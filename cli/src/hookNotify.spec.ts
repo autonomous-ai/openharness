@@ -126,8 +126,15 @@ interface RunHookOpts {
   grokHome?: string
   devinHome?: string
   input?: Record<string, unknown>
-  /** Run through a `/bin/sh -c` that stays the hook's parent, as dash does for every engine's hook on Linux. */
-  viaShell?: boolean
+  /** The command lines the hook is run through, outermost first: each hands the rest of the line on as `"$0" "$@"`. */
+  via?: string[][]
+  /** Linux's /proc as the hook's climb reads it, faked on any platform (`process.platform` reads 'linux'): the hook's
+   *  ancestors, nearest first. The first is the hook's real parent; the row at index n > 0 has pid 9000 + n; each one's
+   *  parent is the next, and the last one's is pid 1. null is a process /proc cannot show (ENOENT). Only
+   *  /proc/<pid>/stat and /proc/<pid>/cmdline of these pids are answered; cmdline is argv joined and ended by NUL. */
+  procAncestors?: Array<{ comm: string; argv: string[] } | null>
+  /** Every path under /proc the hook reads is appended here, one a line. The file is not made when it reads none. */
+  procReadLog?: string
 }
 
 function runHook(opts: RunHookOpts): Promise<string> {
@@ -236,6 +243,38 @@ fs.readFileSync = (path, ...args) => {
       }
       env.PATH = `${binDir}:${env.PATH ?? ''}`
     }
+    if (opts.procAncestors) {
+      const fixtureDir = mkdtempSync(join(tmpdir(), 'adapter-hook-proc-'))
+      tmpDirs.push(fixtureDir)
+      const fixture = join(fixtureDir, 'proc-ancestors.mjs')
+      writeFileSync(fixture, `import fs from 'node:fs'; import { syncBuiltinESMExports } from 'node:module';
+Object.defineProperty(process, 'platform', { value: 'linux' });
+const ancestors = ${JSON.stringify(opts.procAncestors)}, original = fs.readFileSync;
+const pidAt = (index) => index === 0 ? process.ppid : 9000 + index;
+const rows = new Map(ancestors.map((row, index) => [pidAt(index), { row, parent: index + 1 < ancestors.length ? pidAt(index + 1) : 1 }]));
+fs.readFileSync = (path, ...args) => {
+  const asked = /^\\/proc\\/(\\d+)\\/(stat|cmdline)$/.exec(String(path)), known = asked && rows.get(Number(asked[1]));
+  if (!known) return original(path, ...args);
+  if (!known.row) throw Object.assign(Error('fixture process unavailable'), { code: 'ENOENT' });
+  if (asked[2] === 'cmdline') return known.row.argv.join('\\0') + '\\0';
+  return asked[1] + ' (' + known.row.comm + ') S ' + known.parent + ' ' + Array(17).fill(0).join(' ') + ' 12345 '
+    + Array(30).fill(0).join(' ') + '\\n';
+}; syncBuiltinESMExports();\n`)
+      env.NODE_OPTIONS = `${env.NODE_OPTIONS ?? ''} --import ${fixture}`.trim()
+    }
+    if (opts.procReadLog) {
+      const fixtureDir = mkdtempSync(join(tmpdir(), 'adapter-hook-proc-'))
+      tmpDirs.push(fixtureDir)
+      const fixture = join(fixtureDir, 'proc-reads.mjs')
+      // Imported after proc-ancestors.mjs, so it sees every read the hook makes, faked or not.
+      writeFileSync(fixture, `import fs from 'node:fs'; import { syncBuiltinESMExports } from 'node:module';
+const original = fs.readFileSync, log = ${JSON.stringify(opts.procReadLog)};
+fs.readFileSync = (path, ...args) => {
+  if (String(path).startsWith('/proc/')) fs.appendFileSync(log, String(path) + '\\n');
+  return original(path, ...args);
+}; syncBuiltinESMExports();\n`)
+      env.NODE_OPTIONS = `${env.NODE_OPTIONS ?? ''} --import ${fixture}`.trim()
+    }
     const args = [HOOK, '--port', String(opts.port)]
     if (opts.engine && opts.engine !== 'claude') args.push('--engine', opts.engine)
     if (opts.dataDir) args.push('--data-dir', opts.dataDir)
@@ -252,10 +291,7 @@ fs.readFileSync = (path, ...args) => {
       try { writeFileSync(join(hookDataDir, 'hook-credential'), `${'a'.repeat(43)}\n`, { mode: 0o600, flag: 'wx' }) } catch { /* already exists */ }
     }
     daemonSocketFor(opts.port, hookDataDir, env.HOME).then(() => {
-    // `; exit $?` keeps any shell from exec'ing the hook, macOS's bash as well as dash.
-    const [command, argv] = opts.viaShell
-      ? ['/bin/sh', ['-c', '"$0" "$@"; exit $?', process.execPath, ...args]]
-      : [process.execPath, args]
+    const [command, ...argv] = [...(opts.via ?? []).flat(), process.execPath, ...args]
     const child = spawn(command, argv, {
       env,
       stdio: ['pipe', 'pipe', 'inherit'],
@@ -2533,16 +2569,6 @@ describe('hook notify: a session outside a pane', () => {
     }])
   })
 
-  // GitHub run 43721656615: Linux's dash keeps an engine's `sh -c` as the hook's parent, and it exits with the hook, so
-  // the devices kept a pid already gone, refused a tap on the agent's tmux pane and dropped the agent. The hook sees
-  // past it through /proc, which only Linux has; macOS's /bin/sh execs the hook, so its parent is the engine already.
-  it.runIf(process.platform === 'linux')('a hook run through a shell that stays its parent names the shell\'s parent', async () => {
-    const { port, requests } = await collect()
-    await runHook({ port, viaShell: true, input: { hook_event_name: 'Stop', session_id: 'sess-1', cwd: '/work/app' } })
-    await received(requests)
-    expect(requests).toEqual([{ url: '/api/hook/observed', body: expect.objectContaining({ callerPid: process.pid }) }])
-  })
-
   // Each waits for the person: a permission, an MCP server's question or link, or a resume after the quota.
   it.each(['permission_prompt', 'elicitation_dialog', 'elicitation_url_dialog', 'quota_auto_resume_stale'])(
     'paneless claude Notification %s posts needs-input', async (type) => {
@@ -3152,6 +3178,90 @@ describe('hook notify: a session outside a pane', () => {
     await runHook({ port: 9, dataDir: join(dir, 'down'), claudeProjectsDir, env, input })
     expect(existsSync(join(dir, 'down', 'registry.json'))).toBe(false)
     expect(existsSync(mark)).toBe(false)
+  })
+})
+
+describe('hook notify: the caller a hook names', () => {
+  /** Keeps a shell as the hook's parent: `; exit $?` stops bash and dash alike from exec'ing the hook. */
+  const STAYS = '"$0" "$@"; exit $?'
+  const SH = ['/bin/sh', '-c', STAYS]
+  type Ancestor = NonNullable<RunHookOpts['procAncestors']>[number]
+  /** The pid `procAncestors` gives its row at [index]. */
+  const pidAt = (index: number) => index === 0 ? process.pid : 9000 + index
+  const sh: Ancestor = { comm: 'sh', argv: ['/bin/sh', '-c', 'hook'] }
+  const engine: Ancestor = { comm: 'claude', argv: ['claude'] }
+  const bash = (...argv: string[]): Ancestor => ({ comm: 'bash', argv: ['bash', ...argv] })
+  const stop = { hook_event_name: 'Stop', session_id: 'sess-1', cwd: '/work/app' }
+  const linux = process.platform === 'linux'
+  /** The pid a pane's Stop names. A pane post is waited for, so the request is in when the hook exits. */
+  const paneCaller = async (opts: Partial<RunHookOpts>) => {
+    const { port, requests } = await collect()
+    await runHook({ port, tmuxPane: '%4', input: stop, ...opts })
+    expect(requests.map((request) => request.url)).toEqual(['/api/hook/turn-stop'])
+    return requests[0].body.callerPid
+  }
+
+  it.each<[string, Ancestor[], number]>([
+    ['a command shell: its parent', [sh, engine], 1],
+    ['each of the five shells, in a row: the process above them all', [sh, { comm: 'dash', argv: ['dash', '-c', 'hook'] }, bash('-ec', 'hook'),
+      { comm: 'zsh', argv: ['zsh', '-lc', 'hook'] }, { comm: 'fish', argv: ['fish', '-c', 'hook'] }, engine], 5],
+    ['a shell that runs a script (bash run.sh): that shell, not the pane shell above it', [sh, bash('/opt/engine/run.sh'), { comm: 'zsh', argv: ['-zsh'] }], 1],
+    ['an engine under a wrapper script that did not exec: the engine program, not the wrapper',
+      [sh, { comm: 'node', argv: ['node', '/opt/claude/cli.js'] }, { comm: 'bash', argv: ['/bin/bash', '/usr/local/bin/claude'] }], 1],
+    ['a command shell whose parent is init: the shell itself', [sh], 0],
+    ['ten command shells in a row: the one 8 steps up', Array<Ancestor>(10).fill(sh), 8],
+    ['a process /proc cannot show: the last one reached', [sh, null], 1],
+    ['a long option holding a c (bash --norc run.sh): the shell itself', [bash('--norc', 'run.sh'), engine], 0],
+    ['a long option, then -c: its parent', [bash('--norc', '-c', 'hook'), engine], 1],
+    ['-c after the script (bash run.sh -c): the shell itself', [bash('run.sh', '-c'), engine], 0],
+    ['an option\'s own argument before -c (bash -o pipefail -c): its parent', [bash('-o', 'pipefail', '-c', 'hook'), engine], 1],
+    ['a shopt option\'s argument before -c (bash -O extglob -ec): its parent', [bash('-O', 'extglob', '-ec', 'hook'), engine], 1],
+    ['a + option\'s own argument before -c (bash +o posix -c): its parent', [bash('+o', 'posix', '-c', 'hook'), engine], 1],
+    ['an option\'s own argument, then a script (bash -o pipefail run.sh): the shell itself', [bash('-o', 'pipefail', 'run.sh'), engine], 0],
+    ['a program that is no shell, whatever its options (node -c): itself', [{ comm: 'node', argv: ['node', '-c', 'x.js'] }, engine], 0],
+    ['a person\'s interactive shell: itself', [{ comm: 'zsh', argv: ['-zsh'] }, engine], 0],
+  ])('a pane hook names, past %s', async (_case, procAncestors, named) => {
+    expect(await paneCaller({ procAncestors })).toBe(pidAt(named))
+  })
+
+  it('a paneless hook names by the same rule: past two command shells, the process above both', async () => {
+    const { port, requests } = await collect()
+    await runHook({ port, input: stop, procAncestors: [sh, bash('-ec', 'hook'), engine] })
+    await received(requests)
+    expect(requests[0]).toMatchObject({ url: '/api/hook/observed', body: { callerPid: pidAt(2) } })
+  })
+
+  // GitHub run 43721656615: Linux's dash keeps an engine's `sh -c` as the hook's parent, and it exits with the hook, so
+  // the devices kept a pid already gone, refused a tap on the agent's tmux pane and dropped the agent. The hook sees
+  // past it through /proc, which only Linux has; macOS's /bin/sh execs the hook, so its parent is the engine already.
+  it.runIf(linux)('a hook run through a shell that stays its parent names the shell\'s parent', async () => {
+    const { port, requests } = await collect()
+    await runHook({ port, via: [SH], input: stop })
+    await received(requests)
+    expect(requests).toEqual([{ url: '/api/hook/observed', body: expect.objectContaining({ callerPid: process.pid }) }])
+  })
+
+  // Real processes, the kernel's own /proc: dash keeps `sh -c` as the hook's parent, and it exits with the hook.
+  it.runIf(linux)('a pane hook run through a shell that stays its parent names the shell\'s parent', async () => {
+    expect(await paneCaller({ via: [SH] })).toBe(process.pid)
+  })
+  it.runIf(linux)('a pane hook run through two shells in a row names the process above both', async () => {
+    expect(await paneCaller({ via: [SH, ['bash', '-ec', STAYS]] })).toBe(process.pid)
+  })
+  it.runIf(linux)('a script bash runs (bash wrapper.sh) is named itself, never what started it', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'adapter-hook-caller-'))
+    tmpDirs.push(dir)
+    writeFileSync(join(dir, 'wrapper.sh'), `echo $$ > '${join(dir, 'pid')}'\n"$@"\nexit $?\n`)
+    const named = await paneCaller({ via: [['bash', join(dir, 'wrapper.sh')], SH] })
+    expect(named).toBe(Number(readFileSync(join(dir, 'pid'), 'utf8')))
+    expect(named).not.toBe(process.pid)
+  })
+  // macOS's /bin/sh is a bash that execs the hook (no `; exit $?` here, as an engine runs it): nothing to climb.
+  it.runIf(process.platform === 'darwin')('on macOS a hook names its parent, the engine, and reads nothing under /proc', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'adapter-hook-caller-'))
+    tmpDirs.push(dir)
+    expect(await paneCaller({ via: [['/bin/sh', '-c', '"$0" "$@"']], procReadLog: join(dir, 'proc-reads') })).toBe(process.pid)
+    expect(existsSync(join(dir, 'proc-reads'))).toBe(false)
   })
 })
 
