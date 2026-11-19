@@ -89,7 +89,7 @@ chat; a TUI that exits on `Missing gateway auth token.` leaves a plain terminal,
 2. **The first task is kept until taken.** It stays the daemon's until its user row confirms it. A submission OpenClaw
    refused leaves the text in its input box: Harness submits that box (Enter only, never a second paste) once the pane
    is ready again, and does not count the time the pane was not ready against the retries. The whole wait is bounded:
-   3 minutes from launch (the existing lamp-measured submit window, 30 s, keeps its meaning for one try).
+   3 minutes from launch (the existing submit window measured on a slow device, 30 s, keeps its meaning for one try).
 3. **Its end is visible.** A first task not taken within the bound sets the agent's launch to failed, code
    `FIRST_TASK_NOT_TAKEN`, detail `OpenClaw did not take the first task. Close it and start it again.`; `show` says
    `failed` with that line, `wait` exits 1. Reusing `launch` exposes no new data.

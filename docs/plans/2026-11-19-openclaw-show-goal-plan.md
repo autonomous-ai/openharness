@@ -392,7 +392,7 @@ One commit, no red test. Exit 1 is for a launch that failed on its machine only;
 
 **The real OpenClaw, isolated (tester, this Mac, not in CI):** the scratch rig in `…/scratchpad/repro/` (`gw.sh`, `wsProxy.mjs`, `stubModel.mjs`, `openclawRepro.e2e.ts`): an isolated HOME and state folder, a Gateway on port 28911 behind the proxy that drops one `chat.history`, the stub model, `IsolatedDaemon`. Copy `openclawRepro.e2e.ts` into the worktree's `cli/e2e/` for the run only (never committed; delete it after). Run `OC_SCENARIO=proxy-histdrop`, then `down` and `cold`, on the branch head. Expected: the history-drop run types `/session`, delivers the task (the stub logs its tag), and `show` goes `starting` → `working` → `idle` with the ask; `down` is held only after 10 s and types the task in the pass that clears the hold; no `create watch failed` line (if one appears, report the cause it now names). A TUI started on a state folder with no Gateway token: `show` says `failed` with `OpenClaw has no Gateway token. Run openclaw onboard.`. Stop the rig's Gateway, proxy and stub afterwards (only the pids its own files recorded).
 
-**The slow-device box (tester, this Mac, Podman):** follow `…/scratchpad/lamp-rig/README.md` (it may still be being written; use its "Rerun against another SHA"): `./box.sh machine-up`, `./box.sh up 60aa30b528`, `./box.sh run 10 main-cpu0.6` (the README's `results/main-cpu0.6` may already hold this), then `./box.sh up <branch head>` and `./box.sh run 10 fix-<head>-cpu0.6`; optionally `CPU_QUOTA_US=3000` for both. The PR gets, from each `summary.md`: how often the first task was late (taken after 45 s) or lost, the time to `working`, and `show`'s states over time, main against the branch. Stub model by default; a real-model run only with a key file piped into the box (`or-key-in`), removed with `or-key-out` and checked gone. `./box.sh down; ./box.sh machine-down` afterwards. Only the `devcrew-lamp` Podman machine is used.
+**The slow-device box (tester, this Mac, Podman):** follow the slow-device rig's `README.md` (in the session scratchpad, not in the repo) (it may still be being written; use its "Rerun against another SHA"): `./box.sh machine-up`, `./box.sh up 60aa30b528`, `./box.sh run 10 main-cpu0.6` (the README's `results/main-cpu0.6` may already hold this), then `./box.sh up <branch head>` and `./box.sh run 10 fix-<head>-cpu0.6`; optionally `CPU_QUOTA_US=3000` for both. The PR gets, from each `summary.md`: how often the first task was late (taken after 45 s) or lost, the time to `working`, and `show`'s states over time, main against the branch. Stub model by default; a real-model run only with a key file piped into the box (`or-key-in`), removed with `or-key-out` and checked gone. `./box.sh down; ./box.sh machine-down` afterwards. Only the rig's own Podman machine is used.
 
 **Nothing against production, no real account:** every check above is local or a GitHub run of this branch.
 
@@ -400,7 +400,7 @@ One commit, no red test. Exit 1 is for a launch that failed on its machine only;
 
 ## Added during the run (from the slow-device box on main)
 
-The Podman box (arm64 Debian 12, 0.6 CPU, 4 GB, throttled disk; `scratchpad/lamp-rig/results/main-cpu0.6/`) found two
+The Podman box (arm64 Debian 12, 0.6 CPU, 4 GB, throttled disk) found two
 more bugs on this path. Decided by the child, reversible:
 
 ### Task 14: A Gateway that is starting is not "not running"
