@@ -37,6 +37,7 @@ function computer(platform: PlatformName) {
   const deps: ServiceCommandDeps = {
     service,
     logFile: join(data, 'harness.log'),
+    settlePid: async () => {},
     readPid,
     isAlive: (pid) => pid === outside.pid || pid === fake.state().pid,
     masterPlatform: () => null,
@@ -202,6 +203,19 @@ describe.each(['launchd', 'systemd'] as const)('harness service under %s', (plat
     })
   })
 
+  it('settles a pid file it cannot read before it reads it: an install under its lock, an uninstall before its lock', async () => {
+    const seen: string[] = []
+    c.deps.settlePid = async () => { seen.push('settle') }
+    const readPid = c.deps.readPid
+    c.deps.readPid = () => { seen.push('read'); return readPid() }
+    c.deps.withLock = (_purpose, fn) => { seen.push('lock'); return fn() }
+    await expect(serviceCommand(['install'], c.deps)).resolves.toBe(0)
+    expect(seen.slice(0, 3)).toEqual(['lock', 'settle', 'read'])
+    seen.length = 0
+    await expect(serviceCommand(['uninstall'], c.deps)).resolves.toBe(0)
+    expect(seen.slice(0, 3)).toEqual(['settle', 'read', 'lock'])
+  })
+
   describe('uninstall', () => {
     it('has nothing to remove when nothing is installed', async () => {
       await expect(serviceCommand(['uninstall'], c.deps)).resolves.toBe(0)
@@ -354,7 +368,7 @@ describe('harness service with Task Scheduler', () => {
     const locks: string[] = []
     const clock = { now: 0 }
     const deps: ServiceCommandDeps = {
-      service, logFile: 'C:\\d\\harness.log', readPid: () => pid, isAlive: (p) => p === pid, masterPlatform: () => null,
+      service, logFile: 'C:\\d\\harness.log', settlePid: async () => {}, readPid: () => pid, isAlive: (p) => p === pid, masterPlatform: () => null,
       now: () => clock.now, sleep: async (ms) => { clock.now += ms },
       definition: () => ({ nodePath: 'C:\\n\\node.exe', scriptPath: script, logFile: 'C:\\d\\harness.log', home: 'C:\\Users\\demo', env: over.carried ?? {}, launcherPath: launcher }),
       bundleExists: (path) => existsSync(path), ensureDir: () => {},
@@ -378,6 +392,18 @@ describe('harness service with Task Scheduler', () => {
       expect(WINDOWS_SERVICE_USAGE).not.toMatch(/tmux|comes back if it dies|launchd|systemd/)
       await expect(serviceCommand(['restart'], w.deps)).resolves.toBe(2)
       expect(w.err[0]).toBe(`Unknown command: harness service restart\n\n${WINDOWS_SERVICE_USAGE}`)
+    } finally { rmSync(w.dir, { recursive: true, force: true }) }
+  })
+
+  it('settles a pid file it cannot read before it asks whether the daemon runs', async () => {
+    const w = windows({ pid: 4040 })
+    try {
+      const seen: string[] = []
+      const readPid = w.deps.readPid
+      w.deps.settlePid = async () => { seen.push('settle') }
+      w.deps.readPid = () => { seen.push('read'); return readPid() }
+      await expect(serviceCommand(['install'], w.deps)).resolves.toBe(0)
+      expect(seen).toEqual(['settle', 'read'])
     } finally { rmSync(w.dir, { recursive: true, force: true }) }
   })
 

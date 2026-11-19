@@ -1,14 +1,14 @@
 /**
  * A trust file that cannot be read, as a person meets it (docs/plans/2026-11-19-atomic-state-writes-design.md):
  * `harness status` names it with its full path and the fix, a command that would replace it fails and says which
- * file, and its bytes never change. The CLI runs from source with the daemon's environment, as a terminal on that
- * machine would.
+ * file, and its bytes never change. A pid file that cannot be read is asked of the daemon, and set aside only when
+ * none answers. The CLI runs from source with the daemon's environment, as a terminal on that machine would.
  */
 import { spawn } from 'node:child_process'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { CLI_ROOT, IsolatedDaemon } from './harness/daemon.js'
+import { CLI_ROOT, IsolatedDaemon, until } from './harness/daemon.js'
 
 // What a reader saw mid-write.
 const TORN = '[{"identityPub":"'
@@ -73,5 +73,42 @@ describe('a trust file that cannot be read', () => {
     expect(status.out).toContain('○ stopped')
     expect(status.out).toContain(line(devlog))
     expect(readFileSync(devlog, 'utf8')).toBe('{"recent":[')
+  })
+})
+
+describe('a pid file that cannot be read', () => {
+  let d: IsolatedDaemon | null = null
+  afterEach(async () => { await d?.close(); d = null })
+
+  it('a daemon whose pid file was emptied is still running, and can be stopped', async () => {
+    d = await IsolatedDaemon.create()
+    await d.start()
+    const master = d.pid!
+    // What a reader saw while the file was written in place.
+    writeFileSync(join(d.dataDir, 'adapter.pid'), '')
+
+    const status = await harness(d, ['status'])
+    expect(status.code, status.err).toBe(0)
+    expect(status.out).toMatch(/status +● running/)
+    expect(status.out).toMatch(new RegExp(`pid +${master}\\n`))
+    const start = await harness(d, ['start'])
+    expect(start.code, start.err).toBe(0)
+    expect(start.out).toContain(`machine already running (pid ${master})`)
+    const stop = await harness(d, ['stop'])
+    expect(stop.code, stop.err).toBe(0)
+    expect(stop.out).toContain(`machine stopped (pid ${master})`)
+    await until('the master to go', () => !IsolatedDaemon.alive(master), 15_000)
+  })
+
+  it('a stray pid file does not stop a start', async () => {
+    // `harness start` from the source runs the daemon in its own process, so the start under test is the daemon. It
+    // reads its settings from the shell's env file, as a person's start does (`foreground`).
+    d = await IsolatedDaemon.create({ foreground: true, launch: ['--import', 'tsx', 'src/cli.ts', 'start'] })
+    const pidFile = join(d.dataDir, 'adapter.pid')
+    tear(pidFile, 'x')
+    await d.start()
+
+    expect(readFileSync(`${pidFile}.unreadable`, 'utf8')).toBe('x')
+    expect(readFileSync(pidFile, 'utf8')).toBe(`${d.pid}\n`)
   })
 })

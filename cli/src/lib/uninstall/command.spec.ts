@@ -38,6 +38,7 @@ function fake(overrides: Partial<UninstallDeps> = {}) {
     markUninstalling: () => { after('mark') },
     unmarkUninstalling: () => { after('unmark') },
     ask: async () => { calls.push('ask'); return 'n' },
+    settlePid: async () => {},
     daemonPid: () => (running ? 4242 : null),
     alive: (pid) => running && pid === 4242,
     stopAgents: async () => { calls.push('agents'); return { stopped: 2, failed: [] } },
@@ -80,6 +81,13 @@ describe('harness uninstall', () => {
     expect(t.out).toContain('✓ removed the Harness daemon from launchd: it no longer starts at login')
     expect(t.out).toContain('✓ removed the PATH line Harness added to ~/.zshrc')
     expect(t.out.at(-1)).toBe('Harness is uninstalled.')
+  })
+
+  it('settles a pid file it cannot read before it asks which daemon runs', async () => {
+    const seen: string[] = []
+    const t = fake({ settlePid: async () => { seen.push('settle') }, daemonPid: () => { seen.push('daemon'); return 4242 } })
+    expect(await uninstallCommand(['--yes'], t.deps)).toBe(0)
+    expect(seen).toEqual(['settle', 'daemon'])
   })
 
   it('asks first in a terminal, and removes nothing on no', async () => {
