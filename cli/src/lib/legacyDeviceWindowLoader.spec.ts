@@ -218,3 +218,73 @@ it('releases closed damaged frames and refuses damaged notifications without hol
   expect(f.refused).toHaveBeenCalledWith('two', 'LEGACY_DESK_FRAME_INVALID')
   f.loader.stop()
 })
+
+
+it('bounds loaded reporters without evicting their state and restores admission after physical close', async () => {
+  const f = fixture()
+  f.send('one', tab()); f.resolve(); await flush()
+  for (let index = 1; index < 128; index++) {
+    const connection = `window-${index}`; f.live.add(connection)
+    f.send(connection, frame('app_panes', { agentIds: [`agent-${index}`] }))
+  }
+  const prior = f.loader.snapshot(), other = { agentId: 'other', runtimes: [] } as unknown as RegisteredSession
+  const otherTab = frame('app_swarms', { swarms: [{ id: 'other-tab', name: 'Other', agentIds: ['other'] }] })
+  f.send('two', otherTab)
+  expect(f.refused).not.toHaveBeenCalled()
+  expect(f.log).toHaveBeenLastCalledWith('[local-ws] LEGACY_DESK_DELIVERY_FAILED · LEGACY_DESK_STATE_LIMIT')
+  expect(f.loader.snapshot()).toEqual(prior)
+  await expect(f.guard.assertHidden(agent)).rejects.toMatchObject({ code: 'TABS_UNAVAILABLE' })
+  f.live.delete('window-1'); f.loader.closed('window-1')
+  f.send('two', otherTab)
+  expect(f.pending).toHaveBeenLastCalledWith('two', false)
+  expect(f.loader.snapshot()?.swarms?.active).toBe('other-tab')
+  await expect(f.guard.assertHidden(other)).rejects.toMatchObject({ code: 'SESSION_IN_TAB' })
+  f.loader.stop()
+})
+
+it('bounds the loaded current-frame bytes across both rosters, releases replacements, and retains unread after close', async () => {
+  const f = fixture(), width = 512 * 1024
+  const panes = frame('app_panes', { agentIds: ['agent'] })
+  const swarms = tab(), padding = Buffer.alloc(width, ' ')
+  f.send('one', panes); f.resolve(); await flush()
+  // The caller already measured each accepted frame. Each raw fixture is a valid,
+  // padded 512 KiB wire frame, exercising the same bound as the real transport.
+  const encoded = (value: ReturnType<typeof frame>) => { const bytes = Buffer.from(padding); bytes.write(JSON.stringify(value)); return bytes }
+  for (let index = 0; index < 8; index++) {
+    const connection = index === 0 ? 'one' : `window-${index}`; f.live.add(connection)
+    f.send(connection, panes, encoded(panes)); f.send(connection, swarms, encoded(swarms))
+  }
+  const unread = frame('app_unread', { items: [{ agentId: 'agent', machineId: 'machine', text: 'kept' }] })
+  f.send('two', unread)
+  expect(f.refused).not.toHaveBeenCalled()
+  expect(f.loader.snapshot()?.unread).toEqual([])
+  // Replacing one large report, even from the same live reporter, releases its charge.
+  f.send('one', panes)
+  f.send('two', unread)
+  expect(f.loader.snapshot()?.unread).toEqual([{ agentId: 'agent', machineId: 'machine', text: 'kept', question: false }])
+  f.live.delete('two'); f.loader.closed('two')
+  expect(f.loader.snapshot()?.unread).toEqual([{ agentId: 'agent', machineId: 'machine', text: 'kept', question: false }])
+  f.live.add('replacement')
+  f.send('replacement', swarms, encoded(swarms))
+  expect(f.pending).toHaveBeenLastCalledWith('replacement', true)
+  await expect(f.guard.assertHidden(agent)).rejects.toMatchObject({ code: 'TABS_UNAVAILABLE' })
+  f.live.delete('window-1'); f.loader.closed('window-1')
+  f.send('replacement', swarms, encoded(swarms))
+  expect(f.pending).toHaveBeenLastCalledWith('replacement', false)
+  f.loader.stop()
+})
+
+
+it('drains a first-use FIFO at both ceilings without refusing an accepted reporter', async () => {
+  const f = fixture()
+  for (let index = 0; index < 128; index++) {
+    const connection = `window-${index}`, value = frame('app_panes', { agentIds: [connection] })
+    f.live.add(connection)
+    const bytes = Buffer.alloc(64 * 1024, ' '); bytes.write(JSON.stringify(value))
+    f.send(connection, value, bytes)
+  }
+  f.resolve(); await flush()
+  expect(f.refused).not.toHaveBeenCalled()
+  expect(f.loader.snapshot()?.desk).toEqual(['window-127'])
+  f.loader.stop()
+})

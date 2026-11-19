@@ -47,17 +47,19 @@ export function createLegacyDeviceWindowLoader(deps: {
     log(`[local-ws] ${reason}`)
     for (const connection of affected) refuse(connection, reason)
   }
-  const deliver = (connection: string, frame: Frame): void => {
+  const deliver = (connection: string, frame: Frame, bytes: number): void => {
     try {
-      const accepted = owner!.receive(connection, frame.type, frame.payload as Record<string, unknown> | undefined)
+      const accepted = owner!.receive(connection, frame.type, frame.payload as Record<string, unknown> | undefined, bytes)
       if (frame.type === 'app_swarms' && (accepted || !failedTabs.has(connection))) release(connection)
     } catch (caughtFailure) {
       if (frame.type === 'app_swarms') {
         failedTabs.add(connection)
         if (!heldTabs.has(connection)) { heldTabs.add(connection); deps.pending(connection, true) }
       }
-      log(('[local-ws] LEGACY_DESK_DELIVERY_FAILED') + ' · ' + errorKind(caughtFailure))
-      refuse(connection, 'LEGACY_DESK_DELIVERY_FAILED')
+      const kind = errorKind(caughtFailure)
+      log(('[local-ws] LEGACY_DESK_DELIVERY_FAILED') + ' · ' + kind)
+      // A new steady-state ceiling must not cause old clients to reconnect and resend indefinitely.
+      if (kind !== 'LEGACY_DESK_STATE_LIMIT') refuse(connection, 'LEGACY_DESK_DELIVERY_FAILED')
     } finally {
       if (!deps.live(connection)) closed(connection)
     }
@@ -86,7 +88,7 @@ export function createLegacyDeviceWindowLoader(deps: {
           if (!deps.live(row.connection)) release(row.connection)
           continue
         }
-        deliver(row.connection, frame)
+        deliver(row.connection, frame, row.bytes.byteLength)
       }
     }, () => fail(own, 'LEGACY_DESK_LOAD_FAILED'))
     return own
@@ -94,7 +96,7 @@ export function createLegacyDeviceWindowLoader(deps: {
   return {
     receive(connection: string, frame: Frame, bytes: Uint8Array): void {
       if (stopped) return
-      if (owner) { deliver(connection, frame); return }
+      if (owner) { deliver(connection, frame, bytes.byteLength); return }
       const tab = frame.type === 'app_swarms'
       if (tab && !heldTabs.has(connection)) { heldTabs.add(connection); deps.pending(connection, true) }
       if (!pending && attempts === 2) {

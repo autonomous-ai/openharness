@@ -10,14 +10,18 @@ export function appPanesFrom(payload: Record<string, unknown> | undefined): { id
 
 export function appUnreadFrom(payload: Record<string, unknown> | undefined): UnreadNotification[] {
   const raw = payload?.items
-  return Array.isArray(raw) ? raw.flatMap(row => {
+  if (!Array.isArray(raw)) return []
+  const items: UnreadNotification[] = []
+  for (const row of raw) {
     const item = row as Record<string, unknown> | null
     const agentId = item?.agentId, machineId = item?.machineId
     const text = typeof item?.text === 'string' ? item.text : ''
     const readToken = notificationReadToken(item?.readToken)
-    return typeof agentId === 'string' && agentId && typeof machineId === 'string'
-      ? [{ agentId, machineId, question: item?.question === true, text, ...(readToken ? { readToken } : {}) }] : []
-  }) : []
+    if (typeof agentId === 'string' && agentId && typeof machineId === 'string') {
+      items.push({ agentId, machineId, question: item?.question === true, text, ...(readToken ? { readToken } : {}) })
+    }
+  }
+  return items
 }
 
 /**

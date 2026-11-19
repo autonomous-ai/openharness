@@ -44,11 +44,11 @@ it('normalizes only drawable tile rectangles and retains the existing 24-tile li
 
 it('keeps optional callbacks optional and ignores unknown compatibility frame names', () => {
   const owner = createLegacyDeviceWindowState({})
-  expect(owner.receive('window', 'unknown', undefined)).toBe(false)
-  owner.receive('window', 'app_panes', undefined)
-  owner.receive('window', 'app_unread', undefined)
-  owner.receive('window', 'app_swarms', { swarms: [{ id: 'a', name: 'A' }] })
-  owner.receive('window', 'agent_seen', { agentId: 'a', readToken: 'read_1' })
+  expect(owner.receive('window', 'unknown', undefined, 40)).toBe(false)
+  owner.receive('window', 'app_panes', undefined, 40)
+  owner.receive('window', 'app_unread', undefined, 40)
+  owner.receive('window', 'app_swarms', { swarms: [{ id: 'a', name: 'A' }] }, 100)
+  owner.receive('window', 'agent_seen', { agentId: 'a', readToken: 'read_1' }, 100)
   owner.closed('window')
   expect(owner.snapshot()).toEqual({ desk: [], foreground: false, swarms: null, unread: [] })
 })
