@@ -59,6 +59,15 @@ const openclawGatewayAnswered = (screen: OpenclawScreen): boolean =>
   screen.state === 'ready' || screen.state === 'no-history' || screen.gatewayStarting
 
 /**
+ * The status line says the Gateway is gone: `gateway disconnected: <error>` at a failed try, or the bare `disconnected`
+ * the TUI draws once that line has stood 5 s with no try answered (its status timeout), the same outage. Late in one the
+ * tries come 16 and 30 s apart, so a pane is mostly read on the bare line: counted only from the other, a lasting
+ * outage was held a minute late or not at all (e2e/openclawShow.e2e.ts row 8).
+ */
+const openclawGatewayGone = (screen: OpenclawScreen): boolean =>
+  screen.state === 'no-gateway' || (screen.state === null && screen.gatewayLost)
+
+/**
  * The hold a pane's screen gives its agent. A stopped local run keeps the reason it was seen with once OpenClaw's later
  * footer no longer says it. The Gateway holds never apply to a local run, which has no Gateway, and the Gateway gone
  * holds only once it has been gone GATEWAY_HOLD_MS.
@@ -68,7 +77,7 @@ function openclawScreenHold(screen: OpenclawScreen, agent: RegisteredSession, ga
     if (screen.stopped !== null) return openclawLocalStopped(screen.stopped)
     return isOpenclawLocalStopped(agent.identityHold) ? agent.identityHold : openclawLocalStopped(null)
   }
-  if (screen.state === 'no-gateway' && gatewayGoneMs < GATEWAY_HOLD_MS) return undefined
+  if (openclawGatewayGone(screen)) return gatewayGoneMs < GATEWAY_HOLD_MS || agent.openclawLocal ? undefined : OPENCLAW_STATES.noGateway
   return screen.state && !agent.openclawLocal ? OPENCLAW_SCREEN_HOLDS[screen.state] : undefined
 }
 
@@ -164,17 +173,17 @@ export function createBinding({
     return openclawStateDir(tui.pid)
   }
   /**
-   * When each agent's pane first read `gateway disconnected` since its Gateway last answered, agentId → ms. Through a
-   * lasting outage the TUI redraws `gateway disconnected: <error>` at each try to reconnect and a bare `disconnected |
-   * idle` or `startup failed | idle` between them, so a hold set and cleared by each line went and came back every few
-   * seconds (reproduction, 2026-11-19); those lines and a start or a run neither end the outage nor count it again.
+   * When each agent's pane first read its Gateway gone since the Gateway last answered, agentId → ms. Through a lasting
+   * outage the TUI redraws `gateway disconnected: <error>` at each try to reconnect and a bare `disconnected | idle` or
+   * `startup failed | idle` between them, so a hold set and cleared by each line went and came back every few seconds
+   * (reproduction, 2026-11-19); those lines and a start or a run neither end the outage nor count it again.
    * Cleared at 256 entries rather than aged: a hold then comes late, never early.
    */
   const gatewayGone = new Map<string, number>()
   /** How long the pane has read its Gateway gone, as of this pass; 0 for a pass that reads anything else. */
   const gatewayGoneMs = (agentId: string, screen: OpenclawScreen): number => {
     if (openclawGatewayAnswered(screen)) gatewayGone.delete(agentId)
-    if (screen.state !== 'no-gateway') return 0
+    if (!openclawGatewayGone(screen)) return 0
     const since = gatewayGone.get(agentId)
     if (since !== undefined) return Date.now() - since
     if (gatewayGone.size >= 256) gatewayGone.clear()
