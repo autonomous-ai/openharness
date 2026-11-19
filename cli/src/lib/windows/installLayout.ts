@@ -14,8 +14,9 @@
  * (pty/src/launcher.rs) and the desktop app read them. The pointer readers in Node and in Rust (both programs share
  * launcher::resolve) apply the rules this file applies: one segment, resolved inside its root.
  */
-import { existsSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, realpathSync } from 'node:fs'
 import { join, sep } from 'node:path'
+import { atomicWriteFile } from '../secureState.js'
 import { STABLE_NOTIFY } from './installNames.js'
 
 export const CLI_POINTER = 'current'
@@ -46,48 +47,13 @@ export function readPointer(root: string, name: string): string | null {
   return isSingleSegment(value) ? value : null
 }
 
-/** The two calls [writePointer] makes that tests replace. */
-export interface PointerFs {
-  rename: (from: string, to: string) => void
-  sleep: (ms: number) => void
-}
-
-const defaultFs: PointerFs = {
-  rename: renameSync,
-  // Synchronous on purpose: a pointer write is a few milliseconds, and its callers are synchronous.
-  sleep: (ms) => { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms) },
-}
-
 /**
- * The codes Windows gives for a moment when an antivirus scan, the search indexer or a reader holds the file.
- * Waiting can fix those, and nothing else.
+ * Point `<root>\<name>` at [value], whole: a reader sees either the old pointer or the new one, never half of one. The
+ * line ends in CRLF with no BOM: the Rust reader (pty/src/launcher.rs) would keep a BOM as part of the value.
  */
-const RETRIED = new Set(['EPERM', 'EBUSY', 'EACCES'])
-const ATTEMPTS = 5
-
-/**
- * Point `<root>\<name>` at [value] by writing a temporary file and renaming it over the old one. A reader sees
- * either the old pointer or the new one, never half of one. The line ends in CRLF with no BOM: the Rust reader
- * (pty/src/launcher.rs) would keep a BOM as part of the value.
- */
-export function writePointer(root: string, name: string, value: string, fs: PointerFs = defaultFs): void {
+export function writePointer(root: string, name: string, value: string): void {
   if (!isSingleSegment(value)) throw new Error(`a pointer names one folder, not ${JSON.stringify(value)}`)
-  const target = join(root, name)
-  const temporary = join(root, `.${name}.tmp-${process.pid}-${Date.now()}`)
-  writeFileSync(temporary, `${value}\r\n`)
-  for (let attempt = 1; ; attempt++) {
-    try {
-      fs.rename(temporary, target)
-      return
-    } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code ?? ''
-      if (!RETRIED.has(code) || attempt >= ATTEMPTS) {
-        rmSync(temporary, { force: true })
-        throw error
-      }
-      fs.sleep(25 * 2 ** (attempt - 1))
-    }
-  }
+  atomicWriteFile(join(root, name), `${value}\r\n`, 'cache')
 }
 
 export interface CurrentCli {

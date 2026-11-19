@@ -12,9 +12,10 @@
  * the old one is kept aside as `<name>.old-<pid>-<ms>` and the new one is renamed in (putInPlace); the aside files
  * are swept once nothing runs them. Nothing here calls a Windows API, so it is tested on every OS.
  */
-import { copyFileSync, existsSync, linkSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, linkSync, readFileSync, readdirSync, renameSync, rmSync } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
 import { VERSION_DIR } from '../ptyHost/launch.js'
+import { atomicWriteFile, jsonArray, readState } from '../secureState.js'
 import { isSingleSegment, readPointer, writePointer } from './installLayout.js'
 import { PTY_PAYLOAD_FILES, PtyPayloadRefused, type PreparedPty } from './ptyPayload.js'
 
@@ -32,7 +33,6 @@ export interface PtyInstallFs {
   rename: (from: string, to: string) => void
   link: (existing: string, newPath: string) => void
   copyFile: (from: string, to: string) => void
-  writeFile: (path: string, data: string) => void
   rm: (path: string, options?: { recursive?: boolean; force?: boolean }) => void
   sleep: (ms: number) => void
 }
@@ -41,7 +41,6 @@ export const defaultPtyInstallFs: PtyInstallFs = {
   rename: renameSync,
   link: linkSync,
   copyFile: copyFileSync,
-  writeFile: writeFileSync,
   rm: rmSync,
   // Synchronous on purpose, as in installLayout.ts: the caller holds the spawn lock and is synchronous.
   sleep: (ms) => { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms) },
@@ -199,17 +198,6 @@ function undoReplaced(fs: PtyInstallFs, { target, aside }: Replaced): void {
   }
 }
 
-/** Write [path] whole or not at all: a reader never sees half a marker. */
-function writeJson(fs: PtyInstallFs, path: string, value: unknown): void {
-  const temporary = freshName(dirname(path), `.${basename(path)}.tmp`)
-  try {
-    fs.writeFile(temporary, JSON.stringify(value))
-    renameRetrying(fs, temporary, path)
-  } finally {
-    tryRm(fs, temporary)
-  }
-}
-
 function sameFiles(a: string, b: string): boolean {
   return PTY_PAYLOAD_FILES.every((name) => {
     try {
@@ -268,10 +256,10 @@ export function installPreparedPty(prepared: PreparedPty, rootDir: string, fs: P
     // 3. The probation marker.
     const marker = join(ptyRoot, PTY_PENDING)
     undo.push(() => { fs.rm(marker, { force: true }) })
-    writeJson(fs, marker, { version, previous })
+    atomicWriteFile(marker, JSON.stringify({ version, previous }), 'cache')
 
     // 4. The pointer, last: it is what makes the version the one in use.
-    writePointer(ptyRoot, PTY_POINTER, version, { rename: fs.rename, sleep: fs.sleep })
+    writePointer(ptyRoot, PTY_POINTER, version)
     return true
   } catch (error) {
     undoAll(undo)
@@ -331,10 +319,10 @@ export function restorePty(rootDir: string, fs: PtyInstallFs = defaultPtyInstall
   const has = (name: string) => existsSync(join(previousDir, name))
 
   const rejected = rejectedPtyVersions(rootDir)
-  if (!rejected.includes(pending.version)) writeJson(fs, join(ptyRoot, PTY_REJECTED), [...rejected, pending.version])
+  if (!rejected.includes(pending.version)) atomicWriteFile(join(ptyRoot, PTY_REJECTED), JSON.stringify([...rejected, pending.version]), 'cache')
 
   if (has('harness-pty.exe')) {
-    writePointer(ptyRoot, PTY_POINTER, pending.previous, { rename: fs.rename, sleep: fs.sleep })
+    writePointer(ptyRoot, PTY_POINTER, pending.previous)
     result.pointer = true
   }
   const bin = join(rootDir, 'bin')
@@ -360,14 +348,10 @@ export function confirmPty(rootDir: string, fs: PtyInstallFs = defaultPtyInstall
   fs.rm(join(ptyRootOf(rootDir), PTY_PENDING), { force: true })
 }
 
-/** The versions rolled back on this machine. A missing or unreadable list is empty. */
+/** The versions rolled back on this machine. A missing list is empty; one that cannot be read is set aside, then empty. */
 export function rejectedPtyVersions(rootDir: string): string[] {
-  try {
-    const value: unknown = JSON.parse(readFileSync(join(ptyRootOf(rootDir), PTY_REJECTED), 'utf8'))
-    return Array.isArray(value) ? value.filter((v): v is string => typeof v === 'string') : []
-  } catch {
-    return []
-  }
+  const read = readState(join(ptyRootOf(rootDir), PTY_REJECTED), 'cache', jsonArray)
+  return read.state === 'ok' ? read.value.filter((v): v is string => typeof v === 'string') : []
 }
 
 /**

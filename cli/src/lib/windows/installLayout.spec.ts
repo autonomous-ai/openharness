@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
-  CLI_POINTER, LAUNCH_EXE, currentCli, harnessLaunchPath, isSingleSegment, readPointer, writePointer, type PointerFs,
+  CLI_POINTER, LAUNCH_EXE, currentCli, harnessLaunchPath, isSingleSegment, readPointer, writePointer,
 } from './installLayout.js'
 import { STABLE_NOTIFY } from './installNames.js'
 
@@ -32,22 +32,6 @@ function scratch(): string {
   const root = mkdtempSync(join(tmpdir(), 'harness-layout-'))
   roots.push(root)
   return root
-}
-
-/** A rename that fails with each code in [failures] in turn, then renames for real; and the waits between. */
-function flaky(failures: string[]): PointerFs & { sleeps: number[]; calls: () => number } {
-  const sleeps: number[] = []
-  let calls = 0
-  return {
-    sleeps,
-    calls: () => calls,
-    sleep: (ms) => { sleeps.push(ms) },
-    rename: (from, to) => {
-      const code = failures[calls++]
-      if (code) throw Object.assign(new Error(code), { code })
-      renameSync(from, to)
-    },
-  }
 }
 
 describe('pointer files', () => {
@@ -101,32 +85,6 @@ describe('pointer files', () => {
     writePointer(root, 'current', '1.2.3')
     expect(readFileSync(planted, 'utf8')).toBe('not ours')
     expect(readPointer(root, 'current')).toBe('1.2.3')
-  })
-
-  it('retries a rename an antivirus scan or the indexer holds, waiting longer each time', () => {
-    const root = scratch()
-    const fs = flaky(['EPERM', 'EBUSY', 'EACCES'])
-    writePointer(root, 'current', '1.2.3', fs)
-    expect(readPointer(root, 'current')).toBe('1.2.3')
-    expect(fs.sleeps).toEqual([25, 50, 100])
-  })
-
-  it('gives up after five attempts, throws, and leaves no temporary file', () => {
-    const root = scratch()
-    writeFileSync(join(root, 'current'), '1.2.2\r\n')
-    const fs = flaky(['EBUSY', 'EBUSY', 'EBUSY', 'EBUSY', 'EBUSY'])
-    expect(() => writePointer(root, 'current', '1.2.3', fs)).toThrow('EBUSY')
-    expect(fs.calls()).toBe(5)
-    expect(readdirSync(root)).toEqual(['current'])
-    expect(readPointer(root, 'current')).toBe('1.2.2')
-  })
-
-  it('does not retry a failure waiting cannot fix', () => {
-    const root = scratch()
-    const fs = flaky(['ENOENT'])
-    expect(() => writePointer(root, 'current', '1.2.3', fs)).toThrow('ENOENT')
-    expect(fs.calls()).toBe(1)
-    expect(fs.sleeps).toEqual([])
   })
 
   it('refuses to write a pointer its readers would refuse', () => {

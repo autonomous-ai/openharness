@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, 
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { isVersionFolder, processRetireDeps, replaceFile, retireUnused, switchTo, versionsOnDisk, writeVersionFolder } from './cliVersions.js'
+import { isVersionFolder, processRetireDeps, retireUnused, switchTo, versionsOnDisk, writeVersionFolder } from './cliVersions.js'
 import { VERSION_FOLDER } from './installNames.js'
 
 // A disk that fills up partway through a write: the file is left with half its bytes, and the write throws. Each
@@ -110,29 +110,6 @@ describe('the CLI\'s version folders', () => {
     expect(readFileSync(join(cli, 'current'), 'utf8').trim()).toBe('0.5.1')
     expect(log).toHaveBeenCalledWith(expect.stringMatching(/^\[update\] the hooks' notify\.mjs could not be refreshed yet/))
   })
-})
-
-describe('replacing a file a hook may hold', () => {
-  it('tries again while Windows says the file is busy, and gives up on anything else', () => {
-    const cli = cliDir()
-    const file = join(cli, 'notify.mjs')
-    let busy = 2
-    const rename = vi.fn((from: string, to: string) => {
-      if (busy-- > 0) throw Object.assign(new Error('EBUSY'), { code: 'EBUSY' })
-      writeFileSync(to, readFileSync(from)); rmSync(from)
-    })
-    replaceFile(file, Buffer.from('new'), rename, 3, 0)
-    expect(readFileSync(file, 'utf8')).toBe('new')
-    expect(rename).toHaveBeenCalledTimes(3)
-    const denied = vi.fn(() => { throw Object.assign(new Error('EACCES'), { code: 'EACCES' }) })
-    expect(() => replaceFile(file, Buffer.from('x'), denied, 2, 0)).toThrow('EACCES')
-    expect(denied).toHaveBeenCalledTimes(2)
-    const missing = vi.fn(() => { throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }) })
-    expect(() => replaceFile(file, Buffer.from('x'), missing, 5, 0)).toThrow('ENOENT')
-    expect(missing).toHaveBeenCalledTimes(1)
-    expect(readdirSync(cli)).toEqual(['notify.mjs'])
-  })
-
 })
 
 describe('the stable notify.mjs, at a switch', () => {

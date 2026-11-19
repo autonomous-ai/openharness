@@ -14,12 +14,13 @@
  * (`keepStaged`), for the CLI build and the host alike, and the start-of-updater sweep of what installs leave behind.
  * Nothing here calls a Windows API, so it is tested on every OS.
  */
-import { existsSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, readdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { SpawnLockBusyError, describeSpawnLockOwner } from '../daemonSpawnLock.js'
 import { errorKind } from '../log.js'
 import { binaryVersion, currentPtyVersion } from '../ptyHost/launch.js'
 import { PTY_PROTOCOL, SUPPORTED_PTY_PROTOCOLS } from '../ptyHost/protocol.js'
+import { atomicWriteFile } from '../secureState.js'
 import { REFUSED_RETRY_MAX_MS, msUntilSlot, type Poller } from '../selfUpdate.js'
 import {
   BIN_FILES, PTY_PENDING, PTY_REJECTED, confirmPty, defaultPtyInstallFs, installPreparedPty, readPtyPending, rejectedPtyVersions, restorePty,
@@ -420,9 +421,7 @@ export function takeBackPty(rootDir: string, log: (line: string) => void, prefix
     const rejected = rejectedPtyVersions(rootDir)
     if (!rejectedBefore.includes(pending.version) && rejected.includes(pending.version)) {
       const file = join(rootDir, 'runtime', 'pty', PTY_REJECTED)
-      const temporary = `${file}.tmp-${process.pid}`
-      writeFileSync(temporary, JSON.stringify(rejected.filter((version) => version !== pending.version)))
-      renameSync(temporary, file)
+      atomicWriteFile(file, JSON.stringify(rejected.filter((version) => version !== pending.version)), 'cache')
     }
     log(result.pointer
       ? `${prefix}terminal host ${pending.version} taken back out with the build it came with — back to ${pending.previous}`
