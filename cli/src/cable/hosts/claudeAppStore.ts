@@ -79,7 +79,7 @@ interface Kept {
 const byName = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0)
 
 /** The app's id of the session a file name holds: the name without `.json`, in the form the app's link checks. */
-function localIdOf(name: string): string | undefined {
+export function localIdOf(name: string): string | undefined {
   const id = name.endsWith('.json') ? name.slice(0, -'.json'.length) : ''
   return CLAUDE_SESSION.test(id) ? id : undefined
 }
