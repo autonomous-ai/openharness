@@ -4,9 +4,17 @@
  * `write-chars`, then `send-keys`. The daemon runs outside Zellij, so each command names the session. The session and
  * the pane came from a hook, so both are checked against their form before each command, which runs with no shell.
  * Zellij 0.44's `subscribe` reports no focus (testing/recordedZellij.ts), so the dial does not follow Zellij's focus.
+ * Beside them, a lookup reads which client shows the agent's session, to place the agent on the page of the app that
+ * holds it (zellijClients), as tmux's does. zellij is found as the core finds tmux (zellijFinder): the master's PATH may
+ * hold none.
  */
+import { dirname, join } from 'node:path'
+import { binaryOnPath } from '../../lib/binaryOnPath.js'
+import { resolveViaLoginShell, tmuxInstallDirectories, type TmuxPathOutcome } from '../../lib/tmuxOnPath.js'
 import type { HostAdapter, Pane, Place } from './adapter.js'
 import { CONTROL, MAX_TEXT, RUN_TIMEOUT_MS, type OrcaDeps } from './orca.js'
+import { parentChain, type ProcessName } from './scannedApp.js'
+import { binaryFinder, type ClientLookup } from './tmux.js'
 
 // Zellij takes spaces and `:` in a session name too; this form keeps a name no argument parser reads as a flag, and
 // lets `:` end the session in a pane id.
@@ -18,18 +26,56 @@ const HELD = 'held:'
 // `<session>:<pane>`. A session holds no `:`, so a held id never passes for an own one, even of a session named `held`.
 const OWN_PANE = new RegExp(`^(${SESSION}):([0-9]{1,9})$`)
 const ANY_PANE = new RegExp(`^(?:${HELD})?(${SESSION}):([0-9]{1,9})$`)
+/** One row of `list-clients` under its header: a client's id first (RECORDED_ZELLIJ.listClients). */
+const CLIENT_ROW = /^[0-9]+\s/
 
-export function createZellijAdapter(deps: Pick<OrcaDeps, 'run' | 'onPath' | 'platform'>): HostAdapter & Required<Pick<HostAdapter, 'type' | 'canType'>> {
+export interface ZellijDeps {
+  run: OrcaDeps['run']
+  /** Where zellij is (zellijFinder); it never rejects. */
+  zellij(): Promise<TmuxPathOutcome>
+  platform: NodeJS.Platform
+}
+
+/** A zellij in a folder the core looks in for tmux without a shell. */
+const installed = (env: NodeJS.ProcessEnv): string | undefined =>
+  tmuxInstallDirectories(env).map((dir) => join(dir, 'zellij')).find((path) => binaryOnPath(path, env))
+
+/** zellij as the core finds tmux (tmux.ts binaryFinder): on this process's PATH, else where the person's login shell
+ *  finds it, else in a folder the core looks in. Under launchd or systemd the master's PATH holds no Homebrew or cargo
+ *  folder, where zellij is installed. None found is asked again once a zellij is on the PATH or in one of those folders. */
+export function zellijFinder(env: NodeJS.ProcessEnv = process.env): () => Promise<TmuxPathOutcome> {
+  return binaryFinder(async () => {
+    if (binaryOnPath('zellij', env)) return { state: 'present' }
+    const path = (await resolveViaLoginShell('zellij')) ?? installed(env)
+    return path ? { state: 'adopted', path, from: dirname(path) } : { state: 'absent', reason: 'zellij was not found' }
+  }, () => binaryOnPath('zellij', env) || installed(env) !== undefined)
+}
+
+/** One `zellij --session <session> action …` where zellij was found; nothing when none was. */
+async function action(deps: ZellijDeps, session: string, args: string[]): Promise<{ code: number | null; stdout: string } | undefined> {
+  const found = await deps.zellij()
+  if (found.state === 'absent') return undefined
+  return deps.run(found.state === 'adopted' ? found.path : 'zellij', ['--session', session, 'action', ...args], RUN_TIMEOUT_MS)
+}
+
+/** The session and the pane the hints name, each in its form. macOS and Linux only for now: Zellij on Windows is turned
+ *  on with the rest of the Windows dial. */
+function hinted(platform: NodeJS.Platform, hints: Readonly<Record<string, string>>): { session: string; id: string } | undefined {
+  if (platform === 'win32') return undefined
+  const session = hints.ZELLIJ_SESSION_NAME
+  const id = hints.ZELLIJ_PANE_ID
+  return session && id && SESSION_NAME.test(session) && PANE_NUMBER.test(id) ? { session, id } : undefined
+}
+
+export function createZellijAdapter(deps: ZellijDeps): HostAdapter & Required<Pick<HostAdapter, 'type' | 'canType'>> {
   // Per pane, the words being typed: two sends at once would mix in its prompt. Busy queues nothing.
   const sending = new Set<string>()
-  const action = (zellij: string, session: string, args: string[]) =>
-    deps.run(zellij, ['--session', session, 'action', ...args], RUN_TIMEOUT_MS)
 
   // `write-chars` and `send-keys` exit 0 for a pane that is gone and for a plugin's, whose ids are counted apart from
   // the terminals': only the listing tells that the pane is a terminal that is there.
-  const isTerminal = async (zellij: string, session: string, id: string): Promise<boolean> => {
-    const listing = await action(zellij, session, ['list-panes', '--json'])
-    if (listing.code !== 0) return false
+  const isTerminal = async (session: string, id: string): Promise<boolean> => {
+    const listing = await action(deps, session, ['list-panes', '--json'])
+    if (listing?.code !== 0) return false
     try {
       const panes: unknown = JSON.parse(listing.stdout)
       return Array.isArray(panes) && panes.some((one) => one?.id === Number(id) && one?.is_plugin === false)
@@ -42,40 +88,68 @@ export function createZellijAdapter(deps: Pick<OrcaDeps, 'run' | 'onPath' | 'pla
     id: 'zellij',
     tap: 'before',
     paneOf(place: Place): Pane | undefined {
-      // macOS and Linux only for now: Zellij on Windows is turned on with the rest of the Windows dial.
-      if (deps.platform === 'win32') return undefined
-      const session = place.hints.ZELLIJ_SESSION_NAME
-      const id = place.hints.ZELLIJ_PANE_ID
-      if (!session || !id || !SESSION_NAME.test(session) || !PANE_NUMBER.test(id)) return undefined
+      const at = hinted(deps.platform, place.hints)
+      if (!at) return undefined
       // herdr or Rex started in a Zellij pane keeps its variables, and so does tmux, either way round: that pane shows
       // whichever of their panes is in front. Only focus there.
       const own = place.host === 'zellij' && place.hints.TMUX_PANE === undefined
-      return { adapter: 'zellij', id: `${own ? '' : HELD}${session}:${id}` }
+      return { adapter: 'zellij', id: `${own ? '' : HELD}${at.session}:${at.id}` }
     },
-    canFocus: () => deps.onPath('zellij') !== null,
+    // An agent in a Zellij pane has a zellij on this machine: whether it is found is asked at the verb, and a tap that
+    // finds none brings its app forward, as tmux's does.
+    canFocus: () => true,
     async focus(pane) {
       const found = ANY_PANE.exec(pane.id)
-      const zellij = found && deps.onPath('zellij')
-      if (!found || !zellij) return false
+      if (!found) return false
       const [, session, id] = found
-      return (await action(zellij, session, ['focus-pane-id', id])).code === 0
+      return (await action(deps, session, ['focus-pane-id', id]))?.code === 0
     },
-    canType: (pane) => OWN_PANE.test(pane.id) && deps.onPath('zellij') !== null,
+    canType: (pane) => OWN_PANE.test(pane.id),
     async type(pane, text) {
       const found = OWN_PANE.exec(pane.id)
       if (text === '' || text.length > MAX_TEXT || !found || sending.has(pane.id)) return false
-      const zellij = deps.onPath('zellij')
-      if (!zellij) return false
       const [, session, id] = found
       sending.add(pane.id)
       try {
         // `--` keeps words that start with a dash from being read as flags; Enter, sent on its own, submits them.
-        return await isTerminal(zellij, session, id)
-          && (await action(zellij, session, ['write-chars', '--pane-id', id, '--', text.replace(CONTROL, ' ')])).code === 0
-          && (await action(zellij, session, ['send-keys', '--pane-id', id, 'Enter'])).code === 0
+        return await isTerminal(session, id)
+          && (await action(deps, session, ['write-chars', '--pane-id', id, '--', text.replace(CONTROL, ' ')]))?.code === 0
+          && (await action(deps, session, ['send-keys', '--pane-id', id, 'Enter']))?.code === 0
       } finally {
         sending.delete(pane.id)
       }
+    },
+  }
+}
+
+/** A process of zellij's, its server's or a client's: Linux's `ps` names it, macOS's gives its path. */
+const isZellij = (p: ProcessName): boolean => p.executable === 'zellij' || p.executable.endsWith('/zellij')
+
+/**
+ * Zellij's part of the outer lookup (tmux.ts createOuter): the client that shows the agent's session. Zellij names no
+ * client's process or tty (RECORDED_ZELLIJ.listClients), so it is read from the process table, and only when the
+ * session's one client is the machine's one zellij client: of two, which is the person's is a guess, and the agent stays
+ * where its hints place it. Only for a caller under a Zellij server, as a pane's process is.
+ */
+export function zellijClients(deps: ZellijDeps): ClientLookup {
+  return {
+    id: 'zellij',
+    target: (hints) => hinted(deps.platform, hints)?.session,
+    async client(session, pid, rows) {
+      const table = await rows().catch(() => undefined)
+      if (!table) return 'processes'
+      const byPid = new Map(table.map((p) => [p.pid, p]))
+      if (!parentChain(pid, byPid).some(isZellij)) return undefined
+      const listed = await action(deps, session, ['list-clients'])
+      if (!listed) return 'zellij'
+      if (listed.code !== 0) return 'clients'
+      // A server is its panes' parent, a zellij run in a pane is under its server, and this process's own runs are its
+      // children: none is a client.
+      const parents = new Set(table.map((p) => p.ppid))
+      const clients = table.filter((p) => isZellij(p) && !parents.has(p.pid) && p.ppid !== process.pid
+        && !parentChain(p.ppid, byPid).some(isZellij))
+      const sessionClients = listed.stdout.split('\n').filter((line) => CLIENT_ROW.test(line)).length
+      return sessionClients === 1 && clients.length === 1 ? { pid: clients[0].pid } : undefined
     },
   }
 }
