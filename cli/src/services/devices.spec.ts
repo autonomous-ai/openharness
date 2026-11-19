@@ -3371,11 +3371,21 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     const focusPane = zellijAsked('focus-pane-id', '3')
     const zellijWords = [zellijAsked('list-panes', '--json'), zellijAsked('write-chars', '--pane-id', '3', '--', 'run the tests'),
       zellijAsked('send-keys', '--pane-id', '3', 'Enter')]
-    /** Linux's abstract socket: no owner to read. */
+    /** Linux's abstract socket: no owner to read, so a tap alone. */
     const KITTY = { KITTY_WINDOW_ID: '5', KITTY_LISTEN_ON: 'unix:@kitty-1' }
     const kittyAsked = (listenOn: string, ...args: string[]): Run => ['kitten', ['@', '--to', listenOn, ...args], 10_000]
-    const kittyWords = [kittyAsked('unix:@kitty-1', 'send-text', '--match', 'id:5', '--', 'run the tests'),
-      kittyAsked('unix:@kitty-1', 'send-text', '--match', 'id:5', '--', '\\r')]
+    const kittyWords = (listenOn: string): Run[] => [kittyAsked(listenOn, 'send-text', '--match', 'id:5', '--', 'run the tests'),
+      kittyAsked(listenOn, 'send-text', '--match', 'id:5', '--', '\\r')]
+    /** kitty's window 5 at a socket of this account's at a path, which takes words: the devices read its owner from the
+     *  file. */
+    const kittyAt = async (): Promise<{ KITTY_WINDOW_ID: string; KITTY_LISTEN_ON: string }> => {
+      const folder = mkdtempSync('/tmp/hk-')
+      onTestFinished(() => { rmSync(folder, { recursive: true, force: true }) })
+      const server = createServer()
+      await new Promise<void>((resolve) => { server.listen(join(folder, 's'), resolve) })
+      onTestFinished(() => { server.close() })
+      return { KITTY_WINDOW_ID: '5', KITTY_LISTEN_ON: `unix:${join(folder, 's')}` }
+    }
     /** The devices' runs recorded, Zellij's listing naming its pane 3 a terminal. */
     const listing = (base: typeof orca) => ({ ...base, run: async (file: string, args: string[], timeoutMs: number) => {
       orcaRuns.push([file, args, timeoutMs])
@@ -3439,22 +3449,37 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
 
     it('on Linux a hooked agent in a kitty window lists v and f; its tap focuses the window, then raises it', async () => {
       const linux = fakeRaise()
+      const kitty = await kittyAt()
       const { port } = startHere({ raise: linux.raise })
-      port.observed(hook('session-start', { hostHints: KITTY }))
+      port.observed(hook('session-start', { hostHints: kitty }))
       attach(port)
       expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'svf' }])
       expect(await host().openAgent(ID)).toBeUndefined()
-      expect(orcaRuns).toEqual([kittyAsked('unix:@kitty-1', 'focus-window', '--match', 'id:5')])
+      expect(orcaRuns).toEqual([kittyAsked(kitty.KITTY_LISTEN_ON, 'focus-window', '--match', 'id:5')])
       expect(linux.raised).toEqual([{ pid: 4242, app: 'kitty' }])
     })
 
     it('the dial\'s words to an agent in a kitty window run kitty\'s two calls, and reach no other adapter', async () => {
+      const kitty = await kittyAt()
       const { port } = startHere()
-      port.observed(hook('session-start', { hostHints: KITTY }))
+      port.observed(hook('session-start', { hostHints: kitty }))
       attach(port)
       expect(await host().sendTurn(ID, 'run the tests')).toEqual({ ok: true })
-      expect(orcaRuns).toEqual(kittyWords)
+      expect(orcaRuns).toEqual(kittyWords(kitty.KITTY_LISTEN_ON))
       expect(voice()).toEqual(['[device] voice · kitty'])
+      noOther()
+    })
+
+    // Once kitty is gone, any account may take an abstract socket's name: no owner can be read, so no words go there.
+    it('on Linux an agent at kitty\'s abstract socket lists f alone: its tap focuses the window, and it takes no words', async () => {
+      const linux = fakeRaise()
+      const { port } = startHere({ raise: linux.raise })
+      port.observed(hook('session-start', { hostHints: KITTY }))
+      attach(port)
+      expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'sf' }])
+      expect(await host().sendTurn(ID, 'run the tests')).toMatchObject({ ok: false })
+      expect(await host().openAgent(ID)).toBeUndefined()
+      expect(orcaRuns).toEqual([kittyAsked('unix:@kitty-1', 'focus-window', '--match', 'id:5')])
       noOther()
     })
 

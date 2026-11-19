@@ -228,11 +228,17 @@ describe('the kitty adapter', () => {
     expect(owners).toEqual(['/tmp/kitty', '/tmp/kitty'])
   })
 
-  // Linux's abstract sockets have no file and so no owner to read.
-  it('an abstract socket is spoken to with no owner asked', async () => {
+  // Linux's abstract sockets have no file and so no owner to read: once kitty is gone, any account may take the name. A
+  // tap there costs a look; words would run at that account's prompt.
+  it('an abstract socket keeps the tap, with no owner asked, and takes no words', async () => {
     const { calls, owners, adapter } = recorder()
-    expect(await adapter.focus(pane('1@unix:@mykitty'))).toBe(false)
+    const abstract = pane('1@unix:@mykitty')
+    expect(await adapter.focus(abstract)).toBe(false)
     expect(calls).toEqual([ran(['kitten', '@', '--to', 'unix:@mykitty', 'focus-window', '--match', 'id:1'])])
+    expect(adapter.canFocus(abstract)).toBe(true)
+    expect(adapter.canType(abstract)).toBe(false)
+    expect(await adapter.type(abstract, 'hello', 'claude')).toBe(false)
+    expect(calls).toHaveLength(1)
     expect(owners).toEqual([])
   })
 
