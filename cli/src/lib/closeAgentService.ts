@@ -48,6 +48,9 @@ function keptNone(s: Pick<RegisteredSession, 'engine' | 'sessionId'>): boolean {
   return resumeMode(s.engine) === 'conversation' && !s.sessionId
 }
 
+/** Launches Harness failed before the harness started any work: closing one loses nothing. */
+const UNSTARTED_LAUNCHES = new Set<string>([OPENCLAW_FIRST_TASK.error, 'OPENCLAW_NO_TOKEN'])
+
 type CloseSession = Pick<RegisteredSession, 'engine' | 'sessionId' | 'transcriptPath' | 'boundAt' | 'launch' | 'resumeOnly'>
 
 export function unusedChat(session: CloseSession): boolean {
@@ -65,9 +68,10 @@ export function inspectCloseActivity(session: CloseSession, screen: ScreenReadin
   if (turnOpen === true) return 'working'
   if (!screen) return 'unknown'
   if (screen.busy) return 'working'
-  // Harness failed this launch itself, OpenClaw never having taken its first task (core/agents/bind.ts), and tells the
-  // person to close it: no work runs there, and its pane, a history that never loaded, never shows an idle composer.
-  if (session.launch?.state === 'failed' && session.launch.error === OPENCLAW_FIRST_TASK.error) return 'idle'
+  // Harness failed this launch itself and tells the person to close it: OpenClaw never took its first task
+  // (core/agents/bind.ts), or its TUI exited without a Gateway token (core/agents/newPane.ts). No work runs there, and its
+  // pane, a history that never loaded or the TUI's exit, never shows an idle composer.
+  if (session.launch?.state === 'failed' && UNSTARTED_LAUNCHES.has(session.launch.error ?? '')) return 'idle'
   const hold = screen.teamHold
   if (hold === 'team_waiting_draft') return 'draft'
   if (hold === 'team_waiting_user') return 'needs_input'
