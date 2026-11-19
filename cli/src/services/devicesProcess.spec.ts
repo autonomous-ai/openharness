@@ -8,7 +8,7 @@ import { createDevicesLink, type DevicesState } from '../core/devicesLink.js'
 import { devicesListenerPath } from '../devices/listenerPath.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import type { DevicesDeps } from './devices.js'
-import type { ListenerHandler } from './devicesListener.js'
+import type { DevicesListenerOptions, ListenerHandler } from './devicesListener.js'
 import { runDevicesService, type DevicesServiceOptions } from './devicesProcess.js'
 import type { CoreConnection, ServiceProcessOptions } from './process.js'
 
@@ -43,7 +43,7 @@ function devicesPort() {
   return { port, calls }
 }
 
-function setup(over: { processEnv?: NodeJS.ProcessEnv; openListener?: DevicesServiceOptions['openListener'] } = {}) {
+function setup(over: { processEnv?: NodeJS.ProcessEnv; openListener?: DevicesServiceOptions['openListener']; platform?: NodeJS.Platform } = {}) {
   const { port, calls } = devicesPort()
   let api!: CoreApi
   let deps!: DevicesDeps
@@ -59,7 +59,7 @@ function setup(over: { processEnv?: NodeJS.ProcessEnv; openListener?: DevicesSer
   const run = vi.fn((given: ServiceProcessOptions) => { options = given; return { stop } })
   const service = runDevicesService({
     dataDir: '/data', socketPath: '/sock', machineId: 'computer-9', token: 't',
-    start, run, processEnv: over.processEnv ?? {}, openListener: over.openListener,
+    start, run, processEnv: over.processEnv ?? {}, openListener: over.openListener, platform: over.platform,
   })
   const queries: Array<[string, Record<string, unknown> | undefined]> = []
   const notices: Array<[string, Record<string, unknown> | undefined]> = []
@@ -142,6 +142,24 @@ describe('the devices in their own process', () => {
     // The real listener when no test stands in for it.
     await setup().deps().listen!(handlers, log)
     expect(real.listened).toEqual([{ path: devicesListenerPath('/data'), handlers, log }])
+  })
+
+  it('on Windows the devices listen on a new pipe of their own, with their token and record in the data folder', async () => {
+    const opened: DevicesListenerOptions[] = []
+    const handlers: Record<string, ListenerHandler> = { front: { maxBytes: 64, perSecond: 10, handle: () => {} } }
+    const listen = (platform: NodeJS.Platform) =>
+      setup({ platform, openListener: async (options) => { opened.push(options); return null } }).deps().listen!(handlers, vi.fn())
+    await listen('win32')
+    await listen('win32')
+    await listen('darwin')
+    const [windows, again, mac] = opened
+    expect(windows!.pipe!.path).toMatch(/^\\\\\.\\pipe\\harness-[0-9a-f]{32}$/)
+    expect(windows!.pipe!.dataDir).toBe('/data')
+    expect(windows!.path).toBeNull()
+    // A new name each start.
+    expect(again!.pipe!.path).not.toBe(windows!.pipe!.path)
+    expect(mac!.pipe).toBeUndefined()
+    expect(mac!.path).toBe(devicesListenerPath('/data', 'darwin'))
   })
 
   it('stop their link, then the devices, serial ports first', async () => {
