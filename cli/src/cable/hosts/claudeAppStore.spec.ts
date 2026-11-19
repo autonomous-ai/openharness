@@ -4,7 +4,9 @@ import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { ACCOUNT, ORG, claudeAppFixture, type FixturePlace, type FixtureSession } from '../../testing/claudeAppFixture.js'
-import { ClaudeAppStore, MAX_FILE_BYTES, type StoreRead } from './claudeAppStore.js'
+import {
+  ClaudeAppStore, MAX_ACCOUNTS, MAX_FILE_BYTES, MAX_FILES, MAX_LISTED, MAX_ORGS, MAX_PARSES, type StoreRead,
+} from './claudeAppStore.js'
 
 /** A fixed mtime in ms: a whole second, so every mtime set from it reads back exactly. */
 const T = 1_763_000_000_000
@@ -264,7 +266,7 @@ describe.skipIf(process.platform === 'win32')('the Claude app\'s store', () => {
       expect(across.skipped).toBe(1)
     })
 
-    it.each([10, 16])('two files with one cliSessionId keep the newest sort time\'s, beside %i other sessions', async (others) => {
+    it.each([10, MAX_LISTED])('two files with one cliSessionId keep the newest sort time\'s, beside %i other sessions', async (others) => {
       // B's activity is newer but sorts by its older mtime: past 16 others the walk stops before it, so the copy
       // chosen must not be the newer activity's, or it would depend on how many other sessions there are.
       const s = store()
@@ -309,8 +311,8 @@ describe.skipIf(process.platform === 'win32')('the Claude app\'s store', () => {
 
     it('it stops once 16 are counted and the next file is older', async () => {
       const s = await twenty()
-      expect(s.first.parsed).toBe(16)
-      expect(localIds(s.first)).toEqual(range(1, 16).map(local))
+      expect(s.first.parsed).toBe(MAX_LISTED)
+      expect(localIds(s.first)).toEqual(range(1, MAX_LISTED).map(local))
       expect((await s.reader.read()).parsed).toBe(0)
     })
 
@@ -318,28 +320,28 @@ describe.skipIf(process.platform === 'win32')('the Claude app\'s store', () => {
       const s = await twenty()
       const read = await touched(s, s.put(20, { lastActivityAt: T + 1000 }, { mtime: T + 1000 }))
       expect(read.parsed).toBe(1)
-      expect(localIds(read)).toEqual([local(20), ...range(1, 15).map(local)])
+      expect(localIds(read)).toEqual([local(20), ...range(1, MAX_LISTED - 1).map(local)])
     })
 
     it('archiving one of the 16 parses the next', async () => {
       const s = await twenty()
       const read = await touched(s, s.put(3, { isArchived: true }))
       expect(read.parsed).toBe(2)
-      expect(localIds(read)).toEqual([1, 2, ...range(4, 17)].map(local))
+      expect(localIds(read)).toEqual([1, 2, ...range(4, MAX_LISTED + 1)].map(local))
     })
 
     it('a file rewritten with no new activity sorts by its lastActivityAt', async () => {
       const s = await twenty()
       const read = await touched(s, s.put(18, { lastActivityAt: T - 18_000 }, { mtime: T + 1000 }))
       expect(read.parsed).toBe(1)
-      expect(localIds(read)).toEqual(range(1, 16).map(local))
+      expect(localIds(read)).toEqual(range(1, MAX_LISTED).map(local))
     })
 
     it('a lastActivityAt ahead of the file\'s mtime sorts by the mtime, and is handed out as the mtime', async () => {
       // A time in the future would pin the session first on the dial's ring.
       const s = await twenty({ 2: { lastActivityAt: T + 9_000_000 } })
       for (const read of [s.first, await s.reader.read()]) {
-        expect(localIds(read)).toEqual(range(1, 16).map(local))
+        expect(localIds(read)).toEqual(range(1, MAX_LISTED).map(local))
         expect(read.sessions[1]!.lastActivityAt).toBe(T - 2000)
       }
     })
@@ -347,45 +349,47 @@ describe.skipIf(process.platform === 'win32')('the Claude app\'s store', () => {
 
   it('a walk cut at 256 asks for one more read', async () => {
     const s = store()
-    for (const n of range(1, 300)) s.put(n, { isArchived: true })
-    for (const n of range(301, 316)) s.put(n)
+    const archived = 300
+    for (const n of range(1, archived)) s.put(n, { isArchived: true })
+    for (const n of range(archived + 1, archived + MAX_LISTED)) s.put(n)
+    const left = archived + MAX_LISTED - MAX_PARSES
     const first = await loaded(s.reader)
-    expect(first).toEqual({ ...NOTHING, parsed: 256, more: true, over: 60 })
+    expect(first).toEqual({ ...NOTHING, parsed: MAX_PARSES, more: true, over: left })
     const second = await s.reader.read()
-    expect(second).toMatchObject({ parsed: 60, skipped: 0, more: false, over: 0 })
-    expect(localIds(second)).toEqual(range(301, 316).map(local))
+    expect(second).toMatchObject({ parsed: left, skipped: 0, more: false, over: 0 })
+    expect(localIds(second)).toEqual(range(archived + 1, archived + MAX_LISTED).map(local))
   })
 
   describe('bounds', () => {
     it('9 account folders: 8 are read, in name order, and over counts one', async () => {
       const s = store()
       // Made last to first, the last named holding the newest session: a reader that took them unsorted would list it.
-      for (const k of range(1, 9).reverse()) s.put(10 - k, {}, { account: `account-${k}` })
+      for (const k of range(1, MAX_ACCOUNTS + 1).reverse()) s.put(MAX_ACCOUNTS + 2 - k, {}, { account: `account-${k}` })
       const folders = await s.reader.folders()
-      expect(folders?.accounts).toEqual(range(1, 8).map((k) => join(s.fixture.root, `account-${k}`)))
+      expect(folders?.accounts).toEqual(range(1, MAX_ACCOUNTS).map((k) => join(s.fixture.root, `account-${k}`)))
       await s.reader.files()
       const read = await s.reader.read()
-      expect(localIds(read)).toEqual(range(2, 9).map(local))
+      expect(localIds(read)).toEqual(range(2, MAX_ACCOUNTS + 1).map(local))
       expect(read.over).toBe(1)
     })
 
     it('9 org folders in an account: over counts one', async () => {
       const s = store()
-      for (const k of range(1, 9).reverse()) s.put(10 - k, {}, { org: `org-${k}` })
+      for (const k of range(1, MAX_ORGS + 1).reverse()) s.put(MAX_ORGS + 2 - k, {}, { org: `org-${k}` })
       const folders = await s.reader.folders()
-      expect(folders?.orgs).toEqual(range(1, 8).map((k) => join(s.fixture.root, ACCOUNT, `org-${k}`)))
+      expect(folders?.orgs).toEqual(range(1, MAX_ORGS).map((k) => join(s.fixture.root, ACCOUNT, `org-${k}`)))
       await s.reader.files()
       const read = await s.reader.read()
-      expect(localIds(read)).toEqual(range(2, 9).map(local))
+      expect(localIds(read)).toEqual(range(2, MAX_ORGS + 1).map(local))
       expect(read.over).toBe(1)
     })
 
     it('1,030 names in a folder: 1,024 are held and over counts six', async () => {
       const s = store()
       // The six past the bound in name order are the newest: held, they would be listed first.
-      for (const n of range(1, 1030)) s.put(n, { lastActivityAt: T + n * 1000 }, { mtime: T + n * 1000 })
+      for (const n of range(1, MAX_FILES + 6)) s.put(n, { lastActivityAt: T + n * 1000 }, { mtime: T + n * 1000 })
       const read = await loaded(s.reader)
-      expect(localIds(read)).toEqual(range(1009, 1024).reverse().map(local))
+      expect(localIds(read)).toEqual(range(MAX_FILES - MAX_LISTED + 1, MAX_FILES).reverse().map(local))
       expect(read.over).toBe(6)
     })
 
