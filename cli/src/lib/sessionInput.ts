@@ -1294,6 +1294,9 @@ export class SessionInputController {
   private async resubmit(sessionId: string, session: RegisteredSession, state: InputState): Promise<void> {
     state.retries++
     const valid = await this.deps.validateRuntime(session)
+    // Each wait may outlast the message: the agent forgotten, or its turn started, meanwhile. A key pressed then would
+    // land in a pane no message of this agent awaits.
+    if (this.states.get(sessionId) !== state || !state.awaitingFingerprint || state.turnOpen) return
     if (!valid) {
       this.finishDelivery(sessionId, state, 'unknown', 'runtime_gone_post_paste')
       this.settle(state, 'runtime_gone')
@@ -1303,12 +1306,12 @@ export class SessionInputController {
       this.deps.onError(sessionId, 'This agent process is no longer running.')
       return
     }
-    if (state.deliveryId && (this.states.get(sessionId) !== state || !state.awaitingFingerprint || state.turnOpen)) return
     // Said once the engine is known to be there: an engine that exited gets no Enter, and the log used
     // to claim one anyway.
     console.log(`[inject] ${sid(sessionId)} resubmit Enter · engine=${session.engine} · retry=${state.retries}/${SUBMIT_MAX_RETRIES}`)
     // Only the submit key is retried. The prompt body is never pasted twice.
     const delivery = await this.deps.sendKey(session.agentId, 'Enter')
+    if (this.states.get(sessionId) !== state || !state.awaitingFingerprint || state.turnOpen) return
     state.ambiguousDispatch = typeof delivery === 'boolean'
       ? !delivery
       : delivery.dispatch === 'possibly_executed'
