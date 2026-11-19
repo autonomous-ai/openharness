@@ -108,6 +108,7 @@ function setup(over: Partial<BindDeps> = {}) {
     deviceInput: { forget: vi.fn() },
     homes: { copilot: '/copilot', grok: '/grok', agy: '/agy' },
     capturePane: vi.fn(async () => null),
+    activityRevision: vi.fn(() => 1),
     openclawPaneRead: vi.fn(),
     openclawPaneDue: vi.fn(() => true),
     openclawStateDir: vi.fn(async () => null),
@@ -1797,6 +1798,27 @@ describe('binding an OpenClaw pane, read from its screen', () => {
     expect(vi.mocked(run.deps.openclawPaneRead).mock.calls.map(([, reading]) => reading)).toEqual([{ ready: true, gatewayLost: false, running: false }])
   })
 
+  // A capture is older than what lands after it (core rule 6): the turn activity takes a reading of it only while nothing
+  // changed since the revision read before it was taken (core/turns/activity.ts `paneRead`).
+  it('tells the stream, with each capture, the turn activity\'s revision read before it', async () => {
+    let revision = 1
+    let attached = false
+    const run = setup({
+      capturePane: vi.fn(async () => { revision++; return screen('screen-plain') }),
+      activityRevision: vi.fn(() => revision),
+      attachSession: vi.fn(async () => { attached = true; return true }),
+      openclawPaneRead: vi.fn(() => attached),
+    })
+    // Held: the pass that clears it attaches the stream and reads the pane once more, to hand the first task over.
+    const row = pane({ sessionId: 'agent:main:plain', firstTask: 'Fix the parser', identityHold: OPENCLAW_STATES.noGateway })
+    run.byAgent.set('a1', row)
+    vi.mocked(run.deps.registry.byProcess).mockReturnValue(row)
+    await run.binding.bindObservedAgent(tui())
+    await vi.waitFor(() => expect(run.deps.openclawPaneRead).toHaveBeenCalledTimes(2))
+    expect(vi.mocked(run.deps.activityRevision).mock.calls).toEqual([['agent:main:plain'], ['agent:main:plain']])
+    expect(vi.mocked(run.deps.openclawPaneRead).mock.calls.map((call) => call[3])).toEqual([1, 2])
+  })
+
   // A run with no session in the store for 30 s is a store the Gateway does not write (engines/openclaw/live.ts).
   it('tells the stream when the pane reads a run in progress', async () => {
     let shown = screen('screen-abort-running')
@@ -1824,7 +1846,7 @@ describe('binding an OpenClaw pane, read from its screen', () => {
     vi.mocked(run.deps.openclawPaneDue).mockReturnValue(true)
     await run.binding.bindObservedAgent(tui())
     expect(run.deps.capturePane).toHaveBeenCalledOnce()
-    expect(run.deps.openclawPaneRead).toHaveBeenCalledWith('agent:main:plain', { ready: true, gatewayLost: false, running: false }, shown)
+    expect(run.deps.openclawPaneRead).toHaveBeenCalledWith('agent:main:plain', { ready: true, gatewayLost: false, running: false }, shown, 1)
     // A pane not bound yet is read on every pass: its footer is how it is bound.
     vi.mocked(run.deps.openclawPaneDue).mockReturnValue(false)
     vi.mocked(run.deps.registry.byProcess).mockReturnValue(pane())
@@ -1895,7 +1917,7 @@ describe('binding an OpenClaw pane, read from its screen', () => {
       // The message awaits its user row, which this store never shows: the pass reads the pane, and the run on it.
       await pass(10)
       expect(run.deps.capturePane).toHaveBeenCalledTimes(2)
-      expect(run.deps.openclawPaneRead).toHaveBeenLastCalledWith('agent:main:plain', { ready: false, gatewayLost: false, running: true }, shown)
+      expect(run.deps.openclawPaneRead).toHaveBeenLastCalledWith('agent:main:plain', { ready: false, gatewayLost: false, running: true }, shown, 1)
       for (let seconds = 15; seconds < 40; seconds += 5) await pass(seconds)
       expect(onSessionMissing).not.toHaveBeenCalled()
       await pass(40)
@@ -2204,7 +2226,7 @@ describe('binding an OpenClaw pane, read from its screen', () => {
       expect(vi.mocked(run.deps.registry.register).mock.calls[0][0]).toMatchObject({ sessionId: 'agent:main:other', source: 'openclaw-new' })
       await vi.waitFor(() => expect(run.deps.submitFirstTask).toHaveBeenCalledWith('a1', TASK))
       // To the session the pane moved to, never the one the row had.
-      expect(run.deps.openclawPaneRead).toHaveBeenLastCalledWith('agent:main:other', { ready: true, gatewayLost: false, running: false }, other)
+      expect(run.deps.openclawPaneRead).toHaveBeenLastCalledWith('agent:main:other', { ready: true, gatewayLost: false, running: false }, other, 1)
       expect(run.deps.registry.takeFirstTask).toHaveBeenCalledOnce()
     })
 
@@ -2230,7 +2252,7 @@ describe('binding an OpenClaw pane, read from its screen', () => {
         vi.mocked(run.deps.registry.register).mockResolvedValue({ entry: pane({ sessionId: 'agent:main:plain', firstTask: TASK }), ...meta({ isNew: true }) } as never)
         await run.binding.bindObservedAgent(tui())
         await vi.waitFor(() => expect(run.deps.submitFirstTask).toHaveBeenCalledWith('a1', TASK))
-        expect(run.deps.openclawPaneRead).toHaveBeenLastCalledWith('agent:main:plain', { ready: true, gatewayLost: false, running: false }, ready)
+        expect(run.deps.openclawPaneRead).toHaveBeenLastCalledWith('agent:main:plain', { ready: true, gatewayLost: false, running: false }, ready, 1)
         expect(run.deps.capturePane).toHaveBeenCalledTimes(2)
       })
 
