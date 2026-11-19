@@ -8452,6 +8452,22 @@ describe("the Claude app's Code sessions, from its store (docs/plans/2026-11-19-
     expect(await listed()).toEqual([{ id: ID, name: 'Fix the build', caps: 'sf' }])
   })
 
+  it('a session the app resumes after its turn was told done is told no second done', async () => {
+    const { port, live } = withStore()
+    await live()
+    port.observed(hook('session-start'))
+    port.observed(hook('turn-start'))
+    port.observed(hook('turn-stop'))
+    await wait(STOP_HOOK_GRACE_MS)
+    expect(calls('turnDone')).toHaveLength(1)
+    // The app ends its process, and the store's row has its place until the app resumes it, inside the ended copy's 10 s.
+    port.observed(hook('session-end'))
+    expect(await listed()).toEqual([{ id: ID, name: 'Fix the build', caps: 'sf' }])
+    port.observed(hook('session-start'))
+    await flush()
+    expect(calls('turnDone')).toHaveLength(1)
+  })
+
   it('a hooked session whose id the store has not caught up with folds by the app\'s own id; once it ended the store\'s row is the one row', async () => {
     const { fake, port, live } = withStore()
     fake.sessions = [session({ sessionId: SECOND })]
