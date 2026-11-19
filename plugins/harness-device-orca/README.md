@@ -28,19 +28,10 @@ While Orca is in front, a swipe on the dial stays among the agents of the worktr
 
 ## Install
 
-The Harness menu-bar app offers `Connect Orca…` while Orca runs without this plugin. It shows the access Orca lists, and
-installs the plugin when you click Connect. After each Harness update the app brings the plugin current, and asks again
-only when Orca does. The app also offers to replace a plugin installed by hand from a checkout.
-
-Without the app:
-
-```
-orca plugin install <this repository>/plugins/harness-device-orca
-```
-
-Orca stops with `approval_required` and shows the access the plugin asks for. Read it, then run the command Orca
-prints, with its `--approve <fingerprint>`, or approve as Orca shows. A later version installs with
-`orca plugin update <plugin-key>`; one that asks for more access asks again.
+Harness sets this plugin up for you once a dial has attached on this computer and Orca runs, and keeps it current as
+Harness updates. Harness approves this plugin in Orca for you, with read-only access to your workspaces. Remove it in
+Orca, or run `harness device orca disable`, and Harness will not install it again; `harness device orca enable` brings
+it back. An update that asks for more access is not approved.
 
 It needs Orca 1.4.248 or later, on macOS or Linux. On Windows the panel reads "Not on Windows yet."
 
