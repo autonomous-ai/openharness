@@ -83,13 +83,15 @@ it('repairs a child-overwritten parent from an adopted Codex home before the log
   expect(registry.get(parentId)).toMatchObject({ transcriptPath: child, identityHold: expect.stringContaining('ancestor changed') })
   expect(JSON.parse(readFileSync(join(root, 'registry.json'), 'utf8'))[0].transcriptPath).toBe(child)
   // A changed ancestor is incomplete evidence, even when another CI fixture
-  // caused it. The preserved binding can be repaired by the next fresh read.
-  await vi.waitFor(() => {
-    registry.load()
-    expect(registry.get(parentId)?.transcriptPath).toBe(parent)
-    expect(registry.get(parentId)?.identityHold).toBeUndefined()
-    expect(JSON.parse(readFileSync(join(root!, 'registry.json'), 'utf8'))[0].transcriptPath).toBe(parent)
-  }, { timeout: 3_000 })
+  // caused it. The preserved binding is repaired by the next fresh read, and that repair is saved.
+  registry.load()
+  await registry.flush()
+  expect(registry.get(parentId)?.transcriptPath).toBe(parent)
+  expect(registry.get(parentId)?.identityHold).toBeUndefined()
+  expect(JSON.parse(readFileSync(join(root, 'registry.json'), 'utf8'))[0].transcriptPath).toBe(parent)
+  registry.load()
+  expect(registry.get(parentId)).toMatchObject({ transcriptPath: parent })
+  expect(registry.get(parentId)?.identityHold).toBeUndefined()
 })
 
 
