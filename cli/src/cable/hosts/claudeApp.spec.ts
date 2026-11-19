@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Place } from './adapter.js'
-import { createClaudeAppAdapter } from './claudeApp.js'
+import { CLAUDE_SESSION, claudePaneKey, createClaudeAppAdapter } from './claudeApp.js'
 
 const SESSION = 'local_8d1f2c3a-4b5e-4f60-9a7b-1c2d3e4f5a6b'
 const OTHER = 'local_0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d'
@@ -86,6 +86,14 @@ describe('the Claude app adapter', () => {
   it('the hook\'s hints win over the record\'s id', () => {
     const { adapter } = recorder()
     expect(adapter.paneOf(scanned({ hints: { __CFBundleIdentifier: CLAUDE, CLAUDE_CODE_HOST_SESSION_ID: OTHER } }))).toEqual(pane(OTHER))
+  })
+
+  it('its pane key is claude-app: and the session\'s id, the key the store\'s source lists it by', () => {
+    const { adapter } = recorder()
+    expect(adapter.paneKey(pane(SESSION))).toBe(`claude-app:${SESSION}`)
+    expect(claudePaneKey(SESSION)).toBe(`claude-app:${SESSION}`)
+    expect(CLAUDE_SESSION.test(SESSION)).toBe(true)
+    expect(CLAUDE_SESSION.global).toBe(false)
   })
 
   it('canFocus is macOS only; canShow also needs the app in front, asked each time', () => {
