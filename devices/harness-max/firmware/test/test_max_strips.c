@@ -228,6 +228,11 @@ static void waits_for_a_kick(void)
     CHECK(kicks() == 1 && atomic_load(&s_copies) == 0 && max_strips_ppa());
     max_strip_wait(0, 0);   // landed: no second wait, no second kick
     CHECK(kicks() == 1);
+    ppa_mode(WAITS);   // and again: the log says it once
+    push(0, 1, 3);
+    ppa_mode(LANDS);
+    max_strip_wait(0, 1);
+    CHECK(kicks() == 2 && fb_is_want() && logged("once kicked") == 1);
 }
 
 // A push left waiting mid-frame: the next push starts it, no kick needed.

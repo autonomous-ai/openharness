@@ -98,8 +98,10 @@ What to do with it:
 
 - If `product max_turn_ppa` is not `8/8` or the PPA turn is slower than (b), the product should turn on the CPU: the
   PPA path is one commit, `Harness Max: the PPA turns the strips ...`; revert it.
-- `max_strips: a PPA turn did not land` in the console means a turn was lost even after its kick: the frame went on
-  with the CPU turning the strips (every `2c ppa`/`1c ppa` after it is a CPU number), and that is a fault to look into.
+- `max_strips: a PPA turn left waiting landed once kicked` in the console is the PPA driver's race met and got over
+  (`max_turn_ppa.h`): that frame waited 5 ms. `max_strips: a PPA turn did not land` means one was lost even after its
+  kick: the frame went on with the CPU turning the strips (every `2c ppa`/`1c ppa` after it is a CPU number), and that
+  is a fault to look into.
 - The full-repaint frame time (`build` + `warm` + 20 turns) against the 16-33 ms a moving row needs says whether motion
   can repaint whole strips or needs damage-sized frames, two cores, or cached layers ((d)).
 - (g)'s `min` is the row's frame rate at its worst moment: 30 or more is the target for every motion, cold and warm.

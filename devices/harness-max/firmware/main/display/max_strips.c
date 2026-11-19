@@ -51,7 +51,8 @@ static uint32_t s_seq[MAX_WORKERS][MAX_STRIP_SLOTS];     // and which of its wor
 static uint32_t s_pushes[MAX_WORKERS];                   // each worker's own
 static uint16_t *s_spare[MAX_WORKERS];   // a lost turn's strip as the CPU turns it: PSRAM, for a path taken once
 static atomic_bool s_ppa;
-static atomic_int s_lost;   // turns given up: queued, never to land
+static atomic_int s_lost;     // turns given up: queued, never to land
+static atomic_int s_kicked;   // turns that landed once kicked
 
 esp_err_t max_strips_init(max_strips_copy_t copy)
 {
@@ -173,6 +174,7 @@ void max_strip_wait(int worker, int slot)
             lost(worker);
             return;
         }
+        if (!atomic_fetch_add(&s_kicked, 1)) ESP_LOGW(TAG, "a PPA turn left waiting landed once kicked (logged once)");
     }
     s_in_flight[worker][slot] = false;
 }
