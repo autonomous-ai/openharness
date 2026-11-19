@@ -5,7 +5,7 @@ use harness_device::cli::cli_override;
 use harness_device::desktop::{DesktopApp, SystemDesktopApp, run_open};
 use harness_device::follow;
 use harness_device::front;
-use harness_device::install::{Shell, system_shell};
+use harness_device::install::system_shell;
 use harness_device::log::FileLog;
 use harness_device::loginitem::SystemLoginItem;
 use harness_device::runner::{Doors, Runner};
@@ -81,7 +81,7 @@ fn start(handle: &AppHandle, events: Sender<Event>, queue: Receiver<Event>) -> t
         home: paths.home_dir()?,
         path_var: std::env::var_os("PATH"),
         cli_override: cli_override(cfg!(debug_assertions), std::env::var_os("HARNESS_DEVICE_CLI")),
-        shell: system_shell().map(|shell| Arc::new(shell) as Arc<dyn Shell>),
+        shell: Arc::new(system_shell(paths.app_data_dir()?)),
         login_item: Arc::new(SystemLoginItem),
         state,
         log: log.clone(),

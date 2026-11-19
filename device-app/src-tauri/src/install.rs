@@ -1,12 +1,14 @@
-//! The install script runs: `--host`, then `--desktop`. The screen shows the step a run is at, as fixed copy from
-//! STEPS, never the script's text. The log holds only the script's step lines (`▸`, `✓`, `✗`), each run's result, and
-//! after a failure the lines the screen shows: a log that took every line held a script's source and brew's output
-//! (2026-11-17).
+//! The install script runs: on macOS `--host`, then `--desktop`; on Linux the same, `--host` in a terminal the person
+//! sees; on Windows install.ps1 `-Desktop`, once. The screen shows the step a run is at, as fixed copy, never the
+//! script's text. The log holds only the script's step lines, each run's result, and after a failure the lines the
+//! screen shows: a log that took every line held a script's source and brew's output (2026-11-17).
 
 use crate::cli::{self, INSTALL_DEADLINE};
 use crate::log::{printable, redact};
 use crate::types::{Log, Output};
+use std::ffi::OsStr;
 use std::io;
+use std::path::PathBuf;
 use std::process::Command;
 use std::time::Duration;
 
@@ -14,9 +16,12 @@ use std::time::Duration;
 pub const HOST: &str = "curl -fsSL https://cdn.autonomous.ai/harness/cli/install.sh | /bin/sh -s -- --host";
 /// The desktop app's `kHarnessDesktopInstallCommand`, word for word.
 pub const DESKTOP: &str = "curl -fsSL https://cdn.autonomous.ai/harness/cli/install.sh | /bin/sh -s -- --desktop";
+/// The desktop app's `windowsInstallCommand`, word for word: install.ps1 `-Desktop`, read as UTF-8, its exit code
+/// PowerShell's (under `iex` the script sets `$LASTEXITCODE` rather than exiting).
+pub const WINDOWS: &str = r#"[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false); iex "& { $(irm 'https://cdn.autonomous.ai/harness/cli/install.ps1' -ErrorAction Stop) } -Desktop"; exit $LASTEXITCODE"#;
+/// `powershell.exe`'s arguments before WINDOWS, the desktop app's `windowsInstallArguments`.
+pub const POWERSHELL_ARGS: [&str; 5] = ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command"];
 
-/// Off macOS: the Windows script (`install.ps1 -Desktop`) is a later wave.
-pub const NOT_SUPPORTED: &str = "Not supported here.";
 /// A run past its deadline that printed nothing.
 pub const TIMED_OUT: &str = "Setup timed out.";
 /// A run that failed, or a computer with no CLI after both runs, when the run printed nothing.
@@ -35,6 +40,8 @@ const STEP_LINE_CHARS: usize = 512;
 pub const GETTING_READY: &str = "Getting ready…";
 pub const INSTALLING_TMUX: &str = "Installing tmux…";
 pub const DOWNLOADING_HARNESS: &str = "Downloading Harness…";
+/// While Linux's host half runs in a terminal: its lines are the person's there, and name no step here.
+pub const FINISH_IN_TERMINAL: &str = "Finish in the terminal…";
 
 /// How a script step line begins, after its `▸`, and the step it shows. A line not here changes nothing, so a step
 /// the script adds shows the one before it. cli/src/scripts/install.spec.ts's "keeps the step lines Harness Device
@@ -46,33 +53,110 @@ const STEPS: [(&str, &str); 5] = [
     ("downloading Node", DOWNLOADING_HARNESS),
     ("Installing harness", DOWNLOADING_HARNESS),
 ];
+/// How an install.ps1 line that shows DOWNLOADING_HARNESS begins. install.ps1 marks no step with `▸` and has no tmux
+/// step. cli/src/scripts/installPs1.spec.ts's "keeps the step lines Harness Device names" test pins these beginnings
+/// and WINDOWS_DONE's in the script.
+const WINDOWS_STEPS: [&str; 3] = ["Downloading Node ", "Downloading Harness ", "Downloading the terminal host "];
+/// The rest of install.ps1's step lines the log keeps: a step done, and the failure.
+const WINDOWS_DONE: [&str; 2] = ["OK ", "Harness could not be installed. The step that failed: "];
 
-/// Runs one shell line, behind a trait so no test runs the script or reaches the network. `sink` gets each line as
-/// it arrives.
-pub trait Shell: Send + Sync {
-    fn run(&self, line: &str, deadline: Duration, sink: &mut dyn FnMut(&str)) -> io::Result<Output>;
+/// Where a run happens: behind the Install screen, or in a terminal the person sees, where `sudo` can ask for their
+/// password.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Place {
+    Background,
+    Terminal,
 }
 
-/// `/bin/sh -c line`, in its own process group: past the deadline curl and the script die with it.
-pub struct SystemShell;
+/// One fixed line an install runs, and the flag the log names it by.
+#[derive(Debug, PartialEq, Eq)]
+pub struct Run {
+    pub line: &'static str,
+    pub flag: &'static str,
+    pub place: Place,
+}
 
-impl Shell for SystemShell {
-    fn run(&self, line: &str, deadline: Duration, sink: &mut dyn FnMut(&str)) -> io::Result<Output> {
-        let mut command = Command::new("/bin/sh");
-        command.arg("-c").arg(line);
-        cli::run_lines(command, deadline, sink)
+static MACOS_RUNS: [Run; 2] = [
+    Run { line: HOST, flag: "--host", place: Place::Background },
+    Run { line: DESKTOP, flag: "--desktop", place: Place::Background },
+];
+/// On a fresh Ubuntu `--host` reaches `sudo apt-get` (tmux, a clipboard helper), so it runs in a terminal, as the
+/// desktop app runs it there.
+static LINUX_RUNS: [Run; 2] = [
+    Run { line: HOST, flag: "--host", place: Place::Terminal },
+    Run { line: DESKTOP, flag: "--desktop", place: Place::Background },
+];
+/// install.ps1 has no host half: it installs the terminal host itself.
+static WINDOWS_RUNS: [Run; 1] = [Run { line: WINDOWS, flag: "-Desktop", place: Place::Background }];
+
+/// The runs of an install on `os` (`std::env::consts::OS`), in order. macOS's on any other: the app is built for none.
+pub fn runs(os: &str) -> &'static [Run] {
+    match os {
+        "linux" => &LINUX_RUNS,
+        "windows" => &WINDOWS_RUNS,
+        _ => &MACOS_RUNS,
     }
 }
 
-/// Some on macOS only: the install is not offered elsewhere yet, so the runner answers NOT_SUPPORTED there.
-pub fn system_shell() -> Option<SystemShell> {
-    cfg!(target_os = "macos").then_some(SystemShell)
+/// Runs one of an install's runs, behind a trait so no test runs the script or reaches the network. `sink` gets each
+/// line as it arrives; a run in a terminal hands it none.
+pub trait Shell: Send + Sync {
+    fn run(&self, run: &Run, deadline: Duration, sink: &mut dyn FnMut(&str)) -> io::Result<Output>;
 }
 
-/// HOST, then DESKTOP, each within INSTALL_DEADLINE. Each line's exit code is `/bin/sh`'s, not curl's: a curl that
-/// fails hands sh nothing, and sh exits 0. So an install counts only when `cli_there()` finds a CLI after both.
-/// Err holds the last lines of the run that failed, or of the last run. `on_step` is told each step as it changes.
+/// A run behind the screen is `/bin/sh -c line`, or Windows PowerShell on Windows, in its own process group (a job on
+/// Windows): past the deadline curl and the script die with it. A run in a terminal writes its script in `folder`.
+pub struct SystemShell {
+    pub folder: PathBuf,
+}
+
+impl Shell for SystemShell {
+    fn run(&self, run: &Run, deadline: Duration, sink: &mut dyn FnMut(&str)) -> io::Result<Output> {
+        // Only Linux's runs have one in a terminal.
+        #[cfg(any(target_os = "linux", all(test, unix)))]
+        if run.place == Place::Terminal {
+            return crate::terminal::run(&self.folder, run.line, deadline, &crate::terminal::start);
+        }
+        cli::run_lines(background(run.line), deadline, sink)
+    }
+}
+
+#[cfg(unix)]
+fn background(line: &str) -> Command {
+    let mut command = Command::new("/bin/sh");
+    command.arg("-c").arg(line);
+    command
+}
+
+/// `line` is one argument: std quotes it for CreateProcessW, and no shell parses it again.
+#[cfg(windows)]
+fn background(line: &str) -> Command {
+    let mut command = Command::new(powershell(std::env::var_os("SystemRoot").as_deref()));
+    command.args(POWERSHELL_ARGS).arg(line);
+    command
+}
+
+/// Windows PowerShell by its full path under `system_root`, `C:\Windows` when it is unset or empty: a bare
+/// `powershell.exe` is looked for in the working folder before System32. Joined as text, so it reads the same on every
+/// OS.
+pub fn powershell(system_root: Option<&OsStr>) -> PathBuf {
+    let root = system_root.filter(|root| !root.is_empty()).unwrap_or(OsStr::new(r"C:\Windows"));
+    let mut path = root.to_os_string();
+    path.push(r"\System32\WindowsPowerShell\v1.0\powershell.exe");
+    path.into()
+}
+
+/// A terminal run's script goes in `<data>/setup`.
+pub fn system_shell(data: PathBuf) -> SystemShell {
+    SystemShell { folder: data.join("setup") }
+}
+
+/// `runs(os)`, in order, each within INSTALL_DEADLINE. A unix line's exit code is `/bin/sh`'s, not curl's: a curl
+/// that fails hands sh nothing, and sh exits 0. So an install counts only when `cli_there()` finds a CLI after its runs.
+/// Err holds the last lines of the run that failed, or of the last run. `on_step` is told each step as it changes: a
+/// run in a terminal is FINISH_IN_TERMINAL, then GETTING_READY once it has ended well.
 pub fn install(
+    os: &str,
     shell: &dyn Shell,
     log: &dyn Log,
     cli_there: &dyn Fn() -> bool,
@@ -80,11 +164,17 @@ pub fn install(
 ) -> Result<(), Vec<String>> {
     let mut last = Vec::new();
     let mut step = None;
-    for (line, flag) in [(HOST, "--host"), (DESKTOP, "--desktop")] {
+    for run in runs(os) {
+        let flag = run.flag;
+        let in_terminal = run.place == Place::Terminal;
+        if in_terminal {
+            step = Some(FINISH_IN_TERMINAL);
+            on_step(FINISH_IN_TERMINAL);
+        }
         let mut step_lines = 0usize;
         let mut sink = |raw: &str| {
             let Some(line) = clean(raw) else { return };
-            if line.starts_with(['▸', '✓', '✗']) {
+            if is_step_line(os, &line) {
                 step_lines = step_lines.saturating_add(1);
                 if step_lines <= STEP_LINES_LOGGED {
                     log.line(&format!("install: {}", logged(&line, STEP_LINE_CHARS)));
@@ -92,12 +182,12 @@ pub fn install(
                     log.line(&format!("install: {flag} more step lines not logged"));
                 }
             }
-            if let Some(next) = step_of(&line).filter(|next| step != Some(*next)) {
+            if let Some(next) = step_of(os, &line).filter(|next| step != Some(*next)) {
                 step = Some(next);
                 on_step(next);
             }
         };
-        let output = shell.run(line, INSTALL_DEADLINE, &mut sink).map_err(|error| {
+        let output = shell.run(run, INSTALL_DEADLINE, &mut sink).map_err(|error| {
             log.line(&format!("install: {flag} could not start: {error}"));
             vec![error.to_string()]
         })?;
@@ -115,6 +205,10 @@ pub fn install(
         if let Some(sentence) = failed {
             return Err(shown(log, &last, sentence));
         }
+        if in_terminal {
+            step = Some(GETTING_READY);
+            on_step(GETTING_READY);
+        }
     }
     if cli_there() {
         return Ok(());
@@ -123,10 +217,23 @@ pub fn install(
     Err(shown(log, &last, NOT_INSTALLED))
 }
 
-/// The step a clean line names: it starts with `▸`, then one of STEPS' beginnings.
-pub fn step_of(clean: &str) -> Option<&'static str> {
+/// The step a clean line names on `os`: on Windows it starts with one of WINDOWS_STEPS; elsewhere with `▸`, then one
+/// of STEPS' beginnings.
+pub fn step_of(os: &str, clean: &str) -> Option<&'static str> {
+    if os == "windows" {
+        return WINDOWS_STEPS.iter().any(|start| clean.starts_with(start)).then_some(DOWNLOADING_HARNESS);
+    }
     let after = clean.strip_prefix('▸')?.trim_start();
     STEPS.iter().find(|(start, _)| after.starts_with(start)).map(|&(_, step)| step)
+}
+
+/// Whether the log keeps a clean line: one of install.ps1's step lines on Windows, a `▸`, `✓` or `✗` line elsewhere.
+fn is_step_line(os: &str, clean: &str) -> bool {
+    if os == "windows" {
+        WINDOWS_STEPS.iter().chain(&WINDOWS_DONE).any(|start| clean.starts_with(start))
+    } else {
+        clean.starts_with(['▸', '✓', '✗'])
+    }
 }
 
 /// A line as a terminal leaves it: a `\r` progress line shows its last frame. No escape or other control character,

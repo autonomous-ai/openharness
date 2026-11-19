@@ -5,7 +5,7 @@ use crate::cli::{self, Cli, HarnessCli, START_DEADLINE};
 use crate::desktop;
 use crate::follow::{AX_SETTINGS, CHATGPT_BUNDLE, ChatgptFollow, FollowDoor, Heard, Observer, Shown, TRUST_AGAIN};
 use crate::front::{FrontFeed, FrontSource};
-use crate::install::{self, NOT_SUPPORTED, Shell};
+use crate::install::{self, Shell};
 use crate::loginitem::LoginItem;
 use crate::logs;
 use crate::state::StateFile;
@@ -26,8 +26,8 @@ pub struct Doors {
     pub path_var: Option<OsString>,
     /// The fake CLI, in a debug build (`cli::cli_override`).
     pub cli_override: Option<PathBuf>,
-    /// None where the install is not offered (`install::system_shell`).
-    pub shell: Option<Arc<dyn Shell>>,
+    /// What runs the install's lines (`install::system_shell`).
+    pub shell: Arc<dyn Shell>,
     pub login_item: Arc<dyn LoginItem>,
     pub state: Arc<dyn StateFile>,
     pub log: Arc<dyn Log>,
@@ -322,14 +322,14 @@ impl Runner {
             Effect::RunInstall => {
                 let shared = shared.clone();
                 thread::spawn(move || {
-                    let result = match &shared.doors.shell {
-                        Some(shell) => {
-                            install::install(&**shell, &*shared.doors.log, &|| shared.find_cli(), &mut |step| {
-                                shared.answer(Event::InstallStep(step))
-                            })
-                        }
-                        None => Err(vec![NOT_SUPPORTED.into()]),
-                    };
+                    let doors = &shared.doors;
+                    let result = install::install(
+                        std::env::consts::OS,
+                        &*doors.shell,
+                        &*doors.log,
+                        &|| shared.find_cli(),
+                        &mut |step| shared.answer(Event::InstallStep(step)),
+                    );
                     shared.answer(Event::InstallDone(result));
                 });
             }
