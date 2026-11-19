@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs'
 import { failedNode, nodeMigration } from './nodeMigration.js'
 import { tmpdir } from 'os'
 import { dirname, join } from 'path'
@@ -16,6 +16,33 @@ import { firstStart } from '../testing/testNode.js'
 import { SpawnLockBusyError } from './daemonSpawnLock.js'
 import { PTY_PROTOCOL } from './ptyHost/protocol.js'
 import { versionsOnDisk } from './windows/cliVersions.js'
+import { directorySyncSupported } from './secureState.js'
+
+// Pass-through, recording each path opened for writing, each rename's target and each flush (of a file or a folder). A
+// write under `refuse` fails, as on a full disk.
+// `failRead`: reads of a path ending so fail (EIO), after `goodReads` more of them succeed.
+const disk = vi.hoisted(() => ({ events: [] as string[], refuse: '', failRead: '', goodReads: 0 }))
+vi.mock('node:fs', async original => {
+  const actual = await original<typeof import('node:fs')>()
+  const writing = (target: unknown): void => {
+    disk.events.push(`write ${String(target)}`)
+    if (disk.refuse && String(target).startsWith(disk.refuse)) throw Object.assign(new Error('ENOSPC: fixture'), { code: 'ENOSPC' })
+  }
+  const forWriting = (flags: unknown): boolean => typeof flags === 'number'
+    ? (flags & (actual.constants.O_WRONLY | actual.constants.O_RDWR)) !== 0
+    : typeof flags === 'string' && /[wa+]/.test(flags)
+  return { ...actual,
+    openSync: (...args: Parameters<typeof actual.openSync>) => { if (forWriting(args[1])) writing(args[0]); return actual.openSync(...args) },
+    writeFileSync: (...args: Parameters<typeof actual.writeFileSync>) => { if (typeof args[0] !== 'number') writing(args[0]); return actual.writeFileSync(...args) },
+    renameSync: (...args: Parameters<typeof actual.renameSync>) => { disk.events.push(`rename ${String(args[1])}`); return actual.renameSync(...args) },
+    fsyncSync: (fd: number) => { disk.events.push(actual.fstatSync(fd).isDirectory() ? 'flush folder' : 'flush file'); return actual.fsyncSync(fd) },
+    readFileSync: ((...args: Parameters<typeof actual.readFileSync>) => {
+      if (disk.failRead && String(args[0]).endsWith(disk.failRead) && disk.goodReads-- <= 0) throw Object.assign(new Error('EIO: fixture'), { code: 'EIO' })
+      return actual.readFileSync(...args)
+    }) as typeof actual.readFileSync,
+  }
+})
+afterEach(() => { disk.events = []; disk.refuse = ''; disk.failRead = ''; disk.goodReads = 0 })
 
 // The pointer file's writer (B1), with a switch to make it fail.
 const pointer = vi.hoisted(() => ({ fail: false }))
@@ -399,6 +426,20 @@ describe('a rolled-back version', () => {
     expect(rejectedVersions(dir)).toEqual([])
   })
 
+  // A read that failed read nothing: the versions rolled back before must not be written over as none.
+  it('a kept version is taken off a list it read once, and a list it cannot read is not written', () => {
+    const dir = tempDir()
+    writeFileSync(join(dir, 'update-rejected.json'), JSON.stringify(['1.5.0', '2.0.0']))
+    writeFileSync(join(dir, 'update-pending.json'), '{"version":"2.0.0","at":1}\n')
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    disk.failRead = 'update-rejected.json'
+    disk.goodReads = 1
+    confirm(dir)
+    disk.failRead = ''
+    expect(rejectedVersions(dir)).toEqual(['1.5.0'])
+    vi.restoreAllMocks()
+  })
+
   it('keeps the last ten, each once, and reads anything else as none', () => {
     const dir = tempDir()
     for (const version of ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '3']) {
@@ -447,6 +488,61 @@ describe('a rolled-back version', () => {
       expect(staged).toEqual(['9.9.10'])
       expect(JSON.parse(readFileSync(join(dir, 'update-pending.json'), 'utf8'))).toMatchObject({ version: '9.9.10' })
     } finally { log.mockRestore() }
+  })
+})
+
+describe('the update records, written whole', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+    for (const dir of dirs) rmSync(dir, { recursive: true, force: true })
+    dirs = []
+  })
+
+  /** v2 staged over v1, then rolled back: the rejected list is saved. */
+  const rollBack = (dir: string): void => {
+    stage(dir, Buffer.from('v1'), Buffer.from('n1'))
+    stage(dir, Buffer.from('v2'), Buffer.from('n2'), '2.0.0')
+    restore(dir)
+  }
+
+  it('the save goes through a temporary file renamed onto the target', () => {
+    const dir = tempDir()
+    const rejected = join(dir, 'update-rejected.json')
+    disk.events = []
+    rollBack(dir)
+    expect(disk.events).toContain(`rename ${rejected}`)
+    expect(disk.events).not.toContain(`write ${rejected}`)
+  })
+
+  it('a file at the old temporary name is left alone', () => {
+    const dir = tempDir()
+    writeFileSync(join(dir, 'update-rejected.json.tmp'), 'not this writer\'s')
+    rollBack(dir)
+    expect(rejectedVersions(dir)).toEqual(['2.0.0'])
+    expect(readFileSync(join(dir, 'update-rejected.json.tmp'), 'utf8')).toBe('not this writer\'s')
+  })
+
+  it('a torn update-rejected.json is set aside, not written over', () => {
+    const dir = tempDir()
+    const rejected = join(dir, 'update-rejected.json')
+    writeFileSync(rejected, '[{"')
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    rollBack(dir)
+    expect(readFileSync(`${rejected}.unreadable`, 'utf8')).toBe('[{"')
+    expect(rejectedVersions(dir)).toEqual(['2.0.0'])
+    expect(warn).toHaveBeenCalledWith('[state] update-rejected.json could not be read (not valid JSON); kept as update-rejected.json.unreadable, starting empty.')
+  })
+
+  // Read as none, a rollback would forget every version rolled back before, and the updater would offer them again.
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('an update-rejected.json this account cannot read is not written over', () => {
+    const dir = tempDir()
+    const rejected = join(dir, 'update-rejected.json')
+    writeFileSync(rejected, '["1.5.0"]')
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    chmodSync(rejected, 0o000)
+    rollBack(dir)
+    chmodSync(rejected, 0o600)
+    expect(readFileSync(rejected, 'utf8')).toBe('["1.5.0"]')
   })
 })
 
@@ -587,13 +683,13 @@ describe('staging, all or nothing (e2e/updateHostile.e2e.ts)', () => {
   })
 
   it('leaves the install exactly as it was when a write fails, at any step', () => {
-    for (const blocked of ['cli.js.tmp', 'notify.mjs.tmp', 'update-pending.json.tmp']) {
+    for (const blocked of ['cli.js.tmp', 'notify.mjs.tmp', 'update-pending.json']) {
       const dir = installed()
-      // A folder where the file would go: the write fails there, as on a full disk.
-      mkdirSync(join(dir, blocked))
-      writeFileSync(join(dir, blocked, 'x'), '')
+      // The write fails there, as on a full disk.
+      disk.refuse = join(dir, blocked)
       expect(() => stage(dir, Buffer.from('v2'), Buffer.from('n2'), '2.0.0'), blocked).toThrow()
-      expect(files(dir), blocked).toEqual({ 'cli.js': 'v1', 'notify.mjs': 'n1', 'package.json': '{"type":"module"}\n', [blocked]: '<dir>' })
+      disk.refuse = ''
+      expect(files(dir), blocked).toEqual({ 'cli.js': 'v1', 'notify.mjs': 'n1', 'package.json': '{"type":"module"}\n' })
     }
   })
 
@@ -1092,8 +1188,8 @@ describe('a rollback a full disk kept from being remembered (e2e/updateHostile.e
     writeFileSync(join(dir, 'cli.js'), 'v1')
     writeFileSync(join(dir, 'notify.mjs'), 'n1')
     stage(dir, Buffer.from('v2'), Buffer.from('n2'), '2.0.0')
-    // Where the list's temporary file would go, a folder: its write fails, as on a full disk.
-    mkdirSync(join(dir, 'update-rejected.json.tmp'))
+    // The list's write fails, as on a full disk.
+    disk.refuse = join(dir, 'update-rejected.json')
     restore(dir)
     return dir
   }
@@ -1105,7 +1201,7 @@ describe('a rollback a full disk kept from being remembered (e2e/updateHostile.e
     // Still no room: named all the same.
     expect(settleRolledBack(dir)).toBe('2.0.0')
     expect(existsSync(join(dir, 'update-pending.json'))).toBe(true)
-    rmSync(join(dir, 'update-rejected.json.tmp'), { recursive: true })
+    disk.refuse = ''
     expect(settleRolledBack(dir)).toBe('2.0.0')
     expect(rejectedVersions(dir)).toEqual(['2.0.0'])
     expect(existsSync(join(dir, 'update-pending.json'))).toBe(false)
@@ -1655,12 +1751,12 @@ console.log(process.execPath.includes('node-v24.') ? (named.includes('node-v24.'
     const dir = tempDir()
     const events: string[] = []
     const said = vi.spyOn(console, 'error').mockImplementation(() => {})
-    // current-node is written whole through its .tmp beside it: a folder there makes that write fail.
-    mkdirSync(`${currentNode}.tmp`)
+    // current-node's write fails, as on a full disk.
+    disk.refuse = currentNode
     const poller = updater(dir, events)
     try {
       await vi.waitFor(() => expect(events).toHaveLength(2), { timeout: 10_000 })
-    } finally { poller.stop(); rmSync(`${currentNode}.tmp`, { recursive: true, force: true }) }
+    } finally { poller.stop(); disk.refuse = '' }
     expect(events).toEqual([`ensure on ${v22}`, `staged with ${v22}`])
     expect(said.mock.calls.flat().join('\n')).toContain('[update] could not name the new Node in current-node (')
     expect(said.mock.calls.flat().join('\n'), 'no path on the line').not.toContain(v24)
@@ -1676,6 +1772,17 @@ console.log(process.execPath.includes('node-v24.') ? (named.includes('node-v24.'
     expect(readFileSync(currentNode, 'utf8')).toBe(`${v22}\n`)
     expect(nodeMigration(dir)).toBe('does-not-run')
     expect(failedNode(dir)).toBe(v24)
+  })
+
+  // An emptied current-node stops Harness from starting until a reinstall; it moves once an update.
+  it('flushes current-node before it is renamed into place, and its folder after', () => {
+    const dir = tempDir()
+    writeFileSync(currentNode, `${v24}\n`)
+    disk.events = []
+    putNodeBack(dir, v22, 'does-not-run')
+    const at = disk.events.indexOf(`rename ${currentNode}`)
+    expect(disk.events.slice(at - 1, at + (directorySyncSupported() ? 2 : 1)))
+      .toEqual(['flush file', `rename ${currentNode}`, ...(directorySyncSupported() ? ['flush folder'] : [])])
   })
 
   it('stages the build when Node 24 does not go in, and records why for `harness status`', async () => {

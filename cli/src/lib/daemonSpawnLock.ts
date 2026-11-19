@@ -127,6 +127,11 @@ let exitHookInstalled = false
 
 function ownerPath(): string { return join(SPAWN_LOCK_DIR, OWNER_FILE) }
 
+/** Whether this process holds the spawn lock. */
+export function spawnLockHeldHere(): boolean {
+  return held !== null
+}
+
 function uid(): number | null {
   return typeof process.getuid === 'function' ? process.getuid() : null
 }

@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, renameSync } from 'node:fs'
 import { dirname } from 'node:path'
+import { atomicWriteFile } from '../lib/secureState.js'
 import { NO, object, oneOf, optional, text } from './shape.js'
 import type { SharedNotice } from './sharedTabs.js'
 
@@ -39,9 +40,7 @@ export class NoticeStore {
   private save(): void {
     if (!this.path) return
     mkdirSync(dirname(this.path), { recursive: true, mode: 0o700 })
-    const temp = `${this.path}.${randomUUID()}.tmp`
-    writeFileSync(temp, JSON.stringify(this.list), { flag: 'wx', mode: 0o600 })
-    renameSync(temp, this.path)
+    atomicWriteFile(this.path, JSON.stringify(this.list), 'cache')
   }
 
   /** The notice kept, or null when it is skipped as a repeat. */

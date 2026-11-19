@@ -1,23 +1,94 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 
+const io = vi.hoisted(() => ({ failWrite: undefined as string | undefined }))
+vi.mock('node:fs', async original => {
+  const actual = await original<typeof import('node:fs')>()
+  return { ...actual,
+    // Only a write to a descriptor: the writer's temporary file.
+    writeFileSync: (...args: Parameters<typeof actual.writeFileSync>) => {
+      if (io.failWrite && typeof args[0] === 'number') throw Object.assign(new Error(`${io.failWrite}: fixture`), { code: io.failWrite })
+      return actual.writeFileSync(...args)
+    },
+  }
+})
+
 let dataDir = ''
 
-describe('removePidFileIf', () => {
-  beforeEach(() => { dataDir = mkdtempSync(join(tmpdir(), 'adapter-launch-')) })
-  afterEach(() => { rmSync(dataDir, { recursive: true, force: true }); delete process.env.ADAPTER_DATA_DIR })
+async function daemonState() {
+  vi.resetModules()
+  process.env.ADAPTER_DATA_DIR = dataDir
+  return import('./daemonState.js')
+}
 
+beforeEach(() => { dataDir = mkdtempSync(join(tmpdir(), 'adapter-launch-')) })
+afterEach(() => {
+  io.failWrite = undefined
+  rmSync(dataDir, { recursive: true, force: true })
+  delete process.env.ADAPTER_DATA_DIR
+})
+
+describe('removePidFileIf', () => {
   it('removes the file only when it names the given pid', async () => {
-    vi.resetModules()
-    process.env.ADAPTER_DATA_DIR = dataDir
-    const { PID_FILE, removePidFileIf } = await import('./daemonState.js')
+    const { PID_FILE, removePidFileIf } = await daemonState()
     writeFileSync(PID_FILE, '777\n')
     expect(removePidFileIf(778)).toBe(false)
     expect(existsSync(PID_FILE)).toBe(true) // another daemon's record survives our failed child
     expect(removePidFileIf(undefined)).toBe(false)
     expect(removePidFileIf(777)).toBe(true)
     expect(existsSync(PID_FILE)).toBe(false)
+  })
+})
+
+describe('the pid file', () => {
+  it('an empty or torn pid file is unreadable, not missing', async () => {
+    const { PID_FILE, readPidFile } = await daemonState()
+    expect(readPidFile()).toEqual({ state: 'missing' })
+    for (const text of ['', '12x']) {
+      writeFileSync(PID_FILE, text)
+      expect(readPidFile(), JSON.stringify(text)).toEqual({ state: 'unreadable' })
+    }
+    rmSync(PID_FILE)
+    mkdirSync(PID_FILE)
+    expect(readPidFile()).toEqual({ state: 'unreadable' })
+    rmSync(PID_FILE, { recursive: true })
+    writeFileSync(PID_FILE, '4242\n')
+    expect(readPidFile()).toEqual({ state: 'pid', pid: 4242 })
+  })
+
+  it('readPid answers the daemon\'s own pid for a file that cannot be read', async () => {
+    const { PID_FILE, readPid, setAnsweredPid } = await daemonState()
+    writeFileSync(PID_FILE, 'x')
+    expect(readPid()).toBeNull()
+    setAnsweredPid(77)
+    expect(readPid()).toBe(77)
+    writeFileSync(PID_FILE, '4242\n')
+    expect(readPid()).toBe(4242)
+    rmSync(PID_FILE)
+    expect(readPid()).toBeNull()
+  })
+
+  it('writePidFile leaves the old pid when the write fails', async () => {
+    const { PID_FILE, writePidFile } = await daemonState()
+    writePidFile(4242)
+    expect(readFileSync(PID_FILE, 'utf8')).toBe('4242\n')
+    if (process.platform !== 'win32') expect(statSync(PID_FILE).mode & 0o777).toBe(0o600)
+    io.failWrite = 'ENOSPC'
+    expect(() => writePidFile(5151)).toThrow('ENOSPC')
+    expect(readFileSync(PID_FILE, 'utf8')).toBe('4242\n')
+    expect(readdirSync(dataDir)).toEqual(['adapter.pid'])
+  })
+
+  it('pidFileWrittenMs is null for an answered pid', async () => {
+    const { PID_FILE, pidFileWrittenMs, readPid, setAnsweredPid, writePidFile } = await daemonState()
+    expect(pidFileWrittenMs()).toBeNull()
+    writePidFile(4242)
+    expect(pidFileWrittenMs()).toBe(statSync(PID_FILE).mtimeMs)
+    writeFileSync(PID_FILE, 'x')
+    setAnsweredPid(77)
+    expect(readPid()).toBe(77)
+    expect(pidFileWrittenMs()).toBeNull()
   })
 })

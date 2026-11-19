@@ -28,7 +28,7 @@ vi.mock('./secureState.js', async original => {
 
 let directory: string
 let registry: typeof Registry
-let AtomicWriteUnconfirmed: typeof import('./registryPersistence.js').AtomicWriteUnconfirmed
+let AtomicWriteUnconfirmed: typeof import('./secureState.js').AtomicWriteUnconfirmed
 const input = { agentId: 'persisted-agent', engine: 'claude' as const, tmuxPane: '%1',
   processIdentity: { pid: 101, executable: '/fixture/claude', startMarker: 'fixture-101' } }
 beforeEach(async () => {
@@ -36,7 +36,7 @@ beforeEach(async () => {
   directory = mkdtempSync(join(tmpdir(), 'registry-disk-'))
   for (const key of ['ADAPTER_DATA_DIR', 'CLAUDE_PROJECTS_DIR', 'CODEX_HOME', 'CURSOR_HOME']) vi.stubEnv(key, directory)
   registry = (await import('./registry.js')).registry
-  AtomicWriteUnconfirmed = (await import('./registryPersistence.js')).AtomicWriteUnconfirmed
+  AtomicWriteUnconfirmed = (await import('./secureState.js')).AtomicWriteUnconfirmed
   registry.load()
   await registry.openProcessAgent(input)
   await registry.flush()

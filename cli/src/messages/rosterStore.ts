@@ -5,8 +5,9 @@
  * is kept out and remembered as an alert (devlog principle: detect, not block), and the last valid one stays.
  */
 import { randomUUID } from 'node:crypto'
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, renameSync } from 'node:fs'
 import { dirname } from 'node:path'
+import { atomicWriteFile } from '../lib/secureState.js'
 import { verifyRoster, type Roster, type RosterError, type SignedRoster } from './roster.js'
 import { list, NO, nullable, num, object, oneOf, optional, record, text, type Check } from './shape.js'
 
@@ -100,9 +101,7 @@ export class RosterStore {
    *  otherwise had every member's windows read `shares`, two backend requests each, 4 times a second (final review of 1c, I4). */
   private save(change: 'tabs' | 'alerts' | null = 'tabs'): void {
     mkdirSync(dirname(this.path), { recursive: true, mode: 0o700 })
-    const temp = `${this.path}.${randomUUID()}.tmp`
-    writeFileSync(temp, JSON.stringify(this.state), { flag: 'wx', mode: 0o600 })
-    renameSync(temp, this.path)
+    atomicWriteFile(this.path, JSON.stringify(this.state), 'cache')
     if (change) this.onChange?.(change)
   }
   /** Kept with the roster's own alerts: a member's check of the entries under its account records here too, so the

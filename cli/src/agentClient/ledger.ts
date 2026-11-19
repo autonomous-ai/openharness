@@ -25,6 +25,7 @@
 import { appendFileSync, closeSync, constants, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { lockOwnerAlive, lockStartMarker, processLockIdentity, type LockGeneration } from '../lib/processLiveness.js'
+import { atomicWriteFile } from '../lib/secureState.js'
 
 export interface LedgerMember { machineId: string; agentId: string }
 /** A starter: the harness that ran `harness new`, its name and engine, and whether it is the Hachi harness
@@ -231,6 +232,7 @@ export class Ledger {
 
   append(row: Started | Pending | Closed | Told | Handed): void {
     this.locked(() => {
+      // not a state file: rows appended under the lock; its reader skips a torn last row
       appendFileSync(this.path, `${JSON.stringify(row)}\n`, { mode: 0o600 })
       // Past its size the file becomes the previous one, by a rename: a reader sees each line in one file or the other.
       if (statSync(this.path).size > ROTATE_BYTES) renameSync(this.path, this.previous)
@@ -260,14 +262,7 @@ export class Ledger {
         }
         if (!dropped) continue
         // A new file renamed over the old: a reader sees the whole file before or after, and no copy of the words stays.
-        const temp = `${file}.tmp`
-        try {
-          writeFileSync(temp, Buffer.concat(kept), { mode: 0o600 })
-          renameSync(temp, file)
-        } catch (error) {
-          rmSync(temp, { force: true })
-          throw error
-        }
+        atomicWriteFile(file, Buffer.concat(kept), 'cache')
         gone += dropped
       }
       return gone
@@ -292,6 +287,7 @@ export class Ledger {
         Atomics.wait(pause, 0, 0, LOCK_STEP_MS)
         continue
       }
+      // not a state file: the lock's owner; a lock that names no one is taken over once stale
       try { writeFileSync(fd, mine) } finally { closeSync(fd) }
       try { return write() } finally { rmSync(lock, { force: true }) }
     }

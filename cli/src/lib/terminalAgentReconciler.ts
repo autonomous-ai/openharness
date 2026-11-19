@@ -1,6 +1,7 @@
 import { isTerminalEngine, type AgentEngine } from '../engines/types.js'
 import type { RegisteredSession } from './registry.js'
-import { AtomicWriteUnconfirmed, RegistryPersistenceUnavailable } from './registryPersistence.js'
+import { RegistryPersistenceUnavailable } from './registryPersistence.js'
+import { AtomicWriteUnconfirmed } from './secureState.js'
 import {
   probeTerminalAgents,
   targetForRuntime,

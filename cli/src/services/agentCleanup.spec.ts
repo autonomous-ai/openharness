@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -11,6 +11,20 @@ import { Ledger, ledgerPath, type Told } from '../agentClient/ledger.js'
 import { GONE_MS } from './hachiHandOver.js'
 import { ASK_AGAIN_MS, BACKGROUND_CLOSE_MS, CASCADE_RETRY_MS, CASCADE_TRIES, createAgentCleanup, FORGET_LOCK_WAIT_MS, IDLE_CLOSE_MS, JOINED_MAX, joinedPath, LOOK_EVERY_MS, startAgentCleanup, type AgentCleanupDeps } from './agentCleanup.js'
 import { processLockIdentity } from '../lib/processLiveness.js'
+
+// Pass-through, recording each call that opens, writes or renames a file by its name.
+const disk = vi.hoisted(() => ({ events: [] as string[][] }))
+vi.mock('node:fs', async (original) => {
+  const actual = await original<typeof import('node:fs')>()
+  return { ...actual,
+    openSync: (...args: Parameters<typeof actual.openSync>) => { disk.events.push(['open', String(args[0])]); return actual.openSync(...args) },
+    writeFileSync: (...args: Parameters<typeof actual.writeFileSync>) => { disk.events.push(['write', String(args[0])]); return actual.writeFileSync(...args) },
+    renameSync: (...args: Parameters<typeof actual.renameSync>) => { disk.events.push(['rename', String(args[0]), String(args[1])]); return actual.renameSync(...args) },
+  }
+})
+/** The calls that named [file] itself; a fresh temporary name beside it (`<file>.<pid>.<uuid>.tmp`) shown as `<tmp>`. */
+const touching = (file: string) => disk.events.filter((event) => event.includes(file)).map((event) => event.map((name) =>
+  name.startsWith(`${file}.${process.pid}.`) && /^[0-9a-f-]{36}\.tmp$/.test(name.slice(`${file}.${process.pid}.`.length)) ? '<tmp>' : name))
 
 const NOW = Date.parse('2026-10-12T12:00:00Z')
 const MIN = 60_000
@@ -491,6 +505,7 @@ describe('what the cleanup keeps and how it runs', () => {
     expect(Object.keys(kept)).toHaveLength(JOINED_MAX)
     expect(kept.old).toBeUndefined()
     expect(kept.newest).toBe(NOW)
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
     for (const damaged of ['{ not json', '{}']) {
       writeFileSync(joinedPath(dir), damaged)
       const fresh = setup([kid('k0', { parentAgentId: 'p' })])
@@ -504,9 +519,43 @@ describe('what the cleanup keeps and how it runs', () => {
     const blocked = join(dir, 'blocked')
     writeFileSync(blocked, '')
     const core = fakeCore({ dataDir: join(blocked, 'data') })
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
     const log = vi.fn()
     createAgentCleanup(core, { log, every: () => () => {} }).port.typed('kid')
     expect(log).toHaveBeenCalledWith(expect.stringMatching(/^\[agent-cleanup\] could not keep which harnesses the person joined: E[A-Z]+$/))
+  })
+
+  it('a torn agent-cleanup.json is set aside, not written over', () => {
+    writeFileSync(joinedPath(dir), '{"')
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    setup([]).cleanup.port.typed('kid')
+    expect(readFileSync(`${joinedPath(dir)}.unreadable`, 'utf8')).toBe('{"')
+    expect(JSON.parse(readFileSync(joinedPath(dir), 'utf8'))).toEqual({ version: 1, joined: { kid: NOW } })
+    expect(warn).toHaveBeenCalledWith('[state] agent-cleanup.json could not be read (not valid JSON); kept as agent-cleanup.json.unreadable, starting empty.')
+  })
+
+  // Read as none, the next join would forget every harness the person joined before, and cleanup could close them.
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('an agent-cleanup.json this account cannot read is not written over', () => {
+    setup([]).cleanup.port.typed('kid')
+    const before = readFileSync(joinedPath(dir), 'utf8')
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    chmodSync(joinedPath(dir), 0o000)
+    try { setup([]).cleanup.port.typed('other') } finally { chmodSync(joinedPath(dir), 0o600) }
+    expect(readFileSync(joinedPath(dir), 'utf8')).toBe(before)
+  })
+
+  it('the save goes through a temporary file renamed onto the target', () => {
+    const { cleanup } = setup([])
+    disk.events = []
+    cleanup.port.typed('kid')
+    expect(touching(joinedPath(dir))).toEqual([['rename', '<tmp>', joinedPath(dir)]])
+  })
+
+  it('a file at the old temporary name is left alone', () => {
+    const old = `${joinedPath(dir)}.tmp`
+    writeFileSync(old, 'not ours')
+    setup([]).cleanup.port.typed('kid')
+    expect(readFileSync(old, 'utf8')).toBe('not ours')
   })
 
   it('closes nothing, and knows no time, on a core that offers neither', async () => {

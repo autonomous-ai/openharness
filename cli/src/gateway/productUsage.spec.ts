@@ -1,9 +1,41 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync, type PathLike } from 'node:fs'
+import { dirname, join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { PRODUCT_USAGE_METRICS } from '../lib/productUsageContract.js'
 import { createProductUsage, type ProductUsageDeps } from './productUsage.js'
+
+// Every file opened for writing and every rename, in order, from node:fs and node:fs/promises alike; each call passes
+// through (lib/secureState.ts imports node:fs too). `blocking`: the paths of the synchronous ones.
+const disk = vi.hoisted(() => ({ calls: [] as Array<[op: 'write' | 'rename', path: string, to?: string]>, blocking: [] as string[] }))
+vi.mock('node:fs', async (original) => {
+  const actual = await original<typeof import('node:fs')>()
+  const { O_WRONLY, O_RDWR } = actual.constants
+  return { ...actual,
+    openSync: (...args: Parameters<typeof actual.openSync>) => {
+      const flags = args[1]
+      if (typeof flags === 'number' ? flags & (O_WRONLY | O_RDWR) : flags !== undefined && flags !== 'r') {
+        disk.calls.push(['write', String(args[0])]); disk.blocking.push(String(args[0]))
+      }
+      return actual.openSync(...args)
+    },
+    writeFileSync: (...args: Parameters<typeof actual.writeFileSync>) => {
+      if (typeof args[0] !== 'number') { disk.calls.push(['write', String(args[0])]); disk.blocking.push(String(args[0])) }
+      return actual.writeFileSync(...args)
+    },
+    renameSync: (from: PathLike, to: PathLike) => {
+      disk.calls.push(['rename', String(from), String(to)]); disk.blocking.push(String(to))
+      return actual.renameSync(from, to)
+    },
+  }
+})
+vi.mock('node:fs/promises', async (original) => {
+  const actual = await original<typeof import('node:fs/promises')>()
+  return { ...actual,
+    writeFile: (...args: Parameters<typeof actual.writeFile>) => { disk.calls.push(['write', String(args[0])]); return actual.writeFile(...args) },
+    rename: (from: PathLike, to: PathLike) => { disk.calls.push(['rename', String(from), String(to)]); return actual.rename(from, to) },
+  }
+})
 
 let dir: string, file: string, now: number, enabled: boolean, revision: number
 let usage: ReturnType<typeof createProductUsage>
@@ -19,7 +51,7 @@ beforeEach(() => {
   })
   usage = createProductUsage({ file, now: () => now, request })
 })
-afterEach(async () => { await usage.stop(); rmSync(dir, { recursive: true, force: true }) })
+afterEach(async () => { await usage.stop(); disk.calls = []; disk.blocking = []; vi.restoreAllMocks(); rmSync(dir, { recursive: true, force: true }) })
 const totals = () => {
   const result: Record<string, number> = {}
   for (const report of sent as { counters: Record<string, number> }[]) for (const [k, v] of Object.entries(report.counters)) result[k] = (result[k] ?? 0) + v
@@ -951,4 +983,62 @@ it('sends the Node counters alone, so a backend from before them refuses only th
   // Its refusal is the Node counters' alone: no delivery failure is counted for it.
   expect(kept.health_cli_report_rejected).toBeUndefined()
   expect(JSON.parse(readFileSync(file, 'utf8'))).toMatchObject({ pending: null, days: {} })
+})
+
+describe('the counts file is written whole and never written over', () => {
+  const renamesOnto = (target: string) => disk.calls.filter(([op, , to]) => op === 'rename' && to === target)
+
+  it('the save goes through a temporary file renamed onto the target', async () => {
+    await usage.sync()
+    disk.calls = []
+    usage.counter('create_requests'); await usage.sync(); await usage.stop()
+    expect(disk.calls.filter(([op, path]) => op === 'write' && path === file)).toEqual([])
+    // A sync saves before its report goes and again once it is accepted; stop() saves once more.
+    const renames = renamesOnto(file)
+    expect(renames.length).toBeGreaterThan(0)
+    for (const [, from] of renames) {
+      expect(from).not.toBe(file)
+      expect(dirname(from)).toBe(dir)
+    }
+  })
+
+  // The gateway's event loop carries terminal traffic: a save of up to 256 KiB, and a busy rename retried on Windows,
+  // must not hold it. Only stop() writes synchronously, as the process goes.
+  it('a save while running blocks no event loop', async () => {
+    await usage.sync()
+    disk.blocking = []
+    usage.counter('create_requests'); await usage.sync()
+    expect(renamesOnto(file).length).toBeGreaterThan(0)
+    expect(disk.blocking.filter(path => path.startsWith(file))).toEqual([])
+  })
+
+  it('a file at the old temporary names is left alone', async () => {
+    writeFileSync(`${file}.tmp`, 'another writer')
+    writeFileSync(`${file}.final.tmp`, 'another writer')
+    await usage.sync(); usage.counter('create_requests'); await usage.sync(); await usage.stop()
+    expect(readFileSync(`${file}.tmp`, 'utf8')).toBe('another writer')
+    expect(readFileSync(`${file}.final.tmp`, 'utf8')).toBe('another writer')
+  })
+
+  it('a torn counts.json is set aside, not written over', async () => {
+    await usage.stop()
+    writeFileSync(file, '{"')
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    usage = createProductUsage({ file, now: () => now, request })
+    await usage.sync()
+    expect(readFileSync(`${file}.unreadable`, 'utf8')).toBe('{"')
+    expect(JSON.parse(readFileSync(file, 'utf8'))).toMatchObject({ revision: 0 })
+    expect(warn).toHaveBeenCalledWith('[state] counts.json could not be read (not valid JSON); kept as counts.json.unreadable, starting empty.')
+  })
+
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('a counts.json this account cannot read is not written over', async () => {
+    usage.counter('create_requests'); await usage.sync(); await usage.stop()
+    const before = readFileSync(file, 'utf8')
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    chmodSync(file, 0o000)
+    usage = createProductUsage({ file, now: () => now, request })
+    await usage.sync(); usage.counter('create_requests'); await usage.sync(); await usage.stop()
+    chmodSync(file, 0o600)
+    expect(readFileSync(file, 'utf8')).toBe(before)
+  })
 })

@@ -1,5 +1,6 @@
-import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { mkdir, rm, stat } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
+import { atomicWriteJsonAsync, jsonArray, readState } from '../../lib/secureState.js'
 import { PENDING_TASKS_FILE } from './contract.js'
 
 export interface PendingCursorTask {
@@ -50,29 +51,21 @@ async function withLock<T>(file: string, operation: () => Promise<T>): Promise<T
   return null
 }
 
-async function read(file: string): Promise<PendingCursorTask[]> {
-  try {
-    const parsed = JSON.parse(await readFile(file, 'utf8')) as unknown
-    const now = Date.now()
-    return Array.isArray(parsed)
-      ? parsed.filter((item): item is PendingCursorTask => valid(item) && now - item.createdAt <= MAX_AGE_MS)
-      : []
-  } catch {
-    return []
-  }
-}
-
-async function write(file: string, tasks: PendingCursorTask[]): Promise<void> {
-  const tmp = `${file}.${process.pid}.tmp`
-  await writeFile(tmp, JSON.stringify(tasks, null, 2))
-  await rename(tmp, file)
+/** Null when the file cannot be read now (EACCES, EMFILE): it is then neither deleted nor written over. */
+function read(file: string): PendingCursorTask[] | null {
+  const found = readState(file, 'cache', jsonArray)
+  if (found.state === 'unreadable') return null
+  if (found.state !== 'ok') return []
+  const now = Date.now()
+  return found.value.filter((item): item is PendingCursorTask => valid(item) && now - item.createdAt <= MAX_AGE_MS)
 }
 
 export async function loadCursorPendingTasks(dataDir: string): Promise<PendingCursorTask[]> {
   const file = join(dataDir, FILE_NAME)
   return (await withLock(file, async () => {
-    const tasks = await read(file)
-    if (tasks.length) await write(file, tasks)
+    const tasks = read(file)
+    if (!tasks) return []
+    if (tasks.length) await atomicWriteJsonAsync(file, tasks, 'cache')
     else await rm(file, { force: true })
     return tasks
   })) ?? []
@@ -81,8 +74,9 @@ export async function loadCursorPendingTasks(dataDir: string): Promise<PendingCu
 export async function removeCursorPendingTasks(dataDir: string, sessionId: string): Promise<void> {
   const file = join(dataDir, FILE_NAME)
   await withLock(file, async () => {
-    const tasks = (await read(file)).filter((task) => task.sessionId !== sessionId)
-    if (tasks.length) await write(file, tasks)
+    const tasks = read(file)?.filter((task) => task.sessionId !== sessionId)
+    if (!tasks) return
+    if (tasks.length) await atomicWriteJsonAsync(file, tasks, 'cache')
     else await rm(file, { force: true })
   })
 }

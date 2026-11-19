@@ -5,7 +5,7 @@
  * It runs eagerly before launch. Unknown files are held, foreign commands are
  * preserved, and hook and approval destinations are inspected before publication.
  */
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { env } from '../../config/env.js'
@@ -13,6 +13,7 @@ import { HARNESS_AGENT_COMMANDS, HARNESS_AGENT_TOOLS, HARNESS_AGENT_VERBS, type 
 import { prepareReviewed } from './hookReview.js'
 import { managedNodePath } from '../../lib/nodeRuntime.js'
 import { errorKind } from '../../lib/log.js'
+import { atomicWriteFile } from '../../lib/secureState.js'
 import { isMessagesBlock, messagesCommand, writeMessagesHook } from './messagesHook.js'
 import { HookScriptMissing } from './hookHeld.js'
 import { engineName } from '../../lib/agentNames.js'
@@ -218,9 +219,7 @@ function writeRulesFile(file: string, rules: string): void {
   const text = `${RULES_HEADER}${rules}\n`
   try { if (readFileSync(file, 'utf8') === text) return } catch { /* not written yet */ }
   mkdirSync(dirname(file), { recursive: true, mode: 0o700 })
-  const temporary = `${file}.${process.pid}.tmp`
-  writeFileSync(temporary, text, { mode: 0o600 })
-  renameSync(temporary, file)
+  atomicWriteFile(file, text, 'cache')
 }
 
 async function installNotifyHooks(settings: HookSettings, port: number, home: string, entry: { command: string; args?: string[] }, attempt: HookPreparationAttempt,

@@ -1,9 +1,32 @@
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import {
+  chmodSync, constants, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterAll, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, describe, expect, it, vi } from 'vitest'
 import { NOTICES_FILE, NOTICES_FILE_MAX_BYTES, NoticeFile } from './noticeFile.js'
 import type { StoredNotice } from './notices.js'
+
+// Pass-through, recording which paths are opened, written by name and renamed.
+const fsCalls = vi.hoisted(() => [] as Array<{ call: 'open' | 'write' | 'rename'; path: string; to?: string; flags?: unknown }>)
+vi.mock('node:fs', async original => {
+  const actual = await original<typeof import('node:fs')>()
+  return { ...actual,
+    openSync: (...args: Parameters<typeof actual.openSync>) => {
+      fsCalls.push({ call: 'open', path: String(args[0]), flags: args[1] })
+      return actual.openSync(...args)
+    },
+    writeFileSync: (...args: Parameters<typeof actual.writeFileSync>) => {
+      if (typeof args[0] !== 'number') fsCalls.push({ call: 'write', path: String(args[0]) })
+      return actual.writeFileSync(...args)
+    },
+    renameSync: (...args: Parameters<typeof actual.renameSync>) => {
+      fsCalls.push({ call: 'rename', path: String(args[0]), to: String(args[1]) })
+      return actual.renameSync(...args)
+    },
+  }
+})
+afterEach(() => { fsCalls.length = 0; vi.restoreAllMocks() })
 
 // Every folder made and every line said, so the last test can check no line names a path or what a card says.
 const folders: string[] = []
@@ -70,14 +93,19 @@ const BAD_CARDS: Array<[string, Record<string, unknown>]> = [
   ['an at that is a string', { at: '1' }],
 ]
 
+// Not JSON, or JSON that is not an object: the shared reader's to set aside.
+const SET_ASIDE: Array<[string, string, string]> = [
+  ['not valid JSON', 'torn', '{"'],
+  ['not valid JSON', 'not json', '{not json'],
+  ['not valid JSON', 'empty', ''],
+  ['unexpected content', 'a list', '[]'],
+  ['unexpected content', 'null', 'null'],
+  ['unexpected content', 'a number', '7'],
+]
+
 const DROPPED: Array<[string, string, string]> = [
-  ['json', 'not json', '{not json'],
-  ['json', 'empty', ''],
   ['version', 'v 2', '{"v":2,"cards":[]}'],
   ['version', 'no v', '{"cards":[]}'],
-  ['version', 'a list', '[]'],
-  ['version', 'null', 'null'],
-  ['version', 'a number', '7'],
   ['shape', 'no cards', '{"v":1}'],
   ['shape', 'cards that are an object', '{"v":1,"cards":{}}'],
   ['shape', '21 cards', fileOf(Array.from({ length: 21 }, (_, n) => card(n + 1)))],
@@ -159,6 +187,45 @@ describe('the file of pending notices', () => {
     expect(store(file).noticeFile.load()).toEqual([card(1)])
   })
 
+  it.each(SET_ASIDE)('a dial-notices.json that is %s (%s) is set aside, not written over', (failure, _what, text) => {
+    const folder = aFolder()
+    const file = join(folder, NOTICES_FILE)
+    writeFileSync(file, text)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const { noticeFile, pending, logs } = store(file, [card(1)])
+    expect(noticeFile.load()).toEqual([])
+    expect(logs).toEqual([])
+    expect(warn).toHaveBeenCalledWith(`[state] ${NOTICES_FILE} could not be read (${failure}); kept as ${NOTICES_FILE}.unreadable, starting empty.`)
+    noticeFile.changed()
+    pending[0].run()
+    expect(readFileSync(`${file}.unreadable`, 'utf8')).toBe(text)
+    expect(store(file).noticeFile.load()).toEqual([card(1)])
+  })
+
+  it('the save goes through a temporary file of its own renamed onto the target', () => {
+    const file = aFile()
+    const { noticeFile, pending } = store(file, [card(1)])
+    noticeFile.changed()
+    pending[0].run()
+    const renames = fsCalls.filter(({ call, to }) => call === 'rename' && to === file)
+    expect(renames).toHaveLength(1)
+    // Made new and exclusive: never a file another writer or a planted link holds.
+    const opens = fsCalls.filter(({ call, path }) => call === 'open' && path === renames[0].path)
+    expect(opens).toHaveLength(1)
+    expect(Number(opens[0].flags) & constants.O_EXCL).toBe(constants.O_EXCL)
+    expect(fsCalls.some(({ call, path }) => path === file && call === 'write')).toBe(false)
+  })
+
+  it('a file at the old temporary name is left alone', () => {
+    const file = aFile()
+    writeFileSync(`${file}.${process.pid}.tmp`, 'another writer\'s')
+    const { noticeFile, pending } = store(file, [card(1)])
+    noticeFile.changed()
+    pending[0].run()
+    expect(readFileSync(`${file}.${process.pid}.tmp`, 'utf8')).toBe('another writer\'s')
+    expect(store(file).noticeFile.load()).toEqual([card(1)])
+  })
+
   it('a file at 32 KiB is read, one byte longer is not', () => {
     const file = aFile()
     const text = fileOf([card(1)])
@@ -180,16 +247,46 @@ describe('the file of pending notices', () => {
     expect(store(file).noticeFile.load()).toStrictEqual([card(1), card(2, { who: WHO })])
   })
 
-  it('a path that cannot be read is dropped as unreadable; a write there says the error\'s code and the next change tries again', () => {
+  // Nothing was read to judge (a folder there, EACCES, EMFILE, a Windows scanner's EBUSY): what is there stays.
+  it('a path that cannot be read is left, and nothing is written over it', () => {
     const folder = aFolder()
     const file = join(folder, NOTICES_FILE)
     mkdirSync(file)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const { noticeFile, pending, logs } = store(file, [card(1)])
     expect(noticeFile.load()).toEqual([])
-    expect(logs).toEqual(['[device] notices · file dropped · unreadable'])
+    expect(warn).toHaveBeenCalledWith(`[state] ${NOTICES_FILE} could not be read (EISDIR); left as it is, read again next time.`)
     noticeFile.changed()
     pending[0].run()
-    expect(logs).toEqual(['[device] notices · file dropped · unreadable', '[device] notices · not saved · EISDIR'])
+    expect(logs).toEqual([])
+    expect(readdirSync(folder)).toEqual([NOTICES_FILE])
+  })
+
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('a file this account cannot read is not written over', () => {
+    const file = aFile()
+    const kept = store(file, [card(2)])
+    kept.noticeFile.changed()
+    kept.pending[0].run()
+    const before = readFileSync(file, 'utf8')
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    chmodSync(file, 0o000)
+    const { noticeFile, pending } = store(file, [card(1)])
+    expect(noticeFile.load()).toEqual([])
+    noticeFile.changed()
+    pending[0].run()
+    chmodSync(file, 0o600)
+    expect(readFileSync(file, 'utf8')).toBe(before)
+  })
+
+  it('a write that fails says the error\'s code, and the next change tries again', () => {
+    const folder = aFolder()
+    const file = join(folder, NOTICES_FILE)
+    const { noticeFile, pending, logs } = store(file, [card(1)])
+    expect(noticeFile.load()).toEqual([])
+    mkdirSync(file)
+    noticeFile.changed()
+    pending[0].run()
+    expect(logs).toEqual(['[device] notices · not saved · EISDIR'])
     expect(readdirSync(folder)).toEqual([NOTICES_FILE])
     noticeFile.changed()
     expect(pending).toHaveLength(2)

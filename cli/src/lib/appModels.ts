@@ -4,9 +4,10 @@
  * architecture. Grid's llama.cpp starts one only when its app is not installed here. */
 import { spawn } from 'node:child_process'
 import { closeSync, openSync } from 'node:fs'
-import { mkdir, open, readFile, rename, rm, writeFile } from 'node:fs/promises'
+import { mkdir, open, rm } from 'node:fs/promises'
 import { basename, join } from 'node:path'
 import { processExists } from './processLiveness.js'
+import { atomicWriteFileAsync, jsonArray, requireState } from './secureState.js'
 import { execFileTied, type TiedExecError } from './tied.js'
 
 export type AppEngine = 'ollama' | 'lm-studio' | 'llama.cpp'
@@ -231,6 +232,7 @@ export function appEngineOps(env: NodeJS.ProcessEnv, request: typeof fetch = fet
     // start reads its port from. Removed, that file stays that engine's alone.
     const file = join(logDir, logName)
     await rm(file, { force: true })
+    // not a state file: the engine's own output log, a new file each start
     const log = openSync(file, 'w', 0o600)
     try {
       // Its own process group, so it outlives this daemon and Stop ends it with whatever it started.
@@ -342,17 +344,14 @@ export function appEngineOps(env: NodeJS.ProcessEnv, request: typeof fetch = fet
   }
 }
 
-/** The engines this daemon started, by model id. */
+/** The engines this daemon started, by model id. A file that cannot be read now throws (StateFileUnreadable): read as
+ *  none, a start's or a stop's write would forget every engine this daemon started. */
 export async function readAppRecords(file: string): Promise<AppEngineRecord[]> {
-  try {
-    return rows(JSON.parse(await readFile(file, 'utf8'))).filter(r => r.spec === 1 && str(r.modelId) && str(r.grid) &&
-      ['ollama', 'lm-studio', 'llama.cpp'].includes(r.engine) && typeof r.port === 'number' && safe(str(r.alias))) as AppEngineRecord[]
-  } catch { return [] }
+  return rows(requireState(file, jsonArray, 'cache') ?? []).filter(r => r.spec === 1 && str(r.modelId) && str(r.grid) &&
+    ['ollama', 'lm-studio', 'llama.cpp'].includes(r.engine) && typeof r.port === 'number' && safe(str(r.alias))) as AppEngineRecord[]
 }
 
 export async function writeAppRecords(file: string, records: AppEngineRecord[]): Promise<void> {
   await mkdir(join(file, '..'), { recursive: true, mode: 0o700 })
-  const temp = `${file}.${process.pid}.${Date.now()}.tmp`
-  await writeFile(temp, JSON.stringify(records), { mode: 0o600 })
-  await rename(temp, file)
+  await atomicWriteFileAsync(file, JSON.stringify(records), 'cache')
 }

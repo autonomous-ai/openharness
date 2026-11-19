@@ -17,8 +17,9 @@
  * Nothing here runs on any other platform, and a Hermes installed some other way (a real `hermes` on PATH that is not
  * this launcher) is left exactly as it was.
  */
-import { accessSync, constants, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
+import { accessSync, constants, mkdirSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { dirname, join } from 'node:path'
+import { atomicWriteFile } from '../secureState.js'
 
 /** A launcher is small; anything larger is a program of its own, not read to find out. */
 const MAX_LAUNCHER_BYTES = 1024 * 1024
@@ -110,7 +111,7 @@ export function hermesArgv(program: string, args: readonly string[], options: {
   if (!python) return null
   const boot = hermesBootFile(root)
   const source = hermesBootSource(root)
-  const write = options.write ?? ((file: string, text: string) => { mkdirSync(dirname(file), { recursive: true }); writeFileSync(file, text) })
+  const write = options.write ?? ((file: string, text: string) => { mkdirSync(dirname(file), { recursive: true }); atomicWriteFile(file, text, 'cache') })
   try {
     // Rewritten only when it is not already this: an update that moved the install changes the path it names.
     if (!exists(boot) || readFileSync(boot, 'utf8') !== source) write(boot, source)

@@ -1,11 +1,33 @@
 import { spawnSync } from 'node:child_process'
 import { EventEmitter } from 'node:events'
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ENGINE_INSTALL, ENGINE_WINDOWS_INSTALL } from '../../lib/engineInstall.js'
 import { createWindowsInstallations, INSTALL_RUNNER, powershellInstallScript, windowsInstallCommand, WINDOWS_INSTALL_LIMIT_MS } from './windowsInstall.js'
+
+// How the watched path is changed: opened for writing in place, or a file renamed onto it.
+const disk = vi.hoisted(() => ({ watch: '', changes: [] as string[] }))
+vi.mock('node:fs', async original => {
+  const actual = await original<typeof import('node:fs')>()
+  const writes = (flags: unknown) => typeof flags === 'number' ? (flags & 3) !== 0 : typeof flags === 'string' && flags !== 'r'
+  return { ...actual,
+    openSync: (...args: Parameters<typeof actual.openSync>) => {
+      if (args[0] === disk.watch && writes(args[1])) disk.changes.push('write')
+      return actual.openSync(...args)
+    },
+    writeFileSync: (...args: Parameters<typeof actual.writeFileSync>) => {
+      if (args[0] === disk.watch) disk.changes.push('write')
+      return actual.writeFileSync(...args)
+    },
+    renameSync: (...args: Parameters<typeof actual.renameSync>) => {
+      if (args[1] === disk.watch) disk.changes.push('rename')
+      return actual.renameSync(...args)
+    },
+  }
+})
+afterEach(() => { disk.watch = ''; disk.changes = [] })
 
 const fakeChild = (pid = 4242) => Object.assign(new EventEmitter(), { pid, unref: vi.fn() })
 
@@ -176,6 +198,20 @@ describe('the Windows installations', () => {
     expect(await after.status('kilo', 'r1', current)).toMatchObject({ running: true })
     expect(await after.ensure('kilo', recipe, {}, 'r1', current)).toMatchObject({ running: true })
     expect(spawn).toHaveBeenCalledTimes(1)
+  })
+
+  it('the save goes through a temporary file renamed onto the target', async () => {
+    disk.watch = join(directory, 'kilo.json')
+    await make().ensure('kilo', recipe, {}, 'r1', current)
+    expect(disk.changes).toEqual(['rename'])
+    if (process.platform !== 'win32') expect(statSync(disk.watch).mode & 0o777).toBe(0o600)
+  })
+
+  it('a file at the old temporary name is left alone', async () => {
+    const planted = join(directory, `kilo.json.${process.pid}.next`)
+    writeFileSync(planted, 'planted')
+    await make().ensure('kilo', recipe, {}, 'r1', current)
+    expect(readFileSync(planted, 'utf8')).toBe('planted')
   })
 
   it('reads a broken record as no record', async () => {

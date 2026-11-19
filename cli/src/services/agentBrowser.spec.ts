@@ -30,6 +30,17 @@ import { AGENT_BROWSER_REQUESTS, daemonIdOf, startAgentBrowser, type AgentBrowse
 
 vi.mock('node:child_process', async (importOriginal) =>
   (await import('./agentBrowser/fakePodman.js')).trackingFakes(await importOriginal<typeof import('node:child_process')>()))
+// Pass-through. `refuse`: every rename onto agent-browser.json fails with this code, as a disk that refuses the save.
+const disk = vi.hoisted(() => ({ refuse: undefined as string | undefined }))
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>()
+  return { ...actual,
+    renameSync: (...args: Parameters<typeof actual.renameSync>) => {
+      if (disk.refuse && String(args[1]).endsWith('agent-browser.json')) throw Object.assign(new Error(`${disk.refuse}: refused, rename`), { code: disk.refuse })
+      return actual.renameSync(...args)
+    },
+  }
+})
 
 const GiB = 1024 ** 3
 const NOW = new Date('2026-11-10T12:00:00Z')
@@ -60,6 +71,7 @@ afterEach(async () => {
   await stopAll()
   for (const server of servers.splice(0)) server.close()
   rmSync(dataDir, { recursive: true, force: true })
+  disk.refuse = undefined
   vi.restoreAllMocks()
 })
 
@@ -682,7 +694,7 @@ describe('the agent browser service', () => {
   })
 
   it('state carries Harness\'s own connection, so the relay\'s exec reaches the machine the browser runs on', async () => {
-    writeFileSync(join(dataDir, 'agent-browser.json'), JSON.stringify({ browsers: {}, deleting: [], setup: null, connection: 'harness' }))
+    writeFileSync(join(dataDir, 'agent-browser.json'), JSON.stringify({ browsers: {}, deleting: [], setup: null, connection: 'harness' }), { mode: 0o600 })
     fake.reply('--connection harness info --format json', { stdout: JSON.stringify({ version: { Version: '5.8.1' }, host: { memTotal: 8 * GiB } }) })
     fake.reply('--connection harness ps', { stdout: '[]' })
     fake.reply('--connection harness images --format json --filter reference=localhost/harness-browser', {
@@ -1116,22 +1128,22 @@ describe('the person\'s Start and Stop', () => {
   // As a settings save that cannot be written: the service's own failure, which counts against it.
   it('a Start whose state file cannot be written fails, and starts nothing', async () => {
     const sw = startSwitching()
-    mkdirSync(join(dataDir, `agent-browser.json.${process.pid}.tmp`), { recursive: true })
+    disk.refuse = 'EISDIR'
     await expect(sw.requests.agent_browser_start!({ agentId: 'a1' }, LOCAL)).rejects.toThrow('EISDIR')
     expect(sw.port.published('a1')).toBeUndefined()
     expect(asked().filter(call => call.startsWith('create '))).toEqual([])
   })
 
-  // The file is written beside itself and renamed over it (agentBrowser/stateFile.ts): a folder there refuses it.
+  // The file is written beside itself and renamed over it (agentBrowser/stateFile.ts): the rename is refused.
   it('a Stop whose state file cannot be written still stops the browser, and says so', async () => {
     const sw = startSwitching()
     await sw.requests.agent_browser_start!({ agentId: 'a1' }, LOCAL)
     await ready(sw.port, 'a1')
     const log = vi.spyOn(console, 'log')
-    mkdirSync(join(dataDir, `agent-browser.json.${process.pid}.tmp`))
+    disk.refuse = 'EACCES'
     expect(await sw.requests.agent_browser_stop!({ agentId: 'a1' }, LOCAL)).toEqual({ ok: true })
     expect(sw.port.published('a1')).toBeUndefined()
-    expect(log).toHaveBeenCalledWith('agent browser a1: its Stop was not kept · EISDIR')
+    expect(log).toHaveBeenCalledWith('agent browser a1: its Stop was not kept · EACCES')
     await eventually(() => expect(secretsRemoved('a1')).toBe(2))
   })
 
@@ -1826,8 +1838,8 @@ describe('the browser moves with its pane', () => {
     const sw = await ended()
     const log = vi.spyOn(console, 'log')
     const before = readFileSync(join(dataDir, 'agent-browser.json'), 'utf8')
-    // The file is written beside itself and renamed over it (agentBrowser/stateFile.ts): a folder there refuses it.
-    mkdirSync(join(dataDir, `agent-browser.json.${process.pid}.tmp`))
+    // The file is written beside itself and renamed over it (agentBrowser/stateFile.ts): the rename is refused.
+    disk.refuse = 'EACCES'
     sw.move('a1', 'b1')
     await eventually(() => expect(log).toHaveBeenCalledWith('agent browser b1: browser_move_failed (state_unwritable)'))
     expect(readFileSync(join(dataDir, 'agent-browser.json'), 'utf8')).toBe(before)

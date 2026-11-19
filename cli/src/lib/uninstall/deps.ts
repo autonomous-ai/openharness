@@ -1,5 +1,5 @@
 /** This computer's side of `harness uninstall` (command.ts): every module it needs, loaded only when it runs. */
-import { existsSync, rmSync, writeFileSync, writeSync } from 'node:fs'
+import { existsSync, rmSync, writeSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { env } from '../../config/env.js'
@@ -14,8 +14,10 @@ import { stopDaemonProcess } from '../daemonStop.js'
 import { gridCredentialsPath, gridCredentialsExist } from '../gridCredentials.js'
 import { ownedBinEntries } from '../launchers.js'
 import { runtimeShortRoot } from '../localSocket.js'
+import { settlePidFile } from '../pidFileSettle.js'
 import { platformDaemonDeps } from '../platformDaemon.js'
 import { removePath } from '../removePath.js'
+import { atomicWriteFile } from '../secureState.js'
 import { runPowershell } from '../windows/powershell.js'
 import { stopEveryAgent } from './agents.js'
 import { labelHookRemoval, lockHolder, UninstallLockBusy, type UninstallDeps } from './command.js'
@@ -32,6 +34,7 @@ const SERVICE_NAMES: Record<string, string> = { launchd: 'launchd', systemd: 'sy
  * console.log's last lines (the summary) could be dropped when a script captures them (gridCredentials.ts says the same).
  */
 function line(fd: 1 | 2, text: string): void {
+  // not a state file: stdout or stderr
   try { writeSync(fd, `${text}\n`) } catch { /* no stream to write to */ }
 }
 
@@ -53,9 +56,10 @@ export async function uninstallDeps(options: { tildify: (path: string) => string
     pane: process.env.HARNESS_PANE || process.env.TMUX_PANE || null,
     // Best effort: an uninstall that cannot write it still runs, as it did before the marker. A root that is gone has
     // no files left for a daemon to hold.
-    markUninstalling: () => { try { writeFileSync(marker, `${Math.floor(Date.now() / 1000)}\n`) } catch { /* see above */ } },
+    markUninstalling: () => { try { atomicWriteFile(marker, `${Math.floor(Date.now() / 1000)}\n`, 'cache') } catch { /* see above */ } },
     unmarkUninstalling: () => { rmSync(marker, { force: true }) },
     ask: options.ask,
+    settlePid: () => settlePidFile(),
     daemonPid: () => { const pid = readPid(); return pid !== null && isAlive(pid) ? pid : null },
     alive: isAlive,
     // The port the daemon saved when it started (lib/daemonRecord.ts): another user's daemon may have had the configured

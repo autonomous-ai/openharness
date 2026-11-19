@@ -26,7 +26,7 @@
  * answer. One that had not started a conversation has none to keep, and its line says so. One line in the log for each
  * close.
  */
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { mkdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { Ledger, ledgerPath } from '../agentClient/ledger.js'
 import type { AgentCleanupPort, CoreApi, CorePorts } from '../core/api.js'
@@ -34,6 +34,7 @@ import { backgroundSaid } from '../lib/backgroundSaid.js'
 import type { AgentCloseResult } from '../lib/closeAgentService.js'
 import { errorKind } from '../lib/log.js'
 import type { RegisteredSession } from '../lib/registry.js'
+import { atomicWriteFile, jsonObject, readState } from '../lib/secureState.js'
 import { createMessagesRpc } from '../messages/rpc.js'
 import { createHachiHandOver } from './hachiHandOver.js'
 import { removeSwarmLeftovers } from './swarmLeftovers.js'
@@ -79,13 +80,13 @@ export interface AgentCleanupDeps {
 }
 
 
-function readJoined(file: string): Map<string, number> {
-  try {
-    const saved = (JSON.parse(readFileSync(file, 'utf8')) as { joined?: Record<string, unknown> }).joined ?? {}
-    return new Map(Object.entries(saved).filter((entry): entry is [string, number] => typeof entry[1] === 'number'))
-  } catch {
-    return new Map()
-  }
+/** Null when the file cannot be read now (EACCES, EMFILE): read as none, the next join would forget the others. */
+function readJoined(file: string): Map<string, number> | null {
+  const read = readState(file, 'cache', jsonObject)
+  if (read.state === 'unreadable') return null
+  if (read.state !== 'ok') return new Map()
+  const saved = (read.value as { joined?: Record<string, unknown> }).joined ?? {}
+  return new Map(Object.entries(saved).filter((entry): entry is [string, number] => typeof entry[1] === 'number'))
 }
 
 /** One run of a harness's process: a resume, a restore or a restart is another. */
@@ -101,7 +102,9 @@ export function createAgentCleanup(core: CoreApi, deps: AgentCleanupDeps = {}) {
   const refresh = deps.refresh ?? (async () => {})
   const wait = deps.wait ?? ((ms: number) => new Promise<void>((done) => { setTimeout(done, ms).unref() }))
   const file = joinedPath(core.dataDir)
-  const joined = readJoined(file)
+  const saved = readJoined(file)
+  // Kept in memory this run, and never written over the file it could not read.
+  const joined = saved ?? new Map<string, number>()
   /** When one that would not close may be asked again. */
   const askAgainAt = new Map<string, number>()
   /** The ones whose close failed for more than their state, said once each. */
@@ -127,11 +130,10 @@ export function createAgentCleanup(core: CoreApi, deps: AgentCleanupDeps = {}) {
   let stopped = false
 
   const save = (): void => {
+    if (!saved) return
     try {
       mkdirSync(dirname(file), { recursive: true })
-      // Written whole and renamed: a crash mid-write leaves the last list, never half of one.
-      writeFileSync(`${file}.tmp`, JSON.stringify({ version: 1, joined: Object.fromEntries(joined) }), { mode: 0o600 })
-      renameSync(`${file}.tmp`, file)
+      atomicWriteFile(file, JSON.stringify({ version: 1, joined: Object.fromEntries(joined) }), 'cache')
     } catch (error) {
       log(`[agent-cleanup] could not keep which harnesses the person joined: ${errorKind(error)}`)
     }

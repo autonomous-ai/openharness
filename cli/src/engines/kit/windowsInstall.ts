@@ -5,11 +5,12 @@
  * can then find (kit/launchExecutable.ts), so a record says how the install went and never that the engine is there.
  */
 import { spawn as nodeSpawn } from 'node:child_process'
-import { closeSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { closeSync, mkdirSync, openSync, readFileSync, rmSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { stripVTControlCharacters } from 'node:util'
 import { ENGINE_WINDOWS_INSTALL, npmEnginePrefix, type EngineInstallRecipe, type WindowsInstall } from '../../lib/engineInstall.js'
 import { managedNodePath } from '../../lib/nodeRuntime.js'
+import { atomicWriteFile } from '../../lib/secureState.js'
 import { powershellPath } from '../../lib/windows/powershell.js'
 import { endProcessTree, processTreeKillDeps } from '../../lib/windows/treeKill.js'
 import type { AgentEngine } from '../types.js'
@@ -110,9 +111,7 @@ export function createWindowsInstallations({ directory, spawn = nodeSpawn, alive
   }
   const write = (engine: AgentEngine, record: InstallRecord) => {
     mkdirSync(directory, { recursive: true })
-    const next = `${recordFile(engine)}.${process.pid}.next`
-    writeFileSync(next, JSON.stringify(record))
-    renameSync(next, recordFile(engine))
+    atomicWriteFile(recordFile(engine), JSON.stringify(record), 'cache')
   }
   /** A running record with an installer behind it. One whose process is gone (a restart) or too old never holds a launch. */
   const live = (record: InstallRecord | null): boolean =>
@@ -131,6 +130,7 @@ export function createWindowsInstallations({ directory, spawn = nodeSpawn, alive
       const path = Object.keys(env).filter((key) => key.toLowerCase() === 'path').map((key) => { const value = env[key]; delete env[key]; return value }).find(Boolean)
       env.PATH = path ? `${at.nodeDir};${path}` : at.nodeDir
       rmSync(log, { force: true })
+      // not a state file: the installer's output log, a new file each run
       const output = openSync(log, 'w')
       let child
       try {

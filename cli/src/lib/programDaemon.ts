@@ -19,7 +19,7 @@ import { spawn, spawnSync } from 'node:child_process'
 import { closeSync, mkdirSync, openSync, readFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { AgentClientError } from '../agentClient/daemon.js'
-import { processAlive } from './daemonState.js'
+import { processAlive, readPidFile } from './daemonState.js'
 import { platformDaemonDeps } from './platformDaemon.js'
 import { ownProcessGroup } from './windows/noWindow.js'
 
@@ -103,11 +103,10 @@ function lastLine(text: string): string {
 
 function defaultDeps(dataDir: string): ProgramDaemonDeps {
   return {
+    // A pid file that cannot be read names no daemon here: `harness start` then asks the daemon itself.
     running: () => {
-      try {
-        const pid = parseInt(readFileSync(join(dataDir, 'adapter.pid'), 'utf8').trim(), 10)
-        return Number.isFinite(pid) && pid > 0 && processAlive(pid)
-      } catch { return false }
+      const read = readPidFile(join(dataDir, 'adapter.pid'))
+      return read.state === 'pid' && processAlive(read.pid)
     },
     unit: () => {
       const { service, logFile } = platformDaemonDeps({ logFile: join(dataDir, 'harness.log') })

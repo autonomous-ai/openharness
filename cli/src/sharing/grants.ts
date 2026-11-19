@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto'
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { z } from 'zod'
+import { atomicWriteFile } from '../lib/secureState.js'
 
 export const emailSchema = z.string().trim().toLowerCase().email().max(254)
 export const inviteSchema = z.object({
@@ -39,9 +40,7 @@ export class HarnessGrantStore {
   }
   private save(next: HarnessGrant[]): void {
     mkdirSync(dirname(this.path), { recursive: true, mode: 0o700 })
-    const temp = `${this.path}.${randomUUID()}.tmp`
-    writeFileSync(temp, JSON.stringify(next), { mode: 0o600, flag: 'wx' })
-    renameSync(temp, this.path)
+    atomicWriteFile(this.path, JSON.stringify(next), 'cache')
     this.grants = next
   }
   all(): HarnessGrant[] { return this.grants.map(g => ({ ...g })) }

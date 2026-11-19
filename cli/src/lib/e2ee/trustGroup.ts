@@ -12,12 +12,14 @@
  * again stamps a newer entry, which beats the tombstone.
  *
  * Persistence mirrors machinePeers.ts: ${ADAPTER_DATA_DIR}/e2e/group.json, 0600, never cached — the
- * daemon and a short-lived `harness link …` process both read and write it.
+ * daemon and a short-lived `harness link …` process both read and write it. A file that cannot be read
+ * is never written over: an empty roster or block list put in its place would drop or un-block members.
  */
 import { createHash } from 'crypto'
-import { mkdirSync, readFileSync, writeFileSync } from 'fs'
-import { join } from 'path'
+import { mkdirSync } from 'fs'
+import { basename, join } from 'path'
 import { env } from '../../config/env.js'
+import { StateFileUnreadable, atomicWriteFile, atomicWriteJson, jsonArray, jsonObject, readState, requireState, type TrustFile } from '../secureState.js'
 import { b64d, fingerprint } from './core.js'
 import type { PeerKind } from './store.js'
 
@@ -59,6 +61,11 @@ const FILE = join(DIR, 'group.json')
  *  often the group names them. Local only — never sent, so unpairing stays the one-machine act it was;
  *  `harness group remove` is the group-wide one. A new link to the key lifts it. */
 const BLOCKED_FILE = join(DIR, 'group-blocked.json')
+
+/** Both files, for whoever names the ones that cannot be read. */
+export function trustGroupFiles(): TrustFile[] {
+  return [{ file: FILE, parse: jsonObject }, { file: BLOCKED_FILE, parse: jsonArray }]
+}
 
 function isPub(v: unknown): v is string {
   if (typeof v !== 'string' || v.length > 64) return false
@@ -148,24 +155,34 @@ export function rosterDigest(roster: Roster): string {
   return createHash('sha256').update(JSON.stringify({ members, removed })).digest('base64')
 }
 
+const parseGroup = (text: string): Roster => parseRoster(jsonObject(text))
+const parseBlocked = (text: string): Set<string> => new Set(jsonArray(text).filter(isPub))
+
 export class TrustGroupStore {
+  /** Set by each `read` that found group.json but could not read it: the empty roster it answered is not the
+   *  roster, so a merge must not build on it and write it back. */
+  private unreadable: StateFileUnreadable | null = null
+
+  /** The roster; empty when there is none, or when group.json cannot be read (the reader says so once). */
   read(): Roster {
-    try {
-      return parseRoster(JSON.parse(readFileSync(FILE, 'utf-8')))
-    } catch {
-      return { members: [], removed: [] }
-    }
+    const read = readState(FILE, 'trust', parseGroup)
+    this.unreadable = read.state === 'unreadable' ? new StateFileUnreadable(basename(FILE), read.failure, read.readFailed) : null
+    return read.state === 'ok' ? read.value : { members: [], removed: [] }
   }
 
   write(roster: Roster): void {
     mkdirSync(DIR, { recursive: true, mode: 0o700 })
-    writeFileSync(FILE, JSON.stringify(roster, null, 2), { mode: 0o600 })
+    atomicWriteJson(FILE, roster, 'trust')
   }
 
-  /** Merge and persist; returns what changed so the caller can pin/trust or unpin/untrust. */
+  /** Merge and persist; returns what changed so the caller can pin/trust or unpin/untrust. Throws
+   *  StateFileUnreadable while group.json cannot be read. A block list that cannot be read does not stop it: the roster
+   *  holds no block, so a removal still lands, and GroupSyncer pins and trusts nobody new meanwhile. */
   merge(incoming: Roster, selfPub: string): MergeResult {
-    const result = mergeRoster(this.read(), incoming, selfPub)
-    if (result.upserted.length || result.dropped.length || this.digestChanged(result.roster)) this.write(result.roster)
+    const local = this.read()
+    if (this.unreadable) throw this.unreadable
+    const result = mergeRoster(local, incoming, selfPub)
+    if (result.upserted.length || result.dropped.length || rosterDigest(local) !== rosterDigest(result.roster)) this.write(result.roster)
     return result
   }
 
@@ -180,13 +197,9 @@ export class TrustGroupStore {
     return this.merge({ members: [], removed: [{ pub, at: Math.max(at, (current?.at ?? 0) + 1) }] }, selfPub)
   }
 
+  /** Throws StateFileUnreadable when the list cannot be read: an empty one would un-block every key on it. */
   blocked(): Set<string> {
-    try {
-      const raw = JSON.parse(readFileSync(BLOCKED_FILE, 'utf-8')) as unknown
-      return new Set(Array.isArray(raw) ? raw.filter(isPub) : [])
-    } catch {
-      return new Set()
-    }
+    return requireState(BLOCKED_FILE, parseBlocked) ?? new Set()
   }
 
   block(pub: string): void {
@@ -207,10 +220,6 @@ export class TrustGroupStore {
 
   private writeBlocked(blocked: Set<string>): void {
     mkdirSync(DIR, { recursive: true, mode: 0o700 })
-    writeFileSync(BLOCKED_FILE, JSON.stringify([...blocked].slice(-MAX_MEMBERS)), { mode: 0o600 })
-  }
-
-  private digestChanged(next: Roster): boolean {
-    return rosterDigest(this.read()) !== rosterDigest(next)
+    atomicWriteFile(BLOCKED_FILE, JSON.stringify([...blocked].slice(-MAX_MEMBERS)), 'trust')
   }
 }

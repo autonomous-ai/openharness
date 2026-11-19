@@ -5,6 +5,25 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSyn
 import { dirname, join } from 'node:path'
 import { tmpdir } from 'node:os'
 
+/** A write of exactly `text` reaches the disk half way, then the disk is full. `events`: each flush (of a file or a
+ *  folder) and each rename's target, as they happened. */
+const tear = vi.hoisted(() => ({ text: undefined as string | undefined, events: [] as string[] }))
+vi.mock('node:fs', async (original) => {
+  const actual = await original<typeof import('node:fs')>()
+  return { ...actual,
+    writeFileSync: (...args: Parameters<typeof actual.writeFileSync>) => {
+      const [target, data] = args
+      if (tear.text === undefined || data !== tear.text) return actual.writeFileSync(...args)
+      const half = tear.text.slice(0, tear.text.length >> 1)
+      if (typeof target === 'number') actual.writeSync(target, half)
+      else actual.writeFileSync(target, half)
+      throw Object.assign(new Error('ENOSPC: fixture, write'), { code: 'ENOSPC' })
+    },
+    renameSync: (...args: Parameters<typeof actual.renameSync>) => { tear.events.push(`rename ${String(args[1])}`); return actual.renameSync(...args) },
+    fsyncSync: (fd: number) => { tear.events.push(actual.fstatSync(fd).isDirectory() ? 'flush folder' : 'flush file'); return actual.fsyncSync(fd) },
+  }
+})
+
 let root = ''
 let runtimeDir = ''
 let binDir = ''
@@ -133,6 +152,11 @@ describe('ensureManagedRuntime', () => {
     expect(node).toBe(join(runtimeDir, `node-v22.23.2-${key}`, 'bin', 'node'))
     expect(existsSync(node!)).toBe(true)
     expect(readFileSync(join(runtimeDir, 'current-node'), 'utf8').trim()).toBe(node)
+    // An emptied pointer stops Harness from starting until a reinstall: flushed before it is renamed into place.
+    const { directorySyncSupported } = await import('./secureState.js')
+    const at = tear.events.indexOf(`rename ${join(runtimeDir, 'current-node')}`)
+    expect(tear.events.slice(at - 1, at + (directorySyncSupported() ? 2 : 1)))
+      .toEqual(['flush file', `rename ${join(runtimeDir, 'current-node')}`, ...(directorySyncSupported() ? ['flush folder'] : [])])
     // Staging never survives, whatever happened.
     expect(readdirSync(runtimeDir).filter((n) => n.startsWith('.node-staging-'))).toEqual([])
   })
@@ -398,6 +422,7 @@ describe('ensureManagedGrid', () => {
   })
 
   afterEach(() => {
+    tear.text = undefined
     vi.unstubAllGlobals()
     // 0555 directories cannot be emptied as they are; give them back before the sweep.
     for (const entry of readdirSync(runtimeDir)) {
@@ -454,6 +479,20 @@ describe('ensureManagedGrid', () => {
     // deleting it would take `grid` away from an agent mid-conversation. One version back stays.
     expect(existsSync(previous)).toBe(true)
     expect(existsSync(join(runtimeDir, `grid-0.3.45-${key}`))).toBe(false)
+  })
+
+  it('a pointer write that fails leaves the old pointer', async () => {
+    const previous = installedGrid('0.3.46', key, true)
+    const { bytes, root: archiveRoot } = buildArchive('0.3.47', key, 'grid')
+    stubFetch(manifestFor('grid', key, '0.3.47', bytes, archiveRoot), bytes)
+    tear.text = `${join(runtimeDir, `grid-0.3.47-${key}`, 'bin', 'grid')}\n`
+
+    const { ensureManagedGrid } = await load()
+
+    expect(await ensureManagedGrid()).toBe(previous)
+    // Desktop Harness and the hook installer run what it names: never half a path.
+    expect(readFileSync(join(runtimeDir, 'current-grid'), 'utf8')).toBe(`${previous}\n`)
+    expect(readdirSync(runtimeDir).filter((n) => n.endsWith('.tmp'))).toEqual([])
   })
 
   it('tries a pin that does not run on this computer ONCE, and remembers', async () => {
@@ -569,9 +608,10 @@ describe('startGridPinRecheck', () => {
     }
   })
 
-  /** A snapshot of everything under the runtime dir: names, sizes and times. */
+  /** A snapshot of everything under the runtime dir: names, inodes, sizes and times. A write renames a new file in,
+   *  so the inode tells a rewrite that lands in the same clock tick as the last one. */
   const tree = (): string[] => readdirSync(runtimeDir, { recursive: true, withFileTypes: true })
-    .map((entry) => { const path = join(entry.parentPath, entry.name); const st = statSync(path); return `${path}:${st.size}:${st.mtimeMs}` })
+    .map((entry) => { const path = join(entry.parentPath, entry.name); const st = statSync(path); return `${path}:${st.ino}:${st.size}:${st.mtimeMs}` })
     .sort()
 
   it('re-reads the pin every ten minutes, writes nothing while it matches, and a moved pin reaches the next grid call', async () => {

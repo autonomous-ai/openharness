@@ -19,13 +19,13 @@
  * device-gated recap (recap.ts / manager.ts triggerTurnRecap / websocket.ts handleBrainSummaryEvent).
  */
 
-import { mkdirSync, readFileSync, writeFileSync } from 'fs'
+import { mkdirSync } from 'fs'
 import { join } from 'path'
 import type { LastTurnText, LiveEvent } from './normalize.js'
 import { AgentNotifications } from './agentNotifications.js'
 import { deriveTurnSummary } from './deviceRecap.js'
 import { RECENT_TURNS, lastFullText, recentAsks, recentRecaps, splitSummary, type RecentRecap, type SessionRecaps } from './recapReads.js'
-import { atomicWriteJson } from './registry.js'
+import { atomicWriteJson, jsonObject, readState } from './secureState.js'
 import { fallbackTier, type Tier, type TierInput } from './notifyTier.js'
 import { TurnStats } from '../cable/turnStats.js'
 import { errorKind } from './log.js'
@@ -355,6 +355,10 @@ export class CommanderMirror {
   private historyFile: string
   private fullTextFile: string
   private askFile: string
+  /** The recap files the load could not read: no save goes over them until a save's read of them again succeeds. */
+  private readonly unread = new Set<string>()
+  /** Sessions deleted while a file was unread: once it can be read, its rows for them stay deleted. */
+  private readonly deleted = new Set<string>()
   private saveTimer: NodeJS.Timeout | null = null
 
   constructor(private opts: CommanderMirrorOpts) {
@@ -1189,35 +1193,53 @@ export class CommanderMirror {
     this.history.delete(sessionId)
     this.fullTexts.delete(sessionId)
     this.asks.delete(sessionId)
-    this.save(true)
+    if (this.unread.size) this.deleted.add(sessionId)
+    // Flushed: a deletion is asked for once, and a power cut after it must not bring the recaps back.
+    this.save({ strict: true, durable: true })
     this.stored(sessionId)
   }
 
-  private load(): void {
-    try {
-      const obj = JSON.parse(readFileSync(this.file, 'utf-8')) as Record<string, string>
-      for (const [k, v] of Object.entries(obj)) if (typeof v === 'string') this.summaries.set(k, v)
-    } catch { /* no file yet */ }
-    try {
-      const obj = JSON.parse(readFileSync(this.historyFile, 'utf-8')) as Record<string, unknown>
-      for (const [k, v] of Object.entries(obj)) {
-        if (Array.isArray(v)) this.history.set(k, v.filter((x): x is string => typeof x === 'string').slice(0, RECENT_TURNS))
-      }
-    } catch { /* no history yet — recent() falls back to the latest summary */ }
-    try {
-      const obj = JSON.parse(readFileSync(this.fullTextFile, 'utf-8')) as Record<string, unknown>
-      for (const [k, v] of Object.entries(obj)) {
-        // Re-clipped on the way in: the cap may have been lowered since this was written, and a stored
-        // row is not evidence that it still fits the wire.
-        if (Array.isArray(v)) this.fullTexts.set(k, v.filter((x): x is string => typeof x === 'string').slice(0, RECENT_TURNS).map(t => clipBytes(t, FULL_TEXT_MAX_BYTES)))
-      }
-    } catch { /* no full answers yet — recap simply omits the field */ }
-    try {
-      const obj = JSON.parse(readFileSync(this.askFile, 'utf-8')) as Record<string, unknown>
-      for (const [k, v] of Object.entries(obj)) {
-        if (Array.isArray(v)) this.asks.set(k, v.filter((x): x is string => typeof x === 'string').slice(0, RECENT_TURNS).map((t) => t.slice(0, ASK_MAX_CHARS)))
-      }
-    } catch { /* no questions stored yet — the router falls back to recaps alone */ }
+  /**
+   * The last save, as the process stops cleanly: the one waiting on its timer, now, flushed to the disk. The timer's
+   * saves are not flushed, so without this a power cut after a stop could still cost recaps a restart would have kept.
+   */
+  saveBeforeStop(): void {
+    // Cleared, or its save would put an unflushed file over the flushed one.
+    if (this.saveTimer) clearTimeout(this.saveTimer)
+    this.saveTimer = null
+    this.save({ durable: true })
+  }
+
+  /**
+   * The recap files, or only [files]: a save reads again those its load could not, and takes in the rows the run does
+   * not hold already (what it holds is newer) and did not delete.
+   */
+  private load(files?: ReadonlySet<string>): void {
+    // A file that cannot be parsed is set aside, never written over by the next save: its bytes stay for a person. One
+    // that cannot be read now (EACCES, EMFILE, a scanner holding it on Windows) may hold every recap: it is left, and no
+    // save goes over it until one reads it again.
+    const read = (file: string): Array<[string, unknown]> => {
+      if (files && !files.has(file)) return []
+      const state = readState(file, 'cache', jsonObject)
+      if (state.state === 'unreadable') { this.unread.add(file); return [] }
+      this.unread.delete(file)
+      return Object.entries(state.state === 'ok' ? state.value : {}).filter(([k]) => !this.deleted.has(k))
+    }
+    for (const [k, v] of read(this.file)) if (typeof v === 'string' && !this.summaries.has(k)) this.summaries.set(k, v)
+    // No history yet: recent() falls back to the latest summary.
+    for (const [k, v] of read(this.historyFile)) {
+      if (Array.isArray(v) && !this.history.has(k)) this.history.set(k, v.filter((x): x is string => typeof x === 'string').slice(0, RECENT_TURNS))
+    }
+    for (const [k, v] of read(this.fullTextFile)) {
+      // Re-clipped on the way in: the cap may have been lowered since this was written, and a stored
+      // row is not evidence that it still fits the wire.
+      if (Array.isArray(v) && !this.fullTexts.has(k)) this.fullTexts.set(k, v.filter((x): x is string => typeof x === 'string').slice(0, RECENT_TURNS).map(t => clipBytes(t, FULL_TEXT_MAX_BYTES)))
+    }
+    // No questions stored yet: the router falls back to recaps alone.
+    for (const [k, v] of read(this.askFile)) {
+      if (Array.isArray(v) && !this.asks.has(k)) this.asks.set(k, v.filter((x): x is string => typeof x === 'string').slice(0, RECENT_TURNS).map((t) => t.slice(0, ASK_MAX_CHARS)))
+    }
+    if (!this.unread.size) this.deleted.clear()
   }
 
   private saveSoon(): void {
@@ -1225,22 +1247,19 @@ export class CommanderMirror {
     this.saveTimer = setTimeout(() => this.save(), 200)
   }
 
-  private save(strict = false): void {
+  /**
+   * Each file whole or not at all, so a full disk never truncates another session's recaps. `strict` throws instead
+   * of logging, so a deletion that did not land can be tried again. `durable` flushes each file and the folder, which a
+   * cache write otherwise skips for its cost (lib/secureState.ts): only a deletion and the last save before a stop ask for it.
+   */
+  private save({ strict = false, durable = false } = {}): void {
     try {
+      if (this.unread.size) this.load(new Set(this.unread))
       mkdirSync(this.opts.dataDir, { recursive: true, mode: 0o700 })
-      if (strict) {
-        // Cleanup is often requested on a full disk. Never truncate other sessions' shared
-        // history while rewriting these files; failed atomic writes remain safely retryable.
-        atomicWriteJson(this.file, Object.fromEntries(this.summaries))
-        atomicWriteJson(this.historyFile, Object.fromEntries(this.history))
-        atomicWriteJson(this.fullTextFile, Object.fromEntries(this.fullTexts))
-        atomicWriteJson(this.askFile, Object.fromEntries(this.asks))
-        return
-      }
-      writeFileSync(this.file, JSON.stringify(Object.fromEntries(this.summaries), null, 2))
-      writeFileSync(this.historyFile, JSON.stringify(Object.fromEntries(this.history), null, 2))
-      writeFileSync(this.fullTextFile, JSON.stringify(Object.fromEntries(this.fullTexts), null, 2))
-      writeFileSync(this.askFile, JSON.stringify(Object.fromEntries(this.asks), null, 2))
+      const files: Array<[string, Map<string, unknown>]> = [
+        [this.file, this.summaries], [this.historyFile, this.history], [this.fullTextFile, this.fullTexts], [this.askFile, this.asks],
+      ]
+      for (const [file, rows] of files) if (!this.unread.has(file)) atomicWriteJson(file, Object.fromEntries(rows), 'cache', { durable })
     } catch (err) {
       if (strict) throw err
       console.error('[commander] save summaries failed:', errorKind(err))

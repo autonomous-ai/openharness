@@ -110,7 +110,6 @@ describe.runIf(process.platform === 'win32')('ptyInstall on real Windows', () =>
       },
       link: (a, b) => { calls.push(`link ${b}`); defaultPtyInstallFs.link(a, b) },
       copyFile: (a, b) => { calls.push(`copy ${b}`); defaultPtyInstallFs.copyFile(a, b) },
-      writeFile: (p, d) => { calls.push(`write ${p}`); defaultPtyInstallFs.writeFile(p, d) },
       rm: (p, o) => { calls.push(`rm ${p}`); defaultPtyInstallFs.rm(p, o) },
       sleep: (ms) => { calls.push(`sleep ${ms}`); defaultPtyInstallFs.sleep(ms) },
     }

@@ -6428,8 +6428,9 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
     })
 
     it('a write that fails is one line with the error\'s code', () => {
-      mkdirSync(FILE())
       const { port, listener } = devices()
+      // After the start's read, which would set a folder there aside.
+      mkdirSync(FILE())
       port.observed(hook('session-start'))
       expect(listener.notice({ text: LINE, engine: 'claude', sessionId: 'sess-1' })).toEqual({ result: 'shown' })
       vi.advanceTimersByTime(1_000)
@@ -6476,10 +6477,13 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
       expect(saved().cards).toEqual([])
     })
 
-    it('a bad file never stops the devices: one line, and the next notice replaces it', () => {
+    it('a bad file never stops the devices: it is set aside in one line, and the next notice writes a new one', () => {
       writeFileSync(FILE(), '{not json')
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
       const { port, listener } = devices()
-      expect(logs).toContain('[device] notices · file dropped · json')
+      expect(warn).toHaveBeenCalledWith(
+        '[state] dial-notices.json could not be read (not valid JSON); kept as dial-notices.json.unreadable, starting empty.')
+      expect(readFileSync(`${FILE()}.unreadable`, 'utf8')).toBe('{not json')
       port.observed(hook('session-start'))
       expect(listener.notice({ text: LINE, engine: 'claude', sessionId: 'sess-1' })).toEqual({ result: 'shown' })
       vi.advanceTimersByTime(1_000)

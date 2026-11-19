@@ -1,14 +1,25 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
+import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { performance } from 'node:perf_hooks'
 
 const interleave = vi.hoisted(() => ({
   read: undefined as undefined | ((path: string, value: unknown) => Promise<unknown>),
   stat: undefined as undefined | ((path: string, value: unknown) => Promise<unknown>),
   phase: undefined as undefined | ((path: string, phase: string) => Promise<void>),
+  // The lock is published by a synchronous rename, straight after the look that finds no lock.
+  rename: undefined as undefined | ((from: string, to: string) => void),
 }))
+vi.mock('node:fs', async original => {
+  const actual = await original<typeof import('node:fs')>()
+  return { ...actual,
+    renameSync: (...args: Parameters<typeof actual.renameSync>) => {
+      interleave.rename?.(String(args[0]), String(args[1]))
+      return actual.renameSync(...args)
+    },
+  }
+})
 vi.mock('node:fs/promises', async original => {
   const actual = await original<typeof import('node:fs/promises')>()
   return { ...actual,
@@ -27,6 +38,7 @@ vi.mock('node:fs/promises', async original => {
     },
     open: async (...args: Parameters<typeof actual.open>) => {
       const handle = await actual.open(...args)
+      await interleave.phase?.(String(args[0]), 'open')
       const write = handle.writeFile.bind(handle), sync = handle.sync.bind(handle)
       handle.writeFile = async (...options) => { await write(...options); await interleave.phase?.(String(args[0]), 'write') }
       handle.sync = async () => { await sync(); await interleave.phase?.(String(args[0]), 'sync') }
@@ -58,6 +70,13 @@ const deadline = (ms = 5_000) => {
 }
 const publish = (token: string, pid = process.pid) => writeFileSync(owner,
   JSON.stringify({ token, pid, startMarker: '' }), { mode: 0o600 })
+/** The folder a phase at [path] works in, when it is this process's temporary lock folder. */
+const temporaryAt = (path: string, phase: string) => {
+  const folder = phase === 'mkdir' ? path : basename(path) === 'owner.json' ? dirname(path) : ''
+  return dirname(folder) === directory && basename(folder).startsWith(`registry.json.lock.${process.pid}.`)
+    && folder.endsWith('.tmp') ? folder : null
+}
+const lockEntries = () => readdirSync(directory).filter(name => name.startsWith('registry.json.lock'))
 const replace = () => {
   rmSync(lock, { recursive: true, force: true })
   mkdirSync(lock, { mode: 0o700 })
@@ -73,6 +92,7 @@ afterEach(() => {
   interleave.read = undefined
   interleave.stat = undefined
   interleave.phase = undefined
+  interleave.rename = undefined
   vi.useRealTimers()
   vi.restoreAllMocks()
   rmSync(directory, { recursive: true, force: true })
@@ -195,9 +215,10 @@ it('admits at most 64 queued operations behind the unsettled writer', async () =
 
 it.each(['mkdir', 'write', 'sync'])('does not publish after the deadline expires during owner %s', async phase => {
   const entered = deferred(), release = deferred()
-  let expired = false
+  let expired = false, folder = ''
   interleave.phase = async (path, at) => {
-    if (at !== phase || path !== (phase === 'mkdir' ? lock : owner)) return
+    if (at !== phase || !temporaryAt(path, at)) return
+    folder = temporaryAt(path, at)!
     entered.resolve(); await release.promise
   }
   const apply = vi.fn(async () => 'must not publish')
@@ -205,18 +226,17 @@ it.each(['mkdir', 'write', 'sync'])('does not publish after the deadline expires
     check: () => { if (expired) throw new Error('fixture deadline') } }, apply).catch(error => error)
   await entered.promise
   expired = true
-  expect(existsSync(lock)).toBe(true)
+  expect(existsSync(folder)).toBe(true)
   release.resolve()
   expect(await settled).toBeInstanceOf(Error)
   expect(apply).not.toHaveBeenCalled()
-  // Before an inode/token was captured the ownerless directory must remain conservative debris.
-  expect(existsSync(lock)).toBe(phase === 'mkdir')
+  expect(lockEntries()).toEqual([])
 })
 
 it('includes late owner publication in the two-second acquisition budget', async () => {
   const entered = deferred(), release = deferred(), begun = performance.now()
   interleave.phase = async (path, at) => {
-    if (path === owner && at === 'sync') { entered.resolve(); await release.promise }
+    if (at === 'sync' && temporaryAt(path, at)) { entered.resolve(); await release.promise }
   }
   const apply = vi.fn(async () => {})
   const result = registryFileLock(directory, deadline(), apply).catch(error => error)
@@ -225,5 +245,96 @@ it('includes late owner publication in the two-second acquisition budget', async
   release.resolve()
   expect(await result).toMatchObject({ message: expect.stringContaining('registry lock is busy') })
   expect(apply).not.toHaveBeenCalled()
-  expect(existsSync(lock)).toBe(false)
+  expect(lockEntries()).toEqual([])
+})
+
+it('a lock is never there without its owner', async () => {
+  const violations: string[] = []
+  const look = (at: string) => {
+    if (!existsSync(lock)) return
+    try {
+      const saved = JSON.parse(readFileSync(owner, 'utf8'))
+      if (saved.pid !== process.pid || !saved.token) violations.push(at)
+    } catch { violations.push(at) }
+  }
+  interleave.phase = async (_path, at) => look(at)
+  interleave.rename = () => look('rename')
+  expect(await registryFileLock(directory, deadline(), async () => 'held')).toBe('held')
+  expect(violations).toEqual([])
+})
+
+it('a writer stopped while it takes the lock does not hold it', async () => {
+  const stopped = deferred(), resume = deferred()
+  let opened = false, expired = false
+  interleave.phase = async (path, at) => {
+    if (at !== 'open' || basename(path) !== 'owner.json' || opened) return
+    opened = true
+    stopped.resolve(); await resume.promise
+  }
+  const first = registryFileLock(directory, { expires: performance.now() + 5_000,
+    check: () => { if (expired) throw new Error('fixture deadline') } }, async () => 'first').catch(error => error)
+  await stopped.promise
+  const apply = vi.fn(async () => 'second')
+  try { expect(await registryFileLock(directory, deadline(), apply)).toBe('second') }
+  finally { expired = true; resume.resolve() }
+  expect(apply).toHaveBeenCalledOnce()
+  expect(await first).toBeInstanceOf(Error)
+  expect(lockEntries()).toEqual([])
+})
+
+it('a setup that fails leaves no lock and no temporary folder', async () => {
+  interleave.phase = async (path, at) => {
+    if (at === 'write' && basename(path) === 'owner.json') throw Object.assign(new Error('no space'), { code: 'ENOSPC' })
+  }
+  const apply = vi.fn(async () => {})
+  await expect(registryFileLock(directory, deadline(), apply)).rejects.toMatchObject({ code: 'ENOSPC' })
+  expect(apply).not.toHaveBeenCalled()
+  expect(lockEntries()).toEqual([])
+})
+
+it('a publish refused for a moment with no lock there is tried again', async () => {
+  let renames = 0
+  interleave.rename = (_from, to) => {
+    if (to === lock && !renames++) throw Object.assign(new Error('held by a scanner'), { code: 'EPERM' })
+  }
+  const apply = vi.fn(async () => { expect(lockEntries()).toEqual(['registry.json.lock']) })
+  await registryFileLock(directory, deadline(), apply)
+  expect(renames).toBe(2)
+  expect(apply).toHaveBeenCalledOnce()
+  expect(lockEntries()).toEqual([])
+})
+
+it('a wait for a held lock builds its owner once, not once a turn', async () => {
+  mkdirSync(lock, { mode: 0o700 })
+  publish('held')
+  let turns = 0, built = 0, synced = 0
+  interleave.phase = async (path, at) => {
+    if (!temporaryAt(path, at)) return
+    if (at === 'mkdir') built++
+    if (at === 'sync') synced++
+  }
+  interleave.stat = async (path, value) => {
+    // Each busy turn looks at the lock once; its holder lets go five turns in.
+    if (path === lock && ++turns === 5) rmSync(lock, { recursive: true })
+    return value
+  }
+  expect(await registryFileLock(directory, deadline(), async () => 'taken')).toBe('taken')
+  expect(turns).toBeGreaterThanOrEqual(5)
+  expect({ built, synced }).toEqual({ built: 1, synced: 1 })
+  expect(lockEntries()).toEqual([])
+})
+
+// Windows refuses a folder renamed onto any folder, so an older build's folder there is waited for like any lock.
+it.skipIf(process.platform === 'win32')('an older build\'s folder made between the look and the publish is replaced, so its owner create fails', async () => {
+  let raced = false
+  interleave.rename = (_from, to) => {
+    if (to === lock && !raced) { raced = true; mkdirSync(lock, { mode: 0o700 }) }
+  }
+  await registryFileLock(directory, deadline(), async checkOwner => {
+    checkOwner()
+    let refused: unknown
+    try { closeSync(openSync(owner, 'wx', 0o600)) } catch (error) { refused = (error as NodeJS.ErrnoException).code }
+    expect(refused).toBe('EEXIST')
+  })
+  expect(raced).toBe(true)
 })

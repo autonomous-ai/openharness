@@ -1,7 +1,8 @@
 // The Notifications setting: whether an ordinary finished turn still beeps the dial (All) or only lists
 // (Needs you). It is this computer's, not the dial's, so it lives in the daemon's data folder and outlives the
 // devices' process, which restarts often. One writer: the devices' process.
-import { closeSync, openSync, readSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { closeSync, openSync, readSync } from 'node:fs'
+import { atomicWriteFile } from '../lib/secureState.js'
 
 export type NotifyMode = 'full' | 'you'
 
@@ -47,13 +48,9 @@ export class NotifyModeStore {
    *  names the path. */
   set(mode: NotifyMode): string | undefined {
     if (mode === this.mode) return undefined
-    // Written whole and renamed into place, so a reader never sees half a file.
-    const temporary = `${this.file}.${process.pid}.tmp`
     try {
-      writeFileSync(temporary, `${JSON.stringify({ mode })}\n`, { mode: 0o600 })
-      renameSync(temporary, this.file)
+      atomicWriteFile(this.file, `${JSON.stringify({ mode })}\n`, 'cache')
     } catch (error) {
-      rmSync(temporary, { force: true })
       return (error as NodeJS.ErrnoException).code ?? 'FAILED'
     }
     this.mode = mode

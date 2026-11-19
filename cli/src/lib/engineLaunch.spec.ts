@@ -60,6 +60,20 @@ import { MIN_OPEN_FILES, RAISE_OPEN_FILES_SH } from './openFiles.js'
 import { browserPrelude } from './browserShim.js'
 import { DSH_SESSION_ENV, harnessEnvToClear } from '../dsh/launch.js'
 import { launchScriptOf } from '../testing/launchScript.js'
+
+// A write that stops part way, as on a full disk.
+const disk = vi.hoisted(() => ({ full: false }))
+vi.mock('node:fs', async original => {
+  const actual = await original<typeof import('node:fs')>()
+  return { ...actual,
+    writeFileSync: (...args: Parameters<typeof actual.writeFileSync>) => {
+      if (!disk.full) return actual.writeFileSync(...args)
+      actual.writeFileSync(args[0], String(args[1]).slice(0, 8))
+      throw Object.assign(new Error('ENOSPC: fixture'), { code: 'ENOSPC' })
+    },
+  }
+})
+afterEach(() => { disk.full = false })
 import { writeExecutable } from '../testing/executableFixture.js'
 import { buildGridEngineLaunch, gridConflictingEnvToClear } from './gridLaunch.js'
 import { TmuxBackend } from './tmuxBackend.js'
@@ -1903,6 +1917,18 @@ describe('zsh\'s new-user menu, kept out of an agent\'s pane', () => {
     writeFileSync(join(root, 'data'), 'a file where the data folder should be')
     expect(zshNewUserGuard({ HOME: root })).toEqual([])
     expect(zshNewUserGuard({})).toEqual([])
+  })
+
+  it('a write that fails part way leaves the old file', () => {
+    const home = join(root, 'home')
+    mkdirSync(home)
+    // A .zshenv an older Harness wrote: rewritten, but only ever whole.
+    mkdirSync(folder(), { recursive: true })
+    writeFileSync(join(folder(), '.zshenv'), '# an older guard\n')
+    disk.full = true
+    expect(zshNewUserGuard({ HOME: home })).toEqual([])
+    disk.full = false
+    expect(readFileSync(join(folder(), '.zshenv'), 'utf8')).toBe('# an older guard\n')
   })
 
   // What the .zshenv does, in a real zsh: a person's ZDOTDIR, set or unset, is theirs again before any
