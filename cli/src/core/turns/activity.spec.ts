@@ -125,6 +125,23 @@ describe('turn activity', () => {
     expect(readers.turnActivity.snapshot('s4')?.state).toBe('idle')
   })
 
+  // OpenClaw draws its run a moment after the run's end lands in its store: a pass in that moment read the run's last
+  // timer against the one the turn's heartbeat read, and claimed work for the 30 s lease after the answer.
+  it('a run\'s last timer, read after its turn ended, is not compared with one its turn showed', async () => {
+    let open = true
+    const capture = vi.fn(async () => ({ state: 'succeeded' as const, value: running(41) }))
+    const { readers } = setup({ terminals: { capture }, nativeActivity: vi.fn(async () => 'unknown' as const),
+      sessionTurnOpen: (sessionId) => sessionId === 's4' && open })
+    readers.turnActivity.observe('s4', 'turn_started')
+    // The heartbeat's probe, in the turn.
+    await readers.turnActivity.check('s4')
+    expect(capture).toHaveBeenCalled()
+    open = false
+    readers.turnActivity.observe('s4', 'turn_ended')
+    await readers.paneRead(claw, running(42))
+    expect(readers.turnActivity.snapshot('s4')?.state).toBe('idle')
+  })
+
   // Final review: every pass's read of a bound OpenClaw pane cost two store polls and a screen read.
   it('a pane the binding pass read polls nothing while a turn is open, which the heartbeat probes, or while no run shows', async () => {
     let open = true
