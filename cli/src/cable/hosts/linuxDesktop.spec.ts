@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:net'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -69,6 +69,10 @@ const gnome = (bus = BUS, extension = true): Record<string, Answer> => ({
 
 const SWAY_SOCKET = `${RUNTIME}/sway-ipc.1000.42.sock`
 const HYPR_SOCKET = (signature: string) => `${RUNTIME}/hypr/${signature}/.socket.sock`
+// The shape Hyprland gives a signature, `<commit>_<unix time>_<random>` (T4's recording); the commit is `unknown` in a
+// build without git.
+const HYPR_1 = 'unknown_1795101025_1726482416'
+const HYPR_2 = 'dd220efe7b1e_1795101030_4231'
 const NO_SESSION: LinuxDesktop = { kind: 'none', why: 'no desktop session' }
 
 describe('findLinuxDesktop', () => {
@@ -95,16 +99,20 @@ describe('findLinuxDesktop', () => {
       { kind: 'sway', socket: SWAY_SOCKET }],
     // Hyprland
     ['Hyprland from HYPRLAND_INSTANCE_SIGNATURE',
-      { env: { HYPRLAND_INSTANCE_SIGNATURE: 'abc_2' }, files: { [HYPR_SOCKET('abc_1')]: socket(), [HYPR_SOCKET('abc_2')]: socket() } },
-      { kind: 'hyprland', signature: 'abc_2' }],
-    ['Hyprland from its folder alone', { files: { [HYPR_SOCKET('abc_1')]: socket() } }, { kind: 'hyprland', signature: 'abc_1' }],
+      { env: { HYPRLAND_INSTANCE_SIGNATURE: HYPR_2 }, files: { [HYPR_SOCKET(HYPR_1)]: socket(), [HYPR_SOCKET(HYPR_2)]: socket() } },
+      { kind: 'hyprland', signature: HYPR_2 }],
+    ['Hyprland from its folder alone', { files: { [HYPR_SOCKET(HYPR_1)]: socket() } }, { kind: 'hyprland', signature: HYPR_1 }],
     ['a signature out of form is no Hyprland',
       { env: { HYPRLAND_INSTANCE_SIGNATURE: '../../tmp/x' }, files: { '/run/user/tmp/x/.socket.sock': socket() } }, NO_SESSION],
     ['a stale signature beside a live folder: the folder',
-      { env: { HYPRLAND_INSTANCE_SIGNATURE: 'abc_9' }, files: { [HYPR_SOCKET('abc_1')]: socket() } }, { kind: 'hyprland', signature: 'abc_1' }],
+      { env: { HYPRLAND_INSTANCE_SIGNATURE: 'unknown_1795100000_9' }, files: { [HYPR_SOCKET(HYPR_1)]: socket() } }, { kind: 'hyprland', signature: HYPR_1 }],
+    // hyprctl reads an `-i` value with no `_` as an instance's number (T4's recording).
+    ['a signature with no _ is no Hyprland', { env: { HYPRLAND_INSTANCE_SIGNATURE: 'abc' }, files: { [HYPR_SOCKET('abc')]: socket() } }, NO_SESSION],
+    ['a signature with one _ is no Hyprland', { files: { [HYPR_SOCKET('abc_1')]: socket() } }, NO_SESSION],
+    ['a signature over 128 characters is no Hyprland', { files: { [HYPR_SOCKET(`${'a'.repeat(110)}_1795101025_1726482416`)]: socket() } }, NO_SESSION],
     ['a Hyprland socket of another uid is no Hyprland',
-      { env: { HYPRLAND_INSTANCE_SIGNATURE: 'abc_1' }, files: { [HYPR_SOCKET('abc_1')]: socket(1001) } }, NO_SESSION],
-    ['a Hyprland socket with no hyprctl', { files: { [HYPR_SOCKET('abc_1')]: socket() }, tools: ['wmctrl'] }, { kind: 'none', why: 'no hyprctl' }],
+      { env: { HYPRLAND_INSTANCE_SIGNATURE: HYPR_1 }, files: { [HYPR_SOCKET(HYPR_1)]: socket(1001) } }, NO_SESSION],
+    ['a Hyprland socket with no hyprctl', { files: { [HYPR_SOCKET(HYPR_1)]: socket() }, tools: ['wmctrl'] }, { kind: 'none', why: 'no hyprctl' }],
     // KDE
     ['KDE from DBUS_SESSION_BUS_ADDRESS',
       { env: { DBUS_SESSION_BUS_ADDRESS: 'unix:path=/work/bus' }, files: { '/work/bus': socket() }, answers: kwin('unix:path=/work/bus') },
@@ -166,6 +174,7 @@ describe('findLinuxDesktop', () => {
       { kind: 'none', why: 'unknown compositor' }],
     ['a DISPLAY beside a Wayland socket alone is an unknown compositor', { env: { DISPLAY: ':0' }, files: { [`${RUNTIME}/wayland-1`]: socket() } },
       { kind: 'none', why: 'unknown compositor' }],
+    ['an empty WAYLAND_DISPLAY is no Wayland', { env: { DISPLAY: ':0', WAYLAND_DISPLAY: '' } }, { kind: 'x11', display: ':0' }],
     ['a Wayland socket of another uid is no Wayland', { env: { DISPLAY: ':0' }, files: { [`${RUNTIME}/wayland-1`]: socket(1001) } },
       { kind: 'x11', display: ':0' }],
     ['nothing at all', {}, NO_SESSION],
@@ -208,7 +217,7 @@ describe('findLinuxDesktop', () => {
 describe('desktopLine', () => {
   it.each<[LinuxDesktop, string]>([
     [{ kind: 'sway', socket: SWAY_SOCKET }, '[device] raise · sway'],
-    [{ kind: 'hyprland', signature: 'abc_1' }, '[device] raise · hyprland'],
+    [{ kind: 'hyprland', signature: HYPR_1 }, '[device] raise · hyprland'],
     [{ kind: 'kwin', bus: BUS, runtimeDir: RUNTIME }, '[device] raise · kwin'],
     [{ kind: 'gnome', bus: BUS }, '[device] raise · gnome'],
     [{ kind: 'x11', display: ':0', xauthority: '/home/u/.Xauthority' }, '[device] raise · x11'],
@@ -231,7 +240,7 @@ describe('linuxDesktopDeps', () => {
 
   it('reads this process\'s own variables, uid and home, and hands on the apps\' runner and PATH', () => {
     const values = {
-      SWAYSOCK: '/work/sway.sock', HYPRLAND_INSTANCE_SIGNATURE: 'abc_1', XDG_RUNTIME_DIR: RUNTIME, WAYLAND_DISPLAY: 'wayland-0',
+      SWAYSOCK: '/work/sway.sock', HYPRLAND_INSTANCE_SIGNATURE: HYPR_1, XDG_RUNTIME_DIR: RUNTIME, WAYLAND_DISPLAY: 'wayland-0',
       DBUS_SESSION_BUS_ADDRESS: BUS, DISPLAY: ':0', XAUTHORITY: '/work/xauth',
     }
     for (const [name, value] of Object.entries(values)) vi.stubEnv(name, value)
@@ -248,6 +257,7 @@ describe('linuxDesktopDeps', () => {
     folder = mkdtempSync(join(tmpdir(), 'linuxDesktop-'))
     writeFileSync(join(folder, 'f'), '')
     mkdirSync(join(folder, 'd'))
+    symlinkSync(join(folder, 'f'), join(folder, 'l'))
     const server = createServer()
     await new Promise<void>((resolve) => server.listen(join(folder!, 's'), () => resolve()))
     try {
@@ -256,8 +266,9 @@ describe('linuxDesktopDeps', () => {
       expect(deps.kind(join(folder, 'f'))).toEqual({ type: 'file', uid })
       expect(deps.kind(join(folder, 'd'))).toEqual({ type: 'folder', uid })
       expect(deps.kind(join(folder, 's'))).toEqual({ type: 'socket', uid })
+      expect(deps.kind(join(folder, 'l'))).toBeNull()
       expect(deps.kind(join(folder, 'gone'))).toBeNull()
-      expect(deps.list(folder).sort()).toEqual(['d', 'f', 's'])
+      expect(deps.list(folder).sort()).toEqual(['d', 'f', 'l', 's'])
       expect(deps.list(join(folder, 'gone'))).toEqual([])
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()))
