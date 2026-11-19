@@ -1182,6 +1182,18 @@ describe('the dial that shows one app at a time', () => {
     expect(ids(await host.listAgentSnapshot({ apps: true }))).toEqual(['o3', 'o1', 'o2', 'o4'])
   })
 
+  it('a dial that does not say appFilter swipes no resting row; the app\'s page still lists them', async () => {
+    const host = setup([
+      agent('g1', 'ghostty', { state: 'working', lastActivityAt: 1 }),
+      ...['c1', 'c2', 'c3'].map((id, i) => agent(id, 'codex', { engine: 'codex', resting: true, lastActivityAt: 10 + i })),
+    ])
+    const all = await host.listAgentSnapshot()
+    expect(ids(all)).toEqual(['g1'])
+    expect(all.total).toBe(1)
+    host.pickApp('codex')
+    expect(ids(await host.listAgentSnapshot({ apps: true }))).toEqual(['c1', 'c2', 'c3'])
+  })
+
   describe('the front app\'s ring scoped (docs/plans/2026-11-18-dial-orca-tab-scope-design.md)', () => {
     const without = (...out: string[]): RingScope => ({ inScope: (id) => !out.includes(id) })
     /** A host over these agents whose settles run when `settle` says. */
