@@ -188,14 +188,21 @@ unsigned max_layer_painted(void);
 void max_layer_forget(void);
 // The frame being drawn: what max_layer_warm keeps from.
 uint32_t max_layer_now(void);
-// What a warming step met: room for all it drew, a paint left for the next step (a step paints one), or no room.
+// What a warming step met: room for all it drew, an image or a layer it needs left to make (max_layer_warm_paint), or
+// no room.
 typedef enum { MAX_WARM_DONE, MAX_WARM_MORE, MAX_WARM_FULL } max_warm_t;
 // A step of frames drawn off the glass to paint what a motion will show (max_ui_warm.c) begins, from `from` (a
 // max_layer_now) on, or the step ends (0). In it no image or layer used since `from` is given up for one (the glass's
-// and what the warming made stay), one image or layer is painted at most (a step stays about one image's work), its
-// blurs are done as asked, and its agents between looks are left uncut (their cuts and edges are each frame's own).
-// Returns what the step that ends met.
+// and what the warming made stay), nothing is painted: the first image or layer it needs (none while one is owed) is
+// taken and left for max_layer_warm_paint; and its agents between looks are left uncut (their cuts and edges are each
+// frame's own). Returns what the step that ends met.
 max_warm_t max_layer_warm(uint32_t from);
+// The image or layer a warming step left made, a band of rows at a time (about BAND_PX: a fraction of a ms on the
+// P4), while go_on() says so, at least one band: true while some of it is left. It reads none of the model: out of
+// its lock, on the render task, between its frames.
+bool max_layer_warm_paint(bool (*go_on)(void));
+// Whether a warming step left an image or a layer to make.
+bool max_layer_owes(void);
 
 // max_ui_render into s, cleared, for a frame the glass never shows: when the glass's own next frame is due
 // (max_motion_ms) stays as the glass's last render left it.

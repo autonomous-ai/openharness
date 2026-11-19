@@ -142,10 +142,15 @@ uint32_t max_ui_next_wake_ms(uint32_t now_ms);
 // ---- the glass at rest (render task) ----
 // What a motion the finger can start next will paint, painted ahead off the glass while App Detail's row rests (no
 // finger on it, no overlay over it, nothing of it moving): the open agent's close first, then each agent's open from
-// its cell or sliver, every one's first frames first, so whichever comes first starts warm. A frame of one a call, and
-// at most one image or layer painted in it. Leaves the model as it was and draws nothing on the glass. True while
-// there is more to paint: call it again while the render task has nothing else to do.
+// its cell or sliver, every one's first frames first, so whichever comes first starts warm. Under the lock, a frame of
+// one a call (a fraction of the glass's frame), painting nothing: what it needs is made by max_ui_warm_paint. Leaves
+// the model as it was and draws nothing on the glass. True while there is more to paint: call max_ui_warm_paint, then
+// this again, while the render task has nothing else to do.
 bool max_ui_warm(uint32_t now_ms);
+// Out of the lock (it reads none of the model), on the render task: the image or layer the last max_ui_warm needs made
+// a band of rows at a time while go_on() says so (at least one band), or its pets below 1x baked, one. False when
+// nothing was owed (then max_ui_warm is next).
+bool max_ui_warm_paint(bool (*go_on)(void));
 
 // ---- drawing (render task) ----
 // Draw the model into `scene`, which the caller has cleared. Keeps the hit areas for max_ui_touch.

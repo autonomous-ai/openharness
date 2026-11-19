@@ -2,12 +2,12 @@
 // no frame showed before (each step of the moving agents' pets, dimmed and blurred, and the slivers it comes to rest
 // with): on the P4 that is a frame several times a warm one's. So while the row rests, each motion the finger can start
 // from here is drawn off the glass as it will be drawn, frame after frame on its frames' grid (max_tween_frame), from
-// the motion's start to where it rests, and what it paints is kept (max_layer_warm). A step draws one frame and paints
-// one image or layer at most (a frame that needs more is drawn again in the next step), so the render task and the
-// finger never wait on more than about one image. The open agent's close first (its X, the likeliest), then every
-// open's first frame, every one's second and on: whichever the finger picks starts warm, and when the room runs out the
-// later frames are the ones left cold. The glass's model is set aside for each step and put back as it was. Render
-// task only, under the app's lock.
+// the motion's start to where it rests, and what it paints is kept (max_layer_warm). A step under the lock draws one
+// frame; the first image or layer it needs, and then its pets below 1x, are made out of the lock (max_ui_warm_paint) a
+// few ms at a time, and the frame is drawn again once its image is made: neither the finger nor the glass's own frames
+// wait on more than a step. The open agent's close first (its X, the likeliest), then every open's first frame, every
+// one's second and on: whichever the finger picks starts warm, and when the room runs out the later frames are the
+// ones left cold. What a step writes of the glass's model is set aside and put back as it was. Render task only.
 #include <stddef.h>
 #include <string.h>
 
@@ -18,6 +18,9 @@
 // What a render carries to the next (max_ui_internal.h): the row in motion and the render's own clocks.
 #define CARRIED_AT offsetof(max_model_t, row)
 #define CARRIED (offsetof(max_model_t, cell_box) - CARRIED_AT)
+// What a step writes: a page, a talk and a render write the model from `selected` on (max_ui_internal.h).
+#define ASIDE_AT offsetof(max_model_t, selected)
+#define ASIDE (sizeof(max_model_t) - ASIDE_AT)
 
 enum { MOTIONS = MAX_ROW_HITS + 1, FRAMES = 3 * MAX_ROW_MS / MAX_ROW_FRAME_MS };   // past three moves: at rest
 
@@ -30,8 +33,8 @@ typedef struct {
     uint8_t carried[CARRIED];      // what that frame's render carries to the next
 } motion_t;
 
-static EXT_RAM_BSS_ATTR max_model_t s_glass;   // the glass's model while a motion's frame is drawn
-static EXT_RAM_BSS_ATTR ht_scene_t s_scene;
+static EXT_RAM_BSS_ATTR uint8_t s_glass[ASIDE];   // the glass's model while a motion's frame is drawn
+static EXT_RAM_BSS_ATTR ht_scene_t s_scene;        // the frame drawn last, its pets below 1x baked out of the lock
 static uint16_t s_px[1];
 static EXT_RAM_BSS_ATTR struct {
     uint32_t from;   // max_layer_now when the warming began: what the glass showed then on is kept
@@ -40,7 +43,15 @@ static EXT_RAM_BSS_ATTR struct {
     int count;
     bool over;       // no room for more
     int restarts;    // the times the pets' frames baked below 1x started over since (twice: the warming bakes no more)
+    motion_t *baking;            // the motion whose frame in s_scene is drawn whole once its pets below 1x are baked:
+    int frame;                   // that frame,
+    bool rests;                  // whether it is where the motion rests,
+    uint8_t carried[CARRIED];    // and what it carries
+    bool glass, glass_bakes;     // the glass is owed a draw aside (the bakes started over), then its bakes
 } s_warm;
+
+static void aside(void) { memcpy(s_glass, (uint8_t *)&max_m + ASIDE_AT, ASIDE); }
+static void back(void) { memcpy((uint8_t *)&max_m + ASIDE_AT, s_glass, ASIDE); }
 
 // The row at rest, nothing over it: no finger, no overlay, no page or form coming, nothing the row draws moving.
 static bool resting(uint32_t now_ms)
@@ -79,7 +90,9 @@ static uint32_t key_of(void)
 // a tap on another agent.
 static void plan(uint32_t key, uint32_t now_ms)
 {
+    const bool glass = s_warm.glass || s_warm.glass_bakes;   // owed whatever the finger can do next
     memset(&s_warm, 0, sizeof s_warm);
+    s_warm.glass = glass;
     max_m.warm_key = key;
     s_warm.from = max_layer_now();
     s_warm.at = now_ms;
@@ -124,40 +137,80 @@ static bool bake(bool all)
     return false;
 }
 
-// Frame `f` of motion m, from what frame f - 1 carried (frame 0 the motion's start): what it paints is kept, and its
-// pets below 1x baked. A frame that left a paint or a bake to the next step is drawn again then. Sets *restarted when
-// the bakes started over (one with no room drops them all, the glass's too).
-static max_warm_t draw(motion_t *m, int f, bool *restarted)
+// The frame in s_warm.baking drawn whole: the motion's next frame from it.
+static void settle(void)
 {
-    memcpy(&s_glass, &max_m, sizeof s_glass);
-    const unsigned painted = max_layer_painted(), arena = pod_cell_bake_px();
+    motion_t *m = s_warm.baking;
+    memcpy(m->carried, s_warm.carried, CARRIED);
+    m->frame = s_warm.frame;
+    m->rests = s_warm.rests;
+    s_warm.baking = NULL;
+}
+
+// Frame `f` of motion m, from what frame f - 1 carried (frame 0 the motion's start), into s_scene: what it uses is kept,
+// and the first image or layer it needs is left to make (it is drawn again once that is made). A frame with all it
+// needs is drawn whole once its pets below 1x are baked (s_warm.baking), out of the lock.
+static max_warm_t draw(motion_t *m, int f)
+{
+    aside();
+    const unsigned painted = max_layer_painted();
     max_layer_warm(s_warm.from);
     start(m->id, s_warm.at);
     if (f) memcpy((uint8_t *)&max_m + CARRIED_AT, m->carried, CARRIED);
     const uint32_t now = s_warm.at + (uint32_t)f * MAX_ROW_FRAME_MS;
     max_render_aside(&s_scene, now);
     max_warm_t met = max_layer_warm(0);
-    if (met == MAX_WARM_DONE && (max_layer_painted() != painted || (s_warm.restarts < 2 && bake(false))))
-        met = MAX_WARM_MORE;   // its pets' bakes in the next step
-    *restarted = pod_cell_bake_px() < arena;
+    if (met == MAX_WARM_DONE && max_layer_painted() != painted) met = MAX_WARM_MORE;   // an image to make first
     if (met == MAX_WARM_DONE) {
-        memcpy(m->carried, (uint8_t *)&max_m + CARRIED_AT, CARRIED);
-        m->frame = f;
-        m->rests = !max_row_moving(now) || f >= FRAMES;
+        memcpy(s_warm.carried, (uint8_t *)&max_m + CARRIED_AT, CARRIED);
+        s_warm.frame = f;
+        s_warm.rests = !max_row_moving(now) || f >= FRAMES;
+        s_warm.baking = m;
+        if (s_warm.restarts >= 2) settle();   // no room for its bakes
     }
-    memcpy(&max_m, &s_glass, sizeof max_m);
+    back();
     return met;
 }
 
-// The glass as it stands drawn aside and its pets below 1x baked again, nothing it shows given up.
-static void bake_glass(uint32_t now_ms)
+// The glass as it stands drawn aside into s_scene, for its pets below 1x to be baked again, nothing it shows given up.
+static void glass_aside(uint32_t now_ms)
 {
-    memcpy(&s_glass, &max_m, sizeof s_glass);
+    aside();
     max_layer_warm(s_warm.from);
     max_render_aside(&s_scene, now_ms);
     max_layer_warm(0);
-    bake(true);
-    memcpy(&max_m, &s_glass, sizeof max_m);
+    back();
+    s_warm.glass = false;
+    s_warm.glass_bakes = true;
+}
+
+// What is owed out of the lock: the image or layer to make, then s_scene's bakes.
+static bool owed(void) { return max_layer_owes() || s_warm.baking || s_warm.glass_bakes; }
+
+bool max_ui_warm_paint(bool (*go_on)(void))
+{
+    if (!owed()) return false;
+    const unsigned arena = pod_cell_bake_px();
+    const bool glass = s_warm.glass_bakes;
+    if (max_layer_owes()) {
+        max_layer_warm_paint(go_on);
+    } else if (!bake(false)) {   // a bake a call: each is one of the Pro's, whole
+        if (glass) s_warm.glass_bakes = false;
+        else settle();
+    }
+    if (!glass && pod_cell_bake_px() < arena) {
+        // The bakes started over (one with no room drops them all, the glass's too): the frame is drawn again, and
+        // the glass drawn aside for what its next frame needs baked. The first time (the bakes held other pages' till
+        // then) every motion is drawn again from its start for its bakes, its images all found; the next, there is no
+        // room for them all: the warming bakes no more.
+        s_warm.baking = NULL;
+        s_warm.glass = true;
+        if (++s_warm.restarts == 1) {
+            for (int i = 0; i < s_warm.count; i++) s_warm.motions[i].frame = -1, s_warm.motions[i].rests = false;
+            s_warm.over = false;
+        }
+    }
+    return true;
 }
 
 bool max_ui_warm(uint32_t now_ms)
@@ -165,6 +218,11 @@ bool max_ui_warm(uint32_t now_ms)
     if (!resting(now_ms)) return false;
     const uint32_t key = key_of();
     if (key != max_m.warm_key) plan(key, now_ms);
+    if (owed()) return true;   // out of the lock first
+    if (s_warm.glass) {
+        glass_aside(now_ms);
+        return true;
+    }
     motion_t *m = NULL;
     for (int i = 0; i < s_warm.count && !s_warm.over; i++) {
         motion_t *c = &s_warm.motions[i];
@@ -176,17 +234,6 @@ bool max_ui_warm(uint32_t now_ms)
         if (!m || c->frame < m->frame) m = c;
     }
     if (!m) return false;
-    bool restarted = false;
-    s_warm.over = draw(m, m->frame + 1, &restarted) == MAX_WARM_FULL;
-    if (restarted) {
-        // What the glass's next frame needs is baked again. The first time (the bakes held other pages' till then)
-        // every motion is drawn again from its start for its bakes, its images all found; the next, there is no room
-        // for them all: the warming bakes no more.
-        bake_glass(now_ms);
-        if (++s_warm.restarts == 1) {
-            for (int i = 0; i < s_warm.count; i++) s_warm.motions[i].frame = -1, s_warm.motions[i].rests = false;
-            s_warm.over = false;
-        }
-    }
-    return !s_warm.over;
+    s_warm.over = draw(m, m->frame + 1) == MAX_WARM_FULL;
+    return !s_warm.over || owed();
 }
