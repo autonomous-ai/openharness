@@ -698,7 +698,8 @@ export function createBinding({
         hookEvent: moved ? 'OpenclawNew' : 'OpenclawFooter',
       })
       if (!bound?.isNew) return
-      void followRegistered(bound.entry, bound).then(() => handOverAttached(bound.entry.agentId))
+      void followRegistered(bound.entry, bound).then(() => handOverAttached(bound.entry.agentId)).catch((error) => console.error(
+        `[agent] ${sid(bound.entry.agentId)} first task not handed over · ${errorKind(error)}`))
       console.log(`[discovery] ${moved ? `${sid(agent.agentId)} openclaw session moved ${sid(agent.sessionId)} → ` : 'bound openclaw session '}${sid(key)} via ${observed.primaryRuntimeKey}`)
       // Where its store is once this TUI is gone (a `--profile` TUI's is not the default): read while it runs.
       if (bound.entry.openclawLocal) return
