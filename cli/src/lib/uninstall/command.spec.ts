@@ -90,6 +90,22 @@ describe('harness uninstall', () => {
     expect(seen).toEqual(['settle', 'daemon'])
   })
 
+  it('settles again under its lock before it asks whether the service runs the daemon', async () => {
+    // Before the lock another command held it, so a pid file that could not be read had no pid; under the lock the
+    // daemon answers, and the service that runs it is taken out.
+    const seen: string[] = []
+    let locked = false
+    let answered: number | null = null
+    const t = fake({
+      settlePid: async () => { seen.push(locked ? 'settle under lock' : 'settle'); answered = locked ? 4242 : null },
+      withLock: async (fn) => { locked = true; try { return await fn() } finally { locked = false } },
+      service: { name: 'launchd', present: () => answered !== null, unregister: () => { seen.push('service'); return { ok: true } } },
+    })
+    expect(await uninstallCommand(['--yes'], t.deps)).toBe(0)
+    expect(seen).toEqual(['settle', 'settle under lock', 'service'])
+    expect(t.out).toContain('✓ removed the Harness daemon from launchd: it no longer starts at login')
+  })
+
   it('asks first in a terminal, and removes nothing on no', async () => {
     const t = fake({ isTTY: true })
     expect(await uninstallCommand([], t.deps)).toBe(1)

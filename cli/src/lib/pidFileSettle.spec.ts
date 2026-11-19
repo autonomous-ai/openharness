@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import type { PidFileRead } from './daemonState.js'
-import { settlePidFile, type SettleDeps } from './pidFileSettle.js'
+import { isDaemonRunning, settlePidFile, type SettleDeps } from './pidFileSettle.js'
 
 const unreadable: PidFileRead = { state: 'unreadable' }
 
@@ -63,6 +63,16 @@ describe('settlePidFile', () => {
     const missing = fake([{ state: 'missing' }])
     await expect(settlePidFile(missing.deps)).resolves.toEqual({ state: 'missing' })
     expect(missing.calls).toEqual(['read', 'answer null'])
+  })
+})
+
+describe('isDaemonRunning', () => {
+  it('an unreadable pid file whose daemon answers is a daemon that runs', async () => {
+    // `harness new`, `ensure`, `remote` and `grid setup` refused with "not running" on such a file.
+    const t = fake([unreadable], { status: async () => ({ pid: process.pid }) })
+    await expect(isDaemonRunning(t.deps)).resolves.toBe(true)
+    expect(t.calls).toContain(`answer ${process.pid}`)
+    await expect(isDaemonRunning(fake([unreadable]).deps)).resolves.toBe(false)
   })
 })
 
