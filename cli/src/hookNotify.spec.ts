@@ -135,6 +135,14 @@ interface RunHookOpts {
   procAncestors?: Array<{ comm: string; argv: string[] } | null>
   /** Every path under /proc the hook reads is appended here, one a line. The file is not made when it reads none. */
   procReadLog?: string
+  /** The hook's ancestors on Windows, nearest first, as `procAncestors` is for Linux, listed by a fake `harness-pty`; the
+   *  case sets the platform (the pipe's preload, `windowsData`). The first is the hook's real parent; the row at index
+   *  n > 0 has pid 9000 + n; each one's parent is the next, and the last one's parent is no row at all, a process gone.
+   *  null is a process the host lists but could not open: its name alone, with no start marker (pty/src/ps.rs). */
+  windowsAncestors?: Array<{ executable: string; argv: string[] } | null>
+  /** Each run of the fake `harness-pty` (windowsProcessTable's or windowsAncestors') appends a line here. The file is not
+   *  made when it never runs. */
+  psRunLog?: string
 }
 
 function runHook(opts: RunHookOpts): Promise<string> {
@@ -162,6 +170,13 @@ function runHook(opts: RunHookOpts): Promise<string> {
     tmpDirs.push(env.TMUX_TMPDIR)
     delete env.MACHINE_ID
     if (opts.launcherId !== null) env.MACHINE_ID = opts.launcherId ?? '11111111-2222-4333-8444-555555555555'
+    /** A `harness-pty` in [binDir] whose `ps --json` lists [table], as the hook's helper on Windows. */
+    const fakePtyHost = (binDir: string, table: { rows: unknown[] }) => {
+      const quote = (value: string) => "'" + value.replace(/'/g, "'\\''") + "'"
+      const runLog = opts.psRunLog ? `echo ps >> ${quote(opts.psRunLog)}\n` : ''
+      writeExecutable(join(binDir, 'harness-pty'), `#!/bin/sh\n${runLog}[ "$1 $2" = "ps --json" ] || exit 2\nprintf '%s\\n' ${quote(JSON.stringify(table))}\n`)
+      env.HARNESS_PTY_BIN = join(binDir, 'harness-pty')
+    }
     if (opts.processEngine || opts.paneOwner !== undefined || opts.paneSession !== undefined) {
       const binDir = mkdtempSync(join(tmpdir(), 'adapter-hook-bin-'))
       tmpDirs.push(binDir)
@@ -187,8 +202,7 @@ function runHook(opts: RunHookOpts): Promise<string> {
           { pid: 7001, parentPid: 7000, executable, startMarker: 'w:133000000000000001', args: processArgs, nativeArgv: processArgs.split(' ') },
           { pid: process.pid, parentPid: 7001, executable: 'node.exe', startMarker: 'w:133000000000000002', args: 'hook-parent', nativeArgv: ['hook-parent'] },
         ] }
-        writeExecutable(join(binDir, 'harness-pty'), `#!/bin/sh\n[ "$1 $2" = "ps --json" ] || exit 2\nprintf '%s\\n' ${shellQuote(JSON.stringify(table))}\n`)
-        env.HARNESS_PTY_BIN = join(binDir, 'harness-pty')
+        fakePtyHost(binDir, table)
         writeFileSync(join(binDir, 'ps'), '#!/bin/sh\nexit 1\n', { mode: 0o755 })
       } else {
         // Hermes 0.22+: the hook comes from the shared gateway the pane's Hermes started, not from that Hermes.
@@ -261,6 +275,17 @@ fs.readFileSync = (path, ...args) => {
     + Array(30).fill(0).join(' ') + '\\n';
 }; syncBuiltinESMExports();\n`)
       env.NODE_OPTIONS = `${env.NODE_OPTIONS ?? ''} --import ${fixture}`.trim()
+    }
+    if (opts.windowsAncestors) {
+      const binDir = mkdtempSync(join(tmpdir(), 'adapter-hook-bin-'))
+      tmpDirs.push(binDir)
+      // The hook is this process's child; past the last row, the next pid is in no row.
+      const pidAt = (index: number) => index === 0 ? process.pid : 9000 + index
+      fakePtyHost(binDir, { rows: opts.windowsAncestors.map((row, index) => row
+        ? { pid: pidAt(index), parentPid: pidAt(index + 1), executable: row.executable, startMarker: `w:13300000000000000${index}`,
+            args: row.argv.join(' '), nativeArgv: row.argv }
+        : { pid: pidAt(index), parentPid: pidAt(index + 1), executable: 'elevated.exe', startMarker: '', args: 'elevated.exe',
+            nativeArgv: ['elevated.exe'] }) })
     }
     if (opts.procReadLog) {
       const fixtureDir = mkdtempSync(join(tmpdir(), 'adapter-hook-proc-'))
@@ -2369,6 +2394,31 @@ describe('hook notify in a Harness pty host pane (Windows)', () => {
   })
 })
 
+/** [dataDir], by default a new one short enough for a socket, with the daemon's token, and a preload that runs the hook
+ *  as on Windows. */
+function windowsData(dataDir = mkdtempSync('/tmp/hkp-')): { dataDir: string; token: Buffer; id: string; socket: string; preload: string } {
+  tmpDirs.push(dataDir)
+  const token = randomBytes(32), id = randomBytes(16).toString('hex')
+  writeFileSync(join(dataDir, 'daemon-token'), `${token.toString('hex')}\n`, { mode: 0o644 })
+  const preload = join(dataDir, 'win32-pipe.mjs')
+  writeFileSync(preload, [
+    "import http from 'node:http'",
+    "Object.defineProperty(process, 'platform', { value: 'win32' })",
+    'const dial = http.Agent.prototype.createConnection',
+    'http.Agent.prototype.createConnection = function (options, ...rest) {',
+    // Any name ending in harness-<id>, local pipe or not: the hook's own check is what refuses one.
+    '  const id = /harness-([0-9a-f]{32})$/.exec(options.socketPath ?? "")?.[1]',
+    `  const socket = id && ${JSON.stringify(dataDir)} + '/harness-' + id`,
+    '  return dial.call(this, socket ? { ...options, socketPath: socket, path: socket } : options, ...rest)',
+    '}',
+  ].join('\n') + '\n')
+  return { dataDir, token, id, socket: join(dataDir, `harness-${id}`), preload }
+}
+
+function record(dataDir: string, port: number, fields: Record<string, unknown>): void {
+  writeFileSync(join(dataDir, `daemon-${port}.json`), JSON.stringify({ port, ...fields }) + '\n', { mode: 0o644 })
+}
+
 /**
  * Audit W1 (docs/security/2026-11-02-team-account-windows.md): on Windows the hook posted the full local credential to
  * the daemon's TCP port, which the Team account's daemon can hold from boot. It now posts over the daemon's pipe, proving
@@ -2379,31 +2429,6 @@ describe('hook notify posts over the daemon\'s pipe on Windows (W1)', () => {
   const sessionStart = () => {
     const recordings = JSON.parse(readFileSync(new URL('./lib/__fixtures__/prompt-hooks.json', import.meta.url), 'utf8'))
     return { ...recordings.claude.input, hook_event_name: 'SessionStart' }
-  }
-
-  /** [dataDir], by default a new one short enough for a socket, with the daemon's token, and a preload that runs the hook
-   *  as on Windows. */
-  function windowsData(dataDir = mkdtempSync('/tmp/hkp-')): { dataDir: string; token: Buffer; id: string; socket: string; preload: string } {
-    tmpDirs.push(dataDir)
-    const token = randomBytes(32), id = randomBytes(16).toString('hex')
-    writeFileSync(join(dataDir, 'daemon-token'), `${token.toString('hex')}\n`, { mode: 0o644 })
-    const preload = join(dataDir, 'win32-pipe.mjs')
-    writeFileSync(preload, [
-      "import http from 'node:http'",
-      "Object.defineProperty(process, 'platform', { value: 'win32' })",
-      'const dial = http.Agent.prototype.createConnection',
-      'http.Agent.prototype.createConnection = function (options, ...rest) {',
-      // Any name ending in harness-<id>, local pipe or not: the hook's own check is what refuses one.
-      '  const id = /harness-([0-9a-f]{32})$/.exec(options.socketPath ?? "")?.[1]',
-      `  const socket = id && ${JSON.stringify(dataDir)} + '/harness-' + id`,
-      '  return dial.call(this, socket ? { ...options, socketPath: socket, path: socket } : options, ...rest)',
-      '}',
-    ].join('\n') + '\n')
-    return { dataDir, token, id, socket: join(dataDir, `harness-${id}`), preload }
-  }
-
-  function record(dataDir: string, port: number, fields: Record<string, unknown>): void {
-    writeFileSync(join(dataDir, `daemon-${port}.json`), JSON.stringify({ port, ...fields }) + '\n', { mode: 0o644 })
   }
 
   /** The daemon's pipe server, as the daemon serves it (lib/localSocket.ts): every request proves the token. */
@@ -3311,6 +3336,114 @@ describe('hook notify: the caller a hook names', () => {
     tmpDirs.push(dir)
     expect(await paneCaller({ via: [['/bin/sh', '-c', '"$0" "$@"']], procReadLog: join(dir, 'proc-reads') })).toBe(process.pid)
     expect(existsSync(join(dir, 'proc-reads'))).toBe(false)
+  })
+
+  // Codex and Copilot run a hook through PowerShell, Command Code through cmd, and that shell exits with the hook, as dash's
+  // `sh -c` does on Linux. Windows has no /proc: the climb reads the pty host's table (`harness-pty ps --json`).
+  type WindowsAncestor = NonNullable<RunHookOpts['windowsAncestors']>[number]
+  const win = (...argv: string[]): WindowsAncestor => ({ executable: argv[0], argv })
+  const codexExe = win('codex.exe')
+  const powershell = win('powershell.exe', '-NoProfile', '-Command', '& x')
+  const cmd = win('cmd.exe', '/d', '/s', '/c', 'x')
+  /** What a hook run as on Windows posts over the daemon's pipe (a Unix socket named for it, as the W1 cases reach one):
+   *  a Codex Stop from a pty host's pane unless [opts] or [pane] say otherwise. */
+  const onWindows = async (opts: Partial<RunHookOpts>, pane = true) => {
+    const { dataDir, token, id, socket, preload } = windowsData()
+    record(dataDir, 9, { pipe: `\\\\.\\pipe\\harness-${id}`, pid: process.pid })
+    const requests: Array<{ url: string; body: Record<string, unknown> }> = []
+    const server = await listenLocalSocket((req, res) => {
+      let raw = ''
+      req.on('data', (chunk) => { raw += chunk })
+      req.on('end', () => { requests.push({ url: req.url ?? '', body: JSON.parse(raw) as Record<string, unknown> }); res.end('{}') })
+    }, socket, { token })
+    pipeServers.push(server.close)
+    const env = { NODE_OPTIONS: `--import ${pathToFileURL(preload).href}`, ...(pane ? { HARNESS_PANE: 'p1:%1' } : {}) }
+    await runHook({ port: 9, dataDir, engine: 'codex', input: stop, ...opts, env: { ...env, ...opts.env } })
+    // A paneless post is not waited for (postObserved).
+    await received(requests)
+    return requests
+  }
+  /** A file the fake `harness-pty` notes each run in. */
+  const psRunLog = () => {
+    const dir = mkdtempSync(join(tmpdir(), 'adapter-hook-caller-'))
+    tmpDirs.push(dir)
+    return join(dir, 'ps-runs')
+  }
+
+  it.each<[string, WindowsAncestor[], number]>([
+    ['powershell -Command: its parent', [powershell, codexExe], 1],
+    ['an option\'s own value before -Command (-ExecutionPolicy Bypass): its parent',
+      [win('powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', '& x'), codexExe], 1],
+    ['pwsh -c: its parent', [win('pwsh.exe', '-NoLogo', '-NoProfile', '-c', '& x'), codexExe], 1],
+    ['PowerShell and -Command in capitals: its parent', [win('PowerShell.EXE', '-COMMAND', '& x'), codexExe], 1],
+    ['cmd /d /s /c: its parent', [cmd, codexExe], 1],
+    ['CMD /C in capitals: its parent', [win('CMD.EXE', '/C', 'x'), codexExe], 1],
+    ['cmd /c, then powershell -Command: the process above both', [cmd, powershell, codexExe], 2],
+    ['ten cmd /c in a row: the one 8 steps up', Array<WindowsAncestor>(10).fill(cmd), 8],
+    ['an interactive PowerShell: itself', [win('powershell.exe'), codexExe], 0],
+    ['PowerShell running a script (-File run.ps1): itself', [win('powershell.exe', '-File', 'run.ps1'), codexExe], 0],
+    ['-c after the script (-File run.ps1 -c): itself',
+      [win('powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', 'run.ps1', '-c'), codexExe], 0],
+    ['-Command after a script (pwsh run.ps1 -Command): itself', [win('pwsh.exe', 'run.ps1', '-Command', 'x'), codexExe], 0],
+    ['an encoded command (-EncodedCommand): itself', [win('powershell.exe', '-EncodedCommand', 'AAAA'), codexExe], 0],
+    ['cmd /k: itself', [win('cmd.exe', '/k', 'x'), codexExe], 0],
+    ['an interactive cmd: itself', [win('cmd.exe'), codexExe], 0],
+    ['a program that is no shell, whatever its options (node -c): itself', [win('node.exe', '-c', 'x.js'), codexExe], 0],
+    ['a process the host could not open: the last one reached', [cmd, null], 1],
+    ['a command shell whose parent is gone: the shell itself', [cmd], 0],
+  ])('on Windows a Codex pane hook names, past %s', async (_case, windowsAncestors, named) => {
+    expect(await onWindows({ windowsAncestors })).toEqual([
+      { url: '/api/hook/turn-stop', body: expect.objectContaining({ callerPid: pidAt(named) }) },
+    ])
+  })
+
+  it.each<['commandcode' | 'copilot', WindowsAncestor, string[], string[]]>([
+    ['commandcode', cmd, [], ['/api/hook/session-start', '/api/hook/turn-stop']],
+    ['copilot', powershell, ['--copilot-event', 'agentStop'], ['/api/hook/turn-stop']],
+  ])('on Windows a %s pane hook climbs the same way', async (engine, shell, args, urls) => {
+    const requests = await onWindows({ engine, args, windowsAncestors: [shell, win(`${engine}.exe`)] })
+    expect(requests.map(({ url, body }) => [url, body.callerPid])).toEqual(urls.map((url) => [url, pidAt(1)]))
+  })
+
+  it('on Windows a paneless hook names by the same rule: past cmd and PowerShell, the process above both', async () => {
+    expect(await onWindows({ windowsAncestors: [cmd, powershell, codexExe] }, false)).toEqual([
+      { url: '/api/hook/observed', body: expect.objectContaining({ callerPid: pidAt(2) }) },
+    ])
+  })
+
+  it('on Windows Claude Code\'s hook, run with no shell, names its parent and starts no helper', async () => {
+    const runs = psRunLog()
+    expect(await onWindows({ engine: 'claude', windowsAncestors: [powershell, win('claude.exe')], psRunLog: runs })).toEqual([
+      { url: '/api/hook/turn-stop', body: expect.objectContaining({ callerPid: pidAt(0) }) },
+    ])
+    expect(existsSync(runs)).toBe(false)
+  })
+
+  it('on Windows a helper that fails names the hook\'s parent', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'adapter-hook-caller-'))
+    tmpDirs.push(dir)
+    writeExecutable(join(dir, 'harness-pty'), '#!/bin/sh\nexit 1\n')
+    expect(await onWindows({ env: { HARNESS_PTY_BIN: join(dir, 'harness-pty') } })).toEqual([
+      { url: '/api/hook/turn-stop', body: expect.objectContaining({ callerPid: pidAt(0) }) },
+    ])
+  })
+
+  it('on Windows a Codex pane hook starts the helper once: the climb and the engine\'s lookup share its table', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'adapter-hook-caller-'))
+    tmpDirs.push(dir)
+    const codexHome = join(dir, 'codex'), dataDir = join(dir, 'data'), runs = psRunLog()
+    const transcriptPath = join(codexHome, 'sessions', '2026', 'rollout.jsonl')
+    mkdirSync(join(codexHome, 'sessions', '2026'), { recursive: true })
+    mkdirSync(dataDir, { recursive: true, mode: 0o700 })
+    writeFileSync(join(dataDir, 'registry.json'), '[]', { mode: 0o600 })
+    writeFileSync(transcriptPath, '{}\n')
+    // No daemon: the offline registration reads the table for the engine's process and for the caller's descent.
+    await runHook({
+      port: 9, tmuxPane: '%8', engine: 'codex', processEngine: 'codex', windowsProcessTable: true, dataDir, codexHome, psRunLog: runs,
+      input: { hook_event_name: 'SessionStart', session_id: 'codex-session', transcript_path: transcriptPath, cwd: '/tmp/codex' },
+    })
+    expect(JSON.parse(readFileSync(join(dataDir, 'registry.json'), 'utf-8'))).toMatchObject([{ sessionId: 'codex-session', engine: 'codex' }])
+    expect(readFileSync(runs, 'utf8')).toBe('ps\n')
   })
 })
 
