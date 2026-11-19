@@ -103,7 +103,7 @@ describe('owned packaged child execution', { timeout: 15_000 }, () => {
       expect(master.supervisor.status().corePid).toBeNull()
       expect(records()).toEqual([])
       expect(restore).not.toHaveBeenCalled()
-      expect(master.lines.some(line => line.includes('[harnessd] worker_artifact_storage_unavailable — make disk space available; no children will start'))).toBe(true)
+      expect(master.lines.some(line => line.includes('[harnessd] worker_artifact_storage_unavailable — make disk space available and ensure the filesystem is writable; no children will start'))).toBe(true)
       full = false
       await vi.waitFor(() => expect(master.supervisor.status().state).toBe('running'), { timeout: 5_000 })
       expect(records()).toHaveLength(2)

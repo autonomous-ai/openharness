@@ -160,7 +160,12 @@ it('follows a resumed Hermes through /new without failing it', async () => {
   const a = await create(r, c, r.folder('p1'))
   await boundTo(c, a.agentId, a.started.session)
   r.tell({ say: 'before the stop' })
-  expect((await c.request('agent_delete', { agentId: a.agentId }, 60_000)).error).toBeUndefined()
+  // The script append queues work in the fake; Stop must not race the database write it triggers.
+  // Concurrent native-store changes correctly hold Stop (lib/databaseClose.spec.ts).
+  await until('the message saved before Stop', async () =>
+    JSON.stringify(await c.request('session_get', { sessionId: a.agentId }, 30_000)).includes('before the stop') || null, 30_000, 250)
+  const stopped = await c.request('agent_delete', { agentId: a.agentId }, 60_000)
+  expect(stopped.error, JSON.stringify(stopped)).toBeUndefined()
   await until('the agent to be stopped', async () => (await row(c, a.agentId))?.status === 'stopped' || null, 60_000, 250)
 
   const resumed = await startedAgain(r.home, async () =>

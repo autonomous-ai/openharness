@@ -733,6 +733,7 @@ export function startSelfUpdater(opts: {
   let toldWaiting: string | null = null
   let toldProtocol: string | null = null
   let toldHandover: string | null = null
+  let handoverSince = 0
   /** What the protocol rule says of a build that needs host protocol [needs]: null when it may be staged, else the
    *  protocol the installed host speaks. */
   const hostShortOf = (needs: number): number | null => {
@@ -765,9 +766,16 @@ export function startSelfUpdater(opts: {
     const pending = readPending(opts.dir)
     // A restarted updater still belongs to its master's immutable cohort until handover. Running
     // another canary here left it behind when that master stopped its children (native #4416).
-    if (!pending?.sha256 || pending.version === opts.currentVersion || pending.sha256 !== liveSha256(opts.dir, platform)) return false
-    if (toldHandover !== pending.version) console.log(`[update] ${pending.version} is staged — waiting for its updater to take over`)
-    toldHandover = pending.version
+    if (!pending?.sha256 || pending.version === opts.currentVersion || pending.sha256 !== liveSha256(opts.dir, platform)) {
+      toldHandover = null
+      return false
+    }
+    const generation = `${pending.version}:${pending.sha256}`
+    if (toldHandover !== generation) {
+      console.log(`[update] ${pending.version} is staged — waiting for its updater to take over`)
+      handoverSince = now()
+      toldHandover = generation
+    }
     return true
   }
   const download = opts.limits ?? DOWNLOAD_LIMITS
@@ -795,6 +803,20 @@ export function startSelfUpdater(opts: {
     if (checking) return
     checking = true
     try {
+      // A lost notification must not strand the old cohort. Re-notify the exact staged bytes
+      // after the grace, under the stage lock, without re-downloading or running another canary.
+      if (!halted && waitingForHandover()) {
+        const generation = toldHandover
+        if (now() - handoverSince >= 30_000) await withLock(async () => {
+          if (halted || !waitingForHandover() || toldHandover !== generation) return
+          const pending = readPending(opts.dir)!
+          console.log(`[update] ${pending.version} handover did not finish — notifying the master again`)
+          await opts.onStaged(pending.version, null)
+          done = true
+          stop()
+        })
+        return
+      }
       const entry = await fetchManifest(opts.url, opts.key, manifest)
       if (halted || !entry || waitingForHandover()) return
       // On Windows a master superseded by a newer build (one another process staged, or the installer put in)

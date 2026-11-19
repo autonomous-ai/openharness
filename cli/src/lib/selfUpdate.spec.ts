@@ -1087,6 +1087,58 @@ describe('a build that fails on its own merits (e2e/updateHostile.e2e.ts)', () =
     }
   })
 
+  it('renotifies a staged build after a bounded handover wait without another download or canary', async () => {
+    const state = { cli: Buffer.from('console.log("9.9.9")\n'), downloads: 0 }
+    serve(state)
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    const dir = tempDir()
+    writeFileSync(join(dir, 'cli.js'), 'previous kept build')
+    writeFileSync(join(dir, 'notify.mjs'), 'previous notify')
+    stage(dir, Buffer.from('console.log("9.9.8")\n'), notify, '9.9.8')
+    let clock = 0
+    const staged = vi.fn()
+    const poller = startSelfUpdater({ currentVersion: '1.0.0', url: 'https://updates.test/metadata.json', key: 'adapter',
+      dir, intervalMs: 10, now: () => clock, onStaged: staged })
+    try {
+      await vi.waitFor(() => expect(log).toHaveBeenCalledWith('[update] 9.9.8 is staged — waiting for its updater to take over'))
+      expect(staged).not.toHaveBeenCalled()
+      clock = 30_000
+      await vi.waitFor(() => expect(staged).toHaveBeenCalledExactlyOnceWith('9.9.8', null))
+      expect(state.downloads).toBe(0)
+      expect(readdirSync(dir).filter(name => name.startsWith('.canary-'))).toEqual([])
+      expect(readFileSync(join(dir, 'cli.js.prev'), 'utf8')).toBe('previous kept build')
+    } finally { poller.stop() }
+  })
+
+  it.each(['stopped', 'rollback', 'replacement'] as const)('revokes a handover reminder changed under the stage lock: %s', async change => {
+    const state = { cli: Buffer.from('console.log("9.9.9")\n'), downloads: 0 }
+    serve(state)
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    const dir = tempDir()
+    writeFileSync(join(dir, 'cli.js'), 'previous kept build')
+    writeFileSync(join(dir, 'notify.mjs'), 'previous notify')
+    stage(dir, Buffer.from('console.log("9.9.8")\n'), notify, '9.9.8')
+    let clock = 0, checked = false
+    const staged = vi.fn()
+    const poller = startSelfUpdater({ currentVersion: '1.0.0', url: 'https://updates.test/metadata.json', key: 'adapter',
+      dir, intervalMs: 10, now: () => clock, onStaged: staged, withLock: async fn => {
+        if (change === 'stopped') poller.stop()
+        if (change === 'rollback') restore(dir)
+        if (change === 'replacement') stage(dir, Buffer.from('console.log("9.9.7")\n'), notify, '9.9.7')
+        const result = await fn()
+        checked = true
+        poller.stop()
+        return result
+      } })
+    try {
+      await vi.waitFor(() => expect(log).toHaveBeenCalledWith('[update] 9.9.8 is staged — waiting for its updater to take over'))
+      clock = 30_000
+      await vi.waitFor(() => expect(checked).toBe(true))
+      expect(staged).not.toHaveBeenCalled()
+      expect(state.downloads).toBe(0)
+    } finally { poller.stop() }
+  })
+
   it('the updater on the staged cohort can still supersede its build during probation', async () => {
     const state = { cli: Buffer.from('console.log("9.9.9")\n'), downloads: 0 }
     serve(state)

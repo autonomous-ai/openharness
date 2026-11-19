@@ -40,3 +40,40 @@ The six new cases failed against unchanged production code in receipt
 `20261119T144146.762074Z-87118`. The affected caller checks and TypeScript then
 passed in `20261119T144239.573087Z-88310` (99.2 seconds). Native validation and final
 coverage remain pending; this does not resolve the separate Hermes Stop failure.
+
+## Updater handover recovery
+
+The independent review found that the old immutable updater can wait indefinitely
+if its staged notification is lost. Keep the canary suppression, but bound that
+wait: after 30 seconds, its next normal poll rechecks the pending version and live
+digest under the existing stage lock and notifies the master again. It does not
+download, run a canary or change the rollback copy. A successful notification ends
+the poller as ordinary staging does. A stopped poller, rollback or changed pending
+generation revokes that notification. This adds one in-memory timestamp, no stored
+state, protocol change, new timer, account access or migration. The existing polling
+interval bounds retry frequency, and the retry has a named log line. Validate the
+red regression, updater callers and native hostile-update suite on macOS and Linux.
+
+## Hermes native test ordering
+
+Linux shard 1 failed at `agent_delete`, before resume. The test appended a fake
+engine instruction to write a message and immediately requested Stop. Native-store
+generation changes deliberately hold Stop before signalling (`databaseClose.spec.ts`
+covers this). The resume test now waits for that message to appear in the retained
+conversation before stopping. This is an observable state barrier, with the existing
+30-second request/read deadline, and no command retry or sleep. Production Stop's
+native identity, generation and signalling rules are unchanged.
+
+## Review correction evidence
+
+The handover reminder regression failed in `20261119T144744.310985Z-95419`; the
+filesystem guidance assertion failed in `20261119T145102.104810Z-6285`.
+All 291 updater, supervisor, artifact and database Stop caller tests passed in
+`20261119T145147.198791Z-7226`. Its type check found a missing generic return in the
+new test double; after correcting it, the three lock countercases and TypeScript
+passed in `20261119T145313.212850Z-8788`. The failed receipt remains recorded.
+
+The committed recovery candidate `4f9c9fdfe4` passed 15 private-daemon tests in
+`20261119T144650.379377Z-93449`; four Linux sandbox cases were skipped on macOS.
+That native receipt precedes the Hermes synchronization and updater corrections.
+Native hostile-update and the corrected Hermes test still require validation.

@@ -439,7 +439,7 @@ export function runMaster(config: MasterConfig): Supervisor {
         'worker_artifact_source_close_unsettled', 'worker_artifact_reserved_name', 'worker_artifact_publish_failed',
         'worker_artifact_cleanup_unsettled', 'worker_artifact_in_use', 'worker_artifact_storage_unavailable'].find(code => error instanceof Error && error.message === code)
         ?? 'worker_artifact_prepare_failed'
-      const action = reason === 'worker_artifact_storage_unavailable' ? 'make disk space available' : reason.endsWith('_unsettled') || reason === 'worker_artifact_in_use' ? 'restart the supervisor' : 'restore a supported selected build'
+      const action = reason === 'worker_artifact_storage_unavailable' ? 'make disk space available and ensure the filesystem is writable' : reason.endsWith('_unsettled') || reason === 'worker_artifact_in_use' ? 'restart the supervisor' : 'restore a supported selected build'
       log(`[harnessd] ${reason} — ${action}; no children will start`)
       if (reason === 'worker_artifact_storage_unavailable') throw error
       return null
