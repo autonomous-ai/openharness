@@ -2763,6 +2763,33 @@ describe('wait and watch on pushed events', () => {
     expect(slept).toEqual([60_000, 1_000])
   })
 
+  // The goal test on a GitHub Linux runner (e2e/openclawShow.e2e.ts, row 13): the run's end, pushed, was looked at while
+  // OpenClaw still drew the run, and the wait slept on a push that never came until its 1 m timeout.
+  it('wait looks every interval at a harness only its screen says works, the daemon saying idle: that screen ends unpushed', async () => {
+    const d = new PushingDaemon()
+    d.frames = [frame('kid')]
+    d.screens.set('kid', ['working', 'idle'])
+    answered(d, 'kid')
+    const slept: number[] = []
+    const h = harness(d)
+    h.deps.sleep = driven(h, slept, [])
+    expect(await waitCommand(['kid', '--timeout', '1m'], h.deps)).toBe(EXIT.ok)
+    expect(slept).toEqual([1_000, 1_000])
+  })
+
+  it('watch looks every interval at a harness only its screen says works, the daemon saying idle, and says done', async () => {
+    const d = new PushingDaemon()
+    d.frames = [frame('kid')]
+    d.screens.set('kid', ['working', 'idle'])
+    answered(d, 'kid')
+    const slept: number[] = []
+    const h = harness(d)
+    h.deps.sleep = driven(h, slept, [])
+    expect(await watchCommand(['kid', '--json', '--timeout', '1m'], h.deps)).toBe(EXIT.timeout)
+    expect(h.out.map((l) => JSON.parse(l).event)).toEqual(['working', 'done'])
+    expect(slept).toEqual([1_000, 1_000, 58_000])
+  })
+
   it('wait looks every interval at a draft in its box: the person typing is pushed by nothing', async () => {
     const d = new PushingDaemon()
     d.frames = [frame('kid')]
