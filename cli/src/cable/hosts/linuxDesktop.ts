@@ -33,10 +33,10 @@ export interface LinuxDesktopDeps {
 
 type Why = Extract<LinuxDesktop, { kind: 'none' }>['why']
 
-// sway names its socket for its uid and pid; one left by a sway that crashed stays. Four bounds the `get_version`
-// calls a folder of stale ones could cost.
+// sway names its socket for its uid and pid, Hyprland its folder for its instance; one left by a compositor that crashed
+// stays. Four of each bound the calls that ask whether one answers a folder of stale ones could cost.
 const SWAY_SOCKET = /^sway-ipc\.([0-9]+)\.[0-9]+\.sock$/
-const SWAY_SOCKETS = 4
+const ASKED = 4
 // Hyprland's `<commit>_<unix time>_<random>`: `hyprctl -i` reads a value with no `_` as an instance's number, so a
 // signature without them would name another instance (RECORDED_HYPRLAND.signatureWithoutUnderscore).
 const HYPRLAND_SIGNATURE = /^(?=.{1,128}$)[A-Za-z0-9]+(_[A-Za-z0-9]+){2,}$/
@@ -69,7 +69,7 @@ export async function findLinuxDesktop(deps: LinuxDesktopDeps): Promise<LinuxDes
   // A SWAYSOCK the session exported can outlive its sway: the runtime dir's own sockets are asked after it.
   const swaySockets = [...new Set([
     ...(env.SWAYSOCK !== undefined && isAbsolute(env.SWAYSOCK) ? [env.SWAYSOCK] : []),
-    ...inRuntime.filter(({ name }) => SWAY_SOCKET.exec(name)?.[1] === String(uid)).slice(0, SWAY_SOCKETS).map(({ path }) => path),
+    ...inRuntime.filter(({ name }) => SWAY_SOCKET.exec(name)?.[1] === String(uid)).slice(0, ASKED).map(({ path }) => path),
   ])].filter((path) => own(path, 'socket'))
   if (swaySockets.length > 0) {
     const swaymsg = deps.onPath('swaymsg')
@@ -80,19 +80,33 @@ export async function findLinuxDesktop(deps: LinuxDesktopDeps): Promise<LinuxDes
   }
 
   if (runtime) {
+    // As sway's: the exported signature can outlive its Hyprland, and the first folder whose Hyprland answers wins.
     const hypr = join(runtime, 'hypr')
-    const live = (signature: string) => HYPRLAND_SIGNATURE.test(signature) && own(join(hypr, signature, '.socket.sock'), 'socket')
     const exported = env.HYPRLAND_INSTANCE_SIGNATURE
-    const signature = exported !== undefined && live(exported) ? exported : deps.list(hypr).find(live)
-    if (signature !== undefined) return deps.onPath('hyprctl') ? { kind: 'hyprland', signature } : none('no hyprctl')
+    const signatures = [...new Set([
+      ...(exported !== undefined ? [exported] : []),
+      ...deps.list(hypr).filter((name) => HYPRLAND_SIGNATURE.test(name)).slice(0, ASKED),
+    ])].filter((signature) => HYPRLAND_SIGNATURE.test(signature) && own(join(hypr, signature, '.socket.sock'), 'socket'))
+    if (signatures.length > 0) {
+      const hyprctl = deps.onPath('hyprctl')
+      if (!hyprctl) return none('no hyprctl')
+      for (const signature of signatures) {
+        if ((await answer(hyprctl, ['-i', signature, 'version'])).code === 0) return { kind: 'hyprland', signature }
+      }
+    }
   }
 
   const exportedBus = env.DBUS_SESSION_BUS_ADDRESS?.match(SESSION_BUS)?.[0]
   const bus = exportedBus !== undefined && (!exportedBus.startsWith('unix:path=') || own(exportedBus.slice('unix:path='.length), 'socket'))
     ? exportedBus
     : runtime && own(join(runtime, 'bus'), 'socket') ? `unix:path=${join(runtime, 'bus')}` : undefined
-  const wayland = env.WAYLAND_DISPLAY !== undefined && env.WAYLAND_DISPLAY !== ''
-    || inRuntime.some(({ name, path }) => WAYLAND_SOCKET.test(name) && own(path, 'socket'))
+  // A session that exported its display says whether it runs Wayland, by this account's socket WAYLAND_DISPLAY names: a
+  // compositor that crashed leaves its socket behind, which would turn an X11 login's DISPLAY into an unknown
+  // compositor. A daemon started before the session exported either (design § 2.3) goes by the runtime dir's sockets.
+  const named = env.WAYLAND_DISPLAY ? (isAbsolute(env.WAYLAND_DISPLAY) ? env.WAYLAND_DISPLAY : runtime && join(runtime, env.WAYLAND_DISPLAY)) : undefined
+  const wayland = env.WAYLAND_DISPLAY || env.DISPLAY
+    ? !!named && own(named, 'socket')
+    : inRuntime.some(({ name, path }) => WAYLAND_SOCKET.test(name) && own(path, 'socket'))
   if (bus !== undefined) {
     // KDE's raise writes its script to a file in the runtime dir (KWin takes a script only as a file).
     const dbusSend = deps.onPath('dbus-send')
