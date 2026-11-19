@@ -11,6 +11,7 @@ use harness_device::loginitem::SystemLoginItem;
 use harness_device::runner::{Doors, Runner};
 use harness_device::state::{JsonStateFile, StateFile};
 use harness_device::tabs;
+use harness_device::tick;
 use harness_device::types::{Action, Clock, Effect, Event, Log, MenuAction, MenuItem, SystemClock, View};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
@@ -117,8 +118,7 @@ fn start(handle: &AppHandle, events: Sender<Event>, queue: Receiver<Event>) -> t
         // Down only: one click is one MenuOpened. Tray events arrive on the main thread, where AppKit is read.
         .on_tray_icon_event(move |_, event| {
             if let TrayIconEvent::Click { button_state: MouseButtonState::Down, .. } = event {
-                let desktop_installed = SystemDesktopApp.installed();
-                let _ = clicks.send(Event::MenuOpened { now: SystemClock.now(), desktop_installed });
+                let _ = clicks.send(tick::menu_opened(SystemClock.now(), SystemDesktopApp.installed()));
             }
         })
         .build(handle)?;
@@ -154,21 +154,24 @@ fn start(handle: &AppHandle, events: Sender<Event>, queue: Receiver<Event>) -> t
             // AppKit's running applications are read on the main thread.
             #[cfg(target_os = "macos")]
             let sent = ticking.run_on_main_thread(move || {
-                let desktop_running = SystemDesktopApp.running();
-                let _ = events.send(Event::Tick { now: SystemClock.now(), desktop_running });
+                for event in ticked() {
+                    let _ = events.send(event);
+                }
             });
             // Elsewhere it is a scan of every process: here, never on the main thread, where it would hold the tray.
             #[cfg(not(target_os = "macos"))]
-            let sent = {
-                let desktop_running = SystemDesktopApp.running();
-                events.send(Event::Tick { now: SystemClock.now(), desktop_running })
-            };
+            let sent = ticked().into_iter().try_for_each(|event| events.send(event));
             if sent.is_err() {
                 return;
             }
         }
     });
     Ok(())
+}
+
+/// What the timer tells now: the desktop app running, and on Linux what a click on the icon would tell.
+fn ticked() -> Vec<Event> {
+    tick::tick(std::env::consts::OS, SystemClock.now(), SystemDesktopApp.running(), &|| SystemDesktopApp.installed())
 }
 
 /// The one loop that owns the app: each event in the order it was queued, and each of its effects in order, before
