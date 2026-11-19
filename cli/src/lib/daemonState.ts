@@ -13,6 +13,7 @@ import { env } from '../config/env.js'
 import { hasAuthSession } from './authSession.js'
 import { readOrMintComputerId } from './computerIdentity.js'
 import { savedDaemonPort } from './daemonRecord.js'
+import { StateFileUnreadable } from './secureState.js'
 
 export const PID_FILE = join(env.ADAPTER_DATA_DIR, 'adapter.pid')
 /** The daemon's console: the master's and its core's stdout and stderr. Capped (lib/log.ts). */
@@ -78,7 +79,14 @@ export function removePidFileIf(pid: number | undefined, deps: { readPid: () => 
  *  this way, on the terminal of the person who ran one; a core logs a failed start's kind itself, also one a command
  *  runs in its own process (core/main.ts `runCoreInForeground`). */
 export const onError = (err: unknown, code = 1): never => {
-  console.error('Failed to start adapter:', err)
+  // A trust file that cannot be read is the person's to move aside, not a fault in Harness: no stack, and the
+  // file's full path is in `harness status`, kept out of the error itself.
+  if (err instanceof StateFileUnreadable) {
+    console.error(`✗ ${err.message}`)
+    console.error('  harness status shows where it is')
+  } else {
+    console.error('Failed to start adapter:', err)
+  }
   // A pid file left naming a process that is gone, the next `harness start` would refuse on. Only ours, though.
   removePidFileIf(process.pid)
   process.exit(code)

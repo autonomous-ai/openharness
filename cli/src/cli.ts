@@ -105,6 +105,8 @@ import { MachinePeerStore } from './lib/e2ee/machinePeers.js'
 import { connectWithPassword, type PwConnectProgress } from './lib/e2ee/relayClient.js'
 import type { LinkedPeer } from './lib/e2ee/manager.js'
 import { DeviceLogStore } from './lib/e2ee/deviceLogStore.js'
+import { StateFileUnreadable } from './lib/secureState.js'
+import { unreadableTrustLines } from './lib/trustFiles.js'
 import { TrustGroupStore } from './lib/e2ee/trustGroup.js'
 import { fetchManifest, semverGt, isLocalDevBuild, type UpdateEntry } from './lib/selfUpdate.js'
 import { managedNodePath } from './lib/nodeRuntime.js'
@@ -2730,8 +2732,13 @@ async function status(): Promise<void> {
     // `status` can say "(in your account)" from it for a while; that window is accepted.
     // A retired key with none in its place still says something, though: being removed from the
     // account is itself what signs a machine out (the daemon clears the session as it spends the key).
+    // A log that cannot be read leaves the row out: the line below names the file.
     device: (() => {
-      const devlog = new DeviceLogStore().read()
+      let devlog: ReturnType<DeviceLogStore['read']>
+      try { devlog = new DeviceLogStore().read() } catch (error) {
+        if (error instanceof StateFileUnreadable) return undefined
+        throw error
+      }
       return deviceStatusValue(
         thisDeviceFingerprint(false),
         session
@@ -2753,6 +2760,8 @@ async function status(): Promise<void> {
   // Only Linux moves ~/.harness; a move that is held or failed says what to do.
   const moveLine = process.platform === 'linux' ? moveStatusLine(readMoveRecord(homedir(), process.env)) : null
   if (moveLine) console.log(`  ${moveLine}\n`)
+  const unreadable = unreadableTrustLines()
+  if (unreadable.length) console.log(`${unreadable.join('\n')}\n`)
   process.exit(0)
 }
 
