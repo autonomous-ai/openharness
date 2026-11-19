@@ -843,7 +843,7 @@ Every Linux daemon there runs T16's real check: a runner has no active seat0 ses
 - The dial's voice lands in a WezTerm, Zellij and kitty pane.
 - On a Mac, with their own eye: a tap and the voice in a Zellij pane and in a kitty window with remote control on (a kitty window cannot be driven headless there).
 
-**Said in the PR as a follow-up, not changed here (spec § 1.1a):** an opt-in systemd unit written from a shell whose `XDG_DATA_HOME` differs from the desktop session's names another data folder, so Desktop's `harness start` spawns a second master that fails to bind port 18473.
+**Said in the PR as a follow-up, not changed here (spec § 1.1a):** an opt-in systemd unit written from a shell whose `XDG_DATA_HOME` differs from the desktop session's names another data folder, so Desktop's `harness start` spawns a second master. It stays up on a random port (18473 is taken) as a machine of its own, rewrites the Claude Code hooks in `~/.claude/settings.json` to its port (hook calls go to the newest master) and retries bridge port 51793 every 5 s. Already so in CLI 0.6.73; this work makes it slightly more likely only when the login entry and an opt-in unit use different data folders. One master per user (or a fixed hook port) touches the core: a separate follow-up.
 
 **Harness OS** (Review Focus 8): not run here; its dial is checked by the OS's own acceptance when that workflow next runs by hand. Said in the PR.
 

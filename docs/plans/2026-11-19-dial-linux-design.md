@@ -120,10 +120,14 @@ So no code changes for ownership; what is missing is the test. This work adds:
   two callers itself, and needs not: the CLI makes a second start harmless. (Builder check; my call.)
 
 A known edge, not changed here: an opt-in unit written from a shell whose `XDG_DATA_HOME` differs from what a Desktop
-launched by the desktop session sees names another data folder, so Desktop's `harness start` spawns a second master,
-whose core then fails to bind the daemon's port (18473): one working daemon, and a Desktop start that fails. The login
-entry runs in the desktop session, as Desktop does, so it agrees with Desktop. This goes in the final report as a
-follow-up.
+launched by the desktop session sees names another data folder, so Desktop's `harness start` spawns a second master.
+It does not fail: port 18473 is taken, so it logs `[hooks] control port 18473 unavailable; assigning a separate port
+for this user`, listens on a random port and stays up as a machine of its own (its own computer id). Each master
+rewrites the Claude Code hooks in `~/.claude/settings.json` to its own port, so hook calls go to the newest, and the
+later ones retry the bridge port (51793) every 5 s. This is so in CLI 0.6.73 already; this work makes it slightly more
+likely only when the login entry and an opt-in unit use different data folders. The login entry runs in the desktop
+session, as Desktop does, so it agrees with Desktop. One master per user (or a hook port that does not move) touches
+the core, so it is a separate follow-up, said in the final report.
 
 ### 1.2 A dial the account cannot open says how to fix it
 
@@ -456,6 +460,8 @@ macOS behavior changes otherwise. Windows: no change.
 - A WezTerm, kitty or Zellij pane takes words only when its host made the agent's pseudo-terminal (§ 1.5), read from
   the process table, not from the hints: a terminal or an editor started from a pane kept its variables, and the words
   ran at that pane's shell. The tap takes the pane of that host first, and Zellij's client lookup asks the same.
+- § 1.1a: a second master under another data folder does not fail to bind 18473; it stays up on another port. Its
+  guard touches the core and is a separate follow-up.
 
 ## Design (docs/feature-design-rules.md)
 
