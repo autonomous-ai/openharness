@@ -30,6 +30,9 @@
 # The version is REQUIRED: two runs have to publish one version, and upload-desktop.sh's auto-bump
 # reads the manifest, so the second run would see the first one's upload and bump again.
 #
+# Every build is signed ad hoc, whatever the Xcode project names: the job that builds a branch holds no
+# certificate, and scripts/upload-desktop.sh signs the app it publishes (scripts/sign-macos-app.sh).
+#
 # OTA_KEY, DMG_KEY, GCS_PATH and DMG_GCS_PATH are set here per build and override the caller's, so the
 # two runs can never write each other's keys or paths. Everything else upload-desktop.sh reads
 # (GCS_BUCKET, METADATA_PATH, SIGN_IDENTITY, NOTARY_PROFILE, ...) passes straight through.
@@ -40,7 +43,6 @@ APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"   # repository root
 # An override is accepted only with --no-build and passed to upload-desktop.sh.
 APP_BUNDLE="${APP_BUNDLE:-$APP_DIR/build/macos/Build/Products/Release/Harness.app}"
 PLIST="$APP_BUNDLE/Contents/Info.plist"
-SIGN_IDENTITY="${SIGN_IDENTITY:-Developer ID Application}"   # same default as upload-desktop.sh
 
 die() { echo "error: $*" >&2; exit 1; }
 
@@ -106,7 +108,8 @@ else
   # An incremental Xcode build can skip re-stamping Info.plist and leave an old version.
   rm -rf "$APP_BUNDLE"
   # An empty array under set -u needs this expansion on macOS bash 3.2.
-  ( cd "$APP_DIR" && flutter build macos --release --build-name="$VER" --build-number="$BUILD_NUM" \
+  # FLUTTER_XCODE_* become Xcode build settings: `-` overrides the project's Developer ID identity.
+  ( cd "$APP_DIR" && FLUTTER_XCODE_CODE_SIGN_IDENTITY=- flutter build macos --release --build-name="$VER" --build-number="$BUILD_NUM" \
       ${DART_DEFINES[@]+"${DART_DEFINES[@]}"} ${PERFORMANCE_ARGS[@]+"${PERFORMANCE_ARGS[@]}"} )
 fi
 [ -d "$APP_BUNDLE" ] || die "app bundle missing after the build: $APP_BUNDLE"
@@ -142,11 +145,11 @@ case "$RENDERER" in
     # finding that out costs a release cycle and a user.
     [ "$(renderer_key)" = false ] || die "FLTEnableImpeller did not stick in $PLIST"
     # The edit broke the seal Xcode put on the bundle, and macOS will not launch a bundle whose
-    # Info.plist no longer matches its signature. Re-sign the OUTER bundle only — the frameworks inside
-    # are untouched and keep their own signatures — carrying over what Xcode signed it with: the
-    # hardened runtime notarization requires, and the entitlements (get-task-allow=false above all).
-    echo ">> re-signing $APP_BUNDLE ($SIGN_IDENTITY)"
-    codesign --force --sign "$SIGN_IDENTITY" --timestamp --options runtime \
+    # Info.plist no longer matches its signature. Re-sign the OUTER bundle only, ad hoc like the build,
+    # carrying over the hardened runtime and the entitlements; scripts/sign-macos-app.sh signs it for
+    # release.
+    echo ">> re-signing $APP_BUNDLE (ad hoc)"
+    codesign --force --sign - --options runtime \
       --preserve-metadata=identifier,entitlements,requirements,flags,runtime "$APP_BUNDLE"
     [ "$(codesign -d --entitlements - --xml "$APP_BUNDLE" 2>/dev/null)" = "$ENTITLEMENTS_BEFORE" ] \
       || die "re-signing changed the bundle's entitlements"
@@ -158,6 +161,8 @@ codesign --verify --deep --strict "$APP_BUNDLE" || die "the signature does not v
 # Captured, not piped into `grep -q`: grep exiting early SIGPIPEs codesign, which pipefail reports.
 SIGNATURE="$(codesign -dv "$APP_BUNDLE" 2>&1)"
 [[ "$SIGNATURE" == *"flags="*"runtime"* ]] || die "hardened runtime missing — notarization would reject it"
+[[ "$SIGNATURE" == *"Signature=adhoc"* ]] \
+  || die "the build is not signed ad hoc: builds hold no certificate, scripts/sign-macos-app.sh signs"
 KEY="$(renderer_key)"
 echo ">> $VARIANT build $VER ready: $RENDERER (FLTEnableImpeller=${KEY:-unset, the engine default})"
 

@@ -4,6 +4,8 @@
 Publication requires an explicit per-run metadata prefix. The live Desktop
 manifest is never written here. Both existing signing/notarization paths run,
 in parallel, in separate local directories and remote manifest objects.
+Builds are signed ad hoc; publication signs. --no-build publishes the bundles a
+build left in build/macos-variants, so the release's signing job never builds.
 """
 import argparse
 from concurrent.futures import ThreadPoolExecutor
@@ -110,7 +112,7 @@ def build(version, defines, desktop, output, receipt):
            for variant in VARIANTS], desktop, output, receipt)
 
 
-def publication_checks(version, metadata_prefix, artifact_prefix, artifact_suffix, desktop, output):
+def publication_checks(version, metadata_prefix, artifact_prefix, artifact_suffix, desktop, output, notarize=True):
     checks = []
     for variant, filename in VARIANTS.items():
         key = "desktop-macos" if variant == "intel" else "desktop-macos-arm64"
@@ -121,6 +123,7 @@ def publication_checks(version, metadata_prefix, artifact_prefix, artifact_suffi
             f"DMG_GCS_PATH={artifact_prefix}/{filename}{artifact_suffix}.dmg",
             f"METADATA_PATH={metadata_prefix}/macos-{variant}.json",
             "bash", str(desktop / "scripts/upload-desktop.sh"), "--no-build", version,
+            *([] if notarize else ["--no-notarize"]),
         ], 1800))
     return checks
 
@@ -145,23 +148,33 @@ def main(argv=None):
     parser.add_argument("--artifact-suffix", default="")
     parser.add_argument("--verify-downloads", action="store_true", help="verify all four internal-build downloads; real releases use their nine-artifact final gate")
     parser.add_argument("--dart-define", action="append", default=[])
+    parser.add_argument("--no-build", action="store_true", help="publish the bundles already in build/macos-variants")
+    parser.add_argument("--no-notarize", action="store_true", help="publish without notarizing (internal builds)")
     args = parser.parse_args(argv)
     if not re.fullmatch(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)", args.version):
         parser.error("version must be X.Y.Z")
     if not re.fullmatch(r"[A-Za-z0-9._-]*", args.artifact_suffix):
         parser.error("artifact suffix must not contain paths")
-    if (args.verify_downloads or args.artifact_prefix or args.artifact_suffix) and not args.metadata_prefix:
+    if (args.verify_downloads or args.artifact_prefix or args.artifact_suffix or args.no_build or args.no_notarize) \
+            and not args.metadata_prefix:
         parser.error("publication options require --metadata-prefix")
+    if args.no_build and args.dart_define:
+        parser.error("--dart-define needs a build")
     output = DESKTOP / "build/macos-variants"
     output.mkdir(parents=True, exist_ok=True)
     receipt = dict(version=args.version, started_at=runner.utc_now(), status="failed", checks=[])
     started = time.monotonic()
     try:
-        build(args.version, [f"--dart-define={item}" for item in args.dart_define], DESKTOP, output, receipt)
+        if args.no_build:
+            missing = [variant for variant in VARIANTS if not (output / variant / "Harness.app").is_dir()]
+            if missing:
+                raise RuntimeError(f"no built bundle for {', '.join(missing)} in {output}")
+        else:
+            build(args.version, [f"--dart-define={item}" for item in args.dart_define], DESKTOP, output, receipt)
         if args.metadata_prefix:
             checks = publication_checks(args.version, args.metadata_prefix,
                                         args.artifact_prefix or f"harness/desktop/{args.version}",
-                                        args.artifact_suffix, DESKTOP, output)
+                                        args.artifact_suffix, DESKTOP, output, notarize=not args.no_notarize)
             phase(checks, DESKTOP, output, receipt)
             if args.verify_downloads:
                 receipt["artifacts"] = verify_downloads(args.version, args.metadata_prefix)

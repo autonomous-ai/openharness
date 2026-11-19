@@ -167,13 +167,19 @@ commit, differing in one Info.plist key, `FLTEnableImpeller` — which renderer 
 | Intel | Skia (`FLTEnableImpeller = false`) | `desktop-macos`, `desktop-macos-dmg` | `Harness-macos.{zip,dmg}` | Intel Macs, **every install from before the split on either CPU**, and the website download |
 | Apple Silicon | Impeller (the engine default) | `desktop-macos-arm64`, `desktop-macos-arm64-dmg` | `Harness-macos-arm64.{zip,dmg}` | Apple Silicon Macs whose updater knows the key |
 
-CI calls `scripts/build-macos-variants.py <version> --metadata-prefix <run-prefix>`.
-It compiles one universal app, copies it into separate directories, pins and verifies each
-renderer, then packages, notarizes and uploads both variants in parallel. Version/build-number,
-arm64/x86_64 slices, signatures and hardened runtime are checked before publication. Each variant
+CI builds and signs in two jobs. `build-macos` runs `scripts/build-macos-variants.py <version>` on
+any ref with no secret: it compiles one universal app signed ad hoc, copies it into separate
+directories, pins and verifies each renderer, and hands both bundles to `sign-macos`. That job runs
+only in the `release` environment (`main` and `v*_desktop` tags), builds nothing, and runs
+`build-macos-variants.py <version> --no-build --metadata-prefix <run-prefix>`: each app is signed by
+`scripts/sign-macos-app.sh` (frameworks, then the app with the hardened runtime and
+`macos/Runner/Release.entitlements`), then packaged, notarized and uploaded, both variants in
+parallel. Version/build-number, arm64/x86_64 slices, signatures and hardened runtime are checked
+before publication. Each variant
 still receives both app and DMG notarization, with the stapled app inside the DMG. Separate scratch
 manifests are combined only after all macOS, Linux and Windows builds succeed, followed by verification of
-all nine public downloads. `macos-build-timings` records the bounded build and per-variant phases.
+all nine public downloads. `macos-build-timings` records the bounded build, `macos-sign-timings` the
+per-variant signing and publication phases.
 App copies and DMG staging use independent APFS clones when available. The temporary
 notarization ZIP uses faster compression; the downloadable ZIP retains normal compression
 and is rebuilt from the stapled app while DMG notarization runs. Compression failures stop
@@ -450,8 +456,10 @@ so run a COPY of the build rather than the one `flutter run` owns.
 ## Internal builds — an unlisted link, not a release
 
 `../.github/workflows/desktop-internal-build.yml` builds any branch the way a release would — both macOS
-builds, Developer ID signed, notarized, stapled and checked by Gatekeeper — and uploads them where
-no running app and no public page will ever look:
+builds — signed ad hoc and not notarized, because a branch's build never holds the Developer ID
+certificate (#4434), and uploads them where no running app and no public page will ever look. A
+tester clears the download's quarantine once (`xattr -dr com.apple.quarantine /Applications/Harness.app`,
+or System Settings → Privacy & Security → Open Anyway); the run summary says so:
 
 ```bash
 git push origin HEAD:internal/<name>     # builds that commit: Debug off
@@ -475,13 +483,8 @@ page, and in its summary — named `Harness-macos[-arm64]-<next version>-<commit
   public release. The next internal build is installed by its own link.
 - **Same code path as a release, flags aside.** `publish-macos-variant.sh --build-only` builds and
   pins the renderer (its `--dart-define=` arguments go to `flutter build` and nowhere else), then
-  `upload-desktop.sh --no-build` packages, notarizes and uploads, moved onto the internal prefix by
-  its existing env overrides (`GCS_PATH`, `DMG_GCS_PATH`, `METADATA_PATH`). Its signing steps are the
-  release's own `.github/actions/macos-signing`, so an internal build also proves those before a
-  release depends on them.
-- **Why not by hand.** An Info.plist edited and re-signed on a laptop reached a tester as "The
-  application "Harness" can't be opened", and a laptop without the notarytool profile cannot
-  notarize at all — which is what makes a copy downloaded fresh on another Mac open cleanly.
+  `upload-desktop.sh --no-build --no-notarize` signs it ad hoc and uploads, moved onto the internal
+  prefix by its existing env overrides (`GCS_PATH`, `DMG_GCS_PATH`, `METADATA_PATH`).
 
 ## Rollback
 
@@ -499,6 +502,8 @@ GLib and glibc and a 24.04 build will not start on 22.04 — so one `make releas
 `desktop-*` keys only stay on one version when the release goes through CI. Run by hand
 (`make upload-desktop-linux ARCH=arm64`) it moves one key and leaves the others behind. `amd64` and
 `x86_64` are accepted aliases for `x64`; `aarch64` is accepted as an alias for `arm64`.
+In CI the build runners package only (`--no-upload`, no cloud identity) and `upload-linux`, in the
+`release` environment, publishes both AppImages (`--upload-only`).
 
 With no `ARCH`, the command detects the host architecture. A build must run on a matching
 Ubuntu/Linux host because Flutter Linux desktop builds use the host architecture. `--no-build` can

@@ -77,7 +77,7 @@ def make_jobs():
                  steps=[dict(conclusion='success')]) for index, name in enumerate(
                      ['version', 'preflight', 'build-macos', 'build-linux (ubuntu-22.04, x64)',
                       'build-linux (ubuntu-22.04-arm, arm64)', 'build-windows (windows-latest, x64)',
-                      'build-windows (windows-11-arm, arm64)', 'upload-windows', 'candidate', 'cleanup'])]
+                      'build-windows (windows-11-arm, arm64)', 'upload-windows', 'candidate', 'cleanup', 'upload-linux', 'sign-macos'])]
 
 
 class FakeGithub:
@@ -223,6 +223,19 @@ class CandidateIdentityTests(unittest.TestCase):
                 if change == 'failed-step': client.jobs[2]['steps'][0]['conclusion'] = 'failure'
                 if change == 'wrong-source': client.jobs[2]['head_sha'] = 'f' * 40
                 candidate.find_candidate(client, VERSION, INPUTS, BUCKET, 456)
+
+    # A branch candidate builds macOS but cannot sign it: the release environment refuses branches.
+    def test_a_candidate_whose_mac_build_was_not_signed_cannot_reuse(self):
+        jobs = make_jobs()
+        jobs[-1]['conclusion'] = 'skipped'
+        with self.assertRaises(ValueError):
+            candidate.check_jobs(make_run(), jobs)
+        with self.assertRaises(ValueError):
+            candidate.check_jobs(make_run(), jobs[:-1])
+        # Linux packages reach a candidate only through the release environment's upload-linux.
+        jobs = [job for job in make_jobs() if job['name'] != 'upload-linux']
+        with self.assertRaises(ValueError):
+            candidate.check_jobs(make_run(), jobs)
 
     # A candidate prepared while signing was off would otherwise publish unsigned Windows files once it is on.
     def test_unsigned_windows_candidate_cannot_reuse_once_signing_is_required(self):
@@ -418,7 +431,7 @@ class BuildInputTests(unittest.TestCase):
     # name that GitHub never gives makes check_jobs refuse every candidate, so this reads the names from the workflow.
     def test_required_matrix_jobs_are_named_as_github_names_them(self):
         workflow = (ROOT / '.github/workflows/release-desktop.yml').read_text()
-        names = ['version', 'preflight', 'build-macos', 'upload-windows', 'candidate', 'cleanup']
+        names = ['version', 'preflight', 'build-macos', 'sign-macos', 'upload-linux', 'upload-windows', 'candidate', 'cleanup']
         for job in ['build-linux', 'build-windows']:
             body = re.search(rf'^  {job}:\n(.*?)(?=^  [\w-]+:|\Z)', workflow, re.M | re.S)[1]
             template = re.search(r'^    name: (.+)$', body, re.M)

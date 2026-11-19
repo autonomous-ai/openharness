@@ -2,6 +2,8 @@ name: Developer ID signing
 description: >-
   A throwaway keychain holding the Developer ID certificate and the `harness-notarize` notarytool
   profile that scripts/upload-desktop.sh submits with. Sets KEYCHAIN_PATH for every step after it.
+  Only release-desktop.yml's sign-macos uses it, in the `release` environment: never in a job that
+  builds or runs a branch's code.
   Delete that keychain in an `if: always()` step of your own — a composite action has no post step.
 
 inputs:
