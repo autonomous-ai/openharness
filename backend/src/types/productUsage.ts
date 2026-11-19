@@ -158,6 +158,9 @@ export const LAUNCH_ERROR_CODES = [
   // A local OpenClaw's own folder: refused as no folder, gone, not prepared, or held by another harness
   // (core/agents/launches.ts, create.ts, newPane.ts, lib/launchOverrides.ts).
   'invalid_local_folder', 'openclaw_folder_gone', 'openclaw_local_unprepared', 'openclaw_folder_in_use',
+  // An OpenClaw that started with no gateway token (core/agents/newPane.ts, discovery.ts), or did not take its first
+  // task (core/agents/bind.ts).
+  'openclaw_no_token', 'first_task_not_taken',
   // A Codex launch the owner's subscription relay could not sign in. The relay is gone (#4137) and nothing sends it; kept
   // because the contract is published and only extended.
   'owner_relay_unavailable',

@@ -13,8 +13,8 @@ const actions = { agent_create: 'create', agent_resume: 'resume', agent_restart:
   browser_open: 'browser_open',
 } as const
 const unmeasured = (..._args: unknown[]): void => {}
-// An OpenClaw with no Gateway token (`OPENCLAW_NO_TOKEN`) is a computer not set up yet: a fixed kind every backend
-// already counts, where a new launch code would reach backends that do not list it before they update.
+// An OpenClaw with no Gateway token (`OPENCLAW_NO_TOKEN`) is a computer not set up yet, so it counts with setup's,
+// by its listed code.
 const setup = new Set(['TMUX_UNAVAILABLE', 'PTY_HOST_UNAVAILABLE', 'TMUX_TOO_OLD_FOR_DSH', 'TMUX_TOO_OLD_FOR_GRID',
   'ENGINE_UNAVAILABLE', 'NATIVE_LAUNCH_HELD', 'DSH_MATERIALIZE_FAILED', 'SPAWN_FAILED', 'REGISTRATION_FAILED', 'GRID_CONFIG_FAILED',
   'OPENCLAW_NO_TOKEN'])
