@@ -38,8 +38,9 @@ export function createLinuxRaise(deps: LinuxRaiseDeps): LinuxRaise {
   let desktop: LinuxDesktop | undefined
   let said: string | undefined
   let looking: Promise<void> | undefined
-  // One look at a time: raises that fail together share it.
-  const look = () => (looking ??= deps.find().then((found) => {
+  // One look at a time: raises that fail together share it. A look that throws found nothing: unhandled, it would reject
+  // every raise waiting on it.
+  const look = () => (looking ??= deps.find().catch((): LinuxDesktop => ({ kind: 'none', why: 'no desktop session' })).then((found) => {
     desktop = found
     const line = desktopLine(found)
     if (line !== said) deps.log(line)

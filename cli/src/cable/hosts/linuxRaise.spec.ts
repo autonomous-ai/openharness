@@ -99,7 +99,8 @@ describe('createLinuxRaise', () => {
     const raise = createLinuxRaise(deps)
     expect(await raise.raise({ pid: 4242, app: 'wezterm' })).toBe(false)
     expect(raise.ready()).toBe(false)
-    expect(lines).toEqual(['[device] raise · none · no desktop session'])
+    // login() made a raise of its own over the same log, which found sway.
+    expect(lines).toContain('[device] raise · none · no desktop session')
     expect(raised).toEqual([])
   })
 
