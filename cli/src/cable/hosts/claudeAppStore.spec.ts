@@ -188,6 +188,19 @@ describe.skipIf(process.platform === 'win32')('the Claude app\'s store', () => {
       expect(read.skipped).toBe(0)
     })
 
+    // A failed read is not held, so were it counted in the 256 parses, 256 of them first in the walk would cut every read
+    // before the same files, each asking for one more read: the source's again, every 250 ms, for good.
+    it.skipIf(process.getuid?.() === 0)('files that could not be read do not use up the 256 parses', async () => {
+      const s = store()
+      for (const n of range(1, MAX_PARSES)) chmodSync(s.put(n), 0o000)
+      s.put(MAX_PARSES + 1)
+      // The second read parses nothing new: the readable file is held, the others are tried again.
+      for (const [read, parsed] of [[await loaded(s.reader), 1], [await s.reader.read(), 0]] as const) {
+        expect(read).toMatchObject({ parsed, skipped: MAX_PARSES, over: 0, more: false })
+        expect(localIds(read)).toEqual([local(MAX_PARSES + 1)])
+      }
+    })
+
     it('JSON that is no object is skipped and counted', async () => {
       const s = store()
       ;['null', '[]', '42', '"x"'].forEach((body, i) => s.text(i + 1, body))
