@@ -92,18 +92,19 @@ export function createOrcaPluginSetup(deps: OrcaPluginSetupDeps): OrcaPluginSetu
       try {
         const version = deps.version()
         if (version === null) return
-        const removed = deps.removed()
-        const connected = deps.connected()
         const recorded = deps.recorded()
-        if (removed.unread || connected.unread || recorded === undefined) return
-        if (removed.orca) {
-          if (undoOwed) await undo()
-          return
-        }
-        // Set up, found removed or held at this version: Orca is not asked again until the next CLI.
+        if (recorded === undefined) return
+        // A removal this setup owes is taken out while the plugin stays removed, whatever the record says.
+        if (undoOwed && deps.removed().orca) return await undo()
+        // Set up, found removed or held at this version: Orca is not asked again until the next CLI, and no file is read,
+        // as a pass runs each time Orca comes to the front. A removal since was `disable`'s, which uninstalls it itself.
         if (recorded.version === version || recorded.held === version) return
-        // First set up only on a computer that has had a dial; one set up before is still brought current.
-        if (recorded.version === undefined && !connected.connected && !recorded.dial) return
+        // First set up only on a computer that has had a dial, or an `enable`; one set up before is still brought
+        // current. orcaConnected is read only where it decides, so a computer with no dial reads the file once a settle;
+        // one unread reads as not connected.
+        if (recorded.version === undefined && !recorded.dial && !deps.connected().connected) return
+        const removed = deps.removed()
+        if (removed.unread || removed.orca) return
         const result = await deps.setUp()
         switch (result.orca) {
           case 'on': {
@@ -151,9 +152,11 @@ export function createOrcaPluginSetup(deps: OrcaPluginSetupDeps): OrcaPluginSetu
 
 /** The Orca half of the deps, on the real orcaSetUp, orcaRemove and carriedVersion. */
 export function orcaPluginParts(plugin: OrcaPluginDeps): Pick<OrcaPluginSetupDeps, 'platform' | 'version' | 'setUp' | 'remove'> {
+  // The files the build inlined stay as they are while the process runs: parsed at the first pass, not at each settle.
+  let version: string | null | undefined
   return {
     platform: plugin.platform,
-    version: () => carriedVersion(plugin),
+    version: () => version === undefined ? version = carriedVersion(plugin) : version,
     setUp: () => orcaSetUp(plugin, { force: false }),
     remove: () => orcaRemove(plugin),
   }
