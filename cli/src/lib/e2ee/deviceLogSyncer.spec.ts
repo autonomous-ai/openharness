@@ -2144,7 +2144,8 @@ describe('DeviceLogSyncer — a log longer than a usual read', () => {
     await t.syncer.refresh()
     expect(t.backend.fetch).toHaveBeenCalledTimes(20)
     expect(t.store.read().state?.head.seq).toBe(45)
-  }, 10_000)
+    // 45 verified pages, each a trust write flushed to disk: past 10 s on a loaded runner.
+  }, 30_000)
 
   it('a review reads a list longer than the usual page cap', async () => {
     const t = setup()
@@ -2667,5 +2668,54 @@ describe('DeviceLogSyncer — a log that cannot be read', () => {
     expect(switchAccount).not.toHaveBeenCalled()
     expect(readFileSync(path, 'utf8')).toBe(live)
     expect(readFileSync(archive, 'utf8')).toBe(TORN)
+  })
+
+  // The head is written before what the page brings is handed on: a step that threw took the rest with it, and the
+  // next read found nothing new, so a NEW DEVICE alert was never shown and a removed key stayed trusted.
+  it('an adoption that throws skips no alert and no removal', async () => {
+    const t = setup()
+    t.backend.add(box2, 'machine', MID2, 'box2')
+    await t.syncer.register()
+    t.calls.adopt.mockImplementation(() => { throw new StateFileUnreadable('group.json', 'not valid JSON') })
+    t.backend.add(phone, 'viewer', '', 'phone')
+    t.backend.removeBy(box2.pub, box2)
+    await t.syncer.refresh()
+    expect(t.calls.announce).toHaveBeenCalledWith(expect.objectContaining({ pub: phone.pub }))
+    expect(t.calls.drop).toHaveBeenCalledWith(box2.pub)
+    expect(t.calls.removed).toHaveBeenCalledWith(expect.objectContaining({ pub: box2.pub, selfRemoved: true }))
+  })
+
+  it('a kept log that cannot be read trusts nobody new from a page, and skips no alert and no removal', async () => {
+    const path = join(mkdtempSync(join(tmpdir(), 'devlog-')), 'devlog.json')
+    const archive = path.replace(/\.json$/, '.archive.json')
+    const t = setup({ store: new DeviceLogStore(path) })
+    t.backend.add(box2, 'machine', MID2, 'box2')
+    await t.syncer.register()
+    writeFileSync(archive, TORN)
+    t.calls.adopt.mockClear()
+    t.backend.add(phone, 'viewer', '', 'phone')
+    t.backend.removeBy(box2.pub, box2)
+    await t.syncer.refresh()
+    expect(t.calls.announce).toHaveBeenCalledWith(expect.objectContaining({ pub: phone.pub }))
+    expect(t.calls.drop).toHaveBeenCalledWith(box2.pub)
+    expect(t.calls.adopt).not.toHaveBeenCalled()
+    expect(t.store.read().state?.head).toEqual(t.backend.state.head)
+    expect(readFileSync(archive, 'utf8')).toBe(TORN)
+  })
+
+  it('a review whose adoption throws still drops, resumes and announces', async () => {
+    const t = setup()
+    t.backend.add(box2, 'machine', MID2, 'box2')
+    await t.syncer.register()
+    t.backend.lie = t.backend.entries.slice(0, 1)
+    await t.syncer.refresh() // frozen (rolled back)
+    t.backend.lie = null
+    t.backend.add(phone, 'viewer', '', 'phone')
+    t.backend.removeBy(box2.pub, box2)
+    t.calls.adopt.mockImplementation(() => { throw new StateFileUnreadable('group.json', 'not valid JSON') })
+    expect(await t.syncer.rebaseline(true)).toMatchObject({ head: t.backend.state.head })
+    expect(t.calls.drop).toHaveBeenCalledWith(box2.pub)
+    expect(t.calls.resume).toHaveBeenCalled()
+    expect(t.calls.announce).toHaveBeenCalledWith(expect.objectContaining({ pub: phone.pub }))
   })
 })

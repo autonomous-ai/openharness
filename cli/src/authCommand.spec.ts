@@ -277,7 +277,8 @@ describe('signing out takes a person', () => {
     expect(line).toContain(process.execPath.split('/').pop()!)
   })
 
-  it('logout over a session that cannot be read sets it aside', () => {
+  // Kept aside, a session nobody can read would keep its refresh token past the sign-out.
+  it('logout over a session that cannot be read deletes it', () => {
     const root = tempRoot()
     seedTornSession(root)
 
@@ -285,7 +286,7 @@ describe('signing out takes a person', () => {
 
     expect(result.status, result.stderr).toBe(0)
     expect(existsSync(sessionFile(root))).toBe(false)
-    expect(readFileSync(`${sessionFile(root)}.unreadable`, 'utf8')).toBe(TORN_SESSION)
+    expect(existsSync(`${sessionFile(root)}.unreadable`)).toBe(false)
   })
 })
 
@@ -785,7 +786,7 @@ describe('harness login --json', () => {
     expect(await login.exit).toBe(0)
 
     expect(JSON.parse(readFileSync(join(root, 'auth', 'session.json'), 'utf8'))).toMatchObject({ accessToken: 'tok_new', machineId: 'm_new' })
-    expect(readFileSync(join(root, 'auth', 'session.json.unreadable'), 'utf8')).toBe(TORN_SESSION)
+    expect(existsSync(join(root, 'auth', 'session.json.unreadable'))).toBe(false)
   }, 30_000)
 
   it('already signed in with no key yet: makes the key and reports its fingerprint', async () => {

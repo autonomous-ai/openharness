@@ -153,16 +153,34 @@ describe('a paired set that cannot be read', () => {
   beforeEach(() => { vi.spyOn(console, 'warn').mockImplementation(() => {}) })
   afterEach(() => { vi.restoreAllMocks() })
 
-  it('a torn live paired.json stops the switch before anything moves', () => {
+  // The whole files move whatever paired.json holds: left live, the account left behind's roster, blocks and pins went
+  // on to the next one, and a switch back put an older block list in place of the newer one, trusting a blocked machine.
+  it('a torn live paired.json is left as it is, and the whole files still go', () => {
     const dir = e2e()
     writeFileSync(join(dir, 'paired.json'), TORN)
     write(dir, 'group.json', group)
+    write(dir, 'group-blocked.json', ['a-blocked'])
     expect(() => stashTrust(A, dir)).toThrow(StateFileUnreadable)
     expect(bytes(dir, 'paired.json')).toBe(TORN)
-    expect(read(dir, 'group.json')).toEqual(group)
+    expect(read(dir, 'group.json')).toBeUndefined()
+    expect(read(join(dir, 'accounts', A), 'group.json')).toEqual(group)
+    expect(read(join(dir, 'accounts', A), 'group-blocked.json')).toEqual(['a-blocked'])
   })
 
-  it('a torn kept copy is not written over by a stash', () => {
+  it('a switch with a torn live paired.json still swaps the whole files both ways, then says so', () => {
+    const dir = e2e()
+    const keptB = keptFor(dir, B)
+    write(keptB, 'group-blocked.json', ['b-blocked'])
+    writeFileSync(join(dir, 'paired.json'), TORN)
+    write(dir, 'group-blocked.json', ['a-blocked'])
+    expect(() => switchAccountTrust(A, B, dir)).toThrow(StateFileUnreadable)
+    expect(bytes(dir, 'paired.json')).toBe(TORN)
+    expect(read(dir, 'group-blocked.json')).toEqual(['b-blocked'])
+    expect(read(join(dir, 'accounts', A), 'group-blocked.json')).toEqual(['a-blocked'])
+    expect(read(keptB, 'group-blocked.json')).toBeUndefined()
+  })
+
+  it('a torn kept copy is not written over by a stash, and the whole files still go', () => {
     const dir = e2e()
     const kept = keptFor(dir, A)
     writeFileSync(join(kept, 'paired.json'), TORN)
@@ -171,7 +189,8 @@ describe('a paired set that cannot be read', () => {
     expect(() => stashTrust(A, dir)).toThrow(StateFileUnreadable)
     expect(bytes(kept, 'paired.json')).toBe(TORN)
     expect(read(dir, 'paired.json')).toEqual([web('a-web'), device])
-    expect(read(dir, 'group.json')).toEqual(group)
+    expect(read(dir, 'group.json')).toBeUndefined()
+    expect(read(kept, 'group.json')).toEqual(group)
   })
 
   it('a torn paired.json is never written over by a return', () => {
@@ -185,11 +204,12 @@ describe('a paired set that cannot be read', () => {
       expect(() => unstashTrust(A, dir)).toThrow(/^paired\.json cannot be read/)
       expect(bytes(dir, 'paired.json')).toBe(torn)
       expect(read(kept, 'paired.json')).toEqual([web('a-web')])
-      expect(read(kept, 'group.json')).toEqual(group)
+      expect(read(kept, 'group.json')).toBeUndefined()
+      expect(read(dir, 'group.json')).toEqual(group)
     }
   })
 
-  it('a torn kept copy is left', () => {
+  it('a torn kept copy is left, and the whole files still come back', () => {
     const dir = e2e()
     const kept = keptFor(dir, A)
     writeFileSync(join(kept, 'paired.json'), TORN)
@@ -197,9 +217,9 @@ describe('a paired set that cannot be read', () => {
     write(dir, 'paired.json', [device])
     expect(() => unstashTrust(A, dir)).toThrow(StateFileUnreadable)
     expect(bytes(kept, 'paired.json')).toBe(TORN)
-    expect(read(kept, 'group.json')).toEqual(group)
+    expect(read(kept, 'group.json')).toBeUndefined()
     expect(read(dir, 'paired.json')).toEqual([device])
-    expect(read(dir, 'group.json')).toBeUndefined()
+    expect(read(dir, 'group.json')).toEqual(group)
   })
 })
 
@@ -216,5 +236,18 @@ describe('keptAccountDirs', () => {
     const dir = e2e()
     for (let i = 0; i < 70; i++) keptFor(dir, `account-${i}`)
     expect(keptAccountDirs(dir)).toHaveLength(64)
+  })
+
+  // `harness status` lists them: a folder it cannot read ended it with a stack and the folder's full path.
+  it('a folder it cannot list is none, said by its code alone', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const dir = e2e()
+    writeFileSync(join(dir, 'accounts'), '')
+    try {
+      expect(keptAccountDirs(dir)).toEqual([])
+      expect(warn).toHaveBeenCalledWith('[state] the trust kept per account cannot be listed (ENOTDIR)')
+    } finally {
+      warn.mockRestore()
+    }
   })
 })

@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeAll, afterEach, vi } from 'vitest'
-import { mkdtempSync } from 'fs'
+import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 
@@ -592,10 +592,19 @@ describe('GroupSyncer — a trust file it cannot read', () => {
     syncer.handle(C.b64e(C.newIdentity().pub), { members: [], removed: [] })
     expect(peers.get(n.machineId)).toBeNull()
     expect(trusted.has(n.pub)).toBe(false)
-    // A member the group removed is still forgotten here.
-    expect(peers.get(b.machineId)).toBeNull()
-    expect(trusted.has(b.pub)).toBe(false)
     expect(log).toHaveBeenCalledWith(`[group] ${broken} cannot be read: nobody new is pinned or trusted`)
+  })
+
+  // `harness group sync` starts a round and walks away: a throw there was an unhandled rejection that ended the gateway.
+  it('a round while the device log cannot be read is put off, not thrown', async () => {
+    vi.useFakeTimers()
+    const { syncer, log } = machine('the device log')
+    const rounds = vi.spyOn(syncer, 'syncAll')
+    await expect(syncer.syncAll()).resolves.toBeUndefined()
+    expect(log).toHaveBeenCalledWith('[group] the device log cannot be read: nobody new is pinned or trusted')
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(rounds).toHaveBeenCalledTimes(2)
+    syncer.stop()
   })
 
   // "Cannot tell" is not "blocked": the device key log shows every NEW DEVICE alert, and a failure never hides one.
@@ -609,6 +618,127 @@ describe('GroupSyncer — a trust file it cannot read', () => {
     expect(() => syncer.unpaired(b.pub)).toThrow(Sx.StateFileUnreadable)
     expect(peers.get(b.machineId)).toBeNull()
     expect(trusted.has(b.pub)).toBe(false)
+  })
+})
+
+describe('GroupSyncer — on the real store, with a file torn', () => {
+  type Torn = 'group.json' | 'group-blocked.json'
+  const E2E = (): string => join(process.env.ADAPTER_DATA_DIR as string, 'e2e')
+  const TORN: Record<Torn, string> = { 'group.json': '{"members":[{"pub":"', 'group-blocked.json': '["' }
+  const tear = (name: Torn): void => {
+    mkdirSync(E2E(), { recursive: true, mode: 0o700 })
+    writeFileSync(join(E2E(), name), TORN[name], { mode: 0o600 })
+  }
+  const bytes = (name: Torn): string => readFileSync(join(E2E(), name), 'utf8')
+  const key = (): string => C.b64e(C.newIdentity().pub)
+
+  beforeEach(() => {
+    rmSync(E2E(), { recursive: true, force: true })
+    // The reader's retry waits are recorded, not slept; its own line is secureState.spec.ts's.
+    vi.spyOn(Atomics, 'wait').mockReturnValue('timed-out')
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+  })
+  afterEach(() => { vi.restoreAllMocks() })
+
+  /** Machine A on the real TrustGroupStore, pinning and trusting machine B, which the roster holds. */
+  function machine() {
+    const self = { pub: key(), kind: 'machine' as const, label: 'a', machineId: 'a'.repeat(32), at: S.SELF_STAMP }
+    const b = { pub: key(), kind: 'machine' as const, label: 'b', machineId: 'b'.repeat(32), at: 10 }
+    const store = new G.TrustGroupStore()
+    store.add(b, self.pub)
+    const peers = new MemPeers()
+    peers.pin(b.machineId, b.pub, b.label)
+    const trusted = new Set([b.pub])
+    const asked: string[] = []
+    const log = vi.fn()
+    const syncer = new S.GroupSyncer({
+      store,
+      peers: peers as unknown as import('./machinePeers.js').MachinePeerStore,
+      self: () => self,
+      trust: (peer) => { trusted.add(peer.pub) },
+      untrust: (pub) => { trusted.delete(pub) },
+      paired: () => [],
+      request: async (machineId) => { asked.push(machineId); return null },
+      log,
+    })
+    return { syncer, store, peers, trusted, b, asked, log }
+  }
+
+  // start() ran synchronously in the service socket's listener: a throw there ended the gateway, which then crash-looped.
+  it.each<Torn>(['group.json', 'group-blocked.json'])('start() with %s torn still applies the roster and syncs on schedule', async (name) => {
+    vi.useFakeTimers()
+    const { syncer, asked } = machine()
+    tear(name)
+    expect(() => syncer.start()).not.toThrow()
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(asked).toEqual(['b'.repeat(32)])
+    expect(bytes(name)).toBe(TORN[name])
+    syncer.stop()
+  })
+
+  it('start() says it could not add the earlier links to a roster it cannot read', () => {
+    const { syncer, log } = machine()
+    tear('group.json')
+    syncer.start()
+    syncer.stop()
+    expect(log).toHaveBeenCalledWith('[group] the links made before the group are not added to it: StateFileUnreadable')
+  })
+
+  // `harness devices remove` and `harness group remove` failed here, before the key was untrusted or taken out of the log.
+  it('a member removed while the roster cannot be read is still unpinned and untrusted here', () => {
+    const { syncer, peers, trusted, b, log } = machine()
+    tear('group.json')
+    expect(() => syncer.remove(b.pub)).not.toThrow()
+    expect(peers.get(b.machineId)).toBeNull()
+    expect(trusted.has(b.pub)).toBe(false)
+    expect(log).toHaveBeenCalledWith(`[group] ${b.pub.slice(0, 8)} is removed here, but the group is not told: StateFileUnreadable`)
+    expect(bytes('group.json')).toBe(TORN['group.json'])
+  })
+
+  it('a member removed while the block list cannot be read is unpinned, untrusted and removed from the group', () => {
+    const { syncer, store, peers, trusted, b } = machine()
+    tear('group-blocked.json')
+    expect(syncer.remove(b.pub)).toBe(true)
+    expect(peers.get(b.machineId)).toBeNull()
+    expect(trusted.has(b.pub)).toBe(false)
+    expect(store.read().removed.map((t) => t.pub)).toEqual([b.pub])
+    expect(bytes('group-blocked.json')).toBe(TORN['group-blocked.json'])
+  })
+
+  it('a roster that removes a member while the block list cannot be read forgets it, and trusts nobody new', () => {
+    const { syncer, peers, trusted, b, log } = machine()
+    const n = { pub: key(), kind: 'machine' as const, label: 'n', machineId: 'c'.repeat(32), at: 20 }
+    tear('group-blocked.json')
+    syncer.handle(key(), { members: [n], removed: [{ pub: b.pub, at: 30 }] })
+    expect(peers.get(b.machineId)).toBeNull()
+    expect(trusted.has(b.pub)).toBe(false)
+    expect(peers.get(n.machineId)).toBeNull()
+    expect(trusted.has(n.pub)).toBe(false)
+    expect(log).toHaveBeenCalledWith('[group] the block list cannot be read: nobody new is pinned or trusted')
+  })
+
+  it('a key the device log holds is not trusted while the roster cannot be read, and nothing throws', () => {
+    const { syncer, trusted, log } = machine()
+    const n = key()
+    tear('group.json')
+    expect(() => syncer.adoptFromLog([{ pub: n, kind: 'machine', machineId: 'c'.repeat(32), label: 'n', addedAt: 20 }])).not.toThrow()
+    expect(trusted.has(n)).toBe(false)
+    expect(log).toHaveBeenCalledWith('[group] the device log\'s keys are not trusted here: StateFileUnreadable')
+  })
+
+  // Every round and every sync applies the roster: the line said each time filled the log while the file stayed broken.
+  it('says once that the block list cannot be read, and again only after it could be', () => {
+    const { syncer, log } = machine()
+    const said = (): number => log.mock.calls.filter(([line]) => line === '[group] the block list cannot be read: nobody new is pinned or trusted').length
+    tear('group-blocked.json')
+    syncer.resume()
+    syncer.resume()
+    expect(said()).toBe(1)
+    writeFileSync(join(E2E(), 'group-blocked.json'), '[]')
+    syncer.resume()
+    tear('group-blocked.json')
+    syncer.resume()
+    expect(said()).toBe(2)
   })
 })
 

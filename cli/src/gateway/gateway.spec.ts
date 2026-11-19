@@ -17,7 +17,8 @@ import { TerminalBinaryKind, type TerminalBinaryClear } from '../lib/terminalBin
 import { bindMessageRequest } from '../testing/socketCore.js'
 import { dispatchDown, gatewayOf, relaySocket, upstreamOf } from '../testing/relaySocket.js'
 import type { DeviceLogTrustOutcome } from '../lib/e2ee/deviceLogSyncer.js'
-import { unknownHelloReader } from './start.js'
+import { unknownHelloReader, unpairedHandler } from './start.js'
+import { StateFileUnreadable } from '../lib/secureState.js'
 import { UI_GATED_EVENTS, UI_QUIET_MS, UI_SNAPSHOT_MAX_MS } from './gateway.js'
 import { env } from '../config/env.js'
 
@@ -1013,5 +1014,16 @@ describe('unknownHelloReader', () => {
     await new Promise((resolve) => setTimeout(resolve, 0))
     expect([firstDone, againDone]).toEqual([true, true])
     expect(trustFromLog).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('unpairedHandler', () => {
+  // A block list that cannot be written made the group's side throw, and the device log kept the key: its next read
+  // trusted the unpaired device again.
+  it('takes the key out of the device log even when the group could not keep it out, and hands the throw on', () => {
+    const remove = vi.fn(async () => ({ ok: true as const }))
+    const unpaired = unpairedHandler({ unpaired: () => { throw new StateFileUnreadable('group-blocked.json', 'not valid JSON') } }, () => ({ remove }))
+    expect(() => unpaired('pub-a')).toThrow(StateFileUnreadable)
+    expect(remove).toHaveBeenCalledWith('pub-a')
   })
 })

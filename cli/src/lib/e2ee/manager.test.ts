@@ -509,6 +509,19 @@ describe('E2eeManager revoke', () => {
     expect(C.unwrapPayload(oldGroupKey, newEnv, 'text_delta', 's')).toBeNull()
   })
 
+  // What unpairing does beyond this store (the trust group's block, the device log's removal) failed with no word.
+  it('an unpairing the rest of the daemon could not finish stands, and is said', async () => {
+    const { StateFileUnreadable } = await import('../secureState.js')
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const h = machine({ onUnpaired: () => { throw new StateFileUnreadable('group-blocked.json', 'not valid JSON') } })
+    const web = await fullPair(h, 'cu')
+    const fp = C.fingerprint(web.identity.pub)
+    expect(h.mgr.revoke(fp).ok).toBe(true)
+    expect(h.mgr.listPaired()).toEqual([])
+    expect(warn).toHaveBeenCalledWith(`[e2ee] ${fp} is unpaired, but not all of it was done: group-blocked.json cannot be read (not valid JSON). Move it aside to start over.`)
+    warn.mockRestore()
+  })
+
   it('a reconnect hello from a revoked identity is answered with e2e_denied (unpaired)', async () => {
     const h = machine()
     const web = await fullPair(h, 'cr')

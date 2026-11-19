@@ -9,12 +9,15 @@ const IDENTITY_TAIL = join('e2e', 'identity.json')
 // Pass-through unless a test sets a hook. `identityRead` sees every read of identity.json, so a test can play the
 // other process: the one that creates the key between this store's look and its own create. `identityPlaced` runs the
 // moment a store puts its key at identity.json: a write to the path (created, not yet filled) or a link onto it.
-// `tornWrite` makes the next write stop part way, as a full disk does.
+// `tornWrite` makes the next write stop part way, as a full disk does. `identityTaken` makes every link onto identity.json
+// find a name there while a read finds no file (a link to nothing); `identityLinks` counts those links.
 const hooks = vi.hoisted(() => ({
   identityRead: null as ((reads: number) => void) | null,
   identityReads: 0,
   identityPlaced: null as (() => void) | null,
   tornWrite: false,
+  identityTaken: false,
+  identityLinks: 0,
 }))
 vi.mock('node:fs', async (importOriginal) => {
   const real = await importOriginal<typeof import('node:fs')>()
@@ -39,6 +42,11 @@ vi.mock('node:fs', async (importOriginal) => {
       return real.writeFileSync(file, data, { ...(typeof options === 'object' ? options : {}), flag: 'w' })
     }) as typeof real.writeFileSync,
     linkSync: ((existing: fs.PathLike, target: fs.PathLike) => {
+      if (isIdentity(target) && hooks.identityTaken) {
+        // A loop with no end blocks the event loop, and the test's timeout with it: end it here, as a failure.
+        if (++hooks.identityLinks > 50) throw new Error('still minting after 50 keys')
+        throw Object.assign(new Error('EEXIST: file already exists'), { code: 'EEXIST' })
+      }
       const placed = isIdentity(target) ? hooks.identityPlaced : null
       if (placed) { hooks.identityPlaced = null; placed() }
       return real.linkSync(existing, target)
@@ -63,11 +71,11 @@ const passwordRecord = (recentFailures: number[] = []): string =>
 
 beforeEach(() => {
   rmSync(join(root, 'e2e'), { recursive: true, force: true })
-  Object.assign(hooks, { identityRead: null, identityReads: 0, identityPlaced: null, tornWrite: false })
+  Object.assign(hooks, { identityRead: null, identityReads: 0, identityPlaced: null, tornWrite: false, identityTaken: false, identityLinks: 0 })
   vi.spyOn(console, 'warn').mockImplementation(() => {})
 })
 afterEach(() => {
-  Object.assign(hooks, { identityRead: null, identityPlaced: null, tornWrite: false })
+  Object.assign(hooks, { identityRead: null, identityPlaced: null, tornWrite: false, identityTaken: false })
   vi.restoreAllMocks()
 })
 afterAll(() => rmSync(root, { recursive: true, force: true }))
@@ -118,6 +126,13 @@ describe('E2eeStore.init identity', () => {
     expect(hooks.identityReads).toBeGreaterThanOrEqual(3) // it read the empty file and did not give up on it
     expect(b64e(loser.pub)).toBe(winner.pub)
     expect(onDisk()).toEqual(winner)
+  })
+
+  // Windows can leave a link to nothing at identity.json: it reads as missing, and no new key can be put in its place.
+  it('a name at identity.json that reads as no file stops minting after a few tries', () => {
+    hooks.identityTaken = true
+    expect(() => new E2eeStore().init()).toThrow(StateFileUnreadable)
+    expect(hooks.identityLinks).toBeLessThanOrEqual(3)
   })
 
   it('an identity that cannot be read is never replaced', () => {

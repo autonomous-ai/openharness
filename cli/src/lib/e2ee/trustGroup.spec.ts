@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest'
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs'
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 
@@ -184,16 +184,20 @@ describe('TrustGroupStore: a file it cannot read', () => {
     expect(() => blocked.parse('{}')).toThrow()
   })
 
-  it('a torn block list is never replaced by one entry', () => {
+  // The roster holds no block: it still merges, so a removal still lands, and GroupSyncer trusts nobody new meanwhile.
+  it('a torn block list is never replaced by one entry, and the roster still merges', () => {
     const [self, pubA, pubC] = [pub(), pub(), pub()]
+    const b = machine(MID_B)
     put(BLOCKED(), '["' + pubA)                                     // two keys were blocked
     const store = new G.TrustGroupStore()
     expect(() => store.blocked()).toThrow(Sx.StateFileUnreadable)
     expect(() => store.block(pubC)).toThrow(Sx.StateFileUnreadable)
     expect(() => store.unblock(pubA)).toThrow(Sx.StateFileUnreadable)
-    expect(() => store.merge({ members: [machine(MID_B)], removed: [] }, self)).toThrow(Sx.StateFileUnreadable)
     expect(readFileSync(BLOCKED(), 'utf8')).toBe('["' + pubA)       // today: ["<pubC>"], which un-blocks the others
-    expect(existsSync(GROUP())).toBe(false)
+    expect(store.merge({ members: [b], removed: [] }, self).upserted).toEqual([b])
+    expect(store.remove(b.pub, self).dropped).toEqual([b])
+    expect(store.read().removed.map((t) => t.pub)).toEqual([b.pub])
+    expect(readFileSync(BLOCKED(), 'utf8')).toBe('["' + pubA)
   })
 
   it.each([

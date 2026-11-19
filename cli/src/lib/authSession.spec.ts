@@ -1,6 +1,6 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest'
 import type { AuthSession } from './authSession.js'
-import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'fs/promises'
+import { mkdtemp, readdir, readFile, rm, stat, writeFile } from 'fs/promises'
 import { existsSync } from 'fs'
 import { tmpdir } from 'os'
 import { StateFileUnreadable, probeState } from './secureState.js'
@@ -171,7 +171,8 @@ describe('writing the session', () => {
 })
 
 // A session.json that is not a JSON object (a write cut off by a crash) is a credential nobody can read: it is signed
-// out, nothing automatic replaces it, and only a person signing in or out sets it aside (session.json.unreadable).
+// out, nothing automatic replaces it, and only a person signing in or out deletes it. Kept aside, its refresh token
+// would outlive the sign-out.
 describe('a session that cannot be read', () => {
   const TORN = '{"version":1,"accessTok'
   const ASIDE = `${AUTH_SESSION_FILE}.unreadable`
@@ -194,25 +195,16 @@ describe('a session that cannot be read', () => {
     expect(await readFile(AUTH_SESSION_FILE, 'utf8')).toBe(TORN)
   })
 
-  it('a sign-in by hand sets it aside and writes the new one', async () => {
+  it('a sign-in by hand deletes it and writes the new one', async () => {
     await writeFile(AUTH_SESSION_FILE, TORN, { mode: 0o600 })
-    // What `harness login` reads first: the trust line is said, and the sign-in still sets the file aside.
+    // What `harness login` reads first: the trust line is said, and the sign-in still deletes the file.
     expect(readAuthSession()).toBeNull()
 
     writeSignIn(next)
 
     expect(readAuthSession()).toEqual(next)
-    expect(await readFile(ASIDE, 'utf8')).toBe(TORN)
-    expect(warn).toHaveBeenCalledWith('[state] session.json could not be read (not valid JSON); kept as session.json.unreadable, starting empty.')
-  })
-
-  it('a sign-in that cannot set it aside is refused, and leaves it', async () => {
-    await writeFile(AUTH_SESSION_FILE, TORN, { mode: 0o600 })
-    await mkdir(`${ASIDE}/held`, { recursive: true })
-
-    expect(() => writeSignIn(next)).toThrow(StateFileUnreadable)
-
-    expect(await readFile(AUTH_SESSION_FILE, 'utf8')).toBe(TORN)
+    expect(existsSync(ASIDE)).toBe(false)
+    expect(warn).toHaveBeenCalledWith('[state] session.json could not be read (not valid JSON); deleted, signing in again.')
   })
 
   it('a sign-in over a good session replaces it and sets nothing aside', () => {
@@ -224,13 +216,12 @@ describe('a session that cannot be read', () => {
     expect(existsSync(ASIDE)).toBe(false)
   })
 
-  it('clearAuthSession sets it aside; a good session is removed with nothing set aside', async () => {
+  it('clearAuthSession deletes it as it deletes a good one, keeping nothing aside', async () => {
     await writeFile(AUTH_SESSION_FILE, TORN, { mode: 0o600 })
     clearAuthSession()
     expect(existsSync(AUTH_SESSION_FILE)).toBe(false)
-    expect(await readFile(ASIDE, 'utf8')).toBe(TORN)
+    expect(existsSync(ASIDE)).toBe(false)
 
-    await rm(ASIDE)
     writeAuthSession(baseSession())
     clearAuthSession()
     expect(existsSync(AUTH_SESSION_FILE)).toBe(false)
