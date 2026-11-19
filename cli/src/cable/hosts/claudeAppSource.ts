@@ -327,12 +327,17 @@ export class ClaudeAppSource implements HostSource {
   }
 
   private take(read: StoreRead, ms: number): void {
+    // A walk cut at its 256 parses reads on with no event. Its list is partial, so the rows stay until a whole one; the
+    // over line still counts the cut.
+    if (read.more) {
+      this.again = true
+      this.counted(read.over)
+      return
+    }
     const before = shape(this.rows)
     this.rows = read.sessions.map(rowOf)
     this.timed(ms, read)
     this.counted(read.over)
-    // A walk cut at its 256 parses reads on with no event.
-    if (read.more) this.again = true
     if (shape(this.rows) !== before) this.emit()
   }
 
