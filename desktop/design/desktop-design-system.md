@@ -762,9 +762,10 @@ Off (Settings ▸ Experimental ▸ Hachi), none of them is drawn and ⇧⌘H is 
 
 ## Harness Device
 
-Harness Device is the menu-bar app for the dial (`device-app/`), named
-**Harness** wherever a person sees it; only its file stays
-`Harness Device.app`. It sets up
+Harness Device is the menu-bar app for the dial (`device-app/`), on macOS,
+Windows and Linux, named **Harness** wherever a person sees it; only its file
+stays `Harness Device.app`, and its installed name `Harness Device` on Windows.
+It sets up
 Harness, keeps it running and shows the dial's state; it offers sign-in and,
 on a Mac with the ChatGPT app, Follow ChatGPT. Claude Code, Codex and Orca
 need no setting: Harness sets them up once a dial is plugged in. The desktop
@@ -825,6 +826,20 @@ theme: the app runs from macOS 13, older than WebKit's `color-mix()`.
   line under the row reads `Saved to ~/Desktop/harness-logs-YYYYMMDD-HHMM.zip`,
   or `Export failed:` and `timed out`, `Harness did not answer` or `no file`.
   The line stays until the next export or the app quits.
+
+On Windows and Linux it is the same menu, rows and copy, with these
+differences, each an OS limit:
+
+- The icon sits in the tray. Windows shows the dark glyph on a light taskbar
+  and the light one (`tray-light.png`) on a dark taskbar, and follows a change
+  at once; Linux always shows the light glyph, as no common way reads a
+  panel's colour. A GNOME desktop without the AppIndicator extension has no
+  tray, so the icon shows nowhere (Ubuntu ships the extension).
+- **About** opens Tauri's About dialog, in front, with `Harness`, the version
+  and the same credits line: macOS's standard panel is AppKit's.
+- **Export logs** selects the zip in Explorer on Windows; on Linux it opens the
+  zip's folder, as the file manager cannot select a file.
+- The window has no taskbar button, as it has no Dock icon on macOS.
 
 The menu, top to bottom:
 

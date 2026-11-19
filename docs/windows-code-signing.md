@@ -1,12 +1,13 @@
 # Windows code signing
 
-Windows files the Desktop and CLI releases publish are Authenticode-signed through
+Windows files the Desktop, CLI and Harness Device releases publish are Authenticode-signed through
 [Azure Artifact Signing](https://learn.microsoft.com/azure/artifact-signing/) (formerly Trusted Signing), as
 **AUTONOMOUS INC.** Signing removes the SmartScreen "Windows protected your PC" prompt from a signed publisher's
 installer as reputation builds, lets Smart App Control run the app, and gives antivirus a publisher to trust.
 
-Signing is off until the repository variable `WINDOWS_SIGNING` is `required`. Until then the signing jobs are skipped
-and Windows ships unsigned, exactly as before this change.
+For Desktop and the CLI, signing is off until the repository variable `WINDOWS_SIGNING` is `required`. Until then
+their signing jobs are skipped and Windows ships unsigned, exactly as before this change. Harness Device always
+signs.
 
 ## What is signed
 
@@ -14,6 +15,7 @@ and Windows ships unsigned, exactly as before this change.
 | --- | --- | --- |
 | Desktop (`release-desktop.yml`) | `sign-windows` | every `.exe` and `.dll` in `Harness-windows-x64.zip` and `Harness-windows-arm64.zip` (`Harness.exe`, `harness-desktop.exe`, `harness_pipe_io.dll`, Flutter's and the plugins' DLLs), then `app/<version>/harness-desktop.cat`, a catalog of every file in the version folder, and `harness-install.exe` |
 | CLI (`release.yml`) | `pty-sign` | `harness-pty.exe`, `harness-launch.exe`, `harness.exe`, `harness-serial.exe` for x64 and arm64 |
+| Harness Device (`release-device.yml`) | `sign-windows` | `harness-device.exe` for x64 and arm64, then each `Harness-Device-windows-<arch>-setup.exe` that packs it. Always on: it does not wait for `WINDOWS_SIGNING`, since Smart App Control blocks an unsigned program |
 
 A file that already carries a valid signature keeps it: Microsoft's `conpty.dll` and `OpenConsole.exe` are not
 re-signed. A file whose signature is broken fails the job.
@@ -24,6 +26,7 @@ re-signed. A file whose signature is broken fails the job.
 build-windows (x64)   ─┐                            ┌─> upload-windows ─> publish
 build-windows (arm64) ─┴─> sign-windows (x64 only) ─┘
 pty-build (x64, arm64) ──> pty-sign (x64 only) ──────> windows-staging
+device build-windows (x64, arm64) ──> sign-windows (x64 only) ──> check-windows ──> publish
 ```
 
 - **One x64 job per release.** The Artifact Signing action does not run on Windows Arm runners. Authenticode signing
