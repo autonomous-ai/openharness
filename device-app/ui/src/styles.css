@@ -135,38 +135,6 @@ body {
   font: 12px/1.35 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
-.grants {
-  /* Up to ten of Orca's lines, each up to 300 characters: the list shrinks and scrolls, the heading and buttons stay. */
-  min-height: 0;
-  overflow-y: auto;
-  margin: 0;
-  padding-left: 18px;
-}
-
-/* macOS draws an overlay scrollbar only while it scrolls: a styled one is drawn whenever the list does not fit, so the
-   lines below are seen to be there before Connect. */
-.grants::-webkit-scrollbar {
-  width: 6px;
-}
-
-.grants::-webkit-scrollbar-track {
-  border-radius: 3px;
-  background: var(--control);
-}
-
-.grants::-webkit-scrollbar-thumb {
-  border-radius: 3px;
-  background: var(--muted);
-}
-
-.grant {
-  overflow-wrap: anywhere;
-}
-
-.grant + .grant {
-  margin-top: 4px;
-}
-
 .line {
   margin: 0;
   white-space: pre-wrap;
@@ -234,8 +202,7 @@ body {
   background: var(--accent-press);
 }
 
-.button:focus-visible,
-.grants:focus-visible {
+.button:focus-visible {
   outline: 1.5px solid var(--focus);
   outline-offset: 2px;
 }
