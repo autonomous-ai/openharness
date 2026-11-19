@@ -18,6 +18,21 @@ const STATE_MODULES: readonly string[] = [
   'lib/e2ee/deviceLogStore.ts',
   'lib/e2ee/accountTrust.ts',
   'lib/authSession.ts',
+  'lib/hookAuth.ts',
+  'lib/commander.ts',
+  'lib/daemonState.ts',
+  'core/main.ts',
+  'harnessd/master.ts',
+  'masterProcess.ts',
+  'device/machineList.ts',
+  'lib/runtimeInstall.ts',
+  'lib/engineLaunch.ts',
+  'lib/windows/hermesLaunch.ts',
+  'lib/browserShim.ts',
+  'lib/uninstall/deps.ts',
+  'lib/hostTheme.ts',
+  'lib/computerIdentity.ts',
+  'lib/codexProfiles.ts',
 ]
 
 const WRITE_IN_PLACE = /\bwriteFile(Sync)?\s*\(/
