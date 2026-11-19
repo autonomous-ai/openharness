@@ -1,24 +1,25 @@
 // A real writer is killed at a reported persistence boundary; no application acknowledgement is sent.
 import { createRequire, syncBuiltinESMExports } from 'node:module'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 const require = createRequire(import.meta.url)
 const fs = require('node:fs') as typeof import('node:fs')
 const io = require('node:fs/promises') as typeof import('node:fs/promises')
 const [directory, phase] = process.argv.slice(2) as [string, string]
-const lock = join(directory, 'registry.json.lock'), file = join(directory, 'registry.json')
+const file = join(directory, 'registry.json')
 const halt = (at: string): never => {
   process.send?.(at)
   // This isolated crash fixture must stop inside a synchronous fsync boundary until its parent kills it.
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20_000)
   throw new Error('crash fixture was not killed before its fail-safe')
 }
-const mkdir = io.mkdir
-io.mkdir = (async (...args: Parameters<typeof io.mkdir>) => {
-  const result = await mkdir(...args)
-  if (phase === 'ownerless' && String(args[0]) === lock) halt(phase)
-  return result
-}) as typeof io.mkdir
+const open = io.open
+io.open = (async (...args: Parameters<typeof io.open>) => {
+  const handle = await open(...args)
+  // The first owner.json this writer opens is its own, open and still empty, wherever the lock builds it.
+  if (phase === 'taking' && basename(String(args[0])) === 'owner.json') halt(phase)
+  return handle
+}) as typeof io.open
 const sync = fs.fsyncSync
 fs.fsyncSync = fd => { if (phase === 'published' && fs.fstatSync(fd).isDirectory()) halt(phase); sync(fd) }
 const asyncSync = fs.fsync

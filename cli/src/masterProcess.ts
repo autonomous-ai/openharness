@@ -21,7 +21,7 @@ import { PROBE_ANSWER, PROBE_TIMEOUT_MS, decodeResume, RESUME_ENV } from './harn
 import { dropAgentSessionEnv } from './lib/agentSessionEnv.js'
 import { ensureUtf8Locale } from './lib/childLocale.js'
 import { acquireSpawnLock, tryAcquireSpawnLockSync } from './lib/daemonSpawnLock.js'
-import { DAEMON_LOG_FILE, HARNESSD_STATUS_FILE, PID_FILE } from './lib/daemonState.js'
+import { DAEMON_LOG_FILE, HARNESSD_STATUS_FILE, PID_FILE, parsePid, readPidFile, writePidFile } from './lib/daemonState.js'
 import { isInstalledCopy } from './lib/installedCopy.js'
 import { unixSocketPath } from './lib/localSocket.js'
 import { refreshNodeReferences } from './lib/nodeReferences.js'
@@ -137,8 +137,7 @@ export function readHandoverPid(pidFile: string = PID_FILE, read: (path: string)
   }
   // A torn or half-written file reads as null, which is harmless: the replacement writes the pid file only before the
   // cutoff, and the old master reads it for its decision at cutoff + 20 s (harnessd/reexec.ts HANDOVER_CUTOFF_MARGIN_MS).
-  const pid = Number.parseInt(text.trim(), 10)
-  return Number.isSafeInteger(pid) && pid > 0 ? pid : null
+  return parsePid(text)
 }
 
 /**
@@ -170,6 +169,7 @@ export function writeFatalTo(
 ): void {
   const fatal = (what: string) => (error: unknown): void => {
     try {
+      // not a state file: the master's last line, appended to its log
       writeSync(fd, `${ts()} [harnessd] the master stopped on ${what}: ${errorKind(error)}\n`)
     } catch { /* the log cannot be written: the line is lost, never the exit */ }
     exit(1)
@@ -182,9 +182,11 @@ export const processWindowsMasterDeps = (): WindowsMasterDeps => ({
   cliDir: env.ADAPTER_CLI_DIR,
   currentCli: (root) => currentCli(root),
   exists: existsSync,
+  // not a state file: the daemon's log, appended
   openLog: () => openSync(DAEMON_LOG_FILE, 'a'),
   redirect: (fd) => {
     for (const name of ['log', 'info', 'warn', 'error'] as const) {
+      // not a state file: each console line, appended to the daemon's log
       console[name] = (...args: unknown[]) => { try { writeSync(fd, `${format(...args)}\n`) } catch { /* a full disk costs the line */ } }
     }
   },
@@ -277,6 +279,8 @@ export function startMaster(
       leanArtifacts: platform !== 'win32' && process.env.HARNESSD_LEAN !== 'off' && !existsSync(LEAN_OFF_FILE),
     } : {}),
     pidFile: PID_FILE,
+    writePidFile: (pid) => writePidFile(pid),
+    readPidFile: () => { const read = readPidFile(); return read.state === 'pid' ? read.pid : null },
     statusFile: HARNESSD_STATUS_FILE,
     logFile: DAEMON_LOG_FILE,
     // One probation for whatever the updater staged: the CLI build, the terminal host (Windows), or both. The Node the

@@ -10,7 +10,8 @@ import { sameProcessIdentity } from './terminalRuntime.js'
 import { conversationKey } from './conversationIdentity.js'
 import { SessionStorage, sessionStorage } from './sessionStorage.js'
 import { SessionStorageUnavailable, sessionFileIdentity, sessionImageProof, type SessionImage, type SessionImageProof, type StoppedArchiveQuery } from './sessionStorageWire.js'
-import { AtomicWriteUnconfirmed, RegistryPersistenceUnavailable, RegistryWriteQueue } from './registryPersistence.js'
+import { RegistryPersistenceUnavailable, RegistryWriteQueue } from './registryPersistence.js'
+import { AtomicWriteUnconfirmed } from './secureState.js'
 import { prepareSessionPublication } from './sessionPublication.js'
 
 const SAFE_ID = /^[a-zA-Z0-9_-]{1,128}$/
@@ -217,6 +218,7 @@ export class StoppedAgentStore {
     try { fd = openSync(file, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600) }
     catch (error) { if ((error as NodeJS.ErrnoException).code === 'EEXIST') return null; throw error }
     const token = randomUUID()
+    // not a state file: an O_EXCL reservation, filled and flushed; the plan's follow-up moves it to the helper
     try { writeFileSync(fd, JSON.stringify({ token })); fsyncSync(fd) } finally { closeSync(fd) }
     this.syncDirectory()
     return token

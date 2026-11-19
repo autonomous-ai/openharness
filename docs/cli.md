@@ -80,6 +80,15 @@ After the move the Store sets each installed harness up again, two at a time.
 A harness whose setup fails says `Needs setup` on its Store page, and `needs setup` in `harness dsh list`.
 `harness dsh update <owner/name>` or the page's `Update` button sets it up again.
 
+## A state file that cannot be read
+
+- **Trust files** (keys, pairings, linked machines, the trust group, the device log, the sign-in) are left as they are.
+  Harness trusts nobody new from one, and a command that would replace it fails with
+  `✗ <name> cannot be read (<why>)`. `harness status` lists each one after its table:
+  `! <full path> cannot be read (<why>) · move it aside to start over`. Move the file aside and Harness starts that
+  store over; put a good copy back and it reads it again.
+- **Every other state file** is moved to `<name>.unreadable`, where its bytes stay, and Harness starts it empty.
+
 ## The daemon's environment
 
 On macOS and Linux, `harness start` (with or without `-f`) gives the daemon only these variables of the shell that ran

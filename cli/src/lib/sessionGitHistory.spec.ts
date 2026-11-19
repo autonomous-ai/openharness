@@ -1,10 +1,34 @@
-import { mkdtemp, readFile, readdir, rm, stat } from 'node:fs/promises'
+import { chmod, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { SessionGitHistoryStore } from './sessionGitHistory.js'
 import type { RegisteredSession } from './registry.js'
 import type { SessionGitContext } from './sessionGitContext.js'
+
+// Pass-through, recording what replaced a file and what was opened by name through fs/promises; `sync`: each rename's
+// target and each path opened through node:fs's synchronous calls, which a save that must not block its event loop never
+// makes.
+const disk = vi.hoisted(() => ({ renamed: [] as Array<[string, string]>, opened: [] as string[], sync: [] as string[] }))
+vi.mock('node:fs', async original => {
+  const actual = await original<typeof import('node:fs')>()
+  return { ...actual,
+    renameSync: (...args: Parameters<typeof actual.renameSync>) => { disk.sync.push(`rename ${String(args[1])}`); return actual.renameSync(...args) },
+    openSync: (...args: Parameters<typeof actual.openSync>) => { disk.sync.push(`open ${String(args[0])}`); return actual.openSync(...args) },
+  }
+})
+vi.mock('node:fs/promises', async original => {
+  const actual = await original<typeof import('node:fs/promises')>()
+  return { ...actual,
+    rename: (...args: Parameters<typeof actual.rename>) => {
+      disk.renamed.push([String(args[0]), String(args[1])])
+      return actual.rename(...args)
+    },
+    open: (...args: Parameters<typeof actual.open>) => { disk.opened.push(String(args[0])); return actual.open(...args) },
+  }
+})
+/** The synchronous writes of [file]: onto it, or of its temporary file. */
+const syncWrites = (file: string): string[] => disk.sync.filter(event => event === `rename ${file}` || event.startsWith(`open ${file}.`))
 
 const dirs: string[] = []
 const at = '2026-09-27T13:00:00.000Z'
@@ -88,5 +112,57 @@ describe('durable session Git history', () => {
     await store.observe(target, context('maybe', { state: 'uncertain', current: null }))
     expect((await store.get(target)).branches.map(b => b.branch)).toEqual(['main'])
     await store.settled()
+  })
+
+  it('the save goes through a temporary file renamed onto the target, and never blocks the event loop', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'git-history-')); dirs.push(dir)
+    const store = new SessionGitHistoryStore(dir)
+    disk.renamed = []; disk.opened = []; disk.sync = []
+    await store.observe(target, context('main'))
+    await store.settled()
+    const file = join(dir, (await readdir(dir)).find(name => name.endsWith('.json'))!)
+    expect(disk.renamed.filter(([, to]) => to === file).map(([from]) => from)).toEqual([expect.stringMatching(/\.tmp$/)])
+    expect(disk.renamed[0]![0].startsWith(`${file}.`)).toBe(true)
+    expect(disk.opened).not.toContain(file)
+    expect(syncWrites(file)).toEqual([])
+  })
+
+  it('a torn history is set aside, not written over', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'git-history-')); dirs.push(dir)
+    const first = new SessionGitHistoryStore(dir)
+    await first.observe(target, context('main'))
+    await first.settled()
+    const name = (await readdir(dir)).find(n => n.endsWith('.json'))!
+    const file = join(dir, name)
+    await writeFile(file, '{"')
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const store = new SessionGitHistoryStore(dir)
+      expect((await store.get(target)).branches).toEqual([])
+      await store.observe(target, context('feature'))
+      await store.settled()
+      expect(await readFile(`${file}.unreadable`, 'utf8')).toBe('{"')
+      expect(JSON.parse(await readFile(file, 'utf8')).branches.map((b: { branch: string }) => b.branch)).toEqual(['feature'])
+      expect(warn).toHaveBeenCalledWith(
+        `[state] ${name} could not be read (not valid JSON); kept as ${name}.unreadable, starting empty.`)
+    } finally { warn.mockRestore() }
+  })
+
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('a history this account cannot read is not written over', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'git-history-')); dirs.push(dir)
+    const first = new SessionGitHistoryStore(dir)
+    await first.observe(target, context('main'))
+    await first.settled()
+    const file = join(dir, (await readdir(dir)).find(n => n.endsWith('.json'))!)
+    const before = await readFile(file, 'utf8')
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      await chmod(file, 0o000)
+      const store = new SessionGitHistoryStore(dir)
+      await store.observe(target, context('feature'))
+      await store.settled()
+      await chmod(file, 0o600)
+      expect(await readFile(file, 'utf8')).toBe(before)
+    } finally { warn.mockRestore() }
   })
 })

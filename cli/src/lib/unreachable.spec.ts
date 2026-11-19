@@ -69,8 +69,8 @@ describe('a daemon this shell cannot reach', () => {
       expect(pidIn(dir)).toBeNull()
       writeFileSync(join(dir, 'adapter.pid'), '4242\n')
       expect(pidIn(dir)).toBe(4242)
-      // 0 and below name process groups: kill(0, 0) always succeeds.
-      for (const text of ['0', '-1', 'nope']) {
+      // 0 and below name process groups: kill(0, 0) always succeeds. A file that is not a pid names no process.
+      for (const text of ['0', '-1', 'nope', '12x']) {
         writeFileSync(join(dir, 'adapter.pid'), text)
         expect(pidIn(dir), text).toBeNull()
       }

@@ -1,13 +1,24 @@
-import { existsSync, mkdtempSync, rmSync } from 'node:fs'
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { NODE_MIGRATION_FILE, failedNode, nodeMigration, recordNodeMigration, settleNodeMigration } from './nodeMigration.js'
 
+// Pass-through, recording what reaches each file: opened, written, or renamed onto.
+const disk = vi.hoisted(() => ({ events: [] as string[] }))
+vi.mock('node:fs', async original => {
+  const actual = await original<typeof import('node:fs')>()
+  return { ...actual,
+    openSync: (...args: Parameters<typeof actual.openSync>) => { disk.events.push(`open ${String(args[0])}`); return actual.openSync(...args) },
+    writeFileSync: (...args: Parameters<typeof actual.writeFileSync>) => { disk.events.push(`write ${String(args[0])}`); return actual.writeFileSync(...args) },
+    renameSync: (...args: Parameters<typeof actual.renameSync>) => { disk.events.push(`rename ${String(args[1])}`); return actual.renameSync(...args) },
+  }
+})
+
 describe('the node migration record', () => {
   let dir = ''
-  afterEach(() => { rmSync(dir, { recursive: true, force: true }) })
+  afterEach(() => { vi.restoreAllMocks(); rmSync(dir, { recursive: true, force: true }) })
   const fresh = (): string => (dir = mkdtempSync(join(tmpdir(), 'node-migration-')))
 
   it('keeps the Node that failed through later reasons, until nothing holds the daemon back', () => {
@@ -29,5 +40,44 @@ describe('the node migration record', () => {
     expect(nodeMigration(dir)).toBe('rolled-back')
     settleNodeMigration(dir, '24.22.2')
     expect(existsSync(join(dir, NODE_MIGRATION_FILE))).toBe(false)
+  })
+
+  it('the save goes through a temporary file renamed onto the target', () => {
+    const file = join(fresh(), NODE_MIGRATION_FILE)
+    disk.events = []
+    recordNodeMigration(dir, 'rolled-back')
+    expect(disk.events.filter((event) => event.endsWith(` ${file}`))).toEqual([`rename ${file}`])
+  })
+
+  it('a file at the old temporary name is left alone', () => {
+    const planted = `${join(fresh(), NODE_MIGRATION_FILE)}.tmp`
+    writeFileSync(planted, 'planted')
+    recordNodeMigration(dir, 'rolled-back')
+    expect(readFileSync(planted, 'utf8')).toBe('planted')
+  })
+
+  it('a torn node-migration.json is set aside, not written over', () => {
+    const file = join(fresh(), NODE_MIGRATION_FILE)
+    writeFileSync(file, '{"')
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    expect(nodeMigration(dir)).toBeNull()
+    recordNodeMigration(dir, 'rolled-back')
+    expect(readFileSync(`${file}.unreadable`, 'utf8')).toBe('{"')
+    expect(nodeMigration(dir)).toBe('rolled-back')
+    expect(warn).toHaveBeenCalledWith('[state] node-migration.json could not be read (not valid JSON); kept as node-migration.json.unreadable, starting empty.')
+  })
+
+  // Read as none, the next reason would forget the Node that failed here, and the updater would move to it again.
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('a record this account cannot read is not written over by a later reason', () => {
+    const file = join(fresh(), NODE_MIGRATION_FILE)
+    recordNodeMigration(dir, 'rolled-back', '/h/runtime/node-v24.22.2-darwin-arm64/bin/node')
+    const before = readFileSync(file, 'utf8')
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    chmodSync(file, 0o000)
+    recordNodeMigration(dir, 'manifest-unreachable')
+    chmodSync(file, 0o600)
+    expect(readFileSync(file, 'utf8')).toBe(before)
+    expect(error).toHaveBeenCalledWith('[update] could not record why the daemon\'s Node stays as it is (StateFileUnreadable)')
   })
 })

@@ -253,7 +253,7 @@ describe('Browsers', () => {
 
   it('resume with the step starting_podman runs setUp', async () => {
     const setup = { step: 'starting_podman' }
-    writeFileSync(path, JSON.stringify({ browsers: {}, deleting: [], setup }))
+    writeFileSync(path, JSON.stringify({ browsers: {}, deleting: [], setup }), { mode: 0o600 })
     const r = rig()
     r.availability.value = { state: 'needs_setup' }
     const run = deferred<void>()
@@ -267,7 +267,7 @@ describe('Browsers', () => {
   })
 
   it('resume with the step installing does not run the installer', async () => {
-    writeFileSync(path, JSON.stringify({ browsers: {}, deleting: [], setup: { step: 'installing' } }))
+    writeFileSync(path, JSON.stringify({ browsers: {}, deleting: [], setup: { step: 'installing' } }), { mode: 0o600 })
     const r = rig()
     r.availability.value = { state: 'needs_setup' }
     await r.browsers.resume()
@@ -666,7 +666,7 @@ describe('Browsers', () => {
 
   it('startup keeps profiles until an explicit purge, and sweeps only unlisted containers', async () => {
     const settings = defaultSettings(host)
-    writeFileSync(path, JSON.stringify({ browsers: { a1: settings, a2: settings }, deleting: [], setup: null }))
+    writeFileSync(path, JSON.stringify({ browsers: { a1: settings, a2: settings }, deleting: [], setup: null }), { mode: 0o600 })
     const r = rig()
     r.containers.sweep.mockResolvedValue(2)
     await r.browsers.resume()
@@ -683,7 +683,7 @@ describe('Browsers', () => {
 
   it('startup finishes only the purges already recorded', async () => {
     const settings = defaultSettings(host)
-    writeFileSync(path, JSON.stringify({ browsers: { a1: settings, a2: settings }, deleting: ['a3'], setup: null }))
+    writeFileSync(path, JSON.stringify({ browsers: { a1: settings, a2: settings }, deleting: ['a3'], setup: null }), { mode: 0o600 })
     const r = rig()
     await r.browsers.resume()
     expect(r.containers.remove.mock.calls).toEqual([['a3']])
@@ -742,7 +742,7 @@ describe('Browsers', () => {
   // keeps its landscape screen, and its container and profile stay as they are; only a first start takes portrait.
   it('a first start saves the portrait default; a browser an earlier default started keeps its screen', async () => {
     const before = { ...defaultSettings(host), screen: '1920x1080' as const }
-    writeFileSync(path, JSON.stringify({ browsers: { a1: before }, deleting: [], setup: null }))
+    writeFileSync(path, JSON.stringify({ browsers: { a1: before }, deleting: [], setup: null }), { mode: 0o600 })
     const r = rig()
     await r.browsers.start('a1')
     expect(r.containers.start.mock.calls[0]![3]).toEqual(before)

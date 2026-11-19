@@ -1,9 +1,8 @@
 import { b64d, fingerprint } from '../e2ee/core.js'
 import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
-import { renameSync, writeFileSync } from 'node:fs'
 import WebSocket from 'ws'
-import { hardenPrivateStateFileIfPresent, readPrivateStateFile, secureStateDirectory } from '../secureState.js'
+import { atomicWriteFile, hardenPrivateStateFileIfPresent, readPrivateStateFile, secureStateDirectory } from '../secureState.js'
 import { discoverDevices, type DiscoveredDevice } from './discovery.js'
 import type { PairResult } from '../e2ee/manager.js'
 export interface DirectDeviceHost {
@@ -41,8 +40,7 @@ export class AutonomousDeviceDirect {
     }
   }
   private save(): void {
-    secureStateDirectory(this.dataDir); hardenPrivateStateFileIfPresent(this.file, 65536)
-    const temp = `${this.file}.${randomUUID()}.tmp`; writeFileSync(temp, JSON.stringify(this.associations), { mode: 0o600, flag: 'wx' }); renameSync(temp, this.file)
+    secureStateDirectory(this.dataDir); atomicWriteFile(this.file, JSON.stringify(this.associations), 'trust')
   }
   discover(): Promise<DiscoveredDevice[]> {
     if (!this.discovering) this.discovering = this.discovery().then(rows => { this.candidates.clear(); for (const row of rows) this.candidates.set(row.id, row); return rows }).finally(() => { this.discovering = undefined })

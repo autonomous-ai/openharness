@@ -15,9 +15,31 @@ import * as preparations from './nativeHookFiles.js'
 import { reviewHash, reviewRecords } from './hookReview.js'
 import { HARNESS_AGENT_TOOLS } from '../facets/hooks.js'
 
+// How the watched path is changed: opened for writing in place, or a file renamed onto it.
+const disk = vi.hoisted(() => ({ watch: '', changes: [] as string[] }))
+vi.mock('node:fs', async original => {
+  const actual = await original<typeof import('node:fs')>()
+  const writes = (flags: unknown) => typeof flags === 'number' ? (flags & 3) !== 0 : typeof flags === 'string' && flags !== 'r'
+  return { ...actual,
+    openSync: (...args: Parameters<typeof actual.openSync>) => {
+      if (args[0] === disk.watch && writes(args[1])) disk.changes.push('write')
+      return actual.openSync(...args)
+    },
+    writeFileSync: (...args: Parameters<typeof actual.writeFileSync>) => {
+      if (args[0] === disk.watch) disk.changes.push('write')
+      return actual.writeFileSync(...args)
+    },
+    renameSync: (...args: Parameters<typeof actual.renameSync>) => {
+      if (args[1] === disk.watch) disk.changes.push('rename')
+      return actual.renameSync(...args)
+    },
+  }
+})
+afterEach(() => { disk.watch = ''; disk.changes = [] })
+
 // What every case writes and logs is engines/hookInstallers.golden.spec.ts; these are the kit's own edges.
 let root = ''
-beforeEach(() => { root = mkdtempSync(join(tmpdir(), 'hook-settings-')) })
+beforeEach(() => { root = realpathSync(mkdtempSync(join(tmpdir(), 'hook-settings-'))) })
 afterEach(() => {
   vi.restoreAllMocks()
   rmSync(root, { recursive: true, force: true })
@@ -357,6 +379,25 @@ it('allows Harness\'s agent commands in a Codex rules file of its own, leaving t
   const written = statSync(rules).ino
   expect(await installHookSettings('codex', codex.settings, 19473, home)).toBe(true)
   expect(statSync(rules).ino).toBe(written)
+})
+
+it('the Codex rules file goes through a temporary file renamed onto it', async () => {
+  const home = join(root, 'codex'), rules = join(home, 'rules', 'harness.rules')
+  mkdirSync(join(home, 'rules'), { recursive: true })
+  writeFileSync(rules, '# an older release\n', { mode: 0o600 })
+  disk.watch = rules
+  expect(await installHookSettings('codex', codex.settings, 19473, home)).toBe(true)
+  expect(disk.changes).toEqual(['rename'])
+  expect(readFileSync(rules, 'utf8')).toBe(codexRulesFile())
+})
+
+it('a file at the Codex rules file\'s old temporary name is left alone', async () => {
+  const home = join(root, 'codex'), rules = join(home, 'rules', 'harness.rules')
+  mkdirSync(join(home, 'rules'), { recursive: true })
+  writeFileSync(`${rules}.${process.pid}.tmp`, 'planted')
+  expect(await installHookSettings('codex', codex.settings, 19473, home)).toBe(true)
+  expect(readFileSync(`${rules}.${process.pid}.tmp`, 'utf8')).toBe('planted')
+  expect(readFileSync(rules, 'utf8')).toBe(codexRulesFile())
 })
 
 it('rewrites the Codex rules file an earlier release wrote for harness send alone', async () => {

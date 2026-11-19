@@ -82,7 +82,7 @@ export function runRecapsService(options: RecapsServiceOptions): ServiceProcess 
   }), { changed: tell, peer: { composition: 'services', port: env.PORT, token: options.token } })
 
   const run = options.run ?? runServiceProcess
-  const process = run({
+  const link = run({
     name: 'recaps',
     socketPath: options.socketPath,
     machineId: options.machineId,
@@ -101,5 +101,6 @@ export function runRecapsService(options: RecapsServiceOptions): ServiceProcess 
     },
     onDisconnected: () => { core = null; void recaps.port.stop() },
   })
-  return { stop: async () => { process.stop(); await recaps.port.stop() } }
+  // Flush the final cache before disconnecting, then settle the device-presence owner.
+  return { stop: async () => { recaps.mirror.saveBeforeStop(); link.stop(); await recaps.port.stop() } }
 }

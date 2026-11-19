@@ -405,7 +405,8 @@ describe('saved archive final authority', () => {
     const file = join(directory, 'stopped-agents', `${saved.agentId}.json`)
     const before = readFileSync(file, 'utf8')
     const { sessionStorage } = await import('./sessionStorage.js')
-    const { RegistryPersistenceUnavailable, AtomicWriteUnconfirmed } = await import('./registryPersistence.js')
+    const { RegistryPersistenceUnavailable } = await import('./registryPersistence.js')
+    const { AtomicWriteUnconfirmed } = await import('./secureState.js')
     const prepare = sessionStorage.prepare.bind(sessionStorage)
     let current = true
     const paused = vi.spyOn(sessionStorage, 'prepare').mockImplementationOnce(async (...args) => {
@@ -444,7 +445,8 @@ describe('saved archive final authority', () => {
     const { saved, store } = await fixture()
     await store.save(saved)
     const publication = await import('./sessionPublication.js')
-    const { AtomicWriteUnconfirmed, RegistryPersistenceUnavailable } = await import('./registryPersistence.js')
+    const { RegistryPersistenceUnavailable } = await import('./registryPersistence.js')
+    const { AtomicWriteUnconfirmed } = await import('./secureState.js')
     const failure = failureKind === 'atomic' ? new AtomicWriteUnconfirmed(new Error('fixture sync failed'))
       : new Error('fixture after-sync failure')
     const prepare = publication.prepareSessionPublication
@@ -478,7 +480,7 @@ describe('saved archive final authority', () => {
     await store.save(saved)
     const folder = join(directory, 'stopped-agents'), inode = statSync(folder).ino
     const real = await vi.importActual<typeof import('node:fs')>('node:fs')
-    const { AtomicWriteUnconfirmed } = await import('./registryPersistence.js')
+    const { AtomicWriteUnconfirmed } = await import('./secureState.js')
     let failed = false
     vi.mocked(fsync).mockImplementation((fd, callback) => {
       if (!failed && fstatSync(fd).ino === inode) {

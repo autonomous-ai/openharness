@@ -12,7 +12,7 @@ import { prepareCloudPort, type CloudCreateResult } from './responses.js'
  * - Nothing here holds a credential: each call goes through the Connections bridge (cloud/bridge.ts).
  */
 import { randomBytes } from 'node:crypto'
-import { appendFileSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { appendFileSync, mkdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { ServiceRequests } from '../core/api.js'
 import type { SessionOwnerCore, OwnerDelivery } from '../lib/sessionOwnerWire.js'
@@ -21,6 +21,7 @@ import { CLOUD_AGENT_IDS, CLOUD_AGENTS, SAID_MAX, cloudAgentFrame, cloudHarnessI
 import { deriveTurnSummary } from '../lib/deviceRecap.js'
 import { errorKind } from '../lib/log.js'
 import { splitSummary } from '../lib/recapReads.js'
+import { atomicWriteFile, jsonObject, readState } from '../lib/secureState.js'
 import { connectionFor, connectionsBridge, type Bridge } from './bridge.js'
 import { cursorAdapter } from './cursor.js'
 import { devinAdapter } from './devin.js'
@@ -145,9 +146,7 @@ export function startCloudService(options: CloudServiceOptions) {
   const persist = (journal: CloudJournal): void => {
     if (stateUnavailable) throw new Error('CLOUD_STATE_UNAVAILABLE')
     mkdirSync(dir, { recursive: true, mode: 0o700 })
-    const temp = `${stateFile}.${process.pid}.tmp`
-    writeFileSync(temp, JSON.stringify({ harnesses: durable, publication: journal }), { mode: 0o600 })
-    renameSync(temp, stateFile)
+    atomicWriteFile(stateFile, JSON.stringify({ harnesses: durable, publication: journal }), 'trust')
   }
   // Another harness may finish while deliver awaits its maker. Its optimistic working state is not durable.
   const captureProviderState = (): unknown[] => [...entries.values()].map(({ harness, remote, question, changedAt, creationId }) => ({
@@ -169,12 +168,17 @@ export function startCloudService(options: CloudServiceOptions) {
   const transcript = (agentId: string): TranscriptMessage[] => {
     try {
       return readFileSync(transcriptFile(agentId), 'utf8').split('\n').flatMap((line) => {
-        try { return line ? [JSON.parse(line) as TranscriptMessage] : [] } catch { return [] }
+        // A line of another shape (`null`, a number for its words) is no message: its readers read its words.
+        try {
+          const message = (line ? JSON.parse(line) : null) as TranscriptMessage | null
+          return typeof message?.text === 'string' ? [message] : []
+        } catch { return [] }
       })
     } catch { return [] }
   }
   const record = (entry: Entry, message: TranscriptMessage): void => {
     mkdirSync(dir, { recursive: true, mode: 0o700 })
+    // not a state file: a transcript, appended line by line; its reader skips a torn last line
     appendFileSync(transcriptFile(entry.harness.agentId), `${JSON.stringify(message)}\n`, { mode: 0o600 })
     entry.harness.messages += 1
     if (message.from === 'agent') {
@@ -466,7 +470,9 @@ export function startCloudService(options: CloudServiceOptions) {
 
   // The harnesses from before this start: told to the core again, and looked at where one was working.
   try {
-    const saved = JSON.parse(readFileSync(stateFile, 'utf8')) as { harnesses?: Array<Omit<Entry, 'failures'>>; publication?: unknown }
+    const read = readState(stateFile, 'trust', jsonObject)
+    if (read.state === 'unreadable') throw new Error('CLOUD_STATE_UNAVAILABLE')
+    const saved = (read.state === 'ok' ? read.value : { harnesses: [] }) as { harnesses?: Array<Omit<Entry, 'failures'>>; publication?: unknown }
     if (!Array.isArray(saved.harnesses)) throw new Error('CLOUD_STATE_UNAVAILABLE')
     durable = saved.harnesses
     savedPublication = saved.publication

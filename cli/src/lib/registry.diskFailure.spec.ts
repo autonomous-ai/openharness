@@ -22,7 +22,7 @@ let directory: string
 let registry: typeof Registry
 let storage: typeof import('./sessionStorage.js')['sessionStorage']
 let fault: string
-let AtomicWriteUnconfirmed: typeof import('./registryPersistence.js').AtomicWriteUnconfirmed
+let AtomicWriteUnconfirmed: typeof import('./secureState.js').AtomicWriteUnconfirmed
 const input = { agentId: 'persisted-agent', engine: 'claude' as const, tmuxPane: '%1',
   processIdentity: { pid: 101, executable: '/fixture/claude', startMarker: 'fixture-101' } }
 beforeEach(async () => {
@@ -60,7 +60,7 @@ beforeEach(async () => {
   // Source entry keeps the ordinary TSX loader while pinning this exact failure fixture.
   ;(storage as unknown as { entry: () => unknown }).entry = () => ({ file: entry, sha256: fingerprint(entry)!, execArgv: ['--import', import.meta.resolve('tsx')] })
   registry = (await import('./registry.js')).registry
-  AtomicWriteUnconfirmed = (await import('./registryPersistence.js')).AtomicWriteUnconfirmed
+  AtomicWriteUnconfirmed = (await import('./secureState.js')).AtomicWriteUnconfirmed
   await registry.load()
   await registry.openProcessAgent(input)
   await registry.flush()

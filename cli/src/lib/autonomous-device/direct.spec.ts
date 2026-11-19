@@ -1,13 +1,26 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { WebSocketServer } from 'ws'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, type PathLike } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { once } from 'node:events'
 import { b64e, fingerprint, newIdentity } from '../e2ee/core.js'
 import { AutonomousDeviceDirect, type DirectDeviceHost } from './direct.js'
+// Every flush and every rename, in order; each call passes through (lib/secureState.ts imports node:fs too).
+const disk = vi.hoisted(() => ({ calls: [] as Array<[op: 'rename' | 'fsync', path: string, to?: string]> }))
+vi.mock('node:fs', async (original) => {
+  const actual = await original<typeof import('node:fs')>()
+  return { ...actual,
+    fsyncSync: (fd: number) => {
+      disk.calls.push(['fsync', actual.fstatSync(fd).isDirectory() ? 'folder' : 'file'])
+      return actual.fsyncSync(fd)
+    },
+    renameSync: (from: PathLike, to: PathLike) => { disk.calls.push(['rename', String(from), String(to)]); return actual.renameSync(from, to) },
+  }
+})
+
 const clean: Array<() => void> = []
-afterEach(() => { for (const fn of clean.splice(0)) fn() })
+afterEach(() => { disk.calls = []; for (const fn of clean.splice(0)) fn() })
 async function fixture() {
   const dir = mkdtempSync(join(tmpdir(), 'autonomous-direct-')); clean.push(() => rmSync(dir, { recursive: true, force: true }))
   const wss = new WebSocketServer({ port: 0, host: '127.0.0.1' }); await once(wss, 'listening')
@@ -26,6 +39,16 @@ async function fixture() {
   return { direct, host, wss, row, identity, fp, receive, dir, discovery, attempts: () => attempts }
 }
 describe('direct Autonomous device endpoint selection', () => {
+  it('the connections file is flushed before it is renamed', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'autonomous-direct-')); clean.push(() => rmSync(dir, { recursive: true, force: true }))
+    const file = join(dir, 'autonomous-device-connections.json')
+    // A revocation saves the list even when it names no device: no socket or host call is needed for the save.
+    new AutonomousDeviceDirect({} as DirectDeviceHost, dir, vi.fn(async () => [])).revoked('nobody')
+    const rename = disk.calls.findIndex(([op, , to]) => op === 'rename' && to === file)
+    expect(rename).toBeGreaterThan(-1)
+    expect(disk.calls.slice(0, rename).some(([op, path]) => op === 'fsync' && path === 'file')).toBe(true)
+    expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual([])
+  })
   it('only pairs a discovered selected device and starts a fresh socket after a wrong code', async () => {
     const f = await fixture()
     await expect(f.direct.pair('manual-host', 'CODE12')).rejects.toMatchObject({ code: 'DEVICE_NOT_FOUND' })

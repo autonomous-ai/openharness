@@ -19,6 +19,13 @@ import {
 import { HARNESSD_PROTOCOL, LEAN_CORE_SCRIPT_ENV } from './protocol.js'
 import { DEFAULT_SUPERVISOR_OPTIONS, type ResumeState } from './supervisor.js'
 
+/** The pid file at [pidFile], with a writer and a reader as plain as these tests need: the entry gives the master
+ *  atomic ones (../masterProcess.ts). */
+const pidFileAt = (pidFile: string) => ({
+  pidFile,
+  writePidFile: (pid: number) => { writeFileSync(pidFile, `${pid}\n`) },
+  readPidFile: () => { try { return Number(readFileSync(pidFile, 'utf8')) || null } catch { return null } },
+})
 
 describe('supervisorOptions', () => {
   it('reads valid overrides and keeps the defaults for anything unset or invalid', () => {
@@ -151,7 +158,7 @@ describe('trimLogEvery', () => {
 
 describe('masterDefaults', () => {
   it('takes what the config gives, and this process for the rest', () => {
-    const base = { nodePath: 'n', execArgv: [], scriptPath: 's', pidFile: 'p', restoreUpdate: () => {}, confirmUpdate: () => {} }
+    const base = { nodePath: 'n', execArgv: [], scriptPath: 's', ...pidFileAt('p'), restoreUpdate: () => {}, confirmUpdate: () => {} }
     expect(masterDefaults(base)).toEqual({ env: process.env, exit: processExit, onSignal: onProcessSignal, execve: expect.any(Function) })
     const exit = () => {}
     const onSignal = () => {}
@@ -380,7 +387,7 @@ describe('runMaster', { timeout: 60_000 }, () => {
     const signals = new Map<string, () => void>()
     const title = process.title
     const supervisor = runMaster({
-      nodePath: node, runtimeDir: runtime, execArgv: [], scriptPath: core, pidFile: join(dir, 'adapter.pid'),
+      nodePath: node, runtimeDir: runtime, execArgv: [], scriptPath: core, ...pidFileAt(join(dir, 'adapter.pid')),
       restoreUpdate: () => {}, confirmUpdate: () => {},
       exit: (code) => exits.push(code), onSignal: (signal, listener) => signals.set(signal, listener),
     })
@@ -418,7 +425,7 @@ describe('runMaster', { timeout: 60_000 }, () => {
         nodePath: process.execPath,
         execArgv: [],
         scriptPath: core,
-        pidFile,
+        ...pidFileAt(pidFile),
         restoreUpdate: () => { updates.push('restore') },
         confirmUpdate: () => updates.push('confirm'),
         // The entry hears each core that comes up (../masterProcess.ts follows the Node it runs on). One that throws
@@ -457,7 +464,7 @@ describe('runMaster', { timeout: 60_000 }, () => {
     const exits: number[] = []
     const signals = new Map<string, () => void>()
     const supervisor = runMaster({
-      nodePath: process.execPath, execArgv: [], scriptPath: core, pidFile,
+      nodePath: process.execPath, execArgv: [], scriptPath: core, ...pidFileAt(pidFile),
       restoreUpdate: () => {}, confirmUpdate: () => {},
       exit: (code) => exits.push(code), onSignal: (signal, listener) => signals.set(signal, listener),
     })
@@ -485,7 +492,7 @@ describe('runMaster', { timeout: 60_000 }, () => {
     const exits: number[] = []
     const signals = new Map<string, () => void>()
     runMaster({
-      nodePath: process.execPath, execArgv: [], scriptPath: core, pidFile, statusFile, logFile: join(dir, 'harness.log'),
+      nodePath: process.execPath, execArgv: [], scriptPath: core, ...pidFileAt(pidFile), statusFile, logFile: join(dir, 'harness.log'),
       restoreUpdate: () => {}, confirmUpdate: () => {},
       env: { ...process.env, HARNESSD_SERVICES: 'none', HARNESSD_HEAP_LIMIT_MIB: '300' },
       exit: (code) => exits.push(code), onSignal: (signal, listener) => signals.set(signal, listener),
@@ -513,7 +520,7 @@ describe('runMaster', { timeout: 60_000 }, () => {
     const log = vi.spyOn(console, 'log').mockImplementation((line: string) => { writeFileSync(logged, `${line}\n`, { flag: 'a' }) })
     try {
       runMaster({
-        nodePath: process.execPath, execArgv: [], scriptPath: core, pidFile, statusFile,
+        nodePath: process.execPath, execArgv: [], scriptPath: core, ...pidFileAt(pidFile), statusFile,
         restoreUpdate: () => {}, confirmUpdate: () => {},
         env: { ...process.env, HARNESSD_SERVICES: 'none', HARNESSD_PLATFORM: 'launchd' },
         exit: (code) => exits.push(code), onSignal: (signal, listener) => signals.set(signal, listener),
@@ -543,7 +550,7 @@ describe('runMaster', { timeout: 60_000 }, () => {
     const exits: number[] = []
     const signals = new Map<string, () => void>()
     runMaster({
-      nodePath: process.execPath, execArgv: [], scriptPath: script, pidFile,
+      nodePath: process.execPath, execArgv: [], scriptPath: script, ...pidFileAt(pidFile),
       restoreUpdate: () => {}, confirmUpdate: () => {},
       env: { ...process.env, HARNESSD_SERVICES: 'search,unknown,monitor,usage', HARNESSD_SERVICE_INITIAL_BACKOFF_MS: '10' },
       exit: (code) => exits.push(code), onSignal: (signal, listener) => signals.set(signal, listener),
@@ -591,7 +598,7 @@ describe('runMaster', { timeout: 60_000 }, () => {
     const log = vi.spyOn(console, 'log').mockImplementation((line: string) => { lines.push(line) })
     try {
       runMaster({
-        nodePath: process.execPath, execArgv: [], scriptPath: script, pidFile, updater: true,
+        nodePath: process.execPath, execArgv: [], scriptPath: script, ...pidFileAt(pidFile), updater: true,
         restoreUpdate: () => {}, confirmUpdate: () => {},
         env: { ...process.env, HARNESSD_SERVICES: 'none', HARNESSD_UPDATE_PROBATION_MS: '50' },
         exit: (code) => exits.push(code), onSignal: (signal, listener) => signals.set(signal, listener),
@@ -633,7 +640,7 @@ describe('runMaster', { timeout: 60_000 }, () => {
     const log = vi.spyOn(console, 'log').mockImplementation((line: string) => { lines.push(line) })
     try {
       runMaster({
-        nodePath: process.execPath, execArgv: [], scriptPath: script, pidFile, updater: true,
+        nodePath: process.execPath, execArgv: [], scriptPath: script, ...pidFileAt(pidFile), updater: true,
         restoreUpdate: () => {}, confirmUpdate: () => {},
         env: { ...process.env, HARNESSD_SERVICES: 'search' },
         exit: (code) => exits.push(code), onSignal: (signal, listener) => signals.set(signal, listener),
@@ -675,7 +682,7 @@ describe('runMaster', { timeout: 60_000 }, () => {
     const signals = new Map<string, () => void>()
     try {
       runMaster({
-        nodePath: process.execPath, execArgv: [], scriptPath: cli, serviceScriptPath: lean, pidFile,
+        nodePath: process.execPath, execArgv: [], scriptPath: cli, serviceScriptPath: lean, ...pidFileAt(pidFile),
         restoreUpdate: () => {}, confirmUpdate: () => {},
         env: { ...process.env, HARNESSD_SERVICES: 'search' },
         exit: (code) => exits.push(code), onSignal: (signal, listener) => signals.set(signal, listener),
@@ -710,7 +717,7 @@ describe('runMaster', { timeout: 60_000 }, () => {
     const signals = new Map<string, () => void>()
     try {
       const supervisor = runMaster({
-        nodePath: process.execPath, execArgv: [], scriptPath: cli, serviceScriptPath: lean, pidFile,
+        nodePath: process.execPath, execArgv: [], scriptPath: cli, serviceScriptPath: lean, ...pidFileAt(pidFile),
         restoreUpdate: () => {}, confirmUpdate: () => {},
         env: { ...process.env, HARNESSD_SERVICES: 'none', HARNESSD_INITIAL_BACKOFF_MS: '0' },
         exit: (code) => exits.push(code), onSignal: (signal, listener) => signals.set(signal, listener),
@@ -765,7 +772,7 @@ describe('runMaster', { timeout: 60_000 }, () => {
     }
     try {
       runMaster({
-        nodePath: process.execPath, execArgv: [], scriptPath: cli, serviceScriptPath: lean, leanFingerprint: folderFingerprint(leanDir)!, pidFile,
+        nodePath: process.execPath, execArgv: [], scriptPath: cli, serviceScriptPath: lean, leanFingerprint: folderFingerprint(leanDir)!, ...pidFileAt(pidFile),
         restoreUpdate: () => {}, confirmUpdate: () => {},
         env: { ...process.env, HARNESSD_SERVICES: 'search', HARNESSD_SERVICE_INITIAL_BACKOFF_MS: '0', HARNESSD_SERVICE_MAX_BACKOFF_MS: '0', HARNESSD_SERVICE_PARK_CRASHES: '1000' },
         exit: (code) => exits.push(code), onSignal: (signal, listener) => signals.set(signal, listener),
@@ -796,7 +803,7 @@ describe('runMaster', { timeout: 60_000 }, () => {
     writeFileSync(core, `process.send({ type: 'harnessd:bound', protocol: 1, port: 1 }); setTimeout(() => process.exit(0), 100)`)
     const exits: number[] = []
     runMaster({
-      nodePath: process.execPath, execArgv: [], scriptPath: core, pidFile,
+      nodePath: process.execPath, execArgv: [], scriptPath: core, ...pidFileAt(pidFile),
       restoreUpdate: () => {}, confirmUpdate: () => {},
       exit: (code) => exits.push(code), onSignal: () => {},
     })
@@ -817,7 +824,7 @@ describe('runMaster', { timeout: 60_000 }, () => {
     `)
     const exits: number[] = []
     runMaster({
-      nodePath: process.execPath, execArgv: [], scriptPath: core, pidFile,
+      nodePath: process.execPath, execArgv: [], scriptPath: core, ...pidFileAt(pidFile),
       // Found by QA on a quiet machine: each default service ran this same writer. A service stopped
       // between truncate and write left an empty pid file, so this cleanup check raced its fixture.
       env: { ...process.env, HARNESSD_SERVICES: 'none' },
@@ -849,7 +856,7 @@ describe('runMaster', { timeout: 60_000 }, () => {
     const signals = new Map<string, () => void>()
     const exits: number[] = []
     const supervisor = runMaster({
-      nodePath: process.execPath, execArgv: [], scriptPath: own, pidFile: join(dir, 'adapter.pid'), restoreUpdate: () => {}, confirmUpdate: () => {},
+      nodePath: process.execPath, execArgv: [], scriptPath: own, ...pidFileAt(join(dir, 'adapter.pid')), restoreUpdate: () => {}, confirmUpdate: () => {},
       env: { ...process.env, HARNESSD_SERVICES: 'none', HARNESSD_INITIAL_BACKOFF_MS: '10' },
       currentScript: () => current,
       exit: (code) => exits.push(code), onSignal: (signal, listener) => signals.set(signal, listener),
@@ -892,7 +899,7 @@ describe('runMaster', { timeout: 60_000 }, () => {
     const log = vi.spyOn(console, 'log').mockImplementation((line: string) => lines.push(line))
     const supervisor = runMaster({
       nodePath: process.execPath, execArgv: [], scriptPath: own, currentScript: () => selected,
-      pidFile: join(dir, 'adapter.pid'), reexecMarkerFile: join(dir, 'harnessd-reexec.json'), execve: null,
+      ...pidFileAt(join(dir, 'adapter.pid')), reexecMarkerFile: join(dir, 'harnessd-reexec.json'), execve: null,
       env: { ...process.env, HARNESSD_SERVICES: 'search', HARNESSD_ENGINE_OTHERS: '999:99' },
       restoreUpdate: () => {}, confirmUpdate: () => {}, stopByMessage: true,
       exit: (code) => exits.push(code), onSignal: (signal, listener) => signals.set(signal, listener),
@@ -941,7 +948,7 @@ describe('runMaster', { timeout: 60_000 }, () => {
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})
     try {
       runMaster({
-        nodePath: process.execPath, execArgv: [], scriptPath: own, serviceScriptPath: lean, pidFile,
+        nodePath: process.execPath, execArgv: [], scriptPath: own, serviceScriptPath: lean, ...pidFileAt(pidFile),
         restoreUpdate: () => {}, confirmUpdate: () => {},
         env: { ...process.env, HARNESSD_SERVICES: 'search' }, currentScript: () => current,
         exit: (code) => exits.push(code), onSignal: (signal, listener) => signals.set(signal, listener),
@@ -981,7 +988,7 @@ describe('runMaster', { timeout: 60_000 }, () => {
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})
     try {
       runMaster({
-        nodePath: process.execPath, execArgv: [], scriptPath: core, pidFile: join(dir, 'adapter.pid'), restoreUpdate: () => {}, confirmUpdate: () => {},
+        nodePath: process.execPath, execArgv: [], scriptPath: core, ...pidFileAt(join(dir, 'adapter.pid')), restoreUpdate: () => {}, confirmUpdate: () => {},
         env: { ...process.env, HARNESSD_SERVICES: 'search' }, stopByMessage: true, output: fd,
         exit: (code) => exits.push(code), onSignal: () => {},
       })
@@ -1028,7 +1035,7 @@ describe('runMaster', { timeout: 60_000 }, () => {
       const intervals = vi.spyOn(globalThis, 'setInterval')
       try {
         runMaster({
-          nodePath: process.execPath, execArgv: [], scriptPath: core, pidFile, reexecMarkerFile: marker(), logFile: join(dir, 'daemon.log'),
+          nodePath: process.execPath, execArgv: [], scriptPath: core, ...pidFileAt(pidFile), reexecMarkerFile: marker(), logFile: join(dir, 'daemon.log'),
           restoreUpdate: () => { updates.push('restore') }, confirmUpdate: () => {},
           env: { ...process.env, HARNESSD_SERVICES: 'none', [RESUME_ENV]: encodeResume(handedTo('tok')) },
           exit: (code) => exits.push(code), onSignal: (signal, listener) => signals.set(signal, listener),
@@ -1057,7 +1064,7 @@ describe('runMaster', { timeout: 60_000 }, () => {
       const signals = new Map<string, () => void>()
       const exits: number[] = []
       const supervisor = runMaster({
-        nodePath: process.execPath, execArgv: [], scriptPath: core, pidFile, reexecMarkerFile: marker(), restoreUpdate: () => {}, confirmUpdate: () => {},
+        nodePath: process.execPath, execArgv: [], scriptPath: core, ...pidFileAt(pidFile), reexecMarkerFile: marker(), restoreUpdate: () => {}, confirmUpdate: () => {},
         env: { ...process.env, HARNESSD_SERVICES: 'none', [RESUME_ENV]: encodeResume(handedTo('tok')) },
         exit: (code) => exits.push(code), onSignal: (signal, listener) => signals.set(signal, listener),
       })
@@ -1095,7 +1102,7 @@ describe('runMaster', { timeout: 60_000 }, () => {
           const exits: number[] = []
           const updates: string[] = []
           runMaster({
-            nodePath: process.execPath, execArgv: [], scriptPath: core, pidFile: file, reexecMarkerFile: marker(), logFile: join(dir, 'daemon.log'),
+            nodePath: process.execPath, execArgv: [], scriptPath: core, ...pidFileAt(file), reexecMarkerFile: marker(), logFile: join(dir, 'daemon.log'),
             restoreUpdate: () => { updates.push('restore') }, confirmUpdate: () => {},
             env: { ...process.env, HARNESSD_SERVICES: 'none', [RESUME_ENV]: encodeResume(handedTo(token, 'pending')) },
             exit: (code) => exits.push(code), onSignal: () => {},
@@ -1110,7 +1117,7 @@ describe('runMaster', { timeout: 60_000 }, () => {
         // Handed over to, with no marker file to take over at all.
         const alone: number[] = []
         runMaster({
-          nodePath: process.execPath, execArgv: [], scriptPath: core, pidFile, restoreUpdate: () => {}, confirmUpdate: () => {},
+          nodePath: process.execPath, execArgv: [], scriptPath: core, ...pidFileAt(pidFile), restoreUpdate: () => {}, confirmUpdate: () => {},
           env: { ...process.env, HARNESSD_SERVICES: 'none', [RESUME_ENV]: encodeResume(handedTo('f')) },
           exit: (code) => alone.push(code), onSignal: () => {},
         })
@@ -1120,7 +1127,7 @@ describe('runMaster', { timeout: 60_000 }, () => {
         writeMarker(marker(), { pid: 999999, from: 'a', to: fingerprint(core)!, at: now, handover: 'g' })
         const late: number[] = []
         runMaster({
-          nodePath: process.execPath, execArgv: [], scriptPath: core, pidFile: marker(), reexecMarkerFile: marker(), restoreUpdate: () => {}, confirmUpdate: () => {},
+          nodePath: process.execPath, execArgv: [], scriptPath: core, ...pidFileAt(marker()), reexecMarkerFile: marker(), restoreUpdate: () => {}, confirmUpdate: () => {},
           env: { ...process.env, HARNESSD_SERVICES: 'none', [RESUME_ENV]: encodeResume(handedTo('g')) },
           exit: (code) => late.push(code), onSignal: () => {},
         })
@@ -1133,7 +1140,7 @@ describe('runMaster', { timeout: 60_000 }, () => {
         writeMarker(marker(), { pid: process.ppid, from: 'a', to: fingerprint(core)!, at: now, handover: 'h' })
         const back: number[] = []
         runMaster({
-          nodePath: process.execPath, execArgv: [], scriptPath: core, pidFile: marker(), reexecMarkerFile: marker(), restoreUpdate: () => {}, confirmUpdate: () => {},
+          nodePath: process.execPath, execArgv: [], scriptPath: core, ...pidFileAt(marker()), reexecMarkerFile: marker(), restoreUpdate: () => {}, confirmUpdate: () => {},
           env: { ...process.env, HARNESSD_SERVICES: 'none', [RESUME_ENV]: encodeResume(handedTo('h', null, process.ppid)) },
           exit: (code) => back.push(code), onSignal: () => {},
         })
@@ -1144,6 +1151,66 @@ describe('runMaster', { timeout: 60_000 }, () => {
       await new Promise((resolve) => setTimeout(resolve, 300))
       expect(existsSync(ran)).toBe(false)
       expect(existsSync(pidFile)).toBe(false)
+    })
+
+    /** A master whose core binds, with the pid file's writer and reader [given], stopped once its core runs. */
+    const serveAndStop = async (given: { writePidFile(pid: number): void; readPidFile(): number | null }) => {
+      const signals = new Map<string, () => void>()
+      const exits: number[] = []
+      const supervisor = runMaster({
+        nodePath: process.execPath, execArgv: [], scriptPath: coreScript(), pidFile: join(dir, 'adapter.pid'), ...given,
+        restoreUpdate: () => {}, confirmUpdate: () => {},
+        env: { ...process.env, HARNESSD_SERVICES: 'none' },
+        exit: (code) => exits.push(code), onSignal: (signal, listener) => signals.set(signal, listener),
+      })
+      await until('its core to run', () => supervisor.status().state === 'running')
+      signals.get('SIGTERM')!()
+      await until('the master to finish', () => exits.length > 0)
+      expect(exits).toEqual([0])
+    }
+    /** Handed over to under [token] by a master that still runs and settles on the pid file naming it as this one
+     *  writes it (its marker goes): refused once written, this one leaves. What its writer was given, in order. */
+    const refusedOnceWritten = (token: string, readPidFile: (written: number[]) => number | null): number[] => {
+      const core = coreScript()
+      writeMarker(marker(), { pid: process.ppid, from: 'a', to: fingerprint(core)!, at: Date.now(), handover: token })
+      const written: number[] = []
+      const exits: number[] = []
+      runMaster({
+        nodePath: process.execPath, execArgv: [], scriptPath: core, pidFile: join(dir, 'adapter.pid'), reexecMarkerFile: marker(),
+        writePidFile: (pid) => { written.push(pid); rmSync(marker(), { force: true }) }, readPidFile: () => readPidFile(written),
+        restoreUpdate: () => {}, confirmUpdate: () => {},
+        env: { ...process.env, HARNESSD_SERVICES: 'none', [RESUME_ENV]: encodeResume(handedTo(token, null, process.ppid)) },
+        exit: (code) => exits.push(code), onSignal: () => {},
+      })
+      expect(exits).toEqual([0])
+      return written
+    }
+
+    it('the master claims the pid file through the writer it is given', async () => {
+      const lines: string[] = []
+      const log = vi.spyOn(console, 'log').mockImplementation((line: string) => { lines.push(line) })
+      try {
+        // As its core binds, its own pid. A writer that throws is said, and the master carries on without the file.
+        const claimed: number[] = []
+        await serveAndStop({ writePidFile: (pid) => { claimed.push(pid); throw new Error('no room') }, readPidFile: () => null })
+        expect(claimed).toEqual([process.pid])
+        expect(lines.some((line) => line.endsWith('[harnessd] could not write the pid file: Error'))).toBe(true)
+        // Refused once written while the master that handed over runs: the file is that master's again.
+        expect(refusedOnceWritten('w', (written) => written.at(-1) ?? null)).toEqual([process.pid, process.ppid])
+      } finally { log.mockRestore() }
+    })
+
+    it('a pid file it cannot read is neither rewritten nor removed', async () => {
+      const pidFile = join(dir, 'adapter.pid')
+      const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+      try {
+        // The entry's reader could not read it (a folder, no permission, a write in flight): not this master's as far
+        // as it can tell, so left as it leaves...
+        await serveAndStop({ writePidFile: (pid) => { writeFileSync(pidFile, `${pid}\n`) }, readPidFile: () => null })
+        expect(readFileSync(pidFile, 'utf8')).toBe(`${process.pid}\n`)
+        // ...and not handed back to the master that handed over.
+        expect(refusedOnceWritten('u', () => null)).toEqual([process.pid])
+      } finally { log.mockRestore() }
     })
 
     /** A master on [own] whose current build is another, which hands over through a launcher [launch] plays. */
@@ -1159,7 +1226,7 @@ describe('runMaster', { timeout: 60_000 }, () => {
       const signals = new Map<string, () => void>()
       const env = { ...process.env, HARNESSD_SERVICES: 'none' }
       runMaster({
-        nodePath: process.execPath, execArgv: [], scriptPath: own, pidFile, reexecMarkerFile: marker(), restoreUpdate: () => {}, confirmUpdate: () => {},
+        nodePath: process.execPath, execArgv: [], scriptPath: own, ...pidFileAt(pidFile), reexecMarkerFile: marker(), restoreUpdate: () => {}, confirmUpdate: () => {},
         env, currentScript: () => next, execve: null,
         handOver: {
           lock: async () => () => {},
@@ -1220,7 +1287,7 @@ describe('runMaster', { timeout: 60_000 }, () => {
       import { runMaster } from ${JSON.stringify(join(__dirname, 'master.ts'))}
       runMaster({
         nodePath: '/nonexistent/node', execArgv: [], scriptPath: '/nonexistent/core.js',
-        pidFile: ${JSON.stringify(join(dir, 'adapter.pid'))}, restoreUpdate: () => {}, confirmUpdate: () => {},
+        pidFile: ${JSON.stringify(join(dir, 'adapter.pid'))}, writePidFile: () => {}, readPidFile: () => null, restoreUpdate: () => {}, confirmUpdate: () => {},
         env: { ...process.env, HARNESSD_SERVICES: 'none', HARNESSD_INITIAL_BACKOFF_MS: '20' },
       })
       console.log('READY')
@@ -1261,7 +1328,7 @@ describe('runMaster', { timeout: 60_000 }, () => {
       const calls: string[] = []
       const signals = new Map<string, () => void>()
       const supervisor = runMaster({
-        nodePath: process.execPath, execArgv: [], scriptPath, pidFile: join(dir, 'adapter.pid'), statusFile: join(dir, 'harnessd-status.json'),
+        nodePath: process.execPath, execArgv: [], scriptPath, ...pidFileAt(join(dir, 'adapter.pid')), statusFile: join(dir, 'harnessd-status.json'),
         restoreUpdate: () => { calls.push('restore') }, confirmUpdate: () => calls.push('confirm'),
         env: { ...process.env, HARNESSD_SERVICES: 'none', HARNESSD_INITIAL_BACKOFF_MS: '10', HARNESSD_UPDATE_PROBATION_MS: '100' },
         exit: (code) => exits.push(code), onSignal: (signal, listener) => signals.set(signal, listener),

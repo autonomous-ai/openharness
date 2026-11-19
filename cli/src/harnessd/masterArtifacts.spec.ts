@@ -66,6 +66,8 @@ describe('owned packaged child execution', { timeout: 15_000 }, () => {
     vi.spyOn(console, 'log').mockImplementation(line => { lines.push(String(line)) })
     const supervisor = runMaster({
       nodePath: process.execPath, execArgv: [], scriptPath: selected, pidFile: join(directory, 'pid'),
+      writePidFile: pid => writeFileSync(join(directory, 'pid'), String(pid)),
+      readPidFile: () => { try { return Number(readFileSync(join(directory, 'pid'), 'utf8')) || null } catch { return null } },
       env: {
         ...Object.fromEntries(['SystemRoot', 'WINDIR'].flatMap(name => process.env[name] ? [[name, process.env[name]!]] : [])),
         HOME: join(directory, 'home'), USERPROFILE: join(directory, 'home'), TEMP: join(directory, 'tmp'), TMP: join(directory, 'tmp'),

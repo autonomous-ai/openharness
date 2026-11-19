@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdtempSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import * as filesystem from 'node:fs/promises'
 import * as privateState from '../lib/secureState.js'
 import { OrchestratorService, hasSavedProjects, type OrchestratorDependencies } from './service.js'
@@ -11,6 +11,17 @@ import { orchestratorRequest } from './wire.js'
 vi.mock('node:fs/promises', async importOriginal => {
   const actual = await importOriginal<typeof import('node:fs/promises')>()
   return { ...actual, rm: vi.fn(actual.rm) }
+})
+
+// Pass-through, each call that could write a file recorded: what a save does to its target.
+const fsCalls = vi.hoisted(() => [] as Array<{ call: string; path: unknown; from?: unknown }>)
+vi.mock('node:fs', async original => {
+  const actual = await original<typeof import('node:fs')>()
+  return { ...actual,
+    openSync: (...args: Parameters<typeof actual.openSync>) => { fsCalls.push({ call: 'openSync', path: args[0] }); return actual.openSync(...args) },
+    writeFileSync: (...args: Parameters<typeof actual.writeFileSync>) => { fsCalls.push({ call: 'writeFileSync', path: args[0] }); return actual.writeFileSync(...args) },
+    renameSync: (...args: Parameters<typeof actual.renameSync>) => { fsCalls.push({ call: 'renameSync', path: args[1], from: args[0] }); return actual.renameSync(...args) },
+  }
 })
 
 const id = '0123456789abcdef0123456789abcdef'
@@ -195,6 +206,16 @@ describe('durable orchestrator lifecycle', () => {
     expect(send).toHaveBeenCalledTimes(1)
     service.delivery({ deliveryId: messageId, sessionId: 'agent-1', state: 'started' })
     expect(service.snapshot(id).messages).toEqual(expect.arrayContaining([expect.objectContaining({ id: messageId, delivery: 'started' })]))
+  })
+  it('the save goes through a temporary file renamed onto the target', async () => {
+    await start(); await active()
+    const file = join(deps.stateDir, `${id}.json`)
+    fsCalls.length = 0
+    service.plan(id, [task('a')]); await running('a')
+    const onto = fsCalls.filter(c => c.path === file)
+    expect(onto.length).toBeGreaterThan(0)
+    expect(onto.every(c => c.call === 'renameSync' && dirname(String(c.from)) === deps.stateDir)).toBe(true)
+    expect(JSON.parse(readFileSync(file, 'utf8')).tasks[0].id).toBe('a')
   })
   it('recovers a result notification saved before dispatch without rerunning work', async () => {
     await start(); await active(); service.plan(id, [task('a')]); await running('a')

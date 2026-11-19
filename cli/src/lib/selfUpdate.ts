@@ -21,6 +21,7 @@ import { env } from '../config/env.js'
 import { SpawnLockBusyError, describeSpawnLockOwner } from './daemonSpawnLock.js'
 import { errorKind } from './log.js'
 import { MINIMUM_NODE_MAJOR, managedNodePath, nodeMajorOf } from './nodeRuntime.js'
+import { atomicWriteFile, jsonArray, readState, requireState } from './secureState.js'
 import { failedNode, recordNodeMigration, type NodeMigration } from './nodeMigration.js'
 import type { NodeMigrationReason } from './runtimeInstall.js'
 import { patientDeadline } from './patientExec.js'
@@ -54,20 +55,9 @@ function readJson(file: string): unknown {
   try { return JSON.parse(readFileSync(file, 'utf8')) } catch { return null }
 }
 
-/** Written whole and renamed into place; a write cut short (a full disk) leaves nothing behind. */
+/** Written whole; a write cut short (a full disk) leaves nothing behind. */
 function writeJson(file: string, value: unknown): void {
-  writeWhole(file, `${JSON.stringify(value)}\n`)
-}
-
-function writeWhole(file: string, bytes: string | Buffer, mode?: number): void {
-  const tmp = `${file}.tmp`
-  try {
-    writeFileSync(tmp, bytes, mode === undefined ? undefined : { mode })
-    renameSync(tmp, file)
-  } catch (error) {
-    try { rmSync(tmp, { force: true }) } catch { /* not a file this call wrote */ }
-    throw error
-  }
+  atomicWriteFile(file, `${JSON.stringify(value)}\n`, 'cache')
 }
 
 const sha256 = (bytes: Buffer): string => createHash('sha256').update(bytes).digest('hex')
@@ -115,9 +105,17 @@ export function unjudgedUpdate(dir: string, fingerprint: string | null): string 
 
 /** The versions this machine rolled back, oldest first. */
 export function rejectedVersions(dir: string): string[] {
-  const rejected = readJson(join(dir, REJECTED))
-  return Array.isArray(rejected) ? rejected.filter((version): version is string => typeof version === 'string') : []
+  const rejected = readState(join(dir, REJECTED), 'cache', jsonArray)
+  return versionsIn(rejected.state === 'ok' ? rejected.value : [])
 }
+
+/** The list a new rejection is added to. One that cannot be read now throws (StateFileUnreadable): read as none, the
+ *  write would forget every version rolled back before, and the updater would offer them again. */
+function rejectedToChange(dir: string): string[] {
+  return versionsIn(requireState(join(dir, REJECTED), jsonArray, 'cache') ?? [])
+}
+
+const versionsIn = (list: unknown[]): string[] => list.filter((version): version is string => typeof version === 'string')
 
 /** Strict semver-greater on the `X.Y.Z` core (ignores pre-release/build). Unparseable → false, so a
  *  malformed manifest or the `0.0.0-dev` dev sentinel never triggers a downgrade/oscillation.
@@ -327,8 +325,9 @@ export async function runCanary(
   try {
     try {
       mkdirSync(tmpDir, { recursive: true })
+      // not a state file: the canary's own folder, run once and removed
       writeFileSync(join(tmpDir, PACKAGE), RUNTIME_PACKAGE)
-      writeFileSync(tmpCli, cliBuf)
+      writeFileSync(tmpCli, cliBuf) // not a state file: the canary's own folder
     } catch (error) {
       return { ok: false, problem: 'unwritable', detail: error instanceof Error ? error.message : String(error) }
     }
@@ -406,6 +405,7 @@ export function stage(
   const written: string[] = []
   const write = (file: string, bytes: string | Buffer): void => {
     written.push(file)
+    // not a state file: the bundle staged beside the old one, checked and swapped in as a whole
     writeFileSync(file, bytes)
   }
   const unjudged = (): boolean => {
@@ -476,7 +476,7 @@ function stageVersion(dir: string, cliBuf: Buffer, notifyBuf: Buffer, version: s
   } catch (error) {
     try {
       if (before === null) rmSync(note, { force: true })
-      else writeWhole(note, before)
+      else atomicWriteFile(note, before, 'cache')
     } catch { /* the pointer did not move: the build in use is unchanged either way */ }
     throw error
   }
@@ -513,7 +513,7 @@ export function restore(dir: string, platform: NodeJS.Platform = process.platfor
   }
   const failed = pendingVersion(dir)
   try {
-    if (failed) writeJson(join(dir, REJECTED), [...rejectedVersions(dir).filter((version) => version !== failed), failed].slice(-REJECTED_KEPT))
+    if (failed) writeJson(join(dir, REJECTED), [...rejectedToChange(dir).filter((version) => version !== failed), failed].slice(-REJECTED_KEPT))
     // A pointer that did not move back leaves the failed build in use: its note stays, so the next master to start
     // judges it again (`unjudgedUpdate`) and rolls it back once more.
     if (movedBack) rmSync(join(dir, PENDING), { force: true })
@@ -522,9 +522,9 @@ export function restore(dir: string, platform: NodeJS.Platform = process.platfor
 }
 
 /** `current-node` on [node], as runtimeInstall writes it: the path and the platform's line end, readable by this
- *  account alone, whole or not at all. Throws when it cannot be written. */
+ *  account alone, whole or not at all, and flushed. Throws when it cannot be written. */
 function nameNode(node: string, platform: NodeJS.Platform): void {
-  writeWhole(join(env.ADAPTER_RUNTIME_DIR, 'current-node'), `${node}${platform === 'win32' ? '\r\n' : '\n'}`, 0o600)
+  atomicWriteFile(join(env.ADAPTER_RUNTIME_DIR, 'current-node'), `${node}${platform === 'win32' ? '\r\n' : '\n'}`, 'cache', { durable: true })
 }
 
 /**
@@ -545,7 +545,8 @@ export function putNodeBack(dir: string, previous: string | null, reason: NodeMi
     console.error(`[harnessd] could not put current-node back on the Node before (${errorKind(error)}) — the daemon stays on the Node it names`)
     return null
   }
-  recordNodeMigration(dir, reason, reason === 'cannot-switch' ? failedNode(dir) : moved)
+  // 'cannot-switch' keeps the Node recorded before (left out, recordNodeMigration reads it).
+  recordNodeMigration(dir, reason, reason === 'cannot-switch' ? undefined : moved)
   return previous
 }
 
@@ -573,7 +574,7 @@ export function settleRolledBack(dir: string, platform: NodeJS.Platform = proces
   const pending = readPending(dir)
   if (!pending?.sha256 || pending.sha256 === liveSha256(dir, platform)) return null
   try {
-    const listed = rejectedVersions(dir)
+    const listed = rejectedToChange(dir)
     if (!listed.includes(pending.version)) writeJson(join(dir, REJECTED), [...listed, pending.version].slice(-REJECTED_KEPT))
     rmSync(join(dir, PENDING), { force: true })
   } catch { /* still no room: the note stays, and still names it */ }
@@ -587,7 +588,9 @@ export function confirm(dir: string): void {
   }
   const kept = pendingVersion(dir)
   try {
-    if (kept && rejectedVersions(dir).includes(kept)) writeJson(join(dir, REJECTED), rejectedVersions(dir).filter((version) => version !== kept))
+    // Read once: a second read that failed would be written back as no version rolled back at all.
+    const listed = kept ? rejectedVersions(dir) : []
+    if (kept && listed.includes(kept)) writeJson(join(dir, REJECTED), listed.filter((version) => version !== kept))
     rmSync(join(dir, PENDING), { force: true })
   } catch { /* the new build runs either way */ }
 }

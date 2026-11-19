@@ -4,8 +4,9 @@
  * pid (lib/windows/pipeAuth.ts). Both are new on each start, so a client cannot derive them as it derives a Unix
  * socket's path. Written once the core is bound.
  */
-import { mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { atomicWriteFile } from './secureState.js'
 import { isPipePath } from './windows/pipeAuth.js'
 
 export interface DaemonRecord { port: number; pipe: string | null; pid: number | null }
@@ -58,12 +59,5 @@ export function configuredPortOf(dataDir: string, port: number, platform: NodeJS
 /** [pipe]: on Windows, the daemon's pipe and the core's pid, which a client cannot derive. */
 export function writeDaemonRecord(dataDir: string, configuredPort: number, port: number, pipe?: DaemonPipeRecord): void {
   mkdirSync(dataDir, { recursive: true, mode: 0o700 })
-  const target = daemonRecordPath(dataDir, configuredPort)
-  const temporary = `${target}.${process.pid}.tmp`
-  try {
-    writeFileSync(temporary, JSON.stringify(pipe ? { port, pipe: pipe.pipe, pid: pipe.pid } : { port }) + '\n', { mode: 0o600 })
-    renameSync(temporary, target)
-  } finally {
-    rmSync(temporary, { force: true })
-  }
+  atomicWriteFile(daemonRecordPath(dataDir, configuredPort), JSON.stringify(pipe ? { port, pipe: pipe.pipe, pid: pipe.pid } : { port }) + '\n', 'cache')
 }

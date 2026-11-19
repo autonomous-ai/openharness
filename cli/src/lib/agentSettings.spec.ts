@@ -1,9 +1,20 @@
 import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { AGENT_SETTING_EXPERIMENTS, AGENT_SETTING_NAMES, agentSettingsFromAnswer, agentSettingsPath, ownsAgentSettings, readAgentSettings, saveAgentSettings } from './agentSettings.js'
 import { clearAuthSession, writeAuthSession, type AuthSession } from './authSession.js'
+
+// Pass-through, recording what reaches each file: opened, written, or renamed onto.
+const disk = vi.hoisted(() => ({ events: [] as string[] }))
+vi.mock('node:fs', async original => {
+  const actual = await original<typeof import('node:fs')>()
+  return { ...actual,
+    openSync: (...args: Parameters<typeof actual.openSync>) => { disk.events.push(`open ${String(args[0])}`); return actual.openSync(...args) },
+    writeFileSync: (...args: Parameters<typeof actual.writeFileSync>) => { disk.events.push(`write ${String(args[0])}`); return actual.writeFileSync(...args) },
+    renameSync: (...args: Parameters<typeof actual.renameSync>) => { disk.events.push(`rename ${String(args[1])}`); return actual.renameSync(...args) },
+  }
+})
 
 let dir: string
 beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'agent-settings-')) })
@@ -69,5 +80,21 @@ describe('what the person lets agents do', () => {
       answer({ features: {} }), answer({ accountId: '', features: {} }), answer({ accountId: 'acct' }), answer({ accountId: 'acct', features: 'on' })]) {
       expect(agentSettingsFromAnswer(refused)).toBeNull()
     }
+  })
+})
+
+describe('agent-settings.json on disk', () => {
+  it('the save goes through a temporary file renamed onto the target', () => {
+    const file = agentSettingsPath(dir)
+    disk.events = []
+    saveAgentSettings(dir, owner, OFF)
+    expect(disk.events.filter((event) => event.endsWith(` ${file}`))).toEqual([`rename ${file}`])
+  })
+
+  it('a file at the old temporary name is left alone', () => {
+    const planted = `${agentSettingsPath(dir)}.${process.pid}.tmp`
+    writeFileSync(planted, 'planted')
+    saveAgentSettings(dir, owner, OFF)
+    expect(readFileSync(planted, 'utf8')).toBe('planted')
   })
 })

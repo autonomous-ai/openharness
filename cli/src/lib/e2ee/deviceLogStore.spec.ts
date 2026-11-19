@@ -1,11 +1,41 @@
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'fs'
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { afterEach, describe, expect, it, vi } from 'vitest'
-import { DEVLOG_ARCHIVED, DEVLOG_DEPARTED, DeviceLogStore, type DevLogFile } from './deviceLogStore.js'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { env } from '../../config/env.js'
+import { StateFileUnreadable } from '../secureState.js'
+import { DEVLOG_ARCHIVED, DEVLOG_DEPARTED, DeviceLogStore, deviceLogFiles, type DevLogFile } from './deviceLogStore.js'
+
+// Pass-through, but for a rename a test refuses: what each descriptor is, and every flush and rename in order.
+const fs = vi.hoisted(() => ({ refuseRename: undefined as string | undefined, paths: new Map<number, string>(), events: [] as string[][] }))
+vi.mock('node:fs', async (original) => {
+  const actual = await original<typeof import('node:fs')>()
+  return { ...actual,
+    openSync: (...args: Parameters<typeof actual.openSync>) => {
+      const fd = actual.openSync(...args)
+      fs.paths.set(fd, String(args[0]))
+      return fd
+    },
+    fsyncSync: (fd: number) => {
+      fs.events.push(['fsync', fs.paths.get(fd) ?? ''])
+      return actual.fsyncSync(fd)
+    },
+    renameSync: (...args: Parameters<typeof actual.renameSync>) => {
+      if (String(args[1]) === fs.refuseRename) throw Object.assign(new Error('EIO: fixture'), { code: 'EIO' })
+      fs.events.push(['rename', String(args[0]), String(args[1])])
+      return actual.renameSync(...args)
+    },
+  }
+})
 
 const dirs: string[] = []
-afterEach(() => { for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true }) })
+afterEach(() => {
+  vi.restoreAllMocks()
+  fs.refuseRename = undefined
+  fs.paths.clear()
+  fs.events.length = 0
+  for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true })
+})
 const file = (): string => {
   const dir = mkdtempSync(join(tmpdir(), 'harness-devlog-store-'))
   dirs.push(dir)
@@ -82,14 +112,31 @@ describe('DeviceLogStore — writes and the archive of other accounts', () => {
     const path = file()
     const store = new DeviceLogStore(path)
     store.write(of('a', { pending: ['p'] }))
-    const now = vi.spyOn(Date, 'now').mockReturnValue(42)
-    try {
-      // The temp file cannot be created: the write fails before anything touches devlog.json.
-      mkdirSync(`${path}.${process.pid}.42.tmp`)
-      expect(() => store.write(of('a', { pending: [] }))).toThrow()
-    } finally { now.mockRestore() }
+    // The rename into place fails: the write fails before anything touches devlog.json.
+    fs.refuseRename = path
+    expect(() => store.write(of('a', { pending: [] }))).toThrow()
+    fs.refuseRename = undefined
     expect(store.read().pending).toEqual(['p'])
-    expect(readdirSync(join(path, '..')).filter((n) => n.endsWith('.tmp'))).toHaveLength(1)
+    expect(readdirSync(join(path, '..'))).toEqual(['devlog.json'])
+  })
+
+  it('the temporary file is flushed before it is renamed', () => {
+    const path = file()
+    new DeviceLogStore(path).write(of('a'))
+    const into = fs.events.findIndex(([op, , to]) => op === 'rename' && to === path)
+    expect(into).toBeGreaterThanOrEqual(0)
+    expect(fs.events.slice(0, into)).toContainEqual(['fsync', fs.events[into][1]])
+  })
+
+  it('two writes in one millisecond do not share a temporary name', () => {
+    const path = file()
+    const store = new DeviceLogStore(path)
+    vi.spyOn(Date, 'now').mockReturnValue(42)
+    store.write(of('a'))
+    store.write(of('b'))
+    const temps = fs.events.filter(([op, , to]) => op === 'rename' && to === path).map(([, from]) => from)
+    expect(temps).toHaveLength(2)
+    expect(new Set(temps).size).toBe(2)
   })
 
   it('keeps a left account\'s file to restore once, and the newest few only', () => {
@@ -111,12 +158,10 @@ describe('DeviceLogStore — writes and the archive of other accounts', () => {
     const store = new DeviceLogStore(path)
     store.write(of('b'))
     store.archive(of('a', { suspended: ['evil'], pending: ['evil'] }))
-    const now = vi.spyOn(Date, 'now').mockReturnValue(43)
-    try {
-      // Taking it out of the archive fails: by then it is the live file.
-      mkdirSync(`${path.replace(/\.json$/, '.archive.json')}.${process.pid}.43.tmp`)
-      expect(() => store.restore('a', (k) => ({ ...k, owner: 'u2' }))).toThrow()
-    } finally { now.mockRestore() }
+    // Taking it out of the archive fails: by then it is the live file.
+    fs.refuseRename = path.replace(/\.json$/, '.archive.json')
+    expect(() => store.restore('a', (k) => ({ ...k, owner: 'u2' }))).toThrow()
+    fs.refuseRename = undefined
     expect(store.read()).toMatchObject({ state: { acct: 'a' }, suspended: ['evil'], pending: ['evil'], owner: 'u2' })
     expect(store.archivedSuspended()).toContain('evil')
   })
@@ -162,5 +207,53 @@ describe('DeviceLogStore — writes and the archive of other accounts', () => {
     writeFileSync(path.replace(/\.json$/, '.archive.json'), JSON.stringify({ b: of('a', { suspended: ['evil'] }) }))
     expect(store.restore('b')).toBeNull()
     expect(store.archivedSuspended()).toEqual(['evil'])
+  })
+})
+
+describe('DeviceLogStore — a file that cannot be read', () => {
+  const of = (acct: string): DevLogFile => ({ state: { ...state, acct }, recent: [], frozen: null, notifiedUpTo: 1 })
+
+  // The reader's retries wait on Atomics.wait: recorded, not slept. Its one line per file is the reader's own test.
+  beforeEach(() => {
+    vi.spyOn(Atomics, 'wait').mockReturnValue('timed-out')
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+  })
+
+  it.each([['a torn log', '{"state":{"acct":"'], ['an array', '[]'], ['null', 'null']])('%s is not an empty log', (_, text) => {
+    const path = file()
+    writeFileSync(path, text)
+    const store = new DeviceLogStore(path)
+    expect(() => store.read()).toThrow(StateFileUnreadable)
+    expect(() => store.update((f) => f)).toThrow(StateFileUnreadable)
+    expect(() => store.write(of('a'))).toThrow(StateFileUnreadable)
+    // Read as the empty log, its next write would drop the freeze and the rollback protection.
+    expect(readFileSync(path, 'utf8')).toBe(text)
+  })
+
+  it('a torn archive keeps its suspensions', () => {
+    const path = file()
+    const store = new DeviceLogStore(path)
+    store.write(of('b'))
+    const archive = path.replace(/\.json$/, '.archive.json')
+    const torn = '{"a":{"state":{"acct":"a"},"suspended":["ev'
+    writeFileSync(archive, torn)
+    expect(() => store.archivedSuspended()).toThrow(StateFileUnreadable)
+    expect(() => store.archivedFile('a')).toThrow(StateFileUnreadable)
+    expect(() => store.archive(of('c'))).toThrow(StateFileUnreadable)
+    expect(() => store.restore('a')).toThrow(StateFileUnreadable)
+    expect(() => store.unsuspendArchived(['evil'])).toThrow(StateFileUnreadable)
+    expect(readFileSync(archive, 'utf8')).toBe(torn)
+    expect(store.read().state?.acct).toBe('b')
+  })
+
+  it('names both files for harness status, each read as a JSON object', () => {
+    const files = deviceLogFiles()
+    expect(files.map((f) => f.file)).toEqual([
+      join(env.ADAPTER_DATA_DIR, 'e2e', 'devlog.json'), join(env.ADAPTER_DATA_DIR, 'e2e', 'devlog.archive.json'),
+    ])
+    for (const f of files) {
+      expect(f.parse('{}')).toEqual({})
+      expect(() => f.parse('[]')).toThrow()
+    }
   })
 })

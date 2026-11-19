@@ -1,7 +1,8 @@
 /** Core owns the final non-yielding rename/admission fence; storage owns raw encoding and file writes. */
 import { closeSync, constants, fstat, fstatSync, fsync, lstatSync, open, renameSync, type Stats } from 'node:fs'
 import { dirname, join } from 'node:path'
-import { AtomicWriteUnconfirmed, RegistryPersistenceUnavailable, type RegistryWriteDeadline } from './registryPersistence.js'
+import { RegistryPersistenceUnavailable, type RegistryWriteDeadline } from './registryPersistence.js'
+import { AtomicWriteUnconfirmed } from './secureState.js'
 import { directorySyncSupported } from './secureState.js'
 import type { SessionImageSource, SessionStorage } from './sessionStorage.js'
 import { sessionCredentialReference, sessionFileIdentity, sessionImageProof, storedGridLaunch,

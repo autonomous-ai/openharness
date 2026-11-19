@@ -1,7 +1,24 @@
-import { afterAll, afterEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest'
 import type { AuthSession } from './authSession.js'
-import { mkdtemp, readFile, rm, stat, writeFile } from 'fs/promises'
+import { mkdtemp, readdir, readFile, rm, stat, writeFile } from 'fs/promises'
+import { existsSync } from 'fs'
 import { tmpdir } from 'os'
+import { StateFileUnreadable, probeState } from './secureState.js'
+
+// Pass-through unless a test sets a hook: a disk that fails mid-write, and the order of the writer's steps.
+const io = vi.hoisted(() => ({ failWrite: undefined as string | undefined, steps: undefined as string[] | undefined }))
+vi.mock('node:fs', async original => {
+  const actual = await original<typeof import('node:fs')>()
+  return { ...actual,
+    // Only a write to a descriptor: the writer's temporary file.
+    writeFileSync: (...args: Parameters<typeof actual.writeFileSync>) => {
+      if (io.failWrite && typeof args[0] === 'number') throw Object.assign(new Error(`${io.failWrite}: fixture`), { code: io.failWrite })
+      return actual.writeFileSync(...args)
+    },
+    fsyncSync: (fd: number) => { io.steps?.push('flush'); return actual.fsyncSync(fd) },
+    renameSync: (...args: Parameters<typeof actual.renameSync>) => { io.steps?.push('rename'); return actual.renameSync(...args) },
+  }
+})
 
 const authDir = await mkdtemp(`${tmpdir()}/harness-auth-session-`)
 process.env.HARNESS_AUTH_DIR = authDir
@@ -10,6 +27,7 @@ const {
   ADOPTED_SIGN_IN,
   AUTH_SESSION_FILE,
   AuthSessionError,
+  authSessionFiles,
   clearAuthSession,
   ensureSignInEpoch,
   hasAuthSession,
@@ -24,6 +42,7 @@ const {
   tokenAnswer,
   tokenOf,
   writeAuthSession,
+  writeSignIn,
 } = await import('./authSession.js')
 // The renewal, in its own file so the core's process loads none of it (lib/authRefresh.ts).
 const { AuthSessionManager } = await import('./authRefresh.js')
@@ -40,6 +59,7 @@ const baseSession = () => ({
 })
 
 afterEach(() => {
+  Object.assign(io, { failWrite: undefined, steps: undefined })
   clearAuthSession()
   vi.unstubAllGlobals()
 })
@@ -129,6 +149,104 @@ it('reads a legacy session without interpreting optional metadata or rewriting t
     computerId: saved.computerId, machineId: saved.machineId })
   expect(readAuthSession()).not.toHaveProperty('memoryOwner')
   expect(await readFile(AUTH_SESSION_FILE, 'utf8')).toBe(bytes)
+})
+
+describe('writing the session', () => {
+  it('a write that fails part way leaves the old session', async () => {
+    writeAuthSession(baseSession())
+    const before = await readFile(AUTH_SESSION_FILE, 'utf8')
+    io.failWrite = 'ENOSPC'
+
+    expect(() => writeAuthSession({ ...baseSession(), accessToken: 'next-access' })).toThrow(/ENOSPC/)
+
+    expect(await readFile(AUTH_SESSION_FILE, 'utf8')).toBe(before)
+    expect((await readdir(authDir)).filter((name) => name.endsWith('.tmp'))).toEqual([])
+  })
+
+  it('the session is flushed before it is renamed', () => {
+    io.steps = []
+    writeAuthSession(baseSession())
+    expect(io.steps.slice(0, 2)).toEqual(['flush', 'rename'])
+  })
+})
+
+// A session.json that is not a JSON object (a write cut off by a crash) is a credential nobody can read: it is signed
+// out, nothing automatic replaces it, and only a person signing in or out deletes it. Kept aside, its refresh token
+// would outlive the sign-out.
+describe('a session that cannot be read', () => {
+  const TORN = '{"version":1,"accessTok'
+  const ASIDE = `${AUTH_SESSION_FILE}.unreadable`
+  const next: AuthSession = { ...baseSession(), accessToken: 'next-access', expiresAt: 4_000_000_000_000, updatedAt: 1 }
+  let warn: MockInstance<typeof console.warn>
+  beforeEach(() => { warn = vi.spyOn(console, 'warn').mockImplementation(() => {}) })
+  afterEach(async () => {
+    await rm(AUTH_SESSION_FILE, { force: true })
+    await rm(ASIDE, { recursive: true, force: true })
+    warn.mockRestore()
+  })
+
+  it('is signed out, and only a sign-in by hand replaces it', async () => {
+    await writeFile(AUTH_SESSION_FILE, TORN, { mode: 0o600 })
+
+    expect(readAuthSession()).toBeNull()
+    expect(() => writeAuthSession(next)).toThrow(StateFileUnreadable)
+    await expect(updateAuthSession(() => next)).rejects.toThrow(StateFileUnreadable)
+
+    expect(await readFile(AUTH_SESSION_FILE, 'utf8')).toBe(TORN)
+  })
+
+  it('a sign-in by hand deletes it and writes the new one', async () => {
+    await writeFile(AUTH_SESSION_FILE, TORN, { mode: 0o600 })
+    // What `harness login` reads first: the trust line is said, and the sign-in still deletes the file.
+    expect(readAuthSession()).toBeNull()
+
+    writeSignIn(next)
+
+    expect(readAuthSession()).toEqual(next)
+    expect(existsSync(ASIDE)).toBe(false)
+    expect(warn).toHaveBeenCalledWith('[state] session.json could not be read (not valid JSON); deleted, signing in again.')
+  })
+
+  it('a sign-in over a good session replaces it and sets nothing aside', () => {
+    writeAuthSession(baseSession())
+
+    writeSignIn(next)
+
+    expect(readAuthSession()).toEqual(next)
+    expect(existsSync(ASIDE)).toBe(false)
+  })
+
+  it('clearAuthSession deletes it as it deletes a good one, keeping nothing aside', async () => {
+    await writeFile(AUTH_SESSION_FILE, TORN, { mode: 0o600 })
+    clearAuthSession()
+    expect(existsSync(AUTH_SESSION_FILE)).toBe(false)
+    expect(existsSync(ASIDE)).toBe(false)
+
+    writeAuthSession(baseSession())
+    clearAuthSession()
+    expect(existsSync(AUTH_SESSION_FILE)).toBe(false)
+    expect(existsSync(ASIDE)).toBe(false)
+  })
+
+  it('a session of another version is replaced as before', async () => {
+    await writeFile(AUTH_SESSION_FILE, JSON.stringify({ version: 2, accessToken: 'later' }), { mode: 0o600 })
+    expect(readAuthSession()).toBeNull()
+
+    writeAuthSession(next)
+
+    expect(readAuthSession()).toEqual(next)
+    expect(existsSync(ASIDE)).toBe(false)
+  })
+
+  it('is named as a trust file, read as the store reads it', async () => {
+    const [entry, ...others] = authSessionFiles()
+    expect(others).toEqual([])
+    expect(entry?.file).toBe(AUTH_SESSION_FILE)
+    for (const [text, state] of [[TORN, 'unreadable'], ['[]', 'unreadable'], ['{"version":2}', 'ok']] as const) {
+      await writeFile(AUTH_SESSION_FILE, text, { mode: 0o600 })
+      expect(probeState(entry!.file, entry!.parse)).toMatchObject({ state })
+    }
+  })
 })
 
 describe('AuthSessionManager', () => {

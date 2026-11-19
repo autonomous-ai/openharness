@@ -1,7 +1,7 @@
 import * as fs from 'node:fs'
 import * as promises from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 
 vi.mock('node:fs', async original => ({ ...await original<object>() }))
@@ -68,8 +68,8 @@ it.each(['owner-write', 'existing-owner-read', 'final-fence', 'cleanup-read', 'c
     let applied = false
     vi.spyOn(promises, 'open').mockImplementation(async (...args) => {
       const handle = await originalOpen(...args)
-      if (String(args[0]) === owner && (phase === 'owner-write' || phase === 'existing-owner-read'
-        || phase === 'cleanup-read' && applied)) {
+      if (phase === 'owner-write' && basename(String(args[0])) === 'owner.json'
+        || String(args[0]) === owner && (phase === 'existing-owner-read' || phase === 'cleanup-read' && applied)) {
         const close = handle.close.bind(handle)
         handle.close = async () => { cleanup.push(close); throw new Error('fixture close failure') }
       }
@@ -85,7 +85,8 @@ it.each(['owner-write', 'existing-owner-read', 'final-fence', 'cleanup-read', 'c
     })
     const run = () => persistence.registryFileLock(root, { expires: performance.now() + 5_000, check() {} }, async () => { applied = true })
     await expect(run()).rejects.toMatchObject({ code: 'STATE_FILE_CLEANUP_UNCONFIRMED' })
-    expect(fs.existsSync(lock)).toBe(true)
+    expect(fs.existsSync(lock)).toBe(phase !== 'owner-write')
+    if (phase === 'owner-write') expect(fs.readdirSync(root).filter(name => name.startsWith('registry.json.lock.'))).toHaveLength(1)
     const opens = vi.mocked(promises.open).mock.calls.length
     await expect(run()).rejects.toMatchObject({ code: 'STATE_FILE_CLEANUP_UNCONFIRMED' })
     expect(promises.open).toHaveBeenCalledTimes(opens)
@@ -99,4 +100,30 @@ it('still closes other owned handles after one close becomes uncertain', async (
   expect(() => state.closeStateFileDescriptor(first)).toThrow(expect.objectContaining({ code: 'STATE_FILE_CLEANUP_UNCONFIRMED' }))
   state.closeStateFileDescriptor(second)
   expect(() => fs.fstatSync(second)).toThrow(expect.objectContaining({ code: 'EBADF' }))
+})
+
+// A failed close cannot be retried: its descriptor may already belong to another file.
+it.each(['sync', 'async'] as const)('refuses another atomic write after a failed %s temporary close', async kind => {
+  const state = await import('./secureState.js'), file = join(root, 'state.json')
+  const open = promises.open, close = fs.closeSync
+  const syncOpens = vi.spyOn(fs, 'openSync')
+  const asyncOpens = vi.spyOn(promises, 'open')
+  if (kind === 'sync') vi.spyOn(fs, 'closeSync').mockImplementationOnce(fd => {
+    cleanup.push(() => close(fd)); throw new Error('fixture close failure')
+  })
+  else asyncOpens.mockImplementationOnce(async (...args) => {
+    const handle = await open(...args), realClose = handle.close.bind(handle)
+    handle.close = async () => { cleanup.push(realClose); throw new Error('fixture close failure') }
+    return handle
+  })
+  const act = () => kind === 'sync' ? state.atomicWriteFile(file, '{"next":true}', 'cache')
+    : state.atomicWriteFileAsync(file, '{"next":true}', 'cache')
+  const rejected = () => Promise.resolve().then(act)
+  await expect(rejected()).rejects.toMatchObject({ code: 'STATE_FILE_CLEANUP_UNCONFIRMED' })
+  expect(fs.readFileSync(file, 'utf8')).toBe('{}')
+  const syncCount = syncOpens.mock.calls.length, asyncCount = asyncOpens.mock.calls.length
+  await expect(rejected()).rejects.toMatchObject({ code: 'STATE_FILE_CLEANUP_UNCONFIRMED' })
+  expect(() => state.readPrivateStateFile(file)).toThrow(expect.objectContaining({ code: 'STATE_FILE_CLEANUP_UNCONFIRMED' }))
+  expect(syncOpens).toHaveBeenCalledTimes(syncCount)
+  expect(asyncOpens).toHaveBeenCalledTimes(asyncCount)
 })

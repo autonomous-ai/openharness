@@ -14,16 +14,17 @@
  * (`keepStaged`), for the CLI build and the host alike, and the start-of-updater sweep of what installs leave behind.
  * Nothing here calls a Windows API, so it is tested on every OS.
  */
-import { existsSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, readdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { SpawnLockBusyError, describeSpawnLockOwner } from '../daemonSpawnLock.js'
 import { binaryVersion } from '../ptyHost/launch.js'
 import { currentPtyVersion } from '../ptyHost/binary.js'
 import { errorKind } from '../log.js'
 import { PTY_PROTOCOL, SUPPORTED_PTY_PROTOCOLS } from '../ptyHost/protocol.js'
+import { atomicWriteFile } from '../secureState.js'
 import { REFUSED_RETRY_MAX_MS, msUntilSlot, type Poller } from '../selfUpdate.js'
 import {
-  BIN_FILES, PTY_PENDING, PTY_REJECTED, confirmPty, defaultPtyInstallFs, installPreparedPty, readPtyPending, rejectedPtyVersions, restorePty,
+  BIN_FILES, PTY_PENDING, PTY_REJECTED, confirmPty, defaultPtyInstallFs, installPreparedPty, readPtyPending, rejectedPtyToChange, rejectedPtyVersions, restorePty,
   sweepAsideFiles, type PtyInstallFs, type PtyPending, type PtyRestore,
 } from './ptyInstall.js'
 import {
@@ -410,9 +411,10 @@ export function ptyOnProbation(rootDir: string): string | null {
  */
 export function takeBackPty(rootDir: string, log: (line: string) => void, prefix: string, failedPrefix: string = prefix): void {
   const pending = readPtyPending(rootDir)
-  // Only the rejection this restore adds is taken back: one from before (a version installed anyway, by name) stays.
-  const rejectedBefore = rejectedPtyVersions(rootDir)
   try {
+    // Only the rejection this restore adds is taken back: one from before (a version installed anyway, by name) stays.
+    // A list that cannot be read now throws (StateFileUnreadable): read as none, that one would be taken back too.
+    const rejectedBefore = rejectedPtyToChange(rootDir)
     const result = restorePty(rootDir)
     // Before anything sweeps: the aside file is the only copy of that path's bytes.
     const put = putBackAside(rootDir, result.missing)
@@ -421,9 +423,7 @@ export function takeBackPty(rootDir: string, log: (line: string) => void, prefix
     const rejected = rejectedPtyVersions(rootDir)
     if (!rejectedBefore.includes(pending.version) && rejected.includes(pending.version)) {
       const file = join(rootDir, 'runtime', 'pty', PTY_REJECTED)
-      const temporary = `${file}.tmp-${process.pid}`
-      writeFileSync(temporary, JSON.stringify(rejected.filter((version) => version !== pending.version)))
-      renameSync(temporary, file)
+      atomicWriteFile(file, JSON.stringify(rejected.filter((version) => version !== pending.version)), 'cache')
     }
     log(result.pointer
       ? `${prefix}terminal host ${pending.version} taken back out with the build it came with — back to ${pending.previous}`

@@ -376,7 +376,7 @@ it('retains strict repeated intent publication even when its rows are already eq
 })
 
 it.skipIf(process.platform === 'win32')('captures and reconciles an unconfirmed image instead of accepting equal bytes', async () => {
-  const { AtomicWriteUnconfirmed } = await import('./registryPersistence.js')
+  const { AtomicWriteUnconfirmed } = await import('./secureState.js')
   io.failDirectorySync = true
   await expect(track(registry!.setClosePlan(A, plan))).rejects.toBeInstanceOf(AtomicWriteUnconfirmed)
   expect(row(disk()).closePlan).toEqual(plan)
@@ -866,7 +866,7 @@ it('clears resumed lineage in its durable snapshot while preserving a later nest
 })
 
 it.skipIf(process.platform === 'win32')('durably rebases a nested edit to a peer-recovered row after image preparation', async () => {
-  const { AtomicWriteUnconfirmed } = await import('./registryPersistence.js')
+  const { AtomicWriteUnconfirmed } = await import('./secureState.js')
   const prior = registry!.byAgent(A)!
   io.failDirectorySync = true
   await expect(track(registry!.setClosePlan(A, plan))).rejects.toBeInstanceOf(AtomicWriteUnconfirmed)
@@ -938,7 +938,7 @@ it('keeps a queued same-value close cancellation durable after the earlier remov
 })
 
 it.skipIf(process.platform === 'win32')('refuses a successful strict receipt when the published image lacks directory durability', async () => {
-  const { AtomicWriteUnconfirmed } = await import('./registryPersistence.js')
+  const { AtomicWriteUnconfirmed } = await import('./secureState.js')
   const live = registry!.byAgent(A)!
   const serialize = JSON.stringify
   let recoveryFingerprints = 0

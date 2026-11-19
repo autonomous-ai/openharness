@@ -28,11 +28,12 @@ import type { SharedTrustPeer } from '../lib/sharedMachinesAccount.js'
  */
 import { homedir } from 'node:os'
 import { isAbsolute, join, parse, resolve, sep, win32 } from 'node:path'
-import { readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
+import { statSync } from 'node:fs'
 import type { CoreApi, CorePorts, GuestLaunchInput, ServiceRequests } from '../core/api.js'
 import { createGuestAccounts, guestHomeRoot, guestWorkspaceFor, type SharedFolder } from '../lib/guestAccounts.js'
 import { guestHelperStatus, installGuestHelper, type GuestHelperInstallResult, type GuestHelperState } from '../lib/guestHelperInstall.js'
 import { errorKind } from '../lib/log.js'
+import { atomicWriteJson, jsonObject, readState, requireState } from '../lib/secureState.js'
 import { createWindowsGuestAccounts } from '../lib/windows/windowsGuestAccounts.js'
 import { failed, type PortFailure, type ShareMember, type SharedMachinesPort, type SharePolicy } from '../lib/sharedMachinesPort.js'
 import { createGuestLaunches, type GuestLaunches } from './guestLaunches.js'
@@ -78,10 +79,20 @@ export interface SharedMachinesDeps {
 const OFF: LocalPolicy = { emails: [], sameDomain: false, folders: [] }
 
 export function readPolicy(file: string): LocalPolicy {
-  try {
-    const raw = JSON.parse(readFileSync(file, 'utf-8')) as Partial<LocalPolicy>
-    return { emails: normalizeEmails(raw.emails) ?? [], sameDomain: raw.sameDomain === true, folders: normalizeFolders(raw.folders) ?? [] }
-  } catch { return OFF }
+  const read = readState(file, 'cache', jsonObject)
+  return policyOf(read.state === 'ok' ? read.value : null)
+}
+
+/** The policy a change or a refresh starts from. One that cannot be read now throws (StateFileUnreadable): read as off,
+ *  it would be told to the backend, written over the file and taken from the guests. */
+function policyToChange(file: string): LocalPolicy {
+  return policyOf(requireState(file, jsonObject, 'cache'))
+}
+
+function policyOf(saved: Record<string, unknown> | null): LocalPolicy {
+  if (!saved) return OFF
+  const raw = saved as Partial<LocalPolicy>
+  return { emails: normalizeEmails(raw.emails) ?? [], sameDomain: raw.sameDomain === true, folders: normalizeFolders(raw.folders) ?? [] }
 }
 
 /** Folders as the owner shares them: full paths, each once, never /; null when one is not. One a line in the
@@ -130,9 +141,7 @@ export function ownerFolderProblem(path: string, home = homedir(), guests = gues
 }
 
 function writePolicy(file: string, policy: LocalPolicy): void {
-  const temp = `${file}.${process.pid}.tmp`
-  writeFileSync(temp, JSON.stringify(policy, null, 2), { mode: 0o600 })
-  renameSync(temp, file)
+  atomicWriteJson(file, policy, 'cache')
 }
 
 /** Addresses trimmed, lower case, each once; null when one is not an address or there are too many. */
@@ -224,7 +233,7 @@ export function startSharedMachines(core: CoreApi, overrides: Partial<SharedMach
 
   /** Publish this machine's policy and trust whom it names; pin the machines shared with this account. */
   const refresh = async (port: SharedMachinesPort): Promise<void> => {
-    const local = readPolicy(deps.file)
+    const local = policyToChange(deps.file)
     const desired: { pins?: SharedTrustPeer[]; keys?: SharedTrustPeer[] } = {}
     const shared = await port.shared()
     if (!failed(shared)) {
@@ -312,7 +321,7 @@ export function startSharedMachines(core: CoreApi, overrides: Partial<SharedMach
           if (!port) return { error: 'NOT_SIGNED_IN', message: 'Sign in to share this machine.' }
           const published = await port.publish(emails, payload.sameDomain)
           if (failed(published)) return answerFailure(published)
-          writePolicy(deps.file, { ...readPolicy(deps.file), emails: published.emails, sameDomain: published.sameDomain })
+          writePolicy(deps.file, { ...policyToChange(deps.file), emails: published.emails, sameDomain: published.sameDomain })
           await read(port)
           return view()
         }
@@ -337,7 +346,7 @@ export function startSharedMachines(core: CoreApi, overrides: Partial<SharedMach
           if (!folders) return { error: 'BAD_REQUEST', message: `Choose up to ${SHARED_FOLDERS_MAX} folders, each by its full path.` }
           const problem = folders.map((f) => deps.folderProblem(f.path)).find((p) => p !== null)
           if (problem) return { error: 'BAD_REQUEST', message: problem }
-          const local = { ...readPolicy(deps.file), folders }
+          const local = { ...policyToChange(deps.file), folders }
           writePolicy(deps.file, local)
           // Given to every guest now (or taken back), not at their next harness.
           if (port) await read(port)

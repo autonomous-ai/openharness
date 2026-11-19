@@ -13,7 +13,7 @@
 import type { AgentEngine } from '../../engines/types.js'
 import type { TerminateOutcome } from '../deleteAgentFallback.js'
 import type { LaunchPublication, RegisteredSession } from '../registry.js'
-import { AtomicWriteUnconfirmed } from '../registryPersistence.js'
+import { AtomicWriteUnconfirmed } from '../secureState.js'
 import { KILL_CONFIRMED } from '../restartAgent.js'
 import type { RestoreAgentsDeps, RestoreLaunch } from '../restoreAgents.js'
 import type { TerminalBackend } from '../terminalBackend.js'

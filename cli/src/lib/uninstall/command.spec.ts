@@ -1,12 +1,27 @@
 import { existsSync, linkSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { harnessPath } from '../../config/harnessHome.js'
 import { BRIDGE_FILE, makeRealFolders, readBridge, removeBridge, writeBridge, type BridgeRecord } from '../../homeMove/bridge.js'
 import { moveLockPath } from '../../homeMove/lock.js'
 import { removePath } from '../removePath.js'
 import { labelHookRemoval, lockHolder, UNINSTALL_USAGE, uninstallCommand, UninstallLockBusy, type UninstallDeps } from './command.js'
 import { checkRemovable, listEntries, RemovalRefused, removeNow } from './removal.js'
+
+/** A write whose text matches reaches the disk half way, then the disk is full. */
+const tear = vi.hoisted(() => ({ text: undefined as RegExp | undefined }))
+vi.mock('node:fs', async (original) => {
+  const actual = await original<typeof import('node:fs')>()
+  return { ...actual, writeFileSync: (...args: Parameters<typeof actual.writeFileSync>) => {
+    const [target, data] = args
+    if (!tear.text || typeof data !== 'string' || !tear.text.test(data)) return actual.writeFileSync(...args)
+    const half = data.slice(0, data.length >> 1)
+    if (typeof target === 'number') actual.writeSync(target, half)
+    else actual.writeFileSync(target, half)
+    throw Object.assign(new Error('ENOSPC: fixture, write'), { code: 'ENOSPC' })
+  } }
+})
 
 function fake(overrides: Partial<UninstallDeps> = {}) {
   const calls: string[] = []
@@ -23,6 +38,7 @@ function fake(overrides: Partial<UninstallDeps> = {}) {
     markUninstalling: () => { after('mark') },
     unmarkUninstalling: () => { after('unmark') },
     ask: async () => { calls.push('ask'); return 'n' },
+    settlePid: async () => {},
     daemonPid: () => (running ? 4242 : null),
     alive: (pid) => running && pid === 4242,
     stopAgents: async () => { calls.push('agents'); return { stopped: 2, failed: [] } },
@@ -65,6 +81,30 @@ describe('harness uninstall', () => {
     expect(t.out).toContain('✓ removed the Harness daemon from launchd: it no longer starts at login')
     expect(t.out).toContain('✓ removed the PATH line Harness added to ~/.zshrc')
     expect(t.out.at(-1)).toBe('Harness is uninstalled.')
+  })
+
+  it('settles a pid file it cannot read before it asks which daemon runs', async () => {
+    const seen: string[] = []
+    const t = fake({ settlePid: async () => { seen.push('settle') }, daemonPid: () => { seen.push('daemon'); return 4242 } })
+    expect(await uninstallCommand(['--yes'], t.deps)).toBe(0)
+    // The last one is under the lock (the next case).
+    expect(seen).toEqual(['settle', 'daemon', 'settle'])
+  })
+
+  it('settles again under its lock before it asks whether the service runs the daemon', async () => {
+    // Before the lock another command held it, so a pid file that could not be read had no pid; under the lock the
+    // daemon answers, and the service that runs it is taken out.
+    const seen: string[] = []
+    let locked = false
+    let answered: number | null = null
+    const t = fake({
+      settlePid: async () => { seen.push(locked ? 'settle under lock' : 'settle'); answered = locked ? 4242 : null },
+      withLock: async (fn) => { locked = true; try { return await fn() } finally { locked = false } },
+      service: { name: 'launchd', present: () => answered !== null, unregister: () => { seen.push('service'); return { ok: true } } },
+    })
+    expect(await uninstallCommand(['--yes'], t.deps)).toBe(0)
+    expect(seen).toEqual(['settle', 'settle under lock', 'service'])
+    expect(t.out).toContain('✓ removed the Harness daemon from launchd: it no longer starts at login')
   })
 
   it('asks first in a terminal, and removes nothing on no', async () => {
@@ -670,6 +710,31 @@ describe('harness uninstall on Linux\'s two roots', () => {
         expect(t.out, `${name}, --keep-data ${keepData}`).toEqual(lines(keepData))
         expect(t.err, name).toEqual([])
       }
+    }
+  })
+})
+
+describe('the uninstall marker', () => {
+  it('the marker is written whole', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'uninstall-marker-'))
+    vi.stubEnv('HOME', home)
+    vi.stubEnv('USERPROFILE', home)
+    try {
+      const marker = harnessPath('uninstalling', home)
+      mkdirSync(dirname(marker), { recursive: true })
+      writeFileSync(marker, '1700000000\n')
+      const { uninstallDeps } = await import('./deps.js')
+      const deps = await uninstallDeps({ tildify: (path) => path, ask: async () => 'n' })
+      tear.text = /^\d+\n$/
+      // Best effort: a marker that cannot be written does not stop the uninstall.
+      expect(() => deps.markUninstalling()).not.toThrow()
+      // The desktop app reads its time: the old one whole, never half a number.
+      expect(readFileSync(marker, 'utf8')).toBe('1700000000\n')
+      expect(readdirSync(dirname(marker))).toEqual(['uninstalling'])
+    } finally {
+      tear.text = undefined
+      vi.unstubAllEnvs()
+      rmSync(home, { recursive: true, force: true })
     }
   })
 })

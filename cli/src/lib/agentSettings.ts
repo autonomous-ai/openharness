@@ -13,9 +13,10 @@
  * desktop app keeps the same rule for its own). A file that is missing or cannot be read is the defaults too, never a
  * refusal to work.
  */
-import { chmodSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { readAuthSession, type AuthSession } from './authSession.js'
+import { atomicWriteFile } from './secureState.js'
 
 export interface AgentSettings {
   /** Agents may start, wait for and close harnesses of their own, and are told how as they start. */
@@ -130,12 +131,7 @@ export function agentSettingsFromAnswer(answer: { status: number; body: Record<s
   }
 }
 
-/** Keeps [settings] for [owner]: written whole and renamed into place, so a reader never sees half a file. The core's
- *  sync alone calls it. */
+/** Keeps [settings] for [owner]: written whole, so a reader never sees half a file. The core's sync alone calls it. */
 export function saveAgentSettings(dataDir: string, owner: AgentSettingsOwner, settings: AgentSettings): void {
-  const path = agentSettingsPath(dataDir)
-  const temporary = `${path}.${process.pid}.tmp`
-  writeFileSync(temporary, `${JSON.stringify({ version: 2, accountId: owner.accountId, machineId: owner.machineId, ...settings })}\n`, { mode: 0o600 })
-  chmodSync(temporary, 0o600)
-  renameSync(temporary, path)
+  atomicWriteFile(agentSettingsPath(dataDir), `${JSON.stringify({ version: 2, accountId: owner.accountId, machineId: owner.machineId, ...settings })}\n`, 'cache')
 }

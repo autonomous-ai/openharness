@@ -5,9 +5,23 @@
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { PTY_PAYLOAD_FILES, type PtyEntry } from './ptyPayload.js'
 import { newerPtyForUpdate, preparePtyForUpdate, takeBackPtyForUpdate, type PtyUpdateCommandDeps } from './ptyUpdateCommand.js'
+
+// Pass-through; a rename onto a file named [failRenameOnto] fails as a disk error does.
+const io = vi.hoisted(() => ({ failRenameOnto: null as string | null }))
+vi.mock('node:fs', async (original) => {
+  const actual = await original<typeof import('node:fs')>()
+  const { basename } = await import('node:path')
+  const renameSync = (...args: Parameters<typeof actual.renameSync>) => {
+    if (io.failRenameOnto !== null && basename(String(args[1])) === io.failRenameOnto) {
+      throw Object.assign(new Error(`injected EIO onto ${io.failRenameOnto}`), { code: 'EIO' })
+    }
+    return actual.renameSync(...args)
+  }
+  return { ...actual, renameSync, default: { ...actual, renameSync } }
+})
 
 let root: string
 let ptyRoot: string
@@ -18,7 +32,10 @@ beforeEach(() => {
   for (const name of PTY_PAYLOAD_FILES) writeFileSync(join(ptyRoot, '0.10.0', name), `old ${name}`)
   writeFileSync(join(ptyRoot, 'current-pty'), '0.10.0\r\n')
 })
-afterEach(() => { rmSync(root, { recursive: true, force: true }) })
+afterEach(() => {
+  io.failRenameOnto = null
+  rmSync(root, { recursive: true, force: true })
+})
 
 const entryOf = (version = '0.11.0'): PtyEntry => ({ version, url: 'https://cdn.test/pty.zip', sha256: 'a'.repeat(64), size: 10 })
 const pointer = () => readFileSync(join(ptyRoot, 'current-pty'), 'utf8').trim()
@@ -77,12 +94,12 @@ describe('harness update, for the terminal host (Windows)', () => {
     writeFileSync(join(ptyRoot, 'current-pty'), '0.11.0')
     writeFileSync(join(ptyRoot, 'pty-pending.json'), JSON.stringify({ version: '0.11.0', previous: '0.10.0' }))
     // The rejection the restore records first cannot be written.
-    mkdirSync(join(ptyRoot, 'pty-rejected.json'))
+    io.failRenameOnto = 'pty-rejected.json'
     const lines: string[] = []
     takeBackPtyForUpdate(root, (line) => lines.push(line))
     expect(lines).toHaveLength(1)
     expect(lines[0]).toMatch(/^ {2}✗ could not take terminal host 0\.11\.0 back out/)
-    rmSync(join(ptyRoot, 'pty-rejected.json'), { recursive: true })
+    io.failRenameOnto = null
     takeBackPtyForUpdate(root, (line) => lines.push(line))
     expect(lines[1]).toBe('  terminal host 0.11.0 taken back out with the build it came with — back to 0.10.0')
     expect(pointer()).toBe('0.10.0')

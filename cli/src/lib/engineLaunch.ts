@@ -30,6 +30,8 @@ import { shellSingleQuote } from './shellQuote.js'
 import { browserPrelude } from './browserPrelude.js'
 import { currentUserShell } from './userShell.js'
 import { harnessPaneOwner } from './harnessSessionLabel.js'
+import { errorKind } from './log.js'
+import { atomicWriteFile } from './secureState.js'
 
 export { shellSingleQuote }
 
@@ -513,7 +515,7 @@ export function zshNewUserGuard(environment: NodeJS.ProcessEnv = process.env): s
     const file = join(folder, '.zshenv')
     let current: string | null = null
     try { current = readFileSync(file, 'utf8') } catch { /* not written yet */ }
-    if (current !== ZSH_GUARD_ZSHENV) writeFileSync(file, ZSH_GUARD_ZSHENV, { mode: 0o600 })
+    if (current !== ZSH_GUARD_ZSHENV) atomicWriteFile(file, ZSH_GUARD_ZSHENV, 'cache')
   } catch {
     // A ZDOTDIR without its .zshenv would leave the person's own ZDOTDIR unrestored: launch as before.
     return []
@@ -559,6 +561,7 @@ function launchFile(content: (path: string) => string): string {
   mkdirSync(directory, { recursive: true, mode: 0o700 })
   sweepLaunchFiles(directory)
   const file = join(directory, `${randomUUID()}.sh`)
+  // not a state file: a fresh name, complete before tmux is started with it
   writeFileSync(file, content(file), { mode: 0o600 })
   return file
 }

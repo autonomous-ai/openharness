@@ -6,10 +6,11 @@
  */
 import { spawn as nodeSpawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { closeSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { closeSync, mkdirSync, openSync, readFileSync, rmSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { ENGINE_WINDOWS_INSTALL, npmEnginePrefix, type EngineInstallRecipe, type WindowsInstall } from '../../lib/engineInstall.js'
 import { managedNodePath } from '../../lib/nodeRuntime.js'
+import { atomicWriteFile } from '../../lib/secureState.js'
 import { powershellPath } from '../../lib/windows/powershell.js'
 import type { AgentEngine } from '../types.js'
 import type { NativeInstallation } from './nativeInstall.js'
@@ -41,7 +42,8 @@ function publish(value) {
   const owner = JSON.parse(fs.readFileSync(record, 'utf8'));
   if (owner.dispatch !== dispatch || owner.request !== request) throw Error('Installation dispatch ownership changed');
   const next = record + '.' + process.pid + '.next';
-  const fd = fs.openSync(next, 'w', 0o600);
+  const fd = fs.openSync(next, 'wx', 0o600);
+  // not a state file: this standalone helper fills only its exclusive staging file before the atomic rename
   try { fs.writeFileSync(fd, JSON.stringify(value)); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
   fs.renameSync(next, record);
 }
@@ -139,10 +141,8 @@ export function createWindowsInstallations({ directory, spawn = nodeSpawn, alive
   }
   const write = (engine: AgentEngine, record: InstallRecord) => {
     mkdirSync(directory, { recursive: true })
-    const next = `${recordFile(engine)}.${process.pid}.next`
-    const fd = openSync(next, 'w', 0o600)
-    try { writeFileSync(fd, JSON.stringify(record)); fsyncSync(fd) } finally { closeSync(fd) }
-    renameSync(next, recordFile(engine))
+    // A lost dispatch record would let another controller run the same installer again.
+    atomicWriteFile(recordFile(engine), JSON.stringify(record), 'cache', { durable: true })
   }
   /** A running record with an installer behind it. One whose process is gone (a restart) or too old never holds a launch. */
   const live = (record: InstallRecord | null): boolean =>
@@ -167,6 +167,7 @@ export function createWindowsInstallations({ directory, spawn = nodeSpawn, alive
       const dispatch = randomUUID()
       // Failed is deliberately backward readable: rollback cannot replay this same saved request.
       write(engine, { state: 'failed', request, detail: 'Installation dispatch needs recovery.', dispatch })
+      // not a state file: the installer's output log, a new file each run
       const output = openSync(log, 'w')
       let child
       try {

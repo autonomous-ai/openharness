@@ -114,6 +114,7 @@ describe('bounded descriptor fingerprints', () => {
     vi.spyOn(console, 'log').mockImplementation(line => { lines.push(String(line)) })
     const supervisor = runMaster({
       nodePath: process.execPath, execArgv: [], scriptPath: file, pidFile: join(directory, 'pid'),
+      writePidFile: () => {}, readPidFile: () => null,
       env: { HARNESSD_SERVICES: 'none', HOME: directory, USERPROFILE: directory },
       restoreUpdate: () => {}, confirmUpdate: () => {}, execve: null, exit,
       onSignal: (signal, listener) => { signals.set(signal, listener) }, executionArtifacts: { prepare },

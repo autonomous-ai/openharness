@@ -49,6 +49,13 @@ function seedSession(root: string, opts: { expiresInMs?: number; overrides?: Rec
   }))
 }
 
+/** A session.json that is not valid JSON (a write cut off by a crash): a sign-in or a sign-out by hand sets it aside. */
+const TORN_SESSION = '{"version":1,"accessTok'
+function seedTornSession(root: string): void {
+  mkdirSync(join(root, 'auth'), { recursive: true })
+  writeFileSync(join(root, 'auth', 'session.json'), TORN_SESSION)
+}
+
 function envFor(root: string, backendUrl?: string): NodeJS.ProcessEnv {
   return {
     ...process.env,
@@ -268,6 +275,18 @@ describe('signing out takes a person', () => {
     expect(line).toContain(`parent=${process.pid}`)
     // The parent's own command line: here, the node running this suite.
     expect(line).toContain(process.execPath.split('/').pop()!)
+  })
+
+  // Kept aside, a session nobody can read would keep its refresh token past the sign-out.
+  it('logout over a session that cannot be read deletes it', () => {
+    const root = tempRoot()
+    seedTornSession(root)
+
+    const result = runSync(root, ['logout', '--from-sign-out-button'])
+
+    expect(result.status, result.stderr).toBe(0)
+    expect(existsSync(sessionFile(root))).toBe(false)
+    expect(existsSync(`${sessionFile(root)}.unreadable`)).toBe(false)
   })
 })
 
@@ -749,6 +768,26 @@ describe('harness login --json', () => {
     expect(existsSync(gridCalls)).toBe(false)
     expect(JSON.parse(readFileSync(join(root, 'auth', 'session.json'), 'utf8'))).toMatchObject({ machineId: 'm_new', signInAcct: 'acct_new' })
   }, 15_000)
+
+  it('a login over a session that cannot be read signs in', async () => {
+    const root = tempRoot()
+    seedTornSession(root)
+    let redirectUri = ''
+    const { base } = await fakeBackend({
+      authorizeNative: (body) => { redirectUri = body.redirectUri; return { authorizeUrl: 'https://sso.example.test/authorize?tx=abc', tx: 'tx_abc' } },
+      exchange: () => ({ token: 'tok_new', refreshToken: 'refresh_new', expiresIn: 3600, autonomousEnv: 'prod' }),
+      resolveComputer: () => ({ machine: { machineId: 'm_new' } }),
+    })
+
+    const login = jsonChild(root, base, ['login', '--google', '--json'])
+    expect(await login.next()).toMatchObject({ type: 'authorize_url' })
+    await fetch(`${redirectUri}?code=code_123&state=state_456`)
+    expect(await login.next()).toMatchObject({ type: 'result', status: 'success' })
+    expect(await login.exit).toBe(0)
+
+    expect(JSON.parse(readFileSync(join(root, 'auth', 'session.json'), 'utf8'))).toMatchObject({ accessToken: 'tok_new', machineId: 'm_new' })
+    expect(existsSync(join(root, 'auth', 'session.json.unreadable'))).toBe(false)
+  }, 30_000)
 
   it('already signed in with no key yet: makes the key and reports its fingerprint', async () => {
     const root = tempRoot()

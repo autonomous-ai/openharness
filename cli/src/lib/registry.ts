@@ -20,20 +20,13 @@ import { namingTitle } from './sessionTitle.js'
 import { reportedProfileHome, transcriptProject } from '../engines/discoveries.js'
 import { automaticAgentName, engineLabel, isAutomaticName } from './agentNames.js'
 import {
-  closeSync,
-  constants,
   existsSync,
-  fchmodSync,
-  fsyncSync,
   lstatSync,
   mkdirSync,
-  openSync,
   readFileSync,
   realpathSync,
   renameSync,
-  rmSync,
   statSync,
-  writeFileSync,
 } from 'fs'
 import { randomUUID } from 'crypto'
 import { isDeepStrictEqual } from 'node:util'
@@ -59,8 +52,8 @@ import { agyTranscriptPath } from '../engines/agy/contract.js'
 import { copilotTranscriptPath } from '../engines/copilot/contract.js'
 import { OPENCLAW_KEY } from '../engines/openclaw/contract.js'
 import { bootChanged, currentBootId } from './bootId.js'
-import { hardenPrivateStateFileIfPresent, readPrivateStateFile, secureStateDirectory, syncStateDirectory } from './secureState.js'
-import { AtomicWriteUnconfirmed, RegistryCleanupUnavailable, RegistryPersistenceUnavailable, RegistryWriteQueue, privateRegistryDirectory, registryFileLock, type RegistryWriteDeadline } from './registryPersistence.js'
+import { AtomicWriteUnconfirmed, atomicWriteJson, readPrivateStateFile, secureStateDirectory } from './secureState.js'
+import { RegistryCleanupUnavailable, RegistryPersistenceUnavailable, RegistryWriteQueue, privateRegistryDirectory, registryFileLock, type RegistryWriteDeadline } from './registryPersistence.js'
 import { mergeTerminalRuntimes, primaryRuntime, processIdentityKey, sameProcessIdentity, terminalPlacementKey, terminalRouteKey } from './terminalRuntime.js'
 import type { HookTerminalHint, ProcessIdentity, TerminalRuntimeRef } from './terminalTypes.js'
 import { externalReservations, externalResumePending, externalResumeIds, parseExternalResume, type ExternalResumeIntent } from './externalResume.js'
@@ -588,29 +581,6 @@ function persistenceFailure(error: unknown, names = false): Error {
             : code === 'ELOOP' ? 'has an unsafe file type' : 'write failed'
   const failure = new RegistryPersistenceUnavailable(`${subject} ${category}`, typeof code === 'string' ? code : undefined)
   return error instanceof AtomicWriteUnconfirmed ? new AtomicWriteUnconfirmed(failure, error.retryable) : failure
-}
-
-export function atomicWriteJson(file: string, value: unknown, exclusive = false): void {
-  const exists = hardenPrivateStateFileIfPresent(file)
-  if (exclusive && exists) return
-  const temporary = `${file}.${process.pid}.${randomUUID()}.tmp`
-  let renamed = false
-  try {
-    const fd = openSync(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600)
-    try {
-      writeFileSync(fd, JSON.stringify(value, null, 2))
-      fchmodSync(fd, 0o600)
-      fsyncSync(fd)
-    } finally { closeSync(fd) }
-    renameSync(temporary, file)
-    renamed = true
-    syncStateDirectory(dirname(file))
-  } catch (error) {
-    if (renamed) throw new AtomicWriteUnconfirmed(error)
-    throw error
-  } finally {
-    if (!renamed) rmSync(temporary, { force: true })
-  }
 }
 
 function boundedIdentityPart(value: unknown, max = 200): value is string {
@@ -1229,7 +1199,7 @@ function readSavedBoot(): string | null {
 function writeBoot(bootId: string): void {
   try {
     secureStateDirectory(env.ADAPTER_DATA_DIR)
-    atomicWriteJson(BOOT_FILE, bootId)
+    atomicWriteJson(BOOT_FILE, bootId, 'trust')
   } catch { /* registry load will remain conservative on the next restart */ }
 }
 
@@ -1686,7 +1656,7 @@ class Registry {
       if (changed) await this.writer.run(deadline => this.persist(deadline, 'observation'))
       // A marker must not make an interrupted migration look complete on the next start.
       writeBoot(bootId)
-      if (ownModes) atomicWriteJson(OWN_MODES_FILE, Date.now())
+      if (ownModes) atomicWriteJson(OWN_MODES_FILE, Date.now(), 'trust')
     } catch (error) {
       if (error instanceof RegistryPersistenceUnavailable || error instanceof AtomicWriteUnconfirmed) throw error
       if (error instanceof SyntaxError) await this.quarantine('is not JSON', originalContents!)
@@ -1695,7 +1665,7 @@ class Registry {
         console.error('[registry] registry is unreadable; refusing to overwrite it:', errorKind(error))
       } else {
         writeBoot(bootId)
-        atomicWriteJson(OWN_MODES_FILE, Date.now())
+        atomicWriteJson(OWN_MODES_FILE, Date.now(), 'trust')
       }
       // A genuinely absent file starts empty. A file that cannot be opened safely (a symlink, another
       // owner, open permissions) is left exactly as it is, and nothing is written over it.

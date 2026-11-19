@@ -39,7 +39,7 @@ import { masterRunsEngineSubmission } from '../harnessd/services.js'
  * or `start -f` with `HARNESS_NO_MASTER=1`), calls in here. `start -f` runs harnessd's master, which starts
  * the core with `__run`.
  */
-import { readFileSync, writeFileSync, openSync, existsSync, rmSync, statSync } from 'fs'
+import { readFileSync, openSync, existsSync, rmSync, statSync } from 'fs'
 import { readFile } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
 import { join } from 'path'
@@ -59,7 +59,8 @@ import { engineSessionTitle } from '../lib/sessionTitle.js'
 import { machineNames } from '../lib/machineNames.js'
 import { engineHookInstallations as engineHookFacets } from '../engines/nativeHookSetup.js'
 import type { LiveFor } from '../engines/facets/live.js'
-import { DAEMON_LOG_FILE, PID_FILE, daemonPort, isAlive, readPid, removePidFileIf, LEGACY_LOG_FILE, MACHINE_NAME_FILE, tildify, computerId, thisDeviceLabel } from '../lib/daemonState.js'
+import { DAEMON_LOG_FILE, PID_FILE, daemonPort, isAlive, readPid, removePidFileIf, LEGACY_LOG_FILE, MACHINE_NAME_FILE, tildify, computerId, thisDeviceLabel, writePidFile } from '../lib/daemonState.js'
+import { atomicWriteFile } from '../lib/secureState.js'
 import { clearSafeModeMarker, safeModeDisposition, safeModeStatusBody, SafeModeRequest, writeSafeModeMarker } from '../lib/daemonSafeMode.js'
 import { awakeTimeout } from '../lib/sleepAware.js'
 import { harnessdEnv, holdHarnessdEnv } from '../lib/harnessdEnv.js'
@@ -314,6 +315,7 @@ function startMasterHere(): void {
   let log: number | 'ignore' = 'ignore'
   try {
     prepareLogFile(LOG_FILE, LEGACY_LOG_FILE)
+    // not a state file: the daemon's log, appended
     log = openSync(LOG_FILE, 'a')
   } catch (e) { console.error(`[update] the master starts without the log: ${errorKind(e)}`) }
   const { ADAPTER_UPDATED_TO: _handedOver, HARNESSD_SAFE_MODE: _safeMode, ...inherited } = harnessdEnv()
@@ -323,7 +325,7 @@ function startMasterHere(): void {
   master.on('error', (e) => console.error(`[update] master spawn error: ${errorKind(e)}`))
   master.unref()
   try {
-    if (master.pid) writeFileSync(PID_FILE, `${master.pid}\n`)
+    if (master.pid) writePidFile(master.pid)
     else removePidFileIf(process.pid)
   } catch { /* the master claims it itself once its core has bound */ }
   console.log(`[update] harnessd's master started (pid ${master.pid ?? '?'})`)
@@ -2320,7 +2322,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // Retained compatibility: Agent Messages has its own process under older masters.
     askForMessages(outOfProcess, (service) => coreLink.want(service))
   } else {
-    try { writeFileSync(PID_FILE, String(process.pid) + '\n') } catch { /* best effort */ }
+    try { writePidFile(process.pid) } catch { /* best effort */ }
   }
   // Shared account settings are authoritative here; optional saved-state discovery belongs to edge.
   agentSettings.start()
@@ -3291,7 +3293,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // Mirror the machine's display name to disk so `harness status` (a separate process) can print it.
   backend.onMachineMeta = (name) => {
     try {
-      if (name) writeFileSync(MACHINE_NAME_FILE, name + '\n')
+      if (name) atomicWriteFile(MACHINE_NAME_FILE, name + '\n', 'cache')
       else rmSync(MACHINE_NAME_FILE, { force: true })
     } catch { /* best effort */ }
   }

@@ -3,7 +3,7 @@ import { closeSessionStorageFixture } from '../testing/sessionStorageFixture.js'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { fork, type ChildProcess } from 'node:child_process'
 import { on, once } from 'node:events'
-import { mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -268,7 +268,7 @@ it('publishes a resumed owner only after durability and rejects cancelled resume
   expect(rows()).toEqual([])
 })
 
-it.each(['ownerless', 'prepared', 'published', 'confirmed'])('recovers a real writer killed at %s without losing peer metadata', async phase => {
+it.each(['taking', 'prepared', 'published', 'confirmed'])('recovers a real writer killed at %s without losing peer metadata', async phase => {
   holder = fork(fileURLToPath(new URL('./__fixtures__/registryCrashWriter.ts', import.meta.url)), [directory, phase], {
     ...ownProcessGroup(), execArgv: ['--import', fileURLToPath(new URL('../../node_modules/tsx/dist/loader.mjs', import.meta.url))], stdio: ['ignore', 'ignore', 'pipe', 'ipc'],
     env: { ...process.env, ADAPTER_DATA_DIR: directory },
@@ -281,15 +281,19 @@ it.each(['ownerless', 'prepared', 'published', 'confirmed'])('recovers a real wr
   holder.kill('SIGKILL')
   await exited
   holder = undefined
-  if (phase === 'ownerless') {
-    const stale = new Date(Date.now() - 6_000)
-    utimesSync(join(directory, 'registry.json.lock'), stale, stale)
-  }
   const published = phase === 'published' || phase === 'confirmed'
   expect(rows()[0].title).toBe(published ? 'peer crash metadata' : null)
   const committed = await registry.setClosePlan(input.agentId, plan)
   expect(committed?.closePlan).toEqual(plan)
   expect(rows()[0].title).toBe(published ? 'peer crash metadata' : null)
+  expect(rows()[0].closePlan).toEqual(plan)
+})
+
+it("an older build's ownerless folder is still cleared", async () => {
+  const lock = join(directory, 'registry.json.lock'), stale = new Date(Date.now() - 6_000)
+  mkdirSync(lock, { mode: 0o700 })
+  utimesSync(lock, stale, stale)
+  expect((await registry.setClosePlan(input.agentId, plan))?.closePlan).toEqual(plan)
   expect(rows()[0].closePlan).toEqual(plan)
 })
 

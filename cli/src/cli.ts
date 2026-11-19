@@ -33,7 +33,7 @@ import { runCoreInForeground } from './core/main.js'
 import { startCoreProcess } from './coreProcess.js'
 import { backendHttpBase } from './lib/backendHttpBase.js'
 import { GRID_MINT_TIMEOUT_MS, requestJson, postJson, controlPlaneAuth } from './lib/controlPlane.js'
-import { LEGACY_LOG_FILE, MACHINE_NAME_FILE, tildify, computerId, thisDeviceLabel, DAEMON_LOG_FILE, HARNESSD_STATUS_FILE, daemonPort, isAlive, isDaemonRunning, onError, readPid } from './lib/daemonState.js'
+import { LEGACY_LOG_FILE, MACHINE_NAME_FILE, tildify, computerId, thisDeviceLabel, DAEMON_LOG_FILE, HARNESSD_STATUS_FILE, daemonPort, isAlive, onError, readPid } from './lib/daemonState.js'
 import { daemonUnreachableText, sandboxed, startRefusalText } from './lib/unreachable.js'
 import { BIND_WAIT_MS, connectFailure, daemonSpawnOptions, defaultLaunchDeps, waitForBind } from './lib/daemonLaunch.js'
 import { ensureUtf8Locale } from './lib/childLocale.js'
@@ -45,6 +45,7 @@ import { registry } from './lib/registry.js'
 import { readSafeModeMarker } from './lib/daemonSafeMode.js'
 import { SpawnLockBusyError, describeSpawnLockBusyPlainly, describeSpawnLockFailure, describeSpawnLockOwner, describeSpawnLockWaitPlainly, readSpawnLockOwner, withSpawnLock } from './lib/daemonSpawnLock.js'
 import { didNotStopSentence, leftRunning, stopDaemonOrExit, stopDaemonProcess } from './lib/daemonStop.js'
+import { isDaemonRunning, settlePidFile } from './lib/pidFileSettle.js'
 import { AT_LOGON_FLAG, clearTaskStopped, installedPlatform, launchMaster, osDaemonUnit, platformDaemonDeps, serviceDefinition, startThroughTask, startUnderPlatform, taskStoppedThisBoot, waitForMaster } from './lib/platformDaemon.js'
 import { processIfDownDeps, releaseAbandonedLock, runningDaemon, startIfDown } from './lib/startIfDown.js'
 import { isInstalledCopy } from './lib/installedCopy.js'
@@ -56,7 +57,7 @@ import { moveStatusLine } from './homeMove/statusLine.js'
 import { flashCommand } from './lib/flash.js'
 import { awaitLoginCallback, extractCallbackParams, LOGIN_TIMEOUT_MESSAGE, type LoginCallbackParams } from './lib/loginCallback.js'
 import { ancestorsOnce, removeSignIn, SIGN_OUT_BUTTON_FLAG, signOutAsked, type Asker, type SignOutAsked } from './lib/signOut.js'
-import { AUTH_DIR, AuthSessionError, knownSsoClientId, recordMachineId, newSignInEpoch, readAuthSession, readSignedOut, ssoClientIdFor, updateAuthSession, writeAuthSession, type AuthSession } from './lib/authSession.js'
+import { AUTH_DIR, AuthSessionError, knownSsoClientId, recordMachineId, newSignInEpoch, readAuthSession, readSignedOut, ssoClientIdFor, updateAuthSession, writeSignIn, type AuthSession } from './lib/authSession.js'
 import { AuthSessionManager, harnessSessionRequest } from './lib/authRefresh.js'
 import { computerName } from './lib/computerName.js'
 import { handOffToGrid } from './lib/gridHandoff.js'
@@ -106,6 +107,8 @@ import { MachinePeerStore } from './lib/e2ee/machinePeers.js'
 import { connectWithPassword, type PwConnectProgress } from './lib/e2ee/relayClient.js'
 import type { LinkedPeer } from './lib/e2ee/manager.js'
 import { DeviceLogStore } from './lib/e2ee/deviceLogStore.js'
+import { StateFileUnreadable } from './lib/secureState.js'
+import { unreadableTrustLines } from './lib/trustFiles.js'
 import { TrustGroupStore } from './lib/e2ee/trustGroup.js'
 import { fetchManifest, semverGt, isLocalDevBuild, type UpdateEntry } from './lib/selfUpdate.js'
 import { managedNodePath } from './lib/nodeRuntime.js'
@@ -805,7 +808,7 @@ async function saveSignIn(
 ): Promise<SignInOutcome> {
   const signInEpoch = newSignInEpoch()
   const autonomousEnv = tokens.autonomousEnv ?? env.AUTONOMOUS_ENV
-  writeAuthSession({
+  writeSignIn({
     version: 1,
     accessToken: tokens.token,
     ...(tokens.refreshToken ? { refreshToken: tokens.refreshToken } : {}),
@@ -921,7 +924,7 @@ async function browserSignIn(
       updatedAt: Date.now(),
       signInEpoch,
     }
-    writeAuthSession(session)
+    writeSignIn(session)
     await recordSignInAccount(session.accessToken, signInEpoch, session.autonomousEnv)
     try {
       await resolveComputerMachine()
@@ -1125,8 +1128,15 @@ let startedByTheTask = false
  */
 async function runningDaemonPid(underLock: boolean = false): Promise<number | null> {
   if (process.platform === 'win32') return runningDaemon(processIfDownDeps(process.platform, {}, { forget: underLock }))
-  const pid = readPid()
+  const pid = await settledPid()
   return pid && isAlive(pid) ? pid : null
+}
+
+/** The pid file's pid, once a pid file that cannot be read has been asked of the daemon or set aside
+ *  (lib/pidFileSettle.ts). */
+async function settledPid(): Promise<number | null> {
+  await settlePidFile()
+  return readPid()
 }
 
 /**
@@ -1351,7 +1361,7 @@ async function updateCommand(force: boolean): Promise<void> {
   // relaunch there is no pid file for several seconds, and anything that spawns `harness start` on
   // "no daemon" (the desktop app does, every few seconds) used to land a second child in that gap.
   await withSpawnLock('update', async () => {
-    const running = readPid()
+    const running = await settledPid()
     const wasRunning = !!(running && isAlive(running))
     const relaunch = async (): Promise<void> => {
       await new Promise((r) => setTimeout(r, 1000)) // grace for the backend to release the one-machine claim
@@ -1468,7 +1478,7 @@ async function logout(): Promise<void> {
 async function restartDaemonForIdentity(restartIfDown = false): Promise<void> {
   // OUR daemon, by its pid file and private socket. A login in another HOME must never restart a
   // different OS user's daemon just because it happens to hold the default TCP port.
-  const pid = readPid()
+  const pid = await settledPid()
   if (!pid || !isAlive(pid)) {
     if (!restartIfDown) return
     console.log('  starting the daemon again on this account…')
@@ -1507,7 +1517,7 @@ async function runningDaemonStatus(): Promise<{
 } | null> {
   try {
     const body = await localDaemonStatus(env.ADAPTER_DATA_DIR, env.PORT)
-      ?? await legacyDaemonStatus(daemonPort(), readPid(), computerId(), env.ADAPTER_DATA_DIR)
+      ?? await legacyDaemonStatus(daemonPort(), await settledPid(), computerId(), env.ADAPTER_DATA_DIR)
     if (!body) return null
     const status = body as {
       version?: unknown; sessions?: unknown; machineId?: unknown; connected?: unknown
@@ -2095,7 +2105,7 @@ async function remotePasswordSetCommand(json: boolean, stdin: boolean): Promise<
   console.log(`    fingerprint  ${result.fingerprint}   — verify it matches on the joining machine after \`harness link connect\`\n`)
   console.log(`  ▸ Run this on the OTHER machine:  harness link connect ${session.machineId}`)
   console.log('  ⚠ Anyone with this password can link a machine to this one. Keep it private.\n')
-  if (!readPid()) console.log('  Start the adapter with `harness start` if joins are being rejected.\n')
+  if (!await settledPid()) console.log('  Start the adapter with `harness start` if joins are being rejected.\n')
   process.exit(0)
 }
 
@@ -2681,7 +2691,7 @@ async function machinesDeleteCommand(id: string | undefined, assumeYes: boolean)
 
 /** `harness status` — print the info block with the current running state. */
 async function status(): Promise<void> {
-  const pid = readPid()
+  const pid = await settledPid()
   const alive = pid != null && isAlive(pid)
   const session = readAuthSession()
   const daemonStatus = alive ? await runningDaemonStatus() : null
@@ -2731,8 +2741,13 @@ async function status(): Promise<void> {
     // `status` can say "(in your account)" from it for a while; that window is accepted.
     // A retired key with none in its place still says something, though: being removed from the
     // account is itself what signs a machine out (the daemon clears the session as it spends the key).
+    // A log that cannot be read leaves the row out: the line below names the file.
     device: (() => {
-      const devlog = new DeviceLogStore().read()
+      let devlog: ReturnType<DeviceLogStore['read']>
+      try { devlog = new DeviceLogStore().read() } catch (error) {
+        if (error instanceof StateFileUnreadable) return undefined
+        throw error
+      }
       return deviceStatusValue(
         thisDeviceFingerprint(false),
         session
@@ -2754,6 +2769,8 @@ async function status(): Promise<void> {
   // Only Linux moves ~/.harness; a move that is held or failed says what to do.
   const moveLine = process.platform === 'linux' ? moveStatusLine(readMoveRecord(homedir(), process.env)) : null
   if (moveLine) console.log(`  ${moveLine}\n`)
+  const unreadable = unreadableTrustLines()
+  if (unreadable.length) console.log(`${unreadable.join('\n')}\n`)
   process.exit(0)
 }
 
@@ -2883,13 +2900,13 @@ switch (cmd) {
     // account: the desktop app reads that line and does not wait for a restart it observes anyway.
     // Capture before sign-in: the daemon can exit cleanly when its identity changes, and the installed
     // service treats a clean exit as an intentional stop.
-    const daemonWasRunning = isDaemonRunning()
-    loginCommand(foreground, flags.includes('--force'), flags.includes('--json'), {
-      entryPoint: entryPointFlag(),
-      ticket: flags.find((f) => f.startsWith('--ticket='))?.slice('--ticket='.length) || undefined,
-      method: signInMethodFlag(flags) ?? (flags.includes('--json') || !process.stdin.isTTY ? undefined : 'ask'),
-    })
-      .then((outcome) => outcome.signedIn ? restartDaemonForIdentity(outcome.stoppedDaemon || daemonWasRunning) : undefined)
+    isDaemonRunning()
+      .then((daemonWasRunning) => loginCommand(foreground, flags.includes('--force'), flags.includes('--json'), {
+        entryPoint: entryPointFlag(),
+        ticket: flags.find((f) => f.startsWith('--ticket='))?.slice('--ticket='.length) || undefined,
+        method: signInMethodFlag(flags) ?? (flags.includes('--json') || !process.stdin.isTTY ? undefined : 'ask'),
+      })
+        .then((outcome) => outcome.signedIn ? restartDaemonForIdentity(outcome.stoppedDaemon || daemonWasRunning) : undefined))
       .catch(onError)
     break
   }

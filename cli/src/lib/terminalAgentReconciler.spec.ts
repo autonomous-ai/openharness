@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { RegistryOwnershipChanged, type RegisteredSession } from './registry.js'
-import { AtomicWriteUnconfirmed, RegistryPersistenceUnavailable } from './registryPersistence.js'
+import { RegistryPersistenceUnavailable } from './registryPersistence.js'
+import { AtomicWriteUnconfirmed } from './secureState.js'
 import type { DiscoveredTerminalAgent, TerminalAgentProbe } from './terminalAgentDiscovery.js'
 import type { TerminalBackend } from './terminalBackend.js'
 import { TerminalAgentReconciler } from './terminalAgentReconciler.js'

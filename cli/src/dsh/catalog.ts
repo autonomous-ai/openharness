@@ -1,9 +1,10 @@
 /** Live Store metadata. Fetching a catalog never installs or executes a package. */
-import { createHash, randomUUID } from 'node:crypto'
-import { mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { mkdirSync, readFileSync, statSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { env } from '../config/env.js'
 import { ENGINES } from '../engines/types.js'
+import { atomicWriteFile } from '../lib/secureState.js'
 import { bundledDshRegistry, DshRegistryEntrySchema, HARNESS_MONOREPO, type DshRegistryEntry } from './registry.js'
 
 export const STORE_CATALOG_URL = 'https://raw.githubusercontent.com/autonomous-ai/openharness/store-catalog/catalog.json'
@@ -124,11 +125,9 @@ export class LiveStoreCatalog {
       // A read-only disk must not discard metadata that was fetched successfully.
       try {
         mkdirSync(dirname(this.options.cacheFile), { recursive: true, mode: 0o700 })
-        const temporary = `${this.options.cacheFile}.${randomUUID()}.tmp`
         const { url, checkedAt, etag, document } = this.cache
         // `catalog` keeps its name so an older CLI still reads this file (and parses it for itself).
-        writeFileSync(temporary, JSON.stringify({ url, checkedAt, ...(etag ? { etag } : {}), whole: true, catalog: document }), { mode: 0o600 })
-        renameSync(temporary, this.options.cacheFile)
+        atomicWriteFile(this.options.cacheFile, JSON.stringify({ url, checkedAt, ...(etag ? { etag } : {}), whole: true, catalog: document }), 'cache')
       } catch { /* The in-memory catalog still works. */ }
     } catch {
       this.nextAttempt = this.now() + RETRY_MS

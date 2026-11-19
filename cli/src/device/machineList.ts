@@ -7,10 +7,10 @@
 //
 // The cache is SYNCHRONOUS to read. The cable session ticks every second and must never await a network
 // call to decide whether to redraw a list that has not changed.
-import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 import { env } from '../config/env.js'
+import { atomicWriteFile, jsonObject, probeState, readState } from '../lib/secureState.js'
 import type { FleetMachine } from '../cable/machineFleet.js'
 import { errorKind } from '../lib/log.js'
 
@@ -271,25 +271,27 @@ export class MachineListCache {
 
   /** So a daemon that starts offline still draws the list the user saw last time. */
   private loadCache(): void {
-    try {
-      const parsed = JSON.parse(readFileSync(this.path, 'utf8')) as {
-        machines?: ListedMachine[]
-        body?: Record<string, unknown>
-        fetchedAt?: number
-        bodyOwner?: string
-      }
-      if (Array.isArray(parsed.machines)) {
-        this.machines = parsed.machines.map((m) => ({ ...m, state: 'unknown' as const }))
-      }
-      // `body`/`fetchedAt` arrived after this file already existed in the wild, so a cache written by an
-      // older daemon has rows but no body. Rows still draw the wheel; the proxy fallback simply has
-      // nothing to serve until the next successful read fills it in.
-      if (parsed.body && typeof parsed.body === 'object') {
-        this.lastBody = parsed.body
-        this.fetchedAt = typeof parsed.fetchedAt === 'number' ? parsed.fetchedAt : 0
-        this.bodyOwner = typeof parsed.bodyOwner === 'string' ? parsed.bodyOwner : null
-      }
-    } catch { /* no cache yet, or unreadable — an empty wheel plus the local row is correct */ }
+    // No cache yet, or one set aside as unreadable: an empty wheel plus the local row is correct. A copy that never
+    // writes the file leaves a torn one where it is (probeState): its writer sets it aside as it reads it.
+    const read = this.persist ? readState(this.path, 'cache', jsonObject) : probeState(this.path, jsonObject)
+    if (read.state !== 'ok') return
+    const parsed = read.value as {
+      machines?: ListedMachine[]
+      body?: Record<string, unknown>
+      fetchedAt?: number
+      bodyOwner?: string
+    }
+    if (Array.isArray(parsed.machines)) {
+      this.machines = parsed.machines.map((m) => ({ ...m, state: 'unknown' as const }))
+    }
+    // `body`/`fetchedAt` arrived after this file already existed in the wild, so a cache written by an
+    // older daemon has rows but no body. Rows still draw the wheel; the proxy fallback simply has
+    // nothing to serve until the next successful read fills it in.
+    if (parsed.body && typeof parsed.body === 'object') {
+      this.lastBody = parsed.body
+      this.fetchedAt = typeof parsed.fetchedAt === 'number' ? parsed.fetchedAt : 0
+      this.bodyOwner = typeof parsed.bodyOwner === 'string' ? parsed.bodyOwner : null
+    }
   }
 
   private saveCache(): void {
@@ -308,7 +310,7 @@ export class MachineListCache {
     const now = Date.now()
     if (content === this.lastWrittenContent && now - this.lastWrittenAt < REWRITE_UNCHANGED_AFTER_MS) return
     try {
-      writeFileSync(this.path, JSON.stringify({ ...JSON.parse(content), fetchedAt: this.fetchedAt }), { mode: 0o600 })
+      atomicWriteFile(this.path, JSON.stringify({ ...JSON.parse(content), fetchedAt: this.fetchedAt }), 'cache')
       this.lastWrittenContent = content
       this.lastWrittenAt = now
     } catch { /* best effort */ }

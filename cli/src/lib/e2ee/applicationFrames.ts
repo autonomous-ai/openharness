@@ -32,6 +32,8 @@ const FLEET_RESULTS = new Set([...FLEET_REQUESTS].map(type => `${type}_result`))
 const MACHINE_REQUESTS = new Set([...SHELL_REQUESTS, 'agent_purge', 'agent_worktree_delete', 'agents_cleanup_preview', 'agent_close', 'git_project_info', 'scm_project_info', 'git_pull_request', 'git_pull_requests_status', 'machine_resources', 'api_connections', 'connectors', 'group_sync', 'phone_pair', 'viewer_surface', 'orchestrator', 'agent_handoff_prepare',
   // A held launch's cancellation and its receipt contain the client's private request identity.
   'agent_create_cancel', 'agent_handoff_complete',
+  // Change agent moving a conversation between engines (services/sessionMigrate.ts): its answer names the folder.
+  'agent_session_migrate',
   // Memories (services/memory.ts): what this machine's agents remember, and About You and its on/off choice.
   'memory_snapshot', 'memory_about_put', 'memory_deliver',
   // Cloud agents (services/cloud.ts): a cloud harness's conversation, the person's words for it, which are connected.

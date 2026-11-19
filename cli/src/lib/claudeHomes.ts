@@ -18,7 +18,7 @@ import { basename, join, resolve, sep } from 'path'
 import { env } from '../config/env.js'
 import { harnessPath } from '../config/harnessHome.js'
 import { homeIsAbsolute } from '../engines/kit/homeAdoption.js'
-import { readPrivateStateFile } from './secureState.js'
+import { hardenPrivateStateFileIfPresent, jsonArray, readState, requireState } from './secureState.js'
 
 export interface ClaudeProfile {
   id: string
@@ -63,13 +63,23 @@ export function profileFor(machineId: string, path: string, real: string, home: 
 
 export function readLinkedPaths(): Set<string> {
   try {
-    const raw = JSON.parse(readPrivateStateFile(LINKED_FILE, 1024 * 1024)) as unknown
-    if (Array.isArray(raw)) return new Set(raw.filter((p): p is string => typeof p === 'string').slice(0, MAX_LINKED))
+    // A list another account could write is not this reader's to set aside: no list, and the writer refuses it too.
+    hardenPrivateStateFileIfPresent(LINKED_FILE, 1024 * 1024)
   } catch {
-    // Discovery still works when the optional saved list is unavailable/unreadable/malformed.
+    return new Set()
   }
-  return new Set()
+  const read = readState(LINKED_FILE, 'cache', jsonArray)
+  return linkedIn(read.state === 'ok' ? read.value : [])
 }
+
+/** The paths a link starts from. Throws when another account could write the list, or it cannot be read now
+ *  (StateFileUnreadable): read as none, the link would drop every other profile. */
+export function linkedPathsToChange(): Set<string> {
+  hardenPrivateStateFileIfPresent(LINKED_FILE, 1024 * 1024)
+  return linkedIn(requireState(LINKED_FILE, jsonArray, 'cache') ?? [])
+}
+
+const linkedIn = (list: unknown[]): Set<string> => new Set(list.filter((p): p is string => typeof p === 'string').slice(0, MAX_LINKED))
 
 /** Validate + resolve a folder path the same way for linking and for re-checking a saved one. */
 export function resolveFolder(path: string): string | ClaudeProfileError {

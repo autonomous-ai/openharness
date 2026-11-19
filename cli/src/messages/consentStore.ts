@@ -13,9 +13,9 @@
  *
  * Written by the messages process alone; Share reads it (`read`), and never writes it.
  */
-import { randomUUID } from 'node:crypto'
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, renameSync } from 'node:fs'
 import { dirname } from 'node:path'
+import { atomicWriteFile } from '../lib/secureState.js'
 import type { Roster } from './roster.js'
 import { bool, list, NO, object, text } from './shape.js'
 
@@ -88,9 +88,7 @@ export class ConsentStore {
   private save(): void {
     try {
       mkdirSync(dirname(this.path), { recursive: true, mode: 0o700 })
-      const temp = `${this.path}.${randomUUID()}.tmp`
-      writeFileSync(temp, JSON.stringify(this.entries), { flag: 'wx', mode: 0o600 })
-      renameSync(temp, this.path)
+      atomicWriteFile(this.path, JSON.stringify(this.entries), 'cache')
     } catch { return /* kept in memory; the next change writes it */ }
     this.onChange?.()
   }

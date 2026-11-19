@@ -12,10 +12,13 @@ const SRC = join(__dirname, '..')
 
 /** The modules beyond Node and its own folder the move may import. */
 const DOORS = ['config/harnessHome.ts', 'lib/harnessSessionLabel.ts', 'engines/kit/homeAdoption.ts']
-/** What homeAdoption.ts reaches: Node, and modules that import Node or each other and resolve no path as they load. */
+/**
+ * What homeAdoption.ts reaches: Node, and modules that import Node or each other and resolve no path as they load.
+ * lib/log.ts is there for errorKind: secureState.ts names a failed set-aside by its kind, as every log line does.
+ */
 const BEHIND_ADOPTION = [
   'engines/kit/homeCatalog.ts', 'engines/kit/identityScan.ts', 'engines/kit/nativeEvidence.ts', 'engines/kit/windowsFiles.ts',
-  'engines/kit/hookHeld.ts', 'lib/childLocale.ts', 'lib/secureState.ts',
+  'engines/kit/hookHeld.ts', 'lib/childLocale.ts', 'lib/secureState.ts', 'lib/log.ts',
 ]
 
 const sources = (folder: string): string[] => readdirSync(join(SRC, folder), { recursive: true, encoding: 'utf8' })
@@ -54,7 +57,7 @@ describe('what the move loads', () => {
     }
   })
 
-  it('every file it reaches is its own, those three, or the seven behind homeAdoption.ts, and they import only Node', () => {
+  it('every file it reaches is its own, those three, or the eight behind homeAdoption.ts, and they import only Node', () => {
     const reached = new Set<string>(), packages = new Set<string>()
     const pending = [...OWN]
     while (pending.length > 0) {
