@@ -140,13 +140,45 @@ mod tests {
     use std::path::Path;
 
     #[test]
-    fn only_a_release_build_on_a_mac_updates_itself() {
-        assert!(enabled(false, "macos", "0.0.1"));
-        assert!(!enabled(true, "macos", "0.0.1"));
-        assert!(!enabled(false, "linux", "0.0.1"));
-        assert!(!enabled(false, "windows", "0.0.1"));
-        // A local `cargo tauri build` keeps the placeholder: it never replaces itself with the published release.
-        assert!(!enabled(false, "macos", "0.0.0"));
+    fn a_release_build_updates_itself_on_macos_windows_and_as_an_appimage() {
+        // (debug, os, version, appimage, updates itself)
+        for (debug, os, version, appimage, updates) in [
+            (false, "macos", "0.0.1", false, true),
+            (false, "windows", "0.0.1", false, true),
+            (false, "linux", "0.0.1", true, true),
+            // A dev run or a distro package: the updater replaces only an AppImage.
+            (false, "linux", "0.0.1", false, false),
+            (true, "macos", "0.0.1", false, false),
+            (true, "windows", "0.0.1", false, false),
+            (true, "linux", "0.0.1", true, false),
+            // A local `cargo tauri build` keeps the placeholder: it never replaces itself with the published release.
+            (false, "macos", "0.0.0", false, false),
+            (false, "windows", "0.0.0", false, false),
+            (false, "linux", "0.0.0", true, false),
+            (false, "freebsd", "0.0.1", true, false),
+        ] {
+            assert_eq!(enabled(debug, os, version, appimage), updates, "{debug} {os} {version} {appimage}");
+        }
+    }
+
+    #[test]
+    fn what_an_update_replaces_on_each_os() {
+        let in_bundle = Path::new("/Applications/Harness Device.app/Contents/MacOS/harness-device");
+        let appimage = Path::new("/home/a/My Apps/Harness-Device-linux-x64.AppImage");
+        let mounted = Path::new("/tmp/.mount_HarnesAbC/usr/bin/harness-device");
+        let installed = Path::new("C:/Users/Nguyễn Văn A/AppData/Local/Harness Device/harness-device.exe");
+
+        assert_eq!(target("macos", in_bundle, None), Some("/Applications/Harness Device.app".into()));
+        // An APPIMAGE another program left in the environment changes nothing off Linux.
+        assert_eq!(target("macos", in_bundle, Some(appimage)), Some("/Applications/Harness Device.app".into()));
+        assert_eq!(target("macos", Path::new("/x/target/release/harness-device"), None), None);
+        assert_eq!(
+            target("windows", installed, None),
+            Some("C:/Users/Nguyễn Văn A/AppData/Local/Harness Device".into())
+        );
+        assert_eq!(target("linux", mounted, Some(appimage)), Some(appimage.into()));
+        assert_eq!(target("linux", mounted, None), None);
+        assert_eq!(target("freebsd", mounted, Some(appimage)), None);
     }
 
     #[test]
@@ -195,18 +227,72 @@ mod tests {
         let bundle = folder.path().join("X.app");
         fs::create_dir(&bundle).unwrap();
         let set = |path: &Path, mode: u32| fs::set_permissions(path, fs::Permissions::from_mode(mode)).unwrap();
-        assert!(replaceable(&bundle));
+        assert!(replaceable("macos", &bundle));
 
         // Each mode is put back before anything asserts, so a failure still lets the temp folder go.
         set(folder.path(), 0o555);
-        let folder_shut = replaceable(&bundle);
+        let folder_shut = replaceable("macos", &bundle);
         set(folder.path(), 0o755);
         set(&bundle, 0o555);
-        let bundle_shut = replaceable(&bundle);
+        let bundle_shut = replaceable("macos", &bundle);
         set(&bundle, 0o755);
         assert!(!folder_shut);
         assert!(!bundle_shut);
-        assert!(!replaceable(&folder.path().join("Gone.app")));
+        assert!(!replaceable("macos", &folder.path().join("Gone.app")));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_appimage_is_replaceable_only_when_it_and_its_folder_are_writable() {
+        use std::fs;
+        use std::os::unix::fs::PermissionsExt;
+        // Root writes anywhere: no mode below would refuse it.
+        if unsafe { libc::geteuid() } == 0 {
+            return;
+        }
+        let folder = tempfile::tempdir().unwrap();
+        let appimage = folder.path().join("Harness-Device-linux-x64.AppImage");
+        fs::write(&appimage, b"").unwrap();
+        let set = |path: &Path, mode: u32| fs::set_permissions(path, fs::Permissions::from_mode(mode)).unwrap();
+        set(&appimage, 0o755);
+        assert!(replaceable("linux", &appimage));
+
+        // Each mode is put back before anything asserts, so a failure still lets the temp folder go.
+        set(folder.path(), 0o555);
+        let folder_shut = replaceable("linux", &appimage);
+        set(folder.path(), 0o755);
+        set(&appimage, 0o555);
+        let appimage_shut = replaceable("linux", &appimage);
+        set(&appimage, 0o755);
+        assert!(!folder_shut);
+        assert!(!appimage_shut);
+        assert!(!replaceable("linux", &folder.path().join("Gone.AppImage")));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn an_install_folder_is_replaceable_only_when_a_file_can_be_made_in_it() {
+        use std::process::Command;
+        let folder = tempfile::tempdir().unwrap();
+        // Windows' own icacls, by its full path, so no PATH puts another first.
+        let icacls = std::path::PathBuf::from(std::env::var_os("SystemRoot").expect("SystemRoot"))
+            .join("System32")
+            .join("icacls.exe");
+        let acl = |args: &[&str]| {
+            let status = Command::new(&icacls).arg(folder.path()).args(args).status().unwrap();
+            assert!(status.success(), "icacls {args:?}");
+        };
+        assert!(replaceable("windows", folder.path()));
+        // The check leaves nothing in the install folder.
+        assert_eq!(std::fs::read_dir(folder.path()).unwrap().count(), 0);
+
+        // A folder the person may read but not add a file to, as an administrator's install is. Everyone is
+        // S-1-1-0, a name in no language; WD on a folder is "add a file". Put back before anything asserts.
+        acl(&["/deny", "*S-1-1-0:(WD)"]);
+        let shut = replaceable("windows", folder.path());
+        acl(&["/remove:d", "*S-1-1-0"]);
+        assert!(!shut);
+        assert!(!replaceable("windows", &folder.path().join("Gone")));
     }
 
     #[test]
