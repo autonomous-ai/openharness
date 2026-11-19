@@ -103,7 +103,7 @@ function setup(over: Partial<BindDeps> = {}) {
     announceSession: vi.fn(),
     stoppedAgents: { save: vi.fn(), finishResume: vi.fn(), get: vi.fn(() => null) },
     syncRecapPool: vi.fn(),
-    input: { forget: vi.fn(), awaitingConfirmation: vi.fn(() => false), firstTaskWaiting: vi.fn(() => false), typeCommand: vi.fn(async () => true) },
+    input: { forget: vi.fn(), awaitingConfirmation: vi.fn(() => false), firstTaskWaiting: vi.fn(() => false), typeCommand: vi.fn(async () => true), expectFirstTask: vi.fn() },
     submitFirstTask: vi.fn(),
     deviceInput: { forget: vi.fn() },
     homes: { copilot: '/copilot', grok: '/grok', agy: '/agy' },
@@ -2061,6 +2061,18 @@ describe('binding an OpenClaw pane, read from its screen', () => {
       // The task is the person's words: never in a log line.
       const said = [...vi.mocked(console.log).mock.calls, ...error.mock.calls].flat().map(String)
       expect(said.filter((line) => line.includes(TASK))).toEqual([])
+    })
+
+    // Found end to end (e2e/openclawShow.e2e.ts rows 3 and 6): between the row letting the task go and its paste, the
+    // agent read idle with no ask. Expected by the input first, it reads starting from the one or the other throughout.
+    it('the input expects the first task before its row lets it go', async () => {
+      const run = handing(() => ready)
+      vi.mocked(run.deps.registry.takeFirstTask).mockResolvedValue(TASK)
+      await run.binding.bindObservedAgent(tui())
+      await vi.waitFor(() => expect(run.deps.submitFirstTask).toHaveBeenCalled())
+      expect(vi.mocked(run.deps.input.expectFirstTask).mock.calls).toEqual([['a1']])
+      expect(vi.mocked(run.deps.input.expectFirstTask).mock.invocationCallOrder[0])
+        .toBeLessThan(vi.mocked(run.deps.registry.takeFirstTask).mock.invocationCallOrder[0])
     })
 
     it('not while the pane reads no Gateway or a run, before a stream is attached, or unbound', async () => {

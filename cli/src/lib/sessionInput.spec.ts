@@ -947,7 +947,8 @@ describe('SessionInputController', () => {
       const { controller, sendKey, onError, onWaitChanged } = paneController(() => pane)
 
       expect(controller.firstTaskWaiting('s1')).toBe(false)
-      controller.submit('s1', 'Say hello', undefined, undefined, { firstTask: true })
+      controller.expectFirstTask('s1')
+      controller.submit('s1', 'Say hello')
       await vi.advanceTimersByTimeAsync(4 * 60_000)
       pane = readyPane()
       await vi.advanceTimersByTimeAsync(60_000)
@@ -966,7 +967,8 @@ describe('SessionInputController', () => {
       vi.useFakeTimers()
       const { controller, sendKey, onError, onWaitChanged } = paneController(() => null)
 
-      controller.submit('s1', 'Say hello', undefined, undefined, { firstTask: true })
+      controller.expectFirstTask('s1')
+      controller.submit('s1', 'Say hello')
       await vi.advanceTimersByTimeAsync(5 * 60_000)
       expect(sendKey).toHaveBeenCalledTimes(2)
       expect(onError).not.toHaveBeenCalled()
@@ -974,6 +976,58 @@ describe('SessionInputController', () => {
       controller.forget('s1')
       expect(controller.firstTaskWaiting('s1')).toBe(false)
       expect(onWaitChanged.mock.calls).toEqual([['s1'], ['s1']])
+    })
+
+    // Found end to end (e2e/openclawShow.e2e.ts rows 3 and 6): the task left its row before it was typed, and until its
+    // paste was done, about 350 ms, the agent read idle with no ask.
+    it('a first task waits from when it is expected: before it is submitted, while it is pasted, and after', async () => {
+      let paste!: (done: boolean) => void
+      const { controller, inject } = paneController(() => readyPane())
+      inject.mockImplementationOnce(() => new Promise<boolean>((done) => { paste = done }))
+
+      controller.expectFirstTask('s1')
+      expect(controller.firstTaskWaiting('s1')).toBe(true)
+      controller.submit('s1', 'Say hello')
+      await vi.waitFor(() => expect(inject).toHaveBeenCalled())
+      expect(controller.firstTaskWaiting('s1')).toBe(true)
+      paste(true)
+      await vi.waitFor(() => expect(controller.awaitingConfirmation('s1')).toBe(true))
+      expect(controller.firstTaskWaiting('s1')).toBe(true)
+      controller.onTurnStarted('s1', 'Say hello')
+      expect(controller.firstTaskWaiting('s1')).toBe(false)
+      controller.forget('s1')
+    })
+
+    // Off its row once handed over, a first task lost to a paste that failed or a dispatch that could not be confirmed
+    // left the agent idle with no ask for good. It waits: a turn that takes it ends the wait, and if none does the
+    // binding pass's bound fails the launch where every verb shows it (core/agents/bind.ts).
+    it.each([
+      ['a paste that failed', false],
+      ['a dispatch that could not be confirmed', { state: 'unknown', dispatch: 'possibly_executed', reason: 'response was lost' }],
+    ] as const)('a first task still waits after %s, until a turn takes it', async (_, delivery) => {
+      vi.useFakeTimers()
+      const { controller, inject, onError } = paneController(() => readyPane())
+      inject.mockResolvedValueOnce(delivery as never)
+
+      controller.expectFirstTask('s1')
+      controller.submit('s1', 'Say hello')
+      await vi.advanceTimersByTimeAsync(5 * 60_000)
+      expect(onError).toHaveBeenCalled()
+      expect(controller.firstTaskWaiting('s1')).toBe(true)
+      controller.onTurnStarted('s1', 'Say hello')
+      expect(controller.firstTaskWaiting('s1')).toBe(false)
+      controller.forget('s1')
+    })
+
+    it('a first task the person stops before a turn takes it waits no more', async () => {
+      const { controller } = paneController(() => readyPane())
+
+      controller.expectFirstTask('s1')
+      controller.submit('s1', 'Say hello')
+      await vi.waitFor(() => expect(controller.awaitingConfirmation('s1')).toBe(true))
+      expect(await controller.cancelConfirmed('s1')).toBe(true)
+      expect(controller.firstTaskWaiting('s1')).toBe(false)
+      controller.forget('s1')
     })
 
     it('types an OpenClaw command only while nothing is pending for its pane', async () => {
