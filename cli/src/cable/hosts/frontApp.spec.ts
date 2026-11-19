@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { FRONT_NONE, frontAppId } from './frontApp.js'
+import { FRONT_NONE, frontAppId, windowClasses } from './frontApp.js'
 import { APP_IDS, detectApp } from './hostDetect.js'
 import { RECORDED_LINUX_APPS } from '../../testing/recordedLinuxApps.js'
 
@@ -73,6 +73,40 @@ describe('frontAppId', () => {
     for (const [value] of [...BUNDLES, ...EXES, ...LINUX_APPS]) {
       const id = frontAppId(value)
       expect(APP_IDS.includes(id) || id === FRONT_NONE).toBe(true)
+    }
+  })
+})
+
+// Each app's window class spellings on Linux. ChatGPT's .desktop has no StartupWMClass, so codex has none recorded.
+const CLASSES: [string, string[]][] = [
+  ['vscode', [RECORDED_LINUX_APPS.vscode.startupWmClass, RECORDED_LINUX_APPS.vscode.startupWmClass.toLowerCase()]],
+  ['cursor', [RECORDED_LINUX_APPS.cursor.startupWmClass, RECORDED_LINUX_APPS.cursor.startupWmClass.toLowerCase()]],
+  ['claude', [RECORDED_LINUX_APPS.claude.startupWmClass, RECORDED_LINUX_APPS.claude.startupWmClass.toLowerCase()]],
+  ['wezterm', ['org.wezfurlong.wezterm']],
+  ['kitty', ['kitty']],
+  ['ghostty', ['com.mitchellh.ghostty']],
+  ['harness', ['com.autonomous.harness', 'harness']],
+]
+
+describe('windowClasses', () => {
+  it.each(CLASSES)('an app with a row gives its spellings: %s', (app, classes) => {
+    expect(windowClasses(app)).toEqual(classes)
+  })
+
+  it('every row is an app id, and every other app id gives none', () => {
+    const rows = new Set(CLASSES.map(([app]) => app))
+    for (const [app] of CLASSES) expect(APP_IDS).toContain(app)
+    for (const app of APP_IDS.filter((id) => !rows.has(id))) expect(windowClasses(app)).toEqual([])
+  })
+
+  it.each(['codex', 'unknown', '', 'constructor', '__proto__', 'toString', 'Code', 'VSCODE'])(
+    'an app with no row and an inherited key give none: %j', (app) => {
+      expect(windowClasses(app)).toEqual([])
+    })
+
+  it('every spelling is a safe class', () => {
+    for (const [app] of CLASSES) {
+      for (const cls of windowClasses(app)) expect(cls).toMatch(/^[A-Za-z0-9._-]{1,64}$/)
     }
   })
 })
