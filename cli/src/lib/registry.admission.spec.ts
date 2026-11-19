@@ -26,18 +26,30 @@ vi.mock('fs', async original => {
   } }
 })
 // A registry image flush a test holds open, as a slow disk does.
-const preparation = vi.hoisted(() => ({ wait: undefined as undefined | (() => Promise<void>), release: undefined as undefined | (() => void) }))
+const preparation = vi.hoisted(() => ({ wait: undefined as undefined | (() => Promise<void>), release: undefined as undefined | (() => void),
+  due: new Map<unknown, () => void>() }))
 vi.mock('node:fs/promises', async original => {
   const actual = await original<typeof import('node:fs/promises')>()
   return { ...actual, open: async (...args: Parameters<typeof actual.open>) => {
     const handle = await actual.open(...args), sync = handle.sync.bind(handle)
     handle.sync = async () => {
       await sync()
-      if (String(args[0]).includes('registry.json.') && String(args[0]).endsWith('.tmp')) await preparation.wait?.()
+      if (!(String(args[0]).includes('registry.json.') && String(args[0]).endsWith('.tmp'))) return
+      for (const [timer, fire] of preparation.due) { preparation.due.delete(timer); fire() }
+      await preparation.wait?.()
     }
     return handle
   } }
 })
+// Under load a registry image sync outlives every real wait of 250 ms or more: each one still running fires
+// as that sync returns, if not before.
+const realTimeout = globalThis.setTimeout, realClear = globalThis.clearTimeout
+function slowTimeout(callback: (...args: unknown[]) => void, ms: number | undefined, args: unknown[]) {
+  if (ms === undefined || ms < 250) return realTimeout(callback, ms, ...args)
+  const timer = realTimeout(() => { preparation.due.delete(timer); callback(...args) }, ms)
+  preparation.due.set(timer, () => { realClear(timer); callback(...args) })
+  return timer
+}
 function hold() {
   let entered!: () => void, release!: () => void
   const reached = new Promise<void>(done => { entered = done }), released = new Promise<void>(done => { release = done })
@@ -90,7 +102,7 @@ beforeEach(async () => {
   await registry.flush()
 })
 afterEach(async () => {
-  preparation.wait = undefined; preparation.release?.(); preparation.release = undefined
+  preparation.wait = undefined; preparation.release?.(); preparation.release = undefined; preparation.due.clear()
   if (server) await new Promise<void>(resolve => server!.close(() => resolve()))
   server = undefined
   fault.rename = false; fault.directorySync = false; fault.renamed = false; fault.afterProof = undefined; fault.beforeVerify = undefined
@@ -418,12 +430,14 @@ async function httpFixture(blocked: (agentId: string) => boolean = () => false, 
   // The hook server answers a commit still in flight after 250 ms. Only a test fires that reply here,
   // so how fast this machine writes the registry never changes the replies these tests pin.
   let grace: (() => void) | undefined
-  const actualTimeout = globalThis.setTimeout
   vi.spyOn(globalThis, 'setTimeout').mockImplementation(((callback: (...args: unknown[]) => void, ms?: number, ...args: unknown[]) => {
-    if (ms !== 250) return actualTimeout(callback, ms, ...args)
+    if (ms !== 250) return slowTimeout(callback, ms, args)
     grace = () => callback(...args)
-    return actualTimeout(() => {}, 0)
+    return realTimeout(() => {}, 0)
   }) as typeof setTimeout)
+  vi.spyOn(globalThis, 'clearTimeout').mockImplementation(((timer?: Parameters<typeof clearTimeout>[0]) => {
+    preparation.due.delete(timer); realClear(timer)
+  }) as typeof clearTimeout)
   const started = await startHookServer(0, { onRegistered: registered, onSessionEnd: () => {},
     hookAdmissionBlocked: blocked,
     onPromptSubmitted: (_id, text) => prompts.push(text),
