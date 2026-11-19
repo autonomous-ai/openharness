@@ -8,7 +8,7 @@
  * the fields named here are read, and nothing of them is logged (docs/plans/2026-11-18-connect-orca-design.md).
  */
 import { realpathSync } from 'node:fs'
-import { readOrcaConnected } from './dialSkillFiles.js'
+import { readOrcaConnected, readSetup } from './dialSkillFiles.js'
 import { orcaBinary, orcaHomesDeps } from './orcaHomes.js'
 import { ensureOrcaPluginFolder } from './orcaPluginFolder.js'
 
@@ -32,21 +32,23 @@ export interface OrcaPluginRun {
 export interface OrcaPluginDeps extends OrcaPluginRun { folder: string; dataDir: string; err(line: string): void }
 export type OrcaPluginState = 'absent' | 'offer' | 'off' | 'approve' | 'behind' | 'current'
 
-/** What a connect asks Orca with: the `orca` to run, the plugin's key to name to Orca, and the version cli.js carries,
+/** What a change asks Orca with: the `orca` to run, the plugin's key to name to Orca, and the version cli.js carries,
  *  to know a plugin Orca lists as the one asked for. */
 interface Asking { orca: string; key: string; version: string }
-/** The state, and what a connect needs beside it: its error for an `absent` that is not `not-running` (a CLI from the
- *  sources, a folder that cannot be written), what it asks Orca with in the states it asks Orca in, and whether a plugin
- *  `behind` was installed from the plugin's own folder. */
+/** Why Orca is not asked about the plugin: `none`, no Orca here (Windows, no `orca`); `no-plugin`, a CLI from the
+ *  sources; `old`, an Orca below the plugin's engines; `folder`, the plugin's folder not written; `not-running`, an Orca
+ *  not reachable, or an answer that cannot be read. */
+interface Unasked { why: 'none' | 'no-plugin' | 'old' | 'folder' | 'not-running' }
+/** The state, and what a change needs beside it: why it is `absent` (`other` for an entry that is the person's to mend:
+ *  a development install, or one Orca could not load), what it asks Orca with in the states it asks Orca in, and
+ *  whether the entry Orca lists was installed from the plugin's own folder. */
 type Found =
-  | { state: 'absent'; error?: 'no-plugin' | 'failed' }
-  | { state: 'off' }
+  | { state: 'absent'; why: Unasked['why'] | 'other' }
   | { state: 'current' }
-  | ({ state: 'offer' } & Asking)
-  | ({ state: 'approve' } & Asking)
-  | ({ state: 'behind'; ours: boolean } & Asking)
+  | ({ state: 'offer' | 'off' | 'approve' | 'behind'; ours: boolean } & Asking)
 
-const ABSENT: Found = { state: 'absent' }
+const NOT_RUNNING: Found = { state: 'absent', why: 'not-running' }
+const OTHER: Found = { state: 'absent', why: 'other' }
 /** The one range Orca's manifests take. */
 const ENGINE = /^>=(\d+)\.(\d+)\.(\d+)$/
 const APP_VERSION = /^(\d+)\.(\d+)\.(\d+)(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$/
@@ -108,44 +110,63 @@ async function entryOf(deps: OrcaPluginDeps, orca: string, key: string): Promise
 const fromFolder = (source: unknown, folder: string): boolean =>
   isObject(source) && source.kind === 'local-path' && source.reference === real(folder)
 
-/** The first rule that holds (the design's `status`). Orca is asked `status` first: every other plugin command waits
- *  about 30 seconds for an Orca that is not reachable. */
-async function find(deps: OrcaPluginDeps): Promise<Found> {
-  if (deps.platform === 'win32') return ABSENT
+/** The orca-plugin.json cli.js carries. */
+const manifestOf = (files: OrcaPluginFiles) => JSON.parse(files['orca-plugin.json']) as { version: string; engines: { orca: string } }
+
+/** Orca asked up to the plugin's key, the folder written before Orca is asked about it. Orca is asked `status` first:
+ *  every other plugin command waits about 30 seconds for an Orca that is not reachable. */
+async function reach(deps: OrcaPluginDeps): Promise<Asking | Unasked> {
+  if (deps.platform === 'win32') return { why: 'none' }
   const files = deps.files()
-  if (files === null) return { state: 'absent', error: 'no-plugin' }
+  if (files === null) return { why: 'no-plugin' }
   const orca = deps.orca()
-  if (orca === null) return ABSENT
-  const carried = JSON.parse(files['orca-plugin.json']) as { version: string; engines: { orca: string } }
+  if (orca === null) return { why: 'none' }
+  const carried = manifestOf(files)
   const runtime = (await ask(deps, orca, ['status', '--json'], ORCA_STATUS_MS))?.runtime
-  if (!isObject(runtime) || runtime.reachable !== true || typeof runtime.appVersion !== 'string') return ABSENT
-  if (!meets(runtime.appVersion, carried.engines.orca)) return ABSENT
+  if (!isObject(runtime) || runtime.reachable !== true || typeof runtime.appVersion !== 'string') return { why: 'not-running' }
+  if (!meets(runtime.appVersion, carried.engines.orca)) return { why: 'old' }
   const written = ensureOrcaPluginFolder(deps.folder, files)
   if (typeof written === 'object') {
-    // Not Orca's absence: a connect would tell the person Orca is not running.
+    // Not Orca's absence: the person would be told Orca is not running.
     deps.err(`orca plugin folder: ${written.failed}`)
-    return { state: 'absent', error: 'failed' }
+    return { why: 'folder' }
   }
   const plugin = (await ask(deps, orca, ['plugin', 'inspect', deps.folder, '--json'], ORCA_READ_MS))?.plugin
   const key = isObject(plugin) ? plugin.pluginKey : undefined
-  if (typeof key !== 'string' || !PLUGIN_KEY.test(key)) return ABSENT
-  const entry = await entryOf(deps, orca, key)
-  if (entry === null) return ABSENT
-  const asking: Asking = { orca, key, version: carried.version }
+  if (typeof key !== 'string' || !PLUGIN_KEY.test(key)) return { why: 'not-running' }
+  return { orca, key, version: carried.version }
+}
+
+/** Whether the plugin was set up here before, by the devices (`dial-setup.json`'s `orca`) or by an `enable` or 0.1.9's
+ *  connect (`orcaConnected`), so one the person removed since is not set up again; `orcaHeld` alone set nothing up.
+ *  Undefined when a record cannot be read: that is not "never set up". */
+function setUpBefore(dataDir: string): boolean | undefined {
+  const setup = readSetup(dataDir)
+  const connected = readOrcaConnected(dataDir)
+  if (setup.orca !== undefined || connected.connected) return true
+  return setup.unread || connected.unread ? undefined : false
+}
+
+/** The first rule that holds (the design's `status`). With [force] (`enable`), an earlier removal does not count and
+ *  no record is read. */
+async function find(deps: OrcaPluginDeps, force: boolean): Promise<Found> {
+  const asking = await reach(deps)
+  if ('why' in asking) return { state: 'absent', why: asking.why }
+  const entry = await entryOf(deps, asking.orca, asking.key)
+  if (entry === null) return NOT_RUNNING
   if (entry === undefined) {
-    // A record that cannot be read is not "never connected": that would offer the plugin again to a person who
-    // removed it.
-    const record = readOrcaConnected(deps.dataDir)
-    if (record.unread) return ABSENT
-    return record.connected ? { state: 'off' } : { state: 'offer', ...asking }
+    const before = force ? false : setUpBefore(deps.dataDir)
+    if (before === undefined) return NOT_RUNNING
+    return { state: before ? 'off' : 'offer', ours: false, ...asking }
   }
   const { version, status, source } = entry
-  if (typeof version !== 'string' || typeof status !== 'string' || entry.isDev === true) return ABSENT
-  if (status === 'disabled') return { state: 'off' }
-  if (status === 'pending' || entry.needsReconsent === true) return { state: 'approve', ...asking }
+  if (typeof version !== 'string' || typeof status !== 'string') return NOT_RUNNING
+  if (entry.isDev === true) return OTHER
   const ours = fromFolder(source, deps.folder)
-  if (version !== carried.version || !ours) return { state: 'behind', ours, ...asking }
-  if (status === 'errored' || status === 'invalid') return ABSENT
+  if (status === 'disabled') return { state: 'off', ours, ...asking }
+  if (status === 'pending' || entry.needsReconsent === true) return { state: 'approve', ours, ...asking }
+  if (version !== asking.version || !ours) return { state: 'behind', ours, ...asking }
+  if (status === 'errored' || status === 'invalid') return OTHER
   return { state: 'current' }
 }
 
@@ -160,8 +181,14 @@ export function orcaPluginRun(): OrcaPluginRun {
   }
 }
 
+/** The version in the orca-plugin.json cli.js carries; null in a run from the sources. */
+export function carriedVersion(run: Pick<OrcaPluginRun, 'files'>): string | null {
+  const files = run.files()
+  return files === null ? null : manifestOf(files).version
+}
+
 export async function orcaStatus(deps: OrcaPluginDeps): Promise<{ orca: OrcaPluginState }> {
-  return { orca: (await find(deps)).state }
+  return { orca: (await find(deps, false)).state }
 }
 
 /** An approval fingerprint as Orca prints one, held to it where it comes in: from the caller and from Orca. */
@@ -202,8 +229,9 @@ export function withinApproved(data: unknown, key: string, version: string): boo
       && typeof contribution.kind === 'string' && typeof contribution.name === 'string'
       && ORCA_APPROVED.contributions.includes(`${contribution.kind}/${contribution.name}`))
 }
-/** With `status`, `inspect`, `list` and the `list` after a deadline passed, 95 s: within the app's 120 s for a connect. */
-export const ORCA_CONNECT_MS = 60_000
+/** Each install, update, enable or uninstall. With `status`, `inspect`, `list` and the `list` after a deadline passed,
+ *  a connect is 95 s: within the app's 120 s. */
+export const ORCA_CHANGE_MS = 60_000
 export const ORCA_GRANTS_MAX = 10
 export const ORCA_GRANT_MAX_CHARS = 300
 export type OrcaConnectError = 'not-running' | 'no-plugin' | 'off' | 'timeout' | 'failed'
@@ -265,12 +293,24 @@ function approval(data: unknown, update: boolean): OrcaConnect | undefined {
   return { connect: 'approve', name, version, fingerprint, grants, update }
 }
 
-/** Whether Orca lists the plugin as a connect asked for it: at the version cli.js carries, from the plugin's folder,
- *  and waiting on no approval. */
+/** Whether Orca lists the plugin as a change asked for it: at the version cli.js carries, from the plugin's folder,
+ *  waiting on no approval and not disabled. */
 async function finished(deps: OrcaPluginDeps, { orca, key, version }: Asking): Promise<boolean> {
   const entry = await entryOf(deps, orca, key)
   return isObject(entry) && entry.version === version && fromFolder(entry.source, deps.folder)
-    && typeof entry.status === 'string' && entry.status !== 'pending' && entry.needsReconsent !== true
+    && typeof entry.status === 'string' && entry.status !== 'pending' && entry.status !== 'disabled' && entry.needsReconsent !== true
+}
+
+/** Orca's answer to `plugin <args> --json` (an install, update, enable or uninstall): `ok`, its deadline passed, the
+ *  `data` of a refusal for want of an approval, or `failed` for anything else. Orca's message is never read: it can
+ *  hold a path. */
+async function change(deps: OrcaPluginDeps, orca: string, args: string[]): Promise<'ok' | 'timeout' | 'failed' | { refused: unknown }> {
+  const { code, stdout, timedOut } = await deps.run(orca, ['plugin', ...args, '--json'], { timeoutMs: ORCA_CHANGE_MS, maxBytes: ORCA_ANSWER_MAX_BYTES })
+  if (timedOut) return 'timeout'
+  const answer = parse(stdout)
+  if (code === 0 && answer?.ok === true) return 'ok'
+  const error = answer?.ok === false && isObject(answer.error) ? answer.error : undefined
+  return error?.code === 'approval_required' || error?.code === 'approval_stale' ? { refused: error.data } : 'failed'
 }
 
 /** Installs, updates or enables the plugin, as its state in Orca asks. Without [approve], Orca answers with the access
@@ -278,8 +318,10 @@ async function finished(deps: OrcaPluginDeps, { orca, key, version }: Asking): P
  *  was shown and accepted. It writes no record and logs nothing. */
 export async function orcaConnect(deps: OrcaPluginDeps, approve?: string): Promise<OrcaConnect> {
   if (approve !== undefined && !ORCA_FINGERPRINT.test(approve)) return FAILED
-  const found = await find(deps)
-  if (found.state === 'absent') return { connect: 'failed', error: found.error ?? 'not-running' }
+  const found = await find(deps, false)
+  if (found.state === 'absent') {
+    return { connect: 'failed', error: found.why === 'folder' ? 'failed' : found.why === 'no-plugin' ? 'no-plugin' : 'not-running' }
+  }
   // A plugin the person removed or disabled after a connect stays so: no stale click installs it again.
   if (found.state === 'off') return { connect: 'failed', error: 'off' }
   if (found.state === 'current') return { connect: 'done' }
@@ -288,17 +330,71 @@ export async function orcaConnect(deps: OrcaPluginDeps, approve?: string): Promi
   const word = found.state === 'approve' ? ['enable', found.key]
     : found.state === 'behind' && found.ours ? ['update', found.key]
     : ['install', deps.folder]
-  const args = ['plugin', ...word, ...(approve === undefined ? [] : ['--approve', approve]), '--json']
-  const { code, stdout, timedOut } = await deps.run(found.orca, args, { timeoutMs: ORCA_CONNECT_MS, maxBytes: ORCA_ANSWER_MAX_BYTES })
+  const answer = await change(deps, found.orca, [...word, ...(approve === undefined ? [] : ['--approve', approve])])
   // Orca may finish what it was asked after the deadline: `done` then, so the command records the connect.
-  if (timedOut) return await finished(deps, found) ? { connect: 'done' } : { connect: 'failed', error: 'timeout' }
-  const answer = parse(stdout)
-  if (code === 0 && answer?.ok === true) return { connect: 'done' }
-  // Orca's message is never read: it can hold a path.
-  const error = answer?.ok === false && isObject(answer.error) ? answer.error : undefined
-  if (error?.code === 'approval_required' || error?.code === 'approval_stale') {
-    // An update is whether Orca lists the plugin, so the app words the screen as one.
-    return approval(error.data, found.state !== 'offer') ?? FAILED
+  if (answer === 'timeout') return await finished(deps, found) ? { connect: 'done' } : { connect: 'failed', error: 'timeout' }
+  if (answer === 'ok') return { connect: 'done' }
+  // An update is whether Orca lists the plugin, so the app words the screen as one.
+  return answer === 'failed' ? FAILED : approval(answer.refused, found.state !== 'offer') ?? FAILED
+}
+
+export type OrcaSetUp =
+  | { orca: 'on'; did?: 'set up' | 'updated' }
+  | { orca: 'held' }
+  | { orca: 'off' }
+  | { orca: 'absent'; error: 'not-running' | 'old' | 'other' }
+  | { orca: 'failed'; error: 'timeout' | 'failed' | 'folder' }
+
+const SETUP_FAILED: OrcaSetUp = { orca: 'failed', error: 'failed' }
+
+/** Sets the plugin up in Orca, or brings it current, as its state there asks; [force] (`enable`) also brings back one
+ *  the person removed. `did` says what ran: none when it was current. Orca refuses a plugin that runs code without its
+ *  approval's fingerprint; Harness passes it only for a refusal within ORCA_APPROVED, and only once: Diego agreed to
+ *  that access for the person, and anything more is held for his decision. It writes no record and says nothing but
+ *  the folder's code. */
+export async function orcaSetUp(deps: OrcaPluginDeps, { force }: { force: boolean }): Promise<OrcaSetUp> {
+  const found = await find(deps, force)
+  if (found.state === 'absent') {
+    if (found.why === 'folder') return { orca: 'failed', error: 'folder' }
+    return { orca: 'absent', error: found.why === 'old' || found.why === 'other' ? found.why : 'not-running' }
   }
-  return FAILED
+  if (found.state === 'current') return { orca: 'on' }
+  if (found.state === 'off' && !force) return { orca: 'off' }
+  // Harness enables or updates only an entry it installed from its own folder, never code put elsewhere, such as a
+  // pending install from a person's checkout: that one is installed from the folder, which Orca counts as a moved source.
+  const word = !found.ours ? ['install', deps.folder] : found.state === 'behind' ? ['update', found.key] : ['enable', found.key]
+  const on: OrcaSetUp = { orca: 'on', did: found.state === 'offer' ? 'set up' : 'updated' }
+  let answer = await change(deps, found.orca, word)
+  if (typeof answer === 'object') {
+    if (!withinApproved(answer.refused, found.key, found.version)) return { orca: 'held' }
+    const { approvalFingerprint } = answer.refused as { approvalFingerprint?: unknown }
+    // An answer Harness cannot read, not access it would hold: tried again later.
+    if (typeof approvalFingerprint !== 'string' || !ORCA_FINGERPRINT.test(approvalFingerprint)) return SETUP_FAILED
+    answer = await change(deps, found.orca, [...word, '--approve', approvalFingerprint])
+    // A second refusal (the plugin changed in between) is never answered by a third run.
+    if (typeof answer === 'object') return SETUP_FAILED
+  }
+  // Orca may finish what it was asked after the deadline.
+  if (answer === 'timeout') return await finished(deps, found) ? on : { orca: 'failed', error: 'timeout' }
+  return answer === 'ok' ? on : SETUP_FAILED
+}
+
+export type OrcaRemove = { orca: 'off' } | { orca: 'off'; error: 'not-running' | 'timeout' | 'failed' }
+
+const OFF: OrcaRemove = { orca: 'off' }
+
+/** Uninstalls the plugin from Orca, whichever folder Orca holds it from. With no Orca that could hold it (none here,
+ *  a CLI from the sources, an Orca below its engines) there is nothing to uninstall. It writes no record and says
+ *  nothing but the folder's code: the folder is written for Orca to name the plugin's key. */
+export async function orcaRemove(deps: OrcaPluginDeps): Promise<OrcaRemove> {
+  const asking = await reach(deps)
+  if ('why' in asking) {
+    if (asking.why === 'not-running') return { orca: 'off', error: 'not-running' }
+    return asking.why === 'folder' ? { orca: 'off', error: 'failed' } : OFF
+  }
+  const entry = await entryOf(deps, asking.orca, asking.key)
+  if (entry === null) return { orca: 'off', error: 'not-running' }
+  if (entry === undefined) return OFF
+  const answer = await change(deps, asking.orca, ['uninstall', asking.key])
+  return answer === 'ok' ? OFF : { orca: 'off', error: answer === 'timeout' ? 'timeout' : 'failed' }
 }
