@@ -2,7 +2,7 @@
 
 > 2026-11-19. Replaces the first ESP32 roadmap (17 Nov, written before any code) and the "later milestones" lines of
 > [first light](../superpowers/specs/2026-11-17-harness-max-design.md). Code read at `main` `91f60b6a7b` and
-> `feat/harness-max-v3` `6da0a272fd`.
+> `feat/harness-max-v3` `6da0a272fd`. Rewritten the same day after the owner's call on the platform (below).
 
 ## What Max is
 
@@ -11,122 +11,132 @@ person, who is done. One tap on an agent talks to it. A Harness agent's question
 the bar. It runs the same software model as the Dial and the Pro (the Dial's app filter, `hello.appFilter:"v1"`), so
 its edge is where it sits, in the line of sight, not a feature the Pro lacks.
 
+## The target (owner's call, 19 Nov)
+
+- **Hardware:** the Harness Pro's, or its equal: an ESP32-P4 (chip v3.2, as the Pro's WT01P4C5-S1 module), with the
+  Waveshare [8.8-DSI-TOUCH-A](https://www.waveshare.com/8.8-dsi-touch-a.htm) panel: 480 x 1920 used on its side as
+  1920 x 480, OTA7290B over MIPI-DSI 2 lanes, GT9271 touch, about 225 ppi.
+- **Software:** one C firmware, `devices/harness-max/firmware`, built on the Pro's sources from `main` and following
+  the Dial's protocol as Diego moves it. The bar the owner tuned in V3 (Flutter) is ported to it.
+- **Until the P4 and the 8.8" panel are on the bench,** the Orange Pi 4 Pro with its 11.9" 1480 x 320 bar stands in. It
+  runs the same C code through the Linux port (`firmware/linux`) and draws the panel's exact 1920 x 480 picture,
+  scaled 2/3 to 1280 x 320 with black bars of 100 px left and right.
+- The owner's Harness Pro on the desk (ESP32-P4 v3.2, 720 x 720) is a build target only for now: V4 is built for the
+  P4 and checked against its flash layout, and not flashed onto it.
+
 ## Where it stands
 
-Three builds, all local branches (nothing pushed):
+Four builds, all local branches (nothing pushed):
 
 | Build | Branch | What it is |
 |---|---|---|
 | V1 | `feat/harness-max-all` | C firmware on the Pro's sources, the "room + three lanes" layout. Kept for history |
 | V2 | `feat/harness-max-v2` | C firmware, the [Demo V2](../superpowers/specs/2026-11-18-harness-max-v2-design.md) pages in the dial's look |
-| V3 | `feat/harness-max-v3` | Flutter (`devices/harness-max/flutter`) on an Orange Pi 4 Pro with an 11.9" 1480 x 320 touch bar. The build that is shown and tuned |
+| V3 | `feat/harness-max-v3` | Flutter on the Orange Pi. Frozen: the reference for how the bar behaves, not the product |
+| V4 | `feat/harness-max-v4` | C firmware: V2's pages, V3's changes, `main`'s protocol. In progress |
 
-V3 today:
+What V3 settled, which V4 carries into C:
 
-- Pages: Ambient, Overview with App Detail (three cells, the row scrolls, ordered by need: asking, working, failed,
-  done, idle; the order holds while an agent is open), the open agent with the mic on (one tap), Attention, Inbox,
-  Apps (Harness first, "+ New").
+- Overview is App Detail: three cells to the glass, the row scrolls, ordered by need (asking, working, failed, done,
+  idle), the order held while an agent is open; one tap opens an agent across the row with the mic on, the others
+  dimmed slivers (.62).
 - Voice rules of 18 Nov: 5 s of quiet after speech sends; a mic that hears nothing for 5 s closes and sends nothing;
   X cancels; a tap anywhere else sends; only a 25–350 ms tap that moves under 1.2 mm counts; 10 min cap.
 - A finished turn shows a small note bottom right for 6 s and never takes the glass; a question or a failure does
   (Attention, edge light).
-- Chimes on the board's speaker: a question and a failure ring two 2 kHz beeps (110 ms, 160 ms apart), a done turn a
-  soft two-note ding; one sound each at most every 30 s.
-- The cable: hello `board:"max"`, `appFilter:"v1"`, no `ota`; agents, `apps`/`app.pick`, `agent.open`, `answer`,
-  the reviewed path (`question.read`, `answer.reviewed`), `form` open, voice upload. Unit, widget and golden tests:
-  413 pass (`flutter test test/ui test/model test/demo test/link`, 19 Nov).
-- The demo (`deploy-orangepi.sh --demo`) is a scripted fake daemon; `--usb` runs against the Mac's real daemon over the
-  board's USB gadget, `--tcp` over the LAN for development.
+- Chimes: a question and a failure ring two 2 kHz tones (110 ms, 160 ms apart), a done turn a soft two-note ding; one
+  sound each at most every 30 s.
+- Apps: Harness first, with its symbol. "Following <App> on your Mac" when the computer turns the bar.
+- The demo is driven by the person (`--demo`: every state stands, nothing moves by itself); `--story` keeps the loop.
 
-Not done anywhere: the ESP32-P4 bench (the board has not arrived), Wi-Fi, a wake word, product hardware.
+Not done anywhere: the P4 and 8.8" bench, Wi-Fi, a wake word, product hardware.
 
 ## What `main` changed since the fork
 
 `main` moved 76 commits between the fork (`1e17b388ce`, 17 Nov) and `91f60b6a7b` (19 Nov), most of them for the Dial.
-A dry merge into V3 conflicts in five files: `cli/src/cable/cableSession.ts`, `cableFleet.ts`, `cableHost.spec.ts`,
-`cli/src/services/devices.spec.ts`, `scripts/ci-plan.py`.
+A dry merge into the branch conflicts in five files: `cli/src/cable/cableSession.ts`, `cableFleet.ts`,
+`cableHost.spec.ts`, `cli/src/services/devices.spec.ts`, `scripts/ci-plan.py`.
 
 | Change on `main` | Commits | What it means for Max |
 |---|---|---|
-| A `question` frame is only a summary: `questions:[{key:"", q:<≤239 B>, options:[]}]`, no `engine`. The whole question comes from `question.read` | #4460 | **Breaks V3.** V3 reads the options from the frame (`cable_link.dart` `readAskItems`, `bar_model.dart` `onQuestion`), so every question turns into "answer it on the computer", Allow/Deny disappear, and a `shown:` question loses its app name |
+| A `question` frame is only a summary: `questions:[{key:"", q:<≤239 B>, options:[]}]`, no `engine`. The whole question comes from `question.read` | #4460 | The bar must open every question through `question.read`; before V4 it read the options from the frame and answered nothing on the bar |
 | A question too big for a device (more than 4 questions or 6 options, a repeated key, over 6500 B) stays as a summary with no options | #4457 | Show its words with "answer it on the computer" |
-| Notices outlive a restart of the devices process (`dial-notices.json`, 24 h) and come back only as silent drawer rows (`notif.replace`); a held question is never sent again as a `question` frame | #4453, #4457 | **V3 drops `notif.replace`**, so after that restart an open question never reaches the bar |
+| Notices outlive a restart of the devices process (`dial-notices.json`, 24 h) and come back only as silent drawer rows (`notif.replace`); a held question is never sent again as a `question` frame | #4453, #4457 | The bar reads the drawer's question rows, or an open question is lost after that restart |
 | `questionTier:"v1"` in the hello: a question already told comes back as `question{tier:"list"}`, filed without a ring | #4457 | Say it, and file `tier:"list"` silently |
-| The drawer keeps a news row and a question row per agent, at most 8 rows, questions first; the bell counts agents; a full inbox (24) drops news, never a question | #4445, #4448, #4462 | V3 builds its own inbox on the bar; it should read the daemon's drawer instead (M3) |
-| On the Harness window's tab the daemon sends `apps{shown:"harness"}` with Harness left out of the list; welcome feature `apps.switch` | #4441 | Add the Harness tile itself when `shown` is `harness`, or Harness vanishes from Apps |
-| A voice discard is one `voice.abort{uploadId, why:"discarded"}`, before the next `voice.begin`, also after `voice.end` | #4467 | V3 sends the id already; check once-only and the abort after `voice.end` |
-| New agent sources: cmux, opencode, VS Code (terminal and Claude tab), Cursor, Orca account homes, the ChatGPT app's Codex. All `answer:false` | #4406, #4409, #4427, #4461, #4421, #4452 | Icons for `cmux` and `opencode` (the others have one) |
+| The drawer keeps a news row and a question row per agent, at most 8 rows, questions first; the bell counts agents; a full inbox (24) drops news, never a question | #4445, #4448, #4462 | The bar still builds its own Inbox; reading the daemon's drawer instead is M5 |
+| On the Harness window's tab the daemon sends `apps{shown:"harness"}` with Harness left out of the list; welcome feature `apps.switch` | #4441 | The bar adds the Harness entry itself |
+| A voice discard is one `voice.abort{uploadId, why:"discarded"}`, before the next `voice.begin`, also after `voice.end` | #4467 | Fixed in the Pro's `pro_recorder`/`pro_voice`, which Max compiles |
+| New agent sources: cmux, opencode, VS Code (terminal and Claude tab), Cursor, Orca account homes, the ChatGPT app's Codex. All `answer:false` | #4406, #4409, #4427, #4461, #4421, #4452 | App names for `cmux` and `opencode` |
 | Agent status from the engines' hooks: done lands 1.5 s after the turn ends, an interrupted Codex turn ends without a ring, no "working" while a permission waits | #4428, #4429 | No code change; check the chimes against a real daemon |
-| `focus` on the first agent right after `agents.end` when the device held none | #4452 | Ignored by V3 (it lands on Ambient); keep it that way |
-| The menu-bar app is named "Harness" and Desktop installs it when a device is plugged in | #4426, #4432 | V3 has no not-linked screen yet; when it gets one, it names the menu-bar app "Harness" |
+| `focus` on the first agent right after `agents.end` when the device held none | #4452 | The bar keeps its page |
+| The menu-bar app is named "Harness" and Desktop installs it when a device is plugged in | #4426, #4432 | A not-linked screen, when the bar gets one, names the menu-bar app "Harness" |
 
 ## Milestones
 
-### M1: Follow `main` (next)
+### M1: V4, the tuned bar in C on `main` (now)
 
-- Merge `main` into V3 and resolve the five conflicts. Max's own daemon changes go back on top of the new question
-  frame: `board:"max"` gets `seq`/`resync` and the name "Harness Max" (`4b9bbeb852`); `HARNESS_CABLE_TCP` and the
-  `permission:true` mark (`d85e26e71e`). The mark has to ride on the summary frame now.
-- Questions: when the welcome lists `question.review`, open every question through `question.read`; read the
-  permission mark and the `shown:` app from what the daemon still sends.
-- Say `questionTier:"v1"`; file `tier:"list"` without a chime; read the question rows of `notif.replace`.
-- Apps: the Harness tile when `shown` is `harness`; icons for `cmux` and `opencode`.
-- Voice: one `voice.abort` per discard, also after `voice.end`.
+- Merge `main` into the branch. Max's daemon changes go back on top of the new question frame: `board:"max"` gets
+  `seq`/`resync` and the name "Harness Max" (`4b9bbeb852`); `HARNESS_CABLE_TCP` and the `permission:true` mark
+  (`d85e26e71e`), which now rides on the summary frame.
+- The firmware follows `main`'s protocol: `question.read` for every question, `questionTier:"v1"`, the drawer's
+  question rows, the Harness entry for `shown:"harness"`, the new app names.
+- V3's changes in C: App Detail, order by need, voice rules, the done note, three chimes, Harness first, "Following
+  <App>", the person-driven demo.
+- The Orange Pi build draws 1920 x 480, scaled 2/3.
+- The P4 image (`harness_max.bin`) builds for esp32p4 and fits `ota_0` (0x7E0000).
 
-Done when: with the branch CLI installed on the Mac and the bar on `--usb`, a Harness agent's question is answered on
-the bar, a permission prompt is approved on the bar, and an open question is still on the bar after the Mac's devices
-process restarts.
+Done when: the Orange Pi runs V4 in `--demo` at 1280 x 320 with every V3 case; the host tests and goldens pass at
+1920 x 480; the P4 image fits; and with the branch CLI on the Mac and the bar on `--usb`, a Harness agent's question
+is answered and a permission prompt approved on the bar, and an open question survives a restart of the Mac's devices
+process.
 
-### M2: Daemon support on `main`
+### M2: On Pro hardware
+
+The owner's Harness Pro is a P4 v3.2 with a 720 x 720 ST7703I panel, GT911 touch, ES7210 mics and an ES8311 speaker.
+First V4 is only built for it (19 Nov). Next, decide one of:
+
+1. Flash V4 onto the Pro with a board entry for the Pro's pins and panel, the 1920 x 480 picture drawn as a 720 x 180
+   band: the chip, cable, touch, mic and speaker run for real before the 8.8" panel arrives. The Pro's own firmware
+   comes back by `flash.sh` or the daemon's OTA.
+2. Wait for a P4 board with the 8.8" panel (M3).
+
+### M3: The 8.8" panel on a P4
+
+The bring-up list of first light holds: the panel lights, touch lands where the finger is, the picture is the right
+way up, and these are recorded: the longest frame (full glass, one cell, the open agent's slide), the time to turn a
+strip, free internal RAM and PSRAM. App Detail's motion is cut to what the P4 draws in time.
+
+Done when: V4 runs on the P4 with the 8.8" panel against the Mac's daemon, as on the Orange Pi.
+
+### M4: Daemon support on `main`
 
 The daemon changes Max needs (`board:"max"`, the permission mark, `HARNESS_CABLE_TCP` for development) go to `main`
-by pull request, so a released Harness drives the bar without the branch CLI. Each `main` change to `cli/src/cable` is
-merged into V3 the same week until then: two days of `main` already gave five conflicts.
+by pull request, so a released Harness drives the bar without the branch CLI. Until then, each `main` change to
+`cli/src/cable` is merged into the branch the same week: two days of `main` already gave five conflicts.
 
-Done when: a released `harness` on the Mac runs the bar on `--usb`.
+Done when: a released `harness` on the Mac runs the bar.
 
-### M3: The daemon's inbox
+### M5: The daemon's inbox
 
 Drop the inbox the bar builds for itself. Read the drawer (`notif.replace`, `notif.seen`), send `notif.read` when a
 card is read, keep a news row and a question row per agent, and count agents on the bell. The bar, the Dial and the
 Mac then agree on what is unread, and a restart of the bar loses nothing.
 
-Done when: a notice read on the bar is read on the Dial, and a notice survives a restart of the bar's app.
+### M6: New Harness from the bar
 
-### M4: The platform
+The C build walks the New Harness form on the bar (V1/V2); V3 only opened it on the Mac. Starting an agent by voice
+on a chosen machine needs an agent-create frame the daemon does not have. Decide the scope first.
 
-V3 is Dart on Linux; the first plan was C on an ESP32-P4 with the 8.8" 480 x 1920 panel. The C code (V1/V2) lags V3:
-voice still waits 4000 ms / 1600 ms (`max_ui_internal.h` `MAX_HEAR_MS`, `MAX_SILENCE_MS`), and it has no App Detail,
-no order by need, no done note, no three chimes. It is ahead on OTA and on walking the New Harness form on the bar.
+### M7: Without the Mac
 
-To decide, when the P4 board is on the bench (the first plan's bring-up list still holds: panel, touch, the picture's
-turn, frame times, free RAM):
+Wi-Fi through the P4's companion chip (C5 on the Pro's module, C6 on many boards). The bar talks to the backend
+(`/api/device-ws`) and signs in by a QR code from the phone. Approving over the network stays refused, as over TCP
+today, until it has a security design of its own.
 
-1. Port `bar_model.dart` to C and keep one behaviour on both, with V3's tests as the contract.
-2. Ship a Linux bar (Orange Pi class) with the Flutter app, and stop the C firmware.
+### M8: Product
 
-Option 2 also needs: its own USB vendor and product id (the gadget borrows the Dial's `0x303a:0x1001`), an update
-path (today `deploy-orangepi.sh` over ssh; OTA by the daemon's `harness-max` key or a package), and a Flutter CI job
-(CI runs only the C jobs).
-
-The glass is part of it: V3's three cells and its sizes are made for the 11.9" bar at 127 ppi; the 8.8" panel is
-about 225 ppi.
-
-### M5: New Harness from the bar
-
-V3 sends `form{op:"open", surface:"new"}` and the form opens on the Mac; V1/V2 walk the form on the bar. Starting an
-agent by voice on a chosen machine needs an agent-create frame the daemon does not have. Decide the scope first.
-
-### M6: Without the Mac
-
-On a Linux bar Wi-Fi is already there; on the P4 it goes through the C5/C6 chip. Either way the bar talks to the
-backend (`/api/device-ws`) and signs in by a QR code from the phone. Approving over the network stays refused, as
-over TCP today (`PERMISSION_REFUSED`), until it has a security design of its own.
-
-### M7: Product
-
-Board, panel, enclosure, flashing station, release channel, radio certification (a certified module saves most of
-it). Runs beside M4 to M6.
+Board, panel, enclosure, flashing station, OTA release under the `harness-max` key, radio certification (a certified
+module saves most of it). Runs beside M3 to M7.
 
 No wake word is planned: one tap talks.
 
@@ -135,23 +145,25 @@ No wake word is planned: one tap talks.
 - 17 Nov: the code lives in this repo beside the Pro (`devices/harness-max`); USB first; approvals from the bar, over
   USB only, for Harness agents only.
 - 18 Nov: the pages of Demo V2 ("Diego + one tap"); one tap on an agent opens its mic; the voice rules above.
-- 18 Nov: V3 in Flutter; the demo starts still (`--demo`), the old script is `--story`; a done turn does not take the
-  glass.
+- 18 Nov: V3 in Flutter for the Orange Pi; the demo starts still; a done turn does not take the glass.
 - 19 Nov: App Detail; Harness first among apps; the order by need; the chimes.
+- 19 Nov: the product is the C firmware on the Pro's hardware with the 8.8" panel; V3 becomes the reference; the
+  Orange Pi runs the C build at the panel's exact 1920 x 480; the desk Pro is built for, not flashed.
 - The machines rail of the first plan is gone: the app column (the Dial's app filter) replaced it.
 
 ## Open
 
-1. The platform (M4).
-2. The scope of New Harness (M5).
-3. When the daemon changes go to `main` (M2): the branches stay local until the owner says.
+1. M2: flash V4 onto the desk Pro, or wait for the 8.8" panel.
+2. The scope of New Harness (M6).
+3. When the daemon changes go to `main` (M4): the branches stay local until the owner says.
 4. At that merge, remove the demo (`--demo`, `main/demo/`, the `max-demo` launcher).
 
 ## Risks
 
 | Risk | Effect | What we do |
 |---|---|---|
-| The cable protocol changes daily on `main` | V3 breaks against a released daemon (it already does for questions) | M1 now, then merge `main` weekly until M2 |
-| The demo hides gaps of the real path | New Harness, the inbox and empty apps behave differently with the real daemon | Test each milestone on `--usb`, not only `--demo` |
+| The cable protocol changes daily on `main` | The bar breaks against a released daemon | M1 now, then merge `main` weekly until M4 |
+| App Detail's sliding row on the P4's strip renderer | Frames too long, a stutter | Measure in M3; slide less, or snap |
+| The Orange Pi shows the picture at 2/3 | Smaller than the 8.8" panel's pixels, larger than its millimetres | Judge type sizes in mm: 1280 px on the 11.9" bar is about 255 mm wide, the 8.8" panel about 217 mm |
+| The demo hides gaps of the real path | The inbox and empty apps behave differently with the real daemon | Test each milestone on `--usb`, not only `--demo` |
 | Approvals only over USB | A LAN demo cannot approve | Demo approvals on `--usb` |
-| Two codebases (Dart and C) drift | The P4 build shows an older bar | Decide M4 before more C work |
