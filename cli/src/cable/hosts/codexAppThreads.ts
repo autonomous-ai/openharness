@@ -15,18 +15,17 @@ import { codexThreadName, resetCodexThreadNames } from '../../lib/sessionTitle.j
 import { builtinSqlite, idleWalStore, type DatabaseConstructor } from '../../lib/sqliteBuiltin.js'
 import type { SqliteRow } from '../../lib/sqliteRead.js'
 import { CODEX_THREAD } from './codexQueue.js'
+import { MAX_CWD } from './herdrSource.js'
 import { observedTitle } from './observedTitle.js'
 
 /** The threads a read lists: the newest, so a project with many threads cannot keep every Recent one off the dial. */
-export const MAX_LISTED = 16
+const MAX_LISTED = 16
 /** The rows a read takes, each given its sidebar place, so a running thread's hooked copy is placed too. */
-export const MAX_ROWS = 200
+const MAX_ROWS = 200
 /** The project ids kept of `project-order`. */
-export const MAX_PROJECTS = 64
+const MAX_PROJECTS = 64
 /** The largest JSON file read: the app's is about 135 KB. */
 export const MAX_STATE_BYTES = 1_048_576
-/** The longest folder a row may have. */
-export const MAX_CWD = 4_096
 
 const STORE = 'state_5.sqlite'
 const STATE = '.codex-global-state.json'
