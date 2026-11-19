@@ -244,6 +244,8 @@ describe('the installed index', () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     chmodSync(indexFile(), 0o000)
     expect(() => upsertInstalledRecord(record('acme/two'))).toThrow('installed.json could not be read (EACCES)')
+    // The Store's mark after a setup runs again (setupAgain.ts): read as none, it would write an empty index.
+    expect(() => markSetup('acme/one', 'needs-setup')).toThrow('installed.json could not be read (EACCES)')
     chmodSync(indexFile(), 0o600)
     expect(readFileSync(indexFile(), 'utf8')).toBe(before)
     expect(readdirSync(dshRootDir())).toEqual(['installed.json'])
