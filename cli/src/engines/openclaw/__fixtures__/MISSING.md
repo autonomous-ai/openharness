@@ -54,6 +54,12 @@ read every poll from launch to ready, through a run, and through a `chat.history
   it (` startup failed: <error>`) is left out: no error was recorded.
 - **answer-history-words**: a model's answer saying `history failed:` at column 0, over a ready status line.
 
+`screen-box-scrolled.txt` is drawn line by line by OpenClaw 2026.11.2's own components (pi-tui's `Text` and `Editor`,
+rendered with no terminal) at tmux's default 80x24: a 560-character message OpenClaw refused before it connected, put
+back in its input box with the cursor at its end. The box shows 7 lines (30% of the rows, at least 5), so its top border
+reads `↑ 1 more`. `connected | disconnected` is the status a connection leaves after such a refusal (the TUI resets only
+a `starting up` activity when it connects).
+
 `screen-gateway-starting.txt` and `screen-starting-up-disconnected.txt` are `screen-starting-up.txt` with the status
 lines a cold Gateway drew on a slow Linux machine (arm64 Debian 12, 0.6 CPU, OpenClaw 2026.11.2) for 85–110 s:
 `<spinner> starting up • Ns | gateway starting` (the Gateway's answer while it starts, `resolveGatewayDisconnectState`

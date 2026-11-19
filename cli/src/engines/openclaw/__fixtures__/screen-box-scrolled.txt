@@ -1,0 +1,24 @@
+ openclaw tui - ws://127.0.0.1:18789 - agent main - session plain
+
+ session agent:main:plain
+ connected | disconnected
+ agent main | session plain | deepseek/deepseek-v4.1-flash | deliver:off |
+ tokens ?
+─────────────────────────────────── ↑ 1 more ───────────────────────────────────
+Explain in two sentences why it failed, quoting the assertion message exactly
+as the log prints it. Then open the test file, find the code under test, and
+propose the smallest change to the code (not the test) that would make the
+assertion pass. Do not edit any file yet: list the change as a unified diff,
+say which other tests call the same function, and say whether any of them
+would change their result. Finish with one line that starts with VERDICT: and
+names the file you would change.
+────────────────────────────────────────────────────────────────────────────────
+
+
+
+
+
+
+
+
+

@@ -24,6 +24,7 @@ const SHOWN: Record<string, { key: string | null; url: string | null }> = {
   'screen-approval.txt': { key: 'agent:main:approval', url: 'ws://127.0.0.1:18789' },
   'screen-answer-history-words.txt': { key: 'agent:main:plain', url: 'ws://127.0.0.1:18789' },
   'screen-banner.txt': { key: null, url: null },
+  'screen-box-scrolled.txt': { key: 'agent:main:plain', url: 'ws://127.0.0.1:18789' },
   'screen-connecting.txt': { key: 'agent:main:plain', url: 'ws://127.0.0.1:18789' },
   'screen-disconnected.txt': { key: 'agent:main:plain', url: 'ws://127.0.0.1:18789' },
   'screen-fail-model.txt': { key: 'agent:main:fail', url: 'ws://127.0.0.1:18789' },
@@ -261,6 +262,28 @@ describe('the OpenClaw contract', () => {
     expect(openclawBoxHolds('', message)).toBe(false)
     expect(openclawBoxHolds(null, message)).toBe(false)
     expect(openclawBoxHolds('anything', '  ')).toBe(false)
+  })
+
+  it('a box taller than the TUI shows it is read through its scroll borders, and holds the message whose part it shows', () => {
+    // At tmux's default 80x24 the box shows 7 lines (pi-tui's editor: 30% of the rows, at least 5): a message OpenClaw
+    // refused and put back with its cursor at the end shows its last lines under `↑ 1 more`.
+    const message = 'Read the build log in ci/last-run.txt and find the first test that failed. Explain in two sentences why it '
+      + 'failed, quoting the assertion message exactly as the log prints it. Then open the test file, find the code under '
+      + 'test, and propose the smallest change to the code (not the test) that would make the assertion pass. Do not edit '
+      + 'any file yet: list the change as a unified diff, say which other tests call the same function, and say whether any '
+      + 'of them would change their result. Finish with one line that starts with VERDICT: and names the file you would change.'
+    const scrolled = fixture('screen-box-scrolled.txt')
+    const screen = readOpenclawScreen(scrolled)
+    expect(screen).toMatchObject({ key: 'agent:main:plain', state: 'ready', boxHidden: { above: 1, below: 0 } })
+    expect(screen.box).toMatch(/^Explain in two sentences .* names the file you would change\.$/)
+    expect(openclawBoxHolds(screen.box, message, screen.boxHidden)).toBe(true)
+    expect(openclawBoxHolds(screen.box, `${message} Keep it short.`, screen.boxHidden)).toBe(false)
+    // The cursor moved up: the box shows the message's start, `↓ N more` under it, or a part of it with both.
+    const down = scrolled.replace(/^─+ ↑ 1 more ─+$/m, '─'.repeat(80)).replace(/^─{80}$(?![\s\S]*^─)/m, `${'─'.repeat(35)} ↓ 2 more ${'─'.repeat(35)}`)
+    expect(readOpenclawScreen(down)).toMatchObject({ state: 'ready', boxHidden: { above: 0, below: 2 } })
+    expect(openclawBoxHolds('Read the build log in ci/last-run.txt and find the first', message, { above: 0, below: 2 })).toBe(true)
+    expect(openclawBoxHolds('Explain in two sentences why it failed', message, { above: 1, below: 2 })).toBe(true)
+    expect(openclawBoxHolds('Explain in two sentences why it failed', message, { above: 0, below: 2 })).toBe(false)
   })
 
   it('says a first task OpenClaw did not take', () => {
