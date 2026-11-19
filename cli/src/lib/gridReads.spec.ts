@@ -15,6 +15,19 @@ import { join } from 'node:path'
 import { installFakeGrid, type FakeGrid, type FakeGridPlan, type FakeGridTurn } from './__fixtures__/fakeGrid.js'
 import { forgetGridModels, gridInventory, gridServingNodes, listAllGridModels, listGridModels, resetGridModels, type GridModelsService, type GridSection } from './gridModels.js'
 
+// Pass-through, recording what replaced a file and what was opened by name.
+const disk = vi.hoisted(() => ({ renamed: [] as Array<[string, string]>, opened: [] as string[] }))
+vi.mock('node:fs', async original => {
+  const actual = await original<typeof import('node:fs')>()
+  return { ...actual,
+    renameSync: (...args: Parameters<typeof actual.renameSync>) => {
+      disk.renamed.push([String(args[0]), String(args[1])])
+      return actual.renameSync(...args)
+    },
+    openSync: (...args: Parameters<typeof actual.openSync>) => { disk.opened.push(String(args[0])); return actual.openSync(...args) },
+  }
+})
+
 const OWN = 'mine', OWN_ID = 'net-own', TEAM = 'team', TEAM_ID = 'net-team'
 const EMAIL = 'me@example.com'
 const OVERVIEW = '/relay/v1/grid/overview', DISCOVER = '/nodes/discover'
@@ -500,6 +513,22 @@ describe('the grid list', () => {
 
     expect((await look()).map((s) => s.name)).toEqual([OWN])
     expect(grid.calls().filter((argv) => argv[1] === 'info').map((argv) => argv[2])).toEqual([OWN])
+  })
+})
+
+describe('a saved picture', () => {
+  it('the save goes through a temporary file renamed onto the target', async () => {
+    answer(TEAM_ID, OVERVIEW, awake([node('rig', ['qwen'])]))
+    disk.renamed = []; disk.opened = []
+    await look()
+    const folder = join(root, 'data', 'grid-pictures')
+    const files = readdirSync(folder).filter((n) => n.endsWith('.json')).map((n) => join(folder, n))
+    expect(files.length).toBeGreaterThan(0)
+    for (const file of files) {
+      expect(disk.renamed.filter(([, to]) => to === file).map(([from]) => from)).toEqual([expect.stringMatching(/\.tmp$/)])
+      expect(disk.renamed.find(([, to]) => to === file)![0].startsWith(`${file}.`)).toBe(true)
+      expect(disk.opened).not.toContain(file)
+    }
   })
 })
 

@@ -1,11 +1,24 @@
-import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { fakeAppEngine, type FakeAppEngine, type FakeEngineStart } from './__fixtures__/fakeAppEngine.js'
-import { APP_CONTEXT, appContext, appEngineOps, AppStartError, cacheName, llamaServerArgs, lmsKey, scanAppModels,
-  type AppEngineOps, type AppEngineRecord, type AppModel } from './appModels.js'
+import { APP_CONTEXT, appContext, appEngineOps, AppStartError, cacheName, llamaServerArgs, lmsKey, readAppRecords, scanAppModels,
+  writeAppRecords, type AppEngineOps, type AppEngineRecord, type AppModel } from './appModels.js'
 import { processExists } from './processLiveness.js'
+
+// Pass-through, recording what replaced a file and what was opened by name.
+const disk = vi.hoisted(() => ({ renamed: [] as Array<[string, string]>, opened: [] as string[] }))
+vi.mock('node:fs', async original => {
+  const actual = await original<typeof import('node:fs')>()
+  return { ...actual,
+    renameSync: (...args: Parameters<typeof actual.renameSync>) => {
+      disk.renamed.push([String(args[0]), String(args[1])])
+      return actual.renameSync(...args)
+    },
+    openSync: (...args: Parameters<typeof actual.openSync>) => { disk.opened.push(String(args[0])); return actual.openSync(...args) },
+  }
+})
 
 const GiB = 1024 ** 3
 const grid = { kind: 'llama.cpp', path: '/home/me/.grid/bin/llama-server', version: 'version: 10369', note: "Grid's own engine" }
@@ -272,5 +285,45 @@ describe.skipIf(process.platform === 'win32')('an engine started on a port it pi
     const started = await ops.start(mine, 65536, logs)
     expect(started.port).toBe(engine.starts()[0].port)
     await ops.stop(record(mine, started))
+  })
+})
+
+describe('the engines this daemon started, on disk', () => {
+  let dir: string, file: string
+  const started: AppEngineRecord = { spec: 1, modelId: 'app:ollama:llama3.2:3b', grid: 'home', engine: 'ollama', name: 'llama3.2:3b',
+    served: 'llama3.2:3b', alias: 'llama3.2-3b', port: 11434, binary: '/usr/local/bin/ollama' }
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'app-engines-'))
+    file = join(dir, 'app-engines.json')
+    disk.renamed = []; disk.opened = []
+  })
+  afterEach(() => { vi.restoreAllMocks(); rmSync(dir, { recursive: true, force: true }) })
+
+  it('the save goes through a temporary file renamed onto the target', async () => {
+    await writeAppRecords(file, [started])
+    expect(disk.renamed.filter(([, to]) => to === file).map(([from]) => from)).toEqual([expect.stringMatching(/\.tmp$/)])
+    expect(disk.renamed[0]![0].startsWith(`${file}.`)).toBe(true)
+    expect(disk.opened).not.toContain(file)
+    expect(await readAppRecords(file)).toEqual([started])
+  })
+
+  it('a file at the old temporary name is left alone', async () => {
+    const now = Date.parse('2026-11-19T10:00:00Z')
+    vi.spyOn(Date, 'now').mockReturnValue(now)
+    const old = `${file}.${process.pid}.${now}.tmp`
+    writeFileSync(old, 'another writer')
+    await writeAppRecords(file, [started])
+    expect(readFileSync(old, 'utf8')).toBe('another writer')
+  })
+
+  it('a torn app-engines.json is set aside, not written over', async () => {
+    writeFileSync(file, '[{"')
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    expect(await readAppRecords(file)).toEqual([])
+    await writeAppRecords(file, [started])
+    expect(readFileSync(`${file}.unreadable`, 'utf8')).toBe('[{"')
+    expect(readFileSync(file, 'utf8')).toBe(JSON.stringify([started]))
+    expect(warn).toHaveBeenCalledWith(
+      '[state] app-engines.json could not be read (not valid JSON); kept as app-engines.json.unreadable, starting empty.')
   })
 })

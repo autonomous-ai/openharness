@@ -7,6 +7,19 @@ import { AgentTokenUsageCache } from './agentTokenUsage.js'
 import { validUsage } from './agentUsageWire.js'
 import type { RegisteredSession } from './registry.js'
 
+// Pass-through, recording what replaced a file and what was opened by name.
+const disk = vi.hoisted(() => ({ renamed: [] as Array<[string, string]>, opened: [] as string[] }))
+vi.mock('node:fs', async original => {
+  const actual = await original<typeof import('node:fs')>()
+  return { ...actual,
+    renameSync: (...args: Parameters<typeof actual.renameSync>) => {
+      disk.renamed.push([String(args[0]), String(args[1])])
+      return actual.renameSync(...args)
+    },
+    openSync: (...args: Parameters<typeof actual.openSync>) => { disk.opened.push(String(args[0])); return actual.openSync(...args) },
+  }
+})
+
 const at = '2026-09-22T16:00:00Z'
 const claude = (id: string, input = 100, output = 20, extra: Record<string, unknown> = {}) => JSON.stringify({
   type: 'assistant', timestamp: at, sessionId: 'conversation', requestId: `req-${id}`,
@@ -243,6 +256,16 @@ describe('owning-machine token cache', () => {
     store.dispose()
     store = new AgentTokenUsageCache(join(dir, 'cache'), { now: () => now })
     expect((await read())?.totalTokens).toBe(210)
+  })
+
+  it('the save goes through a temporary file renamed onto the target', async () => {
+    await writeFile(target.transcriptPath!, claude('one'))
+    disk.renamed = []; disk.opened = []
+    await read()
+    const file = join(dir, 'cache', (await readdir(join(dir, 'cache')))[0])
+    expect(disk.renamed.filter(([, to]) => to === file).map(([from]) => from)).toEqual([expect.stringMatching(/\.tmp$/)])
+    expect(disk.renamed[0]![0].startsWith(`${file}.`)).toBe(true)
+    expect(disk.opened).not.toContain(file)
   })
 
   it('counts Codex deltas, excludes rate-limit-only updates and repeated records', async () => {
