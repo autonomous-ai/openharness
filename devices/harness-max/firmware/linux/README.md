@@ -20,7 +20,12 @@ list of portable sources; `../main/CMakeLists.txt` adds the ESP32-P4 drivers to 
   the default output. A chime is dropped while one plays or the microphone is open.
 - `cable/`: `cable_link.h` with the far end picked when the program starts: `--live` (the default) takes a real daemon
   over TCP in the USB framing, `--usb` a real daemon over the USB cable through a gadget's serial port (`/dev/ttyGS0`),
-  `--demo` runs the scripted daemon in `../main/demo` inside the program.
+  `--demo` runs the scripted daemon in `../main/demo` inside the program for a person to drive: every agent rests and
+  nothing moves by itself. Talking to an agent starts its turn with the mockup's line; rate-limiter, landing-hero,
+  firmware-max and harness-cli play their case (a failed test run, a question only Orca answers, a permission prompt, a
+  question the bar answers by tap or by voice) on the 1st, 3rd, 5th... words, their line in between. New Harness
+  agents stay until a re-plug (14 agents at most). `--story` runs the same daemon playing its 160 s story by itself, in
+  a loop (the old `--demo`).
 
 The glass is 1920 x 480 by default, the ESP32-P4 panel's, so the bar shows exactly what a Harness Max draws: the
 Orange Pi's 1480 x 320 bar shows it at 1280 x 320 in the middle, 100 px of black either side, and a touch on the black
@@ -39,8 +44,9 @@ cmake -S devices/harness-max/firmware/linux -B build/max-sim            # -DMAX_
 cmake --build build/max-sim -j
 ctest --test-dir build/max-sim                                         # the host tests of this directory
 build/max-sim/harness-max                                              # waits for a daemon on port 7531
-build/max-sim/harness-max --demo                                       # the demo
-build/max-sim/harness-max --demo --screenshot 8 lanes.bmp              # saves the glass after 8 s and quits
+build/max-sim/harness-max --demo                                       # the demo, driven by the person
+build/max-sim/harness-max --story                                      # the demo playing its story by itself
+build/max-sim/harness-max --story --screenshot 8 lanes.bmp             # saves the glass after 8 s and quits
 ```
 
 A daemon reaches `--live` with `HARNESS_CABLE_TCP=localhost:7531` (or `<address>:7531` for a board), the dev-only TCP
@@ -62,6 +68,7 @@ picture a quarter and scales 1920 x 480 to 1280 x 320 in the middle of it, and t
 devices/harness-max/firmware/linux/deploy-orangepi.sh                    # the Mac's daemon over the USB cable
 devices/harness-max/firmware/linux/deploy-orangepi.sh --live             # the Mac's daemon over TCP
 devices/harness-max/firmware/linux/deploy-orangepi.sh --demo --no-build  # the demo, without building again
+devices/harness-max/firmware/linux/deploy-orangepi.sh --story --no-build # the demo's story, playing by itself
 ```
 
 It copies the sources to the board, builds there (`MAX_LINUX_OUTPUT=drm`, `MAX_GLASS_H=480`), runs the host tests,
@@ -76,16 +83,21 @@ Mac carries the cable protocol, as a Harness Max's does, and powers the board (t
 gadget exists while the app runs. The microphone is the USB one Near's voice service uses, which stops while the bar
 runs (`HARNESS_MAX_MIC` in the unit).
 
-Switching the bar (each service stops the other; there is one DRM master at a time):
+Switching the bar. Near and Harness Max Demo V3 (`../../flutter`) both run under Near's `near-app.service`, which
+starts the Flutter bundle `~/near/mode.env` names; `near-demo` and V3's `deploy-orangepi.sh` each write that file.
+`harness-max.service` conflicts with `near-app` and `near-voice`, so starting either side stops the other (one DRM
+master at a time), and this script leaves `~/near/mode.env` and V3's `near-voice` drop-in as they are:
 
 | To | On the Mac | On the board |
 | --- | --- | --- |
-| Harness Max | `deploy-orangepi.sh [--usb / --live / --demo] --no-build` | `sudo systemctl start harness-max` |
-| Near | `near-demo` | `sudo systemctl start near-app` |
+| Harness Max (this build) | `deploy-orangepi.sh [--usb / --live / --demo / --story] --no-build` | `sudo systemctl start harness-max` |
+| Near | `near-demo` | `sudo systemctl start near-app`, when `~/near/mode.env` names Near |
+| Harness Max Demo V3 | `devices/harness-max/flutter/deploy-orangepi.sh [mode] --no-build` | `sudo systemctl start near-app`, when `~/near/mode.env` names `near/app-max` |
 
-The demo (`--demo`, `../main/demo`) is temporary: it goes once this branch is merged into main.
+The demo (`--demo`, `--story`, `../main/demo`) is temporary: it goes once this branch is merged into main.
 
-The unit has no `[Install]`: a reboot comes back to Near.
+The unit has no `[Install]`: a reboot comes back to `near-app`, with the bundle `~/near/mode.env` names (Near, or V3
+when V3 was deployed last).
 
 ## Known
 
