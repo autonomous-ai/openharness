@@ -143,20 +143,21 @@ const WAIT_MS = 2_000
 const POLL_MS = 50
 const TOKEN_TEXT = /^[0-9a-f]{64}\n?$/
 
-export function daemonTokenPath(dataDir: string): string {
-  return join(dataDir, DAEMON_TOKEN_FILE)
+/** [name] lets the devices process prove its own pipe with a token of its own, made the one way the daemon's is. */
+export function daemonTokenPath(dataDir: string, name: string = DAEMON_TOKEN_FILE): string {
+  return join(dataDir, name)
 }
 
 /**
- * The daemon's token in [dataDir], or null when there is none or it cannot be trusted. On Unix the folder and the file
- * pass secureState's owner and mode checks. On Windows the folder must be inside the profile, and the file must be a
- * real file there, not a link (requireWindowsStateFile). The profile's ACL is the protection, as for the hook
- * credential. The file is exactly 64 lowercase hex digits and an optional newline.
+ * The token in [dataDir]'s file [name] (the daemon's by default), or null when there is none or it cannot be trusted.
+ * On Unix the folder and the file pass secureState's owner and mode checks. On Windows the folder must be inside the
+ * profile, and the file must be a real file there, not a link (requireWindowsStateFile). The profile's ACL is the
+ * protection, as for the hook credential. The file is exactly 64 lowercase hex digits and an optional newline.
  */
-export function readDaemonToken(dataDir: string): Buffer | null {
+export function readDaemonToken(dataDir: string, name: string = DAEMON_TOKEN_FILE): Buffer | null {
   try {
     secureStateDirectory(dataDir, false)
-    const file = daemonTokenPath(dataDir)
+    const file = daemonTokenPath(dataDir, name)
     if (process.platform === 'win32') requireWindowsStateFile(file)
     const text = readPrivateStateFile(file, 128)
     return TOKEN_TEXT.test(text) ? Buffer.from(text.slice(0, 64), 'hex') : null
@@ -184,8 +185,9 @@ function sleep(ms: number): void {
  * into place. The link fails with EEXIST when another start got there first, and a reader never sees a part of a token.
  * Returns whether this call published it.
  */
-function publish(dataDir: string, file: string, token: Buffer): boolean {
-  const temp = join(dataDir, `.${DAEMON_TOKEN_FILE}.${process.pid}.${randomBytes(6).toString('hex')}`)
+function publish(dataDir: string, name: string, token: Buffer): boolean {
+  const file = daemonTokenPath(dataDir, name)
+  const temp = join(dataDir, `.${name}.${process.pid}.${randomBytes(6).toString('hex')}`)
   const fd = openSync(temp, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600)
   try {
     try {
@@ -211,21 +213,22 @@ function publish(dataDir: string, file: string, token: Buffer): boolean {
 }
 
 /**
- * The daemon's token, made on the first start: 32 random bytes, published whole with a hard link, so two starts at
- * once agree on the winner's. A short file left by a crash or an old writer is replaced once it is older than
- * STALE_MS; a younger one is waited on for up to WAIT_MS. Any other file that cannot be read as a token (a link, one
- * another account could write, one outside the profile) is refused: the daemon does not start on it.
+ * The token in [dataDir]'s file [name] (the daemon's by default), made on the first start: 32 random bytes, published
+ * whole with a hard link, so two starts at once agree on the winner's. A short file left by a crash or an old writer
+ * is replaced once it is older than STALE_MS; a younger one is waited on for up to WAIT_MS. Any other file that cannot
+ * be read as a token (a link, one another account could write, one outside the profile) is refused: its owner does not
+ * start on it.
  */
-export function ensureDaemonToken(dataDir: string): Buffer {
-  const existing = readDaemonToken(dataDir)
+export function ensureDaemonToken(dataDir: string, name: string = DAEMON_TOKEN_FILE): Buffer {
+  const existing = readDaemonToken(dataDir, name)
   if (existing) return existing
   secureStateDirectory(dataDir)
-  const file = daemonTokenPath(dataDir)
+  const file = daemonTokenPath(dataDir, name)
   const deadline = Date.now() + WAIT_MS
   for (;;) {
     const token = randomBytes(32)
-    if (publish(dataDir, file, token)) return token
-    const winner = readDaemonToken(dataDir)
+    if (publish(dataDir, name, token)) return token
+    const winner = readDaemonToken(dataDir, name)
     if (winner) return winner
     const age = shortFileAge(file)
     if (age === null) break
