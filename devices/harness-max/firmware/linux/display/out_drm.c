@@ -22,6 +22,7 @@
 #include <xf86drm.h>
 #include <xf86drmMode.h>
 
+#include "evdev_touch.h"
 #include "glass_fit.h"
 
 #include "esp_log.h"
@@ -31,6 +32,7 @@ static const char *TAG = "drm";
 
 #define DRM_CARD "/dev/dri/card0"
 #define TOUCH_RETRY_US 5000000   // a touchscreen that is not there (yet) is looked for again this often, as on the device
+#define TOUCH_WAIT_MS 1000       // a read with no finger down waits this long at most for a press (evdev_touch.h)
 #define FLIP_WAIT_MS 100         // six refreshes at 60 Hz: a flip that has not landed by then is not coming
 
 typedef struct {
@@ -222,13 +224,12 @@ void max_output_power(bool on)
         if (s_buf[i].pixels) memset(s_buf[i].pixels, 0, s_buf[i].bytes);
 }
 
-// ── touch: the first evdev device with BTN_TOUCH and absolute X and Y, polled by the touch task ──────────────────────
+// ── touch: the first evdev device with BTN_TOUCH and absolute X and Y, read by the touch task ────────────────────────
 
 static int s_touch = -1;
 static struct input_absinfo s_ax, s_ay;
 static int64_t s_touch_retry_at;
-static bool s_down, s_pend_down, s_dropped;
-static int s_x, s_y, s_pend_x, s_pend_y;   // raw axis values
+static evdev_touch_t s_finger;
 
 #define BITS_LONGS(n) (((n) + 8 * sizeof(long) - 1) / (8 * sizeof(long)))
 static bool has_bit(const unsigned long *bits, int bit) { return (bits[bit / (8 * sizeof(long))] >> (bit % (8 * sizeof(long)))) & 1; }
@@ -251,22 +252,12 @@ static bool touch_open(void)
             ESP_LOGI(TAG, "touch: %s \"%s\", x %d..%d, y %d..%d", path, name, s_ax.minimum, s_ax.maximum, s_ay.minimum,
                      s_ay.maximum);
             s_touch = fd;
-            s_down = s_pend_down = false;
+            evdev_touch_init(&s_finger, fd);
             return true;
         }
         close(fd);
     }
     return false;
-}
-
-// After SYN_DROPPED the events in between are gone: read the state back from the device.
-static void touch_resync(void)
-{
-    unsigned long keys[BITS_LONGS(KEY_CNT)] = {0};
-    struct input_absinfo ax, ay;
-    if (ioctl(s_touch, EVIOCGKEY(sizeof keys), keys) >= 0) s_pend_down = has_bit(keys, BTN_TOUCH);
-    if (ioctl(s_touch, EVIOCGABS(ABS_X), &ax) >= 0) s_pend_x = ax.value;
-    if (ioctl(s_touch, EVIOCGABS(ABS_Y), &ay) >= 0) s_pend_y = ay.value;
 }
 
 pro_touch_sample_t max_output_touch(int *x, int *y)
@@ -277,43 +268,16 @@ pro_touch_sample_t max_output_touch(int *x, int *y)
         s_touch_retry_at = now + TOUCH_RETRY_US;
         if (!touch_open()) return PRO_TOUCH_NONE;
     }
-    struct input_event ev[64];
-    for (;;) {
-        const ssize_t n = read(s_touch, ev, sizeof ev);
-        if (n < 0 && errno == EAGAIN) break;
-        if (n <= 0) {   // unplugged (ENODEV): look for it again
-            ESP_LOGW(TAG, "touch lost: %s", n < 0 ? strerror(errno) : "end of file");
-            close(s_touch);
-            s_touch = -1;
-            s_touch_retry_at = esp_timer_get_time() + TOUCH_RETRY_US;
-            return PRO_TOUCH_ERROR;
-        }
-        for (size_t i = 0; i < (size_t)n / sizeof ev[0]; i++) {
-            const struct input_event *e = &ev[i];
-            if (e->type == EV_SYN && e->code == SYN_DROPPED) {
-                s_dropped = true;
-            } else if (e->type == EV_SYN && e->code == SYN_REPORT) {
-                if (s_dropped) {
-                    touch_resync();
-                    s_dropped = false;
-                }
-                s_down = s_pend_down;
-                s_x = s_pend_x;
-                s_y = s_pend_y;
-            } else if (s_dropped) {
-                continue;   // until the next report, events are part of what was lost
-            } else if (e->type == EV_ABS && e->code == ABS_X) {
-                s_pend_x = e->value;
-            } else if (e->type == EV_ABS && e->code == ABS_Y) {
-                s_pend_y = e->value;
-            } else if (e->type == EV_KEY && e->code == BTN_TOUCH) {
-                s_pend_down = e->value != 0;
-            }
-        }
+    if (!evdev_touch_read(&s_finger, TOUCH_WAIT_MS)) {   // unplugged (ENODEV): look for it again
+        ESP_LOGW(TAG, "touch lost: %s", s_finger.gone_errno ? strerror(s_finger.gone_errno) : "end of file");
+        close(s_touch);
+        s_touch = -1;
+        s_touch_retry_at = esp_timer_get_time() + TOUCH_RETRY_US;
+        return PRO_TOUCH_ERROR;
     }
-    if (!s_down) return PRO_TOUCH_NONE;
-    const int ox = glass_fit_axis(s_x, s_ax.minimum, s_ax.maximum, s_fit.out_w);
-    const int oy = glass_fit_axis(s_y, s_ay.minimum, s_ay.maximum, s_fit.out_h);
+    if (!s_finger.down) return PRO_TOUCH_NONE;
+    const int ox = glass_fit_axis(s_finger.x, s_ax.minimum, s_ax.maximum, s_fit.out_w);
+    const int oy = glass_fit_axis(s_finger.y, s_ay.minimum, s_ay.maximum, s_fit.out_h);
     int gx, gy;
     if (!glass_fit_touch(&s_fit, ox, oy, &gx, &gy)) return PRO_TOUCH_BAD;   // on the black around the picture
     if (x) *x = gx;

@@ -82,7 +82,7 @@ if(MAX_LINUX_OUTPUT STREQUAL "sdl")
 else()
     pkg_check_modules(DRM REQUIRED IMPORTED_TARGET libdrm)
     pkg_check_modules(ALSA REQUIRED IMPORTED_TARGET alsa)
-    target_sources(harness-max PRIVATE display/out_drm.c audio/audio_alsa.c)
+    target_sources(harness-max PRIVATE display/out_drm.c display/evdev_touch.c audio/audio_alsa.c)
     target_link_libraries(harness-max PRIVATE PkgConfig::DRM PkgConfig::ALSA)
 endif()
 
@@ -111,11 +111,14 @@ max_host_test(test_chime test/test_chime.c ${MAX_FW}/main/audio/max_chime_pcm.c 
 target_link_libraries(test_chime PRIVATE m)
 add_test(NAME chime COMMAND test_chime)
 set_tests_properties(glass_fit nvs rtos cable_demo cable_tcp cable_usb chime PROPERTIES TIMEOUT 60)   # a hung link fails, not stalls
-# The bar's microphone choice, where ALSA is: its null device stands in for a microphone.
+# The bar's microphone choice, where ALSA is: its null device stands in for a microphone. Its touch reader, where
+# evdev is: a pipe stands in for the touchscreen.
 if(MAX_LINUX_OUTPUT STREQUAL "drm")
     max_host_test(test_audio_alsa test/test_audio_alsa.c audio/audio_alsa.c audio/bar_chime.c
         ${MAX_FW}/main/audio/max_chime_pcm.c esp/esp.c)
     target_link_libraries(test_audio_alsa PRIVATE PkgConfig::ALSA m)
     add_test(NAME audio_alsa COMMAND test_audio_alsa)
-    set_tests_properties(audio_alsa PROPERTIES TIMEOUT 60)
+    max_host_test(test_evdev_touch test/test_evdev_touch.c display/evdev_touch.c)
+    add_test(NAME evdev_touch COMMAND test_evdev_touch)
+    set_tests_properties(audio_alsa evdev_touch PROPERTIES TIMEOUT 60)
 endif()

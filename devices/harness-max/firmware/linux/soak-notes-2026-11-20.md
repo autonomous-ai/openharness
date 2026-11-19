@@ -100,3 +100,21 @@ deploy. The fixes are committed on `feat/harness-max-v4-opi` only (5 commits on 
 stopped first, so the governor went back to `ondemand`), then `deploy-orangepi.sh --demo` from
 `autonomous-harness-max-v4` (`dc52e52a01`, board ctest 8/8). Until the fixes merge, the board has V4's paint, the
 `ondemand` governor (the 50-57 ms first frames after a rest) and the wait at a frame's start.
+
+## Press: the touch reader waits for the event (06:30-06:45, on `ef89044957`)
+
+The touch task (the Pro's `pro_touch.c`, compiled as it is) polls every 20 ms with no finger down, so a press waited
+0-20 ms to be read. `display/evdev_touch.c` (the reader out of `out_drm.c`) makes a read with no finger down, at its
+last return and now, wait up to 1 s in `poll()` for the touchscreen's next event; a lift and a held finger never wait.
+Linux's DRM build only: the ESP32-P4 and the Mac's SDL build are as they were. Same run as above, A/B in one build
+(a temporary `MAX_TOUCH_WAIT=0` for A), 8 presses and 12 releases each:
+
+| | press: edge to read | press to its first frame on glass | release to glass | motion frames, max / p99 |
+| --- | --- | --- | --- | --- |
+| A, the 20 ms poll | 0.5-19.6 ms, mean 11.7 | 34-53 ms, mean 42.0 (n=7) | 15.7-34.1, mean 25.2 | 801, 28.4 / 17.3 ms |
+| B, the wait | 0.08-0.09 ms | 19-36 ms, mean 27.4 (n=7) | 12.7-34.5, mean 22.7 | 803, 25.5 / 17.3 ms |
+
+The second swipe's press (75.4 -> 58.4 ms) is out of the n=7: nothing changes until the finger passes the drag slop.
+The releases' smaller edge-to-read in B (0.7-2.3 ms against 0.01-4.1) is the scripted taps' fixed length meeting a
+4 ms cadence that now starts at the press, not a change for a real finger. The touch task now wakes about once a
+second with no finger down, where it woke 50 times.

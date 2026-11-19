@@ -12,10 +12,12 @@ list of portable sources; `../main/CMakeLists.txt` adds the ESP32-P4 drivers to 
   into the glass under one lock) over an SDL window (`MAX_LINUX_OUTPUT=sdl`, the mouse is the finger) or DRM/KMS plus
   evdev touch (`MAX_LINUX_OUTPUT=drm`, `/dev/dri/card0`). `glass_fit.c` scales and turns the glass to the output, and
   maps a touch back. DRM keeps two buffers: each frame is painted whole into the one off screen (what it changed and
-  what the frame before changed) and flipped to on the next vblank, so nothing tears; the frame waits for that
-  vblank, so the next one is built from what the finger did until then. Where the driver refuses the second buffer or
-  a flip, the log says so once (`no second scanout buffer` / `page flip refused`) and the one buffer on screen is
-  painted as each strip lands, as before.
+  what the frame before changed) and flipped to on the next vblank, so nothing tears; the frame waits for that vblank,
+  so the next one is built from what the finger did until then. Where the driver refuses the second buffer or a flip,
+  the log says so once (`no second scanout buffer` / `page flip refused`) and the one buffer on screen is painted as
+  each strip lands, as before. The touch task polls every 20 ms with no finger down (the Pro's `pro_touch.c`, as it
+  is); `evdev_touch.c` makes such a read wait for the touchscreen's next event instead (up to a second), so a press is
+  read as the kernel reports it. The ESP32-P4 polls its GT911 as before.
 - `audio/`: `audio/audio_capture.h` and the chimes (`../main/app/max_chime.h`) over SDL (macOS) or ALSA (Linux): the
   microphone is the capture device `HARNESS_MAX_MIC` names (`default` when unset). No microphone: recording fails as
   on a device whose codec does not answer. The chimes are V3's as tuned on the bar (`bar_chime.c`): each between 50 ms
@@ -116,9 +118,10 @@ when V3 was deployed last).
   repaints only its changes and the last frame's, as up to eight rectangles each. A motion in App Detail (an open, a
   close, a swipe of the cells) shows a frame every refresh (58 Hz) with at most 8-11 ms of work in each.
   `frame_max_us` counts the frame's wait for its own flip, so a motion's frames read 17-18 ms. A tap's release reaches
-  the glass 12-37 ms after the finger lifts (25 on average); a press waits for the touch task's poll, every 20 ms
-  while no finger is down (4 ms while one is). The unit sets the pair's governor to `performance` while the bar runs
-  and puts the one it had back when it stops: the image's `ondemand` looks every 200 ms, so a tap after a rest painted
-  its first frames at 416 MHz, 50-57 ms each (V4's `frame_max_us=56571`, logged during a screen recording; the same
-  frames come without one). The first frame is on the glass 40-65 ms after start. `--story` runs at about 2.5% of one
-  core, its RSS flat at 17.4 MiB over a 3-hour soak.
+  the glass 12-37 ms after the finger lifts (25 on average); a press is read 0.1 ms after the kernel's event, where
+  the 20 ms poll took 0.5-19.6 (11.7 on average), and its first frame is on the glass 19-36 ms after it (27 on
+  average, against 34-53 and 42). The unit sets the pair's governor to `performance` while the bar runs and puts the
+  one it had back when it stops: the image's `ondemand` looks every 200 ms, so a tap after a rest painted its first
+  frames at 416 MHz, 50-57 ms each (V4's `frame_max_us=56571`, logged during a screen recording; the same frames come
+  without one). The first frame is on the glass 40-65 ms after start. `--story` runs at about 2.5% of one core, its
+  RSS flat at 17.4 MiB over a 3-hour soak.
