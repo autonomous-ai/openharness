@@ -1,8 +1,19 @@
 import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
-import { configuredPortOf, readDaemonRecord, savedDaemonPort, writeDaemonRecord } from './daemonRecord.js'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { configuredPortOf, daemonRecordPath, readDaemonRecord, savedDaemonPort, writeDaemonRecord } from './daemonRecord.js'
+
+// Pass-through, recording what reaches each file: opened, written, or renamed onto.
+const disk = vi.hoisted(() => ({ events: [] as string[] }))
+vi.mock('node:fs', async original => {
+  const actual = await original<typeof import('node:fs')>()
+  return { ...actual,
+    openSync: (...args: Parameters<typeof actual.openSync>) => { disk.events.push(`open ${String(args[0])}`); return actual.openSync(...args) },
+    writeFileSync: (...args: Parameters<typeof actual.writeFileSync>) => { disk.events.push(`write ${String(args[0])}`); return actual.writeFileSync(...args) },
+    renameSync: (...args: Parameters<typeof actual.renameSync>) => { disk.events.push(`rename ${String(args[1])}`); return actual.renameSync(...args) },
+  }
+})
 
 const dirs: string[] = []
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }) })
@@ -74,5 +85,23 @@ describe('the daemon\'s record', () => {
       writeFileSync(join(dir, 'daemon-18473.json'), JSON.stringify({ port: 24567, pipe: other, pid: 4242 }))
       expect(readDaemonRecord(dir, 18473, 'win32')).toEqual({ port: 24567, pipe: null, pid: 4242 })
     }
+  })
+})
+
+describe('the daemon\'s record on disk', () => {
+  it('the save goes through a temporary file renamed onto the target', () => {
+    const dir = dataDir()
+    const file = daemonRecordPath(dir, 18473)
+    disk.events = []
+    writeDaemonRecord(dir, 18473, 24567)
+    expect(disk.events.filter((event) => event.endsWith(` ${file}`))).toEqual([`rename ${file}`])
+  })
+
+  it('a file at the old temporary name is left alone', () => {
+    const dir = dataDir()
+    const planted = `${daemonRecordPath(dir, 18473)}.${process.pid}.tmp`
+    writeFileSync(planted, 'planted')
+    writeDaemonRecord(dir, 18473, 24567)
+    expect(readFileSync(planted, 'utf8')).toBe('planted')
   })
 })
