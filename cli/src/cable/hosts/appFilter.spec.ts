@@ -660,5 +660,17 @@ describe('AppFilter', () => {
       expect(filter.pick('claude')).toBe('switched')
       expect(filter.shown()).toBe('claude')
     })
+
+    it('… and while no app has a known agent, though they outnumber the agents the scan found', () => {
+      const { filter, agents } = setup()
+      agents({ claude: 16, ghostty: 3 }, {}, { claude: 16 })
+      expect(filter.shown()).toBe('ghostty')
+    })
+
+    it('resting agents are the default when they are all there is', () => {
+      const { filter, agents } = setup()
+      agents({ claude: 16 }, {}, { claude: 16 })
+      expect(filter.shown()).toBe('claude')
+    })
   })
 })
