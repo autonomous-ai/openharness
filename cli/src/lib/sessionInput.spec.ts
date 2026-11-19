@@ -998,16 +998,13 @@ describe('SessionInputController', () => {
       controller.forget('s1')
     })
 
-    // Off its row once handed over, a first task lost to a paste that failed or a dispatch that could not be confirmed
-    // left the agent idle with no ask for good. It waits: a turn that takes it ends the wait, and if none does the
-    // binding pass's bound fails the launch where every verb shows it (core/agents/bind.ts).
-    it.each([
-      ['a paste that failed', false],
-      ['a dispatch that could not be confirmed', { state: 'unknown', dispatch: 'possibly_executed', reason: 'response was lost' }],
-    ] as const)('a first task still waits after %s, until a turn takes it', async (_, delivery) => {
+    // Off its row once handed over, a first task lost to a paste that failed left the agent idle with no ask for good. It
+    // waits: a turn that takes it ends the wait, and if none does the binding pass's bound fails the launch where every
+    // verb shows it (core/agents/bind.ts).
+    it('a first task still waits after a paste that failed, until a turn takes it', async () => {
       vi.useFakeTimers()
       const { controller, inject, onError } = paneController(() => readyPane())
-      inject.mockResolvedValueOnce(delivery as never)
+      inject.mockResolvedValueOnce(false)
 
       controller.expectFirstTask('s1')
       controller.submit('s1', 'Say hello')
@@ -1017,6 +1014,50 @@ describe('SessionInputController', () => {
       controller.onTurnStarted('s1', 'Say hello')
       expect(controller.firstTaskWaiting('s1')).toBe(false)
       controller.forget('s1')
+    })
+
+    // Found in review: a first task whose paste may have gone through was given up at its first window, never sent if
+    // OpenClaw had refused it into its box. Its pane says which it was.
+    describe('a first task whose paste may have gone through', () => {
+      const maybe = { state: 'unknown', dispatch: 'possibly_executed', reason: 'response was lost' } as const
+
+      it('is sent with one Enter when its box holds it', async () => {
+        vi.useFakeTimers()
+        let pane = readyPane('Say hello')
+        const { controller, inject, sendKey, onError } = paneController(() => pane)
+        inject.mockResolvedValueOnce(maybe as never)
+
+        controller.expectFirstTask('s1')
+        controller.submit('s1', 'Say hello')
+        await vi.advanceTimersByTimeAsync(10_000)
+        expect(sendKey.mock.calls).toEqual([['h1', 'Enter']])
+        pane = readyPane()
+        await vi.advanceTimersByTimeAsync(5 * 60_000)
+        expect(sendKey).toHaveBeenCalledTimes(1)
+        expect(onError).not.toHaveBeenCalled()
+        expect(controller.awaitingConfirmation('s1')).toBe(true)
+        controller.onTurnStarted('s1', 'Say hello')
+        expect(controller.firstTaskWaiting('s1')).toBe(false)
+        controller.forget('s1')
+      })
+
+      it.each([
+        ['its box is empty', readyPane()],
+        ['its pane cannot be read', null],
+      ])('waits, with no Enter, while %s', async (_, pane) => {
+        vi.useFakeTimers()
+        const { controller, inject, sendKey, onError } = paneController(() => pane)
+        inject.mockResolvedValueOnce(maybe as never)
+
+        controller.expectFirstTask('s1')
+        controller.submit('s1', 'Say hello')
+        await vi.advanceTimersByTimeAsync(5 * 60_000)
+        expect(sendKey).not.toHaveBeenCalled()
+        expect(onError).not.toHaveBeenCalled()
+        expect(controller.awaitingConfirmation('s1')).toBe(true)
+        expect(controller.firstTaskWaiting('s1')).toBe(true)
+        controller.forget('s1')
+      })
     })
 
     it('a first task the person stops before a turn takes it waits no more', async () => {
