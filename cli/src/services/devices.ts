@@ -509,11 +509,12 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     }),
   ].map(noting)]
   const opener = createOpenActions({ run: apps.run, platform: apps.platform, adapters, log, bin: openBin,
-    // herdr's ring is Herdr.app's window's while it holds an agent there: one hc lists, or a hooked agent with a pane
-    // of Herdr's (herdrApp.ts paneOf). herdr 0.8.0's agents have none. Only this process's own lists are read, which
-    // the pick read a moment before: it never throws, and a pick's bring has no catch.
+    // herdr's ring is Herdr.app's window's while it holds an agent there: one hc lists, or a live hooked agent with a pane
+    // of Herdr's (herdrApp.ts paneOf); an ended one's terminal holds a shell now. herdr 0.8.0's agents have none. Only
+    // this process's own lists are read, which the pick read a moment before: it never throws, and a pick's bring has no
+    // catch.
     herdrApp: () => !!hcSource?.list().length
-      || !!observed?.list().some(({ paneKeys }) => paneKeys?.some((key) => key.startsWith(hcPaneKey('')))) })
+      || !!observed?.list().some(({ paneKeys, ended }) => !ended && paneKeys?.some((key) => key.startsWith(hcPaneKey('')))) })
   const bring = opener.bring
   /** The route or the refusal of the dial's words, and why a queue failed: never the words, the session, the terminal or a
    *  path. */
