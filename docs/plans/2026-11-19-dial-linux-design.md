@@ -427,6 +427,8 @@ macOS behavior changes otherwise. Windows: no change.
 - The login entry has no `NoDisplay=true`: GNOME's Startup Applications hides such entries, and that is where the
   person turns it off. Linux follows macOS, where the item shows in Login Items. An older entry that has the line is
   still the installer's own (only `Exec=` is compared), so the next install rewrites it.
+- The installer's guide line says `Harness starts when you log in to the desktop.`: a server login (SSH, a console)
+  never runs the entry.
 
 ## Design (docs/feature-design-rules.md)
 

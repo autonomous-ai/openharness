@@ -99,7 +99,7 @@ Longest chain: 5 → 28 → 30 → 33 → 40 → 46 → 48 (seven tasks; 47, 49,
   - daemon log: `[device] kitty · remote control off`
   - the login entry, five lines: `[Desktop Entry]`, `Type=Application`, `Name=Harness`, `Exec="<launcher>" start`, `X-GNOME-Autostart-enabled=true` (no `NoDisplay=true`: GNOME's Startup Applications hides such an entry; changed in the final review)
   - the installer's step line, one of: `  ✓ Starts at login`, `  · Start at login is off`, `  · Start at login: set by another app`
-  - the installer's guide line: `  Harness starts when you log in.`
+  - the installer's guide line: `  Harness starts when you log in to the desktop.` ("to the desktop" since the final review: a server login never runs the entry)
 - **Every command** runs with no shell, each value one argument, within `RUN_TIMEOUT_MS` (10 s, `H/orca.ts`). A pane id, pid, class, socket, session name or display is checked against its form in `paneOf` and again before the command (adapter rule 1). An adapter verb never throws.
 - **No process reads another's environment.** The daemon reads its own, and what it reads is on the start allowlist (`lib/startEnvironment.ts`; `src/architecture.startEnvironment.spec.ts` fails otherwise).
 - **No switch, flag or setting.** No udev rule. No new UI, no design-doc or gallery change: `desktop/design/desktop-design-system.md` and `test/elements_gallery_test.dart` list no dial problem (checked 2026-11-19).
@@ -229,7 +229,7 @@ Rules for all eight:
   - `leaves an entry whose Exec is another program's`: a file with `Exec=/opt/harness-device/harness-device --login` is unchanged; stdout has `  · Start at login: set by another app`.
   - `writes it again once deleted, and rewrites its own`.
   - `quotes a launcher path with a space, a $ and a %`: home `…/a b$c%d` gives `Exec="…/a b\\$c%%d/.local/bin/harness" start`.
-  - In `"what it says once it is done"`: on Linux in standalone mode, with its own entry in place (`login_entry_on`), the guide has `  Harness starts when you log in.` after the three numbered commands; with no entry, one turned off or another program's, on a Mac, and in desktop mode, it does not.
+  - In `"what it says once it is done"`: on Linux in standalone mode, with its own entry in place (`login_entry_on`), the guide has `  Harness starts when you log in to the desktop.` after the three numbered commands; with no entry, one turned off or another program's, on a Mac, and in desktop mode, it does not.
 - [ ] **Step 2:** `npx vitest run src/scripts/install.spec.ts` — FAIL (no entry written). Commit red.
 - [ ] **Step 3: Implement** as in Interfaces. The two comments that say installation starts nothing now say: it starts nothing now; on Linux it leaves a login entry that runs `harness start` at the next login.
 - [ ] **Step 4:** the same run passes on this Mac (`/bin/sh` is not dash here: the Linux run is PR CI's `cli-tests`).

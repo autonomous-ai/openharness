@@ -975,7 +975,7 @@ else
   echo "      harness remote-password set    # 3. let your OTHER machines reach this one (asked once, kept)"
   echo ""
   if [ "$(uname -s)" = Linux ] && login_entry_on; then
-    echo "  Harness starts when you log in."
+    echo "  Harness starts when you log in to the desktop."
     echo ""
   fi
   echo "  Then, from a Harness terminal tile on any of your machines:"

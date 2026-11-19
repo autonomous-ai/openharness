@@ -462,7 +462,7 @@ describe("scripts/install.sh: what it says once it is done", () => {
       rmSync(scratch, { recursive: true, force: true });
     }
   };
-  const STARTS_AT_LOGIN = "  Harness starts when you log in.\n";
+  const STARTS_AT_LOGIN = "  Harness starts when you log in to the desktop.\n";
 
   it("on Linux, with its own login entry in place, says Harness starts at login, after the three commands", () => {
     const out = guideWith({ entry: ownLoginEntry });
