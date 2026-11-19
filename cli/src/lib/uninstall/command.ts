@@ -212,7 +212,9 @@ function whatItDoes(deps: UninstallDeps, daemon: number | null, keepData: boolea
     '  · removes the hooks and permission rules Harness added to Claude Code, Codex and your other agents (a rule of yours that is the same as one of Harness\'s goes too)',
     deps.platform === 'win32'
       ? `  · removes ${deps.tildify(deps.binDir)} from your PATH`
-      : '  · removes the harness and hn commands, and the PATH line the installer added',
+      : deps.platform === 'linux'
+        ? '  · removes the harness and hn commands, the login entry and the PATH line the installer added'
+        : '  · removes the harness and hn commands, and the PATH line the installer added',
     keepData
       ? `  · deletes the program in ${rootsNamed(deps)}, and keeps your sign-in, this computer's identity, history and settings there`
       : `  · deletes ${rootsNamed(deps)}: your sign-in, this computer's identity, history and settings (--keep-data keeps them)`,
