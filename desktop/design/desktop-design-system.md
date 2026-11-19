@@ -792,8 +792,9 @@ theme: the app runs from macOS 13, older than WebKit's `color-mix()`.
 - Type: dialog heading 17 semibold, 1.3; body 13, 1.45; control 13 medium,
   1.25; metadata 12, 1.35; monospace for the install's last lines.
 - Install, working: the spinner, and under it one muted body line, the step:
-  `Getting ready…`, `Installing tmux…` or `Downloading Harness…`. The step is
-  fixed copy, never the script's text.
+  `Getting ready…`, `Installing tmux…`, `Downloading Harness…`, and on Linux
+  `Finish in the terminal…` while a terminal runs the step that may ask for a
+  password. The step is fixed copy, never the script's text.
 - Geometry: dialog content inset 24; group / control gap 16 / 8; buttons are
   capsules, 32 high at least, trailing: secondary first, primary last, as the
   desktop's dialogs. The spinner stands still under Reduce Motion.
