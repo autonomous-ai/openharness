@@ -107,6 +107,8 @@ pub fn run_open(args: &[&str], log: Arc<dyn Log>) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::OsStr;
+    use std::path::{Path, PathBuf};
 
     #[test]
     fn the_names_come_from_the_desktop_packaging() {
@@ -135,7 +137,6 @@ mod tests {
         assert_eq!(open_desktop_args(), ["-b", "ai.autonomous.harness"]);
     }
 
-    #[cfg(target_os = "macos")]
     #[test]
     fn the_system_answers() {
         // Read-only lookups: either answer is right; the calls must return.
@@ -143,10 +144,59 @@ mod tests {
         let _ = SystemDesktopApp.running();
     }
 
-    #[cfg(not(target_os = "macos"))]
+    fn entry(exec: &str) -> String {
+        format!("[Desktop Entry]\nType=Application\nName=Harness\n{exec}\nTerminal=false\n")
+    }
+
     #[test]
-    fn no_desktop_app_is_installed_off_a_mac() {
-        assert!(!SystemDesktopApp.installed());
-        let _ = SystemDesktopApp.running();
+    fn an_entrys_exec_names_its_program() {
+        assert_eq!(exec_target(&entry(r#"Exec="/a b/H.AppImage" %u"#)).as_deref(), Some("/a b/H.AppImage"));
+        assert_eq!(exec_target(&entry("Exec=/a/H.AppImage %u")).as_deref(), Some("/a/H.AppImage"));
+        assert_eq!(exec_target(&entry("Exec=/a/H.AppImage")).as_deref(), Some("/a/H.AppImage"));
+        // Desktop puts a backslash before `"`, `` ` ``, `$` and `\` inside the quotes.
+        let escaped = entry(r#"Exec="/a \"b\" \$c\\d/H.AppImage" %u"#);
+        assert_eq!(exec_target(&escaped).as_deref(), Some(r#"/a "b" $c\d/H.AppImage"#));
+        assert_eq!(exec_target(&entry(r#"Exec="/a b/H.AppImage %u"#)), None);
+        assert_eq!(exec_target(&entry("TryExec=/a/H.AppImage")), None);
+    }
+
+    // Unix only: `/home/n` is not an absolute path on Windows.
+    #[cfg(unix)]
+    #[test]
+    fn the_linux_desktop_app_is_its_entrys_appimage_while_it_is_on_disk() {
+        let home = Path::new("/home/n");
+        let image = "/home/n/My Apps/Harness.AppImage";
+        let text = entry(r#"Exec="/home/n/My Apps/Harness.AppImage" %u"#);
+        let at = |entry_path: &'static str, text: String| {
+            move |path: &Path| (path == Path::new(entry_path)).then(|| text.clone())
+        };
+        let on_disk = |path: &Path| path == Path::new(image);
+        let gone = |_: &Path| false;
+        let found = Some(PathBuf::from(image));
+
+        let local = at("/home/n/.local/share/applications/harness.desktop", text.clone());
+        assert_eq!(linux_desktop_app(None, home, &local, &on_disk), found);
+        assert_eq!(linux_desktop_app(None, home, &|_: &Path| None, &on_disk), None);
+        assert_eq!(linux_desktop_app(None, home, &local, &gone), None);
+
+        let xdg = at("/x/data/applications/harness.desktop", text.clone());
+        assert_eq!(linux_desktop_app(Some(OsStr::new("/x/data")), home, &xdg, &on_disk), found);
+        // A relative XDG_DATA_HOME is invalid by the base directory spec: the default stands.
+        assert_eq!(linux_desktop_app(Some(OsStr::new("x/data")), home, &local, &on_disk), found);
+        assert_eq!(linux_desktop_app(Some(OsStr::new("")), home, &local, &on_disk), found);
+
+        let relative = at("/home/n/.local/share/applications/harness.desktop", entry("Exec=Harness.AppImage %u"));
+        assert_eq!(linux_desktop_app(None, home, &relative, &|_: &Path| true), None);
+    }
+
+    #[test]
+    fn the_windows_desktop_app_is_its_launcher() {
+        let local = OsStr::new("/u/AppData/Local");
+        let launcher = Path::new("/u/AppData/Local").join("Programs").join("Harness").join("Harness.exe");
+        let there = |path: &Path| path == launcher;
+        assert_eq!(windows_desktop_app(Some(local), &there), Some(launcher.clone()));
+        assert_eq!(windows_desktop_app(Some(local), &|_: &Path| false), None);
+        assert_eq!(windows_desktop_app(None, &|_: &Path| true), None);
+        assert_eq!(windows_desktop_app(Some(OsStr::new("")), &|_: &Path| true), None);
     }
 }
