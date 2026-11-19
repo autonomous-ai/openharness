@@ -38,8 +38,9 @@ export type OrcaPluginState = 'on' | 'off' | 'held' | 'setup' | 'absent'
 interface Asking { orca: string; key: string; version: string }
 /** Why Orca is not asked about the plugin: `none`, no Orca here (Windows, no `orca`); `no-plugin`, a CLI from the
  *  sources; `old`, an Orca below the plugin's engines; `folder`, the plugin's folder not written; `not-running`, an Orca
- *  not reachable, or an answer that cannot be read. */
-interface Unasked { why: 'none' | 'no-plugin' | 'old' | 'folder' | 'not-running' }
+ *  not reachable, or a status that cannot be read; `unread`, an answer after a status that said Orca is reachable, or a
+ *  record, that cannot be read: a failure, not Orca's absence. */
+interface Unasked { why: 'none' | 'no-plugin' | 'old' | 'folder' | 'not-running' | 'unread' }
 /** How a change brings Orca's entry to the plugin's folder at the version cli.js carries: `install` the folder for no
  *  entry or one from anywhere else, `update` one from the folder at another version whatever its status (an enable
  *  would turn on the old copy Orca holds), and `enable` one from the folder at this version. */
@@ -52,7 +53,7 @@ type Found =
   | { state: 'current' }
   | ({ state: 'offer' | 'off' | 'approve' | 'behind'; how: How } & Asking)
 
-const NOT_RUNNING: Found = { state: 'absent', why: 'not-running' }
+const UNREAD: Found = { state: 'absent', why: 'unread' }
 const OTHER: Found = { state: 'absent', why: 'other' }
 /** The one range Orca's manifests take. */
 const ENGINE = /^>=(\d+)\.(\d+)\.(\d+)$/
@@ -138,7 +139,7 @@ async function reach(deps: OrcaPluginDeps): Promise<Asking | Unasked> {
   }
   const plugin = (await ask(deps, orca, ['plugin', 'inspect', deps.folder, '--json'], ORCA_READ_MS))?.plugin
   const key = isObject(plugin) ? plugin.pluginKey : undefined
-  if (typeof key !== 'string' || !PLUGIN_KEY.test(key)) return { why: 'not-running' }
+  if (typeof key !== 'string' || !PLUGIN_KEY.test(key)) return { why: 'unread' }
   return { orca, key, version: carried.version }
 }
 
@@ -158,10 +159,10 @@ async function find(deps: OrcaPluginDeps, force: boolean): Promise<Found> {
   const asking = await reach(deps)
   if ('why' in asking) return { state: 'absent', why: asking.why }
   const entry = await entryOf(deps, asking.orca, asking.key)
-  if (entry === null) return NOT_RUNNING
+  if (entry === null) return UNREAD
   if (entry === undefined) {
     const before = force ? false : setUpBefore(deps.dataDir)
-    if (before === undefined) return NOT_RUNNING
+    if (before === undefined) return UNREAD
     return { state: before ? 'off' : 'offer', how: 'install', ...asking }
   }
   return stateOf(entry, asking, deps.folder)
@@ -171,7 +172,7 @@ async function find(deps: OrcaPluginDeps, force: boolean): Promise<Found> {
  *  (`current`) once its deadline passed. */
 function stateOf(entry: Record<string, unknown>, asking: Asking, folder: string): Found {
   const { version, status, source } = entry
-  if (typeof version !== 'string' || typeof status !== 'string') return NOT_RUNNING
+  if (typeof version !== 'string' || typeof status !== 'string') return UNREAD
   if (entry.isDev === true) return OTHER
   // Harness enables or updates only an entry it installed from its own folder, never code put elsewhere, such as a
   // pending install from a person's checkout: that one is installed from the folder, which Orca counts as a moved source.
@@ -308,6 +309,9 @@ export async function orcaSetUp(deps: OrcaPluginDeps, { force }: { force: boolea
   const found = await find(deps, force)
   if (found.state === 'absent') {
     if (found.why === 'folder') return { orca: 'failed', error: 'folder' }
+    // A running Orca whose answer cannot be read is counted and waited on: read as Orca closed, each settle would ask
+    // again, unseen.
+    if (found.why === 'unread') return SETUP_FAILED
     return { orca: 'absent', error: found.why === 'old' || found.why === 'other' ? found.why : 'not-running' }
   }
   if (found.state === 'current') return { orca: 'on' }
@@ -334,7 +338,7 @@ const OFF: OrcaRemove = { orca: 'off' }
 export async function orcaRemove(deps: OrcaPluginDeps): Promise<OrcaRemove> {
   const asking = await reach(deps)
   if ('why' in asking) {
-    if (asking.why === 'not-running') return { orca: 'off', error: 'not-running' }
+    if (asking.why === 'not-running' || asking.why === 'unread') return { orca: 'off', error: 'not-running' }
     return asking.why === 'folder' ? { orca: 'off', error: 'failed' } : OFF
   }
   const entry = await entryOf(deps, asking.orca, asking.key)
