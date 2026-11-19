@@ -24,9 +24,11 @@ export interface HostAgent {
    *  voice. The registry gives its row to another source's live copy (`registry.ts`). */
   ended?: true
   /**
-   * No process runs it: a row of the Claude app's store (`claudeAppSource.ts`). It is on its app's page and counts for
-   * nothing in the dial's default app (`select.ts`'s `known`), as `appPending`; it still counts for the app in front
-   * (`AppCounts.inFront`).
+   * No process runs it: a row of the Claude app's store (`claudeAppSource.ts`) or of the ChatGPT app's threads
+   * (`codexAppSource.ts`). It is on its app's page and counts for nothing in the dial's default app (`select.ts`'s
+   * `known`), as `appPending`; it still counts for the app in front (`AppCounts.inFront`). It is left out of the single
+   * machine ring of a dial that does not say `appFilter` (`cableHost.ts` `machineSnapshot`), where it would push live
+   * agents out.
    */
   resting?: true
   state: HostAgentState
@@ -85,7 +87,7 @@ export type PaneSwitch = 'ok' | 'failed' | 'busy'
 
 export interface HostSource {
   /** 'harness' | 'observed' | a listing source's name (`herdr`, `herdr-app`, `opencode`, `cmux`,
-   *  `claude-app`). */
+   *  `claude-app`, `codex-app`). */
   readonly id: string
   list(): HostAgent[]
   capabilities(agent: HostAgent): Caps
