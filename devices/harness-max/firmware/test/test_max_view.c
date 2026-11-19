@@ -5,7 +5,7 @@
 #include "max_test.h"
 #include "max_ui_motion.h"
 
-enum { K_TEXT = 1 };
+enum { K_TEXT = 1, K_IMAGE = 3 };   // pro_canvas.c's PRO_TEXT, PRO_IMAGE
 #define T0 1000000u
 #define ELLIPSIS "\xe2\x80\xa6"
 
@@ -641,6 +641,45 @@ static void test_ambient(void)
     CHECK(word("Not connected") && HITS_ARE(MAX_HIT_WAKE));
 }
 
+// ---- the apps' icons ----
+
+// Whether app's own icon is drawn at size px, with no letter over it.
+static bool icon_drawn(const char *app, int size)
+{
+    const ht_pro_bitmap_t *b = max_icon_find(app, size);
+    for (int i = 0; b && i < S.count; i++) {
+        const ht_run_t *r = &S.runs[i];
+        if (r->pro_kind == K_IMAGE && r->bitmap.pixels == b->pixels)
+            return r->w == size && r->pro_height == size && !label_in((max_box_t){r->x, r->y, r->w, r->pro_height});
+    }
+    return false;
+}
+
+// Harness draws its own symbol (V3's assets/apps/harness.png, its own white tile), pre-rendered by
+// scripts/gen_app_icons.py at each size a page draws an app: never its letter. An app without one keeps its letter.
+static void test_app_icons(void)
+{
+    ring(NULL);
+    show(MAX_VIEW_OVERVIEW, NULL);
+    render_at(T0);
+    CHECK(icon_drawn("harness", DY(60)) && !word("H"));
+    // Apps: Harness's card its symbol, Orca's its letter.
+    show(MAX_VIEW_APPS, NULL);
+    render_at(T0);
+    CHECK(icon_drawn("harness", DY(72)) && word("O"));
+    // Inbox: a notice's app, by its name; Attention: the agent's app.
+    inbox(2);   // Harness's, then Orca's
+    show(MAX_VIEW_INBOX, NULL);
+    render_at(T0);
+    CHECK(icon_drawn("Harness", DY(22)) && !word("H") && word("O"));
+    attention("e", MAX_ATTN_ASK, T0);
+    render_at(T0);
+    CHECK(icon_drawn("harness", DY(28)) && !word("H"));
+    // V3's key: case and anything but letters and digits aside; none for another app, nor at a size no page draws.
+    CHECK(max_icon_find("HARNESS", DY(60)) == max_icon_find("harness", DY(60)));
+    CHECK(!max_icon_find("orca", DY(60)) && !max_icon_find("harness", DY(60) + 1) && !max_icon_find(NULL, DY(60)));
+}
+
 // ---- the toast and the notice ----
 
 // A question while a person talks to another agent: the toast at the top, the first hit, with no motion of its own.
@@ -860,6 +899,7 @@ int main(void)
     test_inbox();
     test_apps();
     test_ambient();
+    test_app_icons();
     test_toast();
     test_done_note();
     test_notice();

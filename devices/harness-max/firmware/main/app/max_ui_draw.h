@@ -75,9 +75,13 @@ void max_icon_x(ht_scene_t *s, int x, int y, int size, unsigned rgb);
 void max_icon_bell(ht_scene_t *s, int x, int y, int size, unsigned rgb);
 void max_icon_grid(ht_scene_t *s, int x, int y, int size, unsigned rgb);
 void max_icon_mic(ht_scene_t *s, int x, int y, int size, unsigned rgb);
-// An app's icon, size x size from (x, y): a rounded square in the app's colour with its initial. `app` is an app id
-// ("orca") or name ("Orca"); `name` gives the initial ("" falls back to `app`).
+// An app's icon, size x size from (x, y): its own (V3's, pre-rendered at that size) when there is one, else a rounded
+// square in the app's colour with its initial. `app` is an app id ("orca") or name ("Orca"); `name` gives the initial
+// ("" falls back to `app`).
 void max_app_icon(ht_scene_t *s, int x, int y, int size, const char *app, const char *name);
+// The app's own icon at exactly size px (max_ui_icons.c), or NULL. The app by V3's key: case and anything but letters
+// and digits aside ("VS Code": "vscode").
+const ht_pro_bitmap_t *max_icon_find(const char *app, int size);
 
 // ---- what an agent's state looks like ----
 // The status word's colour: working lavender, waiting yellow, done green, failed red, resting faint.

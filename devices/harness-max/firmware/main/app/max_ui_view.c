@@ -3,11 +3,13 @@
 // came while a person talks, a finished turn's note, and the notice pill. Here too what the page files share: text,
 // shapes, icons, buttons and what moves by the clock. Inter faces (gen_fonts.py ph_*): at the Max's 225 ppi they come out a little larger than
 // on the Pro's 258.
+#include <ctype.h>
 #include <stdio.h>
 #include <string.h>
 #include <strings.h>
 
 #include "max_ui_draw.h"
+#include "max_ui_icons.h"
 #include "max_ui_motion.h"
 
 static const char ELLIPSIS[] = "\xe2\x80\xa6";   // the Inter faces draw it (gen_fonts.py CONSOLE_EXTRA)
@@ -286,9 +288,24 @@ static unsigned app_tint(const char *app)
     if (!strcasecmp(app, "vscode") || !strcasecmp(app, "vs code") || !strcasecmp(app, "visual studio code")) return 0x007ACC;
     return 0x3A3B45;
 }
+const ht_pro_bitmap_t *max_icon_find(const char *app, int size)
+{
+    char key[24];
+    size_t n = 0;
+    for (const char *c = app ? app : ""; *c && n + 1 < sizeof key; c++)
+        if (isalnum((unsigned char)*c)) key[n++] = (char)tolower((unsigned char)*c);
+    key[n] = 0;
+    for (const max_icon_t *i = max_icons; n && i->app; i++)
+        if (i->image.width == size && !strcmp(i->app, key)) return &i->image;
+    return NULL;
+}
 void max_app_icon(ht_scene_t *s, int x, int y, int size, const char *app, const char *name)
 {
     if (x >= HT_WIDTH) return;
+    // Its own icon is its own rounded tile, drawn as it is (V3's AppIcon).
+    const ht_pro_bitmap_t *own = max_icon_find(app, size);
+    if (!own) own = max_icon_find(name, size);
+    if (own && ht_pro_image(s, x, y, own)) return;
     const unsigned tint = app_tint(app);
     max_box(s, x, y, size, size, size * 14 / 60, tint == 0x111114 ? 1 : 0, TRACK, tint);
     const char *from = name && name[0] ? name : app;
