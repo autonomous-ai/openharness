@@ -1,6 +1,6 @@
 // The ChatGPT app's threads, read from a fixture Codex home in a temp folder: no test reads anyone's own ~/.codex.
 import { execFileSync, spawnSync } from 'node:child_process'
-import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readSync, renameSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
+import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readSync, renameSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { performance } from 'node:perf_hooks'
@@ -311,6 +311,21 @@ describe('names', () => {
     const result = await ok(new CodexAppThreads(fx.home))
     expect(result.listed.map((t) => t.name)).toEqual(['Fix the build', 'n'.repeat(64), 'alpha', 'codex', 'beta'])
     expect(JSON.stringify(result)).not.toContain(NEVER_READ)
+  })
+
+  it('forget() keeps no name: the next read reads Codex\'s index afresh', async () => {
+    const fx = fixture()
+    fx.threads([thread(1, 10)])
+    fx.name(uuid(1), 'Alpha')
+    const when = 1_700_000_000
+    utimesSync(indexOf(fx), when, when)
+    const reader = new CodexAppThreads(fx.home)
+    expect((await ok(reader)).listed[0]!.name).toBe('Alpha')
+    // Another name in the same file, of the same size and mtime: only a reader that kept no name reads it.
+    writeFileSync(indexOf(fx), readFileSync(indexOf(fx), 'utf8').replace('Alpha', 'Bravo'))
+    utimesSync(indexOf(fx), when, when)
+    reader.forget()
+    expect((await ok(reader)).listed[0]!.name).toBe('Bravo')
   })
 
   // A FIFO opened to be read waits for a writer for good, and the event loop with it, so vitest's timeout would never
