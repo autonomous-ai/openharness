@@ -247,6 +247,8 @@ fn run_until(
     sink: &mut dyn FnMut(&str),
 ) -> io::Result<Output> {
     command.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    #[cfg(any(target_os = "linux", all(test, unix)))]
+    crate::appimage_env::remove(&mut command);
     let (mut child, group) = child::spawn(&mut command)?;
     // One queue for both streams, so their lines come in the order they were read; bounded, so a slow sink makes the
     // child wait on its pipe instead of lines piling up here.
@@ -361,6 +363,8 @@ pub struct Timeout;
 impl Child {
     fn start(mut command: Command, name: String, log: Arc<dyn Log>) -> io::Result<Child> {
         command.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
+        #[cfg(any(target_os = "linux", all(test, unix)))]
+        crate::appimage_env::remove(&mut command);
         let (mut child, group) = child::spawn(&mut command)?;
         // Taken out, or `wait` below would close it. A StdinWriter writes on the thread the OS tells the app in front
         // on: a child that stops reading must not hold it, nor a closer waiting on the same lock, so child::Stdin never

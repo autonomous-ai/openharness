@@ -1,9 +1,66 @@
+//! Linux: what the app starts gets the environment the person started the app with, not the one its AppImage gave it.
+//! The AppImage's runtime, its AppRun and linuxdeploy's GTK hook set some twenty variables for the app alone and keep
+//! no copy of what they replaced. Handed on, PYTHONHOME kills xdg-open's Python, and LD_LIBRARY_PATH and the GTK paths
+//! load the AppImage's libraries into a browser built for another distribution.
+
+use std::collections::BTreeMap;
+use std::env;
+use std::ffi::{OsStr, OsString};
+use std::os::unix::ffi::{OsStrExt, OsStringExt};
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
+type Vars = BTreeMap<OsString, OsString>;
+
+/// What the AppImage sets that names no path in it, each over whatever the person had: the runtime's APPIMAGE, ARGV0
+/// and OWD, AppRun's PYTHONDONTWRITEBYTECODE and the GTK hook's GTK_THEME.
+const SET_BY_APPIMAGE: [&str; 5] = ["APPIMAGE", "ARGV0", "OWD", "PYTHONDONTWRITEBYTECODE", "GTK_THEME"];
+
+/// Gives `command` the environment it would start with, the app's and its own, without what the AppImage added.
+/// Outside an AppImage it is left as it is.
+pub fn remove(command: &mut Command) {
+    let mut vars: Vars = env::vars_os().collect();
+    for (name, value) in command.get_envs() {
+        match value {
+            Some(value) => vars.insert(name.into(), value.into()),
+            None => vars.remove(name),
+        };
+    }
+    if let Some(vars) = without_appimage(vars) {
+        command.env_clear().envs(vars);
+    }
+}
+
+/// `vars` without what the AppImage mounted at their APPDIR added, None when they name no APPDIR (Tauri, too, takes
+/// APPDIR for the AppImage's; its runtime sets it over any the person had). Every variable loses its entries under
+/// APPDIR (`outside`), and SET_BY_APPIMAGE go. The rest is the person's: the GTK hook's `/usr/share` after its own in
+/// XDG_DATA_DIRS stays too, a folder the system lists anyway.
+fn without_appimage(vars: Vars) -> Option<Vars> {
+    let appdir = PathBuf::from(vars.get(OsStr::new("APPDIR"))?);
+    if !appdir.is_absolute() {
+        return None;
+    }
+    let not_set_by_appimage = |(name, _): &(OsString, OsString)| !SET_BY_APPIMAGE.iter().any(|set| name == set);
+    let kept = vars.into_iter().filter(not_set_by_appimage);
+    Some(kept.filter_map(|(name, value)| Some((name, outside(value, &appdir)?))).collect())
+}
+
+/// `value`, a `:` list or a single path, without its entries under `appdir` (APPDIR itself among them); kept byte for
+/// byte when it has none. None when only empty entries are left: the `:` the AppImage put before a value the person
+/// did not have.
+fn outside(value: OsString, appdir: &Path) -> Option<OsString> {
+    let inside = |entry: &&[u8]| Path::new(OsStr::from_bytes(entry)).starts_with(appdir);
+    let entries: Vec<&[u8]> = value.as_bytes().split(|&byte| byte == b':').collect();
+    if !entries.iter().any(inside) {
+        return Some(value);
+    }
+    let left: Vec<&[u8]> = entries.into_iter().filter(|entry| !inside(entry)).collect();
+    (!left.iter().all(|entry| entry.is_empty())).then(|| OsString::from_vec(left.join(&b':')))
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use std::env;
-    use std::ffi::{OsStr, OsString};
-    use std::os::unix::ffi::OsStringExt;
 
     /// Where the AppImage is mounted.
     pub(crate) const APPDIR: &str = "/tmp/.mount_HarnesAbC123";

@@ -108,12 +108,14 @@ impl Opener for SystemOpener {
 
 /// Starts `command` and does not wait for it. With `log`, an exit that is not 0 is a log line without the arguments:
 /// a sign-in URL carries its state in its query.
-fn start(command: &mut Command, log: Option<&Arc<dyn Log>>) -> io::Result<()> {
+pub(crate) fn start(command: &mut Command, log: Option<&Arc<dyn Log>>) -> io::Result<()> {
     command.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
     // Its own process group: a signal to the app's (a Ctrl-C where it was started from a shell) never reaches what it
     // opened.
     #[cfg(unix)]
     std::os::unix::process::CommandExt::process_group(command, 0);
+    #[cfg(any(target_os = "linux", all(test, unix)))]
+    crate::appimage_env::remove(command);
     let mut child = {
         let _spawning = crate::cli::spawn_lock();
         command.spawn()?

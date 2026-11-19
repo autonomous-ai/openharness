@@ -1,14 +1,13 @@
 //! Linux: one command in a terminal the person sees, its exit code read back from a file beside it. In a terminal so
 //! `sudo` in the command can ask for the person's password; the app never sees it.
 
-use crate::cli;
+use crate::open;
 use crate::types::Output;
 use std::fs::{self, DirBuilder, Permissions};
 use std::io;
 use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
-use std::os::unix::process::CommandExt;
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::Command;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -96,18 +95,12 @@ pub fn run(
     Ok(Output { code, timed_out: code.is_none(), ..Output::default() })
 }
 
-/// Starts `program flag script` in its own process group, so a signal to the app's group (a Ctrl-C where the app was
-/// started from a shell) does not close the person's terminal, and reaps it on a thread. How it ends says nothing:
-/// gnome-terminal's ends at once and leaves the window to its server, so the run's end is read from `host.exit` alone.
+/// Starts `program flag script` as the app opens a page (`open::start`): in its own process group, so a signal to the
+/// app's group (a Ctrl-C where the app was started from a shell) does not close the person's terminal, and in the
+/// person's environment, not the AppImage's. How it ends says nothing: gnome-terminal's ends at once and leaves the
+/// window to its server, so the run's end is read from `host.exit` alone.
 pub fn start(program: &str, flag: &str, script: &Path) -> io::Result<()> {
-    let mut command = Command::new(program);
-    command.arg(flag).arg(script).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).process_group(0);
-    let mut child = {
-        let _spawning = cli::spawn_lock();
-        command.spawn()?
-    };
-    thread::spawn(move || child.wait());
-    Ok(())
+    open::start(Command::new(program).arg(flag).arg(script), None)
 }
 
 #[cfg(test)]
