@@ -237,15 +237,31 @@ describe('the OpenClaw contract', () => {
     }
   })
 
-  it('only a history line OpenClaw drew in the chat makes a ready pane one whose history did not load', () => {
+  it('only a history line this TUI drew in its chat makes a ready pane one whose history did not load', () => {
     const plain = fixture('screen-plain.txt')
-    const above = (line: string) => readOpenclawScreen(plain.replace(' connected | idle', `${line}\n connected | idle`)).state
+    // A system line is a blank line, then its text one column in.
+    const above = (line: string) => readOpenclawScreen(plain.replace(' connected | idle', `\n${line}\n connected | idle`)).state
     expect(above(' history failed: gateway request timeout for chat.history')).toBe('no-history')
     expect(above(' session history not ready — wait or retry /session')).toBe('no-history')
     expect(above('session history not ready — wait or retry /session')).toBe('ready')
     expect(above('  history failed: quoted')).toBe('ready')
+    // The same words under other text are not one: a code block or a tool's output can show them.
+    expect(readOpenclawScreen(plain.replace(' connected | idle', ' history failed: said\n connected | idle')).state).toBe('ready')
     // A run under the line is a run: the history loaded since.
-    expect(readOpenclawScreen(plain.replace(' connected | idle', ' history failed: x\n ⠦ running • 3s | connected')).state).toBe('busy')
+    expect(readOpenclawScreen(plain.replace(' connected | idle', '\n history failed: x\n ⠦ running • 3s | connected')).state).toBe('busy')
+    // A TUI restarted in the same pane loaded its own history: the last one's lines are above its title.
+    const restarted = `${fixture('screen-history-refused.txt').trimEnd()}\n$ openclaw tui --session plain\n${plain}`
+    expect(readOpenclawScreen(restarted)).toMatchObject({ key: 'agent:main:plain', state: 'ready', historyFailures: 0 })
+  })
+
+  it('counts the history loads on screen that failed', () => {
+    expect(readOpenclawScreen(fixture('screen-history-failed.txt')).historyFailures).toBe(1)
+    expect(readOpenclawScreen(fixture('screen-history-refused.txt')).historyFailures).toBe(1)
+    expect(readOpenclawScreen(fixture('screen-plain.txt')).historyFailures).toBe(0)
+    // A `/session` whose load failed again adds its own line under the first.
+    const again = fixture('screen-history-failed.txt')
+      .replace(' gateway connected | idle', '\n history failed: gateway request timeout for chat.history\n gateway connected | idle')
+    expect(readOpenclawScreen(again)).toMatchObject({ state: 'no-history', historyFailures: 2 })
   })
 
   it('the box holds a message only when it shows all of it, wrapped or not', () => {
