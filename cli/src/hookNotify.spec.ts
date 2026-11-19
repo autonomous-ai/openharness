@@ -2552,8 +2552,9 @@ describe('hook notify: a session outside a pane', () => {
     'ZELLIJ_SESSION_NAME', 'TMUX_PANE', 'HC_TERMINAL_ID', 'CMUX_SURFACE_ID', 'CMUX_WORKSPACE_ID', 'KITTY_WINDOW_ID',
     'KITTY_LISTEN_ON', 'WEZTERM_PANE', 'ORCA_AGENT_SESSION_ID', 'ORCA_TERMINAL_HANDLE', 'CLAUDE_CODE_HOST_SESSION_ID',
     'CLAUDE_CODE_ENTRYPOINT']
-  /** The hints a cut would turn into another value: left out whole over 64 characters. */
-  const WHOLE = ['ZELLIJ_PANE_ID', 'ZELLIJ_SESSION_NAME', 'KITTY_LISTEN_ON']
+  /** The hints a cut would turn into another value: left out whole over 64 characters. The Claude app's session id
+   *  may be longer (claudeApp.ts CLAUDE_SESSION), and cut, it would still pass as another session's. */
+  const WHOLE = ['ZELLIJ_PANE_ID', 'ZELLIJ_SESSION_NAME', 'KITTY_LISTEN_ON', 'CLAUDE_CODE_HOST_SESSION_ID']
   /** The hints sent on macOS alone: the one platform the devices try Herdr's window on, though hc runs on Linux too
    *  (spec Q5), and the one cmux runs on. */
   const CMUX_IDS = ['CMUX_SURFACE_ID', 'CMUX_WORKSPACE_ID']
