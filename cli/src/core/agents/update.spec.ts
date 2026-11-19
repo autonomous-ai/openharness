@@ -156,6 +156,14 @@ describe('authority across durable update waits', () => {
     expect(deps.onAgentRename).not.toHaveBeenCalled()
   })
 
+  it('logs the kind of a failed publication, never its words', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const { deps, ask } = setup()
+    vi.mocked(deps.registry.rename).mockRejectedValueOnce(Object.assign(new Error('/Users/thao/registry.json: no space'), { code: 'ENOSPC' }))
+    await ask({ agentId: 'a1', name: 'Kept' })
+    expect(error).toHaveBeenCalledExactlyOnceWith('[agent_update] explicit choice publication failed · ENOSPC')
+  })
+
   it.each(['control', 'model owner', 'rename', 'open', 'frame', 'name frame'] as const)('refuses a replacement during %s', async phase => {
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     vi.spyOn(console, 'log').mockImplementation(() => {})
