@@ -9,6 +9,7 @@ import 'package:flutter/widgets.dart';
 
 import 'demo/demo_link.dart';
 import 'dev/fixtures.dart';
+import 'link/aplay_chime.dart';
 import 'link/arecord_mic.dart';
 import 'link/cable/cable_link.dart';
 import 'model/bar_model.dart';
@@ -26,7 +27,7 @@ Future<void> main() async {
   if (mode == 'fixture') {
     model = mockupModel(app: env['HARNESS_MAX_FIXTURE_APP'] ?? 'orca');
   } else {
-    model = BarModel();
+    model = BarModel(chime: createChime());
     final mic = createMic();
     // HARNESS_MAX_DEMO=story plays max_demo.c's story by itself, over and over; otherwise a person drives the demo.
     model.link = mode == 'demo'

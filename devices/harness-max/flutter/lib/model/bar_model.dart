@@ -1,11 +1,13 @@
 // The bar's state and its rules (spec: docs/superpowers/specs/2026-11-18-harness-max-v2-design.md, Demo V2's rules,
 // ported from devices/harness-max/firmware/main/app/max_ui_*.c). The computer feeds it through the `on*` inputs, the
 // person through the intents, and the app's ticker through tick(). Pages only read its fields and call intents.
+import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
 
 import '../link/bar_link.dart';
+import '../link/chime.dart';
 import 'types.dart';
 import 'words.dart';
 
@@ -53,6 +55,9 @@ const Duration kToastFor = Duration(seconds: 5);
 /// A finished turn's small note at the glass's bottom right.
 const Duration kDoneNoteFor = Duration(seconds: 6);
 
+/// One chime for the alerts of this long (the C build's BEEP_COALESCE_MS, the Pro's POD_BEEP_COALESCE_MS).
+const Duration kChimeCoalesce = Duration(seconds: 30);
+
 /// A mic level at least this is speech: the C model's MAX_SPEECH_LEVEL 2 on pro_rec_level's 0..4, on this 0..1 scale.
 const double kSpeechLevel = 0.5;
 
@@ -79,10 +84,16 @@ class _Due {
 }
 
 class BarModel extends ChangeNotifier {
-  BarModel({BarLink? link, DateTime Function()? clock})
+  BarModel({BarLink? link, DateTime Function()? clock, this.chime = const NoChime()})
       : link = link ?? NullLink(),
         _clock = clock ?? DateTime.now,
         _idleFrom = (clock ?? DateTime.now)();
+
+  /// The alert's sound (the board's speaker).
+  final Chime chime;
+
+  /// When the last chime sounded: one for the alerts of [kChimeCoalesce].
+  DateTime? _chimedAt;
 
   /// Where intents go. Set after construction when the link needs the model (CableLink(model)).
   BarLink link;
@@ -1364,6 +1375,7 @@ class BarModel extends ChangeNotifier {
   /// Inbox).
   void _attend(Agent a, AttnKind kind) {
     _idleFrom = now();
+    _chime();
     _inboxAdd(a, kind);
     if (kind == AttnKind.done) {
       // A finished turn never takes the glass (the owner's call, 18 Nov): the small note at the bottom right, over
@@ -1389,6 +1401,15 @@ class BarModel extends ChangeNotifier {
       return;
     }
     _attention(a.id, kind);
+  }
+
+  /// An alert sounds (max_app.c alert_locked): a question, a failure, a loud finished turn each come here once; a
+  /// burst of them chimes once.
+  void _chime() {
+    final t = now(), last = _chimedAt;
+    if (last != null && t.difference(last) < kChimeCoalesce) return;
+    _chimedAt = t;
+    unawaited(chime.play());
   }
 
   /// The notice's words: the question, or what the turn said. The same notice again (a question re-sent after the link

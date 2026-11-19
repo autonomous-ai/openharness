@@ -1,6 +1,7 @@
 // What the model's tests share: a BarModel on a fake clock with a recording link (NullLink.sent), the rings and the
 // questions of the C model's tests (devices/harness-max/firmware/test/test_max_*.c).
 import 'package:harness_max_bar/link/bar_link.dart';
+import 'package:harness_max_bar/link/chime.dart';
 import 'package:harness_max_bar/model/bar_model.dart';
 import 'package:harness_max_bar/model/types.dart';
 
@@ -9,13 +10,22 @@ final DateTime t0 = DateTime(2026, 11, 18, 14);
 /// `ms` after [t0].
 DateTime at(int ms) => t0.add(Duration(milliseconds: ms));
 
+/// Counts the chimes the model asks for.
+class RecordingChime implements Chime {
+  int plays = 0;
+
+  @override
+  Future<void> play() async => plays++;
+}
+
 class TestBar {
   TestBar() {
-    model = BarModel(link: link, clock: () => now);
+    model = BarModel(link: link, clock: () => now, chime: chime);
     model.addListener(() => notes++);
   }
 
   final NullLink link = NullLink();
+  final RecordingChime chime = RecordingChime();
   DateTime now = t0;
   late final BarModel model;
 
