@@ -722,6 +722,66 @@ function runsCommandString(cmdline) {
   return false
 }
 
+/** The engines that run their hook through a shell on Windows: Codex and Copilot through PowerShell, Command Code
+ *  through cmd. Claude Code and the others run it as argv, so its parent is the engine already. */
+const WINDOWS_SHELL_ENGINES = new Set(['codex', 'copilot', 'commandcode'])
+
+/** PowerShell's options that take the next word as their value (Windows PowerShell's and pwsh's), each as its name and
+ *  the shortest prefix PowerShell takes for it; `ep`, `if`, `of` and `wd` are short names of their own. */
+const POWERSHELL_VALUE_OPTIONS = [
+  ['executionpolicy', 'ex'], ['ep', 'ep'], ['windowstyle', 'w'], ['inputformat', 'inp'], ['if', 'if'],
+  ['outputformat', 'o'], ['of', 'of'], ['configurationname', 'config'], ['workingdirectory', 'wo'], ['wd', 'wd'],
+  ['custompipename', 'cus'], ['settingsfile', 'settings'], ['version', 'v'], ['psconsolefile', 'psc'],
+]
+
+/**
+ * Whether a PowerShell's argv has it run a command: before its first word that is no option, `-c` or a longer prefix of
+ * `-Command`, in any case. An option's value is no word of its own; `-File` and `-EncodedCommand` are options, so the
+ * script or the encoded text after them ends the scan.
+ */
+function powershellRunsCommand(argv) {
+  for (let index = 1; index < argv.length; index++) {
+    const word = argv[index].toLowerCase()
+    if (!word.startsWith('-')) return false
+    if (word.length >= 2 && '-command'.startsWith(word)) return true
+    const name = word.slice(1)
+    if (POWERSHELL_VALUE_OPTIONS.some(([option, shortest]) => name.length >= shortest.length && option.startsWith(name))) index++
+  }
+  return false
+}
+
+/** Whether a cmd's argv has it run a command: among its leading switches, `/c` or `/r` before any `/k`, in any case. */
+function cmdRunsCommand(argv) {
+  for (const word of argv.slice(1)) {
+    const lower = word.toLowerCase()
+    if (!lower.startsWith('/') || lower === '/k') return false
+    if (lower === '/c' || lower === '/r') return true
+  }
+  return false
+}
+
+/** A row of the pty host's table that is a shell started to run a command, as the engines' hook runners start one. */
+function windowsCommandShell(row) {
+  if (!row.nativeArgv) return false
+  const image = row.executable.toLowerCase()
+  if (image === 'cmd.exe') return cmdRunsCommand(row.nativeArgv)
+  return (image === 'powershell.exe' || image === 'pwsh.exe') && powershellRunsCommand(row.nativeArgv)
+}
+
+/** hookCallerPid on Windows, from the pty host's table; the hook's parent when there is no table. */
+async function windowsHookCallerPid() {
+  const rows = await windowsListedRows()
+  if (!rows) return process.ppid
+  const byPid = new Map(rows.map((row) => [row.pid, row]))
+  let pid = process.ppid
+  for (let step = 0; step < 8; step++) {
+    const shell = byPid.get(pid)
+    if (!shell || !windowsCommandShell(shell) || !byPid.has(shell.parentPid)) break
+    pid = shell.parentPid
+  }
+  return pid
+}
+
 /**
  * The hook's caller, the nearest ancestor that outlives it: the core checks it against the engine's recorded process
  * (core/engines/hooks.ts), and the devices keep it for a paneless agent (cable/hosts/observed.ts). On Linux dash keeps
@@ -733,8 +793,15 @@ function runsCommandString(cmdline) {
  * above the engine. A process /proc cannot show is named, as nothing above it can be read. A shell left to init, its
  * engine gone, is named itself: pid 1 never exits, and the devices would keep the agent. macOS's /bin/sh is a bash
  * that execs the hook, so its parent is the engine already, with nothing to climb.
+ *
+ * Windows has the same gap: PowerShell (`-Command`) and cmd (`/c`) stay the hook's parent and exit with it. Windows has
+ * no /proc, so the climb reads the pty host's table, the one the core's check reads too (lib/windows/processTable.ts):
+ * each row's pid, parent, image name and command line, never an environment. Starting the host costs a process start
+ * on the hook's path, so only the engines whose runner is a shell pay it. A process the host lists but cannot open is
+ * named, as its command line cannot be read; a shell whose parent is in no row, gone, is named itself.
  */
-function hookCallerPid() {
+async function hookCallerPid(engine) {
+  if (process.platform === 'win32') return WINDOWS_SHELL_ENGINES.has(engine) ? windowsHookCallerPid() : process.ppid
   if (process.platform !== 'linux') return process.ppid
   let pid = process.ppid
   for (let step = 0; step < 8; step++) {
@@ -785,7 +852,7 @@ function observedBody(engine, event, input) {
     : Array.isArray(input.workspacePaths) ? input.workspacePaths[0]
       : input.cwd || input.workspaceRoot || (engine === 'devin' ? process.cwd() : undefined)
   const body = {
-    engine, sessionId, event: kind, cwd: path(cwd), callerPid: hookCallerPid(),
+    engine, sessionId, event: kind, cwd: path(cwd), callerPid: CALLER_PID,
     transcriptPath: path(input.transcript_path || input.transcriptPath), hostHints: hostHints(),
   }
   if (relayedPrompt(engine, event, input)) body.relayed = true
@@ -927,7 +994,7 @@ function terminalHookFields(tmuxPane) {
   const runtimeHints = []
   if (tmuxPane) runtimeHints.push({ backend: 'tmux', paneId: tmuxPane })
   else if (PTY_PANE) runtimeHints.push({ backend: 'ptyhost', instance: PTY_PANE.instance, paneId: PTY_PANE.paneId })
-  return { tmuxPane, runtimeHints, callerPid: hookCallerPid() }
+  return { tmuxPane, runtimeHints, callerPid: CALLER_PID }
 }
 
 function sleep(ms) {
@@ -1341,12 +1408,25 @@ function ptyHostBinary() {
   try { accessSync(beside, constants.F_OK); return beside } catch { return null }
 }
 
+/** The PTY host's table, read once a run: the caller's climb (hookCallerPid) and the engine's lookup share one start. */
+let windowsTable
+function windowsListedRows() {
+  windowsTable ??= readWindowsTable()
+  return windowsTable
+}
+
 /**
  * Windows has no `ps`: the PTY host lists the processes (`harness-pty ps --json`, pty/src/ps.rs), and the rows
  * map as the daemon maps them (src/lib/windows/processTable.ts). A row without a start marker (a process the
  * host could not open) can never be an identity and is dropped; a read that names nobody failed.
  */
 async function windowsProcessRows() {
+  const rows = (await windowsListedRows())?.filter((row) => row.startMarker)
+  return rows?.length ? rows : null
+}
+
+/** Every row the PTY host lists, those it could not open (an empty start marker) included; null for a failed read. */
+async function readWindowsTable() {
   const binary = ptyHostBinary()
   if (!binary) return null
   // A busy machine's table is a few hundred KB of JSON: the daemon's own limit (src/lib/windows/processTable.ts).
@@ -1360,13 +1440,13 @@ async function windowsProcessRows() {
     if (!row || typeof row !== 'object') continue
     const { pid, parentPid, executable, startMarker, args, nativeArgv } = row
     if (!Number.isSafeInteger(pid) || pid <= 0 || !Number.isSafeInteger(parentPid) || parentPid < 0) continue
-    if (typeof executable !== 'string' || typeof args !== 'string' || typeof startMarker !== 'string' || !startMarker) continue
+    if (typeof executable !== 'string' || typeof args !== 'string' || typeof startMarker !== 'string') continue
     rows.push({
       pid, parentPid, executable, startMarker, args,
       ...(Array.isArray(nativeArgv) && nativeArgv.every((item) => typeof item === 'string') ? { nativeArgv } : {}),
     })
   }
-  return rows.length ? rows : null
+  return rows
 }
 
 async function processRows() {
@@ -2505,6 +2585,10 @@ async function main() {
   if (held && ok !== true) process.stderr.write('[harness] Hermes admission is held; this delivery could not be confirmed. The current conversation is unchanged.\n')
   if (ok === false && !held) await fallbackRegister(input, engine, tmuxPane)
 }
+
+// Found once, before main(): every post of a run names the same caller. Outside main()'s catch, a climb that throws (a
+// helper path Node refuses to start) names the parent, as a run with no table does.
+const CALLER_PID = await hookCallerPid(argEngine()).catch(() => process.ppid)
 
 main()
   .catch(() => {})
