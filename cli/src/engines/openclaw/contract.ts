@@ -145,7 +145,7 @@ export interface OpenclawScreen {
    * `local stopped` one after it included: that one no longer says why.
    */
   stopped: string | null
-  /** The running TUI's status line as drawn, trimmed. */
+  /** The running TUI's status line as drawn, trimmed, the lines a narrow pane wrapped it onto joined by a space. */
   status: string | null
   /**
    * What the running TUI's input box shows: its lines between the last two rules, trimmed, blank ones dropped, joined
