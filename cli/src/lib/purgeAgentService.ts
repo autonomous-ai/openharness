@@ -115,7 +115,15 @@ export async function inspectNativeHistory(s: RegisteredSession): Promise<Histor
   }
   if (s.engine === 'opencode' && (await query("SELECT name FROM sqlite_master WHERE type='table' AND name='session_v2'")).length
     && (await query(`SELECT id FROM session_v2 WHERE id = ${id}`)).length) {
-    sessionTable = 'session_v2'; children = [['session_message', `session_id = ${id}`]]
+    sessionTable = 'session_v2'
+    // OpenCode 2 keeps a conversation's parts, attachment links, instructions, inbox and schedules beside its messages
+    // (2.2.6, 2026-11-19): with only session_message here every delete was refused as "Other engine data". Parts and
+    // attachment links go before the messages they name. A blob's bytes stay: other conversations may link the same one.
+    // A table this release does not have holds nothing to delete; any other table naming these is still refused below.
+    const present = new Set((await query("SELECT name FROM sqlite_master WHERE type='table'")).map(t => String(t.name)))
+    children = ['session_part', 'blob_ref', 'session_message', 'instruction_entry', 'instruction_state', 'session_inbox', 'schedule']
+      .filter(table => table === 'session_message' || present.has(table))
+      .map(table => [table, `session_id = ${id}`])
   }
   await query(`SELECT id FROM ${sessionTable} WHERE id = ${id}`)
   // The binding, only for a purge of a store-backed engine's history: the monitor's process imports this module.
@@ -138,7 +146,8 @@ export async function inspectNativeHistory(s: RegisteredSession): Promise<Histor
   const schemaVersion = Number((await query('PRAGMA schema_version'))[0]?.schema_version)
   if (!Number.isInteger(schemaVersion)) return fail('The engine history schema could not be verified.')
   const guards: string[] = [`INSERT INTO purge_guard SELECT 0 FROM pragma_schema_version WHERE schema_version <> ${schemaVersion};`]
-  for (const parent of ['parent_id', 'parent_session_id']) if (columns.some(c => c.name === parent)) {
+  // OpenCode 2's fork_session_id too: a fork may still read its source's history up to its fork_boundary.
+  for (const parent of ['parent_id', 'parent_session_id', 'fork_session_id']) if (columns.some(c => c.name === parent)) {
     const predicate = `${parent} = ${id} AND id <> ${id}`
     if ((await query(`SELECT id FROM ${sessionTable} WHERE ${predicate} LIMIT 1`)).length) {
       return fail('Other conversations depend on this session. Delete those through the engine before deleting this harness.')

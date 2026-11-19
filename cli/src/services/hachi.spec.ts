@@ -421,7 +421,9 @@ describe('Hachi\'s wakes, what can go wrong', () => {
   })
 
   it('runs on its own defaults: the daemon\'s socket, real timers and file watches', async () => {
-    vi.useFakeTimers()
+    // At the ledger's own time: on the wall clock its line, written at NOW, aged past the week Hachi follows
+    // (FOLLOWED_WITHIN_MS) on 2026-11-19 at 12:00 UTC, and this test failed on every branch from then.
+    vi.useFakeTimers({ now: NOW })
     setAgentSettingsForTest(dir, { hachi: true })
     startedByHachi('api')
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})
