@@ -189,11 +189,6 @@ mod tests {
     }
 
     #[test]
-    fn open_harness_is_one_fixed_command() {
-        assert_eq!(open_desktop_args(), ["-b", "ai.autonomous.harness"]);
-    }
-
-    #[test]
     fn the_system_answers() {
         // Read-only lookups: either answer is right; the calls must return.
         let _ = SystemDesktopApp.installed();

@@ -83,44 +83,78 @@ pub fn reason(failure: ExportFailure) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[cfg(unix)]
     use crate::cli::LINE_MAX;
     #[cfg(unix)]
     use crate::testing::Fake;
     use crate::types::ExportFailure::{NoAnswer, NoFile, TimedOut};
-    #[cfg(unix)]
     use serde_json::json;
     #[cfg(unix)]
     use std::fs;
 
-    #[cfg(unix)]
     const NAME: &str = "harness-logs-20261118-1030.zip";
+    // An absolute folder, a zip in one and an answer naming it, on the OS that runs the test.
+    #[cfg(unix)]
+    const ROOT: &str = "/";
+    #[cfg(windows)]
+    const ROOT: &str = r"C:\";
+    #[cfg(unix)]
     const ZIP: &str = "/Users/p/Desktop/harness-logs-20261118-1030.zip";
+    #[cfg(windows)]
+    const ZIP: &str = r"C:\Users\p\Desktop\harness-logs-20261118-1030.zip";
     #[cfg(unix)]
     const GOOD: &str = r#"{"path":"/Users/p/Desktop/harness-logs-20261118-1030.zip","included":["a"],"bytes":9}"#;
+    #[cfg(windows)]
+    const GOOD: &str = r#"{"path":"C:\\Users\\p\\Desktop\\harness-logs-20261118-1030.zip","included":["a"],"bytes":9}"#;
+    /// Paths an answer may name that are no bundle the CLI writes.
+    #[cfg(unix)]
+    const NOT_BUNDLES: [&str; 7] = [
+        "tmp/harness-logs-20261118-1030.zip",
+        "/tmp/evil.zip",
+        "/tmp/harness-logs-2026118-1030.zip",
+        "/tmp/harness-logs-20261118-1030.zip.sh",
+        "/tmp/xharness-logs-20261118-1030.zip",
+        "/tmp/harness-logs-20261118-1030.zip/",
+        // Digits of another script are no date the CLI writes.
+        "/tmp/harness-logs-٢٠٢٦١١١٨-1030.zip",
+    ];
+    #[cfg(windows)]
+    const NOT_BUNDLES: [&str; 11] = [
+        r"tmp\harness-logs-20261118-1030.zip",
+        // Rooted on no drive, on a drive's working folder, or unix's: none is absolute.
+        r"\tmp\harness-logs-20261118-1030.zip",
+        r"C:tmp\harness-logs-20261118-1030.zip",
+        "/tmp/harness-logs-20261118-1030.zip",
+        r"C:\tmp\evil.zip",
+        r"C:\tmp\harness-logs-2026118-1030.zip",
+        r"C:\tmp\harness-logs-20261118-1030.zip.sh",
+        r"C:\tmp\xharness-logs-20261118-1030.zip",
+        r"C:\tmp\harness-logs-20261118-1030.zip\",
+        r"C:\tmp\harness-logs-20261118-1030.zip/",
+        r"C:\tmp\harness-logs-٢٠٢٦١١١٨-1030.zip",
+    ];
     #[cfg(unix)]
     const SHORT: Duration = Duration::from_millis(300);
 
     /// A run that ended by itself with this code and stdout.
-    #[cfg(unix)]
     fn ended(code: i32, stdout: &str) -> Output {
         Output { code: Some(code), stdout: stdout.into(), ..Output::default() }
     }
 
     /// A finished run whose answer names this path.
-    #[cfg(unix)]
     fn naming(path: &str) -> Output {
         ended(0, &format!("{}\n", json!({ "path": path, "included": [], "bytes": 1 })))
     }
 
     /// GOOD, after spaces JSON allows, `len` bytes long in all.
-    #[cfg(unix)]
     fn padded(len: usize) -> Output {
         ended(0, &format!("{}{GOOD}\n", " ".repeat(len - GOOD.len())))
     }
 
-    // The paths are unix ones: `/Users/p/…` is not absolute on Windows.
-    #[cfg(unix)]
+    /// The path under ROOT made of these parts.
+    fn absolute(parts: &[&str]) -> String {
+        parts.iter().fold(PathBuf::from(ROOT), |path, part| path.join(part)).display().to_string()
+    }
+
     #[test]
     fn only_an_absolute_bundle_path_is_kept() {
         let good = format!("{GOOD}\n");
@@ -141,19 +175,7 @@ mod tests {
             assert_eq!(parse(output), Err(NoAnswer), "no answer {case}");
         }
         let mut no_file = vec![ended(0, "{\"bytes\":1}\n"), ended(0, "{\"path\":7}\n")];
-        no_file.extend(
-            [
-                "tmp/harness-logs-20261118-1030.zip",
-                "/tmp/evil.zip",
-                "/tmp/harness-logs-2026118-1030.zip",
-                "/tmp/harness-logs-20261118-1030.zip.sh",
-                "/tmp/xharness-logs-20261118-1030.zip",
-                "/tmp/harness-logs-20261118-1030.zip/",
-                // Digits of another script are no date the CLI writes.
-                "/tmp/harness-logs-٢٠٢٦١١١٨-1030.zip",
-            ]
-            .map(naming),
-        );
+        no_file.extend(NOT_BUNDLES.map(naming));
         for (case, output) in no_file.iter().enumerate() {
             assert_eq!(parse(output), Err(NoFile), "no file {case}: {output:?}");
         }
@@ -161,19 +183,42 @@ mod tests {
         assert_eq!(parse(&timed_out), Err(TimedOut));
     }
 
-    // As only_an_absolute_bundle_path_is_kept.
-    #[cfg(unix)]
     #[test]
     fn a_path_that_is_no_menu_line() {
-        let longest = format!("/{}/{NAME}", "a".repeat(1024 - NAME.len() - 2));
+        let longest = absolute(&[&"a".repeat(1024 - ROOT.len() - 1 - NAME.len()), NAME]);
         assert_eq!(longest.len(), 1024);
         assert_eq!(parse(&naming(&longest)), Ok(PathBuf::from(&longest)));
-        let too_long = format!("/{}/{NAME}", "a".repeat(1025 - NAME.len() - 2));
-        let breaks =
-            ["\n", "\r", "\t", "\u{7f}", "\u{85}", "\u{2028}", "\u{2029}"].map(|text| format!("/tmp/a{text}b/{NAME}"));
+        let too_long = absolute(&[&"a".repeat(1025 - ROOT.len() - 1 - NAME.len()), NAME]);
+        let breaks = ["\n", "\r", "\t", "\u{7f}", "\u{85}", "\u{2028}", "\u{2029}"]
+            .map(|text| absolute(&["tmp", &format!("a{text}b"), NAME]));
         for path in breaks.iter().chain([&too_long]) {
             assert_eq!(parse(&naming(path)), Err(NoFile), "{path:?}");
         }
+    }
+
+    #[test]
+    fn a_windows_zip_is_named_after_its_last_backslash() {
+        // Absolute where the test runs; only the separator before the name differs.
+        #[cfg(unix)]
+        let zip = r"/Users/p/Desktop\harness-logs-20261118-1030.zip";
+        #[cfg(windows)]
+        let zip = r"C:\Users\p\Desktop\harness-logs-20261118-1030.zip";
+        assert!(bundle_path(zip, true));
+        // A unix file name may hold a `\`: the name is then all of `Desktop\…`.
+        assert!(!bundle_path(zip, false));
+    }
+
+    #[test]
+    fn a_windows_path_with_a_quote_is_no_bundle() {
+        // Explorer reads the path between quotes, which one inside would end. Windows forbids it in a path; unix
+        // does not.
+        #[cfg(unix)]
+        let zip = r#"/Users/p/a"b\harness-logs-20261118-1030.zip"#;
+        #[cfg(windows)]
+        let zip = r#"C:\Users\p\a"b\harness-logs-20261118-1030.zip"#;
+        assert!(!bundle_path(zip, true));
+        #[cfg(unix)]
+        assert!(bundle_path(r#"/Users/p/a"b/harness-logs-20261118-1030.zip"#, false));
     }
 
     #[cfg(unix)]
@@ -217,10 +262,16 @@ mod tests {
         }
     }
 
+    // `~\Desktop\…` with Windows' separator.
+    #[cfg(windows)]
     #[test]
-    fn the_reveal_is_open_r_on_a_mac_and_the_folder_elsewhere() {
-        assert_eq!(reveal_args("macos", Path::new(ZIP)), ["-R", ZIP]);
-        assert_eq!(reveal_args("linux", Path::new(ZIP)), ["/Users/p/Desktop"]);
+    fn the_home_reads_as_a_tilde() {
+        for home in [r"C:\Users\p", r"C:\Users\p\"] {
+            assert_eq!(shown(Path::new(r"C:\Users\p\Desktop\x.zip"), Path::new(home)), r"~\Desktop\x.zip", "{home}");
+        }
+        for elsewhere in [r"D:\Work\x.zip", r"C:\Users\pp\x.zip"] {
+            assert_eq!(shown(Path::new(elsewhere), Path::new(r"C:\Users\p")), elsewhere);
+        }
     }
 
     #[test]

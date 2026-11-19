@@ -690,6 +690,7 @@ mod tests {
     use crate::front::{FrontSource, NoFront};
     use crate::install::{FINISH_IN_TERMINAL, GETTING_READY, INSTALLING_TMUX, NOT_INSTALLED, Place, Run, Shell, runs};
     use crate::loginitem::LoginItem;
+    use crate::open::Opener;
     use crate::state::StateFile;
     use crate::tabs::{NoTabs, Selected, TabApp, TabError, TabScripts};
     use crate::testing::{Fake, alive, fake_harness, wait_gone};
@@ -743,7 +744,8 @@ mod tests {
         /// The lines each shell run behind the Install screen hands its sink.
         prints: Mutex<Vec<String>>,
         ran: Mutex<Vec<String>>,
-        opened: Mutex<Vec<Vec<String>>>,
+        /// `url <u>`, `reveal <zip>` or `desktop`.
+        opened: Mutex<Vec<String>>,
         saved: Mutex<Vec<Saved>>,
         /// How many times the login item was refreshed, and whether a refresh changes it.
         refreshed: AtomicUsize,
@@ -755,9 +757,23 @@ mod tests {
             self.failing.load(Ordering::SeqCst)
         }
 
-        fn open(&self, args: &[&str]) -> io::Result<()> {
-            self.opened.lock().unwrap().push(args.iter().map(|arg| arg.to_string()).collect());
+        fn open(&self, what: String) -> io::Result<()> {
+            self.opened.lock().unwrap().push(what);
             if self.failing() { Err(io::Error::other("no browser")) } else { Ok(()) }
+        }
+    }
+
+    impl Opener for Doubles {
+        fn url(&self, url: &str) -> io::Result<()> {
+            self.open(format!("url {url}"))
+        }
+
+        fn reveal(&self, zip: &Path) -> io::Result<()> {
+            self.open(format!("reveal {}", zip.display()))
+        }
+
+        fn desktop(&self) -> io::Result<()> {
+            self.open("desktop".into())
         }
     }
 
@@ -1090,7 +1106,6 @@ mod tests {
     }
 
     fn doors(fake: &Fake, home: &Path, doubles: &Arc<Doubles>) -> Doors {
-        let opener = doubles.clone();
         Doors {
             home: home.to_path_buf(),
             // The system's folders, which the fake's tools are in; never the developer's PATH, where a `harness` would
@@ -1101,7 +1116,7 @@ mod tests {
             login_item: doubles.clone(),
             state: doubles.clone(),
             log: fake.log(),
-            open: Arc::new(move |args: &[&str]| opener.open(args)),
+            open: doubles.clone(),
             front: Arc::new(NoFront),
             tabs: Arc::new(NoTabs),
             updater: None,
@@ -1192,7 +1207,8 @@ mod tests {
         w.doubles.failing.store(true, Ordering::SeqCst);
         assert_eq!(w.answer(Effect::RegisterLoginItem), Event::LoginItem(false));
         let url = Effect::OpenUrl("https://id.example/a".into());
-        for effect in [Effect::Save(Saved::default()), url, Effect::OpenDesktop] {
+        let reveal = Effect::Reveal(PathBuf::from("/tmp/harness-logs-20261118-1030.zip"));
+        for effect in [Effect::Save(Saved::default()), url, Effect::OpenDesktop, reveal] {
             assert_eq!(w.runner.run(effect), None);
         }
         assert_eq!(
@@ -1202,6 +1218,7 @@ mod tests {
                 "state: could not save: disk full",
                 "browser: could not open: no browser",
                 "desktop app: could not open: no browser",
+                "logs: could not open: no browser",
             ]
         );
     }
@@ -1302,10 +1319,7 @@ mod tests {
         for effect in [Effect::OpenDesktop, Effect::OpenUrl("https://id.example/a?state=S".into())] {
             assert_eq!(w.runner.run(effect), None);
         }
-        assert_eq!(
-            *w.doubles.opened.lock().unwrap(),
-            [vec!["-b", "ai.autonomous.harness"], vec!["https://id.example/a?state=S"]]
-        );
+        assert_eq!(*w.doubles.opened.lock().unwrap(), ["desktop", "url https://id.example/a?state=S"]);
     }
 
     #[cfg(unix)]
@@ -1342,11 +1356,7 @@ mod tests {
         let w = world();
         let zip = "/Users/p/Desktop/harness-logs-20261118-1030.zip";
         assert_eq!(w.runner.run(Effect::Reveal(PathBuf::from(zip))), None);
-        #[cfg(target_os = "macos")]
-        let expected = vec!["-R", zip];
-        #[cfg(not(target_os = "macos"))]
-        let expected = vec!["/Users/p/Desktop"];
-        assert_eq!(*w.doubles.opened.lock().unwrap(), [expected]);
+        assert_eq!(*w.doubles.opened.lock().unwrap(), [format!("reveal {zip}")]);
     }
 
     #[cfg(unix)]
