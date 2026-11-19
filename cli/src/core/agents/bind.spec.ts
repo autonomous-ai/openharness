@@ -2327,6 +2327,23 @@ describe('binding an OpenClaw pane, read from its screen', () => {
       expect(typed()).toEqual([SESSION])
     })
 
+    // A TUI the person runs with nothing of Harness's waiting on it is theirs to reload.
+    it('types nothing while neither a first task nor a message of Harness\'s waits on the agent', async () => {
+      vi.mocked(run.deps.registry.byProcess).mockReturnValue(pane({ sessionId: 'agent:main:plain' }))
+      for (const second of [0, 20, 40]) await pass(second)
+      expect(typed()).toEqual([])
+    })
+
+    it.each([
+      ['its first task, handed over and not confirmed', 'firstTaskWaiting'],
+      ['a message typed and not confirmed', 'awaitingConfirmation'],
+    ] as const)('types it while %s', async (_, waiting) => {
+      vi.mocked(run.deps.registry.byProcess).mockReturnValue(pane({ sessionId: 'agent:main:plain' }))
+      vi.mocked(run.deps.input[waiting]).mockReturnValue(true)
+      await pass(0)
+      expect(typed()).toEqual([SESSION])
+    })
+
     it('loads the session the footer shows, and types nothing when the screen names none', async () => {
       // The person moved the pane with /new: the row still names the session it had.
       await pass(0, failed.replace(/session plain/g, 'session other'))
@@ -2347,7 +2364,7 @@ describe('binding an OpenClaw pane, read from its screen', () => {
     it('remembers 256 panes at most: one more starts them over', async () => {
       await pass(0)
       for (let i = 0; i < 256; i++) {
-        vi.mocked(run.deps.registry.byProcess).mockReturnValue(pane({ agentId: `b${i}`, sessionId: 'agent:main:plain' }))
+        vi.mocked(run.deps.registry.byProcess).mockReturnValue(pane({ agentId: `b${i}`, sessionId: 'agent:main:plain', firstTask: TASK }))
         await run.binding.bindObservedAgent(tui())
       }
       vi.mocked(run.deps.registry.byProcess).mockReturnValue(pane({ sessionId: 'agent:main:plain', firstTask: TASK }))
