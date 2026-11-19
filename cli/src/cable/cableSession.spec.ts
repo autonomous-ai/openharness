@@ -7315,8 +7315,10 @@ describe('a permission prompt over a link with no authentication (HARNESS_CABLE_
     } finally { await session.stop() }
   })
 
-  it('is answered on a USB dial, as before', async () => {
-    const { session, port, host, answerReviewed, reviewed } = await over()
+  // main's path for every board on USB: the mark changes nothing a round dial or a Pro does with its answer.
+  it.each([['a round dial', {}], ['a Pro', { board: 'pro', hw: 'harness-pro' }], ['a Max', { board: 'max' }]])(
+    'is answered on %s over USB, as before', async (_, hello) => {
+    const { session, port, host, answerReviewed, reviewed } = await over(undefined, hello)
     try {
       await session.question('a1', 'perm-1', PERMISSION, true)
       port().say({ t: 'answer', agentId: 'a1', requestId: 'perm-1', answers: { [PERMISSION[0].key]: 'Yes' } })
