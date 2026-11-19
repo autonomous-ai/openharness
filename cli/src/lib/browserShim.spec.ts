@@ -2,8 +2,31 @@ import { execFileSync } from 'node:child_process'
 import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { browserPrelude, browserShimPath, browserShimScript, writeBrowserShim } from './browserShim.js'
+
+// `full`: a write stops part way, as on a full disk. `watch`: every size that path is seen at, after each write and
+// rename. Node's writeFileSync on a path opens it empty before it writes, so that one is taken apart to look between.
+const disk = vi.hoisted(() => ({ full: false, watch: '', sizes: [] as number[] }))
+vi.mock('node:fs', async original => {
+  const actual = await original<typeof import('node:fs')>()
+  const look = () => { if (disk.watch && actual.existsSync(disk.watch)) disk.sizes.push(actual.statSync(disk.watch).size) }
+  return { ...actual,
+    writeFileSync: (...args: Parameters<typeof actual.writeFileSync>) => {
+      const [target, data, options] = args
+      if (disk.full) {
+        actual.writeFileSync(target, String(data).slice(0, 8))
+        throw Object.assign(new Error('ENOSPC: fixture'), { code: 'ENOSPC' })
+      }
+      if (target !== disk.watch) { actual.writeFileSync(...args); look(); return }
+      const fd = actual.openSync(target, 'w', (options as { mode?: number } | undefined)?.mode)
+      try { look(); actual.writeFileSync(fd, data) } finally { actual.closeSync(fd) }
+      look()
+    },
+    renameSync: (...args: Parameters<typeof actual.renameSync>) => { actual.renameSync(...args); look() },
+  }
+})
+afterEach(() => { disk.full = false; disk.watch = ''; disk.sizes = [] })
 
 /** A pane's `BROWSER`: the daemon first, then the person's own browser, then the system's. Run for real in /bin/sh
  *  with stand-ins for the daemon's command and the browsers, each recording what it was given. */
@@ -65,6 +88,28 @@ describe('the pane browser script', () => {
     writeFileSync(join(dir, 'file'), '')
     expect(writeBrowserShim("'a'", join(dir, 'file', 'nested', 'x'))).toBe(false)
     expect(browserShimPath('/data')).toBe('/data/bin/harness-browser')
+  })
+
+  it('a write that fails part way leaves the old file', () => {
+    const { dir } = sandbox()
+    const path = join(dir, 'bin', 'harness-browser')
+    writeBrowserShim("'old'", path)
+    disk.full = true
+    expect(writeBrowserShim("'new'", path)).toBe(false)
+    disk.full = false
+    expect(readFileSync(path, 'utf8')).toBe(browserShimScript("'old'"))
+  })
+
+  it('is 0700 and never on disk with fewer bytes than the script', () => {
+    const { dir } = sandbox()
+    const path = join(dir, 'bin', 'harness-browser')
+    disk.watch = path
+    writeBrowserShim("'old'", path)
+    writeBrowserShim("'a longer command'", path)
+    expect(statSync(path).mode & 0o777).toBe(0o700)
+    expect(new Set(disk.sizes)).toEqual(new Set([
+      Buffer.byteLength(browserShimScript("'old'")), Buffer.byteLength(browserShimScript("'a longer command'")),
+    ]))
   })
 })
 
