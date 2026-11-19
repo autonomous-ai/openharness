@@ -10,7 +10,7 @@ import { SessionCheckpointStore } from './sessionCheckpoint.js'
 import { IdentityReadUnavailable } from '../engines/kit/identityScan.js'
 import { findResumedTranscript } from './sessionRepair.js'
 import { piSessionFolder } from '../engines/repairIdentities.js'
-import { OPENCLAW_FIRST_TASK } from '../engines/openclaw/contract.js'
+import { OPENCLAW_FIRST_TASK, OPENCLAW_STATES } from '../engines/openclaw/contract.js'
 
 let row: RegisteredSession
 let service: CloseAgentService
@@ -368,6 +368,15 @@ it('reads an OpenClaw whose first task was never taken as idle, unless a run sho
   // Any other launch that failed may have work of its own, an engine Harness lost track of: as before.
   expect(inspectCloseActivity({ ...failed, launch: { state: 'failed', error: 'START_FAILED' } }, screen('history-failed'), false, false)).toBe('unknown')
   expect(inspectCloseActivity({ ...failed, launch: undefined }, screen('history-failed'), false, false)).toBe('unknown')
+})
+
+it('reads an OpenClaw whose launch failed for a missing Gateway token as idle: its TUI exited before any work', () => {
+  const noToken = readFileSync(join(import.meta.dirname, '..', 'engines', 'openclaw', '__fixtures__', 'screen-no-token.txt'), 'utf8')
+  const failed = { engine: 'openclaw', sessionId: '', transcriptPath: null, boundAt: null,
+    launch: { state: 'failed', error: 'OPENCLAW_NO_TOKEN', detail: OPENCLAW_STATES.noToken } } as const
+  expect(inspectCloseActivity(failed, noToken, undefined, false)).toBe('idle')
+  expect(inspectCloseActivity(failed, noToken, true, false)).toBe('working')
+  expect(inspectCloseActivity(failed, null, undefined, false)).toBe('unknown')
 })
 
 it('reads Codex 0.160\'s goal indicator: pursuing one is working, every other state is not', () => {
