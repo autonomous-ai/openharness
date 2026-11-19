@@ -257,7 +257,6 @@ void main() {
     File identityFile, {
     Future<void> Function()? spawnCommand,
     Future<void> Function()? stopCommand,
-    bool Function()? flashing,
   }) => LocalCliDiscovery(
     config: AppConfig(
       apiBaseUrl: 'https://harness-api.autonomous.ai',
@@ -267,7 +266,7 @@ void main() {
     spawnCommand: spawnCommand,
     stopCommand: stopCommand,
     // Never this computer's own: a dial really being flashed held every spawning test at once.
-    flashing: flashing ?? () => false,
+    flashing: () => false,
     uninstalling: () => false,
   );
 
@@ -657,23 +656,83 @@ void main() {
     expect(spawnCount, 1);
   });
 
-  test(
-    'ensureRunning starts no daemon while a dial is being flashed',
-    () async {
-      const computerId = '0123456789abcdef0123456789abcdef';
-      final identityFile = File('${scratch.path}/computer-id')
-        ..writeAsStringSync(computerId);
-      var spawned = false;
-      final probe = await discoveryFor(
-        await freePort(),
-        identityFile,
-        spawnCommand: () async => spawned = true,
-        flashing: () => true,
-      ).ensureRunning();
-      expect(probe.state, LocalCliProbeState.down);
-      expect(spawned, isFalse);
-    },
-  );
+  // Each wait below probes every 500 ms (250 ms for restart), so the last probe inside it lands on
+  // the deadline itself: one step before, the call is still waiting.
+  test('ensureRunning stops waiting for a spawn that never binds once its timeout has run out on its clock', () {
+    fakeAsync((async) {
+      var spawnCount = 0;
+      final discovery = _SupervisionProbe(
+        readProbe: () async =>
+            const LocalCliProbe.down('fixture daemon is down'),
+        spawnCommand: () async => spawnCount++,
+        monotonicClock: () => async.elapsed,
+      );
+      LocalCliProbe? result;
+      discovery
+          .ensureRunning(timeout: const Duration(seconds: 3))
+          .then((probe) => result = probe);
+
+      async.elapse(const Duration(milliseconds: 2500));
+      expect(result, isNull, reason: 'still inside the timeout');
+
+      async.elapse(const Duration(milliseconds: 500));
+      expect(result?.state, LocalCliProbeState.down);
+      expect(spawnCount, 1);
+    });
+  });
+
+  test('ensureRunning stops waiting for a daemon that never becomes ready once readyTimeout has run out on its clock', () {
+    fakeAsync((async) {
+      var spawnCount = 0;
+      final discovery = _SupervisionProbe(
+        readProbe: () async => const LocalCliProbe.notReady('startup scan'),
+        spawnCommand: () async => spawnCount++,
+        monotonicClock: () => async.elapsed,
+      );
+      LocalCliProbe? result;
+      discovery
+          .ensureRunning(readyTimeout: const Duration(seconds: 3))
+          .then((probe) => result = probe);
+
+      async.elapse(const Duration(milliseconds: 2500));
+      expect(result, isNull, reason: 'still inside readyTimeout');
+
+      async.elapse(const Duration(milliseconds: 500));
+      expect(result?.state, LocalCliProbeState.notReady);
+      expect(spawnCount, 0, reason: 'a running daemon is never spawned over');
+    });
+  });
+
+  test('restart stops waiting for the old daemon to let go once stopTimeout has run out on its clock', () {
+    fakeAsync((async) {
+      var stopCount = 0;
+      final discovery = _SupervisionProbe(
+        // A daemon that never lets go of the port.
+        readProbe: () async => LocalCliProbe.ready(
+          LocalCliEndpoint(
+            computerId: '0123456789abcdef0123456789abcdef',
+            wsUri: Uri.parse('ws://127.0.0.1/api/local-ws'),
+            protocolVersion: localWsProtocolVersion,
+            terminalProtocolVersion: localTerminalProtocolVersion,
+          ),
+        ),
+        spawnCommand: () async {},
+        stopCommand: () async => stopCount++,
+        monotonicClock: () => async.elapsed,
+      );
+      LocalCliProbe? result;
+      discovery
+          .restart(stopTimeout: const Duration(seconds: 2))
+          .then((probe) => result = probe);
+
+      async.elapse(const Duration(milliseconds: 1750));
+      expect(result, isNull, reason: 'still inside stopTimeout');
+
+      async.elapse(const Duration(milliseconds: 250));
+      expect(result?.state, LocalCliProbeState.ready);
+      expect(stopCount, 1);
+    });
+  });
 
   test('runHarnessStart treats a non-zero exit as a failed spawn', () async {
     final failing = HarnessCliRunner(
@@ -1247,11 +1306,13 @@ void main() {
   });
 }
 
-/// Control probe results while exercising the real supervisor and its timers.
+/// Control probe results while exercising the real supervisor, ensureRunning and restart, and their
+/// timers.
 class _SupervisionProbe extends LocalCliDiscovery {
   _SupervisionProbe({
     required this.readProbe,
     required Future<void> Function() spawnCommand,
+    super.stopCommand,
     bool Function()? flashing,
     bool Function()? uninstalling,
     super.monotonicClock,
