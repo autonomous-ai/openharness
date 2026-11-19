@@ -55,7 +55,7 @@ import { moveStatusLine } from './homeMove/statusLine.js'
 import { flashCommand } from './lib/flash.js'
 import { awaitLoginCallback, extractCallbackParams, LOGIN_TIMEOUT_MESSAGE, type LoginCallbackParams } from './lib/loginCallback.js'
 import { ancestorsOnce, removeSignIn, SIGN_OUT_BUTTON_FLAG, signOutAsked, type Asker, type SignOutAsked } from './lib/signOut.js'
-import { AUTH_DIR, AuthSessionError, knownSsoClientId, recordMachineId, newSignInEpoch, readAuthSession, readSignedOut, ssoClientIdFor, updateAuthSession, writeAuthSession, type AuthSession } from './lib/authSession.js'
+import { AUTH_DIR, AuthSessionError, knownSsoClientId, recordMachineId, newSignInEpoch, readAuthSession, readSignedOut, ssoClientIdFor, updateAuthSession, writeSignIn, type AuthSession } from './lib/authSession.js'
 import { AuthSessionManager, harnessSessionRequest } from './lib/authRefresh.js'
 import { computerName } from './lib/computerName.js'
 import { handOffToGrid } from './lib/gridHandoff.js'
@@ -804,7 +804,7 @@ async function saveSignIn(
 ): Promise<SignInOutcome> {
   const signInEpoch = newSignInEpoch()
   const autonomousEnv = tokens.autonomousEnv ?? env.AUTONOMOUS_ENV
-  writeAuthSession({
+  writeSignIn({
     version: 1,
     accessToken: tokens.token,
     ...(tokens.refreshToken ? { refreshToken: tokens.refreshToken } : {}),
@@ -920,7 +920,7 @@ async function browserSignIn(
       updatedAt: Date.now(),
       signInEpoch,
     }
-    writeAuthSession(session)
+    writeSignIn(session)
     await recordSignInAccount(session.accessToken, signInEpoch, session.autonomousEnv)
     try {
       await resolveComputerMachine()
