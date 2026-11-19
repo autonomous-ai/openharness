@@ -425,6 +425,32 @@ static void s_form_toast(void)
     max_ui_notice("Sent to auth-refactor", 3000, T0);
 }
 
+// App Detail's row in motion, at a frame the render task draws: an agent opening half way through the row's move
+// (210 ms of 420), its neighbours narrowing and dimming, the row carried along; the row under a finger mid-drag, the
+// cells cut at its ends. The frames before are drawn here, the one shown by draw().
+static void frame(uint32_t now)
+{
+    ht_scene_clear(&S, ht_rgb(HT_THEME_CANVAS));
+    max_ui_render(&S, now);
+}
+static void s_row_opening(void)
+{
+    orca();
+    show(MAX_VIEW_OVERVIEW, NULL);
+    frame(T0 - 1000);
+    max_open("rate");
+    frame(T0 - 210);
+}
+static void s_row_drag(void)
+{
+    orca();
+    show(MAX_VIEW_OVERVIEW, NULL);
+    frame(T0 - 100);
+    max_ui_touch(true, 1200, 240, T0 - 80);
+    max_ui_touch(true, 1100, 240, T0 - 60);   // past the slop: the row takes the finger from here
+    max_ui_touch(true, 900, 240, T0 - 40);
+}
+
 typedef struct { const char *name; void (*setup)(void); } screen_t;
 static const screen_t SCREENS[] = {
     {"overview", s_overview}, {"overview-harness", s_overview_harness}, {"overview-one", s_overview_one},
@@ -442,6 +468,7 @@ static const screen_t SCREENS[] = {
     {"ambient-no-agents", s_ambient_no_agents}, {"not-connected", s_not_connected}, {"update", s_update},
     {"form-opening", s_form_opening}, {"form-page", s_form_page}, {"form-start", s_form_start},
     {"form-busy", s_form_busy}, {"form-failed", s_form_failed}, {"form-say", s_form_say}, {"form-toast", s_form_toast},
+    {"row-opening", s_row_opening}, {"row-drag", s_row_drag},
 };
 enum { SCREEN_COUNT = sizeof SCREENS / sizeof SCREENS[0] };
 
