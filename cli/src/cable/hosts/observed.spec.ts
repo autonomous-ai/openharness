@@ -2844,6 +2844,26 @@ describe('ObservedSource and the app a hook\'s caller runs in', () => {
     expect(s.logs.join('\n')).not.toContain('someone')
   })
 
+  // Cursor's terminal says TERM_PROGRAM=vscode too: only a bundle id tells them apart, and Linux has none.
+  it('a hook that names VS Code by TERM_PROGRAM alone is placed in the editor its caller\'s parents name', async () => {
+    const s = walked()
+    s.src.ingest(s.ev('session-start', { hostHints: { TERM_PROGRAM: 'vscode' } }))
+    expect(s.apps.mock.calls).toEqual([[[100]]])
+    await s.walks[0].answer('cursor')
+    expect(s.agent('s1').app).toBe('cursor')
+  })
+
+  it('a walk that names no app leaves VS Code, as TERM_PROGRAM said; with VS Code\'s bundle id nothing is walked', async () => {
+    const s = walked()
+    s.src.ingest(s.ev('session-start', { hostHints: { TERM_PROGRAM: 'vscode' } }))
+    await s.walks[0]?.answer()
+    expect(s.agent('s1').app).toBe('vscode')
+    s.src.ingest(s.ev('session-start', { sessionId: 'b', callerPid: 101,
+      hostHints: { TERM_PROGRAM: 'vscode', __CFBundleIdentifier: 'com.microsoft.VSCode' } }))
+    expect(s.agent('b').app).toBe('vscode')
+    expect(s.apps).toHaveBeenCalledTimes(1)
+  })
+
   it('a hook whose hints name an app walks nothing', () => {
     const s = walked()
     s.src.ingest(s.ev('session-start', { ...inApp, hostHints: { __CFBundleIdentifier: 'com.openai.codex' } }))
