@@ -3411,7 +3411,10 @@ async function runForeground(session: AuthSession | null): Promise<void> {
  * `harness start` would refuse on.
  */
 const failStart = (err: unknown, code: number): never => {
-  console.error(`Failed to start adapter: ${errorKind(err)}`)
+  // The one a person meets starting by hand (`harness start -f`, `harness login`) says why, in fixed words: its own
+  // words name the socket's path.
+  const why = (err as { code?: unknown } | null | undefined)?.code === 'EADDRINUSE' ? ' · another Harness daemon serves this data folder' : ''
+  console.error(`Failed to start adapter: ${errorKind(err)}${why}`)
   removePidFileIf(process.pid)
   process.exit(code)
 }
