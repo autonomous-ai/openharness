@@ -248,17 +248,19 @@ export function rowsOf(frames: Frame[], ctx: RowContext): Row[] {
       ...(failure ? { failure } : {}),
     })
   }
-  // Working or waiting on the person first, then by last activity: what an agent choosing where work goes looks at first.
-  const rank = (r: Row): number => (r.state === 'working' || r.state === 'needs-input' || r.state === 'held' ? 0 : r.state === 'idle' || r.state === 'unknown' ? 1 : 2)
+  // Busy first, then by last activity: what an agent choosing where work goes looks at first.
+  const rank = (r: Row): number => (busy(r) ? 0 : r.state === 'idle' || r.state === 'unknown' ? 1 : 2)
   return rows.sort((a, b) => rank(a) - rank(b) || (b.lastActive ?? '').localeCompare(a.lastActive ?? ''))
 }
+
+/** Working, starting on its first task, or waiting on the person. */
+const busy = (r: Row): boolean => r.state === 'working' || r.state === 'starting' || r.state === 'needs-input' || r.state === 'held'
 
 /** How many rows an agent's `ps` shows unless asked for all: on the owner's Mac, 40 rows became about 8 to read. */
 export const AGENT_ROWS = 15
 
-/** An agent's `ps`: its own first, then those working or waiting on the person, then the rest; [max] at most. */
+/** An agent's `ps`: its own first, then the busy ones, then the rest; [max] at most. */
 export function forAgent(rows: readonly Row[], max = AGENT_ROWS): { shown: Row[]; more: number } {
-  const busy = (r: Row) => r.state === 'working' || r.state === 'needs-input' || r.state === 'held'
   const ordered = [...rows.filter((r) => r.yours), ...rows.filter((r) => !r.yours && busy(r)), ...rows.filter((r) => !r.yours && !busy(r))]
   return { shown: ordered.slice(0, max), more: Math.max(0, ordered.length - max) }
 }
