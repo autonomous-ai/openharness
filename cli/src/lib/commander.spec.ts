@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { mkdtempSync, rmSync } from 'fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { CommanderMirror, type CommanderFrame, type CommanderMirrorOpts, type TierTurn } from './commander.js'
@@ -7,6 +7,21 @@ import type { Tier } from './notifyTier.js'
 import { isLocalOnly, withoutUpdate } from './cardUpdate.js'
 import type { LiveEvent } from './normalize.js'
 import { BODY_MAX_CHARS, RECAP_MAX_CHARS, deriveTurnSummary } from './deviceRecap.js'
+
+// A disk that fills mid-write: half the bytes land, then ENOSPC. Under both module names, since the mirror and the
+// state writer import it under different ones.
+const disk = vi.hoisted(() => ({
+  full: false,
+  wrap: (actual: typeof import('node:fs')) => ({ ...actual,
+    writeFileSync: (...args: Parameters<typeof actual.writeFileSync>) => {
+      if (!disk.full) return actual.writeFileSync(...args)
+      const [target, data] = args
+      actual.writeFileSync(target, typeof data === 'string' ? data.slice(0, data.length / 2) : data)
+      throw Object.assign(new Error('no space left on device'), { code: 'ENOSPC' })
+    } }),
+}))
+vi.mock('fs', async original => disk.wrap(await original<typeof import('node:fs')>()))
+vi.mock('node:fs', async original => disk.wrap(await original<typeof import('node:fs')>()))
 
 let dataDir = ''
 
@@ -1157,5 +1172,58 @@ describe('the log holds none of a turn\'s words', () => {
     expect(lines).toContainEqual(expect.stringMatching(/^\[recap\] summary FAILED after \d+ms: TypeError$/))
     expect(lines).toContain('[recap] caughtup catch-up failed: Error')
     expect(said()).not.toContain('axolotlnotes')
+  })
+})
+
+describe('the recap files are never written over or left half-written', () => {
+  const FILES = ['summaries.json', 'summaries-history.json', 'summaries-fulltext.json', 'summaries-asks.json']
+  let dir = ''
+  beforeEach(() => {
+    vi.useFakeTimers()
+    dir = mkdtempSync(join(tmpdir(), 'adapter-commander-files-'))
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+  })
+  afterEach(() => { disk.full = false; vi.useRealTimers(); vi.restoreAllMocks(); rmSync(dir, { recursive: true, force: true }) })
+
+  const build = () => new CommanderMirror({ send: () => {}, sendWeb: () => {}, hasDevice: () => true, dataDir: dir,
+    summarize: async () => 'Recap\n\nBody' })
+  async function turn(mirror: CommanderMirror, sessionId: string): Promise<void> {
+    mirror.ingest([
+      { type: 'turn_started', payload: { userMessage: 'question ' + sessionId } },
+      { type: 'text_delta', payload: { content: 'answer ' + sessionId } },
+      { type: 'turn_ended', payload: {} },
+    ] as LiveEvent[], sessionId)
+    await vi.runAllTimersAsync()
+  }
+  const held = () => FILES.map((name) => readFileSync(join(dir, name), 'utf8'))
+
+  it('a torn history is set aside, not written over', async () => {
+    writeFileSync(join(dir, 'summaries-history.json'), '{"s1":["a recap')
+    await turn(build(), 's2')
+    expect(readFileSync(join(dir, 'summaries-history.json.unreadable'), 'utf8')).toBe('{"s1":["a recap')
+    expect(build().recent('s2')).toHaveLength(1)
+  })
+
+  it('a save that fails part way leaves the four files whole', async () => {
+    const mirror = build()
+    await turn(mirror, 's1')
+    const before = held()
+    disk.full = true
+    await turn(mirror, 's2')
+    disk.full = false
+    const after = held()
+    for (const text of after) expect(() => JSON.parse(text)).not.toThrow()
+    expect(after).toEqual(before)
+  })
+
+  it('the timer\'s save and the strict save write the same bytes', async () => {
+    const mirror = build()
+    await turn(mirror, 's1')
+    await turn(mirror, 's2')
+    const timed = held()
+    // Deleting a session that holds nothing saves the same maps, strictly.
+    mirror.deleteHistory('none')
+    expect(held()).toEqual(timed)
   })
 })
