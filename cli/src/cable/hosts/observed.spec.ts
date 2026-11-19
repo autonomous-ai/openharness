@@ -2967,7 +2967,7 @@ describe('ObservedSource panes', () => {
 
   // WezTerm's pane is the nearer for a tap, and Orca's terminal still takes the words and the rest.
   it.each([
-    ['WezTerm', { WEZTERM_PANE: '7', ORCA_TERMINAL_HANDLE: HANDLE }, '7'],
+    ['WezTerm', { WEZTERM_PANE: '7', ORCA_TERMINAL_HANDLE: HANDLE }, 'held:7'],
   ])('%s inside an Orca terminal still takes the dial\'s words and a rest through Orca', async (_, hostHints, tapped) => {
     const { actions } = fakeActions()
     const { src, ev } = setup({ actions })
