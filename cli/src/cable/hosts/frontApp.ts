@@ -29,3 +29,25 @@ export function frontAppId(value: string): string {
   const exe = value.toLowerCase().replace(/\.exe$/, '')
   return Object.hasOwn(EXE_APPS, exe) ? EXE_APPS[exe] : FRONT_NONE
 }
+
+// The spellings each app's window is known by on Linux: X11's WM_CLASS class and Wayland's app id, which some desktops
+// lower-case. A class nobody could confirm has no row (the ChatGPT app's .desktop has no StartupWMClass).
+const WINDOW_CLASSES: Readonly<Record<string, readonly string[]>> = {
+  // cli/src/testing/recordedLinuxApps.ts, StartupWMClass.
+  vscode: ['com.microsoft.VSCode', 'com.microsoft.vscode'],
+  cursor: ['Cursor', 'cursor'],
+  claude: ['com.anthropic.Claude', 'com.anthropic.claude'],
+  // WezTerm's default class (its config option `class`).
+  wezterm: ['org.wezfurlong.wezterm'],
+  // kitty's default class (its `--class` option).
+  kitty: ['kitty'],
+  // Ghostty's GTK application id.
+  ghostty: ['com.mitchellh.ghostty'],
+  // desktop/linux/CMakeLists.txt: APPLICATION_ID, and BINARY_NAME as the X11 instance.
+  harness: ['com.autonomous.harness', 'harness'],
+}
+
+/** The spellings an app's window is known by, for a raise by class; none for an app with no row. */
+export function windowClasses(app: string): readonly string[] {
+  return Object.hasOwn(WINDOW_CLASSES, app) ? WINDOW_CLASSES[app] : []
+}
