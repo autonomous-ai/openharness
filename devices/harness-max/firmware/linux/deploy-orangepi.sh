@@ -84,8 +84,9 @@ main() {
 }
 
 build() {
+    # The glass height named every time: a build directory from before 480 became the default has 415 in its cache.
     cmake -S harness-max/src/devices/harness-max/firmware/linux -B harness-max/build -DMAX_LINUX_OUTPUT=drm \
-        -DCJSON_DIR="$HOME/harness-max/src/cJSON" > /dev/null
+        -DMAX_GLASS_H=480 -DCJSON_DIR="$HOME/harness-max/src/cJSON" > /dev/null
     cmake --build harness-max/build -j "$(nproc)" < /dev/null
     ctest --test-dir harness-max/build --output-on-failure < /dev/null
     mkdir -p harness-max/bin

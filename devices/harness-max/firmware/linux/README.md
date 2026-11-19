@@ -22,8 +22,11 @@ list of portable sources; `../main/CMakeLists.txt` adds the ESP32-P4 drivers to 
   over TCP in the USB framing, `--usb` a real daemon over the USB cable through a gadget's serial port (`/dev/ttyGS0`),
   `--demo` runs the scripted daemon in `../main/demo` inside the program.
 
-The glass is 1920 x 415 by default, the Orange Pi bar's shape at the device's width (1480 x 320 scaled by 0.771);
-`-DMAX_GLASS_H=480` builds the ESP32-P4 panel's 1920 x 480.
+The glass is 1920 x 480 by default, the ESP32-P4 panel's, so the bar shows exactly what a Harness Max draws: the
+Orange Pi's 1480 x 320 bar shows it at 1280 x 320 in the middle, 100 px of black either side, and a touch on the black
+does nothing. `-DMAX_GLASS_H=415` builds the bar's own shape at the device's width (1480 x 320 scaled by 0.771), which
+fills the bar but is drawn by no device. A build directory keeps the height it was first configured with (CMake's
+cache): one configured before 480 became the default stays 415 until `-DMAX_GLASS_H=480`.
 
 ## The simulator (macOS)
 
@@ -32,7 +35,7 @@ works), Python with Pillow (the fonts are baked
 at build time), and ESP-IDF's cJSON (`~/esp/esp-idf-5.5.4`, else `-DCJSON_DIR=.../components/json/cJSON`).
 
 ```sh
-cmake -S devices/harness-max/firmware/linux -B build/max-sim            # -DMAX_GLASS_H=480 for the panel's glass
+cmake -S devices/harness-max/firmware/linux -B build/max-sim            # -DMAX_GLASS_H=415 for the bar's own shape
 cmake --build build/max-sim -j
 ctest --test-dir build/max-sim                                         # the host tests of this directory
 build/max-sim/harness-max                                              # waits for a daemon on port 7531
@@ -53,7 +56,7 @@ The daemon here is the branch's: `cli/scripts/install-cli.sh` installs this tree
 ## The Orange Pi 4 Pro's bar
 
 The bar is the 11.9" 1480 x 320 HDMI panel, which the board drives as 320 x 1480 portrait: the program turns the
-picture a quarter and scales 1920 x 415 to 1480 x 320, and turns touch back. From the Mac:
+picture a quarter and scales 1920 x 480 to 1280 x 320 in the middle of it, and turns touch back. From the Mac:
 
 ```sh
 devices/harness-max/firmware/linux/deploy-orangepi.sh                    # the Mac's daemon over the USB cable
@@ -61,12 +64,12 @@ devices/harness-max/firmware/linux/deploy-orangepi.sh --live             # the M
 devices/harness-max/firmware/linux/deploy-orangepi.sh --demo --no-build  # the demo, without building again
 ```
 
-It copies the sources to the board, builds there (`MAX_LINUX_OUTPUT=drm`), runs the host tests, installs
-`~/harness-max/bin/harness-max` and restarts `harness-max.service` (`orangepi/`), which starts it through the Phase 0
-boot wrapper for its fbcon and HDMI hotplug handling. `--no-build` only switches the installed bar to the mode. The
-board comes from `HARNESS_MAX_BOARD` / `HARNESS_MAX_SSH_OPTS` or near-demo's `~/.config/near/board.env`. The first run
-asks for the board's sudo password once to install the unit, the USB gadget's script (`orangepi/harness-max-usb`) and a
-sudoers rule for switching. The board needs `cmake pkg-config libdrm-dev libasound2-dev python3-pil` from apt.
+It copies the sources to the board, builds there (`MAX_LINUX_OUTPUT=drm`, `MAX_GLASS_H=480`), runs the host tests,
+installs `~/harness-max/bin/harness-max` and restarts `harness-max.service` (`orangepi/`), which starts it through the
+Phase 0 boot wrapper for its fbcon and HDMI hotplug handling. `--no-build` only switches the installed bar to the mode.
+The board comes from `HARNESS_MAX_BOARD` / `HARNESS_MAX_SSH_OPTS` or near-demo's `~/.config/near/board.env`. The first
+run asks for the board's sudo password once to install the unit, the USB gadget's script (`orangepi/harness-max-usb`)
+and a sudoers rule for switching. The board needs `cmake pkg-config libdrm-dev libasound2-dev python3-pil` from apt.
 
 With `--usb` the bar is a USB device on the board's one Type-C port, with the Harness devices' USB ids: the cable to the
 Mac carries the cable protocol, as a Harness Max's does, and powers the board (the port is also its power input). The

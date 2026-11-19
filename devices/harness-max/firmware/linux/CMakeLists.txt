@@ -2,8 +2,8 @@
 # a POSIX runtime for the FreeRTOS and ESP-IDF calls (esp/), the board table, the cable (the demo daemon or TCP), the
 # display and the audio. Plain CMake, no ESP-IDF.
 #
-#   cmake -S devices/harness-max/firmware/linux -B build-sim                      # the macOS simulator: SDL, 415 high
-#   cmake -S ... -B build-sim-480 -DMAX_GLASS_H=480                               # the ESP32-P4's 480-high glass
+#   cmake -S devices/harness-max/firmware/linux -B build-sim                      # the macOS simulator: SDL, 480 high
+#   cmake -S ... -B build-sim-415 -DMAX_GLASS_H=415                               # the bar's own shape, no black bars
 #   cmake -S ... -B build-bar -DMAX_LINUX_OUTPUT=drm                              # the Orange Pi's bar: DRM/KMS, ALSA
 #   cmake --build <dir> && ctest --test-dir <dir>
 cmake_minimum_required(VERSION 3.16)
@@ -11,9 +11,10 @@ project(harness_max_linux C)
 
 set(MAX_LINUX_OUTPUT sdl CACHE STRING "sdl: a window and the mouse (the macOS simulator); drm: DRM/KMS and evdev (the Orange Pi's bar)")
 set_property(CACHE MAX_LINUX_OUTPUT PROPERTY STRINGS sdl drm)
-# 415: the 1480 x 320 bar's shape at the device's 1920 width (1480 / 1920 = 320 / 415). 480: the ESP32-P4's panel.
-set(MAX_GLASS_H 415 CACHE STRING "The glass height: 415 or 480")
-set_property(CACHE MAX_GLASS_H PROPERTY STRINGS 415 480)
+# 480: the ESP32-P4's panel, exactly what the device draws; the 1480 x 320 bar shows it whole at 1280 x 320, black
+# either side. 415: the bar's own shape at the device's width (1480 / 1920 = 320 / 415), drawn by no device.
+set(MAX_GLASS_H 480 CACHE STRING "The glass height: 480 or 415")
+set_property(CACHE MAX_GLASS_H PROPERTY STRINGS 480 415)
 # A -dev version is never offered a firmware image (cli fwPush.ts), and the board name has no image either.
 set(PROJECT_VER 0.0.99-dev CACHE STRING "The hello's fw version")
 # cJSON from an ESP-IDF checkout, the copy the device compiles.
