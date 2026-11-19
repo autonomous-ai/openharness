@@ -5,6 +5,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { publishNativeHookFiles } from './nativeHookPublication.js'
 import type { NativeHookInput } from './nativeHookWire.js'
 import * as nativeFiles from './nativeHookFiles.js'
+import { HookScriptMissing } from './hookHeld.js'
 
 const filesystem = vi.hoisted(() => ({ reads: undefined as Map<string, number> | undefined,
   total: undefined as Map<string, number> | undefined, onStat: undefined as ((path: string) => void) | undefined,
@@ -33,6 +34,44 @@ beforeEach(() => {
 })
 afterEach(() => { filesystem.reads = undefined; filesystem.total = undefined; filesystem.onStat = undefined; filesystem.onSync = undefined; rmSync(fixtureRoot, { recursive: true, force: true }) })
 const prepared = (input: Pick<NativeHookInput, 'files'>) => ({ version: 1 as const, files: input.files.map((entry, index) => ({ index, content: `${entry.content ?? ''} prepared` })) })
+
+it('names a missing shared candidate without publishing the profile', async () => {
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+  try {
+    expect(await publishNativeHookFiles({ engine: 'claude', port: 1234, environment: { HOME: root } },
+      [{ file }, { file: join(root, 'hook.mjs'), shared: true }],
+      { prepareFiles: async () => ({ version: 1, files: [{ index: 0, content: 'prepared' }, { index: 1, content: null }] }) })).toBe(false)
+    expect(readFileSync(file, 'utf8')).toBe('{}')
+    expect(warn).toHaveBeenCalledWith('[hooks] NATIVE_HOOK_PREPARATION_HELD · the shared hook candidate is missing')
+  } finally { warn.mockRestore() }
+})
+
+it.each(['unavailable', 'malformed', 'owner changed'] as const)('names a %s candidate refusal', async failure => {
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+  let current = true
+  try {
+    expect(await publishNativeHookFiles({ engine: 'claude', port: 1234, environment: { HOME: root } }, [{ file }],
+      { prepareFiles: async () => {
+        if (failure === 'owner changed') current = false
+        return failure === 'malformed' ? { version: 2, files: [] } as never : null
+      } }, { current: () => current })).toBe(false)
+    const reasons = { unavailable: 'the setup worker returned no candidate', malformed: 'the setup worker returned a malformed candidate',
+      'owner changed': 'the hook owner changed during preparation' }
+    expect(warn).toHaveBeenCalledWith(`[hooks] NATIVE_HOOK_PREPARATION_HELD · ${reasons[failure]}`)
+    expect(readFileSync(file, 'utf8')).toBe('{}')
+  } finally { warn.mockRestore() }
+})
+
+it.each([new Error('private fixture content'), new HookScriptMissing('/private/fixture/notify.mjs')])(
+  'reports an unexpected or path-bearing preparation failure only by kind: %s', async failure => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      expect(await publishNativeHookFiles({ engine: 'claude', port: 1234, environment: { HOME: root } }, [{ file }],
+        { prepareFiles: async () => { throw failure } })).toBe(false)
+      expect(warn).toHaveBeenCalledWith(`[hooks] NATIVE_HOOK_PREPARATION_HELD · ${failure.name}`)
+      expect(JSON.stringify(warn.mock.calls)).not.toContain('private')
+    } finally { warn.mockRestore() }
+  })
 
 it('bounds filesystem reads during a worker authority check for unchanged native files', async () => {
   const artifact = join(root, 'hook.mjs')

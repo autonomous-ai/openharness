@@ -170,8 +170,13 @@ it.each(['off', 'kill', 'freeze', 'malformed'] as const)('contains file preparat
   expect(operations(d)).toEqual(expect.arrayContaining([
     { type: 'setup_files_prepare_result', pid }, { type: 'setup_files_commit_result', pid },
   ]))
+  const commitsBefore = operations(d).filter(operation => operation.type === 'setup_files_commit_result').length
   const fault = join(d.root, 'setup-files-fault'), observed = fault + '.observed', off = join(d.root, 'setup-files-off')
-  if (failure === 'off') { writeFileSync(off, '', { mode: 0o600 }); process.kill(pid, 'SIGKILL') }
+  if (failure === 'off') {
+    const logFrom = d.log().length
+    writeFileSync(off, '', { mode: 0o600 }); process.kill(pid, 'SIGKILL')
+    await until('the setup connection to close', () => d.log().slice(logFrom).includes('[services] engineSetup disconnected') || null, 30_000, 100)
+  }
   else writeFileSync(fault, failure, { mode: 0o600 })
   const cwd = join(d.projectsDir, `file-held-${failure}`); mkdirSync(cwd, { recursive: true })
   const launchClient = await LocalClient.connect(d)
@@ -186,8 +191,16 @@ it.each(['off', 'kill', 'freeze', 'malformed'] as const)('contains file preparat
       })
     }
     await Promise.all([turn(c, agent.id, `file-during-${failure}`), create(d, c, 'terminal', `file-shell-${failure}`)])
-    if (failure === 'off' || failure === 'freeze') expect(replied).toBe(false)
+    // Service loss may refuse the launch before the unrelated turn ends. The fault stays
+    // active throughout both operations; isolation does not require delaying a held reply.
+    if (failure === 'off') expect(connections()).toBe(connectedBefore)
+    // A frozen worker still holds the launch: unrelated work must finish before its timeout.
+    if (failure === 'freeze') expect(replied).toBe(false)
     expect((await pending).error).toBe('NATIVE_LAUNCH_HELD')
+    if (failure === 'off') expect(connections()).toBe(connectedBefore)
+    if (failure === 'off' || failure === 'freeze') {
+      expect(operations(d).filter(operation => operation.type === 'setup_files_commit_result')).toHaveLength(commitsBefore)
+    }
     expect(nativeFiles(d)).toEqual(before)
     expect(d.corePid()).toBe(core)
     if (failure === 'freeze') expect(setupPid(d)).toBe(pid)

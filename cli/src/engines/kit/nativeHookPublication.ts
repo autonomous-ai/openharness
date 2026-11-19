@@ -49,8 +49,15 @@ export async function publishNativeFiles(destinations: readonly NativeHookDestin
       }))
       // verify() checks the owner again after its filesystem reads; another walk repeats that proof.
       const active = () => { try { attempt.verify(); return true } catch { return false } }
-      const candidate = hookCandidate(await prepare(captured, randomUUID(), active), destinations.length)
-      if (!candidate || destinations.some((destination, index) => destination.shared && candidate.files[index].content === null) || !active()) throw new HookPreparationHeld('the hook preparation is unavailable or its owner changed')
+      const prepared = await prepare(captured, randomUUID(), active)
+      if (prepared === null) throw new HookPreparationHeld(active()
+        ? 'the setup worker returned no candidate' : 'the hook owner changed during preparation')
+      const candidate = hookCandidate(prepared, destinations.length)
+      if (!candidate) throw new HookPreparationHeld('the setup worker returned a malformed candidate')
+      if (destinations.some((destination, index) => destination.shared && candidate.files[index].content === null)) {
+        throw new HookPreparationHeld('the shared hook candidate is missing')
+      }
+      if (!active()) throw new HookPreparationHeld('the hook owner changed during preparation')
       // Every profile destination is preflighted before any publication, including the shared artifact.
       for (const [index, destination] of destinations.entries()) if (!destination.shared) observed[index].prepare(candidate.files[index].content)
       const publish = async (index: number, publication: HookPreparationAttempt, shared = false) => {
@@ -95,7 +102,11 @@ export async function publishNativeFiles(destinations: readonly NativeHookDestin
     options.confirmed?.(proof)
     return true
   } catch (caughtFailure) {
-    console.warn(('[hooks] NATIVE_HOOK_PREPARATION_HELD') + ' · ' + errorKind(caughtFailure))
+    // The base hold's reasons are fixed words. Subclasses such as HookScriptMissing
+    // can carry private paths, so those and unexpected failures remain kind-only.
+    const reason = caughtFailure instanceof HookPreparationHeld && caughtFailure.constructor === HookPreparationHeld
+      ? caughtFailure.reason : errorKind(caughtFailure)
+    console.warn(`[hooks] NATIVE_HOOK_PREPARATION_HELD · ${reason}`)
     return false
   }
 }
