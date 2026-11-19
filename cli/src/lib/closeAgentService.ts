@@ -6,6 +6,7 @@ import { terminalRouteKey } from './terminalRuntime.js'
 import type { StopAgentOptions } from './stopAgentService.js'
 import { resumeMode } from './resumeCapability.js'
 import { sid } from './log.js'
+import { OPENCLAW_FIRST_TASK } from '../engines/openclaw/contract.js'
 
 export type CloseActivity = 'idle' | 'working' | 'needs_input' | 'draft' | 'unknown'
 export type CloseMode = 'inspect' | 'idle' | 'now' | 'after_task' | 'cancel'
@@ -64,6 +65,9 @@ export function inspectCloseActivity(session: CloseSession, screen: ScreenReadin
   if (turnOpen === true) return 'working'
   if (!screen) return 'unknown'
   if (screen.busy) return 'working'
+  // Harness failed this launch itself, OpenClaw never having taken its first task (core/agents/bind.ts), and tells the
+  // person to close it: no work runs there, and its pane, a history that never loaded, never shows an idle composer.
+  if (session.launch?.state === 'failed' && session.launch.error === OPENCLAW_FIRST_TASK.error) return 'idle'
   const hold = screen.teamHold
   if (hold === 'team_waiting_draft') return 'draft'
   if (hold === 'team_waiting_user') return 'needs_input'
