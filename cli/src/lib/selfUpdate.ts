@@ -317,8 +317,9 @@ export async function runCanary(
   try {
     try {
       mkdirSync(tmpDir, { recursive: true })
+      // not a state file: the canary's own folder, run once and removed
       writeFileSync(join(tmpDir, PACKAGE), RUNTIME_PACKAGE)
-      writeFileSync(tmpCli, cliBuf)
+      writeFileSync(tmpCli, cliBuf) // not a state file: the canary's own folder
     } catch (error) {
       return { ok: false, problem: 'unwritable', detail: error instanceof Error ? error.message : String(error) }
     }
@@ -396,6 +397,7 @@ export function stage(
   const written: string[] = []
   const write = (file: string, bytes: string | Buffer): void => {
     written.push(file)
+    // not a state file: the bundle staged beside the old one, checked and swapped in as a whole
     writeFileSync(file, bytes)
   }
   const unjudged = (): boolean => {

@@ -171,6 +171,7 @@ function replace(file: string, text: string): void {
   const target = existsSync(file) ? realpathSync(file) : file
   const mode = existsSync(target) ? statSync(target).mode & 0o777 : 0o600
   const tmp = `${target}.harness-${process.pid}.tmp`
+  // not a state file: the engine's own config, written with its mode and through its link
   writeFileSync(tmp, text, { mode })
   renameSync(tmp, target)
 }

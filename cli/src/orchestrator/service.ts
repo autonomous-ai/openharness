@@ -201,6 +201,7 @@ export class OrchestratorService {
   }
   private async launchDirector(run: Run): Promise<void> {
     try {
+      // not a state file: the director's prompt, created once and only read by the agent
       writeFileSync(join(run.root, 'ORCHESTRATOR.md'), directorPrompt(run, this.catalog(), this.deps.command), { mode: 0o600, flag: 'wx' })
       const result = await this.deps.create({
         engine: run.engine, cwd: run.root, dsh: null, bypassPermission: run.bypassPermission,
@@ -264,6 +265,7 @@ export class OrchestratorService {
       if (task.state !== 'launching' || run.state !== 'active') return
       const harness = this.catalog().find(h => h.id === task.harness)
       requireThat(harness || task.harness === `engine:${run.engine}`, 'HARNESS_UNAVAILABLE', `${task.harness} is no longer installed.`)
+      // not a state file: the worker's prompt, created once and only read by the agent
       writeFileSync(join(task.cwd, 'ORCHESTRATOR_TASK.md'), workerPrompt(run, task, this.deps.command), { mode: 0o600, flag: 'wx' })
       creating = true
       const result = await this.deps.create({

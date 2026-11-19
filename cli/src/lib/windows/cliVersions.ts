@@ -49,9 +49,10 @@ export function writeVersionFolder(cliDir: string, version: string, cliBuf: Buff
     mkdirSync(cliDir, { recursive: true })
     rmSync(temporary, { recursive: true, force: true })
     mkdirSync(temporary)
+    // not a state file: a version folder staged under a temporary name, then renamed in whole
     writeFileSync(join(temporary, PACKAGE), RUNTIME_PACKAGE)
-    writeFileSync(join(temporary, CLI), cliBuf)
-    writeFileSync(join(temporary, NOTIFY), notifyBuf)
+    writeFileSync(join(temporary, CLI), cliBuf) // not a state file: the staged version folder
+    writeFileSync(join(temporary, NOTIFY), notifyBuf) // not a state file: the staged version folder
     if (existsSync(folder)) renameSync(folder, join(cliDir, `.${version}.${Date.now()}.old`))
     renameSync(temporary, folder)
   } catch (error) {

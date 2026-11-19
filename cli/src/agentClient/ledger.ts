@@ -286,6 +286,7 @@ export class Ledger {
         Atomics.wait(pause, 0, 0, LOCK_STEP_MS)
         continue
       }
+      // not a state file: the lock's owner; a lock that names no one is taken over once stale
       try { writeFileSync(fd, mine) } finally { closeSync(fd) }
       try { return write() } finally { rmSync(lock, { force: true }) }
     }

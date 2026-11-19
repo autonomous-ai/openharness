@@ -212,6 +212,7 @@ function tryLock(lock: string, mine: string): boolean {
     if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
     return false
   }
+  // not a state file: the lock's owner; a lock that names no one is taken over once stale
   try { writeFileSync(fd, mine) } finally { closeSync(fd) }
   return true
 }
