@@ -90,6 +90,8 @@ export class GroupSyncer {
   private retryRound = 0
   /** Bumped when the account changes: an exchange started before is not merged into the new roster. */
   private generation = 0
+  /** What `cannotRead` last said could not be read; null once `keptOut` could read both again. */
+  private unreadable: string | null = null
   /** Set once the device key log is wired up; the exchange works without it, as with an older peer. */
   devlog: GroupSyncLogGossip | null = null
   /** A member the GROUP removed (a tombstone that arrived by `group_sync` — from a device that
@@ -138,15 +140,22 @@ export class GroupSyncer {
     this.scheduleFanOut(0)
   }
 
-  /** Remove a member everywhere (`harness group remove`, `harness link unlink`). */
+  /** Remove a member everywhere (`harness group remove`, `harness link unlink`). Forgotten here first, whether or
+   *  not the roster holds it (a link that predates the group): a roster that cannot be written must not leave it
+   *  pinned or trusted, nor stop the caller before it takes the key out of the device log too. */
   remove(pub: string): boolean {
     const known = this.deps.store.read().members.some((m) => m.pub === pub)
-    const result = this.deps.store.remove(pub, this.selfPub(), this.now())
-    this.apply(result)
-    // Not in the roster (a link that predates it): still stop trusting it here.
-    if (!known) this.forget(pub)
+    this.forget(pub)
+    let dropped = false
+    try {
+      const result = this.deps.store.remove(pub, this.selfPub(), this.now())
+      this.apply(result)
+      dropped = result.dropped.length > 0
+    } catch (err) {
+      this.deps.log?.(`[group] ${pub.slice(0, 8)} is removed here, but the group is not told: ${errorKind(err)}`)
+    }
     this.scheduleFanOut(0)
-    return known || result.dropped.length > 0
+    return known || dropped
   }
 
   /** A fork put these keys out of trust here: unpin, untrust and stop dialing them — locally only (no
@@ -180,7 +189,15 @@ export class GroupSyncer {
       .filter((m): m is GroupMember => m !== null)
     if (!parsed.length) return
     const before = rosterDigest(this.deps.store.read())
-    const merged = this.deps.store.merge({ members: parsed, removed: [] }, this.selfPub())
+    let merged: MergeResult
+    try {
+      merged = this.deps.store.merge({ members: parsed, removed: [] }, this.selfPub())
+    } catch (err) {
+      // A roster that cannot be read trusts nobody new; the device log asks again at its next read.
+      if (!(err instanceof StateFileUnreadable)) throw err
+      this.deps.log?.(`[group] the device log's keys are not trusted here: ${errorKind(err)}`)
+      return
+    }
     const paired = new Set(this.deps.paired().map((p) => p.identityPub))
     const untrusted = merged.roster.members.filter((m) =>
       !paired.has(m.pub) && parsed.some((p) => p.pub === m.pub) && !merged.upserted.some((u) => u.pub === m.pub))
@@ -260,7 +277,16 @@ export class GroupSyncer {
     const reachable = this.deps.reachable?.() ?? null
     const self = this.deps.self().machineId
     const targets = new Set<string>()
-    const suspended = this.deps.suspended?.() ?? new Set<string>()
+    let suspended: ReadonlySet<string>
+    try {
+      suspended = this.deps.suspended?.() ?? new Set<string>()
+    } catch (err) {
+      // A suspended key is never dialed, and which those are cannot be told: no round until it can.
+      if (!(err instanceof StateFileUnreadable)) throw err
+      this.cannotRead('the device log')
+      this.retryLater()
+      return
+    }
     for (const m of this.deps.store.read().members) if (m.kind === 'machine' && m.machineId && !suspended.has(m.pub)) targets.add(m.machineId)
     for (const p of this.deps.peers.list()) if (!suspended.has(p.pub) && !p.shared) targets.add(p.machineId)
     if (self) targets.delete(self)
@@ -351,7 +377,14 @@ export class GroupSyncer {
       const m = parseMember({ pub: p.identityPub, machineId: p.machineId, kind: p.kind, label: p.label, at: p.pairedAt || SELF_STAMP }, this.now())
       if (m) seed.push(m)
     }
-    if (seed.length) this.deps.store.merge({ members: seed, removed: [] }, this.selfPub())
+    if (!seed.length) return
+    try {
+      this.deps.store.merge({ members: seed, removed: [] }, this.selfPub())
+    } catch (err) {
+      // Those links stay trusted as they are; the rest of start() must run, or the group never syncs in this process.
+      if (!(err instanceof StateFileUnreadable)) throw err
+      this.deps.log?.(`[group] the links made before the group are not added to it: ${errorKind(err)}`)
+    }
   }
 
   private applyAll(): void {
@@ -390,12 +423,22 @@ export class GroupSyncer {
     try {
       const blocked = this.deps.store.blocked()
       reading = 'the device log'
-      return new Set([...blocked, ...(this.deps.suspended?.() ?? [])])
+      const kept = new Set([...blocked, ...(this.deps.suspended?.() ?? [])])
+      this.unreadable = null
+      return kept
     } catch (err) {
       if (!(err instanceof StateFileUnreadable)) throw err
-      this.deps.log?.(`[group] ${reading} cannot be read: nobody new is pinned or trusted`)
+      this.cannotRead(reading)
       return null
     }
+  }
+
+  /** Says once that `reading` cannot be read, until it can: every round and every sync gets here, and the reader
+   *  has named the file already. */
+  private cannotRead(reading: string): void {
+    if (this.unreadable === reading) return
+    this.unreadable = reading
+    this.deps.log?.(`[group] ${reading} cannot be read: nobody new is pinned or trusted`)
   }
 
   private forget(pub: string): void {

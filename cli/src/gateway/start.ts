@@ -137,6 +137,23 @@ export function unknownHelloReader(
   }
 }
 
+/**
+ * The gateway's `onUnpaired`: the trust group keeps the key out here, and the account's device key log takes it out
+ * too, whatever the group's side throws (a block list that cannot be written): left in the log, its next read would
+ * trust the key again. The throw goes on to the manager, which says it.
+ */
+export function unpairedHandler(
+  group: Pick<GroupSyncer, 'unpaired'>, devlog: () => Pick<DeviceLogSyncer, 'remove'> | null,
+): (identityPub: string) => void {
+  return (identityPub) => {
+    try {
+      group.unpaired(identityPub)
+    } finally {
+      void devlog()?.remove(identityPub)
+    }
+  }
+}
+
 /** Pairing errors as `harness pair` maps them to HTTP. */
 const PAIR_STATUS: Record<string, number> = {
   NO_INTENT: 409, EXPIRED: 409, CODE_MISMATCH: 403, BACKEND_DOWN: 503,
@@ -261,11 +278,7 @@ export function startGateway(given: GatewayHost): StartedGateway {
   groupSyncer = syncer
   gateway.groupSync = syncer
   gateway.onPeerLinked = (peer) => syncer.linked(peer)
-  gateway.onUnpaired = (pub) => {
-    syncer.unpaired(pub)
-    // Unpairing a device here takes it out of the account's log too — or the log would trust it again.
-    void devLogSyncer?.remove(pub)
-  }
+  gateway.onUnpaired = unpairedHandler(syncer, () => devLogSyncer)
   // Started once this machine is signed in: at start, or on the first link-up after a sign-in that the
   // core told it of (`ops.account`).
   let groupStarted = false

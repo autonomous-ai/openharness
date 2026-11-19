@@ -2,7 +2,7 @@ import { chmodSync, closeSync, mkdirSync, openSync, rmSync, statSync } from 'fs'
 import { join } from 'path'
 import { randomBytes } from 'node:crypto'
 import { harnessPath } from '../config/harnessHome.js'
-import { atomicWriteFile, jsonObject, readState, requireState, type TrustFile } from './secureState.js'
+import { atomicWriteFile, jsonObject, probeState, readState, requireState, type TrustFile } from './secureState.js'
 
 export interface AuthSession {
   version: 1
@@ -203,22 +203,21 @@ function ensureDir(): void {
 }
 
 /** Writes the session whole. One on disk that cannot be read is refused (`StateFileUnreadable`), not replaced: only a
- *  person signing in or out sets it aside ([writeSignIn], [clearAuthSession]). */
+ *  person signing in or out deletes it ([writeSignIn], [clearAuthSession]). */
 export function writeAuthSession(session: AuthSession): void {
   ensureDir()
   requireState(AUTH_SESSION_FILE, jsonObject)
   atomicWriteFile(AUTH_SESSION_FILE, JSON.stringify(session) + '\n', 'trust')
 }
 
-/** A session that cannot be read, kept as `session.json.unreadable`; a good or missing one is left. What a person
- *  replacing the session on purpose does first. */
-export function setAsideUnreadableSession(): void {
-  readState(AUTH_SESSION_FILE, 'cache', jsonObject)
-}
-
-/** A sign-in by hand: it replaces even a session that cannot be read, which it sets aside first. */
+/** A sign-in by hand: it replaces even a session that cannot be read, which it deletes first ([clearAuthSession]). One
+ *  it could not delete is still refused by the write. */
 export function writeSignIn(session: AuthSession): void {
-  setAsideUnreadableSession()
+  const read = probeState(AUTH_SESSION_FILE, jsonObject)
+  if (read.state === 'unreadable') {
+    clearAuthSession()
+    console.warn(`[state] session.json could not be read (${read.failure}); deleted, signing in again.`)
+  }
   writeAuthSession(session)
 }
 
@@ -311,10 +310,9 @@ export function readSignedOut(): SignedOutMark | null {
   return readStored()?.signedOut ?? null
 }
 
-/** Removes the sign-in (`harness logout`, `harness reset`). One that cannot be read is kept as `session.json.unreadable`,
- *  as a sign-in by hand keeps it ([writeSignIn]). */
+/** Removes the sign-in (`harness logout`, `harness reset`), one that cannot be read as well: deleted, never kept aside,
+ *  where its refresh token would outlive the sign-out. */
 export function clearAuthSession(): void {
-  setAsideUnreadableSession()
   try { rmSync(AUTH_SESSION_FILE, { force: true }) } catch { /* ignore */ }
 }
 

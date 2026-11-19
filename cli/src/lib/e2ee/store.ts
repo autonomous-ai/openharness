@@ -5,9 +5,9 @@
  * forces every browser to re-pair.
  */
 import { mkdirSync, readdirSync, rmSync } from 'fs'
-import { join } from 'path'
+import { basename, join } from 'path'
 import { env } from '../../config/env.js'
-import { atomicWriteJson, jsonArray, jsonObject, probeState, readState, requireState, type AtomicWriteOptions, type TrustFile } from '../secureState.js'
+import { atomicWriteJson, jsonArray, jsonObject, probeState, readState, requireState, StateFileUnreadable, type AtomicWriteOptions, type TrustFile } from '../secureState.js'
 import { newIdentity, newPairId, b64e, b64d, fingerprint, type Identity, type PairRole } from './core.js'
 import { stretchPassword } from './passwordPake.js'
 
@@ -15,6 +15,8 @@ const DIR = join(env.ADAPTER_DATA_DIR, 'e2e')
 const IDENTITY_FILE = join(DIR, 'identity.json')
 const PAIRED_FILE = join(DIR, 'paired.json')
 const REMOTE_PASSWORD_FILE = join(DIR, 'remotePassword.json')
+/** Mints of a new identity before giving up: one lost race needs one more read. */
+const IDENTITY_TRIES = 3
 
 /** identity.json's content: a key pair of 32 bytes a side. Anything else is not this computer's identity. */
 function parseIdentity(text: string): Identity {
@@ -107,12 +109,14 @@ function writeTrustFile(file: string, data: unknown, options?: AtomicWriteOption
  * cannot be read is never replaced (a new key would lose every pairing): `requireState` throws.
  */
 function identityOnDisk(): Identity {
-  for (;;) {
+  for (let attempt = 1; ; attempt++) {
     const found = requireState(IDENTITY_FILE, parseIdentity)
     if (found) return found
     const id = newIdentity()
     if (writeTrustFile(IDENTITY_FILE, { priv: b64e(id.priv), pub: b64e(id.pub) }, { exclusive: true })) return id
-    // Another process published its key first: the next read finds it.
+    // Another process published its key first: the next read finds it. A name there that still reads as no file (a
+    // link to nothing, as Windows can leave) would have this mint for good, the daemon's loop blocked.
+    if (attempt === IDENTITY_TRIES) throw new StateFileUnreadable(basename(IDENTITY_FILE), 'a link to nothing')
   }
 }
 

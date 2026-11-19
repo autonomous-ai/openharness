@@ -59,18 +59,30 @@ never an error.
 - `MachinePeerStore`: an unreadable `machinePeers.json` makes `get` answer "not pinned"; `pin` and `unlink` throw. An
   unreadable `machinePeers-gone.json` keeps the in-memory marks as today and refuses to rewrite the file.
 - `TrustGroupStore`: an unreadable `group.json` makes `merge`, `add` and `remove` throw (no write back);
-  `list` is empty. An unreadable `group-blocked.json` makes `blocked()` throw, so `merge`, `block` and `unblock`
-  throw too. Its other readers (builder's call, 2026-11-19):
+  `list` is empty. An unreadable `group-blocked.json` makes `blocked()` throw, so `block` and `unblock` throw too;
+  `merge` does not read it (the roster holds no block, so a removal still lands). Orchestrator, 2026-11-19. Its
+  callers and the block list's other readers:
   - `groupSyncer.apply`/`applyAll` (`lib/e2ee/groupSyncer.ts`): pins and trusts nobody new while the block list
-    cannot be read, and logs it; trust already in place stays.
+    cannot be read, and logs it once until it can be read again; trust already in place stays (builder's call,
+    2026-11-19).
+  - `groupSyncer.remove`: unpins, untrusts and drops the sessions of the key here first, then writes the tombstone
+    if it can, and logs it if not. `harness devices remove`, `harness group remove` and the device log's drop go on
+    to the log's removal either way.
+  - `groupSyncer.start` (seeding the roster from earlier links) and `adoptFromLog`: a roster that cannot be read is
+    logged and trusts nobody new; the rest of start (applying the roster, the periodic round) still runs.
   - The device log's `isBlocked` (through `gateway/start.ts`): "cannot tell" is not "blocked", so it answers as for
     a machine that is not blocked and every NEW DEVICE alert is still shown. A failure never hides an alert.
+- The switch of accounts (`lib/e2ee/accountTrust.ts`): `group.json`, `group-blocked.json` and `machinePeers.json`
+  always move both ways, as one unit, by rename, never parsed: left live, one account's roster, blocks and pins went
+  on to the next. Only the split of `paired.json` is refused when a `paired.json` it would write cannot be read, and
+  the switch throws after the renames. Orchestrator, 2026-11-19.
 - The callers (gateway, fleet, CLI commands) already handle a throw from these stores; the plan checks each one and
   makes sure a throw is logged, not swallowed into "empty".
 
-- The auth session (`auth/session.json`): fail closed for every reader and writer but two. `harness login` and
-  `harness logout` are the person replacing it on purpose, so they set an unreadable one aside to
-  `session.json.unreadable` and go on (login writes a fresh session). Orchestrator, 2026-11-19.
+- The auth session (`auth/session.json`): fail closed for every reader and writer but three. `harness login`,
+  `harness logout` and `harness reset` are the person replacing or removing it on purpose, so they delete an
+  unreadable one and go on (login writes a fresh session). It is never kept as `session.json.unreadable`, where its
+  refresh token would outlive the sign-out. Orchestrator, 2026-11-19.
 
 ### Pid files
 

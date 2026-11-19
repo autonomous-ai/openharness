@@ -333,7 +333,13 @@ export class E2eeManager {
   }
 
   private noteUnpaired(identityPub: string): void {
-    try { this.deps.onUnpaired?.(identityPub) } catch { /* the unpairing itself stands */ }
+    try {
+      this.deps.onUnpaired?.(identityPub)
+    } catch (error) {
+      // The unpairing itself stands; what the rest of the daemon did not finish (the trust group's block) is said by
+      // its kind.
+      console.warn(`[e2ee] ${C.fingerprint(C.b64d(identityPub))} is unpaired, but not all of it was done: ${errorKind(error)}`)
+    }
   }
 
   revokeAllFromTrustedWeb(connId: string, requestId: unknown): void {

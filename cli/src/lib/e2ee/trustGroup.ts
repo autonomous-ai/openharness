@@ -176,10 +176,9 @@ export class TrustGroupStore {
   }
 
   /** Merge and persist; returns what changed so the caller can pin/trust or unpin/untrust. Throws
-   *  StateFileUnreadable while either file cannot be read. */
+   *  StateFileUnreadable while group.json cannot be read. A block list that cannot be read does not stop it: the roster
+   *  holds no block, so a removal still lands, and GroupSyncer pins and trusts nobody new meanwhile. */
   merge(incoming: Roster, selfPub: string): MergeResult {
-    // What a merge takes in is pinned and trusted next, and the block list is what keeps a key out of that.
-    this.blocked()
     const local = this.read()
     if (this.unreadable) throw this.unreadable
     const result = mergeRoster(local, incoming, selfPub)
