@@ -20,6 +20,7 @@ function recorder(over: Partial<Deps> = {}, codes: Array<number | null> = []) {
       return { code: codes.length ? codes.shift()! : 0, stdout: '' }
     },
     platform: 'darwin',
+    onPath: () => null,
     inFront: () => true,
     ...over,
   }

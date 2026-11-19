@@ -377,6 +377,9 @@ export class IsolatedDaemon {
     // helper (lib/guestAccounts.ts), which may be installed on the Mac the tests run on. Refused, as for an owner who
     // never turned guest access on.
     await writeFile(join(dirs.bin, 'sudo'), '#!/bin/sh\necho "sudo: a password is required" >&2\nexit 1\n', { mode: 0o755 })
+    // Nor does it ask this computer's scheme handlers: on Linux a link opens only once xdg-mime names the scheme's app
+    // (cable/hosts/appLink.ts), and one that prints nothing names none, so no link reaches the developer's own apps.
+    await writeFile(join(dirs.bin, 'xdg-mime'), '#!/bin/sh\nexit 0\n', { mode: 0o755 })
     // Nor does its open scan see a file held outside its root. The scan reads every `codex` on the computer
     // (sessionSearch/externals/support.ts) and the devices write the dial skill into each Codex home whose rollout one
     // holds: every daemon with a dial attached wrote it into another test's Codex homes, and deviceDialSkill.e2e.ts

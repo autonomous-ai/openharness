@@ -74,6 +74,8 @@ const target = (hints: Record<string, string>): OpenTarget => {
 }
 const run = (file: string, ...args: string[]): Call => ({ file, args, timeoutMs: 10_000 })
 const forward = (bundle: string): Call => run(OPEN, '-b', bundle)
+/** On Linux, asking whether a link's scheme has an app (appLink.ts): the recorder answers none, so nothing opens. */
+const lookup = (scheme: string): Call => run('/fake/bin/xdg-mime', 'query', 'default', `x-scheme-handler/${scheme}`)
 
 describe('opening an agent outside Harness from the dial', () => {
   it('Orca: its terminal is switched to, then Orca comes forward', async () => {
@@ -288,7 +290,9 @@ describe('opening an agent outside Harness from the dial', () => {
       expect(linux.opener.can(target(hints))).toBe(false)
       expect(await linux.opener.open('a4', target(hints))).toBe(false)
     }
-    expect(linux.calls).toHaveLength(2)
+    expect(linux.calls).toEqual([
+      run('/fake/bin/wezterm', 'cli', 'activate-pane', '--pane-id', '7'), run('/fake/bin/herdr', 'agent', 'focus', 'w1:p2'), lookup('claude'),
+    ])
 
     // Not reached, nothing comes forward and nothing is said; the macOS app's own wezterm is never looked for.
     const failed = recorder({ platform: 'linux', onPath: () => null, exists: () => true, orcaSwitch: async () => false })
@@ -424,7 +428,7 @@ describe('a tap on a Codex app session', () => {
       expect(opener.can(app)).toBe(false)
       expect(await opener.open('a1', app)).toBe(false)
     }
-    expect(calls).toEqual([])
+    expect(calls).toEqual([lookup('codex')])
     expect(logs).toEqual([])
   })
 })
