@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { FRONT_NONE, frontAppId } from './frontApp.js'
 import { APP_IDS, detectApp } from './hostDetect.js'
+import { RECORDED_LINUX_APPS } from '../../testing/recordedLinuxApps.js'
 
 const BUNDLES: [string, string][] = [
   ['com.stablyai.orca', 'orca'],
@@ -33,6 +34,12 @@ const EXES: [string, string][] = [
   ['Harness', 'harness'],
 ]
 
+// The Claude and ChatGPT apps' Linux processes, by the comm their recording shows (ChatGPT's as recorded, capitalised).
+const LINUX_APPS: [string, string][] = [
+  [RECORDED_LINUX_APPS.claude.comm, 'claude'],
+  [RECORDED_LINUX_APPS.chatgpt.comm, 'codex'],
+]
+
 describe('frontAppId', () => {
   it.each(BUNDLES)('every bundle id maps to the id detectApp gives for it: %s', (bundle, id) => {
     expect(frontAppId(bundle)).toBe(id)
@@ -43,8 +50,12 @@ describe('frontAppId', () => {
     expect(frontAppId(exe)).toBe(id)
   })
 
+  it.each(LINUX_APPS)('the Claude and ChatGPT apps on Linux map by their recorded comm: %s', (comm, id) => {
+    expect(frontAppId(comm)).toBe(id)
+  })
+
   it.each(['com.apple.Safari', 'org.alacritty', 'net.kovidgoyal.kitty-quick-access', 'alacritty', '', 'x'.repeat(128),
-    'constructor', '__proto__', 'toString', 'COM.MITCHELLH.GHOSTTY', 'com.openai.chat', 'codex', 'Codex.exe', 'ChatGPT',
+    'constructor', '__proto__', 'toString', 'COM.MITCHELLH.GHOSTTY', 'com.openai.chat', 'codex', 'Codex.exe',
     'com.cmuxterm.app.nightly', 'cmux'])(
     'an unknown app, the empty string and a 128-character string are none: %j', (value) => {
       expect(frontAppId(value)).toBe(FRONT_NONE)
@@ -55,11 +66,11 @@ describe('frontAppId', () => {
     expect(APP_IDS).not.toContain(FRONT_NONE)
     expect(frontAppId('other')).toBe(FRONT_NONE)
     expect(frontAppId('Other')).toBe(FRONT_NONE)
-    for (const [value] of [...BUNDLES, ...EXES]) expect(frontAppId(value)).not.toMatch(/^other$/i)
+    for (const [value] of [...BUNDLES, ...EXES, ...LINUX_APPS]) expect(frontAppId(value)).not.toMatch(/^other$/i)
   })
 
   it('every id the table can give is an app id or none', () => {
-    for (const [value] of [...BUNDLES, ...EXES]) {
+    for (const [value] of [...BUNDLES, ...EXES, ...LINUX_APPS]) {
       const id = frontAppId(value)
       expect(APP_IDS.includes(id) || id === FRONT_NONE).toBe(true)
     }
