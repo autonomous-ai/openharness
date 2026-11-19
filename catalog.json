@@ -8,7 +8,7 @@
       "author": "Freek Van der Herten and contributors",
       "description": "A small pattern can become a whole mood. Make a loop, play with its pulse, and keep the happy accidents.",
       "repo": "https://github.com/autonomous-ai/openharness",
-      "ref": "aa07cf0cfa578d8747b7961cf9905527f3369a23",
+      "ref": "10c3f1b107746946697efdf0f0f0a7735b9f9d84",
       "path": "store/agents/ableton-ai",
       "homepage": "https://github.com/freekmurze/ableton-ai",
       "upstream": "https://github.com/freekmurze/ableton-ai",
@@ -40,7 +40,7 @@
       "runsScripts": true,
       "tier": 2,
       "verified": true,
-      "revision": "69e6c4a59b603a162e2cead3db23572190336307"
+      "revision": "d24a40faf7e6a3a7ec699cafb49996646ae90c6c"
     },
     {
       "id": "autonomous/autonomous-circuit",
@@ -49,7 +49,7 @@
       "author": "Autonomous",
       "description": "Describe a board; get a fab-ready PCB with a live board view, ordered from JLCPCB in a click.",
       "repo": "https://github.com/autonomous-ai/openharness",
-      "ref": "aa07cf0cfa578d8747b7961cf9905527f3369a23",
+      "ref": "10c3f1b107746946697efdf0f0f0a7735b9f9d84",
       "path": "store/agents/autonomous-circuit",
       "upstream": "https://github.com/autonomous-ai/autonomous-circuit",
       "license": "MIT",
@@ -87,7 +87,7 @@
       "runsScripts": true,
       "tier": 2,
       "verified": true,
-      "revision": "cc3b71e28619abd7265ac9e83f3adfe4ecb671d8"
+      "revision": "aa44b4ba709ddaaed53d95277b83ca7da03abd9b"
     },
     {
       "id": "autonomous/autonomous-grid",
@@ -96,7 +96,7 @@
       "author": "Autonomous",
       "description": "Run your first local model. Find a model that fits your computer, start it, and use it in Harness. Manage models across your machines in one conversation.",
       "repo": "https://github.com/autonomous-ai/openharness",
-      "ref": "aa07cf0cfa578d8747b7961cf9905527f3369a23",
+      "ref": "10c3f1b107746946697efdf0f0f0a7735b9f9d84",
       "path": "store/agents/autonomous-grid",
       "homepage": "https://github.com/autonomous-ai/autonomous-grid",
       "upstream": "https://github.com/autonomous-ai/autonomous-grid",
@@ -126,7 +126,7 @@
       "runsScripts": true,
       "tier": 2,
       "verified": true,
-      "revision": "d35a6c555d7d7d1d80ac69aaca2352b3de10935b"
+      "revision": "b59857094f845d4f979c6de76846cf6c4714fdf2"
     },
     {
       "id": "autonomous/autonomous-workshop",
@@ -135,7 +135,7 @@
       "author": "Autonomous",
       "description": "Describe a part; get a validated, printable STEP with a live 3D view.",
       "repo": "https://github.com/autonomous-ai/openharness",
-      "ref": "aa07cf0cfa578d8747b7961cf9905527f3369a23",
+      "ref": "10c3f1b107746946697efdf0f0f0a7735b9f9d84",
       "path": "store/agents/autonomous-workshop",
       "upstream": "https://github.com/autonomous-ai/autonomous-workshop",
       "license": "MIT",
@@ -174,7 +174,7 @@
       "runsScripts": true,
       "tier": 2,
       "verified": true,
-      "revision": "d25752f21d1d746b7cca4f05d7d5dd104b9e95c2"
+      "revision": "6eef42d9da619fe1aa30a6ef37058b21b58fee85"
     },
     {
       "id": "autonomous/autoresearch-mlx",
@@ -183,7 +183,7 @@
       "author": "Trevin creator; Andrej Karpathy",
       "description": "Follow a small idea through a real experiment. Train, compare, and see what the evidence says.",
       "repo": "https://github.com/autonomous-ai/openharness",
-      "ref": "aa07cf0cfa578d8747b7961cf9905527f3369a23",
+      "ref": "10c3f1b107746946697efdf0f0f0a7735b9f9d84",
       "path": "store/agents/autoresearch-mlx",
       "homepage": "https://github.com/trevin-creator/autoresearch-mlx",
       "upstream": "https://github.com/trevin-creator/autoresearch-mlx",
@@ -215,7 +215,7 @@
       "runsScripts": true,
       "tier": 2,
       "verified": true,
-      "revision": "45ca6fdc98573c884b599b0250c9d7e6e8d9d662"
+      "revision": "0fe53777a3c94a0dc8c8f4d26dc86e8ed84e88b1"
     },
     {
       "id": "autonomous/blender",
@@ -224,7 +224,7 @@
       "author": "Blender Foundation",
       "description": "Describe an object or scene, then shape it with authored controls: real Blender geometry, named design directions, and editable source you can keep and rebuild.",
       "repo": "https://github.com/autonomous-ai/openharness",
-      "ref": "aa07cf0cfa578d8747b7961cf9905527f3369a23",
+      "ref": "10c3f1b107746946697efdf0f0f0a7735b9f9d84",
       "path": "store/agents/blender",
       "homepage": "https://www.blender.org",
       "upstream": "https://projects.blender.org/blender/blender",
@@ -270,7 +270,7 @@
       "runsScripts": true,
       "tier": 2,
       "verified": true,
-      "revision": "349e67a7e6e827236b816785b0c9953950168c2a"
+      "revision": "75e2d32f4729c44f95f852ca20afb26a38691c05"
     },
     {
       "id": "autonomous/bonsai-mcp",
@@ -279,7 +279,7 @@
       "author": "Show2Instruct",
       "description": "Make room for a new idea. Shape a small building, inspect its spaces, and open the real IFC model anywhere.",
       "repo": "https://github.com/autonomous-ai/openharness",
-      "ref": "aa07cf0cfa578d8747b7961cf9905527f3369a23",
+      "ref": "10c3f1b107746946697efdf0f0f0a7735b9f9d84",
       "path": "store/agents/bonsai-mcp",
       "homepage": "https://github.com/Show2Instruct/bonsai-mcp",
       "upstream": "https://github.com/Show2Instruct/bonsai-mcp",
@@ -311,7 +311,7 @@
       "runsScripts": true,
       "tier": 2,
       "verified": true,
-      "revision": "2d66071b2e5bb13c13a23773cbfeba5dd37e2e8d"
+      "revision": "66e506bcf6fc5146b8f8d7dbb1e32417359e16de"
     },
     {
       "id": "autonomous/cad-viewer",
@@ -321,14 +321,14 @@
       "author": "Jake Fitzgerald",
       "description": "Jake Fitzgerald's CAD Viewer (earthtojake/text-to-cad) as a Harness pane: STEP, GLB, STL, 3MF, DXF, URDF, SRDF and SDF, with MoveIt2 inverse kinematics.",
       "repo": "https://github.com/autonomous-ai/openharness",
-      "ref": "aa07cf0cfa578d8747b7961cf9905527f3369a23",
+      "ref": "10c3f1b107746946697efdf0f0f0a7735b9f9d84",
       "path": "store/viewers/cad-viewer",
       "upstream": "https://github.com/earthtojake/text-to-cad",
       "license": "MIT",
       "runsScripts": true,
       "tier": 2,
       "verified": true,
-      "revision": "6906991e760558eb2fe517e62b94aa07bf04db22"
+      "revision": "79cd89d8bc0f060c641164e9b1106fc96845ebf6"
     },
     {
       "id": "autonomous/circuitjs",
@@ -337,7 +337,7 @@
       "author": "Paul Falstad",
       "description": "Describe a circuit — an RC filter, a 555 flasher, an amplifier — and watch it run in the pane: charge animating along the wires, scope traces drawing, every value still yours to poke at.",
       "repo": "https://github.com/autonomous-ai/openharness",
-      "ref": "aa07cf0cfa578d8747b7961cf9905527f3369a23",
+      "ref": "10c3f1b107746946697efdf0f0f0a7735b9f9d84",
       "path": "store/agents/circuitjs",
       "homepage": "https://www.falstad.com/circuit/",
       "upstream": "https://github.com/pfalstad/circuitjs1",
@@ -382,7 +382,7 @@
       "runsScripts": true,
       "tier": 2,
       "verified": true,
-      "revision": "8af676d459eb6cf9041992af5d13fd2559079511"
+      "revision": "6856e45fa628110420302123f62aa1c32732095d"
     },
     {
       "id": "autonomous/comfy-mcp",
@@ -391,7 +391,7 @@
       "author": "Comfy Org",
       "description": "Follow a visual thread. Explore a family of forms, collect your favourites, and keep the recipe with every image.",
       "repo": "https://github.com/autonomous-ai/openharness",
-      "ref": "aa07cf0cfa578d8747b7961cf9905527f3369a23",
+      "ref": "10c3f1b107746946697efdf0f0f0a7735b9f9d84",
       "path": "store/agents/comfy-mcp",
       "homepage": "https://github.com/Comfy-Org/comfy-mcp",
       "upstream": "https://github.com/Comfy-Org/comfy-mcp",
@@ -423,7 +423,7 @@
       "runsScripts": true,
       "tier": 2,
       "verified": true,
-      "revision": "049759e9d3410a44f91c78328667db48c72cf582"
+      "revision": "ba25b6334dcfbc0194cd73035a83b7ca5b448ca4"
     },
     {
       "id": "autonomous/creative-direction",
@@ -432,7 +432,7 @@
       "author": "Autonomous",
       "description": "Turn a business brief into an editable brand and a complete launch kit. Art-direct original identities, revise linked layouts, keep approved versions, and deliver vector artwork, print PDFs, a brand guide and a responsive website.",
       "repo": "https://github.com/autonomous-ai/openharness",
-      "ref": "aa07cf0cfa578d8747b7961cf9905527f3369a23",
+      "ref": "10c3f1b107746946697efdf0f0f0a7735b9f9d84",
       "path": "store/agents/creative-direction",
       "homepage": "https://github.com/autonomous-ai/openharness/tree/main/store/agents/creative-direction",
       "license": "MIT",
@@ -489,7 +489,7 @@
       "author": "OpenHarness contributors",
       "description": "Turn CSV files and a question into a repeatable local analysis: checked joins, exact calculations, source-record drilldown, revisions and portable SQLite/report/project exports.",
       "repo": "https://github.com/autonomous-ai/openharness",
-      "ref": "aa07cf0cfa578d8747b7961cf9905527f3369a23",
+      "ref": "10c3f1b107746946697efdf0f0f0a7735b9f9d84",
       "path": "store/agents/data-studio",
       "homepage": "https://github.com/autonomous-ai/openharness/tree/main/store/agents/data-studio",
       "upstream": "https://github.com/autonomous-ai/openharness/tree/main/store/agents/data-studio",
@@ -539,7 +539,7 @@
       "runsScripts": true,
       "tier": 2,
       "verified": true,
-      "revision": "297c44f070c09eaf67c13e927fc28a670e56610d"
+      "revision": "77ab7478a654145e8a5b45e454bac2b65bb59349"
     },
     {
       "id": "autonomous/dimos",
@@ -548,7 +548,7 @@
       "author": "Dimensional",
       "description": "Send a little rover on a small adventure. Pick a destination, watch it find a way, and replay the journey.",
       "repo": "https://github.com/autonomous-ai/openharness",
-      "ref": "aa07cf0cfa578d8747b7961cf9905527f3369a23",
+      "ref": "10c3f1b107746946697efdf0f0f0a7735b9f9d84",
       "path": "store/agents/dimos",
       "homepage": "https://github.com/dimensionalOS/dimos",
       "upstream": "https://github.com/dimensionalOS/dimos",
@@ -580,7 +580,7 @@
       "runsScripts": true,
       "tier": 2,
       "verified": true,
-      "revision": "5f2667ed26ffb13d26ab2f3eafbf7b496bd95d77"
+      "revision": "ceb2e6143321aaa4d5b7f821f9f2d2e1d3f3d515"
     },
     {
       "id": "autonomous/doc-viewer",
@@ -590,14 +590,14 @@
       "author": "Autonomous",
       "description": "Read a live PDF, hold an exact draft, pin feedback to words or page regions, and compare the next revision. Keep portable PDF-and-notes review packets alongside native pdf.js search, outlines, spreads and compile diagnostics.",
       "repo": "https://github.com/autonomous-ai/openharness",
-      "ref": "aa07cf0cfa578d8747b7961cf9905527f3369a23",
+      "ref": "10c3f1b107746946697efdf0f0f0a7735b9f9d84",
       "path": "store/viewers/doc-viewer",
       "upstream": "https://github.com/mozilla/pdf.js",
       "license": "MIT",
       "runsScripts": true,
       "tier": 2,
       "verified": true,
-      "revision": "b0d3039cd83abd4c17dc15db477308c0fddf8663"
+      "revision": "d174d8622bdaaacbc37937f9eb12cfae50efc495"
     },
     {
       "id": "autonomous/drone-pilot",
@@ -606,7 +606,7 @@
       "author": "Autonomous",
       "description": "Plan a field survey from your own boundary and camera requirements. Edit routes and exclusions, compare capture directions, split time-bounded sorties, inspect recorded flight CSV and keep an editable GIS and report kit.",
       "repo": "https://github.com/autonomous-ai/openharness",
-      "ref": "aa07cf0cfa578d8747b7961cf9905527f3369a23",
+      "ref": "10c3f1b107746946697efdf0f0f0a7735b9f9d84",
       "path": "store/agents/drone-pilot",
       "homepage": "https://github.com/autonomous-ai/openharness/tree/main/store/agents/drone-pilot",
       "license": "MIT",
@@ -654,7 +654,7 @@
       "runsScripts": true,
       "tier": 2,
       "verified": true,
-      "revision": "e3b2f43ffd9a77ebfb9d84ff65c53eca377e8a21"
+      "revision": "c54c6de41bc6acdcc956d36a76928a01a40cb798"
     },
     {
       "id": "autonomous/excalidraw",
@@ -663,7 +663,7 @@
       "author": "Excalidraw",
       "description": "Describe a diagram — an architecture, a flow, a whiteboard sketch — and watch it appear hand-drawn in the pane, as an .excalidraw file you can open anywhere.",
       "repo": "https://github.com/autonomous-ai/openharness",
-      "ref": "aa07cf0cfa578d8747b7961cf9905527f3369a23",
+      "ref": "10c3f1b107746946697efdf0f0f0a7735b9f9d84",
       "path": "store/agents/excalidraw",
       "homepage": "https://excalidraw.com",
       "upstream": "https://github.com/excalidraw/excalidraw",
@@ -702,7 +702,7 @@
       "runsScripts": true,
       "tier": 2,
       "verified": true,
-      "revision": "debc495304970374927172a3842324b9ca1a329a"
+      "revision": "cf8e5dd09acecac8d25d5ce0ceb1d16350102e9d"
     },
     {
       "id": "autonomous/files",
@@ -711,7 +711,7 @@
       "author": "Autonomous",
       "description": "Browse a folder in the pane: read and edit Markdown and text files, look at pictures and PDFs, from this computer or another of yours. The agent beside it finds, sorts, summarises and writes them with you.",
       "repo": "https://github.com/autonomous-ai/openharness",
-      "ref": "aa07cf0cfa578d8747b7961cf9905527f3369a23",
+      "ref": "10c3f1b107746946697efdf0f0f0a7735b9f9d84",
       "path": "store/agents/files",
       "homepage": "https://github.com/autonomous-ai/openharness/tree/main/store/agents/files",
       "upstream": "https://github.com/autonomous-ai/openharness/tree/main/store/agents/files",
@@ -741,7 +741,7 @@
       "runsScripts": true,
       "tier": 2,
       "verified": true,
-      "revision": "57bca1cc61f14795aea7cf9884686a5d13b9dd98"
+      "revision": "0ce28bdd17626f323d58ce592d4315ca6571d2da"
     },
     {
       "id": "autonomous/film-viewer",
@@ -751,7 +751,7 @@
       "author": "OpenHarness contributors",
       "description": "A screening room for OpenMontage productions: live storyboards, a film player, render versions, and notes tied to a moment in the cut.",
       "repo": "https://github.com/autonomous-ai/openharness",
-      "ref": "aa07cf0cfa578d8747b7961cf9905527f3369a23",
+      "ref": "10c3f1b107746946697efdf0f0f0a7735b9f9d84",
       "path": "store/viewers/film-viewer",
       "homepage": "https://github.com/autonomous-ai/openharness",
       "upstream": "https://github.com/calesthio/OpenMontage",
@@ -763,7 +763,7 @@
       "runsScripts": true,
       "tier": 2,
       "verified": true,
-      "revision": "5126fa90fe38b642dbaf3c8310e457c7f1751429"
+      "revision": "ebfafa6a77eb7f7be42121c4da3efbe09ba4bf36"
     },
     {
       "id": "autonomous/foam-agent",
@@ -772,7 +772,7 @@
       "author": "Foam-Agent team",
       "description": "Give the wind something to move around. Explore shapes, trace the currents, and compare your experiments.",
       "repo": "https://github.com/autonomous-ai/openharness",
-      "ref": "aa07cf0cfa578d8747b7961cf9905527f3369a23",
+      "ref": "10c3f1b107746946697efdf0f0f0a7735b9f9d84",
       "path": "store/agents/foam-agent",
       "homepage": "https://github.com/csml-rpi/Foam-Agent",
       "upstream": "https://github.com/csml-rpi/Foam-Agent",
@@ -804,7 +804,7 @@
       "runsScripts": true,
       "tier": 2,
       "verified": true,
-      "revision": "9cc65ddc725b8eda968dd07fbf985b8818e37491"
+      "revision": "213c5ffb692008724a325215bb4bd1f9eb9a0a85"
     },
     {
       "id": "autonomous/freecad",
@@ -813,7 +813,7 @@
       "author": "OpenHarness contributors",
       "description": "Turn measurements into custom parts with checked holes, clearances and tool access. Keep an editable FreeCAD project, individual STEP/STL exports, reference drawings and a portable handoff.",
       "repo": "https://github.com/autonomous-ai/openharness",
-      "ref": "aa07cf0cfa578d8747b7961cf9905527f3369a23",
+      "ref": "10c3f1b107746946697efdf0f0f0a7735b9f9d84",
       "path": "store/agents/freecad",
       "homepage": "https://freecad.org",
       "upstream": "https://github.com/FreeCAD/FreeCAD",
@@ -852,7 +852,7 @@
       "runsScripts": true,
       "tier": 2,
       "verified": true,
-      "revision": "925fe242e84e5a4d0fd52991f74f0d05e4105cbe"
+      "revision": "469dd77692845d44a985ab9f42bd2b7105e4dd04"
     },
     {
       "id": "autonomous/game-master",
@@ -861,7 +861,7 @@
       "author": "Autonomous",
       "description": "Create original board and card games from an idea. Play the rules, edit components, inspect reproducible playtests and export an offline game plus a physical print-and-play kit.",
       "repo": "https://github.com/autonomous-ai/openharness",
-      "ref": "aa07cf0cfa578d8747b7961cf9905527f3369a23",
+      "ref": "10c3f1b107746946697efdf0f0f0a7735b9f9d84",
       "path": "store/agents/game-master",
       "homepage": "https://github.com/autonomous-ai/openharness/tree/main/store/agents/game-master",
       "license": "MIT",
@@ -909,7 +909,7 @@
       "runsScripts": true,
       "tier": 2,
       "verified": true,
-      "revision": "2e8126584e12c9a23386304af4aec6a15d8c10f8"
+      "revision": "9b2045bfa805ce01f3e1f921ea7282fe023ee5dc"
     },
     {
       "id": "autonomous/game-viewer",
@@ -919,7 +919,7 @@
       "author": "OpenHarness contributors",
       "description": "A live game studio with playable versions, rewind, alternate moves, and saved playtest moments that preserve the exact game and state.",
       "repo": "https://github.com/autonomous-ai/openharness",
-      "ref": "aa07cf0cfa578d8747b7961cf9905527f3369a23",
+      "ref": "10c3f1b107746946697efdf0f0f0a7735b9f9d84",
       "path": "store/viewers/game-viewer",
       "homepage": "https://github.com/autonomous-ai/openharness",
       "license": "MIT",
@@ -927,7 +927,7 @@
       "runsScripts": true,
       "tier": 2,
       "verified": true,
-      "revision": "086acad9e5a7f927cdd36965381e4e12fd90658a"
+      "revision": "e52f1dd73ea0408c751b537899746025eebae237"
     },
     {
       "id": "autonomous/generative-art",
@@ -936,7 +936,7 @@
       "author": "Autonomous",
       "description": "Turn your brief into original vector artwork with its own drawing program and controls. Use your text, images and data; revise multiple layouts; export SVG, PNG, editions and complete editable projects.",
       "repo": "https://github.com/autonomous-ai/openharness",
-      "ref": "aa07cf0cfa578d8747b7961cf9905527f3369a23",
+      "ref": "10c3f1b107746946697efdf0f0f0a7735b9f9d84",
       "path": "store/agents/generative-art",
       "homepage": "https://github.com/autonomous-ai/openharness/tree/main/store/agents/generative-art",
       "license": "MIT",
@@ -992,7 +992,7 @@
       "author": "Alex Ermolov",
       "description": "Build a world you can play. Rewind a run, try another move, and pin a moment for your agent to improve while your game keeps taking shape.",
       "repo": "https://github.com/autonomous-ai/openharness",
-      "ref": "aa07cf0cfa578d8747b7961cf9905527f3369a23",
+      "ref": "10c3f1b107746946697efdf0f0f0a7735b9f9d84",
       "path": "store/agents/godogen",
       "homepage": "https://github.com/htdt/godogen",
       "upstream": "https://github.com/htdt/godogen",
@@ -1046,7 +1046,7 @@
       "runsScripts": true,
       "tier": 2,
       "verified": true,
-      "revision": "27319f7b261471a3b5078595f220e1490a719c89"
+      "revision": "ed8d16aa13d8c97febf5ac1d8aa356b9e28e63c4"
     },
     {
       "id": "autonomous/harness-monitor",
@@ -1055,7 +1055,7 @@
       "author": "Autonomous",
       "description": "Inspect harnesses across your machines. See workspace and session storage separately, stop work, or review permanent session and Git worktree cleanup.",
       "repo": "https://github.com/autonomous-ai/openharness",
-      "ref": "aa07cf0cfa578d8747b7961cf9905527f3369a23",
+      "ref": "10c3f1b107746946697efdf0f0f0a7735b9f9d84",
       "path": "store/agents/harness-monitor",
       "license": "MIT",
       "tagline": "Monitor resources and AI usage across your machines",
@@ -1094,7 +1094,7 @@
       "runsScripts": true,
       "tier": 2,
       "verified": true,
-      "revision": "9f91546fac39288d3340a3d8f8698248654a4d6a"
+      "revision": "aeed63937ccb3f99fc3dcf9e61a37a520e27f41a"
     },
     {
       "id": "autonomous/home-assistant",
@@ -1103,7 +1103,7 @@
       "author": "OpenHarness contributors",
       "description": "Turn a home-automation idea into editable YAML tested by the real Home Assistant engine. Explore what-if scenarios, follow native traces, and export a reviewed installation kit—no devices required to start.",
       "repo": "https://github.com/autonomous-ai/openharness",
-      "ref": "aa07cf0cfa578d8747b7961cf9905527f3369a23",
+      "ref": "10c3f1b107746946697efdf0f0f0a7735b9f9d84",
       "path": "store/agents/home-assistant",
       "homepage": "https://www.home-assistant.io",
       "upstream": "https://github.com/home-assistant/core",
@@ -1140,7 +1140,7 @@
       "runsScripts": true,
       "tier": 2,
       "verified": true,
-      "revision": "27b5cf21bee2b481abbb350364f4b50a516ae861"
+      "revision": "e0d39c5d8947070cdbe0f3a14db400271aeb4a65"
     },
     {
       "id": "autonomous/isolated-web-viewer",
@@ -1150,13 +1150,13 @@
       "author": "OpenHarness contributors",
       "description": "An opaque-origin HTML preview with capability-scoped assets, responsive controls and interaction-based verification.",
       "repo": "https://github.com/autonomous-ai/openharness",
-      "ref": "aa07cf0cfa578d8747b7961cf9905527f3369a23",
+      "ref": "10c3f1b107746946697efdf0f0f0a7735b9f9d84",
       "path": "store/viewers/isolated-web-viewer",
       "license": "MIT",
       "runsScripts": true,
       "tier": 2,
       "verified": true,
-      "revision": "625bd47d1d922b7676e886305b3d646ed1a9de41"
+      "revision": "1496659227071d17df4c92b9982b02f06603ffb0"
     },
     {
       "id": "autonomous/juce-agent-toolkit",
@@ -1165,7 +1165,7 @@
       "author": "Daniel Raffel",
       "description": "Find a sound that feels like you. Shape a synth, play a little, and take the recording with you.",
       "repo": "https://github.com/autonomous-ai/openharness",
-      "ref": "aa07cf0cfa578d8747b7961cf9905527f3369a23",
+      "ref": "10c3f1b107746946697efdf0f0f0a7735b9f9d84",
       "path": "store/agents/juce-agent-toolkit",
       "homepage": "https://github.com/danielraffel/juce-agent-toolkit",
       "upstream": "https://github.com/danielraffel/juce-agent-toolkit",
@@ -1197,7 +1197,7 @@
       "runsScripts": true,
       "tier": 2,
       "verified": true,
-      "revision": "5f5d36593200e90b23cab6df498a5957ccb6fc5d"
+      "revision": "5c96dab42aed00fbaf2390cd1f8f607c409cc72a"
     },
     {
       "id": "autonomous/kicad",
@@ -1206,7 +1206,7 @@
       "author": "KiCad",
       "description": "Describe a board; get a real KiCad project — a wired schematic, DRC-checked copper, a prototype packet — with a live board view.",
       "repo": "https://github.com/autonomous-ai/openharness",
-      "ref": "aa07cf0cfa578d8747b7961cf9905527f3369a23",
+      "ref": "10c3f1b107746946697efdf0f0f0a7735b9f9d84",
       "path": "store/agents/kicad",
       "homepage": "https://www.kicad.org",
       "upstream": "https://github.com/autonomous-ai/autonomous-circuit",
@@ -1234,7 +1234,7 @@
       "runsScripts": true,
       "tier": 2,
       "verified": true,
-      "revision": "6919bfb93e7a232402651a70932866d6982bcdee"
+      "revision": "b90d5ec5adfacc0fc671248e74e9061a03b25384"
     },
     {
       "id": "autonomous/lab-bench",
@@ -1243,7 +1243,7 @@
       "author": "Autonomous",
       "description": "Turn a practical question into a real experiment. Plan randomized runs, collect your measurements, inspect uncertainty and diagnostics, and design a follow-up with a reproducible report.",
       "repo": "https://github.com/autonomous-ai/openharness",
-      "ref": "aa07cf0cfa578d8747b7961cf9905527f3369a23",
+      "ref": "10c3f1b107746946697efdf0f0f0a7735b9f9d84",
       "path": "store/agents/lab-bench",
       "homepage": "https://github.com/autonomous-ai/openharness/tree/main/store/agents/lab-bench",
       "license": "MIT",
@@ -1291,7 +1291,7 @@
       "runsScripts": true,
       "tier": 2,
       "verified": true,
-      "revision": "71c0eb586c967dbf4e56f446aa4937c47ca8aae0"
+      "revision": "2e5e16b56edefa29af20c4e171e59ac3d2f91ac7"
     },
     {
       "id": "autonomous/machine-monitor",
@@ -1300,7 +1300,7 @@
       "author": "Autonomous",
       "description": "Talk to your fleet of computers. Link one, name it, retire it — and watch every machine, project and harness you own come alive on one map.",
       "repo": "https://github.com/autonomous-ai/openharness",
-      "ref": "aa07cf0cfa578d8747b7961cf9905527f3369a23",
+      "ref": "10c3f1b107746946697efdf0f0f0a7735b9f9d84",
       "path": "store/agents/machine-monitor",
       "homepage": "https://harness.autonomous.ai",
       "license": "MIT",
@@ -1328,7 +1328,7 @@
       "runsScripts": true,
       "tier": 2,
       "verified": true,
-      "revision": "23fd1b8cb067daf84ee560709e2dc83a49ca465e"
+      "revision": "dcdbfa86d3a1723d1088f61b752d73a3db3df7e3"
     },
     {
       "id": "autonomous/manim",
@@ -1337,7 +1337,7 @@
       "author": "Manim Community",
       "description": "Describe an explanation — a proof, a transform, an algorithm, a graph — and watch it animate: scenes in Python, rendered by Manim, playing in the pane.",
       "repo": "https://github.com/autonomous-ai/openharness",
-      "ref": "aa07cf0cfa578d8747b7961cf9905527f3369a23",
+      "ref": "10c3f1b107746946697efdf0f0f0a7735b9f9d84",
       "path": "store/agents/manim",
       "homepage": "https://www.manim.community",
       "upstream": "https://github.com/ManimCommunity/manim",
@@ -1377,7 +1377,7 @@
       "runsScripts": true,
       "tier": 2,
       "verified": true,
-      "revision": "83195dc88b6d01dcd98d7953f898e684d7ec039e"
+      "revision": "966f15ca8626ff45af8c3381e99db460e2d8e95d"
     },
     {
       "id": "autonomous/marimo",
@@ -1386,7 +1386,7 @@
       "author": "marimo",
       "description": "Describe an analysis, a model, a dashboard — and watch the reactive notebook come alive in the pane: marimo's own editor on the notebook the agent writes, cells re-running as it types.",
       "repo": "https://github.com/autonomous-ai/openharness",
-      "ref": "aa07cf0cfa578d8747b7961cf9905527f3369a23",
+      "ref": "10c3f1b107746946697efdf0f0f0a7735b9f9d84",
       "path": "store/agents/marimo",
       "homepage": "https://marimo.io",
       "upstream": "https://github.com/marimo-team/marimo",
@@ -1425,7 +1425,7 @@
       "runsScripts": true,
       "tier": 2,
       "verified": true,
-      "revision": "ed49374b93d0713c7b8a8bd7ff66dc0cb8ef41e2"
+      "revision": "5bd4f3616c93541017746a95644361470411fd0b"
     },
     {
       "id": "autonomous/marp",
@@ -1434,7 +1434,7 @@
       "author": "Yuki Hattori",
       "description": "Describe a talk; get a keynote — huge type, generated art, speaker notes — live in the pane, exported to PDF, PPTX or HTML.",
       "repo": "https://github.com/autonomous-ai/openharness",
-      "ref": "aa07cf0cfa578d8747b7961cf9905527f3369a23",
+      "ref": "10c3f1b107746946697efdf0f0f0a7735b9f9d84",
       "path": "store/agents/marp",
       "homepage": "https://marp.app",
       "upstream": "https://github.com/marp-team/marp-cli",
@@ -1473,7 +1473,7 @@
       "runsScripts": true,
       "tier": 2,
       "verified": true,
-      "revision": "a1ee0d83444751baf803b209811e953bebdc0e56"
+      "revision": "2fbd5f2196bc330775f91c7fa646dbb3440587ad"
     },
     {
       "id": "autonomous/memories",
@@ -1482,7 +1482,7 @@
       "author": "Autonomous",
       "description": "Browse what every agent on this computer remembers — Claude Code, Codex, Grok Build, Hermes and more — beside a year of your work with them, and build an About You from your own words.",
       "repo": "https://github.com/autonomous-ai/openharness",
-      "ref": "aa07cf0cfa578d8747b7961cf9905527f3369a23",
+      "ref": "10c3f1b107746946697efdf0f0f0a7735b9f9d84",
       "path": "store/agents/memories",
       "license": "MIT",
       "tagline": "Every memory your agents keep, in one place",
@@ -1521,7 +1521,7 @@
       "runsScripts": true,
       "tier": 2,
       "verified": true,
-      "revision": "262604633eed79a77a3f194eb3ad02790c3f92d9"
+      "revision": "d7be4c42ae5920c60fd0084a18e158797ad5ab2d"
     },
     {
       "id": "autonomous/mlx-lm",
@@ -1530,7 +1530,7 @@
       "author": "OpenHarness contributors",
       "description": "Run language models directly on Apple Silicon with MLX-LM. Talk to Codex to download, load and compare models, with live progress and native performance measurements.",
       "repo": "https://github.com/autonomous-ai/openharness",
-      "ref": "aa07cf0cfa578d8747b7961cf9905527f3369a23",
+      "ref": "10c3f1b107746946697efdf0f0f0a7735b9f9d84",
       "path": "store/agents/mlx-lm",
       "homepage": "https://github.com/ml-explore/mlx-lm",
       "upstream": "https://github.com/ml-explore/mlx-lm",
@@ -1558,7 +1558,7 @@
       "runsScripts": true,
       "tier": 2,
       "verified": true,
-      "revision": "001b9914328bba08110ed9681d56c8d4ec8a9a13"
+      "revision": "94a45bddc2015670f3be68d6706cb706a77b2bcf"
     },
     {
       "id": "autonomous/model-viewer",
@@ -1568,7 +1568,7 @@
       "author": "Autonomous",
       "description": "Inspect live glTF exports with Blender-style navigation, measured properties and shading. Explore authored Blender controls in Shape Lab and keep rebuildable design directions.",
       "repo": "https://github.com/autonomous-ai/openharness",
-      "ref": "aa07cf0cfa578d8747b7961cf9905527f3369a23",
+      "ref": "10c3f1b107746946697efdf0f0f0a7735b9f9d84",
       "path": "store/viewers/model-viewer",
       "homepage": "https://threejs.org",
       "upstream": "https://github.com/mrdoob/three.js",
@@ -1576,7 +1576,7 @@
       "runsScripts": true,
       "tier": 2,
       "verified": true,
-      "revision": "a40e7a5f034e3606f34b1713c0ebd159f28ee080"
+      "revision": "1815b297d8f6b8aad39734f6f52587afad727c50"
     },
     {
       "id": "autonomous/mujoco",
@@ -1585,7 +1585,7 @@
       "author": "Google DeepMind",
       "description": "Build robots and controllers, then investigate them in live MuJoCo physics. Push a robot, compare two futures with different gravity or grip, and give the agent a reproducible experiment to improve.",
       "repo": "https://github.com/autonomous-ai/openharness",
-      "ref": "aa07cf0cfa578d8747b7961cf9905527f3369a23",
+      "ref": "10c3f1b107746946697efdf0f0f0a7735b9f9d84",
       "path": "store/agents/mujoco",
       "homepage": "https://mujoco.org",
       "upstream": "https://github.com/google-deepmind/mujoco",
@@ -1635,7 +1635,7 @@
       "runsScripts": true,
       "tier": 2,
       "verified": true,
-      "revision": "0516ec7e28386c2320225973ecc3be2f8381e180"
+      "revision": "9109cf8a3d311f28e9a95d4a903cecbd02361f0f"
     },
     {
       "id": "autonomous/mujoco-viewer",
@@ -1645,14 +1645,14 @@
       "author": "Autonomous",
       "description": "Live MuJoCo physics with actuator controls, replay, sensors and a What if lab: branch a moment, change the conditions, compare both futures and save a self-contained experiment.",
       "repo": "https://github.com/autonomous-ai/openharness",
-      "ref": "aa07cf0cfa578d8747b7961cf9905527f3369a23",
+      "ref": "10c3f1b107746946697efdf0f0f0a7735b9f9d84",
       "path": "store/viewers/mujoco-viewer",
       "upstream": "https://github.com/google-deepmind/mujoco",
       "license": "MIT",
       "runsScripts": true,
       "tier": 2,
       "verified": true,
-      "revision": "533226f64ca0d467fe599b310bd524e6d8bc55b3"
+      "revision": "5d8140d1e3085dc555486ddc83c8b9a50e542431"
     },
     {
       "id": "autonomous/music-studio",
@@ -1661,7 +1661,7 @@
       "author": "Autonomous",
       "description": "Compose and revise original music from your brief. Edit notes and arrangements, import MIDI and recordings, shape each instrument, and deliver stereo WAV, aligned stems, MIDI and an editable project.",
       "repo": "https://github.com/autonomous-ai/openharness",
-      "ref": "aa07cf0cfa578d8747b7961cf9905527f3369a23",
+      "ref": "10c3f1b107746946697efdf0f0f0a7735b9f9d84",
       "path": "store/agents/music-studio",
       "homepage": "https://github.com/autonomous-ai/openharness/tree/main/store/agents/music-studio",
       "license": "MIT",
@@ -1717,7 +1717,7 @@
       "author": "OpenHarness contributors",
       "description": "Run local language models by talking to Codex. A live viewer shows Ollama models, memory, deployment progress and measured performance on your Mac.",
       "repo": "https://github.com/autonomous-ai/openharness",
-      "ref": "aa07cf0cfa578d8747b7961cf9905527f3369a23",
+      "ref": "10c3f1b107746946697efdf0f0f0a7735b9f9d84",
       "path": "store/agents/ollama",
       "homepage": "https://ollama.com",
       "upstream": "https://github.com/ollama/ollama",
@@ -1745,7 +1745,7 @@
       "runsScripts": true,
       "tier": 2,
       "verified": true,
-      "revision": "23a8ea1fb6a4cd56786bc78ddf04bd2caca303bb"
+      "revision": "9645450a061f16f13f54e110161f697a2342d5fb"
     },
     {
       "id": "autonomous/openmontage",
@@ -1754,7 +1754,7 @@
       "author": "calesthio",
       "description": "Direct a film from the first idea to the final cut. Watch the script, shots, and edits arrive in a live studio; play each version and leave notes right on the film.",
       "repo": "https://github.com/autonomous-ai/openharness",
-      "ref": "aa07cf0cfa578d8747b7961cf9905527f3369a23",
+      "ref": "10c3f1b107746946697efdf0f0f0a7735b9f9d84",
       "path": "store/agents/openmontage",
       "homepage": "https://github.com/calesthio/OpenMontage",
       "upstream": "https://github.com/calesthio/OpenMontage",
@@ -1798,7 +1798,7 @@
       "runsScripts": true,
       "tier": 2,
       "verified": true,
-      "revision": "2d293dcf76a0b160b428578cb71c5335a96d0ffe"
+      "revision": "93f1c86e55bc6bf40cfb12e9f1bcd3c20108f313"
     },
     {
       "id": "autonomous/openscad",
@@ -1807,7 +1807,7 @@
       "author": "OpenSCAD",
       "description": "Turn measurements into parametric part families: compare fit variants, verify actual meshes, and download print-oriented STLs with an independently rebuildable project.",
       "repo": "https://github.com/autonomous-ai/openharness",
-      "ref": "aa07cf0cfa578d8747b7961cf9905527f3369a23",
+      "ref": "10c3f1b107746946697efdf0f0f0a7735b9f9d84",
       "path": "store/agents/openscad",
       "homepage": "https://openscad.org",
       "upstream": "https://github.com/openscad/openscad",
@@ -1852,7 +1852,7 @@
       "runsScripts": true,
       "tier": 2,
       "verified": true,
-      "revision": "43f06e3c9948da1a222b82dc4f7586e032f618db"
+      "revision": "9a3a557297bed53fe40e1bc6b10f4f8c6a97efea"
     },
     {
       "id": "autonomous/orca-slicer",
@@ -1861,7 +1861,7 @@
       "author": "OpenHarness contributors",
       "description": "Turn your STL and printer brief into compared slicing plans, checked G-code, editable native Orca projects and a portable handoff. Inspect actual paths and revise time/material tradeoffs without connecting a printer.",
       "repo": "https://github.com/autonomous-ai/openharness",
-      "ref": "aa07cf0cfa578d8747b7961cf9905527f3369a23",
+      "ref": "10c3f1b107746946697efdf0f0f0a7735b9f9d84",
       "path": "store/agents/orca-slicer",
       "homepage": "https://orca-slicer.pages.dev",
       "upstream": "https://github.com/OrcaSlicer/OrcaSlicer",
@@ -1911,7 +1911,7 @@
       "runsScripts": true,
       "tier": 2,
       "verified": true,
-      "revision": "c61ba15a02c72db29b5ca72b15650baa11390bfb"
+      "revision": "13acd714befc530f5b383dedbb5dc4c2966a2862"
     },
     {
       "id": "autonomous/phaser",
@@ -1920,7 +1920,7 @@
       "author": "Phaser Studio",
       "description": "Describe a game — a breakout, a platformer, a shooter, a puzzle — and play it in the pane as the agent writes it in Phaser 4, reloading on every save.",
       "repo": "https://github.com/autonomous-ai/openharness",
-      "ref": "aa07cf0cfa578d8747b7961cf9905527f3369a23",
+      "ref": "10c3f1b107746946697efdf0f0f0a7735b9f9d84",
       "path": "store/agents/phaser",
       "homepage": "https://phaser.io",
       "upstream": "https://github.com/phaserjs/phaser",
@@ -1959,7 +1959,7 @@
       "runsScripts": true,
       "tier": 2,
       "verified": true,
-      "revision": "c5d73f15c069056a53411a9ae962c4bb5390a992"
+      "revision": "f8ad2b5c9afb126df2a0df0f8689bd83a312185f"
     },
     {
       "id": "autonomous/rdkit",
@@ -1968,7 +1968,7 @@
       "author": "RDKit",
       "description": "Build molecules and analogues from a description, explore their 3D conformers, and turn a bond through a native energy scan you can keep and reproduce.",
       "repo": "https://github.com/autonomous-ai/openharness",
-      "ref": "aa07cf0cfa578d8747b7961cf9905527f3369a23",
+      "ref": "10c3f1b107746946697efdf0f0f0a7735b9f9d84",
       "path": "store/agents/rdkit",
       "homepage": "https://www.rdkit.org",
       "upstream": "https://github.com/rdkit/rdkit",
@@ -2017,7 +2017,7 @@
       "runsScripts": true,
       "tier": 2,
       "verified": true,
-      "revision": "d8e9120041276389ab66a6fba8a210a88e2e20d6"
+      "revision": "b7e4e3eb2eca98260d44039835a0c8bdc11c3f90"
     },
     {
       "id": "autonomous/remotion",
@@ -2026,7 +2026,7 @@
       "author": "Remotion",
       "description": "Describe a video — a product launch, an explainer, a data story — and watch it play in Remotion Studio as the agent writes it in React, then render it to MP4.",
       "repo": "https://github.com/autonomous-ai/openharness",
-      "ref": "aa07cf0cfa578d8747b7961cf9905527f3369a23",
+      "ref": "10c3f1b107746946697efdf0f0f0a7735b9f9d84",
       "path": "store/agents/remotion",
       "homepage": "https://www.remotion.dev",
       "upstream": "https://github.com/remotion-dev/remotion",
@@ -2065,7 +2065,7 @@
       "runsScripts": true,
       "tier": 2,
       "verified": true,
-      "revision": "5f5b285144abc7f68ddf0f62d4ec77fcc54339fb"
+      "revision": "cf10c1a61dd34844ba771114686c17aed6f851dc"
     },
     {
       "id": "autonomous/roundtable",
@@ -2074,7 +2074,7 @@
       "author": "Autonomous",
       "description": "Put a decision to a panel of coding agents — Claude, Codex, Grok, more — who research it independently, argue it out, and hand you the call with the dissent still attached.",
       "repo": "https://github.com/autonomous-ai/openharness",
-      "ref": "aa07cf0cfa578d8747b7961cf9905527f3369a23",
+      "ref": "10c3f1b107746946697efdf0f0f0a7735b9f9d84",
       "path": "store/agents/roundtable",
       "license": "MIT",
       "screenshots": [
@@ -2118,7 +2118,7 @@
       "runsScripts": true,
       "tier": 2,
       "verified": true,
-      "revision": "53a04d819fff2ceebb9bf1c264377042470c5554"
+      "revision": "9dbde37ac1dab40add35c8b9403cf16991b25963"
     },
     {
       "id": "autonomous/score",
@@ -2127,7 +2127,7 @@
       "author": "OpenHarness contributors",
       "description": "Turn a musical idea into editable music, checked instrument parts and a practice pack. Listen, isolate voices, reshape phrases and save a WAV sketch—no instruments required.",
       "repo": "https://github.com/autonomous-ai/openharness",
-      "ref": "aa07cf0cfa578d8747b7961cf9905527f3369a23",
+      "ref": "10c3f1b107746946697efdf0f0f0a7735b9f9d84",
       "path": "store/agents/score",
       "homepage": "https://lilypond.org",
       "upstream": "https://github.com/lilypond/lilypond",
@@ -2170,7 +2170,7 @@
       "runsScripts": true,
       "tier": 2,
       "verified": true,
-      "revision": "c7bf01b5ae165cd4376b9cf7ae8538c85b494ef2"
+      "revision": "dbbf97eac3a82293d6aaaa14e12fce8926c7be07"
     },
     {
       "id": "autonomous/simskill",
@@ -2179,7 +2179,7 @@
       "author": "Qiliu Chen and contributors",
       "description": "Make a little city flow better. Change the lights, watch the streets, and measure what happens.",
       "repo": "https://github.com/autonomous-ai/openharness",
-      "ref": "aa07cf0cfa578d8747b7961cf9905527f3369a23",
+      "ref": "10c3f1b107746946697efdf0f0f0a7735b9f9d84",
       "path": "store/agents/simskill",
       "homepage": "https://github.com/qiliuchn/SimSkill-V1",
       "upstream": "https://github.com/qiliuchn/SimSkill-V1",
@@ -2211,7 +2211,7 @@
       "runsScripts": true,
       "tier": 2,
       "verified": true,
-      "revision": "1e4677b11b0b2dd7fba12b636b0cde81bcc67e49"
+      "revision": "5e203c98436aa6846628633a70a0894ecbbaef73"
     },
     {
       "id": "autonomous/strudel",
@@ -2220,7 +2220,7 @@
       "author": "Strudel",
       "description": "Describe a track and perform it live in Strudel's own REPL. Mute voices, change code, mark a moment, and keep the actual performance as audio with its editable source.",
       "repo": "https://github.com/autonomous-ai/openharness",
-      "ref": "aa07cf0cfa578d8747b7961cf9905527f3369a23",
+      "ref": "10c3f1b107746946697efdf0f0f0a7735b9f9d84",
       "path": "store/agents/strudel",
       "homepage": "https://strudel.cc",
       "upstream": "https://github.com/tidalcycles/strudel",
@@ -2269,7 +2269,7 @@
       "runsScripts": true,
       "tier": 2,
       "verified": true,
-      "revision": "dcbfeead5018b8b03d59db2d8c82844b209e6521"
+      "revision": "5f79adc4ff4dbe1e98a6c6c4beac836e2e637501"
     },
     {
       "id": "autonomous/studio-viewer",
@@ -2279,7 +2279,7 @@
       "author": "OpenHarness contributors",
       "description": "An interactive workbench for experiments, instruments, simulations, and creative tools. Keep every run, compare results, and take your work with you.",
       "repo": "https://github.com/autonomous-ai/openharness",
-      "ref": "aa07cf0cfa578d8747b7961cf9905527f3369a23",
+      "ref": "10c3f1b107746946697efdf0f0f0a7735b9f9d84",
       "path": "store/viewers/studio-viewer",
       "homepage": "https://github.com/autonomous-ai/openharness",
       "license": "MIT",
@@ -2287,7 +2287,7 @@
       "runsScripts": true,
       "tier": 2,
       "verified": true,
-      "revision": "898fd34bcf86de3545796ee85fd726c0d6d89e87"
+      "revision": "733a4e2b6375dc22f56024f08540dd3149c71745"
     },
     {
       "id": "autonomous/text-to-cad",
@@ -2296,7 +2296,7 @@
       "author": "Jake Fitzgerald",
       "description": "Jake Fitzgerald's text-to-cad skills (earthtojake/text-to-cad), pinned: describe a part, get STEP with mesh exports, drawings, robot files and G-code, live in the CAD Viewer.",
       "repo": "https://github.com/autonomous-ai/openharness",
-      "ref": "aa07cf0cfa578d8747b7961cf9905527f3369a23",
+      "ref": "10c3f1b107746946697efdf0f0f0a7735b9f9d84",
       "path": "store/agents/text-to-cad",
       "homepage": "https://github.com/earthtojake/text-to-cad",
       "upstream": "https://github.com/earthtojake/text-to-cad",
@@ -2336,7 +2336,7 @@
       "runsScripts": true,
       "tier": 2,
       "verified": true,
-      "revision": "c772fd63f06c64b75e7e0b82fc030de1ceaa28f7"
+      "revision": "6b852afc9c69c95adc64df8d5e1b0512817c673d"
     },
     {
       "id": "autonomous/trailofbits-skills",
@@ -2345,7 +2345,7 @@
       "author": "Trail of Bits",
       "description": "Point it at a codebase; get a security audit the Trail of Bits way — context first, static analysis, variants, supply chain, every finding checked for false positives — as a live report in the pane.",
       "repo": "https://github.com/autonomous-ai/openharness",
-      "ref": "aa07cf0cfa578d8747b7961cf9905527f3369a23",
+      "ref": "10c3f1b107746946697efdf0f0f0a7735b9f9d84",
       "path": "store/agents/trailofbits-skills",
       "homepage": "https://github.com/trailofbits/skills",
       "upstream": "https://github.com/trailofbits/skills",
@@ -2380,7 +2380,7 @@
       "runsScripts": true,
       "tier": 2,
       "verified": true,
-      "revision": "c0915d7f0ceb69e4a2328d6903c64585b1085b75"
+      "revision": "9a11816d299ff9e3fbb3d547060009c6774ecbe3"
     },
     {
       "id": "autonomous/typst",
@@ -2389,7 +2389,7 @@
       "author": "Typst GmbH",
       "description": "Describe a document — a paper, a spec sheet, a report, a letter — and watch the PDF take shape as Typst compiles it on every save.",
       "repo": "https://github.com/autonomous-ai/openharness",
-      "ref": "aa07cf0cfa578d8747b7961cf9905527f3369a23",
+      "ref": "10c3f1b107746946697efdf0f0f0a7735b9f9d84",
       "path": "store/agents/typst",
       "homepage": "https://typst.app",
       "upstream": "https://github.com/typst/typst",
@@ -2449,13 +2449,13 @@
       "author": "Autonomous",
       "description": "An editor-grade player for what a harness renders: every render listed, chapters on the timeline, frame-accurate scrubbing with a filmstrip, loops and stills — and the render in progress playable as it is made.",
       "repo": "https://github.com/autonomous-ai/openharness",
-      "ref": "aa07cf0cfa578d8747b7961cf9905527f3369a23",
+      "ref": "10c3f1b107746946697efdf0f0f0a7735b9f9d84",
       "path": "store/viewers/video-viewer",
       "license": "MIT",
       "runsScripts": true,
       "tier": 2,
       "verified": true,
-      "revision": "b637abecad84ecb45ec16510d497a61ac8e13232"
+      "revision": "dab16d95ed4f45920b4315ace64b575ffdec73c6"
     },
     {
       "id": "autonomous/vllm",
@@ -2464,7 +2464,7 @@
       "author": "OpenHarness contributors",
       "description": "Serve language models on this Mac with vLLM Metal. Ask the agent to configure context, parallel sequences and prefix caching, then measure concurrent request throughput in the live viewer.",
       "repo": "https://github.com/autonomous-ai/openharness",
-      "ref": "aa07cf0cfa578d8747b7961cf9905527f3369a23",
+      "ref": "10c3f1b107746946697efdf0f0f0a7735b9f9d84",
       "path": "store/agents/vllm",
       "homepage": "https://docs.vllm.ai/projects/vllm-metal/en/latest/",
       "upstream": "https://github.com/vllm-project/vllm-metal",
@@ -2492,7 +2492,7 @@
       "runsScripts": true,
       "tier": 2,
       "verified": true,
-      "revision": "041ffde86ba7777414ca9df1c874e97a64841d97"
+      "revision": "b8186ba93a04f971df12f74d58d87eb1f279c178"
     },
     {
       "id": "autonomous/voxel-worlds",
@@ -2501,7 +2501,7 @@
       "author": "Autonomous",
       "description": "Turn an idea into an editable 3D environment and a reusable asset kit. Shape named objects, sculpt terrain, walk the result, import voxel assets and export GLB, VOX and an offline walkthrough.",
       "repo": "https://github.com/autonomous-ai/openharness",
-      "ref": "aa07cf0cfa578d8747b7961cf9905527f3369a23",
+      "ref": "10c3f1b107746946697efdf0f0f0a7735b9f9d84",
       "path": "store/agents/voxel-worlds",
       "homepage": "https://github.com/autonomous-ai/openharness/tree/main/store/agents/voxel-worlds",
       "license": "MIT",
@@ -2549,7 +2549,7 @@
       "runsScripts": true,
       "tier": 2,
       "verified": true,
-      "revision": "061338c700ea5d2d235695eb4c2abc6cbdb91b2b"
+      "revision": "1a52d8653710d7915e360af333fd9c5a45e9fb44"
     },
     {
       "id": "autonomous/web-studio",
@@ -2558,7 +2558,7 @@
       "author": "OpenHarness contributors",
       "description": "Build interactive pages and generative instruments with live previews, accessible controls, image export and real browser verification.",
       "repo": "https://github.com/autonomous-ai/openharness",
-      "ref": "aa07cf0cfa578d8747b7961cf9905527f3369a23",
+      "ref": "10c3f1b107746946697efdf0f0f0a7735b9f9d84",
       "path": "store/agents/web-studio",
       "homepage": "https://github.com/autonomous-ai/openharness/tree/main/store/agents/web-studio",
       "upstream": "https://github.com/autonomous-ai/openharness/tree/main/store/agents/web-studio",
@@ -2606,13 +2606,13 @@
       "author": "OpenHarness contributors",
       "description": "A live preview for HTML, CSS, and JavaScript in a harness workspace. Reloads when files change.",
       "repo": "https://github.com/autonomous-ai/openharness",
-      "ref": "aa07cf0cfa578d8747b7961cf9905527f3369a23",
+      "ref": "10c3f1b107746946697efdf0f0f0a7735b9f9d84",
       "path": "store/viewers/web-viewer",
       "license": "MIT",
       "runsScripts": true,
       "tier": 2,
       "verified": true,
-      "revision": "939dcb33e324f3c6625dc29888ea5618be3292f4"
+      "revision": "528143244eeba7568581a7d1c2fe3448cd015551"
     },
     {
       "id": "autonomous/yosys",
@@ -2621,7 +2621,7 @@
       "author": "YosysHQ",
       "description": "Describe a digital circuit — a counter, a UART, a state machine — and get Verilog, a simulation with waveforms, a synthesized gate-level schematic and an FPGA bitstream for an iCE40 board. Prompt to silicon.",
       "repo": "https://github.com/autonomous-ai/openharness",
-      "ref": "aa07cf0cfa578d8747b7961cf9905527f3369a23",
+      "ref": "10c3f1b107746946697efdf0f0f0a7735b9f9d84",
       "path": "store/agents/yosys",
       "homepage": "https://yosyshq.net",
       "upstream": "https://github.com/YosysHQ/yosys",
@@ -2660,7 +2660,7 @@
       "runsScripts": true,
       "tier": 2,
       "verified": true,
-      "revision": "f12f0990a12f3ba06d29f1585fce4da2d432c3ea"
+      "revision": "02c47edba1cd0072b8a4a11a1ef852ba164af59a"
     },
     {
       "id": "progretech-llc/pycharm",
