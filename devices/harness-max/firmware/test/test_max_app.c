@@ -9,6 +9,7 @@
 #include "max_test.h"
 
 #include "app/max_app.h"
+#include "app/max_chime.h"
 #include "app/pro_touch.h"
 #include "app/pro_voice.h"
 #include "audio/audio_capture.h"
@@ -107,7 +108,14 @@ bool pro_cable_send_open(const char *agent_id)
     snprintf(OPENED, sizeof OPENED, "%s", agent_id);
     return true;
 }
-void audio_beep(void) { CHECK(LOCK_DEPTH == 0); BEEPS++; }
+// The board's chimes: BEEPS counts them all, CHIMES each sound.
+static int CHIMES[3];
+void max_chime(max_chime_t sound)
+{
+    CHECK(LOCK_DEPTH == 0 && (int)sound >= 0 && (int)sound < 3);
+    BEEPS++;
+    CHIMES[sound]++;
+}
 static char PICKED[PRO_APP_ID_BYTES];
 bool pro_cable_app_pick(const char *app, bool wait)
 {
@@ -174,7 +182,8 @@ time_t time(time_t *out)
     if (out) *out = WALL;
     return WALL;
 }
-bool pro_settings_muted(void) { return false; }
+static bool MUTED;
+bool pro_settings_muted(void) { return MUTED; }
 void pro_cable_counters(uint32_t *bad, uint32_t *unknown) { *bad = *unknown = 0; }
 uint32_t pro_cable_seq_gaps(void) { return 0; }
 cable_link_stats_t cable_link_stats(void) { return (cable_link_stats_t){0}; }
@@ -401,6 +410,12 @@ static void test_an_app_card_picks_it(void)
     PICKED[0] = 0;
     tap_on(plant(MAX_HIT_APP, 1));
     CHECK(!strcmp(PICKED, "vscode") && max_m.view == MAX_VIEW_OVERVIEW);
+    // The daemon turns to it: the person's own pick, so no "Following"; the computer turning it back is followed.
+    pro_app_toast(NULL);
+    pro_app_apps("vscode", apps, 2);
+    CHECK(!max_notice_shown(now) && LOCK_DEPTH == 0);
+    pro_app_apps("orca", apps, 2);
+    CHECK(!strcmp(max_m.notice, "Following Orca on your Mac"));
 }
 
 // Attention outside its buttons brings the agent up on the computer, after the lock, and says where.
@@ -457,20 +472,112 @@ static void test_question_chimes_once(void)
     fresh();
     now += 60000;   // past the last chime's coalescing window
     BEEPS = 0;
-    pro_app_ask("a", "r1", "Proceed?", NULL, 0, false);
+    pro_app_ask("a", NULL, "r1", "Proceed?", NULL, 0, false, false);
     CHECK(BEEPS == 1);
     now += 60000;
     fresh();
-    pro_app_ask("a", "r1", "Proceed?", NULL, 0, false);
+    pro_app_ask("a", NULL, "r1", "Proceed?", NULL, 0, false, false);
     CHECK(BEEPS == 1);
     pro_app_question_close("a");
     now += 60000;
-    pro_app_ask("a", "r2", "And this?", NULL, 0, false);
-    CHECK(BEEPS == 2);
-    // A failed turn is an alert too, but a second alert within 30 s does not chime again.
+    pro_app_ask("a", NULL, "r2", "And this?", NULL, 0, false, false);
+    CHECK(BEEPS == 2 && CHIMES[MAX_CHIME_ASK] == 2);
+}
+
+static void reset_chimes(void)
+{
+    now += 60000;   // past every sound's coalescing window
+    BEEPS = 0;
+    memset(CHIMES, 0, sizeof CHIMES);
+}
+
+// Each alert its sound (V3's): a question rings MAX_CHIME_ASK, a failure MAX_CHIME_FAILED, a loud finished turn
+// MAX_CHIME_DONE. A summary of the list or silent tier, one restored on connect, and a failure's own summary are not
+// news. Each sound once per 30 s, so a soft done never holds back a question's chime.
+static void test_each_alert_its_chime(void)
+{
+    fresh();
+    reset_chimes();
+    pro_app_ask("a", NULL, "r1", "Proceed?", NULL, 0, false, false);
+    CHECK(BEEPS == 1 && CHIMES[MAX_CHIME_ASK] == 1);
     pro_app_turn("b", "started", "", 0);
     pro_app_turn("b", "error", "boom", 0);
+    CHECK(BEEPS == 2 && CHIMES[MAX_CHIME_FAILED] == 1);
+    pro_app_summary("b", "Could not reach the API", NULL, NULL, false, POD_TIER_ALERT);   // the failure's words
+    pro_app_turn("c", "started", "", 0);
+    pro_app_summary("c", "Listed", NULL, NULL, false, POD_TIER_LIST);
+    pro_app_turn("d", "started", "", 0);
+    pro_app_summary("d", "Quiet", NULL, NULL, false, POD_TIER_SILENT);
+    pro_app_summary("e", "From before", NULL, NULL, true, POD_TIER_ALERT);
     CHECK(BEEPS == 2);
+    pro_app_turn("f", "started", "", 0);
+    pro_app_summary("f", "Fixed the flaky test", NULL, NULL, false, POD_TIER_ALERT);
+    CHECK(BEEPS == 3 && CHIMES[MAX_CHIME_DONE] == 1);
+    // Within 30 s of its own last play a sound waits; another sound does not.
+    now += 29000;
+    pro_app_ask("g", NULL, "r2", "Merge?", NULL, 0, false, false);
+    pro_app_turn("h", "started", "", 0);
+    pro_app_turn("h", "error", "boom", 0);
+    pro_app_turn("i", "started", "", 0);
+    pro_app_summary("i", "Shipped", NULL, NULL, false, POD_TIER_ALERT);
+    CHECK(BEEPS == 3);
+    now += 1000;
+    pro_app_ask("j", NULL, "r3", "Push?", NULL, 0, false, false);
+    CHECK(BEEPS == 4 && CHIMES[MAX_CHIME_ASK] == 2 && LOCK_DEPTH == 0);
+    // Muted: no sound, the glass still wakes.
+    reset_chimes();
+    MUTED = true;
+    pro_app_sleep();
+    pro_app_ask("k", NULL, "r4", "Deploy?", NULL, 0, false, false);
+    CHECK(BEEPS == 0 && !pro_app_asleep());
+    MUTED = false;
+}
+
+// A `tier: "list"` question (one the bar was told before) is filed silently once the welcome lists question.tier: no
+// chime, no wake, no Attention. From a daemon that did not list it the flag vouches for nothing: it rings.
+static void test_listed_question_is_silent(void)
+{
+    fresh();
+    FEATURES = CABLE_FEATURE_FORM | CABLE_FEATURE_QUESTION_REVIEW | CABLE_FEATURE_QUESTION_TIER;
+    now += 60000;   // past the last chime's coalescing window
+    BEEPS = 0;
+    pro_app_sleep();
+    pro_app_ask("a", NULL, "r1", "Proceed?", NULL, 0, false, true);
+    CHECK(BEEPS == 0 && pro_app_asleep() && max_m.view == MAX_VIEW_OVERVIEW);
+    CHECK(max_find("a")->state == MAX_ASKING && max_m.inbox[0].unread && LOCK_DEPTH == 0);
+    FEATURES = CABLE_FEATURE_FORM | CABLE_FEATURE_QUESTION_REVIEW;
+    pro_app_ask("b", NULL, "r2", "And this?", NULL, 0, false, true);
+    CHECK(BEEPS == 1 && !pro_app_asleep() && max_m.view == MAX_VIEW_ATTENTION && !strcmp(max_m.attn_id, "b"));
+}
+
+// A question of an agent off the ring (another app's) rings once and files its notice under the frame's name; the page
+// stays, as its agent is not on the bar.
+static void test_question_off_the_ring_rings_once(void)
+{
+    fresh();
+    now += 60000;
+    BEEPS = 0;
+    pro_app_ask("zz", "Zed", "r9", "Ship it?", NULL, 0, false, false);
+    CHECK(BEEPS == 1 && max_m.view == MAX_VIEW_OVERVIEW && !strcmp(max_m.inbox[0].name, "Zed"));
+    CHECK(!strcmp(max_m.inbox[0].text, "Ship it?") && max_m.inbox[0].unread && LOCK_DEPTH == 0);
+    now += 60000;
+    pro_app_ask("zz", "Zed", "r9", "Ship it?", NULL, 0, false, false);
+    CHECK(BEEPS == 1);
+}
+
+// notif.replace: a question row makes its ring agent ask, silently (the daemon sends no `question` for it); news rows
+// file nothing.
+static void test_drawer_rows(void)
+{
+    fresh();
+    now += 60000;
+    BEEPS = 0;
+    const int inbox = max_m.inbox_count;
+    const pro_notif_row_t rows[] = {{"c", "c", "Keep the dark gradient?", "", true}, {"d", "d", "Done.", "t1", false}};
+    pro_app_notif_replace(rows, 2);
+    CHECK(max_find("c")->state == MAX_ASKING && !strcmp(max_find("c")->question, "Keep the dark gradient?"));
+    CHECK(BEEPS == 0 && max_m.view == MAX_VIEW_OVERVIEW && max_m.inbox_count == inbox + 1 && LOCK_DEPTH == 0);
+    CHECK(max_find("d")->state != MAX_DONE);
 }
 
 // ---- answering and New Harness ----
@@ -484,26 +591,32 @@ static void test_reviewed_answer_is_sent_after_the_lock(void)
     fresh();
     FEATURES = CABLE_FEATURE_FORM | CABLE_FEATURE_QUESTION_REVIEW;
     SENDS = OPENS = 0;
-    pro_app_ask("a", "toolu_1", DB.q, &DB, 1, false);
+    pro_app_ask("a", NULL, "toolu_1", DB.q, &DB, 1, false, false);
     CHECK(SENDS == 0 && max_m.view == MAX_VIEW_ATTENTION);   // nothing goes from the cable_link task's callback
     drawn_page(MAX_VIEW_ATTENTION);
     contact(HT_WIDTH - 2, HT_HEIGHT - 2, 0, 0);   // where nothing is drawn
-    CHECK(SENDS == 1 && WAITED && !strcmp(last_sent(), "question.read a q1"));
-    pro_app_question_state("a", "q1", true, "toolu_1", "tok", false, NULL, &DB, 1);
+    // Reads are numbered across the run (earlier tests' questions were read too): the card names this one's.
+    char fetch[16], want[64];
+    snprintf(fetch, sizeof fetch, "%s", max_ask_of("a")->fetch);
+    snprintf(want, sizeof want, "question.read a %s", fetch);
+    CHECK(SENDS == 1 && WAITED && !strcmp(last_sent(), want));
+    pro_app_question_state("a", fetch, true, "toolu_1", "tok", false, NULL, &DB, 1);
     attention_drawn(2);
     tap_on(find_hit(MAX_HIT_OPTION, 1));
-    CHECK(SENDS == 2 && WAITED && !strcmp(last_sent(), "answer.reviewed a tok q1 1:2"));
+    snprintf(want, sizeof want, "answer.reviewed a tok %s 1:2", fetch);
+    CHECK(SENDS == 2 && WAITED && !strcmp(last_sent(), want));
     CHECK(OPENS == 0 && max_m.view == MAX_VIEW_OVERVIEW);   // a button is not the page around it
-    pro_app_answer_receipt("a", "q1", "tok", true, false, NULL);
+    pro_app_answer_receipt("a", fetch, "tok", true, false, NULL);
     CHECK(!strcmp(max_m.notice, "Sent") && max_find("a")->state == MAX_WORKING);
     // The daemon refuses it: its words.
-    pro_app_ask("a", "toolu_2", DB.q, &DB, 1, true);
+    pro_app_ask("a", NULL, "toolu_2", DB.q, &DB, 1, true, false);
     drawn_page(MAX_VIEW_ATTENTION);
     contact(HT_WIDTH - 2, HT_HEIGHT - 2, 0, 0);   // where nothing is drawn
-    pro_app_question_state("a", "q2", true, "toolu_2", "tok2", false, NULL, &DB, 1);
+    snprintf(fetch, sizeof fetch, "%s", max_ask_of("a")->fetch);
+    pro_app_question_state("a", fetch, true, "toolu_2", "tok2", false, NULL, &DB, 1);
     attention_drawn(2);
     tap_on(find_hit(MAX_HIT_OPTION, 0));
-    pro_app_answer_receipt("a", "q2", "tok2", false, false, "Permission prompts cannot be answered from here.");
+    pro_app_answer_receipt("a", fetch, "tok2", false, false, "Permission prompts cannot be answered from here.");
     CHECK(!strcmp(max_m.notice, "Permission prompts cannot be answered from here."));
     CHECK(LOCK_DEPTH == 0);
 }
@@ -514,7 +627,7 @@ static void test_plain_answer_and_a_full_port(void)
     fresh();
     FEATURES = CABLE_FEATURE_FORM;
     SENDS = 0;
-    pro_app_ask("a", "toolu_1", DB.q, &DB, 1, false);
+    pro_app_ask("a", NULL, "toolu_1", DB.q, &DB, 1, false, false);
     attention_drawn(2);
     PORT_FULL = true;
     tap_on(find_hit(MAX_HIT_OPTION, 0));
@@ -599,6 +712,10 @@ int main(void)
     test_update_gate_holds_talk();
     test_asleep_refuses_the_finger();
     test_question_chimes_once();
+    test_each_alert_its_chime();
+    test_listed_question_is_silent();
+    test_question_off_the_ring_rings_once();
+    test_drawer_rows();
     test_reviewed_answer_is_sent_after_the_lock();
     test_plain_answer_and_a_full_port();
     test_new_harness();

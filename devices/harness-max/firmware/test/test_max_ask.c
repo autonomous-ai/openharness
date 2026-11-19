@@ -3,6 +3,8 @@
 #include "max_test.h"
 
 static const char *const ABC[] = {"a", "b", "c"};
+static const char *const ABCD[] = {"a", "b", "c", "d"};
+static const char *const ABCDE[] = {"a", "b", "c", "d", "e"};
 static max_out_t OUT[MAX_OUTBOX];
 static max_answer_t ANSWER;
 
@@ -58,23 +60,26 @@ static void test_paths(void)
     keyless.key = NULL;   // too long to echo
     CHECK(max_ui_question("b", "toolu_4", "Which database?", &keyless, 1, false, false, 0));
     CHECK(ask("b")->path == MAX_PATH_NONE);
-    // No questions the inbox would hold, or no request: only the computer answers.
+    // With question.review every question is read first, the daemon's summary frame (no questions) and one with no
+    // request (the read names it) too. Without it, those are the computer's.
     CHECK(max_ui_question("c", "toolu_5", "Proceed?", NULL, 0, false, true, 0));
-    CHECK(ask("c")->path == MAX_PATH_NONE && ask("c")->count == 0);
+    CHECK(ask("c")->path == MAX_PATH_REVIEWED && ask("c")->phase == MAX_ASK_READING);
     CHECK(max_ui_question("c", NULL, "Proceed?", &DB, 1, false, true, 0));
-    CHECK(ask("c")->path == MAX_PATH_NONE);
+    CHECK(ask("c")->path == MAX_PATH_REVIEWED && ask("c")->request[0] == 0);
+    CHECK(max_ui_question("c", "toolu_5", "Proceed?", NULL, 0, false, false, 0) && ask("c")->path == MAX_PATH_NONE);
+    CHECK(max_ui_question("c", NULL, "Proceed?", &DB, 1, false, false, 0) && ask("c")->path == MAX_PATH_NONE);
     // Shown only: answered in the agent's own app, named by its one option.
     static const pro_ask_item_t shown = {"shown", "Allow Edit of src/auth/session.ts?", {"In Orca"}, 1, false, true};
     CHECK(max_ui_question("c", "shown:toolu_6", shown.q, &shown, 1, true, true, 0));
     CHECK(ask("c")->path == MAX_PATH_SHOWN && !strcmp(ask("c")->app, "Orca") && ask("c")->permission);
     CHECK(max_m.out_count == 0 && take(0) == 1 && !strcmp(OUT[0].agent, "a"));   // the clock reads: a's only
-    // The permission mark is the daemon's; with no questions there is nothing to approve.
+    // The permission mark is the daemon's, kept on its summary frame: the read brings the yes and the no.
     CHECK(max_ui_question("b", "toolu_7", DEPLOY.q, &DEPLOY, 1, true, false, 0) && ask("b")->permission);
-    CHECK(max_ui_question("b", "toolu_8", DEPLOY.q, NULL, 0, true, false, 0) && !ask("b")->permission);
+    CHECK(max_ui_question("b", "toolu_8", DEPLOY.q, NULL, 0, true, false, 0) && ask("b")->permission);
     CHECK(max_ui_question("b", "toolu_9", DEPLOY.q, &DEPLOY, 1, false, false, 0) && !ask("b")->permission);
-    // The same question again is no change; an agent not on the roster is nobody's.
+    // The same question again is no change; one of an agent not on the roster gets no card (it waits for its agent).
     CHECK(!max_ui_question("b", "toolu_9", DEPLOY.q, &DEPLOY, 1, false, false, 10));
-    CHECK(!max_ui_question("zz", "toolu_1", DEPLOY.q, &DEPLOY, 1, false, false, 10));
+    CHECK(max_ui_question("zz", "toolu_1", DEPLOY.q, &DEPLOY, 1, false, false, 10) && !ask("zz"));
 }
 
 static void test_reads(void)
@@ -107,16 +112,171 @@ static void test_reads(void)
     take(0);
     CHECK(max_ui_question_state("b", ask("b")->fetch, false, NULL, NULL, false, "Question changed.", NULL, 0, 0));
     CHECK(ask("b")->phase == MAX_ASK_FAILED && !strcmp(ask("b")->note, "Question changed."));
-    hit("b", MAX_HIT_RELOAD, 0, 0);
-    take(0);
-    CHECK(max_ui_question_state("b", ask("b")->fetch, true, "toolu_2", "tok", false, NULL, NULL, 0, 0));
-    CHECK(ask("b")->phase == MAX_ASK_FAILED && !strcmp(ask("b")->note, "Could not load the question."));
     // Answered already: shown as sent, never sent again.
     hit("b", MAX_HIT_RELOAD, 0, 0);
     take(0);
     CHECK(max_ui_question_state("b", ask("b")->fetch, true, "toolu_2", "tok", true, NULL, &DB, 1, 0));
     CHECK(ask("b")->phase == MAX_ASK_SENT && !strcmp(ask("b")->note, "An answer was already sent. Check the terminal."));
     CHECK(!hit("b", MAX_HIT_OPTION, 0, 0) && !hit("b", MAX_HIT_RELOAD, 0, 0));
+}
+
+// Today's daemon sends a question as its summary (cableSession.ts giveQuestion: the first question's words, no key, no
+// options). With question.review it is read whole first and its options are question.state's; read, a question the
+// daemon holds as its summary alone has none, and the computer answers it, in its words. Without question.review only
+// the computer answers it.
+static void test_summary_frames(void)
+{
+    linked(ABC, 3);
+    CHECK(max_ui_question("a", "toolu_1", "Which database?", NULL, 0, false, true, 0));
+    const max_ask_t *k = ask("a");
+    CHECK(k->path == MAX_PATH_REVIEWED && k->phase == MAX_ASK_READING && max_takes_answers(max_find("a")));
+    // While it is read the card has its words and nothing to press.
+    CHECK(k->count == 1 && !strcmp(k->items[0].q, "Which database?") && k->items[0].option_count == 0);
+    CHECK(!hit("a", MAX_HIT_OPTION, 0, 0));
+    CHECK(take(0) == 1 && OUT[0].kind == MAX_OUT_READ && !strcmp(OUT[0].agent, "a"));
+    CHECK(max_ui_question_state("a", OUT[0].fetch, true, "toolu_1", "tok", false, NULL, &DB, 1, 0));
+    CHECK(k->phase == MAX_ASK_READY && k->items[0].option_count == 2 && hit("a", MAX_HIT_OPTION, 1, 0));
+    CHECK(take(0) == 1 && OUT[0].kind == MAX_OUT_REVIEWED && OUT[0].choices[0] == 2 && !strcmp(OUT[0].token, "tok"));
+    // Its summary alone: ok, no questions. On the computer, in the words it came with; nothing to press or reload.
+    CHECK(max_ui_question("b", "toolu_2", "Approve the plan?", NULL, 0, false, true, 0));
+    take(0);
+    CHECK(max_ui_question_state("b", ask("b")->fetch, true, "toolu_2", "tok", false, NULL, NULL, 0, 0));
+    CHECK(ask("b")->path == MAX_PATH_NONE && ask("b")->phase == MAX_ASK_READY && !max_takes_answers(max_find("b")));
+    CHECK(ask("b")->count == 1 && !strcmp(ask("b")->items[0].q, "Approve the plan?") && ask("b")->note[0] == 0);
+    CHECK(!hit("b", MAX_HIT_OPTION, 0, 0) && !hit("b", MAX_HIT_RELOAD, 0, 0) && take(MAX_READ_MS * 4) == 0);
+    // Without question.review: the computer's, in its words, never read.
+    CHECK(max_ui_question("c", "toolu_3", "Proceed?", NULL, 0, false, false, 0));
+    CHECK(ask("c")->path == MAX_PATH_NONE && ask("c")->count == 1 && !strcmp(ask("c")->items[0].q, "Proceed?"));
+    CHECK(take(0) == 0 && !max_takes_answers(max_find("c")));
+    // A permission prompt keeps its mark through the read, which brings its yes and no.
+    CHECK(max_ui_question("c", "toolu_4", DEPLOY.q, NULL, 0, true, true, 0) && ask("c")->permission);
+    take(0);
+    CHECK(max_ui_question_state("c", ask("c")->fetch, true, "toolu_4", "tok", false, NULL, &DEPLOY, 1, 0));
+    CHECK(ask("c")->permission && ask("c")->phase == MAX_ASK_READY && ask("c")->items[0].option_count == 2);
+}
+
+// A wait the bar only shows (a `shown:` id) is answered in the agent's own app, and never read: the daemon refuses its
+// answer. The summary frame no longer names the app in an option ("In Orca"): the agent's host does, as the daemon names
+// it (hostDetect.ts NAMES); one it does not name leaves the card to the shown app (max_app_of).
+static void test_shown_names_its_app(void)
+{
+    max_ui_reset();
+    max_ui_link(true, "MacBook Pro", 0);
+    const pro_agent_row_t rows[] = {{"a", "a", "claude", "m1", "Mac", "cmux", NULL},
+                                    {"b", "b", "claude", "m1", "Mac", "vscode", NULL},
+                                    {"c", "c", "claude", "m1", "Mac", NULL, NULL},
+                                    {"d", "d", "codex", "m1", "Mac", "opencode", NULL},
+                                    {"e", "e", "codex", "m1", "Mac", "nowhere", NULL}};
+    max_ui_agents(rows, 5, 0);
+    CHECK(max_ui_question("a", "shown:w1", "npm test \xc2\xb7 answer in cmux", NULL, 0, false, true, 0));
+    CHECK(ask("a")->path == MAX_PATH_SHOWN && !strcmp(ask("a")->app, "cmux") && take(0) == 0);
+    CHECK(max_ui_question("b", "shown:w2", "Allow?", NULL, 0, false, true, 0) && !strcmp(ask("b")->app, "VS Code"));
+    CHECK(max_ui_question("d", "shown:w3", "Allow?", NULL, 0, false, true, 0) && !strcmp(ask("d")->app, "opencode"));
+    CHECK(max_ui_question("c", "shown:w4", "Allow?", NULL, 0, false, true, 0) && ask("c")->app[0] == 0);
+    CHECK(max_ui_question("e", "shown:w5", "Allow?", NULL, 0, false, true, 0) && ask("e")->app[0] == 0);
+    CHECK(!max_takes_answers(max_find("a")) && !hit("a", MAX_HIT_OPTION, 0, 0));
+    // One with no id (a drawer row's) is read; the daemon's own id says shown, its one option the app.
+    CHECK(max_ui_question("c", NULL, "Allow the edit?", NULL, 0, false, true, 0) && ask("c")->path == MAX_PATH_REVIEWED);
+    CHECK(take(0) == 1 && OUT[0].kind == MAX_OUT_READ);
+    static const pro_ask_item_t IN_ORCA = {"notice", "Allow the edit?", {"In Orca"}, 1, false, true};
+    CHECK(max_ui_question_state("c", OUT[0].fetch, true, "shown:w6", "tok", false, NULL, &IN_ORCA, 1, 0));
+    CHECK(ask("c")->path == MAX_PATH_SHOWN && !strcmp(ask("c")->app, "Orca") && ask("c")->phase == MAX_ASK_READY);
+    CHECK(!max_takes_answers(max_find("c")) && !hit("c", MAX_HIT_OPTION, 0, 0) && max_m.out_count == 0);
+    // The app an agent of the ring is in: the shown app's name, else its host's, else the host as it came.
+    CHECK(!strcmp(max_app_of(max_find("b")), "VS Code") && !strcmp(max_app_of(max_find("e")), "nowhere"));
+    CHECK(!strcmp(max_app_of(max_find("c")), "") && !strcmp(max_app_of(NULL), ""));
+    const pro_app_row_t apps[] = {{"ghostty", "Ghostty", 5, 0}};
+    max_ui_apps("ghostty", apps, 1, 0);
+    CHECK(!strcmp(max_app_of(max_find("b")), "Ghostty"));
+    CHECK(!strcmp(max_app_name("codex"), "ChatGPT") && !strcmp(max_app_name("iterm"), "iTerm2") && !max_app_name("x"));
+    CHECK(!max_app_name(NULL) && !max_app_name(""));
+}
+
+// notif.replace's rows (max_ui_notices). The daemon holds the bar to every question row (it sends no `question` for
+// one): a ring agent that does not ask asks that question, quietly, read whole like any (the read names its id); one
+// that asks keeps its own. News rows file nothing: the bar's Inbox keeps its own turns, which the window's unread list
+// would double in other words.
+static void test_question_rows(void)
+{
+    linked(ABC, 3);
+    CHECK(max_ui_question("b", "toolu_9", "Merge?", NULL, 0, false, true, 0));
+    CHECK(take(0) == 1);   // b's read
+    const int inbox = max_m.inbox_count;
+    const pro_notif_row_t rows[] = {{"a", "a", "Keep the dark gradient?", "", true},
+                                    {"b", "b", "Something older?", "", true},
+                                    {"c", "c", "Shipped the release notes.", "t1", false}};
+    CHECK(max_ui_notices(rows, 3, true, 1000));
+    const max_agent_t *a = max_find("a");
+    CHECK(a->state == MAX_ASKING && !strcmp(a->question, "Keep the dark gradient?") && a->quiet);
+    CHECK(!strcmp(max_m.attn_id, "b") && !strcmp(max_find("b")->question, "Merge?"));
+    CHECK(max_find("c")->state == MAX_IDLE);
+    CHECK(max_m.inbox_count == inbox + 1 && !strcmp(max_m.inbox[0].id, "a") && max_m.inbox[0].unread);
+    CHECK(ask("a")->path == MAX_PATH_REVIEWED && ask("a")->phase == MAX_ASK_READING);
+    CHECK(take(1000) == 1 && OUT[0].kind == MAX_OUT_READ && !strcmp(OUT[0].agent, "a"));
+    CHECK(max_ui_question_state("a", OUT[0].fetch, true, "toolu_3", "tok", false, NULL, &DB, 1, 1000));
+    CHECK(!strcmp(ask("a")->request, "toolu_3") && ask("a")->phase == MAX_ASK_READY && ask("a")->count == 1);
+    CHECK(!max_ui_notices(rows, 3, true, 2000));   // the same drawer again: nothing new
+    // Without question.review: its words alone, answered on the computer.
+    linked(ABC, 3);
+    CHECK(max_ui_notices(rows, 1, false, 0) && ask("a")->path == MAX_PATH_NONE && ask("a")->count == 1);
+    CHECK(!strcmp(ask("a")->items[0].q, "Keep the dark gradient?") && max_m.view == MAX_VIEW_OVERVIEW);
+    // Rows the bar cannot keep: no agent, no words.
+    const pro_notif_row_t bad[] = {{NULL, "x", "Why?", "", true}, {"", "x", "Why?", "", true}, {"b", "b", "", "", true}};
+    CHECK(!max_ui_notices(bad, 3, true, 0) && max_find("b")->state == MAX_IDLE);
+    CHECK(!max_ui_notices(NULL, 0, true, 0));
+}
+
+// A question of an agent off the ring (a row; a `question` of an agent in another app; one whose agent left the ring)
+// waits for it: it comes back quietly when the agent joins the ring, its notice in Inbox meanwhile. A close, a turn
+// that moves on, the next drawer and the link going end it.
+static void test_questions_off_the_ring(void)
+{
+    linked(ABC, 3);
+    const pro_notif_row_t row = {"d", "delta", "Deploy to staging?", "", true};
+    CHECK(max_ui_notices(&row, 1, true, 1000));
+    CHECK(!max_find("d") && max_m.inbox_count == 1 && !strcmp(max_m.inbox[0].id, "d"));
+    CHECK(!strcmp(max_m.inbox[0].name, "delta") && max_m.inbox[0].unread && max_m.view == MAX_VIEW_OVERVIEW);
+    CHECK(!max_ui_notices(&row, 1, true, 1050));   // filed already
+    // A `question` of an agent in another app: a new notice (it rang), no page.
+    CHECK(max_ui_question("e", "toolu_5", "Push?", NULL, 0, false, true, 1100));
+    CHECK(!max_find("e") && max_m.inbox_count == 2 && !strcmp(max_m.inbox[0].id, "e"));
+    CHECK(max_m.inbox[0].unread && max_m.view == MAX_VIEW_OVERVIEW);
+    CHECK(!max_ui_question("e", "toolu_5", "Push?", NULL, 0, false, true, 1150));   // sent again
+    // A quiet one, of an agent off the ring, keeps its notice as it was.
+    CHECK(max_show(MAX_VIEW_INBOX) && max_show(MAX_VIEW_OVERVIEW) && max_unread() == 0);
+    max_ui_question_quiet("e", "toolu_5", "Push?", NULL, 0, false, true, 1200);
+    CHECK(max_unread() == 0);
+    // d and e join the ring: they ask, quietly, their notices as they were.
+    roster(ABCDE, 5);
+    CHECK(max_find("d")->state == MAX_ASKING && !strcmp(max_find("d")->question, "Deploy to staging?"));
+    CHECK(ask("d")->path == MAX_PATH_REVIEWED && max_find("d")->quiet);
+    CHECK(max_find("e")->state == MAX_ASKING && !strcmp(ask("e")->request, "toolu_5") && max_find("e")->quiet);
+    CHECK(max_m.view == MAX_VIEW_OVERVIEW && max_m.inbox_count == 2 && max_unread() == 0);
+    // e leaves the ring asking: its question waits for it again.
+    roster(ABCD, 4);
+    CHECK(max_ask_of("e") == NULL);
+    roster(ABCDE, 5);
+    CHECK(max_find("e")->state == MAX_ASKING && !strcmp(max_find("e")->question, "Push?"));
+    CHECK(!strcmp(ask("e")->request, "toolu_5"));
+    // What ends one off the ring: its close, a turn that moves on.
+    roster(ABC, 3);
+    max_ui_question_close("d");
+    max_ui_turn("e", "started", "", 0, 2000);
+    roster(ABCDE, 5);
+    CHECK(max_find("d")->state != MAX_ASKING && max_find("e")->state != MAX_ASKING);
+    // The next drawer, which names it no more (the daemon gives any other one again by its own rule).
+    roster(ABC, 3);
+    max_ui_notices(&row, 1, true, 3000);
+    max_ui_notices(NULL, 0, true, 3100);
+    roster(ABCDE, 5);
+    CHECK(max_find("d")->state != MAX_ASKING);
+    // The link.
+    roster(ABC, 3);
+    max_ui_notices(&row, 1, true, 4000);
+    max_ui_link(false, NULL, 4100);
+    max_ui_link(true, "MacBook Pro", 4200);
+    roster(ABCDE, 5);
+    CHECK(max_find("d")->state != MAX_ASKING);
 }
 
 static void test_reviewed_answer(void)
@@ -365,6 +525,10 @@ int main(void)
     test_permission_words();
     test_paths();
     test_reads();
+    test_summary_frames();
+    test_shown_names_its_app();
+    test_question_rows();
+    test_questions_off_the_ring();
     test_reviewed_answer();
     test_steps_and_several_choices();
     test_plain_answer();

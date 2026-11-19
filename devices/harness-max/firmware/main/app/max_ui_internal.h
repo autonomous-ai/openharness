@@ -101,6 +101,17 @@ typedef struct {
     char note[MAX_ERROR_BYTES];     // FAILED: why; SENT: what the daemon said
 } max_ask_t;
 
+// A question of an agent off the ring (max_ui_ask.c): the daemon holds the bar to it (a drawer row, a `question` of an
+// agent in another app, one whose agent left the ring) and gives it no second time, so it waits here for its agent.
+#define MAX_PARKED 16
+typedef struct {
+    char agent[ID_MAX];
+    char request[PRO_TOKEN_BYTES];  // "" for a drawer row's (or one too long to echo): the read names it
+    char text[MAX_QUESTION_BYTES];
+    uint32_t key;                   // its request and words: the same one again is no news
+    bool permission, review;
+} max_parked_t;
+
 // ---- New Harness (max_ui_form.c), after the Dial's form.c ----
 #define MAX_FORM_WAIT_MS 3500u      // a command's reply; the desktop gives up at 2 s
 #define MAX_FORM_POLL_MS 1000u      // the page read again while it is up; MAX_FORM_BUSY_MS while the desktop works
@@ -175,6 +186,7 @@ typedef struct {
     char question[MAX_QUESTION_BYTES];
     uint32_t ask_key;                // the open question's request, prompt and questions: a re-sent one is no change
     uint32_t ask_since;              // when the open question arrived: Attention takes the oldest first
+    bool quiet;                      // the open question came back quietly (a list row): it waits on its tile alone
     char note[MAX_NOTE_BYTES];       // FAILED: the error; DONE: the summary's text, shown until note_until
     uint32_t note_until;
     bool card;                       // a failure's card lasts until the agent moves on; an alert's, until it runs out
@@ -195,6 +207,8 @@ typedef struct {
     cable_machine_t machines[CABLE_MAX_MACHINES];
     int machine_count;
     max_ask_t asks[MAX_AGENTS];      // the open questions, one an agent, by agent id
+    max_parked_t parked[MAX_PARKED]; // the questions of agents off the ring, oldest first
+    int parked_count;
     uint32_t ask_serial;             // names the reads (max_ask_t fetch)
     bool offers_form;                // the welcome offered `form`: New is under the pager
     max_form_t form;
@@ -220,6 +234,9 @@ typedef struct {
     int app_count;
     char shown[PRO_APP_ID_BYTES];    // the app whose agents the ring holds
     bool apps_known;                 // an `apps` frame came: else the app column names the computer, and no Apps page
+    bool harness_own;                // apps[0] is the bar's own Harness, its count the ring's (max_ui_apps)
+    char picked[PRO_APP_ID_BYTES];   // the app the person picked on Apps, until an `apps` shows another
+    unsigned news;                   // MAX_NEWS_* that rang since max_ui_take_news
     max_inbox_t inbox[MAX_INBOX];    // newest first
     int inbox_count;
     int cell_page;                   // Overview's page of cells, within max_cell_pages()
@@ -300,10 +317,22 @@ bool max_show(max_view_t view);
 void max_attention(const char *id, max_attn_t why, uint32_t now_ms);
 // The agent still is what `why` says (asking, done, failed): Attention and the toast hold only while it is.
 bool max_attn_holds(const char *id, max_attn_t why);
-// An agent needs the person (a new question, a failed turn, an alert's summary): an unread notice in Inbox, and
-// Attention takes the glass, unless a person talks or New Harness is up (then only the toast), or another agent's
+// An agent needs the person (a new question, a failed turn, an alert's summary): it rings (max_ui_take_news), an unread
+// notice in Inbox, and Attention takes the glass, unless a person talks or New Harness is up (then only the toast), or another agent's
 // question is on Attention (a question then waits its turn; a turn's end stays in Inbox).
 void max_attend(max_agent_t *, max_attn_t why, uint32_t now_ms);
+// A question back quietly (max_ui_question_quiet): its notice, and nothing more. The same notice keeps its place and
+// whether it was read; one Inbox does not hold comes in unread.
+void max_file_question(const max_agent_t *, uint32_t now_ms);
+// The same for an agent off the ring, by the name the daemon gave (its engine and app unknown here); `quiet` as above,
+// else an unread notice on top. True when Inbox changed.
+bool max_file_notice(const char *id, const char *name, const char *text, bool quiet, uint32_t now_ms);
+// The ring changes (max_ui_agents): an asking agent that leaves parks its question, before its ask goes; one that joins
+// with a parked question asks it, quietly.
+void max_park_leaver(const max_agent_t *);
+void max_unpark_joined(uint32_t now_ms);
+// Its question ended off the ring (a close, a turn that moved on).
+void max_unpark(const char *id);
 // Attention leaves `except`'s question (answered, or gone): the question that has waited longest takes it, else
 // Overview.
 void max_next_question(const char *except, uint32_t now_ms);
@@ -323,7 +352,10 @@ int max_unread(void);
 const max_app_t *max_shown_app(void);
 // The app column's name: the shown app's, else the computer's, else "Harness".
 const char *max_app_label(void);
-// The app an agent of the ring is in, for "Answer it in <App>": the shown app's name, else its host's id, else "".
+// The daemon's name for an app id ("cmux" -> "cmux", "vscode" -> "VS Code"), or NULL for an id it does not name.
+const char *max_app_name(const char *id);
+// The app an agent of the ring is in, for "Answer it in <App>": the shown app's name, else its host's name (the id
+// itself when the daemon does not name it), else "".
 const char *max_app_of(const max_agent_t *);
 // Whether the bar answers this agent's open question (caps a, and a question the inbox holds: a plain or reviewed path).
 bool max_takes_answers(const max_agent_t *);

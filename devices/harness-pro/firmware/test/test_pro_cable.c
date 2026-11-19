@@ -119,8 +119,8 @@ void pro_app_summary(const char *id, const char *text, const char *recap, const 
 void pro_app_notif_replace(const pro_notif_row_t *rows, int n)
 {
     ev_t *e = add(EV_NREPLACE, NULL); e->n1 = n;
-    if (n > 0) { put(e->a, rows[0].agent_id); put(e->b, rows[0].summary); put(e->c, rows[0].token); }
-    if (n > 1) snprintf(e->d, sizeof e->d, "%s", rows[n - 1].token);
+    if (n > 0) { put(e->a, rows[0].agent_id); put(e->b, rows[0].summary); put(e->c, rows[0].token); e->n2 = rows[0].question; }
+    if (n > 1) { snprintf(e->d, sizeof e->d, "%s", rows[n - 1].token); e->n3 = rows[n - 1].question; }
 }
 void pro_app_notif_seen(const char *id, const char *token)
 {
@@ -148,10 +148,12 @@ static void put_items(char *dst, const pro_ask_item_t *items, int n)
     }
 }
 static pro_ask_item_t rec_items[PRO_ASK_ITEMS];
-void pro_app_ask(const char *id, const char *request, const char *text, const pro_ask_item_t *items, int n,
-                 bool permission)
+void pro_app_ask(const char *id, const char *name, const char *request, const char *text, const pro_ask_item_t *items,
+                 int n, bool permission, bool listed)
 {
     ev_t *e = add(EV_ASK, id); put(e->a, text); snprintf(e->d, sizeof e->d, "%s", request); e->n1 = n; e->n2 = permission;
+    e->n3 = listed;
+    snprintf(e->c, sizeof e->c, "%s", name ? name : "<null>");
     put_items(e->b, items, n);
     if (n > 0) memcpy(rec_items, items, (size_t)n * sizeof *items);
 }
@@ -928,6 +930,12 @@ static void test_notifications(void)
          "{\"agentId\":\"\",\"summary\":\"no id\"},{\"summary\":\"no id either\"},{\"agentId\":\"b\",\"summary\":\"did b\",\"readToken\":\"bad token!\"}]}");
     CHECK(nev == 1 && evs[0].kind == EV_NREPLACE && evs[0].n1 == 2);
     CHECK(!strcmp(evs[0].a, "a") && !strcmp(evs[0].b, "did a") && !strcmp(evs[0].c, "tok_1-x") && !strcmp(evs[0].d, ""));
+    CHECK(evs[0].n2 == 0 && evs[0].n3 == 0);   // news rows
+    // A row of an agent's open question says so (`question: true`, anything else is news), its words the summary.
+    reset();
+    feed("{\"t\":\"notif.replace\",\"items\":[{\"agentId\":\"a\",\"name\":\"A\",\"machine\":\"Mac\",\"summary\":\"Which database?\","
+         "\"question\":true},{\"agentId\":\"b\",\"summary\":\"did b\",\"question\":1}]}");
+    CHECK(nev == 1 && evs[0].n1 == 2 && !strcmp(evs[0].b, "Which database?") && evs[0].n2 == 1 && evs[0].n3 == 0);
     reset();
     feed("{\"t\":\"notif.replace\",\"items\":[]}");
     CHECK(nev == 1 && evs[0].n1 == 0);
@@ -1262,6 +1270,10 @@ static void test_features(void)
     CHECK(!pro_cable_supports(CABLE_FEATURE_FORM));   // the session took them with it
     welcome_with("\"player.library\"");
     CHECK(!pro_cable_supports(CABLE_FEATURE_FORM) && !pro_cable_supports(CABLE_FEATURE_QUESTION_REVIEW));
+    CHECK(!pro_cable_supports(CABLE_FEATURE_QUESTION_TIER));
+    // question.tier: the daemon files a question the Max was told before as a `tier: "list"` row (the Max's hello asks).
+    welcome_with("\"question.review\",\"question.tier\"");
+    CHECK(pro_cable_supports(CABLE_FEATURE_QUESTION_TIER | CABLE_FEATURE_QUESTION_REVIEW));
 }
 
 static void test_question_items(void)
@@ -1276,6 +1288,7 @@ static void test_question_items(void)
     CHECK(!strcmp(evs[1].a, "Which database?"));
     CHECK(!strcmp(evs[1].b, "k1|Which database?|Dev/Staging|0|1; k2|Which checks?|Lint/Types/Tests|1|1"));
     CHECK(evs[1].n2 == 0);   // no `permission`: a plain question
+    CHECK(!strcmp(evs[1].c, "A"));   // its agent's name: the Max files the question of an agent off its ring by it
 
     // A permission prompt is marked `permission: true`; anything but true is a plain question.
     const char *marks[] = {"true", "false", "1", "\"true\""};
@@ -1285,6 +1298,19 @@ static void test_question_items(void)
               "\"questions\":[{\"key\":\"k\",\"q\":\"Approve Bash command: npm run deploy:staging\",\"options\":[\"Yes\",\"No\"]}]}",
               marks[i]);
         CHECK(nev == 2 && evs[1].kind == EV_ASK && evs[1].n1 == 1 && evs[1].n2 == (i == 0));
+    }
+    CHECK(evs[1].n3 == 0);   // no `tier`: the frame is news
+    CHECK(!strcmp(evs[1].c, "<null>"));   // no name: none
+
+    // The summary the daemon sends now (cableSession.ts giveQuestion): the first question's words, no key, no options;
+    // `tier: "list"` re-files one the bar was told before. Only "list" is listed; the words are the prompt either way.
+    const char *tiers[] = {"\"list\"", "\"alert\"", "\"List\"", "true", "null"};
+    for (unsigned i = 0; i < sizeof tiers / sizeof tiers[0]; i++) {
+        reset();
+        feedf("{\"t\":\"question\",\"agentId\":\"a\",\"name\":\"A\",\"machine\":\"Mac\",\"id\":\"toolu_9\",\"tier\":%s,"
+              "\"questions\":[{\"key\":\"\",\"q\":\"Which database?\",\"options\":[]}]}", tiers[i]);
+        CHECK(nev == 2 && evs[0].kind == EV_QUESTION && !strcmp(evs[0].a, "Which database?"));
+        CHECK(evs[1].kind == EV_ASK && evs[1].n1 == 0 && !strcmp(evs[1].a, "Which database?") && evs[1].n3 == (i == 0));
     }
 
     // The inbox's rules: 1..4 questions, each with a key, a prompt and 1..6 non-empty string options, keys unique.
@@ -1372,6 +1398,26 @@ static void test_question_state_and_receipt(void)
         reset();
         feedf("{\"t\":\"question.state\",\"agentId\":\"a\",\"requestId\":\"q\",\"ok\":true,%s}", broken[i]);
         CHECK(nev == 1 && evs[0].n1 == 0 && !strcmp(evs[0].b, "") && !strcmp(evs[0].a, "<null>"));
+    }
+    // The inbox holds a question it cannot take an answer for as its summary alone (questionInbox.ts summaryOnly): one
+    // question, no key, no options. Read, it is ok with no questions: the bar sends the person to the computer.
+    reset();
+    feed("{\"t\":\"question.state\",\"agentId\":\"a\",\"requestId\":\"q5\",\"ok\":true,\"id\":\"r\",\"token\":\"t\","
+         "\"questions\":[{\"key\":\"\",\"q\":\"Approve the plan?\",\"options\":[],\"multi\":false}],\"submitted\":false}");
+    CHECK(nev == 1 && evs[0].kind == EV_QSTATE && !strcmp(evs[0].d, "q5") && evs[0].n1 == 1 && evs[0].n3 == 0);
+    CHECK(!strcmp(evs[0].a, "r") && !strcmp(evs[0].c, "t") && !strcmp(evs[0].b, ""));
+    // Not a summary: two of them, options missing or not empty, or no words.
+    const char *not_summaries[] = {
+        "[{\"key\":\"\",\"q\":\"x\",\"options\":[]},{\"key\":\"\",\"q\":\"y\",\"options\":[]}]",
+        "[{\"key\":\"\",\"q\":\"x\"}]",
+        "[{\"key\":\"\",\"q\":\"x\",\"options\":[\"\"]}]",
+        "[{\"key\":\"\",\"q\":\"\",\"options\":[]}]",
+    };
+    for (unsigned i = 0; i < sizeof not_summaries / sizeof not_summaries[0]; i++) {
+        reset();
+        feedf("{\"t\":\"question.state\",\"agentId\":\"a\",\"requestId\":\"q\",\"ok\":true,\"id\":\"r\",\"token\":\"t\","
+              "\"questions\":%s}", not_summaries[i]);
+        CHECK(nev == 1 && evs[0].n1 == 0 && !strcmp(evs[0].a, "<null>"));
     }
     char *long_id = repeat("t", PRO_TOKEN_BYTES);
     reset();

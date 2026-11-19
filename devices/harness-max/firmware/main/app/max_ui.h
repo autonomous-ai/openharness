@@ -26,12 +26,24 @@ bool max_ui_agents(const pro_agent_row_t *rows, int n, uint32_t now_ms);
 bool max_ui_machines(const cable_machine_t *rows, int count, const char *selected);
 // kind and text as pro_app_turn (pro_app_api.h).
 bool max_ui_turn(const char *id, const char *kind, const char *text, int elapsed_s, uint32_t now_ms);
-// An agent asks: `text` is the prompt, `items` the request's questions as pro_app_ask has them (n 0: none the daemon's
-// inbox would hold, so only the computer can answer). `permission`: the daemon marked it a permission prompt.
-// `review`: the daemon offers question.review, and the answer goes that way (read, then answer.reviewed); otherwise as
-// a plain `answer`.
+// An agent asks: `text` is the prompt, `items` the request's questions as pro_app_ask has them (n 0: the daemon's summary
+// frame, its words alone). `permission`: the daemon marked it a permission prompt. `review`: the daemon offers
+// question.review, so every question is read whole first (question.read) and answered by answer.reviewed; otherwise a
+// question whole is answered by a plain `answer`, and one with no options only on the computer.
 bool max_ui_question(const char *id, const char *request, const char *text, const pro_ask_item_t *items, int n,
                      bool permission, bool review, uint32_t now_ms);
+// The same, filed quietly: a question the daemon told the bar before, back as a `tier: "list"` row. Its agent asks,
+// with no Attention and no toast; its Inbox notice keeps its place and whether it was read.
+bool max_ui_question_quiet(const char *id, const char *request, const char *text, const pro_ask_item_t *items, int n,
+                           bool permission, bool review, uint32_t now_ms);
+// Either, as pro_app_ask has it, with the frame's agent name: an agent off the ring is filed under it. A question of an
+// agent off the ring waits for it (it asks quietly when it joins), its notice in Inbox meanwhile.
+bool max_ui_question_from(const char *id, const char *name, const char *request, const char *text,
+                          const pro_ask_item_t *items, int n, bool permission, bool review, bool quiet, uint32_t now_ms);
+// notif.replace's rows, the drawer replaced whole. A question row makes its ring agent ask that question, quietly (one
+// that asks keeps its own); one of an agent off the ring waits for it, as above; news rows file nothing (Inbox keeps
+// the bar's own turns). `review` as max_ui_question.
+bool max_ui_notices(const pro_notif_row_t *rows, int n, bool review, uint32_t now_ms);
 bool max_ui_question_close(const char *id);
 // The replies of the reviewed path, as pro_app_question_state and pro_app_answer_receipt.
 bool max_ui_question_state(const char *id, const char *fetch, bool ok, const char *request, const char *token,
@@ -42,8 +54,16 @@ bool max_ui_summary(const char *id, const char *text, const char *recap, bool re
                     uint32_t now_ms);
 // The computer's window moved to this agent. Not a person at the bar: the page shown stays.
 bool max_ui_focus(const char *id);
-// `apps` (pro_app_apps): the shown app and every app with agents. Before the ring it names.
+// `apps` (pro_app_apps): the shown app and every app with agents. Before the ring it names. Harness is listed first, and
+// added when it is shown and the list leaves it out (the window's tab). The computer turning the bar to another app
+// shows "Following <App> on your Mac", unless it is the first list, the app picked here, or a person talks.
 bool max_ui_apps(const char *shown, const pro_app_row_t *rows, int n, uint32_t now_ms);
+// The person picked this app on Apps (MAX_ACT_PICK): the `apps` that shows it is their doing, not the computer's.
+void max_ui_app_picked(const char *app);
+// What rang since the last take, for the app's chime and wake: a question (one the bar was not told before), a failed
+// turn, a loud finished turn. Quiet filings (a list row, the drawer's rows) ring nothing.
+enum { MAX_NEWS_ASK = 1u << 0, MAX_NEWS_FAILED = 1u << 1, MAX_NEWS_DONE = 1u << 2 };
+unsigned max_ui_take_news(void);
 
 // ---- New Harness ----
 // The welcome offers `form`: Apps shows "+ New". Read on every tick: a daemon restarted inside a session

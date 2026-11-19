@@ -55,11 +55,27 @@ const char *max_app_label(void)
     return max_m.computer[0] ? max_m.computer : "Harness";
 }
 
+const char *max_app_name(const char *id)
+{
+    // cli/src/cable/hosts/hostDetect.ts NAMES, as the round dial's host_name holds them.
+    static const char *const names[][2] = {
+        {"harness", "Harness"}, {"orca", "Orca"}, {"herdr", "herdr"}, {"rex", "Rex"}, {"zellij", "Zellij"},
+        {"tmux", "tmux"}, {"kitty", "kitty"}, {"wezterm", "WezTerm"}, {"iterm", "iTerm2"}, {"terminal-app", "Terminal"},
+        {"ghostty", "Ghostty"}, {"cmux", "cmux"}, {"vscode", "VS Code"}, {"cursor", "Cursor"}, {"warp", "Warp"},
+        {"claude", "Claude"}, {"codex", "ChatGPT"}, {"opencode", "opencode"}, {"terminal", "Terminal"},
+    };
+    for (size_t i = 0; id && i < sizeof names / sizeof names[0]; i++)
+        if (!strcmp(id, names[i][0])) return names[i][1];
+    return NULL;
+}
+
 const char *max_app_of(const max_agent_t *a)
 {
     const max_app_t *app = max_shown_app();
     if (app && app->name[0]) return app->name;
-    return a ? a->host : "";
+    if (!a) return "";
+    const char *name = max_app_name(a->host);
+    return name ? name : a->host;
 }
 
 bool max_takes_answers(const max_agent_t *a)

@@ -156,7 +156,8 @@ static void test_question(void)
     CHECK(max_ui_question_close("b"));
     CHECK(b->state == MAX_WORKING && b->question[0] == 0);
     CHECK(!max_ui_question_close("b"));
-    CHECK(!max_ui_question("zz", "r", "?", NULL, 0, false, false, 0));
+    // An agent off the ring: its notice, and it waits for its agent (test_max_ask.c), which does not appear for it.
+    CHECK(max_ui_question("zz", "r", "?", NULL, 0, false, false, 0) && !max_find("zz") && max_m.inbox[0].id[0] == 'z');
     // A turn that ends while it asks ends the question too.
     max_ui_question("b", "r3", "Push?", NULL, 0, false, false, 6000);
     max_ui_turn("b", "done", "", 0, 7000);
@@ -357,11 +358,11 @@ static void test_inbox(void)
     const pro_agent_row_t rows[] = {{"a", "alpha", "codex", "m1", "MacBook Pro", "orca", NULL},
                                     {"b", "b", "claude", "m1", "MacBook Pro", NULL, NULL}};
     max_ui_agents(rows, 2, 0);
-    // No `apps` yet: a notice names the agent's own app (its host).
+    // No `apps` yet: a notice names the agent's own app (its host, by the daemon's name for it).
     CHECK(max_ui_question("a", "r1", "Keep the dark gradient?", NULL, 0, false, false, 1000));
     const max_inbox_t *n = &max_m.inbox[0];
     CHECK(max_m.inbox_count == 1 && !strcmp(n->id, "a") && !strcmp(n->name, "alpha") && !strcmp(n->engine, "codex"));
-    CHECK(!strcmp(n->app, "orca") && n->kind == MAX_ATTN_ASK && !strcmp(n->text, "Keep the dark gradient?"));
+    CHECK(!strcmp(n->app, "Orca") && n->kind == MAX_ATTN_ASK && !strcmp(n->text, "Keep the dark gradient?"));
     CHECK(n->at == 1000 && n->unread && max_unread() == 1);
     // With `apps`, the shown app's name.
     const pro_app_row_t apps[] = {{"orca", "Orca", 2, 1}};
@@ -399,6 +400,46 @@ static void test_inbox(void)
     CHECK(max_ui_summary("b", "Could not reach the API", NULL, false, POD_TIER_ALERT, 8200));
     CHECK(max_m.inbox_count == MAX_INBOX && !strcmp(max_m.inbox[0].text, "Could not reach the API"));
     CHECK(!strcmp(max_m.inbox[1].text, text));
+}
+
+// A question the bar was told before, back as a `tier: "list"` row (pro_app_ask's `listed`): filed quietly. Its agent
+// asks, but the page, the toast and Ambient's clock are left alone, and its notice keeps its place and whether it was
+// read; one the Inbox does not hold comes back unread. It waits on its tile, never in Attention's queue.
+static void test_quiet_question(void)
+{
+    linked(ABC, 3);
+    CHECK(max_ui_question("a", "r1", "Deploy?", NULL, 0, false, false, 1000));
+    CHECK(max_m.view == MAX_VIEW_ATTENTION && max_m.inbox[0].unread);
+    CHECK(max_show(MAX_VIEW_INBOX) && max_show(MAX_VIEW_OVERVIEW) && max_unread() == 0);
+    max_ui_link(false, NULL, 2000);   // the bar loses its questions with the link; back, the daemon refiles a's
+    max_ui_link(true, "MacBook Pro", 2000);
+    roster(ABC, 3);
+    CHECK(max_find("a")->state != MAX_ASKING);
+    const uint32_t idle = max_m.idle_from;
+    CHECK(max_ui_question_quiet("a", "r1", "Deploy?", NULL, 0, false, false, 3000));
+    CHECK(max_find("a")->state == MAX_ASKING && !strcmp(max_find("a")->question, "Deploy?"));
+    CHECK(max_m.view == MAX_VIEW_OVERVIEW && max_m.toast_id[0] == 0 && max_m.idle_from == idle);
+    CHECK(max_m.inbox_count == 1 && max_m.inbox[0].at == 1000 && !max_m.inbox[0].unread && max_unread() == 0);
+    CHECK(!max_ui_question_quiet("a", "r1", "Deploy?", NULL, 0, false, false, 3100));   // sent again: no change
+    // One the Inbox does not hold: a new notice, unread, and still no page.
+    CHECK(max_ui_question_quiet("b", "r2", "Merge?", NULL, 0, false, false, 4000));
+    CHECK(max_m.view == MAX_VIEW_OVERVIEW && max_m.inbox_count == 2 && !strcmp(max_m.inbox[0].id, "b"));
+    CHECK(max_m.inbox[0].unread && max_unread() == 1);
+    // While a person talks: no toast either.
+    max_ui_talk(MAX_TALK_RECORDING, 4500);
+    CHECK(max_ui_question_quiet("c", "r3", "Push?", NULL, 0, false, false, 5000));
+    CHECK(max_m.toast_id[0] == 0 && max_m.view == MAX_VIEW_OVERVIEW);
+    max_ui_talk(MAX_TALK_IDLE, 5100);
+    // c's next question rings and takes the page; answered on the computer, the quiet ones do not take it after.
+    CHECK(max_ui_question("c", "r4", "Push now?", NULL, 0, false, false, 6000));
+    CHECK(max_m.view == MAX_VIEW_ATTENTION && !strcmp(max_m.attn_id, "c"));
+    max_ui_question_close("c");
+    max_ui_tick(7000);
+    CHECK(max_m.view == MAX_VIEW_OVERVIEW);
+    CHECK(max_find("a")->state == MAX_ASKING && max_find("b")->state == MAX_ASKING);
+    // A quiet one that is asked again (a new question of b's) rings: it takes the page.
+    CHECK(max_ui_question("b", "r5", "Merge now?", NULL, 0, false, false, 8000));
+    CHECK(max_m.view == MAX_VIEW_ATTENTION && !strcmp(max_m.attn_id, "b"));
 }
 
 // Ambient: with no computer, with no agents, and on Overview when nothing works or waits and nobody touched for
@@ -608,6 +649,54 @@ static void test_elapsed_format(void)
     }
 }
 
+// `apps`: Harness first, as V3 lists it. The window's tab names Harness shown in a list that leaves it out
+// (cableHost.ts tabApps): the bar adds it, its count the ring's. The computer turning the bar to another app says so
+// ("Following <App> on your Mac"): not for the first list, not for the app the person picked, not while they talk.
+static void test_apps(void)
+{
+    linked(ABC, 3);
+    const pro_app_row_t rows[] = {{"orca", "Orca", 2, 1}, {"harness", "Harness", 3, 0}, {"cmux", "", 1, 0}};
+    CHECK(max_ui_apps("orca", rows, 3, 100));
+    CHECK(max_m.app_count == 3 && !strcmp(max_m.apps[0].id, "harness") && !strcmp(max_m.apps[1].id, "orca"));
+    CHECK(!strcmp(max_m.apps[2].id, "cmux") && !strcmp(max_m.apps[2].name, "cmux"));   // no name: the daemon's
+    CHECK(!max_notice_shown(100));   // the first list: nothing followed
+    // The tab: Harness shown, left out of the list.
+    const pro_app_row_t tab[] = {{"orca", "Orca", 2, 1}};
+    CHECK(max_ui_apps("harness", tab, 1, 200));
+    CHECK(max_m.app_count == 2 && !strcmp(max_m.apps[0].id, "harness") && !strcmp(max_m.apps[0].name, "Harness"));
+    CHECK(max_m.apps[0].count == 3 && !strcmp(max_shown_app()->name, "Harness") && !strcmp(max_m.apps[1].id, "orca"));
+    CHECK(max_notice_shown(200) && !strcmp(max_m.notice, "Following Harness on your Mac"));
+    CHECK(!max_ui_apps("harness", tab, 1, 250));   // the same list again
+    roster(ABCDE, 5);   // its count follows the ring
+    CHECK(max_m.apps[0].count == 5);
+    // A full list: Harness takes the first place, the last row goes.
+    static char ids[PRO_APPS_MAX][8];
+    pro_app_row_t full[PRO_APPS_MAX];
+    for (int i = 0; i < PRO_APPS_MAX; i++) {
+        snprintf(ids[i], sizeof ids[i], "app%d", i);
+        full[i] = (pro_app_row_t){ids[i], ids[i], 1, 0};
+    }
+    CHECK(max_ui_apps("harness", full, PRO_APPS_MAX, 300) && max_m.app_count == PRO_APPS_MAX);
+    CHECK(!strcmp(max_m.apps[0].id, "harness") && !strcmp(max_m.apps[PRO_APPS_MAX - 1].id, ids[PRO_APPS_MAX - 2]));
+    // The person picks Orca: the daemon turning to it is no news.
+    max_ui_app_picked("orca");
+    max_ui_notice(NULL, 0, 400);
+    CHECK(max_ui_apps("orca", rows, 3, 400) && !max_notice_shown(400));
+    // The computer turns it to cmux, then back to Orca (the pick is spent): followed, by the app's name.
+    CHECK(max_ui_apps("cmux", rows, 3, 500) && !strcmp(max_m.notice, "Following cmux on your Mac"));
+    CHECK(max_ui_apps("orca", rows, 3, 600) && !strcmp(max_m.notice, "Following Orca on your Mac"));
+    // Not over a person talking.
+    max_ui_notice(NULL, 0, 700);
+    max_ui_talk(MAX_TALK_RECORDING, 700);
+    CHECK(max_ui_apps("harness", rows, 3, 800) && !max_notice_shown(800));
+    max_ui_talk(MAX_TALK_IDLE, 900);
+    // The link goes and the apps with it: the next list is a first one again.
+    max_ui_link(false, NULL, 1000);
+    CHECK(!max_m.apps_known && max_m.app_count == 0 && !max_m.shown[0]);
+    max_ui_link(true, "MacBook Pro", 1100);
+    CHECK(max_ui_apps("cmux", rows, 3, 1200) && !max_notice_shown(1200));
+}
+
 static void test_app_state(void)
 {
     max_ui_reset();
@@ -647,12 +736,14 @@ int main(void)
     test_questions_take_attention_oldest_first();
     test_turn_ends_take_attention();
     test_inbox();
+    test_quiet_question();
     test_ambient();
     test_caps();
     test_no_talk_while_an_answer_waits();
     test_agent_page_clock();
     test_recording_clock();
     test_elapsed_format();
+    test_apps();
     test_app_state();
     printf("test_max_model: %d checks passed\n", checks);
     return 0;

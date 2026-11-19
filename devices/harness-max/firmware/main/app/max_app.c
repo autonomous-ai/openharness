@@ -4,7 +4,7 @@
 // THREADS: the cable_link task calls the pro_app_* callbacks; the touch task calls pro_app_touch; the voice tasks call
 // pro_app_notice; the render task ticks, draws and paints. One recursive mutex guards the model, the dirty flag and the
 // state below. Nothing that leaves the device is sent under it: a tap's agent.open or app pick, a recording's start and
-// its send (a tap's or the clock's), the beep and the wake happen after the mutex is released. So does the model's
+// its send (a tap's or the clock's), the chime and the wake happen after the mutex is released. So does the model's
 // outbox (answers, question reads, the New Harness form): taken under the mutex, sent after it, by the touch task (a
 // tap's, waiting for the port as agent.open does) or the render task (the clock's, never waiting).
 #include "app/max_app.h"
@@ -15,6 +15,7 @@
 #include <string.h>
 #include <time.h>
 
+#include "app/max_chime.h"
 #include "app/max_ui.h"
 #include "app/pro_touch.h"
 #include "app/pro_voice.h"
@@ -54,7 +55,7 @@ static const char *TAG = "max";
 
 #define IDLE_SLEEP_MS 300000u       // no touch for this long and the screen sleeps, as the Pro
 #define HEARTBEAT_MS 60000u
-#define BEEP_COALESCE_MS 30000      // one chime for the alerts of this long (the Pro's POD_BEEP_COALESCE_MS)
+#define CHIME_COALESCE_MS 30000     // one chime of a sound for its alerts of this long (V3's, the Pro's beep's)
 #define ASKED_MAX 32                // pro_app_agents sends at most 32 agents
 
 static EXT_RAM_BSS_ATTR ht_scene_t s_scene[2];
@@ -63,10 +64,10 @@ static SemaphoreHandle_t s_lock;
 static TaskHandle_t s_renderer;
 static bool s_started, s_linked, s_dirty;
 static bool s_update_shown;   // the update screen is up (fw_update_ui_begin .. a failure)
-static bool s_beepq;          // an alert landed and the last chime is old enough: chime once the lock is released
+static unsigned s_chimeq;     // 1 << max_chime_t: the sounds to play once the lock is released
 static bool s_wakeq;          // an alert landed: light a dark glass once the lock is released
-static bool s_beep_set;
-static uint32_t s_beep_ms;    // when the last chime was queued
+static bool s_chimed[MAX_CHIME_DONE + 1];
+static uint32_t s_chimed_ms[MAX_CHIME_DONE + 1];   // when each sound was last queued
 // The questions already chimed for: the agent and its question's request and prompt. Kept over a relink, so a question
 // the daemon sends again when the cable comes back does not chime twice; its close forgets it.
 static struct { char id[ID_MAX]; uint32_t key; } s_asked[ASKED_MAX];
@@ -112,28 +113,39 @@ static void changed_if(bool changed)
     if (changed) change();
 }
 
-// An alert (the caller holds the lock): wake the glass, and chime unless one was queued in the last BEEP_COALESCE_MS.
-// Quiet over an update.
-static void alert_locked(void)
+// What rang in the model (MAX_NEWS_*; the caller holds the lock): wake the glass, and queue each alert's sound (V3's: a
+// question MAX_CHIME_ASK, a failure MAX_CHIME_FAILED, a loud finished turn MAX_CHIME_DONE) unless that sound was queued
+// in the last CHIME_COALESCE_MS, so a soft done never holds back a question's chime. Quiet over an update.
+static void alert_locked(unsigned news)
 {
-    if (atomic_load(&s_updating)) return;
+    if (!news || atomic_load(&s_updating)) return;
     s_wakeq = true;
     const uint32_t now = ms();
-    if (!s_beep_set || (int32_t)(now - s_beep_ms) >= BEEP_COALESCE_MS) {
-        s_beep_set = true;
-        s_beep_ms = now;
-        s_beepq = true;
+    static const struct { unsigned news; max_chime_t sound; } SOUNDS[] = {
+        {MAX_NEWS_ASK, MAX_CHIME_ASK}, {MAX_NEWS_FAILED, MAX_CHIME_FAILED}, {MAX_NEWS_DONE, MAX_CHIME_DONE}};
+    for (size_t i = 0; i < sizeof SOUNDS / sizeof SOUNDS[0]; i++) {
+        const max_chime_t sound = SOUNDS[i].sound;
+        if (!(news & SOUNDS[i].news) || (s_chimed[sound] && (int32_t)(now - s_chimed_ms[sound]) < CHIME_COALESCE_MS))
+            continue;
+        s_chimed[sound] = true;
+        s_chimed_ms[sound] = now;
+        s_chimeq |= 1u << sound;
     }
 }
 
 // Release the lock, then light and chime as the feeds asked. Every feed that took the lock ends here.
 static void leave(void)
 {
-    const bool beep = s_beepq, wake = s_wakeq;
-    s_beepq = s_wakeq = false;
+    alert_locked(max_ui_take_news());
+    const unsigned chimes = s_chimeq;
+    const bool wake = s_wakeq;
+    s_chimeq = 0;
+    s_wakeq = false;
     unlock();
     if (wake) pro_app_wake();
-    if (beep && !pro_settings_muted() && !atomic_load(&s_updating)) audio_beep();
+    for (int sound = MAX_CHIME_ASK; sound <= MAX_CHIME_DONE; sound++)
+        if ((chimes & (1u << sound)) && !pro_settings_muted() && !atomic_load(&s_updating))
+            max_chime((max_chime_t)sound);
 }
 
 static void notice_locked(const char *text) { changed_if(max_ui_notice(text, MAX_NOTICE_MS, ms())); }
@@ -232,9 +244,7 @@ void pro_app_turn(const char *id, const char *kind, const char *text, int elapse
 {
     if (!id_ok(id) || !kind) return;
     lock();
-    const bool changed = max_ui_turn(id, kind, text, elapsed_s, ms());
-    changed_if(changed);
-    if (changed && !strcmp(kind, "error")) alert_locked();   // a failure is always an alert, as on the Pro
+    changed_if(max_ui_turn(id, kind, text, elapsed_s, ms()));   // a failure rings (leave)
     leave();
 }
 
@@ -248,16 +258,18 @@ void pro_app_summary(const char *id, const char *text, const char *recap, const 
     (void)full;   // the pages show a short note: the long recap has nowhere to go
     if (!id_ok(id)) return;
     lock();
-    const bool changed = max_ui_summary(id, text, recap, restore, tier, ms());
-    changed_if(changed);
-    if (changed && tier == POD_TIER_ALERT) alert_locked();   // the daemon's loud tier; list and silent only show it
+    changed_if(max_ui_summary(id, text, recap, restore, tier, ms()));   // the loud tier rings (leave), list only shows
     leave();
 }
 
-// The Max keeps its own Inbox from the turns and questions it sees (max_ui.h): the daemon's list adds nothing.
+// The daemon's drawer: its question rows are questions it gives the bar no other way (max_ui_notices), filed silently,
+// as they rang before. Its news rows add nothing: the bar keeps its own Inbox from the turns it sees.
 void pro_app_notif_replace(const pro_notif_row_t *rows, int n)
 {
-    (void)rows; (void)n;
+    const bool review = pro_cable_supports(CABLE_FEATURE_QUESTION_REVIEW);
+    lock();
+    changed_if(max_ui_notices(rows, n, review, ms()));
+    leave();
 }
 
 void pro_app_notif_seen(const char *id, const char *token)
@@ -300,15 +312,21 @@ void pro_app_question(const char *id, const char *request, const char *text)
     (void)id; (void)request; (void)text;
 }
 
-void pro_app_ask(const char *id, const char *request, const char *text, const pro_ask_item_t *items, int n,
-                 bool permission)
+void pro_app_ask(const char *id, const char *name, const char *request, const char *text, const pro_ask_item_t *items,
+                 int n, bool permission, bool listed)
 {
     if (!id_ok(id)) return;
     const bool review = pro_cable_supports(CABLE_FEATURE_QUESTION_REVIEW);   // the reviewed path, when the daemon has it
+    // A list row rang before: silent only when the welcome listed question.tier, so nothing this build cannot vouch
+    // for mutes a question (the round dial's rule).
+    const bool quiet = listed && pro_cable_supports(CABLE_FEATURE_QUESTION_TIER);
     lock();
-    const bool changed = max_ui_question(id, request, text, items, n, permission, review, ms());
+    const bool changed = max_ui_question_from(id, name, request, text, items, n, permission, review, quiet, ms());
     changed_if(changed);
-    if (changed && ask_is_new(id, ask_key(request, text))) alert_locked();
+    // Remembered either way (a quiet one too): the same question rung again, after the cable came back, is not news.
+    unsigned news = max_ui_take_news();
+    if (changed && !ask_is_new(id, ask_key(request, text))) news &= ~(unsigned)MAX_NEWS_ASK;
+    alert_locked(news);
     leave();
 }
 
@@ -490,7 +508,12 @@ static void act(const max_act_t *a)
         pro_cable_voice_form(NULL, 0);
         talk_begin(a->agent_id);
         break;
-    case MAX_ACT_PICK: pro_cable_app_pick(a->app, true); break;
+    case MAX_ACT_PICK:   // the person's pick: the `apps` that answers it is no "Following"
+        lock();
+        max_ui_app_picked(a->app);
+        unlock();
+        pro_cable_app_pick(a->app, true);
+        break;
     case MAX_ACT_NONE: break;
     }
 }

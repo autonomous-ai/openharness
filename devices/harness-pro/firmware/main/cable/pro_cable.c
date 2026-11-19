@@ -234,7 +234,12 @@ static void send_hello(void)
     msg_string(&root, "ota", "v1");
     // The Max shows one app's agents at a time (docs/specs/2026-11-14-dial-app-filter.md): `apps` in, app.pick out. The
     // Pro holds the window's tab, so its hello stays the one the daemon has always had from it.
-    if (board()->kind && !strcmp(board()->kind, "max")) msg_string(&root, "appFilter", "v1");
+    // It also files a question it was told before, sent again as `tier: "list"`, without a chime
+    // (docs/plans/2026-11-18-dial-drawer-limits-design.md); the Pro mutes a repeat itself and is sent none.
+    if (board()->kind && !strcmp(board()->kind, "max")) {
+        msg_string(&root, "appFilter", "v1");
+        msg_string(&root, "questionTier", "v1");
+    }
     char mac[24] = "";
     device_mac_str(mac, sizeof(mac));
     msg_string(&root, "mac", mac);
@@ -777,7 +782,8 @@ static void handle_notif_replace(const cJSON *p)
         const char *aid = str_of(it, "agentId");
         if (!aid || !aid[0] || strnlen(aid, ID_MAX) >= ID_MAX) continue;
         const char *name = str_of(it, "name"), *summary = str_of(it, "summary"), *token = str_of(it, "readToken");
-        rows[n++] = (pro_notif_row_t){aid, name ? name : "", summary ? summary : "", token_ok(token) ? token : ""};
+        rows[n++] = (pro_notif_row_t){aid, name ? name : "", summary ? summary : "", token_ok(token) ? token : "",
+                                      flag(it, "question")};
     }
     pro_app_notif_replace(rows, n);
 }
@@ -839,7 +845,8 @@ static int read_items(const cJSON *questions)
     return i;
 }
 
-// question {agentId, id, questions:[{key, q, options, multi}]}: the prompt, then the whole request.
+// question {agentId, id, tier?, questions:[{key, q, options, multi}]}: the prompt, then the whole request. Today's daemon
+// sends only the first question's words (key "", no options), read whole by question.read.
 static void handle_question(const char *id, const cJSON *p)
 {
     const char *request = str_of(p, "id");   // the request this question belongs to
@@ -847,8 +854,21 @@ static void handle_question(const char *id, const cJSON *p)
     const cJSON *questions = cJSON_GetObjectItemCaseSensitive(p, "questions");
     const char *prompt = str_of(cJSON_GetArrayItem(questions, 0), "q");
     copy_cut(s_text, PRO_QUESTION_BYTES, prompt ? prompt : "Needs your answer");
+    const char *tier = str_of(p, "tier");
     pro_app_question(id, request, s_text);
-    pro_app_ask(id, request, s_text, s_ask_items, read_items(questions), flag(p, "permission"));
+    pro_app_ask(id, str_of(p, "name"), request, s_text, s_ask_items, read_items(questions), flag(p, "permission"),
+                tier && !strcmp(tier, "list"));
+}
+
+// The inbox's summary of a question it cannot take an answer for (questionInbox.ts summaryOnly): one question with
+// words and an empty option list.
+static bool summary_only(const cJSON *questions)
+{
+    const cJSON *first = cJSON_GetArrayItem(questions, 0);
+    const cJSON *options = cJSON_GetObjectItemCaseSensitive(first, "options");
+    const char *q = str_of(first, "q");
+    return cJSON_IsArray(questions) && cJSON_GetArraySize(questions) == 1 && q && q[0] && cJSON_IsArray(options) &&
+           cJSON_GetArraySize(options) == 0;
 }
 
 static bool token_fits(const char *s) { return s && s[0] && strlen(s) < PRO_TOKEN_BYTES; }
@@ -863,9 +883,12 @@ static void handle_question_state(const char *id, const cJSON *p)
         return;
     }
     const char *request = str_of(p, "id"), *token = str_of(p, "token");
-    const int n = read_items(cJSON_GetObjectItemCaseSensitive(p, "questions"));
+    const cJSON *questions = cJSON_GetObjectItemCaseSensitive(p, "questions");
+    const int n = read_items(questions);
     if (token_fits(request) && token_fits(token) && n > 0)
         pro_app_question_state(id, fetch, true, request, token, flag(p, "submitted"), NULL, s_ask_items, n);
+    else if (token_fits(request) && token_fits(token) && summary_only(questions))   // answered on the computer
+        pro_app_question_state(id, fetch, true, request, token, flag(p, "submitted"), NULL, NULL, 0);
     else   // nothing to answer with
         pro_app_question_state(id, fetch, false, NULL, NULL, false, NULL, NULL, 0);
 }
