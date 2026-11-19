@@ -7270,7 +7270,7 @@ describe('a permission prompt over a link with no authentication (HARNESS_CABLE_
   const PERMISSION = [{ key: 'Approve Bash command: npm run deploy', q: 'Approve Bash command: npm run deploy', options: ['Yes', 'No'], multi: false }]
   const QUESTION = [{ key: 'scope', q: 'Which scope?', options: ['File', 'Project'], multi: false }]
 
-  async function over(allowPermissions?: boolean) {
+  async function over(allowPermissions?: boolean, hello: Record<string, unknown> = { board: 'max' }) {
     const answerReviewed = vi.fn<NonNullable<CableHost['answerReviewed']>>(async () => ({ ok: true as const }))
     const host = makeHost({ answerReviewed })
     let port!: LoopbackPort
@@ -7280,7 +7280,9 @@ describe('a permission prompt over a link with no authentication (HARNESS_CABLE_
     }, allowPermissions === undefined ? undefined : { allowPermissions })
     session.start()
     await vi.waitFor(() => expect(port).toBeDefined())
-    port.say({ t: 'hello', product: 'harness', mac: 'aa:bb', board: 'max' })
+    // The open runs on after its port exists and resets what a hello named: a hello before it would greet a round dial.
+    await settle()
+    port.say({ t: 'hello', product: 'harness', mac: 'aa:bb', ...hello })
     await vi.waitFor(() => expect(port.types()).toContain('agents.end'))
     /** The receipt the dial gets for a reviewed answer to that agent's open question. */
     const reviewed = async (agentId: string, choice: number) => {
@@ -7372,6 +7374,18 @@ describe('a permission prompt over a link with no authentication (HARNESS_CABLE_
       expect(asked().find((m) => m.id === 'ask-1')).not.toHaveProperty('permission')
     } finally { await session.stop() }
   })
+
+  // Only the Max's firmware reads the mark (max_ui_ask.c): every other board is rung with the small entry alone, as a
+  // frame carries only what its firmware reads (giveQuestion).
+  it.each([['a round dial', {}], ['a round dial that says questionTier', { questionTier: 'v1' }], ['a Pro', { board: 'pro' }]])(
+    'leaves the mark off the frame %s is sent', async (_, hello) => {
+      const { session, port } = await over(undefined, hello)
+      try {
+        await session.question('a1', 'perm-1', PERMISSION, true)
+        expect(port().sent.filter((m) => m.t === 'question')).toEqual([{ t: 'question', agentId: 'a1', name: expect.any(String),
+          machine: expect.any(String), id: 'perm-1', questions: [{ key: '', q: noticeSummary(PERMISSION[0].q), options: [] }] }])
+      } finally { await session.stop() }
+    })
 
   it('stays marked in what a dial plugged in later is asked again', async () => {
     const { session } = await over()

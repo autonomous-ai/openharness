@@ -163,7 +163,8 @@ frame for each question still open. It does not replay recent `summary` history 
 `HARNESS_CABLE_TCP=host:port[,…]` makes the devices' process also dial each address (the Max's Linux build listens on 7531)
 with USB's frames, retrying with a wait that doubles up to 30 s. Nothing proves who is at the far end, so a TCP session
 answers no permission prompt (`answer`/`answer.reviewed` get `Permission prompts cannot be answered from here.`).
-A `question` that is a permission prompt carries `permission: true` (absent otherwise) so a device can draw approve/deny.
+A `question` to a Harness Max (`board: "max"`) that is a permission prompt carries `permission: true` (absent otherwise, and
+from every other board's frame, as no other firmware reads it) so the Max can draw approve/deny.
 
 ## `summary.tier`
 

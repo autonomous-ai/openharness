@@ -778,6 +778,9 @@ export class CableSession {
   /** A Pro or Max hello (isP4Board): every JSON frame to it carries a `seq` (a USB loss on its path is silent, and a hole
    *  in the count is how it notices). Per session: each welcome restarts it at 0. A round dial's frames stay as they were. */
   private seqOn = false
+  /** `hello.board === 'max'`: the Max draws a permission prompt as approve and deny, so its `question` frames say which
+   *  one is (permissionMark). No other firmware reads the mark, and each frame carries only what its firmware reads. */
+  private markPermissions = false
   private seq = 0
   private resyncAt = 0
   /** From a dial's greeting to its push's walk of the open questions: a question asked meanwhile waits for that walk,
@@ -795,6 +798,7 @@ export class CableSession {
     this.swarmMembers = this.longRecap = this.stepsActivity = this.statsTurn = this.playerCapable = this.appFilter = false
     this.questionTier = false
     this.seqOn = false
+    this.markPermissions = false
     this.seq = 0
     this.resyncAt = 0
     this.playerOffset = this.playerRequest = 0
@@ -1416,6 +1420,7 @@ export class CableSession {
         this.appFilter = str('appFilter') === 'v1'
         this.questionTier = str('questionTier') === 'v1'
         this.seqOn = isP4Board(str('board'))
+        this.markPermissions = str('board') === 'max'
         this.seq = 0
         const mac = str('mac') ?? ''
         // Rule 1: every greeting is answered, but only an unfamiliar dial gets the full state.
@@ -3506,10 +3511,10 @@ export class CableSession {
   async hold(agentId: string, id: string, questions: unknown): Promise<void> {
     this.questionInbox.set(agentId, id, questions, true)
   }
-  /** `permission: true` on the device's `question` for a prompt the core marked, so it can draw approve/deny; a plain
-   *  question carries no key, which is also all older firmware reads (it ignores keys it does not know). */
+  /** `permission: true` on a Max's `question` for a prompt the core marked, so it can draw approve/deny; a plain
+   *  question carries no key, and neither does any other board's (markPermissions). */
   private permissionMark(agentId: string, id: string): { permission?: true } {
-    return this.asked.get(`${agentId}\0${id}`) === true ? { permission: true } : {}
+    return this.markPermissions && this.asked.get(`${agentId}\0${id}`) === true ? { permission: true } : {}
   }
   /** What this dial would be asked again had it lost its questions, by the same rule: for a dial plugged in beside this
    *  one, which nothing else asks. */
