@@ -1216,9 +1216,11 @@ export class DaemonCableHost implements CableHost {
   /** A swipe that rested shows the agent's pane, and its app stays where it is; one superseded runs nothing. */
   swipeEnded(agentId: string, how: 'rest' | 'superseded'): void {
     if (how === 'superseded') { this.wiring.swiped?.('superseded'); return }
-    // The agent may have gone, or left its pane, since the dial turned to it.
+    // The agent may have gone, or left its pane, since the dial turned to it: asked again here, so no source brings
+    // forward an app the person has left.
     const outside = this.outsideEntry(agentId)
-    const shown = outside?.source.showPane?.(outside.agent) ?? Promise.resolve<PaneSwitch>('failed')
+    const shown = (outside?.source.hasPane?.(outside.agent) && outside.source.showPane?.(outside.agent))
+      || Promise.resolve<PaneSwitch>('failed')
     void shown.catch((): PaneSwitch => 'failed').then((outcome) => this.wiring.swiped?.(outcome))
   }
 
