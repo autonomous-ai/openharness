@@ -125,6 +125,28 @@ describe('turn activity', () => {
     expect(readers.turnActivity.snapshot('s4')?.state).toBe('idle')
   })
 
+  // Final review: every pass's read of a bound OpenClaw pane cost two store polls and a screen read.
+  it('a pane the binding pass read polls nothing while a turn is open, which the heartbeat probes, or while no run shows', async () => {
+    let open = true
+    const readScreen = vi.fn(readInlineScreen)
+    const { deps, readers } = setup({ readScreen, sessionTurnOpen: (sessionId) => sessionId === 's4' && open })
+    await readers.paneRead(claw, running(41))
+    open = false
+    await readers.paneRead(claw, pane('plain'))
+    expect(deps.drain).not.toHaveBeenCalled()
+    expect(readScreen).not.toHaveBeenCalled()
+  })
+
+  it('a pane with no run forgets the run read before it: the next run\'s first timer is not compared with it', async () => {
+    const { readers } = setup()
+    await readers.paneRead(claw, running(41))
+    await readers.paneRead(claw, pane('plain'))
+    await readers.paneRead(claw, running(46))
+    expect(readers.turnActivity.snapshot('s4')?.state).toBe('idle')
+    await readers.paneRead(claw, running(47))
+    expect(readers.turnActivity.snapshot('s4')?.state).toBe('working')
+  })
+
   it('a pane the binding pass read claims nothing while withheld', async () => {
     const { readers } = setup({ withheld: () => true })
     await readers.paneRead(claw, running(41))
