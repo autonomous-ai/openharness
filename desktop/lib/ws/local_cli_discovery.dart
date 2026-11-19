@@ -226,6 +226,19 @@ class LocalCliDiscovery {
   final Future<void> Function() _spawnCommand;
   final Future<void> Function() _stopCommand;
 
+  /// A dial being flashed holds the daemon down: [SerialPortLease.heldByAnotherProcess] by default,
+  /// and a test's own answer otherwise.
+  final bool Function() _flashing;
+
+  /// `harness uninstall` at work holds supervision: [UninstallMarker.held] by default, and a test's
+  /// own answer otherwise.
+  final bool Function() _uninstalling;
+
+  /// What the waits and the spawn backoff are timed on: a stopwatch by default, and a test's own
+  /// clock otherwise. Monotonic, so a wall clock set back (NTP, a person changing the time) can
+  /// neither hold a respawn off nor stretch a wait for the length of the step.
+  final Duration Function() _clock;
+
   /// The daemon's local transport: a Windows pipe, Unix socket, or loopback
   /// port. Shared with REST and the local WebSocket.
   final LocalDaemonTransport transport;
@@ -237,12 +250,18 @@ class LocalCliDiscovery {
     Future<void> Function()? spawnCommand,
     Future<void> Function()? stopCommand,
     LocalDaemonTransport? transport,
+    bool Function()? flashing,
+    bool Function()? uninstalling,
+    Duration Function()? monotonicClock,
   }) : identity = identity ?? LocalMachineIdentity(),
        transport =
            transport ??
            LocalDaemonTransport.detect(Uri.parse(config.localCliBaseUrl)),
        _spawnCommand = spawnCommand ?? _defaultSpawnCommand,
        _stopCommand = stopCommand ?? _defaultStopCommand,
+       _flashing = flashing ?? SerialPortLease.heldByAnotherProcess,
+       _uninstalling = uninstalling ?? UninstallMarker.held,
+       _clock = monotonicClock ?? _stopwatchClock(),
        _dio =
            dio ??
            Dio(
@@ -254,6 +273,11 @@ class LocalCliDiscovery {
            );
 
   Future<String?> computerId() => identity.computerId();
+
+  static Duration Function() _stopwatchClock() {
+    final watch = Stopwatch()..start();
+    return () => watch.elapsed;
+  }
 
   /// How long a daemon that ANSWERS is given to become ready before
   /// [ensureRunning] gives up waiting on it. Long, because the common reason
@@ -276,7 +300,7 @@ class LocalCliDiscovery {
     if (!last.alive) {
       // Same reason as the supervisor: while the dial is being flashed the daemon is down on purpose
       // and its port belongs to esptool. Down is the honest answer here — it really is not running.
-      if (SerialPortLease.heldByAnotherProcess()) {
+      if (_flashing()) {
         return last;
       }
       try {
@@ -284,8 +308,8 @@ class LocalCliDiscovery {
       } catch (_) {
         return last;
       }
-      final deadline = DateTime.now().add(timeout);
-      while (!last.alive && DateTime.now().isBefore(deadline)) {
+      final deadline = _clock() + timeout;
+      while (!last.alive && _clock() < deadline) {
         await Future.delayed(const Duration(milliseconds: 500));
         last = await probe();
       }
@@ -293,14 +317,14 @@ class LocalCliDiscovery {
     }
     // Alive, not ready. Wait for it — and if it goes DOWN meanwhile (it was a daemon on its way
     // out, say), fall back to one spawn rather than sitting on a port that just went quiet.
-    final deadline = DateTime.now().add(readyTimeout);
+    final deadline = _clock() + readyTimeout;
     var spawned = false;
-    while (DateTime.now().isBefore(deadline)) {
+    while (_clock() < deadline) {
       await Future.delayed(const Duration(milliseconds: 500));
       last = await probe();
       if (last.ready) return last;
       if (!last.alive) {
-        if (spawned || SerialPortLease.heldByAnotherProcess()) {
+        if (spawned || _flashing()) {
           return last;
         }
         spawned = true;
@@ -325,9 +349,9 @@ class LocalCliDiscovery {
     } catch (_) {
       // Judged by the port below, not by the exit code.
     }
-    final deadline = DateTime.now().add(stopTimeout);
+    final deadline = _clock() + stopTimeout;
     var seen = await probe();
-    while (seen.alive && DateTime.now().isBefore(deadline)) {
+    while (seen.alive && _clock() < deadline) {
       await Future.delayed(const Duration(milliseconds: 250));
       seen = await probe();
     }
@@ -346,8 +370,8 @@ class LocalCliDiscovery {
   /// state a daemon sits in for the length of every self-update's backend handshake, and it is what
   /// this loop used to spawn into every few seconds.
   ///
-  /// [uninstalling] holds the whole tick while `harness uninstall` is at work; [UninstallMarker.held]
-  /// by default, and a test's own answer otherwise.
+  /// A dial being flashed or `harness uninstall` at work holds the whole tick (the constructor's
+  /// `flashing` and `uninstalling`).
   ///
   /// [spawnAllowedAt] gates the spawn — not the probe — to a moment: production passes [inSpawnSlot]
   /// so the spawn keeps clear of the CLI's update slot. Outside the window a down daemon stays down
@@ -383,13 +407,11 @@ class LocalCliDiscovery {
     void Function(LocalCliEndpoint endpoint)? onSnapshot,
     void Function(bool online)? onBackendOnline,
     Future<void> Function(int pid)? checkOwner,
-    bool Function()? uninstalling,
   }) {
-    final uninstallAtWork = uninstalling ?? UninstallMarker.held;
     var backoff = initialBackoff;
     // The daemon pid [checkOwner] last saw: it is asked once per daemon, not once per tick.
     int? ownerCheckedPid;
-    var nextSpawnAllowedAt = DateTime.now();
+    var nextSpawnAllowedAt = _clock();
     var quietTicks = 0;
     var wasReady = false;
     // The daemon's backend link as last observed. Reported on every CHANGE, including the first
@@ -402,7 +424,7 @@ class LocalCliDiscovery {
     var cycleInFlight = false;
 
     void failedSpawn() {
-      nextSpawnAllowedAt = DateTime.now().add(backoff);
+      nextSpawnAllowedAt = _clock() + backoff;
       backoff = (backoff * 2) > maxBackoff ? maxBackoff : backoff * 2;
     }
 
@@ -433,12 +455,12 @@ class LocalCliDiscovery {
           // The daemon is DELIBERATELY down while the dial is being flashed — it was stopped so the
           // port could be handed over. Starting it here takes the port back mid-write and kills the
           // flash, which is what made a firmware update fail at a few tens of kilobytes.
-          if (SerialPortLease.heldByAnotherProcess()) {
+          if (_flashing()) {
             return;
           }
           // Down on purpose as well: `harness uninstall` stopped it and is removing its files. A
           // daemon started now holds them and undoes the uninstall (UninstallMarker).
-          if (uninstallAtWork()) return;
+          if (_uninstalling()) return;
           final seen = await probe();
           observe(seen);
           // A new daemon — replaced from a terminal while the app is open, say. Awaited inside the
@@ -456,7 +478,7 @@ class LocalCliDiscovery {
           if (seen.alive) return;
           quietTicks += 1;
           if (quietTicks < spawnAfter) return;
-          if (DateTime.now().isBefore(nextSpawnAllowedAt)) return;
+          if (_clock() < nextSpawnAllowedAt) return;
           if (!(spawnAllowedAt?.call(DateTime.now()) ?? true)) return;
           // A daemon that signed itself OUT — its machine was deleted from another machine, or its
           // session expired — deletes its session file. It used to exit and refuse to start again
@@ -499,8 +521,8 @@ class LocalCliDiscovery {
           }
           // The grace window ends the moment SOMETHING answers on the port — bound is what the
           // spawn was for; ready is the daemon's own business from there.
-          final deadline = DateTime.now().add(graceWindow);
-          while (DateTime.now().isBefore(deadline)) {
+          final deadline = _clock() + graceWindow;
+          while (_clock() < deadline) {
             await Future.delayed(graceStep);
             final after = await probe();
             observe(after);
