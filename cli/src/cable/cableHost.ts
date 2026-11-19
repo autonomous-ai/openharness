@@ -636,11 +636,12 @@ export class DaemonCableHost implements CableHost {
 
   /**
    * On the tab, at a read by a dial that says `appFilter`, where the filter's own D1 is: the app in front getting known
-   * agents turns the view to its ring. Decided on the agents the tab read listed, so the read takes one registry read.
+   * or resting agents turns the view to its ring. Decided on the agents the tab read listed, so the read takes one
+   * registry read. It reads what `viewOnRing` reads, or a window's view would turn back and forth.
    */
   private viewOnTab(listed: HostAgent[]): void {
     const front = this.otherFront()
-    if (front !== undefined && front !== this.pickedOver && has(this.rings.counts(listed).known, front)) this.setView('apps', 'front')
+    if (front !== undefined && front !== this.pickedOver && has(this.rings.counts(listed).inFront, front)) this.setView('apps', 'front')
   }
 
   /**
@@ -650,10 +651,10 @@ export class DaemonCableHost implements CableHost {
   private viewOnRing(shown: string): boolean {
     if (this.view !== 'apps' || (shown !== '' && shown !== 'harness')) return false
     this.setView('tabs', 'empty')
-    // Harness shown while the app in front has known agents is a pick of Harness made before the window opened: it holds
-    // as one made with the window open, or the next read's D1 would turn the view straight back.
+    // Harness shown while the app in front has known or resting agents is a pick of Harness made before the window
+    // opened: it holds as one made with the window open, or the next read's D1 would turn the view straight back.
     const front = this.otherFront()
-    if (front !== undefined && has(this.counts().known, front)) this.pickedOver = front
+    if (front !== undefined && has(this.counts().inFront, front)) this.pickedOver = front
     return true
   }
 
@@ -1215,9 +1216,11 @@ export class DaemonCableHost implements CableHost {
   /** A swipe that rested shows the agent's pane, and its app stays where it is; one superseded runs nothing. */
   swipeEnded(agentId: string, how: 'rest' | 'superseded'): void {
     if (how === 'superseded') { this.wiring.swiped?.('superseded'); return }
-    // The agent may have gone, or left its pane, since the dial turned to it.
+    // The agent may have gone, or left its pane, since the dial turned to it: asked again here, so no source brings
+    // forward an app the person has left.
     const outside = this.outsideEntry(agentId)
-    const shown = outside?.source.showPane?.(outside.agent) ?? Promise.resolve<PaneSwitch>('failed')
+    const shown = (outside?.source.hasPane?.(outside.agent) && outside.source.showPane?.(outside.agent))
+      || Promise.resolve<PaneSwitch>('failed')
     void shown.catch((): PaneSwitch => 'failed').then((outcome) => this.wiring.swiped?.(outcome))
   }
 

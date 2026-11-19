@@ -229,8 +229,11 @@ export class ObservedSource implements HostSource {
 
   list(): HostAgent[] {
     return [...this.entries.values()].map((e) => {
-      // The keys a listing source knows its panes by (registry.ts): an ended session's pane holds something else now.
-      const paneKeys = this.live(e) ? e.panes.flatMap(({ adapter, pane }) => (adapter.paneKey ? [adapter.paneKey(pane)] : [])) : []
+      // The keys a listing source knows its panes by (registry.ts).
+      const paneKeys = e.panes.flatMap(({ adapter, pane }) => (adapter.paneKey ? [adapter.paneKey(pane)] : []))
+      // An ended session gives its row to another source's live copy. It keeps its pane keys to find one whose session id
+      // differs (the Claude app's store, before it names the new id): the registry folds nothing by an ended copy's keys.
+      if (!this.live(e)) return { ...e.agent, ended: true, ...(paneKeys.length && { paneKeys }) }
       return paneKeys.length ? { ...e.agent, paneKeys } : { ...e.agent }
     })
   }
