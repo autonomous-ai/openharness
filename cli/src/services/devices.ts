@@ -47,6 +47,7 @@ import { HcSource } from '../cable/hosts/hcSource.js'
 import { createHerdrAdapter } from '../cable/hosts/herdr.js'
 import { createHerdrAppAdapter } from '../cable/hosts/herdrApp.js'
 import { createHerdrClient, herdrClientDeps, type HerdrClient } from '../cable/hosts/herdrClient.js'
+import { createHerdrOuter, ttyAtime } from '../cable/hosts/herdrOuter.js'
 import { HerdrSource } from '../cable/hosts/herdrSource.js'
 import { Inbox } from '../cable/hosts/inbox.js'
 import { LAST_ANSWER_DEADLINE_MS, LAST_ANSWER_MAX_BYTES, readLastAnswer } from '../cable/hosts/lastAnswer.js'
@@ -56,6 +57,7 @@ import { createOpenActions } from '../cable/hosts/open.js'
 import { createOpencodeClient, opencodeClientDeps, opencodeMessageId, type OpencodeClient } from '../cable/hosts/opencodeClient.js'
 import { OpencodeSource } from '../cable/hosts/opencodeSource.js'
 import { createOrcaAdapter, createOrcaReads, orcaDeps, type OrcaFocusWatch, type OrcaReadDeps, type OrcaReads, type OrcaTerminal } from '../cable/hosts/orca.js'
+import { firstOuter } from '../cable/hosts/outer.js'
 import { readRecord } from '../cable/hosts/record.js'
 import { HostRegistry, type HostEntry } from '../cable/hosts/registry.js'
 import { appRoots, learnApps, readBundleId, readProcessNames } from '../cable/hosts/scannedApp.js'
@@ -617,6 +619,9 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     after: timerIn('orcaPlugin'),
     count: (kind, reason) => orcaCount('orca', kind, reason),
   }) : null
+  /** What the lookups of an agent nested in the person's herdr or tmux read: the table, the apps and their bundle ids. */
+  const outerDeps = { run: apps.run, processes: readProcessNames, log, now: monotonic, platform: apps.platform,
+    roots: appRoots(homedir()), bundleId: readBundleId }
   const observed = env.HARNESS_DEVICE_OBSERVED ? observedSource(core.dataDir, log, orcaHomes, {
     adapters,
     modReady: (sessionId) => inbox.ready(sessionId),
@@ -636,10 +641,10 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   // Only where a hook's address is taken: following another hc session, Herdr's adapter gives its terminals no pane, so
   // a session paired there would be listed twice on Herdr's page.
   hookIds ? (pid): string | undefined => hcSource?.terminalOf(pid) : undefined,
-  // An agent in a pane of the person's tmux is on the page of the app holding the client that shows it, on every
-  // platform: the lookup answers nothing at once for an agent in no tmux pane.
-  createTmuxOuter({ run: apps.run, tmux: tmuxAt, processes: readProcessNames, log, now: monotonic, platform: apps.platform,
-    roots: appRoots(homedir()), bundleId: readBundleId })) : null
+  // An agent in a pane of the person's herdr or tmux is on the page of the app holding the client that shows it: each
+  // lookup answers nothing at once for an agent in none of its panes. herdr's first: herdr inside the person's tmux is
+  // the nearer host, and keeps tmux's answer when herdr's finds no app.
+  firstOuter(createHerdrOuter({ ...outerDeps, atime: ttyAtime }), createTmuxOuter({ ...outerDeps, tmux: tmuxAt }))) : null
   // Orca is asked only for the parts that use its homes, the first time as the devices start: the start pass waits for
   // that read (at most its 5 s), so an Orca home gets the skill with the default one.
   if (skill || observed) void orcaHomes.refresh().then(() => {
