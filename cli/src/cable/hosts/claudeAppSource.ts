@@ -111,6 +111,8 @@ export class ClaudeAppSource implements HostSource {
   private slowest: number | undefined
   private said: number | undefined
   private over = 0
+  /** Whether the last pass failed, so a run of failures says one line. */
+  private failed = false
 
   constructor(private readonly deps: ClaudeAppSourceDeps) {}
 
@@ -256,7 +258,8 @@ export class ClaudeAppSource implements HostSource {
     if (this.listing || this.named > 0 || this.again) void this.run()
   }
 
-  /** One pass: what waited, then a read. A store call that fails ends it with the rows kept; the next change runs one. */
+  /** One pass: what waited, then a read. A store call or a listener that fails ends it with the rows kept; the next
+   *  change runs one. */
   private async run(): Promise<void> {
     const pass: Pass = { under: true, gap: true, cancel: () => {} }
     this.pass = pass
@@ -294,8 +297,12 @@ export class ClaudeAppSource implements HostSource {
       const read = await this.deps.store.read()
       if (this.stops !== stops) return
       this.take(read, this.deps.monotonic() - began)
+      this.failed = false
     } catch {
       // A failed call tells nothing of the store: the rows stay as they were, and nothing throws into the devices process.
+      // The error is not said: it can name the store's folders and files.
+      if (!this.failed) this.deps.log('[claude-app] read · failed')
+      this.failed = true
     } finally {
       pass.under = false
       this.next()
