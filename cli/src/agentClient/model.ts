@@ -23,6 +23,8 @@ export interface Frame {
   namedState?: string
   /** Its launch; `failed`, live or stopped, is one that started nothing, with its code and words. */
   launch?: AgentLaunch | null
+  /** It has not taken its first task yet (lib/agentFrame.ts). Absent from an older daemon. */
+  starting?: boolean
   tmuxPane?: string | null
   /** Where it runs: a PTY host's pane is named by its instance and pane (Windows). */
   terminal?: { runtimes?: Array<{ backend?: string; instance?: string; paneId?: string }> } | null
@@ -148,6 +150,17 @@ export function namedStateOf(frame: Frame): { sentence: string; held: boolean } 
   return { sentence, held: HELD.has(sentence) || isOpenclawLocalStopped(sentence) }
 }
 
+/** The state `ps`, `show`, `wait` and `watch` list [frame] in: a failed launch over a hold, a hold over a start, and a
+ *  start over what its screen shows (an OpenClaw idle before its first task is typed). A stopped or cloud harness is in
+ *  its own state. */
+export function listedStateOf(frame: Frame): State {
+  const state = stateOf(frame)
+  if (state === 'stopped' || frame.location === 'cloud') return state
+  if (failureOf(frame)) return 'failed'
+  if (namedStateOf(frame)?.held) return 'held'
+  return frame.starting === true ? 'starting' : state
+}
+
 /**
  * The harness on [pane] in [frames], when it is an agent: who is calling. Null only for a person: a terminal's pane,
  * or one Harness does not know. Matching active harnesses only made an agent the person, with the person's right to
@@ -210,8 +223,7 @@ export function rowsOf(frames: Frame[], ctx: RowContext): Row[] {
   const rows: Row[] = []
   for (const frame of frames) {
     if (!isAgent(frame)) continue
-    // Held over what its screen shows: it waits on the person whatever it last drew.
-    const state = namedStateOf(frame)?.held ? 'held' : stateOf(frame)
+    const state = listedStateOf(frame)
     const last = frame.updatedAt ? Date.parse(frame.updatedAt) : NaN
     if (state === 'stopped' && (!ctx.all || !(ctx.now - last < STOPPED_WITHIN_MS))) continue
     const cloud = cloudMeta(frame)

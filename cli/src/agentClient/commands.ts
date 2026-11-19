@@ -34,7 +34,7 @@ import { PERSON_AGENT_ID, REPLY_OFF_TEXT } from '../messages/replyLocal.js'
 import { TELL_OFF_TEXT } from '../messages/tell.js'
 import { sendPane } from '../messages/command.js'
 import { PROGRAM_TOKEN_FLAG, ProgramRecords, programMay, readProgramToken, sameHash, type ProgramHarness, type ProgramInput } from './program.js'
-import { asSaid, callerOf, clip, cloudMeta, cloudTurn, failureOf, forAgent, isAgent, lastTurn, matching, namedStateOf, outsideCaller, rowsOf, stateOf, STOPPED_WITHIN_MS, type Caller, type CloudMeta, type Failure, type Frame, type HistoryEvent, type Row, type State } from './model.js'
+import { asSaid, callerOf, clip, cloudMeta, cloudTurn, failureOf, forAgent, isAgent, lastTurn, listedStateOf, matching, namedStateOf, outsideCaller, rowsOf, stateOf, STOPPED_WITHIN_MS, type Caller, type CloudMeta, type Failure, type Frame, type HistoryEvent, type Row, type State } from './model.js'
 
 export interface ClientDeps {
   pane?: string | undefined
@@ -983,10 +983,10 @@ export function showCommand(argv: readonly string[], deps: ClientDeps = {}): Pro
         throw new UsageError(`${name} runs in its maker's cloud: it has no folder here to read. Its links are in ${step(s.env, 'show', onAway(name, away))}.`)
       }
       const named = namedStateOf(t.frame)
-      const listed: State = named?.held ? 'held' : stateOf(t.frame)
-      // A cloud harness has no screen: its state is the cloud service's. A held one waits for the person whatever its
-      // screen shows.
-      const { screen, background } = listed === 'held' || listed === 'stopped' || listed === 'offline' || t.frame.location === 'cloud'
+      const listed = listedStateOf(t.frame)
+      // A cloud harness has no screen: its state is the cloud service's. A held, starting or failed one is that whatever
+      // its screen shows.
+      const { screen, background } = ['held', 'starting', 'failed', 'stopped', 'offline'].includes(listed) || t.frame.location === 'cloud'
         ? { screen: null, background: null } : await inspect(t)
       const state: State = screen === 'draft' ? 'idle' : screen ?? listed
       const parent = o.ledger.parentOf({ machineId: t.machineId, agentId: t.frame.id })
@@ -1551,13 +1551,14 @@ export function waitCommand(argv: readonly string[], deps: ClientDeps = {}): Pro
         }
         t.frame = frame
         if (frame.status === 'stopped') return ended(t, 'stopped')
+        const listed = listedStateOf(frame)
         // Held until the person acts, whatever its screen shows: no screen to read.
-        if (namedStateOf(frame)?.held) return 'held'
+        if (listed === 'held') return 'held'
         // A cloud harness says where it is itself, with no screen to read: done once it is no longer starting or working.
-        if (frame.location === 'cloud') {
-          const state = stateOf(frame)
-          return state === 'idle' || state === 'needs-input' || state === 'failed' ? state : null
-        }
+        if (frame.location === 'cloud') return listed === 'idle' || listed === 'needs-input' || listed === 'failed' ? listed : null
+        if (listed === 'failed') return 'failed'
+        // Its first task not taken yet: an idle screen is not its end. Looked at again each interval.
+        if (listed === 'starting') { pushedNext.delete(t); idle.delete(t); return null }
         // The daemon says it is working: no need to read its screen.
         const { screen, background: running } = frame.activity?.state === 'working' ? { screen: 'working' as const, background: null } : await inspect(t)
         // Working, by the daemon's word or the screen's: what comes next is pushed, whatever it is (its turn's end, its
@@ -1572,7 +1573,7 @@ export function waitCommand(argv: readonly string[], deps: ClientDeps = {}): Pro
         if (screen === 'draft' || (screen === null && stateOf(frame) !== 'idle')) { idle.delete(t); return null }
         // Idle, on two looks in a row with the same last turn: a message sent just before is typed within a look,
         // and the turn it starts shows as working. One idle look returned before it, on the turn before (#1180).
-        const turn = await readLastTurn(t, 1)
+        const turn = await readLastTurn(t)
         // Told more work it has not taken yet: idle on the answer to the work before.
         if (toldPending(o, t, turn, s.now())) { idle.delete(t); return null }
         const key = turn ? `${turn.ask}\u0000${turn.tools}\u0000${turn.answer.length}` : ''
@@ -1629,13 +1630,16 @@ export function waitCommand(argv: readonly string[], deps: ClientDeps = {}): Pro
         const quiet = pushing && !following.length && targets.every((t) => settled.has(t) || pushedNext.has(t))
         await push.sleep(Math.min(quiet ? PUSHED_BACKSTOP_MS : s.intervalMs, Math.max(0, deadline - s.now())))
       }
-      const results: Array<{ name: string; id: string; state: Settled | 'installing' | 'starting'; detail?: string; cloud?: CloudMeta; backgroundCommands?: number; namedState?: string }> = [
+      const results: Array<{ name: string; id: string; state: Settled | 'installing' | 'starting'; detail?: string; cloud?: CloudMeta; backgroundCommands?: number; namedState?: string; failure?: Failure }> = [
         ...targets.filter((t) => settled.has(t)).map((t) => {
           const cloud = cloudMeta(t.frame)
           // Held by its background commands at its last look, so it timed out on them.
           const running = background.get(t)
           const named = namedStateOf(t.frame)?.sentence
-          return { name: t.frame.name ?? t.frame.id.slice(0, 8), id: t.frame.id, state: settled.get(t)!, ...(cloud ? { cloud } : {}), ...(running ? { backgroundCommands: running } : {}), ...(named ? { namedState: named } : {}) }
+          // Its launch failed on its machine: why, and exit 1. A cloud harness's failure is its maker's.
+          const failure = settled.get(t) === 'failed' && t.frame.location !== 'cloud' ? failureOf(t.frame) : undefined
+          return { name: t.frame.name ?? t.frame.id.slice(0, 8), id: t.frame.id, state: settled.get(t)!, ...(cloud ? { cloud } : {}), ...(running ? { backgroundCommands: running } : {}),
+            ...(named ? { namedState: named } : {}), ...(failure ? { failure } : {}) }
         }),
         // Not started yet when the wait ended: said as what it waits for, which is what the agent waits on.
         ...following.filter((a) => gave.has(a)).map((a) => {
@@ -1663,6 +1667,7 @@ export function waitCommand(argv: readonly string[], deps: ClientDeps = {}): Pro
           : r.state === 'timeout' && r.namedState ? `${r.namedState} Wait again or read it: ${read}`
           : r.state === 'timeout' ? `still working; wait again or read it: ${read}`
           : r.state === 'installing' || r.state === 'starting' ? `${askedLine(s.env, following.find((a) => a.row.creation.creationId === r.id)!, away)}`
+          : r.failure ? r.failure.detail ?? r.failure.error
           : r.state === 'failed' && targets.some((t) => t.frame.id === r.id) ? `it failed in the cloud; what it said and its links: ${read}`
           : r.state === 'failed' ? `it never started: ${r.detail || 'its machine refused it'}`
           // Harness closes one another agent started once it has sat idle half an hour (services/agentCleanup.ts): its
@@ -1673,7 +1678,9 @@ export function waitCommand(argv: readonly string[], deps: ClientDeps = {}): Pro
         if (r.state === 'gone') s.out(formatNext(nextOf(r))!)
       }
       const states = results.map((r) => r.state)
+      // A harness that never started and a failed cloud harness keep 4, which clients already read.
       return states.some((x) => x === 'timeout' || x === 'installing' || x === 'starting') ? EXIT.timeout : states.includes('needs-input') || states.includes('held') ? EXIT.needsInput
+        : results.some((r) => r.failure) ? EXIT.failed
         : states.some((x) => x === 'stopped' || x === 'gone' || x === 'failed') ? EXIT.stopped : EXIT.ok
     } finally {
       for (const t of targets) if (t.remote) t.daemon.close()
@@ -1720,7 +1727,7 @@ function follower(s: Setup, o: Opened, h: Target, say: (event: WatchEvent, turn:
   let turnFor: { updatedAt: string; turn: LastTurn } | null = null
   const turnNow = async () => {
     const updatedAt = h.frame.updatedAt ?? ''
-    if (!turnFor || turnFor.updatedAt !== updatedAt || !updatedAt) turnFor = { updatedAt, turn: await readLastTurn(h, 1) }
+    if (!turnFor || turnFor.updatedAt !== updatedAt || !updatedAt) turnFor = { updatedAt, turn: await readLastTurn(h) }
     return turnFor.turn
   }
   const keyOf = (turn: LastTurn): string => (turn ? `${turn.ask}\u0000${turn.tools}\u0000${turn.answer.length}` : '')
@@ -1741,9 +1748,13 @@ function follower(s: Setup, o: Opened, h: Target, say: (event: WatchEvent, turn:
     }
     h.frame = frame
     if (frame.status === 'stopped') return 'stopped'
-    // Over what its screen shows. A hold can last hours: one look a minute (the backstop), as while it works.
-    if (namedStateOf(frame)?.held) { idle = null; pushedNext = true; return 'held' }
-    if (frame.location === 'cloud') return CLOUD_EVENTS[stateOf(frame)] ?? null
+    const listed = listedStateOf(frame)
+    // Over what its screen shows. A hold or a failed launch can last hours: one look a minute (the backstop), as while
+    // it works.
+    if (listed === 'held' || listed === 'failed') { idle = null; pushedNext = true; return listed }
+    if (frame.location === 'cloud') return CLOUD_EVENTS[listed] ?? null
+    // Its first task not taken yet: looked at again each interval.
+    if (listed === 'starting') { idle = null; return 'started' }
     const { screen, background } = frame.activity?.state === 'working' ? { screen: 'working' as const, background: null } : await inspect(h)
     running = background
     if (screen === 'working' || screen === 'draft') { sawWorking = true; idle = null; pushedNext = screen === 'working'; return 'working' }
