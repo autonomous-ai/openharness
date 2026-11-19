@@ -98,7 +98,7 @@ it. Anything else in that shell never reaches the daemon, its tmux server or a p
 | Group | Variables |
 |---|---|
 | System | `PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `TMPDIR`, `TZ`, `LANG`, `LANGUAGE`, `LC_*`, `SSH_AUTH_SOCK`, `SSH_CONNECTION`, `__CF_USER_TEXT_ENCODING`, `TMUX_TMPDIR`, `ZDOTDIR`, `WSL_DISTRO_NAME` |
-| Linux desktop | `XDG_*`, `DBUS_SESSION_BUS_ADDRESS`, `DISPLAY`, `WAYLAND_DISPLAY`, `XAUTHORITY` |
+| Linux desktop | `XDG_*`, `DBUS_SESSION_BUS_ADDRESS`, `DISPLAY`, `WAYLAND_DISPLAY`, `XAUTHORITY`, `SWAYSOCK`, `HYPRLAND_INSTANCE_SIGNATURE` |
 | Network | `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`, `ALL_PROXY` and their lowercase forms, `NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE`, `SSL_CERT_DIR` |
 | Harness | `HARNESS_*`, `HARNESSD_*`, `ADAPTER_*`, `DOTENV_CONFIG_PATH`, `NODE_ENV`, and every setting of the CLI's config (`BACKEND_WS_URL`, `WEB_URL`, `PORT` and the rest) |
 | Harness OS | `npm_config_prefix`, `BROWSER` |
@@ -452,6 +452,65 @@ Phones & apps).
 
 A `history` or `dismiss` that answers *This needs a newer Harness running here* means the daemon
 still running is an older version: `harness stop && harness start`.
+
+## The dial on Linux
+
+**Starts at login.** The installer leaves a login entry, `~/.config/autostart/harnessd.desktop` (under
+`$XDG_CONFIG_HOME` when that is an absolute path), which runs `harness start` each time you log in. Turn it off where
+your desktop keeps login items (GNOME's Startup Applications, KDE's Autostart); a later install leaves it off. GNOME,
+KDE Plasma, XFCE, Cinnamon, MATE and LXQt run it; sway and Hyprland run it only with `dex` or `uwsm`. A server with
+no desktop session never runs it: use `harness service install`. `harness uninstall` removes the entry when it is
+still the installer's own; a file another app put there stays.
+
+**No access to the dial.** The dial's port belongs to a group (`dialout` on Debian, Ubuntu and Fedora, `uucp` on
+Arch). Desktop's Devices tab and `harness hardware watch` say which step is missing:
+
+| It says | It means |
+|---|---|
+| `No access to the dial. Run: sudo usermod -aG <group> $USER, then log out and in.` | Your account is not in the port's group. |
+| `No access to the dial yet. Log out and in.` | Your account is in the group; this login started before it was. |
+
+**A tap brings the window forward.** A tap focuses the agent's pane, then brings its terminal's or editor's window
+forward. What each desktop needs:
+
+| Desktop | Needs |
+|---|---|
+| sway, Hyprland, KDE Plasma | Nothing to install |
+| X11 (GNOME on X11 too) | `wmctrl` |
+| GNOME on Wayland | The Activate Window By Title extension |
+| Anything else | Nothing works: the tap chooses the pane inside its terminal only |
+
+The daemon's log says which it found, once at start and again when it changes: `[device] raise · sway` (`hyprland`,
+`kwin`, `gnome`, `x11`), or `[device] raise · none · <why>`, `<why>` one of `no desktop session`,
+`gnome without the extension`, `unknown compositor`, `no swaymsg`, `no hyprctl`, `no wmctrl`.
+
+**Links.** An agent in an app opens by the app's own link, through `xdg-open`, when an app has registered the link's
+scheme (`xdg-mime query default x-scheme-handler/<scheme>`). With none, the tap falls back to the pane.
+
+| Link | Registered by |
+|---|---|
+| `vscode://` | VS Code |
+| `cursor://` | Cursor |
+| `claude://` | The Claude desktop app (Linux beta) |
+| `codex://` | The ChatGPT desktop app (Linux preview); its package also claims `http` and `https`, so it may be offered as a browser |
+
+**kitty.** The dial reaches a kitty window only with remote control on. Add to `kitty.conf`, then restart kitty:
+
+```
+allow_remote_control socket-only
+listen_on unix:/tmp/kitty
+```
+
+kitty adds its pid to that address (`/tmp/kitty-<pid>`), which is fine. An address over 64 characters is not used.
+While remote control is off, the daemon's log says `[device] kitty · remote control off` once.
+
+**Zellij** (0.44). A tap focuses the agent's pane, and the dial's words are typed into it. The dial does not follow
+Zellij's focus: Zellij does not report it.
+
+kitty and Zellij are found on the daemon's `PATH`, else where your login shell finds them, else in the usual install
+folders.
+
+**WezTerm.** The dial's words are typed into the agent's pane.
 
 ## The daemon's control interface
 
