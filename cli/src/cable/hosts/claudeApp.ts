@@ -27,8 +27,10 @@ export function createClaudeAppAdapter(
     bundle: APP_BUNDLES.claude,
     paneOf(place: Place): Pane | undefined {
       const { __CFBundleIdentifier: bundle, CLAUDE_CODE_HOST_SESSION_ID: session } = place.hints
-      // The link is the Claude app's: a session id another app's agent carries opens no link.
-      if (bundle === APP_BUNDLES.claude && session && CLAUDE_SESSION.test(session)) {
+      // The link is the Claude app's: a session id another app's agent carries opens no link. Linux has no bundle id, so
+      // there the scan's app says it is the Claude app.
+      const claudeApp = bundle === APP_BUNDLES.claude || (deps.platform === 'linux' && !bundle && place.app === 'claude')
+      if (claudeApp && session && CLAUDE_SESSION.test(session)) {
         return { adapter: 'claude', id: session }
       }
       // Before its first hook, both the scan's parents and the session's record must say the Claude app.
