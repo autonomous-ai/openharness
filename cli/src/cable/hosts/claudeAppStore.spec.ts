@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process'
 import { lstatSync, mkdirSync, mkdtempSync, readdirSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
@@ -129,6 +130,8 @@ describe.skipIf(process.platform === 'win32')('the Claude app\'s store', () => {
       ['half a JSON text (the app mid-write)', (s) => s.text(2, `{"sessionId":"${local(2)}","cliSessionId":"${cli(2)}","cwd":"/wo`)],
       ['a file of 1 MiB + 1 byte', (s) => s.put(2, {}, { bytes: MAX_FILE_BYTES + 1 })],
       ['a link named local_….json to a good file elsewhere', (s) => symlinkSync(s.elsewhere(2), join(s.fixture.org(), `${local(2)}.json`))],
+      ['a FIFO named local_….json', (s) => execFileSync('mkfifo', [join(s.fixture.org(), `${local(2)}.json`)])],
+      ['a folder named local_….json', (s) => mkdirSync(join(s.fixture.org(), `${local(2)}.json`))],
       ['a sessionId of another local id', (s) => s.put(2, { more: { sessionId: local(9) } })],
       ['a cliSessionId of x', (s) => s.put(2, { cliSessionId: 'x' })],
       ['an upper-case cliSessionId', (s) => s.put(2, { cliSessionId: cli(2).toUpperCase() })],
@@ -183,6 +186,18 @@ describe.skipIf(process.platform === 'win32')('the Claude app\'s store', () => {
       await s.reader.files()
       rmSync(path)
       symlinkSync(s.elsewhere(1), path)
+      const read = await s.reader.read()
+      expect(read.sessions).toEqual([])
+      expect(read.skipped).toBe(1)
+    })
+
+    it('a file swapped for a FIFO between its stat and its read is not waited on', async () => {
+      const s = store()
+      const path = s.put(1)
+      await s.reader.folders()
+      await s.reader.files()
+      rmSync(path)
+      execFileSync('mkfifo', [path])
       const read = await s.reader.read()
       expect(read.sessions).toEqual([])
       expect(read.skipped).toBe(1)
