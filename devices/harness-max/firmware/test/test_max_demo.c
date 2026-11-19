@@ -1,7 +1,8 @@
 // Host tests for the scripted demo daemon (main/demo/max_demo.c), on a fake clock.
 //
 // Every frame the demo sends is parsed and held to the shape the real daemon gives that message
-// (cli/src/cable/cableSession.ts): its field names, their types, and nothing else. `seq` is checked from each welcome on.
+// (cli/src/cable/cableSession.ts on main): its field names, their types, and nothing else. `seq` is checked from each
+// welcome on. Most tests run the self-playing story (`--story`); the person's demo (`--demo`) has its own.
 #include <stdarg.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -96,8 +97,9 @@ static const shape_t SHAPES[] = {
                  {"quiet", 'b', false}, {"silent", 'b', false}, {"restore", 'b', false}}},
     {"notif.replace", {{"items", 'a', true}}},
     {"notif.seen", {{"agentId", 's', true}, {"readToken", 's', false}}},
-    {"question", {{"agentId", 's', true}, {"name", 's', true}, {"engine", 's', true}, {"machine", 's', true},
-                  {"id", 's', true}, {"questions", 'a', true}, {"permission", 'b', false}}},
+    // main's giveQuestion: a summary only, without the engine. `permission` is the Max's daemon's mark on it.
+    {"question", {{"agentId", 's', true}, {"name", 's', true}, {"machine", 's', true}, {"id", 's', true},
+                  {"questions", 'a', true}, {"permission", 'b', false}}},
     {"question.close", {{"agentId", 's', true}, {"id", 's', true}}},
     {"question.state", {{"agentId", 's', true}, {"requestId", 's', true}, {"name", 's', true}, {"engine", 's', true},
                         {"machine", 's', true}, {"ok", 'b', true}, {"id", 's', false}, {"token", 's', false},
@@ -144,6 +146,8 @@ static void check_row(const cJSON *row, const field_t *f)
 }
 static const field_t QUESTION_ROW[] = {{"key", 's', true}, {"q", 's', true}, {"options", 'S', true}, {"multi", 'b', true},
                                        {"canText", 'b', false}, {0}};
+// A `question` frame's one row: the first question's words as a drawer row holds them (noticeSummary, 239 B), no options.
+static const field_t SUMMARY_ROW[] = {{"key", 's', true}, {"q", 's', true}, {"options", 'S', true}, {0}};
 static const field_t LIBRARY_ROW[] = {{"id", 's', true}, {"machineId", 's', true}, {"name", 's', true},
                                       {"engine", 's', true}, {"status", 's', true}, {"ageSeconds", 'n', true}, {0}};
 static const field_t NOTICE_ROW[] = {{"agentId", 's', true}, {"name", 's', true}, {"machine", 's', true},
@@ -151,9 +155,13 @@ static const field_t NOTICE_ROW[] = {{"agentId", 's', true}, {"name", 's', true}
 static const field_t MACHINE_ID[] = {{"id", 's', true}, {"name", 's', true}, {0}};
 static const field_t APP_ROW[] = {{"id", 's', true}, {"name", 's', true}, {"count", 'n', true}, {"waiting", 'n', true}, {0}};
 
-// The demo's apps (hostDetect.ts's ids and names) and what the bar may do with each one's agents.
+// The demo's apps: the mockup's, by hostDetect.ts's ids and names, in its order, and what the bar may do with each one's
+// agents.
 static const struct { const char *id, *name, *caps; } APPS[] = {
-    {"orca", "Orca", "sv"}, {"harness", "Harness", "svfa"}, {"vscode", "VS Code", "s"}};
+    {"harness", "Harness", "svfa"}, {"orca", "Orca", "sv"}, {"herdr", "herdr", "sv"}, {"vscode", "VS Code", "s"},
+    {"cursor", "Cursor", "s"}, {"claude", "Claude", "s"}, {"codex", "ChatGPT", "s"}, {"terminal-app", "Terminal", "s"},
+    {"ghostty", "Ghostty", "s"}, {"iterm", "iTerm2", "s"}, {"cmux", "cmux", "s"}};
+enum { N_APPS = sizeof APPS / sizeof APPS[0] };
 
 static void check_shape(const cJSON *m)
 {
@@ -176,7 +184,15 @@ static void check_shape(const cJSON *m)
     for (const field_t *f = shape->f; f->key; f++) if (f->required) CHECK(has(m, f->key));
     const cJSON *e;
     if (!strcmp(t, "welcome")) check_row(cJSON_GetObjectItemCaseSensitive(m, "machine"), MACHINE_ID);
-    if (!strcmp(t, "question") || !strcmp(t, "question.state"))
+    if (!strcmp(t, "question")) {
+        const cJSON *questions = cJSON_GetObjectItemCaseSensitive(m, "questions");
+        CHECK(cJSON_GetArraySize(questions) == 1);
+        e = cJSON_GetArrayItem(questions, 0);
+        check_row(e, SUMMARY_ROW);
+        CHECK(eq(s_of(e, "key"), "") && cJSON_GetArraySize(cJSON_GetObjectItemCaseSensitive(e, "options")) == 0);
+        CHECK(strlen(s_of(e, "q")) > 0 && strlen(s_of(e, "q")) <= 239);
+    }
+    if (!strcmp(t, "question.state"))
         cJSON_ArrayForEach(e, cJSON_GetObjectItemCaseSensitive(m, "questions")) check_row(e, QUESTION_ROW);
     if (!strcmp(t, "player.library")) cJSON_ArrayForEach(e, cJSON_GetObjectItemCaseSensitive(m, "rows")) check_row(e, LIBRARY_ROW);
     if (!strcmp(t, "notif.replace")) cJSON_ArrayForEach(e, cJSON_GetObjectItemCaseSensitive(m, "items")) check_row(e, NOTICE_ROW);
@@ -251,10 +267,13 @@ static void emit(uint8_t type, const uint8_t *payload, size_t len, void *ctx)
     else cJSON_Delete(m);
 }
 
+// The demo the next reset starts: the self-playing story, or the one a person drives.
+static bool story = true;
+
 // A fresh demo: the replies it held, welcomes among them, are gone.
 static void reset_demo(void)
 {
-    max_demo_reset(now);
+    max_demo_reset(now, story);
     hellos_in = hellos_out = 0;
 }
 
@@ -351,6 +370,40 @@ static const cJSON *app_row(const cJSON *apps, const char *app)
     cJSON_ArrayForEach(row, cJSON_GetObjectItemCaseSensitive(apps, "apps")) if (eq(s_of(row, "id"), app)) return row;
     return NULL;
 }
+// A `question` frame's one summary row.
+static const cJSON *summary_row(const cJSON *question)
+{
+    return cJSON_GetArrayItem(cJSON_GetObjectItemCaseSensitive(question, "questions"), 0);
+}
+// Whether a notif.replace holds a row for `agent` of that kind.
+static bool drawer_has(const cJSON *drawer, const char *agent, bool question)
+{
+    const cJSON *row;
+    cJSON_ArrayForEach(row, cJSON_GetObjectItemCaseSensitive(drawer, "items"))
+        if (eq(s_of(row, "agentId"), agent) && b_of(row, "question") == question) return true;
+    return false;
+}
+// The whole question as question.state gives it (requestId `request`), read now.
+static const cJSON *read_question(const char *agent, const char *request)
+{
+    sayf("{\"t\":\"question.read\",\"agentId\":\"%s\",\"requestId\":\"%s\"}", agent, request);
+    run(50);
+    for (int i = seen_n - 1; i >= 0; i--)
+        if (eq(s_of(seen[i], "t"), "question.state") && eq(s_of(seen[i], "requestId"), request)) return seen[i];
+    fprintf(stderr, "no question.state for %s\n", request);
+    abort();
+}
+// Its first question's options, joined by '|'.
+static const char *options_of(const cJSON *state)
+{
+    static char out[256];
+    out[0] = 0;
+    const cJSON *option;
+    const cJSON *first = cJSON_GetArrayItem(cJSON_GetObjectItemCaseSensitive(state, "questions"), 0);
+    cJSON_ArrayForEach(option, cJSON_GetObjectItemCaseSensitive(first, "options"))
+        snprintf(out + strlen(out), sizeof out - strlen(out), "%s%s", out[0] ? "|" : "", option->valuestring);
+    return out;
+}
 
 // ── the roster, as the demo sent it ─────────────────────────────────────────────────────────────────
 
@@ -389,6 +442,7 @@ static void ring_is(const char *app, const char *const want[], int n)
 
 static const char *const ORCA_RING[] = {"auth-refactor", "landing-hero", "flaky-e2e", "rate-limiter", "docs-sweep"};
 static const char *const HARNESS_RING[] = {"firmware-max", "harness-cli", "docs"};
+static const char *const HERDR_RING[] = {"billing-export", "release-notes"};
 
 #define HELLO_MAX "{\"t\":\"hello\",\"fw\":\"0.1.0\",\"product\":\"harness\",\"proto\":3,\"hw\":\"max-nano\",\"board\":\"max\"," \
     "\"swarms\":\"members-v1\",\"recap\":\"long-v1\",\"activity\":\"steps-v1\",\"stats\":\"turn-v1\",\"player\":\"library-v1\"," \
@@ -397,30 +451,44 @@ static const char *const HARNESS_RING[] = {"firmware-max", "harness-cli", "docs"
 #define HELLO_PRO "{\"t\":\"hello\",\"fw\":\"0.1.0\",\"product\":\"harness\",\"proto\":3,\"hw\":\"pro\",\"board\":\"pro\"," \
     "\"swarms\":\"members-v1\",\"recap\":\"long-v1\",\"activity\":\"steps-v1\",\"stats\":\"turn-v1\",\"player\":\"library-v1\"," \
     "\"ota\":\"v1\",\"mac\":\"11:22:33:44:55:66\"}"
+// A Max that also says questionTier: a question it was told comes back to it as a silent row (main's giveQuestion).
+#define HELLO_MAX_TIER "{\"t\":\"hello\",\"fw\":\"0.1.0\",\"product\":\"harness\",\"proto\":3,\"board\":\"max\"," \
+    "\"appFilter\":\"v1\",\"questionTier\":\"v1\",\"mac\":\"aa:bb:cc:dd:ee:01\"}"
 
 // A fresh demo with a Max greeted and the attach push read. The library's last page names the agents no ring shows yet.
-static void attach(void)
+static void attach_as(bool self_playing)
 {
     forget();
     known_n = 0;
     now = 1000;
     next_seq = -1;
+    story = self_playing;
     reset_demo();
     say(HELLO_MAX);
     run(50);
-    say("{\"t\":\"player.library.get\",\"offset\":3,\"request\":1}");
+    say("{\"t\":\"player.library.get\",\"offset\":5,\"request\":1}");
     run(10);
-    CHECK(known_n == 9);
+    CHECK(known_n == 11);
     read_roster();
 }
+static void attach(void) { attach_as(true); }
 
 // ── the tests ───────────────────────────────────────────────────────────────────────────────────────
+
+// The welcome's features, as main's welcome lists them for that hello.
+static void features_are(const cJSON *welcome, const char *const want[], int n)
+{
+    const cJSON *list = cJSON_GetObjectItemCaseSensitive(welcome, "features");
+    CHECK(cJSON_GetArraySize(list) == n);
+    for (int i = 0; i < cJSON_GetArraySize(list) && i < n; i++) CHECK(eq(cJSON_GetArrayItem(list, i)->valuestring, want[i]));
+}
 
 static void test_handshake(void)
 {
     forget();
     now = 5000;
     next_seq = -1;
+    story = true;
     reset_demo();
     run(200);
     CHECK(count("welcome", NULL) == 0);   // nothing but pings before a hello
@@ -437,22 +505,22 @@ static void test_handshake(void)
     const cJSON *machine = cJSON_GetObjectItemCaseSensitive(seen[w], "machine");
     CHECK(eq(s_of(machine, "name"), "MacBook Pro"));
     CHECK(eq(s_of(seen[w], "selected"), s_of(machine, "id")));
+    // apps.switch: its hello said appFilter, so its Apps is a control the daemon answers.
     static const char *const features[] = {"voice.draft", "agents.refresh", "player.library", "resync", "form", "selection",
-                                           "visit", "question.review", "settings"};
-    const cJSON *list = cJSON_GetObjectItemCaseSensitive(seen[w], "features");
-    CHECK(cJSON_GetArraySize(list) == (int)(sizeof features / sizeof features[0]));
-    for (int i = 0; i < cJSON_GetArraySize(list); i++) CHECK(eq(cJSON_GetArrayItem(list, i)->valuestring, features[i]));
+                                           "visit", "question.review", "apps.switch", "settings"};
+    features_are(seen[w], features, (int)(sizeof features / sizeof features[0]));
 
     // Then the attach push, in the daemon's order: the one machine, tabs, the apps, the shown app's ring, the library,
     // the ring's history, the drawer.
     static const char *const order[] = {"welcome", "machines.begin", "machine", "machines.end", "swarms", "apps", "agents.begin"};
     for (size_t i = 0; i < sizeof order / sizeof order[0]; i++) CHECK(eq(s_of(seen[w + (int)i], "t"), order[i]));
     CHECK(b_of(seen[w + 2], "local") && eq(s_of(seen[w + 2], "name"), "MacBook Pro"));
-    // The app in front is Orca: it is shown, and every app with agents is listed in the daemon's fixed order.
+    // The app in front is Orca: it is shown, and every app of the mockup is listed in its order, those with no agents
+    // too (the daemon lists only apps with agents; the demo's Apps is as full as the mockup's).
     const cJSON *apps = seen[w + 5];
-    CHECK(eq(s_of(apps, "shown"), "orca") && cJSON_GetArraySize(cJSON_GetObjectItemCaseSensitive(apps, "apps")) == 3);
-    static const int counts[] = {5, 3, 1};
-    for (int i = 0; i < 3; i++) {
+    CHECK(eq(s_of(apps, "shown"), "orca") && cJSON_GetArraySize(cJSON_GetObjectItemCaseSensitive(apps, "apps")) == N_APPS);
+    static const int counts[N_APPS] = {3, 5, 2, 1};
+    for (int i = 0; i < N_APPS; i++) {
         const cJSON *row = cJSON_GetArrayItem(cJSON_GetObjectItemCaseSensitive(apps, "apps"), i);
         CHECK(eq(s_of(row, "id"), APPS[i].id) && eq(s_of(row, "name"), APPS[i].name));
         CHECK(n_of(row, "count") == counts[i] && n_of(row, "waiting") == 0);
@@ -461,13 +529,13 @@ static void test_handshake(void)
     CHECK(end > w && n_of(seen[end], "total") == 5 && eq(s_of(seen[end], "tab"), "") && eq(s_of(seen[end], "view"), "machine"));
     // Orca's ring: its five agents in their fixed order, watched and spoken to, never answered on the bar.
     ring_is("orca", ORCA_RING, 5);
-    static const char *const engine_of[] = {"claude", "codex", "claude", "codex", "claude"};
+    static const char *const engine_of[] = {"claude", "codex", "claude", "codex", "muse"};   // the mockup's engines
     for (int i = 0; i < 5; i++) CHECK(eq(caps[i], "sv") && eq(engines[i], engine_of[i]));
     int sw = find("swarms", NULL);
     CHECK(eq(s_of(seen[sw], "selected"), "") && cJSON_GetArraySize(cJSON_GetObjectItemCaseSensitive(seen[sw], "items")) == 0);
     // The library is every agent on the computer, a page at a time.
     int lib = find("player.library", NULL);
-    CHECK(lib > end && n_of(seen[lib], "total") == 9 && n_of(seen[lib], "machines") == 1);
+    CHECK(lib > end && n_of(seen[lib], "total") == 11 && n_of(seen[lib], "machines") == 1);
     CHECK(cJSON_GetArraySize(cJSON_GetObjectItemCaseSensitive(seen[lib], "rows")) == 6);
     CHECK(count("summary", NULL) == 5);   // the ring's last answers, as history
     for (int i = find("summary", NULL); i >= 0; i = find_from(i + 1, "summary", NULL)) CHECK(b_of(seen[i], "restore"));
@@ -488,7 +556,17 @@ static void test_handshake(void)
     CHECK(count("machines.begin", NULL) == 2 && count("apps", NULL) == 1 && count("agents.begin", NULL) == 1);
     CHECK(count("notif.replace", NULL) == 1);
 
-    // A round dial (no board, no capabilities): no seq, no resync, no library, no steps, no apps.
+    // A Max that says questionTier is told the daemon files a question it sends again as a row: question.tier.
+    forget();
+    reset_demo();
+    next_seq = -1;
+    say(HELLO_MAX_TIER);
+    run(50);
+    static const char *const tiered[] = {"voice.draft", "agents.refresh", "resync", "form", "selection", "visit",
+                                         "question.review", "apps.switch", "question.tier", "settings"};
+    features_are(seen[find("welcome", NULL)], tiered, (int)(sizeof tiered / sizeof tiered[0]));
+
+    // A round dial (no board, no capabilities): no seq, no resync, no library, no steps, no apps, no app switch.
     forget();
     reset_demo();
     next_seq = -1;
@@ -496,11 +574,9 @@ static void test_handshake(void)
     run(50);
     w = find("welcome", NULL);
     CHECK(w >= 0 && !has(seen[w], "seq"));
-    list = cJSON_GetObjectItemCaseSensitive(seen[w], "features");
-    for (int i = 0; i < cJSON_GetArraySize(list); i++) {
-        CHECK(!eq(cJSON_GetArrayItem(list, i)->valuestring, "resync"));
-        CHECK(!eq(cJSON_GetArrayItem(list, i)->valuestring, "player.library"));
-    }
+    static const char *const plain[] = {"voice.draft", "agents.refresh", "form", "selection", "visit", "question.review",
+                                        "settings"};
+    features_are(seen[w], plain, (int)(sizeof plain / sizeof plain[0]));
     CHECK(count("player.library", NULL) == 0 && count("apps", NULL) == 0);
     run(60000);
     CHECK(count("turn.started", NULL) > 0);
@@ -526,20 +602,25 @@ static void test_one_ring_without_app_filter(void)
     known_n = 0;
     now = 1000;
     next_seq = -1;
+    story = true;
     reset_demo();
     say(HELLO_PRO);
     run(50);
     CHECK(count("apps", NULL) == 0);
     int end = find("agents.end", NULL);
-    CHECK(end >= 0 && n_of(seen[end], "total") == 9);
+    CHECK(end >= 0 && n_of(seen[end], "total") == 11);
     read_roster();
-    CHECK(roster_n == 9);
-    static const char *const want[][3] = {
-        {"auth-refactor", "orca", "sv"}, {"landing-hero", "orca", "sv"}, {"flaky-e2e", "orca", "sv"},
-        {"rate-limiter", "orca", "sv"}, {"docs-sweep", "orca", "sv"}, {"firmware-max", "harness", "svfa"},
-        {"harness-cli", "harness", "svfa"}, {"docs", "harness", "svfa"}, {"api-client", "vscode", "s"}};
-    for (int i = 0; i < 9; i++) CHECK(eq(names[i], want[i][0]) && eq(hosts[i], want[i][1]) && eq(caps[i], want[i][2]));
-    CHECK(count("summary", NULL) == 9);   // its ring is every agent: the history of each
+    CHECK(roster_n == 11);
+    // V3's cast, in the mockup's engines: herdr's two after the story's nine.
+    static const char *const want[][4] = {
+        {"auth-refactor", "orca", "sv", "claude"}, {"landing-hero", "orca", "sv", "codex"},
+        {"flaky-e2e", "orca", "sv", "claude"}, {"rate-limiter", "orca", "sv", "codex"}, {"docs-sweep", "orca", "sv", "muse"},
+        {"firmware-max", "harness", "svfa", "claude"}, {"harness-cli", "harness", "svfa", "claude"},
+        {"docs", "harness", "svfa", "muse"}, {"api-client", "vscode", "s", "claude"},
+        {"billing-export", "herdr", "sv", "muse"}, {"release-notes", "herdr", "sv", "claude"}};
+    for (int i = 0; i < 11; i++)
+        CHECK(eq(names[i], want[i][0]) && eq(hosts[i], want[i][1]) && eq(caps[i], want[i][2]) && eq(engines[i], want[i][3]));
+    CHECK(count("summary", NULL) == 11);   // its ring is every agent: the history of each
     // app.pick is not its to send: ignored.
     forget();
     say("{\"t\":\"app.pick\",\"app\":\"harness\"}");
@@ -602,10 +683,10 @@ static void test_resync(void)
     CHECK(count("apps", NULL) == 1 && count("agents.begin", NULL) == 1 && count("swarms", NULL) == 1);
     CHECK(count("machines.begin", NULL) == 0);
     forget();
-    say("{\"t\":\"player.library.get\",\"offset\":5,\"request\":77}");
+    say("{\"t\":\"player.library.get\",\"offset\":7,\"request\":77}");
     run(50);
     int lib = find("player.library", NULL);
-    CHECK(lib >= 0 && n_of(seen[lib], "request") == 77 && n_of(seen[lib], "offset") == 3);   // 9 rows: the last page is 3..8
+    CHECK(lib >= 0 && n_of(seen[lib], "request") == 77 && n_of(seen[lib], "offset") == 5);   // 11 rows: the last page is 5..10
     forget();
     say("{\"t\":\"player.library.get\",\"offset\":-1,\"request\":78}");   // refused, as the daemon refuses it
     run(50);
@@ -646,6 +727,18 @@ static void test_app_pick(void)
     say("{\"t\":\"app.pick\"}");
     run(50);
     CHECK(count("apps", NULL) == 0 && count("agents.begin", NULL) == 0);
+    // An app listed with no agents has no ring to turn to: the list is told again, as for one the daemon does not list.
+    forget();
+    say("{\"t\":\"app.pick\",\"app\":\"cursor\"}");
+    run(50);
+    CHECK(count("apps", NULL) == 1 && count("agents.begin", NULL) == 0 && find_shown(0, "harness") >= 0);
+    CHECK(n_of(app_row(seen[find("apps", NULL)], "cursor"), "count") == 0);
+    // herdr's two, which the bar watches and talks to, with their history.
+    forget();
+    say("{\"t\":\"app.pick\",\"app\":\"herdr\"}");
+    run(50);
+    ring_is("herdr", HERDR_RING, 2);
+    CHECK(eq(caps[0], "sv") && eq(caps[1], "sv") && count("summary", NULL) == 2);
     // VS Code's one agent, which the bar may only watch.
     forget();
     say("{\"t\":\"app.pick\",\"app\":\"vscode\"}");
@@ -775,10 +868,11 @@ static void test_voice(void)
     CHECK(at >= 0);
     const cJSON *v = seen[at];
     CHECK(eq(s_of(v, "agentId"), sweep) && eq(s_of(v, "agentName"), "docs-sweep") && eq(s_of(v, "uploadId"), "up-1"));
-    CHECK(eq(s_of(v, "routeId"), "") && !b_of(v, "needsConfirm") && strlen(s_of(v, "text")) > 0);
+    // The mockup's line for that agent, which is also the status of the turn it starts.
+    CHECK(eq(s_of(v, "routeId"), "") && !b_of(v, "needsConfirm") && eq(s_of(v, "text"), "Sweep the setup docs for dead links"));
     // ...and that agent goes to work on it, then answers.
     int started = wait_for("turn.started", sweep, 3000);
-    CHECK(started > at);
+    CHECK(started > at && eq(s_of(seen[started], "text"), "Sweep the setup docs for dead links"));
     CHECK(wait_news(sweep, 40000) > started);
 
     // VS Code's agent takes no words from the bar: the daemon's refusal, before anything else is said of the recording.
@@ -810,6 +904,24 @@ static void test_voice(void)
     say("{\"t\":\"voice.abort\",\"uploadId\":\"up-3\"}");
     run(5000);
     CHECK(count("voice.transcript", NULL) == 0 && count("voice.error", NULL) == 0);
+    // Discarded after its end, while its words are on their way: they never come (main's voiceGeneration).
+    forget();
+    sayf("{\"t\":\"voice.begin\",\"agentId\":\"%s\",\"uploadId\":\"up-3b\"}", sweep);
+    pcm(8000);
+    say("{\"t\":\"voice.end\",\"uploadId\":\"up-3b\"}");
+    run(200);
+    say("{\"t\":\"voice.abort\",\"uploadId\":\"up-3b\",\"why\":\"discarded\"}");
+    run(5000);
+    CHECK(count("voice.transcript", NULL) == 0 && count("voice.error", NULL) == 0);
+    // An abort queued for an earlier recording does not cancel this one.
+    forget();
+    sayf("{\"t\":\"voice.begin\",\"agentId\":\"%s\",\"uploadId\":\"up-3c\"}", sweep);
+    pcm(8000);
+    say("{\"t\":\"voice.end\",\"uploadId\":\"up-3c\"}");
+    run(200);
+    say("{\"t\":\"voice.abort\",\"uploadId\":\"up-3b\",\"why\":\"discarded\"}");
+    run(5000);
+    CHECK(count("voice.transcript", NULL) == 1 && eq(s_of(seen[find("voice.transcript", NULL)], "uploadId"), "up-3c"));
 
     // A new recording drops the reply the last one was waiting on.
     forget();
@@ -878,18 +990,22 @@ static void test_beats(void)
 
     // landing-hero asks in Orca, which answers it: a question the bar only shows, as the daemon asks it of an agent the
     // device may not answer (services/devices.ts: shown:<id>, one prompt naming the app, its one option the app).
+    // As main sends a question, the frame is its summary: the words of the inbox's prompt; the whole of it is read.
     int q = find("question", hero);
     CHECK(q >= 0 && !strncmp(s_of(seen[q], "id"), "shown:", 6) && !has(seen[q], "permission"));
-    const cJSON *questions = cJSON_GetObjectItemCaseSensitive(seen[q], "questions");
-    CHECK(cJSON_GetArraySize(questions) == 1);
-    const cJSON *row = cJSON_GetArrayItem(questions, 0);
-    CHECK(eq(s_of(row, "key"), "prompt"));
-    CHECK(eq(s_of(row, "q"), "Use the new image in the hero, or keep the video? \xc2\xb7 answer in Orca"));
-    const cJSON *options = cJSON_GetObjectItemCaseSensitive(row, "options");
-    CHECK(cJSON_GetArraySize(options) == 1 && eq(cJSON_GetArrayItem(options, 0)->valuestring, "In Orca"));
+    const char *words = "Use the new image in the hero, or keep the video? \xc2\xb7 answer in Orca";
+    CHECK(eq(s_of(summary_row(seen[q]), "q"), words));
     CHECK(eq(s_of(seen[q], "name"), "landing-hero") && eq(s_of(seen[q], "machine"), "MacBook Pro"));
+    // The drawer is redrawn after it, the question's row first, in the same words.
+    const int drawn = find_from(q, "notif.replace", NULL);
+    CHECK(drawn > q);
+    const cJSON *first = cJSON_GetArrayItem(cJSON_GetObjectItemCaseSensitive(seen[drawn], "items"), 0);
+    CHECK(eq(s_of(first, "agentId"), hero) && b_of(first, "question") && eq(s_of(first, "summary"), words));
     const int hero_closed = find_from(q, "question.close", hero);
     CHECK(hero_closed > q && eq(s_of(seen[hero_closed], "id"), s_of(seen[q], "id")));
+    // Closed, its row goes with the next drawer.
+    const int redrawn = find_from(hero_closed, "notif.replace", NULL);
+    CHECK(redrawn > hero_closed && !drawer_has(seen[redrawn], hero, true));
     CHECK(news_from(hero_closed, hero) > hero_closed);
     // The turn goes on after the answer without starting again: a turn.started would drop the bar's open question.
     CHECK(count("turn.started", hero) == 1);
@@ -908,19 +1024,11 @@ static void test_beats(void)
     // harness-cli asks what the bar answers.
     q = find("question", cli);
     CHECK(q >= 0 && strncmp(s_of(seen[q], "id"), "shown:", 6) && !has(seen[q], "permission"));
-    row = cJSON_GetArrayItem(cJSON_GetObjectItemCaseSensitive(seen[q], "questions"), 0);
-    CHECK(eq(s_of(row, "q"), "Bump the cable protocol to 4, or keep 3 and add a field?"));
-    options = cJSON_GetObjectItemCaseSensitive(row, "options");
-    CHECK(cJSON_GetArraySize(options) == 2 && eq(cJSON_GetArrayItem(options, 0)->valuestring, "Bump to 4") &&
-          eq(cJSON_GetArrayItem(options, 1)->valuestring, "Keep 3"));
-    // firmware-max asks for a permission, drawn as Allow and Deny.
+    CHECK(eq(s_of(summary_row(seen[q]), "q"), "Bump the cable protocol to 4, or keep 3 and add a field?"));
+    // firmware-max asks for a permission: the Max's daemon marks it on the summary, so the bar draws approve and deny.
     q = find("question", fw);
     CHECK(q >= 0 && b_of(seen[q], "permission") && strncmp(s_of(seen[q], "id"), "shown:", 6));
-    row = cJSON_GetArrayItem(cJSON_GetObjectItemCaseSensitive(seen[q], "questions"), 0);
-    CHECK(eq(s_of(row, "q"), "Bash: idf.py -p /dev/ttyACM0 flash"));
-    options = cJSON_GetObjectItemCaseSensitive(row, "options");
-    CHECK(cJSON_GetArraySize(options) == 2 && eq(cJSON_GetArrayItem(options, 0)->valuestring, "Allow") &&
-          eq(cJSON_GetArrayItem(options, 1)->valuestring, "Deny"));
+    CHECK(eq(s_of(summary_row(seen[q]), "q"), "Bash: idf.py -p /dev/ttyACM0 flash"));
     // While both wait, Harness's row counts two.
     waiting = find_from(q, "apps", NULL);
     CHECK(waiting > q && n_of(app_row(seen[waiting], "harness"), "waiting") == 2);
@@ -1011,7 +1119,7 @@ static void test_question(void)
     const cJSON *questions = cJSON_GetObjectItemCaseSensitive(seen[q], "questions");
     CHECK(cJSON_GetArraySize(questions) == 1);
     CHECK(eq(s_of(seen[q], "name"), "harness-cli") && eq(s_of(seen[q], "machine"), "MacBook Pro"));
-    CHECK(eq(s_of(seen[q], "engine"), "codex") && !has(seen[q], "permission"));   // a plain question carries no mark
+    CHECK(!has(seen[q], "permission"));   // a plain question carries no mark
     char qid[64];
     snprintf(qid, sizeof qid, "%s", s_of(seen[q], "id"));
     sayf("{\"t\":\"agent.open\",\"agentId\":\"%s\"}", cli);   // a person is here: the story waits for them
@@ -1024,7 +1132,11 @@ static void test_question(void)
     CHECK(st >= 0 && b_of(seen[st], "ok") && eq(s_of(seen[st], "requestId"), "rq-1") && eq(s_of(seen[st], "id"), qid));
     CHECK(!b_of(seen[st], "submitted"));
     // A Harness agent may take spoken words: no canText:false on its questions.
-    CHECK(!has(cJSON_GetArrayItem(cJSON_GetObjectItemCaseSensitive(seen[st], "questions"), 0), "canText"));
+    const cJSON *whole = cJSON_GetArrayItem(cJSON_GetObjectItemCaseSensitive(seen[st], "questions"), 0);
+    CHECK(!has(whole, "canText"));
+    // The whole of it, which the frame left out: its words and both options.
+    CHECK(eq(s_of(whole, "q"), "Bump the cable protocol to 4, or keep 3 and add a field?"));
+    CHECK(eq(options_of(seen[st]), "Bump to 4|Keep 3") && eq(s_of(seen[st], "engine"), "claude"));
     char token[64];
     snprintf(token, sizeof token, "%s", s_of(seen[st], "token"));
 
@@ -1073,7 +1185,10 @@ static void test_question_legacy_answer(void)
     int q = until_asked("harness-cli");
     char qid[64], key[256];
     snprintf(qid, sizeof qid, "%s", s_of(seen[q], "id"));
-    snprintf(key, sizeof key, "%s", s_of(cJSON_GetArrayItem(cJSON_GetObjectItemCaseSensitive(seen[q], "questions"), 0), "key"));
+    // The frame's row is a summary with no key: the key asked with is read off the whole question.
+    const cJSON *st = read_question(cli, "lq");
+    snprintf(key, sizeof key, "%s", s_of(cJSON_GetArrayItem(cJSON_GetObjectItemCaseSensitive(st, "questions"), 0), "key"));
+    CHECK(key[0]);
     forget();
     // An answer for another request is not this one's.
     sayf("{\"t\":\"answer\",\"agentId\":\"%s\",\"requestId\":\"old\",\"answers\":{\"%s\":\"Keep 3\"}}", cli, key);
@@ -1092,13 +1207,15 @@ static void test_permission(void)
     attach();
     const char *fw = id_of("firmware-max");
     int q = until_asked("firmware-max");
-    const cJSON *row = cJSON_GetArrayItem(cJSON_GetObjectItemCaseSensitive(seen[q], "questions"), 0);
-    CHECK(eq(s_of(row, "q"), "Bash: idf.py -p /dev/ttyACM0 flash"));
+    CHECK(eq(s_of(summary_row(seen[q]), "q"), "Bash: idf.py -p /dev/ttyACM0 flash"));
     CHECK(cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(seen[q], "permission")));   // drawn as approve/deny
+    CHECK(eq(options_of(read_question(fw, "p0")), "Allow|Deny"));
+    // A resync gives it back as the drawer's row, as main's drawer carries an open question: never a second ring.
+    forget();
     say("{\"t\":\"resync\"}");
     run(50);
-    const int again = find_from(q + 1, "question", fw);
-    CHECK(again > q && cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(seen[again], "permission")));
+    const int d = find("notif.replace", NULL);
+    CHECK(count("question", NULL) == 0 && d >= 0 && drawer_has(seen[d], fw, true));
     sayf("{\"t\":\"question.read\",\"agentId\":\"%s\",\"requestId\":\"p1\"}", fw);
     run(50);
     int st = find("question.state", NULL);
@@ -1368,6 +1485,189 @@ static void test_person_takes_over(void)
     CHECK(seen_at_ >= 0 && eq(s_of(seen[seen_at_], "readToken"), tok));
 }
 
+// main's drawer (replaceNotifications): the open questions first, in their frames' words, then the answers not yet
+// read, one row per agent, at most eight. It is sent again whenever its rows change, after the frames that changed them.
+static void test_drawer(void)
+{
+    attach();
+    const char *e2e = id_of("flaky-e2e"), *cli = id_of("harness-cli"), *fw = id_of("firmware-max");
+    const int q = until_asked("harness-cli");
+    // flaky-e2e's loud answer put its row in the drawer, with the token that reads it.
+    const int done = news(e2e);
+    const int with_news = find_from(done, "notif.replace", NULL);
+    CHECK(done >= 0 && with_news > done && drawer_has(seen[with_news], e2e, false));
+    // harness-cli's question, right after its frame: first, as the frame words it, and no token.
+    const int d = find_from(q, "notif.replace", NULL);
+    CHECK(d > q);
+    const cJSON *items = cJSON_GetObjectItemCaseSensitive(seen[d], "items");
+    const cJSON *first = cJSON_GetArrayItem(items, 0);
+    CHECK(eq(s_of(first, "agentId"), cli) && b_of(first, "question") && !has(first, "readToken"));
+    CHECK(eq(s_of(first, "summary"), s_of(summary_row(seen[q]), "q")));
+    CHECK(cJSON_GetArraySize(items) <= 8);
+    bool had_news = false;
+    const cJSON *row, *other;
+    cJSON_ArrayForEach(row, items) {
+        // Questions before news; one row per agent.
+        if (b_of(row, "question")) CHECK(!had_news);
+        else had_news = true;
+        CHECK(b_of(row, "question") != has(row, "readToken"));
+        int same = 0;
+        cJSON_ArrayForEach(other, items) same += eq(s_of(other, "agentId"), s_of(row, "agentId"));
+        CHECK(same == 1);
+    }
+    CHECK(had_news);
+    char token[64] = "";
+    cJSON_ArrayForEach(row, items) if (eq(s_of(row, "agentId"), e2e)) snprintf(token, sizeof token, "%s", s_of(row, "readToken"));
+    CHECK(token[0]);
+    // Read on the bar: notif.seen, then the drawer without that row.
+    forget();
+    sayf("{\"t\":\"notif.read\",\"agentId\":\"%s\",\"readToken\":\"%s\"}", e2e, token);
+    run(50);
+    const int read = find("notif.seen", NULL);
+    const int after = find_from(read, "notif.replace", NULL);
+    CHECK(read >= 0 && after > read && count("notif.replace", NULL) == 1);
+    CHECK(!drawer_has(seen[after], e2e, false) && drawer_has(seen[after], cli, true));
+    // firmware-max asks too: both questions lead.
+    const int fq = wait_for("question", fw, 30000);
+    const int both = find_from(fq, "notif.replace", NULL);
+    CHECK(fq >= 0 && both > fq);
+    items = cJSON_GetObjectItemCaseSensitive(seen[both], "items");
+    CHECK(b_of(cJSON_GetArrayItem(items, 0), "question") && b_of(cJSON_GetArrayItem(items, 1), "question"));
+    CHECK(drawer_has(seen[both], cli, true) && drawer_has(seen[both], fw, true));
+    // A greeting with questions open: its push's drawer carries them, and no question frame rings them again (main's
+    // greeting asks only what its drawer could not hold, and the demo never has eight questions open).
+    forget();
+    say(HELLO_MAX_TIER);
+    run(50);
+    const int g = find("notif.replace", NULL);
+    CHECK(count("welcome", NULL) == 1 && count("question", NULL) == 0 && g >= 0);
+    CHECK(drawer_has(seen[g], cli, true) && drawer_has(seen[g], fw, true));
+}
+
+// Words to `name` from the bar, with seen forgotten first; the transcript's index.
+static int talk(const char *name)
+{
+    static int upload;
+    forget();
+    sayf("{\"t\":\"voice.begin\",\"agentId\":\"%s\",\"uploadId\":\"pm-%d\"}", id_of(name), ++upload);
+    pcm(16000);
+    sayf("{\"t\":\"voice.end\",\"uploadId\":\"pm-%d\"}", upload);
+    const int at = wait_for("voice.transcript", NULL, 5000);
+    CHECK(at >= 0 && eq(s_of(seen[at], "agentId"), id_of(name)));
+    return at;
+}
+// Words to `name` that are heard as `line` and start its turn, with `line` as the turn's status.
+static void heard(const char *name, const char *line)
+{
+    const int at = talk(name);
+    CHECK(eq(s_of(seen[at], "text"), line));
+    const int started = wait_for("turn.started", id_of(name), 3000);
+    CHECK(started > at && eq(s_of(seen[started], "text"), line));
+}
+
+// The demo a person drives (`--demo`): nothing moves by itself. What they say to an agent is the mockup's line for it,
+// and the turn it starts; the four agents with a case play it, then their line, then the case again.
+static void test_person_mode(void)
+{
+    attach_as(false);
+    const char *rate = id_of("rate-limiter"), *hero = id_of("landing-hero"), *fw = id_of("firmware-max");
+    const char *cli = id_of("harness-cli");
+    // Five minutes alone: pings and the library, nothing else. No turn, no question, no app to the front, the drawer
+    // as the attach drew it.
+    forget();
+    run(300000);
+    CHECK(count("ping", NULL) >= 50 && count("player.library", NULL) > 0);
+    CHECK(count("turn.started", NULL) == 0 && count("turn.activity", NULL) == 0 && count("question", NULL) == 0);
+    CHECK(count("apps", NULL) == 0 && count("agents.begin", NULL) == 0 && count("notif.replace", NULL) == 0);
+
+    // rate-limiter's case: a test run that fails. Then its line, which ends well; then the case again.
+    heard("rate-limiter", "Add a sliding-window limit to the public API");
+    int at = wait_for("turn.error", rate, 30000);
+    CHECK(at >= 0 && eq(s_of(seen[at], "message"), "npm test failed: 3 rate-limit tests time out"));
+    heard("rate-limiter", "Start with the login route only");
+    at = wait_news(rate, 30000);
+    CHECK(at >= 0 && eq(s_of(seen[at], "recap"), "Only the login route is limited") && eq(s_of(seen[at], "tier"), "alert"));
+    heard("rate-limiter", "Add a sliding-window limit to the public API");
+    CHECK(wait_for("turn.error", rate, 30000) >= 0);
+
+    // landing-hero's case: a question only Orca answers. Nobody answers it on the computer by itself...
+    heard("landing-hero", "Freshen up the landing hero");
+    at = wait_for("question", hero, 30000);
+    CHECK(at >= 0 && !strncmp(s_of(seen[at], "id"), "shown:", 6));
+    forget();
+    run(120000);
+    CHECK(count("question.close", NULL) == 0);
+    // ...until it is brought up in Orca, where the person answers it a moment later.
+    sayf("{\"t\":\"agent.open\",\"agentId\":\"%s\"}", hero);
+    run(6050);
+    CHECK(find("question.close", hero) >= 0);
+    at = wait_news(hero, 20000);
+    CHECK(at >= 0 && eq(s_of(seen[at], "recap"), "Hero uses the new image"));
+    // It has no line of its own: the mockup's line for any other.
+    heard("landing-hero", "Run the suite again before you push");
+    at = wait_news(hero, 30000);
+    CHECK(at >= 0 && eq(s_of(seen[at], "recap"), "The whole suite passes"));
+
+    // firmware-max's case: the permission prompt. Words to it then do not answer it; they wait for the turn to end.
+    heard("firmware-max", "Build the firmware with the app picker");
+    at = wait_for("question", fw, 30000);
+    CHECK(at >= 0 && b_of(seen[at], "permission"));
+    at = talk("firmware-max");
+    CHECK(eq(s_of(seen[at], "text"), "Flash it when the build is green"));
+    run(3000);
+    CHECK(count("question.close", NULL) == 0 && count("turn.started", NULL) == 0);
+    char token[64];
+    snprintf(token, sizeof token, "%s", s_of(read_question(fw, "pm-p"), "token"));
+    sayf("{\"t\":\"answer.reviewed\",\"agentId\":\"%s\",\"token\":\"%s\",\"requestId\":\"pm-a\",\"choices\":[1]}", fw, token);
+    at = wait_news(fw, 30000);
+    CHECK(at >= 0 && eq(s_of(seen[at], "recap"), "The Max is flashed with the app picker"));
+    const int next = wait_for("turn.started", fw, 5000);
+    CHECK(next > at && eq(s_of(seen[next], "text"), "Flash it when the build is green"));
+    run(15000);
+    at = news_from(next, fw);
+    CHECK(at > next && eq(s_of(seen[at], "recap"), "Built green and flashed"));
+
+    // harness-cli's case: a question the bar answers. Words to it are the answer, with the line's option: Keep 3.
+    heard("harness-cli", "Put the app list on the cable");
+    CHECK(wait_for("question", cli, 30000) >= 0);
+    at = talk("harness-cli");
+    CHECK(eq(s_of(seen[at], "text"), "Keep three and add the field"));
+    const int closed = wait_for("question.close", cli, 3000);
+    CHECK(closed > at);
+    at = wait_news(cli, 30000);
+    CHECK(at > closed && strstr(s_of(seen[at], "text"), "stays at 3") && count("turn.started", NULL) == 0);
+    // An answer is no new turn: its line comes next, as a turn of its own that asks nothing, then the case again.
+    heard("harness-cli", "Keep three and add the field");
+    CHECK(wait_news(cli, 30000) >= 0 && count("question", NULL) == 0);
+    heard("harness-cli", "Put the app list on the cable");
+    CHECK(wait_for("question", cli, 30000) >= 0);
+
+    // The others say their line, or the line for any other: herdr's agents too.
+    heard("auth-refactor", "Also cover the expired token case with a test");
+    at = wait_news(id_of("auth-refactor"), 30000);
+    CHECK(at >= 0 && eq(s_of(seen[at], "recap"), "Expired tokens are covered by a test"));
+    heard("billing-export", "Run the suite again before you push");
+    CHECK(wait_news(id_of("billing-export"), 30000) >= 0);
+
+    // New Harness starts agents, which stay: the bar holds 14 in all.
+    for (int i = 0; i < 4; i++) {
+        forget();
+        form("open", "\"surface\":\"new\"");
+        form_rev("activate", 0);
+        run(2000);
+    }
+    const cJSON *st = form("state", "\"revision\":0");
+    CHECK(eq(s_of(st, "error"), "The bar holds 14 agents. Wait for one to finish."));
+    forget();
+    say("{\"t\":\"player.library.get\",\"offset\":0,\"request\":9}");
+    run(50);
+    CHECK(n_of(seen[find("player.library", NULL)], "total") == 14);
+    run(600000);
+    say("{\"t\":\"player.library.get\",\"offset\":0,\"request\":10}");
+    run(50);
+    CHECK(n_of(seen[find("player.library", NULL)], "total") == 14);
+}
+
 static void test_machine_select(void)
 {
     attach();
@@ -1408,7 +1708,7 @@ static void random_frame(void)
     const char *agent = known_n ? known_ids[rnd((uint32_t)known_n)] : "x";
     const char *agents[] = {agent, "nobody", "", "\\u0000"};
     const char *a = agents[rnd(4) ? 0 : rnd(4)];
-    static const char *const apps[] = {"orca", "harness", "vscode", "nope", "", "0123456789abcdefg"};
+    static const char *const apps[] = {"orca", "harness", "vscode", "herdr", "cursor", "nope", "", "0123456789abcdefg"};
     static int upload;
     switch (rnd(26)) {
     case 0: say(HELLO_MAX); break;
@@ -1432,11 +1732,11 @@ static void random_frame(void)
         break;
     }
     case 14: sayf("{\"t\":\"voice.begin\",\"formId\":\"f%u\",\"formRevision\":%u,\"uploadId\":\"u%d\"}", rnd(2), rnd(40), ++upload); break;
-    case 15: sayf("{\"t\":\"player.library.get\",\"offset\":%u,\"request\":%u}", rnd(9), rnd(1000)); break;
+    case 15: sayf("{\"t\":\"player.library.get\",\"offset\":%u,\"request\":%u}", rnd(15), rnd(1000)); break;
     case 16: sayf("{\"t\":\"notif.read\",\"agentId\":\"%s\",\"readToken\":\"rt%u\"}", a, rnd(50)); break;
     case 17: sayf("{\"t\":\"machine.select\",\"machineId\":\"m-%s\"}", rnd(2) ? "mbp" : "x"); break;
     case 18: say("{\"t\":\"pong\"}"); break;
-    case 19: say("{\"t\":\"voice.abort\"}"); break;
+    case 19: sayf("{\"t\":\"voice.abort\",\"uploadId\":\"u%d\",\"why\":\"discarded\"}", upload - (int)rnd(2)); break;
     case 20: {   // bytes that are not JSON, or JSON that is not a message
         size_t n = rnd(sizeof json);
         for (size_t i = 0; i < n; i++) json[i] = (char)rnd(256);
@@ -1450,18 +1750,19 @@ static void random_frame(void)
         break;
     }
     case 22: say("{\"t\":7}"); break;
-    case 23: sayf("{\"t\":\"app.pick\",\"app\":\"%s\"}", apps[rnd(6)]); break;
+    case 23: sayf("{\"t\":\"app.pick\",\"app\":\"%s\"}", apps[rnd(8)]); break;
     case 24: sayf("{\"t\":\"turn.stop\",\"agentId\":\"%s\"}", a); break;
     default: max_demo_receive((uint8_t)rnd(8), (const uint8_t *)"{}", 2, now); break;
     }
 }
 
-static void test_soak(void)
+static void test_soak(bool self_playing)
 {
     forget();
     known_n = 0;
     now = 0xFFFF0000u;   // across the clock's wrap too
     next_seq = -1;
+    story = self_playing;
     reset_demo();
     say(HELLO_MAX);
     run(100);
@@ -1490,7 +1791,8 @@ static void test_soak(void)
     CHECK(now - last_frame_at < 10000);   // still talking at the end of the day
     CHECK(worst_frames <= 128 && worst_bytes <= 64 * 1024);
     CHECK(total < 400u * 1024u * 1024u);
-    printf("soak: 24 h, %zu KB sent, worst tick %zu frames / %zu B\n", total / 1024, worst_frames, worst_bytes);
+    printf("soak (%s): 24 h, %zu KB sent, worst tick %zu frames / %zu B\n", self_playing ? "story" : "demo", total / 1024,
+           worst_frames, worst_bytes);
 }
 
 int main(void)
@@ -1513,8 +1815,11 @@ int main(void)
     test_form_voice();
     test_story_loops();
     test_person_takes_over();
+    test_drawer();
+    test_person_mode();
     test_machine_select();
-    test_soak();
+    test_soak(true);
+    test_soak(false);
     forget();
     printf("test_max_demo: %d checks passed\n", checks);
     return 0;

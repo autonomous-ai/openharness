@@ -1,10 +1,11 @@
 // The scripted demo daemon: see max_demo.h.
 //
-// What it says, and in what order, is cableSession.ts's (cli/src/cable): the same messages and fields, so a bar showing
-// this story shows a real computer the same way. It leaves out what only a real computer has: firmware updates, pets,
-// windows and tabs, model lists, drafts and passages. One computer runs agents in three apps. A device that says
-// appFilter (the Max) is shown one app's agents at a time, as the daemon shows them
-// (docs/specs/2026-11-14-dial-app-filter.md); any other gets one ring of every agent.
+// What it says, and in what order, is cableSession.ts's (cli/src/cable on main): the same messages and fields, so a bar
+// showing this demo shows a real computer the same way. It leaves out what only a real computer has: firmware updates,
+// pets, windows and tabs, model lists, drafts and passages. One computer lists the mockup's eleven apps, with agents in
+// four of them. A device that says appFilter (the Max) is shown one app's agents at a time, as the daemon shows them
+// (docs/specs/2026-11-14-dial-app-filter.md); any other gets one ring of every agent. The cast, the turns and the words
+// a person says are the V3 demo's (flutter/lib/demo/demo_script.dart), which took them from this file and the mockup.
 #include "demo/max_demo.h"
 
 #include <stdbool.h>
@@ -32,8 +33,8 @@ enum {
     SHOWN_WAIT_MS = 12000,   // the same for one the bar only shows: nobody can answer it there, so its app does sooner
     MIN_PCM = 3200,          // 0.1 s of 16 kHz, 16-bit audio: less is nothing said
     VOICE_MAX_BYTES = 10 * 60 * 32000,   // the daemon's ceiling on one recording
-    MAX_AGENTS = 12,
-    SCRIPTED = 9,
+    MAX_AGENTS = 14,
+    SCRIPTED = 11,
     PAGE_ROWS = 6,           // cableSession.ts: a library page
     DRAWER_ROWS = 8,
     ID_MAX = 64,             // the longest id the device may send that is said back
@@ -48,17 +49,21 @@ static bool due(uint32_t now, uint32_t at) { return (int32_t)(now - at) >= 0; }
 #define MACHINE_ID "m-mbp"
 #define MACHINE_NAME "MacBook Pro"
 
-// The apps the agents run in, by hostDetect.ts's ids and names, in the order the daemon lists them, and what the
-// device may do with each one's agents (services/devices.ts): s show, v talk to, f bring forward, a answer.
-enum { APP_ORCA, APP_HARNESS, APP_VSCODE, N_APPS };
+// The mockup's apps (diego-1tap.html APPS), in its order, by hostDetect.ts's ids and names, and what the device may do
+// with each one's agents (services/devices.ts): s show, v talk to, f bring forward, a answer.
+enum { APP_HARNESS, APP_ORCA, APP_HERDR, APP_VSCODE, N_APPS = 11 };
 static const struct { const char *id, *name, *caps; } APPS[N_APPS] = {
-    {"orca", "Orca", "sv"}, {"harness", "Harness", "svfa"}, {"vscode", "VS Code", "s"}};
+    {"harness", "Harness", "svfa"}, {"orca", "Orca", "sv"}, {"herdr", "herdr", "sv"}, {"vscode", "VS Code", "s"},
+    {"cursor", "Cursor", "s"}, {"claude", "Claude", "s"}, {"codex", "ChatGPT", "s"}, {"terminal-app", "Terminal", "s"},
+    {"ghostty", "Ghostty", "s"}, {"iterm", "iTerm2", "s"}, {"cmux", "cmux", "s"}};
 
+// New Harness's engines.
 static const char *const ENGINES[] = {"claude", "codex"};
 static const char *const ENGINE_NAMES[] = {"Claude Code", "Codex"};
 
-// A turn is a list of beats, each played some tenths of a second after the one before it.
-enum { B_END, B_START, B_ACT, B_STEP, B_ASK, B_STATS, B_DONE, B_FAIL };
+// A turn's work is a list of beats, each played some tenths of a second after the one before it; the turn's status
+// line (turn.started) goes first, from whoever started it.
+enum { B_END, B_ACT, B_STEP, B_ASK, B_STATS, B_DONE, B_FAIL };
 enum { TIER_ALERT, TIER_LIST, TIER_SILENT };
 static const char *const TIERS[] = {"alert", "list", "silent"};
 
@@ -67,15 +72,15 @@ typedef struct {
     uint8_t kind, tier;
     bool timer;              // B_ACT: the footer's timer rides along (elapsedSeconds)
     uint16_t wait_ds;
-    const char *a, *b, *c;   // START: status. ACT: status, sentence. STEP: step. DONE: recap, text, full. FAIL: message
+    const char *a, *b, *c;   // ACT: status, sentence. STEP: step. DONE: recap, text, full. FAIL: message
     const question_t *ask;
     uint16_t n[5];           // STATS: tests passed, failed, commits, thousands of tokens in, out
 } beat_t;
 
 // One question with up to three options; each answer goes on with its own beats. A permission prompt is one of these,
-// sent with `permission: true` as the daemon marks one, so the bar draws it as approve/deny. An agent the device may
-// not answer asks it shown-only: the bar draws the question and the app to answer it in, and the app answers with the
-// first option. The beats after an answer start with no turn.started: the turn goes on.
+// sent with `permission: true` as the Max's daemon marks one, so the bar draws it as approve/deny. An agent the device
+// may not answer asks it shown-only: the bar draws the question and the app to answer it in, and the app answers with
+// the first option. The beats after an answer start with no turn.started: the turn goes on.
 struct question {
     const char *q;
     const char *options[3];
@@ -84,7 +89,6 @@ struct question {
     const beat_t *next[3];
 };
 
-#define START(w, s) {.kind = B_START, .wait_ds = (w), .a = (s)}
 #define ACT(w, s, said) {.kind = B_ACT, .wait_ds = (w), .a = (s), .b = (said)}
 #define TIMER(w, s) {.kind = B_ACT, .wait_ds = (w), .a = (s), .timer = true}
 #define STEP(w, s) {.kind = B_STEP, .wait_ds = (w), .a = (s)}
@@ -94,9 +98,11 @@ struct question {
 #define FAIL(w, m) {.kind = B_FAIL, .wait_ds = (w), .a = (m)}
 #define END {.kind = B_END}
 
+// The story's turns start "Working…", as the daemon's status line does before an agent says anything.
+#define WORKING "Working…"
+
 // Orca's auth-refactor: the session lookup out of the middleware, with spinner words and steps under them.
 static const beat_t AUTH_SPLIT[] = {
-    START(0, "Working…"),
     ACT(10, "Planning", "Splitting the auth middleware: the session lookup moves out of the request handler."),
     STEP(10, "Read · middleware.ts"),
     STEP(15, "Read · session.ts"),
@@ -114,7 +120,6 @@ static const beat_t AUTH_SPLIT[] = {
     END};
 // ...and later, small work nobody needs to hear about.
 static const beat_t AUTH_FOLLOW[] = {
-    START(0, "Working…"),
     ACT(10, "Cleaning up", "Removing the old session helpers nothing calls any more."),
     STEP(10, "Edit · legacySession.ts"),
     STEP(15, "Bash · npm test -- auth"),
@@ -139,7 +144,6 @@ static const beat_t HERO_IMAGE[] = {
 static const question_t Q_HERO = {
     "Use the new image in the hero, or keep the video?", {"Use the image"}, 1, false, {HERO_IMAGE}};
 static const beat_t HERO_ASK[] = {
-    START(0, "Working…"),
     ACT(10, "Reading", "Looking at the landing page's hero section."),
     STEP(10, "Read · Hero.tsx"),
     STEP(15, "Bash · ls public/hero"),
@@ -149,7 +153,6 @@ static const beat_t HERO_ASK[] = {
 
 // Orca's flaky-e2e: a flake found and fixed, said out loud.
 static const beat_t E2E_FIX[] = {
-    START(0, "Working…"),
     ACT(10, "Reproducing", "Running the checkout test 20 times to catch the flake."),
     STEP(10, "Bash · npx playwright test checkout --repeat-each 20"),
     TIMER(30, "Running tests"),
@@ -167,7 +170,6 @@ static const beat_t E2E_FIX[] = {
 
 // Orca's rate-limiter: a test run that fails, then the fix.
 static const beat_t RATE_LIMIT[] = {
-    START(0, "Working…"),
     ACT(10, "Reading", "Adding a sliding-window limit to the public API."),
     STEP(10, "Read · limiter.ts"),
     STEP(15, "Edit · limiter.ts"),
@@ -176,7 +178,6 @@ static const beat_t RATE_LIMIT[] = {
     FAIL(30, "npm test failed: 3 rate-limit tests time out"),
     END};
 static const beat_t RATE_FIX[] = {
-    START(0, "Working…"),
     ACT(10, "Fixing", "The tests wait on the real clock; moving them to fake timers."),
     STEP(10, "Edit · limiter.test.ts"),
     STEP(10, "Bash · npm test"),
@@ -214,7 +215,6 @@ static const beat_t CLI_KEEP[] = {
 static const question_t Q_PROTO = {
     "Bump the cable protocol to 4, or keep 3 and add a field?", {"Bump to 4", "Keep 3"}, 2, false, {CLI_BUMP, CLI_KEEP}};
 static const beat_t CLI_PROTO[] = {
-    START(0, "Working…"),
     ACT(10, "Reading", "Reading the cable session and the dial's hello for the new app list."),
     STEP(10, "Read · cableSession.ts"),
     STEP(15, "Read · cable.md"),
@@ -241,7 +241,6 @@ static const beat_t FW_STOP[] = {
     END};
 static const question_t Q_FLASH = {"Bash: idf.py -p /dev/ttyACM0 flash", {"Allow", "Deny"}, 2, true, {FW_DONE, FW_STOP}};
 static const beat_t FW_FLASH[] = {
-    START(0, "Working…"),
     ACT(10, "Building", "Building the Max firmware with the new app picker."),
     STEP(10, "Bash · idf.py build"),
     TIMER(25, "Building"),
@@ -252,7 +251,6 @@ static const beat_t FW_FLASH[] = {
 
 // Harness's docs finishes quietly.
 static const beat_t DOCS_PAGE[] = {
-    START(0, "Working…"),
     ACT(10, "Writing", "Documenting the apps frame and app.pick on the cable page."),
     STEP(10, "Edit · cable.md"),
     STEP(20, "Edit · dial-app-filter.md"),
@@ -264,7 +262,7 @@ static const beat_t DOCS_PAGE[] = {
          "follows it."),
     END};
 
-enum { AUTH, HERO, E2E, RATE, SWEEP, FW, CLI, DOCS, API };
+enum { AUTH, HERO, E2E, RATE, SWEEP, FW, CLI, DOCS, API, BILL, NOTES };
 static const struct { uint32_t at; uint8_t agent; const beat_t *turn; } STORY[] = {
     {1000, AUTH, AUTH_SPLIT}, {3000, HERO, HERO_ASK}, {6000, E2E, E2E_FIX}, {24000, RATE, RATE_LIMIT},
     {48000, RATE, RATE_FIX}, {72000, CLI, CLI_PROTO}, {75000, FW, FW_FLASH}, {80000, DOCS, DOCS_PAGE},
@@ -275,49 +273,103 @@ enum { N_STORY = sizeof STORY / sizeof STORY[0] };
 static const struct { uint32_t at; uint8_t app; } FRONT[] = {{0, APP_ORCA}, {70000, APP_HARNESS}, {130000, APP_ORCA}};
 enum { N_FRONT = sizeof FRONT / sizeof FRONT[0] };
 
-// What a person says, in turn, and what the agent then does.
-static const beat_t SAID_RETRY[] = {
-    START(0, "Working…"),
-    ACT(10, "Reading the API client", "Adding a retry with backoff around the request."),
-    STEP(5, "Edit · apiClient.ts"),
-    STEP(15, "Bash · npm test -- apiClient"),
+// What a person says to an agent, the turn it starts (the words are its status), and, said to the agent's open question
+// the bar may answer, the option they answer it with.
+typedef struct {
+    const char *said;
+    const beat_t *work;
+    uint8_t option;
+} spoken_t;
+
+static const beat_t SAY_AUTH[] = {
+    ACT(10, "Reading", "Looking at what session.ts does with a token that has expired."),
+    STEP(10, "Read · session.test.ts"),
+    ACT(15, "Editing", "Adding a test where the token expires mid-request."),
+    STEP(10, "Edit · session.test.ts"),
+    STEP(15, "Bash · npm test -- auth"),
     TIMER(20, "Running tests"),
-    STATS(15, 18, 0, 1, 16, 3),
-    DONE(0, TIER_ALERT, "Requests retry 3 times with backoff",
-         "The API client retries a failed request 3 times, waiting 1, 2 and 4 s. 18/18 tests pass.",
-         "Wrapped the request in a retry: three tries on a network error or a 5xx, waiting 1, 2 and 4 seconds, "
-         "never on a 4xx. Added tests for each case; 18/18 pass. One commit: Retry failed requests."),
+    DONE(15, TIER_ALERT, "Expired tokens are covered by a test",
+         "A new test lets the token expire mid-request: the session refreshes once and the request goes through. "
+         "65/65 tests pass.", NULL),
     END};
-static const beat_t SAID_TEST[] = {
-    START(0, "Working…"),
-    ACT(10, "Writing the test", "Adding a test that renders the cart with nothing in it."),
-    STEP(5, "Edit · cart.test.tsx"),
-    STEP(15, "Bash · npm test -- cart"),
+static const beat_t SAY_E2E[] = {
+    ACT(10, "Pushing", "Starting 50 runs of the checkout test on CI."),
+    STEP(10, "Bash · gh workflow run e2e.yml -f repeat=50"),
+    TIMER(30, "Waiting for CI"),
+    TIMER(30, "Waiting for CI"),
+    DONE(15, TIER_ALERT, "Checkout passes 50 more runs on CI",
+         "CI ran the checkout test 50 more times and every run passed. The flake is gone.", NULL),
+    END};
+static const beat_t SAY_RATE[] = {
+    ACT(10, "Editing", "Limiting POST /login first; the other routes wait."),
+    STEP(10, "Edit · limiter.ts"),
+    STEP(15, "Edit · routes/login.ts"),
+    STEP(10, "Bash · npm test -- limiter"),
     TIMER(20, "Running tests"),
-    STATS(15, 88, 0, 1, 11, 2),
-    DONE(0, TIER_ALERT, "Added a test for the empty cart",
-         "A new test renders the cart with nothing in it and checks the empty state. 88/88 tests pass.",
-         "Added cart.test.tsx: it renders the cart with no items and checks the empty-state text and the Shop button. "
-         "88/88 tests pass. One commit: Test the empty cart."),
+    DONE(15, TIER_ALERT, "Only the login route is limited",
+         "POST /login allows 10 tries a minute per address; the other routes are not limited yet. 112/112 tests pass.",
+         NULL),
     END};
-static const beat_t SAID_RECAP[] = {
-    START(0, "Working…"),
-    STEP(10, "Bash · git log --since=8am --oneline"),
-    ACT(15, "Reading the log", "Reading today's commits."),
-    DONE(20, TIER_ALERT, "Today: 5 commits, auth and checkout",
-         "Since this morning: the session split, a stable checkout test, the rate limiter and the new hero.",
-         "Five commits since 8 am: the session lookup out of the auth middleware, the checkout e2e fix, the rate "
-         "limiter with its tests on fake timers, the new hero image and the cable docs. Nothing is waiting on you."),
+static const beat_t SAY_SWEEP[] = {
+    ACT(10, "Checking links", "Following every link in the setup docs."),
+    STEP(10, "Bash · npx check-links docs/setup"),
+    TIMER(20, "Checking links"),
+    STEP(15, "Edit · docs/setup/install.md"),
+    DONE(15, TIER_ALERT, "The setup docs have no dead links",
+         "Three links in the setup docs pointed at pages that moved; they point at the new ones.", NULL),
     END};
-static const struct { const char *said; const beat_t *turn; } SAID[] = {
-    {"Add a retry to the API client", SAID_RETRY},
-    {"Write a test for the empty cart", SAID_TEST},
-    {"What changed since this morning?", SAID_RECAP}};
-enum { N_SAID = sizeof SAID / sizeof SAID[0] };
+static const beat_t SAY_FW[] = {
+    ACT(10, "Building", "Building the Max firmware before flashing it."),
+    STEP(10, "Bash · idf.py build"),
+    TIMER(25, "Building"),
+    STEP(10, "Bash · idf.py -p /dev/ttyACM0 flash"),
+    TIMER(25, "Flashing"),
+    DONE(15, TIER_ALERT, "Built green and flashed",
+         "The build passed, so the new firmware is on the Max, and it booted into the agents page.", NULL),
+    END};
+static const beat_t SAY_DOCS[] = {
+    ACT(10, "Capturing", "Taking a picture of the menu-bar app with its Devices menu open."),
+    STEP(10, "Bash · screencapture -o menu-bar.png"),
+    STEP(15, "Edit · getting-started/max.md"),
+    TIMER(15, "Writing"),
+    DONE(15, TIER_ALERT, "The Max page shows the menu-bar app",
+         "The getting-started page for the Max has a picture of the menu-bar app, with its Devices menu open.", NULL),
+    END};
+static const beat_t SAY_ELSE_WORK[] = {
+    ACT(10, "Testing", "Running the whole suite before anything is pushed."),
+    STEP(10, "Bash · npm test"),
+    TIMER(30, "Running tests"),
+    TIMER(30, "Running tests"),
+    DONE(15, TIER_ALERT, "The whole suite passes",
+         "Ran the whole suite again and every test passes. Nothing is pushed yet: say when.", NULL),
+    END};
+
+// The mockup's lines (diego-1tap.html SAY), by agent name.
+static const struct { const char *name; spoken_t say; } SAY[] = {
+    {"auth-refactor", {"Also cover the expired token case with a test", SAY_AUTH, 0}},
+    {"flaky-e2e", {"Great, now run it fifty more times on CI", SAY_E2E, 0}},
+    {"rate-limiter", {"Start with the login route only", SAY_RATE, 0}},
+    {"docs-sweep", {"Sweep the setup docs for dead links", SAY_SWEEP, 0}},
+    {"firmware-max", {"Flash it when the build is green", SAY_FW, 0}},
+    // Said while harness-cli asks its protocol question, it is the answer: Keep 3.
+    {"harness-cli", {"Keep three and add the field", CLI_KEEP, 1}},
+    {"docs", {"Add a picture of the menu-bar app", SAY_DOCS, 0}},
+};
+enum { N_SAY = sizeof SAY / sizeof SAY[0] };
+// The mockup's line for an agent with none of its own.
+static const spoken_t SAY_ELSE = {"Run the suite again before you push", SAY_ELSE_WORK, 0};
+// The person's demo: the agents whose words, every other time, start their case instead of their line (the case first,
+// then the line, then the case again), so each case can be played again.
+static const struct { const char *name; spoken_t say; } CASES[] = {
+    {"rate-limiter", {"Add a sliding-window limit to the public API", RATE_LIMIT, 0}},   // a test run that fails
+    {"landing-hero", {"Freshen up the landing hero", HERO_ASK, 0}},                      // a question only Orca answers
+    {"firmware-max", {"Build the firmware with the app picker", FW_FLASH, 0}},           // the permission prompt
+    {"harness-cli", {"Put the app list on the cable", CLI_PROTO, 0}},                    // a question the bar answers
+};
+enum { N_CASES = sizeof CASES / sizeof CASES[0] };
 
 // A new agent's first turn.
 static const beat_t SETUP[] = {
-    START(0, "Working…"),
     ACT(10, "Reading the project", "Reading the README and the scripts to get my bearings."),
     STEP(10, "Read · README.md"),
     STEP(15, "Bash · npm install"),
@@ -327,39 +379,47 @@ static const beat_t SETUP[] = {
          "Ready for a first task."),
     END};
 
-// The nine agents the story is about, in the daemon's list order, and what each did last (the history a ring restores).
+// The agents the demo is about, in the daemon's list order, and what each did last (the history a ring restores).
 static const struct {
-    const char *id, *name;
-    uint8_t engine, app;
+    const char *id, *name, *engine;
+    uint8_t app;
     const char *recap, *text, *full;
 } CAST[SCRIPTED] = {
-    {"ag-auth", "auth-refactor", 0, APP_ORCA, "Sign-in posts to the new auth API",
+    {"ag-auth", "auth-refactor", "claude", APP_ORCA, "Sign-in posts to the new auth API",
      "The sign-in form posts to /v2/auth and keeps the session in a cookie. 61/61 tests pass.",
      "Moved the sign-in form to /v2/auth, which sets an httpOnly session cookie instead of a stored token. 61/61 pass."},
-    {"ag-hero", "landing-hero", 1, APP_ORCA, "Landing copy matches the new pricing",
+    {"ag-hero", "landing-hero", "codex", APP_ORCA, "Landing copy matches the new pricing",
      "The landing page's headline and plan cards say the new prices.",
      "Rewrote the landing headline and the three plan cards for the new pricing, and linked the FAQ from each card."},
-    {"ag-e2e", "flaky-e2e", 0, APP_ORCA, "Two flaky e2e tests found",
+    {"ag-e2e", "flaky-e2e", "claude", APP_ORCA, "Two flaky e2e tests found",
      "Search and checkout fail about one run in ten. Both are on the list to fix.",
      "Ran the e2e suite 30 times: search and checkout fail about one run in ten, each for a different reason."},
-    {"ag-rate", "rate-limiter", 1, APP_ORCA, "Read the API's request path",
+    {"ag-rate", "rate-limiter", "codex", APP_ORCA, "Read the API's request path",
      "Every public route goes through one handler, so a limit there covers them all.",
      "Traced the public API's request path: every route passes through handleRequest, the place for a rate limit."},
-    {"ag-sweep", "docs-sweep", 0, APP_ORCA, "Fixed 12 broken links in the docs",
+    {"ag-sweep", "docs-sweep", "muse", APP_ORCA, "Fixed 12 broken links in the docs",
      "Twelve links pointed at pages that moved; they point at the new ones.",
      "check-links found twelve links to pages that moved in the last restructure. They now point at the new pages."},
-    {"ag-fw", "firmware-max", 0, APP_HARNESS, "The Max boots to the agents page",
+    {"ag-fw", "firmware-max", "claude", APP_HARNESS, "The Max boots to the agents page",
      "The Max skips the splash and opens on the agents page in 2.1 s.",
      "Dropped the boot splash and started the cable before the display, so the Max opens on its agents in 2.1 s."},
-    {"ag-cli", "harness-cli", 1, APP_HARNESS, "harness status names each agent's app",
+    {"ag-cli", "harness-cli", "claude", APP_HARNESS, "harness status names each agent's app",
      "harness status shows which app each agent runs in, from the host detection.",
      "Added an App column to harness status, filled from the host detection the devices already use."},
-    {"ag-docs", "docs", 0, APP_HARNESS, "Getting started covers the Max",
+    {"ag-docs", "docs", "muse", APP_HARNESS, "Getting started covers the Max",
      "The getting-started guide has a page for the Max: plugging it in and what it shows.",
      "Wrote the Max page of the getting-started guide: the one cable, the agents page and the app picker."},
-    {"ag-api", "api-client", 0, APP_VSCODE, "API client regenerated from the spec",
+    {"ag-api", "api-client", "claude", APP_VSCODE, "API client regenerated from the spec",
      "The typed client matches the OpenAPI spec again, with the two new billing routes.",
      "Regenerated the typed API client from the OpenAPI spec: the two new billing routes and one renamed field."},
+    // herdr's two, as the mockup's.
+    {"ag-bill", "billing-export", "muse", APP_HERDR, "Invoices export per currency",
+     "The billing export writes one CSV per currency, with its totals at the foot.",
+     "Split the invoice export by currency: one CSV each, with its totals at the foot, so nobody sorts a mixed file."},
+    {"ag-notes", "release-notes", "claude", APP_HERDR, "Release notes for 0.9 drafted",
+     "Release notes for 0.9 are drafted: 14 fixes, 3 features, and one breaking change called out at the top.",
+     "Drafted the 0.9 release notes from the merged pull requests: 14 fixes, 3 features, and the config file's "
+     "breaking change called out at the top."},
 };
 
 // New Harness: an engine and a project, then Start. Its agents run in Harness.
@@ -382,8 +442,10 @@ typedef struct {
     bool used, made;             // made: by a person, with New Harness
     bool restored;               // its history went to the device since the attach (cableSession.ts `restored`)
     char id[16], name[24];
-    uint8_t engine, app;
-    const beat_t *turn;          // the beats playing; NULL between turns
+    const char *engine;
+    uint8_t app;
+    const beat_t *turn;          // the work playing; NULL between turns
+    const char *opening;         // the status line its turn.started says before the work, while not yet sent
     uint8_t beat, status;
     uint32_t beat_at, started_at;
     const question_t *q;         // while a question is open or being taken
@@ -392,21 +454,25 @@ typedef struct {
     const char *recap, *text, *full;   // the last answer
     bool unread;
     uint32_t read_serial;
-    int8_t said;                 // words a person said, waiting for the agent to be free; -1 none
+    const spoken_t *said;        // words a person said, waiting for the agent to be free
     uint32_t said_at;
+    uint8_t talks;               // the person's demo: words that started a turn, so a case agent knows which comes next
 } agent_t;
 
 enum { OWE_FULL = 1, OWE_MACHINES = 2, OWE_AGENTS = 4, OWE_SWARMS = 8, OWE_RESYNC = 16 };
 
 static struct {
     uint32_t now;                // the clock at the call in progress
+    bool story;                  // the self-playing story (--story); else the person's demo, where nothing moves by itself
     bool greeted, seq_on, long_recap, steps, stats, player;
     bool app_filter;             // the device said appFilter "v1": it is shown one app's ring, after `apps`
+    bool question_tier;          // the device said questionTier "v1"
     uint32_t seq;
     char mac[40], fw[40];
     uint32_t last_rx, last_ping, last_tick, resync_ok_at, library_at;
     char library_key[MAX_AGENTS + 1];
     char apps_key[2 + 2 * N_APPS];   // the last `apps` sent, as apps_key() writes it
+    char drawer_key[DRAWER_ROWS * 11 + 1];   // the last notif.replace sent, as drawer_key() writes it
     int64_t library_request, library_offset;
     unsigned owed;               // pushes the next tick makes
     char focus[16];              // the agent both screens are on
@@ -416,16 +482,16 @@ static struct {
     uint32_t story_pos, story_total;
     uint8_t next_entry, next_front;
     uint32_t serial;             // questions, tokens, notices and form revisions: every number only goes up
-    uint8_t said_next, made;
+    uint8_t made;
     uint32_t dropped;            // frames that did not fit: this module's bug, never the device's
 } s;
 
-static agent_t agents[MAX_AGENTS];   // in the daemon's list order, the scripted nine first
+static agent_t agents[MAX_AGENTS];   // in the daemon's list order, the scripted eleven first
 
 enum { V_AGENT, V_FORM, V_QUESTION, V_DRAFT, V_CARRY, V_SEARCH, V_SELECTION };
 static struct {
     bool open, thinking;
-    uint8_t kind, said;
+    uint8_t kind;
     char upload[ID_MAX + 1];
     bool named, form_ok;         // named: the device said whose words these are
     char agent[ID_MAX + 1], form_id[49];
@@ -650,14 +716,15 @@ static bool person_here(uint32_t now) { return s.person && (uint32_t)(now - s.pe
 static void who(const agent_t *a)
 {
     f_s("name", a ? a->name : "");
-    f_s("engine", a ? ENGINES[a->engine] : "");
+    f_s("engine", a ? a->engine : "");
     f_s("machine", a ? MACHINE_NAME : "");
 }
 
 static void send_welcome(void)
 {
     static const char *const FEATURES[] = {"voice.draft", "agents.refresh", "player.library", "resync", "form",
-                                           "selection", "visit", "question.review", "settings"};
+                                           "selection", "visit", "question.review", "apps.switch", "question.tier",
+                                           "settings"};
     f_begin("welcome");
     f_i("proto", 3);
     f_s("app", "harness");
@@ -672,9 +739,12 @@ static void send_welcome(void)
     put("[", 1);
     bool first = true;
     for (size_t i = 0; i < sizeof FEATURES / sizeof FEATURES[0]; i++) {
-        // As the daemon: the library for a device that named it, resync for one that counts frames.
+        // As the daemon: the library for a device that named it, resync for one that counts frames, the app switch for
+        // one that said appFilter, the question tier for one that said questionTier.
         if (!strcmp(FEATURES[i], "player.library") && !s.player) continue;
         if (!strcmp(FEATURES[i], "resync") && !s.seq_on) continue;
+        if (!strcmp(FEATURES[i], "apps.switch") && !s.app_filter) continue;
+        if (!strcmp(FEATURES[i], "question.tier") && !s.question_tier) continue;
         if (!first) put(",", 1);
         put_str(FEATURES[i]);
         first = false;
@@ -736,21 +806,20 @@ static void apps_key(char *out)
     out[n] = 0;
 }
 
-// The apps with agents on this computer, in the daemon's fixed order, and the one whose ring the device holds.
+// The apps, in the mockup's order, and the one whose ring the device holds. The daemon lists only apps with agents; the
+// demo lists the mockup's all, those with none too, so its Apps is as full as the mockup's.
 static void push_apps(void)
 {
     f_begin("apps");
     f_s("shown", APPS[s.shown].id);
     key("apps");
     put("[", 1);
-    for (unsigned i = 0, rows = 0; i < N_APPS; i++) {
-        const int count = app_agents(i, false);
-        if (!count) continue;
-        if (rows++) put(",", 1);
+    for (unsigned i = 0; i < N_APPS; i++) {
+        if (i) put(",", 1);
         put_c("{\"id\":");
         put_str(APPS[i].id);
         f_s("name", APPS[i].name);
-        f_i("count", count);
+        f_i("count", app_agents(i, false));
         f_i("waiting", app_agents(i, true));
         put("}", 1);
     }
@@ -792,7 +861,7 @@ static void push_agents(bool restore)
         f_begin("agent");
         f_s("id", a->id);
         f_s("name", a->name);
-        f_s("engine", ENGINES[a->engine]);
+        f_s("engine", a->engine);
         f_s("model", "");
         f_s("effort", "");
         f_s("machineId", MACHINE_ID);
@@ -840,7 +909,7 @@ static void push_library(void)
         put_str(a->id);
         f_s("machineId", MACHINE_ID);
         f_s("name", a->name);
-        f_s("engine", ENGINES[a->engine]);
+        f_s("engine", a->engine);
         f_s("status", STATUS[status_of(a)]);
         f_i("ageSeconds", -1);
         put("}", 1);
@@ -852,23 +921,72 @@ static void push_library(void)
     s.library_at = s.now;
 }
 
-// The bell and the inbox count every agent on this computer, not only the ring's.
+// The words of an agent's open question as the inbox's first prompt holds them, which its frame, its drawer row and
+// question.state all say. One the device may not answer is the daemon's shown-only question (hosts/observed.ts
+// askedLine): it names the app to answer it in.
+static void asked_line(const agent_t *a, char *out, size_t cap)
+{
+    const int n = lacks(a, 'a') ? snprintf(out, cap, "%s \xc2\xb7 answer in %s", a->q->q, APPS[a->app].name)
+                                : snprintf(out, cap, "%s", a->q->q);
+    if (n < 0 || (size_t)n >= cap) out[0] = 0;
+}
+
+// The drawer's agents, in its order (main's replaceNotifications): the open questions first, then the answers not yet
+// read, one row per agent, at most eight. The bell and the inbox count every agent on this computer, not only the
+// ring's. A question stays a row until it closes, answered or not.
+static int drawer_rows(int rows[DRAWER_ROWS])
+{
+    const int n = agent_count();
+    int count = 0;
+    for (int i = 0; i < n && count < DRAWER_ROWS; i++) if (agents[i].ask != ASK_NONE) rows[count++] = i;
+    for (int i = 0; i < n && count < DRAWER_ROWS; i++)
+        if (agents[i].ask == ASK_NONE && agents[i].unread && agents[i].recap) rows[count++] = i;
+    return count;
+}
+
+// What notif.replace says, as a short key: each row's agent, kind and number (a question's, or its answer's token).
+static void drawer_key(char *out, size_t cap)
+{
+    int rows[DRAWER_ROWS];
+    const int count = drawer_rows(rows);
+    size_t used = 0;
+    out[0] = 0;
+    for (int r = 0; r < count; r++) {
+        const agent_t *a = &agents[rows[r]];
+        const bool question = a->ask != ASK_NONE;
+        const int n = snprintf(out + used, cap - used, "%c%c%08lx", 'A' + rows[r], question ? 'q' : 'n',
+                               (unsigned long)(question ? a->serial : a->read_serial));
+        if (n < 0 || (size_t)n >= cap - used) return;
+        used += (size_t)n;
+    }
+}
+
+// The drawer, replaced whole. Its question rows are how a device that greets, or lost its place, gets the open
+// questions back: main's drawer carries each open question as a row and marks it asked, and asks by a `question` frame
+// only one its eight rows could not hold. The demo has at most four agents that ask, so none is ever cut, and the
+// `tier: "list"` frame main sends a questionTier device for a cut question never comes up here.
 static void push_drawer(void)
 {
+    int rows[DRAWER_ROWS];
+    const int count = drawer_rows(rows);
     f_begin("notif.replace");
     key("items");
     put("[", 1);
-    const int n = agent_count();
-    for (int i = 0, rows = 0; i < n && rows < DRAWER_ROWS; i++) {
-        const agent_t *a = &agents[i];
-        const bool question = a->ask == ASK_OPEN;
-        if (!question && !(a->unread && a->recap)) continue;
-        if (rows++) put(",", 1);
+    for (int r = 0; r < count; r++) {
+        const agent_t *a = &agents[rows[r]];
+        const bool question = a->ask != ASK_NONE;
+        if (r) put(",", 1);
         put_c("{\"agentId\":");
         put_str(a->id);
         f_s("name", a->name);
         f_s("machine", MACHINE_NAME);
-        f_s("summary", question ? a->q->q : a->recap);
+        if (question) {
+            char words[160];
+            asked_line(a, words, sizeof words);
+            f_s("summary", words);
+        } else {
+            f_s("summary", a->recap);
+        }
         f_b("question", question);
         if (!question) {
             char token[24];
@@ -879,22 +997,21 @@ static void push_drawer(void)
     }
     put("]", 1);
     f_end();
+    drawer_key(s.drawer_key, sizeof s.drawer_key);
 }
 
-// The question as the inbox holds it; `state` adds what question.read adds: an agent outside Harness takes no spoken
-// answer. One the device may not answer is the daemon's shown-only question (hosts/observed.ts askedLine): one prompt
-// naming the app to answer it in, its one option that app.
-static void put_questions(const agent_t *a, bool state)
+// The whole question as question.read gives it: an agent outside Harness takes no spoken answer. A shown-only question
+// is one prompt naming the app to answer it in, its one option that app.
+static void put_questions(const agent_t *a)
 {
+    char line[160];
+    asked_line(a, line, sizeof line);
     key("questions");
     put_c("[{\"key\":");
     if (lacks(a, 'a')) {
-        char line[160];
-        int n = snprintf(line, sizeof line, "%s \xc2\xb7 answer in %s", a->q->q, APPS[a->app].name);
-        if (n < 0 || (size_t)n >= sizeof line) line[0] = 0;
         put_str("prompt");
         f_s("q", line);
-        n = snprintf(line, sizeof line, "In %s", APPS[a->app].name);
+        const int n = snprintf(line, sizeof line, "In %s", APPS[a->app].name);
         if (n < 0 || (size_t)n >= sizeof line) line[0] = 0;
         key("options");
         put("[", 1);
@@ -902,7 +1019,7 @@ static void put_questions(const agent_t *a, bool state)
         put("]", 1);
     } else {
         put_str(a->q->q);
-        f_s("q", a->q->q);
+        f_s("q", line);
         key("options");
         put("[", 1);
         for (unsigned o = 0; o < a->q->count; o++) {
@@ -912,32 +1029,35 @@ static void put_questions(const agent_t *a, bool state)
         put("]", 1);
     }
     f_b("multi", false);
-    if (state && outside(a)) f_b("canText", false);
+    if (outside(a)) f_b("canText", false);
     put_c("}]");
 }
 
+// main's giveQuestion: the frame carries only what the firmware reads of it, the first question's words as its drawer
+// row shows them, and the bar reads the whole of it by question.read. main cuts the words at noticeSummary's 239 bytes;
+// the demo's questions are all well under that. Sent once, when the agent asks: after that it is the drawer's row.
 static void send_question(const agent_t *a)
 {
-    char id[40];
+    char id[40], words[160];
     question_id(a, id, sizeof id);
+    asked_line(a, words, sizeof words);
     f_begin("question");
     f_s("agentId", a->id);
-    who(a);
+    f_s("name", a->name);
+    f_s("machine", MACHINE_NAME);
     f_s("id", id);
-    put_questions(a, false);
-    // Absent, not false, on a plain question: as the daemon sends it. A shown-only one is never a permission.
+    key("questions");
+    put_c("[{\"key\":\"\"");
+    f_s("q", words);
+    put_c(",\"options\":[]}]");
+    // The Max's daemon marks a permission prompt on this summary (d85e26e71e), so the bar draws approve and deny before
+    // it reads the question. Absent, not false, on a plain question; a shown-only one is never a permission.
     if (a->q->permission && !lacks(a, 'a')) f_b("permission", true);
     f_end();
 }
 
-// Every open question, whichever ring its agent is on: each is a drawer row.
-static void push_questions(void)
-{
-    const int n = agent_count();
-    for (int i = 0; i < n; i++) if (agents[i].ask == ASK_OPEN) send_question(&agents[i]);
-}
-
-// Everything a device that has just greeted has lost, in the daemon's order (pushAgents).
+// Everything a device that has just greeted has lost, in the daemon's order (pushAgents). The open questions come back
+// as the drawer's rows.
 static void push_full(void)
 {
     for (int i = 0; i < MAX_AGENTS; i++) agents[i].restored = false;   // a device that greets has no history at all
@@ -947,7 +1067,6 @@ static void push_full(void)
     if (s.player) push_library();
     push_restores();
     push_drawer();
-    push_questions();
 }
 
 static void push_owed(void)
@@ -960,8 +1079,7 @@ static void push_owed(void)
         push_machines();
         push_swarms();
         push_agents(true);
-        push_drawer();
-        push_questions();
+        push_drawer();   // its open questions with it, as rows
         return;
     }
     if (owed & OWE_SWARMS) push_swarms();
@@ -970,26 +1088,32 @@ static void push_owed(void)
 
 // ── turns ───────────────────────────────────────────────────────────────────────────────────────────
 
-static void begin_beats(agent_t *a, const beat_t *turn, uint32_t delay)
+// The work goes on in the same turn: after an answer, no turn.started (it would drop the bar's open question).
+static void begin_beats(agent_t *a, const beat_t *work, uint32_t delay)
 {
-    a->turn = turn;
+    a->turn = work;
+    a->opening = NULL;
     a->beat = 0;
-    a->beat_at = s.now + delay + turn[0].wait_ds * 100u;
+    a->beat_at = s.now + delay + work[0].wait_ds * 100u;
 }
-static void start_turn(agent_t *a, const beat_t *turn, uint32_t delay)
+// A new turn, `delay` from now: turn.started with its status line, then its work.
+static void start_turn(agent_t *a, const char *status, const beat_t *work, uint32_t delay)
 {
-    begin_beats(a, turn, delay);
-    a->started_at = s.now + delay;
+    a->turn = work;
+    a->opening = status;
+    a->beat = 0;
+    a->beat_at = a->started_at = s.now + delay;
 }
 
 static void end_turn(agent_t *a, uint8_t status)
 {
     a->turn = NULL;
+    a->opening = NULL;
     a->q = NULL;
     a->ask = ASK_NONE;
     a->status = status;
     // Words said while it was busy go next, after a breath.
-    if (a->said >= 0 && !due(a->said_at, s.now + 1000)) a->said_at = s.now + 1000;
+    if (a->said && !due(a->said_at, s.now + 1000)) a->said_at = s.now + 1000;
 }
 
 static void send_stats(const agent_t *a, const beat_t *b)
@@ -1058,14 +1182,17 @@ static void take_answer(agent_t *a)
 
 static void play(agent_t *a)
 {
-    const beat_t *b = &a->turn[a->beat];
-    switch (b->kind) {
-    case B_START:
+    if (a->opening) {
         f_begin("turn.started");
         f_s("agentId", a->id);
-        f_s("text", b->a);
+        f_s("text", a->opening);
         f_end();
-        break;
+        a->opening = NULL;
+        a->beat_at = s.now + a->turn[0].wait_ds * 100u;
+        return;
+    }
+    const beat_t *b = &a->turn[a->beat];
+    switch (b->kind) {
     case B_ACT:
         f_begin("turn.activity");
         f_s("agentId", a->id);
@@ -1114,15 +1241,15 @@ static void run_agent(agent_t *a)
     if (a->ask == ASK_TAKEN && due(s.now, a->close_at)) take_answer(a);
     // Bounded: beats with no wait between them all go now, and the guard stops a list that never waits.
     for (unsigned guard = 0; guard < 16 && a->turn && a->ask == ASK_NONE && due(s.now, a->beat_at); guard++) play(a);
-    if (!a->turn && a->ask == ASK_NONE && a->said >= 0 && due(s.now, a->said_at)) {
-        start_turn(a, SAID[a->said].turn, 0);
-        a->said = -1;
+    if (!a->turn && a->ask == ASK_NONE && a->said && due(s.now, a->said_at)) {
+        start_turn(a, a->said->said, a->said->work, 0);
+        a->said = NULL;
     }
 }
 
 // ── the story ───────────────────────────────────────────────────────────────────────────────────────
 
-static bool idle(const agent_t *a) { return !a->turn && a->ask == ASK_NONE && a->said < 0; }
+static bool idle(const agent_t *a) { return !a->turn && a->ask == ASK_NONE && !a->said; }
 
 // The device is turned to an app's ring: `apps` and the ring follow (cableSession.ts syncAgents after a switch).
 static void show(uint8_t app)
@@ -1140,7 +1267,8 @@ static void to_front(uint8_t app)
     if (app != s.shown && app_agents(app, false)) show(app);
 }
 
-// The agents a person made leave when the story starts over, so the next person finds the same nine.
+// The agents a person made leave when the story starts over, so the next person finds the same eleven. On the
+// person's demo they stay until the bar is plugged in again.
 static void forget_made(void)
 {
     for (int i = MAX_AGENTS - 1; i >= SCRIPTED; i--) {
@@ -1149,7 +1277,6 @@ static void forget_made(void)
         if (!strcmp(s.focus, a->id)) s.focus[0] = 0;
         memmove(&agents[i], &agents[i + 1], (size_t)(MAX_AGENTS - 1 - i) * sizeof *a);
         memset(&agents[MAX_AGENTS - 1], 0, sizeof *a);
-        agents[MAX_AGENTS - 1].said = -1;
         s.owed |= OWE_AGENTS;
     }
 }
@@ -1160,8 +1287,8 @@ static void advance_story(uint32_t dt)
     s.story_pos += dt;
     for (;;) {
         for (; s.next_entry < N_STORY && s.story_pos >= STORY[s.next_entry].at; s.next_entry++) {
-            agent_t *a = &agents[STORY[s.next_entry].agent];   // the scripted nine never move
-            if (idle(a)) start_turn(a, STORY[s.next_entry].turn, 0);   // busy with a person's words: skipped this time
+            agent_t *a = &agents[STORY[s.next_entry].agent];   // the scripted eleven never move
+            if (idle(a)) start_turn(a, WORKING, STORY[s.next_entry].turn, 0);   // busy with a person's words: skipped
         }
         for (; s.next_front < N_FRONT && s.story_pos >= FRONT[s.next_front].at; s.next_front++) to_front(FRONT[s.next_front].app);
         if (s.story_pos < CYCLE_MS) break;
@@ -1210,7 +1337,7 @@ static uint32_t story_wait(void)
 static void end_session(void)
 {
     // The daemon closes the port on silence, and a new port is a new device: no greeting, no count, nothing owed.
-    s.greeted = s.seq_on = s.long_recap = s.steps = s.stats = s.player = s.app_filter = false;
+    s.greeted = s.seq_on = s.long_recap = s.steps = s.stats = s.player = s.app_filter = s.question_tier = false;
     s.seq = 0;
     s.mac[0] = s.fw[0] = 0;
     s.owed = 0;
@@ -1234,12 +1361,13 @@ static void on_hello(const cJSON *m)
     const bool keepalive = s.greeted && !strcmp(mac_c, s.mac) && !strcmp(fw_c, s.fw) && app_filter == s.app_filter;
     // swarms:"members-v1" changes nothing here: the demo has no tabs to send members of.
     const char *recap = str_of(m, "recap"), *activity = str_of(m, "activity");
-    const char *stats = str_of(m, "stats"), *player = str_of(m, "player");
+    const char *stats = str_of(m, "stats"), *player = str_of(m, "player"), *tier = str_of(m, "questionTier");
     s.long_recap = recap && !strcmp(recap, "long-v1");
     s.steps = activity && !strcmp(activity, "steps-v1");
     s.stats = stats && !strcmp(stats, "turn-v1");
     s.player = player && !strcmp(player, "library-v1");
     s.app_filter = app_filter;
+    s.question_tier = tier && !strcmp(tier, "v1");
     s.seq_on = board && (!strcmp(board, "pro") || !strcmp(board, "max"));   // isP4Board
     s.seq = 0;
     s.greeted = true;
@@ -1372,12 +1500,13 @@ static void on_voice_end(const cJSON *m)
         return;
     }
     if (v.kind == V_AGENT && !v.named) copy(v.agent, sizeof v.agent, agents[voice_target()].id);
-    v.said = s.said_next;
-    if (v.kind == V_AGENT) s.said_next = (uint8_t)((s.said_next + 1) % N_SAID);
     v.thinking = true;
     v.ready_at = s.now + THINK_MS;
 }
 
+// The recording named, or the one in progress when none is: dropped, its words too when they are on their way after
+// its end (main's voiceGeneration). An abort queued for an earlier recording is not this one's. Its `why` is the bar's
+// own reason, which the daemon only logs.
 static void on_voice_abort(const cJSON *m)
 {
     const char *upload = str_of(m, "uploadId");
@@ -1536,15 +1665,15 @@ static void create_agent(void)
     form.busy = false;
     form.revision = ++s.serial;
     const int n = agent_count();
+    _Static_assert(MAX_AGENTS == 14, "the refusal below names the bar's cap");
     if (n >= MAX_AGENTS) {
-        form.error = "The bar holds 12 agents. Wait for one to finish.";
+        form.error = "The bar holds 14 agents. Wait for one to finish.";
         return;
     }
     agent_t *a = &agents[n];
     memset(a, 0, sizeof *a);
     a->used = a->made = true;
-    a->said = -1;
-    a->engine = form.engine;
+    a->engine = ENGINES[form.engine];
     a->app = APP_HARNESS;
     s.made = (uint8_t)(s.made + 1);
     int w = snprintf(a->id, sizeof a->id, "ag-new-%u", (unsigned)s.made);
@@ -1564,7 +1693,7 @@ static void create_agent(void)
     s.owed |= OWE_AGENTS;
     form.active = false;
     form.closed = true;
-    start_turn(a, SETUP, VOICE_TURN_MS);
+    start_turn(a, WORKING, SETUP, VOICE_TURN_MS);
 }
 
 // The spoken name lands in the field's list: the list opens on what was heard.
@@ -1584,20 +1713,47 @@ static void hear_form(void)
     f_end();
 }
 
+// The mockup's line for an agent, or its line for any other.
+static const spoken_t *say_of(const agent_t *a)
+{
+    for (unsigned i = 0; i < N_SAY; i++) if (!strcmp(SAY[i].name, a->name)) return &SAY[i].say;
+    return &SAY_ELSE;
+}
+
+// The words that start an agent's next turn. On the person's demo an agent with a case says it and its line by turns,
+// the case first, so a person can play each case again.
+static const spoken_t *words_of(agent_t *a)
+{
+    for (unsigned i = 0; !s.story && i < N_CASES; i++)
+        if (!strcmp(CASES[i].name, a->name)) return a->talks++ % 2 == 0 ? &CASES[i].say : say_of(a);
+    return say_of(a);
+}
+
+// The words reach the agent: the mockup's line for it. Said to a question the bar answers, they are its answer, with
+// the line's option (never a permission prompt's, which takes Allow or Deny only); otherwise the agent works on them
+// when it is free.
 static void hear_agent(void)
 {
     const int i = find_agent(v.agent);
     if (i < 0) { voice_error("Could not reach that harness. Check its connection and try again."); return; }
     agent_t *a = &agents[i];
+    const bool answers = a->ask == ASK_OPEN && !lacks(a, 'a') && !a->q->permission;
+    const spoken_t *words = answers ? say_of(a) : words_of(a);
     f_begin("voice.transcript");
     f_s("routeId", "");
-    f_s("text", SAID[v.said].said);
+    f_s("text", words->said);
     f_s("agentId", a->id);
     f_s("agentName", a->name);
     f_b("needsConfirm", false);
     if (v.upload[0]) f_s("uploadId", v.upload);
     f_end();
-    a->said = (int8_t)v.said;   // goes when the agent is free
+    if (answers) {
+        a->choice = words->option < a->q->count ? words->option : 0;
+        a->ask = ASK_TAKEN;
+        a->close_at = s.now + CLOSE_MS;
+        return;
+    }
+    a->said = words;   // goes when the agent is free
     a->said_at = s.now + VOICE_TURN_MS;
 }
 
@@ -1619,7 +1775,7 @@ static void on_question_read(const cJSON *m)
         f_b("ok", true);
         f_s("id", id);
         f_s("token", token);
-        put_questions(a, true);
+        put_questions(a);
         f_b("submitted", a->ask == ASK_TAKEN);
     } else {
         f_b("ok", false);
@@ -1813,7 +1969,7 @@ static void handle(const cJSON *m)
 
 // ── the four calls ──────────────────────────────────────────────────────────────────────────────────
 
-void max_demo_reset(uint32_t now_ms)
+void max_demo_reset(uint32_t now_ms, bool story)
 {
     memset(&s, 0, sizeof s);
     memset(agents, 0, sizeof agents);
@@ -1822,8 +1978,9 @@ void max_demo_reset(uint32_t now_ms)
     q_n = 0;
     q_used = 0;
     sink = NULL;
+    s.story = story;
     s.now = s.last_rx = s.last_ping = s.last_tick = s.resync_ok_at = s.library_at = now_ms;
-    // The story opens with its first app in front, and shown: that entry is played. (Left due at story time 0, it
+    // Both demos open with its first app in front, and shown: that entry is played. (Left due at story time 0, it
     // would be due before the story has counted any time, which advances nothing.)
     s.front = s.shown = FRONT[0].app;
     s.next_front = 1;
@@ -1838,9 +1995,7 @@ void max_demo_reset(uint32_t now_ms)
         a->text = CAST[i].text;
         a->full = CAST[i].full;
         a->status = ST_IDLE;
-        a->said = -1;
     }
-    for (int i = SCRIPTED; i < MAX_AGENTS; i++) agents[i].said = -1;
 }
 
 void max_demo_receive(uint8_t type, const uint8_t *payload, size_t len, uint32_t now_ms)
@@ -1894,7 +2049,7 @@ void max_demo_tick(uint32_t now_ms, max_demo_emit_fn emit, void *ctx)
     if (s.greeted && s.owed) push_owed();
     s.owed = 0;
 
-    if (s.greeted && !person_here(now_ms)) {
+    if (s.story && s.greeted && !person_here(now_ms)) {
         const uint32_t from = story_from();
         if ((int32_t)(now_ms - from) > 0) {
             const uint32_t dt = now_ms - from;
@@ -1906,6 +2061,12 @@ void max_demo_tick(uint32_t now_ms, max_demo_emit_fn emit, void *ctx)
     for (int i = 0; i < MAX_AGENTS && agents[i].used; i++) run_agent(&agents[i]);
     if (s.owed && s.greeted) push_owed();   // the story's own roster changes, and the app in front
     s.owed = 0;
+    if (s.greeted) {
+        // A question asked or closed, an answer in or read: the drawer again, after the frames that changed it.
+        char k[sizeof s.drawer_key];
+        drawer_key(k, sizeof k);
+        if (strcmp(k, s.drawer_key)) push_drawer();
+    }
 
     if (s.greeted && s.app_filter) {
         // A count, a waiting count or the shown app changed with no ring to carry it: `apps` alone.
@@ -1940,12 +2101,12 @@ uint32_t max_demo_next_ms(uint32_t now_ms)
         const agent_t *a = &agents[i];
         if (a->ask == ASK_TAKEN) SOON(a->close_at);
         else if (a->turn && a->ask == ASK_NONE) SOON(a->beat_at);
-        else if (!a->turn && a->said >= 0) SOON(a->said_at);
+        else if (!a->turn && a->said) SOON(a->said_at);
     }
     if (s.person) SOON(s.person_at + QUIET_MS);
     if (s.greeted) {
         if (s.player) SOON(s.library_at + LIBRARY_MS);
-        if (!person_here(now_ms)) SOON(story_from() + story_wait());
+        if (s.story && !person_here(now_ms)) SOON(story_from() + story_wait());
     }
 #undef SOON
     return best;

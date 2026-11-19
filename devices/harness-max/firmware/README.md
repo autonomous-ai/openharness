@@ -14,7 +14,7 @@ The Max compiles the Pro's generic sources where they are (`devices/harness-pro/
 compositor, the strip path, the finger's contact rules, the recorder) at its own glass size, and the Pro's
 `components/esp_driver_usb_serial_jtag` and `bootloader_components/wdt_pc` sources. Its own code is the board
 (`main/board/`), the panel, touch, backlight and turn behind the Pro's `pro_display.h` (`main/display/`), the ES8311
-behind the Pro's `audio/audio_capture.h` (`main/audio/`), the lanes screen and the app (`main/app/`), and `app_main.c`.
+behind the Pro's `audio/audio_capture.h` and the chimes (`main/audio/`), the lanes screen and the app (`main/app/`), and `app_main.c`.
 A change under `devices/harness-pro/` can break the Max: build both.
 
 ## Build
@@ -65,6 +65,7 @@ bash devices/harness-max/firmware/test/golden.sh --check
 
 `run.sh` runs the lanes model, view and touch tests, the app layer (`test/test_max_app.c`: `main/app/max_app.c` over
 the real model, with the cable, the recorder and FreeRTOS as host fakes) and the strip turn (`test/test_max_turn.c`).
+The chimes' samples, which both boards render (`main/audio/max_chime_pcm.c`), are checked by `linux/`'s `test_chime`.
 `golden.sh --check` renders each screen to 1920 x 480 and compares hashes. The Pro's `test/run.sh` also runs the strip
 path at 1920 x 480.
 
@@ -80,5 +81,6 @@ When the board arrives, check and write the numbers here:
    lane, and the time `pro_panel_submit` spends turning a strip. If the CPU turn is too slow, the P4's PPA does it.
 5. Free internal RAM and PSRAM from the heartbeat (`heap=`, `psram=`). The strip and the turned band take 2 x 90 KB of
    internal RAM.
-6. Audio: the beep on an alert, and a recording at a usable level (the mic gain is 36 dB, a guess).
+6. Audio: the chimes (`main/app/max_chime.h`: a question's or a failure's two tones, a finished turn's two soft notes)
+   at the Pro beep's loudness, and a recording at a usable level (the mic gain is 36 dB, a guess).
 7. The C6 stays in reset (GPIO54 low) and draws no current to speak of.

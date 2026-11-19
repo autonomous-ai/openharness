@@ -2,12 +2,13 @@
 # Builds Harness Max for the Orange Pi 4 Pro's bar on the board itself, installs it and switches the bar to it. Runs on
 # the Mac, from any directory.
 #
-#   deploy-orangepi.sh [--usb | --live | --demo] [--no-build] [ssh-host]
+#   deploy-orangepi.sh [--usb | --live | --demo | --story] [--no-build] [ssh-host]
 #
 # --usb (the default): the bar is a USB device on the board's Type-C port, which the Mac's daemon finds as it finds a
 # Harness Max; the cable to the Mac also powers the board. --live: the bar waits for a daemon on TCP port 7531 (on the
 # Mac: HARNESS_CABLE_TCP=<board address>:7531), which answers no permission prompt. --demo: the scripted demo daemon
-# runs inside the program, no computer needed. --no-build switches the bar that is installed to the mode, in seconds.
+# runs inside the program, no computer needed, and the person drives it. --story: the same demo plays its story by
+# itself, in a loop. --no-build switches the bar that is installed to the mode, in seconds.
 #
 # Board: the ssh-host argument or HARNESS_MAX_BOARD / HARNESS_MAX_SSH_OPTS; when none is set, near-demo's board
 # (NEAR_BOARD / NEAR_SSH_OPTS, else ~/.config/near/board.env); otherwise plain `opi`. Nothing about the board is kept in
@@ -17,20 +18,24 @@
 # script and the sudoers rule that lets later runs switch without it. A run that changes the unit or the script asks
 # again.
 #
-# Back to Near: `near-demo` on the Mac, or on the board `sudo systemctl start near-app` (each stops the other).
+# The bar's other programs run under Near's near-app.service, which starts the Flutter bundle ~/near/mode.env names:
+# Near (near-demo writes it) or Harness Max Demo V3 (../../flutter/deploy-orangepi.sh writes it). This leaves that file
+# and V3's near-voice drop-in alone: harness-max.service conflicts with near-app and near-voice, so starting it stops
+# whichever runs, and starting near-app stops it. Back: `near-demo` (Near) or V3's deploy-orangepi.sh (it stops this
+# first); on the board `sudo systemctl start near-app` brings back what ~/near/mode.env names.
 set -eu
 LINUX=$(cd "$(dirname "$0")" && pwd)
 DEVICES=$(cd "$LINUX/../../.." && pwd)
 
 usage() {
-    echo "usage: deploy-orangepi.sh [--usb | --live | --demo] [--no-build] [ssh-host]"
+    echo "usage: deploy-orangepi.sh [--usb | --live | --demo | --story] [--no-build] [ssh-host]"
 }
 
 ARGS=--usb
 BUILD=1
 while [ $# -gt 0 ]; do
     case $1 in
-        --usb|--live|--demo) ARGS=$1 ;;
+        --usb|--live|--demo|--story) ARGS=$1 ;;
         --no-build) BUILD=0 ;;
         -h|--help) usage; exit 0 ;;
         -*) usage >&2; exit 2 ;;
@@ -84,8 +89,9 @@ main() {
 }
 
 build() {
+    # The glass height named every time: a build directory from before 480 became the default has 415 in its cache.
     cmake -S harness-max/src/devices/harness-max/firmware/linux -B harness-max/build -DMAX_LINUX_OUTPUT=drm \
-        -DCJSON_DIR="$HOME/harness-max/src/cJSON" > /dev/null
+        -DMAX_GLASS_H=480 -DCJSON_DIR="$HOME/harness-max/src/cJSON" > /dev/null
     cmake --build harness-max/build -j "$(nproc)" < /dev/null
     ctest --test-dir harness-max/build --output-on-failure < /dev/null
     mkdir -p harness-max/bin
@@ -118,7 +124,7 @@ switch() {
         if journalctl -u harness-max --since "@$t0" --no-pager -o cat < /dev/null | grep -q "app: first frame at"
         then
             journalctl -u harness-max --since "@$t0" --no-pager -o cat < /dev/null \
-                | grep -E "board: |drm: |audio: mic|cable: link up|app: first frame" || true
+                | grep -E "board: |drm: |audio: |cable: link up|app: first frame" || true
             return 0
         fi
         systemctl is-active -q harness-max || break
@@ -173,7 +179,7 @@ fi
 
 say "switching the bar to Harness Max ($ARGS)"
 board switch
-say "done: Harness Max ($ARGS) is on $HOST's bar. Back to Near: near-demo (on the board: sudo systemctl start near-app)"
+say "done: Harness Max ($ARGS) is on $HOST's bar. Back: near-demo for Near, flutter/deploy-orangepi.sh for V3"
 case $ARGS in
     --usb) say "the board's USB-C port to the Mac (it powers the board): the daemon there finds the bar" ;;
     --live) say "a daemon on this Mac drives it: HARNESS_CABLE_TCP=<board address>:7531 harness start --restart" ;;
