@@ -44,6 +44,7 @@ import type { publishGridConfigDir } from '../../lib/publishedGridConfig.js'
 import { nativeHookLocations } from '../../engines/kit/nativeLocations.js'
 import { engineHooks } from '../../engines/hooks.js'
 import { hooksHeldDetail } from '../../engines/kit/hooksHeldDetail.js'
+import { HookPreparationHeld } from '../../engines/kit/hookHeld.js'
 import { folderTrust } from '../../engines/launchPrep.js'
 import { projectsRoot } from '../../lib/projectFolder.js'
 import { NativeFiles } from '../../engines/kit/nativeFiles.js'
@@ -297,7 +298,8 @@ export function createAgentCreator({
           gridLaunch.args = [...gridLaunch.args, ...handOff.args]
         } catch (error) {
           const detail = `could not write ${engine}'s grid configuration · ${error instanceof Error ? error.message : error}`
-          console.warn(`[agent] create ${engine} refused · could not write ${engine}'s grid configuration · ${errorKind(error)}`)
+          // A held publication's reason is fixed words (engines/kit/hookHeld.ts): it says what holds it.
+          console.warn(`[agent] create ${engine} refused · could not write ${engine}'s grid configuration · ${error instanceof HookPreparationHeld ? error.reason : errorKind(error)}`)
           return { ok: false, error: 'GRID_CONFIG_FAILED', detail, ...(native ? { unavailable: 'native' } : {}) }
         }
       }
