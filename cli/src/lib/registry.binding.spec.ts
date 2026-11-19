@@ -31,12 +31,17 @@ function slowTimeout(callback: (...args: unknown[]) => void, ms?: number, ...arg
   slowSync.due.set(timer, () => { realClear(timer); callback(...args) })
   return timer
 }
+// The registry expires a write after 5 s. No test here means to, so that timer is never scheduled: how fast this
+// machine writes the registry never fails these tests.
+function ownedTimeout(callback: (...args: unknown[]) => void, ms?: number, ...args: unknown[]) {
+  return ms === 5_000 ? realTimeout(() => {}, 0) : slowTimeout(callback, ms, ...args)
+}
 let root: string, home: string, file: string, registry: typeof import('./registry.js')['registry']
 const ids = ['aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa', 'bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb']
 const header = (id: string) => JSON.stringify({ type: 'session_meta', payload: { id, cwd: root, source: 'cli' } }) + '\n'
 const transcript = (index: number) => join(home, 'sessions', `rollout-${ids[index]}.jsonl`)
 beforeEach(async () => {
-  vi.spyOn(globalThis, 'setTimeout').mockImplementation(slowTimeout as typeof setTimeout)
+  vi.spyOn(globalThis, 'setTimeout').mockImplementation(ownedTimeout as typeof setTimeout)
   vi.spyOn(globalThis, 'clearTimeout').mockImplementation(((timer?: Parameters<typeof clearTimeout>[0]) => {
     slowSync.due.delete(timer); realClear(timer)
   }) as typeof clearTimeout)
