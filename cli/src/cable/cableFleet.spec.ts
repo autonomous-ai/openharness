@@ -1119,6 +1119,54 @@ describe('a Harness Pro that is silent from the moment its port opens', () => {
   })
 })
 
+describe('a port that never opened', () => {
+  // Stands in for a session whose every open fails (no access to the tty): it only reports its problem.
+  class Closed {
+    static made: Closed[] = []
+    isConnected = false
+    wantsStats = false
+    constructor(readonly host: CableHost) { Closed.made.push(this) }
+    start() {}
+    async stop() {}
+    petDial() { return { supported: false, held: [], sending: null, errors: {} } }
+  }
+  function setup() {
+    Closed.made = []
+    const f = fixture()
+    f.setPorts([device('/dev/ttyACM0', 'CC:03')])
+    const fleet = new CableFleet(Closed as unknown as typeof CableSession, f.host, f.logs, DialLog, f.options)
+    const scan = () => (fleet as unknown as { scan(): Promise<void> }).scan()
+    const rows = () => (vi.mocked(f.host.onDialStatus!).mock.calls.at(-1)?.[0].devices ?? [])
+    return { f, fleet, scan, rows }
+  }
+
+  it('has a row carrying only its problem', async () => {
+    const s = setup()
+    try {
+      s.fleet.start()
+      await vi.waitFor(() => expect(Closed.made).toHaveLength(1))
+      Closed.made[0].host.onDialStatus?.({ attached: false, problem: 'P' })
+      expect(s.rows()).toEqual([{ id: 'CC:03', attached: false, problem: 'P' }])
+    } finally { await s.fleet.stop() }
+  })
+
+  it('the row goes with the problem, with the port, and when USB passes to another account', async () => {
+    for (const change of ['problem', 'port', 'usb'] as const) {
+      const s = setup()
+      try {
+        s.fleet.start()
+        await vi.waitFor(() => expect(Closed.made).toHaveLength(1))
+        Closed.made[0].host.onDialStatus?.({ attached: false, problem: 'P' })
+        expect(s.rows()).toHaveLength(1)
+        if (change === 'problem') Closed.made[0].host.onDialStatus?.({ attached: false })
+        if (change === 'port') { s.f.setPorts([]); await s.scan() }
+        if (change === 'usb') { s.f.options.canUseUsb.mockReturnValue(false); await s.scan() }
+        expect(s.rows()).toEqual([])
+      } finally { await s.fleet.stop() }
+    }
+  })
+})
+
 describe('which apps the dials want', () => {
   it('wants apps while any connected dial says appFilter', async () => {
     const f = fixture()
