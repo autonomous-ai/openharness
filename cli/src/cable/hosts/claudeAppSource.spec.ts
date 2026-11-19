@@ -15,7 +15,7 @@ const ID = observedAgentId('claude', SESSION)
 const T = 1_763_000_000_000
 const FOLDERS: StoreFolders = { accounts: [ACCOUNT], orgs: [ORG] }
 const LOG =
-  /^\[claude-app\] (watch · (on|none)|listed · \d+ sessions|read · \d+ ms · \d+ parsed · \d+ skipped|over · \d+)$/
+  /^\[claude-app\] (watch · (on|none)|listed · \d+ sessions|read · (\d+ ms · \d+ parsed · \d+ skipped|failed)|over · \d+)$/
 
 /** The session every test lists: Claude Code's id SESSION, the app's LOCAL, in /work/api. */
 const session = (over: Partial<ClaudeAppSession> = {}): ClaudeAppSession => ({
@@ -537,10 +537,36 @@ describe("the Claude app's source (docs/plans/2026-11-19-dial-claude-app-session
         await s.fail()
         expect(s.source.list().map(({ id }) => id)).toEqual([ID])
         expect(s.changes).toBe(1)
+        expect(s.log.at(-1)).toBe('[claude-app] read · failed')
         s.gap()
         expect(await after(s, () => s.fire(ORG, undefined))).toEqual(['folders', 'files', 'read'])
       },
     )
+
+    it('read · failed is said once a run of failures, and again after a pass that worked', async () => {
+      const s = await started()
+      const failed = () => s.log.filter((line) => line === '[claude-app] read · failed')
+      for (let i = 0; i < 2; i++) {
+        s.fire(ORG, undefined)
+        await turn()
+        await s.fail()
+        s.gap()
+      }
+      expect(failed()).toHaveLength(1)
+      await after(s, () => s.fire(ORG, undefined))
+      s.fire(ORG, undefined)
+      await turn()
+      await s.fail()
+      expect(failed()).toHaveLength(2)
+    })
+
+    it('a listener that throws throws nothing into the devices process, and read · failed is said', async () => {
+      const s = setup()
+      s.source.onChange(() => { throw new Error('broken') })
+      s.source.start()
+      await s.land()
+      expect(s.log.at(-1)).toBe('[claude-app] read · failed')
+    })
   })
 
   describe('log lines', () => {
