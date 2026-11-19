@@ -3806,7 +3806,7 @@ describe('ObservedSource outer place', () => {
 
   /** A source whose outer places the test answers by hand, in the order they were asked, as the tmux lookup answers an
    *  event in a tmux pane; an event in no tmux pane is not nested. A tty read answers at once. */
-  function nested(over: Partial<Fakes> = {}, adapt = (adapters: readonly HostAdapter[]) => adapters) {
+  function nested(over: Partial<Fakes> = {}, adapt = (adapters: readonly HostAdapter[]) => adapters, deps: Partial<ObservedDeps> = {}) {
     const asks: Array<{ answer(place: { app?: string; tty?: string }): Promise<unknown> }> = []
     const outer = vi.fn((hints: Readonly<Record<string, string>>, _pid: number) => (hints.TMUX_PANE
       ? new Promise<{ app?: string; tty?: string }>((resolve) => {
@@ -3815,7 +3815,7 @@ describe('ObservedSource outer place', () => {
       : undefined))
     const tty = vi.fn(async (_pid: number): Promise<string | undefined> => '/dev/ttys031')
     const { actions, ran } = fakeActions(over)
-    const s = setup({ actions: { ...actions, adapters: adapt(actions.adapters) }, tty, outer })
+    const s = setup({ actions: { ...actions, adapters: adapt(actions.adapters) }, tty, outer, ...deps })
     const agent = () => s.src.list()[0]
     return { ...s, actions, ran, outer, asks, tty, agent }
   }
@@ -3940,6 +3940,45 @@ describe('ObservedSource outer place', () => {
     await t.asks[0].answer({})
     expect(t.src.byTab('terminal-app', '/dev/ttys031')).toBeUndefined()
     expect(t.tty.mock.calls).toEqual([[100]])
+  })
+
+  // A tmux before 3.2 sets no TERM_PROGRAM: the one its server started with may name no listed app (Hyper), so the
+  // caller's parents are walked too, and that walk can answer after the outer place.
+  describe('beside a walk of its caller\'s parents', () => {
+    /** A source whose walks the test answers by hand, in the order they began. */
+    function walked() {
+      const walks: Array<(apps: ReadonlyMap<number, string>) => Promise<unknown>> = []
+      const apps = vi.fn((_pids: readonly number[]) => new Promise<ReadonlyMap<number, string>>((resolve) => {
+        walks.push((found) => { resolve(found); return vi.advanceTimersByTimeAsync(0) })
+      }))
+      const t = nested({}, undefined, { apps })
+      t.src.ingest(t.ev('session-start', inTmux({ TERM_PROGRAM: 'Hyper' })))
+      expect(apps).toHaveBeenCalledTimes(1)
+      return { ...t, walks }
+    }
+
+    it('a walk that answers after its outer place leaves it on that app, at its client\'s tab', async () => {
+      const t = walked()
+      await t.asks[0].answer(CLIENT)
+      expect(t.agent().app).toBe('terminal-app')
+      // The walk ends at tmux's server, which no app holds.
+      await t.walks[0](new Map())
+      expect(t.agent().app).toBe('terminal-app')
+      expect(t.src.byTab('terminal-app', '/dev/ttys004')).toMatchObject({ id: t.agent().id })
+      expect(t.src.paneOf(t.agent().id, 'tabs')).toBe('terminal-app:/dev/ttys004')
+      expect(t.tty).not.toHaveBeenCalled()
+    })
+
+    it('a walk that names a tab app before its outer place answers reads no tty', async () => {
+      const t = walked()
+      // A server kept in a Terminal tab's foreground (`tmux -D`): its walk names Terminal, whose tab is not the pane's pty.
+      await t.walks[0](new Map([[100, 'terminal-app']]))
+      expect(t.agent().app).toBe('terminal-app')
+      expect(t.tty).not.toHaveBeenCalled()
+      await t.asks[0].answer({})
+      expect(t.src.paneOf(t.agent().id, 'tabs')).toBeUndefined()
+      expect(t.tty).not.toHaveBeenCalled()
+    })
   })
 
   it('undefined: nothing changes', async () => {
