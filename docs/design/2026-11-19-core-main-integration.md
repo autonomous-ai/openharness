@@ -20,3 +20,7 @@ All 113 conflicting files and 190 conflict hunks were reviewed against both side
 - `20261119T095138.748665Z-88117`: types pass; architecture, failure-log checks, Create and actual-child disk-failure checks pass (237 cases overall). One remaining hook-migration expectation assumed the default Claude home; it now checks the explicitly selected profile's projects directory.
 
 The merge is a source checkpoint, not release acceptance. Full combined coverage, packaged native behavior, final performance comparisons and independent review remain open. Earlier cost holds in the core plan are unchanged.
+
+## Final main update
+
+The integration includes `36c1bac7aa` (Devices locates the same tmux as core) and `a38553f5f6` (bounded long voice delivery). Runtime and test merges are automatic; the only conflict is the Devices documentation row. Resolution retains component-owned startup discovery and adds main's tmux lookup description. The cohosted-focus correction remains in `devicesProcess.ts`, outside core. Final local gates cover the combined source; the added long-transcript native case is selected alongside Wi-Fi acceptance. No backend source differs from this main revision.

@@ -15,7 +15,7 @@ const LEGACY_TIERS = [
 ] as const
 
 const CAMPAIGN_TIERS = {
-  free: { name: 'Free', cpus: '1', memory: '1g', maxAgents: 3, priceUsd: 0, dailyVoiceLimitSeconds: 10 * 60, authMode: 'managed', isDefault: true },
+  free: { name: 'Free', cpus: '1', memory: '1g', maxAgents: 3, priceUsd: 0, dailyVoiceLimitSeconds: 30 * 60, authMode: 'managed', isDefault: true },
   pro: { name: 'Pro', cpus: '1', memory: '2g', maxAgents: 10, priceUsd: 20, dailyVoiceLimitSeconds: 30 * 60, authMode: 'managed', isDefault: false },
   max: { name: 'Max', cpus: '2', memory: '4g', maxAgents: 50, priceUsd: 100, dailyVoiceLimitSeconds: 0, authMode: 'managed', isDefault: false },
   remote: { name: 'Remote', cpus: '1', memory: '2g', maxAgents: 1, priceUsd: 10, dailyVoiceLimitSeconds: 60 * 60, authMode: 'remote', isDefault: false },

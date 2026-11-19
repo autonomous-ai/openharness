@@ -6,10 +6,12 @@
  * that session shows it, and none is moved to another session. Those are the two things done there, each only once the
  * pane's process is checked to be the agent's or one of its parents, and never on a session Harness made: nothing is
  * typed, made or closed (Q1). Beside them, a lookup reads which client shows a pane's session, to place the agent on the
- * page of the app that holds it (createTmuxOuter). tmux is the daemon's: the name on its PATH, with no `-L` or `-S`. Each
- * value came from a hook or from tmux, so it is checked against its form, and tmux runs with no shell.
+ * page of the app that holds it (createTmuxOuter). tmux is the daemon's, with no `-L` or `-S`: the master's PATH may hold
+ * none, so the devices find it as the core does (tmuxFinder), the same binary and so the same server. Each value came
+ * from a hook or from tmux, so it is checked against its form, and tmux runs with no shell.
  */
 import { HARNESS_OWNER_OPTION, isHarnessSession, paneOwnerFormat } from '../../lib/harnessSessionLabel.js'
+import { ensureTmuxOnPath, tmuxAvailableNow, type TmuxPathOutcome } from '../../lib/tmuxOnPath.js'
 import type { HostAdapter, Pane, Place } from './adapter.js'
 import { APP_IDS } from './hostDetect.js'
 import { RUN_TIMEOUT_MS, type OrcaDeps } from './orca.js'
@@ -44,6 +46,8 @@ const OUTER_EVERY_MS = 5_000
 
 export interface TmuxDeps {
   run: OrcaDeps['run']
+  /** Where tmux is, as the core finds it (tmuxFinder); it never rejects. */
+  tmux(): Promise<TmuxPathOutcome>
   /** The machine's processes, as the open scan reads them; it rejects when the table cannot be read. */
   processes(): Promise<readonly ProcessName[]>
   log(line: string): void
@@ -51,12 +55,45 @@ export interface TmuxDeps {
   front(): string | undefined
 }
 
+/** tmux as the core finds it (lib/tmuxOnPath.ts), asked at the first tmux call and shared by the adapter and the lookup,
+ *  on a copy of the environment: this process's own PATH stays the master's. A tmux found holds. No tmux, or a lookup
+ *  that threw, is asked again once a tmux is where the core looks without a shell (tmuxAvailableNow), as the core
+ *  retries its own (lib/terminalBackendRecovery.ts): a tmux installed after this process started, or a login shell that
+ *  timed out on a loaded Mac, otherwise left the dial with no tmux until the process restarted. Never rejects. */
+export function tmuxFinder(
+  find = (): Promise<TmuxPathOutcome> => ensureTmuxOnPath({ ...process.env }),
+  arrived = (): boolean => tmuxAvailableNow(),
+): () => Promise<TmuxPathOutcome> {
+  let found: Promise<TmuxPathOutcome> | undefined
+  let none = false
+  return () => {
+    if (!found || (none && arrived())) {
+      none = false
+      const asking = find().catch((): TmuxPathOutcome => ({ state: 'absent', reason: 'the lookup failed' }))
+      // Registered before any caller's wait on it, so it runs first: a call after the answer sees it.
+      void asking.then((outcome) => { none = outcome.state === 'absent' })
+      found = asking
+    }
+    return found
+  }
+}
+
+/** One run of tmux where it was found; nothing when no tmux was. A run that rejects is one that failed, so the lookup's
+ *  line names the step that ran it. */
+async function runTmux(deps: Pick<TmuxDeps, 'run' | 'tmux'>, args: string[]): Promise<{ code: number | null; stdout: string } | undefined> {
+  const found = await deps.tmux()
+  if (found.state === 'absent') return undefined
+  return deps.run(found.state === 'adopted' ? found.path : 'tmux', args, RUN_TIMEOUT_MS).catch(() => ({ code: null, stdout: '' }))
+}
+
 /** What tmux says of a pane: its process, and whether it is the person's by the rule the hook and the client filter
- *  hold (no daemon's tag, not in a session Harness named). Nothing when tmux did not answer in form. */
-async function paneFacts(run: TmuxDeps['run'], id: string): Promise<{ pid: number; persons: boolean } | undefined> {
-  const said = await run('tmux', ['display-message', '-p', '-t', id, TMUX_PANE_FACTS], RUN_TIMEOUT_MS)
+ *  hold (no daemon's tag, not in a session Harness named). `tmux` when no tmux was found, `pane` when tmux did not
+ *  answer in form. */
+async function paneFacts(deps: Pick<TmuxDeps, 'run' | 'tmux'>, id: string): Promise<{ pid: number; persons: boolean } | 'tmux' | 'pane'> {
+  const said = await runTmux(deps, ['display-message', '-p', '-t', id, TMUX_PANE_FACTS])
+  if (!said) return 'tmux'
   const facts = TMUX_PANE_FACT.exec(said.stdout.trim())
-  if (said.code !== 0 || !facts) return undefined
+  if (said.code !== 0 || !facts) return 'pane'
   const [, pid, session, owner] = facts
   return { pid: Number(pid), persons: !owner && !isHarnessSession(session) }
 }
@@ -84,8 +121,8 @@ export function createTmuxAdapter(deps: TmuxDeps): HostAdapter {
    * which attached later, wins.
    */
   async function personsClient(): Promise<string | undefined> {
-    const listed = await deps.run('tmux', ['list-clients', '-F', TMUX_CLIENTS], RUN_TIMEOUT_MS)
-    if (listed.code !== 0) return undefined
+    const listed = await runTmux(deps, ['list-clients', '-F', TMUX_CLIENTS])
+    if (listed?.code !== 0) return undefined
     let last: { activity: number; name: string } | undefined
     for (const line of listed.stdout.split('\n')) {
       const client = TMUX_CLIENT.exec(line)
@@ -107,8 +144,8 @@ export function createTmuxAdapter(deps: TmuxDeps): HostAdapter {
    *  as a second tmux server of the person's (`-L`) can have a pane of the same id. And only while the pane is still the
    *  person's: the hook checked that at its last event, and a pane can move into a session Harness made since (Q1). */
   async function checkedPane(id: string, agentPid: number): Promise<boolean | 'refused'> {
-    const facts = await paneFacts(deps.run, id)
-    if (!facts) return false
+    const facts = await paneFacts(deps, id)
+    if (typeof facts === 'string') return false
     if (!facts.persons) return notItsPane()
     const rows = await deps.processes().catch(() => undefined)
     if (!rows) return false
@@ -117,7 +154,7 @@ export function createTmuxAdapter(deps: TmuxDeps): HostAdapter {
 
   /** The pane's window, then the pane, made active on the pane's own session, in one run of tmux. */
   async function select(id: string): Promise<boolean> {
-    return (await deps.run('tmux', ['select-window', '-t', id, ';', 'select-pane', '-t', id], RUN_TIMEOUT_MS)).code === 0
+    return (await runTmux(deps, ['select-window', '-t', id, ';', 'select-pane', '-t', id]))?.code === 0
   }
 
   return {
@@ -141,7 +178,7 @@ export function createTmuxAdapter(deps: TmuxDeps): HostAdapter {
       if (checked !== true) return checked
       if (parts.app) return select(parts.id)
       const client = await personsClient()
-      return !!client && (await deps.run('tmux', ['switch-client', '-c', client, '-t', parts.id], RUN_TIMEOUT_MS)).code === 0
+      return !!client && (await runTmux(deps, ['switch-client', '-c', client, '-t', parts.id]))?.code === 0
     },
     // A rest never switches a client: only the session's own pane moves, and only in the app the person looks at.
     canShow(pane) {
@@ -157,6 +194,7 @@ export function createTmuxAdapter(deps: TmuxDeps): HostAdapter {
 
 export interface TmuxOuterDeps {
   run: TmuxDeps['run']
+  tmux: TmuxDeps['tmux']
   processes: TmuxDeps['processes']
   log: TmuxDeps['log']
   now(): number
@@ -167,6 +205,9 @@ export interface TmuxOuterDeps {
 
 /** The app that holds the tmux client showing an agent's pane, and that client's tty when it names a tab. */
 interface ClientPlace { app?: string; tty?: string }
+/** The step of a lookup that could not be read, as its line names it: no tmux found, the pane's facts, the process
+ *  table, the session's clients, the client's app. */
+type NotRead = 'tmux' | 'pane' | 'processes' | 'clients' | 'app'
 
 /** Nothing at once when the hints name no tmux pane in form or the caller is no pid; else the client's place, `{}` when
  *  none is found. Never rejects. */
@@ -185,17 +226,18 @@ export function createTmuxOuter(deps: TmuxOuterDeps): TmuxOuter {
   const asked = new Map<string, { at: number; answer: Promise<ClientPlace>; settled: boolean }>()
 
   /** `{}` when the pane is not the person's, holds no process of the caller's, or no client of its session is in a
-   *  listed app; nothing when tmux or the process table could not be read. */
-  async function placeOf(id: string, pid: number): Promise<ClientPlace | undefined> {
-    const facts = await paneFacts(deps.run, id)
-    if (!facts) return undefined
+   *  listed app; the step that could not be read, when one could not. */
+  async function placeOf(id: string, pid: number): Promise<ClientPlace | NotRead> {
+    const facts = await paneFacts(deps, id)
+    if (typeof facts === 'string') return facts
     if (!facts.persons) return {}
     // One read of the table serves the pane's proof and the client's walk.
-    const rows = await deps.processes()
+    const rows = await deps.processes().catch(() => undefined)
+    if (!rows) return 'processes'
     if (!holdsPane(rows, pid, facts.pid)) return {}
     // By the pane id, which tmux resolves to its session: a session's name could read as another target (`$0`, `@1`).
-    const listed = await deps.run('tmux', ['list-clients', '-t', id, '-F', TMUX_CLIENT_PLACES], RUN_TIMEOUT_MS)
-    if (listed.code !== 0) return undefined
+    const listed = await runTmux(deps, ['list-clients', '-t', id, '-F', TMUX_CLIENT_PLACES])
+    if (listed?.code !== 0) return 'clients'
     let client: { activity: number; pid: number; tty: string } | undefined
     for (const line of listed.stdout.split('\n')) {
       const row = TMUX_CLIENT_PLACE.exec(line)
@@ -211,9 +253,14 @@ export function createTmuxOuter(deps: TmuxOuterDeps): TmuxOuter {
   }
 
   async function lookUp(id: string, pid: number): Promise<ClientPlace> {
-    const place = await placeOf(id, pid).catch(() => undefined)
-    deps.log(`[device] tmux client · ${!place ? 'not read' : place.app ? 'found' : 'none'}`)
-    return place ?? {}
+    // Every other step answers its own word: what is left to throw is the app scan.
+    const place = await placeOf(id, pid).catch((): NotRead => 'app')
+    if (typeof place === 'string') {
+      deps.log(`[device] tmux client · not read · ${place}`)
+      return {}
+    }
+    deps.log(`[device] tmux client · ${place.app ? 'found' : 'none'}`)
+    return place
   }
 
   return (hints, pid) => {

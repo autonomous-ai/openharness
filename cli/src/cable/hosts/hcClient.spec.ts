@@ -7,6 +7,7 @@ import {
   createHcClient, hcClientDeps, hcKind, hcSocketPath, hcTerminal,
   type HcClientDeps, type HcSubscriber,
 } from './hcClient.js'
+import { MAX_TEXT } from './orca.js'
 import { connectLines } from './unixSocket.js'
 
 /** hc's longest line, the bound of every connection to it: its snapshot is one line with every terminal of the core. */
@@ -901,13 +902,13 @@ describe.skipIf(process.platform === 'win32')('the hc client (docs/plans/2026-11
       .toMatchObject({ params: { terminal: 't7', text: 'fix it rm -rf / [2J', if: 'idle' } })
   })
 
-  it('an empty text, one blank once its control characters are spaces, one over 2000 characters, an address or a kind not in its form: failed, bad_request, and nothing connects', async () => {
+  it('an empty text, one blank once its control characters are spaces, one over MAX_TEXT characters, an address or a kind not in its form: failed, bad_request, and nothing connects', async () => {
     server.terminals = [{ address: 't7' }]
     const hc = client()
     for (const [address, kind, text] of [
       ['t7', 'claude', ''],
       ['t7', 'claude', '\n\t'],
-      ['t7', 'claude', 'x'.repeat(2001)],
+      ['t7', 'claude', 'x'.repeat(MAX_TEXT + 1)],
       ['t', 'claude', 'go'],
       ['T7', 'claude', 'go'],
       ['vps/t7', 'claude', 'go'],
@@ -919,7 +920,12 @@ describe.skipIf(process.platform === 'win32')('the hc client (docs/plans/2026-11
       expect(await hc.prompt(address, kind, text), `${address} ${kind} ${text.length}`).toEqual({ outcome: 'failed', fault: 'bad_request' })
     }
     expect(server.connections).toBe(0)
-    expect(await hc.prompt('t7', 'claude', 'x'.repeat(2000))).toEqual({ outcome: 'sent' })
+  })
+
+  it('a text of 20,000 characters is sent whole', async () => {
+    server.terminals = [{ address: 't7' }]
+    expect(await client().prompt('t7', 'claude', 'x'.repeat(20_000))).toEqual({ outcome: 'sent' })
+    expect((await server.got('terminal.send', 1)).request).toMatchObject({ params: { terminal: 't7', text: 'x'.repeat(20_000) } })
   })
 
   // A Claude Code terminal draws on the alternate screen, so the dial's scroll presses its own page keys

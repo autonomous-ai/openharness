@@ -4,6 +4,7 @@ import { fakeHerdr, RECORDED, type FakeHerdr } from '../../testing/fakeHerdr.js'
 import { createHerdrAdapter } from './herdr.js'
 import { createHerdrClient, type HerdrPrompt } from './herdrClient.js'
 import { HerdrSource, type HerdrSourceDeps } from './herdrSource.js'
+import { MAX_TEXT } from './orca.js'
 import type { HostAgent } from './types.js'
 
 const KINDS = [{ type: 'pane.agent_detected' }, { type: 'pane.closed' }, { type: 'pane.exited' }]
@@ -984,10 +985,10 @@ describe.skipIf(process.platform === 'win32')('the herdr source (docs/specs/2026
       server.event('pane.agent_status_changed', { agent: 'claude', agent_status: status, pane_id: 'w1:p1' })
       await s.until(() => api().state === state)
     }
-    const sent = async () => {
+    const sent = async (text = 'run the tests') => {
       const calls = s.prompt.mock.calls.length
-      expect(await s.source.send(api(), 'run the tests')).toEqual({ ok: true })
-      expect(s.prompt.mock.calls.slice(calls)).toEqual([['w1:p1', 'claude', 'run the tests']])
+      expect(await s.source.send(api(), text)).toEqual({ ok: true })
+      expect(s.prompt.mock.calls.slice(calls)).toEqual([['w1:p1', 'claude', text]])
     }
     const refused = async (reason: string, text = 'run the tests', of: HostAgent = api()) => {
       const calls = s.prompt.mock.calls.length
@@ -996,8 +997,10 @@ describe.skipIf(process.platform === 'win32')('the herdr source (docs/specs/2026
     }
     const BUSY = 'api is busy. Say it when it is done.'
 
-    // Idle, done, and a turn that ended idle.
+    // Idle, done, and a turn that ended idle; ten minutes of fast speech and a passage reach it whole.
     await sent()
+    await sent('x'.repeat(10_000))
+    await sent('x'.repeat(20_000))
     await to('done', 'done')
     await sent()
     await to('working', 'working')
@@ -1005,13 +1008,13 @@ describe.skipIf(process.platform === 'win32')('the herdr source (docs/specs/2026
     await to('idle', 'done')
     expect(api().unseenDone).toBe(false)
     await sent()
-    expect(s.counts).toEqual(['herdr', 'herdr', 'busy', 'herdr'])
+    expect(s.counts).toEqual(['herdr', 'herdr', 'herdr', 'herdr', 'busy', 'herdr'])
 
     await to('blocked', 'needs-you')
     expect(await refused('api is waiting for your answer in herdr.')).toBe(0)
     await to('unknown', 'idle')
     expect(await refused(BUSY)).toBe(0)
-    expect(s.counts.slice(4)).toEqual(['waiting', 'busy'])
+    expect(s.counts.slice(6)).toEqual(['waiting', 'busy'])
 
     // A second send while one runs, and a prompt the adapter answers busy.
     await to('done', 'done')
@@ -1029,7 +1032,7 @@ describe.skipIf(process.platform === 'win32')('the herdr source (docs/specs/2026
     expect(s.counts).toEqual(['busy', 'herdr', 'busy'])
 
     s.counts.length = 0
-    expect(await refused('Too long. Say it shorter.', 'x'.repeat(2001))).toBe(0)
+    expect(await refused('Too long. Say it shorter.', 'x'.repeat(MAX_TEXT + 1))).toBe(0)
     server.answer('agent.prompt', refusal('agent_not_ready'))
     expect(await refused('api did not answer.')).toBe(1)
     const gone = api()

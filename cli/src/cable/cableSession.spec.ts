@@ -7224,3 +7224,104 @@ describe('the agent the dial shows (docs/specs/2026-11-16-orca-device-plugin.md)
     } finally { await session.stop() }
   })
 })
+
+describe('a long recording and its long transcript', () => {
+  const HELLO = { t: 'hello', product: 'harness', mac: 'aa:bb' }
+  /** 16 kHz mono 16-bit, as both dials record. */
+  const SECOND = 32_000
+
+  /** One voice turn as the dial sends it, PCM in frames of 8,000 bytes, and the answer that carries its uploadId. */
+  async function record(port: LoopbackPort, uploadId: string, bytes: number, fields: Record<string, unknown> = { agentId: 'a1' }) {
+    port.say({ t: 'voice.begin', uploadId, ...fields })
+    const frame = Buffer.alloc(8_000)
+    for (let at = 0; at < bytes; at += frame.length) port.pcm(frame.subarray(0, Math.min(frame.length, bytes - at)))
+    port.say({ t: 'voice.end' })
+    return vi.waitFor(() => {
+      const answer = port.sent.find(m => (m.t === 'voice.transcript' || m.t === 'voice.error') && m.uploadId === uploadId)
+      expect(answer).toBeDefined()
+      return answer!
+    })
+  }
+
+  /** A session whose transcriber notes the length of each PCM it is handed and answers `words`. */
+  async function listening(words: () => string, over: Partial<CableHost> = {}) {
+    const lines: string[] = []
+    const handed: number[] = []
+    const c = await connect(makeHost({
+      transcribe: async (pcm) => { handed.push(pcm.length); return words() },
+      log: (line) => lines.push(line),
+      ...over,
+    }))
+    c.port.say(HELLO); await settle()
+    return { ...c, lines, handed }
+  }
+
+  it("a recording of 600 s, and one a second past it to the dial's own stop, are transcribed", async () => {
+    const { session, port, handed } = await listening(() => 'fix the login screen')
+    try {
+      expect(await record(port, 'ten', 600 * SECOND)).toMatchObject({ t: 'voice.transcript' })
+      expect(await record(port, 'stop', 601 * SECOND)).toMatchObject({ t: 'voice.transcript' })
+      expect(handed).toEqual([600 * SECOND, 601 * SECOND])
+    } finally { await session.stop() }
+  }, 60_000)
+
+  it("a recording of 615 s is transcribed; past it, a stuck dial's is dropped and logged", async () => {
+    const { session, port, handed, lines } = await listening(() => 'fix the login screen')
+    try {
+      expect(await record(port, 'last', 615 * SECOND)).toMatchObject({ t: 'voice.transcript' })
+      expect(await record(port, 'stuck', 615 * SECOND + 2)).toMatchObject({ t: 'voice.error', message: "Didn't catch that" })
+      expect(handed).toEqual([615 * SECOND])
+      expect(lines.filter(l => l === 'cable: voice over the length cap, dropped')).toHaveLength(1)
+    } finally { await session.stop() }
+  }, 60_000)
+
+  describe('a transcript too long for one frame reaches the dial as voice.transcript without its text, on either route', () => {
+    const LONG = `${'word '.repeat(2_000).trim()}.`
+    const SENT = { t: 'voice.transcript', routeId: '', agentName: 'Fix login screen', needsConfirm: false }
+
+    it('a named agent', async () => {
+      expect(LONG).toHaveLength(10_000)
+      const { session, port, host, lines } = await listening(() => LONG)
+      try {
+        const answer = await record(port, 'named', 3_200)
+        expect(host.sendTurn).toHaveBeenCalledOnce()
+        expect(host.sendTurn).toHaveBeenCalledWith('a1', LONG)
+        expect(answer).toEqual({ ...SENT, uploadId: 'named', agentId: 'a1' })
+        expect(lines.some(l => l.includes('dropped a voice.transcript'))).toBe(false)
+      } finally { await session.stop() }
+    })
+
+    it("the window's route", async () => {
+      const { session, port, lines } = await listening(() => LONG,
+        { routeInWindow: async () => ({ t: 'sent' as const, agentId: 'a2' }) })
+      try {
+        const answer = await record(port, 'window', 3_200, {})
+        expect(answer).toEqual({ ...SENT, uploadId: 'window', agentId: 'a2', agentName: 'Device firmware voice' })
+        expect(lines.some(l => l.includes('dropped a voice.transcript'))).toBe(false)
+      } finally { await session.stop() }
+    })
+
+    it('3,000 characters of three UTF-8 bytes each', async () => {
+      const { session, port } = await listening(() => 'ệ'.repeat(3_000))
+      try {
+        const answer = await record(port, 'accented', 3_200)
+        expect(answer).toMatchObject({ t: 'voice.transcript', agentId: 'a1' })
+        expect(answer).not.toHaveProperty('text')
+      } finally { await session.stop() }
+    })
+
+    it('at the margin the text is kept; one character more and it goes', async () => {
+      const empty = { t: 'voice.transcript', routeId: '', text: '', agentId: 'a1', agentName: 'Fix login screen', needsConfirm: false }
+      const fits = 'a'.repeat(CABLE_MAX_PAYLOAD - 256 - Buffer.byteLength(JSON.stringify(empty), 'utf8'))
+      let words = fits
+      const { session, port } = await listening(() => words)
+      try {
+        expect(await record(port, 'margin', 3_200)).toEqual({ ...empty, text: fits, uploadId: 'margin' })
+        words = `${fits}a`
+        const over = await record(port, 'over', 3_200)
+        expect(over).toMatchObject({ t: 'voice.transcript', uploadId: 'over', agentId: 'a1' })
+        expect(over).not.toHaveProperty('text')
+      } finally { await session.stop() }
+    })
+  })
+})

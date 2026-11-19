@@ -12,7 +12,9 @@
  * - a window brings back its tab's list, and closing it the machine's;
  * - talking to it is refused kindly, and `HARNESS_DEVICE_OBSERVED=off` leaves only the Harness agent;
  * - Claude Code in a tmux session the person opened (harness/ownTmux.ts) is listed with host tmux, takes the dial's words
- *   through its mod, and a tap moves the person's own tmux client to its pane, never one on a session Harness made.
+ *   through its mod, and a tap moves the person's own tmux client to its pane, never one on a session Harness made;
+ * - a ten-minute transcript, 10,000 characters, reaches Claude Code's mod whole in VS Code's terminal, and the dial hears
+ *   it was sent.
  */
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { request } from 'node:http'
@@ -21,6 +23,7 @@ import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
 import { LocalClient, type Frame } from './harness/client.js'
 import { IsolatedDaemon, until } from './harness/daemon.js'
 import { Desk } from './harness/desk.js'
+import { FakeBackend, type FakeMachine } from './harness/fakeBackend.js'
 import type { DialMessage, FakeDial } from './harness/fakeDial.js'
 import { Outside } from './harness/outsideAgent.js'
 import { controlClient, InOwnTmux, type ControlClient } from './harness/ownTmux.js'
@@ -40,6 +43,8 @@ async function create(daemon: IsolatedDaemon, client: LocalClient, folder: strin
   }, 60_000, 500)
   return created.agent.id
 }
+/** The machine a daemon signs in as, to hear its dial's words: the daemon asks its backend for each transcript. */
+const ME: FakeMachine = { machineId: 'c5'.repeat(16), computerId: 'e2e-device-without-app-computer', name: 'Fixture', token: 'e2e-device-without-app-token' }
 const isTurn = (type: string, agentId: string) => (frame: Frame) => frame.type === type && frame.agentId === agentId
 
 /** The mod's poll over the daemon's socket, as the mod sends it: its status and what it was answered. */
@@ -78,6 +83,7 @@ const ids = (roster: Roster): unknown[] => roster.rows.map((r) => r.id)
 describe('the device without the app', () => {
   let daemon: IsolatedDaemon | undefined
   let desk: Desk | undefined
+  let backend: FakeBackend | undefined
   const outside: Outside[] = []
   const clients: ControlClient[] = []
   afterEach(async () => {
@@ -86,11 +92,15 @@ describe('the device without the app', () => {
     for (const engine of outside.splice(0)) await engine.close()
     await desk?.close()
     await daemon?.close()
+    await backend?.close()
     daemon = undefined
     desk = undefined
+    backend = undefined
   })
-  const fresh = async (env: Record<string, string> = {}): Promise<{ d: IsolatedDaemon; desk: Desk }> => {
-    const d = await IsolatedDaemon.create({ env: { CABLE_DISABLE: 'false', ...env } })
+  /** A daemon of its own and a desk; with [relay], signed in to it as ME, for the dial's words. */
+  const fresh = async (env: Record<string, string> = {}, relay?: FakeBackend): Promise<{ d: IsolatedDaemon; desk: Desk }> => {
+    const signIn = relay ? { BACKEND_WS_URL: relay.wsUrl, WEB_URL: relay.httpUrl, ADAPTER_COMPUTER_ID: ME.computerId } : {}
+    const d = await IsolatedDaemon.create({ env: { CABLE_DISABLE: 'false', ...signIn, ...env } })
     daemon = d
     const file = join(d.root, 'dials.json')
     d.env.HARNESSD_TEST_DIAL_PORT = file
@@ -101,6 +111,11 @@ describe('the device without the app', () => {
       console.log(`---- daemon log\n${d.log().split('\n').slice(-200).join('\n')}`)
       console.log(`---- hooks the engines ran\n${d.hookLog().split('\n').slice(-40).join('\n')}`)
     })
+    // Signed in as ME: the session `harness login` leaves, which the core reads at start.
+    if (relay) writeFileSync(join(d.root, 'auth', 'session.json'), JSON.stringify({ version: 1, accessToken: ME.token,
+      autonomousEnv: 'prod', computerId: ME.computerId, machineId: ME.machineId,
+      expiresAt: Date.now() + 30 * 24 * 3600_000, updatedAt: Date.now(), signInEpoch: 'e2e',
+    }), { mode: 0o600 })
     await d.start()
     return { d, desk: theDesk }
   }
@@ -355,6 +370,34 @@ describe('the device without the app', () => {
     await showing(dial, 'voice once its mod polls', (r) => r.rows.find((row) => row.id === engine.id)?.caps === 'svf')
     dial.send({ t: 'turn.send', agentId: engine.id, text: 'from the dial' })
     expect(await poll).toEqual({ status: 200, body: { text: 'from the dial' } })
+  })
+
+  it('a ten-minute transcript, 10,000 characters, reaches Claude Code\'s mod whole, and the dial hears it was sent', async () => {
+    const relay = await FakeBackend.start()
+    backend = relay
+    relay.addMachine(ME)
+    const { d, desk } = await fresh({}, relay)
+    const dial = await desk.plug('E2E-A', 'e2:e0:00:00:00:0a')
+    await heard(dial, (m) => m.t === 'agents.end', 'the first list')
+    const engine = await startOutside(d, 'in-vscode', { TERM_PROGRAM: 'vscode' })
+    await showing(dial, 'the agent listed', (r) => ids(r).includes(engine.id))
+    const poll = inboxPoll(d, engine.sessionId)
+    await showing(dial, 'voice once its mod polls', (r) => String(r.rows.find((row) => row.id === engine.id)?.caps ?? '').includes('v'))
+    // About what ten minutes of speech transcribes to.
+    const words = `${'word '.repeat(2_000).trim()}.`
+    expect(words).toHaveLength(10_000)
+    relay.speech = words
+    const since = dial.messages.length
+    dial.send({ t: 'voice.begin', agentId: engine.id, uploadId: 'e2e-long-1', sr: 16_000, lang: 'en' })
+    dial.audio(Buffer.alloc(3_200, 1))
+    dial.send({ t: 'voice.end', uploadId: 'e2e-long-1' })
+    const answer = await heard(dial, (m) => (m.t === 'voice.transcript' || m.t === 'voice.error') && m.uploadId === 'e2e-long-1',
+      'the answer to its words', since)
+    // Sent, with no text: the dial's frame cannot hold 10,000 characters, and it has nothing to confirm.
+    expect(answer).toMatchObject({ t: 'voice.transcript', agentId: engine.id, needsConfirm: false })
+    expect(answer).not.toHaveProperty('text')
+    expect(await poll).toEqual({ status: 200, body: { text: words } })
+    expect(d.log()).not.toContain('word word')
   })
 
   it('a tap on it switches the person\'s tmux client to its pane, never one on a Harness session, and brings no app forward', async () => {

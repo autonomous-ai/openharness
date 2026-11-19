@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { delimiter, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import { appCodexCandidates, CODEX_THREAD, codexQueueDeps, createCodexQueue, type CodexQueueDeps, type CodexRunEnd } from './codexQueue.js'
+import { MAX_TEXT } from './orca.js'
 import { writeExecutable } from '../../testing/executableFixture.js'
 
 // The real execFile, watched: a spec reads how the child of a run ended.
@@ -149,18 +150,23 @@ describe('codex queue', () => {
     expect(fake.cwd()).toBe(realpathSync(cwd))
   })
 
-  it('a thread id that is not a lower-case UUID, an empty text, one over 2000 characters and one with a NUL run nothing and answer failed, refused', async () => {
+  it('a thread id that is not a lower-case UUID, an empty text, one over MAX_TEXT characters and one with a NUL run nothing and answer failed, refused', async () => {
     expect(CODEX_THREAD.test(THREAD)).toBe(true)
     const { calls, queue } = recorder()
     for (const id of ['', THREAD.toUpperCase(), `${THREAD}; rm -rf /`, '--help', 'my session']) {
       expect(await queue.send(id, 'hi', false)).toEqual(REFUSED)
     }
-    for (const text of ['', 'a'.repeat(2001), 'one\0two']) {
+    for (const text of ['', 'a'.repeat(MAX_TEXT + 1), 'one\0two']) {
       expect(await queue.send(THREAD, text, false)).toEqual(REFUSED)
     }
     expect(calls).toEqual([])
-    expect(await queue.send(THREAD, 'a'.repeat(2000), false)).toEqual({ outcome: 'queued' })
+  })
+
+  it('a text of 20,000 characters is queued whole, in one run', async () => {
+    const { calls, queue } = recorder()
+    expect(await queue.send(THREAD, 'a'.repeat(20_000), false)).toEqual({ outcome: 'queued' })
     expect(calls).toHaveLength(1)
+    expect(calls[0][1]).toContain(`--message=${'a'.repeat(20_000)}`)
   })
 
   it('exit 0 is queued; a non-zero exit is failed with its exit code; a binary that cannot start, and no binary, are failed with no binary', async () => {
