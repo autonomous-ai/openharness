@@ -883,6 +883,7 @@ mod tests {
     /// shut.
     struct Updates {
         check: Result<Option<String>, UpdateFailure>,
+        download: Mutex<Result<(), UpdateFailure>>,
         install: Mutex<Result<(), UpdateFailure>>,
         calls: Mutex<Vec<&'static str>>,
         shut: Mutex<bool>,
@@ -893,6 +894,7 @@ mod tests {
         fn answering(check: Result<Option<String>, UpdateFailure>, install: Result<(), UpdateFailure>) -> Arc<Updates> {
             Arc::new(Updates {
                 check,
+                download: Mutex::new(Ok(())),
                 install: Mutex::new(install),
                 calls: Mutex::default(),
                 shut: Mutex::default(),
@@ -911,6 +913,11 @@ mod tests {
             self.calls.lock().unwrap().push("check");
             drop(self.opened.wait_while(self.shut.lock().unwrap(), |shut| *shut).unwrap());
             self.check.clone()
+        }
+
+        fn download(&self) -> Result<(), UpdateFailure> {
+            self.calls.lock().unwrap().push("download");
+            *self.download.lock().unwrap()
         }
 
         fn install(&self) -> Result<(), UpdateFailure> {
@@ -1500,15 +1507,27 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn a_check_or_an_install_answers_its_failure() {
+    fn a_check_a_download_or_an_install_answers_its_failure() {
         let updates = Updates::answering(Err(UpdateFailure::Check), Ok(()));
         let door = updates.clone();
         let w = world_where(move |doors| doors.updater = Some(door));
         assert_eq!(w.answer(Effect::CheckUpdate), Event::UpdateFailed(UpdateFailure::Check));
+        *updates.download.lock().unwrap() = Err(UpdateFailure::NotWritable);
+        assert_eq!(w.answer(Effect::DownloadUpdate), Event::UpdateFailed(UpdateFailure::NotWritable));
+        *updates.install.lock().unwrap() = Err(UpdateFailure::Install);
+        assert_eq!(w.answer(Effect::InstallUpdate), Event::UpdateFailed(UpdateFailure::Install));
+        assert_eq!(*updates.calls.lock().unwrap(), ["check", "download", "install"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_download_then_an_install_reach_the_door_in_order() {
+        let updates = Updates::answering(Ok(Some("0.1.3".into())), Ok(()));
+        let door = updates.clone();
+        let w = world_where(move |doors| doors.updater = Some(door));
+        assert_eq!(w.answer(Effect::DownloadUpdate), Event::UpdateDownloaded);
         assert_eq!(w.answer(Effect::InstallUpdate), Event::UpdateInstalled);
-        *updates.install.lock().unwrap() = Err(UpdateFailure::NotWritable);
-        assert_eq!(w.answer(Effect::InstallUpdate), Event::UpdateFailed(UpdateFailure::NotWritable));
-        assert_eq!(*updates.calls.lock().unwrap(), ["check", "install", "install"]);
+        assert_eq!(*updates.calls.lock().unwrap(), ["download", "install"]);
     }
 
     #[cfg(unix)]
@@ -1516,6 +1535,7 @@ mod tests {
     fn with_no_updater_a_check_finds_nothing() {
         let w = world();
         assert_eq!(w.answer(Effect::CheckUpdate), Event::UpdateChecked(None));
+        assert_eq!(w.answer(Effect::DownloadUpdate), Event::UpdateChecked(None));
         assert_eq!(w.answer(Effect::InstallUpdate), Event::UpdateChecked(None));
     }
 
@@ -2244,7 +2264,7 @@ mod tests {
         w.fake.script("hardware watch --json", &[r#"{"attached":true,"fw":"0.0.95"}"#, "@stdin"]);
         w.fake.script("auth status --json", &[r#"{"loggedIn":true}"#]);
         w.fake.script("--version", &["0.6.58"]);
-        let (mut app, mut effects) = App::new(Saved::default(), w.runner.find_cli(), false, B);
+        let (mut app, mut effects) = App::new(Saved::default(), w.runner.find_cli(), false, B, false);
         let connected = MenuItem::Text("Device ready".into());
         let (mut dial, mut auth, mut version) = (false, false, false);
         loop {

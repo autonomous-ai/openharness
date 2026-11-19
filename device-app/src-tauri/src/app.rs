@@ -641,16 +641,21 @@ mod tests {
     };
 
     fn found() -> App {
-        App::new(SEEN, true, false, B).0
+        found_where(false)
+    }
+
+    /// Found, where installing the app's update ends the app (`true`) or not.
+    fn found_where(install_exits_app: bool) -> App {
+        App::new(SEEN, true, false, B, install_exits_app).0
     }
 
     /// No CLI, never seen.
     fn fresh() -> App {
-        App::new(Saved { login_item: true, ..Saved::default() }, false, false, B).0
+        App::new(Saved { login_item: true, ..Saved::default() }, false, false, B, false).0
     }
 
     fn removed() -> App {
-        App::new(SEEN, false, false, B).0
+        App::new(SEEN, false, false, B, false).0
     }
 
     fn has(effects: &[Effect], effect: &Effect) -> bool {
@@ -736,7 +741,11 @@ mod tests {
 
     /// Found, signed out: the window offers sign-in.
     fn on_sign_in() -> App {
-        let mut app = found();
+        on_sign_in_where(false)
+    }
+
+    fn on_sign_in_where(install_exits_app: bool) -> App {
+        let mut app = found_where(install_exits_app);
         answer(&mut app, false);
         assert_eq!(app.view(), shown(Screen::SignIn, Phase::Offer, &[]));
         app
@@ -744,7 +753,7 @@ mod tests {
 
     #[test]
     fn a_found_cli_is_watched_and_read() {
-        let (app, effects) = App::new(Saved::default(), true, false, B);
+        let (app, effects) = App::new(Saved::default(), true, false, B, false);
         let seen = Saved { cli_seen: true, ..Saved::default() };
         let asked =
             [Effect::SpawnWatch, Effect::ReadAuth, Effect::ReadVersion, Effect::Save(seen), Effect::RegisterLoginItem];
@@ -755,13 +764,13 @@ mod tests {
         assert!(shows(&effects).is_empty());
         assert_eq!(app.view(), None);
 
-        let (_, effects) = App::new(SEEN, true, false, B);
+        let (_, effects) = App::new(SEEN, true, false, B, false);
         assert!(!effects.iter().any(|effect| matches!(effect, Effect::Save(_))));
     }
 
     #[test]
     fn no_cli_ever_seen_installs_on_its_own() {
-        let (app, effects) = App::new(Saved::default(), false, false, B);
+        let (app, effects) = App::new(Saved::default(), false, false, B, false);
         assert!(has(&effects, &Effect::RunInstall));
         assert!(!has(&effects, &Effect::SpawnWatch));
         assert_eq!(shows(&effects), [shown(Screen::Install, Phase::Working, &[GETTING_READY])]);
@@ -771,7 +780,7 @@ mod tests {
 
     #[test]
     fn a_cli_that_was_seen_and_is_gone_is_never_reinstalled() {
-        let (app, effects) = App::new(SEEN, false, false, B);
+        let (app, effects) = App::new(SEEN, false, false, B, false);
         assert!(effects.iter().all(|effect| matches!(effect, Effect::Menu(_) | Effect::Log(_))), "{effects:?}");
         assert_eq!(rows(&effects), ["Harness removed", "Install", "About", "Quit"]);
         assert_eq!(app.view(), None);
@@ -809,15 +818,15 @@ mod tests {
     #[test]
     fn the_login_item_is_registered_once() {
         let saved = Saved { cli_seen: true, ..Saved::default() };
-        let (mut app, effects) = App::new(saved, true, false, B);
+        let (mut app, effects) = App::new(saved, true, false, B, false);
         assert!(has(&effects, &Effect::RegisterLoginItem));
         let registered = Saved { login_item: true, ..saved };
         assert_eq!(app.handle(Event::LoginItem(true)), [Effect::Save(registered)]);
 
-        let (_, effects) = App::new(registered, true, false, B);
+        let (_, effects) = App::new(registered, true, false, B, false);
         assert!(!has(&effects, &Effect::RegisterLoginItem));
 
-        let (mut app, _) = App::new(saved, true, false, B);
+        let (mut app, _) = App::new(saved, true, false, B, false);
         assert!(app.handle(Event::LoginItem(false)).is_empty());
     }
 
@@ -865,7 +874,7 @@ mod tests {
     #[test]
     fn the_install_screen_shows_its_step() {
         let at = |step: &str| shown(Screen::Install, Phase::Working, &[step]);
-        let (mut app, effects) = App::new(Saved::default(), false, false, B);
+        let (mut app, effects) = App::new(Saved::default(), false, false, B, false);
         assert_eq!(shows(&effects), [at(GETTING_READY)]);
         assert_eq!(shows(&app.handle(Event::InstallStep(INSTALLING_TMUX))), [at(INSTALLING_TMUX)]);
         assert!(shows(&app.handle(Event::InstallStep(INSTALLING_TMUX))).is_empty());
@@ -911,7 +920,7 @@ mod tests {
         assert_eq!(shows(&app.handle(Event::Auth(Some(true)))), [None]);
 
         let asked = Saved { asked_sign_in: true, ..SEEN };
-        let mut app = App::new(asked, true, false, B).0;
+        let mut app = App::new(asked, true, false, B, false).0;
         assert!(shows(&answer(&mut app, false)).is_empty());
         assert_eq!(app.view(), None);
     }
@@ -1001,7 +1010,7 @@ mod tests {
         assert!(has(&effects, &Effect::Save(later)));
         assert_eq!(shows(&effects), [None]);
 
-        let mut app = App::new(later, true, false, B).0;
+        let mut app = App::new(later, true, false, B, false).0;
         assert!(shows(&answer(&mut app, false)).is_empty());
     }
 
@@ -1028,7 +1037,7 @@ mod tests {
 
     #[test]
     fn the_menu_opening_runs_nothing_of_orca() {
-        let (mut app, mut effects) = App::new(SEEN, true, false, B);
+        let (mut app, mut effects) = App::new(SEEN, true, false, B, false);
         effects.extend(answer(&mut app, true));
         // Past five minutes, when the menu once asked Orca again.
         effects.extend(app.handle(Event::MenuOpened { now: B + 300, desktop_installed: false }));
@@ -1037,7 +1046,7 @@ mod tests {
 
     #[test]
     fn a_new_cli_version_runs_nothing_of_orca() {
-        let (mut app, mut effects) = App::new(SEEN, true, false, B);
+        let (mut app, mut effects) = App::new(SEEN, true, false, B, false);
         effects.extend(answer(&mut app, true));
         effects.extend(app.handle(Event::CliVersion(Some("0.6.66".into()))));
         effects.extend(app.handle(Event::CliVersion(Some("0.6.67".into()))));
@@ -1396,16 +1405,18 @@ mod tests {
     }
 
     #[test]
-    fn a_newer_version_is_installed_and_the_app_relaunches() {
+    fn a_found_update_downloads_then_installs_then_relaunches() {
         let mut app = found();
         app.handle(tick(B + 5));
         let effects = app.handle(Event::UpdateChecked(Some("0.1.3".into())));
-        assert!(has(&effects, &Effect::InstallUpdate));
+        assert!(has(&effects, &Effect::DownloadUpdate));
+        assert!(!has(&effects, &Effect::InstallUpdate));
         assert_eq!(logs(&effects), ["update: found 0.1.3"]);
         let menu = menu_of(&effects);
         let row = MenuItem::Text("Updating Harness…".into());
         let at = menu.iter().position(|item| *item == row).expect("the row");
         assert_eq!(menu[at + 1], MenuItem::Separator);
+        assert_eq!(app.handle(Event::UpdateDownloaded), [Effect::InstallUpdate]);
         assert!(!has(&app.handle(tick(B + 5 + M1)), &Effect::CheckUpdate));
 
         let effects = app.handle(Event::UpdateInstalled);
@@ -1420,7 +1431,8 @@ mod tests {
         let mut app = on_sign_in();
         app.handle(tick(B + 5));
         app.handle(Event::Act(Action::SignIn));
-        assert!(has(&app.handle(Event::UpdateChecked(Some("0.1.3".into()))), &Effect::InstallUpdate));
+        assert!(has(&app.handle(Event::UpdateChecked(Some("0.1.3".into()))), &Effect::DownloadUpdate));
+        assert_eq!(app.handle(Event::UpdateDownloaded), [Effect::InstallUpdate]);
         app.handle(Event::UpdateInstalled);
         assert!(!has(&app.handle(tick(B + 10)), &Effect::Relaunch));
         // Signed in, the window closes: nothing holds the relaunch any more.
@@ -1428,10 +1440,11 @@ mod tests {
         assert!(app.handle(tick(B + 15)).ends_with(&[Effect::StopWatch, Effect::Relaunch]));
     }
 
-    /// The first check finds 0.1.3 and installs it.
+    /// The first check finds 0.1.3, downloads it and installs it.
     fn installed(app: &mut App) {
         assert!(has(&app.handle(tick(B + 5)), &Effect::CheckUpdate));
-        assert!(has(&app.handle(Event::UpdateChecked(Some("0.1.3".into()))), &Effect::InstallUpdate));
+        assert!(has(&app.handle(Event::UpdateChecked(Some("0.1.3".into()))), &Effect::DownloadUpdate));
+        assert_eq!(app.handle(Event::UpdateDownloaded), [Effect::InstallUpdate]);
         app.handle(Event::UpdateInstalled);
     }
 
@@ -1443,6 +1456,7 @@ mod tests {
         app.handle(Event::WatchExit(Some(3)));
         assert!(has(&app.handle(tick(B + 10)), &Effect::RunStart));
         app.handle(Event::UpdateChecked(Some("0.1.3".into())));
+        app.handle(Event::UpdateDownloaded);
         app.handle(Event::UpdateInstalled);
         assert!(!has(&app.handle(tick(B + 15)), &Effect::Relaunch));
         app.handle(Event::StartDone { ok: true });
@@ -1469,6 +1483,117 @@ mod tests {
         assert!(app.handle(tick(B + 15 + M1)).ends_with(&[Effect::StopWatch, Effect::Relaunch]));
     }
 
+    /// The check finds 0.1.3 and its download answers, where installing ends the app: no row and no install yet.
+    fn held(app: &mut App) {
+        assert!(has(&app.handle(Event::UpdateChecked(Some("0.1.3".into()))), &Effect::DownloadUpdate));
+        assert!(!rows_now(app).contains(&"Updating Harness…".to_string()));
+        assert!(app.handle(Event::UpdateDownloaded).is_empty());
+    }
+
+    /// The tick a held install starts on: the row is drawn and the line said before the install, which ends the app;
+    /// the watch is not stopped and nothing relaunches.
+    fn starts_the_held_install(effects: &[Effect]) {
+        assert_eq!(effects.len(), 4, "{effects:?}");
+        assert!(rows(&effects[..1]).contains(&"Updating Harness…".to_string()), "{effects:?}");
+        assert_eq!(effects[2..], [Effect::Log("update: installing 0.1.3".into()), Effect::InstallUpdate]);
+    }
+
+    #[test]
+    fn where_the_install_exits_the_app_it_waits_for_what_a_relaunch_waits_for() {
+        // The window open.
+        let mut app = on_sign_in_where(true);
+        assert!(has(&app.handle(tick(B + 5)), &Effect::CheckUpdate));
+        held(&mut app);
+        assert!(!has(&app.handle(tick(B + 10)), &Effect::InstallUpdate));
+        app.handle(Event::WindowClosed);
+        starts_the_held_install(&app.handle(tick(B + 15)));
+
+        // A sign-in running, its window closed.
+        let mut app = on_sign_in_where(true);
+        assert!(has(&app.handle(tick(B + 5)), &Effect::CheckUpdate));
+        app.handle(Event::Act(Action::SignIn));
+        app.handle(Event::WindowClosed);
+        held(&mut app);
+        assert!(!has(&app.handle(tick(B + 10)), &Effect::InstallUpdate));
+        app.handle(login(LoginEvent::Done(Ok(()))));
+        starts_the_held_install(&app.handle(tick(B + 15)));
+
+        // A start of the daemon running.
+        let mut app = found_where(true);
+        app.handle(Event::WatchExit(Some(3)));
+        assert!(has(&app.handle(tick(B + 5)), &Effect::CheckUpdate));
+        app.handle(Event::WatchExit(Some(3)));
+        assert!(has(&app.handle(tick(B + 10)), &Effect::RunStart));
+        held(&mut app);
+        assert!(!has(&app.handle(tick(B + 15)), &Effect::InstallUpdate));
+        app.handle(Event::StartDone { ok: true });
+        starts_the_held_install(&app.handle(tick(B + 20)));
+
+        // The CLI installing, from the menu after it was removed, its window closed.
+        let mut app = App::new(SEEN, false, false, B, true).0;
+        assert!(has(&app.handle(tick(B + 5)), &Effect::CheckUpdate));
+        app.handle(Event::Menu(MenuAction::Install));
+        app.handle(Event::WindowClosed);
+        held(&mut app);
+        assert!(!has(&app.handle(tick(B + 10)), &Effect::InstallUpdate));
+        app.handle(Event::InstallDone(Err(Vec::new())));
+        starts_the_held_install(&app.handle(tick(B + 15)));
+    }
+
+    #[test]
+    fn a_held_install_starts_no_second_check() {
+        let mut app = on_sign_in_where(true);
+        assert!(has(&app.handle(tick(B + 5)), &Effect::CheckUpdate));
+        held(&mut app);
+        // The window stays open for minutes: the download waits to be installed, and a check would fetch it again.
+        for now in [B + 5 + M1, B + 5 + 2 * M1] {
+            assert!(!has(&app.handle(tick(now)), &Effect::CheckUpdate), "{now}");
+        }
+        app.handle(Event::WindowClosed);
+        starts_the_held_install(&app.handle(tick(B + 10 + 2 * M1)));
+    }
+
+    #[test]
+    fn an_install_that_fails_where_it_exits_the_app_is_tried_again_after_the_wait() {
+        let mut app = found_where(true);
+        app.handle(tick(B + 5));
+        held(&mut app);
+        starts_the_held_install(&app.handle(tick(B + 10)));
+        let effects = app.handle(Event::UpdateFailed(UpdateFailure::Install));
+        assert_eq!(logs(&effects), ["update: failed install"]);
+        assert!(!rows(&effects).contains(&"Updating Harness…".to_string()));
+        // Still checked every minute; the same version waits two checks before it is fetched again, as on a Mac.
+        assert!(has(&app.handle(tick(B + 10 + M1)), &Effect::CheckUpdate));
+        assert!(app.handle(Event::UpdateChecked(Some("0.1.3".into()))).is_empty());
+        assert!(has(&app.handle(tick(B + 10 + 2 * M1)), &Effect::CheckUpdate));
+        assert!(has(&app.handle(Event::UpdateChecked(Some("0.1.3".into()))), &Effect::DownloadUpdate));
+    }
+
+    #[test]
+    fn a_blocked_or_failed_download_reads_as_before() {
+        for install_exits_app in [false, true] {
+            // Not writable: nothing was downloaded, and the menu offers the page.
+            let mut app = found_where(install_exits_app);
+            app.handle(tick(B + 5));
+            assert!(has(&app.handle(Event::UpdateChecked(Some("0.1.3".into()))), &Effect::DownloadUpdate));
+            let effects = app.handle(Event::UpdateFailed(UpdateFailure::NotWritable));
+            assert_eq!(logs(&effects), ["update: skipped not-writable"], "{install_exits_app}");
+            assert!(rows(&effects).contains(&"Update 0.1.3…".to_string()), "{install_exits_app}");
+
+            // A download or its signature failed: one line, no row, and the version waits.
+            for (kind, word) in [(UpdateFailure::Download, "download"), (UpdateFailure::Signature, "signature")] {
+                let mut app = found_where(install_exits_app);
+                app.handle(tick(B + 5));
+                app.handle(Event::UpdateChecked(Some("0.1.3".into())));
+                let effects = app.handle(Event::UpdateFailed(kind));
+                assert_eq!(logs(&effects), [format!("update: failed {word}")], "{install_exits_app}");
+                assert!(!rows_now(&app).contains(&"Updating Harness…".to_string()), "{install_exits_app} {kind:?}");
+                assert!(has(&app.handle(tick(B + 5 + M1)), &Effect::CheckUpdate), "{install_exits_app} {kind:?}");
+                assert!(app.handle(Event::UpdateChecked(Some("0.1.3".into()))).is_empty(), "{install_exits_app}");
+            }
+        }
+    }
+
     #[test]
     fn a_failure_is_one_line_and_the_next_check_tries_again() {
         let kinds = [
@@ -1479,11 +1604,15 @@ mod tests {
         ];
         for (kind, word) in kinds {
             // Kept from the start, so the last menu in it is the one shown.
-            let (mut app, mut sent) = App::new(SEEN, true, false, B);
+            let (mut app, mut sent) = App::new(SEEN, true, false, B, false);
             sent.extend(app.handle(tick(B + 5)));
             // A check fails on its own; the others fail installing what it found.
             if kind != UpdateFailure::Check {
                 sent.extend(app.handle(Event::UpdateChecked(Some("0.1.3".into()))));
+            }
+            // Only an install fails after its download answered.
+            if kind == UpdateFailure::Install {
+                sent.extend(app.handle(Event::UpdateDownloaded));
             }
             let effects = app.handle(Event::UpdateFailed(kind));
             assert_eq!(logs(&effects), [format!("update: failed {word}")]);
@@ -1505,7 +1634,10 @@ mod tests {
             let mut at = B + 5;
             for wait in [2 * M1, 4 * M1, 8 * M1, 16 * M1, 32 * M1, H1, H1] {
                 assert!(has(&app.handle(tick(at)), &Effect::CheckUpdate), "{kind:?} {wait}");
-                assert!(has(&app.handle(Event::UpdateChecked(Some("0.1.3".into()))), &Effect::InstallUpdate));
+                assert!(has(&app.handle(Event::UpdateChecked(Some("0.1.3".into()))), &Effect::DownloadUpdate));
+                if kind == UpdateFailure::Install {
+                    assert_eq!(app.handle(Event::UpdateDownloaded), [Effect::InstallUpdate]);
+                }
                 app.handle(Event::UpdateFailed(kind));
                 // Still checked every minute; the same version is neither fetched nor said, and the menu stays.
                 assert!(has(&app.handle(tick(at + wait - M1)), &Effect::CheckUpdate), "{kind:?} {wait}");
@@ -1518,7 +1650,7 @@ mod tests {
             app.handle(Event::UpdateFailed(kind));
             app.handle(tick(at + M1));
             let effects = app.handle(Event::UpdateChecked(Some("0.1.4".into())));
-            assert!(has(&effects, &Effect::InstallUpdate), "{kind:?}");
+            assert!(has(&effects, &Effect::DownloadUpdate), "{kind:?}");
             assert_eq!(logs(&effects), ["update: found 0.1.4"]);
         }
     }
@@ -1534,7 +1666,7 @@ mod tests {
         app.handle(Event::UpdateFailed(UpdateFailure::Check));
         // Two minutes after its one failed download, it is tried again.
         assert!(has(&app.handle(tick(B + 5 + 2 * M1)), &Effect::CheckUpdate));
-        assert!(has(&app.handle(Event::UpdateChecked(Some("0.1.3".into()))), &Effect::InstallUpdate));
+        assert!(has(&app.handle(Event::UpdateChecked(Some("0.1.3".into()))), &Effect::DownloadUpdate));
     }
 
     #[test]
@@ -1557,7 +1689,7 @@ mod tests {
         // A minute on, the same version: tried again, the row stays, and no line is said twice, found or skipped.
         assert!(has(&app.handle(tick(B + 5 + M1)), &Effect::CheckUpdate));
         let effects = app.handle(Event::UpdateChecked(Some("0.1.3".into())));
-        assert!(has(&effects, &Effect::InstallUpdate));
+        assert!(has(&effects, &Effect::DownloadUpdate));
         assert!(logs(&effects).is_empty());
         assert!(!effects.iter().any(|effect| matches!(effect, Effect::Menu(_))));
         assert!(logs(&app.handle(Event::UpdateFailed(UpdateFailure::NotWritable))).is_empty());
