@@ -84,10 +84,9 @@ afterEach(() => vi.restoreAllMocks())
 
 describe('the devices in their own process', () => {
   it('start the devices on a link of their own, with what their process\'s environment says', () => {
-    const f = setup({ processEnv: { HARNESS_DIAL_SERIALS: ' AA, ,BB ', HARNESSD_TEST_DIAL_PORT: '/dev/ttys042', HARNESSD_TEST_FAULTS: 'dial, fleet.knows ,',
-      HARNESS_CABLE_TCP: '127.0.0.1:7000' } })
+    const f = setup({ processEnv: { HARNESS_DIAL_SERIALS: ' AA, ,BB ', HARNESSD_TEST_DIAL_PORT: '/dev/ttys042', HARNESSD_TEST_FAULTS: 'dial, fleet.knows ,' } })
     expect(f.options()).toMatchObject({ name: 'devices', socketPath: '/sock', machineId: 'computer-9', token: 't' })
-    expect(f.deps()).toMatchObject({ dialSerials: ['AA', 'BB'], testDialPort: '/dev/ttys042', cableTcp: '127.0.0.1:7000' })
+    expect(f.deps()).toMatchObject({ dialSerials: ['AA', 'BB'], testDialPort: '/dev/ttys042' })
     // No credential and no E2EE identity: the account is asked of the core.
     expect(Object.keys(f.deps())).not.toContain('identity')
     expect([...f.deps().faults!]).toEqual(['dial', 'fleet.knows'])
@@ -98,7 +97,6 @@ describe('the devices in their own process', () => {
   it('read no serials, dial or faults without them', () => {
     const f = setup({ processEnv: {} })
     expect(f.deps().dialSerials).toBeUndefined()
-    expect(f.deps().cableTcp).toBeUndefined()
     expect([...f.deps().faults!]).toEqual([])
     // Their own process's environment by default.
     const was = process.env.HARNESSD_TEST_DIAL_PORT
@@ -112,6 +110,12 @@ describe('the devices in their own process', () => {
       if (was === undefined) delete process.env.HARNESSD_TEST_DIAL_PORT
       else process.env.HARNESSD_TEST_DIAL_PORT = was
     }
+  })
+
+  // HARNESS_CABLE_TCP (cable/cableTcp.ts), development alone: only its own variable turns it on.
+  it('dial devices over TCP only where HARNESS_CABLE_TCP names them', () => {
+    expect(setup({ processEnv: { HARNESS_CABLE_TCP: '127.0.0.1:7000' } }).deps().cableTcp).toBe('127.0.0.1:7000')
+    expect(setup({ processEnv: { HARNESS_DIAL_SERIALS: 'AA' } }).deps().cableTcp).toBeUndefined()
   })
 
   it('run what the devices registered for a core that goes, each time one does', () => {
