@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { fakeOpencode, type FakeAnswer, type FakeOpencode, type FakeSession } from '../../testing/fakeOpencode.js'
 import { createOpencodeClient, MAX_BODY_BYTES, type OpencodeClient, type OpencodePrompt } from './opencodeClient.js'
 import { LIST_LIMIT, MAX_SESSIONS, OpencodeSource, RECENT_MS, type OpencodeSourceDeps } from './opencodeSource.js'
+import { MAX_TEXT } from './orca.js'
 import type { HostAgent, HostAgentState } from './types.js'
 
 /** The wall clock the test starts at; the sessions' times are set against it. */
@@ -1159,9 +1160,9 @@ describe("the opencode source (docs/plans/2026-11-17-dial-opencode-design.md)", 
         tell()
         await s.until(() => api().state === state)
       }
-      const sent = async (n: number) => {
-        expect(await s.source.send(api(), 'run the tests')).toEqual({ ok: true })
-        expect((await server.got(POST, n)).body).toEqual({ text: 'run the tests', id: messageIdOf(n), delivery: 'queue' })
+      const sent = async (n: number, text = 'run the tests') => {
+        expect(await s.source.send(api(), text)).toEqual({ ok: true })
+        expect((await server.got(POST, n)).body).toEqual({ text, id: messageIdOf(n), delivery: 'queue' })
       }
       const refused = async (reason: string, text = 'run the tests', of: HostAgent = api()) => {
         const calls = prompt.mock.calls.length
@@ -1170,19 +1171,21 @@ describe("the opencode source (docs/plans/2026-11-17-dial-opencode-design.md)", 
       }
       let permission = ''
 
-      // At rest, done and in error, the words are sent.
+      // At rest, done and in error, the words are sent; ten minutes of fast speech and a passage reach it whole.
       await sent(1)
+      await sent(2, 'x'.repeat(10_000))
+      await sent(3, 'x'.repeat(20_000))
       await to(() => server.start('ses_a1'), 'working')
       expect(await refused(BUSY)).toBe(0)
       await to(() => { permission = server.ask('ses_a1') }, 'needs-you')
       expect(await refused('Fix the login test is waiting for your answer in opencode.')).toBe(0)
       await to(() => server.reply('ses_a1', permission), 'working')
       await to(() => server.end('ses_a1', 'succeeded'), 'done')
-      await sent(2)
+      await sent(4)
       await to(() => server.start('ses_a1'), 'working')
       await to(() => server.end('ses_a1', 'failed'), 'error')
-      await sent(3)
-      expect(s.counts).toEqual(['opencode', 'busy', 'waiting', 'opencode', 'opencode'])
+      await sent(5)
+      expect(s.counts).toEqual(['opencode', 'opencode', 'opencode', 'busy', 'waiting', 'opencode', 'opencode'])
 
       // A second send while one is under way.
       s.counts.length = 0
@@ -1195,7 +1198,7 @@ describe("the opencode source (docs/plans/2026-11-17-dial-opencode-design.md)", 
       expect(s.counts).toEqual(['busy', 'opencode'])
 
       s.counts.length = 0
-      expect(await refused('Too long. Say it shorter.', 'x'.repeat(2001))).toBe(0)
+      expect(await refused('Too long. Say it shorter.', 'x'.repeat(MAX_TEXT + 1))).toBe(0)
       server.answer(POST, NOT_FOUND)
       expect(await refused(SILENT)).toBe(1)
       server.answer(POST, { status: 500 })

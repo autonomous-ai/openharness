@@ -1,6 +1,7 @@
 // The devices in a process of their own (services/devicesProcess.ts): the core API they run on across their
 // link, what the core tells them reaching the devices' port, and what the core asks answered from it.
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { MAX_TEXT } from '../cable/hosts/orca.js'
 import type { CoreApi, CorePorts, DevicesPort, ServiceRequests } from '../core/api.js'
 import { createDeviceHookCalls } from '../core/deviceHookCalls.js'
 import { createDevicesLink, type DevicesState } from '../core/devicesLink.js'
@@ -472,5 +473,22 @@ describe('what the core asks of the devices', () => {
     client.abort()
     expect(await left).toBe('off')
     expect(f.calls).toEqual([['inboxGone', ['p2']]])
+  })
+
+  // The core keeps its own copy of the cap (it imports nothing from cable/). Below the hosts' MAX_TEXT, it would answer
+  // {} to words the devices' inbox already counted taken, and the mod would drop them with no word to anyone.
+  it('is the longest text every host path takes, answered whole through the core\'s bound', async () => {
+    const f = setup()
+    const asker = { local: true, owner: true }
+    const link = createDevicesLink({
+      core: {} as CoreApi,
+      notify: () => true,
+      call: async (type, payload) => f.options().requests[type](payload, asker),
+      state: (): DevicesState => ({ desk: [], foreground: true, swarms: null, unread: [], focus: { voice: null, form: null }, engines: [], commanders: false }),
+    })
+    const calls = createDeviceHookCalls({ ready: () => true, devices: () => link.port, newId: () => 'p1' })
+    const longest = 'x'.repeat(MAX_TEXT)
+    f.port.inboxPoll.mockResolvedValueOnce({ text: longest })
+    expect(await calls.onInbox({ sessionId: 's1' }, new AbortController().signal)).toEqual({ text: longest })
   })
 })

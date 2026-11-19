@@ -81,7 +81,7 @@ async function limitForMachine(machineId: string, db: DbClient = prisma): Promis
 export const userVoiceBucket = (userId: string): string => `user:${userId}`
 
 /** The Free tier's allowance (lib/db/seed.ts), for an account whose plans cannot be read at all. */
-const FALLBACK_USER_LIMIT_SECONDS = 10 * 60
+const FALLBACK_USER_LIMIT_SECONDS = 30 * 60
 
 /**
  * An account's daily voice seconds: the most generous plan among its live machines (0, unlimited, beats

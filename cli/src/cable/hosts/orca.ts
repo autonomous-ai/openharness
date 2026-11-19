@@ -19,8 +19,13 @@ export const ORCA_HANDLE = /^term_[0-9a-f-]{36}$/
 
 /** How long any app's command may run (open.ts too). */
 export const RUN_TIMEOUT_MS = 10_000
-/** The longest text typed into a terminal; the mod's prompt takes no more either (observed.ts). */
-export const MAX_TEXT = 2000
+/**
+ * The longest text any host path takes (observed.ts and each host's source and client). The dial records up to 10
+ * minutes: fast speech (200 words a minute, ~6.5 characters a word) is about 13,000 characters, plus a carried passage
+ * or selection (up to 4,096 bytes, each line quoted), plus margin. core/deviceHookCalls.ts holds the same number for
+ * the mod's poll: the core imports nothing from cable/.
+ */
+export const MAX_TEXT = 20_000
 // A newline would submit part of the text and an escape would steer the agent's screen: the text is typed as one line,
 // and --enter submits it.
 export const CONTROL = /\p{Cc}/gu

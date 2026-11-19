@@ -96,7 +96,7 @@ import { registerAuthMiddleware } from '../middlewares/authMiddleware.js'
 import { env } from '../config/env.js'
 import { voiceInflightBytes } from '../lib/voiceBudget.js'
 
-const FREE: PlanRow = { id: 'plan-free', autonomousEnv: 'prod', isDefault: true, dailyVoiceLimitSeconds: 10 * 60 }
+const FREE: PlanRow = { id: 'plan-free', autonomousEnv: 'prod', isDefault: true, dailyVoiceLimitSeconds: 30 * 60 }
 const PRO: PlanRow = { id: 'plan-pro', autonomousEnv: 'prod', isDefault: false, dailyVoiceLimitSeconds: 30 * 60 }
 const MAX: PlanRow = { id: 'plan-max', autonomousEnv: 'prod', isDefault: false, dailyVoiceLimitSeconds: 0 }
 
@@ -207,19 +207,19 @@ describe('POST /api/voice/stt', () => {
   })
 
   describe('daily seconds by plan', () => {
-    it('refuses a Free account past 10 minutes a day, in plain words, without calling Deepgram', async () => {
-      for (let i = 0; i < 4; i++) expect((await send(app, wav(140))).statusCode).toBe(200)
-      expect(usedSeconds('user-1')).toBe(560)
+    it('refuses a Free account past 30 minutes a day, in plain words, without calling Deepgram', async () => {
+      for (let i = 0; i < 3; i++) expect((await send(app, wav(580))).statusCode).toBe(200)
+      expect(usedSeconds('user-1')).toBe(1740)
       transcribeWavWithDeepgram.mockClear()
-      const res = await send(app, wav(60))
+      const res = await send(app, wav(61))
       expect(res.statusCode).toBe(429)
       expect(res.json().error.code).toBe('DAILY_VOICE_LIMIT_REACHED')
       expect(res.json().error.message).toMatch(/today's voice limit/i)
-      expect(res.json().error.message).toMatch(/10 minutes/)
+      expect(res.json().error.message).toMatch(/30 minutes/)
       expect(transcribeWavWithDeepgram).not.toHaveBeenCalled()
-      expect(usedSeconds('user-1')).toBe(560)
+      expect(usedSeconds('user-1')).toBe(1740)
       // What is left still passes.
-      expect((await send(app, wav(40))).statusCode).toBe(200)
+      expect((await send(app, wav(60))).statusCode).toBe(200)
     })
 
     it('gives a Pro account 30 minutes a day', async () => {
@@ -230,7 +230,7 @@ describe('POST /api/voice/stt', () => {
 
     it('lifts the cap for an account on an unlimited plan', async () => {
       store.machines = [{ userId: 'user-1', planId: MAX.id }]
-      for (let i = 0; i < 3; i++) expect((await send(app, wav(400))).statusCode).toBe(200)
+      for (let i = 0; i < 4; i++) expect((await send(app, wav(590))).statusCode).toBe(200)
     })
 
     it('does not grant a plan through a deleted machine or an unpaid checkout', async () => {
@@ -238,20 +238,20 @@ describe('POST /api/voice/stt', () => {
         { userId: 'user-1', planId: MAX.id, deletedAt: new Date() },
         { userId: 'user-1', planId: PRO.id, billingStatus: 'pending', billingActivatedAt: null },
       ]
-      expect((await send(app, wav(590))).statusCode).toBe(200)
-      expect((await send(app, wav(20))).statusCode).toBe(429)
+      for (let i = 0; i < 3; i++) expect((await send(app, wav(590))).statusCode).toBe(200)
+      expect((await send(app, wav(31))).statusCode).toBe(429)
     })
 
     it('does not grant a plan through a machine whose subscription lapsed', async () => {
       store.machines = [{ userId: 'user-1', planId: MAX.id, billingStatus: 'suspended', billingActivatedAt: new Date('2026-10-01') }]
-      expect((await send(app, wav(590))).statusCode).toBe(200)
-      expect((await send(app, wav(20))).statusCode).toBe(429)
+      for (let i = 0; i < 3; i++) expect((await send(app, wav(590))).statusCode).toBe(200)
+      expect((await send(app, wav(31))).statusCode).toBe(429)
     })
 
     it('holds even with no plan rows: a forgotten default never means unlimited', async () => {
       store.plans = []
-      expect((await send(app, wav(590))).statusCode).toBe(200)
-      expect((await send(app, wav(20))).statusCode).toBe(429)
+      for (let i = 0; i < 3; i++) expect((await send(app, wav(590))).statusCode).toBe(200)
+      expect((await send(app, wav(31))).statusCode).toBe(429)
     })
 
     it('refuses a header that claims an absurd sample rate, which would read a long clip as no time', async () => {
@@ -314,7 +314,7 @@ describe('POST /api/voice/stt', () => {
       expect(voiceInflightBytes()).toBe(0)
 
       store.usage.set(`user:user-1|${new Date().toISOString().slice(0, 10)}`, {
-        machineId: 'user:user-1', dayKey: new Date().toISOString().slice(0, 10), usedMs: 600_000, expiresAt: new Date(Date.now() + 86_400_000),
+        machineId: 'user:user-1', dayKey: new Date().toISOString().slice(0, 10), usedMs: 1_800_000, expiresAt: new Date(Date.now() + 86_400_000),
       })
       expect((await send(app, wav(2))).statusCode).toBe(429)
       expect(voiceInflightBytes()).toBe(0)

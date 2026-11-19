@@ -16,7 +16,7 @@ import { HerdrSource } from '../cable/hosts/herdrSource.js'
 import { observedAgentId, ObservedSource } from '../cable/hosts/observed.js'
 import { OPENCODE_MESSAGE, opencodeClientDeps, type OpencodeAnswer, type OpencodeClient, type OpencodeEvent, type OpencodeFault, type OpencodePrompt } from '../cable/hosts/opencodeClient.js'
 import { OpencodeSource } from '../cable/hosts/opencodeSource.js'
-import type { OrcaChild, OrcaReads, OrcaTabs, OrcaTerminal } from '../cable/hosts/orca.js'
+import { MAX_TEXT, type OrcaChild, type OrcaReads, type OrcaTabs, type OrcaTerminal } from '../cable/hosts/orca.js'
 import { AppRings } from '../cable/hosts/select.js'
 import { env } from '../config/env.js'
 import { routeVoiceTask } from '../lib/voiceRouter.js'
@@ -5660,13 +5660,24 @@ describe('herdr\'s agents, over its socket (docs/specs/2026-11-16-device-herdr.m
     status('blocked')
     expect(await host().sendTurn(id, 'run the tests')).toMatchObject({ ok: false, message: 'api is waiting for your answer in herdr.' })
     status('idle')
-    expect(await host().sendTurn(id, 'x'.repeat(2001))).toMatchObject({ ok: false, message: 'Too long. Say it shorter.' })
+    expect(await host().sendTurn(id, 'x'.repeat(MAX_TEXT + 1))).toMatchObject({ ok: false, message: 'Too long. Say it shorter.' })
     herdr.prompts.push({ outcome: 'failed', fault: 'rejected', code: 'agent_not_ready' })
     expect(await host().sendTurn(id, 'run the tests')).toMatchObject({ ok: false, message: 'api did not answer.' })
     expect(said()).toEqual(['[device] voice · herdr', '[device] voice · busy', '[device] voice · waiting', '[device] voice · too-long',
       '[device] voice · no-answer'])
     // Refused by its state, nothing was typed.
     expect(herdr.asked.filter(([what]) => what === 'prompt')).toHaveLength(2)
+  })
+
+  // Ten minutes of fast speech is about 13,000 characters.
+  it('a 10,000-character text reaches an idle herdr agent whole', async () => {
+    const { herdr, live } = withHerdr()
+    await live()
+    const [{ id }] = await listed()
+    const text = 'x'.repeat(10_000)
+    expect(await host().sendTurn(id, text)).toEqual({ ok: true })
+    expect(herdr.asked.filter(([what]) => what === 'prompt')).toEqual([['prompt', PANE, 'claude', text]])
+    expect(said()).toEqual(['[device] voice · herdr'])
   })
 
   it('a tap runs herdr agent focus for the pane, brings no app forward, and is the dial\'s own move', async () => {
@@ -6816,7 +6827,7 @@ describe('Herdr\'s agents, through Herdr Core (docs/plans/2026-11-16-herdr-app-d
     changed({ status: 'blocked' })
     expect(await host().sendTurn(id, 'run the tests')).toMatchObject({ ok: false, message: 'api is waiting for your answer in herdr.' })
     changed({ status: 'idle' })
-    expect(await host().sendTurn(id, 'x'.repeat(2001))).toMatchObject({ ok: false, message: 'Too long. Say it shorter.' })
+    expect(await host().sendTurn(id, 'x'.repeat(MAX_TEXT + 1))).toMatchObject({ ok: false, message: 'Too long. Say it shorter.' })
     changed({ status: 'error' })
     expect(await host().sendTurn(id, 'run the tests')).toMatchObject({ ok: false, message: 'api did not answer.' })
     changed({ status: 'idle' })
@@ -6826,6 +6837,17 @@ describe('Herdr\'s agents, through Herdr Core (docs/plans/2026-11-16-herdr-app-d
       '[device] voice · no-answer', '[device] voice · no-answer'])
     // Refused by its state, nothing was typed.
     expect(hc.prompted).toHaveLength(2)
+  })
+
+  // Ten minutes of fast speech is about 13,000 characters.
+  it('a 10,000-character text reaches an idle Herdr agent whole', async () => {
+    const { hc, live } = withHc()
+    live()
+    const [{ id }] = await listed()
+    const text = 'x'.repeat(10_000)
+    expect(await host().sendTurn(id, text)).toEqual({ ok: true })
+    expect(hc.prompted).toEqual([['t7', 'claude', text]])
+    expect(said()).toEqual(['[device] voice · herdr-app'])
   })
 
   // hc types into any terminal by its address: only one whose program reports an agent's status is at an agent's prompt.
@@ -8212,13 +8234,24 @@ describe("opencode's sessions, over its local server (docs/plans/2026-11-17-dial
     tell('permission.asked', { sessionID: SES, id: 'per_1' })
     expect(await host().sendTurn(id, 'run the tests')).toMatchObject({ ok: false, message: 'Fix the login test is waiting for your answer in opencode.' })
     tell('session.execution.succeeded', { sessionID: SES })
-    expect(await host().sendTurn(id, 'x'.repeat(2001))).toMatchObject({ ok: false, message: 'Too long. Say it shorter.' })
+    expect(await host().sendTurn(id, 'x'.repeat(MAX_TEXT + 1))).toMatchObject({ ok: false, message: 'Too long. Say it shorter.' })
     oc.prompts.push('failed')
     expect(await host().sendTurn(id, 'run the tests')).toMatchObject({ ok: false, message: 'Fix the login test did not answer.' })
     expect(said()).toEqual(['[device] voice · opencode', '[device] voice · busy', '[device] voice · waiting', '[device] voice · too-long',
       '[device] voice · no-answer'])
     // Refused by its state, nothing was posted.
     expect(oc.asked.filter(([what]) => what === 'prompt')).toHaveLength(2)
+  })
+
+  // Ten minutes of fast speech is about 13,000 characters.
+  it('a 10,000-character text reaches a session at rest whole', async () => {
+    const { oc, live } = withOpencode()
+    await live()
+    const [{ id }] = await listed()
+    const text = 'x'.repeat(10_000)
+    expect(await host().sendTurn(id, text)).toEqual({ ok: true })
+    expect(oc.asked.filter(([what]) => what === 'prompt')).toEqual([['prompt', SES, text, expect.stringMatching(OPENCODE_MESSAGE)]])
+    expect(said()).toEqual(['[device] voice · opencode'])
   })
 
   it('a tap opens nothing', async () => {
