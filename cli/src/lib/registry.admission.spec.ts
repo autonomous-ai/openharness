@@ -427,12 +427,12 @@ async function httpFixture(blocked: (agentId: string) => boolean = () => false, 
   const { startHookServer } = await import('../hookServer.js')
   const { readHookCredential } = await import('./hookAuth.js')
   const prompts: string[] = [], registered = vi.fn(), reasons: Array<string | undefined> = []
-  // The hook server answers a commit still in flight after 250 ms. Only a test fires that reply here,
-  // so how fast this machine writes the registry never changes the replies these tests pin.
+  // The hook server answers a commit still in flight after 250 ms, and the registry expires a write after 5 s.
+  // Only a test fires either here, so how fast this machine writes the registry never changes the replies these tests pin.
   let grace: (() => void) | undefined
   vi.spyOn(globalThis, 'setTimeout').mockImplementation(((callback: (...args: unknown[]) => void, ms?: number, ...args: unknown[]) => {
-    if (ms !== 250) return slowTimeout(callback, ms, args)
-    grace = () => callback(...args)
+    if (ms !== 250 && ms !== 5_000) return slowTimeout(callback, ms, args)
+    if (ms === 250) grace = () => callback(...args)
     return realTimeout(() => {}, 0)
   }) as typeof setTimeout)
   vi.spyOn(globalThis, 'clearTimeout').mockImplementation(((timer?: Parameters<typeof clearTimeout>[0]) => {

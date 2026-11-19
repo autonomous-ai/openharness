@@ -27,6 +27,8 @@ function slowTimeout(callback: (...args: unknown[]) => void, ms: number | undefi
   preparation.due.set(timer, () => { realClear(timer); callback(...args) })
   return timer
 }
+// The write deadline is a test's to expire (limit), never the host's clock.
+vi.mock('node:perf_hooks', async original => ({ ...await original<object>(), performance: { now: () => 0 } }))
 vi.mock('./bootId.js', async original => ({ ...await original<object>(), currentBootId: () => 'fixture-boot', bootChanged: () => false }))
 const deferred = () => {
   let resolve!: () => void
@@ -52,10 +54,13 @@ beforeEach(async () => {
   writeFileSync(join(root, 'conversation.jsonl'), '{}\n')
   await registry.flush()
   prompts = []; registered = vi.fn(); stopJobs.clear(); limit = grace = undefined
+  // The 250 ms reply grace and the 5 s write deadline fire only when a test fires them, so how fast
+  // this machine writes the registry never changes the replies these tests pin.
   vi.spyOn(globalThis, 'setTimeout').mockImplementation(((callback: (...args: unknown[]) => void, ms?: number, ...args: unknown[]) => {
-    if (ms !== undefined && ms > 4_500 && ms <= 5_000) limit = () => callback(...args)
-    if (ms === 250) grace = () => callback(...args)
-    return slowTimeout(callback, ms, args)
+    if (ms === 5_000) limit = () => callback(...args)
+    else if (ms === 250) grace = () => callback(...args)
+    else return slowTimeout(callback, ms, args)
+    return realTimeout(() => {}, 0)
   }) as typeof setTimeout)
   vi.spyOn(globalThis, 'clearTimeout').mockImplementation(((timer?: Parameters<typeof clearTimeout>[0]) => {
     preparation.due.delete(timer); realClear(timer)
