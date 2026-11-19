@@ -902,6 +902,28 @@ describe('SessionInputController', () => {
       controller.forget('s1')
     })
 
+    // At tmux's default 80x24 the box shows 7 lines (pi-tui's editor: 30% of the rows, at least 5): a long message
+    // OpenClaw refused and put back, its cursor at the end, shows its last lines under `↑ 1 more`.
+    it('a long message OpenClaw put back in a box that shows only its end is sent with one Enter', async () => {
+      vi.useFakeTimers()
+      const message = 'Read the build log in ci/last-run.txt and find the first test that failed. Explain in two sentences why it '
+        + 'failed, quoting the assertion message exactly as the log prints it. Then open the test file, find the code under '
+        + 'test, and propose the smallest change to the code (not the test) that would make the assertion pass. Do not edit '
+        + 'any file yet: list the change as a unified diff, say which other tests call the same function, and say whether any '
+        + 'of them would change their result. Finish with one line that starts with VERDICT: and names the file you would change.'
+      const scrolled = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'engines', 'openclaw', '__fixtures__', 'screen-box-scrolled.txt'), 'utf8')
+      const { controller, sendKey, onError } = paneController(() => scrolled)
+
+      controller.submit('s1', message)
+      await vi.advanceTimersByTimeAsync(10_000)
+      expect(sendKey.mock.calls).toEqual([['h1', 'Enter']])
+      controller.onTurnStarted('s1', message)
+      await vi.advanceTimersByTimeAsync(60_000)
+      expect(sendKey).toHaveBeenCalledTimes(1)
+      expect(onError).not.toHaveBeenCalled()
+      controller.forget('s1')
+    })
+
     it('no Enter on a ready OpenClaw pane whose box holds other text: each window counts', async () => {
       vi.useFakeTimers()
       const { controller, sendKey, onError } = paneController(() => readyPane('my own words'))
