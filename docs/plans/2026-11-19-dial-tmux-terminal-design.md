@@ -136,10 +136,15 @@ multiplexer's own pty is never a tab.
 - Several clients on one session: the client used last gives the app and tab; only its tab turns the dial (`byTab`).
 - A pane the person moves to another session: it keeps the app it had until the next `session-start` or `turn-start`.
 - A detached session: no client, so the "tmux" page, as today; a tap switches the person's client used last, as today.
-- tmux started inside cmux or Herdr's own terminal: tmux is the nearer host (`TMUX_PANE`), so the lookup runs and the
-  agent lands on the page of the app that holds the client (cmux, Herdr); a rest there selects the tmux pane as in any
-  app. herdr started inside tmux: herdr is the nearer host, but the lookup runs on its `TMUX_PANE` all the same; no
-  special case is made for either.
+- tmux started inside cmux or Herdr's own terminal: tmux is the nearer host (`TMUX_PANE`), so the lookup runs. In cmux
+  the client's parents reach cmux's app, so the agent lands on cmux's page and a rest there selects the tmux pane as in
+  any app. Herdr's terminals run under Herdr Core's holder, which is no listed app and not under Herdr.app, so the
+  lookup finds none: the "tmux" page, as today.
+- herdr started inside tmux: herdr is the nearer host, but its agents carry tmux's `TMUX_PANE`, so the lookup runs on
+  it all the same. It finds the client's app only when the tmux pane's process is one of the agent's parents (a herdr
+  server started in that pane): the agent then lands on that app's page as in plain tmux. Otherwise it keeps the app
+  its hints name, as today. Either way its caller's tty (herdr's pane, no tab) is not read. No special case is made for
+  either.
 
 ### Measures
 
