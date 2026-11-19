@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } fr
 import { chmodSync, existsSync, fstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync, writeSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
-import { AtomicWriteUnconfirmed, READ_TRIES, READ_WAIT_MS, RENAME_TRIES, RENAME_WAIT_MS, StateFileUnreadable, atomicWriteFile, atomicWriteJson, directorySyncSupported, hardenPrivateStateFileIfPresent, insideWindowsRoots, jsonArray, jsonObject, probeState, readPrivateStateFile, readState, requireState, requireWindowsStateFile, secureStateDirectory, syncStateDirectory, windowsStateRoots } from './secureState.js'
+import { AtomicWriteUnconfirmed, READ_TRIES, READ_WAIT_MS, RENAME_TRIES, RENAME_WAIT_MS, StateFileUnreadable, atomicWriteFile, atomicWriteFileAsync, atomicWriteJson, atomicWriteJsonAsync, directorySyncSupported, hardenPrivateStateFileIfPresent, insideWindowsRoots, jsonArray, jsonObject, probeState, readPrivateStateFile, readState, requireState, requireWindowsStateFile, secureStateDirectory, syncStateDirectory, windowsStateRoots } from './secureState.js'
 
 const WINDOWS = process.platform === 'win32'
 
@@ -15,41 +15,80 @@ const fault = vi.hoisted(() => ({
   sync: undefined as ((fd: number) => void) | undefined,
   read: undefined as ((file: string) => void) | undefined,
   rm: undefined as ((path: string) => void) | undefined,
+  // The async writer's timer waits, recorded and never slept; and, while a test watches, every synchronous fs call.
+  timers: [] as number[],
+  syncCalls: undefined as string[] | undefined,
 }))
 const errno = (code: string) => Object.assign(new Error(`${code}: fixture`), { code })
 vi.mock('node:fs', async original => {
   const actual = await original<typeof import('node:fs')>()
+  const watched = <K extends keyof typeof actual>(name: K, call: (typeof actual)[K]): (typeof actual)[K] =>
+    ((...args: unknown[]) => { fault.syncCalls?.push(name); return (call as (...args: unknown[]) => unknown)(...args) }) as (typeof actual)[K]
   return { ...actual,
+    ...Object.fromEntries((['openSync', 'closeSync', 'fchmodSync', 'fstatSync', 'copyFileSync', 'statSync', 'lstatSync', 'mkdirSync'] as const)
+      .map((name) => [name, watched(name, actual[name])])),
     // Only a write to a descriptor (the writer's temporary file), and once: a hook may run a second writer.
-    writeFileSync: (...args: Parameters<typeof actual.writeFileSync>) => {
+    writeFileSync: watched('writeFileSync', (...args: Parameters<typeof actual.writeFileSync>) => {
       const hook = fault.write
       if (hook && typeof args[0] === 'number') { fault.write = undefined; hook(args[0]) }
       return actual.writeFileSync(...args)
-    },
-    renameSync: (...args: Parameters<typeof actual.renameSync>) => {
+    }),
+    renameSync: watched('renameSync', (...args: Parameters<typeof actual.renameSync>) => {
       fault.rename?.(++fault.renames)
       return actual.renameSync(...args)
-    },
-    linkSync: (...args: Parameters<typeof actual.linkSync>) => {
+    }),
+    linkSync: watched('linkSync', (...args: Parameters<typeof actual.linkSync>) => {
       if (fault.link) throw Object.assign(new Error(`${fault.link}: fixture`), { code: fault.link })
       return actual.linkSync(...args)
-    },
-    fsyncSync: (fd: number) => {
+    }),
+    fsyncSync: watched('fsyncSync', (fd: number) => {
       fault.sync?.(fd)
       return actual.fsyncSync(fd)
-    },
+    }),
     // After the real read of a path: a hook may throw what the read could have, or change the file once it was read.
-    readFileSync: ((...args: Parameters<typeof actual.readFileSync>) => {
+    readFileSync: watched('readFileSync', ((...args: Parameters<typeof actual.readFileSync>) => {
       const value = actual.readFileSync(...args)
       if (typeof args[0] === 'string') fault.read?.(args[0])
       return value
-    }) as typeof actual.readFileSync,
-    rmSync: (...args: Parameters<typeof actual.rmSync>) => {
+    }) as typeof actual.readFileSync),
+    rmSync: watched('rmSync', (...args: Parameters<typeof actual.rmSync>) => {
       fault.rm?.(String(args[0]))
       return actual.rmSync(...args)
+    }),
+  }
+})
+// The same faults for the async writer: its file's write and flush, its rename, link and removal.
+vi.mock('node:fs/promises', async original => {
+  const actual = await original<typeof import('node:fs/promises')>()
+  return { ...actual,
+    open: async (...args: Parameters<typeof actual.open>) => {
+      const handle = await actual.open(...args)
+      const writeFile = handle.writeFile.bind(handle), sync = handle.sync.bind(handle)
+      handle.writeFile = (async (...rest: Parameters<typeof handle.writeFile>) => {
+        const hook = fault.write
+        if (hook) { fault.write = undefined; hook(handle.fd) }
+        return writeFile(...rest)
+      }) as typeof handle.writeFile
+      handle.sync = async () => { fault.sync?.(handle.fd); return sync() }
+      return handle
+    },
+    rename: async (...args: Parameters<typeof actual.rename>) => {
+      fault.rename?.(++fault.renames)
+      return actual.rename(...args)
+    },
+    link: async (...args: Parameters<typeof actual.link>) => {
+      if (fault.link) throw Object.assign(new Error(`${fault.link}: fixture`), { code: fault.link })
+      return actual.link(...args)
+    },
+    rm: async (...args: Parameters<typeof actual.rm>) => {
+      fault.rm?.(String(args[0]))
+      return actual.rm(...args)
     },
   }
 })
+vi.mock('node:timers/promises', async original => ({ ...await original<typeof import('node:timers/promises')>(),
+  setTimeout: async (ms?: number) => { fault.timers.push(ms ?? 0) },
+}))
 
 // The retries' blocking waits (pauseSync) are recorded, not slept: a test never waits for real.
 let pauses: MockInstance<typeof Atomics.wait>
@@ -59,7 +98,8 @@ beforeEach(() => { pauses = vi.spyOn(Atomics, 'wait').mockReturnValue('timed-out
 const dirs: string[] = []
 afterEach(() => {
   vi.restoreAllMocks()
-  Object.assign(fault, { write: undefined, rename: undefined, renames: 0, link: undefined, sync: undefined, read: undefined, rm: undefined })
+  Object.assign(fault, { write: undefined, rename: undefined, renames: 0, link: undefined, sync: undefined, read: undefined, rm: undefined,
+    timers: [], syncCalls: undefined })
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true })
 })
 
@@ -461,6 +501,115 @@ describe('atomicWriteFile', () => {
     expect(readFileSync(f, 'utf8')).toBe('new')
     expect(atomicWriteFile(f, 'other', 'trust', { exclusive: true })).toBe(false)
     expect(readFileSync(f, 'utf8')).toBe('new')
+    expect(readdirSync(dir)).toEqual(['f'])
+  })
+})
+
+// The form for the paths that were async before (hot paths): the same rules, run with fs/promises and a timer.
+describe('atomicWriteFileAsync', () => {
+  function folder(): string {
+    const dir = mkdtempSync(join(tmpdir(), 'secure-write-async-'))
+    dirs.push(dir)
+    return dir
+  }
+
+  async function onPlatform<T>(platform: NodeJS.Platform, run: () => Promise<T>): Promise<T> {
+    const real = Object.getOwnPropertyDescriptor(process, 'platform')!
+    Object.defineProperty(process, 'platform', { ...real, value: platform })
+    try { return await run() } finally { Object.defineProperty(process, 'platform', real) }
+  }
+
+  /** What one write did: its answer, the file's bytes and mode, what it flushed in order, and what is in its folder. */
+  async function outcome(write: (file: string) => boolean | Promise<boolean>, before?: string) {
+    const dir = folder(), file = join(dir, 'f')
+    if (before !== undefined) writeFileSync(file, before)
+    const flushed: string[] = []
+    fault.sync = fd => { flushed.push(fstatSync(fd).isDirectory() ? 'folder' : 'file') }
+    const answer = await write(file)
+    fault.sync = undefined
+    return { answer, bytes: readFileSync(file, 'utf8'), mode: WINDOWS ? null : modeOf(file), flushed, entries: readdirSync(dir) }
+  }
+
+  it.each([
+    ['trust', {}], ['cache', {}], ['cache', { durable: true }], ['cache', { mode: 0o700 }], ['cache', { exclusive: true }],
+    ['trust', { exclusive: true }],
+  ] as const)('writes what the sync form writes: %s %o', async (kind, options) => {
+    const sync = await outcome(file => atomicWriteFile(file, 'new', kind, options))
+    expect(await outcome(file => atomicWriteFileAsync(file, 'new', kind, options))).toEqual(sync)
+    const over = await outcome(file => atomicWriteFile(file, 'new', kind, options), 'old')
+    expect(await outcome(file => atomicWriteFileAsync(file, 'new', kind, options), 'old')).toEqual(over)
+  })
+
+  it('where link is refused it copies, as the sync form does', async () => {
+    fault.link = 'EXDEV'
+    const sync = await outcome(file => atomicWriteFile(file, 'id', 'cache', { exclusive: true }))
+    expect(sync.flushed).toEqual(['file', 'file', ...(directorySyncSupported() ? ['folder'] : [])])
+    expect(await outcome(file => atomicWriteFileAsync(file, 'id', 'cache', { exclusive: true }))).toEqual(sync)
+  })
+
+  it('atomicWriteJsonAsync writes JSON.stringify(value, null, 2)', async () => {
+    const f = join(folder(), 'f')
+    const value = { rows: [1, 'two'], none: null }
+    expect(await atomicWriteJsonAsync(f, value, 'cache')).toBe(true)
+    expect(readFileSync(f, 'utf8')).toBe(JSON.stringify(value, null, 2))
+  })
+
+  it('a write that fails part way leaves the old file whole and no temporary file', async () => {
+    const dir = folder(), f = join(dir, 'f')
+    writeFileSync(f, 'old')
+    fault.write = fd => { writeSync(fd, 'ne'); throw errno('ENOSPC') }
+    await expect(atomicWriteFileAsync(f, 'new', 'trust')).rejects.toThrow(/ENOSPC/)
+    expect(readFileSync(f, 'utf8')).toBe('old')
+    expect(readdirSync(dir)).toEqual(['f'])
+  })
+
+  it.skipIf(WINDOWS)('a rename the folder does not confirm is AtomicWriteUnconfirmed', async () => {
+    const f = join(folder(), 'f')
+    fault.sync = fd => { if (fstatSync(fd).isDirectory()) throw errno('EIO') }
+    await expect(atomicWriteFileAsync(f, 'new', 'trust')).rejects.toBeInstanceOf(AtomicWriteUnconfirmed)
+    expect(readFileSync(f, 'utf8')).toBe('new')
+  })
+
+  it.skipIf(WINDOWS)('trust refuses a target another account could write', async () => {
+    const f = join(folder(), 'f')
+    writeFileSync(f, 'old')
+    chmodSync(f, 0o664)
+    await expect(atomicWriteFileAsync(f, 'new', 'trust')).rejects.toThrow(/group\/world writable/)
+    expect(readFileSync(f, 'utf8')).toBe('old')
+  })
+
+  it('exclusive: the second creator answers false and leaves the first one\'s file', async () => {
+    const dir = folder(), f = join(dir, 'f')
+    expect(await atomicWriteFileAsync(f, 'first', 'trust', { exclusive: true })).toBe(true)
+    expect(await atomicWriteFileAsync(f, 'second', 'trust', { exclusive: true })).toBe(false)
+    expect(readFileSync(f, 'utf8')).toBe('first')
+    expect(readdirSync(dir)).toEqual(['f'])
+  })
+
+  // The event loop goes on while a scanner holds the file: the wait is a timer, never Atomics.wait or a sync call.
+  it('on Windows a rename refused for a moment waits by a timer, and blocks nothing', async () => {
+    const f = join(folder(), 'f')
+    writeFileSync(f, 'old')
+    fault.rename = attempt => { if (attempt <= 2) throw errno('EBUSY') }
+    fault.syncCalls = []
+    expect(await onPlatform('win32', () => atomicWriteFileAsync(f, 'new', 'trust'))).toBe(true)
+    const syncCalls = fault.syncCalls
+    fault.syncCalls = undefined
+    expect(syncCalls).toEqual([])
+    expect(pausedFor()).toEqual([])
+    expect(fault.renames).toBe(3)
+    expect(fault.timers).toEqual([RENAME_WAIT_MS, RENAME_WAIT_MS])
+    expect(readFileSync(f, 'utf8')).toBe('new')
+  })
+
+  it('on Windows it gives up after RENAME_TRIES', async () => {
+    const dir = folder(), f = join(dir, 'f')
+    writeFileSync(f, 'old')
+    fault.rename = () => { throw errno('EBUSY') }
+    await expect(onPlatform('win32', () => atomicWriteFileAsync(f, 'new', 'cache'))).rejects.toThrow(/EBUSY/)
+    expect(fault.renames).toBe(RENAME_TRIES)
+    expect(fault.timers).toEqual(Array(RENAME_TRIES - 1).fill(RENAME_WAIT_MS))
+    expect(readFileSync(f, 'utf8')).toBe('old')
     expect(readdirSync(dir)).toEqual(['f'])
   })
 })
