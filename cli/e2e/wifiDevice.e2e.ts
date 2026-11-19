@@ -11,7 +11,7 @@
  *   and a dial unplugged costs the other two nothing;
  * - its service failing to start costs it alone: the dials and the agents go on, and
  *   `harness device receipt` says it is not running;
- * - paired, it starts the devices' process with the daemon, with no dial (core/devicesWake.ts), and what it
+ * - paired, it starts the devices' process with the daemon, with no dial (services/componentStartup.ts), and what it
  *   sends while that process starts again is held by the gateway and answered.
  */
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
@@ -201,7 +201,7 @@ describe('the Wi-Fi device with the dials', () => {
     const fromFocus = client.frames.length
     const step = { direction: 'next', idempotencyKey: key, focusRevision: focus.focusRevision }
     const stepped = await d.ask('focus.step', step)
-    expect(stepped).toMatchObject({ focus: { agentId } })
+    expect(stepped, JSON.stringify({ focus, stepped })).toMatchObject({ focus: { agentId } })
     await client.waitFor(f => f.type === 'dial_focus' && f.payload?.agentId === agentId, 15_000, 'gesture dial_focus', fromFocus)
     expect(await d.ask('focus.step', step)).toMatchObject({ focus: stepped.focus, focusRevision: stepped.focusRevision })
     // The sentinel is on the same physical window stream as a repeated focus effect would be.
@@ -379,9 +379,9 @@ describe('the Wi-Fi device with the dials', () => {
     // Explicit mixed composition: this worker owns only Wi-Fi; devices remain inline in the core.
     const { machine, window, agentId, device } = await fresh({ HARNESSD_SERVICES: 'wifi' })
     const log = () => machine.daemon.log()
-    // No dial here: its pairing asks for the process (core/devicesWake.ts).
+    // The gateway may demand Wi-Fi before saved-state discovery; prove its actual supervised process.
     await until('the Wi-Fi device\'s service to connect', () => wifiConnections(world!) >= 1 || null, 30_000, 200)
-    expect(log()).toContain('[startup] wifi: a paired device')
+    expect(machine.daemon.servicePids('devices')).toHaveLength(1)
     await connect(device)
     expect(log()).not.toContain('[services] devices connected')
     await gestures(window, device, agentId, 'mixed-wifi-external')

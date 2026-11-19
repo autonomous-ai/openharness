@@ -100,8 +100,12 @@ export function runDevicesService(options: DevicesServiceOptions): ServiceProces
     }
     if (deskOwner?.generation === generation && deskOwner.machineId === view.machine.id) return
     deskOwner?.revoke()
-    const origin = core, epoch = generation, machineId = view.machine.id
-    deskOwner = { generation: epoch, machineId, revoke: publishDeviceDesk({ dataDir: options.dataDir, machineId, desk, faults,
+    const origin = core, epoch = generation, machineId = view.machine.id, direct = desk
+    deskOwner = { generation: epoch, machineId, revoke: publishDeviceDesk({ dataDir: options.dataDir, machineId, desk: {
+      // Wi-Fi can call this desk before a dial has ever read its startup view.
+      stepFocus: async (...args) => await refresh() ? direct.stepFocus(...args) : 'no_agents',
+      scroll: (...args) => direct.scroll(...args),
+    }, faults,
       current: () => !stopped && generation === epoch && core === origin && view.machine.id === machineId,
       hasWindow: () => view.hasWindow,
     }) }

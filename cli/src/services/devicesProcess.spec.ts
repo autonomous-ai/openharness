@@ -334,6 +334,69 @@ describe('the core\'s view, read in line by the dial', () => {
     machine: { ...snapshotFixture().machine, ...over.machine },
   })
 
+  it.each([false, true])('refreshes a cohosted focus step from cached window=%s before authorizing its effect', async cached => {
+    const f = setup(), effects: string[] = []
+    f.deps().onDesk!({
+      stepFocus: async (_direction, _agent, current) => {
+        if (!current()) return 'no_agents'
+        effects.push('focus')
+        return { machineId: 'machine-1', agentId: 'a1' }
+      },
+      scroll: vi.fn(),
+    })
+    f.answer('session_read_advertised', capture({ agents: [agent], hasWindow: cached }))
+    f.connect(); await f.deps().refresh!()
+    const peer = deviceDeskFor('/data', 'machine-1')!
+    f.answer('session_read_advertised', capture({ agents: [agent], hasWindow: !cached }))
+    const before = f.queries.length
+    expect(await peer.stepFocus('next', 'a1', () => true)).toEqual(cached ? 'no_app' : { machineId: 'machine-1', agentId: 'a1' })
+    expect(f.queries.length - before).toBe(1)
+    expect(effects).toEqual(cached ? [] : ['focus'])
+    await f.service.stop()
+  })
+
+  it('refuses a cohosted step when its view cannot be read and permits a later fresh read', async () => {
+    const f = setup(), step = vi.fn(async () => ({ machineId: 'machine-1', agentId: 'a1' }))
+    f.deps().onDesk!({ stepFocus: step, scroll: vi.fn() })
+    const snapshot = capture({ agents: [agent], hasWindow: true })
+    f.answer('session_read_advertised', snapshot)
+    f.connect(); await f.deps().refresh!()
+    const peer = deviceDeskFor('/data', 'machine-1')!
+    f.answer('session_read_advertised', new Error('read failed'))
+    expect(await peer.stepFocus('next', 'a1', () => true)).toBe('no_agents')
+    expect(step).not.toHaveBeenCalled()
+    f.answer('session_read_advertised', snapshot)
+    expect(await peer.stepFocus('next', 'a1', () => true)).toEqual({ machineId: 'machine-1', agentId: 'a1' })
+    expect(step).toHaveBeenCalledOnce()
+    await f.service.stop()
+  })
+
+  it.each(['caller', 'disconnect', 'stop', 'timeout'] as const)('revokes a cohosted effect while refreshing after %s', async ending => {
+    vi.useFakeTimers()
+    const f = setup(), effects: string[] = []
+    try {
+      f.deps().onDesk!({ stepFocus: async (_direction, _agent, current) => {
+        if (current()) effects.push('focus')
+        return { machineId: 'machine-1', agentId: 'a1' }
+      }, scroll: vi.fn() })
+      const snapshot = capture({ agents: [agent], hasWindow: true })
+      f.answer('session_read_advertised', snapshot)
+      f.connect(); await f.deps().refresh!()
+      let finish!: (value: Record<string, unknown>) => void, current = true
+      vi.mocked(f.connection.query).mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+      const result = deviceDeskFor('/data', 'machine-1')!.stepFocus('next', 'a1', () => current)
+      expect(finish).toBeTypeOf('function')
+      if (ending === 'caller') current = false
+      if (ending === 'disconnect') f.options().onDisconnected!()
+      if (ending === 'stop') await f.service.stop()
+      if (ending === 'timeout') { await vi.advanceTimersByTimeAsync(5000); expect(await result).toBe('no_agents') }
+      finish({ ...snapshot })
+      await f.deps().refresh!()
+      expect(await result).toBe('no_agents')
+      expect(effects).toEqual([])
+    } finally { await f.service.stop(); vi.useRealTimers() }
+  })
+
   it('publishes a desk only after a verified view and keeps its in-flight effects on that exact connection', async () => {
     const f = setup(), effects: string[] = []
     let release!: () => void
