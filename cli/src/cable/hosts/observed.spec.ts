@@ -3979,6 +3979,41 @@ describe('ObservedSource outer place', () => {
       expect(t.src.paneOf(t.agent().id, 'tabs')).toBeUndefined()
       expect(t.tty).not.toHaveBeenCalled()
     })
+
+    it('a walk that answers after an outer place of none gives its app, and reads no tty', async () => {
+      const t = walked()
+      await t.asks[0].answer({})
+      await t.walks[0](new Map([[100, 'terminal-app']]))
+      expect(t.agent().app).toBe('terminal-app')
+      expect(t.src.paneOf(t.agent().id, 'tabs')).toBeUndefined()
+      expect(t.tty).not.toHaveBeenCalled()
+    })
+
+    it('a walk its outer place held back gives its app once a later ask finds none', async () => {
+      const t = walked()
+      await t.asks[0].answer(CLIENT)
+      await t.walks[0](new Map([[100, 'iterm']]))
+      expect(t.agent().app).toBe('terminal-app')
+      t.src.ingest(t.ev('turn-start', inTmux({ TERM_PROGRAM: 'Hyper' })))
+      await t.asks[1].answer({})
+      expect(t.agent().app).toBe('iterm')
+      // Walked once for its caller.
+      expect(t.walks).toHaveLength(1)
+      expect(t.src.paneOf(t.agent().id, 'tabs')).toBeUndefined()
+      expect(t.tty).not.toHaveBeenCalled()
+    })
+
+    it('a caller it moved to during the walk is walked next, and that walk leaves its new outer place', async () => {
+      const t = walked()
+      t.src.ingest(t.ev('needs-input', { ...inTmux({ TERM_PROGRAM: 'Hyper' }), callerPid: 101 }))
+      await t.walks[0](new Map([[100, 'iterm']]))
+      expect(t.walks).toHaveLength(2)
+      await t.asks[1].answer(CLIENT)
+      await t.walks[1](new Map())
+      expect(t.agent().app).toBe('terminal-app')
+      expect(t.src.byTab('terminal-app', '/dev/ttys004')).toMatchObject({ id: t.agent().id })
+      expect(t.tty).not.toHaveBeenCalled()
+    })
   })
 
   it('undefined: nothing changes', async () => {
