@@ -47,8 +47,8 @@ export function createOrcaPluginSetup(deps: OrcaPluginSetupDeps): OrcaPluginSetu
   /** An hour after a failed pass, or an Orca too old: an attach or a settle within it runs no Orca CLI, so an Orca that
    *  cannot take the plugin is not asked again each time it comes to the front. */
   let waiting = false
-  /** An uninstall that failed: tried again at the passes after its hour while the plugin is removed, as nothing else
-   *  would take out what this setup put in. */
+  /** An uninstall owed: one that failed, or a `disable` during an install past its deadline; tried at the passes after
+   *  while the plugin is removed, as nothing else would take out what this setup put in. */
   let undoOwed = false
 
   /** That hour; [retry]: a pass at its end. */

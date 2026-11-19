@@ -29,18 +29,18 @@ While Orca is in front, a swipe on the dial stays among the agents of the worktr
 ## Install
 
 Harness sets this plugin up for you once a dial has attached on this computer and Orca runs, and keeps it current as
-Harness updates. Harness approves this plugin in Orca for you, with read-only access to your workspaces. Remove it in
-Orca, or run `harness device orca disable`, and Harness will not install it again; `harness device orca enable` brings
-it back. An update that asks for more access is not approved.
+Harness updates. Harness approves the plugin in Orca for you: its own worker process and read-only access to your
+workspaces. Remove it in Orca, or run `harness device orca disable`, and Harness will not install it again;
+`harness device orca enable` brings it back. An update that asks for more access is not approved.
 
 It needs Orca 1.4.248 or later, on macOS or Linux. On Windows the panel reads "Not on Windows yet."
 
 ## The access Orca asks for
 
-Its worker is a Node process with your own access, which Orca asks you to approve at install. It uses that to run
-`harness device orca link` (`~/.local/bin/harness`, then `harness` on `PATH`) and to talk to one local socket, the one
-that command names. While no dial is attached, it watches the folder that holds that socket (the Harness daemon's data
-folder) for the socket to appear.
+Its worker is a Node process with your own access, which Harness approves for you at install; Orca lists it with the
+plugin's access. It uses that to run `harness device orca link` (`~/.local/bin/harness`, then `harness` on `PATH`) and
+to talk to one local socket, the one that command names. While no dial is attached, it watches the folder that holds
+that socket (the Harness daemon's data folder) for the socket to appear.
 
 It declares one capability, `workspace:read`, which Orca words as "Read your projects and workspaces (names, branches,
 paths and agent status) and the terminals in them, and get notified when they change". It uses only the terminal ids

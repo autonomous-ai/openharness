@@ -105,29 +105,35 @@ This replaces `orcaConnect`. It is one function for the devices' pass and for `e
 
 ### The devices' pass (`cli/src/cable/orcaPluginSetup.ts`, new, beside `vscodeExtensionSetup.ts`)
 
-- Same shape as the editor setup: one pass at a time; it never rejects; nothing runs on Windows or in a run from the
+- Same shape as the editor setup: one pass at a time, and one asked while another runs runs once after it (Orca may
+  come up while a pass waits for its `orca status`); it never rejects; nothing runs on Windows or in a run from the
   sources.
-- A pass reads `dial-skill.json`'s removals and `dial-setup.json`'s record anew. Removed, unread, or the record not yet
-  read: it returns.
+- A pass reads `dial-setup.json`'s record (held in memory) first, then `dial-skill.json` once: its removals, or
+  `orcaConnected` alone where that decides the first set-up. Removed, unread, or the record not yet read: it returns.
+  An uninstall the pass owes (below) is tried first, whatever the record says.
 - "The version" everywhere below is the version in the carried `orca-plugin.json` (the build stamps
   `extensionVersion(VERSION)` there), as the editors record `buildVersion`.
-- `recorded.orca` or `recorded.orcaHeld` equals the version: it returns with no Orca run. So a pass when Orca settles
-  in front costs nothing once the plugin is set up or held.
+- `recorded.orca` or `recorded.orcaHeld` equals the version: it returns with no Orca run and no file read (a removal
+  since is `disable`'s to carry out). So a pass when Orca settles in front costs nothing once the plugin is set up or
+  held. The carried version is parsed once a process.
 - With no `orca` version recorded and no `orcaConnected`: it runs only when a dial has attached here (`recorded.dial`).
   A plugin set up before is still brought current.
 - Each result:
   - `on`: record the version. The count is `set up`, or `updated` for a plugin that was installed. A
     `harness device orca disable` that landed while the install ran is honoured: `orcaRemove` then, as the editor
-    setup's `undo` does.
+    setup's `undo` does. With Orca not running then, it stays owed, with nothing counted and no hour: the next start,
+    attach or settle runs it.
   - `off`: record the version. The count is `left removed`, once per version.
   - `held`: record the version as `orcaHeld`, never as `orca`, so it is not asked again until the next CLI and never
     counts as "set up before" (a plugin held before it was ever installed is still installed by a later CLI that
     approves it). The count is `failed` with reason `access`.
   - `absent/not-running`: nothing recorded and nothing counted. The next start, attach or Orca settle passes again.
   - `absent/old`, and `absent/other` (an entry Orca lists as a development install, `errored` or `invalid`; PM,
-    2026-11-19): nothing counted, and the pass waits an hour, so each settle does not run Orca's CLI again.
+    2026-11-19): nothing counted, and passes wait an hour with none at its end, so neither each settle nor each hour
+    runs Orca's CLI again; the first one after the hour asks again.
   - `failed`: the count is `failed` with its reason, and the pass waits an hour, as the editor setup's failed pass
-    does. An attach or a settle within that hour runs nothing.
+    does. An attach or a settle within that hour runs nothing. A `disable` that landed while Orca ran past its deadline
+    is owed: the hour's pass uninstalls what Orca installed late, as the editors' setup does.
 - **When:** at the devices' start (after Orca's homes are read, beside the editors' passes), at each attach, when Orca
   settles in front, and an hour after a failed pass. The settle runs the pass whenever the setup exists (as the
   editors' passes are gated on `skill`), not only with `observed`, and with or without a dial. Settles come from the
@@ -183,9 +189,9 @@ and its strings in `ui/` (`screens.ts`, `gallery.ts`, `api.ts`) and their tests;
 
 - `device-app/AGENTS.md`: the Orca lines go.
 - `plugins/harness-device-orca/README.md`: how Harness sets the plugin up. It says, in these words or close: Harness
-  approves this plugin in Orca for you, with read-only access to your workspaces; remove it in Orca or run
-  `harness device orca disable` and Harness will not install it again; an update that asks for more access is not
-  approved.
+  approves the plugin in Orca for you: its own worker process and read-only access to your workspaces; remove it in
+  Orca or run `harness device orca disable` and Harness will not install it again; an update that asks for more access
+  is not approved.
 - `cli/AGENTS.md`'s devices row: the Orca plugin's setup, beside the editors'.
 - The header of `orcaPlugin.ts`: it now runs in the devices' process, never the core's.
 - `harness device` usage gains the two lines.

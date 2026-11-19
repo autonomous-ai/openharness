@@ -34,8 +34,8 @@ export function createVscodeExtensionSetup(deps: VscodeExtensionSetupDeps): Vsco
   /** A failed pass's hour: an attach within it runs no CLI, so a computer whose editor cannot install is not asked
    *  again at every replug. */
   let waiting = false
-  /** An uninstall that failed: tried again at the passes after its hour while the extension is removed, as nothing else
-   *  would take out what this setup put in. */
+  /** An uninstall owed: one that failed, or a `disable` during an install past its deadline; tried at the passes after
+   *  its hour while the extension is removed, as nothing else would take out what this setup put in. */
   let undoOwed = false
 
   const failed = (reason: string): void => {
