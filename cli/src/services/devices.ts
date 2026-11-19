@@ -709,7 +709,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
    *  (docs/plans/2026-11-19-dial-claude-app-sessions-design.md). It runs only while a dial is attached, behind the
    *  observed agents' switch, on macOS alone, where the app runs. A session with a process is the observed source's
    *  copy, which holds its row while it runs (registry.ts). */
-  const claudeApp = observed && apps.platform === 'darwin' ? new ClaudeAppSource({
+  const claudeAppSource = observed && apps.platform === 'darwin' ? new ClaudeAppSource({
     store: deps.claudeAppStore ?? new ClaudeAppStore(claudeAppRoot),
     root: claudeAppRoot,
     watch: (folders, changed) => watchNearest(folders, changed),
@@ -1016,7 +1016,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   })
   // What the dial lists with no window, or with one in the apps view: this computer's harness agents, and the ones outside
   // a pane unless switched off.
-  const registry = new HostRegistry([cableHost.harness, observed, herdr, hcSource, cmuxSource, opencode, claudeApp].filter((source) => source !== null))
+  const registry = new HostRegistry([cableHost.harness, observed, herdr, hcSource, cmuxSource, opencode, claudeAppSource].filter((source) => source !== null))
   cableHost.setRegistry(registry)
   // The dial's log lives with the app's, one file a day (dialLog.ts). The old unbounded `dial.log` in the
   // data folder is cut down to a pointer, for anyone with a bookmark.
@@ -1391,7 +1391,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   hcSource?.onChange(() => part.call('dial', outsideTurn))
   cmuxSource?.onChange(() => part.call('dial', outsideTurn))
   opencode?.onChange(() => part.call('dial', outsideTurn))
-  claudeApp?.onChange(() => part.call('dial', outsideTurn))
+  claudeAppSource?.onChange(() => part.call('dial', outsideTurn))
   /** One of the observed source's timers, each run guarded as a notice is: one that throws is logged and the next runs. */
   const every = (ms: number, run: () => unknown): ReturnType<typeof setInterval> => {
     const timer = setInterval(() => part.call('observed', run), ms)
@@ -1679,7 +1679,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       return cmuxFound ? cmuxSource.start() : cmuxSource.stop()
     })
     part.call('opencode', () => on ? opencode.start() : opencode.stop())
-    if (claudeApp) part.call('claude-app', () => on ? claudeApp.start() : claudeApp.stop())
+    if (claudeAppSource) part.call('claude-app', () => on ? claudeAppSource.start() : claudeAppSource.stop())
     if (!on) {
       // The next attach checks Orca's ring afresh, and a read under way lands on nothing.
       orcaRing = { again: false }
