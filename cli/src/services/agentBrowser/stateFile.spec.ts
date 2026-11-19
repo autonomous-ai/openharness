@@ -56,7 +56,7 @@ describe('StateFile', () => {
   })
 
   it('a file with no told reads as nobody told, and update keeps a told it does not know', () => {
-    writeFileSync(path, JSON.stringify({ browsers: { a1: settings }, deleting: [], setup: null }))
+    writeFileSync(path, JSON.stringify({ browsers: { a1: settings }, deleting: [], setup: null }), { mode: 0o600 })
     const file = new StateFile(path)
     expect(file.read().told?.a1).toBeUndefined()
     file.update(s => { s.told = { a1: true } })
@@ -66,7 +66,7 @@ describe('StateFile', () => {
 
   it("an entry's profile is read back as written, and an entry without one is read as before", () => {
     // a2 took a1's browser with its pane; a3's never moved, and its entry is what an older CLI writes and reads.
-    writeFileSync(path, JSON.stringify({ browsers: { a3: settings }, deleting: [], setup: null }))
+    writeFileSync(path, JSON.stringify({ browsers: { a3: settings }, deleting: [], setup: null }), { mode: 0o600 })
     const file = new StateFile(path)
     file.update(s => { s.browsers.a2 = { ...settings, profile: 'a1' } })
     expect(file.read().browsers).toEqual({ a2: { ...settings, profile: 'a1' }, a3: settings })
