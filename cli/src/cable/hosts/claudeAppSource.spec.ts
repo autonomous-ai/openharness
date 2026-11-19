@@ -425,6 +425,14 @@ describe("the Claude app's source (docs/plans/2026-11-19-dial-claude-app-session
       await turn()
       expect(s.calls()).toEqual(['folders', 'files', 'read', 'read'])
     })
+
+    it('a read cut short keeps the rows and tells nothing', async () => {
+      const s = await started()
+      s.answers.read = read([nth(1)], { more: true })
+      await after(s, () => s.fire(ORG, undefined))
+      expect(s.source.list().map(({ id }) => id)).toEqual([ID])
+      expect(s.changes).toBe(1)
+    })
   })
 
   describe('told only when the list changes', () => {
