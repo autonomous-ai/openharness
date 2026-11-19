@@ -473,6 +473,23 @@ static void test_question_chimes_once(void)
     CHECK(BEEPS == 2);
 }
 
+// A `tier: "list"` question (one the bar was told before) is filed silently once the welcome lists question.tier: no
+// chime, no wake, no Attention. From a daemon that did not list it the flag vouches for nothing: it rings.
+static void test_listed_question_is_silent(void)
+{
+    fresh();
+    FEATURES = CABLE_FEATURE_FORM | CABLE_FEATURE_QUESTION_REVIEW | CABLE_FEATURE_QUESTION_TIER;
+    now += 60000;   // past the last chime's coalescing window
+    BEEPS = 0;
+    pro_app_sleep();
+    pro_app_ask("a", "r1", "Proceed?", NULL, 0, false, true);
+    CHECK(BEEPS == 0 && pro_app_asleep() && max_m.view == MAX_VIEW_OVERVIEW);
+    CHECK(max_find("a")->state == MAX_ASKING && max_m.inbox[0].unread && LOCK_DEPTH == 0);
+    FEATURES = CABLE_FEATURE_FORM | CABLE_FEATURE_QUESTION_REVIEW;
+    pro_app_ask("b", "r2", "And this?", NULL, 0, false, true);
+    CHECK(BEEPS == 1 && !pro_app_asleep() && max_m.view == MAX_VIEW_ATTENTION && !strcmp(max_m.attn_id, "b"));
+}
+
 // ---- answering and New Harness ----
 
 static const pro_ask_item_t DB = {"db", "Which database?", {"Dev", "Staging"}, 2, false, true};
@@ -605,6 +622,7 @@ int main(void)
     test_update_gate_holds_talk();
     test_asleep_refuses_the_finger();
     test_question_chimes_once();
+    test_listed_question_is_silent();
     test_reviewed_answer_is_sent_after_the_lock();
     test_plain_answer_and_a_full_port();
     test_new_harness();

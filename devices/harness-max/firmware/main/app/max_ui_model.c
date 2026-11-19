@@ -157,7 +157,7 @@ void max_attention(const char *id, max_attn_t why, uint32_t now_ms)
 // An agent that asks and has no answer on its way waits for a person.
 static bool waits(const max_agent_t *a)
 {
-    if (a->state != MAX_ASKING) return false;
+    if (a->state != MAX_ASKING || a->quiet) return false;   // a quiet one rang before: it waits on its tile
     const max_ask_t *k = max_ask_of(a->id);
     return !k || (k->phase != MAX_ASK_SENDING && k->phase != MAX_ASK_SENT);
 }
@@ -180,8 +180,9 @@ void max_next_question(const char *except, uint32_t now_ms)
     else max_show(MAX_VIEW_OVERVIEW);
 }
 
-// The notice's words: the question, or what the turn said (a failure's error, a summary's text).
-static void inbox_add(const max_agent_t *a, max_attn_t why, uint32_t now_ms)
+// The notice's words: the question, or what the turn said (a failure's error, a summary's text). `quiet`: the same
+// notice is left as it is.
+static void inbox_add(const max_agent_t *a, max_attn_t why, bool quiet, uint32_t now_ms)
 {
     static char text[MAX_QUESTION_BYTES];   // with the scan below, over the cable_link task's frame budget
     max_copy(text, sizeof text, why == MAX_ATTN_ASK ? a->question : a->note);
@@ -189,6 +190,7 @@ static void inbox_add(const max_agent_t *a, max_attn_t why, uint32_t now_ms)
     while (j < max_m.inbox_count && (max_m.inbox[j].kind != why || strcmp(max_m.inbox[j].id, a->id) ||
                                      strcmp(max_m.inbox[j].text, text)))
         j++;
+    if (quiet && j < max_m.inbox_count) return;
     if (j == max_m.inbox_count) {
         if (max_m.inbox_count < MAX_INBOX) max_m.inbox_count++;
         j = max_m.inbox_count - 1;   // full: the oldest goes
@@ -220,7 +222,7 @@ static void inbox_words(const max_agent_t *a)
 void max_attend(max_agent_t *a, max_attn_t why, uint32_t now_ms)
 {
     max_m.idle_from = now_ms;
-    inbox_add(a, why, now_ms);
+    inbox_add(a, why, false, now_ms);
     if (max_m.talk != MAX_TALK_IDLE || max_form_open()) {   // a person talks or fills the form: only the toast
         max_copy(max_m.toast_id, sizeof max_m.toast_id, a->id);
         max_m.toast_attn = why;
@@ -234,6 +236,8 @@ void max_attend(max_agent_t *a, max_attn_t why, uint32_t now_ms)
         return;
     max_attention(a->id, why, now_ms);
 }
+
+void max_file_question(const max_agent_t *a, uint32_t now_ms) { inbox_add(a, MAX_ATTN_ASK, true, now_ms); }
 
 static bool busy(void)
 {

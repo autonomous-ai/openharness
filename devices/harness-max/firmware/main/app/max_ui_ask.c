@@ -170,8 +170,8 @@ static void take_question(max_ask_t *k, const max_agent_t *a, const char *reques
     }
 }
 
-bool max_ui_question(const char *id, const char *request, const char *text, const pro_ask_item_t *items, int n,
-                     bool permission, bool review, uint32_t now_ms)
+static bool question(const char *id, const char *request, const char *text, const pro_ask_item_t *items, int n,
+                     bool permission, bool review, bool quiet, uint32_t now_ms)
 {
     max_agent_t *a = max_find(id);
     if (!a) return false;
@@ -183,10 +183,24 @@ bool max_ui_question(const char *id, const char *request, const char *text, cons
     a->ask_key = key;
     a->ask_since = now_ms;
     a->card = false;   // the question's card replaces a failure's or a summary's
+    a->quiet = quiet;
     max_ask_t *k = ask_slot(id);
     if (k) take_question(k, a, request, text, items, n, permission, review, now_ms);
-    max_attend(a, MAX_ATTN_ASK, now_ms);
+    if (quiet) max_file_question(a, now_ms);
+    else max_attend(a, MAX_ATTN_ASK, now_ms);
     return true;
+}
+
+bool max_ui_question(const char *id, const char *request, const char *text, const pro_ask_item_t *items, int n,
+                     bool permission, bool review, uint32_t now_ms)
+{
+    return question(id, request, text, items, n, permission, review, false, now_ms);
+}
+
+bool max_ui_question_quiet(const char *id, const char *request, const char *text, const pro_ask_item_t *items, int n,
+                           bool permission, bool review, uint32_t now_ms)
+{
+    return question(id, request, text, items, n, permission, review, true, now_ms);
 }
 
 // Answered, here or elsewhere: the turn and its clock go on.

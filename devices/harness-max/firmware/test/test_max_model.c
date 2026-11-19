@@ -401,6 +401,45 @@ static void test_inbox(void)
     CHECK(!strcmp(max_m.inbox[1].text, text));
 }
 
+// A question the bar was told before, back as a `tier: "list"` row (pro_app_ask's `listed`): filed quietly. Its agent
+// asks, but the page, the toast and Ambient's clock are left alone, and its notice keeps its place and whether it was
+// read; one the Inbox does not hold comes back unread. It waits on its tile, never in Attention's queue.
+static void test_quiet_question(void)
+{
+    linked(ABC, 3);
+    CHECK(max_ui_question("a", "r1", "Deploy?", NULL, 0, false, false, 1000));
+    CHECK(max_m.view == MAX_VIEW_ATTENTION && max_m.inbox[0].unread);
+    CHECK(max_show(MAX_VIEW_INBOX) && max_show(MAX_VIEW_OVERVIEW) && max_unread() == 0);
+    roster(ABC + 1, 2);   // a's row is cut from the ring, its question with it; it comes back and the daemon refiles
+    roster(ABC, 3);
+    CHECK(max_find("a")->state != MAX_ASKING);
+    const uint32_t idle = max_m.idle_from;
+    CHECK(max_ui_question_quiet("a", "r1", "Deploy?", NULL, 0, false, false, 3000));
+    CHECK(max_find("a")->state == MAX_ASKING && !strcmp(max_find("a")->question, "Deploy?"));
+    CHECK(max_m.view == MAX_VIEW_OVERVIEW && max_m.toast_id[0] == 0 && max_m.idle_from == idle);
+    CHECK(max_m.inbox_count == 1 && max_m.inbox[0].at == 1000 && !max_m.inbox[0].unread && max_unread() == 0);
+    CHECK(!max_ui_question_quiet("a", "r1", "Deploy?", NULL, 0, false, false, 3100));   // sent again: no change
+    // One the Inbox does not hold: a new notice, unread, and still no page.
+    CHECK(max_ui_question_quiet("b", "r2", "Merge?", NULL, 0, false, false, 4000));
+    CHECK(max_m.view == MAX_VIEW_OVERVIEW && max_m.inbox_count == 2 && !strcmp(max_m.inbox[0].id, "b"));
+    CHECK(max_m.inbox[0].unread && max_unread() == 1);
+    // While a person talks: no toast either.
+    max_ui_talk(MAX_TALK_RECORDING, 4500);
+    CHECK(max_ui_question_quiet("c", "r3", "Push?", NULL, 0, false, false, 5000));
+    CHECK(max_m.toast_id[0] == 0 && max_m.view == MAX_VIEW_OVERVIEW);
+    max_ui_talk(MAX_TALK_IDLE, 5100);
+    // c's next question rings and takes the page; answered on the computer, the quiet ones do not take it after.
+    CHECK(max_ui_question("c", "r4", "Push now?", NULL, 0, false, false, 6000));
+    CHECK(max_m.view == MAX_VIEW_ATTENTION && !strcmp(max_m.attn_id, "c"));
+    max_ui_question_close("c");
+    max_ui_tick(7000);
+    CHECK(max_m.view == MAX_VIEW_OVERVIEW);
+    CHECK(max_find("a")->state == MAX_ASKING && max_find("b")->state == MAX_ASKING);
+    // A quiet one that is asked again (a new question of b's) rings: it takes the page.
+    CHECK(max_ui_question("b", "r5", "Merge now?", NULL, 0, false, false, 8000));
+    CHECK(max_m.view == MAX_VIEW_ATTENTION && !strcmp(max_m.attn_id, "b"));
+}
+
 // Ambient: with no computer, with no agents, and on Overview when nothing works or waits and nobody touched for
 // MAX_AMBIENT_MS. A turn that starts or an agent that needs the person leaves it.
 static void test_ambient(void)
@@ -647,6 +686,7 @@ int main(void)
     test_questions_take_attention_oldest_first();
     test_turn_ends_take_attention();
     test_inbox();
+    test_quiet_question();
     test_ambient();
     test_caps();
     test_no_talk_while_an_answer_waits();

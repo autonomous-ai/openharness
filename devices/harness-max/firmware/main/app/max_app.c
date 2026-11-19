@@ -303,13 +303,17 @@ void pro_app_question(const char *id, const char *request, const char *text)
 void pro_app_ask(const char *id, const char *request, const char *text, const pro_ask_item_t *items, int n,
                  bool permission, bool listed)
 {
-    (void)listed;
     if (!id_ok(id)) return;
     const bool review = pro_cable_supports(CABLE_FEATURE_QUESTION_REVIEW);   // the reviewed path, when the daemon has it
+    // A list row rang before: silent only when the welcome listed question.tier, so nothing this build cannot vouch
+    // for mutes a question (the round dial's rule).
+    const bool quiet = listed && pro_cable_supports(CABLE_FEATURE_QUESTION_TIER);
     lock();
-    const bool changed = max_ui_question(id, request, text, items, n, permission, review, ms());
+    const bool changed = (quiet ? max_ui_question_quiet : max_ui_question)(id, request, text, items, n, permission,
+                                                                          review, ms());
     changed_if(changed);
-    if (changed && ask_is_new(id, ask_key(request, text))) alert_locked();
+    // Remembered either way: the same question rung later is not news.
+    if (changed && ask_is_new(id, ask_key(request, text)) && !quiet) alert_locked();
     leave();
 }
 

@@ -175,6 +175,7 @@ typedef struct {
     char question[MAX_QUESTION_BYTES];
     uint32_t ask_key;                // the open question's request, prompt and questions: a re-sent one is no change
     uint32_t ask_since;              // when the open question arrived: Attention takes the oldest first
+    bool quiet;                      // the open question came back quietly (a list row): it waits on its tile alone
     char note[MAX_NOTE_BYTES];       // FAILED: the error; DONE: the summary's text, shown until note_until
     uint32_t note_until;
     bool card;                       // a failure's card lasts until the agent moves on; an alert's, until it runs out
@@ -304,6 +305,9 @@ bool max_attn_holds(const char *id, max_attn_t why);
 // Attention takes the glass, unless a person talks or New Harness is up (then only the toast), or another agent's
 // question is on Attention (a question then waits its turn; a turn's end stays in Inbox).
 void max_attend(max_agent_t *, max_attn_t why, uint32_t now_ms);
+// A question back quietly (max_ui_question_quiet): its notice, and nothing more. The same notice keeps its place and
+// whether it was read; one Inbox does not hold comes in unread.
+void max_file_question(const max_agent_t *, uint32_t now_ms);
 // Attention leaves `except`'s question (answered, or gone): the question that has waited longest takes it, else
 // Overview.
 void max_next_question(const char *except, uint32_t now_ms);
