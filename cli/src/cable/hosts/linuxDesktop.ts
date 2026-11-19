@@ -6,7 +6,7 @@
  * environment (cli/AGENTS.md rule 4). A socket another account owns is never used: what answers on it is someone
  * else's desktop. Every command runs with no shell, each value one argument, and none of them throws here.
  */
-import { lstatSync, readdirSync } from 'node:fs'
+import { lstatSync, readdirSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { isAbsolute, join } from 'node:path'
 import { RUN_TIMEOUT_MS, type OrcaDeps } from './orca.js'
@@ -25,8 +25,8 @@ export interface LinuxDesktopDeps {
   home: string
   /** A folder's entry names; none when it cannot be read. */
   list(dir: string): string[]
-  /** What the path is and whose: null when it is not there. */
-  kind(path: string): { type: 'socket' | 'file' | 'folder'; uid: number } | null
+  /** What the path is and whose: null when it is not there, or a link, unless [follow] looks through it. */
+  kind(path: string, follow?: boolean): { type: 'socket' | 'file' | 'folder'; uid: number } | null
   run: OrcaDeps['run']
   onPath: OrcaDeps['onPath']
 }
@@ -147,7 +147,8 @@ export async function findLinuxDesktop(deps: LinuxDesktopDeps): Promise<LinuxDes
     const display = env.DISPLAY !== undefined && DISPLAY.test(env.DISPLAY) ? env.DISPLAY : lowestXSocket(deps)
     if (display !== undefined) {
       if (!deps.onPath('wmctrl')) return none('no wmctrl')
-      const file = (path: string) => deps.kind(path)?.type === 'file'
+      // Through a link: wmctrl reads the cookie as this account, so a link gives it nothing this account could not read.
+      const file = (path: string) => deps.kind(path, true)?.type === 'file'
       const home = join(deps.home, '.Xauthority')
       const xauthority = env.XAUTHORITY !== undefined && isAbsolute(env.XAUTHORITY) && file(env.XAUTHORITY) ? env.XAUTHORITY
         : file(home) ? home
@@ -188,10 +189,11 @@ export function linuxDesktopDeps(apps: Pick<OrcaDeps, 'run' | 'onPath'>): LinuxD
         return []
       }
     },
-    // lstat: a link is none of the three, so a socket or file is never followed into another account's.
-    kind: (path) => {
+    // lstat unless told to follow: a link is none of the three, so a socket or file is never followed into another
+    // account's.
+    kind: (path, follow) => {
       try {
-        const found = lstatSync(path)
+        const found = (follow ? statSync : lstatSync)(path)
         const type = found.isSocket() ? 'socket' : found.isFile() ? 'file' : found.isDirectory() ? 'folder' : null
         return type && { type, uid: found.uid }
       } catch {
