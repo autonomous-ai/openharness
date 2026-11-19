@@ -647,6 +647,11 @@ export class SessionInputController {
     return this.states.get(id)?.awaitingFingerprint != null
   }
 
+  /** Whether a message waits, typed nowhere, for its OpenClaw pane to be able to send ([OPENCLAW_NOT_READY]). */
+  waitsForPane(id: string): boolean {
+    return this.states.get(id)?.paneWait === true
+  }
+
   onTurnStarted(sessionId: string, userMessage: string): void {
     const state = this.state(sessionId)
     const session = this.controlSession(sessionId)

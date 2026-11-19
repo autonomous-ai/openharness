@@ -116,7 +116,7 @@ export interface BindDeps {
   announceSession: (session: RegisteredSession) => void
   stoppedAgents: Pick<StoppedAgentStore, 'save' | 'finishResume' | 'get'>
   syncRecapPool: () => void
-  input: Pick<SessionInputController, 'forget' | 'awaitingConfirmation' | 'firstTaskWaiting' | 'typeCommand' | 'expectFirstTask'>
+  input: Pick<SessionInputController, 'forget' | 'awaitingConfirmation' | 'waitsForPane' | 'firstTaskWaiting' | 'typeCommand' | 'expectFirstTask'>
   /** Types an agent's first task into its pane as the person's own message (core/input.ts `submitAgent`), which the input
    *  keeps from its hand-over until a turn takes it (`expectFirstTask`). */
   submitFirstTask: (agentId: string, task: string) => void
@@ -594,9 +594,10 @@ export function createBinding({
       // keeps it. A bound pane is read when its stream says it may show something new: an idle one is not read every pass.
       // One a message was typed into is read on every pass until the message is confirmed: the run it starts shows on the
       // pane before the store, which may never show it (live.ts NO_SESSION_MS counts from the first pass that reads it).
-      // So is one whose first task waits: a history that did not load reads idle, and its `/session` and the task wait.
+      // So is one whose first task, or a message waiting untyped for the pane to be able to send, waits: a history that
+      // did not load reads idle, and its `/session` and the message wait.
       const taskWaits = firstTaskWaits(agent)
-      const waiting = taskWaits || input.awaitingConfirmation(agent.agentId)
+      const waiting = taskWaits || input.awaitingConfirmation(agent.agentId) || input.waitsForPane(agent.agentId)
       if (agent.sessionId && !waiting && !openclawPaneDue(agent.sessionId)) return
       const revision = agent.sessionId ? activityRevision(agent.sessionId) : undefined
       const captured = await read(() => capturePane(agent.agentId), (screen) => !screen)
