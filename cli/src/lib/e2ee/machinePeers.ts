@@ -71,11 +71,15 @@ function writeAll(peers: Map<string, MachinePeer>): void {
   atomicWriteJson(FILE, [...peers.values()], 'trust')
 }
 
-/** Throws StateFileUnreadable while the file cannot be read: the marks in it are not known, so it is not written over. */
 function writeGone(gone: Set<string>): void {
-  requireState(GONE_FILE, jsonArray)
   mkdirSync(DIR, { recursive: true, mode: 0o700 })
   atomicWriteFile(GONE_FILE, JSON.stringify([...gone].slice(-GONE_MAX)), 'trust')
+}
+
+/** The marks of [saved], with those in memory. */
+function withMemory(saved: unknown[]): Set<string> {
+  const kept = saved.filter((id): id is string => typeof id === 'string')
+  return new Set([...kept.filter((id) => !backInMemory.has(id)), ...goneInMemory])
 }
 
 export class MachinePeerStore {
@@ -100,10 +104,12 @@ export class MachinePeerStore {
    *  Throws when the mark or the unpin cannot be written; the mark holds in memory for this process all the same. */
   markGone(machineId: string): void {
     backInMemory.delete(machineId)
-    const gone = this.gone()
-    gone.delete(machineId)
-    gone.add(machineId)
-    try { writeGone(gone) } catch (err) { goneInMemory.add(machineId); throw err }
+    try {
+      const gone = this.goneToChange()
+      gone.delete(machineId)
+      gone.add(machineId)
+      writeGone(gone)
+    } catch (err) { goneInMemory.add(machineId); throw err }
     this.unlink(machineId)
   }
 
@@ -111,8 +117,13 @@ export class MachinePeerStore {
   gone(): Set<string> {
     const read = readState(GONE_FILE, 'trust', jsonArray)
     // None yet, or unreadable: the marks in memory still hold.
-    const kept = read.state === 'ok' ? read.value.filter((id): id is string => typeof id === 'string') : []
-    return new Set([...kept.filter((id) => !backInMemory.has(id)), ...goneInMemory])
+    return withMemory(read.state === 'ok' ? read.value : [])
+  }
+
+  /** The marks a change starts from. Throws StateFileUnreadable while the file cannot be read: the marks in it are not
+   *  known, so it is not written over. */
+  private goneToChange(): Set<string> {
+    return withMemory(requireState(GONE_FILE, jsonArray) ?? [])
   }
 
   /** The account's machine list names [listed]: any of them marked gone is back (re-added, or shared again). True when one was.
@@ -127,7 +138,9 @@ export class MachinePeerStore {
     }
     if (!back.length) return false
     try {
-      writeGone(gone)
+      const next = this.goneToChange()
+      for (const id of back) next.delete(id)
+      writeGone(next)
     } catch (err) {
       for (const id of back) backInMemory.add(id)
       console.warn(`[relay] could not record ${back.length} machine(s) as back on the list, kept in memory: ${errorKind(err)}`)
