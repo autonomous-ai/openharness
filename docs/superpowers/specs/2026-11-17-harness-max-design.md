@@ -1,6 +1,7 @@
 # Harness Max: first light
 
-> 2026-11-17. Milestones 0 and 1 of the Harness Max roadmap: the firmware runs on the board, the bar shows the cabled
+> 2026-11-17. Milestones 0 and 1 of the [Harness Max roadmap](../../plans/2026-11-19-harness-max-roadmap.md) (rewritten
+> 19 Nov): the firmware runs on the board, the bar shows the cabled
 > computer's agents side by side, and a tap talks to one. Written before the hardware arrives: nothing here has been
 > on a bench yet.
 
