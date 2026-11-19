@@ -10,6 +10,7 @@
 
 static const char *const ABCDE[] = {"a", "b", "c", "d", "e", "f"};
 #define T0 1000000u
+#define CHIP_Y DY(250)   // a cell's chip is below this; the open agent's beside its name, above
 
 static bool near(int32_t got, int32_t want, int32_t tol)
 {
@@ -272,18 +273,109 @@ static void test_layer_kept(void)
     CHECK(max_layer_painted() == painted + 2);
 }
 
+// A pet's every step through an open, and through a close, is kept: the same motion again blurs no pet anew (an
+// agent opened, closed and opened again, as people peek; fewer kept, each step's image evicts the next one's). Its
+// row's pets all differ (two at work, two Codex's), none of them one image for two agents.
+static void test_pets_kept(void)
+{
+    for (int closing = 0; closing <= 1; closing++) {
+        max_layer_forget();
+        unsigned painted = 0;
+        for (int run = 0; run < 2; run++) {
+            row_of(5);
+            max_ui_turn("a", "started", "", 0, T0 - 6000);
+            max_ui_turn("d", "started", "", 0, T0 - 6000);
+            max_copy(max_find("b")->engine, sizeof max_find("b")->engine, "codex");
+            max_copy(max_find("d")->engine, sizeof max_find("d")->engine, "codex");
+            render(T0 - 4000);
+            if (closing) {   // open a while
+                max_open("c");
+                render(T0 - 3000);
+                render(T0 - 1000);
+            }
+            painted = max_layer_painted();
+            if (closing) max_show(MAX_VIEW_OVERVIEW);
+            else max_open("c");
+            frames(T0, T0 + 1000);
+            CHECK(run || max_layer_painted() > painted + 60);   // the first time: its pets' steps all blurred
+        }
+        CHECK(max_layer_painted() == painted);
+    }
+}
+
+// ---- the open agent's panel crossing its face ----
+
+// The brightest green (of 63) S shows over [x0, x1) x [y0, y1).
+static int brightest(int x0, int x1, int y0, int y1)
+{
+    static uint16_t px[HT_WIDTH * HT_HEIGHT];
+    const int w = x1 - x0, h = y1 - y0;
+    ht_raster(&S, (ht_rect_t){(int16_t)x0, (int16_t)y0, (int16_t)w, (int16_t)h}, px);
+    int best = 0;
+    for (int i = 0; i < w * h; i++)
+        if ((px[i] >> 5 & 63) > best) best = px[i] >> 5 & 63;
+    return best;
+}
+// The words `t` in `f` (the first such run from y `below` down) show across their whole width: each 12 px of them
+// (less than a glyph) holds a pixel at least `least` of 63 green.
+static bool shows(const char *t, const ht_pro_font_t *f, int below, int least)
+{
+    const ht_run_t *r = NULL;
+    for (int i = 0; i < S.count && !r; i++)
+        if (S.runs[i].pro_kind == 1 && S.runs[i].pro_font == f && S.runs[i].y >= below && !strcmp(S.runs[i].text, t))
+            r = &S.runs[i];
+    if (!r) return false;
+    for (int x = r->x; x + 12 <= r->x + r->w; x += 12) {
+        const int got = brightest(x, x + 12, r->y, r->y + r->pro_height);
+        if (got < least) {
+            fprintf(stderr, "  \"%s\" at most %d of 63 green at x %d..%d\n", t, got, x, x + 12);
+            return false;
+        }
+    }
+    return true;
+}
+
+// The open agent's panel fades out over its cell's face coming back, and in over the face going, both by their
+// colours toward the ground under them: neither one's ground, pet or box may lie over the other's words. Three
+// quarters through the panel's fade out, the face's name and its chip's word (their colours .9 of the way back) show
+// across their whole width; just after the panel begins to come in, the face's going (.2 of them left) still do.
+static void test_cross_fade(void)
+{
+    static const char NAME[] = "harness-firmware-max";
+    for (int closing = 1; closing >= 0; closing--) {
+        row_of(5);
+        max_copy(max_find("c")->name, sizeof max_find("c")->name, NAME);
+        max_ui_turn("c", "started", "", 0, T0 - 10);
+        const char *word = max_status_word(max_find("c"));
+        max_open("c");
+        if (closing) {
+            frames(T0, T0 + 700);
+            max_show(MAX_VIEW_OVERVIEW);
+            frames(T0 + 1000, T0 + 1225);   // 300 ms ease out: .07 of the panel left; 250 ms ease in: .98 of the face
+            CHECK(shows(NAME, &ph_sb_34, 0, 30) && shows(word, &ph_sb_22, CHIP_Y, 20));
+        } else {
+            frames(T0, T0 + 150);   // the panel's first ms in (Interval(140/440)); 250 ms ease out: .2 of the face left
+            CHECK(shows(NAME, &ph_sb_34, 0, 6) && shows(word, &ph_sb_22, CHIP_Y, 4));
+        }
+    }
+}
+
 // ---- the slivers' filter ----
 
 // What a layer is painted from: a glow, a rail, the line on its right, and two marks (a pet's stand-ins), one by the
-// left side. No words: those the filter leaves sharp.
+// left side. No words: those the filter leaves sharp. Their colours by C(): dimmed as drawn on the glass (max_dim).
 static void marks(ht_scene_t *s, int x, const void *arg)
 {
     const int w = *(const int *)arg;
-    pod_grad_aa_dither(s, x, 0, w, DY(138), 0, ht_rgb(0x2A3D2A), ht_rgb(0));
-    ht_pro_rect(s, x, 0, w, 7, 0, ht_rgb(0xE6E62E));
-    ht_pro_rect(s, x + w - 1, 0, 1, HT_HEIGHT, 0, ht_rgb(0x26262E));
+    pod_grad_aa_dither(s, x, 0, w, DY(138), 0, C(0x2A3D2A), C(0));
+    ht_pro_rect(s, x, 0, w, RAIL_H, 0, C(0xE6E62E));
+    ht_pro_rect(s, x + w - 1, 0, 1, HT_HEIGHT, 0, C(0x26262E));
+    const int dim = max_dim_now(), from = s->count;
+    max_dim(0);   // the pet's image dims it by the pixel
     ht_pro_rect(s, x + w / 2 - 30, DY(130), 60, 60, 0, ht_rgb(0xEAEAF0));
     ht_pro_rect(s, x + 2, DY(200), 20, 20, 0, ht_rgb(0xD9774B));
+    max_dim(dim);
+    max_layer_pet(s, from, GROUND, dim, 256);
 }
 // V3's _Dim done the plain way, in doubles: the agent's columns [x, x + w) rasterised alone, blurred down then across
 // by a Gaussian of the layer's sigma (transparent past the agent and the glass), dimmed by dimMatrix(t). Out: 8 bits a
@@ -336,30 +428,33 @@ static void plain_filter(int x, int w, int l, int r, int t, int arg)
             REF[y][g][2] = br * br * ((.213 - .213 * sat) * R + (.715 - .715 * sat) * G + (.072 + .928 * sat) * B);
         }
 }
-// The layer just shown on S (its last run, a window of an image: PRO_IMAGE 3) against REF over [l, r): every pixel
-// within 1.6 of its RGB565 levels (the dither's 1, the rest the integer filter's roundings).
-static bool matches_plain(int l, int r)
+// What S shows over [l, r) against REF: every pixel within `tol` of its RGB565 levels.
+static bool matches_plain(int l, int r, double tol)
 {
-    const ht_run_t *run = &S.runs[S.count - 1];
-    if (run->pro_kind != 3 || run->x != l || run->w != r - l) return false;
+    static uint16_t px[HT_WIDTH * HT_HEIGHT];
+    ht_raster(&S, (ht_rect_t){(int16_t)l, 0, (int16_t)(r - l), HT_HEIGHT}, px);
     double worst = 0;
     int wx = 0, wy = 0;
     for (int y = 0; y < HT_HEIGHT; y++)
         for (int g = l; g < r; g++) {
-            const uint16_t c = run->bitmap.pixels[(size_t)y * run->bitmap.width + (g - l)];
+            const uint16_t c = px[(size_t)y * (r - l) + (g - l)];
             const double d[3] = {fabs((c >> 11) - REF[y][g][0] * 31 / 255),
                                  fabs((c >> 5 & 63) - REF[y][g][1] * 63 / 255),
                                  fabs((c & 31) - REF[y][g][2] * 31 / 255)};
             for (int k = 0; k < 3; k++)
                 if (d[k] > worst) worst = d[k], wx = g, wy = y;
         }
-    if (worst <= 1.6) return true;
+    if (getenv("MAX_FILTER_REPORT")) fprintf(stderr, "  %.2f levels off V3's filter at worst, at (%d, %d)\n", worst, wx, wy);
+    if (worst <= tol) return true;
     fprintf(stderr, "  %.2f levels off V3's filter at (%d, %d)\n", worst, wx, wy);
     return false;
 }
 
-// A settled sliver (kept) and one between looks, its window cut by the row's end, dimmed and blurred as V3's _Dim:
-// worked out near the edges only, the same as everywhere.
+// A settled sliver (kept) dimmed and blurred as V3's _Dim, worked out near the edges only, the same as everywhere:
+// within 1.6 of its RGB565 levels (the dither's 1, the rest the integer filter's roundings). One between looks, its
+// window cut by the row's end, drawn on the glass at four points of its dimming: its colours dimmed as drawn, its marks
+// as a pet's image, its rail and its sides blurred by the pixel: within 2 levels (the dither's 1, the rest the
+// roundings of a dim and two blurs where the layer has one of each).
 static void test_layer_filter(void)
 {
     static const int SLIVER = SLIVER_W, CUT = CELL_W - 120;
@@ -368,12 +463,17 @@ static void test_layer_filter(void)
     max_layer_frame();
     max_layer_kept(&S, x, x, x + SLIVER_W, marks, &SLIVER);
     plain_filter(x, SLIVER_W, x, x + SLIVER_W, MAX_ONE, SLIVER);
-    CHECK(matches_plain(x, x + SLIVER_W));
-    // Half way dimmed, the agent's left 60 px past the row's start.
-    max_layer_frame();
-    max_layer_fresh(&S, x, CUT, x + 60, x + CUT, MAX_ONE / 2, marks, &CUT);
-    plain_filter(x, CUT, x + 60, x + CUT, MAX_ONE / 2, CUT);
-    CHECK(matches_plain(x + 60, x + CUT));
+    CHECK(matches_plain(x, x + SLIVER_W, 1.6));
+    for (int t = MAX_ONE / 4; t <= MAX_ONE; t += MAX_ONE / 4) {   // the agent's left 60 px past the row's start
+        ht_scene_clear(&S, 0);
+        max_layer_frame();
+        max_dim(t);
+        marks(&S, x, &CUT);
+        max_dim(0);
+        max_layer_cut(&S, 0, x, CUT, x + 60, x + CUT, t);
+        plain_filter(x, CUT, x + 60, x + CUT, t, CUT);
+        CHECK(matches_plain(x + 60, x + CUT, 2.0));
+    }
 }
 
 int main(void)
@@ -387,6 +487,8 @@ int main(void)
     test_frame_clock();
     test_drawn();
     test_layer_kept();
+    test_pets_kept();
+    test_cross_fade();
     test_layer_filter();
     printf("test_max_motion: %d checks passed\n", checks);
     return 0;

@@ -27,6 +27,13 @@ static unsigned glow_pct(const max_agent_t *a)
     return a->state == MAX_ASKING ? 18 : a->state == MAX_FAILED ? 14 : a->state == MAX_IDLE ? 0 : 8;
 }
 
+// The glow's colour at height y: pct % of ink at the top, nothing glow_h px down, over `under`. What a part of the panel
+// fades toward, so that no box of it shows on the glow while it comes in or goes.
+static unsigned glow_at(unsigned ink, unsigned pct, unsigned under, int glow_h, int y)
+{
+    return y < glow_h ? max_mix(ink, under, pct * (unsigned)(glow_h - y) / (unsigned)glow_h) : under;
+}
+
 // ---- the band ----
 
 // The waveform: one bar per level the mic gave, newest at the right, tallest in the middle as the mockup's shape.
@@ -147,21 +154,26 @@ void max_agent_body(ht_scene_t *s, const max_agent_t *a, int x, int w, unsigned 
 {
     const bool talking = max_m.talk != MAX_TALK_IDLE && !strcmp(max_m.talk_id, a->id);
     const unsigned pct = glow_pct(a), ink = max_chip_ink(a);
-    // The pet, centred down the space over the band, on the glow's colour at its middle; coming in, veiled toward the
-    // glow under it.
+    // The pet, centred down the space over the band, on the glow's colour at its middle; coming in or going, by its
+    // alpha over what lies under it.
+    // Its ground as the page's at rest, also while the cell's lightens it (by 6 levels at most): a frame below 1x is
+    // resampled once a ground, not again every frame of a move.
     const int pet_cx = x + PAD_L + PET_W / 2, mid = PAD_T + TOP_H / 2;
-    const unsigned ground =
-        mid < glow_h ? max_mix(ink, under, pct * (unsigned)(glow_h - mid) / (unsigned)glow_h) : under;
+    const unsigned ground = glow_at(ink, pct, PANEL, GLOW_H, mid);
     const pod_scene_t scene = max_pet_scene(a, true);
-    const int from = s->count;
+    const int from = s->count, dim = max_dim_now();
+    max_dim(0);   // its image dims it by the pixel
     max_pet(s, a->engine, scene, pet_cx, mid + PET_H / 2, PET_W / 2, PET_H, ground, now_ms, false);
-    if (keep < 256) max_fade_runs(s, from, max_mix(ink, under, pct), under, glow_h, keep);
-    max_tint(under, keep);
+    max_dim(dim);
+    max_layer_pet(s, from, ground, dim, keep);
     max_motion(now_ms, max_pet_next_ms(a->engine, scene, now_ms));
+    max_tint(glow_at(ink, pct, under, glow_h, mid), keep);   // the words are centred beside the pet
     words(s, a, x + PAD_L + PET_W + WORDS_GAP, x + w - PAD_R - X_ROOM);
+    max_tint(under, keep);
     band(s, a, x, w, talking, now_ms);
     // X, its reach past the button on every side: a miss there is not harmless, it sends what is being said.
     const int x_cx = x + w - X_RIGHT;
+    max_tint(glow_at(ink, pct, under, glow_h, X_CY), keep);
     max_round(s, x_cx, X_CY, X_D);
     max_icon_x(s, x_cx - X_ICON / 2, X_CY - X_ICON / 2, X_ICON, FG);
     max_hit(x + w - X_HIT_W, 0, X_HIT_W, X_HIT_H, MAX_HIT_AGENT_X, 0);

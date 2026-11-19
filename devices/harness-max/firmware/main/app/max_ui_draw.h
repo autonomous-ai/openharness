@@ -10,6 +10,15 @@
 // rest `toward`, the colour under it, until max_tint(0, 256).
 void max_tint(unsigned toward, unsigned keep);
 unsigned max_tinted(unsigned rgb);
+// What a sliver dims by its colours on the glass (an agent of the row between looks): every colour C() takes, after
+// its tint, dimmed `t` of MAX_ONE of the way as V3's dimMatrix(t) dims it, until max_dim(0). max_dim_now: that t.
+void max_dim(int t);
+int max_dim_now(void);
+// V3's dimMatrix(t) in 4096ths (brightness, the Filter Effects saturate, and the opacity over black), and a colour
+// (0xRRGGBB, or 8 bits a channel) through it.
+typedef struct { int32_t m[9]; } max_dim_t;
+max_dim_t max_dim_of(int t);
+unsigned max_dim_rgb(const max_dim_t *d, unsigned rgb);
 // The dial's tokens, as Diego's mockup draws them (the spec's Tokens), and the few shades the mockup adds.
 enum {
     GROUND = 0x000000, FG = 0xEAEAF0, INK = 0xEFE7DE, RECAP = 0xD6D6D2, DIM = 0xADA6AD, REST = 0x9A9AA6,
@@ -134,16 +143,24 @@ void max_motion(uint32_t now_ms, uint32_t ms);
 // ---- App Detail's row off the glass (max_ui_layer.c) ----
 // Paints one agent of the row from the glass's x.
 typedef void (*max_paint_t)(ht_scene_t *s, int x, const void *arg);
-// A frame of the row begins: the layers painted for the last one are done with.
+// A frame of the row begins: the patches drawn for the last one are done with.
 void max_layer_frame(void);
-// The glass's [l, r) of an agent x..x + w, painted where it lies and dimmed and blurred `dim` (MAX_ONE whole) of the
-// way, this frame: an agent between looks.
-void max_layer_fresh(ht_scene_t *s, int x, int w, int l, int r, int dim, max_paint_t paint, const void *arg);
 // The glass's [l, r) of a settled sliver from x (SLIVER_W wide), dimmed and blurred whole: painted from x 0 and kept
 // while what it paints stays the same.
 void max_layer_kept(ht_scene_t *s, int x, int l, int r, max_paint_t paint, const void *arg);
-// How many layers were rasterised so far (a test's count of what was kept).
+// The runs from `from` on (a pet, a logo or the ">_" mark, drawn on one colour `ground`) as one image over the glass:
+// dimmed and blurred `dim` (MAX_ONE whole) of the way as a sliver's are, and `keep` of 256 there by its alpha, so what
+// lies under it shows through (no box of the ground over it, as a fade by colours would leave). Painted again only
+// when the runs, the ground or the dim change.
+void max_layer_pet(ht_scene_t *s, int from, unsigned ground, int dim, unsigned keep);
+// The runs from `from` on, an agent of the row drawn on the glass from x (w wide) with its colours dimmed `dim` of the
+// way (max_dim) and its pets by max_layer_pet, cut to the glass's [l, r) as its own layer would be cut, and its rail
+// and its sides blurred as the layer's blur would blur them.
+void max_layer_cut(ht_scene_t *s, int from, int x, int w, int l, int r, int dim);
+// How many layers and pets were rasterised so far (a test's count of what was kept).
 unsigned max_layer_painted(void);
+// Every kept layer and pet image dropped, the pets' pixels scribbled over (a test's fresh start).
+void max_layer_forget(void);
 
 // ---- the pages, each over the whole glass ----
 // App Detail: the app column, the row of agents and the bell; an agent open across the row while the agent page is up.
@@ -152,13 +169,9 @@ void max_draw_ambient(ht_scene_t *s);                                           
 // The open agent in the row, x..x + w over the glass's height (max_ui_agent.c).
 void max_draw_agent(ht_scene_t *s, const max_agent_t *a, int x, int w, uint32_t now_ms);
 // Its pet, words, band and X without its ground, glow and rail, over `under` and its glow glow_h px down: as it fades
-// in or out, `keep` of 256 there (its words by their colours, its pet veiled toward that glow), its hits recorded all
-// the same.
+// in or out, `keep` of 256 there (its words by their colours, its pet by its alpha), its hits recorded all the same.
 void max_agent_body(ht_scene_t *s, const max_agent_t *a, int x, int w, unsigned keep, unsigned under, int glow_h,
                     uint32_t now_ms);
-// The runs from `from` on (a pet), veiled 256 - keep of 256 over their box toward what lies under them: `top` at the
-// glass's top to `bottom` gh px down, `bottom` below.
-void max_fade_runs(ht_scene_t *s, int from, unsigned top, unsigned bottom, int gh, unsigned keep);
 void max_draw_attention(ht_scene_t *s, const max_agent_t *a, uint32_t now_ms);   // max_ui_card.c
 void max_draw_inbox(ht_scene_t *s, uint32_t now_ms);                             // max_ui_lists.c
 void max_draw_apps(ht_scene_t *s);                                               // max_ui_lists.c

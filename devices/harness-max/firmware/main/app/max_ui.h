@@ -142,6 +142,12 @@ uint32_t max_ui_next_wake_ms(uint32_t now_ms);
 // ---- drawing (render task) ----
 // Draw the model into `scene`, which the caller has cleared. Keeps the hit areas for max_ui_touch.
 void max_ui_render(ht_scene_t *scene, uint32_t now_ms);
+// Its blurs (the pets and edges of App Detail's moving agents) kept from max_ui_render for the frame path to share
+// between its cores (true) or done in it (false, the default). Shared, each task that paints the scene's strips calls
+// max_ui_work (0 the render task, 1 the other) before it paints any: it takes the next blur nobody has until none is
+// left, then returns once the other task's last is done too. A scene shown before its blurs are done shows garbage.
+void max_ui_share(bool on);
+void max_ui_work(int worker);
 
 // ---- the finger (touch task), landscape glass coordinates ----
 typedef enum {

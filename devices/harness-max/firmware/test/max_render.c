@@ -429,8 +429,9 @@ static void s_form_toast(void)
 }
 
 // App Detail's row in motion, at a frame the render task draws: an agent opening half way through the row's move
-// (210 ms of 420), its neighbours narrowing and dimming, the row carried along; the row under a finger mid-drag, the
-// cells cut at its ends. The frames before are drawn here, the one shown by draw().
+// (210 ms of 420), its neighbours narrowing and dimming, the row carried along; one closing three quarters through its
+// panel's fade out (225 ms of 300), its face coming back across it; the row under a finger mid-drag, the cells cut at
+// its ends. The frames before are drawn here, the one shown by draw().
 static void frame(uint32_t now)
 {
     ht_scene_clear(&S, ht_rgb(HT_THEME_CANVAS));
@@ -443,6 +444,14 @@ static void s_row_opening(void)
     frame(T0 - 1000);
     max_open("rate");
     frame(T0 - 210);
+}
+static void s_row_closing(void)
+{
+    orca();
+    show(MAX_VIEW_AGENT, "rate");
+    frame(T0 - 2000);
+    max_show(MAX_VIEW_OVERVIEW);
+    frame(T0 - 225);
 }
 static void s_row_drag(void)
 {
@@ -471,7 +480,7 @@ static const screen_t SCREENS[] = {
     {"ambient-no-agents", s_ambient_no_agents}, {"not-connected", s_not_connected}, {"update", s_update},
     {"form-opening", s_form_opening}, {"form-page", s_form_page}, {"form-start", s_form_start},
     {"form-busy", s_form_busy}, {"form-failed", s_form_failed}, {"form-say", s_form_say}, {"form-toast", s_form_toast},
-    {"row-opening", s_row_opening}, {"row-drag", s_row_drag},
+    {"row-opening", s_row_opening}, {"row-closing", s_row_closing}, {"row-drag", s_row_drag},
 };
 enum { SCREEN_COUNT = sizeof SCREENS / sizeof SCREENS[0] };
 

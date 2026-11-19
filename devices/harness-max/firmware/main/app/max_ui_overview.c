@@ -4,13 +4,15 @@
 // status rail, a faint glow of its chip's colour from the top, its pet holding one frame, its name, the line of its
 // task and its state chip. An agent open (the agent page) lies across the row, the agents beside it dimmed and blurred
 // slivers: its pet smaller and lower, its words gone. The row moves as V3's (max_ui_row.c): an agent opening widens
-// over its neighbours as they narrow, its face fading and its panel coming in, and the row follows the finger.
+// over its neighbours as they narrow, its face fading and its panel coming in, and the row follows the finger. An
+// agent between looks is drawn on the glass as a cell is, dimmed by its colours and cut to its window (max_ui_layer.c).
 // Ambient: the clock large, the date, a few still stars, the agents' pets relaxing, and what the bar has to say ("All
 // quiet").
 #include <stdio.h>
 #include <string.h>
 
 #include "max_ui_draw.h"
+#include "pod/pod_mem.h"   // EXT_RAM_BSS_ATTR: a cross-fade's runs, past the render task's frame
 
 enum {
     APP_PAD = DX(26), APP_ICON = DY(60), GRID = DY(20), CELL_PAD = DX(22), TASK_W = DX(330),
@@ -118,19 +120,22 @@ static void centred_rows(ht_scene_t *s, int cx, int y, int w, int rows, unsigned
 typedef struct { unsigned ink, pct, under; int gh; } under_t;
 
 // A cell's face, a cell wide from fx (V3 _Face): its pet holding one frame, `sl` of the way to a sliver's (.6 the size,
-// 52 px lower), its name, the line of its task and its chip; the pet `pet` and the words `words` of MAX_ONE there over
-// what lies under them.
+// 52 px lower), its name, the line of its task and its chip; the pet `pet` (by its alpha) and the words `words` (by
+// their colours) of MAX_ONE there over what lies under them, all dimmed as C() dims (max_dim).
 static void face(ht_scene_t *s, int fx, const max_agent_t *a, int sl, int pet, int words, const under_t *u)
 {
     const int cx = fx + CELL_W / 2, inner = CELL_W - 2 * CELL_PAD;
     const int half = PET_HALF - (PET_HALF - SLIVER_HALF) * sl / MAX_ONE;
     const int h = PET_H - (PET_H - SLIVER_PET_H) * sl / MAX_ONE;
     const int foot = PET_FOOT + (SLIVER_FOOT - PET_FOOT) * sl / MAX_ONE;
-    const int from = s->count;
-    const unsigned ground = glow_at(u->ink, u->pct, u->under, u->gh, foot - h / 2);
+    const int from = s->count, dim = max_dim_now();
+    // Its ground as a cell's at rest, also while the panel's darkens it (by 6 levels at most): a frame below 1x is
+    // resampled once a ground, not again every frame of a move.
+    const unsigned ground = glow_at(u->ink, u->pct, GROUND, GLOW_H, foot - h / 2);
+    max_dim(0);   // its image dims it by the pixel
     max_pet(s, a->engine, max_pet_scene(a, false), cx, foot, half, h, ground, 0, true);
-    if (pet < MAX_ONE)
-        max_fade_runs(s, from, max_mix(u->ink, u->under, u->pct), u->under, u->gh, (unsigned)pet * 256 / MAX_ONE);
+    max_dim(dim);
+    max_layer_pet(s, from, ground, dim, (unsigned)pet * 256 / MAX_ONE);
     const unsigned keep = (unsigned)words * 256 / MAX_ONE;
     if (!keep) return;
     max_tint(u->under, keep);
@@ -165,12 +170,33 @@ static void sliver(ht_scene_t *s, int x, const void *arg)
 typedef struct {
     const max_agent_t *a;
     int w, sl, words, face, dim, ground, panel;
-    bool cover;   // something drawn before spills over it: its ground first
+    bool opening;   // its panel is on its way in
+    bool cover;     // something drawn before spills over it: its ground first
     uint32_t now;
 } item_t;
 
+// A run that hides what lies under it, the cross-fade's box: a band, a chip's pill, a round button; not a dot or a bar.
+static bool box_run(const ht_run_t *r)
+{
+    const int k = r->pro_kind, least = DY(24);   // PRO_RECT 2, PRO_RECT_AA 4, PRO_RECT_AA_STROKE 5
+    return (k == 2 || k == 4 || k == 5) && r->w >= least && r->pro_height >= least;
+}
+// The runs [from, mid) going and [mid, count) coming, as V3's cross-fade needs them when both fade by their colours
+// toward the ground under them: both one's boxes first, the going one's under the coming one's, then both one's words
+// and pets the same way. So neither one's box covers the other's words or pet (V3 stacks the two by their opacity),
+// and the one coming is on top.
+static void cross(ht_scene_t *s, int from, int mid)
+{
+    static EXT_RAM_BSS_ATTR ht_run_t runs[HT_RUNS];
+    int n = 0;
+    for (int pass = 0; pass < 4; pass++)
+        for (int i = pass & 1 ? mid : from, end = pass & 1 ? s->count : mid; i < end; i++)
+            if (box_run(&s->runs[i]) == (pass < 2)) runs[n++] = s->runs[i];
+    memcpy(&s->runs[from], runs, (size_t)n * sizeof runs[0]);
+}
+
 // The whole cell as V3 stacks it: its ground going to the panel's, the glow, the rail and the line, the face (moved
-// to a sliver's middle, its pet and words fading), and the open agent's panel over it at its opacity.
+// to a sliver's middle, its pet and words fading), and the open agent's panel at its opacity, crossing the face.
 static void paint_item(ht_scene_t *s, int x, const void *arg)
 {
     const item_t *it = arg;
@@ -179,16 +205,20 @@ static void paint_item(ht_scene_t *s, int x, const void *arg)
     const under_t u = {max_chip_ink(a), glow_pct(a), mix_q(PANEL, g, it->panel),
                        GLOW_H + (PANEL_GLOW_H - GLOW_H) * it->panel / MAX_ONE};
     if (it->cover || u.under != GROUND) ht_pro_rect(s, x, 0, it->w, HT_HEIGHT, 0, C(u.under));
-    // While a pet fades by a veil its glow is not dithered: the veil mixes toward the same rows, so no box shows.
-    const bool veiled = it->face < MAX_ONE || (it->panel && it->panel < MAX_ONE);
-    const uint16_t top = C(max_mix(u.ink, u.under, u.pct));
-    if (u.pct && veiled) pod_grad_aa(s, x, 0, it->w, u.gh, 0, top, C(u.under));
-    else if (u.pct) pod_grad_aa_dither(s, x, 0, it->w, u.gh, 0, top, C(u.under));
+    if (u.pct) pod_grad_aa_dither(s, x, 0, it->w, u.gh, 0, C(max_mix(u.ink, u.under, u.pct)), C(u.under));
     rail(s, x, it->w, RAIL_H, max_rail_ink(a));
     right_line(s, x, it->w);
-    const int seen = it->face * (MAX_ONE - it->panel) / MAX_ONE;
-    if (seen) face(s, x + SLIVER_DX * it->sl / MAX_ONE, a, it->sl, seen, it->words * seen / MAX_ONE, &u);
-    if (it->panel) max_agent_body(s, a, x, OPEN_W, (unsigned)it->panel * 256 / MAX_ONE, u.under, u.gh, it->now);
+    const int seen = it->face * (MAX_ONE - it->panel) / MAX_ONE, from = s->count;
+    const unsigned keep = (unsigned)it->panel * 256 / MAX_ONE;
+    for (int pass = 0, mid = from; pass < 2; pass++) {   // the one going first
+        if ((pass == 0) == it->opening) {
+            if (seen) face(s, x + SLIVER_DX * it->sl / MAX_ONE, a, it->sl, seen, it->words * seen / MAX_ONE, &u);
+        } else if (it->panel) {
+            max_agent_body(s, a, x, OPEN_W, keep, u.under, u.gh, it->now);
+        }
+        if (pass == 0) mid = s->count;
+        else if (mid > from && s->count > mid) cross(s, from, mid);
+    }
 }
 
 // A cell or a sliver the finger can open, as on the glass.
@@ -216,7 +246,7 @@ static void cut_hits(int h, int l, int r, bool keep)
     max_m.hit_count = k;
 }
 
-typedef enum { AS_CELL, AS_SLIVER, AS_OPEN, AS_ON_GLASS, AS_LAYER } kind_t;
+typedef enum { AS_CELL, AS_SLIVER, AS_OPEN, AS_ON_GLASS, AS_MOVING } kind_t;
 static kind_t kind_of(const item_t *it)
 {
     if (!it->sl && !it->dim && it->words == MAX_ONE && it->face == MAX_ONE && !it->ground && !it->panel &&
@@ -227,15 +257,15 @@ static kind_t kind_of(const item_t *it)
         return AS_SLIVER;
     if (!it->sl && !it->dim && !it->face && it->ground == MAX_ONE && it->panel == MAX_ONE && it->w == OPEN_W)
         return AS_OPEN;
-    // Not dimmed and at least a cell wide, its face fits it: drawn on the glass. Else off it, cut and dimmed.
-    return !it->dim && it->w >= CELL_W ? AS_ON_GLASS : AS_LAYER;
+    // Not dimmed, at least a cell wide and its face at its left: as it is. Else cut to its window and dimmed.
+    return !it->dim && !it->sl && it->w >= CELL_W ? AS_ON_GLASS : AS_MOVING;
 }
 static item_t item_of(const max_place_t *p, uint32_t now_ms)
 {
     const max_look_t *l = p->look;
     return (item_t){p->a, p->w, max_tween_at(&l->sl, now_ms), max_tween_at(&l->words, now_ms),
                     max_tween_at(&l->face, now_ms), max_tween_at(&l->dim, now_ms), max_tween_at(&l->ground, now_ms),
-                    max_tween_at(&l->panel, now_ms), false, now_ms};
+                    max_tween_at(&l->panel, now_ms), l->panel.to == MAX_ONE, false, now_ms};
 }
 // How far right of x what is drawn on the glass for it reaches: the open agent's panel is laid out at its full width.
 static int reach(const item_t *it, kind_t k)
@@ -255,7 +285,7 @@ void max_draw_overview(ht_scene_t *s, uint32_t now_ms)
     for (int i = 0; i < n; i++) {
         const item_t it = item_of(&row[i], now_ms);
         const kind_t k = kind_of(&it);
-        if (k == AS_SLIVER || k == AS_LAYER || row[i].x + row[i].w <= ROW_X || row[i].x >= ROW_X + ROW_W) continue;
+        if (k == AS_SLIVER || k == AS_MOVING || row[i].x + row[i].w <= ROW_X || row[i].x >= ROW_X + ROW_W) continue;
         spill_l |= row[i].x < ROW_X;
         spill_r |= row[i].x + reach(&it, k) > ROW_X + ROW_W;
     }
@@ -289,8 +319,14 @@ void max_draw_overview(ht_scene_t *s, uint32_t now_ms)
         else if (k == AS_SLIVER) max_layer_kept(s, p->x, l, r, sliver, p->a);
         else if (k == AS_OPEN) max_draw_agent(s, p->a, p->x, OPEN_W, now_ms);
         else if (k == AS_ON_GLASS) paint_item(s, p->x, &it);
-        else max_layer_fresh(s, p->x, p->w, l, r, it.dim, paint_item, &it);
-        if (k != AS_SLIVER && k != AS_LAYER) drawn = imax(drawn, p->x + reach(&it, k));
+        else {
+            const int from = s->count;
+            max_dim(it.dim);
+            paint_item(s, p->x, &it);
+            max_dim(0);
+            max_layer_cut(s, from, p->x, p->w, l, r, it.dim);
+        }
+        if (k != AS_SLIVER && k != AS_MOVING) drawn = imax(drawn, p->x + reach(&it, k));
         cut_hits(h, l, r, open);
     }
     if (spill_l) {

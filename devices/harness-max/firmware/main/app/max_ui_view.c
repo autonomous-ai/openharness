@@ -236,33 +236,28 @@ unsigned max_mix(unsigned a, unsigned b, unsigned pct)
     return out;
 }
 static unsigned s_toward, s_keep = 256;
+static int s_dim;
+static max_dim_t s_dim_m;
 void max_tint(unsigned toward, unsigned keep)
 {
     s_toward = toward;
     s_keep = keep < 256 ? keep : 256;
 }
+void max_dim(int t)
+{
+    s_dim = t;
+    if (t) s_dim_m = max_dim_of(t);
+}
+int max_dim_now(void) { return s_dim; }
 unsigned max_tinted(unsigned rgb)
 {
-    if (s_keep >= 256) return rgb;
-    unsigned out = 0;
-    for (int sh = 0; sh <= 16; sh += 8)
-        out |= ((((rgb >> sh) & 0xff) * s_keep + ((s_toward >> sh) & 0xff) * (256 - s_keep) + 128) >> 8) << sh;
-    return out;
-}
-void max_fade_runs(ht_scene_t *s, int from, unsigned top, unsigned bottom, int gh, unsigned keep)
-{
-    if (keep >= 256 || from >= s->count) return;
-    ht_rect_t b = ht_run_bounds(&s->runs[from]);
-    for (int i = from + 1; i < s->count; i++) {
-        const ht_rect_t r = ht_run_bounds(&s->runs[i]);
-        const int x1 = b.x + b.w > r.x + r.w ? b.x + b.w : r.x + r.w;
-        const int y1 = b.y + b.h > r.y + r.h ? b.y + b.h : r.y + r.h;
-        b.x = b.x < r.x ? b.x : r.x;
-        b.y = b.y < r.y ? b.y : r.y;
-        b.w = (int16_t)(x1 - b.x);
-        b.h = (int16_t)(y1 - b.y);
+    unsigned out = rgb;
+    if (s_keep < 256) {
+        out = 0;
+        for (int sh = 0; sh <= 16; sh += 8)
+            out |= ((((rgb >> sh) & 0xff) * s_keep + ((s_toward >> sh) & 0xff) * (256 - s_keep) + 128) >> 8) << sh;
     }
-    pod_veil(s, b.x, b.y, b.w, b.h, b.x + b.w, true, 0, gh, ht_rgb(top), ht_rgb(bottom), 0, (256 - keep) * 255 / 256);
+    return s_dim ? max_dim_rgb(&s_dim_m, out) : out;
 }
 void max_hit(int x, int y, int w, int h, max_hit_kind_t kind, int arg)
 {
@@ -583,6 +578,7 @@ void max_ui_render(ht_scene_t *s, uint32_t now_ms)
     max_m.row.open_l = max_m.row.open_r = 0;
     s_moving = false;
     max_tint(0, 256);
+    max_dim(0);
     if (max_m.update_pct >= 0) {
         update_screen(s);
     } else {
