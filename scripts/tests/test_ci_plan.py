@@ -126,7 +126,10 @@ class SelectionTests(unittest.TestCase):
         for text in ("libwebkit2gtk-4.1-dev", "libayatana-appindicator3-dev", "librsvg2-dev",
                      "working-directory: device-app/ui", "npx vitest run", "npm run build",
                      "cargo test --locked --manifest-path device-app/src-tauri/Cargo.toml",
-                     "xvfb", "openbox", "xdotool", "xterm", "--ignored x11_live", "x11_live ... ok"):
+                     "xvfb", "openbox", "xdotool", "xterm", "--ignored x11_live", "x11_live ... ok",
+                     # A Windows leg runs the lib's rules; the Linux steps stay on the Linux leg.
+                     "windows-latest", "cargo test --locked --lib --manifest-path device-app/src-tauri/Cargo.toml",
+                     "strategy.job-index", "runner.os == 'Linux'"):
             self.assertIn(text, job)
         self.assertLess(job.index("npm run build"), job.index("cargo test"))  # the binary embeds ui/dist
         # The live X11 step reuses the unit tests' build.
