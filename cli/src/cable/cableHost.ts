@@ -692,9 +692,11 @@ export class DaemonCableHost implements CableHost {
     this.registry = registry
   }
 
-  /** That app's own order, for its ring alone. It reaches the dial on the session's next list, as any ring change. */
-  setRank(app: string, rank: RingRank): void {
-    this.ranks.set(app, rank)
+  /** That app's own order, for its ring alone; undefined drops it. It reaches the dial on the session's next list, as
+   *  any ring change. */
+  setRank(app: string, rank: RingRank | undefined): void {
+    if (rank) this.ranks.set(app, rank)
+    else this.ranks.delete(app)
   }
 
   /** That app's ring lists only the agents in scope while the app is shown and settled in front; undefined lists them
