@@ -290,6 +290,43 @@ describe('orcaHomesDeps', () => {
     expect(await readOrcaHomes({ ...orcaHomesDeps(), exists: () => false })).toEqual({ homes: NONE, failure: 'no orca' })
     expect(existsSync(ran)).toBe(false)
   })
+
+  // On Linux Orca links its CLI as `orca-ide`, beside the screen reader's `orca`.
+  describe("on Linux Orca's CLI is orca-ide", () => {
+    const linked = (target: string, name: string): string => {
+      const link = join(home(), name)
+      symlinkSync(target, link)
+      return link
+    }
+    const linux = () => orcaBinary({ ...orcaHomesDeps(), platform: 'linux', exists: () => false })
+
+    it('found by its real path, before an orca launcher', () => {
+      const ide = linked(script('exit 0', 'Orca/resources/bin/orca-ide'), 'orca-ide')
+      const orca = linked(script('exit 0', 'Orca/resources/bin/orca'), 'orca')
+      vi.stubEnv('PATH', [dirname(orca), dirname(ide)].join(delimiter))
+      expect(linux()).toBe(ide)
+    })
+
+    it('the screen reader alone gives none', () => {
+      vi.stubEnv('PATH', dirname(script('exit 0')))
+      expect(linux()).toBeNull()
+    })
+
+    it('an orca-ide whose real path is elsewhere is passed over', () => {
+      const other = script('exit 0', 'orca-ide')
+      const orca = linked(script('exit 0', 'Orca/resources/bin/orca'), 'orca')
+      vi.stubEnv('PATH', [dirname(other), dirname(orca)].join(delimiter))
+      expect(linux()).toBe(orca)
+      vi.stubEnv('PATH', dirname(other))
+      expect(linux()).toBeNull()
+    })
+
+    it('on macOS orca-ide is never looked for', () => {
+      const names: string[] = []
+      orcaBinary({ onPath: (name) => { names.push(name); return null }, exists: () => false, platform: 'darwin' })
+      expect(names).toEqual(['orca'])
+    })
+  })
 })
 
 describe('createOrcaHomesCache', () => {
