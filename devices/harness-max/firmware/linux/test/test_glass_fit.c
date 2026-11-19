@@ -85,6 +85,97 @@ static void test_scaled_flat_and_bars(void)
         }
 }
 
+// The paint as it was first written, the 2 x 2 bilinear blend worked out whole for every picture pixel: what
+// glass_fit_paint's two passes must give, to the bit.
+typedef struct {
+    int a, b, w;
+} ref_tap_t;
+
+static ref_tap_t ref_tap(int p, int pic, int glass)
+{
+    int64_t s = ((int64_t)(2 * p + 1) * glass << 16) / (2 * pic) - (1 << 15);
+    if (s < 0) s = 0;
+    if (s > (int64_t)(glass - 1) << 16) s = (int64_t)(glass - 1) << 16;
+    const int a = (int)(s >> 16);
+    return (ref_tap_t){a, a + 1 < glass ? a + 1 : a, (int)((s >> 8) & 255)};
+}
+
+static void ref_unpack(uint16_t c, int *r, int *g, int *b)
+{
+    const int r5 = c >> 11, g6 = (c >> 5) & 63, b5 = c & 31;
+    *r = r5 << 3 | r5 >> 2;
+    *g = g6 << 2 | g6 >> 4;
+    *b = b5 << 3 | b5 >> 2;
+}
+
+static uint32_t ref_blend(const uint16_t *glass, int stride, ref_tap_t x, ref_tap_t y)
+{
+    const uint16_t *row0 = glass + y.a * stride, *row1 = glass + y.b * stride;
+    int r[4], g[4], b[4];
+    ref_unpack(row0[x.a], &r[0], &g[0], &b[0]);
+    ref_unpack(row0[x.b], &r[1], &g[1], &b[1]);
+    ref_unpack(row1[x.a], &r[2], &g[2], &b[2]);
+    ref_unpack(row1[x.b], &r[3], &g[3], &b[3]);
+    const int w0 = (256 - x.w) * (256 - y.w), w1 = x.w * (256 - y.w), w2 = (256 - x.w) * y.w, w3 = x.w * y.w;
+    const uint32_t ro = (uint32_t)(r[0] * w0 + r[1] * w1 + r[2] * w2 + r[3] * w3 + 32768) >> 16;
+    const uint32_t go = (uint32_t)(g[0] * w0 + g[1] * w1 + g[2] * w2 + g[3] * w3 + 32768) >> 16;
+    const uint32_t bo = (uint32_t)(b[0] * w0 + b[1] * w1 + b[2] * w2 + b[3] * w3 + 32768) >> 16;
+    return ro << 16 | go << 8 | bo;
+}
+
+static void ref_paint(const glass_fit_t *f, const uint16_t *glass, glass_fit_rect_t land, uint32_t *out, int stride)
+{
+    const int lw = f->turned ? f->out_h : f->out_w;
+    for (int ly = land.y; ly < land.y + land.h; ly++)
+        for (int lx = land.x; lx < land.x + land.w; lx++) {
+            const ref_tap_t x = ref_tap(lx - f->pic.x, f->pic.w, f->glass_w);
+            const ref_tap_t y = ref_tap(ly - f->pic.y, f->pic.h, f->glass_h);
+            const int ox = f->turned ? ly : lx, oy = f->turned ? lw - 1 - lx : ly;
+            out[(size_t)oy * stride + ox] = ref_blend(glass, f->glass_w, x, y);
+        }
+}
+
+// Every picture pixel glass_fit_paint writes is the whole 2 x 2 blend's, on every fit (turned or not, scaled down, up
+// or not at all, a picture with black either side), for the whole picture and for damage of any size anywhere, and
+// nothing outside the rectangle asked for is written.
+static void test_paint_matches_blend(void)
+{
+    static const struct { int gw, gh, ow, oh; } FITS[] = {
+        {1920, 480, 320, 1480},   // the ESP32-P4's glass on the bar: turned, 2/3, black either side
+        {1920, 415, 320, 1480},   // the bar's own shape: turned, filling it
+        {1920, 480, 1920, 1080},  // a landscape monitor: unturned, unscaled, black above and below
+        {1920, 480, 1280, 720},   // unturned and scaled down
+        {37, 11, 100, 300},       // turned and scaled up
+        {37, 11, 160, 90},        // unturned and scaled up
+        {1000, 333, 250, 777},    // turned, odd sizes, no simple ratio
+        {9, 4, 4, 9},             // turned, unscaled
+    };
+    static uint16_t glass[1920 * 480];
+    static uint32_t want[1920 * 1080], got[1920 * 1080];
+    unsigned seed = 99;
+    for (size_t c = 0; c < sizeof FITS / sizeof FITS[0]; c++) {
+        const glass_fit_t f = glass_fit(FITS[c].gw, FITS[c].gh, FITS[c].ow, FITS[c].oh);
+        const size_t px = (size_t)f.out_w * f.out_h;
+        for (int rep = 0; rep < 40; rep++) {
+            fill(glass, f.glass_w * f.glass_h, seed++);
+            glass_fit_rect_t land = f.pic;
+            if (rep) {   // a change somewhere on the glass, from one pixel to most of it, as a frame's damage
+                seed = seed * 1103515245u + 12345u;
+                const int x = (int)(seed >> 8) % f.glass_w, y = (int)(seed >> 4) % f.glass_h;
+                seed = seed * 1103515245u + 12345u;
+                const int w = 1 + (int)(seed >> 8) % (rep % 3 ? 24 : f.glass_w - x);
+                const int h = 1 + (int)(seed >> 4) % (rep % 3 ? 24 : f.glass_h - y);
+                land = glass_fit_damage(&f, (glass_fit_rect_t){x, y, w > f.glass_w - x ? f.glass_w - x : w,
+                                                              h > f.glass_h - y ? f.glass_h - y : h});
+            }
+            for (size_t i = 0; i < px; i++) want[i] = got[i] = 0xdeadbeef;
+            ref_paint(&f, glass, land, want, f.out_w);
+            glass_fit_paint(&f, glass, land, got, f.out_w);
+            CHECK(!memcmp(want, got, px * sizeof want[0]));
+        }
+    }
+}
+
 // Every raster pixel a change to a glass rectangle alters lies inside glass_fit_damage of it, and the damage is no more
 // than a pixel or two wider than the change's own footprint.
 static void check_damage(const glass_fit_t *f, glass_fit_rect_t g)
@@ -233,6 +324,7 @@ int main(void)
     test_fits();
     test_unscaled_pixels();
     test_scaled_flat_and_bars();
+    test_paint_matches_blend();
     test_damage();
     test_union();
     test_flip_rects();
