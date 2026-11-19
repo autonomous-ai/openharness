@@ -321,7 +321,17 @@ jobs:
           node-version: ${{ env.CLI_NODE_VERSION }}
           cache: npm
           cache-dependency-path: cli/package-lock.json
-      - run: sudo apt-get update && sudo apt-get install -y zsh
+      - name: Install zsh and repair the runner's completion permissions
+        run: |
+          sudo apt-get update && sudo apt-get install -y zsh
+          # As in cli-e2e.yml: the image's writable completion directories make the real
+          # new-user PTY test stop at compinit's security prompt before its command runs.
+          insecure=$(zsh -fc 'autoload -U compaudit && compaudit' 2>/dev/null | grep '^/' | sort -u || true)
+          if [ -n "$insecure" ]; then
+            echo "$insecure" | xargs sudo chown root:root
+            echo "$insecure" | xargs sudo chmod g-w,o-w
+          fi
+          zsh -fc 'autoload -U compaudit && compaudit'
       - run: npm ci --no-audit --no-fund
       # Vitest partitions files using the same config in every shard. Keep the
       # existing worker cap/isolation: subprocess fixtures still need spare CPUs.
