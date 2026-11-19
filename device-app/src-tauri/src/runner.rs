@@ -674,7 +674,7 @@ mod tests {
     use crate::app::App;
     use crate::follow::{AX_SETTINGS, AxTrust, CHATGPT_BUNDLE, ChatgptWindow, Heard, NoFollow};
     use crate::front::{FrontSource, NoFront};
-    use crate::install::{DESKTOP, HOST, INSTALLING_TMUX, NOT_INSTALLED, NOT_SUPPORTED, Shell};
+    use crate::install::{FINISH_IN_TERMINAL, GETTING_READY, INSTALLING_TMUX, NOT_INSTALLED, Place, Run, Shell, runs};
     use crate::loginitem::LoginItem;
     use crate::state::StateFile;
     use crate::tabs::{NoTabs, Selected, TabApp, TabError, TabScripts};
@@ -724,9 +724,9 @@ mod tests {
     #[derive(Default)]
     struct Doubles {
         failing: AtomicBool,
-        /// The home the host script puts a `harness` launcher in; None: the shell installs nothing.
+        /// The home the next shell run puts a `harness` launcher in; None: the shell installs nothing.
         installs_into: Mutex<Option<PathBuf>>,
-        /// The lines each shell run hands its sink.
+        /// The lines each shell run behind the Install screen hands its sink.
         prints: Mutex<Vec<String>>,
         ran: Mutex<Vec<String>>,
         opened: Mutex<Vec<Vec<String>>>,
@@ -745,12 +745,15 @@ mod tests {
     }
 
     impl Shell for Doubles {
-        fn run(&self, line: &str, _deadline: Duration, sink: &mut dyn FnMut(&str)) -> io::Result<Output> {
-            self.ran.lock().unwrap().push(line.to_string());
-            if let Some(home) = self.installs_into.lock().unwrap().as_deref().filter(|_| line == HOST) {
-                put_launcher(home);
+        fn run(&self, run: &Run, _deadline: Duration, sink: &mut dyn FnMut(&str)) -> io::Result<Output> {
+            self.ran.lock().unwrap().push(run.line.to_string());
+            if let Some(home) = self.installs_into.lock().unwrap().take() {
+                put_launcher(&home);
             }
-            self.prints.lock().unwrap().iter().for_each(|printed| sink(printed));
+            // A terminal's lines are the person's: a run there hands the app none.
+            if run.place == Place::Background {
+                self.prints.lock().unwrap().iter().for_each(|printed| sink(printed));
+            }
             Ok(Output { code: Some(0), ..Output::default() })
         }
     }
@@ -960,6 +963,19 @@ mod tests {
             self.next()
         }
 
+        /// Runs an install, and gives each step it told, then how it ended.
+        fn install(&self) -> (Vec<&'static str>, Result<(), Vec<String>>) {
+            assert_eq!(self.runner.run(Effect::RunInstall), None);
+            let mut steps = Vec::new();
+            loop {
+                match self.next() {
+                    Event::InstallStep(step) => steps.push(step),
+                    Event::InstallDone(result) => return (steps, result),
+                    other => panic!("not the install's: {other:?}"),
+                }
+            }
+        }
+
         fn logged(&self, line: &str) -> bool {
             self.fake.log().lines().iter().any(|logged| logged == line)
         }
@@ -1056,7 +1072,7 @@ mod tests {
             // be found.
             path_var: Some("/usr/bin:/bin".into()),
             cli_override: Some(fake.program()),
-            shell: Some(doubles.clone()),
+            shell: doubles.clone(),
             login_item: doubles.clone(),
             state: doubles.clone(),
             log: fake.log(),
@@ -1209,10 +1225,12 @@ mod tests {
     #[test]
     fn an_install_counts_only_when_a_cli_is_there() {
         let w = world_where(|doors| doors.cli_override = None);
-        assert_eq!(w.answer(Effect::RunInstall), Event::InstallDone(Err(vec![NOT_INSTALLED.into()])));
+        assert_eq!(w.install().1, Err(vec![NOT_INSTALLED.into()]));
         *w.doubles.installs_into.lock().unwrap() = Some(w.home.path().to_path_buf());
-        assert_eq!(w.answer(Effect::RunInstall), Event::InstallDone(Ok(())));
-        assert_eq!(*w.doubles.ran.lock().unwrap(), [HOST, DESKTOP, HOST, DESKTOP]);
+        assert_eq!(w.install().1, Ok(()));
+        // This OS's runs, in order, each time.
+        let lines: Vec<&str> = runs(std::env::consts::OS).iter().map(|run| run.line).collect();
+        assert_eq!(*w.doubles.ran.lock().unwrap(), [lines.as_slice(), lines.as_slice()].concat());
         // The CLI the install found is the one the runs after it use.
         assert_eq!(w.answer(Effect::ReadAuth), Event::Auth(Some(true)));
     }
@@ -1222,15 +1240,13 @@ mod tests {
     fn an_install_tells_its_steps() {
         let w = world();
         *w.doubles.prints.lock().unwrap() = vec!["▸ Installing the managed tmux into /x".into()];
-        assert_eq!(w.answer(Effect::RunInstall), Event::InstallStep(INSTALLING_TMUX));
-        assert_eq!(w.next(), Event::InstallDone(Ok(())));
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn install_off_a_mac_is_not_supported() {
-        let w = world_where(|doors| doors.shell = None);
-        assert_eq!(w.answer(Effect::RunInstall), Event::InstallDone(Err(vec![NOT_SUPPORTED.into()])));
+        // Linux's host half runs first, in a terminal.
+        let steps: &[&str] = if cfg!(target_os = "linux") {
+            &[FINISH_IN_TERMINAL, GETTING_READY, INSTALLING_TMUX]
+        } else {
+            &[INSTALLING_TMUX]
+        };
+        assert_eq!(w.install(), (steps.to_vec(), Ok(())));
     }
 
     #[cfg(unix)]

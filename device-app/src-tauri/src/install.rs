@@ -165,7 +165,9 @@ mod tests {
     use super::*;
     use crate::types::{MemoryLog, Output};
     use std::collections::VecDeque;
+    use std::ffi::OsStr;
     use std::io;
+    use std::path::PathBuf;
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
@@ -178,8 +180,8 @@ mod tests {
 
     impl Shell for Answers {
         /// Hands the sink each line of the answer's stdout, then of its stderr, as a run hands them before it ends.
-        fn run(&self, line: &str, deadline: Duration, sink: &mut dyn FnMut(&str)) -> io::Result<Output> {
-            self.journal.lock().unwrap().push(format!("{line} ({} s)", deadline.as_secs()));
+        fn run(&self, run: &Run, deadline: Duration, sink: &mut dyn FnMut(&str)) -> io::Result<Output> {
+            self.journal.lock().unwrap().push(format!("{} ({} s)", run.line, deadline.as_secs()));
             let answer = self.answers.lock().unwrap().pop_front().expect("an answer for each run");
             if let Ok(output) = &answer {
                 output.stdout.lines().chain(output.stderr.lines()).for_each(&mut *sink);
@@ -198,6 +200,10 @@ mod tests {
     }
 
     fn install_with(answers: Vec<io::Result<Output>>, cli: bool) -> Ran {
+        install_on("macos", answers, cli)
+    }
+
+    fn install_on(os: &str, answers: Vec<io::Result<Output>>, cli: bool) -> Ran {
         let journal = Arc::new(Mutex::new(Vec::new()));
         let shell = Answers { answers: Mutex::new(answers.into()), journal: journal.clone() };
         let log = MemoryLog::default();
@@ -206,7 +212,7 @@ mod tests {
             cli
         };
         let mut steps = Vec::new();
-        let result = install(&shell, &log, &cli_there, &mut |step| steps.push(step));
+        let result = install(os, &shell, &log, &cli_there, &mut |step| steps.push(step));
         let journal = journal.lock().unwrap().clone();
         Ran { result, journal, log: log.lines(), steps }
     }
@@ -223,10 +229,46 @@ mod tests {
         lines.iter().map(|line| line.to_string()).collect()
     }
 
+    /// A run behind the Install screen; its flag names it in the log only.
+    fn background(line: &'static str) -> Run {
+        Run { line, flag: "--host", place: Place::Background }
+    }
+
     #[test]
     fn the_lines_are_the_desktop_apps() {
         assert_eq!(HOST, "curl -fsSL https://cdn.autonomous.ai/harness/cli/install.sh | /bin/sh -s -- --host");
         assert_eq!(DESKTOP, "curl -fsSL https://cdn.autonomous.ai/harness/cli/install.sh | /bin/sh -s -- --desktop");
+    }
+
+    #[test]
+    fn the_windows_line_is_the_desktop_apps() {
+        assert_eq!(
+            WINDOWS,
+            r#"[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false); iex "& { $(irm 'https://cdn.autonomous.ai/harness/cli/install.ps1' -ErrorAction Stop) } -Desktop"; exit $LASTEXITCODE"#
+        );
+    }
+
+    #[test]
+    fn powershell_is_named_by_its_full_path() {
+        assert_eq!(POWERSHELL_ARGS, ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command"]);
+        let windows = PathBuf::from(r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe");
+        assert_eq!(powershell(None), windows);
+        assert_eq!(powershell(Some(OsStr::new(""))), windows);
+        assert_eq!(
+            powershell(Some(OsStr::new(r"D:\WINNT"))),
+            PathBuf::from(r"D:\WINNT\System32\WindowsPowerShell\v1.0\powershell.exe")
+        );
+    }
+
+    #[test]
+    fn the_runs_of_each_os() {
+        let run = |line, flag, place| Run { line, flag, place };
+        assert_eq!(
+            runs("macos"),
+            [run(HOST, "--host", Place::Background), run(DESKTOP, "--desktop", Place::Background)]
+        );
+        assert_eq!(runs("linux"), [run(HOST, "--host", Place::Terminal), run(DESKTOP, "--desktop", Place::Background)]);
+        assert_eq!(runs("windows"), [run(WINDOWS, "-Desktop", Place::Background)]);
     }
 
     #[test]
@@ -351,9 +393,9 @@ mod tests {
         // A step is a line the script marks: the same words with no `▸`, or other words after it, name none.
         let ran = install_with(vec![ended(0, "Installing harness now\n▸ Installing hn\n", ""), ended(0, "", "")], true);
         assert!(ran.steps.is_empty(), "{:?}", ran.steps);
-        assert_eq!(step_of("▸ downloading Node 24.1.0 (darwin-arm64)…"), Some(DOWNLOADING_HARNESS));
-        assert_eq!(step_of("Installing harness now"), None);
-        assert_eq!(step_of("▸ Installing hn"), None);
+        assert_eq!(step_of("macos", "▸ downloading Node 24.1.0 (darwin-arm64)…"), Some(DOWNLOADING_HARNESS));
+        assert_eq!(step_of("macos", "Installing harness now"), None);
+        assert_eq!(step_of("macos", "▸ Installing hn"), None);
     }
 
     #[test]
@@ -413,14 +455,111 @@ mod tests {
     }
 
     #[test]
-    fn the_system_shell_is_for_macos() {
-        assert_eq!(system_shell().is_some(), cfg!(target_os = "macos"));
+    fn a_windows_run_shows_downloading_harness_and_logs_only_its_step_lines() {
+        let failed = "Harness could not be installed. The step that failed: Node.";
+        let stdout = [
+            "  Downloading Node 24.22.2 (win32-x64)...",
+            "  Connection interrupted; retrying (1/3)...",
+            r"  OK Node 24.22.2 -> C:\x",
+            "",
+            failed,
+            "  The response ended prematurely.",
+            "  Run the installer again, or send this message to Harness support.",
+        ]
+        .join("\n");
+        let ran = install_on("windows", vec![ended(1, &stdout, "")], true);
+        assert_eq!(ran.journal, [within_ten_minutes(WINDOWS)]);
+        assert_eq!(ran.steps, [DOWNLOADING_HARNESS]);
+        let shown = [
+            r"OK Node 24.22.2 -> C:\x",
+            failed,
+            "The response ended prematurely.",
+            "Run the installer again, or send this message to Harness support.",
+        ];
+        assert_eq!(ran.result, Err(texts(&shown)));
+        let mut log = texts(&[
+            "install: Downloading Node 24.22.2 (win32-x64)...",
+            r"install: OK Node 24.22.2 -> C:\x",
+            &format!("install: {failed}"),
+            "install: -Desktop exit 1",
+        ]);
+        log.extend(shown.iter().map(|line| format!("install: last: {line}")));
+        assert_eq!(ran.log, log);
+    }
+
+    #[test]
+    fn a_unix_step_line_is_no_windows_step_and_the_reverse() {
+        for line in ["Downloading Harness 0.6.20...", "Downloading the terminal host 0.6.20..."] {
+            assert_eq!(step_of("windows", line), Some(DOWNLOADING_HARNESS));
+        }
+        let unix = "▸ Installing harness from https://x/y.json";
+        assert_eq!(step_of("windows", unix), None);
+        for os in ["macos", "linux"] {
+            assert_eq!(step_of(os, unix), Some(DOWNLOADING_HARNESS));
+            assert_eq!(step_of(os, "Downloading Node 24.22.2 (win32-x64)..."), None);
+        }
+
+        // Nor does the log keep one as the other's step line.
+        let ran = install_on("windows", vec![ended(0, &format!("{unix}\n✓ harness ready\n"), "")], true);
+        assert!(ran.steps.is_empty(), "{:?}", ran.steps);
+        assert_eq!(ran.log, ["install: -Desktop exit 0"]);
+        let windows = "  Downloading Harness 0.6.20...\n  OK Harness 0.6.20 -> /x\n";
+        let ran = install_with(vec![ended(0, windows, ""), ended(0, "", "")], true);
+        assert!(ran.steps.is_empty(), "{:?}", ran.steps);
+        assert_eq!(ran.log, ["install: --host exit 0", "install: --desktop exit 0"]);
+    }
+
+    #[test]
+    fn a_terminal_run_shows_finish_in_the_terminal_then_getting_ready() {
+        assert_eq!(FINISH_IN_TERMINAL, "Finish in the terminal…");
+        // The steps told and the runs in one journal: the terminal's step is told before it starts.
+        let journal = Arc::new(Mutex::new(Vec::new()));
+        let runs = vec![ended(0, "", ""), ended(0, "▸ Installing harness from https://x/y.json\n", "")];
+        let shell = Answers { answers: Mutex::new(runs.into()), journal: journal.clone() };
+        let told = |step: &str| journal.lock().unwrap().push(step.to_string());
+        let result = install("linux", &shell, &MemoryLog::default(), &|| true, &mut |step| told(step));
+        assert_eq!(result, Ok(()));
+        assert_eq!(
+            *journal.lock().unwrap(),
+            [
+                FINISH_IN_TERMINAL.to_string(),
+                within_ten_minutes(HOST),
+                GETTING_READY.to_string(),
+                within_ten_minutes(DESKTOP),
+                DOWNLOADING_HARNESS.to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_terminal_run_that_failed_stops_there() {
+        // 129: the terminal was closed before the line ended.
+        let ran = install_on("linux", vec![ended(129, "", "")], true);
+        assert_eq!(ran.result, Err(texts(&[NOT_INSTALLED])));
+        assert_eq!(ran.journal, [within_ten_minutes(HOST)]);
+        assert_eq!(ran.log, ["install: --host exit 129"]);
+        assert_eq!(ran.steps, [FINISH_IN_TERMINAL]);
+    }
+
+    #[test]
+    fn no_terminal_is_what_the_screen_shows() {
+        let no_terminal = io::Error::new(io::ErrorKind::NotFound, "No terminal found.");
+        let ran = install_on("linux", vec![Err(no_terminal)], true);
+        assert_eq!(ran.result, Err(texts(&["No terminal found."])));
+        assert_eq!(ran.log, ["install: --host could not start: No terminal found."]);
+    }
+
+    #[test]
+    fn a_terminal_runs_script_is_in_the_setup_folder() {
+        let data = PathBuf::from("data");
+        assert_eq!(system_shell(data.clone()).folder, data.join("setup"));
     }
 
     #[cfg(unix)]
     #[test]
     fn the_system_shell_runs_through_sh() {
-        let output = SystemShell.run("printf hi; exit 3", Duration::from_secs(5), &mut |_| {}).unwrap();
+        let shell = system_shell(std::env::temp_dir());
+        let output = shell.run(&background("printf hi; exit 3"), Duration::from_secs(5), &mut |_| {}).unwrap();
         assert_eq!((output.code, output.stdout.as_str()), (Some(3), "hi"));
     }
 
@@ -428,7 +567,22 @@ mod tests {
     #[test]
     fn the_system_shell_hands_its_lines() {
         let mut lines = Vec::new();
-        SystemShell.run(r"printf 'a\nb\n'", Duration::from_secs(5), &mut |line| lines.push(line.to_string())).unwrap();
+        system_shell(std::env::temp_dir())
+            .run(&background(r"printf 'a\nb\n'"), Duration::from_secs(5), &mut |line| lines.push(line.to_string()))
+            .unwrap();
         assert_eq!(lines, ["a", "b"]);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn powershell_takes_a_command_with_quotes_inside_whole() {
+        let mut lines = Vec::new();
+        // A bound, not a wait: Windows PowerShell can take seconds to start on a busy runner.
+        let output = system_shell(std::env::temp_dir())
+            .run(&background(r#"iex "& { 'hi' }"; exit 7"#), Duration::from_secs(60), &mut |line| {
+                lines.push(line.trim_end().to_string())
+            })
+            .unwrap();
+        assert_eq!((output.code, lines), (Some(7), vec!["hi".to_string()]));
     }
 }
