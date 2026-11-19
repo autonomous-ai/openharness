@@ -3,7 +3,8 @@
  * from, any delete in progress, the setup step (spec § Lifecycle), the agents told their browser is ready, and the
  * agents whose Browser is on. It holds proxy passwords, so it is the person's alone (0600).
  */
-import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
+import { atomicWriteFile } from '../../lib/secureState.js'
 import { PodmanError } from './podman.js'
 import type { BrowserSettings } from './settings.js'
 import type { SetupStep } from './setup.js'
@@ -54,8 +55,6 @@ export class StateFile {
   update(change: (s: BrowserStateData) => void): void {
     const data = this.read()
     change(data)
-    const next = `${this.path}.${process.pid}.tmp`
-    writeFileSync(next, `${JSON.stringify(data, null, 2)}\n`, { mode: 0o600 })
-    renameSync(next, this.path)
+    atomicWriteFile(this.path, `${JSON.stringify(data, null, 2)}\n`, 'cache')
   }
 }

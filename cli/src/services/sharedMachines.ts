@@ -27,11 +27,12 @@
  */
 import { homedir } from 'node:os'
 import { isAbsolute, join, parse, resolve, sep, win32 } from 'node:path'
-import { readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
+import { statSync } from 'node:fs'
 import type { CoreApi, CorePorts, GuestLaunchInput, ServiceRequests } from '../core/api.js'
 import { createGuestAccounts, guestHomeRoot, guestWorkspaceFor, type SharedFolder } from '../lib/guestAccounts.js'
 import { guestHelperStatus, installGuestHelper, type GuestHelperInstallResult, type GuestHelperState } from '../lib/guestHelperInstall.js'
 import { errorKind } from '../lib/log.js'
+import { atomicWriteJson, jsonObject, readState } from '../lib/secureState.js'
 import { createWindowsGuestAccounts } from '../lib/windows/windowsGuestAccounts.js'
 import { failed, type PortFailure, type ShareMember, type SharedMachinesPort, type SharePolicy,
   type SharedTrustPeer } from '../lib/sharedMachinesPort.js'
@@ -78,10 +79,10 @@ export interface SharedMachinesDeps {
 const OFF: LocalPolicy = { emails: [], sameDomain: false, folders: [] }
 
 export function readPolicy(file: string): LocalPolicy {
-  try {
-    const raw = JSON.parse(readFileSync(file, 'utf-8')) as Partial<LocalPolicy>
-    return { emails: normalizeEmails(raw.emails) ?? [], sameDomain: raw.sameDomain === true, folders: normalizeFolders(raw.folders) ?? [] }
-  } catch { return OFF }
+  const read = readState(file, 'cache', jsonObject)
+  if (read.state !== 'ok') return OFF
+  const raw = read.value as Partial<LocalPolicy>
+  return { emails: normalizeEmails(raw.emails) ?? [], sameDomain: raw.sameDomain === true, folders: normalizeFolders(raw.folders) ?? [] }
 }
 
 /** Folders as the owner shares them: full paths, each once, never /; null when one is not. One a line in the
@@ -130,9 +131,7 @@ export function ownerFolderProblem(path: string, home = homedir(), guests = gues
 }
 
 function writePolicy(file: string, policy: LocalPolicy): void {
-  const temp = `${file}.${process.pid}.tmp`
-  writeFileSync(temp, JSON.stringify(policy, null, 2), { mode: 0o600 })
-  renameSync(temp, file)
+  atomicWriteJson(file, policy, 'cache')
 }
 
 /** Addresses trimmed, lower case, each once; null when one is not an address or there are too many. */

@@ -12,11 +12,12 @@
  * closed. Never synced and never sent to the backend. A service of its own, not the core's: a session runs without it.
  */
 import { randomBytes } from 'node:crypto'
-import { chmodSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { HACHI_GOAL_TITLE_MAX, type Asker, type CoreApi, type ServiceRequests } from '../core/api.js'
 import { HACHI_ID } from '../dsh/builtinIds.js'
 import { errorKind } from '../lib/log.js'
+import { atomicWriteFile, jsonObject, readState } from '../lib/secureState.js'
 import { sessionForPaneId } from '../lib/terminalRuntime.js'
 
 /** The requests the goals answer, declared in core/api.ts for the core to route. */
@@ -63,13 +64,11 @@ export function startGoals(core: CoreApi, deps: { now?: () => number } = {}): Se
   const file = goalsPath(core.dataDir)
 
   /** The goals kept, without those closed more than a week ago, and whether the file holds any others. A file that
-   *  cannot be read is no goals, said by its kind: never its contents, which are the person's words. */
+   *  cannot be read is set aside and is no goals. */
   const read = (): { goals: Goal[]; pruned: boolean } => {
-    let kept: unknown
-    try { kept = (JSON.parse(readFileSync(file, 'utf8')) as { goals?: unknown }).goals } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') console.error(`[goals] goals.json unreadable · ${errorKind(error)}`)
-      return { goals: [], pruned: false }
-    }
+    const saved = readState(file, 'cache', jsonObject)
+    if (saved.state !== 'ok') return { goals: [], pruned: false }
+    const kept = saved.value.goals
     const all = Array.isArray(kept) ? kept : []
     const goals = all.filter(isGoal).filter((g) => g.doneAt === null || now() - g.doneAt < GOAL_KEPT_MS)
     return { goals, pruned: goals.length !== all.length }
@@ -79,10 +78,7 @@ export function startGoals(core: CoreApi, deps: { now?: () => number } = {}): Se
   const write = (goals: Goal[]): boolean => {
     try {
       mkdirSync(join(core.dataDir, 'hachi'), { recursive: true, mode: 0o700 })
-      const temp = `${file}.${process.pid}.tmp`
-      writeFileSync(temp, JSON.stringify({ goals }), { mode: 0o600 })
-      renameSync(temp, file)
-      chmodSync(file, 0o600)
+      atomicWriteFile(file, JSON.stringify({ goals }), 'cache')
       return true
     } catch (error) {
       console.error(`[goals] goals.json not written · ${errorKind(error)}`)

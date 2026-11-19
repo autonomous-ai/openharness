@@ -16,7 +16,7 @@
  * window's own engines with their small model (Claude's `haiku`, Codex at low effort).
  */
 import { execFile } from 'node:child_process'
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import { promisify } from 'node:util'
 import type { CoreApi, ServiceRequests } from '../core/api.js'
@@ -27,6 +27,7 @@ import type { OneShotEngine } from '../lib/disposableOneShotPool.js'
 import { opencodeBinAsync } from '../lib/engineBin.js'
 import { errorKind } from '../lib/log.js'
 import { runRouterOneShot } from '../lib/oneshot.js'
+import { atomicWriteFile } from '../lib/secureState.js'
 import { describeScmProject } from '../scm/scmProjects.js'
 import { internalOnThrow } from './requestErrors.js'
 
@@ -158,8 +159,7 @@ export function startWindowNames(core: CoreApi, deps: WindowNamesDeps = {}): Ser
     names.set(key, name)
     for (const old of names.keys()) { if (names.size <= KEEP) break; names.delete(old) }
     try {
-      writeFileSync(`${file}.tmp`, JSON.stringify([...names]))
-      renameSync(`${file}.tmp`, file)
+      atomicWriteFile(file, JSON.stringify([...names]), 'cache')
     } catch (error) { console.error('[window-names] could not keep the names:', errorKind(error)) }
   }
 
