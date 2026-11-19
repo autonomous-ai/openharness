@@ -72,13 +72,14 @@ export function createZellijAdapter(deps: ZellijDeps): HostAdapter & Required<Pi
   const sending = new Set<string>()
 
   // `write-chars` and `send-keys` exit 0 for a pane that is gone and for a plugin's, whose ids are counted apart from
-  // the terminals': only the listing tells that the pane is a terminal that is there.
+  // the terminals': only the listing tells that the pane is a terminal that is there. A pane whose program exited stays
+  // open, held by Zellij, and Enter there runs that program again: only a pane whose program runs takes words.
   const isTerminal = async (session: string, id: string): Promise<boolean> => {
     const listing = await action(deps, session, ['list-panes', '--json'])
     if (listing?.code !== 0) return false
     try {
       const panes: unknown = JSON.parse(listing.stdout)
-      return Array.isArray(panes) && panes.some((one) => one?.id === Number(id) && one?.is_plugin === false)
+      return Array.isArray(panes) && panes.some((one) => one?.id === Number(id) && one?.is_plugin === false && one?.exited === false)
     } catch {
       return false
     }

@@ -313,8 +313,9 @@ checks and orders the new names so a session in Zellij inside kitty keeps Zellij
   forward after (macOS `open -b`, Linux part 2's raise).
 - `type`: `zellij --session <s> action write-chars --pane-id <id> -- <text>`, then
   `zellij --session <s> action send-keys --pane-id <id> Enter`, one send at a time per pane. Before typing, the pane is
-  checked against `zellij --session <s> action list-panes --json` (it exists, and is a terminal pane), so a closed pane
-  whose id was reused is not typed into.
+  checked against `zellij --session <s> action list-panes --json` (it exists, is a terminal pane, and its program has
+  not exited), so a closed pane whose id was reused is not typed into, nor a pane Zellij holds open after its program
+  exited, where Enter runs that program again.
 - No follow: the dial does not follow the pane focused in Zellij. 0.44's `subscribe` reports pane render updates
   only, never a focus change (`RECORDED_ZELLIJ.subscribe`), so there is nothing to follow, and nothing polls instead.
 - `zellij` is found as the core finds tmux (`zellijFinder`, through `binaryFinder` in `tmux.ts`): on the devices
