@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { readFileSync, rmSync, writeFileSync } from 'node:fs'
 import type { AddressInfo } from 'node:net'
+import { join } from 'node:path'
 import { WebSocket, WebSocketServer } from 'ws'
+import { env } from '../config/env.js'
 import { RemoteRelayPool } from './remoteRelay.js'
 import { TerminalP2pInitiator } from './terminalP2p.js'
 import { b64e, newIdentity } from './e2ee/core.js'
@@ -1089,5 +1092,41 @@ describe('RemoteRelayPool and agent browser frames from the relay', () => {
     const r = await relayed()
     r.push({ type: 'agent_browser_transport_error', payload: { code: 'RATE' } })
     await vi.waitFor(() => expect(r.inbox).toContainEqual({ type: 'agent_browser_transport_error', payload: { code: 'RATE' } }))
+  })
+})
+
+describe('RemoteRelayPool when a machine denies this one', () => {
+  const machineId = 'cdefcdefcdefcdefcdefcdefcdefcdef'
+  const pins = join(env.ADAPTER_DATA_DIR, 'e2e', 'machinePeers.json')
+  const torn = '[{"machineId":"' + machineId
+  afterEach(() => { vi.restoreAllMocks(); rmSync(pins, { force: true }) })
+
+  // The denial is handled in the socket's message handler, which nothing above catches: a pin file that became
+  // unreadable during the dial (an older build writing it in place) is said, and the dial answers as for any denial.
+  it('a pin that cannot be dropped is said, and the relay goes on', async () => {
+    const wss = new WebSocketServer({ port: 0, host: '127.0.0.1' })
+    await new Promise<void>(resolve => wss.once('listening', resolve))
+    wss.on('connection', ws => ws.on('message', raw => {
+      const frame = JSON.parse(raw.toString()) as { type: string }
+      if (frame.type === 'machine_select') ws.send(JSON.stringify({ type: 'connected', payload: { machineId } }))
+      else if (frame.type === 'e2e_hello') {
+        writeFileSync(pins, torn)
+        ws.send(JSON.stringify({ type: 'e2e_denied' }))
+      }
+    }))
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const peers = new MachinePeerStore(); peers.pin(machineId, b64e(newIdentity().pub), 'test remote')
+    const pool = new RemoteRelayPool({ accessToken: async () => 'fixture-token' } as never,
+      `ws://127.0.0.1:${(wss.address() as AddressInfo).port}`, newIdentity(), peers, { p2p: false })
+    try {
+      await expect(pool.acquire(machineId, 'prod', { type: 'machine_select', payload: { machineId } },
+        { sendFrame: () => true, sendBinary: () => true }, () => {})).rejects.toThrow('NO_PEER_LINK')
+      expect(warn).toHaveBeenCalledWith('[relay] could not drop the pin of a machine that denied this one:'
+        + ' machinePeers.json cannot be read (not valid JSON). Move it aside to start over.')
+      expect(readFileSync(pins, 'utf8')).toBe(torn)
+    } finally {
+      for (const ws of wss.clients) ws.terminate()
+      await new Promise<void>(resolve => wss.close(() => resolve()))
+    }
   })
 })
