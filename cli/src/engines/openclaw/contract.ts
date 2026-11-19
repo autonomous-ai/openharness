@@ -77,8 +77,9 @@ const STATUS = {
   localStopped: /^local stopped\b/,
   noGateway: /^gateway disconnected\b/,
   /** The connection dropped or just came back: `gateway disconnected: …` (5 s), `disconnected` after it, `gateway
-   * reconnected` (4 s; `setConnectionStatus` in OpenClaw's tui). */
-  gatewayLost: /^(?:gateway )?(?:disconnected|reconnected)\b/,
+   * reconnected` (4 s; `setConnectionStatus` in OpenClaw's tui). A busy line draws the connection last: `| disconnected`,
+   * or `| gateway starting` from a Gateway that went away to restart. */
+  gatewayLost: /^(?:(?:gateway )?(?:disconnected|reconnected)\b|\S{1,2} .* \| (?:gateway starting|disconnected)$)/,
   /**
    * A cold Gateway's answer while it starts, `⠙ starting up • 20s | gateway starting` (OpenClaw's tui
    * `resolveGatewayDisconnectState`): over a minute on a slow machine, between bare `disconnected` lines.
