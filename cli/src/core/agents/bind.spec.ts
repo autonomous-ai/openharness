@@ -2302,9 +2302,19 @@ describe('binding an OpenClaw pane, read from its screen', () => {
     const typed = () => vi.mocked(run.deps.input.typeCommand).mock.calls
     const logged = () => vi.mocked(console.log).mock.calls.flat().map(String)
     const tries = (...counts: number[]) => counts.map((n) => `[discovery] a1 openclaw · history not loaded · /session ${n}/5`)
+    const LINE = ' history failed: gateway request timeout for chat.history'
+    /** The pane once `loads` loads of its history failed: one system line each. */
+    const failedTimes = (loads: number) => failed.replace(LINE, Array.from({ length: loads }, () => LINE).join('\n\n'))
 
-    it('types /session into its empty box, at most once every 20 s and 5 times, and hands no task over', async () => {
-      for (const second of [0, 5, 19, 20, 40, 60, 80, 100, 120]) await pass(second)
+    // OpenClaw drops a load still in flight for a newer `/session` (its tui `setSession`), and its history request times
+    // out at 30 s: one typed every 20 s threw away each load before it could end.
+    it('types /session into its empty box once the last load failed, 20 s after it at the soonest or 35 s with none failed, 5 times, and hands no task over', async () => {
+      for (const [second, loads, count] of [
+        [0, 1, 1], [20, 1, 1], [30, 2, 2], [45, 3, 2], [50, 3, 3], [84, 3, 3], [85, 3, 4], [120, 4, 5], [160, 5, 5],
+      ]) {
+        await pass(second, failedTimes(loads))
+        expect(typed(), `${second} s`).toHaveLength(count)
+      }
       expect(typed()).toEqual([SESSION, SESSION, SESSION, SESSION, SESSION])
       // The key is the person's conversation: never in a log line.
       expect(logged()).toEqual(tries(1, 2, 3, 4, 5))
@@ -2313,7 +2323,8 @@ describe('binding an OpenClaw pane, read from its screen', () => {
     })
 
     it('a pass that reads anything else starts the count again', async () => {
-      for (const second of [0, 20, 40, 60, 80]) await pass(second)
+      for (const [loads, second] of [0, 20, 40, 60, 80].entries()) await pass(second, failedTimes(loads + 1))
+      expect(typed()).toHaveLength(5)
       await pass(85, screen('screen-plain'))
       await pass(86)
       expect(typed()).toHaveLength(6)
