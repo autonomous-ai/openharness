@@ -74,8 +74,9 @@ export function createOrcaPluginSetup(deps: OrcaPluginSetupDeps): OrcaPluginSetu
   const undo = async (): Promise<void> => {
     undoOwed = true
     const change = await deps.remove()
-    if ('error' in change) return failed(change.error)
-    undoOwed = false
+    if (!('error' in change)) undoOwed = false
+    // Orca quit: still owed, with nothing counted and no hour, so the next start, attach or settle takes it out.
+    else if (change.error !== 'not-running') failed(change.error)
   }
 
   const setup: OrcaPluginSetup = {
