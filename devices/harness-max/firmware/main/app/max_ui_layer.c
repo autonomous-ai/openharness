@@ -784,11 +784,44 @@ static pet_t *dimmed_pet(const pet_t *k, const ht_run_t *runs)
     return p;
 }
 
+// A pet drawn as it is: each of its frames below 1x on one colour (pod_cell_flat) as an image of what its bake would be,
+// the frame resampled onto that colour, clear where it is that colour: an undimmed pet of that frame alone on that
+// colour, the same pixels as the bake copies. Made in the frame that first needs it, or a band at a time by a warming
+// (its bake would be one whole frame in one go); kept like a pet's image. One with no room stays as it is, baked.
+static void flat_images(ht_scene_t *s, int from)
+{
+    for (int i = from; i < s->count; i++) {
+        const ht_run_t *r = &s->runs[i];
+        if (r->pro_kind != POD_CELL || r->text[0] != 1) continue;
+        const ht_rect_t b = ht_run_bounds(r);
+        const int x0 = imax(0, b.x), y0 = imax(0, b.y);
+        const int x1 = imin(HT_WIDTH, b.x + b.w), y1 = imin(HT_HEIGHT, b.y + b.h);
+        if (x1 <= x0 || y1 <= y0 || (x1 - x0) * (y1 - y0) > PET_PX) continue;
+        pet_t *k = &s_key;
+        *k = (pet_t){.count = 1, .ground = r->fg, .x = (int16_t)x0, .y = (int16_t)y0, .w = (int16_t)(x1 - x0),
+                     .h = (int16_t)(y1 - y0)};
+        k->runs[0] = *r;
+        k->runs[0].x = (int16_t)(r->x - x0), k->runs[0].y = (int16_t)(r->y - y0);
+        pet_t *p = undimmed(k, r);
+        if (!p) continue;
+        p->used = s_frame;
+        const ht_pro_bitmap_t bmp = {&s_pool_px[p->at], &s_pool_a[p->at], (uint16_t)p->w, (uint16_t)p->h, p->revision,
+                                     NULL};
+        ht_scene_clear(&s_one, 0);
+        ht_pro_image(&s_one, x0, y0, &bmp);
+        s->runs[i] = s_one.runs[0];
+    }
+}
+
 void max_layer_pet(ht_scene_t *s, int from, unsigned ground, int dim, unsigned keep)
 {
     const int n = s->count - from;
     dim = (dim + DIM_STEP / 2) / DIM_STEP * DIM_STEP;
-    if (n <= 0 || (!dim && keep >= 256)) return;   // drawn as it is
+    if (n <= 0) return;
+    if (!dim && keep >= 256) {   // drawn as it is
+        if (s != &s_sub) flat_images(s, from);   // in a sliver's layer: rasterised with it (a warming's, band_raster)
+        return;
+    }
     const unsigned opacity = keep >= 256 ? 255 : keep * 255 / 256;
     if (!opacity) {   // nothing of it shows
         s->count = from;
