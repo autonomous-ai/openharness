@@ -559,6 +559,9 @@ export function createReexec(deps: ReexecDeps): {
       const args = [...deps.execArgv, deps.scriptPath]
       let checked: ProbeResult | undefined
       const carryOn = (outcome: ReexecOutcome): void => {
+        if (outcome === 'storage-unavailable') {
+          childrenBundle = null; replacing = false; proceed(outcome); return
+        }
         if (deps.prepareChildren && (outcome === 'refused' || deps.current() !== next || !deps.prepareChildren(next, checked))) {
           childrenBundle = null
           replacing = false
@@ -588,13 +591,25 @@ export function createReexec(deps: ReexecDeps): {
             done(result)
           })
         }
-        const prepared = deps.prepareProbe ? deps.prepareProbe(next) : deps.scriptPath
+        const failed = (error: unknown): void => {
+          if (deps.stopping()) return
+          if (error instanceof Error && error.message === 'worker_artifact_storage_unavailable') {
+            carryOn('storage-unavailable'); return
+          }
+          done({ ok: false, detail: 'immutable execution artifact unavailable' })
+        }
+        let prepared: ReturnType<NonNullable<ReexecDeps['prepareProbe']>>
+        try { prepared = deps.prepareProbe ? deps.prepareProbe(next) : deps.scriptPath }
+        catch (error) { failed(error); return }
         if (prepared === null || typeof prepared === 'string') { run(prepared); return }
         probe = prepared
         probing = prepared.result
         void prepared.result.then(script => {
           probe = null; probing = null
           run(script)
+        }, error => {
+          probe = null; probing = null
+          failed(error)
         })
       }
       // Ordinary core restarts keep surviving workers. A changed cohort always waits for actual reap.

@@ -14,6 +14,7 @@ const hooks = vi.hoisted(() => ({
   readLimit: Infinity,
   statSize: null as number | null,
   fail: '' as string,
+  diskFailure: '' as string,
   failWrite: null as null | ((path: string) => boolean),
   failRename: null as null | ((from: string, to: string) => boolean),
   failRemove: null as null | ((path: string) => boolean),
@@ -52,7 +53,7 @@ vi.mock('node:fs', async (load) => {
       if (hooks.fail === 'close') throw new Error('private source path')
     },
     writeFileSync: ((path: string, ...rest: unknown[]) => {
-      if (hooks.failWrite?.(String(path))) throw new Error('private destination path')
+      if (hooks.failWrite?.(String(path))) throw Object.assign(new Error('private destination path'), { code: hooks.diskFailure })
       return (fs.writeFileSync as (...args: unknown[]) => unknown)(path, ...rest)
     }) as typeof fs.writeFileSync,
     renameSync: (from: string, to: string) => {
@@ -306,6 +307,29 @@ describe('one owned execution artifact', () => {
     hooks.statSize = CLI.length - 1
     expect(() => owner().prepare(original, expected)).toThrow('worker_artifact_source_unavailable')
     expect(existsSync(directory)).toBe(false)
+  })
+
+  it.each(['ENOSPC', 'EDQUOT', 'EROFS'])('reports recoverable storage failure %s only after candidate cleanup', code => {
+    const artifacts = owner(), expected = selected(CLI + leanBlock(FILES))
+    hooks.failWrite = path => path.endsWith('cohort-cli.mjs')
+    hooks.diskFailure = code
+    try {
+      expect(() => artifacts.prepare(original, expected)).toThrow('worker_artifact_storage_unavailable')
+      expect(readdirSync(directory)).toEqual([])
+    } finally { hooks.diskFailure = ''; hooks.failWrite = null }
+    const image = artifacts.prepare(original, expected)
+    image.release()
+  })
+
+  it('keeps cleanup uncertainty stronger than a disk failure', () => {
+    const artifacts = owner(), expected = selected(CLI + leanBlock(FILES))
+    hooks.failWrite = path => path.endsWith('cohort-cli.mjs')
+    hooks.failRemove = path => path.endsWith('.tmp')
+    hooks.diskFailure = 'ENOSPC'
+    try {
+      expect(() => artifacts.prepare(original, expected)).toThrow('worker_artifact_cleanup_unsettled')
+      expect(() => artifacts.prepare(original, expected)).toThrow('worker_artifact_cleanup_unsettled')
+    } finally { hooks.diskFailure = ''; hooks.failWrite = null; hooks.failRemove = null }
   })
 
   it('leaves no partial image or own claim when writing fails and allows the next preparation', () => {

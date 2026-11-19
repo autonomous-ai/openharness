@@ -100,6 +100,48 @@ describe('Supervisor', () => {
     expect(core().sent.at(-1)).toMatchObject({ type: 'harnessd:status', status: { services: [{ name: 'engine-others', pid: null }] } })
   })
 
+  it('keeps a disk-limited update pending, starts no child, and resumes probation once storage recovers', () => {
+    let unavailable = false
+    const attempts = vi.fn()
+    const supervisor = make({}, { reexec: (state, proceed) => {
+      attempts(state); proceed(unavailable ? 'storage-unavailable' : 'same')
+    } })
+    supervisor.start(); core().up()
+    unavailable = true
+    core().exit(CORE_EXIT_UPDATE); vi.advanceTimersByTime(0)
+    expect(cores).toHaveLength(1)
+    expect(attempts).toHaveBeenLastCalledWith(expect.objectContaining({ update: 'pending' }))
+    expect(calls).toEqual(['claim'])
+    const count = attempts.mock.calls.length
+    vi.advanceTimersByTime(999)
+    expect(attempts).toHaveBeenCalledTimes(count)
+    vi.advanceTimersByTime(1)
+    expect(attempts).toHaveBeenCalledTimes(count + 1)
+    expect(attempts).toHaveBeenLastCalledWith(expect.objectContaining({ update: 'pending' }))
+    expect(cores).toHaveLength(1)
+    expect(calls).toEqual(['claim'])
+    unavailable = false
+    vi.advanceTimersByTime(2_000)
+    expect(cores).toHaveLength(2)
+    core().up(); live(options.updateProbationMs)
+    expect(calls).toEqual(['claim', 'confirm'])
+    supervisor.stop('fixture'); core().exit(0)
+  })
+
+  it('bounds disk-limited preparation retries and cancels them on stop without a child', () => {
+    const attempts = vi.fn()
+    const supervisor = make({}, { reexec: (_state, proceed) => { attempts(); proceed('storage-unavailable') } })
+    supervisor.start()
+    for (const delay of [1_000, 2_000, 4_000, 4_000]) vi.advanceTimersByTime(delay)
+    expect(attempts).toHaveBeenCalledTimes(5)
+    expect(cores).toEqual([])
+    expect(calls).toEqual([])
+    expect(supervisor.status()).toMatchObject({ corePid: null, state: 'restarting', lastExit: 'worker storage unavailable' })
+    supervisor.stop('fixture'); vi.runOnlyPendingTimers()
+    expect(attempts).toHaveBeenCalledTimes(5)
+    expect(exited).toEqual([0])
+  })
+
   it('backs off a pre-spawn core refusal without inventing a child, and stop cancels its retry', () => {
     const spawnCore = vi.fn(() => null) as unknown as SupervisorDeps['spawnCore']
     const supervisor = make({}, { spawnCore })

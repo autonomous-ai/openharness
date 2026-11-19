@@ -429,6 +429,40 @@ describe('re-executing', () => {
     if (ending === 'stop') expect(settled).toHaveBeenCalledExactlyOnceWith(false)
   })
 
+  it('keeps disk-limited preparation separate from a refused worker cohort', () => {
+    const prepareChildren = vi.fn(() => true)
+    const { reexec } = make({ execve: null, prepareProbe: () => { throw new Error('worker_artifact_storage_unavailable') }, prepareChildren })
+    reexec(state(), outcome => outcomes.push(outcome))
+    expect(() => stopped[0]()).not.toThrow()
+    expect(outcomes).toEqual(['storage-unavailable'])
+    expect(probes).toEqual([])
+    expect(prepareChildren).not.toHaveBeenCalled()
+    expect(calls).not.toContain('start children')
+  })
+
+  it.each(['storage', 'other', 'stopping'] as const)('settles an asynchronous preparer failure without starting children: %s', async failure => {
+    let reject!: (error: Error) => void
+    const task = { result: new Promise<string | null>((_resolve, fail) => { reject = fail }), cancel: vi.fn() }
+    const admit = vi.fn(() => true)
+    const running = make({ prepareProbe: () => task, prepareChildren: admit })
+    running.reexec(state(), outcome => outcomes.push(outcome)); stopped[0]()
+    if (failure === 'stopping') { stopping = true; running.cancel() }
+    reject(new Error(failure === 'other' ? 'fixture failure' : 'worker_artifact_storage_unavailable'))
+    await new Promise(resolve => setImmediate(resolve))
+    expect(outcomes).toEqual(failure === 'stopping' ? [] : [failure === 'storage' ? 'storage-unavailable' : 'unsupported'])
+    expect(probes).toEqual([])
+    expect(admit).not.toHaveBeenCalled()
+    expect(calls).not.toContain('start children')
+  })
+
+  it('refuses an unexpected synchronous preparation error without an unhandled exception', () => {
+    const running = make({ prepareProbe: () => { throw new Error('private failure') }, prepareChildren: () => true })
+    running.reexec(state(), outcome => outcomes.push(outcome))
+    expect(() => stopped[0]()).not.toThrow()
+    expect(outcomes).toEqual(['unsupported'])
+    expect(calls.join(' ')).not.toContain('private failure')
+  })
+
   it('never probes or starts a packaged candidate when immutable preparation refuses it', () => {
     const prepareChildren = vi.fn(() => true)
     const { reexec } = make({ execve: null, prepareProbe: () => null, prepareChildren } as Partial<ReexecDeps>)

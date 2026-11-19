@@ -114,9 +114,9 @@ export interface ResumeState {
 /**
  * Why a master did not replace itself: the bundle on disk is its own code (`same`); it could not or
  * would not, for a reason that is not the bundle's (`kept`); or the bundle's master did not answer its
- * probe (`refused`), which fails an update to it.
+ * probe (`refused`), which fails an update to it. `storage-unavailable` retries preparation without judging an update.
  */
-export type ReexecOutcome = 'same' | 'kept' | 'refused' | 'unsupported'
+export type ReexecOutcome = 'same' | 'kept' | 'refused' | 'unsupported' | 'storage-unavailable'
 
 /** Who this master is: its code's version, and what the master it replaced handed on. */
 export interface SupervisorIdentity {
@@ -337,6 +337,16 @@ export class Supervisor {
     this.deps.reexec(this.resumeState(), (outcome) => {
       // Stopped while it was deciding: the stop has finished this master already.
       if (this.state === 'stopping' || this.state === 'stopped') return
+      if (outcome === 'storage-unavailable') {
+        // No candidate ran: storage exhaustion cannot reject or confirm an update.
+        this.lastExit = 'worker storage unavailable'
+        this.lastExitReason = 'did-not-bind'
+        const delay = Math.max(1_000, this.backoff)
+        this.backoff = Math.min(delay * 2, this.options.maxBackoffMs)
+        this.deps.log(`[harnessd] the selected bundle had no room to start — make disk space available; retrying in ${delay} ms`)
+        this.scheduleSpawn(delay)
+        return
+      }
       if (outcome === 'refused' && this.update === 'pending') {
         // A bundle whose master cannot start is an update that failed, as one whose core cannot is.
         this.update = null

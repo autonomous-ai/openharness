@@ -32,7 +32,7 @@ export function createArtifactPreparation(options: { directory: string; node: st
       if (!reply || typeof reply !== 'object' || Array.isArray(reply)) throw new Error('worker_artifact_cleanup_unsettled')
       const value = reply as Record<string, unknown>
       if (value.ok === false && Object.keys(value).every(key => ['ok', 'code'].includes(key))
-        && typeof value.code === 'string' && /^worker_artifact_(request_refused|source_unavailable|source_changed|source_close_unsettled|cleanup_unsettled|reserved_name|publish_failed)$/.test(value.code)) {
+        && typeof value.code === 'string' && /^worker_artifact_(request_refused|source_unavailable|source_changed|source_close_unsettled|cleanup_unsettled|reserved_name|publish_failed|storage_unavailable)$/.test(value.code)) {
         if (!value.code.endsWith('_unsettled')) { unsettled = false; active = false }
         throw new Error(value.code)
       }

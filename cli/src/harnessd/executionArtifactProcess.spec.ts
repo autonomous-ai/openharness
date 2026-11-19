@@ -106,7 +106,7 @@ describe('owned artifact preparation', () => {
     expect(readdirSync(directory)).toHaveLength(1)
   })
 
-  it.each(['worker_artifact_source_changed', 'worker_artifact_source_close_unsettled', 'worker_artifact_cleanup_unsettled'])('preserves the fixed failure %s and its retry rule', async code => {
+  it.each(['worker_artifact_storage_unavailable', 'worker_artifact_source_changed', 'worker_artifact_source_close_unsettled', 'worker_artifact_cleanup_unsettled'])('preserves the fixed failure %s and its retry rule', async code => {
     const fixture = rig(), running = fixture.owner.prepare(source, expected)
     fixture.close({ ok: false, code })
     await expect(running.result).rejects.toThrow(code)
@@ -151,6 +151,13 @@ describe('owned artifact preparation', () => {
     expect(prepareArtifact(request())).toEqual({ ok: false, code: 'worker_artifact_request_refused' })
     const cycle: Record<string, unknown> = {}; cycle.self = cycle
     expect(preparationRequest(cycle, process.pid)).toBe(false)
+  })
+
+  it('serializes a cleaned-up disk failure as a fixed retryable preparation result', () => {
+    vi.spyOn(artifactModule, 'createExecutionArtifacts').mockImplementationOnce(() => {
+      throw new Error('worker_artifact_storage_unavailable')
+    })
+    expect(prepareArtifact(request(), process.pid)).toEqual({ ok: false, code: 'worker_artifact_storage_unavailable' })
   })
 
   it('reports a real source change and sanitizes unexpected preparer failures', () => {

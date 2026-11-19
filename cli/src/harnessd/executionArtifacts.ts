@@ -157,7 +157,9 @@ export function createExecutionArtifacts(options: ArtifactOptions): { prepare(or
           else release(entry, options)
         } catch { unsettled = true }
       }
-      throw new Error(unsettled ? 'worker_artifact_cleanup_unsettled' : 'worker_artifact_publish_failed')
+      const storageUnavailable = ['ENOSPC', 'EDQUOT', 'EROFS'].includes((error as NodeJS.ErrnoException).code ?? '')
+      throw new Error(unsettled ? 'worker_artifact_cleanup_unsettled'
+        : storageUnavailable ? 'worker_artifact_storage_unavailable' : 'worker_artifact_publish_failed')
     }
     const fullScript = join(folder, fullName)
     const core = lean?.files.get(LEAN_CORE_ENTRY)

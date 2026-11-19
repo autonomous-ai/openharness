@@ -87,6 +87,31 @@ describe('owned packaged child execution', { timeout: 15_000 }, () => {
     return { supervisor, lines, exits, stop }
   }
 
+  it('keeps a storage-limited packaged update pending until its actual children can be admitted', async () => {
+    writeFileSync(selected, body())
+    const artifacts = owner(), restore = vi.fn(), confirm = vi.fn()
+    let full = true
+    const master = start(artifacts, { restoreUpdate: restore, confirmUpdate: confirm, unjudgedUpdate: () => 'fixture-update',
+      executionArtifacts: { prepare: (file, hash) => ({
+        result: full ? Promise.reject(new Error('worker_artifact_storage_unavailable')) : Promise.resolve(artifacts.prepare(file, hash)),
+        cancel: () => {},
+      }) },
+    })
+    try {
+      await vi.waitFor(() => expect(master.supervisor.status().lastExit).toBe('worker storage unavailable'))
+      expect(confirm).not.toHaveBeenCalled()
+      expect(master.supervisor.status().corePid).toBeNull()
+      expect(records()).toEqual([])
+      expect(restore).not.toHaveBeenCalled()
+      expect(master.lines.some(line => line.includes('[harnessd] worker_artifact_storage_unavailable — make disk space available; no children will start'))).toBe(true)
+      full = false
+      await vi.waitFor(() => expect(master.supervisor.status().state).toBe('running'), { timeout: 5_000 })
+      expect(records()).toHaveLength(2)
+      expect(restore).not.toHaveBeenCalled()
+    } finally { await master.stop() }
+    expect(artifacts.releases).toEqual([1])
+  })
+
   it('probes and starts its own cohort from one immutable payload and releases only after actual exits', async () => {
     writeFileSync(selected, body())
     const artifacts = owner(), master = start(artifacts)

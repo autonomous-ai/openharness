@@ -24,7 +24,7 @@ export function prepareArtifact(value: unknown, parentPid = process.ppid): objec
     const owner = createExecutionArtifacts({ directory: value.directory, pid: parentPid, keepMasterEntry: value.keepMasterEntry })
     return { ok: true, artifact: artifactMetadata(owner.prepare(value.originalScript, value.expected)) }
   } catch (error) {
-    const code = error instanceof Error && /^worker_artifact_(source_unavailable|source_changed|source_close_unsettled|reserved_name|publish_failed|cleanup_unsettled)$/.test(error.message)
+    const code = error instanceof Error && /^worker_artifact_(source_unavailable|source_changed|source_close_unsettled|reserved_name|publish_failed|storage_unavailable|cleanup_unsettled)$/.test(error.message)
       ? error.message : 'worker_artifact_cleanup_unsettled'
     return { ok: false, code }
   }
