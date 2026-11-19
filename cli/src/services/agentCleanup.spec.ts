@@ -230,7 +230,7 @@ describe('handing what Hachi started to the person, however Hachi closes', () =>
     expect(ledger.parentOf({ machineId: 'machine-1', agentId: 'api' })).toBeNull()
     // The other machine was asleep: still Hachi's there and here, asked again at the next look.
     expect(ledger.childrenOf({ machineId: 'machine-1', agentId: 'hachi' }).map((r) => r.child.agentId)).toEqual(['far'])
-    expect(t.log).toHaveBeenCalledWith('[hachi] could not hand far to the person on its machine yet: asleep. Asked again at the next look.')
+    expect(t.log).toHaveBeenCalledWith('[hachi] could not hand far to the person on its machine yet: Error. Asked again at the next look.')
     reachable = true
     t.advance(LOOK_EVERY_MS)
     await t.cleanup.look()

@@ -202,8 +202,8 @@ describe('createAndRegisterPane', () => {
       await create(stuck)
       // The pane left open is one the person sees with no harness in it: the line must not say it closed.
       expect(said()).toEqual([
-        '[agent] create claude not saved · pane %1 closed · RegistryPersistenceUnavailable',
-        '[agent] create claude not saved · pane %2 close failed · RegistryPersistenceUnavailable',
+        '[agent] create claude not saved · pane %1 closed · RegistryPersistenceUnavailable ENOSPC',
+        '[agent] create claude not saved · pane %2 close failed · RegistryPersistenceUnavailable ENOSPC',
       ])
     } finally {
       warn.mockRestore()

@@ -189,7 +189,7 @@ describe('sealing, guarded', () => {
     expect(window.map((frame) => frame.type)).toEqual(['turn_started', 'turn_ended'])
     // Said once, then counted, so a broken seal does not flood the log with one line per event.
     expect(error).toHaveBeenCalledTimes(1)
-    expect(String(error.mock.calls[0][0])).toContain('sealing broke')
+    expect(String(error.mock.calls[0][0])).toBe('[backend] the gateway could not take a web frame · Error')
     // A terminal frame that cannot be sealed is one that was not sent: its stream closes, nothing throws.
     vi.spyOn(e2ee, 'wrapTarget').mockImplementation(() => { throw new Error('sealing broke') })
     vi.spyOn(e2ee, 'wrapTerminalBinary').mockImplementation(() => { throw new Error('sealing broke') })

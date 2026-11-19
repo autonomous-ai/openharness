@@ -145,7 +145,7 @@ const copilotRuns = (line: string) => spawnSync('powershell.exe', ['-NoProfile',
       .toEqual([...flags('copilot'), '--copilot-event', 'sessionStart'])
   }, 60_000) // a ceiling for the slow arm64 runner's process starts, not a timing assertion
 
-  it('refuses a home with & ( ) for the cmd.exe engine with its reason, and the PowerShell engines pass it whole', async () => {
+  it('refuses a home with & ( ) for the cmd.exe engine with its kind, and the PowerShell engines pass it whole', async () => {
     vi.spyOn(console, 'log').mockImplementation(() => {})
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     const error = vi.spyOn(console, 'error').mockImplementation(() => {})
@@ -153,7 +153,7 @@ const copilotRuns = (line: string) => spawnSync('powershell.exe', ['-NoProfile',
     expect(await installCommandCodeHooks(PORT, { environment })).toBe(false)
     // One line, no stack.
     expect(error.mock.calls).toEqual([
-      ['[hooks] Command Code hooks are not installed: a hook argument holds one of " % ! & | < > ^ ( ), which cmd.exe reads as more than text'],
+      ['[hooks] Command Code hooks are not installed · HookPreparationHeld'],
     ])
     expect(existsSync(join(home, '.commandcode'))).toBe(false)
     // Inside PowerShell's single quotes these are text: Copilot's line, and Codex's.

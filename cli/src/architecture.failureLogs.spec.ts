@@ -288,34 +288,12 @@ function failureLogs(code: string, file = 'file.ts'): string[] {
   return found
 }
 
-let scanned: string[] | undefined
 /** The hits in every file of the daemon: every .ts under cli/src but tests, scripts of tests, the TUI and the terminal list. */
-const daemonHits = (): string[] => scanned ??= readdirSync(SRC, { recursive: true, encoding: 'utf8' })
+const daemonHits = (): string[] => readdirSync(SRC, { recursive: true, encoding: 'utf8' })
   .map((file) => file.split(sep).join('/'))
   .filter((file) => file.endsWith('.ts') && !/\.(spec|test|d)\.ts$/.test(file) && !/^(e2e|tui|testing)\//.test(file)
     && !/(^|\/)__fixtures__\//.test(file) && !TERMINAL.includes(file))
   .flatMap((file) => failureLogs(readFileSync(join(SRC, file), 'utf8'), file))
-
-// The sweep's pending lists, one a task of docs/plans/2026-11-19-log-failure-kinds-plan.md. A line `<file> <hits>`
-// excuses exactly that many hits in its file, no more and no fewer. Each sweep task deletes its own list; Task 19
-// deletes this block and what reads it.
-const fileOf = (hit: string): string => hit.slice(0, hit.indexOf(':'))
-const countsOf = (hits: string[]): Map<string, number> => {
-  const counts = new Map<string, number>()
-  for (const hit of hits) counts.set(fileOf(hit), (counts.get(fileOf(hit)) ?? 0) + 1)
-  return counts
-}
-const PENDING = join(SRC, 'architecture.failureLogs.pending')
-const pendingLines = (): { list: string, line: string }[] => existsSync(PENDING)
-  ? readdirSync(PENDING).flatMap((list) => readFileSync(join(PENDING, list), 'utf8').split('\n')
-    .filter((line) => line.trim()).map((line) => ({ list, line })))
-  : []
-const parsed = (line: string): [string, number] => [line.slice(0, line.lastIndexOf(' ')), Number(line.slice(line.lastIndexOf(' ') + 1))]
-const unexcused = (hits: string[], pending: string[]): string[] => {
-  const counts = countsOf(hits)
-  const listed = new Map(pending.map(parsed))
-  return hits.filter((hit) => listed.get(fileOf(hit)) !== counts.get(fileOf(hit)))
-}
 
 it.each([
   "try { run() } catch (error) { console.error('[x] failed:', error) }",
@@ -371,16 +349,8 @@ it.each([
   "try { run() } catch (error) { console.error('[x] git refused:', (error as { stderr?: string }).stderr) }",
 ])('passes %s', (code) => expect(failureLogs(code)).toEqual([]))
 
-it('a pending line excuses its file\'s hits and no more', () => {
-  const planted = failureLogs("try { run() } catch (error) { log(error.message) }\nrun().catch(() => log('[x] save failed'))", 'planted.ts')
-  expect(planted).toHaveLength(2)
-  expect(unexcused(planted, ['planted.ts 2'])).toEqual([])
-  expect(unexcused(planted, ['planted.ts 1'])).toEqual(planted)
-  expect(unexcused(planted, ['planted.ts 3'])).toEqual(planted)
-})
-
 it('no daemon log line carries an error\'s words or hides its kind', () => {
-  expect(unexcused(daemonHits(), pendingLines().map(({ line }) => line)), 'A daemon log line names a failure by its kind, '
+  expect(daemonHits(), 'A daemon log line names a failure by its kind, '
     + '`errorKind(error)` from lib/log.ts, and never prints an error\'s message, stack or the error itself: those can quote '
     + 'the person\'s files and prompts, and Export logs sends the log off the machine. A catch that logs binds what it '
     + 'caught and names its kind, so someone can act on the line.').toEqual([])
@@ -388,10 +358,4 @@ it('no daemon log line carries an error\'s words or hides its kind', () => {
 
 it('every terminal file exists', () => {
   expect(TERMINAL.filter((file) => !existsSync(join(SRC, file)))).toEqual([])
-})
-
-it('every pending line names a file with exactly that many hits', () => {
-  const counts = countsOf(daemonHits())
-  const stale = pendingLines().filter(({ line }) => { const [file, hits] = parsed(line); return counts.get(file) !== hits })
-  expect(stale.map(({ list, line }) => `${list}: ${line} (${counts.get(parsed(line)[0]) ?? 0} found)`)).toEqual([])
 })
