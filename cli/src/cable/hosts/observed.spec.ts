@@ -3038,8 +3038,9 @@ describe('ObservedSource panes', () => {
     }
   })
 
-  // The key a listing source knows the same pane by (registry.ts): an ended session's pane holds something else now.
-  it('a live agent in a herdr pane carries its pane key', async () => {
+  // The key a listing source knows the same pane by (registry.ts). An ended session keeps it: the registry folds nothing by
+  // an ended copy's keys, and finds by them the listing source's live copy that takes its row.
+  it('an agent in a herdr pane carries its pane key, ended or not', async () => {
     const { actions } = fakeActions()
     const { src, ev, open, owners, externals } = setup({ actions })
     src.ingest(ev('session-start', { sessionId: 'herdr', hostHints: { HERDR_PANE_ID: 'w1:p2' } }))
@@ -3052,7 +3053,8 @@ describe('ObservedSource panes', () => {
     await src.scanOpen()
     const agent = (sessionId: string) => src.list().find((a) => a.sessionId === sessionId)!
     expect(agent('herdr').paneKeys).toEqual(['herdr:w1:p2'])
-    for (const sessionId of ['ended', 'orca', 'found']) expect(agent(sessionId), sessionId).not.toHaveProperty('paneKeys')
+    expect(agent('ended')).toMatchObject({ ended: true, paneKeys: ['herdr:w1:p3'] })
+    for (const sessionId of ['orca', 'found']) expect(agent(sessionId), sessionId).not.toHaveProperty('paneKeys')
   })
 
   // A wave 1 app is one adapter: the source asks it as it asks the others, and what it cannot do the next pane does.

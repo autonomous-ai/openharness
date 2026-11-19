@@ -8440,13 +8440,16 @@ describe("the Claude app's Code sessions, from its store (docs/plans/2026-11-19-
     expect(await listed()).toEqual([{ id: ID, name: 'Fix the build', caps: 'sf' }])
   })
 
-  it('a hooked session whose id the store has not caught up with folds by the app\'s own id', async () => {
+  it('a hooked session whose id the store has not caught up with folds by the app\'s own id; once it ended the store\'s row is the one row', async () => {
     const { fake, port, live } = withStore()
     fake.sessions = [session({ sessionId: SECOND })]
     await live()
     expect(await ids()).toEqual([observedAgentId('claude', SECOND)])
     port.observed(hook('session-start'))
     expect(await ids()).toEqual([ID])
+    // Decision 8: the store's id from then on.
+    port.observed(hook('session-end'))
+    expect(await ids()).toEqual([observedAgentId('claude', SECOND)])
   })
 
   // Review Focus 1: the person resumes one of the app's sessions in a terminal.

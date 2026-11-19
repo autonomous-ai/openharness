@@ -163,6 +163,19 @@ describe('an ended copy (docs/plans/2026-11-19-dial-claude-app-sessions-design.m
     expect(ids(new HostRegistry([observed, herdr]))).toEqual(['x'])
   })
 
+  // Each listing source's copy as it lists it: herdr's, hc's and cmux's have no session id until their client names one,
+  // and the store's may name an older id of the session, so only the pane key the ended hooked copy keeps finds them.
+  it.each([
+    ['herdr', 'herdr:w1:p1', {}],
+    ['hc', 'herdr-app:t7', {}],
+    ['cmux', 'cmux:s1', { callerPid: 4242 }],
+    ['claude-app', 'claude-app:local_a', { sessionId: 'old', resting: true }],
+  ] as [string, string, Partial<HostAgent>][])("an ended hooked copy gives its row to %s's live copy by the pane key it keeps", (id, key, over) => {
+    const observed = fakeSource('observed', [ended({ id: 'o', sessionId: 'new', paneKeys: [key] })])
+    const listed = fakeSource(id, [agent({ id: 'x', paneKeys: [key], ...over })])
+    expect(ids(new HostRegistry([observed, listed]))).toEqual(['x'])
+  })
+
   it('an ended copy no other source lists is listed alone', () => {
     const observed = fakeSource('observed', [ended({ id: 'o', sessionId: 's' })])
     const herdr = fakeSource('herdr', [agent({ id: 'x', sessionId: 't' })])
