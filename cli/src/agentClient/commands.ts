@@ -484,7 +484,7 @@ async function targetAway(s: Setup, o: Opened, name: string, away: Away): Promis
   } catch (error) { daemon.close(); throw error }
 }
 
-type Screen = 'working' | 'needs-input' | 'idle' | 'draft'
+export type Screen = 'working' | 'needs-input' | 'idle' | 'draft'
 
 /** What the screen says now (the windows' read, `agent_close` `inspect`); null when it cannot be read. `draft`:
  *  text waits in its box, the person's or a message being typed, so the agent is about to work. `background`: how many

@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { EXIT } from './commands.js'
 import { AgentClientError, type Daemon, type Where } from './daemon.js'
-import { engineRuns, ensureCommand, type EnsureDeps } from './ensure.js'
+import { engineRuns, ensureCommand, gatewayHolds, SETTLE_MS, type EnsureDeps } from './ensure.js'
 import { Ledger, ledgerPath } from './ledger.js'
 import { ProgramRecords } from './program.js'
 import { signedOutForTest } from '../testing/agentSettings.js'
@@ -27,10 +27,18 @@ class FakeDaemon implements Daemon {
   extra: Record<string, (payload: Record<string, unknown>) => Record<string, unknown>> = {}
   async request(type: string, payload: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
     this.requests.push({ type, payload })
-    if (this.extra[type]) return this.extra[type](payload)
+    if (this.extra[type]) return this.resumed(type, this.extra[type](payload))
     if (type === 'agents_list') return { agents: this.frames.filter((f) => payload.includeStopped || f.status !== 'stopped') }
     if (type === 'agent_close') return payload.mode === 'inspect' ? { activity: 'idle' } : { closed: true }
     return { error: 'UNKNOWN' }
+  }
+  /** As the daemon does: a harness opened again is listed active. */
+  private resumed(type: string, reply: Record<string, unknown>): Record<string, unknown> {
+    const agent = reply.agent as Frame | undefined
+    if (type === 'agent_resume' && reply.state === 'created' && agent) {
+      this.frames = [...this.frames.filter((f) => f.id !== agent.id), { ...agent, status: 'active' }]
+    }
+    return reply
   }
   close(): void {}
   types(): string[] { return this.requests.map((r) => r.type) }
@@ -59,7 +67,7 @@ function harness(d: FakeDaemon, over: Partial<EnsureDeps> = {}) {
   const deps: EnsureDeps = {
     pane: undefined, env: {}, where: () => where, open: async () => d,
     ledger: (data) => new Ledger(ledgerPath(data)), out: (l) => out.push(l), err: (l) => err.push(l), now: () => NOW,
-    engineAlive: async () => true, sleep: async () => {},
+    engineAlive: async () => true, sessionHeld: async () => null, sleep: async () => {},
     create: async (argv) => {
       made.push(argv)
       const id = `new${made.length}`
@@ -72,6 +80,9 @@ function harness(d: FakeDaemon, over: Partial<EnsureDeps> = {}) {
   }
   return { deps, out, err, made, json: () => JSON.parse(out.at(-1) ?? '{}') }
 }
+
+/** [first] for the first ask, [then] after it: an engine found dead before the resume and running after. */
+const firstThen = <T>(first: T, then: T) => { let n = 0; return async () => n++ === 0 ? first : then }
 
 const args = (extra: string[] = [], engine = 'openclaw') => [engine, '--name', 'lamp', '--program-token-file', token, '--json', ...extra]
 
@@ -89,7 +100,7 @@ describe('harness ensure (#4393)', () => {
     const h = harness(d, { daemonUp: async () => ({ started: true, ms: 912 }) })
     expect(await ensureCommand(args(), h.deps)).toBe(EXIT.ok)
     expect(h.made).toEqual([['openclaw', '--name', 'lamp', '--program-token-file', token, '--json']])
-    expect(h.json()).toEqual({ result: 'new', id: 'new1', name: 'lamp', engine: 'openclaw', engineSession: 'agent:main:harness-new1', state: 'starting',
+    expect(h.json()).toEqual({ result: 'new', id: 'new1', name: 'lamp', engine: 'openclaw', engineSession: 'agent:main:harness-new1', state: 'idle',
       daemonStarted: true, daemonStartMs: 912 })
   })
 
@@ -133,10 +144,10 @@ describe('harness ensure (#4393)', () => {
     }
     d.extra.agent_resume = (p) => ({ state: 'created', resumed: true, agent: frame(String(p.agentId), { tmuxPane: '%7' }) })
     const checked: Frame[] = []
-    const h = harness(d, { engineAlive: async (f) => { checked.push(f); return 'pane-gone' } })
+    const h = harness(d, { engineAlive: async (f) => { checked.push(f); return f.tmuxPane === '%7' ? true : 'pane-gone' } })
     expect(await ensureCommand(args(), h.deps)).toBe(EXIT.ok)
-    expect(h.json()).toMatchObject({ result: 'resumed', id: 'a1', engineSession: 'agent:main:harness-a1', state: 'starting' })
-    expect(checked.map((f) => f.id)).toEqual(['a1'])
+    expect(h.json()).toMatchObject({ result: 'resumed', id: 'a1', engineSession: 'agent:main:harness-a1', state: 'starting', confirmed: true })
+    expect(checked.map((f) => f.tmuxPane)).toEqual(['%a1', '%7'])
     expect(d.types()).toEqual(expect.arrayContaining(['agent_close', 'agent_resume']))
     expect(d.requests.find((r) => r.type === 'agent_close')?.payload).toMatchObject({ agentId: 'a1', mode: 'now' })
     expect(new ProgramRecords(dir).get('a1')?.startedAt).toBe(NOW)
@@ -153,9 +164,9 @@ describe('harness ensure (#4393)', () => {
       return { closed: true }
     }
     d.extra.agent_resume = (p) => ({ state: 'created', resumed: true, agent: frame(String(p.agentId), { engine: 'claude', sessionId: 'sess-1' }) })
-    const h = harness(d, { engineAlive: async () => false })
+    const h = harness(d, { engineAlive: firstThen<boolean>(false, true) })
     expect(await ensureCommand(args([], 'claude'), h.deps)).toBe(EXIT.ok)
-    expect(h.json()).toMatchObject({ result: 'resumed', id: 'c1', engine: 'claude', engineSession: 'sess-1' })
+    expect(h.json()).toMatchObject({ result: 'resumed', id: 'c1', engine: 'claude', engineSession: 'sess-1', confirmed: true })
   })
 
   it('never closes a working row for an engine it cannot see in a pane still there (another namespace, hidepid)', async () => {
@@ -205,7 +216,7 @@ describe('harness ensure (#4393)', () => {
     d.extra.agent_resume = (p) => ({ state: 'created', resumed: true, agent: frame(String(p.agentId), { engine: 'hermes', sessionId: '20261117_abc' }) })
     const h = harness(d)
     expect(await ensureCommand(args([], 'hermes'), h.deps)).toBe(EXIT.ok)
-    expect(h.json()).toMatchObject({ result: 'resumed', id: 'c1', engine: 'hermes', engineSession: '20261117_abc' })
+    expect(h.json()).toMatchObject({ result: 'resumed', id: 'c1', engine: 'hermes', engineSession: '20261117_abc', state: 'idle', confirmed: true })
     expect(new ProgramRecords(dir).get('c1')?.startedAt).toBe(NOW)
     expect(h.made).toEqual([])
   })
@@ -217,7 +228,7 @@ describe('harness ensure (#4393)', () => {
     d.extra.agent_resume = (p) => ({ state: 'created', resumed: false, agent: frame(String(p.agentId)) })
     const h = harness(d)
     await ensureCommand(args(), h.deps)
-    expect(h.json()).toMatchObject({ result: 'new', id: 'c1', why: expect.stringContaining('could not resume') })
+    expect(h.json()).toMatchObject({ result: 'new', id: 'c1', why: expect.stringContaining('could not resume'), whyCode: 'ENGINE_SESSION_GONE' })
   })
 
   it('starts a new one in place of a closed one that cannot be opened again, and forgets the old as the program\'s', async () => {
@@ -227,7 +238,7 @@ describe('harness ensure (#4393)', () => {
     d.extra.agent_resume = () => ({ state: 'failed', failure: { code: 'AGENT_NOT_FOUND', detail: 'deleted' } })
     const h = harness(d)
     await ensureCommand(args(), h.deps)
-    expect(h.json()).toMatchObject({ result: 'new', id: 'new1', why: expect.stringContaining('could not be opened again') })
+    expect(h.json()).toMatchObject({ result: 'new', id: 'new1', why: expect.stringContaining('could not be opened again'), whyCode: 'HARNESS_GONE' })
     expect(new ProgramRecords(dir).get('c1')).toBeNull()
   })
 
@@ -249,7 +260,7 @@ describe('harness ensure (#4393)', () => {
     d.extra.agent_resume = () => ({ state: 'failed', failure: { code: 'AGENT_NOT_FOUND' } })
     const h = harness(d)
     expect(await ensureCommand(args(), h.deps)).toBe(EXIT.ok)
-    expect(h.json()).toMatchObject({ result: 'new', id: 'new1' })
+    expect(h.json()).toMatchObject({ result: 'new', id: 'new1', whyCode: 'HARNESS_GONE' })
     expect(new ProgramRecords(dir).get('c1')).toBeNull()
   })
 
@@ -306,9 +317,9 @@ describe('harness ensure (#4393)', () => {
     let busy = 2
     d.extra.agent_resume = (p) => busy-- > 0 ? { state: 'failed', failure: { code: 'AGENT_BUSY' } }
       : { state: 'created', resumed: true, agent: frame(String(p.agentId), { engine: 'claude', sessionId: 'sess-k' }) }
-    const h = harness(d, { engineAlive: async () => 'pane-gone' })
+    const h = harness(d, { engineAlive: firstThen<'pane-gone' | true>('pane-gone', true) })
     expect(await ensureCommand(args([], 'claude'), h.deps)).toBe(EXIT.ok)
-    expect(h.json()).toMatchObject({ result: 'resumed', id: 'k1', engineSession: 'sess-k' })
+    expect(h.json()).toMatchObject({ result: 'resumed', id: 'k1', engineSession: 'sess-k', confirmed: true })
     expect(h.made).toEqual([])
     expect(new ProgramRecords(dir).get('k1')).not.toBeNull()
   })
@@ -410,5 +421,134 @@ describe('harness ensure (#4393)', () => {
     expect([a.json().result, b.json().result].sort()).toEqual(['live', 'new'])
     expect(a.made.length + b.made.length).toBe(1)
     expect(readdirSync(dir).filter((f) => f.endsWith('.lock'))).toEqual([])
+  })
+})
+
+describe('harness ensure, a conversation its engine no longer holds (#4484)', () => {
+  /** c1 closed, its OpenClaw conversation `agent:main:harness-c1`, and a resume the daemon opens. */
+  function closed() {
+    const d = new FakeDaemon()
+    d.frames = [frame('c1', { status: 'stopped' })]
+    own('c1')
+    d.extra.agent_resume = (p) => ({ state: 'created', resumed: true, agent: frame(String(p.agentId)) })
+    return d
+  }
+  const resumes = (d: FakeDaemon) => d.requests.filter((r) => r.type === 'agent_resume')
+
+  it('never resumes a key the Gateway no longer holds: a new harness by the same name and token', async () => {
+    const d = closed()
+    const asked: string[] = []
+    const h = harness(d, { sessionHeld: async (key) => { asked.push(key); return false } })
+    expect(await ensureCommand(args(), h.deps)).toBe(EXIT.ok)
+    expect(asked).toEqual(['agent:main:harness-c1'])
+    expect(resumes(d)).toEqual([])
+    expect(h.made).toEqual([['openclaw', '--name', 'lamp', '--program-token-file', token, '--json']])
+    expect(h.json()).toMatchObject({ result: 'new', id: 'new1', name: 'lamp', whyCode: 'ENGINE_SESSION_GONE', why: expect.stringContaining('agent:main:harness-c1') })
+    expect(h.json()).not.toHaveProperty('confirmed')
+    expect(new ProgramRecords(dir).get('c1')).toBeNull()
+    expect(new ProgramRecords(dir).get('new1')).toMatchObject({ tokenHash: HASH, name: 'lamp' })
+  })
+
+  it('resumes when the Gateway holds the key, or cannot be asked', async () => {
+    for (const held of [true, null]) {
+      const d = closed()
+      const h = harness(d, { sessionHeld: async () => held })
+      expect(await ensureCommand(args(), h.deps)).toBe(EXIT.ok)
+      expect(h.json()).toMatchObject({ result: 'resumed', id: 'c1', state: 'idle', confirmed: true })
+      expect(h.json()).not.toHaveProperty('whyCode')
+      expect(resumes(d)).toHaveLength(1)
+      expect(h.made).toEqual([])
+    }
+  })
+
+  it('asks no Gateway for --local, nor for another engine', async () => {
+    let asked = 0
+    const d = closed()
+    const local = harness(d, { sessionHeld: async () => { asked++; return false } })
+    await ensureCommand(args(['--local', '/state']), local.deps)
+    expect(local.json()).toMatchObject({ result: 'resumed', id: 'c1' })
+    const hd = new FakeDaemon()
+    hd.frames = [frame('h1', { status: 'stopped', engine: 'hermes', sessionId: '20261117_abc' })]
+    own('h1', 'lamp', 'hermes')
+    hd.extra.agent_resume = (p) => ({ state: 'created', resumed: true, agent: frame(String(p.agentId), { engine: 'hermes', sessionId: '20261117_abc' }) })
+    const hermes = harness(hd, { sessionHeld: async () => { asked++; return false } })
+    await ensureCommand(args([], 'hermes'), hermes.deps)
+    expect(hermes.json()).toMatchObject({ result: 'resumed', id: 'h1' })
+    expect(asked).toBe(0)
+  })
+
+  it('starts a new one when the engine exits right after the resume and the Gateway then says the key is gone', async () => {
+    const d = closed()
+    const h = harness(d, { sessionHeld: firstThen<boolean | null>(null, false), engineAlive: async () => 'pane-gone' })
+    expect(await ensureCommand(args(), h.deps)).toBe(EXIT.ok)
+    expect(resumes(d)).toHaveLength(1)
+    expect(d.requests.find((r) => r.type === 'agent_close' && r.payload.mode === 'now')?.payload).toMatchObject({ agentId: 'c1' })
+    expect(h.json()).toMatchObject({ result: 'new', id: 'new1', name: 'lamp', whyCode: 'ENGINE_SESSION_GONE' })
+    expect(new ProgramRecords(dir).get('c1')).toBeNull()
+  })
+
+  it('says an engine that exits right after the resume stopped, and keeps the record, while the key is held or unknown', async () => {
+    for (const held of [true, null]) {
+      const byEngine = closed()
+      const a = harness(byEngine, { sessionHeld: async () => held, engineAlive: async () => false })
+      expect(await ensureCommand(args(), a.deps)).toBe(EXIT.ok)
+      expect(a.json()).toMatchObject({ result: 'resumed', id: 'c1', state: 'stopped', confirmed: false, whyCode: 'ENGINE_EXITED' })
+      expect(a.made).toEqual([])
+      expect(new ProgramRecords(dir).get('c1')).not.toBeNull()
+      // The row closed again by discovery while it is watched.
+      const byRow = closed()
+      byRow.extra.agents_list = () => ({ agents: [frame('c1', { status: 'stopped' })] })
+      const b = harness(byRow, { sessionHeld: async () => held })
+      expect(await ensureCommand(args(), b.deps)).toBe(EXIT.ok)
+      expect(b.json()).toMatchObject({ result: 'resumed', id: 'c1', state: 'stopped', confirmed: false, whyCode: 'ENGINE_EXITED' })
+      expect(b.made).toEqual([])
+    }
+  })
+
+  it('watches a resumed one only until it is seen up, and never past SETTLE_MS', async () => {
+    let clock = NOW
+    const sleep = async (ms: number) => { clock += ms }
+    const d = closed()
+    let reads = 0
+    d.extra.agent_close = (p) => p.mode === 'inspect' ? (++reads >= 4 ? { activity: 'idle' } : {}) : { closed: true }
+    const soon = harness(d, { now: () => clock, sleep })
+    await ensureCommand(args(), soon.deps)
+    expect(soon.json()).toMatchObject({ result: 'resumed', state: 'idle', confirmed: true })
+    expect(clock - NOW).toBe(3_000)
+
+    clock = NOW
+    const never = closed()
+    never.extra.agent_close = (p) => p.mode === 'inspect' ? {} : { closed: true }
+    const slow = harness(never, { now: () => clock, sleep: async (ms) => { clock += ms + 300 } })
+    await ensureCommand(args(), slow.deps)
+    expect(slow.json()).toMatchObject({ result: 'resumed', id: 'c1', state: 'starting', confirmed: false })
+    expect(slow.json()).not.toHaveProperty('whyCode')
+    expect(clock - NOW).toBeGreaterThanOrEqual(SETTLE_MS)
+    expect(clock - NOW).toBeLessThanOrEqual(SETTLE_MS + 300)
+  })
+
+  it('says a resume the daemon has not confirmed resumed, confirmed false, rather than as a plain resume', async () => {
+    let clock = NOW
+    const d = closed()
+    d.extra.agent_resume = () => { d.frames = [frame('c1')]; return { state: 'unconfirmed' } }
+    d.extra.agent_close = (p) => p.mode === 'inspect' ? {} : { closed: true }
+    const h = harness(d, { now: () => clock, sleep: async (ms) => { clock += ms } })
+    expect(await ensureCommand(args(), h.deps)).toBe(EXIT.ok)
+    expect(h.json()).toMatchObject({ result: 'resumed', id: 'c1', state: 'starting', confirmed: false })
+    expect(new ProgramRecords(dir).get('c1')?.startedAt).toBe(NOW)
+  })
+})
+
+describe('gatewayHolds', () => {
+  const said = (ok: boolean, text: string) => { const argv: string[][] = []; return { argv, call: async (a: string[]) => { argv.push(a); return { ok, said: text } } } }
+
+  it('asks sessions.resolve for the key, and reads a held key, a deleted one, and anything else', async () => {
+    const held = said(true, '{\n  "ok": true,\n  "key": "agent:main:harness-c1"\n}')
+    expect(await gatewayHolds('agent:main:harness-c1', held.call)).toBe(true)
+    expect(held.argv).toEqual([['gateway', 'call', 'sessions.resolve', '--params', '{"key":"agent:main:harness-c1"}', '--json', '--timeout', '10000']])
+    expect(await gatewayHolds('k', said(false, '{"ok": false, "message": "No session found: k"}').call)).toBe(false)
+    expect(await gatewayHolds('k', said(false, 'Error: connect ECONNREFUSED 127.0.0.1:18789').call)).toBeNull()
+    expect(await gatewayHolds('k', said(false, '').call)).toBeNull()
+    expect(await gatewayHolds('k', said(true, 'gateway call: unknown method').call)).toBeNull()
   })
 })
