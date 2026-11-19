@@ -1,16 +1,24 @@
-import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { defaultSettings } from './settings.js'
 import { StateFile } from './stateFile.js'
 
-// Pass-through, recording each call that opens, writes or renames a file by its name.
-const disk = vi.hoisted(() => ({ events: [] as string[][] }))
+// Pass-through, recording each call that opens a file for writing, writes, flushes or renames a file by its name.
+const disk = vi.hoisted(() => ({ events: [] as string[][], opened: new Map<number, string>() }))
 vi.mock('node:fs', async (original) => {
   const actual = await original<typeof import('node:fs')>()
+  const { O_WRONLY, O_RDWR } = actual.constants
   return { ...actual,
-    openSync: (...args: Parameters<typeof actual.openSync>) => { disk.events.push(['open', String(args[0])]); return actual.openSync(...args) },
+    openSync: (...args: Parameters<typeof actual.openSync>) => {
+      const flags = args[1]
+      if (typeof flags === 'number' ? flags & (O_WRONLY | O_RDWR) : flags !== undefined && flags !== 'r') disk.events.push(['open', String(args[0])])
+      const fd = actual.openSync(...args)
+      disk.opened.set(fd, String(args[0]))
+      return fd
+    },
+    fsyncSync: (fd: number) => { disk.events.push(['fsync', disk.opened.get(fd) ?? String(fd)]); return actual.fsyncSync(fd) },
     writeFileSync: (...args: Parameters<typeof actual.writeFileSync>) => { disk.events.push(['write', String(args[0])]); return actual.writeFileSync(...args) },
     renameSync: (...args: Parameters<typeof actual.renameSync>) => { disk.events.push(['rename', String(args[0]), String(args[1])]); return actual.renameSync(...args) },
   }
@@ -74,6 +82,39 @@ describe('StateFile', () => {
       expect(() => file.update(s => { s.deleting.push('a1') })).toThrow(expect.objectContaining({ state: 'state_unreadable' }))
       expect(readFileSync(path, 'utf8')).toBe(broken)
     }
+  })
+
+  // The file holds proxy passwords and is never rebuilt: a power cut must not leave it empty.
+  it('a save flushes the new file before it is renamed onto agent-browser.json', () => {
+    const file = new StateFile(path)
+    disk.events = []
+    file.update(s => { s.browsers.a1 = settings })
+    const flushed = disk.events.findIndex(([op, name]) => op === 'fsync' && name.startsWith(`${path}.${process.pid}.`))
+    const renamed = disk.events.findIndex(([op, , to]) => op === 'rename' && to === path)
+    expect(flushed).toBeGreaterThan(-1)
+    expect(flushed).toBeLessThan(renamed)
+  })
+
+  it.skipIf(process.platform === 'win32')('a file another account could have rewritten is not written over', () => {
+    writeFileSync(path, JSON.stringify({ browsers: {}, deleting: [], setup: null }))
+    chmodSync(path, 0o666)
+    const before = readFileSync(path, 'utf8')
+    expect(() => new StateFile(path).update(s => { s.browsers.a1 = settings })).toThrow('group/world writable')
+    expect(readFileSync(path, 'utf8')).toBe(before)
+  })
+
+  // browsers.ts logs this message: the path names the person, and JSON.parse quotes the file, a proxy password with it.
+  it('a file that cannot be read is named by its base name and a fixed word, never its path or text', () => {
+    writeFileSync(path, 'hunter2-proxy-password')
+    expect(() => new StateFile(path).read()).toThrow(expect.objectContaining({ message: 'agent-browser.json cannot be read (not valid JSON)' }))
+    writeFileSync(path, '[]')
+    expect(() => new StateFile(path).read()).toThrow(expect.objectContaining({ message: 'agent-browser.json is not a browser state file' }))
+  })
+
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('a file this account cannot read says why, by its base name', () => {
+    writeFileSync(path, JSON.stringify({ browsers: {}, deleting: [], setup: null }))
+    chmodSync(path, 0o000)
+    expect(() => new StateFile(path).read()).toThrow(expect.objectContaining({ message: 'agent-browser.json cannot be read (EACCES)' }))
   })
 
   it('the save goes through a temporary file renamed onto the target', () => {

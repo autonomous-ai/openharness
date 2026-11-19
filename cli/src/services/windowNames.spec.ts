@@ -11,13 +11,18 @@ vi.mock('../lib/oneshot.js', () => ({ runRouterOneShot: vi.fn(async () => ({ tex
 // The real `opencode models` path, run with a command that lists nothing.
 vi.mock('../lib/engineBin.js', () => ({ opencodeBinAsync: () => '/bin/echo' }))
 // Pass-through, recording each call that opens, writes or renames a file by its name.
-const disk = vi.hoisted(() => ({ events: [] as string[][] }))
+// `refuse`: the next rename fails, as a full disk would.
+const disk = vi.hoisted(() => ({ events: [] as string[][], refuse: false }))
 vi.mock('node:fs', async (original) => {
   const actual = await original<typeof import('node:fs')>()
   return { ...actual,
     openSync: (...args: Parameters<typeof actual.openSync>) => { disk.events.push(['open', String(args[0])]); return actual.openSync(...args) },
     writeFileSync: (...args: Parameters<typeof actual.writeFileSync>) => { disk.events.push(['write', String(args[0])]); return actual.writeFileSync(...args) },
-    renameSync: (...args: Parameters<typeof actual.renameSync>) => { disk.events.push(['rename', String(args[0]), String(args[1])]); return actual.renameSync(...args) },
+    renameSync: (...args: Parameters<typeof actual.renameSync>) => {
+      disk.events.push(['rename', String(args[0]), String(args[1])])
+      if (disk.refuse) { disk.refuse = false; throw Object.assign(new Error('no space left'), { code: 'ENOSPC' }) }
+      return actual.renameSync(...args)
+    },
   }
 })
 /** The calls that named [file] itself; a fresh temporary name beside it (`<file>.<pid>.<uuid>.tmp`) shown as `<tmp>`. */
@@ -208,15 +213,43 @@ describe('window names', () => {
 
   it('a name it cannot write is still answered, and the error said', async () => {
     const dataDir = mkdtempSync(join(tmpdir(), 'window-names-'))
-    // The names file is a folder: the scratch folder can be made, the file cannot be written.
-    const { mkdirSync } = await import('node:fs')
-    mkdirSync(join(dataDir, 'window-names.json'))
     const error = vi.spyOn(console, 'error').mockImplementation(() => {})
     const { name } = setup({ dataDir })
+    disk.refuse = true
     expect(await name(['tui'])).toEqual({ name: null, pending: true })
     await vi.waitFor(async () => expect(await name(['tui'])).toEqual({ name: 'Harness TUI LMStudio' }))
     expect(error).toHaveBeenCalledWith('[window-names] could not keep the names:', expect.any(String))
     error.mockRestore()
+  })
+
+  it('a torn window-names.json is set aside, not written over', async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'window-names-'))
+    const file = join(dataDir, 'window-names.json')
+    writeFileSync(file, '[["k1","N1"')
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const { name } = setup({ dataDir })
+    expect(await name(['tui'])).toEqual({ name: null, pending: true })
+    await vi.waitFor(async () => expect(await name(['tui'])).toEqual({ name: 'Harness TUI LMStudio' }))
+    expect(readFileSync(`${file}.unreadable`, 'utf8')).toBe('[["k1","N1"')
+    expect(JSON.parse(readFileSync(file, 'utf8'))).toHaveLength(1)
+    expect(warn).toHaveBeenCalledWith('[state] window-names.json could not be read (not valid JSON); kept as window-names.json.unreadable, starting empty.')
+    warn.mockRestore()
+  })
+
+  // A read that failed read nothing: the names it may hold are not replaced by this run's alone.
+  it('a window-names.json that could not be read is not written over', async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'window-names-'))
+    const file = join(dataDir, 'window-names.json')
+    // A folder at its name: every read of it fails (EISDIR).
+    const { mkdirSync } = await import('node:fs')
+    mkdirSync(file)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const { name } = setup({ dataDir })
+    disk.events = []
+    expect(await name(['tui'])).toEqual({ name: null, pending: true })
+    await vi.waitFor(async () => expect(await name(['tui'])).toEqual({ name: 'Harness TUI LMStudio' }))
+    expect(touching(file)).toEqual([])
+    warn.mockRestore()
   })
 
   it('the save goes through a temporary file renamed onto the target', async () => {

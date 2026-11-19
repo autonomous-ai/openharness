@@ -6,22 +6,27 @@ import { PRODUCT_USAGE_METRICS } from '../lib/productUsageContract.js'
 import { createProductUsage, type ProductUsageDeps } from './productUsage.js'
 
 // Every file opened for writing and every rename, in order, from node:fs and node:fs/promises alike; each call passes
-// through (lib/secureState.ts imports node:fs too).
-const disk = vi.hoisted(() => ({ calls: [] as Array<[op: 'write' | 'rename', path: string, to?: string]> }))
+// through (lib/secureState.ts imports node:fs too). `blocking`: the paths of the synchronous ones.
+const disk = vi.hoisted(() => ({ calls: [] as Array<[op: 'write' | 'rename', path: string, to?: string]>, blocking: [] as string[] }))
 vi.mock('node:fs', async (original) => {
   const actual = await original<typeof import('node:fs')>()
   const { O_WRONLY, O_RDWR } = actual.constants
   return { ...actual,
     openSync: (...args: Parameters<typeof actual.openSync>) => {
       const flags = args[1]
-      if (typeof flags === 'number' ? flags & (O_WRONLY | O_RDWR) : flags !== undefined && flags !== 'r') disk.calls.push(['write', String(args[0])])
+      if (typeof flags === 'number' ? flags & (O_WRONLY | O_RDWR) : flags !== undefined && flags !== 'r') {
+        disk.calls.push(['write', String(args[0])]); disk.blocking.push(String(args[0]))
+      }
       return actual.openSync(...args)
     },
     writeFileSync: (...args: Parameters<typeof actual.writeFileSync>) => {
-      if (typeof args[0] !== 'number') disk.calls.push(['write', String(args[0])])
+      if (typeof args[0] !== 'number') { disk.calls.push(['write', String(args[0])]); disk.blocking.push(String(args[0])) }
       return actual.writeFileSync(...args)
     },
-    renameSync: (from: PathLike, to: PathLike) => { disk.calls.push(['rename', String(from), String(to)]); return actual.renameSync(from, to) },
+    renameSync: (from: PathLike, to: PathLike) => {
+      disk.calls.push(['rename', String(from), String(to)]); disk.blocking.push(String(to))
+      return actual.renameSync(from, to)
+    },
   }
 })
 vi.mock('node:fs/promises', async (original) => {
@@ -46,7 +51,7 @@ beforeEach(() => {
   })
   usage = createProductUsage({ file, now: () => now, request })
 })
-afterEach(async () => { await usage.stop(); disk.calls = []; vi.restoreAllMocks(); rmSync(dir, { recursive: true, force: true }) })
+afterEach(async () => { await usage.stop(); disk.calls = []; disk.blocking = []; vi.restoreAllMocks(); rmSync(dir, { recursive: true, force: true }) })
 const totals = () => {
   const result: Record<string, number> = {}
   for (const report of sent as { counters: Record<string, number> }[]) for (const [k, v] of Object.entries(report.counters)) result[k] = (result[k] ?? 0) + v
@@ -995,6 +1000,16 @@ describe('the counts file is written whole and never written over', () => {
       expect(from).not.toBe(file)
       expect(dirname(from)).toBe(dir)
     }
+  })
+
+  // The gateway's event loop carries terminal traffic: a save of up to 256 KiB, and a busy rename retried on Windows,
+  // must not hold it. Only stop() writes synchronously, as the process goes.
+  it('a save while running blocks no event loop', async () => {
+    await usage.sync()
+    disk.blocking = []
+    usage.counter('create_requests'); await usage.sync()
+    expect(renamesOnto(file).length).toBeGreaterThan(0)
+    expect(disk.blocking.filter(path => path.startsWith(file))).toEqual([])
   })
 
   it('a file at the old temporary names is left alone', async () => {
