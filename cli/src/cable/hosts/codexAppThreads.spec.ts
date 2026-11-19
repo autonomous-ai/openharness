@@ -66,6 +66,16 @@ describe('the query', () => {
     for (let n = 1; n <= 5; n++) expect(result.order).not.toContain(uuid(n))
   })
 
+  it('rows tied at the limit keep the highest ids, as the store\'s index orders them, with no such index too', async () => {
+    const fx = fixture()
+    fx.threads(Array.from({ length: 205 }, (_, i) => thread(i + 1, 100)))
+    const writer = fx.writer()
+    writer.exec('DROP INDEX idx_threads_recency_at_ms')
+    writer.close()
+    const result = await ok(new CodexAppThreads(fx.home))
+    for (let n = 1; n <= 5; n++) expect(result.order).not.toContain(uuid(n))
+  })
+
   it('a row with a bad id or folder is skipped and counted', async () => {
     const fx = fixture()
     const bad = [
