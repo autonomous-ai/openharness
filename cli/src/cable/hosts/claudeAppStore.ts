@@ -41,7 +41,8 @@ export interface ClaudeAppSession {
   cwd: string
   /** `title` after the title rule (at most 64 characters), so a held session stays small whatever the app wrote. */
   title?: string
-  /** The store's, when a finite number; else the file's mtime (ms). */
+  /** The store's, when a finite number; else the file's mtime (ms). A read hands out its sort time, never past the
+   *  mtime: a time in the future would pin the session first. */
   lastActivityAt: number
 }
 /** The folders read, each an absolute path of a real folder, in name order. */
@@ -301,7 +302,8 @@ export class ClaudeAppStore {
       top = newest([...kept.values()].map((one) => one.time))
     }
     const sessions = [...kept.values()]
-      .sort((a, b) => b.time - a.time || byName(a.name, b.name)).slice(0, MAX_LISTED).map((one) => one.session)
+      .sort((a, b) => b.time - a.time || byName(a.name, b.name)).slice(0, MAX_LISTED)
+      .map((one) => ({ ...one.session, lastActivityAt: one.time }))
     const over = this.overFolders + [...this.orgs.values()].reduce((sum, org) => sum + org.over, 0) + cut
     return { sessions, parsed, skipped, over, more: cut > 0 }
   }
