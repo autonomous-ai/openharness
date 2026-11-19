@@ -34,6 +34,61 @@ pub fn system(
     Arc::new(source)
 }
 
+/// Which source is following the app in front, so a line that it stopped names it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Source {
+    X11,
+    Sway,
+    Hyprland,
+    Windows,
+}
+
+/// Why a source stopped telling; it tells nothing more. Each is one fixed log line, never the error's own text: that
+/// carries a display, a socket path or the window system's words.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Stop {
+    /// The window system could not be reached, or no thread could follow it.
+    NotFollowed,
+    /// The connection to it ended.
+    Ended,
+}
+
+impl Stop {
+    pub fn line(&self, source: Source) -> &'static str {
+        match (source, self) {
+            (Source::X11, Stop::NotFollowed) => "front: X11 not followed",
+            (Source::X11, Stop::Ended) => "front: X11 ended",
+            (Source::Sway, Stop::NotFollowed) => "front: sway not followed",
+            (Source::Sway, Stop::Ended) => "front: sway ended",
+            (Source::Hyprland, Stop::NotFollowed) => "front: Hyprland not followed",
+            (Source::Hyprland, Stop::Ended) => "front: Hyprland ended",
+            (Source::Windows, Stop::NotFollowed) => "front: Windows not followed",
+            (Source::Windows, Stop::Ended) => "front: Windows ended",
+        }
+    }
+}
+
+/// `follow` on a thread named for its source, then the line of why it stopped.
+pub fn on_thread(log: Arc<dyn Log>, source: Source, follow: impl FnOnce() -> Stop + Send + 'static) {
+    let name = match source {
+        Source::X11 => "front-x11",
+        Source::Sway => "front-sway",
+        Source::Hyprland => "front-hyprland",
+        Source::Windows => "front-windows",
+    };
+    let told = log.clone();
+    let spawned = std::thread::Builder::new().name(name.into()).spawn(move || told.line(follow().line(source)));
+    if spawned.is_err() {
+        log.line(Stop::NotFollowed.line(source));
+    }
+}
+
+/// Under Wayland, XWayland's DISPLAY sees only X11 windows, never the app in front: read X11 only in an X11 session.
+pub fn session_is_x11(session_type: Option<&str>, wayland_display: Option<&str>, display: Option<&str>) -> bool {
+    let set = |value: Option<&str>| value.is_some_and(|value| !value.is_empty());
+    session_type != Some("wayland") && !set(wayland_display) && set(display)
+}
+
 /// `{"front":"…"}`, one line: the value cut to FRONT_MAX characters. A value with a character that is not `kept` is the
 /// empty value.
 pub fn front_line(value: &str) -> String {
@@ -134,6 +189,37 @@ mod tests {
             assert!(written.len() <= 512, "{value:?}: {}", written.len());
             assert!(!written.contains(['\n', '\r']), "{written}");
         }
+    }
+
+    #[test]
+    fn a_wayland_session_is_not_x11() {
+        let x11 = [
+            (Some("x11"), None, Some(":0")),
+            // startx from a console, or a session manager that sets no type.
+            (Some("tty"), None, Some(":0")),
+            (None, None, Some(":1")),
+        ];
+        for (session_type, wayland_display, display) in x11 {
+            assert!(session_is_x11(session_type, wayland_display, display), "{session_type:?} {display:?}");
+        }
+        let not_x11 = [
+            // XWayland's DISPLAY under Wayland: X11 windows only, never the app in front.
+            (Some("wayland"), Some("wayland-0"), Some(":0")),
+            (Some("wayland"), None, Some(":0")),
+            (None, Some("wayland-0"), Some(":0")),
+            (Some("x11"), Some("wayland-1"), Some(":0")),
+            (Some("x11"), None, None),
+            (Some("x11"), None, Some("")),
+            (None, None, None),
+        ];
+        for (session_type, wayland_display, display) in not_x11 {
+            assert!(
+                !session_is_x11(session_type, wayland_display, display),
+                "{session_type:?} {wayland_display:?} {display:?}"
+            );
+        }
+        // An empty WAYLAND_DISPLAY names no display.
+        assert!(session_is_x11(Some("x11"), Some(""), Some(":0")));
     }
 
     const WAIT: std::time::Duration = std::time::Duration::from_secs(5);

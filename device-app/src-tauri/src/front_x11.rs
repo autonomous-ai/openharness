@@ -1,13 +1,13 @@
 //! The app in front on Linux X11: the window manager sets the root window's `_NET_ACTIVE_WINDOW`, and the X server
 //! tells each change. No timer, no permission. Wayland has no common way to tell: there this source tells nothing.
 
-use crate::types::Log;
 use std::path::Path;
-use std::sync::Arc;
 #[cfg(target_os = "linux")]
 use {
-    crate::front::FrontSource,
+    crate::front::{FrontSource, Source, Stop, on_thread, session_is_x11},
+    crate::types::Log,
     std::error::Error,
+    std::sync::Arc,
     x11rb::connection::Connection,
     x11rb::protocol::Event,
     x11rb::protocol::xproto::{Atom, AtomEnum, ChangeWindowAttributesAux, ConnectionExt as _, EventMask, Window},
@@ -31,35 +31,7 @@ impl FrontSource for X11Front {
         }
         let Some(display) = display else { return };
         // Connecting can wait on a remote display: never on the thread that starts the app.
-        on_thread(self.log.clone(), move || follow(&display, &*changed));
-    }
-}
-
-/// Why the source stopped telling; it tells nothing more, as on Wayland. Each is one fixed log line, never the
-/// error's own text: x11rb's carries `$DISPLAY` and the X server's words.
-#[derive(Debug, PartialEq, Eq)]
-pub enum Stop {
-    /// The display could not be reached, or no thread could follow it.
-    NotFollowed,
-    /// The connection to it ended.
-    Ended,
-}
-
-impl Stop {
-    fn line(&self) -> &'static str {
-        match self {
-            Stop::NotFollowed => "front: X11 not followed",
-            Stop::Ended => "front: X11 ended",
-        }
-    }
-}
-
-/// `follow` on a thread of its own, then the line of why it stopped.
-pub fn on_thread(log: Arc<dyn Log>, follow: impl FnOnce() -> Stop + Send + 'static) {
-    let told = log.clone();
-    let spawned = std::thread::Builder::new().name("front-x11".into()).spawn(move || told.line(follow().line()));
-    if spawned.is_err() {
-        log.line(Stop::NotFollowed.line());
+        on_thread(self.log.clone(), Source::X11, move || follow(&display, &*changed));
     }
 }
 
@@ -113,12 +85,6 @@ pub fn exe_name(proc_root: &Path, pid: u32) -> Option<String> {
     Some(name.strip_suffix(" (deleted)").unwrap_or(name).to_string())
 }
 
-/// Under Wayland, XWayland's DISPLAY sees only X11 windows, never the app in front: read X11 only in an X11 session.
-pub fn session_is_x11(session_type: Option<&str>, wayland_display: Option<&str>, display: Option<&str>) -> bool {
-    let set = |value: Option<&str>| value.is_some_and(|value| !value.is_empty());
-    session_type != Some("wayland") && !set(wayland_display) && set(display)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -147,61 +113,23 @@ mod tests {
         assert_eq!(exe_name(proc_root.path(), 4343), None);
     }
 
-    #[test]
-    fn a_wayland_session_is_not_x11() {
-        let x11 = [
-            (Some("x11"), None, Some(":0")),
-            // startx from a console, or a session manager that sets no type.
-            (Some("tty"), None, Some(":0")),
-            (None, None, Some(":1")),
-        ];
-        for (session_type, wayland_display, display) in x11 {
-            assert!(session_is_x11(session_type, wayland_display, display), "{session_type:?} {display:?}");
-        }
-        let not_x11 = [
-            // XWayland's DISPLAY under Wayland: X11 windows only, never the app in front.
-            (Some("wayland"), Some("wayland-0"), Some(":0")),
-            (Some("wayland"), None, Some(":0")),
-            (None, Some("wayland-0"), Some(":0")),
-            (Some("x11"), Some("wayland-1"), Some(":0")),
-            (Some("x11"), None, None),
-            (Some("x11"), None, Some("")),
-            (None, None, None),
-        ];
-        for (session_type, wayland_display, display) in not_x11 {
-            assert!(
-                !session_is_x11(session_type, wayland_display, display),
-                "{session_type:?} {wayland_display:?} {display:?}"
-            );
-        }
-        // An empty WAYLAND_DISPLAY names no display.
-        assert!(session_is_x11(Some("x11"), Some(""), Some(":0")));
-    }
-
+    #[cfg(target_os = "linux")]
     const WAIT: std::time::Duration = std::time::Duration::from_secs(5);
 
     /// A log that hands each line on, so a test waits for it without a sleep.
+    #[cfg(target_os = "linux")]
     struct Lines(std::sync::mpsc::Sender<String>);
+    #[cfg(target_os = "linux")]
     impl Log for Lines {
         fn line(&self, text: &str) {
             let _ = self.0.send(text.into());
         }
     }
 
+    #[cfg(target_os = "linux")]
     fn lines() -> (Arc<dyn Log>, std::sync::mpsc::Receiver<String>) {
         let (send, lines) = std::sync::mpsc::channel();
         (Arc::new(Lines(send)), lines)
-    }
-
-    #[test]
-    fn why_following_stopped_is_one_fixed_line() {
-        for (stop, line) in [(Stop::NotFollowed, "front: X11 not followed"), (Stop::Ended, "front: X11 ended")] {
-            let (log, lines) = lines();
-            on_thread(log, move || stop);
-            assert_eq!(lines.recv_timeout(WAIT).as_deref(), Ok(line));
-            // The thread has ended and dropped the log: one line, then nothing.
-            assert_eq!(lines.recv_timeout(WAIT), Err(std::sync::mpsc::RecvTimeoutError::Disconnected));
-        }
     }
 
     #[cfg(target_os = "linux")]
@@ -209,7 +137,7 @@ mod tests {
     fn a_display_with_no_server_is_one_line_that_names_nothing() {
         let (log, lines) = lines();
         // A socket no server listens on: no TCP is tried for a `unix:` display.
-        on_thread(log, || follow("unix:59000", &|_| {}));
+        on_thread(log, Source::X11, || follow("unix:59000", &|_| {}));
         assert_eq!(lines.recv_timeout(WAIT).as_deref(), Ok("front: X11 not followed"));
         assert_eq!(lines.recv_timeout(WAIT), Err(std::sync::mpsc::RecvTimeoutError::Disconnected));
     }
