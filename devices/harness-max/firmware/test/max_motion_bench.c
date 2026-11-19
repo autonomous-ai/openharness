@@ -20,10 +20,12 @@ static ht_scene_t s_scene[2];
 static int s_front;
 static uint16_t s_px[HT_WIDTH * STRIP];
 
+// This thread's CPU time: what the host's other work takes while it waits (a loaded host's often more than a step) is
+// left out of every frame and step.
 static double now_us(void)
 {
     struct timespec t;
-    clock_gettime(CLOCK_MONOTONIC, &t);
+    clock_gettime(CLOCK_THREAD_CPUTIME_ID, &t);
     return t.tv_sec * 1e6 + t.tv_nsec / 1e3;
 }
 

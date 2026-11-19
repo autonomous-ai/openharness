@@ -68,7 +68,7 @@ static bool (*s_go_on)(void) = one_band;
 
 // max_ui_warm until it has nothing left, max_ui_warm_paint first while it has something, as max_app.c steps them: a
 // step under the lock leaves one image or layer at most to make and the model as it was (but for what the warming is
-// of); one out of it leaves the model as it was and, a band, bakes nothing. Its steps under the lock.
+// of); one out of it makes bands of that, leaves the model as it was and bakes nothing. Its steps under the lock.
 static int s_paints;   // and out of it
 static int warm(uint32_t now)
 {
@@ -83,7 +83,7 @@ static int warm(uint32_t now)
         if (max_ui_warm_paint(s_go_on)) {
             s_paints++;
             CHECK(!memcmp(&before, &max_m, sizeof before));
-            CHECK(!band || pod_cell_bakes() == bakes);   // a band copies a frame below 1x, it never bakes it
+            CHECK(band && pod_cell_bakes() == bakes);   // a band copies a frame below 1x, it never bakes it
             continue;
         }
         const unsigned painted = max_layer_painted();
@@ -241,16 +241,18 @@ static void test_not_resting(void)
     CHECK(max_row_moving(T0 + MAX_ROW_FRAME_MS) && !max_ui_warm(T0 + MAX_ROW_FRAME_MS));
     CHECK(!max_ui_warm_rests(T0 + MAX_ROW_FRAME_MS));
     max_layer_forget();   // what was owed given up
-    painted = max_layer_painted();
 
     rest(3, NULL);
     max_notice_set("Cancelled, nothing sent", T0);
     render(T0);
+    painted = max_layer_painted();
     CHECK(!max_ui_warm(T0 + MAX_ROW_FRAME_MS));
+    CHECK(max_layer_painted() == painted);
 
     rest(3, NULL);
     max_show(MAX_VIEW_INBOX);
     render(T0);
+    painted = max_layer_painted();
     CHECK(!max_ui_warm(T0 + MAX_ROW_FRAME_MS));
     CHECK(max_layer_painted() == painted);
 }
@@ -266,48 +268,37 @@ static void bake_one(unsigned i)
         if (one.runs[r].text[0] == 1) ht_raster(&one, (ht_rect_t){one.runs[r].x, one.runs[r].y, 1, 1}, px);
 }
 
-// The bakes with no room for one more start over (pod_draw.c), the glass's with them. The first time (other pages'
-// bakes filled them), the warming bakes the glass's again and every motion's again from its start: the glass's next
-// frame, and the motion's first frames, bake nothing. The second time (no room for the warming's), it bakes the
-// glass's again and no more of its own.
+// The bakes with no room for one more start over (pod_draw.c), and other pages' fill them. The row's pets below 1x take
+// none of them (each is an image, or in one): with the bakes as full as they get, and again just started over, the
+// warming bakes nothing, nor does the glass's next frame, and a motion painted ahead paints and bakes nothing.
 static void test_bakes_full(void)
 {
     rest(3, NULL);
-    unsigned fill = 0, last = pod_cell_bake_px(), one = 0;
-    while (pod_cell_bake_px() >= last) {   // how many more fit
+    unsigned fill = 0, last = pod_cell_bake_px();
+    while (pod_cell_bake_px() >= last) {   // how many fit
         CHECK(fill < 1000);
-        if (fill == 1) one = pod_cell_bake_px() - last;
         last = pod_cell_bake_px();
         bake_one(++fill);
     }
     CHECK(fill > 2);
-    rest(3, NULL);
-    for (unsigned i = 1; i < fill; i++) bake_one(i);   // as full as it gets
-    const unsigned full = pod_cell_bake_px();
-    warm(T0);
-    CHECK(pod_cell_bake_px() < full);   // the warming's bakes had no room
-    unsigned baked = pod_cell_bakes();
-    frame(T0 - MAX_ROW_FRAME_MS);
-    CHECK(pod_cell_bakes() == baked);
     char taps[MAX_ROW_HITS + 1][ID_MAX];
-    taps_of(taps);
-    const motion_t m = motion(taps[0]);
-    CHECK(!m.paints[0] && !m.paints[1]);
-
-    rest(3, NULL);
-    for (unsigned i = 1; i < fill; i++) bake_one(i);
-    unsigned ground = fill, starts = 0, px = pod_cell_bake_px();
-    for (int steps = 0; max_ui_warm_paint(one_band) || max_ui_warm(T0); steps++) {
-        CHECK(steps < 64 * STEPS);
-        starts += pod_cell_bake_px() < px;
-        if (starts == 1 && ground == fill)   // the first time: as full again
-            while (pod_cell_bake_px() + one <= last) bake_one(++ground);
-        px = pod_cell_bake_px();
+    for (int over = 0; over < 2; over++) {
+        rest(3, NULL);
+        for (unsigned i = 1; i < fill; i++) bake_one(i);   // as full as it gets
+        const unsigned full = pod_cell_bake_px();
+        if (over) {
+            bake_one(fill);
+            CHECK(pod_cell_bake_px() < full);   // started over
+        }
+        const unsigned baked = pod_cell_bakes();
+        warm(T0);
+        frame(T0 - MAX_ROW_FRAME_MS);
+        CHECK(pod_cell_bakes() == baked);
+        taps_of(taps);
+        const motion_t m = motion(taps[0]);
+        if (m.painted || m.baked) painted_where(NULL, taps[0], &m, 0);
+        CHECK(m.painted == 0 && m.baked == 0);
     }
-    CHECK(starts >= 2);
-    baked = pod_cell_bakes();
-    frame(T0 - MAX_ROW_FRAME_MS);
-    CHECK(pod_cell_bakes() == baked);
 }
 
 // After a motion, the page it came to is painted ahead again: listening, only its X (a tap anywhere else sends what
@@ -328,8 +319,8 @@ static void test_again(void)
     CHECK(m.painted == 0 && m.baked == 0);
 }
 
-// Out of the lock a call stops where it is told (at a band, or a bake: as many calls as bands and bakes), and an
-// image made a band at a time is the same pixels as one made in one go.
+// Out of the lock a call stops where it is told (at a band: as many calls as bands), and an image made a band at a time
+// is the same pixels as one made in one go.
 static void test_bands(void)
 {
     rest(3, NULL);

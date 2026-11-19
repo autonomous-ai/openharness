@@ -172,7 +172,8 @@ void max_layer_kept(ht_scene_t *s, int x, int l, int r, max_paint_t paint, const
 // The runs from `from` on (a pet, a logo or the ">_" mark, drawn on one colour `ground`) as one image over the glass:
 // dimmed and blurred `dim` (MAX_ONE whole) of the way as a sliver's are, and `keep` of 256 there by its alpha, so what
 // lies under it shows through (no box of the ground over it, as a fade by colours would leave). Painted again only
-// when the runs, the ground or the dim change.
+// when the runs, the ground or the dim change. Undimmed and whole, it is drawn as it is, but for its frames below 1x on
+// one colour: each an image of what its bake would be (no bake for a warming to make in one go).
 void max_layer_pet(ht_scene_t *s, int from, unsigned ground, int dim, unsigned keep);
 // The runs from `from` on, an agent of the row drawn on the glass from x (w wide) with its colours dimmed `dim` of the
 // way (max_dim) and its pets by max_layer_pet, cut to the glass's [l, r) as its own layer would be cut, and its rail
