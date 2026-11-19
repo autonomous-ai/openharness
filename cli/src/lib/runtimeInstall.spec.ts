@@ -608,9 +608,10 @@ describe('startGridPinRecheck', () => {
     }
   })
 
-  /** A snapshot of everything under the runtime dir: names, sizes and times. */
+  /** A snapshot of everything under the runtime dir: names, inodes, sizes and times. A write renames a new file in,
+   *  so the inode tells a rewrite that lands in the same clock tick as the last one. */
   const tree = (): string[] => readdirSync(runtimeDir, { recursive: true, withFileTypes: true })
-    .map((entry) => { const path = join(entry.parentPath, entry.name); const st = statSync(path); return `${path}:${st.size}:${st.mtimeMs}` })
+    .map((entry) => { const path = join(entry.parentPath, entry.name); const st = statSync(path); return `${path}:${st.ino}:${st.size}:${st.mtimeMs}` })
     .sort()
 
   it('re-reads the pin every ten minutes, writes nothing while it matches, and a moved pin reaches the next grid call', async () => {

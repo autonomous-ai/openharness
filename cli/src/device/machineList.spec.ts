@@ -358,14 +358,16 @@ describe('MachineListCache disk writes', () => {
     const path = join(dir, 'machines.json')
     const cache = new MachineListCache(ok([row()]), () => 'aabbccdd', () => {}, dir, () => OWNER)
     await cache.refresh()
-    const first = statSync(path).mtimeMs
+    // A write renames a new file in, so the inode tells a rewrite; two writes in one clock tick share an mtime.
+    const first = statSync(path).ino
 
     // The desktop asking again is the common case; an unchanged answer must cost no synchronous write.
     for (let i = 0; i < 5; i++) cache.adopt({ machines: [row()] })
-    expect(statSync(path).mtimeMs).toBe(first)
+    expect(statSync(path).ino).toBe(first)
 
     cache.adopt({ machines: [row({ machineId: 'm2' })] })   // a real change still lands
-    expect(statSync(path).mtimeMs).not.toBe(first)
+    expect(statSync(path).ino).not.toBe(first)
+    expect(readFileSync(path, 'utf8')).toContain('m2')
   })
 })
 

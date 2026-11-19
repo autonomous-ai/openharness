@@ -84,9 +84,10 @@ describe('the pane browser script', () => {
     const path = join(dir, 'bin', 'harness-browser')
     expect(writeBrowserShim("'a'", path)).toBe(true)
     expect(statSync(path).mode & 0o777).toBe(0o700)
-    const first = statSync(path).mtimeMs
+    // A write renames a new file in, so the inode tells a rewrite; two writes in one clock tick share an mtime.
+    const first = statSync(path).ino
     expect(writeBrowserShim("'a'", path)).toBe(true)
-    expect(statSync(path).mtimeMs).toBe(first)
+    expect(statSync(path).ino).toBe(first)
     expect(readFileSync(path, 'utf8')).toBe(browserShimScript("'a'"))
     writeFileSync(join(dir, 'file'), '')
     expect(writeBrowserShim("'a'", join(dir, 'file', 'nested', 'x'))).toBe(false)
