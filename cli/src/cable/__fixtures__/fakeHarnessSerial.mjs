@@ -7,13 +7,30 @@
 //   FAKE_SERIAL_DELAY  watch: wait this many ms before printing its lines
 //   FAKE_SERIAL_STUBBORN watch: ignore stdin EOF, to test bounded cleanup
 //   FAKE_SERIAL_OPEN   open: echo (default) | busy | gone | silent | partial | stubborn | stubborn-open | unplug:<ms>
+//                      | bridge:<endpoint>: carry the bytes to and from a Unix socket or \\.\pipe\… that a test's dial serves
 //   FAKE_SERIAL_PROBE  probe: free (default) | busy | gone
 // Every write that is followed by an exit waits for its callback: on a pipe a write can still be in flight.
+import { connect } from 'node:net'
+
 const [mode] = process.argv.slice(2)
 const env = process.env
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 const write = (stream, text) => new Promise((resolve) => stream.write(text, resolve))
 const exitAtEndOfStdin = () => { process.stdin.on('data', () => {}); process.stdin.on('end', () => process.exit(0)) }
+const bridge = (endpoint) => {
+  const socket = connect(endpoint)
+  socket.once('error', async () => { await write(process.stderr, 'gone\n'); process.exit(4) })
+  socket.once('connect', async () => {
+    socket.removeAllListeners('error')
+    await write(process.stderr, 'open\n')
+    // Either side ending ends the stand-in, once the bytes it carried are written.
+    process.stdin.pipe(socket, { end: false })
+    process.stdin.on('end', () => socket.end(() => process.exit(0)))
+    socket.pipe(process.stdout, { end: false })
+    socket.on('end', () => process.stdout.write('', () => process.exit(0)))
+    socket.on('error', () => process.exit(0))
+  })
+}
 
 if (mode === 'watch') {
   if (env.FAKE_SERIAL_STUBBORN) { process.stdin.resume(); process.on('SIGTERM', () => {}); setInterval(() => {}, 1000) }
@@ -38,7 +55,8 @@ if (mode === 'watch') {
   const behaviour = env.FAKE_SERIAL_OPEN ?? 'echo'
   if (behaviour === 'busy') { await write(process.stderr, 'busy\n'); process.exit(3) }
   if (behaviour === 'gone') { await write(process.stderr, 'gone\n'); process.exit(4) }
-  if (behaviour === 'stubborn') { process.stdin.resume(); process.on('SIGTERM', () => {}); setInterval(() => {}, 1000) }
+  if (behaviour.startsWith('bridge:')) bridge(behaviour.slice('bridge:'.length))
+  else if (behaviour === 'stubborn') { process.stdin.resume(); process.on('SIGTERM', () => {}); setInterval(() => {}, 1000) }
   else if (behaviour === 'silent') exitAtEndOfStdin()
   else {
     if (behaviour === 'partial') { await write(process.stderr, 'open'); exitAtEndOfStdin() }
