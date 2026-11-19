@@ -414,12 +414,19 @@ describe('withinApproved', () => {
     ['a command', { grants: { contributions: [PANEL, EVENT, { kind: 'statusBarItems', name: 'Dial' }, { kind: 'commands', name: 'Harness' }] } }],
     ['the panel retitled', { grants: { contributions: [{ kind: 'panels', name: 'Dial' }, EVENT, { kind: 'statusBarItems', name: 'Dial' }] } }],
     ['a replacement', { grants: { replacements: [{ command: 'x', action: 'open' }] } }],
+    ['a grant of another kind', { grants: { network: ['*'] } }],
+    ['a contribution with another field', { grants: { contributions: [PANEL, EVENT, { kind: 'statusBarItems', name: 'Dial', scope: '*' }] } }],
   ])('more access is not: %s', (_, over) => {
     expect(withinApproved(data(over), KEY, '1.2.3')).toBe(false)
   })
 
   it('no replacements: absent or empty', () => {
     expect(withinApproved(data({ grants: { replacements: [] } }), KEY, '1.2.3')).toBe(true)
+  })
+
+  it("a contribution's detail is within it", () => {
+    const contributions = [PANEL, EVENT, { kind: 'statusBarItems', name: 'Dial', detail: 'right' }]
+    expect(withinApproved(data({ grants: { contributions } }), KEY, '1.2.3')).toBe(true)
   })
 
   it.each<[string, unknown]>([
