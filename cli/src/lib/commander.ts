@@ -355,8 +355,10 @@ export class CommanderMirror {
   private historyFile: string
   private fullTextFile: string
   private askFile: string
-  /** The recap files the load could not read: no save goes over them. */
+  /** The recap files the load could not read: no save goes over them until a save's read of them again succeeds. */
   private readonly unread = new Set<string>()
+  /** Sessions deleted while a file was unread: once it can be read, its rows for them stay deleted. */
+  private readonly deleted = new Set<string>()
   private saveTimer: NodeJS.Timeout | null = null
 
   constructor(private opts: CommanderMirrorOpts) {
@@ -1191,6 +1193,7 @@ export class CommanderMirror {
     this.history.delete(sessionId)
     this.fullTexts.delete(sessionId)
     this.asks.delete(sessionId)
+    if (this.unread.size) this.deleted.add(sessionId)
     // Flushed: a deletion is asked for once, and a power cut after it must not bring the recaps back.
     this.save({ strict: true, durable: true })
     this.stored(sessionId)
@@ -1207,28 +1210,36 @@ export class CommanderMirror {
     this.save({ durable: true })
   }
 
-  private load(): void {
+  /**
+   * The recap files, or only [files]: a save reads again those its load could not, and takes in the rows the run does
+   * not hold already (what it holds is newer) and did not delete.
+   */
+  private load(files?: ReadonlySet<string>): void {
     // A file that cannot be parsed is set aside, never written over by the next save: its bytes stay for a person. One
-    // that cannot be read now (EACCES, EMFILE) may hold every recap: it is left, and this run saves nothing over it.
-    const read = (file: string): Record<string, unknown> => {
+    // that cannot be read now (EACCES, EMFILE, a scanner holding it on Windows) may hold every recap: it is left, and no
+    // save goes over it until one reads it again.
+    const read = (file: string): Array<[string, unknown]> => {
+      if (files && !files.has(file)) return []
       const state = readState(file, 'cache', jsonObject)
-      if (state.state === 'unreadable') this.unread.add(file)
-      return state.state === 'ok' ? state.value : {}
+      if (state.state === 'unreadable') { this.unread.add(file); return [] }
+      this.unread.delete(file)
+      return Object.entries(state.state === 'ok' ? state.value : {}).filter(([k]) => !this.deleted.has(k))
     }
-    for (const [k, v] of Object.entries(read(this.file))) if (typeof v === 'string') this.summaries.set(k, v)
+    for (const [k, v] of read(this.file)) if (typeof v === 'string' && !this.summaries.has(k)) this.summaries.set(k, v)
     // No history yet: recent() falls back to the latest summary.
-    for (const [k, v] of Object.entries(read(this.historyFile))) {
-      if (Array.isArray(v)) this.history.set(k, v.filter((x): x is string => typeof x === 'string').slice(0, RECENT_TURNS))
+    for (const [k, v] of read(this.historyFile)) {
+      if (Array.isArray(v) && !this.history.has(k)) this.history.set(k, v.filter((x): x is string => typeof x === 'string').slice(0, RECENT_TURNS))
     }
-    for (const [k, v] of Object.entries(read(this.fullTextFile))) {
+    for (const [k, v] of read(this.fullTextFile)) {
       // Re-clipped on the way in: the cap may have been lowered since this was written, and a stored
       // row is not evidence that it still fits the wire.
-      if (Array.isArray(v)) this.fullTexts.set(k, v.filter((x): x is string => typeof x === 'string').slice(0, RECENT_TURNS).map(t => clipBytes(t, FULL_TEXT_MAX_BYTES)))
+      if (Array.isArray(v) && !this.fullTexts.has(k)) this.fullTexts.set(k, v.filter((x): x is string => typeof x === 'string').slice(0, RECENT_TURNS).map(t => clipBytes(t, FULL_TEXT_MAX_BYTES)))
     }
     // No questions stored yet: the router falls back to recaps alone.
-    for (const [k, v] of Object.entries(read(this.askFile))) {
-      if (Array.isArray(v)) this.asks.set(k, v.filter((x): x is string => typeof x === 'string').slice(0, RECENT_TURNS).map((t) => t.slice(0, ASK_MAX_CHARS)))
+    for (const [k, v] of read(this.askFile)) {
+      if (Array.isArray(v) && !this.asks.has(k)) this.asks.set(k, v.filter((x): x is string => typeof x === 'string').slice(0, RECENT_TURNS).map((t) => t.slice(0, ASK_MAX_CHARS)))
     }
+    if (!this.unread.size) this.deleted.clear()
   }
 
   private saveSoon(): void {
@@ -1243,6 +1254,7 @@ export class CommanderMirror {
    */
   private save({ strict = false, durable = false } = {}): void {
     try {
+      if (this.unread.size) this.load(new Set(this.unread))
       mkdirSync(this.opts.dataDir, { recursive: true, mode: 0o700 })
       const files: Array<[string, Map<string, unknown>]> = [
         [this.file, this.summaries], [this.historyFile, this.history], [this.fullTextFile, this.fullTexts], [this.askFile, this.asks],
