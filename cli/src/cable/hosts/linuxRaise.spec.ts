@@ -246,13 +246,14 @@ describe('systemLinuxRaise', () => {
   }
   /** A machine with every program on PATH in /usr/bin, each run kept and answered by [answer] (else exit 1): the
    *  devices' own runner, so nothing of the developer's runs. */
-  const machine = (answer: (args: string[]) => { code: number; stdout: string } | undefined) => {
+  type Answer = { code: number; stdout: string } | undefined
+  const machine = (answer: (args: string[]) => Answer | Promise<Answer>) => {
     const runs: Array<[string, string[], number]> = []
     const lines: string[] = []
     const apps: OrcaDeps = {
       run: async (file, args, timeoutMs) => {
         runs.push([file, args, timeoutMs])
-        return answer(args) ?? { code: 1, stdout: '' }
+        return (await answer(args)) ?? { code: 1, stdout: '' }
       },
       onPath: (name) => `/usr/bin/${name}`,
       exists: () => false,
@@ -313,6 +314,37 @@ describe('systemLinuxRaise', () => {
       expect(existsSync(file)).toBe(false)
     }
     expect(loaded[0].file).not.toBe(loaded[1].file)
+  })
+
+  // An id is reused once its script is unloaded (RECORDED_KWIN.loadScript): two raises at once could run or unload each
+  // other's script.
+  it('on KDE runs one raise at a time: the second loads its script once the first unloaded its own', async () => {
+    session({ XDG_RUNTIME_DIR: folder, DBUS_SESSION_BUS_ADDRESS: BUS })
+    const first = deferred<void>()
+    let loads = 0
+    const { runs, lines, raise } = machine(async (args) => {
+      if (args.includes('string:org.kde.KWin')) return { code: 0, stdout: RECORDED_KWIN.nameHasOwner.stdout }
+      if (args.includes('org.kde.kwin.Scripting.loadScript')) {
+        if (loads++ === 0) await first.promise
+        return { code: 0, stdout: RECORDED_KWIN.loadScript.stdout }
+      }
+      if (args.includes('org.kde.kwin.Script.run')) return { code: 0, stdout: RECORDED_KWIN.run.stdout }
+      if (args.includes('org.kde.kwin.Scripting.unloadScript')) return { code: 0, stdout: RECORDED_KWIN.unloadScript.stdout }
+      return undefined
+    })
+    await vi.waitFor(() => expect(lines).toEqual(['[device] raise · kwin']))
+    const both = Promise.all([raise.raise({ app: 'kitty' }), raise.raise({ app: 'kitty' })])
+    await vi.waitFor(() => expect(loads).toBe(1))
+    // Every step a raise takes before its load is a promise already settled: a turn of the event loop runs them all.
+    await new Promise((done) => setImmediate(done))
+    expect(loads).toBe(1)
+    first.resolve()
+    expect(await both).toEqual([true, true])
+    const methods = runs.map(([, args]) => args.find((arg) => arg.startsWith('org.kde.kwin.'))).filter((method) => method !== undefined)
+    expect(methods).toEqual([
+      'org.kde.kwin.Scripting.loadScript', 'org.kde.kwin.Script.run', 'org.kde.kwin.Scripting.unloadScript',
+      'org.kde.kwin.Scripting.loadScript', 'org.kde.kwin.Script.run', 'org.kde.kwin.Scripting.unloadScript',
+    ])
   })
 
   it.each([
