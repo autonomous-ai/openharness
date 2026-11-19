@@ -269,15 +269,16 @@ export class ClaudeAppStore {
           cut = order.length - index
           break
         }
-        parsed++
         let text: string | undefined
         try {
           text = await textOf(file.path)
         } catch {
-          // Not held: a failed read is tried again at the next read, within its bound of parses.
+          // Not held: a failed read is tried again at the next read. Nor counted in the parses, which it did not use: 256
+          // of them first in the walk would cut every read before the same files, each asking for one more, for good.
           skipped++
           continue
         }
+        parsed++
         gave = sessionOf(file, text)
         file.parsed = { size: file.size, mtime: file.mtime, gave }
       }

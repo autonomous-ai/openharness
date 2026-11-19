@@ -149,7 +149,8 @@ Each session it keeps is one `HostAgent`:
   file's session can be newer than its mtime, so the rule below holds whatever the app writes.
 - **A read** walks every held file newest sort time first. A file whose size and mtime match what it was parsed at
   counts from what is held; a new or changed one is parsed. The walk stops once 16 sessions not archived are counted
-  and the next file's mtime is older than the 16th's sort time, or after 256 parses. A walk cut by the 256 asks for one
+  and the next file's mtime is older than the 16th's sort time, or after 256 parses (a file whose read failed is none:
+  it is not held, so it would cut every read before the same files). A walk cut by the 256 asks for one
   more read (the same coalescing below), so the rest is parsed with no change event; the `over` line counts it.
   Listed: the counted sessions, newest sort time first, at most 16. Archiving one of the 16 makes the walk go on to the
   next file, parsing it if it was never parsed.
