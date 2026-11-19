@@ -5,6 +5,7 @@
 // The demo model and its scenes are max_render.c's.
 // Each motion runs cold (nothing kept), then ahead (nothing kept, then max_ui_warm while the page rests, as the render
 // task paints it ahead), then warm: its first frames (0 and 1) ahead must cost no more than its warm worst.
+#include <stdlib.h>
 #include <time.h>
 
 #define main max_render_main
@@ -71,17 +72,32 @@ static void draw_frame(uint32_t now) { frame_at(now); }
 // Runs one motion REPEATS times; prints its frames' mean and worst cost (each frame's least of the runs: the host's
 // other work only ever adds, and the runs after the first find the pets' images and the slivers kept), the first run's
 // mean and worst (cold: nothing kept, every image painted as it first appears), the second's first frames and worst
-// (ahead: nothing kept, then painted ahead: max_ui_warm's steps, the worst of them, their time), and each against the
+// (ahead: nothing kept, then painted ahead: max_ui_warm's steps as max_app.c takes them, their time and its spread),
+// and each against the
 // whole glass of the page it moves on, timed before each run (the least of them: a host's cores and clocks change under
 // a run of seconds, and the frames and the glass they are measured against must be timed alike). verbose: each frame's
 // build and raster, its damage, the layers and pets it painted and the pet frames it resampled (pod_cell_bakes: below
 // 1x a frame is resampled once a size and ground).
+// A step out of the lock makes bands for STEP_US: the P4's WARM_STEP_US (max_app.c) at the host's ~60x its speed. A
+// step over OVER_US is one over the P4's 4 ms at that speed.
+enum { STEP_US = 3000 / 60, OVER_US = 4000 / 60, STEPS = 8192 };
+static double s_until;
+static bool step_on(void) { return now_us() < s_until; }
+static int by_time(const void *a, const void *b)
+{
+    const double x = *(const double *)a, y = *(const double *)b;
+    return x < y ? -1 : x > y;
+}
+
 static void bench(const max_motion_t *m, bool verbose)
 {
+    static double step_us[STEPS];
+    int locked = 0;
+    double locked_max = 0;
     static cost_t cost[REPEATS][FRAMES];
     static unsigned painted[FRAMES], baked[FRAMES];
     int frames = 0, steps = 0;
-    double cold = 0, cold_sum = 0, glass = 1e9, ahead = 0, ahead_first = 0, ahead_us = 0, step_max = 0;
+    double cold = 0, cold_sum = 0, glass = 1e9, ahead = 0, ahead_first = 0, ahead_us = 0;
     for (int r = 0; r < REPEATS; r++) {
         if (r < 2) {
             max_layer_forget();
@@ -91,12 +107,15 @@ static void bench(const max_motion_t *m, bool verbose)
         frame_at(T0 - 1000);
         frame_at(T0 - 500);
         frame_at(T0 - FRAME_MS);
-        for (bool more = r == 1; more; steps++) {
+        for (bool more = r == 1; more && steps < STEPS; steps++) {
             const double t0 = now_us();
-            more = max_ui_warm(T0 - FRAME_MS);
+            s_until = t0 + STEP_US;
+            const bool out = max_ui_warm_paint(step_on);
+            if (!out) more = max_ui_warm(T0 - FRAME_MS);
             const double t = now_us() - t0;
+            if (!out) locked++, locked_max = t > locked_max ? t : locked_max;
+            step_us[steps] = t;
             ahead_us += t;
-            step_max = t > step_max ? t : step_max;
         }
         const double g = whole_glass(4);
         glass = g < glass ? g : glass;
@@ -142,10 +161,15 @@ static void bench(const max_motion_t *m, bool verbose)
            " (%3.0f%%)  worst %5.0f us (%3.0f%%)  damage %3.0f%%\n",
            m->name, frames, glass, mean, 100 * mean / glass, worst, 100 * worst / glass, cold_mean,
            100 * cold_mean / glass, cold, 100 * cold / glass, 100 * px / frames / (HT_WIDTH * HT_HEIGHT));
+    int over = 0;
+    for (int i = 0; i < steps; i++) over += step_us[i] > OVER_US;
+    qsort(step_us, (size_t)steps, sizeof step_us[0], by_time);
     printf("  %-13s ahead: first frames %5.0f us (%3.0f%%, %s the warm worst)  worst %5.0f us (%3.0f%%)  painted in"
-           " %d steps, %.1f ms, the longest %4.0f us\n",
+           " %d steps (%d under the lock), %.1f ms\n",
            "", ahead_first, 100 * ahead_first / glass, ahead_first <= worst ? "within" : "OVER", ahead,
-           100 * ahead / glass, steps, ahead_us / 1000, step_max);
+           100 * ahead / glass, steps, locked, ahead_us / 1000);
+    printf("  %-13s ahead: a step p50 %3.0f us  p95 %3.0f us  max %4.0f us, %d over %d us; under the lock max %4.0f us\n",
+           "", step_us[steps / 2], step_us[steps * 95 / 100], step_us[steps - 1], over, OVER_US, locked_max);
 }
 
 int main(int argc, char **argv)

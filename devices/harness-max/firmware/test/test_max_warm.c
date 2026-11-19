@@ -3,7 +3,8 @@
 // paints no image and bakes no pet frame from its first frame to its last (its open agent's pet, on the clock, may
 // need a pose the warming did not land on: none when the tap comes on the warming's own clock); with room for less,
 // every motion's first frames still; the glass shows the same pixels as without it; the model is left as it was; a
-// step paints one image or layer at most; and nothing is painted ahead while the row is not at rest.
+// step under the lock paints nothing, and what it needs is made out of it a band at a time, the same pixels as made
+// whole; and nothing is painted ahead while the row is not at rest.
 #include "max_test.h"
 #include "pod/pod_draw.h"
 #include "pod/pod_pet.h"
@@ -59,17 +60,32 @@ static void rest_of(int n, const char *open, const char *engine)
 }
 static void rest(int n, const char *open) { rest_of(n, open, NULL); }
 
-// max_ui_warm until it has nothing left, each step painting one image or layer at most and leaving the model as it
-// was (but for what the warming is of); its steps.
+// What the warming makes out of the lock, a band (or a bake) a call, or all it can.
+static unsigned s_asked;
+static bool one_band(void) { return s_asked++, false; }
+static bool all_bands(void) { return s_asked++, true; }
+static bool (*s_go_on)(void) = one_band;
+
+// max_ui_warm until it has nothing left, max_ui_warm_paint first while it has something, as max_app.c steps them: a
+// step under the lock leaves one image or layer at most to make and the model as it was (but for what the warming is
+// of); one out of it leaves the model as it was. Its steps under the lock.
+static int s_paints;   // and out of it
 static int warm(uint32_t now)
 {
     static max_model_t before;
     int steps = 0;
-    for (bool more = true; more; steps++) {
-        CHECK(steps < STEPS);
+    s_paints = 0;
+    for (bool more = true; more;) {
+        CHECK(steps < STEPS && s_paints < 64 * STEPS);
         memcpy(&before, &max_m, sizeof before);
+        if (max_ui_warm_paint(s_go_on)) {
+            s_paints++;
+            CHECK(!memcmp(&before, &max_m, sizeof before));
+            continue;
+        }
         const unsigned painted = max_layer_painted();
         more = max_ui_warm(now);
+        steps++;
         CHECK(max_layer_painted() - painted <= 1);
         before.warm_key = max_m.warm_key;
         CHECK(!memcmp(&before, &max_m, sizeof before));
@@ -269,8 +285,8 @@ static void test_bakes_full(void)
     rest(3, NULL);
     for (unsigned i = 1; i < fill; i++) bake_one(i);
     unsigned ground = fill, starts = 0, px = pod_cell_bake_px();
-    for (int steps = 0; max_ui_warm(T0); steps++) {
-        CHECK(steps < STEPS);
+    for (int steps = 0; max_ui_warm_paint(one_band) || max_ui_warm(T0); steps++) {
+        CHECK(steps < 64 * STEPS);
         starts += pod_cell_bake_px() < px;
         if (starts == 1 && ground == fill)   // the first time: as full again
             while (pod_cell_bake_px() + one <= last) bake_one(++ground);
@@ -300,9 +316,31 @@ static void test_again(void)
     CHECK(m.painted == 0 && m.baked == 0);
 }
 
+// Out of the lock a call stops where it is told (at a band, or a bake: as many calls as bands and bakes), and an
+// image made a band at a time is the same pixels as one made in one go.
+static void test_bands(void)
+{
+    rest(3, NULL);
+    s_go_on = all_bands;
+    warm(T0);
+    const int whole = s_paints;
+    char taps[MAX_ROW_HITS + 1][ID_MAX];
+    taps_of(taps);
+    const motion_t in_one = motion(taps[1]);
+    rest(3, NULL);
+    s_go_on = one_band;
+    s_asked = 0;
+    warm(T0);
+    CHECK(s_paints > 4 * whole && s_asked <= (unsigned)(2 * s_paints));   // asked once a band, twice at an image's end
+    const motion_t banded = motion(taps[1]);
+    CHECK(in_one.painted == 0 && banded.painted == 0 && banded.frames == in_one.frames);
+    CHECK(!memcmp(banded.hash, in_one.hash, (size_t)in_one.frames * sizeof in_one.hash[0]));
+}
+
 int main(void)
 {
     test_ahead();
+    test_bands();
     test_first_frames();
     test_bakes_full();
     test_not_resting();

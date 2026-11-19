@@ -97,6 +97,8 @@ static int imin(int a, int b) { return a < b ? a : b; }
 static int imax(int a, int b) { return a > b ? a : b; }
 
 static void jobs_frame(void);
+static void owed_drop(void);
+static bool owed_any(void);
 
 void max_layer_frame(void)
 {
@@ -119,7 +121,7 @@ static bool held(uint32_t used) { return used == s_frame || (s_warm && (int32_t)
 // Whether this frame may paint an image or a layer: a warming step's first, the rest left to the next.
 static bool may_paint(void)
 {
-    if (!s_warm || s_painted == s_step) return true;
+    if (!s_warm || (!owed_any() && s_painted == s_step)) return true;
     s_more = true;
     return false;
 }
@@ -129,6 +131,7 @@ void max_layer_forget(void)
     for (int i = 0; i < PETS; i++) s_pets[i].full = false;
     memset(s_pool_px, 0xA5, sizeof s_pool_px);
     memset(s_pool_a, 0xA5, sizeof s_pool_a);
+    owed_drop();
 }
 
 // ---- colours ----
@@ -210,9 +213,10 @@ static inline uint16_t dim_px(const max_dim_t *d, uint16_t c, int x, int y)
 // columns.
 
 enum { GROUP = 8, WORDS = ((LAYER_W + GROUP - 1) / GROUP + 31) / 32, DOWN = 1, ACROSS = 2 };
-static EXT_RAM_BSS_ATTR uint32_t s_down[HT_HEIGHT][WORDS], s_across[HT_HEIGHT][WORDS];
+typedef struct { uint32_t down[HT_HEIGHT][WORDS], across[HT_HEIGHT][WORDS]; } busy_t;
+static EXT_RAM_BSS_ATTR busy_t s_busy;
 
-static void busy_add(int x0, int x1, int y0, int y1, int w, int passes)
+static void busy_add(busy_t *bz, int x0, int x1, int y0, int y1, int w, int passes)
 {
     x0 = imax(0, x0), x1 = imin(w, x1), y0 = imax(0, y0), y1 = imin(HT_HEIGHT, y1);
     if (x1 <= x0 || y1 <= y0) return;
@@ -220,20 +224,19 @@ static void busy_add(int x0, int x1, int y0, int y1, int w, int passes)
     for (int g = x0 / GROUP; g <= (x1 - 1) / GROUP; g++) m[g >> 5] |= 1u << (g & 31);
     for (int y = y0; y < y1; y++)
         for (int i = 0; i < WORDS; i++) {
-            if (passes & DOWN) s_down[y][i] |= m[i];
-            if (passes & ACROSS) s_across[y][i] |= m[i];
+            if (passes & DOWN) bz->down[y][i] |= m[i];
+            if (passes & ACROSS) bz->across[y][i] |= m[i];
         }
 }
 
-// The edges of the layer's runs in s_sub over [0, w). Returns the row past anything painted but a one-px line the
-// glass's height (and the blur's reach below it): past it the layer is the black ground but for the line.
-static int busy_of(int w)
+// The edges of the layer's runs in sub over [0, w), into bz. Returns the row past anything painted but a one-px line
+// the glass's height (and the blur's reach below it): past it the layer is the black ground but for the line.
+static int busy_of(busy_t *bz, const ht_scene_t *sub, int w)
 {
-    memset(s_down, 0, sizeof s_down);
-    memset(s_across, 0, sizeof s_across);
-    int bottom = s_sub.background ? HT_HEIGHT : 0;
-    for (int i = 0; i < s_sub.count; i++) {
-        const ht_run_t *r = &s_sub.runs[i];
+    memset(bz, 0, sizeof *bz);
+    int bottom = sub->background ? HT_HEIGHT : 0;
+    for (int i = 0; i < sub->count; i++) {
+        const ht_run_t *r = &sub->runs[i];
         const ht_rect_t b = ht_run_bounds(r);
         const int l = b.x, e = l + b.w;
         if (e <= 0 || l >= w) continue;
@@ -242,17 +245,17 @@ static int busy_of(int w)
         if (!(tall && b.w == 1)) bottom = imax(bottom, b.y + b.h);
         if (kind == RUN_TEXT || kind == RUN_RECT_AA || kind == RUN_RECT_AA_STROKE) continue;
         if (kind == POD_GRAD || tall) {   // a glow (it ends in the ground's colour), a ground, the line: their sides
-            busy_add(l - BLUR_R, l + BLUR_R, b.y, b.y + b.h, w, ACROSS);
-            busy_add(e - BLUR_R, e + BLUR_R, b.y, b.y + b.h, w, ACROSS);
+            busy_add(bz, l - BLUR_R, l + BLUR_R, b.y, b.y + b.h, w, ACROSS);
+            busy_add(bz, e - BLUR_R, e + BLUR_R, b.y, b.y + b.h, w, ACROSS);
         } else {
-            busy_add(l - BLUR_R, e + BLUR_R, b.y - BLUR_R, b.y + b.h + BLUR_R, w, DOWN | ACROSS);
+            busy_add(bz, l - BLUR_R, e + BLUR_R, b.y - BLUR_R, b.y + b.h + BLUR_R, w, DOWN | ACROSS);
         }
     }
     bottom = imin(HT_HEIGHT, bottom + BLUR_R);
-    busy_add(0, BLUR_R, 0, bottom, w, ACROSS);
-    busy_add(w - BLUR_R, w, 0, bottom, w, ACROSS);
-    busy_add(0, w, 0, BLUR_R, w, DOWN);
-    if (bottom == HT_HEIGHT) busy_add(0, w, HT_HEIGHT - BLUR_R, HT_HEIGHT, w, DOWN);
+    busy_add(bz, 0, BLUR_R, 0, bottom, w, ACROSS);
+    busy_add(bz, w - BLUR_R, w, 0, bottom, w, ACROSS);
+    busy_add(bz, 0, w, 0, BLUR_R, w, DOWN);
+    if (bottom == HT_HEIGHT) busy_add(bz, 0, w, HT_HEIGHT - BLUR_R, HT_HEIGHT, w, DOWN);
     return bottom;
 }
 
@@ -285,16 +288,17 @@ static int spans_of(const uint32_t *m, int w, span_t *out)
     return n;
 }
 
-// The w-wide layer blurred down where busy (rows past the glass are transparent), in place: before a row is written,
-// what the rows below it read of it is kept in the ring.
-static void down(uint16_t *px, int w, const uint16_t *k)
+// Rows [y0, y1) of the w-wide layer blurred down where bz is busy (rows past the glass are transparent), in place:
+// before a row is written, what the rows below it read of it is kept in the ring. Rows above y0 done before, with the
+// same ring.
+static void down(uint16_t *px, int w, const uint16_t *k, const busy_t *bz, uint16_t (*ring)[LAYER_W], int y0, int y1)
 {
     span_t sp[SPANS], keep[SPANS];
-    for (int y = 0; y < HT_HEIGHT; y++) {
+    for (int y = y0; y < y1; y++) {
         uint32_t read[WORDS] = {0};
         for (int t = 1; t <= BLUR_R && y + t < HT_HEIGHT; t++)
-            for (int i = 0; i < WORDS; i++) read[i] |= s_down[y + t][i];
-        const int n = spans_of(s_down[y], w, sp), kn = spans_of(read, w, keep);
+            for (int i = 0; i < WORDS; i++) read[i] |= bz->down[y + t][i];
+        const int n = spans_of(bz->down[y], w, sp), kn = spans_of(read, w, keep);
         if (!n && !kn) continue;
         uint16_t *row = px + (size_t)y * w;
         for (int i = 0; i < n; i++) {
@@ -305,7 +309,7 @@ static void down(uint16_t *px, int w, const uint16_t *k)
             const uint32_t wt = k[t < 0 ? -t : t];
             const int yy = y + t;
             if (!wt || yy < 0 || yy >= HT_HEIGHT) continue;
-            const uint16_t *src = yy < y ? s_ring[yy % BLUR_R] : px + (size_t)yy * w;
+            const uint16_t *src = yy < y ? ring[yy % BLUR_R] : px + (size_t)yy * w;
             for (int i = 0; i < n; i++)
                 for (int x = sp[i].x0; x < sp[i].x1; x++) {
                     s_rb[x] += wt * rb_of(src[x]);
@@ -314,22 +318,23 @@ static void down(uint16_t *px, int w, const uint16_t *k)
         }
         for (int i = 0; i < kn; i++) {
             const int x0 = keep[i].x0;
-            memcpy(&s_ring[y % BLUR_R][x0], &row[x0], (size_t)(keep[i].x1 - x0) * sizeof row[0]);
+            memcpy(&ring[y % BLUR_R][x0], &row[x0], (size_t)(keep[i].x1 - x0) * sizeof row[0]);
         }
         for (int i = 0; i < n; i++)
             for (int x = sp[i].x0; x < sp[i].x1; x++) row[x] = pack(s_rb[x], s_g[x]);
     }
 }
 
-// Each row of a w-wide layer blurred across where busy (taps past its sides are transparent) and dimmed. Rows from
-// `bottom` on are only their busy columns.
-static void across(uint16_t *px, int w, int bottom, const uint16_t *k, const max_dim_t *d)
+// Rows [y0, y1) of a w-wide layer blurred across where bz is busy (taps past its sides are transparent) and dimmed.
+// Rows from `bottom` on are only their busy columns.
+static void across(uint16_t *px, int w, int bottom, const uint16_t *k, const max_dim_t *d, const busy_t *bz, int y0,
+                   int y1)
 {
     span_t sp[SPANS];
     int taps = 1;
     while (taps <= BLUR_R && k[taps]) taps++;
-    for (int y = 0; y < HT_HEIGHT; y++) {
-        const int n = spans_of(s_across[y], w, sp);
+    for (int y = y0; y < y1; y++) {
+        const int n = spans_of(bz->across[y], w, sp);
         if (y >= bottom && !n) continue;
         uint16_t *row = px + (size_t)y * w;
         memset(s_line, 0, BLUR_R * sizeof s_line[0]);
@@ -559,6 +564,38 @@ static bool movable(const ht_run_t *r)
            r->pro_kind == RUN_RECT_AA || r->pro_kind == RUN_RECT_AA_STROKE || r->pro_kind == POD_CELL;
 }
 
+// ---- a warming's paint, out of the lock ----
+//
+// A warming's frame paints nothing itself: the first image or layer it needs is taken (its entry and its room in the
+// pool kept from the glass's frames until it is made) and left here, with copies of what it is made from, for
+// max_layer_warm_paint to make a band of rows at a time, out of the model's lock: no step of the warming holds the
+// render task or the lock for more than a band. The frame is drawn again once it is made.
+
+enum { BAND_PX = 1024 };   // a band's pixels: under a ms on the P4 (a pet's blur reads 2 * BLUR_R rows more a band)
+typedef enum { OWED_NONE, OWED_BARE, OWED_DIM, OWED_KEPT } owed_kind_t;
+static EXT_RAM_BSS_ATTR struct {
+    owed_kind_t kind;
+    pet_t *pet, *src;   // the pet's image being made and (dimmed) the undimmed one it is made from
+    kept_t *kept;       // or the layer
+    job_t job;          // a dimmed pet's blur
+    int y;              // its next row; a layer's are all rasterised first, then blurred from y - HT_HEIGHT
+    int bottom;         // a layer's busy_of
+    busy_t busy;
+    uint16_t ring[BLUR_R][LAYER_W];
+    ht_scene_t scene;   // what a bare pet or a layer is rasterised from
+} s_owed;
+
+static void owed_drop(void)
+{
+    s_owed.kind = OWED_NONE;
+    s_owed.pet = s_owed.src = NULL;
+    s_owed.kept = NULL;
+}
+static bool owed_any(void) { return s_owed.kind != OWED_NONE; }
+bool max_layer_owes(void) { return owed_any(); }
+// An image or a layer the warming is making, or making one from: neither shown nor given up until it is made.
+static bool owed(const void *c) { return c == s_owed.pet || c == s_owed.src || c == s_owed.kept; }
+
 // Room for `area` px in the pool from the next place on, past any image this frame shows; the images there given up.
 // -1 when there is none.
 static int place(int area)
@@ -569,7 +606,7 @@ static int place(int area)
         const pet_t *shown = NULL;
         for (int i = 0; i < PETS && !shown; i++) {
             const pet_t *c = &s_pets[i];
-            if (c->full && held(c->used) && c->at < at + area && at < c->at + c->w * c->h) shown = c;
+            if (c->full && (held(c->used) || owed(c)) && c->at < at + area && at < c->at + c->w * c->h) shown = c;
         }
         if (!shown) {
             for (int i = 0; i < PETS; i++) {
@@ -588,7 +625,7 @@ static pet_t *find(const pet_t *k)
 {
     for (int i = 0; i < PETS; i++) {
         pet_t *c = &s_pets[i];
-        if (c->full && c->count == k->count && c->pinned == k->pinned && c->ground == k->ground && c->dim == k->dim &&
+        if (c->full && c != s_owed.pet && c->count == k->count && c->pinned == k->pinned && c->ground == k->ground && c->dim == k->dim &&
             c->w == k->w && c->h == k->h && (!k->pinned || (c->x == k->x && c->y == k->y)) &&
             !memcmp(c->runs, k->runs, (size_t)k->count * sizeof k->runs[0]))
             return c;
@@ -605,7 +642,7 @@ static pet_t *take(const pet_t *k)
             spare = c;
             break;
         }
-        if (!held(c->used) && (!spare || c->used < spare->used)) spare = c;
+        if (!held(c->used) && !owed(c) && (!spare || c->used < spare->used)) spare = c;
     }
     const int at = spare ? place(k->w * k->h) : -1;
     if (at < 0) {
@@ -620,7 +657,20 @@ static pet_t *take(const pet_t *k)
     return spare;
 }
 
-// k undimmed: its runs rasterised on its ground, what is not the ground its alpha (premultiplied: 0 where it is not).
+// Rows [y0, y1) of p undimmed, from its scene: its runs rasterised on its ground, what is not the ground its alpha
+// (premultiplied: 0 where it is not).
+static void bare_rows(const pet_t *p, const ht_scene_t *one, int y0, int y1)
+{
+    uint16_t *px = &s_pool_px[p->at];
+    uint8_t *a = &s_pool_a[p->at];
+    ht_raster(one, (ht_rect_t){p->x, (int16_t)(p->y + y0), p->w, (int16_t)(y1 - y0)}, px + (size_t)y0 * p->w);
+    for (int i = y0 * p->w; i < y1 * p->w; i++) {
+        const bool on = px[i] != p->ground;
+        a[i] = on ? 255 : 0;
+        if (!on) px[i] = 0;
+    }
+}
+// k undimmed.
 static pet_t *undimmed(const pet_t *k, const ht_run_t *runs)
 {
     s_bare = *k;
@@ -628,32 +678,30 @@ static pet_t *undimmed(const pet_t *k, const ht_run_t *runs)
     pet_t *p = find(&s_bare);
     if (p) return p;
     if (!may_paint() || !(p = take(&s_bare))) return NULL;
-    uint16_t *px = &s_pool_px[p->at];
-    uint8_t *a = &s_pool_a[p->at];
-    ht_scene_clear(&s_one, p->ground);
-    memcpy(s_one.runs, runs, (size_t)p->count * sizeof runs[0]);
-    s_one.count = p->count;
+    ht_scene_t *one = s_warm ? &s_owed.scene : &s_one;
+    ht_scene_clear(one, p->ground);
+    memcpy(one->runs, runs, (size_t)p->count * sizeof runs[0]);
+    one->count = p->count;
     // A frame below 1x on one colour is baked for the frames that draw it again (pod_cell_flat); drawn into this image
     // once, on nothing but that colour, it is resampled straight in: the same pixels, no room taken from the bakes the
     // glass draws from (a warming's frames would fill it).
     for (int i = 0; i < p->count; i++) {
-        ht_run_t *r = &s_one.runs[i];
+        ht_run_t *r = &one->runs[i];
         if (r->pro_kind != POD_CELL || r->text[0] != 1 || r->fg != p->ground) continue;
         const ht_rect_t b = ht_run_bounds(r);
         bool bare = true;
         for (int j = 0; j < i && bare; j++) {
-            const ht_rect_t u = ht_run_bounds(&s_one.runs[j]);
+            const ht_rect_t u = ht_run_bounds(&one->runs[j]);
             bare = u.x >= b.x + b.w || b.x >= u.x + u.w || u.y >= b.y + b.h || b.y >= u.y + u.h;
         }
         if (bare) r->text[0] = 0;
     }
-    ht_raster(&s_one, (ht_rect_t){k->x, k->y, p->w, p->h}, px);
-    for (int i = 0; i < p->w * p->h; i++) {
-        const bool on = px[i] != p->ground;
-        a[i] = on ? 255 : 0;
-        if (!on) px[i] = 0;
-    }
     s_painted++;
+    if (s_warm) {   // made out of the lock
+        s_owed.kind = OWED_BARE, s_owed.pet = p, s_owed.y = 0;
+        return NULL;
+    }
+    bare_rows(p, one, 0, p->h);
     return p;
 }
 
@@ -669,8 +717,12 @@ static pet_t *dimmed_pet(const pet_t *k, const ht_run_t *runs)
     const job_t j = {.src = &s_pool_px[u->at], .alpha = &s_pool_a[u->at], .kx = kernel_x(p->dim),
                      .ky = kernel_y(p->dim), .d = max_dim_of(p->dim), .dims = true, .sw = p->w, .sh = p->h, .ow = p->w,
                      .oh = p->h, .out = &s_pool_px[p->at], .out_a = &s_pool_a[p->at], .pet = p};
-    job_ask(&j);
     s_painted++;
+    if (s_warm) {   // made out of the lock
+        s_owed.kind = OWED_DIM, s_owed.pet = p, s_owed.src = u, s_owed.job = j, s_owed.y = 0;
+        return NULL;
+    }
+    job_ask(&j);
     return p;
 }
 
@@ -986,6 +1038,22 @@ static void on_glass(ht_scene_t *s, int x, int l, int r, max_paint_t paint, cons
     max_layer_cut(s, from, x, SLIVER_W, l, r, MAX_ONE);
 }
 
+// Rows [y0, y1) of a sliver's layer, rasterised whole, blurred and dimmed as it is kept (rows above done before).
+static void kept_rows(uint16_t *px, int bottom, const busy_t *bz, uint16_t (*ring)[LAYER_W], int y0, int y1)
+{
+    const max_dim_t d = max_dim_of(MAX_ONE);
+    memset(s_memo_of, 0, sizeof s_memo_of);   // a frame's own layers may have dimmed by the memo since
+    down(px, LAYER_W, kernel_y(MAX_ONE), bz, ring, y0, y1);
+    across(px, LAYER_W, bottom, kernel_x(MAX_ONE), &d, bz, y0, y1);
+}
+static void kept_made(kept_t *k, const ht_scene_t *sub)
+{
+    memcpy(k->runs, sub->runs, (size_t)sub->count * sizeof sub->runs[0]);
+    k->count = sub->count;
+    k->full = true;
+    k->revision++;
+}
+
 void max_layer_kept(ht_scene_t *s, int x, int l, int r, max_paint_t paint, const void *arg)
 {
     paint_sub(0, paint, arg);
@@ -994,7 +1062,7 @@ void max_layer_kept(ht_scene_t *s, int x, int l, int r, max_paint_t paint, const
         kept_t *c = &s_kept[i];
         if (c->full && c->count == s_sub.count && !memcmp(c->runs, s_sub.runs, (size_t)c->count * sizeof c->runs[0]))
             k = c;
-        else if (!held(c->used) && (!spare || c->used < spare->used))   // the longest unseen, never this frame's
+        else if (!held(c->used) && !owed(c) && (!spare || c->used < spare->used))   // the longest unseen, not this frame's
             spare = c;
     }
     if (!k) {
@@ -1004,20 +1072,63 @@ void max_layer_kept(ht_scene_t *s, int x, int l, int r, max_paint_t paint, const
             return;
         }
         k = spare;
+        s_painted++;
+        if (s_warm) {   // made out of the lock; on the glass this frame
+            k->full = false;
+            memcpy(&s_owed.scene, &s_sub, sizeof s_sub);
+            s_owed.kind = OWED_KEPT, s_owed.kept = k, s_owed.y = 0;
+            on_glass(s, x, l, r, paint, arg);
+            return;
+        }
         uint16_t *px = s_kept_px[k - s_kept];
         ht_raster(&s_sub, (ht_rect_t){0, 0, LAYER_W, HT_HEIGHT}, px);
-        const max_dim_t d = max_dim_of(MAX_ONE);
-        memset(s_memo_of, 0, sizeof s_memo_of);
-        const int bottom = busy_of(LAYER_W);
-        down(px, LAYER_W, kernel_y(MAX_ONE));
-        across(px, LAYER_W, bottom, kernel_x(MAX_ONE), &d);
-        memcpy(k->runs, s_sub.runs, (size_t)s_sub.count * sizeof s_sub.runs[0]);
-        k->count = s_sub.count;
-        k->full = true;
-        k->revision++;
-        s_painted++;
+        kept_rows(px, busy_of(&s_busy, &s_sub, LAYER_W), &s_busy, s_ring, 0, HT_HEIGHT);
+        kept_made(k, &s_sub);
     }
     k->used = s_frame;
     const ht_pro_bitmap_t b = {s_kept_px[k - s_kept] + (l - x), NULL, LAYER_W, HT_HEIGHT, k->revision, NULL};
     if (ht_pro_image(s, l, 0, &b)) s->runs[s->count - 1].w = (int16_t)(r - l);
+}
+
+bool max_layer_warm_paint(bool (*go_on)(void))
+{
+    while (s_owed.kind) {
+        const int y0 = s_owed.y;
+        bool made = false;
+        if (s_owed.kind == OWED_BARE) {
+            pet_t *p = s_owed.pet;
+            const int y1 = imin(p->h, y0 + imax(1, BAND_PX / p->w));
+            bare_rows(p, &s_owed.scene, y0, y1);
+            s_owed.y = y1;
+            made = y1 == p->h;
+        } else if (s_owed.kind == OWED_DIM) {
+            const job_t *j = &s_owed.job;
+            const int y1 = imin(j->oh, y0 + imax(1, BAND_PX / j->ow));
+            blur(&s_work[0], j->src, j->alpha, j->sw, j->sh, j->kx, j->ky, &j->d, j->ox, j->oy + y0, j->ow, y1 - y0,
+                 j->out + (size_t)y0 * j->ow, j->out_a + (size_t)y0 * j->ow, j->gx, j->gy + y0);
+            s_owed.y = y1;
+            made = y1 == j->oh;
+        } else {   // a layer: its rows rasterised, then blurred
+            uint16_t *px = s_kept_px[s_owed.kept - s_kept];
+            const int y1 = imin(2 * HT_HEIGHT, y0 + BAND_PX / LAYER_W);
+            if (y0 < HT_HEIGHT) {
+                ht_raster(&s_owed.scene, (ht_rect_t){0, (int16_t)y0, LAYER_W, (int16_t)(imin(y1, HT_HEIGHT) - y0)},
+                          px + (size_t)y0 * LAYER_W);
+                if (y1 >= HT_HEIGHT) s_owed.bottom = busy_of(&s_owed.busy, &s_owed.scene, LAYER_W);
+                s_owed.y = imin(y1, HT_HEIGHT);
+            } else {
+                kept_rows(px, s_owed.bottom, &s_owed.busy, s_owed.ring, y0 - HT_HEIGHT, y1 - HT_HEIGHT);
+                s_owed.y = y1;
+                if ((made = y1 == 2 * HT_HEIGHT)) kept_made(s_owed.kept, &s_owed.scene);
+            }
+        }
+        if (made) {   // kept by the warming from here
+            if (s_owed.pet) s_owed.pet->used = s_frame;
+            if (s_owed.src) s_owed.src->used = s_frame;
+            if (s_owed.kept) s_owed.kept->used = s_frame;
+            owed_drop();
+        }
+        if (!go_on()) break;
+    }
+    return s_owed.kind != OWED_NONE;
 }

@@ -273,6 +273,8 @@ typedef struct {
     max_form_t form;
     max_out_t outbox[MAX_OUTBOX];    // queued for the app to send (max_ui_take)
     int out_count;
+    // From here on: what a page, a talk and a render write (max_ui_warm.c sets it aside for a motion it draws). The
+    // roster, the questions, the form and the outbox above are only read by them.
     char selected[ID_MAX];           // the agent page's agent, "" = none (it left the ring)
     char toast_id[ID_MAX];           // what needed the person while they talked or the form was up, from toast_from
     uint32_t toast_from;
