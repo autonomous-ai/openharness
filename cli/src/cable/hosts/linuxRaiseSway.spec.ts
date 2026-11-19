@@ -95,6 +95,13 @@ describe('createSwayRaise', () => {
     expect(calls).toHaveLength(1)
   })
 
+  // pid 1 holds every orphan: a window it owns is no agent's.
+  it('takes no window by pid 1', async () => {
+    const { deps, calls } = login([listing(treeOf({ id: 7, pid: 1, app_id: 'a' }))])
+    expect(await createSwayRaise(deps, SOCKET).raise({ pids: [1], classes: [] })).toBe(false)
+    expect(calls).toHaveLength(1)
+  })
+
   it('never lets a pid or a node id out of form reach a command', async () => {
     const tree = treeOf(
       { id: 7, pid: -3, app_id: 'a' },

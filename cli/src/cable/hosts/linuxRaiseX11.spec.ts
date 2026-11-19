@@ -104,6 +104,13 @@ describe('createX11Raise', () => {
     expect(calls).toHaveLength(1)
   })
 
+  // pid 1 holds every orphan: a window it owns is no agent's.
+  it('matches nothing by pid 1', async () => {
+    const { calls, raise } = x11({ listing: { code: 0, stdout: `${RECORDED_WMCTRL.lpx}0x00c00001  0 1      init.Init             box init\n` } })
+    expect(await raise({ pids: [1] })).toBe(false)
+    expect(calls).toHaveLength(1)
+  })
+
   it('answers false with no second command when neither pid nor class matches', async () => {
     const { calls, raise } = x11()
     expect(await raise({ pids: [4242], classes: ['Code'] })).toBe(false)

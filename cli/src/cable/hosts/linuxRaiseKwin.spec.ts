@@ -137,6 +137,24 @@ describe('createKwinRaise', () => {
     expect(calls).toEqual([])
   })
 
+  it.each([
+    ['another transport', 'tcp:host=box,port=1'],
+    ['a second address', `${BUS};unix:path=/tmp/other`],
+    ['a guid left on', `${BUS},guid=0123`],
+  ])('writes nothing and runs nothing on a bus out of form: %s', async (_, bus) => {
+    const { deps, written, calls } = kwin(PLASMA_6)
+    expect(await createKwinRaise(deps, bus).raise({ pids: [3123], classes: ['foot'] })).toBe(false)
+    expect(written).toEqual([])
+    expect(calls).toEqual([])
+  })
+
+  it('takes a class only in the form every raise takes: one that starts with a letter or a digit', async () => {
+    const { backend, written, calls } = kwin(PLASMA_6)
+    expect(await backend.raise({ pids: [], classes: ['.foot', '-foot', '_foot'] })).toBe(false)
+    expect(written).toEqual([])
+    expect(calls).toEqual([])
+  })
+
   it('writes nothing and runs nothing with no dbus-send on PATH', async () => {
     const { backend, written, calls } = kwin(PLASMA_6, { onPath: () => null })
     expect(await backend.raise({ pids: [3123], classes: ['foot'] })).toBe(false)

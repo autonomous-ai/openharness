@@ -124,9 +124,9 @@ describe('createHyprlandRaise', () => {
 
   it('never puts a pid out of form on a command line', async () => {
     const windows = recordedWindows()
-    const odd = [0, 1, 1.5, -4101].map((pid) => ({ ...windows[0], pid }))
+    const odd = [0, 1, 1.5, -4101, 2 ** 53].map((pid) => ({ ...windows[0], pid }))
     const { raise, focused } = hyprland({ listing: listingOf(odd) })
-    expect(await raise({ pids: [0, 1, 1.5, -4101, Number.NaN] })).toBe(false)
+    expect(await raise({ pids: [0, 1, 1.5, -4101, Number.NaN, 2 ** 53] })).toBe(false)
     expect(focused()).toEqual([])
   })
 
