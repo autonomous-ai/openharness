@@ -230,12 +230,25 @@ export function createNativeInstallations({ directory, node = managedNodePath, d
         const file = join(directory, name), record = readRecord(file), hash = digest(record.text), claim = JSON.parse(record.text) as Claim
         retain(record)
         if (claim.version !== 1 || typeof claim.token !== 'string' || !claim.token || typeof claim.request !== 'string'
-          || claim.authority !== authorityFile || claim.witness !== witness(index) || JSON.stringify(claim.previous) !== JSON.stringify(previous)) throw Error('Invalid installation claim')
+          || typeof claim.authority !== 'string' || !claim.authority.endsWith('.authority') || typeof claim.witness !== 'string'
+          || !Array.isArray(claim.previous)) throw Error('Invalid installation claim')
+        // A claim names its history by the path it was written at. Linux's move of Harness's folder to the XDG paths
+        // (#4469) renames the history whole, its authority and dispatch witnesses with it, so every claim named the old
+        // path and every launch on an MSI held on "Invalid installation claim", its engine already installed
+        // (2026-11-19). The chain is checked as before, the old path read as this one.
+        const written = claim.authority.slice(0, -'.authority'.length)
+        const here = (path: string) => path === written || path.startsWith(`${written}.`) || path.startsWith(`${written}/`)
+          ? directory + path.slice(written.length) : path
+        if (here(claim.authority) !== authorityFile || here(claim.witness) !== witness(index)
+          || JSON.stringify(claim.previous.map(link => ({ ...link, file: here(link.file) }))) !== JSON.stringify(previous)) throw Error('Invalid installation claim')
         if (claim.request === request && (claim.engine !== engine || (!query && claim.recipe !== wantedRecipe))) return hold('The saved request’s installation choices changed.')
-        const resultRecord = maybe(`${file}.result`), slot = maybe(claim.witness)
+        const resultRecord = maybe(`${file}.result`), slot = maybe(witness(index))
         if (slot) retain(slot)
         if (!resultRecord) {
           if (index !== names.length - 1) throw Error('Unfinished installation predecessor')
+          // Its installer, and the steps below, read the claim's own paths: a moved history's last installer is left
+          // to settle where it began, never replayed.
+          if (written !== directory) return hold('An installer from before Harness’s folder moved is still unsettled; it is never replayed.')
           pending = { file, record, claim, slot }; break
         }
         if (!slot) throw Error('Missing installation dispatch witness')
