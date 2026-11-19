@@ -411,6 +411,10 @@ bool max_ui_link(bool up, const char *machine, uint32_t now_ms)
     max_m.page = max_m.cell_page = 0;
     memset(max_m.asks, 0, sizeof max_m.asks);
     max_m.parked_count = 0;
+    memset(max_m.apps, 0, sizeof max_m.apps);   // the apps too: the next list is a first one, followed by nothing
+    max_m.app_count = 0;
+    max_m.shown[0] = max_m.picked[0] = 0;
+    max_m.apps_known = max_m.harness_own = false;
     max_form_reset();
     max_m.out_count = 0;
     max_show(MAX_VIEW_AMBIENT);
@@ -450,6 +454,7 @@ bool max_ui_agents(const pro_agent_row_t *rows, int n, uint32_t now_ms)
     for (int i = 0; i < MAX_AGENTS; i++)
         if (max_m.asks[i].agent[0] && !max_find(max_m.asks[i].agent)) max_m.asks[i].agent[0] = 0;
     max_unpark_joined(now_ms);
+    if (max_m.harness_own) max_m.apps[0].count = k;   // the bar's own Harness: its agents are the ring
     bool changed = k != old || memcmp(max_m.agents, s_old, (size_t)k * sizeof s_old[0]);
     if (!max_find(max_m.selected)) max_m.selected[0] = 0;   // its page goes (settle)
     const int last = max_cell_pages() - 1;
@@ -702,30 +707,68 @@ bool max_ui_level(unsigned level, uint32_t now_ms)
     return true;   // the waveform moved
 }
 
+static const char HARNESS[] = "harness";   // cableHost.ts: the window's own app
+
 bool max_ui_apps(const char *shown, const pro_app_row_t *rows, int n, uint32_t now_ms)
 {
-    (void)now_ms;
-    if (n < 0) n = 0;
+    if (!rows || n < 0) n = 0;
     if (n > PRO_APPS_MAX) n = PRO_APPS_MAX;
     static max_app_t apps[PRO_APPS_MAX];   // over the 1 KB frame budget of the cable_link task
     memset(apps, 0, sizeof apps);
+    int harness = -1;
     for (int i = 0; i < n; i++) {
         max_copy(apps[i].id, sizeof apps[i].id, rows[i].id);
-        max_copy_label(apps[i].name, sizeof apps[i].name, rows[i].name && rows[i].name[0] ? rows[i].name : rows[i].id);
+        const char *name = rows[i].name && rows[i].name[0] ? rows[i].name : max_app_name(apps[i].id);
+        max_copy_label(apps[i].name, sizeof apps[i].name, name ? name : apps[i].id);
         apps[i].count = rows[i].count < 0 ? 0 : rows[i].count;
         apps[i].waiting = rows[i].waiting < 0 ? 0 : rows[i].waiting;
+        if (harness < 0 && !strcmp(apps[i].id, HARNESS)) harness = i;
     }
     char id[PRO_APP_ID_BYTES];
     max_copy(id, sizeof id, shown);
-    if (strcmp(id, max_m.shown)) max_m.cell_page = 0;   // another app's agents: from their first page
-    const bool changed = !max_m.apps_known || n != max_m.app_count || strcmp(id, max_m.shown) ||
-                         memcmp(apps, max_m.apps, sizeof apps);
+    // Harness first (V3's list). The window's tab shows it from a list that leaves it out (cableHost.ts tabApps): the
+    // bar adds it, the last row giving way when the list is full; its agents are the ring's.
+    const bool own = harness < 0 && !strcmp(id, HARNESS);
+    if (harness > 0 || own) {
+        max_app_t first;
+        memset(&first, 0, sizeof first);
+        int moved = harness;   // the rows before it step down one
+        if (own) {
+            max_copy(first.id, sizeof first.id, HARNESS);
+            max_copy(first.name, sizeof first.name, max_app_name(HARNESS));
+            first.count = max_m.count;   // waiting stays 0: the shown app's dots are the ring's own states
+            moved = n < PRO_APPS_MAX ? n++ : n - 1;
+        } else {
+            first = apps[harness];
+        }
+        memmove(&apps[1], &apps[0], (size_t)moved * sizeof apps[0]);
+        apps[0] = first;
+    }
+    const bool turned = strcmp(id, max_m.shown) != 0;
+    if (turned) max_m.cell_page = 0;   // another app's agents: from their first page
+    // The computer turned the bar to the app in front (V3's rule): never the first list, never the app the person just
+    // picked here, never over a person talking.
+    if (turned && max_m.apps_known && id[0]) {
+        if (strcmp(id, max_m.picked) && max_m.talk != MAX_TALK_RECORDING) {
+            const char *name = id;
+            for (int i = 0; i < n; i++)
+                if (!strcmp(apps[i].id, id)) name = apps[i].name;
+            char text[MAX_NOTICE_BYTES];
+            snprintf(text, sizeof text, "Following %s on your Mac", name);
+            max_ui_notice(text, MAX_NOTICE_MS, now_ms);
+        }
+        max_m.picked[0] = 0;
+    }
+    const bool changed = !max_m.apps_known || n != max_m.app_count || turned || memcmp(apps, max_m.apps, sizeof apps);
     memcpy(max_m.apps, apps, sizeof apps);
     max_m.app_count = n;
     memcpy(max_m.shown, id, sizeof id);
     max_m.apps_known = true;
+    max_m.harness_own = own;
     return changed;
 }
+
+void max_ui_app_picked(const char *app) { max_copy(max_m.picked, sizeof max_m.picked, app); }
 
 bool max_ui_update(int pct, const char *to)
 {

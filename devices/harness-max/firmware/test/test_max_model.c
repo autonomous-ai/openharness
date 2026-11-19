@@ -649,6 +649,54 @@ static void test_elapsed_format(void)
     }
 }
 
+// `apps`: Harness first, as V3 lists it. The window's tab names Harness shown in a list that leaves it out
+// (cableHost.ts tabApps): the bar adds it, its count the ring's. The computer turning the bar to another app says so
+// ("Following <App> on your Mac"): not for the first list, not for the app the person picked, not while they talk.
+static void test_apps(void)
+{
+    linked(ABC, 3);
+    const pro_app_row_t rows[] = {{"orca", "Orca", 2, 1}, {"harness", "Harness", 3, 0}, {"cmux", "", 1, 0}};
+    CHECK(max_ui_apps("orca", rows, 3, 100));
+    CHECK(max_m.app_count == 3 && !strcmp(max_m.apps[0].id, "harness") && !strcmp(max_m.apps[1].id, "orca"));
+    CHECK(!strcmp(max_m.apps[2].id, "cmux") && !strcmp(max_m.apps[2].name, "cmux"));   // no name: the daemon's
+    CHECK(!max_notice_shown(100));   // the first list: nothing followed
+    // The tab: Harness shown, left out of the list.
+    const pro_app_row_t tab[] = {{"orca", "Orca", 2, 1}};
+    CHECK(max_ui_apps("harness", tab, 1, 200));
+    CHECK(max_m.app_count == 2 && !strcmp(max_m.apps[0].id, "harness") && !strcmp(max_m.apps[0].name, "Harness"));
+    CHECK(max_m.apps[0].count == 3 && !strcmp(max_shown_app()->name, "Harness") && !strcmp(max_m.apps[1].id, "orca"));
+    CHECK(max_notice_shown(200) && !strcmp(max_m.notice, "Following Harness on your Mac"));
+    CHECK(!max_ui_apps("harness", tab, 1, 250));   // the same list again
+    roster(ABCDE, 5);   // its count follows the ring
+    CHECK(max_m.apps[0].count == 5);
+    // A full list: Harness takes the first place, the last row goes.
+    static char ids[PRO_APPS_MAX][8];
+    pro_app_row_t full[PRO_APPS_MAX];
+    for (int i = 0; i < PRO_APPS_MAX; i++) {
+        snprintf(ids[i], sizeof ids[i], "app%d", i);
+        full[i] = (pro_app_row_t){ids[i], ids[i], 1, 0};
+    }
+    CHECK(max_ui_apps("harness", full, PRO_APPS_MAX, 300) && max_m.app_count == PRO_APPS_MAX);
+    CHECK(!strcmp(max_m.apps[0].id, "harness") && !strcmp(max_m.apps[PRO_APPS_MAX - 1].id, ids[PRO_APPS_MAX - 2]));
+    // The person picks Orca: the daemon turning to it is no news.
+    max_ui_app_picked("orca");
+    max_ui_notice(NULL, 0, 400);
+    CHECK(max_ui_apps("orca", rows, 3, 400) && !max_notice_shown(400));
+    // The computer turns it to cmux, then back to Orca (the pick is spent): followed, by the app's name.
+    CHECK(max_ui_apps("cmux", rows, 3, 500) && !strcmp(max_m.notice, "Following cmux on your Mac"));
+    CHECK(max_ui_apps("orca", rows, 3, 600) && !strcmp(max_m.notice, "Following Orca on your Mac"));
+    // Not over a person talking.
+    max_ui_notice(NULL, 0, 700);
+    max_ui_talk(MAX_TALK_RECORDING, 700);
+    CHECK(max_ui_apps("harness", rows, 3, 800) && !max_notice_shown(800));
+    max_ui_talk(MAX_TALK_IDLE, 900);
+    // The link goes and the apps with it: the next list is a first one again.
+    max_ui_link(false, NULL, 1000);
+    CHECK(!max_m.apps_known && max_m.app_count == 0 && !max_m.shown[0]);
+    max_ui_link(true, "MacBook Pro", 1100);
+    CHECK(max_ui_apps("cmux", rows, 3, 1200) && !max_notice_shown(1200));
+}
+
 static void test_app_state(void)
 {
     max_ui_reset();
@@ -695,6 +743,7 @@ int main(void)
     test_agent_page_clock();
     test_recording_clock();
     test_elapsed_format();
+    test_apps();
     test_app_state();
     printf("test_max_model: %d checks passed\n", checks);
     return 0;

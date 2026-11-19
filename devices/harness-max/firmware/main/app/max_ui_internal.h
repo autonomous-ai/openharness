@@ -234,6 +234,8 @@ typedef struct {
     int app_count;
     char shown[PRO_APP_ID_BYTES];    // the app whose agents the ring holds
     bool apps_known;                 // an `apps` frame came: else the app column names the computer, and no Apps page
+    bool harness_own;                // apps[0] is the bar's own Harness, its count the ring's (max_ui_apps)
+    char picked[PRO_APP_ID_BYTES];   // the app the person picked on Apps, until an `apps` shows another
     max_inbox_t inbox[MAX_INBOX];    // newest first
     int inbox_count;
     int cell_page;                   // Overview's page of cells, within max_cell_pages()

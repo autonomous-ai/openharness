@@ -54,8 +54,12 @@ bool max_ui_summary(const char *id, const char *text, const char *recap, bool re
                     uint32_t now_ms);
 // The computer's window moved to this agent. Not a person at the bar: the page shown stays.
 bool max_ui_focus(const char *id);
-// `apps` (pro_app_apps): the shown app and every app with agents. Before the ring it names.
+// `apps` (pro_app_apps): the shown app and every app with agents. Before the ring it names. Harness is listed first, and
+// added when it is shown and the list leaves it out (the window's tab). The computer turning the bar to another app
+// shows "Following <App> on your Mac", unless it is the first list, the app picked here, or a person talks.
 bool max_ui_apps(const char *shown, const pro_app_row_t *rows, int n, uint32_t now_ms);
+// The person picked this app on Apps (MAX_ACT_PICK): the `apps` that shows it is their doing, not the computer's.
+void max_ui_app_picked(const char *app);
 
 // ---- New Harness ----
 // The welcome offers `form`: Apps shows "+ New". Read on every tick: a daemon restarted inside a session

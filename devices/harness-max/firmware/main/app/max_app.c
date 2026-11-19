@@ -498,7 +498,12 @@ static void act(const max_act_t *a)
         pro_cable_voice_form(NULL, 0);
         talk_begin(a->agent_id);
         break;
-    case MAX_ACT_PICK: pro_cable_app_pick(a->app, true); break;
+    case MAX_ACT_PICK:   // the person's pick: the `apps` that answers it is no "Following"
+        lock();
+        max_ui_app_picked(a->app);
+        unlock();
+        pro_cable_app_pick(a->app, true);
+        break;
     case MAX_ACT_NONE: break;
     }
 }

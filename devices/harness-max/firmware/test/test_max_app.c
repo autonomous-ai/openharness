@@ -401,6 +401,12 @@ static void test_an_app_card_picks_it(void)
     PICKED[0] = 0;
     tap_on(plant(MAX_HIT_APP, 1));
     CHECK(!strcmp(PICKED, "vscode") && max_m.view == MAX_VIEW_OVERVIEW);
+    // The daemon turns to it: the person's own pick, so no "Following"; the computer turning it back is followed.
+    pro_app_toast(NULL);
+    pro_app_apps("vscode", apps, 2);
+    CHECK(!max_notice_shown(now) && LOCK_DEPTH == 0);
+    pro_app_apps("orca", apps, 2);
+    CHECK(!strcmp(max_m.notice, "Following Orca on your Mac"));
 }
 
 // Attention outside its buttons brings the agent up on the computer, after the lock, and says where.
