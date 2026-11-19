@@ -531,7 +531,8 @@ function postObserved(port, body) {
  * session, 2026-11-13), and they must never leave this process. CLAUDE_CODE_HOST_SESSION_ID is the Claude app's own id
  * for the session it runs (`local_<random uuid>`): a tap on the dial opens the app on that session. It is an id, not a
  * credential (read in the app, 2026-11-14: it names the session in the app's list and its telemetry; the app's tokens
- * are other variables).
+ * are other variables). The app takes one of up to 70 characters, and cut it would still pass as another session's, so
+ * one over 64 is left out whole.
  *
  * CLAUDE_CODE_ENTRYPOINT is a fixed word naming how Claude Code was started, not a secret: the VS Code extension sets
  * `claude-vscode` (read in the extension's code), and a tap then opens the extension's tab on the session.
@@ -564,7 +565,8 @@ const HOST_HINTS = ['TERM_PROGRAM', '__CFBundleIdentifier', 'HERDR_PANE_ID', 'RE
   'KITTY_LISTEN_ON', 'WEZTERM_PANE', 'ORCA_AGENT_SESSION_ID', 'ORCA_TERMINAL_HANDLE', 'CLAUDE_CODE_HOST_SESSION_ID',
   'CLAUDE_CODE_ENTRYPOINT']
 /** The hints a cut would turn into another pane, session or socket (see HOST_HINTS): sent whole or not at all. */
-const WHOLE_HINTS = ['ZELLIJ_PANE_ID', 'ZELLIJ_SESSION_NAME', 'KITTY_LISTEN_ON']
+const WHOLE_HINTS = ['ZELLIJ_PANE_ID', 'ZELLIJ_SESSION_NAME', 'KITTY_LISTEN_ON',
+  'CLAUDE_CODE_HOST_SESSION_ID']
 /** The core's observed route takes no more (core/observedHook.ts MAX_HINTS, which hookNotify.spec.ts keeps this equal to). */
 const MAX_HINTS = 10
 
