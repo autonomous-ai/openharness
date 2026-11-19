@@ -200,6 +200,28 @@ describe('the Cursor folder adapter on Linux', () => {
     expect(calls).toEqual([])
   })
 
+  // A look runs every second for each Cursor agent, and finding the CLI reads up to three .desktop files and walks PATH.
+  it('the CLI is looked for once; again only while none was found, or after a run that failed', async () => {
+    const { adapter, clis, folders } = rig({ platform: 'linux' }, [1])
+    folders.add('/work/api')
+    for (let look = 0; look < 3; look++) expect(adapter.canFocus(pane('/work/api'))).toBe(true)
+    expect(clis).toHaveBeenCalledTimes(1)
+    expect(await adapter.focus(pane('/work/api'))).toBe(false)
+    expect(adapter.canFocus(pane('/work/api'))).toBe(true)
+    expect(clis).toHaveBeenCalledTimes(2)
+    expect(await adapter.focus(pane('/work/api'))).toBe(true)
+    expect(adapter.canFocus(pane('/work/api'))).toBe(true)
+    expect(clis).toHaveBeenCalledTimes(2)
+
+    const none = rig({ platform: 'linux' })
+    none.folders.add('/work/api')
+    none.clis.mockReturnValueOnce(null)
+    expect(none.adapter.canFocus(pane('/work/api'))).toBe(false)
+    expect(none.adapter.canFocus(pane('/work/api'))).toBe(true)
+    expect(none.adapter.canFocus(pane('/work/api'))).toBe(true)
+    expect(none.clis).toHaveBeenCalledTimes(2)
+  })
+
   it('a folder that is not there, or a pane id not in its form, runs nothing', async () => {
     for (const [what, id] of [['gone', '/work/api'], ...OUT_OF_FORM]) {
       const { adapter, calls, folders } = rig({ platform: 'linux' })
