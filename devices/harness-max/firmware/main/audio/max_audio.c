@@ -1,9 +1,13 @@
-// Harness Max's audio behind the Pro's audio/audio_capture.h. ONE ES8311 is both the microphone (its ADC) and the
-// speaker (its DAC), on one full-duplex I2S bus. esp_codec_dev pairs two codec instances on the same chip (one ADC, one
-// DAC) and counts their opens; this file makes them take turns, so the chip is never set up for one while the other runs.
+// Harness Max's audio behind the Pro's audio/audio_capture.h, and its chimes (app/max_chime.h). ONE ES8311 is both the
+// microphone (its ADC) and the speaker (its DAC), on one full-duplex I2S bus. esp_codec_dev pairs two codec instances on
+// the same chip (one ADC, one DAC) and counts their opens; this file makes them take turns, so the chip is never set up
+// for one while the other runs.
 #include "audio/audio_capture.h"
 
 #include <stdatomic.h>
+
+#include "app/max_chime.h"
+#include "audio/max_chime_pcm.h"
 
 #include "max_i2c.h"
 #include "pins_max.h"
@@ -13,7 +17,6 @@
 #include "esp_codec_dev.h"
 #include "esp_codec_dev_defaults.h"
 #include "esp_log.h"
-#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
@@ -30,8 +33,9 @@ static const audio_codec_gpio_if_t *s_gpio_if;
 static const audio_codec_if_t *s_adc, *s_dac;
 static esp_codec_dev_handle_t s_mic, s_spk;
 static SemaphoreHandle_t s_chip;   // held while the mic or the speaker is being opened, closed or played
-static atomic_bool s_open;         // the mic is open or opening: the beep task reads it and steps aside
-static TaskHandle_t s_beep_task;
+static atomic_bool s_open;         // the mic is open or opening: the chime task reads it and steps aside
+static TaskHandle_t s_chime_task;
+static atomic_bool s_chime_busy;   // a chime is waiting for the task or playing: another one is dropped
 static atomic_uint s_rx_overruns;
 
 uint32_t audio_capture_overruns(void) { return atomic_load(&s_rx_overruns); }
@@ -119,25 +123,13 @@ bool audio_capture_init(void)
     return true;
 }
 
-// The notification beep, as the Pro's: 3 tones of 80 ms at ~2 kHz with 60 ms gaps, generated 20 ms at a time.
-#define BEEP_SAMPLES (AUDIO_SAMPLE_RATE * 80 / 1000)
-#define GAP_SAMPLES  (AUDIO_SAMPLE_RATE * 60 / 1000)
-#define BEEP_COUNT   3
-#define TONE_SAMPLES (BEEP_SAMPLES * BEEP_COUNT + GAP_SAMPLES * (BEEP_COUNT - 1))
-#define TONE_BLOCK_SAMPLES (AUDIO_SAMPLE_RATE / 50)
-static int16_t s_tone[TONE_BLOCK_SAMPLES];
+// The chimes at the Pro beep's loudness: a question's square tones peak at 6000, a finished turn's notes at 2200/2700
+// of it, as V3 set them against each other on the bar. Rendered 20 ms at a time.
+#define CHIME_LOUDNESS 6000
+#define CHIME_BLOCK_SAMPLES (AUDIO_SAMPLE_RATE / 50)
+static int16_t s_block[CHIME_BLOCK_SAMPLES];
 
-static void render_tone(size_t offset, size_t count)
-{
-    const int half = AUDIO_SAMPLE_RATE / 2000 / 2;   // half-period of a ~2 kHz square wave
-    const int16_t amp = 6000;
-    for (size_t i = 0; i < count; i++) {
-        size_t phase = (offset + i) % (BEEP_SAMPLES + GAP_SAMPLES);
-        s_tone[i] = phase < BEEP_SAMPLES ? (((phase / (half > 0 ? half : 1)) & 1) ? amp : -amp) : 0;
-    }
-}
-
-static void play_beep(void)
+static void play_chime(max_chime_t sound)
 {
     xSemaphoreTake(s_chip, portMAX_DELAY);
     if (atomic_load(&s_open)) {   // a recording is open or opening
@@ -151,25 +143,28 @@ static void play_beep(void)
         return;
     }
     esp_codec_dev_set_out_vol(s_spk, 100);
-    for (size_t offset = 0; offset < TONE_SAMPLES;) {
+    const size_t total = max_chime_samples(sound);
+    for (size_t offset = 0; offset < total;) {
         if (atomic_load(&s_open)) break;   // a recording wants the chip: let go within one 20 ms write
-        size_t count = TONE_SAMPLES - offset;
-        if (count > TONE_BLOCK_SAMPLES) count = TONE_BLOCK_SAMPLES;
-        render_tone(offset, count);
-        if (esp_codec_dev_write(s_spk, s_tone, (int)(count * sizeof s_tone[0])) != ESP_CODEC_DEV_OK) { ESP_LOGW(TAG, "spk write failed"); break; }
+        size_t count = total - offset;
+        if (count > CHIME_BLOCK_SAMPLES) count = CHIME_BLOCK_SAMPLES;
+        max_chime_render(sound, CHIME_LOUDNESS, offset, s_block, count);
+        if (esp_codec_dev_write(s_spk, s_block, (int)(count * sizeof s_block[0])) != ESP_CODEC_DEV_OK) { ESP_LOGW(TAG, "spk write failed"); break; }
         offset += count;
     }
     esp_codec_dev_close(s_spk);
     xSemaphoreGive(s_chip);
-    ESP_LOGI(TAG, "beep");
+    ESP_LOGI(TAG, "chime %d", (int)sound);
 }
 
-static void beep_task(void *arg)
+static void chime_task(void *arg)
 {
     (void)arg;
     for (;;) {
-        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-        play_beep();
+        uint32_t sound = 0;
+        xTaskNotifyWait(0, 0, &sound, portMAX_DELAY);
+        play_chime((max_chime_t)sound);
+        atomic_store(&s_chime_busy, false);
     }
 }
 
@@ -183,7 +178,7 @@ static void speaker_init_failed(const char *why)
 
 void audio_beep_init(void)
 {
-    if (s_beep_task) return;
+    if (s_chime_task) return;
     if (!s_mic && !audio_capture_init()) { ESP_LOGW(TAG, "speaker: the ES8311 is unavailable"); return; }
     es8311_codec_cfg_t dac_cfg = {
         .ctrl_if = s_ctrl_if,
@@ -199,31 +194,29 @@ void audio_beep_init(void)
     esp_codec_dev_cfg_t dev_cfg = { .dev_type = ESP_CODEC_DEV_TYPE_OUT, .codec_if = s_dac, .data_if = s_data_if };
     s_spk = esp_codec_dev_new(&dev_cfg);
     if (!s_spk) { speaker_init_failed("device allocation"); return; }
-    if (xTaskCreate(beep_task, "beep", STACK_BEEP, NULL, 5, &s_beep_task) != pdPASS) {
-        s_beep_task = NULL;
+    if (xTaskCreate(chime_task, "chime", STACK_BEEP, NULL, 5, &s_chime_task) != pdPASS) {
+        s_chime_task = NULL;
         speaker_init_failed("task allocation");
         return;
     }
     ESP_LOGI(TAG, "speaker (ES8311 DAC) ready");
 }
 
-void audio_beep(void)
+void max_chime(max_chime_t sound)
 {
-    // At most one chime a second (the round's rule): two turns ending together ring once.
-    static atomic_uint_least32_t last;
-    const uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
-    uint32_t was = atomic_load(&last);
-    if (!s_beep_task || atomic_load(&s_open) || (was && now - was < 1000) ||
-        !atomic_compare_exchange_strong(&last, &was, now ? now : 1))
-        return;
-    xTaskNotifyGive(s_beep_task);
+    bool idle = false;
+    if (!s_chime_task || atomic_load(&s_open) || !atomic_compare_exchange_strong(&s_chime_busy, &idle, true)) return;
+    xTaskNotify(s_chime_task, (uint32_t)sound, eSetValueWithOverwrite);
 }
+
+// The Pro's alert sound, for a caller of its audio_capture.h: a question's chime.
+void audio_beep(void) { max_chime(MAX_CHIME_ASK); }
 
 bool audio_capture_start(void)
 {
     if (!s_mic && !audio_capture_init()) return false;
     if (atomic_load(&s_open)) return true;
-    // Claim the chip before waiting for it: a beep that is playing sees the claim and stops within one block.
+    // Claim the chip before waiting for it: a chime that is playing sees the claim and stops within one block.
     atomic_store(&s_open, true);
     xSemaphoreTake(s_chip, portMAX_DELAY);
     esp_codec_dev_sample_info_t fs = {

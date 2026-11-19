@@ -10,9 +10,14 @@ list of portable sources; `../main/CMakeLists.txt` adds the ESP32-P4 drivers to 
 - `display/`: `pro_display.h` over an SDL window (`MAX_LINUX_OUTPUT=sdl`, the mouse is the finger) or DRM/KMS plus
   evdev touch (`MAX_LINUX_OUTPUT=drm`, `/dev/dri/card0`). `glass_fit.c` scales and turns the glass to the output, and
   maps a touch back.
-- `audio/`: `audio/audio_capture.h` and the beep over SDL (macOS) or ALSA (Linux): the microphone is the capture device
-  `HARNESS_MAX_MIC` names (`default` when unset), the beep plays on `default`. No microphone: recording fails as on a
-  device whose codec does not answer.
+- `audio/`: `audio/audio_capture.h` and the chimes (`../main/app/max_chime.h`) over SDL (macOS) or ALSA (Linux): the
+  microphone is the capture device `HARNESS_MAX_MIC` names (`default` when unset). No microphone: recording fails as
+  on a device whose codec does not answer. The chimes are V3's as tuned on the bar (`bar_chime.c`): each between 50 ms
+  of near silence before and 300 ms after, with no sample of digital silence, which the board's codec mutes on. They
+  play on the ALSA device `HARNESS_MAX_SPEAKER` names, else the board's codec (`plughw:CARD=sndi2s4,DEV=0`), whose
+  DAC is set to `HARNESS_MAX_SPEAKER_VOLUME` (0..255, 171 when unset) once before the first; a speaker that fails
+  gives way to the screen's HDMI audio (`plughw:CARD=allwinnerhdmi,DEV=0`). The simulator plays the same samples on
+  the default output. A chime is dropped while one plays or the microphone is open.
 - `cable/`: `cable_link.h` with the far end picked when the program starts: `--live` (the default) takes a real daemon
   over TCP in the USB framing, `--usb` a real daemon over the USB cable through a gadget's serial port (`/dev/ttyGS0`),
   `--demo` runs the scripted daemon in `../main/demo` inside the program.

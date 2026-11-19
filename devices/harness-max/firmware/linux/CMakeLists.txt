@@ -41,6 +41,7 @@ add_executable(harness-max
     ${PRO_FONTS_C}
     ${CJSON_DIR}/cJSON.c
     main.c
+    audio/bar_chime.c
     board_linux.c
     cable/cable_linux.c
     display/display_linux.c
@@ -99,11 +100,16 @@ max_host_test(test_cable_linux test/test_cable_linux.c cable/cable_linux.c esp/e
 add_test(NAME cable_demo COMMAND test_cable_linux demo)
 add_test(NAME cable_tcp COMMAND test_cable_linux tcp)
 add_test(NAME cable_usb COMMAND test_cable_linux usb)
-set_tests_properties(glass_fit nvs cable_demo cable_tcp cable_usb PROPERTIES TIMEOUT 60)   # a hung link fails, not stalls
+# The chimes' samples on both boards, the bar's padding of them, and which speaker plays them there.
+max_host_test(test_chime test/test_chime.c ${MAX_FW}/main/audio/max_chime_pcm.c audio/bar_chime.c)
+target_link_libraries(test_chime PRIVATE m)
+add_test(NAME chime COMMAND test_chime)
+set_tests_properties(glass_fit nvs cable_demo cable_tcp cable_usb chime PROPERTIES TIMEOUT 60)   # a hung link fails, not stalls
 # The bar's microphone choice, where ALSA is: its null device stands in for a microphone.
 if(MAX_LINUX_OUTPUT STREQUAL "drm")
-    max_host_test(test_audio_alsa test/test_audio_alsa.c audio/audio_alsa.c esp/esp.c)
-    target_link_libraries(test_audio_alsa PRIVATE PkgConfig::ALSA)
+    max_host_test(test_audio_alsa test/test_audio_alsa.c audio/audio_alsa.c audio/bar_chime.c
+        ${MAX_FW}/main/audio/max_chime_pcm.c esp/esp.c)
+    target_link_libraries(test_audio_alsa PRIVATE PkgConfig::ALSA m)
     add_test(NAME audio_alsa COMMAND test_audio_alsa)
     set_tests_properties(audio_alsa PROPERTIES TIMEOUT 60)
 endif()

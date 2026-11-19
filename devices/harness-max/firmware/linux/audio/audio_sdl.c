@@ -1,13 +1,14 @@
-// The Pro's audio/audio_capture.h on SDL: the default capture device and the beep on the default output (the macOS
-// simulator). SDL was initialised on the main thread by the output. The microphone is opened for each recording, not at
-// boot: opening it takes macOS seconds (and its permission prompt), and lights the microphone indicator while open. No
-// microphone: recording fails, as on a device whose codec does not answer.
+// The Pro's audio/audio_capture.h on SDL: the default capture device, and the chimes (app/max_chime.h) on the default
+// output as the Orange Pi bar plays them (the macOS simulator). SDL was initialised on the main thread by the output. The
+// microphone is opened for each recording, not at boot: opening it takes macOS seconds (and its permission prompt), and
+// lights the microphone indicator while open. No microphone: recording fails, as on a device whose codec does not answer.
 #include "audio/audio_capture.h"
 
 #include <SDL.h>
 #include <stdatomic.h>
 
-#include "audio/beep_tone.h"
+#include "app/max_chime.h"
+#include "audio/bar_chime.h"
 
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -26,7 +27,8 @@ static uint8_t s_ring[RING_BYTES];
 static size_t s_head, s_len;
 static atomic_bool s_open;
 static atomic_uint s_overruns;
-static int16_t s_tone[BEEP_TONE_SAMPLES];
+static SDL_mutex *s_spk_mu;   // one chime rendered and queued at a time
+static int16_t s_wave[BAR_CHIME_WAVE_MAX];   // under s_spk_mu
 
 static void captured(void *ctx, Uint8 *data, int len)
 {
@@ -72,6 +74,7 @@ bool audio_capture_start(void)
         return false;
     }
     atomic_store(&s_open, true);
+    if (s_spk) SDL_ClearQueuedAudio(s_spk);   // the person is talking: a chime stops
     SDL_PauseAudioDevice(s_mic, 0);
     ESP_LOGI(TAG, "mic stream open (%d Hz mono)", AUDIO_SAMPLE_RATE);
     return true;
@@ -106,26 +109,29 @@ void audio_capture_stop(void)
 void audio_beep_init(void)
 {
     if (s_spk) return;
+    if (!s_spk_mu && !(s_spk_mu = SDL_CreateMutex())) {
+        ESP_LOGW(TAG, "speaker unavailable: %s", SDL_GetError());
+        return;
+    }
     const SDL_AudioSpec want = {.freq = AUDIO_SAMPLE_RATE, .format = AUDIO_S16LSB, .channels = 1, .samples = 512};
     s_spk = SDL_OpenAudioDevice(NULL, 0, &want, NULL, 0);
     if (!s_spk) {
         ESP_LOGW(TAG, "speaker unavailable: %s", SDL_GetError());
         return;
     }
-    beep_tone(s_tone);
     SDL_PauseAudioDevice(s_spk, 0);   // plays what is queued, silence otherwise
     ESP_LOGI(TAG, "speaker (the default output) ready");
 }
 
-void audio_beep(void)
+void max_chime(max_chime_t sound)
 {
-    // As the device: at most one chime a second, and none while a recording is open. Queued, so it never blocks.
-    static atomic_uint_least32_t last;
-    const uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
-    uint32_t was = atomic_load(&last);
-    if (!s_spk || atomic_load(&s_open) || (was && now - was < 1000) ||
-        !atomic_compare_exchange_strong(&last, &was, now ? now : 1))
-        return;
-    SDL_ClearQueuedAudio(s_spk);
-    SDL_QueueAudio(s_spk, s_tone, sizeof s_tone);
+    // Queued, so it never blocks; one still queued is the one playing, and this one is dropped.
+    if (!s_spk || atomic_load(&s_open)) return;
+    SDL_LockMutex(s_spk_mu);
+    if (!SDL_GetQueuedAudioSize(s_spk))
+        SDL_QueueAudio(s_spk, s_wave, (Uint32)(bar_chime_wave(sound, s_wave) * sizeof s_wave[0]));
+    SDL_UnlockMutex(s_spk_mu);
 }
+
+// The Pro's alert sound, for a caller of its audio_capture.h: a question's chime.
+void audio_beep(void) { max_chime(MAX_CHIME_ASK); }
