@@ -59,11 +59,15 @@ export function createCursorFolderAdapter(deps: CursorFolderDeps): HostAdapter {
       return false
     }
   }
+  // Found once: a look runs every second for each Cursor agent, and finding the CLI reads files and walks PATH. None
+  // found, or a run that failed, is asked again: Cursor installed, moved or removed since.
+  let found: string | null = null
+  const cli = (): string | null => (found ??= deps.cli())
   /** What a tap runs on the folder: macOS's `open -b`, Linux's Cursor CLI; none elsewhere or with no CLI found. */
   const command = (folder: string): [string, string[]] | null => {
     if (mac) return [openBin, ['-b', APP_BUNDLES.cursor, folder]]
-    const cli = deps.platform === 'linux' ? deps.cli() : null
-    return cli === null ? null : [cli, [folder]]
+    const run = deps.platform === 'linux' ? cli() : null
+    return run === null ? null : [run, [folder]]
   }
   const canFocus = (pane: Pane): boolean => inForm(pane.id) && there(pane.id) && command(pane.id) !== null
 
@@ -82,11 +86,14 @@ export function createCursorFolderAdapter(deps: CursorFolderDeps): HostAdapter {
       // Asked again: the folder may have gone, or become a file, since the look.
       const run = inForm(pane.id) && there(pane.id) ? command(pane.id) : null
       if (run === null) return false
+      let ok = false
       try {
-        return (await deps.run(run[0], run[1], RUN_TIMEOUT_MS)).code === 0
+        ok = (await deps.run(run[0], run[1], RUN_TIMEOUT_MS)).code === 0
       } catch {
-        return false
+        // The error may name the folder: it goes nowhere.
       }
+      if (!ok) found = null
+      return ok
     },
   }
 }
