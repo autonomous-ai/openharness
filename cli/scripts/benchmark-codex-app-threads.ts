@@ -1,9 +1,10 @@
 /** The ChatGPT app's threads read (`CodexAppThreads`): warm reads of 20, 200 and 2,000 threads, a read while the app's
- * writer holds the WAL, a first read that parses the JSON file, and the devices event loop's block before and after.
+ * writer holds the WAL, first reads (a new reader, no Codex name read yet) that parse the JSON file and read Codex's
+ * index, of a few names and of more than its 1 MiB read, and the devices event loop's block before and after.
  * Only on fixture Codex homes in a throwaway folder: never the real `~/.codex`, never a real home.
  * Run from cli/: node --import tsx scripts/benchmark-codex-app-threads.ts [output.json]
  */
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { appendFileSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { arch, platform, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { monitorEventLoopDelay, performance } from 'node:perf_hooks'
@@ -26,6 +27,8 @@ const RUNS = 100
 const PROJECTS = 4
 // The size of a long-used app's sidebar file.
 const STATE_BYTES = 135_000
+// More than the most of Codex's index codexThreadName reads at once.
+const INDEX_BYTES = 1_100_000
 const START = 1_794_000_000_000
 
 interface Case { name: string; threads: number; runs: number; medianMs: number; p90Ms: number; rows: number }
@@ -34,17 +37,25 @@ interface Loop { maxMs: number; p99Ms: number }
 try {
   const { CodexAppThreads } = await import('../src/cable/hosts/codexAppThreads.js')
   const { codexAppFixture } = await import('../src/testing/codexAppFixture.js')
+  const { resetCodexThreadNames } = await import('../src/lib/sessionTitle.js')
 
   const uuid = (i: number): string => `00000000-0000-4000-8000-${i.toString(16).padStart(12, '0')}`
-  /** A Codex home of `count` threads, one second apart, half of them in 4 projects, each named in the session index. */
-  function codexHome(count: number) {
-    const fixture = codexAppFixture(join(home, `codex-${count}`))
+  /** A Codex home of `count` threads, one second apart, half of them in 4 projects, each named in the session index
+   *  after `indexBytes` of older threads' names. */
+  function codexHome(count: number, folder = `codex-${count}`, indexBytes = 0) {
+    const fixture = codexAppFixture(join(home, folder))
     const ids = Array.from({ length: count }, (_, i) => uuid(i))
     fixture.threads(ids.map((id, i) => ({ id, cwd: `/work/project-${i % PROJECTS}`, recencyAtMs: START + i * 1000 })))
     const projectOrder = Array.from({ length: PROJECTS }, (_, p) => `/work/project-${p}`)
     const assignments = Object.fromEntries(ids.filter((_, i) => i % 2 === 0)
       .map((id, i) => [id, { projectKind: 'local', projectId: projectOrder[i % PROJECTS] }]))
     fixture.state({ projectOrder, assignments, padTo: STATE_BYTES })
+    const older: string[] = []
+    for (let i = count, bytes = 0; bytes < indexBytes; i++) {
+      older.push(`${JSON.stringify({ id: uuid(i), thread_name: `Thread ${i}` })}\n`)
+      bytes += older.at(-1)!.length
+    }
+    if (older.length > 0) appendFileSync(join(fixture.home, 'session_index.jsonl'), older.join(''))
     ids.forEach((id, i) => fixture.name(id, `Thread ${i}`))
     return fixture
   }
@@ -93,7 +104,13 @@ try {
     writer.close()
   }
 
-  cases.push(await measure('first-200', 200, () => rowsOf(new CodexAppThreads(fixture200.home))))
+  /** A new reader, with no name of Codex's index read yet. */
+  const first = (path: string) => () => {
+    resetCodexThreadNames()
+    return rowsOf(new CodexAppThreads(path))
+  }
+  cases.push(await measure('first-200', 200, first(fixture200.home)))
+  cases.push(await measure('first-200-index-1mib', 200, first(codexHome(200, 'codex-200-index-1mib', INDEX_BYTES).home)))
 
   const turn = (): Promise<void> => new Promise((resolve) => setImmediate(resolve))
   /** The loop's delay over `RUNS` turns, each running `work` once. */
