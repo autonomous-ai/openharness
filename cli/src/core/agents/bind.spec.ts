@@ -2048,6 +2048,8 @@ describe('binding an OpenClaw pane, read from its screen', () => {
   describe('its first task', () => {
     const TASK = 'Fix the parser'
     const ready = screen('screen-plain')
+    /** Ready, with the person's own text in its input box. */
+    const holding = ready.replace(/(─+\n) *\n(─+)/, '$1Fix it myself\n$2')
     const running = screen('screen-abort-running').replace(/abort/g, 'plain')
     /** The pane bound to `agent:main:plain` with its first task on the row, its stream attached. */
     const handing = (shown: () => string, over: Partial<BindDeps> = {}) => {
@@ -2104,6 +2106,14 @@ describe('binding an OpenClaw pane, read from its screen', () => {
       vi.mocked(run.deps.registry.byProcess).mockReturnValue(pane({ firstTask: TASK }))
       await run.binding.bindObservedAgent(tui())
       expect(run.deps.registry.register).toHaveBeenCalled()
+      expect(run.deps.registry.takeFirstTask).not.toHaveBeenCalled()
+    })
+
+    // The person's text, or a message OpenClaw refused: the task pasted after it would go with it on one Enter.
+    it('not into a box that holds text', async () => {
+      const run = handing(() => holding)
+      await run.binding.bindObservedAgent(tui())
+      expect(run.deps.openclawPaneRead).toHaveBeenCalled()
       expect(run.deps.registry.takeFirstTask).not.toHaveBeenCalled()
     })
 
@@ -2224,6 +2234,15 @@ describe('binding an OpenClaw pane, read from its screen', () => {
         await vi.waitFor(() => expect(run.deps.submitFirstTask).toHaveBeenCalledWith('a1', TASK))
         expect(run.deps.openclawStateDir).toHaveBeenCalledWith(7714)
         expect(run.deps.submitFirstTask).toHaveBeenCalledOnce()
+      })
+
+      it('a box that holds text once the stream is up keeps the task for a later pass', async () => {
+        const { run } = streaming({ identityHold: OPENCLAW_STATES.noGateway })
+        vi.mocked(run.deps.capturePane).mockResolvedValueOnce(ready).mockResolvedValue(holding)
+        await run.binding.bindObservedAgent(tui())
+        await vi.waitFor(() => expect(run.deps.capturePane).toHaveBeenCalledTimes(2))
+        await new Promise((settle) => setImmediate(settle))
+        expect(run.deps.registry.afterTransaction).not.toHaveBeenCalled()
       })
 
       it('a pane that cannot be read once the stream is up keeps the task for a later pass', async () => {
