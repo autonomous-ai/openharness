@@ -1,9 +1,10 @@
-import { readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { rmSync } from 'node:fs'
 import { join } from 'node:path'
 
 import { errorKind } from './log.js'
 import { MINIMUM_NODE_MAJOR } from './nodeRuntime.js'
 import type { NodeMigrationReason } from './runtimeInstall.js'
+import { atomicWriteFile, jsonObject, readState } from './secureState.js'
 
 // Read and cleared by the daemon's core (`/api/status`, its start), so this file loads nothing the core may not
 // (architecture.spec.ts); selfUpdate.ts and the master write it.
@@ -17,8 +18,10 @@ const NODE_MIGRATIONS: readonly NodeMigration[] = ['no-manifest-entry', 'manifes
 
 type Recorded = { reason?: unknown; node?: unknown }
 
+/** Null when there is none; one that cannot be read is set aside, so the next record does not write over it. */
 function readRecord(dir: string): Recorded | null {
-  try { return JSON.parse(readFileSync(join(dir, NODE_MIGRATION_FILE), 'utf8')) as Recorded | null } catch { return null }
+  const read = readState(join(dir, NODE_MIGRATION_FILE), 'cache', jsonObject)
+  return read.state === 'ok' ? read.value : null
 }
 
 /** Why the daemon is not on the minimum Node, as last recorded; null when nothing held it back. What `harness status`
@@ -45,8 +48,7 @@ export function recordNodeMigration(dir: string, reason: NodeMigration | null, f
   try {
     if (reason === null) { rmSync(file, { force: true }); return }
     // Whole or not at all: a half-written record would read as nothing recorded.
-    writeFileSync(`${file}.tmp`, `${JSON.stringify({ reason, at: Date.now(), ...(failed ? { node: failed } : {}) })}\n`)
-    renameSync(`${file}.tmp`, file)
+    atomicWriteFile(file, `${JSON.stringify({ reason, at: Date.now(), ...(failed ? { node: failed } : {}) })}\n`, 'cache')
   } catch (error) {
     // A full disk costs `harness status` the reason, never the update.
     console.error(`[update] could not record why the daemon's Node stays as it is (${errorKind(error)})`)
