@@ -3447,13 +3447,53 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     expect(seen.cable.calls).toHaveLength(sent)
   })
 
-  it('on Linux a Claude app agent has no pane', async () => {
-    const { front } = await inClaudeApp({ orca })
-    front('claude')
+  // On Linux a link opens by xdg-open, once xdg-mime names its scheme's app (docs/plans/2026-11-19-dial-linux-design.md
+  // § 1.6): the session's app is the one the process scan named, as Linux has no bundle id.
+  const xdgMime = (scheme: string): [string, string[], number] => ['/usr/bin/xdg-mime', ['query', 'default', `x-scheme-handler/${scheme}`], 10_000]
+  const xdgOpen = (url: string): [string, string[], number] => ['/usr/bin/xdg-open', [url], 10_000]
+  /** Linux, every run recorded, xdg-mime naming `handler` as each scheme's app: none when it is empty. */
+  const onLinux = (handler: string) => ({ ...orca, onPath: (name: string) => `/usr/bin/${name}`, run: async (file: string, args: string[], timeoutMs: number) => {
+    orcaRuns.push([file, args, timeoutMs])
+    return { code: 0, stdout: file === '/usr/bin/xdg-mime' && handler ? `${handler}\n` : '' }
+  } })
+  /** An agent on Linux whose caller the scan finds in `app`, with that app in front once it is on the app's page. */
+  const inLinuxApp = async (app: string, handler: string, over: Partial<ObservedHookEvent>) => {
+    vi.useFakeTimers()
+    readers.apps.mockResolvedValueOnce(new Map([[4242, app]]))
+    const listener = fakeListener()
+    const started = startHere({ orca: onLinux(handler), listen: listener.listen })
+    started.port.observed(hook('session-start', over))
+    attach(started.port)
+    await vi.waitFor(async () => expect((await host().listAgentSnapshot({ apps: true })).apps?.apps)
+      .toContainEqual(expect.objectContaining({ id: app, count: 1 })))
+    expect(listener.front(app)).toBeUndefined()
+    return started
+  }
+  const linuxClaude = (handler: string) => inLinuxApp('claude', handler, { hostHints: { CLAUDE_CODE_HOST_SESSION_ID: SESSION } })
+  const claudeLink = `claude://code/continue?session=${SESSION}`
+
+  it('on Linux, with the claude scheme\'s app known, a rest and a tap on a Claude app agent each run xdg-open on its link', async () => {
+    await linuxClaude('claude-desktop.desktop')
+    await vi.waitFor(() => expect(host().swipeSwitches(ID)).toBe(true))
+    host().swipeEnded(ID, 'rest')
+    await swiped('ok')
+    expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'sf' }])
+    expect(await host().openAgent(ID)).toBeUndefined()
+    // The scheme's app is read once, at the first look.
+    expect(orcaRuns).toEqual([xdgMime('claude'), xdgOpen(claudeLink), xdgOpen(claudeLink)])
+    expect(logs.filter((line) => [SESSION, 'sess-1', ID, claudeLink].some((secret) => line.includes(secret)))).toEqual([])
+  })
+
+  it('on Linux, with no app for the claude scheme, a Claude app agent opens nothing: the rest fails', async () => {
+    await linuxClaude('')
+    await vi.waitFor(() => expect(orcaRuns).toEqual([xdgMime('claude')]))
     expect(host().swipeSwitches(ID)).toBe(false)
     host().swipeEnded(ID, 'rest')
     await swiped('failed')
-    expect(orcaRuns).toEqual([])
+    // No f: the dial asks for no tap.
+    expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 's' }])
+    expect(orcaRuns).toEqual([xdgMime('claude')])
+    expect(logs.filter((line) => [SESSION, 'sess-1', ID, claudeLink].some((secret) => line.includes(secret)))).toEqual([])
   })
 
   it('no swipe line carries the session', async () => {
@@ -3610,13 +3650,29 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     expect(orcaRuns).toEqual([])
   })
 
-  it('on Linux a VS Code extension agent has no rest', async () => {
-    const { front } = await inVscode({ orca })
-    front('vscode')
+  const linuxVscode = (handler: string) => inLinuxApp('vscode', handler, { sessionId: UUID, hostHints: { CLAUDE_CODE_ENTRYPOINT: 'claude-vscode' } })
+
+  it('on Linux, with the vscode scheme\'s app known, a rest and a tap on a VS Code extension agent each run xdg-open on its link', async () => {
+    await linuxVscode('code.desktop')
+    await vi.waitFor(() => expect(host().swipeSwitches(V1)).toBe(true))
+    host().swipeEnded(V1, 'rest')
+    await swiped('ok')
+    expect(await listed()).toEqual([{ id: V1, name: 'api', caps: 'sf' }])
+    expect(await host().openAgent(V1)).toBeUndefined()
+    expect(orcaRuns).toEqual([xdgMime('vscode'), xdgOpen(vscodeLink(UUID)), xdgOpen(vscodeLink(UUID))])
+    expect(logs.filter((line) => [UUID, V1, vscodeLink(UUID)].some((secret) => line.includes(secret)))).toEqual([])
+  })
+
+  it('on Linux, with no app for the vscode scheme, a VS Code extension agent opens nothing: the rest fails', async () => {
+    await linuxVscode('')
+    await vi.waitFor(() => expect(orcaRuns).toEqual([xdgMime('vscode')]))
     expect(host().swipeSwitches(V1)).toBe(false)
     host().swipeEnded(V1, 'rest')
     await swiped('failed')
-    expect(orcaRuns).toEqual([])
+    // No f: the dial asks for no tap.
+    expect(await listed()).toEqual([{ id: V1, name: 'api', caps: 's' }])
+    expect(orcaRuns).toEqual([xdgMime('vscode')])
+    expect(logs.filter((line) => [UUID, V1, vscodeLink(UUID)].some((secret) => line.includes(secret)))).toEqual([])
   })
 
   it('no swipe line carries the VS Code or Cursor session, the link or the bundle', async () => {
