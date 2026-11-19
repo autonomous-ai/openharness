@@ -12,7 +12,7 @@ import type { PaneInspection } from '../facets/screen.js'
 import type { InlineRuntimeContext, InlineRuntimeReader } from '../facets/inlineRuntime.js'
 import type { ProfileEvidence } from '../facets/runtime.js'
 import { RUNTIME_EFFORTS } from '../kit/runtime.js'
-import { OPENCLAW_RULE, openclawScreenLines, readOpenclawScreen } from './contract.js'
+import { readOpenclawScreen } from './contract.js'
 
 export interface OpenclawFooter {
   model: string
@@ -41,12 +41,10 @@ export function parseOpenclawFooter(capture: string): OpenclawFooter | null {
   }
 }
 
-/** Idle is a ready TUI with nothing typed in the composer, the band between the two rules under the footer. */
+/** Idle is a ready TUI with nothing typed in its input box. */
 export function inspectOpenclawPane(capture: string): PaneInspection {
   const screen = readOpenclawScreen(capture)
-  const lines = openclawScreenLines(capture)
-  const rules = lines.flatMap((line, index) => (OPENCLAW_RULE.test(line) ? [index] : []))
-  const draft = screen.footer !== null && lines.slice(rules[rules.length - 2] + 1, rules[rules.length - 1]).join('').trim().length > 0
+  const draft = !!screen.box
   return { idle: screen.state === 'ready' && !draft, plan: false, dialog: false, draft }
 }
 

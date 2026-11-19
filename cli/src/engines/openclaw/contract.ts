@@ -37,7 +37,7 @@ const TITLE_START = /^\s*openclaw tui - (wss?:\/\/\S+) - agent /
 const TITLE = /^openclaw tui - wss?:\/\/\S+ - agent ([A-Za-z0-9_-]{1,64})(?: \([^)]*\))? - session ([A-Za-z0-9._:-]{1,128})$/
 
 /** The composer's borders: the two rules under the footer are the last lines a running TUI draws. */
-export const OPENCLAW_RULE = /^\s*─{8,}\s*$/
+const OPENCLAW_RULE = /^\s*─{8,}\s*$/
 
 /**
  * The status line, the last line above the footer: `connected | idle`, `gateway reconnected | idle`, `connected |
@@ -47,9 +47,22 @@ export const OPENCLAW_RULE = /^\s*─{8,}\s*$/
  */
 const STATUS = {
   ready: /^(?:(?:gateway )?(?:connected|reconnected) \| (?:idle|aborted|error)|local ready(?: \| (?:idle|aborted|error))?)$/,
-  /** `starting local runtime` is the local TUI's `connecting`. */
-  busy: /^(?:\S{1,2} (?:running|streaming|connecting)\b|starting local runtime\b)/,
-  /** A run in progress; `connecting` is the TUI still reaching its Gateway, before any run. */
+  /**
+   * Before the TUI can send: `connecting | idle` while it reaches its Gateway (`starting local runtime` for a local
+   * run), then `⠙ starting up • 0s | subscribing to session events` while it loads the session (OpenClaw's tui
+   * `onConnected`), drawn as a busy status though no run has begun.
+   */
+  starting: /^(?:connecting(?: \||$)|\S{1,2} (?:starting up|connecting)\b|starting local runtime\b)/,
+  /**
+   * Every other busy status, `<spinner> <status> • <elapsed> | <connection>`: `sending`, a waiting phrase
+   * (`⠼ flibbertigibbeting… • 0s`), `running`, `streaming`, `finishing context`; the elapsed time `Ns` or `Nm Ns`
+   * (OpenClaw's tui `updateBusyStatusMessage`).
+   */
+  busy: /^\S{1,2} \S.* • (?:\d+m )?\d+s \| \S/,
+  /**
+   * A run in progress. Not `sending` or a waiting phrase: a Gateway slow to write the run's first row is not a store
+   * Harness cannot read (live.ts `NO_SESSION_MS`).
+   */
   running: /^\S{1,2} (?:running|streaming)\b/,
   localStopped: /^local stopped\b/,
   noGateway: /^gateway disconnected\b/,
@@ -68,7 +81,15 @@ const CONTROL = /[\u0000-\u001f\u007f-\u009f]/g
 /** What `openclaw tui` prints as it exits when the config has no Gateway token (`screen-no-token.txt`). */
 const NO_TOKEN = /^Missing gateway auth token\./
 
-export type OpenclawPaneState = 'ready' | 'busy' | 'no-gateway' | 'no-token' | 'remote' | 'local-stopped'
+/**
+ * The system lines a TUI whose session history did not load draws in its chat, one leading space as every system line
+ * (a model's text starts at column 0): `history failed: <error>` (OpenClaw's tui `loadHistory`), and `session history
+ * not ready — wait or retry /session` for each message it then refuses. It still draws a ready status line, and
+ * refuses every message until a load succeeds, which clears the chat, these lines with it.
+ */
+const NO_HISTORY = /^ (?:history failed: |session history not ready — wait or retry \/session$)/
+
+export type OpenclawPaneState = 'ready' | 'busy' | 'starting' | 'no-history' | 'no-gateway' | 'no-token' | 'remote' | 'local-stopped'
 
 /** What an OpenClaw pane's screen says. */
 export interface OpenclawScreen {
@@ -92,12 +113,21 @@ export interface OpenclawScreen {
    * `local stopped` one after it included: that one no longer says why.
    */
   stopped: string | null
+  /** The running TUI's status line as drawn, trimmed. */
+  status: string | null
+  /**
+   * What the running TUI's input box holds: its lines between the last two rules, trimmed, blank ones dropped, joined
+   * by a space; `''` when it is empty. A message OpenClaw refused is put back here.
+   */
+  box: string | null
 }
 
-const NOTHING: OpenclawScreen = { key: null, url: null, state: null, footer: null, gatewayLost: false, running: false, stopped: null }
+const NOTHING: OpenclawScreen = {
+  key: null, url: null, state: null, footer: null, gatewayLost: false, running: false, stopped: null, status: null, box: null,
+}
 
 /** Lines as drawn: escapes removed, trailing blanks dropped. */
-export function openclawScreenLines(capture: string): string[] {
+function openclawScreenLines(capture: string): string[] {
   return stripAnsi(capture).split('\n').map((line) => line.replace(/\s+$/, ''))
 }
 
@@ -129,6 +159,12 @@ function readTitle(lines: readonly string[], start: number): RegExpExecArray | n
   return null
 }
 
+/** The input box: a live footer has it under it, between the last two rules. */
+function readBox(lines: readonly string[]): string {
+  const rules = lines.flatMap((line, index) => (OPENCLAW_RULE.test(line) ? [index] : []))
+  return lines.slice(rules[rules.length - 2] + 1, rules[rules.length - 1]).map((line) => line.trim()).filter((line) => line).join(' ')
+}
+
 /**
  * The reason a local runtime stopped with, read off the non-blank lines above the footer (`above`, the status line
  * last): its stop line joined with the lines it wrapped onto. Null when there is none, or when the status line is
@@ -136,7 +172,7 @@ function readTitle(lines: readonly string[], start: number): RegExpExecArray | n
  */
 function readStopped(above: readonly string[]): string | null {
   const said = above.at(-1) ?? ''
-  if ([STATUS.ready, STATUS.busy, STATUS.gatewayLost, STATUS.localStopped].some((status) => status.test(said))) return null
+  if ([STATUS.ready, STATUS.starting, STATUS.busy, STATUS.gatewayLost, STATUS.localStopped].some((status) => status.test(said))) return null
   const at = lastIndex(above, (line) => line.startsWith('local runtime stopped'))
   const stopped = at >= 0 ? LOCAL_RUNTIME_STOPPED.exec(above.slice(at).join(' ')) : null
   if (!stopped) return null
@@ -168,8 +204,10 @@ export function readOpenclawScreen(capture: string): OpenclawScreen {
   const state: OpenclawPaneState | null = remote ? 'remote'
     : stopped !== null || STATUS.localStopped.test(said) ? 'local-stopped'
       : STATUS.noGateway.test(said) ? 'no-gateway'
-        : STATUS.busy.test(said) ? 'busy'
-          : STATUS.ready.test(said) ? 'ready' : null
+        : STATUS.starting.test(said) ? 'starting'
+          : STATUS.busy.test(said) ? 'busy'
+            : !STATUS.ready.test(said) ? null
+              : lines.slice(0, start).some((line) => NO_HISTORY.test(line)) ? 'no-history' : 'ready'
   return {
     key: shown && agrees ? `agent:${shown[1]}:${shown[2]}` : null,
     url,
@@ -178,6 +216,8 @@ export function readOpenclawScreen(capture: string): OpenclawScreen {
     gatewayLost: STATUS.gatewayLost.test(said),
     running: STATUS.running.test(said),
     stopped,
+    status: said,
+    box: readBox(lines),
   }
 }
 
@@ -203,6 +243,21 @@ export const OPENCLAW_LAUNCH = {
   resumeLocal: (key: string): string[] => ['--session', key],
   /** Variables that would point a local run at files outside its folder; cleared so the folder holds all of it. */
   localClear: ['OPENCLAW_CONFIG_PATH', 'OPENCLAW_AGENT_DIR', 'OPENCLAW_OAUTH_DIR', 'OPENCLAW_WORKSPACE_DIR'],
+} as const
+
+/**
+ * A box holds a message when it starts with the message's first 32 characters, whitespace runs collapsed: the TUI
+ * wraps a long message over several lines, which the box joins by a space.
+ */
+export function openclawBoxHolds(box: string | null, message: string): boolean {
+  const start = message.replace(/\s+/g, ' ').trim().slice(0, 32)
+  return !!start && !!box && box.replace(/\s+/g, ' ').startsWith(start)
+}
+
+/** A first task OpenClaw never took: the launch fails with it, and every verb says it. */
+export const OPENCLAW_FIRST_TASK = {
+  error: 'FIRST_TASK_NOT_TAKEN',
+  detail: 'OpenClaw did not take the first task. Close it and start it again.',
 } as const
 
 /** What a person reads when OpenClaw cannot work for Harness, each with what to do about it. */
