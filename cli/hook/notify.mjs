@@ -313,9 +313,10 @@ function boundedPrompt(prompt) {
  * permission mode or close plan the daemon kept, merged over its own at its next save
  * (e2e/stall.e2e.ts).
  */
-/** This process's start, epoch ms: the engine ran the hook then. */
+/** This process's start, epoch ms: the engine ran the hook then. One reading Node took as it started: two clock
+ *  reads here, with a pause between them, put it before the turn's opening record (CI 44381432197, Linux). */
 const DELIVERY_ID = randomUUID()
-const FIRED_AT = Date.now() - Math.round(process.uptime() * 1000)
+const FIRED_AT = Math.floor(performance.timeOrigin)
 
 /** Mirrors MAX_SOCKET_PATH_BYTES in src/lib/localSocket.ts. */
 const MAX_SOCKET_PATH_BYTES = 96
