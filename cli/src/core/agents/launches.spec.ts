@@ -943,8 +943,8 @@ describe('agent_create with a receipt', () => {
     vi.mocked(preTrustClaudeProject).mockImplementationOnce(() => { throw new Error('config locked') }).mockImplementationOnce(() => { throw 'busy' })
     await launch({ engine: 'claude', projectSource: 'new' }, 6)
     await launch({ engine: 'claude', projectSource: 'new' }, 7)
-    expect(console.warn).toHaveBeenCalledWith('[agent] pre-trust /projects/prepared · config locked')
-    expect(console.warn).toHaveBeenCalledWith('[agent] pre-trust /projects/prepared · busy')
+    expect(console.warn).toHaveBeenCalledWith('[agent] pre-trust skipped · Error')
+    expect(console.warn).toHaveBeenCalledWith('[agent] pre-trust skipped · string')
     expect(claudeTrusts).toHaveBeenCalledWith('/repo')
     // A worktree workspaces answered anywhere but where Harness makes worktrees is not trusted, its repository trusted or
     // not: the folder is their word, and a trust above it would cover every repository there.
@@ -996,8 +996,8 @@ describe('agent_create with a receipt', () => {
     vi.mocked(preTrustCodexProject).mockImplementationOnce(() => { throw new Error('config locked') }).mockImplementationOnce(() => { throw 'busy' })
     await launch({ engine: 'codex', cwd: empty }, true, 9)
     await launch({ engine: 'codex', cwd: empty }, true, 10)
-    expect(warn).toHaveBeenCalledWith(`[agent] pre-trust ${empty} · config locked`)
-    expect(warn).toHaveBeenCalledWith(`[agent] pre-trust ${empty} · busy`)
+    expect(warn).toHaveBeenCalledWith('[agent] pre-trust skipped · Error')
+    expect(warn).toHaveBeenCalledWith('[agent] pre-trust skipped · string')
   })
 
   it('resolves a model picked by name inside the receipt, and holds it when it cannot be read', async () => {

@@ -180,7 +180,7 @@ describe('agents held until a service is ready', () => {
       await h.held.boot(async () => {})
       await h.held.restoreHeld()
       await vi.advanceTimersByTimeAsync(500)
-      expect(h.log).toHaveBeenLastCalledWith(expect.stringContaining('test retry failure'))
+      expect(h.log).toHaveBeenLastCalledWith('[restore] core contention retry failed: Error')
     } finally { vi.useRealTimers() }
   })
 
