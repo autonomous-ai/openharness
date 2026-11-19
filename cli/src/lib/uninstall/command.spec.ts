@@ -48,6 +48,7 @@ function fake(overrides: Partial<UninstallDeps> = {}) {
     endPtyHosts: async () => { calls.push('pty'); return [] },
     removeHooks: async () => { calls.push('hooks'); return [{ file: '/Users/u/.claude/settings.json', removed: 5 }] },
     removeLaunchers: () => { calls.push('launchers'); return ['/Users/u/.local/bin/harness', '/Users/u/.local/bin/hn'] },
+    removeLoginEntry: () => null,
     removePathEntry: () => { calls.push('path'); return { kind: 'rc', edits: [{ file: '/Users/u/.zshrc', removed: 1, changedByPerson: 0 }], keptFor: [] } },
     listEntries: (dir) => (dir === '/Users/u/.harness' ? [{ name: 'auth', dir: true }, { name: 'cli', dir: true }, { name: 'runtime', dir: true }] : [{ name: 'cli.js', dir: false }, { name: 'data', dir: true }]),
     exists: () => true,
@@ -670,6 +671,29 @@ describe('harness uninstall on Linux\'s two roots', () => {
     const outside = fake({ ...xdg, dataDir: '/srv/data' })
     expect(await uninstallCommand(['--yes'], outside.deps)).toBe(0)
     expect(outside.out).toContain('· left /srv/data: it is outside ~/.local/share/harness and ~/.local/state/harness (ADAPTER_DATA_DIR or HARNESS_AUTH_DIR names it); delete it yourself if it is Harness\'s')
+  })
+
+  it('removes the login entry the installer wrote, beside the launchers', async () => {
+    const t = fake({ ...xdg, removeLoginEntry: () => '/home/u/.config/autostart/harnessd.desktop' })
+    expect(await uninstallCommand(['--yes'], t.deps)).toBe(0)
+    const lines = ['✓ removed ~/.local/bin/hn', '✓ removed ~/.config/autostart/harnessd.desktop', '✓ removed the PATH line Harness added to ~/.bashrc']
+    expect(t.out.filter((line) => lines.includes(line))).toEqual(lines)
+    // None there, or another program's: nothing is said.
+    const none = fake({ ...xdg })
+    expect(await uninstallCommand(['--yes'], none.deps)).toBe(0)
+    expect(none.out.some((line) => line.includes('autostart'))).toBe(false)
+  })
+
+  it('a login entry it could not remove is a problem, and the rest still runs', async () => {
+    const t = fake({ ...xdg, removeLoginEntry: () => ({ path: '/home/u/.config/autostart/harnessd.desktop', failed: 'EACCES' }) })
+    expect(await uninstallCommand(['--yes'], t.deps)).toBe(1)
+    expect(t.err).toEqual(['✗ Harness is uninstalled, except:', '  · could not remove ~/.config/autostart/harnessd.desktop (EACCES): delete it yourself'])
+    expect(t.out).toEqual(expect.arrayContaining(['✓ removed ~/.local/bin/hn', '✓ removed the PATH line Harness added to ~/.bashrc', '✓ removed ~/.local/share/harness', '✓ removed ~/.local/state/harness']))
+  })
+
+  it('never looks for a login entry on Windows', async () => {
+    const t = fake({ ...win, removeLoginEntry: () => { throw new Error('looked') } })
+    expect(await uninstallCommand(['--yes'], t.deps)).toBe(0)
   })
 
   it('with one root every line is today\'s', async () => {
