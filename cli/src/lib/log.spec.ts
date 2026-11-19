@@ -223,6 +223,8 @@ describe('errorKind', () => {
   it('a name that is not a type name is not printed', () => {
     expect(errorKind(Object.assign(new Error('x'), { name: 'Could not read /Users/dee/x' }))).toBe('Error')
     expect(errorKind(Object.assign(new TypeError('x'), { name: 'a b' }))).toBe('TypeError')
+    // One word that is not a class name's shape can be a file's or a person's name.
+    expect(errorKind(Object.assign(new Error('x'), { name: 'someone' }))).toBe('Error')
   })
 
   it('a cause that loops ends', () => {
