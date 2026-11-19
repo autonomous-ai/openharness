@@ -1,0 +1,163 @@
+Harness Max display bench on the desk Harness Pro (ESP32-P4 v3.2, 400 MHz, 32 MB hex PSRAM at 200 MHz), 2026-11-20,
+bench built from feat/harness-max-v4-motion e9c3c9ae80: V3's row motion, the paint-ahead (max_ui_warm.c), the PPA kick
+(max_strips.c) and the compositor's one-multiply blend. No panel scans PSRAM during the bench; on the 8.8" panel its
+refresh reads about 110 MB/s more. (g) is the motion section: first, mean, worst in ms; ahead = after the paint-ahead.
+
+==== Harness Max display bench, pass 1, up 0 s ====
+ESP32-P4 rev v3.2, 2 cores, CPU 400 MHz, PSRAM 32768 KB; free internal 167 KB (largest 64 KB), PSRAM 10255 KB
+(a, e) whole glass 1920x480 in 24-line strips into internal RAM. build: max_ui_render; cold: no pet cell baked yet; warm: best of 2; 2 cores: strips alternating
+screen                    runs    build     cold     warm  2 cores speedup
+overview                    70     0.85    91.71    23.80    15.02    1.58
+overview-harness            69     0.72    29.38    19.78    12.69    1.56
+overview-one                31     0.24    19.12     9.71     6.67    1.46
+overview-pages              74     0.58    70.84    29.84    18.10    1.65
+overview-long               51     0.82    56.97    15.57    10.05    1.55
+agent-reading               62     0.78    27.73    27.57    16.57    1.66
+agent-working               63     0.28    26.66    26.50    16.15    1.64
+agent-mic-closed            68     0.34    35.05    22.45    14.05    1.60
+agent-listening            119     0.94    43.34    28.76    17.24    1.67
+agent-listening-start      117     0.42    24.93    24.73    14.98    1.65
+agent-working-talking      119     0.46    42.05    27.44    16.68    1.64
+agent-sending              109     0.80    28.19    28.02    16.81    1.67
+agent-no-voice              47     0.38    46.28    16.53     9.88    1.67
+toast                      124     0.83    43.77    29.19    17.58    1.66
+done-note                   77     1.27   103.01    24.70    15.53    1.59
+attention-question          35     0.49     9.48     9.19     5.59    1.64
+attention-permission        27     0.20     7.87     7.62     4.66    1.64
+attention-outside           23     0.57    11.73    11.25     6.77    1.66
+attention-done              17     0.47     6.33     6.10     3.68    1.66
+attention-failed            17     0.33     6.29     6.07     3.67    1.65
+attention-six               43     0.52    11.04    10.76     6.35    1.69
+attention-multi             43     0.41    10.13     9.85     5.76    1.71
+attention-error             25     0.41     8.42     8.16     5.04    1.62
+attention-long-vi           37     1.06    11.75    11.41     6.77    1.69
+inbox                       49     1.17    58.62    15.66     9.31    1.68
+inbox-empty                  7     0.05     5.84     5.75     3.50    1.64
+apps                        61     0.33    14.55    14.43     8.54    1.69
+ambient                    112     0.31    58.78    17.73    10.10    1.76
+ambient-no-agents           94     0.25    10.06     9.68     5.65    1.71
+not-connected               89     0.19     7.70     7.66     4.52    1.70
+update                       5     0.06     3.34     3.26     2.25    1.45
+form-opening                15     0.11    10.29    10.21     7.54    1.35
+form-page                   31     0.28    12.85    12.73     8.71    1.46
+form-start                  21     0.21    11.36    11.25     7.87    1.43
+form-busy                   23     0.23    11.63    11.51     7.99    1.44
+form-failed                 12     0.17    10.31    10.21     7.47    1.37
+form-say                    28     0.29    12.78    12.67     8.65    1.46
+form-toast                  40     0.68    15.32    15.17     9.88    1.53
+row-opening                 96    14.62    35.24    35.08    20.98    1.67
+row-closing                100     2.93    38.91    38.81    22.54    1.72
+row-drag                    84     1.47    96.05    28.27    17.57    1.61
+overview-loops              70     1.39    91.78    23.87    15.23    1.57
+all 42 screens, warm: mean 17.12 ms, max 38.81 ms (row-closing); 2 cores: mean 10.59 ms
+(a) by run kind, warm, every screen once:
+kind                    ms  share    calls       Mpx   ns/px
+background          108.09  15.1%      840    38.707     2.8
+text                 87.23  12.2%     1027     3.257    26.8
+rect                 25.91   3.6%     2862     6.991     3.7
+image               159.62  22.3%      961     2.490    64.1
+rect_aa             103.14  14.4%     2221    24.890     4.1
+rect_aa_stroke       23.01   3.2%      126     0.254    90.5
+cell                 67.91   9.5%      386     1.114    61.0
+arc                   8.47   1.2%      148     0.070   121.8
+grad_aa               1.57   0.2%       18     0.190     8.2
+grad_dither          70.13   9.8%      348     4.903    14.3
+tri                  60.51   8.5%      739     0.078   773.7
+(a) partial frames: ht_damage, then each rectangle in strips as pro_frame_present (best of 5); the costliest run kinds, ms (k px)
+frame                    rects       px       ms
+listening band              14    64556    2.680  arc 0.58 (6) image 0.40 (4) rect 0.38 (71)
+agent page second            4    33744    2.273  cell 1.48 (22) grad_dither 0.44 (27) rect 0.11 (38)
+overview cell                6     8336    0.433  text 0.11 (3) rect_aa 0.08 (1) grad_dither 0.08 (4)
+overview +40 px             14   796132   22.980  image 6.50 (47) grad_dither 4.56 (315) cell 3.59 (56)
+(f) the product's frame (max_present.c, max_strips.c) end to end into a 480x1920 framebuffer in PSRAM, no panel scanning it: whole glass, warm, best of 2, ms. cpu: max_turn_pixels and a copy as draw_bitmap's; ppa: the PPA turns each 12-line strip straight into the framebuffer while the next is rasterised. 1c: the render task alone; 2c: with the helper on core 0. fps, raster: the product's (2c ppa); raster sums both cores. 
+screen                    1c cpu  1c ppa  2c cpu  2c ppa    fps  raster framebuffer
+overview                  104.41   27.00   73.07   17.34   57.7   26.92 same
+overview-harness           99.65   24.18   75.39   16.72   59.8   21.24 same
+overview-one               86.86   17.70   67.14   15.43   64.8   10.23 same
+overview-pages            111.06   32.54   80.43   18.63   53.7   33.15 same
+overview-long              94.85   21.18   72.34   16.35   61.2   16.98 same
+agent-reading             109.51   30.17   76.84   19.31   51.8   31.54 same
+agent-working             108.51   29.23   77.17   18.70   53.5   30.36 same
+agent-mic-closed          104.57   25.17   71.65   17.23   58.0   26.61 same
+agent-listening           113.44   31.48   76.06   19.67   50.8   34.21 same
+agent-listening-start     109.53   27.48   79.66   17.24   58.0   29.20 same
+agent-working-talking     112.25   30.11   75.41   18.81   53.2   32.39 same
+agent-sending             112.10   30.68   78.83   19.49   51.3   32.08 same
+agent-no-voice             95.47   21.46   66.35   15.88   63.0   18.24 same
+toast                     114.57   31.94   76.64   19.66   50.9   34.00 same
+done-note                 105.86   27.89   73.98   17.43   57.4   27.97 same
+attention-question         87.03   16.82   73.91   15.40   64.9    9.79 same
+attention-permission       84.77   15.88   73.44   15.39   65.0    8.09 same
+attention-outside          88.91   17.56   77.79   15.47   64.6   11.94 same
+attention-done             82.23   16.35   69.24   15.36   65.1    6.42 same
+attention-failed           82.19   16.30   69.15   15.35   65.2    6.41 same
+attention-six              89.02   17.65   74.12   15.41   64.9   11.45 same
+attention-multi            88.05   16.88   73.82   15.41   64.9   10.48 same
+attention-error            85.38   16.32   73.62   15.39   65.0    8.70 same
+attention-long-vi          89.75   18.14   74.52   15.42   64.9   12.20 same
+inbox                      94.19   20.93   65.30   15.77   63.4   16.93 same
+inbox-empty                80.63   16.59   61.42   15.27   65.5    6.03 same
+apps                       93.29   20.09   65.42   15.38   65.0   16.67 same
+ambient                   100.41   21.74   77.50   15.51   64.5   19.73 same
+ambient-no-agents          89.61   15.95   64.96   15.47   64.6   10.33 same
+not-connected              86.11   15.66   63.64   15.44   64.8    8.07 same
+update                     77.91   15.20   60.89   15.29   65.4    3.45 same
+form-opening               84.44   15.25   61.71   15.32   65.3    9.40 same
+form-page                  87.98   16.53   62.72   15.33   65.2   12.30 same
+form-start                 85.94   15.49   62.14   15.31   65.3   10.53 same
+form-busy                  86.26   15.53   62.12   15.31   65.3   10.88 same
+form-failed                84.34   15.41   61.60   15.32   65.3    9.45 same
+form-say                   87.68   16.48   62.52   15.33   65.2   12.27 same
+form-toast                 91.00   18.42   63.66   15.33   65.2   15.69 same
+row-opening               118.14   37.77   76.99   22.91   43.6   38.99 same
+row-closing               122.84   41.75   79.31   23.98   41.7   44.12 same
+row-drag                  109.87   31.39   77.67   18.96   52.7   31.64 same
+overview-loops            104.55   27.06   73.10   17.36   57.6   26.97 same
+overview          6 mean  100.23   24.94   73.58   16.97   58.9
+                     max  111.06   32.54   80.43   18.63   53.7
+agent             8 mean  108.17   28.22   75.25   18.29   54.7
+                     max  113.44   31.48   79.66   19.67   50.8
+every screen     42 mean   96.31   22.32   71.03   16.79   59.6
+                     max  122.84   41.75   80.43   23.98   41.7
+framebuffer as the CPU's raster and turn: 42/42 screens in every mode
+(f) partial frames through the product's frame: `before` whole, then the frame to `after`, best of 3, ms
+frame                         px    %  1c cpu  1c ppa  2c cpu  2c ppa    fps  raster framebuffer
+listening band             64556    7    9.89    4.07    6.91    3.08  324.8    2.73 same
+agent page second          33744    4    4.78    3.02    4.28    2.72  368.1    2.29 same
+overview cell               8336    1    1.01    0.79    0.66    0.60 1655.6    0.46 same
+overview +40 px           796132   86   92.24   27.04   64.36   18.04   55.4   25.89 same
+the frame's helper: up, 7060 bytes of its stack never used
+(g) App Detail's row in motion through the product's frame (2c ppa, the row's blurs shared between the cores as max_app.c has them), one frame every 16 ms of the row's clock: each built (max_ui_render) then presented (max_present) into the framebuffer, wall ms. cold: no pet cell baked, no sliver or pet image kept; ahead: the same, then painted ahead while the page rests (max_ui_warm, its steps after the line); warm: the same motion again. first: the costlier of its frames 0 and 1. framebuffer: after the last frame, as the CPU's raster and turn
+motion           run frames   first    mean   worst    fps    min   build     max present     max framebuffer
+drag + snap     cold     69    2.04   18.04   24.12   55.4   41.5    1.89    2.24   16.15   22.32 same
+open            cold     29   75.82   54.93  123.24   18.2    8.1   24.20   87.98   30.73   45.88 same
+open           ahead     29   18.13   28.72   46.19   34.8   21.6    4.98   25.25   23.74   30.83 same
+               painted ahead in 179 steps, 3050.9 ms, the longest 88.45 ms
+open            warm     29   17.98   27.57   37.81   36.3   26.4    3.83    6.88   23.74   30.94 same
+close           cold     54  181.80   38.36  181.80   26.1    5.5   12.57  134.85   25.79   60.44 same
+close          ahead     54   35.84   23.50   41.24   42.5   24.2    3.14    6.43   20.36   34.81 same
+               painted ahead in 206 steps, 4108.8 ms, the longest 88.62 ms
+close           warm     54   35.68   23.50   41.27   42.5   24.2    3.14    6.43   20.36   34.83 same
+drag slivers    cold     47    1.92   16.42   86.41   60.9   11.6    2.64   66.79   13.78   66.64 same
+loops           cold    126    2.02    4.51    6.83  221.6  146.3    1.28    1.62    3.23    5.33 same
+agent loops     cold    126    1.06    3.83   49.31  260.8   20.3    0.68    0.94    3.16   48.68 same
+(b) CPU turn (max_turn_pixels): 1920x24 strip 0.715 ms; 20 strips 14.34 ms
+(c) PPA SRM turn of the 1920x24 strip, against max_turn_pixels (MAX_TURN_CCW_DEGREES 270):
+  ccw  90: differs
+  ccw  90 mirror x: differs
+  ccw  90 mirror y: differs
+  ccw  90 mirror x mirror y: SAME
+  ccw 270: SAME
+  ccw 270 mirror x: differs
+  ccw 270 mirror y: differs
+  ccw 270 mirror x mirror y: differs
+  into the internal band: 0.514 ms a strip (CPU 0.715), 20 strips 10.28 ms
+  into a 480x1920 framebuffer in PSRAM at (456, 0): 0.517 ms a strip, same as max_turn_pixels
+  product max_turn_ppa: 8/8 shapes same as max_turn_pixels; 1920x24 0.514 ms, 46x24 0.062 ms (CPU 0.015)
+  product max_turn_ppa_kick: ESP_OK
+(d) copy a 1169x480 RGB565 layer (1095 KB) to x=300, no panel scanning PSRAM meanwhile:
+  PSRAM->PSRAM, memcpy a row at a time:        19.86 ms     57 MB/s; with the write-back a DMA reader needs 19.90 ms
+  PSRAM->internal strips, memcpy a row:         9.79 ms    115 MB/s
+  PSRAM->PSRAM, PPA in one transaction:         9.58 ms    117 MB/s, same as memcpy
+  PSRAM->internal strips, PPA a strip:         10.77 ms    104 MB/s, same as memcpy (the last strip)
+==== end of pass 1 ====
