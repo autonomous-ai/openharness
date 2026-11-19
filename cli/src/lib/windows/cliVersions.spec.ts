@@ -5,17 +5,33 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { isVersionFolder, processRetireDeps, replaceFile, retireUnused, switchTo, versionsOnDisk, writeVersionFolder } from './cliVersions.js'
 import { VERSION_FOLDER } from './installNames.js'
 
-// A disk that fills up partway through a write: the file is left with half its bytes, and the write throws.
-const fault = vi.hoisted(() => ({ at: null as ((file: string) => boolean) | null }))
+// A disk that fills up partway through a write: the file is left with half its bytes, and the write throws. Each
+// path written or opened by name, and each rename's target, is noted.
+const fault = vi.hoisted(() => ({
+  at: null as ((file: string) => boolean) | null, written: [] as string[], renamedOnto: [] as string[], opened: new Map<number, string>(),
+}))
 vi.mock('node:fs', async (real) => {
   const actual = await real<typeof import('node:fs')>()
   const writeFileSync = (...args: Parameters<typeof actual.writeFileSync>): void => {
-    const [file, data] = args
-    if (!fault.at?.(String(file))) return actual.writeFileSync(...args)
-    actual.writeFileSync(file, String(data).slice(0, 1))
+    const [target, data] = args
+    const file = typeof target === 'number' ? fault.opened.get(target) ?? '' : String(target)
+    if (typeof target !== 'number') fault.written.push(file)
+    if (!fault.at?.(file)) return actual.writeFileSync(...args)
+    actual.writeFileSync(target, String(data).slice(0, 1))
     throw Object.assign(new Error('ENOSPC'), { code: 'ENOSPC' })
   }
-  return { ...actual, default: { ...actual, writeFileSync }, writeFileSync }
+  const openSync = (...args: Parameters<typeof actual.openSync>): number => {
+    const fd = actual.openSync(...args)
+    fault.written.push(String(args[0]))
+    fault.opened.set(fd, String(args[0]))
+    return fd
+  }
+  const renameSync = (...args: Parameters<typeof actual.renameSync>): void => {
+    fault.renamedOnto.push(String(args[1]))
+    actual.renameSync(...args)
+  }
+  const wrapped = { writeFileSync, openSync, renameSync }
+  return { ...actual, ...wrapped, default: { ...actual, ...wrapped } }
 })
 
 // A's process table, as this computer's retirement reads it.
@@ -24,7 +40,13 @@ vi.mock('./processTable.js', () => ({ windowsProcessRows: table.rows }))
 
 const dirs: string[] = []
 const cliDir = () => { const root = mkdtempSync(join(tmpdir(), 'cli-versions-')); dirs.push(root); const cli = join(root, 'cli'); mkdirSync(cli); return cli }
-afterEach(() => { fault.at = null; for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }) })
+afterEach(() => {
+  fault.at = null
+  fault.written.length = 0
+  fault.renamedOnto.length = 0
+  fault.opened.clear()
+  for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true })
+})
 
 describe('the CLI\'s version folders', () => {
   it('are named after a release\'s version and hold its cli.js and notify.mjs', () => {
@@ -111,13 +133,43 @@ describe('replacing a file a hook may hold', () => {
     expect(readdirSync(cli)).toEqual(['notify.mjs'])
   })
 
-  it('leaves no part-written file beside it when the write fails', () => {
+})
+
+describe('the stable notify.mjs, at a switch', () => {
+  /** 0.5.0 written, and the notify.mjs of a build before it in place. */
+  function written(): { cli: string; file: string } {
     const cli = cliDir()
+    writeVersionFolder(cli, '0.5.0', Buffer.from('cli'), Buffer.from('notify 0.5.0'))
     const file = join(cli, 'notify.mjs')
     writeFileSync(file, 'old')
+    fault.written.length = 0
+    return { cli, file }
+  }
+
+  it('the save goes through a temporary file renamed onto the target', () => {
+    const { cli, file } = written()
+    switchTo(cli, '0.5.0')
+    expect(fault.renamedOnto).toContain(file)
+    expect(fault.written).not.toContain(file)
+    expect(readFileSync(file, 'utf8')).toBe('notify 0.5.0')
+  })
+
+  it('a file at the old temporary name is left alone', () => {
+    const { cli, file } = written()
+    const planted = `${file}.${process.pid}.tmp`
+    writeFileSync(planted, 'not ours')
+    switchTo(cli, '0.5.0')
+    expect(readFileSync(planted, 'utf8')).toBe('not ours')
+    expect(readFileSync(file, 'utf8')).toBe('notify 0.5.0')
+  })
+
+  it('a write that fails part way leaves the old file, and nothing beside it', () => {
+    const { cli, file } = written()
     fault.at = (path) => path.startsWith(`${file}.`)
-    expect(() => replaceFile(file, Buffer.from('new'), renameSync, 1, 0)).toThrow('ENOSPC')
-    expect(readdirSync(cli)).toEqual(['notify.mjs'])
+    const log = vi.fn()
+    switchTo(cli, '0.5.0', log)
+    expect(log).toHaveBeenCalledWith(expect.stringMatching(/^\[update\] the hooks' notify\.mjs could not be refreshed yet \(ENOSPC\)/))
+    expect(readdirSync(cli).sort()).toEqual(['0.5.0', 'current', 'notify.mjs'])
     expect(readFileSync(file, 'utf8')).toBe('old')
   })
 })

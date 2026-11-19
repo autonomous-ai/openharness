@@ -1,12 +1,34 @@
-import { copyFileSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'fs'
-import { tmpdir } from 'os'
-import { basename, dirname, join } from 'path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { copyFileSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { basename, dirname, join } from 'node:path'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { readPointer } from './installLayout.js'
 import { PTY_PAYLOAD_FILES, PtyPayloadRefused, type PreparedPty } from './ptyPayload.js'
 import {
   confirmPty, installPreparedPty, rejectedPtyVersions, restorePty, sweepAsideFiles, type PtyInstallFs,
 } from './ptyInstall.js'
+
+// Pass-through, noting each path written or opened by name and each rename's target; a rename onto a file named
+// [failRenameOnto] fails as a disk error does.
+const io = vi.hoisted(() => ({ written: [] as string[], renamedOnto: [] as string[], failRenameOnto: null as string | null }))
+vi.mock('node:fs', async (original) => {
+  const actual = await original<typeof import('node:fs')>()
+  const { basename } = await import('node:path')
+  const writeFileSync = (...args: Parameters<typeof actual.writeFileSync>) => {
+    if (typeof args[0] !== 'number') io.written.push(String(args[0]))
+    return actual.writeFileSync(...args)
+  }
+  const openSync = (...args: Parameters<typeof actual.openSync>) => { io.written.push(String(args[0])); return actual.openSync(...args) }
+  const renameSync = (...args: Parameters<typeof actual.renameSync>) => {
+    io.renamedOnto.push(String(args[1]))
+    if (io.failRenameOnto !== null && basename(String(args[1])) === io.failRenameOnto) {
+      throw Object.assign(new Error(`injected EIO onto ${io.failRenameOnto}`), { code: 'EIO' })
+    }
+    return actual.renameSync(...args)
+  }
+  const wrapped = { writeFileSync, openSync, renameSync }
+  return { ...actual, ...wrapped, default: { ...actual, ...wrapped } }
+})
 
 let root: string
 let ptyRoot: string
@@ -22,7 +44,13 @@ beforeEach(() => {
   mkdirSync(bin)
   for (const name of ['harness.exe', 'harness-launch.exe']) writeFileSync(join(bin, name), `old ${name}`)
 })
-afterEach(() => { rmSync(root, { recursive: true, force: true }) })
+afterEach(() => {
+  io.written.length = 0
+  io.renamedOnto.length = 0
+  io.failRenameOnto = null
+  vi.restoreAllMocks()
+  rmSync(root, { recursive: true, force: true })
+})
 
 /** A staging folder as preparePtyPayload leaves it, holding [prefix] in front of each file name. */
 function staged(prefix = 'new', version = '0.11.0'): PreparedPty {
@@ -293,6 +321,24 @@ describe('installPreparedPty', () => {
     })
   })
 
+  it.each(['pty-pending.json', 'current-pty'])('a failed save of %s leaves the bin files, the marker and the pointer as they were', (name) => {
+    const before = snapshot()
+    const prepared = staged()
+    io.failRenameOnto = name
+    expect(() => installPreparedPty(prepared, root, realFs)).toThrow(`injected EIO onto ${name}`)
+    expect(snapshot()).toEqual(before)
+    expect(existsSync(prepared.staging)).toBe(false)
+  })
+
+  it('a file at the old temporary name is left alone', () => {
+    vi.spyOn(Date, 'now').mockReturnValue(1_000)
+    const planted = join(ptyRoot, `.pty-pending.json.tmp-${process.pid}-1000`)
+    writeFileSync(planted, 'not ours')
+    installPreparedPty(staged(), root, realFs)
+    expect(readFileSync(planted, 'utf8')).toBe('not ours')
+    expect(JSON.parse(readFileSync(join(ptyRoot, 'pty-pending.json'), 'utf8'))).toEqual({ version: '0.11.0', previous: '0.10.0' })
+  })
+
   it('an existing version folder is reused only when it matches', () => {
     mkdirSync(join(ptyRoot, '0.11.0'))
     for (const name of PTY_PAYLOAD_FILES) writeFileSync(join(ptyRoot, '0.11.0', name), `new ${name}`)
@@ -426,6 +472,26 @@ describe('restorePty', () => {
     const fs: PtyInstallFs = { ...realFs, copyFile: () => { throw err('EIO') } }
     expect(restorePty(root, fs)).toEqual({ found: true, pointer: true, restored: [], kept: ['harness.exe', 'harness-launch.exe'], missing: [] })
     expect(existsSync(join(ptyRoot, 'pty-pending.json'))).toBe(false)
+  })
+
+  it('the save goes through a temporary file renamed onto the target', () => {
+    installPreparedPty(staged(), root, realFs)
+    restorePty(root)
+    for (const name of ['pty-pending.json', 'pty-rejected.json']) {
+      expect(io.renamedOnto).toContain(join(ptyRoot, name))
+      expect(io.written).not.toContain(join(ptyRoot, name))
+    }
+  })
+
+  it('a torn pty-rejected.json is set aside, not written over', () => {
+    installPreparedPty(staged(), root, realFs)
+    const file = join(ptyRoot, 'pty-rejected.json')
+    writeFileSync(file, '[{"')
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    restorePty(root)
+    expect(readFileSync(`${file}.unreadable`, 'utf8')).toBe('[{"')
+    expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual(['0.11.0'])
+    expect(warn).toHaveBeenCalledWith('[state] pty-rejected.json could not be read (not valid JSON); kept as pty-rejected.json.unreadable, starting empty.')
   })
 
   it('adds to the rejected list without repeating a version', () => {

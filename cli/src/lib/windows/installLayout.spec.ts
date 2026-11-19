@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -7,8 +7,27 @@ import {
 } from './installLayout.js'
 import { STABLE_NOTIFY } from './installNames.js'
 
+// Pass-through, noting each path written or opened by name and each rename's target.
+const io = vi.hoisted(() => ({ written: [] as string[], renamedOnto: [] as string[] }))
+vi.mock('node:fs', async (original) => {
+  const actual = await original<typeof import('node:fs')>()
+  const writeFileSync = (...args: Parameters<typeof actual.writeFileSync>) => {
+    if (typeof args[0] !== 'number') io.written.push(String(args[0]))
+    return actual.writeFileSync(...args)
+  }
+  const openSync = (...args: Parameters<typeof actual.openSync>) => { io.written.push(String(args[0])); return actual.openSync(...args) }
+  const renameSync = (...args: Parameters<typeof actual.renameSync>) => { io.renamedOnto.push(String(args[1])); return actual.renameSync(...args) }
+  const wrapped = { writeFileSync, openSync, renameSync }
+  return { ...actual, ...wrapped, default: { ...actual, ...wrapped } }
+})
+
 const roots: string[] = []
-afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }) })
+afterEach(() => {
+  io.written.length = 0
+  io.renamedOnto.length = 0
+  vi.restoreAllMocks()
+  for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true })
+})
 function scratch(): string {
   const root = mkdtempSync(join(tmpdir(), 'harness-layout-'))
   roots.push(root)
@@ -63,6 +82,25 @@ describe('pointer files', () => {
     writePointer(root, 'current', '1.2.4')
     expect(readPointer(root, 'current')).toBe('1.2.4')
     expect(readdirSync(root)).toEqual(['current'])
+  })
+
+  it('the save goes through a temporary file renamed onto the target', () => {
+    const root = scratch()
+    const target = join(root, 'current')
+    writePointer(root, 'current', '1.2.2')
+    writePointer(root, 'current', '1.2.3')
+    expect(io.renamedOnto).toEqual([target, target])
+    expect(io.written).not.toContain(target)
+  })
+
+  it('a file at the old temporary name is left alone', () => {
+    const root = scratch()
+    vi.spyOn(Date, 'now').mockReturnValue(1_000)
+    const planted = join(root, `.current.tmp-${process.pid}-1000`)
+    writeFileSync(planted, 'not ours')
+    writePointer(root, 'current', '1.2.3')
+    expect(readFileSync(planted, 'utf8')).toBe('not ours')
+    expect(readPointer(root, 'current')).toBe('1.2.3')
   })
 
   it('retries a rename an antivirus scan or the indexer holds, waiting longer each time', () => {

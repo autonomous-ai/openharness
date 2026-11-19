@@ -13,6 +13,28 @@ import {
   type PtyPoller, type PtyUpdaterDeps,
 } from './ptyUpdate.js'
 
+// Pass-through, noting each path written or opened by name and each rename's target; a rename onto a file named
+// [failRenameOnto] fails as a disk error does.
+const io = vi.hoisted(() => ({ written: [] as string[], renamedOnto: [] as string[], failRenameOnto: null as string | null }))
+vi.mock('node:fs', async (original) => {
+  const actual = await original<typeof import('node:fs')>()
+  const { basename } = await import('node:path')
+  const writeFileSync = (...args: Parameters<typeof actual.writeFileSync>) => {
+    if (typeof args[0] !== 'number') io.written.push(String(args[0]))
+    return actual.writeFileSync(...args)
+  }
+  const openSync = (...args: Parameters<typeof actual.openSync>) => { io.written.push(String(args[0])); return actual.openSync(...args) }
+  const renameSync = (...args: Parameters<typeof actual.renameSync>) => {
+    io.renamedOnto.push(String(args[1]))
+    if (io.failRenameOnto !== null && basename(String(args[1])) === io.failRenameOnto) {
+      throw Object.assign(new Error(`injected EIO onto ${io.failRenameOnto}`), { code: 'EIO' })
+    }
+    return actual.renameSync(...args)
+  }
+  const wrapped = { writeFileSync, openSync, renameSync }
+  return { ...actual, ...wrapped, default: { ...actual, ...wrapped } }
+})
+
 let root: string
 let ptyRoot: string
 let bin: string
@@ -29,6 +51,9 @@ beforeEach(() => {
   for (const name of ['harness.exe', 'harness-launch.exe']) writeFileSync(join(bin, name), `old ${name}`)
 })
 afterEach(() => {
+  io.written.length = 0
+  io.renamedOnto.length = 0
+  io.failRenameOnto = null
   for (const poller of pollers.splice(0)) poller.stop()
   vi.useRealTimers()
   rmSync(root, { recursive: true, force: true })
@@ -588,6 +613,24 @@ describe('takeBackPty', () => {
     expect(lines).toEqual(['[update] terminal host 0.11.0 taken back out with the build it came with — back to 0.10.0'])
   })
 
+  it('the save goes through a temporary file renamed onto the target', () => {
+    pairedIn()
+    takeBackPty(root, () => {}, '')
+    const file = join(ptyRoot, 'pty-rejected.json')
+    // The restore's rejection, then its take-back.
+    expect(io.renamedOnto.filter((target) => target === file)).toHaveLength(2)
+    expect(io.written).not.toContain(file)
+  })
+
+  it('a file at the old temporary name is left alone', () => {
+    pairedIn()
+    const planted = join(ptyRoot, `pty-rejected.json.tmp-${process.pid}`)
+    writeFileSync(planted, 'not ours')
+    takeBackPty(root, () => {}, '')
+    expect(readFileSync(planted, 'utf8')).toBe('not ours')
+    expect(rejectedPtyVersions(root)).toEqual([])
+  })
+
   it('says the host stays when the version before it is no longer there to go back to', () => {
     pairedIn()
     rmSync(join(ptyRoot, '0.10.0'), { recursive: true })
@@ -599,8 +642,8 @@ describe('takeBackPty', () => {
 
   it('on a failure, says the marker stays for the next master, which may keep it', () => {
     pairedIn()
-    // The rejection the restore records first cannot be written: a folder stands where it goes.
-    mkdirSync(join(ptyRoot, 'pty-rejected.json'))
+    // The rejection the restore records first cannot be written.
+    io.failRenameOnto = 'pty-rejected.json'
     const lines: string[] = []
     takeBackPty(root, (l) => lines.push(l), '  ', '  ✗ ')
     expect(existsSync(join(ptyRoot, 'pty-pending.json'))).toBe(true)
@@ -640,7 +683,7 @@ describe("a master's start: a host this build cannot speak on probation (ptyUnju
     expect(ptyUnjudged(root, { cliPending: true, log: (l) => lines.push(l), protocol: speaks(PTY_PROTOCOL + 1), lock: () => () => {} })).toBe('terminal host 0.11.0')
     expect(ptyUnjudged(root, { cliPending: false, log: (l) => lines.push(l), protocol: speaks(null), lock: () => () => {} })).toBe('terminal host 0.11.0')
     expect(lines).toEqual([])
-    mkdirSync(join(ptyRoot, 'pty-rejected.json'))
+    io.failRenameOnto = 'pty-rejected.json'
     expect(ptyUnjudged(root, { cliPending: false, log: (l) => lines.push(l), protocol: speaks(PTY_PROTOCOL + 1), lock: () => null })).toBe('terminal host 0.11.0')
     expect(lines[0]).toBe('[harnessd] the daemon spawn lock is busy — taking terminal host 0.11.0 back out without it')
     expect(lines.at(-1)).toMatch(/could not take terminal host 0\.11\.0 back out/)
