@@ -12,7 +12,6 @@ import { execFileSync } from 'node:child_process'
 import { lstatSync, mkdirSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
-import { observedAgentId } from '../src/cable/hosts/observed.js'
 import { IsolatedDaemon, until } from './harness/daemon.js'
 import { Desk } from './harness/desk.js'
 import { FakeBackend, type FakeMachine } from './harness/fakeBackend.js'
@@ -202,12 +201,7 @@ describe.skipIf(!herdrBinary)("herdr's agents on the dial, from a private herdr 
     await dial.next((m) => m.t === 'agents.end', 45_000, 'the first list')
 
     // 1. The suite's fake Claude Code in a herdr pane: its hook runs with herdr's own HERDR_PANE_ID.
-    const pane = await herdr.pane('hooked')
-    await until('the shell in its pane', async () => /\S/.test(await herdr.screen(pane)), 20_000, 100)
-    await herdr.type(pane, '"$CLAUDE_PATH"')
-    const sessionId = await until('its SessionStart hook to run',
-      () => d.hookLog().match(/claude pid=\d+ SessionStart\(startup\) session=(\S+) ran/)?.[1], 30_000, 100)
-    const id = observedAgentId('claude', sessionId)
+    const { pane, id } = await herdr.hooked('hooked')
     await showing(dial, 'the hooked agent listed', (rows) => rows.some((row) => row.id === id))
 
     // 2. Told to herdr too: herdr lists it, and the dial still has one row for that pane, the hook's.
