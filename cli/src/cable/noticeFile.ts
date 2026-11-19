@@ -2,8 +2,9 @@
 // (a crash, a CLI update): the desk (notices.ts) holds the cards, and this file is their copy, read once at the start.
 // It is this computer's, so it lives in the daemon's data folder beside dial-notify.json. One writer: the devices'
 // process.
-import { closeSync, openSync, readSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { closeSync, openSync, readSync } from 'node:fs'
 import { errorKind } from '../lib/log.js'
+import { atomicWriteFile, jsonObject, readState } from '../lib/secureState.js'
 import { SHOWN_ONLY_PREFIX } from './cableSession.js'
 import {
   NOTICE_KEY_MAX_CHARS, NOTICE_KEYS_MAX, NOTICE_LINE_MAX_BYTES, NOTICES_PENDING_MAX, type StoredNotice,
@@ -73,14 +74,14 @@ const read = (file: string): StoredNotice[] | Dropped => {
   } catch (error) {
     return (error as NodeJS.ErrnoException).code === 'ENOENT' ? [] : 'unreadable'
   }
-  let parsed: unknown
+  let parsed: Record<string, unknown>
   try {
-    parsed = JSON.parse(text)
+    parsed = jsonObject(text)
   } catch {
     return 'json'
   }
-  if ((parsed as { v?: unknown } | null)?.v !== 1) return 'version'
-  const { cards } = parsed as { cards?: unknown }
+  if (parsed.v !== 1) return 'version'
+  const { cards } = parsed
   if (!Array.isArray(cards) || cards.length > NOTICES_PENDING_MAX || !cards.every(isStoredNotice)) return 'shape'
   // One card an agent, as the desk keeps them.
   if (new Set(cards.map((card) => card.agentId)).size < cards.length) return 'shape'
@@ -98,7 +99,13 @@ export class NoticeFile {
   /** The cards the file keeps. A file that cannot be trusted is dropped whole, in one line, and the next write
    *  replaces it: nothing in it may stop the devices' process from starting, so this never throws. */
   load(): StoredNotice[] {
-    const cards = read(this.deps.file)
+    let cards = read(this.deps.file)
+    // One that cannot be read or parsed goes to the shared reader, which tries again and sets it aside, so the next
+    // write cannot replace it unseen. The bounded read stays first: it keeps a large file from being read whole.
+    if (cards === 'json' || cards === 'unreadable') {
+      if (readState(this.deps.file, 'cache', jsonObject).state !== 'ok') return []
+      cards = read(this.deps.file)
+    }
     if (Array.isArray(cards)) return cards
     this.deps.log(`[device] notices · file dropped · ${cards}`)
     return []
@@ -132,13 +139,9 @@ export class NoticeFile {
       cards = cards.slice(1)
       text = textOf(cards)
     }
-    // Written whole and renamed into place, so a reader never sees half a file.
-    const temporary = `${this.deps.file}.${process.pid}.tmp`
     try {
-      writeFileSync(temporary, text, { mode: 0o600 })
-      renameSync(temporary, this.deps.file)
+      atomicWriteFile(this.deps.file, text, 'cache')
     } catch (error) {
-      rmSync(temporary, { force: true })
       // Its kind, never the message, which names the path. Memory stays the truth; the next change tries again.
       this.deps.log(`[device] notices · not saved · ${errorKind(error)}`)
     }
