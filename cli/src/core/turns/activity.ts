@@ -57,10 +57,12 @@ export function createTurnActivity({ readScreen, terminals, bySession, sessionTu
   /**
    * A pane the binding pass captured (OpenClaw's, core/agents/bind.ts) is read as the probe would read it. With no turn
    * open nothing probes the runtime, while an OpenClaw run shows on its pane before its first row and through a quiet
-   * step: the pass's capture is that reading, and no second capture is taken.
+   * step: the pass's capture is that reading, and no second capture is taken. The capture is older than what lands after
+   * it: [revision] is the activity's revision read before capturing, the one at this call when not given.
    */
-  const paneRead = (session: RegisteredSession, capture: string): Promise<void> =>
-    turnActivity.check(session.sessionId, () => probe(session.sessionId, active => runtimeActivity.observe(active, capture)))
+  const paneRead = (session: RegisteredSession, capture: string,
+    revision = turnActivity.snapshot(session.sessionId)?.revision): Promise<void> =>
+    turnActivity.check(session.sessionId, () => probe(session.sessionId, active => runtimeActivity.observe(active, capture)), revision)
   /** The activity the app shows for an agent; none for a plain terminal. */
   const activityFrame = (session: RegisteredSession): ActivityFrame | null =>
     isTerminalEngine(session.engine) ? null : turnActivity.snapshot(session.sessionId) ?? null

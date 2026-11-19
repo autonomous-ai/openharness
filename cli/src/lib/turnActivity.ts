@@ -87,14 +87,18 @@ export class TurnActivity {
       validForMs: entry.state === 'working' ? Math.max(0, Math.min(WORK_HEARTBEAT_LEASE_MS, entry.until - this.now())) : 0 }
   }
   forget(sessionId: string): void { this.entries.delete(sessionId) }
-  /** [probe], when given, reads the runtime for this check in place of the one this was built with. */
-  async check(sessionId: string, probe = () => this.deps.probe(sessionId)): Promise<void> {
+  /**
+   * [probe], when given, reads the runtime for this check in place of the one this was built with. [since], when given,
+   * is the revision read before [probe]'s evidence was taken (a capture made before this check): a change since then is
+   * newer than that evidence and wins over it.
+   */
+  async check(sessionId: string, probe = () => this.deps.probe(sessionId), since?: number): Promise<void> {
     const entry = this.entry(sessionId)
     if (!entry || entry.pending) return entry?.pending
     const run = async () => {
       await this.deps.drain(sessionId)
       if (this.entry(sessionId) !== entry) return
-      const revision = entry.revision
+      const revision = since ?? entry.revision
       const result = await probe()
       await this.deps.drain(sessionId)
       // A completion, a new prompt, or a replaced process wins over a probe
