@@ -136,11 +136,17 @@ describe('native clipboard process ownership', () => {
   it('settles a child without pipes and ignores a closed tie error', async () => {
     const f = fixture()
     Object.assign(f.child, { stdout: null, stderr: null })
-    const owner = startClipboardOwner(f.file, { platform: 'darwin' })
-    f.tie.emit('error', new Error('closed'))
-    f.child.emit('error', new Error('spawn failed'))
-    f.end(1); await owner.settled
-    expect(await owner.ready).toEqual({ state: 'failed', reason: 'PASTE_CLIPBOARD_FAILED' })
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
+    // Exercise the default host selection without depending on the runner's display server.
+    Object.defineProperty(process, 'platform', { ...platform, value: 'darwin' })
+    try {
+      const owner = startClipboardOwner(f.file)
+      expect(spawn).toHaveBeenCalledWith('/bin/sh', expect.arrayContaining(['/usr/bin/osascript']), expect.any(Object))
+      f.tie.emit('error', new Error('closed'))
+      f.child.emit('error', new Error('spawn failed'))
+      f.end(1); await owner.settled
+      expect(await owner.ready).toEqual({ state: 'failed', reason: 'PASTE_CLIPBOARD_FAILED' })
+    } finally { Object.defineProperty(process, 'platform', platform) }
   })
 
   it('never kills after its watcher was released but before child close is observed', async () => {
