@@ -32,6 +32,9 @@ import type { ClaudeRun } from '../devices/claudePlugin.js'
 import { DIAL_SKILL } from '../devices/dialSkill.js'
 import { readSetup, writeRemoved, writeSetup } from '../devices/dialSkillFiles.js'
 import type { OrcaHomes, OrcaHomesCache } from '../devices/orcaHomes.js'
+import * as orcaPluginModule from '../devices/orcaPlugin.js'
+import * as orcaPluginSetupModule from '../cable/orcaPluginSetup.js'
+import { harnessPath } from '../config/harnessHome.js'
 import * as vscodeExtension from '../devices/vscodeExtension.js'
 import type { VscodeEditor, VscodeExtensionDeps } from '../devices/vscodeExtension.js'
 import { devicesListenerPath } from '../devices/listenerPath.js'
@@ -66,6 +69,10 @@ const seen = vi.hoisted(() => ({
 vi.mock('../devices/claudePlugin.js', async (real) => ({ ...await real<object>() }))
 // A copy of the module, so a spec can watch the daemon's own VS Code deps be asked for, and answer with its fake.
 vi.mock('../devices/vscodeExtension.js', async (real) => ({ ...await real<object>() }))
+// Copies too, so a spec can watch the daemon's own Orca and the deps of Orca's plugin be asked for, and answer with its
+// fake.
+vi.mock('../devices/orcaPlugin.js', async (real) => ({ ...await real<object>() }))
+vi.mock('../cable/orcaPluginSetup.js', async (real) => ({ ...await real<object>() }))
 vi.mock('../cable/cableHost.js', async (real) => {
   const actual = await real<typeof import('../cable/cableHost.js')>()
   return {
@@ -428,6 +435,51 @@ function fakeVscode({ installed = null, app = installed !== null, editor = 'vsco
   return { deps, runs }
 }
 
+const ORCA_KEY = 'local.harness-device'
+const ORCA_FP = `ap1-${'0123456789abcdef'.repeat(2)}`
+/** Orca's CLI and Harness Device's plugin in it as the devices see them (services/devices.ts orcaPlugin): the spec's own,
+ *  in memory, each run's arguments kept, so no spec runs the developer's `orca` or writes their ~/.harness/orca-plugin.
+ *  An Orca that is `running` answers at 1.4.262 and lists the plugin from [folder] at [installed]; an install or update
+ *  is refused without the approval's fingerprint for the pinned access, or [more] than it, and with it leaves this
+ *  build's 9.9.9. */
+function fakeOrcaPlugin({ running = true, installed = null, folder = join(dataDir, 'orca-plugin'), more = false }: { running?: boolean; installed?: string | null; folder?: string; more?: boolean } = {}) {
+  const runs: string[] = []
+  const state = { running, version: installed }
+  const answer = (code: number, json: unknown) => ({ code, stdout: JSON.stringify(json), timedOut: false })
+  const deps: orcaPluginModule.OrcaPluginRun & { folder: string } = {
+    platform: 'darwin',
+    orca: () => '/nowhere/orca',
+    run: async (_file, args) => {
+      runs.push(args.join(' '))
+      if (args[0] === 'status') return answer(0, { ok: true, result: { runtime: state.running ? { reachable: true, appVersion: '1.4.262' } : { reachable: false } } })
+      if (args[1] === 'inspect') return answer(0, { ok: true, result: { plugin: { pluginKey: ORCA_KEY } } })
+      if (args[1] === 'list') {
+        // Orca lists the folder it was handed by its real path: a throwaway data folder under macOS's /var is /private/var.
+        const entry = { pluginKey: ORCA_KEY, version: state.version, status: 'running', source: { kind: 'local-path', reference: realpathSync(folder) } }
+        return answer(0, { ok: true, result: { plugins: state.version === null ? [] : [entry] } })
+      }
+      if (args.at(-3) === '--approve' && args.at(-2) === ORCA_FP) {
+        state.version = '9.9.9'
+        return answer(0, { ok: true, result: { pluginKey: ORCA_KEY, version: '9.9.9' } })
+      }
+      return answer(3, { ok: false, error: { code: 'approval_required', data: {
+        pluginKey: ORCA_KEY, version: '9.9.9', approvalFingerprint: ORCA_FP,
+        grants: {
+          execution: 'trusted-worker',
+          capabilities: [{ kind: 'workspace:read', description: 'Read your projects' }, ...more ? [{ kind: 'agent:read', description: 'Read your agents' }] : []],
+          contributions: [{ kind: 'panels', name: 'Harness Device' }, { kind: 'statusBarItems', name: 'Dial' }, { kind: 'events', name: 'workspace.changed' }],
+        },
+      } } })
+    },
+    files: () => ({
+      'orca-plugin.json': JSON.stringify({ manifestVersion: 2, id: 'harness-device', name: 'Harness Device', version: '9.9.9', engines: { orca: '>=1.4.248' }, main: 'src/worker.ts' }),
+      'src/worker.ts': 'export const worker = true\n',
+    }),
+    folder,
+  }
+  return { deps, runs, state }
+}
+
 let dataDir: string
 let logs: string[]
 beforeEach(() => {
@@ -468,7 +520,7 @@ afterEach(() => {
   vi.unstubAllEnvs()
 })
 
-function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolean; testDialPort?: string; readUsage?: DevicesDeps['readUsage']; now?: () => number; decideTier?: DevicesDeps['decideTier'] | null; refresh?: DevicesDeps['refresh']; onDesk?: DevicesDeps['onDesk']; orca?: DevicesDeps['orca']; orcaReads?: DevicesDeps['orcaReads']; codex?: DevicesDeps['codex']; herdr?: DevicesDeps['herdr']; hc?: DevicesDeps['hc']; cmux?: DevicesDeps['cmux'] | null; opencode?: DevicesDeps['opencode']; claudeAppStore?: DevicesDeps['claudeAppStore']; codexAppThreads?: DevicesDeps['codexAppThreads'] | null; bundleId?: DevicesDeps['bundleId'] | null; listen?: DevicesDeps['listen']; tty?: DevicesDeps['tty']; claude?: DevicesDeps['claude'] | null; orcaHomes?: ReturnType<typeof fakeOrcaHomes> | null; vscodeExtension?: DevicesDeps['vscodeExtension'] | null; cursorExtension?: DevicesDeps['cursorExtension'] | null; claudeFullscreen?: null; claudeManagedSettings?: string } = {}) {
+function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolean; testDialPort?: string; readUsage?: DevicesDeps['readUsage']; now?: () => number; decideTier?: DevicesDeps['decideTier'] | null; refresh?: DevicesDeps['refresh']; onDesk?: DevicesDeps['onDesk']; orca?: DevicesDeps['orca']; orcaReads?: DevicesDeps['orcaReads']; codex?: DevicesDeps['codex']; herdr?: DevicesDeps['herdr']; hc?: DevicesDeps['hc']; cmux?: DevicesDeps['cmux'] | null; opencode?: DevicesDeps['opencode']; claudeAppStore?: DevicesDeps['claudeAppStore']; codexAppThreads?: DevicesDeps['codexAppThreads'] | null; bundleId?: DevicesDeps['bundleId'] | null; listen?: DevicesDeps['listen']; tty?: DevicesDeps['tty']; claude?: DevicesDeps['claude'] | null; orcaHomes?: ReturnType<typeof fakeOrcaHomes> | null; vscodeExtension?: DevicesDeps['vscodeExtension'] | null; cursorExtension?: DevicesDeps['cursorExtension'] | null; orcaPlugin?: DevicesDeps['orcaPlugin'] | null; claudeFullscreen?: null; claudeManagedSettings?: string } = {}) {
   const core = over.core ?? fakeCore({ dataDir })
   // None, and no read under way, unless the spec gives its own; null leaves the devices to read this computer's.
   const orcaHomes = over.orcaHomes ?? fakeOrcaHomes()
@@ -516,6 +568,8 @@ function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolea
     // out.
     vscodeExtension: over.vscodeExtension === null ? undefined : over.vscodeExtension ?? fakeVscode().deps,
     cursorExtension: over.cursorExtension === null ? undefined : over.cursorExtension ?? fakeVscode({ editor: 'cursor' }).deps,
+    // An Orca that is not running unless the spec gives its own: no spec runs the developer's. null leaves it out.
+    orcaPlugin: over.orcaPlugin === null ? undefined : over.orcaPlugin ?? fakeOrcaPlugin({ running: false }).deps,
     processParents: async () => {
       processTable.reads++
       return processTable.rows
@@ -9613,6 +9667,122 @@ describe('Harness\'s VS Code extension, set up once a computer in VS Code and in
     await vi.waitFor(() => expect(calls('start')).toHaveLength(1))
     await vi.waitFor(() => expect(flags(vscode)).toEqual(['--install-extension']))
     expect(cursor.runs).toEqual([])
+  })
+})
+
+describe('Harness Device\'s plugin for Orca, set up from the devices\' own process (cable/orcaPluginSetup.ts)', () => {
+  /** Lets a pass's runs be answered. */
+  const settled = () => new Promise((resolve) => setImmediate(resolve))
+  /** The tally's lines for Orca's plugin, but its day line. */
+  const counted = (line: string) => line.startsWith('[device] orca plugin · orca')
+
+  it('a dial\'s first attach installs it, approves the pinned access, records it and counts it set up', async () => {
+    const orca = fakeOrcaPlugin()
+    start({ faults: ['fleet'], listen: fakeListener().listen, orcaPlugin: orca.deps })
+    await settled()
+    // No dial here yet: the start asks Orca nothing.
+    expect(orca.runs).toEqual([])
+
+    seen.host.watching!(true)
+
+    await vi.waitFor(() => expect(readSetup(dataDir).orca).toBe('9.9.9'))
+    const { folder } = orca.deps
+    expect(orca.runs.slice(-2)).toEqual([`plugin install ${folder} --json`, `plugin install ${folder} --approve ${ORCA_FP} --json`])
+    expect(logs.filter(counted)).toEqual(['[device] orca plugin · orca · set up'])
+    expect(logs).toContainEqual(expect.stringMatching(/^\[device\] orca plugin · day \d{4}-\d\d-\d\d · orca set up 1 updated 0 failed 0 left removed 0$/))
+    // A replug asks Orca nothing more.
+    const before = orca.runs.length
+    seen.host.watching!(false)
+    seen.host.watching!(true)
+    await settled()
+    expect(orca.runs).toHaveLength(before)
+  })
+
+  it('more access than the pin: held, recorded as orcaHeld, counted failed · access; a replug asks Orca nothing more', async () => {
+    const orca = fakeOrcaPlugin({ more: true })
+    start({ faults: ['fleet'], listen: fakeListener().listen, orcaPlugin: orca.deps })
+    seen.host.watching!(true)
+    await vi.waitFor(() => expect(readSetup(dataDir).orcaHeld).toBe('9.9.9'))
+    expect(readSetup(dataDir).orca).toBeUndefined()
+    expect(orca.runs.filter((run) => run.includes('--approve'))).toEqual([])
+    expect(logs.filter(counted)).toEqual(['[device] orca plugin · orca · failed · access'])
+    const before = orca.runs.length
+    seen.host.watching!(false)
+    seen.host.watching!(true)
+    await settled()
+    expect(orca.runs).toHaveLength(before)
+  })
+
+  it('set up before at another version: brought current at the start, a dial here or not', async () => {
+    expect(writeSetup(dataDir, { dial: false, orca: '0.0.1', homes: { claude: [], codex: [] }, pluginHomes: [] })).toBeUndefined()
+    const orca = fakeOrcaPlugin({ installed: '0.0.1' })
+    start({ faults: ['fleet'], listen: fakeListener().listen, orcaPlugin: orca.deps })
+    await vi.waitFor(() => expect(readSetup(dataDir).orca).toBe('9.9.9'))
+    expect(orca.runs.slice(-2)).toEqual([`plugin update ${ORCA_KEY} --json`, `plugin update ${ORCA_KEY} --approve ${ORCA_FP} --json`])
+    expect(logs.filter(counted)).toEqual(['[device] orca plugin · orca · updated'])
+  })
+
+  it.each([['observed agents on', true], ['observed agents off', false]])('Orca settling in front runs a pass (%s)', async (_, on) => {
+    const switched = env as { HARNESS_DEVICE_OBSERVED: boolean }
+    switched.HARNESS_DEVICE_OBSERVED = on
+    onTestFinished(() => { switched.HARNESS_DEVICE_OBSERVED = true })
+    const orca = fakeOrcaPlugin({ running: false })
+    start({ faults: ['fleet'], listen: fakeListener().listen, orcaPlugin: orca.deps })
+    seen.host.watching!(true)
+    // Not running at the attach: asked whether it runs, and nothing more.
+    await vi.waitFor(() => expect(orca.runs).toEqual(['status --json']))
+    await settled()
+
+    orca.state.running = true
+    seen.host.appSettled!('orca')
+
+    await vi.waitFor(() => expect(readSetup(dataDir).orca).toBe('9.9.9'))
+    expect(logs.filter(counted)).toEqual(['[device] orca plugin · orca · set up'])
+  })
+
+  it('in the core\'s process (no listener): nothing, at a start, an attach or a settle', async () => {
+    const orca = fakeOrcaPlugin()
+    start({ faults: ['fleet'], orcaPlugin: orca.deps })
+    seen.host.watching!(true)
+    seen.host.appSettled!('orca')
+    await settled()
+    expect(orca.runs).toEqual([])
+    expect(readSetup(dataDir).orca).toBeUndefined()
+  })
+
+  it('unset: this computer\'s orca, the folder in Harness\'s data root, the core\'s data folder', async () => {
+    const own = vi.spyOn(orcaPluginModule, 'orcaPluginRun').mockReturnValue(fakeOrcaPlugin({ running: false }).deps)
+    const parts = vi.spyOn(orcaPluginSetupModule, 'orcaPluginParts')
+    start({ faults: ['fleet'], listen: fakeListener().listen, orcaPlugin: null })
+    seen.host.watching!(true)
+    await settled()
+    expect(own).toHaveBeenCalledTimes(1)
+    const folder = harnessPath('orca-plugin', homedir())
+    expect(parts.mock.calls).toEqual([[expect.objectContaining({ folder, dataDir })]])
+    // Asked whether Orca runs, and it does not: nothing is written there.
+    expect(existsSync(folder)).toBe(false)
+  })
+
+  it('a folder that cannot be written: failed · folder; no line holds its path or its code', async () => {
+    writeFileSync(join(dataDir, 'file'), '')
+    const orca = fakeOrcaPlugin({ folder: join(dataDir, 'file', 'orca-plugin') })
+    start({ faults: ['fleet'], listen: fakeListener().listen, orcaPlugin: orca.deps })
+    seen.host.watching!(true)
+    await vi.waitFor(() => expect(logs.filter(counted)).toEqual(['[device] orca plugin · orca · failed · folder']))
+    expect(logs.filter((line) => line.includes(dataDir) || line.includes('ENOTDIR'))).toEqual([])
+    expect(readSetup(dataDir).orca).toBeUndefined()
+  })
+
+  it('a throw there costs the dial nothing', async () => {
+    // Set up before at another version: without the throw, the start's pass would bring it current.
+    expect(writeSetup(dataDir, { dial: true, orca: '0.0.1', homes: { claude: [], codex: [] }, pluginHomes: [] })).toBeUndefined()
+    const orca = fakeOrcaPlugin({ installed: '0.0.1' })
+    // Its start pass follows the dial setup's, once Orca's homes are read.
+    await start({ faults: ['fleet', 'orcaPlugin'], listen: fakeListener().listen, orcaPlugin: orca.deps }).orcaHomes.landed()
+    expect(logs).toContain('[devices] orcaPlugin failed · Error')
+    await vi.waitFor(() => expect(calls('start')).toHaveLength(1))
+    await settled()
+    expect(orca.runs).toEqual([])
   })
 })
 

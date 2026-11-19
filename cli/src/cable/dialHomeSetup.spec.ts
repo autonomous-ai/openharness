@@ -1146,6 +1146,36 @@ describe('the record the plugin\'s setup reads', () => {
     expect(again.writer.pluginHomes()).toEqual(homes)
   })
 
+  it('Orca\'s plugin: its version and its held version are kept in the record beside the dial and the editors\'', () => {
+    const other = folder()
+    const r = rig()
+    // Not read yet: nothing is known, so nothing is written over the record.
+    expect(r.writer.orca()).toBeUndefined()
+    r.writer.started()
+    expect(r.writer.orca()).toEqual({ dial: true })
+    expect(r.writer.recordVscode('0.6.60')).toBe(true)
+
+    expect(r.writer.recordOrca('0.6.70')).toBe(true)
+    expect(r.writer.recordOrcaHeld('0.6.71')).toBe(true)
+
+    expect(r.writer.orca()).toEqual({ dial: true, version: '0.6.70', held: '0.6.71' })
+    expect(readSetup(r.dataDir)).toEqual({ dial: true, vscode: '0.6.60', orca: '0.6.70', orcaHeld: '0.6.71', homes: { claude: [], codex: [skillsOf(r.codexHome)] }, pluginHomes: [] })
+    // The skill's own save keeps them.
+    r.writer.scanned([ownerIn(other)])
+    expect(readSetup(r.dataDir)).toMatchObject({ vscode: '0.6.60', orca: '0.6.70', orcaHeld: '0.6.71', homes: { codex: [r.codexHome, other].map(skillsOf) } })
+    // The next start reads them back.
+    const again = rig({ dataDir: r.dataDir, codexHome: r.codexHome })
+    again.writer.started()
+    expect(again.writer.orca()).toEqual({ dial: true, version: '0.6.70', held: '0.6.71' })
+
+    // A value a read would drop is not saved: after a restart the plugin would read as never set up, or never held.
+    const saved = readFileSync(join(r.dataDir, DIAL_SETUP_FILE), 'utf8')
+    expect(r.writer.recordOrca('0.6.72 beta')).toBe(false)
+    expect(r.writer.recordOrcaHeld('0.6.72 beta')).toBe(false)
+    expect(r.writer.orca()).toEqual({ dial: true, version: '0.6.70', held: '0.6.71' })
+    expect(readFileSync(join(r.dataDir, DIAL_SETUP_FILE), 'utf8')).toBe(saved)
+  })
+
   it('a record that cannot be saved keeps the list as before and says false', () => {
     const r = rig()
     r.writer.started()

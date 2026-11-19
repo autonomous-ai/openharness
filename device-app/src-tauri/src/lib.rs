@@ -17,7 +17,6 @@ pub mod log;
 pub mod loginitem;
 pub mod logs;
 pub mod model;
-pub mod orca_cli;
 pub mod runner;
 pub mod state;
 pub mod tabs;

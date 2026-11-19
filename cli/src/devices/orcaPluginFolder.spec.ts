@@ -1,9 +1,9 @@
 /**
  * The folder Orca installs Harness Device's plugin from, in a throwaway data folder each. Orca reads it at an install
- * and copies it again at each update, so it is never half written: not by a crash, and not by two commands at once
- * (the app's status beside a person's connect).
+ * and copies it again at each update, so it is never half written: not by a crash, and not by two writers at once
+ * (the devices' pass beside a person's `enable`).
  */
-import { spawnSync } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import * as fs from 'node:fs'
 import { chmodSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -79,6 +79,58 @@ process.stdout.write(ensureOrcaPluginFolder(${JSON.stringify(folder)}, ${JSON.st
   const run = spawnSync(process.execPath, ['--import', LOADER, '--input-type=module', '-e', script], { encoding: 'utf8', timeout: 20_000 })
   return run.stdout
 }
+
+/** Blocks until [path] exists, at most 20 s, with no event loop: an ensure runs whole in one synchronous call, and the
+ *  other process goes on meanwhile. */
+function waitFor(path: string): void {
+  const tick = new Int32Array(new SharedArrayBuffer(4))
+  const until = Date.now() + 20_000
+  while (!fs.existsSync(path)) {
+    if (Date.now() > until) throw new Error(`waited 20 s for ${path}`)
+    Atomics.wait(tick, 0, 0, 5)
+  }
+}
+/** waitFor, in the paused command's script. */
+const WAIT_FOR = `(path) => {
+  const tick = new Int32Array(new SharedArrayBuffer(4))
+  const until = Date.now() + 20_000
+  while (!fs.existsSync(path)) {
+    if (Date.now() > until) throw new Error('waited 20 s for ' + path)
+    Atomics.wait(tick, 0, 0, 5)
+  }
+}`
+
+/** The ensure of another command in a process of its own, returned once it stopped at its first file's flush: it has
+ *  looked for what an earlier run left and swapped nothing. It goes on at resume(); done is what it answered. */
+function pausedCommand(folder: string, files: Record<string, string>): { resume(): void; done: Promise<string> } {
+  const signals = aDataDir()
+  const paused = join(signals, 'paused')
+  const resumed = join(signals, 'resumed')
+  const script = `import fs from 'node:fs'
+import { syncBuiltinESMExports } from 'node:module'
+const waitFor = ${WAIT_FOR}
+const flush = fs.fsyncSync
+let stopped = false
+fs.fsyncSync = (...args) => {
+  flush(...args)
+  if (stopped) return
+  stopped = true
+  fs.writeFileSync(${JSON.stringify(paused)}, '')
+  waitFor(${JSON.stringify(resumed)})
+}
+syncBuiltinESMExports()
+const { ensureOrcaPluginFolder } = await import(${JSON.stringify(MODULE)})
+process.stdout.write(ensureOrcaPluginFolder(${JSON.stringify(folder)}, ${JSON.stringify(files)}))`
+  const child = spawn(process.execPath, ['--import', LOADER, '--input-type=module', '-e', script], { stdio: ['ignore', 'pipe', 'inherit'] })
+  let out = ''
+  child.stdout.on('data', (chunk: Buffer) => { out += chunk.toString() })
+  const done = new Promise<string>((resolve) => child.on('close', () => resolve(out)))
+  waitFor(paused)
+  return { resume: () => writeFileSync(resumed, ''), done }
+}
+
+/** A pid no process has now. */
+const gonePid = (): number => spawnSync(process.execPath, ['-e', '']).pid!
 
 const watched = fs as unknown as Record<string, (...args: unknown[]) => unknown>
 
@@ -161,11 +213,11 @@ describe('the Orca plugin\'s folder', () => {
     expect(calls).toEqual([...Object.keys(FILES).map(() => 'fsyncSync'), 'renameSync', 'renameSync'])
   })
 
-  it('an old folder with no folder is put back first', () => {
+  it('a folder a crashed swap moved aside, with no folder, is put back first', () => {
     const folder = aFolder()
     ensureOrcaPluginFolder(folder, FILES)
     const inode = lstatSync(folder).ino
-    renameSync(folder, `${folder}.old`)
+    renameSync(folder, `${folder}.old.${gonePid()}`)
 
     expect(ensureOrcaPluginFolder(folder, FILES)).toBe('same')
 
@@ -173,20 +225,32 @@ describe('the Orca plugin\'s folder', () => {
     holdsOnly(folder, FILES)
   })
 
-  it('an old folder beside a whole one is removed', () => {
+  it('a folder a crashed swap moved aside, beside a whole one, is removed', () => {
     const folder = aFolder()
     ensureOrcaPluginFolder(folder, FILES)
-    mkdirSync(`${folder}.old`)
-    writeFileSync(join(`${folder}.old`, 'orca-plugin.json'), EARLIER['orca-plugin.json'])
+    const old = `${folder}.old.${gonePid()}`
+    mkdirSync(old)
+    writeFileSync(join(old, 'orca-plugin.json'), EARLIER['orca-plugin.json'])
 
     expect(ensureOrcaPluginFolder(folder, FILES)).toBe('same')
 
     holdsOnly(folder, FILES)
   })
 
+  it('a folder a running command moved aside is left alone', () => {
+    const folder = aFolder()
+    ensureOrcaPluginFolder(folder, FILES)
+    const running = `orca-plugin.old.${process.ppid}`
+    mkdirSync(join(dirname(folder), running))
+
+    expect(ensureOrcaPluginFolder(folder, FILES)).toBe('same')
+
+    expect(readdirSync(dirname(folder)).sort()).toEqual(['orca-plugin', running])
+  })
+
   it('a new folder a crash left is removed; one a running command writes is left alone', () => {
     const folder = aFolder()
-    const gone = spawnSync(process.execPath, ['-e', '']).pid
+    const gone = gonePid()
     const running = process.ppid
     for (const pid of [gone, running]) {
       mkdirSync(`${folder}.new.${pid}`)
@@ -236,13 +300,14 @@ describe('the Orca plugin\'s folder', () => {
   it('a key that would leave the folder writes nothing', () => {
     const folder = aFolder()
     // What an earlier run left is not touched either.
-    mkdirSync(`${folder}.old`)
+    const left = `orca-plugin.old.${gonePid()}`
+    mkdirSync(join(dirname(folder), left))
 
     for (const key of ['../x', '/abs', 'a//b', 'src/../x', 'src/.', '', 'src/', 'a\\b']) {
       expect(ensureOrcaPluginFolder(folder, { ...FILES, [key]: 'x' }), key).toEqual({ failed: 'EINVAL' })
     }
 
-    expect(readdirSync(dirname(folder))).toEqual(['orca-plugin.old'])
+    expect(readdirSync(dirname(folder))).toEqual([left])
   })
 
   it('a key that names a file and a folder at once writes nothing', () => {
@@ -267,6 +332,29 @@ describe('the Orca plugin\'s folder', () => {
     expect(ensureOrcaPluginFolder(folder, FILES)).toBe('written')
 
     expect(other).toBe('written')
+    holdsOnly(folder, FILES)
+  })
+
+  it('a command that looks for what an earlier run left while another swaps: the swap is left alone, and both finish', async () => {
+    const folder = aFolder()
+    ensureOrcaPluginFolder(folder, EARLIER)
+    const real = watched.renameSync
+    let other: ReturnType<typeof pausedCommand> | undefined
+    // The other command starts once this one moved the folder aside, and stops at its own first file, having looked
+    // for what an earlier run left; this one renames its folder into place meanwhile.
+    vi.spyOn(watched, 'renameSync').mockImplementation((from, to) => {
+      if (other !== undefined || !String(from).startsWith(`${folder}.new`)) return real(from, to)
+      other = pausedCommand(folder, FILES)
+      try {
+        return real(from, to)
+      } finally {
+        other.resume()
+      }
+    })
+
+    const answered = ensureOrcaPluginFolder(folder, FILES)
+
+    expect({ answered, other: await other!.done }).toEqual({ answered: 'written', other: 'written' })
     holdsOnly(folder, FILES)
   })
 

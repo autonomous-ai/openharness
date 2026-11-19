@@ -1,12 +1,15 @@
 /**
  * The folder Orca installs Harness Device's plugin from (`orca plugin install <folder>`) and copies again at each
  * `orca plugin update`: the plugin's files `cli.js` carries, written in Harness's data root by the `harness device orca`
- * command's own process. Orca must never read half a folder, after a crash or with two commands at once (the app's
- * `status` beside a person's `connect`), so a write goes whole into a folder beside it and is renamed into place.
+ * command's process and by the devices' process (cable/orcaPluginSetup.ts). Orca must never read half a folder, after a
+ * crash or with two writers at once (the devices' pass beside a person's `enable`), so a write goes whole into a folder
+ * beside it and is renamed into place.
  *
- * Each command writes into a folder named by its pid (`<folder>.new.<pid>`), never into one named for all: a command
- * that cleared a shared `<folder>.new` as a leftover, file by file, could do it while another renamed that folder into
- * place, or make it again half full for the other to rename. A staging folder is removed only once its command is gone.
+ * Each process writes into its own staging folder and moves the folder it replaces aside into its own, both named by
+ * its pid (`<folder>.new.<pid>`, `<folder>.old.<pid>`), never into ones named for all: a process that cleared a shared
+ * `<folder>.new` as a leftover, file by file, could do it while another renamed that folder into place, or make it
+ * again half full for the other to rename; one that put a shared `<folder>.old` back as a leftover could do it while
+ * another swapped, and the other's rename then failed. What a process left is put back or removed only once it is gone.
  */
 import { closeSync, fsyncSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
@@ -18,7 +21,9 @@ type Tree = Map<string, Tree | Buffer>
 /** A key's segment: a plain name, so no key reaches outside the folder. The build holds the plugin's names to the same
  *  pattern (scripts/lib/orcaPluginBundle.mjs). */
 const SEGMENT = /^[A-Za-z0-9._-]+$/
-const PID = /^[0-9]+$/
+/** What a process leaves beside the folder, after `<folder>.`: its staging folder, or the folder its swap moved aside,
+ *  by its pid. */
+const LEFT = /^(new|old)\.([0-9]+)$/
 
 /** Makes [folder] hold exactly [files], writing only when it differs. Never throws: a failure is its error's code
  *  (`EACCES`), never its message, which names a path; a key off the pattern is `EINVAL`, as Node names a bad argument. */
@@ -58,17 +63,20 @@ function treeOf(files: Readonly<Record<string, string>>): Tree | undefined {
   return root
 }
 
-/** What an earlier run left: the staging folders of commands that are gone, and the folder a swap moved aside, put back
- *  when nothing took its place and removed when something did. */
+/** What processes that are gone left: their staging folders, removed, and the folders their swaps moved aside. */
 function recover(folder: string): void {
   const parent = dirname(folder)
-  const prefix = `${basename(folder)}.new.`
+  const prefix = `${basename(folder)}.`
   for (const name of readdirSync(parent)) {
-    const pid = name.slice(prefix.length)
-    if (name.startsWith(prefix) && PID.test(pid) && !pidAlive(Number(pid))) rmSync(join(parent, name), { recursive: true, force: true })
+    const left = name.startsWith(prefix) ? LEFT.exec(name.slice(prefix.length)) : null
+    if (left === null || pidAlive(Number(left[2]))) continue
+    if (left[1] === 'new') rmSync(join(parent, name), { recursive: true, force: true })
+    else settle(join(parent, name), folder)
   }
-  const old = `${folder}.old`
-  if (!lstatSync(old, { throwIfNoEntry: false })) return
+}
+
+/** A folder a swap moved aside to [old]: put back when nothing took its place, removed when something did. */
+function settle(old: string, folder: string): void {
   if (lstatSync(folder, { throwIfNoEntry: false })) rmSync(old, { recursive: true, force: true })
   else renameSync(old, folder)
 }
@@ -99,11 +107,11 @@ function holds(path: string, tree: Tree): boolean {
   return true
 }
 
-/** [tree] whole into this command's staging folder, then the swap. A step that fails puts the moved folder back and
- *  removes the staging folder. */
+/** [tree] whole into this process's staging folder, then the swap. A step that fails removes the staging folder and
+ *  puts the moved folder back, or removes it when another process put a folder in its place meanwhile. */
 function write(folder: string, tree: Tree): void {
   const staging = `${folder}.new.${process.pid}`
-  const old = `${folder}.old`
+  const old = `${folder}.old.${process.pid}`
   let moved = false
   try {
     put(staging, tree)
@@ -114,7 +122,7 @@ function write(folder: string, tree: Tree): void {
     renameSync(staging, folder)
   } catch (error) {
     try {
-      if (moved) renameSync(old, folder)
+      if (moved) settle(old, folder)
     } finally {
       rmSync(staging, { recursive: true, force: true })
     }

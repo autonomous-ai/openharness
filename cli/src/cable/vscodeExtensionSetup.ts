@@ -34,8 +34,8 @@ export function createVscodeExtensionSetup(deps: VscodeExtensionSetupDeps): Vsco
   /** A failed pass's hour: an attach within it runs no CLI, so a computer whose editor cannot install is not asked
    *  again at every replug. */
   let waiting = false
-  /** An uninstall that failed: tried again at the passes after its hour while the extension is removed, as nothing else
-   *  would take out what this setup put in. */
+  /** An uninstall owed: one that failed, or a `disable` during an install past its deadline; tried at the passes after
+   *  its hour while the extension is removed, as nothing else would take out what this setup put in. */
   let undoOwed = false
 
   const failed = (reason: string): void => {
@@ -63,7 +63,12 @@ export function createVscodeExtensionSetup(deps: VscodeExtensionSetupDeps): Vsco
 
   const install = async (version: string, kind: SetupCount): Promise<void> => {
     const change = await vscodeEnable(deps.vscode)
-    if ('error' in change) return failed(change.error)
+    if ('error' in change) {
+      // A `disable` that landed while the install ran past its deadline found nothing to uninstall, and the editor may
+      // still install it: owed, and taken out at the hour's pass.
+      if (deps.removed()[deps.vscode.editor]) undoOwed = true
+      return failed(change.error)
+    }
     // A `disable` that landed while the install ran found nothing to uninstall yet: it is honoured here, and nothing
     // recorded. One not known is neither: a moment's read error never uninstalls an extension the person keeps, and the
     // next pass finds it current and records it.

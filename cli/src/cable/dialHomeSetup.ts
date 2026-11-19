@@ -58,6 +58,13 @@ export interface DialHomeSetup {
   cursor(): { dial: boolean; version?: string } | undefined
   /** false when the record could not be saved. */
   recordCursor(version: string): boolean
+  /** Whether a dial attached here once, the version of Orca's plugin that last set it up or found it removed, and the
+   *  version held for asking more access; undefined until the record could be read. */
+  orca(): { dial: boolean; version?: string; held?: string } | undefined
+  /** false when the record could not be saved, and the record is as before. */
+  recordOrca(version: string): boolean
+  /** As recordOrca(), for the held version. */
+  recordOrcaHeld(version: string): boolean
 }
 
 type Counts = Record<DialEngine, { wrote: number; removed: number; failed: number }>
@@ -497,6 +504,22 @@ export function createDialHomeSetup(deps: DialHomeSetupDeps): DialHomeSetup {
 
     recordCursor(version) {
       const next = { ...record, cursor: version }
+      if (writeSetup(deps.dataDir, next) !== undefined) return false
+      record = next
+      return true
+    },
+
+    orca: () => known ? { dial: record.dial, version: record.orca, held: record.orcaHeld } : undefined,
+
+    recordOrca(version) {
+      const next = { ...record, orca: version }
+      if (writeSetup(deps.dataDir, next) !== undefined) return false
+      record = next
+      return true
+    },
+
+    recordOrcaHeld(version) {
+      const next = { ...record, orcaHeld: version }
       if (writeSetup(deps.dataDir, next) !== undefined) return false
       record = next
       return true
