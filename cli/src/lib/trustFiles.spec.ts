@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { env } from '../config/env.js'
@@ -40,6 +40,16 @@ describe('unreadableTrustLines', () => {
     ])
     for (const spy of said) expect(spy).not.toHaveBeenCalled()
     for (const [file, text] of Object.entries(files)) expect(readFileSync(file, 'utf8')).toBe(text)
+  })
+
+  // Nothing was read, so moving it aside is not the fix: the code says what failed.
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('names a trust file this account cannot read, without the move-aside fix', () => {
+    const paired = join(E2E, 'paired.json')
+    write(paired, '[]')
+    chmodSync(paired, 0o000)
+    try {
+      expect(unreadableTrustLines()).toEqual([`  ! ${paired} could not be read (EACCES)`])
+    } finally { chmodSync(paired, 0o600) }
   })
 
   it('names a torn hook token', () => {
