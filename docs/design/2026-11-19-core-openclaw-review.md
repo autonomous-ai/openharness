@@ -10,12 +10,19 @@ extracted input path. Reproduce each confirmed case before changing runtime code
   first task retains only its fingerprint, cleared by its matching turn or stop.
 - Concurrency: capture session binding before asynchronous pane/transaction work;
   recheck before reading into a session, taking its task, or submitting it.
+  Durable removal is the consumption point. Its receipt survives subsequent
+  source-release waits; a revoked handoff is reported, and a still-current launch
+  fails visibly instead of waiting for a task no longer on disk. Replacement
+  launches remain untouched.
   Only the engine's recovery command may bypass queued messages that are waiting
   for their pane. Other controls preserve their existing ordering.
 - Read cost: no new polling. Preserve retry budgets across unreadable/transient
   screens; a genuine ready reading resets the history-recovery episode.
 - Scale: keep existing map, byte and time limits. A pane-readiness wait must not
   spend the separate terminal-lease wait before that lease is requested.
+  Each wait spends only its own cumulative budget, even when the reasons alternate.
+  History retry episodes reset on a new TUI process or a confirmed Gateway outage,
+  not a transient banner or unreadable frame.
 - Compatibility: no public protocol or stored format change. First-task identity
   is in-memory only. Native history stays in its worker. Empty OpenClaw history
   must have no selected node or window, and cannot erase an earlier checkpoint.

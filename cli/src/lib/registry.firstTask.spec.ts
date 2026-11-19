@@ -81,6 +81,24 @@ it('keeps the first task when its launch authority is withdrawn during preparati
   expect(disk()[0].firstTask).toBe(TASK)
 })
 
+it('returns a consumed task receipt when a hold arrives during source release', async () => {
+  const { registry, row } = await bound()
+  const { sessionStorage: storage } = await import('./sessionStorage.js')
+  const retain = storage.retain.bind(storage)
+  vi.spyOn(storage, 'retain').mockImplementationOnce(async (...args) => {
+    const source = await retain(...args)
+    const release = source.release.bind(source)
+    source.release = async () => {
+      await release()
+      registry.setIdentityHold(row.agentId, 'Gateway unavailable')
+    }
+    return source
+  })
+  await expect(registry.takeFirstTask(row.agentId)).resolves.toBe(TASK)
+  expect(disk()[0]).not.toHaveProperty('firstTask')
+  expect(registry.byAgent(row.agentId)?.identityHold).toBe('Gateway unavailable')
+})
+
 it('an unbound agent keeps its task', async () => {
   const { registry, row } = await pending()
   expect((await registry.takeFirstTask(row.agentId))).toBeNull()

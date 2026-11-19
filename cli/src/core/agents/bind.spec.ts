@@ -2278,6 +2278,45 @@ describe('binding an OpenClaw pane, read from its screen', () => {
       expect(run.deps.submitFirstTask).not.toHaveBeenCalled()
     })
 
+    it.each(['held', 'ready'] as const)('reports a consumed task that cannot be handed to its still-current %s launch', async change => {
+      let saved!: (task: string) => void
+      const run = handing(() => ready)
+      const row = run.byAgent.get('a1')!
+      row.launch = { state: 'starting' }
+      vi.mocked(run.deps.registry.takeFirstTask).mockImplementationOnce(() => new Promise(resolve => { saved = resolve }))
+      await run.binding.bindObservedAgent(tui())
+      await vi.waitFor(() => expect(run.deps.registry.takeFirstTask).toHaveBeenCalledOnce())
+      delete row.firstTask
+      row.evidenceRevision = (row.evidenceRevision ?? 0) + 1
+      if (change === 'held') row.identityHold = OPENCLAW_STATES.noGateway
+      else row.launch = { state: 'ready' }
+      saved(TASK)
+      await new Promise(resolve => setImmediate(resolve))
+      expect(row.launch).toMatchObject({ state: 'failed', error: 'FIRST_TASK_NOT_TAKEN' })
+      expect(run.deps.input.forget).toHaveBeenCalledWith('a1')
+      expect(run.deps.announceSession).toHaveBeenCalledWith(row)
+      expect(run.deps.submitFirstTask).not.toHaveBeenCalled()
+    })
+
+    it.each(['removed', 'rebound', 'replacement task'] as const)('does not fail a replacement after a consumed task is %s', async change => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      let saved!: (task: string) => void
+      const run = handing(() => ready)
+      const row = run.byAgent.get('a1')!
+      vi.mocked(run.deps.registry.takeFirstTask).mockImplementationOnce(() => new Promise(resolve => { saved = resolve }))
+      await run.binding.bindObservedAgent(tui())
+      await vi.waitFor(() => expect(run.deps.registry.takeFirstTask).toHaveBeenCalledOnce())
+      delete row.firstTask
+      if (change === 'removed') run.byAgent.delete('a1')
+      else if (change === 'rebound') row.sessionId = 'agent:main:other'
+      else { row.evidenceRevision = 2; row.firstTask = 'A new task' }
+      saved(TASK)
+      await new Promise(resolve => setImmediate(resolve))
+      expect(run.deps.registry.setLaunch).not.toHaveBeenCalled()
+      expect(run.deps.submitFirstTask).not.toHaveBeenCalled()
+      expect(warn).toHaveBeenCalledWith('[agent] a1 first task not handed over · launch changed after removal')
+    })
+
     it('a pane that moved to another key binds it, and hands the task to that session once its stream is up', async () => {
       // `/new` before the task was typed: the pane shows a session the agent is not bound to yet.
       const other = ready.replace(/session plain/g, 'session other')
@@ -2491,6 +2530,23 @@ describe('binding an OpenClaw pane, read from its screen', () => {
       expect(logged().at(-1)).toBe(tries(1)[0])
     })
 
+    it('a new TUI process starts a new history-recovery episode', async () => {
+      for (const [loads, second] of [0, 20, 40, 60, 80].entries()) await pass(second, failedTimes(loads + 1))
+      expect(typed()).toHaveLength(5)
+      vi.setSystemTime(START + 85_000)
+      await run.binding.bindObservedAgent(tui({ processIdentity: { pid: 8815, startMarker: new Date(START + 81_000).toISOString(), executable: 'openclaw' } }))
+      expect(typed()).toHaveLength(6)
+    })
+
+    it('a confirmed Gateway outage starts a new history-recovery episode', async () => {
+      for (const [loads, second] of [0, 20, 40, 60, 80].entries()) await pass(second, failedTimes(loads + 1))
+      const lost = screen('screen-plain').replace(' connected | idle', ' gateway disconnected: connect ECONNREFUSED 127.0.0.1:18789 | idle')
+      await pass(85, lost)
+      await pass(96, lost)
+      await pass(97)
+      expect(typed()).toHaveLength(6)
+    })
+
     it('types nothing into a box that holds text: the person\'s, or a message OpenClaw refused', async () => {
       for (const second of [0, 20, 40]) await pass(second, screen('screen-history-refused'))
       expect(typed()).toEqual([])
@@ -2612,6 +2668,19 @@ describe('binding an OpenClaw pane, read from its screen', () => {
       await pass(0)
       await pass(180)
       expect(run.deps.registry.takeFirstTask).not.toHaveBeenCalled()
+    })
+
+    it('keeps failed-launch cleanup valid across a hold of the same owner', async () => {
+      let commit = () => {}
+      vi.mocked(run.deps.registry.afterTransaction).mockImplementation(((action: () => unknown) =>
+        new Promise(resolve => { commit = () => resolve(action()) })) as never)
+      await pass(0)
+      await pass(180)
+      row.identityHold = OPENCLAW_STATES.noGateway
+      row.evidenceRevision = (row.evidenceRevision ?? 0) + 1
+      commit()
+      await new Promise(resolve => setImmediate(resolve))
+      expect(run.deps.registry.takeFirstTask).toHaveBeenCalledOnce()
     })
 
     it('a task still on the row 3 minutes after its TUI started fails the launch, comes off the row, and is never typed', async () => {

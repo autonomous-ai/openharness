@@ -199,11 +199,11 @@ export function createBinding({
   }
   /**
    * The `/session` tries on each agent's pane since its history last failed to load, agentId → how many, when the last,
-   * and how many `history failed:` lines the pane showed then. A pass that reads any other state forgets them: a
-   * reconnect or a load that worked ends the run. Cleared at 256 entries rather than aged: a try then comes sooner, and
+   * and how many `history failed:` lines the pane showed then. A ready history, confirmed Gateway outage or new TUI
+   * process ends the episode; transient frames preserve it. Cleared at 256 entries rather than aged: a try then comes sooner, and
    * OpenClaw takes a `/session` at any time.
    */
-  const sessionTries = new Map<string, { tries: number; lastAt: number; failures: number }>()
+  const sessionTries = new Map<string, { process: string; tries: number; lastAt: number; failures: number }>()
   /**
    * How long each agent's first task has waited, agentId → when this daemon first saw it wait, the time it was paused
    * since, and since when it is paused now. A first task once waited for ever: typed into a TUI whose history had not
@@ -454,7 +454,18 @@ export function createBinding({
     // Expected before its row lets it go: the frame reads starting from the one or the other all the way to its turn.
     input.expectFirstTask(agentId, row.firstTask)
     void takeFirstTask(agentId, current).then((task) => {
-      if (!task || !current()) return
+      if (!task) return
+      if (!current()) {
+        const latest = registry.byAgent(agentId)
+        // A hold or startup completion can arrive after durable removal, while its storage source releases.
+        // Fail that same launch visibly; never fail a replacement owner or a launch carrying a new task.
+        const completed = latest?.launch === undefined || latest.launch.state === 'ready'
+          ? { ...selected, launch: latest?.launch } : selected
+        if (latest && !latest.firstTask && matchesLaunchReceipt({ ...latest, evidenceRevision: selected.evidenceRevision }, completed)) {
+          failFirstTask(latest)
+        } else console.warn(`[agent] ${sid(agentId)} first task not handed over · launch changed after removal`)
+        return
+      }
       console.log(`[agent] ${sid(agentId)} first task handed over`)
       try { submitFirstTask(agentId, task) }
       catch (error) { console.error(`[agent] ${sid(agentId)} first task not typed · ${errorKind(error)}`) }
@@ -471,7 +482,12 @@ export function createBinding({
     const failed = registry.setLaunch(agent.agentId, { state: 'failed', ...OPENCLAW_FIRST_TASK })
     if (failed) {
       const selected = structuredClone(failed)
-      void takeFirstTask(agent.agentId, () => matchesLaunchReceipt(registry.byAgent(agent.agentId), selected))
+      void takeFirstTask(agent.agentId, () => {
+        const latest = registry.byAgent(agent.agentId)
+        // A reader hold cannot revive this failed task. A replacement owner, launch or task still revokes cleanup.
+        return !!latest && latest.firstTask === selected.firstTask
+          && matchesLaunchReceipt({ ...latest, evidenceRevision: selected.evidenceRevision }, selected)
+      })
     }
     input.forget(agent.agentId)
     announceSession(agent)
@@ -629,6 +645,7 @@ export function createBinding({
       const ready = screen.state === 'ready' || screen.state === 'no-history'
       const streamed = !!agent.sessionId && openclawPaneRead(agent.sessionId, { ready, gatewayLost: screen.gatewayLost, running: screen.running }, captured.value, revision)
       const held = openclawScreenHold(screen, agent, gatewayGoneMs(agent.agentId, screen))
+      if (held === OPENCLAW_STATES.noGateway) sessionTries.delete(agent.agentId)
       const ours = !agent.identityHold || OPENCLAW_HOLDS.has(agent.identityHold) || isOpenclawLocalStopped(agent.identityHold)
       if (held) {
         // A hold another reason set (the store unreadable, an identity read that failed) is that reason's to clear.
@@ -684,7 +701,9 @@ export function createBinding({
       // is theirs to reload. The key is the footer's, the session the pane is on; the row's would undo a `/new`.
       if (screen.state === 'no-history' && screen.box === '' && screen.key && waiting) {
         const now = Date.now()
-        const tried = sessionTries.get(agent.agentId) ?? { tries: 0, lastAt: -Infinity, failures: 0 }
+        const process = tuiProcess(observed.processIdentity)
+        const prior = sessionTries.get(agent.agentId)
+        const tried = prior?.process === process ? prior : { tries: 0, lastAt: -Infinity, failures: 0 }
         // The next is typed once the last load failed, or had its time: one typed while a load is in flight drops it.
         const ended = screen.historyFailures > tried.failures || now - tried.lastAt >= SESSION_LOAD_MS
         if (tried.tries < SESSION_TRIES && now - tried.lastAt >= SESSION_RETRY_MS && ended) {
@@ -692,7 +711,7 @@ export function createBinding({
           // the serial discovery pass, every other agent's behind it.
           const tries = tried.tries + 1
           if (sessionTries.size >= 256) sessionTries.clear()
-          sessionTries.set(agent.agentId, { tries, lastAt: now, failures: screen.historyFailures })
+          sessionTries.set(agent.agentId, { process, tries, lastAt: now, failures: screen.historyFailures })
           console.log(`[discovery] ${sid(agent.agentId)} openclaw · history not loaded · /session ${tries}/${SESSION_TRIES}`)
           void input.typeCommand(agent.agentId, `/session ${screen.key}`).catch(() => false).then((typed) => {
             if (!typed) console.warn(`[discovery] ${sid(agent.agentId)} openclaw · /session ${tries}/${SESSION_TRIES} not typed`)

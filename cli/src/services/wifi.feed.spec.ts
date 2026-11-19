@@ -331,7 +331,7 @@ describe('component evidence and normalized-feed ordering', () => {
     const funnel = funnelFor({ bySession: () => ({ ...t.agent, engine: 'opencode' }) as never,
       tokenUsage: { changed: vi.fn() }, agentIdFor: () => 'agent', isSubagentSession: () => false,
       turnActivity: { observe: vi.fn(), snapshot: () => ({ epoch: 'boot', revision: 11, state: 'idle', validForMs: 0 }) },
-      clients: t.backend, search: null, turnStartedAt: new Map(), input: { onTurnStarted: vi.fn(), onTurnEnded: vi.fn() },
+      clients: t.backend, search: null, turnStartedAt: new Map(), input: { onTurnStarted: vi.fn(), onTurnEnded: vi.fn(), onUserMessage: vi.fn() },
       startHeartbeat: vi.fn(), questionWatcher: { start: vi.fn(), stop: vi.fn(), noteTurnStart: vi.fn() },
       mirror: { ingest: () => { void t.peer.card(card, 'captured full text') } },
     })

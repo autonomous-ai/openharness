@@ -4,6 +4,9 @@ import { createEventFunnel, funnelFor, type FunnelDeps } from './funnel.js'
 import { createShortTurnGuard } from './shortTurnGuard.js'
 import { createServiceLinks, type ServiceFrame } from '../serviceLinks.js'
 import { createDeliveries } from '../deliveries.js'
+import { SessionInputController } from '../../lib/sessionInput.js'
+import { readInlineScreen } from '../../testing/inlineScreen.js'
+import { inlineSubmission } from '../../testing/inlineSubmission.js'
 
 type Event = Parameters<ReturnType<typeof funnelFor>>[1][number]
 const started = (userMessage = 'go'): Event => ({ type: 'turn_started', payload: { userMessage } }) as Event
@@ -27,7 +30,7 @@ function setup(engine = 'claude', over: Partial<FunnelDeps> = {}) {
     clients: { send: vi.fn((frame: { type: string }) => { calls.push(`send ${frame.type}`) }) },
     search: { touch: vi.fn(log('search')) },
     turnStartedAt: new Map(),
-    input: { onTurnStarted: vi.fn(log('input started')), onTurnEnded: vi.fn(log('input ended')) },
+    input: { onTurnStarted: vi.fn(log('input started')), onTurnEnded: vi.fn(log('input ended')), onUserMessage: vi.fn() },
     startHeartbeat: vi.fn(log('heartbeat')),
     questionWatcher: { start: vi.fn(log('questions start')), noteTurnStart: vi.fn(log('questions pre-turn')), stop: vi.fn(log('questions stop')) },
     mirror: { ingest: vi.fn(log('mirror')) },
@@ -38,6 +41,31 @@ function setup(engine = 'claude', over: Partial<FunnelDeps> = {}) {
 
 describe('the event funnel', () => {
   afterEach(() => vi.restoreAllMocks())
+
+  it('confirms the first task accepted as a user message within an intervening turn', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    const row = { agentId: 'a1', sessionId: 's1', engine: 'openclaw', active: true } as RegisteredSession
+    const input = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
+      getSession: () => row, validateRuntime: async () => true,
+      inject: async () => true, sendKey: async () => true, onError: vi.fn() })
+    const { funnel } = setup('openclaw', { input })
+    try {
+      input.expectFirstTask('a1', 'Fix the parser')
+      input.submit('a1', 'Fix the parser')
+      await vi.waitFor(() => expect(input.awaitingConfirmation('a1')).toBe(true))
+      const echo: Event = { type: 'user_message', payload: { content: 'Fix the parser' } }
+      funnel('s1', [echo], { replay: true })
+      funnel('s1', [echo], { resumed: true })
+      funnel('s1', [{ type: 'user_message', payload: { content: 'Unrelated' } }])
+      expect(input.firstTaskWaiting('a1')).toBe(true)
+      funnel('s1', [started('An intervening message')])
+      expect(input.firstTaskWaiting('a1')).toBe(true)
+      // OpenClaw normalizes a second user row before the first answer as user_message, not another turn_started.
+      funnel('s1', [echo])
+      expect(input.firstTaskWaiting('a1')).toBe(false)
+      expect(input.awaitingConfirmation('a1')).toBe(false)
+    } finally { input.forget('a1') }
+  })
 
   it('enqueues dispatch and started notices before a read response requested at the earlier app send point', async () => {
     vi.spyOn(console, 'log').mockImplementation(() => {})
@@ -54,7 +82,7 @@ describe('the event funnel', () => {
     deliveries.input({ agentId: 'a1', deliveryId: 'd', phase: 'dispatching', when: 'composer', sessionId: 's1', activity: { epoch: 'core', revision: 1 } })
     const f = setup('opencode', {
       clients: { send: () => link.receive({ type: 'service_query', payload: { query: 'resolve', id: 'a1', requestId: 'barrier' } }) },
-      input: { onTurnStarted: () => deliveries.settled({ sessionId: 'a1', deliveryId: 'd', state: 'started' }), onTurnEnded: vi.fn() },
+      input: { onTurnStarted: () => deliveries.settled({ sessionId: 'a1', deliveryId: 'd', state: 'started' }), onTurnEnded: vi.fn(), onUserMessage: vi.fn() },
     })
     f.funnel('s1', [started()])
     expect(wire.map(frame => frame.payload?.kind)).toEqual(['input', 'delivery'])

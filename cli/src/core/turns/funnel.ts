@@ -50,7 +50,7 @@ export interface FunnelDeps {
   /** The prompt of each agent's last turn start, by agent, for the one-line summary of what it does (turns/summaries.ts).
    *  Not cleared when the turn ends: an idle agent with no recap is summarised by its last prompt. */
   prompts?: Map<string, string>
-  input: Pick<SessionInputController, 'onTurnStarted' | 'onTurnEnded'>
+  input: Pick<SessionInputController, 'onTurnStarted' | 'onTurnEnded' | 'onUserMessage'>
   startHeartbeat: (sessionId: string) => void
   questionWatcher: Pick<QuestionWatcher, 'start' | 'noteTurnStart' | 'stop'>
   mirror: Pick<TurnRecaps, 'ingest'>
@@ -81,6 +81,7 @@ export function funnelFor({
       const event = events[index]
       const agentId = agentIdFor(sessionId)
       const replay = !!(opts?.resumed || opts?.replay)
+      if (!replay && event.type === 'user_message') input.onUserMessage(agentId, event.payload.content)
       turnActivity.observe(sessionId, event.type, replay)
       if (!replay && isProgressEvent(event.type)) working?.(agentId)
       if (!replay && event.type === 'turn_started') {

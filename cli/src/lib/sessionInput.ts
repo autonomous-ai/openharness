@@ -456,29 +456,28 @@ export class SessionInputController {
   ): Promise<boolean | TerminalActionResult> {
     const now = this.deps.now ?? Date.now
     const sleep = this.deps.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)))
-    let leaseSince: number | undefined
+    let leaseWaitMs = 0, paneWaitMs = 0
     const refused = (): TerminalActionResult => ({ state: 'failed', dispatch: 'not_started', reason: 'held' })
     if (held()) return refused()
     if (!current()) return { state: 'failed', dispatch: 'not_started', reason: TERMINAL_LEASE_REFUSED }
     let delivery = await write()
-    let notReadySince: number | undefined
     for (;;) {
       const notReady = paneNotReady(delivery)
       if (notReady) {
-        notReadySince ??= now()
-        if (!firstTask() && now() - notReadySince >= OPENCLAW_NOT_READY_MAX_MS) break
+        if (!firstTask() && paneWaitMs >= OPENCLAW_NOT_READY_MAX_MS) break
       } else {
-        if (!leaseRefused(delivery)) break
-        leaseSince ??= now()
-        if (now() - leaseSince >= LEASE_WAIT_MS) break
+        if (!leaseRefused(delivery) || leaseWaitMs >= LEASE_WAIT_MS) break
       }
       state.paneWait = notReady
+      const waitingAt = now()
       await sleep(notReady ? OPENCLAW_PANE_RETRY_MS : LEASE_RETRY_MS)
       state.paneWait = false
       if (held()) return refused()
       if (!current()) break
-      if (notReady && state.controlLocked) continue
-      delivery = await write()
+      if (!notReady || !state.controlLocked) delivery = await write()
+      // Alternating refusal reasons pause, rather than spend or renew, each other's bounded wait.
+      if (notReady) paneWaitMs += now() - waitingAt
+      else leaseWaitMs += now() - waitingAt
     }
     return delivery
   }
@@ -810,6 +809,12 @@ export class SessionInputController {
   /** Whether a message waits, typed nowhere, for its OpenClaw pane to be able to send ([OPENCLAW_NOT_READY]). */
   waitsForPane(id: string): boolean {
     return this.states.get(id)?.paneWait === true
+  }
+
+  /** A user row within an existing turn still confirms its exact pending input, without inventing another turn. */
+  onUserMessage(sessionId: string, content: string): void {
+    const state = this.states.get(sessionId)
+    if (state?.awaitingFingerprint && state.awaitingFingerprint === fingerprint(content)) this.onTurnStarted(sessionId, content)
   }
 
   onTurnStarted(sessionId: string, userMessage: string): void {

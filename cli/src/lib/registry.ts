@@ -2918,7 +2918,9 @@ class Registry {
       const next = { ...row }
       delete next.firstTask
       const receipt = await this.persist(deadline, true, false, undefined, { agentId, candidate: next, verify })
-      return this.committedOwner(agentId, receipt) ? task : null
+      // Removal is already durable. A later source-release wait may change the owner; the caller must see the
+      // consumed task to report that revoked handoff, rather than mistaking it for a task still on disk.
+      return receipt !== undefined ? task : null
     })
   }
 

@@ -1401,6 +1401,39 @@ describe('SessionInputController', () => {
         controller.forget('s1')
       })
 
+      it('an intervening pane wait cannot spend the remaining lease budget', async () => {
+        vi.useFakeTimers()
+        const { controller, inject, canSend, typed, onError } = waitingPane()
+        const refused: TerminalActionResult = { state: 'failed', dispatch: 'not_started', reason: TERMINAL_LEASE_REFUSED }
+        inject.mockResolvedValueOnce(refused)
+        controller.submit('s1', 'Say hello')
+        await vi.advanceTimersByTimeAsync(20_000)
+        inject.mockResolvedValueOnce(refused)
+        canSend()
+        await vi.advanceTimersByTimeAsync(2_000)
+        expect(typed).toEqual(['Say hello'])
+        expect(onError).not.toHaveBeenCalled()
+        controller.forget('s1')
+      })
+
+      it('alternating pane and lease refusals spend separate cumulative bounds', async () => {
+        vi.useFakeTimers()
+        const { controller, inject, onError } = waitingPane()
+        let attempts = 0
+        inject.mockImplementation(async () => ++attempts % 2
+          ? { state: 'failed', dispatch: 'not_started', reason: TERMINAL_LEASE_REFUSED }
+          : notReady)
+        controller.submit('s1', 'Say hello')
+        await vi.advanceTimersByTimeAsync(60_000)
+        expect(onError).not.toHaveBeenCalled()
+        await vi.advanceTimersByTimeAsync(20_000)
+        expect(onError).toHaveBeenCalledOnce()
+        const ended = attempts
+        await vi.advanceTimersByTimeAsync(60_000)
+        expect(attempts).toBe(ended)
+        controller.forget('s1')
+      })
+
       it('an unrelated turn cannot confirm the waiting first task', async () => {
         vi.useFakeTimers()
         const { controller } = waitingPane()
