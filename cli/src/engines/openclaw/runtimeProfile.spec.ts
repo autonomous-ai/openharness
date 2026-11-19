@@ -127,7 +127,7 @@ describe('OpenClaw activity', () => {
   it('a quiet run is working to a close, with no turn open', () => {
     const reading = legacyScreen('openclaw', screen('running-quiet'))
     expect(reading.busy).toBe(true)
-    const row = { engine: 'openclaw', sessionId: 'agent:main:plain', transcriptPath: null, boundAt: 1, launch: null, resumeOnly: false } as const
+    const row = { engine: 'openclaw', sessionId: 'agent:main:plain', transcriptPath: null, boundAt: 1 } as const
     expect(inspectCloseActivity(row, reading, false, false)).toBe('working')
   })
 })

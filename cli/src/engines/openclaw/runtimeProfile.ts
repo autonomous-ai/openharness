@@ -49,6 +49,16 @@ export function inspectOpenclawPane(capture: string): PaneInspection {
 }
 
 /**
+ * A run on screen, `⠦ running • 45s | connected`: its status word as the label (`…` as `...`, as Claude Code's and
+ * Codex's read) and the status line as the indicator. Starting up and connecting are not work.
+ */
+export function openclawActivity(capture: string): { label: string; indicator: string } | null {
+  const { state, status } = readOpenclawScreen(capture)
+  const label = state === 'busy' && status ? /^\S{1,2} (.+?) • /.exec(status)?.[1] : undefined
+  return label && status ? { label: label.replace(/…/g, '...'), indicator: status } : null
+}
+
+/**
  * The workspace OpenClaw's tools run in: the session header's `cwd`, shown on the agent as a label because the pane's
  * folder is not it. A session `/model` made before any message records `/`, the Gateway's own folder: no label.
  */
