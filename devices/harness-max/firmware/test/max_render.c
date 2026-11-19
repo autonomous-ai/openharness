@@ -4,6 +4,7 @@
 //   max_render <screen> <out.ppm>   one screen (max_render.py turns them into PNGs, golden.sh hashes them)
 //   max_render --list               the screens, one a line
 //   max_render --check-all          every screen within the run budget (run.sh)
+// bench/ compiles the screens without the tool (MAX_RENDER_SCREENS_ONLY), to time the very scenes the goldens hash.
 #include <stdio.h>
 #include <string.h>
 
@@ -13,7 +14,9 @@
 
 #define T0 20000000u
 static ht_scene_t S;
+#ifndef MAX_RENDER_SCREENS_ONLY
 static uint16_t px[HT_WIDTH * HT_HEIGHT];
+#endif
 
 // Diego's mockup's agents: Orca's five, whose answers the bar does not take, and Harness's three, whose it does.
 static const pro_agent_row_t ORCA[] = {{"auth", "auth-refactor", "claude", "m1", "MacBook Pro", "orca", "svf"},
@@ -472,17 +475,19 @@ static const screen_t SCREENS[] = {
 };
 enum { SCREEN_COUNT = sizeof SCREENS / sizeof SCREENS[0] };
 
-static const screen_t *find(const char *name)
-{
-    for (int i = 0; i < SCREEN_COUNT; i++)
-        if (!strcmp(SCREENS[i].name, name)) return &SCREENS[i];
-    return NULL;
-}
 static void draw(const screen_t *sc)
 {
     sc->setup();
     ht_scene_clear(&S, ht_rgb(HT_THEME_CANVAS));
     max_ui_render(&S, T0);
+}
+
+#ifndef MAX_RENDER_SCREENS_ONLY
+static const screen_t *find(const char *name)
+{
+    for (int i = 0; i < SCREEN_COUNT; i++)
+        if (!strcmp(SCREENS[i].name, name)) return &SCREENS[i];
+    return NULL;
 }
 
 int main(int argc, char **argv)
@@ -527,3 +532,4 @@ int main(int argc, char **argv)
     printf("%s: %d runs\n", sc->name, S.count);
     return 0;
 }
+#endif

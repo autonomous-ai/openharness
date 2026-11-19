@@ -4,12 +4,17 @@ The Max firmware's own sources, built as a Linux (or macOS) program: the same ap
 protocol as the ESP32-P4 image, over Linux drivers. A board change is a build target. `../sources.cmake` is the one
 list of portable sources; `../main/CMakeLists.txt` adds the ESP32-P4 drivers to it, this directory adds:
 
-- `esp/`: the FreeRTOS and ESP-IDF calls the shared sources make, on pthreads and the C library. NVS is a text file,
+- `esp/`: the FreeRTOS and ESP-IDF calls the shared sources make, on pthreads and the C library (the frame's helper
+  task is a thread). NVS is a text file,
   `~/.config/harness-max/nvs`. The firmware updater refuses every image (the version is `0.0.99-dev` and the board
   `harness-max-linux`, which the daemon never offers one).
-- `display/`: `pro_display.h` over an SDL window (`MAX_LINUX_OUTPUT=sdl`, the mouse is the finger) or DRM/KMS plus
+- `display/`: `pro_display.h` and the frame path's strips (`../main/display/max_strips.h`: both tasks' strips copied
+  into the glass under one lock) over an SDL window (`MAX_LINUX_OUTPUT=sdl`, the mouse is the finger) or DRM/KMS plus
   evdev touch (`MAX_LINUX_OUTPUT=drm`, `/dev/dri/card0`). `glass_fit.c` scales and turns the glass to the output, and
-  maps a touch back.
+  maps a touch back. DRM keeps two buffers: each frame is painted whole into the one off screen (what it changed and
+  what the frame before changed) and flipped to on the next vblank, so nothing tears. Where the driver refuses the
+  second buffer or a flip, the log says so once (`no second scanout buffer` / `page flip refused`) and the one buffer
+  on screen is painted as each strip lands, as before.
 - `audio/`: `audio/audio_capture.h` and the chimes (`../main/app/max_chime.h`) over SDL (macOS) or ALSA (Linux): the
   microphone is the capture device `HARNESS_MAX_MIC` names (`default` when unset). No microphone: recording fails as
   on a device whose codec does not answer. The chimes are V3's as tuned on the bar (`bar_chime.c`): each between 50 ms
@@ -108,4 +113,6 @@ when V3 was deployed last).
 - Frame time on the bar (measured 2026-11-17, the unit's A76 pair, `ondemand` governor): a clock or status change
   0.4-0.6 ms, a lane change up to 9 ms, a full-screen change about 47 ms, the first frame 58 ms (102 ms when not
   pinned to the A76 pair, hence `CPUAffinity=`). The scaled paint is at most 3 ms of a frame; the rest is the
-  renderer. The program idles at about 2% of one core.
+  renderer. The program idles at about 2% of one core. These predate the page flip: a frame now also waits, at most a
+  refresh, for the last one's flip before it is painted, and paints the last frame's change again into the other
+  buffer.

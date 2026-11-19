@@ -81,8 +81,8 @@ esp_err_t max_panel_open(esp_lcd_panel_handle_t *out_panel)
     esp_lcd_dbi_io_config_t dbi = OTA7290B_PANEL_IO_DBI_CONFIG();
     ESP_RETURN_ON_ERROR(esp_lcd_new_panel_io_dbi(s_bus, &dbi, &s_io), TAG, "dbi io");
 
-    // 480 x 1920 at a 75 MHz pixel clock. ONE framebuffer: the renderer pushes turned bands with draw_bitmap, so the
-    // pixels are copied in rather than swapped (as on the Pro).
+    // 480 x 1920 at a 75 MHz pixel clock. ONE framebuffer: the PPA turns the strips straight into it (max_strips.c),
+    // or the CPU's turns are copied in with draw_bitmap, so the pixels are written in place rather than swapped.
     esp_lcd_dpi_panel_config_t dpi = OTA7290B_480_1920_PANEL_60HZ_DPI_CONFIG(LCD_COLOR_PIXEL_FORMAT_RGB565);
     dpi.num_fbs = 1;
 

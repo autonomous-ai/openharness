@@ -523,6 +523,29 @@ void pod_veil(ht_scene_t *s, int x, int y, int w, int h, int edge, bool inside_l
     veil_params_t p = {top, bottom, bg, (int16_t)edge, (int16_t)gy0, (int16_t)gh, (uint8_t)imin(255, (int)k), inside_left};
     memcpy(r->text, &p, sizeof p);
 }
+// mix565(ink, c, k, 255), with the ink's share (ink * k + the rounding half) worked out once for the row and the
+// division by the constant 255, which compiles to a multiply. mix565 divides by its argument: three hardware divides a
+// pixel, 132 ns a pixel of veil on the ESP32-P4.
+static inline uint16_t veil_px(uint16_t c, unsigned ir, unsigned ig, unsigned ib, unsigned rest)
+{
+    return (uint16_t)((((ir + (c >> 11) * rest) / 255u) << 11) | (((ig + ((c >> 5) & 63) * rest) / 255u) << 5) |
+                      ((ib + (c & 31) * rest) / 255u));
+}
+// The veil over n pixels. What it covers is mostly long runs of one colour, so a pixel the colour of the one before
+// takes that one's answer.
+static void veil_span(uint16_t *d, int n, uint16_t ink, unsigned k)
+{
+    if (n <= 0) return;
+    const unsigned ir = (ink >> 11) * k + 127, ig = ((ink >> 5) & 63) * k + 127, ib = (ink & 31) * k + 127;
+    uint16_t under = d[0], veiled = veil_px(under, ir, ig, ib, 255 - k);
+    for (int i = 0; i < n; i++) {
+        if (d[i] != under) {
+            under = d[i];
+            veiled = veil_px(under, ir, ig, ib, 255 - k);
+        }
+        d[i] = veiled;
+    }
+}
 static void veil_raster(const ht_run_t *r, ht_rect_t clip, uint16_t *out)
 {
     veil_params_t p;
@@ -530,14 +553,16 @@ static void veil_raster(const ht_run_t *r, ht_rect_t clip, uint16_t *out)
     int x0 = imax(clip.x, r->x), x1 = imin(clip.x + clip.w, r->x + r->w);
     int y0 = imax(clip.y, r->y), y1 = imin(clip.y + clip.h, r->y + r->pro_height);
     const int last = p.gh > 1 ? p.gh - 1 : 1;
+    // Each row splits at the edge: the veiled side [x0, edge) when inside_left, else [edge, x1); the other side is bg.
+    const int edge = imin(imax(p.edge, x0), x1);
+    const int in0 = p.inside_left ? x0 : edge, in1 = p.inside_left ? edge : x1;
+    const int bg0 = p.inside_left ? edge : x0, bg1 = p.inside_left ? x1 : edge;
     for (int y = y0; y < y1; y++) {
         const int row = imin(imax(y - p.gy0, 0), last);
         const uint16_t ink = mix565(p.bottom, p.top, (unsigned)row, (unsigned)last);
         uint16_t *d = out + (y - clip.y) * clip.w - clip.x;
-        for (int x = x0; x < x1; x++) {
-            const bool in = p.inside_left ? x < p.edge : x >= p.edge;
-            d[x] = in ? mix565(ink, d[x], p.k, 255) : p.bg;
-        }
+        veil_span(d + in0, in1 - in0, ink, p.k);
+        for (int x = bg0; x < bg1; x++) d[x] = p.bg;
     }
 }
 static void grad_raster(const ht_run_t *r, ht_rect_t clip, uint16_t *out)

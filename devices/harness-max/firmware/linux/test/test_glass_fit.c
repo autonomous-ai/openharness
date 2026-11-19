@@ -126,6 +126,72 @@ static void test_damage(void)
     CHECK(glass_fit_damage(&bar, (glass_fit_rect_t){5, 5, 0, 3}).w == 0);
 }
 
+static bool empty(glass_fit_rect_t r) { return r.w <= 0 || r.h <= 0; }
+
+static void test_union(void)
+{
+    const glass_fit_rect_t none = {0, 0, 0, 0}, a = {10, 20, 30, 40}, b = {35, 5, 10, 10};
+    CHECK(same(glass_fit_union(none, a), a) && same(glass_fit_union(a, none), a));
+    CHECK(empty(glass_fit_union(none, (glass_fit_rect_t){7, 7, 0, 9})));
+    CHECK(same(glass_fit_union(a, b), (glass_fit_rect_t){10, 5, 35, 55}));
+    CHECK(same(glass_fit_union(a, (glass_fit_rect_t){12, 22, 2, 2}), a));
+}
+
+// The rectangles a flip asks for, frame by frame.
+static void test_flip_rects(void)
+{
+    glass_fit_flip_t f = {{0, 0, 0, 0}, {0, 0, 0, 0}};
+    glass_fit_rect_t out[2];
+    CHECK(glass_fit_flip(&f, out) == 0);   // nothing changed: no flip
+    // The first change: there was no frame before it.
+    glass_fit_flip_add(&f, (glass_fit_rect_t){0, 0, 4, 2});
+    glass_fit_flip_add(&f, (glass_fit_rect_t){0, 2, 4, 2});   // the frame's next strip
+    CHECK(glass_fit_flip(&f, out) == 1 && same(out[0], (glass_fit_rect_t){0, 0, 4, 4}));
+    // A change far from the last one: both, apart (their union would repaint the space between).
+    glass_fit_flip_add(&f, (glass_fit_rect_t){1000, 300, 10, 10});
+    CHECK(glass_fit_flip(&f, out) == 2 && same(out[0], (glass_fit_rect_t){1000, 300, 10, 10}) &&
+          same(out[1], (glass_fit_rect_t){0, 0, 4, 4}));
+    // A row moving by two pixels: the two overlap, and their union is one paint of fewer pixels.
+    glass_fit_flip_add(&f, (glass_fit_rect_t){1002, 300, 10, 10});
+    CHECK(glass_fit_flip(&f, out) == 1 && same(out[0], (glass_fit_rect_t){1000, 300, 12, 10}));
+    // A frame that changed nothing keeps what the buffer off screen lacks for the next one.
+    CHECK(glass_fit_flip(&f, out) == 0);
+    glass_fit_flip_add(&f, (glass_fit_rect_t){1003, 300, 2, 2});
+    CHECK(glass_fit_flip(&f, out) == 1 && same(out[0], (glass_fit_rect_t){1002, 300, 10, 10}));
+}
+
+// Two buffers flipped frame after frame, each painted only with what glass_fit_flip asks for: the one on screen is
+// always the whole glass.
+static void test_flip_keeps_both_buffers(void)
+{
+    enum { W = 24, H = 12, FRAMES = 400 };
+    static int glass[H][W], buf[2][H][W];
+    glass_fit_flip_t f = {{0, 0, 0, 0}, {0, 0, 0, 0}};
+    int front = 0;
+    unsigned seed = 12345;
+    for (int frame = 1; frame <= FRAMES; frame++) {
+        // Zero to three changes in the frame, anywhere.
+        seed = seed * 1103515245u + 12345u;
+        const int changes = (int)(seed >> 16) % 4;
+        for (int c = 0; c < changes; c++) {
+            seed = seed * 1103515245u + 12345u;
+            const int x = (int)(seed >> 8) % W, y = (int)(seed >> 16) % H;
+            const int w = 1 + (int)(seed >> 4) % (W - x), h = 1 + (int)(seed >> 20) % (H - y);
+            for (int yy = y; yy < y + h; yy++)
+                for (int xx = x; xx < x + w; xx++) glass[yy][xx] = frame * 4 + c;
+            glass_fit_flip_add(&f, (glass_fit_rect_t){x, y, w, h});
+        }
+        glass_fit_rect_t out[2];
+        const int n = glass_fit_flip(&f, out);
+        CHECK(n == 0 || changes > 0);
+        for (int i = 0; i < n; i++)
+            for (int yy = out[i].y; yy < out[i].y + out[i].h; yy++)
+                for (int xx = out[i].x; xx < out[i].x + out[i].w; xx++) buf[front ^ 1][yy][xx] = glass[yy][xx];
+        if (n) front ^= 1;
+        CHECK(!memcmp(buf[front], glass, sizeof glass));
+    }
+}
+
 static void test_touch(void)
 {
     const glass_fit_t bar = glass_fit(1920, 415, 320, 1480);
@@ -168,6 +234,9 @@ int main(void)
     test_unscaled_pixels();
     test_scaled_flat_and_bars();
     test_damage();
+    test_union();
+    test_flip_rects();
+    test_flip_keeps_both_buffers();
     test_touch();
     test_axis();
     printf("test_glass_fit: %d checks passed\n", checks);

@@ -1,5 +1,6 @@
-// FreeRTOS's tasks, notifications and mutexes on pthreads, for the shared sources (include/freertos/). Real threads:
-// the render, touch, cable, hello and voice tasks run at once, as on the device's two cores.
+// FreeRTOS's tasks, notifications, mutexes and binary semaphores on pthreads, for the shared sources
+// (include/freertos/). Real threads: the render, touch, cable, hello and voice tasks run at once, as on the device's
+// two cores.
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
@@ -182,12 +183,13 @@ uint32_t ulTaskNotifyTake(BaseType_t clear_on_exit, TickType_t ticks)
     return count;
 }
 
-// ── mutexes ─────────────────────────────────────────────────────────────────────────────────────────────────────
+// ── mutexes and binary semaphores ───────────────────────────────────────────────────────────────────────────────
 
 struct rtos_sem {
     pthread_mutex_t mu;
     pthread_cond_t cv;
     bool recursive;
+    bool binary;   // a signal, not a lock: held is "empty", and any task gives it
     bool held;
     pthread_t holder;
     unsigned depth;
@@ -205,6 +207,16 @@ static SemaphoreHandle_t sem_new(bool recursive)
 
 SemaphoreHandle_t xSemaphoreCreateMutex(void) { return sem_new(false); }
 SemaphoreHandle_t xSemaphoreCreateRecursiveMutex(void) { return sem_new(true); }
+
+SemaphoreHandle_t xSemaphoreCreateBinary(void)
+{
+    struct rtos_sem *s = sem_new(false);
+    if (s) {
+        s->binary = true;
+        s->held = true;   // empty until the first give
+    }
+    return s;
+}
 
 BaseType_t xSemaphoreTake(SemaphoreHandle_t s, TickType_t ticks)
 {
@@ -228,6 +240,14 @@ BaseType_t xSemaphoreTake(SemaphoreHandle_t s, TickType_t ticks)
 BaseType_t xSemaphoreGive(SemaphoreHandle_t s)
 {
     pthread_mutex_lock(&s->mu);
+    if (s->binary) {   // FreeRTOS's: a give to a full one is refused, and changes nothing
+        const bool was_empty = s->held;
+        s->held = false;
+        s->depth = 0;
+        pthread_cond_signal(&s->cv);
+        pthread_mutex_unlock(&s->mu);
+        return was_empty ? pdTRUE : pdFALSE;
+    }
     if (!s->held || !pthread_equal(s->holder, pthread_self())) {   // only the holder gives a mutex back
         pthread_mutex_unlock(&s->mu);
         return pdFALSE;

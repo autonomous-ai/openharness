@@ -11,6 +11,9 @@
 #define MAX_GLASS_W 1920
 #define MAX_GLASS_H 480
 #define MAX_TURN_FLIPPED 0
+// The same turn as the P4's PPA names it: a counter-clockwise rotation of the landscape rectangle, a quarter clockwise
+// (270) unflipped, a quarter counter-clockwise (90) flipped.
+#define MAX_TURN_CCW_DEGREES (MAX_TURN_FLIPPED ? 90 : 270)
 
 typedef struct {
     int x, y, w, h;

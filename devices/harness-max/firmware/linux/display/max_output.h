@@ -12,8 +12,11 @@
 bool max_output_open(int glass_w, int glass_h);
 
 // The glass rectangle (x, y, w, h) changed in `glass` (RGB565, rows of the glass width). From the render task; ignored
-// while dark.
+// while dark. It shows by the next max_output_show at the latest.
 void max_output_paint(const uint16_t *glass, int x, int y, int w, int h);
+
+// The rectangles painted since the last call are one whole frame: show it. From the render task.
+void max_output_show(void);
 
 // Dark (false) shows black and keeps the picture, as the device's backlight off; the caller repaints after on.
 void max_output_power(bool on);

@@ -25,6 +25,7 @@ file(GLOB MAX_DEMO_SRCS ${MAX_GLOB_FLAGS} ${MAX_FW}/main/demo/*.c)
 set(MAX_PORTABLE_SRCS
     ${MAX_FW}/main/app/max_app.c
     ${MAX_FW}/main/audio/max_chime_pcm.c
+    ${MAX_FW}/main/display/max_present.c
     ${MAX_UI_SRCS}
     ${MAX_DEMO_SRCS}
     ${PRO_MAIN}/app/pro_touch.c

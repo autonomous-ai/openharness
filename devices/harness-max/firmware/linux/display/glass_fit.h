@@ -32,6 +32,25 @@ glass_fit_rect_t glass_fit_damage(const glass_fit_t *f, glass_fit_rect_t glass);
 // write-combined, where scattered writes are slow.
 void glass_fit_paint(const glass_fit_t *f, const uint16_t *glass, glass_fit_rect_t land, uint32_t *out, int stride);
 
+// The smallest rectangle holding both; an empty one (w or h of 0) adds nothing.
+glass_fit_rect_t glass_fit_union(glass_fit_rect_t a, glass_fit_rect_t b);
+
+// What a double-buffered output repaints before it flips. The buffer off screen was last painted two frames ago, so to
+// show the frame being drawn it needs what this frame changed and what the last one changed: the last frame was painted
+// into the other buffer only. Picture pixels (landscape), as glass_fit_damage gives them.
+typedef struct {
+    glass_fit_rect_t pending;   // changed since the last frame was shown
+    glass_fit_rect_t last;      // what the last frame shown changed
+} glass_fit_flip_t;
+
+// A change to the frame being drawn.
+void glass_fit_flip_add(glass_fit_flip_t *f, glass_fit_rect_t r);
+
+// The frame is whole: the rectangles to paint into the buffer off screen before flipping to it, in out[0..n), n <= 2:
+// the two changes, or their union when that paints fewer pixels. 0 when the frame changed nothing: then there is no
+// flip, and `last` stays, as the buffer off screen still lacks it.
+int glass_fit_flip(glass_fit_flip_t *f, glass_fit_rect_t out[2]);
+
 // A raster point (a touch, in the output's native frame) -> the glass point under it. False off the picture.
 bool glass_fit_touch(const glass_fit_t *f, int ox, int oy, int *gx, int *gy);
 

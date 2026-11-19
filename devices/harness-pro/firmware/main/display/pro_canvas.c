@@ -7,9 +7,21 @@ static int min_(int a, int b) { return a < b ? a : b; }
 static int max_(int a, int b) { return a > b ? a : b; }
 static inline uint16_t over(uint16_t fg, uint16_t bg, unsigned a) { return ht_pro_over(fg, bg, a); }
 
+// Two pixels to a 32-bit store (the RV32's widest), four stores a turn: rectangles are most of what a screen paints, and
+// a 16-bit store loop costs three instructions a pixel on the ESP32-P4. may_alias: the words write pixels read back as
+// uint16_t.
+typedef uint32_t __attribute__((__may_alias__)) two_px_t;
 static void fill_span(uint16_t *dst, int count, uint16_t ink)
 {
-    for (int i = 0; i < count; i++) dst[i] = ink;
+    if (count > 0 && ((uintptr_t)dst & 2)) {
+        *dst++ = ink;
+        count--;
+    }
+    const uint32_t two = ink * 0x10001u;
+    two_px_t *w = (two_px_t *)dst;
+    for (; count >= 8; count -= 8, w += 4) w[0] = w[1] = w[2] = w[3] = two;
+    for (; count >= 2; count -= 2) *w++ = two;
+    if (count > 0) *(uint16_t *)w = ink;
 }
 static void image_span(uint16_t *dst, const uint16_t *src, const uint8_t *alpha, int count)
 {
@@ -168,23 +180,59 @@ bool ht_pro_rect_aa_stroke(ht_scene_t *s, int x, int y, int w, int h, int radius
     memcpy(r->text, &fill, sizeof fill);
     return true;
 }
+// The first cx in [lo, hi) where ht_pro_corner_cover(rad, cx, cy) is at least `cover`, else hi. Along a corner row the
+// coverage only grows with cx (the pixel nears the circle's centre), so this bisects the very function the pixel loops
+// call: the columns it splits off as none or full are, pixel for pixel, what those loops would have found.
+static int cover_from(int rad, int cy, unsigned cover, int lo, int hi)
+{
+    while (lo < hi) {
+        const int mid = (lo + hi) / 2;
+        if (ht_pro_corner_cover(rad, mid, cy) >= cover) hi = mid;
+        else lo = mid + 1;
+    }
+    return lo;
+}
+// The same first cx, looked for from `near` (the row before's answer: an edge moves little from one row to the next) by
+// stepping, which the coverage only growing along the row also makes exact. A negative `near` bisects.
+static int cover_edge(int rad, int cy, unsigned cover, int near)
+{
+    if (near < 0) return cover_from(rad, cy, cover, 0, rad);
+    while (near > 0 && ht_pro_corner_cover(rad, near - 1, cy) >= cover) near--;
+    while (near < rad && ht_pro_corner_cover(rad, near, cy) < cover) near++;
+    return near;
+}
+static void fill_clipped(uint16_t *row, int from, int to, int x0, int x1, uint16_t ink)
+{
+    from = max_(from, x0);
+    to = min_(to, x1);
+    if (to > from) fill_span(row + from, to - from, ink);
+}
+// A corner row's pixels in [from, to) clipped to [x0, x1), each blended by its own coverage.
+static void rect_aa_px(const ht_run_t *r, int cy, int from, int to, int x0, int x1, uint16_t *row)
+{
+    const int rad = r->radius;
+    for (int x = max_(from, x0); x < min_(to, x1); x++) {
+        int dx = x - r->x, cx = dx < rad ? dx : dx >= r->w-rad ? r->w-1-dx : -1;
+        unsigned cov = cx < 0 ? 16 : ht_pro_corner_cover(rad, cx, cy);
+        if (cov >= 16) row[x] = r->fg;
+        else if (cov) row[x] = over(r->fg, row[x], cov*255/16);
+    }
+}
 static void rect_aa_raster(const ht_run_t *r, int x0, int y0, int x1, int y1, ht_rect_t clip, uint16_t *out)
 {
-    int rad = r->radius;
+    int rad = r->radius, none = -1, full = -1;
     for (int y = y0; y < y1; y++) {
         int dy = y - r->y;
         uint16_t *row = out + (y-clip.y)*clip.w - clip.x;
         int cy = dy < rad ? dy : dy >= r->pro_height-rad ? r->pro_height-1-dy : -1;   // corner row, mirrored
         if (cy < 0) { fill_span(row + x0, x1-x0, r->fg); continue; }
-        // A corner row: the coverage only varies in the two corner columns; the straight middle is one span.
-        const int ml = max_(x0, r->x + rad), mr = min_(x1, r->x + r->w - rad);
-        for (int x = x0; x < x1; x++) {
-            if (x == ml && mr > ml) { fill_span(row + ml, mr - ml, r->fg); x = mr - 1; continue; }
-            int dx = x - r->x, cx = dx < rad ? dx : dx >= r->w-rad ? r->w-1-dx : -1;
-            unsigned cov = cx < 0 ? 16 : ht_pro_corner_cover(rad, cx, cy);
-            if (cov >= 16) row[x] = r->fg;
-            else if (cov) row[x] = over(r->fg, row[x], cov*255/16);
-        }
+        // A corner row: outside the circle up to `none`, partly covered up to `full`, then one span (the straight middle
+        // with it) to the mirror image on the right. Only the partly covered pixels are worked out one by one.
+        none = cover_edge(rad, cy, 1, none);
+        full = cover_edge(rad, cy, 16, full);
+        rect_aa_px(r, cy, r->x + none, r->x + full, x0, x1, row);
+        fill_clipped(row, r->x + full, r->x + r->w - full, x0, x1, r->fg);
+        rect_aa_px(r, cy, r->x + r->w - full, r->x + r->w - none, x0, x1, row);
     }
 }
 // The coverage of pixel (dx, dy) of a w x h AA rect of corner radius rad (the corner circle's, mirrored into each corner).
@@ -204,6 +252,7 @@ static void rect_aa_stroke_raster(const ht_run_t *r, int x0, int y0, int x1, int
     int rad = r->radius, inner = rad > 0 ? rad-1 : 0, w = r->w, h = r->pro_height;
     uint16_t ink = r->fg, fill;
     memcpy(&fill, r->text, sizeof fill);
+    int none = -1, full = -1, inone = -1, ifull = -1;   // the last corner row's edges, near where this row's are
     for (int y = y0; y < y1; y++) {
         int dy = y - r->y;
         uint16_t *row = out + (y-clip.y)*clip.w - clip.x;
@@ -214,21 +263,47 @@ static void rect_aa_stroke_raster(const ht_run_t *r, int x0, int y0, int x1, int
             if (x1 > r->x+w-1 && x0 <= r->x+w-1) row[r->x+w-1] = ink;
             continue;
         }
-        // Border and corner rows: the corner pixels take the border fill and then the inner one over it, per pixel; between
-        // the corners (dx in [rad, w-rad)) the row is plain: the border on the top and bottom edges, the fill under them.
+        // Border and corner rows: the corner pixels take the border fill and then the inner one over it; between the
+        // corners (dx in [rad, w-rad)) the row is plain: the border on the top and bottom edges, the fill under them.
         uint16_t mid = dy == 0 || dy == h-1 ? ink : fill;
-        for (int x = x0; x < x1;) {
-            int dx = x - r->x;
-            if (dx >= rad && dx < w-rad) {
-                int e = min_(x1, r->x + w - rad);
-                fill_span(row + x, e - x, mid);
-                x = e;
-                continue;
+        fill_clipped(row, r->x + rad, r->x + w - rad, x0, x1, mid);
+        if (rad == 0) continue;
+        // The left corner's columns dx = 0 .. rad-1, the right one's mirrored (dx = w-1-c), split where either circle's
+        // coverage turns from none to partial to full (cover_edge). A span with no partial coverage is one thing (the
+        // pixels as they were, the border or the fill); only the others are blended pixel by pixel, as before.
+        const bool inside = dy >= 1 && dy < h-1;   // the inner rect covers this row (the border's own rows it does not)
+        const int cy = dy < rad ? dy : h-1-dy;     // a corner row of the border's circle (rows that are not are straight)
+        const int iy = dy-1 < inner ? dy-1 : dy-1 >= h-2-inner ? h-3-(dy-1) : -1;   // the inner circle's, or none
+        none = cover_edge(rad, cy, 1, none);
+        full = cover_edge(rad, cy, 16, full);
+        const bool inner_corner = inside && iy >= 0 && inner > 0;
+        if (inner_corner) {
+            inone = cover_edge(inner, iy, 1, inone);
+            ifull = cover_edge(inner, iy, 16, ifull);
+        }
+        // In the inner rect's columns (c-1); a straight inner row covers all of them.
+        const int in_none = inner_corner ? inone : 0, in_full = inner_corner ? ifull : 0;
+        int cut[7] = {0, rad, none, full}, n = 4;
+        if (inside) { cut[n++] = 1; cut[n++] = 1 + in_none; cut[n++] = 1 + in_full; }
+        for (int i = 1; i < n; i++)   // insertion sort: seven at most
+            for (int j = i; j > 0 && cut[j-1] > cut[j]; j--) { int t = cut[j]; cut[j] = cut[j-1]; cut[j-1] = t; }
+        for (int i = 0; i + 1 < n; i++) {
+            const int c = cut[i], e = cut[i+1];
+            if (c == e) continue;
+            const int o = c < none ? 0 : c < full ? 1 : 2;   // the border's circle: none, partial, full
+            const int f = !inside || c < 1 || c-1 < in_none ? 0 : c-1 < in_full ? 1 : 2;   // the inner one's
+            for (int side = 0; side < 2; side++) {
+                const int from = side ? r->x + w - e : r->x + c, to = side ? r->x + w - c : r->x + e;
+                if (o == 1 || f == 1) {
+                    for (int x = max_(from, x0); x < min_(to, x1); x++) {
+                        int dx = x - r->x;
+                        blend_px(row + x, ink, rect_cover(rad, w, h, dx, dy));
+                        if (dx >= 1 && dx < w-1 && inside)
+                            blend_px(row + x, fill, rect_cover(inner, w-2, h-2, dx-1, dy-1));
+                    }
+                } else if (f == 2) fill_clipped(row, from, to, x0, x1, fill);
+                else if (o == 2) fill_clipped(row, from, to, x0, x1, ink);
             }
-            blend_px(row + x, ink, rect_cover(rad, w, h, dx, dy));
-            if (dx >= 1 && dx < w-1 && dy >= 1 && dy < h-1)
-                blend_px(row + x, fill, rect_cover(inner, w-2, h-2, dx-1, dy-1));
-            x++;
         }
     }
 }

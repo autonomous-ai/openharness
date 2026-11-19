@@ -15,8 +15,10 @@ idf_component_register(
         "board/max_i2c.c"
         "display/max_display.c"
         "display/max_panel.c"
+        "display/max_strips.c"
         "display/max_touch.c"
         "display/max_turn.c"
+        "display/max_turn_ppa.c"
         "${PRO_MAIN}/cable/cable_link.c"
         ${MAX_PORTABLE_SRCS}
     INCLUDE_DIRS
@@ -33,6 +35,7 @@ idf_component_register(
         esp_driver_i2c
         esp_driver_gpio
         esp_driver_i2s
+        esp_driver_ppa
         esp_driver_usb_serial_jtag
         esp_lcd
         esp_lcd_touch

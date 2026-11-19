@@ -30,9 +30,12 @@ idf.py -B build -DPROJECT_VER=0.0.99-dev build
 - `PROJECT_VER=0.0.99-dev` keeps a dev build from being overwritten by the daemon's OTA update.
 - `-DPRO_PYTHON=/path/to/python` when the first `python3` on the PATH has no Pillow; `-DPRO_FONT=/path/font.ttf` picks
   the text face as on the Pro.
-- The app draws landscape; `main/display/max_turn.c` turns every strip into the panel's portrait framebuffer, and every
-  touch back. If the picture comes out upside down, set `MAX_TURN_FLIPPED` to 1 in `main/display/max_turn.h`: the
-  finger turns with it.
+- A frame (`main/display/max_present.c`, the Max's own `pro_frame_present`) is cut into 12-row strips that the render
+  task (core 1) and a helper task on core 0 share, each rasterising into its own two internal buffers. The app draws
+  landscape; the P4's PPA turns each strip straight into its place in the panel's portrait framebuffer while the next
+  is rasterised (`main/display/max_strips.c`, `max_turn_ppa.c`), and when the PPA fails the CPU turns it
+  (`main/display/max_turn.c`) and `draw_bitmap` copies it in. Every touch is turned back. If the picture comes out upside
+  down, set `MAX_TURN_FLIPPED` to 1 in `main/display/max_turn.h`: the finger turns with it.
 
 The same sources also build as a Linux program: a simulator window on the Mac, and the Orange Pi 4 Pro's bar for
 demos. See `linux/README.md`.
@@ -64,12 +67,18 @@ bash devices/harness-max/firmware/test/golden.sh --check
 ```
 
 `run.sh` runs the lanes model, view and touch tests, the app layer (`test/test_max_app.c`: `main/app/max_app.c` over
-the real model, with the cable, the recorder and FreeRTOS as host fakes) and the strip turn (`test/test_max_turn.c`).
+the real model, with the cable, the recorder and FreeRTOS as host fakes), the frame path on two tasks
+(`test/test_max_present.c`, also under ThreadSanitizer: the glass is each scene's whichever task painted a strip) and
+the strip turn (`test/test_max_turn.c`). `test/raster_same.sh <git-ref>` checks that the Pro's compositor paints every
+pixel of every screen and of random runs as it did at that revision: run it after a change made for speed there.
 The chimes' samples, which both boards render (`main/audio/max_chime_pcm.c`), are checked by `linux/`'s `test_chime`.
 `golden.sh --check` renders each screen to 1920 x 480 and compares hashes. The Pro's `test/run.sh` also runs the strip
 path at 1920 x 480.
 
 ## On the bench
+
+Before it arrives, `bench/` times the display path (raster, turn, copies) on any ESP32-P4 v3, such as a Harness Pro,
+from its `ota_1` slot: see `bench/README.md`.
 
 When the board arrives, check and write the numbers here:
 
@@ -78,9 +87,11 @@ When the board arrives, check and write the numbers here:
    brightness setting; asleep, register 0x96 at 0 is dark.
 3. Touch: the boot log names the address that answered (0x14 or 0x5D); a tap lands where the finger is.
 4. The heartbeat line (`alive ... raster_max_us=... frame_max_us=...`): the longest frame for a full screen and for one
-   lane, and the time `pro_panel_submit` spends turning a strip. If the CPU turn is too slow, the P4's PPA does it.
-5. Free internal RAM and PSRAM from the heartbeat (`heap=`, `psram=`). The strip and the turned band take 2 x 90 KB of
-   internal RAM.
+   lane (`raster_max_us` adds both cores' raster time, so it can exceed the frame's). The PPA turns the strips; the
+   boot line says `turned by the PPA`, and a log line says when the CPU does instead (`no PPA`, `PPA turn ...
+   failed`).
+5. Free internal RAM and PSRAM from the heartbeat (`heap=`, `psram=`). The strips take 4 x 45 KB of internal RAM, and
+   the frame's helper task an 8 KB stack.
 6. Audio: the chimes (`main/app/max_chime.h`: a question's or a failure's two tones, a finished turn's two soft notes)
    at the Pro beep's loudness, and a recording at a usable level (the mic gain is 36 dB, a guess).
 7. The C6 stays in reset (GPIO54 low) and draws no current to speak of.

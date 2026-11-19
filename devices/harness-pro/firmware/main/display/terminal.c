@@ -276,10 +276,24 @@ void ht_damage(const ht_scene_t *a, const ht_scene_t *b, ht_damage_t *d)
         d->pixels += (uint32_t)d->rect[i].w * d->rect[i].h;
     if (rows) damage_rows_finish(rows, d);
 }
+// `count` pixels of `ink`, two to a 32-bit store (the RV32's widest), four stores a turn. Pixel by pixel, the background
+// fill alone was a third of the ESP32-P4's raster time. may_alias: the words write pixels read back as uint16_t.
+typedef uint32_t __attribute__((__may_alias__)) two_px_t;
+static void fill_px(uint16_t *dst, size_t count, uint16_t ink)
+{
+    if (count && ((uintptr_t)dst & 2)) {
+        *dst++ = ink;
+        count--;
+    }
+    const uint32_t two = ink * 0x10001u;
+    two_px_t *w = (two_px_t *)dst;
+    for (; count >= 8; count -= 8, w += 4) w[0] = w[1] = w[2] = w[3] = two;
+    for (; count >= 2; count -= 2) *w++ = two;
+    if (count) *(uint16_t *)w = ink;
+}
 void ht_raster(const ht_scene_t *s, ht_rect_t clip, uint16_t *out)
 {
-    for (size_t i = 0, n = (size_t)clip.w * clip.h; i < n; i++)
-        out[i] = s->background;
+    fill_px(out, (size_t)clip.w * clip.h, s->background);
     for (int i = 0; i < s->count; i++) {
         const ht_run_t *r = &s->runs[i];
         if (r->pro_kind && intersect(ht_run_bounds(r), clip))

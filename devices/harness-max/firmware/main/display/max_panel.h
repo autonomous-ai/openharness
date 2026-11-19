@@ -1,6 +1,6 @@
 // Harness Max's panel and its light: the DSI PHY's LDO, the two-lane bus, the DBI io, the OTA7290B, and the display
-// board's MCU (I2C 0x45), which powers the panel and drives the backlight. max_display.c owns the panel handle and
-// pushes bands with esp_lcd_panel_draw_bitmap.
+// board's MCU (I2C 0x45), which powers the panel and drives the backlight. max_display.c owns the panel handle: the PPA
+// turns strips straight into its framebuffer (max_strips.c), and the CPU's turns go in with esp_lcd_panel_draw_bitmap.
 #pragma once
 
 #include <stdbool.h>

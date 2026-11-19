@@ -1,17 +1,20 @@
 // Harness Max's glass behind the Pro's pro_display.h: the app draws 1920 x 480 landscape, the OTA7290B's framebuffer is
-// 480 x 1920 portrait. Every strip is turned on its way in (max_turn.h) and every touch on its way out.
+// 480 x 1920 portrait. Every strip is turned on its way in (max_strips.c: by the PPA straight into the framebuffer,
+// max_turn_ppa.h, else by the CPU and copied in here) and every touch on its way out.
 #include "pro_display.h"
 
 #include <assert.h>
 #include <stdlib.h>
 
+#include "max_frame.h"
 #include "max_panel.h"
+#include "max_strips.h"
+#include "max_strips_p4.h"
 #include "max_touch.h"
 #include "max_turn.h"
 #include "pins_max.h"
 
 #include "esp_attr.h"
-#include "esp_heap_caps.h"
 #include "esp_lcd_mipi_dsi.h"
 #include "esp_lcd_panel_ops.h"
 #include "esp_log.h"
@@ -24,22 +27,15 @@ static const char *TAG = "max_display";
 _Static_assert(PRO_DISPLAY_W == MAX_GLASS_W && PRO_DISPLAY_H == MAX_GLASS_H, "the app's glass is the turned panel");
 _Static_assert(MAX_GLASS_W == MAX_LCD_V_RES && MAX_GLASS_H == MAX_LCD_H_RES, "the turn swaps the panel's axes");
 
-/* The Pro's API offers two strips so the DMA of one overlaps the raster of the other. Here the DMA never reads a strip:
- * pro_panel_submit turns it into the band before it returns, and the band is what the DMA reads. So both strips are one
- * buffer, and the overlap is the band's DMA with the next strip's raster. pro_frame_present waits for the last submit
- * before the next, which is when the band is free to be written again. */
 static esp_lcd_panel_handle_t s_panel;
 static SemaphoreHandle_t      s_dma_done;
-static uint16_t              *s_strip;   // landscape, rows at the strip's width: the renderer's
-static uint16_t              *s_band;    // the same pixels in the panel's portrait raster: the DMA's
-static bool                   s_in_flight;
 
 static esp_lcd_panel_io_handle_t s_touch_io;
 static esp_lcd_touch_handle_t    s_touch;
 static int64_t                   s_touch_retry_at;
 
 /* on_color_trans_done, not on_refresh_done: it reports that the pixels asked for by draw_bitmap have landed in the
- * framebuffer, which is what a copying push waits for. */
+ * framebuffer, which is what a copy waits for. */
 static bool IRAM_ATTR color_done(esp_lcd_panel_handle_t p, esp_lcd_dpi_panel_event_data_t *event, void *ctx)
 {
     (void)p;
@@ -50,18 +46,32 @@ static bool IRAM_ATTR color_done(esp_lcd_panel_handle_t p, esp_lcd_dpi_panel_eve
     return wake == pdTRUE;
 }
 
+// A band the CPU turned, into the framebuffer (max_strips_copy_t), landed before it returns: the band is the worker's
+// next buffer.
+static void copy_band(int x, int y, int w, int h, const uint16_t *band)
+{
+    xSemaphoreTake(s_dma_done, 0);   // drop a stale give from an earlier timed-out copy
+    ESP_ERROR_CHECK(esp_lcd_panel_draw_bitmap(s_panel, x, y, x + w, y + h, band));
+    if (xSemaphoreTake(s_dma_done, pdMS_TO_TICKS(250)) != pdTRUE) {
+        ESP_LOGE(TAG, "DMA completion timeout");
+        abort();
+    }
+}
+
 void pro_display_init(void)
 {
     s_dma_done = xSemaphoreCreateBinary();
-    // Internal RAM for both: the raster and the turn walk them pixel by pixel. Only the band needs to be DMA-capable.
-    s_strip = heap_caps_malloc((size_t)PRO_STRIP_PX * sizeof(uint16_t), MALLOC_CAP_INTERNAL);
-    s_band = heap_caps_malloc((size_t)PRO_STRIP_PX * sizeof(uint16_t), MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
-    assert(s_dma_done && s_strip && s_band);
+    assert(s_dma_done);
+    // The strips' buffers first: internal RAM, which the raster and the CPU's turn walk pixel by pixel.
+    ESP_ERROR_CHECK(max_strips_init(copy_band));
 
     // Dark until the panel is up: the framebuffer starts zeroed (black), and the light comes on after.
     ESP_ERROR_CHECK(max_panel_open(&s_panel));
     const esp_lcd_dpi_panel_event_callbacks_t cbs = { .on_color_trans_done = color_done };
     ESP_ERROR_CHECK(esp_lcd_dpi_panel_register_event_callbacks(s_panel, &cbs, NULL));
+    void *fb = NULL;
+    ESP_ERROR_CHECK(esp_lcd_dpi_panel_get_frame_buffer(s_panel, 1, &fb));
+    max_strips_framebuffer(fb);
     max_backlight_set(255);
 
     if (!max_touch_open(&s_touch_io, &s_touch)) {
@@ -69,36 +79,30 @@ void pro_display_init(void)
         s_touch_retry_at = esp_timer_get_time() + 5000000;
         ESP_LOGW(TAG, "touch not up; pro_touch_poll() will retry");
     }
-    ESP_LOGI(TAG, "%dx%d glass up (panel %dx%d, turned)", PRO_DISPLAY_W, PRO_DISPLAY_H, MAX_LCD_H_RES, MAX_LCD_V_RES);
+    ESP_LOGI(TAG, "%dx%d glass up (panel %dx%d, turned by the %s)", PRO_DISPLAY_W, PRO_DISPLAY_H, MAX_LCD_H_RES,
+             MAX_LCD_V_RES, max_strips_ppa() ? "PPA" : "CPU");
 }
 
+/* The Pro's push, for pro_frame.c should anything paint through it (Max's frames go through max_present.h): both its
+ * strips are one buffer, because the push has turned it into place by the time it returns. */
 uint16_t *pro_panel_strip(int which)
 {
     (void)which;
-    return s_strip;
+    return max_strip_buffer(0, 0);
 }
 
 void pro_panel_submit(int x, int y, int w, int h, const uint16_t *buf)
 {
     assert(s_panel && w > 0 && h > 0 && x >= 0 && y >= 0 && x + w <= PRO_DISPLAY_W && y + h <= PRO_DISPLAY_H);
-    assert(buf == s_strip && w * h <= PRO_STRIP_PX);
-    assert(!s_in_flight);   // the band is still the DMA's: writing it now would tear the last strip
-    const max_rect_t panel = max_turn_rect((max_rect_t){x, y, w, h});
-    max_turn_pixels(buf, w, h, s_band);
-    xSemaphoreTake(s_dma_done, 0);   // drop a stale give from an earlier timed-out push
-    ESP_ERROR_CHECK(esp_lcd_panel_draw_bitmap(s_panel, panel.x, panel.y, panel.x + panel.w, panel.y + panel.h, s_band));
-    s_in_flight = true;
+    assert(buf == max_strip_buffer(0, 0) && w * h <= PRO_STRIP_PX);
+    max_strips_put(x, y, w, h);
 }
 
-void pro_panel_wait(void)
-{
-    if (!s_in_flight) return;
-    if (xSemaphoreTake(s_dma_done, pdMS_TO_TICKS(250)) != pdTRUE) {
-        ESP_LOGE(TAG, "DMA completion timeout");
-        abort();
-    }
-    s_in_flight = false;
-}
+void pro_panel_wait(void) {}
+
+// One framebuffer, which the panel scans all the time: each strip is on the glass once its turn lands, so a whole frame
+// has nothing left to show.
+void max_frame_show(void) {}
 
 /* Polled, as on the Pro. After this many failed reads in a row the controller is closed and reopened: a wedged one
  * does not recover by itself. */
