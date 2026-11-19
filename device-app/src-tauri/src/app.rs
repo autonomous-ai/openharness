@@ -949,7 +949,7 @@ mod tests {
 
     /// Whether any effect is about Orca, which the devices service sets up on its own.
     fn of_orca(effects: &[Effect]) -> bool {
-        effects.iter().any(|effect| format!("{effect:?}").contains("Orca"))
+        effects.iter().any(|effect| format!("{effect:?}").to_lowercase().contains("orca"))
     }
 
     #[test]

@@ -124,8 +124,8 @@ describe('screens', () => {
 
   it('a screen Rust no longer sends draws nothing', async () => {
     await mount(at('sign_in', 'offer'))
-    for (const screen of ['claude', 'codex']) {
-      push(at(screen as Screen, 'offer'))
+    for (const [screen, phase] of [['claude', 'offer'], ['codex', 'offer'], ['orca', 'approve']]) {
+      push(at(screen as Screen, phase as Phase))
       expect(page().childNodes).toHaveLength(0)
     }
   })

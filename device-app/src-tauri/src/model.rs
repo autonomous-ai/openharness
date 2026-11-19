@@ -242,7 +242,7 @@ mod tests {
     fn no_orca_row_in_any_state() {
         for state in states() {
             for item in menu(&state) {
-                assert!(!format!("{item:?}").contains("Orca"), "{item:?}");
+                assert!(!format!("{item:?}").to_lowercase().contains("orca"), "{item:?}");
             }
         }
     }

@@ -104,8 +104,6 @@ body {
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 4;
   overflow: hidden;
-  /* Its overflow lets a flex item shrink to nothing: a clamped line keeps its height, and a list beside it scrolls. */
-  flex-shrink: 0;
 }
 
 .muted {
