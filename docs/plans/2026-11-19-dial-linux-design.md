@@ -335,7 +335,8 @@ checks and orders the new names so a session in Zellij inside kitty keeps Zellij
   Linux), both checked.
 - `focus`: `kitten @ --to <listen_on> focus-window --match id:<id>`; `tap: 'before'`.
 - `type`: `kitten @ --to <listen_on> send-text --match id:<id> -- <text>`, then the Enter key
-  (`send-key --match id:<id> enter`), one send at a time per window.
+  as `send-text --match id:<id> -- \r`, one send at a time per window. Not `send-key`: kitty 0.32.2 sends a key to the
+  active window whatever `--match` names (`RECORDED_KITTY.sendKeyOtherActive`).
 - `kitten` is found as the core finds tmux (`kittyFinder`): on `PATH`, else through the login shell, else in the
   folders the core looks in, else on macOS `kitty.app`'s own; else `kitty` on `PATH`, run as `kitty @` (`kitty +kitten
   @` fails on 0.32.2, `RECORDED_KITTY.kittyAt`). A socket at a path is spoken to only when it is this account's.

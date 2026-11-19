@@ -1,6 +1,6 @@
 /**
  * A kitty window (docs/plans/2026-11-19-dial-linux-design.md § 3.3): a tap focuses it by kitty's remote control, then
- * kitty comes forward as every app does, and the dial's words are typed into it by `send-text`, then `send-key`. The
+ * kitty comes forward as every app does, and the dial's words are typed into it by `send-text`, then Enter. The
  * daemon runs outside kitty, so each command names the socket kitty listens on (`--to`), which kitty sets only with
  * remote control on (`allow_remote_control`, `listen_on`). The window and the socket came from a hook, so both are checked
  * against their form before each command, which runs with no shell, and a socket at a path is spoken to only when it is
@@ -116,9 +116,11 @@ export function createKittyAdapter(deps: KittyDeps): HostAdapter & Required<Pick
       try {
         // kitty reads Python escapes in send-text (RECORDED_KITTY.sendTextBackslash): each backslash doubled lands as
         // typed. `--` keeps words that start with a dash from being read as flags; Enter, sent on its own, submits them.
+        // Enter is send-text's `\r` escape, not send-key, which goes to the active window whatever --match names
+        // (RECORDED_KITTY.sendKeyOtherActive).
         const words = text.replace(CONTROL, ' ').replaceAll('\\', '\\\\')
-        const match = ['--match', `id:${at.id}`]
-        return await remote(at.listenOn, ['send-text', ...match, '--', words]) && await remote(at.listenOn, ['send-key', ...match, 'enter'])
+        const send = (typed: string) => remote(at.listenOn, ['send-text', '--match', `id:${at.id}`, '--', typed])
+        return await send(words) && await send('\\r')
       } finally {
         sending.delete(pane.id)
       }

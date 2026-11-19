@@ -102,7 +102,7 @@ describe.skipIf(!kittyInstalled)('the dial reaches an agent in a kitty window', 
     expect(row.caps).toContain('v')
     expect(row.caps).toContain('f')
 
-    // 2. The dial's words are its next prompt, typed by `kitten @ send-text`, then `send-key enter`.
+    // 2. The dial's words are its next prompt, typed by `kitten @ send-text`, then Enter as `send-text` `\r`.
     relay.speech = 'run the spoken tests'
     const since = dial.messages.length
     dial.send({ t: 'voice.begin', agentId: id, uploadId: 'spoken-1', sr: 16_000, lang: 'en' })
