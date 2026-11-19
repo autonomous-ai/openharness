@@ -1,16 +1,16 @@
 //! Find the `harness` CLI and run it: deadlines, NDJSON lines.
 
+#[cfg(unix)]
+use crate::child_unix as child;
 use crate::harness_home::{Entry, Look, harness_roots_with};
 use crate::types::{Log, Output};
 use std::collections::VecDeque;
 use std::env;
 use std::ffi::{OsStr, OsString};
 use std::fs;
-use std::io::{self, BufRead, BufReader, Read, Write};
-use std::os::fd::AsRawFd;
-use std::os::unix::process::CommandExt;
+use std::io::{self, BufRead, BufReader, Read};
 use std::path::{Component, Path, PathBuf};
-use std::process::{ChildStdin, Command, Stdio};
+use std::process::{Command, Stdio};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, Weak, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -172,20 +172,17 @@ fn run_until(
     now: &dyn Fn() -> Instant,
     sink: &mut dyn FnMut(&str),
 ) -> io::Result<Output> {
-    command.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).process_group(0);
-    let mut child = {
-        let _spawning = spawn_lock();
-        command.spawn()?
-    };
-    let pid = child.id() as libc::pid_t;
+    command.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    let (mut child, group) = child::spawn(&mut command)?;
     // One queue for both streams, so their lines come in the order they were read; bounded, so a slow sink makes the
     // child wait on its pipe instead of lines piling up here.
     let (send, lines) = mpsc::sync_channel(LINES_QUEUED);
     let stdout = tailed_lines(child.stdout.take().expect("stdout is piped"), send.clone());
     let stderr = tailed_lines(child.stderr.take().expect("stderr is piped"), send);
     let (send_exit, exit) = mpsc::channel();
+    let exiting = group.clone();
     thread::spawn(move || {
-        exited(pid);
+        exiting.exited();
         let _ = send_exit.send(());
     });
     let left = || end.saturating_duration_since(now());
@@ -200,9 +197,9 @@ fn run_until(
         }
     };
     if timed_out {
-        kill_group(pid);
+        group.kill();
     }
-    let code = child.wait()?.code();
+    let code = group.code(child.wait()?);
     Ok(Output { code, timed_out, stdout: text(&stdout), stderr: text(&stderr) })
 }
 
@@ -276,7 +273,7 @@ pub fn version(cli: &dyn Cli) -> Option<String> {
 /// A running CLI in its own process group: its stdin is held open until closed or dropped, its stdout comes a line
 /// at a time.
 pub struct Child {
-    stdin: Arc<Mutex<Option<ChildStdin>>>,
+    stdin: Arc<Mutex<Option<child::Stdin>>>,
     lines: mpsc::Receiver<String>,
     exit: mpsc::Receiver<Option<i32>>,
     code: Option<Option<i32>>,
@@ -289,24 +286,12 @@ pub struct Timeout;
 
 impl Child {
     fn start(mut command: Command, name: String, log: Arc<dyn Log>) -> io::Result<Child> {
-        command.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).process_group(0);
-        let mut child = {
-            let _spawning = spawn_lock();
-            command.spawn()?
-        };
-        let pid = child.id() as libc::pid_t;
-        // Taken out, or `wait` below would close it.
-        let stdin = child.stdin.take();
-        if let Some(pipe) = &stdin {
-            // A StdinWriter writes on the thread the OS tells the app in front on: a child that stops reading must
-            // not hold it, nor a closer waiting on the same lock.
-            // SAFETY: fcntl only reads and sets the flags of the pipe this child's handle owns.
-            unsafe {
-                let flags = libc::fcntl(pipe.as_raw_fd(), libc::F_GETFL);
-                libc::fcntl(pipe.as_raw_fd(), libc::F_SETFL, flags | libc::O_NONBLOCK);
-            }
-        }
-        let stdin = Arc::new(Mutex::new(stdin));
+        command.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
+        let (mut child, group) = child::spawn(&mut command)?;
+        // Taken out, or `wait` below would close it. A StdinWriter writes on the thread the OS tells the app in front
+        // on: a child that stops reading must not hold it, nor a closer waiting on the same lock, so child::Stdin never
+        // waits.
+        let stdin = Arc::new(Mutex::new(child.stdin.take().map(child::Stdin::new)));
         let stdout = child.stdout.take().expect("stdout is piped");
         let (send, lines) = mpsc::sync_channel(LINES_QUEUED);
         thread::spawn(move || read_lines(stdout, |line| send.send(line).is_ok()));
@@ -315,19 +300,19 @@ impl Child {
         let stderr = tail(child.stderr.take().expect("stderr is piped"), stderr_done, move |line| {
             stderr_log.line(&format!("{stderr_name}: {line}"))
         });
-        let killer = Killer(Arc::new(Unreaped { pid: Mutex::new(Some(pid)), reaped: Condvar::new() }));
+        let killer = Killer(Arc::new(Unreaped { group: Mutex::new(Some(group.clone())), reaped: Condvar::new() }));
         let unreaped = killer.0.clone();
         let (send_exit, exit) = mpsc::channel();
         thread::spawn(move || {
-            exited(pid);
+            group.exited();
             let _ = stderr_ended.recv_timeout(STDERR_GRACE);
             let status = {
-                let mut pid = unreaped.pid.lock().unwrap();
-                *pid = None;
+                let mut held = unreaped.group.lock().unwrap();
+                *held = None;
                 child.wait()
             };
             unreaped.reaped.notify_all();
-            let code = status.ok().and_then(|status| status.code());
+            let code = status.ok().and_then(|status| group.code(status));
             log.line(&ended(&name, code, &text(&stderr)));
             let _ = send_exit.send(code);
         });
@@ -364,29 +349,28 @@ impl Child {
     }
 }
 
-/// Kills a child's process group from any thread. Its pid while the child is unreaped: once reaped, the pid may be
+/// Kills a child's process group from any thread. Its group while the child is unreaped: once reaped, the pid may be
 /// another process's, so a kill then does nothing.
 #[derive(Clone)]
 pub struct Killer(Arc<Unreaped>);
 
-/// A child's pid until it is reaped, and the word that it has been.
+/// A child's group until it is reaped, and the word that it has been.
 struct Unreaped {
-    pid: Mutex<Option<libc::pid_t>>,
+    group: Mutex<Option<child::Group>>,
     reaped: Condvar,
 }
 
 impl Killer {
     pub fn kill(&self) {
-        if let Some(pid) = *self.0.pid.lock().unwrap() {
-            kill_group(pid);
+        if let Some(group) = &*self.0.group.lock().unwrap() {
+            group.kill();
         }
     }
 
     /// SIGTERM to the child alone, which it may catch to clean up, then `kill_after(grace)`.
     pub fn stop(&self, grace: Duration) {
-        if let Some(pid) = *self.0.pid.lock().unwrap() {
-            // SAFETY: kill only sends a signal, to an unreaped child's own pid.
-            unsafe { libc::kill(pid, libc::SIGTERM) };
+        if let Some(group) = &*self.0.group.lock().unwrap() {
+            group.stop();
         }
         self.kill_after(grace);
     }
@@ -396,10 +380,10 @@ impl Killer {
     pub fn kill_after(&self, grace: Duration) {
         let unreaped = self.0.clone();
         thread::spawn(move || {
-            let pid = unreaped.pid.lock().unwrap();
-            let (pid, _) = unreaped.reaped.wait_timeout_while(pid, grace, |pid| pid.is_some()).unwrap();
-            if let Some(pid) = *pid {
-                kill_group(pid);
+            let group = unreaped.group.lock().unwrap();
+            let (group, _) = unreaped.reaped.wait_timeout_while(group, grace, |group| group.is_some()).unwrap();
+            if let Some(group) = &*group {
+                group.kill();
             }
         });
     }
@@ -408,7 +392,7 @@ impl Killer {
 /// Closes a child's stdin from any thread, while another waits on its lines. It holds the pipe weakly, so a dropped
 /// child's stdin still closes with it, and a close after that does nothing.
 #[derive(Clone)]
-pub struct StdinCloser(Weak<Mutex<Option<ChildStdin>>>);
+pub struct StdinCloser(Weak<Mutex<Option<child::Stdin>>>);
 
 impl StdinCloser {
     /// True when this call closed it.
@@ -418,7 +402,7 @@ impl StdinCloser {
 }
 
 /// Writes lines on a child's stdin from any thread. It holds the pipe weakly, as StdinCloser does.
-pub struct StdinWriter(Weak<Mutex<Option<ChildStdin>>>);
+pub struct StdinWriter(Weak<Mutex<Option<child::Stdin>>>);
 
 /// Why a line was not written.
 #[derive(Debug, PartialEq, Eq)]
@@ -434,28 +418,8 @@ impl StdinWriter {
     pub fn line(&self, text: &str) -> Result<(), Unwritten> {
         let stdin = self.0.upgrade().ok_or(Unwritten::Closed)?;
         let mut stdin = stdin.lock().unwrap();
-        let pipe = stdin.as_mut().ok_or(Unwritten::Closed)?;
-        pipe.write_all(format!("{text}\n").as_bytes()).map_err(|error| match error.kind() {
-            io::ErrorKind::WouldBlock => Unwritten::Full,
-            _ => Unwritten::Closed,
-        })
+        stdin.as_mut().ok_or(Unwritten::Closed)?.line(text)
     }
-}
-
-/// Blocks until the child `pid` has exited, and leaves it unreaped: until it is reaped neither its pid nor its group
-/// can be another's.
-fn exited(pid: libc::pid_t) {
-    // SAFETY: waitid writes only the siginfo it is handed, which zeroes are a valid value of.
-    let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
-    while unsafe { libc::waitid(libc::P_PID, pid as libc::id_t, &mut info, libc::WEXITED | libc::WNOWAIT) } == -1
-        && io::Error::last_os_error().kind() == io::ErrorKind::Interrupted
-    {}
-}
-
-/// SIGKILL to the child and everything it started in its group.
-fn kill_group(pid: libc::pid_t) {
-    // SAFETY: kill only sends a signal; callers hold an unreaped child's pid, which is its group's id.
-    unsafe { libc::kill(-pid, libc::SIGKILL) };
 }
 
 type Tail = Arc<Mutex<VecDeque<u8>>>;
