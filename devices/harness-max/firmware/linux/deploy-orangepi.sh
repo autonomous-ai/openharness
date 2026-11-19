@@ -13,6 +13,7 @@
 # Board: the ssh-host argument or HARNESS_MAX_BOARD / HARNESS_MAX_SSH_OPTS; when none is set, near-demo's board
 # (NEAR_BOARD / NEAR_SSH_OPTS, else ~/.config/near/board.env); otherwise plain `opi`. Nothing about the board is kept in
 # the repository. cJSON comes from ESP-IDF, as on the device: CJSON_DIR, else $IDF_PATH or ~/esp/esp-idf-5.5.4.
+# The bar's clock shows this computer's time zone (the board keeps UTC); HARNESS_MAX_TZ names another.
 #
 # The first run asks for the board's sudo password once, to install orangepi/harness-max.service, the USB gadget's
 # script and the sudoers rule that lets later runs switch without it. A run that changes the unit or the script asks
@@ -82,7 +83,7 @@ main() {
     case $1 in
         build) build ;;
         installed) [ -x harness-max/bin/harness-max ] ;;
-        mode) mode "$2" ;;
+        mode) mode "$2" "${3:-}" ;;
         check) check ;;
         switch) switch ;;
     esac
@@ -103,6 +104,8 @@ build() {
 # The unit reads the mode from here (EnvironmentFile=), so switching it needs no sudo.
 mode() {
     echo "HARNESS_MAX_ARGS=$1" > harness-max/mode.env
+    # The board's system zone is UTC: the bar's clock takes the zone of the computer that deployed it.
+    [ -z "$2" ] || echo "TZ=$2" >> harness-max/mode.env
 }
 
 # Exit 10 when the unit or the gadget's script is missing or not the one in the sources, the unit from before the
@@ -157,7 +160,12 @@ elif ! board installed; then
     echo "deploy-orangepi: Harness Max is not installed on $HOST: run without --no-build first" >&2
     exit 1
 fi
-board mode "$ARGS"
+# The bar's clock is the person's: this computer's time zone (HARNESS_MAX_TZ overrides), a zoneinfo name only.
+ZONE=${HARNESS_MAX_TZ:-$(readlink /etc/localtime 2>/dev/null | sed -n 's|.*/zoneinfo/||p')}
+case $ZONE in
+    *[!A-Za-z0-9_+/-]*) ZONE= ;;
+esac
+board mode "$ARGS" "$ZONE"
 
 set +e
 board check
