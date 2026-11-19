@@ -352,7 +352,7 @@ describe('the link to one dial', () => {
     // Both listeners first: 'close' follows 'error' at once.
     const closed = new Promise((resolve) => stream.once('close', resolve))
     const error = await new Promise<NodeJS.ErrnoException>((resolve) => stream.once('error', resolve))
-    expect(error.code).toBe('closed: The device is not connected.')
+    expect(error).toMatchObject({ code: 'PORT_CLOSED', message: 'closed: The device is not connected.' })
     await closed
     expect(events[0]).toBe('error')
   })
