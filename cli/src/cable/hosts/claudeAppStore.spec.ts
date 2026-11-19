@@ -86,6 +86,13 @@ describe.skipIf(process.platform === 'win32')('the Claude app\'s store', () => {
         [local(1), false, T - 1000], [local(2), false, T - 2000], [local(3), false, T - 3000],
       ])
     })
+
+    it('a title of 100,000 characters is kept as its first 64', async () => {
+      const s = store()
+      s.put(1, { title: 'x'.repeat(100_000) })
+      const { sessions } = await loaded(s.reader)
+      expect(sessions[0]!.title).toBe('x'.repeat(64))
+    })
   })
 
   describe('gone', () => {
