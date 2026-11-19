@@ -14,6 +14,7 @@
 #include <string.h>
 
 #include "app/max_app.h"
+#include "app/max_ui.h"
 #include "app/pro_touch.h"
 #include "app/pro_voice.h"
 #include "audio/audio_capture.h"
@@ -73,6 +74,7 @@ int main(int argc, char **argv)
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--demo")) {
             cable_linux_use_demo(false);
+            max_ui_demo(true);   // the person's demo: its welcome is --story's, so only this says it rests on Ambient
         } else if (!strcmp(argv[i], "--story")) {
             cable_linux_use_demo(true);
         } else if (!strcmp(argv[i], "--live")) {
