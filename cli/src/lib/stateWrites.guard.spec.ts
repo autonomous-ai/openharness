@@ -20,8 +20,21 @@ const STATE_MODULES: readonly string[] = [
   'lib/authSession.ts',
 ]
 
-function hits(_source: string): Array<{ line: number; text: string }> {
-  return []
+const WRITE_IN_PLACE = /\bwriteFile(Sync)?\s*\(/
+const MARKER = 'not a state file:'
+
+/** Every `writeFile` / `writeFileSync` call outside a comment line, unless it or the line above is marked. */
+function hits(source: string): Array<{ line: number; text: string }> {
+  const lines = source.split('\n')
+  const found: Array<{ line: number; text: string }> = []
+  lines.forEach((text, index) => {
+    const trimmed = text.trim()
+    if (trimmed.startsWith('//') || trimmed.startsWith('/*') || trimmed.startsWith('*')) return
+    if (!WRITE_IN_PLACE.test(text)) return
+    if (text.includes(MARKER) || (lines[index - 1] ?? '').includes(MARKER)) return
+    found.push({ line: index + 1, text: trimmed })
+  })
+  return found
 }
 
 describe('state writes guard', () => {

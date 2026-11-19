@@ -150,6 +150,10 @@ sessions to the owner's other machines, the Share relay for a harness shared wit
    recorded baseline. `e2e/perf.e2e.ts` provides an opt-in workload and JSON measurements; these are not
    an automatic performance gate. Keep failure-isolation and deadline tests mandatory. A new numerical
    performance limit needs measured evidence, not a source-size estimate.
+9. **State files are written whole and read through one reader.** Write them with `atomicWriteFile` /
+   `atomicWriteJson` and read them with `readState`, all in `src/lib/secureState.ts`; never `writeFile` in
+   place. `src/lib/stateWrites.guard.spec.ts` lists the modules that own a state file and fails on a write in
+   place there; a write that is not a state file says so on its line: `// not a state file: <why>`.
 
 ## Commands
 
