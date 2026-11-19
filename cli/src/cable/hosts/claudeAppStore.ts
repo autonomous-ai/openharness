@@ -19,6 +19,7 @@ import { lstat, open, readdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import { CLAUDE_SESSION } from './claudeApp.js'
 import { MAX_CWD } from './herdrSource.js'
+import { observedTitle } from './observedTitle.js'
 
 export const MAX_ACCOUNTS = 8
 export const MAX_ORGS = 8
@@ -37,7 +38,7 @@ export interface ClaudeAppSession {
   /** Claude Code's id of the session: `cliSessionId`. */
   sessionId: string
   cwd: string
-  /** `title` as written, when it is a string: the source runs the title rule. */
+  /** `title` after the title rule (at most 64 characters), so a held session stays small whatever the app wrote. */
   title?: string
   /** The store's, when a finite number; else the file's mtime (ms). */
   lastActivityAt: number
@@ -164,11 +165,12 @@ function sessionOf(file: Held, text: string | undefined): Gave {
   if (isArchived) return 'archived'
   if (typeof cliSessionId !== 'string' || !CLI_SESSION.test(cliSessionId)) return 'unusable'
   if (typeof cwd !== 'string' || cwd === '' || cwd.length > MAX_CWD) return 'unusable'
+  const shown = observedTitle(title)
   return {
     localId,
     sessionId: cliSessionId,
     cwd,
-    ...(typeof title === 'string' && { title }),
+    ...(shown !== undefined && { title: shown }),
     lastActivityAt: typeof lastActivityAt === 'number' && Number.isFinite(lastActivityAt) ? lastActivityAt : file.mtime,
   }
 }
