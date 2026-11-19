@@ -23,6 +23,7 @@ import { prepareInstructionWrites } from '../../scm/launch.js'
 import { opencodeMajorVersion } from '../../engines/launchControl.js'
 import { installOpencodePlugin } from '../../engines/nativeHooks.js'
 import { missingHookScript } from '../../engines/kit/notifyHooks.js'
+import { HookPreparationHeld } from '../../engines/kit/hookHeld.js'
 import type { NativeLaunch } from '../../engines/nativeLaunch.js'
 import { projectsRoot } from '../../lib/projectFolder.js'
 import { NativeFiles } from '../../engines/kit/nativeFiles.js'
@@ -578,12 +579,16 @@ describe('creating an agent', () => {
       capabilities.mockResolvedValueOnce({ sessionEnv: false })
       expect(await create(request({ grid }))).toMatchObject({ error: 'TMUX_TOO_OLD_FOR_GRID' })
       const configured = { ok: true, launch: { env: {}, args: [], webSearch: 'off', configDir: { envVar: 'PI_CONFIG', files: {}, links: [] } } }
-      buildGridLaunch.mockResolvedValueOnce(configured as never).mockResolvedValueOnce(configured as never)
+      buildGridLaunch.mockResolvedValueOnce(configured as never).mockResolvedValueOnce(configured as never).mockResolvedValueOnce(configured as never)
       vi.mocked(writeGridConfigDir).mockRejectedValueOnce(new Error('read-only')).mockRejectedValueOnce('worse')
+        .mockRejectedValueOnce(new HookPreparationHeld('the generated configuration directory is not private'))
       expect(await create(request({ grid }))).toMatchObject({ error: 'GRID_CONFIG_FAILED', detail: "could not write claude's grid configuration · read-only" })
       expect(await create(request({ grid }))).toMatchObject({ detail: "could not write claude's grid configuration · worse" })
+      expect(await create(request({ grid }))).toMatchObject({ error: 'GRID_CONFIG_FAILED' })
       expect(console.warn).toHaveBeenCalledWith("[agent] create claude refused · could not write claude's grid configuration · Error")
       expect(console.warn).toHaveBeenCalledWith("[agent] create claude refused · could not write claude's grid configuration · string")
+      // A held publication says what holds it, in the fixed words of its reason.
+      expect(console.warn).toHaveBeenCalledWith("[agent] create claude refused · could not write claude's grid configuration · the generated configuration directory is not private")
     })
 
 
