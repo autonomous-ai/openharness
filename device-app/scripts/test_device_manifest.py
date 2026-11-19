@@ -28,6 +28,23 @@ LIVE = f"{BUCKET}/metadata.json"
 CDN = "https://cdn.autonomous.ai/harness/device"
 ORIGIN_MANIFEST = "https://storage.googleapis.com/s3-autonomous-upgrade-3/harness/device/metadata.json"
 FILES = ("Harness-Device.dmg", "Harness-Device.app.tar.gz", "Harness-Device.app.tar.gz.sig")
+# Each build job's files: macOS's three, Windows' two installers and an AppImage per Linux arch, each beside its .sig.
+PARTS = {
+    "macos": FILES,
+    "windows": ("Harness-Device-windows-x64-setup.exe", "Harness-Device-windows-x64-setup.exe.sig",
+                "Harness-Device-windows-arm64-setup.exe", "Harness-Device-windows-arm64-setup.exe.sig"),
+    "linux-x64": ("Harness-Device-linux-x64.AppImage", "Harness-Device-linux-x64.AppImage.sig"),
+    "linux-arm64": ("Harness-Device-linux-arm64.AppImage", "Harness-Device-linux-arm64.AppImage.sig"),
+}
+ALL = tuple(PARTS)
+ALL_FILES = tuple(name for part in ALL for name in PARTS[part])
+# Tauri's key of each Windows and Linux update, then Desktop's key and the file both name.
+UPDATES = {
+    "windows-x86_64": ("device-windows-x64", "Harness-Device-windows-x64-setup.exe"),
+    "windows-aarch64": ("device-windows-arm64", "Harness-Device-windows-arm64-setup.exe"),
+    "linux-x86_64": ("device-linux-x64", "Harness-Device-linux-x64.AppImage"),
+    "linux-aarch64": ("device-linux-arm64", "Harness-Device-linux-arm64.AppImage"),
+}
 PUB_DATE = "2026-11-16T10:00:00Z"
 DMG, ARCHIVE, SIGNATURE = b"dmg bytes", b"archive bytes", "c2lnbmF0dXJl"
 GIT = ["git", "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "-c", "maintenance.auto=false",
@@ -89,12 +106,28 @@ else:
 '''
 
 
-def make_build(folder):
-    """The three files of a build, as the build job leaves them."""
+def make_build(folder, parts=("macos",)):
+    """The files of the parts named, as their build jobs leave them: macOS's three by default."""
     folder.mkdir(parents=True)
-    for name, data in zip(FILES, (DMG, ARCHIVE, (SIGNATURE + "\n").encode())):
-        (folder / name).write_bytes(data)
+    macos = dict(zip(FILES, (DMG, ARCHIVE, (SIGNATURE + "\n").encode())))
+    for name in (name for part in parts for name in PARTS[part]):
+        # Every other file's bytes are its own, so a manifest that names one for another shows.
+        (folder / name).write_bytes(macos.get(name, f"{name} bytes\n".encode()))
     return folder
+
+
+def windows_and_linux(manifest):
+    """A manifest's Windows and Linux keys, in its order."""
+    return {"platforms": {key: value for key, value in manifest["platforms"].items()
+                          if key.startswith(("windows-", "linux-"))},
+            **{key: value for key, value in manifest.items() if key.startswith(("device-windows-", "device-linux-"))}}
+
+
+def keep_windows_and_linux(manifest, earlier):
+    """Put earlier's Windows and Linux keys into manifest, as a macOS release keeps them."""
+    kept = windows_and_linux(earlier)
+    manifest["platforms"].update(kept.pop("platforms"))
+    manifest.update(kept)
 
 
 def flip(path):
@@ -305,6 +338,70 @@ class ManifestTests(TempTest):
         refused(self, result)
         self.assertIn("Harness-Device.dmg", result.stderr)
 
+    def test_all_names_every_platform_at_one_version(self):
+        build = make_build(self.root / "all", ALL)
+        manifest = rules.build_manifest("0.1.0", build, "Harness Device 0.1.0", PUB_DATE, CDN, platforms="all")
+        self.assertEqual(list(manifest), ["version", "notes", "pub_date", "platforms", "device-macos", "device-macos-dmg",
+                                          "device-macos-arm64", "device-macos-arm64-dmg",
+                                          *[desktop for desktop, _ in UPDATES.values()]])
+        self.assertEqual(list(manifest["platforms"]), ["darwin-aarch64", "darwin-x86_64", *UPDATES])
+        # Its macOS keys are a macOS release's.
+        macos = rules.build_manifest("0.1.0", self.build, "Harness Device 0.1.0", PUB_DATE, CDN)
+        self.assertEqual({key: manifest[key] for key in macos if key != "platforms"},
+                         {key: value for key, value in macos.items() if key != "platforms"})
+        self.assertEqual({key: manifest["platforms"][key] for key in macos["platforms"]}, macos["platforms"])
+        for key, (desktop, name) in UPDATES.items():
+            with self.subTest(key=key):
+                url = f"{CDN}/0.1.0/{name}"
+                self.assertEqual(manifest["platforms"][key], {"url": url, "signature": f"{name}.sig bytes"})
+                data = (build / name).read_bytes()
+                self.assertEqual(manifest[desktop], {"version": "0.1.0", "url": url,
+                                                     "sha256": hashlib.sha256(data).hexdigest(), "size": len(data)})
+                self.assertEqual(list(manifest[desktop]), ["version", "url", "sha256", "size"])
+
+        notes, out = self.root / "notes.txt", self.root / "metadata.json"
+        notes.write_text("Harness Device 0.1.0\n")
+        result = run("build", "--version", "0.1.0", "--dir", build, "--notes-file", notes, "--pub-date", PUB_DATE,
+                     "--base-url", CDN, "--out", out, "--platforms", "all")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(out.read_text(), json.dumps(manifest, indent=2) + "\n")
+
+        for name in ALL_FILES[len(FILES):]:
+            with self.subTest(missing=name):
+                folder = self.root / f"without-{name}"
+                shutil.copytree(build, folder)
+                (folder / name).unlink()
+                with self.assertRaises(OSError):
+                    rules.build_manifest("0.1.0", folder, "notes", PUB_DATE, CDN, platforms="all")
+
+    def test_sums_cover_one_part_each(self):
+        everything = make_build(self.root / "all", ALL)
+        default = self.root / "default.json"
+        result = run("sums", "--dir", everything, "--out", default)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        for part, names in PARTS.items():
+            with self.subTest(part=part):
+                sums = self.root / f"{part}.json"
+                result = run("sums", "--part", part, "--dir", everything, "--out", sums)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(json.loads(sums.read_text()), {
+                    name: {"sha256": hashlib.sha256((everything / name).read_bytes()).hexdigest(),
+                           "size": (everything / name).stat().st_size} for name in names})
+                # Its artifact alone misses no other part's file, and a changed file of another part is not its own.
+                alone, mixed = make_build(self.root / part, (part,)), self.root / f"{part}-mixed"
+                shutil.copytree(everything, mixed)
+                for name in set(ALL_FILES) - set(names):
+                    flip(mixed / name)
+                for folder in (alone, mixed):
+                    result = run("sums", "--part", part, "--dir", folder, "--check", sums)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                flip(alone / names[-1])
+                result = run("sums", "--part", part, "--dir", alone, "--check", sums)
+                refused(self, result)
+                self.assertIn(names[-1], result.stderr)
+        # Without --part the part is macOS's, as the macOS job's calls have it.
+        self.assertEqual(default.read_text(), (self.root / "macos.json").read_text())
+
 
 class PublishTests(TempTest):
     def setUp(self):
@@ -355,13 +452,13 @@ class PublishTests(TempTest):
                 steps.append(("cat" if call[1] == "cat" else "describe", names[-1]))
         return steps
 
-    def uploads(self, version):
+    def uploads(self, version, files=FILES):
         """Each file uploaded, then read back."""
-        return [step for name in FILES for step in (("upload", f"{BUCKET}/{version}/{name}"),
+        return [step for name in files for step in (("upload", f"{BUCKET}/{version}/{name}"),
                                                    ("download", f"{BUCKET}/{version}/{name}"))]
 
-    def publish(self, version):
-        return rules.publish(version, self.build, "Harness Device notes\n", PUB_DATE)
+    def publish(self, version, **platforms):
+        return rules.publish(version, self.build, "Harness Device notes\n", PUB_DATE, **platforms)
 
     def test_first_release_writes_only_where_none_exists(self):
         written = self.publish("0.1.0")
@@ -454,6 +551,78 @@ class PublishTests(TempTest):
         self.assertEqual(json.loads(self.stored("metadata.json")), written)
         self.assertEqual(self.generations()[LIVE], 8)
 
+    def test_macos_names_no_windows_or_linux_file(self):
+        macos = self.build
+        self.build = make_build(self.root / "all", ALL)
+        written = self.publish("0.1.0", platforms="macos")
+        self.assertEqual(self.steps(), [("describe", LIVE), *self.uploads("0.1.0"), ("upload", LIVE)])
+        self.assertEqual(written, rules.build_manifest("0.1.0", macos, "Harness Device notes", PUB_DATE, CDN))
+
+    def test_macos_keeps_live_windows_and_linux_keys_untouched(self):
+        live = rules.build_manifest("0.1.0", make_build(self.root / "all", ALL), "Harness Device 0.1.0",
+                                    "2026-11-15T09:00:00Z", CDN, platforms="all")
+        self.put("metadata.json", json.dumps(live, indent=2), generation=7)
+        written = self.publish("0.1.1")
+        self.assertEqual(self.steps(), [("describe", LIVE), ("cat", f"{LIVE}#7"), *self.uploads("0.1.1"),
+                                        ("upload", LIVE)])
+        self.assertEqual(json.dumps(windows_and_linux(written)), json.dumps(windows_and_linux(live)))
+        expected = rules.build_manifest("0.1.1", self.build, "Harness Device notes", PUB_DATE, CDN)
+        keep_windows_and_linux(expected, live)
+        self.assertEqual(json.dumps(written), json.dumps(expected))
+        self.assertEqual(json.loads(self.stored("metadata.json")), written)
+
+    def test_all_replaces_them(self):
+        self.build = make_build(self.root / "all", ALL)
+        live = rules.build_manifest("0.1.0", self.build, "Harness Device 0.1.0", "2026-11-15T09:00:00Z", CDN,
+                                    platforms="all")
+        self.put("metadata.json", json.dumps(live), generation=7)
+        written = self.publish("0.1.1", platforms="all")
+        self.assertEqual(self.steps(), [("describe", LIVE), ("cat", f"{LIVE}#7"), *self.uploads("0.1.1", ALL_FILES),
+                                        ("upload", LIVE)])
+        self.assertEqual(written, rules.build_manifest("0.1.1", self.build, "Harness Device notes", PUB_DATE, CDN,
+                                                       platforms="all"))
+        self.assertEqual(json.loads(self.stored("metadata.json")), written)
+
+    def test_a_rerun_compares_only_its_own_platforms(self):
+        everything = make_build(self.root / "all", ALL)
+        earlier = rules.build_manifest("0.1.0", everything, "Harness Device 0.1.0", "2026-11-14T09:00:00Z", CDN,
+                                       platforms="all")
+        # A macOS rerun: beside its own keys are the Windows and Linux ones it kept from 0.1.0.
+        live = self.live_build(lambda live: keep_windows_and_linux(live, earlier))
+        self.assertEqual(self.publish("0.1.1"), live)
+        self.assertEqual(self.steps(), [("describe", LIVE), ("cat", f"{LIVE}#7")])
+        # Those keys are not this version's, so a release of every platform finds other files under it.
+        self.build = everything
+        with self.assertRaisesRegex(ValueError, "^0.1.1 is already published with other files; release a new version$"):
+            self.publish("0.1.1", platforms="all")
+        # Every platform live at 0.1.1: a rerun of either mode finds its own files.
+        live = rules.build_manifest("0.1.1", everything, "Harness Device 0.1.1", "2026-11-15T09:00:00Z", CDN,
+                                    platforms="all")
+        self.put("metadata.json", json.dumps(live), generation=8)
+        for platforms in ("all", "macos"):
+            with self.subTest(platforms=platforms):
+                self.assertEqual(self.publish("0.1.1", platforms=platforms), live)
+        self.assertNotIn("cp", [call[1] for call in self.calls()])
+        self.assertEqual(self.generations()[LIVE], 8)
+
+    def test_an_unknown_platforms_value_is_one_error_line(self):
+        notes, out = self.root / "notes.txt", self.root / "out.json"
+        notes.write_text("Harness Device 0.1.0\n")
+        common = ("--version", "0.1.0", "--dir", self.build)
+        release = (*common, "--notes-file", notes, "--pub-date", PUB_DATE)
+        for args, option in [
+            (("build", *release, "--base-url", CDN, "--out", out, "--platforms", "windows"), "--platforms"),
+            (("publish", *release, "--platforms", "linux"), "--platforms"),
+            (("verify", *common, "--platforms", "macos,all"), "--platforms"),
+            (("sums", "--dir", self.build, "--out", out, "--part", "all"), "--part"),
+        ]:
+            with self.subTest(args=args):
+                result = run(*args)
+                refused(self, result)
+                self.assertIn(f"argument {option}: invalid choice", result.stderr)
+        self.assertEqual(self.calls(), [])
+        self.assertFalse(out.exists())
+
 
 class QuietHandler(SimpleHTTPRequestHandler):
     def log_message(self, *args):
@@ -521,19 +690,18 @@ class VerifyTests(TempTest):
         self.served = self.root / "served"
         self.base = serve(self, functools.partial(QuietHandler, directory=str(self.served)))
 
-    def publish_copy(self, change=None):
+    def publish_copy(self, change=None, **platforms):
         """Serve the build as publish leaves it, with change applied to its manifest."""
         shutil.rmtree(self.served, ignore_errors=True)
-        (self.served / "0.1.0").mkdir(parents=True)
-        for name in FILES:
-            shutil.copyfile(self.build / name, self.served / "0.1.0" / name)
-        manifest = rules.build_manifest("0.1.0", self.build, "Harness Device 0.1.0", PUB_DATE, self.base)
+        shutil.copytree(self.build, self.served / "0.1.0")
+        manifest = rules.build_manifest("0.1.0", self.build, "Harness Device 0.1.0", PUB_DATE, self.base, **platforms)
         if change:
             change(manifest)
         (self.served / "metadata.json").write_text(json.dumps(manifest))
 
-    def verify(self):
-        rules.verify("0.1.0", self.build, manifest_url=f"{self.base}/metadata.json", base_url=self.base, pause=0)
+    def verify(self, **platforms):
+        rules.verify("0.1.0", self.build, manifest_url=f"{self.base}/metadata.json", base_url=self.base, pause=0,
+                     **platforms)
 
     def test_verify_passes_on_the_published_copy(self):
         self.publish_copy()
@@ -562,6 +730,34 @@ class VerifyTests(TempTest):
                 change()
                 with self.assertRaises(ValueError):
                     self.verify()
+
+    def test_verify_downloads_each_file_it_names(self):
+        requests = []
+
+        class RecordingHandler(QuietHandler):
+            def do_GET(self):
+                requests.append(self.path)
+                super().do_GET()
+
+        self.base = serve(self, functools.partial(RecordingHandler, directory=str(self.served)))
+        self.build = make_build(self.root / "all", ALL)
+        macos = ["/metadata.json", "/0.1.0/Harness-Device.app.tar.gz", "/0.1.0/Harness-Device.dmg"]
+        # A macOS release beside the Windows and Linux keys of an earlier one, which are not this run's to fetch.
+        earlier = rules.build_manifest("0.0.9", self.build, "Harness Device 0.0.9", PUB_DATE, self.base, platforms="all")
+        self.publish_copy(lambda manifest: keep_windows_and_linux(manifest, earlier))
+        self.verify(platforms="macos")
+        self.assertEqual(requests, macos)
+
+        requests.clear()
+        self.publish_copy(platforms="all")
+        self.verify(platforms="all")
+        self.assertEqual(requests, [*macos, *[f"/0.1.0/{name}" for _, name in UPDATES.values()]])
+        for _, name in UPDATES.values():
+            with self.subTest(changed=name):
+                self.publish_copy(platforms="all")
+                flip(self.served / "0.1.0" / name)
+                with self.assertRaisesRegex(ValueError, re.escape(name)):
+                    self.verify(platforms="all")
 
 
 if __name__ == "__main__":
