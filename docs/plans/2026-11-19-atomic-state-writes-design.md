@@ -166,9 +166,14 @@ Reviewed revision: spec v1  Reviewer: builder check  Each line: answered / N/A b
    older build writing in place during a handover (the bounded read retry). Two writers racing (lost update) is a
    non-goal, listed for the follow-up.
 3. **Read cost**: unchanged; the same files are read as often as today. A parse error adds a few bounded retries.
-4. **Scale**: the files are small (largest: the recap history, bounded by its own caps). A rename and an `fsync` per
-   write; the recap timer (200 ms debounce) already pays it on its strict path. The plan measures the recap save's
-   time before and after on a full history.
+4. **Scale**: the files are small (largest: the recap history, bounded by its own caps). Measured on a full recap
+   history (200 sessions, 5.9 MB in four files): a save went from about 12 ms to 90-143 ms when every file and its
+   folder were flushed. So (orchestrator, 2026-11-19) a **cache** write is temporary file + rename with no `fsync`:
+   the rename alone is what stops another process from reading half a file, and a power cut that leaves an empty
+   cache file is the set-aside case above. A cache write asked to be durable (`durable: true`) flushes like a trust
+   write; the recaps' last save when the process stops cleanly (stop, update, handover) asks for it, so a normal
+   restart never loses recaps. **Trust** writes always flush the file and its folder. The pull request gives ms per
+   save and flushes per save, before and after.
 5. **Compatibility**: formats, names and folders are unchanged, so an older build reads what this one writes and the
    other way round. An older build still writes in place during a handover: the bounded read retry rides it out.
 6. **Migration and rollback**: none. A rollback returns to in-place writes; the files stay readable by it.
