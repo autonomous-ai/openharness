@@ -17,7 +17,10 @@
  * one, a method called on `this`), and what a `writeSync` writes, are found the same way, but for the catch they run in.
  *
  * Its limits: a logger under another name, text carried two locals away or through a local of the function that logs
- * it, a catch with a binding that logs without the word "fail", and an error's `.reason`, `.detail`, `.stderr`,
+ * it, what a function of the file's own returns (a write that answers with an error's message), a local destructured
+ * from an error (`const { message } = error`), an error kept on a property (`this.lastError.message`,
+ * `run.error?.message`), an error's words read by element access (`error['message']`), an `AggregateError`'s
+ * `.errors`, a catch with a binding that logs without the word "fail", and an error's `.reason`, `.detail`, `.stderr`,
  * `.stdout` and `.path`, which a follow-up adds with the lines that log stored strings
  * (docs/plans/2026-11-19-log-failure-kinds-plan.md, answer 6).
  */

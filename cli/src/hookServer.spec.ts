@@ -1306,7 +1306,8 @@ describe('the daemon socket', () => {
     }
   })
 
-  it('starts on TCP alone when the socket cannot be opened', async () => {
+  it('starts on TCP alone when the socket cannot be opened, and says why by the failure\'s kind, with no path', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const dir = mkdtempSync('/tmp/hsock-')
     const blocked = join(dir, 'daemon.sock')
     writeFileSync(blocked, 'not a socket')
@@ -1314,6 +1315,8 @@ describe('the daemon socket', () => {
     server = started.server
     expect(started.localSocket).toBeNull()
     expect(started.port).toBeGreaterThan(0)
+    // The claim refuses a file that is no socket in words that name its path: only the kind is logged.
+    expect(warn.mock.calls.filter(([line]) => String(line).startsWith('[hooks] local socket'))).toEqual([['[hooks] local socket unavailable · Error']])
     rmSync(dir, { recursive: true, force: true })
   })
 
