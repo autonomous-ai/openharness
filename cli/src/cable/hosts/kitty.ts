@@ -4,7 +4,8 @@
  * daemon runs outside kitty, so each command names the socket kitty listens on (`--to`), which kitty sets only with
  * remote control on (`allow_remote_control`, `listen_on`). The window and the socket came from a hook, so both are checked
  * against their form before each command, which runs with no shell, and a socket at a path is spoken to only when it is
- * this account's. kitty's binary is found as the core finds tmux (kittyFinder): the master's PATH may hold none.
+ * this account's. Linux's abstract socket has no owner to read, so it takes a tap alone. kitty's binary is found as the
+ * core finds tmux (kittyFinder): the master's PATH may hold none.
  */
 import { dirname, join } from 'node:path'
 import { binaryOnPath, resolveBinaryOnPath } from '../../lib/binaryOnPath.js'
@@ -71,8 +72,14 @@ export function createKittyAdapter(deps: KittyDeps): HostAdapter & Required<Pick
     const socket = parts && socketOf(deps.platform, parts[3])
     return socket ? { own: !parts[1], id: parts[2], ...socket } : undefined
   }
-  // Another account's socket would take the dial's words to that account's kitty. An abstract socket has no owner to read.
+  // Another account's socket would take the dial's words to that account's kitty. An abstract socket has no owner to read,
+  // and once kitty is gone any account may take its name: a tap there costs a look, words would run at that account's
+  // prompt. So only a socket at a path that is this account's takes words.
   const ours = (path: string | undefined): boolean => path === undefined || deps.socketOwner(path) === deps.uid
+  const typable = (pane: Pane) => {
+    const at = windowOf(pane)
+    return at?.own && at.path !== undefined ? at : undefined
+  }
   /** One `@` command to the window's kitty where kitty was found; false when none was or it did not exit 0. */
   const remote = async (listenOn: string, args: string[]): Promise<boolean> => {
     const found = await deps.kitty()
@@ -107,10 +114,10 @@ export function createKittyAdapter(deps: KittyDeps): HostAdapter & Required<Pick
       const at = windowOf(pane)
       return !!at && ours(at.path) && await remote(at.listenOn, ['focus-window', '--match', `id:${at.id}`])
     },
-    canType: (pane) => windowOf(pane)?.own === true,
+    canType: (pane) => typable(pane) !== undefined,
     async type(pane, text) {
-      const at = windowOf(pane)
-      if (text === '' || text.length > MAX_TEXT || !at?.own || sending.has(pane.id) || !ours(at.path)) return false
+      const at = typable(pane)
+      if (text === '' || text.length > MAX_TEXT || !at || sending.has(pane.id) || !ours(at.path)) return false
       sending.add(pane.id)
       try {
         // kitty reads Python escapes in send-text (RECORDED_KITTY.sendTextBackslash): each backslash doubled lands as

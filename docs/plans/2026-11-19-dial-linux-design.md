@@ -341,8 +341,10 @@ checks and orders the new names so a session in Zellij inside kitty keeps Zellij
   active window whatever `--match` names (`RECORDED_KITTY.sendKeyOtherActive`).
 - `kitten` is found as the core finds tmux (`kittyFinder`): on `PATH`, else through the login shell, else in the
   folders the core looks in, else on macOS `kitty.app`'s own; else `kitty` on `PATH`, run as `kitty @` (`kitty +kitten
-  @` fails on 0.32.2, `RECORDED_KITTY.kittyAt`). A socket at a path is spoken to only when it is this account's.
-- `canFocus`: the hints in form; `canType`: the agent's own window, not one that only holds it.
+  @` fails on 0.32.2, `RECORDED_KITTY.kittyAt`). A socket at a path is spoken to only when it is this account's. Linux's
+  abstract socket (`unix:@<name>`) has no owner to read, and once kitty is gone any account may take its name: it takes
+  a tap, never words.
+- `canFocus`: the hints in form; `canType`: the agent's own window, not one that only holds it, at a socket at a path.
 - **Telling the person.** A kitty session with no `KITTY_LISTEN_ON` gets one daemon log line per process start
   (`[device] kitty · remote control off`), and `docs/cli.md` gives the two `kitty.conf` lines to add
   (`allow_remote_control socket-only`, `listen_on unix:/tmp/kitty`), then restarting kitty. No new screen.
