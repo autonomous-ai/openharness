@@ -357,9 +357,10 @@ const runFinale = (mode: "standalone" | "desktop", pathHasBin: boolean, script =
 };
 
 // The login entry install.sh writes on Linux (spec § 1.1), under `home` when XDG_CONFIG_HOME is not absolute.
+// No NoDisplay=true: GNOME's Startup Applications hides such an entry, and that is where the person turns it off.
 const loginEntryPath = (home: string) => join(home, ".config", "autostart", "harnessd.desktop");
 const loginEntryOf = (launcherExec: string) =>
-  ["[Desktop Entry]", "Type=Application", "Name=Harness", `Exec=${launcherExec}`, "NoDisplay=true", "X-GNOME-Autostart-enabled=true", ""].join("\n");
+  ["[Desktop Entry]", "Type=Application", "Name=Harness", `Exec=${launcherExec}`, "X-GNOME-Autostart-enabled=true", ""].join("\n");
 const ownLoginEntry = (home: string) => loginEntryOf(`"${home}/.local/bin/harness" start`);
 const TURNED_OFF = ["Hidden=true", "X-GNOME-Autostart-enabled=false", "X-MATE-Autostart-enabled=false"];
 const OTHER_APPS_ENTRY = loginEntryOf("/opt/harness-device/harness-device --login");
@@ -1621,7 +1622,8 @@ describe("scripts/install.sh: the login entry", () => {
       rmSync(loginEntryPath(home));
       expect(again().stdout).toBe("  ✓ Starts at login\n");
       expect(readFileSync(loginEntryPath(home), "utf8")).toBe(ownLoginEntry(home));
-      writeFileSync(loginEntryPath(home), `${ownLoginEntry(home)}Comment=an older one\n`, { mode: 0o600 });
+      // An older one, which had NoDisplay=true, is still its own.
+      writeFileSync(loginEntryPath(home), `${ownLoginEntry(home)}NoDisplay=true\n`, { mode: 0o600 });
       expect(again().stdout).toBe("  ✓ Starts at login\n");
       expect(readFileSync(loginEntryPath(home), "utf8")).toBe(ownLoginEntry(home));
       expect(statSync(loginEntryPath(home)).mode & 0o777).toBe(0o644);
