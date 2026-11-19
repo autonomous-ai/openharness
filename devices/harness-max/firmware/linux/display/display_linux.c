@@ -5,6 +5,7 @@
 #include <assert.h>
 #include <string.h>
 
+#include "display/max_frame.h"
 #include "max_output.h"
 
 #include "esp_log.h"
@@ -37,8 +38,13 @@ bool pro_touch_read(int *x, int *y) { return pro_touch_poll(x, y) == PRO_TOUCH_O
 // No light to set: a window has none, and the bar's HDMI monitor keeps its own.
 void pro_display_set_brightness(uint8_t level) { (void)level; }
 
+void max_frame_show(void) { max_output_show(); }
+
 void pro_display_power(bool on)
 {
     max_output_power(on);
-    if (on) max_output_paint(s_glass, 0, 0, PRO_DISPLAY_W, PRO_DISPLAY_H);
+    if (on) {
+        max_output_paint(s_glass, 0, 0, PRO_DISPLAY_W, PRO_DISPLAY_H);
+        max_output_show();   // the whole glass is a frame of its own: no pro_frame_present follows it
+    }
 }

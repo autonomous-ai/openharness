@@ -5,6 +5,7 @@
 #include <assert.h>
 #include <stdlib.h>
 
+#include "max_frame.h"
 #include "max_panel.h"
 #include "max_touch.h"
 #include "max_turn.h"
@@ -99,6 +100,10 @@ void pro_panel_wait(void)
     }
     s_in_flight = false;
 }
+
+// One framebuffer, which the panel scans all the time: each band is on the glass once its copy lands, so a whole frame
+// has nothing left to show.
+void max_frame_show(void) {}
 
 /* Polled, as on the Pro. After this many failed reads in a row the controller is closed and reopened: a wedged one
  * does not recover by itself. */

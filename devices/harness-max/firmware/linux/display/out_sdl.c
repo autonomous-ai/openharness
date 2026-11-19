@@ -2,7 +2,7 @@
 // logical size), and maps the mouse back, so the window can be any size and keep the glass's shape.
 //
 // macOS wants the window, the renderer and the events on the main thread: the render task only copies its pixels in
-// and wakes the main loop, which uploads them and presents.
+// and, once they make a whole frame, wakes the main loop, which uploads them and presents.
 #include "max_output.h"
 
 #include <SDL.h>
@@ -77,6 +77,10 @@ void max_output_paint(const uint16_t *glass, int x, int y, int w, int h)
     if (SDL_RectEmpty(&s_dirty)) s_dirty = rect;
     else SDL_UnionRect(&s_dirty, &rect, &s_dirty);
     SDL_UnlockMutex(s_mu);
+}
+
+void max_output_show(void)
+{
     if (!atomic_exchange(&s_wake_queued, true)) {
         SDL_Event wake = {.type = s_wake};
         SDL_PushEvent(&wake);   // thread-safe: wakes the main loop

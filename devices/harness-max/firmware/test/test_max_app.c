@@ -191,11 +191,25 @@ void pro_touch_stats(pro_touch_stats_t *out) { memset(out, 0, sizeof *out); }
 void pro_display_power(bool on) { (void)on; }
 void pro_display_set_brightness(uint8_t level) { (void)level; }
 void pro_frame_init(void) {}
+// The frames the render task paints, each reporting PUSHED_PX pixels pushed, and the ones it shows. OWED: a frame
+// pushed pixels and is not shown yet.
+static uint32_t PUSHED_PX;
+static int PRESENTS, SHOWS;
+static bool OWED;
 uint32_t pro_frame_present(const ht_scene_t *prev, const ht_scene_t *next, uint32_t *pushed_px)
 {
     (void)prev; (void)next;
-    *pushed_px = 0;
+    CHECK(!OWED);   // the last frame was shown before the next is painted
+    PRESENTS++;
+    OWED = PUSHED_PX != 0;
+    *pushed_px = PUSHED_PX;
     return 0;
+}
+void max_frame_show(void)
+{
+    CHECK(LOCK_DEPTH == 0 && OWED);
+    OWED = false;
+    SHOWS++;
 }
 uint8_t config_load_brightness(void) { return 255; }
 bool fw_was_updated(char *version, size_t cap) { (void)version; (void)cap; return false; }
@@ -708,6 +722,24 @@ static void test_new_harness(void)
     CHECK(LOCK_DEPTH == 0);
 }
 
+// A frame that pushed pixels is shown once, right after it is painted: a double-buffered output (the Orange Pi's)
+// flips to it then. A frame that pushed nothing (the scene did not change) shows nothing.
+static void test_a_painted_frame_is_shown(void)
+{
+    fresh();
+    PUSHED_PX = 1920 * 24;
+    PRESENTS = SHOWS = 0;
+    pro_app_toast("Sent to auth-refactor");   // a change to the picture
+    render_pass();
+    CHECK(PRESENTS == 1 && SHOWS == 1);
+    PUSHED_PX = 0;
+    pro_app_toast("Sent to landing-hero");
+    render_pass();
+    CHECK(PRESENTS == 2 && SHOWS == 1);
+    render_pass();   // nothing new: no frame at all
+    CHECK(PRESENTS == 2 && SHOWS == 1 && !OWED);
+}
+
 // The daemon's toast is the notice line.
 static void test_toast(void)
 {
@@ -739,6 +771,7 @@ int main(void)
     test_plain_answer_and_a_full_port();
     test_new_harness();
     test_toast();
+    test_a_painted_frame_is_shown();
     printf("test_max_app: %d checks passed\n", checks);
     return 0;
 }

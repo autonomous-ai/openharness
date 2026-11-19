@@ -108,6 +108,37 @@ void glass_fit_paint(const glass_fit_t *f, const uint16_t *glass, glass_fit_rect
     }
 }
 
+static bool rect_empty(glass_fit_rect_t r) { return r.w <= 0 || r.h <= 0; }
+static int64_t area(glass_fit_rect_t r) { return (int64_t)r.w * r.h; }
+
+glass_fit_rect_t glass_fit_union(glass_fit_rect_t a, glass_fit_rect_t b)
+{
+    if (rect_empty(a)) return rect_empty(b) ? (glass_fit_rect_t){0, 0, 0, 0} : b;
+    if (rect_empty(b)) return a;
+    const int x0 = a.x < b.x ? a.x : b.x, y0 = a.y < b.y ? a.y : b.y;
+    const int x1 = a.x + a.w > b.x + b.w ? a.x + a.w : b.x + b.w, y1 = a.y + a.h > b.y + b.h ? a.y + a.h : b.y + b.h;
+    return (glass_fit_rect_t){x0, y0, x1 - x0, y1 - y0};
+}
+
+void glass_fit_flip_add(glass_fit_flip_t *f, glass_fit_rect_t r) { f->pending = glass_fit_union(f->pending, r); }
+
+int glass_fit_flip(glass_fit_flip_t *f, glass_fit_rect_t out[2])
+{
+    const glass_fit_rect_t now = f->pending, last = f->last;
+    if (rect_empty(now)) return 0;
+    f->last = now;
+    f->pending = (glass_fit_rect_t){0, 0, 0, 0};
+    // One paint of the union when it is no more pixels than the two apart (an overlap is painted twice either way).
+    const glass_fit_rect_t both = glass_fit_union(now, last);
+    if (area(both) <= area(now) + (rect_empty(last) ? 0 : area(last))) {
+        out[0] = both;
+        return 1;
+    }
+    out[0] = now;
+    out[1] = last;
+    return 2;
+}
+
 bool glass_fit_touch(const glass_fit_t *f, int ox, int oy, int *gx, int *gy)
 {
     if (ox < 0 || oy < 0 || ox >= f->out_w || oy >= f->out_h) return false;
