@@ -177,8 +177,12 @@ export class ClaudeAppSource implements HostSource {
     return this.rows.find(({ agent }) => agent.id === agentId)
   }
 
+  /** Each listener on its own: one that throws neither keeps the next from hearing nor fails a good read. devices.ts
+   *  runs each of its listeners through its part guard, which says what failed. */
   private emit(): void {
-    for (const listener of [...this.listeners]) listener()
+    for (const listener of [...this.listeners]) {
+      try { listener() } catch { /* said by the listener's own guard */ }
+    }
   }
 
   /** Drops the rows, told once if there were any. The next count is said again, even with as many rows. */
@@ -257,8 +261,8 @@ export class ClaudeAppSource implements HostSource {
     if (this.listing || this.named > 0 || this.again) void this.run()
   }
 
-  /** One pass: what waited, then a read. A store call or a listener that fails ends it with the rows kept; the next
-   *  change runs one. */
+  /** One pass: what waited, then a read. A store call that fails ends it with the rows kept; the next change runs
+   *  one. */
   private async run(): Promise<void> {
     const pass: Pass = { under: true, tooSoon: true, cancel: () => {} }
     this.pass = pass

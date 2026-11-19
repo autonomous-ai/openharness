@@ -185,8 +185,12 @@ export class CodexAppSource implements HostSource {
     return this.rows.find(({ agent }) => agent.id === agentId)
   }
 
+  /** Each listener on its own: one that throws neither keeps the next from hearing nor fails a good read. devices.ts
+   *  runs each of its listeners through its part guard, which says what failed. */
   private emit(): void {
-    for (const listener of [...this.listeners]) listener()
+    for (const listener of [...this.listeners]) {
+      try { listener() } catch { /* said by the listener's own guard */ }
+    }
   }
 
   private wake(): void {
@@ -203,7 +207,7 @@ export class CodexAppSource implements HostSource {
     if (this.again) void this.run()
   }
 
-  /** One read. A failed one, or a listener that throws, keeps the rows and rank as they were: the next change reads. */
+  /** One read. A failed one keeps the rows and rank as they were: the next change reads. */
   private async run(): Promise<void> {
     const pass: Pass = { under: true, tooSoon: true, cancel: () => {} }
     this.pass = pass
