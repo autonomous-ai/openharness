@@ -855,11 +855,21 @@ describe('orcaRemove', () => {
     orca.answer('status', status(null, false))
     expect(await orcaRemove(unreachable.deps)).toStrictEqual({ orca: 'off', error: 'not-running' })
     expect(unreachable.calls()).toEqual(['status --json'])
-    const unread = setup()
+  })
+
+  it('an answer after a status that says Orca is reachable that cannot be read: off · failed, never read as Orca closed', async () => {
+    // The devices' pass keeps an owed removal with no hour only for an Orca not running: read so, a running Orca whose
+    // answers cannot be read would be asked again at each settle, unseen.
+    const unreadList = setup()
     holds()
     orca.answer('plugin list', '{"ok": tr')
-    expect(await orcaRemove(unread.deps)).toStrictEqual({ orca: 'off', error: 'not-running' })
-    expect(unread.calls()).toEqual(reads(unread.folder))
+    expect(await orcaRemove(unreadList.deps)).toStrictEqual({ orca: 'off', error: 'failed' })
+    expect(unreadList.calls()).toEqual(reads(unreadList.folder))
+    const badKey = setup()
+    holds()
+    orca.answer('plugin inspect', inspect('Not A Key'))
+    expect(await orcaRemove(badKey.deps)).toStrictEqual({ orca: 'off', error: 'failed' })
+    expect(badKey.calls()).toEqual(['status --json', `plugin inspect ${badKey.folder} --json`])
   })
 
   it('no Orca to ask: off, nothing but status', async () => {
