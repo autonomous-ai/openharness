@@ -198,6 +198,14 @@ static void open_done(void)
     show_agent(id);
 }
 
+// An app listed besides the one shown, to pick on Apps (V3 hasOtherApps).
+static bool other_apps(void)
+{
+    for (int i = 0; max_m.apps_known && i < max_m.app_count; i++)
+        if (strcmp(max_m.apps[i].id, max_m.shown)) return true;
+    return false;
+}
+
 // A button of a page, the toast, the card or the form. A page's buttons act only while that page is up (a tap can land
 // between a change and the redraw). The card must still be the one the person saw: the same question, at the same
 // step, in the same phase; the form's page the one drawn.
@@ -214,13 +222,22 @@ static max_act_t press(const max_hit_t *h, uint32_t now_ms)
         break;
     case MAX_HIT_APP: {   // the daemon turns to it, and its next `apps` names it shown
         if (view != MAX_VIEW_APPS || h->arg < 0 || h->arg >= max_m.app_count) break;
+        if (!max_m.apps[h->arg].count) {   // listed with no agents (the demo lists every app): Apps stays, and says why
+            static char text[MAX_NOTICE_BYTES];   // the touch task's 1 KB frame
+            snprintf(text, sizeof text, "No agents in %s", max_m.apps[h->arg].name);
+            max_notice_set(text, now_ms);
+            max_m.dirty = true;
+            break;
+        }
         max_act_t act = act_for(MAX_ACT_PICK, NULL);
         max_copy(act.app, sizeof act.app, max_m.apps[h->arg].id);
         go(MAX_VIEW_OVERVIEW);
         return act;
     }
-    case MAX_HIT_CLOSE:
-    case MAX_HIT_WAKE: go(MAX_VIEW_OVERVIEW); break;
+    case MAX_HIT_CLOSE: go(MAX_VIEW_OVERVIEW); break;
+    case MAX_HIT_WAKE:   // the demo's first Ambient shows every app, while there is another to pick
+        go(max_m.wake_to_apps && other_apps() ? MAX_VIEW_APPS : MAX_VIEW_OVERVIEW);
+        break;
     case MAX_HIT_AGENT_X:   // the row comes back
         if (view == MAX_VIEW_AGENT) go(MAX_VIEW_OVERVIEW);
         break;

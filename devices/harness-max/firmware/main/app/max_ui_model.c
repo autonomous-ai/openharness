@@ -135,6 +135,7 @@ void max_fmt_elapsed(char *out, size_t cap, int64_t secs)
 bool max_show(max_view_t view)
 {
     if (max_m.view == view) return false;
+    if (view != MAX_VIEW_AMBIENT) max_m.wake_to_apps = false;   // only the Ambient it was set for
     const max_view_t was = max_m.view;
     if (was == MAX_VIEW_INBOX)   // seen: the bell's count goes
         for (int i = 0; i < max_m.inbox_count; i++) max_m.inbox[i].unread = false;
@@ -249,7 +250,7 @@ void max_attend(max_agent_t *a, max_attn_t why, uint32_t now_ms)
 {
     max_m.idle_from = now_ms;
     inbox_add(a, why, now_ms);
-    if (why == MAX_ATTN_DONE) {   // never the glass (the owner's call, 18 Nov): the note over whatever is up, the newest
+    if (why == MAX_ATTN_DONE) {   // never the glass (the owner's call, 18 Nov): the newest note, over whatever is up
         max_copy(max_m.done_id, sizeof max_m.done_id, a->id);
         max_m.done_from = now_ms;
         return;
@@ -413,6 +414,10 @@ bool max_ui_unsent(const max_out_t *o, uint32_t now_ms)
 
 // ---- feeds ----
 
+// The program's mode, set once before the app starts: max_ui_reset keeps it.
+static bool s_demo;
+void max_ui_demo(bool on) { s_demo = on; }
+
 bool max_ui_link(bool up, const char *machine, uint32_t now_ms)
 {
     (void)now_ms;
@@ -420,6 +425,7 @@ bool max_ui_link(bool up, const char *machine, uint32_t now_ms)
         char name[CABLE_NAME_MAX];
         max_copy_label(name, sizeof name, machine);
         const bool changed = !max_m.link || strcmp(max_m.computer, name);
+        if (!max_m.link && s_demo) max_m.rest_owed = true;   // the demo opens on Ambient (max_ui_agents)
         max_m.link = true;
         memcpy(max_m.computer, name, sizeof name);
         return changed;
@@ -434,6 +440,7 @@ bool max_ui_link(bool up, const char *machine, uint32_t now_ms)
     max_m.count = max_m.machine_count = 0;
     max_m.selected[0] = max_m.attn_id[0] = max_m.toast_id[0] = max_m.done_id[0] = 0;
     max_m.row_first = 0;
+    max_m.rest_owed = max_m.wake_to_apps = false;
     memset(max_m.asks, 0, sizeof max_m.asks);
     max_form_reset();
     max_m.out_count = 0;
@@ -474,11 +481,19 @@ bool max_ui_agents(const pro_agent_row_t *rows, int n, uint32_t now_ms)
     bool changed = k != old || memcmp(max_m.agents, s_old, (size_t)k * sizeof s_old[0]);
     if (!max_find(max_m.selected)) max_m.selected[0] = 0;   // its page goes (settle)
     if (max_m.row_first > max_row_last()) max_m.row_first = max_row_last();
+    // The demo's first ring after the link came up: Ambient at once when nothing works or waits, not a quiet minute
+    // later, and its tap shows every app (V3 restNow(wakeToApps)).
+    const bool rest = max_m.rest_owed && !busy() && max_m.talk == MAX_TALK_IDLE && !max_form_open();
+    max_m.rest_owed = false;
     if (!k && old) {   // nobody left: Ambient
         changed |= max_show(MAX_VIEW_AMBIENT);
     } else if (k && !old) {   // the first agents: Overview, and Ambient waits from now
         max_m.idle_from = now_ms;
-        if (max_m.view == MAX_VIEW_AMBIENT) changed |= max_show(MAX_VIEW_OVERVIEW);
+        if (max_m.view == MAX_VIEW_AMBIENT && !rest) changed |= max_show(MAX_VIEW_OVERVIEW);
+    }
+    if (rest) {
+        changed |= max_show(MAX_VIEW_AMBIENT);
+        max_m.wake_to_apps = true;
     }
     return settle(now_ms) || changed;
 }

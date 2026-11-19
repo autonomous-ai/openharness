@@ -19,6 +19,10 @@
 
 // A fresh model: link down (Ambient says so), no agents, an empty Inbox, no notice, no update.
 void max_ui_reset(void);
+// The scripted demo daemon drives the bar (linux/main.c --demo): each time the link comes up and its first ring has
+// nothing at work or waiting, Ambient comes at once, and its first tap opens Apps (V3 restNow(wakeToApps)). The
+// program's mode: set before the app starts, kept over max_ui_reset.
+void max_ui_demo(bool on);
 
 // ---- feeds (the cable_link task, through max_app.c) ----
 bool max_ui_link(bool up, const char *machine, uint32_t now_ms);

@@ -265,7 +265,7 @@ static void test_inbox(void)
 }
 
 // The app column opens Apps when the daemon lists them; a card picks its app (the daemon's next `apps` names it shown),
-// "+ New" names a form, Close goes back.
+// unless it lists no agents: then Apps stays and says why (V3 pickApp). "+ New" names a form, Close goes back.
 static void test_apps(void)
 {
     linked(ABCDE, 3);
@@ -273,13 +273,15 @@ static void test_apps(void)
     overview_drawn();
     const max_hit_t *column = plant(MAX_HIT_APPS, 0);
     CHECK(tap_on(column).kind == MAX_ACT_NONE && max_m.view == MAX_VIEW_OVERVIEW);   // no `apps`: no Apps page
-    const pro_app_row_t apps[] = {{"orca", "Orca", 3, 1}, {"vscode", "VS Code", 2, 0}};
-    max_ui_apps("orca", apps, 2, 0);
+    const pro_app_row_t apps[] = {{"orca", "Orca", 3, 1}, {"vscode", "VS Code", 2, 0}, {"ghostty", "Ghostty", 0, 0}};
+    max_ui_apps("orca", apps, 3, 0);
     CHECK(tap_on(column).kind == MAX_ACT_NONE && max_m.view == MAX_VIEW_APPS);
     drawn_page(MAX_VIEW_APPS);
     const max_hit_t *close = plant(MAX_HIT_CLOSE, 0), *orca = plant(MAX_HIT_APP, 0), *vscode = plant(MAX_HIT_APP, 1),
-                    *past = plant(MAX_HIT_APP, 2), *add = plant(MAX_HIT_NEW, 0);
+                    *ghostty = plant(MAX_HIT_APP, 2), *past = plant(MAX_HIT_APP, 3), *add = plant(MAX_HIT_NEW, 0);
     CHECK(tap_on(past).kind == MAX_ACT_NONE && max_m.view == MAX_VIEW_APPS);
+    no_notice();
+    CHECK(tap_on(ghostty).kind == MAX_ACT_NONE && max_m.view == MAX_VIEW_APPS && noticed("No agents in Ghostty"));
     max_act_t act = tap_on(vscode);
     CHECK(act.kind == MAX_ACT_PICK && !strcmp(act.app, "vscode") && max_m.view == MAX_VIEW_OVERVIEW);
     CHECK(!strcmp(max_m.shown, "orca"));   // until the daemon says otherwise
@@ -292,7 +294,8 @@ static void test_apps(void)
     CHECK(tap_on(close).kind == MAX_ACT_NONE && max_m.view == MAX_VIEW_OVERVIEW);
 }
 
-// Ambient: a tap anywhere is Overview, and a person at the bar.
+// Ambient: a tap anywhere is Overview, and a person at the bar. The demo's first Ambient (max_ui_demo, V3
+// restNow(wakeToApps)) opens Apps instead, once, while there is another app to pick; with none, Overview.
 static void test_ambient_wakes(void)
 {
     linked(ABCDE, 3);
@@ -300,6 +303,32 @@ static void test_ambient_wakes(void)
     drawn_page(MAX_VIEW_AMBIENT);
     plant_page(MAX_HIT_WAKE);
     CHECK(tap_at(10, 10, 5000).kind == MAX_ACT_NONE && max_m.view == MAX_VIEW_OVERVIEW && max_m.idle_from == 5090);
+    // The demo: the link up, its first ring all quiet: Ambient at once, whose tap opens Apps.
+    max_ui_demo(true);
+    max_ui_reset();
+    max_ui_link(true, "MacBook Pro", 0);
+    const pro_app_row_t apps[] = {{"harness", "Harness", 3, 0}, {"orca", "Orca", 2, 0}};
+    max_ui_apps("orca", apps, 2, 0);
+    roster(ABCDE, 3);
+    CHECK(max_m.view == MAX_VIEW_AMBIENT);
+    drawn_page(MAX_VIEW_AMBIENT);
+    plant_page(MAX_HIT_WAKE);
+    CHECK(tap_page().kind == MAX_ACT_NONE && max_m.view == MAX_VIEW_APPS);
+    // The next Ambient wakes to Overview, as always.
+    max_show(MAX_VIEW_AMBIENT);
+    drawn_page(MAX_VIEW_AMBIENT);
+    plant_page(MAX_HIT_WAKE);
+    CHECK(tap_page().kind == MAX_ACT_NONE && max_m.view == MAX_VIEW_OVERVIEW);
+    // Only the shown app listed: Overview.
+    max_ui_link(false, NULL, 0);
+    max_ui_link(true, "MacBook Pro", 0);
+    max_ui_apps("orca", apps + 1, 1, 0);
+    roster(ABCDE, 3);
+    CHECK(max_m.view == MAX_VIEW_AMBIENT);
+    drawn_page(MAX_VIEW_AMBIENT);
+    plant_page(MAX_HIT_WAKE);
+    CHECK(tap_page().kind == MAX_ACT_NONE && max_m.view == MAX_VIEW_OVERVIEW);
+    max_ui_demo(false);
 }
 
 // ---- the open agent ----

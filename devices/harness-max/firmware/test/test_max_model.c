@@ -605,6 +605,46 @@ static void test_ambient(void)
     CHECK(max_ui_link(false, NULL, t) && max_m.view == MAX_VIEW_AMBIENT);
 }
 
+// The demo (max_ui_demo, kept over max_ui_reset as the program's mode): when the link comes up and its first ring has
+// nothing at work or waiting, Ambient at once rather than a quiet minute later, and its first tap opens Apps (V3
+// restNow(wakeToApps)). Leaving that Ambient any other way forgets it, a turn that starts at once too; without the
+// demo, the first ring is Overview as always.
+static void test_demo_rests_at_once(void)
+{
+    max_ui_demo(true);
+    max_ui_reset();
+    max_ui_link(true, "MacBook Pro", 0);
+    CHECK(max_m.view == MAX_VIEW_AMBIENT);
+    roster(ABC, 3);
+    CHECK(max_m.view == MAX_VIEW_AMBIENT && max_m.wake_to_apps);
+    // Only the first ring after the link came up.
+    max_show(MAX_VIEW_OVERVIEW);
+    CHECK(!max_m.wake_to_apps);
+    roster(ABCDE, 5);
+    CHECK(max_m.view == MAX_VIEW_OVERVIEW);
+    // Left another way (a turn that starts): forgotten.
+    max_ui_link(false, NULL, 1000);
+    max_ui_link(true, "MacBook Pro", 1000);
+    roster(ABC, 3);
+    CHECK(max_m.view == MAX_VIEW_AMBIENT && max_m.wake_to_apps);
+    max_ui_turn("a", "started", "", 0, 2000);
+    CHECK(max_m.view == MAX_VIEW_OVERVIEW && !max_m.wake_to_apps);
+    max_show(MAX_VIEW_AMBIENT);
+    CHECK(!max_m.wake_to_apps);
+    // The link goes with it.
+    max_ui_link(false, NULL, 3000);
+    max_ui_link(true, "MacBook Pro", 3000);
+    roster(ABC, 3);
+    max_ui_link(false, NULL, 3000);
+    CHECK(!max_m.wake_to_apps);
+    // Not the demo: the first ring is Overview.
+    max_ui_demo(false);
+    max_ui_reset();
+    max_ui_link(true, "MacBook Pro", 0);
+    roster(ABC, 3);
+    CHECK(max_m.view == MAX_VIEW_OVERVIEW && !max_m.wake_to_apps);
+}
+
 static bool ends_cut(const char *s) { const size_t n = strlen(s); return n >= 3 && !strcmp(s + n - 3, "\xe2\x80\xa6"); }
 
 static void test_caps(void)
@@ -791,6 +831,7 @@ int main(void)
     test_done_note();
     test_inbox();
     test_ambient();
+    test_demo_rests_at_once();
     test_caps();
     test_no_talk_while_an_answer_waits();
     test_agent_page_clock();

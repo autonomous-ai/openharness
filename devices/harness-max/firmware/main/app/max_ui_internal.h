@@ -230,6 +230,8 @@ typedef struct {
     int app_count;
     char shown[PRO_APP_ID_BYTES];    // the app whose agents the ring holds
     bool apps_known;                 // an `apps` frame came: else the app column names the computer, and no Apps page
+    bool rest_owed;                  // the demo's link came up: its first ring rests at once (max_ui_demo)
+    bool wake_to_apps;               // this Ambient's tap opens Apps (the demo's first); forgotten when it goes
     max_inbox_t inbox[MAX_INBOX];    // newest first
     int inbox_count;
     int row_first;                   // App Detail's row: the first cell on the glass while no agent is open

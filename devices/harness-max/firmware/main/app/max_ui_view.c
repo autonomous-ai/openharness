@@ -1,8 +1,8 @@
 // The screen (max_ui.h), 1920 x 480 (or 415): one of Demo V2's pages over the whole glass (max_m.view), in the dial's
 // look; New Harness over it while it is up, the update screen instead of it. Over the page the toast of a question that
 // came while a person talks, a finished turn's note, and the notice pill. Here too what the page files share: text,
-// shapes, icons, buttons and what moves by the clock. Inter faces (gen_fonts.py ph_*): at the Max's 225 ppi they come out a little larger than
-// on the Pro's 258.
+// shapes, icons, buttons and what moves by the clock. Inter faces (gen_fonts.py ph_*): at the Max's 225 ppi they come
+// out a little larger than on the Pro's 258.
 #include <ctype.h>
 #include <stdio.h>
 #include <string.h>
