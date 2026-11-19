@@ -1,8 +1,34 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { adoptComputerId, readOrMintComputerId } from './computerIdentity.js'
+
+/** A second command that runs while the first is publishing its new id: `during`, run once, at the moment it lands. */
+const race = vi.hoisted(() => {
+  const state = { file: '', during: undefined as (() => void) | undefined }
+  const take = () => { const during = state.during; state.during = undefined; return during }
+  const wrap = (actual: typeof import('fs')) => ({
+    ...actual,
+    // A `wx` create makes the file empty, then fills it: another command reading in between sees a blank file.
+    writeFileSync: (...args: Parameters<typeof actual.writeFileSync>) => {
+      const [target, data, options] = args
+      const during = target === state.file && (options as { flag?: string } | undefined)?.flag === 'wx' ? take() : undefined
+      if (!during) return actual.writeFileSync(...args)
+      actual.closeSync(actual.openSync(state.file, 'wx', 0o600))
+      during()
+      actual.writeFileSync(state.file, data)
+    },
+    // An exclusive publish lands whole, by a link.
+    linkSync: (...args: Parameters<typeof actual.linkSync>) => {
+      if (args[1] === state.file) take()?.()
+      return actual.linkSync(...args)
+    },
+  })
+  return { state, wrap }
+})
+vi.mock('fs', async (original) => race.wrap(await original<typeof import('fs')>()))
+vi.mock('node:fs', async (original) => race.wrap(await original<typeof import('fs')>()))
 
 // The invariant under test is one sentence: a computer that already has an id must never get a new one.
 // Every case below is a path that used to be able to break it — see the file's docstring for why that
@@ -28,7 +54,10 @@ function seed(path: string, value: string): void {
 }
 
 beforeEach(() => { home = mkdtempSync(join(tmpdir(), 'computer-identity-')) })
-afterEach(() => { rmSync(home, { recursive: true, force: true }) })
+afterEach(() => {
+  race.state.during = undefined
+  rmSync(home, { recursive: true, force: true })
+})
 
 describe('readOrMintComputerId', () => {
   it('mints once, then returns the same value forever', () => {
@@ -76,6 +105,25 @@ describe('readOrMintComputerId', () => {
     expect(id).toMatch(/^[0-9a-f-]{36}$/)
     expect(readFileSync(canonical(), 'utf-8').trim()).toBe(id)
     expect(readOrMintComputerId(canonical())).toBe(id)
+  })
+
+  it('a blank id file is set aside and a new id minted', () => {
+    seed(canonical(), '')
+    const id = readOrMintComputerId(canonical())
+    expect(id).toMatch(/^[0-9a-f-]{36}$/)
+    expect(existsSync(`${canonical()}.unreadable`)).toBe(true)
+    expect(readFileSync(canonical(), 'utf-8')).toBe(`${id}\n`)
+  })
+
+  it('two commands minting at once agree', () => {
+    mkdirSync(root(), { recursive: true })
+    race.state.file = canonical()
+    let second = ''
+    race.state.during = () => { second = readOrMintComputerId(canonical()) }
+    const first = readOrMintComputerId(canonical())
+    expect(race.state.during).toBeUndefined()
+    expect(second).toBe(first)
+    expect(readFileSync(canonical(), 'utf-8')).toBe(`${first}\n`)
   })
 })
 

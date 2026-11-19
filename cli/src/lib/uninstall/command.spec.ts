@@ -1,12 +1,27 @@
 import { existsSync, linkSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { harnessPath } from '../../config/harnessHome.js'
 import { BRIDGE_FILE, makeRealFolders, readBridge, removeBridge, writeBridge, type BridgeRecord } from '../../homeMove/bridge.js'
 import { moveLockPath } from '../../homeMove/lock.js'
 import { removePath } from '../removePath.js'
 import { labelHookRemoval, lockHolder, UNINSTALL_USAGE, uninstallCommand, UninstallLockBusy, type UninstallDeps } from './command.js'
 import { checkRemovable, listEntries, RemovalRefused, removeNow } from './removal.js'
+
+/** A write whose text matches reaches the disk half way, then the disk is full. */
+const tear = vi.hoisted(() => ({ text: undefined as RegExp | undefined }))
+vi.mock('node:fs', async (original) => {
+  const actual = await original<typeof import('node:fs')>()
+  return { ...actual, writeFileSync: (...args: Parameters<typeof actual.writeFileSync>) => {
+    const [target, data] = args
+    if (!tear.text || typeof data !== 'string' || !tear.text.test(data)) return actual.writeFileSync(...args)
+    const half = data.slice(0, data.length >> 1)
+    if (typeof target === 'number') actual.writeSync(target, half)
+    else actual.writeFileSync(target, half)
+    throw Object.assign(new Error('ENOSPC: fixture, write'), { code: 'ENOSPC' })
+  } }
+})
 
 function fake(overrides: Partial<UninstallDeps> = {}) {
   const calls: string[] = []
@@ -670,6 +685,31 @@ describe('harness uninstall on Linux\'s two roots', () => {
         expect(t.out, `${name}, --keep-data ${keepData}`).toEqual(lines(keepData))
         expect(t.err, name).toEqual([])
       }
+    }
+  })
+})
+
+describe('the uninstall marker', () => {
+  it('the marker is written whole', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'uninstall-marker-'))
+    vi.stubEnv('HOME', home)
+    vi.stubEnv('USERPROFILE', home)
+    try {
+      const marker = harnessPath('uninstalling', home)
+      mkdirSync(dirname(marker), { recursive: true })
+      writeFileSync(marker, '1700000000\n')
+      const { uninstallDeps } = await import('./deps.js')
+      const deps = await uninstallDeps({ tildify: (path) => path, ask: async () => 'n' })
+      tear.text = /^\d+\n$/
+      // Best effort: a marker that cannot be written does not stop the uninstall.
+      expect(() => deps.markUninstalling()).not.toThrow()
+      // The desktop app reads its time: the old one whole, never half a number.
+      expect(readFileSync(marker, 'utf8')).toBe('1700000000\n')
+      expect(readdirSync(dirname(marker))).toEqual(['uninstalling'])
+    } finally {
+      tear.text = undefined
+      vi.unstubAllEnvs()
+      rmSync(home, { recursive: true, force: true })
     }
   })
 })

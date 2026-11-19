@@ -5,6 +5,20 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSyn
 import { dirname, join } from 'node:path'
 import { tmpdir } from 'node:os'
 
+/** A write of exactly `text` reaches the disk half way, then the disk is full. */
+const tear = vi.hoisted(() => ({ text: undefined as string | undefined }))
+vi.mock('node:fs', async (original) => {
+  const actual = await original<typeof import('node:fs')>()
+  return { ...actual, writeFileSync: (...args: Parameters<typeof actual.writeFileSync>) => {
+    const [target, data] = args
+    if (tear.text === undefined || data !== tear.text) return actual.writeFileSync(...args)
+    const half = tear.text.slice(0, tear.text.length >> 1)
+    if (typeof target === 'number') actual.writeSync(target, half)
+    else actual.writeFileSync(target, half)
+    throw Object.assign(new Error('ENOSPC: fixture, write'), { code: 'ENOSPC' })
+  } }
+})
+
 let root = ''
 let runtimeDir = ''
 let binDir = ''
@@ -398,6 +412,7 @@ describe('ensureManagedGrid', () => {
   })
 
   afterEach(() => {
+    tear.text = undefined
     vi.unstubAllGlobals()
     // 0555 directories cannot be emptied as they are; give them back before the sweep.
     for (const entry of readdirSync(runtimeDir)) {
@@ -454,6 +469,20 @@ describe('ensureManagedGrid', () => {
     // deleting it would take `grid` away from an agent mid-conversation. One version back stays.
     expect(existsSync(previous)).toBe(true)
     expect(existsSync(join(runtimeDir, `grid-0.3.45-${key}`))).toBe(false)
+  })
+
+  it('a pointer write that fails leaves the old pointer', async () => {
+    const previous = installedGrid('0.3.46', key, true)
+    const { bytes, root: archiveRoot } = buildArchive('0.3.47', key, 'grid')
+    stubFetch(manifestFor('grid', key, '0.3.47', bytes, archiveRoot), bytes)
+    tear.text = `${join(runtimeDir, `grid-0.3.47-${key}`, 'bin', 'grid')}\n`
+
+    const { ensureManagedGrid } = await load()
+
+    expect(await ensureManagedGrid()).toBe(previous)
+    // Desktop Harness and the hook installer run what it names: never half a path.
+    expect(readFileSync(join(runtimeDir, 'current-grid'), 'utf8')).toBe(`${previous}\n`)
+    expect(readdirSync(runtimeDir).filter((n) => n.endsWith('.tmp'))).toEqual([])
   })
 
   it('tries a pin that does not run on this computer ONCE, and remembers', async () => {
