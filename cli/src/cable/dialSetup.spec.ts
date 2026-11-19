@@ -271,6 +271,26 @@ describe('createDialSetup', () => {
     expect(readSetup(r.dataDir)).toMatchObject({ vscode: '0.6.60', cursor: '0.6.61' })
   })
 
+  it('Orca\'s versions pass through the dial setup\'s record', async () => {
+    const r = rig()
+    expect(r.setup.orca()).toBeUndefined()
+    await r.setup.attached()
+    expect(r.setup.orca()).toEqual({ dial: true })
+    expect(r.setup.recordCursor('0.6.61')).toBe(true)
+
+    expect(r.setup.recordOrca('0.6.70')).toBe(true)
+    expect(r.setup.recordOrcaHeld('0.6.71')).toBe(true)
+
+    expect(r.setup.orca()).toEqual({ dial: true, version: '0.6.70', held: '0.6.71' })
+    expect(r.setup.cursor()).toEqual({ dial: true, version: '0.6.61' })
+    expect(readSetup(r.dataDir)).toMatchObject({ dial: true, plugin: '0.6.59', cursor: '0.6.61', orca: '0.6.70', orcaHeld: '0.6.71' })
+    // A version a read would drop is not saved, and the ones before stay.
+    expect(r.setup.recordOrca('0.6.72 beta')).toBe(false)
+    expect(r.setup.recordOrcaHeld('0.6.72 beta')).toBe(false)
+    expect(r.setup.orca()).toEqual({ dial: true, version: '0.6.70', held: '0.6.71' })
+    expect(readSetup(r.dataDir)).toMatchObject({ orca: '0.6.70', orcaHeld: '0.6.71' })
+  })
+
   it('a record that could not be read leaves the VS Code extension\'s part not known', async () => {
     const r = rig()
     const file = join(r.dataDir, DIAL_SETUP_FILE)

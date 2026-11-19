@@ -155,6 +155,25 @@ describe('what disable removed', () => {
     expect(writeRemoved(dataDir, 'cursor', true, ['/a/skills'])).toBeUndefined()
     expect(file()).toEqual({ removed: { claude: true, cursor: true }, homes: { claude: ['/b/skills'], codex: [] } })
   })
+
+  it('removed.orca: only true is a removal; saved and cleared beside the editors\', and every write keeps orcaConnected', () => {
+    const dataDir = aDataDir()
+    const file = (): unknown => JSON.parse(readFileSync(join(dataDir, DIAL_SKILL_FILE), 'utf8'))
+    writeFileSync(join(dataDir, DIAL_SKILL_FILE), '{"removed":{"orca":1},"orcaConnected":true}')
+    expect(readRemoved(dataDir)).toEqual({})
+
+    // Alone, it still keeps removed in the file: lost, the devices would install the plugin again.
+    expect(writeRemoved(dataDir, 'orca', true)).toBeUndefined()
+    expect(file()).toEqual({ removed: { orca: true }, orcaConnected: true })
+    expect(writeRemoved(dataDir, 'vscode', true)).toBeUndefined()
+    expect(readRemoved(dataDir)).toEqual({ vscode: true, orca: true })
+
+    expect(writeRemoved(dataDir, 'orca', false)).toBeUndefined()
+    expect(file()).toEqual({ removed: { vscode: true }, orcaConnected: true })
+    // Orca's removal writes no skills folder, as an editor's writes none.
+    expect(writeRemoved(dataDir, 'orca', true, ['/a/skills'])).toBeUndefined()
+    expect(file()).toEqual({ removed: { vscode: true, orca: true }, orcaConnected: true })
+  })
 })
 
 describe('the devices\' record of a dial\'s setup', () => {
@@ -226,6 +245,26 @@ describe('the devices\' record of a dial\'s setup', () => {
     for (const cursor of [true, 660, '', '../x', '0.6.60 beta', 'v'.repeat(65)]) {
       writeFileSync(join(dataDir, DIAL_SETUP_FILE), JSON.stringify({ dial: true, cursor }))
       expect(readSetup(dataDir), String(cursor)).toEqual({ dial: true, homes, pluginHomes: [] })
+    }
+  })
+
+  it('dial-setup.json keeps orca and orcaHeld as it keeps cursor: a version, or nothing', () => {
+    const dataDir = aDataDir()
+    const homes = { claude: [], codex: [] }
+    expect(writeSetup(dataDir, { dial: true, cursor: '0.6.60', orca: '0.6.70', orcaHeld: '0.6.71', homes, pluginHomes: [] })).toBeUndefined()
+    expect(readSetup(dataDir)).toEqual({ dial: true, cursor: '0.6.60', orca: '0.6.70', orcaHeld: '0.6.71', homes, pluginHomes: [] })
+    const record = readFileSync(join(dataDir, DIAL_SETUP_FILE), 'utf8')
+    // Saved, the plugin would read as never set up, or never held, and Orca would be run again.
+    for (const field of ['orca', 'orcaHeld'] as const) {
+      expect(writeSetup(dataDir, { dial: true, [field]: '0.6.60 beta', homes, pluginHomes: [] }), field).toBe('EINVAL')
+      expect(readFileSync(join(dataDir, DIAL_SETUP_FILE), 'utf8')).toBe(record)
+    }
+    // A value that is no version drops that field alone.
+    for (const value of [true, 660, '', '../x', '0.6.60 beta', 'v'.repeat(65)]) {
+      writeFileSync(join(dataDir, DIAL_SETUP_FILE), JSON.stringify({ dial: true, orca: value, orcaHeld: '0.6.71' }))
+      expect(readSetup(dataDir), `orca ${String(value)}`).toEqual({ dial: true, orcaHeld: '0.6.71', homes, pluginHomes: [] })
+      writeFileSync(join(dataDir, DIAL_SETUP_FILE), JSON.stringify({ dial: true, orca: '0.6.70', orcaHeld: value }))
+      expect(readSetup(dataDir), `orcaHeld ${String(value)}`).toEqual({ dial: true, orca: '0.6.70', homes, pluginHomes: [] })
     }
   })
 
