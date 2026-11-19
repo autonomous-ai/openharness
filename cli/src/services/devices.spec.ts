@@ -3049,7 +3049,7 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
       port.observed(hook('session-start', { engine: 'codex', sessionId: 'cx-1', hostHints: { TERM_PROGRAM: 'WezTerm', WEZTERM_PANE: '3' } }))
       attach(port)
       expect(await host().openAgent(CODEX)).toBeUndefined()
-      expect(orcaRuns).toEqual([['/opt/orca/bin/orca', ['cli', 'activate-pane', '--pane-id', '3'], 10_000]])
+      expect(orcaRuns).toEqual([['/opt/orca/bin/orca', ['cli', '--no-auto-start', 'activate-pane', '--pane-id', '3'], 10_000]])
       expect(linux.raised).toEqual([{ pid: 4242, app: 'wezterm' }])
     })
 
@@ -4646,7 +4646,7 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     attach(port)
     expect(await host().openAgent(CODEX)).toBeUndefined()
     expect(orcaRuns).toEqual([
-      ['/opt/wezterm/bin/wezterm', ['cli', 'activate-pane', '--pane-id', '7'], 10_000],
+      ['/opt/wezterm/bin/wezterm', ['cli', '--no-auto-start', 'activate-pane', '--pane-id', '7'], 10_000],
       ['/usr/bin/open', ['-b', 'com.github.wez.wezterm'], 10_000],
     ])
   })
