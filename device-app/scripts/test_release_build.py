@@ -1,6 +1,7 @@
-"""release-build.sh and release-check.sh in a temp tree, as on each OS, with a fake uname, cargo and minisign first on
-PATH. The fake cargo records its arguments, names a temp target folder for `metadata` and writes the files a bundle
-would. Nothing is compiled, signed, checked by Apple or Microsoft, or uploaded."""
+"""release-build.sh, release-check.sh and release-setup.sh in a temp tree, as on each OS, with a fake uname, cargo and
+minisign first on PATH, and fakes of the installers release-setup.sh runs. The fake cargo records its arguments, names a
+temp target folder for `metadata` and writes the files a bundle would. Nothing is compiled, signed, checked by Apple or
+Microsoft, installed, downloaded or uploaded."""
 import base64
 import json
 import os
@@ -325,6 +326,98 @@ class ReleaseCheckTests(Fakes):
                 self.assertEqual(result.returncode, 2)
                 self.assertIn("usage: release-check.sh", result.stderr)
                 self.assertEqual(result.stdout, "")
+
+
+# Appends {"cmd", "args"} to FAKE_SETUP_LOG.
+RECORD = r'''#!/usr/bin/env python3
+import json, os, sys
+with open(os.environ["FAKE_SETUP_LOG"], "a") as log:
+    log.write(json.dumps({"cmd": os.path.basename(sys.argv[0]), "args": sys.argv[1:]}) + "\n")
+'''
+
+# Records the URL, then writes to -o a file of the asset's layout: minisign's Linux tarball holds
+# minisign-linux/<arch>/minisign.
+CURL = RECORD + r'''
+import io, tarfile
+url, out = sys.argv[-1], sys.argv[sys.argv.index("-o") + 1]
+if url.endswith(".tar.gz"):
+    with tarfile.open(out, "w:gz") as tar:
+        for arch in ("x86_64", "aarch64"):
+            info = tarfile.TarInfo(f"minisign-linux/{arch}/minisign")
+            info.size, info.mode = 2, 0o755
+            tar.addfile(info, io.BytesIO(b"#!"))
+else:
+    open(out, "w").write("PK")
+'''
+
+# Answers FAKE_ASSET_SHA256 as the hash of what it reads. Git Bash's sha256sum marks its input binary: "<hash> *-".
+SHA256SUM = r'''#!/usr/bin/env python3
+import os, sys
+binary = os.environ["FAKE_UNAME_S"].startswith("MINGW")
+print(os.environ["FAKE_ASSET_SHA256"] + (" *" if binary else "  ") + (sys.argv[-1] if sys.argv[1:] else "-"))
+'''
+
+MINISIGN_RELEASE = "https://github.com/jedisct1/minisign/releases/download/0.12/"
+LINUX_MINISIGN = (MINISIGN_RELEASE + "minisign-0.12-linux.tar.gz",
+                  "9a599b48ba6eb7b1e80f12f36b94ceca7c00b7a5173c95c3efc88d9822957e73")
+WINDOWS_MINISIGN = (MINISIGN_RELEASE + "minisign-0.12-win64.zip",
+                    "37b600344e20c19314b2e82813db2bfdcc408b77b876f7727889dbd46d539479")
+
+
+class ReleaseSetupTests(Fakes):
+    def setUp(self):
+        super().setUp()
+        bin_dir = self.root / "bin"
+        for name, body in (("rustup", RECORD), ("npm", RECORD), ("brew", RECORD), ("apt-get", RECORD),
+                           ("pwsh", RECORD), ("curl", CURL), ("sha256sum", SHA256SUM),
+                           ("sudo", '#!/bin/sh\nexec "$@"\n'),
+                           ("cygpath", '#!/bin/sh\nfor last; do :; done\necho "$last"\n')):
+            (bin_dir / name).write_text(body)
+            (bin_dir / name).chmod(0o755)
+        (self.root / "device-app" / "ui").mkdir()
+        self.setup_log, self.github_path = self.root / "setup.jsonl", self.root / "github-path"
+        self.runner_temp = self.root / "runner-temp"
+        self.runner_temp.mkdir()
+
+    def setup(self, os_, sha256):
+        return self.run_script("release-setup.sh", os_, GITHUB_ACTIONS="true", FAKE_SETUP_LOG=str(self.setup_log),
+                               GITHUB_PATH=str(self.github_path), RUNNER_TEMP=str(self.runner_temp),
+                               FAKE_ASSET_SHA256=sha256)
+
+    def calls(self, cmd):
+        lines = self.setup_log.read_text().splitlines() if self.setup_log.exists() else []
+        return [call["args"] for call in map(json.loads, lines) if call["cmd"] == cmd]
+
+    def test_linux_and_windows_install_minisigns_own_pinned_release(self):
+        tools = self.runner_temp / "minisign"
+        for os_, (url, sha256), folder in ((LINUX_X64, LINUX_MINISIGN, "minisign-linux/x86_64"),
+                                           (LINUX_ARM64, LINUX_MINISIGN, "minisign-linux/aarch64"),
+                                           (WINDOWS, WINDOWS_MINISIGN, "minisign-win64/x86_64")):
+            with self.subTest(os=os_):
+                self.setup_log.unlink(missing_ok=True)
+                self.github_path.unlink(missing_ok=True)
+                result = self.setup(os_, sha256)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual([args[-1] for args in self.calls("curl")], [url])
+                # Ubuntu 22.04's apt has no minisign.
+                self.assertFalse([args for args in self.calls("apt-get") if "minisign" in args])
+                self.assertEqual(self.github_path.read_text().splitlines(), [str(tools / folder)])
+                if os_[0] == "Linux":
+                    self.assertTrue((tools / folder / "minisign").is_file())
+
+    def test_a_download_that_is_not_the_pinned_file_stops(self):
+        for os_, asset in ((LINUX_X64, "minisign-0.12-linux.tar.gz"), (WINDOWS, "minisign-0.12-win64.zip")):
+            with self.subTest(os=os_):
+                result = self.setup(os_, "0" * 64)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(f"release-setup: {asset} is not the file pinned here", result.stderr)
+                self.assertFalse(self.github_path.exists())
+
+    def test_macos_installs_minisign_with_brew(self):
+        result = self.setup(MACOS, "0" * 64)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.calls("brew"), [["install", "minisign"]])
+        self.assertEqual(self.calls("curl"), [])
 
 
 if __name__ == "__main__":
