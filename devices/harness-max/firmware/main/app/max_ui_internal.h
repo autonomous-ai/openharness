@@ -451,6 +451,10 @@ uint8_t max_caps_of(const char *letters);
 int32_t max_ease(max_curve_t curve, int32_t t);
 int32_t max_tween_at(const max_tween_t *, uint32_t now_ms);
 bool max_tween_done(const max_tween_t *, uint32_t now_ms);
+// The same on its motion's frames: where it was a whole number of MAX_ROW_FRAME_MS after it started. A moving agent's
+// pet steps by it, so a motion shows the same pets' images whenever its frames come, and max_ui_warm can make them
+// ahead.
+int32_t max_tween_frame(const max_tween_t *, uint32_t now_ms);
 // At rest at v; and an implicit animation to `to`: a new end starts it again from where it is, the same end runs on.
 void max_tween_rest(max_tween_t *, int32_t v);
 void max_tween_to(max_tween_t *, int32_t to, uint32_t ms, max_curve_t curve, uint32_t now_ms);

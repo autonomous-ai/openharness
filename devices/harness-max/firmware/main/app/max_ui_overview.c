@@ -262,11 +262,12 @@ static kind_t kind_of(const item_t *it)
     // Not dimmed, at least a cell wide and its face at its left: as it is. Else cut to its window and dimmed.
     return !it->dim && !it->sl && it->w >= CELL_W ? AS_ON_GLASS : AS_MOVING;
 }
+// Its pet's size and dim (its image's key) by the motion's frames (max_tween_frame), the rest by the clock.
 static item_t item_of(const max_place_t *p, uint32_t now_ms)
 {
     const max_look_t *l = p->look;
-    return (item_t){p->a, p->w, max_tween_at(&l->sl, now_ms), max_tween_at(&l->words, now_ms),
-                    max_tween_at(&l->face, now_ms), max_tween_at(&l->dim, now_ms), max_tween_at(&l->ground, now_ms),
+    return (item_t){p->a, p->w, max_tween_frame(&l->sl, now_ms), max_tween_at(&l->words, now_ms),
+                    max_tween_at(&l->face, now_ms), max_tween_frame(&l->dim, now_ms), max_tween_at(&l->ground, now_ms),
                     max_tween_at(&l->panel, now_ms), l->panel.to == MAX_ONE, false, false, now_ms};
 }
 // How far right of x what is drawn on the glass for it reaches: the open agent's panel is laid out at its full width.

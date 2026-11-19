@@ -67,6 +67,12 @@ int32_t max_tween_at(const max_tween_t *t, uint32_t now_ms)
     const int32_t e = max_ease((max_curve_t)t->curve, (int32_t)((int64_t)gone * Q / t->ms));
     return t->from + (int32_t)(((int64_t)(t->to - t->from) * e + Q / 2) >> 16);
 }
+int32_t max_tween_frame(const max_tween_t *t, uint32_t now_ms)
+{
+    const int32_t gone = (int32_t)(now_ms - t->at);
+    if (gone > 0 && gone < t->ms) now_ms -= (uint32_t)(gone % MAX_ROW_FRAME_MS);
+    return max_tween_at(t, now_ms);
+}
 bool max_tween_done(const max_tween_t *t, uint32_t now_ms)
 {
     return !t->ms || (int32_t)(now_ms - t->at) >= t->ms || t->from == t->to;

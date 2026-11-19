@@ -73,6 +73,14 @@ static void test_curves(void)
     max_tween_t t = {100, 200, 50, 400, MAX_EASE};
     CHECK(max_tween_at(&t, 40) == 100 && max_tween_at(&t, 250) == 100 + (100 * 52559 + 32768) / 65536);
     CHECK(max_tween_at(&t, 450) == 200 && max_tween_done(&t, 450) && !max_tween_done(&t, 449));
+    // On the motion's frames: where it was at the last whole frame since it started, and as the clock has it outside.
+    const max_tween_t u = {0, MAX_ONE, 50, 400, MAX_EASE};
+    const uint32_t f3 = 50 + 3 * MAX_ROW_FRAME_MS;
+    CHECK(max_tween_frame(&u, f3 + 7) == max_tween_at(&u, f3) && max_tween_at(&u, f3) < max_tween_at(&u, f3 + 7));
+    CHECK(max_tween_frame(&u, f3 + MAX_ROW_FRAME_MS) == max_tween_at(&u, f3 + MAX_ROW_FRAME_MS));
+    CHECK(max_tween_frame(&u, 50 + MAX_ROW_FRAME_MS - 1) == 0);
+    CHECK(max_tween_frame(&u, 449) == max_tween_at(&u, 50 + 24 * MAX_ROW_FRAME_MS) && max_tween_frame(&u, 449) < MAX_ONE);
+    CHECK(max_tween_frame(&u, 40) == 0 && max_tween_frame(&u, 450) == MAX_ONE && max_tween_frame(&u, 9000) == MAX_ONE);
 }
 
 // An agent opens: its cell widens over 420 ms as its neighbours narrow (kRowEase), its face fades (250 ms ease), its
