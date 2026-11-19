@@ -71,6 +71,14 @@ describe('a harness as the agent verbs show it', () => {
     expect(forAgent(many).shown[0].name).toBe('held')
   })
 
+  it('lists a starting harness with the working ones, before the idle', () => {
+    const rows = rowsOf([frame('calm'), frame('new', { starting: true, updatedAt: '2026-10-11T09:00:00Z' })],
+      { machineId: 'm', machine: 'mac', caller: null, ledger: ledger(), now: NOW, all: false })
+    expect(rows.map((r) => [r.name, r.state])).toEqual([['new', 'starting'], ['calm', 'idle']])
+    const many = [...Array.from({ length: 20 }, (_, i) => ({ ...rows[1], name: `idle${i}` })), rows[0]]
+    expect(forAgent(many).shown[0].name).toBe('new')
+  })
+
   it('lists a failed launch, then a hold, then a start, over what it shows; a stopped or cloud harness by its own state', () => {
     const failed = { state: 'failed', error: 'FIRST_TASK_NOT_TAKEN', detail: 'OpenClaw did not take the first task. Close it and start it again.' } as const
     // A failed launch leaves its row inactive: the frame says offline.
