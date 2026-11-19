@@ -119,7 +119,12 @@ class _DeviceSetupState extends State<_DeviceSetup> {
                         value: _model,
                         options: [
                           for (final model in HarnessDeviceModel.values)
-                            SelectOption(value: model, label: model.label),
+                            // Harness Max only for a device that greets as one, or one already saved as one: a
+                            // round dial's and a Pro's setup offers the two models it always did.
+                            if (model != HarnessDeviceModel.max ||
+                                _model == HarnessDeviceModel.max ||
+                                selected?.status.board == 'max')
+                              SelectOption(value: model, label: model.label),
                         ],
                         onChanged: (value) => setState(() => _model = value),
                       ),

@@ -563,6 +563,40 @@ void main() {
     },
   );
 
+  // main's two models for a round dial and a Pro: Harness Max is offered only for a device that greets as one.
+  for (final board in [null, 'pro']) {
+    testWidgets(
+      'setup of a ${board ?? 'round'} device offers Harness and Harness Pro alone',
+      (tester) async {
+        final dial = DialState();
+        final controller = DevicesController(
+          dial: dial,
+          accountId: 'a',
+          storage: MemoryStore(),
+          sendSettings: (_, _) async => true,
+        );
+        await pump(tester, controller);
+        await tester.tap(find.byKey(const Key('devices-add')));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Harness').last);
+        await tester.pumpAndSettle();
+        expect(find.text('Harness Pro'), findsWidgets);
+        expect(find.text('Harness Max'), findsNothing);
+        await tester.tap(find.text('Harness').last);
+        await tester.pumpAndSettle();
+        report(dial, [deviceStatus('new', board: board)]);
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Harness').last);
+        await tester.pumpAndSettle();
+        expect(find.text('Harness Pro'), findsWidgets);
+        expect(find.text('Harness Max'), findsNothing);
+        await tester.pumpWidget(const SizedBox());
+        controller.dispose();
+        dial.dispose();
+      },
+    );
+  }
+
   testWidgets('setup names a Harness Max by its model, kept across a restart', (
     tester,
   ) async {
@@ -577,7 +611,8 @@ void main() {
     await pump(tester, controller);
     await tester.tap(find.byKey(const Key('devices-add')));
     await tester.pumpAndSettle();
-    report(dial, [deviceStatus('new')]);
+    // The bar says it is one (hello.board): only then is Harness Max a model to pick.
+    report(dial, [deviceStatus('new', board: 'max', hw: 'harness-max')]);
     await tester.pumpAndSettle();
     await tester.tap(find.text('Harness').last);
     await tester.pumpAndSettle();

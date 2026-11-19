@@ -13,12 +13,16 @@ DialStatus deviceStatus(
   int brightness = 80,
   bool muted = true,
   String? updating,
+  String? board,
+  String? hw,
 }) => DialStatus.fromJson({
   'id': id,
   'mac': mac ?? '00:11:22:33:$id',
   'attached': attached,
   'fw': '0.0.101',
   'updating': updating,
+  'board': ?board,
+  'hw': ?hw,
   'settings': {
     'brightness': brightness,
     'character': 2,
