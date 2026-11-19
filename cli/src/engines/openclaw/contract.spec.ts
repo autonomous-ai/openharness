@@ -221,6 +221,21 @@ describe('the OpenClaw contract', () => {
     expect(status('⠋ connecting…')).toBe('starting')
   })
 
+  it('a connected TUI with no spinner is ready, whatever its activity word says', () => {
+    const plain = fixture('screen-plain.txt')
+    const status = (line: string) => readOpenclawScreen(plain.replace(' connected | idle', ` ${line}`)).state
+    // A message refused while the TUI started leaves `disconnected` as its activity once it connects (tui `onConnected`).
+    for (const line of ['connected | idle', 'gateway connected | idle', 'gateway reconnected | aborted', 'connected | disconnected',
+      'gateway connected | disconnected', 'connected | tools expanded', 'connected | tools collapsed', 'connected | abort failed',
+      'event gap: expected 12, got 15 | idle', 'local ready', 'local ready | tools collapsed']) {
+      expect(status(line), line).toBe('ready')
+    }
+    for (const line of ['disconnected | idle', 'disconnected | disconnected', 'startup failed | idle', 'session event subscription failed | idle',
+      'connectedness | idle']) {
+      expect(status(line), line).toBeNull()
+    }
+  })
+
   it('only a history line OpenClaw drew in the chat makes a ready pane one whose history did not load', () => {
     const plain = fixture('screen-plain.txt')
     const above = (line: string) => readOpenclawScreen(plain.replace(' connected | idle', `${line}\n connected | idle`)).state
