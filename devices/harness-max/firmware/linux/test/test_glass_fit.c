@@ -85,6 +85,97 @@ static void test_scaled_flat_and_bars(void)
         }
 }
 
+// The paint as it was first written, the 2 x 2 bilinear blend worked out whole for every picture pixel: what
+// glass_fit_paint's two passes must give, to the bit.
+typedef struct {
+    int a, b, w;
+} ref_tap_t;
+
+static ref_tap_t ref_tap(int p, int pic, int glass)
+{
+    int64_t s = ((int64_t)(2 * p + 1) * glass << 16) / (2 * pic) - (1 << 15);
+    if (s < 0) s = 0;
+    if (s > (int64_t)(glass - 1) << 16) s = (int64_t)(glass - 1) << 16;
+    const int a = (int)(s >> 16);
+    return (ref_tap_t){a, a + 1 < glass ? a + 1 : a, (int)((s >> 8) & 255)};
+}
+
+static void ref_unpack(uint16_t c, int *r, int *g, int *b)
+{
+    const int r5 = c >> 11, g6 = (c >> 5) & 63, b5 = c & 31;
+    *r = r5 << 3 | r5 >> 2;
+    *g = g6 << 2 | g6 >> 4;
+    *b = b5 << 3 | b5 >> 2;
+}
+
+static uint32_t ref_blend(const uint16_t *glass, int stride, ref_tap_t x, ref_tap_t y)
+{
+    const uint16_t *row0 = glass + y.a * stride, *row1 = glass + y.b * stride;
+    int r[4], g[4], b[4];
+    ref_unpack(row0[x.a], &r[0], &g[0], &b[0]);
+    ref_unpack(row0[x.b], &r[1], &g[1], &b[1]);
+    ref_unpack(row1[x.a], &r[2], &g[2], &b[2]);
+    ref_unpack(row1[x.b], &r[3], &g[3], &b[3]);
+    const int w0 = (256 - x.w) * (256 - y.w), w1 = x.w * (256 - y.w), w2 = (256 - x.w) * y.w, w3 = x.w * y.w;
+    const uint32_t ro = (uint32_t)(r[0] * w0 + r[1] * w1 + r[2] * w2 + r[3] * w3 + 32768) >> 16;
+    const uint32_t go = (uint32_t)(g[0] * w0 + g[1] * w1 + g[2] * w2 + g[3] * w3 + 32768) >> 16;
+    const uint32_t bo = (uint32_t)(b[0] * w0 + b[1] * w1 + b[2] * w2 + b[3] * w3 + 32768) >> 16;
+    return ro << 16 | go << 8 | bo;
+}
+
+static void ref_paint(const glass_fit_t *f, const uint16_t *glass, glass_fit_rect_t land, uint32_t *out, int stride)
+{
+    const int lw = f->turned ? f->out_h : f->out_w;
+    for (int ly = land.y; ly < land.y + land.h; ly++)
+        for (int lx = land.x; lx < land.x + land.w; lx++) {
+            const ref_tap_t x = ref_tap(lx - f->pic.x, f->pic.w, f->glass_w);
+            const ref_tap_t y = ref_tap(ly - f->pic.y, f->pic.h, f->glass_h);
+            const int ox = f->turned ? ly : lx, oy = f->turned ? lw - 1 - lx : ly;
+            out[(size_t)oy * stride + ox] = ref_blend(glass, f->glass_w, x, y);
+        }
+}
+
+// Every picture pixel glass_fit_paint writes is the whole 2 x 2 blend's, on every fit (turned or not, scaled down, up
+// or not at all, a picture with black either side), for the whole picture and for damage of any size anywhere, and
+// nothing outside the rectangle asked for is written.
+static void test_paint_matches_blend(void)
+{
+    static const struct { int gw, gh, ow, oh; } FITS[] = {
+        {1920, 480, 320, 1480},   // the ESP32-P4's glass on the bar: turned, 2/3, black either side
+        {1920, 415, 320, 1480},   // the bar's own shape: turned, filling it
+        {1920, 480, 1920, 1080},  // a landscape monitor: unturned, unscaled, black above and below
+        {1920, 480, 1280, 720},   // unturned and scaled down
+        {37, 11, 100, 300},       // turned and scaled up
+        {37, 11, 160, 90},        // unturned and scaled up
+        {1000, 333, 250, 777},    // turned, odd sizes, no simple ratio
+        {9, 4, 4, 9},             // turned, unscaled
+    };
+    static uint16_t glass[1920 * 480];
+    static uint32_t want[1920 * 1080], got[1920 * 1080];
+    unsigned seed = 99;
+    for (size_t c = 0; c < sizeof FITS / sizeof FITS[0]; c++) {
+        const glass_fit_t f = glass_fit(FITS[c].gw, FITS[c].gh, FITS[c].ow, FITS[c].oh);
+        const size_t px = (size_t)f.out_w * f.out_h;
+        for (int rep = 0; rep < 40; rep++) {
+            fill(glass, f.glass_w * f.glass_h, seed++);
+            glass_fit_rect_t land = f.pic;
+            if (rep) {   // a change somewhere on the glass, from one pixel to most of it, as a frame's damage
+                seed = seed * 1103515245u + 12345u;
+                const int x = (int)(seed >> 8) % f.glass_w, y = (int)(seed >> 4) % f.glass_h;
+                seed = seed * 1103515245u + 12345u;
+                const int w = 1 + (int)(seed >> 8) % (rep % 3 ? 24 : f.glass_w - x);
+                const int h = 1 + (int)(seed >> 4) % (rep % 3 ? 24 : f.glass_h - y);
+                land = glass_fit_damage(&f, (glass_fit_rect_t){x, y, w > f.glass_w - x ? f.glass_w - x : w,
+                                                              h > f.glass_h - y ? f.glass_h - y : h});
+            }
+            for (size_t i = 0; i < px; i++) want[i] = got[i] = 0xdeadbeef;
+            ref_paint(&f, glass, land, want, f.out_w);
+            glass_fit_paint(&f, glass, land, got, f.out_w);
+            CHECK(!memcmp(want, got, px * sizeof want[0]));
+        }
+    }
+}
+
 // Every raster pixel a change to a glass rectangle alters lies inside glass_fit_damage of it, and the damage is no more
 // than a pixel or two wider than the change's own footprint.
 static void check_damage(const glass_fit_t *f, glass_fit_rect_t g)
@@ -140,8 +231,9 @@ static void test_union(void)
 // The rectangles a flip asks for, frame by frame.
 static void test_flip_rects(void)
 {
-    glass_fit_flip_t f = {{0, 0, 0, 0}, {0, 0, 0, 0}};
-    glass_fit_rect_t out[2];
+    glass_fit_flip_t f;
+    memset(&f, 0, sizeof f);
+    glass_fit_rect_t out[GLASS_FIT_FLIP_MAX];
     CHECK(glass_fit_flip(&f, out) == 0);   // nothing changed: no flip
     // The first change: there was no frame before it.
     glass_fit_flip_add(&f, (glass_fit_rect_t){0, 0, 4, 2});
@@ -160,30 +252,78 @@ static void test_flip_rects(void)
     CHECK(glass_fit_flip(&f, out) == 1 && same(out[0], (glass_fit_rect_t){1002, 300, 10, 10}));
 }
 
+// A frame's changes far apart are painted apart: pets at both ends of the bar repaint the pets, not the bar between
+// them (one rectangle around both made the bar's every story frame a whole-picture paint).
+static void test_flip_keeps_changes_apart(void)
+{
+    glass_fit_flip_t f;
+    memset(&f, 0, sizeof f);
+    glass_fit_rect_t out[GLASS_FIT_FLIP_MAX];
+    const glass_fit_rect_t left = {100, 40, 60, 80}, right = {1300, 200, 50, 50};
+    glass_fit_flip_add(&f, left);
+    glass_fit_flip_add(&f, right);
+    CHECK(glass_fit_flip(&f, out) == 2 && same(out[0], left) && same(out[1], right));
+    // The next frame: the same two again, and the last frame's are the same rectangles, painted once each.
+    glass_fit_flip_add(&f, right);
+    glass_fit_flip_add(&f, left);
+    CHECK(glass_fit_flip(&f, out) == 2);
+    CHECK((same(out[0], left) && same(out[1], right)) || (same(out[0], right) && same(out[1], left)));
+    // A damage rectangle's strips, as two tasks push them, out of order: one rectangle.
+    memset(&f, 0, sizeof f);
+    for (int i = 0; i < 12; i++) {
+        const int strip = (i % 2) ? 11 - i / 2 : i / 2;   // 0, 11, 1, 10, 2, 9, ...
+        glass_fit_flip_add(&f, (glass_fit_rect_t){400, strip * 24, 300, 24});
+    }
+    CHECK(glass_fit_flip(&f, out) == 1 && same(out[0], (glass_fit_rect_t){400, 0, 300, 288}));
+    // More changes far apart than are kept: GLASS_FIT_RECTS rectangles, the nearest joined, every change inside one.
+    memset(&f, 0, sizeof f);
+    glass_fit_rect_t dots[GLASS_FIT_RECTS + 4];
+    for (int i = 0; i < GLASS_FIT_RECTS + 4; i++) {
+        dots[i] = (glass_fit_rect_t){i * 110 + (i % 3) * 7, (i * 37) % 300, 4, 4};
+        glass_fit_flip_add(&f, dots[i]);
+    }
+    const int n = glass_fit_flip(&f, out);
+    CHECK(n == GLASS_FIT_RECTS);
+    int64_t painted = 0;
+    for (int i = 0; i < n; i++) painted += (int64_t)out[i].w * out[i].h;
+    CHECK(painted < 1480 * 320 / 4);   // far less than one rectangle around them all
+    for (int i = 0; i < GLASS_FIT_RECTS + 4; i++) {
+        bool inside = false;
+        for (int k = 0; k < n && !inside; k++)
+            inside = dots[i].x >= out[k].x && dots[i].y >= out[k].y && dots[i].x + dots[i].w <= out[k].x + out[k].w &&
+                     dots[i].y + dots[i].h <= out[k].y + out[k].h;
+        CHECK(inside);
+    }
+}
+
 // Two buffers flipped frame after frame, each painted only with what glass_fit_flip asks for: the one on screen is
 // always the whole glass.
 static void test_flip_keeps_both_buffers(void)
 {
-    enum { W = 24, H = 12, FRAMES = 400 };
+    enum { W = 48, H = 16, FRAMES = 2000 };
     static int glass[H][W], buf[2][H][W];
-    glass_fit_flip_t f = {{0, 0, 0, 0}, {0, 0, 0, 0}};
+    glass_fit_flip_t f;
+    memset(&f, 0, sizeof f);
     int front = 0;
     unsigned seed = 12345;
     for (int frame = 1; frame <= FRAMES; frame++) {
-        // Zero to three changes in the frame, anywhere.
+        // No change in the frame, or up to more than GLASS_FIT_RECTS of them, anywhere, small ones most often.
         seed = seed * 1103515245u + 12345u;
-        const int changes = (int)(seed >> 16) % 4;
+        const int changes = (int)(seed >> 16) % (GLASS_FIT_RECTS + 5);
         for (int c = 0; c < changes; c++) {
             seed = seed * 1103515245u + 12345u;
             const int x = (int)(seed >> 8) % W, y = (int)(seed >> 16) % H;
-            const int w = 1 + (int)(seed >> 4) % (W - x), h = 1 + (int)(seed >> 20) % (H - y);
+            const int big = (seed >> 28) == 0;
+            const int w = 1 + (int)(seed >> 4) % (big ? W - x : (W - x < 4 ? W - x : 4));
+            const int h = 1 + (int)(seed >> 20) % (big ? H - y : (H - y < 3 ? H - y : 3));
             for (int yy = y; yy < y + h; yy++)
                 for (int xx = x; xx < x + w; xx++) glass[yy][xx] = frame * 4 + c;
             glass_fit_flip_add(&f, (glass_fit_rect_t){x, y, w, h});
         }
-        glass_fit_rect_t out[2];
+        glass_fit_rect_t out[GLASS_FIT_FLIP_MAX];
         const int n = glass_fit_flip(&f, out);
         CHECK(n == 0 || changes > 0);
+        CHECK(n <= GLASS_FIT_FLIP_MAX);
         for (int i = 0; i < n; i++)
             for (int yy = out[i].y; yy < out[i].y + out[i].h; yy++)
                 for (int xx = out[i].x; xx < out[i].x + out[i].w; xx++) buf[front ^ 1][yy][xx] = glass[yy][xx];
@@ -233,9 +373,11 @@ int main(void)
     test_fits();
     test_unscaled_pixels();
     test_scaled_flat_and_bars();
+    test_paint_matches_blend();
     test_damage();
     test_union();
     test_flip_rects();
+    test_flip_keeps_changes_apart();
     test_flip_keeps_both_buffers();
     test_touch();
     test_axis();

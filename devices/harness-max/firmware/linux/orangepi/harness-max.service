@@ -32,6 +32,11 @@ ExecStopPost=/usr/local/sbin/harness-max-usb --down
 Environment="PHASE0_APP_CMD=exec setpriv --reuid=orangepi --regid=orangepi --init-groups env HOME=/home/orangepi /home/orangepi/harness-max/bin/harness-max $HARNESS_MAX_ARGS"
 # The A76 pair (cpu6, cpu7): the bar's scaled paint takes half the time it takes on the A55 cores.
 CPUAffinity=6 7
+# The pair at its top clock while the bar runs, as the ESP32-P4 runs at one clock. The image's ondemand governor
+# (/etc/default/cpufrequtils) looks every 200 ms, so a tap after a rest painted its first frames at 416 MHz: 50-57 ms
+# each, where 2 GHz takes 10-12 (measured 2026-11-20). The governor the pair had comes back when the bar stops.
+ExecStartPre=-/bin/sh -c 'g=/sys/devices/system/cpu/cpu6/cpufreq/scaling_governor; [ -w "$$g" ] || exit 0; [ -s /run/harness-max-governor ] || cat "$$g" > /run/harness-max-governor; echo performance > "$$g"'
+ExecStopPost=-/bin/sh -c 'g=/sys/devices/system/cpu/cpu6/cpufreq/scaling_governor; [ -s /run/harness-max-governor ] && [ -w "$$g" ] && cat /run/harness-max-governor > "$$g"; rm -f /run/harness-max-governor'
 ExecStart=/usr/local/sbin/phase0-flutter-start
 Restart=on-failure
 RestartSec=2

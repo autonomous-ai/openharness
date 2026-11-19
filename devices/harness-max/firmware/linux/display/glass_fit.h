@@ -37,19 +37,26 @@ glass_fit_rect_t glass_fit_union(glass_fit_rect_t a, glass_fit_rect_t b);
 
 // What a double-buffered output repaints before it flips. The buffer off screen was last painted two frames ago, so to
 // show the frame being drawn it needs what this frame changed and what the last one changed: the last frame was painted
-// into the other buffer only. Picture pixels (landscape), as glass_fit_damage gives them.
+// into the other buffer only. Picture pixels (landscape), as glass_fit_damage gives them. A frame's changes are kept
+// as up to GLASS_FIT_RECTS rectangles, not one around them all: pets moving at both ends of the bar repaint the pets,
+// not the bar between them.
+#define GLASS_FIT_RECTS 8
+#define GLASS_FIT_FLIP_MAX (2 * GLASS_FIT_RECTS)
 typedef struct {
-    glass_fit_rect_t pending;   // changed since the last frame was shown
-    glass_fit_rect_t last;      // what the last frame shown changed
+    glass_fit_rect_t pending[GLASS_FIT_RECTS];   // changed since the last frame was shown
+    glass_fit_rect_t last[GLASS_FIT_RECTS];      // what the last frame shown changed
+    int pending_n, last_n;
 } glass_fit_flip_t;
 
-// A change to the frame being drawn.
+// A change to the frame being drawn. It joins a rectangle already kept when their union is no more pixels than the
+// two apart (the strips of one damage rectangle, a change inside another); with GLASS_FIT_RECTS kept apart already, it
+// joins the one whose union grows least.
 void glass_fit_flip_add(glass_fit_flip_t *f, glass_fit_rect_t r);
 
-// The frame is whole: the rectangles to paint into the buffer off screen before flipping to it, in out[0..n), n <= 2:
-// the two changes, or their union when that paints fewer pixels. 0 when the frame changed nothing: then there is no
-// flip, and `last` stays, as the buffer off screen still lacks it.
-int glass_fit_flip(glass_fit_flip_t *f, glass_fit_rect_t out[2]);
+// The frame is whole: the rectangles to paint into the buffer off screen before flipping to it, in out[0..n): this
+// frame's changes and the last one's, joined as glass_fit_flip_add joins them. 0 when the frame changed nothing: then
+// there is no flip, and the last frame's stay, as the buffer off screen still lacks them.
+int glass_fit_flip(glass_fit_flip_t *f, glass_fit_rect_t out[GLASS_FIT_FLIP_MAX]);
 
 // A raster point (a touch, in the output's native frame) -> the glass point under it. False off the picture.
 bool glass_fit_touch(const glass_fit_t *f, int ox, int oy, int *gx, int *gy);

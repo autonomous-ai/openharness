@@ -145,9 +145,9 @@ static void flip_done(int fd, unsigned int sequence, unsigned int tv_sec, unsign
     if ((uintptr_t)tag == s_flip_tag) s_flip_pending = false;
 }
 
-// Until the last flip has landed: from then on the buffer it left is off screen and free to paint. Bounded: a flip
-// whose vblank does not come (the screen gone) is taken as done, said once; the next flip then fails (EBUSY) if the
-// kernel still holds it, which ends the flipping (single_buffer).
+// Until the last flip has landed: from then on the buffer it left is off screen and free to paint (each frame waits
+// for its own, max_output_show). Bounded: a flip whose vblank does not come (the screen gone) is taken as done, said
+// once; the next flip then fails (EBUSY) if the kernel still holds it, which ends the flipping (single_buffer).
 static void flip_wait(void)
 {
     static bool said;
@@ -193,11 +193,10 @@ void max_output_paint(const uint16_t *glass, int x, int y, int w, int h)
 void max_output_show(void)
 {
     if (s_dark || !s_flipping) return;   // one buffer was painted as the rectangles came
-    glass_fit_rect_t out[2];
+    glass_fit_rect_t out[GLASS_FIT_FLIP_MAX];
     const int n = glass_fit_flip(&s_damage, out);
     if (!n) return;
-    flip_wait();
-    const int back = s_front ^ 1;
+    const int back = s_front ^ 1;   // off screen: the last frame waited for its flip (below)
     for (int i = 0; i < n; i++) paint(back, out[i]);
     if (drmModePageFlip(s_fd, s_crtc, s_buf[back].fb, DRM_MODE_PAGE_FLIP_EVENT, (void *)++s_flip_tag) != 0) {
         single_buffer(strerror(errno), out, n);
@@ -205,6 +204,12 @@ void max_output_show(void)
     }
     s_flip_pending = true;
     s_front = back;
+    // The frame waits for its own flip here, not at the start of the next one: the render task then builds the next
+    // scene right after the vblank this one shows at, with what the finger did meanwhile, and paints it within the
+    // next refresh (scene, strips and paint: 2-12 ms of the 17 at 2 GHz). Waiting at the start, the next scene was
+    // built as soon as this one was queued, a refresh before it could show: a tap during a motion (App Detail's press)
+    // reached the glass 42 ms after the finger on average, against 29 waiting here (2026-11-20).
+    flip_wait();
 }
 
 // The HDMI bar has no light this program can dim: dark is a black picture, and the picture stays in the glass copy.
