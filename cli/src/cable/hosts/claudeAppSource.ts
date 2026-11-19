@@ -52,11 +52,11 @@ interface Row {
   agent: HostAgent
 }
 
-/** The pass under way or last run: whether it is under way, and whether 250 ms have not passed since it started (and
- *  that timer's cancel). */
+/** The pass under way or last run: whether it is under way, and whether it is too soon for the next one, 250 ms not
+ *  having passed since it started (and that timer's cancel). */
 interface Pass {
   under: boolean
-  gap: boolean
+  tooSoon: boolean
   cancel: () => void
 }
 
@@ -136,7 +136,7 @@ export class ClaudeAppSource implements HostSource {
     // A pass under way runs to its end and takes nothing, so a start meanwhile waits for it: one pass at a time.
     if (this.pass) {
       this.pass.cancel()
-      this.pass.gap = false
+      this.pass.tooSoon = false
       this.next()
     }
     this.deps.store.forget()
@@ -251,7 +251,7 @@ export class ClaudeAppSource implements HostSource {
   /** A pass that ended, 250 ms after it started, frees the way: what waited since runs. */
   private next(): void {
     const pass = this.pass
-    if (!pass || pass.under || pass.gap) return
+    if (!pass || pass.under || pass.tooSoon) return
     this.pass = undefined
     if (this.listing || this.named > 0 || this.again) void this.run()
   }
@@ -259,10 +259,10 @@ export class ClaudeAppSource implements HostSource {
   /** One pass: what waited, then a read. A store call or a listener that fails ends it with the rows kept; the next
    *  change runs one. */
   private async run(): Promise<void> {
-    const pass: Pass = { under: true, gap: true, cancel: () => {} }
+    const pass: Pass = { under: true, tooSoon: true, cancel: () => {} }
     this.pass = pass
     pass.cancel = this.deps.after(GAP_MS, () => {
-      pass.gap = false
+      pass.tooSoon = false
       this.next()
     })
     const { listing } = this
