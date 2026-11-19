@@ -206,10 +206,11 @@ export class CodexAppThreads {
   }
 
   /**
-   * The sidebar's projects for `ids`, or null when the file changed while it was read (the app writing it): the last
-   * parse is then kept as it was, so the projects do not flash to Recent and back. The file is parsed again only when
-   * its size or mtime changed, or a thread comes that the last parse was not kept for. A file that held still and is
-   * not the app's (missing, a link, too large, not JSON, of another shape) names no project until it next changes.
+   * The sidebar's projects for `ids`, or null when the file changed while it was read (the app writing it) or could not
+   * be opened: the last parse is then kept as it was, so the projects do not flash to Recent and back. The file is
+   * parsed again only when its size or mtime changed, or a thread comes that the last parse was not kept for. A file
+   * that held still and is not the app's (missing, a link, too large, not JSON, of another shape) names no project until
+   * it next changes.
    */
   private readProjects(ids: readonly string[]): Projects | null {
     const path = join(this.home, STATE)
@@ -222,8 +223,11 @@ export class CodexAppThreads {
     let fd: number
     try {
       fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK)
-    } catch {
-      return noProjects(stampOf(found))
+    } catch (error) {
+      // Gone since its lstat, or a link put in its place, it held still. Any other failure (EACCES, EMFILE, EINTR) says
+      // nothing of the file: kept as no projects, it would put every thread under Recent until the app next writes it.
+      const code = (error as NodeJS.ErrnoException).code
+      return code === 'ENOENT' || code === 'ELOOP' ? noProjects(stampOf(found)) : null
     }
     try {
       const opened = fstatSync(fd)
