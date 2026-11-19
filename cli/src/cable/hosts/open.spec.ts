@@ -131,14 +131,14 @@ describe('opening an agent outside Harness from the dial', () => {
   it('WezTerm: its pane is activated, then WezTerm comes forward', async () => {
     const { calls, opener } = recorder()
     expect(await opener.open('a1', target({ WEZTERM_PANE: '7' }))).toBe(true)
-    expect(calls).toEqual([run('/fake/bin/wezterm', 'cli', 'activate-pane', '--pane-id', '7'), forward('com.github.wez.wezterm')])
+    expect(calls).toEqual([run('/fake/bin/wezterm', 'cli', '--no-auto-start', 'activate-pane', '--pane-id', '7'), forward('com.github.wez.wezterm')])
   })
 
   it('WezTerm\'s own binary is used on macOS when PATH has none', async () => {
     const looked: string[] = []
     const { calls, opener } = recorder({ onPath: () => null, exists: (path) => { looked.push(path); return path === APP_WEZTERM } })
     expect(await opener.open('a1', target({ WEZTERM_PANE: '7' }))).toBe(true)
-    expect(calls).toEqual([run(APP_WEZTERM, 'cli', 'activate-pane', '--pane-id', '7'), forward('com.github.wez.wezterm')])
+    expect(calls).toEqual([run(APP_WEZTERM, 'cli', '--no-auto-start', 'activate-pane', '--pane-id', '7'), forward('com.github.wez.wezterm')])
     expect(looked).toEqual([APP_WEZTERM])
   })
 
@@ -213,7 +213,7 @@ describe('opening an agent outside Harness from the dial', () => {
 
     const wezterm = recorder({}, [1])
     expect(await wezterm.opener.open('a1', target({ WEZTERM_PANE: '7' }))).toBe(true)
-    expect(wezterm.calls).toEqual([run('/fake/bin/wezterm', 'cli', 'activate-pane', '--pane-id', '7'), forward('com.github.wez.wezterm')])
+    expect(wezterm.calls).toEqual([run('/fake/bin/wezterm', 'cli', '--no-auto-start', 'activate-pane', '--pane-id', '7'), forward('com.github.wez.wezterm')])
     expect(wezterm.logs).toEqual(['[device] open · wezterm · fallback'])
 
     // A command it could not start has no exit code.
@@ -290,7 +290,7 @@ describe('opening an agent outside Harness from the dial', () => {
     expect(await linux.opener.open('a2', target({ WEZTERM_PANE: '7' }))).toBe(true)
     expect(await linux.opener.open('a3', target({ HERDR_PANE_ID: 'w1:p2' }))).toBe(true)
     expect(linux.switched).toEqual([HANDLE])
-    expect(linux.calls).toEqual([run('/fake/bin/wezterm', 'cli', 'activate-pane', '--pane-id', '7'), run('/fake/bin/herdr', 'agent', 'focus', 'w1:p2')])
+    expect(linux.calls).toEqual([run('/fake/bin/wezterm', 'cli', '--no-auto-start', 'activate-pane', '--pane-id', '7'), run('/fake/bin/herdr', 'agent', 'focus', 'w1:p2')])
     const appsOnly: Array<Record<string, string>> = [
       { TERM_PROGRAM: 'WarpTerminal' }, { __CFBundleIdentifier: 'org.alacritty' }, { __CFBundleIdentifier: CLAUDE, CLAUDE_CODE_HOST_SESSION_ID: SESSION },
     ]
@@ -299,7 +299,7 @@ describe('opening an agent outside Harness from the dial', () => {
       expect(await linux.opener.open('a4', target(hints))).toBe(false)
     }
     expect(linux.calls).toEqual([
-      run('/fake/bin/wezterm', 'cli', 'activate-pane', '--pane-id', '7'), run('/fake/bin/herdr', 'agent', 'focus', 'w1:p2'), lookup('claude'),
+      run('/fake/bin/wezterm', 'cli', '--no-auto-start', 'activate-pane', '--pane-id', '7'), run('/fake/bin/herdr', 'agent', 'focus', 'w1:p2'), lookup('claude'),
     ])
 
     // Not reached, nothing comes forward and nothing is said; the macOS app's own wezterm is never looked for.
@@ -538,7 +538,7 @@ describe('a tap in the order its pane\'s adapter keeps', () => {
 // Linux has no `open -b`: the window comes forward through the raise (linuxRaise.ts) where macOS brings the app.
 describe('a tap on Linux brings the window forward through the raise', () => {
   const WEZTERM = target({ WEZTERM_PANE: '7' })
-  const ACTIVATE = run('/fake/bin/wezterm', 'cli', 'activate-pane', '--pane-id', '7')
+  const ACTIVATE = run('/fake/bin/wezterm', 'cli', '--no-auto-start', 'activate-pane', '--pane-id', '7')
   const WARP = target({ TERM_PROGRAM: 'WarpTerminal' })
   const PANE: Pane = { adapter: 'made-up', id: 'p1' }
 
