@@ -5,11 +5,15 @@ import type { FileHandle } from 'node:fs/promises'
 export interface RecoveryBoundary { offset: number; device: number; inode: number; digest: string }
 export type TranscriptFileIdentity = Pick<RecoveryBoundary, 'device' | 'inode'>
 
+/** The code is the error's `code` as well as its words: a log line names a failure by its code (`errorKind`). */
+export const boundaryChanged = (): Error =>
+  Object.assign(new Error('ENGINE_CONTROL_BOUNDARY_CHANGED'), { code: 'ENGINE_CONTROL_BOUNDARY_CHANGED' })
+
 export async function verifyTranscriptHandle(handle: FileHandle, expected?: TranscriptFileIdentity): Promise<void> {
   if (!expected) return
   const actual = await handle.stat()
   if (!actual.isFile() || actual.dev !== expected.device || actual.ino !== expected.inode) {
-    throw new Error('ENGINE_CONTROL_BOUNDARY_CHANGED')
+    throw boundaryChanged()
   }
 }
 
