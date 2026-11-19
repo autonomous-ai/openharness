@@ -108,7 +108,8 @@ export function sid(id: string): string {
   return id.startsWith('agent:') ? `oc-${createHash('sha256').update(id).digest('hex').slice(0, 8)}` : id.slice(0, 8)
 }
 
-const TYPE_NAME = /^[A-Za-z_$][A-Za-z0-9_$]{0,63}$/
+// A class name starts upper case: one lower-case word can be a file's or a person's name ("notes", "someone").
+const TYPE_NAME = /^[A-Z][A-Za-z0-9_$]{0,63}$/
 const CODE = /^[A-Z][A-Z0-9_]{1,39}$/
 
 /**
