@@ -21,6 +21,7 @@ import { pathToFileURL } from 'node:url'
 import { afterAll, afterEach, beforeAll, describe, expect, it, onTestFailed } from 'vitest'
 import { LAUNCHD_LABEL, SYSTEMD_UNIT, launchdPlist, systemdUnit } from '../src/harnessd/platform.js'
 import { savedDaemonPort } from '../src/lib/daemonRecord.js'
+import { processTable } from '../src/testing/spawnedRuns.js'
 import { assertNodeAlone } from '../src/testing/testNode.js'
 import { LocalClient } from './harness/client.js'
 import { CLI_ROOT, IsolatedDaemon, until, type DaemonOptions } from './harness/daemon.js'
@@ -353,6 +354,36 @@ describe('harness start, stop and status from the installed bundle', () => {
     expect((await harness(m, 'stop')).stdout).toContain(`machine stopped (pid ${third})`)
     expect(calls(m).slice(from)).toEqual([])
     expect(await panes(m)).toBe(before)
+  })
+
+  // On a Linux desktop the login entry and Desktop may both run `harness start` at the same moment: the spawn lock, and
+  // with the opt-in unit systemd, must leave one master per data folder (docs/plans/2026-11-19-dial-linux-design.md § 1.1a).
+  // One machine for both halves: without the unit no platform is asked, whatever HARNESSD_TEST_PLATFORM names.
+  it('two starts at once, as the login entry and Desktop: one master', async () => {
+    const m = await install('systemd')
+    const masters = () => processTable().filter((row) => row.command.includes(`${m.daemon.root}/`) && row.command.endsWith(' __harnessd'))
+    const together = async () => {
+      const runs = await Promise.all([harness(m, 'start'), harness(m, 'start')])
+      for (const run of runs) expect(run.status, said(run)).toBe(0)
+      expect(runs.filter((run) => said(run).includes('already running')), 'one start found the other\'s master').toHaveLength(1)
+      const master = pidOf(m)!
+      seen.add(master)
+      expect(alive(master)).toBe(true)
+      expect(masters().map((row) => row.pid)).toEqual([master])
+      return master
+    }
+
+    await together()
+    expect((await harness(m, 'stop')).status).toBe(0)
+    expect(calls(m), 'no platform tool was asked anything').toEqual([])
+
+    allow(m, 'platform')
+    expect((await harness(m, 'service', 'install')).status).toBe(0)
+    seen.add(pidOf(m)!)
+    expect((await harness(m, 'stop')).status).toBe(0)
+    await until('the unit\'s master to go', () => masters().length === 0, 10_000)
+    const master = await together()
+    expect(platformPid(m), 'systemd runs it').toBe(master)
   })
 
   it.each(['launchd', 'systemd'] as const)('ignores a %s definition written for another data folder', async (platform) => {
