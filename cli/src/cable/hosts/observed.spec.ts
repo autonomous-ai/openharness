@@ -244,6 +244,16 @@ describe('ObservedSource states', () => {
 })
 
 describe('ObservedSource removal', () => {
+  it('list() says an ended session is ended, and a live or resumed one is not', () => {
+    const { src, ev } = setup()
+    src.ingest(ev('session-start'))
+    expect(src.list()[0]).not.toHaveProperty('ended')
+    src.ingest(ev('session-end'))
+    expect(src.list()[0].ended).toBe(true)
+    src.ingest(ev('session-start'))
+    expect(src.list()[0]).not.toHaveProperty('ended')
+  })
+
   it('session-end removes after 10 s', async () => {
     const { src, clock, ev } = setup()
     src.ingest(ev('session-start'))

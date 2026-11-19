@@ -124,6 +124,90 @@ describe('HostRegistry', () => {
   })
 })
 
+describe('an ended copy (docs/plans/2026-11-19-dial-claude-app-sessions-design.md)', () => {
+  const ended = (over: Partial<HostAgent>) => agent({ ...over, ended: true })
+  function counting(id: string, agents: HostAgent[]) {
+    const src = fakeSource(id, agents)
+    let calls = 0
+    const list = src.list
+    return Object.assign(src, { list: () => { calls++; return list() }, calls: () => calls })
+  }
+
+  it("an observed copy and a store copy of one session are one row, the observed's, by its session id", () => {
+    const o = agent({ id: 'o', sessionId: 's' })
+    const observed = fakeSource('observed', [o])
+    const store = fakeSource('claude-app', [agent({ id: 'o', sessionId: 's', resting: true })])
+    expect(new HostRegistry([observed, store]).entries()).toEqual([{ agent: o, source: observed }])
+    expect(new HostRegistry([store, observed]).entries()).toEqual([{ agent: o, source: observed }])
+  })
+
+  it('… and by the pane key alone', () => {
+    const observed = fakeSource('observed', [agent({ id: 'o', sessionId: 'new', paneKeys: ['claude-app:local_a'] })])
+    const store = fakeSource('claude-app', [agent({ id: 'c', sessionId: 'old', paneKeys: ['claude-app:local_a'] })])
+    expect(ids(new HostRegistry([store, observed]))).toEqual(['o'])
+  })
+
+  it("an ended observed copy gives its row to the store's live copy", () => {
+    const c = agent({ id: 'o', sessionId: 's', resting: true })
+    const store = fakeSource('claude-app', [c])
+    const observed = fakeSource('observed', [ended({ id: 'o', sessionId: 's' })])
+    expect(new HostRegistry([observed, store]).entries()).toEqual([{ agent: c, source: store }])
+  })
+
+  it("… and to herdr's, by the session id or by a pane key", () => {
+    const observed = fakeSource('observed', [ended({ id: 'o', sessionId: 's' })])
+    const herdr = fakeSource('herdr', [agent({ id: 'x', sessionId: 's' })])
+    expect(ids(new HostRegistry([observed, herdr]))).toEqual(['x'])
+    observed.set([ended({ id: 'o', sessionId: 's', paneKeys: ['herdr:w1:p1'] })])
+    herdr.set([agent({ id: 'x', paneKeys: ['herdr:w1:p1'] })])
+    expect(ids(new HostRegistry([observed, herdr]))).toEqual(['x'])
+  })
+
+  it('an ended copy no other source lists is listed alone', () => {
+    const observed = fakeSource('observed', [ended({ id: 'o', sessionId: 's' })])
+    const herdr = fakeSource('herdr', [agent({ id: 'x', sessionId: 't' })])
+    expect(ids(new HostRegistry([observed, herdr]))).toEqual(['o', 'x'])
+  })
+
+  it("an ended copy takes no key: the live copy that took its row still folds the next source's", () => {
+    const observed = fakeSource('observed', [ended({ id: 'o', sessionId: 's' })])
+    const cmux = fakeSource('cmux', [agent({ id: 'x', sessionId: 's' })])
+    const opencode = fakeSource('opencode', [agent({ id: 'y', sessionId: 's' })])
+    expect(ids(new HostRegistry([observed, cmux, opencode]))).toEqual(['x'])
+  })
+
+  it("a Harness agent's session still takes an ended copy's row", () => {
+    const harness = fakeSource('harness', [agent({ id: 'h', sessionId: 's' })])
+    const observed = fakeSource('observed', [ended({ id: 'o', sessionId: 's' })])
+    expect(ids(new HostRegistry([harness, observed]))).toEqual(['h'])
+  })
+
+  it.each([
+    ['herdr', { paneKeys: ['herdr:w1:p1'] }],
+    ['cmux', { sessionId: 's', paneKeys: ['cmux:s1'] }],
+    ['opencode', { engine: 'opencode', sessionId: 's' }],
+  ] as [string, Partial<HostAgent>][])("%s's rows merge as before", (id, over) => {
+    const live = agent({ id: 'o', ...over })
+    const observed = fakeSource('observed', [live])
+    const listed = fakeSource(id, [agent({ id: 'x', ...over })])
+    expect(ids(new HostRegistry([listed, observed]))).toEqual(['o'])
+    observed.set([live, ended({ id: 'e', sessionId: 'gone' })])
+    expect(ids(new HostRegistry([listed, observed]))).toEqual(['o', 'e'])
+  })
+
+  it('each list is read once a call, with an ended copy or none', () => {
+    const observed = counting('observed', [agent({ id: 'o', sessionId: 's' })])
+    const herdr = counting('herdr', [agent({ id: 'x', sessionId: 't' })])
+    const store = counting('claude-app', [agent({ id: 'c', sessionId: 'u', resting: true })])
+    const reg = new HostRegistry([observed, herdr, store])
+    reg.entries()
+    expect([observed.calls(), herdr.calls(), store.calls()]).toEqual([1, 1, 1])
+    observed.set([ended({ id: 'o', sessionId: 's' })])
+    reg.entries()
+    expect([observed.calls(), herdr.calls(), store.calls()]).toEqual([2, 2, 2])
+  })
+})
+
 describe('capsLetters', () => {
   it('capsLetters({status,voice,answer}) === sva', () => {
     expect(capsLetters({ status: true, voice: true, focus: false, answer: true })).toBe('sva')
