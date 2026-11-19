@@ -45,18 +45,26 @@ export function createTurnActivity({ readScreen, terminals, bySession, sessionTu
         : undefined
     },
     drain: sessionId => drain(sessionId),
-    probe: async sessionId => {
-      // The hooks know better than the pane: a wait shows no spinner's end, and a lead's subagents run off screen.
-      if (withheld(sessionId)) return 'unknown'
-      if (atWork(sessionId)) return 'working'
-      const session = bySession(sessionId)
-      return session?.active ? runtimeActivity.read(session) : 'unknown'
-    },
+    probe: sessionId => probe(sessionId, session => runtimeActivity.read(session)),
   })
+  async function probe(sessionId: string, read: (session: RegisteredSession) => Promise<ActivityState>): Promise<ActivityState> {
+    // The hooks know better than the pane: a wait shows no spinner's end, and a lead's subagents run off screen.
+    if (withheld(sessionId)) return 'unknown'
+    if (atWork(sessionId)) return 'working'
+    const session = bySession(sessionId)
+    return session?.active ? read(session) : 'unknown'
+  }
+  /**
+   * A pane the binding pass captured (OpenClaw's, core/agents/bind.ts) is read as the probe would read it. With no turn
+   * open nothing probes the runtime, while an OpenClaw run shows on its pane before its first row and through a quiet
+   * step: the pass's capture is that reading, and no second capture is taken.
+   */
+  const paneRead = (session: RegisteredSession, capture: string): Promise<void> =>
+    turnActivity.check(session.sessionId, () => probe(session.sessionId, active => runtimeActivity.observe(active, capture)))
   /** The activity the app shows for an agent; none for a plain terminal. */
   const activityFrame = (session: RegisteredSession): ActivityFrame | null =>
     isTerminalEngine(session.engine) ? null : turnActivity.snapshot(session.sessionId) ?? null
-  return { runtimeActivity, turnActivity, activityFrame }
+  return { runtimeActivity, turnActivity, activityFrame, paneRead }
 }
 
 /**

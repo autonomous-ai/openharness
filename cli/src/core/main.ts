@@ -2052,6 +2052,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       const session = registry.bySession(sessionId)
       // As the footer poll beside the other engines' panes reads them: a profile that cannot be read leaves the chip as it was.
       if (session) void Promise.resolve(runtimeProfiles.ingestPane(session, capture)).catch(() => undefined)
+      if (session) void activity.paneRead(session, capture).catch(() => undefined)
       return streamed
     },
     openclawPaneDue: (sessionId) => otherStreams.paneDue(sessionId),

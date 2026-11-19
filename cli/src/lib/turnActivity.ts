@@ -87,14 +87,15 @@ export class TurnActivity {
       validForMs: entry.state === 'working' ? Math.max(0, Math.min(WORK_HEARTBEAT_LEASE_MS, entry.until - this.now())) : 0 }
   }
   forget(sessionId: string): void { this.entries.delete(sessionId) }
-  async check(sessionId: string): Promise<void> {
+  /** [probe], when given, reads the runtime for this check in place of the one this was built with. */
+  async check(sessionId: string, probe = () => this.deps.probe(sessionId)): Promise<void> {
     const entry = this.entry(sessionId)
     if (!entry || entry.pending) return entry?.pending
     const run = async () => {
       await this.deps.drain(sessionId)
       if (this.entry(sessionId) !== entry) return
       const revision = entry.revision
-      const result = await this.deps.probe(sessionId)
+      const result = await probe()
       await this.deps.drain(sessionId)
       // A completion, a new prompt, or a replaced process wins over a probe
       // started before it. Failed reads never mean idle.
