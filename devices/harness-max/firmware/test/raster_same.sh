@@ -19,10 +19,19 @@ for f in display/terminal.c display/pro_canvas.c pod/pod_draw.c; do
     git -C "$fw" show "$ref:./main/pro_fork/$f" > "$out/old/$f" 2>/dev/null || git -C "$pro" show "$ref:./main/$f" > "$out/old/$f"
 done
 python3 "$pro/scripts/gen_fonts.py" --out "$out/pro_fonts.c" >/dev/null
+# The Max's screen asks its pod_draw.c for a bake a band of rows at a time (pod_cell_bake_some, only while it paints
+# ahead, which raster_dump does not); one from before that has none, so there it is always "no room".
+old_extra=()
+if ! grep -q pod_cell_bake_some "$out/old/pod/pod_draw.c"; then
+    printf '%s\n' '#include "max_ui_draw.h"' \
+        'int pod_cell_bake_some(const ht_run_t *r, int px) { (void)r; (void)px; return -1; }' > "$out/old/bake_some.c"
+    old_extra=("$out/old/bake_some.c")
+fi
 
 dump() {   # dump <old|new> <height>: build and run raster_dump over that compositor, into $out/<side>-<height>.txt
     local side="$1" h="$2" compositor
-    if [[ $side == old ]]; then compositor=("$out/old/display/terminal.c" "$out/old/display/pro_canvas.c" "$out/old/pod/pod_draw.c")
+    if [[ $side == old ]]; then
+        compositor=("$out/old/display/terminal.c" "$out/old/display/pro_canvas.c" "$out/old/pod/pod_draw.c" ${old_extra[@]+"${old_extra[@]}"})
     else compositor=("${max_compositor[@]}"); fi
     # The Pro's main/pod/ on the path: a Pro file from before the copies names its pod_draw.h from beside it.
     cc -std=c11 -D_DEFAULT_SOURCE -Wall -Wextra -Werror -O1 -g -fsanitize=undefined,bounds -DHT_WIDTH=1920 -DHT_HEIGHT="$h" \

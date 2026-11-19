@@ -172,8 +172,9 @@ void max_layer_kept(ht_scene_t *s, int x, int l, int r, max_paint_t paint, const
 // The runs from `from` on (a pet, a logo or the ">_" mark, drawn on one colour `ground`) as one image over the glass:
 // dimmed and blurred `dim` (MAX_ONE whole) of the way as a sliver's are, and `keep` of 256 there by its alpha, so what
 // lies under it shows through (no box of the ground over it, as a fade by colours would leave). Painted again only
-// when the runs, the ground or the dim change. Undimmed and whole, it is drawn as it is, but for its frames below 1x on
-// one colour: each an image of what its bake would be (no bake for a warming to make in one go).
+// when the runs, the ground or the dim change. Undimmed and whole, it is drawn as it is: its frames below 1x on one
+// colour baked as the Pro bakes them, a warming's a band at a time (pod_cell_bake_some), or, with no room for its bake,
+// as an image of what the bake would be that the warming made.
 void max_layer_pet(ht_scene_t *s, int from, unsigned ground, int dim, unsigned keep);
 // The runs from `from` on, an agent of the row drawn on the glass from x (w wide) with its colours dimmed `dim` of the
 // way (max_dim) and its pets by max_layer_pet, cut to the glass's [l, r) as its own layer would be cut, and its rail
@@ -204,6 +205,10 @@ max_warm_t max_layer_warm(uint32_t from);
 bool max_layer_warm_paint(bool (*go_on)(void));
 // Whether a warming step left an image or a layer to make.
 bool max_layer_owes(void);
+// The Max's pod_draw.c (main/pro_fork): the rows of a frame below 1x on one colour (pod_cell_flat) still to bake into
+// its arena, once its next ones (about px) are baked, a band at a time (px 0: only asked); -1 when it is not such a
+// frame or has no room there without starting the arena over. A raster that meets one not baked whole bakes the rest.
+int pod_cell_bake_some(const ht_run_t *r, int px);
 
 // max_ui_render into s, cleared, for a frame the glass never shows: when the glass's own next frame is due
 // (max_motion_ms) stays as the glass's last render left it.

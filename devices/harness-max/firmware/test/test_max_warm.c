@@ -33,13 +33,15 @@ static uint32_t frame(uint32_t now)
     return fnv(s_glass, sizeof s_glass);
 }
 
-// n agents at rest on Overview (3 or more), a and d working, nothing kept: Claude's pets, b's and d's the HD Codex
-// (its pet resampled below 1x), or all of `engine` (a logo where a pet would stand: small images); or the agent page
-// of `open` (its mic off), the row at rest by T0 - MAX_ROW_FRAME_MS.
-static void rest_of(int n, const char *open, const char *engine)
+// n agents at rest on Overview (3 or more), a and d working, nothing kept (or, `kept`, all that was painted and baked
+// before): Claude's pets, b's and d's the HD Codex (its pet resampled below 1x), or all of `engine` (a logo where a pet
+// would stand: small images); or the agent page of `open` (its mic off), the row at rest by T0 - MAX_ROW_FRAME_MS.
+static void page_of(int n, const char *open, const char *engine, bool kept)
 {
-    max_layer_forget();
-    pod_cell_bake_reset();
+    if (!kept) {
+        max_layer_forget();
+        pod_cell_bake_reset();
+    }
     max_ui_reset();
     max_ui_link(true, "MacBook Pro", 0);
     roster_of(ABCDE, n, engine ? engine : "claude");
@@ -58,6 +60,7 @@ static void rest_of(int n, const char *open, const char *engine)
     frame(T0 - MAX_ROW_FRAME_MS);
     CHECK(!max_row_moving(T0 - MAX_ROW_FRAME_MS));
 }
+static void rest_of(int n, const char *open, const char *engine) { page_of(n, open, engine, false); }
 static void rest(int n, const char *open) { rest_of(n, open, NULL); }
 
 // What the warming makes out of the lock, a band (or a bake) a call, or all it can.
@@ -220,6 +223,52 @@ static void test_first_frames(void)
     }
 }
 
+// The P4 bench's order (bench_main.c (g)): each tap painted ahead and then tapped a frame off the warming's clock, then
+// tapped again from the same page with all that kept. With room for all its motions, ahead the glass bakes no pet frame:
+// the warming baked each it met, a band at a time, or made an image of it (a pose it did not land on is painted, its
+// frames' bakes found). Again, it bakes nothing. Every frame is the same pixels as cold.
+static void test_after_ahead(void)
+{
+    const struct { int n; const char *page, *engine; bool room; } cases[] = {
+        {3, NULL, NULL, true}, {3, "b", NULL, true}, {5, NULL, NULL, false}, {5, "c", "codex", true},
+    };
+    for (unsigned c = 0; c < sizeof cases / sizeof cases[0]; c++) {
+        rest_of(cases[c].n, cases[c].page, cases[c].engine);
+        char taps[MAX_ROW_HITS + 1][ID_MAX];
+        const int n = taps_of(taps);
+        CHECK(n == 3);
+        for (int t = 0; t < n; t++) {
+            const char *tap = taps[t];
+            rest_of(cases[c].n, cases[c].page, cases[c].engine);
+            const motion_t cold = motion(tap);
+            rest_of(cases[c].n, cases[c].page, cases[c].engine);
+            const int steps = warm(T0 - MAX_ROW_FRAME_MS);
+            const motion_t ahead = motion(tap);
+            if (cases[c].room && ahead.baked) painted_where(cases[c].page, tap, &ahead, steps);
+            CHECK(!cases[c].room || ahead.baked == 0);
+            page_of(cases[c].n, cases[c].page, cases[c].engine, true);
+            const motion_t again = motion(tap);
+            CHECK(again.baked == 0);
+            CHECK(ahead.frames == cold.frames && again.frames == cold.frames);
+            CHECK(!memcmp(ahead.hash, cold.hash, (size_t)cold.frames * sizeof cold.hash[0]));
+            CHECK(!memcmp(again.hash, cold.hash, (size_t)cold.frames * sizeof cold.hash[0]));
+        }
+    }
+}
+
+// The glass makes no image of a pet drawn as it is: its frames below 1x are baked as the Pro bakes them, and the bakes
+// kept for the frames that draw them again. Overview at rest with nothing painted ahead paints nothing, and its next
+// frame bakes nothing.
+static void test_glass_flats(void)
+{
+    const unsigned painted = max_layer_painted();
+    rest(3, NULL);
+    CHECK(max_layer_painted() == painted && pod_cell_bakes() > 0);
+    const unsigned baked = pod_cell_bakes();
+    frame(T0);
+    CHECK(max_layer_painted() == painted && pod_cell_bakes() == baked);
+}
+
 // Not at rest, nothing is painted ahead: a finger on the glass, the row moving, an overlay up, a page not App Detail's.
 static void test_not_resting(void)
 {
@@ -268,9 +317,69 @@ static void bake_one(unsigned i)
         if (one.runs[r].text[0] == 1) ht_raster(&one, (ht_rect_t){one.runs[r].x, one.runs[r].y, 1, 1}, px);
 }
 
-// The bakes with no room for one more start over (pod_draw.c), and other pages' fill them. The row's pets below 1x take
-// none of them (each is an image, or in one): with the bakes as full as they get, and again just started over, the
-// warming bakes nothing, nor does the glass's next frame, and a motion painted ahead paints and bakes nothing.
+// A frame below 1x baked a band of rows at a time (the Max's pod_draw.c, pod_cell_bake_some) is the same pixels as one
+// a raster bakes whole, and not one of the rasters' bakes: asked (px 0), it makes no entry; a call bakes px of rows; a
+// raster that meets it part baked bakes the rest, one bake. With no room left it is -1, and the arena is not started
+// over.
+static void test_bake_bands(void)
+{
+    static ht_scene_t one;
+    static uint16_t whole[256 * 256], banded[256 * 256];
+    ht_scene_clear(&one, 0);
+    pod_pet_draw_flat(&one, 0, 0, 120, "codex", POD_SCENE_REST, 0, 0, 7, 16);
+    const ht_run_t *r = NULL;
+    for (int i = 0; i < one.count && !r; i++)
+        if (one.runs[i].text[0] == 1) r = &one.runs[i];
+    CHECK(r != NULL && r->w * r->pro_height <= 256 * 256 && r->pro_height > 8);
+    const ht_rect_t box = ht_run_bounds(r);
+    const size_t bytes = (size_t)box.w * box.h * sizeof whole[0];
+    pod_cell_bake_reset();
+    ht_raster(&one, box, whole);
+    CHECK(pod_cell_bakes() == 1);
+
+    pod_cell_bake_reset();
+    CHECK(pod_cell_bake_some(r, 0) == r->pro_height && pod_cell_bake_px() == 0);
+    for (int left = r->pro_height; left > 0;) {
+        const int next = pod_cell_bake_some(r, 3 * r->w);
+        CHECK(next == (left > 3 ? left - 3 : 0));
+        left = next;
+    }
+    CHECK(pod_cell_bake_some(r, 0) == 0 && pod_cell_bakes() == 0);
+    memset(banded, 0, sizeof banded);
+    ht_raster(&one, box, banded);
+    CHECK(pod_cell_bakes() == 0 && !memcmp(whole, banded, bytes));
+
+    pod_cell_bake_reset();
+    CHECK(pod_cell_bake_some(r, 5 * r->w) == r->pro_height - 5);
+    memset(banded, 0, sizeof banded);
+    ht_raster(&one, box, banded);
+    CHECK(pod_cell_bakes() == 1 && pod_cell_bake_some(r, 0) == 0 && !memcmp(whole, banded, bytes));
+
+    rest(3, NULL);
+    unsigned fill = 0, last = pod_cell_bake_px();
+    while (pod_cell_bake_px() >= last) {   // how many fit
+        CHECK(fill < 1000);
+        last = pod_cell_bake_px();
+        bake_one(++fill);
+    }
+    rest(3, NULL);
+    for (unsigned i = 1; i < fill; i++) bake_one(i);   // as full as it gets
+    const unsigned full = pod_cell_bake_px();
+    ht_scene_clear(&one, 0);
+    pod_pet_draw_flat(&one, 0, 0, 120, "codex", POD_SCENE_REST, 0, 0, fill, 16);
+    int none = 0;
+    for (int i = 0; i < one.count; i++) {
+        if (one.runs[i].text[0] != 1 || pod_cell_bake_some(&one.runs[i], 0) != -1) continue;
+        CHECK(pod_cell_bake_some(&one.runs[i], 1024) == -1);
+        none++;
+    }
+    CHECK(none > 0 && pod_cell_bake_px() == full);
+}
+
+// The bakes with no room for one more start over (pod_draw.c), and other pages' fill them. A warming never starts them
+// over (each of the row's pets below 1x it has no room to bake is an image): with the bakes as full as they get, and
+// again just started over, the warming bakes nothing whole, nor does the glass's next frame, and a motion painted ahead
+// paints and bakes nothing.
 static void test_bakes_full(void)
 {
     rest(3, NULL);
@@ -360,6 +469,9 @@ int main(void)
     test_bands();
     test_band_flats();
     test_first_frames();
+    test_after_ahead();
+    test_glass_flats();
+    test_bake_bands();
     test_bakes_full();
     test_not_resting();
     test_again();

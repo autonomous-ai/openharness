@@ -298,8 +298,11 @@ static void cell_raster_core(const ht_run_t *r, ht_rect_t clip, uint16_t *out)
 // frame or another ground is another entry. When the table or the arena is full it starts over; a raster looks its entry up (and bakes it) when it
 // runs, so nothing holds an entry across rasters. Render task only.
 // 360 K pixels (720 KB of PSRAM): every frame the Notices faces and the recap's RELAX and REST scenes can show for all four pets at once come to 353 K.
+// The Max's: an entry can also be baked a band of rows at a time (pod_cell_bake_some, the Max's paint-ahead out of the lock: a whole one would
+// be one long step); a raster that meets one not baked to its last row bakes the rest. Its rows are the very pixels a whole bake writes there.
+// pod_cell_bakes counts the bakes rasters make (whole, or the rest of one): a band at a time is not one.
 enum { BAKE_SLOTS = 64, BAKE_ARENA_PX = 360 * 1024 };
-typedef struct { const ht_cell_frame_t *f; const uint8_t *cells; const uint16_t *palette; uint16_t ground, w, h, cols, rows; uint8_t z, s16; uint32_t off; } bake_t;
+typedef struct { const ht_cell_frame_t *f; const uint8_t *cells; const uint16_t *palette; uint16_t ground, w, h, cols, rows, done; uint8_t z, s16; uint32_t off; } bake_t;
 static bake_t s_bake[BAKE_SLOTS];
 static unsigned s_nbake;
 static uint32_t s_arena_used;
@@ -320,30 +323,70 @@ static bool flat_mark(ht_scene_t *s, bool ok, uint16_t ground)
 bool pod_cell_flat(ht_scene_t *s, int x, int y, const ht_cell_frame_t *f, unsigned zoom8, uint16_t ground) { return flat_mark(s, pod_cell(s, x, y, f, zoom8), ground); }
 bool pod_cell_flat16(ht_scene_t *s, int x, int y, const ht_cell_frame_t *f, unsigned zoom16, uint16_t ground) { return flat_mark(s, pod_cell16(s, x, y, f, zoom16), ground); }
 
-static const bake_t *bake_of(const ht_run_t *r)
+static bake_t *bake_find(const ht_run_t *r)
 {
     const ht_cell_frame_t *f = r->bitmap.asset;
     for (unsigned i = 0; i < s_nbake; i++) {
-        const bake_t *b = &s_bake[i];
+        bake_t *b = &s_bake[i];
         if (b->f == f && b->cells == f->cells && b->palette == f->palette && b->z == r->radius && b->s16 == r->text[1] && b->ground == r->fg &&
             b->cols == f->cols && b->rows == f->rows && b->w == r->w && b->h == r->pro_height) return b;
     }
+    return NULL;
+}
+static bool bake_room(size_t px) { return s_nbake < BAKE_SLOTS && px <= BAKE_ARENA_PX - s_arena_used; }
+// A new entry for r with no row baked: room for it at the arena's end, which starts over when it has none (and `over`).
+static bake_t *bake_new(const ht_run_t *r, bool over)
+{
+    const ht_cell_frame_t *f = r->bitmap.asset;
     size_t px = (size_t)r->w * (size_t)r->pro_height;
     if (px > BAKE_ARENA_PX) return NULL;
     // Full: start the arena over (the arena never evicts one entry). The screen shown re-bakes what it draws, which fits: no
     // screen needs more than the arena (the Working card about 126 K px), while a session that visits every Notices, Recap and
     // Working pet adds up to more.
-    if (s_nbake >= BAKE_SLOTS || px > BAKE_ARENA_PX - s_arena_used) { s_nbake = 0; s_arena_used = 0; }
+    if (!bake_room(px)) {
+        if (!over) return NULL;
+        s_nbake = 0; s_arena_used = 0;
+    }
+    bake_t *b = &s_bake[s_nbake++];
+    *b = (bake_t){f, f->cells, f->palette, r->fg, (uint16_t)r->w, (uint16_t)r->pro_height, f->cols, f->rows, 0, r->radius, r->text[1], s_arena_used};
+    s_arena_used += (uint32_t)px;
+    return b;
+}
+// b's rows from the next one to bake to y1, resampled over the ground.
+static void bake_rows(bake_t *b, const ht_run_t *r, int y1)
+{
     ht_run_t plain = *r;   // the same run at the origin, an ordinary cell run: resampled over the ground into the arena
     plain.x = 0; plain.y = 0; plain.text[0] = 0;
-    uint16_t *dst = s_arena + s_arena_used;
-    for (size_t i = 0; i < px; i++) dst[i] = r->fg;
-    cell_raster_core(&plain, (ht_rect_t){0, 0, r->w, r->pro_height}, dst);
-    bake_t *b = &s_bake[s_nbake++];
-    *b = (bake_t){f, f->cells, f->palette, r->fg, (uint16_t)r->w, (uint16_t)r->pro_height, f->cols, f->rows, r->radius, r->text[1], s_arena_used};
-    s_arena_used += (uint32_t)px;
+    uint16_t *dst = s_arena + b->off + (size_t)b->done * b->w;
+    for (size_t i = 0; i < (size_t)(y1 - b->done) * b->w; i++) dst[i] = r->fg;
+    cell_raster_core(&plain, (ht_rect_t){0, (int16_t)b->done, r->w, (int16_t)(y1 - b->done)}, dst);
+    b->done = (uint16_t)y1;
+}
+
+static const bake_t *bake_of(const ht_run_t *r)
+{
+    bake_t *b = bake_find(r);
+    if (b && b->done == b->h) return b;
+    if (!b && !(b = bake_new(r, true))) return NULL;
+    bake_rows(b, r, b->h);
     s_bakes_made++;
     return b;
+}
+
+// The rows of r's bake still to make (0: baked whole), once its next ones, about px of them, are baked (px 0: none, only asked); -1 when r is not
+// a frame below 1x on one colour (pod_cell_flat), or when its entry has no room without starting the arena over (that drops what the glass draws
+// from). Its entry is made with its first rows.
+int pod_cell_bake_some(const ht_run_t *r, int px)
+{
+    if (r->pro_kind != POD_CELL || r->text[0] != 1 || r->w <= 0 || r->pro_height <= 0) return -1;
+    bake_t *b = bake_find(r);
+    if (!b) {
+        if (!bake_room((size_t)r->w * (size_t)r->pro_height)) return -1;
+        if (px <= 0) return r->pro_height;
+        b = bake_new(r, false);
+    }
+    if (px > 0) bake_rows(b, r, imin(b->h, b->done + imax(1, px / b->w)));
+    return b->h - b->done;
 }
 
 static void cell_raster(const ht_run_t *r, ht_rect_t clip, uint16_t *out)

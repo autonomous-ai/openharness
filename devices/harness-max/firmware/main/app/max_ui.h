@@ -147,9 +147,9 @@ uint32_t max_ui_next_wake_ms(uint32_t now_ms);
 // the model as it was and draws nothing on the glass. True while there is more to paint: call max_ui_warm_paint, then
 // this again, while the render task has nothing else to do.
 bool max_ui_warm(uint32_t now_ms);
-// Out of the lock (it reads none of the model), on the render task: the image or layer the last max_ui_warm needs made
-// a band of rows at a time while go_on() says so (at least one band). False when nothing was owed (then max_ui_warm is
-// next).
+// Out of the lock (it reads none of the model), on the render task: the image, layer or pet frame's bake the last
+// max_ui_warm needs made a band of rows at a time while go_on() says so (at least one band). False when nothing was
+// owed (then max_ui_warm is next).
 bool max_ui_warm_paint(bool (*go_on)(void));
 // Under the lock: whether the row rests, so painting ahead may go on (max_ui_warm_paint's work waits while it moves:
 // the glass's own frames come first).

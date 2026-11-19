@@ -574,17 +574,18 @@ static bool movable(const ht_run_t *r)
 // A band's pixels, about a ms on the P4: a pet's blur (it reads 2 * BLUR_R rows more a band), or a raster (a pet's
 // frame below 1x resampled straight in costs about four times a blur's pixel).
 enum { BAND_PX = 1024, RASTER_PX = BAND_PX / 4 };
-typedef enum { OWED_NONE, OWED_BARE, OWED_DIM, OWED_KEPT } owed_kind_t;
+typedef enum { OWED_NONE, OWED_BARE, OWED_DIM, OWED_KEPT, OWED_BAKE } owed_kind_t;
 static EXT_RAM_BSS_ATTR struct {
     owed_kind_t kind;
     pet_t *pet, *src;   // the pet's image being made and (dimmed) the undimmed one it is made from
     kept_t *kept;       // or the layer
     job_t job;          // a dimmed pet's blur
+    int flat;           // the next of the scene's runs whose bake is made first (a bare pet's, a layer's, a bake's)
     int y;              // its next row; a layer's are all rasterised first, then blurred from y - HT_HEIGHT
     int bottom;         // a layer's busy_of
     busy_t busy;
     uint16_t ring[BLUR_R][LAYER_W];
-    ht_scene_t scene;   // what a bare pet or a layer is rasterised from
+    ht_scene_t scene;   // what a bare pet or a layer is rasterised from; a bake's frame below 1x
 } s_owed;
 
 static void owed_drop(void)
@@ -595,18 +596,23 @@ static void owed_drop(void)
 }
 // A pet's frame below 1x on one colour (pod_cell_flat) is baked whole by pod_draw.c the first time a raster meets it
 // (resampled onto that colour into its arena) and copied from then on where it is not that colour: one band of an
-// image would bake all of it, in one go. So a band of a warming's image draws each such frame as that copy instead:
-// its rows in the band resampled onto the colour, then put down as an image whole where that is not the colour and
-// clear where it is. The same pixels; no bake.
+// image would bake all of it, in one go. So a warming bakes each frame its image or layer draws first, a band of rows
+// at a time (pod_cell_bake_some: kept in the arena for the glass's frames, as a whole bake would be), and a band of the
+// image copies it; one with no room there it draws as that copy instead: its rows in the band resampled onto the
+// colour, then put down as an image whole where that is not the colour and clear where it is. The same pixels.
 enum { FLATS = 4, FLAT_PX = 2 * BAND_PX };
 static EXT_RAM_BSS_ATTR uint16_t s_flat_px[FLATS][FLAT_PX];
 static EXT_RAM_BSS_ATTR uint8_t s_flat_a[FLATS][FLAT_PX];
 static EXT_RAM_BSS_ATTR ht_scene_t s_flat, s_band;   // a frame alone; the scene with its frames as those copies
+// A frame below 1x not baked whole (one that is, the raster copies).
+static bool unbaked(const ht_run_t *r)
+{
+    return r->pro_kind == POD_CELL && r->text[0] == 1 && pod_cell_bake_some(r, 0) != 0;
+}
 static bool flat_in(const ht_run_t *r, ht_rect_t band)
 {
     const ht_rect_t b = ht_run_bounds(r);
-    return r->pro_kind == POD_CELL && r->text[0] == 1 && b.x < band.x + band.w && band.x < b.x + b.w &&
-           b.y < band.y + band.h && band.y < b.y + b.h;
+    return unbaked(r) && b.x < band.x + band.w && band.x < b.x + b.w && b.y < band.y + band.h && band.y < b.y + b.h;
 }
 static void band_raster(const ht_scene_t *sc, ht_rect_t band, uint16_t *out)
 {
@@ -621,7 +627,7 @@ static void band_raster(const ht_scene_t *sc, ht_rect_t band, uint16_t *out)
     memcpy(s_band.runs, sc->runs, (size_t)sc->count * sizeof sc->runs[0]);
     for (; i < sc->count; i++) {
         const ht_run_t *r = &sc->runs[i];
-        if (r->pro_kind != POD_CELL || r->text[0] != 1) continue;
+        if (!unbaked(r)) continue;
         const ht_rect_t b = ht_run_bounds(r);
         const int x0 = imax(b.x, band.x), x1 = imin(b.x + b.w, band.x + band.w);
         const int y0 = imax(b.y, band.y), y1 = imin(b.y + b.h, band.y + band.h);
@@ -756,7 +762,7 @@ static pet_t *undimmed(const pet_t *k, const ht_run_t *runs)
     }
     s_painted++;
     if (s_warm) {   // made out of the lock
-        s_owed.kind = OWED_BARE, s_owed.pet = p, s_owed.y = 0;
+        s_owed.kind = OWED_BARE, s_owed.pet = p, s_owed.flat = 0, s_owed.y = 0;
         return NULL;
     }
     bare_rows(p, one, 0, p->h, ht_raster);
@@ -784,10 +790,13 @@ static pet_t *dimmed_pet(const pet_t *k, const ht_run_t *runs)
     return p;
 }
 
-// A pet drawn as it is: each of its frames below 1x on one colour (pod_cell_flat) as an image of what its bake would be,
-// the frame resampled onto that colour, clear where it is that colour: an undimmed pet of that frame alone on that
-// colour, the same pixels as the bake copies. Made in the frame that first needs it, or a band at a time by a warming
-// (its bake would be one whole frame in one go); kept like a pet's image. One with no room stays as it is, baked.
+// A pet drawn as it is: its frames below 1x on one colour (pod_cell_flat) baked by a warming a band at a time (the
+// glass's raster copies the bake, which stays in the arena for the frames and pages that draw it again). One the arena
+// has no room for it makes an image of what its bake would be instead, a band at a time too: the frame resampled onto
+// that colour, clear where it is that colour, an undimmed pet of that frame alone on that colour (the same pixels as
+// the bake copies), kept like a pet's image. The glass shows such an image and makes none: there a frame with neither
+// is baked as the Pro bakes it (an image made there would cost the frame the whole of it, and give up images the
+// motions painted ahead need).
 static void flat_images(ht_scene_t *s, int from)
 {
     for (int i = from; i < s->count; i++) {
@@ -796,13 +805,27 @@ static void flat_images(ht_scene_t *s, int from)
         const ht_rect_t b = ht_run_bounds(r);
         const int x0 = imax(0, b.x), y0 = imax(0, b.y);
         const int x1 = imin(HT_WIDTH, b.x + b.w), y1 = imin(HT_HEIGHT, b.y + b.h);
-        if (x1 <= x0 || y1 <= y0 || (x1 - x0) * (y1 - y0) > PET_PX) continue;
-        pet_t *k = &s_key;
-        *k = (pet_t){.count = 1, .ground = r->fg, .x = (int16_t)x0, .y = (int16_t)y0, .w = (int16_t)(x1 - x0),
-                     .h = (int16_t)(y1 - y0)};
-        k->runs[0] = *r;
-        k->runs[0].x = (int16_t)(r->x - x0), k->runs[0].y = (int16_t)(r->y - y0);
-        pet_t *p = undimmed(k, r);
+        const bool fits = x1 > x0 && y1 > y0 && (x1 - x0) * (y1 - y0) <= PET_PX;
+        pet_t *k = &s_key, *p = NULL;
+        if (fits) {
+            *k = (pet_t){.count = 1, .ground = r->fg, .x = (int16_t)x0, .y = (int16_t)y0, .w = (int16_t)(x1 - x0),
+                         .h = (int16_t)(y1 - y0)};
+            k->runs[0] = *r;
+            k->runs[0].x = (int16_t)(r->x - x0), k->runs[0].y = (int16_t)(r->y - y0);
+            p = find(k);
+        }
+        if (!p && s_warm) {
+            const int left = pod_cell_bake_some(r, 0);
+            if (left > 0 && may_paint()) {   // baked out of the lock
+                ht_scene_clear(&s_owed.scene, 0);
+                s_owed.scene.runs[0] = *r;
+                s_owed.scene.count = 1;
+                s_owed.kind = OWED_BAKE, s_owed.flat = 0;
+                s_painted++;
+            } else if (left < 0 && fits) {   // no room in the arena: its image
+                p = undimmed(k, r);
+            }
+        }
         if (!p) continue;
         p->used = s_frame;
         const ht_pro_bitmap_t bmp = {&s_pool_px[p->at], &s_pool_a[p->at], (uint16_t)p->w, (uint16_t)p->h, p->revision,
@@ -1167,7 +1190,7 @@ void max_layer_kept(ht_scene_t *s, int x, int l, int r, max_paint_t paint, const
         if (s_warm) {   // made out of the lock; on the glass this frame
             k->full = false;
             memcpy(&s_owed.scene, &s_sub, sizeof s_sub);
-            s_owed.kind = OWED_KEPT, s_owed.kept = k, s_owed.y = 0;
+            s_owed.kind = OWED_KEPT, s_owed.kept = k, s_owed.flat = 0, s_owed.y = 0;
             on_glass(s, x, l, r, paint, arg);
             return;
         }
@@ -1181,12 +1204,30 @@ void max_layer_kept(ht_scene_t *s, int x, int l, int r, max_paint_t paint, const
     if (ht_pro_image(s, l, 0, &b)) s->runs[s->count - 1].w = (int16_t)(r - l);
 }
 
+// A band of rows of the next bake what is owed draws (a bake's own frame, or a frame below 1x in a bare pet or a layer:
+// baked before its bands copy it, none for a dim), the bakes it has no room for left out: whether it made one.
+static bool bake_band(void)
+{
+    if (s_owed.kind == OWED_DIM) return false;
+    for (; s_owed.flat < s_owed.scene.count; s_owed.flat++) {
+        const ht_run_t *r = &s_owed.scene.runs[s_owed.flat];
+        if (pod_cell_bake_some(r, 0) <= 0) continue;
+        if (!pod_cell_bake_some(r, RASTER_PX)) s_owed.flat++;
+        return true;
+    }
+    return false;
+}
+
 bool max_layer_warm_paint(bool (*go_on)(void))
 {
     while (s_owed.kind) {
         const int y0 = s_owed.y;
         bool made = false;
-        if (s_owed.kind == OWED_BARE) {
+        if (bake_band()) {
+            made = s_owed.kind == OWED_BAKE && s_owed.flat == s_owed.scene.count;
+        } else if (s_owed.kind == OWED_BAKE) {   // baked meanwhile, or no room for it now
+            made = true;
+        } else if (s_owed.kind == OWED_BARE) {
             pet_t *p = s_owed.pet;
             const int y1 = imin(p->h, y0 + imax(1, RASTER_PX / p->w));
             bare_rows(p, &s_owed.scene, y0, y1, band_raster);

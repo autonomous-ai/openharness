@@ -1,13 +1,14 @@
-// App Detail's next motion painted ahead (max_ui.h, max_ui_warm). The first frames of an open or a close paint what
-// no frame showed before (each step of the moving agents' pets, dimmed and blurred, and the slivers it comes to rest
+// App Detail's next motion painted ahead (max_ui.h, max_ui_warm). The first frames of an open or a close paint what no
+// frame showed before (each step of the moving agents' pets, dimmed and blurred, and the slivers it comes to rest
 // with): on the P4 that is a frame several times a warm one's. So while the row rests, each motion the finger can start
 // from here is drawn off the glass as it will be drawn, frame after frame on its frames' grid (max_tween_frame), from
 // the motion's start to where it rests, and what it paints is kept (max_layer_warm). A step under the lock draws one
-// frame; the first image or layer it needs is made out of the lock (max_ui_warm_paint) a few ms at a time, and the frame
-// is drawn again once it is made: neither the finger nor the glass's own frames wait on more than a step (its pets below
-// 1x bake nothing: each is an image, or in one, max_layer_pet). The open agent's close first (its X, the likeliest), then every open's first frame, every
-// one's second and on: whichever the finger picks starts warm, and when the room runs out the later frames are the
-// ones left cold. What a step writes of the glass's model is set aside and put back as it was. Render task only.
+// frame; the first image or layer it needs, or bake of a pet's frame below 1x, is made out of the lock
+// (max_ui_warm_paint) a few ms at a time, and the frame is drawn again once it is made: neither the finger nor the
+// glass's own frames wait on more than a step. The open agent's close first (its X, the likeliest), then every open's
+// first frame, every one's second and on: whichever the finger picks starts warm, and when the room runs out the later
+// frames are the ones left cold. What a step writes of the glass's model is set aside and put back as it was. Render
+// task only.
 #include <stddef.h>
 #include <string.h>
 

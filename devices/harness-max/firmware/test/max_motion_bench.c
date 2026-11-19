@@ -4,7 +4,9 @@
 // rows, as pro_frame_present does it. Built and run by test/max_motion_bench.sh (max_motion_bench -v: every frame).
 // The demo model and its scenes are max_render.c's.
 // Each motion runs cold (nothing kept), then ahead (nothing kept, then max_ui_warm while the page rests, as the render
-// task paints it ahead), then warm: its first frames (0 and 1) ahead must cost no more than its warm worst.
+// task paints it ahead), then warm: its first frames (0 and 1) ahead must cost no more than its warm worst, and so must
+// the first warm run's, right after ahead with all kept (the P4 bench's (g) order: what the glass painted ahead must not
+// have given up what the motion needs again).
 #include <stdlib.h>
 #include <time.h>
 
@@ -105,6 +107,7 @@ static void bench(const max_motion_t *m, bool verbose)
     static unsigned painted[FRAMES], baked[FRAMES];
     int frames = 0, steps = 0;
     double cold = 0, cold_sum = 0, glass = 1e9, ahead = 0, ahead_first = 0, ahead_us = 0;
+    double first[3] = {0}, build_max[3] = {0};   // cold, ahead and the first warm run (r == 2), as the P4's bench has them
     for (int r = 0; r < REPEATS; r++) {
         if (r < 2) {
             max_layer_forget();
@@ -141,6 +144,8 @@ static void bench(const max_motion_t *m, bool verbose)
             if (!r) cold_sum += c;
             if (r == 1 && c > ahead) ahead = c;
             if (r == 1 && f < 2 && c > ahead_first) ahead_first = c;
+            if (r < 3 && f < 2 && c > first[r]) first[r] = c;
+            if (r < 3 && cost[r][f].build > build_max[r]) build_max[r] = cost[r][f].build;
             if (f >= m->steps && !max_row_moving(now)) {   // this frame drew where it rests
                 f++;
                 break;
@@ -176,6 +181,10 @@ static void bench(const max_motion_t *m, bool verbose)
            " %d steps (%d under the lock), %.1f ms\n",
            "", ahead_first, 100 * ahead_first / glass, ahead_first <= worst ? "within" : "OVER", ahead,
            100 * ahead / glass, steps, locked, ahead_us / 1000);
+    printf("  %-13s cold build max %5.0f us; ahead build max %5.0f us; warm (the run after ahead): first frames %5.0f us"
+           " (%3.0f%%, %s the warm worst)  build max %5.0f us\n",
+           "", build_max[0], build_max[1], first[2], 100 * first[2] / glass, first[2] <= worst ? "within" : "OVER",
+           build_max[2]);
     printf("  %-13s ahead: a step p50 %3.0f us  p95 %3.0f us  max %4.0f us, %d over %d us; under the lock max %4.0f us\n",
            "", step_us[steps / 2], step_us[steps * 95 / 100], step_us[steps - 1], over, OVER_US, locked_max);
 }
