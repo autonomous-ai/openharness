@@ -142,10 +142,13 @@ export function createEngineHooks(deps: EngineHookDeps) {
 
   const resolveHookAgent: ResolveHookAgent = async ({ engine, runtimeHints, callerPid, bySessionPane = false, onWait }) => {
     if (!callerPid) return null
-    // Who the hook came from, read as it arrives. On Linux dash keeps its `sh -c` as the hook's parent, a
-    // shell that exits with the hook (its 500ms, or `onWait`'s answer); read after the reconcile pass or
-    // the wait, the ancestry stopped at a pid already gone and a restart's new conversation was never
-    // bound (e2e/updates.e2e.ts). macOS's /bin/sh is a bash that execs the hook: never seen there.
+    // Who the hook came from, read as it arrives. A caller that exits with its hook (its 500ms, or `onWait`'s
+    // answer) is gone after the reconcile pass or the wait, and a restart's new conversation was then never
+    // bound (e2e/updates.e2e.ts, on Linux at the time). On Linux the hook now names the nearest ancestor that
+    // outlives it (hook/notify.mjs hookCallerPid), and macOS's /bin/sh execs the hook, so on both the caller
+    // is alive. Windows still needs this read: Codex and Copilot run their hook through PowerShell, Command
+    // Code through cmd.exe, a shell that is the hook's parent and exits with it. The read only narrows that
+    // window: a core held past the shell's exit starts it too late (e2e/stallHook.e2e.ts).
     const arrival = processRows().then(rows => rows?.map(row => ({ ...row })) ?? null)
     const resolved: TerminalRuntimeRef[] = []
     for (const hint of runtimeHints ?? []) {
