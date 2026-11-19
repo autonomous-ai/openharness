@@ -10,7 +10,7 @@ import { lstatSync } from 'node:fs'
 import { env } from '../config/env.js'
 import { localDaemonStatus } from './daemonEndpoint.js'
 import { SPAWN_LOCK_DIR, spawnLockHeldHere } from './daemonSpawnLock.js'
-import { PID_FILE, parsePid, readPidFile, setAnsweredPid, type PidFileRead } from './daemonState.js'
+import { isAlive, PID_FILE, pidOrThrow, readPidFile, setAnsweredPid, type PidFileRead } from './daemonState.js'
 import { readState } from './secureState.js'
 
 export interface SettleDeps {
@@ -24,12 +24,6 @@ export interface SettleDeps {
 }
 
 export type Settled = { state: 'pid'; pid: number; from: 'file' | 'daemon' } | { state: 'missing' } | { state: 'busy' }
-
-function pidOrThrow(text: string): number {
-  const pid = parsePid(text)
-  if (pid === null) throw new TypeError('not a pid')
-  return pid
-}
 
 /** No lock there at all. One that cannot be looked at is not known to be free. */
 function lockAbsent(): boolean {
@@ -73,4 +67,11 @@ export async function settlePidFile(deps: SettleDeps = processSettleDeps()): Pro
   if (again.state === 'pid') return { state: 'pid', pid: again.pid, from: 'file' }
   if (again.state === 'unreadable') deps.setAside()
   return { state: 'missing' }
+}
+
+/** Whether the daemon runs: the settled pid is alive. Here, not in daemonState.ts, which the core loads: the settle
+ *  asks the daemon, and the core never loads that. */
+export async function isDaemonRunning(deps: SettleDeps = processSettleDeps()): Promise<boolean> {
+  const settled = await settlePidFile(deps)
+  return settled.state === 'pid' && isAlive(settled.pid)
 }

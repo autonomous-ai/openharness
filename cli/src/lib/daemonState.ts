@@ -39,7 +39,8 @@ export function parsePid(text: string): number | null {
   return Number.isSafeInteger(pid) && pid > 0 ? pid : null
 }
 
-function pidOrThrow(text: string): number {
+/** [parsePid] for the state readers (secureState.ts), which take a file whose text is no pid as unreadable. */
+export function pidOrThrow(text: string): number {
   const pid = parsePid(text)
   if (pid === null) throw new TypeError('not a pid')
   return pid
@@ -135,12 +136,6 @@ export const onError = (err: unknown, code = 1): never => {
   // A pid file left naming a process that is gone, the next `harness start` would refuse on. Only ours, though.
   removePidFileIf(process.pid)
   process.exit(code)
-}
-
-/** Is the background daemon process alive right now? (pid file present AND that pid still exists) */
-export function isDaemonRunning(): boolean {
-  const pid = readPid()
-  return pid !== null && isAlive(pid)
 }
 
 // Pre-rename name. Adopted (renamed, keeping the inode) the first time a daemon opens the log, so a

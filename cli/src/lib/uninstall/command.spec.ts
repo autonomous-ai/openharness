@@ -87,7 +87,8 @@ describe('harness uninstall', () => {
     const seen: string[] = []
     const t = fake({ settlePid: async () => { seen.push('settle') }, daemonPid: () => { seen.push('daemon'); return 4242 } })
     expect(await uninstallCommand(['--yes'], t.deps)).toBe(0)
-    expect(seen).toEqual(['settle', 'daemon'])
+    // The last one is under the lock (the next case).
+    expect(seen).toEqual(['settle', 'daemon', 'settle'])
   })
 
   it('settles again under its lock before it asks whether the service runs the daemon', async () => {

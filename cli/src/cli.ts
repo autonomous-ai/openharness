@@ -32,7 +32,7 @@ import { runCoreInForeground } from './core/main.js'
 import { startCoreProcess } from './coreProcess.js'
 import { backendHttpBase } from './lib/backendHttpBase.js'
 import { GRID_MINT_TIMEOUT_MS, requestJson, postJson, controlPlaneAuth } from './lib/controlPlane.js'
-import { LEGACY_LOG_FILE, MACHINE_NAME_FILE, tildify, computerId, thisDeviceLabel, DAEMON_LOG_FILE, HARNESSD_STATUS_FILE, daemonPort, isAlive, isDaemonRunning, onError, readPid } from './lib/daemonState.js'
+import { LEGACY_LOG_FILE, MACHINE_NAME_FILE, tildify, computerId, thisDeviceLabel, DAEMON_LOG_FILE, HARNESSD_STATUS_FILE, daemonPort, isAlive, onError, readPid } from './lib/daemonState.js'
 import { daemonUnreachableText, sandboxed, startRefusalText } from './lib/unreachable.js'
 import { BIND_WAIT_MS, connectFailure, daemonSpawnOptions, defaultLaunchDeps, waitForBind } from './lib/daemonLaunch.js'
 import { ensureUtf8Locale } from './lib/childLocale.js'
@@ -44,7 +44,7 @@ import { registry } from './lib/registry.js'
 import { readSafeModeMarker } from './lib/daemonSafeMode.js'
 import { SpawnLockBusyError, describeSpawnLockBusyPlainly, describeSpawnLockFailure, describeSpawnLockOwner, describeSpawnLockWaitPlainly, readSpawnLockOwner, withSpawnLock } from './lib/daemonSpawnLock.js'
 import { didNotStopSentence, leftRunning, stopDaemonOrExit, stopDaemonProcess } from './lib/daemonStop.js'
-import { settlePidFile } from './lib/pidFileSettle.js'
+import { isDaemonRunning, settlePidFile } from './lib/pidFileSettle.js'
 import { AT_LOGON_FLAG, clearTaskStopped, installedPlatform, launchMaster, osDaemonUnit, platformDaemonDeps, serviceDefinition, startThroughTask, startUnderPlatform, taskStoppedThisBoot, waitForMaster } from './lib/platformDaemon.js'
 import { processIfDownDeps, releaseAbandonedLock, runningDaemon, startIfDown } from './lib/startIfDown.js'
 import { isInstalledCopy } from './lib/installedCopy.js'
@@ -2899,16 +2899,13 @@ switch (cmd) {
     // account: the desktop app reads that line and does not wait for a restart it observes anyway.
     // Capture before sign-in: the daemon can exit cleanly when its identity changes, and the installed
     // service treats a clean exit as an intentional stop.
-    settlePidFile()
-      .then(() => {
-        const daemonWasRunning = isDaemonRunning()
-        return loginCommand(foreground, flags.includes('--force'), flags.includes('--json'), {
-          entryPoint: entryPointFlag(),
-          ticket: flags.find((f) => f.startsWith('--ticket='))?.slice('--ticket='.length) || undefined,
-          method: signInMethodFlag(flags) ?? (flags.includes('--json') || !process.stdin.isTTY ? undefined : 'ask'),
-        })
-          .then((outcome) => outcome.signedIn ? restartDaemonForIdentity(outcome.stoppedDaemon || daemonWasRunning) : undefined)
+    isDaemonRunning()
+      .then((daemonWasRunning) => loginCommand(foreground, flags.includes('--force'), flags.includes('--json'), {
+        entryPoint: entryPointFlag(),
+        ticket: flags.find((f) => f.startsWith('--ticket='))?.slice('--ticket='.length) || undefined,
+        method: signInMethodFlag(flags) ?? (flags.includes('--json') || !process.stdin.isTTY ? undefined : 'ask'),
       })
+        .then((outcome) => outcome.signedIn ? restartDaemonForIdentity(outcome.stoppedDaemon || daemonWasRunning) : undefined))
       .catch(onError)
     break
   }

@@ -426,6 +426,8 @@ async function removeHarness(deps: UninstallDeps, daemon: number | null, keepDat
   let ended: number | null = null
   try {
     halted = await deps.withLock(async () => {
+      // Again under the lock: the settle before it may have found the lock held elsewhere, and no pid then.
+      await deps.settlePid()
       if (deps.service?.present()) {
         const removed = deps.service.unregister()
         if (!removed.ok) {
