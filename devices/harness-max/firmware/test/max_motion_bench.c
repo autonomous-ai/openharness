@@ -81,8 +81,13 @@ static void draw_frame(uint32_t now) { frame_at(now); }
 // A step out of the lock makes bands for STEP_US: the P4's WARM_STEP_US (max_app.c) at the host's ~60x its speed. A
 // step over OVER_US is one over the P4's 4 ms at that speed.
 enum { STEP_US = 3000 / 60, OVER_US = 4000 / 60, STEPS = 8192 };
-static double s_until;
-static bool step_on(void) { return now_us() < s_until; }
+static double s_until, s_band_from;
+static bool step_on(void)   // max_app.c's warm_on
+{
+    const double now = now_us(), band = now - s_band_from;
+    s_band_from = now;
+    return now + band < s_until;
+}
 static int by_time(const void *a, const void *b)
 {
     const double x = *(const double *)a, y = *(const double *)b;
@@ -109,6 +114,7 @@ static void bench(const max_motion_t *m, bool verbose)
         frame_at(T0 - FRAME_MS);
         for (bool more = r == 1; more && steps < STEPS; steps++) {
             const double t0 = now_us();
+            s_band_from = t0;
             s_until = t0 + STEP_US;
             const bool out = max_ui_warm_paint(step_on);
             if (!out) more = max_ui_warm(T0 - FRAME_MS);

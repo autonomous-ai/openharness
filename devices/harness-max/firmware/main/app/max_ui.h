@@ -151,6 +151,9 @@ bool max_ui_warm(uint32_t now_ms);
 // a band of rows at a time while go_on() says so (at least one band), or its pets below 1x baked, one. False when
 // nothing was owed (then max_ui_warm is next).
 bool max_ui_warm_paint(bool (*go_on)(void));
+// Under the lock: whether the row rests, so painting ahead may go on (max_ui_warm_paint's work waits while it moves:
+// the glass's own frames come first).
+bool max_ui_warm_rests(uint32_t now_ms);
 
 // ---- drawing (render task) ----
 // Draw the model into `scene`, which the caller has cleared. Keeps the hit areas for max_ui_touch.

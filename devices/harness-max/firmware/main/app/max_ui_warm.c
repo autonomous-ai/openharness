@@ -213,6 +213,8 @@ bool max_ui_warm_paint(bool (*go_on)(void))
     return true;
 }
 
+bool max_ui_warm_rests(uint32_t now_ms) { return resting(now_ms); }
+
 bool max_ui_warm(uint32_t now_ms)
 {
     if (!resting(now_ms)) return false;

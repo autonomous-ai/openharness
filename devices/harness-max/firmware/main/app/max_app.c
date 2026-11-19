@@ -60,7 +60,7 @@ static const char *TAG = "max";
 #define CHIME_COALESCE_MS 30000     // one chime of a sound for its alerts of this long (V3's, the Pro's beep's)
 #define ASKED_MAX 32                // pro_app_agents sends at most 32 agents
 #define WARM_ROOM_US 5000           // a step painted ahead only with this much left before the next frame is due
-#define WARM_STEP_US 3000           // the bands of a step painting out of the lock: the last ends a band past it
+#define WARM_STEP_US 3000           // a step painting out of the lock: no band begun that the last says ends past it
 
 static EXT_RAM_BSS_ATTR ht_scene_t s_scene[2];
 
@@ -628,17 +628,25 @@ static bool take_scene(ht_scene_t *scene)
 
 // What a tap on App Detail's row would show next, painted ahead while it rests (max_ui_warm): while nothing changed and
 // the next frame is more than WARM_ROOM_US away, a step at a time. A frame drawn aside under the lock (a fraction of a
-// frame's build), or out of it what that frame needs made, WARM_STEP_US of bands (max_ui_warm_paint): a touch or a
-// message waits one frame aside at most, and the glass's own frames come on time.
-static int64_t s_warm_until;
-static bool warm_on(void) { return esp_timer_get_time() < s_warm_until; }
+// frame's build), or out of it what that frame needs made, WARM_STEP_US of bands (max_ui_warm_paint), none while the row
+// moves: a touch or a message waits one frame aside at most, and the glass's own frames come on time.
+static int64_t s_warm_until, s_band_from;
+// Another band while the last one's time is left before the step's end: a step ends inside it, but for a band longer
+// than the step.
+static bool warm_on(void)
+{
+    const int64_t now = esp_timer_get_time(), band = now - s_band_from;
+    s_band_from = now;
+    return now + band < s_warm_until;
+}
 static void warm_ahead(int64_t wake_at)
 {
     for (bool more = true; more && wake_at - esp_timer_get_time() > WARM_ROOM_US;) {
         lock();
-        more = !s_dirty;
+        more = !s_dirty && max_ui_warm_rests(ms());   // a motion's frames first
         unlock();
-        s_warm_until = esp_timer_get_time() + WARM_STEP_US;
+        s_band_from = esp_timer_get_time();
+        s_warm_until = s_band_from + WARM_STEP_US;
         if (more && !max_ui_warm_paint(warm_on)) {
             lock();
             more = !s_dirty && max_ui_warm(ms());

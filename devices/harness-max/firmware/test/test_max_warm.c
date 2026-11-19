@@ -224,15 +224,24 @@ static void test_first_frames(void)
 static void test_not_resting(void)
 {
     rest(3, NULL);
+    CHECK(max_ui_warm_rests(T0));
     max_m.down = true;
     unsigned painted = max_layer_painted();
-    CHECK(!max_ui_warm(T0));
+    CHECK(!max_ui_warm(T0) && !max_ui_warm_rests(T0));
     max_m.down = false;
     CHECK(max_layer_painted() == painted);
 
+    // A motion while an image is owed: the row no longer rests, so what is owed waits (max_app.c asks first).
+    rest(3, NULL);
+    for (int i = 0; i < 64 && !max_layer_owes(); i++)
+        if (!max_ui_warm_paint(one_band)) max_ui_warm(T0);
+    CHECK(max_layer_owes());
     max_open("b");
     render(T0);
     CHECK(max_row_moving(T0 + MAX_ROW_FRAME_MS) && !max_ui_warm(T0 + MAX_ROW_FRAME_MS));
+    CHECK(!max_ui_warm_rests(T0 + MAX_ROW_FRAME_MS));
+    max_layer_forget();   // what was owed given up
+    painted = max_layer_painted();
 
     rest(3, NULL);
     max_notice_set("Cancelled, nothing sent", T0);

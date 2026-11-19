@@ -342,8 +342,13 @@ static bool s_motion_shown;
 // The warming's steps as max_app.c takes them: one under the lock, or out of it WARM_STEP_US of bands (max_app.c's).
 enum { AHEAD_STEPS = 4096, WARM_STEP_US = 3000, OVER_US = 4000 };
 static struct { int steps, locked, over; double ms, locked_max, step_ms[AHEAD_STEPS]; } s_ahead;
-static int64_t s_ahead_until;
-static bool ahead_on(void) { return esp_timer_get_time() < s_ahead_until; }
+static int64_t s_ahead_until, s_band_from;
+static bool ahead_on(void)   // max_app.c's warm_on
+{
+    const int64_t now = esp_timer_get_time(), band = now - s_band_from;
+    s_band_from = now;
+    return now + band < s_ahead_until;
+}
 static int by_time(const void *a, const void *b)
 {
     const double x = *(const double *)a, y = *(const double *)b;
@@ -373,6 +378,7 @@ static void motion_ahead(uint32_t now)
     s_ahead.ms = s_ahead.locked_max = 0;
     for (bool more = true; more && s_ahead.steps < AHEAD_STEPS; s_ahead.steps++) {
         const int64_t t0 = esp_timer_get_time();
+        s_band_from = t0;
         s_ahead_until = t0 + WARM_STEP_US;
         const bool out = max_ui_warm_paint(ahead_on);
         if (!out) more = max_ui_warm(now);
