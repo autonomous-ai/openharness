@@ -128,7 +128,8 @@ fn spawn_watch_within(
     Ok(Watch { stdin, writer, killer, grace, log, not_reading: AtomicBool::new(false) })
 }
 
-#[cfg(test)]
+// Every test runs the fake CLI, a shell script.
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use crate::cli::{HarnessCli, find_cli};

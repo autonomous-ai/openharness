@@ -58,11 +58,19 @@ pub fn replaceable(bundle: &Path) -> bool {
 }
 
 /// access(2) answers for the person, with ACLs and a read-only volume (the app run from its dmg) included.
+#[cfg(unix)]
 fn writable(path: &Path) -> bool {
     use std::os::unix::ffi::OsStrExt;
     let Ok(path) = std::ffi::CString::new(path.as_os_str().as_bytes()) else { return false };
     // SAFETY: access only reads the NUL-terminated path, which outlives the call.
     unsafe { libc::access(path.as_ptr(), libc::W_OK) == 0 }
+}
+
+/// Nothing is replaceable on Windows, which `enabled` never updates, until Task 15 of the Windows and Linux plan
+/// (docs/plans/2026-11-19-device-app-win-linux-plan.md) gives it its own rule.
+#[cfg(windows)]
+fn writable(_: &Path) -> bool {
+    false
 }
 
 /// The door, where this build updates itself (`enabled`); None elsewhere.

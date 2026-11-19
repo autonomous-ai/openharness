@@ -83,32 +83,44 @@ pub fn reason(failure: ExportFailure) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
     use crate::cli::LINE_MAX;
+    #[cfg(unix)]
     use crate::testing::Fake;
     use crate::types::ExportFailure::{NoAnswer, NoFile, TimedOut};
+    #[cfg(unix)]
     use serde_json::json;
+    #[cfg(unix)]
     use std::fs;
 
+    #[cfg(unix)]
     const NAME: &str = "harness-logs-20261118-1030.zip";
     const ZIP: &str = "/Users/p/Desktop/harness-logs-20261118-1030.zip";
+    #[cfg(unix)]
     const GOOD: &str = r#"{"path":"/Users/p/Desktop/harness-logs-20261118-1030.zip","included":["a"],"bytes":9}"#;
+    #[cfg(unix)]
     const SHORT: Duration = Duration::from_millis(300);
 
     /// A run that ended by itself with this code and stdout.
+    #[cfg(unix)]
     fn ended(code: i32, stdout: &str) -> Output {
         Output { code: Some(code), stdout: stdout.into(), ..Output::default() }
     }
 
     /// A finished run whose answer names this path.
+    #[cfg(unix)]
     fn naming(path: &str) -> Output {
         ended(0, &format!("{}\n", json!({ "path": path, "included": [], "bytes": 1 })))
     }
 
     /// GOOD, after spaces JSON allows, `len` bytes long in all.
+    #[cfg(unix)]
     fn padded(len: usize) -> Output {
         ended(0, &format!("{}{GOOD}\n", " ".repeat(len - GOOD.len())))
     }
 
+    // The paths are unix ones: `/Users/p/…` is not absolute on Windows.
+    #[cfg(unix)]
     #[test]
     fn only_an_absolute_bundle_path_is_kept() {
         let good = format!("{GOOD}\n");
@@ -149,6 +161,8 @@ mod tests {
         assert_eq!(parse(&timed_out), Err(TimedOut));
     }
 
+    // As only_an_absolute_bundle_path_is_kept.
+    #[cfg(unix)]
     #[test]
     fn a_path_that_is_no_menu_line() {
         let longest = format!("/{}/{NAME}", "a".repeat(1024 - NAME.len() - 2));
@@ -191,6 +205,8 @@ mod tests {
         assert!(fake.calls().is_empty());
     }
 
+    // `~/Desktop/…` with a unix separator.
+    #[cfg(unix)]
     #[test]
     fn the_home_reads_as_a_tilde() {
         for home in ["/Users/p", "/Users/p/"] {

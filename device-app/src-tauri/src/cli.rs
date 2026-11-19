@@ -2,6 +2,8 @@
 
 #[cfg(unix)]
 use crate::child_unix as child;
+#[cfg(windows)]
+use crate::child_windows as child;
 use crate::harness_home::{Entry, Look, harness_roots_with};
 use crate::types::{Log, Output};
 use std::collections::VecDeque;
@@ -367,7 +369,8 @@ impl Killer {
         }
     }
 
-    /// SIGTERM to the child alone, which it may catch to clean up, then `kill_after(grace)`.
+    /// SIGTERM to the child alone, which it may catch to clean up (Windows has none: its job ends at once), then
+    /// `kill_after(grace)`.
     pub fn stop(&self, grace: Duration) {
         if let Some(group) = &*self.0.group.lock().unwrap() {
             group.stop();
@@ -571,15 +574,21 @@ fn ended(name: &str, code: Option<i32>, stderr: &str) -> String {
 mod tests {
     use super::*;
     use crate::harness_home::Look;
+    #[cfg(unix)]
     use crate::testing::{Fake, wait_gone};
+    #[cfg(unix)]
     use crate::types::MemoryLog;
     use std::cell::Cell;
+    #[cfg(unix)]
     use std::env;
     use std::fs;
+    #[cfg(unix)]
     use std::time::Instant;
 
     const WAIT: Duration = Duration::from_secs(5);
+    #[cfg(unix)]
     const WATCH: [&str; 3] = ["hardware", "watch", "--json"];
+    #[cfg(unix)]
     const CANCELLED: &str = concat!(
         r#"{"type":"result","status":"error","code":"CANCELLED","#,
         r#""message":"Sign-in stopped: the app that started it has gone."}"#
@@ -664,6 +673,8 @@ mod tests {
         }
     }
 
+    // The launcher and the folders are unix ones.
+    #[cfg(unix)]
     #[test]
     fn then_the_launcher_then_path_then_nothing() {
         let home = tempfile::tempdir().unwrap();
@@ -696,6 +707,8 @@ mod tests {
         assert_eq!((cli.program, cli.prefix), (over, vec![]));
     }
 
+    // A unix PATH, `:` between its folders.
+    #[cfg(unix)]
     #[test]
     fn the_child_path_starts_with_the_launcher_folder() {
         let home = Path::new("/Users/someone");
@@ -752,6 +765,7 @@ mod tests {
     /// Runs `sh -c script` in a folder of its own, its deadline WAIT away on a clock the sink moves: at the first line,
     /// which the script prints once it has written `pid`, the sink reads that file and moves the clock to the deadline.
     /// Gives whether the run timed out, the lines it handed and the pid read.
+    #[cfg(unix)]
     fn past_its_deadline(script: &str) -> (bool, usize, Option<i32>) {
         let folder = tempfile::tempdir().unwrap();
         let mut command = Command::new("sh");
@@ -786,6 +800,7 @@ mod tests {
     }
 
     /// What `sh -c script` hands a sink, and its output. `args` are the script's `$1` on.
+    #[cfg(unix)]
     fn handed(script: &str, args: &[&str]) -> (Vec<String>, Output) {
         let mut command = Command::new("sh");
         command.args(["-c", script, "sh"]).args(args);
@@ -796,6 +811,7 @@ mod tests {
 
     /// A child that prints `a` on stdout, `b` on stderr, then `c` on stdout and exits 3, each line only once the sink
     /// has the one before: it waits on a FIFO the sink writes to.
+    #[cfg(unix)]
     fn in_turn() -> (Vec<String>, Output) {
         let folder = tempfile::tempdir().unwrap();
         let mut command = Command::new("sh");
@@ -1455,13 +1471,13 @@ Start-Sleep 600
 
         #[test]
         fn closing_stdin_ends_a_child_that_reads_it() {
-            // sort prints what it read once its stdin has ended.
-            let mut child = start(Command::new(system32(&["sort.exe"])));
+            // It prints what it read, as it was, once its stdin has ended.
+            let mut child = start(powershell("[Console]::Out.Write([Console]::In.ReadToEnd())"));
             let writer = child.stdin_writer();
-            assert_eq!(writer.line("b"), Ok(()));
             assert_eq!(writer.line("a"), Ok(()));
+            assert_eq!(writer.line("b"), Ok(()));
             assert!(child.stdin_closer().close());
-            assert_eq!([next(&mut child, WAIT), next(&mut child, WAIT)], ["a", "b"]);
+            assert_eq!([next(&mut child, FIRST_LINE), next(&mut child, WAIT)], ["a", "b"]);
             assert_eq!(child.line(WAIT), Ok(None));
             assert_eq!(child.exit(WAIT), Ok(Some(0)));
         }

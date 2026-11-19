@@ -1,10 +1,45 @@
 //! Lines for a Windows child's stdin, queued for its writer thread and bounded, so a stuck child never blocks the app.
 
+use crate::cli::Unwritten;
+use std::io::Write;
+use std::sync::mpsc::{self, SyncSender, TrySendError};
+use std::thread;
+
+/// Lines waiting for the writer, as many as a run's lines wait to be read (cli.rs LINES_QUEUED).
+pub(crate) const STDIN_QUEUED: usize = 16;
+
+/// A pipe written by a thread of its own, a line at a time, so `line` never waits: a line past STDIN_QUEUED waiting is
+/// `Unwritten::Full`, as a full non-blocking pipe is on unix. Dropped, it closes the pipe once the lines queued are
+/// written.
+pub(crate) struct Queue(SyncSender<String>);
+
+impl Queue {
+    pub(crate) fn new(mut pipe: impl Write + Send + 'static) -> Queue {
+        let (send, lines) = mpsc::sync_channel::<String>(STDIN_QUEUED);
+        thread::spawn(move || {
+            // The queue closes as the loop ends, before the pipe does: once the pipe has closed, `line` says Closed.
+            for line in lines {
+                if pipe.write_all(line.as_bytes()).is_err() {
+                    break;
+                }
+            }
+        });
+        Queue(send)
+    }
+
+    /// The text and a newline.
+    pub(crate) fn line(&self, text: &str) -> Result<(), Unwritten> {
+        self.0.try_send(format!("{text}\n")).map_err(|error| match error {
+            TrySendError::Full(_) => Unwritten::Full,
+            TrySendError::Disconnected(_) => Unwritten::Closed,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cli::Unwritten;
-    use std::io::{self, Write};
+    use std::io;
     use std::sync::mpsc::{self, RecvTimeoutError};
     use std::thread;
     use std::time::Duration;
@@ -92,9 +127,12 @@ mod tests {
         let (queue, written, go) = queue();
         assert_eq!(queue.line("a"), Ok(()));
         assert_eq!(written.recv_timeout(WAIT), Ok(b"a\n".to_vec()));
-        // Dropped while a write is under way: the pipe closes once it is done.
+        assert_eq!(queue.line("b"), Ok(()));
+        // Dropped while a write is under way and a line waits: the pipe closes once both are written, as a closed pipe
+        // on unix still hands on what was in it.
         drop(queue);
         go.send(()).unwrap();
-        assert_eq!(until_dropped(&written), Vec::<Vec<u8>>::new());
+        go.send(()).unwrap();
+        assert_eq!(until_dropped(&written), [b"b\n".to_vec()]);
     }
 }

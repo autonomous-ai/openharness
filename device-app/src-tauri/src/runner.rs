@@ -666,7 +666,8 @@ impl Shared {
     }
 }
 
-#[cfg(test)]
+// Every test runs the fake CLI, a shell script.
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use crate::account::NO_RESULT;

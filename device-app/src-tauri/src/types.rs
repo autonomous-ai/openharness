@@ -513,7 +513,9 @@ mod tests {
         assert!(!plist.contains("CFBundleDisplayName"), "{plist}");
         let source = macos["files"]["Resources/en.lproj/InfoPlist.strings"].as_str().expect("InfoPlist.strings mapped");
         let strings = std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(source)).unwrap();
-        assert_eq!(strings, "CFBundleName = \"Harness\";\nCFBundleDisplayName = \"Harness\";\n");
+        // A Windows checkout ends its lines with \r\n; the file ships from a macOS build only.
+        let strings = strings.replace("\r\n", "\n");
+        assert_eq!(strings,"CFBundleName = \"Harness\";\nCFBundleDisplayName = \"Harness\";\n");
     }
 
     /// A template image 18 points square at two pixels a point: macOS keeps only its alpha, so it tints it for a light

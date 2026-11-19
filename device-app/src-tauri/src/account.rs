@@ -165,7 +165,8 @@ fn shown(message: &str) -> String {
     message.chars().take(MESSAGE_MAX).collect()
 }
 
-#[cfg(test)]
+// Every test runs the fake CLI, a shell script.
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use crate::cli::LINE_MAX;
