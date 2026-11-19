@@ -394,10 +394,12 @@ export async function registryFileLock<T>(directory: string, deadline: RegistryW
     } finally { await handle.close() }
     for (;;) {
       check()
-      // A rename replaces an empty folder on macOS and Linux, so look first: only an older build's folder made since
-      // can be replaced, and that build's O_EXCL create of its owner then fails, so it does not enter.
+      // A rename replaces an empty folder on macOS and Linux, so look first, and rename at once, with no wait between:
+      // only an older build's folder made in that gap can be replaced. Its O_EXCL create of its owner then fails; a
+      // build before #4356 removes the lock on that EEXIST and takes it on its next turn, and this build's checkOwner
+      // then fails its own write, so neither writes the registry over the other.
       if (!lstatSync(lock, { throwIfNoEntry: false })) {
-        try { await fs.rename(temporary, lock); built = false; created = true }
+        try { renameSync(temporary, lock); built = false; created = true }
         catch (error) { if (!PUBLISH_REFUSED.includes((error as NodeJS.ErrnoException).code ?? '')) throw error }
       }
       if (created) {

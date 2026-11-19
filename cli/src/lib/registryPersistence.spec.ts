@@ -8,8 +8,18 @@ const interleave = vi.hoisted(() => ({
   read: undefined as undefined | ((path: string, value: unknown) => Promise<unknown>),
   stat: undefined as undefined | ((path: string, value: unknown) => Promise<unknown>),
   phase: undefined as undefined | ((path: string, phase: string) => Promise<void>),
-  rename: undefined as undefined | ((from: string, to: string) => Promise<void>),
+  // The lock is published by a synchronous rename, straight after the look that finds no lock.
+  rename: undefined as undefined | ((from: string, to: string) => void),
 }))
+vi.mock('node:fs', async original => {
+  const actual = await original<typeof import('node:fs')>()
+  return { ...actual,
+    renameSync: (...args: Parameters<typeof actual.renameSync>) => {
+      interleave.rename?.(String(args[0]), String(args[1]))
+      return actual.renameSync(...args)
+    },
+  }
+})
 vi.mock('node:fs/promises', async original => {
   const actual = await original<typeof import('node:fs/promises')>()
   return { ...actual,
@@ -21,10 +31,6 @@ vi.mock('node:fs/promises', async original => {
     readFile: async (...args: Parameters<typeof actual.readFile>) => {
       const value = await actual.readFile(...args)
       return interleave.read ? interleave.read(String(args[0]), value) : value
-    },
-    rename: async (...args: Parameters<typeof actual.rename>) => {
-      await interleave.rename?.(String(args[0]), String(args[1]))
-      return actual.rename(...args)
     },
     lstat: async (...args: Parameters<typeof actual.lstat>) => {
       const value = await actual.lstat(...args)
@@ -252,7 +258,7 @@ it('a lock is never there without its owner', async () => {
     } catch { violations.push(at) }
   }
   interleave.phase = async (_path, at) => look(at)
-  interleave.rename = async () => look('rename')
+  interleave.rename = () => look('rename')
   expect(await registryFileLock(directory, deadline(), async () => 'held')).toBe('held')
   expect(violations).toEqual([])
 })
@@ -288,7 +294,7 @@ it('a setup that fails leaves no lock and no temporary folder', async () => {
 
 it('a publish refused for a moment with no lock there is tried again', async () => {
   let renames = 0
-  interleave.rename = async (_from, to) => {
+  interleave.rename = (_from, to) => {
     if (to === lock && !renames++) throw Object.assign(new Error('held by a scanner'), { code: 'EPERM' })
   }
   const apply = vi.fn(async () => { expect(lockEntries()).toEqual(['registry.json.lock']) })
@@ -319,9 +325,9 @@ it('a wait for a held lock builds its owner once, not once a turn', async () => 
 })
 
 // Windows refuses a folder renamed onto any folder, so an older build's folder there is waited for like any lock.
-it.skipIf(process.platform === 'win32')('an older build that makes its folder between the look and the publish does not enter', async () => {
+it.skipIf(process.platform === 'win32')('an older build\'s folder made between the look and the publish is replaced, so its owner create fails', async () => {
   let raced = false
-  interleave.rename = async (_from, to) => {
+  interleave.rename = (_from, to) => {
     if (to === lock && !raced) { raced = true; mkdirSync(lock, { mode: 0o700 }) }
   }
   await registryFileLock(directory, deadline(), async checkOwner => {
