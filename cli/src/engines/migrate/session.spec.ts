@@ -172,7 +172,9 @@ describe('Codex to Claude Code', () => {
       { type: 'tool_result', tool_use_id: 'call_1', content: '1 failing: parser', is_error: true },
       { type: 'tool_result', tool_use_id: 'call_2', content: 'Success. Updated src/parser.ts' },
     ])
-    expect(lines.find(line => line.message.usage)?.message).toMatchObject({ model: 'gpt-6', usage: { input_tokens: 100, output_tokens: 20, cache_read_input_tokens: 50 } })
+    const used = lines.find(line => line.message.usage)?.message
+    expect(used).toMatchObject({ usage: { input_tokens: 100, output_tokens: 20, cache_read_input_tokens: 50 } })
+    expect(used.model, 'a Codex model is never the resumed Claude Code\'s').toBeUndefined()
   })
 
   it('is a conversation Harness adopts as a terminal\'s, in Claude Code\'s folder for its cwd', async () => {
@@ -213,6 +215,22 @@ describe('round trips and slash commands', () => {
     const lines = records(writeClaudeTranscript({ ...read, meta: { ...read.meta, id: NEW_ID } }))
     expect(lines[0]!.message.content).toBe('<command-name>/model</command-name>\n<command-message>model</command-message>\n<command-args>opus</command-args>')
     expect(lines[1]).toMatchObject({ type: 'system', subtype: 'local_command', content: '<local-command-stdout>Set model to opus</local-command-stdout>' })
+  })
+
+  it('leaves a Claude slash command and what it printed out of Codex, which showed a `_model` row for each', () => {
+    const base = { sessionId: 's', cwd: CWD, timestamp: '2026-11-18T09:00:00.000Z' }
+    const source = [
+      { ...base, type: 'user', uuid: 'u1', parentUuid: null, message: { role: 'user', content: '<command-name>/model</command-name>\n<command-message>model</command-message>\n<command-args>opus</command-args>' } },
+      { ...base, type: 'system', subtype: 'local_command', uuid: 'u2', parentUuid: 'u1', content: '<local-command-stdout>Set model to opus</local-command-stdout>' },
+      { ...base, type: 'user', uuid: 'u3', parentUuid: 'u2', message: { role: 'user', content: 'hello' } },
+      { ...base, type: 'assistant', uuid: 'u4', parentUuid: 'u3', message: { role: 'assistant', content: [{ type: 'text', text: 'hi' }] } },
+    ].map(row => JSON.stringify(row)).join('\n')
+    const text = convertSession('claude', source, { sessionId: NEW_ID, cwd: CWD, now: NOW }).text
+    expect(text).not.toContain('_model')
+    expect(text).not.toContain('Set model to')
+    expect(readCodexRollout(text).messages.flatMap(m => m.content)).toEqual([
+      { type: 'text', text: 'hello' }, { type: 'text', text: 'hi' },
+    ])
   })
 
   it('refuses a conversation with nothing said', () => {

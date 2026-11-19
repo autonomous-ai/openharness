@@ -32,7 +32,7 @@ describe('the change-agent handoff service', () => {
   it('moves a conversation through the core\'s conversation reads, the owner\'s alone', async () => {
     const resolve = vi.fn(async () => null)
     const handlers = startHandoff(fakeCore({ conversations: { resolve } }), emptyPorts(), undefined, {}, (reads) => ({
-      conversations: reads, probe: async () => ({ installed: true, signedIn: true }), home: async () => '/nowhere' }))
+      conversations: reads, probe: async () => ({ installed: true, signedIn: true }), home: async () => '/nowhere', version: async () => null }))
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})
     expect(await handlers.agent_session_migrate!({ agentId: 'agent', targetEngine: 'codex' }, owner)).toEqual({ error: 'UNKNOWN_AGENT' })
     expect(resolve).toHaveBeenCalledWith('agent')

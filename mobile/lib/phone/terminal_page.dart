@@ -49,8 +49,6 @@ import 'package:harness_mobile/terminal/question_pane.dart';
 import 'package:harness_mobile/terminal/question_pane_watcher.dart';
 import 'package:harness_mobile/terminal/terminal_find.dart';
 import 'package:harness_mobile/terminal/terminal_session.dart';
-import 'package:harness_mobile/core/agent_handoff.dart'
-    show supportsAgentHandoff;
 import 'package:harness_mobile/widgets/engine_identity.dart'
     show engineIdentity;
 import 'package:harness_mobile/widgets/fork_agent_dialog.dart';
@@ -95,6 +93,11 @@ import 'package:harness_mobile/demo/sample_mode.dart';
 import 'package:harness_mobile/notify/notifications_ask.dart';
 
 import 'voice_input_controller.dart';
+
+/// Whether [agent] can show as Chat UI: a Terminal harness is a shell, with no conversation for a chat to show, so its
+/// menu offered "Show chat" and the tap left it on a blank terminal (Pixel 8 Pro, 2026-11-19).
+@visibleForTesting
+bool showsAsChat(Agent? agent) => agent != null && agent.engine != null && agent.engine != 'terminal';
 
 /// The chip in Chat UI's composer: the engine as people know it, then the model and effort the daemon saw it running
 /// (`Claude Opus 5.5 · Medium`) — read the way the desktop reads it — or the grid model it was moved to.
@@ -304,6 +307,10 @@ class _TerminalPageState extends State<TerminalPage>
   /// one pane, so opening an agent from the Machines tab closes the pane belonging to a
   /// TerminalPage still sitting in the Agents tab's stack.
   bool _hadPane = false;
+
+  /// What the veil over this page says while Change agent runs from it (`Switching to Codex…`), or
+  /// null. Held from the pick until the new agent replaces this page, or the switch stops.
+  String? _switchingTo;
 
   /// The agent's name as the last list to carry it knew it.
   ///
@@ -871,6 +878,15 @@ class _TerminalPageState extends State<TerminalPage>
     WidgetsBinding.instance.addObserver(this);
     widget.notifier.addListener(_onNotifier);
     chatViewStore.addListener(_onChatView);
+    // So the first menu already knows whether Change agent can be offered (see [_showActions]).
+    final listed = widget.notifier
+        .stateOf(widget.machineId)
+        ?.agents
+        .where((a) => a.id == widget.agentId)
+        .firstOrNull;
+    if (listed != null && AppNotifier.changeAgentTarget(listed) != null) {
+      unawaited(widget.notifier.probeEngines(widget.machineId));
+    }
     _lifecycle =
         WidgetsBinding.instance.lifecycleState ?? AppLifecycleState.resumed;
     // A session already taking input when the page comes ticks nothing to raise from.
@@ -1069,34 +1085,12 @@ class _TerminalPageState extends State<TerminalPage>
 
   /// Says what went wrong, above the mic for two seconds, the way tmux's `display-message` does.
   /// Nothing that went right is said: its effect is on screen, and a tap is felt.
-  ///
-  /// Over a [_hold], which comes back once the two seconds are up.
   void _flash(String text, {bool error = false}) {
     _barMessageTimer?.cancel();
     _barMessage.value = (text: text, error: error);
     _barMessageTimer = Timer(const Duration(seconds: 2), () {
-      if (mounted) _barMessage.value = _held;
+      if (mounted) _barMessage.value = null;
     });
-  }
-
-  /// What the line above the mic says for as long as something is on its way, rather than for a
-  /// [_flash]'s two seconds — a Change agent, which is several round trips to the computer. Null
-  /// when nothing is.
-  ///
-  /// ⚠️ **Two seconds were not enough to say it.** The first switch tried waited half a minute on
-  /// the computer, and "switching to Claude…" had gone after two seconds: the terminal looked as if
-  /// nothing had been asked, and the only sign left was a menu row nobody had open.
-  String? _barHold;
-
-  ({String text, bool error})? get _held =>
-      _barHold == null ? null : (text: _barHold!, error: false);
-
-  /// Says [text] above the mic until it is held no more (null). A flash showing now keeps its two
-  /// seconds and hands back to this.
-  void _hold(String? text) {
-    _barHold = text;
-    if (_barMessageTimer?.isActive ?? false) return;
-    _barMessage.value = _held;
   }
 
   /// This page's `⋯` menu while it is up — see [_putMenuAway].
@@ -1683,7 +1677,7 @@ class _TerminalPageState extends State<TerminalPage>
         .where((a) => a.id == widget.agentId)
         .firstOrNull;
     // No session is no reason for a terminal: an agent nobody has talked to yet shows an empty chat.
-    return agent != null && agent.engine != null && agent.engine != 'terminal';
+    return showsAsChat(agent);
   }
 
   void _setShowsChat(bool chat) => unawaited(
@@ -2617,7 +2611,11 @@ class _TerminalPageState extends State<TerminalPage>
       // Left set, the page would land saying the agent had GONE for any frame that beats the
       // attach to it, and the branch below takes the whole pager down for that.
       _hadPane = false;
-    } else if (_hadPane) {
+    } else if (_hadPane && _switchingTo == null) {
+      // ⚠️ Not mid-switch: Change agent stops this agent before the new one opens, and leaving then
+      // put another harness on screen while the switch ran (Pixel 8 Pro, 2026-11-19). The switch
+      // replaces this page itself — see [_changeAgent].
+      //
       // The pane this page was showing is gone while it was the one being READ — another tab
       // opened a different agent, or the agent was deleted. Leave rather than spin: there is
       // nothing here to come back.
@@ -2739,7 +2737,7 @@ class _TerminalPageState extends State<TerminalPage>
         widget.agentId,
       );
     }
-    return Scaffold(
+    final scaffold = Scaffold(
       // On the terminal's palette, which stays dark in a light app — see [TerminalLook].
       backgroundColor: TerminalLook.read(context, () => AppPalette.windowBg),
       // ⚠️ No fab. New agent is the `+` in the header — see the note there.
@@ -3422,6 +3420,10 @@ class _TerminalPageState extends State<TerminalPage>
         ],
       ),
     );
+    final switching = _switchingTo;
+    return switching == null
+        ? scaffold
+        : Stack(children: [scaffold, _SwitchingVeil(label: switching)]);
   }
 
   /// Pops after the frame: this runs from inside a build, where popping a route synchronously is
@@ -3474,6 +3476,11 @@ class _TerminalPageState extends State<TerminalPage>
     TerminalSession? session,
   }) {
     final agentName = agent.displayName;
+    // Change agent is offered only where the machine reported both engines installed and signed in:
+    // asked now for the next time the menu opens, at most once a run ([AppNotifier.probeEngines]).
+    if (AppNotifier.changeAgentTarget(agent) != null) {
+      unawaited(widget.notifier.probeEngines(widget.machineId));
+    }
     Route<void>? shown;
     final closed = showPhoneSheet(
       context,
@@ -3503,7 +3510,7 @@ class _TerminalPageState extends State<TerminalPage>
                 label: 'Show terminal',
                 onTap: () => _setShowsChat(false),
               )
-            else
+            else if (showsAsChat(agent))
               PhoneSheetAction(
                 icon: LucideIcons.messagesSquare300,
                 label: 'Show chat',
@@ -3867,33 +3874,30 @@ class _TerminalPageState extends State<TerminalPage>
     }
   }
 
-  /// Change agent: pick the engine, and the harness goes on there with the conversation handed
-  /// over — then the new one opens in place of this one. See [AppNotifier.changeAgent].
-  ///
-  /// The choices are the desktop picker's rows in its words: the agent it is on now, and for each
-  /// other whether the conversation goes with it or it starts a new one in the same project.
+  /// Change agent: the conversation moves to the other engine, Claude Code to Codex or back — then
+  /// the new one opens in place of this one. See [AppNotifier.changeAgent].
   ///
   /// ⚠️ **What opens the new agent is captured before the wait.** The switch stops this agent, and
   /// this page can leave on its own while the answer is still out (its pane goes — see
   /// `_hadPane`); the shell, which puts an agent on the home screen, is still there to open it.
   Future<void> _changeAgent(Agent agent) async {
     final current = agent.engine;
+    final other = AppNotifier.changeAgentTarget(agent);
+    if (other == null) return;
+    String title(String id) =>
+        id == 'claude' ? 'Claude Code' : engineIdentity(id).label;
     final picked = await showNewAgentChooser<String>(
       context,
       title: 'Change agent',
       hint: 'Search agents',
       items: [
-        for (final id in AppNotifier.agentChangeEngines())
+        for (final id in [?current, other])
           ChooserItem(
             value: id,
-            title: id == 'claude' ? 'Claude Code' : engineIdentity(id).label,
+            title: title(id),
             subtitle: id == current
                 ? 'Current agent'
-                : id == 'opencode'
-                ? 'Muse Spark 1.3 · continue with recent context'
-                : supportsAgentHandoff(id)
-                ? 'Continue this project with recent context'
-                : 'New conversation in the same project',
+                : 'Move this conversation',
             selected: id == current,
           ),
       ],
@@ -3901,33 +3905,39 @@ class _TerminalPageState extends State<TerminalPage>
     if (picked == null || picked == current || !mounted) return;
     final messenger = ScaffoldMessenger.maybeOf(context);
     final shell = PhoneShellScope.maybeOf(context);
-    // Held for the whole switch — see [_barHold].
-    _hold('switching to ${engineIdentity(picked).label}…');
+    // A veil for the whole switch, the page held under it: several round trips to the computer,
+    // and nothing on this page is the person's to touch until it ends.
+    setState(() => _switchingTo = 'Switching to ${title(picked)}…');
+    _putMenuAway();
     final result = await widget.notifier.changeAgent(
       widget.machineId,
       widget.agentId,
       picked,
     );
-    if (mounted) {
-      _hold(null);
-      // Before the answer is said: a menu opened in the wait would cover it — see [_putMenuAway].
-      _putMenuAway();
-    }
     final said = result.error ?? result.notice;
     if (said != null) messenger?.showSnackBar(SnackBar(content: Text(said)));
     final next = result.agentId;
-    if (result.error != null || next == null || next == widget.agentId) return;
+    if (result.error != null || next == null || next == widget.agentId) {
+      // Nothing replaces this page: the veil goes, and a pane that went meanwhile is left as usual.
+      if (mounted) setState(() => _switchingTo = null);
+      return;
+    }
+    final notifier = widget.notifier, machineId = widget.machineId;
+    final moved = widget.agentId;
     if (mounted) {
       openAgent(
         context,
-        widget.notifier,
-        widget.machineId,
+        notifier,
+        machineId,
         next,
         replacingCurrentPage: true,
       );
     } else {
-      shell?.onOpenAgent(widget.machineId, next);
+      shell?.onOpenAgent(machineId, next);
     }
+    // Only now, with the new agent on screen — see [AppNotifier.deleteMovedConversation].
+    final kept = await notifier.deleteMovedConversation(machineId, moved);
+    if (kept != null) messenger?.showSnackBar(SnackBar(content: Text(kept)));
   }
 
   /// Stopping the agent: the last card of its sheet, alone.
@@ -4177,6 +4187,51 @@ class _AgentGone extends StatelessWidget {
             child: const Text('Open another harness'),
           ),
         ],
+      ),
+    ),
+  );
+}
+
+/// Over the whole page while Change agent runs from it: a spinner and what is happening, taking
+/// every tap. The switch stops this agent before the new one opens, so the page under it may show
+/// nothing at all for a while; without this the person saw it empty, or another harness.
+class _SwitchingVeil extends StatelessWidget {
+  const _SwitchingVeil({required this.label});
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) => Positioned.fill(
+    child: TerminalLook.read(
+      context,
+      () => AbsorbPointer(
+        child: ColoredBox(
+          color: AppPalette.windowBg.withValues(alpha: 0.92),
+          child: Center(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                SizedBox.square(
+                  dimension: 26,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: AppPalette.accent,
+                  ),
+                ),
+                const SizedBox(height: 14),
+                Text(
+                  label,
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: AppPalette.textPrimary,
+                    fontSize: 15,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
       ),
     ),
   );

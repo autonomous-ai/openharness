@@ -35,12 +35,24 @@ export const writeSession = (engine: MigrateEngine, transcript: Transcript): str
  * `text`, `from`'s transcript, as a new session `sessionId` of the other engine in `cwd`, started at `now`. The
  * CLI version is left out: it names the source engine's build, which the target would read as its own.
  */
-export function convertSession(from: MigrateEngine, text: string, to: { sessionId: string; cwd: string; now: number }): { meta: Meta; text: string } {
+export function convertSession(from: MigrateEngine, text: string,
+  to: { sessionId: string; cwd: string; now: number; cliVersion?: string }): { meta: Meta; text: string } {
   const source = readSession(from, text)
   if (!source.messages.length) throw new ConvertError('EMPTY')
-  const { cliVersion: _version, ...kept } = source.meta
-  const meta: Meta = { ...kept, id: to.sessionId, cwd: to.cwd, timestamp: to.now }
-  return { meta, text: writeSession(from === 'claude' ? 'codex' : 'claude', { meta, messages: source.messages }) }
+  const target: MigrateEngine = from === 'claude' ? 'codex' : 'claude'
+  // The version is the engine that resumes it: Harness reads Codex's from `session_meta` alone, and left empty the
+  // resumed agent's Model sheet said "Update the agent to change its model here" (Pixel 8 Pro, 2026-11-19).
+  const { cliVersion: _version, model: _model, ...kept } = source.meta
+  const meta: Meta = { ...kept, id: to.sessionId, cwd: to.cwd, timestamp: to.now,
+    ...(to.cliVersion !== undefined ? { cliVersion: to.cliVersion } : {}) }
+  const messages = source.messages.map(({ model: _from, ...message }) => {
+    // A model id names the engine that answered, never the one resuming: a Codex reply's `gpt-5.6-terra` showed as
+    // "Claude GPT-5.6 Terra" in the resumed Claude's chip. And Codex writes no `stop_reason`, which closes a Claude
+    // turn: without one the resumed Claude's turn was open for good, "Working…" under its answer.
+    if (target !== 'claude' || message.role !== 'assistant' || message.stopReason !== undefined) return message
+    return { ...message, stopReason: message.content.some(block => block.type === 'tool_use') ? 'tool_use' : 'end_turn' }
+  })
+  return { meta, text: writeSession(target, { meta, messages }) }
 }
 
 /**

@@ -17,6 +17,7 @@ import type { ConversationReads } from '../core/api.js'
 import { env } from '../config/env.js'
 import { claudeSessionPath, codexRolloutPath, convertSession, MIGRATE_ENGINES, writeNewSessionFile, type MigrateEngine } from '../engines/migrate/session.js'
 import { launchCodexHome, sessionClaudeHome } from '../lib/engineHomes.js'
+import { commandOutputInInteractiveShell } from '../lib/engineLaunch.js'
 import { probeEngines } from '../lib/engineProbe.js'
 import { warmLoginShellEnvironment } from '../lib/loginShellEnv.js'
 import { errorKind } from '../lib/log.js'
@@ -40,6 +41,8 @@ export interface MigrateDeps {
   probe(engine: MigrateEngine): Promise<{ installed: boolean; signedIn?: boolean | null }>
   /** Where a new agent of `engine` launched now keeps its sessions: Claude Code's `projects`, Codex's home. */
   home(engine: MigrateEngine): Promise<string>
+  /** The version `engine --version` names here, or null when it does not answer with one. */
+  version(engine: MigrateEngine): Promise<string | null>
   now?: () => number
   newId?: () => string
   deadlineMs?: number
@@ -56,6 +59,11 @@ export const productionMigrateDeps = (conversations: MigrateDeps['conversations'
     if (engine === 'codex') return launchCodexHome(null)
     const home = sessionClaudeHome({ transcriptPath: null })
     return home === dirname(env.CLAUDE_PROJECTS_DIR) ? env.CLAUDE_PROJECTS_DIR : join(home, 'projects')
+  },
+  // In the shell a launch runs in, as the probe finds the engine: `codex-cli 0.130.0`, `2.1.200 (Claude Code)`.
+  version: async (engine) => {
+    const ran = await commandOutputInInteractiveShell(engine, engine, ['--version'])
+    return ran?.code === 0 ? /\b\d+\.\d+\.\d+\b/.exec(ran.output)?.[0] ?? null : null
   },
 })
 
@@ -134,13 +142,15 @@ async function migrate(deps: MigrateDeps, agentId: string, target: MigrateEngine
   if (!probed?.installed || probed.signedIn === false) throw new MigrateError('TARGET_UNAVAILABLE')
   const targetHome = await deps.home(target)
   tick()
+  const cliVersion = await deps.version(target).catch(() => null)
+  tick()
 
   const size = (await stat(path)).size
   if (size > (deps.maxBytes ?? MIGRATE_MAX_BYTES)) throw new MigrateError('CONVERT_FAILED')
   const text = await readFile(path, 'utf8')
   tick()
   const now = (deps.now ?? Date.now)(), sessionId = (deps.newId ?? randomUUID)()
-  const converted = convertSession(from as MigrateEngine, text, { sessionId, cwd, now })
+  const converted = convertSession(from as MigrateEngine, text, { sessionId, cwd, now, ...(cliVersion ? { cliVersion } : {}) })
   const destination = target === 'claude' ? claudeSessionPath(targetHome, cwd, sessionId) : codexRolloutPath(targetHome, now, sessionId)
   // Past the deadline the phone has its TIMEOUT: a file written now would be a session nobody resumes.
   tick()

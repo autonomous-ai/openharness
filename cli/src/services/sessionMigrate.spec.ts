@@ -8,6 +8,8 @@ import { createSessionMigrate, productionMigrateDeps, type MigrateDeps } from '.
 
 vi.mock('../lib/engineProbe.js', () => ({ probeEngines: vi.fn(async (engines: string[]) => engines.map(engine => ({ engine, installed: true, signedIn: true }))) }))
 vi.mock('../lib/loginShellEnv.js', async (original) => ({ ...await original<object>(), warmLoginShellEnvironment: vi.fn(async () => ({})) }))
+const versionRun = vi.hoisted(() => ({ result: { code: 0, output: 'codex-cli 0.130.0\n' } as { code: number; output: string } | null }))
+vi.mock('../lib/engineLaunch.js', () => ({ commandOutputInInteractiveShell: vi.fn(async () => versionRun.result) }))
 
 /**
  * `agent_session_migrate`: the owner's alone, checked before anything is read; the agent's own vouched transcript
@@ -30,6 +32,7 @@ function deps(over: Partial<MigrateDeps> = {}, conversations: Partial<MigrateDep
     conversations: { resolve: vi.fn(async () => agent()), findTranscript: vi.fn(async () => null), transcriptOk: vi.fn(async () => true), ...conversations },
     probe: vi.fn(async () => ({ installed: true, signedIn: true })),
     home: vi.fn(async (engine) => engine === 'claude' ? claudeProjects : codexHome),
+    version: vi.fn(async (engine) => engine === 'claude' ? '2.1.200' : '0.130.0'),
     now: () => NOW, newId: () => NEW_ID,
     ...over,
   }
@@ -52,7 +55,8 @@ describe('agent_session_migrate', () => {
     const day = join(codexHome, 'sessions', '2026', '11', String(new Date(NOW).getDate()).padStart(2, '0'))
     const [file] = readdirSync(day)
     expect(file).toMatch(new RegExp(`^rollout-.*-${NEW_ID}\\.jsonl$`))
-    expect(JSON.parse(readFileSync(join(day, file!), 'utf8').split('\n')[0]!).payload).toMatchObject({ id: NEW_ID, cwd, source: 'cli' })
+    // The resuming Codex's own version: Harness reads it from `session_meta` alone, and an empty one locked the Model sheet.
+    expect(JSON.parse(readFileSync(join(day, file!), 'utf8').split('\n')[0]!).payload).toMatchObject({ id: NEW_ID, cwd, source: 'cli', cli_version: '0.130.0' })
     expect(readFileSync(transcript, 'utf8')).toBe(claudeLines('c1'))
     expect(d.conversations.transcriptOk).toHaveBeenCalledWith('claude', transcript, null)
     expect(d.probe).toHaveBeenCalledWith('codex')
@@ -66,6 +70,8 @@ describe('agent_session_migrate', () => {
       { timestamp: '2026-11-18T09:00:00.000Z', type: 'session_meta', payload: { id: 'x1', cwd: '/w', source: 'cli' } },
       { timestamp: '2026-11-18T09:00:01.000Z', type: 'event_msg', payload: { type: 'user_message', message: 'hey' } },
       { timestamp: '2026-11-18T09:00:01.000Z', type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'hey' }] } },
+      { timestamp: '2026-11-18T09:00:02.000Z', type: 'turn_context', payload: { turn_id: 't1', model: 'gpt-5.6-terra' } },
+      { timestamp: '2026-11-18T09:00:02.000Z', type: 'response_item', payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'hi' }] } },
     ].map(line => JSON.stringify(line)).join('\n'))
     const transcriptOk = vi.fn(async (_engine: string, path: string) => path === rollout)
     const findTranscript = vi.fn(async () => rollout)
@@ -75,6 +81,13 @@ describe('agent_session_migrate', () => {
     expect(transcriptOk).toHaveBeenCalledWith('codex', rollout, '/profile')
     const folder = join(claudeProjects, cwd.replace(/[^a-zA-Z0-9]/g, '-'))
     expect(readdirSync(folder)).toEqual([`${NEW_ID}.jsonl`])
+    // Codex's model is never the resumed Claude's (its chip read "Claude GPT-5.6 Terra"), the reply closes its turn
+    // (without `end_turn` the resumed Claude said "Working…" for good), and the lines name Claude Code's version.
+    const reply = readFileSync(join(folder, `${NEW_ID}.jsonl`), 'utf8').trim().split('\n').map(line => JSON.parse(line))
+      .find(line => line.type === 'assistant')
+    expect(reply.message.model).toBeUndefined()
+    expect(reply.message.stop_reason).toBe('end_turn')
+    expect(reply.version).toBe('2.1.200')
   })
 
   it('is the owner\'s alone, and checks the agent and the engine before anything is read', async () => {
@@ -171,5 +184,24 @@ describe('the production facts', () => {
     expect(await d.home('claude')).toBe(env.CLAUDE_PROJECTS_DIR)
     vi.stubEnv('CLAUDE_CONFIG_DIR', join(dir, 'moved'))
     expect(await d.home('claude')).toBe(join(dir, 'moved', 'projects'))
+  })
+
+  it('converts all the same when the engine names no version', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    for (const version of [vi.fn(async () => null), vi.fn(async () => { throw new Error('spawn') })]) {
+      rmSync(codexHome, { recursive: true, force: true })
+      expect(await ask(deps({ version }), { agentId: 'a1', targetEngine: 'codex' })).toMatchObject({ engine: 'codex' })
+    }
+  })
+
+  it('names the version the engine says, or none when it does not answer with one', async () => {
+    const d = productionMigrateDeps(deps().conversations)
+    expect(await d.version('codex')).toBe('0.130.0')
+    versionRun.result = { code: 0, output: '2.1.200 (Claude Code)\n' }
+    expect(await d.version('claude')).toBe('2.1.200')
+    for (const result of [null, { code: 1, output: '2.1.200' }, { code: 0, output: 'no version' }]) {
+      versionRun.result = result
+      expect(await d.version('claude')).toBeNull()
+    }
   })
 })

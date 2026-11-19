@@ -7,7 +7,7 @@
  * writing emits both logs so Codex can resume the session and Harness can read it.
  */
 import {
-  artifactText, bashTool, editTool, isObject, isoTime, outputText, parseJsonl, parseTs, renderJsonl, rustLines, str, u64, writeTool,
+  artifactText, bashTool, commandTool, editTool, isObject, isoTime, outputText, parseJsonl, parseTs, renderJsonl, rustLines, str, u64, writeTool,
   type Block, type Json, type Message, type Meta, type Role, type Tool, type ToolOutput, type Transcript, type Usage,
 } from './canonical.js'
 
@@ -351,6 +351,14 @@ function messagesToLines(meta: Meta, messages: readonly Message[]): Line[] {
   const lines: Line[] = [line(isoTime(meta.timestamp), 'session_meta', sessionMeta)]
   // Only a pending patch call takes a custom-tool result; a completed id may be reused by another tool later.
   const pendingPatches = new Set<string>()
+  // A slash command the person ran at Claude Code (`/model`, `/effort`) drove that engine, and Codex has no tool for
+  // it: written as a `_model` call, every Change agent showed a row per command (Pixel 8 Pro, 2026-11-19). It and
+  // what it printed are left out.
+  const commands = new Set<string>()
+  messages = messages.map(message => ({ ...message, content: message.content.filter(block => {
+    if (block.type === 'tool_use' && commandTool(block.tool)) { commands.add(block.id); return false }
+    return !(block.type === 'tool_result' && commands.has(block.toolUseId))
+  }) })).filter(message => message.content.length > 0)
   messages.forEach((message, i) => {
     const at = isoTime(message.timestamp)
     // A turn boundary carries the model and frames the usage backfill.
