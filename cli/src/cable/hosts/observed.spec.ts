@@ -1366,6 +1366,7 @@ interface Fakes extends Omit<ObservedActions, 'adapters'> {
   codexInFront(): boolean
   tabsOpen(): boolean
   tabSelect(app: TabApp, tty: string, raise: boolean): PaneSwitch
+  tmuxFront(): string | undefined
 }
 
 /** What each count says, as devices.ts logs it. */
@@ -1399,6 +1400,8 @@ function fakeActions(over: Partial<Fakes> = {}, platform: NodeJS.Platform = 'dar
     // A watch holds the tabs stream open, and takes each select.
     tabsOpen: vi.fn(() => true),
     tabSelect: vi.fn((_app: TabApp, _tty: string, _raise: boolean): PaneSwitch => 'ok'),
+    // Terminal is in front: a tmux pane whose client it holds can be shown.
+    tmuxFront: vi.fn((): string | undefined => 'terminal-app'),
     // Codex is there, and queues every message.
     codexQueue: {
       can: vi.fn((_isApp: boolean) => true),
@@ -1408,7 +1411,9 @@ function fakeActions(over: Partial<Fakes> = {}, platform: NodeJS.Platform = 'dar
     count: vi.fn((_what: Parameters<ObservedActions['count']>[0]) => {}),
   }
   const fake = { ...fakes, ...over } as typeof fakes
-  const ran = vi.fn(async (_file: string, _args: string[], _timeoutMs: number) => ({ code: 0, stdout: '' }))
+  // tmux says a pane's process is 100, the agent's, in a session of the person's: a tmux show passes its checks.
+  const ran = vi.fn(async (_file: string, args: string[], _timeoutMs: number) =>
+    ({ code: 0, stdout: args[0] === 'display-message' ? '100|work|\n' : '' }))
   const deps: OrcaDeps = { run: ran, onPath: (name) => `/fake/bin/${name}`, exists: () => false, platform }
   const orca = createOrcaAdapter(deps)
   const claude = createClaudeAppAdapter({ ...deps, inFront: () => fake.claudeInFront() })
@@ -1417,7 +1422,8 @@ function fakeActions(over: Partial<Fakes> = {}, platform: NodeJS.Platform = 'dar
       prompt: (pane, kind, text) => fake.herdrPrompt(pane, kind, text),
       socketStamp: () => fake.herdrStamp(),
     } }),
-    createTmuxAdapter({ run: ran, processes: async () => [], log: () => {} }),
+    createTmuxAdapter({ run: ran, processes: async () => [{ pid: 100, ppid: 1, executable: 'claude' }], log: () => {},
+      front: () => fake.tmuxFront() }),
     // As devices.ts takes it where the hook's addresses are hc's own session's.
     createHerdrAppAdapter({ ...deps,
       client: { prompt: (address, kind, text) => fake.hcPrompt(address, kind, text), keys: async () => false },
@@ -3784,6 +3790,285 @@ describe('ObservedSource tabs', () => {
     t.src.ingest(t.ev('session-end', { sessionId: 'a', callerPid: 100, ...inTerminal }))
     t.src.ingest(t.ev('session-end', { sessionId: 'b', callerPid: 101, ...inTerminal }))
     expect(t.src.byTab('terminal-app', TTY)).toBeUndefined()
+  })
+})
+
+// An agent in a tmux pane of the person's is seen in the app holding the tmux client, at that client's tab
+// (docs/plans/2026-11-19-dial-tmux-terminal-design.md): the pane's own hints and pty name neither.
+describe('ObservedSource outer place', () => {
+  beforeEach(() => { vi.useFakeTimers() })
+  afterEach(() => { vi.useRealTimers() })
+  const CLIENT = { app: 'terminal-app', tty: '/dev/ttys004' }
+  /** An event's hints in tmux pane %3, a fresh record each time as each hook sends its own. */
+  const inTmux = (more: Record<string, string> = {}) => ({ hostHints: { TMUX_PANE: '%3', TERM_PROGRAM: 'tmux', ...more } })
+  const paneAsked = ['tmux', ['display-message', '-p', '-t', '%3', expect.any(String)], expect.any(Number)]
+  const selected = ['tmux', ['select-window', '-t', '%3', ';', 'select-pane', '-t', '%3'], expect.any(Number)]
+
+  /** A source whose outer places the test answers by hand, in the order they were asked, as the tmux lookup answers an
+   *  event in a tmux pane; an event in no tmux pane is not nested. A tty read answers at once. */
+  function nested(over: Partial<Fakes> = {}, adapt = (adapters: readonly HostAdapter[]) => adapters, deps: Partial<ObservedDeps> = {}) {
+    const asks: Array<{ answer(place: { app?: string; tty?: string }): Promise<unknown> }> = []
+    const outer = vi.fn((hints: Readonly<Record<string, string>>, _pid: number) => (hints.TMUX_PANE
+      ? new Promise<{ app?: string; tty?: string }>((resolve) => {
+        asks.push({ answer: (place) => { resolve(place); return vi.advanceTimersByTimeAsync(0) } })
+      })
+      : undefined))
+    const tty = vi.fn(async (_pid: number): Promise<string | undefined> => '/dev/ttys031')
+    const { actions, ran } = fakeActions(over)
+    const s = setup({ actions: { ...actions, adapters: adapt(actions.adapters) }, tty, outer, ...deps })
+    const agent = () => s.src.list()[0]
+    return { ...s, actions, ran, outer, asks, tty, agent }
+  }
+
+  it('a nested event lands on its outer app, with its client\'s tty and that app\'s bundle', async () => {
+    const t = nested()
+    t.src.ingest(t.ev('session-start', inTmux()))
+    expect(t.outer.mock.calls).toEqual([[inTmux().hostHints, 100]])
+    expect(t.agent().app).toBe('tmux')
+    const told = t.changes.mock.calls.length
+    await t.asks[0].answer(CLIENT)
+    const { id } = t.agent()
+    expect(t.agent().app).toBe('terminal-app')
+    expect(t.changes).toHaveBeenCalledTimes(told + 1)
+    expect(t.src.byTab('terminal-app', '/dev/ttys004')).toMatchObject({ id })
+    expect(t.src.paneOf(id, 'tabs')).toBe('terminal-app:/dev/ttys004')
+    expect(t.src.paneOf(id, 'tmux')).toBe('%3:100:terminal-app')
+    expect(await t.src.focus(t.agent())).toBe(true)
+    expect(t.actions.open.mock.calls[0][1].bundle).toBe('com.apple.Terminal')
+    expect(t.tty).not.toHaveBeenCalled()
+  })
+
+  it('needs-input and turn-stop keep it, and ask nothing', async () => {
+    const t = nested()
+    t.src.ingest(t.ev('session-start', inTmux()))
+    await t.asks[0].answer(CLIENT)
+    t.src.ingest(t.ev('needs-input', inTmux()))
+    t.src.ingest(t.ev('turn-stop', inTmux()))
+    expect(t.outer).toHaveBeenCalledTimes(1)
+    expect(t.agent().app).toBe('terminal-app')
+    expect(t.src.paneOf(t.agent().id, 'tabs')).toBe('terminal-app:/dev/ttys004')
+    expect(t.tty).not.toHaveBeenCalled()
+  })
+
+  it('turn-start and session-start ask again, keeping the outer place until the answer', async () => {
+    const t = nested()
+    t.src.ingest(t.ev('session-start', inTmux()))
+    await t.asks[0].answer(CLIENT)
+    for (const [i, event] of [[1, 'turn-start'], [2, 'session-start']] as const) {
+      t.src.ingest(t.ev(event, inTmux()))
+      expect(t.outer).toHaveBeenCalledTimes(i + 1)
+      // While it is asked, the agent keeps its page and its tab: the dial does not flicker to tmux's page.
+      expect(t.agent().app, event).toBe('terminal-app')
+      expect(t.src.byTab('terminal-app', '/dev/ttys004'), event).toMatchObject({ id: t.agent().id })
+      expect(t.src.paneOf(t.agent().id, 'tmux'), event).toBe('%3:100:terminal-app')
+      await t.asks[i].answer(i === 1 ? CLIENT : {})
+    }
+    // The person detached: back on tmux's page, with no tab.
+    expect(t.agent().app).toBe('tmux')
+    expect(t.src.byTab('terminal-app', '/dev/ttys004')).toBeUndefined()
+    expect(t.src.paneOf(t.agent().id, 'tabs')).toBeUndefined()
+    expect(t.src.paneOf(t.agent().id, 'tmux')).toBe('%3:100')
+  })
+
+  it('a new caller or a new pane drops it and asks again', async () => {
+    const t = nested()
+    t.src.ingest(t.ev('session-start', inTmux()))
+    await t.asks[0].answer(CLIENT)
+    t.src.ingest(t.ev('needs-input', { ...inTmux(), callerPid: 101 }))
+    expect(t.agent().app).toBe('tmux')
+    expect(t.src.byTab('terminal-app', '/dev/ttys004')).toBeUndefined()
+    expect(t.outer.mock.calls[1]).toEqual([inTmux().hostHints, 101])
+    await t.asks[1].answer(CLIENT)
+    expect(t.agent().app).toBe('terminal-app')
+    t.src.ingest(t.ev('needs-input', { ...inTmux({ TMUX_PANE: '%4' }), callerPid: 101 }))
+    expect(t.agent().app).toBe('tmux')
+    expect(t.src.paneOf(t.agent().id, 'tabs')).toBeUndefined()
+    expect(t.outer.mock.calls[2]).toEqual([inTmux({ TMUX_PANE: '%4' }).hostHints, 101])
+    expect(t.tty).not.toHaveBeenCalled()
+  })
+
+  it('{} falls back to the app the hints name, as today', async () => {
+    const t = nested()
+    t.src.ingest(t.ev('session-start', inTmux({ __CFBundleIdentifier: 'com.mitchellh.ghostty' })))
+    await t.asks[0].answer({})
+    expect(t.agent().app).toBe('ghostty')
+    expect(t.src.paneOf(t.agent().id, 'tabs')).toBeUndefined()
+    expect(await t.src.focus(t.agent())).toBe(true)
+    expect(t.actions.open.mock.calls).toEqual([[t.agent().id, { bundle: 'com.mitchellh.ghostty', pane: { adapter: 'tmux', id: '%3:100' } }]])
+  })
+
+  it('an answer for an earlier ask, caller or pane, or after the end, is dropped', async () => {
+    // The earlier ask's answer lands after the later one's.
+    const late = nested()
+    late.src.ingest(late.ev('session-start', inTmux()))
+    late.src.ingest(late.ev('turn-start', inTmux()))
+    await late.asks[1].answer({})
+    await late.asks[0].answer(CLIENT)
+    expect(late.agent().app).toBe('tmux')
+    expect(late.src.byTab('terminal-app', '/dev/ttys004')).toBeUndefined()
+
+    // It moved to another caller, or another pane, while it was asked.
+    for (const moved of [{ callerPid: 101 }, inTmux({ TMUX_PANE: '%4' })]) {
+      const t = nested()
+      t.src.ingest(t.ev('session-start', inTmux()))
+      t.src.ingest(t.ev('needs-input', { ...inTmux(), ...moved }))
+      await t.asks[0].answer(CLIENT)
+      expect(t.agent().app, JSON.stringify(moved)).toBe('tmux')
+      expect(t.src.byTab('terminal-app', '/dev/ttys004'), JSON.stringify(moved)).toBeUndefined()
+    }
+
+    // It ended while it was asked.
+    const ended = nested()
+    ended.src.ingest(ended.ev('session-start', inTmux()))
+    ended.src.ingest(ended.ev('session-end', inTmux()))
+    await ended.asks[0].answer(CLIENT)
+    expect(ended.agent().app).toBe('tmux')
+    expect(ended.changes).toHaveBeenCalledTimes(2)
+  })
+
+  it('the caller\'s tty is never read, and an old one is cleared at once', async () => {
+    const t = nested()
+    const inTerminal = { __CFBundleIdentifier: 'com.apple.Terminal' }
+    t.src.ingest(t.ev('session-start', { hostHints: { ...inTerminal } }))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(t.src.byTab('terminal-app', '/dev/ttys031')).toMatchObject({ id: t.agent().id })
+    // Its caller read already now names a tmux pane, whose server Terminal started: that pane's pty is no tab.
+    t.src.ingest(t.ev('turn-start', inTmux(inTerminal)))
+    expect(t.agent().app).toBe('terminal-app')
+    expect(t.src.byTab('terminal-app', '/dev/ttys031')).toBeUndefined()
+    expect(t.src.paneOf(t.agent().id, 'tabs')).toBeUndefined()
+    await t.asks[0].answer({})
+    expect(t.src.byTab('terminal-app', '/dev/ttys031')).toBeUndefined()
+    expect(t.tty.mock.calls).toEqual([[100]])
+  })
+
+  // A tmux before 3.2 sets no TERM_PROGRAM: the one its server started with may name no listed app (Hyper), so the
+  // caller's parents are walked too, and that walk can answer after the outer place.
+  describe('beside a walk of its caller\'s parents', () => {
+    /** A source whose walks the test answers by hand, in the order they began. */
+    function walked() {
+      const walks: Array<(apps: ReadonlyMap<number, string>) => Promise<unknown>> = []
+      const apps = vi.fn((_pids: readonly number[]) => new Promise<ReadonlyMap<number, string>>((resolve) => {
+        walks.push((found) => { resolve(found); return vi.advanceTimersByTimeAsync(0) })
+      }))
+      const t = nested({}, undefined, { apps })
+      t.src.ingest(t.ev('session-start', inTmux({ TERM_PROGRAM: 'Hyper' })))
+      expect(apps).toHaveBeenCalledTimes(1)
+      return { ...t, walks }
+    }
+
+    it('a walk that answers after its outer place leaves it on that app, at its client\'s tab', async () => {
+      const t = walked()
+      await t.asks[0].answer(CLIENT)
+      expect(t.agent().app).toBe('terminal-app')
+      // The walk ends at tmux's server, which no app holds.
+      await t.walks[0](new Map())
+      expect(t.agent().app).toBe('terminal-app')
+      expect(t.src.byTab('terminal-app', '/dev/ttys004')).toMatchObject({ id: t.agent().id })
+      expect(t.src.paneOf(t.agent().id, 'tabs')).toBe('terminal-app:/dev/ttys004')
+      expect(t.tty).not.toHaveBeenCalled()
+    })
+
+    it('a walk that names a tab app before its outer place answers reads no tty', async () => {
+      const t = walked()
+      // A server kept in a Terminal tab's foreground (`tmux -D`): its walk names Terminal, whose tab is not the pane's pty.
+      await t.walks[0](new Map([[100, 'terminal-app']]))
+      expect(t.agent().app).toBe('terminal-app')
+      expect(t.tty).not.toHaveBeenCalled()
+      await t.asks[0].answer({})
+      expect(t.src.paneOf(t.agent().id, 'tabs')).toBeUndefined()
+      expect(t.tty).not.toHaveBeenCalled()
+    })
+
+    it('a walk that answers after an outer place of none gives its app, and reads no tty', async () => {
+      const t = walked()
+      await t.asks[0].answer({})
+      await t.walks[0](new Map([[100, 'terminal-app']]))
+      expect(t.agent().app).toBe('terminal-app')
+      expect(t.src.paneOf(t.agent().id, 'tabs')).toBeUndefined()
+      expect(t.tty).not.toHaveBeenCalled()
+    })
+
+    it('a walk its outer place held back gives its app once a later ask finds none', async () => {
+      const t = walked()
+      await t.asks[0].answer(CLIENT)
+      await t.walks[0](new Map([[100, 'iterm']]))
+      expect(t.agent().app).toBe('terminal-app')
+      t.src.ingest(t.ev('turn-start', inTmux({ TERM_PROGRAM: 'Hyper' })))
+      await t.asks[1].answer({})
+      expect(t.agent().app).toBe('iterm')
+      // Walked once for its caller.
+      expect(t.walks).toHaveLength(1)
+      expect(t.src.paneOf(t.agent().id, 'tabs')).toBeUndefined()
+      expect(t.tty).not.toHaveBeenCalled()
+    })
+
+    it('a caller it moved to during the walk is walked next, and that walk leaves its new outer place', async () => {
+      const t = walked()
+      t.src.ingest(t.ev('needs-input', { ...inTmux({ TERM_PROGRAM: 'Hyper' }), callerPid: 101 }))
+      await t.walks[0](new Map([[100, 'iterm']]))
+      expect(t.walks).toHaveLength(2)
+      await t.asks[1].answer(CLIENT)
+      await t.walks[1](new Map())
+      expect(t.agent().app).toBe('terminal-app')
+      expect(t.src.byTab('terminal-app', '/dev/ttys004')).toMatchObject({ id: t.agent().id })
+      expect(t.tty).not.toHaveBeenCalled()
+    })
+  })
+
+  it('undefined: nothing changes', async () => {
+    const t = nested()
+    t.src.ingest(t.ev('session-start', { hostHints: { __CFBundleIdentifier: 'com.apple.Terminal' } }))
+    expect(t.outer).toHaveBeenCalledTimes(1)
+    expect(t.tty.mock.calls).toEqual([[100]])
+    await vi.advanceTimersByTimeAsync(0)
+    expect(t.src.paneOf(t.agent().id, 'tabs')).toBe('terminal-app:/dev/ttys031')
+  })
+
+  it('a rest shows the tab, then the tmux pane', async () => {
+    const t = nested()
+    t.src.ingest(t.ev('session-start', inTmux()))
+    await t.asks[0].answer(CLIENT)
+    expect(t.src.hasPane(t.agent())).toBe(true)
+    expect(await t.src.showPane(t.agent())).toBe('ok')
+    expect(t.actions.tabSelect.mock.calls).toEqual([['terminal-app', '/dev/ttys004', false]])
+    expect(t.ran.mock.calls).toEqual([paneAsked, selected])
+    expect(t.actions.tabSelect.mock.invocationCallOrder[0]).toBeLessThan(t.ran.mock.invocationCallOrder[0])
+  })
+
+  it.each([
+    ['busy', 'ok', 'busy'],
+    ['ok', 'busy', 'busy'],
+    ['failed', 'ok', 'ok'],
+    ['ok', 'failed', 'ok'],
+    ['failed', 'failed', 'failed'],
+  ] as const)('a rest whose tab says %s and whose tmux pane says %s answers %s', async (tab, pane, said) => {
+    const shows = { tabs: vi.fn(async (): Promise<PaneSwitch> => tab), tmux: vi.fn(async (): Promise<PaneSwitch> => pane) }
+    const t = nested({}, (adapters) => adapters.map((a) => (a.id === 'tabs' || a.id === 'tmux' ? { ...a, show: shows[a.id] } : a)))
+    t.src.ingest(t.ev('session-start', inTmux()))
+    await t.asks[0].answer(CLIENT)
+    expect(await t.src.showPane(t.agent())).toBe(said)
+    expect(shows.tabs).toHaveBeenCalledTimes(1)
+    expect(shows.tmux).toHaveBeenCalledTimes(1)
+  })
+
+  it('a rest while another app is in front shows the tab alone', async () => {
+    const t = nested({ tmuxFront: vi.fn((): string | undefined => 'ghostty') })
+    t.src.ingest(t.ev('session-start', inTmux()))
+    await t.asks[0].answer(CLIENT)
+    expect(await t.src.showPane(t.agent())).toBe('ok')
+    expect(t.actions.tabSelect.mock.calls).toEqual([['terminal-app', '/dev/ttys004', false]])
+    expect(t.ran).not.toHaveBeenCalled()
+  })
+
+  it('a tap opens the tmux pane and the app, then raises the tab', async () => {
+    const t = nested()
+    t.src.ingest(t.ev('session-start', inTmux()))
+    await t.asks[0].answer(CLIENT)
+    expect(await t.src.focus(t.agent())).toBe(true)
+    expect(t.actions.open.mock.calls).toEqual([[t.agent().id, { bundle: 'com.apple.Terminal', pane: { adapter: 'tmux', id: '%3:100:terminal-app' } }]])
+    expect(t.actions.tabSelect.mock.calls).toEqual([['terminal-app', '/dev/ttys004', true]])
+    expect(t.actions.open.mock.invocationCallOrder[0]).toBeLessThan(t.actions.tabSelect.mock.invocationCallOrder[0])
   })
 })
 

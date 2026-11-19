@@ -65,6 +65,7 @@ const FAKE_APPS = {
   ghostty: { bundle: 'Ghostty', id: 'com.mitchellh.ghostty', exe: 'ghostty' },
   vscode: { bundle: 'Visual Studio Code', id: 'com.microsoft.VSCode', exe: 'code' },
   cursor: { bundle: 'Cursor', id: 'com.todesktop.230313mzl4w4u92', exe: 'cursor' },
+  'terminal-app': { bundle: 'Terminal', id: 'com.apple.Terminal', exe: 'Terminal' },
 } as const
 export type FakeApp = keyof typeof FAKE_APPS
 
@@ -99,6 +100,37 @@ function fakeApp(d: IsolatedDaemon, app: FakeApp): string {
   }
   symlinkSync(process.execPath, path)
   return path
+}
+
+/**
+ * A tab of a fake [app] running [argv] on a pseudo-terminal of its own (PTY), under [env] alone: its parents are the
+ * pseudo-terminal's helper, the app, the test. [pid] is the command's own process. Closed, the command is killed and the
+ * tab waited for, so nothing of it outlives the test.
+ */
+export async function tabUnder(d: IsolatedDaemon, app: FakeApp, argv: readonly string[], env: NodeJS.ProcessEnv):
+  Promise<{ pid: number; close(): Promise<void> }> {
+  const tab = spawn(fakeApp(d, app), ['-e', UNDER_APP, 'python3', '-c', PTY, ...argv], { env, stdio: ['pipe', 'pipe', 'pipe'] })
+  tab.stdout!.resume()
+  const exited = new Promise<void>((done) => tab.once('exit', () => done()))
+  const pid = await new Promise<number>((resolve, reject) => {
+    let said = ''
+    tab.stderr!.on('data', (chunk: Buffer) => {
+      said += chunk.toString('utf8')
+      const [first] = said.split('\n').slice(0, -1)
+      if (first) resolve(Number(first))
+    })
+    tab.once('exit', (code) => reject(new Error(`the terminal tab exited (${code}): ${said}`)))
+  })
+  return {
+    pid,
+    async close() {
+      try { process.kill(pid, 'SIGKILL') } catch { /* already gone */ }
+      // The helper ends with its pseudo-terminal, and the app with it; one that does not is killed.
+      const timer = setTimeout(() => tab.kill('SIGKILL'), 5_000)
+      await exited
+      clearTimeout(timer)
+    },
+  }
 }
 
 /** Claude Code in a terminal app outside Harness: no tmux pane, no Harness pane. */
