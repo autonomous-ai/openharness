@@ -2,6 +2,7 @@ import type { ScreenReader } from './screenReader.js'
 import type { SubmissionReader } from './submissionReader.js'
 import { createHash } from 'crypto'
 import { composerHolds, composerShown, normalizedTerminalText, visibleTerminal } from '../engines/kit/submission.js'
+import { openclawBoxHolds, readOpenclawScreen } from '../engines/openclaw/contract.js'
 import { launchBound } from '../core/engines/sessionBinding.js'
 import type { RegisteredSession } from './registry.js'
 import { errorKind, sid } from './log.js'
@@ -61,6 +62,10 @@ const COPILOT_SUBMIT_VERIFY_MS = 6_000
 // writes it as the run starts. A Gateway short of memory stalled 18 s at a time before writing it (lamp, 2026-11-11):
 // three 10 s windows give the row 30 s in all before the message is given up.
 const OPENCLAW_SUBMIT_VERIFY_MS = 10_000
+// OpenClaw puts a message it refused back into its input box (Gateway not connected, history not loaded, a run going)
+// and sends nothing until its pane can. Two Enters on a pane that could not send gave a first task up with a log line
+// only (reproduced on a cold Gateway, 2026-11-19): the windows on such a pane are not counted, up to this long from the paste.
+const OPENCLAW_NOT_READY_MAX_MS = 180_000
 const CURSOR_TURN_SETTLE_MS = 750
 const SUBMIT_MAX_RETRIES = 2
 /** How long a paste the control lease refused, before a byte was written, waits for the lease, and how
@@ -105,6 +110,7 @@ function sayOnce(receipt?: MessageReceipt): MessageReceipt | undefined {
 interface QueuedInput {
   deliveryId?: string
   receipt?: MessageReceipt
+  firstTask?: boolean
   content: string
   bytes: number
   expiresAt: number
@@ -138,6 +144,10 @@ interface InputState {
   turnOpen: boolean
   awaitingFingerprint: string | null
   awaitingContent: string | null
+  /** When the message awaiting confirmation was pasted. */
+  pastedAt: number
+  /** The message awaiting confirmation is the agent's first task, which is never given up here ([firstTaskWaiting]). */
+  firstTask: boolean
   /** The receipt of the person's message typed last, until it is settled ([settle]). */
   awaitingReceipt?: MessageReceipt
   controlLocked: boolean
@@ -278,6 +288,11 @@ export class SessionInputController {
     return this.waitingEngine.has(id) ? 'engine' : null
   }
 
+  /** Whether [id]'s first task is typed and its user row has not confirmed it yet. */
+  firstTaskWaiting(id: string): boolean {
+    return this.states.get(id)?.firstTask === true
+  }
+
   private countWait(id: string, by: 1 | -1): void {
     const count = (this.waitingEngine.get(id) ?? 0) + by
     if (count > 0) this.waitingEngine.set(id, count)
@@ -322,6 +337,8 @@ export class SessionInputController {
         turnOpen: false,
         awaitingFingerprint: null,
         awaitingContent: null,
+        pastedAt: 0,
+        firstTask: false,
         controlLocked: false,
         cancelling: 0,
         afterCancel: { writes: [], sent: [] },
@@ -355,10 +372,26 @@ export class SessionInputController {
   }
 
   /** The awaited person's message is settled as [outcome]: wherever its wait for a turn ends. */
-  private settle(state: InputState, outcome: MessageOutcome): void {
+  private settle(sessionId: string, state: InputState, outcome: MessageOutcome): void {
     const receipt = state.awaitingReceipt
     state.awaitingReceipt = undefined
     receipt?.(outcome)
+    this.firstTaskEnded(sessionId, state)
+  }
+
+  /** A first task no longer awaits its confirmation: the agent's frame says so (`onWaitChanged`). */
+  private firstTaskEnded(sessionId: string, state: InputState): void {
+    if (!state.firstTask) return
+    state.firstTask = false
+    this.deps.onWaitChanged?.(sessionId)
+  }
+
+  /** The message awaiting confirmation is in the pane since now: [firstTask], the agent's frame says it waits. */
+  private pasted(sessionId: string, state: InputState, firstTask: boolean): void {
+    state.pastedAt = (this.deps.now ?? Date.now)()
+    if (!firstTask) return
+    state.firstTask = true
+    this.deps.onWaitChanged?.(sessionId)
   }
 
   /** Revoke queued work only; a paste already in progress cannot be recalled. */
@@ -386,9 +419,11 @@ export class SessionInputController {
     return false
   }
 
-  /** [receipt]: what became of a person's message (one with no [deliveryId]), for its measurement. */
-  submit(sessionId: string, content: string, deliveryId?: string, receipt?: MessageReceipt): void {
+  /** [receipt]: what became of a person's message (one with no [deliveryId]), for its measurement. [options.firstTask]:
+   *  the task the agent was started with, kept until its user row confirms it ([firstTaskWaiting]). */
+  submit(sessionId: string, content: string, deliveryId?: string, receipt?: MessageReceipt, options?: { firstTask?: boolean }): void {
     const said = sayOnce(receipt)
+    const firstTask = options?.firstTask === true
     if (this.refuseHeldMessage(sessionId, deliveryId, said)) return
     // An agent changing host has no pane to type into until the move ends: the message waits, as itself, and
     // is submitted then, through every check `submitNow` makes, into the pane the row then names.
@@ -403,7 +438,7 @@ export class SessionInputController {
       state.held.push(item)
       gate.enqueue(agentId, async () => {
         removeHeld(state.held, item)
-        if (!item.cancelled && this.states.get(sessionId) === state) await this.submitNow(sessionId, content, deliveryId, said)
+        if (!item.cancelled && this.states.get(sessionId) === state) await this.submitNow(sessionId, content, deliveryId, said, firstTask)
       }, () => {
         removeHeld(state.held, item)
         if (!item.cancelled && this.states.get(sessionId) === state) {
@@ -413,7 +448,7 @@ export class SessionInputController {
       })
       return
     }
-    void this.submitNow(sessionId, content, deliveryId, said)
+    void this.submitNow(sessionId, content, deliveryId, said, firstTask)
   }
 
   /**
@@ -421,7 +456,7 @@ export class SessionInputController {
    * here or refused: the gate delivers what it held one at a time, and a keystroke held behind this message
    * must not land between its paste and its Enter.
    */
-  private submitNow(sessionId: string, content: string, deliveryId?: string, said?: MessageReceipt): Promise<void> {
+  private submitNow(sessionId: string, content: string, deliveryId?: string, said?: MessageReceipt, firstTask = false): Promise<void> {
     if (this.refuseHeldMessage(sessionId, deliveryId, said)) return Promise.resolve()
     const session = this.controlSession(sessionId)
     if (!session) {
@@ -433,7 +468,7 @@ export class SessionInputController {
     const state = this.state(sessionId)
     if (state.cancelling) {
       this.holdForCancel(sessionId, state, Buffer.byteLength(content, 'utf8'), deliveryId, said, 'sent',
-        () => void this.submitNow(sessionId, content, deliveryId, said))
+        () => void this.submitNow(sessionId, content, deliveryId, said, firstTask))
       return Promise.resolve()
     }
     this.dropExpired(sessionId, state)
@@ -441,7 +476,7 @@ export class SessionInputController {
       || (deliveryId && (state.deliveryId || state.dispatching || state.awaitingFingerprint || state.turnOpen || state.settling))
       || (!this.typesWhileBusy(session.engine) && (state.turnOpen || state.awaitingFingerprint || state.settling))) {
       console.log(`[inject] ${sid(sessionId)} queued · engine=${session.engine} · depth=${state.queue.length + 1}`)
-      this.enqueue(sessionId, state, content, deliveryId, said)
+      this.enqueue(sessionId, state, content, deliveryId, said, firstTask)
       return Promise.resolve()
     }
     this.delivery(sessionId, deliveryId, 'queued')
@@ -453,10 +488,10 @@ export class SessionInputController {
     // agent as it is by then, which a restart in between may have changed.
     // With nothing in flight the write starts at once, so a cancel or a control request that follows
     // the submit sees it, as before.
-    return this.scheduleWrite(sessionId, content, deliveryId, said)
+    return this.scheduleWrite(sessionId, content, deliveryId, said, firstTask)
   }
 
-  private scheduleWrite(sessionId: string, content: string, deliveryId?: string, receipt?: MessageReceipt): Promise<void> {
+  private scheduleWrite(sessionId: string, content: string, deliveryId?: string, receipt?: MessageReceipt, firstTask = false): Promise<void> {
     const state = this.state(sessionId)
     let pending: HeldInput | undefined
     if (state.writes) {
@@ -475,7 +510,7 @@ export class SessionInputController {
       // On its way before a cancel began, its turn to be typed came while the Ctrl-C is: it goes on after it.
       if (state.cancelling) {
         this.holdForCancel(sessionId, state, pending?.bytes ?? Buffer.byteLength(content, 'utf8'), deliveryId, receipt, 'writes',
-          () => void this.scheduleWrite(sessionId, content, deliveryId, receipt))
+          () => void this.scheduleWrite(sessionId, content, deliveryId, receipt, firstTask))
         return Promise.resolve()
       }
       const current = this.controlSession(sessionId)
@@ -485,7 +520,7 @@ export class SessionInputController {
         if (!deliveryId?.startsWith('team:')) this.deps.onError(sessionId, 'This harness is no longer available.')
         return Promise.resolve()
       }
-      return this.inject(sessionId, current, content, deliveryId, receipt)
+      return this.inject(sessionId, current, content, deliveryId, receipt, firstTask)
     }
     const running = state.writes ? state.writes.then(write, write) : write()
     const clear = (): void => {
@@ -532,6 +567,27 @@ export class SessionInputController {
       if (current !== state) return
       current.controlLocked = false
       this.drainOne(sessionId, current)
+    }
+  }
+
+  /**
+   * Types [line] and its Enter, a command of the engine's own (OpenClaw's `/session <key>`), into [id]'s pane through
+   * `inject`, under the pane's write lock, only while nothing is pending for the pane: no message awaiting confirmation
+   * or being written, none queued, no caller holding it, no turn open. Held as a control is, so a message sent
+   * meanwhile waits for it. Whether it was typed.
+   */
+  async typeCommand(id: string, line: string): Promise<boolean> {
+    const session = this.controlSession(id)
+    if (!session || this.states.get(id)?.writes) return false
+    const release = this.acquireControl(id)
+    if (!release) return false
+    try {
+      const delivery = await this.deps.inject(session.agentId, line)
+      return typeof delivery === 'boolean' ? delivery : delivery.state === 'succeeded'
+    } catch {
+      return false
+    } finally {
+      release()
     }
   }
 
@@ -588,6 +644,7 @@ export class SessionInputController {
         if (engineReads) void this.echoes(session, userMessage, expected).then(matched => { if (!matched) warn(); receipt?.(matched ? 'started' : 'prompt_mismatch') })
         else { warn(); receipt?.('prompt_mismatch') }
       } else receipt?.('started')
+      this.firstTaskEnded(sessionId, state)
       state.awaitingFingerprint = null
       state.awaitingContent = null
       state.retries = 0
@@ -632,7 +689,7 @@ export class SessionInputController {
     const state = this.state(sessionId)
     if (!state.dispatching) this.finishDelivery(sessionId, state, 'unknown', 'turn_ended_without_start')
     // Typed while a turn ran, the engine holds it as that turn's follow-up; otherwise no turn was seen for it.
-    this.settle(state, state.turnOpen ? 'taken' : 'turn_ended')
+    this.settle(sessionId, state, state.turnOpen ? 'taken' : 'turn_ended')
     state.turnOpen = false
     state.awaitingFingerprint = null
     state.awaitingContent = null
@@ -727,7 +784,7 @@ export class SessionInputController {
   /** What a Ctrl-C the person asked for ends: the message typed last, and the turn. */
   private interrupted(sessionId: string, state: InputState): void {
     this.finishDelivery(sessionId, state, 'unknown', 'cancelled_after_paste')
-    this.settle(state, 'cancelled')
+    this.settle(sessionId, state, 'cancelled')
     state.turnOpen = false
     state.awaitingFingerprint = null
     state.awaitingContent = null
@@ -742,7 +799,7 @@ export class SessionInputController {
     if (state?.settleTimer) clearTimeout(state.settleTimer)
     if (state) {
       this.finishDelivery(sessionId, state, state.writing || state.awaitingFingerprint || state.deliveryFingerprint ? 'unknown' : 'rejected', 'agent_gone')
-      this.settle(state, 'ambiguous')
+      this.settle(sessionId, state, 'ambiguous')
       for (const item of state.queue) {
         this.delivery(sessionId, item.deliveryId, 'rejected', 'agent_gone')
         item.receipt?.('agent_gone')
@@ -762,7 +819,7 @@ export class SessionInputController {
   }
 
   /** Preserve the established injection path for every caller that opts out of receipts. */
-  private async injectLegacy(sessionId: string, session: RegisteredSession, content: string, receipt?: MessageReceipt): Promise<void> {
+  private async injectLegacy(sessionId: string, session: RegisteredSession, content: string, receipt?: MessageReceipt, firstTask = false): Promise<void> {
     const state = this.state(sessionId)
     const current = (): boolean => this.states.get(sessionId) === state && this.controlSession(sessionId) !== undefined
     const gone = (outcome: MessageOutcome = 'agent_gone'): void => {
@@ -845,27 +902,29 @@ export class SessionInputController {
     }
     console.log(`[inject] ${sid(sessionId)} paste ok · engine=${session.engine} · target=${session.agentId} · len=${content.length}`)
     // The one typed before it, never refused, was taken as the message before this one.
-    this.settle(state, 'taken')
+    this.settle(sessionId, state, 'taken')
     state.awaitingReceipt = receipt
     state.awaitingFingerprint = fingerprint(content)
     state.awaitingContent = content
     state.retries = 0
     state.observes = 0
     state.ambiguousDispatch = typeof delivery !== 'boolean' && delivery.dispatch === 'possibly_executed'
+    this.pasted(sessionId, state, firstTask)
     this.deps.onSubmitted?.(sessionId, content)
     this.armSubmitCheck(sessionId, session, state)
   }
 
-  private async inject(sessionId: string, session: RegisteredSession, content: string, deliveryId?: string, receipt?: MessageReceipt): Promise<void> {
+  private async inject(sessionId: string, session: RegisteredSession, content: string, deliveryId?: string, receipt?: MessageReceipt,
+    firstTask = false): Promise<void> {
     if (this.refuseHeldMessage(sessionId, deliveryId, receipt)) return
     const state = this.state(sessionId)
     if (!deliveryId) {
       // A local submission keeps its original scheduling. Overlap removes our ability
       // to attribute a later terminal turn to the lamp; it must not block local input.
       this.finishDelivery(sessionId, state, 'unknown', 'prompt_mismatch')
-      if (!receipt) return this.injectLegacy(sessionId, session, content)
+      if (!receipt) return this.injectLegacy(sessionId, session, content, undefined, firstTask)
       // A write that threw may have typed something: unknown, and thrown on as before.
-      return this.injectLegacy(sessionId, session, content, receipt).catch((error: unknown) => {
+      return this.injectLegacy(sessionId, session, content, receipt, firstTask).catch((error: unknown) => {
         receipt('ambiguous')
         throw error
       })
@@ -965,6 +1024,7 @@ export class SessionInputController {
       state.retries = 0
       state.observes = 0
       state.ambiguousDispatch = typeof delivery !== 'boolean' && delivery.dispatch === 'possibly_executed'
+      this.pasted(sessionId, state, firstTask)
       state.dispatching = false
       this.delivery(sessionId, state.deliveryId, 'delivered')
       if (state.observedStart !== undefined) {
@@ -1052,14 +1112,16 @@ export class SessionInputController {
         console.warn(`[inject] ${sid(sessionId)} not accepted · engine=cursor · composer clear of draft`)
         state.awaitingFingerprint = null
         state.awaitingContent = null
-        this.settle(state, 'not_submitted')
+        this.settle(sessionId, state, 'not_submitted')
         this.finishDelivery(sessionId, state, 'unknown', 'not_submitted')
         this.deps.onError(sessionId, 'The agent did not accept the message. Please try again.')
         return
       }
+    } else if (session.engine === 'openclaw') {
+      await this.retryOpenclaw(sessionId, session, state)
+      return
     } else if (session.engine === 'opencode' || session.engine === 'kilo' || session.engine === 'pi' || session.engine === 'hermes' || session.engine === 'muse'
-      || session.engine === 'amp' || session.engine === 'grok' || session.engine === 'agy' || session.engine === 'copilot'
-      || session.engine === 'openclaw') {
+      || session.engine === 'amp' || session.engine === 'grok' || session.engine === 'agy' || session.engine === 'copilot') {
       // OpenCode has no composer glyph, and the submitted text stays visible in the message area, so a
       // pane scrape can't tell "still in the composer" from "already sent". Rely purely on the reader-
       // derived turn_started (a new user row in opencode.db) to clear awaitingFingerprint; if it hasn't
@@ -1088,7 +1150,7 @@ export class SessionInputController {
         state.awaitingContent = null
         state.observes = 0
         state.ambiguousDispatch = false
-        this.settle(state, 'taken')
+        this.settle(sessionId, state, 'taken')
         return
       }
       if (capture) {
@@ -1117,20 +1179,64 @@ export class SessionInputController {
       }
     }
     if (state.retries >= SUBMIT_MAX_RETRIES) {
-      console.warn(`[inject] ${sid(sessionId)} not accepted · engine=${session.engine} · gave up after ${state.retries} retries`)
-      state.awaitingFingerprint = null
-      state.awaitingContent = null
-      state.ambiguousDispatch = false
-      this.settle(state, 'not_submitted')
-      this.finishDelivery(sessionId, state, 'unknown', 'not_submitted')
-      this.deps.onError(sessionId, 'The agent did not accept the message. Please try again.')
+      this.notAccepted(sessionId, session, state, `gave up after ${state.retries} retries`)
       return
     }
+    await this.resubmit(sessionId, session, state)
+  }
+
+  /**
+   * OpenClaw's pane says what became of a message before any Enter: one it refused (Gateway not connected, history not
+   * loaded, a run going) is back in its input box, and its status line says when it can send. Only the user row
+   * confirms one, so a window ends here: on a pane that cannot send, waiting without counting it; on a ready one, an
+   * Enter only when its box holds the message (never a second paste).
+   */
+  private async retryOpenclaw(sessionId: string, session: RegisteredSession, state: InputState): Promise<void> {
+    if (state.ambiguousDispatch) {
+      this.failAmbiguousSubmission(sessionId, state)
+      return
+    }
+    const capture = await this.deps.capture?.(session.agentId)
+    if (this.states.get(sessionId) !== state || !state.awaitingFingerprint || state.turnOpen) return
+    const screen = capture ? readOpenclawScreen(capture) : null
+    if (screen && screen.state !== 'ready') {
+      if (state.firstTask || (this.deps.now ?? Date.now)() - state.pastedAt < OPENCLAW_NOT_READY_MAX_MS) this.armSubmitCheck(sessionId, session, state)
+      else this.notAccepted(sessionId, session, state, `its pane could not send for ${OPENCLAW_NOT_READY_MAX_MS / 1000} s`)
+      return
+    }
+    // A first task is never given up here: the binding pass bounds it from the agent's launch (core/agents/bind.ts).
+    if (state.retries >= SUBMIT_MAX_RETRIES && !state.firstTask) {
+      this.notAccepted(sessionId, session, state, `gave up after ${state.retries} retries`)
+      return
+    }
+    // An empty box sent the message, and other text in it is the person's, which an Enter would send. With no reading,
+    // the blind Enters every engine gets, and no more.
+    if (screen ? openclawBoxHolds(screen.box, state.awaitingContent ?? '') : state.retries < SUBMIT_MAX_RETRIES) {
+      await this.resubmit(sessionId, session, state)
+      return
+    }
+    state.retries++
+    this.armSubmitCheck(sessionId, session, state)
+  }
+
+  /** The message awaiting confirmation is given up, [why]: the person is told the agent did not accept it. */
+  private notAccepted(sessionId: string, session: RegisteredSession, state: InputState, why: string): void {
+    console.warn(`[inject] ${sid(sessionId)} not accepted · engine=${session.engine} · ${why}`)
+    state.awaitingFingerprint = null
+    state.awaitingContent = null
+    state.ambiguousDispatch = false
+    this.settle(sessionId, state, 'not_submitted')
+    this.finishDelivery(sessionId, state, 'unknown', 'not_submitted')
+    this.deps.onError(sessionId, 'The agent did not accept the message. Please try again.')
+  }
+
+  /** One retry of the message awaiting confirmation: its submit key, pressed again. */
+  private async resubmit(sessionId: string, session: RegisteredSession, state: InputState): Promise<void> {
     state.retries++
     const valid = await this.deps.validateRuntime(session)
     if (!valid) {
       this.finishDelivery(sessionId, state, 'unknown', 'runtime_gone_post_paste')
-      this.settle(state, 'runtime_gone')
+      this.settle(sessionId, state, 'runtime_gone')
       state.awaitingFingerprint = null
       state.awaitingContent = null
       state.ambiguousDispatch = false
@@ -1179,7 +1285,7 @@ export class SessionInputController {
     state.awaitingFingerprint = null
     state.awaitingContent = null
     state.observes = 0
-    this.settle(state, 'taken')
+    this.settle(sessionId, state, 'taken')
   }
 
   /**
@@ -1204,13 +1310,13 @@ export class SessionInputController {
     state.awaitingContent = null
     state.observes = 0
     state.ambiguousDispatch = false
-    this.settle(state, 'taken')
+    this.settle(sessionId, state, 'taken')
     return true
   }
 
   private failAmbiguousSubmission(sessionId: string, state: InputState): void {
     this.finishDelivery(sessionId, state, 'unknown', 'dispatch_ambiguous')
-    this.settle(state, 'ambiguous')
+    this.settle(sessionId, state, 'ambiguous')
     state.awaitingFingerprint = null
     state.awaitingContent = null
     state.ambiguousDispatch = false
@@ -1247,13 +1353,13 @@ export class SessionInputController {
       return
     }
     // A drained delivery must own the same write chain as a new person's message, through paste and Enter.
-    await this.scheduleWrite(sessionId, next.content, next.deliveryId, next.receipt)
+    await this.scheduleWrite(sessionId, next.content, next.deliveryId, next.receipt, next.firstTask)
   }
 
-  private enqueue(sessionId: string, state: InputState, content: string, deliveryId?: string, receipt?: MessageReceipt): void {
+  private enqueue(sessionId: string, state: InputState, content: string, deliveryId?: string, receipt?: MessageReceipt, firstTask = false): void {
     const bytes = Buffer.byteLength(content, 'utf8')
     if (this.refusedFull(sessionId, state, bytes, deliveryId, receipt)) return
-    state.queue.push({ content, bytes, expiresAt: Date.now() + ITEM_TTL_MS, deliveryId, ...(receipt ? { receipt } : {}) })
+    state.queue.push({ content, bytes, expiresAt: Date.now() + ITEM_TTL_MS, deliveryId, ...(receipt ? { receipt } : {}), ...(firstTask ? { firstTask } : {}) })
     this.delivery(sessionId, deliveryId, 'queued')
   }
 
