@@ -276,6 +276,18 @@ describe("the Claude app's source (docs/plans/2026-11-19-dial-claude-app-session
       await after(s, () => s.fire(ACCOUNT, undefined))
       expect(s.watches.map(({ folders }) => folders)).toEqual([[ROOT, dirname(ROOT)], [ACCOUNT], [ORG], [ORG2]])
     })
+
+    // A folder removed ends its watch for good (folderWatch.ts); made again before the listing, it is still listed.
+    it('an event naming a folder sets that folder\'s watch, and those below it, again', async () => {
+      const s = await started()
+      await after(s, () => s.fire(ACCOUNT, 'org'))
+      expect(s.watches.map(({ folders, stopped }) => [folders, stopped])).toEqual([
+        [[ROOT, dirname(ROOT)], false], [[ACCOUNT], false], [[ORG], true], [[ORG], false],
+      ])
+      await after(s, () => s.fire(ROOT, 'acc'))
+      expect(s.watching()).toEqual([[ROOT, dirname(ROOT)], [ACCOUNT], [ORG]])
+      expect(s.watches).toHaveLength(6)
+    })
   })
 
   describe('the root\'s wait', () => {
