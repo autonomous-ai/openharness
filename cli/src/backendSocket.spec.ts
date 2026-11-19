@@ -3755,6 +3755,16 @@ describe('the models lists pushed to the windows', () => {
     await socket.stop()
   })
 
+  // `harness show/ps/wait/watch` read agents_list, whose frames are built here: they say starting as pushed ones do.
+  it('says an agent is starting in every frame it builds, from the core', async () => {
+    const socket = relaySocket('token')
+    const agent = { agentId: 'a-start', sessionId: 's-start', engine: 'claude', cwd: '/tmp', runtimes: [], registeredAt: 1, active: true } as unknown as RegisteredSession
+    expect((await socket.toProject(agent)).starting).toBe(false)
+    socket.startingProvider = (s) => s.agentId === 'a-start'
+    expect((await socket.toProject(agent)).starting).toBe(true)
+    await socket.stop()
+  })
+
   it('answers the grid commands\' handshake itself, so a Grid harness never reads models being down as "update Harness"', async () => {
     const socket = relaySocket('token')
     socket.models = () => MODELS_OFF

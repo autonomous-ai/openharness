@@ -28,6 +28,7 @@ const agents = new Map<string, RegisteredSession>([
   ['cx', { agentId: 'cx', sessionId: 'cx-s', engine: 'codex' } as RegisteredSession],
   ['s1', { agentId: 'a1', sessionId: 's1', engine: 'claude' } as RegisteredSession],
   ['cc', { agentId: 'cc', sessionId: 'cc-s', engine: 'commandcode' } as RegisteredSession],
+  ['oc', { agentId: 'oc', sessionId: 'agent:main:oc', engine: 'openclaw' } as RegisteredSession],
   ['cc-new', { agentId: 'cc-new', sessionId: '', engine: 'commandcode' } as RegisteredSession],
   ['cc-none', { agentId: 'cc-none', sessionId: 'cc-none-s', engine: 'commandcode' } as RegisteredSession],
 ])
@@ -166,6 +167,60 @@ describe('the session input controller\'s dependencies', () => {
     expect(await wired.inject('a1', 'hi')).toBe(ok)
     expect(await wired.inject('nobody', 'hi')).toEqual({ state: 'failed', dispatch: 'not_started', reason: 'terminal agent is unavailable' })
     expect(run.calls.filter((call) => call.startsWith('submit'))).toEqual(['submit cc hi', 'submit a1 hi'])
+  })
+
+  // Found in review: typed into an OpenClaw pane whose history had not loaded, a message was refused back into its input
+  // box, where nothing sent it.
+  it('types an OpenClaw message only into a pane ready to send it with an empty box, and says why not', async () => {
+    const openclawPane = (name: string) => readFileSync(new URL(`../engines/openclaw/__fixtures__/${name}`, import.meta.url), 'utf8')
+    const notReady = { state: 'failed', dispatch: 'not_started', reason: 'openclaw_not_ready' }
+    const run = deps()
+    const wired = sessionInputDeps(run.deps, () => lock(run.calls))
+    for (const pane of ['screen-history-failed.txt', 'screen-history-refused.txt', 'screen-starting-up.txt', 'screen-sending.txt', 'screen-no-gateway.txt']) {
+      run.setPane(openclawPane(pane))
+      expect(await wired.inject('oc', 'hi'), pane).toEqual(notReady)
+    }
+    run.setPane(null)
+    expect(await wired.inject('oc', 'hi')).toEqual(notReady)
+    const unread = deps({ readScreen: async () => null })
+    expect(await sessionInputDeps(unread.deps, () => lock([])).inject('oc', 'hi')).toEqual(notReady)
+    run.setPane(openclawPane('screen-plain.txt'))
+    expect(await wired.inject('oc', 'hi')).toBe(ok)
+    expect([...run.calls, ...unread.calls].filter((call) => call.startsWith('submit'))).toEqual(['submit oc hi'])
+  })
+
+  // Found end to end (e2e/openclawShow.e2e.ts rows 4 and 5): a pane whose history failed to load can send no message, and
+  // only `/session` loads it again; held back as a message is, the binding pass's `/session` was never typed.
+  it('types an OpenClaw pane\'s own command into a pane that cannot send yet, only with an empty box, while a message waits', async () => {
+    vi.useFakeTimers()
+    try {
+      const openclawPane = (name: string) => readFileSync(new URL(`../engines/openclaw/__fixtures__/${name}`, import.meta.url), 'utf8')
+      const command = '/session agent:main:oc'
+      vi.spyOn(console, 'log').mockImplementation(() => {})
+      vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const run = deps()
+      const { input, submitAgent } = createInput(run.deps)
+      const typed = () => run.calls.filter((call) => call.startsWith('submit'))
+      run.setPane(openclawPane('screen-history-failed.txt'))
+      submitAgent('oc', 'hi')
+      await vi.advanceTimersByTimeAsync(5_500)
+      expect(typed()).toEqual([])
+      // Text in the box, the person's or a message OpenClaw refused, would go with the command's Enter; a pane not read
+      // may hold some.
+      for (const pane of [openclawPane('screen-history-refused.txt'), null]) {
+        run.setPane(pane)
+        expect(await input.typeCommand('oc', command)).toBe(false)
+      }
+      const unread = createInput(deps({ readScreen: async () => null }).deps)
+      expect(await unread.input.typeCommand('oc', command)).toBe(false)
+      run.setPane(openclawPane('screen-history-failed.txt'))
+      expect(await input.typeCommand('oc', command)).toBe(true)
+      expect(typed()).toEqual([`submit oc ${command}`])
+      run.setPane(openclawPane('screen-plain.txt'))
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(typed()).toEqual([`submit oc ${command}`, 'submit oc hi'])
+      input.forget('oc')
+    } finally { vi.useRealTimers() }
   })
 
   it('reads the pane after its engine has answered, so a dialog opened during the wait is seen', async () => {
@@ -399,6 +454,18 @@ describe('the session input controller\'s dependencies', () => {
     wired.onSubmitted!('cc', 'hi')
     await vi.waitFor(() => expect(given.emit).toHaveBeenCalledWith('cc-s', [{ type: 'turn_started', text: 'hi' }]))
     expect(normalizer.openTurn).toHaveBeenCalledWith('cc-s', 'hi')
+  })
+
+  // Found end to end (e2e/openclawShow.e2e.ts row 13): OpenClaw draws a message's run at once (`sending`), and writes its
+  // first row only when its Gateway does, 15-45 s on a slow one: `show` read the run off the pane while `ps` said idle
+  // until the binding pass had read the run's timer change.
+  it('says an OpenClaw works from our own paste of a message, and nobody else', () => {
+    const sending = vi.fn()
+    const wired = sessionInputDeps(deps({ sending }).deps, () => lock([]))
+    for (const id of ['a1', 'nobody', 'cc']) wired.onSubmitted!(id, 'hi')
+    expect(sending).not.toHaveBeenCalled()
+    wired.onSubmitted!('oc', 'hi')
+    expect(sending.mock.calls).toEqual([['agent:main:oc']])
   })
 })
 

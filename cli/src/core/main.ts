@@ -269,7 +269,7 @@ import { type ActivityFrame } from '../lib/turnActivity.js'
 import { cursorDataDir } from '../engines/cursor/contract.js'
 import { TranscriptPager } from '../lib/transcriptPages.js'
 import { AgentCreationReceipts } from '../lib/agentCreationReceipt.js'
-import { agentFrame, lastActivityAt, type AgentFrame } from '../lib/agentFrame.js'
+import { agentFrame, agentStarting, lastActivityAt, type AgentFrame } from '../lib/agentFrame.js'
 import { transcriptActivityAt } from '../lib/transcriptActivity.js'
 import { createUsageLink } from './usageLink.js'
 import type { UsageSnapshots } from './usageLink.js'
@@ -442,6 +442,8 @@ function bootHandoff(version: string): void {
 let activityFrameContextRef: ((s: RegisteredSession) => ActivityFrame | null) | null = null
 /** Set by runForeground once the input is built: what a message to an agent waits for (core/input.ts), for every frame. */
 let waitingForRef: ((s: RegisteredSession) => 'engine' | null) | null = null
+/** Set by runForeground once the input is built: whether an agent has yet to take its first task, for every frame. */
+let startingRef: ((s: RegisteredSession) => boolean) | null = null
 
 let framePartsRef: ((s: RegisteredSession) => () => Readonly<Record<string, unknown>>) | null = null
 
@@ -460,6 +462,7 @@ function projectFrame(s: RegisteredSession, selectedModel: string | null, worksp
     parts: framePartsRef?.(s),
     activity: () => activityFrameContextRef?.(s) ?? null,
     waitingFor: () => waitingForRef?.(s) ?? null,
+    starting: () => startingRef?.(s) ?? false,
     gridAnnotation: (grid) => gridAnnotationRef?.(grid) ?? null,
   })
 }
@@ -1464,6 +1467,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // Declared further down: read when an error is reported, never now.
     agentIdFor: (sessionId) => agentIdFor(sessionId),
     openTurn: (sessionId, text) => otherStreams.openTurn(sessionId, text),
+    sending: (sessionId) => activity.turnActivity.observe(sessionId, 'turn_started'),
     // Reassigned further down (the funnel): always the current one.
     emit: (sessionId, events) => emitSessionEvents(sessionId, events),
     // Declared further down: read as a prompt is typed, never now.
@@ -1485,6 +1489,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // sent by an agent's id, or by its session's.
   waitingForRef = (s) => input.waitingFor(s.agentId) ?? input.waitingFor(s.sessionId)
   backend.waitingForProvider = waitingForRef
+  startingRef = (s) => agentStarting(s, input.firstTaskWaiting(s.agentId), Date.now())
+  backend.startingProvider = startingRef
   const deviceInput = inputs.deviceInput
 
   // agy's turn closed from its pane when its final Stop never comes (core/turns/agyBackstop.ts).
@@ -2040,18 +2046,20 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     stoppedAgents,
     syncRecapPool,
     input,
-    // A first task is the person's own message (core/input.ts).
-    submitAgent: inputs.submitAgent,
+    // A first task is the person's own message, which the controller keeps from its hand-over until a turn takes it.
+    submitFirstTask: (agentId, task) => inputs.submitAgent(agentId, task),
     deviceInput,
     homes: { copilot: env.COPILOT_HOME, grok: env.GROK_HOME, agy: env.AGY_HOME },
     // OpenClaw's session key is on its TUI's footer and nowhere else. The scrollback above the screen keeps its title,
     // the only place a Gateway on another host shows, a while longer into a conversation.
     capturePane: (agentId) => captureTerminal(agentId, 200),
-    openclawPaneRead: (sessionId, reading, capture) => {
+    activityRevision: (sessionId) => turnActivity.snapshot(sessionId)?.revision,
+    openclawPaneRead: (sessionId, reading, capture, revision) => {
       const streamed = otherStreams.paneRead(sessionId, reading)
       const session = registry.bySession(sessionId)
       // As the footer poll beside the other engines' panes reads them: a profile that cannot be read leaves the chip as it was.
       if (session) void Promise.resolve(runtimeProfiles.ingestPane(session, capture)).catch(() => undefined)
+      if (session) void activity.paneRead(session, capture, revision).catch(() => undefined)
       return streamed
     },
     openclawPaneDue: (sessionId) => otherStreams.paneDue(sessionId),

@@ -63,10 +63,10 @@ function harness(daemon: FakeDaemon, env: NodeJS.ProcessEnv = {}) {
   return { deps, out, err }
 }
 
-const own = (agentId: string, name = 'lamp-openclaw', over: Partial<Parameters<ProgramRecords['put']>[0]> = {}) =>
+const own = (agentId: string, name = 'openclaw-1', over: Partial<Parameters<ProgramRecords['put']>[0]> = {}) =>
   new ProgramRecords(dir).put({ agentId, tokenHash: HASH, name, engine: 'openclaw', createdAt: NOW - 60_000, startedAt: NOW - 60_000, inputs: [], ...over })
 
-const reply = (h: ReturnType<typeof harness>, name = 'lamp-openclaw', extra: string[] = []) =>
+const reply = (h: ReturnType<typeof harness>, name = 'openclaw-1', extra: string[] = []) =>
   replyCommand([name, '--program-token-file', token, '--json', ...extra, '--', 'turn', 'on', 'the', 'light'], h.deps)
 
 describe('harness reply to a program\'s own harness (#4393)', () => {
@@ -89,7 +89,7 @@ describe('harness reply to a program\'s own harness (#4393)', () => {
     own('a1')
     d.screens = ['working']
     const h = harness(d)
-    expect(await reply(h, 'lamp-openclaw', ['--timeout', '3s'])).toBe(EXIT.refused)
+    expect(await reply(h, 'openclaw-1', ['--timeout', '3s'])).toBe(EXIT.refused)
     expect(JSON.parse(h.out[0]).error).toBe('ENGINE_NOT_READY')
     expect(d.requests.some((r) => r.type === 'input_ack')).toBe(false)
     expect(d.requests.filter((r) => r.payload.mode === 'inspect').length).toBeGreaterThan(2)
@@ -105,10 +105,24 @@ describe('harness reply to a program\'s own harness (#4393)', () => {
     expect(await reply(h)).toBe(EXIT.ok)
   })
 
+  it('waits while it is starting, though its screen says idle, and types once it has started', async () => {
+    const d = new FakeDaemon()
+    d.frames = [frame('a1', { starting: true })]
+    own('a1')
+    const h = harness(d)
+    expect(await reply(h, 'openclaw-1', ['--timeout', '3s'])).toBe(EXIT.refused)
+    expect(JSON.parse(h.out[0]).error).toBe('ENGINE_NOT_READY')
+    expect(d.requests.some((r) => r.type === 'input_ack')).toBe(false)
+    let lists = 0
+    d.extra.agents_list = () => ({ agents: [frame('a1', { starting: ++lists < 3 })] })
+    d.extra.input_ack = () => ({ inputId: 'program:x5', state: 'taken', takenAt: NOW })
+    expect(await reply(harness(d))).toBe(EXIT.ok)
+  })
+
   it('says NOT_IDLE at once while it works on words it took, and NOT_RUNNING (4) once it was closed', async () => {
     const d = new FakeDaemon()
     d.frames = [frame('a1')]
-    own('a1', 'lamp-openclaw', { inputs: [{ id: 'program:old', takenAt: NOW - 1_000 }] })
+    own('a1', 'openclaw-1', { inputs: [{ id: 'program:old', takenAt: NOW - 1_000 }] })
     d.screens = ['working']
     const h = harness(d)
     expect(await reply(h)).toBe(EXIT.refused)
@@ -170,8 +184,8 @@ describe('harness reply to a program\'s own harness (#4393)', () => {
   it('follows an input not seen taken with wait --after: idle only once it was seen working', async () => {
     const d = new FakeDaemon()
     d.frames = [frame('a1')]
-    own('a1', 'lamp-openclaw', { inputs: [{ id: 'program:u1', takenAt: NOW, unconfirmed: true }, { id: 'program:t1', takenAt: NOW }] })
-    const wait = (id: string, extra: string[] = []) => { const h = harness(d); return waitCommand(['lamp-openclaw', '--program-token-file', token, '--after', id, '--json', ...extra], h.deps).then((code) => ({ code, out: h.out })) }
+    own('a1', 'openclaw-1', { inputs: [{ id: 'program:u1', takenAt: NOW, unconfirmed: true }, { id: 'program:t1', takenAt: NOW }] })
+    const wait = (id: string, extra: string[] = []) => { const h = harness(d); return waitCommand(['openclaw-1', '--program-token-file', token, '--after', id, '--json', ...extra], h.deps).then((code) => ({ code, out: h.out })) }
     // Taken: its turn started, so the first idle after it is its end.
     d.screens = ['idle']
     expect((await wait('program:t1')).code).toBe(EXIT.ok)
@@ -204,7 +218,7 @@ describe('harness reply to a program\'s own harness (#4393)', () => {
     own('a1')
     d.extra.agent_resume = () => ({ state: 'created', agent: frame('a1'), resumed: true })
     const h = harness(d)
-    expect(await resumeCommand(['lamp-openclaw', '--program-token-file', token, '--json'], h.deps)).toBe(EXIT.ok)
+    expect(await resumeCommand(['openclaw-1', '--program-token-file', token, '--json'], h.deps)).toBe(EXIT.ok)
     expect(JSON.parse(h.out[0])).toMatchObject({ ok: true, id: 'a1', resumed: true })
     expect(new ProgramRecords(dir).get('a1')!.startedAt).toBe(NOW)
   })

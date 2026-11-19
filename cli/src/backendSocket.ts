@@ -230,6 +230,8 @@ export class BackendSocket {
   activityFrameProvider: ((session: RegisteredSession) => ActivityFrame | null) | null = null
   /** What a message to an agent waits for now (core/input.ts `waitingFor`): its frame says so. */
   waitingForProvider: ((session: RegisteredSession) => 'engine' | null) | null = null
+  /** Whether an agent has yet to take its first task (lib/agentFrame.ts `agentStarting`): its frame says so. */
+  startingProvider: ((session: RegisteredSession) => boolean) | null = null
   /** Captures a run's service projection before asynchronous frame work. */
   framePartsProvider: ((session: RegisteredSession) => () => Readonly<Record<string, unknown>>) | null = null
   /** This machine's viewers, served to a client over its connection: the viewers' (core/viewerStreams.ts). */
@@ -1477,6 +1479,7 @@ export class BackendSocket {
       parts: this.framePartsProvider?.(s),
       activity: () => this.activityFrameProvider?.(s) ?? null,
       waitingFor: () => this.waitingForProvider?.(s) ?? null,
+      starting: () => this.startingProvider?.(s) ?? false,
       gridAnnotation: this.gridAnnotation,
     })
   }

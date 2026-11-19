@@ -6,6 +6,7 @@ import { terminalRouteKey } from './terminalRuntime.js'
 import type { StopAgentOptions } from './stopAgentService.js'
 import { resumeMode } from './resumeCapability.js'
 import { sid } from './log.js'
+import { OPENCLAW_FIRST_TASK } from '../engines/openclaw/contract.js'
 
 export type CloseActivity = 'idle' | 'working' | 'needs_input' | 'draft' | 'unknown'
 export type CloseMode = 'inspect' | 'idle' | 'now' | 'after_task' | 'cancel'
@@ -47,6 +48,9 @@ function keptNone(s: Pick<RegisteredSession, 'engine' | 'sessionId'>): boolean {
   return resumeMode(s.engine) === 'conversation' && !s.sessionId
 }
 
+/** Launches Harness failed before the harness started any work: closing one loses nothing. */
+const UNSTARTED_LAUNCHES = new Set<string>([OPENCLAW_FIRST_TASK.error, 'OPENCLAW_NO_TOKEN'])
+
 type CloseSession = Pick<RegisteredSession, 'engine' | 'sessionId' | 'transcriptPath' | 'boundAt' | 'launch' | 'resumeOnly'>
 
 export function unusedChat(session: CloseSession): boolean {
@@ -64,6 +68,10 @@ export function inspectCloseActivity(session: CloseSession, screen: ScreenReadin
   if (turnOpen === true) return 'working'
   if (!screen) return 'unknown'
   if (screen.busy) return 'working'
+  // Harness failed this launch itself and tells the person to close it: OpenClaw never took its first task
+  // (core/agents/bind.ts), or its TUI exited without a Gateway token (core/agents/newPane.ts). No work runs there, and its
+  // pane, a history that never loaded or the TUI's exit, never shows an idle composer.
+  if (session.launch?.state === 'failed' && UNSTARTED_LAUNCHES.has(session.launch.error ?? '')) return 'idle'
   const hold = screen.teamHold
   if (hold === 'team_waiting_draft') return 'draft'
   if (hold === 'team_waiting_user') return 'needs_input'

@@ -959,6 +959,127 @@ describe('a harness held for the person', () => {
   })
 })
 
+describe('a harness starting, or whose launch failed here', () => {
+  const firstTask = { state: 'failed', error: 'FIRST_TASK_NOT_TAKEN', detail: 'OpenClaw did not take the first task. Close it and start it again.' } as const
+  const inUse = { state: 'failed', error: 'OPENCLAW_FOLDER_IN_USE', detail: 'Another OpenClaw is using this folder. Give each run its own --local folder.' } as const
+  const starting = (id: string) => frame(id, { engine: 'openclaw', sessionId: '', starting: true })
+  // A failed launch leaves its row inactive: the frame says offline.
+  const failed = (id: string, launch: Frame['launch'] = firstTask) => frame(id, { engine: 'openclaw', sessionId: '', status: 'offline', launch })
+  const lines = (out: string[]) => out.map((l) => JSON.parse(l) as Record<string, unknown>)
+
+  it('show says starting and to wait, reading no screen', async () => {
+    const d = new FakeDaemon()
+    d.frames = [starting('kid')]
+    const h = harness(d, { pane: undefined })
+    expect(await showCommand(['kid'], h.deps)).toBe(EXIT.ok)
+    expect(h.out[0]).toBe('kid on studio: starting · OpenClaw · started by person')
+    expect(h.out.at(-1)).toBe('Next: harness wait kid  (until it stops working)')
+    const json = harness(d, { pane: undefined })
+    expect(await showCommand(['kid', '--json'], json.deps)).toBe(EXIT.ok)
+    expect(JSON.parse(json.out[0])).toMatchObject({ state: 'starting', next: [{ run: 'harness wait kid' }] })
+    expect(d.requests.some((r) => r.type === 'agent_close')).toBe(false)
+  })
+
+  it('show says failed and why, reading no screen', async () => {
+    const d = new FakeDaemon()
+    // Live for a moment while its row is saved: still failed, and its screen is not read.
+    d.frames = [frame('kid', { engine: 'openclaw', sessionId: '', launch: firstTask })]
+    const h = harness(d, { pane: undefined })
+    expect(await showCommand(['kid'], h.deps)).toBe(EXIT.ok)
+    expect(h.out[0]).toBe('kid on studio: failed · OpenClaw · started by person')
+    expect(h.out).toContain(`failed: ${firstTask.detail}`)
+    const json = harness(d, { pane: undefined })
+    expect(await showCommand(['kid', '--json'], json.deps)).toBe(EXIT.ok)
+    const result = JSON.parse(json.out[0])
+    expect(result).toMatchObject({ state: 'failed', failure: { error: 'FIRST_TASK_NOT_TAKEN', detail: firstTask.detail }, next: [] })
+    expect(result).not.toHaveProperty('needsPerson')
+    expect(d.requests.some((r) => r.type === 'agent_close')).toBe(false)
+  })
+
+  it('ps lists one starting and one failed', async () => {
+    const d = new FakeDaemon()
+    d.frames = [starting('new'), failed('lost')]
+    const h = harness(d, { pane: undefined })
+    expect(await psCommand([], h.deps)).toBe(EXIT.ok)
+    expect(h.out.join('\n')).toMatch(/^new +OpenClaw +starting /m)
+    expect(h.out.join('\n')).toMatch(/^lost +OpenClaw +failed /m)
+    const json = harness(d, { pane: undefined })
+    expect(await psCommand(['--json'], json.deps)).toBe(EXIT.ok)
+    const rows = JSON.parse(json.out[0]).harnesses as Array<{ name: string; state: string }>
+    expect(rows.map((r) => [r.name, r.state])).toEqual([['new', 'starting'], ['lost', 'failed']])
+  })
+
+  it('wait keeps waiting while it starts, though its screen and last turn say idle', async () => {
+    const d = new FakeDaemon()
+    d.frames = [frame('kid', { starting: true })]
+    answeredTurn(d, 'kid')
+    const h = harness(d)
+    expect(await waitCommand(['kid', '--timeout', '10s'], h.deps)).toBe(EXIT.timeout)
+    expect(h.out[0]).toBe('kid: timeout · still working; wait again or read it: harness show kid')
+  })
+
+  it('wait ends on a launch that failed here with exit 1 and why, in text and JSON', async () => {
+    for (const launch of [firstTask, inUse]) {
+      const d = new FakeDaemon()
+      d.frames = [failed('kid', launch)]
+      const h = harness(d)
+      expect(await waitCommand(['kid'], h.deps)).toBe(EXIT.failed)
+      expect(h.out[0]).toBe(`kid: failed · ${launch.detail}`)
+      const json = harness(d)
+      expect(await waitCommand(['kid', '--json'], json.deps)).toBe(EXIT.failed)
+      expect(JSON.parse(json.out.join('\n')).harnesses[0]).toMatchObject({ state: 'failed', failure: { error: launch.error, detail: launch.detail } })
+    }
+  })
+
+  it('wait exits 1 for a failed launch beside a stopped harness, and 3 beside a held one', async () => {
+    const d = new FakeDaemon()
+    d.frames = [failed('kid'), frame('old', { status: 'stopped' }), frame('held', { namedState: MISSING_HELPER })]
+    const h = harness(d)
+    expect(await waitCommand(['kid,old'], h.deps)).toBe(EXIT.failed)
+    const held = harness(d)
+    expect(await waitCommand(['kid,held'], held.deps)).toBe(EXIT.needsInput)
+  })
+
+  it('watch says started while it starts, and failed once its launch failed', async () => {
+    const d = new FakeDaemon()
+    d.frames = [starting('kid')]
+    const h = harness(d)
+    expect(await watchCommand(['kid', '--json', '--timeout', '10s'], h.deps)).toBe(EXIT.timeout)
+    expect(lines(h.out).map((l) => [l.event, l.state])).toEqual([['started', 'starting']])
+    d.frames = [failed('kid')]
+    const f = harness(d)
+    expect(await watchCommand(['kid', '--json', '--timeout', '10s'], f.deps)).toBe(EXIT.timeout)
+    expect(lines(f.out).map((l) => [l.event, l.state])).toEqual([['failed', 'failed']])
+  })
+
+  it('watch says why a launch failed, in text and JSON', async () => {
+    const d = new FakeDaemon()
+    d.frames = [failed('kid', inUse)]
+    const json = harness(d)
+    expect(await watchCommand(['kid', '--json', '--timeout', '10s'], json.deps)).toBe(EXIT.timeout)
+    expect(lines(json.out)[0]).toMatchObject({ event: 'failed', failure: { error: inUse.error, detail: inUse.detail } })
+    const text = harness(d)
+    expect(await watchCommand(['kid', '--timeout', '10s'], text.deps)).toBe(EXIT.timeout)
+    expect(text.out[0]).toMatch(new RegExp(`Z kid: failed: ${inUse.detail.replace(/\./g, '\\.')}$`))
+  })
+
+  it('wait and watch read back past a page of heartbeat runs to the last turn', async () => {
+    const d = new FakeDaemon()
+    // Just started: with no turn found, wait would take it for one whose task is not typed yet.
+    d.frames = [frame('kid', { createdAt: '2026-10-11T12:00:00Z' })]
+    d.pages.set('s-kid', [
+      { events: [ev('heartbeat'), ev('heartbeat')], hasMore: true, oldestCursor: '1' },
+      { events: [ev('user_message', { content: 'fix it' }), ev('tool_start'), ev('text_delta', { content: 'Fixed.' })], hasMore: false },
+    ])
+    const h = harness(d)
+    expect(await waitCommand(['kid', '--timeout', '30s'], h.deps)).toBe(EXIT.ok)
+    expect(h.out[0]).toBe('kid: idle · read it: harness show kid')
+    const w = harness(d)
+    expect(await watchCommand(['kid', '--json', '--timeout', '10s'], w.deps)).toBe(EXIT.timeout)
+    expect(lines(w.out).map((l) => [l.event, l.summary])).toEqual([['done', 'Fixed.']])
+  })
+})
+
 describe('harness close', () => {
   it('closes a harness the agent started, once it is idle', async () => {
     const d = new FakeDaemon()
@@ -2642,6 +2763,33 @@ describe('wait and watch on pushed events', () => {
     expect(slept).toEqual([60_000, 1_000])
   })
 
+  // The goal test on a GitHub Linux runner (e2e/openclawShow.e2e.ts, row 13): the run's end, pushed, was looked at while
+  // OpenClaw still drew the run, and the wait slept on a push that never came until its 1 m timeout.
+  it('wait looks every interval at a harness only its screen says works, the daemon saying idle: that screen ends unpushed', async () => {
+    const d = new PushingDaemon()
+    d.frames = [frame('kid')]
+    d.screens.set('kid', ['working', 'idle'])
+    answered(d, 'kid')
+    const slept: number[] = []
+    const h = harness(d)
+    h.deps.sleep = driven(h, slept, [])
+    expect(await waitCommand(['kid', '--timeout', '1m'], h.deps)).toBe(EXIT.ok)
+    expect(slept).toEqual([1_000, 1_000])
+  })
+
+  it('watch looks every interval at a harness only its screen says works, the daemon saying idle, and says done', async () => {
+    const d = new PushingDaemon()
+    d.frames = [frame('kid')]
+    d.screens.set('kid', ['working', 'idle'])
+    answered(d, 'kid')
+    const slept: number[] = []
+    const h = harness(d)
+    h.deps.sleep = driven(h, slept, [])
+    expect(await watchCommand(['kid', '--json', '--timeout', '1m'], h.deps)).toBe(EXIT.timeout)
+    expect(h.out.map((l) => JSON.parse(l).event)).toEqual(['working', 'done'])
+    expect(slept).toEqual([1_000, 1_000, 58_000])
+  })
+
   it('wait looks every interval at a draft in its box: the person typing is pushed by nothing', async () => {
     const d = new PushingDaemon()
     d.frames = [frame('kid')]
@@ -2837,6 +2985,16 @@ describe('harness reply to a harness in a pane (a program acting for the person)
     expect(h.err.join('\n')).toMatch(/waiting for the person.*Only they answer that/)
     h = program(d, { record: r.record })
     expect(await replyCommand(['done', '--', 'x'], h.deps)).not.toBe(EXIT.ok)
+    expect(r.calls).toEqual([])
+  })
+
+  it('is refused while the harness is starting, though its screen says idle', async () => {
+    const d = new FakeDaemon()
+    d.frames = [frame('kid', { engine: 'openclaw', starting: true })]
+    const r = replied()
+    const h = program(d, { record: r.record })
+    expect(await replyCommand(['kid', '--', 'x'], h.deps)).toBe(EXIT.failed)
+    expect(h.err.join('\n')).toBe('kid is starting: wait for it, then reply.')
     expect(r.calls).toEqual([])
   })
 

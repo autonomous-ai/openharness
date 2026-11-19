@@ -4,8 +4,10 @@ import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { inspectRuntimePane } from '../../lib/legacyPane.js'
 import { parseRuntimeProfile } from '../../lib/runtimeProfileWire.js'
+import { legacyScreen } from '../../lib/legacyScreen.js'
+import { inspectCloseActivity } from '../../lib/closeAgentService.js'
 import {
-  createRuntimeProfileReader, parseOpenclawFooter, transcriptEvidence, type OpenclawFooter,
+  createRuntimeProfileReader, parseOpenclawFooter, readOpenclawPane, transcriptEvidence, type OpenclawFooter,
 } from './runtimeProfile.js'
 import { readOpenclawScreen } from './contract.js'
 
@@ -27,10 +29,10 @@ describe('OpenClaw pane state', () => {
     expect(openclawPaneState(screen(name))).toBe(state)
   })
 
-  it('reads a streaming or connecting status as busy', () => {
+  it('reads a streaming status as busy, and a connecting one as starting', () => {
     const base = screen('plain')
     expect(openclawPaneState(base.replace(' connected | idle', ' ⠋ streaming • 3s | connected'))).toBe('busy')
-    expect(openclawPaneState(base.replace(' connected | idle', ' ⠋ connecting • 1s'))).toBe('busy')
+    expect(openclawPaneState(base.replace(' connected | idle', ' ⠋ connecting • 1s'))).toBe('starting')
   })
 
   it('is null for a screen that is not OpenClaw', () => {
@@ -91,10 +93,42 @@ describe('OpenClaw pane inspection', () => {
     expect(inspectRuntimePane('openclaw', 'plain shell').idle).toBe(false)
   })
 
+  it('a pane whose history did not load is never idle, and sees the refused message left in its box', () => {
+    expect(inspectRuntimePane('openclaw', screen('history-refused'))).toEqual({ idle: false, plan: false, dialog: false, draft: true })
+    expect(inspectRuntimePane('openclaw', screen('history-failed'))).toEqual({ idle: false, plan: false, dialog: false, draft: false })
+  })
+
+  it('is not idle while starting or sending', () => {
+    for (const name of ['connecting', 'starting-up', 'sending', 'waiting', 'running-quiet']) {
+      expect(inspectRuntimePane('openclaw', screen(name)), name).toEqual({ idle: false, plan: false, dialog: false, draft: false })
+    }
+  })
+
   it('sees a draft in the composer', () => {
     const drafted = screen('plain').replace(/(─{8,}\n)\n(─{8,})/, '$1half a sentence\n$2')
     expect(drafted).not.toBe(screen('plain'))
     expect(inspectRuntimePane('openclaw', drafted)).toMatchObject({ idle: false, draft: true })
+  })
+})
+
+describe('OpenClaw activity', () => {
+  it.each([
+    ['sending', 'sending', '⠋ sending • 0s | connected'],
+    ['waiting', 'flibbertigibbeting...', '⠼ flibbertigibbeting… • 0s | connected'],
+    ['running-quiet', 'running', '⠦ running • 45s | connected'],
+  ])('%s reads as work, its status line the indicator', (name, label, indicator) => {
+    expect(readOpenclawPane(screen(name)).activity).toEqual({ label, indicator })
+  })
+
+  it.each(['starting-up', 'connecting', 'plain'])('%s is no work', (name) => {
+    expect(readOpenclawPane(screen(name)).activity).toBeNull()
+  })
+
+  it('a quiet run is working to a close, with no turn open', () => {
+    const reading = legacyScreen('openclaw', screen('running-quiet'))
+    expect(reading.busy).toBe(true)
+    const row = { engine: 'openclaw', sessionId: 'agent:main:plain', transcriptPath: null, boundAt: 1 } as const
+    expect(inspectCloseActivity(row, reading, false, false)).toBe('working')
   })
 })
 
