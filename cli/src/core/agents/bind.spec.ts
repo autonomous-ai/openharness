@@ -1489,9 +1489,16 @@ describe('binding an OpenClaw pane, read from its screen', () => {
     processIdentity: { pid: 7714, startMarker: '2026-11-10T07:40:00Z' }, ...over,
   }) as DiscoveredTerminalAgent
   const pane = (over: Partial<RegisteredSession> = {}) => agent({ engine: 'openclaw', sessionId: '', ...over } as Partial<RegisteredSession>)
+  /** Two passes over the pane 10 s apart: a Gateway gone holds its agent only once it has been gone that long. */
+  const lasting = async (run: ReturnType<typeof setup>) => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    await run.binding.bindObservedAgent(tui())
+    vi.setSystemTime(Date.now() + 10_000)
+    await run.binding.bindObservedAgent(tui())
+  }
 
   beforeEach(() => { vi.spyOn(console, 'log').mockImplementation(() => {}) })
-  afterEach(() => { vi.restoreAllMocks() })
+  afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers() })
 
   it('binds an openclaw pane to main from its footer, and remembers the state folder its TUI holds', async () => {
     const run = setup({ capturePane: vi.fn(async () => screen('screen-two-panes-main-a')), openclawStateDir: vi.fn(async () => '/h/.openclaw-work') })
@@ -1615,7 +1622,7 @@ describe('binding an OpenClaw pane, read from its screen', () => {
       const row = pane({ sessionId: 'agent:main:plain' })
       run.byAgent.set('a1', row)
       vi.mocked(run.deps.registry.byProcess).mockReturnValue(row)
-      await run.binding.bindObservedAgent(tui())
+      await lasting(run)
       expect(row.identityHold, name).toBe(said)
       expect(run.deps.announceSession, name).toHaveBeenCalledWith(row)
       expect(run.deps.registry.register, name).not.toHaveBeenCalled()
@@ -1634,7 +1641,7 @@ describe('binding an OpenClaw pane, read from its screen', () => {
     const row = pane({ sessionId: 'agent:main:plain' })
     run.byAgent.set('a1', row)
     vi.mocked(run.deps.registry.byProcess).mockReturnValue(row)
-    await run.binding.bindObservedAgent(tui())
+    await lasting(run)
     shown = screen('screen-no-gateway-reconnected')
     await run.binding.bindObservedAgent(tui())
     expect(row).not.toHaveProperty('identityHold')
@@ -1659,13 +1666,13 @@ describe('binding an OpenClaw pane, read from its screen', () => {
     const row = pane()
     run.byAgent.set('a1', row)
     vi.mocked(run.deps.registry.byProcess).mockReturnValue(row)
-    await run.binding.bindObservedAgent(tui())
+    await lasting(run)
     expect(row.identityHold).toBe('OpenClaw Gateway is not running. Start it with openclaw gateway.')
     shown = screen('screen-no-gateway-reconnected')
     await run.binding.bindObservedAgent(tui())
     expect(row).not.toHaveProperty('identityHold')
     expect(run.deps.attachSession).not.toHaveBeenCalled()
-    expect(vi.mocked(run.deps.registry.register).mock.calls[0][0]).toMatchObject({ sessionId: 'agent:main:plain', source: 'openclaw-footer' })
+    expect(vi.mocked(run.deps.registry.register).mock.calls.at(-1)![0]).toMatchObject({ sessionId: 'agent:main:plain', source: 'openclaw-footer' })
   })
 
   it('an overlay that hides the footer keeps the no-Gateway state until a footer shows again', async () => {
@@ -1676,7 +1683,7 @@ describe('binding an OpenClaw pane, read from its screen', () => {
     const row = pane({ sessionId: 'agent:main:plain' })
     run.byAgent.set('a1', row)
     vi.mocked(run.deps.registry.byProcess).mockReturnValue(row)
-    await run.binding.bindObservedAgent(tui())
+    await lasting(run)
     expect(row.identityHold).toBe('OpenClaw Gateway is not running. Start it with openclaw gateway.')
     shown = `${noGateway.trimEnd()}\n /help  Show help\n /new  Start a new session\n`
     await run.binding.bindObservedAgent(tui())
@@ -1738,7 +1745,7 @@ describe('binding an OpenClaw pane, read from its screen', () => {
     expect(run.deps.attachSession).not.toHaveBeenCalled()
   })
 
-  it('a hold a failed capture set gives way to the screen\'s own state: let go on one pass, No Gateway said on the next', async () => {
+  it('a hold a failed capture set gives way to the screen\'s own state: let go on one pass, No Gateway said once it lasts', async () => {
     const capturePane = vi.fn<BindDeps['capturePane']>().mockRejectedValueOnce(new Error('the pane could not be captured'))
       .mockResolvedValue(screen('screen-no-gateway-attached'))
     const run = setup({ capturePane })
@@ -1746,8 +1753,10 @@ describe('binding an OpenClaw pane, read from its screen', () => {
     run.byAgent.set('a1', row)
     vi.mocked(run.deps.registry.byProcess).mockReturnValue(row)
     await run.binding.bindObservedAgent(tui())
+    vi.useFakeTimers({ toFake: ['Date'] })
     await run.binding.bindObservedAgent(tui())
     expect(row).not.toHaveProperty('identityHold')
+    vi.setSystemTime(Date.now() + 10_000)
     await run.binding.bindObservedAgent(tui())
     expect(row.identityHold).toBe('OpenClaw Gateway is not running. Start it with openclaw gateway.')
     expect(run.deps.announceSession).toHaveBeenCalledTimes(3)
@@ -1761,7 +1770,7 @@ describe('binding an OpenClaw pane, read from its screen', () => {
     await run.binding.bindObservedAgent(tui())
     shown = screen('screen-abort')
     await run.binding.bindObservedAgent(tui())
-    // A pass that reads no Gateway is told too, while its state is said on the agent.
+    // A pass that reads the Gateway gone is told too.
     shown = screen('screen-no-gateway').replace(/session no-gateway/g, 'session abort')
     await run.binding.bindObservedAgent(tui())
     shown = screen('screen-no-gateway-reconnected').replace(/session plain/g, 'session abort')
@@ -1919,6 +1928,93 @@ describe('binding an OpenClaw pane, read from its screen', () => {
   })
 
   // OpenClaw takes its first task typed, not in argv: the bind pass that reads the pane hands it to the session input.
+  // Found reproducing a lasting outage (2026-11-19): the TUI redraws `gateway disconnected: <error>` at each try to
+  // reconnect and a bare `disconnected | idle` or `startup failed | idle` between, so the hold went and came back every
+  // few seconds; and a drop it reconnected from by itself held the agent on the first pass.
+  describe('its Gateway hold', () => {
+    const START = Date.parse('2026-11-19T10:00:00Z')
+    const NO_GATEWAY = OPENCLAW_STATES.noGateway
+    /** The pane on `agent:main:plain`, its status line saying `line`. */
+    const status = (line: string) => screen('screen-plain').replace(' connected | idle', ` ${line}`)
+    const LOST = status('gateway disconnected: connect ECONNREFUSED 127.0.0.1:18789 | idle')
+    let shown = ''
+    let run: ReturnType<typeof setup>
+    let row: RegisteredSession
+    beforeEach(() => {
+      vi.useFakeTimers({ toFake: ['Date'] })
+      run = setup({ capturePane: vi.fn(async () => shown) })
+      row = pane({ sessionId: 'agent:main:plain' })
+      run.byAgent.set('a1', row)
+      vi.mocked(run.deps.registry.byProcess).mockReturnValue(row)
+    })
+    /** What the agent says after each pass, for each `[second, screen]`: the pane shows that screen that many seconds in. */
+    const passes = async (...reads: [number, string][]): Promise<(string | undefined)[]> => {
+      const said: (string | undefined)[] = []
+      for (const [second, at] of reads) {
+        vi.setSystemTime(START + second * 1_000)
+        shown = at
+        await run.binding.bindObservedAgent(tui())
+        said.push(row.identityHold)
+      }
+      return said
+    }
+    const logged = () => vi.mocked(console.log).mock.calls.flat().map(String)
+
+    it('holds once the Gateway has been gone 10 s, and says so once', async () => {
+      expect(await passes([0, LOST], [5, LOST], [10, LOST], [15, LOST])).toEqual([undefined, undefined, NO_GATEWAY, NO_GATEWAY])
+      expect(run.deps.announceSession).toHaveBeenCalledOnce()
+      expect(logged()).toEqual([`[discovery] a1 openclaw · ${NO_GATEWAY}`])
+    })
+
+    it('holds through the outage: the lines between its tries, a start and a run neither clear it nor count it again', async () => {
+      expect(await passes(
+        [0, LOST], [4, status('disconnected | idle')], [10, LOST],
+        [12, status('disconnected | idle')], [14, status('startup failed | idle')], [16, status('connecting | idle')],
+        [18, status('⠋ sending • 0s | connected')], [20, LOST],
+      )).toEqual([undefined, undefined, NO_GATEWAY, NO_GATEWAY, NO_GATEWAY, NO_GATEWAY, NO_GATEWAY, NO_GATEWAY])
+      expect(run.deps.announceSession).toHaveBeenCalledOnce()
+      expect(logged()).not.toContain('[discovery] a1 openclaw · working again')
+    })
+
+    it.each([
+      ['a connected line', status('connected | idle')],
+      ['a connected line under a history that did not load', screen('screen-history-failed')],
+    ])('%s clears it and forgets the outage: a drop 2 s later holds 10 s after it began', async (_, connected) => {
+      expect(await passes([0, LOST], [10, LOST], [20, connected], [22, LOST], [31, LOST], [32, LOST]))
+        .toEqual([undefined, NO_GATEWAY, undefined, undefined, undefined, NO_GATEWAY])
+      expect(logged()).toContain('[discovery] a1 openclaw · working again')
+    })
+
+    it('a drop the TUI reconnects from within 10 s never holds', async () => {
+      const back = status('gateway reconnected | idle')
+      expect(await passes([0, LOST], [4, LOST], [5, back], [30, back])).toEqual([undefined, undefined, undefined, undefined])
+      expect(run.deps.announceSession).not.toHaveBeenCalled()
+    })
+
+    it('a reconnect between two drops starts the 10 s again', async () => {
+      expect(await passes([0, LOST], [4, status('gateway reconnected | idle')], [6, LOST], [15, LOST], [16, LOST]))
+        .toEqual([undefined, undefined, undefined, undefined, NO_GATEWAY])
+    })
+
+    it.each([
+      ['a remote TUI', screen('screen-remote'), OPENCLAW_STATES.remote],
+      ['no token', screen('screen-no-token'), OPENCLAW_STATES.noToken],
+      ['a local stop', status('local runtime stopped: boom | idle').replace('ws://127.0.0.1:18789', 'local embedded'), "OpenClaw's local run stopped: boom"],
+    ])('%s holds at its first read, as before', async (_, at, said) => {
+      expect(await passes([0, at])).toEqual([said])
+    })
+
+    it('remembers 256 outages at most: one more starts them over, so a hold comes late, never early', async () => {
+      await passes([0, LOST])
+      for (let i = 0; i < 256; i++) {
+        vi.mocked(run.deps.registry.byProcess).mockReturnValue(pane({ agentId: `b${i}`, sessionId: 'agent:main:plain' }))
+        await run.binding.bindObservedAgent(tui())
+      }
+      vi.mocked(run.deps.registry.byProcess).mockReturnValue(row)
+      expect(await passes([10, LOST], [19, LOST], [20, LOST])).toEqual([undefined, undefined, NO_GATEWAY])
+    })
+  })
+
   describe('its first task', () => {
     const TASK = 'Fix the parser'
     const ready = screen('screen-plain')
