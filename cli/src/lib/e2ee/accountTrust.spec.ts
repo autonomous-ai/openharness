@@ -1,20 +1,67 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
-import { join } from 'path'
-import { describe, expect, it } from 'vitest'
-import { stashTrust, switchAccountTrust, unstashTrust } from './accountTrust.js'
+import { dirname, join } from 'path'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { directorySyncSupported, StateFileUnreadable } from '../secureState.js'
+import { keptAccountDirs, stashTrust, switchAccountTrust, unstashTrust } from './accountTrust.js'
+
+// What reaches the disk, in order: a flush by the path its descriptor was opened on, a rename by its target.
+const io = vi.hoisted(() => ({ events: [] as string[], opened: new Map<number, string>() }))
+vi.mock('node:fs', async (original) => {
+  const actual = await original<typeof import('node:fs')>()
+  return { ...actual,
+    openSync: (...args: Parameters<typeof actual.openSync>) => {
+      const fd = actual.openSync(...args)
+      io.opened.set(fd, String(args[0]))
+      return fd
+    },
+    fsyncSync: (fd: number) => {
+      actual.fsyncSync(fd)
+      io.events.push(`flush ${io.opened.get(fd)}`)
+    },
+    renameSync: (...args: Parameters<typeof actual.renameSync>) => {
+      actual.renameSync(...args)
+      io.events.push(`rename ${String(args[1])}`)
+    },
+    rmSync: (...args: Parameters<typeof actual.rmSync>) => {
+      actual.rmSync(...args)
+      io.events.push(`remove ${String(args[0])}`)
+    },
+  }
+})
 
 const A = '65f0a1b2c3d4e5f6a7b8c9d0', B = '65f0a1b2c3d4e5f6a7b8c9d1'
 const web = (pub: string) => ({ identityPub: pub, label: pub, pairedAt: 1, role: 'web' })
 const device = { identityPub: 'dev', label: 'wifi', pairedAt: 1, role: 'device' }
+const group = { members: ['a'], removed: [] }
+// What a reader saw mid-write.
+const TORN = '[{"identityPub":"'
 
 function e2e(): string {
   const dir = mkdtempSync(join(tmpdir(), 'account-trust-'))
   writeFileSync(join(dir, 'identity.json'), '{"pub":"me"}')
   return dir
 }
-const write = (dir: string, name: string, data: unknown): void => writeFileSync(join(dir, name), JSON.stringify(data))
+// Every writer under the data folder makes its files 0600; a trust write refuses one another account could write.
+const write = (dir: string, name: string, data: unknown): void =>
+  writeFileSync(join(dir, name), JSON.stringify(data), { mode: 0o600 })
 const read = (dir: string, name: string): unknown => existsSync(join(dir, name)) ? JSON.parse(readFileSync(join(dir, name), 'utf-8')) : undefined
+const bytes = (dir: string, name: string): string => readFileSync(join(dir, name), 'utf-8')
+function keptFor(dir: string, acct: string): string {
+  const kept = join(dir, 'accounts', acct)
+  mkdirSync(kept, { recursive: true })
+  return kept
+}
+
+/** [copy]'s data, its place and its folder were flushed before [cut] reached the disk. */
+function flushedBefore(copy: string, cut: string): void {
+  const at = io.events.indexOf(cut)
+  expect(at).toBeGreaterThan(-1)
+  const before = io.events.slice(0, at)
+  expect(before.some((event) => event.startsWith(`flush ${copy}.`) && event.endsWith('.tmp'))).toBe(true)
+  expect(before).toContain(`rename ${copy}`)
+  if (directorySyncSupported()) expect(before).toContain(`flush ${dirname(copy)}`)
+}
 
 describe('trust stores kept per account', () => {
   it('puts away one account\'s stores and brings back the other\'s, keeping the Wi-Fi device and the identity', () => {
@@ -74,5 +121,100 @@ describe('trust stores kept per account', () => {
     }
     expect(read(dir, 'paired.json')).toEqual([web('a-web')])
     expect(existsSync(join(dir, 'accounts', A))).toBe(false)
+  })
+
+  it('the copy is flushed before the original is cut', () => {
+    const dir = e2e()
+    const kept = join(dir, 'accounts', A)
+    write(dir, 'paired.json', [web('a-web'), device])
+    io.events.length = 0
+    stashTrust(A, dir)
+    flushedBefore(join(kept, 'paired.json'), `rename ${join(dir, 'paired.json')}`)
+
+    io.events.length = 0
+    unstashTrust(A, dir)
+    flushedBefore(join(dir, 'paired.json'), `remove ${join(kept, 'paired.json')}`)
+  })
+
+  it('a file at the old fixed temporary name is left alone', () => {
+    const dir = e2e()
+    const kept = keptFor(dir, A)
+    const other = `paired.json.${process.pid}.tmp`
+    for (const at of [dir, kept]) writeFileSync(join(at, other), 'another writer\'s')
+    write(dir, 'paired.json', [web('a-web'), device])
+    stashTrust(A, dir)
+    unstashTrust(A, dir)
+    for (const at of [dir, kept]) expect(bytes(at, other)).toBe('another writer\'s')
+    expect(read(dir, 'paired.json')).toEqual([device, web('a-web')])
+  })
+})
+
+describe('a paired set that cannot be read', () => {
+  beforeEach(() => { vi.spyOn(console, 'warn').mockImplementation(() => {}) })
+  afterEach(() => { vi.restoreAllMocks() })
+
+  it('a torn live paired.json stops the switch before anything moves', () => {
+    const dir = e2e()
+    writeFileSync(join(dir, 'paired.json'), TORN)
+    write(dir, 'group.json', group)
+    expect(() => stashTrust(A, dir)).toThrow(StateFileUnreadable)
+    expect(bytes(dir, 'paired.json')).toBe(TORN)
+    expect(read(dir, 'group.json')).toEqual(group)
+  })
+
+  it('a torn kept copy is not written over by a stash', () => {
+    const dir = e2e()
+    const kept = keptFor(dir, A)
+    writeFileSync(join(kept, 'paired.json'), TORN)
+    write(dir, 'paired.json', [web('a-web'), device])
+    write(dir, 'group.json', group)
+    expect(() => stashTrust(A, dir)).toThrow(StateFileUnreadable)
+    expect(bytes(kept, 'paired.json')).toBe(TORN)
+    expect(read(dir, 'paired.json')).toEqual([web('a-web'), device])
+    expect(read(dir, 'group.json')).toEqual(group)
+  })
+
+  it('a torn paired.json is never written over by a return', () => {
+    // Valid JSON that is not a list is no more a paired set than half of one.
+    for (const torn of [TORN, '{}']) {
+      const dir = e2e()
+      const kept = keptFor(dir, A)
+      write(kept, 'paired.json', [web('a-web')])
+      write(kept, 'group.json', group)
+      writeFileSync(join(dir, 'paired.json'), torn)
+      expect(() => unstashTrust(A, dir)).toThrow(/^paired\.json cannot be read/)
+      expect(bytes(dir, 'paired.json')).toBe(torn)
+      expect(read(kept, 'paired.json')).toEqual([web('a-web')])
+      expect(read(kept, 'group.json')).toEqual(group)
+    }
+  })
+
+  it('a torn kept copy is left', () => {
+    const dir = e2e()
+    const kept = keptFor(dir, A)
+    writeFileSync(join(kept, 'paired.json'), TORN)
+    write(kept, 'group.json', group)
+    write(dir, 'paired.json', [device])
+    expect(() => unstashTrust(A, dir)).toThrow(StateFileUnreadable)
+    expect(bytes(kept, 'paired.json')).toBe(TORN)
+    expect(read(kept, 'group.json')).toEqual(group)
+    expect(read(dir, 'paired.json')).toEqual([device])
+    expect(read(dir, 'group.json')).toBeUndefined()
+  })
+})
+
+describe('keptAccountDirs', () => {
+  it('lists the folders kept per account, and nothing else', () => {
+    const dir = e2e()
+    expect(keptAccountDirs(dir)).toEqual([])
+    for (const name of [B, A, 'not.an.account']) keptFor(dir, name)
+    writeFileSync(join(dir, 'accounts', 'a-file'), '')
+    expect(keptAccountDirs(dir).sort()).toEqual([join(dir, 'accounts', A), join(dir, 'accounts', B)])
+  })
+
+  it('lists at most 64', () => {
+    const dir = e2e()
+    for (let i = 0; i < 70; i++) keptFor(dir, `account-${i}`)
+    expect(keptAccountDirs(dir)).toHaveLength(64)
   })
 })
