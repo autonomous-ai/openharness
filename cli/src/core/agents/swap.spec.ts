@@ -386,6 +386,19 @@ describe('the pane-process swap', () => {
     expect(await never).toBeNull()
   })
 
+  it('returns the latest process facts after its identity survives the settle interval', async () => {
+    vi.useFakeTimers()
+    const { swap } = setup()
+    const opening = { pid: 99, startMarker: 'now', executable: '/bin/launch-wrapper' }
+    const settled = { ...opening, executable: '/bin/codex' }
+    vi.mocked(resolvePaneEngineProcess).mockResolvedValueOnce(opening).mockResolvedValueOnce(settled)
+    const waiting = swap.paneSwapDeps(session(), place()).waitForProcess()
+    await vi.advanceTimersByTimeAsync(150 + ENGINE_SETTLE_MS)
+    // Publication checks executable as well as pid/start; the first snapshot is already stale.
+    expect(await waiting).toEqual(settled)
+    expect(resolvePaneEngineProcess).toHaveBeenCalledTimes(2)
+  })
+
   it('builds the relaunch argv with the row\'s mode, folder, the caller\'s argv and the keys a grid must clear', () => {
     const { swap } = setup()
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})

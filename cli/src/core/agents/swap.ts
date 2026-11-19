@@ -163,7 +163,8 @@ export function createPaneSwap({ byAgent, prepareSessionResume, keepAbandonedCon
             await new Promise((resolve) => setTimeout(resolve, ENGINE_SETTLE_MS))
             waited += ENGINE_SETTLE_MS
             const still = await resolvePaneEngineProcess(backend, runtime, session.engine)
-            if (sameProcessIdentity(still, found)) return found
+            // Startup can change argv-derived executable facts without changing pid/start.
+            if (sameProcessIdentity(still, found)) return still
           }
           delayMs = Math.min(delayMs * 2, 750)
         }
