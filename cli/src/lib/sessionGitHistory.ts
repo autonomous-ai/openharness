@@ -14,7 +14,8 @@ export type WorkBranch = { cwd: string; remote: string | null; branch: string; a
 export type RecordedPullRequest = WorkPullRequest & { result?: PullRequestResult; checkedAt?: string; aliases?: string[] }
 export type GitHistory = { branches: WorkBranch[]; pullRequests: RecordedPullRequest[]; truncated: boolean }
 type Target = Pick<RegisteredSession, 'engine' | 'sessionId' | 'agentId' | 'codexHome' | 'forkedFrom' | 'registeredAt'>
-type Entry = { value: GitHistory; loaded: Promise<void>; saving: Promise<void>; readers: number; writes: number }
+/** `unread`: its file could not be read (EACCES, EMFILE), so no save goes over what it holds; a later load tries again. */
+type Entry = { value: GitHistory; loaded: Promise<void>; saving: Promise<void>; readers: number; writes: number; unread?: true }
 const MAX = 128
 const empty = (): GitHistory => ({ branches: [], pullRequests: [], truncated: false })
 function keyFor(target: Target): string {
@@ -69,6 +70,7 @@ export class SessionGitHistoryStore {
           const path = join(this.directory, `${key}.json`)
           if ((await stat(path)).size > 512 * 1024) return
           const read = readState(path, 'cache', jsonObject)
+          if (read.state === 'unreadable') current.unread = true
           if (read.state === 'ok' && valid(read.value)) current.value = read.value
         } catch { /* Missing history, or a shape `valid` trips on, remains unknown, never a reason to stop a session. */ }
       })()
@@ -140,6 +142,7 @@ export class SessionGitHistoryStore {
     } finally { entry.readers--; this.trim() }
   }
   private save(key: string, entry: Entry): void {
+    if (entry.unread) return
     const bytes = JSON.stringify(entry.value)
     entry.writes++
     entry.saving = entry.saving.then(async () => {

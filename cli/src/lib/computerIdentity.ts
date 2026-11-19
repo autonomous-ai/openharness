@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, renameSync } from 'fs'
 import { dirname } from 'path'
 import { randomUUID } from 'crypto'
-import { atomicWriteFile, readState } from './secureState.js'
+import { AtomicWriteUnconfirmed, atomicWriteFile, readState } from './secureState.js'
 
 /**
  * This computer's identity: minted ONCE, then never regenerated.
@@ -62,6 +62,8 @@ export function readOrMintComputerId(file: string, pinned?: string): string {
     // who this computer is. The loser reads the winner's value instead of clobbering it.
     published = atomicWriteFile(file, id + '\n', 'cache', { exclusive: true })
   } catch (err) {
+    // It landed; only its folder did not confirm the flush. The file holds this id, so this id is this computer's.
+    if (err instanceof AtomicWriteUnconfirmed) return id
     throw new Error(
       `could not establish a computer id at ${file}: ${err instanceof Error ? err.message : String(err)}`,
     )
@@ -75,7 +77,8 @@ export function readOrMintComputerId(file: string, pinned?: string): string {
 /**
  * A blank file (a crashed write from an older build, a full disk) is set aside and read as missing:
  * it was never sent to the backend, so there is no identity to protect and minting cannot orphan a
- * machine. Refusing here would instead brick every command, `harness status` included.
+ * machine. Refusing here would instead brick every command, `harness status` included. A read that
+ * fails (EACCES, EMFILE) read nothing: the id there may be the one the backend binds, so it throws.
  */
 function readId(file: string): string | null {
   const read = readState(file, 'cache', (text) => {
@@ -83,5 +86,6 @@ function readId(file: string): string | null {
     if (!id) throw new Error('blank')
     return id
   })
+  if (read.state === 'unreadable') throw new Error(`could not establish a computer id at ${file}: it cannot be read (${read.failure})`)
   return read.state === 'ok' ? read.value : null
 }

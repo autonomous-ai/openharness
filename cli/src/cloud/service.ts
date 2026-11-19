@@ -121,7 +121,9 @@ export function startCloudService(options: CloudServiceOptions) {
   }
 
   const transcriptFile = (agentId: string): string => join(dir, `${agentId}.jsonl`)
+  let unread = false
   const save = (): void => {
+    if (unread) return
     mkdirSync(dir, { recursive: true, mode: 0o700 })
     atomicWriteFile(stateFile, JSON.stringify({ harnesses: [...entries.values()].map(({ harness, remote, question, changedAt, creationId }) => ({ harness, remote, question, changedAt, creationId })) }), 'cache')
   }
@@ -403,8 +405,10 @@ export function startCloudService(options: CloudServiceOptions) {
     },
   }
 
-  // The harnesses from before this start: told to the core again, and looked at where one was working.
+  // The harnesses from before this start: told to the core again, and looked at where one was working. A file that
+  // cannot be read now (EACCES, EMFILE) may name them all: this run keeps its harnesses in memory and writes nothing.
   const saved = readState(stateFile, 'cache', jsonObject)
+  unread = saved.state === 'unreadable'
   const harnesses = saved.state === 'ok' && Array.isArray(saved.value.harnesses) ? saved.value.harnesses as Array<Omit<Entry, 'failures'>> : []
   for (const raw of harnesses) {
     if (!raw?.harness?.agentId || !isCloudAgent(raw.harness.agent) || !raw.remote?.id) continue

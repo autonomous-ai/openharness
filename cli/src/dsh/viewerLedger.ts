@@ -103,7 +103,13 @@ export class ViewerLedger {
   }
 
   read(): ViewerLedgerEntry[] {
+    return this.saved() ?? []
+  }
+
+  /** Null when the ledger cannot be read now: a change then leaves it as it is, so no entry in it is lost. */
+  private saved(): ViewerLedgerEntry[] | null {
     const read = readState(this.file, 'cache', jsonArray)
+    if (read.state === 'unreadable') return null
     if (read.state !== 'ok') return []
     return read.value.filter((e): e is ViewerLedgerEntry =>
       !!e && typeof e === 'object'
@@ -125,11 +131,13 @@ export class ViewerLedger {
   add(entry: Omit<ViewerLedgerEntry, 'startedAt'> & { startedAt?: number }): void {
     if (!Number.isInteger(entry.pid) || entry.pid <= 1) return
     const startedAt = entry.startedAt ?? (this.deps.now ?? Date.now)()
-    this.write([...this.read().filter((e) => e.pid !== entry.pid), { ...entry, startedAt }])
+    const saved = this.saved()
+    if (saved) this.write([...saved.filter((e) => e.pid !== entry.pid), { ...entry, startedAt }])
   }
 
   remove(pid: number): void {
-    const entries = this.read()
+    const entries = this.saved()
+    if (!entries) return
     const kept = entries.filter((e) => e.pid !== pid)
     if (kept.length !== entries.length) this.write(kept)
   }

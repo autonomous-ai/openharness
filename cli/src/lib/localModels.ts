@@ -16,7 +16,7 @@ import type { GpuProcess } from './gpuProcesses.js'
 import { downloadedBytes, removeDownload, unfinishedDownload } from './modelFiles.js'
 import { APP_LABEL, AppStartError, GRID_LABEL, appContext, readAppRecords, writeAppRecords, type AppEngine, type AppEngineOps, type AppEngineRecord, type AppModel } from './appModels.js'
 import { osToken, type OsToken } from './osToken.js'
-import { atomicWriteFile, jsonArray, readState } from './secureState.js'
+import { atomicWriteFile, jsonArray, requireState } from './secureState.js'
 
 // Its own module, so the API launches the core keeps need not load this one (codingContext.ts).
 export { MIN_CODING_CONTEXT }
@@ -28,11 +28,10 @@ const str = (v: unknown): string => typeof v === 'string' ? v : ''
 const num = (v: unknown): number | undefined => typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : undefined
 const key = (v: string): string => createHash('sha256').update(v).digest('hex').slice(0, 24)
 
-/** The models a grid's known-models file names, each checked: a malformed row is left out, never forwarded as argv. */
+/** The models a grid's known-models file names, each checked: a malformed row is left out, never forwarded as argv. One
+ *  that cannot be read now throws (StateFileUnreadable): read as none, the next model kept would be written over it. */
 async function readKnown(path: string): Promise<Candidate[]> {
-  const read = readState(path, 'cache', jsonArray)
-  if (read.state !== 'ok') return []
-  return rows(read.value).filter(c =>
+  return rows(requireState(path, jsonArray, 'cache') ?? []).filter(c =>
     c.id === `local:${c.file}` && basename(str(c.file)) === c.file && validArg(c.file) &&
     c.pull === '' && typeof c.name === 'string' && c.name.length < 256 && num(c.size) &&
     Array.isArray(c.files) && c.files.length === 1 && c.files[0] === c.file).map(({ context: _pinned, ...c }) => ({

@@ -10,7 +10,7 @@
 import { randomUUID } from 'node:crypto'
 import { closeSync, fsyncSync, openSync, readSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
-import { jsonObject, readState } from '../lib/secureState.js'
+import { jsonObject, requireState, StateFileUnreadable } from '../lib/secureState.js'
 
 export type DialEngine = 'claude' | 'codex'
 
@@ -43,7 +43,8 @@ export interface DialSetupRecord { dial: boolean; plugin?: string; vscode?: stri
  *  nothing may be written from that read: it would lose what the file holds. */
 export type Read<T> = T & { unread?: true }
 
-const codeOf = (error: unknown): string => (error as NodeJS.ErrnoException).code ?? 'FAILED'
+const codeOf = (error: unknown): string =>
+  error instanceof StateFileUnreadable ? error.failure : (error as NodeJS.ErrnoException).code ?? 'FAILED'
 
 /** [file] parsed as JSON; undefined when it is missing, longer than [max] bytes or not a JSON object. One that is there
  *  but cannot be read throws. One within [max] that is not a JSON object is set aside, so no write puts "empty" over
@@ -72,9 +73,9 @@ const readJson = (file: string, max: number): unknown => {
   try {
     return jsonObject(buffer.toString('utf8', 0, length))
   } catch {
-    // Read again with the retry: another process may have been writing it.
-    const read = readState(file, 'cache', jsonObject)
-    return read.state === 'ok' ? read.value : undefined
+    // Read again with the retry: another process may have been writing it. A read again that fails throws, as the
+    // first read's open does.
+    return requireState(file, jsonObject, 'cache') ?? undefined
   }
 }
 

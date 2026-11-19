@@ -18,7 +18,7 @@ import { basename, join, resolve, sep } from 'path'
 import { env } from '../config/env.js'
 import { harnessPath } from '../config/harnessHome.js'
 import { homeIsAbsolute } from '../engines/kit/homeAdoption.js'
-import { hardenPrivateStateFileIfPresent, jsonArray, readState } from './secureState.js'
+import { hardenPrivateStateFileIfPresent, jsonArray, readState, requireState } from './secureState.js'
 
 export interface ClaudeProfile {
   id: string
@@ -69,9 +69,17 @@ export function readLinkedPaths(): Set<string> {
     return new Set()
   }
   const read = readState(LINKED_FILE, 'cache', jsonArray)
-  if (read.state !== 'ok') return new Set()
-  return new Set(read.value.filter((p): p is string => typeof p === 'string').slice(0, MAX_LINKED))
+  return linkedIn(read.state === 'ok' ? read.value : [])
 }
+
+/** The paths a link starts from. Throws when another account could write the list, or it cannot be read now
+ *  (StateFileUnreadable): read as none, the link would drop every other profile. */
+export function linkedPathsToChange(): Set<string> {
+  hardenPrivateStateFileIfPresent(LINKED_FILE, 1024 * 1024)
+  return linkedIn(requireState(LINKED_FILE, jsonArray, 'cache') ?? [])
+}
+
+const linkedIn = (list: unknown[]): Set<string> => new Set(list.filter((p): p is string => typeof p === 'string').slice(0, MAX_LINKED))
 
 /** Validate + resolve a folder path the same way for linking and for re-checking a saved one. */
 export function resolveFolder(path: string): string | ClaudeProfileError {

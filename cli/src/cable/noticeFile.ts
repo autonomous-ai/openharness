@@ -93,18 +93,26 @@ const textOf = (cards: readonly StoredNotice[]): string => `${JSON.stringify({ v
 export class NoticeFile {
   private cancel: (() => void) | undefined
   private closed = false
+  /** The file could not be read (EACCES, EMFILE): it may hold cards still pending, so this run writes nothing over it. */
+  private unread = false
 
   constructor(private readonly deps: NoticeFileDeps) {}
 
   /** The cards the file keeps. A file that cannot be trusted is dropped whole, in one line, and the next write
-   *  replaces it: nothing in it may stop the devices' process from starting, so this never throws. */
+   *  replaces it; one that cannot be read is kept, and not written over: nothing in it may stop the devices' process
+   *  from starting, so this never throws. */
   load(): StoredNotice[] {
     let cards = read(this.deps.file)
-    // One that cannot be read or parsed goes to the shared reader, which tries again and sets it aside, so the next
-    // write cannot replace it unseen. The bounded read stays first: it keeps a large file from being read whole.
+    // One that cannot be read or parsed goes to the shared reader, which tries again and sets aside one it cannot
+    // parse, so the next write cannot replace it unseen. The bounded read stays first: it keeps a large file from
+    // being read whole.
     if (cards === 'json' || cards === 'unreadable') {
-      if (readState(this.deps.file, 'cache', jsonObject).state !== 'ok') return []
-      cards = read(this.deps.file)
+      const again = readState(this.deps.file, 'cache', jsonObject)
+      cards = again.state === 'ok' ? read(this.deps.file) : again.state === 'unreadable' ? 'unreadable' : []
+    }
+    if (cards === 'unreadable') {
+      this.unread = true
+      return []
     }
     if (Array.isArray(cards)) return cards
     this.deps.log(`[device] notices · file dropped · ${cards}`)
@@ -132,6 +140,7 @@ export class NoticeFile {
   }
 
   private write(): void {
+    if (this.unread) return
     let cards = this.deps.cards().filter(isStoredNotice)
     let text = textOf(cards)
     // The oldest go first: they are the least likely still to be true.

@@ -122,7 +122,8 @@ const engineSignedIn = async (engine: 'claude' | 'codex'): Promise<boolean | nul
 export function createProductUsage(deps: ProductUsageDeps) {
   const now = deps.now ?? Date.now, uuid = deps.uuid ?? randomUUID, random = deps.random ?? Math.random
   const context = cleanUsageContext(deps.context)
-  let state = fresh(-1), enabled = false, stopped = false, active = false
+  // `unread`: the queue file could not be read (EACCES, EMFILE); this run writes nothing over what it holds.
+  let state = fresh(-1), enabled = false, stopped = false, active = false, unread = false
   let syncing: Promise<void> | null = null, persistTimer: ReturnType<typeof setTimeout> | undefined
   let writing: Promise<boolean> | null = null, writeAgain = false
   // What stop() wrote as the process went: nothing written after it may replace it.
@@ -148,6 +149,7 @@ export function createProductUsage(deps: ProductUsageDeps) {
     if (statSync(deps.file).size > MAX_QUEUE_BYTES) throw new Error('Usage queue exceeds its bound')
     // Reconstruct every field; even a corrupted local file cannot introduce a new upload property.
     const read = readState(deps.file, 'cache', jsonObject)
+    unread = read.state === 'unreadable'
     const saved = (read.state === 'ok' ? read.value : {}) as unknown as State
     if (Number.isSafeInteger(saved.revision) && saved.revision >= 0) {
       state = fresh(saved.revision)
@@ -228,6 +230,7 @@ export function createProductUsage(deps: ProductUsageDeps) {
    *  planned stop read as an unclean restart (health_cli_unclean_restart, 69 to 170 on 2026-10-16, production
    *  counters). At most 256 KiB. */
   function writeFinal(value: string): boolean {
+    if (unread) return false
     try {
       mkdirSync(dirname(deps.file), { recursive: true, mode: 0o700 })
       atomicWriteFile(deps.file, value, 'cache')
@@ -235,6 +238,7 @@ export function createProductUsage(deps: ProductUsageDeps) {
     } catch { return false }
   }
   function persist(): Promise<boolean> {
+    if (unread) return Promise.resolve(false)
     if (final !== null) return writing ?? Promise.resolve(true)
     writeAgain = true
     // Coalesce concurrent saves to one in-flight write and the latest bounded state.

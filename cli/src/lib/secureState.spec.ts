@@ -646,9 +646,9 @@ describe('readState', () => {
     expect(readState(file, 'cache', jsonArray)).toEqual(failed)
     expect(readState(file, 'trust', jsonArray)).toEqual(failed)
     expect(pausedFor()).toEqual(Array(2 * (READ_TRIES - 1)).fill(READ_WAIT_MS))
+    fault.read = undefined
     expect(readdirSync(dirname(file))).toEqual(['summaries.json'])
     expect(readFileSync(file, 'utf8')).toBe(whole)
-    fault.read = undefined
     expect(readState(file, 'cache', jsonArray)).toEqual({ state: 'ok', value: [{ identityPub: 'k' }] })
     expect(readState(file, 'trust', jsonArray)).toEqual({ state: 'ok', value: [{ identityPub: 'k' }] })
   })
@@ -699,8 +699,8 @@ describe('readState', () => {
     writeFileSync(file, '{"all":null}')
     fault.read = () => { throw errno('EMFILE') }
     expect(() => requireState(file, jsonObject, 'cache')).toThrow(StateFileUnreadable)
-    expect(readFileSync(file, 'utf8')).toBe('{"all":null}')
     fault.read = undefined
+    expect(readFileSync(file, 'utf8')).toBe('{"all":null}')
     expect(requireState(file, jsonObject, 'cache')).toEqual({ all: null })
   })
 

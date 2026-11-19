@@ -80,8 +80,10 @@ export interface AgentCleanupDeps {
 }
 
 
-function readJoined(file: string): Map<string, number> {
+/** Null when the file cannot be read now (EACCES, EMFILE): read as none, the next join would forget the others. */
+function readJoined(file: string): Map<string, number> | null {
   const read = readState(file, 'cache', jsonObject)
+  if (read.state === 'unreadable') return null
   if (read.state !== 'ok') return new Map()
   const saved = (read.value as { joined?: Record<string, unknown> }).joined ?? {}
   return new Map(Object.entries(saved).filter((entry): entry is [string, number] => typeof entry[1] === 'number'))
@@ -100,7 +102,9 @@ export function createAgentCleanup(core: CoreApi, deps: AgentCleanupDeps = {}) {
   const refresh = deps.refresh ?? (async () => {})
   const wait = deps.wait ?? ((ms: number) => new Promise<void>((done) => { setTimeout(done, ms).unref() }))
   const file = joinedPath(core.dataDir)
-  const joined = readJoined(file)
+  const saved = readJoined(file)
+  // Kept in memory this run, and never written over the file it could not read.
+  const joined = saved ?? new Map<string, number>()
   /** When one that would not close may be asked again. */
   const askAgainAt = new Map<string, number>()
   /** The ones whose close failed for more than their state, said once each. */
@@ -126,6 +130,7 @@ export function createAgentCleanup(core: CoreApi, deps: AgentCleanupDeps = {}) {
   let stopped = false
 
   const save = (): void => {
+    if (!saved) return
     try {
       mkdirSync(dirname(file), { recursive: true })
       atomicWriteFile(file, JSON.stringify({ version: 1, joined: Object.fromEntries(joined) }), 'cache')

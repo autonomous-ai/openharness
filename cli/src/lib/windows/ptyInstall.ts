@@ -15,7 +15,7 @@
 import { copyFileSync, existsSync, linkSync, readFileSync, readdirSync, renameSync, rmSync } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
 import { VERSION_DIR } from '../ptyHost/launch.js'
-import { atomicWriteFile, jsonArray, readState } from '../secureState.js'
+import { atomicWriteFile, jsonArray, readState, requireState } from '../secureState.js'
 import { isSingleSegment, readPointer, writePointer } from './installLayout.js'
 import { PTY_PAYLOAD_FILES, PtyPayloadRefused, type PreparedPty } from './ptyPayload.js'
 
@@ -307,8 +307,8 @@ export interface PtyRestore {
  * Roll a version on probation back. The rejection is recorded first. `current-pty` names `previous` again when its
  * host is still there, and each bin file `previous` still has is copied back the rename-aside way; a missing one
  * keeps the current file. The version folder stays; a host may still run from it (spec §3 removes it later). Only a
- * failed pointer or record write throws, and a retry repeats nothing that took: a restore never sticks on a
- * version folder that is gone or incomplete.
+ * failed pointer or record write throws (or a rejected list that cannot be read now, which the write would lose), and
+ * a retry repeats nothing that took: a restore never sticks on a version folder that is gone or incomplete.
  */
 export function restorePty(rootDir: string, fs: PtyInstallFs = defaultPtyInstallFs): PtyRestore {
   const ptyRoot = ptyRootOf(rootDir)
@@ -318,7 +318,7 @@ export function restorePty(rootDir: string, fs: PtyInstallFs = defaultPtyInstall
   const previousDir = join(ptyRoot, pending.previous)
   const has = (name: string) => existsSync(join(previousDir, name))
 
-  const rejected = rejectedPtyVersions(rootDir)
+  const rejected = (requireState(join(ptyRoot, PTY_REJECTED), jsonArray, 'cache') ?? []).filter((v): v is string => typeof v === 'string')
   if (!rejected.includes(pending.version)) atomicWriteFile(join(ptyRoot, PTY_REJECTED), JSON.stringify([...rejected, pending.version]), 'cache')
 
   if (has('harness-pty.exe')) {

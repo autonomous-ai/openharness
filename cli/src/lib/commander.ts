@@ -355,6 +355,8 @@ export class CommanderMirror {
   private historyFile: string
   private fullTextFile: string
   private askFile: string
+  /** The recap files the load could not read: no save goes over them. */
+  private readonly unread = new Set<string>()
   private saveTimer: NodeJS.Timeout | null = null
 
   constructor(private opts: CommanderMirrorOpts) {
@@ -1205,9 +1207,11 @@ export class CommanderMirror {
   }
 
   private load(): void {
-    // A file that cannot be read is set aside, never written over by the next save: its bytes stay for a person.
+    // A file that cannot be parsed is set aside, never written over by the next save: its bytes stay for a person. One
+    // that cannot be read now (EACCES, EMFILE) may hold every recap: it is left, and this run saves nothing over it.
     const read = (file: string): Record<string, unknown> => {
       const state = readState(file, 'cache', jsonObject)
+      if (state.state === 'unreadable') this.unread.add(file)
       return state.state === 'ok' ? state.value : {}
     }
     for (const [k, v] of Object.entries(read(this.file))) if (typeof v === 'string') this.summaries.set(k, v)
@@ -1239,10 +1243,10 @@ export class CommanderMirror {
   private save({ strict = false, durable = false } = {}): void {
     try {
       mkdirSync(this.opts.dataDir, { recursive: true, mode: 0o700 })
-      atomicWriteJson(this.file, Object.fromEntries(this.summaries), 'cache', { durable })
-      atomicWriteJson(this.historyFile, Object.fromEntries(this.history), 'cache', { durable })
-      atomicWriteJson(this.fullTextFile, Object.fromEntries(this.fullTexts), 'cache', { durable })
-      atomicWriteJson(this.askFile, Object.fromEntries(this.asks), 'cache', { durable })
+      const files: Array<[string, Map<string, unknown>]> = [
+        [this.file, this.summaries], [this.historyFile, this.history], [this.fullTextFile, this.fullTexts], [this.askFile, this.asks],
+      ]
+      for (const [file, rows] of files) if (!this.unread.has(file)) atomicWriteJson(file, Object.fromEntries(rows), 'cache', { durable })
     } catch (err) {
       if (strict) throw err
       console.error('[commander] save summaries failed:', errorKind(err))

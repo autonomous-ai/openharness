@@ -21,7 +21,7 @@ import { env } from '../config/env.js'
 import { SpawnLockBusyError, describeSpawnLockOwner } from './daemonSpawnLock.js'
 import { errorKind } from './log.js'
 import { MINIMUM_NODE_MAJOR, managedNodePath, nodeMajorOf } from './nodeRuntime.js'
-import { atomicWriteFile, jsonArray, readState } from './secureState.js'
+import { atomicWriteFile, jsonArray, readState, requireState } from './secureState.js'
 import { failedNode, recordNodeMigration, type NodeMigration } from './nodeMigration.js'
 import type { NodeMigrationReason } from './runtimeInstall.js'
 import { patientDeadline } from './patientExec.js'
@@ -106,8 +106,16 @@ export function unjudgedUpdate(dir: string, fingerprint: string | null): string 
 /** The versions this machine rolled back, oldest first. */
 export function rejectedVersions(dir: string): string[] {
   const rejected = readState(join(dir, REJECTED), 'cache', jsonArray)
-  return rejected.state === 'ok' ? rejected.value.filter((version): version is string => typeof version === 'string') : []
+  return versionsIn(rejected.state === 'ok' ? rejected.value : [])
 }
+
+/** The list a new rejection is added to. One that cannot be read now throws (StateFileUnreadable): read as none, the
+ *  write would forget every version rolled back before, and the updater would offer them again. */
+function rejectedToChange(dir: string): string[] {
+  return versionsIn(requireState(join(dir, REJECTED), jsonArray, 'cache') ?? [])
+}
+
+const versionsIn = (list: unknown[]): string[] => list.filter((version): version is string => typeof version === 'string')
 
 /** Strict semver-greater on the `X.Y.Z` core (ignores pre-release/build). Unparseable → false, so a
  *  malformed manifest or the `0.0.0-dev` dev sentinel never triggers a downgrade/oscillation.
@@ -505,7 +513,7 @@ export function restore(dir: string, platform: NodeJS.Platform = process.platfor
   }
   const failed = pendingVersion(dir)
   try {
-    if (failed) writeJson(join(dir, REJECTED), [...rejectedVersions(dir).filter((version) => version !== failed), failed].slice(-REJECTED_KEPT))
+    if (failed) writeJson(join(dir, REJECTED), [...rejectedToChange(dir).filter((version) => version !== failed), failed].slice(-REJECTED_KEPT))
     // A pointer that did not move back leaves the failed build in use: its note stays, so the next master to start
     // judges it again (`unjudgedUpdate`) and rolls it back once more.
     if (movedBack) rmSync(join(dir, PENDING), { force: true })
@@ -537,7 +545,8 @@ export function putNodeBack(dir: string, previous: string | null, reason: NodeMi
     console.error(`[harnessd] could not put current-node back on the Node before (${errorKind(error)}) — the daemon stays on the Node it names`)
     return null
   }
-  recordNodeMigration(dir, reason, reason === 'cannot-switch' ? failedNode(dir) : moved)
+  // 'cannot-switch' keeps the Node recorded before (left out, recordNodeMigration reads it).
+  recordNodeMigration(dir, reason, reason === 'cannot-switch' ? undefined : moved)
   return previous
 }
 
@@ -565,7 +574,7 @@ export function settleRolledBack(dir: string, platform: NodeJS.Platform = proces
   const pending = readPending(dir)
   if (!pending?.sha256 || pending.sha256 === liveSha256(dir, platform)) return null
   try {
-    const listed = rejectedVersions(dir)
+    const listed = rejectedToChange(dir)
     if (!listed.includes(pending.version)) writeJson(join(dir, REJECTED), [...listed, pending.version].slice(-REJECTED_KEPT))
     rmSync(join(dir, PENDING), { force: true })
   } catch { /* still no room: the note stays, and still names it */ }

@@ -3,7 +3,7 @@ import { statSync } from 'node:fs'
 import { mkdir, readFile, readdir, rm } from 'node:fs/promises'
 import { basename, extname, join } from 'node:path'
 import { errorKind } from '../../lib/log.js'
-import { atomicWriteFile, atomicWriteJson, jsonObject, readState } from '../../lib/secureState.js'
+import { atomicWriteFile, atomicWriteJson, jsonObject, readState, requireState } from '../../lib/secureState.js'
 import { convertPet, type ConvertedPet } from './convert.js'
 import { PACK_VERSION, encodePack } from './pack.js'
 import { PET_ROWS, PET_STATES, PetSheetError, parsePetSheet, pickPetRows, readPetSource, resolvePetRows, type PetRows, type PetSheet } from './sheet.js'
@@ -164,7 +164,7 @@ export class PetStore {
     if (!ID_RE.test(id)) throw new PetStoreError('UNKNOWN_PET', 'That pet is not on this computer any more')
     return this.serial(async () => {
       await this.pack(id) // must exist
-      const next = this.mapping()
+      const next = this.mappingToChange()
       if (target === 'all') next.all = id
       else {
         if (!(target in next.engines) && Object.keys(next.engines).length >= MAX_ENGINES) {
@@ -182,11 +182,21 @@ export class PetStore {
   async reset(target: PetTarget): Promise<PetMapping> {
     checkTarget(target)
     return this.serial(async () => {
-      const next = this.mapping()
+      const next = this.mappingToChange()
       if (target === 'all') next.all = null
       else delete next.engines[target]
       return this.commit(next)
     })
+  }
+
+  /** The mapping a change starts from, read again. One that cannot be read now throws (StateFileUnreadable): read as
+   *  none, the change would drop every other pet. */
+  private mappingToChange(): PetMapping {
+    const file = join(this.dir, 'pets.json')
+    const stamp = stampOf(file)
+    this.map = mappingOf(requireState(file, jsonObject, 'cache'))
+    this.mapStamp = stamp
+    return { all: this.map.all, engines: { ...this.map.engines } }
   }
 
   // Calls run one at a time: each reads the mapping the previous one left.
@@ -251,10 +261,13 @@ function checkTarget(target: string): void {
 }
 
 function loadMapping(file: string): PetMapping {
-  // A file that cannot be read is set aside and maps nothing, so the next commit cannot replace it unseen.
+  // A file that cannot be parsed is set aside and maps nothing, so the next commit cannot replace it unseen.
   const read = readState(file, 'cache', jsonObject)
-  if (read.state !== 'ok') return { all: null, engines: {} }
-  const raw = read.value
+  return mappingOf(read.state === 'ok' ? read.value : null)
+}
+
+function mappingOf(raw: Record<string, unknown> | null): PetMapping {
+  if (!raw) return { all: null, engines: {} }
   const all = typeof raw.all === 'string' && ID_RE.test(raw.all) ? raw.all : null
   const engines: Record<string, string> = {}
   if (raw.engines && typeof raw.engines === 'object') {

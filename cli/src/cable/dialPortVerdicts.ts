@@ -26,11 +26,14 @@ const keyOf = (port: DialPort) => (port.serialNumber ?? port.path).toUpperCase()
 
 export class DialVerdicts {
   private readonly foreign = new Map<string, Verdict>()
+  /** The file could not be read (EACCES, EMFILE): this run keeps its verdicts in memory and writes nothing over it. */
+  private unread = false
 
   constructor(private readonly file?: string, private readonly now: () => number = Date.now) {
     if (!file || !existsSync(file)) return
-    // A file that cannot be read is set aside: start with no opinions, and write a new one on the next verdict.
+    // A file that cannot be parsed is set aside: start with no opinions, and write a new one on the next verdict.
     const read = readState(file, 'cache', jsonObject)
+    this.unread = read.state === 'unreadable'
     if (read.state !== 'ok') return
     for (const [key, value] of Object.entries(read.value)) {
       const v = value as Partial<Verdict> | null
@@ -75,7 +78,7 @@ export class DialVerdicts {
   }
 
   private save(): void {
-    if (!this.file) return
+    if (!this.file || this.unread) return
     try {
       mkdirSync(dirname(this.file), { recursive: true })
       atomicWriteFile(this.file, JSON.stringify(Object.fromEntries(this.foreign)), 'cache')

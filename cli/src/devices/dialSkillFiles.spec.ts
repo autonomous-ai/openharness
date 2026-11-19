@@ -511,7 +511,7 @@ describe('a file that cannot be parsed', () => {
     writeFileSync(file, '{"homes":')
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     const read = fs.readFileSync
-    vi.spyOn(fs, 'readFileSync').mockImplementation(((path: fs.PathOrFileDescriptor, ...rest: unknown[]) => {
+    const failing = vi.spyOn(fs, 'readFileSync').mockImplementation(((path: fs.PathOrFileDescriptor, ...rest: unknown[]) => {
       if (path === file) throw Object.assign(new Error('EMFILE: fixture'), { code: 'EMFILE' })
       return (read as (...args: unknown[]) => unknown)(path, ...rest)
     }) as typeof fs.readFileSync)
@@ -519,6 +519,7 @@ describe('a file that cannot be parsed', () => {
     expect(readPluginHomes(dataDir)).toEqual({ homes: [], unread: true })
     expect(writePluginHomes(dataDir, [home])).toBe('EMFILE')
 
+    failing.mockRestore()
     expect(readdirSync(dataDir)).toEqual([DIAL_SKILL_FILE])
     expect(readFileSync(file, 'utf8')).toBe('{"homes":')
   })

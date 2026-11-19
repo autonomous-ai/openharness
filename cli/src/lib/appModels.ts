@@ -7,7 +7,7 @@ import { closeSync, openSync } from 'node:fs'
 import { mkdir, open, rm } from 'node:fs/promises'
 import { basename, join } from 'node:path'
 import { processExists } from './processLiveness.js'
-import { atomicWriteFile, jsonArray, readState } from './secureState.js'
+import { atomicWriteFile, jsonArray, requireState } from './secureState.js'
 import { execFileTied, type TiedExecError } from './tied.js'
 
 export type AppEngine = 'ollama' | 'lm-studio' | 'llama.cpp'
@@ -343,11 +343,10 @@ export function appEngineOps(env: NodeJS.ProcessEnv, request: typeof fetch = fet
   }
 }
 
-/** The engines this daemon started, by model id. */
+/** The engines this daemon started, by model id. A file that cannot be read now throws (StateFileUnreadable): read as
+ *  none, a start's or a stop's write would forget every engine this daemon started. */
 export async function readAppRecords(file: string): Promise<AppEngineRecord[]> {
-  const read = readState(file, 'cache', jsonArray)
-  if (read.state !== 'ok') return []
-  return rows(read.value).filter(r => r.spec === 1 && str(r.modelId) && str(r.grid) &&
+  return rows(requireState(file, jsonArray, 'cache') ?? []).filter(r => r.spec === 1 && str(r.modelId) && str(r.grid) &&
     ['ollama', 'lm-studio', 'llama.cpp'].includes(r.engine) && typeof r.port === 'number' && safe(str(r.alias))) as AppEngineRecord[]
 }
 

@@ -64,9 +64,11 @@ export function startGoals(core: CoreApi, deps: { now?: () => number } = {}): Se
   const file = goalsPath(core.dataDir)
 
   /** The goals kept, without those closed more than a week ago, and whether the file holds any others. A file that
-   *  cannot be read is set aside and is no goals. */
-  const read = (): { goals: Goal[]; pruned: boolean } => {
+   *  cannot be parsed is set aside and is no goals; null when it cannot be read now (EACCES, EMFILE): read as no goals,
+   *  the next write would lose every goal in it. */
+  const read = (): { goals: Goal[]; pruned: boolean } | null => {
     const saved = readState(file, 'cache', jsonObject)
+    if (saved.state === 'unreadable') return null
     if (saved.state !== 'ok') return { goals: [], pruned: false }
     const kept = saved.value.goals
     const all = Array.isArray(kept) ? kept : []
@@ -86,6 +88,7 @@ export function startGoals(core: CoreApi, deps: { now?: () => number } = {}): Se
     }
   }
   const NOT_SAVED = { error: 'NOT_SAVED', message: 'Harness could not save the goal on this computer. Try again in a moment.' }
+  const NOT_READ = { error: 'NOT_READ', message: 'Harness could not read the goals on this computer. Try again in a moment.' }
 
   /** The Hachi harness's agent id, by the pane the request came from on this machine; anything else is no caller. */
   const hachi = (payload: Record<string, unknown>, asker: Asker): string | null => {
@@ -98,7 +101,9 @@ export function startGoals(core: CoreApi, deps: { now?: () => number } = {}): Se
     (payload: Record<string, unknown>, asker: Asker): Record<string, unknown> => {
       const hachiId = hachi(payload, asker)
       if (!hachiId) return NOT_HACHI
-      const { goals, pruned } = read()
+      const kept = read()
+      if (!kept) return NOT_READ
+      const { goals, pruned } = kept
       leftBehind(goals)
       return run(payload, goals, pruned, hachiId)
     }

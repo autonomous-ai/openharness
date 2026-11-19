@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { errorKind } from './log.js'
 import { MINIMUM_NODE_MAJOR } from './nodeRuntime.js'
 import type { NodeMigrationReason } from './runtimeInstall.js'
-import { atomicWriteFile, jsonObject, readState } from './secureState.js'
+import { atomicWriteFile, jsonObject, readState, requireState } from './secureState.js'
 
 // Read and cleared by the daemon's core (`/api/status`, its start), so this file loads nothing the core may not
 // (architecture.spec.ts); selfUpdate.ts and the master write it.
@@ -34,21 +34,24 @@ export function nodeMigration(dir: string): NodeMigration | null {
 /** The managed Node that did not hold up here (a rollback moved the daemon off it, or the build or the master did not
  *  run on it); the updater does not move to it again (lib/selfUpdate.ts `startSelfUpdater`). Null when none did. */
 export function failedNode(dir: string): string | null {
-  const node = readRecord(dir)?.node
-  return typeof node === 'string' ? node : null
+  return nodeOf(readRecord(dir))
 }
+
+const nodeOf = (record: Recorded | null): string | null => typeof record?.node === 'string' ? record.node : null
 
 /**
  * Record why the daemon is not on the minimum Node, or, with null, that nothing holds it back. [failed] names the Node
  * that caused it; left out, the one recorded before stays: a later update that could not even read the manifest must
  * not forget that the Node it offers already failed here.
  */
-export function recordNodeMigration(dir: string, reason: NodeMigration | null, failed: string | null = failedNode(dir)): void {
+export function recordNodeMigration(dir: string, reason: NodeMigration | null, failed?: string | null): void {
   const file = join(dir, NODE_MIGRATION_FILE)
   try {
     if (reason === null) { rmSync(file, { force: true }); return }
+    // A record that cannot be read now throws rather than lose the Node it names (StateFileUnreadable).
+    const node = failed === undefined ? nodeOf(requireState(file, jsonObject, 'cache')) : failed
     // Whole or not at all: a half-written record would read as nothing recorded.
-    atomicWriteFile(file, `${JSON.stringify({ reason, at: Date.now(), ...(failed ? { node: failed } : {}) })}\n`, 'cache')
+    atomicWriteFile(file, `${JSON.stringify({ reason, at: Date.now(), ...(node ? { node } : {}) })}\n`, 'cache')
   } catch (error) {
     // A full disk costs `harness status` the reason, never the update.
     console.error(`[update] could not record why the daemon's Node stays as it is (${errorKind(error)})`)

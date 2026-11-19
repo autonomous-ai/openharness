@@ -15,7 +15,7 @@ import { join } from 'path'
 import { env } from '../config/env.js'
 import { homeIsAbsolute } from '../engines/kit/homeAdoption.js'
 import { discoverCodexProfiles } from './codexProfileDiscovery.js'
-import { atomicWriteJson, hardenPrivateStateFileIfPresent, jsonArray, readState, secureStateDirectory } from './secureState.js'
+import { atomicWriteJson, hardenPrivateStateFileIfPresent, jsonArray, readState, requireState, secureStateDirectory } from './secureState.js'
 
 export interface CodexProfile {
   path: string
@@ -41,9 +41,17 @@ function readLinkedPaths(): Set<string> {
     return new Set()
   }
   const read = readState(FILE, 'cache', jsonArray)
-  if (read.state !== 'ok') return new Set()
-  return new Set(read.value.filter((p): p is string => typeof p === 'string').slice(0, MAX_LINKED))
+  return linkedIn(read.state === 'ok' ? read.value : [])
 }
+
+/** The paths a link starts from. Throws when another account could write the list, or it cannot be read now
+ *  (StateFileUnreadable): read as none, the link would drop every other profile. */
+function linkedPathsToChange(): Set<string> {
+  hardenPrivateStateFileIfPresent(FILE, 1024 * 1024)
+  return linkedIn(requireState(FILE, jsonArray, 'cache') ?? [])
+}
+
+const linkedIn = (list: unknown[]): Set<string> => new Set(list.filter((p): p is string => typeof p === 'string').slice(0, MAX_LINKED))
 
 function writeLinkedPaths(paths: Set<string>): void {
   secureStateDirectory(env.ADAPTER_DATA_DIR)
@@ -77,7 +85,7 @@ export function resolveCodexProfilePath(path: string): CodexProfile | CodexProfi
 export function linkCodexProfile(path: string): CodexProfile | CodexProfileError {
   const profile = resolveCodexProfilePath(path)
   if ('error' in profile) return profile
-  const linked = readLinkedPaths()
+  const linked = linkedPathsToChange()
   linked.add(profile.path)
   writeLinkedPaths(linked)
   return profile

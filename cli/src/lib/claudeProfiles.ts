@@ -8,7 +8,7 @@ import { randomUUID } from 'crypto'
 import { closeSync, constants, fchmodSync, fsyncSync, openSync, renameSync, rmSync, writeFileSync } from 'fs'
 import { homedir } from 'os'
 import { env } from '../config/env.js'
-import { LINKED_FILE, listClaudeProfiles, MAX_LINKED, profileFor, profileId, readLinkedPaths, resolveFolder, type ClaudeProfile,
+import { LINKED_FILE, linkedPathsToChange, listClaudeProfiles, MAX_LINKED, profileFor, profileId, resolveFolder, type ClaudeProfile,
   type ClaudeProfileError } from './claudeHomes.js'
 import { defaultCodexHome, listCodexProfiles } from './codexProfiles.js'
 import { hardenPrivateStateFileIfPresent, secureStateDirectory } from './secureState.js'
@@ -38,7 +38,7 @@ function writeLinkedPaths(paths: Set<string>): void {
 export function linkClaudeProfile(path: string, machineId: string): { profile: ClaudeProfile } | ClaudeProfileError {
   const resolved = resolveFolder(path)
   if (typeof resolved !== 'string') return resolved
-  const linked = readLinkedPaths()
+  const linked = linkedPathsToChange()
   linked.add(path)
   writeLinkedPaths(linked)
   return { profile: profileFor(machineId, path, resolved, homedir()) }

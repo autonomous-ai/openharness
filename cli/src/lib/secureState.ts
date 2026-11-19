@@ -29,7 +29,9 @@ function ownerUid(): number | null {
 }
 
 function isMissing(error: unknown): boolean {
-  return (error as NodeJS.ErrnoException).code === 'ENOENT'
+  // ENOTDIR: a folder on the way is a file, so nothing can be there.
+  const code = (error as NodeJS.ErrnoException).code
+  return code === 'ENOENT' || code === 'ENOTDIR'
 }
 
 /**
@@ -214,8 +216,9 @@ export const RENAME_TRIES = 10
 export const RENAME_WAIT_MS = 100
 // Windows refuses a rename over a file another process holds open (a scanner, a reader), for a moment.
 const RENAME_BUSY = new Set(['EPERM', 'EACCES', 'EBUSY'])
-// A file system without hard links (FAT, some network shares) refuses `link` with one of these.
-const LINK_REFUSED = new Set(['EPERM', 'ENOTSUP', 'EXDEV', 'ENOSYS'])
+// A file system without hard links (FAT, some network shares) refuses `link` with one of these. EISDIR: Windows on exFAT
+// and FAT answers ERROR_INVALID_FUNCTION, which libuv maps to it.
+const LINK_REFUSED = new Set(['EPERM', 'ENOTSUP', 'EXDEV', 'ENOSYS', 'EISDIR'])
 
 /** The new file is in place, but its folder has not confirmed it is durable. */
 export class AtomicWriteUnconfirmed extends Error {
@@ -310,8 +313,11 @@ export function atomicWriteFile(
     if (published) throw new AtomicWriteUnconfirmed(error)
     throw error
   } finally {
-    // A link or a copy leaves the temporary file's own name behind.
-    if (options.exclusive || !published) rmSync(temporary, { force: true })
+    // A link or a copy leaves the temporary file's own name behind. Its removal must not replace what the write answers
+    // (Windows refuses it while a scanner holds the file): one left behind is read by nobody.
+    if (options.exclusive || !published) {
+      try { rmSync(temporary, { force: true }) } catch { /* left for nobody to read */ }
+    }
   }
 }
 
@@ -326,13 +332,19 @@ export const READ_WAIT_MS = 20
 // Enough for every state file one process reads; a broken one then costs its readers one stat after the first read.
 const REMEMBERED_FILES = 64
 
-export type StateRead<T> = { state: 'ok'; value: T } | { state: 'missing' } | { state: 'unreadable'; failure: string }
+/**
+ * `unreadable`: bytes were read and could not be parsed, or, with `readFailed`, the read itself failed (`failure` is its
+ * code: EMFILE, EIO, EACCES, Windows' EBUSY or EPERM). That read read nothing to judge, so it is never remembered or set
+ * aside, and the next read tries again.
+ */
+export type StateRead<T> = { state: 'ok'; value: T } | { state: 'missing' } | { state: 'unreadable'; failure: string; readFailed?: true }
 
-/** A trust file that cannot be read, which a write would replace. The message holds the file's base name only. */
+/** A file a write would replace that cannot be read. The message holds the file's base name only. */
 export class StateFileUnreadable extends Error {
   override readonly name = 'StateFileUnreadable'
-  constructor(readonly base: string, readonly failure: string) {
-    super(`${base} cannot be read (${failure}). Move it aside to start over.`)
+  constructor(readonly base: string, readonly failure: string, readFailed = false) {
+    super(readFailed ? `${base} could not be read (${failure}), so it was not changed.`
+      : `${base} cannot be read (${failure}). Move it aside to start over.`)
   }
 }
 
@@ -342,22 +354,21 @@ export interface TrustFile { file: string; parse(text: string): unknown }
 interface Unreadable {
   identity: string
   failure: string
-  /** Its trust line is logged. */
-  said?: boolean
   /** It could not be set aside: not tried again on every read. */
   stuck?: boolean
 }
-// By path, oldest first.
+// Files whose bytes could not be parsed, by path, oldest first.
 const unreadableFiles = new Map<string, Unreadable>()
+// What the last line about each file said, by path, oldest first: a line is said once, until what it says changes.
+const toldFiles = new Map<string, string>()
 
-/** What a file is remembered by: a write in place or a rename over it changes it. Undefined when missing. */
+/** What a file is remembered by: a write in place or a rename over it changes it. Undefined when it cannot be looked at. */
 function identityOf(file: string): string | undefined {
   try {
     const { dev, ino, size, mtimeMs } = statSync(file)
     return `${dev}:${ino}:${size}:${mtimeMs}`
-  } catch (error) {
-    // A folder that cannot be searched stays so: it is remembered by its error.
-    return isMissing(error) ? undefined : errorCode(error) || 'unreadable'
+  } catch {
+    return undefined
   }
 }
 
@@ -368,13 +379,22 @@ function remember(file: string, identity: string | undefined, failure: string): 
   if (unreadableFiles.size > REMEMBERED_FILES) unreadableFiles.delete(unreadableFiles.keys().next().value!)
 }
 
+/** Logs [line], unless the last line about [file] said the same [what]. */
+function tell(file: string, what: string, line: string): void {
+  if (toldFiles.get(file) === what) return
+  toldFiles.delete(file)
+  toldFiles.set(file, what)
+  if (toldFiles.size > REMEMBERED_FILES) toldFiles.delete(toldFiles.keys().next().value!)
+  console.warn(line)
+}
+
 function readOnce<T>(file: string, parse: (text: string) => T): StateRead<T> {
   let text: string
   try {
     text = readFileSync(file, 'utf8')
   } catch (error) {
     if (isMissing(error)) return { state: 'missing' }
-    return { state: 'unreadable', failure: errorCode(error) || 'unreadable' }
+    return { state: 'unreadable', failure: errorCode(error) || 'unreadable', readFailed: true }
   }
   try {
     return { state: 'ok', value: parse(text) }
@@ -384,7 +404,10 @@ function readOnce<T>(file: string, parse: (text: string) => T): StateRead<T> {
   }
 }
 
-/** Read and parse, with the retry and the memory of an unreadable file. Logs nothing, moves nothing. */
+/**
+ * Read and parse, with the retry and the memory of bytes that could not be parsed (a read that failed is not remembered).
+ * Logs nothing, moves nothing.
+ */
 export function probeState<T>(file: string, parse: (text: string) => T): StateRead<T> {
   const known = unreadableFiles.get(file)
   if (known && known.identity === identityOf(file)) return { state: 'unreadable', failure: known.failure }
@@ -394,10 +417,11 @@ export function probeState<T>(file: string, parse: (text: string) => T): StateRe
     const read = readOnce(file, parse)
     if (read.state !== 'unreadable') {
       unreadableFiles.delete(file)
+      toldFiles.delete(file)
       return read
     }
     if (attempt === READ_TRIES) {
-      remember(file, identity, read.failure)
+      remember(file, read.readFailed ? undefined : identity, read.failure)
       return read
     }
     pauseSync(READ_WAIT_MS)
@@ -405,34 +429,51 @@ export function probeState<T>(file: string, parse: (text: string) => T): StateRe
 }
 
 /**
- * `probeState`, then the kind: a trust file is logged once and left as it is (its store fails closed); a cache file
- * is set aside, logged, and answered as missing.
+ * `probeState`, then what failed. A read that failed is logged once and answered as it is, whatever the kind: nothing
+ * is moved. Bytes that cannot be parsed: a trust file is logged once and left as it is (its store fails closed); a
+ * cache file is set aside, logged, and answered as missing, unless a writer replaced it since: that file is read.
  */
 export function readState<T>(file: string, kind: StateKind, parse: (text: string) => T): StateRead<T> {
-  const read = probeState(file, parse)
-  if (read.state !== 'unreadable') return read
   const base = basename(file)
-  const memory = unreadableFiles.get(file)
-  if (kind === 'trust') {
-    if (!memory?.said) console.warn(`[state] ${base} cannot be read (${read.failure}); left as it is. Move it aside to start over.`)
-    if (memory) memory.said = true
-    return read
+  for (let round = 1; ; round++) {
+    const read = probeState(file, parse)
+    if (read.state !== 'unreadable') return read
+    if (read.readFailed) {
+      tell(file, read.failure, `[state] ${base} could not be read (${read.failure}); left as it is, read again next time.`)
+      return read
+    }
+    const memory = unreadableFiles.get(file)
+    if (kind === 'trust') {
+      tell(file, `${memory?.identity}:${read.failure}`, `[state] ${base} cannot be read (${read.failure}); left as it is. Move it aside to start over.`)
+      return read
+    }
+    if (memory?.stuck) return { state: 'missing' }
+    // Only the bytes that failed are set aside: a file put there since they were read (an older build writing in place)
+    // is read again. One that keeps changing, or cannot be looked at, is left for the next read.
+    if (!memory || memory.identity !== identityOf(file)) {
+      if (memory && round < READ_TRIES) continue
+      return read
+    }
+    if (setAsideUnreadable(file)) {
+      console.warn(`[state] ${base} could not be read (${read.failure}); kept as ${base}.unreadable, starting empty.`)
+    }
+    return { state: 'missing' }
   }
-  if (!memory?.stuck && setAsideUnreadable(file)) {
-    console.warn(`[state] ${base} could not be read (${read.failure}); kept as ${base}.unreadable, starting empty.`)
-  }
-  return { state: 'missing' }
 }
 
-/** A trust file a write depends on: its value, null when missing, a thrown StateFileUnreadable otherwise. */
-export function requireState<T>(file: string, parse: (text: string) => T): T | null {
-  const read = readState(file, 'trust', parse)
-  if (read.state === 'unreadable') throw new StateFileUnreadable(basename(file), read.failure)
+/**
+ * A file a write depends on: its value, or null when missing (a cache file that cannot be parsed is set aside, then
+ * missing). A thrown StateFileUnreadable when it cannot be read: a trust file that cannot be parsed, or any file the
+ * read failed on, which the write then leaves as it is.
+ */
+export function requireState<T>(file: string, parse: (text: string) => T, kind: StateKind = 'trust'): T | null {
+  const read = readState(file, kind, parse)
+  if (read.state === 'unreadable') throw new StateFileUnreadable(basename(file), read.failure, read.readFailed)
   return read.state === 'ok' ? read.value : null
 }
 
 /** Rename to `<file>.unreadable`, over an older one. Never throws: a failure is one log line. True when set aside. */
-export function setAsideUnreadable(file: string): boolean {
+function setAsideUnreadable(file: string): boolean {
   try {
     renameOver(file, `${file}.unreadable`)
     unreadableFiles.delete(file)

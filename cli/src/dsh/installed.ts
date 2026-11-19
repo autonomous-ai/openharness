@@ -9,7 +9,7 @@
 import { mkdirSync, realpathSync } from 'node:fs'
 import { join } from 'node:path'
 import { env } from '../config/env.js'
-import { atomicWriteFile, jsonArray, readState } from '../lib/secureState.js'
+import { atomicWriteFile, jsonArray, readState, requireState } from '../lib/secureState.js'
 import { DSH_ID_RE, readDshManifest, type DshManifest } from './manifest.js'
 
 /**
@@ -86,7 +86,8 @@ export function writeInstalledIndex(records: readonly InstalledDshRecord[]): voi
 }
 
 export function upsertInstalledRecord(record: InstalledDshRecord): void {
-  const others = readInstalledIndex().filter((row) => row.id !== record.id)
+  // An index that cannot be read now throws: read as none, this write would forget every other harness installed.
+  const others = (requireState(indexPath(), jsonArray, 'cache') ?? []).filter(validRecord).filter((row) => row.id !== record.id)
   writeInstalledIndex([...others, record].sort((a, b) => a.id.localeCompare(b.id)))
   invalidateInstalledDsh()
 }
