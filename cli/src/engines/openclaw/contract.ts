@@ -69,6 +69,11 @@ const STATUS = {
   /** The connection dropped or just came back: `gateway disconnected: …` (5 s), `disconnected` after it, `gateway
    * reconnected` (4 s; `setConnectionStatus` in OpenClaw's tui). */
   gatewayLost: /^(?:gateway )?(?:disconnected|reconnected)\b/,
+  /**
+   * A cold Gateway's answer while it starts, `⠙ starting up • 20s | gateway starting` (OpenClaw's tui
+   * `resolveGatewayDisconnectState`): over a minute on a slow machine, between bare `disconnected` lines.
+   */
+  gatewayStarting: / \| gateway starting$/,
 }
 
 /** The local runtime's stop and its reason, as OpenClaw prints it: the line's wrapped continuations joined. */
@@ -108,6 +113,8 @@ export interface OpenclawScreen {
   gatewayLost: boolean
   /** The status line says a run is in progress: `running` or `streaming`, not `connecting`. */
   running: boolean
+  /** The status line says the Gateway is starting: it answered, so it is running. */
+  gatewayStarting: boolean
   /**
    * The reason on a `local runtime stopped` status line, `''` when it gives none. Null on every other screen, the
    * `local stopped` one after it included: that one no longer says why.
@@ -123,7 +130,8 @@ export interface OpenclawScreen {
 }
 
 const NOTHING: OpenclawScreen = {
-  key: null, url: null, state: null, footer: null, gatewayLost: false, running: false, stopped: null, status: null, box: null,
+  key: null, url: null, state: null, footer: null, gatewayLost: false, running: false, gatewayStarting: false, stopped: null,
+  status: null, box: null,
 }
 
 /** Lines as drawn: escapes removed, trailing blanks dropped. */
@@ -215,6 +223,7 @@ export function readOpenclawScreen(capture: string): OpenclawScreen {
     footer,
     gatewayLost: STATUS.gatewayLost.test(said),
     running: STATUS.running.test(said),
+    gatewayStarting: STATUS.gatewayStarting.test(said),
     stopped,
     status: said,
     box: readBox(lines),
