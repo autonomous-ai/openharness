@@ -65,13 +65,13 @@ import { HostRegistry, type HostEntry } from '../cable/hosts/registry.js'
 import { appRoots, learnApps, readBundleId, readProcessNames, readPtyOwner, readTtyName } from '../cable/hosts/scannedApp.js'
 import { createScrollLines } from '../cable/hosts/scrollLines.js'
 import { createTabsAdapter, readTty, type Tab } from '../cable/hosts/tabs.js'
-import { createOuter, createTmuxAdapter, tmuxClients } from '../cable/hosts/tmux.js'
+import { createTmuxAdapter, createTmuxOuter } from '../cable/hosts/tmux.js'
 import type { HostAgent, HostAgentState } from '../cable/hosts/types.js'
 import { watchSocket } from '../cable/hosts/unixSocket.js'
 import { createVscodeAdapter, termPid } from '../cable/hosts/vscode.js'
 import { readForeground, readProcessParents, vscodeStreams, type VscodeTerminalsDeps } from '../cable/hosts/vscodeTerminals.js'
 import { createWeztermAdapter } from '../cable/hosts/wezterm.js'
-import { createZellijAdapter, zellijClients, zellijFinder } from '../cable/hosts/zellij.js'
+import { createZellijAdapter, createZellijOuter, zellijFinder } from '../cable/hosts/zellij.js'
 import { createEngineTally } from '../cable/engineTally.js'
 import { createVscodeExtensionSetup } from '../cable/vscodeExtensionSetup.js'
 import { NoticeFile, NOTICES_FILE } from '../cable/noticeFile.js'
@@ -532,7 +532,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
    *  after tmux, as a tmux inside their terminal is the nearer host, and before the terminals: each tells its programs
    *  they run in Ghostty, whose tabs hold none of them. Zellij is a multiplexer as tmux is, and kitty a terminal as
    *  WezTerm is. */
-  // One lookup of tmux and one of zellij, each for the tap, the words and the client lookup (createOuter, below).
+  // One lookup of tmux and one of zellij, each for the tap, the words and the client lookup (the outer lookups, below).
   const tmuxAt = tmuxFinder()
   const zellijAt = zellijFinder()
   const tmux = noting(createTmuxAdapter({ run: apps.run, tmux: tmuxAt, processes: readProcessNames, log, front: () => cableHost.latestFront() }))
@@ -671,9 +671,10 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   hookIds ? (pid): string | undefined => hcSource?.terminalOf(pid) : undefined,
   // An agent in a pane of the person's herdr, tmux or Zellij is on the page of the app holding the client that shows
   // it: each lookup answers nothing at once for an agent in none of its panes. herdr's first: herdr inside the person's
-  // tmux is the nearer host, and keeps tmux's answer when herdr's finds no app.
-  firstOuter(createHerdrOuter({ ...outerDeps, atime: ttyAtime }), createOuter(outerDeps,
-    [tmuxClients({ run: apps.run, tmux: tmuxAt }), zellijClients({ run: apps.run, zellij: zellijAt, platform: apps.platform, tty: readTtyName })])),
+  // tmux is the nearer host, and keeps tmux's answer when herdr's finds no app. Zellij's last: a Zellij server started
+  // in a tmux pane gives its panes that pane's TMUX_PANE, where tmux's finds no app.
+  firstOuter(createHerdrOuter({ ...outerDeps, atime: ttyAtime }), firstOuter(createTmuxOuter({ ...outerDeps, tmux: tmuxAt }),
+    createZellijOuter({ ...outerDeps, zellij: zellijAt, tty: readTtyName }))),
   // Windows has no `ps`: there no terminal's pane is read as the agent's own, and none takes its words.
   apps.platform === 'win32' ? undefined : async (pid) => readPtyOwner(pid, await readProcessNames(), readTtyName)) : null
   // Orca is asked only for the parts that use its homes, the first time as the devices start: the start pass waits for

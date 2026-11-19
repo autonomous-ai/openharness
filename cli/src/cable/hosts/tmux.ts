@@ -6,7 +6,7 @@
  * that session shows it, and none is moved to another session. Those are the two things done there, each only once the
  * pane's process is checked to be the agent's or one of its parents, and never on a session Harness made: nothing is
  * typed, made or closed (Q1). Beside them, a lookup reads which client shows a pane's session, to place the agent on the
- * page of the app that holds it (tmuxClients, in createOuter). tmux is the daemon's, with no `-L` or `-S`: the master's PATH may hold
+ * page of the app that holds it (createTmuxOuter). tmux is the daemon's, with no `-L` or `-S`: the master's PATH may hold
  * none, so the devices find it as the core does (tmuxFinder), the same binary and so the same server. Each value came
  * from a hook or from tmux, so it is checked against its form, and tmux runs with no shell.
  */
@@ -20,7 +20,8 @@ import { parentChain, scannedApps, type ProcessName } from './scannedApp.js'
 import { TAB_TTY } from './tabs.js'
 
 const TMUX_PANE_ID = /^%[0-9]{1,9}$/
-/** A process id as the table and the hooks give it; the herdr lookup holds its pids to it too (herdrOuter.ts). */
+/** A process id as the table and the hooks give it; the herdr and Zellij lookups hold their pids to it too
+ *  (herdrOuter.ts, zellij.ts). */
 export const PID = /^[1-9][0-9]{0,9}$/
 /** This adapter's pane: tmux's pane id and the agent's process, `%3:100`, as the hook's event named them, and the app
  *  holding the client that shows its session when one was found, `%3:100:terminal-app`. */
@@ -45,7 +46,8 @@ const TMUX_CLIENT_PLACES = '#{client_activity}|#{client_pid}|#{client_tty}'
 /** One line of TMUX_CLIENT_PLACES; one with no whole activity or no pid in form is no client. */
 const TMUX_CLIENT_PLACE = /^([0-9]+)\|([1-9][0-9]{0,9})\|(.*)$/
 /** How long a pane's answer holds, from its lookup's start: Command Code's turn-start comes at every tool call, and a
- *  lookup is a `ps` and up to BUNDLES_A_PASS `plutil` runs. The herdr lookup holds its answers as long (herdrOuter.ts). */
+ *  lookup is a `ps` and up to BUNDLES_A_PASS `plutil` runs. The herdr and Zellij lookups hold their answers as long
+ *  (herdrOuter.ts, zellij.ts). */
 export const OUTER_EVERY_MS = 5_000
 
 export interface TmuxDeps {
@@ -189,7 +191,9 @@ export function createTmuxAdapter(deps: TmuxDeps): HostAdapter {
   }
 }
 
-export interface OuterDeps {
+export interface TmuxOuterDeps {
+  run: TmuxDeps['run']
+  tmux: TmuxDeps['tmux']
   processes: TmuxDeps['processes']
   log: TmuxDeps['log']
   now(): number
@@ -198,109 +202,75 @@ export interface OuterDeps {
   bundleId(bundle: string): Promise<string | undefined>
 }
 
-/** The app that holds the multiplexer's client showing an agent's pane, that client's tty when it names a tab, and its
- *  process. */
+/** The app that holds the tmux client showing an agent's pane, that client's tty when it names a tab, and its process. */
 interface ClientPlace { app?: string; tty?: string; pid?: number }
-/** The step of a lookup that could not be read, as its line names it: no multiplexer found (by its id), the pane's facts,
- *  the process table, the session's clients, the client's app. */
-type NotRead = ClientLookup['id'] | 'pane' | 'processes' | 'clients' | 'app'
-
-/** A multiplexer's part of the outer lookup (createOuter). */
-export interface ClientLookup {
-  /** Its name in the lookup's line, and the step that names it not found. */
-  readonly id: 'tmux' | 'zellij'
-  /** What its clients are asked by, its pane or its session, when the hints name one of its in form; none otherwise. */
-  target(hints: Readonly<Record<string, string>>): string | undefined
-  /** The process of the client that shows [target] and the client's tty, when the multiplexer names it; none when the
-   *  caller [pid] is not in it, or no client is known; the step that could not be read, when one could not. [rows] reads
-   *  the process table, once for the whole lookup. */
-  client(target: string, pid: number, rows: () => Promise<readonly ProcessName[]>): Promise<{ pid: number; tty?: string } | NotRead | undefined>
-}
+/** The step of a lookup that could not be read, as its line names it: no tmux found, the pane's facts, the process
+ *  table, the session's clients, the client's app. */
+type NotRead = 'tmux' | 'pane' | 'processes' | 'clients' | 'app'
 
 /**
- * Where the person sees an agent in a pane of their own multiplexer: in the app that holds the client showing it, at that
- * client's tty. The pane's own hints cannot say: tmux sets TERM_PROGRAM=tmux, a multiplexer's bundle id is the one its
- * server started with, none when the daemon started it (Diego's Mac, 2026-11-19), and another app's after a re-attach.
- * It only reads, and only for a caller its multiplexer's lookup finds in it. The first of [lookups] whose pane the hints
- * name asks.
+ * Where the person sees an agent in a pane of their own tmux: in the app that holds the client used last on the pane's
+ * session, at that client's tty. The pane's own hints cannot say: tmux sets TERM_PROGRAM=tmux, and the bundle id is the
+ * one the server started with, none when the daemon started it (Diego's Mac, 2026-11-19), and another app's after a
+ * re-attach. It only reads, the pane's facts and its session's clients, and only for a pane of the person's that holds
+ * the hook's caller (pid). Nothing at once when the hints name no tmux pane in form or the caller is no pid; else the
+ * client's place, `{}` when none is found. Never rejects.
  */
-export function createOuter(deps: OuterDeps, lookups: readonly ClientLookup[]): OuterLookup {
-  // By multiplexer, target and caller: an answer holds for the caller whose chain held the pane, a pane of the same id may
-  // be another server's. A lookup in flight is shared past its 5 s, so a multiplexer that hangs to its timeout runs no
-  // second one.
+export function createTmuxOuter(deps: TmuxOuterDeps): OuterLookup {
+  // By pane and caller: an answer holds for the caller whose chain held the pane, a pane of the same id may be another
+  // server's. A lookup in flight is shared past its 5 s, so a tmux that hangs to its timeout runs no second one.
   const asked = new Map<string, { at: number; answer: Promise<ClientPlace>; settled: boolean }>()
 
-  /** `{}` when the lookup finds no client, or none in a listed app; the step that could not be read, when one could not. */
-  async function placeOf(lookup: ClientLookup, target: string, pid: number): Promise<ClientPlace | NotRead> {
-    // One read of the table serves the lookup's proof and the client's walk.
-    let table: Promise<readonly ProcessName[]> | undefined
-    const rows = () => (table ??= deps.processes())
-    const client = await lookup.client(target, pid, rows)
-    if (client === undefined || typeof client === 'string') return client ?? {}
-    const apps = await scannedApps([client.pid], { platform: deps.platform, roots: deps.roots, processes: rows, bundleId: deps.bundleId })
+  /** `{}` when the pane is not the person's, holds no process of the caller's, or no client of its session is in a
+   *  listed app; the step that could not be read, when one could not. */
+  async function placeOf(id: string, pid: number): Promise<ClientPlace | NotRead> {
+    const facts = await paneFacts(deps, id)
+    if (typeof facts === 'string') return facts
+    if (!facts.persons) return {}
+    // One read of the table serves the pane's proof and the client's walk.
+    const rows = await deps.processes().catch(() => undefined)
+    if (!rows) return 'processes'
+    if (!holdsPane(rows, pid, facts.pid)) return {}
+    // By the pane id, which tmux resolves to its session: a session's name could read as another target (`$0`, `@1`).
+    const listed = await runTmux(deps, ['list-clients', '-t', id, '-F', TMUX_CLIENT_PLACES])
+    if (listed?.code !== 0) return 'clients'
+    let client: { activity: number; pid: number; tty: string } | undefined
+    for (const line of listed.stdout.split('\n')) {
+      const row = TMUX_CLIENT_PLACE.exec(line)
+      // tmux gives the activity in whole seconds: on a tie the one listed later, which attached later, wins (personsClient).
+      if (row && (!client || Number(row[1]) >= client.activity)) client = { activity: Number(row[1]), pid: Number(row[2]), tty: row[3] }
+    }
+    if (!client) return {}
+    const apps = await scannedApps([client.pid], { platform: deps.platform, roots: deps.roots, processes: async () => rows, bundleId: deps.bundleId })
     const app = apps.get(client.pid)
     if (!app) return {}
     // A tty out of form names no tab: a control client has none, and Linux's are no tab the dial selects.
-    return client.tty !== undefined && TAB_TTY.test(client.tty) ? { app, tty: client.tty, pid: client.pid } : { app, pid: client.pid }
+    return TAB_TTY.test(client.tty) ? { app, tty: client.tty, pid: client.pid } : { app, pid: client.pid }
   }
 
-  async function lookUp(lookup: ClientLookup, target: string, pid: number): Promise<ClientPlace> {
+  async function lookUp(id: string, pid: number): Promise<ClientPlace> {
     // Every other step answers its own word: what is left to throw is the app scan.
-    const place = await placeOf(lookup, target, pid).catch((): NotRead => 'app')
+    const place = await placeOf(id, pid).catch((): NotRead => 'app')
     if (typeof place === 'string') {
-      deps.log(`[device] ${lookup.id} client · not read · ${place}`)
+      deps.log(`[device] tmux client · not read · ${place}`)
       return {}
     }
-    deps.log(`[device] ${lookup.id} client · ${place.app ? 'found' : 'none'}`)
+    deps.log(`[device] tmux client · ${place.app ? 'found' : 'none'}`)
     return place
   }
 
   return (hints, pid) => {
-    if (!PID.test(String(pid))) return undefined
-    for (const lookup of lookups) {
-      const target = lookup.target(hints)
-      if (target === undefined) continue
-      const now = deps.now()
-      // Only lookups asked in the last 5 s, or still in flight, are kept.
-      for (const [key, ask] of asked) if (ask.settled && now - ask.at >= OUTER_EVERY_MS) asked.delete(key)
-      const key = `${lookup.id}:${target}:${pid}`
-      const last = asked.get(key)
-      if (last) return last.answer
-      const ask = { at: now, answer: lookUp(lookup, target, pid), settled: false }
-      void ask.answer.then(() => { ask.settled = true })
-      asked.set(key, ask)
-      return ask.answer
-    }
-    return undefined
-  }
-}
-
-/** tmux's part of the outer lookup: the client used last on the pane's session, read only for a pane of the person's
- *  that holds the hook's caller (pid). */
-export function tmuxClients(deps: Pick<TmuxDeps, 'run' | 'tmux'>): ClientLookup {
-  return {
-    id: 'tmux',
-    target: (hints) => {
-      const id = hints.TMUX_PANE
-      return id && TMUX_PANE_ID.test(id) ? id : undefined
-    },
-    async client(id, pid, rows) {
-      const facts = await paneFacts(deps, id)
-      if (typeof facts === 'string') return facts
-      if (!facts.persons) return undefined
-      const table = await rows().catch(() => undefined)
-      if (!table) return 'processes'
-      if (!holdsPane(table, pid, facts.pid)) return undefined
-      // By the pane id, which tmux resolves to its session: a session's name could read as another target (`$0`, `@1`).
-      const listed = await runTmux(deps, ['list-clients', '-t', id, '-F', TMUX_CLIENT_PLACES])
-      if (listed?.code !== 0) return 'clients'
-      let client: { activity: number; pid: number; tty: string } | undefined
-      for (const line of listed.stdout.split('\n')) {
-        const row = TMUX_CLIENT_PLACE.exec(line)
-        // tmux gives the activity in whole seconds: on a tie the one listed later, which attached later, wins (personsClient).
-        if (row && (!client || Number(row[1]) >= client.activity)) client = { activity: Number(row[1]), pid: Number(row[2]), tty: row[3] }
-      }
-      return client && { pid: client.pid, tty: client.tty }
-    },
+    const id = hints.TMUX_PANE
+    if (!id || !TMUX_PANE_ID.test(id) || !PID.test(String(pid))) return undefined
+    const now = deps.now()
+    // Only panes asked in the last 5 s, or still in flight, are kept.
+    for (const [key, ask] of asked) if (ask.settled && now - ask.at >= OUTER_EVERY_MS) asked.delete(key)
+    const key = `${id}:${pid}`
+    const last = asked.get(key)
+    if (last) return last.answer
+    const ask = { at: now, answer: lookUp(id, pid), settled: false }
+    void ask.answer.then(() => { ask.settled = true })
+    asked.set(key, ask)
+    return ask.answer
   }
 }

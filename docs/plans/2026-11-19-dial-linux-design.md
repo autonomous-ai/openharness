@@ -258,8 +258,8 @@ fails or finds nothing answers false and the tap's own outcome stays the pane's.
 1. The agent's process chain (the existing `ps` walk, `scannedApp.ts` `parentChain`) from the agent's pid upward: the
    first ancestor that owns a window is the terminal's (or the editor's) window. The chain starts from the agent's
    window as the observed source knows it (`ObservedSource.windowOf`): for an agent in a tmux or Zellij pane, the pid of
-   the client that shows its session, as the outer lookup found it (`createOuter` in `tmux.ts`, with `tmuxClients` and
-   `zellijClients`), else its caller's or its own pid. When a tap ran tmux's `switch-client`, the adapter's `windowPid`
+   the client that shows its session, as its outer lookup found it (`createTmuxOuter` in `tmux.ts`, `createZellijOuter`
+   in `zellij.ts`, asked in turn by `outer.ts` `firstOuter`), else its caller's or its own pid. When a tap ran tmux's `switch-client`, the adapter's `windowPid`
    gives the client it switched instead, asked once after that focus.
 2. None found by pid: the app's window by its class, from the place's app (`windowClasses` in `frontApp.ts`, one fixed
    table beside its exe names: `vscode` → `com.microsoft.VSCode`, `wezterm` → `org.wezfurlong.wezterm`, …, with the
@@ -342,11 +342,11 @@ checks and orders the new names so a session in Zellij inside kitty keeps Zellij
   true for any Zellij pane (a tap that finds no `zellij` brings the app forward, as tmux's does); `canType` is true for
   the agent's own pane, one whose terminal Zellij's server made (§ 1.5), not one that only holds it (herdr, Rex, tmux,
   a terminal or an editor started in Zellij).
-- The page: the agent is on the page of the app that holds the Zellij client showing its session, found by the outer
-  lookup as tmux's (`zellijClients`), only for a caller whose terminal Zellij's server made (§ 1.5): a terminal started
-  from a pane is under the server too. `list-clients` names no client's process or tty, so the client is read from the
-  process table, and only when the session has exactly one client and the machine one Zellij client; otherwise the
-  agent stays where its hints place it.
+- The page: the agent is on the page of the app that holds the Zellij client showing its session, found by an outer
+  lookup of its own, asked after tmux's (`createZellijOuter`, `outer.ts` `firstOuter`), only for a caller whose terminal
+  Zellij's server made (§ 1.5): a terminal started from a pane is under the server too. `list-clients` names no client's
+  process or tty, so the client is read from the process table, and only when the session has exactly one client and
+  the machine one Zellij client; otherwise the agent stays where its hints place it.
 
 ### 3.3 kitty
 

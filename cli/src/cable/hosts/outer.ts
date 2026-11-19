@@ -1,8 +1,8 @@
 /**
- * An agent nested in a multiplexer (the person's tmux, the person's herdr) runs on that multiplexer's pty, which is no
+ * An agent nested in a multiplexer (the person's tmux, herdr or Zellij) runs on that multiplexer's pty, which is no
  * tab: the person sees it in the app that holds the multiplexer's client. Each multiplexer has its own lookup, and
- * neither knows the other; the caller (`devices.ts`: herdr's, then tmux's) picks the order, so herdr inside the
- * person's tmux keeps tmux's answer whenever herdr's finds no app.
+ * none knows another; the caller (`devices.ts`: herdr's, then tmux's, then Zellij's) picks the order, so herdr inside
+ * the person's tmux keeps tmux's answer whenever herdr's finds no app.
  */
 
 /**

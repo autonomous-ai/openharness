@@ -3455,7 +3455,7 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
       noOther()
     })
 
-    // The outer lookup's Zellij part (zellij.ts zellijClients); its walk is zellij.spec.ts's.
+    // Zellij's outer lookup (zellij.ts createZellijOuter); its walk is zellij.spec.ts's.
     it('an agent in Zellij is on the page of the app that holds the session\'s one client', async () => {
       const terminal = join(homedir(), 'Applications', 'Terminal.app')
       readers.processes.mockResolvedValue([

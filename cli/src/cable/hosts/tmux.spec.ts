@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { detectApp, detectHost } from './hostDetect.js'
 import { bundleOf, createOpenActions, type OpenTarget } from './open.js'
 import { tmuxFinder, type TmuxPathOutcome } from '../../lib/tmuxOnPath.js'
-import { createOuter, createTmuxAdapter, tmuxClients, type OuterDeps, type TmuxDeps } from './tmux.js'
+import { createTmuxAdapter, createTmuxOuter, type TmuxDeps, type TmuxOuterDeps } from './tmux.js'
 
 const OPEN = '/usr/bin/open'
 /** tmux on the process's PATH, as the core finds it. */
@@ -378,12 +378,12 @@ const none = ['[device] tmux client · none']
 const notRead = (why: 'tmux' | 'pane' | 'processes' | 'clients' | 'app') => [`[device] tmux client · not read · ${why}`]
 
 /** A recording runner as `recorder`, for the lookup: it runs nothing, each call answers the next of [codes], then exit 0. */
-function lookup(over: Partial<OuterDeps & Pick<TmuxDeps, 'run' | 'tmux'>> = {}, codes: Array<number | null> = [], said: { pane?: string; clients?: string } = {}) {
+function lookup(over: Partial<TmuxOuterDeps> = {}, codes: Array<number | null> = [], said: { pane?: string; clients?: string } = {}) {
   const calls: Call[] = []
   const logs: string[] = []
   const clock = { t: 1_000_000 }
   let reads = 0
-  const deps: OuterDeps & Pick<TmuxDeps, 'run' | 'tmux'> = {
+  const outer = createTmuxOuter({
     run: async (file, args, timeoutMs) => {
       calls.push({ file, args, timeoutMs })
       const stdout = args[0] === 'display-message' ? said.pane ?? '' : args[0] === 'list-clients' ? said.clients ?? '' : ''
@@ -397,8 +397,7 @@ function lookup(over: Partial<OuterDeps & Pick<TmuxDeps, 'run' | 'tmux'>> = {}, 
     roots: ['/Users/u/Applications/'],
     bundleId: async (bundle) => (bundle === '/Users/u/Applications/Terminal.app' ? 'com.apple.Terminal' : undefined),
     ...over,
-  }
-  const outer = createOuter(deps, [tmuxClients(deps)])
+  })
   return { calls, logs, clock, reads: () => reads, outer }
 }
 

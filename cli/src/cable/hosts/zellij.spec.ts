@@ -7,8 +7,7 @@ import { RECORDED_ZELLIJ } from '../../testing/recordedZellij.js'
 import type { Place } from './adapter.js'
 import { MAX_TEXT } from './orca.js'
 import { parseProcessNames, type ProcessName, type PtyProcess } from './scannedApp.js'
-import { createOuter, tmuxClients, type OuterDeps } from './tmux.js'
-import { createZellijAdapter, zellijClients, zellijFinder, type ZellijDeps } from './zellij.js'
+import { createZellijAdapter, createZellijOuter, zellijFinder, type ZellijDeps, type ZellijOuterDeps } from './zellij.js'
 
 /** The person's login shell, as the finder asks it: never this machine's own. It answers [answer] for any name. */
 const shell = vi.hoisted(() => ({ asked: [] as string[], answer: null as string | null }))
@@ -351,7 +350,7 @@ const TABLE: PtyProcess[] = [
 const MAC_TABLE: PtyProcess[] = TABLE.map((p) => (
   p.executable === 'zellij' ? { ...p, executable: '/opt/homebrew/bin/zellij' }
     : p === GHOSTTY ? { ...p, executable: '/Users/u/Applications/Terminal.app/Contents/MacOS/Terminal' } : p))
-const MAC: Partial<OuterDeps> = {
+const MAC: Partial<ZellijOuterDeps> = {
   platform: 'darwin',
   roots: ['/Users/u/Applications/'],
   bundleId: async (bundle) => (bundle === '/Users/u/Applications/Terminal.app' ? 'com.apple.Terminal' : undefined),
@@ -367,29 +366,30 @@ const notRead = (why: 'zellij' | 'processes' | 'clients' | 'app') => [`[device] 
  *  reads holds none. */
 const ttysOf = (table: readonly PtyProcess[]) => async (pid: number) => table.find((p) => p.pid === pid)?.tty
 
-/** The outer lookup with Zellij's part alone, on Linux, over [table]: zellij runs nothing, `list-clients` of `s1`
- *  answers [clients] with exit [code], and each process's terminal is [table]'s unless [tty] reads it. */
-function lookup(over: Partial<OuterDeps> & { table?: PtyProcess[]; clients?: string; code?: number; zellij?: ZellijDeps['zellij']
-  tty?: (pid: number) => Promise<string | undefined> } = {}) {
+/** Zellij's outer lookup on Linux, over [table]: zellij runs nothing, `list-clients` of `s1` answers [clients] with exit
+ *  [code], and each process's terminal is [table]'s unless [tty] reads it. */
+function lookup(over: Partial<ZellijOuterDeps> & { table?: PtyProcess[]; clients?: string; code?: number } = {}) {
   const calls: Call[] = []
   const logs: string[] = []
+  const clock = { t: 1_000_000 }
   let reads = 0
-  const { table = TABLE, clients = listClients.one, code = listClients.code, zellij = FOUND, tty = ttysOf(table), ...deps } = over
-  const run: ZellijDeps['run'] = async (file, args, timeoutMs) => {
-    calls.push({ file, args, timeoutMs })
-    return args[1] === env.ZELLIJ_SESSION_NAME ? { code, stdout: clients } : { code: missingSession.code, stdout: '' }
-  }
-  const outerDeps: OuterDeps = {
+  const { table = TABLE, clients = listClients.one, code = listClients.code, ...deps } = over
+  const outer = createZellijOuter({
+    run: async (file, args, timeoutMs) => {
+      calls.push({ file, args, timeoutMs })
+      return args[1] === env.ZELLIJ_SESSION_NAME ? { code, stdout: clients } : { code: missingSession.code, stdout: '' }
+    },
+    zellij: FOUND,
+    tty: ttysOf(table),
     processes: async () => { reads++; return table },
     log: (line) => { logs.push(line) },
-    now: () => 0,
+    now: () => clock.t,
     platform: 'linux',
     roots: [],
     bundleId: async () => undefined,
     ...deps,
-  }
-  const outer = createOuter(outerDeps, [zellijClients({ run, zellij, platform: outerDeps.platform, tty })])
-  return { calls, logs, reads: () => reads, outer }
+  })
+  return { calls, logs, clock, reads: () => reads, outer }
 }
 
 describe('the outer place of an agent in a Zellij pane', () => {
@@ -486,17 +486,40 @@ describe('the outer place of an agent in a Zellij pane', () => {
     }
   })
 
-  it('one lookup for tmux and Zellij: each one\'s hints ask its own', async () => {
+  // As tmux's: Command Code's turn-start comes at every tool call, and a lookup reads the table, the caller's terminals
+  // and the session's clients.
+  it('one lookup per session and caller in flight, and one every 5 s', async () => {
+    const answer = { app: 'ghostty', pid: 103 }
+    const held: Array<() => void> = []
     const calls: Call[] = []
-    const run: ZellijDeps['run'] = async (file, args, timeoutMs) => {
+    const { clock, outer } = lookup({ run: async (file, args, timeoutMs) => {
       calls.push({ file, args, timeoutMs })
-      return { code: 0, stdout: '' }
-    }
-    const outer = createOuter({ processes: async () => TABLE, log: () => {}, now: () => 0, platform: 'linux', roots: [], bundleId: async () => undefined },
-      [tmuxClients({ run, tmux: async () => ({ state: 'present' }) }), zellijClients({ run, zellij: FOUND, platform: 'linux', tty: ttysOf(TABLE) })])
-    await outer(hints, 100)
-    await outer({ TMUX_PANE: '%3' }, 100)
-    expect(calls.map(({ file, args }) => [file, args.includes('list-clients') ? 'list-clients' : args[0]]))
-      .toEqual([[FAKE_ZELLIJ, 'list-clients'], ['tmux', 'display-message']])
+      await new Promise<void>((settle) => held.push(settle))
+      return { code: listClients.code, stdout: listClients.one }
+    } })
+    const at = clock.t
+    const first = outer(hints, 100)
+    const again = outer(hints, 100)
+    await vi.waitFor(() => expect(calls).toEqual([ran(listClients.args)]))
+    held[0]()
+    expect([await first, await again]).toEqual([answer, answer])
+    // The answer holds for that caller alone: the pane's shell (50) is asked on its own.
+    const caller = outer(hints, 50)
+    await vi.waitFor(() => expect(calls).toHaveLength(2))
+    held[1]()
+    expect(await caller).toEqual(answer)
+    // Asked again within 5 s of its start: the last answer, with nothing run.
+    clock.t = at + 4_999
+    expect(await outer(hints, 100)).toEqual(answer)
+    expect(calls).toHaveLength(2)
+    // At 5 s it runs again, and still in flight past its own 5 s, one lookup is shared.
+    clock.t = at + 5_000
+    const later = outer(hints, 100)
+    await vi.waitFor(() => expect(calls).toHaveLength(3))
+    clock.t = at + 10_001
+    const stuck = outer(hints, 100)
+    expect(calls).toHaveLength(3)
+    held[2]()
+    expect([await later, await stuck]).toEqual([answer, answer])
   })
 })

@@ -119,10 +119,10 @@ export interface ObservedDeps {
   /** The hc terminal whose foreground is that pid, when exactly one is (hcSource.ts terminalOf). Absent, nothing is
    *  paired. */
   herdrTerminal?(pid: number): string | undefined
-  /** The place of an agent nested in a multiplexer whose own pty is no tab (outer.ts firstOuter of herdrOuter.ts's
-   *  lookup and tmux.ts createOuter's, of tmux and Zellij), by its event's hints and caller: undefined at once when it is
-   *  not nested; else the app holding that multiplexer's client, the client's tty and its process, `{}` when none was
-   *  found, never rejected. Absent, nothing is learned. */
+  /** The place of an agent nested in a multiplexer whose own pty is no tab (outer.ts firstOuter of herdrOuter.ts's,
+   *  tmux.ts's and zellij.ts's lookups), by its event's hints and caller: undefined at once when it is not nested; else
+   *  the app holding that multiplexer's client, the client's tty and its process, `{}` when none was found, never
+   *  rejected. Absent, nothing is learned. */
   outer?: OuterLookup
 }
 
