@@ -1489,6 +1489,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   waitingForRef = (s) => input.waitingFor(s.agentId) ?? input.waitingFor(s.sessionId)
   backend.waitingForProvider = waitingForRef
   startingRef = (s) => agentStarting(s, input.firstTaskWaiting(s.agentId), Date.now())
+  backend.startingProvider = startingRef
   const deviceInput = inputs.deviceInput
 
   // agy's turn closed from its pane when its final Stop never comes (core/turns/agyBackstop.ts).
