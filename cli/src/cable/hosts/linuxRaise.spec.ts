@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { createServer, type Server } from 'node:net'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -12,6 +12,20 @@ import type { LinuxDesktop } from './linuxDesktop.js'
 import { createLinuxRaise, systemLinuxRaise, type LinuxRaiseDeps, type RaiseTarget } from './linuxRaise.js'
 import type { OrcaDeps } from './orca.js'
 import { WALK_PARENTS } from './scannedApp.js'
+
+/** The paths the file system says are another account's, when a test says so: no test can make one. */
+const foreign = vi.hoisted(() => new Set<string>())
+vi.mock('node:fs', async (importOriginal) => {
+  const real = await importOriginal<typeof import('node:fs')>()
+  return {
+    ...real,
+    lstatSync: ((path: string, options?: object) => {
+      const seen = real.lstatSync(path, options)
+      if (seen && foreign.has(path)) seen.uid += 1
+      return seen
+    }) as typeof real.lstatSync,
+  }
+})
 
 const SWAY: LinuxDesktop = { kind: 'sway', socket: '/run/user/1000/sway-ipc.1000.7.sock' }
 const HYPRLAND: LinuxDesktop = { kind: 'hyprland', signature: 'abc_1700000000_x' }
@@ -166,6 +180,7 @@ describe('systemLinuxRaise', () => {
   })
   afterEach(async () => {
     vi.unstubAllEnvs()
+    foreign.clear()
     await Promise.all(servers.splice(0).map((server) => new Promise((done) => server.close(done))))
     rmSync(folder, { recursive: true, force: true })
   })
@@ -248,6 +263,32 @@ describe('systemLinuxRaise', () => {
       expect(existsSync(file)).toBe(false)
     }
     expect(loaded[0].file).not.toBe(loaded[1].file)
+  })
+
+  it.each([
+    ['the runtime dir is not 0700', (runtime: string) => chmodSync(runtime, 0o755)],
+    ['harness is a link', (runtime: string) => {
+      mkdirSync(join(runtime, 'elsewhere'))
+      symlinkSync(join(runtime, 'elsewhere'), join(runtime, 'harness'))
+    }],
+    ["harness is another account's", (runtime: string) => {
+      mkdirSync(join(runtime, 'harness'), { mode: 0o700 })
+      foreign.add(join(runtime, 'harness'))
+    }],
+  ])('on KDE writes no script and loads none when %s', async (_, arrange) => {
+    arrange(folder)
+    session({ XDG_RUNTIME_DIR: folder, DBUS_SESSION_BUS_ADDRESS: BUS })
+    // A KWin that would load and run any script it is handed.
+    const { runs, lines, raise } = machine((args) =>
+      args.includes('string:org.kde.KWin') ? { code: 0, stdout: RECORDED_KWIN.nameHasOwner.stdout }
+        : args.includes('org.kde.kwin.Scripting.loadScript') ? { code: 0, stdout: RECORDED_KWIN.loadScript.stdout }
+          : args.includes('org.kde.kwin.Script.run') ? { code: 0, stdout: RECORDED_KWIN.run.stdout } : undefined)
+    await vi.waitFor(() => expect(lines).toEqual(['[device] raise · kwin']))
+    expect(await raise.raise({ app: 'kitty' })).toBe(false)
+    expect(runs.filter(([, args]) => args.includes('org.kde.kwin.Scripting.loadScript'))).toEqual([])
+    for (const each of [join(folder, 'harness'), join(folder, 'elsewhere')]) {
+      if (existsSync(each)) expect(readdirSync(each), each).toEqual([])
+    }
   })
 
   it('on GNOME asks the extension for the app\'s class over the bus found', async () => {
