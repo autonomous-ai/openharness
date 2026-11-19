@@ -2544,6 +2544,20 @@ describe('binding an OpenClaw pane, read from its screen', () => {
       expect(await pass(780, banner, START + 600_000)).toBe(true)
     })
 
+    it('a TUI started on Windows counts from its start too', async () => {
+      row.registeredAt = START - 3_600_000
+      // Windows names a process's start by its FILETIME, 100 ns since 1601 (lib/processProof.ts `startMarkerMs`).
+      const startMarker = `w:${(BigInt(START + 600_000) + 11_644_473_600_000n) * 10_000n}`
+      const windowsPass = async (second: number): Promise<boolean> => {
+        vi.setSystemTime(START + second * 1_000)
+        await run.binding.bindObservedAgent(tui({ processIdentity: { pid: 7714, startMarker, executable: 'openclaw' } }))
+        return row.launch?.state === 'failed'
+      }
+      expect(await windowsPass(0)).toBe(false)
+      expect(await windowsPass(779)).toBe(false)
+      expect(await windowsPass(780)).toBe(true)
+    })
+
     it('a TUI start that cannot be read counts from the row\'s registration or the first pass', async () => {
       const unread = tui({ processIdentity: { pid: 7714, startMarker: 'unknown', executable: 'openclaw' } })
       vi.setSystemTime(START + 60_000)
