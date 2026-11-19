@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { MAX_TEXT } from './hosts/orca.js'
 
 export type DraftState = {
   ok: boolean; active: boolean; id: string; revision: number; agentId?: string; name?: string
@@ -13,7 +14,7 @@ type Entry = {
   carryId?: string; undo?: { text: string; index: number }; error?: string
   sent?: boolean; settled?: boolean; receipt?: Promise<DraftState>; submit: (text: string) => Promise<Receipt>
 }
-const MAX_BYTES = 16_000, PART_BYTES = 480
+const PART_BYTES = 480
 
 /** Bounded viewports over the exact transcript; joining the spans loses no whitespace. */
 function spans(text: string): Span[] {
@@ -33,7 +34,7 @@ function spans(text: string): Span[] {
   return out
 }
 function valid(text: string): boolean {
-  return !!text.trim() && Buffer.byteLength(text, 'utf8') <= MAX_BYTES &&
+  return !!text.trim() && text.length <= MAX_TEXT &&
     !/[\x00-\x09\x0b-\x1f\x7f-\x9f]/.test(text)
 }
 export class VoiceDraft {
