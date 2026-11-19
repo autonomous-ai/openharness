@@ -178,7 +178,8 @@ void max_layer_kept(ht_scene_t *s, int x, int l, int r, max_paint_t paint, const
 void max_layer_pet(ht_scene_t *s, int from, unsigned ground, int dim, unsigned keep);
 // The runs from `from` on, an agent of the row drawn on the glass from x (w wide) with its colours dimmed `dim` of the
 // way (max_dim) and its pets by max_layer_pet, cut to the glass's [l, r) as its own layer would be cut, and its rail
-// and its sides blurred as the layer's blur would blur them.
+// and its sides blurred as the layer's blur would blur them: those a warming made ahead for the same runs and place
+// kept like a pet's image, the rest worked out in the frame.
 void max_layer_cut(ht_scene_t *s, int from, int x, int w, int l, int r, int dim);
 // A light across a rail from the glass's lx, lw wide: `base` at its ends, `peak` in its middle, cut to the glass's
 // [l, r) and RAIL_H down from the top, as one of this frame's images (dithered: a ramp this long bands in RGB565).
@@ -186,6 +187,8 @@ void max_layer_cut(ht_scene_t *s, int from, int x, int w, int l, int r, int dim)
 void max_layer_light(ht_scene_t *s, int lx, int lw, int l, int r, unsigned base, unsigned peak);
 // How many layers and pets were rasterised so far (a test's count of what was kept).
 unsigned max_layer_painted(void);
+// How many agents between looks had their edges worked out on the glass so far, none kept for them (a test's count).
+unsigned max_layer_edges(void);
 // Every kept layer and pet image dropped, the pets' pixels scribbled over (a test's fresh start).
 void max_layer_forget(void);
 // The frame being drawn: what max_layer_warm keeps from.
@@ -196,8 +199,8 @@ typedef enum { MAX_WARM_DONE, MAX_WARM_MORE, MAX_WARM_FULL } max_warm_t;
 // A step of frames drawn off the glass to paint what a motion will show (max_ui_warm.c) begins, from `from` (a
 // max_layer_now) on, or the step ends (0). In it no image or layer used since `from` is given up for one (the glass's
 // and what the warming made stay), nothing is painted: the first image or layer it needs (none while one is owed) is
-// taken and left for max_layer_warm_paint; and its agents between looks are left uncut (their cuts and edges are each
-// frame's own). Returns what the step that ends met.
+// taken and left for max_layer_warm_paint; and its agents between looks are left uncut (their cuts are each frame's
+// own), their edges left to make like an image. Returns what the step that ends met.
 max_warm_t max_layer_warm(uint32_t from);
 // The image or layer a warming step left made, a band of rows at a time (about a ms on the P4), while go_on() says
 // so, at least one band: true while some of it is left. It reads none of the model: out of

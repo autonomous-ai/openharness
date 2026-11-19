@@ -1,10 +1,10 @@
 // App Detail's next motion painted ahead (max_ui_warm.c): while the row rests, each open a tap can start and the open
-// agent's close are drawn off the glass as the tap will draw them, so that the motion, with room for all of it,
-// paints no image and bakes no pet frame from its first frame to its last (its open agent's pet, on the clock, may
-// need a pose the warming did not land on: none when the tap comes on the warming's own clock); with room for less,
-// every motion's first frames still; the glass shows the same pixels as without it; the model is left as it was; a
-// step under the lock paints nothing, and what it needs is made out of it a band at a time, the same pixels as made
-// whole; and nothing is painted ahead while the row is not at rest.
+// agent's close are drawn off the glass as the tap will draw them, so that the motion, with room for all of it, paints
+// no image, bakes no pet frame and works out no agent's edges from its first frame to its last (its open agent's pet,
+// on the clock, may need a pose the warming did not land on: none when the tap comes on the warming's own clock); with
+// room for less, every motion's first frames still; the glass shows the same pixels as without it; the model is left as
+// it was; a step under the lock paints nothing, and what it needs is made out of it a band at a time, the same pixels
+// as made whole; and nothing is painted ahead while the row is not at rest.
 #include "max_test.h"
 #include "pod/pod_draw.h"
 #include "pod/pod_pet.h"
@@ -123,23 +123,24 @@ static void tap(const char *id, uint32_t at)
     CHECK(max_m.view == MAX_VIEW_AGENT && !strcmp(max_m.selected, id));
 }
 
-// The motion a tap on `id` at `at` starts, until it rests: its frames' pixels into hash (as many as `frames`), and
-// what it painted and baked.
-typedef struct { int frames; unsigned painted, baked; uint32_t hash[128]; uint8_t paints[128]; } motion_t;
+// The motion a tap on `id` at `at` starts, until it rests: its frames' pixels into hash (as many as `frames`), what it
+// painted and baked, and the agents' edges it worked out on the glass.
+typedef struct { int frames; unsigned painted, baked, edges; uint32_t hash[128]; uint8_t paints[128]; } motion_t;
 static motion_t motion_at(const char *id, uint32_t at)
 {
     motion_t m = {0};
-    const unsigned painted = max_layer_painted(), baked = pod_cell_bakes();
+    const unsigned painted = max_layer_painted(), baked = pod_cell_bakes(), edges = max_layer_edges();
     tap(id, at);
     for (uint32_t now = at;; now += MAX_ROW_FRAME_MS) {
         CHECK(m.frames < 128);
-        const unsigned p0 = max_layer_painted() + pod_cell_bakes();
+        const unsigned p0 = max_layer_painted() + pod_cell_bakes() + max_layer_edges();
         m.hash[m.frames] = frame(now);
-        m.paints[m.frames++] = (uint8_t)(max_layer_painted() + pod_cell_bakes() - p0);
+        m.paints[m.frames++] = (uint8_t)(max_layer_painted() + pod_cell_bakes() + max_layer_edges() - p0);
         if (!max_row_moving(now)) break;
     }
     m.painted = max_layer_painted() - painted;
     m.baked = pod_cell_bakes() - baked;
+    m.edges = max_layer_edges() - edges;
     return m;
 }
 static motion_t motion(const char *id) { return motion_at(id, T0); }
@@ -147,8 +148,8 @@ static motion_t motion(const char *id) { return motion_at(id, T0); }
 // What the ahead motion painted, frame by frame, when it should have painted nothing.
 static void painted_where(const char *page, const char *tap, const motion_t *m, int steps)
 {
-    fprintf(stderr, "  %s, tap %s: %u painted, %u baked after %d steps ahead:", page ? page : "overview",
-            tap[0] ? tap : "X", m->painted, m->baked, steps);
+    fprintf(stderr, "  %s, tap %s: %u painted, %u baked, %u edges after %d steps ahead:", page ? page : "overview",
+            tap[0] ? tap : "X", m->painted, m->baked, m->edges, steps);
     for (int f = 0; f < m->frames; f++)
         if (m->paints[f]) fprintf(stderr, " f%d %u", f, m->paints[f]);
     fprintf(stderr, "\n");
@@ -180,20 +181,23 @@ static void test_ahead(void)
         CHECK(n == 3);
         static motion_t cold[MAX_ROW_HITS + 1];
         int most = 0;
+        unsigned edges = 0;
         for (int t = 0; t < n; t++) {
             rest_of(cases[c].n, cases[c].page, cases[c].engine);
             cold[t] = motion(taps[t]);
             CHECK(cold[t].painted > 0);   // there is something to paint ahead
-            most += cold[t].frames + (int)(cold[t].painted + cold[t].baked);
+            most += cold[t].frames + (int)(cold[t].painted + cold[t].baked + cold[t].edges);
+            edges += cold[t].edges;
         }
+        CHECK(edges > 0);   // agents between looks whose edges the glass works out
         for (int t = 0; t < n; t++) {
             const char *tap = taps[t];
             rest_of(cases[c].n, cases[c].page, cases[c].engine);
             const int steps = warm(T0);
             CHECK(steps > 10 && steps <= most + 1);   // and the last, which finds nothing left
             const motion_t ahead = motion(tap);
-            if (ahead.painted || ahead.baked) painted_where(cases[c].page, tap, &ahead, steps);
-            CHECK(ahead.painted == 0 && ahead.baked == 0);
+            if (ahead.painted || ahead.baked || ahead.edges) painted_where(cases[c].page, tap, &ahead, steps);
+            CHECK(ahead.painted == 0 && ahead.baked == 0 && ahead.edges == 0);
             CHECK(ahead.frames == cold[t].frames);
             CHECK(!memcmp(ahead.hash, cold[t].hash, (size_t)cold[t].frames * sizeof cold[t].hash[0]));
         }
