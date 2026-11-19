@@ -1218,11 +1218,12 @@ describe('binding a running process to its session', () => {
       vi.mocked(findLiveSession).mockRejectedValueOnce(incomplete).mockRejectedValueOnce(incomplete).mockRejectedValueOnce(incomplete)
         .mockRejectedValueOnce(unsettled).mockResolvedValueOnce(null).mockRejectedValueOnce(incomplete)
       for (let pass = 0; pass < 6; pass++) await run.binding.bindObservedAgent(codex())
+      // The log names the hold's kind; its words are on the row (setIdentityHold), which clients are sent.
       expect(said()).toEqual([
-        '[discovery] a1 binding held · This Harness install is incomplete. Reinstall Harness.',
-        '[discovery] a1 binding held · a native child changed during inspection',
+        '[discovery] a1 binding held · IdentityReadUnavailable IDENTITY_UNAVAILABLE',
+        '[discovery] a1 binding held · Error',
         '[discovery] a1 binding released · its native evidence was read completely',
-        '[discovery] a1 binding held · This Harness install is incomplete. Reinstall Harness.',
+        '[discovery] a1 binding held · IdentityReadUnavailable IDENTITY_UNAVAILABLE',
       ])
     })
 

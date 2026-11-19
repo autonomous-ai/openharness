@@ -30,6 +30,7 @@ import {
   buildEngineCommandArgv, buildEngineLaunchArgv, engineLaunchEnv, namedAgentArgs, permissionModeApproves, permissionModeFlags,
   launchAttempts, refusePermissionFlagIfUnsupported, supportsFirstPrompt, supportsNamedAgent, typedFirstPrompt, NamedAgentUnsupportedError,
 } from '../../lib/engineLaunch.js'
+import { errorKind } from '../../lib/log.js'
 import { setUpWithin } from '../../lib/setUpWithin.js'
 import { agentLaunchArgs, joinedInstructions } from '../../lib/agentAttribution.js'
 import { machineMcpLaunchArgs } from '../../lib/machineMcp.js'
@@ -258,11 +259,11 @@ export function createAgentCreator({
           try {
             // In the agent's own profile when it has one: that config.toml is the one a Codex agent reads.
             folderTrust(engine, engine === 'claude' ? claudeHome : codexHome)?.record(cwd)
-          } catch (error) { console.warn(`[dsh] pre-trust ${cwd} · ${error instanceof Error ? error.message : error}`) }
+          } catch (error) { console.warn(`[dsh] pre-trust skipped · ${errorKind(error)}`) }
         }
       } catch (error) {
         const detail = `could not prepare the workspace for ${dsh} · ${error instanceof Error ? error.message : error}`
-        console.warn(`[agent] create ${dsh} refused · ${detail}`)
+        console.warn(`[agent] create ${dsh} refused · could not prepare the workspace for ${dsh} · ${errorKind(error)}`)
         return { ok: false, error: 'DSH_MATERIALIZE_FAILED', detail }
       }
       const prepared = await dshLaunch.launch({ dsh, workspace: cwd, engine, key: label, account: dshAccount })
@@ -296,7 +297,7 @@ export function createAgentCreator({
           gridLaunch.args = [...gridLaunch.args, ...handOff.args]
         } catch (error) {
           const detail = `could not write ${engine}'s grid configuration · ${error instanceof Error ? error.message : error}`
-          console.warn(`[agent] create ${engine} refused · ${detail}`)
+          console.warn(`[agent] create ${engine} refused · could not write ${engine}'s grid configuration · ${errorKind(error)}`)
           return { ok: false, error: 'GRID_CONFIG_FAILED', detail, ...(native ? { unavailable: 'native' } : {}) }
         }
       }
@@ -318,7 +319,7 @@ export function createAgentCreator({
           const profile = engine === 'codex' && environment ? nativeHookLocations(environment).CODEX_HOME : engine === 'claude' ? claudeHome : codexHome
           folderTrust(engine, profile, environment)?.record(cwd)
         }
-      } catch (error) { console.warn(`[agent] pre-trust ${cwd} · ${error instanceof Error ? error.message : error}`) }
+      } catch (error) { console.warn(`[agent] pre-trust skipped · ${errorKind(error)}`) }
     }
     if (native && !await native.prepareHooks(hooksDisabled ? 0 : hookPort, authority.current,
       { ...gridLaunch?.env, ...dshEnv }, gridLaunch ? gridConflictingEnvToClear(gridLaunch) : [])) return hooksHeld(engine, 'Waiting to confirm the engine’s native hooks.')

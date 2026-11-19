@@ -31,6 +31,7 @@ import {
 } from '../../lib/engineLaunch.js'
 import { parseGridLaunchOverride, type GridLaunchOverride } from '../../lib/gridLaunchWire.js'
 import { parseLaunchModel } from '../../lib/launchModel.js'
+import { errorKind } from '../../lib/log.js'
 import { parseNewAgentModel, type NewAgentModel } from '../../lib/newAgentModel.js'
 import { parseProjectFolder, prepareNewFolder, projectsRoot, ProjectFolderError, type ProjectFolder } from '../../lib/projectFolder.js'
 import type { ScmLaunchRecord } from '../../scm/types.js'
@@ -176,7 +177,7 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
             && engineTrust.trusts(projectFolder.gitSource)))) {
           engineTrust.record(preparedFolder)
         }
-      } catch (error) { console.warn(`[agent] pre-trust ${preparedFolder} · ${error instanceof Error ? error.message : error}`) }
+      } catch (error) { console.warn(`[agent] pre-trust skipped · ${errorKind(error)}`) }
     } else if (!dsh && !resumeSessionId && local && dirname(input.cwd) === projectsRoot()) {
       // On the LOCAL machine the desktop makes a new workspace ITSELF and sends the path as a plain
       // cwd, so `projectFolder` above never sees it. Such a folder is empty and is trusted the way a
@@ -195,7 +196,7 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
       try {
         const empty = await readdir(input.cwd).then((names) => names.length === 0, () => false)
         if (empty) folderTrust(input.engine, input.codexHome ?? input.claudeHome ?? null)?.record(input.cwd)
-      } catch (error) { console.warn(`[agent] pre-trust ${input.cwd} · ${error instanceof Error ? error.message : error}`) }
+      } catch (error) { console.warn(`[agent] pre-trust skipped · ${errorKind(error)}`) }
     }
     const result = await invoke(preparedFolder ? { ...input, cwd: preparedFolder, scmLaunchRecord } : input)
     if (result.ok) return { state: 'created', agentId: result.session.agentId, ...(clonedVia ? { clonedVia } : {}) }

@@ -57,7 +57,8 @@ describe.runIf(process.platform === 'darwin')('a build without its native helper
     // Once by the end of the test, a few seconds after the hold: no more than that. The daemon gives no per-pass signal
     // to wait on, and no sleep stands in for one, so one more 5 s pass or none may have run by now. That a later pass
     // logs nothing is bind.spec.ts's ('logs a hold once, ...').
-    expect(d.log().split(`binding held · ${MISSING_HELPER}`)).toHaveLength(2)
+    // The log names the hold's kind; its sentence is the row's namedState, read above.
+    expect(d.log().split('binding held · IdentityReadUnavailable IDENTITY_UNAVAILABLE')).toHaveLength(2)
     client.close()
   }, 180_000)
 })

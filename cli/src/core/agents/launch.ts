@@ -17,7 +17,7 @@ import { dropPermissionFlagIfUnsupported } from '../../lib/engineLaunch.js'
 import { gridUnavailable, type GridLaunchAnswer, type GridLaunchRequest } from '../../lib/gridLaunchWire.js'
 import { buildLaunchOverrides, type LaunchOverrides, type LaunchOverridesDeps, type LaunchOverridesResult, type LaunchSource } from '../../lib/launchOverrides.js'
 import type { ModelsPort } from '../api.js'
-import { sid } from '../../lib/log.js'
+import { errorKind, sid } from '../../lib/log.js'
 import { prepareInstructionWrites } from '../../scm/launch.js'
 import type { registry, RegisteredSession } from '../../lib/registry.js'
 
@@ -142,7 +142,7 @@ export function createLaunchHelpers({ authority, prepareApiTools, launchOverride
         const home = bringPiSessionHome(session.transcriptPath, roots, sessions)
         if (home && home !== session.transcriptPath) console.log(`[resume] ${sid(session.agentId)} · pi's conversation brought home · ${home}`)
       } catch (error) {
-        console.warn(`[resume] ${sid(session.agentId)} · could not bring pi's conversation home · ${error instanceof Error ? error.message : error}`)
+        console.warn(`[resume] ${sid(session.agentId)} · could not bring pi's conversation home · ${errorKind(error)}`)
       }
     }
     const repair = await prepareResume(session, current)
