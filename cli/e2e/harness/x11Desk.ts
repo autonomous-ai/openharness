@@ -6,8 +6,9 @@
  */
 import { execFile, spawn, type ChildProcess } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
-import { mkdir, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { lstatSync, readdirSync } from 'node:fs'
+import { mkdir, rm, symlink, writeFile } from 'node:fs/promises'
+import { dirname, join } from 'node:path'
 import type { Readable } from 'node:stream'
 import { promisify } from 'node:util'
 import { resolveBinaryOnPath } from '../../src/lib/binaryOnPath.js'
@@ -22,6 +23,7 @@ const run = promisify(execFile)
 const onLinux = (name: string) => dialHost(name, process.platform === 'linux' ? resolveBinaryOnPath(name) : null)
 const BIN = { xvfb: onLinux('Xvfb'), openbox: onLinux('openbox'), wmctrl: onLinux('wmctrl'), xterm: onLinux('xterm'), xprop: onLinux('xprop') }
 export const x11Installed = Object.values(BIN).every((found) => found !== null)
+const X11_SOCKETS = '/tmp/.X11-unix'
 
 /** One MIT-MAGIC-COOKIE-1 entry in Xauthority's layout, every part but the family length-prefixed, big-endian. The
  *  wild family with no address and no display number matches any display, so it is written before Xvfb picks one. */
@@ -51,6 +53,10 @@ export class X11Desk {
     if (!x11Installed) throw new Error('Xvfb, openbox, wmctrl, xterm or xprop is not installed')
     const xauthority = join(d.env.HOME!, '.Xauthority')
     await writeFile(xauthority, cookieEntry(), { mode: 0o600 })
+    // Every daemon's bin holds a wmctrl that refuses (daemon.ts): this desk's runs the real one.
+    const wmctrl = join(dirname(d.env.CLAUDE_PATH!), 'wmctrl')
+    await rm(wmctrl, { force: true })
+    await symlink(BIN.wmctrl!, wmctrl)
     // -displayfd: Xvfb takes the lowest free display and writes its number once it accepts clients. -noreset: no
     // client's leaving makes it start over.
     const server = spawn(BIN.xvfb!, ['-displayfd', '3', '-auth', xauthority, '-nolisten', 'tcp', '-noreset', '-screen', '0', '1280x800x24'], {
@@ -95,6 +101,18 @@ export class X11Desk {
       return row ? Number.parseInt(row[1], 16) : null
     }, 20_000, 100)
     return { pid, window }
+  }
+
+  /** Whether an X server of root's or this account's holds a display below this desk's: a daemon given no DISPLAY takes
+   *  the lowest such (cable/hosts/linuxDesktop.ts), which would be that server, the developer's own, not this desk. */
+  serverBelow(): boolean {
+    const own = Number(this.display.slice(1))
+    const uid = process.getuid!()
+    return readdirSync(X11_SOCKETS).some((name) => {
+      const number = /^X(0|[1-9][0-9]*)$/.exec(name)?.[1]
+      const seen = number === undefined || Number(number) >= own ? undefined : lstatSync(join(X11_SOCKETS, name), { throwIfNoEntry: false })
+      return !!seen?.isSocket() && (seen.uid === uid || seen.uid === 0)
+    })
   }
 
   /** The window `_NET_ACTIVE_WINDOW` names, as a number: xprop prints it without wmctrl's leading zeros. */

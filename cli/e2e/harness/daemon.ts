@@ -380,6 +380,11 @@ export class IsolatedDaemon {
     // Nor does it ask this computer's scheme handlers: on Linux a link opens only once xdg-mime names the scheme's app
     // (cable/hosts/appLink.ts), and one that prints nothing names none, so no link reaches the developer's own apps.
     await writeFile(join(dirs.bin, 'xdg-mime'), '#!/bin/sh\nexit 0\n', { mode: 0o755 })
+    // Nor does a tap raise a window on the developer's own X display. A daemon with no DISPLAY finds the lowest X server
+    // socket of root's or this account's in /tmp/.X11-unix (cable/hosts/linuxDesktop.ts), whatever its home, and
+    // /usr/bin's wmctrl is on its PATH: a wmctrl that refuses, until an X11 desk of the test's own links the real one
+    // (harness/x11Desk.ts).
+    await writeFile(join(dirs.bin, 'wmctrl'), '#!/bin/sh\nexit 1\n', { mode: 0o755 })
     // Nor does its open scan see a file held outside its root. The scan reads every `codex` on the computer
     // (sessionSearch/externals/support.ts) and the devices write the dial skill into each Codex home whose rollout one
     // holds: every daemon with a dial attached wrote it into another test's Codex homes, and deviceDialSkill.e2e.ts

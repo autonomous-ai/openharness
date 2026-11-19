@@ -5,12 +5,13 @@
  * display from its DISPLAY, or with none from the X server's socket in /tmp/.X11-unix, as one started before the
  * session exported it would.
  *
- * Skipped where the X11 programs are not installed, and off Linux. CI's `e2e (dial hosts)` job installs them, and there
- * a missing one fails the file (harness/dialHosts.ts).
+ * Skipped where the X11 programs are not installed, and off Linux; the case with neither variable also where an X server
+ * of the developer's holds a lower display. CI's `e2e (dial hosts)` job installs them, and there a missing one fails the
+ * file (harness/dialHosts.ts), and a lower display the case.
  */
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
+import { afterEach, describe, expect, it, onTestFailed, type TestContext } from 'vitest'
 import { observedAgentId } from '../src/cable/hosts/observed.js'
 import { IsolatedDaemon, until } from './harness/daemon.js'
 import { Desk } from './harness/desk.js'
@@ -47,7 +48,7 @@ describe.skipIf(!x11Installed)("a tap raises the agent's window on X11", () => {
   })
 
   /** A daemon on its own X11 desk, given its DISPLAY and XAUTHORITY when [exported], with a dial attached; then the tap. */
-  async function tapRaises(exported: boolean): Promise<void> {
+  async function tapRaises(exported: boolean, context: TestContext): Promise<void> {
     const d = await IsolatedDaemon.create({ env: { CABLE_DISABLE: 'false' } })
     daemon = d
     onTestFailed(() => {
@@ -57,6 +58,12 @@ describe.skipIf(!x11Installed)("a tap raises the agent's window on X11", () => {
     // Up before the daemon: its raise looks for the desktop as it starts.
     const x = await X11Desk.start(d)
     x11 = x
+    // With neither, the daemon takes the lowest X server of root's or this account's: one below the desk's is the
+    // developer's own display, where the tap must never raise a window. A dial-hosts runner has none.
+    if (!exported && x.serverBelow()) {
+      if (process.env.E2E_DIAL_HOSTS === '1') throw new Error(`an X server holds a display below ${x.display} on a dial-hosts run`)
+      context.skip(`an X server of this account's or root's holds a display below ${x.display}`)
+    }
     if (exported) Object.assign(d.env, { DISPLAY: x.display, XAUTHORITY: x.xauthority })
     const file = join(d.root, 'dials.json')
     d.env.HARNESSD_TEST_DIAL_PORT = file
@@ -85,7 +92,7 @@ describe.skipIf(!x11Installed)("a tap raises the agent's window on X11", () => {
     expect(dial.messages.slice(since).filter((m) => m.t === 'toast')).toEqual([])
   }
 
-  it('with the DISPLAY and XAUTHORITY the session exported', () => tapRaises(true))
+  it('with the DISPLAY and XAUTHORITY the session exported', (context) => tapRaises(true, context))
 
-  it('with neither, from the X server socket and ~/.Xauthority', () => tapRaises(false))
+  it('with neither, from the X server socket and ~/.Xauthority', (context) => tapRaises(false, context))
 })
