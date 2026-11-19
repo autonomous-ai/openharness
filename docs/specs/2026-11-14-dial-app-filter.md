@@ -255,8 +255,11 @@ and a desktop change. The rings are memory only too, as swipe-order decided.
 - `runDialWatch` (`cli/src/devices/client.ts`) maps the value to an app id through a table next to `hostDetect.ts`:
   the bundle ids `detectApp` knows (kitty's, WezTerm's and Harness Desktop's among them), plus the exe names: Linux's
   `code`, `cursor`, `wezterm-gui` (WezTerm's `CFBundleExecutable`, the same `Info.plist`), `kitty`, `ghostty` and
-  `harness` (Harness Desktop's, `desktop/linux/CMakeLists.txt`, `BINARY_NAME`), and
-  Windows's `Code.exe`, `Cursor.exe` and `WindowsTerminal.exe`, which nothing sends until the Windows source exists.
+  `harness` (Harness Desktop's, `desktop/linux/CMakeLists.txt`, `BINARY_NAME`), the Claude app's `claude-desktop`
+  (→ `claude`) and the ChatGPT app's `ChatGPT` (→ `codex`), as their Linux packages run (`ps -o comm=`,
+  `cli/src/testing/recordedLinuxApps.ts`), and Windows's `Code.exe`, `Cursor.exe` and `WindowsTerminal.exe`, which
+  nothing sends until the Windows source exists. The table is one for both systems (a name is lower-cased and `.exe`
+  dropped), so `ChatGPT.exe` maps to `codex` too.
   The list is closed: a new row is a new decision.
 - An app the table does not know is `none`: no listed app is in front. `none` is not an app id. It is never the
   unknown app `terminal` ("Other"): Safari in front and an agent in an unknown terminal are different things, so on

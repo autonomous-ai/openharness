@@ -185,12 +185,19 @@ hook carries over to the Linux opener.
 
 The links this turns on:
 
-| Link | App on Linux | Adapter |
-|---|---|---|
-| `vscode://anthropic.claude-code/open?session=<id>` | VS Code | `vscode.ts` |
-| `cursor://anthropic.claude-code/open?session=<id>` | Cursor | `vscode.ts` |
-| `claude://code/continue?session=<id>` | the Claude desktop app (Linux beta, Ubuntu/Debian) | `claudeApp.ts` |
-| `codex://threads/<id>` | the ChatGPT desktop app (Linux preview) | `codexApp.ts` |
+| Link | App on Linux | Adapter | On Linux, as recorded |
+|---|---|---|---|
+| `vscode://anthropic.claude-code/open?session=<id>` | VS Code | `vscode.ts` | on: `code` 1.147.0 registers `vscode` (`com.microsoft.VSCode.UrlHandler.desktop`) |
+| `cursor://anthropic.claude-code/open?session=<id>` | Cursor | `vscode.ts` | on: `cursor` 3.30.14 registers `cursor` (`cursor-url-handler.desktop`) |
+| `claude://code/continue?session=<id>` | the Claude desktop app (Linux beta, Ubuntu/Debian) | `claudeApp.ts` | on: `claude-desktop` 5.11492.5 registers `claude` (`com.anthropic.Claude.desktop`) |
+| `codex://threads/<id>` | the ChatGPT desktop app (Linux preview) | `codexApp.ts` | on: `chatgpt` 26.1111.71704 registers `codex` (`chatgpt.desktop`) |
+
+All four are the vendors' own `.deb` packages, recorded in `cli/src/testing/recordedLinuxApps.ts`. The process names
+are `code`, `cursor`, `claude-desktop` and `ChatGPT` (the ChatGPT package's `chatgpt` launcher execs `ChatGPT`), which
+the exe table maps to `vscode`, `cursor`, `claude` and `codex`. The window classes are each `.desktop` file's
+`StartupWMClass`: `com.microsoft.VSCode`, `Cursor` and `com.anthropic.Claude`. The ChatGPT app's `.desktop` file has
+none, so the raise has no class for `codex` and finds its window by pid only; that file also claims `http` and `https`,
+which makes it a browser candidate but changes nothing for `codex://`.
 
 Each adapter's `paneOf` today needs a macOS bundle hint to know its app. On Linux it reads the same facts Linux
 gives: the app from the process scan (`place.app`, from `frontApp.ts`'s exe names) or the hook's own hints. The exe
@@ -230,10 +237,14 @@ fails or finds nothing answers false and the tap's own outcome stays the pane's.
 ### 2.2 Which window
 
 1. The agent's process chain (the existing `ps` walk, `scannedApp.ts` `parentChain`) from the agent's pid upward: the
-   first ancestor that owns a window is the terminal's (or the editor's) window. For tmux, the chain starts from the
-   client tmux switched (`tmux.ts` already finds that client's pid).
-2. None found by pid: the app's window by its class, from the place's app (`wezterm` → `org.wezfurlong.wezterm`,
-   `code` → `Code`, …, one fixed table beside `frontApp.ts`'s exe names), as macOS raises an app by bundle.
+   first ancestor that owns a window is the terminal's (or the editor's) window. The chain starts from the agent's
+   window as the observed source knows it (`ObservedSource.windowOf`): for an agent in a tmux or Zellij pane, the pid of
+   the client that shows its session, as the outer lookup found it (`createOuter` in `tmux.ts`, with `tmuxClients` and
+   `zellijClients`), else its caller's or its own pid. When a tap ran tmux's `switch-client`, the adapter's `windowPid`
+   gives the client it switched instead, asked once after that focus.
+2. None found by pid: the app's window by its class, from the place's app (`windowClasses` in `frontApp.ts`, one fixed
+   table beside its exe names: `vscode` → `com.microsoft.VSCode`, `wezterm` → `org.wezfurlong.wezterm`, …, with the
+   lower-cased spelling some desktops use), as macOS raises an app by bundle. An app with no confirmed class has no row.
 
 ### 2.3 How, per desktop
 
@@ -244,11 +255,11 @@ sockets in `$XDG_RUNTIME_DIR` when the variables are absent:
 
 | Desktop | Found by | Raise |
 |---|---|---|
-| sway | `$SWAYSOCK`, else `$XDG_RUNTIME_DIR/sway-ipc.<uid>.*.sock` | `swaymsg -s <sock> '[pid=<p>] focus'`, else `[app_id=<class>]` |
-| Hyprland | `$HYPRLAND_INSTANCE_SIGNATURE`, else `$XDG_RUNTIME_DIR/hypr/<sig>/` | `hyprctl -i <sig> dispatch focuswindow pid:<p>`, else `class:<class>` |
-| KDE Plasma (Wayland or X11) | `org.kde.KWin` on the session bus (`$XDG_RUNTIME_DIR/bus`) | a KWin script loaded through `org.kde.kwin.Scripting` (`loadScript`, run, unload) that activates the window whose `pid` (else `resourceClass`) matches, through `dbus-send` |
-| GNOME on Wayland | `org.gnome.Shell` on the session bus and the Activate Window By Title extension's object answering | `activateByWmClass(<class>)` through `gdbus` (the extension matches by class, not pid) |
-| Any X11 desktop with an EWMH window manager | `$DISPLAY`, else `/tmp/.X11-unix/X<n>` with its `XAUTHORITY` (`$XAUTHORITY`, `~/.Xauthority`, or the session's Xwayland auth in `$XDG_RUNTIME_DIR`) | `wmctrl -lpx` to find the window by pid (else class), then `wmctrl -i -a <id>` |
+| sway | `$SWAYSOCK`, else `$XDG_RUNTIME_DIR/sway-ipc.<uid>.*.sock` (this account's, answering `get_version`) | `swaymsg -s <sock> -t get_tree`, then `'[pid=<p>] focus'` for the first pid that owns a window, else `'[con_id=<id>] focus'` for the first window of the class: its `app_id`, or for an XWayland window (whose `app_id` is null) its `window_properties.class` |
+| Hyprland | `$HYPRLAND_INSTANCE_SIGNATURE`, else `$XDG_RUNTIME_DIR/hypr/<sig>/.socket.sock`; a signature holds at least two `_` (`<commit>_<time>_<random>`), since `hyprctl -i` reads one without as an instance's number | `hyprctl -i <sig> clients -j`, then `dispatch focuswindow pid:<p>`, else `address:<address>` of the first window of the class (`class`, else `initialClass`); success is stdout `ok`, as `hyprctl` exits 0 on a miss too |
+| KDE Plasma (Wayland or X11) | `org.kde.KWin` on the session bus (`$DBUS_SESSION_BUS_ADDRESS`, else `$XDG_RUNTIME_DIR/bus`) | a KWin script loaded through `org.kde.kwin.Scripting` (`loadScript`, then `org.kde.kwin.Script.run` at `/Scripting/Script<id>` on Plasma 6, else `/<id>` on Plasma 5, then `unloadScript`) that activates the window whose `pid` (else `resourceClass`) matches, through `dbus-send`; the script reads `windowList`/`activeWindow` on Plasma 6 and `clientList`/`activeClient` on Plasma 5. A script that ran is a raise: it cannot say whether it found a window |
+| GNOME on Wayland | `org.gnome.Shell` on the session bus, and the Activate Window By Title extension on: its interface name in `gdbus introspect`'s output of its object (GDBus answers an introspection of any path) | `activateByWmClass(<class>)` through `gdbus`, `(true,)` a hit (the extension matches by class, not pid: a native window's app id, an XWayland window's WM_CLASS class part) |
+| Any X11 desktop with an EWMH window manager | `$DISPLAY`, else `/tmp/.X11-unix/X<n>` with its `XAUTHORITY` (`$XAUTHORITY`, `~/.Xauthority`, or the session's Xwayland auth in `$XDG_RUNTIME_DIR`) | `env DISPLAY=… XAUTHORITY=… wmctrl -lpx` to find the window by pid (else class, either side of `<instance>.<class>`), then `wmctrl -i -a <id>` |
 | Anything else (GNOME Wayland without the extension, an unknown compositor, no tool installed) | — | nothing: the tap focuses inside the terminal only |
 
 Order: the compositor's own IPC first (sway, Hyprland, KWin, GNOME), X11 last, since on Wayland the X11 socket is
@@ -259,8 +270,10 @@ once per process start which raise it found (`[device] raise · none · gnome wi
 lists what turns it on (install `wmctrl` on X11; the GNOME extension on GNOME Wayland). No error, no new screen.
 
 KWin takes a script only as a file (`loadScript(path, name)`) and passes it no arguments, so each KDE raise writes the
-fixed script with the checked pid or class filled in to a private file (`$XDG_RUNTIME_DIR/harness/`, mode 0600),
-loads it, runs it, unloads it and deletes the file. (Builder check; my call.)
+fixed script with the checked pids and classes filled in as JSON to a private file
+(`$XDG_RUNTIME_DIR/harness/raise-<pid>-<n>.js`, the folder 0700, the file 0600), loads it under a name of its own
+(`harness-raise-<pid>-<n>`, so two raises at once never unload each other's), runs it, unloads it and deletes the file.
+(Builder check; my call.)
 
 Every command runs with no shell, the existing run timeout, one raise at a time (the opener's `running` set already
 holds that per agent), and a pid or class checked against its form before it reaches a command line or a KWin script
@@ -301,11 +314,17 @@ checks and orders the new names so a session in Zellij inside kitty keeps Zellij
   `zellij --session <s> action send-keys --pane-id <id> Enter`, one send at a time per pane. Before typing, the pane is
   checked against `zellij --session <s> action list-panes --json` (it exists, and is a terminal pane), so a closed pane
   whose id was reused is not typed into.
-- Follow: while a dial is attached, the dial follows the pane focused in Zellij through one `zellij subscribe` child per
-  session with a shown agent, as the Orca adapter follows `orca terminal watch-focus`, if 0.44's `subscribe` reports
-  focus changes. If it does not (to be read from the recorded output), there is no follow, and the spec's table and
-  `docs/cli.md` say so; no polling instead.
-- `canType`/`canFocus`: a `zellij` binary found on `PATH`.
+- No follow: the dial does not follow the pane focused in Zellij. 0.44's `subscribe` reports pane render updates
+  only, never a focus change (`RECORDED_ZELLIJ.subscribe`), so there is nothing to follow, and nothing polls instead.
+- `zellij` is found as the core finds tmux (`zellijFinder`, through `binaryFinder` in `tmux.ts`): on the devices
+  process's `PATH`, else where the person's login shell finds it, else in the folders the core looks in for tmux; none
+  found is asked again once one is there. One finder serves the tap, the words and the client lookup. `canFocus` is
+  true for any Zellij pane (a tap that finds no `zellij` brings the app forward, as tmux's does); `canType` is true for
+  the agent's own pane, not one that only holds it (herdr, Rex or tmux inside Zellij).
+- The page: the agent is on the page of the app that holds the Zellij client showing its session, found by the outer
+  lookup as tmux's (`zellijClients`). `list-clients` names no client's process or tty, so the client is read from the
+  process table, and only when the session has exactly one client and the machine one Zellij client; otherwise the
+  agent stays where its hints place it.
 
 ### 3.3 kitty
 
@@ -317,7 +336,10 @@ checks and orders the new names so a session in Zellij inside kitty keeps Zellij
 - `focus`: `kitten @ --to <listen_on> focus-window --match id:<id>`; `tap: 'before'`.
 - `type`: `kitten @ --to <listen_on> send-text --match id:<id> -- <text>`, then the Enter key
   (`send-key --match id:<id> enter`), one send at a time per window.
-- `canType`/`canFocus`: a `kitten` (or `kitty +kitten`) binary found, and the hint present.
+- `kitten` is found as the core finds tmux (`kittyFinder`): on `PATH`, else through the login shell, else in the
+  folders the core looks in, else on macOS `kitty.app`'s own; else `kitty` on `PATH`, run as `kitty @` (`kitty +kitten
+  @` fails on 0.32.2, `RECORDED_KITTY.kittyAt`). A socket at a path is spoken to only when it is this account's.
+- `canFocus`: the hints in form; `canType`: the agent's own window, not one that only holds it.
 - **Telling the person.** A kitty session with no `KITTY_LISTEN_ON` gets one daemon log line per process start
   (`[device] kitty · remote control off`), and `docs/cli.md` gives the two `kitty.conf` lines to add
   (`allow_remote_control socket-only`, `listen_on unix:/tmp/kitty`), then restarting kitty. No new screen.
@@ -327,8 +349,10 @@ checks and orders the new names so a session in Zellij inside kitty keeps Zellij
 Contract tests with output recorded from the real tools (Zellij 0.44's `list-panes --json` and `subscribe`, kitty's
 `kitten @ ls` and the error text when remote control is off), each a fixture in `src/testing/` as `fakeHerdr.ts`'s
 `RECORDED`. E2E where the binary runs on an Ubuntu runner: Zellij in a background session
-(`zellij attach --create-background`), typing and focus read back from `list-panes --json` and `dump-screen`; kitty
-under Xvfb with software GL if it starts there, else contract tests only (the builder's call, said in the PR).
+(`zellij attach --create-background`), typing and focus read back from `list-panes --json` and `dump-screen`
+(`dialHostZellij`). kitty starts under Xvfb (`RECORDED_KITTY.startsUnderXvfb`), so it has an e2e too (`dialHostKitty`):
+kitty under Xvfb with `LIBGL_ALWAYS_SOFTWARE=1` (Mesa's llvmpipe), with fontconfig and a font installed, which it needs
+to start.
 
 ## Linux against macOS
 
@@ -373,7 +397,9 @@ and reads as on a Mac. Where Linux forces a difference, this table names it and 
 - **X11 raise:** an Ubuntu container or runner with Xvfb, openbox, wmctrl and two xterms; a fake agent in one;
   the tap raises its xterm (`_NET_ACTIVE_WINDOW` read back).
 - **Wayland raise:** headless sway (`WLR_BACKENDS=headless`) with two foot terminals; the tap focuses the agent's
-  (`swaymsg -t get_tree` read back). Hyprland headless only if it starts cheaply on a runner; else contract tests only.
+  (`swaymsg -t get_tree` read back). Hyprland has no live check: it does not start without a GPU, and runners and
+  containers have none (`RECORDED_HYPRLAND`); contract tests only, against `hyprctl` run on a stand-in socket, with
+  the replies' text taken from Hyprland's source and marked `published`.
 - **GNOME and KDE:** contract tests against recorded calls and a fake session bus; no live check.
 - **WezTerm typing:** `wezterm-mux-server` headless in a container; `type` lands the text in the pane
   (`wezterm cli get-text`).
@@ -385,7 +411,7 @@ and reads as on a Mac. Where Linux forces a difference, this table names it and 
 - **Permission copy:** a fake `/dev` node without access through `HARNESSD_TEST_DIAL_PORT`; the status's `problem`
   carries the copy.
 - **Zellij:** an e2e on the Ubuntu runner with a background session (typing lands, focus moves).
-- **kitty:** an e2e under Xvfb if kitty starts there; else contract tests only.
+- **kitty:** an e2e under Xvfb with software GL, fontconfig and a font (§ 3.4).
 - **The real dial on a Linux desktop:** a person with Linux and a dial (sent to harness-pm): plug in without the
   group, read the copy, fix, see it attach; tap an agent in each terminal they have and see its window come forward.
 

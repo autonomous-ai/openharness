@@ -84,6 +84,9 @@ export interface HostAdapter {
   /** Whether a tap can bring that pane forward on this computer. */
   canFocus(pane: Pane): boolean
   focus(pane: Pane): Promise<boolean>
+  /** The process whose window holds the pane, as its last `focus` found it; asked once after a `focus` that answered
+   *  true, and forgotten then. Absent, or none: the agent's window as the observed source knows it (windowOf). */
+  windowPid?(pane: Pane): number | undefined
   /** Whether a rest can show the pane inside its app now (the app in front, a watch open): asked at each look. */
   canShow?(pane: Pane): boolean
   show?(pane: Pane, agentId: string): Promise<PaneSwitch>
@@ -99,13 +102,17 @@ export interface HostAdapter {
 }
 ```
 
+`windowPid` is for Linux's raise ([dial on Linux](../plans/2026-11-19-dial-linux-design.md#22-which-window)): tmux's
+answers the client its `switch-client` moved, so the window raised is that client's terminal.
+
 The adapter id is the name today's log lines use (`[device] open · claude · fallback`), so the Claude app's is `claude`
 (PM, 2026-11-15).
 
 `ObservedSource` keeps every pane an adapter recognises for an entry, in a fixed order (`adapters` in
-`services/devices.ts`): herdr, tmux, Herdr (`herdr-app`), cmux, WezTerm, Orca, the Claude app, the Codex app, VS Code,
-then a tab by tty. The nearest host first: a multiplexer keeps the environment it started in, and Herdr and cmux tell
-their programs they run in Ghostty, whose tabs hold none of them.
+`services/devices.ts`): herdr, Zellij, tmux, Herdr (`herdr-app`), cmux, kitty, WezTerm, Orca, the Claude app, the
+Codex app, VS Code, Cursor, Cursor's folder window, then a tab by tty. The nearest host first: a multiplexer keeps the
+environment it started in, and Herdr and cmux tell their programs they run in Ghostty, whose tabs hold none of them.
+Zellij is a multiplexer as tmux is, and kitty a terminal as WezTerm is.
 
 Each verb uses the first pane in that order whose adapter can do it:
 - words: the first with `type` (Orca);
@@ -132,7 +139,9 @@ pane it left (PM, 2026-11-15).
 | `codex` | `hosts/codexApp.ts` | the app `codex`, the engine `codex` and a thread id (`CODEX_THREAD`); no hint read | none | the `codex://threads/<id>` link to the Codex app alone (`open -b com.openai.codex <url>`) through `hosts/appLink.ts`, macOS only; `open -b com.openai.codex` when the link fails | the link through `hosts/appLink.ts`, while the Codex app is in front |
 | `vscode` | `hosts/vscode.ts` | the engine `claude`, `CLAUDE_CODE_ENTRYPOINT=claude-vscode`, VS Code's bundle id and a UUID session | none | the `vscode://anthropic.claude-code/open?session=<id>` link to VS Code alone (`open -b com.microsoft.VSCode <url>`) through `hosts/appLink.ts`, macOS only | the link through `hosts/appLink.ts`, while VS Code is in front |
 | `tabs` | `hosts/tabs.ts` (#4331's file) | a tab app and a learnt tty | none | the watch's select with raise | the watch's select, while a watch is open |
-| `wezterm` | `hosts/wezterm.ts` (new, from `open.ts`) | `WEZTERM_PANE` | none | `wezterm cli activate-pane` | none |
+| `wezterm` | `hosts/wezterm.ts` (new, from `open.ts`) | `WEZTERM_PANE` | `wezterm cli send-text --no-paste`, then Enter on its own ([dial on Linux](../plans/2026-11-19-dial-linux-design.md#15-wezterm-types)) | `wezterm cli activate-pane` | none |
+| `zellij` | `hosts/zellij.ts` | `ZELLIJ_PANE_ID` and `ZELLIJ_SESSION_NAME`; macOS and Linux | `zellij --session <s> action write-chars`, then `send-keys Enter`, once `list-panes --json` shows the pane a terminal | `zellij --session <s> action focus-pane-id` | none ([dial on Linux](../plans/2026-11-19-dial-linux-design.md#32-zellij-044)) |
+| `kitty` | `hosts/kitty.ts` | `KITTY_WINDOW_ID` and `KITTY_LISTEN_ON` (remote control on); macOS and Linux | `kitten @ --to <socket> send-text`, then `send-key enter` | `kitten @ --to <socket> focus-window` | none ([dial on Linux](../plans/2026-11-19-dial-linux-design.md#33-kitty)) |
 | `herdr` | `hosts/herdr.ts` (new, from `open.ts`) | `HERDR_PANE_ID` | none | `herdr agent focus` | none |
 | `herdr-app` | `hosts/herdrApp.ts` | `HC_TERMINAL_ID` | Herdr Core's `terminal.send` | `open -b dev.herdr.app`, then `herdr-app do agent.focus`, macOS only | `herdr-app do agent.focus`, while Herdr is in front |
 | `cmux` | `hosts/cmuxApp.ts` | `CMUX_SURFACE_ID` and `CMUX_WORKSPACE_ID` in a cmux terminal | `cmux paste --submit`, only with Automation mode, an idle empty prompt and the same agent | the `cmux://workspace/<w>/surface/<s>` link to cmux alone (`open -b com.cmuxterm.app <url>`) through `hosts/appLink.ts`, macOS only | the link, while cmux is in front |
@@ -263,8 +272,11 @@ byte" above.
   `architecture.coreFiles.txt` is unchanged.
 - **Platforms:**
   - macOS, where every adapter runs;
-  - Linux and Windows, where only a pane's own command focuses (Orca, WezTerm, herdr) and the Claude app link and
-    bundle opener are off, as today;
+  - Linux, where a pane's own command focuses (Orca, WezTerm, herdr, tmux, Zellij, kitty), the app links open by
+    `xdg-open` where an app registered their scheme, and the raise brings the window forward in place of `open -b`
+    ([dial on Linux](../plans/2026-11-19-dial-linux-design.md));
+  - Windows, where only a pane's own command focuses (Orca, WezTerm, herdr) and the app links and bundle opener are
+    off;
   - the round dial's firmware.
 - **Measures:** no new path, so no new measure. The `[device] open · <app> · fallback` and `[observed]` lines stay as
   they are.
