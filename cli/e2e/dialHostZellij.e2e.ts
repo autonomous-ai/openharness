@@ -117,8 +117,10 @@ describe.skipIf(!zellijBinary)('an agent in a Zellij pane is on the dial', () =>
 
     // 4. Its pane closed, the dial's words are refused and typed nowhere.
     await session.close(pane)
+    const typed = session.ran('write-chars')
     expect(await speak(dial, relay, id, 'echo closed', 'spoken-2')).toMatchObject({ t: 'voice.error' })
     expect(await session.screen(session.shell)).not.toContain('echo closed')
+    expect(session.ran('write-chars')).toBe(typed)
 
     // 5. No folder or words in the log.
     for (const secret of [join(d.projectsDir, 'api'), 'run the tests', 'echo closed']) expect(d.log()).not.toContain(secret)

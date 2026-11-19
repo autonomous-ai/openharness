@@ -257,7 +257,7 @@ change to the agent browser's container, image or stream; the nightly run leaves
 
 Run workflow with **`dial_hosts`** ticked runs only the `e2e (dial hosts)` job: `cli/e2e/dialHost*.e2e.ts` and
 `cli/e2e/deviceHerdr.e2e.ts` on Ubuntu 24.04 with herdr, WezTerm and Zellij installed from their pinned, checksum-checked
-releases, an X11 desktop (Xvfb, openbox) and sway. There a host that is missing fails its file instead of skipping it,
+releases, kitty from Ubuntu, an X11 desktop (Xvfb, openbox) and sway. There a host that is missing fails its file instead of skipping it,
 and a case that skips fails the job. The shards leave these files out; the nightly run, and every manual run without
 `agent_browser_podman`, includes the job. Use it alone for a change to a dial host's adapter.
 

@@ -115,7 +115,7 @@ environment it started in, and Herdr and cmux tell their programs they run in Gh
 Zellij is a multiplexer as tmux is, and kitty a terminal as WezTerm is.
 
 Each verb uses the first pane in that order whose adapter can do it:
-- words: the first with `type` (Orca);
+- words: the first whose adapter types and whose `canType` says yes;
 - a rest: the first whose `canShow` says yes;
 - a tap: the first whose `canFocus` says yes.
 

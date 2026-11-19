@@ -16,7 +16,7 @@ name: CLI end to end
 #
 # Run workflow with `agent_browser_podman` runs only the agent browser on real Podman, which builds
 # the browser's image, Chrome and all: nothing else then, so that one heavy run holds one runner.
-# With `dial_hosts` it runs only the dial's hosts (herdr, WezTerm, Zellij, an X11 desktop and sway),
+# With `dial_hosts` it runs only the dial's hosts (herdr, WezTerm, Zellij, kitty, an X11 desktop and sway),
 # the job every nightly run has beside the shards.
 on:
   schedule:
@@ -28,7 +28,7 @@ on:
         type: boolean
         default: false
       dial_hosts:
-        description: "Only the dial's hosts: herdr, WezTerm, Zellij, an X11 desktop and sway"
+        description: "Only the dial's hosts: herdr, WezTerm, Zellij, kitty, an X11 desktop and sway"
         type: boolean
         default: false
 
@@ -283,8 +283,8 @@ jobs:
           overwrite: true
           retention-days: 7
 
-  # The dial's hosts (cli/e2e/harness/dialHosts.ts): herdr, WezTerm and Zellij from their own releases, an X11 desktop
-  # (Xvfb, openbox) and sway, which the files start themselves. Each program is version pinned and checksum checked, and
+  # The dial's hosts (cli/e2e/harness/dialHosts.ts): herdr, WezTerm and Zellij from their own releases, kitty from Ubuntu,
+  # an X11 desktop (Xvfb, openbox) and sway, which the files start themselves. Each program is version pinned and checksum checked, and
   # E2E_DIAL_HOSTS fails a file whose program is missing, where elsewhere it skips.
   dial-hosts:
     name: e2e (dial hosts)
