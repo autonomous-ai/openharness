@@ -1980,6 +1980,17 @@ describe('binding an OpenClaw pane, read from its screen', () => {
       expect(logged()).not.toContain('[discovery] a1 openclaw · working again')
     })
 
+    // Found end to end (e2e/openclawShow.e2e.ts row 8): an idle pane is read every 30 s (engines/openclaw/live.ts), and by
+    // then the TUI tries its Gateway 16 or 30 s apart and draws `gateway disconnected` 5 s of each, a bare `disconnected`
+    // between: read on those, an outage of a minute was never held. The bare line is drawn only once a failed try has
+    // stood 5 s with none answered: the same outage, counted from the first pass that reads either.
+    it('counts a bare disconnected between tries as the outage: from its first read, and to hold it', async () => {
+      const bare = status('disconnected | idle')
+      expect(await passes([0, bare], [5, bare], [10, bare], [15, LOST])).toEqual([undefined, undefined, NO_GATEWAY, NO_GATEWAY])
+      expect(logged()).toEqual([`[discovery] a1 openclaw · ${NO_GATEWAY}`])
+      expect(await passes([20, status('connected | idle')], [22, LOST], [32, bare])).toEqual([undefined, undefined, NO_GATEWAY])
+    })
+
     it.each([
       ['a connected line', status('connected | idle')],
       ['a connected line under a history that did not load', screen('screen-history-failed')],
