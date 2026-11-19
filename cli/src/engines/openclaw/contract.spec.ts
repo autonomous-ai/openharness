@@ -28,6 +28,7 @@ const SHOWN: Record<string, { key: string | null; url: string | null }> = {
   'screen-disconnected.txt': { key: 'agent:main:plain', url: 'ws://127.0.0.1:18789' },
   'screen-fail-model.txt': { key: 'agent:main:fail', url: 'ws://127.0.0.1:18789' },
   'screen-fail.txt': { key: 'agent:main:fail', url: 'ws://127.0.0.1:18789' },
+  'screen-gateway-starting.txt': { key: 'agent:main:plain', url: 'ws://127.0.0.1:18789' },
   'screen-history-failed.txt': { key: 'agent:main:plain', url: 'ws://127.0.0.1:18789' },
   'screen-history-refused.txt': { key: 'agent:main:plain', url: 'ws://127.0.0.1:18789' },
   'screen-main-heartbeat.txt': { key: 'agent:main:main', url: 'ws://127.0.0.1:18789' },
@@ -50,6 +51,7 @@ const SHOWN: Record<string, { key: string | null; url: string | null }> = {
   'screen-rewind.txt': { key: 'agent:main:rewind', url: 'ws://127.0.0.1:18789' },
   'screen-running-quiet.txt': { key: 'agent:main:plain', url: 'ws://127.0.0.1:18789' },
   'screen-sending.txt': { key: 'agent:main:plain', url: 'ws://127.0.0.1:18789' },
+  'screen-starting-up-disconnected.txt': { key: 'agent:main:plain', url: 'ws://127.0.0.1:18789' },
   'screen-starting-up.txt': { key: 'agent:main:plain', url: 'ws://127.0.0.1:18789' },
   'screen-startup-failed.txt': { key: 'agent:main:plain', url: 'ws://127.0.0.1:18789' },
   'screen-tool.txt': { key: 'agent:main:tool', url: 'ws://127.0.0.1:18789' },
@@ -193,7 +195,10 @@ describe('the OpenClaw contract', () => {
   it.each([
     ['banner', { key: null, state: null, status: null, box: null, running: false, gatewayLost: false }],
     ['connecting', { state: 'starting', status: 'connecting | idle', box: '', running: false, gatewayLost: false }],
-    ['starting-up', { state: 'starting', status: '⠙ starting up • 0s | subscribing to session events', box: '', running: false, gatewayLost: false }],
+    ['starting-up', { state: 'starting', status: '⠙ starting up • 0s | subscribing to session events', box: '', running: false, gatewayLost: false, gatewayStarting: false }],
+    // A cold Gateway on a slow machine: the TUI starts up for over a minute, the Gateway answering it is starting.
+    ['gateway-starting', { state: 'starting', status: '⠙ starting up • 20s | gateway starting', box: '', running: false, gatewayLost: false, gatewayStarting: true }],
+    ['starting-up-disconnected', { state: 'starting', status: '⠴ starting up • 25s | disconnected', box: '', running: false, gatewayLost: false, gatewayStarting: false }],
     ['sending', { state: 'busy', status: '⠋ sending • 0s | connected', box: '', running: false, gatewayLost: false }],
     ['waiting', { state: 'busy', status: '⠼ flibbertigibbeting… • 0s | connected', box: '', running: false, gatewayLost: false }],
     ['running-quiet', { state: 'busy', status: '⠦ running • 45s | connected', box: '', running: true, gatewayLost: false }],

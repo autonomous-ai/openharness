@@ -53,3 +53,8 @@ read every poll from launch to ready, through a run, and through a `chat.history
   (`setConnectionStatus("startup failed", …)` in its source); the recording did not see it. The chat line drawn with
   it (` startup failed: <error>`) is left out: no error was recorded.
 - **answer-history-words**: a model's answer saying `history failed:` at column 0, over a ready status line.
+
+`screen-gateway-starting.txt` and `screen-starting-up-disconnected.txt` are `screen-starting-up.txt` with the status
+lines a cold Gateway drew on a slow Linux machine (arm64 Debian 12, 0.6 CPU, OpenClaw 2026.11.2) for 85–110 s:
+`<spinner> starting up • Ns | gateway starting` (the Gateway's answer while it starts, `resolveGatewayDisconnectState`
+in OpenClaw's tui) and `<spinner> starting up • Ns | disconnected` between its tries.

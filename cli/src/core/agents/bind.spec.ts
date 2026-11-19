@@ -1995,6 +1995,21 @@ describe('binding an OpenClaw pane, read from its screen', () => {
       expect(run.deps.announceSession).not.toHaveBeenCalled()
     })
 
+    // Found on a slow machine (2026-11-19): a cold Gateway answers `gateway starting` for over a minute, between bare
+    // `disconnected` lines, and the agent was held throughout while the Gateway was running.
+    it('a Gateway that answers it is starting clears it and starts the 10 s again', async () => {
+      const starting = screen('screen-gateway-starting')
+      expect(await passes([0, LOST], [10, LOST], [12, starting], [16, LOST], [25, LOST], [26, LOST]))
+        .toEqual([undefined, NO_GATEWAY, undefined, undefined, undefined, NO_GATEWAY])
+      expect(logged()).toContain('[discovery] a1 openclaw · working again')
+    })
+
+    it('a start up that reads disconnected neither holds nor clears it', async () => {
+      const disconnected = screen('screen-starting-up-disconnected')
+      expect(await passes([0, disconnected], [20, disconnected])).toEqual([undefined, undefined])
+      expect(await passes([30, LOST], [40, LOST], [42, disconnected])).toEqual([undefined, NO_GATEWAY, NO_GATEWAY])
+    })
+
     it('a reconnect between two drops starts the 10 s again', async () => {
       expect(await passes([0, LOST], [4, status('gateway reconnected | idle')], [6, LOST], [15, LOST], [16, LOST]))
         .toEqual([undefined, undefined, undefined, undefined, NO_GATEWAY])
