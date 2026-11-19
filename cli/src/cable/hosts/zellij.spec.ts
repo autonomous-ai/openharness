@@ -31,6 +31,10 @@ interface Call { file: string; args: readonly string[]; timeoutMs: number }
 /** The recorded listing with its terminal pane [id] left out: the pane closed, or never was. */
 const withoutTerminal = (id: number) =>
   JSON.stringify((JSON.parse(listPanes.stdout) as Array<{ id: number; is_plugin: boolean }>).filter((one) => one.is_plugin || one.id !== id))
+/** The recorded listing with [over] on its terminal pane [id]. */
+const withTerminal = (id: number, over: Record<string, unknown>) =>
+  JSON.stringify((JSON.parse(listPanes.stdout) as Array<{ id: number; is_plugin: boolean }>)
+    .map((one) => (!one.is_plugin && one.id === id ? { ...one, ...over } : one)))
 
 /** A runner that answers as the recorded session `s1` did, so no spec moves the developer's own Zellij: another session
  *  is gone; `focus-pane-id` fails for a terminal pane the listing lacks; `write-chars` and `send-keys` exit 0 for any
@@ -151,8 +155,16 @@ describe('the Zellij adapter', () => {
     expect(never.calls).toEqual([ran(listPanes.args), ran(missingPane.args)])
   })
 
+  // Its program exited and Zellij holds the pane open: Enter there would run that command again.
+  it('a pane whose program exited is not typed into', async () => {
+    const { calls, adapter } = recorder({}, withTerminal(1, { exited: true, exit_status: 0, is_held: true }))
+    expect(await adapter.type(pane('s1:1'), 'hello', 'claude')).toBe(false)
+    expect(calls).toEqual([ran(listPanes.args)])
+  })
+
   it('a listing that is not the recorded shape types nothing', async () => {
-    for (const stdout of ['', 'not json', '{"id":1,"is_plugin":false}', '[null]', '[{"id":"1","is_plugin":false}]', '[{"id":1}]']) {
+    for (const stdout of ['', 'not json', '{"id":1,"is_plugin":false}', '[null]', '[{"id":"1","is_plugin":false}]', '[{"id":1}]',
+      '[{"id":1,"is_plugin":false}]', '[{"id":1,"is_plugin":false,"exited":"false"}]']) {
       const { calls, adapter } = recorder({}, stdout)
       expect(await adapter.type(pane('s1:1'), 'hello', 'claude'), stdout).toBe(false)
       expect(calls).toEqual([ran(listPanes.args)])

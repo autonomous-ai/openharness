@@ -3379,7 +3379,7 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     /** The devices' runs recorded, Zellij's listing naming its pane 3 a terminal. */
     const listing = (base: typeof orca) => ({ ...base, run: async (file: string, args: string[], timeoutMs: number) => {
       orcaRuns.push([file, args, timeoutMs])
-      return { code: 0, stdout: args.includes('list-panes') ? JSON.stringify([{ id: 3, is_plugin: false }]) : '' }
+      return { code: 0, stdout: args.includes('list-panes') ? JSON.stringify([{ id: 3, is_plugin: false, exited: false }]) : '' }
     } })
     const voice = () => said().filter((line) => line.startsWith('[device] voice'))
     /** No other adapter was reached: herdr's and Herdr's sockets, Codex's queue. */
