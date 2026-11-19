@@ -10,7 +10,7 @@
  */
 import { isAbsolute } from 'node:path'
 import type { HostAdapter, Pane } from './adapter.js'
-import { APP_BUNDLES, HARNESS_BUNDLE, inCmux, inHerdr } from './hostDetect.js'
+import { APP_BUNDLES, BUNDLE_APPS, HARNESS_BUNDLE, inCmux, inHerdr } from './hostDetect.js'
 import type { LinuxRaise } from './linuxRaise.js'
 import { RUN_TIMEOUT_MS, type OrcaDeps } from './orca.js'
 
@@ -90,7 +90,11 @@ export function createOpenActions(deps: OpenDeps): {
     const adapter = pane && deps.adapters.find((known) => known.id === pane.adapter)
     return adapter && adapter.tap !== 'after' && adapter.canFocus(pane) ? { adapter, pane } : undefined
   }
-  const can = (target: OpenTarget): boolean => !!paneOn(target) || (mac && !!target.bundle) || !!raise?.ready()
+  // On Linux the agent's window, by its process or its app's class: its app as its bundle names it (bundleOf), the only
+  // word of it a target carries.
+  const appOf = (bundle?: string): string | undefined => (bundle !== undefined && Object.hasOwn(BUNDLE_APPS, bundle) ? BUNDLE_APPS[bundle] : undefined)
+  const can = (target: OpenTarget): boolean =>
+    !!paneOn(target) || (mac && !!target.bundle) || !!raise?.ready({ agent: true, app: appOf(target.bundle) })
   const forward = async (bundle: string): Promise<boolean> => (await deps.run(openBin, ['-b', bundle], RUN_TIMEOUT_MS)).code === 0
 
   // herdr 0.8.0's agents, whose terminal nobody knows (#4366), have no window of their own: herdr's ring brings Herdr
@@ -100,10 +104,11 @@ export function createOpenActions(deps: OpenDeps): {
     if (app === 'herdr') return deps.herdrApp?.() ? APP_BUNDLES.herdr : undefined
     return Object.hasOwn(APP_BUNDLES, app) ? APP_BUNDLES[app] : undefined
   }
-  // On Linux a pick raises its app's window by the app's word, whose class the raise knows; herdr's agents have no window
-  // of their own there, and Herdr.app is macOS's.
+  // On Linux a pick raises its app's window by the app's class, which only a desktop found and the app's own row give:
+  // a pick has no process. With neither, nothing runs and nothing is logged (herdr, whose agents have no window of their
+  // own there, has no class).
   const pickOf = (app: string): (() => Promise<boolean>) | undefined => {
-    if (raise) return app === 'herdr' ? undefined : () => raise.raise({ app })
+    if (raise) return raise.ready({ agent: false, app }) ? () => raise.raise({ app }) : undefined
     const bundle = bundleFor(app)
     return bundle ? () => forward(bundle) : undefined
   }

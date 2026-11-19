@@ -21,8 +21,9 @@ export interface RaiseTarget { pids: readonly number[]; classes: readonly string
 export interface RaiseBackend { raise(target: RaiseTarget): Promise<boolean> }
 export type RaiseRun = Pick<OrcaDeps, 'run' | 'onPath'>
 export interface LinuxRaise {
-  /** Whether the last look found a desktop: false until the first look lands. */
-  ready(): boolean
+  /** Whether a raise can bring forward [window]: the last look found a desktop (false until the first lands) that takes
+   *  an agent's window by its process ([agent]; a pick has none), or knows [app]'s class. */
+  ready(window: { agent: boolean; app?: string }): boolean
   /** Brings forward the window of that process or one of its parents, else its app's by class. Never throws. */
   raise(window: { pid?: number; app?: string }): Promise<boolean>
 }
@@ -33,6 +34,9 @@ export interface LinuxRaiseDeps {
   classes(app: string): readonly string[]
   log(line: string): void
 }
+
+// GNOME's extension finds a window by its app's class alone (linuxRaiseGnome.ts); every other desktop by its process too.
+const byProcess = (desktop: LinuxDesktop): boolean => desktop.kind !== 'gnome'
 
 export function createLinuxRaise(deps: LinuxRaiseDeps): LinuxRaise {
   let desktop: LinuxDesktop | undefined
@@ -55,13 +59,15 @@ export function createLinuxRaise(deps: LinuxRaiseDeps): LinuxRaise {
   void look()
 
   return {
-    ready: () => desktop !== undefined && desktop.kind !== 'none',
+    ready: ({ agent, app }) => desktop !== undefined && desktop.kind !== 'none'
+      && ((agent && byProcess(desktop)) || (app !== undefined && deps.classes(app).length > 0)),
     async raise({ pid, app }) {
       await looking
       const found = desktop
       if (found === undefined || found.kind === 'none') return false
-      // pid 1 holds every orphan, so it names no agent's window.
-      const pids = pid !== undefined && Number.isInteger(pid) && pid > 1 ? await chainOf(pid) : []
+      // pid 1 holds every orphan, so it names no agent's window. A desktop that takes no process is not handed one: with
+      // no class either, nothing runs and nothing is looked at again.
+      const pids = byProcess(found) && pid !== undefined && Number.isInteger(pid) && pid > 1 ? await chainOf(pid) : []
       const classes = app === undefined ? [] : deps.classes(app)
       if (pids.length === 0 && classes.length === 0) return false
       try {

@@ -2,9 +2,10 @@ import { describe, expect, it, vi } from 'vitest'
 import type { HostAdapter, Pane } from './adapter.js'
 import { createClaudeAppAdapter } from './claudeApp.js'
 import { createCodexAppAdapter } from './codexApp.js'
+import { windowClasses } from './frontApp.js'
 import { createHerdrAdapter } from './herdr.js'
 import { detectApp, detectHost } from './hostDetect.js'
-import type { LinuxRaise } from './linuxRaise.js'
+import { createLinuxRaise, type LinuxRaise, type RaiseTarget } from './linuxRaise.js'
 import { bundleOf, createOpenActions, type OpenTarget } from './open.js'
 import { createOrcaAdapter, type OrcaDeps } from './orca.js'
 import { createTabsAdapter } from './tabs.js'
@@ -869,10 +870,17 @@ describe('a pick on the dial brings its app forward', () => {
 
   // herdr's agents have no window of their own, and Herdr.app is macOS's: herdr has no class.
   it('Linux: a pick of herdr runs nothing', async () => {
-    const raised: Window[] = []
-    const { calls, opener } = recorder({
-      platform: 'linux', herdrApp: () => true, raise: { ready: () => true, raise: async (window) => { raised.push(window); return true } },
+    // The raise itself, over a sway it found and the apps' own classes: only its backend is made up.
+    const raised: RaiseTarget[] = []
+    const raise = createLinuxRaise({
+      find: async () => ({ kind: 'sway', socket: '/run/user/1000/sway-ipc.1000.7.sock' }),
+      backend: () => ({ raise: async (target) => { raised.push(target); return true } }),
+      processes: async () => [],
+      classes: windowClasses,
+      log: () => {},
     })
+    await vi.waitFor(() => expect(raise.ready({ agent: false, app: 'vscode' })).toBe(true))
+    const { calls, opener } = recorder({ platform: 'linux', herdrApp: () => true, raise })
     expect(await opener.bring!('herdr')).toBeUndefined()
     expect(raised).toEqual([])
     expect(calls).toEqual([])
