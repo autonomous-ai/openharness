@@ -578,6 +578,9 @@ static void test_recording_clock(void)
     CHECK(max_ui_level(9, 1300) && max_m.levels[max_m.level_count - 1] == 4);   // past the scale: its top
     CHECK(max_ui_level(1, 1400) && max_m.talk_quiet_from == 1300 && max_m.level_count == 3);
     CHECK(max_ui_next_wake_ms(1300 + MAX_SILENCE_MS - 40) == 40);
+    // Speech that never stops: the send is due at MAX_TALK_MAX_MS all the same.
+    max_ui_level(3, 1000 + MAX_TALK_MAX_MS - 100);
+    CHECK(max_ui_next_wake_ms(1000 + MAX_TALK_MAX_MS - 40) == 40);
     for (int i = 0; i < MAX_LEVELS + 5; i++) max_ui_level(0, 1500);
     CHECK(max_m.level_count == MAX_LEVELS && max_m.levels[0] == 0);
     // Not recording: no levels, no frames.
@@ -585,8 +588,13 @@ static void test_recording_clock(void)
     CHECK(!max_ui_level(3, 2000));
     as_drawn(2000);
     CHECK(max_ui_next_wake_ms(2000) == 60000 - 2000 && !max_ui_tick(2000 + MAX_TALK_FRAME_MS));
-    // A new recording starts its own clock, nothing heard.
+    // A new recording starts its own clock, nothing heard, and "Mic closed" goes.
+    max_m.talk_closed = true;
     CHECK(max_ui_talk(MAX_TALK_RECORDING, 5000) && max_m.talk_from == 5000 && !max_m.talk_heard && !max_m.level_count);
+    CHECK(!max_m.talk_closed);
+    // "Mic closed" belongs to the page it closed on.
+    max_m.talk_closed = true;
+    CHECK(max_show(MAX_VIEW_OVERVIEW) && !max_m.talk_closed);
 }
 
 static void test_elapsed_format(void)

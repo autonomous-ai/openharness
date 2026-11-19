@@ -241,6 +241,7 @@ static void attention_drawn(int options)
 // The cable says hello and lists the agents (a..f, every one taking voice); the glass shows Overview as drawn.
 static void fresh(void)
 {
+    now += 1000;   // past the last test's voice action and its guard (MAX_GUARD_MS)
     pro_app_link(false, NULL);
     V_OPEN = V_PENDING = V_WAITING = false;
     LEVEL = 0;
@@ -334,7 +335,8 @@ static void test_the_clock_sends_after_silence(void)
     CHECK(!V_OPEN && max_m.talk == MAX_TALK_IDLE);
 }
 
-// Nothing heard in MAX_HEAR_MS: the mic closes, nothing is sent, and the agent page stays to be tapped again.
+// Nothing heard in MAX_HEAR_MS: the mic closes, nothing is sent, and the agent page stays (and says so) to be tapped
+// again.
 static void test_the_mic_closes_when_nothing_is_heard(void)
 {
     fresh();
@@ -346,7 +348,7 @@ static void test_the_mic_closes_when_nothing_is_heard(void)
     now += 1;
     render_pass();
     CHECK(!V_OPEN && !V_WAITING && max_m.talk == MAX_TALK_IDLE);
-    CHECK(!strcmp(max_m.notice, "Mic closed \xc2\xb7 tap to talk") && max_m.view == MAX_VIEW_AGENT);
+    CHECK(max_m.talk_closed && max_m.view == MAX_VIEW_AGENT);
 }
 
 // The agent page's body opens the mic, X drops it (the page stays), and the body again sends it.
@@ -359,9 +361,11 @@ static void test_the_body_talks_and_x_cancels(void)
     CHECK(!V_OPEN && max_m.talk == MAX_TALK_IDLE && max_m.view == MAX_VIEW_AGENT);
     agent_drawn();
     V_BEGINS = 0;
+    now += MAX_GUARD_MS;   // past the cancel's guard
     tap_page();
     CHECK(V_BEGINS == 1 && V_OPEN && !strcmp(V_AGENT, "a") && max_m.talk == MAX_TALK_RECORDING);
     agent_drawn();
+    now += MAX_GUARD_MS;   // past the opening's
     tap_page();
     CHECK(V_WAITING && max_m.talk == MAX_TALK_SENDING && max_m.view == MAX_VIEW_OVERVIEW);
     pro_app_voice_result(PRO_VOICE_ERROR, "Nobody heard that");
@@ -430,9 +434,11 @@ static void test_update_gate_holds_talk(void)
     CHECK(!strcmp(max_m.notice, "Updating") && max_m.view == MAX_VIEW_AGENT);
     pro_app_end_update_gate();
     agent_drawn();
+    now += MAX_GUARD_MS;   // past the opening's guard
     tap_page();
     CHECK(V_BEGINS == 1 && V_OPEN);
     agent_drawn();
+    now += MAX_GUARD_MS;
     tap_page();
     pro_app_voice_result(PRO_VOICE_OK, "a");
     CHECK(!V_OPEN);
@@ -555,6 +561,7 @@ static void test_new_harness(void)
     tap_on(say);
     CHECK(V_BEGINS == 1 && V_OPEN && !strcmp(V_AGENT, "") && !strcmp(VOICE_FORM, form_id) && VOICE_REVISION == 7);
     CHECK(max_m.talk == MAX_TALK_RECORDING);
+    now += MAX_GUARD_MS;   // past the opening's guard
     tap_on(say);
     CHECK(V_WAITING && max_form_open());
     pro_form_page_t found = page;
@@ -568,9 +575,11 @@ static void test_new_harness(void)
     // Talk for an agent clears the form's name from the next recording.
     max_show(MAX_VIEW_OVERVIEW);
     overview_drawn();
+    now += MAX_GUARD_MS;   // past the spoken name's send
     tap_cell("a");
     CHECK(V_OPEN && !strcmp(V_AGENT, "a") && VOICE_FORM[0] == 0);
     agent_drawn();
+    now += MAX_GUARD_MS;
     tap_page();
     pro_app_voice_result(PRO_VOICE_OK, "a");
     CHECK(LOCK_DEPTH == 0);

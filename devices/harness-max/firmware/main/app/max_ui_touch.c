@@ -1,7 +1,9 @@
 // The finger on the pages (max_ui.h): a tap acts on what the last render drew (its hits first, then Overview's
 // cells), a sideways swipe pages Overview's cells, walks the ring on the agent page, or moves the form's choice. A tap
 // on a card's button or the form queues its message in the outbox. While a recording is up the page is its send: X
-// cancels it, Back and the strip send what was heard (else drop it) and go on, any other tap sends it. The clock's
+// cancels it, Back and the strip send what was heard (else drop it) and go on, any other tap sends it. Only the Dial's
+// tap counts then (MAX_TAP_*): a hold or a slide is the dead zone, and the mic stays open. A touch that opens the mic
+// lets go before MAX_HOLD_MS, and touches that begin within MAX_GUARD_MS of a voice action are part of it. The clock's
 // side of a recording is max_ui_talk_due.
 #include <stdio.h>
 #include <string.h>
@@ -28,10 +30,40 @@ static void go(max_view_t view)
 
 static void show_agent(const char *id)
 {
+    if (strcmp(max_m.selected, id)) max_m.talk_closed = false;   // "Mic closed" was the other agent's
     max_copy(max_m.selected, sizeof max_m.selected, id);
     max_show(MAX_VIEW_AGENT);
     max_m.dirty = true;
 }
+
+// ---- the Dial's touch around the mic ----
+
+// A voice action (the mic opening, a send, a cancel): the touches that begin within MAX_GUARD_MS are part of it, so a
+// double tap is one intent (the Dial's ht_gesture_guard).
+static void guard(uint32_t now_ms)
+{
+    max_m.guarding = true;
+    max_m.guard_until = now_ms + MAX_GUARD_MS;
+}
+
+// The clock ended the talk: a finger on the glass then acts on nothing (the Dial cancels a live gesture when its view
+// changes), and the next touches within the guard are part of it.
+static void void_contact(uint32_t now_ms)
+{
+    if (max_m.down) max_m.held = true;
+    guard(now_ms);
+}
+
+// While the mic is open, whether the contact let go at now_ms sends: the Dial's tap. Anything else is the dead zone.
+static bool send_tap(uint32_t now_ms)
+{
+    const uint32_t d = now_ms - max_m.down_at;
+    return !max_m.held && d >= MAX_TAP_MIN_MS && d <= MAX_TAP_MAX_MS && max_m.far2 <= MAX_TAP_FAR2;
+}
+
+// Whether the contact let go at now_ms may open the mic: let go before MAX_HOLD_MS, and not part of the last voice
+// action.
+static bool start_tap(uint32_t now_ms) { return !max_m.held && now_ms - max_m.down_at < MAX_HOLD_MS; }
 
 // ---- a recording ----
 
@@ -45,6 +77,7 @@ static max_act_t send_talk(uint32_t now_ms)
         else snprintf(text, sizeof text, "Sent");
         max_notice_set(text, now_ms);
     }
+    guard(now_ms);
     max_m.dirty = true;
     return act_for(MAX_ACT_SEND, max_m.talk_id);
 }
@@ -71,15 +104,21 @@ max_act_t max_ui_talk_due(uint32_t now_ms)
 {
     if (max_m.talk != MAX_TALK_RECORDING || !max_m.link) return nothing();
     if (max_m.talk_id[0] && !max_find(max_m.talk_id)) {   // its agent left the ring: its page went with it
-        go(MAX_VIEW_OVERVIEW);
+        if (max_m.view == MAX_VIEW_AGENT) go(MAX_VIEW_OVERVIEW);
+        void_contact(now_ms);
         return settle_talk(now_ms);
     }
     if (max_m.talk_heard) {
-        if (!reached(max_m.talk_quiet_from + MAX_SILENCE_MS, now_ms)) return nothing();
+        const bool quiet = reached(max_m.talk_quiet_from + MAX_SILENCE_MS, now_ms);
+        if (!quiet && !reached(max_m.talk_from + MAX_TALK_MAX_MS, now_ms)) return nothing();
+        void_contact(now_ms);
         return send_onward(now_ms);
     }
     if (!reached(max_m.talk_from + MAX_HEAR_MS, now_ms)) return nothing();
-    max_notice_set("Mic closed \xc2\xb7 tap to talk", now_ms);   // the page stays: a tap opens it again
+    // The page stays and says so ("Mic closed · tap to talk"); the form's spoken name has no band: the notice says it.
+    if (max_m.talk_id[0]) max_m.talk_closed = true;
+    else max_notice_set("Mic closed", now_ms);
+    void_contact(now_ms);
     max_m.dirty = true;
     return act_for(MAX_ACT_CANCEL, max_m.talk_id);
 }
@@ -99,9 +138,10 @@ static max_act_t bring_up(const char *id, const char *name, const char *app, uin
 }
 
 // The mic for this agent, from the page that shows it.
-static max_act_t talk_to(const max_agent_t *a, max_act_kind_t kind)
+static max_act_t talk_to(const max_agent_t *a, max_act_kind_t kind, uint32_t now_ms)
 {
     max_copy(max_m.talk_id, sizeof max_m.talk_id, a->id);
+    guard(now_ms);
     return act_for(kind, a->id);
 }
 
@@ -109,14 +149,14 @@ static max_act_t talk_to(const max_agent_t *a, max_act_kind_t kind)
 static max_act_t open_cell(const char *id, uint32_t now_ms)
 {
     const max_agent_t *a = max_find(id);
-    if (!a) return nothing();
+    if (!a || !start_tap(now_ms)) return nothing();
     if (a->state == MAX_ASKING) {   // its question first: nothing is recorded
         max_attention(a->id, MAX_ATTN_ASK, now_ms);
         max_m.dirty = true;
         return nothing();
     }
     show_agent(a->id);
-    if (max_can_talk(a) && max_takes_voice(a)) return talk_to(a, MAX_ACT_OPEN_TALK);
+    if (max_can_talk(a) && max_takes_voice(a)) return talk_to(a, MAX_ACT_OPEN_TALK, now_ms);
     return act_for(MAX_ACT_OPEN, a->id);   // no voice now: "Talk to it in <App>"
 }
 
@@ -171,16 +211,16 @@ static max_act_t press(const max_hit_t *h, uint32_t now_ms)
         break;
     case MAX_HIT_BODY: {   // the mic, or the computer when the bar cannot listen for it now
         const max_agent_t *a = view == MAX_VIEW_AGENT ? max_find(max_m.selected) : NULL;
-        if (!a) break;
-        if (max_can_talk(a) && max_takes_voice(a)) return talk_to(a, MAX_ACT_TALK);
+        if (!a || !start_tap(now_ms)) break;
+        if (max_can_talk(a) && max_takes_voice(a)) return talk_to(a, MAX_ACT_TALK, now_ms);
         return act_for(MAX_ACT_OPEN, a->id);
     }
     case MAX_HIT_SAY_IT: {   // the answer in words, on the agent's page (a permission prompt takes Yes or No only)
         const bool asks = view == MAX_VIEW_ATTENTION && max_m.attn == MAX_ATTN_ASK;
         const max_agent_t *a = asks ? max_find(max_m.attn_id) : NULL;
-        if (!a || !max_can_talk(a) || !max_takes_voice(a)) break;
+        if (!a || !max_can_talk(a) || !max_takes_voice(a) || !start_tap(now_ms)) break;
         show_agent(a->id);
-        return talk_to(a, MAX_ACT_TALK);
+        return talk_to(a, MAX_ACT_TALK, now_ms);
     }
     case MAX_HIT_AWAY: {
         if (view != MAX_VIEW_ATTENTION) break;
@@ -197,8 +237,9 @@ static max_act_t press(const max_hit_t *h, uint32_t now_ms)
         break;
     case MAX_HIT_TALK_CANCEL: break;   // only while recording
     case MAX_HIT_FORM_SAY: {   // a spoken name for the form's field
-        if (!page || !max_form_can_say()) break;
+        if (!page || !max_form_can_say() || !start_tap(now_ms)) break;
         max_m.talk_id[0] = 0;
+        guard(now_ms);
         max_act_t act = act_for(MAX_ACT_SAY, NULL);
         memcpy(act.form_id, f->id, sizeof act.form_id);
         act.revision = f->page.revision;
@@ -230,13 +271,27 @@ static max_act_t press(const max_hit_t *h, uint32_t now_ms)
     return nothing();
 }
 
-// A tap while a recording is up: X drops it and the page stays; Back and the strip send what was heard (else drop it)
-// and go where they go, with the mic closed; anything else, even bare glass, sends it now.
+// A tap while a recording is up: X drops it and the page stays, whatever the touch; else only the Dial's tap acts.
+// Back and the strip send what was heard (else drop it) and go where they go, with the mic closed; the toast sends it,
+// then opens its Attention; anything else, even bare glass, sends it now.
 static max_act_t recording_tap(const max_hit_t *h, uint32_t now_ms)
 {
     if (h && h->kind == MAX_HIT_TALK_CANCEL) {
+        guard(now_ms);
         max_m.dirty = true;
         return act_for(MAX_ACT_CANCEL, max_m.talk_id);
+    }
+    if (!send_tap(now_ms)) return nothing();   // the dead zone: the mic stays open
+    if (h && h->kind == MAX_HIT_TOAST) {   // the words first (a tap never loses them), then what the toast announced
+        char id[ID_MAX];
+        const max_attn_t why = max_m.toast_attn;
+        memcpy(id, max_m.toast_id, sizeof id);
+        const max_act_t act = send_onward(now_ms);
+        if (id[0] && max_attn_holds(id, why)) {
+            max_form_dismiss();
+            max_attention(id, why, now_ms);
+        }
+        return act;
     }
     if (h && h->kind == MAX_HIT_BACK) {
         go(MAX_VIEW_OVERVIEW);
@@ -275,12 +330,7 @@ static void browse(int step)
 // A sideways swipe: to the left shows what comes next.
 static max_act_t swipe(int step, uint32_t now_ms)
 {
-    if (max_m.talk == MAX_TALK_RECORDING) {   // only the agent page moves on, with what was heard
-        if (max_m.view != MAX_VIEW_AGENT || max_m.count < 2 || !max_find(max_m.selected)) return nothing();
-        const max_act_t act = settle_talk(now_ms);
-        browse(step);
-        return act;
-    }
+    if (max_m.talk == MAX_TALK_RECORDING) return nothing();   // a slide is the dead zone: the mic stays open
     if (max_form_open()) {   // over the page: its choice moves, unless a spoken name is on its way
         if (max_m.talk == MAX_TALK_IDLE && max_m.form.page.revision == max_m.form_revision &&
             max_form_command(MAX_FORM_MOVE, step, now_ms))
@@ -302,6 +352,13 @@ static max_act_t swipe(int step, uint32_t now_ms)
     return nothing();
 }
 
+// How far the contact went from where it went down: the Dial's tap stays within MAX_TAP_FAR2.
+static void reach(int x, int y)
+{
+    const int dx = x - max_m.down_x, dy = y - max_m.down_y, d2 = dx * dx + dy * dy;
+    if (d2 > max_m.far2) max_m.far2 = d2;
+}
+
 max_act_t max_ui_touch(bool down, int x, int y, uint32_t now_ms)
 {
     if (down) {
@@ -310,8 +367,13 @@ max_act_t max_ui_touch(bool down, int x, int y, uint32_t now_ms)
             max_m.moved = false;
             max_m.down_x = x;
             max_m.down_y = y;
-        } else if (iabs(x - max_m.down_x) > MAX_TAP_SLOP || iabs(y - max_m.down_y) > MAX_TAP_SLOP) {
-            max_m.moved = true;   // out and back is still a drag
+            max_m.down_at = now_ms;
+            max_m.far2 = 0;
+            max_m.held = max_m.guarding && !reached(max_m.guard_until, now_ms);
+        } else {
+            reach(x, y);
+            if (iabs(x - max_m.down_x) > MAX_TAP_SLOP || iabs(y - max_m.down_y) > MAX_TAP_SLOP)
+                max_m.moved = true;   // out and back is still a drag
         }
         return nothing();
     }
@@ -320,6 +382,7 @@ max_act_t max_ui_touch(bool down, int x, int y, uint32_t now_ms)
         max_m.down = false;
         return nothing();
     }
+    reach(x, y);
     max_m.down = false;
     const int dx = x - max_m.down_x, dy = y - max_m.down_y;
     if (!max_m.moved && iabs(dx) <= MAX_TAP_SLOP && iabs(dy) <= MAX_TAP_SLOP) return tap(max_m.down_x, max_m.down_y, now_ms);

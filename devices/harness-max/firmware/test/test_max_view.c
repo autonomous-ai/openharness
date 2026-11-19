@@ -367,6 +367,17 @@ static void test_agent_page(void)
     check_page_hit_last(MAX_HIT_BODY);
     CHECK(word("Done") && word("Tap to talk") && word("Muse"));
     agent_words();
+    // The clock closed its mic on nothing heard: the page says so, for its own agent only.
+    max_copy(max_m.talk_id, sizeof max_m.talk_id, "c");
+    max_m.talk_closed = true;
+    render_at(T0);
+    CHECK(word("Mic closed \xc2\xb7 tap to talk") && !word("Tap to talk"));
+    agent_words();
+    max_copy(max_m.talk_id, sizeof max_m.talk_id, "b");
+    render_at(T0);
+    CHECK(word("Tap to talk") && !word("Mic closed \xc2\xb7 tap to talk"));
+    max_m.talk_closed = false;
+    max_m.talk_id[0] = 0;
     // Its pet moves, on its own beat; a logo holds still.
     const uint32_t beat = max_motion_ms(T0);
     CHECK(beat > 0 && beat < MAX_WAKE_MS);

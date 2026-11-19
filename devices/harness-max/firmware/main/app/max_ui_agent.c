@@ -112,11 +112,14 @@ static void reading(ht_scene_t *s, const max_agent_t *a, bool talking, uint32_t 
         ht_pro_text(s, MAIN_X, y + i * say_f->height, width, say_f, C(said ? RECAP : REST), rows[i]);
 }
 
-// "Tap to talk" at the bottom right; for an agent the bar cannot record for, where to talk to it instead.
+// "Tap to talk" at the bottom right ("Mic closed · tap to talk" once the clock closed it on nothing heard); for an
+// agent the bar cannot record for, where to talk to it instead.
 static void talk_hint(ht_scene_t *s, const max_agent_t *a)
 {
     if (max_takes_voice(a)) {
-        const int w = max_text_right(s, HINT_R, HINT_CY, DX(300), &ph_rg_24, REST, "Tap to talk");
+        const bool closed = max_m.talk_closed && !strcmp(max_m.talk_id, a->id);
+        const int w = max_text_right(s, HINT_R, HINT_CY, DX(420), &ph_rg_24, REST,
+                                     closed ? "Mic closed \xc2\xb7 tap to talk" : "Tap to talk");
         max_icon_mic(s, HINT_R - w - DX(8) - HINT_MIC, HINT_CY - HINT_MIC / 2, HINT_MIC, REST);
         return;
     }

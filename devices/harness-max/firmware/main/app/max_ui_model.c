@@ -134,6 +134,7 @@ bool max_show(max_view_t view)
     if (max_m.view == view) return false;
     if (max_m.view == MAX_VIEW_INBOX)   // seen: the bell's count goes
         for (int i = 0; i < max_m.inbox_count; i++) max_m.inbox[i].unread = false;
+    max_m.talk_closed = false;   // "Mic closed" belongs to the page it closed on
     max_m.view = view;
     return true;
 }
@@ -642,6 +643,7 @@ bool max_ui_talk(max_talk_t state, uint32_t now_ms)
     if (changed && state == MAX_TALK_RECORDING) {   // a new recording: its clock, and nothing heard yet
         max_m.talk_from = max_m.talk_quiet_from = now_ms;
         max_m.talk_heard = false;
+        max_m.talk_closed = false;
         max_m.level_count = 0;
     }
     max_m.talk = state;
@@ -735,7 +737,12 @@ uint32_t max_ui_next_wake_ms(uint32_t now_ms)
         sooner(&ms, 60000u - (uint32_t)(now_ms - max_m.inbox[i].at) % 60000u);
     if (max_m.talk == MAX_TALK_RECORDING) {   // the band, and the send or the close the clock owes (max_ui_talk_due)
         sooner(&ms, MAX_TALK_FRAME_MS);
-        until(&ms, max_m.talk_heard ? max_m.talk_quiet_from + MAX_SILENCE_MS : max_m.talk_from + MAX_HEAR_MS, now_ms);
+        if (max_m.talk_heard) {
+            until(&ms, max_m.talk_quiet_from + MAX_SILENCE_MS, now_ms);
+            until(&ms, max_m.talk_from + MAX_TALK_MAX_MS, now_ms);
+        } else {
+            until(&ms, max_m.talk_from + MAX_HEAR_MS, now_ms);
+        }
     }
     if (max_m.view == MAX_VIEW_ATTENTION && max_m.attn != MAX_ATTN_ASK)
         until(&ms, max_m.attn_from + MAX_ATTN_END_MS, now_ms);
