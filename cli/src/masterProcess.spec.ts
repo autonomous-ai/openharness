@@ -12,6 +12,17 @@ import { PTY_PROTOCOL } from './lib/ptyHost/protocol.js'
 import type { WindowsMasterDeps } from './masterProcess.js'
 import { writeExecutable } from './testing/executableFixture.js'
 
+const io = vi.hoisted(() => ({ failWrite: undefined as string | undefined }))
+vi.mock('node:fs', async (real) => {
+  const actual = await real<typeof import('node:fs')>()
+  return { ...actual,
+    // Only a write to a descriptor: the atomic writer's temporary file.
+    writeFileSync: (...args: Parameters<typeof actual.writeFileSync>) => {
+      if (io.failWrite && typeof args[0] === 'number') throw Object.assign(new Error(`${io.failWrite}: fixture`), { code: io.failWrite })
+      return actual.writeFileSync(...args)
+    },
+  }
+})
 const runMaster = vi.hoisted(() => vi.fn((_config: Record<string, unknown>) => 'supervisor'))
 vi.mock('./harnessd/master.js', async (real) => ({ ...await real<object>(), runMaster }))
 const leanBundle = vi.hoisted(() => ({ read: vi.fn((_bundle: Buffer): LeanBundle | null => null) }))
@@ -461,7 +472,7 @@ describe('the master on Windows', () => {
       expect(readHandoverPid(file)).toBeNull()
       writeFileSync(file, '1234\n')
       expect(readHandoverPid(file)).toBe(1234)
-      for (const text of ['', 'pid', '0', '-5']) {
+      for (const text of ['', 'pid', '0', '-5', '12x']) {
         writeFileSync(file, text)
         expect(readHandoverPid(file)).toBeNull()
       }
@@ -534,6 +545,31 @@ describe('starting the master', () => {
     } finally { said.mockRestore() }
     expect(LEAN_DIR).toMatch(/[\\/]lean$/)
     expect(LEAN_OFF_FILE).toMatch(/[\\/]lean-off$/)
+  })
+
+  it('the pid file is written whole', () => {
+    runMaster.mockClear()
+    startMaster({ scriptPath: '/cli/cli.js' })
+    const config = runMaster.mock.calls[0][0] as { pidFile: string; writePidFile(pid: number): void; readPidFile(): number | null }
+    expect(config.pidFile).toBe(PID_FILE)
+    mkdirSync(env.ADAPTER_DATA_DIR, { recursive: true })
+    try {
+      expect(config.readPidFile()).toBeNull()
+      config.writePidFile(4242)
+      expect(readFileSync(PID_FILE, 'utf8')).toBe('4242\n')
+      expect(config.readPidFile()).toBe(4242)
+      // A write that fails leaves the earlier pid, never an empty or half-written file.
+      io.failWrite = 'ENOSPC'
+      expect(() => config.writePidFile(5151)).toThrow('ENOSPC')
+      expect(readFileSync(PID_FILE, 'utf8')).toBe('4242\n')
+      io.failWrite = undefined
+      // A file that cannot be read names no pid: the master neither rewrites nor removes it on that.
+      writeFileSync(PID_FILE, '42x')
+      expect(config.readPidFile()).toBeNull()
+    } finally {
+      io.failWrite = undefined
+      rmSync(PID_FILE, { force: true })
+    }
   })
 
   it('on Windows, a failed update names the Node before in current-node, which the handover\'s launcher starts the next master on', () => {
