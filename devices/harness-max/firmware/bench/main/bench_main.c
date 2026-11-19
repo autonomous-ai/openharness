@@ -14,7 +14,7 @@
 #include "max_strips_p4.h"
 #include "max_turn.h"
 #include "max_turn_ppa.h"
-#include "max_ui.h"        // max_ui_share, max_ui_work
+#include "max_ui.h"        // max_ui_share, max_ui_work, max_ui_warm
 #include "max_ui_draw.h"   // max_layer_forget
 #include "pod/pod_draw.h"
 
@@ -338,6 +338,7 @@ static void present_partials(void)
 static struct { double build, present; } s_motion[BENCH_MOTION_FRAMES];
 static ht_scene_t *s_motion_last;
 static bool s_motion_shown;
+static struct { int steps; double ms, longest; } s_ahead;
 
 // A frame of a motion as the render task paints it: the scene built over the other buffer, then presented.
 static void motion_frame(uint32_t now, int f)
@@ -354,38 +355,61 @@ static void motion_frame(uint32_t now, int f)
     vTaskDelay(1);   // the idle task's turn: the task watchdog watches it
 }
 
+// What a tap on the page at rest would show, painted ahead as the render task paints it (max_app.c warm_ahead): every
+// step, timed.
+static void motion_ahead(uint32_t now)
+{
+    s_ahead.steps = 0;
+    s_ahead.ms = s_ahead.longest = 0;
+    for (bool more = true; more; s_ahead.steps++) {
+        const int64_t t0 = esp_timer_get_time();
+        more = max_ui_warm(now);
+        const double ms = (esp_timer_get_time() - t0) / 1000.0;
+        s_ahead.ms += ms;
+        if (ms > s_ahead.longest) s_ahead.longest = ms;
+        vTaskDelay(1);   // the idle task's turn
+    }
+}
+
 static void motions(void)
 {
     printf("(g) App Detail's row in motion through the product's frame (2c ppa, the row's blurs shared between the "
            "cores as max_app.c has them), one frame every %u ms of the row's clock: each built (max_ui_render) then "
            "presented (max_present) into the framebuffer, wall ms. cold: no pet cell baked, no sliver or pet image "
-           "kept; warm: the same motion again. framebuffer: after the last frame, as the CPU's raster and turn\n",
+           "kept; ahead: the same, then painted ahead while the page rests (max_ui_warm, its steps after the line); "
+           "warm: the same motion again. first: the costlier of its frames 0 and 1. framebuffer: after the last frame, "
+           "as the CPU's raster and turn\n",
            (unsigned)MAX_ROW_FRAME_MS);
-    printf("%-14s %4s %6s %7s %7s %6s %6s %7s %7s %7s %7s %s\n", "motion", "run", "frames", "mean", "worst", "fps",
-           "min", "build", "max", "present", "max", "framebuffer");
+    printf("%-14s %5s %6s %7s %7s %7s %6s %6s %7s %7s %7s %7s %s\n", "motion", "run", "frames", "first", "mean", "worst",
+           "fps", "min", "build", "max", "present", "max", "framebuffer");
     use_mode(PRODUCT);
     max_ui_share(true);
     for (int i = 0; i < bench_motion_count(); i++) {
-        const bool twice = !strcmp(bench_motion_name(i), "open") || !strcmp(bench_motion_name(i), "close");
-        for (int run = 0; run < (twice ? 2 : 1); run++) {
-            if (!run) {
+        const bool tapped = !strcmp(bench_motion_name(i), "open") || !strcmp(bench_motion_name(i), "close");
+        for (int run = 0; run < (tapped ? 3 : 1); run++) {
+            if (run < 2) {
                 max_layer_forget();
                 pod_cell_bake_reset();
             }
             s_motion_shown = false;
-            const int frames = bench_motion(i, motion_frame);
-            double sum = 0, worst = 0, build = 0, build_max = 0, present = 0, present_max = 0;
+            const int frames = bench_motion(i, motion_frame, run == 1 ? motion_ahead : NULL);
+            double sum = 0, worst = 0, first = 0, build = 0, build_max = 0, present = 0, present_max = 0;
             for (int f = 0; f < frames; f++) {
                 const double b = s_motion[f].build, p = s_motion[f].present;
                 sum += b + p, build += b, present += p;
                 if (b + p > worst) worst = b + p;
+                if (f < 2 && b + p > first) first = b + p;
                 if (b > build_max) build_max = b;
                 if (p > present_max) present_max = p;
             }
             want_of(s_motion_last);
-            printf("%-14s %4s %6d %7.2f %7.2f %6.1f %6.1f %7.2f %7.2f %7.2f %7.2f %s\n", bench_motion_name(i),
-                   run ? "warm" : "cold", frames, sum / frames, worst, 1000.0 * frames / sum, 1000.0 / worst,
-                   build / frames, build_max, present / frames, present_max, fb_is_want() ? "same" : "DIFFERS");
+            printf("%-14s %5s %6d %7.2f %7.2f %7.2f %6.1f %6.1f %7.2f %7.2f %7.2f %7.2f %s\n", bench_motion_name(i),
+                   run == 2 ? "warm" : run ? "ahead" : "cold", frames, first, sum / frames, worst, 1000.0 * frames / sum,
+                   1000.0 / worst, build / frames, build_max, present / frames, present_max,
+                   fb_is_want() ? "same" : "DIFFERS");
+            if (run == 1)
+                printf("%-14s painted ahead in %d steps, %.1f ms, the longest %.2f ms\n", "", s_ahead.steps, s_ahead.ms,
+                       s_ahead.longest);
         }
     }
     max_ui_share(false);

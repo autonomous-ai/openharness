@@ -74,16 +74,20 @@ reads 480 x 1920 x 2 bytes 60 times a second (about 110 MB/s) from PSRAM, so PSR
   (with means and maxima for Overview's, the agent page's and every screen), then the partial frames of (a), each
   from its `before` painted whole; the last line is the helper task's unused stack.
 - **(g) the row in motion**: App Detail's row replayed frame by frame (`test/max_motions.h`, the host's
-  `test/max_motion_bench.c` replays the same): a drag across Overview and its snap, an agent opening, the same agent
-  closing, a drag over the slivers beside it, and 2 s of the loops alone (V3's pulses and sweeps): on Overview, one
+  `test/max_motion_bench.c` replays the same): a drag across Overview and its snap, an agent opening (a tap on its
+  cell, the mic opening with it), the same agent closing, a drag over the slivers beside it, and 2 s of the loops
+  alone (V3's pulses and sweeps): on Overview, one
   agent asking and two working (`loops`), and the asking agent open (`agent loops`, its panel's glow breathing), one
   frame every 16 ms of the row's clock however long a frame takes (the product draws the loops every 33 ms).
   Each frame is the render task's: `max_ui_render` (`build`), then `max_present` in the product's way (`present`: the
   row's blurs that the build leaves to the frame, shared by both cores before the strips, then the strips), into the
-  framebuffer, wall ms. Per motion: its frames, the mean and worst frame, `fps` (frames over their time) and `min` (the
-  worst frame's), and the build and present means and maxima. `cold` starts with no pet cell baked and no sliver or pet
-  image kept (an agent's first open); the open and the close run once more, `warm`. `framebuffer` must say `same`: the
-  framebuffer after the last frame against the CPU's raster and turn of its scene.
+  framebuffer, wall ms. Per motion: its frames, `first` (the costlier of frames 0 and 1), the mean and worst frame,
+  `fps` (frames over their time) and `min` (the worst frame's), and the build and present means and maxima. `cold`
+  starts with no pet cell baked and no sliver or pet image kept (an agent's first open); the open and the close run
+  twice more: `ahead`, the same start, then painted ahead while the page rests as the render task does it
+  (`max_ui_warm`; the line after it: its steps, their time and the longest, which is how long a touch can wait on
+  it), and `warm`, the motion once more. `framebuffer` must say `same`: the framebuffer after the last frame against
+  the CPU's raster and turn of its scene.
 - **(b) CPU turn**: `max_turn_pixels` of a 1920 x 24 strip, and of the 20 strips of the glass.
 - **(c) PPA SRM turn**: each quarter turn and mirror the PPA has, against `max_turn_pixels`: exactly one should say
   `SAME`, and it should be `ccw 270` with no mirror (`MAX_TURN_CCW_DEGREES`, what the product asks for). Then its time
@@ -105,6 +109,9 @@ What to do with it:
 - The full-repaint frame time (`build` + `warm` + 20 turns) against the 16-33 ms a moving row needs says whether motion
   can repaint whole strips or needs damage-sized frames, two cores, or cached layers ((d)).
 - (g)'s `min` is the row's frame rate at its worst moment: 30 or more is the target for every motion, cold and warm.
+  An open's and a close's `ahead` `first` should be no more than its `warm` `worst`: the first frame a tap shows is a
+  warm one. Its other frames are warm too while the pets' images fit (`max_ui_layer.c` POOL_PX), but for a pose of the
+  open agent's pet on the clock that the painting ahead did not land on.
   If a line says `DIFFERS`, the shared blurs are wrong on the chip: `max_ui_share(false)` in `max_app.c` puts them
   back in the build.
 - (f)'s `2c ppa` is what the glass gets. The targets: an Overview-class screen whole in 16 ms or less, an agent page in

@@ -19,10 +19,11 @@ void bench_partial(int i, ht_scene_t *before, ht_scene_t *after);
 
 // The row's motions (test/max_motions.h): motion i replayed from its page at rest, one frame every MAX_ROW_FRAME_MS of
 // the row's clock from T0 until the row rests, each frame drawn by `frame` (its number, or -1 for the frames that set
-// the page up). Returns the motion's frames; at most BENCH_MOTION_FRAMES.
+// the page up). `ahead`, when not NULL, is called once the page rests, before the motion starts, with the row's clock
+// then (the render task paints ahead there: max_ui_warm). Returns the motion's frames; at most BENCH_MOTION_FRAMES.
 enum { BENCH_MOTION_FRAMES = 128 };
 int bench_motion_count(void);
 const char *bench_motion_name(int i);
-int bench_motion(int i, void (*frame)(uint32_t now, int f));
+int bench_motion(int i, void (*frame)(uint32_t now, int f), void (*ahead)(uint32_t now));
 // The UI as it stands drawn at `now` into `out`, as the render task draws it.
 void bench_draw(ht_scene_t *out, uint32_t now);

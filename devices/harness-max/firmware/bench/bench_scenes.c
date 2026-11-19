@@ -85,13 +85,15 @@ void bench_draw(ht_scene_t *out, uint32_t now)
 static void (*s_frame)(uint32_t now, int f);
 static void set_up_frame(uint32_t now) { s_frame(now, -1); }
 
-int bench_motion(int i, void (*frame)(uint32_t now, int f))
+int bench_motion(int i, void (*frame)(uint32_t now, int f), void (*ahead)(uint32_t now))
 {
     const max_motion_t *m = &MAX_MOTIONS[i];
     s_frame = frame;
     m->set_up(set_up_frame);
     frame(T0 - 1000, -1);
+    frame(T0 - 500, -1);
     frame(T0 - MAX_ROW_FRAME_MS, -1);
+    if (ahead) ahead(T0 - MAX_ROW_FRAME_MS);
     m->go();
     for (int f = 0; f < BENCH_MOTION_FRAMES; f++) {
         const uint32_t now = T0 + (uint32_t)f * MAX_ROW_FRAME_MS;
