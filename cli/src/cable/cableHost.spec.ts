@@ -1172,6 +1172,16 @@ describe('the dial that shows one app at a time', () => {
     expect(ids(await host.listAgentSnapshot({ apps: true }))).toEqual(['o2', 'o3', 'o1'])
   })
 
+  it('a rank set to undefined is dropped: an agent that enters next takes no place from it', async () => {
+    const agents = mixed()
+    const host = setup(agents)
+    host.setRank('orca', new Map([['o4', 0], ['o3', 1], ['o1', 2], ['o2', 3]]))
+    expect(ids(await host.listAgentSnapshot({ apps: true }))).toEqual(['o3', 'o1', 'o2'])
+    host.setRank('orca', undefined)
+    agents.push(agent('o4', 'orca'))
+    expect(ids(await host.listAgentSnapshot({ apps: true }))).toEqual(['o3', 'o1', 'o2', 'o4'])
+  })
+
   describe('the front app\'s ring scoped (docs/plans/2026-11-18-dial-orca-tab-scope-design.md)', () => {
     const without = (...out: string[]): RingScope => ({ inScope: (id) => !out.includes(id) })
     /** A host over these agents whose settles run when `settle` says. */
