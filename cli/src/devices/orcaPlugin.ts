@@ -36,11 +36,11 @@ export type OrcaPluginState = 'on' | 'off' | 'held' | 'setup' | 'absent'
 /** What a change asks Orca with: the `orca` to run, the plugin's key to name to Orca, and the version cli.js carries,
  *  to know a plugin Orca lists as the one asked for. */
 interface Asking { orca: string; key: string; version: string }
-/** Why Orca is not asked about the plugin: `none`, no Orca here (Windows, no `orca`); `no-plugin`, a CLI from the
- *  sources; `old`, an Orca below the plugin's engines; `folder`, the plugin's folder not written; `not-running`, an Orca
- *  not reachable, or a status that cannot be read; `unread`, an answer after a status that said Orca is reachable, or a
+/** Why Orca is not asked about the plugin: `no-plugin`, no Orca here (Windows, no `orca`) or a CLI from the sources;
+ *  `old`, an Orca below the plugin's engines; `folder`, the plugin's folder not written; `not-running`, an Orca not
+ *  reachable, or a status that cannot be read; `unread`, an answer after a status that said Orca is reachable, or a
  *  record, that cannot be read: a failure, not Orca's absence. */
-interface Unasked { why: 'none' | 'no-plugin' | 'old' | 'folder' | 'not-running' | 'unread' }
+interface Unasked { why: 'no-plugin' | 'old' | 'folder' | 'not-running' | 'unread' }
 /** How a change brings Orca's entry to the plugin's folder at the version cli.js carries: `install` the folder for no
  *  entry or one from anywhere else, `update` one from the folder at another version whatever its status (an enable
  *  would turn on the old copy Orca holds), and `enable` one from the folder at this version. */
@@ -112,7 +112,7 @@ async function entryOf(deps: OrcaPluginDeps, orca: string, key: string): Promise
 /** Whether an entry's `source` is the plugin's folder as Orca counts it: Orca records the real path of the folder it
  *  was handed and updates from that path, so any other path is another folder, even one that leads to it through a link
  *  (its place before Harness's files moved on Linux, now the bridge's link). Such an entry is installed from the folder
- *  itself, which Orca asks the person to approve, so Orca's record follows the move and never reads the link. */
+ *  itself, which Harness approves within ORCA_APPROVED, so Orca's record follows the move and never reads the link. */
 const fromFolder = (source: unknown, folder: string): boolean =>
   isObject(source) && source.kind === 'local-path' && source.reference === real(folder)
 
@@ -122,11 +122,11 @@ const manifestOf = (files: OrcaPluginFiles) => JSON.parse(files['orca-plugin.jso
 /** Orca asked up to the plugin's key, the folder written before Orca is asked about it. Orca is asked `status` first:
  *  every other plugin command waits about 30 seconds for an Orca that is not reachable. */
 async function reach(deps: OrcaPluginDeps): Promise<Asking | Unasked> {
-  if (deps.platform === 'win32') return { why: 'none' }
+  if (deps.platform === 'win32') return { why: 'no-plugin' }
   const files = deps.files()
   if (files === null) return { why: 'no-plugin' }
   const orca = deps.orca()
-  if (orca === null) return { why: 'none' }
+  if (orca === null) return { why: 'no-plugin' }
   const carried = manifestOf(files)
   const runtime = (await ask(deps, orca, ['status', '--json'], ORCA_STATUS_MS))?.runtime
   if (!isObject(runtime) || runtime.reachable !== true || typeof runtime.appVersion !== 'string') return { why: 'not-running' }
@@ -218,15 +218,15 @@ const ORCA_FINGERPRINT = /^ap1-[0-9a-f]{32}$/
 
 /** What Diego agreed Harness may approve for the person (2026-11-19): the access the plugin asks for as it ships, a
  *  contribution as `<kind>/<name>` in Orca's words. A change here is that decision, reviewed. */
-export const ORCA_APPROVED: {
+const ORCA_APPROVED: {
   readonly execution: 'trusted-worker'
   readonly capabilities: readonly string[]
   readonly contributions: readonly string[]
-} = {
+} = Object.freeze({
   execution: 'trusted-worker',
-  capabilities: ['workspace:read'],
-  contributions: ['panels/Harness Device', 'statusBarItems/Dial', 'events/workspace.changed'],
-}
+  capabilities: Object.freeze(['workspace:read']),
+  contributions: Object.freeze(['panels/Harness Device', 'statusBarItems/Dial', 'events/workspace.changed']),
+})
 
 /** A list of an approval's `grants`: absent is none, as Orca leaves `replacements` out when there are none; undefined
  *  when it is no list. */
@@ -257,7 +257,7 @@ export function withinApproved(data: unknown, key: string, version: string): boo
 }
 
 /** Each install, update, enable or uninstall. */
-export const ORCA_CHANGE_MS = 60_000
+const ORCA_CHANGE_MS = 60_000
 
 /** Whether Orca lists the plugin as a change asked for it: current, by the rules find() reads it with. */
 async function finished(deps: OrcaPluginDeps, { orca, key, version }: Asking): Promise<boolean> {
