@@ -117,7 +117,7 @@ static void check_idle_ticks(void)
 
 // ── the demo far end: a fake of main/demo ───────────────────────────────────────────────────────────────────────
 
-static atomic_int s_resets;
+static atomic_int s_resets, s_story_resets;
 static pthread_t s_demo_thread;
 static atomic_bool s_demo_known, s_demo_off_thread;
 static uint8_t s_received[64][16];   // the first bytes of each frame the demo was handed, and its type
@@ -135,11 +135,12 @@ static void demo_call(void)
     else if (!pthread_equal(s_demo_thread, pthread_self())) atomic_store(&s_demo_off_thread, true);
 }
 
-void max_demo_reset(uint32_t now_ms)
+void max_demo_reset(uint32_t now_ms, bool story)
 {
     (void)now_ms;
     demo_call();
     atomic_fetch_add(&s_resets, 1);
+    if (story) atomic_fetch_add(&s_story_resets, 1);
 }
 
 void max_demo_receive(uint8_t type, const uint8_t *payload, size_t len, uint32_t now_ms)
@@ -196,12 +197,12 @@ static bool received_is(int i, uint8_t type, const char *text)
 
 static void test_demo(void)
 {
-    cable_linux_use_demo();
+    cable_linux_use_demo(true);   // --story
     CHECK(!send_text("early"));   // no link before start
     CHECK(cable_link_start(on_frame, on_tick, &s_got));
     CHECK(cable_link_host_present());   // the demo daemon is always plugged in
     WAIT_FOR(atomic_load(&s_resets) == 1);
-    CHECK(atomic_load(&s_resets) == 1);
+    CHECK(atomic_load(&s_resets) == 1 && atomic_load(&s_story_resets) == 1);   // the demo asked for
 
     // The device's frames reach the demo whole and in order, on the demo's one thread.
     CHECK(send_text("hello"));
@@ -262,10 +263,10 @@ static void test_demo(void)
 
     check_idle_ticks();
 
-    // A re-plug is a new device to the demo: it starts over.
+    // A re-plug is a new device to the demo: the same demo starts over.
     cable_link_replug();
     WAIT_FOR(atomic_load(&s_resets) == 2);
-    CHECK(atomic_load(&s_resets) == 2);
+    CHECK(atomic_load(&s_resets) == 2 && atomic_load(&s_story_resets) == 2);
 
     CHECK(!atomic_load(&s_demo_off_thread));   // one thread called the demo, as it requires
     CHECK(!atomic_load(&s_off_reader) && pthread_equal(s_reader, s_demo_thread));

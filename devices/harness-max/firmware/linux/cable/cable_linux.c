@@ -51,9 +51,14 @@ static cable_frame_cb s_cb;
 static cable_tick_cb s_tick;
 static void *s_ctx;
 static atomic_bool s_running, s_replug;
+static bool s_story;   // the demo's: set before the link starts, read by its reader
 static atomic_uint s_rx_bytes, s_frames_ok;
 
-void cable_linux_use_demo(void) { s_use = USE_DEMO; }
+void cable_linux_use_demo(bool story)
+{
+    s_use = USE_DEMO;
+    s_story = story;
+}
 
 void cable_linux_use_tcp(int port)
 {
@@ -176,10 +181,10 @@ static void demo_emit(uint8_t type, const uint8_t *payload, size_t len, void *ct
 static void *demo_reader(void *arg)
 {
     (void)arg;
-    max_demo_reset(now_ms());
+    max_demo_reset(now_ms(), s_story);
     for (;;) {
-        // A re-plug is a fresh plug-in: the demo starts over, as a daemon sees a new device.
-        if (atomic_exchange(&s_replug, false)) max_demo_reset(now_ms());
+        // A re-plug is a fresh plug-in: the same demo starts over, as a daemon sees a new device.
+        if (atomic_exchange(&s_replug, false)) max_demo_reset(now_ms(), s_story);
         pthread_mutex_lock(&s_q_mu);
         qframe_t *in = s_q_head;
         s_q_head = NULL;

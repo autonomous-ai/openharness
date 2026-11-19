@@ -3,6 +3,8 @@
 // daemon (main/demo). cable_linux.c implements the Pro's cable/cable_link.h over any of them.
 #pragma once
 
+#include <stdbool.h>
+
 #define CABLE_LINUX_PORT 7531                 // the daemon's HARNESS_CABLE_TCP=host:7531
 #define CABLE_LINUX_USB_PORT "/dev/ttyGS0"    // the serial port of the gadget orangepi/harness-max-usb makes
 
@@ -15,5 +17,7 @@ void cable_linux_use_tcp(int port);
 // /sys/class/udc/<controller>/state file) says; NULL reads the first controller's.
 void cable_linux_use_usb(const char *port, const char *udc_state);
 
-// The scripted demo daemon runs inside this program, on the link's reader thread: the bar without a computer.
-void cable_linux_use_demo(void);
+// The scripted demo daemon runs inside this program, on the link's reader thread: the bar without a computer. `story`:
+// the agents play their story on their own (--story); else everything rests until a person talks to it (--demo). A
+// re-plug starts the same demo over.
+void cable_linux_use_demo(bool story);

@@ -1,12 +1,13 @@
 // Harness Max as a Linux program: the device's boot order (main/app_main.c) over the Linux drivers, with the cable's far
 // end chosen on the command line. The output is a build choice (MAX_LINUX_OUTPUT).
 //
-//   harness-max [--live [--port N] | --usb [PORT] | --demo] [--screenshot SECONDS FILE.bmp]
+//   harness-max [--live [--port N] | --usb [PORT] | --demo | --story] [--screenshot SECONDS FILE.bmp]
 //
 // --live (the default): a real daemon dials in over TCP (HARNESS_CABLE_TCP=host:7531). --usb: a real daemon over the
 // USB cable, through the serial port of the gadget orangepi/harness-max-usb makes (/dev/ttyGS0). --demo: the scripted
-// daemon in main/demo runs inside the program. --screenshot (the SDL window only): save the glass after SECONDS, then
-// quit.
+// daemon in main/demo runs inside the program, every agent at rest until a person talks to one. --story: the same
+// daemon, its agents playing their story on their own, in a loop. --screenshot (the SDL window only): save the glass
+// after SECONDS, then quit.
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -57,7 +58,7 @@ static void boot(void *arg)
 
 static int usage(void)
 {
-    fprintf(stderr, "usage: harness-max [--live [--port N] | --usb [PORT] | --demo]%s\n",
+    fprintf(stderr, "usage: harness-max [--live [--port N] | --usb [PORT] | --demo | --story]%s\n",
 #ifdef MAX_OUTPUT_SDL
             " [--screenshot SECONDS FILE.bmp]"
 #else
@@ -71,7 +72,9 @@ int main(int argc, char **argv)
 {
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--demo")) {
-            cable_linux_use_demo();
+            cable_linux_use_demo(false);
+        } else if (!strcmp(argv[i], "--story")) {
+            cable_linux_use_demo(true);
         } else if (!strcmp(argv[i], "--live")) {
             cable_linux_use_tcp(CABLE_LINUX_PORT);
         } else if (!strcmp(argv[i], "--usb")) {
