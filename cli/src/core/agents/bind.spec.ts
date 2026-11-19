@@ -2352,13 +2352,30 @@ describe('binding an OpenClaw pane, read from its screen', () => {
       expect(typed()).toEqual([['a1', '/session agent:main:other']])
     })
 
-    it('a /session the pane is not free for is tried on the next pass, and counted once typed', async () => {
-      vi.mocked(run.deps.input.typeCommand).mockResolvedValueOnce(false)
+    // The discovery pass is serial: a pane slow to take the line held every other agent's pass behind it.
+    it('a /session is counted as it is typed and not waited for: a pass meanwhile types no second one', async () => {
+      let done = (_typed: boolean) => {}
+      vi.mocked(run.deps.input.typeCommand).mockImplementationOnce(() => new Promise((resolve) => { done = resolve }))
+      const passed = vi.fn()
+      void pass(0).then(passed)
+      await vi.waitFor(() => expect(passed).toHaveBeenCalled())
+      expect(logged()).toEqual(tries(1))
+      await pass(5)
+      expect(typed()).toEqual([SESSION])
+      done(true)
+    })
+
+    it.each([
+      ['refuses', () => Promise.resolve(false)],
+      ['fails', () => Promise.reject(new Error('pane gone'))],
+    ])('a /session the pane %s is counted all the same, and said without its key', async (_, outcome) => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      vi.mocked(run.deps.input.typeCommand).mockImplementationOnce(outcome)
       await pass(0)
-      expect(logged()).toEqual([])
-      for (const second of [5, 20, 25]) await pass(second)
-      expect(typed()).toHaveLength(3)
-      expect(logged()).toEqual(tries(1, 2))
+      await vi.waitFor(() => expect(warn).toHaveBeenCalledWith('[discovery] a1 openclaw · /session 1/5 not typed'))
+      expect(logged()).toEqual(tries(1))
+      await pass(5)
+      expect(typed()).toHaveLength(1)
     })
 
     it('remembers 256 panes at most: one more starts them over', async () => {
