@@ -1425,8 +1425,10 @@ describe('cable session', () => {
     it('another failure is logged each time, as before', async () => {
       vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval'] })
       try {
-        const { session, seen, lines } = await tryOpens([new Error('busy'), new Error('busy'), new Error('busy')])
-        expect(said(lines, 'busy')).toBe(3)
+        // The line names the failure's kind, never its words.
+        const busy = () => Object.assign(new Error('busy'), { code: 'EBUSY' })
+        const { session, seen, lines } = await tryOpens([busy(), busy(), busy()])
+        expect(said(lines, 'EBUSY')).toBe(3)
         expect(seen).toEqual([])
         await session.stop()
       } finally { vi.useRealTimers() }
