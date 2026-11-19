@@ -1,8 +1,8 @@
 // The dial's setup in the devices' own process: the skill in each home (dialHomeSetup.ts), then Claude Code's plugin
 // (dialPluginSetup.ts), at the service's start, at each attach and at each open scan. The plugin reads from the homes'
-// record whether a dial attached here once, the version that last set it up and the Orca homes it turned on, and
-// Harness's extension (vscodeExtensionSetup.ts), in VS Code and in Cursor, reads and saves each editor's version
-// through it too, so the record has one writer.
+// record whether a dial attached here once, the version that last set it up and the Orca homes it turned on. Harness's
+// extension (vscodeExtensionSetup.ts), in VS Code and in Cursor, reads and saves each editor's version through it too,
+// and Orca's own plugin its versions, so the record has one writer.
 import type { ClaudeRun } from '../devices/claudePlugin.js'
 import { readPluginHomes } from '../devices/dialSkillFiles.js'
 import type { RolloutOwner } from './codexRolloutHome.js'
@@ -26,6 +26,9 @@ export interface DialSetup {
   recordVscode: DialHomeSetup['recordVscode']
   cursor: DialHomeSetup['cursor']
   recordCursor: DialHomeSetup['recordCursor']
+  orca: DialHomeSetup['orca']
+  recordOrca: DialHomeSetup['recordOrca']
+  recordOrcaHeld: DialHomeSetup['recordOrcaHeld']
 }
 
 export function createDialSetup(deps: DialSetupDeps): DialSetup {
@@ -62,5 +65,8 @@ export function createDialSetup(deps: DialSetupDeps): DialSetup {
     recordVscode: (version) => homes.recordVscode(version),
     cursor: () => homes.cursor(),
     recordCursor: (version) => homes.recordCursor(version),
+    orca: () => homes.orca(),
+    recordOrca: (version) => homes.recordOrca(version),
+    recordOrcaHeld: (version) => homes.recordOrcaHeld(version),
   }
 }
