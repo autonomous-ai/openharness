@@ -10,12 +10,14 @@ final DateTime t0 = DateTime(2026, 11, 18, 14);
 /// `ms` after [t0].
 DateTime at(int ms) => t0.add(Duration(milliseconds: ms));
 
-/// Counts the chimes the model asks for.
+/// The chimes the model asks for, in order.
 class RecordingChime implements Chime {
-  int plays = 0;
+  final List<ChimeSound> sounds = [];
+
+  int get plays => sounds.length;
 
   @override
-  Future<void> play() async => plays++;
+  Future<void> play(ChimeSound sound) async => sounds.add(sound);
 }
 
 class TestBar {
