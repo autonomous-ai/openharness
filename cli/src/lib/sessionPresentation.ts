@@ -20,7 +20,7 @@ const OPTIONAL_FIELDS = ['identityHold', 'namedState', 'workspace', 'claudeHome'
 /** This order, rather than a public frame's property order, defines the versioned checkpoint bytes. */
 export const SESSION_FACT_FIELDS = ['id', 'engine', 'name', 'createdAt', 'updatedAt', 'sessionId',
   ...NULL_FIELDS, ...OPTIONAL_FIELDS, 'nameChosen', 'status', 'closeSupported', 'forkable', 'resumeMode',
-  'launch', 'terminal', 'gitContext', 'app', 'turn', 'work'] as const satisfies readonly (keyof SessionFacts)[]
+  'launch', 'terminal', 'gitContext', 'app', 'turn', 'work', 'starting'] as const satisfies readonly (keyof SessionFacts)[]
 
 // These are shared presentation defaults, never mutable Registry objects.
 const EMPTY: never[] = []; Object.freeze(EMPTY)
@@ -59,6 +59,7 @@ function frame<T>(owner: T, read: Reader<T>, has: Has<T>, app?: App): SessionFra
     forkable: read(owner, 'forkable') ?? false, resumeMode: read(owner, 'resumeMode') ?? 'conversation',
     permissionMode: read(owner, 'permissionMode') ?? null, bypassPermission: read(owner, 'bypassPermission') ?? null,
     namedAgent: read(owner, 'namedAgent') ?? null, waitingFor: read(owner, 'waitingFor') ?? null,
+    starting: read(owner, 'starting') ?? false,
   }
   return Object.assign(value, typeof app === 'function' ? app() : app)
 }

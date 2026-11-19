@@ -10,7 +10,8 @@ import { openclawSessionLocation } from './openclawStore.js'
 import type { RegisteredSession } from './registry.js'
 
 export interface DatabaseCheckpointProof {
-  source: ExportSource
+  /** Null only for a proven absent OpenClaw store, whose Gateway has not written history. */
+  source: ExportSource | null
   verify(): void
   /** After confirmed exit, allow expected content flushes while retaining the exact selected location. */
   fresh(): DatabaseCheckpointProof
@@ -34,8 +35,13 @@ export async function databaseCheckpointEvidence(s: RegisteredSession, current: 
     default: return undefined
   }
   const paths = new NativePaths(new NativeEvidenceBudget())
-  const location = paths.resolveSync(declared)!
+  const location = paths.resolveSync(declared, s.engine === 'openclaw')
   const verifyRoute = paths.retain()
+  if (!location) {
+    const verify = () => { locationProof?.(); verifyRoute() }
+    const fresh = (): DatabaseCheckpointProof => { verify(); return { source: null, verify, fresh } }
+    return fresh()
+  }
   const source = { path: location.path, key: nativeFileKey(location.info), database: declared }
   const fresh = (): DatabaseCheckpointProof => {
     locationProof?.(); verifyRoute()

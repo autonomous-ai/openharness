@@ -77,3 +77,30 @@ The committed recovery candidate `4f9c9fdfe4` passed 15 private-daemon tests in
 `20261119T144650.379377Z-93449`; four Linux sandbox cases were skipped on macOS.
 That native receipt precedes the Hermes synchronization and updater corrections.
 Native hostile-update and the corrected Hermes test still require validation.
+
+## Integrating OpenClaw from main
+
+Main `ba0160a84d` adds first-task readiness and permits closing a conversation the
+Gateway never wrote. Keep the shared input writer, caller revocation and worker
+database export; do not restore the removed device writer or SQL reader in core.
+The public `starting` frame field is additive, defaults false and is carried through
+the existing admitted session-facts format. Its boolean validation remains at the
+service boundary; older workers omit it safely.
+
+An unwritten OpenClaw database is established by core-owned negative path evidence.
+An existing database with no selected conversation is established by the storage
+worker against the core-selected file generation. The worker may return an explicit
+empty receipt only for this case; core verifies the empty stage, unchanged source
+and request authority and publishes no checkpoint. Missing or unreadable stores of
+other engines remain failures. Older workers can refuse this new case safely.
+No database file is created, rewritten or deleted, and prior checkpoints are kept.
+
+Growth stays bounded by the existing four export stages and one-GiB export cap;
+the empty case owns no retained stage. Per-agent Stop ownership and existing stage
+locks remain. Reads stay indexed and paged in the worker; core reads only file
+identity and bytes of its bounded stage. At 10x load the existing stage-backpressure
+state remains the warning. No migration, credentials, audience or account identity
+changes are needed; rollback leaves old artifacts readable. Platforms remain macOS
+and Linux for validation, with Windows explicitly deferred. Run the new main cases
+red before adapting export, all affected callers, architecture and native OpenClaw
+flows, then final exact-head gates and matched cost evidence on the combined source.

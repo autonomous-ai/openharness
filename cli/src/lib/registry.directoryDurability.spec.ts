@@ -390,9 +390,9 @@ it.skipIf(process.platform === 'win32')('the actual bind caller never submits a 
   const binding = createBinding({ registry, mirror: { inheritSummary: vi.fn() }, forgetSession: vi.fn(),
     clients: { send: vi.fn() }, attachSession: vi.fn(async () => true), captureReader: () => () => true,
     announceSession: vi.fn(), stoppedAgents: { save: vi.fn(), finishResume: vi.fn(), get: vi.fn(async () => null) },
-    syncRecapPool: vi.fn(), input: { forget: vi.fn(), awaitingConfirmation: () => false }, submitAgent: submit,
+    syncRecapPool: vi.fn(), input: { forget: vi.fn(), awaitingConfirmation: () => false, waitsForPane: () => false, firstTaskWaiting: () => false, typeCommand: async () => false, expectFirstTask: vi.fn() }, submitFirstTask: submit,
     homes: { copilot: root, grok: root, agy: root },
-    capturePane: async () => screen, openclawPaneRead: () => true, openclawPaneDue: () => true,
+    capturePane: async () => screen, activityRevision: () => undefined, openclawPaneRead: () => true, openclawPaneDue: () => true,
     openclawStateDir: async () => null, followsLive: () => false,
   })
   const observed = { engine: 'openclaw' as const, processIdentity: newProcess, runtimes, cwd: root, primaryRuntimeKey: 'tmux:%3', args: '', resumeSessionId: null }

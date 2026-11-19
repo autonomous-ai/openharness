@@ -73,6 +73,15 @@ it('an unbound agent keeps its task', async () => {
   expect((await registry.takeFirstTask('gone'))).toBeNull()
 })
 
+// A first task OpenClaw never took fails the launch (core/agents/bind.ts `failFirstTask`): kept on a row with no session
+// yet, it was typed into the TUI that bound one later.
+it('an unbound agent whose launch failed gives its task up', async () => {
+  const { registry, row } = await pending()
+  registry.setLaunch(row.agentId, { state: 'failed', error: 'FIRST_TASK_NOT_TAKEN' })
+  expect((await registry.takeFirstTask(row.agentId))).toBe(TASK)
+  expect(disk()[0]).not.toHaveProperty('firstTask')
+})
+
 it('a registry that cannot save keeps the task', async () => {
   const { registry, row } = await bound()
   writeFileSync(join(root, 'registry.json'), '{unreadable', { mode: 0o600 })

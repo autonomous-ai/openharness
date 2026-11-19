@@ -385,8 +385,8 @@ it('binding revalidation cannot change Stop evidence while its prepared image wa
   const store = stoppedStore(join(directory, 'revalidation-stop')), jobs = new Map<string, Promise<void>>()
   const binding = createBinding({ registry, mirror: { inheritSummary: vi.fn() }, forgetSession: vi.fn(), clients: { send: vi.fn() },
     attachSession: vi.fn(async () => true), captureReader: () => () => false, announceSession: announce, stoppedAgents: store, syncRecapPool: vi.fn(),
-    input: { forget: vi.fn(), awaitingConfirmation: () => false }, submitAgent: vi.fn(),
-    homes: { copilot: directory, grok: directory, agy: directory }, capturePane: async () => null,
+    input: { forget: vi.fn(), awaitingConfirmation: () => false, waitsForPane: () => false, firstTaskWaiting: () => false, typeCommand: async () => false, expectFirstTask: vi.fn() }, submitFirstTask: vi.fn(),
+    homes: { copilot: directory, grok: directory, agy: directory }, capturePane: async () => null, activityRevision: () => undefined,
     openclawPaneRead: vi.fn(), openclawPaneDue: () => false, openclawStateDir: async () => null, followsLive: () => false })
   binding.whileChanging(id => jobs.has(id))
   const nativeEntered = deferred(), nativeDone = deferred(), deleted = vi.fn()

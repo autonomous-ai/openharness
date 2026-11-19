@@ -10,6 +10,14 @@ const facts = (over: Partial<SessionFacts> = {}): SessionFacts => ({ id: 'sessio
   createdAt: '0', updatedAt: '0', ...over })
 const admit = (value: unknown) => readSessionFacts(value, SESSION_OWNER_LIMITS.catalogue, factory => factory === 'fixture')
 
+it.each([undefined, false, true])('retains the additive starting fact and defaults legacy omissions to false: %s', starting => {
+  const input = facts(starting === undefined ? {} : { starting })
+  const retained = retainSessionFacts(admit(input).facts)
+  expect(retainedSessionFrame(retained).starting).toBe(starting ?? false)
+  expect(sessionFactsWire(retained)).toEqual(input)
+  expect(() => admit({ ...input, starting: 'true' })).toThrow()
+})
+
 it.each([undefined, {}, { note: 'opaque', app: { value: 'app-name' }, turn: 'opaque-turn', work: ['opaque-work'] }])
 ('roundtrips absent, empty and opaque app values without exposing authority or retaining the caller object: %j', app => {
   const input = facts(app === undefined ? {} : { app }), before = structuredClone(input)

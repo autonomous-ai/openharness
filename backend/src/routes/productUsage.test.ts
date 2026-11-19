@@ -4,7 +4,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 const methods = vi.hoisted(() => ({ ingestProductUsage: vi.fn(), ingestSetupUsage: vi.fn(), productUsageChoice: vi.fn(), setProductUsageChoice: vi.fn() }))
 vi.mock('../lib/productUsage.js', () => methods)
 import { productUsageRoutes } from './productUsage.js'
-import { PRODUCT_USAGE_METRICS, PRODUCT_USAGE_MAX_COUNT } from '../types/productUsage.js'
+import { LAUNCH_ERROR_FAMILIES, PRODUCT_USAGE_METRICS, PRODUCT_USAGE_MAX_COUNT } from '../types/productUsage.js'
 import { HUB_METRICS, HUB_REPORT_MAX_COUNTERS, HUB_REPORT_MAX_VALUE } from '../lib/hubMetricsContract.js'
 let app: ReturnType<typeof Fastify>
 beforeEach(async () => {
@@ -160,6 +160,13 @@ it('takes the CLI\'s launch codes, late launch failures and first launches by en
       { counters: { launch_late_failed: 1, health_cli_report_unknown_metric: 1 } }))
     expect((await submit({ ...good, context, counters: { [name]: 1 } })).statusCode, name).toBe(400)
   }
+})
+it('keeps an OpenClaw with no Gateway token and one that did not take its first task as listed codes in every family', async () => {
+  const context = { surface: 'cli', release: '0.6.20', platform: 'macos', channel: 'production' }
+  const counters = Object.fromEntries(LAUNCH_ERROR_FAMILIES.flatMap(family =>
+    ['openclaw_no_token', 'first_task_not_taken'].map(code => [`${family}_${code}`, 1])))
+  expect((await submit({ ...good, context, counters })).statusCode).toBe(200)
+  expect(methods.ingestProductUsage).toHaveBeenCalledExactlyOnceWith('account', { ...good, context, counters })
 })
 
 it('takes a phone build context: its release and iOS or Android, nothing finer', async () => {

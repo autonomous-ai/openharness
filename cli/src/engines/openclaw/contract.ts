@@ -30,45 +30,94 @@ const FOOTER_START = /^\s*agent \S+(?: \([^)]*\))? \| session /
  * The title, the first line the TUI draws: `openclaw tui - <gateway url> - agent <id>[ (<name>)] - session <key>`. It
  * scrolls off a long conversation. A remote TUI still holds this machine's state database open, so only this URL tells
  * a local Gateway from one on another host. It word-wraps like the footer: a Harness key (`harness-<uuid>`) makes it
- * about 103 characters, so under that many columns the URL is read off its first line and the session off its lines
- * joined.
+ * about 103 characters, so under that many columns the URL is read off its first line, which may end with it or the
+ * dash after it (a loopback one at 40 columns), and the session off its lines joined.
  */
-const TITLE_START = /^\s*openclaw tui - (wss?:\/\/\S+) - agent /
+const TITLE_START = /^\s*openclaw tui - (wss?:\/\/\S+)(?: -|$)/
 const TITLE = /^openclaw tui - wss?:\/\/\S+ - agent ([A-Za-z0-9_-]{1,64})(?: \([^)]*\))? - session ([A-Za-z0-9._:-]{1,128})$/
 
-/** The composer's borders: the two rules under the footer are the last lines a running TUI draws. */
-export const OPENCLAW_RULE = /^\s*─{8,}\s*$/
+/**
+ * The composer's borders: the two rules under the footer are the last lines a running TUI draws. A box holding more
+ * lines than it shows (30% of the rows, at least 5) names the lines scrolled out of view in them, `──── ↑ 3 more ────`
+ * above and `──── ↓ 2 more ────` below (pi-tui's editor `createScrollBorder`).
+ */
+const OPENCLAW_RULE = /^\s*(?:─{8,}|─+ [↑↓] \d+ more ─+)\s*$/
+const SCROLLED = / [↑↓] (\d+) more /
 
 /**
- * The status line, the last line above the footer: `connected | idle`, `gateway reconnected | idle`, `connected |
- * aborted`, `⠏ running • 6s | connected`, `gateway disconnected: <error> | idle`. A `--local` run says `starting local
- * runtime`, `local ready | idle`, `⠏ running • 6s | local ready`, `local runtime stopped[: <reason>] | idle` for 5 s,
- * then `local stopped | idle`.
+ * The status line, the last line above the footer: `<connection> | <activity>` while idle (`connected | idle`, `gateway
+ * reconnected | idle`, `gateway disconnected: <error> | idle`), `<spinner> <activity> • <elapsed> | <connection>` while
+ * busy (`⠏ running • 6s | connected`). A `--local` run says `starting local runtime`, `local ready | idle`, `⠏ running •
+ * 6s | local ready`, `local runtime stopped[: <reason>] | idle` for 5 s, then `local stopped | idle`.
  */
 const STATUS = {
-  ready: /^(?:(?:gateway )?(?:connected|reconnected) \| (?:idle|aborted|error)|local ready(?: \| (?:idle|aborted|error))?)$/,
-  /** `starting local runtime` is the local TUI's `connecting`. */
-  busy: /^(?:\S{1,2} (?:running|streaming|connecting)\b|starting local runtime\b)/,
-  /** A run in progress; `connecting` is the TUI still reaching its Gateway, before any run. */
+  /**
+   * Connected with no run: the activity word is whatever the TUI last set (`idle`, `aborted`, `tools expanded`, `abort
+   * failed`, or `disconnected` from a message it refused before it connected, which its connection leaves in place;
+   * OpenClaw's tui `setActivityStatus`). An `event gap` is drawn only on a live connection (`client.onGap`).
+   */
+  ready: /^(?:(?:gateway )?(?:connected|reconnected) \| |local ready\b|event gap: )/,
+  /**
+   * Before the TUI can send: `connecting | idle` while it reaches its Gateway (`starting local runtime` for a local
+   * run), then `⠙ starting up • 0s | subscribing to session events` while it loads the session (OpenClaw's tui
+   * `onConnected`), drawn as a busy status though no run has begun.
+   */
+  starting: /^(?:connecting(?: \||$)|\S{1,2} (?:starting up|connecting)\b|starting local runtime\b)/,
+  /**
+   * Every other busy status, `<spinner> <status> • <elapsed> | <connection>`: `sending`, a waiting phrase
+   * (`⠼ flibbertigibbeting… • 0s`), `running`, `streaming`, `finishing context`; the elapsed time `Ns` or `Nm Ns`
+   * (OpenClaw's tui `updateBusyStatusMessage`).
+   */
+  busy: /^\S{1,2} \S.* • (?:\d+m )?\d+s \| \S/,
+  /**
+   * A run in progress. Not `sending` or a waiting phrase: a Gateway slow to write the run's first row is not a store
+   * Harness cannot read (live.ts `NO_SESSION_MS`).
+   */
   running: /^\S{1,2} (?:running|streaming)\b/,
   localStopped: /^local stopped\b/,
   noGateway: /^gateway disconnected\b/,
   /** The connection dropped or just came back: `gateway disconnected: …` (5 s), `disconnected` after it, `gateway
-   * reconnected` (4 s; `setConnectionStatus` in OpenClaw's tui). */
-  gatewayLost: /^(?:gateway )?(?:disconnected|reconnected)\b/,
+   * reconnected` (4 s; `setConnectionStatus` in OpenClaw's tui). A busy line draws the connection last: `| disconnected`,
+   * or `| gateway starting` from a Gateway that went away to restart. */
+  gatewayLost: /^(?:(?:gateway )?(?:disconnected|reconnected)\b|\S{1,2} .* \| (?:gateway starting|disconnected)$)/,
+  /**
+   * A cold Gateway's answer while it starts, `⠙ starting up • 20s | gateway starting` (OpenClaw's tui
+   * `resolveGatewayDisconnectState`): over a minute on a slow machine, between bare `disconnected` lines.
+   */
+  gatewayStarting: / \| gateway starting$/,
 }
+
+/** The status lines the TUI draws, a local runtime's stop aside. */
+const DRAWN = [STATUS.ready, STATUS.starting, STATUS.busy, STATUS.gatewayLost, STATUS.localStopped]
+
+/** A busy status line's spinner: pi-tui's `Loader` frames. */
+const SPINNER = /^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] /
 
 /** The local runtime's stop and its reason, as OpenClaw prints it: the line's wrapped continuations joined. */
 const LOCAL_RUNTIME_STOPPED = /^local runtime stopped(?:: (.*?))?(?: \| idle)?$/
-/** How far above the footer the stop line is looked for: a long reason wraps the status line onto the lines under it. */
-const STOPPED_LINES = 4
+/**
+ * How far above the footer the status line is read: a narrow pane wraps it, and a long stop reason, onto the lines
+ * under its first.
+ */
+const STATUS_LINES = 4
 const REASON_MAX = 200
 const CONTROL = /[\u0000-\u001f\u007f-\u009f]/g
 
 /** What `openclaw tui` prints as it exits when the config has no Gateway token (`screen-no-token.txt`). */
 const NO_TOKEN = /^Missing gateway auth token\./
 
-export type OpenclawPaneState = 'ready' | 'busy' | 'no-gateway' | 'no-token' | 'remote' | 'local-stopped'
+/**
+ * The system lines a TUI whose session history did not load draws in its chat: `history failed: <error>` for each load
+ * that failed (OpenClaw's tui `loadHistory`), and `session history not ready — wait or retry /session` for each message
+ * it then refuses. It still draws a ready status line, and refuses every message until a load succeeds, which clears
+ * the chat, these lines with it. A system line is a blank line, then its text one column in (`createSystemMessage`).
+ * A model's code block, a tool's output or an earlier TUI in the same pane can show the same words one column in too,
+ * so only lines under a blank one, from this TUI's title down, are read as its own.
+ */
+const NO_HISTORY = /^ (?:history failed: |session history not ready\b)/
+const HISTORY_FAILED = /^ history failed: /
+
+export type OpenclawPaneState = 'ready' | 'busy' | 'starting' | 'no-history' | 'no-gateway' | 'no-token' | 'remote' | 'local-stopped'
 
 /** What an OpenClaw pane's screen says. */
 export interface OpenclawScreen {
@@ -87,17 +136,37 @@ export interface OpenclawScreen {
   gatewayLost: boolean
   /** The status line says a run is in progress: `running` or `streaming`, not `connecting`. */
   running: boolean
+  /** The status line says the Gateway is starting: it answered, so it is running. */
+  gatewayStarting: boolean
+  /** The `history failed:` lines in the running TUI's chat: one for each history load that failed since one worked. */
+  historyFailures: number
   /**
    * The reason on a `local runtime stopped` status line, `''` when it gives none. Null on every other screen, the
    * `local stopped` one after it included: that one no longer says why.
    */
   stopped: string | null
+  /** The running TUI's status line as drawn, trimmed, the lines a narrow pane wrapped it onto joined by a space. */
+  status: string | null
+  /**
+   * What the running TUI's input box shows: its lines between the last two rules, trimmed, blank ones dropped, joined
+   * by a space; `''` when it is empty. A message OpenClaw refused is put back here.
+   */
+  box: string | null
+  /** The box's lines scrolled out of view above and below what it shows. */
+  boxHidden: OpenclawBoxHidden
 }
 
-const NOTHING: OpenclawScreen = { key: null, url: null, state: null, footer: null, gatewayLost: false, running: false, stopped: null }
+export interface OpenclawBoxHidden { above: number; below: number }
+
+const NOT_SCROLLED: OpenclawBoxHidden = { above: 0, below: 0 }
+
+const NOTHING: OpenclawScreen = {
+  key: null, url: null, state: null, footer: null, gatewayLost: false, running: false, gatewayStarting: false, historyFailures: 0,
+  stopped: null, status: null, box: null, boxHidden: NOT_SCROLLED,
+}
 
 /** Lines as drawn: escapes removed, trailing blanks dropped. */
-export function openclawScreenLines(capture: string): string[] {
+function openclawScreenLines(capture: string): string[] {
   return stripAnsi(capture).split('\n').map((line) => line.replace(/\s+$/, ''))
 }
 
@@ -129,14 +198,46 @@ function readTitle(lines: readonly string[], start: number): RegExpExecArray | n
   return null
 }
 
+/** The lines from [from] up to [to] each drawn under a blank line, as a system line is. */
+function systemLines(lines: readonly string[], from: number, to: number): string[] {
+  return lines.slice(from, to).filter((line, index, drawn) => index > 0 && !drawn[index - 1].trim())
+}
+
+/** The input box: a live footer has it under it, between the last two rules. */
+function readBox(lines: readonly string[]): Pick<OpenclawScreen, 'box' | 'boxHidden'> {
+  const rules = lines.flatMap((line, index) => (OPENCLAW_RULE.test(line) ? [index] : []))
+  const [top, bottom] = rules.slice(-2)
+  const hidden = (rule: string): number => Number(SCROLLED.exec(rule)?.[1] ?? 0)
+  return {
+    box: lines.slice(top + 1, bottom).map((line) => line.trim()).filter((line) => line).join(' '),
+    boxHidden: { above: hidden(lines[top]), below: hidden(lines[bottom]) },
+  }
+}
+
+/**
+ * The status line, joined with the lines a narrow pane wrapped it onto. A busy one is every line under the blank line
+ * pi-tui's `Loader` draws above its spinner; any other is drawn right under the chat, so it is the fewest lines above
+ * the footer that read as a status. The blank line is looked for first: a busy line's last part can read as a status
+ * by itself (`reconnected`, `local ready`). Null when no lines read as one.
+ */
+function readStatus(lines: readonly string[], start: number): string | null {
+  const drawn = lines.slice(Math.max(0, start - STATUS_LINES), start).map((line) => line.trim())
+  const loader = drawn.lastIndexOf('')
+  if (loader >= 0 && SPINNER.test(drawn[loader + 1] ?? '')) return drawn.slice(loader + 1).join(' ')
+  for (let from = drawn.length - 1; from > loader; from--) {
+    const said = drawn.slice(from).join(' ')
+    if (DRAWN.some((status) => status.test(said))) return said
+  }
+  return null
+}
+
 /**
  * The reason a local runtime stopped with, read off the non-blank lines above the footer (`above`, the status line
- * last): its stop line joined with the lines it wrapped onto. Null when there is none, or when the status line is
- * another of the TUI's own, so a stop line the model wrote above it in the chat is not taken for one.
+ * last): its stop line joined with the lines it wrapped onto. Null when there is none, or when the status line ([said])
+ * is another of the TUI's own, so a stop line the model wrote above it in the chat is not taken for one.
  */
-function readStopped(above: readonly string[]): string | null {
-  const said = above.at(-1) ?? ''
-  if ([STATUS.ready, STATUS.busy, STATUS.gatewayLost, STATUS.localStopped].some((status) => status.test(said))) return null
+function readStopped(above: readonly string[], said: string): string | null {
+  if (DRAWN.some((status) => status.test(said))) return null
   const at = lastIndex(above, (line) => line.startsWith('local runtime stopped'))
   const stopped = at >= 0 ? LOCAL_RUNTIME_STOPPED.exec(above.slice(at).join(' ')) : null
   if (!stopped) return null
@@ -162,14 +263,17 @@ export function readOpenclawScreen(capture: string): OpenclawScreen {
   const shown = FOOTER.exec(footer)
   // A title on screen that cannot be read whole agrees with no footer.
   const agrees = titled < 0 || (!!title && !!shown && title[1] === shown[1] && title[2] === shown[2])
-  const above = lines.slice(0, start).map((line) => line.trim()).filter((line) => line).slice(-STOPPED_LINES)
-  const said = above.at(-1) ?? ''
-  const stopped = readStopped(above)
+  const above = lines.slice(0, start).map((line) => line.trim()).filter((line) => line).slice(-STATUS_LINES)
+  const said = readStatus(lines, start) ?? above.at(-1) ?? ''
+  const stopped = readStopped(above, said)
+  const chat = systemLines(lines, Math.max(titled, 0), start)
   const state: OpenclawPaneState | null = remote ? 'remote'
     : stopped !== null || STATUS.localStopped.test(said) ? 'local-stopped'
       : STATUS.noGateway.test(said) ? 'no-gateway'
-        : STATUS.busy.test(said) ? 'busy'
-          : STATUS.ready.test(said) ? 'ready' : null
+        : STATUS.starting.test(said) ? 'starting'
+          : STATUS.busy.test(said) ? 'busy'
+            : !STATUS.ready.test(said) ? null
+              : chat.some((line) => NO_HISTORY.test(line)) ? 'no-history' : 'ready'
   return {
     key: shown && agrees ? `agent:${shown[1]}:${shown[2]}` : null,
     url,
@@ -177,7 +281,11 @@ export function readOpenclawScreen(capture: string): OpenclawScreen {
     footer,
     gatewayLost: STATUS.gatewayLost.test(said),
     running: STATUS.running.test(said),
+    gatewayStarting: STATUS.gatewayStarting.test(said),
+    historyFailures: chat.filter((line) => HISTORY_FAILED.test(line)).length,
     stopped,
+    status: said,
+    ...readBox(lines),
   }
 }
 
@@ -203,6 +311,37 @@ export const OPENCLAW_LAUNCH = {
   resumeLocal: (key: string): string[] => ['--session', key],
   /** Variables that would point a local run at files outside its folder; cleared so the folder holds all of it. */
   localClear: ['OPENCLAW_CONFIG_PATH', 'OPENCLAW_AGENT_DIR', 'OPENCLAW_OAUTH_DIR', 'OPENCLAW_WORKSPACE_DIR'],
+} as const
+
+/**
+ * A paste over 10 lines or 1000 characters, as pi-tui's editor draws it in the box: `[paste #1 +12 lines]`, or
+ * `[paste #1 1250 chars]` counted after it makes each line break one `\n` and each tab four spaces (`handlePaste`).
+ */
+const PASTE_MARKER = /^\[paste #\d+ (?:\+(\d+) lines|(\d+) chars)\]$/
+
+/**
+ * A box holds a message when it shows all of it and nothing else, compared with all whitespace removed: the TUI
+ * wraps a long message over lines the box joins by a space, breaking a word longer than a line. Any other text in it
+ * is the person's, which an Enter would send. A box scrolled over the message ([hidden]) shows a part: its end under
+ * lines hidden above, its start over lines hidden below, a part between with both. A long paste shows as its marker.
+ */
+export function openclawBoxHolds(box: string | null, message: string, hidden: OpenclawBoxHidden = NOT_SCROLLED): boolean {
+  const pasted = box ? PASTE_MARKER.exec(box) : null
+  if (pasted) {
+    const text = message.replace(/\r\n?/g, '\n')
+    return pasted[1] ? Number(pasted[1]) === text.split('\n').length : Number(pasted[2]) === text.replace(/\t/g, '    ').length
+  }
+  const shown = box?.replace(/\s+/g, '') ?? ''
+  const whole = message.replace(/\s+/g, '')
+  if (!shown) return false
+  return hidden.above && hidden.below ? whole.includes(shown) : hidden.above ? whole.endsWith(shown)
+    : hidden.below ? whole.startsWith(shown) : whole === shown
+}
+
+/** A first task OpenClaw never took: the launch fails with it, and every verb says it. */
+export const OPENCLAW_FIRST_TASK = {
+  error: 'FIRST_TASK_NOT_TAKEN',
+  detail: 'OpenClaw did not take the first task. Close it and start it again.',
 } as const
 
 /** What a person reads when OpenClaw cannot work for Harness, each with what to do about it. */

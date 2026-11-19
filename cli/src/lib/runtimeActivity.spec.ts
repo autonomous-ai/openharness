@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { removeRegistryAgent } from '../testing/registryFixtures.js'
 import { readInlineScreen } from '../testing/inlineScreen.js'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -81,5 +82,28 @@ describe('live terminal fallback', () => {
     expect(await reader.read(row)).toBe('working'); expect(capture).not.toHaveBeenCalled()
     const unsupported = new RuntimeActivityReader({ readScreen: readInlineScreen, codex: async () => 'unknown', capture })
     row.engine = 'pi'; expect(await unsupported.read(row)).toBe('unknown'); expect(capture).not.toHaveBeenCalled()
+    row.engine = 'hermes'; expect(await unsupported.read(row)).toBe('unknown'); expect(capture).not.toHaveBeenCalled()
+  })
+})
+describe('OpenClaw run timer', () => {
+  const fixture = (name: string) => readFileSync(new URL(`../engines/openclaw/__fixtures__/screen-${name}.txt`, import.meta.url), 'utf8')
+  const running = (seconds: number) => fixture('running-quiet').replace('• 45s', `• ${seconds}s`)
+  const openclaw = async () => Object.assign((await session()), { engine: 'openclaw' as const })
+  it('reads a timer that moves as working, from its own capture or a capture handed to it', async () => {
+    const row = (await openclaw()); const capture = vi.fn(async () => running(41))
+    const reader = new RuntimeActivityReader({ readScreen: readInlineScreen, codex: async () => 'unknown', capture })
+    expect(await reader.read(row)).toBe('unknown')
+    capture.mockResolvedValue(running(46))
+    expect(await reader.read(row)).toBe('working')
+    expect(await reader.observe(row, running(51))).toBe('working')
+    expect(capture).toHaveBeenCalledTimes(2)
+  })
+  it('reads the same timer twice, or a ready pane, as unknown', async () => {
+    const row = (await openclaw())
+    const reader = new RuntimeActivityReader({ readScreen: readInlineScreen, codex: async () => 'unknown', capture: async () => null })
+    expect(await reader.observe(row, running(41))).toBe('unknown')
+    expect(await reader.observe(row, running(41))).toBe('unknown')
+    expect(await reader.observe(row, fixture('plain'))).toBe('unknown')
+    expect(await reader.observe(row, fixture('plain'))).toBe('unknown')
   })
 })

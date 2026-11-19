@@ -991,6 +991,468 @@ describe('SessionInputController', () => {
       expect(onError).not.toHaveBeenCalled()
       controller.forget('s1')
     })
+
+    /** An OpenClaw screen as its TUI draws it (engines/openclaw/__fixtures__), its input box holding [box]. */
+    const openclawScreen = (name: string, box: string) => {
+      const lines = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'engines', 'openclaw', '__fixtures__', name), 'utf8').split('\n')
+      const rules = lines.flatMap((line, at) => (/^─+$/.test(line) ? [at] : []))
+      return [...lines.slice(0, rules.at(-2)! + 1), box, ...lines.slice(rules.at(-1)!)].join('\n')
+    }
+    const readyPane = (box = '') => openclawScreen('screen-plain.txt', box)
+    const startingPane = (box = '') => openclawScreen('screen-starting-up.txt', box)
+    const paneController = (pane: () => string | null) => {
+      const inject = vi.fn(async (_id: string, _text: string) => true)
+      const injectCommand = vi.fn(async (_id: string, _line: string) => true)
+      const sendKey = vi.fn(async (_id: string, _key: string) => true)
+      const onError = vi.fn()
+      const onWaitChanged = vi.fn()
+      const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
+        getSession: () => session('openclaw'),
+        validateRuntime: async () => true,
+        inject, injectCommand, sendKey, capture: async () => pane(), onError, onWaitChanged,
+      })
+      return { controller, inject, injectCommand, sendKey, onError, onWaitChanged }
+    }
+
+    it('a message OpenClaw put back in its box while it started up is sent with one Enter at the first ready read', async () => {
+      vi.useFakeTimers()
+      let pane = startingPane('Say hello')
+      const { controller, inject, sendKey, onError } = paneController(() => pane)
+
+      controller.submit('s1', 'Say hello')
+      await vi.advanceTimersByTimeAsync(25_000)
+      expect(sendKey).not.toHaveBeenCalled()
+      pane = readyPane('Say hello')
+      await vi.advanceTimersByTimeAsync(5_000)
+      expect(sendKey.mock.calls).toEqual([['h1', 'Enter']])
+      pane = readyPane()
+      await vi.advanceTimersByTimeAsync(5_000)
+      controller.onTurnStarted('s1', 'Say hello')
+      await vi.advanceTimersByTimeAsync(60_000)
+      expect(sendKey).toHaveBeenCalledTimes(1)
+      expect(inject).toHaveBeenCalledTimes(1)
+      expect(onError).not.toHaveBeenCalled()
+      controller.forget('s1')
+    })
+
+    // At tmux's default 80x24 the box shows 7 lines (pi-tui's editor: 30% of the rows, at least 5): a long message
+    // OpenClaw refused and put back, its cursor at the end, shows its last lines under `↑ 1 more`.
+    it('a long message OpenClaw put back in a box that shows only its end is sent with one Enter', async () => {
+      vi.useFakeTimers()
+      const message = 'Read the build log in ci/last-run.txt and find the first test that failed. Explain in two sentences why it '
+        + 'failed, quoting the assertion message exactly as the log prints it. Then open the test file, find the code under '
+        + 'test, and propose the smallest change to the code (not the test) that would make the assertion pass. Do not edit '
+        + 'any file yet: list the change as a unified diff, say which other tests call the same function, and say whether any '
+        + 'of them would change their result. Finish with one line that starts with VERDICT: and names the file you would change.'
+      const scrolled = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'engines', 'openclaw', '__fixtures__', 'screen-box-scrolled.txt'), 'utf8')
+      const { controller, sendKey, onError } = paneController(() => scrolled)
+
+      controller.submit('s1', message)
+      await vi.advanceTimersByTimeAsync(10_000)
+      expect(sendKey.mock.calls).toEqual([['h1', 'Enter']])
+      controller.onTurnStarted('s1', message)
+      await vi.advanceTimersByTimeAsync(60_000)
+      expect(sendKey).toHaveBeenCalledTimes(1)
+      expect(onError).not.toHaveBeenCalled()
+      controller.forget('s1')
+    })
+
+    it('no Enter on a ready OpenClaw pane whose box holds other text: each window counts', async () => {
+      vi.useFakeTimers()
+      const { controller, sendKey, onError } = paneController(() => readyPane('my own words'))
+
+      controller.submit('s1', 'Say hello')
+      await vi.advanceTimersByTimeAsync(29_900)
+      expect(onError).not.toHaveBeenCalled()
+      await vi.advanceTimersByTimeAsync(200)
+      expect(sendKey).not.toHaveBeenCalled()
+      expect(onError).toHaveBeenCalledWith('s1', expect.stringContaining('did not accept'))
+      controller.forget('s1')
+    })
+
+    it('no Enter on a ready OpenClaw pane with an empty box, which sent the message: each window counts', async () => {
+      vi.useFakeTimers()
+      const { controller, sendKey, onError } = paneController(() => readyPane())
+
+      controller.submit('s1', 'Say hello')
+      await vi.advanceTimersByTimeAsync(29_900)
+      expect(onError).not.toHaveBeenCalled()
+      await vi.advanceTimersByTimeAsync(200)
+      expect(sendKey).not.toHaveBeenCalled()
+      expect(onError).toHaveBeenCalledWith('s1', expect.stringContaining('did not accept'))
+      controller.forget('s1')
+    })
+
+    it('an OpenClaw message whose pane cannot send waits, uncounted, 3 minutes from the paste, then is given up', async () => {
+      vi.useFakeTimers()
+      const { controller, sendKey, onError } = paneController(() => startingPane('Say hello'))
+
+      controller.submit('s1', 'Say hello')
+      await vi.advanceTimersByTimeAsync(179_900)
+      expect(onError).not.toHaveBeenCalled()
+      await vi.advanceTimersByTimeAsync(200)
+      expect(sendKey).not.toHaveBeenCalled()
+      expect(onError).toHaveBeenCalledWith('s1', expect.stringContaining('did not accept'))
+      controller.forget('s1')
+    })
+
+    it('a first task is never given up: it waits, said to the frame, until its user row confirms it', async () => {
+      vi.useFakeTimers()
+      let pane = startingPane()
+      const { controller, sendKey, onError, onWaitChanged } = paneController(() => pane)
+
+      expect(controller.firstTaskWaiting('s1')).toBe(false)
+      controller.expectFirstTask('s1')
+      controller.submit('s1', 'Say hello')
+      await vi.advanceTimersByTimeAsync(4 * 60_000)
+      pane = readyPane()
+      await vi.advanceTimersByTimeAsync(60_000)
+      expect(onError).not.toHaveBeenCalled()
+      expect(sendKey).not.toHaveBeenCalled()
+      expect(controller.firstTaskWaiting('s1')).toBe(true)
+      expect(onWaitChanged.mock.calls).toEqual([['s1']])
+      controller.onTurnStarted('s1', 'Say hello')
+      expect(controller.firstTaskWaiting('s1')).toBe(false)
+      expect(onWaitChanged.mock.calls).toEqual([['s1'], ['s1']])
+      controller.forget('s1')
+      expect(onWaitChanged).toHaveBeenCalledTimes(2)
+    })
+
+    it('a first task on a pane it cannot read gets the two Enters any message does, and waits until it is forgotten', async () => {
+      vi.useFakeTimers()
+      const { controller, sendKey, onError, onWaitChanged } = paneController(() => null)
+
+      controller.expectFirstTask('s1')
+      controller.submit('s1', 'Say hello')
+      await vi.advanceTimersByTimeAsync(5 * 60_000)
+      expect(sendKey).toHaveBeenCalledTimes(2)
+      expect(onError).not.toHaveBeenCalled()
+      expect(controller.firstTaskWaiting('s1')).toBe(true)
+      controller.forget('s1')
+      expect(controller.firstTaskWaiting('s1')).toBe(false)
+      expect(onWaitChanged.mock.calls).toEqual([['s1'], ['s1']])
+    })
+
+    // Found end to end (e2e/openclawShow.e2e.ts rows 3 and 6): the task left its row before it was typed, and until its
+    // paste was done, about 350 ms, the agent read idle with no ask.
+    it('a first task waits from when it is expected: before it is submitted, while it is pasted, and after', async () => {
+      let paste!: (done: boolean) => void
+      const { controller, inject } = paneController(() => readyPane())
+      inject.mockImplementationOnce(() => new Promise<boolean>((done) => { paste = done }))
+
+      controller.expectFirstTask('s1')
+      expect(controller.firstTaskWaiting('s1')).toBe(true)
+      controller.submit('s1', 'Say hello')
+      await vi.waitFor(() => expect(inject).toHaveBeenCalled())
+      expect(controller.firstTaskWaiting('s1')).toBe(true)
+      paste(true)
+      await vi.waitFor(() => expect(controller.awaitingConfirmation('s1')).toBe(true))
+      expect(controller.firstTaskWaiting('s1')).toBe(true)
+      controller.onTurnStarted('s1', 'Say hello')
+      expect(controller.firstTaskWaiting('s1')).toBe(false)
+      controller.forget('s1')
+    })
+
+    // Off its row once handed over, a first task lost to a paste that failed left the agent idle with no ask for good. It
+    // waits: a turn that takes it ends the wait, and if none does the binding pass's bound fails the launch where every
+    // verb shows it (core/agents/bind.ts).
+    it('a first task still waits after a paste that failed, until a turn takes it', async () => {
+      vi.useFakeTimers()
+      const { controller, inject, onError } = paneController(() => readyPane())
+      inject.mockResolvedValueOnce(false)
+
+      controller.expectFirstTask('s1')
+      controller.submit('s1', 'Say hello')
+      await vi.advanceTimersByTimeAsync(5 * 60_000)
+      expect(onError).toHaveBeenCalled()
+      expect(controller.firstTaskWaiting('s1')).toBe(true)
+      controller.onTurnStarted('s1', 'Say hello')
+      expect(controller.firstTaskWaiting('s1')).toBe(false)
+      controller.forget('s1')
+    })
+
+    // Found in review: a first task whose paste may have gone through was given up at its first window, never sent if
+    // OpenClaw had refused it into its box. Its pane says which it was.
+    describe('a first task whose paste may have gone through', () => {
+      const maybe = { state: 'unknown', dispatch: 'possibly_executed', reason: 'response was lost' } as const
+
+      it('is sent with one Enter when its box holds it', async () => {
+        vi.useFakeTimers()
+        let pane = readyPane('Say hello')
+        const { controller, inject, sendKey, onError } = paneController(() => pane)
+        inject.mockResolvedValueOnce(maybe as never)
+
+        controller.expectFirstTask('s1')
+        controller.submit('s1', 'Say hello')
+        await vi.advanceTimersByTimeAsync(10_000)
+        expect(sendKey.mock.calls).toEqual([['h1', 'Enter']])
+        pane = readyPane()
+        await vi.advanceTimersByTimeAsync(5 * 60_000)
+        expect(sendKey).toHaveBeenCalledTimes(1)
+        expect(onError).not.toHaveBeenCalled()
+        expect(controller.awaitingConfirmation('s1')).toBe(true)
+        controller.onTurnStarted('s1', 'Say hello')
+        expect(controller.firstTaskWaiting('s1')).toBe(false)
+        controller.forget('s1')
+      })
+
+      it.each([
+        ['its box is empty', readyPane()],
+        ['its pane cannot be read', null],
+      ])('waits, with no Enter, while %s', async (_, pane) => {
+        vi.useFakeTimers()
+        const { controller, inject, sendKey, onError } = paneController(() => pane)
+        inject.mockResolvedValueOnce(maybe as never)
+
+        controller.expectFirstTask('s1')
+        controller.submit('s1', 'Say hello')
+        await vi.advanceTimersByTimeAsync(5 * 60_000)
+        expect(sendKey).not.toHaveBeenCalled()
+        expect(onError).not.toHaveBeenCalled()
+        expect(controller.awaitingConfirmation('s1')).toBe(true)
+        expect(controller.firstTaskWaiting('s1')).toBe(true)
+        controller.forget('s1')
+      })
+    })
+
+    it('a first task the person stops before a turn takes it waits no more', async () => {
+      const { controller } = paneController(() => readyPane())
+
+      controller.expectFirstTask('s1')
+      controller.submit('s1', 'Say hello')
+      await vi.waitFor(() => expect(controller.awaitingConfirmation('s1')).toBe(true))
+      expect(await controller.cancelConfirmed('s1')).toBe(true)
+      expect(controller.firstTaskWaiting('s1')).toBe(false)
+      controller.forget('s1')
+    })
+
+    it('types an OpenClaw command only while nothing is pending for its pane, as a command, not a message', async () => {
+      const { controller, inject, injectCommand } = paneController(() => readyPane())
+      const command = '/session agent:main:plain'
+
+      controller.submit('s1', 'Say hello')
+      await vi.waitFor(() => expect(controller.awaitingConfirmation('s1')).toBe(true))
+      expect(await controller.typeCommand('s1', command)).toBe(false)
+      controller.onTurnStarted('s1', 'Say hello')
+      expect(await controller.typeCommand('s1', command)).toBe(false)
+      controller.onTurnEnded('s1')
+      expect(await controller.typeCommand('s1', command)).toBe(true)
+      expect(inject.mock.calls).toEqual([['h1', 'Say hello', expect.any(Function)]])
+      expect(injectCommand.mock.calls).toEqual([['h1', command, expect.any(Function)]])
+      controller.forget('s1')
+    })
+
+    it.each(['forgotten', 'rebound'] as const)('revokes a pending command when its session is %s', async (change) => {
+      const row = session('openclaw')
+      let finish!: (value: boolean) => void
+      let current!: () => boolean
+      const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
+        getSession: () => row, validateRuntime: async () => true, inject: async () => true,
+        injectCommand: async (_id, _line, allowed) => {
+          current = allowed!
+          return new Promise<boolean>(resolve => { finish = resolve })
+        }, sendKey: async () => true, onError: vi.fn() })
+
+      const typing = controller.typeCommand('s1', '/session agent:main:plain')
+      expect(current()).toBe(true)
+      expect(controller.acquireInputWriter('s1')).toBeNull()
+      if (change === 'forgotten') controller.forget('s1')
+      else row.tmuxPane = '%2'
+      expect(current()).toBe(false)
+      finish(true)
+      expect(await typing).toBe(false)
+      expect(controller.controlHeld('s1')).toBe(false)
+      controller.forget('s1')
+    })
+
+    it('types no command into a pane it was given no way to type one into', async () => {
+      const inject = vi.fn(async () => true)
+      const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
+        getSession: () => session('openclaw'), validateRuntime: async () => true, inject, sendKey: async () => true, onError: vi.fn() })
+
+      expect(await controller.typeCommand('s1', '/session agent:main:plain')).toBe(false)
+      expect(inject).not.toHaveBeenCalled()
+      expect(controller.controlHeld('s1')).toBe(false)
+    })
+
+    // Found in review: an Enter retry of a message with no delivery id checked only the agent's process once it answered,
+    // so a retry that answered after the agent was forgotten still pressed Enter into its pane.
+    describe('an Enter retry the agent is forgotten during', () => {
+      const retrying = () => {
+        const validateRuntime = vi.fn(async () => true)
+        const sendKey = vi.fn(async (_id: string, _key: string) => true)
+        const capture = vi.fn(async () => null)
+        const onError = vi.fn()
+        const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
+          getSession: () => session('openclaw'), validateRuntime, inject: async () => true, sendKey, capture, onError })
+        return { controller, validateRuntime, sendKey, capture, onError }
+      }
+
+      it.each([true, false])('presses nothing and says nothing when its process check answers %s after', async (alive) => {
+        vi.useFakeTimers()
+        const { controller, validateRuntime, sendKey, onError } = retrying()
+
+        controller.submit('s1', 'hello')
+        let answer!: (alive: boolean) => void
+        validateRuntime.mockImplementationOnce(() => new Promise<boolean>((done) => { answer = done }))
+        await vi.advanceTimersByTimeAsync(10_000)
+        expect(validateRuntime).toHaveBeenCalledTimes(2)
+        controller.forget('s1')
+        answer(alive)
+        await vi.advanceTimersByTimeAsync(60_000)
+        expect(sendKey).not.toHaveBeenCalled()
+        expect(onError).not.toHaveBeenCalled()
+      })
+
+      it('reads the pane no more once the Enter it was pressing is done', async () => {
+        vi.useFakeTimers()
+        const { controller, validateRuntime, sendKey, capture } = retrying()
+        let pressed!: (done: boolean) => void
+        sendKey.mockImplementationOnce(() => new Promise<boolean>((done) => { pressed = done }))
+
+        controller.submit('s1', 'hello')
+        await vi.advanceTimersByTimeAsync(10_000)
+        expect(sendKey).toHaveBeenCalledTimes(1)
+        controller.forget('s1')
+        pressed(true)
+        const reads = capture.mock.calls.length, checks = validateRuntime.mock.calls.length
+        await vi.advanceTimersByTimeAsync(60_000)
+        expect(capture).toHaveBeenCalledTimes(reads)
+        expect(validateRuntime).toHaveBeenCalledTimes(checks)
+        expect(sendKey).toHaveBeenCalledTimes(1)
+      })
+    })
+
+    // Found in review: typed into a pane whose history had not loaded, a message was refused back into the input box,
+    // where the binding pass's `/session` (typed only into an empty box) never ran; it was given up after 3 minutes and
+    // stayed in the box under the next paste.
+    describe('a message its OpenClaw pane cannot send yet', () => {
+      const notReady: TerminalActionResult = { state: 'failed', dispatch: 'not_started', reason: 'openclaw_not_ready' }
+      /** A pane that types no message (core/input.ts reads it unable to send) until `canSend`, and its own command at once. */
+      const waitingPane = () => {
+        let ready = false
+        let commandDone: (() => void) | null = null
+        const typed: string[] = []
+        const inject = vi.fn(async (_id: string, text: string): Promise<boolean | TerminalActionResult> => {
+          if (!ready) return notReady
+          typed.push(text)
+          return true
+        })
+        const injectCommand = vi.fn(async (_id: string, line: string) => {
+          typed.push(line)
+          await new Promise<void>((done) => { commandDone = done })
+          return true
+        })
+        const onError = vi.fn()
+        const onDelivery = vi.fn()
+        const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
+          getSession: () => session('openclaw'),
+          validateRuntime: async () => true,
+          inject, injectCommand, sendKey: vi.fn(async () => true), capture: async () => readyPane(), onError, onDelivery,
+        })
+        return { controller, inject, onError, onDelivery, typed, canSend: () => { ready = true }, finishCommand: () => commandDone?.() }
+      }
+
+      it('is typed once its pane can send, and not before', async () => {
+        vi.useFakeTimers()
+        const { controller, typed, onError, canSend } = waitingPane()
+
+        controller.submit('s1', 'Say hello')
+        await vi.advanceTimersByTimeAsync(60_000)
+        expect(typed).toEqual([])
+        expect(controller.awaitingConfirmation('s1')).toBe(false)
+        canSend()
+        await vi.advanceTimersByTimeAsync(1_000)
+        expect(typed).toEqual(['Say hello'])
+        expect(controller.awaitingConfirmation('s1')).toBe(true)
+        expect(onError).not.toHaveBeenCalled()
+        controller.forget('s1')
+      })
+
+      // Found in review: the binding pass types `/session` only while a message of Harness's waits on the agent, and a
+      // message waiting here, untyped, awaits no confirmation: nothing let its pane send it.
+      it('says it waits for its pane while it does, and no more once it is typed or given up', async () => {
+        vi.useFakeTimers()
+        const { controller, canSend } = waitingPane()
+
+        expect(controller.waitsForPane('s1')).toBe(false)
+        controller.submit('s1', 'Say hello')
+        await vi.advanceTimersByTimeAsync(5_000)
+        expect(controller.waitsForPane('s1')).toBe(true)
+        canSend()
+        await vi.advanceTimersByTimeAsync(1_000)
+        expect(controller.waitsForPane('s1')).toBe(false)
+        controller.forget('s1')
+
+        const given = waitingPane()
+        given.controller.submit('s1', 'Say hello')
+        await vi.advanceTimersByTimeAsync(181_000)
+        expect(given.onError).toHaveBeenCalled()
+        expect(given.controller.waitsForPane('s1')).toBe(false)
+        given.controller.forget('s1')
+      })
+
+      it.each([
+        ['a person\'s message', undefined],
+        ['a delivery', 'delivery-1'],
+      ])('%s waits 3 minutes, then is given up, typed nowhere', async (_, deliveryId) => {
+        vi.useFakeTimers()
+        const { controller, inject, typed, onError, onDelivery } = waitingPane()
+
+        controller.submit('s1', 'Say hello', deliveryId)
+        await vi.advanceTimersByTimeAsync(179_000)
+        expect(onError).not.toHaveBeenCalled()
+        await vi.advanceTimersByTimeAsync(2_000)
+        expect(onError).toHaveBeenCalledWith('s1', 'The agent did not accept the message. Please try again.')
+        if (deliveryId) expect(onDelivery).toHaveBeenLastCalledWith({ sessionId: 's1', deliveryId, state: 'rejected', reason: 'not_submitted' })
+        const tries = inject.mock.calls.length
+        await vi.advanceTimersByTimeAsync(60_000)
+        expect(inject).toHaveBeenCalledTimes(tries)
+        expect(typed).toEqual([])
+        controller.forget('s1')
+      })
+
+      it('a first task waits for it until the binding pass lets the task go', async () => {
+        vi.useFakeTimers()
+        const { controller, inject, typed, onError } = waitingPane()
+
+        controller.expectFirstTask('s1')
+        controller.submit('s1', 'Say hello')
+        await vi.advanceTimersByTimeAsync(10 * 60_000)
+        expect(onError).not.toHaveBeenCalled()
+        expect(controller.firstTaskWaiting('s1')).toBe(true)
+        controller.forget('s1')
+        const tries = inject.mock.calls.length
+        await vi.advanceTimersByTimeAsync(60_000)
+        expect(inject).toHaveBeenCalledTimes(tries)
+        expect(typed).toEqual([])
+      })
+
+      it('lets the pane\'s own command be typed meanwhile, tries nothing while it is, and is typed after it', async () => {
+        vi.useFakeTimers()
+        const { controller, inject, typed, onError, canSend, finishCommand } = waitingPane()
+        const command = '/session agent:main:plain'
+
+        controller.submit('s1', 'Say hello', 'delivery-1')
+        controller.submit('s1', 'And then this', 'delivery-2')
+        await vi.advanceTimersByTimeAsync(2_000)
+        const typing = controller.typeCommand('s1', command)
+        const tries = inject.mock.calls.length
+        await vi.advanceTimersByTimeAsync(5_000)
+        expect(inject).toHaveBeenCalledTimes(tries)
+        finishCommand()
+        expect(await typing).toBe(true)
+        canSend()
+        await vi.advanceTimersByTimeAsync(1_000)
+        expect(typed).toEqual([command, 'Say hello'])
+        controller.onTurnStarted('s1', 'Say hello')
+        controller.onTurnEnded('s1')
+        await vi.advanceTimersByTimeAsync(1_000)
+        expect(typed).toEqual([command, 'Say hello', 'And then this'])
+        expect(onError).not.toHaveBeenCalled()
+        controller.forget('s1')
+      })
+    })
   })
 
   describe('Claude Code and Codex readings from their engine worker', () => {

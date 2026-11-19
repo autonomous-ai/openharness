@@ -66,16 +66,16 @@ describe('a program token file', () => {
 
 describe('the program harness records', () => {
   const hash = 'f'.repeat(64)
-  const row = (agentId: string, name = 'lamp-openclaw', createdAt = 1) =>
+  const row = (agentId: string, name = 'openclaw-1', createdAt = 1) =>
     ({ agentId, tokenHash: hash, name, engine: 'openclaw', createdAt, startedAt: createdAt, inputs: [] })
 
   it('finds a harness by the program\'s name and token, newest first, and keeps its last inputs', () => {
     const records = new ProgramRecords(dir)
     expect(records.all()).toEqual([])
-    records.put(row('a', 'Lamp-OpenClaw', 1))
-    records.put(row('b', 'lamp-openclaw', 2))
-    expect(records.named('lamp-openclaw', hash).map((h) => h.agentId)).toEqual(['b', 'a'])
-    expect(records.named('lamp-openclaw', '0'.repeat(64))).toEqual([])
+    records.put(row('a', 'OpenClaw-1', 1))
+    records.put(row('b', 'openclaw-1', 2))
+    expect(records.named('openclaw-1', hash).map((h) => h.agentId)).toEqual(['b', 'a'])
+    expect(records.named('openclaw-1', '0'.repeat(64))).toEqual([])
     expect(ownedBy(dir, 'a', hash)).toBe(true)
     expect(ownedBy(dir, 'a', '0'.repeat(64))).toBe(false)
     expect(ownedBy(dir, 'zzz', hash)).toBe(false)

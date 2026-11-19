@@ -15,7 +15,7 @@ const fields = new Set<string>(SESSION_FACT_FIELDS)
 const optionalText = ['identityHold', 'namedState', 'workspace']
 const nullableTexts = ['title', 'lastOpenedAt', 'selectedModel', 'codexHome', 'claudeHome', 'dsh', 'dshName',
   'viewerUrl', 'viewerName', 'parentAgentId', 'permissionMode', 'namedAgent']
-const flags = ['nameChosen', 'closeSupported', 'forkable']
+const flags = ['nameChosen', 'closeSupported', 'forkable', 'starting']
 const displays = ['tokenUsage', 'outputStats', 'grid', 'project', 'verdict']
 const displayOverrides = new Set(['project', 'gitContext', 'dsh', 'dshName', 'viewerUrl', 'viewerName', 'verdict'])
 const reserved = new Set<string>([...SESSION_FACT_FIELDS.filter(key => key !== 'app' && key !== 'turn' && key !== 'work'),

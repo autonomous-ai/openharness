@@ -6,7 +6,7 @@ import { MISSING_HELPER, REPLACED_PROGRAM } from '../engines/kit/identityScan.js
 import { OPENCLAW_STATES } from '../engines/openclaw/contract.js'
 import { OTHER_ENGINE_STATES } from '../engines/otherEngines.js'
 import { Ledger, ledgerPath } from './ledger.js'
-import { asSaid, callerOf, clip, forAgent, lastTurn, matching, namedStateOf, outsideCaller, rowsOf, stateOf, STOPPED_WITHIN_MS, type Frame, type Row } from './model.js'
+import { asSaid, callerOf, clip, forAgent, lastTurn, listedStateOf, matching, namedStateOf, outsideCaller, rowsOf, stateOf, STOPPED_WITHIN_MS, type Frame, type Row } from './model.js'
 
 describe('forAgent', () => {
   const row = (name: string, over: Partial<Row> = {}): Row => ({ name, id: name, agent: 'Codex', machine: 'm', state: 'idle', folder: null, branch: null,
@@ -69,6 +69,31 @@ describe('a harness as the agent verbs show it', () => {
     expect(rows.map((r) => [r.name, r.state])).toEqual([['held', 'held'], ['calm', 'idle'], ['mending', 'idle']])
     const many = [...Array.from({ length: 20 }, (_, i) => ({ ...rows[1], name: `idle${i}` })), rows[0]]
     expect(forAgent(many).shown[0].name).toBe('held')
+  })
+
+  it('lists a starting harness with the working ones, before the idle', () => {
+    const rows = rowsOf([frame('calm'), frame('new', { starting: true, updatedAt: '2026-10-11T09:00:00Z' })],
+      { machineId: 'm', machine: 'mac', caller: null, ledger: ledger(), now: NOW, all: false })
+    expect(rows.map((r) => [r.name, r.state])).toEqual([['new', 'starting'], ['calm', 'idle']])
+    const many = [...Array.from({ length: 20 }, (_, i) => ({ ...rows[1], name: `idle${i}` })), rows[0]]
+    expect(forAgent(many).shown[0].name).toBe('new')
+  })
+
+  it('lists a failed launch, then a hold, then a start, over what it shows; a stopped or cloud harness by its own state', () => {
+    const failed = { state: 'failed', error: 'FIRST_TASK_NOT_TAKEN', detail: 'OpenClaw did not take the first task. Close it and start it again.' } as const
+    // A failed launch leaves its row inactive: the frame says offline.
+    expect(listedStateOf(frame('a', { status: 'offline', launch: failed }))).toBe('failed')
+    expect(listedStateOf(frame('a', { launch: failed, namedState: OPENCLAW_STATES.noGateway, starting: true }))).toBe('failed')
+    expect(listedStateOf(frame('a', { namedState: OPENCLAW_STATES.noGateway, starting: true }))).toBe('held')
+    expect(listedStateOf(frame('a', { starting: true }))).toBe('starting')
+    expect(listedStateOf(frame('a', { status: 'stopped', launch: failed, starting: true }))).toBe('stopped')
+    expect(listedStateOf(frame('a', { location: 'cloud', cloud: { state: 'working' }, launch: failed, starting: true }))).toBe('working')
+    // Not confirmed is not failed, and a recovering sentence holds nothing.
+    expect(listedStateOf(frame('a', { launch: { state: 'failed', error: 'RESUME_UNCONFIRMED' } }))).toBe('idle')
+    expect(listedStateOf(frame('a', { namedState: OTHER_ENGINE_STATES.lost, starting: false, activity: { state: 'working' } }))).toBe('working')
+    const rows = rowsOf([frame('new', { starting: true }), frame('lost', { status: 'offline', launch: failed })],
+      { machineId: 'm', machine: 'mac', caller: null, ledger: ledger(), now: NOW, all: false })
+    expect(rows.map((r) => [r.name, r.state])).toEqual([['new', 'starting'], ['lost', 'failed']])
   })
 
   it('knows the caller by its pane in any state, and a terminal is not one', () => {

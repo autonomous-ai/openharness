@@ -74,6 +74,15 @@ beforeEach(async () => {
 afterEach(async () => { Object.assign(env, originalStoreHomes); vi.restoreAllMocks(); for (const s of registry.list()) (await removeRegistryAgent(registry, s.agentId)); await rm(root, { recursive: true, force: true }) })
 const manifest = async () => JSON.parse(await readFile(join(directory, (await readdir(directory)).find(f => /^[a-f0-9]{64}\.json$/.test(f))!), 'utf8'))
 
+it('refuses a worker empty-history receipt for any engine other than OpenClaw', async () => {
+  row = { ...row, engine: 'hermes', transcriptPath: null, hermesHome: root }
+  const empty = new SessionCheckpointStore(directory, { exportDatabase: async () => ({ empty: true, bytes: 0,
+    sha256: 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855' }) })
+  await expect(empty.save(row)).rejects.toMatchObject({ code: 'HISTORY_NOT_SAVED' })
+  expect(await readdir(directory)).toEqual(['.stages'])
+  expect(await readdir(join(directory, '.stages'))).toEqual([])
+})
+
 async function piSession() {
   const previousHome = env.PI_HOME
   env.PI_HOME = join(root, 'pi')

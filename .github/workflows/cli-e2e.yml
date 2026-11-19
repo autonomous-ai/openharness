@@ -48,7 +48,8 @@ jobs:
       fail-fast: false
       matrix:
         shard: [1, 2, 3, 4, 5, 6, 7, 8]
-    runs-on: ubuntu-latest
+    # ubuntu-latest moved to 26.04, which has no zsh or tcsh package; 24.04 until it does.
+    runs-on: ubuntu-24.04
     # About nine minutes of tests per shard by the timing hints, plus install and the bundle.
     timeout-minutes: 45
     defaults:

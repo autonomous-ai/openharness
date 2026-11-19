@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { MISSING_HELPER, REPLACED_PROGRAM } from '../engines/kit/identityScan.js'
 import { OPENCLAW_STATES } from '../engines/openclaw/contract.js'
-import { agentFrame } from './agentFrame.js'
+import { agentFrame, agentStarting } from './agentFrame.js'
 import { agentProject } from './agentProject.js'
 import type { RegisteredSession } from './registry.js'
 
@@ -21,6 +21,34 @@ function session(grid: RegisteredSession['grid'], codexHome: RegisteredSession['
 }
 
 const assignment = { baseUrl: 'https://grid.autonomous.ai/grid-abc/relay', model: 'DeepSeek-V4-Flash-0731' }
+
+describe('agentStarting', () => {
+  const launched = Date.parse('2026-11-19T08:00:00.000Z')
+  const unboundOpenclaw = { ...session(null), engine: 'openclaw' as const, sessionId: '', registeredAt: launched }
+
+  it('is starting while the row still holds its first task', () => {
+    expect(agentStarting({ ...session(null), firstTask: 'Fix the parser' }, false, launched + 3_600_000)).toBe(true)
+  })
+  it('is starting while its typed first task awaits confirmation', () => {
+    expect(agentStarting(session(null), true, launched + 3_600_000)).toBe(true)
+  })
+  it('an OpenClaw with no session bound is starting for a minute from its launch', () => {
+    expect(agentStarting(unboundOpenclaw, false, launched + 59_000)).toBe(true)
+    expect(agentStarting(unboundOpenclaw, false, launched + 61_000)).toBe(false)
+  })
+  // An engine typed into a pane that was open first starts later than its row.
+  it('an OpenClaw counts its minute from its process\'s start when that is later than its row', () => {
+    const row = { ...unboundOpenclaw, processIdentity: { pid: 7, executable: 'openclaw', startMarker: new Date(launched + 30_000).toISOString() } }
+    expect(agentStarting(row, false, launched + 89_000)).toBe(true)
+    expect(agentStarting(row, false, launched + 91_000)).toBe(false)
+  })
+  it('an unbound Codex is not starting', () => {
+    expect(agentStarting({ ...unboundOpenclaw, engine: 'codex' }, false, launched + 1_000)).toBe(false)
+  })
+  it('a bound OpenClaw with no task is not starting', () => {
+    expect(agentStarting({ ...unboundOpenclaw, sessionId: 's1' }, false, launched + 1_000)).toBe(false)
+  })
+})
 
 describe('agentFrame', () => {
   it.each(['Live view is waiting for its engine reader. The terminal and Stop still work.',
@@ -114,8 +142,16 @@ describe('agentFrame', () => {
   // The task is the person's words, typed into the pane once (core/agents/bind.ts); no client is ever sent it.
   it('a first task never rides the agent\'s frame', async () => {
     const row = { ...session(null), engine: 'openclaw' as const, firstTask: 'Fix the parser' }
-    const frame = await agentFrame(row, { selectedModel: null, terminalAvailable: true })
+    const frame = await agentFrame(row, { selectedModel: null, terminalAvailable: true, starting: () => true })
+    expect(frame.starting).toBe(true)
     expect(JSON.stringify(frame)).not.toContain('Fix the parser')
+  })
+
+  // Always present: a push without the key would leave a window showing a start that ended.
+  it('says starting as its context reads it, and false without one', async () => {
+    expect((await agentFrame(session(null), { selectedModel: null, terminalAvailable: true })).starting).toBe(false)
+    expect((await agentFrame(session(null), { selectedModel: null, terminalAvailable: true, starting: () => true })).starting).toBe(true)
+    expect((await agentFrame(session(null), { selectedModel: null, terminalAvailable: true, starting: () => false })).starting).toBe(false)
   })
 
   it('F1 sends a fork origin to clients as name and id only, never its transcript', async () => {

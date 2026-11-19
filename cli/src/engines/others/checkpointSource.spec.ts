@@ -5,7 +5,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { nativeFileKey } from '../kit/nativePaths.js'
 import { sqliteReadAll } from '../../lib/sqliteRead.js'
 import { exportDatabase } from './checkpoint.js'
-import type { ExportSource, ExportStage } from '../worker/storageProtocol.js'
+import { exportReceipt, type ExportSource, type ExportStage } from '../worker/storageProtocol.js'
 import { OPENCLAW_COLUMNS } from '../openclaw/contract.js'
 
 vi.mock('../../lib/sqliteRead.js', () => ({ sqliteReadAll: vi.fn() }))
@@ -23,6 +23,25 @@ beforeEach(() => {
         : [{ id: 'wanted' }] }))
 })
 afterEach(() => { vi.restoreAllMocks(); rmSync(root, { recursive: true, force: true }) })
+
+it.each(['empty', 'unreadable', 'changed', 'cancelled', 'other engine'] as const)('reports unwritten history only from a complete stable OpenClaw read: %s', async how => {
+  let current = true
+  vi.mocked(sqliteReadAll).mockImplementationOnce(async () => {
+    if (how === 'changed') writeFileSync(source.path, 'new native conversation')
+    if (how === 'cancelled') current = false
+    return how === 'unreadable' ? { ok: false, reason: 'unavailable' } as never : { ok: true, via: 'builtin', rows: [] }
+  })
+  const result = exportDatabase(how === 'other engine' ? 'hermes' : 'openclaw', { sessionId: 'agent:main:unwritten' }, stage, source, () => current)
+  if (how === 'empty') {
+    const receipt = await result
+    expect(receipt).toMatchObject({ empty: true, bytes: 0 })
+    expect(exportReceipt(receipt)).toBe(true)
+    expect(exportReceipt({ ...receipt, empty: false })).toBe(false)
+    expect(exportReceipt({ ...receipt, bytes: 1 })).toBe(false)
+    expect(exportReceipt({ ...receipt, sha256: 'a'.repeat(64) })).toBe(false)
+  } else await expect(result).rejects.toThrow()
+  expect(readFileSync(stage.path, 'utf8')).toBe('')
+})
 
 it.each(['hermes', 'openclaw'] as const)('uses only the core-selected %s source despite another discovered profile/config', async engine => {
   const other = join(root, 'other'); mkdirSync(other)

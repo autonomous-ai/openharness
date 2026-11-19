@@ -14,6 +14,7 @@ const column = (name: string): PageColumn => ({ as: name, sql: `t."${name.replac
 
 /** How a conversation table is read: every column, or these, with their size. */
 type Paged = true | { columns: PageColumn[]; size: string }
+class UnwrittenOpenclawHistory extends Error {}
 
 /**
  * A conversation table's rows of this session, read in pages bounded by bytes (#4188): read whole against the 32 MiB
@@ -86,6 +87,7 @@ async function* databaseHistory(s: StorageSession & { engine: StorageEngine }, s
     let firstRow = true
     const read = paged ? pagedRows(database, table, where, s.sessionId, paged)
       : await sqliteReadAll(database, `SELECT * FROM ${table} WHERE ${where};`, [s.sessionId]).then(result => {
+        if (s.engine === 'openclaw' && table === selections[0][0] && result.ok && result.rows.length === 0) throw new UnwrittenOpenclawHistory()
         if (!result.ok || (table === selections[0][0] && result.rows.length !== 1)) throw new Error('checkpoint row unavailable')
         return result.rows
       })
@@ -171,5 +173,10 @@ export async function exportDatabase(engine: StorageEngine, session: StorageSess
     if (!current()) throw new Error('checkpoint cancelled')
     input.verify()
     return { bytes, sha256: hash.digest('hex') }
+  } catch (error) {
+    // No selected conversation means no checkpoint. Never turn a read failure into absence.
+    if (!(error instanceof UnwrittenOpenclawHistory) || engine !== 'openclaw' || bytes !== 0 || !current()) throw error
+    input.verify()
+    return { empty: true, bytes: 0, sha256: createHash('sha256').digest('hex') }
   } finally { await output.close() }
 }

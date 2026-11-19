@@ -13,7 +13,7 @@ import { sid } from '../lib/log.js'
 import type { LiveEvent } from '../engines/kit/events.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import type { MoveGate } from '../lib/hostMove/gate.js'
-import { SessionInputController, type MessageReceipt, type SessionInputDelivery, type SessionInputDeps, type SessionInputProgress, type SessionInputRequest } from '../lib/sessionInput.js'
+import { OPENCLAW_NOT_READY, SessionInputController, type MessageReceipt, type SessionInputDelivery, type SessionInputDeps, type SessionInputProgress, type SessionInputRequest } from '../lib/sessionInput.js'
 import { passingHold } from '../lib/messageHolds.js'
 import { pasteComesAsKeys, pasteOnScreen } from '../lib/pasteOnScreen.js'
 import type { ScreenReader } from '../lib/screenReader.js'
@@ -47,6 +47,8 @@ export interface InputDeps {
   agentIdFor: (sessionId: string) => string
   /** Command Code's turn opened on our paste, from outside its transcript, in its worker (core/engines/otherStreams.ts). */
   openTurn: (sessionId: string, text: string) => Promise<LiveEvent[]>
+  /** An OpenClaw's run began with our paste: it is working from now (core/turns/activity.ts), on the lease any work is. */
+  sending?: (sessionId: string) => void
   emit: (sessionId: string, events: LiveEvent[]) => void
   /** A prompt is about to be typed, and `capture` is the pane as read right before: what is on it belongs
    *  to the turns before the one it starts (the question watcher's, lib/askQuestion.ts `notePrompt`). */
@@ -141,6 +143,24 @@ export function messageWriter({ readScreen, resolve, terminal: { captureTerminal
 const ENTER_CHECK_TRIES = 12
 const ENTER_CHECK_RETRY_MS = 250
 
+/**
+ * What holds a message from an OpenClaw pane as read: one the pane cannot send yet (Gateway not connected, history not
+ * loaded, a run going) OpenClaw puts back in its input box, where nothing sends it. So it is typed only into a pane
+ * ready with an empty box, its idle reading (engines/openclaw/runtimeProfile.ts), and waits for one (lib/sessionInput.ts).
+ */
+function openclawHold(session: RegisteredSession, screen: ScreenReading | null): string | null {
+  return session.engine === 'openclaw' && !screen?.pane.idle ? OPENCLAW_NOT_READY : null
+}
+
+/**
+ * What holds a pane's own command (OpenClaw's `/session`) from the pane as read: text in its input box, the person's or a
+ * message OpenClaw refused, which the command's Enter would send with it, or a pane not read, which may hold some. Not
+ * whether the pane can send a message: the command is what makes one whose history failed to load able to.
+ */
+function commandHold(_session: RegisteredSession, screen: ScreenReading | null, capture: string | null): string | null {
+  return capture === null ? 'screen_unreadable' : screen?.pane.draft ? 'box_not_empty' : null
+}
+
 /** What holds a typed delivery from the pane as read: the same draft and dialog checks as a person's own message. */
 function paneHold(screen: ScreenReading | null): string | null {
   return screen ? screen.teamHold : 'team_waiting_unavailable'
@@ -178,8 +198,9 @@ export function sessionInputDeps(
     },
     beforeTeamWrite: async (session) => (await readTeamHold(deps, session)).hold,
     validateRuntime: validateTerminal,
-    // Typed into the pane as it stands, a draft or a running turn included, under the pane's write lock.
-    inject: (id, text, current) => writeMessage(id, text, undefined, current),
+    // Both messages and engine commands use the shared writer and retain the caller's authority.
+    inject: (id, text, current) => writeMessage(id, text, openclawHold, current),
+    injectCommand: (id, line, current) => writeMessage(id, line, commandHold, current),
     // An Agent Messages turn waits for a ready composer, and for its mailbox to still want it written.
     injectTeam: async (id, text, deliveryId, current) => {
       if (!resolve(id)) return terminalActionNotStarted('team_waiting_unavailable')
@@ -209,6 +230,9 @@ export function sessionInputDeps(
       // `id` is whatever the caller addressed the agent by — in the inject path it is the AGENT id, not
       // the session id, and the normalizer map is keyed by session. Resolve before looking anything up.
       const session = resolve(id)
+      // OpenClaw draws the run at once (`sending`), and its first row comes only when its Gateway writes it, 15-45 s on a
+      // slow one: until then nothing else tells the agent's frame it works, and `ps` read it idle.
+      if (session?.engine === 'openclaw' && session.sessionId) deps.sending?.(session.sessionId)
       if (session?.engine !== 'commandcode' || !session.sessionId) return
       const sessionId = session.sessionId
       void openTurn(sessionId, content).then(events => { if (events.length) emit(sessionId, events) })

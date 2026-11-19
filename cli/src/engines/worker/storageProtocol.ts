@@ -17,7 +17,7 @@ export type StorageEngine = typeof STORAGE_ENGINES[number]
 export interface ExportStage { path: string; key: string }
 /** Both paths are core-selected: only path is opened; database preserves the legacy JSON metadata spelling. */
 export interface ExportSource { path: string; key: string; database: string }
-export interface ExportReceipt { bytes: number; sha256: string }
+export interface ExportReceipt { bytes: number; sha256: string; empty?: true }
 /** Core-only callbacks; these never cross IPC or grant worker publication authority. */
 export interface ExportOwnership { readonly deadline: number; writer(pid: number): Promise<void>; settled(): Promise<void> }
 export interface StorageLifetime { pid: number; nonce: string }
@@ -42,8 +42,10 @@ export function exportSource(value: unknown): value is ExportSource {
 export function exportReceipt(value: unknown): value is ExportReceipt {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false
   const v = value as Record<string, unknown>
-  return Object.keys(v).every(k => k === 'bytes' || k === 'sha256') && Number.isSafeInteger(v.bytes)
-    && (v.bytes as number) > 0 && (v.bytes as number) <= STORAGE_STAGE_BYTES && typeof v.sha256 === 'string' && /^[a-f0-9]{64}$/.test(v.sha256)
+  return Object.keys(v).every(k => k === 'bytes' || k === 'sha256' || k === 'empty') && Number.isSafeInteger(v.bytes)
+    && (v.empty === true ? v.bytes === 0 && v.sha256 === 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'
+      : v.empty === undefined && (v.bytes as number) > 0 && (v.bytes as number) <= STORAGE_STAGE_BYTES)
+    && typeof v.sha256 === 'string' && /^[a-f0-9]{64}$/.test(v.sha256)
 }
 
 export type StorageSession = Pick<BackgroundSession, 'sessionId' | 'hermesHome'> & { openclawStateDir?: string | null; pid?: number }

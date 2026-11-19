@@ -161,11 +161,17 @@ export class SessionCheckpointStore {
         } finally { await input.close().catch(() => { throw new IdentityReadUnavailable('the source transcript could not be closed') }) }
         if (reuseCheckpoint) { authority!.verify(); saveScreen(); return }
       } else {
+        databaseProof ??= await databaseCheckpointEvidence(s, () => { current(); return true })
+        if (!databaseProof) throw new SessionCheckpointError('The conversation location is unavailable. The session has not been closed.')
+        current()
+        if (databaseProof.source === null) {
+          if (s.engine !== 'openclaw') throw new SessionCheckpointError('The conversation location is unavailable. The session has not been closed.')
+          saveScreen()
+          return
+        }
         if (!this.deps.exportDatabase) throw new SessionCheckpointError('Could not read the saved conversation. The session has not been closed.')
         databaseStageRequested = true
         stage = await this.stages.acquire()
-        databaseProof ??= await databaseCheckpointEvidence(s, () => { current(); return true })
-        if (!databaseProof) throw new SessionCheckpointError('The conversation location is unavailable. The session has not been closed.')
         current()
         temporary = stage.stage.path
         const receipt = await this.deps.exportDatabase(s, stage.stage, stage, databaseProof.source).catch(() => {
@@ -173,6 +179,11 @@ export class SessionCheckpointStore {
         })
         current()
         await stage.verify(receipt)
+        if (receipt.empty) {
+          if (s.engine !== 'openclaw') throw new SessionCheckpointError('Could not read the saved conversation. The session has not been closed.')
+          saveScreen()
+          return
+        }
         checkpoint.bytes = receipt.bytes
       }
       if (stage) await stage.publish(destination, current)

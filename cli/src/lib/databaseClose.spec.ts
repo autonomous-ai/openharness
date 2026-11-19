@@ -402,8 +402,20 @@ it('retains the documented Windows default without claiming native descriptor ev
   try {
     const proof = await databaseCheckpointEvidence(row)
     proof!.verify()
-    expect(proof?.source.path).toBe(realpathSync(database))
+    expect(proof?.source?.path).toBe(realpathSync(database))
     expect(nativeOpenFiles).not.toHaveBeenCalled()
     expect(nativeHeldFiles).not.toHaveBeenCalled()
   } finally { Object.defineProperty(process, 'platform', platform) }
+})
+
+it('revokes an absent OpenClaw store proof as soon as its database appears', async () => {
+  source('openclaw')
+  rmSync(database)
+  const proof = await databaseCheckpointEvidence(row)
+  expect(proof?.source).toBeNull()
+  proof!.verify()
+  proof!.fresh().verify()
+  writeFileSync(database, 'new native history')
+  expect(() => proof!.verify()).toThrow(IdentityReadUnavailable)
+  expect(() => proof!.fresh()).toThrow(IdentityReadUnavailable)
 })

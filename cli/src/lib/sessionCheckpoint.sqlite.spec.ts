@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { KIB, MIB, pageReads, withinBudget } from '../testing/storePages.js'
@@ -94,6 +94,30 @@ it('backs up an OpenCode 2 conversation from its v2 tables, and a v1 one from th
   expect(JSON.stringify(v1)).toContain('v1 part')
   // In neither: nothing to keep, so the session stays open.
   await expect(store.save({ agentId: 'gone', sessionId: 'gone', engine: 'opencode' } as RegisteredSession)).rejects.toBeInstanceOf(SessionCheckpointError)
+})
+
+it('closes an OpenClaw session the Gateway never wrote with no checkpoint, and refuses one whose store cannot be read', async () => {
+  // A client closing an agent that never took its task was refused, and the agent stayed listed (2026-11-19).
+  const { SessionCheckpointStore, SessionCheckpointError } = await import('./sessionCheckpoint.js')
+  const directory = join(root, 'backups')
+  const store = new SessionCheckpointStore(directory, workerExport)
+  const save = () => store.save({ agentId: 'fixture', sessionId: 'agent:main:plain', engine: 'openclaw', openclawStateDir: root } as RegisteredSession)
+  await save()
+  expect(readdirSync(directory)).toEqual([])
+  const path = join(root, 'agents', 'main', 'agent', 'openclaw-agent.sqlite')
+  mkdirSync(dirname(path), { recursive: true })
+  const { DatabaseSync } = process.getBuiltinModule('node:sqlite') as any
+  const database = new DatabaseSync(path)
+  databases.push(database)
+  database.exec(readFileSync(join(import.meta.dirname, '..', 'engines', 'openclaw', '__fixtures__', 'schema.sql'), 'utf8'))
+  await save()
+  expect(readdirSync(directory)).toEqual(['.stages'])
+  expect(readdirSync(join(directory, '.stages'))).toEqual([])
+  databases.pop()!.close()
+  writeFileSync(path, 'not a database')
+  await expect(save()).rejects.toBeInstanceOf(SessionCheckpointError)
+  expect(readdirSync(directory)).toEqual(['.stages'])
+  expect(readdirSync(join(directory, '.stages'))).toEqual([])
 })
 
 // Only the read threads enforce a reply limit. The stores are built with the binding: the sqlite3 CLI cannot take
