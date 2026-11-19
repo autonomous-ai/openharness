@@ -36,9 +36,9 @@ function inputs(platform: string, launcher: 'missing' | 'held' = 'missing') {
 }
 
 describe('wire', () => {
-  it('on Windows, or in a remote window, nothing is made: no channel, no listener', async () => {
-    for (const [platform, remoteName] of [['win32', undefined], ['darwin', 'ssh-remote']] as const) {
-      const vscode = fakeVscode({ remoteName })
+  it('in a remote window nothing is made, on any platform: no channel, no listener', async () => {
+    for (const platform of ['darwin', 'win32']) {
+      const vscode = fakeVscode({ remoteName: 'ssh-remote' })
       vscode.open()
       const world = inputs(platform)
       const stop = wire(vscode.api, world.given)
@@ -57,6 +57,19 @@ describe('wire', () => {
     await flush()
 
     expect(vscode.channels.map(({ name, lines }) => ({ name, lines }))).toEqual([{ name: 'Harness Device', lines: ['state: noHarness'] }])
+    await stop()
+  })
+
+  it('on Windows the loop starts: it looks for harness and says what it found in the channel', async () => {
+    const vscode = fakeVscode()
+    const world = inputs('win32')
+    const stop = wire(vscode.api, world.given)
+    await flush()
+
+    expect([world.runs.length, vscode.channels.map(({ name, lines }) => ({ name, lines }))]).toEqual([
+      2,
+      [{ name: 'Harness Device', lines: ['state: noHarness'] }],
+    ])
     await stop()
   })
 
