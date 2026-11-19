@@ -147,13 +147,30 @@ static unsigned code(const ht_pro_font_t *f, uint32_t cp)
     if (cp >= 0x2010 && cp <= 0x2015) cp = '-';
     return cp >= f->first && cp <= f->last ? cp : '?';
 }
+// The Max's: code() for a string's every character, the face's least extra (a mark its extras table holds; none: past
+// every code point) found once a string. Below it and below 256 a code point has no Vietnamese or extra entry, so it is
+// its own glyph or '?' with no lookup: a label's width, worked out each frame it is drawn, looked every character up
+// in the extras table, most of a scene's build on the ESP32-P4.
+static uint32_t least_extra(const ht_pro_font_t *f)
+{
+    uint32_t least = UINT32_MAX;
+    for (unsigned i = 0; f && f->extras && i < f->extra_count; i++)
+        if (f->extras[i] < least) least = f->extras[i];
+    return least;
+}
+static unsigned code_below(const ht_pro_font_t *f, uint32_t cp, uint32_t least)
+{
+    if (cp < 256 && cp < least) return cp >= f->first && cp <= f->last ? cp : '?';
+    return code(f, cp);
+}
 /* Glyph advances position the next glyph; atlas ink may extend beyond them.
  * Keep that last overhang inside both fit decisions and damage bounds. */
 static int visible_width(const ht_pro_font_t *f, const char *text)
 {
     int advance = 0, extent = 0;
+    const uint32_t least = least_extra(f);
     while (*text && *text != '\n') {
-        const ht_pro_glyph_t *g = &f->glyphs[code(f, ht_utf8_next(&text)) - f->first];
+        const ht_pro_glyph_t *g = &f->glyphs[code_below(f, ht_utf8_next(&text), least) - f->first];
         extent = max_(extent, advance + g->width);
         advance += g->advance;
     }
@@ -187,9 +204,10 @@ bool ht_pro_text(ht_scene_t *s, int x, int y, int width, const ht_pro_font_t *fo
     bool complete = ht_display_text_ex(normalized, sizeof normalized, text, font);
     const char *p = normalized;
     int used = 0, advance = 0, extent = 0;
+    const uint32_t least = least_extra(font);
     while (*p && *p != '\n') {
         const char *next = p;
-        const ht_pro_glyph_t *g = &font->glyphs[code(font, ht_utf8_next(&next)) - font->first];
+        const ht_pro_glyph_t *g = &font->glyphs[code_below(font, ht_utf8_next(&next), least) - font->first];
         int n = (int)(next - p), next_extent = max_(extent, advance + g->width);
         if (max_(next_extent, advance + g->advance) > width || used + n >= HT_TEXT_BYTES) break;
         memcpy(r->text + used, p, (size_t)n); used += n;
@@ -417,8 +435,9 @@ void ht_pro_raster(const ht_run_t *r, ht_rect_t clip, uint16_t *out)
     } else if (r->pro_kind == PRO_TEXT) {
         const ht_pro_font_t *f=r->pro_font;
         const char *p=r->text; int gx=r->x;
+        const uint32_t least = least_extra(f);
         while (*p && gx < x1) {
-            const ht_pro_glyph_t *g=&f->glyphs[code(f,ht_utf8_next(&p))-f->first];
+            const ht_pro_glyph_t *g=&f->glyphs[code_below(f,ht_utf8_next(&p),least)-f->first];
             int left=max_(x0,gx), right=min_(x1,gx+g->width);
             if (right > left) for(int y=y0;y<y1;y++) {
                 int row=y-r->y;

@@ -147,6 +147,16 @@ bool ht_display_text_ex(char *dst, size_t cap, const char *src, const struct ht_
     size_t used = 0;
     bool digit = false, fraction = false, complete = true;
     while (*p) {
+        // The Max's: printable ASCII after anything but a fraction copied as it is, a cell a byte, as display_token
+        // and token_gap would have it (no gap, no fallback) without a token each: a label's normalization each frame
+        // it is measured or drawn was much of a scene's build on the ESP32-P4.
+        unsigned char c;
+        while (!fraction && (c = (unsigned char)*p) >= 32 && c < 127) {
+            if (1 > columns || 1 >= cap - used) break;
+            dst[used++] = (char)c, p++, columns--;
+            digit = c >= '0' && c <= '9';
+        }
+        if (!*p) break;
         bool newline = *p == '\n';
         display_token_t t; display_token(&p,&t,face);
         bool gap = token_gap(&t,digit,fraction);

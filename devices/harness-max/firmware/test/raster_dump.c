@@ -91,6 +91,25 @@ static int radius(int w, int h)
     }
 }
 
+// Text of every path the glyphs take: ASCII prose and digits, a fraction beside a digit (a gap between them), Latin-1,
+// Vietnamese, a face's marks and what no face draws (its fallback), controls, a newline, typographic punctuation.
+static const char *const PIECES[] = {
+    "Harness Max ", "abc", "12", "3", " ", "1/2", "\xc2\xbd", "\xc2\xbc cup", "2\xe2\x85\x93", "caf\xc3\xa9",
+    "Ti\xe1\xba\xbfng Vi\xe1\xbb\x87t", "\xc4\x90\xc6\xb0\xe1\xbb\x9dng", "\xe2\x86\x92", "\xe2\x9c\x93",
+    "\xe2\x80\xa6", "\xe2\x96\xb2", "\xf0\x9f\x98\x80", "\xe2\x80\x9cq\xe2\x80\x9d", "\xe2\x80\x94", "\t",
+    "\x01", "\xc2\xa0", "\xc2\xad", "\n", "~{}|", "\x7f", "\xff", "9\xe2\x82\xac",
+};
+static const ht_pro_font_t *const FACES[] = {&ht_pro_24, &ht_pro_32, &ph_sb_26, &ph_rg_24, &ph_mono_18, &ph_sb_48};
+static void random_text(ht_scene_t *s, int x, int y, int w, uint16_t ink)
+{
+    char text[HT_TEXT_BYTES * 3] = "";
+    for (int n = pick(1, 12); n > 0; n--) {
+        const char *piece = PIECES[next() % (sizeof PIECES / sizeof PIECES[0])];
+        if (strlen(text) + strlen(piece) < sizeof text) strcat(text, piece);
+    }
+    ht_pro_text(s, x, y, w, FACES[next() % (sizeof FACES / sizeof FACES[0])], ink, text);
+}
+
 static void random_rects(ht_scene_t *s, int kind)
 {
     ground(s);
@@ -103,6 +122,7 @@ static void random_rects(ht_scene_t *s, int kind)
         case 0: ht_pro_rect(s, x, y, w, h, r, ink); break;
         case 1: ht_pro_rect_aa(s, x, y, w, h, r, ink); break;
         case 2: ht_pro_rect_aa_stroke(s, x, y, w, h, r, ink, fill); break;
+        case 5: random_text(s, x, y, w, ink); break;
         case 4:   // a gradient from ink to fill: dithered (two pixels a store, from any x), anti-aliased or plain
             if (next() % 3 == 0) pod_grad(s, x, y, w, h, r, ink, fill);
             else if (next() & 1) pod_grad_aa(s, x, y, w, h, r, ink, fill);
@@ -170,9 +190,9 @@ int main(void)
         draw(&SCREENS[i]);
         dump(SCREENS[i].name, &S);
     }
-    static const char *const KINDS[] = {"rect", "rect_aa", "rect_aa_stroke", "veil", "grad"};
+    static const char *const KINDS[] = {"rect", "rect_aa", "rect_aa_stroke", "veil", "grad", "text"};
     char name[40];
-    for (int kind = 0; kind < 5; kind++)
+    for (int kind = 0; kind < 6; kind++)
         for (int n = 0; n < 60; n++) {
             random_rects(&s, kind);
             snprintf(name, sizeof name, "%s %d", KINDS[kind], n);
