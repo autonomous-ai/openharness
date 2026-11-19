@@ -731,6 +731,9 @@ mod tests {
         ran: Mutex<Vec<String>>,
         opened: Mutex<Vec<Vec<String>>>,
         saved: Mutex<Vec<Saved>>,
+        /// How many times the login item was refreshed, and whether a refresh changes it.
+        refreshed: AtomicUsize,
+        refresh_changes: AtomicBool,
     }
 
     impl Doubles {
@@ -761,6 +764,14 @@ mod tests {
     impl LoginItem for Doubles {
         fn register(&self) -> Result<(), String> {
             if self.failing() { Err("Login item not added (error 1).".into()) } else { Ok(()) }
+        }
+
+        fn refresh(&self) -> Result<bool, String> {
+            self.refreshed.fetch_add(1, Ordering::SeqCst);
+            if self.failing() {
+                return Err("Login item not added (error 1).".into());
+            }
+            Ok(self.refresh_changes.load(Ordering::SeqCst))
         }
     }
 
@@ -1233,6 +1244,27 @@ mod tests {
         assert_eq!(*w.doubles.ran.lock().unwrap(), [lines.as_slice(), lines.as_slice()].concat());
         // The CLI the install found is the one the runs after it use.
         assert_eq!(w.answer(Effect::ReadAuth), Event::Auth(Some(true)));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_login_item_is_refreshed_at_start_and_after_an_install() {
+        let w = world();
+        assert_eq!(w.doubles.refreshed.load(Ordering::SeqCst), 1);
+        // A refresh that changed nothing says nothing.
+        assert!(!w.fake.log().lines().iter().any(|line| line.starts_with("login item: ")));
+        w.doubles.refresh_changes.store(true, Ordering::SeqCst);
+        assert_eq!(w.install().1, Ok(()));
+        assert_eq!(w.doubles.refreshed.load(Ordering::SeqCst), 2);
+        assert!(w.logged("login item: updated"));
+        w.doubles.failing.store(true, Ordering::SeqCst);
+        assert_eq!(w.install().1, Ok(()));
+        assert!(w.logged("login item: not updated: Login item not added (error 1)."));
+
+        // An install that failed put nothing new in place.
+        let w = world_where(|doors| doors.cli_override = None);
+        assert_eq!(w.install().1, Err(vec![NOT_INSTALLED.into()]));
+        assert_eq!(w.doubles.refreshed.load(Ordering::SeqCst), 1);
     }
 
     #[cfg(unix)]
