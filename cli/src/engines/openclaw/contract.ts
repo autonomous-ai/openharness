@@ -40,13 +40,18 @@ const TITLE = /^openclaw tui - wss?:\/\/\S+ - agent ([A-Za-z0-9_-]{1,64})(?: \([
 const OPENCLAW_RULE = /^\s*─{8,}\s*$/
 
 /**
- * The status line, the last line above the footer: `connected | idle`, `gateway reconnected | idle`, `connected |
- * aborted`, `⠏ running • 6s | connected`, `gateway disconnected: <error> | idle`. A `--local` run says `starting local
- * runtime`, `local ready | idle`, `⠏ running • 6s | local ready`, `local runtime stopped[: <reason>] | idle` for 5 s,
- * then `local stopped | idle`.
+ * The status line, the last line above the footer: `<connection> | <activity>` while idle (`connected | idle`, `gateway
+ * reconnected | idle`, `gateway disconnected: <error> | idle`), `<spinner> <activity> • <elapsed> | <connection>` while
+ * busy (`⠏ running • 6s | connected`). A `--local` run says `starting local runtime`, `local ready | idle`, `⠏ running •
+ * 6s | local ready`, `local runtime stopped[: <reason>] | idle` for 5 s, then `local stopped | idle`.
  */
 const STATUS = {
-  ready: /^(?:(?:gateway )?(?:connected|reconnected) \| (?:idle|aborted|error)|local ready(?: \| (?:idle|aborted|error))?)$/,
+  /**
+   * Connected with no run: the activity word is whatever the TUI last set (`idle`, `aborted`, `tools expanded`, `abort
+   * failed`, or `disconnected` from a message it refused before it connected, which its connection leaves in place;
+   * OpenClaw's tui `setActivityStatus`). An `event gap` is drawn only on a live connection (`client.onGap`).
+   */
+  ready: /^(?:(?:gateway )?(?:connected|reconnected) \| |local ready\b|event gap: )/,
   /**
    * Before the TUI can send: `connecting | idle` while it reaches its Gateway (`starting local runtime` for a local
    * run), then `⠙ starting up • 0s | subscribing to session events` while it loads the session (OpenClaw's tui
