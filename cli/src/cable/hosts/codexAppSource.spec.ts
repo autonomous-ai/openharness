@@ -264,6 +264,14 @@ describe("the ChatGPT app's source (docs/plans/2026-11-19-dial-chatgpt-ring-and-
       expect(s.changes).toBe(2)
     })
 
+    it('read · failed is said again for the first failure after a stop and a start', async () => {
+      const s = await started(FAILED)
+      s.source.stop()
+      s.source.start()
+      await s.land(FAILED)
+      expect(s.log.filter((line) => line === '[codex-app] read · failed')).toHaveLength(2)
+    })
+
     it('a good read with no projects is taken: its order replaces the last', async () => {
       const p1 = thread(1, { inProject: true })
       const r1 = thread(2)
