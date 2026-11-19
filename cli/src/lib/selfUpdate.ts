@@ -522,9 +522,9 @@ export function restore(dir: string, platform: NodeJS.Platform = process.platfor
 }
 
 /** `current-node` on [node], as runtimeInstall writes it: the path and the platform's line end, readable by this
- *  account alone, whole or not at all. Throws when it cannot be written. */
+ *  account alone, whole or not at all, and flushed. Throws when it cannot be written. */
 function nameNode(node: string, platform: NodeJS.Platform): void {
-  atomicWriteFile(join(env.ADAPTER_RUNTIME_DIR, 'current-node'), `${node}${platform === 'win32' ? '\r\n' : '\n'}`, 'cache')
+  atomicWriteFile(join(env.ADAPTER_RUNTIME_DIR, 'current-node'), `${node}${platform === 'win32' ? '\r\n' : '\n'}`, 'cache', { durable: true })
 }
 
 /**

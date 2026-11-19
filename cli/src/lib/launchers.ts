@@ -37,7 +37,8 @@ export function ensureLauncher(node: string, log: (message: string) => void = ()
   if (next === current) return false
 
   try {
-    atomicWriteFile(launcher, next, 'cache', { mode: 0o755 })
+    // Flushed: a launcher a power cut emptied stops `harness` from starting until a reinstall.
+    atomicWriteFile(launcher, next, 'cache', { mode: 0o755, durable: true })
   } catch (error) {
     // A read-only bin dir, a launcher owned by another user: said, and not worth failing a start over.
     log(`  ✗ could not repoint bin/harness at the new Node: ${errorKind(error)}`)

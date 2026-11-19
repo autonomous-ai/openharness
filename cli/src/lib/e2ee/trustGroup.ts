@@ -166,7 +166,7 @@ export class TrustGroupStore {
   /** The roster; empty when there is none, or when group.json cannot be read (the reader says so once). */
   read(): Roster {
     const read = readState(FILE, 'trust', parseGroup)
-    this.unreadable = read.state === 'unreadable' ? new StateFileUnreadable(basename(FILE), read.failure) : null
+    this.unreadable = read.state === 'unreadable' ? new StateFileUnreadable(basename(FILE), read.failure, read.readFailed) : null
     return read.state === 'ok' ? read.value : { members: [], removed: [] }
   }
 

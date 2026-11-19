@@ -10,7 +10,7 @@
 import { join } from 'node:path'
 
 import { env } from '../config/env.js'
-import { atomicWriteFile, jsonObject, readState } from '../lib/secureState.js'
+import { atomicWriteFile, jsonObject, probeState, readState } from '../lib/secureState.js'
 import type { FleetMachine } from '../cable/machineFleet.js'
 import { errorKind } from '../lib/log.js'
 
@@ -271,8 +271,9 @@ export class MachineListCache {
 
   /** So a daemon that starts offline still draws the list the user saw last time. */
   private loadCache(): void {
-    // No cache yet, or one set aside as unreadable: an empty wheel plus the local row is correct.
-    const read = readState(this.path, 'cache', jsonObject)
+    // No cache yet, or one set aside as unreadable: an empty wheel plus the local row is correct. A copy that never
+    // writes the file leaves a torn one where it is (probeState): its writer sets it aside as it reads it.
+    const read = this.persist ? readState(this.path, 'cache', jsonObject) : probeState(this.path, jsonObject)
     if (read.state !== 'ok') return
     const parsed = read.value as {
       machines?: ListedMachine[]

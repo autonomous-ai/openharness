@@ -15,7 +15,7 @@ import { lstat, mkdir, readdir, readlink, rm, stat, symlink } from 'node:fs/prom
 import { join } from 'node:path'
 import { env } from '../config/env.js'
 import { removeLink } from './removePath.js'
-import { atomicWriteFile } from './secureState.js'
+import { atomicWriteFileAsync } from './secureState.js'
 import type { GridConfigFile, GridConfigLink } from './gridLaunchWire.js'
 
 /** Everything this module owns lives under one root, so pruning can be confident about what it is. */
@@ -92,7 +92,7 @@ export async function writeGridConfigDir(
   // Best-effort and never in the way: a failed prune must not cost a launch.
   await prune(root).catch(() => {})
   // Whole or not at all: an engine relaunched over a torn provider file would start without its grid.
-  for (const file of files) atomicWriteFile(join(dir, file.name), file.content, 'cache')
+  for (const file of files) await atomicWriteFileAsync(join(dir, file.name), file.content, 'cache')
   for (const link of links) {
     await linkInto(dir, link.name, link.target)
   }

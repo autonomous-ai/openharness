@@ -1,5 +1,5 @@
 /** Discoverable tool access, without copying credentials or model settings into projects. */
-import { existsSync, lstatSync, readFileSync, realpathSync } from 'node:fs'
+import { accessSync, constants, existsSync, lstatSync, readFileSync, realpathSync } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
 import type { ApiConnectionMetadata } from './apiConnectionMetadata.js'
 import { projectsRoot } from './projectFolder.js'
@@ -39,6 +39,9 @@ export function prepareApiInstructions(store: Pick<ApiConnectionMetadata, 'saved
   // Whole or not at all: a torn write would lose the instructions written there before the note. The file keeps its
   // own mode, and a new one is readable as a file written in place was.
   if (!previous.includes(marker)) {
+    // A file the person made read-only stays as they left it: the rename would replace it (and on Windows retry for a
+    // second first), so it is refused (EACCES) as a write in place was, for the caller's log line.
+    if (existing) accessSync(file, constants.W_OK)
     atomicWriteFile(file, `${previous.trimEnd()}${previous ? '\n\n' : ''}${API_INSTRUCTIONS}`, 'cache', { mode: existing ? existing.mode & 0o777 : 0o644 })
   }
 }

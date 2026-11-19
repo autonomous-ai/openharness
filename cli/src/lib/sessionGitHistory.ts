@@ -4,7 +4,7 @@ import { mkdir, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { env } from '../config/env.js'
 import type { RegisteredSession } from './registry.js'
-import { atomicWriteFile, jsonObject, readState } from './secureState.js'
+import { atomicWriteFileAsync, jsonObject, readState } from './secureState.js'
 import type { SessionGitContext } from './sessionGitContext.js'
 import { validPullRequestUrl, validWorkPath } from './sessionWorkWire.js'
 import type { WorkPullRequest } from './sessionWork.js'
@@ -147,7 +147,7 @@ export class SessionGitHistoryStore {
     entry.writes++
     entry.saving = entry.saving.then(async () => {
       await mkdir(this.directory, { recursive: true, mode: 0o700 })
-      atomicWriteFile(join(this.directory, `${key}.json`), bytes, 'cache')
+      await atomicWriteFileAsync(join(this.directory, `${key}.json`), bytes, 'cache')
     }).catch(() => { /* Display keeps the in-memory observations if disk is temporarily unavailable. */ })
       .finally(() => { entry.writes--; this.trim() })
   }

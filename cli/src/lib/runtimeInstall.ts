@@ -273,8 +273,9 @@ async function ensureManagedArchive(spec: ManagedArchive): Promise<ArchiveResult
       return kept('does-not-run')
     }
     // Written last, and only once the binary has answered: Desktop Harness and the hook installer
-    // both read this file to decide what to execute, so it must never name something that cannot run.
-    if (!spec.leavesPointer) atomicWriteFile(join(env.ADAPTER_RUNTIME_DIR, `current-${spec.name}`), `${binary}${layout.eol}`, 'cache')
+    // both read this file to decide what to execute, so it must never name something that cannot run. Flushed: one a
+    // power cut emptied names nothing to run until a reinstall.
+    if (!spec.leavesPointer) atomicWriteFile(join(env.ADAPTER_RUNTIME_DIR, `current-${spec.name}`), `${binary}${layout.eol}`, 'cache', { durable: true })
     spec.log(`  ✓ ${spec.label} runtime ready → ${target}`)
     if (spec.retiresSuperseded) retireSuperseded(spec.name, key, target, installed)
     return { path: binary, reason: null }

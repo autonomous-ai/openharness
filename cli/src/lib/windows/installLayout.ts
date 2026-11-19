@@ -49,11 +49,12 @@ export function readPointer(root: string, name: string): string | null {
 
 /**
  * Point `<root>\<name>` at [value], whole: a reader sees either the old pointer or the new one, never half of one. The
- * line ends in CRLF with no BOM: the Rust reader (pty/src/launcher.rs) would keep a BOM as part of the value.
+ * line ends in CRLF with no BOM: the Rust reader (pty/src/launcher.rs) would keep a BOM as part of the value. Flushed:
+ * one a power cut emptied stops Harness from starting until a reinstall, and it moves only once an update.
  */
 export function writePointer(root: string, name: string, value: string): void {
   if (!isSingleSegment(value)) throw new Error(`a pointer names one folder, not ${JSON.stringify(value)}`)
-  atomicWriteFile(join(root, name), `${value}\r\n`, 'cache')
+  atomicWriteFile(join(root, name), `${value}\r\n`, 'cache', { durable: true })
 }
 
 export interface CurrentCli {

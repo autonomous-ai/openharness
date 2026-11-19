@@ -42,7 +42,8 @@ export function writeBrowserShim(command: string, path: string = browserShimPath
     try { current = readFileSync(path, 'utf8') } catch { /* not written yet */ }
     if (current !== script) {
       mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
-      atomicWriteFile(path, script, 'cache', { mode: 0o700 })
+      // Flushed: every pane's BROWSER runs it, and one a power cut emptied opens nothing.
+      atomicWriteFile(path, script, 'cache', { mode: 0o700, durable: true })
     }
     chmodSync(path, 0o700)
     return true

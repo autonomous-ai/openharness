@@ -1,6 +1,6 @@
 import { mkdir, rm, stat } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
-import { atomicWriteJson, jsonArray, readState } from '../../lib/secureState.js'
+import { atomicWriteJsonAsync, jsonArray, readState } from '../../lib/secureState.js'
 import { PENDING_TASKS_FILE } from './contract.js'
 
 export interface PendingCursorTask {
@@ -65,7 +65,7 @@ export async function loadCursorPendingTasks(dataDir: string): Promise<PendingCu
   return (await withLock(file, async () => {
     const tasks = read(file)
     if (!tasks) return []
-    if (tasks.length) atomicWriteJson(file, tasks, 'cache')
+    if (tasks.length) await atomicWriteJsonAsync(file, tasks, 'cache')
     else await rm(file, { force: true })
     return tasks
   })) ?? []
@@ -76,7 +76,7 @@ export async function removeCursorPendingTasks(dataDir: string, sessionId: strin
   await withLock(file, async () => {
     const tasks = read(file)?.filter((task) => task.sessionId !== sessionId)
     if (!tasks) return
-    if (tasks.length) atomicWriteJson(file, tasks, 'cache')
+    if (tasks.length) await atomicWriteJsonAsync(file, tasks, 'cache')
     else await rm(file, { force: true })
   })
 }

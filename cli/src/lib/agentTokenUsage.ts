@@ -7,7 +7,7 @@ import { join } from 'node:path'
 import { env } from '../config/env.js'
 import { loadEngine } from '../engines/inProcess.js'
 import { openclawSessionDb } from './openclawStore.js'
-import { atomicWriteFile } from './secureState.js'
+import { atomicWriteFileAsync } from './secureState.js'
 import { sqliteReadAll } from './sqliteRead.js'
 import { emptyOutputLedger, ingestOutput, outputSnapshot, validOutputLedger, type AgentOutputStats, type OutputLedger } from './agentOutputStats.js'
 import { emptySessionWork, ingestSessionWork, sessionWorkSnapshot, validSessionWork, type SessionWork, type SessionWorkLedger } from './sessionWork.js'
@@ -357,7 +357,7 @@ export class AgentTokenUsageCache {
     const bytes = JSON.stringify(state)
     if (Buffer.byteLength(bytes) > MAX_CACHE_BYTES) throw new Error('Usage checkpoint is too large')
     await mkdir(this.directory, { recursive: true, mode: 0o700 })
-    atomicWriteFile(join(this.directory, `${key}.json`), bytes, 'cache')
+    await atomicWriteFileAsync(join(this.directory, `${key}.json`), bytes, 'cache')
   }
   private async refresh(key: string, entry: Entry): Promise<boolean> {
     let nextFingerprint: string | undefined

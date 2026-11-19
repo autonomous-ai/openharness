@@ -40,7 +40,7 @@ import {
 import type { GridLaunchOverride } from './gridLaunch.js'
 import { PrewarmDebounce, wakeRead, type RelayAccess, type WakePurpose } from './gridWake.js'
 import { readRunRecords } from './localModels.js'
-import { atomicWriteFile } from './secureState.js'
+import { atomicWriteFileAsync } from './secureState.js'
 
 export interface GridModel {
   /** The id an engine is pointed at, in the exact case the grid serves it. */
@@ -707,7 +707,7 @@ export class GridModelsService {
       const file = this.file(tracked)
       await mkdir(dirname(file), { recursive: true, mode: 0o700 })
       const saved: SavedPicture = { networkId: tracked.id, name: tracked.name, own: tracked.own, picture: tracked.picture }
-      atomicWriteFile(file, JSON.stringify(saved), 'cache')
+      await atomicWriteFileAsync(file, JSON.stringify(saved), 'cache')
       tracked.saved = text
     } catch { /* the picture is still in memory; the next read tries again */ }
   }

@@ -122,8 +122,8 @@ function defaultsFor(platform: NodeJS.Platform): { deps: FlashDeps; cached: stri
       },
       writeCache: (body) => {
         mkdirSync(dirname(cached), { recursive: true })
-        // Whole or not at all: the cache is what runs offline, and a truncated copy would be run.
-        atomicWriteFile(cached, body, 'cache', { mode: 0o755 })
+        // Whole or not at all, and flushed: the cache is what runs offline, and a truncated or emptied copy would be run.
+        atomicWriteFile(cached, body, 'cache', { mode: 0o755, durable: true })
       },
       run: realRun(script),
       log: (line) => console.log(line),

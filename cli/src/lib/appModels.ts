@@ -7,7 +7,7 @@ import { closeSync, openSync } from 'node:fs'
 import { mkdir, open, rm } from 'node:fs/promises'
 import { basename, join } from 'node:path'
 import { processExists } from './processLiveness.js'
-import { atomicWriteFile, jsonArray, requireState } from './secureState.js'
+import { atomicWriteFileAsync, jsonArray, requireState } from './secureState.js'
 import { execFileTied, type TiedExecError } from './tied.js'
 
 export type AppEngine = 'ollama' | 'lm-studio' | 'llama.cpp'
@@ -353,5 +353,5 @@ export async function readAppRecords(file: string): Promise<AppEngineRecord[]> {
 
 export async function writeAppRecords(file: string, records: AppEngineRecord[]): Promise<void> {
   await mkdir(join(file, '..'), { recursive: true, mode: 0o700 })
-  atomicWriteFile(file, JSON.stringify(records), 'cache')
+  await atomicWriteFileAsync(file, JSON.stringify(records), 'cache')
 }

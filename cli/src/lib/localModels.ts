@@ -16,7 +16,7 @@ import type { GpuProcess } from './gpuProcesses.js'
 import { downloadedBytes, removeDownload, unfinishedDownload } from './modelFiles.js'
 import { APP_LABEL, AppStartError, GRID_LABEL, appContext, readAppRecords, writeAppRecords, type AppEngine, type AppEngineOps, type AppEngineRecord, type AppModel } from './appModels.js'
 import { osToken, type OsToken } from './osToken.js'
-import { atomicWriteFile, jsonArray, requireState } from './secureState.js'
+import { atomicWriteFileAsync, jsonArray, requireState } from './secureState.js'
 
 // Its own module, so the API launches the core keeps need not load this one (codingContext.ts).
 export { MIN_CODING_CONTEXT }
@@ -613,7 +613,7 @@ export class LocalModels {
     }
     if (changed) {
       await mkdir(this.options.stateDir, { recursive: true, mode: 0o700 })
-      atomicWriteFile(path, JSON.stringify(known), 'cache')
+      await atomicWriteFileAsync(path, JSON.stringify(known), 'cache')
     }
     const existing = await Promise.all(known.map(async candidate =>
       await this.downloaded(candidate) && !await this.tooSmallToCode(candidate.file) ? candidate : null))
@@ -709,7 +709,7 @@ export class LocalModels {
     const value: Receipt = { spec: 1, grid, operation: { ...operation, updatedAt: new Date().toISOString() } }
     this.receipt = value; this.receiptScope = grid; this.cached = undefined
     await mkdir(this.options.stateDir, { recursive: true, mode: 0o700 })
-    atomicWriteFile(this.receiptPath(grid), JSON.stringify(value), 'cache')
+    await atomicWriteFileAsync(this.receiptPath(grid), JSON.stringify(value), 'cache')
   }
 
   /**
@@ -753,7 +753,7 @@ export class LocalModels {
 
   private async saveApps(value: AppModel[]): Promise<void> {
     await mkdir(this.options.stateDir, { recursive: true, mode: 0o700 })
-    atomicWriteFile(this.appsFile, JSON.stringify(value), 'cache')
+    await atomicWriteFileAsync(this.appsFile, JSON.stringify(value), 'cache')
   }
 
   /** An app's model that Grid's llama.cpp serves (its app is not installed here), as a candidate whose

@@ -1191,7 +1191,8 @@ export class CommanderMirror {
     this.history.delete(sessionId)
     this.fullTexts.delete(sessionId)
     this.asks.delete(sessionId)
-    this.save({ strict: true })
+    // Flushed: a deletion is asked for once, and a power cut after it must not bring the recaps back.
+    this.save({ strict: true, durable: true })
     this.stored(sessionId)
   }
 
@@ -1238,7 +1239,7 @@ export class CommanderMirror {
   /**
    * Each file whole or not at all, so a full disk never truncates another session's recaps. `strict` throws instead
    * of logging, so a deletion that did not land can be tried again. `durable` flushes each file and the folder, which a
-   * cache write otherwise skips for its cost (lib/secureState.ts): only the last save before a stop asks for it.
+   * cache write otherwise skips for its cost (lib/secureState.ts): only a deletion and the last save before a stop ask for it.
    */
   private save({ strict = false, durable = false } = {}): void {
     try {
