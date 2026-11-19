@@ -3018,6 +3018,16 @@ describe('ObservedSource and the host that owns its caller\'s terminal', () => {
     expect(s.zellijPane()).toBe('s1:1')
   })
 
+  // Only WezTerm's, kitty's and Zellij's panes take words on the terminal their host made alone: reading any other
+  // caller's would add a read of the process table to its hook for nothing.
+  it('a caller whose hints name no WezTerm, kitty or Zellij pane is never read', () => {
+    const s = owned()
+    for (const hostHints of [{ TMUX_PANE: '%3' }, { TERM_PROGRAM: 'ghostty' }, {}]) s.src.ingest(s.ev('session-start', { hostHints }))
+    s.src.ingest(s.ev('session-start', { hostHints: { WEZTERM_PANE: '7' }, callerPid: 200 }))
+    s.src.ingest(s.ev('session-start', { hostHints: { KITTY_WINDOW_ID: '5' }, callerPid: 300 }))
+    expect(s.ptyOwner.mock.calls).toEqual([[200], [300]])
+  })
+
   // tmux started in a Zellij pane keeps the pane's variables, and Zellij's adapter comes first: a tap there would only
   // focus the pane that shows tmux's client, never select the agent's own tmux pane.
   it('tmux inside a Zellij pane: a tap takes tmux\'s pane, as tmux made its terminal, and no words go to Zellij\'s', async () => {

@@ -192,6 +192,8 @@ const readers = vi.hoisted(() => ({
   apps: vi.fn(async (_pids: readonly number[]) => new Map<number, string>()),
   record: vi.fn(async (..._args: unknown[]): Promise<{ name?: string; hostSession?: string }> => ({})),
   processes: vi.fn(async () => [] as Array<{ pid: number; ppid: number; tty?: string; executable: string }>),
+  // A process's terminal, as its made-up row gives it: the table the devices read holds none.
+  tty: vi.fn(async (pid: number): Promise<string | undefined> => (await readers.processes()).find((p) => p.pid === pid)?.tty),
   bundleId: vi.fn(async (_bundle: string): Promise<string | undefined> => undefined),
 }))
 vi.mock('../lib/sessionSearch/external.js', async (real) => ({
@@ -223,6 +225,7 @@ vi.mock('../cable/hosts/scannedApp.js', async (real) => ({
   ...await real<typeof import('../cable/hosts/scannedApp.js')>(),
   learnApps: readers.apps,
   readProcessNames: readers.processes,
+  readTtyName: readers.tty,
   readBundleId: readers.bundleId,
 }))
 // Where tmux is: on the PATH, so no spec asks the developer's login shell.

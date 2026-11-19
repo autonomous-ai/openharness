@@ -6,7 +6,7 @@ import type { TmuxPathOutcome } from '../../lib/tmuxOnPath.js'
 import { RECORDED_ZELLIJ } from '../../testing/recordedZellij.js'
 import type { Place } from './adapter.js'
 import { MAX_TEXT } from './orca.js'
-import { parseProcessNames, type ProcessName } from './scannedApp.js'
+import { parseProcessNames, type ProcessName, type PtyProcess } from './scannedApp.js'
 import { createOuter, tmuxClients, type OuterDeps } from './tmux.js'
 import { createZellijAdapter, zellijClients, zellijFinder, type ZellijDeps } from './zellij.js'
 
@@ -341,14 +341,14 @@ const TTYS: Readonly<Record<number, string>> = { 1: 'pts/0', 20: 'pts/0', 21: 'p
 /** The recorded table with one client (RECORDED_ZELLIJ.listClients), each row's terminal, and what the container had
  *  none of: the agent (100) in `s1`'s pane shell (50), and Ghostty holding the client's pseudo-terminal (101). */
 const GHOSTTY: ProcessName = { pid: 7000, ppid: 1, executable: 'ghostty' }
-const TABLE: ProcessName[] = [
-  ...parseProcessNames(listClients.ps.replace(/^(\s*(\d+)\s+\d+)/gm, (_, row: string, pid: string) => `${row} ${TTYS[Number(pid)] ?? '?'}`))
-    .map((p) => (p.pid === 101 ? { ...p, ppid: GHOSTTY.pid } : p)),
+const TABLE: PtyProcess[] = [
+  ...parseProcessNames(listClients.ps)
+    .map((p) => ({ ...p, ...(p.pid === 101 ? { ppid: GHOSTTY.pid } : {}), ...(TTYS[p.pid] === undefined ? {} : { tty: TTYS[p.pid] }) })),
   GHOSTTY,
   { pid: 100, ppid: 50, tty: 'pts/2', executable: 'claude' },
 ]
 /** The same machine as macOS's `ps` names it: each process by its path, Ghostty's place taken by Terminal. */
-const MAC_TABLE: ProcessName[] = TABLE.map((p) => (
+const MAC_TABLE: PtyProcess[] = TABLE.map((p) => (
   p.executable === 'zellij' ? { ...p, executable: '/opt/homebrew/bin/zellij' }
     : p === GHOSTTY ? { ...p, executable: '/Users/u/Applications/Terminal.app/Contents/MacOS/Terminal' } : p))
 const MAC: Partial<OuterDeps> = {
@@ -363,13 +363,18 @@ const none = ['[device] zellij client · none']
 /** The lookup's line when a step could not be read, naming that step. */
 const notRead = (why: 'zellij' | 'processes' | 'clients' | 'app') => [`[device] zellij client · not read · ${why}`]
 
-/** The outer lookup with Zellij's part alone, on Linux, over [table]: zellij runs nothing, and `list-clients` of `s1`
- *  answers [clients] with exit [code]. */
-function lookup(over: Partial<OuterDeps> & { table?: ProcessName[]; clients?: string; code?: number; zellij?: ZellijDeps['zellij'] } = {}) {
+/** Each process's terminal as [table] gives it, read one at a time (scannedApp.ts readTtyName): the table the lookup
+ *  reads holds none. */
+const ttysOf = (table: readonly PtyProcess[]) => async (pid: number) => table.find((p) => p.pid === pid)?.tty
+
+/** The outer lookup with Zellij's part alone, on Linux, over [table]: zellij runs nothing, `list-clients` of `s1`
+ *  answers [clients] with exit [code], and each process's terminal is [table]'s unless [tty] reads it. */
+function lookup(over: Partial<OuterDeps> & { table?: PtyProcess[]; clients?: string; code?: number; zellij?: ZellijDeps['zellij']
+  tty?: (pid: number) => Promise<string | undefined> } = {}) {
   const calls: Call[] = []
   const logs: string[] = []
   let reads = 0
-  const { table = TABLE, clients = listClients.one, code = listClients.code, zellij = FOUND, ...deps } = over
+  const { table = TABLE, clients = listClients.one, code = listClients.code, zellij = FOUND, tty = ttysOf(table), ...deps } = over
   const run: ZellijDeps['run'] = async (file, args, timeoutMs) => {
     calls.push({ file, args, timeoutMs })
     return args[1] === env.ZELLIJ_SESSION_NAME ? { code, stdout: clients } : { code: missingSession.code, stdout: '' }
@@ -383,7 +388,7 @@ function lookup(over: Partial<OuterDeps> & { table?: ProcessName[]; clients?: st
     bundleId: async () => undefined,
     ...deps,
   }
-  const outer = createOuter(outerDeps, [zellijClients({ run, zellij, platform: outerDeps.platform })])
+  const outer = createOuter(outerDeps, [zellijClients({ run, zellij, platform: outerDeps.platform, tty })])
   return { calls, logs, reads: () => reads, outer }
 }
 
@@ -458,6 +463,7 @@ describe('the outer place of an agent in a Zellij pane', () => {
     const cases: Array<[string, ReturnType<typeof lookup>, Call[], string[]]> = [
       ['no zellij is found', lookup({ zellij: ABSENT }), [], notRead('zellij')],
       ['the table is not read', lookup({ processes: async () => { throw new Error('process table not read') } }), [], notRead('processes')],
+      ['a terminal is not read', lookup({ tty: async () => { throw new Error('tty not read') } }), [], notRead('processes')],
       ['the session is gone', lookup({ code: missingSession.code, clients: '' }), [ran(listClients.args)], notRead('clients')],
       ['the app scan throws', lookup({ ...MAC, table: MAC_TABLE, roots }), [ran(listClients.args)], notRead('app')],
     ]
@@ -487,7 +493,7 @@ describe('the outer place of an agent in a Zellij pane', () => {
       return { code: 0, stdout: '' }
     }
     const outer = createOuter({ processes: async () => TABLE, log: () => {}, now: () => 0, platform: 'linux', roots: [], bundleId: async () => undefined },
-      [tmuxClients({ run, tmux: async () => ({ state: 'present' }) }), zellijClients({ run, zellij: FOUND, platform: 'linux' })])
+      [tmuxClients({ run, tmux: async () => ({ state: 'present' }) }), zellijClients({ run, zellij: FOUND, platform: 'linux', tty: ttysOf(TABLE) })])
     await outer(hints, 100)
     await outer({ TMUX_PANE: '%3' }, 100)
     expect(calls.map(({ file, args }) => [file, args.includes('list-clients') ? 'list-clients' : args[0]]))

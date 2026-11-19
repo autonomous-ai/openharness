@@ -9,8 +9,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { RunningProcess } from '../../lib/sessionSearch/externals/types.js'
 import { ObservedSource, type ObservedDeps } from './observed.js'
 import {
-  appRoots, learnApps, parseProcessNames, ptyOwner, readBundleId, readProcessNames, scannedApps, WALK_PARENTS, type ProcessName,
-  type ScannedAppDeps,
+  appRoots, learnApps, parseProcessNames, ptyOwner, readBundleId, readProcessNames, readPtyOwner, readTtyName, scannedApps,
+  WALK_PARENTS, type ProcessName, type PtyProcess, type ScannedAppDeps,
 } from './scannedApp.js'
 
 // The patient exec, as the scan's default reads get it: each call is kept, and a command a test gives an answer for is
@@ -41,7 +41,7 @@ const ROOTS = appRoots(HOME)
 const GHOSTTY = '/Applications/Ghostty.app/Contents/MacOS/ghostty'
 
 /** A made-up process table, each row `[pid, ppid, executable]`, and its tty after when it runs on one. */
-const table = (rows: Array<[number, number, string, string?]>): ProcessName[] =>
+const table = (rows: Array<[number, number, string, string?]>): PtyProcess[] =>
   rows.map(([pid, ppid, executable, tty]) => ({ pid, ppid, executable, ...(tty === undefined ? {} : { tty }) }))
 
 function deps(rows: Array<[number, number, string]>, bundles: Record<string, string | undefined | Error> = {},
@@ -334,45 +334,107 @@ describe('the host that owns a process\'s terminal', () => {
   })
 })
 
+// The table holds no terminal: a tty column tripled every read of it on macOS. The own-pane check reads its caller's
+// chain's, one process at a time: on macOS a `ps -p` of two pids or more took 53 ms, of one 2.4 ms.
+describe('the host that owns a process\'s terminal, read', () => {
+  /** Each process's terminal as `ps -o tty= -p` prints it, `?` for none; each read kept. */
+  function ttys(of: Readonly<Record<number, string>>) {
+    const exec = vi.fn(async (_command: string, args: readonly string[]): Promise<string | null> => {
+      const tty = of[Number(args[3])]
+      return tty === undefined ? null : `${tty}\n`
+    })
+    return { exec, tty: (pid: number) => readTtyName(pid, exec), read: () => exec.mock.calls.map(([, args]) => Number(args[3])) }
+  }
+  // An agent in Zellij's pane, and Zellij's client in kitty's window: as `ptyOwner` was given them with their terminals.
+  const ROWS = table([[100, 50, 'claude'], [50, 29, 'bash'], [29, 1, 'zellij'], [103, 21, 'zellij'], [21, 20, 'bash'], [20, 1, 'kitty']])
+  const LINUX = { 100: 'pts/2', 50: 'pts/2', 29: '?', 103: 'pts/1', 21: 'pts/1', 20: '?' }
+
+  it('reads the caller\'s terminal, then its parents\' one at a time up to the first on another or none', async () => {
+    const at = ttys(LINUX)
+    expect(await readPtyOwner(100, ROWS, at.tty)).toBe('zellij')
+    expect(at.read()).toEqual([100, 50, 29])
+    expect(at.exec.mock.calls[0]).toEqual(['ps', ['-o', 'tty=', '-p', '100'], { timeout: 1_000, maxBuffer: 256 }])
+  })
+
+  it('answers as ptyOwner does over the same terminals, macOS\'s names too', async () => {
+    const mac = { 400: 'ttys007', 399: 'ttys007', 398: 'ttys002', 50: 'ttys002', 29: '??' }
+    const rows = table([[400, 399, 'claude'], [399, 398, 'zsh'], [398, 50, '/Applications/kitty.app/Contents/MacOS/kitty'],
+      [50, 29, 'bash'], [29, 1, '/opt/homebrew/bin/zellij']])
+    expect(await readPtyOwner(400, rows, ttys(mac).tty)).toBe('kitty')
+    const vscode = table([[900, 899, 'codex'], [899, 800, 'bash'], [800, 1, 'code']])
+    expect(await readPtyOwner(900, vscode, ttys({ 900: 'pts/9', 899: 'pts/9', 800: '?' }).tty)).toBeUndefined()
+  })
+
+  it('a caller on no terminal reads its own alone; one the table does not hold reads none', async () => {
+    const none = ttys({ 100: '?' })
+    expect(await readPtyOwner(100, ROWS, none.tty)).toBeUndefined()
+    expect(none.read()).toEqual([100])
+    const gone = ttys(LINUX)
+    expect(await readPtyOwner(4242, ROWS, gone.tty)).toBeUndefined()
+    expect(gone.read()).toEqual([])
+  })
+
+  it('walks no further than the scan does', async () => {
+    const shells = Array.from({ length: WALK_PARENTS + 1 }, (_, i): [number, number, string] => [100 + i, 101 + i, 'sh'])
+    const at = ttys(Object.fromEntries(shells.map(([pid]) => [pid, 'pts/1'])))
+    expect(await readPtyOwner(100, table([...shells, [101 + WALK_PARENTS, 1, 'kitty']]), at.tty)).toBeUndefined()
+    expect(at.read()).toHaveLength(WALK_PARENTS + 1)
+  })
+
+  it('a terminal not read rejects, saying nothing of the process', async () => {
+    const error = await readPtyOwner(100, ROWS, ttys({ 100: 'pts/2' }).tty).catch((e: unknown) => e)
+    expect(error).toEqual(new Error('tty not read'))
+  })
+
+  it.skipIf(process.platform === 'win32')('reads a terminal through the patient exec', async () => {
+    patient.answers = { ps: 'ttys004\n' }
+    expect(await readTtyName(700)).toBe('ttys004')
+    expect(patient.calls).toEqual([[execFile, 'ps', ['-o', 'tty=', '-p', '700'], { timeout: 1_000, maxBuffer: 256 }]])
+  })
+
+  it('none for `?` and `??`', async () => {
+    expect(await readTtyName(1, async () => '?\n')).toBeUndefined()
+    expect(await readTtyName(1, async () => '??      \n')).toBeUndefined()
+  })
+})
+
 describe('the process table the scan reads', () => {
-  // Recorded as `ps -axo pid=,ppid=,tty=,comm=` prints it on macOS, the names made up: `comm` last is the whole path, and
-  // a process on no terminal has `??`. With a column after it (`comm=,lstart=,args=`), the first rows' names came cut
-  // to `/Users/someone/A` and `/Applications/Vi`.
+  // Recorded as `ps -axo pid=,ppid=,comm=` prints it on macOS, the names made up: `comm` last is the whole path. With a
+  // column after it (`comm=,lstart=,args=`), the first rows' names came cut to `/Users/someone/A` and `/Applications/Vi`.
   const MACOS = [
-    '    1     0 ??       /sbin/launchd',
-    '  612     1 ??       /Users/someone/Applications/Ghostty.app/Contents/MacOS/ghostty',
-    '  640   612 ttys004  /usr/bin/login',
-    '  641   640 ttys004  -zsh',
-    '  700   641 ttys004  claude',
-    '  810     1 ??       /Applications/Visual Studio Code.app/Contents/Frameworks/Code Helper (Plugin).app/Contents/MacOS/Code Helper (Plugin)',
-    '  820   810 ttys005  /bin/zsh',
-    '  830   820 ttys005  claude',
+    '    1     0 /sbin/launchd',
+    '  612     1 /Users/someone/Applications/Ghostty.app/Contents/MacOS/ghostty',
+    '  640   612 /usr/bin/login',
+    '  641   640 -zsh',
+    '  700   641 claude',
+    '  810     1 /Applications/Visual Studio Code.app/Contents/Frameworks/Code Helper (Plugin).app/Contents/MacOS/Code Helper (Plugin)',
+    '  820   810 /bin/zsh',
+    '  830   820 claude',
     '',
   ].join('\n')
-  // As procps prints it: `comm` is the task name, cut to 15 characters either way, and a process on no terminal has `?`.
-  const LINUX = ['      1       0 ?        systemd', '   2201       1 ?        ghostty', '   2230    2201 pts/1    bash',
-    '   2300    2230 pts/1    claude', '   2400       1 ?        Visual Studio C', ''].join('\n')
+  // As procps prints it: `comm` is the task name, cut to 15 characters either way.
+  const LINUX = ['      1       0 systemd', '   2201       1 ghostty', '   2230    2201 bash', '   2300    2230 claude',
+    '   2400       1 Visual Studio C', ''].join('\n')
 
-  it('parses macOS rows, each name whole however long, spaces and all, and each one\'s terminal', () => {
+  it('parses macOS rows, each name whole however long, spaces and all', () => {
     expect(parseProcessNames(MACOS)).toEqual(table([
       [1, 0, '/sbin/launchd'],
       [612, 1, '/Users/someone/Applications/Ghostty.app/Contents/MacOS/ghostty'],
-      [640, 612, '/usr/bin/login', 'ttys004'], [641, 640, '-zsh', 'ttys004'], [700, 641, 'claude', 'ttys004'],
+      [640, 612, '/usr/bin/login'], [641, 640, '-zsh'], [700, 641, 'claude'],
       [810, 1, '/Applications/Visual Studio Code.app/Contents/Frameworks/Code Helper (Plugin).app/Contents/MacOS/Code Helper (Plugin)'],
-      [820, 810, '/bin/zsh', 'ttys005'], [830, 820, 'claude', 'ttys005'],
+      [820, 810, '/bin/zsh'], [830, 820, 'claude'],
     ]))
   })
 
-  it('parses Linux rows, each name the task\'s, and each one\'s terminal', () => {
+  it('parses Linux rows, each name the task\'s', () => {
     expect(parseProcessNames(LINUX)).toEqual(table([
-      [1, 0, 'systemd'], [2201, 1, 'ghostty'], [2230, 2201, 'bash', 'pts/1'], [2300, 2230, 'claude', 'pts/1'],
-      [2400, 1, 'Visual Studio C'],
+      [1, 0, 'systemd'], [2201, 1, 'ghostty'], [2230, 2201, 'bash'], [2300, 2230, 'claude'], [2400, 1, 'Visual Studio C'],
     ]))
   })
 
   it('a line that is no row is passed over', () => {
-    expect(parseProcessNames(['', '   ', 'PID PPID TTY COMM', '  12', '  12   1', '  12   1 ?', '  x   1 ? claude',
-      '  13   1 claude', '  14   1 ?  claude  '].join('\n'))).toEqual(table([[14, 1, 'claude']]))
+    expect(parseProcessNames(['', '   ', 'PID PPID COMM', '  12', '  12   1', '  x   1 claude', '  13   1 claude  '].join('\n')))
+      .toEqual(table([[13, 1, 'claude']]))
   })
 
   it('an app\'s path longer than 16 characters names its app, as the read that cut it never did', async () => {
@@ -382,15 +444,15 @@ describe('the process table the scan reads', () => {
   })
 
   it.skipIf(process.platform === 'win32')('runs one ps with comm last: no command line, no environment, under 3 s and 1 MiB', async () => {
-    const exec = vi.fn(async (): Promise<string | null> => '  100     1 ?  claude\n')
+    const exec = vi.fn(async (): Promise<string | null> => '  100     1 claude\n')
     await learnApps([100], exec)
-    expect(exec.mock.calls).toEqual([['ps', ['-axo', 'pid=,ppid=,tty=,comm='], { timeout: 3_000, maxBuffer: 1024 * 1024 }]])
+    expect(exec.mock.calls).toEqual([['ps', ['-axo', 'pid=,ppid=,comm='], { timeout: 3_000, maxBuffer: 1024 * 1024 }]])
   })
 
   it.skipIf(process.platform === 'win32')('runs ps through the patient exec: a held loop never reads as an empty table', async () => {
-    patient.answers = { ps: '  100     1 ?  claude\n' }
+    patient.answers = { ps: '  100     1 claude\n' }
     expect(await learnApps([100])).toEqual(new Map())
-    expect(patient.calls).toEqual([[execFile, 'ps', ['-axo', 'pid=,ppid=,tty=,comm='], { timeout: 3_000, maxBuffer: 1024 * 1024 }]])
+    expect(patient.calls).toEqual([[execFile, 'ps', ['-axo', 'pid=,ppid=,comm='], { timeout: 3_000, maxBuffer: 1024 * 1024 }]])
   })
 
   it('a ps that failed or listed nobody is an error that says nothing of what it printed', async () => {
@@ -405,7 +467,7 @@ describe('the process table the scan reads', () => {
 describe.skipIf(process.platform === 'win32')('the scan\'s process read', () => {
   it('runs once for a scan of several new sessions, never on a tick, nor at a scan with no new session', async () => {
     const owners = new Map<string, { pid: number; engine: string; record: string }>()
-    const exec = vi.fn(async (): Promise<string | null> => [...owners.values()].map(({ pid }) => `  ${pid}     1 ?  claude`).join('\n'))
+    const exec = vi.fn(async (): Promise<string | null> => [...owners.values()].map(({ pid }) => `  ${pid}     1 claude`).join('\n'))
     const src = new ObservedSource({
       now: () => 0,
       processes: async () => [...owners.values()].map(({ pid }) => ({ pid, generation: `g${pid}` })),
@@ -534,12 +596,15 @@ describe('the scan\'s files', () => {
     }
   })
 
-  it('read the processes with one ps, its tty, then comm last: no command line, and no read that cuts the name', () => {
+  // A tty column made every read of the table three times as slow on macOS (27 ms to 82 ms, 638 processes): only one
+  // process's terminal is read, and only for the own-pane check.
+  it('read the processes with one ps, comm last, and a terminal one process at a time: no command line, no cut name', () => {
     const source = readFileSync(fileURLToPath(new URL('./scannedApp.ts', import.meta.url)), 'utf8')
     for (const reader of [/listProcesses/, /processTable/, /processRows/, /\bargs=/, /\bcommand=/, /lstart/, /\/proc\//]) {
       expect(source).not.toMatch(reader)
     }
-    expect(source.match(/'ps'/g)).toEqual(["'ps'"])
-    expect(source).toContain("'ps', ['-axo', 'pid=,ppid=,tty=,comm=']")
+    expect(source.match(/'ps'/g)).toEqual(["'ps'", "'ps'"])
+    expect(source).toContain("'ps', ['-axo', 'pid=,ppid=,comm=']")
+    expect(source).toContain("'ps', ['-o', 'tty=', '-p', String(pid)]")
   })
 })
