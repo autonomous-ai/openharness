@@ -865,6 +865,21 @@ describe('ObservedSource and the app the scan learns', () => {
     expect(s.src.list()[0]).not.toHaveProperty('appPending')
   })
 
+  it('windowOf: a live agent\'s latest caller and its app, a scanned one\'s own pid; none for an ended or unknown one', async () => {
+    const s = setup({ apps: async () => new Map([[11, 'ghostty']]) })
+    s.src.ingest(s.ev('session-start', { sessionId: 'hooked', callerPid: 100, hostHints: { TERM_PROGRAM: 'WezTerm' } }))
+    const id = (sessionId: string) => s.src.list().find((a) => a.sessionId === sessionId)!.id
+    expect(s.src.windowOf(id('hooked'))).toEqual({ pid: 100, app: 'wezterm' })
+    s.src.ingest(s.ev('turn-start', { sessionId: 'hooked', callerPid: 222, hostHints: { TERM_PROGRAM: 'WezTerm' } }))
+    expect(s.src.windowOf(id('hooked'))).toEqual({ pid: 222, app: 'wezterm' })
+    found(s, 'a', 11)
+    await s.src.scanOpen()
+    expect(s.src.windowOf(id('a'))).toEqual({ pid: 11, app: 'ghostty' })
+    s.src.ingest(s.ev('session-end', { sessionId: 'hooked', callerPid: 222, hostHints: { TERM_PROGRAM: 'WezTerm' } }))
+    expect(s.src.windowOf(id('hooked'))).toBeUndefined()
+    expect(s.src.windowOf('observed:unknown')).toBeUndefined()
+  })
+
   it('the scan asks once a pass, for the new sessions\' pids alone, and never again for one it listed', async () => {
     const apps = vi.fn(async (_pids: readonly number[]) => new Map<number, string>())
     const s = setup({ apps })
