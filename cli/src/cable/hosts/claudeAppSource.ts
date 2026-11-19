@@ -13,6 +13,7 @@
  * A log line says only fixed words and counts: the store names people's folders and sessions.
  */
 import { basename, dirname, join, sep } from 'node:path'
+import { errorKind } from '../../lib/log.js'
 import { claudePaneKey } from './claudeApp.js'
 import { localIdOf } from './claudeAppStore.js'
 import type { ClaudeAppSession, ClaudeAppStore, StoreFolders, StoreRead } from './claudeAppStore.js'
@@ -296,10 +297,10 @@ export class ClaudeAppSource implements HostSource {
       if (this.stops !== stops) return
       this.take(read, this.deps.monotonic() - began)
       this.failed = false
-    } catch {
+    } catch (error) {
       // A failed call tells nothing of the store: the rows stay as they were, and nothing throws into the devices process.
-      // The error is not said: it can name the store's folders and files.
-      if (!this.failed) this.deps.log('[claude-app] read · failed')
+      // The kind is said, never the error's words: they can name the store's folders and files.
+      if (!this.failed) this.deps.log(`[claude-app] read · failed · ${errorKind(error)}`)
       this.failed = true
     } finally {
       pass.under = false
