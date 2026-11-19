@@ -31,6 +31,7 @@ import { openDevicesListener } from './devicesListener.js'
 import { runServiceProcess, type CoreConnection, type ServiceProcess, type ServiceProcessOptions } from './process.js'
 import { processCoreApi, UNASKED } from './processCoreApi.js'
 import { harnessdEnv } from '../lib/harnessdEnv.js'
+import { newPipePath } from '../lib/windows/pipeAuth.js'
 
 /** An agent as the core lists it for the dial: with the name the apps show and the model it runs. */
 type Viewed = RegisteredSession & { displayName?: string; runtimeProfile?: string | null }
@@ -54,6 +55,8 @@ export interface DevicesServiceOptions {
   run?: (options: ServiceProcessOptions) => ServiceProcess
   openListener?: typeof openDevicesListener
   processEnv?: NodeJS.ProcessEnv
+  /** For this service's tests: the platform the listener is opened for. */
+  platform?: NodeJS.Platform
 }
 
 const text = (value: unknown): string => (typeof value === 'string' ? value : '')
@@ -217,8 +220,17 @@ export function runDevicesService(options: DevicesServiceOptions): ServiceProces
     faults: faultsOf(processEnv.HARNESSD_TEST_FAULTS),
     refresh,
     onCoreGone: (run) => { coreGone = run },
-    // Their own listener, in this process alone: the devices started inside the core's process are given none.
-    listen: (handlers, log) => (options.openListener ?? openDevicesListener)({ path: devicesListenerPath(options.dataDir), handlers, log }),
+    // Their own listener, in this process alone: the devices started inside the core's process are given none. On
+    // Windows a pipe with a new name each start, as the daemon's.
+    listen: (handlers, log) => {
+      const platform = options.platform ?? process.platform
+      return (options.openListener ?? openDevicesListener)({
+        path: devicesListenerPath(options.dataDir, platform),
+        pipe: platform === 'win32' ? { path: newPipePath(), dataDir: options.dataDir } : undefined,
+        handlers,
+        log,
+      })
+    },
   }
   const requests = (options.start ?? startDevices)(api, ports, deps)
   const port = ports.devices as DevicesPort
