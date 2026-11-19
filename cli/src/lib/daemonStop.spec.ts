@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import type { StopDeps } from './daemonStop.js'
@@ -24,7 +24,7 @@ function fakeDeps(state: { pid: number | null; alive: Set<number>; killed: strin
     sleep: async (ms) => { clock.now += ms },
     now: () => clock.now,
     lock: async () => { state.locked += 1; return () => { state.released += 1 } },
-    settlePid: async () => {},
+    settlePid: async () => (state.pid === null ? { state: 'missing' } : { state: 'pid', pid: state.pid, from: 'file' }),
     warn: () => {},
     ...overrides,
   }
@@ -95,7 +95,7 @@ describe('stopDaemonProcess', () => {
     const state = { pid: null, alive: new Set<number>(), killed: [] as string[], locked: 0, released: 0 }
     await stopDaemonProcess(fakeDeps(state, {
       lock: async () => { seen.push('lock'); return () => { seen.push('release') } },
-      settlePid: async () => { seen.push('settle') },
+      settlePid: async () => { seen.push('settle'); return { state: 'missing' } },
       readPid: () => { seen.push('read'); return null },
     }))
     expect(seen).toEqual(['lock', 'settle', 'read', 'release'])
@@ -109,6 +109,22 @@ describe('stopDaemonProcess', () => {
     await expect(stopDaemonProcess(fakeDeps(state))).resolves.toEqual({ pid: null, stopped: false })
     expect(existsSync(PID_FILE)).toBe(false)
     expect(state.released).toBe(1)
+  })
+
+  it('leaves a pid file it cannot read while another process holds the lock, and says so', async () => {
+    // The lock could not be taken and the stop went on without it: the holder may be writing the file this moment.
+    const { stopDaemonProcess } = await load()
+    const { PID_FILE } = await import('./daemonState.js')
+    writeFileSync(PID_FILE, 'x')
+    const warned: string[] = []
+    const state = { pid: null, alive: new Set<number>(), killed: [] as string[], locked: 0, released: 0 }
+    await expect(stopDaemonProcess(fakeDeps(state, {
+      settlePid: async () => ({ state: 'busy' }),
+      warn: (line) => warned.push(line),
+    }))).resolves.toEqual({ pid: null, stopped: false })
+    expect(readFileSync(PID_FILE, 'utf8')).toBe('x')
+    expect(warned).toEqual(['  ! the pid file cannot be read and the daemon does not answer: nothing was stopped'])
+    expect(state.killed).toEqual([])
   })
 
   describe('when launchd or systemd runs the master', () => {

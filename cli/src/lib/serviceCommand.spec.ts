@@ -203,7 +203,7 @@ describe.each(['launchd', 'systemd'] as const)('harness service under %s', (plat
     })
   })
 
-  it('settles a pid file it cannot read before it reads it: an install under its lock, an uninstall before its lock', async () => {
+  it('settles a pid file it cannot read under its lock, before it reads it: an install and an uninstall', async () => {
     const seen: string[] = []
     c.deps.settlePid = async () => { seen.push('settle') }
     const readPid = c.deps.readPid
@@ -213,7 +213,7 @@ describe.each(['launchd', 'systemd'] as const)('harness service under %s', (plat
     expect(seen.slice(0, 3)).toEqual(['lock', 'settle', 'read'])
     seen.length = 0
     await expect(serviceCommand(['uninstall'], c.deps)).resolves.toBe(0)
-    expect(seen.slice(0, 3)).toEqual(['settle', 'read', 'lock'])
+    expect(seen.slice(0, 3)).toEqual(['lock', 'settle', 'read'])
   })
 
   describe('uninstall', () => {
@@ -240,6 +240,21 @@ describe.each(['launchd', 'systemd'] as const)('harness service under %s', (plat
       await expect(serviceCommand(['uninstall'], c.deps)).resolves.toBe(0)
       expect(c.clock.now).toBeGreaterThanOrEqual(12_000)
       expect(c.stops).toHaveLength(1)
+      expect(c.relaunches).toHaveLength(1)
+    })
+
+    it('starts the daemon again when its pid file could be read only under the lock', async () => {
+      // A start held the lock and its pid file read as nothing: the platform's master went, and nothing came after it.
+      await serviceCommand(['install'], c.deps)
+      let locked = false
+      c.deps.withLock = async (_purpose, fn) => { locked = true; try { return await fn() } finally { locked = false } }
+      let answered: number | null = null
+      c.deps.settlePid = async () => { answered = locked ? 4242 : null }
+      const readPid = c.deps.readPid
+      c.deps.readPid = () => readPid() ?? answered
+      writeFileSync(c.pidFile, 'x')
+      await expect(serviceCommand(['uninstall'], c.deps)).resolves.toBe(0)
+      expect(c.fake.state()).toMatchObject({ pid: null })
       expect(c.relaunches).toHaveLength(1)
     })
 
