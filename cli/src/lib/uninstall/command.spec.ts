@@ -713,8 +713,8 @@ describe('harness uninstall on Linux\'s two roots', () => {
       '✓ removed Harness\'s hooks from ~/.claude/settings.json',
     ]
     const done = (keepData: boolean) => (keepData ? 'Harness is uninstalled. Your sign-in and history are kept for the next install.' : 'Harness is uninstalled.')
-    const posixLines = (service: string, rc: string) => (keepData: boolean) => [
-      ...asked(service, '  · removes the harness and hn commands, and the PATH line the installer added', '~/.harness', keepData),
+    const posixLines = (service: string, rc: string, commands: string) => (keepData: boolean) => [
+      ...asked(service, commands, '~/.harness', keepData),
       '✓ removed ~/.local/bin/harness',
       '✓ removed ~/.local/bin/hn',
       `✓ removed the PATH line Harness added to ${rc}`,
@@ -727,7 +727,11 @@ describe('harness uninstall on Linux\'s two roots', () => {
       `✓ ${keepData ? 'the program in ~\\.harness' : '~\\.harness'} goes once this command has exited (anything left is listed in C:\\T\\h.log)`,
       done(keepData),
     ]
-    for (const [name, platform, lines] of [['macOS', {}, posixLines('launchd', '~/.zshrc')], ['Windows', win, windowsLines], ['Linux', legacyLinux, posixLines('systemd', '~/.bashrc')]] as const) {
+    for (const [name, platform, lines] of [
+      ['macOS', {}, posixLines('launchd', '~/.zshrc', '  · removes the harness and hn commands, and the PATH line the installer added')],
+      ['Windows', win, windowsLines],
+      ['Linux', legacyLinux, posixLines('systemd', '~/.bashrc', '  · removes the harness and hn commands, the login entry and the PATH line the installer added')],
+    ] as const) {
       for (const keepData of [false, true]) {
         const t = fake({ ...platform, isTTY: true, ask: async () => 'y' })
         expect(await uninstallCommand(keepData ? ['--keep-data'] : [], t.deps), name).toBe(0)
