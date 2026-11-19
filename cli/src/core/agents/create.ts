@@ -381,12 +381,13 @@ export function createAgentCreator({
         { ...launchOptions, extraArgs: launchSettingsArgs(engine, extraArgs, settings) })
     } catch (error) { return windowsLaunchRefusal(error) }
     const held = windowsArgv !== undefined && isWindowsHeldPane(windowsArgv)
-    const argv = held ? windowsArgv! : () => {
+    const prepareCommand = () => {
       const selectedArgs = launchSettingsArgs(engine, extraArgs, settings)
       const selected = { ...baseOptions, extraArgs: selectedArgs.length ? selectedArgs : undefined }
       command = buildEngineCommandArgv(engine, selected)
       return buildEngineLaunchArgv(engine, selected)
     }
+    const argv = held ? windowsArgv! : prepareCommand
     let dispatchRefusal: ReturnType<typeof workspaceRefusal> = null
     const result = await createAndRegisterPane({
       current, agentId, ...(native ? { nativeToken: native.token } : {}),
@@ -400,7 +401,7 @@ export function createAgentCreator({
       engine,
       cwd,
       sessionLabel: label,
-      argv: launchAttempts(argv, () => buildEngineLaunchArgv(engine, launchOptions)),
+      argv: launchAttempts(argv, prepareCommand),
       // Windows: the workspace to start in and the shell the pane becomes after the engine (lib/windows/engineStart.ts).
       paneLaunch: windowsPaneLaunch(engine, { ...launchOptions, held }),
       // Windows: the variables the argv's `/usr/bin/env` prefix carries elsewhere, last (engineLaunchEnv).

@@ -58,5 +58,5 @@ it('returns immutable values and preserves selected context without retaining ca
 it('names optional failure without source contents', async () => {
   const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
   expect(await prepareLaunchSettings('claude', {}, null, { prepareSettings: async () => { throw Error('private contents') } }, options())).toBeNull()
-  expect(warn).toHaveBeenCalledExactlyOnceWith('[launch-settings] OPTIONAL_PREPARATION_UNAVAILABLE')
+  expect(warn).toHaveBeenCalledExactlyOnceWith('[launch-settings] OPTIONAL_PREPARATION_UNAVAILABLE · Error')
 })

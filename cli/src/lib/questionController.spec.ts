@@ -433,7 +433,7 @@ describe('a hook said a dialog is coming', () => {
 })
 
 describe('the log of an answer that was not keyed', () => {
-  // The question and the answer are the person's words: the log names the harness and their sizes, never the words.
+  // Only the refusal category is logged; questions, answers and session/request identities stay private.
   const QUESTION = 'SECRET-QUESTION-MARKER?'
   const question = { kind: 'question' as const, question: QUESTION, multi: false, typeRow: null,
     rows: [{ number: '1', label: 'Tea', checked: false }, { number: '2', label: 'Coffee', checked: false }] }
@@ -449,14 +449,15 @@ describe('the log of an answer that was not keyed', () => {
 
   it.each([
     ['stuck on the dialog', { answers: { [QUESTION]: 'Coffee' } }, 'dialog stuck'],
-    ['the dialog changed', { answers: { [QUESTION]: 'Coffee' }, requestId: 'req-1' }, 'req=req-1'],
-    ['no answer names the question', { answers: { 'Other?': 'Coffee' } }, 'no answer names'],
-    ['no option matches the answer', { answers: { [QUESTION]: 'SECRET-ANSWER-MARKER' } }, 'no option matched'],
-  ])('says the harness and sizes, not the words, when %s', async (_, answer, says) => {
+    ['the dialog changed', { answers: { [QUESTION]: 'Coffee' }, requestId: 'req-1' }, 'stale request; nothing typed'],
+    ['no answer names the question', { answers: { 'Other?': 'Coffee' } }, 'question mismatch; nothing typed'],
+    ['no option matches the answer', { answers: { [QUESTION]: 'SECRET-ANSWER-MARKER' } }, 'option mismatch; no text input'],
+  ])('names the refusal without content or identities when %s', async (_, answer, says) => {
     const lines = (await warned(answer)).filter(line => line.includes(says))
     expect(lines).toHaveLength(1)
-    expect(lines[0]).toContain('[question] agent ')
-    expect(lines[0]).toMatch(/\d+ chars/)
+    expect(lines[0]).toBe(`[question] ${says}`)
+    expect(lines[0]).not.toContain('agent')
+    expect(lines[0]).not.toContain('req-1')
     expect(lines[0]).not.toContain('SECRET')
   })
 })

@@ -114,7 +114,7 @@ it('keeps an ambiguous send charged and makes every pending answer unconfirmed o
   expect(f.listener.unavailable).toHaveBeenCalledExactlyOnceWith('QUESTION_OBSERVATION_UNAVAILABLE')
   f.socket.emit('close', 1000)
   expect(release).toHaveBeenCalledTimes(2)
-  expect(warn).toHaveBeenCalledExactlyOnceWith('[questions] QUESTION_ANSWER_UNAVAILABLE')
+  expect(warn).toHaveBeenCalledExactlyOnceWith('[questions] QUESTION_ANSWER_UNAVAILABLE · Error')
   warn.mockRestore()
 })
 

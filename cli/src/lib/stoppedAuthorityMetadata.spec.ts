@@ -135,6 +135,6 @@ describe('stopped archive authority metadata', () => {
     expect(() => stoppedArchiveWitness(directory)).toThrow('cleanup-unconfirmed')
     expect(() => stoppedAuthorityHealthy()).toThrow('cleanup-unconfirmed')
     expect(() => stoppedArchiveWitness(directory)).toThrow('cleanup-unconfirmed')
-    expect(logged).toHaveBeenCalledWith('[session-storage] authority descriptor close failed; restart required')
+    expect(logged).toHaveBeenCalledWith('[session-storage] authority descriptor close failed; restart required · Error')
   })
 })

@@ -1,4 +1,5 @@
 import type { Socket } from 'node:net'
+import { once } from 'node:events'
 import http from 'node:http'
 import net, { type AddressInfo } from 'node:net'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -555,7 +556,7 @@ describe('local CLI WebSocket', () => {
   })
 
   it.each(['local binary', 'remote JSON', 'remote binary'] as const)(
-    'keeps later messages behind an unfinished %s operation', async (kind) => {
+    'orders %s at its owning queue', async (kind) => {
       const backend = new FakeBackend(), pending = gate(), entered = gate()
       const trace: string[] = []
       const first = async () => {
@@ -595,12 +596,16 @@ describe('local CLI WebSocket', () => {
       }
       ws.send(JSON.stringify({ type: 'agents_list', payload: { requestId: 'second' } }))
       await entered.promise
-      // Let the real socket deliver the queued frame while the first operation is held open.
-      await new Promise((resolve) => setTimeout(resolve, 20))
-      expect(trace).toEqual(['first started'])
-      pending.resolve()
-      await vi.waitFor(() => expect(trace).toEqual(['first started', 'first finished', 'second']))
-      ws.close()
+      try {
+        // A pong proves the socket consumed both earlier frames, without a timing sleep. Local binary
+        // work belongs to the shared input queue; only the remote relay keeps its own transport FIFO.
+        const pong = once(ws, 'pong', { signal: AbortSignal.timeout(5_000) })
+        ws.ping(); await pong
+        expect(trace).toEqual(remote ? ['first started'] : ['first started', 'second'])
+        pending.resolve()
+        await vi.waitFor(() => expect(trace).toEqual(remote
+          ? ['first started', 'first finished', 'second'] : ['first started', 'second', 'first finished']))
+      } finally { pending.resolve(); ws.close() }
     },
   )
 
@@ -1110,7 +1115,7 @@ describe('local CLI WebSocket', () => {
       await vi.waitFor(() => expect(backend.unregisters).toContain(backend.connId))
       expect(tabs).toHaveBeenLastCalledWith(backend.connId, null)
       expect(local!.legacyDeviceSnapshot()?.swarms).toBeNull()
-      expect(logged).toHaveBeenCalledExactlyOnceWith('[local-ws] APP_DISCONNECT_FAILED')
+      expect(logged).toHaveBeenCalledExactlyOnceWith('[local-ws] APP_DISCONNECT_FAILED · Error')
     } finally { ws.terminate(); logged.mockRestore() }
   })
 

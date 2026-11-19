@@ -22,6 +22,13 @@ import { clearGridMcpUrlCache } from './lib/gridMcpUrl.js'
 import { observeMachineList, resetGridModels, type GridModelsService } from './lib/gridModels.js'
 import { MODELS_REQUESTS, startModels } from './services/models.js'
 import { fakeCore } from './testing/fakeCore.js'
+import { ensureBundledModelManager } from './dsh/builtins.js'
+
+// Source tests have no release-embedded packages. Their installation/failure contract is covered by
+// models.spec; this fixture exercises the real Grid reader after that prerequisite has succeeded.
+vi.mock('./dsh/builtins.js', async (real) => ({
+  ...await real<object>(), ensureBundledModelManager: vi.fn(() => true),
+}))
 
 const OWN = 'mine', OWN_ID = 'net-own'
 const externalFetch = globalThis.fetch.bind(globalThis)
@@ -238,6 +245,7 @@ describe('grid_fleet_models_list (the Model Manager) on a sleeping own grid', ()
 
     const reply = await ask('grid_fleet_models_list', { refresh: true })
 
+    expect(reply.error).toBeUndefined()
     expect(reply.error).not.toBe('Running models could not be checked. Try again.')
     expect(reply.models).toEqual([expect.objectContaining({ id: 'local:Small-Q4.gguf', state: 'running', gridAsleep: true, canStop: true })])
     expect(seen.map((r) => r.path)).toEqual([`/g/${OWN_ID}${OVERVIEW}`])
@@ -247,6 +255,7 @@ describe('grid_fleet_models_list (the Model Manager) on a sleeping own grid', ()
     await ask('grid_fleet_models_list', { refresh: true })
     expect(grid.calls().filter((argv) => argv.includes('info'))).toHaveLength(1)
     expect(grid.calls().some((argv) => argv.includes('engines'))).toBe(false)
+    expect(ensureBundledModelManager).toHaveBeenCalledOnce()
   })
 })
 

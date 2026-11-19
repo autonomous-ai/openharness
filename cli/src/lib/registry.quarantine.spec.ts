@@ -102,9 +102,9 @@ describe('a registry no version can load', () => {
     const file = join(dataDir, 'registry.json')
     writeFileSync(file, '[{"agentId":"a1","defaultName": SECRET-NAME-MARKER}]', { mode: 0o600 })
     const registry = await loadRegistry()
-    registry.load()
+    await registry.load()
     expect(registry.list()).toEqual([])
-    expect(error).toHaveBeenCalledWith(expect.stringMatching(/^\[registry\] registry is not JSON; moved it aside to .*registry\.json\.corrupt-\S+ and started empty$/))
+    expect(error).toHaveBeenCalledWith('[registry] registry is not JSON; moved it aside and started empty')
     expect(error.mock.calls.flat().join('\n')).not.toContain('SECRET')
   })
 

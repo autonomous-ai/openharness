@@ -87,7 +87,7 @@ it('names a refused warmup once, then admits only an actual requested probe', as
   spawn.mockImplementationOnce(() => { throw Error('fixture spawn refused') })
   const own = createSetupProbeExecutor()
   own.warmOnce(); own.warmOnce()
-  expect(warning).toHaveBeenCalledExactlyOnceWith('[engine-setup] SETUP_PROBE_WARMUP_UNAVAILABLE')
+  expect(warning).toHaveBeenCalledExactlyOnceWith('[engine-setup] SETUP_PROBE_WARMUP_UNAVAILABLE · Error')
   expect(spawn).toHaveBeenCalledTimes(1)
   try {
     const result = await new Promise<string>((resolve, reject) => {

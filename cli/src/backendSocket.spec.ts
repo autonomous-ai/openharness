@@ -465,7 +465,7 @@ describe('viewer forwarding authentication', () => {
     await dispatchDown(socket, { type: 'route_task', payload: { requestId: 'original', text: 'fixture' } }, 'local:owner')
     expect(frames).toEqual([])
     await dispatchDown(socket, { type: 'terminal_input', payload: { text: 'typed meanwhile' } }, 'local:owner')
-    expect(input).toHaveBeenCalledExactlyOnceWith('local:owner', 'terminal_input', { text: 'typed meanwhile' })
+    expect(input).toHaveBeenCalledExactlyOnceWith('local:owner', 'terminal_input', { text: 'typed meanwhile' }, undefined)
     finish({ agentId: 'picked', requestId: 'forged' })
     await vi.waitFor(() => expect(frames).toHaveLength(1))
     expect(JSON.stringify(frames[0])).toBe('{"type":"route_task_result","payload":{"requestId":"original","agentId":"picked"}}')
@@ -1224,7 +1224,7 @@ describe('BackendSocket outbound queue', () => {
     socket.registerLocalClient('local:hn', { sendFrame: (frame) => { frames.push(frame as Record<string, unknown>); return true }, sendBinary: () => true })
     socket.handleLocalFrame('local:hn', { type: 'terminal_info', payload: { requestId: 'i-1', agentId: 'no-such-agent' } })
     await vi.waitFor(() => expect(frames).toContainEqual({ type: 'terminal_info_result', payload: { requestId: 'i-1', error: 'AGENT_NOT_FOUND' } }))
-    expect(handleFrame).toHaveBeenCalledWith('local:hn', 'terminal_info', expect.objectContaining({ agentId: 'no-such-agent' }))
+    expect(handleFrame).toHaveBeenCalledWith('local:hn', 'terminal_info', expect.objectContaining({ agentId: 'no-such-agent' }), undefined)
     // A terminal frame the streams take, or one nobody knows, is not answered here.
     socket.handleLocalFrame('local:hn', { type: 'terminal_resize', payload: { requestId: 'r-1', streamId: 's' } })
     socket.handleLocalFrame('local:hn', { type: 'terminal_unknown', payload: { requestId: 'u-1' } })
@@ -2576,7 +2576,7 @@ describe('BackendSocket outbound queue', () => {
       compressed: false,
     }
     await socket.handleLocalBinary('local:terminal', clear)
-    expect(handleBinary).toHaveBeenCalledWith('local:terminal', clear)
+    expect(handleBinary).toHaveBeenCalledWith('local:terminal', clear, expect.any(Function))
     expect(socket.sendTerminalBinaryTo('local:terminal', clear)).toBe(true)
     expect(decodeTerminalLocal(binary[0])).toEqual(clear)
     // A frame its maker framed already (a browser stream's screen, core/browserStreams.ts) goes to a window as it is.

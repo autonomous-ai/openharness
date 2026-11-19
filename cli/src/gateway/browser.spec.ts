@@ -209,7 +209,7 @@ describe('browser_callback', () => {
     expect(replay).toHaveBeenCalledTimes(2)
     await vi.advanceTimersByTimeAsync(1)
     expect(await call).toEqual({ ok: true, status: 302 })
-    expect(deps.log).toHaveBeenCalledWith('[browser] CALLBACK_PAGE_NOT_DELIVERED')
+    expect(deps.log).toHaveBeenCalledWith('[browser] CALLBACK_PAGE_NOT_DELIVERED · Error')
   })
 
   it('does not follow a redirect whose encoded URL exceeds the request bound', async () => {
@@ -218,7 +218,7 @@ describe('browser_callback', () => {
     await browser.open({ pane: '%7', url: CLAUDE })
     expect(await browser.callback({ url: 'http://localhost:35391/callback' }, 'phone-1')).toEqual({ ok: true, status: 302 })
     expect(deps.replay).toHaveBeenCalledOnce()
-    expect(deps.log).toHaveBeenCalledWith('[browser] CALLBACK_PAGE_NOT_DELIVERED')
+    expect(deps.log).toHaveBeenCalledWith('[browser] CALLBACK_PAGE_NOT_DELIVERED · Error')
   })
 
   it.each(['request', 'agent', 'gateway', 'peer'] as const)('revokes later effects after the %s ends or changes', async cause => {
@@ -281,13 +281,13 @@ describe('browser_callback', () => {
     failing.browser.typed('a1', { connId: 'phone-1', kind: 'phone' })
     await failing.browser.open({ pane: '%7', url: CODEX })
     expect(await failing.browser.callback({ url: 'http://127.0.0.1:1455/auth/callback?code=c' }, 'phone-1')).toEqual({ ok: true, status: 302 })
-    expect(failing.deps.log).toHaveBeenCalledWith('[browser] CALLBACK_PAGE_NOT_DELIVERED')
+    expect(failing.deps.log).toHaveBeenCalledWith('[browser] CALLBACK_PAGE_NOT_DELIVERED · Error')
     // A rejection that is not an Error is said the same way.
     const plain = setup({ replay: vi.fn().mockResolvedValueOnce({ status: 302, location: '/success' }).mockRejectedValueOnce('socket closed') })
     plain.browser.typed('a1', { connId: 'phone-1', kind: 'phone' })
     await plain.browser.open({ pane: '%7', url: CODEX })
     expect(await plain.browser.callback({ url: 'http://127.0.0.1:1455/auth/callback?code=c' }, 'phone-1')).toEqual({ ok: true, status: 302 })
-    expect(plain.deps.log).toHaveBeenCalledWith('[browser] CALLBACK_PAGE_NOT_DELIVERED')
+    expect(plain.deps.log).toHaveBeenCalledWith('[browser] CALLBACK_PAGE_NOT_DELIVERED · string')
     // A program that keeps sending the browser on is followed a few pages, never for ever.
     const loop = setup({ replay: vi.fn(async () => ({ status: 302, location: '/again' })) })
     loop.browser.typed('a1', { connId: 'phone-1', kind: 'phone' })
@@ -306,8 +306,8 @@ describe('browser_callback', () => {
     await browser.open({ pane: '%7', url: CLAUDE })
     expect(await browser.callback({ url: 'http://127.0.0.1:35391/callback?code=x' }, 'phone-1')).toEqual({ error: 'NOT_DELIVERED' })
     // The log says what happened and where, never the code.
-    expect(deps.log).toHaveBeenCalledWith('[browser] CALLBACK_NOT_DELIVERED')
-    expect(deps.log).toHaveBeenCalledWith('[browser] CALLBACK_NOT_DELIVERED')
+    expect(deps.log).toHaveBeenCalledWith('[browser] CALLBACK_NOT_DELIVERED · Error')
+    expect(deps.log).toHaveBeenCalledWith('[browser] CALLBACK_NOT_DELIVERED · string')
     expect(JSON.stringify(vi.mocked(deps.log).mock.calls)).not.toContain('code=')
     expect(await browser.callback({ url: 'http://localhost/callback?code=x' }, 'phone-1')).toEqual({ error: 'NOT_EXPECTED' })
     expect(deps.log).toHaveBeenLastCalledWith('[browser] CALLBACK_NOT_EXPECTED')
