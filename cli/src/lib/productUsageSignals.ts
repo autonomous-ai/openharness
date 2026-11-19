@@ -13,8 +13,11 @@ const actions = { agent_create: 'create', agent_resume: 'resume', agent_restart:
   browser_open: 'browser_open',
 } as const
 const unmeasured = (..._args: unknown[]): void => {}
+// An OpenClaw with no Gateway token (`OPENCLAW_NO_TOKEN`) is a computer not set up yet: a fixed kind every backend
+// already counts, where a new launch code would reach backends that do not list it before they update.
 const setup = new Set(['TMUX_UNAVAILABLE', 'PTY_HOST_UNAVAILABLE', 'TMUX_TOO_OLD_FOR_DSH', 'TMUX_TOO_OLD_FOR_GRID',
-  'ENGINE_UNAVAILABLE', 'NATIVE_LAUNCH_HELD', 'DSH_MATERIALIZE_FAILED', 'SPAWN_FAILED', 'REGISTRATION_FAILED', 'GRID_CONFIG_FAILED'])
+  'ENGINE_UNAVAILABLE', 'NATIVE_LAUNCH_HELD', 'DSH_MATERIALIZE_FAILED', 'SPAWN_FAILED', 'REGISTRATION_FAILED', 'GRID_CONFIG_FAILED',
+  'OPENCLAW_NO_TOKEN'])
 // The Browser's Start refusals (services/agentBrowser.ts) answer no launch, so they take a fixed kind, not the launch
 // code list, where each would have joined all twelve launch families: a guest's agent (`NOT_ALLOWED`) is `auth`, and an
 // agent that does not run here (`NOT_RUNNING`) is `invalid`.
