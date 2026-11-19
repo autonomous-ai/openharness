@@ -97,7 +97,9 @@ describe.skipIf(!kittyInstalled)('the dial reaches an agent in a kitty window', 
     const agent = await windows.agent('api', true)
     const shell = await windows.beside(agent)
     const id = observedAgentId('claude', agent.sessionId)
-    const row = (await showing(dial, 'the hooked agent listed', (rows) => rows.some((r) => r.id === id))).find((r) => r.id === id)!
+    // It takes words once the devices read that kitty made its terminal: until then its window only holds it.
+    const row = (await showing(dial, 'the hooked agent listed, taking words',
+      (rows) => rows.some((r) => r.id === id && String(r.caps).includes('v')))).find((r) => r.id === id)!
     expect(row).toMatchObject({ engine: 'claude', host: 'kitty' })
     expect(row.caps).toContain('v')
     expect(row.caps).toContain('f')

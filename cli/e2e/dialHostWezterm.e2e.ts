@@ -84,7 +84,9 @@ describe.skipIf(!weztermBinary)("an agent in a WezTerm pane takes the dial's wor
     const sessionId = await until('its SessionStart hook to run',
       () => d.hookLog().match(/claude pid=\d+ SessionStart\(startup\) session=(\S+) ran/)?.[1], 30_000, 100)
     const id = observedAgentId('claude', sessionId)
-    const row = (await showing(dial, 'the hooked agent listed', (rows) => rows.some((r) => r.id === id))).find((r) => r.id === id)!
+    // It takes words once the devices read that WezTerm's mux server made its terminal: until then its pane only holds it.
+    const row = (await showing(dial, 'the hooked agent listed, taking words',
+      (rows) => rows.some((r) => r.id === id && String(r.caps).includes('v')))).find((r) => r.id === id)!
     expect(row).toMatchObject({ engine: 'claude', host: 'wezterm' })
     expect(row.caps).toContain('v')
 

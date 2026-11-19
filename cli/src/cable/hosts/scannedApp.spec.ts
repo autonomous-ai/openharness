@@ -9,7 +9,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { RunningProcess } from '../../lib/sessionSearch/externals/types.js'
 import { ObservedSource, type ObservedDeps } from './observed.js'
 import {
-  appRoots, learnApps, parseProcessNames, readBundleId, readProcessNames, scannedApps, type ProcessName, type ScannedAppDeps,
+  appRoots, learnApps, parseProcessNames, ptyOwner, readBundleId, readProcessNames, scannedApps, WALK_PARENTS, type ProcessName,
+  type ScannedAppDeps,
 } from './scannedApp.js'
 
 // The patient exec, as the scan's default reads get it: each call is kept, and a command a test gives an answer for is
@@ -39,8 +40,9 @@ const HOME = '/Users/someone'
 const ROOTS = appRoots(HOME)
 const GHOSTTY = '/Applications/Ghostty.app/Contents/MacOS/ghostty'
 
-/** A made-up process table, each row `[pid, ppid, executable]`. */
-const table = (rows: Array<[number, number, string]>): ProcessName[] => rows.map(([pid, ppid, executable]) => ({ pid, ppid, executable }))
+/** A made-up process table, each row `[pid, ppid, executable]`, and its tty after when it runs on one. */
+const table = (rows: Array<[number, number, string, string?]>): ProcessName[] =>
+  rows.map(([pid, ppid, executable, tty]) => ({ pid, ppid, executable, ...(tty === undefined ? {} : { tty }) }))
 
 function deps(rows: Array<[number, number, string]>, bundles: Record<string, string | undefined | Error> = {},
   platform: NodeJS.Platform = 'darwin') {
@@ -278,43 +280,99 @@ describe('scannedApps elsewhere', () => {
   })
 })
 
+// A terminal or an editor started from another host's pane keeps that pane's variables: only the process that made the
+// agent's terminal says whose pane it is (docs/plans/2026-11-19-dial-linux-plan.md, Review Focus 1).
+describe('the host that owns a process\'s terminal', () => {
+  it('is the first of its parents on another terminal or on none: a terminal\'s or a multiplexer\'s server', () => {
+    // An agent in Zellij's pane, whose server has no terminal; Zellij's client runs in kitty's window.
+    const zellij = table([[100, 50, 'claude', 'pts/2'], [50, 29, 'bash', 'pts/2'], [29, 1, 'zellij'],
+      [103, 21, 'zellij', 'pts/1'], [21, 20, 'bash', 'pts/1'], [20, 1, 'kitty']])
+    expect(ptyOwner(100, zellij)).toBe('zellij')
+    // kitty started from a Zellij pane: its window's terminal is kitty's, kitty itself on the pane's.
+    const kitty = table([[400, 399, 'claude', 'pts/7'], [399, 398, 'zsh', 'pts/7'], [398, 50, 'kitty', 'pts/2'],
+      [50, 29, 'bash', 'pts/2'], [29, 1, 'zellij']])
+    expect(ptyOwner(400, kitty)).toBe('kitty')
+    // tmux inside a Zellij pane: tmux's server, which has no terminal, made the agent's.
+    const tmux = table([[500, 499, 'claude', 'pts/4'], [499, 498, 'bash', 'pts/4'], [498, 1, 'tmux: server'],
+      [497, 50, 'tmux: client', 'pts/2'], [50, 29, 'bash', 'pts/2'], [29, 1, 'zellij']])
+    expect(ptyOwner(500, tmux)).toBe('tmux')
+  })
+
+  it('names WezTerm\'s GUI and mux server, kitty, Zellij and tmux, by Linux\'s names and by macOS\'s paths', () => {
+    const owned = (owner: string) => ptyOwner(10, table([[10, 9, 'claude', 'pts/3'], [9, 8, '-zsh', 'pts/3'], [8, 1, owner]]))
+    expect(['wezterm-gui', 'wezterm-mux-ser', 'wezterm-mux-server', '/Applications/WezTerm.app/Contents/MacOS/wezterm-gui',
+      'kitty', '/Applications/kitty.app/Contents/MacOS/kitty', 'zellij', '/opt/homebrew/bin/zellij',
+      'tmux: server', '/opt/homebrew/bin/tmux'].map(owned))
+      .toEqual(['wezterm', 'wezterm', 'wezterm', 'wezterm', 'kitty', 'kitty', 'zellij', 'zellij', 'tmux', 'tmux'])
+    // Any other terminal or editor owns no pane the dial types into.
+    for (const other of ['code', 'cursor', 'ghostty', '/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal', 'orca', 'login']) {
+      expect(owned(other), other).toBeUndefined()
+    }
+  })
+
+  // VS Code started from WezTerm's pane 7 keeps WEZTERM_PANE=7 in its terminals: its own pty host made the agent's.
+  it('a terminal started from a host\'s pane is not that host\'s', () => {
+    const rows = table([[900, 899, 'codex', 'pts/9'], [899, 800, 'bash', 'pts/9'], [800, 700, 'code'],
+      [700, 600, 'code', 'pts/5'], [600, 590, 'zsh', 'pts/5'], [590, 1, 'wezterm-gui']])
+    expect(ptyOwner(900, rows)).toBeUndefined()
+  })
+
+  it('none for a process on no terminal, one the table does not hold, or a walk that ends on its terminal', () => {
+    expect(ptyOwner(29, table([[29, 1, 'zellij']]))).toBeUndefined()
+    expect(ptyOwner(100, table([[29, 1, 'zellij']]))).toBeUndefined()
+    // Its terminal's maker is not in the table, or is init: the walk ends with no owner.
+    expect(ptyOwner(100, table([[100, 50, 'claude', 'pts/2'], [50, 29, 'bash', 'pts/2']]))).toBeUndefined()
+    expect(ptyOwner(100, table([[100, 1, 'claude', 'pts/2']]))).toBeUndefined()
+  })
+
+  it('walks no further than the scan does', () => {
+    // The agent under WALK_PARENTS shells on its own terminal: kitty is one past the walk's end.
+    const shells = Array.from({ length: WALK_PARENTS }, (_, i): [number, number, string, string] => [101 + i, 102 + i, 'sh', 'pts/1'])
+    const rows = table([[100, 101, 'claude', 'pts/1'], ...shells, [101 + WALK_PARENTS, 1, 'kitty']])
+    expect(ptyOwner(100, rows)).toBeUndefined()
+    expect(ptyOwner(101, rows)).toBe('kitty')
+  })
+})
+
 describe('the process table the scan reads', () => {
-  // Recorded as `ps -axo pid=,ppid=,comm=` prints it on macOS, the names made up: `comm` last is the whole path. With a
-  // column after it (`comm=,lstart=,args=`), the first rows' names came cut to `/Users/someone/A` and `/Applications/Vi`.
+  // Recorded as `ps -axo pid=,ppid=,tty=,comm=` prints it on macOS, the names made up: `comm` last is the whole path, and
+  // a process on no terminal has `??`. With a column after it (`comm=,lstart=,args=`), the first rows' names came cut
+  // to `/Users/someone/A` and `/Applications/Vi`.
   const MACOS = [
-    '    1     0 /sbin/launchd',
-    '  612     1 /Users/someone/Applications/Ghostty.app/Contents/MacOS/ghostty',
-    '  640   612 /usr/bin/login',
-    '  641   640 -zsh',
-    '  700   641 claude',
-    '  810     1 /Applications/Visual Studio Code.app/Contents/Frameworks/Code Helper (Plugin).app/Contents/MacOS/Code Helper (Plugin)',
-    '  820   810 /bin/zsh',
-    '  830   820 claude',
+    '    1     0 ??       /sbin/launchd',
+    '  612     1 ??       /Users/someone/Applications/Ghostty.app/Contents/MacOS/ghostty',
+    '  640   612 ttys004  /usr/bin/login',
+    '  641   640 ttys004  -zsh',
+    '  700   641 ttys004  claude',
+    '  810     1 ??       /Applications/Visual Studio Code.app/Contents/Frameworks/Code Helper (Plugin).app/Contents/MacOS/Code Helper (Plugin)',
+    '  820   810 ttys005  /bin/zsh',
+    '  830   820 ttys005  claude',
     '',
   ].join('\n')
-  // As procps prints it: `comm` is the task name, cut to 15 characters either way.
-  const LINUX = ['      1       0 systemd', '   2201       1 ghostty', '   2230    2201 bash', '   2300    2230 claude',
-    '   2400       1 Visual Studio C', ''].join('\n')
+  // As procps prints it: `comm` is the task name, cut to 15 characters either way, and a process on no terminal has `?`.
+  const LINUX = ['      1       0 ?        systemd', '   2201       1 ?        ghostty', '   2230    2201 pts/1    bash',
+    '   2300    2230 pts/1    claude', '   2400       1 ?        Visual Studio C', ''].join('\n')
 
-  it('parses macOS rows, each name whole however long, spaces and all', () => {
+  it('parses macOS rows, each name whole however long, spaces and all, and each one\'s terminal', () => {
     expect(parseProcessNames(MACOS)).toEqual(table([
       [1, 0, '/sbin/launchd'],
       [612, 1, '/Users/someone/Applications/Ghostty.app/Contents/MacOS/ghostty'],
-      [640, 612, '/usr/bin/login'], [641, 640, '-zsh'], [700, 641, 'claude'],
+      [640, 612, '/usr/bin/login', 'ttys004'], [641, 640, '-zsh', 'ttys004'], [700, 641, 'claude', 'ttys004'],
       [810, 1, '/Applications/Visual Studio Code.app/Contents/Frameworks/Code Helper (Plugin).app/Contents/MacOS/Code Helper (Plugin)'],
-      [820, 810, '/bin/zsh'], [830, 820, 'claude'],
+      [820, 810, '/bin/zsh', 'ttys005'], [830, 820, 'claude', 'ttys005'],
     ]))
   })
 
-  it('parses Linux rows, each name the task\'s', () => {
+  it('parses Linux rows, each name the task\'s, and each one\'s terminal', () => {
     expect(parseProcessNames(LINUX)).toEqual(table([
-      [1, 0, 'systemd'], [2201, 1, 'ghostty'], [2230, 2201, 'bash'], [2300, 2230, 'claude'], [2400, 1, 'Visual Studio C'],
+      [1, 0, 'systemd'], [2201, 1, 'ghostty'], [2230, 2201, 'bash', 'pts/1'], [2300, 2230, 'claude', 'pts/1'],
+      [2400, 1, 'Visual Studio C'],
     ]))
   })
 
   it('a line that is no row is passed over', () => {
-    expect(parseProcessNames(['', '   ', 'PID PPID COMM', '  12', '  12   1', '  x   1 claude', '  13   1 claude  '].join('\n')))
-      .toEqual(table([[13, 1, 'claude']]))
+    expect(parseProcessNames(['', '   ', 'PID PPID TTY COMM', '  12', '  12   1', '  12   1 ?', '  x   1 ? claude',
+      '  13   1 claude', '  14   1 ?  claude  '].join('\n'))).toEqual(table([[14, 1, 'claude']]))
   })
 
   it('an app\'s path longer than 16 characters names its app, as the read that cut it never did', async () => {
@@ -324,15 +382,15 @@ describe('the process table the scan reads', () => {
   })
 
   it.skipIf(process.platform === 'win32')('runs one ps with comm last: no command line, no environment, under 3 s and 1 MiB', async () => {
-    const exec = vi.fn(async (): Promise<string | null> => '  100     1 claude\n')
+    const exec = vi.fn(async (): Promise<string | null> => '  100     1 ?  claude\n')
     await learnApps([100], exec)
-    expect(exec.mock.calls).toEqual([['ps', ['-axo', 'pid=,ppid=,comm='], { timeout: 3_000, maxBuffer: 1024 * 1024 }]])
+    expect(exec.mock.calls).toEqual([['ps', ['-axo', 'pid=,ppid=,tty=,comm='], { timeout: 3_000, maxBuffer: 1024 * 1024 }]])
   })
 
   it.skipIf(process.platform === 'win32')('runs ps through the patient exec: a held loop never reads as an empty table', async () => {
-    patient.answers = { ps: '  100     1 claude\n' }
+    patient.answers = { ps: '  100     1 ?  claude\n' }
     expect(await learnApps([100])).toEqual(new Map())
-    expect(patient.calls).toEqual([[execFile, 'ps', ['-axo', 'pid=,ppid=,comm='], { timeout: 3_000, maxBuffer: 1024 * 1024 }]])
+    expect(patient.calls).toEqual([[execFile, 'ps', ['-axo', 'pid=,ppid=,tty=,comm='], { timeout: 3_000, maxBuffer: 1024 * 1024 }]])
   })
 
   it('a ps that failed or listed nobody is an error that says nothing of what it printed', async () => {
@@ -347,7 +405,7 @@ describe('the process table the scan reads', () => {
 describe.skipIf(process.platform === 'win32')('the scan\'s process read', () => {
   it('runs once for a scan of several new sessions, never on a tick, nor at a scan with no new session', async () => {
     const owners = new Map<string, { pid: number; engine: string; record: string }>()
-    const exec = vi.fn(async (): Promise<string | null> => [...owners.values()].map(({ pid }) => `  ${pid}     1 claude`).join('\n'))
+    const exec = vi.fn(async (): Promise<string | null> => [...owners.values()].map(({ pid }) => `  ${pid}     1 ?  claude`).join('\n'))
     const src = new ObservedSource({
       now: () => 0,
       processes: async () => [...owners.values()].map(({ pid }) => ({ pid, generation: `g${pid}` })),
@@ -476,12 +534,12 @@ describe('the scan\'s files', () => {
     }
   })
 
-  it('read the processes with one ps, comm last: no command line, and no read that cuts the name', () => {
+  it('read the processes with one ps, its tty, then comm last: no command line, and no read that cuts the name', () => {
     const source = readFileSync(fileURLToPath(new URL('./scannedApp.ts', import.meta.url)), 'utf8')
     for (const reader of [/listProcesses/, /processTable/, /processRows/, /\bargs=/, /\bcommand=/, /lstart/, /\/proc\//]) {
       expect(source).not.toMatch(reader)
     }
     expect(source.match(/'ps'/g)).toEqual(["'ps'"])
-    expect(source).toContain("'ps', ['-axo', 'pid=,ppid=,comm=']")
+    expect(source).toContain("'ps', ['-axo', 'pid=,ppid=,tty=,comm=']")
   })
 })

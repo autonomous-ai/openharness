@@ -25,7 +25,9 @@ function recorder(over: Partial<OrcaDeps> = {}, codes: Array<number | null> = []
   return { calls, adapter: createWeztermAdapter(deps) }
 }
 
-const place = (hints: Record<string, string>, host = 'wezterm'): Place => ({ host, app: 'wezterm', hints })
+/** A place, by default an agent on the pseudo-terminal of WezTerm's own pane. */
+const place = (hints: Record<string, string>, host = 'wezterm', ptyOwner: string | null = 'wezterm'): Place =>
+  ({ host, app: 'wezterm', hints, ...(ptyOwner === null ? {} : { ptyOwner }) })
 const pane = (id: string) => ({ adapter: 'wezterm', id })
 // Every command says --no-auto-start: with no WezTerm running, `wezterm cli` would start a mux server that outlives it.
 const activate = (file: string, id: string): Call =>
@@ -51,21 +53,42 @@ describe('the WezTerm adapter', () => {
     expect(calls).toEqual([send('7', 'hello there'), send('7', '\r')])
   })
 
-  it('types only into the agent\'s own pane', async () => {
+  // A multiplexer, a terminal or an editor started in a WezTerm pane keeps its variables: that pane shows whichever of
+  // their panes is in front, or a shell that runs whatever is typed. Only the process that made the agent's
+  // pseudo-terminal says whose it is (Place.ptyOwner): any but WezTerm's, or none read yet, only focuses.
+  it('types only into a pane whose pseudo-terminal is the agent\'s', async () => {
     const { calls, adapter } = recorder()
     const held = [
-      ...['tmux', 'zellij', 'herdr', 'rex', 'kitty'].map((host) => place({ WEZTERM_PANE: '7' }, host)),
-      place({ WEZTERM_PANE: '7', ORCA_TERMINAL_HANDLE: 'term_0f8e2c1a-0000-4000-8000-000000000000' }),
+      ...['tmux', 'zellij', 'kitty', null].map((owner) => place({ WEZTERM_PANE: '7' }, 'wezterm', owner)),
+      ...['tmux', 'zellij', 'herdr', 'rex', 'kitty'].map((host) => place({ WEZTERM_PANE: '7' }, host, null)),
     ]
     for (const at of held) {
       const found = adapter.paneOf(at)!
-      expect(found, at.host).toEqual(pane('held:7'))
+      expect(found, `${at.host} ${at.ptyOwner}`).toEqual(pane('held:7'))
       expect(adapter.canType!(found)).toBe(false)
       expect(await adapter.type!(found, 'hello', 'claude')).toBe(false)
       expect(calls).toEqual([])
     }
     expect(await adapter.focus(pane('held:7'))).toBe(true)
     expect(calls).toEqual([activate(FAKE_PATH_WEZTERM, '7')])
+  })
+
+  // `code .` run in WezTerm's pane 7: Codex in VS Code's terminal carries WEZTERM_PANE=7, and detectHost says WezTerm.
+  it('a terminal started from the pane takes no words', async () => {
+    const { calls, adapter } = recorder()
+    const found = adapter.paneOf(place({ WEZTERM_PANE: '7', TERM_PROGRAM: 'vscode' }, 'wezterm', null))!
+    expect(found).toEqual(pane('held:7'))
+    expect(adapter.canType!(found)).toBe(false)
+    expect(await adapter.type!(found, 'hello', 'claude')).toBe(false)
+    expect(calls).toEqual([])
+  })
+
+  // WezTerm started from an Orca terminal keeps its handle: WezTerm's own pane is where the agent is.
+  it('the agent\'s own pane takes words whatever other host\'s variables it inherited', () => {
+    const { adapter } = recorder()
+    const inherited = place({ WEZTERM_PANE: '7', ORCA_TERMINAL_HANDLE: 'term_0f8e2c1a-0000-4000-8000-000000000000', TMUX_PANE: '%1' }, 'tmux')
+    expect(adapter.paneOf(inherited)).toEqual(pane('7'))
+    expect(adapter.canType!(pane('7'))).toBe(true)
   })
 
   it('one send at a time for a pane', async () => {

@@ -63,7 +63,9 @@ function recorder(over: Partial<ZellijDeps> = {}, panes: string = listPanes.stdo
 }
 
 const hints = { ZELLIJ: env.ZELLIJ, ZELLIJ_PANE_ID: env.ZELLIJ_PANE_ID, ZELLIJ_SESSION_NAME: env.ZELLIJ_SESSION_NAME }
-const place = (over: Record<string, string> = {}, host = 'zellij'): Place => ({ host, app: 'terminal', hints: { ...hints, ...over } })
+/** A place, by default an agent on the pseudo-terminal of the Zellij server's own pane. */
+const place = (over: Record<string, string> = {}, host = 'zellij', ptyOwner: string | null = 'zellij'): Place =>
+  ({ host, app: 'terminal', hints: { ...hints, ...over }, ...(ptyOwner === null ? {} : { ptyOwner }) })
 const pane = (id: string) => ({ adapter: 'zellij', id })
 /** A recorded argv, run as the adapter runs it: the binary where it was found, then the arguments. */
 const ran = (args: readonly string[]): Call => ({ file: FAKE_ZELLIJ, args: args.slice(1), timeoutMs: 10_000 })
@@ -100,18 +102,41 @@ describe('the Zellij adapter', () => {
     expect(adapter.paneOf({ host: 'zellij', app: 'terminal', hints: { ZELLIJ: '0', ZELLIJ_SESSION_NAME: 's1' } })).toBeUndefined()
   })
 
-  it('types only into the agent\'s own pane', async () => {
+  // herdr, Rex, tmux, a terminal or an editor started in a Zellij pane keeps its variables: that pane shows whichever of
+  // their panes is in front, or a shell that runs whatever is typed. Only the process that made the agent's
+  // pseudo-terminal says whose it is (Place.ptyOwner): any but Zellij's server, or none read yet, only focuses.
+  it('types only into a pane whose pseudo-terminal is the agent\'s', async () => {
     const { calls, adapter } = recorder()
-    const held = [place({}, 'herdr'), place({}, 'rex'), place({ TMUX_PANE: '%3' })]
+    const held = [
+      ...['tmux', 'kitty', 'wezterm', null].map((owner) => place({}, 'zellij', owner)),
+      place({}, 'herdr', null), place({}, 'rex', null), place({ TMUX_PANE: '%3' }, 'zellij', 'tmux'),
+    ]
     for (const at of held) {
       const found = adapter.paneOf(at)!
-      expect(found, at.host).toEqual(pane('held:s1:1'))
+      expect(found, `${at.host} ${at.ptyOwner}`).toEqual(pane('held:s1:1'))
       expect(adapter.canType(found)).toBe(false)
       expect(await adapter.type(found, 'hello', 'claude')).toBe(false)
       expect(calls).toEqual([])
     }
     expect(await adapter.focus(pane('held:s1:1'))).toBe(true)
     expect(calls).toEqual([ran(focusPaneId.args)])
+  })
+
+  // VS Code, WezTerm, kitty or nvim's :terminal started from Zellij's pane 1 carries its variables, and detectHost says
+  // Zellij: words written there would run at that pane's shell.
+  it('a terminal started from the pane takes no words', async () => {
+    const { calls, adapter } = recorder()
+    const found = adapter.paneOf(place({ TERM_PROGRAM: 'vscode' }, 'zellij', null))!
+    expect(found).toEqual(pane('held:s1:1'))
+    expect(adapter.canType(found)).toBe(false)
+    expect(await adapter.type(found, 'hello', 'claude')).toBe(false)
+    expect(calls).toEqual([])
+  })
+
+  // Zellij started in a tmux pane keeps TMUX_PANE: Zellij's own pane is where the agent is.
+  it('the agent\'s own pane takes words whatever other host\'s variables it inherited', () => {
+    const { adapter } = recorder()
+    expect(adapter.paneOf(place({ TMUX_PANE: '%3', KITTY_WINDOW_ID: '1' }))).toEqual(pane('s1:1'))
   })
 
   it('a session named held is still the agent\'s own', async () => {
@@ -308,13 +333,19 @@ describe('zellij as the core finds tmux', () => {
   })
 })
 
-/** The recorded table with one client (RECORDED_ZELLIJ.listClients), and what the container had none of: the agent (100)
- *  in `s1`'s pane shell (50), and Ghostty holding the client's pseudo-terminal (101). */
+/** The terminal each recorded process runs on, which the recording did not read: the recording's shell and its runs on
+ *  the container's own, the client on the pseudo-terminal holding it, each pane's shell on its pane's, and the servers on
+ *  none. */
+const TTYS: Readonly<Record<number, string>> = { 1: 'pts/0', 20: 'pts/0', 21: 'pts/0', 50: 'pts/2', 83: 'pts/3', 101: 'pts/1',
+  103: 'pts/1', 134: 'pts/0', 135: 'pts/0' }
+/** The recorded table with one client (RECORDED_ZELLIJ.listClients), each row's terminal, and what the container had
+ *  none of: the agent (100) in `s1`'s pane shell (50), and Ghostty holding the client's pseudo-terminal (101). */
 const GHOSTTY: ProcessName = { pid: 7000, ppid: 1, executable: 'ghostty' }
 const TABLE: ProcessName[] = [
-  ...parseProcessNames(listClients.ps).map((p) => (p.pid === 101 ? { ...p, ppid: GHOSTTY.pid } : p)),
+  ...parseProcessNames(listClients.ps.replace(/^(\s*(\d+)\s+\d+)/gm, (_, row: string, pid: string) => `${row} ${TTYS[Number(pid)] ?? '?'}`))
+    .map((p) => (p.pid === 101 ? { ...p, ppid: GHOSTTY.pid } : p)),
   GHOSTTY,
-  { pid: 100, ppid: 50, executable: 'claude' },
+  { pid: 100, ppid: 50, tty: 'pts/2', executable: 'claude' },
 ]
 /** The same machine as macOS's `ps` names it: each process by its path, Ghostty's place taken by Terminal. */
 const MAC_TABLE: ProcessName[] = TABLE.map((p) => (
@@ -388,6 +419,17 @@ describe('the outer place of an agent in a Zellij pane', () => {
       expect(calls, String(pid)).toEqual([])
       expect(logs, String(pid)).toEqual(none)
     }
+  })
+
+  // kitty started from pane 50 keeps the pane's variables, and its window's agent is under the Zellij server: placed on
+  // the client's page, its tap would raise the window of the app holding Zellij, not kitty's.
+  it('a terminal started from a pane is no client\'s: {} and no client listed', async () => {
+    const table = [...TABLE, { pid: 398, ppid: 50, tty: 'pts/2', executable: 'kitty' }, { pid: 399, ppid: 398, tty: 'pts/7', executable: 'zsh' },
+      { pid: 400, ppid: 399, tty: 'pts/7', executable: 'claude' }]
+    const { calls, logs, outer } = lookup({ table })
+    expect(await outer(hints, 400)).toEqual({})
+    expect(calls).toEqual([])
+    expect(logs).toEqual(none)
   })
 
   // Which of two is the person's is a guess: the agent stays where its hints place it.

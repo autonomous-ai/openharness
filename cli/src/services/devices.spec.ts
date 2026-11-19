@@ -191,7 +191,7 @@ const readers = vi.hoisted(() => ({
   answer: vi.fn(async (..._args: unknown[]): Promise<string | undefined> => undefined),
   apps: vi.fn(async (_pids: readonly number[]) => new Map<number, string>()),
   record: vi.fn(async (..._args: unknown[]): Promise<{ name?: string; hostSession?: string }> => ({})),
-  processes: vi.fn(async () => [] as Array<{ pid: number; ppid: number; executable: string }>),
+  processes: vi.fn(async () => [] as Array<{ pid: number; ppid: number; tty?: string; executable: string }>),
   bundleId: vi.fn(async (_bundle: string): Promise<string | undefined> => undefined),
 }))
 vi.mock('../lib/sessionSearch/external.js', async (real) => ({
@@ -3394,15 +3394,27 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     const voice = () => said().filter((line) => line.startsWith('[device] voice'))
     /** No other adapter was reached: herdr's and Herdr's sockets, Codex's queue. */
     const noOther = () => expect([herdrCalls, hcCalls, codexRuns]).toEqual([[], [], []])
+    /** The hook's caller (4242) in a shell on a pseudo-terminal that [maker] made, a process on no terminal: whose pane
+     *  takes its words. [above] are the processes on [maker]'s own terminal, outermost last. */
+    const madeBy = (maker: string, above: Array<{ pid: number; ppid: number; tty?: string; executable: string }> = []) => {
+      readers.processes.mockResolvedValue([{ pid: 4242, ppid: 4000, tty: 'pts/5', executable: 'claude' },
+        { pid: 4000, ppid: 3900, tty: 'pts/5', executable: 'zsh' },
+        { pid: 3900, ppid: above[0]?.pid ?? 1, ...(above.length ? { tty: 'pts/2' } : {}), executable: maker }, ...above])
+    }
+    /** What a hook's reads of the process table found has landed. */
+    const settled = () => new Promise<void>((resolve) => { setImmediate(resolve) })
 
     it('a hooked agent in a Zellij pane lists v and f; on macOS its tap focuses the pane, then brings its app forward', async () => {
+      madeBy('/opt/homebrew/bin/zellij')
       const { port } = startHere({ orca: mac })
       // macOS's Ghostty names itself by its bundle id, which a tap brings forward.
       port.observed(hook('session-start', { hostHints: { ...ZELLIJ, TERM_PROGRAM: 'ghostty', __CFBundleIdentifier: 'com.mitchellh.ghostty' } }))
       attach(port)
+      await settled()
       expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'svf' }])
       expect(await host().openAgent(ID)).toBeUndefined()
-      expect(orcaRuns).toEqual([focusPane, ['/usr/bin/open', ['-b', 'com.mitchellh.ghostty'], 10_000]])
+      // The client lookup first: the session's listing names no client.
+      expect(orcaRuns).toEqual([zellijAsked('list-clients'), focusPane, ['/usr/bin/open', ['-b', 'com.mitchellh.ghostty'], 10_000]])
     })
 
     it('on Linux a tap on an agent in a Zellij pane focuses it, then raises its caller\'s window in its terminal', async () => {
@@ -3416,12 +3428,27 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     })
 
     it('the dial\'s words to an agent in a Zellij pane run Zellij\'s three calls, and reach no other adapter', async () => {
+      madeBy('zellij')
       const { port } = startHere({ orca: listing(orca) })
       port.observed(hook('session-start', { hostHints: ZELLIJ }))
       attach(port)
+      await settled()
       expect(await host().sendTurn(ID, 'run the tests')).toEqual({ ok: true })
-      expect(orcaRuns).toEqual(zellijWords)
+      expect(orcaRuns).toEqual([zellijAsked('list-clients'), ...zellijWords])
       expect(voice()).toEqual(['[device] voice · zellij'])
+      noOther()
+    })
+
+    // Ghostty started from a Zellij pane keeps the pane's variables: words written to the pane would run at its shell.
+    it('an agent in a terminal started from a Zellij pane lists f alone: the pane takes no words', async () => {
+      madeBy('ghostty')
+      const { port } = startHere({ orca: listing(orca) })
+      port.observed(hook('session-start', { hostHints: { ...ZELLIJ, TERM_PROGRAM: 'ghostty' } }))
+      attach(port)
+      await settled()
+      expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'sf' }])
+      expect(await host().sendTurn(ID, 'run the tests')).toMatchObject({ ok: false })
+      expect(orcaRuns).toEqual([])
       noOther()
     })
 
@@ -3429,9 +3456,11 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     it('an agent in Zellij is on the page of the app that holds the session\'s one client', async () => {
       const terminal = join(homedir(), 'Applications', 'Terminal.app')
       readers.processes.mockResolvedValue([
-        { pid: 4242, ppid: 4000, executable: 'claude' }, { pid: 4000, ppid: 3900, executable: 'zsh' }, { pid: 3900, ppid: 1, executable: 'zellij' },
+        { pid: 4242, ppid: 4000, tty: 'ttys005', executable: 'claude' }, { pid: 4000, ppid: 3900, tty: 'ttys005', executable: 'zsh' },
+        { pid: 3900, ppid: 1, executable: 'zellij' },
         // The client, in its Terminal tab: under the home the devices read apps in.
-        { pid: 4300, ppid: 4298, executable: 'zellij' }, { pid: 4298, ppid: 1, executable: join(terminal, 'Contents', 'MacOS', 'Terminal') },
+        { pid: 4300, ppid: 4298, tty: 'ttys002', executable: 'zellij' },
+        { pid: 4298, ppid: 1, executable: join(terminal, 'Contents', 'MacOS', 'Terminal') },
       ])
       readers.bundleId.mockImplementation(async (bundle) => bundle === terminal ? 'com.apple.Terminal' : undefined)
       const { port } = startHere({ orca: { ...mac, run: async (file, args, timeoutMs) => {
@@ -3450,9 +3479,11 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     it('on Linux a hooked agent in a kitty window lists v and f; its tap focuses the window, then raises it', async () => {
       const linux = fakeRaise()
       const kitty = await kittyAt()
+      madeBy('kitty')
       const { port } = startHere({ raise: linux.raise })
       port.observed(hook('session-start', { hostHints: kitty }))
       attach(port)
+      await settled()
       expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'svf' }])
       expect(await host().openAgent(ID)).toBeUndefined()
       expect(orcaRuns).toEqual([kittyAsked(kitty.KITTY_LISTEN_ON, 'focus-window', '--match', 'id:5')])
@@ -3461,9 +3492,11 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
 
     it('the dial\'s words to an agent in a kitty window run kitty\'s two calls, and reach no other adapter', async () => {
       const kitty = await kittyAt()
+      madeBy('kitty')
       const { port } = startHere()
       port.observed(hook('session-start', { hostHints: kitty }))
       attach(port)
+      await settled()
       expect(await host().sendTurn(ID, 'run the tests')).toEqual({ ok: true })
       expect(orcaRuns).toEqual(kittyWords(kitty.KITTY_LISTEN_ON))
       expect(voice()).toEqual(['[device] voice · kitty'])
@@ -3507,26 +3540,77 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
       expect(orcaRuns).toEqual([front, front])
     })
 
-    it('an agent in Zellij inside kitty: the tap and the words are Zellij\'s', async () => {
+    // Both carry both hosts' variables, either way round: the process that made the agent's terminal tells them apart.
+    it('an agent in Zellij inside kitty: the tap and the words are Zellij\'s, whose server made its terminal', async () => {
       const linux = fakeRaise()
+      const kitty = await kittyAt()
+      madeBy('zellij')
       const { port } = startHere({ orca: listing(orca), raise: linux.raise })
-      port.observed(hook('session-start', { hostHints: { ...ZELLIJ, ...KITTY } }))
+      port.observed(hook('session-start', { hostHints: { ...ZELLIJ, ...kitty } }))
       attach(port)
+      await settled()
       expect(await host().openAgent(ID)).toBeUndefined()
       expect(await host().sendTurn(ID, 'run the tests')).toEqual({ ok: true })
-      expect(orcaRuns).toEqual([focusPane, ...zellijWords])
+      expect(orcaRuns).toEqual([zellijAsked('list-clients'), focusPane, ...zellijWords])
       expect(linux.raised).toEqual([{ pid: 4242, app: 'kitty' }])
     })
 
-    it('kitty inside an Orca terminal still sends through Orca', async () => {
-      const { port } = startHere()
-      port.observed(hook('session-start', { hostHints: { ...KITTY, ORCA_TERMINAL_HANDLE: HANDLE } }))
+    it('an agent in kitty started from a Zellij pane: the tap and the words are kitty\'s, which made its terminal', async () => {
+      const linux = fakeRaise()
+      const kitty = await kittyAt()
+      // kitty itself on the Zellij pane's terminal.
+      madeBy('kitty', [{ pid: 3800, ppid: 3700, tty: 'pts/2', executable: 'bash' }, { pid: 3700, ppid: 1, executable: 'zellij' }])
+      const { port } = startHere({ orca: listing(orca), raise: linux.raise })
+      port.observed(hook('session-start', { hostHints: { ...ZELLIJ, ...kitty } }))
       attach(port)
+      await settled()
+      expect(await host().openAgent(ID)).toBeUndefined()
+      expect(await host().sendTurn(ID, 'run the tests')).toEqual({ ok: true })
+      expect(orcaRuns).toEqual([kittyAsked(kitty.KITTY_LISTEN_ON, 'focus-window', '--match', 'id:5'), ...kittyWords(kitty.KITTY_LISTEN_ON)])
+      expect(voice()).toEqual(['[device] voice · kitty'])
+      expect(linux.raised).toEqual([{ pid: 4242, app: 'kitty' }])
+    })
+
+    it('an agent in kitty started from an Orca terminal takes the words in kitty, which made its terminal', async () => {
+      const kitty = await kittyAt()
+      madeBy('kitty', [{ pid: 3800, ppid: 3700, tty: 'pts/2', executable: 'zsh' }, { pid: 3700, ppid: 1, executable: 'orca' }])
+      const { port } = startHere()
+      port.observed(hook('session-start', { hostHints: { ...kitty, ORCA_TERMINAL_HANDLE: HANDLE } }))
+      attach(port)
+      await settled()
+      expect(await host().sendTurn(ID, 'run the tests')).toEqual({ ok: true })
+      expect(orcaRuns).toEqual(kittyWords(kitty.KITTY_LISTEN_ON))
+      expect(voice()).toEqual(['[device] voice · kitty'])
+    })
+
+    it('an agent in an Orca terminal, Orca started from a kitty window, takes the words through Orca, which made its terminal', async () => {
+      const kitty = await kittyAt()
+      madeBy('orca')
+      const { port } = startHere()
+      port.observed(hook('session-start', { hostHints: { ...kitty, ORCA_TERMINAL_HANDLE: HANDLE } }))
+      attach(port)
+      await settled()
       expect(await host().sendTurn(ID, 'run the tests')).toEqual({ ok: true })
       expect(orcaRuns).toEqual([
         ['/opt/orca/bin/orca', ['terminal', 'send', '--terminal', HANDLE, '--text=run the tests', '--enter', '--wait-submit', '5', '--json'], 10_000],
       ])
       expect(voice()).toEqual(['[device] voice · orca'])
+    })
+
+    // As before Zellij had an adapter: a tap on the Zellij pane that shows tmux's client would leave tmux's pane where it was.
+    it('an agent in tmux inside a Zellij pane: a tap selects its tmux pane, as tmux\'s server made its terminal', async () => {
+      madeBy('tmux: server')
+      const { port } = startHere({ orca: { ...orca, run: async (file: string, args: string[], timeoutMs: number) => {
+        orcaRuns.push([file, args, timeoutMs])
+        return { code: 0, stdout: args[0] === 'display-message' ? '4000|work|\n' : args[0] === 'list-clients' ? '1794700050|5004|/dev/pts/1||work\n' : '' }
+      } } })
+      port.observed(hook('session-start', { hostHints: { ...ZELLIJ, TMUX_PANE: '%3' } }))
+      attach(port)
+      await vi.waitFor(() => expect(said()).toContain('[device] tmux client · none'))
+      await settled()
+      orcaRuns.length = 0
+      expect(await host().openAgent(ID)).toBeUndefined()
+      expect(orcaRuns.map(([file, args]) => [file, args[0]])).toEqual([['tmux', 'display-message'], ['tmux', 'list-clients'], ['tmux', 'switch-client']])
     })
 
     it('a kitty session with no socket logs it once, and on macOS keeps its tap by its bundle', async () => {

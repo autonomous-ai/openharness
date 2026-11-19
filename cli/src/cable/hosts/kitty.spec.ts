@@ -76,7 +76,9 @@ function recorder(over: Partial<KittyDeps> = {}, answer: Record<string, { code: 
   return { calls, logs, owners, deps, adapter: createKittyAdapter(deps) }
 }
 
-const place = (hints: Record<string, string> = env, host = 'kitty'): Place => ({ host, app: 'kitty', hints })
+/** A place, by default an agent on the pseudo-terminal of kitty's own window. */
+const place = (hints: Record<string, string> = env, host = 'kitty', ptyOwner: string | null = 'kitty'): Place =>
+  ({ host, app: 'kitty', hints, ...(ptyOwner === null ? {} : { ptyOwner }) })
 const pane = (id: string) => ({ adapter: 'kitty', id })
 const OWN = pane(`1@${env.KITTY_LISTEN_ON}`)
 /** A recorded argv, run as the adapter runs it: the binary where it was found, then the arguments. */
@@ -141,15 +143,18 @@ describe('the kitty adapter', () => {
     expect(logs).toEqual([])
   })
 
-  it('types only into the agent\'s own pane', async () => {
+  // A multiplexer, a terminal or an editor started in a kitty window keeps its variables: that window shows whichever of
+  // their panes is in front, or a shell that runs whatever is typed. Only the process that made the agent's
+  // pseudo-terminal says whose it is (Place.ptyOwner): any but kitty's, or none read yet, only focuses.
+  it('types only into a window whose pseudo-terminal is the agent\'s', async () => {
     const { calls, adapter } = recorder()
-    // A multiplexer, herdr or Rex started in a kitty window keeps its variables: that window shows whichever of their
-    // panes is in front. In an Orca terminal the words go through Orca. All only focus.
-    const held = [place(env, 'tmux'), place(env, 'zellij'), place(env, 'herdr'), place(env, 'rex'),
-      place({ ...env, ORCA_TERMINAL_HANDLE: 'term_00000000-0000-0000-0000-000000000000' })]
+    const held = [
+      ...['tmux', 'zellij', 'wezterm', null].map((owner) => place(env, 'kitty', owner)),
+      ...['tmux', 'zellij', 'herdr', 'rex'].map((host) => place(env, host, null)),
+    ]
     for (const at of held) {
       const found = adapter.paneOf(at)!
-      expect(found, at.host).toEqual(pane(`held:${OWN.id}`))
+      expect(found, `${at.host} ${at.ptyOwner}`).toEqual(pane(`held:${OWN.id}`))
       expect(adapter.canFocus(found)).toBe(true)
       expect(adapter.canType(found)).toBe(false)
       expect(await adapter.type(found, 'hello', 'claude')).toBe(false)
@@ -157,6 +162,24 @@ describe('the kitty adapter', () => {
     }
     expect(await adapter.focus(pane(`held:${OWN.id}`))).toBe(true)
     expect(calls).toEqual([ran(focusWindow.args)])
+  })
+
+  // VS Code, WezTerm, screen or nvim's :terminal started from kitty window 1 carries KITTY_WINDOW_ID=1, and detectHost
+  // says kitty.
+  it('a terminal started from the window takes no words', async () => {
+    const { calls, adapter } = recorder()
+    const found = adapter.paneOf(place({ ...env, TERM_PROGRAM: 'vscode' }, 'kitty', null))!
+    expect(found).toEqual(pane(`held:${OWN.id}`))
+    expect(adapter.canType(found)).toBe(false)
+    expect(await adapter.type(found, 'hello', 'claude')).toBe(false)
+    expect(calls).toEqual([])
+  })
+
+  // kitty started from an Orca terminal or a Zellij pane keeps their variables: kitty's own window is where the agent is.
+  it('the agent\'s own window takes words whatever other host\'s variables it inherited', () => {
+    const { adapter } = recorder()
+    const inherited = place({ ...env, ORCA_TERMINAL_HANDLE: 'term_00000000-0000-0000-0000-000000000000', ZELLIJ: '0' }, 'zellij')
+    expect(adapter.paneOf(inherited)).toEqual(OWN)
   })
 
   it('focus runs the recorded focus-window', async () => {
