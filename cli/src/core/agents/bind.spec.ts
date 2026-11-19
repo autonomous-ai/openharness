@@ -2445,20 +2445,23 @@ describe('binding an OpenClaw pane, read from its screen', () => {
     const START = Date.parse('2026-11-19T10:00:00Z')
     const TASK = 'Fix the parser'
     const FAILED = { state: 'failed', error: 'FIRST_TASK_NOT_TAKEN', detail: 'OpenClaw did not take the first task. Close it and start it again.' }
+    /** A TUI that has drawn no footer: it cannot take the task, and nothing says it is on its way to. */
+    const banner = screen('screen-banner')
     const starting = screen('screen-starting-up')
+    const sending = screen('screen-sending')
     const ready = screen('screen-plain')
     const LOST = ready.replace(' connected | idle', ' gateway disconnected: connect ECONNREFUSED 127.0.0.1:18789 | idle')
     let run: ReturnType<typeof setup>
     let row: RegisteredSession
     beforeEach(() => {
       vi.useFakeTimers({ toFake: ['Date'] })
-      run = setup({ capturePane: vi.fn(async () => starting) })
+      run = setup({ capturePane: vi.fn(async () => banner) })
       row = pane({ sessionId: 'agent:main:plain', firstTask: TASK, registeredAt: START })
       run.byAgent.set('a1', row)
       vi.mocked(run.deps.registry.byProcess).mockReturnValue(row)
     })
     /** A pass `second`s after START, the pane showing `shown`, its TUI started at `tuiAt`: whether the launch failed. */
-    const pass = async (second: number, shown = starting, tuiAt = START): Promise<boolean> => {
+    const pass = async (second: number, shown = banner, tuiAt = START): Promise<boolean> => {
       vi.setSystemTime(START + second * 1_000)
       vi.mocked(run.deps.capturePane).mockResolvedValue(shown)
       await run.binding.bindObservedAgent(tui({ processIdentity: { pid: 7714, startMarker: new Date(tuiAt).toISOString(), executable: 'openclaw' } }))
@@ -2471,8 +2474,7 @@ describe('binding an OpenClaw pane, read from its screen', () => {
       vi.mocked(run.deps.registry.takeFirstTask).mockResolvedValue(TASK)
       expect(await pass(0)).toBe(false)
       expect(await pass(179)).toBe(false)
-      vi.mocked(run.deps.capturePane).mockClear()
-      // A pane that would take it now is not read: nothing is typed after the bound.
+      // A pane that would take it now: nothing is typed after the bound.
       expect(await pass(180, ready)).toBe(true)
       expect(row.launch).toEqual(FAILED)
       expect(run.deps.registry.setLaunch).toHaveBeenCalledOnce()
@@ -2481,8 +2483,34 @@ describe('binding an OpenClaw pane, read from its screen', () => {
       expect(run.deps.input.forget).toHaveBeenCalledWith('a1')
       expect(run.deps.announceSession).toHaveBeenCalledWith(row)
       expect(logged()).toEqual(['[agent] a1 first task not taken · FIRST_TASK_NOT_TAKEN'])
-      expect(run.deps.capturePane).not.toHaveBeenCalled()
       expect(run.deps.submitFirstTask).not.toHaveBeenCalled()
+    })
+
+    // `connecting`, `starting up`: a TUI still reaching its Gateway, or a Gateway still starting (over a minute on a slow
+    // machine), can take no task yet.
+    it('the time its TUI reads starting is not counted, as the time held is not', async () => {
+      expect(await pass(0)).toBe(false)
+      for (const second of [60, 120, 240]) expect(await pass(second, starting)).toBe(false)
+      // 3 min 5 s of it starting.
+      expect(await pass(245)).toBe(false)
+      expect(await pass(364)).toBe(false)
+      expect(await pass(365)).toBe(true)
+    })
+
+    // OpenClaw at work on it: a Gateway slow to write the run's user row (15-45 s measured) confirms it late.
+    it('a task typed is never failed while the pane shows a run, and is once the run is gone and still not confirmed', async () => {
+      delete row.firstTask
+      vi.mocked(run.deps.input.firstTaskWaiting).mockReturnValue(true)
+      vi.mocked(run.deps.input.awaitingConfirmation).mockReturnValue(true)
+      expect(await pass(0)).toBe(false)
+      expect(await pass(180, sending)).toBe(false)
+      expect(await pass(300, sending)).toBe(false)
+      expect(await pass(305)).toBe(true)
+    })
+
+    it('a run on a pane its task was not typed into yet is counted: the person\'s own', async () => {
+      expect(await pass(0)).toBe(false)
+      expect(await pass(180, sending)).toBe(true)
     })
 
     it('a task typed and not confirmed by the bound is let go, and the launch fails the same', async () => {
@@ -2511,9 +2539,9 @@ describe('binding an OpenClaw pane, read from its screen', () => {
       row.registeredAt = START - 3_600_000
       // Seen waiting under a TUI stopped before its bound, then resumed in a new one 10 minutes later.
       expect(await pass(0)).toBe(false)
-      expect(await pass(605, starting, START + 600_000)).toBe(false)
-      expect(await pass(779, starting, START + 600_000)).toBe(false)
-      expect(await pass(780, starting, START + 600_000)).toBe(true)
+      expect(await pass(605, banner, START + 600_000)).toBe(false)
+      expect(await pass(779, banner, START + 600_000)).toBe(false)
+      expect(await pass(780, banner, START + 600_000)).toBe(true)
     })
 
     it('a TUI start that cannot be read counts from the row\'s registration or the first pass', async () => {
