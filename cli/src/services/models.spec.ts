@@ -1010,7 +1010,7 @@ it('retains null account fallback on read failure and rejects a malformed contri
   const name = vi.fn(async (): Promise<string | null> => { throw Error('private account content') })
   const run = setup([], { account: { privateGridName: name } })
   expect(await run.ask('grid_launch_context', { setup: false })).toEqual({ ok: true, account: { privateGrid: null } })
-  expect(console.warn).toHaveBeenCalledWith('[models] LAUNCH_CONTEXT_UNAVAILABLE')
+  expect(console.warn).toHaveBeenCalledWith('[models] LAUNCH_CONTEXT_UNAVAILABLE · Error')
   name.mockResolvedValueOnce('x'.repeat(4097))
   expect(await run.ask('grid_launch_context', { setup: false })).toEqual({ error: 'CONTEXT_INVALID' })
   expect(console.warn).toHaveBeenCalledWith('[models] LAUNCH_CONTEXT_INVALID')

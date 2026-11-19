@@ -68,7 +68,7 @@ it('passes Claude source and user homes to trust preparation and reports failure
   try {
     expect(await request('setup_trust_prepare', { request: 'source', ...input })).toEqual({ files: null })
     expect(setup.prepareTrust).toHaveBeenCalledWith(input, 'source', expect.any(Function))
-    expect(warning).toHaveBeenCalledExactlyOnceWith('[engine-setup] TRUST_PREPARATION_FAILED')
+    expect(warning).toHaveBeenCalledExactlyOnceWith('[engine-setup] TRUST_PREPARATION_FAILED · Error')
   } finally { warning.mockRestore() }
 })
 
@@ -115,7 +115,7 @@ it.each(['malformed', 'closed', 'exception'] as const)('never exposes a file pre
     expect(await request('setup_files_prepare', { engine: 'codex', environment, port: 1234, request: failure,
       files: [{ file: '/fixture/hooks.json', directory: '/fixture', content: null }] }, closed.signal)).toEqual({ files: null })
     expect(setup.installations.ensure).not.toHaveBeenCalled()
-    if (failure === 'exception') expect(warning).toHaveBeenCalledExactlyOnceWith('[engine-setup] FILE_PREPARATION_FAILED')
+    if (failure === 'exception') expect(warning).toHaveBeenCalledExactlyOnceWith('[engine-setup] FILE_PREPARATION_FAILED · Error')
     else expect(warning).not.toHaveBeenCalled()
   } finally { warning.mockRestore() }
 })

@@ -113,7 +113,10 @@ it('keeps missing, malformed and disconnected answers unknown without falling ba
   t.call.mockResolvedValue({ error: 'SERVICE_UNAVAILABLE' } as never)
   expect(await t.storage.background(session)).toBeNull()
   expect(t.inline).not.toHaveBeenCalled()
-  expect(log.mock.calls.every(([line]) => line === '[engine-others] STORAGE_BACKGROUND_UNAVAILABLE')).toBe(true)
+  expect(log.mock.calls.map(([line]) => line)).toEqual([
+    ...Array(5).fill('[engine-others] STORAGE_BACKGROUND_UNAVAILABLE · EngineReadError ENGINE_INVALID_REPLY'),
+    '[engine-others] STORAGE_BACKGROUND_UNAVAILABLE · EngineReadError ENGINE_UNAVAILABLE',
+  ])
 })
 
 it('bounds a frozen worker and an explicit inline reader', async () => {

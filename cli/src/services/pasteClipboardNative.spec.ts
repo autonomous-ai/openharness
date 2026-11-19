@@ -129,7 +129,7 @@ describe('native clipboard process ownership', () => {
     const owner = startClipboardOwner(f.file, { platform: 'darwin' })
     owner.cancel(); owner.cancel()
     expect(process.kill).toHaveBeenCalledOnce()
-    expect(log.mock.calls).toEqual(code === 'ESRCH' ? [] : [['[paste] PASTE_CLIPBOARD_STOP_FAILED']])
+    expect(log.mock.calls).toEqual(code === 'ESRCH' ? [] : [['[paste] PASTE_CLIPBOARD_STOP_FAILED · EPERM']])
     f.end(1); await owner.settled
   })
 

@@ -511,7 +511,7 @@ export const GRID_LAUNCH_FIELDS: Readonly<Partial<Record<AgentEngine, {
     literals: ['--disallowedTools=WebSearch,WebFetch', '--allowedTools=mcp__harness__web_search,mcp__harness__web_read'] },
   codex: { flags: ['-m'], assignments: ['model_provider', 'model_providers.grid.name', 'model_providers.grid.base_url',
     'model_providers.grid.env_key', 'model_providers.grid.wire_api', 'model_providers.grid.supports_websockets',
-    'web_search', 'mcp_servers.harness.url', 'mcp_servers.harness.env_http_headers.Authorization',
+    'web_search', 'mcp_servers.harness.url', 'mcp_servers.harness.env_http_headers.Authorization', 'mcp_servers.harness.omit_tools_from',
     'model_context_window', 'model_auto_compact_token_limit'],
     config: { pointer: 'cliConfigKey', value: 'model_catalog_json', file: 'model-catalog.json', pointAt: 'model-catalog.json' } },
   opencode: { flags: ['-m'], literals: ['--standalone'],

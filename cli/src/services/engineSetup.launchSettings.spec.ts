@@ -181,7 +181,7 @@ it('refuses missing renderers and invalid settings inputs without preparing, and
   const warning = vi.spyOn(console, 'warn').mockImplementation(() => {})
   try {
     expect(await request('setup_files_prepare', { request: 'throws', ...input() })).toEqual({ files: null })
-    expect(warning).toHaveBeenCalledExactlyOnceWith('[engine-setup] SETTINGS_PREPARATION_FAILED')
+    expect(warning).toHaveBeenCalledExactlyOnceWith('[engine-setup] SETTINGS_PREPARATION_FAILED · Error')
   } finally { warning.mockRestore() }
 })
 

@@ -72,7 +72,7 @@ describe('workspace instruction preparation', () => {
     if (stage === 'write') state.write.mockImplementationOnce(() => { throw Error('private path and content') })
     const prepare = createWorkspaceInstructions('/data', () => false, writer)
     expect(await prepare('/work', 'claude')).toBe(false)
-    expect(log.mock.calls).toEqual([['[workspaces] INSTRUCTIONS_FAILED']])
+    expect(log.mock.calls).toEqual([['[workspaces] INSTRUCTIONS_FAILED · Error']])
     expect(await prepare('/work', 'claude')).toBe(true)
   })
 

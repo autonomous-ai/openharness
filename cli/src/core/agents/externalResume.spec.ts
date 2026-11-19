@@ -57,7 +57,7 @@ function setup() {
   const create = vi.fn<NonNullable<ExternalResumeDeps['backend']>['create']>(async request => {
     if (request.current?.() === false) return { state: 'failed', dispatch: 'not_started', reason: 'cancelled' }
     const paneId = `%${++paneSequence}`
-    panes.set(paneId, (request.command as string[]).at(-1)!)
+    panes.set(paneId, (typeof request.command === 'function' ? request.command() : request.command)!.at(-1)!)
     return { state: 'succeeded', dispatch: 'executed', runtime: { backend: 'tmux', paneId } }
   })
   const killHeld = vi.fn<NonNullable<NonNullable<ExternalResumeDeps['backend']>['killHeld']>>(async (runtime, token, current) => {
@@ -431,7 +431,7 @@ it('opens and cancels an adoption on a ptyhost pane through that pane\'s own bac
   const test = setup(); test.inspect.mockResolvedValue(externalUnavailable())
   const pty = { backend: 'ptyhost' as const, instance: 'p1', paneId: '%3' }
   test.create.mockImplementationOnce(async request => {
-    test.panes.set(pty.paneId, (request.command as string[]).at(-1)!)
+    test.panes.set(pty.paneId, (typeof request.command === 'function' ? request.command() : request.command)!.at(-1)!)
     return { state: 'succeeded', dispatch: 'executed', runtime: pty }
   })
   const id = await test.stage(); await test.controller.settled()

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { GuestLaunch, GuestLaunchInput } from '../api.js'
 import type { RegisteredSession } from '../../lib/registry.js'
-import type { TmuxRuntimeRef } from '../../lib/terminalTypes.js'
+import type { TerminalCreateRequest, TmuxRuntimeRef } from '../../lib/terminalTypes.js'
 import { createGuestCreate, type GuestCreateDeps } from './guestCreate.js'
 import { guestPaneCommand } from '../../lib/guestPaneCommand.js'
 import { guestUserFor, guestWorkspaceFor } from '../../lib/guestUser.js'
@@ -22,7 +22,7 @@ const launched = guestFixture()
 function setup(over: Partial<GuestCreateDeps> & { answer?: GuestLaunch; spawn?: 'ok' | 'fail'; register?: boolean } = {}) {
   const session = { agentId: 'agent-1', sessionId: '', engine: 'claude', guest: 'kim@acme.io' } as RegisteredSession
   const tmux = {
-    create: vi.fn(async () => over.spawn === 'fail' ? { state: 'failed' as const, reason: 'no server' } : { state: 'succeeded' as const, runtime }),
+    create: vi.fn(async (_request: TerminalCreateRequest) => over.spawn === 'fail' ? { state: 'failed' as const, reason: 'no server' } : { state: 'succeeded' as const, runtime }),
     kill: vi.fn(async () => {}),
   }
   const deps: GuestCreateDeps = {
@@ -51,7 +51,9 @@ describe('a guest\'s New Harness', () => {
     // Auto-approve, a harness's default: the engine's own auto mode, never Skip all checks.
     expect(deps.launch).toHaveBeenCalledWith({ email: 'kim@acme.io', engine: 'claude', bypassPermission: true,
       permissionFlags: ['--permission-mode', 'auto'], cwd: '/Users/owner/secret' })
-    expect(tmux.create).toHaveBeenCalledWith(expect.objectContaining({ cwd: launched.ok && launched.workspace, command: launched.argv, env: launched.env }))
+    expect(tmux.create).toHaveBeenCalledWith(expect.objectContaining({ cwd: launched.ok && launched.workspace, command: expect.any(Function), env: launched.env }))
+    const command = tmux.create.mock.calls[0]![0].command
+    expect(typeof command === 'function' ? command() : command).toEqual(launched.argv)
     expect(deps.registry.openPendingAgent).toHaveBeenCalledWith(expect.objectContaining({ engine: 'claude', cwd: launched.ok && launched.workspace,
       guest: 'kim@acme.io', defaultName: 'Notes', bypassPermission: true, permissionMode: 'auto' }))
     expect(deps.announceSession).toHaveBeenCalledWith(session)
@@ -94,14 +96,16 @@ describe('a guest\'s New Harness', () => {
     const windows: GuestLaunch = { ok: true, workspace: `C:\\Users\\${USER}\\work`, argv: ['claude', '--permission-mode', 'auto'], env: {},
       guestHostUser: USER }
     const runtime = { backend: 'ptyhost', instance: 'p3', paneId: '%1' } as const
-    const host = { create: vi.fn(async () => ({ state: 'succeeded' as const, runtime })), kill: vi.fn(async () => {}) }
+    const host = { create: vi.fn(async (_request: TerminalCreateRequest) => ({ state: 'succeeded' as const, runtime })), kill: vi.fn(async () => {}) }
     const guestBackend = vi.fn(() => host as never)
     const run = setup({ answer: windows, guestBackend })
     expect(await run.create({ engine: 'claude' }, 'kim@acme.io')).toEqual({ ok: true, session: run.session })
     expect(guestBackend).toHaveBeenCalledWith(USER)
     expect(run.tmux.create).not.toHaveBeenCalled()
     // The pane is made on the guest's host, starts in its workspace, and becomes the guest's shell when the engine goes.
-    expect(host.create).toHaveBeenCalledWith(expect.objectContaining({ cwd: windows.workspace, command: ['claude', '--permission-mode', 'auto'], afterExit: expect.any(Object) }))
+    expect(host.create).toHaveBeenCalledWith(expect.objectContaining({ cwd: windows.workspace, command: expect.any(Function), afterExit: expect.any(Object) }))
+    const command = host.create.mock.calls[0]![0].command
+    expect(typeof command === 'function' ? command() : command).toEqual(['claude', '--permission-mode', 'auto'])
     expect(run.deps.registry.openPendingAgent).toHaveBeenCalledWith(expect.objectContaining({ runtimes: [runtime], guest: 'kim@acme.io' }))
     // A host that is gone is said as such: the owner's pane is never a fallback (it would run as the owner).
     const missing = setup({ answer: windows, guestBackend: () => null })

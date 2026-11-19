@@ -137,7 +137,7 @@ it('admits only bounded prepared rename replies for the captured owner and name'
     const t = immediate(result)
     expect(await t.cloud.update({ agentId: owner.agentId, name: 'Renamed' })).toMatchObject({ error: 'SERVICE_UNAVAILABLE' })
     expect(t.clients.send).not.toHaveBeenCalled(); expect(t.clients.sendCommander).not.toHaveBeenCalled()
-    expect(t.log).toHaveBeenLastCalledWith('[sessions] SESSION_RESPONSE_INVALID')
+    expect(t.log).toHaveBeenLastCalledWith('[sessions] SESSION_RESPONSE_INVALID · Error')
   }
 })
 

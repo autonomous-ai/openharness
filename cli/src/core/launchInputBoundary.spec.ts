@@ -42,7 +42,7 @@ const guestReply = (platform: NodeJS.Platform = process.platform) => {
 
 async function guestCreate(answer: unknown, input: GuestLaunchInput = guestRequest, mode: 'inline' | 'linked' = 'linked') {
   // A real caller reaches this backend only after admission. The fake fails before opening any pane.
-  const open = vi.fn(async (_input: unknown) => ({ state: 'failed' as const, dispatch: 'not_started' as const, reason: 'fixture stopped before pane open' }))
+  const open = vi.fn(async (_input: import('../lib/terminalTypes.js').TerminalCreateRequest) => ({ state: 'failed' as const, dispatch: 'not_started' as const, reason: 'fixture stopped before pane open' }))
   const backend = { create: open, kill: vi.fn() }
   const tmuxBackend = vi.fn(() => backend), guestBackend = vi.fn(() => backend as never)
   const ensureEngine = vi.fn(async () => ({ ok: true as const })), register = vi.fn()
@@ -58,7 +58,9 @@ async function guestCreate(answer: unknown, input: GuestLaunchInput = guestReque
 async function guestAdmitted(answer: Extract<GuestLaunch, { ok: true }>, input: GuestLaunchInput = guestRequest) {
   for (const mode of ['inline', 'linked'] as const) {
     const run = await guestCreate(answer, input, mode)
-    expect(run.open).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ command: answer.argv, env: answer.env, cwd: answer.workspace }))
+    expect(run.open).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ command: expect.any(Function), env: answer.env, cwd: answer.workspace }))
+    const command = run.open.mock.calls[0]![0].command
+    expect(typeof command === 'function' ? command() : command).toEqual(answer.argv)
     if (answer.guestHostUser) expect(run.guestBackend).toHaveBeenCalledExactlyOnceWith(answer.guestHostUser)
     else expect(run.guestBackend).not.toHaveBeenCalled()
   }

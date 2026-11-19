@@ -176,7 +176,7 @@ it('runs a streaming recovery four at a time and isolates a failed journal or re
     pendingIntents: async function* () { yield { id: id(9), fingerprint, request, held }; throw new Error('directory unavailable') } })
   damaged.pending.open()
   await damaged.pending.recover()
-  expect(warned).toHaveBeenCalledWith('[creation] CREATION_DISCOVERY_UNAVAILABLE')
+  expect(warned).toHaveBeenCalledWith('[creation] CREATION_DISCOVERY_UNAVAILABLE · Error')
   await vi.waitFor(() => expect(refused).toHaveBeenCalledOnce())
   damaged.pending.stop()
 })

@@ -99,7 +99,7 @@ describe('the devices in their own process', () => {
         machine: { id: 'machine-1', computerId: 'computer-9', name: 'This machine' }, signedIn: true, environment: 'prod', hasWindow: true } } })
       receive({ type: 'row', payload: { index: 0, value: ['registered', 'compact', 'session', 'claude', 7, '/history/transcript', 9,
         true, '/work', 'stored', ['failed', 'FAILED', 'detail'], 'Current name', true, 'selected', false, 'published'] } })
-      receive({ type: 'row', payload: { index: 1, value: ['cloud', 'remote', 'remote-session', 'fo', 8, null, 10, 'Cloud name', 'remote-model'] } })
+      receive({ type: 'row', payload: { index: 1, value: ['service', 'remote', 'remote-session', 'fo', 8, null, 10, 'Cloud name', 'remote-model'] } })
       receive({ type: 'end', payload: { count: 2 } })
     })
     f.connect()

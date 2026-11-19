@@ -10,7 +10,7 @@ import { fakeCore } from '../testing/fakeCore.js'
 import { MODEL_MANAGER_ID } from '../dsh/builtinIds.js'
 
 vi.mock('../scm/instructionWrites.js', () => ({ prepareInstructionWrites: vi.fn(async () => {}) }))
-vi.mock('../dsh/installed.js', () => ({ installedDsh: vi.fn(), dshRootDir: () => '/unused' }))
+vi.mock('../dsh/installed.js', async original => ({ ...await original<object>(), installedDsh: vi.fn(), dshRootDir: () => '/unused' }))
 vi.mock('../dsh/materialize.js', () => ({ materializeWorkspace: vi.fn() }))
 vi.mock('../dsh/runtime.js', () => ({ forkRuntimeKey: vi.fn(() => 'source-runtime'), prepareHarnessLaunch: vi.fn() }))
 const run: PrepareDsh = async (_workspace, _input, action) => action()

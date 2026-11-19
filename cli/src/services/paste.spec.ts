@@ -233,7 +233,7 @@ describe('paste files in the worker', () => {
     files.cancel(request.generation)
     await files.stop()
     expect(await readdir(directory)).toEqual([])
-    expect(log).not.toHaveBeenCalledWith('PASTE_CLEANUP_FAILED')
+    expect(log).not.toHaveBeenCalledWith(expect.stringMatching(/^PASTE_CLEANUP_FAILED/))
   })
 
   it('closes an owned descriptor but preserves its pathname when descriptor identity could not be established', async () => {
@@ -250,7 +250,7 @@ describe('paste files in the worker', () => {
     await files.stop()
     expect(closed).toHaveBeenCalledOnce()
     expect(await readdir(directory)).toEqual([`${request.generation}.part`])
-    expect(log).toHaveBeenCalledWith('PASTE_CLEANUP_FAILED')
+    expect(log).toHaveBeenCalledWith('PASTE_CLEANUP_FAILED · Error')
   })
 
   it('releases a cancelled reservation when the owned staging file has already gone', async () => {
@@ -259,7 +259,7 @@ describe('paste files in the worker', () => {
     await filesystem.unlink(join(directory, `${request.generation}.part`))
     files.cancel(request.generation)
     await files.stop()
-    expect(log).not.toHaveBeenCalledWith('PASTE_CLEANUP_FAILED')
+    expect(log).not.toHaveBeenCalledWith(expect.stringMatching(/^PASTE_CLEANUP_FAILED/))
     expect(await readdir(directory)).toEqual([])
   })
 
@@ -354,7 +354,7 @@ describe('paste files in the worker', () => {
     files.cancel(request.generation)
     await files.stop()
     expect(await readFile(part, 'utf8')).toBe('foreign replacement fixture')
-    expect(log).toHaveBeenCalledWith('PASTE_CLEANUP_FAILED')
+    expect(log).toHaveBeenCalledWith('PASTE_CLEANUP_FAILED · Error')
   })
 
   it('retains a published generation and its artifact when inspection after rename fails', async () => {
@@ -495,7 +495,7 @@ describe('paste files in the worker', () => {
       log.mockImplementation((code: string) => { if (code === 'PASTE_CLEANUP_CHANGED') observed.resolve() })
     } else if (mode === 'denied') {
       vi.mocked(unlink).mockRejectedValueOnce(Object.assign(new Error('private details'), { code: 'EACCES' }))
-      log.mockImplementation((code: string) => { if (code === 'PASTE_CLEANUP_FAILED') observed.resolve() })
+      log.mockImplementation((code: string) => { if (code === 'PASTE_CLEANUP_FAILED · EACCES') observed.resolve() })
     } else {
       vi.mocked(unlink).mockImplementationOnce(async (...args) => { await filesystem.unlink(...args); observed.resolve() })
     }
@@ -592,7 +592,7 @@ describe('paste files in the worker', () => {
     vi.mocked(unlink).mockRejectedValueOnce(Object.assign(new Error('private fixture detail'), { code: 'EACCES' }))
     expect(await files.chunk({ ...request, seq: 0 }, new Uint8Array(8))).toEqual({ error: 'PASTE_WRITE_STALLED' })
     await files.stop()
-    expect(log).toHaveBeenCalledWith('PASTE_CLEANUP_FAILED')
+    expect(log).toHaveBeenCalledWith('PASTE_CLEANUP_FAILED · EACCES')
     expect(log.mock.calls.flat().join(' ')).not.toContain('private fixture detail')
   })
 
@@ -633,7 +633,7 @@ describe('paste files in the worker', () => {
     await filesystem.unlink(join(directory, `${request.generation}.part`))
     files.cancel(request.generation)
     await files.stop()
-    expect(log).not.toHaveBeenCalledWith('PASTE_CLEANUP_FAILED')
+    expect(log).not.toHaveBeenCalledWith(expect.stringMatching(/^PASTE_CLEANUP_FAILED/))
   })
 
   it('sanitizes terminal controls, path syntax and long UTF-8 names inside the worker', async () => {

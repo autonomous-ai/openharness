@@ -46,7 +46,7 @@ describe('the store service', () => {
     expect(ready(HACHI_ID)).toBe(true)
     // Disabled Hachi needs no package; that exemption does not make other bundled packages ready.
     expect(ready.ready()).toBe(false)
-    expect(warn).toHaveBeenCalledWith('[store] BUNDLED_PREPARATION_FAILED')
+    expect(warn).toHaveBeenCalledWith('[store] BUNDLED_PREPARATION_FAILED · Error')
     expect(ready('autonomous/autonomous-grid')).toBe(true)
     expect(ready.ready()).toBe(true)
     expect(ready()).toBe(true)

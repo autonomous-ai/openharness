@@ -210,7 +210,7 @@ describe('component evidence and normalized-feed ordering', () => {
     vi.mocked(t.core.agents.readSessions).mockRejectedValueOnce(new Error('view failed'))
     await t.feedOptions()!.receive('agent', [{ type: 'agent_synced', payload: {} }], () => true)
     expect(t.reader.changed).toHaveBeenCalledExactlyOnceWith('agent')
-    await vi.waitFor(() => expect(warn).toHaveBeenCalledExactlyOnceWith('[wifi] CORE_VIEW_UNAVAILABLE'))
+    await vi.waitFor(() => expect(warn).toHaveBeenCalledExactlyOnceWith('[wifi] CORE_VIEW_UNAVAILABLE · Error'))
     await t.feedOptions()!.receive('agent', [{ type: 'agent_synced', payload: {} }], () => true)
     await t.port.appFocus('machine-1', 'agent', 'window')
     expect(t.core.agents.readSessions).toHaveBeenCalledTimes(3)
@@ -227,7 +227,7 @@ describe('component evidence and normalized-feed ordering', () => {
     await Promise.resolve()
     reject(new Error('changed view failed')); await failed
     expect(t.core.agents.readSessions).toHaveBeenCalledTimes(2)
-    expect(warn).toHaveBeenCalledWith('[wifi] CORE_VIEW_UNAVAILABLE')
+    expect(warn).toHaveBeenCalledWith('[wifi] CORE_VIEW_UNAVAILABLE · Error')
   })
 
   it('ignores ordinary activity and validates all fields of a consumed tool end', async () => {
@@ -254,7 +254,7 @@ describe('component evidence and normalized-feed ordering', () => {
     const commander = vi.spyOn(t.service, 'commander')
     t.feed.barrier.mockRejectedValueOnce(new Error('SESSION_EVENTS_GAP'))
     await t.peer.card({ type: 'commander_event', agentId: 'agent', dbSessionId: 's1', payload: { kind: 'summary', text: 'answer' } }, 'full')
-    await vi.waitFor(() => expect(warn).toHaveBeenCalledWith('[wifi] SESSION_SUMMARY_UNAVAILABLE'))
+    await vi.waitFor(() => expect(warn).toHaveBeenCalledWith('[wifi] SESSION_SUMMARY_UNAVAILABLE · Error'))
     expect(commander).not.toHaveBeenCalled()
   })
 

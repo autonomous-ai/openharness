@@ -33,7 +33,7 @@ describe('owner commands in the devices process', () => {
     expect(send).not.toHaveBeenCalled()
     task.mockRejectedValueOnce(new Error('private-token-and-text'))
     expect(await request('route_task', { text: 'fixture' }, owner)).toEqual({ error: 'COMMAND_UNAVAILABLE', detail: 'This machine could not complete the command. Try again.' })
-    expect(log).toHaveBeenCalledExactlyOnceWith('[devices] owner command COMMAND_UNAVAILABLE')
+    expect(log).toHaveBeenCalledExactlyOnceWith('[devices] owner command COMMAND_UNAVAILABLE · Error')
   })
 
   it('bounds actual work globally and per connection, including callers from a core with no connection field', async () => {

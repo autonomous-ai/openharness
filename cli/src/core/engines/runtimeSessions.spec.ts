@@ -649,7 +649,7 @@ describe('live profile evidence shares runtime authority', () => {
     expect(t.read.mock.calls[1][1].session.hermesHome).toBe('/tmp/profile')
     t.read.mockRejectedValueOnce(Error('secret path and pane text'))
     p.evidence(s, [{ model: 'newer', refresh: true }])
-    await vi.waitFor(() => expect(warning).toHaveBeenCalledWith('[runtime-profile] ENGINE_UNAVAILABLE'))
+    await vi.waitFor(() => expect(warning).toHaveBeenCalledWith('[runtime-profile] ENGINE_UNAVAILABLE · Error'))
     expect(warning).toHaveBeenCalledTimes(1)
     expect(p.getState(s.agentId).model).toBe('newer')
   })

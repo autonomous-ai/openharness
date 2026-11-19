@@ -40,7 +40,7 @@ describe('delivered turns', () => {
     const fact = { agentId: 'a', when: 'composer' as const, phase: 'written' as const }
     deliveries.input(fact)
     expect(heard).toHaveBeenCalledExactlyOnceWith(fact)
-    expect(deps.log).toHaveBeenCalledExactlyOnceWith('[input] an input listener failed')
+    expect(deps.log).toHaveBeenCalledExactlyOnceWith('[input] an input listener failed · Error')
     stop(); stopFailure()
     deliveries.input(fact)
     expect(heard).toHaveBeenCalledOnce()

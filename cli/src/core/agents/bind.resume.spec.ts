@@ -267,7 +267,7 @@ it('keeps a completed stream without repeating its saved record or terminal prob
   await t.liveTurn()
 })
 
-it('follows a reader installed while its attachment has not completed', async () => {
+it('reopens a reader whose attachment was superseded during configuration', async () => {
   const t = await setup('config'), first = t.requestAttach(t.resumed)
   await t.entered.promise
   expect(t.others.ready(sessionId)).toBe(true)
@@ -275,7 +275,10 @@ it('follows a reader installed while its attachment has not completed', async ()
   expect(await first).toBe(false)
   await Promise.all(t.attempts)
   expect(t.requestAttach).toHaveBeenCalledTimes(2)
-  expect(t.others.open).toHaveBeenCalledTimes(1)
+  // Main's attachment recovery retires the unfinished reader so the successor installs
+  // its complete history and question watcher; a completed reader is retained above.
+  expect(t.others.open).toHaveBeenCalledTimes(2)
+  expect(t.others.forget).toHaveBeenCalledOnce()
   await t.liveTurn()
 })
 

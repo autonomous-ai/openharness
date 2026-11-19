@@ -49,7 +49,7 @@ describe('recaps, as the core keeps them', () => {
     expect(f.port.lifecycle).toHaveBeenCalledExactlyOnceWith({ kind: 'failure', failure }, watching)
     f.port.lifecycle.mockImplementationOnce(() => { throw new Error('private failure') })
     expect(() => f.recaps.mirror.failure(failure)).not.toThrow()
-    expect(warn).toHaveBeenCalledExactlyOnceWith('[recaps] FAILURE_UNAVAILABLE')
+    expect(warn).toHaveBeenCalledExactlyOnceWith('[recaps] FAILURE_UNAVAILABLE · Error')
     f.off()
     f.recaps.mirror.failure(failure)
     expect(f.port.lifecycle).toHaveBeenCalledTimes(2)

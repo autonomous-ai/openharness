@@ -50,7 +50,7 @@ describe('Store reads context from Models through the owner socket', () => {
     }
     expect(await storeLaunchContext(where, false, () => true, new AbortController().signal,
       () => { throw Error('private socket detail') }, name)).toEqual({ privateGrid: null })
-    if (reason !== 'unknown') expect(console.warn).toHaveBeenCalledWith(`[store] LAUNCH_ACCOUNT_${reason === 'failure' ? 'UNAVAILABLE' : 'INVALID'}`)
+    if (reason !== 'unknown') expect(console.warn).toHaveBeenCalledWith(`[store] LAUNCH_ACCOUNT_${reason === 'failure' ? 'UNAVAILABLE · Error' : 'INVALID'}`)
     expect(vi.mocked(console.warn).mock.calls.flat().join(' ')).not.toContain('private')
   })
   it.each([true, false])('rejects a connection replaced during the backend read, setup=%s', async setup => {

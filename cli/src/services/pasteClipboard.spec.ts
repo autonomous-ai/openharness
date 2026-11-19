@@ -221,7 +221,7 @@ describe('paste clipboard reservation', () => {
     const f = fixture(undefined, { claim: async () => { throw error }, release: async () => {} })
     const reason = error instanceof Error && error.message.startsWith('PASTE_') ? error.message : 'PASTE_CLIPBOARD_RESERVATION_FAILED'
     expect(await f.clipboard.prepare(request(1))).toEqual({ state: 'failed', reason })
-    expect(log).toHaveBeenCalledWith(`[paste] ${reason}`)
+    expect(log).toHaveBeenCalledWith(`[paste] PASTE_CLIPBOARD_RESERVATION_FAILED · ${error instanceof Error ? 'Error' : 'string'}`)
     await f.clipboard.stop()
   })
 

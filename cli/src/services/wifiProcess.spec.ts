@@ -1146,7 +1146,7 @@ describe('the Wi-Fi device in the devices\' process', () => {
     f.answer('machine', new Error('the core went away'))
     f.event({ kind: 'resume' })
     await f.settled()
-    expect(warn).toHaveBeenCalledWith('[wifi] WIFI_NOTICE_FAILED')
+    expect(warn).toHaveBeenCalledWith('[wifi] WIFI_NOTICE_FAILED · Error')
     f.answer('machine', { id: 'machine-1' })
     f.event({ kind: 'resume' })
     f.connect()
@@ -1156,7 +1156,7 @@ describe('the Wi-Fi device in the devices\' process', () => {
     f.event({ kind: 'appFocus', machineId: 'm', agentId: 'a', connId: 'w' })
     f.event({ kind: 'turnEnded', agentId: 'a' })
     await f.settled()
-    expect(warn).toHaveBeenCalledWith('[wifi] WIFI_NOTICE_FAILED')
+    expect(warn).toHaveBeenCalledWith('[wifi] WIFI_NOTICE_FAILED · string')
   })
 
   it('stops its link and its service', async () => {

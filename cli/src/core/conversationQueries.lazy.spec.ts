@@ -125,7 +125,7 @@ it('fails visibly for every waiting caller and retries only on a later query', a
   const { reads } = await facade()
   const results = await Promise.allSettled([reads.recentAsks(row.sessionId, 1), reads.discover(row.agentId), reads.findTranscript('codex', row.sessionId, {})])
   for (const result of results) expect(result).toMatchObject({ status: 'rejected', reason: { code: 'HANDOFF_UNAVAILABLE' } })
-  expect(logged.mock.calls).toEqual([['[handoff] initialization failed: HANDOFF_UNAVAILABLE']])
+  expect(logged.mock.calls).toEqual([['[handoff] initialization failed: HANDOFF_UNAVAILABLE · Error']])
   expect(loading.create).toHaveBeenCalledOnce()
   expect(await Promise.all([reads.resolve(row.agentId), reads.recentAsks(row.sessionId, 1)])).toEqual([row, ['ask']])
   expect(loading.create).toHaveBeenCalledTimes(2)

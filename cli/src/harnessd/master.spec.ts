@@ -297,7 +297,7 @@ describe('coreHandle', () => {
     const handle = coreHandle(child as unknown as ChildProcess, log)
     expect(() => handle.send({ type: 'harnessd:shutdown' }, () => { throw new Error('private') })).not.toThrow()
     handle.send({ type: 'harnessd:shutdown' })
-    expect(log).toHaveBeenCalledWith('[harnessd] child_channel_callback_failed')
+    expect(log).toHaveBeenCalledWith('[harnessd] child_channel_callback_failed · Error')
   })
 })
 

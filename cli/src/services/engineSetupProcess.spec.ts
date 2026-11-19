@@ -73,7 +73,7 @@ it.each(['missing', 'empty', 'oversized', 'nul', 'write-failed', 'query-failed']
     f.replies[0](kind === 'missing' ? {} : { command: kind === 'empty' ? '' : kind === 'oversized' ? 'x'.repeat(16_385) : kind === 'nul' ? 'x\0y' : 'valid command' })
   }
   expect(await f.options().requests.setup_probe!({}, { local: true, owner: true })).toEqual({ output: null })
-  expect(warn).toHaveBeenCalledWith('[engine-setup] BROWSER_SHIM_UNAVAILABLE')
+  expect(warn).toHaveBeenCalledWith(`[engine-setup] BROWSER_SHIM_UNAVAILABLE${kind === 'query-failed' ? ' · Error' : ''}`)
   expect(JSON.stringify(warn.mock.calls)).not.toContain('private source path')
   await f.service.stop()
 })

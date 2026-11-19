@@ -230,7 +230,7 @@ describe('the hook installers after the move', () => {
     const settings = json(join(own, 'settings.json'))
     for (const { event } of claudeContract.settings.events) {
       expect(settings.hooks![event].map((block) => block.hooks.map((hook) => hook.command)))
-        .toEqual([[after.command(PORT, 'claude', undefined, undefined, { CLAUDE_CONFIG_DIR: own })]])
+        .toEqual([[after.command(PORT, 'claude', undefined, undefined, { HOME: home, CLAUDE_CONFIG_DIR: own })]])
     }
     expect(read(join(own, 'settings.json'))).not.toContain(positional)
   })

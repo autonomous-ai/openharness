@@ -60,7 +60,7 @@ describe('the desk shared by cohosted device components', () => {
       expect(await peer.stepFocus('next', undefined, () => true)).toBe('no_agents')
       expect(peer.scroll('move', 2, 3, () => true)).toBe(true)
       expect(stepFocus).not.toHaveBeenCalled(); expect(scroll).not.toHaveBeenCalled()
-      expect(log.mock.calls).toEqual([['[devices] DESK_FAILED'], ['[devices] DESK_FAILED']])
+      expect(log.mock.calls).toEqual([['[devices] DESK_FAILED · Error'], ['[devices] DESK_FAILED · Error']])
     } finally { revoke() }
   })
 
@@ -75,7 +75,7 @@ describe('the desk shared by cohosted device components', () => {
       // A one-way stroke retains its existing accepted result; failure is visible in the fixed log.
       expect(peer.scroll('move', 2, 3, () => true)).toBe(true)
       expect(stepFocus).toHaveBeenCalledOnce(); expect(scroll).toHaveBeenCalledOnce()
-      expect(warn.mock.calls).toEqual([['[devices] DESK_FAILED'], ['[devices] DESK_FAILED']])
+      expect(warn.mock.calls).toEqual([['[devices] DESK_FAILED · Error'], ['[devices] DESK_FAILED · Error']])
     } finally { revoke() }
   })
 
