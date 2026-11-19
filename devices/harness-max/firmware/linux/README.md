@@ -111,12 +111,14 @@ when V3 was deployed last).
   libinput and flutter-pi do, and the Near app records the same offset on this panel, so it is the panel's own; it is
   not corrected here. Make targets near that corner wider than they look.
 - The board bakes the text in Liberation Sans, the Mac in Helvetica (the Pro's font choice in `../sources.cmake`).
-- Frame time on the bar (measured 2026-11-20, V4, the unit's A76 pair at 2 GHz): a whole-picture change is about
-  9 ms of scaled paint (`glass_fit_paint`, which is most of any large frame here) and 1-2 ms of strips; a motion in
-  App Detail (an open, a close, a swipe of the cells) shows a frame every refresh (58 Hz) with 8-11 ms of work in
-  each. `frame_max_us` counts the frame's wait for its own flip, so a motion's frames read 17-18 ms. A tap's release
-  reaches the glass 12-37 ms after the finger lifts; a press waits for the touch task's poll, every 20 ms while no
-  finger is down (4 ms while one is). The unit sets the pair's governor to `performance` while the bar runs and puts
-  the one it had back when it stops: the image's `ondemand` looks every 200 ms, so a tap after a rest painted its
-  first frames at 416 MHz, 50-57 ms each (V4's `frame_max_us=56571`, logged during a screen recording; the same
-  frames come without one). The first frame is about 40 ms after start.
+- Frame time on the bar (measured 2026-11-20, V4, the unit's A76 pair at 2 GHz): a whole-picture change is about 9 ms
+  of scaled paint (`glass_fit_paint`, which is most of any large frame here) and 1-2 ms of strips, and a frame
+  repaints only its changes and the last frame's, as up to eight rectangles each. A motion in App Detail (an open, a
+  close, a swipe of the cells) shows a frame every refresh (58 Hz) with at most 8-11 ms of work in each.
+  `frame_max_us` counts the frame's wait for its own flip, so a motion's frames read 17-18 ms. A tap's release reaches
+  the glass 12-37 ms after the finger lifts (25 on average); a press waits for the touch task's poll, every 20 ms
+  while no finger is down (4 ms while one is). The unit sets the pair's governor to `performance` while the bar runs
+  and puts the one it had back when it stops: the image's `ondemand` looks every 200 ms, so a tap after a rest painted
+  its first frames at 416 MHz, 50-57 ms each (V4's `frame_max_us=56571`, logged during a screen recording; the same
+  frames come without one). The first frame is on the glass 40-65 ms after start. `--story` runs at about 2.5% of one
+  core, its RSS flat at 17.4 MiB over a 3-hour soak.

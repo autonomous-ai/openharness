@@ -180,7 +180,10 @@ static void rects_add(glass_fit_rect_t *set, int *n, int cap, glass_fit_rect_t r
     }
 }
 
-void glass_fit_flip_add(glass_fit_flip_t *f, glass_fit_rect_t r) { rects_add(f->pending, &f->pending_n, GLASS_FIT_RECTS, r); }
+void glass_fit_flip_add(glass_fit_flip_t *f, glass_fit_rect_t r)
+{
+    rects_add(f->pending, &f->pending_n, GLASS_FIT_RECTS, r);
+}
 
 int glass_fit_flip(glass_fit_flip_t *f, glass_fit_rect_t out[GLASS_FIT_FLIP_MAX])
 {
