@@ -10,12 +10,29 @@ Nothing here has been on a bench yet. The pins, addresses and module settings co
 
 ## What is whose
 
-The Max compiles the Pro's generic sources where they are (`devices/harness-pro/firmware/main`: the cable, `sys/`, the
-compositor, the strip path, the finger's contact rules, the recorder) at its own glass size, and the Pro's
-`components/esp_driver_usb_serial_jtag` and `bootloader_components/wdt_pc` sources. Its own code is the board
-(`main/board/`), the panel, touch, backlight and turn behind the Pro's `pro_display.h` (`main/display/`), the ES8311
-behind the Pro's `audio/audio_capture.h` and the chimes (`main/audio/`), the lanes screen and the app (`main/app/`), and `app_main.c`.
-A change under `devices/harness-pro/` can break the Max: build both.
+The Max never changes the Pro's tree: the Pro builds from its own files exactly as on `main`. The Max compiles the
+Pro's generic sources where they are and as they are (`devices/harness-pro/firmware/main`: `sys/`, the cable's helpers,
+the strip path, the finger's contact rules, the recorder, Pets), and the Pro's `components/esp_driver_usb_serial_jtag`
+and `bootloader_components/wdt_pc` sources. Where it needs other behaviour, the file is its own:
+
+- `main/pro_fork/` holds its copies of the Pro's files, each at the Pro's path under `main/` and compiled in its place:
+  the cable (`cable/pro_cable.c`: apps, answering, New Harness; see `../docs/cable.md`), the compositor
+  (`display/terminal.c`, `display/pro_canvas.c`, `pod/pod_draw.c`: its speed, its damage and triangles across 1920 px),
+  the app contract (`pro_app_api.h`) and the few hooks the Pro's touch and voice tasks ask of the app (`app/pro_app.h`).
+  The directory is first on every Max build's include path, so those headers are the ones the whole build reads.
+- `main/max_glass.h`, force-included into every file, puts the Max's 1920 x 480 in place of the 720 of the Pro's
+  `terminal.h` and `pro_display.h`.
+- `main/cable/` is what its cable adds to the Pro's headers (`max_cable.h`) and the welcome features only it reads.
+
+`main/pro_fork/upstream.txt` names the Pro file and git blob each copy came from, and the Pro files the Max leans on as
+they are. After each merge of `main`, run `python3 scripts/check_pro_forks.py`: it fails on every such file that
+changed, with the `git diff` to re-port; then record the new blob there and in the file's header. (`test/run.sh` prints
+the same report without failing.)
+
+Its own code beside that is the board (`main/board/`), the panel, touch, backlight and turn behind the Pro's
+`pro_display.h` (`main/display/`), the ES8311 behind the Pro's `audio/audio_capture.h` and the chimes (`main/audio/`),
+the screen and the app (`main/app/`), and `app_main.c`. A change under `devices/harness-pro/` can still break the Max:
+build both.
 
 ## Build
 
@@ -69,11 +86,12 @@ bash devices/harness-max/firmware/test/golden.sh --check
 `run.sh` runs the lanes model, view and touch tests, the app layer (`test/test_max_app.c`: `main/app/max_app.c` over
 the real model, with the cable, the recorder and FreeRTOS as host fakes), the frame path on two tasks
 (`test/test_max_present.c`, also under ThreadSanitizer: the glass is each scene's whichever task painted a strip) and
-the strip turn (`test/test_max_turn.c`). `test/raster_same.sh <git-ref>` checks that the Pro's compositor paints every
-pixel of every screen and of random runs as it did at that revision: run it after a change made for speed there.
-The chimes' samples, which both boards render (`main/audio/max_chime_pcm.c`), are checked by `linux/`'s `test_chime`.
-`golden.sh --check` renders each screen to 1920 x 480 and compares hashes. The Pro's `test/run.sh` also runs the strip
-path at 1920 x 480.
+the strip turn (`test/test_max_turn.c`), the cable (`test/test_max_cable.c` and `test/test_max_hello.py`: the Max's
+copy of the Pro's cable client, what it still does as the Pro's and what it adds) and the upstream check of
+`main/pro_fork/`. `test/raster_same.sh <git-ref>` checks that the Max's compositor paints every pixel of every screen
+and of random runs as it did at that revision: run it after a change made for speed there. The chimes' samples, which
+both boards render (`main/audio/max_chime_pcm.c`), are checked by `linux/`'s `test_chime`. `golden.sh --check` renders
+each screen to 1920 x 480 and compares hashes.
 
 ## On the bench
 
