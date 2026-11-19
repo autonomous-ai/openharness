@@ -50,10 +50,10 @@ static inline const ht_run_t *text_run(const char *t)
         if (S.runs[i].pro_kind == 1 && strstr(S.runs[i].text, t)) return &S.runs[i];
     return NULL;
 }
-// The lane order as ids, joined by spaces ("d e b a c").
+// App Detail's row as ids, joined by spaces ("d e b a c").
 static inline const char *order_ids(char *buf, size_t cap)
 {
-    int o[MAX_AGENTS], n = max_order(o);
+    int o[MAX_AGENTS], n = max_row(o);
     buf[0] = 0;
     for (int i = 0; i < n; i++) {
         size_t len = strlen(buf);
@@ -93,7 +93,7 @@ static inline const max_hit_t *plant(max_hit_kind_t kind, int arg)
 }
 // A page-wide target (the agent page's body, Attention's away), planted after the buttons as a page records it.
 static inline const max_hit_t *plant_page(max_hit_kind_t kind) { return plant_at(kind, 0, 0, 0, HT_WIDTH, HT_HEIGHT); }
-// Overview's cells on the page of cells shown, as max_cells() lists them, side by side under the buttons.
+// App Detail's cells on the glass, as max_cells() lists them, side by side under the buttons.
 static inline void plant_cells(void)
 {
     int c[MAX_CELLS];
@@ -110,22 +110,20 @@ static inline const max_box_t *cell_of(const char *id)
         if (!strcmp(max_m.cell_id[i], id)) return &max_m.cell_box[i];
     return NULL;
 }
-// The agent page's strip as max_segs() lists it: a segment each (seg_id).
-static inline void plant_strip(void)
+// The slivers beside the open agent, as App Detail draws them: the row's window round it, but the open one.
+static inline void plant_slivers(void)
 {
-    int g[MAX_SEGS], n = max_segs(g);
-    memset(max_m.seg_id, 0, sizeof max_m.seg_id);
-    for (int i = 0; i < n; i++) {
-        max_copy(max_m.seg_id[i], sizeof max_m.seg_id[i], max_m.agents[g[i]].id);
-        plant(MAX_HIT_SEG, i);
+    int row[MAX_AGENTS], n = max_row(row), at = 0;
+    for (int i = 0; i < n; i++)
+        if (!strcmp(max_m.agents[row[i]].id, max_m.selected)) at = i;
+    const int first = max_open_first(at, n);
+    max_m.cell_hits = 0;
+    for (int i = first; i < n && i < first + MAX_CELLS; i++) {
+        if (i == at) continue;
+        const int k = max_m.cell_hits++;
+        max_m.cell_box[k] = (max_box_t){(int16_t)(k * 300), 200, 280, 100};
+        max_copy(max_m.cell_id[k], sizeof max_m.cell_id[k], max_m.agents[row[i]].id);
     }
-}
-// The strip's segment for this agent, or NULL.
-static inline const max_hit_t *seg_of(const char *id)
-{
-    for (int i = 0; i < max_m.hit_count; i++)
-        if (max_m.hits[i].kind == MAX_HIT_SEG && !strcmp(max_m.seg_id[max_m.hits[i].arg], id)) return &max_m.hits[i];
-    return NULL;
 }
 // Attention's answer buttons stand for the agent on it as it stands now (card_id, card_key).
 static inline void plant_card(void)

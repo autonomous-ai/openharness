@@ -1,13 +1,15 @@
 // The screen (max_ui.h), 1920 x 480 (or 415): one of Demo V2's pages over the whole glass (max_m.view), in the dial's
 // look; New Harness over it while it is up, the update screen instead of it. Over the page the toast of a question that
-// came while a person talks, and the notice pill. Here too what the page files share: text, shapes, icons, buttons and
-// what moves by the clock. Inter faces (gen_fonts.py ph_*): at the Max's 225 ppi they come out a little larger than
-// on the Pro's 258.
+// came while a person talks, a finished turn's note, and the notice pill. Here too what the page files share: text,
+// shapes, icons, buttons and what moves by the clock. Inter faces (gen_fonts.py ph_*): at the Max's 225 ppi they come
+// out a little larger than on the Pro's 258.
+#include <ctype.h>
 #include <stdio.h>
 #include <string.h>
 #include <strings.h>
 
 #include "max_ui_draw.h"
+#include "max_ui_icons.h"
 #include "max_ui_motion.h"
 
 static const char ELLIPSIS[] = "\xe2\x80\xa6";   // the Inter faces draw it (gen_fonts.py CONSOLE_EXTRA)
@@ -247,11 +249,6 @@ static void line24(ht_scene_t *s, int x, int y, int size, int x0, int y0, int x1
 {
     max_stroke16(s, at16(x, size, x0), at16(y, size, y0), at16(x, size, x1), at16(y, size, y1), size * 6 / 5, rgb);
 }
-void max_icon_back(ht_scene_t *s, int x, int y, int size, unsigned rgb)
-{
-    line24(s, x, y, size, 30, 12, 18, 24, rgb);   // m15 6-6 6 6 6
-    line24(s, x, y, size, 18, 24, 30, 36, rgb);
-}
 void max_icon_x(ht_scene_t *s, int x, int y, int size, unsigned rgb)
 {
     line24(s, x, y, size, 12, 12, 36, 36, rgb);
@@ -291,9 +288,24 @@ static unsigned app_tint(const char *app)
     if (!strcasecmp(app, "vscode") || !strcasecmp(app, "vs code") || !strcasecmp(app, "visual studio code")) return 0x007ACC;
     return 0x3A3B45;
 }
+const ht_pro_bitmap_t *max_icon_find(const char *app, int size)
+{
+    char key[24];
+    size_t n = 0;
+    for (const char *c = app ? app : ""; *c && n + 1 < sizeof key; c++)
+        if (isalnum((unsigned char)*c)) key[n++] = (char)tolower((unsigned char)*c);
+    key[n] = 0;
+    for (const max_icon_t *i = max_icons; n && i->app; i++)
+        if (i->image.width == size && !strcmp(i->app, key)) return &i->image;
+    return NULL;
+}
 void max_app_icon(ht_scene_t *s, int x, int y, int size, const char *app, const char *name)
 {
     if (x >= HT_WIDTH) return;
+    // Its own icon is its own rounded tile, drawn as it is (V3's AppIcon).
+    const ht_pro_bitmap_t *own = max_icon_find(app, size);
+    if (!own) own = max_icon_find(name, size);
+    if (own && ht_pro_image(s, x, y, own)) return;
     const unsigned tint = app_tint(app);
     max_box(s, x, y, size, size, size * 14 / 60, tint == 0x111114 ? 1 : 0, TRACK, tint);
     const char *from = name && name[0] ? name : app;
@@ -324,18 +336,30 @@ unsigned max_rail_ink(const max_agent_t *a)
 {
     return a->state == MAX_FAILED ? FAIL_RAIL : a->state == MAX_IDLE ? IDLE_RAIL : max_state_ink(a);
 }
+unsigned max_chip_ink(const max_agent_t *a) { return a->state == MAX_IDLE ? CHIP_IDLE : max_rail_ink(a); }
+
+// ---- the state chip ----
+
+enum { CHIP_DOT = DX(8), CHIP_GAP = DX(8) };
+static int chip_pad(bool small) { return small ? DX(13) : DX(16); }
+int max_chip_w(const max_agent_t *a, bool small, int max_w)
+{
+    const int w = 2 * chip_pad(small) + CHIP_DOT + CHIP_GAP + ht_pro_width(&ph_sb_22, max_status_word(a));
+    return w < max_w ? w : max_w;
+}
+int max_chip(ht_scene_t *s, int x, int cy, const max_agent_t *a, bool small, int max_w)
+{
+    const unsigned c = max_chip_ink(a);
+    const unsigned words = a->state == MAX_IDLE ? REST : a->state == MAX_FAILED ? FAIL : c;
+    const int h = small ? DY(30) : DY(34), pad = chip_pad(small), w = max_chip_w(a, small, max_w);
+    max_box(s, x, cy - h / 2, w, h, h / 2, 1, max_mix(c, GROUND, 40), max_mix(c, GROUND, 15));
+    max_dot(s, x + pad, cy, CHIP_DOT, c);
+    const int tx = x + pad + CHIP_DOT + CHIP_GAP;
+    max_text(s, tx, cy, x + w - pad - tx, &ph_sb_22, words, max_status_word(a));
+    return w;
+}
+
 unsigned max_kind_ink(max_attn_t kind) { return kind == MAX_ATTN_ASK ? WAIT : kind == MAX_ATTN_DONE ? DONE : FAIL; }
-const char *max_engine_label(char *out, size_t cap, const char *engine)
-{
-    if (!strcmp(engine, "claude")) snprintf(out, cap, "Claude Code");
-    else snprintf(out, cap, "%s", engine);
-    if (out[0] >= 'a' && out[0] <= 'z') out[0] = (char)(out[0] - 'a' + 'A');   // "codex": "Codex"
-    return out;
-}
-unsigned max_engine_ink(const char *engine)
-{
-    return !strcmp(engine, "claude") ? CLAUDE : !strcmp(engine, "codex") ? CODEX : !strcmp(engine, "muse") ? MUSE : REST;
-}
 
 // ---- buttons ----
 
@@ -394,8 +418,8 @@ uint32_t max_motion_ms(uint32_t now_ms)
 
 enum { TOAST_W = DX(760), TOAST_H = DY(52), TOAST_Y = DY(6), PILL_PAD = DX(22), PILL_DOT = DY(8) };
 
-// The toast's place: top centre, over the strip of the agent page; while New Harness is up, in its title row left of
-// Close, so it covers none of the form's buttons.
+// The toast's place: top centre; while New Harness is up, in its title row left of Close, so it covers none of the
+// form's buttons.
 static max_box_t toast_box(bool form)
 {
     if (!form) return (max_box_t){(HT_WIDTH - TOAST_W) / 2, TOAST_Y, TOAST_W, TOAST_H};
@@ -435,6 +459,59 @@ static void notice(ht_scene_t *s, bool form, max_box_t toast_at, bool toasting)
     ht_pro_text(s, x + PILL_PAD + PILL_DOT + DX(10), max_top_of(f, y + h / 2), tw, f, C(FG), row);
 }
 
+// ---- over the page: a finished turn's note ----
+
+// V3's done note: 460 x 42 design px at most, 16 from the glass's right and 10 from its foot, its pet 34 x 30; the
+// finger's target reaches 12 past it all round (the bar's touch lands off the finger at the right).
+enum {
+    DONE_W = DX(460), DONE_H = DY(42), DONE_RIGHT = DX(16), DONE_FOOT = DY(10), DONE_PAD_L = DX(10), DONE_PAD_R = DX(18),
+    DONE_PET_W = DX(34), DONE_PET_H = DY(30), DONE_GAP = DX(10), DONE_REACH = DX(12), DONE_MIN_SAID = DX(40),
+};
+#define DONE_IS " is done"
+#define DONE_DOT " \xc2\xb7 "
+
+typedef struct {
+    max_box_t card;
+    int name_w, said_w;   // what of the name and of what it said fits; no words when said_w is 0
+} done_t;
+
+// The note of agent a, as wide as its words up to DONE_W: the name (at most half the room when words follow it),
+// " is done", then as much of what the turn said as fits, if enough does to read.
+static done_t done_layout(const max_agent_t *a)
+{
+    const ht_pro_font_t *nf = &ph_sb_22, *sf = &ph_rg_24;
+    const int is_w = ht_pro_width(nf, DONE_IS), dot_w = ht_pro_width(sf, DONE_DOT);
+    const int left = DONE_W - DONE_PAD_L - DONE_PET_W - DONE_GAP - DONE_PAD_R - is_w;
+    char row[ROW_BYTES];
+    max_cut(row, a->name, nf, a->note[0] ? left / 2 : left, false);
+    done_t d = {.name_w = ht_pro_width(nf, row)};
+    if (a->note[0]) {
+        max_cut(row, a->note, sf, left - d.name_w - dot_w, false);
+        d.said_w = ht_pro_width(sf, row);
+        if (d.said_w < DONE_MIN_SAID) d.said_w = 0;
+    }
+    const int w = DONE_PAD_L + DONE_PET_W + DONE_GAP + d.name_w + is_w + (d.said_w ? dot_w + d.said_w : 0) + DONE_PAD_R;
+    d.card = (max_box_t){HT_WIDTH - DONE_RIGHT - w, HT_HEIGHT - DONE_FOOT - DONE_H, w, DONE_H};
+    return d;
+}
+
+// The pet, still, then "name is done · what it said" on one row, the name in the done green, on a card in the toast's
+// colours.
+static void done_note(ht_scene_t *s, const max_agent_t *a, const done_t *d)
+{
+    const max_box_t c = d->card;
+    max_box(s, c.x, c.y, c.w, c.h, DONE_H / 3, 1, RIM, CARD);
+    const int cy = c.y + c.h / 2;
+    max_pet(s, a->engine, POD_SCENE_REST, c.x + DONE_PAD_L + DONE_PET_W / 2, cy + DONE_PET_H / 2, DONE_PET_W / 2,
+            DONE_PET_H, CARD, 0, true);
+    int x = c.x + DONE_PAD_L + DONE_PET_W + DONE_GAP;
+    x += max_text(s, x, cy, d->name_w, &ph_sb_22, DONE, a->name);
+    x += max_text(s, x, cy, c.x + c.w - x, &ph_sb_22, DIM, DONE_IS);
+    if (!d->said_w) return;
+    x += max_text(s, x, cy, c.x + c.w - x, &ph_rg_24, FAINT, DONE_DOT);
+    max_text(s, x, cy, d->said_w, &ph_rg_24, RECAP, a->note);
+}
+
 // ---- the whole screen ----
 
 static void update_screen(ht_scene_t *s)
@@ -453,12 +530,12 @@ static void update_screen(ht_scene_t *s)
     }
 }
 
-// The page the model shows. One that names an agent no longer in the ring shows Overview instead.
+// The page the model shows. One that names an agent no longer in the ring shows Overview instead; App Detail draws the
+// agent page, its agent open across the row.
 static void page(ht_scene_t *s, uint32_t now_ms)
 {
-    const max_agent_t *agent = max_find(max_m.selected), *attn = max_find(max_m.attn_id);
-    if (max_m.view == MAX_VIEW_AGENT && agent) max_draw_agent(s, agent, now_ms);
-    else if (max_m.view == MAX_VIEW_ATTENTION && attn) max_draw_attention(s, attn, now_ms);
+    const max_agent_t *attn = max_find(max_m.attn_id);
+    if (max_m.view == MAX_VIEW_ATTENTION && attn) max_draw_attention(s, attn, now_ms);
     else if (max_m.view == MAX_VIEW_INBOX) max_draw_inbox(s, now_ms);
     else if (max_m.view == MAX_VIEW_APPS) max_draw_apps(s);
     else if (max_m.view == MAX_VIEW_AMBIENT) max_draw_ambient(s);
@@ -479,9 +556,20 @@ void max_ui_render(ht_scene_t *s, uint32_t now_ms)
         const bool form = max_form_open(), toasting = max_m.link && max_toast_shown(now_ms);
         const max_box_t t = toast_box(form);
         if (toasting) max_hit(t.x, t.y, t.w, t.h, MAX_HIT_TOAST, 0);   // first: it lies over the page's own
+        // The done note, over any page but the form (whose buttons it would cover; its notice waits in Inbox).
+        const max_agent_t *done = max_m.link && !form && max_done_shown(now_ms) ? max_find(max_m.done_id) : NULL;
+        done_t d = {.name_w = 0};
+        if (done) {
+            d = done_layout(done);
+            const int hx = d.card.x - DONE_REACH, hy = d.card.y - DONE_REACH;
+            const int hw = d.card.w + 2 * DONE_REACH, hh = d.card.h + 2 * DONE_REACH;
+            max_hit(hx, hy, hx + hw > HT_WIDTH ? HT_WIDTH - hx : hw, hy + hh > HT_HEIGHT ? HT_HEIGHT - hy : hh,
+                    MAX_HIT_DONE_NOTE, 0);
+        }
         if (form) max_draw_form(s);
         else page(s, now_ms);
         if (toasting) toast(s, t);
+        if (done) done_note(s, done, &d);
         if (max_notice_shown(now_ms)) notice(s, form, t, toasting);
     }
     max_m.drawn_key = max_time_key(now_ms);

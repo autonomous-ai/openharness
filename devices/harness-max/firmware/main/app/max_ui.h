@@ -19,6 +19,10 @@
 
 // A fresh model: link down (Ambient says so), no agents, an empty Inbox, no notice, no update.
 void max_ui_reset(void);
+// The scripted demo daemon drives the bar (linux/main.c --demo): each time the link comes up and its first ring has
+// nothing at work or waiting, Ambient comes at once, and its first tap opens Apps (V3 restNow(wakeToApps)). The
+// program's mode: set before the app starts, kept over max_ui_reset.
+void max_ui_demo(bool on);
 
 // ---- feeds (the cable_link task, through max_app.c) ----
 bool max_ui_link(bool up, const char *machine, uint32_t now_ms);
@@ -159,16 +163,17 @@ typedef struct {
     char app[PRO_APP_ID_BYTES];
 } max_act_t;
 // One contact at a time: down with the first point, then moves, then up (down false). A tap acts on the lift; a
-// sideways swipe pages the cells on Overview, browses the ring on the agent page, or moves the form. Returns what the
-// app must do (most calls: MAX_ACT_NONE); a tap on an answer or the form queues its message in the outbox instead.
+// sideways swipe scrolls App Detail's row of cells, or moves the form. Returns what the app must do (most calls:
+// MAX_ACT_NONE); a tap on an answer or the form queues its message in the outbox instead.
 // Every lift is a person at the bar (idle_from: Ambient waits for them).
 max_act_t max_ui_touch(bool down, int x, int y, uint32_t now_ms);
 void max_ui_touch_cancel(void);
 
 // What the clock owes the recording (render task, every tick while recording): MAX_ACT_SEND after speech and then
-// MAX_SILENCE_MS of quiet (to Overview, as a tap on the page); MAX_ACT_CANCEL when nothing was heard in MAX_HEAR_MS
-// (the notice says the mic closed and the page stays); MAX_ACT_SEND (words heard) or MAX_ACT_CANCEL when its agent
-// left the ring; else MAX_ACT_NONE. The app acts on it as on the finger's.
+// MAX_SILENCE_MS of quiet, or at MAX_TALK_MAX_MS (to Overview, as a tap on the page); MAX_ACT_CANCEL when nothing was
+// heard in MAX_HEAR_MS (the page stays and says the mic closed); MAX_ACT_SEND (words heard) or MAX_ACT_CANCEL when its
+// agent left the ring; else MAX_ACT_NONE. A finger on the glass then acts on nothing. The app acts on it as on the
+// finger's.
 max_act_t max_ui_talk_due(uint32_t now_ms);
 
 // The agent page's (or Attention's) agent id, or NULL when neither is up.

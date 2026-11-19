@@ -57,33 +57,51 @@ max_agent_t *max_find(const char *id)
     return NULL;
 }
 
-static int group(const max_agent_t *a)
+// The row's order of need (the owner's call, 19 Nov): waiting on the person first, then at work, failed, done, resting.
+static int need(const max_agent_t *a)
 {
-    if (a->state == MAX_ASKING || a->state == MAX_FAILED) return 0;
-    return a->state == MAX_WORKING ? 1 : 2;
+    switch (a->state) {
+    case MAX_ASKING: return 0;
+    case MAX_WORKING: return 1;
+    case MAX_FAILED: return 2;
+    case MAX_DONE: return 3;
+    default: return 4;
+    }
 }
-int max_order(int out[MAX_AGENTS])
+static bool in_held_row(const char *id)
+{
+    for (int h = 0; h < max_m.held_count; h++)
+        if (!strcmp(max_m.held_row[h], id)) return true;
+    return false;
+}
+int max_row(int out[MAX_AGENTS])
 {
     int n = 0;
-    for (int g = 0; g < 3; g++)
+    for (int h = 0; h < max_m.held_count; h++) {
+        const max_agent_t *a = max_find(max_m.held_row[h]);
+        if (a) out[n++] = (int)(a - max_m.agents);
+    }
+    for (int g = 0; g <= 4; g++)
         for (int i = 0; i < max_m.count; i++)
-            if (group(&max_m.agents[i]) == g) out[n++] = i;
+            if (need(&max_m.agents[i]) == g && !in_held_row(max_m.agents[i].id)) out[n++] = i;
     return n;
 }
-
-// The lanes: every agent but the room's, in lane order.
-static int lane_order(int out[MAX_AGENTS])
+// The agent's place in the row, or -1.
+static int row_index(const char *id)
 {
-    int o[MAX_AGENTS], n = max_order(o), k = 0;
+    int row[MAX_AGENTS];
+    const int n = max_row(row);
     for (int i = 0; i < n; i++)
-        if (strcmp(max_m.agents[o[i]].id, max_m.selected)) out[k++] = o[i];
-    return k;
+        if (!strcmp(max_m.agents[row[i]].id, id)) return i;
+    return -1;
 }
-
-int max_pages(void)
+// The row as it is now, for front_if_passed to compare with.
+static void see_row(void)
 {
-    int o[MAX_AGENTS];
-    return (lane_order(o) + MAX_LANES - 1) / MAX_LANES;
+    int row[MAX_AGENTS];
+    max_m.row_seen_count = max_row(row);
+    for (int i = 0; i < max_m.row_seen_count; i++)
+        memcpy(max_m.row_seen[i], max_m.agents[row[i]].id, ID_MAX);
 }
 
 int64_t max_secs(const max_agent_t *a, uint32_t now_ms)
@@ -112,30 +130,41 @@ void max_fmt_elapsed(char *out, size_t cap, int64_t secs)
     else snprintf(out, cap, "%lld:%02d:%02d", (long long)(secs / 3600), (int)(secs / 60 % 60), (int)(secs % 60));
 }
 
-int max_visible(int out[MAX_LANES])
-{
-    int o[MAX_AGENTS], n = lane_order(o), k = 0;
-    for (int i = max_m.page * MAX_LANES; i < n && k < MAX_LANES; i++) out[k++] = o[i];
-    return k;
-}
-
-bool max_asks_off_page(void)
-{
-    int o[MAX_AGENTS], n = lane_order(o);
-    for (int i = 0; i < n; i++)
-        if (i / MAX_LANES != max_m.page && max_m.agents[o[i]].state == MAX_ASKING) return true;
-    return false;
-}
-
 // ---- Demo V2: which page is up ----
 
 bool max_show(max_view_t view)
 {
     if (max_m.view == view) return false;
-    if (max_m.view == MAX_VIEW_INBOX)   // seen: the bell's count goes
+    if (view != MAX_VIEW_AMBIENT) max_m.wake_to_apps = false;   // only the Ambient it was set for
+    const max_view_t was = max_m.view;
+    if (was == MAX_VIEW_INBOX)   // seen: the bell's count goes
         for (int i = 0; i < max_m.inbox_count; i++) max_m.inbox[i].unread = false;
+    max_m.talk_closed = false;   // "Mic closed" belongs to the page it closed on
     max_m.view = view;
+    // Opening an agent holds the row's order until it closes, so the open agent and the slivers beside it stay put as
+    // states change.
+    max_m.held_count = 0;
+    if (view == MAX_VIEW_AGENT) {
+        int row[MAX_AGENTS];
+        max_m.held_count = max_row(row);
+        for (int i = 0; i < max_m.held_count; i++) memcpy(max_m.held_row[i], max_m.agents[row[i]].id, ID_MAX);
+    }
+    if (view == MAX_VIEW_OVERVIEW) {
+        // Closed, the row is by need again with the agent that was open one cell in, where it stands; from any other
+        // page the row starts at its front.
+        const int i = was == MAX_VIEW_AGENT ? row_index(max_m.selected) : -1;
+        const int last = max_row_last();
+        max_m.row_first = i - 1 < 0 ? 0 : i - 1 > last ? last : i - 1;
+        see_row();
+    }
     return true;
+}
+
+void max_open(const char *id)
+{
+    if (strcmp(max_m.selected, id)) max_m.talk_closed = false;   // "Mic closed" was the other agent's
+    max_copy(max_m.selected, sizeof max_m.selected, id);
+    max_show(MAX_VIEW_AGENT);
 }
 
 bool max_attn_holds(const char *id, max_attn_t why)
@@ -233,6 +262,11 @@ void max_attend(max_agent_t *a, max_attn_t why, uint32_t now_ms)
     max_m.idle_from = now_ms;
     max_m.news |= why == MAX_ATTN_ASK ? MAX_NEWS_ASK : why == MAX_ATTN_FAIL ? MAX_NEWS_FAILED : MAX_NEWS_DONE;
     inbox_add(a, why, false, now_ms);
+    if (why == MAX_ATTN_DONE) {   // never the glass (the owner's call, 18 Nov): the newest note, over whatever is up
+        max_copy(max_m.done_id, sizeof max_m.done_id, a->id);
+        max_m.done_from = now_ms;
+        return;
+    }
     if (max_m.talk != MAX_TALK_IDLE || max_form_open()) {   // a person talks or fills the form: only the toast
         max_copy(max_m.toast_id, sizeof max_m.toast_id, a->id);
         max_m.toast_attn = why;
@@ -240,7 +274,7 @@ void max_attend(max_agent_t *a, max_attn_t why, uint32_t now_ms)
         if (max_m.view == MAX_VIEW_AMBIENT) max_show(MAX_VIEW_OVERVIEW);
         return;
     }
-    // Another agent's question keeps Attention: this one waits its turn, a turn's end stays in Inbox.
+    // Another agent's question keeps Attention: this one waits its turn, a failure stays in Inbox.
     if (max_m.view == MAX_VIEW_ATTENTION && max_m.attn == MAX_ATTN_ASK && strcmp(max_m.attn_id, a->id) &&
         max_attn_holds(max_m.attn_id, MAX_ATTN_ASK))
         return;
@@ -279,9 +313,29 @@ static bool ambient_waits(void)
     return max_m.view == MAX_VIEW_OVERVIEW && max_m.talk == MAX_TALK_IDLE && !max_form_open() && !busy();
 }
 
+// The row by need can move an agent up past the cells before the glass (one just talked to starting work, one coming
+// to wait on the person), out of sight: then the row goes to its front, unless a finger holds it. True when it did.
+static bool front_if_passed(void)
+{
+    bool front = false;
+    if (max_m.view == MAX_VIEW_OVERVIEW && !max_m.down && max_m.row_first > 0) {
+        int row[MAX_AGENTS];
+        const int n = max_row(row), before = max_m.row_first;
+        for (int i = 0; i < before && !front; i++) {
+            bool seen = i >= n;
+            for (int j = 0; j < before && j < max_m.row_seen_count && !seen; j++)
+                seen = !strcmp(max_m.row_seen[j], max_m.agents[row[i]].id);
+            front = !seen;
+        }
+        if (front) max_m.row_first = 0;
+    }
+    if (max_m.view == MAX_VIEW_OVERVIEW || max_m.view == MAX_VIEW_AGENT) see_row();
+    return front;
+}
+
 // The page follows what it shows: Attention whose agent moved on gives way to the next question (else Overview), a
-// turn's end goes after MAX_ATTN_END_MS, the agent page goes with its agent, and an idle Overview turns Ambient. True
-// when the page changed.
+// turn's end goes after MAX_ATTN_END_MS, the agent page goes with its agent, an idle Overview turns Ambient, and the
+// row comes to its front when an agent moved up past it. True when the page changed.
 static bool settle(uint32_t now_ms)
 {
     const max_view_t view = max_m.view;
@@ -296,7 +350,8 @@ static bool settle(uint32_t now_ms)
         max_show(MAX_VIEW_OVERVIEW);
     }
     if (ambient_waits() && reached(max_m.idle_from + MAX_AMBIENT_MS, now_ms)) max_show(MAX_VIEW_AMBIENT);
-    return max_m.view != view || max_m.attn != attn || strcmp(max_m.attn_id, attn_id);
+    const bool front = front_if_passed();
+    return front || max_m.view != view || max_m.attn != attn || strcmp(max_m.attn_id, attn_id);
 }
 
 uint32_t max_fnv(uint32_t h, const void *data, size_t n)
@@ -321,28 +376,18 @@ static uint32_t fnv_ago(uint32_t h, uint32_t since_ms, uint32_t now_ms)
     return max_fnv(h, ago, strlen(ago));
 }
 
-// The agent page's agent, while it is up.
-static const max_agent_t *paged(void) { return max_m.view == MAX_VIEW_AGENT ? max_find(max_m.selected) : NULL; }
-
 uint32_t max_time_key(uint32_t now_ms)
 {
     uint32_t h = max_fnv(2166136261u, &max_m.view, sizeof max_m.view);
-    const max_agent_t *a = paged();
-    if (a) {   // a turn's clock while it runs, else how long ago it ended; its summary until it runs out
-        const int64_t secs = running(a->state) ? max_secs(a, now_ms) : -1;
-        const bool note = max_note_shown(a, now_ms);
-        h = max_fnv(h, &secs, sizeof secs);
-        h = max_fnv(h, &note, sizeof note);
-        if (!running(a->state)) h = fnv_ago(h, a->since_ms, now_ms);
-    }
     if (max_m.view == MAX_VIEW_INBOX)
         for (int i = 0; i < max_m.inbox_count; i++) h = fnv_ago(h, max_m.inbox[i].at, now_ms);
     if (max_m.talk == MAX_TALK_RECORDING) {   // the band's frames
         const uint32_t frame = (now_ms - max_m.talk_from) / MAX_TALK_FRAME_MS;
         h = max_fnv(h, &frame, sizeof frame);
     }
-    const bool notice = max_notice_shown(now_ms), toast = max_toast_shown(now_ms);
+    const bool notice = max_notice_shown(now_ms), toast = max_toast_shown(now_ms), done = max_done_shown(now_ms);
     h = max_fnv(h, &notice, sizeof notice);
+    h = max_fnv(h, &done, sizeof done);
     return max_fnv(h, &toast, sizeof toast);
 }
 
@@ -399,6 +444,10 @@ bool max_ui_unsent(const max_out_t *o, uint32_t now_ms)
 
 // ---- feeds ----
 
+// The program's mode, set once before the app starts: max_ui_reset keeps it.
+static bool s_demo;
+void max_ui_demo(bool on) { s_demo = on; }
+
 bool max_ui_link(bool up, const char *machine, uint32_t now_ms)
 {
     (void)now_ms;
@@ -406,6 +455,7 @@ bool max_ui_link(bool up, const char *machine, uint32_t now_ms)
         char name[CABLE_NAME_MAX];
         max_copy_label(name, sizeof name, machine);
         const bool changed = !max_m.link || strcmp(max_m.computer, name);
+        if (!max_m.link && s_demo) max_m.rest_owed = true;   // the demo opens on Ambient (max_ui_agents)
         max_m.link = true;
         memcpy(max_m.computer, name, sizeof name);
         return changed;
@@ -418,8 +468,9 @@ bool max_ui_link(bool up, const char *machine, uint32_t now_ms)
     max_m.link = false;
     max_m.computer[0] = 0;
     max_m.count = max_m.machine_count = 0;
-    max_m.selected[0] = max_m.attn_id[0] = max_m.toast_id[0] = 0;
-    max_m.page = max_m.cell_page = 0;
+    max_m.selected[0] = max_m.attn_id[0] = max_m.toast_id[0] = max_m.done_id[0] = 0;
+    max_m.row_first = 0;
+    max_m.rest_owed = max_m.wake_to_apps = false;
     memset(max_m.asks, 0, sizeof max_m.asks);
     max_m.parked_count = 0;
     memset(max_m.apps, 0, sizeof max_m.apps);   // the apps too: the next list is a first one, followed by nothing
@@ -468,13 +519,20 @@ bool max_ui_agents(const pro_agent_row_t *rows, int n, uint32_t now_ms)
     if (max_m.harness_own) max_m.apps[0].count = k;   // the bar's own Harness: its agents are the ring
     bool changed = k != old || memcmp(max_m.agents, s_old, (size_t)k * sizeof s_old[0]);
     if (!max_find(max_m.selected)) max_m.selected[0] = 0;   // its page goes (settle)
-    const int last = max_cell_pages() - 1;
-    if (max_m.cell_page > last) max_m.cell_page = last < 0 ? 0 : last;
+    if (max_m.row_first > max_row_last()) max_m.row_first = max_row_last();
+    // The demo's first ring after the link came up: Ambient at once when nothing works or waits, not a quiet minute
+    // later, and its tap shows every app (V3 restNow(wakeToApps)).
+    const bool rest = max_m.rest_owed && !busy() && max_m.talk == MAX_TALK_IDLE && !max_form_open();
+    max_m.rest_owed = false;
     if (!k && old) {   // nobody left: Ambient
         changed |= max_show(MAX_VIEW_AMBIENT);
     } else if (k && !old) {   // the first agents: Overview, and Ambient waits from now
         max_m.idle_from = now_ms;
-        if (max_m.view == MAX_VIEW_AMBIENT) changed |= max_show(MAX_VIEW_OVERVIEW);
+        if (max_m.view == MAX_VIEW_AMBIENT && !rest) changed |= max_show(MAX_VIEW_OVERVIEW);
+    }
+    if (rest) {
+        changed |= max_show(MAX_VIEW_AMBIENT);
+        max_m.wake_to_apps = true;
     }
     return settle(now_ms) || changed;
 }
@@ -685,6 +743,7 @@ bool max_ui_talk(max_talk_t state, uint32_t now_ms)
     if (changed && state == MAX_TALK_RECORDING) {   // a new recording: its clock, and nothing heard yet
         max_m.talk_from = max_m.talk_quiet_from = now_ms;
         max_m.talk_heard = false;
+        max_m.talk_closed = false;
         max_m.level_count = 0;
     }
     max_m.talk = state;
@@ -756,7 +815,7 @@ bool max_ui_apps(const char *shown, const pro_app_row_t *rows, int n, uint32_t n
         apps[0] = first;
     }
     const bool turned = strcmp(id, max_m.shown) != 0;
-    if (turned) max_m.cell_page = 0;   // another app's agents: from their first page
+    if (turned) max_m.row_first = 0;   // another app's agents: from the row's front
     // The computer turned the bar to the app in front (V3's rule): never the first list, never the app the person just
     // picked here, never over a person talking.
     if (turned && max_m.apps_known && id[0]) {
@@ -805,24 +864,23 @@ uint32_t max_ui_next_wake_ms(uint32_t now_ms)
 {
     if (max_m.dirty) return 1;
     uint32_t ms = MAX_WAKE_MS;
-    const max_agent_t *a = paged();
-    if (a && running(a->state)) {
-        if (a->clock) sooner(&ms, 1000u - (uint32_t)(now_ms - a->clock_ms) % 1000u);   // to the clock's next second
-    } else if (a) {
-        sooner(&ms, 60000u - (uint32_t)(now_ms - a->since_ms) % 60000u);   // "2m ago" turns "3m ago"
-        if (a->state == MAX_DONE && max_note_shown(a, now_ms)) until(&ms, a->note_until, now_ms);
-    }
     for (int i = 0; max_m.view == MAX_VIEW_INBOX && i < max_m.inbox_count; i++)
         sooner(&ms, 60000u - (uint32_t)(now_ms - max_m.inbox[i].at) % 60000u);
     if (max_m.talk == MAX_TALK_RECORDING) {   // the band, and the send or the close the clock owes (max_ui_talk_due)
         sooner(&ms, MAX_TALK_FRAME_MS);
-        until(&ms, max_m.talk_heard ? max_m.talk_quiet_from + MAX_SILENCE_MS : max_m.talk_from + MAX_HEAR_MS, now_ms);
+        if (max_m.talk_heard) {
+            until(&ms, max_m.talk_quiet_from + MAX_SILENCE_MS, now_ms);
+            until(&ms, max_m.talk_from + MAX_TALK_MAX_MS, now_ms);
+        } else {
+            until(&ms, max_m.talk_from + MAX_HEAR_MS, now_ms);
+        }
     }
     if (max_m.view == MAX_VIEW_ATTENTION && max_m.attn != MAX_ATTN_ASK)
         until(&ms, max_m.attn_from + MAX_ATTN_END_MS, now_ms);
     if (ambient_waits()) until(&ms, max_m.idle_from + MAX_AMBIENT_MS, now_ms);
     if (max_notice_shown(now_ms)) until(&ms, max_m.notice_until, now_ms);
     if (max_toast_shown(now_ms)) until(&ms, max_m.toast_from + MAX_TOAST_MS, now_ms);
+    if (max_done_shown(now_ms)) until(&ms, max_m.done_from + MAX_DONE_NOTE_MS, now_ms);
     if (max_m.link) ms = max_form_wake(now_ms, max_ask_wake(now_ms, ms));   // a read again, a poll, a reply overdue
     sooner(&ms, max_motion_ms(now_ms));   // the drawing's own motion
     return ms ? ms : 1;
@@ -840,6 +898,12 @@ bool max_toast_shown(uint32_t now_ms)
 {
     return max_m.toast_id[0] && max_attn_holds(max_m.toast_id, max_m.toast_attn) &&
            now_ms - max_m.toast_from < MAX_TOAST_MS;
+}
+
+bool max_done_shown(uint32_t now_ms)
+{
+    return max_m.done_id[0] && max_attn_holds(max_m.done_id, MAX_ATTN_DONE) &&
+           now_ms - max_m.done_from < MAX_DONE_NOTE_MS;
 }
 
 bool max_can_talk(const max_agent_t *a)

@@ -20,6 +20,7 @@
 #define MAX_DONE_MS 60000u          // how long a finished turn's summary stays on its lane
 #define MAX_WAKE_MS 60000u          // the render task's longest sleep when nothing drawn depends on the time
 #define MAX_TOAST_MS 5000u          // what needs a person who is talking is announced this long, as the Pro's toast
+#define MAX_DONE_NOTE_MS 6000u      // a finished turn's note at the bottom right (V3 kDoneNoteFor)
 
 // The glass, 1920 x 480 at about 225 ppi (8.86 px a mm), or the demo bar's 1920 x 415. Columns, left to right, on one
 // row 22 px from the glass's ends: the room (one agent, large), the lanes (the others, up to three a page sharing their
@@ -43,13 +44,21 @@ typedef enum { MAX_VIEW_OVERVIEW, MAX_VIEW_AGENT, MAX_VIEW_ATTENTION, MAX_VIEW_I
 typedef enum { MAX_ATTN_ASK, MAX_ATTN_DONE, MAX_ATTN_FAIL } max_attn_t;
 // pro_agent_row_t.caps as bits: no letters string (NULL) is all of them, as the dial reads it.
 enum { MAX_CAP_VOICE = 1, MAX_CAP_FOCUS = 2, MAX_CAP_ANSWER = 4, MAX_CAPS_ALL = 7 };
-#define MAX_CELLS 5                 // agents on one page of Overview
-#define MAX_SEGS 6                  // agents on the agent page's strip
+#define MAX_CELLS 3                 // App Detail's row: the cells on the glass at once, and an open agent's window
 #define MAX_INBOX 12                // notices kept, newest first
 #define MAX_LEVELS 48               // the band's waveform: the mic's last levels, a tick each
 #define MAX_SPEECH_LEVEL 2          // a level at least this is speech (pro_rec_level: 0..4)
-#define MAX_HEAR_MS 4000u           // nothing heard this long after the mic opened: it closes
-#define MAX_SILENCE_MS 1600u        // quiet this long after speech: the recording is sent
+#define MAX_HEAR_MS 5000u           // nothing heard this long after the mic opened: it closes, nothing sent
+#define MAX_SILENCE_MS 5000u        // quiet this long after speech: the recording is sent
+#define MAX_TALK_MAX_MS 600000u     // the longest recording (the Dial's 600 s): then it is sent
+// The Dial's touch, which the owner kept for the bar (18 Nov). While the mic is open only the Dial's tap sends: down
+// MAX_TAP_MIN_MS..MAX_TAP_MAX_MS, never farther than 1.2 mm from where it went down. A longer hold or a slide is the
+// dead zone: nothing happens and the mic stays open.
+#define MAX_TAP_MIN_MS 25u
+#define MAX_TAP_MAX_MS 350u
+#define MAX_TAP_FAR2 113            // 1.2 mm at 8.86 px a mm is 10.6 px: a send's farthest, squared
+#define MAX_HOLD_MS 650u            // a touch that opens the mic lets go before this (the Dial's hold)
+#define MAX_GUARD_MS 450u           // touches that begin this soon after the mic opens, a send or a cancel are part of it
 #define MAX_AMBIENT_MS 60000u       // nobody touched and nothing works or waits this long: Ambient
 #define MAX_ATTN_END_MS 8000u       // a done or failed turn's Attention goes back to Overview after this
 #define MAX_TALK_FRAME_MS 100u      // the band redraws this often while recording
@@ -149,12 +158,12 @@ typedef enum {
     MAX_HIT_TALK_SEND,   // the room's Send while recording
     MAX_HIT_TALK_CANCEL, // the room's Cancel while recording: nothing is sent
     MAX_HIT_TOAST,       // the toast: Attention for its agent (toast_id, toast_attn)
+    MAX_HIT_DONE_NOTE,   // a finished turn's note (done_id): its agent open, the mic closed, its done notices read
     MAX_HIT_FORM_SAY,    // the form's Say, while max_form_can_say(): a spoken name for its field
     MAX_HIT_PAGE,        // the pager: the next page of lanes, the first after the last
     // Demo V2's pages:
-    MAX_HIT_BACK,        // the agent page's Back: to Overview (a recording with words is sent, else cancelled)
-    MAX_HIT_SEG,         // arg: a strip segment (seg_id): show that agent, mic closed (a recording as Back)
-    MAX_HIT_BODY,        // the agent page's body: record (mic closed), or send now (recording)
+    MAX_HIT_AGENT_X,     // the open agent's X: a recording is dropped, nothing sent, and the row comes back
+    MAX_HIT_BODY,        // the open agent's panel: record (mic closed), or send now (recording)
     MAX_HIT_BELL,        // Overview's bell: Inbox
     MAX_HIT_APPS,        // Overview's app column: Apps (only drawn as a hit when there is another app)
     MAX_HIT_APP,         // arg: an app card on Apps (index in apps[]): pick it
@@ -217,8 +226,9 @@ typedef struct {
     char selected[ID_MAX];           // the agent page's agent, "" = none (it left the ring)
     char toast_id[ID_MAX];           // what needed the person while they talked or the form was up, from toast_from
     uint32_t toast_from;
-    max_attn_t toast_attn;           // why: a question, a turn done or failed
-    int page;                        // the page of lanes shown, 0-based, always within max_ui_pages()
+    max_attn_t toast_attn;           // why: a question or a failure
+    char done_id[ID_MAX];            // the last finished turn's agent, its note shown from done_from (max_done_shown)
+    uint32_t done_from;
     char notice[MAX_NOTICE_BYTES];
     uint32_t notice_until;
     max_talk_t talk;
@@ -237,25 +247,28 @@ typedef struct {
     bool harness_own;                // apps[0] is the bar's own Harness, its count the ring's (max_ui_apps)
     char picked[PRO_APP_ID_BYTES];   // the app the person picked on Apps, until an `apps` shows another
     unsigned news;                   // MAX_NEWS_* that rang since max_ui_take_news
+    bool rest_owed;                  // the demo's link came up: its first ring rests at once (max_ui_demo)
+    bool wake_to_apps;               // this Ambient's tap opens Apps (the demo's first); forgotten when it goes
     max_inbox_t inbox[MAX_INBOX];    // newest first
     int inbox_count;
-    int cell_page;                   // Overview's page of cells, within max_cell_pages()
+    int row_first;                   // App Detail's row: the first cell on the glass while no agent is open
+    char held_row[MAX_AGENTS][ID_MAX];   // the row's order when an agent opened, held while it is open (max_row)
+    int held_count;
+    char row_seen[MAX_AGENTS][ID_MAX];   // the row as last laid out, to see an agent move up past row_first
+    int row_seen_count;
     uint32_t talk_from;              // the recording's start (its clock)
     bool talk_heard;                 // speech was heard in this recording
     uint32_t talk_quiet_from;        // when the speech last stopped (the send ring fills from here)
+    bool talk_closed;                // the clock closed the mic on nothing heard: talk_id's page says so until it goes
     uint8_t levels[MAX_LEVELS];      // the mic's levels, oldest first
     int level_count;
     uint32_t idle_from;              // since when nothing works or waits (Ambient)
     bool wall_known;                 // the wall clock (max_ui_wall): Ambient's clock and date, else no clock
     uint8_t wall_hour, wall_min, wall_wday, wall_mday, wall_mon;   // local time; wday 0 = Sunday, mon 0 = January
     // What the last render drew, for the finger and the clock.
-    max_box_t cell_box[MAX_CELLS];
+    max_box_t cell_box[MAX_CELLS];   // the row's cells, or the slivers beside the open agent
     char cell_id[MAX_CELLS][ID_MAX];
     int cell_hits;
-    char seg_id[MAX_SEGS][ID_MAX];   // MAX_HIT_SEG's arg names one
-    max_box_t lane_box[MAX_LANES];
-    char lane_id[MAX_LANES][ID_MAX];
-    int lane_hits;
     max_hit_t hits[MAX_HITS];        // the card's buttons, the pager and New, the form's choices
     int hit_count;
     char card_id[ID_MAX];            // the room's agent as drawn, for its card's buttons ("" = none)
@@ -266,6 +279,11 @@ typedef struct {
     // The contact in progress.
     bool down, moved;
     int down_x, down_y;
+    uint32_t down_at;                // when it went down
+    int far2;                        // the farthest it went from there, squared px
+    bool held;                       // it began inside the guard, or the clock ended the talk under it: no voice of it
+    bool guarding;                   // a voice action's guard runs until guard_until (MAX_GUARD_MS)
+    uint32_t guard_until;
 } max_model_t;
 
 extern max_model_t max_m;
@@ -275,18 +293,17 @@ void max_copy(char *dst, size_t cap, const char *src);
 // max_copy for a name the screen shows: one that does not fit ends in an ellipsis, so a cut word never reads as whole.
 void max_copy_label(char *dst, size_t cap, const char *src);
 max_agent_t *max_find(const char *id);
-// The roster's indices in lane order: needs a person (asking, failed), then working, then the rest; roster order in
-// each group, so the order moves only when a state does. Returns the count.
-int max_order(int out[MAX_AGENTS]);
-// The pages of lanes: every agent but the room's, MAX_LANES a page.
-int max_pages(void);
+// App Detail's row as roster indices: by need (asking, working, failed, done, resting; the ring's order in each), or,
+// while an agent is open, in the order it opened on (those still in the ring), newcomers after them by need. Returns
+// the count.
+int max_row(int out[MAX_AGENTS]);
 // The seconds a lane's clock shows at now_ms, or -1 when it shows none.
 int64_t max_secs(const max_agent_t *, uint32_t now_ms);
 // Whether a finished lane still shows its summary, and the notice is up.
 bool max_note_shown(const max_agent_t *, uint32_t now_ms);
 bool max_notice_shown(uint32_t now_ms);
-// A digest of everything drawn that depends on the time (the agent page's clock, summary and "ago", Inbox's "ago",
-// the recording's band, a notice or the toast running out).
+// A digest of everything drawn that depends on the time (Inbox's "ago", the recording's band, a notice or the toast
+// running out).
 uint32_t max_time_key(uint32_t now_ms);
 // "m:ss" under an hour, else "h:mm:ss"; "" for a negative count.
 void max_fmt_elapsed(char *out, size_t cap, int64_t secs);
@@ -295,31 +312,34 @@ void max_fmt_elapsed(char *out, size_t cap, int64_t secs);
 void max_fmt_ago(char *out, size_t cap, uint32_t since_ms, uint32_t now_ms);
 // FNV-1a over n bytes, from h (2166136261u to start).
 uint32_t max_fnv(uint32_t h, const void *data, size_t n);
-// The lanes on the page shown, as roster indices, in max_order() without the room's agent. Returns how many.
-int max_visible(int out[MAX_LANES]);
-// An agent on a page of lanes not shown asks: the pager's badge.
-bool max_asks_off_page(void);
 bool max_notice_set(const char *text, uint32_t now_ms);   // for MAX_NOTICE_MS
 // A state change, with the turn's clock (stopped at the end of a turn, dropped when one we did not see start begins).
 void max_set_state(max_agent_t *, max_state_t st, uint32_t now_ms);
 
-// The toast is up: its agent still is what it announced (asking, done, failed), for MAX_TOAST_MS from toast_from.
+// The toast is up: its agent still is what it announced (asking, failed), for MAX_TOAST_MS from toast_from.
 bool max_toast_shown(uint32_t now_ms);
+// The done note is up: its agent is still in the ring and done, for MAX_DONE_NOTE_MS from done_from.
+bool max_done_shown(uint32_t now_ms);
 // The bar may record for this agent now: the link is up, nothing is recorded or sent, no form is up, and the agent is
 // neither on a permission prompt (Yes or No only) nor waiting on an answer that is on its way or in. Whether the agent
 // takes voice at all is max_takes_voice.
 bool max_can_talk(const max_agent_t *);
 
 // ---- Demo V2: which page is up (max_ui_model.c) ----
-// Put this page up; leaving Inbox marks every notice read. True when it changed.
+// Put this page up; leaving Inbox marks every notice read. Opening an agent holds the row's order until it closes;
+// Overview comes back with the closed agent one cell in from the left, or from any other page at the row's front.
+// True when it changed.
 bool max_show(max_view_t view);
+// Open this agent across the row (App Detail's agent page), the order of the row held.
+void max_open(const char *id);
 // Attention for this agent, for this reason, from now_ms (the edge light and a turn's end count from it).
 void max_attention(const char *id, max_attn_t why, uint32_t now_ms);
 // The agent still is what `why` says (asking, done, failed): Attention and the toast hold only while it is.
 bool max_attn_holds(const char *id, max_attn_t why);
-// An agent needs the person (a new question, a failed turn, an alert's summary): it rings (max_ui_take_news), an unread
-// notice in Inbox, and Attention takes the glass, unless a person talks or New Harness is up (then only the toast), or another agent's
-// question is on Attention (a question then waits its turn; a turn's end stays in Inbox).
+// An agent needs the person (a new question, a failed turn, an alert's summary): it rings (max_ui_take_news), and
+// an unread notice in Inbox. An alert's summary never takes the glass: its note (done_id) for MAX_DONE_NOTE_MS. Else
+// Attention takes the glass, unless a person talks or New Harness is up (then only the toast), or another agent's
+// question is on Attention (a question then waits its turn; a failure stays in Inbox).
 void max_attend(max_agent_t *, max_attn_t why, uint32_t now_ms);
 // A question back quietly (max_ui_question_quiet): its notice, and nothing more. The same notice keeps its place and
 // whether it was read; one Inbox does not hold comes in unread.
@@ -338,14 +358,12 @@ void max_unpark(const char *id);
 void max_next_question(const char *except, uint32_t now_ms);
 
 // ---- Demo V2: what the pages read (max_ui_nav.c) ----
-// Overview's cells on the page shown, as roster indices in roster order (the ring's own). Returns how many.
+// The row's cells on the glass while no agent is open, from row_first, as roster indices. Returns how many.
 int max_cells(int out[MAX_CELLS]);
-// Overview's pages of cells (0 with no agents).
-int max_cell_pages(void);
-// An agent on this page of cells waits on the person.
-bool max_page_waits(int page);
-// The agent page's strip: up to MAX_SEGS agents in roster order, a window that holds the selected one. Returns how many.
-int max_segs(int out[MAX_SEGS]);
+// The last row_first there is: the row's last cells fill the glass.
+int max_row_last(void);
+// The first of the row's MAX_CELLS on the glass with the agent at row index i open: a sliver before it where there is one.
+int max_open_first(int i, int n);
 // Inbox's unread notices.
 int max_unread(void);
 // The shown app's entry, or NULL (no `apps` yet, or it lists no such app).
@@ -361,8 +379,11 @@ const char *max_app_of(const max_agent_t *);
 bool max_takes_answers(const max_agent_t *);
 // Whether the bar records for this agent (caps v).
 bool max_takes_voice(const max_agent_t *);
-// The status word under a cell and on its segment: "Needs you", the spinner word, "Done", "Failed", "Resting".
+// The status word on a cell's chip: "Needs you", the spinner word, "Done", "Failed", "Resting".
 const char *max_status_word(const max_agent_t *);
+// What a cell says of the agent's task: at work its activity (else its last step); otherwise its question, failure or
+// summary. "" when there is none.
+const char *max_summary(const max_agent_t *);
 // The letters pro_agent_row_t.caps carries as MAX_CAP_* bits (NULL: all).
 uint8_t max_caps_of(const char *letters);
 

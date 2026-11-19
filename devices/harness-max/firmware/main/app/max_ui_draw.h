@@ -17,6 +17,8 @@ enum {
     APP_BG = 0x0C0C11, APP_RIM = 0x24242C,                            // an Apps card
     ALLOW_INK = 0x00130B, DENY_INK = 0xFFB4B4, DENY_RIM = 0xAA3333,   // Allow's words; Deny's words and outline
     MONO_INK = 0xF3EBFF, TRACK = 0x2C2C35, FLOW = 0x111111,           // a command; the send ring's track; the flow bar
+    CHIP_IDLE = 0x6B6B77,                                             // a resting agent's chip
+    PANEL = 0x060609, BAND_BG = 0x0B0B0F,                             // the open agent; its band at rest (rim APP_RIM)
 };
 // Diego's mockup is 1480 x 320. Across, a design px is 1920 / 1480 of the glass's; down, 1.5 px at 480, which MAX_Y
 // scales to the demo bar's 415. The text keeps its size at both heights.
@@ -69,25 +71,31 @@ unsigned max_mix(unsigned a, unsigned b, unsigned pct);
 void max_hit(int x, int y, int w, int h, max_hit_kind_t kind, int arg);
 
 // ---- icons, the mockup's 24-unit strokes at `size` px from (x, y) ----
-void max_icon_back(ht_scene_t *s, int x, int y, int size, unsigned rgb);   // a chevron to the left
 void max_icon_x(ht_scene_t *s, int x, int y, int size, unsigned rgb);
 void max_icon_bell(ht_scene_t *s, int x, int y, int size, unsigned rgb);
 void max_icon_grid(ht_scene_t *s, int x, int y, int size, unsigned rgb);
 void max_icon_mic(ht_scene_t *s, int x, int y, int size, unsigned rgb);
-// An app's icon, size x size from (x, y): a rounded square in the app's colour with its initial. `app` is an app id
-// ("orca") or name ("Orca"); `name` gives the initial ("" falls back to `app`).
+// An app's icon, size x size from (x, y): its own (V3's, pre-rendered at that size) when there is one, else a rounded
+// square in the app's colour with its initial. `app` is an app id ("orca") or name ("Orca"); `name` gives the initial
+// ("" falls back to `app`).
 void max_app_icon(ht_scene_t *s, int x, int y, int size, const char *app, const char *name);
+// The app's own icon at exactly size px (max_ui_icons.c), or NULL. The app by V3's key: case and anything but letters
+// and digits aside ("VS Code": "vscode").
+const ht_pro_bitmap_t *max_icon_find(const char *app, int size);
 
 // ---- what an agent's state looks like ----
 // The status word's colour: working lavender, waiting yellow, done green, failed red, resting faint.
 unsigned max_state_ink(const max_agent_t *);
 // Its rail's: the same, failed in the rail's red, resting dark.
 unsigned max_rail_ink(const max_agent_t *);
+// Its chip's and glow's: the rail's, a resting agent's a quiet grey.
+unsigned max_chip_ink(const max_agent_t *);
+// The state chip (App Detail): a pill in the chip's colour (.15 over the ground, its rim .4), its dot and the status
+// word, at most max_w wide, from x and centred on cy; `small` beside the open agent's name. Returns its width.
+int max_chip(ht_scene_t *s, int x, int cy, const max_agent_t *a, bool small, int max_w);
+int max_chip_w(const max_agent_t *a, bool small, int max_w);
 // An Inbox notice's or Attention's colour by why it came.
 unsigned max_kind_ink(max_attn_t kind);
-// The engine as the agent page names it ("Claude Code") and its colour.
-const char *max_engine_label(char *out, size_t cap, const char *engine);
-unsigned max_engine_ink(const char *engine);
 
 // ---- buttons ----
 typedef enum { STYLE_PLAIN, STYLE_CHOSEN, STYLE_PRIMARY, STYLE_REJECT, STYLE_GHOST, STYLE_OFF } max_style_t;
@@ -113,9 +121,11 @@ uint32_t max_pet_next_ms(const char *engine, pod_scene_t scene, uint32_t now_ms)
 void max_motion(uint32_t now_ms, uint32_t ms);
 
 // ---- the pages, each over the whole glass ----
+// App Detail: the app column, the row of agents and the bell; an agent open across the row while the agent page is up.
 void max_draw_overview(ht_scene_t *s, uint32_t now_ms);                          // max_ui_overview.c
 void max_draw_ambient(ht_scene_t *s);                                            // max_ui_overview.c
-void max_draw_agent(ht_scene_t *s, const max_agent_t *a, uint32_t now_ms);       // max_ui_agent.c
+// The open agent in the row, x..x + w over the glass's height (max_ui_agent.c).
+void max_draw_agent(ht_scene_t *s, const max_agent_t *a, int x, int w, uint32_t now_ms);
 void max_draw_attention(ht_scene_t *s, const max_agent_t *a, uint32_t now_ms);   // max_ui_card.c
 void max_draw_inbox(ht_scene_t *s, uint32_t now_ms);                             // max_ui_lists.c
 void max_draw_apps(ht_scene_t *s);                                               // max_ui_lists.c
