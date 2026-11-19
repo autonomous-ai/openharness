@@ -323,6 +323,7 @@ activity, then the screen, then two idle looks on one turn for one here. The fir
 | `started` | installing or starting | |
 | `working` | it works (a draft in its box counts) | `ask`: the last thing it was told |
 | `needs_person` | a question or a permission; for a cloud harness, its maker's own state | `question`: its last words, to `--chars` (4000) |
+| `held` | Harness cannot follow it until the person acts | `namedState`: what to do; a new line when it changes |
 | `background` | idle after a turn, with background commands it started still running | `backgroundCommands`: how many; a new line each time the number changes |
 | `done` | idle after a turn, once none runs | `summary`: its last answer, to `--chars`; `truncated`; `tools`; `backgroundCommands` |
 | `idle` | idle with nothing asked of it, past its start | `backgroundCommands` |
@@ -390,9 +391,11 @@ commands, and the person for one that needs the person; `close` says how many of
 agent's `ps` ends with its idle one to read, its busy ones to wait for, or a start, and shows its own first and at
 most 15 rows (`--all` shows every one).
 A harness waiting on a question or a permission is shown as `needs the person` (JSON keeps `needs-input` and adds
-`needsPerson: true`). A refusal (`SPAWN_LIMIT`, `TURNED_OFF`, `NOT_YOURS`) exits 5, with `code`, `reason` and
-`next` in its JSON. `harness help agents` prints the commands, states, exit codes and rules on one screen, and
-`harness --help` starts with it when an agent runs it.
+`needsPerson: true`). An agent Harness cannot follow until the person acts is shown as `held`, with what to do
+(`namedState`; JSON adds `needsPerson: true`): `wait` ends on it with exit 3. A named state Harness recovers from by
+itself does not end `wait`: `show` prints it, and so does `wait` when its time is up. A refusal (`SPAWN_LIMIT`,
+`TURNED_OFF`, `NOT_YOURS`) exits 5, with `code`, `reason` and `next` in its JSON. `harness help agents` prints the
+commands, states, exit codes and rules on one screen, and `harness --help` starts with it when an agent runs it.
 
 ## Your devices
 

@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { IdentityReadUnavailable, MISSING_HELPER, REPLACED_PROGRAM } from '../engines/kit/identityScan.js'
 import { parseDescriptors } from '../engines/kit/nativeDescriptors.js'
 import { NativeEvidenceBudget } from '../engines/kit/nativeEvidence.js'
 import { controlDescriptors, nativeProcessControl, parseNativeProcessControl } from './nativeProcessControl.js'
@@ -55,6 +56,8 @@ const record = (pid = 42) => ({ pid, parentPid: 1, startSeconds: 1_790_000_000, 
   commandHex: hex('codex'), imageHex: hex('/fixture/codex'), commandDigest: 'a'.repeat(64), fds: [regular] })
 const output = (row: unknown = record(), header: unknown = { schema: 2, mode: 'control', parent: 0, children: [] }) => `${JSON.stringify(header)}\n${JSON.stringify(row)}\n`
 const parse = (text: string) => parseNativeProcessControl(text, [42], 0, budget())
+const helperBytes = Buffer.alloc(64, 7)
+const helperArtifact = JSON.stringify({ schema: 1, size: helperBytes.length, base64: helperBytes.toString('base64'), sha256: createHash('sha256').update(helperBytes).digest('hex') })
 function file(path: string, text: string) { mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, text) }
 function processRow(pid = 42, parent = 1, command = 'codex', ticks = 100) {
   const root = join(host.root, 'proc', String(pid))
@@ -76,6 +79,8 @@ afterEach(() => {
 })
 
 describe('strict Darwin control protocol', () => {
+  // A build that bundles a valid helper; the helper's preparation and execution are faked per test.
+  beforeEach(() => { vi.stubGlobal('__DARWIN_PROCESS_IMAGES__', helperArtifact) })
   it('retains exact birth, image, command digest and lossless file keys without argv/environment text', () => {
     const snapshot = parse(output()), row = snapshot.rows.get(42)!
     expect(row).toMatchObject({ pid: 42, birth: '1790000000:123456', command: 'codex', imagePath: '/fixture/codex', commandDigest: 'a'.repeat(64) })
@@ -126,11 +131,14 @@ describe('strict Darwin control protocol', () => {
   it('names a live process whose program was replaced on disk, and only that, when the probe fails', async () => {
     const live = process.pid, gone = 2_000_000_000
     const paths = (pid: number) => `${JSON.stringify({ schema: 1, mode: 'paths' })}\n${JSON.stringify({ pid, unavailable: true })}\n`
-    for (const [pid, expected] of [[live, 'replaced on disk'], [gone, 'probe did not complete']] as const) {
+    for (const [pid, expected] of [[live, { message: REPLACED_PROGRAM }], [gone, 'probe did not complete']] as const) {
       host.exec.mockImplementation((_path, args, _options, callback) => args[0] === '--paths'
         ? callback(null, paths(pid), '')
         : callback(Object.assign(Error('exit 75'), { code: 75 }), Buffer.alloc(0), Buffer.alloc(0)))
-      await expect(nativeProcessControl([pid], 0, budget())).rejects.toThrow(expected)
+      const read = nativeProcessControl([pid], 0, budget())
+      await expect(read).rejects.toBeInstanceOf(IdentityReadUnavailable)
+      if (typeof expected === 'string') await expect(read).rejects.toThrow(expected)
+      else await expect(read).rejects.toMatchObject(expected)
       expect(host.exec.mock.calls.at(-1)?.[1]).toEqual(['--paths', String(pid)])
     }
     host.exec.mockClear().mockImplementation((_path, _args, _options, callback) => callback(null, Buffer.from(output({ ...record(), imageHex: 'zz' })), Buffer.alloc(0)))
@@ -147,6 +155,20 @@ describe('strict Darwin control protocol', () => {
     await expect(nativeProcessControl([42], 0, new NativeEvidenceBudget(10))).rejects.toThrow('unavailable')
     host.exec.mockImplementationOnce(() => { throw Error('spawn denied') })
     await expect(nativeProcessControl([42], 0, budget())).rejects.toThrow('could not start')
+  })
+  it('holds a build with no usable helper with the person\'s sentence, at once', async () => {
+    vi.unstubAllGlobals()
+    const read = nativeProcessControl([42], 0, budget())
+    await expect(read).rejects.toBeInstanceOf(IdentityReadUnavailable)
+    await expect(read).rejects.toMatchObject({ message: MISSING_HELPER })
+    expect(host.helper).not.toHaveBeenCalled()
+    expect(host.exec).not.toHaveBeenCalled()
+  })
+  it('keeps a valid helper that could not be prepared as the transient reason', async () => {
+    host.helper.mockResolvedValueOnce(null)
+    const read = nativeProcessControl([42], 0, budget())
+    await expect(read).rejects.toThrow('the native control helper is unavailable')
+    await expect(read).rejects.not.toMatchObject({ message: MISSING_HELPER })
   })
   it('recovers an evicted helper from pinned bytes using only control calls', async () => {
     const bytes = Buffer.alloc(64, 7)

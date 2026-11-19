@@ -386,8 +386,11 @@ export function createBinding({
       if (!current()) return false
       const reason = error instanceof Error ? error.message : String(error)
       const set = registry.setIdentityHold(agent.agentId, reason)
-      if (set) announceSession(agent)
-      console.log(`[discovery] ${sid(agent.agentId)} binding held · ${reason}`)
+      // Said when the row changes, not on every pass: a hold only the person can clear lasts hours.
+      if (set) {
+        announceSession(agent)
+        console.log(`[discovery] ${sid(agent.agentId)} binding held · ${reason}`)
+      }
       return set
     }
     const commit = async (input: Parameters<typeof registry.register>[0]) => {

@@ -2,8 +2,11 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
+import { MISSING_HELPER, REPLACED_PROGRAM } from '../engines/kit/identityScan.js'
+import { OPENCLAW_STATES } from '../engines/openclaw/contract.js'
+import { OTHER_ENGINE_STATES } from '../engines/otherEngines.js'
 import { Ledger, ledgerPath } from './ledger.js'
-import { asSaid, callerOf, clip, forAgent, lastTurn, matching, outsideCaller, rowsOf, stateOf, STOPPED_WITHIN_MS, type Frame, type Row } from './model.js'
+import { asSaid, callerOf, clip, forAgent, lastTurn, matching, namedStateOf, outsideCaller, rowsOf, stateOf, STOPPED_WITHIN_MS, type Frame, type Row } from './model.js'
 
 describe('forAgent', () => {
   const row = (name: string, over: Partial<Row> = {}): Row => ({ name, id: name, agent: 'Codex', machine: 'm', state: 'idle', folder: null, branch: null,
@@ -41,6 +44,31 @@ describe('a harness as the agent verbs show it', () => {
     expect(stateOf(frame('a', { activity: { state: 'working' } }))).toBe('working')
     expect(stateOf(frame('a'))).toBe('idle')
     expect(stateOf(frame('a', { activity: null }))).toBe('unknown')
+  })
+
+  it('knows a held named state by the list, and any other sentence as recovering', () => {
+    for (const sentence of [MISSING_HELPER, REPLACED_PROGRAM, OPENCLAW_STATES.noGateway, "OpenClaw's local run stopped: boom"]) {
+      expect(namedStateOf(frame('a', { namedState: sentence }))).toEqual({ sentence, held: true })
+    }
+    // A sentence this client does not know, as from a newer daemon, is never one only the person can fix.
+    for (const sentence of [OTHER_ENGINE_STATES.lost, 'A state from a newer Harness.']) {
+      expect(namedStateOf(frame('a', { namedState: sentence }))).toEqual({ sentence, held: false })
+    }
+    expect(namedStateOf(frame('a', { namedState: '' }))).toBeNull()
+    expect(namedStateOf(frame('a', { namedState: 42 as unknown as string }))).toBeNull()
+    expect(namedStateOf(frame('a'))).toBeNull()
+    expect(namedStateOf(frame('a', { namedState: MISSING_HELPER, status: 'stopped' }))).toBeNull()
+    expect(namedStateOf(frame('a', { namedState: MISSING_HELPER, status: 'offline' }))).toBeNull()
+    expect(namedStateOf(frame('a', { namedState: MISSING_HELPER, location: 'cloud', cloud: { state: 'working' } }))).toBeNull()
+  })
+
+  it('lists a held harness as held, with the ones needing the person', () => {
+    const held = frame('held', { namedState: MISSING_HELPER, activity: { state: 'working' }, updatedAt: '2026-10-11T09:00:00Z' })
+    const rows = rowsOf([frame('calm'), held, frame('mending', { namedState: OTHER_ENGINE_STATES.lost })],
+      { machineId: 'm', machine: 'mac', caller: null, ledger: ledger(), now: NOW, all: false })
+    expect(rows.map((r) => [r.name, r.state])).toEqual([['held', 'held'], ['calm', 'idle'], ['mending', 'idle']])
+    const many = [...Array.from({ length: 20 }, (_, i) => ({ ...rows[1], name: `idle${i}` })), rows[0]]
+    expect(forAgent(many).shown[0].name).toBe('held')
   })
 
   it('knows the caller by its pane in any state, and a terminal is not one', () => {
