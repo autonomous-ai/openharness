@@ -884,8 +884,12 @@ class _TerminalPageState extends State<TerminalPage>
         ?.agents
         .where((a) => a.id == widget.agentId)
         .firstOrNull;
+    // After the first frame: the probe notifies as it starts, and a page built inside another
+    // widget's build would mark that one dirty mid-build.
     if (listed != null && AppNotifier.changeAgentTarget(listed) != null) {
-      unawaited(widget.notifier.probeEngines(widget.machineId));
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) unawaited(widget.notifier.probeEngines(widget.machineId));
+      });
     }
     _lifecycle =
         WidgetsBinding.instance.lifecycleState ?? AppLifecycleState.resumed;
