@@ -1245,7 +1245,9 @@ export class SessionInputController {
    * Enter only when its box holds the message (never a second paste).
    */
   private async retryOpenclaw(sessionId: string, session: RegisteredSession, state: InputState): Promise<void> {
-    if (state.ambiguousDispatch) {
+    // A write that may have gone through is given up, but a first task's, which is never given up here: its box says
+    // whether OpenClaw refused it, and an unread pane gets no Enter.
+    if (state.ambiguousDispatch && !state.firstTask) {
       this.failAmbiguousSubmission(sessionId, state)
       return
     }
@@ -1264,7 +1266,7 @@ export class SessionInputController {
     }
     // An empty box sent the message, and other text in it is the person's, which an Enter would send. With no reading,
     // the blind Enters every engine gets, and no more.
-    if (screen ? openclawBoxHolds(screen.box, state.awaitingContent ?? '') : state.retries < SUBMIT_MAX_RETRIES) {
+    if (screen ? openclawBoxHolds(screen.box, state.awaitingContent ?? '') : state.retries < SUBMIT_MAX_RETRIES && !state.ambiguousDispatch) {
       await this.resubmit(sessionId, session, state)
       return
     }
