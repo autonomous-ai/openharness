@@ -2,7 +2,7 @@
 // they say reaches the core through its API alone, and the fleet failing costs the dial nothing.
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
-import { delimiter, dirname, join, parse } from 'node:path'
+import { delimiter, dirname, join, parse, sep } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import type { CableHostWiring, DaemonCableHost } from '../cable/cableHost.js'
 import { AppFilter, FRONT_SETTLE_MS } from '../cable/hosts/appFilter.js'
@@ -8547,7 +8547,9 @@ describe("the Claude app's Code sessions, from its store (docs/plans/2026-11-19-
 
   it.skipIf(process.platform === 'win32')('with no reader given the devices read the store under the home folder', async () => {
     vi.useRealTimers()
-    onTestFinished(() => rmSync(join(homedir(), 'Library'), { recursive: true, force: true }))
+    // The suite's throwaway home (vitest.setup.ts), never the person's: only the Claude app's folder the fixture makes goes.
+    expect(homedir().startsWith(`${tmpdir()}${sep}`)).toBe(true)
+    onTestFinished(() => rmSync(dirname(ROOT), { recursive: true, force: true }))
     claudeAppFixture(ROOT).write({ localId: LOCAL, cliSessionId: SESSION, cwd: '/work/api', title: 'Fix the build', lastActivityAt: Date.now() })
     const { port } = start({ faults: ['fleet'], orca: { ...orca, platform: 'darwin' }, tty: async () => undefined })
     attach(port)
