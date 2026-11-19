@@ -2,9 +2,11 @@
  * `harness device claude …`, `codex …`, `vscode …` and `orca …` as a person, the plugin's hook and its mod run them:
  * a fake `claude` (a ClaudeRun that answers from a table), Claude Code's settings in a throwaway CLAUDE_CONFIG_DIR,
  * Codex's home a throwaway folder, VS Code a fake one under a throwaway home, a fake `orca` (testing/fakeOrcaCli.ts)
- * holding the plugin's approvals, and a daemon and the devices' listener on sockets in a throwaway folder.
+ * holding the plugin's approvals, and a daemon and the devices' listener on sockets in a throwaway folder (on Windows
+ * their pipes, stood in by sockets named as pipes are).
  * The real `claude`, `code`, `orca`, ~/.claude, ~/.codex, ~/.vscode and the daemon are never touched.
  */
+import { randomBytes } from 'node:crypto'
 import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { Socket } from 'node:net'
@@ -15,8 +17,13 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { DIAL_SKILL } from '../devices/dialSkill.js'
 import { readOrcaConnected, readPluginHomes, readRemoved, writeRemoved, writeSetup } from '../devices/dialSkillFiles.js'
 import { devicesListenerPath } from '../devices/listenerPath.js'
+import { createDevicesProof, DEVICES_TOKEN_FILE, devicesPipe, devicesRecordPath, writeDevicesRecord } from '../devices/listenerPipe.js'
+import { writeDaemonRecord } from '../lib/daemonRecord.js'
 import { listenLocalSocket, unixSocketPath } from '../lib/localSocket.js'
 import { socketIsPrivate } from '../lib/localTransport.js'
+import type { HostLiveness } from '../lib/processProof.js'
+import { daemonPipe } from '../lib/windows/daemonPipe.js'
+import { ensureDaemonToken } from '../lib/windows/pipeAuth.js'
 import { harnessPath } from '../config/harnessHome.js'
 import { DEVICE_USAGE, runDeviceCommand, takesConnect, type DeviceDeps } from './command.js'
 import type { ClaudeRun } from '../devices/claudePlugin.js'
@@ -1054,10 +1061,6 @@ describe('harness device orca link and vscode link', () => {
     expect(await device([host, 'link'], { dataDir: plain })).toEqual(link(plain, false))
   })
 
-  it.each(['orca', 'vscode'])('%s link: on Windows it prints {"daemon":false,"devicesReady":false} and exits 0', async (host) => {
-    expect(await device([host, 'link'], { platform: 'win32' })).toEqual({ code: 0, err: [], out: ['{"daemon":false,"devicesReady":false}'] })
-  })
-
   it.each(['orca', 'vscode'])('%s link: with the harness-device plugin off in Claude Code it prints the same', async (host) => {
     const dataDir = folder()
     pluginOn(false)
@@ -1083,6 +1086,100 @@ describe('harness device orca link and vscode link', () => {
       expect(await device(argv), argv.join(' ')).toEqual({ code: 1, out: [], err: [DEVICE_USAGE] })
     }
     expect(DEVICE_USAGE).not.toMatch(new RegExp(`${host} link`))
+  })
+
+  describe('on Windows', () => {
+    /** A data folder the token checks take, short enough for the sockets that stand in for its pipes. */
+    function pipeFolder(): string {
+      const dir = mkdtempSync('/tmp/dc-pipe-')
+      cleanup.push(() => rmSync(dir, { recursive: true, force: true }))
+      return dir
+    }
+    const pipeIn = (dir: string) => join(dir, `harness-${randomBytes(16).toString('hex')}`)
+    const filetime = (ms: number) => `w:${(BigInt(Math.floor(ms)) + 11_644_473_600_000n) * 10_000n}`
+    /** The pipes found as `link` finds them, with the recorded processes taken as running unless [devices] says
+     *  otherwise: off Windows there is no process table to read. */
+    const found = (devices: HostLiveness = { alive: () => true }): DeviceDeps['pipes'] => ({
+      daemon: (dataDir, port) => daemonPipe(dataDir, port, { alive: () => true }),
+      devices: (dataDir) => devicesPipe(dataDir, createDevicesProof({ liveness: devices })),
+    })
+    /** The daemon's pipe recorded in [dataDir] with its token, and [serve] listening there (by default the daemon,
+     *  answering its status with the token's proof). */
+    async function daemonPipeAt(dataDir: string, serve: 'daemon' | 'none' | 'squatter' | 'silent' = 'daemon'): Promise<void> {
+      const pipe = pipeIn(dataDir)
+      const token = ensureDaemonToken(dataDir)
+      writeDaemonRecord(dataDir, PORT, PORT, { pipe, pid: process.pid })
+      const status = JSON.stringify({ pid: 4242, corePid: 4243 })
+      if (serve === 'daemon') {
+        const served = await listenLocalSocket((_req, res) => res.end(status), pipe, { token })
+        cleanup.push(served.close)
+      } else if (serve !== 'none') {
+        // Whatever took the name: an answer with no proof, or none at all.
+        const server = createServer((_req, res) => { if (serve === 'squatter') res.end(status) })
+        cleanup.push(() => new Promise<void>((resolve) => { server.closeAllConnections(); server.close(() => resolve()) }))
+        await new Promise<void>((resolve) => { server.listen(pipe, resolve) })
+      }
+    }
+    /** The devices' record and token in [dataDir]; nothing listens, as link connects to nothing there. */
+    function devicesPipeAt(dataDir: string): { pipe: string; token: string } {
+      const pipe = pipeIn(dataDir)
+      const token = ensureDaemonToken(dataDir, DEVICES_TOKEN_FILE).toString('hex')
+      writeDevicesRecord(dataDir, { pipe, pid: process.pid })
+      return { pipe, token }
+    }
+    const ready = (dataDir: string, daemon: boolean, devices: { pipe: string; token: string }) => ({
+      code: 0, err: [],
+      out: [JSON.stringify({ daemon, devicesPipe: devices.pipe, devicesToken: devices.token, devicesReady: true, devicesRecord: join(dataDir, 'devices.json') })],
+    })
+    const notReady = (dataDir: string, daemon: boolean) =>
+      ({ code: 0, err: [], out: [JSON.stringify({ daemon, devicesReady: false, devicesRecord: join(dataDir, 'devices.json') })] })
+
+    it.each(['orca', 'vscode'])('%s link: the daemon answering on its pipe and the devices\' pipe recorded, it prints both pipes\' state, the devices\' pipe, token and record', async (host) => {
+      const dataDir = pipeFolder()
+      await daemonPipeAt(dataDir)
+      const devices = devicesPipeAt(dataDir)
+      expect(devices.token).toMatch(/^[0-9a-f]{64}$/)
+      expect(devices.token).toBe(readFileSync(join(dataDir, 'devices-token'), 'utf8').trim())
+      expect(await device([host, 'link'], { dataDir, platform: 'win32', pipes: found() })).toEqual(ready(dataDir, true, devices))
+    })
+
+    it.each(['orca', 'vscode'])('%s link: no devices\' pipe to dial is devicesReady false with the record\'s path, and no pipe or token', async (host) => {
+      const dataDir = pipeFolder()
+      await daemonPipeAt(dataDir)
+      expect(devicesRecordPath(dataDir)).toBe(join(dataDir, 'devices.json'))
+      // No record yet.
+      expect(await device([host, 'link'], { dataDir, platform: 'win32', pipes: found() })).toEqual(notReady(dataDir, true))
+      // A record and the daemon's token, but no token of the devices' own.
+      writeDevicesRecord(dataDir, { pipe: pipeIn(dataDir), pid: process.pid })
+      expect(await device([host, 'link'], { dataDir, platform: 'win32', pipes: found() })).toEqual(notReady(dataDir, true))
+      ensureDaemonToken(dataDir, DEVICES_TOKEN_FILE)
+      // The recorded process is gone.
+      expect(await device([host, 'link'], { dataDir, platform: 'win32', pipes: found({ alive: () => false }) })).toEqual(notReady(dataDir, true))
+      // Review Focus 1: it crashed and its pid now runs a process that started after the record was written.
+      const written = statSync(devicesRecordPath(dataDir)).mtimeMs
+      const reused: HostLiveness = { alive: () => true, rows: async () => [{ pid: process.pid, executable: 'other.exe', startMarker: filetime(written + 60_000) }] }
+      expect(await device([host, 'link'], { dataDir, platform: 'win32', pipes: found(reused) })).toEqual(notReady(dataDir, true))
+    })
+
+    it.each(['orca', 'vscode'])('%s link: daemon is false with no daemon\'s pipe, one nothing listens on, and one whose answer has no proof', async (host) => {
+      for (const serve of [undefined, 'none', 'squatter'] as const) {
+        const dataDir = pipeFolder()
+        if (serve) await daemonPipeAt(dataDir, serve)
+        const devices = devicesPipeAt(dataDir)
+        expect(await device([host, 'link'], { dataDir, platform: 'win32', pipes: found() }), serve).toEqual(ready(dataDir, false, devices))
+      }
+    })
+
+    it('a daemon\'s pipe that does not answer within a second is daemon false', async () => {
+      const dataDir = pipeFolder()
+      await daemonPipeAt(dataDir, 'silent')
+      expect(await device(['orca', 'link'], { dataDir, platform: 'win32', pipes: found() })).toEqual(notReady(dataDir, false))
+    })
+
+    it.each(['orca', 'vscode'])('%s link: with nothing recorded it finds neither pipe by itself', async (host) => {
+      const dataDir = pipeFolder()
+      expect(await device([host, 'link'], { dataDir, platform: 'win32' })).toEqual(notReady(dataDir, false))
+    })
   })
 })
 
