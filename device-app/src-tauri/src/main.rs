@@ -123,7 +123,13 @@ fn start(handle: &AppHandle, events: Sender<Event>, queue: Receiver<Event>) -> t
         })
         .build(handle)?;
 
-    let (app, first) = App::new(saved, runner.find_cli(), SystemDesktopApp.installed(), clock.now());
+    let (app, first) = App::new(
+        saved,
+        runner.find_cli(),
+        SystemDesktopApp.installed(),
+        clock.now(),
+        harness_device::update::install_exits_app(),
+    );
     let looping = handle.clone();
     thread::spawn(move || run_loop(&looping, &log, app, &runner, first, queue));
 

@@ -47,8 +47,9 @@ pub struct App {
     desktop_running: bool,
     /// When the last update check started.
     checked_at: Option<u64>,
-    /// A check, or the install it found, has not answered, or the install waits for the relaunch: no second check
-    /// starts, however long the Mac slept or the relaunch waits. Only the relaunch's new process starts without it.
+    /// A check, or the download or install it found, has not answered, or the install is held, or waits for the
+    /// relaunch: no second check starts, however long the Mac slept or the wait lasts. Only the new process starts
+    /// without it.
     updating: bool,
     /// The version the last check found.
     found: Option<String>,
@@ -58,10 +59,20 @@ pub struct App {
     failed: Option<Failed>,
     /// An update is installed: the app relaunches on the first tick with nothing running.
     relaunch: bool,
+    /// Installing ends the app (Windows): the install waits for what a relaunch waits for.
+    install_exits_app: bool,
+    /// An update is downloaded where installing ends the app: it installs on the first tick with nothing running.
+    install_held: bool,
 }
 
 impl App {
-    pub fn new(saved: Saved, cli_found: bool, desktop_installed: bool, now: u64) -> (App, Vec<Effect>) {
+    pub fn new(
+        saved: Saved,
+        cli_found: bool,
+        desktop_installed: bool,
+        now: u64,
+        install_exits_app: bool,
+    ) -> (App, Vec<Effect>) {
         let keep = KeepAlive::new();
         let state = AppState {
             cli: CliState::Removed,
@@ -93,6 +104,8 @@ impl App {
             skipped: None,
             failed: None,
             relaunch: false,
+            install_exits_app,
+            install_held: false,
         };
         let mut effects = Vec::new();
         // A CLI seen once and gone now was removed on purpose: it stays Removed, never installed on its own.
@@ -130,6 +143,17 @@ impl App {
                     self.relaunch = false;
                     self.stop_watch(effects);
                     effects.push(Effect::Relaunch);
+                    return;
+                }
+                if self.install_held && !self.relaunch_waits() {
+                    self.install_held = false;
+                    self.installing();
+                    // Drawn and said first: the install ends this process before anything after it runs.
+                    self.send_menu(effects);
+                    if let Some(version) = &self.found {
+                        effects.push(Effect::Log(format!("update: installing {version}")));
+                    }
+                    effects.push(Effect::InstallUpdate);
                     return;
                 }
                 match self.state.cli {
@@ -329,7 +353,8 @@ impl App {
                 self.found = None;
                 self.state.app_update = AppUpdate::None;
             }
-            // Installed even while a sign-in runs: only the relaunch waits for it.
+            // Downloaded even while a sign-in runs: only the relaunch waits for it, and where installing ends the app,
+            // the install.
             Event::UpdateChecked(Some(version)) => {
                 // Checked every minute, a release that fails the same way was downloaded whole each minute: it waits
                 // two checks, then four, eight, up to an hour, as the CLI's updater waits on a build it refused. A
@@ -345,12 +370,19 @@ impl App {
                 if self.found.as_ref() != Some(&version) {
                     effects.push(Effect::Log(format!("update: found {version}")));
                 }
-                // A version already blocked keeps its row while it is tried again, so the menu does not flip.
-                if self.state.app_update != AppUpdate::Blocked(version.clone()) {
-                    self.state.app_update = AppUpdate::Installing;
-                }
                 self.found = Some(version);
-                effects.push(Effect::InstallUpdate);
+                // Where installing ends the app, the row shows from the install's start.
+                if !self.install_exits_app {
+                    self.installing();
+                }
+                effects.push(Effect::DownloadUpdate);
+            }
+            Event::UpdateDownloaded => {
+                if self.install_exits_app {
+                    self.install_held = true;
+                } else {
+                    effects.push(Effect::InstallUpdate);
+                }
             }
             // `updating` stays set: until the relaunch this process is the old version, and a check would install
             // the same one again.
@@ -371,6 +403,14 @@ impl App {
                 self.state.logs = LogsExport::Failed(failure);
                 effects.push(Effect::Log(format!("logs: export failed: {}", reason(failure))));
             }
+        }
+    }
+
+    /// The row says the update installs. A version already blocked keeps its row while it is tried again, so the menu
+    /// does not flip.
+    fn installing(&mut self) {
+        if self.found.as_ref().is_some_and(|version| self.state.app_update != AppUpdate::Blocked(version.clone())) {
+            self.state.app_update = AppUpdate::Installing;
         }
     }
 
@@ -411,8 +451,8 @@ impl App {
         self.state.cli == CliState::Installing || self.login.is_some()
     }
 
-    /// The relaunch would also cut short a daemon start or what the window shows, so it waits for them too; a check does
-    /// not, as the first launch's window is open right after the CLI install.
+    /// The relaunch, and an install that ends the app, would also cut short a daemon start or what the window shows,
+    /// so they wait for them too; a check does not, as the first launch's window is open right after the CLI install.
     fn relaunch_waits(&self) -> bool {
         self.running() || self.keep.starting() || self.window.is_some()
     }

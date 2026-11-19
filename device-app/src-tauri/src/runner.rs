@@ -377,6 +377,10 @@ impl Runner {
                 Ok(found) => Event::UpdateChecked(found),
                 Err(failure) => Event::UpdateFailed(failure),
             }),
+            Effect::DownloadUpdate => shared.with_updater(|updater| match updater.download() {
+                Ok(()) => Event::UpdateDownloaded,
+                Err(failure) => Event::UpdateFailed(failure),
+            }),
             Effect::InstallUpdate => shared.with_updater(|updater| match updater.install() {
                 Ok(()) => Event::UpdateInstalled,
                 Err(failure) => Event::UpdateFailed(failure),

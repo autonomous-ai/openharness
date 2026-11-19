@@ -13,8 +13,17 @@ const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(300);
 pub trait AppUpdater: Send + Sync {
     /// Asks once. Ok(Some(version)): a strictly newer release.
     fn check(&self) -> Result<Option<String>, UpdateFailure>;
-    /// Downloads the release the last check found, checks its signature and puts it over the running bundle.
+    /// Downloads the release the last check found and checks its signature, once the person can replace the app;
+    /// keeps it for the install.
+    fn download(&self) -> Result<(), UpdateFailure>;
+    /// Puts the kept download in place of the running app. Check: nothing was downloaded.
     fn install(&self) -> Result<(), UpdateFailure>;
+}
+
+/// Whether installing ends the app: on Windows the plugin exits it the moment it starts the installer, so the install
+/// itself waits for what a relaunch waits for.
+pub fn install_exits_app() -> bool {
+    cfg!(windows)
 }
 
 /// Whether this build updates itself: a release build on macOS that a release wrote its version into. A local
@@ -61,14 +70,16 @@ pub fn system(handle: &tauri::AppHandle) -> Option<Arc<dyn AppUpdater>> {
     if !enabled(cfg!(debug_assertions), std::env::consts::OS, &handle.package_info().version.to_string()) {
         return None;
     }
-    Some(Arc::new(SystemUpdater { handle: handle.clone(), found: Mutex::default() }))
+    Some(Arc::new(SystemUpdater { handle: handle.clone(), found: Mutex::default(), downloaded: Mutex::default() }))
 }
 
 /// No error's text leaves this door: the plugin's may hold the manifest's URLs.
 struct SystemUpdater {
     handle: tauri::AppHandle,
-    /// What the last check found, for the install that follows it.
+    /// What the last check found, for the download that follows it.
     found: Mutex<Option<Update>>,
+    /// The download whose signature checked out, for the install that follows it.
+    downloaded: Mutex<Option<(Update, Vec<u8>)>>,
 }
 
 impl AppUpdater for SystemUpdater {
@@ -82,7 +93,7 @@ impl AppUpdater for SystemUpdater {
         Ok(version)
     }
 
-    fn install(&self) -> Result<(), UpdateFailure> {
+    fn download(&self) -> Result<(), UpdateFailure> {
         let mut update = self.found.lock().unwrap().take().ok_or(UpdateFailure::Check)?;
         // Before any download, so the plugin's password prompt is never reached. Tauri's current_exe is the one the
         // plugin finds the bundle from.
@@ -93,6 +104,12 @@ impl AppUpdater for SystemUpdater {
         update.timeout = Some(DOWNLOAD_TIMEOUT);
         let bytes = tauri::async_runtime::block_on(update.download(|_, _| {}, || {}))
             .map_err(|error| download_failure(&error))?;
+        *self.downloaded.lock().unwrap() = Some((update, bytes));
+        Ok(())
+    }
+
+    fn install(&self) -> Result<(), UpdateFailure> {
+        let (update, bytes) = self.downloaded.lock().unwrap().take().ok_or(UpdateFailure::Check)?;
         update.install(bytes).map_err(|_| UpdateFailure::Install)
     }
 }
