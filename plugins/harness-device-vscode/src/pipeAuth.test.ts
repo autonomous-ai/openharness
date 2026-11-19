@@ -28,6 +28,7 @@ describe('pipeAuth', () => {
     const pipe = '\\\\.\\pipe\\harness-0123456789abcdef0123456789abcdef'
     const [first, second] = [pipeNonce(pipe), pipeNonce(pipe)]
     expect(first).toMatch(/^0123456789abcdef0123456789abcdef[0-9a-f]{32}$/)
-    expect(second).not.toBe(first)
+    // `.not` is not in the types this folder is checked with (vscodeExtensionTypes.spec.ts).
+    expect(second === first).toBe(false)
   })
 })
