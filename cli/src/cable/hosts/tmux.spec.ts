@@ -4,6 +4,19 @@ import { bundleOf, createOpenActions, type OpenTarget } from './open.js'
 import type { TmuxPathOutcome } from '../../lib/tmuxOnPath.js'
 import { createTmuxAdapter, createTmuxOuter, tmuxFinder, type TmuxDeps, type TmuxOuterDeps } from './tmux.js'
 
+/** The core's finder, as the default tmuxFinder asks it: never this machine's login shell or tmux. It adopts tmux as the
+ *  core does, its folder put ahead on the PATH of the environment it is given. */
+const core = vi.hoisted(() => ({ envs: [] as NodeJS.ProcessEnv[] }))
+vi.mock('../../lib/tmuxOnPath.js', async (real) => ({
+  ...await real<typeof import('../../lib/tmuxOnPath.js')>(),
+  ensureTmuxOnPath: async (env: NodeJS.ProcessEnv) => {
+    core.envs.push(env)
+    env.PATH = `/x/bin:${env.PATH}`
+    return { state: 'adopted', path: '/x/bin/tmux', from: '/x/bin' }
+  },
+  tmuxAvailableNow: () => false,
+}))
+
 const OPEN = '/usr/bin/open'
 /** tmux on the process's PATH, as the core finds it. */
 const PRESENT = async (): Promise<TmuxPathOutcome> => ({ state: 'present' })
@@ -439,6 +452,7 @@ describe('the outer place of an agent in the person\'s tmux', () => {
     const roots = Object.assign([], { some: () => { throw new Error('roots not read') } })
     const cases: Array<[string, ReturnType<typeof lookup>, Call[], string[]]> = [
       ['no tmux is found', lookup({ tmux: absent }, [], ONE), [], notRead('tmux')],
+      ['tmux does not start', lookup({ run: async () => { throw new Error('spawn /x/bin/tmux EACCES') } }, [], ONE), [], notRead('pane')],
       ['display-message fails', lookup({}, [1], ONE), [asked], notRead('pane')],
       ['display-message says no fact', lookup({}, [], { ...ONE, pane: 'abc\n' }), [asked], notRead('pane')],
       ['the table is not read', lookup({ processes: async () => { throw new Error('process table not read') } }, [], ONE), [asked], notRead('processes')],
@@ -554,5 +568,37 @@ describe('tmux as the core finds it', () => {
     settle({ state: 'adopted', path: '/x/bin/tmux', from: '/x/bin' })
     await Promise.all([first, second, shown, adapter.focus({ adapter: 'tmux', id: '%3:100' })])
     expect(finds).toBe(1)
+  })
+
+  // As the core retries its own (lib/terminalBackendRecovery.ts): a tmux installed after the process started, or a login
+  // shell that timed out on a loaded Mac, otherwise left the dial with no tmux until the process restarted.
+  it('no tmux found, or a lookup that threw, is asked again once a tmux is where the core looks without a shell', async () => {
+    const answers: Array<() => Promise<TmuxPathOutcome>> = [
+      async () => { throw new Error('lookup failed') },
+      async () => ({ state: 'absent', reason: 'tmux was not found' }),
+      ADOPTED,
+    ]
+    let finds = 0
+    let there = false
+    const tmux = tmuxFinder(() => answers[finds++](), () => there)
+    expect((await tmux()).state).toBe('absent')
+    // None there yet: nothing is asked again.
+    expect((await tmux()).state).toBe('absent')
+    expect(finds).toBe(1)
+    there = true
+    expect((await tmux()).state).toBe('absent')
+    expect(await tmux()).toEqual(await ADOPTED())
+    expect(finds).toBe(3)
+    // Found, it holds.
+    expect(await tmux()).toEqual(await ADOPTED())
+    expect(finds).toBe(3)
+  })
+
+  it('the finder asks as the core does, on a copy of this process\'s environment: its own PATH stays the master\'s', async () => {
+    const path = process.env.PATH
+    expect(await tmuxFinder()()).toEqual(await ADOPTED())
+    expect(process.env.PATH).toBe(path)
+    expect(core.envs).toHaveLength(1)
+    expect(core.envs[0]).not.toBe(process.env)
   })
 })
