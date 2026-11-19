@@ -47,6 +47,9 @@ class _OverviewPageState extends State<OverviewPage> with SingleTickerProviderSt
   /// Closing: where the row scrolls once its cells have their widths again (before, the row is too short to reach).
   double? _back;
 
+  /// The row's agents (ids) as last laid out, to see one move up past the cells before the glass.
+  List<String> _order = const [];
+
   BarModel get model => widget.model;
 
   @override
@@ -54,6 +57,7 @@ class _OverviewPageState extends State<OverviewPage> with SingleTickerProviderSt
     super.initState();
     _open = _openOf();
     _from = _to = _targets(_open);
+    _order = [for (final a in model.row) a.id];
     // Built open (from Attention, Inbox, the done note): the row is there at once, one sliver before the open agent.
     _scroll = ScrollController(initialScrollOffset: _open == null ? 0 : _openScroll(_open!));
     model.addListener(_changed);
@@ -115,8 +119,26 @@ class _OverviewPageState extends State<OverviewPage> with SingleTickerProviderSt
       final row = model.row, n = row.length, i = row.indexWhere((a) => a.id == _open);
       _carry = null;
       _back = i < 0 ? null : ((i - 1) * kCellW).clamp(0.0, math.max(0.0, (n - 3) * kCellW));
+    } else if (open == null) {
+      _frontIfPassed();
     }
+    _order = [for (final a in model.row) a.id];
     setState(() => _open = open);
+  }
+
+  /// The row is by need (BarModel.row): an agent that moves up past the cells before the glass (the one just talked to
+  /// starting work, one coming to wait on the person) would go out of sight, so the row goes to its front. A row that
+  /// is closing goes there once its widths settle; a finger on the row keeps it.
+  void _frontIfPassed() {
+    final before = ((_back ?? _pixels) / kCellW).round();
+    if (before <= 0) return;
+    final now = [for (final a in model.row) a.id];
+    if (setEquals(_order.take(before).toSet(), now.take(before).toSet())) return;
+    if (_back != null) {
+      _back = 0;
+    } else if (_scroll.hasClients && !_scroll.position.isScrollingNotifier.value) {
+      _scroll.animateTo(0, duration: kRowMove, curve: kRowEase);
+    }
   }
 
   void _follow() {

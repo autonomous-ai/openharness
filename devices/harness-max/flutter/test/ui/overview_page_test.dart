@@ -215,6 +215,67 @@ void main() {
     });
   });
 
+  group('order moving the row', () {
+    testWidgets('an agent that moves up past the cells before the glass brings the row to its front', (tester) async {
+      final m = mockupModel();
+      await _show(tester, m);
+      await tester.dragFrom(const Offset(1300, 160), const Offset(-1000, 0));
+      await _rest(tester);
+      expect(_scrolled(tester), closeTo(2 * kCellW, .01));
+      // docs-sweep, on the glass at the end, comes to wait on the person: second in the row, off the glass to the left
+      m
+        ..agentById('docs-sweep')!.state = AgentState.asking
+        ..changed();
+      await tester.pump();
+      await _rest(tester);
+      expect(_scrolled(tester), closeTo(0, .01));
+      expect(tester.getTopLeft(find.byKey(const ValueKey('docs-sweep'))).dx, closeTo(196 + kCellW, .01));
+    });
+
+    testWidgets('a change that leaves the cells before the glass as they were keeps the row', (tester) async {
+      final m = mockupModel();
+      await _show(tester, m);
+      await tester.dragFrom(const Offset(900, 160), const Offset(-260, 0));
+      await _rest(tester);
+      expect(_scrolled(tester), closeTo(kCellW, .01));
+      // rate-limiter finishes: it moves behind flaky-e2e, landing-hero still the one cell before the glass
+      m
+        ..agentById('rate-limiter')!.state = AgentState.done
+        ..changed();
+      await tester.pump();
+      await _rest(tester);
+      expect(_scrolled(tester), closeTo(kCellW, .01));
+    });
+
+    testWidgets('the agent just talked to moving to the front after its page closes brings the row there',
+        (tester) async {
+      // landing-hero waits, flaky-e2e is done, the rest rest: docs-sweep last
+      final m = mockupModel();
+      m.agentById('auth-refactor')!.state = AgentState.idle;
+      m.agentById('rate-limiter')!.state = AgentState.idle;
+      await _show(tester, m);
+      m
+        ..page = BarPage.agent
+        ..selectedId = 'docs-sweep'
+        ..changed();
+      await tester.pump();
+      await _rest(tester);
+      // closed: the row would come back with docs-sweep in the middle; it starts work meanwhile and goes second, before
+      // the cells the row would have come back to
+      m
+        ..page = BarPage.overview
+        ..changed();
+      await tester.pump(const Duration(milliseconds: 100));
+      m
+        ..agentById('docs-sweep')!.state = AgentState.working
+        ..changed();
+      await tester.pump();
+      await _rest(tester);
+      expect(_scrolled(tester), closeTo(0, .01));
+      expect(tester.getTopLeft(find.byKey(const ValueKey('docs-sweep'))).dx, closeTo(196 + kCellW, .01));
+    });
+  });
+
   group('dots', () {
     testWidgets('one per agent in its state\'s colour; the three cells on the glass lit', (tester) async {
       await _show(tester, mockupModel());
