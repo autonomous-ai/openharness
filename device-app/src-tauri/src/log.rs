@@ -219,7 +219,7 @@ mod tests {
 
     #[test]
     fn the_home_folder_is_written_as_a_tilde() {
-        let home = home_rule("/Users/person");
+        let home = home_rule("/Users/person", false);
         let cases = [
             ("Installed to /Users/person/.local/bin/harness", "Installed to ~/.local/bin/harness"),
             ("cd /Users/person && ls /Users/person/a", "cd ~ && ls ~/a"),
@@ -237,7 +237,27 @@ mod tests {
         for (text, expected) in cases {
             assert_eq!(redact_with(text, home.as_ref()), expected, "{text}");
         }
-        assert!(home_rule("/").is_none() && home_rule("").is_none());
+        assert!(home_rule("/", false).is_none() && home_rule("", false).is_none());
+    }
+
+    #[test]
+    fn the_windows_profile_folder_is_written_as_a_tilde() {
+        let home = home_rule(r"C:\Users\Kim", true);
+        let cases = [
+            (r"Installing into C:\Users\Kim\.harness", r"Installing into ~\.harness"),
+            ("c:/users/kim/x", "~/x"),
+            (r#"set "C:\Users\Kim" C:\Users\Kim"#, r#"set "~" ~"#),
+            // Another person's folder: a Windows user name also holds a space.
+            (
+                r"C:\Users\Kimberly\x C:\Users\Kim.b C:\Users\Kim Lee\x",
+                r"C:\Users\Kimberly\x C:\Users\Kim.b C:\Users\Kim Lee\x",
+            ),
+        ];
+        for (text, expected) in cases {
+            assert_eq!(redact_with(text, home.as_ref()), expected, "{text}");
+        }
+        let home = home_rule(r"C:\Users\Nguyễn Văn A", true);
+        assert_eq!(redact_with(r"C:\Users\Nguyễn Văn A\Desktop", home.as_ref()), r"~\Desktop");
     }
 
     #[test]
