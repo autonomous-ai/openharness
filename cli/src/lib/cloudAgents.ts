@@ -242,6 +242,8 @@ export function cloudAgentFrame(harness: CloudHarness): CloudAgentFrame {
     namedAgent: null,
     // A cloud harness is typed into by its own host: nothing here waits for it.
     waitingFor: null,
+    // Its host types its first task: nothing here starts it.
+    starting: false,
     location: 'cloud',
     cloud: {
       place: CLOUD_AGENTS[harness.agent].place, state: harness.state, activity: harness.activity, links: harness.links, messages: harness.messages,

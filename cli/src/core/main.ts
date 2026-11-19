@@ -269,7 +269,7 @@ import { type ActivityFrame } from '../lib/turnActivity.js'
 import { cursorDataDir } from '../engines/cursor/contract.js'
 import { TranscriptPager } from '../lib/transcriptPages.js'
 import { AgentCreationReceipts } from '../lib/agentCreationReceipt.js'
-import { agentFrame, lastActivityAt, type AgentFrame } from '../lib/agentFrame.js'
+import { agentFrame, agentStarting, lastActivityAt, type AgentFrame } from '../lib/agentFrame.js'
 import { transcriptActivityAt } from '../lib/transcriptActivity.js'
 import { createUsageLink } from './usageLink.js'
 import type { UsageSnapshots } from './usageLink.js'
@@ -442,6 +442,8 @@ function bootHandoff(version: string): void {
 let activityFrameContextRef: ((s: RegisteredSession) => ActivityFrame | null) | null = null
 /** Set by runForeground once the input is built: what a message to an agent waits for (core/input.ts), for every frame. */
 let waitingForRef: ((s: RegisteredSession) => 'engine' | null) | null = null
+/** Set by runForeground once the input is built: whether an agent has yet to take its first task, for every frame. */
+let startingRef: ((s: RegisteredSession) => boolean) | null = null
 
 let framePartsRef: ((s: RegisteredSession) => () => Readonly<Record<string, unknown>>) | null = null
 
@@ -460,6 +462,7 @@ function projectFrame(s: RegisteredSession, selectedModel: string | null, worksp
     parts: framePartsRef?.(s),
     activity: () => activityFrameContextRef?.(s) ?? null,
     waitingFor: () => waitingForRef?.(s) ?? null,
+    starting: () => startingRef?.(s) ?? false,
     gridAnnotation: (grid) => gridAnnotationRef?.(grid) ?? null,
   })
 }
@@ -1485,6 +1488,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // sent by an agent's id, or by its session's.
   waitingForRef = (s) => input.waitingFor(s.agentId) ?? input.waitingFor(s.sessionId)
   backend.waitingForProvider = waitingForRef
+  startingRef = (s) => agentStarting(s, input.firstTaskWaiting(s.agentId), Date.now())
   const deviceInput = inputs.deviceInput
 
   // agy's turn closed from its pane when its final Stop never comes (core/turns/agyBackstop.ts).
