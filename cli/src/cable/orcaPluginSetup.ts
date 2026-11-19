@@ -44,24 +44,25 @@ export function createOrcaPluginSetup(deps: OrcaPluginSetupDeps): OrcaPluginSetu
   /** A pass asked while one runs: Orca may have come up while that one waited for `orca status`, and its settle is not
    *  lost, so the running pass runs once more. */
   let again = false
-  /** A failed pass's hour: an attach or a settle within it runs no Orca CLI, so an Orca that cannot take the plugin is
-   *  not asked again each time it comes to the front. */
+  /** An hour after a failed pass, or an Orca too old: an attach or a settle within it runs no Orca CLI, so an Orca that
+   *  cannot take the plugin is not asked again each time it comes to the front. */
   let waiting = false
   /** An uninstall that failed: tried again at the passes after its hour while the plugin is removed, as nothing else
    *  would take out what this setup put in. */
   let undoOwed = false
 
-  const wait = (): void => {
+  /** That hour; [retry]: a pass at its end. */
+  const wait = (retry: boolean): void => {
     waiting = true
     deps.after(RETRY_MS, () => {
       waiting = false
-      void setup.pass()
+      if (retry) void setup.pass()
     })
   }
 
   const failed = (reason: string): void => {
     deps.count('failed', reason)
-    wait()
+    wait(true)
   }
 
   /** This version saved as the one that set the plugin up or found it removed; [kind] is counted once it is saved. */
@@ -124,8 +125,9 @@ export function createOrcaPluginSetup(deps: OrcaPluginSetupDeps): OrcaPluginSetu
             return deps.count('failed', 'access')
           case 'absent':
             // Not running: passed again at the next start, attach or settle. Too old, or an entry that is the person's
-            // to mend: Orca's CLI is not run again at each settle.
-            if (result.error !== 'not-running') wait()
+            // to mend: Orca's CLI is not run again at each settle, nor at the hour's end, which would run it each hour
+            // while that lasts; the first settle after the hour asks again.
+            if (result.error !== 'not-running') wait(false)
             return
           case 'failed':
             // A `disable` that landed while Orca ran past its deadline found nothing to uninstall, and Orca may still
