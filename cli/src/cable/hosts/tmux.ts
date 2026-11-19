@@ -40,7 +40,7 @@ const TMUX_CLIENT_PLACES = '#{client_activity}|#{client_pid}|#{client_tty}'
 const TMUX_CLIENT_PLACE = /^([0-9]+)\|([1-9][0-9]{0,9})\|(.*)$/
 /** How long a pane's answer holds, from its lookup's start: Command Code's turn-start comes at every tool call, and a
  *  lookup is a `ps` and up to BUNDLES_A_PASS `plutil` runs. */
-export const OUTER_EVERY_MS = 5_000
+const OUTER_EVERY_MS = 5_000
 
 export interface TmuxDeps {
   run: OrcaDeps['run']
