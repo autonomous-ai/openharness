@@ -6,6 +6,7 @@ import type { ScreenReader } from '../../lib/screenReader.js'
  *
  * Moved verbatim out of `runForeground` (the core boundary, step 7: docs/design/2026-10-03-harnessd.md).
  */
+import { readOpenclawScreen } from '../../engines/openclaw/contract.js'
 import { isTerminalEngine } from '../../engines/types.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import { RuntimeActivityReader, activityRuntimeKey } from '../../lib/runtimeActivity.js'
@@ -60,9 +61,15 @@ export function createTurnActivity({ readScreen, terminals, bySession, sessionTu
    * step: the pass's capture is that reading, and no second capture is taken. The capture is older than what lands after
    * it: [revision] is the activity's revision read before capturing, the one at this call when not given.
    */
-  const paneRead = (session: RegisteredSession, capture: string,
-    revision = turnActivity.snapshot(session.sessionId)?.revision): Promise<void> =>
-    turnActivity.check(session.sessionId, () => probe(session.sessionId, active => runtimeActivity.observe(active, capture)), revision)
+  const paneRead = async (session: RegisteredSession, capture: string,
+    revision = turnActivity.snapshot(session.sessionId)?.revision): Promise<void> => {
+    // Every pass reads a bound pane: an open turn the heartbeat probes already, and a pane with no run can claim no work,
+    // so neither polls the store. Its run is forgotten, as a reading with none would leave it: the next run's first timer
+    // is not compared with it.
+    if (sessionTurnOpen(session.sessionId)) return
+    if (readOpenclawScreen(capture).state !== 'busy') return runtimeActivity.forget(session.sessionId)
+    await turnActivity.check(session.sessionId, () => probe(session.sessionId, active => runtimeActivity.observe(active, capture)), revision)
+  }
   /** The activity the app shows for an agent; none for a plain terminal. */
   const activityFrame = (session: RegisteredSession): ActivityFrame | null =>
     isTerminalEngine(session.engine) ? null : turnActivity.snapshot(session.sessionId) ?? null
