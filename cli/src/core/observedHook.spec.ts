@@ -21,6 +21,13 @@ describe('parseObservedHook', () => {
       .toEqual({ engine: 'codex', sessionId: 's', event: 'session-start', callerPid: 1, hostHints: {} })
   })
 
+  it.each(['unix:/tmp/kitty.sock', 'unix:@kitty'])('hands Linux host hints to the devices service: %s', (address) => {
+    const body = { ...full, hostHints: { ZELLIJ_PANE_ID: '7', ZELLIJ_SESSION_NAME: 'work', KITTY_LISTEN_ON: address } }
+    const forward = vi.fn(() => true)
+    expect(createObservedHook({ forward, now: () => 7 }).onObserved(body)).toBe('ok')
+    expect(forward).toHaveBeenCalledExactlyOnceWith(body)
+  })
+
   it('takes 10 hint keys', () => {
     const hostHints = Object.fromEntries(Array.from({ length: 10 }, (_, i) => [`K${i}`, 'v'.repeat(64)]))
     expect(parseObservedHook({ ...full, hostHints })).toEqual({ ...full, hostHints })

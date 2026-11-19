@@ -20,6 +20,7 @@ function recorder(over: Partial<Deps> = {}, codes: Array<number | null> = []) {
       return { code: codes.length ? codes.shift()! : 0, stdout: '' }
     },
     platform: 'darwin',
+    onPath: () => null,
     inFront: () => true,
     log: (line) => { logs.push(line) },
     ...over,
@@ -137,6 +138,40 @@ describe('the Codex app adapter', () => {
     expect(await adapter.focus(pane(THREAD))).toBe(true)
     expect(await adapter.show(pane(THREAD), 'a1')).toBe('ok')
     expect(calls).toEqual([{ ...link, file }, { ...forward, file }, { ...link, file }])
+  })
+})
+
+describe('the Codex app on Linux', () => {
+  const xdgMime: Call = { file: '/fake/bin/xdg-mime', args: ['query', 'default', 'x-scheme-handler/codex'], timeoutMs: 10_000 }
+  const xdgOpen: Call = { file: '/fake/bin/xdg-open', args: [`codex://threads/${THREAD}`], timeoutMs: 10_000 }
+  /** The app registered codex:// (xdg-mime names it), and xdg-open exits with [code]. */
+  function linux(code: number | null) {
+    const calls: Call[] = []
+    const { logs, adapter } = recorder({
+      platform: 'linux',
+      onPath: (name) => `/fake/bin/${name}`,
+      run: async (file, args, timeoutMs) => {
+        calls.push({ file, args, timeoutMs })
+        return file === xdgMime.file ? { code: 0, stdout: 'chatgpt.desktop\n' } : { code, stdout: '' }
+      },
+    })
+    return { calls, logs, adapter }
+  }
+
+  it('a tap runs xdg-open with the thread\'s link alone', async () => {
+    const { calls, logs, adapter } = linux(0)
+    expect(await adapter.focus(pane(THREAD))).toBe(true)
+    expect(calls).toEqual([xdgMime, xdgOpen])
+    expect(logs).toEqual([])
+  })
+
+  it('a failed link logs no fallback and runs no open', async () => {
+    for (const code of [1, null]) {
+      const { calls, logs, adapter } = linux(code)
+      expect(await adapter.focus(pane(THREAD)), String(code)).toBe(false)
+      expect(calls).toEqual([xdgMime, xdgOpen])
+      expect(logs).toEqual([])
+    }
   })
 })
 

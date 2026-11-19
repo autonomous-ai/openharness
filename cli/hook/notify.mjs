@@ -531,7 +531,8 @@ function postObserved(port, body) {
  * session, 2026-11-13), and they must never leave this process. CLAUDE_CODE_HOST_SESSION_ID is the Claude app's own id
  * for the session it runs (`local_<random uuid>`): a tap on the dial opens the app on that session. It is an id, not a
  * credential (read in the app, 2026-11-14: it names the session in the app's list and its telemetry; the app's tokens
- * are other variables).
+ * are other variables). The app takes one of up to 70 characters, and cut it would still pass as another session's, so
+ * one over 64 is left out whole.
  *
  * CLAUDE_CODE_ENTRYPOINT is a fixed word naming how Claude Code was started, not a secret: the VS Code extension sets
  * `claude-vscode` (read in the extension's code), and a tap then opens the extension's tab on the session.
@@ -546,15 +547,26 @@ function postObserved(port, body) {
  * the one platform cmux runs on. cmux sets CMUX_SOCKET_PASSWORD and other CMUX_ names there too, and they must never
  * leave this process.
  *
+ * ZELLIJ_PANE_ID is Zellij's id of the pane (digits) and ZELLIJ_SESSION_NAME the name of the Zellij session holding it,
+ * which `zellij --session <name> action …` targets: an id and a name, no credential. KITTY_LISTEN_ON is the address of
+ * the socket kitty's remote control listens on (`unix:…`), which `kitten @ --to` needs from outside kitty: an address,
+ * no credential. A cut one of these would name another pane, session or socket, so one over 64 characters is left out
+ * whole instead.
+ *
  * In order: the app's names first, then the hosts from the nearest, as detectHost reads them (cable/hosts/hostDetect.ts),
- * so a session with more than MAX_HINTS set loses the farthest. HC_TERMINAL_ID comes after the multiplexers: one started
+ * so a session with more than MAX_HINTS set loses the farthest. Zellij's names come before kitty's: a session in Zellij
+ * inside kitty keeps Zellij's, the nearer host. HC_TERMINAL_ID comes after the multiplexers: one started
  * in an hc terminal keeps that terminal's address, and is the nearer host. cmux's ids come after them: a multiplexer
  * started in a cmux terminal keeps cmux's ids, and is the nearer host. CLAUDE_CODE_ENTRYPOINT is last, the first the
  * cap drops: without it a tap still brings the app forward.
  */
-const HOST_HINTS = ['TERM_PROGRAM', '__CFBundleIdentifier', 'HERDR_PANE_ID', 'REX_BLOCK', 'ZELLIJ', 'TMUX_PANE',
-  'HC_TERMINAL_ID', 'CMUX_SURFACE_ID', 'CMUX_WORKSPACE_ID', 'KITTY_WINDOW_ID', 'WEZTERM_PANE', 'ORCA_AGENT_SESSION_ID',
-  'ORCA_TERMINAL_HANDLE', 'CLAUDE_CODE_HOST_SESSION_ID', 'CLAUDE_CODE_ENTRYPOINT']
+const HOST_HINTS = ['TERM_PROGRAM', '__CFBundleIdentifier', 'HERDR_PANE_ID', 'REX_BLOCK', 'ZELLIJ', 'ZELLIJ_PANE_ID',
+  'ZELLIJ_SESSION_NAME', 'TMUX_PANE', 'HC_TERMINAL_ID', 'CMUX_SURFACE_ID', 'CMUX_WORKSPACE_ID', 'KITTY_WINDOW_ID',
+  'KITTY_LISTEN_ON', 'WEZTERM_PANE', 'ORCA_AGENT_SESSION_ID', 'ORCA_TERMINAL_HANDLE', 'CLAUDE_CODE_HOST_SESSION_ID',
+  'CLAUDE_CODE_ENTRYPOINT']
+/** The hints a cut would turn into another pane, session or socket (see HOST_HINTS): sent whole or not at all. */
+const WHOLE_HINTS = ['ZELLIJ_PANE_ID', 'ZELLIJ_SESSION_NAME', 'KITTY_LISTEN_ON',
+  'CLAUDE_CODE_HOST_SESSION_ID']
 /** The core's observed route takes no more (core/observedHook.ts MAX_HINTS, which hookNotify.spec.ts keeps this equal to). */
 const MAX_HINTS = 10
 
@@ -581,6 +593,8 @@ function hostHints() {
     // (hostDetect.ts inCmux), which the dial's words are pasted into. Skipped before the cap counts them too.
     if ((name === 'CMUX_SURFACE_ID' || name === 'CMUX_WORKSPACE_ID') && (process.platform !== 'darwin'
       || process.env.HERDR_PANE_ID || process.env.HERDR_SESSION || process.env.HC_TERMINAL_ID)) continue
+    // Skipped before the cap counts it too.
+    if (WHOLE_HINTS.includes(name) && process.env[name]?.length > 64) continue
     const value = process.env[name]?.slice(0, 64)
     if (value && !CONTROL.test(value)) hints[name] = value
   }

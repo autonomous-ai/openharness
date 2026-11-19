@@ -14,9 +14,10 @@ import { describe, expect, it, vi, type Mock } from 'vitest'
 import { CABLE_MAX_FRAME, CABLE_MAX_PAYLOAD, CableDecoder, CableType, encodeCableFrame } from './cableFrame.js'
 import { DaemonCableHost } from './cableHost.js'
 import type { MachineFleet } from './machineFleet.js'
-import { CableSession, fitDrawer, SHOWN_ONLY_PREFIX, SWIPE_REST_MS, type CableAgent, type CableHost, type CableMachine, type CablePort, type DialAgent, type SendOutcome } from './cableSession.js'
+import { CableSession, fitDrawer, SHOWN_ONLY_PREFIX, SWIPE_REST_MS, type CableAgent, type CableHost, type CableMachine, type CablePort, type DialAgent, type DialStatus, type SendOutcome } from './cableSession.js'
 import { DialLog } from './dialLog.js'
 import { noticeSummary } from './dialText.js'
+import { NO_ACCESS, NO_ACCESS_YET, PortAccessError } from './portAccess.js'
 import type { PetStore } from './pets/store.js'
 import { HostRegistry } from './hosts/registry.js'
 import type { AppList, AppPick, HostAgent, HostSource } from './hosts/types.js'
@@ -1354,6 +1355,84 @@ describe('cable session', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+
+  describe('a dial this account cannot open', () => {
+    const NO_DIALOUT = NO_ACCESS('dialout')
+
+    /** One open per outcome, REOPEN_EVERY_MS apart: a failure, or 'port' for one that opens. */
+    async function tryOpens(outcomes: Array<Error | 'port'>) {
+      const seen: DialStatus[] = []
+      const lines: string[] = []
+      let port: LoopbackPort | undefined
+      let attempts = 0
+      const host = makeHost({ onDialStatus: (s) => seen.push(s), log: (l) => lines.push(l) })
+      const session = new CableSession(host, tmpLog(), async (onData, onClosed) => {
+        const outcome = outcomes[attempts++]
+        if (outcome === 'port') return (port = new LoopbackPort(onData, onClosed))
+        throw outcome
+      })
+      session.start()
+      await settle()
+      for (let i = 1; i < outcomes.length; i++) { vi.advanceTimersByTime(2_000); await settle() }
+      expect(attempts).toBe(outcomes.length)
+      return { session, seen, lines, port }
+    }
+
+    const said = (lines: string[], why: string) => lines.filter((l) => l === `cable: cannot open the dial: ${why}`).length
+
+    it('shows what to do, once', async () => {
+      vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval'] })
+      try {
+        const denied = () => new PortAccessError(NO_DIALOUT)
+        const { session, seen, lines } = await tryOpens([denied(), denied(), denied()])
+        expect(seen).toEqual([{ attached: false, problem: 'No access to the dial. Run: sudo usermod -aG dialout $USER, then log out and in.' }])
+        expect(said(lines, NO_DIALOUT)).toBe(1)
+        await session.stop()
+      } finally { vi.useRealTimers() }
+    })
+
+    it('the problem changes with the login', async () => {
+      vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval'] })
+      try {
+        const { session, seen, lines } = await tryOpens([
+          new PortAccessError(NO_DIALOUT), new PortAccessError(NO_DIALOUT),
+          new PortAccessError(NO_ACCESS_YET), new PortAccessError(NO_ACCESS_YET),
+        ])
+        expect(seen).toEqual([{ attached: false, problem: NO_DIALOUT }, { attached: false, problem: NO_ACCESS_YET }])
+        expect(said(lines, NO_DIALOUT)).toBe(1)
+        expect(said(lines, NO_ACCESS_YET)).toBe(1)
+        await session.stop()
+      } finally { vi.useRealTimers() }
+    })
+
+    it('the problem goes when the failure is another one, and when the port opens', async () => {
+      vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval'] })
+      try {
+        const { session, seen, port } = await tryOpens([
+          new PortAccessError(NO_DIALOUT), new Error('busy'), new PortAccessError(NO_DIALOUT), 'port',
+        ])
+        expect(seen).toEqual([
+          { attached: false, problem: NO_DIALOUT }, { attached: false },
+          { attached: false, problem: NO_DIALOUT }, { attached: false },
+        ])
+        port!.say({ t: 'hello', product: 'harness', mac: 'aa:bb', fw: '0.0.90', proto: 3 })
+        await vi.waitFor(() => expect(seen.at(-1)).toMatchObject({ attached: true, mac: 'aa:bb' }))
+        await session.stop()
+      } finally { vi.useRealTimers() }
+    })
+
+    it('another failure is logged each time, as before', async () => {
+      vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval'] })
+      try {
+        // The line names the failure's kind, never its words.
+        const busy = () => Object.assign(new Error('busy'), { code: 'EBUSY' })
+        const { session, seen, lines } = await tryOpens([busy(), busy(), busy()])
+        expect(said(lines, 'EBUSY')).toBe(3)
+        expect(seen).toEqual([])
+        await session.stop()
+      } finally { vi.useRealTimers() }
+    })
   })
 
   it('brings the dial to the agent the window opened', async () => {

@@ -2602,6 +2602,14 @@ describe('the dial reaches the fleet through the core\'s port', () => {
       expect(JSON.stringify([...failed.heard(), ...none.heard()])).not.toContain('o1')
     })
 
+    // On Linux no bundle names the Claude app or VS Code: its agent's host is the unknown terminal, its app the scan's.
+    it('a failed focus on an agent in an unknown terminal names the app it runs in', async () => {
+      for (const [app, name] of [['claude', 'Claude'], ['vscode', 'VS Code'], ['terminal', 'Terminal']]) {
+        const { host } = setup({ focus: vi.fn(async () => false), list: () => [{ ...scratch, host: 'terminal', app }] })
+        expect(await host.openAgent('o1'), app).toEqual({ ok: false, error: `${name} did not open it.` })
+      }
+    })
+
     it('an open with reason question never calls source.focus', async () => {
       const { host, observed, heard } = setup()
       expect(await host.openAgent('o1', 'question')).toBeUndefined()

@@ -22,6 +22,7 @@ import { resolveBinaryOnPath } from '../../src/lib/binaryOnPath.js'
 import { ownProcessGroup } from '../../src/lib/windows/noWindow.js'
 import { writeExecutable } from '../../src/testing/executableFixture.js'
 import { IsolatedDaemon, until } from './daemon.js'
+import { dialHost } from './dialHosts.js'
 import { tabUnder, type FakeApp } from './outsideAgent.js'
 import { forgetGroup, leaderGone, watchGroup } from './reaper.js'
 
@@ -45,13 +46,13 @@ int main(void) {
 `
 
 /** The installed herdr: on the worker's PATH, else ~/.local/bin/herdr of the account that runs the tests
- *  (`userInfo().homedir`: the suite's HOME is a throwaway one). Null when there is none, or no `cc`: the file is
- *  then skipped. */
-export const herdrBinary: string | null = (() => {
-  if (process.platform === 'win32' || !resolveBinaryOnPath('cc')) return null
+ *  (`userInfo().homedir`: the suite's HOME is a throwaway one). Null when there is none, or no `cc` to build its agent:
+ *  the file is then skipped, but on a dial-hosts run (dialHosts.ts), which names the one missing. */
+export const herdrBinary: string | null = dialHost('herdr', (() => {
+  if (process.platform === 'win32' || !dialHost('cc', resolveBinaryOnPath('cc'))) return null
   const installed = join(userInfo().homedir, '.local', 'bin', 'herdr')
   return resolveBinaryOnPath('herdr') ?? (existsSync(installed) ? installed : null)
-})()
+})())
 
 export class PrivateHerdr {
   private constructor(private readonly d: IsolatedDaemon, private readonly server: ChildProcess, private readonly config: string,
@@ -63,7 +64,7 @@ export class PrivateHerdr {
   /** herdr installed for the daemon, and not running: its config, and the daemon's `herdr` on its PATH, as the devices
    *  look for it at each dial attach. Its config folder. */
   static async install(d: IsolatedDaemon): Promise<string> {
-    if (!herdrBinary) throw new Error('herdr is not installed')
+    if (!herdrBinary) throw new Error('herdr, or the cc that builds its agent, is not installed')
     const config = join(d.env.HOME!, '.config')
     // Beside its socket herdr binds herdr-client.sock, the longer, and exits when it does not fit.
     const client = join(config, 'herdr', 'herdr-client.sock')

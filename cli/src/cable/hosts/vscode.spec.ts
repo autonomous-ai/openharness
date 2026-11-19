@@ -33,6 +33,7 @@ function recorder(over: Partial<Deps> = {}, codes: Array<number | null> = [], ed
       return { code: codes.length ? codes.shift()! : 0, stdout: '' }
     },
     platform: 'darwin',
+    onPath: () => null,
     inFront: () => true,
     terminals: {
       terminalOf: () => { asked.push('terminalOf'); return windows.held },
@@ -440,4 +441,102 @@ it.each(['vscode', 'cursor'] as const)('cursor-agent in %s\'s terminal has the t
   expect(adapter.paneOf(place('opencode'))).toBeUndefined()
   // Cursor's own agent: its bundle id names the app, but it sends no TERM_PROGRAM, so its pid is never read with `ps`.
   expect(adapter.paneOf(place('cursor', { __CFBundleIdentifier: bundle }))).toBeUndefined()
+})
+
+// Linux has no `open -b`: the devices' raise brings the editor forward (docs/plans/2026-11-19-dial-linux-design.md
+// §§ 1.6, 2).
+describe('a tap on a terminal on Linux raises its editor', () => {
+  const HELD: Terminal = { window: 'w1', shell: 4000 }
+  const tapped = (editor: 'vscode' | 'cursor', answer = true, platform: 'linux' | 'darwin' = 'linux') => {
+    const raises: Array<{ pid?: number; app?: string }> = []
+    const r = recorder({ platform, raise: async (window) => { raises.push(window); return answer } }, [], editor)
+    r.windows.held = HELD
+    return { ...r, raises, focus: () => r.adapter.focus({ adapter: editor, id: 'term:4242' }) }
+  }
+
+  it.each(['vscode', 'cursor'] as const)('%s: the show is queued with the raise, then the raise names the pane\'s pid and the editor', async (editor) => {
+    const t = tapped(editor)
+    expect(await t.focus()).toBe(true)
+    expect(t.windows.shows).toEqual([{ terminal: HELD, tap: true }])
+    expect(t.raises).toEqual([{ pid: 4242, app: editor }])
+    expect(t.calls).toEqual([])
+  })
+
+  it('a raise that answers false leaves the tap true: the show was queued', async () => {
+    const t = tapped('vscode', false)
+    expect(await t.focus()).toBe(true)
+    expect(t.raises).toEqual([{ pid: 4242, app: 'vscode' }])
+  })
+
+  it('a show that cannot be written raises nothing', async () => {
+    const t = tapped('vscode')
+    t.windows.writes = false
+    expect(await t.focus()).toBe(false)
+    expect(t.raises).toEqual([])
+  })
+
+  it('macOS runs open -b and no raise', async () => {
+    const t = tapped('vscode', true, 'darwin')
+    expect(await t.focus()).toBe(true)
+    expect(t.calls).toEqual([forward(VSCODE)])
+    expect(t.raises).toEqual([])
+  })
+})
+
+// Linux has no bundle id: the editor is the app the process scan named (docs/plans/2026-11-19-dial-linux-design.md § 1.6).
+describe('the extension\'s tab on Linux', () => {
+  const CURSOR = 'com.todesktop.230313mzl4w4u92'
+  const ENTRY = { CLAUDE_CODE_ENTRYPOINT: 'claude-vscode' }
+  const at = (app: string, over: Partial<Place> = {}, hints: Record<string, string> = ENTRY): Place =>
+    ({ host: detectHost(hints), app, hints, engine: 'claude', sessionId: UUID, pid: 4242, ...over })
+  /** A Linux box whose every tool is under /fake/bin and whose xdg-mime names an app for each scheme. */
+  const linux = (editor: 'vscode' | 'cursor' = 'vscode') => {
+    const calls: Call[] = []
+    const r = recorder({
+      platform: 'linux',
+      onPath: (name) => `/fake/bin/${name}`,
+      run: async (file, args, timeoutMs) => {
+        calls.push({ file, args, timeoutMs })
+        return { code: 0, stdout: file.endsWith('/xdg-mime') ? `${args[2].split('/')[1]}.desktop\n` : '' }
+      },
+    }, [], editor)
+    return { ...r, calls }
+  }
+
+  it('a Claude Code session the extension started, in the editor the scan named, has the tab\'s pane', () => {
+    expect(linux().adapter.paneOf(at('vscode'))).toEqual({ adapter: 'vscode', id: UUID })
+    expect(linux('cursor').adapter.paneOf(at('cursor'))).toEqual({ adapter: 'cursor', id: UUID })
+    expect(linux().adapter.paneOf(at('cursor'))).toBeUndefined()
+    expect(linux('cursor').adapter.paneOf(at('vscode'))).toBeUndefined()
+  })
+
+  it('another app\'s bundle id, another engine, a terminal app or a session out of form has none', () => {
+    const { adapter } = linux()
+    const cases: Place[] = [
+      at('vscode', {}, { ...ENTRY, __CFBundleIdentifier: CURSOR }),
+      at('vscode', { engine: 'codex' }),
+      at('terminal'),
+      at('vscode', { sessionId: 'sess-1' }),
+      at('vscode', { sessionId: undefined }),
+    ]
+    for (const place of cases) expect(adapter.paneOf(place), JSON.stringify(place)).toBeUndefined()
+  })
+
+  it('on macOS the scan\'s app alone names no tab', () => {
+    expect(recorder().adapter.paneOf(at('vscode'))).toBeUndefined()
+  })
+
+  it.each([
+    ['vscode', 'vscode://anthropic.claude-code/open?session='],
+    ['cursor', 'cursor://anthropic.claude-code/open?session='],
+  ] as const)('a tap in %s runs xdg-open on the editor\'s link once its scheme has an app', async (editor, url) => {
+    const { adapter, calls } = linux(editor)
+    const pane = adapter.paneOf(at(editor))!
+    expect(await adapter.focus(pane)).toBe(true)
+    expect(calls).toEqual([
+      run('/fake/bin/xdg-mime', 'query', 'default', `x-scheme-handler/${editor}`),
+      run('/fake/bin/xdg-open', `${url}${UUID}`),
+    ])
+    expect(adapter.canFocus(pane)).toBe(true)
+  })
 })

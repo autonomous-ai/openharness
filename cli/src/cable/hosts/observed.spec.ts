@@ -18,6 +18,7 @@ import { createTmuxAdapter } from './tmux.js'
 import type { HostAgent, PaneSwitch, TypeResult } from './types.js'
 import { createVscodeAdapter } from './vscode.js'
 import { createWeztermAdapter } from './wezterm.js'
+import { createZellijAdapter } from './zellij.js'
 
 function setup(over: Partial<ObservedDeps> = {}) {
   const clock = { t: 1_000_000 }
@@ -863,6 +864,21 @@ describe('ObservedSource and the app the scan learns', () => {
     await s.src.scanOpen()
     expect(s.src.list()[0]).toMatchObject({ app: 'ghostty', host: 'terminal' })
     expect(s.src.list()[0]).not.toHaveProperty('appPending')
+  })
+
+  it('windowOf: a live agent\'s latest caller and its app, a scanned one\'s own pid; none for an ended or unknown one', async () => {
+    const s = setup({ apps: async () => new Map([[11, 'ghostty']]) })
+    s.src.ingest(s.ev('session-start', { sessionId: 'hooked', callerPid: 100, hostHints: { TERM_PROGRAM: 'WezTerm' } }))
+    const id = (sessionId: string) => s.src.list().find((a) => a.sessionId === sessionId)!.id
+    expect(s.src.windowOf(id('hooked'))).toEqual({ pid: 100, app: 'wezterm' })
+    s.src.ingest(s.ev('turn-start', { sessionId: 'hooked', callerPid: 222, hostHints: { TERM_PROGRAM: 'WezTerm' } }))
+    expect(s.src.windowOf(id('hooked'))).toEqual({ pid: 222, app: 'wezterm' })
+    found(s, 'a', 11)
+    await s.src.scanOpen()
+    expect(s.src.windowOf(id('a'))).toEqual({ pid: 11, app: 'ghostty' })
+    s.src.ingest(s.ev('session-end', { sessionId: 'hooked', callerPid: 222, hostHints: { TERM_PROGRAM: 'WezTerm' } }))
+    expect(s.src.windowOf(id('hooked'))).toBeUndefined()
+    expect(s.src.windowOf('observed:unknown')).toBeUndefined()
   })
 
   it('the scan asks once a pass, for the new sessions\' pids alone, and never again for one it listed', async () => {
@@ -2828,6 +2844,26 @@ describe('ObservedSource and the app a hook\'s caller runs in', () => {
     expect(s.logs.join('\n')).not.toContain('someone')
   })
 
+  // Cursor's terminal says TERM_PROGRAM=vscode too: only a bundle id tells them apart, and Linux has none.
+  it('a hook that names VS Code by TERM_PROGRAM alone is placed in the editor its caller\'s parents name', async () => {
+    const s = walked()
+    s.src.ingest(s.ev('session-start', { hostHints: { TERM_PROGRAM: 'vscode' } }))
+    expect(s.apps.mock.calls).toEqual([[[100]]])
+    await s.walks[0].answer('cursor')
+    expect(s.agent('s1').app).toBe('cursor')
+  })
+
+  it('a walk that names no app leaves VS Code, as TERM_PROGRAM said; with VS Code\'s bundle id nothing is walked', async () => {
+    const s = walked()
+    s.src.ingest(s.ev('session-start', { hostHints: { TERM_PROGRAM: 'vscode' } }))
+    await s.walks[0]?.answer()
+    expect(s.agent('s1').app).toBe('vscode')
+    s.src.ingest(s.ev('session-start', { sessionId: 'b', callerPid: 101,
+      hostHints: { TERM_PROGRAM: 'vscode', __CFBundleIdentifier: 'com.microsoft.VSCode' } }))
+    expect(s.agent('b').app).toBe('vscode')
+    expect(s.apps).toHaveBeenCalledTimes(1)
+  })
+
   it('a hook whose hints name an app walks nothing', () => {
     const s = walked()
     s.src.ingest(s.ev('session-start', { ...inApp, hostHints: { __CFBundleIdentifier: 'com.openai.codex' } }))
@@ -2892,6 +2928,126 @@ describe('ObservedSource and the app a hook\'s caller runs in', () => {
   })
 })
 
+// A terminal or an editor started from another host's pane keeps that pane's variables, so only the process that made
+// the caller's pseudo-terminal says whose pane it is (scannedApp.ts ptyOwner): words typed into a pane that only holds
+// the agent run at whatever that pane shows.
+describe('ObservedSource and the host that owns its caller\'s terminal', () => {
+  const ZELLIJ = { ZELLIJ: '0', ZELLIJ_SESSION_NAME: 's1', ZELLIJ_PANE_ID: '1' }
+
+  /** A source with Zellij's adapter, whose listing names pane 1 a terminal whose program runs, and tmux's, whose pane's
+   *  process is the agent's; each read of a caller's terminal's owner answered by hand, in the order they began. */
+  function owned() {
+    const reads: Array<{ answer(owner?: string): Promise<void>; fail(): Promise<void> }> = []
+    const ptyOwner = vi.fn((_pid: number) => new Promise<string | undefined>((resolve, reject) => {
+      reads.push({
+        answer: (owner) => { resolve(owner); return flushed() },
+        fail: () => { reject(new Error('ps timed out under /Users/someone')); return flushed() },
+      })
+    }))
+    const run = vi.fn(async (_file: string, args: string[], _timeoutMs: number) => ({ code: 0, stdout: args.includes('list-panes')
+      ? JSON.stringify([{ id: 1, is_plugin: false, exited: false }]) : args[0] === 'display-message' ? '100|work|\n' : '' }))
+    const present = async () => ({ state: 'present' as const })
+    const adapters = [
+      createZellijAdapter({ run, zellij: present, platform: 'linux' }),
+      createTmuxAdapter({ run, tmux: present, processes: async () => [{ pid: 100, ppid: 1, executable: 'claude' }], log: () => {}, front: () => undefined }),
+    ]
+    const { actions } = fakeActions()
+    const s = setup({ actions: { ...actions, adapters }, ptyOwner })
+    const agent = () => s.src.list()[0]
+    const zellijPane = () => s.src.paneOf(agent().id, 'zellij')
+    return { ...s, actions, run, ptyOwner, reads, agent, zellijPane }
+  }
+
+  it('until its caller\'s terminal is read, its Zellij pane takes a tap and no words; read as Zellij\'s, it takes them', async () => {
+    const s = owned()
+    s.src.ingest(s.ev('session-start', { hostHints: ZELLIJ }))
+    expect(s.zellijPane()).toBe('held:s1:1')
+    expect(s.src.capabilities(s.agent())).toMatchObject({ voice: false, focus: true })
+    s.changes.mockClear()
+    await s.reads[0].answer('zellij')
+    expect(s.zellijPane()).toBe('s1:1')
+    expect(s.src.capabilities(s.agent())).toMatchObject({ voice: true, focus: true })
+    expect(s.changes).toHaveBeenCalledTimes(1)
+    expect(await s.src.send(s.agent(), 'next')).toEqual({ ok: true })
+    expect(s.run.mock.calls.map(([, args]) => args[3])).toEqual(['list-panes', 'write-chars', 'send-keys'])
+  })
+
+  // `code .` run in a Zellij pane: Codex in VS Code's terminal keeps the pane's variables, and VS Code made its terminal.
+  it('a terminal started from a pane is read as no host\'s: the pane takes a tap and never words', async () => {
+    const s = owned()
+    s.src.ingest(s.ev('session-start', { engine: 'codex', hostHints: { ...ZELLIJ, TERM_PROGRAM: 'vscode' } }))
+    await s.reads[0].answer(undefined)
+    expect(s.zellijPane()).toBe('held:s1:1')
+    expect(s.src.capabilities(s.agent())).toMatchObject({ voice: false, focus: true })
+    expect(await s.src.send(s.agent(), 'next')).toMatchObject({ ok: false })
+    expect(s.run).not.toHaveBeenCalled()
+  })
+
+  it('read once per caller: its later events read nothing, another caller is held until read, and a left one\'s answer is dropped', async () => {
+    const s = owned()
+    s.src.ingest(s.ev('session-start', { hostHints: ZELLIJ }))
+    s.src.ingest(s.ev('turn-start', { hostHints: ZELLIJ }))
+    await s.reads[0].answer('zellij')
+    s.src.ingest(s.ev('turn-stop', { hostHints: ZELLIJ }))
+    expect(s.ptyOwner.mock.calls).toEqual([[100]])
+    expect(s.zellijPane()).toBe('s1:1')
+    // Resumed in another process, then another before the first answers.
+    s.src.ingest(s.ev('session-start', { hostHints: ZELLIJ, callerPid: 200 }))
+    expect(s.zellijPane()).toBe('held:s1:1')
+    s.src.ingest(s.ev('session-start', { hostHints: ZELLIJ, callerPid: 300 }))
+    await s.reads[1].answer('zellij')
+    expect(s.zellijPane()).toBe('held:s1:1')
+    await s.reads[2].answer('zellij')
+    expect(s.zellijPane()).toBe('s1:1')
+    expect(s.ptyOwner.mock.calls).toEqual([[100], [200], [300]])
+  })
+
+  it('a read that fails holds its panes, logs its kind alone, and is read again on a later event after 10 s', async () => {
+    const s = owned()
+    s.src.ingest(s.ev('session-start', { hostHints: ZELLIJ }))
+    await s.reads[0].fail()
+    expect(s.zellijPane()).toBe('held:s1:1')
+    expect(s.logs).toContain('[observed] pty · not read · Error')
+    expect(s.logs.join('\n')).not.toContain('someone')
+    s.src.ingest(s.ev('turn-start', { hostHints: ZELLIJ }))
+    expect(s.ptyOwner).toHaveBeenCalledTimes(1)
+    s.clock.t += 10_000
+    s.src.ingest(s.ev('turn-stop', { hostHints: ZELLIJ }))
+    expect(s.ptyOwner).toHaveBeenCalledTimes(2)
+    await s.reads[1].answer('zellij')
+    expect(s.zellijPane()).toBe('s1:1')
+  })
+
+  // Only WezTerm's, kitty's and Zellij's panes take words on the terminal their host made alone: reading any other
+  // caller's would add a read of the process table to its hook for nothing.
+  it('a caller whose hints name no WezTerm, kitty or Zellij pane is never read', () => {
+    const s = owned()
+    const others: Array<Record<string, string>> = [{ TMUX_PANE: '%3' }, { TERM_PROGRAM: 'ghostty' }, {}]
+    for (const hostHints of others) s.src.ingest(s.ev('session-start', { hostHints }))
+    s.src.ingest(s.ev('session-start', { hostHints: { WEZTERM_PANE: '7' }, callerPid: 200 }))
+    s.src.ingest(s.ev('session-start', { hostHints: { KITTY_WINDOW_ID: '5' }, callerPid: 300 }))
+    expect(s.ptyOwner.mock.calls).toEqual([[200], [300]])
+  })
+
+  // tmux started in a Zellij pane keeps the pane's variables, and Zellij's adapter comes first: a tap there would only
+  // focus the pane that shows tmux's client, never select the agent's own tmux pane.
+  it('tmux inside a Zellij pane: a tap takes tmux\'s pane, as tmux made its terminal, and no words go to Zellij\'s', async () => {
+    const s = owned()
+    s.src.ingest(s.ev('session-start', { hostHints: { ...ZELLIJ, TMUX_PANE: '%3' } }))
+    await s.reads[0].answer('tmux')
+    expect(await s.src.focus(s.agent())).toBe(true)
+    expect(s.actions.open.mock.calls.map(([, target]) => target.pane)).toEqual([{ adapter: 'tmux', id: '%3:100' }])
+    expect(s.src.capabilities(s.agent())).toMatchObject({ voice: false })
+  })
+
+  it('with no read of it (Windows), every pane of a terminal or a multiplexer only holds the agent', () => {
+    const { actions } = fakeActions()
+    const s = setup({ actions: { ...actions, adapters: [createZellijAdapter({ run: vi.fn(), zellij: async () => ({ state: 'present' }), platform: 'linux' })] } })
+    s.src.ingest(s.ev('session-start', { hostHints: ZELLIJ }))
+    expect(s.src.paneOf(s.src.list()[0].id, 'zellij')).toBe('held:s1:1')
+  })
+})
+
 describe('ObservedSource panes', () => {
   const OTHER = 'term_9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d'
   const inOrca = (handle = HANDLE) => ({ hostHints: { ORCA_AGENT_SESSION_ID: 'x', ORCA_TERMINAL_HANDLE: handle } })
@@ -2952,7 +3108,7 @@ describe('ObservedSource panes', () => {
 
   // WezTerm's pane is the nearer for a tap, and Orca's terminal still takes the words and the rest.
   it.each([
-    ['WezTerm', { WEZTERM_PANE: '7', ORCA_TERMINAL_HANDLE: HANDLE }, '7'],
+    ['WezTerm', { WEZTERM_PANE: '7', ORCA_TERMINAL_HANDLE: HANDLE }, 'held:7'],
   ])('%s inside an Orca terminal still takes the dial\'s words and a rest through Orca', async (_, hostHints, tapped) => {
     const { actions } = fakeActions()
     const { src, ev } = setup({ actions })
@@ -3035,6 +3191,17 @@ describe('ObservedSource panes', () => {
     expect(actions.herdrPrompt).not.toHaveBeenCalled()
     expect(actions.orcaSend).not.toHaveBeenCalled()
     expect(counted(actions.count)).toEqual(['no-answer', 'no-answer'])
+  })
+
+  // On Linux no hint names VS Code: the agent's host is the unknown terminal, its app the one its caller runs under.
+  it('an agent waiting in an app its hints do not name is waiting in that app, not in Terminal', async () => {
+    const typer: HostAdapter = { id: 'typer', tap: 'before', paneOf: () => ({ adapter: 'typer', id: 'p1' }),
+      canFocus: () => true, focus: async () => true, canType: () => true, type: async () => true }
+    const { src, ev } = setup({ actions: { ...fakeActions({}, 'linux').actions, adapters: [typer] }, apps: async () => new Map([[100, 'vscode']]) })
+    src.ingest(ev('session-start'))
+    await vi.waitFor(() => expect(src.list()[0]).toMatchObject({ host: 'terminal', app: 'vscode' }))
+    src.ingest(ev('needs-input'))
+    expect(await src.send(src.list()[0], '1')).toEqual({ ok: false, reason: 'proj is waiting for your answer in VS Code.' })
   })
 
   // herdr types into a working agent as readily as an idle one: the source's idle rules decide, as for Orca.
@@ -3851,9 +4018,9 @@ describe('ObservedSource outer place', () => {
   /** A source whose outer places the test answers by hand, in the order they were asked, as the tmux lookup answers an
    *  event in a tmux pane; an event in no tmux pane is not nested. A tty read answers at once. */
   function nested(over: Partial<Fakes> = {}, adapt = (adapters: readonly HostAdapter[]) => adapters, deps: Partial<ObservedDeps> = {}) {
-    const asks: Array<{ answer(place: { app?: string; tty?: string }): Promise<unknown> }> = []
+    const asks: Array<{ answer(place: { app?: string; tty?: string; pid?: number }): Promise<unknown> }> = []
     const outer = vi.fn((hints: Readonly<Record<string, string>>, _pid: number) => (hints.TMUX_PANE
-      ? new Promise<{ app?: string; tty?: string }>((resolve) => {
+      ? new Promise<{ app?: string; tty?: string; pid?: number }>((resolve) => {
         asks.push({ answer: (place) => { resolve(place); return vi.advanceTimersByTimeAsync(0) } })
       })
       : undefined))
@@ -3880,6 +4047,19 @@ describe('ObservedSource outer place', () => {
     expect(await t.src.focus(t.agent())).toBe(true)
     expect(t.actions.open.mock.calls[0][1].bundle).toBe('com.apple.Terminal')
     expect(t.tty).not.toHaveBeenCalled()
+  })
+
+  // A process under tmux's server owns no window: the one that holds the pane is its client's (the dial-linux spec, 2.2).
+  it('windowOf: a nested agent is in its client\'s window, and in its own process\'s once no client holds it', async () => {
+    const t = nested()
+    t.src.ingest(t.ev('session-start', inTmux()))
+    const { id } = t.agent()
+    expect(t.src.windowOf(id)).toEqual({ pid: 100, app: 'tmux' })
+    await t.asks[0].answer({ ...CLIENT, pid: 4300 })
+    expect(t.src.windowOf(id)).toEqual({ pid: 4300, app: 'terminal-app' })
+    t.src.ingest(t.ev('turn-start', inTmux()))
+    await t.asks[1].answer({})
+    expect(t.src.windowOf(id)).toEqual({ pid: 100, app: 'tmux' })
   })
 
   it('needs-input and turn-stop keep it, and ask nothing', async () => {

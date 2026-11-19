@@ -39,7 +39,7 @@ import type { ReviewedAnswer, AnswerReceipt } from './questionInbox.js'
 import { isTier, type Tier } from '../lib/notifyTier.js'
 import { HarnessSource } from './hosts/harness.js'
 import { AppFilter, type AppCounts } from './hosts/appFilter.js'
-import { appDisplayName, hostDisplayName } from './hosts/hostDetect.js'
+import { agentPlaceName, appDisplayName, hostDisplayName } from './hosts/hostDetect.js'
 import type { HostEntry, HostRegistry } from './hosts/registry.js'
 import { APP_LIMIT, AppRings, DialRing, pageOf, type RingRank } from './hosts/select.js'
 import { FRONT_NONE } from './hosts/frontApp.js'
@@ -1067,7 +1067,7 @@ export class DaemonCableHost implements CableHost {
       // Only a person's tap switches the other app: a question screen that came up by itself never does.
       if (reason) return
       return (outside.source.focus?.(outside.agent) ?? Promise.resolve(false))
-        .then((opened) => opened ? undefined : { ok: false as const, error: `${hostDisplayName(outside.agent.host)} did not open it.` })
+        .then((opened) => opened ? undefined : { ok: false as const, error: `${agentPlaceName(outside.agent)} did not open it.` })
     }
     const machineId = this.machineOf(agentId)
     if (!machineId) {

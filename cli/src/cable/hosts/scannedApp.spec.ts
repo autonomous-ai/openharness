@@ -9,7 +9,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { RunningProcess } from '../../lib/sessionSearch/externals/types.js'
 import { ObservedSource, type ObservedDeps } from './observed.js'
 import {
-  appRoots, learnApps, parseProcessNames, readBundleId, readProcessNames, scannedApps, type ProcessName, type ScannedAppDeps,
+  appRoots, learnApps, parseProcessNames, ptyOwner, readBundleId, readProcessNames, readPtyOwner, readTtyName, scannedApps,
+  WALK_PARENTS, type ProcessName, type PtyProcess, type ScannedAppDeps,
 } from './scannedApp.js'
 
 // The patient exec, as the scan's default reads get it: each call is kept, and a command a test gives an answer for is
@@ -39,8 +40,9 @@ const HOME = '/Users/someone'
 const ROOTS = appRoots(HOME)
 const GHOSTTY = '/Applications/Ghostty.app/Contents/MacOS/ghostty'
 
-/** A made-up process table, each row `[pid, ppid, executable]`. */
-const table = (rows: Array<[number, number, string]>): ProcessName[] => rows.map(([pid, ppid, executable]) => ({ pid, ppid, executable }))
+/** A made-up process table, each row `[pid, ppid, executable]`, and its tty after when it runs on one. */
+const table = (rows: Array<[number, number, string, string?]>): PtyProcess[] =>
+  rows.map(([pid, ppid, executable, tty]) => ({ pid, ppid, executable, ...(tty === undefined ? {} : { tty }) }))
 
 function deps(rows: Array<[number, number, string]>, bundles: Record<string, string | undefined | Error> = {},
   platform: NodeJS.Platform = 'darwin') {
@@ -278,6 +280,124 @@ describe('scannedApps elsewhere', () => {
   })
 })
 
+// A terminal or an editor started from another host's pane keeps that pane's variables: only the process that made the
+// agent's terminal says whose pane it is (docs/plans/2026-11-19-dial-linux-plan.md, Review Focus 1).
+describe('the host that owns a process\'s terminal', () => {
+  it('is the first of its parents on another terminal or on none: a terminal\'s or a multiplexer\'s server', () => {
+    // An agent in Zellij's pane, whose server has no terminal; Zellij's client runs in kitty's window.
+    const zellij = table([[100, 50, 'claude', 'pts/2'], [50, 29, 'bash', 'pts/2'], [29, 1, 'zellij'],
+      [103, 21, 'zellij', 'pts/1'], [21, 20, 'bash', 'pts/1'], [20, 1, 'kitty']])
+    expect(ptyOwner(100, zellij)).toBe('zellij')
+    // kitty started from a Zellij pane: its window's terminal is kitty's, kitty itself on the pane's.
+    const kitty = table([[400, 399, 'claude', 'pts/7'], [399, 398, 'zsh', 'pts/7'], [398, 50, 'kitty', 'pts/2'],
+      [50, 29, 'bash', 'pts/2'], [29, 1, 'zellij']])
+    expect(ptyOwner(400, kitty)).toBe('kitty')
+    // tmux inside a Zellij pane: tmux's server, which has no terminal, made the agent's.
+    const tmux = table([[500, 499, 'claude', 'pts/4'], [499, 498, 'bash', 'pts/4'], [498, 1, 'tmux: server'],
+      [497, 50, 'tmux: client', 'pts/2'], [50, 29, 'bash', 'pts/2'], [29, 1, 'zellij']])
+    expect(ptyOwner(500, tmux)).toBe('tmux')
+  })
+
+  it('names WezTerm\'s GUI and mux server, kitty, Zellij and tmux, by Linux\'s names and by macOS\'s paths', () => {
+    const owned = (owner: string) => ptyOwner(10, table([[10, 9, 'claude', 'pts/3'], [9, 8, '-zsh', 'pts/3'], [8, 1, owner]]))
+    expect(['wezterm-gui', 'wezterm-mux-ser', 'wezterm-mux-server', '/Applications/WezTerm.app/Contents/MacOS/wezterm-gui',
+      'kitty', '/Applications/kitty.app/Contents/MacOS/kitty', 'zellij', '/opt/homebrew/bin/zellij',
+      'tmux: server', '/opt/homebrew/bin/tmux'].map(owned))
+      .toEqual(['wezterm', 'wezterm', 'wezterm', 'wezterm', 'kitty', 'kitty', 'zellij', 'zellij', 'tmux', 'tmux'])
+    // Any other terminal or editor owns no pane the dial types into.
+    for (const other of ['code', 'cursor', 'ghostty', '/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal', 'orca', 'login']) {
+      expect(owned(other), other).toBeUndefined()
+    }
+  })
+
+  // VS Code started from WezTerm's pane 7 keeps WEZTERM_PANE=7 in its terminals: its own pty host made the agent's.
+  it('a terminal started from a host\'s pane is not that host\'s', () => {
+    const rows = table([[900, 899, 'codex', 'pts/9'], [899, 800, 'bash', 'pts/9'], [800, 700, 'code'],
+      [700, 600, 'code', 'pts/5'], [600, 590, 'zsh', 'pts/5'], [590, 1, 'wezterm-gui']])
+    expect(ptyOwner(900, rows)).toBeUndefined()
+  })
+
+  it('none for a process on no terminal, one the table does not hold, or a walk that ends on its terminal', () => {
+    expect(ptyOwner(29, table([[29, 1, 'zellij']]))).toBeUndefined()
+    expect(ptyOwner(100, table([[29, 1, 'zellij']]))).toBeUndefined()
+    // Its terminal's maker is not in the table, or is init: the walk ends with no owner.
+    expect(ptyOwner(100, table([[100, 50, 'claude', 'pts/2'], [50, 29, 'bash', 'pts/2']]))).toBeUndefined()
+    expect(ptyOwner(100, table([[100, 1, 'claude', 'pts/2']]))).toBeUndefined()
+  })
+
+  it('walks no further than the scan does', () => {
+    // The agent under WALK_PARENTS shells on its own terminal: kitty is one past the walk's end.
+    const shells = Array.from({ length: WALK_PARENTS }, (_, i): [number, number, string, string] => [101 + i, 102 + i, 'sh', 'pts/1'])
+    const rows = table([[100, 101, 'claude', 'pts/1'], ...shells, [101 + WALK_PARENTS, 1, 'kitty']])
+    expect(ptyOwner(100, rows)).toBeUndefined()
+    expect(ptyOwner(101, rows)).toBe('kitty')
+  })
+})
+
+// The table holds no terminal: a tty column tripled every read of it on macOS. The own-pane check reads its caller's
+// chain's, one process at a time: on macOS a `ps -p` of two pids or more took 53 ms, of one 2.4 ms.
+describe('the host that owns a process\'s terminal, read', () => {
+  /** Each process's terminal as `ps -o tty= -p` prints it, `?` for none; each read kept. */
+  function ttys(of: Readonly<Record<number, string>>) {
+    const exec = vi.fn(async (_command: string, args: readonly string[]): Promise<string | null> => {
+      const tty = of[Number(args[3])]
+      return tty === undefined ? null : `${tty}\n`
+    })
+    return { exec, tty: (pid: number) => readTtyName(pid, exec), read: () => exec.mock.calls.map(([, args]) => Number(args[3])) }
+  }
+  // An agent in Zellij's pane, and Zellij's client in kitty's window: as `ptyOwner` was given them with their terminals.
+  const ROWS = table([[100, 50, 'claude'], [50, 29, 'bash'], [29, 1, 'zellij'], [103, 21, 'zellij'], [21, 20, 'bash'], [20, 1, 'kitty']])
+  const LINUX = { 100: 'pts/2', 50: 'pts/2', 29: '?', 103: 'pts/1', 21: 'pts/1', 20: '?' }
+
+  it('reads the caller\'s terminal, then its parents\' one at a time up to the first on another or none', async () => {
+    const at = ttys(LINUX)
+    expect(await readPtyOwner(100, ROWS, at.tty)).toBe('zellij')
+    expect(at.read()).toEqual([100, 50, 29])
+    expect(at.exec.mock.calls[0]).toEqual(['ps', ['-o', 'tty=', '-p', '100'], { timeout: 1_000, maxBuffer: 256 }])
+  })
+
+  it('answers as ptyOwner does over the same terminals, macOS\'s names too', async () => {
+    const mac = { 400: 'ttys007', 399: 'ttys007', 398: 'ttys002', 50: 'ttys002', 29: '??' }
+    const rows = table([[400, 399, 'claude'], [399, 398, 'zsh'], [398, 50, '/Applications/kitty.app/Contents/MacOS/kitty'],
+      [50, 29, 'bash'], [29, 1, '/opt/homebrew/bin/zellij']])
+    expect(await readPtyOwner(400, rows, ttys(mac).tty)).toBe('kitty')
+    const vscode = table([[900, 899, 'codex'], [899, 800, 'bash'], [800, 1, 'code']])
+    expect(await readPtyOwner(900, vscode, ttys({ 900: 'pts/9', 899: 'pts/9', 800: '?' }).tty)).toBeUndefined()
+  })
+
+  it('a caller on no terminal reads its own alone; one the table does not hold reads none', async () => {
+    const none = ttys({ 100: '?' })
+    expect(await readPtyOwner(100, ROWS, none.tty)).toBeUndefined()
+    expect(none.read()).toEqual([100])
+    const gone = ttys(LINUX)
+    expect(await readPtyOwner(4242, ROWS, gone.tty)).toBeUndefined()
+    expect(gone.read()).toEqual([])
+  })
+
+  it('walks no further than the scan does', async () => {
+    const shells = Array.from({ length: WALK_PARENTS + 1 }, (_, i): [number, number, string] => [100 + i, 101 + i, 'sh'])
+    const at = ttys(Object.fromEntries(shells.map(([pid]) => [pid, 'pts/1'])))
+    expect(await readPtyOwner(100, table([...shells, [101 + WALK_PARENTS, 1, 'kitty']]), at.tty)).toBeUndefined()
+    expect(at.read()).toHaveLength(WALK_PARENTS + 1)
+  })
+
+  it('a terminal not read rejects, saying nothing of the process', async () => {
+    const error = await readPtyOwner(100, ROWS, ttys({ 100: 'pts/2' }).tty).catch((e: unknown) => e)
+    expect(error).toEqual(new Error('tty not read'))
+  })
+
+  it.skipIf(process.platform === 'win32')('reads a terminal through the patient exec', async () => {
+    patient.answers = { ps: 'ttys004\n' }
+    expect(await readTtyName(700)).toBe('ttys004')
+    expect(patient.calls).toEqual([[execFile, 'ps', ['-o', 'tty=', '-p', '700'], { timeout: 1_000, maxBuffer: 256 }]])
+  })
+
+  it('none for `?` and `??`', async () => {
+    expect(await readTtyName(1, async () => '?\n')).toBeUndefined()
+    expect(await readTtyName(1, async () => '??      \n')).toBeUndefined()
+  })
+})
+
 describe('the process table the scan reads', () => {
   // Recorded as `ps -axo pid=,ppid=,comm=` prints it on macOS, the names made up: `comm` last is the whole path. With a
   // column after it (`comm=,lstart=,args=`), the first rows' names came cut to `/Users/someone/A` and `/Applications/Vi`.
@@ -476,12 +596,15 @@ describe('the scan\'s files', () => {
     }
   })
 
-  it('read the processes with one ps, comm last: no command line, and no read that cuts the name', () => {
+  // A tty column made every read of the table three times as slow on macOS (27 ms to 82 ms, 638 processes): only one
+  // process's terminal is read, and only for the own-pane check.
+  it('read the processes with one ps, comm last, and a terminal one process at a time: no command line, no cut name', () => {
     const source = readFileSync(fileURLToPath(new URL('./scannedApp.ts', import.meta.url)), 'utf8')
     for (const reader of [/listProcesses/, /processTable/, /processRows/, /\bargs=/, /\bcommand=/, /lstart/, /\/proc\//]) {
       expect(source).not.toMatch(reader)
     }
-    expect(source.match(/'ps'/g)).toEqual(["'ps'"])
+    expect(source.match(/'ps'/g)).toEqual(["'ps'", "'ps'"])
     expect(source).toContain("'ps', ['-axo', 'pid=,ppid=,comm=']")
+    expect(source).toContain("'ps', ['-o', 'tty=', '-p', String(pid)]")
   })
 })

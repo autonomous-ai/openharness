@@ -1,4 +1,5 @@
 import { configDefaults, defineConfig, mergeConfig } from 'vitest/config'
+import { DIAL_HOST_FILES } from './e2e/harness/dialHosts.js'
 import config from './vitest.e2e.config.js'
 import { createDurationSequencer, E2E_HINT_PATH, readTimingHintsFile } from './src/__fixtures__/ciTestSequencer.js'
 
@@ -10,11 +11,12 @@ import { createDurationSequencer, E2E_HINT_PATH, readTimingHintsFile } from './s
  * `--config vitest.e2e.ci.config.ts --shard=N/8` reproduces a CI shard's files locally.
  *
  * Left out: the agent browser on real Podman, which builds the browser's image (minutes, Chrome and
- * all) and runs only when asked, in its own job (`agent_browser_podman`).
+ * all) and runs only when asked, in its own job (`agent_browser_podman`); and the dial's hosts, which need herdr,
+ * WezTerm, Zellij and desktops installed and run in their own job (`e2e (dial hosts)`, vitest.e2e.dialHosts.config.ts).
  */
 export default mergeConfig(config, defineConfig({
   test: {
-    exclude: [...configDefaults.exclude, 'e2e/agentBrowserPodman.e2e.ts'],
+    exclude: [...configDefaults.exclude, 'e2e/agentBrowserPodman.e2e.ts', ...DIAL_HOST_FILES],
     sequence: { sequencer: createDurationSequencer(readTimingHintsFile('ci-e2e-durations.json', E2E_HINT_PATH)) },
   },
 }))

@@ -48,6 +48,7 @@ function fake(overrides: Partial<UninstallDeps> = {}) {
     endPtyHosts: async () => { calls.push('pty'); return [] },
     removeHooks: async () => { calls.push('hooks'); return [{ file: '/Users/u/.claude/settings.json', removed: 5 }] },
     removeLaunchers: () => { calls.push('launchers'); return ['/Users/u/.local/bin/harness', '/Users/u/.local/bin/hn'] },
+    removeLoginEntry: () => null,
     removePathEntry: () => { calls.push('path'); return { kind: 'rc', edits: [{ file: '/Users/u/.zshrc', removed: 1, changedByPerson: 0 }], keptFor: [] } },
     listEntries: (dir) => (dir === '/Users/u/.harness' ? [{ name: 'auth', dir: true }, { name: 'cli', dir: true }, { name: 'runtime', dir: true }] : [{ name: 'cli.js', dir: false }, { name: 'data', dir: true }]),
     exists: () => true,
@@ -672,6 +673,29 @@ describe('harness uninstall on Linux\'s two roots', () => {
     expect(outside.out).toContain('· left /srv/data: it is outside ~/.local/share/harness and ~/.local/state/harness (ADAPTER_DATA_DIR or HARNESS_AUTH_DIR names it); delete it yourself if it is Harness\'s')
   })
 
+  it('removes the login entry the installer wrote, beside the launchers', async () => {
+    const t = fake({ ...xdg, removeLoginEntry: () => '/home/u/.config/autostart/harnessd.desktop' })
+    expect(await uninstallCommand(['--yes'], t.deps)).toBe(0)
+    const lines = ['✓ removed ~/.local/bin/hn', '✓ removed ~/.config/autostart/harnessd.desktop', '✓ removed the PATH line Harness added to ~/.bashrc']
+    expect(t.out.filter((line) => lines.includes(line))).toEqual(lines)
+    // None there, or another program's: nothing is said.
+    const none = fake({ ...xdg })
+    expect(await uninstallCommand(['--yes'], none.deps)).toBe(0)
+    expect(none.out.some((line) => line.includes('autostart'))).toBe(false)
+  })
+
+  it('a login entry it could not remove is a problem, and the rest still runs', async () => {
+    const t = fake({ ...xdg, removeLoginEntry: () => ({ path: '/home/u/.config/autostart/harnessd.desktop', failed: 'EACCES' }) })
+    expect(await uninstallCommand(['--yes'], t.deps)).toBe(1)
+    expect(t.err).toEqual(['✗ Harness is uninstalled, except:', '  · could not remove ~/.config/autostart/harnessd.desktop (EACCES): delete it yourself'])
+    expect(t.out).toEqual(expect.arrayContaining(['✓ removed ~/.local/bin/hn', '✓ removed the PATH line Harness added to ~/.bashrc', '✓ removed ~/.local/share/harness', '✓ removed ~/.local/state/harness']))
+  })
+
+  it('never looks for a login entry on Windows', async () => {
+    const t = fake({ ...win, removeLoginEntry: () => { throw new Error('looked') } })
+    expect(await uninstallCommand(['--yes'], t.deps)).toBe(0)
+  })
+
   it('with one root every line is today\'s', async () => {
     const asked = (service: string, path: string, root: string, keepData: boolean) => [
       'harness uninstall removes Harness from this computer:',
@@ -689,8 +713,8 @@ describe('harness uninstall on Linux\'s two roots', () => {
       '✓ removed Harness\'s hooks from ~/.claude/settings.json',
     ]
     const done = (keepData: boolean) => (keepData ? 'Harness is uninstalled. Your sign-in and history are kept for the next install.' : 'Harness is uninstalled.')
-    const posixLines = (service: string, rc: string) => (keepData: boolean) => [
-      ...asked(service, '  · removes the harness and hn commands, and the PATH line the installer added', '~/.harness', keepData),
+    const posixLines = (service: string, rc: string, commands: string) => (keepData: boolean) => [
+      ...asked(service, commands, '~/.harness', keepData),
       '✓ removed ~/.local/bin/harness',
       '✓ removed ~/.local/bin/hn',
       `✓ removed the PATH line Harness added to ${rc}`,
@@ -703,7 +727,11 @@ describe('harness uninstall on Linux\'s two roots', () => {
       `✓ ${keepData ? 'the program in ~\\.harness' : '~\\.harness'} goes once this command has exited (anything left is listed in C:\\T\\h.log)`,
       done(keepData),
     ]
-    for (const [name, platform, lines] of [['macOS', {}, posixLines('launchd', '~/.zshrc')], ['Windows', win, windowsLines], ['Linux', legacyLinux, posixLines('systemd', '~/.bashrc')]] as const) {
+    for (const [name, platform, lines] of [
+      ['macOS', {}, posixLines('launchd', '~/.zshrc', '  · removes the harness and hn commands, and the PATH line the installer added')],
+      ['Windows', win, windowsLines],
+      ['Linux', legacyLinux, posixLines('systemd', '~/.bashrc', '  · removes the harness and hn commands, the login entry and the PATH line the installer added')],
+    ] as const) {
       for (const keepData of [false, true]) {
         const t = fake({ ...platform, isTTY: true, ask: async () => 'y' })
         expect(await uninstallCommand(keepData ? ['--keep-data'] : [], t.deps), name).toBe(0)
