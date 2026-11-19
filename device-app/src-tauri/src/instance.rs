@@ -1,5 +1,34 @@
 //! One instance: a lock in the app's data folder, so a second launch leaves the first one running.
 
+use std::fs::{DirBuilder, File, OpenOptions, TryLockError};
+use std::io;
+use std::path::Path;
+
+/// The running app's hold on the lock. Only held, never read: dropping it lets go.
+pub struct Instance(#[allow(dead_code)] File);
+
+/// Takes `instance.lock` in `folder`, made if missing, without waiting: `Ok(None)` while another process holds it.
+/// The lock is std's: `flock(LOCK_EX | LOCK_NB)` on unix, `LockFileEx` failing at once on Windows. Either ends with
+/// the process, so a crashed app leaves no lock behind.
+pub fn acquire(folder: &Path) -> io::Result<Option<Instance>> {
+    let mut builder = DirBuilder::new();
+    builder.recursive(true);
+    // The app's data folder is the person's alone, as the log and state.json make it.
+    #[cfg(unix)]
+    std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+    builder.create(folder)?;
+    let mut options = OpenOptions::new();
+    options.write(true).create(true).truncate(false);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    let file = options.open(folder.join("instance.lock"))?;
+    match file.try_lock() {
+        Ok(()) => Ok(Some(Instance(file))),
+        Err(TryLockError::WouldBlock) => Ok(None),
+        Err(TryLockError::Error(error)) => Err(error),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

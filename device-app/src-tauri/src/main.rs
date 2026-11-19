@@ -7,6 +7,7 @@ use harness_device::desktop::{DesktopApp, SystemDesktopApp, run_open};
 use harness_device::follow;
 use harness_device::front;
 use harness_device::install::system_shell;
+use harness_device::instance::Instance;
 use harness_device::log::FileLog;
 use harness_device::loginitem::SystemLoginItem;
 use harness_device::runner::{Doors, Runner};
@@ -32,6 +33,8 @@ struct Shared {
     view: Mutex<Option<View>>,
     /// The app's one queue: every event goes through it, so the loop handles them in the order they came.
     events: Sender<Event>,
+    /// Off macOS, this copy's lock: let go before a relaunch, so the new copy never finds it held.
+    instance: Mutex<Option<Instance>>,
 }
 
 #[tauri::command]
@@ -50,7 +53,7 @@ fn main() {
     #[cfg_attr(not(target_os = "macos"), allow(unused_mut))]
     let mut app = tauri::Builder::default()
         // Managed before the window is made, so its first `view` finds it.
-        .manage(Shared { view: Mutex::default(), events: events.clone() })
+        .manage(Shared { view: Mutex::default(), events: events.clone(), instance: Mutex::default() })
         .plugin(tauri_plugin_updater::Builder::new().build())
         .invoke_handler(tauri::generate_handler![view, act])
         .setup(move |app| start(app.handle(), events, queue).map_err(Into::into))
@@ -76,6 +79,17 @@ fn start(handle: &AppHandle, events: Sender<Event>, queue: Receiver<Event>) -> t
     let paths = handle.path();
     let clock: Arc<dyn Clock> = Arc::new(SystemClock);
     let log: Arc<dyn Log> = Arc::new(FileLog::new(paths.app_log_dir()?, clock.clone()));
+    // macOS runs one copy of a bundle by itself. Elsewhere a second launch leaves before its tray or watch, and a lock
+    // that cannot be made costs one log line, never the app.
+    #[cfg(not(target_os = "macos"))]
+    match harness_device::instance::acquire(&paths.app_data_dir()?) {
+        Ok(Some(instance)) => *handle.state::<Shared>().instance.lock().unwrap() = Some(instance),
+        Ok(None) => {
+            log.line("instance: already running");
+            std::process::exit(0);
+        }
+        Err(error) => log.line(&format!("instance: no lock ({})", error.kind())),
+    }
     let state = Arc::new(JsonStateFile::new(paths.app_data_dir()?, log.clone()));
     let saved = state.load();
     let doors = Doors {
@@ -231,7 +245,11 @@ fn draw(handle: &AppHandle, effect: Effect, asked: bool) -> tauri::Result<()> {
         Effect::ShowAbout(credits) => show_about(credits.as_deref()),
         // The daemon is left running: the app only ever watched it.
         Effect::Quit => handle.exit(0),
-        Effect::Relaunch => handle.restart(),
+        // Tauri starts the new copy before this one exits.
+        Effect::Relaunch => {
+            drop(handle.state::<Shared>().instance.lock().unwrap().take());
+            handle.restart()
+        }
         _ => {}
     }
     Ok(())
