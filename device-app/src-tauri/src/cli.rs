@@ -1262,4 +1262,208 @@ mod tests {
         assert_eq!(finished.line(WAIT), Ok(None));
         assert_eq!(finished.exit(WAIT), Ok(Some(0)));
     }
+
+    /// A child on Windows, run with Windows' own programs.
+    #[cfg(windows)]
+    mod windows_children {
+        use crate::child_windows::CREATION_FLAGS;
+        use crate::cli::*;
+        use crate::types::MemoryLog;
+        use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
+        use std::os::windows::process::CommandExt;
+        use windows_sys::Win32::Foundation::WAIT_OBJECT_0;
+        use windows_sys::Win32::System::Threading::{
+            OpenProcess, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE, TerminateProcess, WaitForSingleObject,
+        };
+
+        const WAIT: Duration = Duration::from_secs(5);
+        /// For a child's first line: PowerShell on a cold machine, and C# it compiles, take seconds.
+        const FIRST_LINE: Duration = Duration::from_secs(60);
+        /// Plenty for a process in a job that was ended to be gone.
+        const GONE: Duration = Duration::from_secs(1);
+
+        /// Starts its first argument outside the job it runs in, as harness-launch.exe starts the daemon, prints the
+        /// pid it started (a CreateProcess error as a negative number), then waits. STARTUPINFOW and
+        /// PROCESS_INFORMATION are bytes: 104 on 64-bit Windows with the size first, and 24 with the pid at 16.
+        const BREAKS_AWAY: &str = r#"
+Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+using System.Text;
+public static class Breakaway {
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    static extern bool CreateProcessW(string app, StringBuilder line, IntPtr process, IntPtr thread, bool inherit,
+        uint flags, IntPtr env, string folder, byte[] startup, byte[] started);
+
+    public static int Start(string line) {
+        var startup = new byte[104];
+        startup[0] = 104;
+        var started = new byte[24];
+        // CREATE_BREAKAWAY_FROM_JOB | CREATE_NO_WINDOW
+        if (!CreateProcessW(null, new StringBuilder(line), IntPtr.Zero, IntPtr.Zero, false, 0x09000000, IntPtr.Zero,
+                null, startup, started)) {
+            return -Marshal.GetLastWin32Error();
+        }
+        return BitConverter.ToInt32(started, 16);
+    }
+}
+'@
+[Console]::Out.WriteLine([Breakaway]::Start($args[0]))
+Start-Sleep 600
+"#;
+
+        /// A program of Windows' own, by its full path, so no PATH puts another first.
+        fn system32(parts: &[&str]) -> PathBuf {
+            let mut path = PathBuf::from(env::var_os("SystemRoot").expect("SystemRoot")).join("System32");
+            path.extend(parts);
+            path
+        }
+
+        fn powershell_exe() -> PathBuf {
+            system32(&["WindowsPowerShell", "v1.0", "powershell.exe"])
+        }
+
+        /// `cmd /C line`, the line as written: cmd reads its own command line.
+        fn cmd(line: &str) -> Command {
+            let mut command = Command::new(system32(&["cmd.exe"]));
+            command.arg("/C").raw_arg(line);
+            command
+        }
+
+        fn powershell(script: &str) -> Command {
+            let mut command = Command::new(powershell_exe());
+            command.args(["-NoProfile", "-NonInteractive", "-Command", script]);
+            command
+        }
+
+        fn start(command: Command) -> Child {
+            Child::start(command, "child".into(), Arc::new(MemoryLog::default())).unwrap()
+        }
+
+        /// The next line, without the `\r` Windows' programs end it with.
+        fn next(child: &mut Child, wait: Duration) -> String {
+            child.line(wait).expect("a line in time").expect("a line").trim_end().to_string()
+        }
+
+        /// The process a child printed the pid of, held open so the pid is never another's while the test looks.
+        fn process(pid: &str) -> OwnedHandle {
+            let pid: u32 = pid.parse().unwrap_or_else(|_| panic!("a pid: {pid}"));
+            // SAFETY: OpenProcess only opens a handle, which OwnedHandle closes.
+            let handle = unsafe { OpenProcess(PROCESS_SYNCHRONIZE | PROCESS_TERMINATE, 0, pid) };
+            assert!(!handle.is_null(), "{pid}: {}", io::Error::last_os_error());
+            // SAFETY: a new handle, which nothing else owns.
+            unsafe { OwnedHandle::from_raw_handle(handle) }
+        }
+
+        /// Whether the process is gone, or goes within `wait`.
+        fn gone_within(process: &OwnedHandle, wait: Duration) -> bool {
+            // SAFETY: the handle is open while `process` lives.
+            unsafe { WaitForSingleObject(process.as_raw_handle(), wait.as_millis() as u32) == WAIT_OBJECT_0 }
+        }
+
+        #[test]
+        fn the_flags_hide_the_console() {
+            // CREATE_NO_WINDOW: a console no one sees, which the console programs the child starts share.
+            assert_ne!(CREATION_FLAGS & 0x0800_0000, 0);
+            // Never DETACHED_PROCESS: with no console at all, each console program the child starts shows one.
+            assert_eq!(CREATION_FLAGS & 0x0000_0008, 0);
+        }
+
+        #[test]
+        fn a_run_gives_its_code_and_its_lines_in_order() {
+            let mut lines = Vec::new();
+            let output =
+                run_lines(cmd("echo a& echo b& exit 3"), WAIT, &mut |line| lines.push(line.trim_end().to_string()))
+                    .unwrap();
+            assert_eq!(lines, ["a", "b"]);
+            assert_eq!((output.code, output.timed_out), (Some(3), false));
+        }
+
+        #[test]
+        fn a_run_past_its_deadline_has_no_code() {
+            let started = Instant::now();
+            let output = run(powershell("Start-Sleep 60"), Duration::from_secs(2)).unwrap();
+            assert!(output.timed_out);
+            assert_eq!(output.code, None);
+            assert!(started.elapsed() < Duration::from_secs(10), "{:?}", started.elapsed());
+        }
+
+        /// A child that prints its pid and the pid of a process it started, then waits, is ended by `end`: then
+        /// neither is left.
+        fn ends_with_what_it_started(end: impl FnOnce(&Killer)) {
+            let mut child = start(powershell(concat!(
+                "$started = Start-Process -PassThru -NoNewWindow $env:ComSpec '/C ping -n 600 127.0.0.1 >NUL'; ",
+                "[Console]::Out.WriteLine($PID); [Console]::Out.WriteLine($started.Id); Start-Sleep 600",
+            )));
+            let both = [next(&mut child, FIRST_LINE), next(&mut child, WAIT)].map(|pid| process(&pid));
+            end(&child.killer());
+            assert_eq!(child.exit(WAIT), Ok(None));
+            for process in &both {
+                assert!(gone_within(process, WAIT));
+            }
+        }
+
+        #[test]
+        fn a_kill_ends_the_child_and_what_it_started() {
+            ends_with_what_it_started(|killer| killer.kill());
+            // Windows has no SIGTERM: a stop ends them at once, whatever the grace.
+            ends_with_what_it_started(|killer| killer.stop(Duration::from_secs(600)));
+        }
+
+        #[test]
+        fn a_killed_child_has_no_code() {
+            let mut child = start(cmd("ping -n 600 127.0.0.1 >NUL"));
+            child.killer().kill();
+            assert_eq!(child.exit(WAIT), Ok(None));
+        }
+
+        #[test]
+        fn a_process_that_broke_away_outlives_the_kill() {
+            let folder = tempfile::tempdir().unwrap();
+            let script = folder.path().join("breaks-away.ps1");
+            fs::write(&script, BREAKS_AWAY).unwrap();
+            let mut command = Command::new(powershell_exe());
+            command.args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File"]);
+            command.arg(&script).arg(format!("{} -n 600 127.0.0.1", system32(&["ping.exe"]).display()));
+            let mut child = start(command);
+            let away = process(&next(&mut child, FIRST_LINE));
+            child.killer().kill();
+            assert_eq!(child.exit(WAIT), Ok(None));
+            let outlived = !gone_within(&away, GONE);
+            // SAFETY: the handle is open, with the right to end it.
+            unsafe { TerminateProcess(away.as_raw_handle(), 1) };
+            assert!(outlived);
+        }
+
+        #[test]
+        fn a_writer_never_waits_on_a_child_that_reads_nothing() {
+            let mut child = start(cmd("ping -n 600 127.0.0.1 >NUL"));
+            let writer = child.stdin_writer();
+            // On a thread, so a write that waits fails the test instead of hanging it.
+            let (send, dropped) = mpsc::channel();
+            thread::spawn(move || {
+                let line = "x".repeat(100);
+                // 1 MB, past any pipe's buffer.
+                let _ = send.send((0..10_000).find_map(|_| writer.line(&line).err()));
+            });
+            assert_eq!(dropped.recv_timeout(Duration::from_secs(10)), Ok(Some(Unwritten::Full)));
+            // The closer is not held up either.
+            assert!(child.stdin_closer().close());
+            child.killer().kill();
+            assert_eq!(child.exit(WAIT), Ok(None));
+        }
+
+        #[test]
+        fn closing_stdin_ends_a_child_that_reads_it() {
+            // sort prints what it read once its stdin has ended.
+            let mut child = start(Command::new(system32(&["sort.exe"])));
+            let writer = child.stdin_writer();
+            assert_eq!(writer.line("b"), Ok(()));
+            assert_eq!(writer.line("a"), Ok(()));
+            assert!(child.stdin_closer().close());
+            assert_eq!([next(&mut child, WAIT), next(&mut child, WAIT)], ["a", "b"]);
+            assert_eq!(child.line(WAIT), Ok(None));
+            assert_eq!(child.exit(WAIT), Ok(Some(0)));
+        }
+    }
 }
