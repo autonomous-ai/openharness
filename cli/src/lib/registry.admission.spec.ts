@@ -757,6 +757,55 @@ it('claims an already-bound linked Stop once when its registration write outlive
   expect(onTurnStop).toHaveBeenCalledOnce()
 })
 
+it('claims a linked Stop once when it queued only behind the slow registry write of its agent\'s earlier hook', async () => {
+  const owner = (await registry.openProcessAgent({ engine: 'cursor', tmuxPane: '%3', cwd: root,
+    processIdentity: { pid: 7103, startMarker: 'fixture-start', executable: '<engine>' } }))!.entry
+  ;(await registry.register({ engine: 'cursor', sessionId: A, tmuxPane: '%3', cwd: root, processIdentity: owner.processIdentity! }))
+  const onTurnStop = vi.fn(), onAdmissionStop = vi.fn((_row: unknown, unmatched: boolean) => unmatched)
+  const f = await httpFixture(() => false, 65_536, { onTurnStop, onAdmissionStop })
+  const firedAt = Date.now()
+  const body = { engine: 'cursor', sessionId: A, transcriptPath: undefined, tmuxPane: '%3', hookEvent: 'stop', prompt: undefined }
+  // The turn's prompt hook, whose registry write a slow disk holds open.
+  const flush = hold(), prompt = f.post({ ...body, hookEvent: 'beforeSubmitPrompt' }, { id: 'fixture-prompt-slow-write-01', firedAt: firedAt - 1 })
+  await flush.entered
+  f.replyGrace()!()
+  expect((await prompt).body).toEqual({ pending: true })
+  const delivery = { id: 'fixture-stop-queued-write-01', firedAt }
+  expect((await f.post(body, delivery)).body).toEqual({ pending: true })
+  expect((await f.post(body, delivery, 'turn-stop')).body).toEqual({ pending: true })
+  flush.release()
+  await vi.waitFor(() => expect(f.registered).toHaveBeenCalledTimes(2))
+  expect(onAdmissionStop).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ agentId: owner.agentId }), false)
+  await vi.waitFor(() => expect(onTurnStop).toHaveBeenCalledOnce())
+  expect(onTurnStop).toHaveBeenCalledExactlyOnceWith({ sessionId: A, status: undefined, transcriptPath: undefined, firedAt })
+})
+
+it.each(['before', 'after'] as const)('keeps a linked Stop unmatched when the earlier hook it queued behind is held %s it arrives', async when => {
+  const owner = (await registry.openProcessAgent({ engine: 'cursor', tmuxPane: '%3', cwd: root,
+    processIdentity: { pid: 7103, startMarker: 'fixture-start', executable: '<engine>' } }))!.entry
+  ;(await registry.register({ engine: 'cursor', sessionId: A, tmuxPane: '%3', cwd: root, processIdentity: owner.processIdentity! }))
+  const onTurnStop = vi.fn(), onAdmissionStop = vi.fn((_row: unknown, unmatched: boolean) => unmatched)
+  const f = await httpFixture(() => false, 65_536, { onTurnStop, onAdmissionStop })
+  const firedAt = Date.now()
+  const body = { engine: 'cursor', sessionId: A, transcriptPath: undefined, tmuxPane: '%3', hookEvent: 'stop', prompt: undefined }
+  // A held hook is a real wait, unlike a slow write: the Stop behind it may belong to an earlier turn.
+  const flush = when === 'after' ? hold() : undefined
+  if (!flush) fault.rename = true
+  const prompt = f.post({ ...body, hookEvent: 'beforeSubmitPrompt' }, { id: 'fixture-prompt-held-01', firedAt: firedAt - 1 })
+  if (flush) { await flush.entered; f.replyGrace()!() }
+  expect((await prompt).body).toEqual({ pending: true })
+  const delivery = { id: 'fixture-stop-queued-hold-01', firedAt }
+  expect((await f.post(body, delivery)).body).toEqual({ pending: true })
+  if (flush) { fault.rename = true; flush.release() }
+  expect((await f.post(body, delivery, 'turn-stop')).body).toEqual({ pending: true })
+  await vi.waitFor(() => expect(f.reasons.some(reason => reason?.includes('registry storage write failed'))).toBe(true), { timeout: 3_000 })
+  fault.rename = false
+  await vi.waitFor(() => expect(onAdmissionStop).toHaveBeenCalled(), { timeout: 3_000 })
+  expect(onAdmissionStop).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ agentId: owner.agentId }), true)
+  await vi.waitFor(() => expect(f.registered).toHaveBeenCalledTimes(2))
+  expect(onTurnStop).not.toHaveBeenCalled()
+})
+
 it.each([false, true])('retains an overtaking Stop after process resolution recovers, with onWait: %s', async waiting => {
   const owner = (await registry.openProcessAgent({ engine: 'cursor', tmuxPane: '%3', cwd: root,
     processIdentity: { pid: 7103, startMarker: 'fixture-start', executable: '<engine>' } }))!.entry
