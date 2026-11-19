@@ -263,6 +263,17 @@ describe.skipIf(process.platform === 'win32')('the Claude app\'s store', () => {
       expect(localIds(across)).toEqual([local(2)])
       expect(across.skipped).toBe(1)
     })
+
+    it.each([10, 16])('two files with one cliSessionId keep the newest sort time\'s, beside %i other sessions', async (others) => {
+      // B's activity is newer but sorts by its older mtime: past 16 others the walk stops before it, so the copy
+      // chosen must not be the newer activity's, or it would depend on how many other sessions there are.
+      const s = store()
+      for (const n of range(1, others)) s.put(n)
+      s.put(101, { cliSessionId: cli(99), lastActivityAt: T }, { mtime: T })
+      s.put(102, { cliSessionId: cli(99), lastActivityAt: T + 5000 }, { mtime: T - 100_000 })
+      const read = await loaded(s.reader)
+      expect(read.sessions.find((session) => session.sessionId === cli(99))?.localId).toBe(local(101))
+    })
   })
 
   it('only new or changed files are parsed', async () => {
