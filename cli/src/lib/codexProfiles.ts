@@ -15,7 +15,7 @@ import { join } from 'path'
 import { env } from '../config/env.js'
 import { homeIsAbsolute } from '../engines/kit/homeAdoption.js'
 import { discoverCodexProfiles } from './codexProfileDiscovery.js'
-import { atomicWriteJson, readPrivateStateFile, secureStateDirectory } from './secureState.js'
+import { atomicWriteJson, hardenPrivateStateFileIfPresent, jsonArray, readState, secureStateDirectory } from './secureState.js'
 
 export interface CodexProfile {
   path: string
@@ -35,14 +35,14 @@ function labelFor(path: string): string {
 
 function readLinkedPaths(): Set<string> {
   try {
-    const raw = JSON.parse(readPrivateStateFile(FILE, 1024 * 1024)) as unknown
-    if (Array.isArray(raw)) {
-      return new Set(raw.filter((p): p is string => typeof p === 'string').slice(0, MAX_LINKED))
-    }
+    // A list another account could write is not this reader's to set aside: no list, and the writer refuses it too.
+    hardenPrivateStateFileIfPresent(FILE, 1024 * 1024)
   } catch {
-    // Discovery still works when the optional saved list is unavailable/unreadable/malformed.
+    return new Set()
   }
-  return new Set()
+  const read = readState(FILE, 'cache', jsonArray)
+  if (read.state !== 'ok') return new Set()
+  return new Set(read.value.filter((p): p is string => typeof p === 'string').slice(0, MAX_LINKED))
 }
 
 function writeLinkedPaths(paths: Set<string>): void {

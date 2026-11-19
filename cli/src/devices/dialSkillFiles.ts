@@ -10,6 +10,7 @@
 import { randomUUID } from 'node:crypto'
 import { closeSync, fsyncSync, openSync, readSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
+import { jsonObject, readState } from '../lib/secureState.js'
 
 export type DialEngine = 'claude' | 'codex'
 
@@ -44,8 +45,9 @@ export type Read<T> = T & { unread?: true }
 
 const codeOf = (error: unknown): string => (error as NodeJS.ErrnoException).code ?? 'FAILED'
 
-/** [file] parsed as JSON; undefined when it is missing, longer than [max] bytes or not JSON. One that is there but
- *  cannot be read throws. */
+/** [file] parsed as JSON; undefined when it is missing, longer than [max] bytes or not a JSON object. One that is there
+ *  but cannot be read throws. One within [max] that is not a JSON object is set aside, so no write puts "empty" over
+ *  what it held. */
 const readJson = (file: string, max: number): unknown => {
   let fd: number
   try {
@@ -68,9 +70,11 @@ const readJson = (file: string, max: number): unknown => {
   }
   if (length > max) return undefined
   try {
-    return JSON.parse(buffer.toString('utf8', 0, length))
+    return jsonObject(buffer.toString('utf8', 0, length))
   } catch {
-    return undefined
+    // Read again with the retry: another process may have been writing it.
+    const read = readState(file, 'cache', jsonObject)
+    return read.state === 'ok' ? read.value : undefined
   }
 }
 
