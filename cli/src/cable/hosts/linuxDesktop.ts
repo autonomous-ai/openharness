@@ -107,6 +107,8 @@ export async function findLinuxDesktop(deps: LinuxDesktopDeps): Promise<LinuxDes
     }
   }
 
+  // A path's socket must be this account's. An abstract socket has no file, so no owner to check: the bus daemon itself
+  // refuses a client of another uid.
   const exportedBus = env.DBUS_SESSION_BUS_ADDRESS?.match(SESSION_BUS)?.[0]
   const bus = exportedBus !== undefined && (!exportedBus.startsWith('unix:path=') || own(exportedBus.slice('unix:path='.length), 'socket'))
     ? exportedBus

@@ -21,7 +21,7 @@ export interface KwinRaiseDeps extends RaiseRun {
   name(): string
 }
 
-// A load answers the script's id (RECORDED_KWIN.loadScript); KWin answers -1 for a name loaded already, no script's.
+// A load answers the script's id (RECORDED_KWIN.loadScript): only a whole number is taken for one.
 const SCRIPT_ID = /^\s*int32 ([0-9]{1,10})$/m
 
 /** The text that ran on Plasma 6 and 5 alike (RECORDED_KWIN.raiseScript): Plasma 6 names the API windowList and
