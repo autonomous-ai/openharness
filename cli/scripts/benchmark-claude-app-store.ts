@@ -33,7 +33,8 @@ try {
   const { claudeAppFixture } = await import('../src/testing/claudeAppFixture.js')
 
   const uuid = (i: number): string => `00000000-0000-4000-8000-${i.toString(16).padStart(12, '0')}`
-  /** A store of `count` files, none archived, mtimes one second apart. Its newest file's path. */
+  /** A store of `count` files, none archived, mtimes one second apart: its root, and `write`, which rewrites its newest
+   *  file at an mtime and gives that file's path. */
   function store(root: string, count: number): { write: (mtime: number) => string; root: string } {
     const fixture = claudeAppFixture(root)
     const write = (i: number, mtime: number): string => fixture.write(
