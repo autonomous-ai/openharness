@@ -56,10 +56,10 @@ import { OpencodeSource } from '../cable/hosts/opencodeSource.js'
 import { createOrcaAdapter, createOrcaReads, orcaDeps, type OrcaFocusWatch, type OrcaReadDeps, type OrcaReads, type OrcaTerminal } from '../cable/hosts/orca.js'
 import { readRecord } from '../cable/hosts/record.js'
 import { HostRegistry, type HostEntry } from '../cable/hosts/registry.js'
-import { learnApps, readProcessNames } from '../cable/hosts/scannedApp.js'
+import { appRoots, learnApps, readBundleId, readProcessNames } from '../cable/hosts/scannedApp.js'
 import { createScrollLines } from '../cable/hosts/scrollLines.js'
 import { createTabsAdapter, readTty, type Tab } from '../cable/hosts/tabs.js'
-import { createTmuxAdapter } from '../cable/hosts/tmux.js'
+import { createTmuxAdapter, createTmuxOuter } from '../cable/hosts/tmux.js'
 import type { HostAgent, HostAgentState } from '../cable/hosts/types.js'
 import { watchSocket } from '../cable/hosts/unixSocket.js'
 import { createVscodeAdapter, termPid } from '../cable/hosts/vscode.js'
@@ -230,6 +230,7 @@ function orcaHomesCache(now: () => number, log: (line: string) => void): OrcaHom
 function observedSource(
   dataDir: string, log: (line: string) => void, orcaHomes: Pick<OrcaHomesCache, 'get'>, actions: ObservedActions,
   tty: ObservedDeps['tty'], scanned: ObservedDeps['scanned'], herdrTerminal: ObservedDeps['herdrTerminal'],
+  outer: ObservedDeps['outer'],
 ): ObservedSource {
   // Worked out at each read: a home the person moved is adopted while the daemon runs, and Orca's follow its last read.
   const places = observedPlaces({
@@ -259,6 +260,7 @@ function observedSource(
     tty,
     scanned,
     herdrTerminal,
+    outer,
   })
 }
 
@@ -593,7 +595,11 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   }, ttyOf, skill ? (owners) => part.call('skill', () => skill.scanned(owners.values())) : undefined,
   // Only where a hook's address is taken: following another hc session, Herdr's adapter gives its terminals no pane, so
   // a session paired there would be listed twice on Herdr's page.
-  hookIds ? (pid): string | undefined => hcSource?.terminalOf(pid) : undefined) : null
+  hookIds ? (pid): string | undefined => hcSource?.terminalOf(pid) : undefined,
+  // An agent in a pane of the person's tmux is on the page of the app holding the client that shows it, on every
+  // platform: the lookup answers nothing at once for an agent in no tmux pane.
+  createTmuxOuter({ run: apps.run, processes: readProcessNames, log, now: monotonic, platform: apps.platform,
+    roots: appRoots(homedir()), bundleId: readBundleId })) : null
   // Orca is asked only for the parts that use its homes, the first time as the devices start: the start pass waits for
   // that read (at most its 5 s), so an Orca home gets the skill with the default one.
   if (skill || observed) void orcaHomes.refresh().then(() => {
