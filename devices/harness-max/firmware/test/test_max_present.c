@@ -160,6 +160,50 @@ static void last_row(void)
     check_frame("full damage and the last row", &b);
 }
 
+// A run added or dropped mid-scene (a line of words wrapping onto two): the damage is what it draws, not every run after
+// it, and the glass is the scene's. The listening band's partial frame does that: the new level ends the quiet, and the
+// send prompt's two rows become one, before the X, the slivers and the row's faded ends.
+static void runs_added(void)
+{
+    draw(&SCREENS[0]);
+    a = S;
+    present(NULL, &a, "a run added, before");
+    b = a;
+    const int at = b.count / 2;
+    memmove(&b.runs[at + 1], &b.runs[at], (size_t)(b.count - at) * sizeof b.runs[0]);
+    b.count++;
+    ht_scene_t one;
+    ht_scene_clear(&one, b.background);
+    CHECK(ht_pro_rect(&one, 300, 100, 20, 10, 0, 0xF800));
+    b.runs[at] = one.runs[0];
+    ht_damage_t d;
+    ht_damage(&a, &b, &d);
+    CHECK(d.pixels == 20 * 10);
+    max_present(&a, &b, NULL);
+    check_frame("a run added", &b);
+    ht_damage(&b, &a, &d);
+    CHECK(d.pixels == 20 * 10);
+    max_present(&b, &a, NULL);
+    check_frame("a run dropped", &a);
+
+    for (int i = 0; i < SCREEN_COUNT; i++)
+        if (!strcmp(SCREENS[i].name, "agent-listening")) draw(&SCREENS[i]);
+    a = S;
+    present(NULL, &a, "listening, before");
+    max_ui_level(4, T0 + MAX_TALK_FRAME_MS);
+    frame(T0 + MAX_TALK_FRAME_MS);
+    b = S;
+    CHECK(b.count == a.count - 1);   // the case
+    ht_damage(&a, &b, &d);
+    int tail = 0;   // what follows the band, the same in both: the X, the slivers, the row's faded ends
+    while (tail < b.count && !memcmp(&a.runs[a.count - 1 - tail], &b.runs[b.count - 1 - tail], sizeof b.runs[0])) tail++;
+    CHECK(tail >= 10);
+    for (int k = 0; k < tail; k++)
+        for (int n = 0; n < d.count; n++) CHECK(!overlap(ht_run_bounds(&b.runs[b.count - 1 - k]), d.rect[n]));
+    CHECK(d.pixels < 100000);
+    present(&a, &b, "listening, the next level");
+}
+
 // App Detail's row as it closes, its blurs left to the frame (max_ui_share): both tasks do them before any strip, and
 // the glass is the one those blurs done in the build give. A scene built and never shown (its blurs never done) leaves
 // no pet's image unmade for the next frame to take up: that frame paints them again.
@@ -189,6 +233,7 @@ int main(void)
     shared_blurs();
     max_ui_share(true);   // as the app has it
     last_row();
+    runs_added();
     every_screen(2);
     CHECK(helper_pushes > 0);   // the helper did paint
     CHECK(serial_runs > 0);     // and the render task kept the resampled cells (Overview's logos)

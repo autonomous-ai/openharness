@@ -262,16 +262,25 @@ void ht_damage(const ht_scene_t *a, const ht_scene_t *b, ht_damage_t *d)
     }
     if (!a || a->background != b->background) {
         damage_add(d, (ht_rect_t){0, 0, HT_WIDTH, HT_HEIGHT}, NULL);
-    } else
-        for (int i = 0; i < imax(a->count, b->count); i++) {
-            if (i < a->count && i < b->count &&
-                memcmp(&a->runs[i], &b->runs[i], sizeof(ht_run_t)) == 0)
+    } else {
+        // The runs both scenes end with, the same in the same order, draw the same pixels wherever the runs before them
+        // do: a run added or dropped before them (a line of words wrapping onto two) damages what it draws, not every
+        // run after it.
+        int tail = 0;
+        if (a->count != b->count)
+            while (tail < imin(a->count, b->count) &&
+                   memcmp(&a->runs[a->count - 1 - tail], &b->runs[b->count - 1 - tail], sizeof(ht_run_t)) == 0)
+                tail++;
+        for (int i = 0; i < imax(a->count, b->count) - tail; i++) {
+            const bool in_a = i < a->count - tail, in_b = i < b->count - tail;
+            if (in_a && in_b && memcmp(&a->runs[i], &b->runs[i], sizeof(ht_run_t)) == 0)
                 continue;
-            if (i < a->count)
+            if (in_a)
                 damage_add(d, ht_run_bounds(&a->runs[i]), rows);
-            if (i < b->count)
+            if (in_b)
                 damage_add(d, ht_run_bounds(&b->runs[i]), rows);
         }
+    }
     for (int i = 0; i < d->count; i++)
         d->pixels += (uint32_t)d->rect[i].w * d->rect[i].h;
     if (rows) damage_rows_finish(rows, d);
