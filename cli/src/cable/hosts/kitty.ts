@@ -8,11 +8,10 @@
  */
 import { dirname, join } from 'node:path'
 import { binaryOnPath, resolveBinaryOnPath } from '../../lib/binaryOnPath.js'
-import { resolveViaLoginShell, tmuxInstallDirectories, type TmuxPathOutcome } from '../../lib/tmuxOnPath.js'
+import { binaryFinder, resolveViaLoginShell, tmuxInstallDirectories, type TmuxPathOutcome } from '../../lib/tmuxOnPath.js'
 import type { HostAdapter, Pane, Place } from './adapter.js'
 import { APP_BUNDLES } from './hostDetect.js'
 import { CONTROL, MAX_TEXT, RUN_TIMEOUT_MS, type OrcaDeps } from './orca.js'
-import { binaryFinder } from './tmux.js'
 
 const APP_KITTEN = '/Applications/kitty.app/Contents/MacOS/kitten'
 const WINDOW_ID = /^[0-9]{1,9}$/

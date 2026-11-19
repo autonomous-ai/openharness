@@ -10,11 +10,11 @@
  */
 import { dirname, join } from 'node:path'
 import { binaryOnPath } from '../../lib/binaryOnPath.js'
-import { resolveViaLoginShell, tmuxInstallDirectories, type TmuxPathOutcome } from '../../lib/tmuxOnPath.js'
+import { binaryFinder, resolveViaLoginShell, tmuxInstallDirectories, type TmuxPathOutcome } from '../../lib/tmuxOnPath.js'
 import type { HostAdapter, Pane, Place } from './adapter.js'
 import { CONTROL, MAX_TEXT, RUN_TIMEOUT_MS, type OrcaDeps } from './orca.js'
 import { parentChain, type ProcessName } from './scannedApp.js'
-import { binaryFinder, type ClientLookup } from './tmux.js'
+import type { ClientLookup } from './tmux.js'
 
 // Zellij takes spaces and `:` in a session name too; this form keeps a name no argument parser reads as a flag, and
 // lets `:` end the session in a pane id.
