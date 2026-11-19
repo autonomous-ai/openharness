@@ -1,3 +1,4 @@
+#![cfg_attr(windows, windows_subsystem = "windows")]
 //! The binary: the tray, the window and the timer. Every rule they follow is in the library, under `cargo test`.
 
 use harness_device::app::App;

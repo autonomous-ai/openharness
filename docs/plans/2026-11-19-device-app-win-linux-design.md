@@ -126,7 +126,8 @@ folders. `child_env` joins PATH with `;` on Windows (today it always uses `:`) a
 - **Windows:** a `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` value `Harness Device` = the quoted path of the
   installed exe. The same rule as `register_from`: written only when absent; when Windows' Startup Apps has it turned
   off (`...\Explorer\StartupApproved\Run` value whose first byte is not `02`), it reads as `RequiresApproval` and is
-  never turned back on. The NSIS uninstaller removes the value.
+  never turned back on. Tauri's NSIS uninstaller removes the value (it is named after the product), on a real
+  uninstall only, not on an update.
 - **Linux:** one entry only, shared with the CLI. `feat/dial-linux` makes `install.sh` write
   `<config>/autostart/harnessd.desktop` (`Exec=<launcher> start`, `NoDisplay=true`, `X-GNOME-Autostart-enabled=true`,
   name `Harness`; `<config>` is `$XDG_CONFIG_HOME` when absolute, else `~/.config`; atomic write; a file with

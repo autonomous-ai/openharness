@@ -59,7 +59,7 @@ Checked on this Mac, 2026-11-19: `cargo check --locked --lib --target x86_64-pc-
 | 23 | Linux: `tray: no host` | `ST/src/tray_host.rs`, `ST/src/main.rs` | 2 | high | `tray_host.rs` |
 | 24 | About on Windows and Linux | `ST/src/types.rs`, `ST/src/app.rs`, `ST/src/runner.rs`, `ST/src/main.rs` | 4 | high | `app.rs`, `runner.rs` new cases |
 | 25 | Linux refreshes from the tick; the parity test | `ST/src/tick.rs`, `ST/src/parity.rs`, `ST/src/main.rs` | 14 | high | `tick.rs`, `parity.rs` |
-| 26 | Packaging details | `ST/tauri.conf.json`, `ST/tauri.windows.conf.json`, `ST/tauri.linux.conf.json`, `ST/windows/hooks.nsh`, `ST/icons/32x32.png`, `ST/icons/128x128.png`, `ST/icons/128x128@2x.png`, `ST/src/packaging.rs`, `ST/src/main.rs` | 2, 12 | high | `packaging.rs` |
+| 26 | Packaging details | `ST/tauri.conf.json`, `ST/tauri.windows.conf.json`, `ST/tauri.linux.conf.json`, `ST/icons/32x32.png`, `ST/icons/128x128.png`, `ST/icons/128x128@2x.png`, `ST/src/packaging.rs`, `ST/src/main.rs` | 2, 12 | high | `packaging.rs` |
 | 27 | The manifest carries every platform | `DA/scripts/device-manifest.py`, `DA/scripts/test_device_manifest.py` | none | xhigh | `test_device_manifest.py` new cases |
 | 28 | `make release-device` chooses the platforms | `DA/scripts/release-device.sh`, `DA/scripts/test_release_device.py`, `Makefile` | none | high | `test_release_device.py` new cases |
 | 29 | Build, bundle and check on each OS | `DA/scripts/release-setup.sh`, `DA/scripts/release-build.sh`, `DA/scripts/release-check.sh`, `DA/scripts/test_release_build.py` (new) | 26 | xhigh | `test_release_build.py` |
@@ -127,7 +127,7 @@ Checked on this Mac, 2026-11-19: `cargo check --locked --lib --target x86_64-pc-
 
 ## Review Focus
 
-1. **A Windows update must not remove the login item.** NSIS runs the old uninstaller on every update (`/UPDATE`), and Tauri's hooks run there too. Tests: Task 26 `the_uninstaller_removes_the_run_value_only_on_a_real_uninstall`; Task 34 checks the Run value after 0.0.1 → 0.0.2.
+1. **A Windows update must not remove the login item.** NSIS runs the old uninstaller on every update (`/UPDATE`); Tauri's uninstaller deletes the Run value named after the product on a real uninstall only. Tests: Task 26 `the_uninstaller_removes_the_run_value_only_on_a_real_uninstall`; Task 34 checks the Run value after 0.0.1 → 0.0.2.
 2. **A killed Windows child must read as "no code".** Tests: Task 4 `a_killed_child_has_no_code`, `a_run_past_its_deadline_has_no_code`.
 3. **A path with a space or a non-ASCII letter** (`C:\Users\Nguyễn Văn A`, `~/My Apps/Harness-Device-linux-x64.AppImage`): the CLI is found, Explorer selects the zip, the entry's `Exec=` starts the AppImage, the log says `~`. Tests: Task 5 `the_layout_is_found_under_a_home_with_a_space_and_an_accent`; Task 6; Task 13 `a_path_with_a_space_a_percent_a_dollar_a_quote_and_a_backslash_is_quoted`; Task 20 `explorer_selects_a_zip_whose_path_has_a_space`.
 4. **A Linux relaunch after an update must not lose to its own lock.** Tests: Task 21 `a_second_acquire_is_refused_until_the_first_is_dropped`; Task 34 finds the app running after the update.
@@ -525,17 +525,17 @@ No behavior changes on macOS or Linux. Later tasks fill the files and never edit
 
 ### Task 26: Packaging details
 
-**Files:** Modify `ST/tauri.conf.json`, `ST/tauri.windows.conf.json`, `ST/tauri.linux.conf.json`, `ST/src/main.rs`; create `ST/windows/hooks.nsh`, `ST/icons/32x32.png`, `ST/icons/128x128.png`, `ST/icons/128x128@2x.png`; fill `ST/src/packaging.rs`.
+**Files:** Modify `ST/tauri.conf.json`, `ST/tauri.windows.conf.json`, `ST/tauri.linux.conf.json`, `ST/src/main.rs`; create `ST/icons/32x32.png`, `ST/icons/128x128.png`, `ST/icons/128x128@2x.png`; fill `ST/src/packaging.rs`.
 
 **Interfaces — Consumes:** `loginitem_windows::RUN_VALUE` (Task 12).
 
 - `tauri.conf.json`: the window gains `"skipTaskbar": true`.
-- `tauri.windows.conf.json`: `bundle.windows.nsis`: `"installMode": "currentUser"`, `"installerHooks": "windows/hooks.nsh"`. WebView2 stays the download bootstrapper (Tauri's default).
-- `hooks.nsh`: `!macro NSIS_HOOK_POSTUNINSTALL` holding, inside `${If} $UpdateMode <> 1` … `${EndIf}`, `DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "Harness Device"`.
+- `tauri.windows.conf.json`: `bundle.windows.nsis`: `"installMode": "currentUser"`. WebView2 stays the download bootstrapper (Tauri's default).
+- No installer hook: Tauri's NSIS uninstaller already deletes the HKCU Run value named after the product (`productName`, `Harness Device`), and keeps it on an update (`$UpdateMode`).
 - `tauri.linux.conf.json`: `bundle.icon` lists the three PNGs (from Task 2's `cargo tauri icon` output) and `icons/icon.png`.
 - `main.rs`, first line: `#![cfg_attr(windows, windows_subsystem = "windows")]`.
 
-- [ ] **Step 1: Failing tests** (`packaging.rs`; the files read with `include_str!`, the JSON with `serde_json`): `the_uninstaller_removes_the_run_value_only_on_a_real_uninstall` (the macro, the `$UpdateMode <> 1` guard around the `DeleteRegValue` line, and its value name equals `RUN_VALUE`); `windows_installs_per_user_as_harness_device` (`productName` is `Harness Device`, targets `["nsis"]`, `installMode` `currentUser`, the hooks path); `linux_is_an_appimage`; `the_window_is_harness_at_420_by_320_with_no_taskbar_button`; `every_windows_build_is_a_gui_program`.
+- [ ] **Step 1: Failing tests** (`packaging.rs`; the files read at run time, the JSON with `serde_json`): `the_uninstaller_removes_the_run_value_only_on_a_real_uninstall` (`productName` equals `RUN_VALUE`, and `tauri.windows.conf.json` does not override it; a pin that passes at once); `windows_installs_per_user_as_harness_device` (`productName` is `Harness Device`, targets `["nsis"]`, `installMode` `currentUser`); `linux_is_an_appimage`; `the_window_is_harness_at_420_by_320_with_no_taskbar_button`; `every_windows_build_is_a_gui_program`.
 - [ ] **Step 2:** `cargo test --locked --lib packaging` FAILS. Commit red. **Step 3: Implement.** **Step 4:** green here and on both `windows-unit` steps. **Step 5: Commit** `Windows installs per user as Harness Device and Linux as an AppImage; no taskbar button, no console`.
 
 ### Task 27: The manifest carries every platform
