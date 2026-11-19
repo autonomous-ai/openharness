@@ -1,9 +1,23 @@
 import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { defaultSettings } from './settings.js'
 import { StateFile } from './stateFile.js'
+
+// Pass-through, recording each call that opens, writes or renames a file by its name.
+const disk = vi.hoisted(() => ({ events: [] as string[][] }))
+vi.mock('node:fs', async (original) => {
+  const actual = await original<typeof import('node:fs')>()
+  return { ...actual,
+    openSync: (...args: Parameters<typeof actual.openSync>) => { disk.events.push(['open', String(args[0])]); return actual.openSync(...args) },
+    writeFileSync: (...args: Parameters<typeof actual.writeFileSync>) => { disk.events.push(['write', String(args[0])]); return actual.writeFileSync(...args) },
+    renameSync: (...args: Parameters<typeof actual.renameSync>) => { disk.events.push(['rename', String(args[0]), String(args[1])]); return actual.renameSync(...args) },
+  }
+})
+/** The calls that named [file] itself; a fresh temporary name beside it (`<file>.<pid>.<uuid>.tmp`) shown as `<tmp>`. */
+const touching = (file: string) => disk.events.filter((event) => event.includes(file)).map((event) => event.map((name) =>
+  name.startsWith(`${file}.${process.pid}.`) && /^[0-9a-f-]{36}\.tmp$/.test(name.slice(`${file}.${process.pid}.`.length)) ? '<tmp>' : name))
 
 const settings = defaultSettings({ timeZone: 'UTC', languages: 'en-US' })
 
@@ -60,5 +74,20 @@ describe('StateFile', () => {
       expect(() => file.update(s => { s.deleting.push('a1') })).toThrow(expect.objectContaining({ state: 'state_unreadable' }))
       expect(readFileSync(path, 'utf8')).toBe(broken)
     }
+  })
+
+  it('the save goes through a temporary file renamed onto the target', () => {
+    const file = new StateFile(path)
+    disk.events = []
+    file.update(s => { s.browsers.a1 = settings })
+    expect(touching(path)).toEqual([['rename', '<tmp>', path]])
+    expect(readFileSync(path, 'utf8')).toBe(`${JSON.stringify({ browsers: { a1: settings }, deleting: [], setup: null }, null, 2)}\n`)
+  })
+
+  it('a file at the old temporary name is left alone', () => {
+    const old = `${path}.${process.pid}.tmp`
+    writeFileSync(old, 'not ours')
+    new StateFile(path).update(s => { s.browsers.a1 = settings })
+    expect(readFileSync(old, 'utf8')).toBe('not ours')
   })
 })

@@ -9,6 +9,20 @@ import type { RegisteredSession } from '../lib/registry.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import { GOAL_HARNESSES_MAX, GOAL_KEPT_MS, GOAL_LEFT_MS, GOAL_TITLE_MAX, GOALS_OPEN_MAX, goalsPath, startGoals } from './goals.js'
 
+// Pass-through, recording each call that opens, writes or renames a file by its name.
+const disk = vi.hoisted(() => ({ events: [] as string[][] }))
+vi.mock('node:fs', async (original) => {
+  const actual = await original<typeof import('node:fs')>()
+  return { ...actual,
+    openSync: (...args: Parameters<typeof actual.openSync>) => { disk.events.push(['open', String(args[0])]); return actual.openSync(...args) },
+    writeFileSync: (...args: Parameters<typeof actual.writeFileSync>) => { disk.events.push(['write', String(args[0])]); return actual.writeFileSync(...args) },
+    renameSync: (...args: Parameters<typeof actual.renameSync>) => { disk.events.push(['rename', String(args[0]), String(args[1])]); return actual.renameSync(...args) },
+  }
+})
+/** The calls that named [file] itself; a fresh temporary name beside it (`<file>.<pid>.<uuid>.tmp`) shown as `<tmp>`. */
+const touching = (file: string) => disk.events.filter((event) => event.includes(file)).map((event) => event.map((name) =>
+  name.startsWith(`${file}.${process.pid}.`) && /^[0-9a-f-]{36}\.tmp$/.test(name.slice(`${file}.${process.pid}.`.length)) ? '<tmp>' : name))
+
 const NOW = Date.parse('2026-11-12T12:00:00Z')
 const LOCAL: Asker = { local: true, owner: true }
 
@@ -142,18 +156,37 @@ describe('harness goal, kept by the service', () => {
     log.mockRestore()
   })
 
-  it('starts empty from a file it cannot read, and says so by its code, never its contents', async () => {
+  it('reads a file of another shape as no goals, and drops a goal missing its parts', async () => {
     mkdirSync(join(dir, 'hachi'), { recursive: true })
-    writeFileSync(goalsPath(dir), '{not json')
-    const log = vi.spyOn(console, 'error').mockImplementation(() => {})
-    expect((await ask('goal_list', {})).goals).toEqual([])
-    expect(log).toHaveBeenCalledWith('[goals] goals.json unreadable · SyntaxError')
-    // A file of another shape is no goals either; a goal missing its parts is dropped.
     writeFileSync(goalsPath(dir), JSON.stringify({ goals: [{ id: 'a' }, { id: 'b', title: 't', harnesses: [], openedAt: 1, lastStartAt: null, doneAt: null }] }))
     expect((await ask('goal_list', {})).goals.map((g: { id: string }) => g.id)).toEqual(['b'])
     writeFileSync(goalsPath(dir), JSON.stringify({ goals: 'no' }))
     expect((await ask('goal_list', {})).goals).toEqual([])
-    log.mockRestore()
+  })
+
+  it('a torn goals.json is set aside, not written over', async () => {
+    mkdirSync(join(dir, 'hachi'), { recursive: true })
+    writeFileSync(goalsPath(dir), '{"')
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    await open()
+    expect(readFileSync(`${goalsPath(dir)}.unreadable`, 'utf8')).toBe('{"')
+    expect(JSON.parse(readFileSync(goalsPath(dir), 'utf8')).goals).toHaveLength(1)
+    expect(warn).toHaveBeenCalledWith('[state] goals.json could not be read (not valid JSON); kept as goals.json.unreadable, starting empty.')
+    warn.mockRestore()
+  })
+
+  it('the save goes through a temporary file renamed onto the target', async () => {
+    disk.events = []
+    await open()
+    expect(touching(goalsPath(dir))).toEqual([['rename', '<tmp>', goalsPath(dir)]])
+  })
+
+  it('a file at the old temporary name is left alone', async () => {
+    mkdirSync(join(dir, 'hachi'), { recursive: true })
+    const old = `${goalsPath(dir)}.${process.pid}.tmp`
+    writeFileSync(old, 'not ours')
+    await open()
+    expect(readFileSync(old, 'utf8')).toBe('not ours')
   })
 })
 
