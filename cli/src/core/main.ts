@@ -1446,6 +1446,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // The person sent a harness text from a window or the phone (services/agentCleanup.ts).
     typed: id => { const session = registry.resolve(id); if (session) agentLife.input(session) },
     moveGate,
+    launchRevision: restoreRevision,
     // Its waitingFor changed: every window gets the agent's frame again.
     sync: (id) => { const session = registry.resolve(id); if (session) syncSession(session) },
     // Claude Code's and Codex's readers start on demand in a process of their own: a message waits for its engine's (26 s at load 40).

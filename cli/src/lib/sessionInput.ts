@@ -230,6 +230,8 @@ export interface SessionInputDeps {
   /** Whether the engine's reader of [session] is starting: null when it is up (or the engine needs none), else whether it came up
    *  within its bounded wait (core/serviceLinks.ts `whenUp`). A message waits for it before the lease's wait begins. */
   engineStarting?: (session: RegisteredSession) => Promise<boolean> | null
+  /** Stop, restart and retarget revoke a pending restored launch through this existing lifecycle revision. */
+  launchRevision?: (agentId: string) => number
   /** A message waits for something before it is typed: said once, as it starts to wait. */
   onWaiting?: (sessionId: string, reason: 'engine_starting') => void
   /** An agent's `waitingFor` changed (its first message began to wait, or its last stopped): its frame is pushed again. */
@@ -957,8 +959,8 @@ export class SessionInputController {
       this.enqueue(sessionId, state, content, deliveryId, receipt, request)
       return
     }
-    const typed = { ...session }
-    const sameBinding = captureSessionBinding(typed)
+    let typed = { ...session }
+    let sameBinding = captureSessionBinding(typed)
     const operation: InputOperation = { request, session: typed, duringTurn: state.turnOpen,
       writing: false, dispatched: false, ...(release ? { release } : {}) }
     const current = (): boolean => {
@@ -991,6 +993,43 @@ export class SessionInputController {
       state.cancelled = false
     }
     try {
+      // Restore exposes the conversation before its engine exists. Only the same lifecycle may
+      // supply its first process; a pane alone never authorizes typing into the startup shell.
+      if (typed.sessionId && typed.boundAt != null && typed.launch?.state === 'starting'
+        && !typed.processIdentity && this.deps.launchRevision) {
+        const restoredRevision = this.deps.launchRevision(session.agentId)
+        const token = typed.launch.nativeToken
+        const sameRestore = captureSessionBinding({ ...typed, processIdentity: null, evidenceRevision: undefined })
+        const now = this.deps.now ?? Date.now
+        const sleep = this.deps.sleep ?? (ms => new Promise<void>(resolve => setTimeout(resolve, ms)))
+        const deadline = now() + LEASE_WAIT_MS
+        const personal = !deliveryId?.startsWith('team:')
+        if (personal) { this.deps.onWaiting?.(sessionId, 'engine_starting'); this.countWait(sessionId, 1) }
+        try {
+          for (;;) {
+            const row = this.controlSession(sessionId)
+            if (this.states.get(sessionId) !== state || deliveryId && state.cancelled || request.current?.() === false
+              || this.deps.launchRevision(session.agentId) !== restoredRevision || !row
+              || !sameRestore({ ...row, processIdentity: null, evidenceRevision: undefined })
+              || row.launch && row.launch.state !== 'ready'
+                && (row.launch.state !== 'starting' || row.launch.nativeToken !== token)) { gone(); return }
+            if (this.refuseHeldMessage(sessionId, deliveryId, receipt)) return
+            if (row.processIdentity && (!row.launch || row.launch.state === 'ready')) {
+              typed = { ...row }
+              const committedBinding = captureSessionBinding(typed)
+              sameBinding = row => this.deps.launchRevision!(session.agentId) === restoredRevision && committedBinding(row)
+              operation.session = typed
+              break
+            }
+            if (now() >= deadline) {
+              console.warn('[inject] RUNTIME_START_TIMEOUT restored engine did not become ready')
+              refuse('runtime_start_timeout', 'runtime_gone', 'This agent is still starting. Try again when it is ready.')
+              return
+            }
+            await sleep(LEASE_RETRY_MS)
+          }
+        } finally { if (personal) this.countWait(sessionId, -1) }
+      }
       if (!current()) { gone(); return }
       if (this.refuseHeldMessage(sessionId, deliveryId, receipt)) return
       const valid = await this.deps.validateRuntime(typed)

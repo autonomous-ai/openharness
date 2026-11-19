@@ -134,7 +134,10 @@ describe('the session input controller\'s dependencies', () => {
   it('asks whether an engine\'s reader is starting, and tells the app a message waits for it', async () => {
     const starting = Promise.resolve(true)
     const { deps: given } = deps({ engineStarting: (engine) => engine === 'claude' ? starting : null })
-    const wired = sessionInputDeps(given)
+    const revision = vi.fn(() => 7)
+    const wired = sessionInputDeps({ ...given, launchRevision: revision })
+    expect(wired.launchRevision!('a1')).toBe(7)
+    expect(revision).toHaveBeenCalledWith('a1')
     expect(wired.engineStarting!({ ...agents.get('a1')!, engine: 'claude' })).toBe(starting)
     expect(wired.engineStarting!({ ...agents.get('a1')!, engine: 'codex' })).toBeNull()
     expect(sessionInputDeps(deps().deps).engineStarting!(agents.get('a1')!)).toBeNull()
