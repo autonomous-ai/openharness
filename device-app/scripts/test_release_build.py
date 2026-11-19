@@ -181,6 +181,13 @@ class ReleaseBuildTests(Fakes):
                 self.assertEqual(args[:7], ["tauri", "bundle", "--ci", "--target", target, "--bundles", "nsis"])
                 self.assertNotIn('"createUpdaterArtifacts":true', " ".join(args))
 
+    def test_windows_bundles_the_signed_exe_unpatched(self):
+        # Tauri writes the bundle type into the exe it packs, which breaks the Authenticode signature it already has.
+        result = self.build(WINDOWS, "bundle", "0.1.3", str(self.out), DEVICE_TARGET="x86_64-pc-windows-msvc")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        [args] = self.tauri_calls("bundle")
+        self.assertIn("--no-binary-patching", args)
+
     def test_windows_needs_its_target_named(self):
         for step, args in (("compile", ()), ("bundle", (str(self.out),))):
             with self.subTest(step=step):
