@@ -5,8 +5,8 @@ export interface HostAgent {
   id: string
   engine: string
   sessionId?: string
-  /** The keys another source may know the same agent by, beside its session: herdr's pane, `herdr:<pane id>`, and
-   *  Herdr's terminal, `herdr-app:<address>`. */
+  /** The keys another source may know the same agent by, beside its session: herdr's pane, `herdr:<pane id>`,
+   *  Herdr's terminal, `herdr-app:<address>`, and the Claude app's session, `claude-app:<local id>`. */
   paneKeys?: readonly string[]
   callerPid?: number
   cwd?: string
@@ -20,6 +20,15 @@ export interface HostAgent {
    * page, so it can be reached, but is not known to be in that app, so it counts for nothing in the dial's default.
    */
   appPending?: true
+  /** Its session ended and its source still lists it (the observed source's, until its tick drops it): no tap, rest or
+   *  voice. The registry gives its row to another source's live copy (`registry.ts`). */
+  ended?: true
+  /**
+   * No process runs it: a row of the Claude app's store (`claudeAppSource.ts`). It is on its app's page and counts for
+   * nothing in the dial's default app (`select.ts`'s `known`), as `appPending`; it still counts for the app in front
+   * (`AppCounts.inFront`).
+   */
+  resting?: true
   state: HostAgentState
   lastActivityAt: number
   /** The end of the last turn, cut to the card's length. */
@@ -75,7 +84,8 @@ export type TypeResult = boolean | 'busy' | 'waiting' | { refused: string }
 export type PaneSwitch = 'ok' | 'failed' | 'busy'
 
 export interface HostSource {
-  /** 'harness' | 'observed' | a listing source's name (`herdr`, `herdr-app`, `opencode`). */
+  /** 'harness' | 'observed' | a listing source's name (`herdr`, `herdr-app`, `opencode`, `cmux`,
+   *  `claude-app`). */
   readonly id: string
   list(): HostAgent[]
   capabilities(agent: HostAgent): Caps
