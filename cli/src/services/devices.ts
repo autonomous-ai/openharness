@@ -84,7 +84,7 @@ import { createOrcaHomesCache, orcaHomesDeps, readOrcaHomes, type OrcaHomesCache
 import { orcaPluginRun, type OrcaPluginRun } from '../devices/orcaPlugin.js'
 import { createOrcaPluginSetup, orcaPluginParts } from '../cable/orcaPluginSetup.js'
 import { harnessPath } from '../config/harnessHome.js'
-import { vscodeExtensionDeps, type VscodeExtensionDeps } from '../devices/vscodeExtension.js'
+import { cursorFolderCli, vscodeExtensionDeps, type VscodeExtensionDeps } from '../devices/vscodeExtension.js'
 import { WindowForm } from '../cable/windowForm.js'
 import { createWindowRouter } from '../cable/windowRoute.js'
 import { WindowSelection } from '../cable/windowSelection.js'
@@ -517,6 +517,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   const tmuxAt = tmuxFinder()
   const tmux = noting(createTmuxAdapter({ run: apps.run, tmux: tmuxAt, processes: readProcessNames, log, front: () => cableHost.latestFront() }))
   const orca = createOrcaAdapter(apps, { worktreeOf: (handle) => orcaWorktrees.get(handle), log, switching: (handle) => orcaSwitches.note(handle) })
+  // Cursor as found here: its folder window's tap on Linux (below) and its extension's setup run the same `cursor`.
+  const cursorExtension = deps.cursorExtension ?? vscodeExtensionDeps('cursor', process.env.HARNESS_CURSOR_BIN)
   const adapters: readonly HostAdapter[] = [herdrNoted, tmux, herdrAppNoted, cmuxAppNoted, ...[
     createWeztermAdapter(apps),
     // A rest's or a tap's switch: Orca's focus line for that pane, a moment later, is the dial's own echo.
@@ -528,7 +530,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     createVscodeAdapter('vscode', { ...apps, bin: openBin, inFront: () => cableHost.latestFront() === 'vscode', terminals: vscode }),
     createVscodeAdapter('cursor', { ...apps, bin: openBin, inFront: () => cableHost.latestFront() === 'cursor', terminals: vscode }),
     // After Cursor's terminals and tabs: whatever agent in Cursor they do not reach opens its folder's window.
-    createCursorFolderAdapter({ run: apps.run, platform: apps.platform, bin: openBin, isFolder }),
+    createCursorFolderAdapter({ run: apps.run, platform: apps.platform, bin: openBin, isFolder, cli: () => cursorFolderCli(cursorExtension) }),
     createTabsAdapter({
       isOpen: () => tabs.isOpen(),
       select: (tab, raise) => {
@@ -597,7 +599,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     count: (kind, reason) => extensionCount('vscode', kind, reason),
   }) : null
   const cursorSetup = skill ? createVscodeExtensionSetup({
-    vscode: deps.cursorExtension ?? vscodeExtensionDeps('cursor', process.env.HARNESS_CURSOR_BIN),
+    vscode: cursorExtension,
     removed: () => readRemoved(core.dataDir),
     recorded: () => skill.cursor(),
     record: (version) => skill.recordCursor(version),
