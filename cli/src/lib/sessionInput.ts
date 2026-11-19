@@ -193,6 +193,9 @@ export interface SessionInputDeps {
   inject: (terminalTarget: string, content: string) => Promise<boolean | TerminalActionResult>
   /** Host serializes the preflight and paste with other terminal writers. */
   injectTeam?: (terminalTarget: string, content: string, deliveryId: string) => Promise<boolean | TerminalActionResult>
+  /** A command of the engine's own and its Enter, typed as `inject` types a message but into an empty box, whether or not
+   *  the pane can send a message yet: the command is what makes it able to ([typeCommand]). */
+  injectCommand?: (terminalTarget: string, line: string) => Promise<boolean | TerminalActionResult>
   sendKey: (terminalTarget: string, key: string) => Promise<boolean | TerminalActionResult>
   capture?: (terminalTarget: string) => Promise<string | null>
   onError: (sessionId: string, message: string) => void
@@ -612,7 +615,7 @@ export class SessionInputController {
 
   /**
    * Types [line] and its Enter, a command of the engine's own (OpenClaw's `/session <key>`), into [id]'s pane through
-   * `inject`, under the pane's write lock, only while nothing typed is pending for the pane: no message awaiting
+   * `injectCommand`, under the pane's write lock, only while nothing typed is pending for the pane: no message awaiting
    * confirmation or being written, none queued, no caller holding it, no turn open. A message waiting for the pane to
    * be able to send, and those queued behind it, are typed nowhere yet: the command is what lets the pane send them.
    * Held as a control is, so a message sent meanwhile waits for it. Whether it was typed.
@@ -620,11 +623,12 @@ export class SessionInputController {
   async typeCommand(id: string, line: string): Promise<boolean> {
     const session = this.controlSession(id)
     const state = this.states.get(id)
-    if (!session || (state?.writes && !state.paneWait)) return false
+    const injectCommand = this.deps.injectCommand
+    if (!session || !injectCommand || (state?.writes && !state.paneWait)) return false
     const release = this.acquireControl(id)
     if (!release) return false
     try {
-      const delivery = await this.deps.inject(session.agentId, line)
+      const delivery = await injectCommand(session.agentId, line)
       return typeof delivery === 'boolean' ? delivery : delivery.state === 'succeeded'
     } catch {
       return false

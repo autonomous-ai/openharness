@@ -148,6 +148,15 @@ function openclawHold(session: RegisteredSession, screen: ScreenReading | null):
   return session.engine === 'openclaw' && !screen?.pane.idle ? OPENCLAW_NOT_READY : null
 }
 
+/**
+ * What holds a pane's own command (OpenClaw's `/session`) from the pane as read: text in its input box, the person's or a
+ * message OpenClaw refused, which the command's Enter would send with it, or a pane not read, which may hold some. Not
+ * whether the pane can send a message: the command is what makes one whose history failed to load able to.
+ */
+function commandHold(_session: RegisteredSession, screen: ScreenReading | null, capture: string | null): string | null {
+  return capture === null ? 'screen_unreadable' : screen?.pane.draft ? 'box_not_empty' : null
+}
+
 /** What holds a typed delivery from the pane as read: the same draft and dialog checks as a person's own message. */
 function paneHold(screen: ScreenReading | null): string | null {
   return screen ? screen.teamHold : 'team_waiting_unavailable'
@@ -185,6 +194,7 @@ export function sessionInputDeps(
     // Typed into the pane as it stands, a draft or a running turn included (an OpenClaw's, only once it can send), under
     // the pane's write lock.
     inject: (id, text) => deviceInput().legacyWrite(id, () => writeMessage(id, text, openclawHold)),
+    injectCommand: (id, line) => deviceInput().legacyWrite(id, () => writeMessage(id, line, commandHold)),
     // An Agent Messages turn waits for a ready composer, and for its mailbox to still want it written.
     injectTeam: (id, text, deliveryId) => deviceInput().legacyWrite(id, async () => {
       if (!resolve(id)) return terminalActionNotStarted('team_waiting_unavailable')
