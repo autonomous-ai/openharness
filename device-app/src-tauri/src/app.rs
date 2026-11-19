@@ -1383,7 +1383,10 @@ mod tests {
         let about = |app: &mut App| app.handle(Event::Menu(MenuAction::About));
         let mut app = found();
         assert_eq!(about(&mut app), [Effect::ShowAbout(None)]);
-        assert!(app.handle(Event::CliVersion(Some("0.6.58".into()))).is_empty());
+        assert_eq!(
+            app.handle(Event::CliVersion(Some("0.6.58".into()))),
+            [Effect::AboutCredits(Some("Harness 0.6.58".into()))]
+        );
         assert_eq!(about(&mut app), [Effect::ShowAbout(Some("Harness 0.6.58".into()))]);
         app.handle(notifying(NotifyMode::Full));
         assert_eq!(about(&mut app), [Effect::ShowAbout(Some("Device 0.0.95 · Harness 0.6.58".into()))]);
@@ -1397,6 +1400,38 @@ mod tests {
         app.handle(Event::Cli(false));
         app.handle(Event::CliVersion(Some("0.6.58".into())));
         assert_eq!(about(&mut app), [Effect::ShowAbout(None)]);
+    }
+
+    /// Off macOS, About is drawn into the menu with its credits, so the binary hears them before the menu they go in.
+    #[test]
+    fn the_about_credits_are_told_when_they_change_and_only_then() {
+        let credits = |effects: &[Effect]| -> Vec<Option<String>> {
+            effects
+                .iter()
+                .filter_map(|effect| match effect {
+                    Effect::AboutCredits(credits) => Some(credits.clone()),
+                    _ => None,
+                })
+                .collect()
+        };
+        let credits_before_menu = |effects: &[Effect]| {
+            let credits = effects.iter().position(|effect| matches!(effect, Effect::AboutCredits(_)));
+            let menu = effects.iter().position(|effect| matches!(effect, Effect::Menu(_)));
+            assert!(credits < menu, "{effects:?}");
+        };
+        let mut app = found();
+        app.handle(Event::CliVersion(Some("0.6.58".into())));
+        let effects = app.handle(notifying(NotifyMode::Full));
+        assert_eq!(credits(&effects), [Some("Device 0.0.95 · Harness 0.6.58".to_string())]);
+        credits_before_menu(&effects);
+
+        assert!(credits(&app.handle(notifying(NotifyMode::Full))).is_empty());
+
+        let mut app = found();
+        app.handle(Event::CliVersion(Some("0.6.58".into())));
+        let effects = app.handle(Event::Cli(false));
+        assert_eq!(credits(&effects), [None]);
+        credits_before_menu(&effects);
     }
 
     #[test]

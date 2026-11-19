@@ -1394,6 +1394,15 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn the_about_credits_are_the_binarys() {
+        let w = world();
+        for effect in [Effect::AboutCredits(None), Effect::AboutCredits(Some("Harness 0.6.58".into()))] {
+            assert_eq!(w.runner.run(effect.clone()), Some(effect));
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn relaunch_is_the_binarys() {
         let w = world();
         assert_eq!(w.runner.run(Effect::Relaunch), Some(Effect::Relaunch));
