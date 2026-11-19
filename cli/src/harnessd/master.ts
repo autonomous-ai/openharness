@@ -47,7 +47,14 @@ export interface MasterConfig {
    *  `scriptPath` itself but on the lean bundle read from it: the bundle it runs is the one it was read
    *  from, whatever is on disk by the time this master starts. */
   bundleFingerprint?: string
+  /** The pid file, removed as this master ends while it still names this master. */
   pidFile: string
+  /** Write [pid] to the pid file, whole: the entry's writer (../lib/daemonState.ts), since this folder imports no
+   *  helper. One that throws is said, as on a full disk. */
+  writePidFile(pid: number): void
+  /** The pid the pid file names; null when there is none, or it cannot be read: such a file is never taken for this
+   *  master's, so it is neither rewritten nor removed. */
+  readPidFile(): number | null
   /** Where the master records its status for `harness status` (see `writeStatusFile`). */
   statusFile?: string
   /** The log the master and its core write, kept under its cap by the master. */
@@ -97,8 +104,8 @@ export interface MasterConfig {
  * `takeBackHandover`), and leaving is this process's end. The lock waits a bounded while (../masterProcess.ts
  * `HANDOVER_LOCK_WAIT_MS`) for a start or a stop under way: null when it is still busy, or on any throw. The launch is bounded well inside the 45 s a `harness stop` waits on the lock. Each token is fresh. `readPid`
  * throws when the pid file cannot be read: null says it names no pid, and on that this master stays at the bound
- * (./reexec.ts `taken`), where a file it could not read is a new master it must leave to. This file's own pid-file
- * read, which takes a failure for null, is never given to it.
+ * (./reexec.ts `taken`), where a file it could not read is a new master it must leave to. `MasterConfig.readPidFile`,
+ * which takes a file it cannot read for null, is never given to it.
  */
 export type MasterHandOver = Omit<HandOverDeps, 'claim' | 'claimant' | 'takeBack' | 'leave'>
 
@@ -183,6 +190,7 @@ export function coreExecArgv(execArgv: readonly string[], heapLimitMiB: number):
 export function writeStatusFile(file: string, status: MasterStatusFile): void {
   const temp = `${file}.${status.masterPid}.tmp`
   try {
+    // not a state file: the master imports no helper (follow-up)
     writeFileSync(temp, `${JSON.stringify(status)}\n`)
     renameSync(temp, file)
   } catch {
@@ -284,10 +292,6 @@ export function runMaster(config: MasterConfig): Supervisor {
   const resume = decodeResume(given[RESUME_ENV])
   const env: NodeJS.ProcessEnv = { ...given }
   delete env[RESUME_ENV]
-  const writePidFile = (pid = process.pid): void => { writeFileSync(config.pidFile, `${pid}\n`) }
-  const readPid = (): number | null => {
-    try { return Number.parseInt(readFileSync(config.pidFile, 'utf8').trim(), 10) || null } catch { return null }
-  }
   const options = supervisorOptions(env, config.execArgv)
   const execArgv = coreExecArgv(config.execArgv, options.heapLimitMiB)
   // The core's stamp, local time (lib/log.ts): in UTC, the master's lines sat hours away from the core's
@@ -338,14 +342,14 @@ export function runMaster(config: MasterConfig): Supervisor {
   const takeOver = ({ from, token }: { from: number; token: string }): boolean => {
     const leaving = (why: string): false => { log(`[harnessd] ${why} — leaving`); return false }
     const stopped = `the master that started this one (pid ${from}) stopped waiting for it`
-    const write = (pid: number): string | null => { try { writePidFile(pid); return null } catch (error) { return errorKind(error) } }
+    const write = (pid: number): string | null => { try { config.writePidFile(pid); return null } catch (error) { return errorKind(error) } }
     if (!markerFile || !takeHandover(markerFile, token, process.pid) || !mayClaimPidFile(markerFile, token)) return leaving(stopped)
     const failed = write(process.pid)
     if (failed !== null) return leaving(`could not take over from pid ${from} (${failed})`)
     if (!mayClaimPidFile(markerFile, token)) {
       // That master may have settled on the pid file naming it before this write: still running, it is the master, and
       // a pid file naming this process, about to end, would have `harness start --if-down` start a second one.
-      if (readPid() === process.pid && alive(from)) write(from)
+      if (config.readPidFile() === process.pid && alive(from)) write(from)
       return leaving(`${stopped} as this one took over`)
     }
     log(`[harnessd] took over from the master before it (pid ${from})`)
@@ -429,7 +433,7 @@ export function runMaster(config: MasterConfig): Supervisor {
     ...(config.handOver ? {
       handOver: {
         ...config.handOver,
-        claim: () => { writePidFile(); releaseOnExit = true },
+        claim: () => { config.writePidFile(process.pid); releaseOnExit = true },
         claimant: (handed: string) => readHandoverClaimant(markerFile, handed),
         takeBack: (handed: string) => takeBackHandover(markerFile, handed, process.pid),
         // This master's end once its replacement holds the pid file: nothing of the daemon's left to stop.
@@ -473,7 +477,7 @@ export function runMaster(config: MasterConfig): Supervisor {
     // On a full disk the claim fails, and the master carries on without it: it was thrown out of the
     // core's `bound` message, and took the master down.
     claimPidFile: () => {
-      try { writePidFile() } catch (error) { log(`[harnessd] could not write the pid file: ${errorKind(error)}`) }
+      try { config.writePidFile(process.pid) } catch (error) { log(`[harnessd] could not write the pid file: ${errorKind(error)}`) }
     },
     // Removed as this master exits, below: once a handover under way (Windows) is decided.
     releasePidFile: () => { releaseOnExit = true },
@@ -493,7 +497,7 @@ export function runMaster(config: MasterConfig): Supervisor {
       // Stopped as it handed over (Windows), and the new master took over: the pid file and the marker are its.
       const end = (handedOver: boolean): void => {
         if (!handedOver) {
-          if (releaseOnExit && readPid() === process.pid) rmSync(config.pidFile, { force: true })
+          if (releaseOnExit && config.readPidFile() === process.pid) rmSync(config.pidFile, { force: true })
           // A master stopped before its first core came up has not failed to come up: its own marker goes
           // with it. Left behind by a stop, a sign-out or a shutdown in the seconds after a re-execution, it
           // made the next start roll a good update back and reject its version (recoverFailedReexec).

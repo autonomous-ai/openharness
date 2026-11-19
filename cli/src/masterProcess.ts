@@ -21,7 +21,7 @@ import { PROBE_ANSWER, PROBE_TIMEOUT_MS } from './harnessd/reexec.js'
 import { dropAgentSessionEnv } from './lib/agentSessionEnv.js'
 import { ensureUtf8Locale } from './lib/childLocale.js'
 import { acquireSpawnLock, tryAcquireSpawnLockSync } from './lib/daemonSpawnLock.js'
-import { DAEMON_LOG_FILE, HARNESSD_STATUS_FILE, PID_FILE } from './lib/daemonState.js'
+import { DAEMON_LOG_FILE, HARNESSD_STATUS_FILE, PID_FILE, parsePid, readPidFile, writePidFile } from './lib/daemonState.js'
 import { isInstalledCopy } from './lib/installedCopy.js'
 import { unixSocketPath } from './lib/localSocket.js'
 import { refreshNodeReferences } from './lib/nodeReferences.js'
@@ -125,8 +125,7 @@ export function readHandoverPid(pidFile: string = PID_FILE, read: (path: string)
   }
   // A torn or half-written file reads as null, which is harmless: the replacement writes the pid file only before the
   // cutoff, and the old master reads it for its decision at cutoff + 20 s (harnessd/reexec.ts HANDOVER_CUTOFF_MARGIN_MS).
-  const pid = Number.parseInt(text.trim(), 10)
-  return Number.isSafeInteger(pid) && pid > 0 ? pid : null
+  return parsePid(text)
 }
 
 /**
@@ -259,6 +258,8 @@ export function startMaster(
     ...windowsConfig,
     ...start,
     pidFile: PID_FILE,
+    writePidFile: (pid) => writePidFile(pid),
+    readPidFile: () => { const read = readPidFile(); return read.state === 'pid' ? read.pid : null },
     statusFile: HARNESSD_STATUS_FILE,
     logFile: DAEMON_LOG_FILE,
     // One probation for whatever the updater staged: the CLI build, the terminal host (Windows), or both. The Node the
