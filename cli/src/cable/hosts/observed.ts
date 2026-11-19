@@ -111,6 +111,9 @@ export interface ObservedDeps {
   /** The tty of a process in a tab app (tabs.ts readTty), rejecting when `ps` could not be read; absent (off macOS), no
    *  agent has a tab. */
   tty?(pid: number): Promise<string | undefined>
+  /** The host that made the pseudo-terminal a process runs on (scannedApp.ts ptyOwner), rejecting when the process table
+   *  could not be read. Absent (Windows), no terminal's or multiplexer's pane is any agent's own. */
+  ptyOwner?(pid: number): Promise<string | undefined>
   /** Every owner a scan read, before any is listed. Absent, nothing is told. */
   scanned?(owners: ReadonlyMap<string, SessionOwner>): void
   /** The hc terminal whose foreground is that pid, when exactly one is (hcSource.ts terminalOf). Absent, nothing is
@@ -196,6 +199,11 @@ interface Entry {
   tty?: string
   /** When the read of ttyPid began, once that read failed. */
   ttyFailedAt?: number
+  /** The caller the host that made its terminal was read for, that host once read, and when that read began, once it
+   *  failed (learnPtyOwner). */
+  ptyPid?: number
+  ptyOwner?: string
+  ptyFailedAt?: number
   /** The caller and hints its outer place was last asked for (ObservedDeps.outer), while it runs nested: only that ask's
    *  answer lands. */
   outerAsk?: { pid: number; hints: Readonly<Record<string, string>> }
@@ -463,7 +471,11 @@ export class ObservedSource implements HostSource {
   /** What a tap opens: its app, and the first of its panes the opener brings forward. Asked at each look, as a rest's.
    *  An agent placed by its caller, or found by the scan, has had no hook to name its app: its pane's adapter names it. */
   private target(e: Entry): OpenTarget {
-    const near = this.shownOnly(e).find(({ adapter, pane }) => tapped(adapter, pane))
+    const panes = this.shownOnly(e)
+    // The pane of the host that made its terminal is where it is: one before it in the adapters' order only holds it
+    // (tmux inside a Zellij pane).
+    const near = panes.find(({ adapter, pane }) => adapter.id === e.ptyOwner && tapped(adapter, pane))
+      ?? panes.find(({ adapter, pane }) => tapped(adapter, pane))
     const bundle = e.bundle ?? near?.adapter.bundle
     return { ...(bundle ? { bundle } : {}), ...(near ? { pane: near.pane } : {}) }
   }
@@ -487,7 +499,7 @@ export class ObservedSource implements HostSource {
     const hints = entry.paired ? { HC_TERMINAL_ID: entry.paired.address } : entry.hints
     const place = { host: entry.agent.host, app: entry.agent.app, hints, tty: entry.tty, hostSession: entry.hostSession,
       pid: entry.caller ?? entry.pid, sessionId: entry.agent.sessionId, engine: entry.agent.engine, cwd: entry.agent.cwd,
-      outer: entry.outer }
+      outer: entry.outer, ptyOwner: entry.ptyOwner }
     entry.panes = (this.deps.actions?.adapters ?? []).flatMap((adapter) => {
       const pane = adapter.paneOf(place)
       return pane ? [{ adapter, pane }] : []
@@ -599,6 +611,32 @@ export class ObservedSource implements HostSource {
       this.emit()
     })
     return entry.agent.app
+  }
+
+  /**
+   * The host that made its caller's terminal (Place.ptyOwner), read once per process in the background, as its tty is:
+   * until it lands, a terminal's or a multiplexer's pane only holds the agent, and takes no words. An answer lands only
+   * while that process is still its caller. A read that failed said nothing of the host: a later event reads it again, no
+   * sooner than TTY_RETRY_MS.
+   */
+  private learnPtyOwner(entry: Entry, pid: number): void {
+    if (!this.deps.ptyOwner) return
+    const now = this.deps.now()
+    if (entry.ptyPid === pid && (entry.ptyFailedAt === undefined || now - entry.ptyFailedAt < TTY_RETRY_MS)) return
+    entry.ptyPid = pid
+    entry.ptyOwner = undefined
+    entry.ptyFailedAt = undefined
+    this.deps.ptyOwner(pid).then((owner) => {
+      if (entry.ptyPid !== pid) return
+      entry.ptyOwner = owner
+      if (owner === undefined || !this.live(entry)) return
+      this.locate(entry)
+      this.emit()
+    }, (error) => {
+      if (entry.ptyPid === pid) entry.ptyFailedAt = now
+      // Its kind only: never the pid or the session.
+      this.deps.log(`[observed] pty · not read · ${errorKind(error)}`)
+    })
   }
 
   /**
@@ -734,6 +772,7 @@ export class ObservedSource implements HostSource {
     // Every event's own: a session resumed elsewhere must not be typed into the terminal it left.
     entry.hints = e.hostHints
     entry.caller = e.callerPid
+    this.learnPtyOwner(entry, e.callerPid)
     // Before locate: learnTty returns early for a caller it already read, so nothing places the session again at this
     // hook, and a pane by folder must see the one this hook names.
     if (e.cwd) {

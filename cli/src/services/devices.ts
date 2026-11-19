@@ -62,7 +62,7 @@ import { createOrcaAdapter, createOrcaReads, orcaDeps, type OrcaFocusWatch, type
 import { firstOuter } from '../cable/hosts/outer.js'
 import { readRecord } from '../cable/hosts/record.js'
 import { HostRegistry, type HostEntry } from '../cable/hosts/registry.js'
-import { appRoots, learnApps, readBundleId, readProcessNames } from '../cable/hosts/scannedApp.js'
+import { appRoots, learnApps, ptyOwner, readBundleId, readProcessNames } from '../cable/hosts/scannedApp.js'
 import { createScrollLines } from '../cable/hosts/scrollLines.js'
 import { createTabsAdapter, readTty, type Tab } from '../cable/hosts/tabs.js'
 import { createOuter, createTmuxAdapter, tmuxClients } from '../cable/hosts/tmux.js'
@@ -287,6 +287,8 @@ function observedSource(
     log,
     actions,
     apps: learnApps,
+    // Windows has no `ps`, and a terminal there has no pseudo-terminal of a host's to read.
+    ...(process.platform === 'win32' ? {} : { ptyOwner: async (pid: number) => ptyOwner(pid, await readProcessNames()) }),
     // Asked for Claude Code's sessions alone (observed.ts), and read only inside its own records folders.
     record: (owner) => readRecord(owner, { records: places.claude.records() }),
     tty,

@@ -174,7 +174,19 @@ Orca's `resources/bin`. Every caller (`orca.ts`, `orcaHomes.ts`, `orcaPlugin.ts`
 `type`: `wezterm cli send-text --pane-id <n> --no-paste -- <text>`, then the Enter key on its own
 (`send-text --no-paste $'\r'`), each with the existing run timeout, no shell. `--no-paste` sends the text as typed, so
 an agent's TUI does not treat it as a bracketed paste. One send at a time per pane (as herdr's `prompting`). `canType`
-is true when a `wezterm` binary is found. It runs on every platform WezTerm does, macOS included.
+is true for the agent's own pane when a `wezterm` binary is found. It runs on macOS and Linux; Windows has no process
+table to tell the agent's own pane (below).
+
+**The agent's own pane.** A terminal, an editor or a multiplexer started from a host's pane keeps that pane's
+variables: `code .` run in WezTerm's pane 7 gives VS Code's terminals `WEZTERM_PANE=7`, and words typed into pane 7
+run at its shell. So no variable decides whose pane it is: the process that made the agent's pseudo-terminal does. From
+the hook's caller up its parents (`parentChain`'s walk and bound) while they run on the caller's tty, the first process
+on another tty or on none made it, read from the one table the open scan reads, `ps -axo pid=,ppid=,tty=,comm=`
+(`scannedApp.ts` `ptyOwner`). WezTerm's pane is the agent's own when that is `wezterm-gui` or `wezterm-mux-server`
+(Linux cuts it to `wezterm-mux-ser`); kitty's when `kitty`; Zellij's when its server, `zellij`; macOS names each by its
+path. It is read once per caller (`observed.ts` `learnPtyOwner`) and reaches the adapters as `Place.ptyOwner`; until it
+lands, and for any other maker, the pane is `held:` and takes a tap alone. A tap takes the pane of the host that made the
+agent's terminal before any other (tmux's `tmux: server` too, so tmux inside a Zellij pane selects its tmux pane).
 
 ### 1.6 Links on Linux
 
@@ -322,9 +334,11 @@ checks and orders the new names so a session in Zellij inside kitty keeps Zellij
   process's `PATH`, else where the person's login shell finds it, else in the folders the core looks in for tmux; none
   found is asked again once one is there. One finder serves the tap, the words and the client lookup. `canFocus` is
   true for any Zellij pane (a tap that finds no `zellij` brings the app forward, as tmux's does); `canType` is true for
-  the agent's own pane, not one that only holds it (herdr, Rex or tmux inside Zellij).
+  the agent's own pane, one whose terminal Zellij's server made (§ 1.5), not one that only holds it (herdr, Rex, tmux,
+  a terminal or an editor started in Zellij).
 - The page: the agent is on the page of the app that holds the Zellij client showing its session, found by the outer
-  lookup as tmux's (`zellijClients`). `list-clients` names no client's process or tty, so the client is read from the
+  lookup as tmux's (`zellijClients`), only for a caller whose terminal Zellij's server made (§ 1.5): a terminal started
+  from a pane is under the server too. `list-clients` names no client's process or tty, so the client is read from the
   process table, and only when the session has exactly one client and the machine one Zellij client; otherwise the
   agent stays where its hints place it.
 
@@ -344,7 +358,8 @@ checks and orders the new names so a session in Zellij inside kitty keeps Zellij
   @` fails on 0.32.2, `RECORDED_KITTY.kittyAt`). A socket at a path is spoken to only when it is this account's. Linux's
   abstract socket (`unix:@<name>`) has no owner to read, and once kitty is gone any account may take its name: it takes
   a tap, never words.
-- `canFocus`: the hints in form; `canType`: the agent's own window, not one that only holds it, at a socket at a path.
+- `canFocus`: the hints in form; `canType`: the agent's own window, one whose terminal kitty made (§ 1.5), not one that
+  only holds it, at a socket at a path.
 - **Telling the person.** A kitty session with no `KITTY_LISTEN_ON` gets one daemon log line per process start
   (`[device] kitty · remote control off`), and `docs/cli.md` gives the two `kitty.conf` lines to add
   (`allow_remote_control socket-only`, `listen_on unix:/tmp/kitty`), then restarting kitty. No new screen.
@@ -432,6 +447,9 @@ macOS behavior changes otherwise. Windows: no change.
   still the installer's own (only `Exec=` is compared), so the next install rewrites it.
 - The installer's guide line says `Harness starts when you log in to the desktop.`: a server login (SSH, a console)
   never runs the entry.
+- A WezTerm, kitty or Zellij pane takes words only when its host made the agent's pseudo-terminal (§ 1.5), read from
+  the process table, not from the hints: a terminal or an editor started from a pane kept its variables, and the words
+  ran at that pane's shell. The tap takes the pane of that host first, and Zellij's client lookup asks the same.
 
 ## Design (docs/feature-design-rules.md)
 

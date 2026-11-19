@@ -36,10 +36,10 @@ export function createWeztermAdapter(deps: OrcaDeps): HostAdapter {
     paneOf(place: Place): Pane | undefined {
       const id = place.hints.WEZTERM_PANE
       if (!id || !WEZTERM_PANE.test(id)) return undefined
-      // A multiplexer keeps the environment of the WezTerm pane it was started in, so that pane shows whichever of its
-      // panes is in front, another agent's or a shell's; in an Orca terminal the words go through Orca. Both only focus.
-      const own = place.host === 'wezterm' && place.hints.ORCA_TERMINAL_HANDLE === undefined
-      return { adapter: 'wezterm', id: own ? id : `${HELD}${id}` }
+      // A multiplexer, a terminal or an editor started in a WezTerm pane keeps its variables, and that pane shows whichever
+      // of their panes is in front, or a shell that runs what is typed: only a pane WezTerm made the agent's terminal for
+      // takes words. Any other only focuses.
+      return { adapter: 'wezterm', id: place.ptyOwner === 'wezterm' ? id : `${HELD}${id}` }
     },
     // `wezterm cli` runs on every platform.
     canFocus: () => true,

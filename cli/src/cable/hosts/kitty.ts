@@ -103,10 +103,10 @@ export function createKittyAdapter(deps: KittyDeps): HostAdapter & Required<Pick
         return undefined
       }
       if (!socketOf(deps.platform, listenOn)) return undefined
-      // A multiplexer, herdr or Rex keeps the environment of the kitty window it was started in, so that window shows
-      // whichever of its panes is in front; in an Orca terminal the words go through Orca. Both only focus.
-      const own = place.host === 'kitty' && place.hints.ORCA_TERMINAL_HANDLE === undefined
-      return { adapter: 'kitty', id: `${own ? '' : HELD}${id}@${listenOn}` }
+      // A multiplexer, a terminal or an editor started in a kitty window keeps its variables, and that window shows
+      // whichever of their panes is in front, or a shell that runs what is typed: only a window kitty made the agent's
+      // terminal for takes words. Any other only focuses.
+      return { adapter: 'kitty', id: `${place.ptyOwner === 'kitty' ? '' : HELD}${id}@${listenOn}` }
     },
     // Whether kitty is found is asked at the verb, and a tap that finds none brings its app forward.
     canFocus: (pane) => windowOf(pane) !== undefined,

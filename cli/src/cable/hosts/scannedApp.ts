@@ -1,17 +1,19 @@
 // Which app a session the open scan found runs in, from its parent processes' executables alone
-// (docs/specs/2026-11-14-dial-app-filter.md, "The scan learns the app where that is cheap"). Nothing else of a process is
-// read: its environment holds secrets, and its name is outside text (a process can write a prompt there), so a name is
-// matched against the tables and dropped, never kept, logged or sent.
+// (docs/specs/2026-11-14-dial-app-filter.md, "The scan learns the app where that is cheap"), and which host made the
+// pseudo-terminal a hook's caller runs on (ptyOwner). Nothing else of a process is read but the terminal it runs on: its
+// environment holds secrets, and its name is outside text (a process can write a prompt there), so a name is matched
+// against the tables and dropped, never kept, logged or sent.
 
 import { execFile } from 'node:child_process'
 import { homedir } from 'node:os'
+import { basename } from 'node:path'
 import { patientExec } from '../../lib/patientExec.js'
 import type { RunningProcess } from '../../lib/sessionSearch/externals/types.js'
 import { frontAppId } from './frontApp.js'
 import { APP_IDS, UNKNOWN_APP } from './hostDetect.js'
 
-/** All the walk reads of a process: no command line to hand on. */
-export type ProcessName = Pick<RunningProcess, 'pid' | 'ppid' | 'executable'>
+/** All the walk reads of a process: no command line to hand on. Its tty is the terminal it runs on; none on none. */
+export type ProcessName = Pick<RunningProcess, 'pid' | 'ppid' | 'executable'> & { tty?: string }
 
 export const WALK_PARENTS = 16
 export const BUNDLES_A_PASS = 16
@@ -60,20 +62,21 @@ export async function readBundleId(bundle: string, exec: Exec = execText): Promi
   return id && BUNDLE_ID.test(id) ? id : undefined
 }
 
-/** `ps -axo pid=,ppid=,comm=` rows; a line that is no row is passed over. */
+/** `ps -axo pid=,ppid=,tty=,comm=` rows; a line that is no row is passed over. A process on no terminal has no tty: ps
+ *  says `?` on Linux, `??` on macOS. */
 export function parseProcessNames(stdout: string): ProcessName[] {
   const rows: ProcessName[] = []
   for (const line of stdout.split('\n')) {
-    const row = /^\s*(\d+)\s+(\d+)\s+(\S.*?)\s*$/.exec(line)
-    if (row) rows.push({ pid: Number(row[1]), ppid: Number(row[2]), executable: row[3] })
+    const row = /^\s*(\d+)\s+(\d+)\s+(\S+)\s+(\S.*?)\s*$/.exec(line)
+    if (row) rows.push({ pid: Number(row[1]), ppid: Number(row[2]), ...(/^\?+$/.test(row[3]) ? {} : { tty: row[3] }), executable: row[4] })
   }
   return rows
 }
 
-/** Each process's pid, parent and name, `comm` last: before another column macOS cuts it to 16 characters (`-ww` does
- *  not help), which leaves no `.app` in an app's path. On Linux it is the task's name either way. */
+/** Each process's pid, parent, tty and name, `comm` last: before another column macOS cuts it to 16 characters (`-ww`
+ *  does not help), which leaves no `.app` in an app's path. On Linux it is the task's name either way. */
 export async function readProcessNames(exec: Exec = execText): Promise<ProcessName[]> {
-  const rows = parseProcessNames(await exec('ps', ['-axo', 'pid=,ppid=,comm='], { timeout: PS_TIMEOUT_MS, maxBuffer: PS_MAX_BYTES }) ?? '')
+  const rows = parseProcessNames(await exec('ps', ['-axo', 'pid=,ppid=,tty=,comm='], { timeout: PS_TIMEOUT_MS, maxBuffer: PS_MAX_BYTES }) ?? '')
   // `ps` lists itself at the least: no row is a read that failed. The error names nothing it printed: a name is outside text.
   if (!rows.length) throw new Error('process table not read')
   return rows
@@ -129,7 +132,8 @@ function nearestApp(bundles: readonly string[], ids: ReadonlyMap<string, string 
 }
 
 /** A process and up to WALK_PARENTS of its parents, nearest first, from one read of the table: a pid the table does not
- *  hold starts none. The open scan reads their names, a tap on a tmux pane their ids (tmux.ts). */
+ *  hold starts none. The open scan reads their names, a tap on a tmux pane their ids (tmux.ts), and ptyOwner their
+ *  terminals. */
 export function parentChain<P extends Pick<ProcessName, 'pid' | 'ppid'>>(pid: number, table: ReadonlyMap<number, P>): P[] {
   const chain: P[] = []
   const passed = new Set<number>()
@@ -141,6 +145,33 @@ export function parentChain<P extends Pick<ProcessName, 'pid' | 'ppid'>>(pid: nu
     p = p.ppid > 1 ? table.get(p.ppid) : undefined
   }
   return chain
+}
+
+/** The hosts whose panes the dial reaches, by the name of the process that makes a pane's pseudo-terminal: a terminal's
+ *  own (WezTerm's GUI, or its mux server, which Linux cuts to 15 characters) or a multiplexer's server (tmux's names
+ *  itself so on Linux). macOS names each by its path. */
+const PTY_HOSTS: Readonly<Record<string, string>> = {
+  'wezterm-gui': 'wezterm',
+  'wezterm-mux-server': 'wezterm',
+  'wezterm-mux-ser': 'wezterm',
+  kitty: 'kitty',
+  zellij: 'zellij',
+  tmux: 'tmux',
+  'tmux: server': 'tmux',
+}
+
+/**
+ * The host that made the pseudo-terminal a process runs on: of it and its parents (parentChain), the first on another
+ * terminal or on none. Its environment cannot say: a terminal, an editor or a multiplexer started from a host's pane
+ * keeps that pane's variables. None when the process runs on no terminal, the walk ends first, or that process is no
+ * host the dial types into. Its name is matched and dropped, never kept.
+ */
+export function ptyOwner(pid: number, rows: readonly ProcessName[]): string | undefined {
+  const [own, ...parents] = parentChain(pid, new Map(rows.map((p) => [p.pid, p])))
+  if (own?.tty === undefined) return undefined
+  const maker = parents.find((p) => p.tty !== own.tty)
+  const name = maker && basename(maker.executable)
+  return name !== undefined && Object.hasOwn(PTY_HOSTS, name) ? PTY_HOSTS[name] : undefined
 }
 
 /** The app each of these processes runs in, read from this machine. */

@@ -13,7 +13,7 @@ import { binaryOnPath } from '../../lib/binaryOnPath.js'
 import { binaryFinder, resolveViaLoginShell, tmuxInstallDirectories, type TmuxPathOutcome } from '../../lib/tmuxOnPath.js'
 import type { HostAdapter, Pane, Place } from './adapter.js'
 import { CONTROL, MAX_TEXT, RUN_TIMEOUT_MS, type OrcaDeps } from './orca.js'
-import { parentChain, type ProcessName } from './scannedApp.js'
+import { parentChain, ptyOwner, type ProcessName } from './scannedApp.js'
 import type { ClientLookup } from './tmux.js'
 
 // Zellij takes spaces and `:` in a session name too; this form keeps a name no argument parser reads as a flag, and
@@ -91,10 +91,10 @@ export function createZellijAdapter(deps: ZellijDeps): HostAdapter & Required<Pi
     paneOf(place: Place): Pane | undefined {
       const at = hinted(deps.platform, place.hints)
       if (!at) return undefined
-      // herdr or Rex started in a Zellij pane keeps its variables, and so does tmux, either way round: that pane shows
-      // whichever of their panes is in front. Only focus there.
-      const own = place.host === 'zellij' && place.hints.TMUX_PANE === undefined
-      return { adapter: 'zellij', id: `${own ? '' : HELD}${at.session}:${at.id}` }
+      // herdr, Rex, tmux, a terminal or an editor started in a Zellij pane keeps its variables, and that pane shows
+      // whichever of their panes is in front, or a shell that runs what is typed: only a pane Zellij's server made the
+      // agent's terminal for takes words. Any other only focuses.
+      return { adapter: 'zellij', id: `${place.ptyOwner === 'zellij' ? '' : HELD}${at.session}:${at.id}` }
     },
     // An agent in a Zellij pane has a zellij on this machine: whether it is found is asked at the verb, and a tap that
     // finds none brings its app forward, as tmux's does.
@@ -130,7 +130,8 @@ const isZellij = (p: ProcessName): boolean => p.executable === 'zellij' || p.exe
  * Zellij's part of the outer lookup (tmux.ts createOuter): the client that shows the agent's session. Zellij names no
  * client's process or tty (RECORDED_ZELLIJ.listClients), so it is read from the process table, and only when the
  * session's one client is the machine's one zellij client: of two, which is the person's is a guess, and the agent stays
- * where its hints place it. Only for a caller under a Zellij server, as a pane's process is.
+ * where its hints place it. Only for a caller on a terminal a Zellij server made, as a pane's process is: a terminal
+ * started from a pane is under the server too, and keeps the pane's variables.
  */
 export function zellijClients(deps: ZellijDeps): ClientLookup {
   return {
@@ -139,8 +140,8 @@ export function zellijClients(deps: ZellijDeps): ClientLookup {
     async client(session, pid, rows) {
       const table = await rows().catch(() => undefined)
       if (!table) return 'processes'
+      if (ptyOwner(pid, table) !== 'zellij') return undefined
       const byPid = new Map(table.map((p) => [p.pid, p]))
-      if (!parentChain(pid, byPid).some(isZellij)) return undefined
       const listed = await action(deps, session, ['list-clients'])
       if (!listed) return 'zellij'
       if (listed.code !== 0) return 'clients'

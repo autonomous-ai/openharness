@@ -118,7 +118,7 @@ Longest chain: 5 → 28 → 30 → 33 → 40 → 46 → 48 (seven tasks; 47, 49,
 - **A Wayland session with no known compositor is `none · unknown compositor`:** X11 is tried only when this login has no Wayland socket (the spec's order, made exact). GNOME Shell without the extension on X11 goes on to `x11`.
 - **The discovery reads `$XDG_RUNTIME_DIR` only when it is set and absolute;** there is no `/run/user/<uid>` guess.
 - **A link's handler is read at the first look at a pane of that app,** not at start: no `xdg-mime` runs for an app no agent is in.
-- **Words go only to the agent's own pane.** WezTerm types when `place.host === 'wezterm'` and no `ORCA_TERMINAL_HANDLE` is set (so "WezTerm inside an Orca terminal still takes words through Orca", as today); kitty the same with `kitty`; Zellij when `place.host === 'zellij'` and no `TMUX_PANE` is set. Any other agent with that adapter's pane keeps its tap and gets no words there. The pane id carries it: `7` types, `held:7` only focuses.
+- **Words go only to the agent's own pane:** one whose pseudo-terminal that pane's host made. The hints cannot say it: a terminal, an editor or a multiplexer started from a host's pane keeps that pane's variables (`code .` run in WezTerm's pane 7 gives VS Code's terminals `WEZTERM_PANE=7`). So the devices read it from the process table, `ps -axo pid=,ppid=,tty=,comm=` (`readProcessNames`, the one read the open scan makes): from the hook's caller up its parents while they run on the caller's tty, the first on another tty or on none made it (`scannedApp.ts` `ptyOwner`: `zellij` for Zellij's server, `kitty`, `wezterm-gui` or `wezterm-mux-server`, cut by Linux to `wezterm-mux-ser`, for WezTerm, and `tmux: server` for tmux; macOS by the path's last part). It is read once per caller (`observed.ts` `learnPtyOwner`) and handed to the adapters as `Place.ptyOwner`: WezTerm, kitty and Zellij type only into a pane of their own; until the read lands, and for any other maker, the pane only holds the agent and keeps its tap. The pane id carries it: `7` types, `held:7` only focuses. A tap takes the pane of the host that made the agent's terminal first (tmux inside a Zellij pane selects its tmux pane), and Zellij's client lookup runs only for a caller whose terminal Zellij's server made. (Final review, replacing a rule by `place.host`, `ORCA_TERMINAL_HANDLE` and `TMUX_PANE`.)
 - **Order in the devices' list:** herdr, Zellij, tmux, Herdr, cmux, kitty, WezTerm, Orca, … (as `detectHost` ranks them).
 - **kitty's binary:** `kitten` on `PATH`, else on macOS `/Applications/kitty.app/Contents/MacOS/kitten`, else `kitty` on `PATH` run as `kitty +kitten`.
 - **A Zellij session name is taken only in the form `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`;** another name gets no Zellij pane.
@@ -128,7 +128,7 @@ Longest chain: 5 → 28 → 30 → 33 → 40 → 46 → 48 (seven tasks; 47, 49,
 
 ## Review Focus
 
-1. **Words in another pane.** An agent in tmux, Zellij, herdr or Rex inside a WezTerm or kitty window, or in Zellij with tmux's variable, must get no words through the outer host: they would land in whichever pane it shows. Tests: T18, T44, T45 "types only into the agent's own pane".
+1. **Words in another pane.** An agent in tmux, Zellij, herdr or Rex inside a WezTerm or kitty window, in tmux inside Zellij, or in a terminal or editor started from any of their panes, must get no words through the outer host: they would land in whichever pane it shows, or run at its shell. Only the process that made the agent's terminal decides (the decided rule above), never a variable. Tests: `wezterm.spec.ts`, `kitty.spec.ts`, `zellij.spec.ts` "a terminal started from the pane takes no words", `scannedApp.spec.ts` "the host that owns a process's terminal", `observed.spec.ts` "the host that owns its caller's terminal", `devices.spec.ts` "Zellij and kitty".
 2. **kitty reads backslash escapes in `send-text`.** Words holding `\n`, `\x1b` or `\\` reach the prompt as typed. Test: T45, against T8's recording.
 3. **A login entry the person turned off, or a launcher path with a space, `$` or `%`.** Off the Cinnamon/MATE way stays off; the entry's `Exec=` still starts the launcher. Test: T9.
 4. **A hint cut at 64 characters names something else.** `KITTY_LISTEN_ON`, `ZELLIJ_SESSION_NAME` or `ZELLIJ_PANE_ID` over 64 characters is left out, never cut. Test: T43.
@@ -349,7 +349,7 @@ Rules for all eight:
 **Files:** `H/wezterm.ts`, spec.
 
 **Interfaces:**
-- Pane ids: `<n>` when `place.host === 'wezterm'` and `place.hints.ORCA_TERMINAL_HANDLE` is not set; else `held:<n>`. `focus` takes both; `type` and `canType` only the first.
+- Pane ids: `<n>` when `place.ptyOwner === 'wezterm'` ("Decided here", words go only to the agent's own pane); else `held:<n>`. `focus` takes both; `type` and `canType` only the first.
 - `canType(pane)`: the id is `<n>` and a `wezterm` binary is found (PATH, else the macOS app's, as `focus`).
 - `type(pane, text)`: false for an empty text, one over `MAX_TEXT`, or a pane a send is under way in; control characters become spaces (`CONTROL`, `orca.ts`); then `wezterm cli send-text --pane-id <n> --no-paste -- <text>` and, only if it exited 0, `wezterm cli send-text --pane-id <n> --no-paste -- \r` (one carriage return); true when both exited 0.
 
@@ -714,7 +714,7 @@ Extra cases: the file is gone after a success, after each failing call and after
 
 **Interfaces:** `export function createZellijAdapter(deps: Pick<OrcaDeps, 'run' | 'onPath' | 'platform'>): HostAdapter & Required<Pick<HostAdapter, 'type' | 'canType'>>`.
 - `id: 'zellij'`, `tap: 'before'`, no bundle. No pane on Windows.
-- `paneOf`: `ZELLIJ_PANE_ID` (`^[0-9]{1,9}$`) and `ZELLIJ_SESSION_NAME` (the form in "Decided here") → id `<session>:<pane>` when `place.host === 'zellij'` and no `TMUX_PANE` is set, else `held:<session>:<pane>`.
+- `paneOf`: `ZELLIJ_PANE_ID` (`^[0-9]{1,9}$`) and `ZELLIJ_SESSION_NAME` (the form in "Decided here") → id `<session>:<pane>` when `place.ptyOwner === 'zellij'` ("Decided here"), else `held:<session>:<pane>`.
 - `canFocus`: a `zellij` on `PATH`. `focus`: `zellij --session <s> action focus-pane-id <id>` (the spelling T7 recorded), true on exit 0.
 - `canType`: the id is not `held:` and a `zellij` is on `PATH`. `type`: the text rules of T18; one send at a time per pane; first `zellij --session <s> action list-panes --json`, and only when it lists that id as a terminal pane (not a plugin; the field names are `RECORDED_ZELLIJ.listPanes`'s): `… action write-chars --pane-id <id> -- <text>`, then `… action send-keys --pane-id <id> Enter`; true when all three exited 0.
 
@@ -730,7 +730,7 @@ Extra cases: the file is gone after a success, after each failing call and after
 
 **Interfaces:** `export function createKittyAdapter(deps: Pick<OrcaDeps, 'run' | 'onPath' | 'exists' | 'platform'> & { log(line: string): void; uid: number; socketOwner(path: string): number | null }): HostAdapter & Required<Pick<HostAdapter, 'type' | 'canType'>>`.
 - `id: 'kitty'`, `tap: 'before'`, `bundle: APP_BUNDLES.kitty`. No pane on Windows.
-- `paneOf`: `KITTY_WINDOW_ID` (`^[0-9]{1,9}$`) and `KITTY_LISTEN_ON` in the form `unix:` + an absolute path, or on Linux `unix:@` + `[A-Za-z0-9._-]{1,58}` → id `<window>@<listen_on>` when `place.host === 'kitty'` and no `ORCA_TERMINAL_HANDLE` is set, else `held:<window>@<listen_on>`. A window id in form with no `KITTY_LISTEN_ON` gives no pane and logs `[device] kitty · remote control off` once per process.
+- `paneOf`: `KITTY_WINDOW_ID` (`^[0-9]{1,9}$`) and `KITTY_LISTEN_ON` in the form `unix:` + an absolute path, or on Linux `unix:@` + `[A-Za-z0-9._-]{1,58}` → id `<window>@<listen_on>` when `place.ptyOwner === 'kitty'` ("Decided here"), else `held:<window>@<listen_on>`. A window id in form with no `KITTY_LISTEN_ON` gives no pane and logs `[device] kitty · remote control off` once per process.
 - The binary: "Decided here". A path socket must be this account's at each verb (`socketOwner(path) === uid`); an abstract one cannot be checked.
 - `canFocus`/`focus`: `kitten @ --to <listen_on> focus-window --match id:<id>`.
 - `canType`/`type`: the text rules of T18, then every backslash doubled (kitty reads Python escapes in `send-text`; `RECORDED_KITTY.sendTextBackslash` shows what lands); `kitten @ --to <listen_on> send-text --match id:<id> -- <text>`, then `kitten @ --to <listen_on> send-key --match id:<id> enter`; one send at a time per window; true when both exited 0.
