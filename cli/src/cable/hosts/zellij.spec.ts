@@ -314,7 +314,7 @@ describe('zellij as the core finds tmux', () => {
     expect(shell.asked).toEqual([])
   })
 
-  // As the core retries its own tmux (tmux.ts tmuxFinder): a zellij installed after the devices started, or a login
+  // As the core retries its own tmux (tmuxOnPath.ts tmuxFinder): a zellij installed after the devices started, or a login
   // shell that timed out on a loaded Mac, otherwise left the dial with no zellij until the process restarted.
   it('none found is asked again once a zellij is in a folder the core looks in, and found there', async () => {
     const { env: where } = home()

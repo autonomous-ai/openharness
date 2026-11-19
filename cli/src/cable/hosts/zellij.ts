@@ -40,7 +40,7 @@ export interface ZellijDeps {
 const installed = (env: NodeJS.ProcessEnv): string | undefined =>
   tmuxInstallDirectories(env).map((dir) => join(dir, 'zellij')).find((path) => binaryOnPath(path, env))
 
-/** zellij as the core finds tmux (tmux.ts binaryFinder): on this process's PATH, else where the person's login shell
+/** zellij as the core finds tmux (tmuxOnPath.ts binaryFinder): on this process's PATH, else where the person's login shell
  *  finds it, else in a folder the core looks in. Under launchd or systemd the master's PATH holds no Homebrew or cargo
  *  folder, where zellij is installed. None found is asked again once a zellij is on the PATH or in one of those folders. */
 export function zellijFinder(env: NodeJS.ProcessEnv = process.env): () => Promise<TmuxPathOutcome> {
