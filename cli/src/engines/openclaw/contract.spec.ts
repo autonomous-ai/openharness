@@ -248,20 +248,40 @@ describe('the OpenClaw contract', () => {
     expect(readOpenclawScreen(plain.replace(' connected | idle', ' history failed: x\n ⠦ running • 3s | connected')).state).toBe('busy')
   })
 
-  it('the box holds a message when it starts with the message, wrapped or not', () => {
+  it('the box holds a message only when it shows all of it, wrapped or not', () => {
     const message = 'Say hello from scenario proxy-histdrop 1795078028664 and then list the files here'
     const wrapped = fixture('screen-history-refused.txt')
       .replace('Say hello from scenario proxy-histdrop 1795078028664', 'Say hello from scenario proxy-histdrop\n1795078028664 and then list the files here  ')
     const box = readOpenclawScreen(wrapped).box
     expect(box).toBe('Say hello from scenario proxy-histdrop 1795078028664 and then list the files here')
     expect(openclawBoxHolds(box, message)).toBe(true)
-    expect(openclawBoxHolds(box, 'Say  hello\nfrom scenario proxy-histdrop')).toBe(true)
+    expect(openclawBoxHolds(box, 'Say  hello\nfrom scenario proxy-histdrop 1795078028664 and then\tlist the files here ')).toBe(true)
     expect(openclawBoxHolds('hi', 'hi')).toBe(true)
+    // Text the person typed after the message, or in place of it, is theirs: an Enter would send it.
+    expect(openclawBoxHolds(box, 'Say hello from scenario proxy-histdrop')).toBe(false)
+    expect(openclawBoxHolds("yesterday's build failed, can you", 'yes')).toBe(false)
     expect(openclawBoxHolds(box, 'Something else entirely')).toBe(false)
     expect(openclawBoxHolds('Say hello from', message)).toBe(false)
     expect(openclawBoxHolds('', message)).toBe(false)
     expect(openclawBoxHolds(null, message)).toBe(false)
     expect(openclawBoxHolds('anything', '  ')).toBe(false)
+  })
+
+  it('a paste over 10 lines or 1000 characters holds the message its marker counts', () => {
+    // pi-tui's editor draws such a paste as one marker, its lines or its characters as it counts them (`handlePaste`).
+    const long = 'word '.repeat(250)
+    const pasted = fixture('screen-plain.txt').replace(/(─{8,}\n)\n(─{8,})/, '$1[paste #1 1250 chars]\n$2')
+    const box = readOpenclawScreen(pasted).box
+    expect(box).toBe('[paste #1 1250 chars]')
+    expect(openclawBoxHolds(box, long)).toBe(true)
+    expect(openclawBoxHolds(box, `${long}more`)).toBe(false)
+    const lines = Array.from({ length: 12 }, (_, i) => `line ${i}`).join('\n')
+    expect(openclawBoxHolds('[paste #1 +12 lines]', lines)).toBe(true)
+    expect(openclawBoxHolds('[paste #2 +12 lines]', lines.replace(/\n/g, '\r\n'))).toBe(true)
+    expect(openclawBoxHolds('[paste #1 +13 lines]', lines)).toBe(false)
+    // A line break is one character and a tab four, as the editor counts them.
+    expect(openclawBoxHolds('[paste #1 1205 chars]', `${'x'.repeat(600)}\r\n\t${'y'.repeat(600)}`)).toBe(true)
+    expect(openclawBoxHolds('[paste #1 1250 chars] and this', long)).toBe(false)
   })
 
   it('a box taller than the TUI shows it is read through its scroll borders, and holds the message whose part it shows', () => {
