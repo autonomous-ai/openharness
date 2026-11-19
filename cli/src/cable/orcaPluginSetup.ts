@@ -34,13 +34,16 @@ export interface OrcaPluginSetupDeps {
   count(kind: SetupCount, reason?: string): void
 }
 
-/** One pass at a time; never rejects. */
+/** One pass at a time, and one asked meanwhile runs once after it; never rejects. */
 export interface OrcaPluginSetup { pass(): Promise<void> }
 
 const RETRY_MS = 3_600_000
 
 export function createOrcaPluginSetup(deps: OrcaPluginSetupDeps): OrcaPluginSetup {
   let running = false
+  /** A pass asked while one runs: Orca may have come up while that one waited for `orca status`, and its settle is not
+   *  lost, so the running pass runs once more. */
+  let again = false
   /** A failed pass's hour: an attach or a settle within it runs no Orca CLI, so an Orca that cannot take the plugin is
    *  not asked again each time it comes to the front. */
   let waiting = false
@@ -78,10 +81,12 @@ export function createOrcaPluginSetup(deps: OrcaPluginSetupDeps): OrcaPluginSetu
   const setup: OrcaPluginSetup = {
     async pass() {
       // The devices' listener, which the plugin talks to, does not exist on Windows.
-      if (deps.platform === 'win32' || running || waiting) return
+      if (deps.platform === 'win32' || waiting) return
+      if (running) {
+        again = true
+        return
+      }
       running = true
-      // Only a run of Orca's CLI is awaited: a pass that runs none ends at once, and does not turn away an attach's or a
-      // settle's pass that follows it in the same moment.
       try {
         const version = deps.version()
         if (version === null) return
@@ -127,6 +132,10 @@ export function createOrcaPluginSetup(deps: OrcaPluginSetupDeps): OrcaPluginSetu
         failed('error')
       } finally {
         running = false
+        if (again) {
+          again = false
+          await setup.pass()
+        }
       }
     },
   }
