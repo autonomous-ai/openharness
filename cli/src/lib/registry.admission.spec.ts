@@ -748,6 +748,8 @@ it('claims an already-bound linked Stop once when its registration write outlive
   // notify.mjs sends turn-stop once, whatever the registration answered, and leaves on pending.
   expect((await registration).body).toEqual({ pending: true })
   expect((await f.post(body, delivery, 'turn-stop')).body).toEqual({ pending: true })
+  // A duplicate in flight is the same Stop, never a second one.
+  expect((await f.post(body, delivery, 'turn-stop')).body).toEqual({ pending: true })
   flush.release()
   await vi.waitFor(() => expect(f.registered).toHaveBeenCalledOnce())
   expect(onAdmissionStop).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ agentId: owner.agentId }), false)
@@ -755,6 +757,29 @@ it('claims an already-bound linked Stop once when its registration write outlive
   expect(onTurnStop).toHaveBeenCalledExactlyOnceWith({ sessionId: A, status: undefined, transcriptPath: undefined, firedAt: delivery.firedAt })
   expect((await f.post(body, delivery, 'turn-stop')).body).toEqual({ ok: true, duplicate: true })
   expect(onTurnStop).toHaveBeenCalledOnce()
+})
+
+it('never claims a parked linked Stop whose registration is rejected', async () => {
+  const owner = (await registry.openProcessAgent({ engine: 'cursor', tmuxPane: '%3', cwd: root,
+    processIdentity: { pid: 7103, startMarker: 'fixture-start', executable: '<engine>' } }))!.entry
+  ;(await registry.register({ engine: 'cursor', sessionId: A, tmuxPane: '%3', cwd: root, processIdentity: owner.processIdentity! }))
+  const onTurnStop = vi.fn(), onAdmissionStop = vi.fn((_row: unknown, unmatched: boolean) => unmatched)
+  const log = vi.spyOn(console, 'log')
+  const f = await httpFixture(() => false, 65_536, { onTurnStop, onAdmissionStop })
+  const delivery = { id: 'fixture-stop-rejected-01', firedAt: Date.now() }
+  const body = { engine: 'cursor', sessionId: A, transcriptPath: undefined, tmuxPane: '%3', hookEvent: 'stop', prompt: undefined }
+  const flush = hold(), registration = f.post(body, delivery)
+  await flush.entered
+  f.replyGrace()!()
+  expect((await registration).body).toEqual({ pending: true })
+  expect((await f.post(body, delivery, 'turn-stop')).body).toEqual({ pending: true })
+  // The agent goes inactive while its write is in flight: the registration is refused as stale.
+  registry.byAgent(owner.agentId)!.active = false
+  flush.release()
+  await vi.waitFor(() => expect(log.mock.calls.some(([line]) => String(line).includes('ignored · stale_hook'))).toBe(true), { timeout: 3_000 })
+  expect(f.registered).not.toHaveBeenCalled()
+  expect(onAdmissionStop).not.toHaveBeenCalled()
+  expect(onTurnStop).not.toHaveBeenCalled()
 })
 
 it('claims a linked Stop once when it queued only behind the slow registry write of its agent\'s earlier hook', async () => {
