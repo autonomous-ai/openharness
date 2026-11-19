@@ -40,13 +40,17 @@ interface Asking { orca: string; key: string; version: string }
  *  sources; `old`, an Orca below the plugin's engines; `folder`, the plugin's folder not written; `not-running`, an Orca
  *  not reachable, or an answer that cannot be read. */
 interface Unasked { why: 'none' | 'no-plugin' | 'old' | 'folder' | 'not-running' }
+/** How a change brings Orca's entry to the plugin's folder at the version cli.js carries: `install` the folder for no
+ *  entry or one from anywhere else, `update` one from the folder at another version whatever its status (an enable
+ *  would turn on the old copy Orca holds), and `enable` one from the folder at this version. */
+type How = 'install' | 'update' | 'enable'
 /** The state, and what a change needs beside it: why it is `absent` (`other` for an entry that is the person's to mend:
- *  a development install, or one Orca could not load), what it asks Orca with in the states it asks Orca in, and
- *  whether the entry Orca lists was installed from the plugin's own folder. */
+ *  a development install, or one Orca could not load), and what it asks Orca with, and how, in the states it asks
+ *  Orca in. */
 type Found =
   | { state: 'absent'; why: Unasked['why'] | 'other' }
   | { state: 'current' }
-  | ({ state: 'offer' | 'off' | 'approve' | 'behind'; ours: boolean } & Asking)
+  | ({ state: 'offer' | 'off' | 'approve' | 'behind'; how: How } & Asking)
 
 const NOT_RUNNING: Found = { state: 'absent', why: 'not-running' }
 const OTHER: Found = { state: 'absent', why: 'other' }
@@ -158,15 +162,17 @@ async function find(deps: OrcaPluginDeps, force: boolean): Promise<Found> {
   if (entry === undefined) {
     const before = force ? false : setUpBefore(deps.dataDir)
     if (before === undefined) return NOT_RUNNING
-    return { state: before ? 'off' : 'offer', ours: false, ...asking }
+    return { state: before ? 'off' : 'offer', how: 'install', ...asking }
   }
   const { version, status, source } = entry
   if (typeof version !== 'string' || typeof status !== 'string') return NOT_RUNNING
   if (entry.isDev === true) return OTHER
-  const ours = fromFolder(source, deps.folder)
-  if (status === 'disabled') return { state: 'off', ours, ...asking }
-  if (status === 'pending' || entry.needsReconsent === true) return { state: 'approve', ours, ...asking }
-  if (version !== asking.version || !ours) return { state: 'behind', ours, ...asking }
+  // Harness enables or updates only an entry it installed from its own folder, never code put elsewhere, such as a
+  // pending install from a person's checkout: that one is installed from the folder, which Orca counts as a moved source.
+  const how: How = !fromFolder(source, deps.folder) ? 'install' : version !== asking.version ? 'update' : 'enable'
+  if (status === 'disabled') return { state: 'off', how, ...asking }
+  if (status === 'pending' || entry.needsReconsent === true) return { state: 'approve', how, ...asking }
+  if (how !== 'enable') return { state: 'behind', how, ...asking }
   if (status === 'errored' || status === 'invalid') return OTHER
   return { state: 'current' }
 }
@@ -275,11 +281,25 @@ export type OrcaSetUp =
 
 const SETUP_FAILED: OrcaSetUp = { orca: 'failed', error: 'failed' }
 
+/** Orca's answer to `plugin <word>` for [asking]: `ok`, its deadline passed, or what orcaSetUp answers. Orca refuses a
+ *  plugin that runs code without its approval's fingerprint; Harness passes it only for a refusal within
+ *  ORCA_APPROVED, and only once: Diego agreed to that access for the person, and anything more is held for his
+ *  decision. */
+async function approving(deps: OrcaPluginDeps, asking: Asking, word: string[]): Promise<'ok' | 'timeout' | OrcaSetUp> {
+  const answer = await change(deps, asking.orca, word)
+  if (typeof answer !== 'object') return answer === 'failed' ? SETUP_FAILED : answer
+  if (!withinApproved(answer.refused, asking.key, asking.version)) return { orca: 'held' }
+  const { approvalFingerprint } = answer.refused as { approvalFingerprint?: unknown }
+  // An answer Harness cannot read, not access it would hold: tried again later.
+  if (typeof approvalFingerprint !== 'string' || !ORCA_FINGERPRINT.test(approvalFingerprint)) return SETUP_FAILED
+  const approved = await change(deps, asking.orca, [...word, '--approve', approvalFingerprint])
+  // A second refusal (the plugin changed in between) is never answered by a third run.
+  return typeof approved === 'object' || approved === 'failed' ? SETUP_FAILED : approved
+}
+
 /** Sets the plugin up in Orca, or brings it current, as its state there asks; [force] (`enable`) also brings back one
- *  the person removed. `did` says what ran: none when it was current. Orca refuses a plugin that runs code without its
- *  approval's fingerprint; Harness passes it only for a refusal within ORCA_APPROVED, and only once: Diego agreed to
- *  that access for the person, and anything more is held for his decision. It writes no record and says nothing but
- *  the folder's code. */
+ *  the person removed. `did` says what ran: none when it was current. It writes no record and says nothing but the
+ *  folder's code. */
 export async function orcaSetUp(deps: OrcaPluginDeps, { force }: { force: boolean }): Promise<OrcaSetUp> {
   const found = await find(deps, force)
   if (found.state === 'absent') {
@@ -288,23 +308,16 @@ export async function orcaSetUp(deps: OrcaPluginDeps, { force }: { force: boolea
   }
   if (found.state === 'current') return { orca: 'on' }
   if (found.state === 'off' && !force) return { orca: 'off' }
-  // Harness enables or updates only an entry it installed from its own folder, never code put elsewhere, such as a
-  // pending install from a person's checkout: that one is installed from the folder, which Orca counts as a moved source.
-  const word = !found.ours ? ['install', deps.folder] : found.state === 'behind' ? ['update', found.key] : ['enable', found.key]
   const on: OrcaSetUp = { orca: 'on', did: found.state === 'offer' ? 'set up' : 'updated' }
-  let answer = await change(deps, found.orca, word)
-  if (typeof answer === 'object') {
-    if (!withinApproved(answer.refused, found.key, found.version)) return { orca: 'held' }
-    const { approvalFingerprint } = answer.refused as { approvalFingerprint?: unknown }
-    // An answer Harness cannot read, not access it would hold: tried again later.
-    if (typeof approvalFingerprint !== 'string' || !ORCA_FINGERPRINT.test(approvalFingerprint)) return SETUP_FAILED
-    answer = await change(deps, found.orca, [...word, '--approve', approvalFingerprint])
-    // A second refusal (the plugin changed in between) is never answered by a third run.
-    if (typeof answer === 'object') return SETUP_FAILED
+  let answer = await approving(deps, found, found.how === 'install' ? ['install', deps.folder] : [found.how, found.key])
+  // Orca brings an update's files in and may leave an entry that was not on as it was, disabled or waiting on an
+  // approval: it is enabled then, at the version the update brought.
+  if (answer === 'ok' && found.how === 'update' && found.state !== 'behind' && !await finished(deps, found)) {
+    answer = await approving(deps, found, ['enable', found.key])
   }
   // Orca may finish what it was asked after the deadline.
   if (answer === 'timeout') return await finished(deps, found) ? on : { orca: 'failed', error: 'timeout' }
-  return answer === 'ok' ? on : SETUP_FAILED
+  return answer === 'ok' ? on : answer
 }
 
 export type OrcaRemove = { orca: 'off' } | { orca: 'off'; error: 'not-running' | 'timeout' | 'failed' }
