@@ -641,8 +641,10 @@ export function createBinding({
       if (streamed && agent.firstTask && screen.state === 'ready' && screen.key === agent.sessionId) handOverFirstTask(agent.agentId)
       // A history that did not load (a Gateway too slow to answer the TUI's first read) refuses every message until a
       // load works: `/session` loads it again, typed only into an empty box, never over the person's text or a message
-      // OpenClaw refused. The key is the footer's, the session the pane is on; the row's would undo a `/new`.
-      if (screen.state === 'no-history' && screen.box === '' && screen.key) {
+      // OpenClaw refused, and only for a first task or a message of Harness's waiting there: a TUI the person runs alone
+      // is theirs to reload. The key is the footer's, the session the pane is on; the row's would undo a `/new`.
+      if (screen.state === 'no-history' && screen.box === '' && screen.key
+        && (agent.firstTask || input.firstTaskWaiting(agent.agentId) || input.awaitingConfirmation(agent.agentId))) {
         const now = Date.now()
         const tried = sessionTries.get(agent.agentId) ?? { tries: 0, lastAt: -Infinity }
         if (tried.tries < SESSION_TRIES && now - tried.lastAt >= SESSION_RETRY_MS && await input.typeCommand(agent.agentId, `/session ${screen.key}`)) {
