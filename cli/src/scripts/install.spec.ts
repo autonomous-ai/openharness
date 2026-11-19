@@ -260,7 +260,7 @@ const gridFixture = (scratch: string, tamperSha = false, drain = false) => {
 // The constants and helpers (install_hn among them), then step 3c alone.
 const hnStepOf = (source: string) =>
   source.slice(source.indexOf('METADATA_URL="${HARNESS_METADATA_URL'), source.indexOf("# 1. Host requirements")) +
-  source.slice(source.indexOf("# 3c. hn's binary"), source.indexOf("# 4. Ensure ~/.local/bin"));
+  source.slice(source.indexOf("# 3c. hn's binary"), source.indexOf("# 3d. Start at login"));
 
 const hnFixture = (scratch: string, { tamper = false, runs = true, drain = false } = {}) => {
   const home = join(scratch, "home");

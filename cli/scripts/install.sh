@@ -123,6 +123,62 @@ LAUNCHER="$BIN_DIR/harness"
 TUI_BIN="$HARNESS_DATA_ROOT/bin/harness-tui"
 HN_LAUNCHER="$BIN_DIR/hn"
 
+# The login entry (Linux): an XDG autostart entry the desktop session runs at each login, inside the
+# session, so the daemon gets its display as when someone types `harness start`. Not a systemd unit: one
+# starts before the session's display reaches the user manager, and ends with the last session unless
+# lingering. Named harnessd.desktop to stay apart from Desktop's menu entry (harness.desktop). Its
+# folder is $XDG_CONFIG_HOME's only when that is absolute, as the XDG spec says.
+login_entry_file() {
+  case "${XDG_CONFIG_HOME:-}" in
+    /*) printf '%s/autostart/harnessd.desktop\n' "$XDG_CONFIG_HOME" ;;
+    *)  printf '%s/.config/autostart/harnessd.desktop\n' "$HOME" ;;
+  esac
+}
+# `"<launcher>" start`, quoted as the Desktop Entry spec quotes an argument, inside a value that is then
+# read as a string: so a backslash is doubled twice, `"`, a backtick and `$` take an escaped backslash,
+# and `%` (a field code there) is doubled.
+login_entry_exec() {
+  printf '"%s" start\n' "$(printf '%s' "$LAUNCHER" | sed -e 's/\\/\\\\\\\\/g' -e 's/["`$]/\\\\&/g' -e 's/%/%%/g')"
+}
+# The file is there and its first Exec= line is this launcher's: the entry this script writes.
+login_entry_own() {
+  [ -f "$1" ] && [ "$(grep '^Exec=' "$1" | head -n 1)" = "Exec=$(login_entry_exec)" ]
+}
+# Turned off where the person turns off any login item: Hidden=true, or GNOME's or MATE's own key.
+login_entry_off() {
+  grep -qx -e 'Hidden=true' -e 'X-GNOME-Autostart-enabled=false' -e 'X-MATE-Autostart-enabled=false' "$1"
+}
+login_entry_on() {
+  _login_entry="$(login_entry_file)"
+  login_entry_own "$_login_entry" && ! login_entry_off "$_login_entry"
+}
+# Writes its own entry when there is none or its own is on; any other file is left as it is, so the
+# person's choice, or another app's entry (the Linux Device app's), stands. Atomic: a temp file in the
+# same folder, then a rename. A launcher path holding a control character cannot be written in one
+# Exec= line, so it gets none.
+write_login_entry() {
+  case "$LAUNCHER" in *[[:cntrl:]]*) return 0 ;; esac
+  _login_entry="$(login_entry_file)"
+  if [ -e "$_login_entry" ] && ! login_entry_on; then
+    if login_entry_own "$_login_entry"; then
+      echo "  · Start at login is off"
+    else
+      echo "  · Start at login: set by another app"
+    fi
+    return 0
+  fi
+  _login_staged="$_login_entry.$$.tmp"
+  if mkdir -p "$(dirname "$_login_entry")" \
+      && printf '%s\n' '[Desktop Entry]' 'Type=Application' 'Name=Harness' "Exec=$(login_entry_exec)" \
+        'NoDisplay=true' 'X-GNOME-Autostart-enabled=true' > "$_login_staged" \
+      && chmod 644 "$_login_staged" && mv -f "$_login_staged" "$_login_entry"; then
+    echo "  ✓ Starts at login"
+  else
+    rm -f "$_login_staged"
+    return 1
+  fi
+}
+
 # The PATH of the terminal this runs in, before the steps below put ~/.local/bin on the installer's
 # own: the closing advice is about the person's PATH. Checked against the installer's, the advice to
 # fix it never printed, and on a fresh Mac the `hn` it said to type was "command not found" (macOS VM,
@@ -801,6 +857,12 @@ if [ "$INSTALL_MODE" = "standalone" ]; then
   install_hn || echo "  · hn will download itself the first time you run it"
 fi
 
+# 3d. Start at login (Linux), in both modes that install the CLI. Optional: an entry that cannot be
+#     written leaves the tool's own error and the install goes on; `harness start` still works by hand.
+if [ "$INSTALL_MODE" != "host" ] && [ "$(uname -s)" = Linux ]; then
+  write_login_entry || true
+fi
+
 # 4. Ensure ~/.local/bin is on PATH (per shell), idempotently — defined up with the other helpers.
 ensure_path_rc
 
@@ -840,7 +902,8 @@ if [ "$INSTALL_MODE" = "standalone" ] && [ "$NEW_COMPUTER" = 1 ] \
 fi
 
 # 5. Final verification. Use the launcher by absolute path because this process cannot update its
-#    parent shell's PATH. Installation never authenticates or starts the adapter implicitly.
+#    parent shell's PATH. Installation never authenticates, and starts nothing now; on Linux it leaves
+#    a login entry (step 3d) that runs `harness start` at the next login.
 "$NODE_BIN" --version </dev/null >/dev/null 2>&1 || { echo "✗ Managed Node verification failed." >&2; exit 30; }
 "$LAUNCHER" version </dev/null >/dev/null 2>&1 || { echo "✗ Harness CLI verification failed." >&2; exit 31; }
 if [ "$INSTALL_MODE" = "standalone" ]; then
@@ -861,7 +924,8 @@ print_logo() {
 }
 
 # The explicit commands keep browser SSO and the long-lived daemon lifecycle understandable and
-# scriptable: nothing here signs in or starts anything. Desktop mode is the app installing its own
+# scriptable: nothing here signs in, and nothing starts now; on Linux the login entry runs `harness start`
+# at the next login. Desktop mode is the app installing its own
 # CLI — the app takes the person through sign-in itself, so it gets the one line and not the guide.
 # One line of it: `harness version` prints the version alone today, and a notice it might add
 # tomorrow must not land inside this sentence.
@@ -910,6 +974,10 @@ else
   echo "      harness start                  # 2. connect this computer as a machine (runs in the background)"
   echo "      harness remote-password set    # 3. let your OTHER machines reach this one (asked once, kept)"
   echo ""
+  if [ "$(uname -s)" = Linux ] && login_entry_on; then
+    echo "  Harness starts when you log in."
+    echo ""
+  fi
   echo "  Then, from a Harness terminal tile on any of your machines:"
   echo ""
   echo "      harness remote                 # pick a machine — the tile becomes a terminal on it"
