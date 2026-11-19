@@ -19,13 +19,13 @@
  * device-gated recap (recap.ts / manager.ts triggerTurnRecap / websocket.ts handleBrainSummaryEvent).
  */
 
-import { mkdirSync, readFileSync, writeFileSync } from 'fs'
+import { mkdirSync } from 'fs'
 import { join } from 'path'
 import type { LastTurnText, LiveEvent } from './normalize.js'
 import { AgentNotifications } from './agentNotifications.js'
 import { deriveTurnSummary } from './deviceRecap.js'
 import { RECENT_TURNS, lastFullText, recentAsks, recentRecaps, splitSummary, type RecentRecap, type SessionRecaps } from './recapReads.js'
-import { atomicWriteJson } from './secureState.js'
+import { atomicWriteJson, jsonObject, readState } from './secureState.js'
 import { fallbackTier, type Tier, type TierInput } from './notifyTier.js'
 import { TurnStats } from '../cable/turnStats.js'
 import { errorKind } from './log.js'
@@ -1194,30 +1194,25 @@ export class CommanderMirror {
   }
 
   private load(): void {
-    try {
-      const obj = JSON.parse(readFileSync(this.file, 'utf-8')) as Record<string, string>
-      for (const [k, v] of Object.entries(obj)) if (typeof v === 'string') this.summaries.set(k, v)
-    } catch { /* no file yet */ }
-    try {
-      const obj = JSON.parse(readFileSync(this.historyFile, 'utf-8')) as Record<string, unknown>
-      for (const [k, v] of Object.entries(obj)) {
-        if (Array.isArray(v)) this.history.set(k, v.filter((x): x is string => typeof x === 'string').slice(0, RECENT_TURNS))
-      }
-    } catch { /* no history yet — recent() falls back to the latest summary */ }
-    try {
-      const obj = JSON.parse(readFileSync(this.fullTextFile, 'utf-8')) as Record<string, unknown>
-      for (const [k, v] of Object.entries(obj)) {
-        // Re-clipped on the way in: the cap may have been lowered since this was written, and a stored
-        // row is not evidence that it still fits the wire.
-        if (Array.isArray(v)) this.fullTexts.set(k, v.filter((x): x is string => typeof x === 'string').slice(0, RECENT_TURNS).map(t => clipBytes(t, FULL_TEXT_MAX_BYTES)))
-      }
-    } catch { /* no full answers yet — recap simply omits the field */ }
-    try {
-      const obj = JSON.parse(readFileSync(this.askFile, 'utf-8')) as Record<string, unknown>
-      for (const [k, v] of Object.entries(obj)) {
-        if (Array.isArray(v)) this.asks.set(k, v.filter((x): x is string => typeof x === 'string').slice(0, RECENT_TURNS).map((t) => t.slice(0, ASK_MAX_CHARS)))
-      }
-    } catch { /* no questions stored yet — the router falls back to recaps alone */ }
+    // A file that cannot be read is set aside, never written over by the next save: its bytes stay for a person.
+    const read = (file: string): Record<string, unknown> => {
+      const state = readState(file, 'cache', jsonObject)
+      return state.state === 'ok' ? state.value : {}
+    }
+    for (const [k, v] of Object.entries(read(this.file))) if (typeof v === 'string') this.summaries.set(k, v)
+    // No history yet: recent() falls back to the latest summary.
+    for (const [k, v] of Object.entries(read(this.historyFile))) {
+      if (Array.isArray(v)) this.history.set(k, v.filter((x): x is string => typeof x === 'string').slice(0, RECENT_TURNS))
+    }
+    for (const [k, v] of Object.entries(read(this.fullTextFile))) {
+      // Re-clipped on the way in: the cap may have been lowered since this was written, and a stored
+      // row is not evidence that it still fits the wire.
+      if (Array.isArray(v)) this.fullTexts.set(k, v.filter((x): x is string => typeof x === 'string').slice(0, RECENT_TURNS).map(t => clipBytes(t, FULL_TEXT_MAX_BYTES)))
+    }
+    // No questions stored yet: the router falls back to recaps alone.
+    for (const [k, v] of Object.entries(read(this.askFile))) {
+      if (Array.isArray(v)) this.asks.set(k, v.filter((x): x is string => typeof x === 'string').slice(0, RECENT_TURNS).map((t) => t.slice(0, ASK_MAX_CHARS)))
+    }
   }
 
   private saveSoon(): void {
@@ -1225,22 +1220,17 @@ export class CommanderMirror {
     this.saveTimer = setTimeout(() => this.save(), 200)
   }
 
+  /**
+   * Each file whole or not at all, so a full disk never truncates another session's recaps. `strict` throws instead
+   * of logging, so a deletion that did not land can be tried again.
+   */
   private save(strict = false): void {
     try {
       mkdirSync(this.opts.dataDir, { recursive: true, mode: 0o700 })
-      if (strict) {
-        // Cleanup is often requested on a full disk. Never truncate other sessions' shared
-        // history while rewriting these files; failed atomic writes remain safely retryable.
-        atomicWriteJson(this.file, Object.fromEntries(this.summaries), 'trust')
-        atomicWriteJson(this.historyFile, Object.fromEntries(this.history), 'trust')
-        atomicWriteJson(this.fullTextFile, Object.fromEntries(this.fullTexts), 'trust')
-        atomicWriteJson(this.askFile, Object.fromEntries(this.asks), 'trust')
-        return
-      }
-      writeFileSync(this.file, JSON.stringify(Object.fromEntries(this.summaries), null, 2))
-      writeFileSync(this.historyFile, JSON.stringify(Object.fromEntries(this.history), null, 2))
-      writeFileSync(this.fullTextFile, JSON.stringify(Object.fromEntries(this.fullTexts), null, 2))
-      writeFileSync(this.askFile, JSON.stringify(Object.fromEntries(this.asks), null, 2))
+      atomicWriteJson(this.file, Object.fromEntries(this.summaries), 'cache')
+      atomicWriteJson(this.historyFile, Object.fromEntries(this.history), 'cache')
+      atomicWriteJson(this.fullTextFile, Object.fromEntries(this.fullTexts), 'cache')
+      atomicWriteJson(this.askFile, Object.fromEntries(this.asks), 'cache')
     } catch (err) {
       if (strict) throw err
       console.error('[commander] save summaries failed:', errorKind(err))
