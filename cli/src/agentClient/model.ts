@@ -63,8 +63,9 @@ export interface Caller extends LedgerMember {
   hachi?: true
 }
 
-/** `installing`, `starting`, `failed`: a harness asked for that has not started (commands.ts `Asked`). `held`: one
- *  Harness cannot follow until the person acts (`namedStateOf`). */
+/** `installing`: a harness asked for that has not started (commands.ts `Asked`). `starting`: that, or one that has not
+ *  taken its first task yet; `failed`: one its machine refused, or whose launch started nothing (`listedStateOf`).
+ *  `held`: one Harness cannot follow until the person acts (`namedStateOf`). */
 export type State = 'working' | 'idle' | 'needs-input' | 'held' | 'stopped' | 'offline' | 'unknown' | 'installing' | 'starting' | 'failed'
 
 export interface Row {

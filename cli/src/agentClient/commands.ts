@@ -113,7 +113,7 @@ export const WAIT_USAGE = `Usage: harness wait [--machine <name>] <name>[,<name>
 
 Waits until each harness has stopped working and the background commands it started have ended, then prints its state.
 --any returns when the first one does.
-Exit status: 0 idle or closed by you, 1 one's launch failed (harness show says why), 3 one needs the person (a question, a permission, or a problem only they can fix), 4 one stopped, never started or is gone,
+Exit status: 0 idle or closed by you, 1 one's launch failed (harness show says why), 3 one needs the person (a question, a permission, or a problem only they can fix), 4 one stopped, is gone, or its machine refused it,
 124 timed out.
 --timeout takes 90s, 30m, 2h; 0 waits as long as it takes.
 ${ON_MACHINE}`
@@ -1681,7 +1681,7 @@ export function waitCommand(argv: readonly string[], deps: ClientDeps = {}): Pro
         if (r.state === 'gone') s.out(formatNext(nextOf(r))!)
       }
       const states = results.map((r) => r.state)
-      // A harness that never started and a failed cloud harness keep 4, which clients already read.
+      // A harness its machine refused and a failed cloud harness keep 4, which clients already read.
       return states.some((x) => x === 'timeout' || x === 'installing' || x === 'starting') ? EXIT.timeout : states.includes('needs-input') || states.includes('held') ? EXIT.needsInput
         : results.some((r) => r.failure) ? EXIT.failed
         : states.some((x) => x === 'stopped' || x === 'gone' || x === 'failed') ? EXIT.stopped : EXIT.ok
@@ -1704,7 +1704,7 @@ const CLOUD_EVENTS: Partial<Record<State, WatchEvent>> = {
   starting: 'started', installing: 'started', working: 'working', 'needs-input': 'needs_person', idle: 'done', failed: 'failed', stopped: 'stopped',
 }
 
-/** The state a harness here is in at each event: its frame says only working or idle, the screen the rest. */
+/** The state a harness here is in at each event: its frame says working, held, starting or failed, its screen the rest. */
 const EVENT_STATES: Record<WatchEvent, State> = {
   started: 'starting', working: 'working', needs_person: 'needs-input', held: 'held', background: 'idle', done: 'idle', idle: 'idle', failed: 'failed', stopped: 'stopped',
 }

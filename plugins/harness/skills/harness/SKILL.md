@@ -88,7 +88,8 @@ harness close <name> [--now]                        # when you are done with one
   holds 2,000 characters; for a longer one, write it to a file and name the file in the task.
 - `wait` exits 0 when it is idle (or you closed it), 1 when its launch failed (`show` says why), 3 when it needs
   the person (a question, a permission, or a problem only they can fix: only the person answers those, so tell
-  them), 4 when it stopped, never started or is gone, 124 on timeout. `--timeout 0` waits as long as it takes.
+  them), 4 when it stopped, is gone, or its machine refused it, 124 on timeout. `--timeout 0` waits as long as it
+  takes.
 - Read the result with `show` instead of asking for a summary.
 - `close` what you started once you have its answer. It keeps the conversation; the person can resume it.
   It refuses while the harness is working, unless `--now`. One closed while still starting may have no

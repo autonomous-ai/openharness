@@ -28,7 +28,7 @@ The commands an agent uses:
 harness whoami                                      # who and where you are, whether you may start harnesses, your limits
 harness ps [--all]                                  # the harnesses here: state, who started each, what each is about
 harness new [agent] [--machine NAME] [folder | project] --name NAME -- TASK
-harness wait NAME[,NAME…] [--any] [--timeout 30m]   # exits 0 idle, 1 launch failed, 3 needs the person (a question, a permission, or a problem only they can fix), 4 stopped, never started or gone, 124 timed out
+harness wait NAME[,NAME…] [--any] [--timeout 30m]   # exits 0 idle, 1 launch failed, 3 needs the person (a question, a permission, or a problem only they can fix), 4 stopped, gone, or its machine refused it, 124 timed out
 harness show NAME [--chars N]                       # its state, the last ask and its answer
 harness send NAME "text"                            # a teammate in this tab, while Agent Messages are on
 harness close NAME [--now]                          # save its screen and stop it; the conversation is kept
