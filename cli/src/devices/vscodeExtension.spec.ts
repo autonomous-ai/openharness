@@ -11,10 +11,11 @@ import { inflateRawSync } from 'node:zlib'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { crc32 } from '../lib/zipWriter.js'
 import {
-  buildVersion, packVsix, recordVersion, vscodeDisable, vscodeEnable, vscodeExtensionDeps, vscodeStatus,
+  buildVersion, cursorFolderCli, packVsix, recordVersion, vscodeDisable, vscodeEnable, vscodeExtensionDeps, vscodeStatus,
   VSCODE_EXTENSION_ID, VSCODE_RECORD_MAX_BYTES, type VscodeEditor, type VscodeExtensionDeps, type VscodeExtensionFiles,
 } from './vscodeExtension.js'
 import { writeExecutable } from '../testing/executableFixture.js'
+import { RECORDED_LINUX_APPS } from '../testing/recordedLinuxApps.js'
 
 const HOME = '/Users/someone'
 const APP = '/Applications/Visual Studio Code.app'
@@ -364,6 +365,81 @@ describe('Cursor', () => {
     symlinkSync(target, link)
     expect(real.real(link)).toBe(realpathSync(target))
     expect(real.real('/nowhere/x')).toBe('/nowhere/x')
+  })
+})
+
+describe('cursorFolderCli: the Cursor CLI a tap opens a folder with on Linux', () => {
+  const RECORDED = RECORDED_LINUX_APPS.cursor
+  const SHIM = `${HOME}/.local/bin/cursor`
+  /** A `.desktop` file as Cursor's package ships it, its binary [exec]: the window's actions carry an `Exec=` of their
+   *  own after the entry's. */
+  const desktop = (exec: string) =>
+    `[Desktop Entry]\nName=Cursor\nExec=${exec}\nType=Application\n\n[Desktop Action new-empty-window]\nExec=/elsewhere/cursor --new-window %F\n`
+  const entry = (dir: string) => `${dir}/applications/${RECORDED.desktopFile}`
+  const linux = (disk: Record<string, string>, pathVar = '/usr/bin') => computer({ editor: 'cursor', platform: 'linux', pathVar, disk }).deps
+  /** The package as recorded: its `.desktop` file, the CLI beside its binary and the link its install puts on PATH. */
+  const INSTALLED = { [entry('/usr/share')]: desktop(RECORDED.exec), [RECORDED.cliBesideExec]: '', [RECORDED.pathCommand]: '' }
+
+  it('the package\'s .desktop Exec= names the binary, and the bin/cursor beside it is the CLI', () => {
+    expect(cursorFolderCli(linux(INSTALLED))).toBe(RECORDED.cliBesideExec)
+  })
+
+  it('the .desktop file is looked for in the home\'s, then /usr/local\'s, then /usr\'s share', () => {
+    const disk: Record<string, string> = {
+      [entry(`${HOME}/.local/share`)]: desktop(`${HOME}/cursor/cursor %F`), [`${HOME}/cursor/bin/cursor`]: '',
+      [entry('/usr/local/share')]: desktop('/opt/cursor/cursor %F'), '/opt/cursor/bin/cursor': '',
+      ...INSTALLED,
+    }
+    expect(cursorFolderCli(linux(disk))).toBe(`${HOME}/cursor/bin/cursor`)
+    delete disk[`${HOME}/cursor/bin/cursor`]
+    expect(cursorFolderCli(linux(disk))).toBe('/opt/cursor/bin/cursor')
+    delete disk['/opt/cursor/bin/cursor']
+    expect(cursorFolderCli(linux(disk))).toBe(RECORDED.cliBesideExec)
+  })
+
+  it('with no .desktop CLI it is the cursor on PATH, cursor-agent\'s shim passed over; none of them, null', () => {
+    const pathVar = `${HOME}/.local/bin:/usr/bin`
+    expect(cursorFolderCli(linux({ [SHIM]: '', [RECORDED.pathCommand]: '' }, pathVar))).toBe(RECORDED.pathCommand)
+    expect(cursorFolderCli(linux({ [SHIM]: '' }, pathVar))).toBeNull()
+    // A binary with no bin/cursor beside it, as an AppImage.
+    expect(cursorFolderCli(linux({ [entry('/usr/share')]: desktop('/opt/Cursor.AppImage %U') }, pathVar))).toBeNull()
+  })
+
+  it.each([
+    ['a relative one', 'cursor %F', 'bin/cursor'],
+    ['one of 4097 characters', `/${'a'.repeat(4089)}/cursor %F`, `/${'a'.repeat(4089)}/bin/cursor`],
+    ['one with a control character', '/opt/cur\u0001sor/cursor %F', '/opt/cur\u0001sor/bin/cursor'],
+  ])('an Exec= binary that is %s is passed over for PATH\'s cursor', (_, exec, beside) => {
+    const disk = { [entry('/usr/share')]: desktop(exec), [beside]: '', [RECORDED.pathCommand]: '' }
+    expect(cursorFolderCli(linux(disk))).toBe(RECORDED.pathCommand)
+  })
+
+  it('an Exec= binary of exactly 4096 characters is used', () => {
+    const folder = `/${'a'.repeat(4088)}`
+    expect(`${folder}/cursor`).toHaveLength(4096)
+    expect(cursorFolderCli(linux({ [entry('/usr/share')]: desktop(`${folder}/cursor %F`), [`${folder}/bin/cursor`]: '' }))).toBe(`${folder}/bin/cursor`)
+  })
+
+  it('a .desktop file of up to 64 KiB is read; a larger one is passed over', () => {
+    const sized = (bytes: number) => {
+      const text = desktop(RECORDED.exec)
+      return `${text}#${'x'.repeat(bytes - Buffer.byteLength(text) - 2)}\n`
+    }
+    expect(cursorFolderCli(linux({ [entry('/usr/share')]: sized(64 * 1024), [RECORDED.cliBesideExec]: '' }))).toBe(RECORDED.cliBesideExec)
+    expect(cursorFolderCli(linux({ [entry('/usr/share')]: sized(64 * 1024 + 1), [RECORDED.cliBesideExec]: '' }))).toBeNull()
+  })
+
+  it('HARNESS_CURSOR_BIN, absolute and executable, is the CLI; absolute and not there, there is none', () => {
+    const bin = '/e2e/root/cursor/cursor'
+    expect(cursorFolderCli(computer({ editor: 'cursor', platform: 'linux', pathVar: '/usr/bin', disk: { ...INSTALLED, [bin]: '' }, bin }).deps)).toBe(bin)
+    expect(cursorFolderCli(computer({ editor: 'cursor', platform: 'linux', pathVar: '/usr/bin', disk: INSTALLED, bin }).deps)).toBeNull()
+  })
+
+  it.each(['darwin', 'win32'] as const)('on %s there is none, whatever is installed', (platform) => {
+    const bin = '/e2e/root/cursor/cursor'
+    const disk = { ...INSTALLED, '/Applications/Cursor.app': '', '/Applications/Cursor.app/Contents/Resources/app/bin/cursor': '', [bin]: '' }
+    expect(cursorFolderCli(computer({ editor: 'cursor', platform, pathVar: '/usr/bin', disk }).deps)).toBeNull()
+    expect(cursorFolderCli(computer({ editor: 'cursor', platform, pathVar: '/usr/bin', disk, bin }).deps)).toBeNull()
   })
 })
 

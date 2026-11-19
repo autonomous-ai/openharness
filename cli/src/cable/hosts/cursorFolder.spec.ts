@@ -7,14 +7,18 @@ import { createCursorFolderAdapter, isFolder, type CursorFolderDeps } from './cu
 
 const CURSOR = 'com.todesktop.230313mzl4w4u92'
 const MARKER = '/work/SECRET-FOLDER-MARKER'
+/** Cursor's CLI as its Linux package installs it (testing/recordedLinuxApps.ts). */
+const CLI = '/usr/share/cursor/bin/cursor'
 
 interface Call { file: string; args: string[]; timeoutMs: number }
 
 /** A recording runner that runs nothing, so no spec opens the developer's own Cursor: each call answers the next of
- *  [codes] (null: it was killed or never started), then exit 0. A folder is there only once added to [folders]. */
+ *  [codes] (null: it was killed or never started), then exit 0. A folder is there only once added to [folders]. Cursor's
+ *  CLI is [CLI], each look at it counted in [clis]. */
 function rig(over: Partial<CursorFolderDeps> = {}, codes: Array<number | null> = []) {
   const calls: Call[] = []
   const folders = new Set<string>()
+  const clis = vi.fn((): string | null => CLI)
   const deps: CursorFolderDeps = {
     run: async (file, args, timeoutMs) => {
       calls.push({ file, args, timeoutMs })
@@ -22,9 +26,10 @@ function rig(over: Partial<CursorFolderDeps> = {}, codes: Array<number | null> =
     },
     platform: 'darwin',
     isFolder: (path) => folders.has(path),
+    cli: clis,
     ...over,
   }
-  return { calls, folders, adapter: createCursorFolderAdapter(deps) }
+  return { calls, folders, clis, adapter: createCursorFolderAdapter(deps) }
 }
 
 const place = (over: Partial<Place> = {}): Place => ({ host: 'cursor', app: 'cursor', hints: {}, engine: 'cursor', cwd: '/work/api', ...over })
@@ -146,8 +151,16 @@ describe('the Cursor folder adapter', () => {
     for (const spy of said) expect(spy).not.toHaveBeenCalled()
   })
 
-  it.each(['linux', 'win32'] as const)('on %s nothing can be tapped and nothing runs', async (platform) => {
-    const { adapter, calls, folders } = rig({ platform })
+  it('on a Mac Cursor\'s CLI is never looked for', async () => {
+    const { adapter, clis, folders } = rig()
+    folders.add('/work/api')
+    expect(adapter.canFocus(pane('/work/api'))).toBe(true)
+    expect(await adapter.focus(pane('/work/api'))).toBe(true)
+    expect(clis).not.toHaveBeenCalled()
+  })
+
+  it('on Windows nothing can be tapped and nothing runs', async () => {
+    const { adapter, calls, folders } = rig({ platform: 'win32' })
     folders.add('/work/api')
     expect(adapter.canFocus(pane('/work/api'))).toBe(false)
     expect(await adapter.focus(pane('/work/api'))).toBe(false)
@@ -162,6 +175,51 @@ describe('the Cursor folder adapter', () => {
       expect(await adapter.focus(pane(id)), what).toBe(false)
       expect(calls, what).toEqual([])
     }
+  })
+})
+
+describe('the Cursor folder adapter on Linux', () => {
+  const ran = (folder: string): Call => ({ file: CLI, args: [folder], timeoutMs: 10_000 })
+
+  it('a tap runs Cursor\'s CLI on the folder: one run, the path one argument, in 10 s; HARNESS_OPEN_BIN is not it', async () => {
+    for (const folder of ['/work/api', '/work/my proj/ü', '/work/-rf', '/work/a;b $(x) `y`']) {
+      const { adapter, calls, folders } = rig({ platform: 'linux', bin: '/tmp/e2e/fake-open' })
+      folders.add(folder)
+      expect(adapter.paneOf(place({ cwd: folder })), folder).toEqual(pane(folder))
+      expect(adapter.canFocus(pane(folder)), folder).toBe(true)
+      expect(await adapter.focus(pane(folder)), folder).toBe(true)
+      expect(calls, folder).toEqual([ran(folder)])
+    }
+  })
+
+  it('with no Cursor CLI the folder cannot be tapped and nothing runs', async () => {
+    const { adapter, calls, folders } = rig({ platform: 'linux', cli: () => null })
+    folders.add('/work/api')
+    expect(adapter.canFocus(pane('/work/api'))).toBe(false)
+    expect(await adapter.focus(pane('/work/api'))).toBe(false)
+    expect(calls).toEqual([])
+  })
+
+  it('a folder that is not there, or a pane id not in its form, runs nothing', async () => {
+    for (const [what, id] of [['gone', '/work/api'], ...OUT_OF_FORM]) {
+      const { adapter, calls, folders } = rig({ platform: 'linux' })
+      if (what !== 'gone') folders.add(id)
+      expect(adapter.canFocus(pane(id)), what).toBe(false)
+      expect(await adapter.focus(pane(id)), what).toBe(false)
+      expect(calls, what).toEqual([])
+    }
+  })
+
+  it('a run that exits non-zero, was killed, or rejects answers false', async () => {
+    for (const codes of [[1], [null]]) {
+      const { adapter, calls, folders } = rig({ platform: 'linux' }, codes)
+      folders.add('/work/api')
+      expect(await adapter.focus(pane('/work/api')), String(codes)).toBe(false)
+      expect(calls, String(codes)).toEqual([ran('/work/api')])
+    }
+    const { adapter, folders } = rig({ platform: 'linux', run: () => Promise.reject(new Error(`spawn ${MARKER} failed`)) })
+    folders.add('/work/api')
+    expect(await adapter.focus(pane('/work/api'))).toBe(false)
   })
 })
 

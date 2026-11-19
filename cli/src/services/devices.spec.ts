@@ -3457,11 +3457,11 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     return { code: 0, stdout: file === '/usr/bin/xdg-mime' && handler ? `${handler}\n` : '' }
   } })
   /** An agent on Linux whose caller the scan finds in `app`, with that app in front once it is on the app's page. */
-  const inLinuxApp = async (app: string, handler: string, over: Partial<ObservedHookEvent>) => {
+  const inLinuxApp = async (app: string, handler: string, over: Partial<ObservedHookEvent>, more: Parameters<typeof start>[0] = {}) => {
     vi.useFakeTimers()
     readers.apps.mockResolvedValueOnce(new Map([[4242, app]]))
     const listener = fakeListener()
-    const started = startHere({ orca: onLinux(handler), listen: listener.listen })
+    const started = startHere({ ...more, orca: onLinux(handler), listen: listener.listen })
     started.port.observed(hook('session-start', over))
     attach(started.port)
     await vi.waitFor(async () => expect((await host().listAgentSnapshot({ apps: true })).apps?.apps)
@@ -4213,11 +4213,27 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     expect(logs.filter((line) => ['SECRET-', CURSOR].some((secret) => line.includes(secret)))).toEqual([])
   })
 
-  it('off macOS Cursor\'s own agent has no tap', async () => {
-    const { port } = startHere()
+  /** Cursor on Linux as the devices find it (devices/vscodeExtension.ts cursorFolderCli): its CLI [cli], or none. */
+  const linuxCursor = (cli?: string) => ({ ...fakeVscode({ editor: 'cursor' }).deps, platform: 'linux' as const, bin: cli, executable: (path: string) => path === cli })
+
+  it('on Linux with no Cursor CLI, Cursor\'s own agent has no tap', async () => {
+    const { port } = startHere({ cursorExtension: linuxCursor() })
     port.observed(hook('session-start', { engine: 'cursor', sessionId: 'cur-1', cwd: secretFolder(), hostHints: { __CFBundleIdentifier: CURSOR } }))
     attach(port)
     expect(await caps()).toEqual([{ id: observedAgentId('cursor', 'cur-1'), caps: 's' }])
+  })
+
+  it('on Linux a tap on Cursor\'s own agent runs the Cursor CLI the devices found, on its folder', async () => {
+    const cli = '/e2e/root/cursor/cursor'
+    const folder = secretFolder()
+    // No hint names Cursor: on Linux the scan does.
+    await inLinuxApp('cursor', '', { engine: 'cursor', sessionId: 'cur-1', title: 'SECRET-TITLE-MARKER', cwd: folder, hostHints: {} },
+      { cursorExtension: linuxCursor(cli) })
+    const id = observedAgentId('cursor', 'cur-1')
+    expect(await caps()).toEqual([{ id, caps: 'sf' }])
+    expect(await host().openAgent(id)).toBeUndefined()
+    expect(orcaRuns).toEqual([[cli, [folder], 10_000]])
+    expect(logs.filter((line) => ['SECRET-', 'cur-1'].some((secret) => line.includes(secret)))).toEqual([])
   })
 
   it('Claude Code\'s panel in Cursor opens by cursor://, sent to Cursor alone', async () => {
