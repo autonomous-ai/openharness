@@ -213,7 +213,10 @@ none, so the raise has no class for `codex` and finds its window by pid only; th
 which makes it a browser candidate but changes nothing for `codex://`.
 
 Each adapter's `paneOf` today needs a macOS bundle hint to know its app. On Linux it reads the same facts Linux
-gives: the app from the process scan (`place.app`, from `frontApp.ts`'s exe names) or the hook's own hints. The exe
+gives: the app from the process scan (`place.app`, from `frontApp.ts`'s exe names) or the hook's own hints. Cursor's
+terminal says `TERM_PROGRAM=vscode` as VS Code's does, and only a bundle id tells them apart: hints that name VS Code by
+`TERM_PROGRAM` alone are confirmed by the caller's parents (`observed.ts` `walked`), and a walk that names no app leaves
+VS Code. The exe
 names of the Claude and ChatGPT Linux apps and the scheme lines of their `.desktop` files are recorded from the real
 packages (a task installs each in a disposable Ubuntu container, reads `dpkg -L`, the `.desktop` files'
 `MimeType=` and `Exec=`, and the running process's name, and commits only those facts as fixtures). If a package does

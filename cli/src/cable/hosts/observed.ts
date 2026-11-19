@@ -126,6 +126,13 @@ export interface ObservedDeps {
   outer?: OuterLookup
 }
 
+/** Whether a caller's app is learnt from its parents: its hints name none, or name VS Code by TERM_PROGRAM alone, which
+ *  Cursor's terminal says too. Only a bundle id tells the two apart, and Linux has none. */
+function walked(hints: Readonly<Record<string, string>>): boolean {
+  const named = detectApp(hints)
+  return named === UNKNOWN_APP || (named === 'vscode' && !hints.__CFBundleIdentifier)
+}
+
 /** Whether two events' hints are the same, key for key. */
 function sameHints(a: Readonly<Record<string, string>>, b: Readonly<Record<string, string>>): boolean {
   const keys = Object.keys(a)
@@ -571,15 +578,15 @@ export class ObservedSource implements HostSource {
   }
 
   /**
-   * The app of a caller whose hints name none, from its parents as the open scan reads them: walked once per process, as
-   * its tty is read, and one walk at a time. Until the walk answers, the session keeps the app it had. The answer lands
-   * only while that process is still its caller, its latest hook named no app, no outer place holds it and it is live,
-   * and a nested one's tty is not read for it; a caller it moved to is walked next. An ended session keeps the answer
-   * for its caller, for a resume from it. A session no longer listed is walked no more. One that names no listed app, or
-   * fails, leaves the unknown app.
+   * The app of a caller whose hints leave it to its parents (walked), from its parents as the open scan reads them:
+   * walked once per process, as its tty is read, and one walk at a time. Until the walk answers, the session keeps the app
+   * it had. The answer lands only while that process is still its caller, its latest hook still leaves the app to it, no
+   * outer place holds it and it is live, and a nested one's tty is not read for it; a caller it moved to is walked next.
+   * An ended session keeps the answer for its caller, for a resume from it. A session no longer listed is walked no more.
+   * One that names no listed app, or fails, leaves the app the hints [named]: the unknown one when they name none.
    */
-  private learnApp(entry: Entry, pid: number): string {
-    if (entry.appPid === pid) return entry.appWalking ? entry.agent.app : entry.callerApp ?? UNKNOWN_APP
+  private learnApp(entry: Entry, pid: number, named: string): string {
+    if (entry.appPid === pid) return entry.appWalking ? entry.agent.app : entry.callerApp ?? named
     if (entry.appWalking) return entry.agent.app
     entry.appPid = pid
     entry.callerApp = undefined
@@ -593,14 +600,14 @@ export class ObservedSource implements HostSource {
       entry.callerApp = app
       // Its latest hook named its app, or it is seen in the app holding its multiplexer's client (askOuter), which a walk
       // that ends at the multiplexer's server cannot name: that stands. An ended one is on no app's page.
-      if (detectApp(entry.hints) !== UNKNOWN_APP || entry.outer || !this.live(entry)) return
+      if (!walked(entry.hints) || entry.outer || !this.live(entry)) return
       // It moved to another process during the walk: that one is walked now.
       if (entry.caller !== pid) {
-        this.learnApp(entry, entry.caller!)
+        this.learnApp(entry, entry.caller!, detectApp(entry.hints))
         return
       }
       const had = entry.agent.app
-      entry.agent.app = app ?? UNKNOWN_APP
+      entry.agent.app = app ?? detectApp(entry.hints)
       // Nested, its caller's tty is the multiplexer's pane's, which no tab holds: never read (askOuter).
       if (entry.agent.app === had || entry.outerAsk) this.locate(entry)
       else {
@@ -675,10 +682,10 @@ export class ObservedSource implements HostSource {
   }
 
   /** Its app, and the one a tap brings forward: the app it is seen in when nested, else the one its hints name; hints
-   *  that name none learn it from the caller's parents. */
+   *  that name none, or only a word Cursor says too (walked), learn it from the caller's parents. */
   private placeApp(entry: Entry, hints: Readonly<Record<string, string>>, pid: number): void {
     const named = detectApp(hints)
-    entry.agent.app = entry.outer?.app ?? (named === UNKNOWN_APP && this.deps.apps ? this.learnApp(entry, pid) : named)
+    entry.agent.app = entry.outer?.app ?? (walked(hints) && this.deps.apps ? this.learnApp(entry, pid, named) : named)
     entry.bundle = entry.outer ? APP_BUNDLES[entry.outer.app] : bundleOf(entry.agent.host, hints)
   }
 
