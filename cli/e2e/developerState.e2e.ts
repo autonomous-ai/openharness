@@ -157,6 +157,17 @@ describe('a daemon under test knows nothing of the developer\'s own state', () =
     expect(existsSync(bin), bin).toBe(false)
   })
 
+  // A fake dial's attach lists the ChatGPT app's threads only with the app installed (services/devices.ts): /Applications
+  // is the computer's, whatever the home, so the devices look for the app in a folder of the daemon's own root in its
+  // place, where there is none.
+  it('finds none of the developer\'s ChatGPT app for its threads: its devices look for the app in place of /Applications only in its own root, where there is none', async () => {
+    const d = daemon = await IsolatedDaemon.create()
+    const apps = d.env.HARNESS_APPLICATIONS_DIR ?? ''
+    expect(isAbsolute(apps), apps).toBe(true)
+    expect(relative(d.root, apps).startsWith('..'), apps).toBe(false)
+    expect(existsSync(apps), apps).toBe(false)
+  })
+
   // Shell scripts, and Windows never runs `codex queue`.
   it.skipIf(process.platform === 'win32')('a test\'s own app codex notes its queue calls apart from the PATH codex\'s, whose queue exits 127', async () => {
     const d = daemon = await IsolatedDaemon.create()

@@ -120,8 +120,8 @@ describe.skipIf(process.platform !== 'darwin')("the ChatGPT app's threads on the
     ])
     expect(dial.messages.filter((m) => m.t === 'turn.started' || m.t === 'turn.done')).toEqual([])
 
-    // 2. A rest on each runs no open, with nothing in front; 3. a tap opens one in the app, by its link. The dial's
-    // messages are handled in order, so a rest's open would be in the log before the tap's.
+    // 2. A rest on each runs no open, with nothing in front; 3. a tap opens one in the app, by its link. Step 6's last
+    // check of the opens holds the rests: by then the tap's is still the only one.
     for (const id of [p1, p2, r1, r2, r3]) dial.send({ t: 'focus', agentId: agent(id) })
     dial.send({ t: 'agent.open', agentId: agent(r1) })
     await until("the tap's open", () => d.opens().length > 0, 30_000, 50)
@@ -150,7 +150,9 @@ describe.skipIf(process.platform !== 'darwin')("the ChatGPT app's threads on the
     for (const line of lines) expect(line).toMatch(LINE)
     const log = d.log()
     const threads = [p1, p2, r1, r2, r3, a1, e1]
-    for (const secret of [NEVER_READ, 'Fixture Named', ...threads, ...threads.map(folder)]) expect(log).not.toContain(secret)
+    // A thread Codex gave no name is named by its folder's last part: the log holds that name no more than the folder.
+    const names = threads.map((id) => folder(id).slice('/work/'.length))
+    for (const secret of [NEVER_READ, 'Fixture Named', ...threads, ...threads.map(folder), ...names]) expect(log).not.toContain(secret)
     expect(d.opens()).toEqual([['-b', CODEX_APP, `codex://threads/${r1}`]])
   })
 })
