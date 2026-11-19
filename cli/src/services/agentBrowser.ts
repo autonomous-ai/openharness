@@ -133,7 +133,7 @@ function commandReply(reply: ToolReply): Reply {
 
 /** A failure the apps can act on, named; anything else is the service's own and counts against it. */
 function named(error: unknown): Reply {
-  if (error instanceof PodmanError) return { error: error.state.toUpperCase() }
+  if (error instanceof PodmanError) return { error: error.code }
   if (error instanceof Error && error.message.startsWith('invalid browser setting')) return { error: 'INVALID_SETTINGS', detail: error.message }
   throw error
 }

@@ -366,7 +366,7 @@ export class CableFleet {
     const first = this.options.dropBackoffMs ?? DROP_BACKOFF_MS
     const backoffMs = !last || now - last.at > DROP_FORGIVEN_MS ? first : Math.min(last.backoffMs * 2, DROP_BACKOFF_MAX_MS)
     this.dropped.set(id, { until: now + backoffMs, backoffMs, at: now })
-    this.host.log(`cable: ${entry.port.path} dropped (${hostile ? 'flooding the port' : `${entry.faults.length} faults in a minute`}: ${errorKind(error)}) — this dial alone; its port is looked at again in ${Math.round(backoffMs / 1000)} s [usb ${id}]`)
+    this.host.log(`cable: ${entry.port.path} dropped (${hostile ? 'flooding the port' : `${entry.faults.length} faults in a minute: ${errorKind(error)}`}) — this dial alone; its port is looked at again in ${Math.round(backoffMs / 1000)} s [usb ${id}]`)
     // Off this call stack: the session is in the middle of the call that failed, and stop() waits on it.
     setTimeout(() => {
       if (this.entries.get(id) !== entry) return

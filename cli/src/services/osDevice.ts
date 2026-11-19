@@ -163,7 +163,7 @@ export function execBounded(file: string, args: readonly string[], options: Exec
 export function spawnDetached(file: string, args: readonly string[], input?: string): void {
   const child = spawn(file, [...args], { detached: true, stdio: [input === undefined ? 'ignore' : 'pipe', 'ignore', 'ignore'] })
   // Never the input: it may hold a Wi-Fi password.
-  child.on('error', (error) => console.error('[os-device] could not start a detached command:', errorKind(error)))
+  child.on('error', (error) => console.error(`[os-device] could not start ${basename(file)}:`, errorKind(error)))
   if (input !== undefined) {
     child.stdin!.on('error', () => { /* the command exited before reading it */ })
     child.stdin!.end(input)

@@ -140,7 +140,7 @@ export function runWifiService(options: WifiServiceOptions): ServiceProcess {
    *  and the service resumed (each against the agents as the core lists them then) before what came after. */
   let heardSoFar: Promise<unknown> = Promise.resolve()
   const inOrder = (run: () => unknown): void => {
-    heardSoFar = heardSoFar.then(run).catch((error: unknown) => console.warn(`[wifi] ${errorKind(error)}`))
+    heardSoFar = heardSoFar.then(run).catch((error: unknown) => console.warn(`[wifi] a core event failed · ${errorKind(error)}`))
   }
   /** The core's first word on each connection: which machine this is, then what it holds for the service. */
   const connected = async (state: Record<string, unknown>): Promise<void> => {

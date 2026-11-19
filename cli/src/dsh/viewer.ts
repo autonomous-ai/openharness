@@ -341,7 +341,7 @@ export class DshViewerManager {
         purpose: 'viewer',
       })
     } catch (error) {
-      // Windows without Git Bash (shell.ts says what to install), or an argument spawn refuses.
+      // Windows without Git Bash, SHELL_UNAVAILABLE (shell.ts says what to install), or an argument spawn refuses.
       await this.fail(state, `[dsh] ${state.dsh.id} viewer could not start · ${errorKind(error)}`)
       return
     }

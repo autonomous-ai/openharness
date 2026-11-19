@@ -155,7 +155,8 @@ export function startHachi(core: CoreApi, given: Partial<HachiDeps> = {}): { sto
       }
       if (away) {
         const answer = await current.line.harnessWatch!(ids, heard)
-        if (answer.error) throw new Error(String(answer.error))
+        // The refusal's code (TOO_MANY) is what the log line below names.
+        if (answer.error) throw Object.assign(new Error('refused'), { code: String(answer.error) })
         for (const each of Array.isArray(answer.agents) ? answer.agents as Array<{ agentId?: unknown; state?: unknown }> : []) {
           if (typeof each.agentId === 'string') heard(each.agentId, { type: 'harness_event', payload: { agentId: each.agentId, state: each.state } })
         }
@@ -195,7 +196,7 @@ export function startHachi(core: CoreApi, given: Partial<HachiDeps> = {}): { sto
       line = await deps.open(core.daemon.machineId())
       const reply = await line.request('agent_close', { agentId: running.agentId, sessionId: running.sessionId,
         createdAt: new Date(running.registeredAt).toISOString(), mode: 'now' })
-      if (reply.error) throw new Error(String(reply.error))
+      if (reply.error) throw Object.assign(new Error('refused'), { code: String(reply.error) })
       // As the close answered (lib/closeAgentService.ts `withoutConversation`): a Hachi turned off before it bound a
       // conversation was closed without one, and the line said it was kept.
       deps.log(reply.withoutConversation === true

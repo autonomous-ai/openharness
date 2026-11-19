@@ -16,6 +16,9 @@ export class PodmanError extends Error {
     super(message)
     this.name = 'PodmanError'
   }
+
+  /** The state as a log line's kind prints it (`errorKind`), as the apps read it (`agent_browser` replies). */
+  get code(): string { return this.state.toUpperCase() }
 }
 
 export type Availability =
