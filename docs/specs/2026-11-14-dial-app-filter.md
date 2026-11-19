@@ -108,8 +108,9 @@ working in. The app he is working in is the one in front, and the computer alrea
     still show it.
 - **The scan learns the app where that is cheap** (the PM, 2026-11-15): with no new permission, by walking the
   session's parent processes (`ppid`) and reading only each one's executable name or path. The scan runs its own
-  `ps -axo pid=,ppid=,tty=,comm=` (`comm` last, so macOS prints the whole path, not 16 characters; the tty tells a hook's
-  caller's own pane, [dial on Linux § 1.5](../plans/2026-11-19-dial-linux-design.md#15-wezterm-types)), and only on a scan
+  `ps -axo pid=,ppid=,comm=` (`comm` last, so macOS prints the whole path, not 16 characters; no tty, which made each read
+  three times as slow on macOS: a hook's caller's own pane reads its chain's one process at a time,
+  [dial on Linux § 1.5](../plans/2026-11-19-dial-linux-design.md#15-wezterm-types)), and only on a scan
   with sessions whose app is not known yet. Each name is mapped to an app with the existing bundle and exe tables (a
   `.app` path's bundle id comes from that app's `Info.plist`). A bundle that was not read (past the pass's bound, or
   unreadable) ends that walk: the app stays not known yet, never an outer app's guess. Nothing else of a process is

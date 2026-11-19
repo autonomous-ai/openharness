@@ -181,8 +181,11 @@ table to tell the agent's own pane (below).
 variables: `code .` run in WezTerm's pane 7 gives VS Code's terminals `WEZTERM_PANE=7`, and words typed into pane 7
 run at its shell. So no variable decides whose pane it is: the process that made the agent's pseudo-terminal does. From
 the hook's caller up its parents (`parentChain`'s walk and bound) while they run on the caller's tty, the first process
-on another tty or on none made it, read from the one table the open scan reads, `ps -axo pid=,ppid=,tty=,comm=`
-(`scannedApp.ts` `ptyOwner`). WezTerm's pane is the agent's own when that is `wezterm-gui` or `wezterm-mux-server`
+on another tty or on none made it: the walk from the one table the open scan reads, `ps -axo pid=,ppid=,comm=`, and
+each process's tty from `ps -o tty= -p <pid>`, one at a time and only up to that first one (`scannedApp.ts`
+`readPtyOwner`, `ptyOwner`), as a tty column made every read of the table three times as slow on macOS and a `ps -p`
+of two pids or more takes 53 ms there, of one 2.4 ms. Only a caller whose hints name a WezTerm, kitty or Zellij pane is
+read. WezTerm's pane is the agent's own when that is `wezterm-gui` or `wezterm-mux-server`
 (Linux cuts it to `wezterm-mux-ser`); kitty's when `kitty`; Zellij's when its server, `zellij`; macOS names each by its
 path. It is read once per caller (`observed.ts` `learnPtyOwner`) and reaches the adapters as `Place.ptyOwner`; until it
 lands, and for any other maker, the pane is `held:` and takes a tap alone. A tap takes the pane of the host that made the
