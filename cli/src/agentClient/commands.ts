@@ -609,7 +609,8 @@ async function programReply(s: Setup, o: Opened, t: ProgramTarget, text: string,
     if (state === 'stopped' || state === 'offline') {
       return programFailure(s, json, 'NOT_RUNNING', `${name} is not running: it was closed or stopped. Run harness ensure to open it again.`, EXIT.stopped)
     }
-    const { screen } = await inspect(t)
+    // Its first task or its session not taken yet: not ready for words, whatever its screen says.
+    const { screen } = listedStateOf(t.frame) === 'starting' ? { screen: null } : await inspect(t)
     if (screen === 'idle') break
     if (screen === 'needs-input') return programFailure(s, json, 'NOT_IDLE', `${name} waits for the person (a question or a permission).`, EXIT.refused)
     if (screen === 'working' && !fresh) return programFailure(s, json, 'NOT_IDLE', `${name} is still working on the last words. Wait for it (harness wait ${name}), then reply.`, EXIT.refused)
@@ -1230,6 +1231,8 @@ async function replyInPane(s: Setup, o: Opened, t: Target, text: string, at: str
   if (state === 'stopped' || state === 'offline') {
     throw new AgentClientError('NOT_RUNNING', `${name} is no longer running: it was closed or stopped. Resume it with harness resume ${at}, then reply; or start a new harness with the whole task.`)
   }
+  // An idle screen before its first task is taken is not idle: words typed now would go before that task.
+  if (listedStateOf(t.frame) === 'starting') throw new AgentClientError('NOT_IDLE', `${name} is starting: wait for it, then reply.`)
   if (state !== 'idle') throw new AgentClientError('NOT_IDLE', state === 'working' ? `${name} is working. Wait for it to finish (${step(s.env, 'wait', at)}), then reply.` : `${name} is not idle: it may be waiting for the person (a question or a permission). Only they answer that.`)
   let reply: Record<string, unknown>
   try { reply = await s.record({ port: o.where.port, dataDir: o.where.dataDir, machineId: t.machineId }, { action: 'reply_local', machine: o.machine, agentId: t.frame.id, text }, 20_000) } catch (error) {
