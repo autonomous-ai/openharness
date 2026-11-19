@@ -8335,7 +8335,9 @@ describe("the Claude app's Code sessions, from its store (docs/plans/2026-11-19-
   const host = () => seen.dial as unknown as DaemonCableHost
   /** A dial on the cable, on this computer's agents: no window. */
   const attach = (port: DevicesPort) => { seen.host.watching!(true); port.swarms(null) }
-  const listed = async () => (await host().listAgentSnapshot()).agents.map(({ id, name, caps }) => ({ id, name, caps }))
+  /** The page a dial that says appFilter reads, the Claude app's while it is the one app with rows: the store's resting
+   *  rows show on app pages only, never in the single machine ring (D7). */
+  const listed = async () => (await host().listAgentSnapshot({ apps: true })).agents.map(({ id, name, caps }) => ({ id, name, caps }))
   const ids = async () => (await listed()).map(({ id }) => id)
   /** The list a dial that says appFilter reads with no window. */
   const appList = async (port: DevicesPort) => { port.swarms(null); return (await host().listAgentSnapshot({ apps: true })).apps }
@@ -8526,7 +8528,7 @@ describe("the Claude app's Code sessions, from its store (docs/plans/2026-11-19-
     await live()
     const ghostty = { hostHints: { TERM_PROGRAM: 'ghostty' } }
     port.observed(hook('session-start', ghostty))
-    expect(await ids()).toEqual([ID])
+    expect((await host().listAgentSnapshot()).agents.map(({ id }) => id)).toEqual([ID])
     expect(host().appOf(ID)).toBe('ghostty')
     port.observed(hook('session-end', ghostty))
     expect(await listed()).toEqual([{ id: ID, name: 'Fix the build', caps: 'sf' }])
