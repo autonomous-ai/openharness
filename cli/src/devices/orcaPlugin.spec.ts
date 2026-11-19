@@ -786,7 +786,24 @@ describe('orcaSetUp', () => {
     expect(existsSync(folder)).toBe(false)
   })
 
-  it.skipIf(process.getuid?.() === 0)('a record that cannot be read, without force: absent · not-running, nothing installed', async () => {
+  it('Orca reachable, and an answer after its status that cannot be read: failed, nothing changed', async () => {
+    const unread: [string, (folder: string) => void][] = [
+      ['inspect exits 2', () => orca.answer('plugin inspect', { id: 'req-2', ok: false, error: { code: 'plugin_invalid', message: 'no', data: {} } }, 2)],
+      ['inspect names no plugin key', () => orca.answer('plugin inspect', inspect('../x'))],
+      ['list is not JSON', () => orca.answer('plugin list', '{"ok": tr')],
+      ['an entry with no version', (folder) => orca.answer('plugin list', list([entry(folder, { version: undefined })]))],
+      ['an entry with no status', (folder) => orca.answer('plugin list', list([entry(folder, { status: 7 })]))],
+    ]
+    for (const [name, answer] of unread) {
+      const { deps, folder, calls } = setup()
+      up([entry(folder, { version: '1.2.2' })])
+      answer(folder)
+      expect({ name, ...await orcaSetUp(deps, { force: true }) }).toStrictEqual({ name, ...SETUP_FAILED })
+      expect(calls().filter((call) => /^plugin (install|update|enable) /.test(call))).toEqual([])
+    }
+  })
+
+  it.skipIf(process.getuid?.() === 0)('a record that cannot be read, without force: failed, nothing installed', async () => {
     for (const file of [DIAL_SKILL_FILE, DIAL_SETUP_FILE]) {
       const { deps, folder, calls } = setup()
       holds()
@@ -794,7 +811,7 @@ describe('orcaSetUp', () => {
       writeFileSync(record, '{}\n')
       chmodSync(record, 0o000)
       locked.push(record)
-      expect({ file, ...await orcaSetUp(deps, { force: false }) }).toStrictEqual({ file, orca: 'absent', error: 'not-running' })
+      expect({ file, ...await orcaSetUp(deps, { force: false }) }).toStrictEqual({ file, ...SETUP_FAILED })
       expect(calls()).toEqual(reads(folder))
       // An enable reads neither record.
       expect({ file, ...await orcaSetUp(deps, { force: true }) }).toStrictEqual({ file, ...SET_UP })
