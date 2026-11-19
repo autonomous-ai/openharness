@@ -395,3 +395,37 @@ One commit, no red test. Exit 1 is for a launch that failed on its machine only;
 **The slow-device box (tester, this Mac, Podman):** follow `…/scratchpad/lamp-rig/README.md` (it may still be being written; use its "Rerun against another SHA"): `./box.sh machine-up`, `./box.sh up 60aa30b528`, `./box.sh run 10 main-cpu0.6` (the README's `results/main-cpu0.6` may already hold this), then `./box.sh up <branch head>` and `./box.sh run 10 fix-<head>-cpu0.6`; optionally `CPU_QUOTA_US=3000` for both. The PR gets, from each `summary.md`: how often the first task was late (taken after 45 s) or lost, the time to `working`, and `show`'s states over time, main against the branch. Stub model by default; a real-model run only with a key file piped into the box (`or-key-in`), removed with `or-key-out` and checked gone. `./box.sh down; ./box.sh machine-down` afterwards. Only the `devcrew-lamp` Podman machine is used.
 
 **Nothing against production, no real account:** every check above is local or a GitHub run of this branch.
+
+---
+
+## Added during the run (from the slow-device box on main)
+
+The Podman box (arm64 Debian 12, 0.6 CPU, 4 GB, throttled disk; `scratchpad/lamp-rig/results/main-cpu0.6/`) found two
+more bugs on this path. Decided by the child, reversible:
+
+### Task 14: A Gateway that is starting is not "not running"
+
+- **Files:** `cli/src/engines/openclaw/contract.ts`, `contract.spec.ts`, new `__fixtures__/screen-gateway-starting.txt`
+  and `screen-starting-up-disconnected.txt`, `MISSING.md`; `cli/src/core/agents/bind.ts`, `bind.spec.ts`.
+- **Depends on:** 9 (bind.ts). **Effort:** high.
+- **Behavior:** a cold Gateway shows `⠙ starting up • Ns | gateway starting`, `⠙ starting up • Ns | disconnected` and
+  `⠙ starting up • Ns | subscribing to session events` for 85–110 s on the box. All read `starting` (not work, not
+  ready). `gateway starting` is the Gateway's own answer, so it is running: it clears a `noGateway` hold and restarts
+  the 10 s count (the agent reads `starting`, never `held`); `starting up | disconnected` neither sets nor clears.
+- **Red test:** `contract.spec.ts` (the three lines read `starting`), `bind.spec.ts` (held agent, then `gateway
+  starting` → hold cleared; `disconnected` after it does not clear an existing hold).
+
+### Task 15: Closing an OpenClaw agent whose session never reached the store
+
+- **Files:** `cli/src/lib/sessionCheckpoint.ts`, its spec; `cli/src/core/agents/close.ts` and its spec only if the
+  checkpoint's caller needs it.
+- **Depends on:** none. **Effort:** high.
+- **Behavior:** `harness close --now` on an OpenClaw agent whose key has no store or no `session_nodes` row (the
+  Gateway never wrote it) closes, saving no checkpoint: there is nothing to save, and OpenClaw keeps its own store
+  anyway (`OPENCLAW_STORE_KEPT`). A store that exists and cannot be read still refuses, as today. Today it refuses with
+  "Could not read the saved conversation. The session has not been closed." and the agent stays listed, so a client
+  that closes an agent which did not take its task cannot.
+- **Red test:** the checkpoint spec (no database / no row → close proceeds with no checkpoint; unreadable → refused).
+
+Verification adds: the box rerun on the branch (`./box.sh up <sha> && ./box.sh run 10 fix-cpu0.6`), compared with
+`results/main-cpu0.6/summary.md` in the PR.
