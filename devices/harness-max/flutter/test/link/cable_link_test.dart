@@ -1,5 +1,5 @@
 // The cable link over a far end held by hand: the hello and the session, each daemon frame into the model (the C's
-// fixtures in devices/harness-pro/firmware/test/test_pro_cable.c), each BarLink call into bytes, and the clocks.
+// fixtures in devices/harness-max/firmware/test/test_max_cable.c), each BarLink call into bytes, and the clocks.
 import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';

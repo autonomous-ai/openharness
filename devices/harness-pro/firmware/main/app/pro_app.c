@@ -514,12 +514,6 @@ void pro_app_summary(const char *id, const char *text, const char *recap, const 
     leave();
 }
 
-// The Pro does not say appFilter, so the daemon sends it no `apps`: the Max shows them.
-void pro_app_apps(const char *shown, const pro_app_row_t *rows, int n)
-{
-    (void)shown; (void)rows; (void)n;
-}
-
 void pro_app_notif_replace(const pro_notif_row_t *rows, int n)
 {
     pro_app_lock();
@@ -571,33 +565,6 @@ void pro_app_question_close(const char *id)
     settle(pod_ui_question_close(&s_pod, id));
     leave();
 }
-
-// The Pro answers on the computer and starts no agent: pro_app_question already shows the prompt, and the replies to
-// the Max's answering and New Harness never come, since the Pro sends neither.
-void pro_app_ask(const char *id, const char *name, const char *request, const char *text, const pro_ask_item_t *items,
-                 int n, bool permission, bool listed)
-{
-    (void)id; (void)name; (void)request; (void)text; (void)items; (void)n; (void)permission; (void)listed;
-}
-void pro_app_question_state(const char *id, const char *fetch, bool ok, const char *request, const char *token,
-                            bool submitted, const char *error, const pro_ask_item_t *items, int n)
-{
-    (void)id; (void)fetch; (void)ok; (void)request; (void)token; (void)submitted; (void)error; (void)items; (void)n;
-}
-void pro_app_answer_receipt(const char *id, const char *fetch, const char *token, bool ok, bool pending, const char *error)
-{
-    (void)id; (void)fetch; (void)token; (void)ok; (void)pending; (void)error;
-}
-void pro_app_form_state(const char *request, const char *form_id, bool ok, const pro_form_page_t *page)
-{
-    (void)request; (void)form_id; (void)ok; (void)page;
-}
-void pro_app_voice_form(const char *form_id, bool ok, const pro_form_page_t *page)
-{
-    (void)form_id; (void)ok; (void)page;
-}
-// The Pro has never shown a toast (a refused open says nothing on it): parsed now for the Max, and still dropped here.
-void pro_app_toast(const char *text) { (void)text; }
 
 bool pro_app_question_open(const char *agent_id)
 {

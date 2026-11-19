@@ -58,10 +58,12 @@ target_include_directories(harness-max PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}/esp/include
     ${CJSON_DIR}
 )
-# The device's glass width, at this build's height: pro_display.h and terminal.h take these instead of their 720.
+# The device's glass width, at this build's height: main/max_glass.h, force-included, puts these in place of the 720 of
+# the Pro's pro_display.h and terminal.h.
 target_compile_definitions(harness-max PRIVATE
     HT_WIDTH=1920 HT_HEIGHT=${MAX_GLASS_H} PRO_DISPLAY_W=1920 PRO_DISPLAY_H=${MAX_GLASS_H}
     MAX_LINUX_OUTPUT_NAME="${MAX_LINUX_OUTPUT}")
+max_glass(harness-max)
 set_source_files_properties(esp/esp.c PROPERTIES COMPILE_DEFINITIONS PROJECT_VER="${PROJECT_VER}")
 target_compile_options(harness-max PRIVATE -O2 -g -Wall -Wextra -Werror)
 # As the device's build: snprintf() truncates safely, and GCC's format-truncation analysis errors on same-size copies.

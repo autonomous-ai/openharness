@@ -3,7 +3,7 @@
 #include <assert.h>
 #include <stdatomic.h>
 
-#include "app/pro_app_hooks.h"
+#include "app/pro_app.h"
 #include "task_stacks.h"
 
 #include "esp_timer.h"

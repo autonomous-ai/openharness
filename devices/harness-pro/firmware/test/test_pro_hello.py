@@ -23,8 +23,8 @@ code = r'''
 #include <stdio.h>
 #include <string.h>
 typedef struct cJSON { int unused; } cJSON;
-typedef struct { const char *name, *kind; } board_t;
-static const board_t *board(void) { static const board_t b = {"pro-stub", KIND}; return &b; }
+typedef struct { const char *name; } board_t;
+static const board_t *board(void) { static const board_t b = {"pro-stub"}; return &b; }
 static cJSON root_obj;
 static const char *pro_cable_fw_version(void) { return "0.0.0"; }
 static bool device_mac_str(char *o, size_t n) { snprintf(o, n, "aa"); return true; }
@@ -50,19 +50,12 @@ static void config_load_voicelang(char *o, size_t n) { snprintf(o, n, "en"); }
 int main(void) { send_hello(); return 0; }
 '''
 
-def hello(kind):
-    """The hello's lines on a board of this kind."""
-    with tempfile.TemporaryDirectory() as d:
-        src = Path(d) / "hello.c"
-        src.write_text(code)
-        exe = Path(d) / "hello"
-        subprocess.run(["cc", "-std=c11", "-D_DEFAULT_SOURCE", "-Wall", "-Werror", f'-DKIND="{kind}"', "-o", str(exe),
-                        str(src)], check=True)
-        return subprocess.run([str(exe)], check=True, capture_output=True, text=True).stdout.split()
-
-
-lines = hello("kind-stub")
-max_lines = hello("max")
+with tempfile.TemporaryDirectory() as d:
+    src = Path(d) / "hello.c"
+    src.write_text(code)
+    exe = Path(d) / "hello"
+    subprocess.run(["cc", "-std=c11", "-D_DEFAULT_SOURCE", "-Wall", "-Werror", "-o", str(exe), str(src)], check=True)
+    lines = subprocess.run([str(exe)], check=True, capture_output=True, text=True).stdout.split()
 
 # The settings object: every key the app's DeviceSettings.fromJson requires, with its JSON type. Otherwise the app
 # drops the whole object.
@@ -80,7 +73,7 @@ assert pairs == [
     ("product", "harness"),
     ("proto", "3"),
     ("hw", "pro-stub"),
-    ("board", "kind-stub"),   # the board table's kind (Harness Max compiles this file and says "max")
+    ("board", "pro"),
     ("swarms", "members-v1"),
     ("recap", "long-v1"),
     ("activity", "steps-v1"),
@@ -90,20 +83,9 @@ assert pairs == [
     ("mac", "aa"),
     ("settings", "{"),
 ], pairs
-# Harness Max compiles this file and says "max": the same hello and appFilter, so the daemon sends it the shown app's
-# ring and `apps` (docs/specs/2026-11-14-dial-app-filter.md), and questionTier, so a question it was told before comes
-# back as a silent `tier: "list"` row (docs/plans/2026-11-18-dial-drawer-limits-design.md). The Pro says neither.
-max_pairs = [tuple(x.split("=", 1)) for x in max_lines[1:] if not x.startswith("S.")]
-want_max = [("board", "max") if k == "board" else (k, v) for k, v in pairs]
-at = want_max.index(("ota", "v1")) + 1
-want_max[at:at] = [("appFilter", "v1"), ("questionTier", "v1")]
-assert max_pairs == want_max, max_pairs
-assert "appFilter" not in {k for k, _ in pairs} and "questionTier" not in {k for k, _ in pairs}
 keys = {k for k, _ in pairs}
 for round_only in ("carry", "draft", "speech", "form", "visit", "workspace", "selection", "metrics", "pcm16"):
     assert round_only not in keys and round_only not in body, f"hello mentions {round_only}"
 # The real hello is not conditional on a board define: nothing in it may be compiled out.
 assert "#if" not in body and "DEVICE_" not in body
-# And the Pro's table names the kind the daemon has always seen from it.
-assert re.search(r'\.kind\s*=\s*"pro"', (main / "board/board_pro.c").read_text()), "board_pro.c: kind is not \"pro\""
 print("Pro hello: fw product proto hw board swarms recap activity stats player ota mac, and no round-dial keys")

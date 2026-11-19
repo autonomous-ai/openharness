@@ -23,7 +23,6 @@ Full key list, in the order the Pro sends it:
 | `proto` | number | existing |
 | `hw` | board name | existing, informational |
 | `board` | `"pro"` | new on main: names the client kind, for logs |
-| | `"max"` | Harness Max, which builds this firmware: the daemon gives it the Pro's `seq`, `resync`, firmware offers (key `harness-max`) and port verdicts |
 | `swarms` | `"members-v1"` | capability |
 | `recap` | `"long-v1"` | capability |
 | `activity` | `"steps-v1"` | capability |
@@ -157,14 +156,6 @@ firmware transfer, which has its own resend). The daemon answers with a full sna
 frame for each question still open. It does not replay recent `summary` history (the attach push does); a lost
 `summary` is not repaired by a resync. The welcome of a Pro lists `resync` in `features`; a Pro whose welcome does not (an older daemon) sends the old
 `swarms.list` and `agents.list` instead. A welcome without `seq` turns the gap check off for that session.
-
-## 8. The cable over TCP, for development only
-
-`HARNESS_CABLE_TCP=host:port[,…]` makes the devices' process also dial each address (the Max's Linux build listens on 7531)
-with USB's frames, retrying with a wait that doubles up to 30 s. Nothing proves who is at the far end, so a TCP session
-answers no permission prompt (`answer`/`answer.reviewed` get `Permission prompts cannot be answered from here.`).
-A `question` to a Harness Max (`board: "max"`) that is a permission prompt carries `permission: true` (absent otherwise, and
-from every other board's frame, as no other firmware reads it) so the Max can draw approve/deny.
 
 ## `summary.tier`
 

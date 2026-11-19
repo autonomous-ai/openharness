@@ -14,7 +14,7 @@
 #include "app/pro_voice.h"
 #include "audio/audio_capture.h"
 #include "audio/pro_recorder.h"
-#include "cable/cable_features.h"
+#include "cable/max_cable.h"
 #include "cable/cable_link.h"
 #include "cable/pro_cable.h"
 #include "display/max_present.h"
