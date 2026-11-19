@@ -34,13 +34,11 @@ const Set<String> encryptedDownTypes = {
   'agent_resume',
   // Carries the fork's name and first task — what the person typed — like agent_create's prompt.
   'agent_fork',
-  // Change agent (`AppNotifier.changeAgent`): the machine writes the conversation's record into the
-  // project, then the old agent is saved and stopped. Both `MACHINE_REQUESTS` types in the CLI, which
-  // refuses them unsealed (E2EE_REQUIRED) — without them the switch could never start.
-  'agent_handoff_prepare',
+  // Change agent (`AppNotifier.changeAgent`): the machine writes the conversation as the other
+  // engine's session, then the old agent is saved and stopped. Both `MACHINE_REQUESTS` types in the
+  // CLI, which refuses them unsealed (E2EE_REQUIRED) — without them the switch could never start.
+  'agent_session_migrate',
   'agent_close',
-  // Then which harness took over (`AppNotifier._reportReplacement`): a `MACHINE_REQUESTS` type too.
-  'agent_handoff_complete',
   // Delete Harness (`AppNotifier.purgeAgent`): reviewed, then deleted under that review. A
   // `MACHINE_REQUESTS` type in the CLI, refused unsealed (E2EE_REQUIRED).
   'agent_purge',
