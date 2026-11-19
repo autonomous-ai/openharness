@@ -12,7 +12,7 @@
 
 ## Base
 
-- Branch `fix/hook-descendant-stall` at `d78ce8149d`, worktree `/Users/nqhieu84/orca/workspaces/openharness/hook-descendant-stall`.
+- Branch `fix/hook-descendant-stall` at `d78ce8149d`, in a worktree of its own.
 - **Before the first task, once:** `cd cli && npm ci --no-audit --no-fund` (`cli/` has no `node_modules`). One process runs it, never two tasks at once.
 - Names at the base. `cli/hook/notify.mjs`: `HOOK_SHELLS`, `observedCallerPid`, `observedBody`, `terminalHookFields`, `linuxOwnerBirth`, `readProcField`. `cli/src/hookNotify.spec.ts`: `RunHookOpts` (`viaShell`), `runHook`, `collect`, `tmpDirs`, the `native-process.mjs` fixture. `cli/src/core/engines/hooks.spec.ts`: `agent`, `tree`, `hint`, `setup`, `gatewayTree`. If a name differs, follow the code and say so in the report.
 - `main` has moved. #4475 added `received(requests)` to `hookNotify.spec.ts` (a paneless post is waited for at the fake daemon). It is not on this base: a paneless case here that reads `requests` as the hook exits fails now and then under load (one of 283 in each of two Linux runs while planning, a different case each time). Do not chase it; the new paneless cases below wait for their request, and take `received(requests)` at the rebase.
