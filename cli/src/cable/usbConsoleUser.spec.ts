@@ -26,6 +26,13 @@ describe('physical USB ownership', () => {
     expect(isUsbConsoleUser({ platform: 'linux', uid: 1000, consoleUid, linuxSeat: () => true })).toBe(true)
     expect(consoleUid).not.toHaveBeenCalled()
   })
+
+  it('isUsbConsoleUser on Linux tells the seat reader whether a dial is on USB', () => {
+    const linuxSeat = vi.fn((_dialHere: boolean) => true)
+    isUsbConsoleUser({ platform: 'linux', dialHere: false, linuxSeat })
+    isUsbConsoleUser({ platform: 'linux', dialHere: true, linuxSeat })
+    expect(linuxSeat.mock.calls).toEqual([[false], [true]])
+  })
 })
 
 type Answer = { code: number; stdout: string } | Error
@@ -60,18 +67,18 @@ describe('the Linux seat\'s owner', () => {
   it('on Linux the user of seat0\'s active session owns the dial', async () => {
     const loginctl = fakeLoginctl(seatOf('1000'))
     const owner = linuxSeatOwner(loginctl.deps(1000))
-    expect(owner()).toBe(true)
+    expect(owner(true)).toBe(true)
     await vi.waitFor(() => expect(loginctl.calls).toHaveLength(2))
     await settled()
-    expect(owner()).toBe(true)
+    expect(owner(true)).toBe(true)
     expect(loginctl.calls).toEqual([
       ['loginctl', SHOW_SEAT, 10_000],
       ['loginctl', showSession('2'), 10_000],
     ])
 
     const other = linuxSeatOwner(fakeLoginctl(seatOf('1000')).deps(1001))
-    expect(other()).toBe(true)
-    await vi.waitFor(() => expect(other()).toBe(false))
+    expect(other(true)).toBe(true)
+    await vi.waitFor(() => expect(other(true)).toBe(false))
   })
 
   const enoent = Object.assign(new Error('spawn loginctl ENOENT'), { code: 'ENOENT' })
@@ -90,23 +97,34 @@ describe('the Linux seat\'s owner', () => {
     let answer = seatOf('1000')
     const loginctl = fakeLoginctl((args) => answer(args))
     const owner = linuxSeatOwner(loginctl.deps(1001))
-    owner()
-    await vi.waitFor(() => expect(owner()).toBe(false))
+    owner(true)
+    await vi.waitFor(() => expect(owner(true)).toBe(false))
 
     answer = broken
     loginctl.at(8_000)
-    owner()
-    await vi.waitFor(() => expect(owner()).toBe(true))
+    owner(true)
+    await vi.waitFor(() => expect(owner(true)).toBe(true))
     expect(loginctl.calls.slice(2).map(([, args]) => args[0])).toEqual(asksSession ? ['show-seat', 'show-session'] : ['show-seat'])
+  })
+
+  it('starts no reading while no dial is on USB, and reads once one is', async () => {
+    const loginctl = fakeLoginctl(seatOf('1000'))
+    const owner = linuxSeatOwner(loginctl.deps(1001))
+    loginctl.at(8_000)
+    expect(owner(false)).toBe(true)
+    await settled()
+    expect(loginctl.calls).toHaveLength(0)
+    owner(true)
+    await vi.waitFor(() => expect(owner(true)).toBe(false))
   })
 
   it('a daemon with no uid keeps the dial', async () => {
     const loginctl = fakeLoginctl(seatOf('1000'))
     const owner = linuxSeatOwner(loginctl.deps(undefined))
-    owner()
+    owner(true)
     await vi.waitFor(() => expect(loginctl.calls).toHaveLength(2))
     await settled()
-    expect(owner()).toBe(true)
+    expect(owner(true)).toBe(true)
   })
 
   it('reads again only 8 s after the last reading began, one at a time', async () => {
@@ -118,28 +136,28 @@ describe('the Linux seat\'s owner', () => {
       return seatOf(user)(args)
     })
     const owner = linuxSeatOwner(loginctl.deps(1000))
-    owner()
+    owner(true)
     await vi.waitFor(() => expect(loginctl.calls).toHaveLength(2))
     await settled()
 
     loginctl.at(7_999)
-    expect(owner()).toBe(true)
+    expect(owner(true)).toBe(true)
     await settled()
     expect(loginctl.calls).toHaveLength(2)
 
     hold = true
     loginctl.at(8_000)
-    expect(owner()).toBe(true)
+    expect(owner(true)).toBe(true)
     expect(loginctl.calls).toHaveLength(3)
 
     loginctl.at(16_000)
-    expect(owner()).toBe(true)
+    expect(owner(true)).toBe(true)
     await settled()
     expect(loginctl.calls).toHaveLength(3)
 
     user = '1001'
     hold = false
     release()
-    await vi.waitFor(() => expect(owner()).toBe(false))
+    await vi.waitFor(() => expect(owner(true)).toBe(false))
   })
 })

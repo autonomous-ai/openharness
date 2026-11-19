@@ -51,7 +51,7 @@ function fixture(extra: Partial<CableFleetOptions> = {}, Log: typeof DialLog = D
   }
   const logs = mkdtempSync(join(tmpdir(), 'usb-fleet-'))
   const options = {
-    canUseUsb: vi.fn(() => true),
+    canUseUsb: vi.fn((_dialHere: boolean) => true),
     // Nobody else holds these ports. The default asks `lsof`, a process per port per scan, which on a
     // loaded machine outlasts the second a test waits for both dials.
     inUse: vi.fn(async () => false),
@@ -185,6 +185,7 @@ describe('USB dial fleet', () => {
       f.options.canUseUsb.mockReturnValue(false)
       f.fleet.start()
       await scan()
+      expect(f.options.discover).not.toHaveBeenCalled()
       expect(f.ports).toHaveLength(0)
       f.options.canUseUsb.mockReturnValue(true)
       await scan()
@@ -195,8 +196,9 @@ describe('USB dial fleet', () => {
       await scan()
       expect(f.ports.every(port => !port.isOpen)).toBe(true)
       expect(f.fleet.isConnected).toBe(false)
+      const discoveries = f.options.discover.mock.calls.length
       await scan()
-      expect(f.ports).toHaveLength(2)
+      expect(f.options.discover).toHaveBeenCalledTimes(discoveries)
       f.options.canUseUsb.mockReturnValue(true)
       await scan()
       await vi.waitFor(() => expect(f.ports).toHaveLength(4))
@@ -205,7 +207,7 @@ describe('USB dial fleet', () => {
     } finally { await f.fleet.stop() }
   })
 
-  it('asks whose USB it is only while a dial is plugged in, so an empty desk starts no process', async () => {
+  it('says whether a dial is on USB when it asks whose USB it is, so an empty desk starts no process', async () => {
     const f = fixture()
     f.setPorts([])
     const scan = () => (f.fleet as unknown as { scan(): Promise<void> }).scan()
@@ -213,10 +215,14 @@ describe('USB dial fleet', () => {
       f.fleet.start()
       for (let i = 0; i < 3; i++) await scan()
       expect(f.options.discover.mock.calls.length).toBeGreaterThanOrEqual(3)
-      expect(f.options.canUseUsb).not.toHaveBeenCalled()
+      expect(f.options.canUseUsb.mock.calls.every(([dialHere]) => dialHere === false)).toBe(true)
       f.setPorts([device('/dev/tim', 'AA:01')])
       await scan()
-      expect(f.options.canUseUsb).toHaveBeenCalled()
+      await vi.waitFor(() => expect(f.ports).toHaveLength(1))
+      expect(f.options.canUseUsb).toHaveBeenLastCalledWith(true)
+      f.options.canUseUsb.mockClear()
+      await scan()
+      expect(f.options.canUseUsb).toHaveBeenCalledWith(true)
     } finally { await f.fleet.stop() }
   })
 
