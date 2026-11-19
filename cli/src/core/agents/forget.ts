@@ -8,7 +8,7 @@
 import type { CursorTranscriptDiscovery } from '../../engines/cursor/discovery.js'
 import type { TurnRecaps } from '../turns/recaps.js'
 import type { ShortTurnGuard } from '../turns/shortTurnGuard.js'
-import { sid } from '../../lib/log.js'
+import { errorKind, sid } from '../../lib/log.js'
 import { sameProcessIdentity } from '../../lib/terminalRuntime.js'
 import { matchesLaunchReceipt, withHermesHome, type RegisteredSession, type RegistryAuthority, type registry } from '../../lib/registry.js'
 import { IdentityReadUnavailable } from '../../engines/kit/identityScan.js'
@@ -119,7 +119,7 @@ export function createForgetSession({
     // save keeps a known one through an unbound row (StoppedAgentStore.save). One owner each from here on.
     if (!opts.keepAgent && doomed) {
       try { await owners?.settleSaved(doomed.agentId) }
-      catch (error) { console.warn(`[agent] ${sid(doomed.agentId)} could not settle who owns its conversation: ${error instanceof Error ? error.message : error}`) }
+      catch (error) { console.warn(`[agent] ${sid(doomed.agentId)} could not settle who owns its conversation: ${errorKind(error)}`) }
     }
     syncRecapPool()
     // Publication can finish after another agent acquired the old session. Its reader/state

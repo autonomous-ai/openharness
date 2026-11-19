@@ -54,6 +54,10 @@ export interface DialHomeSetup {
   vscode(): { dial: boolean; version?: string } | undefined
   /** false when the record could not be saved. */
   recordVscode(version: string): boolean
+  /** As vscode(), for the extension in Cursor, which keeps its own version: either editor may be there alone. */
+  cursor(): { dial: boolean; version?: string } | undefined
+  /** false when the record could not be saved. */
+  recordCursor(version: string): boolean
 }
 
 type Counts = Record<DialEngine, { wrote: number; removed: number; failed: number }>
@@ -484,6 +488,15 @@ export function createDialHomeSetup(deps: DialHomeSetupDeps): DialHomeSetup {
 
     recordVscode(version) {
       const next = { ...record, vscode: version }
+      if (writeSetup(deps.dataDir, next) !== undefined) return false
+      record = next
+      return true
+    },
+
+    cursor: () => known ? { dial: record.dial, version: record.cursor } : undefined,
+
+    recordCursor(version) {
+      const next = { ...record, cursor: version }
       if (writeSetup(deps.dataDir, next) !== undefined) return false
       record = next
       return true

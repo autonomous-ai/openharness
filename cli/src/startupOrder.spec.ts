@@ -87,7 +87,8 @@ function callArguments(source: string, call: string): { text: string; at: number
 const STARTUP_CALLS = ['await repairProjectCwds({', 'await restoreAgents({']
 
 /** What the prologue is allowed to do before the master's update is listened for: nothing that can throw. */
-const PROLOGUE_CALLS = new Set(['installTimestampedConsole'])
+// errorKind never throws (lib/log.ts) and runs only when a fatal handler fires.
+const PROLOGUE_CALLS = new Set(['installTimestampedConsole', 'errorKind'])
 const KEYWORDS = new Set(['if', 'for', 'while', 'switch', 'catch', 'return', 'typeof', 'new', 'await', 'function'])
 
 describe('the core\'s start-up order (core/main.ts)', () => {

@@ -19,7 +19,7 @@ import type { TurnRecaps } from '../turns/recaps.js'
 import { paneReadIdentity } from '../transcripts/readIdentity.js'
 import { isRecentlyDeleted } from '../../lib/deletedSessions.js'
 import { transcriptIsFirstTurn } from '../../lib/firstTurnReplay.js'
-import { sid } from '../../lib/log.js'
+import { errorKind, sid } from '../../lib/log.js'
 import { matchesLaunchReceipt, projectDisplayName, type registry, type RegisteredSession } from '../../lib/registry.js'
 import type { SessionInputController } from '../../lib/sessionInput.js'
 import { findLiveSession, findResumedTranscript } from '../../lib/sessionRepair.js'
@@ -217,7 +217,7 @@ export function createBinding({
       if (!current()) return
       await stoppedAgents.save(entry, current)
     } catch (error) {
-      console.error(`[agent] ${sid(entry.agentId)} could not save the record it resumes from: ${error instanceof Error ? error.message : error}`)
+      console.error(`[agent] ${sid(entry.agentId)} could not save the record it resumes from: ${errorKind(error)}`)
     }
     if (!current()) return
     if (entry.resumeOnly) stoppedAgents.finishResume(entry.agentId)
@@ -225,7 +225,7 @@ export function createBinding({
     // `/resume`, `claude --resume` in a terminal, a compaction) lets it go, as a running one already has.
     if (meta.isNew) {
       try { await owners?.settle([conversationKey(entry)]) }
-      catch (error) { console.warn(`[agent] ${sid(entry.agentId)} could not settle who owns ${sid(entry.sessionId)}: ${error instanceof Error ? error.message : error}`) }
+      catch (error) { console.warn(`[agent] ${sid(entry.agentId)} could not settle who owns ${sid(entry.sessionId)}: ${errorKind(error)}`) }
     }
     if (!current()) return
     syncRecapPool()
@@ -323,7 +323,7 @@ export function createBinding({
   // discovery pass (and therefore readiness) or prevent another process from being bound.
   const followRegistered = (entry: RegisteredSession, meta: RegisteredMeta): void => {
     void handleRegistered(entry, meta).catch(error => console.error(
-      `[agent] ${sid(entry.agentId)} transcript attachment is unavailable: ${error instanceof Error ? error.message : error}`))
+      `[agent] ${sid(entry.agentId)} transcript attachment is unavailable: ${errorKind(error)}`))
   }
   /**
    * Takes the agent's first task off its row and types it as the person's own message, under the agent: its turn is
@@ -333,13 +333,12 @@ export function createBinding({
    * again before then takes nothing. A submit that throws has the task off the row already: it is said, not put back.
    */
   const handOverFirstTask = (agentId: string): void => {
-    const reason = (error: unknown): string => error instanceof Error ? error.message : String(error)
     void registry.afterTransaction(() => registry.takeFirstTask(agentId)).then((task) => {
       if (!task) return
       console.log(`[agent] ${sid(agentId)} first task handed over`)
       try { submitAgent(agentId, task) }
-      catch (error) { console.error(`[agent] ${sid(agentId)} first task not typed · ${reason(error)}`) }
-    }, (error) => console.error(`[agent] ${sid(agentId)} first task kept · ${reason(error)}`))
+      catch (error) { console.error(`[agent] ${sid(agentId)} first task not typed · ${errorKind(error)}`) }
+    }, (error) => console.error(`[agent] ${sid(agentId)} first task kept · ${errorKind(error)}`))
   }
   const ownTranscript = (engine: 'cursor' | 'grok' | 'agy' | 'copilot', sessionId: string, cwd: string): Promise<string | null> =>
     transcriptOf(engine, engine === 'cursor' ? cursorDataDir() : homes[engine], sessionId, cwd)
@@ -388,8 +387,11 @@ export function createBinding({
       if (!current()) return false
       const reason = error instanceof Error ? error.message : String(error)
       const set = registry.setIdentityHold(agent.agentId, reason)
-      if (set) announceSession(agent)
-      console.log(`[discovery] ${sid(agent.agentId)} binding held · ${reason}`)
+      // Said when the row changes, not on every pass: a hold only the person can clear lasts hours.
+      if (set) {
+        announceSession(agent)
+        console.log(`[discovery] ${sid(agent.agentId)} binding held · ${errorKind(error)}`)
+      }
       return set
     }
     const commit = async (input: Parameters<typeof registry.register>[0]) => {
@@ -432,7 +434,7 @@ export function createBinding({
     // held row attaches nothing. So it is attached now, with the hold gone and without waiting; one already attached is
     // left as it is.
     if (row.sessionId) void attachSession(row).catch((error) => console.error(
-      `[agent] ${sid(row.agentId)} transcript attachment is unavailable: ${error instanceof Error ? error.message : error}`))
+      `[agent] ${sid(row.agentId)} transcript attachment is unavailable: ${errorKind(error)}`))
   }
   /** One pass over a process an agent runs: what it reads, and the session it binds from that. */
   const bindPass = async (observed: DiscoveredTerminalAgent, agent: RegisteredSession, { current, hold, commit, read, mayClaim }: BindPass): Promise<void> => {
@@ -478,7 +480,7 @@ export function createBinding({
           announceSession(agent)
           // A hold that came up while the agent woke kept its stream from attaching; an attached one is left as it is.
           if (agent.sessionId) void attachSession(agent).catch((error) => console.error(
-            `[agent] ${sid(agent.agentId)} transcript attachment is unavailable: ${error instanceof Error ? error.message : error}`))
+            `[agent] ${sid(agent.agentId)} transcript attachment is unavailable: ${errorKind(error)}`))
         }
       }
       // A TUI the person relaunched with another OPENCLAW_STATE_DIR (as the store hold asks) shows the same key, so the

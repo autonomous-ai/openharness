@@ -12,6 +12,7 @@ import { join } from 'node:path'
 
 import { env } from '../config/env.js'
 import type { FleetMachine } from '../cable/machineFleet.js'
+import { errorKind } from '../lib/log.js'
 
 /** What `GET /api/machines` returns per row (MachineService.toOwner). Only the fields the dial uses. */
 interface OwnerMachine {
@@ -169,7 +170,7 @@ export class MachineListCache {
     try {
       res = await this.fetchMachines()
     } catch (err) {
-      this.degrade(`unreachable (${(err as Error).message})`)
+      this.degrade(`unreachable (${errorKind(err)})`)
       return null
     }
     // A sign-in changed while the request was in flight: its response belongs to the old account.

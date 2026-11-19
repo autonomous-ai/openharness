@@ -409,7 +409,7 @@ describe('prepareTerminalBackends', () => {
       { state: 'unavailable', code: 'PTY_HOST_UNAVAILABLE', reason: 'could not prepare ptyhost: odd' },
       { state: 'ready' },
     ])
-    expect(error).toHaveBeenCalledWith('[terminal] tmux: could not prepare tmux: spawn tmux ENOMEM')
+    expect(error.mock.calls).toEqual([['[terminal] tmux: could not prepare tmux: Error'], ['[terminal] ptyhost: could not prepare ptyhost: string']])
     error.mockRestore()
   })
 })

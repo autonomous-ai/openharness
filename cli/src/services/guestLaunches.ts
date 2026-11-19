@@ -13,6 +13,7 @@ import { GuestHelperError, guestUserFor, type GuestAccounts, type SharedFolder }
 import type { GuestHelperState } from '../lib/guestHelperInstall.js'
 import { GUEST_LAUNCH_ENGINES, type GuestLaunchEngine } from '../lib/guestEngines.js'
 import { guestPaneCommand } from '../lib/guestPaneCommand.js'
+import { errorKind } from '../lib/log.js'
 
 export interface GuestLaunchesDeps {
   /** The guests' accounts; only what a launch and a share change read (lib/guestAccounts.ts, or the
@@ -89,7 +90,7 @@ export function createGuestLaunches(deps: GuestLaunchesDeps): GuestLaunches {
         await share(account.user, shared)
       } catch (error) {
         const detail = error instanceof Error ? error.message : String(error)
-        log(`could not share folders with ${account.user}: ${detail}`)
+        log(`could not share folders with ${account.user}: ${errorKind(error)}`)
         if (folder) return { ok: false, error: 'GUEST_FOLDER_UNAVAILABLE', detail: `That folder could not be shared with you: ${detail}` }
       }
       const where = folder && start ? start : account.workspace
@@ -110,7 +111,7 @@ export function createGuestLaunches(deps: GuestLaunchesDeps): GuestLaunches {
       const owned = folders()
       for (const user of accounts) {
         await share(user, named.has(user) ? owned : [])
-          .catch((error: unknown) => log(`could not share folders with ${user}: ${error instanceof Error ? error.message : String(error)}`))
+          .catch((error: unknown) => log(`could not share folders with ${user}: ${errorKind(error)}`))
       }
     },
   }

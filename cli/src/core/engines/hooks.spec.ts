@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vite
 import * as hooks from '../../engines/nativeHookSetup.js'
 import { engineHookInstallations as engineHooks } from '../../engines/nativeHookSetup.js'
 import { RegistryOwnershipChanged, type RegisteredSession } from '../../lib/registry.js'
+import { IdentityReadUnavailable } from '../../engines/kit/identityScan.js'
 import { processRows } from '../../lib/terminalAgentDiscovery.js'
 import { confirmHomes, recoverEngineHomes } from '../../lib/engineHomes.js'
 import { createEngineHooks, installEngineHooks, installOpencodePluginBeforeSpawn, PROCESS_RECORD_WAIT_MS, type EngineHookDeps } from './hooks.js'
@@ -85,12 +86,37 @@ describe('which agent a hook belongs to', () => {
     expect(console.log).not.toHaveBeenCalled()
   })
 
+  // A Linux hook names the nearest ancestor that outlives it (hook/notify.mjs hookCallerPid). When a held core reads
+  // the table, the hook and the shells that ran it are gone, and the process it named is still there.
+  it.each([
+    ['the recorded engine itself', tree([100, 1]), 100],
+    ['the engine program a recorded wrapper script started', tree([200, 100], [100, 1]), 200],
+  ])('the agent whose engine the named caller is, the hook and its shells gone: %s', async (_case, rows, callerPid) => {
+    const a1 = agent('a1', 100)
+    vi.mocked(processRows).mockResolvedValueOnce(rows as never)
+    expect(await setup({ '%1': a1 }).hooks.resolveHookAgent({ engine: 'claude', runtimeHints: [hint('%1')], callerPid })).toEqual(a1)
+    expect(processRows).toHaveBeenCalledTimes(1)
+    expect(console.log).not.toHaveBeenCalled()
+  })
+
   it.each(['claude', 'cursor'] as const)('matches current %s evidence after a reconciliation owner changed', async engine => {
     const current = { ...agent('current', 100), engine } as RegisteredSession
     const { deps, hooks } = setup({ '%1': current })
     vi.mocked(processRows).mockResolvedValue(tree([300, 100], [100, 1]) as never)
     vi.mocked(deps.agentReconciler.triggerHint).mockRejectedValueOnce(new RegistryOwnershipChanged('fixture changed'))
     expect(await hooks.resolveHookAgent({ engine, runtimeHints: [hint('%1')], callerPid: 300 })).toEqual(current)
+  })
+
+  // A pass whose observation changed before it could publish it fails every hook that waits on it. Answered 500,
+  // the hook client wrote the registry itself while the daemon ran, and the agent it replaced never bound (e2e/scale.e2e.ts).
+  it('matches current evidence after a reconciliation could not publish what it observed', async () => {
+    const current = agent('current', 100)
+    const { deps, hooks } = setup({ '%1': current })
+    vi.mocked(processRows).mockResolvedValue(tree([300, 100], [100, 1]) as never)
+    vi.mocked(deps.agentReconciler.triggerHint).mockRejectedValueOnce(new IdentityReadUnavailable('the observed process changed before publication'))
+    expect(await hooks.resolveHookAgent({ engine: 'claude', runtimeHints: [hint('%1')], callerPid: 300 })).toEqual(current)
+    // Any of the pass's holds lands here: the log names its kind, never its words.
+    expect(console.log).toHaveBeenCalledWith('[hooks] reconciliation held · IdentityReadUnavailable IDENTITY_UNAVAILABLE · checking current process evidence')
   })
 
   it.each(['committed', 'removed'] as const)('keeps Cursor resolution through a superseded reconciliation until pane %s', async outcome => {
@@ -274,6 +300,11 @@ describe('which agent a hook belongs to', () => {
       expect(await hooks.hookViaSharedProcess({ engine: 'claude', callerPid: 500 })).toBe(false)
     })
 
+    it('is one when the caller named is the gateway itself, as a Linux hook names it past its shell', async () => {
+      vi.mocked(processRows).mockResolvedValueOnce(gatewayTree().slice(0, 2) as never)
+      expect(await setup().hooks.hookViaSharedProcess({ engine: 'hermes', callerPid: 23704 })).toBe(true)
+    })
+
     it('is not one when nothing says so: no table, a chain that ends, or one that loops', async () => {
       const { hooks } = setup()
       vi.mocked(processRows).mockResolvedValueOnce(null as never)
@@ -353,8 +384,8 @@ describe('which agent a hook belongs to', () => {
       await hook.waiting()
       await new Promise((resolve) => setTimeout(resolve, 250))
       expect(hook.answer()).toBeUndefined()
-      // Said before the wait, so the hook is answered then: its client gives up after 500ms and writes
-      // the registry itself (hook/notify.mjs).
+      // Said before the wait, so the hook is answered then: its engine waits on it, and its client gives
+      // up after 500ms (hook/notify.mjs).
       expect(onWait).toHaveBeenCalledTimes(1)
       // What restart.ts does once the new process is found and probed.
       onPane['%1'] = agent('a1', 200)
@@ -394,8 +425,25 @@ describe('which agent a hook belongs to', () => {
       expect(hook.answer()).toEqual(agent('a1', 200))
     })
 
-    // On Linux the hook runs under dash, whose `sh -c` stays the hook's parent and exits with it: once
-    // `onWait` has answered the hook, the caller is gone from the table. It still belongs to its engine.
+    it('when the pass that would open its agent could not publish what it observed, waits for the agent to appear on its pane', async () => {
+      const onPane: Record<string, RegisteredSession> = {}
+      vi.mocked(processRows).mockResolvedValue(newEngine() as never)
+      const failed = setup(onPane, { agentReconciler: {
+        triggerHint: vi.fn(async () => { throw new IdentityReadUnavailable('the observed process changed before publication') }),
+        nudge: vi.fn(),
+      } as unknown as EngineHookDeps['agentReconciler'] })
+      const onWait = vi.fn()
+      const hook = ask(failed.hooks, ['%1'], onWait)
+      await hook.waiting()
+      expect(onWait).toHaveBeenCalledTimes(1)
+      // The next pass opens the agent.
+      onPane['%1'] = agent('a1', 200)
+      await hook.asked
+      expect(hook.answer()).toEqual(agent('a1', 200))
+    })
+
+    // On Windows a shell (PowerShell, cmd.exe) stays the hook's parent and exits with it: once `onWait` has
+    // answered the hook, the caller is gone from the table. It still belongs to its engine.
     it('belongs to the agent after the wait though its own process has exited by then, by its ancestry as it arrived', async () => {
       const onPane: Record<string, RegisteredSession> = { '%1': agent('a1', 100) }
       vi.mocked(processRows).mockResolvedValueOnce(newEngine() as never).mockResolvedValue(tree([200, 1]) as never)
@@ -601,7 +649,7 @@ describe('installing every engine\'s hooks', () => {
     const installed = installEngineHooks(4242)
     await installed.settled
     expect(hooks.installCopilotHooks).toHaveBeenCalledWith(...startupArgs(hooks.installCopilotHooks))
-    expect(console.warn).toHaveBeenCalledWith('[hooks] opencode install skipped · probe unavailable')
+    expect(console.warn).toHaveBeenCalledWith('[hooks] opencode install skipped · Error')
     installed.close()
   })
 
@@ -747,10 +795,10 @@ describe('installing every engine\'s hooks', () => {
 
   it('contains a rejected login-shell read and fences a late successful read after close', async () => {
     const rejected = await installEngineHooks(4242, { environment: {}, loginShell: Promise.reject('fixture unavailable') })
-    expect(console.warn).toHaveBeenCalledWith('[hooks] login-shell homes unavailable · fixture unavailable')
+    expect(console.warn).toHaveBeenCalledWith('[hooks] login-shell homes unavailable · string')
     rejected.close()
     await installEngineHooks(4242, { environment: {}, loginShell: Promise.reject(new Error('fixture failed')) })
-    expect(console.warn).toHaveBeenLastCalledWith('[hooks] login-shell homes unavailable · fixture failed')
+    expect(console.warn).toHaveBeenLastCalledWith('[hooks] login-shell homes unavailable · Error')
     let resolve!: (environment: NodeJS.ProcessEnv) => void
     const installed = await installEngineHooks(4242, { environment: {}, loginShell: new Promise(done => { resolve = done }) })
     const calls = vi.mocked(confirmHomes).mock.calls.length
@@ -777,8 +825,8 @@ describe('installing every engine\'s hooks', () => {
     vi.mocked(engineHooks.codex.install).mockImplementationOnce(() => { throw new Error('config.toml is read-only') })
     vi.mocked(hooks.installGrokHooks).mockImplementationOnce(() => { throw 'settings mid-write' })
     await installEngineHooks(4242).settled
-    expect(console.warn).toHaveBeenCalledWith('[hooks] codex install skipped · config.toml is read-only')
-    expect(console.warn).toHaveBeenCalledWith('[hooks] grok install skipped · settings mid-write')
+    expect(console.warn).toHaveBeenCalledWith('[hooks] codex install skipped · Error')
+    expect(console.warn).toHaveBeenCalledWith('[hooks] grok install skipped · string')
     for (const install of installs) expect(install).toHaveBeenCalledTimes(1)
   })
 })

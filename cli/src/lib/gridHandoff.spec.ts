@@ -12,6 +12,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { writeExecutable } from '../testing/executableFixture.js'
 
 let root = ''
 let runtimeDir = ''
@@ -31,14 +32,14 @@ async function load() {
 function fakeGrid(dir: string, label: string): string {
   mkdirSync(dir, { recursive: true })
   const bin = join(dir, 'grid')
-  writeFileSync(bin, [
+  writeExecutable(bin, [
     '#!/bin/sh',
     `printf '%s\\n' "$@" > "${join(root, `${label}.args`)}"`,
     `printf '%s' "\${GRID_NO_UPDATE_CHECK-unset}" > "${join(root, `${label}.update-check`)}"`,
     `[ "$1" = login ] && /bin/cat > "${join(root, `${label}.stdin`)}"`,
     'exit 0',
     '',
-  ].join('\n'), { mode: 0o755 })
+  ].join('\n'))
   return bin
 }
 

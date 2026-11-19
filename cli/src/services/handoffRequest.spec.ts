@@ -41,7 +41,7 @@ describe('agent_handoff_prepare', () => {
     expect(ask(null, good())).toStrictEqual([{ error: 'UNSUPPORTED' }])
   })
 
-  it('passes on a handoff error\'s code, and nothing else of any failure, logging only its name and errno code', async () => {
+  it('passes on a handoff error\'s code, and nothing else of any failure, logging only its kind', async () => {
     const logged = vi.spyOn(console, 'error').mockImplementation(() => {})
     const failing = async (error: unknown) => {
       const replies = ask(async () => { throw error }, good())
@@ -55,7 +55,7 @@ describe('agent_handoff_prepare', () => {
     expect(await failing('a string')).toStrictEqual({ error: 'INTERNAL' })
     expect(await failing(null)).toStrictEqual({ error: 'INTERNAL' })
     expect(logged.mock.calls.map(([line]) => line)).toEqual([
-      '[handoff] prepare failed: HandoffError', '[handoff] prepare failed: Error EACCES', '[handoff] prepare failed: string', '[handoff] prepare failed: object',
+      '[handoff] prepare failed: HandoffError', '[handoff] prepare failed: EACCES', '[handoff] prepare failed: string', '[handoff] prepare failed: object',
     ])
     // Thrown before any promise exists: the same catch, the same quiet log.
     const replies = ask(() => { throw new Error('sync /secret/path') }, good())

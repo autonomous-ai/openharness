@@ -1,7 +1,7 @@
 // The gate's hands inside the throwaway VS Code (../realVscode.gate.ts), run as its extension tests: it connects to the
-// gate's control socket and answers one NDJSON line per asked line, `{ error }` when the ask failed. It touches nothing
-// the extension under test does; the extension is the installed one. Its run ending, on `exit` or the gate gone, ends
-// VS Code with code 0.
+// gate's control socket and answers one NDJSON line per asked line (`{ ask, ...arguments }`), `{ error }` when the ask
+// failed. It touches nothing the extension under test does; the extension is the installed one. Its run ending, on
+// `exit` or the gate gone, ends VS Code with code 0.
 const { connect } = require('node:net')
 const vscode = require('vscode')
 
@@ -14,10 +14,17 @@ const asks = {
     const terminal = vscode.window.activeTerminal
     return { active: (terminal && (await terminal.processId)) ?? null }
   },
+  /** A terminal running the fake alt-screen app (altScreenApp.cjs) under the gate's own Node: no shell stands between
+   *  the app and the keys. VS Code's own binary as Node left its window not ending after the run, and at times its
+   *  terminal never started. */
+  async app({ node, script, record }) {
+    const terminal = vscode.window.createTerminal({ name: 'app', shellPath: node, shellArgs: [script, record] })
+    return { app: await terminal.processId }
+  },
 }
 
 /** The answer, or the failure's message: the gate is told, never left waiting. */
-const answer = (ask) => Promise.resolve().then(() => asks[ask]()).catch((error) => ({ error: String(error?.message ?? error) }))
+const answer = (ask, args) => Promise.resolve().then(() => asks[ask](args)).catch((error) => ({ error: String(error?.message ?? error) }))
 
 exports.run = () =>
   new Promise((done) => {
@@ -27,10 +34,10 @@ exports.run = () =>
     socket.on('data', (chunk) => {
       held += chunk
       for (let end = held.indexOf('\n'); end !== -1; end = held.indexOf('\n')) {
-        const { ask } = JSON.parse(held.slice(0, end))
+        const { ask, ...args } = JSON.parse(held.slice(0, end))
         held = held.slice(end + 1)
         if (ask === 'exit') socket.end()
-        else answer(ask).then((line) => socket.write(`${JSON.stringify(line)}\n`))
+        else answer(ask, args).then((line) => socket.write(`${JSON.stringify(line)}\n`))
       }
     })
     socket.on('error', () => {})

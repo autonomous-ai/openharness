@@ -256,8 +256,8 @@ describe('forgetting a session', () => {
     await createForgetSession({ ...setup().deps, owners })('s1')
     owners.settleSaved.mockImplementationOnce(() => { throw 'plain' })
     await createForgetSession({ ...setup().deps, owners })('s1')
-    expect(warn).toHaveBeenCalledWith('[agent] a1 could not settle who owns its conversation: stopped store unreadable')
-    expect(warn).toHaveBeenCalledWith('[agent] a1 could not settle who owns its conversation: plain')
+    expect(warn).toHaveBeenCalledWith('[agent] a1 could not settle who owns its conversation: Error')
+    expect(warn).toHaveBeenCalledWith('[agent] a1 could not settle who owns its conversation: string')
     expect(deps.clients.send).toHaveBeenCalledWith({ type: 'agent_deleted', payload: { agentId: 'a1', retained: true } })
   })
 

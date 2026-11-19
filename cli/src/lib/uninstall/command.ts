@@ -24,7 +24,10 @@
  * it, then what it leaves or what to do.
  */
 import { posix, win32 } from 'node:path'
+import { legacyHarnessHome } from '../../config/harnessHome.js'
 import type { HookFileRemoval } from '../../engines/kit/hookRemovalOutcome.js'
+import { BRIDGE_FILE, type BridgeRecord } from '../../homeMove/bridge.js'
+import { OWN_FILES } from '../../homeMove/plan.js'
 import type { SpawnLockOwner, SpawnLockPurpose } from '../daemonSpawnLock.js'
 import type { AgentsStopped } from './agents.js'
 import type { PtyHostEnd } from './ptyHosts.js'
@@ -116,8 +119,10 @@ export interface UninstallDeps {
   platform: NodeJS.Platform
   cwd: string
   home: string
-  /** ~/.harness, the product root (config/env.ts). */
-  root: string
+  /** Harness's roots in this home, the data root first (config/harnessHome.ts harnessRoots): ~/.harness, or Linux's two XDG roots. */
+  roots: readonly string[]
+  /** Harness's bin folder (harnessPath('bin')): on Windows the PATH entry the uninstall removes. */
+  binDir: string
   cliDir: string
   dataDir: string
   authDir: string
@@ -148,6 +153,18 @@ export interface UninstallDeps {
   removePathEntry(): PathStep
   listEntries(dir: string): RootEntry[]
   exists(path: string): boolean
+  /**
+   * Linux, where Harness moves from ~/.harness to the XDG roots (homeMove/): the move's lock, ~/.harness.move-lock
+   * whether or not the move ran (lock.ts moveLockPath); the bridge it leaves at ~/.harness, by its record in the state
+   * root (bridge.ts readBridge and removeBridge: each link goes, never what it points to); and what removes a file or
+   * folder of the move's, a link as a link. Null on macOS and Windows, where nothing moves.
+   */
+  move: {
+    lock: string
+    readBridge(stateRoot: string): BridgeRecord | null
+    removeBridge(bridge: BridgeRecord, stateRoot: string): 'removed' | 'left'
+    remove(path: string): void
+  } | null
   /** removal.ts checkRemovable: throws RemovalRefused for a plan removeNow or the last step would refuse. */
   checkRemovable(plan: RemovalPlan): void
   /** Throws RemovalRefused, removing nothing, on a plan it will not carry out. */
@@ -169,6 +186,8 @@ function inside(root: string, path: string, windows: boolean): boolean {
 }
 
 const plural = (n: number, word: string, many = `${word}s`) => `${n} ${n === 1 ? word : many}`
+/** The roots as one phrase: one root as today, Linux's two as both. */
+const rootsNamed = (deps: UninstallDeps): string => deps.roots.map((root) => deps.tildify(root)).join(' and ')
 const message = (error: unknown): string => (error instanceof Error ? error.message : String(error))
 /** A sentence ending in a full stop, without it: the report's lines are clauses. */
 const clause = (text: string): string => text.trim().replace(/\.$/, '')
@@ -181,7 +200,6 @@ const WINDOWS_PATH_SETTING = 'Edit environment variables for your account'
 
 /** The pid is not named: before the stop it is only the pid file's, which a reboot can leave naming another process. */
 function whatItDoes(deps: UninstallDeps, daemon: number | null, keepData: boolean): string[] {
-  const root = deps.tildify(deps.root)
   return [
     'harness uninstall removes Harness from this computer:',
     ...(daemon !== null ? ['  · stops every harness running here, then the Harness daemon'] : []),
@@ -189,25 +207,25 @@ function whatItDoes(deps: UninstallDeps, daemon: number | null, keepData: boolea
     // The rules are recognized by their text: one the person added that is the same as Harness's cannot be told apart (B5.5).
     '  · removes the hooks and permission rules Harness added to Claude Code, Codex and your other agents (a rule of yours that is the same as one of Harness\'s goes too)',
     deps.platform === 'win32'
-      ? `  · removes ${deps.tildify(win32.join(deps.root, 'bin'))} from your PATH`
+      ? `  · removes ${deps.tildify(deps.binDir)} from your PATH`
       : '  · removes the harness and hn commands, and the PATH line the installer added',
     keepData
-      ? `  · deletes the program in ${root}, and keeps your sign-in, this computer's identity, history and settings there`
-      : `  · deletes ${root}: your sign-in, this computer's identity, history and settings (--keep-data keeps them)`,
+      ? `  · deletes the program in ${rootsNamed(deps)}, and keeps your sign-in, this computer's identity, history and settings there`
+      : `  · deletes ${rootsNamed(deps)}: your sign-in, this computer's identity, history and settings (--keep-data keeps them)`,
     '',
   ]
 }
 
-function planFor(deps: UninstallDeps, keepData: boolean): RemovalPlan {
+function planFor(deps: UninstallDeps, root: string, keepData: boolean): RemovalPlan {
   return removalPlan({
-    platform: deps.platform, root: deps.root, home: deps.home, entries: deps.listEntries(deps.root),
+    platform: deps.platform, root, home: deps.home, entries: deps.listEntries(root),
     cliDir: deps.cliDir, cliEntries: deps.listEntries(deps.cliDir), dataDir: deps.dataDir, keepData,
   })
 }
 
 /** A refusal's sentence, with the home as ~ and what to do next. */
 function refusal(deps: UninstallDeps, error: RemovalRefused): string {
-  const said = clause(error.message).split(deps.root).join(deps.tildify(deps.root))
+  const said = deps.roots.reduce((text, root) => text.split(root).join(deps.tildify(root)), clause(error.message))
   const next = /a link to another folder$/.test(said) ? ' Remove the link yourself, and the folder it points to if it is Harness\'s.' : ''
   return `${said}. Nothing was removed.${next}`
 }
@@ -266,18 +284,18 @@ function reportPath(deps: UninstallDeps, path: PathStep, problems: string[]): vo
 }
 
 /**
- * The files. Returns false when they were not removed nor set to be: the uninstall is then only partly done.
- * [handover.done] is set once the Windows last step has them, and the uninstall marker with them.
+ * The files of [dir], one of the roots. Returns false when they were not removed nor set to be: the uninstall is then
+ * only partly done. [handover.done] is set once a Windows last step has them, and the uninstall marker with them.
  */
-function removeFiles(deps: UninstallDeps, keepData: boolean, problems: string[], handover: { done: boolean }): boolean {
+function removeFiles(deps: UninstallDeps, dir: string, keepData: boolean, problems: string[], handover: { done: boolean }): boolean {
   const windows = deps.platform === 'win32'
-  const root = deps.tildify(deps.root)
+  const root = deps.tildify(dir)
   let plan: RemovalPlan
   try {
     // Made again: the harnesses, the daemon and the terminal host may have changed what is in the root since the check.
-    plan = planFor(deps, keepData)
+    plan = planFor(deps, dir, keepData)
     // Nothing to take: no step to start, and no line about it.
-    if (!plan.remove.length && (!plan.removeRoot || !deps.exists(deps.root))) return true
+    if (!plan.remove.length && (!plan.removeRoot || !deps.exists(dir))) return true
     // What stays in the root besides what could not be removed: the desktop app's state, or with --keep-data the data.
     const what = keepData ? `the program in ${root}` : plan.removeRoot ? root : `everything in ${root} except ${plan.kept.join(', ')}`
     if (windows) {
@@ -308,6 +326,28 @@ function removeFiles(deps: UninstallDeps, keepData: boolean, problems: string[],
 }
 
 /**
+ * Linux: what moving Harness to the XDG roots left, whatever --keep-data keeps, as no later install reads it: the bridge
+ * at ~/.harness, by its record; then that record, the move's own, and the move's lock.
+ */
+function removeMoved(deps: UninstallDeps, move: NonNullable<UninstallDeps['move']>, problems: string[]): void {
+  // The data root comes first, so the last root holds the state.
+  const state = deps.roots[deps.roots.length - 1]
+  const bridged = deps.tildify(legacyHarnessHome(deps.home, deps.platform))
+  try {
+    const bridge = move.readBridge(state)
+    // The folder it names is the one removeBridge empties: only ~/.harness is the move's (services/homeBridge.ts refuses the same).
+    if (bridge && bridge.oldHome !== legacyHarnessHome(deps.home, 'linux')) problems.push(`${deps.tildify(posix.join(state, BRIDGE_FILE))} names a folder other than ${bridged}: nothing in that folder was removed`)
+    else if (bridge && move.removeBridge(bridge, state) === 'removed') deps.out(`✓ removed ${bridged}, which held only links`)
+    else if (bridge) problems.push(`${bridged} is still there: something in it is not Harness's. Look in it, then delete it yourself`)
+  } catch (error) {
+    problems.push(`could not remove ${bridged}, which links to Harness's folders (${message(error)}): delete it yourself`)
+  }
+  for (const path of [posix.join(state, BRIDGE_FILE), posix.join(state, OWN_FILES.record), move.lock]) {
+    try { move.remove(path) } catch (error) { problems.push(`could not remove ${deps.tildify(path)} (${message(error)}): delete it yourself`) }
+  }
+}
+
+/**
  * One step after the daemon has stopped. An error nobody expected is one more problem in the summary, with what it
  * leaves: the steps after it still run, and the person still reads what was done (B5.9 review, M4).
  */
@@ -329,14 +369,15 @@ export async function uninstallCommand(argv: readonly string[], deps: UninstallD
     deps.err('✗ This terminal is one of Harness\'s, which the uninstall closes before it has finished. Run harness uninstall from a terminal outside Harness.')
     return 1
   }
-  if (windows && inside(deps.root, deps.cwd, true)) {
+  if (windows && deps.roots.some((root) => inside(root, deps.cwd, true))) {
     deps.err(`✗ This terminal is in ${deps.tildify(deps.cwd)}, which the uninstall removes, and Windows cannot delete a folder a terminal is in. Run \`cd ~\`, then run it again.`)
     return 1
   }
   let daemon: number | null
   try {
-    // A root the last step would refuse is refused now, before a harness, the service or the daemon is touched (I1).
-    deps.checkRemovable(planFor(deps, keepData))
+    // A root the last step would refuse is refused now, before a harness, the service, the daemon or another root is
+    // touched (I1).
+    for (const root of deps.roots) deps.checkRemovable(planFor(deps, root, keepData))
     daemon = deps.daemonPid()
     if (!yes) {
       if (!deps.isTTY) { deps.err('✗ harness uninstall asks before it removes anything. Run it in a terminal, or add --yes. Nothing was removed.'); return 1 }
@@ -434,11 +475,14 @@ async function removeHarness(deps: UninstallDeps, daemon: number | null, keepDat
   await step(problems, (detail) => `Harness could not take itself off your PATH (${detail}): remove its entry yourself`,
     () => reportPath(deps, deps.removePathEntry(), problems))
 
-  const filesDone = removeFiles(deps, keepData, problems, handover)
+  // Before the roots' files: the bridge's record is in the state root, which they take.
+  if (deps.move) removeMoved(deps, deps.move, problems)
+
+  // Every root, even after one that failed: the summary then lists what each left.
+  const filesDone = deps.roots.map((root) => removeFiles(deps, root, keepData, problems, handover)).every(Boolean)
   if (!keepData) {
-    const root = deps.tildify(deps.root)
     for (const dir of [deps.dataDir, deps.authDir]) {
-      if (!inside(deps.root, dir, windows) && deps.exists(dir)) deps.out(`· left ${deps.tildify(dir)}: it is outside ${root} (ADAPTER_DATA_DIR or HARNESS_AUTH_DIR names it); delete it yourself if it is Harness's`)
+      if (!deps.roots.some((each) => inside(each, dir, windows)) && deps.exists(dir)) deps.out(`· left ${deps.tildify(dir)}: it is outside ${rootsNamed(deps)} (ADAPTER_DATA_DIR or HARNESS_AUTH_DIR names it); delete it yourself if it is Harness's`)
     }
   }
   // A note about what is not Harness's: nothing to report when it cannot be said.

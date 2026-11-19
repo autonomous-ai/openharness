@@ -28,6 +28,7 @@ import { RECENT_TURNS, lastFullText, recentAsks, recentRecaps, splitSummary, typ
 import { atomicWriteJson } from './registry.js'
 import { fallbackTier, type Tier, type TierInput } from './notifyTier.js'
 import { TurnStats } from '../cable/turnStats.js'
+import { errorKind } from './log.js'
 
 export type CommanderFrame = {
   type: 'commander_event'
@@ -732,7 +733,7 @@ export class CommanderMirror {
       })
       .catch((err) => {
         if (ac.signal.aborted) return
-        this.trace(sessionId, `${sid} JSON session read failed: ${err instanceof Error ? err.message : String(err)} — no verified final result`, true)
+        this.trace(sessionId, `${sid} JSON session read failed: ${errorKind(err)} — no verified final result`, true)
         this.startSummary(sessionId, st, ac, t0, sid, '', fallbackUserMessage, device, 'session-json', localOnly)
       })
   }
@@ -879,7 +880,7 @@ export class CommanderMirror {
                 this.opts.sendWeb({ type: 'turn_summary', agentId: this.opts.agentIdFor?.(sessionId) ?? sessionId,
                   dbSessionId: sessionId, payload: { summary, sessionId, notification, ...(tier ? { tier } : {}) } })
               } catch (err) {
-                this.trace(sessionId, `${sid} recap not sent: ${err instanceof Error ? err.message : String(err)}`, true)
+                this.trace(sessionId, `${sid} recap not sent: ${errorKind(err)}`, true)
               }
             }
             const decide = this.opts.decideTier
@@ -903,7 +904,7 @@ export class CommanderMirror {
         if (ac.signal.aborted) return
         st.summarizing = false
         this.opts.changed?.(sessionId)
-        this.trace(sessionId, `${sid} FAILED after ${ms}ms: ${err instanceof Error ? err.message : String(err)}`, true)
+        this.trace(sessionId, `${sid} FAILED after ${ms}ms: ${errorKind(err)}`, true)
         this.emit(sessionId, { kind: 'done', text: 'done' })
         this.opts.sendWeb({ type: 'turn_summary_pending', dbSessionId: sessionId, payload: { sessionId, done: true } })
       })
@@ -946,7 +947,7 @@ export class CommanderMirror {
         this.emit(sessionId, { kind: 'summary', text: body || recap, recap, notification: null, restored: true })
       })
       .catch((err) => {
-        this.trace(sessionId, `${sid} catch-up failed: ${err instanceof Error ? err.message : String(err)}`, true)
+        this.trace(sessionId, `${sid} catch-up failed: ${errorKind(err)}`, true)
       })
       .finally(() => { if (st.abort === ac) st.abort = null })
   }
@@ -1242,7 +1243,7 @@ export class CommanderMirror {
       writeFileSync(this.askFile, JSON.stringify(Object.fromEntries(this.asks), null, 2))
     } catch (err) {
       if (strict) throw err
-      console.error('[commander] save summaries failed:', err)
+      console.error('[commander] save summaries failed:', errorKind(err))
     }
   }
 }

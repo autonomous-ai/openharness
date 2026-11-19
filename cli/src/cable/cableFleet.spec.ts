@@ -10,7 +10,7 @@ import { CableDecoder, CableType, encodeCableFrame } from './cableFrame.js'
 import { DialLog } from './dialLog.js'
 import { DialVerdicts } from './dialPortVerdicts.js'
 import { completeFlash } from '../lib/flashRecovery.js'
-import { SerialToolTimeoutError, createDarwinDialFinder, parseDarwinDialPorts, portInUse, type DialPort } from './serial.js'
+import { createDarwinDialFinder, parseDarwinDialPorts, portInUse, type DialPort } from './serial.js'
 
 // Run the same two-device scenarios against the staged helper before deployment.
 const CableFleet: typeof SourceFleet = process.env.HARNESS_TEST_USB_FLEET
@@ -100,7 +100,7 @@ describe('one dial failing', () => {
       // Every greeting the faulty dial sends fails in its session, as its firmware greets on a cadence.
       for (let i = 0; i < 5; i++) faulty.say({ t: 'hello', product: 'harness', mac: faulty.path, fw: 'fixture', proto: 3 })
       await vi.waitFor(() => expect(faulty.isOpen).toBe(false))
-      expect(f.host.log).toHaveBeenCalledWith(expect.stringMatching(/cable: \/dev\/tim dropped \(5 faults in a minute: injected fault: dial\.AA:01\) — this dial alone; its port is looked at again in 0 s \[usb AA:01\]/))
+      expect(f.host.log).toHaveBeenCalledWith(expect.stringMatching(/cable: \/dev\/tim dropped \(5 faults in a minute: Error\) — this dial alone; its port is looked at again in 0 s \[usb AA:01\]/))
       // The other dial is untouched: still attached, still told the desk's work.
       expect(healthy.isOpen).toBe(true)
       healthy.sent.length = 0
@@ -125,7 +125,7 @@ describe('one dial failing', () => {
       flooding.raw(Buffer.alloc(70 * 1024, 0x41))
       await vi.waitFor(() => expect(flooding.isOpen).toBe(false))
       expect(f.host.log).toHaveBeenCalledWith(expect.stringMatching(/cable: flooded · 716\d\d B that are no frames in a second, more than a dial sends/))
-      expect(f.host.log).toHaveBeenCalledWith(expect.stringMatching(/\/dev\/tim dropped \(flooding the port: .*\) — this dial alone; its port is looked at again in 0 s/))
+      expect(f.host.log).toHaveBeenCalledWith(expect.stringMatching(/\/dev\/tim dropped \(flooding the port\) — this dial alone; its port is looked at again in 0 s/))
       expect(healthy.isOpen).toBe(true)
       await new Promise((resolve) => setTimeout(resolve, 150))
       await scan()
@@ -171,7 +171,7 @@ describe('one dial failing', () => {
       const [noisy, quiet] = f.ports
       for (let i = 0; i < 5; i++) noisy.raw(Buffer.from(encodeCableFrame(CableType.Log, Buffer.from('I (12) boot: line'))))
       await vi.waitFor(() => expect(noisy.isOpen).toBe(false))
-      expect(f.host.log).toHaveBeenCalledWith(expect.stringContaining('cable: fault · the log could not be written'))
+      expect(f.host.log).toHaveBeenCalledWith(expect.stringContaining('cable: fault · Error'))
       expect(quiet.isOpen).toBe(true)
     } finally { await f.fleet.stop() }
   })
@@ -394,7 +394,7 @@ describe('USB dial fleet', () => {
     try {
       f.fleet.start()
       await vi.advanceTimersByTimeAsync(5_000)
-      expect(f.host.log).toHaveBeenCalledWith(`cable: USB discovery failed: ${String(new SerialToolTimeoutError('ioreg'))}`)
+      expect(f.host.log).toHaveBeenCalledWith('cable: USB discovery failed: SerialToolTimeoutError')
       expect(f.ports).toHaveLength(0)
       await f.fleet['scan']()
       expect(runIoreg).toHaveBeenCalledTimes(2)
@@ -488,6 +488,43 @@ describe('a dial plugged in beside one already attached', () => {
       // Asked in the order they came: by the notice, the question would be there too.
       await vi.waitFor(() => expect(questions(f.ports[1])).toContain(`b ${noticeId}`))
       expect(questions(f.ports[1])).toEqual([`b ${noticeId}`])
+    } finally { await f.fleet.stop() }
+  })
+
+  it('holds a held question on every dial, one plugged in later too, and asks it of none', async () => {
+    const f = await firstAlone()
+    const reads = (peer: Peer) => peer.sent.filter(m => m.t === 'question.state')
+    const readOn = async (peer: Peer, agentId: string) => {
+      const before = reads(peer).length
+      peer.say({ t: 'question.read', agentId, requestId: 'r' })
+      await vi.waitFor(() => expect(reads(peer)).toHaveLength(before + 1))
+      return reads(peer)[before]
+    }
+    try {
+      await f.fleet.hold('b', noticeId, notice)
+      await f.fleet.question('a', 'q1', asked)
+      await plugSecond(f)
+      await vi.waitFor(() => expect(questions(f.ports[1])).toEqual(['a q1']))
+      await flush()
+      expect(questions(f.ports[1])).toEqual(['a q1'])
+      expect(questions(f.ports[0])).toEqual(['a q1'])
+      for (const port of f.ports) expect(await readOn(port, 'b')).toMatchObject({ ok: true, id: noticeId })
+      await f.fleet.hold('c', `${SHOWN_ONLY_PREFIX}n2`, notice)
+      for (const port of f.ports) expect(await readOn(port, 'c')).toMatchObject({ ok: true })
+      for (const port of f.ports) expect(questions(port)).toEqual(['a q1'])
+    } finally { await f.fleet.stop() }
+  })
+
+  it('is given a question the dial cannot answer, once, and the first dial is not asked again', async () => {
+    const f = await firstAlone()
+    try {
+      await f.fleet.question('a', 'q1', [{ key: 'plan', q: `Approve? ${'x'.repeat(9000)}`, options: ['Approve', 'Keep planning'] }])
+      expect(questions(f.ports[0])).toEqual(['a q1'])
+      await plugSecond(f)
+      await vi.waitFor(() => expect(questions(f.ports[1])).toEqual(['a q1']))
+      await flush()
+      expect(questions(f.ports[1])).toEqual(['a q1'])
+      expect(questions(f.ports[0])).toEqual(['a q1'])
     } finally { await f.fleet.stop() }
   })
 })

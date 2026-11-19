@@ -17,6 +17,7 @@
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { env } from '../config/env.js'
+import { errorKind } from './log.js'
 
 export interface HostTheme {
   background: string
@@ -57,6 +58,6 @@ export function saveHostTheme(theme: HostTheme): void {
     mkdirSync(env.ADAPTER_DATA_DIR, { recursive: true, mode: 0o700 })
     writeFileSync(fileOf(), JSON.stringify(theme, null, 2) + '\n', { mode: 0o600 })
   } catch (error) {
-    console.warn(`[theme] could not persist host theme: ${error instanceof Error ? error.message : error}`)
+    console.warn(`[theme] could not persist host theme: ${errorKind(error)}`)
   }
 }

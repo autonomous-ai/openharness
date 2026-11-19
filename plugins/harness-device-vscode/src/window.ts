@@ -18,6 +18,9 @@ export interface WindowFacade {
   raise(): void
   /** One line toward older lines (`up`) or newer, in the active terminal. */
   scrollLine(up: boolean): Promise<void>
+  /** Presses PageUp (`up`, toward older lines) or PageDown in the terminal whose shell has that pid: one of two fixed
+   *  key sequences, with no newline. False when no terminal has that shell. The one member that writes to a terminal. */
+  pageKey(pid: number, up: boolean): boolean
 }
 
 /** The first 32 distinct shells whose pid is known (an integer in 2..2^31-1), in order; `active` only when it is one of them. */

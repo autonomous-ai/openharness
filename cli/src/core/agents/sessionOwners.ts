@@ -1,4 +1,5 @@
 /** One ephemeral presentation per declared service session; current native ownership always wins. */
+import { errorKind } from '../../lib/log.js'
 import type { SessionFactoryOwner } from '../../harnessd/services.js'
 import { copySessionValue } from '../../lib/sessionFactValues.js'
 import { readSessionFact, retainedSessionFrame, sessionFactsWire, sessionOwnerId, sessionOwnerFactory, sessionOwnerCreatedAt,
@@ -82,7 +83,7 @@ export function createSessionOwners({ factoryOwner, native, port, whenStarting, 
     if (alias) alias[ownerIncarnation].revoked = true
     for (const owner of [first, alias]) if (owner) {
       try { retire(sessionOwnerId(owner)) }
-      catch { try { log('[sessions] question close unavailable') } catch { /* both native claims already revoked */ } }
+      catch (caughtFailure) { try { log(('[sessions] question close unavailable') + ' · ' + errorKind(caughtFailure)) } catch { /* both native claims already revoked */ } }
     }
   }
   const gone = (agentId: string): void => {
@@ -161,7 +162,7 @@ export function createSessionOwners({ factoryOwner, native, port, whenStarting, 
       const candidate = detached(result, 256 * 1024)
       if (!admit(candidate)) throw new Error('SESSION_OWNER_INVALID')
       accepted = candidate as T
-    } catch { log('[sessions] SESSION_RESPONSE_INVALID'); return fallback }
+    } catch (caughtFailure) { log(('[sessions] SESSION_RESPONSE_INVALID') + ' · ' + errorKind(caughtFailure)); return fallback }
     apply(accepted)
     return accepted
   }

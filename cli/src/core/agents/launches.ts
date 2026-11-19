@@ -31,6 +31,7 @@ import {
 } from '../../lib/engineLaunch.js'
 import { parseGridLaunchOverride, type GridLaunchOverride } from '../../lib/gridLaunchWire.js'
 import { parseLaunchModel, type LaunchModel } from '../../lib/launchModel.js'
+import { errorKind } from '../../lib/log.js'
 import { parseNewAgentModel, type NewAgentModel } from '../../lib/newAgentModel.js'
 import { parseProjectFolder, prepareNewFolder, projectsRoot, ProjectFolderError, type ProjectFolder } from '../../lib/projectFolder.js'
 import type { ScmLaunchRecord } from '../../scm/types.js'
@@ -188,7 +189,7 @@ export function createLaunchRequests({ nativeFactory, describeDsh = async id => 
             ...(projectFolder.source === 'new' ? { empty: true } : { source: projectFolder.gitSource }),
           }, current)
         }
-      } catch { console.warn('[trust] FOLDER_TRUST_UNAVAILABLE') }
+      } catch (caughtFailure) { console.warn(('[trust] FOLDER_TRUST_UNAVAILABLE') + ' · ' + errorKind(caughtFailure)) }
     } else if (!dsh && !resumeSessionId && local && dirname(input.cwd) === projectsRoot()) {
       // On the LOCAL machine the desktop makes a new workspace ITSELF and sends the path as a plain
       // cwd, so `projectFolder` above never sees it. Such a folder is empty and is trusted the way a
@@ -208,7 +209,7 @@ export function createLaunchRequests({ nativeFactory, describeDsh = async id => 
         const empty = await readdir(input.cwd).then((names) => names.length === 0, () => false)
         if (empty && current()) await prepareFolderTrust?.({ engine: input.engine, cwd: input.cwd, environment,
           profile: input.codexHome ?? input.claudeHome ?? null, empty: true }, current)
-      } catch { console.warn('[trust] FOLDER_TRUST_UNAVAILABLE') }
+      } catch (caughtFailure) { console.warn(('[trust] FOLDER_TRUST_UNAVAILABLE') + ' · ' + errorKind(caughtFailure)) }
     }
     if (!current()) return { state: 'unconfirmed' }
     const result = await invoke(preparedFolder ? { ...input, cwd: preparedFolder, scmLaunchRecord } : input)

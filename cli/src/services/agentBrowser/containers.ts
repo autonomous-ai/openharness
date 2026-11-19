@@ -4,6 +4,7 @@
  * dev or test daemon on the same Podman never touches another's (spec § The container). The profile is the agent's id
  * until its browser moves with its pane to another agent (decision 19): the names stay, the label is the new agent's.
  */
+import { errorKind } from '../../lib/log.js'
 import { PodmanError, type Podman } from './podman.js'
 import { settingsHash, type BrowserSettings } from './settings.js'
 
@@ -67,7 +68,7 @@ export class Containers {
       return await this.create(agentId, profile, image, settings, timeZone, secretId, labels)
     } catch (error) {
       await this.stop(profile).catch((cleanup: unknown) => {
-        this.log(`agent browser ${agentId}: a failed start was not cleaned up: ${(cleanup as Error).message}`)
+        this.log(`agent browser ${agentId}: a failed start was not cleaned up · ${errorKind(cleanup)}`)
       })
       throw error
     }

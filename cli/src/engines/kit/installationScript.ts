@@ -1,3 +1,4 @@
+import { harnessPathText } from '../../config/harnessHome.js'
 /** Installer programs belong to engineSetup and the invoking CLI, never the core's launch module. */
 import { join } from 'node:path'
 import type { AgentEngine } from '../types.js'
@@ -119,7 +120,7 @@ function installIfMissingScript(recipe: EngineInstallRecipe, runtimeNode: string
     // minutes) while the download still runs ends the pane rather than starting a second install.
     ...(downloadEngine ? [
       'harness_wait_download() {',
-      '  harness_dl_pid=$(cat "$HOME/.harness/run/downloading-$1" 2>/dev/null) || return 0',
+      `  harness_dl_pid=$(cat "${harnessPathText('run')}/downloading-$1" 2>/dev/null) || return 0`,
       "  case \"$harness_dl_pid\" in ''|*[!0-9]*) return 0 ;; esac",
       '  kill -0 "$harness_dl_pid" 2>/dev/null || return 0',
       '  ps -p "$harness_dl_pid" -o command= 2>/dev/null | grep -q harness-download || return 0',

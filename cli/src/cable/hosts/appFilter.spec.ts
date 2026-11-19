@@ -4,11 +4,13 @@ import type { SwitchCause } from './types.js'
 
 /**
  * A filter over counts the test sets, a settle timer on vitest's fake clock, and a random function that draws only what is
- * scripted. The known agents are the counts unless a test gives its own.
+ * scripted. The known agents are the counts unless a test gives its own, and the agents counted for the app in front
+ * are the known ones unless it gives those too.
  */
 function setup(draws: number[] = []) {
   const counts = new Map<string, number>()
   let known: Map<string, number> | undefined
+  let inFront: Map<string, number> | undefined
   /** What the filter told, in order: a switch as its cause, a settle as `settled <app>`. */
   const told: string[] = []
   const switched = vi.fn((cause: SwitchCause) => { told.push(cause) })
@@ -27,7 +29,7 @@ function setup(draws: number[] = []) {
   filter = new AppFilter({
     after,
     random,
-    counts: () => ({ all: counts, known: known ?? counts }),
+    counts: () => ({ all: counts, known: known ?? counts, inFront: inFront ?? known ?? counts }),
     switched,
     settled: (app) => {
       expect(filter.settledApp()).toBe(app)
@@ -35,10 +37,11 @@ function setup(draws: number[] = []) {
       told.push(`settled ${app}`)
     },
   })
-  const agents = (next: Record<string, number>, knownNext?: Record<string, number>): void => {
+  const agents = (next: Record<string, number>, knownNext?: Record<string, number>, inFrontNext?: Record<string, number>): void => {
     counts.clear()
     for (const [app, n] of Object.entries(next)) counts.set(app, n)
     known = knownNext && new Map(Object.entries(knownNext))
+    inFront = inFrontNext && new Map(Object.entries(inFrontNext))
   }
   const causes = (): SwitchCause[] => switched.mock.calls.map(([cause]) => cause)
   return { filter, agents, random, after, causes, told, settled }
@@ -317,6 +320,51 @@ describe('AppFilter', () => {
     expect(causes()).toEqual(['front'])
   })
 
+  it('hold of the shown app holds it and tells no switch', () => {
+    const { filter, agents, causes } = setup()
+    agents({ ghostty: 3 })
+    expect(filter.shown()).toBe('ghostty')
+    filter.front('vscode')
+    settle()
+    expect(filter.hold('ghostty')).toBe(true)
+    agents({ ghostty: 3, vscode: 1 })
+    expect(filter.shown()).toBe('ghostty')
+    expect(causes()).toEqual([])
+  })
+
+  it('hold of another app is a switch by pick', () => {
+    const { filter, agents, causes } = setup()
+    agents({ ghostty: 3, vscode: 1 })
+    filter.front('ghostty')
+    settle()
+    expect(filter.hold('vscode')).toBe(true)
+    expect(filter.shown()).toBe('vscode')
+    expect(causes()).toEqual(['pick'])
+  })
+
+  it('hold of an app with no agents answers false and holds nothing', () => {
+    const { filter, agents, causes } = setup()
+    agents({ ghostty: 3 })
+    expect(filter.shown()).toBe('ghostty')
+    filter.front('vscode')
+    settle()
+    expect(filter.hold('cursor')).toBe(false)
+    agents({ ghostty: 3, vscode: 1 })
+    expect(filter.shown()).toBe('vscode')
+    expect(causes()).toEqual(['front'])
+  })
+
+  it('a hold ends when another app settles in front', () => {
+    const { filter, agents, causes } = setup()
+    agents({ ghostty: 3, vscode: 1 })
+    expect(filter.shown()).toBe('ghostty')
+    expect(filter.hold('vscode')).toBe(true)
+    filter.front('ghostty')
+    settle()
+    expect(filter.shown()).toBe('ghostty')
+    expect(causes()).toEqual(['pick', 'front'])
+  })
+
   it('a notice pick is a switch by notice and holds as a pick does', () => {
     const { filter, agents, causes } = setup()
     agents({ ghostty: 3, vscode: 1 })
@@ -565,6 +613,64 @@ describe('AppFilter', () => {
       settle()
       expect(filter.shown()).toBe('terminal')
       expect(causes()).toEqual(['pick'])
+    })
+
+    it('a hold of the default page stops it giving way', () => {
+      const { filter, agents, causes } = setup()
+      agents({ terminal: 3 }, {})
+      expect(filter.shown()).toBe('terminal')
+      expect(filter.hold('terminal')).toBe(true)
+      agents({ terminal: 3, ghostty: 5 }, { ghostty: 5 })
+      expect(filter.shown()).toBe('terminal')
+      expect(causes()).toEqual([])
+    })
+  })
+
+  describe('resting agents (docs/plans/2026-11-19-dial-claude-app-sessions-design.md)', () => {
+    it('the app in front whose agents all rest is shown once they come, though the dial shows another app', () => {
+      const { filter, agents, causes } = setup()
+      filter.front('claude')
+      settle()
+      agents({ ghostty: 1 })
+      expect(filter.shown()).toBe('ghostty')
+      agents({ ghostty: 1, claude: 2 }, { ghostty: 1 }, { ghostty: 1, claude: 2 })
+      expect(filter.shown()).toBe('claude')
+      expect(causes()).toEqual(['front'])
+      expect(filter.shown()).toBe('claude')
+      expect(filter.shown()).toBe('claude')
+      expect(causes()).toEqual(['front'])
+    })
+
+    it('… and when they come before the dial\'s first list', () => {
+      const { filter, agents, causes } = setup()
+      filter.front('claude')
+      settle()
+      agents({ ghostty: 1, claude: 2 }, { ghostty: 1 }, { ghostty: 1, claude: 2 })
+      for (let i = 0; i < 4; i++) expect(filter.shown()).toBe('claude')
+      expect(causes()).toEqual([])
+    })
+
+    it('resting agents weigh nothing in the default while their app is not in front', () => {
+      const { filter, agents } = setup()
+      agents({ claude: 16, ghostty: 1 }, { ghostty: 1 }, { claude: 16, ghostty: 1 })
+      expect(filter.shown()).toBe('ghostty')
+      filter.front('vscode')
+      settle()
+      expect(filter.shown()).toBe('ghostty')
+      expect(filter.pick('claude')).toBe('switched')
+      expect(filter.shown()).toBe('claude')
+    })
+
+    it('… and while no app has a known agent, though they outnumber the agents the scan found', () => {
+      const { filter, agents } = setup()
+      agents({ claude: 16, ghostty: 3 }, {}, { claude: 16 })
+      expect(filter.shown()).toBe('ghostty')
+    })
+
+    it('resting agents are the default when they are all there is', () => {
+      const { filter, agents } = setup()
+      agents({ claude: 16 }, {}, { claude: 16 })
+      expect(filter.shown()).toBe('claude')
     })
   })
 })

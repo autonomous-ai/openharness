@@ -1,3 +1,4 @@
+import { errorKind } from '../lib/log.js'
 /**
  * Hosting services in the core's process so that a failing one cannot take the core down with it
  * (docs/design/2026-10-03-harnessd.md, the core boundary). In process, a service shares the core's
@@ -44,7 +45,7 @@ type PortName = keyof CorePorts
 type Port<K extends PortName> = NonNullable<CorePorts[K]>
 type Member = (...args: unknown[]) => unknown
 
-const describe = (error: unknown): string => (error instanceof Error ? error.message : String(error))
+
 
 export function createServiceHost(ports: CorePorts, options: ServiceHostOptions = {}) {
   const maxFailures = options.maxFailures ?? 5
@@ -71,12 +72,12 @@ export function createServiceHost(ports: CorePorts, options: ServiceHostOptions 
     if (Object.hasOwn(ports, name)) ports[name as PortName] = null
     log(`[services] ${name} switched off after ${failed} failures in ${Math.round(windowMs / 1000)}s · it stays off until the daemon restarts`)
     for (const handler of [stoppers.get(name), ...offHandlers.get(name) ?? []]) {
-      try { handler?.() } catch (error) { log(`[services] switching ${name} off: ${describe(error)}`) }
+      try { handler?.() } catch (error) { log(`[services] switching ${name} off: ${errorKind(error)}`) }
     }
   }
 
   const failed = (name: string, member: string, error: unknown): void => {
-    log(`[services] ${name}.${member} failed · ${describe(error)}`)
+    log(`[services] ${name}.${member} failed · ${errorKind(error)}`)
     const at = now()
     const recent = (failures.get(name) ?? []).filter((t) => at - t < windowMs)
     recent.push(at)
@@ -140,7 +141,7 @@ export function createServiceHost(ports: CorePorts, options: ServiceHostOptions 
   const didNotStart = (name: string, error: unknown): void => {
     off.add(name)
     if (Object.hasOwn(ports, name)) ports[name as PortName] = null
-    log(`[services] ${name} did not start · ${describe(error)} · the core runs without it`)
+    log(`[services] ${name} did not start · ${errorKind(error)} · the core runs without it`)
   }
 
   /** One execution owner for routed requests and bounded composition-root calls. */

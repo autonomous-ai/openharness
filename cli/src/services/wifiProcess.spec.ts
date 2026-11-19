@@ -1120,7 +1120,7 @@ describe('the Wi-Fi device in the devices\' process', () => {
     f.event({ kind: 'resume' })
     f.event({ kind: 'revealed', agentId: 'a', operationId: 'unavailable' })
     await f.settled()
-    expect(warn).toHaveBeenCalledWith('[wifi] did not start · journal unreadable')
+    expect(warn).toHaveBeenCalledWith('[wifi] did not start · Error')
     expect(await f.options().requests!.wifi_http({ method: 'GET', target: '/api/autonomous-device/addon/state' }, { local: true, owner: true })).toEqual({ error: 'SERVICE_UNAVAILABLE' })
     // A start that leaves its port empty is off too, and is tried again on the next connection.
     const g = setup({ leavesOff: true })
@@ -1136,7 +1136,7 @@ describe('the Wi-Fi device in the devices\' process', () => {
     h.connect()
     h.event({ kind: 'resume' })
     await h.settled()
-    expect(warn).toHaveBeenCalledWith('[wifi] did not start · no')
+    expect(warn).toHaveBeenCalledWith('[wifi] did not start · string')
   })
 
   it('names a failed notice without content and recovers on the next connection', async () => {

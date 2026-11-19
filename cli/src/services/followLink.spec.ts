@@ -127,10 +127,10 @@ describe('what a service in its own process hears of agents', () => {
     link.follow(() => { throw 'not an error' })
     link.heard(told({ kind: 'stopped', agentId: 'a1' }))
     expect(log.mock.calls).toEqual([
-      ['[agents] a follower failed on running: boom'],
-      ['[agents] a follower failed on running: not an error'],
-      ['[agents] a follower failed on stopped: boom'],
-      ['[agents] a follower failed on stopped: not an error'],
+      ['[agents] a follower failed on running: Error'],
+      ['[agents] a follower failed on running: string'],
+      ['[agents] a follower failed on stopped: Error'],
+      ['[agents] a follower failed on stopped: string'],
     ])
     expect(heard.map((event) => event.kind)).toEqual(['running', 'stopped'])
   })
@@ -140,7 +140,7 @@ describe('what a service in its own process hears of agents', () => {
     const link = followLink({})
     link.follow(() => { throw new Error('boom') })
     link.heard(told({ kind: 'stopped', agentId: 'a1' }))
-    expect(warn).toHaveBeenCalledWith('[agents] a follower failed on stopped: boom')
+    expect(warn).toHaveBeenCalledWith('[agents] a follower failed on stopped: Error')
   })
 
   describe('as it connects', () => {

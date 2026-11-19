@@ -19,6 +19,7 @@ import type { GatewayEvents, TabRelay } from '../core/api.js'
 import { SHARED_TAB_FRAME_MAX } from '../lib/e2ee/tabSession.js'
 import { BACKEND_IDLE_DEADLINE_MS, watchSocketLiveness, type LivenessWatch } from '../lib/wsLiveness.js'
 import { declaredClientQuery } from '../lib/declaredClient.js'
+import { errorKind } from '../lib/log.js'
 
 /** The relay closes a socket that sends a frame bigger than this (agentMessagesWs.ts `MAX_FRAME`): refused here first. */
 export const TAB_RELAY_MAX_FRAME = SHARED_TAB_FRAME_MAX
@@ -79,7 +80,6 @@ interface TabSocket {
 
 type Payload = Record<string, unknown>
 const isRecord = (value: unknown): value is Payload => !!value && typeof value === 'object' && !Array.isArray(value)
-const why = (error: unknown): string => (error instanceof Error ? error.message : String(error))
 
 export class TabRelaySockets implements TabRelay {
   private readonly sockets = new Map<string, TabSocket>()
@@ -136,7 +136,7 @@ export class TabRelaySockets implements TabRelay {
     try {
       token = await this.deps.accessToken()
     } catch (error) {
-      this.retry(sharedTabId, entry, `no token (${why(error)})`)
+      this.retry(sharedTabId, entry, `no token (${errorKind(error)})`)
       return
     }
     if (entry.closed) return
@@ -147,7 +147,7 @@ export class TabRelaySockets implements TabRelay {
     try {
       ws = new WebSocket(url, [token], { handshakeTimeout: HANDSHAKE_TIMEOUT_MS, maxPayload: MAX_PAYLOAD })
     } catch (error) {
-      this.retry(sharedTabId, entry, `could not dial (${why(error)})`)
+      this.retry(sharedTabId, entry, `could not dial (${errorKind(error)})`)
       return
     }
     entry.ws = ws

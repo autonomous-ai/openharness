@@ -22,6 +22,7 @@
  */
 import { randomUUID } from 'node:crypto'
 import { agentView, FOLLOW_HAVING_MAX, type AgentLife, type AgentView, type FollowOptions, type HeldAgentLife } from './api.js'
+import { errorKind } from '../lib/log.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import type { ServiceFrame } from './serviceLinks.js'
 
@@ -173,10 +174,10 @@ export function createAgentLife(deps: AgentLifeDeps) {
         tell: (event) => {
           if (failures >= FOLLOWER_FAILURES_MAX) return
           try { listener(event) } catch (error) {
-            log(`[agents] a follower failed on ${event.kind}: ${error instanceof Error ? error.message : String(error)}`)
+            log(`[agents] a follower failed on ${event.kind}: ${errorKind(error)}`)
             if (++failures < FOLLOWER_FAILURES_MAX) return
             listeners.delete(follower)
-            log(`[agents] a follower failed ${failures} times: it hears nothing more`)
+            log(`[agents] a follower failed ${failures} times: it hears nothing more · ${errorKind(error)}`)
           }
         },
       }

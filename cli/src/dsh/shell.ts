@@ -128,7 +128,8 @@ export function dshShellUnavailable(purpose: DshCommandPurpose): string {
  * runs in the harness's folder (review of #2025).
  */
 function gitBashArgv(script: string, bash: string | null, purpose: DshCommandPurpose): { path: string; args: string[]; env: Record<string, string> } {
-  if (!bash) throw new Error(dshShellUnavailable(purpose))
+  // The code is what the daemon's log line prints (viewer.ts); the words are for the person.
+  if (!bash) throw Object.assign(new Error(dshShellUnavailable(purpose)), { code: 'SHELL_UNAVAILABLE' })
   const runtimeDir = shellSingleQuote(win32.dirname(managedNodePath()))
   const body = [
     'unalias node 2>/dev/null || true',

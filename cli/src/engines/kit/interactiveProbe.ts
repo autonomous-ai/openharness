@@ -9,6 +9,7 @@ import { managedNodePath } from '../../lib/nodeRuntime.js'
 import { shellSingleQuote } from '../../lib/shellQuote.js'
 import { engineShellArgv, interactiveEngineShell } from '../../lib/engineLaunch.js'
 import { npmRuntimePrelude } from './installationScript.js'
+import { errorKind } from '../../lib/log.js'
 
 function availabilityScript(recipe: EngineInstallRecipe | undefined): string {
   const names = recipe?.executable.names.map(shellSingleQuote).join(' ') ?? ''
@@ -90,7 +91,7 @@ export async function commandOutputInInteractiveShell(engine: AgentEngine, comma
       : windowsEngineArgv(engine, [command, ...args])
   } catch (error) {
     // A shim Windows will not run (lib/windows/launch.ts): the launch itself says why.
-    console.warn(`[engine] ${engine} ${args.join(' ')} not run · ${error instanceof Error ? error.message : error}`)
+    console.warn(`[engine] ${engine} not run · ${errorKind(error)}`)
     return null
   }
   const [file, ...argv] = run

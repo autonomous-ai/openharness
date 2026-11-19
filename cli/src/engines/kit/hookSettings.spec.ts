@@ -1,6 +1,7 @@
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { parse as parseToml } from 'smol-toml'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { env } from '../../config/env.js'
 import { hooks as claude } from '../claude/hookContract.js'
@@ -131,6 +132,29 @@ it('approves the required Codex hook when an earlier optional hook uses the same
   expect(confirmed.mock.calls[0]![0].current()).toBe(true)
 })
 
+// Codex keys a hook's review by its place: put after the person's when its command changes (the move, a Node update), ours
+// moved theirs, and Codex asked for its review again.
+it('an updated Codex hook of Harness\'s keeps its place, and the person\'s beside it its review', async () => {
+  vi.spyOn(console, 'log').mockImplementation(() => {})
+  const home = join(root, 'codex'); mkdirSync(home)
+  const file = join(home, codex.settings.file), config = join(home, codex.settings.reviewed!.file)
+  expect(await installHookSettings('codex', codex.settings, 19474, home)).toBe(true)
+  const theirs = { hooks: [{ type: 'command', command: 'my-own-hook', timeout: 7 }] }
+  const settings = JSON.parse(readFileSync(file, 'utf8'))
+  settings.hooks.Stop.push(theirs)
+  writeFileSync(file, JSON.stringify(settings, null, 2) + '\n')
+  const at = (block: number) => `${realpathSync(file)}:${codex.settings.reviewed!.events.Stop}:${block}:0`
+  const trusted = reviewHash(codex.settings.reviewed!, 'Stop', undefined, theirs.hooks[0]!)
+  writeFileSync(config, `${readFileSync(config, 'utf8')}\n[hooks.state.${JSON.stringify(at(1))}]\ntrusted_hash = ${JSON.stringify(trusted)}\n`)
+  expect(await installHookSettings('codex', codex.settings, 19473, home)).toBe(true)
+  const stop = JSON.parse(readFileSync(file, 'utf8')).hooks.Stop
+  expect(stop[0].hooks[0].command).toContain('--port 19473')
+  expect(stop.slice(1)).toEqual([theirs])
+  const state = (parseToml(readFileSync(config, 'utf8')) as { hooks: { state: Record<string, { trusted_hash: string }> } }).hooks.state
+  expect(state[at(0)]?.trusted_hash).toBe(reviewHash(codex.settings.reviewed!, 'Stop', stop[0].matcher, stop[0].hooks[0]))
+  expect(state[at(1)]?.trusted_hash).toBe(trusted)
+})
+
 it('names a home literally in its log lines, whatever characters the path holds', async () => {
   const log = vi.spyOn(console, 'log').mockImplementation(() => {})
   // `$&` and `$1` mean something to String.replace with a string replacement, and {port} to the templates.
@@ -148,7 +172,7 @@ it('reports a held malformed file even when an engine declares no malformed-file
   writeFileSync(join(home, 'hooks.json'), '{not-json')
   const { malformed: _, ...messages } = codex.settings.messages
   expect(await installHookSettings('codex', { ...codex.settings, messages }, 19473, home)).toBe(false)
-  expect(error).toHaveBeenCalledWith(codex.settings.messages.failed, expect.any(SyntaxError))
+  expect(error).toHaveBeenCalledWith(codex.settings.messages.failed, 'SyntaxError')
   expect(readFileSync(join(home, 'hooks.json'), 'utf8')).toBe('{not-json')
 })
 
@@ -363,7 +387,7 @@ it('allows the agent commands where an engine has no inbox, and holds nothing wh
     return path === file && ++calls === 3 ? { ...observed, content: JSON.stringify({ hooks: [] }) } : observed
   })
   expect(await installHookSettings('claude', settings, 19473, home)).toBe(true)
-  expect(warn.mock.calls.map(call => call[0])).toEqual([`[hooks] could not allow Harness's agent commands in ${file} (the engine asks before each one):`])
+  expect(warn.mock.calls.map(call => call[0])).toEqual(["[hooks] could not allow Harness's agent commands in Claude Code's settings.json (the engine asks before each one):"])
 })
 
 it('launches Codex when its rules file cannot be written, and says so', async () => {
@@ -371,7 +395,7 @@ it('launches Codex when its rules file cannot be written, and says so', async ()
   const home = join(root, 'codex'); mkdirSync(home)
   writeFileSync(join(home, 'rules'), 'a file where the folder goes')
   expect(await installHookSettings('codex', codex.settings, 19473, home)).toBe(true)
-  expect(warn).toHaveBeenCalledWith(`[hooks] could not allow Harness's agent commands in ${join(home, 'rules', 'harness.rules')} (the engine asks before each one):`, expect.any(String))
+  expect(warn).toHaveBeenCalledWith("[hooks] could not allow Harness's agent commands in Codex's rules/harness.rules (the engine asks before each one):", expect.stringMatching(/^[A-Za-z_$][\w$]*( [A-Z][A-Z0-9_]+)?$/))
   expect(JSON.parse(readFileSync(join(home, 'hooks.json'), 'utf8')).hooks.PostToolUse[0].hooks[0].command).toBe(messagesCommand(env.HARNESS_AGENT_MESSAGES_DIR))
 })
 
@@ -384,7 +408,7 @@ it.skipIf(process.getuid?.() === 0)('says only the allowance failed when a read-
   const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
   try {
     expect(await installHookSettings('claude', claude.settings, 19473, home)).toBe(true)
-    expect(warn.mock.calls.map(call => call[0])).toEqual([`[hooks] could not allow Harness's agent commands in ${file} (the engine asks before each one):`])
+    expect(warn.mock.calls.map(call => call[0])).toEqual(["[hooks] could not allow Harness's agent commands in Claude Code's settings.json (the engine asks before each one):"])
     expect(existsSync(join(env.HARNESS_AGENT_MESSAGES_DIR, 'hook.mjs'))).toBe(true)
   } finally { chmodSync(file, 0o644) }
 })

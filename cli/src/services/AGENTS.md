@@ -69,7 +69,7 @@ hang or leak costs only its process. A process per risk, not per feature (`SERVI
 | `engineSetup` | engineSetup | optional installation, probes and hook/configuration candidate rendering; only core selects destinations and publishes native files | on demand |
 | `search` | search | native `node:sqlite`, the index's memory | always |
 | `viewers` | viewers, store | the viewer servers, the remote viewer streams and rendered surfaces, minutes-long installs | on demand |
-| `edge` | workspaces, usage, monitor, projects, handoff, recaps, windowNames, shell, connectors, sharedMachines, agentCleanup, messages, osDevice, goals, hachi, engineProbe, componentStartup | light pure-JS services: isolated from the core, not from each other | always |
+| `edge` | workspaces, usage, monitor, paste, projects, handoff, recaps, windowNames, shell, connectors, sharedMachines, agentCleanup, messages, osDevice, goals, hachi, engineProbe, componentStartup, homeBridge | light pure-JS services: isolated from the core, not from each other | always |
 | `gateway` | gateway | network, crypto and pure-JS WebRTC: the attack surface | on demand |
 | `models` | models | grid's installs, downloads and commands | on demand |
 | `devices` | devices, wifi | the dials' serial ports, the fleet's lane, the voice router's worker, the Wi-Fi device | on demand |
@@ -231,17 +231,21 @@ master too old to run it starts it beside itself, still in its own process (`src
   first is told as a notice. What a local tool tells the devices (first the app in front, from `harness hardware
   watch`) goes to their own listener (src/services/devicesListener.ts), never through the core: a new message is a
   handler registered there by its type, with its own body and rate limits, beside `front`, `tab`, the mod's
-  `attach`, the session the Claude app shows, `notice`, an agent's line from `harness device notify`, and `notify`,
-  the Notifications setting (src/services/devices.ts). Where the listener does not run (Windows, and devices inside
-  the core, as on Harness OS) `harness device notify` answers `no dial` and the dial's status carries no Notifications
-  setting, which nothing could change: a known gap. A handler of a second kind holds a stream open,
+  `attach`, the session the Claude app shows, `notice`, an agent's line from `harness device notify`, `notify`,
+  the Notifications setting, and `orcaFront`, the terminals of the worktree on Orca's screen from Orca's Harness
+  Device plugin, taken only while its `dial` stream is open (src/services/devices.ts). Where the listener does not
+  run (Windows, and devices inside the core, as on Harness OS) `harness device notify` answers `no dial` and the
+  dial's status carries no Notifications setting, which nothing could change: a known gap. A handler of a second kind holds a stream open,
   one of its type across every connection (a keyed type keeps one per key up to its limit, a new key past it
   answered 409), and is told when the stream can take a line (`onWritable`) and why it
   ended (`StreamEnd`): on `tabs` the devices tell the watch which terminal tab to select; on `dial` (`dialStream`),
   opened with `standby` so it never takes the stream from another Orca, they tell Orca's Harness Device plugin
-  (plugins/harness-device-orca) whether a dial is attached and which agent it shows; on `vscode`, keyed by its window
-  and at most 8, they tell Harness's VS Code extension (plugins/harness-device-vscode) which terminal to show and
-  scroll, and that window reports its terminals' shells in a `vscode-state` message (src/cable/hosts/vscodeTerminals.ts).
+  (plugins/harness-device-orca) whether a dial is attached and which agent it shows, and its end drops what
+  `orcaFront` set; on `vscode`, keyed by its window and at most 8, they tell Harness's VS Code extension
+  (plugins/harness-device-vscode) which terminal to show and scroll, and that window reports its terminals' shells in
+  a `vscode-state` message (src/cable/hosts/vscodeTerminals.ts). Cursor's windows hold the same `vscode` stream: the
+  extension is the same and cannot tell the apps apart, and a terminal is found by its shell's pid, whichever app holds
+  it.
   Which path: a route of the core's local door, where the core checks who calls (the account's, the Wi-Fi device's,
   the add-ons'), is a `SERVICE_HTTP_ROUTES` route (above); what a tool on this computer tells the devices alone is a
   message on their listener, which the core never routes or reads.
@@ -349,8 +353,10 @@ from before (`src/harnessd/services.spec.ts`, `e2e/messagesSkew.e2e.ts`).
   renewing the sign-in: the core asks the gateway for the token it hands you (`lib/authRefresh.ts`).
 - Do not write to tmux, the registry or another service's files. A service never writes to Harness's tmux: no pane or
   session Harness made. One thing is allowed in the person's own tmux (PM, 2026-11-15,
-  [the spec](../../../docs/specs/2026-11-15-device-wave1-checks.md)): the devices process may run `switch-client` (or
-  a select) to the pane a hook named, once it has checked that the pane's process is the agent's or one of its parents
-  (`cable/hosts/tmux.ts`). It names the client it moves, and never one on a session Harness made. It never types,
-  creates or closes anything there. Harness's panes and the person's can share one tmux server, so the rule is held
-  per pane and session, by the owner tag the hook reads (`hook/notify.mjs` `paneFacts`).
+  [the spec](../../../docs/specs/2026-11-15-device-wave1-checks.md)): the devices process may move to the pane a hook
+  named, once it has checked that the pane's process is the agent's or one of its parents (`cable/hosts/tmux.ts`). It
+  runs `select-window` and `select-pane` on the pane's own session, which every client on that session then shows, and
+  `switch-client` only when it found no app holding a client of that session; that names the client it moves. It runs
+  nothing on a session Harness made. It never types, creates or closes anything there. Harness's panes and the
+  person's can share one tmux server, so the rule is held per pane and session, by the owner tag the hook reads
+  (`hook/notify.mjs` `paneFacts`).

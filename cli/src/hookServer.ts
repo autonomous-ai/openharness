@@ -19,7 +19,7 @@ import { paneReadIdentity } from './core/transcripts/readIdentity.js'
 import { processIdentityKey } from './lib/terminalRuntime.js'
 import { isRecentlyDeleted } from './lib/deletedSessions.js'
 import { registry, type RegisterInput, type RegisteredSession } from './lib/registry.js'
-import { sid } from './lib/log.js'
+import { errorKind, sid } from './lib/log.js'
 import { VERSION } from './version.js'
 import { env } from './config/env.js'
 import { hookCredentialMatches, loadOrCreateHookCredential, loadOrCreateHookToken } from './lib/hookAuth.js'
@@ -399,7 +399,7 @@ async function hermesCreationPane(sessionId: string, capture?: (verify: () => vo
     return found.length === 1 ? clientEnvPane(found[0].row.client_env) : null
   } catch (error) {
     if (!(error instanceof IdentityReadUnavailable)) throw error
-    console.log(`[hooks] ${sid(sessionId)} hermes session pane unreadable · ${error.message}`)
+    console.log(`[hooks] ${sid(sessionId)} hermes session pane unreadable · ${errorKind(error)}`)
     return null
   }
 }
@@ -467,7 +467,8 @@ export function startHookServer(
   type StopAcknowledgement = { status: number; reply: unknown }
   type LinkedStop = (body: BoundHookBody, firedAt: number | undefined) => StopAcknowledgement | Promise<StopAcknowledgement>
   type Receipt = { fingerprint: string; status: number; reply: unknown; pending: boolean; bytes: number; linkedStop?: LinkedStop }
-  const admissionReceipts = new Map<string, { scope: string; records: Map<string, Receipt> }>()
+  // Per agent: its receipts, how many of its admissions are in their registry write, and how many holds it has had.
+  const admissionReceipts = new Map<string, { scope: string; records: Map<string, Receipt>; writing: number; holds: number }>()
   const resolvingStops = new Map<string, { fingerprint: string; stop: LinkedStop }>()
   let receiptCount = 0, receiptBytes = 0
   const saveReceipt = (records: Map<string, Receipt>, id: string, next?: Receipt) => {
@@ -511,7 +512,7 @@ export function startHookServer(
       const proxied = async (call: () => Promise<{ status: number; body: unknown }>): Promise<void> => {
         try { const out = await call(); json(out.status, out.body) }
         catch (e) {
-          console.error(`[hook] ${req.method} ${url} failed:`, e instanceof Error ? e.message : e)
+          console.error(`[hook] ${req.method} failed:`, errorKind(e))
           json(502, { success: false, error: { code: 'PROXY_FAILED', message: e instanceof Error ? e.message : 'INTERNAL' } })
         }
       }
@@ -667,6 +668,8 @@ export function startHookServer(
         const preliminary = carriesStop && body.sessionId ? registry.bySession(body.sessionId) : undefined
         const stopScope = preliminary?.engine === engine ? scopeOf(preliminary) : undefined
         const stopWitness = stopScope ? handlers.captureAdmissionStop?.(preliminary!) : undefined
+        // Waited on more than registry writes (the process record, a hold, a queue paused by one): its Stop
+        // may belong to an earlier turn. A slow write, its own or an earlier hook's of its agent, only delays the reply.
         let deferred = false
         if (carriesStop) resolvingStops.set(deliveryId, { fingerprint, stop: (stop, firedAt) => {
           if (stopProvenance(stop, firedAt) !== originalStop) return conflict
@@ -682,11 +685,9 @@ export function startHookServer(
             callerPid: Number.isSafeInteger(body.callerPid) && body.callerPid! > 0 ? body.callerPid : undefined,
             ...(bySessionPane ? { bySessionPane } : {}),
             // A relaunch records its engine's process a moment after the engine starts, and a hook in that
-            // moment waits for the record, up to 20s. Its client does not: the engine's hook command gives
-            // up on a reply after 500ms and then writes the registry itself, as for a daemon that is down
-            // (hook/notify.mjs, fallbackRegister), with a row of its own in place of the agent's, which
-            // the running daemon's next save took in. Told the registration is pending, it writes nothing,
-            // as for a transcript not yet written below, and the wait goes on here.
+            // moment waits for the record, up to 20s. Its client does not: the engine waits on its hook
+            // command, which gives up on a reply after 500ms (hook/notify.mjs). Told the registration is
+            // pending, it ends at once, and the wait goes on here.
             // Hermes admission has a separate bounded queue after resolution. Do not
             // claim a slot before one exists: its hook client can retry this live hold.
             onWait: () => { deferred = true; answer(202, { pending: false, retry: true, detail: 'Waiting for the engine process record; admission is not queued yet.' }) },
@@ -710,7 +711,7 @@ export function startHookServer(
           for (const delivery of history.records.keys()) saveReceipt(history.records, delivery)
           admissionReceipts.delete(id)
         }
-        const history = admissionReceipts.get(processAgent.agentId) ?? { scope: receiptScope(processAgent)!, records: new Map() }
+        const history = admissionReceipts.get(processAgent.agentId) ?? { scope: receiptScope(processAgent)!, records: new Map(), writing: 0, holds: 0 }
         admissionReceipts.set(processAgent.agentId, history)
         const completed = history.records.get(deliveryId)
         if (completed) {
@@ -732,17 +733,22 @@ export function startHookServer(
         let committing = false, settled = false, stopRetained = false, stopUnmatched = false, stopInvocationClaimed = false
         const stopCurrent = processAgent.sessionId === body.sessionId && stopScope === scope ? stopWitness : undefined
         let followupFingerprint: string | undefined, committedIdentity: string | undefined
+        // A turn-stop answered pending before this settled, kept only until acceptance claims it or rejection drops it.
+        let parkedStop: { stop: BoundHookBody; firedAt: number | undefined } | undefined
+        // The agent's hold count when this began waiting on an earlier hook's write.
+        let waitedHolds: number | undefined
         const live = () => registry.byAgent(processAgent.agentId)
         const current = () => !isRecentlyDeleted(processAgent.agentId) && !isRecentlyDeleted(body.sessionId)
           && live()?.active !== false && scopeOf(live()) === scope
         const publishHold = () => {
           const reason = [...admissionHolds.get(processAgent.agentId)?.values() ?? []].at(-1)
           try { handlers.onAdmissionHeld?.(processAgent.agentId, reason) }
-          catch (error) { console.warn('[hooks] admission status notification failed', error) }
+          catch (error) { console.warn('[hooks] admission status notification failed', errorKind(error)) }
         }
         const held = (reason: string) => {
           cancelReplyTimer?.()
           deferred = true
+          history.holds++
           const holds = admissionHolds.get(processAgent.agentId) ?? new Map<string, string>()
           holds.set(deliveryId, reason); admissionHolds.set(processAgent.agentId, holds)
           publishHold()
@@ -770,10 +776,20 @@ export function startHookServer(
           followupFingerprint = sent
           // The registration itself owns this native Stop, even if its second
           // HTTP delivery outruns source recovery. Never close a later live turn.
-          if (!settled || stopRetained) {
-            deferred = true
+          // Its client leaves on pending and never sends it again: acceptance claims it.
+          if (!settled) {
+            // Its bytes join its registration's receipt, inside the same budget, until settling rewrites that receipt.
+            const receipt = history.records.get(deliveryId)
+            const bytes = retainedBytes + 2 * JSON.stringify(stop).length
+            if (!receipt || receiptBytes - receipt.bytes + bytes > bytesCapacity) {
+              return { status: 429, reply: { pending: false, error: 'HOOK_ADMISSION_BUSY',
+                detail: 'Hook acknowledgement storage is full; this Stop was not kept.' } }
+            }
+            saveReceipt(history.records, deliveryId, { ...receipt, bytes })
+            parkedStop = { stop, firedAt }
             return { status: 200, reply: { pending: true } }
           }
+          if (stopRetained) return { status: 200, reply: { pending: true } }
           if (stopCurrent && !stopCurrent()) stopInvocationClaimed = true
           if (stopInvocationClaimed) return { status: 200, reply: { ok: true, duplicate: true } }
           const owner = await verifiedBoundMutation(stop, handlers)
@@ -825,7 +841,9 @@ export function startHookServer(
           const before = prior && { sessionId: prior.sessionId, transcriptPath: prior.transcriptPath,
             held: !!(prior.identityHold || prior.interpretationHold) }
           let verifySource: (() => void) | undefined, verifyPane: (() => void) | undefined
+          if (waitedHolds !== undefined && waitedHolds !== history.holds) deferred = true
           committing = true
+          history.writing++
           try {
             committed = await registry.register(hermesHome ? { ...prepared, hermesHome } : prepared, { verifiedNativeSource: true,
               ...(engine === 'hermes' && body.sessionId ? { refresh: async () => {
@@ -846,7 +864,7 @@ export function startHookServer(
                 return admissionCurrent() && current() && paneReadIdentity(live()) === inspectionIdentity
                   && !handlers.hookAdmissionBlocked?.(processAgent.agentId)
               } })
-          } finally { committing = false }
+          } finally { committing = false; history.writing-- }
           if (committed?.refusedHome) refusedHeader(CODEX_HOME_HEADER)
           if (stopCurrent && !stopCurrent()) stopInvocationClaimed = true
           if (committed && carriesStop && !stopRetained && !stopInvocationClaimed) {
@@ -872,8 +890,8 @@ export function startHookServer(
           console.log(`[hooks] ${sid(result.entry.sessionId)} ${body.hookEvent ?? 'session-start'} · engine=${result.entry.engine} · isNew=${result.isNew}`
             + (engine === 'hermes' ? ` · after a source check${result.entry.hermesHome ? ` · home=${result.entry.hermesHome}` : ''}` : ''))
           const optional = (call: () => void | Promise<void>) => {
-            try { void Promise.resolve(call()).catch(error => console.warn('[hooks] committed admission notification failed', error)) }
-            catch (error) { console.warn('[hooks] committed admission notification failed', error) }
+            try { void Promise.resolve(call()).catch(error => console.warn('[hooks] committed admission notification failed', errorKind(error))) }
+            catch (error) { console.warn('[hooks] committed admission notification failed', errorKind(error)) }
           }
           // Native prompt credit follows the durable bind, never an attempted one.
           if (body.hookEvent === 'UserPromptSubmit') {
@@ -896,12 +914,22 @@ export function startHookServer(
             commit,
             held,
             reject: reason => {
+              parkedStop = undefined
               clearHold()
               console.log(`[hooks] ${sid(body.sessionId ?? '?')} ${body.hookEvent ?? 'session-start'} ignored · ${reason}`)
               if (reason === 'invalid_session_registration') completedReply(400, { error: 'invalid session registration' })
               else completedReply(200, { ignored: true, reason })
             },
-            accept: () => { completedReply(200, { ok: true }); notify() },
+            accept: () => {
+              completedReply(200, { ok: true }); notify()
+              // A turn-stop parked while this was in flight is claimed as one sent now would be, through every fence.
+              const parked = parkedStop
+              parkedStop = undefined
+              // Its client left on pending and hears no reply: a claim that closed nothing is said here.
+              if (parked) void Promise.resolve(linkedStop(parked.stop, parked.firedAt)).then(({ status }) => {
+                if (status !== 200) console.log(`[hooks] ${sid(body.sessionId ?? '?')} parked Stop not claimed · status=${status}`)
+              }).catch(error => console.warn(`[hooks] parked linked Stop claim failed · ${errorKind(error)}`))
+            },
           })
           if (queued) {
             // A registry commit has its own bounded deadline and owns its reply.
@@ -909,12 +937,16 @@ export function startHookServer(
             if (engine === 'hermes') answer(200, { pending: true })
             else setImmediate(() => {
               if (settled) return
-              const pending = () => { if (!settled) deferred = true; answer(200, { pending: true }) }
               if (committing) {
                 // The hook process itself has a five-second timeout. Slow durable
                 // preparation retains the delivery while its caller leaves promptly.
-                cancelReplyTimer = replyClock.after(250, pending)
-              } else pending()
+                cancelReplyTimer = replyClock.after(250, () => answer(200, { pending: true }))
+                return
+              }
+              // Waiting behind another durable write alone does not make its linked Stop unmatched.
+              if (history.writing && !admissionHolds.has(processAgent.agentId)) waitedHolds = history.holds
+              else deferred = true
+              answer(200, { pending: true })
             })
           } else {
             saveReceipt(history.records, deliveryId)
@@ -1114,7 +1146,7 @@ export function startHookServer(
     })().catch((error: unknown) => {
       // Whatever a handler throws, the request is answered: an engine's hook that waits on this server
       // holds up that engine's turn until its own timeout, and the desktop waits out thirty seconds.
-      console.error(`[hooks] ${req.method} ${(req.url ?? '').split('?')[0].slice(0, 80)} failed:`, error instanceof Error ? error.message : error)
+      console.error(`[hooks] ${req.method} failed:`, errorKind(error))
       if (!res.headersSent) {
         res.writeHead(500, { 'Content-Type': 'application/json' })
         res.end(JSON.stringify({ error: 'INTERNAL' }))
@@ -1138,7 +1170,7 @@ export function startHookServer(
         console.error(`[hooks] 127.0.0.1:${port} is already in use — another adapter is probably running.`)
         console.error('        Use a different PORT; no other user\'s daemon was stopped.')
       } else {
-        console.error('[hooks] listen failed:', err)
+        console.error('[hooks] listen failed:', errorKind(err))
       }
       reject(err)
     }
@@ -1169,7 +1201,7 @@ export function startHookServer(
             reject(error)
             return
           }
-          console.warn(`[hooks] local socket unavailable (${socketPath}): ${error instanceof Error ? error.message : error}`)
+          console.warn(`[hooks] local socket unavailable · ${errorKind(error)}`)
           tcpOnly()
         },
       )

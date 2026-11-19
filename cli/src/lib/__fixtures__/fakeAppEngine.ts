@@ -8,9 +8,10 @@
  * Named as the real binary, so `ps` shows the name Stop checks for.
  */
 import { execFileSync } from 'node:child_process'
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { writeExecutable } from '../../testing/executableFixture.js'
 
 /** `exits`: binds nothing, names no port and exits 1. `port-zero`: says it bound port 0, as llama.cpp before build
  *  4240 did. `split-line`: its line in two writes, cut inside the port. `early-line`: first the line llama.cpp prints
@@ -68,8 +69,7 @@ server.listen(asked, '127.0.0.1', () => {
 export function fakeAppEngine(kind: 'ollama' | 'llama.cpp', fault?: FakeEngineFault): FakeAppEngine {
   const root = mkdtempSync(join(tmpdir(), 'fake-engine-'))
   const binary = join(root, kind === 'ollama' ? 'ollama' : 'llama-server')
-  writeFileSync(binary, script(kind, fault ?? null))
-  chmodSync(binary, 0o755)
+  writeExecutable(binary, script(kind, fault ?? null))
   const starts = (): FakeEngineStart[] => {
     try {
       return readFileSync(join(root, 'starts.jsonl'), 'utf8').split('\n').filter(Boolean).map((line) => JSON.parse(line) as FakeEngineStart)

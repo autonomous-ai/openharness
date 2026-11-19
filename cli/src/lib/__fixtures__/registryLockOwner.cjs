@@ -11,12 +11,22 @@ const release = () => {
     if (owner.token === token) fs.rmSync(lock, { recursive: true, force: true })
   } catch {}
 }
-fs.mkdirSync(lock, { mode: 0o700 })
-const descriptor = fs.openSync(path.join(lock, 'owner.json'), 'wx', 0o600)
-try {
-  fs.writeFileSync(descriptor, JSON.stringify({ pid: process.pid, startMarker: '', token }))
-  fs.fsyncSync(descriptor)
-} finally { fs.closeSync(descriptor) }
+// A caller's write resolves before its lock cleanup finishes, so the lock may still be
+// taken here; wait for its removal as a legacy writer would. Watch before trying, so a
+// removal between the attempt and the watch is still seen.
+const watcher = fs.watch(directory)
+const take = () => {
+  try { fs.mkdirSync(lock, { mode: 0o700 }) }
+  catch (error) { if (error.code === 'EEXIST') return false; throw error }
+  watcher.close()
+  const descriptor = fs.openSync(path.join(lock, 'owner.json'), 'wx', 0o600)
+  try {
+    fs.writeFileSync(descriptor, JSON.stringify({ pid: process.pid, startMarker: '', token }))
+    fs.fsyncSync(descriptor)
+  } finally { fs.closeSync(descriptor) }
+  process.send('locked')
+  return true
+}
 process.on('message', message => {
   if (message !== 'release') return
   release()
@@ -29,4 +39,5 @@ process.on('SIGTERM', () => {
 })
 // This helper must not outlive a failed test or a parent that never releases it.
 setTimeout(() => { release(); process.exit(2) }, 20_000).unref()
-process.send('locked')
+watcher.on('change', take)
+if (!take()) process.send('waiting')

@@ -30,7 +30,9 @@
 import { stat } from 'node:fs/promises'
 import { scanRecordsBackward, streamRecords } from './transcriptTail.js'
 import type { RuntimeField } from './runtimeProfile.js'
+import { boundaryChanged } from './transcriptBoundary.js'
 import { closeFileIdentity, replayCloses, type TranscriptClose } from './transcriptControls.js'
+import { errorKind } from './log.js'
 
 export interface AttachRules {
   /** The record the engine's fold opens a turn on, judged from the record alone. */
@@ -242,9 +244,10 @@ export async function replayAttachSpan(
     records++
     feed(fold, line)
   }, isWholeRecord, undefined, closeFileIdentity(closes))
-  if (!read && closes.length) throw new Error('ENGINE_CONTROL_BOUNDARY_CHANGED')
+  if (!read && closes.length) throw boundaryChanged()
   if (read) closeThrough(read.next)
-  if (failures) console.warn(`[attach] ${filePath}: ${failures} record(s) could not be taken in: ${String(firstFailure)}`)
+  // The error's kind only: a parse error's message quotes the record, which is the person's transcript.
+  if (failures) console.warn(`[attach] ${failures} record(s) could not be taken in: ${errorKind(firstFailure)}`)
   return { next: read?.next ?? span.end, records, content: records > 0 || !!read?.partial }
 }
 
@@ -278,7 +281,7 @@ export async function attachTranscript(
     if (options.closes?.length) span.end = Math.min(options.end ?? Infinity, (await stat(filePath)).size)
     return { ...span, ...await replayAttachSpan(filePath, span, consumers, options.closes), failed: false }
   } catch (error) {
-    console.warn(`[attach] ${filePath} could not be read: ${String(error)}`)
+    console.warn(`[attach] a transcript could not be read: ${errorKind(error)}`)
     const end = span ? span.end : await reach(filePath, options.end)
     return { ...(span ?? wholeFile(end)), next: end, records: 0, content: end > 0, failed: true }
   }

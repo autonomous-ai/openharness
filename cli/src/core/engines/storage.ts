@@ -1,4 +1,5 @@
 /** Captured storage reads; unavailable workers never turn an unknown background count into zero. */
+import { errorKind } from '../../lib/log.js'
 import type { BackgroundSession } from '../../lib/backgroundCommands.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import { backgroundCount, STORAGE_BACKGROUND, STORAGE_BACKGROUND_WAIT_MS, STORAGE_CAPABILITIES,
@@ -76,7 +77,7 @@ export function createEngineStorage(deps: EngineStorageDeps) {
         if (!deps.isolated) return await boundedControl(admitted(async () => deps.inline?.(captured) ?? null),
           STORAGE_BACKGROUND_WAIT_MS, () => new Error('storage unavailable'))
         return await admitted(async () => await transport.read('hermes', STORAGE_BACKGROUND, { session: captured }, backgroundCount) as number | null)
-      } catch { console.error('[engine-others] STORAGE_BACKGROUND_UNAVAILABLE'); return null }
+      } catch (caughtFailure) { console.error(('[engine-others] STORAGE_BACKGROUND_UNAVAILABLE') + ' · ' + errorKind(caughtFailure)); return null }
     },
   }
 }

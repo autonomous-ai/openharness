@@ -13,6 +13,7 @@ import { readWifiView } from './wifiView.js'
 import type { RecentTurn } from '../cable/cableHost.js'
 import { emptyPorts, type AgentView, type CoreApi, type CorePorts, type ForkResult, type ServiceRequests, type WifiPort, type WifiResume } from '../core/api.js'
 import type { AutonomousDeviceDelivery } from '../lib/autonomous-device/service.js'
+import { errorKind } from '../lib/log.js'
 import { runServiceProcess, type CoreConnection, type ServiceProcess, type ServiceProcessOptions } from './process.js'
 import { processCoreApi } from './processCoreApi.js'
 import { startWifi } from './wifi.js'
@@ -234,7 +235,7 @@ export function runWifiService(options: WifiServiceOptions): ServiceProcess {
       })
     } catch (error) {
       owner.following.reset(); component = null; verified = null
-      console.warn(`[wifi] did not start · ${error instanceof Error ? error.message : String(error)}`)
+      console.warn(`[wifi] did not start · ${errorKind(error)}`)
       return null
     }
     built = ports.wifi ? { machineId, port: ports.wifi, requests } : null
@@ -277,8 +278,8 @@ export function runWifiService(options: WifiServiceOptions): ServiceProcess {
       if (current()) { disconnect(); console.warn('[wifi] WIFI_NOTICE_TIMEOUT') }
     }, 15_000)
     timer.unref?.()
-    heardSoFar = heardSoFar.then(() => { if (current()) return run(current) }).catch(() => {
-      if (current()) { disconnect(); console.warn('[wifi] WIFI_NOTICE_FAILED') }
+    heardSoFar = heardSoFar.then(() => { if (current()) return run(current) }).catch((caughtFailure) => {
+      if (current()) { disconnect(); console.warn(('[wifi] WIFI_NOTICE_FAILED') + ' · ' + errorKind(caughtFailure)) }
     }).finally(() => { clearTimeout(timer); release() })
   }
   /** The core's first word on each connection: which machine this is, then what it holds for the service. */

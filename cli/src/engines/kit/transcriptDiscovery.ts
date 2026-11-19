@@ -1,4 +1,5 @@
 import { locateTranscript, transcriptGroups, type TranscriptLocation } from './sessionLocation.js'
+import { errorKind } from '../../lib/log.js'
 
 /**
  * Poll only while a known session has no transcript. A recursive watcher over the project tree once
@@ -40,7 +41,7 @@ export class TranscriptDiscovery {
 
   private hold(id: string, candidate: { looking: boolean; detail?: string }, error: unknown): void {
     if (this.pending.get(id) !== candidate) return
-    const detail = error instanceof Error ? error.message : String(error)
+    const detail = errorKind(error)
     if (candidate.detail === detail) return
     candidate.detail = detail
     console.error(`[discovery] transcript ${id} held · ${detail}`)
@@ -67,7 +68,7 @@ export class TranscriptDiscovery {
   private schedule(): void {
     if (!this.started || this.timer || !this.pending.size) return
     this.timer = setInterval(() => {
-      void this.sweep().catch(error => console.error('[discovery] transcript lookup failed', error))
+      void this.sweep().catch(error => console.error('[discovery] transcript lookup failed', errorKind(error)))
     }, this.pollMs)
     this.timer.unref()
   }

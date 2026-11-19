@@ -19,7 +19,7 @@ vi.mock('node:fs/promises', async original => {
     return fs.lstat(...args)
   } }
 })
-const { nativeProcessImages, parseNativeProcessImages, prepareProcessImageHelper } = await import('./nativeProcessImages.js')
+const { bundledProcessImageHelper, nativeProcessImages, parseNativeProcessImages, prepareProcessImageHelper, processImageHelperBundled } = await import('./nativeProcessImages.js')
 
 const header = '{"schema":1,"mode":"paths"}\n'
 const record = (pid: number, path = '/fixture/native') => ({
@@ -139,6 +139,26 @@ describe('bundled native helper preparation', () => {
     expect(await prepareProcessImageHelper(artifact, root)).toBeNull()
     expect((await lstat(target)).isSymbolicLink()).toBe(true)
     expect(await readFile(elsewhere)).toEqual(bytes)
+  })
+
+  it.each([
+    ['no artifact', undefined],
+    ['text that is not JSON', 'not json'],
+    ['no checksum', '{}'],
+    ['another schema', JSON.stringify({ ...artifact, schema: 2 })],
+    ['a size that is not its bytes', JSON.stringify({ ...artifact, size: bytes.length + 1 })],
+    ['base64 that does not round trip', JSON.stringify({ ...artifact, base64: artifact.base64 + '\n' })],
+    ['bytes that are not its checksum', JSON.stringify({ ...artifact, sha256: '0'.repeat(64) })],
+  ])('finds no usable helper in a build with %s, and prepares none', async (_, source) => {
+    if (source !== undefined) vi.stubGlobal('__DARWIN_PROCESS_IMAGES__', source)
+    expect(processImageHelperBundled()).toBe(false)
+    expect(await bundledProcessImageHelper()).toBeNull()
+    expect(await readdir(root)).toEqual([])
+  })
+
+  it('finds a usable helper in a build whose artifact passes every check', () => {
+    vi.stubGlobal('__DARWIN_PROCESS_IMAGES__', JSON.stringify(artifact))
+    expect(processImageHelperBundled()).toBe(true)
   })
 
   it('leaves unsafe directory permissions unchanged and falls back', async () => {

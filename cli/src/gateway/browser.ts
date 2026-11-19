@@ -11,6 +11,7 @@
  * a mismatched `state`), and a phone must not reach arbitrary ports of this computer.
  */
 
+import { errorKind } from '../lib/log.js'
 import type { CoreApi, ServiceRequest } from '../core/api.js'
 
 /** Who typed into an agent's terminal last, as the terminal stream knows them. */
@@ -94,8 +95,8 @@ export function createBrowser(deps: BrowserDeps) {
     try { page = new URL(payload.url) } catch { return { handled: false } }
     if (page.href.length > BROWSER_URL_MAX || page.protocol !== 'https:' && page.protocol !== 'http:') return { handled: false }
     let agentId: string | undefined
-    try { agentId = await deps.agentOfPane(payload.pane) } catch {
-      deps.log('[browser] PANE_UNAVAILABLE')
+    try { agentId = await deps.agentOfPane(payload.pane) } catch (caughtFailure) {
+      deps.log(('[browser] PANE_UNAVAILABLE') + ' · ' + errorKind(caughtFailure))
       return { handled: false }
     }
     const source = agentId ? lastInput.get(agentId) : undefined
@@ -155,8 +156,8 @@ export function createBrowser(deps: BrowserDeps) {
       try {
         answer = await replay(url)
         deps.log('[browser] CALLBACK_DELIVERED')
-      } catch {
-        deps.log('[browser] CALLBACK_NOT_DELIVERED')
+      } catch (caughtFailure) {
+        deps.log(('[browser] CALLBACK_NOT_DELIVERED') + ' · ' + errorKind(caughtFailure))
         return { error: 'NOT_DELIVERED' }
       }
       const { status } = answer
@@ -172,9 +173,9 @@ export function createBrowser(deps: BrowserDeps) {
           answer = await replay(url)
           deps.log('[browser] CALLBACK_PAGE_DELIVERED')
         }
-      } catch {
+      } catch (caughtFailure) {
         // The sign-in is the program's already: only its own page after it is missed.
-        deps.log('[browser] CALLBACK_PAGE_NOT_DELIVERED')
+        deps.log(('[browser] CALLBACK_PAGE_NOT_DELIVERED') + ' · ' + errorKind(caughtFailure))
       }
       return { ok: status < 400, status }
     } finally {

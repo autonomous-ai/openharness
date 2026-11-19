@@ -1,4 +1,5 @@
 /** The two desk gestures shared by the device components when they occupy the same worker. */
+import { errorKind } from '../lib/log.js'
 import { resolve } from 'node:path'
 import { DeviceWorkBudget } from '../lib/autonomous-device/pendingWork.js'
 
@@ -45,8 +46,8 @@ export function publishDeviceDesk(options: {
           if (options.faults?.has('devices.stepFocus')) throw new Error('DESK_FAILED')
           return options.desk.stepFocus(direction, agentId, () => current() && options.hasWindow())
         }
-        void actual().then(result => resolve(current() ? options.hasWindow() ? result : 'no_app' : 'no_agents'), () => {
-          log('[devices] DESK_FAILED'); resolve('no_agents')
+        void actual().then(result => resolve(current() ? options.hasWindow() ? result : 'no_app' : 'no_agents'), (caughtFailure) => {
+          log(('[devices] DESK_FAILED') + ' · ' + errorKind(caughtFailure)); resolve('no_agents')
         }).finally(() => { clearTimeout(timer); release() })
       })
     },
@@ -55,7 +56,7 @@ export function publishDeviceDesk(options: {
       try {
         if (options.faults?.has('devices.scroll')) throw new Error('DESK_FAILED')
         options.desk.scroll(phase, dy, velocity, () => active() && callerCurrent() && options.hasWindow())
-      } catch { log('[devices] DESK_FAILED') }
+      } catch (caughtFailure) { log(('[devices] DESK_FAILED') + ' · ' + errorKind(caughtFailure)) }
       // Like the existing core notice, a stroke is accepted, not an acknowledged mutation.
       return true
     },

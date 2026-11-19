@@ -27,7 +27,7 @@ import { AttachTracker } from '../../lib/attachTracker.js'
 import { READER_IN_FLIGHT } from '../worker/protocol.js'
 import { LIVE_CACHE_BYTES } from '../worker/liveProtocol.js'
 import { env } from '../../config/env.js'
-import { sid } from '../../lib/log.js'
+import { errorKind, sid } from '../../lib/log.js'
 import { WHOLE_READ_CAP_BYTES } from '../../lib/transcriptTail.js'
 import type { HistoryEvent, LineEvent, RewrittenEvent, Watcher } from '../../watcher/watcher.js'
 import { STREAM_EVIDENCE, STREAM_KEPT_BYTES, STREAMS_MAX, type StreamFrame, type StreamOpened, type StreamTurn } from '../worker/otherStreamProtocol.js'
@@ -284,8 +284,8 @@ export function createOtherStreams(deps: OtherStreamsDeps) {
       if (evt.next !== undefined) { stream.offset = evt.next; stream.stamp = evt.stamp }
       stream.push({ events: read.events, ...(read.failure !== undefined ? { failure: read.failure, failureSummary: read.failureSummary } : {}),
         ...(read.evidence ? { evidence: [read.evidence] } : {}), ...(stream.offset !== undefined ? { offset: stream.offset, ...(stream.stamp !== undefined ? { stamp: stream.stamp } : {}) } : {}) })
-    } catch {
-      warn(`[engine ${stream.engine}] LIVE_RECORD_INVALID`)
+    } catch (error) {
+      warn(`[engine ${stream.engine}] LIVE_RECORD_INVALID · ${errorKind(error)}`)
     }
   })
   // A catch-up is history, an unfinished last turn included: one frame, which the core emits as a replay.
@@ -305,8 +305,8 @@ export function createOtherStreams(deps: OtherStreamsDeps) {
       }
       stream.push({ events, replay: true, ...(failure ?? {}), ...(evidence.length ? { evidence } : {}),
         ...(stream.offset !== undefined ? { offset: stream.offset, ...(stream.stamp !== undefined ? { stamp: stream.stamp } : {}) } : {}) })
-    } catch {
-      warn(`[engine ${stream.engine}] LIVE_HISTORY_INVALID`)
+    } catch (error) {
+      warn(`[engine ${stream.engine}] LIVE_HISTORY_INVALID · ${errorKind(error)}`)
     }
   })
   // Rewritten in place with too much history to replay: its tail already starts at the new end, and the core attaches
@@ -528,8 +528,8 @@ export function createOtherStreams(deps: OtherStreamsDeps) {
       if (resume && resume.turnOpen && !normalizer.turnOpen) stream.push({ events: [{ type: 'turn_ended', payload: {} }] })
       // The Tasks Cursor's hook queued while no daemon ran: followed once its session is.
       if (session.engine === 'cursor' && await cursorQueued(dataDir)) {
-        const pending = await (code as InProcessModules['cursor']).loadCursorPendingTasks(dataDir).catch(() => {
-          warn('[cursor] CURSOR_TASKS_UNAVAILABLE')
+        const pending = await (code as InProcessModules['cursor']).loadCursorPendingTasks(dataDir).catch((error: unknown) => {
+          warn(`[cursor] CURSOR_TASKS_UNAVAILABLE · ${errorKind(error)}`)
           return []
         })
         for (const task of pending) if (task.sessionId === session.sessionId) enqueueTask(stream, task.toolUseId, task.input)

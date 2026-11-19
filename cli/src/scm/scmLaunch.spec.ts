@@ -100,7 +100,7 @@ describe('the SCM launch record on the registry row', () => {
     const create = vi.fn(async (): Promise<TerminalCreateResult<TmuxRuntimeRef>> => ({ state: 'succeeded', dispatch: 'executed', runtime: { backend: 'tmux', paneId: '%1' } }))
     const tmuxBackend = { create, kill: vi.fn(async () => ({ state: 'succeeded' as const, dispatch: 'executed' as const })) }
     const result = await createAndRegisterPane({
-      tmuxBackend, registry, engine: 'claude', cwd: '/tmp/demo', sessionLabel: 'harness-claude-1', argv: ['claude'], scmLaunchRecord: GIT,
+      tmuxBackend, registry, engine: 'claude', cwd: '/tmp/demo', sessionLabel: 'harness-claude-1', argv: () => ['claude'], scmLaunchRecord: GIT,
     })
     if (!result.ok) throw new Error(result.error)
     const row = registry.byAgent(result.pending.agentId)!

@@ -31,7 +31,7 @@ describe('the DSH requests on the local socket', () => {
   const serveStore = (faults: ReadonlySet<string> = new Set()): void => {
     const ports = emptyPorts()
     const host = createServiceHost(ports, { log: () => {}, faults })
-    const deps: StoreDeps = { prepare: () => true, refresh: refreshDshRegistry, rows: dshListRows, mutate: (input, progress) => mutate(input, progress), remove: (id) => remove(id), watch: () => () => {} }
+    const deps: StoreDeps = { prepare: () => true, setupAgain: async () => ({ done: 0, needsSetup: 0, busy: 0 }), refresh: refreshDshRegistry, rows: dshListRows, mutate: (input, progress) => mutate(input, progress), remove: (id) => remove(id), watch: () => () => {} }
     const core = fakeCore({ clients: { dshInstallStatus: (status) => socket.send({ type: 'dsh_install_status', payload: status }) } })
     host.start('store', (api, ports) => {
       ports.store = { ...storeLaunchPort(), stop: () => {} }

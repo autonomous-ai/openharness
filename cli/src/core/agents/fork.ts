@@ -16,7 +16,7 @@ import { harnessEnvToClear } from '../../dsh/sessionEnv.js'
 import { captureDshWorkspace, type DshThrough } from './dshThrough.js'
 import type { TurnRecaps } from '../turns/recaps.js'
 import { createAndRegisterPane } from '../../lib/createAgentPane.js'
-import { buildEngineCommandArgv, buildEngineLaunchArgv, engineLaunchEnv, namedAgentArgs, refusePermissionFlagIfUnsupported, supportsNamedAgent, typedFirstPrompt } from '../../lib/engineLaunch.js'
+import { buildEngineCommandArgv, buildEngineLaunchArgv, engineLaunchEnv, launchAttempts, namedAgentArgs, refusePermissionFlagIfUnsupported, supportsNamedAgent, typedFirstPrompt } from '../../lib/engineLaunch.js'
 import { forkName, planFork } from '../../lib/forkAgent.js'
 import { buildHarnessSessionLabel } from '../../lib/harnessSessionLabel.js'
 import { projectDisplayName, type registry, type RegisteredSession } from '../../lib/registry.js'
@@ -209,7 +209,7 @@ export function createAgentForker({ opencodeMajor,
       engine,
       cwd: source.cwd,
       sessionLabel: label,
-      argv,
+      argv: launchAttempts(argv, () => buildEngineLaunchArgv(engine, launchOptions)),
       // Windows: the workspace to start in and the shell the pane becomes after the engine (lib/windows/engineStart.ts).
       paneLaunch: windowsPaneLaunch(engine, { ...launchOptions, held }),
       // The SCM's environment last, after the harness context's, as at create and relaunch.

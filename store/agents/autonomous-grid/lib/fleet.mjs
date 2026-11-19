@@ -143,7 +143,11 @@ export function invocation(machine, args, env = process.env, thinking) {
   // user input as shell syntax. BatchMode and strict host keys use the user's established SSH trust.
   const argv = ['-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=yes', '-o', 'ConnectTimeout=8'];
   if (machine.port) argv.push('-p', String(machine.port));
-  const choose = machine.gridBinary ? `bin=${shellQuote(machine.gridBinary)}` : 'runtime="${ADAPTER_RUNTIME_DIR:-$HOME/.harness/runtime}"; bin="$(cat "$runtime/current-grid" 2>/dev/null || true)"; case "$bin" in "$runtime"/*) test -x "$bin" || bin="";; *) bin="";; esac; if test -z "$bin"; then bin="$(command -v grid || true)"; fi; if test -z "$bin"; then bin="$HOME/.local/bin/grid"; fi';
+  // The other machine's runtime folder, by Harness's rule (cli/src/config/harnessHome.ts): on Linux the XDG state root's,
+  // unless the XDG data root lacks the marker (.harness-root) and ~/.harness exists; a base that is not an absolute path is
+  // ignored, and a trailing slash dropped so the path matches the one recorded there. It runs there, so it asks uname.
+  const runtime = 'harness_runtime() { if test -n "${ADAPTER_RUNTIME_DIR:-}"; then printf %s "$ADAPTER_RUNTIME_DIR"; return; fi; if test "$(uname -s)" = Linux; then case "${XDG_DATA_HOME:-}" in /*) data="${XDG_DATA_HOME%/}/harness";; *) data="$HOME/.local/share/harness";; esac; case "${XDG_STATE_HOME:-}" in /*) state="${XDG_STATE_HOME%/}/harness";; *) state="$HOME/.local/state/harness";; esac; if test -f "$data/.harness-root" || test ! -e "$HOME/.harness"; then printf %s "$state/runtime"; return; fi; fi; printf %s "$HOME/.harness/runtime"; }';
+  const choose = machine.gridBinary ? `bin=${shellQuote(machine.gridBinary)}` : runtime + '; runtime="$(harness_runtime)"; bin="$(cat "$runtime/current-grid" 2>/dev/null || true)"; case "$bin" in "$runtime"/*) test -x "$bin" || bin="";; *) bin="";; esac; if test -z "$bin"; then bin="$(command -v grid || true)"; fi; if test -z "$bin"; then bin="$HOME/.local/bin/grid"; fi';
   const remote = `export GRID_NO_UPDATE_CHECK=1; ${template === null ? '' : `export LLAMA_ARG_CHAT_TEMPLATE_KWARGS=${shellQuote(template)}; `}${machine.gridHome ? `export GRID_HOME=${shellQuote(machine.gridHome)}; ` : ''}${choose}; exec "$bin" ${args.map(shellQuote).join(' ')}`;
   return { file: 'ssh', args: [...argv, machine.host, remote], env: childEnv };
 }

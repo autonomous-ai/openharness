@@ -37,11 +37,13 @@
  */
 import { createHash } from 'node:crypto'
 import { existsSync } from 'node:fs'
-import { availableParallelism, totalmem } from 'node:os'
+import { availableParallelism, homedir, totalmem } from 'node:os'
 import { join, resolve } from 'node:path'
 import { AGENT_BROWSER_REQUESTS, type AgentLife, type AgentView, type Asker, type CoreApi, type ServiceRequests } from '../core/api.js'
 import { mayOpenBrowser, type BrowserRuntimeSlot } from './agentBrowserRuntime.js'
+import { harnessPath, legacyHarnessPath, type HomeLook } from '../config/harnessHome.js'
 import { sweepAgentTmpWhenDue } from '../lib/agentTmp.js'
+import { errorKind } from '../lib/log.js'
 import { browserTools } from '../lib/browserToolsAsset.js'
 import type { ProductUsageMetric } from '../lib/productUsageContract.js'
 import { BROWSER_CHUNK_BYTES, encodeTerminalLocal } from '../lib/terminalBinary.js'
@@ -101,9 +103,13 @@ export interface AgentBrowserOptions {
   now?: () => Date
 }
 
-/** The daemon's id on Podman's labels: a dev or test daemon beside the installed one never touches another's. */
-export function daemonIdOf(dataDir: string): string {
-  return createHash('sha256').update(resolve(dataDir)).digest('hex').slice(0, 16)
+/** The daemon's id on Podman's labels: a dev or test daemon beside the installed one never touches another's. The
+ *  default data folder is labelled by its spelling before Harness's folder moved on Linux, so a browser started before
+ *  the move stays this daemon's after it. */
+export function daemonIdOf(dataDir: string, home = homedir(), platform = process.platform, look?: HomeLook): string {
+  const folder = resolve(dataDir)
+  const labelled = folder === resolve(harnessPath('cli', home, platform, look), 'data') ? join(legacyHarnessPath('cli', home, platform), 'data') : folder
+  return createHash('sha256').update(labelled).digest('hex').slice(0, 16)
 }
 
 /** The machine's zone and language, read once: a browser's defaults (spec § Settings per agent). Under launchd the
@@ -128,7 +134,7 @@ function commandReply(reply: ToolReply): Reply {
 
 /** A failure the apps can act on, named; anything else is the service's own and counts against it. */
 function named(error: unknown): Reply {
-  if (error instanceof PodmanError) return { error: error.state.toUpperCase() }
+  if (error instanceof PodmanError) return { error: error.code }
   if (error instanceof Error && error.message.startsWith('invalid browser setting')) return { error: 'INVALID_SETTINGS', detail: error.message }
   throw error
 }
@@ -277,7 +283,7 @@ export function startAgentBrowser(core: CoreApi, ports: BrowserRuntimeSlot, opti
       })
     } catch (error) {
       // The next time it runs, it is taken in then.
-      log(`agent browser ${session.agentId}: its Browser flag was not taken in: ${(error as Error).message}`)
+      log(`agent browser ${session.agentId}: its Browser flag was not taken in · ${errorKind(error)}`)
     }
   }
   /** Its browser, started: once each time it runs here, and not for a guest's (the machine's Podman, memory and network
@@ -557,7 +563,7 @@ export function startAgentBrowser(core: CoreApi, ports: BrowserRuntimeSlot, opti
       // state file does not take still stops the browser, and starts it again at its agent's next run: said here.
       let changed = false
       try { changed = setOn(agentId, false) } catch (error) {
-        log(`agent browser ${agentId}: its Stop was not kept: ${(error as Error).message}`)
+        log(`agent browser ${agentId}: its Stop was not kept · ${errorKind(error)}`)
       }
       if (attached.delete(agentId) || browsers.state(agentId) || browsers.pending(agentId)) void browsers.stop(agentId)
       if (changed) count('agent_browser_stopped')

@@ -87,10 +87,10 @@ describe('the session search service', () => {
       vi.mocked(SessionSearchStore.open).mockImplementationOnce(() => { throw new Error('disk I/O error') })
       startSearch(core, ports)
       expect(ports.search?.inspect).toBeTypeOf('function')
-      expect(console.error).toHaveBeenCalledWith('[search] could not open the session index:', 'disk I/O error')
+      expect(console.error).toHaveBeenCalledWith('[search] could not open the session index:', 'Error')
       vi.mocked(SessionSearchStore.open).mockImplementationOnce(() => { throw 'locked' })
       startSearch(core, ports)
-      expect(console.error).toHaveBeenLastCalledWith('[search] could not open the session index:', 'locked')
+      expect(console.error).toHaveBeenLastCalledWith('[search] could not open the session index:', 'string')
     })
   })
 

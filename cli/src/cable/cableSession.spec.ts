@@ -11,11 +11,12 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, vi, type Mock } from 'vitest'
 
-import { CABLE_MAX_FRAME, CableDecoder, CableType, encodeCableFrame } from './cableFrame.js'
+import { CABLE_MAX_FRAME, CABLE_MAX_PAYLOAD, CableDecoder, CableType, encodeCableFrame } from './cableFrame.js'
 import { DaemonCableHost } from './cableHost.js'
 import type { MachineFleet } from './machineFleet.js'
-import { CableSession, SHOWN_ONLY_PREFIX, SWIPE_REST_MS, type CableAgent, type CableHost, type CableMachine, type CablePort, type DialAgent, type SendOutcome } from './cableSession.js'
+import { CableSession, fitDrawer, SHOWN_ONLY_PREFIX, SWIPE_REST_MS, type CableAgent, type CableHost, type CableMachine, type CablePort, type DialAgent, type SendOutcome } from './cableSession.js'
 import { DialLog } from './dialLog.js'
+import { noticeSummary } from './dialText.js'
 import type { PetStore } from './pets/store.js'
 import { HostRegistry } from './hosts/registry.js'
 import type { AppList, AppPick, HostAgent, HostSource } from './hosts/types.js'
@@ -79,6 +80,11 @@ class LoopbackPort implements CablePort {
   /** Speak as the dial. */
   say(msg: Record<string, unknown>): void {
     this.onData(Buffer.from(encodeCableFrame(CableType.Json, Buffer.from(JSON.stringify(msg), 'utf8'))))
+  }
+
+  /** Speak as the dial in raw JSON text, for values `JSON.stringify` cannot write, such as `1e999`. */
+  sayText(json: string): void {
+    this.onData(Buffer.from(encodeCableFrame(CableType.Json, Buffer.from(json, 'utf8'))))
   }
 
   /** Bytes that are not (all) a frame, as the dial's boot ROM or panic handler writes them. */
@@ -361,6 +367,157 @@ describe('cable session', () => {
       expect(readNotification).toHaveBeenCalledExactlyOnceWith('a1', 'question-2')
       expect(openAgent).not.toHaveBeenCalled()
     } finally { await session.stop() }
+  })
+
+  it('bounds every drawer field to what the dial keeps, so eight rows of the worst text stay one frame', async () => {
+    const long = '\u0001"\u001f\u007f"'.repeat(200)
+    const { session, port } = await connect(makeHost({ describe: () => ({ name: long, engine: 'claude', machine: long }) }))
+    try {
+      // Every character of an id the dial keeps escaped to two bytes, every summary 1000+ characters of escapes.
+      await session.replaceNotifications(Array.from({ length: 8 }, (_, i) => ({
+        agentId: '"'.repeat(46) + i, machineId: 'mac-local', question: i % 2 === 0, text: '\u0001"\u007fé\u001f😀'.repeat(300) })))
+      const replace = port.sent.find((m) => m.t === 'notif.replace')
+      expect(replace).toBeDefined()
+      expect(Buffer.byteLength(JSON.stringify(replace), 'utf8')).toBeLessThanOrEqual(CABLE_MAX_PAYLOAD - 256)
+      const items = replace!.items as Array<{ name: string; machine: string; summary: string }>
+      expect(items).toHaveLength(8)
+      for (const { name, machine, summary } of items) {
+        for (const [text, max] of [[name, 39], [machine, 39], [summary, 239]] as const) {
+          expect(Buffer.byteLength(text, 'utf8')).toBeLessThanOrEqual(max)
+          // Its JSON, quotes aside, no wider than a field of quotes the dial keeps whole.
+          expect(Buffer.byteLength(JSON.stringify(text), 'utf8') - 2).toBeLessThanOrEqual(2 * max)
+        }
+      }
+      expect(port.isOpen).toBe(true)
+    } finally { await session.stop() }
+  })
+
+  it('leaves out a row whose id the dial cannot keep', async () => {
+    const { session, port } = await connect()
+    try {
+      await session.replaceNotifications(['x'.repeat(48), 'é'.repeat(24), 'a\u0001b', 'a\ud800', 'x'.repeat(47), 'a1'].map((agentId) => (
+        { agentId, machineId: 'mac-local', question: true, text: 'Which branch?' })))
+      expect((port.sent.at(-1)!.items as Array<{ agentId: string }>).map((row) => row.agentId)).toEqual(['x'.repeat(47), 'a1'])
+    } finally { await session.stop() }
+  })
+
+  it('writes half an emoji in a drawer row as the dial writes a byte it cannot read, so the dial can parse the frame', async () => {
+    // JSON escapes a lone surrogate as \ud83d, and the dial's parser refuses the whole frame for it.
+    const { session, port } = await connect(makeHost({ describe: () => ({ name: 'Fix \ud83d', engine: 'claude', machine: '\ude00Mac' }) }))
+    try {
+      await session.replaceNotifications([{ agentId: 'a1', machineId: 'mac-local', question: true, text: 'Ship \ud83d it? 😀' }])
+      expect(port.sent.at(-1)!.items).toMatchObject([{ name: 'Fix ?', machine: '?Mac', summary: 'Ship ? it? 😀' }])
+    } finally { await session.stop() }
+  })
+
+  it('writes half an emoji in any frame as the dial writes a byte it cannot read, so the dial can parse the frame', async () => {
+    // JSON escapes a lone surrogate as \ud83d, and the dial's parser refuses the whole frame for it: the agent list and
+    // the question never reached the dial.
+    const agents = [{ id: 'a1', name: 'Fix \ud83d', engine: 'claude' }]
+    const { session, port } = await connect(makeHost({ listAgents: async () => agents, describe: () => ({ name: 'Fix \ud83d', engine: 'claude', machine: '' }) }))
+    try {
+      port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
+      await vi.waitFor(() => expect(port.types()).toContain('agents.end'))
+      await session.question('a1', 'q1', [{ key: 'k', q: 'Ship \ud83d it? 😀', options: ['\udc00yes', 'no'] }])
+      for (const frame of port.frames) expect(Buffer.from(frame).toString('utf8')).not.toMatch(/\\ud[89a-f]/i)
+      expect(port.sent.find((m) => m.t === 'agent')).toMatchObject({ name: 'Fix ?' })
+      expect(port.sent.find((m) => m.t === 'question'))
+        .toMatchObject({ name: 'Fix ?', questions: [{ q: 'Ship ? it? 😀', options: [] }] })
+    } finally { await session.stop() }
+  })
+
+  it('keeps words that only read like half an emoji after a backslash', async () => {
+    // JSON writes a backslash as \\: the `\ud83d` of a path is words, and half an emoji after a backslash is still half.
+    const names = ['C:\\ud83d\\udc00', 'C:\\\\ud83d', 'C:\\\ud83d', 'C:\\\\\ud83d']
+    const agents = names.map((name, i) => ({ id: `a${i}`, name, engine: 'claude' }))
+    const { session, port } = await connect(makeHost({ listAgents: async () => agents }))
+    try {
+      port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
+      await vi.waitFor(() => expect(port.types()).toContain('agents.end'))
+      expect(port.sent.filter((m) => m.t === 'agent').map((m) => m.name))
+        .toEqual(['C:\\ud83d\\udc00', 'C:\\\\ud83d', 'C:\\?', 'C:\\\\?'])
+    } finally { await session.stop() }
+  })
+
+  describe('an answer to a question with half an emoji, which the dial read as ?', () => {
+    async function asked(questions: unknown, over: Partial<CableHost> = {}) {
+      const c = await connect(makeHost(over))
+      c.port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
+      await vi.waitFor(() => expect(c.port.types()).toContain('agents.end'))
+      await c.session.question('a1', 'q1', questions)
+      return c
+    }
+
+    it('reaches the host in the words it was asked with, and typed words as typed', async () => {
+      // '?yes' matched no row of the dialog, which typed it into its free-text row instead of choosing the option.
+      const { session, port, host } = await asked([
+        { key: 'Ship \ud83d it?', q: 'Ship \ud83d it?', options: ['\ud83dyes', 'no'] },
+        { key: 'Why?', q: 'Why?', options: ['tests'] },
+      ])
+      try {
+        port.say({ t: 'answer', agentId: 'a1', requestId: 'q1', answers: { 'Ship ? it?': '?yes', 'Why?': 'see ?' } })
+        await vi.waitFor(() => expect(host.answer).toHaveBeenCalled())
+        expect(host.answer).toHaveBeenCalledWith('a1', 'q1', { 'Ship \ud83d it?': '\ud83dyes', 'Why?': 'see ?' })
+      } finally { await session.stop() }
+    })
+
+    it('reaches the host in the words it was asked with when several options are chosen', async () => {
+      const { session, port, host } = await asked([{ key: 'k', q: 'Which?', options: ['\ud83da', 'b', 'c'], multi: true }])
+      try {
+        port.say({ t: 'answer', agentId: 'a1', requestId: 'q1', answers: { k: '?a, b' } })
+        await vi.waitFor(() => expect(host.answer).toHaveBeenCalled())
+        expect(host.answer).toHaveBeenCalledWith('a1', 'q1', { k: '\ud83da, b' })
+      } finally { await session.stop() }
+    })
+
+    it.each([
+      // An option holding ', ' was cut in two, neither half an option, and its '?' reached the host as the dial read it.
+      [['\ud83dYes, continue', 'No', 'Maybe'], '?Yes, continue, Maybe', '\ud83dYes, continue, Maybe'],
+      // Read greedily, '?a, b' is an option and '?c' none; only '?a' then 'b, ?c' spells the whole answer.
+      [['\ud83da, b', '\ud83da', 'b, \ud83dc'], '?a, b, ?c', '\ud83da, b, \ud83dc'],
+    ])('reaches the host in the words it was asked with when a chosen option holds a comma (%j)', async (options, read, words) => {
+      const { session, port, host } = await asked([{ key: 'k', q: 'Which?', options, multi: true }])
+      try {
+        port.say({ t: 'answer', agentId: 'a1', requestId: 'q1', answers: { k: read } })
+        await vi.waitFor(() => expect(host.answer).toHaveBeenCalled())
+        expect(host.answer).toHaveBeenCalledWith('a1', 'q1', { k: words })
+      } finally { await session.stop() }
+    })
+
+    it('is refused when two options read the same on the dial', async () => {
+      const { session, port, host } = await asked([{ key: 'k', q: 'Which?', options: ['\ud83dyes', '\udc00yes'] }])
+      try {
+        port.say({ t: 'answer', agentId: 'a1', requestId: 'q1', answers: { k: '?yes' } })
+        await vi.waitFor(() => expect(port.types()).toContain('toast'))
+        expect(host.answer).not.toHaveBeenCalled()
+      } finally { await session.stop() }
+    })
+
+    it('reviewed, reaches the host in the words it was asked with', async () => {
+      const answerReviewed = vi.fn<NonNullable<CableHost['answerReviewed']>>(async () => ({ ok: true }))
+      const { session, port } = await asked([{ key: 'Ship \ud83d it?', q: 'Ship \ud83d it?', options: ['\ud83dyes', 'no'] }],
+        { answerReviewed })
+      try {
+        port.say({ t: 'question.read', agentId: 'a1', requestId: 'read-1' })
+        await vi.waitFor(() => expect(port.types()).toContain('question.state'))
+        const { token } = port.sent.find((m) => m.t === 'question.state')!
+        port.say({ t: 'answer.reviewed', agentId: 'a1', requestId: 'send-1', token, choices: [1] })
+        await vi.waitFor(() => expect(port.types()).toContain('answer.receipt'))
+        expect(port.sent.find((m) => m.t === 'answer.receipt')).toMatchObject({ ok: true })
+        expect(answerReviewed).toHaveBeenCalledWith(expect.objectContaining({
+          answers: { 'Ship \ud83d it?': '\ud83dyes' }, selections: { 'Ship \ud83d it?': ['\ud83dyes'] } }))
+      } finally { await session.stop() }
+    })
+  })
+
+  it('keeps the leading drawer rows that fit one frame', () => {
+    const rows = Array.from({ length: 8 }, (_, i) => ({ agentId: `a${i}`, summary: 'x'.repeat(2000) }))
+    const kept = fitDrawer(rows)
+    expect(kept).toEqual(rows.slice(0, kept.length))
+    expect(kept.length).toBeGreaterThan(0)
+    expect(kept.length).toBeLessThan(8)
+    expect(Buffer.byteLength(JSON.stringify({ t: 'notif.replace', items: kept }), 'utf8')).toBeLessThanOrEqual(CABLE_MAX_PAYLOAD - 256)
+    expect(fitDrawer(rows.slice(0, 2))).toEqual(rows.slice(0, 2))
   })
 
   it.each(['turn-1', 'turn-2'])('a late read of %s cannot clear a newer snapshot occurrence', async readToken => {
@@ -1638,7 +1795,7 @@ describe('cable session', () => {
           expect(port.sent).toEqual([{ t: 'focus', agentId: 'r1' }])
         } else {
           if (outcome === 'refused') expect(port.sent).toContainEqual(expect.objectContaining({ t: 'machine.error', code: 'UNREACHABLE' }))
-          else expect(log).toHaveBeenCalledWith('cable: could not follow app machine (connection lost)')
+          else expect(log).toHaveBeenCalledWith('cable: could not follow app machine (Error)')
           await session.followApp('mac-local', 'a2')
           expect(port.sent.filter(m => m.t === 'focus').at(-1)).toEqual({ t: 'focus', agentId: 'a2' })
         }
@@ -1664,6 +1821,65 @@ describe('cable session', () => {
     expect(host.scrolled).toHaveBeenNthCalledWith(1, 'down', 0, 0)
     expect(host.scrolled).toHaveBeenNthCalledWith(2, 'move', 12, 0)
     expect(host.scrolled).toHaveBeenNthCalledWith(3, 'up', 3, -1800)
+    await session.stop()
+  })
+
+  it('takes a travel that is not finite as none and holds a huge one to the bound, logging once per stroke', async () => {
+    // `"dy":1e999` parses to Infinity: forwarded, it became a scroll that never ends in VS Code's terminal and
+    // a null in Harness's windows. The frame still carries its phase, so the stroke keeps its two ends.
+    const lines: string[] = []
+    const host = makeHost({ log: (line) => lines.push(line) })
+    const { session, port } = await connect(host)
+    port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
+    await settle()
+    const scrollLogs = () => lines.filter((line) => line.startsWith('cable: scroll'))
+
+    port.sayText('{"t":"scroll","phase":"down","dy":0}')
+    port.sayText('{"t":"scroll","phase":"move","dy":1e999}')
+    port.sayText('{"t":"scroll","phase":"move","dy":-1e999}')
+    port.sayText('{"t":"scroll","phase":"move","dy":1e300}')
+    port.sayText('{"t":"scroll","phase":"up","dy":-1e300,"v":1e999}')
+    await settle()
+
+    expect(host.scrolled).toHaveBeenNthCalledWith(1, 'down', 0, 0)
+    expect(host.scrolled).toHaveBeenNthCalledWith(2, 'move', 0, 0)
+    expect(host.scrolled).toHaveBeenNthCalledWith(3, 'move', 0, 0)
+    expect(host.scrolled).toHaveBeenNthCalledWith(4, 'move', 1000, 0)
+    expect(host.scrolled).toHaveBeenNthCalledWith(5, 'up', -1000, 0)
+    expect(scrollLogs()).toHaveLength(1)
+
+    // A new stroke may log again, and a normal one passes as it came.
+    port.sayText('{"t":"scroll","phase":"down","dy":0}')
+    port.sayText('{"t":"scroll","phase":"move","dy":12}')
+    port.sayText('{"t":"scroll","phase":"up","dy":3,"v":-1800}')
+    port.sayText('{"t":"scroll","phase":"down","dy":1e999}')
+    await settle()
+
+    expect(host.scrolled).toHaveBeenNthCalledWith(7, 'move', 12, 0)
+    expect(host.scrolled).toHaveBeenNthCalledWith(8, 'up', 3, -1800)
+    expect(host.scrolled).toHaveBeenNthCalledWith(9, 'down', 0, 0)
+    expect(scrollLogs()).toHaveLength(2)
+    await session.stop()
+  })
+
+  it('holds a huge velocity to the bound, logging it as a bounded report', async () => {
+    // hn plays a fling's velocity as an f32 (tui/src/dial.rs): `"v":1e300` is Infinity there, a fling that never
+    // decays. Every dial firmware caps its speed at 6000 px/s, so the bound takes nothing from a real throw.
+    const lines: string[] = []
+    const host = makeHost({ log: (line) => lines.push(line) })
+    const { session, port } = await connect(host)
+    port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
+    await settle()
+
+    port.sayText('{"t":"scroll","phase":"down","dy":0}')
+    port.sayText('{"t":"scroll","phase":"up","dy":0,"v":1e300}')
+    port.sayText('{"t":"scroll","phase":"down","dy":0}')
+    port.sayText('{"t":"scroll","phase":"up","dy":0,"v":-6000}')
+    await settle()
+
+    expect(host.scrolled).toHaveBeenNthCalledWith(2, 'up', 0, 10_000)
+    expect(host.scrolled).toHaveBeenNthCalledWith(4, 'up', 0, -6000)
+    expect(lines.filter((line) => line.startsWith('cable: scroll'))).toHaveLength(1)
     await session.stop()
   })
 
@@ -2212,9 +2428,27 @@ describe('cable session', () => {
 
     expect(port.sent.find((m) => m.t === 'summary' && m.agentId === 'a2'))
       .toMatchObject({ name: 'Device firmware voice', engine: 'codex', machine: '' })
-    expect(port.sent.find((m) => m.t === 'question')).toMatchObject({ name: 'Fix login screen', engine: 'claude', id: 'q1' })
+    await vi.waitFor(() =>
+      expect(port.sent.find((m) => m.t === 'question')).toEqual(expect.objectContaining({ name: 'Fix login screen', machine: '', id: 'q1' })))
     expect(port.sent.find((m) => m.t === 'summary' && m.agentId === 'ghost')).toMatchObject({ name: '', engine: '' })
     await session.stop()
+  })
+
+  it('bounds the name and machine on a summary and a question, so a hostile name cannot push either past the cap', async () => {
+    // Several KB each, its JSON wider still: quotes and control characters escape, the rest is multibyte.
+    const long = '"\u0001é😀\\'.repeat(800)
+    const { session, port } = await connect(makeHost({ describe: () => ({ name: long, engine: 'claude', machine: long }) }))
+    try {
+      port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' }); await settle()
+      await session.summary('a1', 'recap', 'body')
+      await session.question('a1', 'q1', [{ key: 'k', q: 'Ship it?', options: ['yes', 'no'] }])
+      for (const t of ['summary', 'question']) {
+        const frame = port.sent.find((m) => m.t === t)
+        expect(frame).toBeDefined()
+        for (const text of [frame!.name, frame!.machine] as string[]) expect(Buffer.byteLength(text, 'utf8')).toBeLessThanOrEqual(39)
+      }
+      expect(port.isOpen).toBe(true)
+    } finally { await session.stop() }
   })
 
   it('marks a summary quiet when the window already has that agent on screen', async () => {
@@ -2727,6 +2961,23 @@ describe('cable session', () => {
     port.say({ t: 'answer', agentId: 'a1', requestId: 'req-7', answers: { scope: 'wide', mode: 'plan' } })
     await vi.waitFor(() => expect(host.answer).toHaveBeenCalled())
     expect(host.answer).toHaveBeenCalledWith('a1', 'req-7', { scope: 'wide', mode: 'plan' })
+    await session.stop()
+  })
+
+  it('forwards an answer verbatim to a question that repeats a key or an option', async () => {
+    // Two options in the same words are one answer, not two the dial could have meant: refused, they sent the person to
+    // the terminal for a question the dial had always answered.
+    const host = makeHost()
+    const { session, port } = await connect(host)
+    port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
+    await vi.waitFor(() => expect(port.types()).toContain('agents.end'))
+    await session.question('a1', 'req-7', [
+      { key: 'scope', q: 'Which scope?', options: ['wide', 'wide', 'narrow'] },
+      { key: 'scope', q: 'Which scope?', options: ['wide'] },
+    ])
+    port.say({ t: 'answer', agentId: 'a1', requestId: 'req-7', answers: { scope: 'wide' } })
+    await vi.waitFor(() => expect(host.answer).toHaveBeenCalled())
+    expect(host.answer).toHaveBeenCalledWith('a1', 'req-7', { scope: 'wide' })
     await session.stop()
   })
 
@@ -3550,7 +3801,7 @@ describe('hello capabilities', () => {
     } finally { await session.stop() }
   })
 
-  it('a drawer replaced without a question row loses that question: the next ask of it is sent', async () => {
+  it('a drawer replaced without a question row carries it as one, and the dial is not asked it again', async () => {
     const { session, port } = await connect(richHost())
     const ask = [{ key: 'k', q: 'Ship it?', options: ['yes', 'no'] }]
     try {
@@ -3558,11 +3809,443 @@ describe('hello capabilities', () => {
       await vi.waitFor(() => expect(port.types()).toContain('notif.replace'))
       await session.question('a1', 'q1', ask)
       await session.question('a2', 'q2', ask)
-      // A window's unread list that names a1's question as a row keeps it on the dial; a2's is gone with the old drawer.
-      await session.replaceNotifications([{ agentId: 'a1', machineId: 'm1', question: true, text: 'Ship it?' }])
       port.sent.length = 0
+      // A window's unread list that names a1's question keeps it on the dial; a2's goes back on it as a row of its own.
+      // No ask: the dial beeps and wakes at each, and this list changes whenever the window reads or marks anything.
+      await session.replaceNotifications([{ agentId: 'a1', machineId: 'm1', question: true, text: 'Ship it?' }])
+      expect(port.types()).toEqual(['notif.replace'])
+      expect(ofType(port, 'notif.replace')[0].items).toEqual([
+        { agentId: 'a2', name: 'Device firmware voice', machine: '', summary: 'Ship it?', question: true },
+        expect.objectContaining({ agentId: 'a1', question: true }),
+      ])
+      // Each is on the dial: the core asking again as the devices reconnect sends nothing.
       await session.question('a1', 'q1', ask)
       await session.question('a2', 'q2', ask)
+      expect(port.types()).toEqual(['notif.replace'])
+    } finally { await session.stop() }
+  })
+
+  it('an open question whose id the dial cannot keep is not carried as a row, nor asked again at each replace', async () => {
+    const { session, port } = await connect(richHost())
+    try {
+      port.say({ t: 'hello', product: 'harness', mac: 'aa:bb', fw: '1.0.0' })
+      await vi.waitFor(() => expect(port.types()).toContain('notif.replace'))
+      await session.question('x'.repeat(48), 'q1', [{ key: 'k', q: 'Ship it?', options: ['yes', 'no'] }])
+      port.sent.length = 0
+      await session.replaceNotifications([])
+      await session.replaceNotifications([])
+      // The dial drops a question frame of that id: asking it again sent one for nothing at every change of the list.
+      expect(port.types()).toEqual(['notif.replace', 'notif.replace'])
+      expect(ofType(port, 'notif.replace')[0].items).toEqual([])
+    } finally { await session.stop() }
+  })
+
+  it('a drawer that names an open question as news, or not at all, carries the question in its place', async () => {
+    const { session, port } = await connect(richHost())
+    try {
+      port.say({ t: 'hello', product: 'harness', mac: 'aa:bb', fw: '1.0.0' })
+      await vi.waitFor(() => expect(port.types()).toContain('notif.replace'))
+      await session.question('a1', 'q1', [{ key: 'k', q: 'Ship it?\nThe tests pass.', options: ['yes', 'no'] }])
+      port.sent.length = 0
+      // The window's mark for a1 turned into news: a drawer carries one row an agent, and the open question is that row.
+      await session.replaceNotifications([{ agentId: 'a1', machineId: 'm1', question: false, text: 'The build passed, all green.' }])
+      expect(port.types()).toEqual(['notif.replace'])
+      expect(ofType(port, 'notif.replace')[0].items).toEqual([
+        { agentId: 'a1', name: 'Fix login screen', machine: '', summary: 'Ship it? The tests pass.', question: true }])
+      port.sent.length = 0
+      // The person looked at a1 in the window: its mark is gone, its question is not.
+      await session.replaceNotifications([])
+      expect(port.sent).toEqual([{ t: 'notif.replace', items: [
+        { agentId: 'a1', name: 'Fix login screen', machine: '', summary: 'Ship it? The tests pass.', question: true }] }])
+    } finally { await session.stop() }
+  })
+
+  it('a drawer holds eight rows, open questions first: one past them comes back as a row, with no ring', async () => {
+    const ask = [{ key: 'k', q: 'Ship it?', options: ['yes', 'no'] }]
+    const round = { t: 'hello', product: 'harness', mac: 'aa:bb', fw: '1.0.0' }
+    const who = { name: '', machine: '' }   // q8 is on no list
+    /** Nine questions rung live, then two changes of the window's list: what follows the drawers. */
+    const afterDrawers = async (hello: Record<string, unknown>) => {
+      const { session, port } = await connect(richHost())
+      try {
+        port.say(hello)
+        await vi.waitFor(() => expect(port.types()).toContain('notif.replace'))
+        for (let i = 0; i < 9; i++) await session.question(`q${i}`, `id${i}`, ask)
+        expect(ofType(port, 'question')).toHaveLength(9)
+        port.sent.length = 0
+        await session.replaceNotifications([{ agentId: 'b', machineId: 'm1', question: false, text: 'The build passed, all green.' }])
+        await session.replaceNotifications([])
+        expect(ofType(port, 'notif.replace')).toHaveLength(2)
+        for (const drawer of ofType(port, 'notif.replace'))
+          expect((drawer.items as Array<{ agentId: string }>).map((row) => row.agentId)).toEqual(['q0', 'q1', 'q2', 'q3', 'q4', 'q5', 'q6', 'q7'])
+        return port.sent.filter((m) => m.t !== 'notif.replace')
+      } finally { await session.stop() }
+    }
+    // A dial that says questionTier: the ninth goes back on it as a row after each drawer, with no ring.
+    const row = { t: 'question', agentId: 'q8', ...who, id: 'id8', tier: 'list', questions: [{ key: '', q: 'Ship it?', options: [] }] }
+    expect(await afterDrawers({ ...round, questionTier: 'v1' })).toEqual([row, row])
+    // An older round dial would ring, and so would one that says a tier this daemon does not know: neither is sent it.
+    expect(await afterDrawers(round)).toEqual([])
+    expect(await afterDrawers({ ...round, questionTier: 'v2' })).toEqual([])
+    // A Pro mutes a question sent again by its id and words: the plain frame, its words as the ring had them.
+    const plain = { t: 'question', agentId: 'q8', ...who, id: 'id8', questions: [{ key: '', q: 'Ship it?', options: [] }] }
+    expect(await afterDrawers({ ...PRO_HELLO })).toEqual([plain, plain])
+  })
+
+  it('a held question past the drawer is never sent to a Pro, and goes back silent to a questionTier dial', async () => {
+    const ask = [{ key: 'k', q: 'Ship it?', options: ['yes', 'no'] }]
+    const notice = [{ key: 'notice', q: 'Tests pass.', options: ['In Terminal'] }]
+    const NID = `${SHOWN_ONLY_PREFIX}n1`
+    const afterDrawers = async (hello: Record<string, unknown>) => {
+      const { session, port } = await connect(richHost())
+      try {
+        port.say(hello)
+        await vi.waitFor(() => expect(port.types()).toContain('notif.replace'))
+        for (let i = 0; i < 8; i++) await session.question(`q${i}`, `id${i}`, ask)
+        await session.hold('h', NID, notice)          // restored after the devices process restarted: it rang before
+        port.sent.length = 0
+        await session.replaceNotifications([])
+        await session.replaceNotifications([])
+        for (const drawer of ofType(port, 'notif.replace'))
+          expect((drawer.items as Array<{ agentId: string }>).map((row) => row.agentId)).not.toContain('h')
+        return ofType(port, 'question').filter((m) => m.agentId === 'h')
+      } finally { await session.stop() }
+    }
+    // A Pro mutes a repeat only by a hash in its RAM, which a restart of the computer cleared: the frame would beep.
+    expect(await afterDrawers({ ...PRO_HELLO })).toEqual([])
+    expect(await afterDrawers({ t: 'hello', product: 'harness', mac: 'aa:bb', fw: '1.0.0', questionTier: 'v1' }))
+      .toEqual([expect.objectContaining({ id: NID, tier: 'list' }), expect.objectContaining({ id: NID, tier: 'list' })])
+  })
+
+  it("a question the greeting's drawer carried was told: a later drawer that cuts it does not ring", async () => {
+    const host = richHost()
+    const { session, port } = await connect(host)
+    const ask = [{ key: 'k', q: 'Ship it?', options: ['yes', 'no'] }]
+    const eight = ['q0', 'q1', 'q2', 'q3', 'q4', 'q5', 'q6', 'q7']
+    try {
+      port.say({ t: 'hello', product: 'harness', mac: 'aa:bb', fw: '1.0.0' })
+      await vi.waitFor(() => expect(port.types()).toContain('notif.replace'))
+      for (let i = 0; i < 9; i++) await session.question(`q${i}`, `id${i}`, ask)
+      host.listUnread = () => [{ agentId: 'q8', machineId: 'm1', question: true, text: 'Ship it?' }]
+      port.sent.length = 0
+      // It rebooted. Its drawer carries q8's question as the window's row; the walk rings the eight it does not carry.
+      port.say({ t: 'hello', product: 'harness', mac: 'aa:bb', fw: '1.0.1' })
+      await vi.waitFor(() => expect(ofType(port, 'question')).toHaveLength(8))
+      await settle()
+      expect(ofType(port, 'question').map((m) => m.agentId)).toEqual(eight)
+      port.sent.length = 0
+      // Live: the drawer's eight rows are q0 to q7. q8 was shown as a row, so this older dial is not sent it again.
+      await session.replaceNotifications([])
+      expect(port.types()).toEqual(['notif.replace'])
+      expect((port.sent[0].items as Array<{ agentId: string }>).map((item) => item.agentId)).toEqual(eight)
+    } finally { await session.stop() }
+  })
+
+  it('a told question the dial lost, delivered again unchanged, follows the same rule and stays one small frame', async () => {
+    const long = [{ key: 'k', q: `Ship  it?\n${'x'.repeat(6000)}`, options: ['yes', 'no'] }]
+    const round = { t: 'hello', product: 'harness', mac: 'aa:bb', fw: '1.0.0' }
+    const who = { name: 'Fix login screen', machine: '' }
+    const again = async (hello: Record<string, unknown>) => {
+      const { session, port } = await connect(richHost())
+      try {
+        port.say(hello)
+        await vi.waitFor(() => expect(port.types()).toContain('notif.replace'))
+        await session.question('a1', 'q1', long)      // rang
+        await session.turnDone('a1')                  // its turn moved on without a close: no longer owed
+        await session.replaceNotifications([])        // the drawer drops its row
+        port.sent.length = 0
+        await session.question('a1', 'q1', long)      // the core asks again as the devices reconnect
+        await session.question('a1', 'q1', long)      // and again: the dial holds it now
+        return port.sent
+      } finally { await session.stop() }
+    }
+    const row = { t: 'question', agentId: 'a1', ...who, id: 'q1', tier: 'list', questions: [{ key: '', q: `Ship it? ${'x'.repeat(230)}`, options: [] }] }
+    expect(await again({ ...round, questionTier: 'v1' })).toEqual([row])
+    expect(Buffer.byteLength(JSON.stringify(row), 'utf8')).toBeLessThan(600)
+    expect(await again(round)).toEqual([])
+    expect(await again({ ...PRO_HELLO })).toEqual([{ t: 'question', agentId: 'a1', ...who, id: 'q1', questions: row.questions }])
+  })
+
+  it('a told question whose id the dial cannot keep is not given back, as a row or as the plain frame', async () => {
+    const ask = [{ key: 'k', q: 'Ship it?', options: ['yes', 'no'] }]
+    const id48 = 'x'.repeat(48)
+    for (const hello of [{ t: 'hello', product: 'harness', mac: 'aa:bb', fw: '1.0.0', questionTier: 'v1' }, { ...PRO_HELLO }]) {
+      const { session, port } = await connect(richHost())
+      try {
+        port.say(hello)
+        await vi.waitFor(() => expect(port.types()).toContain('notif.replace'))
+        await session.question(id48, 'q1', ask)       // rung once, as at the base: told
+        await session.replaceNotifications([])        // no row carries it
+        port.sent.length = 0
+        await session.question(id48, 'q1', ask)       // the core asks again as the devices reconnect
+        await session.replaceNotifications([])
+        expect(port.types()).toEqual(['notif.replace'])
+      } finally { await session.stop() }
+    }
+  })
+
+  it('an answerable question whose objects carry kilobytes beyond what the dial reads rings as one small frame', async () => {
+    const q = 'Ship it?'
+    const ask = [{ key: 'k', q, options: ['yes', 'no'], detail: 'x'.repeat(9000) }]
+    const log = vi.fn()
+    const { session, port } = await connect(richHost({ log }))
+    try {
+      port.say({ t: 'hello', product: 'harness', mac: 'aa:bb', fw: '1.0.0' })
+      await vi.waitFor(() => expect(port.types()).toContain('notif.replace'))
+      port.sent.length = 0
+      await session.question('a1', 'q1', ask)
+      const rung = ofType(port, 'question')
+      expect(rung).toHaveLength(1)
+      expect(Buffer.byteLength(JSON.stringify(rung[0]), 'utf8')).toBeLessThanOrEqual(CABLE_MAX_PAYLOAD)
+      expect(rung[0].questions).toEqual([{ key: '', q: noticeSummary(q), options: [] }])
+      expect(log.mock.calls.map(([line]) => String(line)).filter((line) => line.includes('dropped'))).toEqual([])
+    } finally { await session.stop() }
+  })
+
+  it('a question of an agent whose id the dial cannot keep is not rung, nor closed', async () => {
+    const ask = [{ key: 'k', q: 'Ship it?', options: ['yes', 'no'] }]
+    const big = 'x'.repeat(9000)
+    for (const hello of [{ t: 'hello', product: 'harness', mac: 'aa:bb', fw: '1.0.0' },
+      { t: 'hello', product: 'harness', mac: 'aa:bb', fw: '1.0.0', questionTier: 'v1' }, { ...PRO_HELLO }]) {
+      const log = vi.fn()
+      const { session, port } = await connect(richHost({ log }))
+      try {
+        port.say(hello)
+        await vi.waitFor(() => expect(port.types()).toContain('notif.replace'))
+        port.sent.length = 0
+        await session.question(big, 'q1', ask)
+        await session.questionClose(big, 'q1')
+        expect(ofType(port, 'question')).toEqual([])
+        expect(ofType(port, 'question.close')).toEqual([])
+        expect(log.mock.calls.map(([line]) => String(line)).filter((line) => line.includes('dropped'))).toEqual([])
+      } finally { await session.stop() }
+    }
+  })
+
+  it('a question rung on a Pro and given back after it lost it carries the same words both times', async () => {
+    const q = `Ship  it?\nThe  tests pass. ${'Étape très longue. '.repeat(20)}`
+    const ask = [{ key: 'k', q, options: ['yes', 'no'] }]
+    const { session, port } = await connect(richHost())
+    try {
+      port.say({ ...PRO_HELLO })
+      await vi.waitFor(() => expect(port.types()).toContain('notif.replace'))
+      port.sent.length = 0
+      await session.question('a1', 'q1', ask)      // rung
+      await session.turnDone('a1')                  // its turn moved on without a close: no longer owed
+      await session.replaceNotifications([])        // the drawer drops its row
+      await session.question('a1', 'q1', ask)       // the core asks again as the devices reconnect: the plain frame
+      const words = ofType(port, 'question').map((m) => (m.questions as Array<{ q: string }>)[0].q)
+      // The Pro mutes a repeat by a hash of the id and these words, and reads them as the drawer row shows them.
+      expect(words).toEqual([noticeSummary(q), noticeSummary(q)])
+    } finally { await session.stop() }
+  })
+
+  it('a Pro is never rung, given back or closed a question whose id it closes nothing by', async () => {
+    const ask = [{ key: 'k', q: 'Ship it?', options: ['yes', 'no'] }]
+    // pro_cable.c ignores a question.close whose id is 64 bytes or more: a ring for it could never be closed.
+    const asked = async (id: string) => {
+      const { session, port } = await connect(richHost())
+      try {
+        port.say({ ...PRO_HELLO })
+        await vi.waitFor(() => expect(port.types()).toContain('notif.replace'))
+        port.sent.length = 0
+        await session.question('a1', id, ask)
+        await session.replaceNotifications([])        // no row of the window's carries it
+        await session.questionClose('a1', id)
+        return port.sent.filter((m) => m.t === 'question' || m.t === 'question.close' ||
+          (m.t === 'notif.replace' && (m.items as unknown[]).length > 0)).map((m) => m.t)
+      } finally { await session.stop() }
+    }
+    expect(await asked('é'.repeat(32))).toEqual([])   // 64 UTF-8 bytes, as the firmware's strlen counts them
+    expect(await asked('\u0000ship')).toEqual([])     // cJSON keeps the NUL: strlen reads an empty id, which it ignores too
+    expect(await asked('x'.repeat(63))).toEqual(['question', 'notif.replace', 'question.close'])
+  })
+
+  it('a refused question whose id is past the bound an answerable one has is not sent, nor filed as a row', async () => {
+    const plan = [{ key: 'k', q: 'Approve this plan?', options: [] }]
+    for (const hello of [{ t: 'hello', product: 'harness', mac: 'aa:bb', fw: '1.0.0', questionTier: 'v1' }, { ...PRO_HELLO }]) {
+      const log = vi.fn()
+      const { session, port } = await connect(richHost({ log }))
+      try {
+        port.say(hello)
+        await vi.waitFor(() => expect(port.types()).toContain('notif.replace'))
+        port.sent.length = 0
+        await session.question('a1', 'x'.repeat(8000), plan)
+        await session.replaceNotifications([])
+        await session.replaceNotifications([])
+        expect(port.types()).toEqual(['notif.replace', 'notif.replace'])
+        for (const drawer of ofType(port, 'notif.replace')) expect(drawer.items).toEqual([])
+        expect(log.mock.calls.map(([line]) => String(line)).filter((line) => line.includes('dropped'))).toEqual([])
+      } finally { await session.stop() }
+    }
+  })
+
+  it('the close of a question whose id no frame could carry is not sent', async () => {
+    const log = vi.fn()
+    const { session, port } = await connect(richHost({ log }))
+    try {
+      port.say({ t: 'hello', product: 'harness', mac: 'aa:bb', fw: '1.0.0', questionTier: 'v1' })
+      await vi.waitFor(() => expect(port.types()).toContain('notif.replace'))
+      await session.question('a1', 'q1', [{ key: 'k', q: 'Ship it?', options: ['yes', 'no'] }])
+      const big = 'x'.repeat(9000)
+      await session.question('a1', big, [{ key: 'k', q: 'Approve this plan?', options: [] }])
+      port.sent.length = 0
+      await session.questionClose('a1', big)
+      expect(port.sent).toEqual([])
+      expect(log.mock.calls.map(([line]) => String(line)).filter((line) => line.includes('dropped'))).toEqual([])
+      await session.questionClose('a1', big)
+      expect(port.sent).toEqual([])
+    } finally { await session.stop() }
+  })
+
+  it('a question delivered again while its row is being written is sent once', async () => {
+    const { session, port } = await connect(richHost())
+    const ask = [{ key: 'k', q: 'Ship it?', options: ['yes', 'no'] }]
+    try {
+      port.say({ t: 'hello', product: 'harness', mac: 'aa:bb', fw: '1.0.0', questionTier: 'v1' })
+      await vi.waitFor(() => expect(port.types()).toContain('notif.replace'))
+      for (let i = 0; i < 9; i++) await session.question(`q${i}`, `id${i}`, ask)
+      port.sent.length = 0
+      // The core asks q8 again at the moment the walk's row for it is on its way out.
+      const write = port.write.bind(port)
+      let again: Promise<void> | undefined
+      port.write = async (bytes) => {
+        await write(bytes)
+        if (!again && port.types().at(-1) === 'question') again = session.question('q8', 'id8', ask)
+      }
+      await session.replaceNotifications([])
+      await again
+      expect(ofType(port, 'question')).toEqual([expect.objectContaining({ agentId: 'q8', tier: 'list' })])
+    } finally { await session.stop() }
+  })
+
+  it('the welcome says question.tier only to a dial that says questionTier v1', async () => {
+    const round = { t: 'hello', product: 'harness', mac: 'aa:bb', fw: '1.0.0' }
+    const features = async (hello: Record<string, unknown>) => {
+      const { session, port } = await connect(richHost())
+      try {
+        port.say(hello)
+        await vi.waitFor(() => expect(port.types()).toContain('welcome'))
+        return ofType(port, 'welcome')[0].features as string[]
+      } finally { await session.stop() }
+    }
+    expect(await features({ ...round, questionTier: 'v1' })).toContain('question.tier')
+    for (const hello of [round, { ...round, questionTier: 'v2' }, { ...round, questionTier: 'V1' }, { ...round, questionTier: true }, { ...PRO_HELLO }])
+      expect(await features(hello)).not.toContain('question.tier')
+  })
+
+  it('names questionTier in the greeting line', async () => {
+    const log = vi.fn()
+    const { session, port } = await connect(richHost({ log }))
+    try {
+      port.say({ t: 'hello', product: 'harness', mac: 'aa:bb', fw: '1.0.0', questionTier: 'v1' })
+      await vi.waitFor(() => expect(log.mock.calls.map(([line]) => line)).toContainEqual(expect.stringMatching(/caps questionTier$/)))
+    } finally { await session.stop() }
+  })
+
+  it('a drawer holds its questions before news: one it has room for is never asked again as the list changes', async () => {
+    const { session, port } = await connect(richHost())
+    const ask = [{ key: 'k', q: 'Ship it?', options: ['yes', 'no'] }]
+    try {
+      port.say({ t: 'hello', product: 'harness', mac: 'aa:bb', fw: '1.0.0' })
+      await vi.waitFor(() => expect(port.types()).toContain('notif.replace'))
+      for (let i = 0; i < 8; i++) await session.question(`q${i}`, `id${i}`, ask)
+      port.sent.length = 0
+      // The window names q7's question after b's news: the eight rows hold the eight questions, and b's news gives way.
+      const list = [{ agentId: 'b', machineId: 'm1', question: false, text: 'The build passed, all green.' },
+        { agentId: 'q7', machineId: 'm1', question: true, text: 'Ship it?' }]
+      await session.replaceNotifications(list)
+      await session.replaceNotifications(list)
+      expect(port.types()).toEqual(['notif.replace', 'notif.replace'])
+      expect((ofType(port, 'notif.replace')[1].items as Array<{ agentId: string }>).map((row) => row.agentId))
+        .toEqual(['q0', 'q1', 'q2', 'q3', 'q4', 'q5', 'q6', 'q7'])
+    } finally { await session.stop() }
+  })
+
+  it("a drawer row's words are the dial's own preview, so eight long rows stay one frame and a read row stays read", async () => {
+    const { session, port } = await connect(richHost())
+    const long = `Approve  this\n\nplan? ${'Étape très longue. '.repeat(300)}`
+    // What the dial keeps of it (recap_preview): whitespace folded to one space, cut on a whole character at 239 bytes.
+    let preview = ''
+    for (const ch of long.split(/[ \t-\r]+/).filter(Boolean).join(' ')) {
+      if (Buffer.byteLength(preview + ch, 'utf8') > 239) break
+      preview += ch
+    }
+    preview = preview.trimEnd()
+    try {
+      port.say({ t: 'hello', product: 'harness', mac: 'aa:bb', fw: '1.0.0' })
+      await vi.waitFor(() => expect(port.types()).toContain('notif.replace'))
+      await session.question('a0', 'id0', [{ key: 'k', q: long, options: ['yes', 'no'] }])
+      port.sent.length = 0
+      await session.replaceNotifications(Array.from({ length: 7 }, (_, i) =>
+        ({ agentId: `w${i}`, machineId: 'm1', question: true, text: long })))
+      expect(port.types()).toEqual(['notif.replace'])
+      const items = ofType(port, 'notif.replace')[0].items as Array<{ agentId: string; summary: string }>
+      expect(items.map((row) => row.agentId)).toEqual(['a0', 'w0', 'w1', 'w2', 'w3', 'w4', 'w5', 'w6'])
+      for (const row of items) expect(row.summary).toBe(preview)
+    } finally { await session.stop() }
+  })
+
+  it("a drawer row keeps its words' control characters, as the dial previews them, so a read question stays read", async () => {
+    const { session, port } = await connect(richHost())
+    try {
+      port.say({ t: 'hello', product: 'harness', mac: 'aa:bb', fw: '1.0.0' })
+      await vi.waitFor(() => expect(port.types()).toContain('notif.replace'))
+      // Colored text: the dial filed the asked question with its escapes and bell (recap_preview folds only whitespace).
+      await session.question('a0', 'id0', [{ key: 'k', q: '\u001b[1mShip\u001b[0m  it?\u0007\u007f', options: ['yes', 'no'] }])
+      port.sent.length = 0
+      await session.replaceNotifications([])
+      expect(ofType(port, 'notif.replace')[0].items).toMatchObject([{ agentId: 'a0', summary: '\u001b[1mShip\u001b[0m it?\u0007\u007f' }])
+    } finally { await session.stop() }
+  })
+
+  it('a replace overtaken by a newer one sends nothing: the newer carries each open question', async () => {
+    let finish!: (value: Array<{ recap: string; text: string }>) => void
+    const history = new Promise<Array<{ recap: string; text: string }>>(resolve => { finish = resolve })
+    const host = richHost()
+    const { session, port } = await connect(host)
+    try {
+      port.say({ t: 'hello', product: 'harness', mac: 'aa:bb', fw: '1.0.0' })
+      await vi.waitFor(() => expect(port.types()).toContain('notif.replace'))
+      await session.question('a1', 'q1', [{ key: 'k', q: 'Ship it?', options: ['yes', 'no'] }])
+      host.recentSummaries = () => history
+      port.sent.length = 0
+      const older = session.replaceNotifications([{ agentId: 'a2', machineId: 'm1', question: false, text: '' }])
+      await session.replaceNotifications([])
+      finish([{ recap: 'Old result.', text: 'Old result.' }]); await older
+      expect(port.sent).toEqual([{ t: 'notif.replace', items: [
+        { agentId: 'a1', name: 'Fix login screen', machine: '', summary: 'Ship it?', question: true }] }])
+    } finally { await session.stop() }
+  })
+
+  it('answers agents.list with a drawer that carries each open question, and asks none', async () => {
+    const { session, port } = await connect(richHost())
+    try {
+      port.say({ t: 'hello', product: 'harness', mac: 'aa:bb', fw: '1.0.0' })
+      await vi.waitFor(() => expect(port.types()).toContain('notif.replace'))
+      await session.question('a1', 'q1', [{ key: 'k', q: 'Ship it?', options: ['yes', 'no'] }])
+      port.sent.length = 0
+      port.say({ t: 'agents.list' })
+      await vi.waitFor(() => expect(port.types()).toContain('notif.replace'))
+      await settle()
+      expect(ofType(port, 'notif.replace')[0].items).toMatchObject([{ agentId: 'a1', question: true, summary: 'Ship it?' }])
+      expect(ofType(port, 'question')).toEqual([])
+    } finally { await session.stop() }
+  })
+
+  it('a dial that greets anew with a drawer naming an open question is not asked it again', async () => {
+    const host = richHost()
+    const { session, port } = await connect(host)
+    try {
+      port.say({ t: 'hello', product: 'harness', mac: 'aa:bb', fw: '1.0.0' })
+      await vi.waitFor(() => expect(port.types()).toContain('notif.replace'))
+      await session.question('a1', 'q1', [{ key: 'k', q: 'Ship it?', options: ['yes', 'no'] }])
+      await session.question('a2', 'q2', [{ key: 'k', q: 'Merge it?', options: ['yes', 'no'] }])
+      host.listUnread = () => [{ agentId: 'a1', machineId: 'm1', question: true, text: 'Ship it?' }]
+      port.sent.length = 0
+      port.say({ t: 'hello', product: 'harness', mac: 'aa:bb', fw: '1.0.1' })
+      await vi.waitFor(() => expect(port.types()).toContain('question'))
+      await settle()
       expect(ofType(port, 'question')).toMatchObject([{ agentId: 'a2', id: 'q2' }])
     } finally { await session.stop() }
   })
@@ -3580,7 +4263,7 @@ describe('hello capabilities', () => {
     } finally { await session.stop() }
   })
 
-  it('answers resync with machines, swarms, agents, notices and open questions, at most once per 2 s', async () => {
+  it('answers resync with machines, swarms, agents and a drawer that carries the open questions, at most once per 2 s', async () => {
     const { session, port } = await connect(richHost())
     try {
       port.say({ ...PRO_HELLO })
@@ -3593,15 +4276,55 @@ describe('hello capabilities', () => {
       await session.summary('a3', 'Done.', 'Done.')
       port.sent.length = 0
       port.say({ t: 'resync' })
-      await vi.waitFor(() => expect(ofType(port, 'question')).toHaveLength(2))
+      await vi.waitFor(() => expect(port.types()).toContain('notif.replace'))
       const types = port.types()
       for (const t of ['machines.begin', 'swarms', 'agents.begin', 'agents.end', 'notif.replace']) expect(types).toContain(t)
-      // The closed one is not resent; the notice is.
-      expect(ofType(port, 'question')).toMatchObject([{ agentId: 'a1', id: 'q1' }, { agentId: 'a3', id: `${SHOWN_ONLY_PREFIX}n3` }])
+      // The closed one is not carried; the notice is. As rows: an ask would ring again what the dial already rang for.
+      expect(ofType(port, 'notif.replace')[0].items).toMatchObject([
+        { agentId: 'a1', question: true, summary: 'Ship it?' }, { agentId: 'a3', question: true, summary: 'Tests pass.' }])
+      expect(ofType(port, 'question')).toEqual([])
       port.sent.length = 0
       port.say({ t: 'resync' })
       await settle()
       expect(port.sent).toEqual([])   // inside the window
+    } finally { await session.stop() }
+  })
+
+  it('a held question is read when its row is opened, and never asked: not as it is held, at a greeting, a drawer replace or a resync', async () => {
+    const { session, port } = await connect(richHost())
+    const notice = [{ key: 'notice', q: 'Tests pass.', options: ['In Terminal'] }]
+    const NID = `${SHOWN_ONLY_PREFIX}n1`
+    const asked = (agentId: string) => ofType(port, 'question').filter((m) => m.agentId === agentId)
+    try {
+      port.say({ ...PRO_HELLO })
+      await vi.waitFor(() => expect(port.types()).toContain('notif.replace'))
+      port.sent.length = 0
+      await session.hold('a3', NID, notice)
+      expect(port.sent).toEqual([])
+      port.say({ t: 'question.read', agentId: 'a3', requestId: 'read-1' })
+      await vi.waitFor(() => expect(ofType(port, 'question.state')).toHaveLength(1))
+      expect(ofType(port, 'question.state')[0]).toMatchObject({ ok: true, id: NID, questions: [{ q: 'Tests pass.' }] })
+      // A real question is the barrier at a greeting, which asks it again, so the held one would be asked by then.
+      await session.question('a1', 'q1', [{ key: 'k', q: 'Ship it?', options: ['yes', 'no'] }])
+      // Rebooted on a new image: the same hello again is a keepalive, which asks nothing.
+      port.say({ ...PRO_HELLO, fw: '1.0.1' })
+      await vi.waitFor(() => expect(asked('a1')).toHaveLength(2))
+      await settle()
+      expect(asked('a3')).toEqual([])
+      await session.replaceNotifications([{ agentId: 'a3', machineId: 'local', question: true, text: 'Tests pass.' }])
+      // A resync's drawer carries the open questions as rows and asks none: the held one is a row there, never asked.
+      const drawers = ofType(port, 'notif.replace').length
+      port.say({ t: 'resync' })
+      await vi.waitFor(() => expect(ofType(port, 'notif.replace')).toHaveLength(drawers + 1))
+      expect(ofType(port, 'notif.replace')[drawers].items).toContainEqual(expect.objectContaining({ agentId: 'a3', question: true }))
+      await settle()
+      expect(asked('a3')).toEqual([])
+      expect(session.owedQuestions()).toContainEqual(expect.objectContaining({ agentId: 'a3', id: NID, held: true }))
+      await session.questionClose('a3', NID)
+      expect(ofType(port, 'question.close')).toMatchObject([{ agentId: 'a3', id: NID }])
+      port.say({ t: 'question.read', agentId: 'a3', requestId: 'read-2' })
+      await vi.waitFor(() => expect(ofType(port, 'question.state')).toHaveLength(2))
+      expect(ofType(port, 'question.state')[1]).toMatchObject({ ok: false })
     } finally { await session.stop() }
   })
 
@@ -4047,10 +4770,82 @@ describe('hello capabilities', () => {
     } finally { await session.stop() }
   })
 
+  describe('a question the inbox refuses', () => {
+    const text = `Approve  this\n\nplan? ${'Étape très longue. '.repeat(600)}`   // 12 kB: over the frame cap as it comes
+    const plan = [{ key: 'plan', q: text, options: ['Approve', 'Keep planning'] }]
+    let summary = ''
+    for (const ch of text.split(/[ \t-\r]+/).filter(Boolean).join(' ')) {
+      if (Buffer.byteLength(summary + ch, 'utf8') > 239) break
+      summary += ch
+    }
+    summary = summary.trimEnd()
+    const who = { name: 'Fix login screen', machine: '' }
+    const ring = { t: 'question', agentId: 'a1', ...who, id: 'q1', questions: [{ key: '', q: summary, options: [] }] }
+
+    it('reaches the dial as its small entry, rings once, is read as its summary and stays on the drawer until closed', async () => {
+      const { session, port } = await connect(richHost())
+      try {
+        port.say({ t: 'hello', product: 'harness', mac: 'aa:bb', fw: '1.0.0' })
+        await vi.waitFor(() => expect(port.types()).toContain('notif.replace'))
+        port.sent.length = 0
+        await session.question('a1', 'q1', plan)
+        await session.question('a1', 'q1', plan)   // the core asks again as the devices reconnect: nothing
+        expect(port.sent).toEqual([ring])
+        expect(Buffer.byteLength(JSON.stringify(ring), 'utf8')).toBeLessThan(600)
+        port.sent.length = 0
+        await session.replaceNotifications([])
+        expect(port.sent).toEqual([{ t: 'notif.replace', items: [{ agentId: 'a1', name: who.name, machine: '', summary, question: true }] }])
+        port.say({ t: 'question.read', agentId: 'a1', requestId: 'read-1' })
+        await vi.waitFor(() => expect(port.types()).toContain('question.state'))
+        const state = ofType(port, 'question.state')[0]
+        expect(state).toMatchObject({ ok: true, agentId: 'a1', id: 'q1', requestId: 'read-1', submitted: false,
+          questions: [{ key: '', q: summary, options: [] }] })
+        port.say({ t: 'answer.reviewed', agentId: 'a1', requestId: 'send-1', token: state.token, choices: [1] })
+        await vi.waitFor(() => expect(port.types()).toContain('answer.receipt'))
+        expect(ofType(port, 'answer.receipt')[0]).toMatchObject({ ok: false })
+        port.sent.length = 0
+        await session.questionClose('a1', 'q1')
+        await session.replaceNotifications([])
+        expect(port.sent).toEqual([{ t: 'question.close', agentId: 'a1', id: 'q1' }, { t: 'notif.replace', items: [] }])
+      } finally { await session.stop() }
+    })
+
+    it('reaches a Pro in the same words each time', async () => {
+      const { session, port } = await connect(richHost())
+      try {
+        port.say({ ...PRO_HELLO })
+        await vi.waitFor(() => expect(port.types()).toContain('notif.replace'))
+        port.sent.length = 0
+        await session.question('a1', 'q1', plan)
+        expect(port.sent).toEqual([ring])
+        await session.turnDone('a1')
+        await session.replaceNotifications([])   // its row leaves the dial
+        port.sent.length = 0
+        await session.question('a1', 'q1', plan)
+        expect(port.sent).toEqual([ring])        // the Pro's mute is a hash of the id and these words
+      } finally { await session.stop() }
+    })
+
+    it('with no agent or no id is not kept and not sent', async () => {
+      const { session, port } = await connect(richHost())
+      const ask = [{ key: 'k', q: 'Ship it?', options: ['yes', 'no'] }]
+      try {
+        port.say({ t: 'hello', product: 'harness', mac: 'aa:bb', fw: '1.0.0' })
+        await vi.waitFor(() => expect(port.types()).toContain('notif.replace'))
+        port.sent.length = 0
+        await session.question('', 'q1', ask)
+        await session.question('a1', '', ask)
+        await session.question('a1', '', plan)
+        await session.replaceNotifications([])
+        expect(port.sent).toEqual([{ t: 'notif.replace', items: [] }])
+      } finally { await session.stop() }
+    })
+  })
+
   describe('link counters in the dial log', () => {
     const linkLines = (log: DialLog) => readFileSync(log.currentPath, 'utf8').split('\n').filter((l) => l.includes('[daemon] link'))
 
-    it('logs bytes and frames both ways at close, and keeps the printable text of non-frame bytes', async () => {
+    it('logs bytes and frames both ways at close, and the size of the printable text of non-frame bytes, never its words', async () => {
       const log = tmpLog()
       const { session, port } = await connect(makeHost(), log)
       try {
@@ -4068,11 +4863,31 @@ describe('hello capabilities', () => {
       expect(line).toContain(`tx ${sentBytes} B in ${port.frames.length} frames`)
       expect(line).toMatch(/rx \d+ B in 2 frames/)
       expect(line).toMatch(/discarded \d+ B/)
-      expect(line).toContain('non-frame text: Guru Meditation Error: Core 0 panic')
-      expect(line).not.toContain('ab')   // a two-character run is not text worth keeping
+      // A two-character run ('ab') is not text worth counting.
+      expect(line).toContain('non-frame text 35 chars')
+      expect(line).not.toContain('Guru')
     })
 
-    it('logs once a minute while connected, and caps the text at 200 characters', async () => {
+    it('never says the words of a frame of the dial\'s that arrived broken, which can be the person\'s', async () => {
+      const log = tmpLog()
+      const { session, port } = await connect(makeHost(), log)
+      try {
+        port.say({ t: 'hello', product: 'harness', fw: '0.1.0', proto: 1, mac: 'aa:bb' })
+        await vi.waitFor(() => expect(port.types()).toContain('agents.end'))
+        // A turn the dial sends, its last byte lost on the cable: the decoder steps over its bytes as noise.
+        const sent = encodeCableFrame(CableType.Json, Buffer.from(JSON.stringify({ t: 'turn.send', agentId: 'a1', text: 'SECRET-TEXT-MARKER' }), 'utf8'))
+        port.raw(Buffer.from(sent.subarray(0, sent.length - 1)))
+        port.raw(Buffer.from([sent[sent.length - 1] ^ 0xff]))
+        await settle()
+        await port.close('unplugged')
+        await log.flush()
+      } finally { await session.stop() }
+      const [line] = linkLines(log)
+      expect(line).toMatch(/corrupt 1 · discarded \d+ B · non-frame text \d+ chars/)
+      expect(line).not.toContain('SECRET')
+    })
+
+    it('logs once a minute while connected, with the size of the text', async () => {
       vi.useFakeTimers({ toFake: ['Date'] })
       const log = tmpLog()
       const { session, port } = await connect(makeHost(), log)
@@ -4085,7 +4900,9 @@ describe('hello capabilities', () => {
       } finally { vi.useRealTimers(); await session.stop() }
       const [line] = linkLines(log)
       expect(line).toMatch(/\] link · tx \d+ B in \d+ frames · rx \d+ B in 1 frames/)
-      expect(line.split('non-frame text: ')[1]).toHaveLength(200)
+      // The last few bytes may still wait in the decoder for a header: what it stepped over is counted.
+      expect(line).toMatch(/ · discarded (\d+) B · non-frame text \1 chars$/)
+      expect(line).not.toContain('xxxx')
     })
   })
 })
@@ -4263,12 +5080,14 @@ const NAMES: Record<string, string> = { ghostty: 'Ghostty', vscode: 'VS Code' }
 
 /** A host with the cable host's app answers: Ghostty (3) shown, VS Code (2, one waiting); v1 can be brought forward.
  *  With a window, a dial that says appFilter holds the shown app's ring while `appView` is set, and the tab t1 (a1, a2)
- *  otherwise; any other dial holds the tab. `focus` is the window's. */
+ *  otherwise; any other dial holds the tab. `focus` is the window's. `tabApps`: the tab's answer to such a dial carries
+ *  the other apps, as the cable host's does. */
 function appHost(over: Partial<CableHost> = {}) {
   const state = {
     shown: 'ghostty',
     window: false,
     appView: false,
+    tabApps: false,
     focus: undefined as { machineId: string; agentId: string } | undefined,
     rings: { ghostty: [row('g1', 'ghostty'), row('g2', 'ghostty'), row('g3', 'ghostty')], vscode: [row('v1', 'vscode', 'sf'), row('v2', 'vscode')] } as Record<string, CableAgent[]>,
     waiting: { vscode: 1 } as Record<string, number>,
@@ -4289,7 +5108,7 @@ function appHost(over: Partial<CableHost> = {}) {
   const host = makeHost({
     listAgentSnapshot: async (opts) => {
       asked.push(opts)
-      if (onTab(opts)) return { agents: AGENTS, tab: 't1', total: 2 }
+      if (onTab(opts)) return { agents: AGENTS, tab: 't1', total: 2, ...(opts?.apps && state.tabApps ? { apps: { shown: 'harness', apps: list().apps } } : {}) }
       if (!opts?.apps) return { agents: all(), tab: '', total: all().length, view: 'machine' as const }
       const rows = state.rings[state.shown] ?? []
       return { agents: rows, tab: '', total: rows.length, view: 'machine' as const, apps: list() }
@@ -4308,6 +5127,286 @@ function appHost(over: Partial<CableHost> = {}) {
   })
   return { host, state, asked, pickApp, list }
 }
+
+describe('a machine list lands a dial that holds no agent (docs/plans/2026-11-18-dial-chatgpt-pick-and-voice-design.md)', () => {
+  type Snapshot = Awaited<ReturnType<NonNullable<CableHost['listAgentSnapshot']>>>
+  const RING = [row('o1', 'ghostty'), row('h1', 'harness', 'svfa')]
+  const OTHER = [row('x1', 'ghostty'), row('x2', 'ghostty')]
+  const machine = (agents: CableAgent[]): Snapshot => ({ agents, tab: '', total: agents.length, view: 'machine' as const })
+  const WINDOW: Snapshot = { agents: AGENTS, tab: 't1', total: 2 }
+  const HELLO = { t: 'hello', product: 'harness', mac: 'aa:bb' }
+  const focuses = (port: LoopbackPort) => port.sent.filter((m) => m.t === 'focus')
+
+  /** Waited for to the drawer, the attach push's last frame: the list and any focus after it have been sent. */
+  async function greet(port: LoopbackPort, hello: Record<string, unknown> = {}) {
+    port.say({ ...HELLO, ...hello })
+    await vi.waitFor(() => expect(port.types()).toContain('notif.replace'))
+  }
+  async function landed(snapshot: () => Snapshot, over: Partial<CableHost> = {}) {
+    const c = await connect(makeHost({ dialShows: vi.fn(), listAgentSnapshot: async () => snapshot(), ...over }))
+    await greet(c.port)
+    return c
+  }
+  /** A session that opens a new loopback each time its port is reopened, as a dial unplugged and plugged in again. */
+  function replugging(snapshot: () => Snapshot | Promise<Snapshot>) {
+    const ports: LoopbackPort[] = []
+    const session = new CableSession(makeHost({ listAgentSnapshot: async () => snapshot() }), tmpLog(), async (onData, onClosed) => {
+      const next = new LoopbackPort(onData, onClosed)
+      ports.push(next)
+      return next
+    })
+    session.start()
+    return { session, ports }
+  }
+
+  it('the first machine list after an attach sends focus on its first agent, after the list, and brings nothing forward', async () => {
+    const { session, port, host } = await landed(() => machine(RING))
+    try {
+      expect(focuses(port)).toEqual([{ t: 'focus', agentId: 'o1' }])
+      expect(port.types().indexOf('focus')).toBeGreaterThan(port.types().lastIndexOf('agents.end'))
+      expect(host.focus).not.toHaveBeenCalled()
+      expect((host.dialShows as Mock).mock.calls.at(-1)).toEqual([session, { name: 'o1', app: 'Ghostty' }, 'o1'])
+    } finally { await session.stop() }
+  })
+
+  it('a dial that says appFilter lands on the shown app\'s first agent, and a pick of the shown app still sends nothing', async () => {
+    const { host, pickApp } = appHost()
+    const { session, port } = await connect(host)
+    try {
+      await greet(port, { appFilter: 'v1' })
+      expect(focuses(port)).toEqual([{ t: 'focus', agentId: 'g1' }])
+      port.sent.length = 0
+      port.say({ t: 'app.pick', app: 'ghostty' })
+      await vi.waitFor(() => expect(pickApp).toHaveBeenCalled())
+      await settle()
+      const LIST = new Set(['apps', 'agents.begin', 'agent', 'agents.end', 'focus'])
+      expect(port.sent.filter((m) => LIST.has(m.t as string))).toEqual([])
+    } finally { await session.stop() }
+  })
+
+  it('a machine list after an empty one lands on its first agent', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'performance'] })
+    let rows: CableAgent[] = []
+    const { session, port } = await landed(() => machine(rows))
+    try {
+      expect(focuses(port)).toEqual([])
+      vi.advanceTimersByTime(1_100)
+      rows = RING
+      await session.syncAgents()
+      expect(focuses(port)).toEqual([{ t: 'focus', agentId: 'o1' }])
+    } finally { await session.stop(); vi.useRealTimers() }
+  })
+
+  it('a ring that replaces a ring with agents sends no landing', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'performance'] })
+    try {
+      let rows = RING
+      const { session, port } = await landed(() => machine(rows))
+      try {
+        expect(focuses(port)).toEqual([{ t: 'focus', agentId: 'o1' }])
+        port.sent.length = 0
+        vi.advanceTimersByTime(1_100)
+        rows = OTHER
+        await session.syncAgents()
+        expect(port.types()).toContain('agents.end')
+        expect(focuses(port)).toEqual([])
+      } finally { await session.stop() }
+      // The dial held the window's tab, and its window shut: the machine list replaces a list with agents.
+      let open = true
+      const shut = await landed(() => open ? WINDOW : machine(RING))
+      try {
+        vi.advanceTimersByTime(1_100)
+        open = false
+        await shut.session.syncAgents()
+        expect(shut.port.sent.filter((m) => m.t === 'agents.end').at(-1)).toMatchObject({ view: 'machine' })
+        expect(focuses(shut.port)).toEqual([])
+      } finally { await shut.session.stop() }
+    } finally { vi.useRealTimers() }
+  })
+
+  it('a record in the list is re-asserted, not the first agent', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'performance'] })
+    let rows = RING
+    const { session, port } = await landed(() => machine(rows))
+    try {
+      expect(focuses(port)).toEqual([{ t: 'focus', agentId: 'o1' }])
+      vi.advanceTimersByTime(751)
+      port.say({ t: 'focus', agentId: 'h1' })
+      await settle()
+      port.sent.length = 0
+      vi.advanceTimersByTime(1_100)
+      rows = [...RING, row('n1', 'ghostty')]
+      await session.syncAgents()
+      expect(focuses(port)).toEqual([{ t: 'focus', agentId: 'h1' }])
+    } finally { await session.stop(); vi.useRealTimers() }
+  })
+
+  /** Landed on RING, turned by hand to h1 once the landing's 750 ms passed, unplugged, and plugged in again. */
+  async function turnedThenReplugged(ports: LoopbackPort[], before: () => void = () => {}) {
+    await vi.waitFor(() => expect(ports).toHaveLength(1))
+    await greet(ports[0])
+    expect(focuses(ports[0])).toEqual([{ t: 'focus', agentId: 'o1' }])
+    vi.advanceTimersByTime(751)
+    ports[0].say({ t: 'focus', agentId: 'h1' })
+    await ports[0].close('unplugged')
+    // The tick reopens a port 2 s after it last opened one.
+    vi.advanceTimersByTime(2_000)
+    await vi.waitFor(() => expect(ports).toHaveLength(2), NEXT_TICKS)
+    before()
+    await greet(ports[1])
+    return ports[1]
+  }
+
+  it('a reattach keeps the person\'s place: a record further down the new ring is re-asserted', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'performance'] })
+    const { session, ports } = replugging(() => machine(RING))
+    try {
+      const again = await turnedThenReplugged(ports)
+      expect(focuses(again)).toEqual([{ t: 'focus', agentId: 'h1' }])
+    } finally { await session.stop(); vi.useRealTimers() }
+  })
+
+  it('a reattach whose record names an agent of another ring lands on the first agent', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'performance'] })
+    let rows = RING
+    const { session, ports } = replugging(() => machine(rows))
+    try {
+      const again = await turnedThenReplugged(ports, () => { rows = OTHER })
+      expect(focuses(again)).toEqual([{ t: 'focus', agentId: 'x1' }])
+    } finally { await session.stop(); vi.useRealTimers() }
+  })
+
+  it('a follow in flight lands only its own agent', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'performance'] })
+    /** The list fills and the follow starts in one synchronous step, so the session's own tick cannot push the list first. */
+    const following = async (agentId: string) => {
+      let rows: CableAgent[] = []
+      const c = await landed(() => machine(rows))
+      vi.advanceTimersByTime(1_100)
+      rows = RING
+      await c.session.followApp('mac-local', agentId)
+      return c
+    }
+    try {
+      const onRing = await following('h1')
+      try {
+        expect(focuses(onRing.port).length).toBeGreaterThan(0)
+        expect(focuses(onRing.port).every((m) => m.agentId === 'h1')).toBe(true)
+      } finally { await onRing.session.stop() }
+      const offRing = await following('zz')
+      try {
+        expect(focuses(offRing.port)).toEqual([{ t: 'focus', agentId: 'zz' }])
+      } finally { await offRing.session.stop() }
+    } finally { vi.useRealTimers() }
+  })
+
+  // A follow writes its record before its push and its focus after it. The unplug in between ends it with no focus sent,
+  // and the dial comes back holding nothing: no follow is in flight any more, and nothing else will land it.
+  it('a follow the unplug cut short leaves none in flight: the next attach lands on the first agent', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'performance'] })
+    let rows = RING
+    let reads = 0
+    let gate: Promise<void> | undefined
+    const { session, ports } = replugging(async () => {
+      reads++
+      await gate
+      return machine(rows)
+    })
+    try {
+      await vi.waitFor(() => expect(ports).toHaveLength(1))
+      await greet(ports[0])
+      expect(focuses(ports[0])).toEqual([{ t: 'focus', agentId: 'o1' }])
+      // The follow's push waits on its read while the dial is unplugged.
+      let release!: () => void
+      gate = new Promise((resolve) => { release = resolve })
+      const before = reads
+      const following = session.followApp('mac-local', 'h1')
+      await vi.waitFor(() => expect(reads).toBeGreaterThan(before))
+      await ports[0].close('unplugged')
+      rows = OTHER
+      gate = undefined
+      release()
+      await following
+      expect(focuses(ports[0])).toEqual([{ t: 'focus', agentId: 'o1' }])
+      // The tick reopens a port 2 s after it last opened one.
+      vi.advanceTimersByTime(2_000)
+      await vi.waitFor(() => expect(ports).toHaveLength(2), NEXT_TICKS)
+      await greet(ports[1])
+      expect(focuses(ports[1])).toEqual([{ t: 'focus', agentId: 'x1' }])
+    } finally { await session.stop(); vi.useRealTimers() }
+  })
+
+  it('a window\'s tab with no record sends no focus', async () => {
+    const { session, port } = await landed(() => WINDOW)
+    try {
+      expect(port.types()).toContain('agents.end')
+      expect(focuses(port)).toEqual([])
+    } finally { await session.stop() }
+  })
+
+  it('a dial that asks agents.list while its port stays open is landed on the first agent, or has its record re-asserted', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'performance'] })
+    try {
+      let rows = RING
+      const { session, port } = await landed(() => machine(rows))
+      try {
+        expect(focuses(port)).toEqual([{ t: 'focus', agentId: 'o1' }])
+        vi.advanceTimersByTime(751)
+        port.say({ t: 'focus', agentId: 'h1' })
+        vi.advanceTimersByTime(1_100)
+        rows = OTHER
+        await session.syncAgents()
+        expect(focuses(port)).toEqual([{ t: 'focus', agentId: 'o1' }])
+        port.sent.length = 0
+        // The dial's silence rule emptied its list while the port stayed open, and it asks for the list.
+        port.say({ t: 'agents.list' })
+        await vi.waitFor(() => expect(port.types()).toContain('notif.replace'))
+        expect(focuses(port)).toEqual([{ t: 'focus', agentId: 'x1' }])
+        expect(port.types().indexOf('focus')).toBeGreaterThan(port.types().lastIndexOf('agents.end'))
+        expect(port.isOpen).toBe(true)
+      } finally { await session.stop() }
+      const kept = await landed(() => machine(RING))
+      try {
+        expect(focuses(kept.port)).toEqual([{ t: 'focus', agentId: 'o1' }])
+        vi.advanceTimersByTime(751)
+        kept.port.say({ t: 'focus', agentId: 'h1' })
+        kept.port.sent.length = 0
+        kept.port.say({ t: 'agents.list' })
+        await vi.waitFor(() => expect(kept.port.types()).toContain('notif.replace'))
+        expect(focuses(kept.port)).toEqual([{ t: 'focus', agentId: 'h1' }])
+        expect(kept.port.isOpen).toBe(true)
+      } finally { await kept.session.stop() }
+    } finally { vi.useRealTimers() }
+  })
+
+  it('in the 750 ms after the landing a swipe is dropped, and the first swipe after them moves the dial', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'performance'] })
+    try {
+      const { session, port, host } = await landed(() => machine(RING))
+      const shown = () => (host.dialShows as Mock).mock.calls.at(-1)?.[2]
+      try {
+        expect(focuses(port)).toEqual([{ t: 'focus', agentId: 'o1' }])
+        port.say({ t: 'focus', agentId: 'h1' })
+        await settle()
+        expect(host.focus).not.toHaveBeenCalled()
+        expect(shown()).toBe('o1')
+        vi.advanceTimersByTime(751)
+        port.say({ t: 'focus', agentId: 'h1' })
+        await settle()
+        expect(host.focus).toHaveBeenCalledWith('h1')
+        expect(shown()).toBe('h1')
+      } finally { await session.stop() }
+      // A focus on the landed agent within the 750 ms is taken as the landing's echo: no hand moved the dial.
+      const echoed = await landed(() => machine(RING), { turned: vi.fn() })
+      try {
+        echoed.port.say({ t: 'focus', agentId: 'o1' })
+        await settle()
+        expect(echoed.host.focus).not.toHaveBeenCalled()
+        expect(echoed.host.turned).not.toHaveBeenCalled()
+      } finally { await echoed.session.stop() }
+    } finally { vi.useRealTimers() }
+  })
+})
 
 describe('the app filter', () => {
   const LIST = new Set(['apps', 'agents.begin', 'agent', 'agents.end'])
@@ -4346,14 +5445,74 @@ describe('the app filter', () => {
     } finally { await session.stop() }
   })
 
-  it('with a window no apps frame is sent', async () => {
-    const { host, state, asked } = appHost()
-    state.window = true
+  it('the welcome lists apps.switch for a dial that says appFilter and a host that picks', async () => {
+    const welcome = (port: LoopbackPort) => port.sent.find((m) => m.t === 'welcome')?.features
+    const c = await greeted(appHost().host)
+    try {
+      expect(welcome(c.port)).toEqual(['voice.draft', 'agents.refresh', 'apps.switch', 'settings'])
+    } finally { await c.session.stop() }
+    const old = await greeted(appHost().host, false)
+    try {
+      expect(welcome(old.port)).toEqual(['voice.draft', 'agents.refresh', 'settings'])
+    } finally { await old.session.stop() }
+    const noPick = await greeted(appHost({ pickApp: undefined }).host)
+    try {
+      expect(welcome(noPick.port)).toEqual(['voice.draft', 'agents.refresh', 'settings'])
+    } finally { await noPick.session.stop() }
+  })
+
+  it('the fullest round-dial welcome is nine names', async () => {
+    const { host } = appHost({
+      form: async () => ({ ok: false, active: false, error: 'test' }),
+      visit: async () => ({ ok: false, active: false, error: 'test' }),
+      selectPassage: async () => ({ ok: false, error: 'test' }),
+      answerReviewed: async () => ({ ok: false, error: 'test' }),
+    })
+    const { session, port } = await connect(host)
+    try {
+      port.say({ t: 'hello', product: 'harness', mac: 'aa:bb', appFilter: 'v1', questionTier: 'v1' })
+      await vi.waitFor(() => expect(port.types()).toContain('notif.replace'))
+      const features = port.sent.find((m) => m.t === 'welcome')?.features as string[]
+      expect(features).toEqual(['voice.draft', 'agents.refresh', 'form', 'selection', 'visit', 'question.review', 'apps.switch', 'question.tier', 'settings'])
+      // The dial drops every feature of a welcome that lists more than 16 names.
+      expect(features.length).toBeLessThanOrEqual(16)
+    } finally { await session.stop() }
+  })
+
+  it('with a window the tab\'s apps go before the tab\'s list, and a count change alone sends apps', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'performance'] })
+    const { host, state, asked, list } = appHost()
+    state.window = state.tabApps = true
     const { session, port } = await greeted(host)
     try {
-      expect(listTypes(port)).toEqual(['agents.begin', 'agent', 'agent', 'agents.end'])
+      expect(listTypes(port)).toEqual(['apps', 'agents.begin', 'agent', 'agent', 'agents.end'])
+      expect(listFrames(port)[0]).toEqual({ t: 'apps', shown: 'harness', apps: list().apps })
       expect(asked).toContainEqual({ apps: true })
-    } finally { await session.stop() }
+      port.sent.length = 0
+      vi.advanceTimersByTime(1_100)
+      state.rings.vscode = [row('v1', 'vscode', 'sf')]
+      await session.syncAgents()
+      expect(listFrames(port)).toEqual([{ t: 'apps', shown: 'harness', apps: list().apps }])
+      port.sent.length = 0
+      vi.advanceTimersByTime(1_100)
+      await session.syncAgents()
+      expect(listFrames(port)).toEqual([])
+    } finally { await session.stop(); vi.useRealTimers() }
+  })
+
+  it('app.pick on the tab that the host answers switched is sent apps and that app\'s ring at once', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'performance'] })
+    const { host, state, pickApp } = appHost()
+    state.window = state.tabApps = true
+    pickApp.mockImplementation((app: string): AppPick => { state.appView = true; state.shown = app; return 'switched' })
+    const { session, port } = await greeted(host)
+    try {
+      port.sent.length = 0
+      port.say({ t: 'app.pick', app: 'vscode' })
+      await vi.waitFor(() => expect(listTypes(port)).toEqual(['apps', 'agents.begin', 'agent', 'agent', 'agents.end']))
+      expect(listFrames(port)[0]).toMatchObject({ t: 'apps', shown: 'vscode' })
+      expect(listFrames(port).at(-1)).toEqual({ t: 'agents.end', total: 2, tab: '', view: 'machine' })
+    } finally { await session.stop(); vi.useRealTimers() }
   })
 
   it('a count change alone sends apps and no agents.begin', async () => {
@@ -4650,13 +5809,18 @@ describe('the app filter', () => {
       listSwarms: vi.spyOn(host, 'listSwarms'), capsOf: vi.spyOn(host, 'capsOf'), hostOf: vi.spyOn(host, 'hostOf'),
       appOf: vi.spyOn(host, 'appOf'), markSeen: vi.spyOn(host, 'markSeen'), appFocus: vi.spyOn(host, 'appFocus'),
     }
-    const c = await greeted(host, appFilter)
-    c.port.say({ t: 'focus', agentId: 'g1' })
-    c.port.say({ t: 'agent.open', agentId: 'g1' })
-    c.port.say({ t: 'turn.stop', agentId: 'g1' })
-    await vi.waitFor(() => expect(c.port.types()).toContain('toast'))
-    await settle()
-    return { ...c, state, spies }
+    vi.useFakeTimers({ toFake: ['Date', 'performance'] })
+    try {
+      const c = await greeted(host, appFilter)
+      // Past the 750 ms after a landing on g1, so the turn to g1 is a hand's and not taken as the landing's echo.
+      vi.advanceTimersByTime(751)
+      c.port.say({ t: 'focus', agentId: 'g1' })
+      c.port.say({ t: 'agent.open', agentId: 'g1' })
+      c.port.say({ t: 'turn.stop', agentId: 'g1' })
+      await vi.waitFor(() => expect(c.port.types()).toContain('toast'))
+      await settle()
+      return { ...c, state, spies }
+    } finally { vi.useRealTimers() }
   }
   const askedAs = (spies: Record<string, { mock: { calls: unknown[][] } }>, apps: boolean) => {
     for (const [name, spy] of Object.entries(spies)) {
@@ -4833,10 +5997,13 @@ describe('the app filter', () => {
   })
 
   it("a window focus off the ring of a dial on an app's ring does not move it", async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'performance'] })
     const { host, state } = appHost()
     state.window = state.appView = true
     const { session, port } = await greeted(host)
     try {
+      // Past the 750 ms after the landing on g1, in which the dial's report of another agent is dropped.
+      vi.advanceTimersByTime(751)
       port.say({ t: 'focus', agentId: 'g2' })   // a hand put the dial on g2
       await vi.waitFor(() => expect(host.markSeen).toHaveBeenCalled())
       port.sent.length = 0
@@ -4848,7 +6015,7 @@ describe('the app filter', () => {
       expect(focuses(port)).toEqual([])
       await session.followLocal('g3', 'prompt')
       expect(focuses(port)).toEqual([{ t: 'focus', agentId: 'g3' }])
-    } finally { await session.stop() }
+    } finally { await session.stop(); vi.useRealTimers() }
   })
 
   it('a window focus on that ring moves the dial', async () => {
@@ -4869,7 +6036,8 @@ describe('the app filter', () => {
     const { session, port } = await greeted(host)
     try {
       await settle()
-      expect(focuses(port)).toEqual([])
+      // Landed on its ring's first agent, never the window's.
+      expect(focuses(port)).toEqual([{ t: 'focus', agentId: 'g1' }])
     } finally { await session.stop() }
   })
 
@@ -4971,6 +6139,8 @@ describe('the app filter', () => {
     // Faked after the greeting, as `resting` does: vi.waitFor is not used while a rest is pending.
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
     try {
+      // Past the 750 ms after the landing on g1, in which the dial's report of another agent is dropped.
+      await vi.advanceTimersByTimeAsync(751)
       port.say({ t: 'focus', agentId: 'g2' })
       await vi.advanceTimersByTimeAsync(SWIPE_REST_MS)
       expect(swipeEnded.mock.calls).toEqual([['g2', 'rest']])
@@ -4984,7 +6154,8 @@ describe('the app filter', () => {
       port.say({ t: 'focus', agentId: 'g2' })
       await vi.advanceTimersByTimeAsync(SWIPE_REST_MS)
       expect(swipeEnded).toHaveBeenCalledTimes(1)
-      expect(dialShows.mock.calls.map(([, agent]) => agent)).toEqual([{ name: 'g2', app: 'Ghostty' }])
+      // The landing's g1, then the hand's g2: the reorder and its echo told the host no other agent.
+      expect(dialShows.mock.calls.map(([, agent]) => agent)).toEqual([{ name: 'g1', app: 'Ghostty' }, { name: 'g2', app: 'Ghostty' }])
     } finally { vi.useRealTimers(); await session.stop() }
   })
 })
@@ -5320,7 +6491,7 @@ describe('what the dial cannot do for an agent', () => {
     const { session, port } = await greeted(caps({ sendTurn, log: (line) => lines.push(line) }))
     try {
       port.say({ t: 'turn.send', agentId: 'a2', text: 'hi' })
-      await vi.waitFor(() => expect(lines).toContain('cable: turn.send → failed'))
+      await vi.waitFor(() => expect(lines).toContain('cable: turn.send → failed · Error'))
       port.say({ t: 'turn.send', agentId: 'a2', text: 'again' })
       await vi.waitFor(() => expect(sendTurn).toHaveBeenCalledTimes(2))
     } finally { await session.stop() }
@@ -5429,16 +6600,20 @@ describe('what the dial cannot do for an agent', () => {
       sendTurn: vi.fn(), stopTurn: vi.fn(), answer: vi.fn(), recent: () => [], recentAsks: () => [], log: vi.fn(),
     })
     host.setRegistry(new HostRegistry([host.harness]))
+    vi.useFakeTimers({ toFake: ['Date', 'performance'] })
     const { session, port } = await connect(host)
     try {
       port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
       await vi.waitFor(() => expect(port.sent).toContainEqual({ t: 'agents.end', total: 1, tab: '', view: 'machine' }))
+      // Landed on h1. A turn to it within the next 750 ms would be taken as the landing's echo, not a hand's.
+      await vi.waitFor(() => expect(port.sent).toContainEqual({ t: 'focus', agentId: 'h1' }))
+      vi.advanceTimersByTime(751)
       host.harness.noteCard('h1', 'done')
       expect(host.harness.list()[0]).toMatchObject({ state: 'done', unseenDone: true })
       port.say({ t: 'focus', agentId: 'h1' })
       await vi.waitFor(() => expect(host.harness.list()[0]).toMatchObject({ state: 'done', unseenDone: false }))
       expect(toasts(port)).toEqual([])
-    } finally { await session.stop() }
+    } finally { await session.stop(); vi.useRealTimers() }
   })
 
   /** a1 and a3 have a pane a rest shows; a2 has none. The clock is faked after the greeting, so it holds only what a turn
@@ -5865,7 +7040,8 @@ describe('the agent the dial shows (docs/specs/2026-11-16-orca-device-plugin.md)
     const { session, port, told } = await greeted(appHost({ openAgent: vi.fn() }).host, { appFilter: 'v1' })
     try {
       port.say({ t: 'agent.open', agentId: 'v1' })
-      await vi.waitFor(() => expect(told()).toEqual([{ name: 'v1', app: 'VS Code' }]))
+      // The landing's g1; none while the tap's record names v1 before VS Code's ring is pushed; then v1.
+      await vi.waitFor(() => expect(told()).toEqual([{ name: 'g1', app: 'Ghostty' }, null, { name: 'v1', app: 'VS Code' }]))
     } finally { await session.stop() }
   })
 

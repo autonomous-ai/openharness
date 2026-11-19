@@ -99,7 +99,7 @@ describe('the connectors service', () => {
       await vi.waitFor(() => expect(warn.mock.calls.map(([line]) => String(line))).toContain('[connections] could not keep linear signed in: This account needs to be connected again in Connections.'))
       vi.mocked(keepAlive).mockRejectedValueOnce(new Error('disk gone'))
       await vi.advanceTimersByTimeAsync(3_600_000)
-      await vi.waitFor(() => expect(warn.mock.calls.map(([line]) => String(line))).toContain('[connections] keeping connections signed in failed: Error: disk gone'))
+      await vi.waitFor(() => expect(warn.mock.calls.map(([line]) => String(line))).toContain('[connections] keeping connections signed in failed: Error'))
     } finally { warn.mockRestore(); vi.useRealTimers() }
   })
 
@@ -282,7 +282,7 @@ describe('the connectors service', () => {
     writeFileSync(join(home, 'a-file'), '')
     try {
       expect(await ports.connectors!.syncProfileHome('claude', join(home, 'a-file', 'profile'))).toEqual([])
-      expect(warn).toHaveBeenCalledWith(expect.stringMatching(/^\[connections\] could not update claude:.+ · ENOTDIR/))
+      expect(warn).toHaveBeenCalledWith(expect.stringMatching(/^\[connections\] could not update a claude profile home · ENOTDIR$/))
     } finally { warn.mockRestore() }
   })
 
@@ -482,7 +482,7 @@ describe('the connectors service', () => {
       startConnectors(fakeCore(), emptyPorts(), { vault, env: free, offered: async () => ({}), retryMs: 5, holderIsMine: async () => false })
       vi.spyOn(vault, 'file').mockImplementation(() => { throw new Error('disk full') })
       for (let n = 0; n < 200 && !said.mock.calls.flat().join(' ').includes('could not save'); n++) await new Promise(resolve => setTimeout(resolve, 10))
-      expect(said.mock.calls.flat().join(' ')).toContain("could not save the bridge's new port: disk full")
+      expect(said.mock.calls.flat().join(' ')).toContain("could not save the bridge's new port: Error")
     } finally {
       said.mockRestore()
       await new Promise<void>(resolve => holder.close(() => resolve()))
@@ -601,7 +601,7 @@ describe('the connectors service', () => {
       const said = () => warn.mock.calls.filter(([line]) => String(line).includes('socket is not listening'))
       await vi.waitFor(() => expect(vi.mocked(serveBridgeSocket).mock.calls.length).toBeGreaterThanOrEqual(3))
       expect(said()).toHaveLength(1)
-      expect(String(said()[0][0])).toContain(path)
+      expect(String(said()[0][0])).not.toContain(path)
       const calls = vi.mocked(serveBridgeSocket).mock.calls.length
       await new Promise<void>(resolve => holder.close(() => resolve()))
       await vi.waitFor(async () => {
@@ -611,12 +611,12 @@ describe('the connectors service', () => {
       warn.mockRestore()
     })
 
-    it('says what went wrong when the failure is not an Error', async () => {
+    it('names the kind of a failure that is not an Error', async () => {
       const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
       vi.mocked(serveBridgeSocket).mockRejectedValueOnce('a plain reason')
       const vault = new Store(join(shortHome(), 'p'), env), path = join(vault.root, 'bridge.sock')
       startConnectors(fakeCore(), emptyPorts(), { vault, env, port: 0, offered: async () => ({}), retryMs: 10, connectorSync: null })
-      await vi.waitFor(() => expect(warn).toHaveBeenCalledWith(expect.stringContaining('a plain reason')))
+      await vi.waitFor(() => expect(warn).toHaveBeenCalledWith(expect.stringContaining('trying again: string')))
       // Its retry goes on and listens: waited for, or it would make the folder again after this test's cleanup.
       await vi.waitFor(() => new Promise<void>((resolve, reject) => { const client = connect(path, () => { client.destroy(); resolve() }); client.once('error', reject) }))
       warn.mockRestore()

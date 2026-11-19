@@ -11,6 +11,7 @@ import { closeStateDirectoryIterator, closeStateFileDescriptor, closeStateFileHa
 import { lockStartMarker, processExists } from './processLiveness.js'
 import { psEnv } from './childLocale.js'
 import { ownProcessGroup } from './windows/noWindow.js'
+import { errorKind } from './log.js'
 
 const REQUEST_MS = 5_000
 const LOCK_MS = 2_000
@@ -30,7 +31,11 @@ function measure(phase: PersistencePhase, started: number, depth = 0): void {
 }
 
 export class RegistryPersistenceUnavailable extends Error {
-  constructor(reason: string) { super(`Registry persistence unavailable: ${reason}`); this.name = 'RegistryPersistenceUnavailable' }
+  // The disk's code rides on `cause` for the log line (errorKind), not as `code`: readers of `code` answer clients.
+  constructor(reason: string, disk?: string) {
+    super(`Registry persistence unavailable: ${reason}`, disk === undefined ? undefined : { cause: { code: disk } })
+    this.name = 'RegistryPersistenceUnavailable'
+  }
 }
 
 /** The row is admitted; its caller must not undo the launch as if publication were refused. */
@@ -146,7 +151,7 @@ export class RegistryWriteQueue {
           // The durable result is already known. Cleanup still owns admission,
           // and its rejection is observed without replacing that result.
           await cleanup?.catch(async error => {
-            console.warn('[registry] write cleanup failed')
+            console.warn(`[registry] write cleanup failed · ${errorKind(error)}`)
             if (error instanceof StateFileCleanupUnconfirmed) {
               this.failedClose = true
               await new Promise<void>(() => {})
@@ -387,7 +392,7 @@ export async function registryFileLock<T>(directory: string,
         if (owner?.token === token && owner.pid === process.pid) removeLockNow(lock, identity, owner)
       } catch (error) {
         if (error instanceof StateFileCleanupUnconfirmed) throw error
-        console.warn('[registry] lock cleanup refused an unsafe owner')
+        console.warn(`[registry] lock cleanup refused an unsafe owner · ${errorKind(error)}`)
       }
     }
     try {

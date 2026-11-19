@@ -92,18 +92,28 @@ describe('a registry no version can load', () => {
     rename.fails = 'error'
     const registry = await loadRegistry()
     await registry.load()
-    expect(error).toHaveBeenCalledWith('[registry] registry is not JSON, and it could not be moved aside (EXDEV: cross-device link not permitted); refusing to overwrite it')
+    expect(error).toHaveBeenCalledWith('[registry] registry is not JSON, and it could not be moved aside (EXDEV); refusing to overwrite it')
     ;(await registry.openProcessAgent({ agentId: 'must-not-write', engine: 'claude', tmuxPane: '%9', processIdentity: processIdentity(109) }))
     expect(readFileSync(file, 'utf8')).toBe('[{"agentId":')
     expect(readdirSync(dataDir).filter((name) => name.startsWith('registry.json.corrupt-'))).toEqual([])
   })
 
-  it('says why it could not be moved, whatever the failure was', async () => {
+  it('that is not JSON is said without the parse error\'s message, which quotes its rows: the names of the person\'s harnesses', async () => {
+    const file = join(dataDir, 'registry.json')
+    writeFileSync(file, '[{"agentId":"a1","defaultName": SECRET-NAME-MARKER}]', { mode: 0o600 })
+    const registry = await loadRegistry()
+    registry.load()
+    expect(registry.list()).toEqual([])
+    expect(error).toHaveBeenCalledWith(expect.stringMatching(/^\[registry\] registry is not JSON; moved it aside to .*registry\.json\.corrupt-\S+ and started empty$/))
+    expect(error.mock.calls.flat().join('\n')).not.toContain('SECRET')
+  })
+
+  it('names the kind of failure it could not be moved by, whatever was thrown', async () => {
     const file = join(dataDir, 'registry.json')
     writeFileSync(file, '{"schemaVersion":2}', { mode: 0o600 })
     rename.fails = 'string'
     const registry = await loadRegistry()
     await registry.load()
-    expect(error).toHaveBeenCalledWith('[registry] registry root is not an array, and it could not be moved aside (read-only file system); refusing to overwrite it')
+    expect(error).toHaveBeenCalledWith('[registry] registry root is not an array, and it could not be moved aside (string); refusing to overwrite it')
   })
 })

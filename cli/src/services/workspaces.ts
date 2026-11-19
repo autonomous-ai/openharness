@@ -34,7 +34,8 @@ export function startWorkspaces(core: CoreApi, ports: CorePorts): void {
       const cwd = session.cwd
       void renameScmProject(cwd, title).then((renamed) => {
         if (!renamed || stopped) return
-        console.log(`[worktrees] agent ${sid(session.agentId)} branch named ${renamed}`)
+        // Not the branch's name: it is made of the session's title, the person's words.
+        console.log(`[worktrees] agent ${sid(session.agentId)} branch named after its title`)
         forgetScmProject(cwd)
         const current = core.agents.byAgent(session.agentId)
         if (current && current.cwd === cwd && current.sessionId === session.sessionId) { frames.refresh(current); core.agents.sync(current) }

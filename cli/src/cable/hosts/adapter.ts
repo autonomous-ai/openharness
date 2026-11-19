@@ -11,6 +11,12 @@
  */
 import type { PaneSwitch, TypeResult } from './types.js'
 
+/** The terminal app holding a multiplexer's client, and that client's tab: the place the person sees the agent in. */
+export interface Outer {
+  app: string
+  tty?: string
+}
+
 /** Where an outside agent runs, from its latest hook event and what was learnt of its process. */
 export interface Place {
   host: string                                  // detectHost
@@ -20,7 +26,19 @@ export interface Place {
   pid?: number                                  // its process: that event's caller
   sessionId?: string                            // the engine's own id of the session: the VS Code extension's link names it
   engine?: string                               // whose session it is: that link names Claude Code's alone
+  cwd?: string                                  // the folder its latest event named, else its scan row's: Cursor's folder window opens it
+  /** The Claude app's own id of a session the open scan found, from the session's record (record.ts), until its first
+   *  hook; only the Claude app's adapter reads it. */
+  hostSession?: string
+  /** The app and tab of the terminal holding the multiplexer's client the agent runs in, from observed.ts; only the tmux
+   *  and tabs adapters read it. */
+  outer?: Outer
 }
+
+/** What a page guard knows of the agent: whether it waits on the person, the folder its session started in (its
+ *  project settings'), and its transcript path as its hook or the scan gave it (the user settings' home:
+ *  claudeRenderer.ts). */
+export interface PageAgent { asking: boolean; cwd?: string; transcriptPath?: string }
 
 /** One adapter's own handle on one agent: an Orca terminal, a Claude app session, a tab's tty, a pane id. */
 export interface Pane {
@@ -52,6 +70,21 @@ export interface HostAdapter {
   /** Whether `type` can reach the pane now (its app's socket there): asked at each look. One that cannot leaves the words
    *  to the agent's next pane whose app types. */
   canType?(pane: Pane): boolean
+  /** Whether a stroke on the dial may scroll that pane's view now, as far as the adapter knows without asking its app:
+   *  its app in front and the pane in its window. */
+  canScroll?(pane: Pane): boolean
+  /** Whether the pane is the one its app shows on screen now, asked of the app once a stroke, after `canScroll`. False on
+   *  any failure or past its deadline; never throws. An adapter that knows it from `canScroll` alone has none. */
+  onScreen?(pane: Pane): Promise<boolean>
+  /** Whether the program in the pane takes its own page keys now: Claude Code's fullscreen view keeps no history for its
+   *  app to scroll. Asked at a stroke's down, after `canScroll`, only for an agent whose engine has such keys, with
+   *  whether it waits on the person, the folder it started in and its transcript path. `false` at once when no key may
+   *  go and nothing was read; else a promise, never rejected, settled within the adapter's own deadline. */
+  pageKeys?(pane: Pane, agent: PageAgent): false | Promise<boolean>
+  /** Scrolls the app's view of the pane's history by whole lines, n < 0 toward older lines. Fire and forget: a line it
+   *  could not send is never retried into the program. `page`: this stroke's `pageKeys` said yes, and the lines may
+   *  carry those keys too. */
+  scroll?(pane: Pane, lines: number, page?: boolean): void
   /** The key a source that lists this app's agents knows the same pane by (registry.ts). Only an app with such a
    *  source has one. */
   paneKey?(pane: Pane): string

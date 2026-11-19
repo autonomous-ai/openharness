@@ -743,6 +743,98 @@ describe.skipIf(process.platform === 'win32')('the hc source (docs/plans/2026-11
     expect(s.source.terminalOf(4242)).toBeUndefined()
   })
 
+  it('tabOf: the herdr.tab label of each terminal shows covers, listed or past the 64, as it changes; none for any other', async () => {
+    const tab = (id: string) => ({ labels: { 'herdr.space': 'sp0123', 'herdr.tab': id } })
+    server.terminals = [
+      agent('t7', tab('tbaaaa')),
+      agent('t8', { ...tab('tbbbbb'), status: null }),
+      // A hidden worker: the window does not show it.
+      agent('t9', { labels: { 'herdr.tab': 'tbcccc' } }),
+      // Shown, with no tab of its own.
+      agent('t10'),
+      agent('t11', { ...tab('tbdddd'), state: 'finished' }),
+      // With t7 and t10, 66 listable: t76 is past the 64.
+      ...Array.from({ length: 64 }, (_, at) => agent(`t${at + 13}`, tab('tbeeee'))),
+    ]
+    const s = setup()
+    await live(s)
+    const addresses = ['t7', 't8', 't9', 't10', 't11', 't76', 't99']
+    const tabs = () => addresses.map((address) => s.source.tabOf(address))
+    expect(tabs()).toEqual(['tbaaaa', 'tbbbbb', undefined, undefined, undefined, 'tbeeee', undefined])
+
+    // A terminal moved to another tab is matched there; one the window no longer shows has none.
+    server.change('t7', tab('tbffff'))
+    server.change('t8', { labels: { 'herdr.tab': 'tbbbbb' } })
+    await vi.waitFor(() => expect(tabs()).toEqual(['tbffff', undefined, undefined, undefined, undefined, 'tbeeee', undefined]))
+
+    s.source.stop()
+    expect(tabs()).toEqual(addresses.map(() => undefined))
+  })
+
+  // The dial's scroll presses a Claude Code terminal's own page keys, and none while it asks (herdrApp.ts).
+  it('kindOf and statusOf: the kind and hc\'s status of each terminal shows covers, listed or past the 64, as they change; none for any other', async () => {
+    server.terminals = [
+      agent('t7'),
+      agent('t8', status('working', 'codex')),
+      // Shown, its program reporting nothing.
+      agent('t9', { status: null }),
+      // A hidden worker: the window does not show it.
+      agent('t10', { labels: {} }),
+      agent('t11', { state: 'finished' }),
+      // With t7 and t8, 66 listable: t76 is past the 64.
+      ...Array.from({ length: 64 }, (_, at) => agent(`t${at + 13}`, status('blocked'))),
+    ]
+    const s = setup()
+    await live(s)
+    const addresses = ['t7', 't8', 't9', 't10', 't11', 't76', 't99']
+    const kinds = () => addresses.map((address) => s.source.kindOf(address))
+    const statuses = () => addresses.map((address) => s.source.statusOf(address))
+    expect(kinds()).toEqual(['claude', 'codex', undefined, undefined, undefined, 'claude', undefined])
+    expect(statuses()).toEqual(['idle', 'working', undefined, undefined, undefined, 'blocked', undefined])
+
+    server.change('t7', status('blocked'))
+    server.change('t8', { status: null })
+    await vi.waitFor(() => expect(statuses()).toEqual(['blocked', undefined, undefined, undefined, undefined, 'blocked', undefined]))
+    expect(kinds()).toEqual(['claude', undefined, undefined, undefined, undefined, 'claude', undefined])
+
+    s.source.stop()
+    expect(kinds()).toEqual(addresses.map(() => undefined))
+    expect(statuses()).toEqual(addresses.map(() => undefined))
+  })
+
+  // A drop keeps the rows for the retry, but hc may have changed a status meanwhile: a Claude Code that began to ask
+  // must not take the dial's keys on a status heard before the drop (herdrApp.ts).
+  it('statusOf is none from a drop until the next snapshot, which tells it again; kindOf is kept', async () => {
+    server.terminals = [agent('t7', status('working'))]
+    const s = setup()
+    await live(s)
+    expect(s.source.statusOf('t7')).toBe('working')
+    server.drop()
+    await s.until(() => s.log.at(-1) === '[herdr-app] retry · 1')
+    expect(s.source.shows('t7')).toBe(true)
+    expect(s.source.kindOf('t7')).toBe('claude')
+    expect(s.source.statusOf('t7')).toBeUndefined()
+
+    // It asked while nothing was subscribed: the next snapshot says so.
+    server.terminals[0].status = { state: 'blocked', app: 'claude-code' }
+    s.advance(1000)
+    await s.until(() => s.source.statusOf('t7') === 'blocked')
+  })
+
+  it('paneOf answers a listed agent\'s terminal, and none for another id or one that left', async () => {
+    server.terminals = [agent('t7'), agent('t8')]
+    const s = setup()
+    await live(s)
+    const left = row(s, 't7')!.id
+    expect(s.source.paneOf(left)).toBe('t7')
+    expect(s.source.paneOf(row(s, 't8')!.id)).toBe('t8')
+    expect(s.source.paneOf('nope')).toBeUndefined()
+
+    server.remove('t7')
+    await s.until(() => s.source.list().length === 1)
+    expect(s.source.paneOf(left)).toBeUndefined()
+  })
+
   it('no log line holds an address, a name, a folder or the words', async () => {
     server.terminals = Array.from({ length: 65 }, (_, at) => agent(`t${at + 1}`, { name: 'secret-name', cwd: '/work/secret-folder' }))
     const s = setup()

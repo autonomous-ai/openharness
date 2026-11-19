@@ -11,6 +11,7 @@
  * steps is the part worth testing — the archive must exist before a client is told to look for it,
  * and the ending must reach the client before the frame that is behind a filesystem await.
  */
+import { errorKind } from './log.js'
 import type { LaunchPublication, RegisteredSession, RegistryAuthority, registry } from './registry.js'
 
 export interface RetainExitedSessionDeps {
@@ -30,7 +31,7 @@ export interface RetainExitedSessionDeps {
   /** The agent no longer runs here: its DSH viewer and its browser let go (core/main.ts `agentEnded`). */
   ended(agentId: string): void
   syncRecapPool(): void
-  warn(message: string, error: unknown): void
+  warn(message: string): void
 }
 
 export function createRetainExitedSession(deps: RetainExitedSessionDeps) {
@@ -69,11 +70,11 @@ export function createRetainExitedSession(deps: RetainExitedSessionDeps) {
       const terminal = publication.entry
       deps.send({ type: 'agent_deleted', payload: { agentId: entry.agentId, retained: true, ...(terminal ? { successor: terminal.agentId } : {}) } })
       deps.syncRecapPool()
-      void deps.publishStoppedAgent(saved).catch(() => deps.warn('[resume] could not announce saved harness', new Error('archive announcement unavailable')))
+      void deps.publishStoppedAgent(saved).catch((error) => deps.warn(`[resume] could not announce saved harness: archive announcement unavailable · ${errorKind(error)}`))
       if (terminal) deps.announceSession(terminal)
       return publication
-    } catch {
-      deps.warn('[resume] engine exit publication failed; the terminal remains held', new Error('registry publication unavailable'))
+    } catch (error) {
+      deps.warn(`[resume] engine exit publication failed; the terminal remains held: registry publication unavailable · ${errorKind(error)}`)
       return { state: 'not-published' }
     }
   }

@@ -59,12 +59,14 @@ describe('the workspaces service', () => {
       }
     })
     it('renames once per agent, then forgets the cached project and re-sends the agent\'s frame', async () => {
-      vi.mocked(nameBranchAfterSession).mockResolvedValueOnce('fix-login')
+      vi.mocked(nameBranchAfterSession).mockResolvedValueOnce('secret-branch-marker')
       const { core, port } = setup([agent({})])
       port.nameBranches()
       await settle()
       expect(nameBranchAfterSession).toHaveBeenCalledWith('/work/tree', 'Fix login')
-      expect(console.log).toHaveBeenCalledWith('[worktrees] agent a1 branch named fix-login')
+      // The branch's name is made of the session's title, the person's words: the log says only that it was named.
+      expect(console.log).toHaveBeenCalledWith('[worktrees] agent a1 branch named after its title')
+      expect(vi.mocked(console.log).mock.calls.flat().join('\n')).not.toContain('secret')
       expect(forgetAgentProject).toHaveBeenCalledWith('/work/tree')
       expect(core.agents.sync).toHaveBeenCalledWith(agent({}))
       port.nameBranches()

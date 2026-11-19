@@ -1,4 +1,5 @@
 /** Vendor storage inspection runs here, never in the session-owning process. */
+import { errorKind } from '../../lib/log.js'
 import type { ServiceRequests } from '../../core/api.js'
 import { randomUUID } from 'node:crypto'
 import { env } from '../../config/env.js'
@@ -47,7 +48,7 @@ export function otherStorageRequests(deps: { background?: typeof hermesBackgroun
         const valid = background ? backgroundCount(answer) : exportReceipt(answer)
         return valid && Buffer.byteLength(JSON.stringify(answer)) <= STORAGE_REPLY_BYTES
           ? { version: STORAGE_VERSION, answer } : failure('ENGINE_INVALID_REPLY')
-      }, () => { console.error('[engine-others] STORAGE_READ_UNAVAILABLE'); return failure() })
+      }, (caughtFailure) => { console.error(('[engine-others] STORAGE_READ_UNAVAILABLE') + ' · ' + errorKind(caughtFailure)); return failure() })
       .finally(() => { pending-- })
     try { return await Promise.race([work, ended]) }
     finally { active = false; clearTimeout(timer); closed?.removeEventListener('abort', abort) }

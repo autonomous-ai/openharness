@@ -20,13 +20,13 @@ import { fingerprint as e2eeCoreFingerprint, b64d as e2eeCoreDecode } from './li
  * and the backend socket (events up / chat + RPCs down).
  */
 
-import { readFileSync, readdirSync, writeFileSync, writeSync, mkdirSync, openSync, existsSync, rmSync, statSync } from 'fs'
+import { readFileSync, readdirSync, writeSync, mkdirSync, openSync, existsSync, rmSync, statSync } from 'fs'
 import { dirname, join, resolve } from 'path'
 import { fileURLToPath } from 'url'
 import { spawn } from 'child_process'
 import { createServer } from 'http'
 import { createInterface, emitKeypressEvents } from 'readline'
-import { homedir, hostname } from 'os'
+import { homedir, hostname, release } from 'os'
 import { env } from './config/env.js'
 import { VERSION } from './version.js'
 import { runCoreInForeground } from './core/main.js'
@@ -37,8 +37,8 @@ import { LEGACY_LOG_FILE, MACHINE_NAME_FILE, tildify, computerId, thisDeviceLabe
 import { daemonUnreachableText, sandboxed, startRefusalText } from './lib/unreachable.js'
 import { BIND_WAIT_MS, connectFailure, daemonSpawnOptions, defaultLaunchDeps, waitForBind } from './lib/daemonLaunch.js'
 import { ensureUtf8Locale } from './lib/childLocale.js'
-import { buildLogBundle, bundleFileName } from './lib/logBundle.js'
-import { redactSecretsInText } from './lib/redactSecrets.js'
+import { collectBundleFacts, runCommand } from './lib/logBundleFacts.js'
+import { logsExportCommand } from './lib/logsExportCommand.js'
 
 import { machineListCachePath } from './device/machineList.js'
 import { registry } from './lib/registry.js'
@@ -51,6 +51,8 @@ import { isInstalledCopy } from './lib/installedCopy.js'
 import { askRuntimePort, readCgroup, takeRuntimeBack } from './lib/osUnitTakeover.js'
 import { serviceCommand, serviceCommandDeps } from './lib/serviceCommand.js'
 import { infoBlockFooter } from './lib/infoBlockFooter.js'
+import { readMoveRecord } from './homeMove/record.js'
+import { moveStatusLine } from './homeMove/statusLine.js'
 import { flashCommand } from './lib/flash.js'
 import { awaitLoginCallback, extractCallbackParams, LOGIN_TIMEOUT_MESSAGE, type LoginCallbackParams } from './lib/loginCallback.js'
 import { ancestorsOnce, removeSignIn, SIGN_OUT_BUTTON_FLAG, signOutAsked, type Asker, type SignOutAsked } from './lib/signOut.js'
@@ -77,6 +79,7 @@ import { DEVICE_USAGE, runDeviceCommand } from './deviceClaude/command.js'
 import { vscodeExtensionDeps } from './devices/vscodeExtension.js'
 import { claudeRun, claudeRunIn } from './devices/claudePlugin.js'
 import { orcaHomesDeps, readOrcaHomes } from './devices/orcaHomes.js'
+import { orcaPluginRun } from './devices/orcaPlugin.js'
 import { remoteCommand } from './remoteCommand.js'
 import { tuiCommand } from './tui/index.js'
 import { machineChoices, newCommand, type MachineRow, type NewMachine } from './lib/newCommand.js'
@@ -112,7 +115,7 @@ import { ensureManagedGrid, ensureManagedRuntime } from './lib/runtimeInstall.js
 // Before ANY child is spawned: on Linux an absent locale makes tmux and ps mangle their output,
 // which silently costs the daemon every pane it would have discovered. See lib/childLocale.ts.
 ensureUtf8Locale()
-import { prepareLogFile, ts } from './lib/log.js'
+import { errorKind, prepareLogFile, ts } from './lib/log.js'
 import { narrowOwnEnvironment, startEnvLine } from './lib/startEnvironment.js'
 import { privacyCommand } from './lib/privacyCommand.js'
 
@@ -1269,7 +1272,7 @@ async function resolveMachineIfUnknown(session: AuthSession): Promise<void> {
   try {
     await resolveComputerMachine(AbortSignal.timeout(RESOLVE_ON_START_TIMEOUT_MS))
   } catch (err) {
-    console.log(`  (machine id not resolved yet — ${err instanceof Error ? err.message : String(err)}; starting on the computer id, resolved on the next login or online start)`)
+    console.log(`  (machine id not resolved yet — ${errorKind(err)}; starting on the computer id, resolved on the next login or online start)`)
   }
 }
 const RESOLVE_ON_START_TIMEOUT_MS = 10_000
@@ -2686,7 +2689,7 @@ async function status(): Promise<void> {
   if (!alive) {
     await registry.load()
     try { await registry.flush() }
-    catch { console.error('[registry] status flush failed') }
+    catch (error) { console.error(`[registry] status flush failed · ${errorKind(error)}`) }
   }
   // A daemon whose start-up failed is alive and answering, but nothing on this machine works. Say so
   // in the one line a person reads, rather than leaving it looking like an ordinary slow start.
@@ -2748,37 +2751,9 @@ async function status(): Promise<void> {
       authDir: alive ? daemonStatus?.authDir ?? null : AUTH_DIR,
     },
   })
-  process.exit(0)
-}
-
-/**
- * `harness logs export [--to <dir>] [--days N] [--json]` — the last week of every log this product
- * writes, zipped to the Desktop (or `--to`), secrets blanked. The file a bug report is made of; the
- * desktop app's Settings ▸ Debug ▸ Export logs runs this same command.
- */
-async function logsExportCommand(json: boolean): Promise<void> {
-  const flagValue = (name: string): string | undefined => {
-    const at = process.argv.indexOf(name)
-    return at >= 0 ? process.argv[at + 1] : undefined
-  }
-  const days = Math.max(1, Number(flagValue('--days') ?? 7) || 7)
-  const desktop = join(homedir(), 'Desktop')
-  const to = flagValue('--to') ?? (existsSync(desktop) ? desktop : process.cwd())
-  const now = new Date()
-  const notes = [`machine: ${readAuthSession()?.machineId ?? 'not signed in'}`]
-  const { zip, included } = buildLogBundle({
-    logsDir: env.HARNESS_LOGS_DIR, dataDir: env.ADAPTER_DATA_DIR, days, now, version: VERSION, notes,
-    redact: redactSecretsInText,
-  })
-  mkdirSync(to, { recursive: true })
-  const path = join(to, bundleFileName(now))
-  writeFileSync(path, zip)
-  if (json) console.log(JSON.stringify({ path, included, bytes: zip.length }))
-  else {
-    console.log(`wrote ${tildify(path)} (${Math.round(zip.length / 1024)} KB)`)
-    for (const name of included) console.log(`  ${name}`)
-    if (!included.length) console.log('  (no logs found)')
-  }
+  // Only Linux moves ~/.harness; a move that is held or failed says what to do.
+  const moveLine = process.platform === 'linux' ? moveStatusLine(readMoveRecord(homedir(), process.env)) : null
+  if (moveLine) console.log(`  ${moveLine}\n`)
   process.exit(0)
 }
 
@@ -3125,6 +3100,7 @@ switch (cmd) {
   case 'device':
     runDeviceCommand(rest, {
       dataDir: env.ADAPTER_DATA_DIR,
+      home: homedir(),
       port: daemonPort(),
       platform: process.platform,
       stdin: process.stdin,
@@ -3135,6 +3111,7 @@ switch (cmd) {
       codexHome: env.CODEX_HOME,
       codex: () => installedEngineBin('codex') !== null,
       vscode: vscodeExtensionDeps,
+      orca: orcaPluginRun,
       env: process.env,
       cwd: process.cwd(),
       out: (line) => console.log(line),
@@ -3200,8 +3177,17 @@ switch (cmd) {
     status().catch(onError)
     break
   case 'logs':
-    if (args[0] === 'export') logsExportCommand(flags.includes('--json')).catch(onError)
-    else { console.error(`Unknown command: logs ${args[0] ?? ''}`); usage(1) }
+    if (args[0] === 'export') {
+      logsExportCommand({
+        args: rest, logsDir: env.HARNESS_LOGS_DIR, dataDir: env.ADAPTER_DATA_DIR, version: VERSION, home: homedir(),
+        cwd: process.cwd(), now: new Date(), machineId: readAuthSession()?.machineId,
+        facts: () => collectBundleFacts({
+          self: [process.execPath, ...process.execArgv, process.argv[1]], platform: process.platform, home: homedir(),
+          env: process.env, nodeVersion: process.version, osRelease: release(), exists: existsSync, run: runCommand,
+        }),
+        out: (line) => console.log(line),
+      }).then(() => process.exit(0)).catch(onError)
+    } else { console.error(`Unknown command: logs ${args[0] ?? ''}`); usage(1) }
     break
   case 'update':
     updateCommand(flags.includes('--force')).catch(onError)

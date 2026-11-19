@@ -1,4 +1,5 @@
 /** Saved-API discovery and instruction writes belong to workspaces, never the session loop. */
+import { errorKind } from '../lib/log.js'
 import { isAbsolute } from 'node:path'
 import { ENGINES } from '../engines/types.js'
 
@@ -32,7 +33,7 @@ export function createWorkspaceInstructions(dataDir: string, stopped: () => bool
       if (!current()) return false
       files.write(workspace, engine)
       return true
-    } catch { console.warn('[workspaces] INSTRUCTIONS_FAILED'); return false }
+    } catch (caughtFailure) { console.warn(('[workspaces] INSTRUCTIONS_FAILED') + ' · ' + errorKind(caughtFailure)); return false }
     // A core timeout does not settle this work. Keep its slot until all preparation really returns.
     finally { active-- }
   }

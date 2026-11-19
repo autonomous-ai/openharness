@@ -4,7 +4,7 @@ import { createHash } from 'crypto'
 import { composerHolds, composerShown, normalizedTerminalText, visibleTerminal } from '../engines/kit/submission.js'
 import { launchBound, captureSessionBinding } from '../core/engines/sessionBinding.js'
 import type { RegisteredSession } from './registry.js'
-import { sid } from './log.js'
+import { errorKind, sid } from './log.js'
 import { isMessageHold, messageHoldText, messageWithheldText, passingHold, type MessageHold } from './messageHolds.js'
 import type { MoveGate } from './hostMove/gate.js'
 import { enterWithheldReason, terminalActionNotStarted, TERMINAL_LEASE_REFUSED, type TerminalActionResult } from './terminalTypes.js'
@@ -824,7 +824,7 @@ export class SessionInputController {
   cancel(sessionId: string): void {
     void this.interrupt(sessionId, true).catch((error) => {
       // Before an owner was captured, an unexpected failure can be logged but cannot address an agent.
-      console.warn(`[inject] ${sid(sessionId)} cancel failed · ${error instanceof Error ? error.message : error}`)
+      console.warn(`[inject] ${sid(sessionId)} cancel failed · ${errorKind(error)}`)
     })
   }
 
@@ -883,7 +883,7 @@ export class SessionInputController {
       if (!current()) return false
       if (!reportGone) throw error
       // No extra promise continuation may put this original failure on a replacement agent.
-      console.warn(`[inject] ${sid(sessionId)} cancel failed · ${error instanceof Error ? error.message : error}`)
+      console.warn(`[inject] ${sid(sessionId)} cancel failed · ${errorKind(error)}`)
       this.deps.onError(sessionId, 'Stop did not reach this agent.')
       return false
     } finally { release() }

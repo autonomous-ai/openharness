@@ -5,6 +5,7 @@ import { existsSync } from 'node:fs'
 import { basename } from 'path'
 import { ENGINE_EXIT_PANE_OPTION } from './engineExitOption.js'
 import { psEnv } from './childLocale.js'
+import { errorKind } from './log.js'
 import { neutralizePasteControls } from './pasteText.js'
 import { submitContent, submitSettleMs } from './submitTiming.js'
 import { patientDeadline, patientExec } from './patientExec.js'
@@ -233,7 +234,7 @@ function sleep(ms: number): Promise<void> {
 function tmuxEnter(pane: string): Promise<boolean> {
   return new Promise((resolve) => {
     run('tmux', ['send-keys', '-t', pane, 'Enter'], { timeout: 2000 }, (err) => {
-      if (err) console.error(`[tmux] Enter to ${pane} failed:`, err.message)
+      if (err) console.error(`[tmux] Enter to ${pane} failed:`, errorKind(err))
       resolve(!err)
     })
   })
@@ -466,7 +467,7 @@ async function pasteThroughBuffer(pane: string, content: string, bracketed: bool
   args.push('-d')
   const pasted = await new Promise<boolean>((resolve) => {
     run('tmux', args, { timeout: 2_000 }, (err) => {
-      if (err) console.error(`[tmux] paste-buffer to ${pane} failed:`, err.message)
+      if (err) console.error(`[tmux] paste-buffer to ${pane} failed:`, errorKind(err))
       resolve(!err)
     })
   })

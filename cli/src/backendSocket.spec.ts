@@ -2743,8 +2743,8 @@ describe('BackendSocket outbound queue', () => {
     socket.onRemoteAppJoined = () => { throw 'not an error' }
     socket.fromGateway.client('r3', { role: 'web', label: null, identity: 'PUB3', direct: false })
     expect(warn.mock.calls.map(([line]) => line)).toEqual([
-      '[backend] re-announcing to a remote app failed: replay broke',
-      '[backend] re-announcing to a remote app failed: not an error',
+      '[backend] re-announcing to a remote app failed: Error',
+      '[backend] re-announcing to a remote app failed: string',
     ])
     expect(socket.remoteClient('r2')?.role).toBe('web')
     expect(socket.remoteClient('r3')?.role).toBe('web')

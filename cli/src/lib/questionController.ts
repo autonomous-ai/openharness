@@ -5,8 +5,12 @@ import type { AgentEngine } from '../engines/types.js'
 import type { ShapedQuestion, QuestionRow, QuestionView, ReviewView, PaneView } from '../engines/facets/screen.js'
 export type { ShapedQuestion, QuestionRow, QuestionView, ReviewView, PaneView, FoundDialog } from '../engines/facets/screen.js'
 import { isApprovalDialog } from './questionApproval.js'
+import { errorKind } from './log.js'
 const STEP_MS = 350          // let the TUI repaint between keystrokes
 const MAX_STEPS = 14         // hard bound on the drive loop (questions × keys), never spin on a stuck pane
+// The longest answer value a dialog asks for: its longest options joined, with headroom (a reviewed text answer is
+// capped at 1200 bytes). Every sender's answer reaches the core's own loop through answer(), so it is bounded there.
+const ANSWER_BYTES_MAX = 4096
 const CAPTURE_LINES = 60
 
 function norm(value: string): string {
@@ -45,6 +49,52 @@ export function matchRow(rows: QuestionRow[], answer: string): QuestionRow | nul
   return rows.find((r) => norm(r.label) === a)
     ?? (a.length >= 3 ? rows.find((r) => norm(r.label).startsWith(a)) ?? rows.find((r) => a.startsWith(norm(r.label)) && norm(r.label).length >= 3) : undefined)
     ?? null
+}
+
+/**
+ * Read an answer of texts joined with ", " as the texts that spell it, by index. A text may hold a comma itself, so
+ * the answer is split only where every piece, trimmed, is a whole text (`key` of each the same) or blank. Of several
+ * readings the fewest pieces wins; on a tie, the longest first piece, then the same rule on the rest. Null when no
+ * reading spells the whole answer.
+ *
+ * The answer is outside text read in the core's own loop, so the work grows with its length times the texts' length:
+ * a piece holds as many commas as the text it spells, so only runs of as many pieces as some text has are tried.
+ * Trying every run of pieces held the core 12 s on a 3 KB answer; every run up to the text with the most commas,
+ * 16 s on a 4 KB answer against a text of 2,000 (2026-11-18).
+ */
+export function partitionTexts(texts: string[], answer: string, key: (text: string) => string): number[] | null {
+  // The first text of each key, as a find takes it; the key keeps every comma.
+  const byKey = new Map<string, number>()
+  texts.forEach((text, index) => { const k = key(text); if (k && !byKey.has(k)) byKey.set(k, index) })
+  // How many pieces each text spans, most first, so a tie keeps the longest piece.
+  const spans = [...new Set([...byKey.keys()].map((k) => k.split(',').length))].sort((a, b) => b - a)
+  const parts = answer.split(',')
+  // count[i]: the fewest texts that spell parts[i..], the first of them first[i], the rest from parts[next[i]].
+  const count = Array<number>(parts.length + 1).fill(Infinity)
+  const first = Array<number | undefined>(parts.length), next = Array<number>(parts.length)
+  count[parts.length] = 0
+  for (let i = parts.length - 1; i >= 0; i--) {
+    // A blank piece (a stray or trailing comma) spells nothing, as the loose reading drops it: refusing it would
+    // send a comma text back to that reading.
+    if (!key(parts[i].trim())) { count[i] = count[i + 1]; next[i] = i + 1; continue }
+    // Trimmed first, as the loose reading's pieces: norm drops a trailing full stop before it trims, so " No. " would
+    // read "no.".
+    for (const span of spans) {
+      const j = i + span
+      if (j > parts.length) continue
+      const index = byKey.get(key(parts.slice(i, j).join(',').trim()))
+      if (index !== undefined && count[j] + 1 < count[i]) { count[i] = count[j] + 1; first[i] = index; next[i] = j }
+    }
+  }
+  if (count[0] === Infinity) return null
+  const spelled: number[] = []
+  for (let i = 0; i < parts.length; i = next[i]) if (first[i] !== undefined) spelled.push(first[i]!)
+  return spelled
+}
+
+/** A multi-choice answer as the rows whose labels spell it (partitionTexts), each label read as matchRow's first test. */
+export function partitionLabels(rows: QuestionRow[], answer: string): QuestionRow[] | null {
+  return partitionTexts(rows.map((row) => row.label), answer, norm)?.map((index) => rows[index]) ?? null
 }
 
 /**
@@ -158,9 +208,17 @@ export class AskQuestionController {
     const remembered = this.pending.get(requestId)
     const sessionId = payload.sessionId || payload.agentId || remembered || ''
     const answers = payload.answers && typeof payload.answers === 'object' ? structuredClone(payload.answers) : null
-    if (!sessionId || !answers || Object.keys(answers).length === 0) {
+    if (!sessionId || !answers || Object.keys(answers).length === 0 || Object.values(answers).some(value => typeof value !== 'string')) {
       console.warn('[question] answer missing session or choices')
       return failed('The answer named no agent or carried no choice.')
+    }
+    // A dialog asks at most 4 questions in Claude Code and 3 in Codex; opencode and Kilo set no limit, but the drive keys
+    // one question a step, so more than MAX_STEPS answers could never all go in.
+    const values = Object.values(answers)
+    const longest = values.reduce((max, value) => Math.max(max, Buffer.byteLength(value, 'utf8')), 0)
+    if (values.length > MAX_STEPS || longest > ANSWER_BYTES_MAX) {
+      console.warn(`[question] answer refused · ${values.length} answers, longest ${longest} bytes`)
+      return failed('The answer is too long. Answer it in the terminal.')
     }
     const session = this.deps.getSession(sessionId)
     const terminalTarget = session?.agentId || session?.sessionId
@@ -195,8 +253,8 @@ export class AskQuestionController {
       try {
         native = session ? this.deps.questionControlFor(session) : undefined
         reviewed = payload.expectedQuestions ? structuredClone(payload) : undefined
-      } catch {
-        console.warn('[question] control preparation failed')
+      } catch (caughtFailure) {
+        console.warn(('[question] control preparation failed') + ' · ' + errorKind(caughtFailure))
         return failed('The answer could not be prepared. Nothing was typed.')
       }
       const result = await this.drive(terminalTarget, answers, payload.allowPermissions !== false, { requestId, owners }, reviewed, native)
@@ -345,13 +403,15 @@ export class AskQuestionController {
       }
 
       if (view.multi) {
-        // Device joins the selected labels with ", " (q_done_tap).
-        const labels = reviewed ? reviewed.selectedLabels?.[picked.key] ?? []
-          : picked.value.split(',').map((s) => s.trim()).filter(Boolean)
+        // A reviewed answer lists its labels. An unreviewed one is one string of labels joined with ", " (the hn TUI,
+        // the dial's `answer`, the device `question.answer` API), read by the labels on screen because a label may
+        // hold a comma; only an answer they cannot spell is cut on every comma and matched loosely, piece by piece.
+        const labels = reviewed?.selectedLabels?.[picked.key] ?? []
         if (reviewed && (!labels.length || labels.some(label => !view.rows.some(row => row.label === label)))) return failed('That answer matches no option.')
         // Core chooses the exact approved set; the engine owns toggling and advancing its UI.
         const rows = reviewed ? view.rows.filter(row => row.checked !== labels.includes(row.label))
-          : labels.map(label => matchRow(view.rows, label)).filter((row): row is QuestionRow => !!row && !row.checked)
+          : (partitionLabels(view.rows, picked.value) ?? picked.value.split(',').map(label => matchRow(view.rows, label.trim())))
+            .filter((row): row is QuestionRow => !!row && !row.checked)
         const freeText = !reviewed && !rows.length && view.typeRow ? { row: view.typeRow, text: picked.value } : undefined
         const toggled = notEntered(await apply({ kind: 'multiple', rows, ...(freeText ? { freeText } : {}) }))
         if (toggled) return toggled

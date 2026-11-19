@@ -10,7 +10,7 @@ import { OPENCLAW_LOCAL, openclawFolderInUse, readOpenclawScreen } from '../../e
 import type { AgentEngine } from '../../engines/types.js'
 import { describeAgentCreateFailure, summarizePaneOutput } from '../../lib/agentCreateDiagnosis.js'
 import type { NativeExecutableSnapshot } from '../../engines/kit/versionData.js'
-import { sid } from '../../lib/log.js'
+import { errorKind, sid } from '../../lib/log.js'
 import { matchesLaunchReceipt, RegistryOwnershipChanged, type LaunchPublication, type registry, type RegisteredSession, type RegistryAuthority } from '../../lib/registry.js'
 import { IdentityReadUnavailable } from '../../engines/kit/identityScan.js'
 import type { TerminalBackendCoordinator } from '../../lib/terminalBackendCoordinator.js'
@@ -122,7 +122,7 @@ export function createPaneWatcher({ registry, announceSession, triggerHint, capt
           // Before the hint: the pass it asks for is the one that must see this pane again.
           releaseRoute()
           void triggerHint(spawned.runtime, engine).catch((error) => {
-            console.warn(`[agent] background bind failed · ${engine} · ${error instanceof Error ? error.message : error}`)
+            console.warn(`[agent] background bind failed · ${engine} · ${errorKind(error)}`)
           })
           console.log(`[agent] create ready · ${engine}${local ? ' · local' : ''} · agent ${pending.agentId} · ${Date.now() - startedAt}ms`)
           return
@@ -233,7 +233,7 @@ export function createPaneWatcher({ registry, announceSession, triggerHint, capt
       if (failed) announceSession(failed)
       console.warn(`[agent] create timed out · ${engine} · agent ${pending.agentId}`)
     } catch (error) {
-      console.warn(`[agent] create watch failed · ${engine} · readiness publication unavailable`)
+      console.warn(`[agent] create watch failed · ${engine} · readiness publication unavailable · ${errorKind(error)}`)
     } finally {
       releaseRoute()
     }

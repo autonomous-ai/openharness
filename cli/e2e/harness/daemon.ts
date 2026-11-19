@@ -23,6 +23,7 @@ import { promisify } from 'node:util'
 import { isolatedTmux, type IsolatedTmux } from '../../src/testing/isolatedTmux.js'
 import { artifactLog, artifactsEnabled } from './artifacts.js'
 import { daemonEnvironment } from '../../src/testing/daemonEnvironment.js'
+import { writeExecutable } from '../../src/testing/executableFixture.js'
 import { GH_FORBIDDEN_STUB } from '../../src/testing/ghStub.js'
 import { readAdoptedHomes } from '../../src/engines/kit/homeAdoption.js'
 import { ownProcessGroup } from '../../src/lib/windows/noWindow.js'
@@ -30,6 +31,7 @@ import { endRootProcesses } from '../../src/testing/rootProcesses.js'
 import { assertSocketPathFits } from '../../src/testing/socketPathRoom.js'
 import { alive, processTable } from '../../src/testing/spawnedRuns.js'
 import { assertNodeAlone } from '../../src/testing/testNode.js'
+import { SYSTEM_FOLDERS } from '../../src/testing/testPath.js'
 import { forgetGroup, forgetTmux, leaderGone, watchGroup, watchTmux } from './reaper.js'
 
 const exec = promisify(execFile)
@@ -69,6 +71,8 @@ export interface EngineConfig {
   trustPrompt?: boolean
   /** Send Claude Code's kitty graphics query on start, then set this title [titleAfterMs] later (fakeEngine.mjs). */
   graphicsQuery?: { title: string; titleAfterMs: number }
+  /** The file under [root] where `codex queue` notes its calls: `codex-queue` when unset (harness/codexAppCli.ts). */
+  queueLedger?: string
 }
 
 export interface DaemonOptions {
@@ -102,6 +106,9 @@ export interface DaemonOptions {
   /** Run this bundle (an installed `cli.js`, its `notify.mjs` beside it: `assertHookScriptBeside`) instead of
    *  the checkout's source. */
   scriptPath?: string
+  /** Start from the sources with no process-image helper, even under `E2E_BUNDLE` (whose build embeds it): a build
+   *  that ships without the helper (identityHoldVisible.e2e.ts). */
+  withoutProcessImages?: boolean
   /** Keep the daemon's data folder here instead of under the throwaway root (a test volume). The fake
    *  engines read their hook credential from it, so it is set for them too. Its socket path is never measured:
    *  where it sits is the test's subject (noSocket.e2e.ts passes one too long on purpose). */
@@ -370,6 +377,27 @@ export class IsolatedDaemon {
     // helper (lib/guestAccounts.ts), which may be installed on the Mac the tests run on. Refused, as for an owner who
     // never turned guest access on.
     await writeFile(join(dirs.bin, 'sudo'), '#!/bin/sh\necho "sudo: a password is required" >&2\nexit 1\n', { mode: 0o755 })
+    // Nor does its open scan see a file held outside its root. The scan reads every `codex` on the computer
+    // (sessionSearch/externals/support.ts) and the devices write the dial skill into each Codex home whose rollout one
+    // holds: every daemon with a dial attached wrote it into another test's Codex homes, and deviceDialSkill.e2e.ts
+    // failed whenever the other dial files ran beside it, and into the developer's real ones too (2026-11-19). Found by
+    // name, first on its PATH. Only the open files the scan reads (-Fpn) lose the names outside the root. A process's
+    // folder (-d cwd) is kept: adoption reads it to place an engine process with no record, and one it cannot read may
+    // hold any conversation. lsof's other callers (process images, held files) see the computer as it is. A computer
+    // with no lsof has no scan to hide. Admitted before the daemon runs it: the scan gives lsof 3 s, and macOS checks a
+    // new executable on its first exec. It exits with lsof's status, never awk's: the scan tells lsof's empty match (1,
+    // nothing said) from a failure.
+    const lsof = SYSTEM_FOLDERS.map((folder) => join(folder, 'lsof')).find((file) => existsSync(file))
+    if (lsof) writeExecutable(join(dirs.bin, 'lsof'), `#!/bin/sh
+case " $* " in
+  *" -d cwd "*) exec '${lsof}' "$@" ;;
+  *" -Fpn "*)
+    exec 4>&1
+    status=$({ { '${lsof}' "$@" 3>&- 4>&-; echo $? >&3; } | awk -v root='${root}/' 'substr($0, 1, 1) != "n" || index($0, "n" root) == 1' >&4 3>&- 4>&-; } 3>&1)
+    exit "$status" ;;
+  *) exec '${lsof}' "$@" ;;
+esac
+`)
     // Nor does it ever reach the real Orca app on the Mac the tests run on, which every session here may be running
     // inside: a listed Orca agent asks Orca for a list. A launcher is an `orca` whose real path is in Orca's install
     // (devices/orcaHomes.ts), so the stub sits in one, linked from bin, and it is the Orca app's own too
@@ -450,10 +478,21 @@ export class IsolatedDaemon {
       HARNESS_GRID_BIN: '',
       HARNESS_OPEN_BIN: fakeOpen,
       HARNESS_ORCA_APP_BIN: orcaLauncher,
-      // Nor does a fake dial's attach install Harness's VS Code extension into the developer's VS Code
+      // Nor does a fake dial's attach install Harness's VS Code extension into the developer's VS Code or Cursor
       // (cable/vscodeExtensionSetup.ts): /Applications is the computer's, whatever the home, so the devices look for VS
-      // Code's `code` here alone, in place of /Applications, ~/Applications and PATH. Missing until a test writes its own.
+      // Code's `code` and Cursor's `cursor` here alone, in place of /Applications, ~/Applications and PATH. Missing
+      // until a test writes its own.
       HARNESS_VSCODE_BIN: join(own, 'vscode', 'code'),
+      HARNESS_CURSOR_BIN: join(own, 'cursor', 'cursor'),
+      // Nor does a word to a ChatGPT app session reach the developer's ChatGPT app (cable/hosts/codexQueue.ts):
+      // /Applications is the computer's, whatever the home, so the devices look for the app's own Codex CLI here alone,
+      // in place of /Applications and ~/Applications. Missing until a test writes its own (harness/codexAppCli.ts).
+      HARNESS_CODEX_APP_BIN: join(own, 'ChatGPT.app', 'Contents', 'Resources', 'codex-cli', 'CodexCLI.app', 'Contents', 'MacOS', 'codex'),
+      // Nor does a fake dial's attach start the ChatGPT app's source on the developer's app (services/devices.ts):
+      // /Applications is the computer's, whatever the home, so the devices look here in its place; ~/Applications is
+      // already the throwaway home's. Missing until a test writes its own, so no e2e file passes or fails by whether
+      // this Mac has the ChatGPT app.
+      HARNESS_APPLICATIONS_DIR: join(own, 'Applications'),
       // Claude Code's and Codex's hooks, installed as on a person's computer, into this home and CODEX_HOME
       // (assertHooksContained), and run by the fake engines. Every other engine's installer writes into
       // folders these tests have no engine for.
@@ -531,6 +570,10 @@ export class IsolatedDaemon {
     // and a test may name its script after `create` (`masterIpcExit.e2e.ts`).
     assertHooksContained(this.root, this.env)
     if (this.options.scriptPath) assertHookScriptBeside(this.options.scriptPath)
+    // An installed bundle may embed a helper of its own, and a test's own launcher starts what it says.
+    if (this.options.withoutProcessImages && (this.options.scriptPath || this.options.launch)) {
+      throw new Error('withoutProcessImages runs the sources; it cannot run a given bundle or launcher')
+    }
     // The product looks for npm-installed engines beside the Node the daemon runs on (lib/engineLaunch.ts
     // `npmRuntimeBins`), and on a developer's Mac the worker's Node was in the version manager's folder with their real
     // engines, which freshMachineEngines.e2e.ts's daemon found "already installed" (audit of 2026-11-16,
@@ -545,8 +588,11 @@ export class IsolatedDaemon {
     // Readiness is judged from what this start prints, never from an earlier boot's lines.
     const from = this.output.length
     // A test's own bundle (an old release), the run's bundle (`E2E_BUNDLE`, see bundle.ts), or the sources.
-    const bundle = this.options.scriptPath ?? process.env.E2E_BUNDLE_PATH
-    const script = bundle ? [bundle] : ['--import', 'tsx', 'src/cli.ts']
+    const bundle = this.options.withoutProcessImages ? undefined : this.options.scriptPath ?? process.env.E2E_BUNDLE_PATH
+    // From the sources on macOS, the helper a release embeds comes in by a preload (processImages.ts): without it the
+    // daemon held every Codex read for good. The master passes its flags on to the core and the services.
+    const preload = this.options.withoutProcessImages ? undefined : process.env.E2E_PROCESS_IMAGES_PRELOAD
+    const script = bundle ? [bundle] : [...(preload ? ['--import', preload] : []), '--import', 'tsx', 'src/cli.ts']
     // A process group of its own, which the core and the services join: one signal reaches all of them, whether or
     // not the master is still there, and the worker's reaper (reaper.ts) ends it should the worker go without closing it.
     const env = this.options.foreground ? await this.shellEnv() : this.env

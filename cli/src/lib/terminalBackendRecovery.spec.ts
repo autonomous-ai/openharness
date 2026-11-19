@@ -48,14 +48,14 @@ it('tries again after an unavailable result instead of caching another absence',
   expect(await recover()).toBe(backend)
 })
 
-it.each([new Error('not ready'), 'not ready'])('contains a preparation exception and permits a later retry: %s', async error => {
+it.each([[new Error('not ready'), 'Error'], ['not ready', 'string']])('contains a preparation exception and permits a later retry: %s', async (error, kind) => {
   const { deps, prepare, backend } = setup()
   const log = vi.spyOn(console, 'warn').mockImplementation(() => {})
   prepare.mockRejectedValueOnce(error)
   try {
     const recover = createTerminalBackendRecovery(deps)
     expect(await recover()).toBeNull()
-    expect(log).toHaveBeenCalledWith('[terminal] tmux recovery failed: not ready')
+    expect(log).toHaveBeenCalledWith(`[terminal] tmux recovery failed: ${kind}`)
     expect(await recover()).toBe(backend)
   } finally { log.mockRestore() }
 })

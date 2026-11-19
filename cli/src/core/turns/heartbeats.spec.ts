@@ -150,7 +150,7 @@ describe('turn heartbeats', () => {
     beats.startHeartbeat('s1')
     await vi.advanceTimersByTimeAsync(5_000)
     expect(deps.turnActivity.check).toHaveBeenCalledTimes(1)
-    expect(error).toHaveBeenCalledWith('[activity] probe failed:', 'Error: pane gone')
+    expect(error).toHaveBeenCalledWith('[activity] probe failed:', 'Error')
     beats.stopHeartbeat('s1')
     beats.stopHeartbeat('never-started')
   })

@@ -67,7 +67,7 @@ import { externalReservations, externalResumePending, externalResumeIds, parseEx
 import type { StartedBy } from './agentAttribution.js'
 import { PTY_HOST_INSTANCE } from './ptyHost/instance.js'
 import { isKittyGraphicsCommand } from './terminalTitle.js'
-import { sid } from './log.js'
+import { errorKind, sid } from './log.js'
 import { HOOK_GATEWAY_ENGINES } from './gatewayRuntime.js'
 
 export type { ProcessIdentity } from './terminalTypes.js'
@@ -569,7 +569,8 @@ function rowFingerprint(row: unknown): string {
 const BINDING_RECOVERY_HOLD = 'Waiting for native evidence after a concurrent binding write.'
 export class RegistryOwnershipChanged extends IdentityReadUnavailable {}
 
-/** Storage errors can quote file contents or paths. Only fixed categories cross this boundary. */
+/** Storage errors can quote file contents or paths. Only fixed categories cross this boundary, and the disk's
+ *  code on `cause`, so the log line can say `ENOSPC` or `EROFS`. */
 function persistenceFailure(error: unknown, names = false): Error {
   if (error instanceof IdentityReadUnavailable || error instanceof RegistryPersistenceUnavailable) return error
   const subject = names ? 'name storage' : 'registry storage'
@@ -585,7 +586,7 @@ function persistenceFailure(error: unknown, names = false): Error {
         : code === 'EACCES' || code === 'EPERM' ? 'access was refused'
           : code === 'ENOENT' ? 'is unavailable'
             : code === 'ELOOP' ? 'has an unsafe file type' : 'write failed'
-  const failure = new RegistryPersistenceUnavailable(`${subject} ${category}`)
+  const failure = new RegistryPersistenceUnavailable(`${subject} ${category}`, typeof code === 'string' ? code : undefined)
   return error instanceof AtomicWriteUnconfirmed ? new AtomicWriteUnconfirmed(failure, error.retryable) : failure
 }
 
@@ -1319,7 +1320,7 @@ class Registry {
   private entered(owner: RegisteredSession): void {
     if (this.initializing || this.exiting) return
     try { this.onEnter?.(owner.engine, owner) }
-    catch { console.warn('[registry] entry notification failed') }
+    catch (caughtFailure) { console.warn(('[registry] entry notification failed') + ' · ' + errorKind(caughtFailure)) }
   }
 
   private drop(entry: RegisteredSession | undefined): void {
@@ -1394,7 +1395,7 @@ class Registry {
       secureStateDirectory(env.ADAPTER_DATA_DIR)
     } catch (error) {
       this.writeBlocked = true
-      console.error('[registry] unsafe state directory; refusing to load or write state:', error)
+      console.error('[registry] unsafe state directory; refusing to load or write state:', errorKind(error))
       return
     }
     await this.loadNames()
@@ -1691,7 +1692,7 @@ class Registry {
       if (error instanceof SyntaxError) await this.quarantine('is not JSON', originalContents!)
       else if (existsSync(FILE)) {
         this.writeBlocked = true
-        console.error('[registry] registry is unreadable; refusing to overwrite it:', error instanceof Error ? error.message : error)
+        console.error('[registry] registry is unreadable; refusing to overwrite it:', errorKind(error))
       } else {
         writeBoot(bootId)
         atomicWriteJson(OWN_MODES_FILE, Date.now())
@@ -1736,7 +1737,7 @@ class Registry {
       console.error(`[registry] registry ${reason}; moved it aside and started empty`)
     } catch (error) {
       this.writeBlocked = true
-      console.error(`[registry] registry ${reason}, and it could not be moved aside (${error instanceof Error ? error.message : error}); refusing to overwrite it`)
+      console.error(`[registry] registry ${reason}, and it could not be moved aside (${errorKind(error)}); refusing to overwrite it`)
       if (error instanceof RegistryPersistenceUnavailable) throw error
     }
   }
@@ -2064,7 +2065,7 @@ class Registry {
       return structuredClone(committed)
       })
     }).catch(error => {
-      console.error('[registry] pending admission failed')
+      console.error(`[registry] pending admission failed · ${errorKind(error)}`)
       // Read as a taken route, a storage refusal opened and closed three panes and answered "tmux pane could not
       // be registered" (e2e/diskfull.e2e.ts, 2026-11-17). Its caller answers it by name instead.
       if (error instanceof RegistryPersistenceUnavailable || error instanceof AtomicWriteUnconfirmed) throw error
@@ -2103,7 +2104,7 @@ class Registry {
       this.terminalAvailableAgents.add(entry.agentId)
       return structuredClone(committed)
     }).catch(error => {
-      console.error('[registry] resume admission failed')
+      console.error(`[registry] resume admission failed · ${errorKind(error)}`)
       if (error instanceof AtomicWriteUnconfirmed || error instanceof RegistryCleanupUnavailable) throw error
       return null
     })
@@ -3321,7 +3322,7 @@ class Registry {
     }
     const timer = options.holdSavesMs === undefined ? undefined : setTimeout(() => {
       console.warn(`[registry] a transaction has held saves back for ${options.holdSavesMs} ms; saving without waiting for it`)
-      void release().catch(() => console.error('[registry] transaction save failed'))
+      void release().catch((error) => console.error(`[registry] transaction save failed · ${errorKind(error)}`))
     }, options.holdSavesMs)
     timer?.unref?.()
     try {
@@ -3383,7 +3384,7 @@ class Registry {
       started = true
       this.pendingObservation = undefined
       await this.persist(deadline)
-    }).catch(() => { console.error('[registry] save failed') })
+    }).catch((error) => { console.error(`[registry] save failed · ${errorKind(error)}`) })
     if (!started) this.pendingObservation = pending
     void pending.finally(() => { if (this.pendingObservation === pending) this.pendingObservation = undefined })
     return pending
@@ -3901,7 +3902,7 @@ class Registry {
       }))
     } catch (err) {
       if (strict) throw persistenceFailure(err)
-      console.error('[registry] save failed')
+      console.error(`[registry] save failed · ${errorKind(err)}`)
     }
     return committedOwner
   }
@@ -3926,7 +3927,7 @@ class Registry {
       started = true
       this.pendingNames = undefined
       await this.persistNames(deadline)
-    }).catch(() => { this.namesUnsaved = true; console.error('[registry] save names failed') })
+    }).catch((error) => { this.namesUnsaved = true; console.error(`[registry] save names failed · ${errorKind(error)}`) })
     if (!started) this.pendingNames = pending
     void pending.finally(() => { if (this.pendingNames === pending) this.pendingNames = undefined })
   }

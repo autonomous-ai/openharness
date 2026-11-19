@@ -4,6 +4,7 @@ import { delimiter, join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { TmuxBackend } from './tmuxBackend.js'
 import { ensureTmuxOnPath, managedTmuxPath, resolveViaLoginShell, TMUX_CHECK_MS, tmuxAvailableNow, tmuxInstallDirectories } from './tmuxOnPath.js'
+import { writeExecutable } from '../testing/executableFixture.js'
 
 const dirs: string[] = []
 const originalPath = process.env.PATH
@@ -25,14 +26,13 @@ const noManagedTmux = () => scratch('tmux-onpath-no-runtime-')
 function fakeShell(binDir: string): string {
   const dir = scratch('tmux-onpath-shell-')
   const shell = join(dir, 'sh')
-  writeFileSync(shell, `#!/bin/sh
+  writeExecutable(shell, `#!/bin/sh
 # Mimics "zsh -lic <script> $0 $1": drop the flag, run the script with the remaining positionals.
 shift
 # Hermetic: ONLY this dir, or the real tmux on the test machine leaks in and the
 # "cannot find it either" case silently passes for the wrong reason.
 PATH="${binDir}" exec /bin/sh -c "$@"
 `)
-  chmodSync(shell, 0o700)
   return shell
 }
 
@@ -40,7 +40,7 @@ PATH="${binDir}" exec /bin/sh -c "$@"
 function loginOnlyShell(binDir: string): string {
   const dir = scratch('tmux-onpath-login-')
   const shell = join(dir, 'bash')
-  writeFileSync(shell, `#!/bin/sh
+  writeExecutable(shell, `#!/bin/sh
 # The daemon asks bash with '-ic'; only '-lic' reads the file this user's PATH lives in.
 case "$1" in
   -lic) ;;
@@ -49,7 +49,6 @@ esac
 shift
 PATH="${binDir}" exec /bin/sh -c "$@"
 `)
-  chmodSync(shell, 0o700)
   return shell
 }
 
@@ -105,12 +104,11 @@ describe('ensureTmuxOnPath', () => {
   it('finds tmux after startup chatter from the login shell', async () => {
     const binDir = fakeTmux()
     const shell = join(scratch('tmux-onpath-chatty-shell-'), 'zsh')
-    writeFileSync(shell, `#!/bin/sh
+    writeExecutable(shell, `#!/bin/sh
 shift
 printf '%s\\n' 'Now using node v25.7.0'
 PATH="${binDir}" exec /bin/sh -c "$@"
 `)
-    chmodSync(shell, 0o700)
     const env: NodeJS.ProcessEnv = { PATH: '/nonexistent-for-this-test' }
 
     const outcome = await ensureTmuxOnPath(env, shell, noManagedTmux())
@@ -194,13 +192,12 @@ PATH="${binDir}" exec /bin/sh -c "$@"
     // A tmux that answers like the real one, in a directory the daemon's PATH does not list.
     const binDir = scratch('tmux-onpath-real-')
     const tmux = join(binDir, 'tmux')
-    writeFileSync(tmux, `#!/bin/sh
+    writeExecutable(tmux, `#!/bin/sh
 case "$1" in
   new-session) printf '%%7\\n' ;;
 esac
 exit 0
 `)
-    chmodSync(tmux, 0o700)
     const shell = fakeShell(binDir)
 
     // Before: exactly what the machine reported after its reboot.
@@ -220,12 +217,12 @@ exit 0
 
   it('creates the first pane with an installed tmux absent from a fresh user’s shell', async () => {
     const binDir = scratch('tmux-onpath-installed-')
-    writeFileSync(join(binDir, 'tmux'), `#!/bin/sh
+    writeExecutable(join(binDir, 'tmux'), `#!/bin/sh
 case "$1" in
   -V) printf 'tmux 3.7c\\n' ;;
   new-session) printf '%%0\\n' ;;
 esac
-`, { mode: 0o700 })
+`)
     const runtimeDir = noManagedTmux()
     process.env.PATH = '/nonexistent-for-this-test'
     const backend = new TmuxBackend()
@@ -255,7 +252,7 @@ esac
     const broken = scratch('tmux-onpath-broken-')
     writeFileSync(join(broken, 'tmux'), '#!/bin/sh\nexit 1\n', { mode: 0o700 })
     const working = scratch('tmux-onpath-working-')
-    writeFileSync(join(working, 'tmux'), '#!/bin/sh\nprintf "tmux 3.7c\\n"\n', { mode: 0o700 })
+    writeExecutable(join(working, 'tmux'), '#!/bin/sh\nprintf "tmux 3.7c\\n"\n')
     const env: NodeJS.ProcessEnv = { PATH: '/nonexistent' }
     expect(await ensureTmuxOnPath(env, '/nonexistent/shell', noManagedTmux(), [broken, working]))
       .toMatchObject({ state: 'adopted', path: join(working, 'tmux') })
@@ -265,7 +262,7 @@ esac
   // Under load a working tmux's `-V` took past the 2 s it was given and read as absent (flipped absent/adopted on a loaded Mac).
   it('adopts an install candidate whose version check is slow but answers, and never one that does not answer', async () => {
     const slow = scratch('tmux-onpath-slow-')
-    writeFileSync(join(slow, 'tmux'), '#!/bin/sh\n/bin/sleep 2.5\nprintf "tmux 3.7c\\n"\n', { mode: 0o700 })
+    writeExecutable(join(slow, 'tmux'), '#!/bin/sh\n/bin/sleep 2.5\nprintf "tmux 3.7c\\n"\n')
     const env: NodeJS.ProcessEnv = { PATH: '/nonexistent' }
     expect(await ensureTmuxOnPath(env, '/nonexistent/shell', noManagedTmux(), [slow]))
       .toMatchObject({ state: 'adopted', path: join(slow, 'tmux') })

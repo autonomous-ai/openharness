@@ -77,7 +77,7 @@ static struct {
     int draft_drag, tab_drag, start_x, start_y, last_x, last_y, tab_count, machine_count, model_count, notice_count, pet_pose;
     int touch_far2;
     uint32_t touch_started, coast_until, character_activity, pet_until, nap_until, last_celebration;
-    uint32_t notice_sequence, voice_retry_until, error_until;
+    uint32_t voice_retry_until, error_until;
     char hint[40];
     bool machine_view;
     cable_app_t apps[CABLE_MAX_APPS];
@@ -232,17 +232,17 @@ code += function('color')
 code += function('settings_item') + function('settings_count') + function('hit_contains')
 code += function('find')
 code += 'static void notice_expire(uint32_t now);\n'
-for name in ['copy', 'recap_preview', 'notice_unread', 'notice_was_read', 'notice_forget_read', 'notice_flush_reads', 'notice_mark_read', 'habitat_scene_receipt', 'habitat_scene_presented', 'pane_memory', 'pane_memory_apply', 'dismiss_result', 'activity_text', 'host_name', 'face_app', 'agent_allows', 'ensure', 'input_cancel', 'view', 'notice_open', 'workspace_index', 'face_id', 'tab_id_at', 'tabs_open', 'app_index', 'apps_open', 'hold_picks_app', 'hold_open', 'app_pick', 'workspace_failed', 'tab_request', 'tabs_sync', 'ui_scroll_reportable', 'focus_face_for', 'focus_chord', 'focus_put', 'focus_span', 'focus_take', 'focus_rows', 'ui_rows', 'ui_can_display', 'ui_wrap', 'text_in', 'control', 'home_footer', 'footer_control', 'text', 'center', 'render_brand', 'heading', 'question_view', 'question_rows', 'question_move', 'question_text', 'render_question', 'render_choices', 'render_answer_review', 'question_answer', 'send_answer', 'make_action', 'character_mood', 'voice_status', 'status_animated', 'status_speed', 'status_wake_ms', 'surface_tick', 'render_workspace_preview', 'question_prompt', 'focus_bell', 'render_home', 'render_voice', 'render_selection', 'render_form', 'draft_move', 'render_draft', 'render_draft_options', 'ui_swarms_replace', 'ui_workspace_applied', 'ui_land_after_reload']:
+for name in ['copy', 'recap_preview', 'notice_unread', 'notice_was_read', 'notice_forget_read', 'notice_flush_reads', 'notice_mark_read', 'habitat_scene_receipt', 'habitat_scene_presented', 'pane_memory', 'pane_memory_apply', 'dismiss_result', 'activity_text', 'host_name', 'face_app', 'agent_allows', 'ensure', 'input_cancel', 'view', 'notice_open', 'workspace_index', 'face_id', 'tab_id_at', 'tabs_open', 'app_index', 'apps_open', 'hold_picks_app', 'apps_switch', 'apps_from_switch', 'hold_open', 'app_pick', 'workspace_failed', 'tab_request', 'tabs_sync', 'ui_scroll_reportable', 'focus_face_for', 'focus_chord', 'focus_put', 'focus_span', 'focus_take', 'focus_rows', 'ui_rows', 'ui_can_display', 'ui_wrap', 'text_in', 'control', 'home_footer', 'footer_control', 'text', 'center', 'render_brand', 'heading', 'question_view', 'question_rows', 'question_move', 'question_text', 'render_question', 'render_choices', 'render_answer_review', 'question_answer', 'send_answer', 'make_action', 'character_mood', 'voice_status', 'status_animated', 'status_speed', 'status_wake_ms', 'surface_tick', 'render_workspace_preview', 'question_prompt', 'focus_bell', 'render_home', 'render_voice', 'render_selection', 'render_form', 'draft_move', 'render_draft', 'render_draft_options', 'ui_swarms_replace', 'ui_workspace_applied', 'ui_land_after_reload']:
     code += function(name)
 code += function('render_settings') + function('ui_visit_state')
 code += function('ui_project_known') + function('ui_focus_project') + function('ui_apply_pending_focus')
-code += function('focus_centred') + function('focus_header') + function('focus_clipped') + function('tabs_move') + function('tab_split') + function('tab_fade') + function('tab_neighbour') + function('focus_carousel') + function('tab_label') + function('render_focus_tabs') + function('app_label') + function('app_under') + function('render_apps') + function('pane_label') + function('render_agents') + function('render_tabs') + function('page_controls') + function('css_line') + function('inbox_line') + function('inbox_page') + function('render_focus_inbox') + function('render_list')
-for name in ['notice_remove', 'notice_sync_view', 'notice_selection', 'notice_restore_selection', 'notice_add', 'notice_expire', 'on_face', 'notice_read_now', 'ui_notify_summary', 'ui_turn_error', 'ui_notif_seen', 'ui_notif_read', 'ui_notif_replace', 'ui_notif_open', 'ui_question_close', 'ui_answer_receipt']:
+code += function('focus_centred') + function('focus_spaced') + function('focus_header') + function('focus_switch') + function('focus_clipped') + function('tabs_move') + function('tab_split') + function('tab_fade') + function('tab_neighbour') + function('focus_carousel') + function('tab_label') + function('render_focus_tabs') + function('app_label') + function('app_under') + function('render_apps') + function('pane_label') + function('render_agents') + function('render_tabs') + function('page_controls') + function('css_line') + function('inbox_line') + function('inbox_page') + function('render_focus_inbox') + function('render_list')
+code += 'static void dispatch(action_t a);\n'
+for name in ['notice_drop', 'notice_remove', 'notice_remove_question', 'notice_sync_view', 'notice_selection', 'notice_restore_selection', 'notice_make_room', 'notice_add', 'notice_expire', 'on_face', 'notice_read_now', 'ui_notify_summary', 'ui_turn_error', 'ui_notif_seen', 'ui_notif_read', 'ui_notif_replace', 'ui_notif_open', 'ui_question_close', 'ui_answer_receipt']:
     code += function(name)
 code += '#define ui_notify_task_done(a,b,c,d) ui_notify_summary(a,b,c,d,"alert",false,false)\n'
 for name in ['ui_project_set_host_caps', 'ui_fleet_set_view', 'ui_apps_replace', 'ui_apps_forget', 'event', 'ui_project_emit', 'ui_project_restore_event', 'ui_project_clear_event', 'ui_project_set_name', 'ui_project_remove', 'ui_project_clear_all', 'ui_project_apply_order']:
     code += function(name)
-code += 'static void dispatch(action_t a);\n'
 visit_actions=source.split('    case A_LATEST:',1)[1].split('    case A_TABS:',1)[0]
 code+='static void visit_action(action_t a) { switch(a.kind) { case A_LATEST:'+visit_actions+'default: break; } }\n'
 notice_actions=source.split('    case A_NOTICE:',1)[1].split('    case A_LATEST:',1)[0]
@@ -300,7 +300,8 @@ static void dispatch(action_t a) {
     else if (a.kind == A_RECAP_DISMISS) dismiss_result(a.id);
     else if (a.kind == A_DESKTOP) desktop_action(a);
     else if (a.kind == A_UP || a.kind == A_DOWN) page_action(a);
-    else if (a.kind == A_TABS || a.kind == A_TAB || a.kind == A_TAB_DONE || a.kind == A_APP || a.kind == A_APP_DONE) workspace_action(a);
+    else if (a.kind == A_TABS || a.kind == A_TAB || a.kind == A_TAB_DONE || a.kind == A_APP || a.kind == A_APP_DONE ||
+             a.kind == A_SWITCH_TABS || a.kind == A_SWITCH_APPS) workspace_action(a);
     else if (a.kind == A_SELECT_BEGIN) {
         view(SELECTION); ht_selection_open(&selection,"pick-test",active()->id,1800,select_emit,NULL);
     } else if (a.kind == A_SELECT_EXTEND) ht_selection_extend(&selection,3000);
@@ -886,7 +887,9 @@ static void pane_notification_soak(void) {
         for(int i=0;i<s.notice_count;i++) {
             assert(s.notice[i].agent_id[0] && memchr(s.notice[i].agent_id,0,ID_MAX));
             assert(memchr(s.notice[i].summary,0,sizeof s.notice[i].summary));
-            for(int j=0;j<i;j++) assert(strcmp(s.notice[i].agent_id,s.notice[j].agent_id));
+            // One row per agent and kind: an agent's news sits beside its open question.
+            for(int j=0;j<i;j++)
+                assert(strcmp(s.notice[i].agent_id,s.notice[j].agent_id) || s.notice[i].question!=s.notice[j].question);
         }
         if((step&255)==0) {
             for(int i=0;i<PANE_MEMORY_MAX;i++) {
@@ -1025,6 +1028,100 @@ static void bell_checks(const char *dir) {
     reset(); scene_take();
     assert(!blue_bell_drawn() && !action_enabled(A_INBOX));   // an empty inbox has no bell
     puts("bell/inbox: an empty inbox draws no bell PASS");
+    // The bell counts agents, like the window: "b"'s unread question and its unread news are one.
+    // Snapshot rows run newest first, and a newer question replaces the news: the news here is the newer row.
+    cable_notif_t both[2]={
+        {.agent_id="b",.name="Release",.summary="The release notes are ready."},
+        {.agent_id="b",.name="Release",.summary="May I publish this release?",.question=true}};
+    reset(); ui_notif_replace(both,2); scene_take();
+    assert(s.notice_count==2 && s.notice[0].question && !s.notice[1].question);
+    assert(notice_unread(NULL)==1 && notice_unread("a")==1 && status_is(HT_BELL " 1"));
+    // A read row does not hide its agent's unread one: the question read, the news still counts.
+    notice_mark_read(&s.notice[0]); assert(notice_unread(NULL)==1);
+    puts("bell/inbox: an agent's unread question and news count one PASS");
+    reset();
+}
+static bool notice_has(const char *id, bool question) {
+    for(int i=0;i<s.notice_count;i++)
+        if(!strcmp(s.notice[i].agent_id,id) && s.notice[i].question==question) return true;
+    return false;
+}
+// A full inbox never gives up a question for a message.
+static void inbox_full_checks(void) {
+    cable_notif_t rows[NOTICES]={0};
+    char id[ID_MAX];
+    // 23 questions and the message being read: a new message has nothing to take the place of. The oldest question is
+    // the read message's agent's own: the card being read is that row, not its agent.
+    for(int i=0;i<NOTICES-2;i++) {
+        snprintf(rows[i].agent_id,sizeof rows[i].agent_id,"q-%d",i);
+        COPY(rows[i].summary,"May I go on?"); rows[i].question=true;
+    }
+    strcpy(rows[NOTICES-2].agent_id,"read"); COPY(rows[NOTICES-2].summary,"The build passed.");
+    strcpy(rows[NOTICES-1].agent_id,"read"); COPY(rows[NOTICES-1].summary,"May I ship?"); rows[NOTICES-1].question=true;
+    reset(); ui_notif_replace(rows,NOTICES); ui_notif_open();
+    s.offset=NOTICES-1; assert(!strcmp(s.notice[s.offset].agent_id,"read") && !s.notice[s.offset].question);
+    ui_notify_task_done("new","New pane","M2","Another result arrived.");
+    assert(s.notice_count==NOTICES && s.view==INBOX && !strcmp(s.notice[s.offset].agent_id,"read"));
+    for(int i=0;i<NOTICES-2;i++) { snprintf(id,sizeof id,"q-%d",i); assert(notice_has(id,true)); }
+    assert(notice_has("read",true));
+    assert(notice_add("q-new","New pane","M2","May I go on?",true,false));
+    snprintf(id,sizeof id,"q-%d",NOTICES-3);
+    assert(!notice_has("read",true) && notice_has(id,true));
+    assert(!strcmp(s.notice[s.offset].agent_id,"read") && !s.notice[s.offset].question);
+    // 24 questions: a message is refused; a question takes the oldest question's place but the one being read.
+    for(int i=0;i<NOTICES;i++) {
+        snprintf(rows[i].agent_id,sizeof rows[i].agent_id,"q-%d",i);
+        COPY(rows[i].summary,"May I go on?"); rows[i].question=true;
+    }
+    reset(); ui_notif_replace(rows,NOTICES); wakes=0;
+    // With no row to read, nothing rings, wakes or celebrates; a failure still shows as an error about no agent does.
+    assert(!ui_notify_task_done("new","New pane","M2","Another result arrived.") && !wakes && !s.pet_pose);
+    assert(!ui_turn_error("new","The build crashed.") && !wakes && s.view==MESSAGE);
+    assert(s.notice_count==NOTICES && !notice_has("new",false));
+    for(int i=0;i<NOTICES;i++) { snprintf(id,sizeof id,"q-%d",i); assert(notice_has(id,true)); }
+    ui_notif_open(); s.offset=NOTICES-1; char oldest[ID_MAX]; COPY(oldest,s.notice[s.offset].agent_id);
+    char next[ID_MAX]; COPY(next,s.notice[NOTICES-2].agent_id);
+    assert(notice_add("q-new","New pane","M2","May I go on?",true,false));
+    assert(s.notice_count==NOTICES && notice_has("q-new",true) && notice_has(oldest,true) && !notice_has(next,true));
+    assert(!strcmp(s.notice[s.offset].agent_id,oldest));
+    // Messages and a question kept at the end while it was read: the oldest message gives way, not the question.
+    cable_notif_t held={.agent_id="held",.name="Release",.summary="May I publish?",.question=true,.read_token="t"};
+    reset(); ui_notif_replace(&held,1); ui_notif_open(); notice_mark_read(&s.notice[s.offset]);
+    for(int i=0;i<NOTICES-1;i++) {
+        memset(&rows[i],0,sizeof rows[i]);
+        snprintf(rows[i].agent_id,sizeof rows[i].agent_id,"m-%d",i); COPY(rows[i].summary,"Done.");
+    }
+    ui_notif_replace(rows,NOTICES-1);
+    assert(s.notice_count==NOTICES && s.notice[NOTICES-1].question && !strcmp(s.notice[NOTICES-1].agent_id,"held"));
+    s.offset=0; COPY(oldest,s.notice[NOTICES-2].agent_id);
+    ui_notify_task_done("new","New pane","M2","Another result arrived.");
+    assert(s.notice_count==NOTICES && notice_has("held",true) && notice_has("new",false) && !notice_has(oldest,false));
+    // A full snapshot without the message being read: the oldest message makes room for it, no question goes.
+    cable_notif_t read={.agent_id="held",.name="Release",.summary="Published.",.read_token="t"};
+    for(int i=0;i<NOTICES;i++) {
+        memset(&rows[i],0,sizeof rows[i]);
+        snprintf(rows[i].agent_id,sizeof rows[i].agent_id,i<4 ? "q-%d" : "m-%d",i);
+        COPY(rows[i].summary,"Done."); rows[i].question=i<4;
+    }
+    reset(); ui_notif_replace(&read,1); ui_notif_open(); notice_mark_read(&s.notice[s.offset]);
+    ui_notif_replace(rows,NOTICES);
+    assert(s.notice_count==NOTICES && s.view==INBOX && !strcmp(s.notice[s.offset].agent_id,"held") && !s.notice[s.offset].question);
+    for(int i=0;i<4;i++) { snprintf(id,sizeof id,"q-%d",i); assert(notice_has(id,true)); }
+    snprintf(id,sizeof id,"m-%d",NOTICES-1); assert(!notice_has(id,false));
+    // 24 questions: none gives way to the message being read, which goes.
+    for(int i=0;i<NOTICES;i++) { snprintf(rows[i].agent_id,sizeof rows[i].agent_id,"q-%d",i); rows[i].question=true; }
+    reset(); ui_notif_replace(&read,1); ui_notif_open(); notice_mark_read(&s.notice[s.offset]);
+    ui_notif_replace(rows,NOTICES);
+    assert(s.notice_count==NOTICES && !notice_has("held",false));
+    for(int i=0;i<NOTICES;i++) { snprintf(id,sizeof id,"q-%d",i); assert(notice_has(id,true)); }
+    // The question being read stays in its place: the oldest question gives way to it.
+    read.question=true;
+    reset(); ui_notif_replace(&read,1); ui_notif_open(); notice_mark_read(&s.notice[s.offset]);
+    ui_notif_replace(rows,NOTICES);
+    assert(s.notice_count==NOTICES && s.view==INBOX && !strcmp(s.notice[s.offset].agent_id,"held") && s.notice[s.offset].question);
+    snprintf(id,sizeof id,"q-%d",NOTICES-1); assert(!notice_has(id,true));
+    for(int i=0;i<NOTICES-1;i++) { snprintf(id,sizeof id,"q-%d",i); assert(notice_has(id,true)); }
+    puts("inbox full: a message never takes a question's place; the oldest message, or the oldest question for a question, goes PASS");
     reset();
 }
 
@@ -1132,7 +1229,7 @@ static void notification_read_checks(const char *dir) {
     assert(!ui_notify_summary("c","C","M2","x",NULL,true,true) && s.notice_count==1);
     assert(!ui_notify_summary("c","C","M2","x","bogus",true,false) && s.notice_count==2);
     assert(ui_notify_summary("d","D","M2","x",NULL,false,false) && s.notice_count==3 && wakes==1);
-    // One row per agent: the newest wins.
+    // One news row per agent: the newest wins.
     assert(ui_notify_summary("d","D","M2","newer","alert",false,false) && s.notice_count==3 && !strcmp(s.notice[0].summary,"newer"));
     // On the face: no beep, no wake, no celebration, and the row is read at once.
     reset(); fake_ms=5000; wakes=0;
@@ -1169,7 +1266,65 @@ static void notification_read_checks(const char *dir) {
     reset(); fake_ms=9000; ui_turn_error("b","");
     assert(!strcmp(s.notice[0].summary,"The turn failed") && !strcmp(s.message,"The turn failed"));
     ui_turn_error("c",NULL); assert(!strcmp(s.message,"The turn failed"));
-    puts("Notification tiers: alert/list/silent, old-daemon flags, face, one row per agent, 6 h expiry and 8 s error PASS");
+    puts("Notification tiers: alert/list/silent, old-daemon flags, face, one news row per agent, 6 h expiry and 8 s error PASS");
+
+    // A question outlives news: a turn's summary, a failure or a drawer's news row about the same agent lands beside
+    // its open question, never in its place, and each row keeps its own read token.
+    cable_notif_t asked={.agent_id="b",.name="B",.summary="Ship it?",.question=true,.read_token="question-1"};
+    reset(); ui_notif_replace(&asked,1);
+    ui_notify_summary("b","B","M2","Built.","list",false,false);
+    assert(s.notice_count==2 && s.notice[0].question && !strcmp(s.notice[1].summary,"Built."));
+    ui_turn_error("b","The build crashed.");
+    assert(s.notice_count==2 && s.notice[0].question && s.notice[1].failed);
+    cable_notif_t beside[2]={
+        {.agent_id="b",.name="B",.summary="Built.",.read_token="turn-1"},
+        {.agent_id="b",.name="B",.summary="Ship it?",.question=true,.read_token="question-1"}};
+    ui_notif_replace(beside,2);
+    assert(s.notice_count==2 && !strcmp(s.notice[0].read_token,"question-1") && !strcmp(s.notice[1].read_token,"turn-1"));
+    // The desktop reading the news row clears that row, not the question beside it.
+    ui_notif_read("b","turn-1"); assert(s.notice_count==1 && s.notice[0].question);
+    // Both rows read before a receipt goes out: each keeps its own.
+    reset(); ui_notif_replace(beside,2); congestion=true;
+    notice_mark_read(&s.notice[0]); notice_mark_read(&s.notice[1]);
+    int receipts=0; for (int i=0;i<NOTICES;i++) receipts+=s.notice_reads[i].pending;
+    assert(receipts==2); congestion=false;
+    // The card being read, the news row, stays in place as another agent's news arrives, and as a drawer that names
+    // only its agent's question replaces the rest.
+    reset(); ui_notif_replace(beside,2); ui_notif_open(); s.offset=1;
+    ui_notify_summary("c","C","M2","Done.","list",false,false);
+    assert(s.notice_count==3 && !strcmp(s.notice[s.offset].agent_id,"b") && !s.notice[s.offset].question);
+    notice_mark_read(&s.notice[s.offset]); ui_notif_replace(&asked,1);
+    assert(s.notice_count==2 && !strcmp(s.notice[s.offset].agent_id,"b") && !s.notice[s.offset].question);
+    // The question's row goes alone too: read on the desktop, closed elsewhere or answered here, the news beside it stays.
+    reset(); ui_notif_replace(beside,2);
+    ui_notif_read("b","question-1"); assert(s.notice_count==1 && !s.notice[0].question);
+    reset(); ui_notif_replace(beside,2);
+    ui_question_close("b","request-1"); assert(s.notice_count==1 && !s.notice[0].question);
+    // The person opened question A of the agent, which then asked B: B's close takes B's row, the news stays.
+    reset(); ui_notif_replace(beside,2); strcpy(s.q.agent,"b"); strcpy(s.q.request,"A");
+    ui_question_close("b","B"); assert(s.notice_count==1 && !s.notice[0].question);
+    // A close while the agent's question screen still loads takes the row and the loading screen.
+    reset(); ui_notif_replace(beside,2); strcpy(s.q.agent,"b"); s.q.loading=true; s.view=QUESTION;
+    ui_question_close("b","B"); assert(s.notice_count==1 && !s.notice[0].question && s.view==HOME && !s.q.loading);
+    reset(); ui_notif_replace(beside,2);
+    strcpy(s.q.agent,"b"); strcpy(s.q.fetch,"fetch-1"); strcpy(s.q.token,"token-1"); s.q.valid=s.q.pending=true;
+    {
+        cJSON fields[]={
+            {.string="agentId",.type=JSTRING,.valuestring="b"},
+            {.string="requestId",.type=JSTRING,.valuestring="fetch-1"},
+            {.string="token",.type=JSTRING,.valuestring="token-1"},
+            {.string="ok",.type=JTRUE}};
+        for(int i=0;i<3;i++)fields[i].next=&fields[i+1];
+        cJSON receipt={.child=fields}; ui_answer_receipt(&receipt);
+    }
+    assert(!s.q.valid && s.notice_count==1 && !s.notice[0].question);
+    // News about the agent keeps the read of its question's row: the receipt still goes out, and the row stays read.
+    reset(); ui_notif_replace(&asked,1); congestion=true; notice_mark_read(&s.notice[0]);
+    ui_notify_summary("b","B","M2","Built.","list",false,false); ui_turn_error("b","The build crashed.");
+    receipts=0; for (int i=0;i<NOTICES;i++) receipts+=s.notice_reads[i].pending;
+    assert(receipts==1); congestion=false;
+    ui_notif_replace(&asked,1); assert(s.notice_count==1 && s.notice[0].read_on_dial);
+    puts("Notification beside a question: summary, failure, drawer tokens, desktop read, receipts and the card being read PASS");
     reset();
 }
 
@@ -1374,10 +1529,191 @@ static void app_picker_checks(const char *dir) {
     }
     puts("APPS picker: a hold in the machine view opens it on the shown app, pages drawn as the mockup, picks only on Done or a tap, kept by app id; the hints say Hold for apps and Hold to switch apps PASS");
 }
+/*
+ * THE TABS | APPS SWITCH (spec 2026-11-18-dial-tabs-apps-switch, mockup tabs-apps-options "2 · Pill"): on the window's
+ * tab, with the daemon's apps.switch and another app with agents, the TABS title is a pill. Its APPS cell flips to the
+ * other apps, a pick there turns the dial to that app, and its TABS cell goes back.
+ */
+static void switch_setup(int n) {
+    workspace_setup(); ht_character_select(&character, HT_CHARACTER_FOCUS); fake_ms = 1000;
+    host_features |= CABLE_FEATURE_APPS_SWITCH; ui_apps_replace(picker_rows, n, "harness"); scene_take();
+}
+// TABS from a hold, then a tap on the pill's APPS.
+static void switch_apps(void) {
+    switch_setup(3); hold_at(233, 230); fake_ms += 1000; tap(fake_ms, 275, 76);
+}
+static const hit_t *hit_of(action_kind_t action) {
+    for (int i = 0; i < s.hit_count; i++) if (s.hits[i].action == action) return &s.hits[i];
+    return NULL;
+}
+static bool hit_is(const hit_t *h, int x, int y, int w, int height) {
+    return h && h->rect.x == x && h->rect.y == y && h->rect.w == w && h->rect.h == height;
+}
+// The title's letters: Inter 20 runs at y 62, in order.
+static int title_letters(const ht_run_t **letters, int cap) {
+    int n = 0;
+    for (int i = 0; i < scene.count; i++)
+        if (scene.runs[i].font == &ht_lv_inter_20.base && scene.runs[i].y == 62 && scene.runs[i].text[0] && n < cap)
+            letters[n++] = &scene.runs[i];
+    return n;
+}
+// The pill, `apps` its selected cell: two boxes, eight letters each word centred in its 84 px cell, and the two hits.
+static void pill_is(bool apps) {
+    static const char *const word[8] = {"T", "A", "B", "S", "A", "P", "P", "S"};
+    const ht_run_t *outer = NULL, *cell = NULL, *letters[16];
+    for (int i = 0; i < scene.count; i++) {
+        if (scene.runs[i].box.h == 36) { assert(!outer); outer = &scene.runs[i]; }
+        if (scene.runs[i].box.h == 30) { assert(!cell); cell = &scene.runs[i]; }
+    }
+    assert(outer && outer->x == 149 && outer->y == 58 && outer->w == 168 && outer->box.radius == 18);
+    assert(outer->box.fill == BG && outer->box.border == color(0x2c2c2c));
+    assert(cell && cell->x == (apps ? 233 : 152) && cell->y == 61 && cell->w == 81 && cell->box.radius == 15);
+    assert(cell->box.fill == color(0x1e1e1e) && cell->box.border == color(0x1e1e1e));
+    assert(outer < cell);   // the cell is drawn over the pill
+    assert(title_letters(letters, 16) == 8);
+    for (int i = 0; i < 8; i++) {
+        bool on = (i >= 4) == apps;
+        assert(!strcmp(letters[i]->text, word[i]) && cell < letters[i]);   // the letters over the cell
+        assert(letters[i]->fg == color(on ? 0x8a8a8a : 0x3a3a3a) && letters[i]->bg == (on ? color(0x1e1e1e) : BG));
+    }
+    assert(letters[0]->x == 161 && letters[4]->x == 245);
+    for (int w = 0; w < 2; w++)
+        assert(letters[w * 4 + 3]->x + ht_measure(&ht_lv_inter_20.base, letters[w * 4 + 3]->text) - letters[w * 4]->x == 59);
+    const hit_t *tabs = hit_of(A_SWITCH_TABS), *other = hit_of(A_SWITCH_APPS);
+    assert(hit_is(tabs, 83, 30, 150, 78) && tabs->enabled == apps);
+    assert(hit_is(other, 233, 30, 150, 78) && other->enabled == !apps);
+}
+// Today's title: four grey letters, no pill and no switch.
+static void plain_title_is(const char *title) {
+    const ht_run_t *letters[16];
+    int n = title_letters(letters, 16);
+    assert(n == 4);
+    for (int i = 0; i < n; i++) assert(letters[i]->text[0] == title[i] && letters[i]->fg == color(0x4c4c4c));
+    for (int i = 0; i < scene.count; i++) assert(scene.runs[i].box.h != 36);
+    assert(!hit_of(A_SWITCH_TABS) && !hit_of(A_SWITCH_APPS));
+}
+static bool runs_same(const ht_scene_t *a, const ht_scene_t *b) {
+    if (a->count != b->count) return false;
+    for (int i = 0; i < a->count; i++) {
+        const ht_run_t *p = &a->runs[i], *q = &b->runs[i];
+        if (strcmp(p->text, q->text) || p->x != q->x || p->y != q->y || p->fg != q->fg || p->bg != q->bg || p->font != q->font)
+            return false;
+    }
+    return true;
+}
+static void apps_switch_checks(const char *dir) {
+    // A hold in the window view opens TABS on the desktop's tab, the title a pill with TABS filled; nothing is sent.
+    switch_setup(3); hold_at(233, 230);
+    assert(s.view == TABS && ht_tab_carousel_index(&tab_carousel) == 1 && !tab_switches && !app_picks);
+    pill_is(false);
+    assert(scene.count == 29);
+    host_features &= ~CABLE_FEATURE_APPS_SWITCH; scene_take();
+    assert(scene.count == 29 - 6); plain_title_is("TABS");
+    host_features |= CABLE_FEATURE_APPS_SWITCH;
+    FOCUS_PAGE("tabs-switch");
+    // Tap APPS: the other apps on the first page (Harness is shown and not listed), APPS filled, no pick.
+    fake_ms += 1000; tap(fake_ms, 275, 76);
+    assert(s.view == APPS && !s.machine_view && ht_tab_carousel_index(&app_carousel) == 0 && !app_picks && !tab_switches);
+    assert(run_in("Ghostty", &ht_lv_inter_44.base) && run_in("3 agents", &ht_lv_inter_25.base));
+    pill_is(true);
+    assert(scene.count == 31);
+    for (int d = -200; d <= 200; d += 40) {
+        int keep = app_carousel.position; app_carousel.position = keep + d;
+        ht_scene_t dragged; ht_scene_clear(&dragged, BG); s.hit_count = 0; render_apps(&dragged);
+        assert(dragged.count == 31);
+        app_carousel.position = keep;
+    }
+    FOCUS_PAGE("apps-switch");
+    // Browsing sends nothing; Done picks the page in the middle and the face waits for that app's first agent.
+    picker_swipe(300, 200); assert(s.view == APPS && ht_tab_carousel_index(&app_carousel) == 1 && !app_picks);
+    fake_ms += 1000; tap(fake_ms, 233, 420);
+    assert(app_picks == 1 && !strcmp(app_target, "vscode") && s.view == HOME && !strcmp(s.app_landing, "vscode"));
+    // A tap on a page picks that page.
+    switch_apps(); fake_ms += 1000; tap(fake_ms, 233, 233);
+    assert(app_picks == 1 && !strcmp(app_target, "ghostty") && s.view == HOME);
+    // Tap TABS: back to TABS on the desktop's tab, TABS filled, nothing sent.
+    switch_apps(); picker_swipe(300, 200); fake_ms += 1000; tap(fake_ms, 191, 76);
+    assert(s.view == TABS && ht_tab_carousel_index(&tab_carousel) == 1 && !app_picks && !tab_switches);
+    pill_is(false);
+    // The selected cell, a swipe over the pill and a hold on it do nothing.
+    switch_setup(3); hold_at(233, 230);
+    fake_ms += 1000; tap(fake_ms, 191, 76);
+    fake_ms += 1000; habitat_touch(true, 275, 76, fake_ms); habitat_touch(true, 175, 76, fake_ms + 100);
+    habitat_touch(false, 175, 76, fake_ms + 150); surface_tick(fake_ms + 600); scene_take();
+    hold_at(275, 76);
+    assert(s.view == TABS && ht_tab_carousel_index(&tab_carousel) == 1 && !app_picks && !tab_switches);
+    pill_is(false);
+    switch_apps(); fake_ms += 1000; tap(fake_ms, 275, 76);
+    fake_ms += 1000; habitat_touch(true, 275, 76, fake_ms); habitat_touch(true, 175, 76, fake_ms + 100);
+    habitat_touch(false, 175, 76, fake_ms + 150); surface_tick(fake_ms + 600); scene_take();
+    assert(s.view == APPS && ht_tab_carousel_index(&app_carousel) == 0 && !app_picks && !tab_switches);
+    pill_is(true);
+    // The switch remembers nothing: from APPS, TABS, Done, and the next hold opens TABS again.
+    switch_apps(); fake_ms += 1000; tap(fake_ms, 191, 76);
+    fake_ms += 1000; tap(fake_ms, 233, 420); assert(s.view == HOME);
+    hold_at(233, 230); assert(s.view == TABS); pill_is(false);
+    // No pill: (a) a daemon without apps.switch that sends apps; (b) no other app; (c) no apps yet; (d) the machine
+    // view without apps. The hold opens today's TABS and the pill's place does nothing.
+    for (int mode = 0; mode < 4; mode++) {
+        static ht_scene_t face;
+        workspace_setup(); fake_ms = 1000;
+        if (mode) host_features |= CABLE_FEATURE_APPS_SWITCH;
+        if (mode == 3) ui_fleet_set_view(true);
+        scene_take(); face = scene;
+        if (mode < 2) ui_apps_replace(picker_rows, mode ? 0 : 3, "harness");
+        scene_take();
+        if (!mode) assert(runs_same(&face, &scene));   // what old firmware does with the new daemon: the face as before
+        hold_at(233, 230); assert(s.view == TABS); plain_title_is("TABS");
+        fake_ms += 1000; tap(fake_ms, 275, 76); assert(s.view == TABS);
+    }
+    // No tabs yet: the pill is there too, so APPS stays one tap away.
+    reset(); fake_ms = 1000; host_features |= CABLE_FEATURE_APPS_SWITCH; ui_apps_replace(picker_rows, 3, "harness"); scene_take();
+    hold_at(233, 230); assert(s.view == TABS && run_in("No tabs yet.", &ht_lv_inter_30.base)); pill_is(false);
+    FOCUS_PAGE("tabs-switch-empty");
+    fake_ms += 1000; tap(fake_ms, 275, 76); assert(s.view == APPS);
+    // The last other app going on the switch's APPS: back to TABS, on the desktop's tab, with the plain title.
+    switch_apps(); assert(s.view == APPS);
+    ui_apps_replace(picker_rows, 0, "harness"); scene_take();
+    assert(s.view == TABS && ht_tab_carousel_index(&tab_carousel) == 1); plain_title_is("TABS");
+    // Another app brought to the front on the Mac closes the switch's APPS to the face.
+    switch_apps(); ui_fleet_set_view(true); assert(s.view == HOME);
+    // The machine view's hold: today's APPS with its plain title, the feature on.
+    picker_setup(3, "ghostty"); host_features |= CABLE_FEATURE_APPS_SWITCH; scene_take(); hold_at(233, 230);
+    assert(s.view == APPS); plain_title_is("APPS"); assert(scene.count == 25);
+    // A tab switch still loading when APPS is tapped: its roster lands and the switch's APPS stays open.
+    switch_setup(3); hold_at(233, 230); picker_swipe(300, 200);
+    assert(s.view == TABS && tab_switches == 1 && !strcmp(tab_target, "tab-2") && s.loading);
+    fake_ms += 1000; tap(fake_ms, 275, 76); assert(s.view == APPS);
+    { uint32_t serial = workspace.serial;
+      ui_swarms_replace(s.tabs, s.tab_count, "tab-2");
+      assert(ht_workspace_refresh(&workspace, serial, 10));
+      ui_workspace_applied("tab-2", 11); ui_land_after_reload(); }
+    assert(!s.loading && s.view == APPS);
+    // A pick there before that tab lands leaves the tab: it is no longer waited for, so the face does not hold the
+    // loading wordmark, and the view's turn, which sends no tabs, does not read as that tab gone.
+    switch_setup(3); hold_at(233, 230); picker_swipe(300, 200);
+    fake_ms += 1000; tap(fake_ms, 275, 76); fake_ms += 1000; tap(fake_ms, 233, 420);
+    assert(app_picks == 1 && !strcmp(app_target, "ghostty") && s.view == HOME && !s.loading);
+    ui_swarms_replace(NULL, 0, ""); scene_take();
+    assert(s.view == HOME && !s.loading);
+    // TABS again before that tab lands, by its cell or by the last other app going: on the tab being opened, so Done
+    // does not switch the desktop back to the one the swipe left.
+    for (int emptied = 0; emptied < 2; emptied++) {
+        switch_setup(3); hold_at(233, 230); picker_swipe(300, 200);
+        fake_ms += 1000; tap(fake_ms, 275, 76); assert(s.view == APPS);
+        if (emptied) { ui_apps_replace(picker_rows, 0, "harness"); scene_take(); }
+        else { fake_ms += 1000; tap(fake_ms, 191, 76); }
+        assert(s.view == TABS && ht_tab_carousel_index(&tab_carousel) == 2 && s.loading);
+        fake_ms += 1000; tap(fake_ms, 233, 420);
+        assert(tab_switches == 1 && !strcmp(tab_target, "tab-2"));
+    }
+    puts("TABS | APPS switch: the pill on the window's TABS; its APPS lists the other apps and picks only on Done or a tap, TABS goes back; no feature or no app is today's TABS PASS");
+}
 int main(int argc, char **argv) {
     test_character = HT_CHARACTER_FOCUS;
     notification_read_checks(argc>1 ? argv[1] : NULL);
     bell_checks(argc>1 ? argv[1] : NULL);
+    inbox_full_checks();
     // The companion screen is gone: character, edge text and still-character are the app's now
     // (Settings > Autonomous robots). What the glass kept is actions, and Nap is the one that moved
     // off that screen into the controls list.
@@ -2028,6 +2364,7 @@ int main(int argc, char **argv) {
       ui_apps_replace(rows, 1, "terminal"); scene_take(); assert(scene_says("Other") && !scene_says("Terminal"));
       tap(1000,233,220); assert(!starts && scene_says("See it in Terminal")); }
     app_picker_checks(dir);
+    apps_switch_checks(dir);
     // the resting face of an agent without V shows no voice invitation, on the plain face and the pet's relaxing one
     for (int pet = 0; pet < 2; pet++) {
         reset(); fake_ms = 1000; if (pet) strcpy(s.agents[0].engine, "claude");

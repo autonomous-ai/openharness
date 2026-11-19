@@ -1,6 +1,12 @@
 //! What the menu shows and which screen is due, from the app's state.
 
-use crate::types::{AppState, AppUpdate, CliState, Daemon, DialStatus, MenuAction, MenuItem, NotifyMode, Screen};
+use crate::logs::reason;
+use crate::types::{
+    AppState, AppUpdate, CliState, Daemon, DialStatus, LogsExport, MenuAction, MenuItem, NotifyMode, OrcaState, Screen,
+};
+
+/// The start of the line a saved export leaves in the menu, which the log writes as `Saved`.
+const SAVED_TO: &str = "Saved to ";
 
 /// The menu's first, disabled row: the first of these that applies.
 pub fn dial_line(state: &AppState) -> String {
@@ -46,6 +52,11 @@ pub fn menu(state: &AppState) -> Vec<MenuItem> {
         Some(false) => items.push(MenuItem::Action(MenuAction::SignIn, "Sign in…".into())),
         None => {}
     }
+    match state.orca {
+        OrcaState::Offer => items.push(MenuItem::Action(MenuAction::Orca, "Connect Orca…".into())),
+        OrcaState::Update => items.push(MenuItem::Action(MenuAction::Orca, "Update Orca connection…".into())),
+        OrcaState::None => {}
+    }
     // The check is what the dial reports; the item carries the action its click does.
     match settable(state).and_then(|dial| dial.muted) {
         Some(false) => items.push(MenuItem::Check(MenuAction::SoundOff, "Sound".into(), true)),
@@ -72,6 +83,18 @@ pub fn menu(state: &AppState) -> Vec<MenuItem> {
     if state.desktop_installed {
         items.push(MenuItem::Action(MenuAction::OpenHarness, "Open Harness".into()));
     }
+    // The export runs the CLI; its answer is heard, and kept, whatever became of the CLI since.
+    if state.cli == CliState::Found {
+        items.push(match state.logs {
+            LogsExport::Running => MenuItem::Text("Exporting logs…".into()),
+            _ => MenuItem::Action(MenuAction::ExportLogs, "Export logs".into()),
+        });
+    }
+    match &state.logs {
+        LogsExport::Saved(shown) => items.push(MenuItem::Text(format!("{SAVED_TO}{shown}"))),
+        LogsExport::Failed(failure) => items.push(MenuItem::Text(format!("Export failed: {}", reason(*failure)))),
+        LogsExport::Idle | LogsExport::Running => {}
+    }
     items.push(MenuItem::Action(MenuAction::About, "About".into()));
     items.push(MenuItem::Action(MenuAction::Quit, "Quit".into()));
     items
@@ -91,6 +114,8 @@ pub fn menu_log(items: &[MenuItem]) -> String {
     let labels: Vec<String> = items
         .iter()
         .filter_map(|item| match item {
+            // The zip may be outside the home, where the line names it whole: the log never names it.
+            MenuItem::Text(label) if label.starts_with(SAVED_TO) => Some("Saved".into()),
             MenuItem::Text(label) | MenuItem::Action(_, label) | MenuItem::Check(_, label, false) => {
                 Some(label.clone())
             }
@@ -117,7 +142,8 @@ fn settable(state: &AppState) -> Option<&DialStatus> {
 mod tests {
     use super::*;
     use crate::types::{
-        AppState, AppUpdate, CliState, Daemon, DialStatus, MenuAction, MenuItem, NotifyMode, Saved, Screen,
+        AppState, AppUpdate, CliState, Daemon, DialStatus, ExportFailure, LogsExport, MenuAction, MenuItem, NotifyMode,
+        OrcaState, Saved, Screen,
     };
     use MenuItem::{Action, Check, Separator, Submenu, Text};
 
@@ -162,6 +188,8 @@ mod tests {
             saved: Saved { version: 1, cli_seen: true, asked_sign_in: true, login_item: true },
             app_update: AppUpdate::None,
             cli_version: None,
+            logs: LogsExport::Idle,
+            orca: OrcaState::None,
         }
     }
 
@@ -182,13 +210,14 @@ mod tests {
                 text("Signed in"),
                 Separator,
                 act(MenuAction::OpenHarness, "Open Harness"),
+                act(MenuAction::ExportLogs, "Export logs"),
                 act(MenuAction::About, "About"),
                 act(MenuAction::Quit, "Quit"),
             ]
         );
     }
 
-    /// Every CliState × Daemon × dial (none, attached, with Sound and Notifications) × signed_in.
+    /// Every CliState × Daemon × dial (none, attached, with Sound and Notifications) × signed_in × the Orca row.
     fn states() -> Vec<AppState> {
         let dials = [None, Some(dial(true, Some("0.0.95"))), Some(notifying(NotifyMode::Full))];
         let mut states = Vec::new();
@@ -196,7 +225,9 @@ mod tests {
             for daemon in [Daemon::Starting, Daemon::Up, Daemon::Stopped, Daemon::Updating] {
                 for dial in &dials {
                     for signed_in in [Some(true), Some(false), None] {
-                        states.push(AppState { cli, daemon, dial: dial.clone(), signed_in, ..state() });
+                        for orca in [OrcaState::None, OrcaState::Offer, OrcaState::Update] {
+                            states.push(AppState { cli, daemon, dial: dial.clone(), signed_in, orca, ..state() });
+                        }
                     }
                 }
             }
@@ -277,6 +308,31 @@ mod tests {
     }
 
     #[test]
+    fn the_orca_row_sits_under_the_account_and_above_sound() {
+        let on = Check(MenuAction::SoundOff, "Sound".into(), true);
+        let rows = [
+            (OrcaState::Offer, act(MenuAction::Orca, "Connect Orca…")),
+            (OrcaState::Update, act(MenuAction::Orca, "Update Orca connection…")),
+        ];
+        for (orca, row) in rows {
+            let with_sound = AppState { orca, dial: Some(sound(Some(false))), ..state() };
+            assert_eq!(menu(&with_sound)[1..4], [text("Signed in"), row.clone(), on.clone()], "{orca:?}");
+            let signed_out = AppState { orca, signed_in: Some(false), ..state() };
+            assert_eq!(menu(&signed_out)[1..4], [act(MenuAction::SignIn, "Sign in…"), row.clone(), Separator]);
+            // With no account row, it is the first under the dial line.
+            assert_eq!(menu(&AppState { orca, signed_in: None, ..state() })[1], row, "{orca:?}");
+        }
+        assert_eq!(
+            menu(&AppState { orca: OrcaState::None, dial: Some(sound(Some(false))), ..state() })[1..3],
+            [text("Signed in"), on]
+        );
+        assert_eq!(
+            menu_log(&menu(&AppState { orca: OrcaState::Offer, ..state() })),
+            "Device ready | Signed in | Connect Orca… | Open Harness | Export logs | About | Quit"
+        );
+    }
+
+    #[test]
     fn the_sound_row() {
         let on = Check(MenuAction::SoundOff, "Sound".into(), true);
         let off = Check(MenuAction::SoundOn, "Sound".into(), false);
@@ -288,6 +344,7 @@ mod tests {
                 on.clone(),
                 Separator,
                 act(MenuAction::OpenHarness, "Open Harness"),
+                act(MenuAction::ExportLogs, "Export logs"),
                 act(MenuAction::About, "About"),
                 act(MenuAction::Quit, "Quit"),
             ]
@@ -333,7 +390,7 @@ mod tests {
         }
         assert_eq!(
             menu_log(&menu(&AppState { app_update: AppUpdate::Blocked("0.1.3".into()), ..state() })),
-            "Device ready | Signed in | Update 0.1.3… | Open Harness | About | Quit"
+            "Device ready | Signed in | Update 0.1.3… | Open Harness | Export logs | About | Quit"
         );
     }
 
@@ -348,6 +405,7 @@ mod tests {
                 notifications(true, false),
                 Separator,
                 act(MenuAction::OpenHarness, "Open Harness"),
+                act(MenuAction::ExportLogs, "Export logs"),
                 act(MenuAction::About, "About"),
                 act(MenuAction::Quit, "Quit"),
             ]
@@ -387,8 +445,13 @@ mod tests {
     fn open_harness_needs_the_desktop_app() {
         let items = menu(&AppState { desktop_installed: false, ..state() });
         assert_eq!(
-            items[items.len() - 3..],
-            [Separator, act(MenuAction::About, "About"), act(MenuAction::Quit, "Quit")]
+            items[items.len() - 4..],
+            [
+                Separator,
+                act(MenuAction::ExportLogs, "Export logs"),
+                act(MenuAction::About, "About"),
+                act(MenuAction::Quit, "Quit")
+            ]
         );
         assert!(!items.contains(&act(MenuAction::OpenHarness, "Open Harness")));
     }
@@ -441,22 +504,89 @@ mod tests {
 
     #[test]
     fn the_menu_as_a_log_line() {
-        assert_eq!(menu_log(&menu(&state())), "Device ready | Signed in | Open Harness | About | Quit");
+        assert_eq!(menu_log(&menu(&state())), "Device ready | Signed in | Open Harness | Export logs | About | Quit");
         assert_eq!(
             menu_log(&menu(&AppState { dial: Some(sound(Some(false))), ..state() })),
-            "Device ready | Signed in | Sound ✓ | Open Harness | About | Quit"
+            "Device ready | Signed in | Sound ✓ | Open Harness | Export logs | About | Quit"
         );
         assert_eq!(
             menu_log(&menu(&AppState { dial: Some(sound(Some(true))), ..state() })),
-            "Device ready | Signed in | Sound | Open Harness | About | Quit"
+            "Device ready | Signed in | Sound | Open Harness | Export logs | About | Quit"
         );
         assert_eq!(
             menu_log(&menu(&AppState { dial: Some(notifying(NotifyMode::Full)), ..state() })),
-            "Device ready | Signed in | Sound ✓ | Notifications: All | Open Harness | About | Quit"
+            "Device ready | Signed in | Sound ✓ | Notifications: All | Open Harness | Export logs | About | Quit"
         );
         assert_eq!(
             menu_log(&menu(&AppState { dial: Some(notifying(NotifyMode::You)), ..state() })),
-            "Device ready | Signed in | Sound ✓ | Notifications: Needs you | Open Harness | About | Quit"
+            "Device ready | Signed in | Sound ✓ | Notifications: Needs you | Open Harness | Export logs | About | Quit"
         );
+    }
+
+    const SAVED: &str = "~/Desktop/harness-logs-20261118-1030.zip";
+
+    fn exporting(logs: LogsExport) -> Vec<MenuItem> {
+        menu(&AppState { logs, ..state() })
+    }
+
+    /// The rows after Open Harness.
+    fn export_rows(items: &[MenuItem]) -> Vec<MenuItem> {
+        let at = items.iter().position(|item| *item == act(MenuAction::OpenHarness, "Open Harness")).unwrap();
+        items[at + 1..].to_vec()
+    }
+
+    #[test]
+    fn the_export_row_has_three_states() {
+        let export = act(MenuAction::ExportLogs, "Export logs");
+        let (about, quit) = (act(MenuAction::About, "About"), act(MenuAction::Quit, "Quit"));
+        assert_eq!(export_rows(&exporting(LogsExport::Idle)), [export.clone(), about.clone(), quit.clone()]);
+        // A second click has nothing to land on while one runs.
+        assert_eq!(
+            export_rows(&exporting(LogsExport::Running)),
+            [text("Exporting logs…"), about.clone(), quit.clone()]
+        );
+        assert_eq!(
+            export_rows(&exporting(LogsExport::Saved(SAVED.into()))),
+            [export.clone(), text("Saved to ~/Desktop/harness-logs-20261118-1030.zip"), about.clone(), quit.clone()]
+        );
+        let failures = [
+            (ExportFailure::TimedOut, "Export failed: timed out"),
+            (ExportFailure::NoAnswer, "Export failed: Harness did not answer"),
+            (ExportFailure::NoFile, "Export failed: no file"),
+        ];
+        for (failure, line) in failures {
+            assert_eq!(
+                export_rows(&exporting(LogsExport::Failed(failure))),
+                [export.clone(), text(line), about.clone(), quit.clone()],
+                "{failure:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_export_row_needs_a_cli() {
+        let every = [
+            LogsExport::Idle,
+            LogsExport::Running,
+            LogsExport::Saved(SAVED.into()),
+            LogsExport::Failed(ExportFailure::NoAnswer),
+        ];
+        for cli in [CliState::Installing, CliState::InstallFailed, CliState::Removed] {
+            for logs in every.clone() {
+                let line = menu_log(&menu(&AppState { cli, logs: logs.clone(), ..state() }));
+                for row in ["Export logs", "Exporting logs…"] {
+                    assert!(!line.split(" | ").any(|label| label == row), "{cli:?} {logs:?}: {line}");
+                }
+            }
+            // The line outlives the CLI.
+            let saved = menu(&AppState { cli, logs: LogsExport::Saved(SAVED.into()), ..state() });
+            assert!(saved.contains(&text("Saved to ~/Desktop/harness-logs-20261118-1030.zip")), "{cli:?}");
+        }
+    }
+
+    #[test]
+    fn the_log_never_names_the_zip() {
+        let items = exporting(LogsExport::Saved("/Volumes/Work/harness-logs-20261118-1030.zip".into()));
+        assert_eq!(menu_log(&items), "Device ready | Signed in | Open Harness | Export logs | Saved | About | Quit");
     }
 }

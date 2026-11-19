@@ -1,4 +1,5 @@
 /** Bounded feature-state observations, made only by the edge host. No saved content leaves it. */
+import { errorKind } from '../lib/log.js'
 import * as fs from 'node:fs'
 
 const SAVED_BYTES = 1024 * 1024
@@ -31,7 +32,7 @@ export function createStartupFiles(log: (line: string) => void, io: Io = fs): St
         log('[startup] STARTUP_SCAN_LIMIT')
         return true
       } catch (error) { failed(error); return false }
-      finally { try { directory?.closeSync() } catch { log('[startup] STARTUP_STATE_UNAVAILABLE') } }
+      finally { try { directory?.closeSync() } catch (caughtFailure) { log(('[startup] STARTUP_STATE_UNAVAILABLE') + ' · ' + errorKind(caughtFailure)) } }
     },
     rows(path) {
       let fd: number | undefined
@@ -54,7 +55,7 @@ export function createStartupFiles(log: (line: string) => void, io: Io = fs): St
         if (error instanceof SyntaxError) log('[startup] STARTUP_STATE_INVALID')
         else failed(error)
         return []
-      } finally { try { if (fd !== undefined) io.closeSync(fd) } catch { log('[startup] STARTUP_STATE_UNAVAILABLE') } }
+      } finally { try { if (fd !== undefined) io.closeSync(fd) } catch (caughtFailure) { log(('[startup] STARTUP_STATE_UNAVAILABLE') + ' · ' + errorKind(caughtFailure)) } }
     },
   }
 }

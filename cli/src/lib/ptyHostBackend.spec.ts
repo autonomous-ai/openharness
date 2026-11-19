@@ -10,6 +10,7 @@ import type { EnsurePtyHostResult, PtyHostTarget } from './ptyHost/launch.js'
 import type { PtyRuntimeRef } from './terminalTypes.js'
 import { restoreTerminals } from './restoreTerminals.js'
 import type { RegisteredSession } from './registry.js'
+import { writeExecutable } from '../testing/executableFixture.js'
 
 // validate's branches, not the process table: the same narrow mock tmuxBackendValidate.spec.ts uses.
 const lookupPaneEngineProcess = vi.hoisted(() => vi.fn())
@@ -867,7 +868,7 @@ describe('PtyHostBackend on Windows: the process table and the agent signaller',
     }) as typeof process.kill)
     signalAgentProcess(900, 'SIGKILL')
     await vi.waitFor(() => expect(killed).toEqual([901, 902, 900]))
-    expect(error.mock.calls).toEqual([['[terminal] ptyhost: could not end pid 901, under pid 900: kill EPERM']])
+    expect(error.mock.calls).toEqual([['[terminal] ptyhost: could not end pid 901, under pid 900: EPERM']])
   })
 
   it('says when it could not end the process', async () => {
@@ -883,12 +884,12 @@ describe('PtyHostBackend on Windows: the process table and the agent signaller',
     const { backend } = await ready({}, { platform: 'win32', endTree })
     backend.dispose()
     backend.signalProcess(77, 'SIGTERM')
-    await vi.waitFor(() => expect(error).toHaveBeenCalledWith('[terminal] ptyhost: could not SIGTERM pid 77: spawn failed'))
+    await vi.waitFor(() => expect(error).toHaveBeenCalledWith('[terminal] ptyhost: could not SIGTERM pid 77: Error'))
     const odd = vi.fn(async () => { throw 'odd' })
     const other = (await ready({}, { platform: 'win32', endTree: odd })).backend
     other.dispose()
     other.signalProcess(78, 'SIGKILL')
-    await vi.waitFor(() => expect(error).toHaveBeenCalledWith('[terminal] ptyhost: could not SIGKILL pid 78: odd'))
+    await vi.waitFor(() => expect(error).toHaveBeenCalledWith('[terminal] ptyhost: could not SIGKILL pid 78: string'))
   })
 })
 
@@ -1284,7 +1285,7 @@ describe('PtyHostBackend hosts by instance', () => {
     const binary = path.join(home, 'harness-pty-stub')
     // `serve --home <home>`: says how it was started, then serves as [instance] (hello, `ok` to every op) and
     // publishes its discovery file. It ends itself after 30 s if nothing kills it.
-    writeFileSync(binary, `#!${process.execPath}
+    writeExecutable(binary, `#!${process.execPath}
 const { createHash } = require('node:crypto')
 const fs = require('node:fs')
 const net = require('node:net')
@@ -1317,7 +1318,7 @@ server.listen(endpoint, () => {
   fs.writeFileSync(path.join(home, 'run', ${JSON.stringify(discoveryFileName(instance))}), JSON.stringify({ protocol: ${P}, instance: ${JSON.stringify(instance)}, endpoint, pid: process.pid, version: '0.2.0', token }))
 })
 setTimeout(() => process.exit(0), 30000)
-`, { mode: 0o755 })
+`)
     vi.stubEnv('HARNESS_PTY_BIN', binary)
     const own = await hostIn(home, instance, '0.2.0', GONE_PID)
     const other = await hostIn(home, `p${P}-0.3.0`, '0.3.0')

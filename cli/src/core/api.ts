@@ -2243,7 +2243,8 @@ export function readSessions(deps: Pick<CoreApiDeps, 'registry' | 'serviceRead' 
       if (signal?.aborted) pump.cancel()
       else if (!finished) signal?.addEventListener('abort', abort, { once: true })
     } catch (error) {
-      finish(error instanceof Error && ['SESSION_READ_TIMEOUT', 'SESSION_READ_TOO_LARGE'].includes(error.message) ? error.message : 'SESSION_READ_UNAVAILABLE')
+      finish(error instanceof Error && error.message === 'SESSION_READ_TIMEOUT' ? 'SESSION_READ_TIMEOUT'
+        : error instanceof Error && error.message === 'SESSION_READ_TOO_LARGE' ? 'SESSION_READ_TOO_LARGE' : 'SESSION_READ_UNAVAILABLE')
     }
   })
 }

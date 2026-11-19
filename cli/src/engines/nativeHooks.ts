@@ -6,6 +6,7 @@ import { runHookPreparation } from './kit/nativeHookFiles.js'
 import { nativeHookLocations, type NativeHookOptions } from './kit/nativeLocations.js'
 import { env } from '../config/env.js'
 import { hookTokenPath } from '../lib/hookAuth.js'
+import { errorKind } from '../lib/log.js'
 import { VERSION } from '../version.js'
 import { prepareOpencodeHooks } from './kit/opencodeHookPreparation.js'
 import { OPENCODE_LEGACY_PLUGIN, OPENCODE_TUI_PLUGIN, OPENCODE_LEGACY_REMOVAL } from './opencode/setup.js'
@@ -19,7 +20,7 @@ import type { OpencodeLaunchSnapshot } from './launchControl.js'
 import { installNativePlugin, prepareNativePlugin, prepareNativePluginRemoval } from './kit/nativePlugin.js'
 import { installNativeYamlHooks, removeNativeYamlHooks } from './kit/nativeHookYaml.js'
 import { nativeHookHomes } from './kit/nativeHookHomes.js'
-import { command, hooksNotInstalled, requireHookScript } from './kit/notifyHooks.js'
+import { command, isNamedHold, hooksNotInstalled, requireHookScript } from './kit/notifyHooks.js'
 import { hostPlatform } from './kit/windowsFiles.js'
 import { GROK_HOOK_SETTINGS } from './grok/setup.js'
 import { AGY_HOOK_SETTINGS } from './agy/setup.js'
@@ -78,9 +79,8 @@ export async function installHermesHooks(port: number, selectedHome?: string, op
 function hermesHooksAsToday(port: number, selectedHome: string | undefined, options: NativeHookOptions | undefined, platform: NodeJS.Platform): Promise<boolean> {
   // Once for every home, before the pool: a missing notify.mjs is a failed install said in one line, never a rejection.
   try { requireHookScript('hermes') } catch (error) {
-    const line = hooksNotInstalled('hermes', error, platform)
-    if (line) console.error(line)
-    else console.error(HERMES_HOOK_SETTINGS.messages.failed, error)
+    if (isNamedHold(error, platform)) console.error(`${hooksNotInstalled('hermes')} · ${errorKind(error)}`)
+    else console.error(HERMES_HOOK_SETTINGS.messages.failed, errorKind(error))
     return Promise.resolve(false)
   }
   return installNativeYamlHooks(HERMES_HOOK_SETTINGS, home => command(port, 'hermes', env.CODEX_HOME, home, options?.environment, platform === 'win32' ? 'cmd' : 'bash'), selectedHome,

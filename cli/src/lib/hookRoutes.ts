@@ -8,6 +8,7 @@ import { chmodSync, mkdirSync, realpathSync, renameSync, rmSync, writeFileSync }
 import { join } from 'node:path'
 import { env } from '../config/env.js'
 import { harnessPaneOwner } from './harnessSessionLabel.js'
+import { errorKind } from './log.js'
 
 export function hookRouteFile(tag: string, dir: string = env.HARNESS_HOOK_ROUTES_DIR): string {
   return join(dir, `${tag}.json`)
@@ -24,7 +25,7 @@ export function publishHookRoute(dataDir: string, port: number, dir: string = en
     writeFileSync(temporary, JSON.stringify({ dataDir: realpathSync(dataDir), port }) + '\n', { mode: 0o600 })
     renameSync(temporary, target)
   } catch (error) {
-    console.warn(`[hooks] could not record this daemon's hook route in ${dir}: ${error instanceof Error ? error.message : error}`
+    console.warn(`[hooks] could not record this daemon's hook route: ${errorKind(error)}`
       + ' · hooks installed by another daemon will not reach this one\'s agents')
   } finally {
     // QA found ENOTDIR here turned the warning above into a failed daemon start.

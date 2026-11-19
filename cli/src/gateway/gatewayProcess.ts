@@ -13,6 +13,7 @@
 import type { ProductUsageMetric } from '../lib/productUsageContract.js'
 import type { Asker, GatewayAccount, GatewayEvents, UsageEvent, WindowRelaySession } from '../core/api.js'
 import { localWindowsOf, windowSurfaceOf } from '../lib/windowSurfaces.js'
+import { errorKind } from '../lib/log.js'
 import { decodeGatewayBinary, encodeGatewayBinary, GatewayBinary, GATEWAY_CALLS } from '../lib/gatewayWire.js'
 import { RelayConnectError } from '../lib/relayFrames.js'
 import { decodeTerminalLocal, encodeTerminalLocal } from '../lib/terminalBinary.js'
@@ -96,7 +97,7 @@ export function runGatewayService(options: GatewayServiceOptions): ServiceProces
     running = null
     for (const session of windows.values()) session.detach()
     windows.clear()
-    return was ? was.stop().catch((error: unknown) => console.warn(`[gateway] stopping: ${error instanceof Error ? error.message : String(error)}`)) : Promise.resolve()
+    return was ? was.stop().catch((error: unknown) => console.warn(`[gateway] stopping: ${errorKind(error)}`)) : Promise.resolve()
   }
 
   const begin = (payload: Payload): void => {

@@ -149,16 +149,31 @@ export function parseNativeProcessImages(
   return { images, unavailable }
 }
 
-export async function bundledProcessImageHelper(options: { retryUnavailable?: boolean } = {}): Promise<{ path: string; key: string } | null> {
+/** The artifact this build bundles, only when it passes every check. The bundle never changes in a process, so it is
+ * parsed and hashed once, not on every 5 s pass. */
+function bundledArtifact(): ProcessImageArtifact | null {
   const source = typeof __DARWIN_PROCESS_IMAGES__ === 'undefined' ? undefined : __DARWIN_PROCESS_IMAGES__
   if (typeof source !== 'string') return null
   if (source !== artifactSource) {
     artifactSource = source
     artifactValue = null
-    try { artifactValue = JSON.parse(artifactSource) } catch { /* Optional asset. */ }
+    try {
+      const artifact = JSON.parse(source)
+      artifactBytes(artifact)
+      artifactValue = artifact
+    } catch { /* No usable helper in this build. */ }
   }
-  const artifact = artifactValue
-  if (!artifact || typeof artifact.sha256 !== 'string') return null
+  return artifactValue
+}
+
+/** Whether this build carries a usable helper. Without one, nothing recovers until Harness is reinstalled. */
+export function processImageHelperBundled(): boolean {
+  return bundledArtifact() !== null
+}
+
+export async function bundledProcessImageHelper(options: { retryUnavailable?: boolean } = {}): Promise<{ path: string; key: string } | null> {
+  const artifact = bundledArtifact()
+  if (!artifact) return null
   const key = `${env.ADAPTER_RUNTIME_DIR}\0${artifact.sha256}`
   // Optional discovery backs off failed probes. Control must confirm recovery on its own
   // deadline: its healthy owner may be unrelated to the failed discovery request.

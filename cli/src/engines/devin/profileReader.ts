@@ -3,6 +3,7 @@ import type { RuntimeModelOption } from '../facets/runtime.js'
 import { effortLabel, encodeRuntimeProfile, record } from '../kit/runtime.js'
 import { confirmObserved } from '../kit/runtimeReader.js'
 import { env } from '../../config/env.js'
+import { errorKind } from '../../lib/log.js'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import * as devin from './runtimeProfile.js'
@@ -102,8 +103,8 @@ class ProfileReader {
         maxBuffer: 1024 * 1024,
       })
       entries = devin.parseDevinModelsOutput(result.stdout)
-    } catch {
-      console.warn('[runtime-profile] DEVIN_CATALOG_UNAVAILABLE')
+    } catch (err) {
+      console.warn('[runtime-profile] Devin model catalog failed:', errorKind(err))
     }
     this.devinCatalogCache = { key, entries, expiresAt: Date.now() + CATALOG_TTL_MS }
     return entries

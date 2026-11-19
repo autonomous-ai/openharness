@@ -59,7 +59,7 @@ import { engineSessionTitle } from '../lib/sessionTitle.js'
 import { machineNames } from '../lib/machineNames.js'
 import { engineHookInstallations as engineHookFacets } from '../engines/nativeHookSetup.js'
 import type { LiveFor } from '../engines/facets/live.js'
-import { DAEMON_LOG_FILE, PID_FILE, daemonPort, isAlive, readPid, removePidFileIf, onError, LEGACY_LOG_FILE, MACHINE_NAME_FILE, tildify, computerId, thisDeviceLabel } from '../lib/daemonState.js'
+import { DAEMON_LOG_FILE, PID_FILE, daemonPort, isAlive, readPid, removePidFileIf, LEGACY_LOG_FILE, MACHINE_NAME_FILE, tildify, computerId, thisDeviceLabel } from '../lib/daemonState.js'
 import { clearSafeModeMarker, safeModeDisposition, safeModeStatusBody, SafeModeRequest, writeSafeModeMarker } from '../lib/daemonSafeMode.js'
 import { awakeTimeout } from '../lib/sleepAware.js'
 import { harnessdEnv, holdHarnessdEnv } from '../lib/harnessdEnv.js'
@@ -259,7 +259,7 @@ import type { RuntimeDisplay, RuntimeModelOption } from '../engines/facets/runti
 import { createRuntimeProfiles } from './engines/runtimeProfiles.js'
 import { createRuntimeTransport } from './engines/runtimeTransport.js'
 import { RuntimeProfileController } from '../lib/runtimeControl.js'
-import { installTimestampedConsole, sid, prepareLogFile, trimLogFile, LOG_CHECK_INTERVAL_MS } from '../lib/log.js'
+import { installTimestampedConsole, sid, errorKind, prepareLogFile, trimLogFile, LOG_CHECK_INTERVAL_MS } from '../lib/log.js'
 
 // Daemon stdout/stderr. Capped at LOG_MAX_BYTES — see prepareLogFile/trimLogFile in lib/log.ts.
 const LOG_FILE = DAEMON_LOG_FILE
@@ -315,12 +315,12 @@ function startMasterHere(): void {
   try {
     prepareLogFile(LOG_FILE, LEGACY_LOG_FILE)
     log = openSync(LOG_FILE, 'a')
-  } catch (e) { console.error('[update] the master starts without the log:', e instanceof Error ? e.message : e) }
+  } catch (e) { console.error(`[update] the master starts without the log: ${errorKind(e)}`) }
   const { ADAPTER_UPDATED_TO: _handedOver, HARNESSD_SAFE_MODE: _safeMode, ...inherited } = harnessdEnv()
   const master = spawn(managedNodePath(), [SCRIPT_PATH, '__harnessd'], { detached: true, env: inherited, stdio: ['ignore', log, log] })
   // A spawn failure (e.g. EMFILE) emits 'error' on the child; with no listener that is an
   // uncaughtException. This core is leaving either way, and the next `harness start` starts the daemon.
-  master.on('error', (e) => console.error('[update] master spawn error:', e instanceof Error ? e.message : e))
+  master.on('error', (e) => console.error(`[update] master spawn error: ${errorKind(e)}`))
   master.unref()
   try {
     if (master.pid) writeFileSync(PID_FILE, `${master.pid}\n`)
@@ -438,12 +438,13 @@ async function runForeground(session: AuthSession | null): Promise<void> {
 
   // Last-resort net: a stray throw in ANY long-lived callback (a malformed JSONL line, a hostile backend
   // frame, a timer) must NEVER take the daemon down — there is no supervisor. Log it and keep running.
-  // (Startup errors still fail loudly: they reject the runForeground promise → onError → exit, not these.)
+  // (Startup errors still fail loudly: they reject the runForeground promise → `enterSafeMode`, or under
+  // `runCoreInForeground` its own catch, not these.)
   process.on('unhandledRejection', (reason) => {
-    console.error('[fatal-guard] unhandledRejection:', reason instanceof Error ? (reason.stack ?? reason.message) : reason)
+    console.error(`[fatal-guard] unhandledRejection: ${errorKind(reason)}`)
   })
   process.on('uncaughtException', (err) => {
-    console.error('[fatal-guard] uncaughtException:', err instanceof Error ? (err.stack ?? err.message) : err)
+    console.error(`[fatal-guard] uncaughtException: ${errorKind(err)}`)
   })
 
   // ── THE MASTER'S UPDATE IS HEARD FIRST. Everything below this point can throw, hang, or wait on a vendor
@@ -515,7 +516,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
         const updater = spawn(managedNodePath(), [SCRIPT_PATH, '__service', 'updater'], {
           env: { ...harnessdEnv(), HARNESSD_SERVICE: 'updater', HARNESSD_UPDATER_BESIDE_CORE: '1' }, stdio: ['ignore', 'inherit', 'inherit', 'ipc'],
         })
-        updater.on('error', (e) => console.error('[update] the updater could not start:', e instanceof Error ? e.message : e))
+        updater.on('error', (e) => console.error(`[update] the updater could not start: ${errorKind(e)}`))
         return { onMessage: (listener) => { updater.on('message', listener) }, onExit: (listener) => { updater.on('exit', listener) }, kill: () => { updater.kill() } }
       },
       staged: (version) => { void daemonBoot.applyStagedUpdate(version) },
@@ -1099,7 +1100,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     const sessions = registry.advertised()
     console.log(`[cli] connected · ${sessions.length} agent(s) registered`)
     void fullReconcile(true).catch((err) => {
-      console.error('[runtime-profile] connect reconcile failed:', err instanceof Error ? err.message : err)
+      console.error(`[runtime-profile] connect reconcile failed: ${errorKind(err)}`)
     })
   })
   backendRef = backend
@@ -1288,7 +1289,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     },
     // Built further down: read when a frame comes, never now.
     frame: (session, frame) => ingest.acceptStreamFrame(session, frame),
-    reattach: (session) => { void attachSession(session, true).catch(() => console.error('[engine-others] LIVE_REATTACH_FAILED')) },
+    reattach: (session) => { void attachSession(session, true).catch((error) => console.error(`[engine-others] LIVE_REATTACH_FAILED · ${errorKind(error)}`)) },
   })
   // What the engines' hooks say of each session's turn (core/turns/turnHooks.ts), built further down.
   let turnHooksRef: TurnHooks | undefined
@@ -1349,8 +1350,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       cliVersion: existing.cliVersion ?? undefined,
       processIdentity: existing.processIdentity ?? undefined,
       hookEvent: 'TranscriptDiscovered',
-    }, { current: () => paneReadIdentity(registry.byAgent(existing.agentId)) === authority }).catch(() => {
-      console.error('[cursor-discovery] binding held: registration could not be committed')
+    }, { current: () => paneReadIdentity(registry.byAgent(existing.agentId)) === authority }).catch((error) => {
+      console.error(`[cursor-discovery] binding held: registration could not be committed · ${errorKind(error)}`)
       return null
     })
     if (!result) return
@@ -1358,7 +1359,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     syncRecapPool()
     syncSession(result.entry)
     void attachSession(result.entry, false, true).catch((err) => {
-      console.error('[cursor-discovery] attach failed:', err instanceof Error ? err.message : err)
+      console.error(`[cursor-discovery] attach failed: ${errorKind(err)}`)
     })
   })
 
@@ -1861,6 +1862,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   if (!outOfProcess.has('goals')) serviceHost!.serve('goals', inline!.startGoals, coreApi, GOALS_REQUESTS)
   // Hachi's wakes and its off path (services/hachi.ts): here, or in the edge host. The apps ask it nothing.
   if (!outOfProcess.has('hachi')) serviceHost!.serve('hachi', inline!.startHachiInCore, coreApi, [])
+  // The bridge left in ~/.harness once Harness's folder moved to the XDG folders on Linux (services/homeBridge.ts): here, or in the edge host.
+  if (!outOfProcess.has('homeBridge')) serviceHost!.serve('homeBridge', inline!.startHomeBridgeInCore, coreApi, [])
   if (!outOfProcess.has('memory')) serviceHost!.serve('memory', inline!.startMemory, coreApi, MEMORY_REQUESTS)
   if (!outOfProcess.has('router')) serviceHost!.serve('router', inline!.startRouter, coreApi, ROUTER_REQUESTS)
   if (!outOfProcess.has('handoff')) serviceHost!.serve('handoff', (core) => inline!.startHandoff(core), coreApi, HANDOFF_REQUESTS)
@@ -2009,7 +2012,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     forgetInput: agentId => { forgetRestartRevision(agentId); inputLifecycle.forget(agentId) },
     ended: agentEnded,
     syncRecapPool,
-    warn: (message, error) => console.warn(message, error),
+    warn: (message) => console.warn(message),
   })
   const keepAbandonedConversation = createKeepAbandonedConversation({ stoppedAgents, publishStoppedAgent: (saved) => backend.publishStoppedAgent(saved) })
 
@@ -2113,12 +2116,12 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       gridAssignments.observe(agents)
       if (ptyDrain) {
         void ptyDrain.step().catch((error) => {
-          console.error('[terminal] ptyhost: drain failed:', error instanceof Error ? error.message : error)
+          console.error(`[terminal] ptyhost: drain failed: ${errorKind(error)}`)
         })
       }
       // At most one idle, unwatched agent at a time moves off a drained host (lib/hostMove/mover.ts).
       void hostMover?.step().catch((error) => {
-        console.error('[terminal] move: the mover failed:', error instanceof Error ? error.message : error)
+        console.error(`[terminal] move: the mover failed: ${errorKind(error)}`)
       })
     },
     onProbeStatus: (status) => {
@@ -2506,7 +2509,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     const repaired = await repairProjectCwds({ registry, stoppedAgents, log: (message) => console.log(message) })
     if (repaired.registry || repaired.archived) console.log(`[repair] cwd · ${repaired.registry} live · ${repaired.archived} saved`)
   } catch (error) {
-    console.warn(`[repair] cwd repair skipped · ${error instanceof Error ? error.message : error}`)
+    console.warn(`[repair] cwd repair skipped · ${errorKind(error)}`)
   }
   watcher.start()
   await cursorDiscovery.start()
@@ -2581,7 +2584,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   if (pty && ptyHosts) {
     const swept = await pty.removeOrphanMovePanes(terminalBackends.filter((backend) => backend.name === 'ptyhost'), registry.list())
       .catch((error) => {
-        console.warn(`[terminal] move: could not look for panes a stopped move left: ${error instanceof Error ? error.message : error}`)
+        console.warn(`[terminal] move: could not look for panes a stopped move left: ${errorKind(error)}`)
         return { removed: 0, unconfirmed: [] as string[], keptPanes: [] }
       })
     if (swept.removed) console.log(`[terminal] move: closed ${swept.removed} pane(s) a stopped move left`)
@@ -2648,7 +2651,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     }
    } catch (error) {
     restoreFailed = true
-    console.warn(`[restore] skipped · ${error instanceof Error ? error.message : error}`
+    console.warn(`[restore] skipped · ${errorKind(error)}`
       + ' · agents keep their rows and come back on the next start')
    }
   }
@@ -2723,13 +2726,13 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const RUNTIME_RECONCILE_MS = 5 * 60_000
   const runtimeReconcileTimer = setInterval(() => {
     void fullReconcile().catch((err) => {
-      console.error('[runtime-profile] periodic reconcile failed:', err instanceof Error ? err.message : err)
+      console.error(`[runtime-profile] periodic reconcile failed: ${errorKind(err)}`)
     })
   }, RUNTIME_RECONCILE_MS)
   const PANE_TITLE_SYNC_MS = 5_000
   const paneTitleSyncTimer = setInterval(() => {
     void syncTerminalTitles().catch((err) => {
-      console.error('[terminal-title] sync failed:', err instanceof Error ? err.message : err)
+      console.error(`[terminal-title] sync failed: ${errorKind(err)}`)
     })
   }, PANE_TITLE_SYNC_MS)
 
@@ -3053,7 +3056,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       } catch (error) {
         // A task that is gone, or a host that cannot start, is no host: the create says "turn sharing on again"
         // rather than throwing out of the request.
-        console.warn(`[guest] ${user} host unavailable · ${error instanceof Error ? error.message : String(error)}`)
+        console.warn(`[guest] ${user} host unavailable · ${errorKind(error)}`)
         backend?.dispose()
         return null
       }
@@ -3250,7 +3253,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // Stop producers before sealing, then retain the claim/socket until actual I/O settlement.
     deadline.at('the registry')
     try { await registry.flush({ exiting: true }) }
-    catch { console.error('[registry] shutdown flush failed') }
+    catch (error) { console.error(`[registry] shutdown flush failed · ${errorKind(error)}`) }
     deadline.at('stopped sessions')
     await stoppedAgents.close()
     deadline.at('session storage')
@@ -3281,7 +3284,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // Marked before the stop: the core that comes back must read it as signed out. The mark waits for a
     // refresh another process has under way, so that refresh's save cannot write over it.
     void markSignedOut('revoked')
-      .catch((error: unknown) => console.log(`[cli] could not mark the sign-in signed out (${error instanceof Error ? error.message : String(error)})`))
+      .catch((error: unknown) => console.log(`[cli] could not mark the sign-in signed out (${errorKind(error)})`))
       .finally(() => void shutdown('revoked'))
   }
 
@@ -3366,6 +3369,20 @@ async function runForeground(session: AuthSession | null): Promise<void> {
 }
 
 /**
+ * A start-up that threw, and does not stay up: only its kind goes to the log, which Export logs sends, never its words
+ * or its stack. The pid file goes if it is this core's: one left naming a process that is gone, the next
+ * `harness start` would refuse on.
+ */
+const failStart = (err: unknown, code: number): never => {
+  // The one a person meets starting by hand (`harness start -f`, `harness login`) says why, in fixed words: its own
+  // words name the socket's path.
+  const why = (err as { code?: unknown } | null | undefined)?.code === 'EADDRINUSE' ? ' · another Harness daemon serves this data folder' : ''
+  console.error(`Failed to start adapter: ${errorKind(err)}${why}`)
+  removePidFileIf(process.pid)
+  process.exit(code)
+}
+
+/**
  * The daemon's start-up threw. STAY UP anyway, waiting for a fix.
  *
  * Exiting here is what made one bad build unrecoverable: the desktop app answers a dead port by running
@@ -3388,10 +3405,11 @@ const enterSafeMode = (err: unknown): void => {
     // Under harnessd, said for good: any other exit, the master restarts, and a core that another daemon
     // keeps from running was restarted for as long as its master lived (e2e/twodaemons.e2e.ts). Except
     // what stands in the way is leaving too: then the master starts this core again.
-    onError(err, coreLink.supervised && !disposition.retry ? CORE_EXIT_STOP : 1)
+    failStart(err, coreLink.supervised && !disposition.retry ? CORE_EXIT_STOP : 1)
   }
+  // The marker keeps the stack, for `harness status`; the log, which Export logs sends, gets only the kind.
   const detail = err instanceof Error ? (err.stack ?? err.message) : String(err)
-  console.error('Failed to start adapter:', err)
+  console.error(`Failed to start adapter: ${errorKind(err)}`)
   console.error(`[safe-mode] staying up on v${VERSION} — a published fix will be applied on its own.`
     + ' Nothing else on this machine works until then.')
   writeSafeModeMarker(env.ADAPTER_DATA_DIR, { pid: process.pid, version: VERSION, at: Date.now(), error: detail })
@@ -3435,7 +3453,7 @@ const enterSafeMode = (err: unknown): void => {
       res.end(JSON.stringify(body))
     })
     status.on('error', (e) => {
-      console.error(`[safe-mode] could not serve status on ${port}: ${e instanceof Error ? e.message : e}`)
+      console.error(`[safe-mode] could not serve status on ${port}: ${errorKind(e)}`)
       // A ref'd timer: something has to hold the event loop open.
       setInterval(() => console.log(`[safe-mode] still waiting for a fixed build · v${VERSION}`), 10 * 60_000)
     })
@@ -3471,5 +3489,6 @@ export function runCoreInForeground(session: AuthSession | null, scriptPath: str
   holdHarnessdEnv()
   dropAgentSessionEnv()
   SCRIPT_PATH = scriptPath
-  return runForeground(session)
+  // Never the command's `onError`, which prints the error whole: this process is the daemon, and that is its log.
+  return runForeground(session).catch((err: unknown) => failStart(err, 1))
 }

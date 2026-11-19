@@ -3,6 +3,7 @@ import { hookAuthority as claude } from './claude/hookAuthority.js'
 import { hookAuthority as codex } from './codex/hookAuthority.js'
 import { isChildSession, knownTranscript } from './kit/hookRules.js'
 import { closeTurnOnStop } from './kit/stopHook.js'
+import { errorKind } from '../lib/log.js'
 
 /**
  * The engines' mandatory hooks load no installer and wait on no setup worker: hooks bind sessions and close turns, which are the
@@ -34,7 +35,7 @@ export function hooksFor(name: string | null | undefined): EngineHooks | undefin
  */
 export function admitHook(engine: string, body: HookSession): HookAdmission {
   try { return hooksFor(engine)?.admit?.(body) ?? { accepted: true } } catch (error) {
-    console.warn(`[hooks] ${engine} admission failed:`, error instanceof Error ? error.message : error)
+    console.warn(`[hooks] ${engine} admission failed:`, errorKind(error))
     return { accepted: false, reason: 'engine_hook_failed' }
   }
 }

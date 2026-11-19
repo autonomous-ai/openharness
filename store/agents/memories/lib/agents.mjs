@@ -14,6 +14,7 @@
 import { readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { harnessRoots } from './localDaemon.mjs'
 
 /** The display order, the tile name, and a color per agent (the viewer tints the agent's name with it). */
 export const AGENTS = [
@@ -33,7 +34,9 @@ export const AGENTS = [
 export const AGENT_BY_ID = new Map(AGENTS.map((agent) => [agent.id, agent]))
 
 /** Every agent home this package reads, resolved once per collection. */
-export function homes(env = process.env, home = homedir()) {
+export function homes(env = process.env, home = homedir(), platform = process.platform) {
+  // Harness's own folders follow its rule, looked for under the home given here.
+  const harness = harnessRoots({ ...env, HOME: home }, platform)
   return {
     home,
     claude: env.CLAUDE_CONFIG_DIR || join(home, '.claude'),
@@ -48,10 +51,10 @@ export function homes(env = process.env, home = homedir()) {
     cursor: join(home, '.cursor'),
     copilot: join(home, '.copilot'),
     // The session index Harness keeps for search (cli/src/lib/sessionSearch): read-only here.
-    harnessData: env.ADAPTER_DATA_DIR || join(home, '.harness', 'cli', 'data'),
+    harnessData: env.ADAPTER_DATA_DIR || join(harness.data, 'cli', 'data'),
     // Where the About You profile lives: one per person on this computer, not per workspace, so every
     // Memories workspace (and, later, every agent) reads the same file.
-    memory: env.MEMORIES_HOME || join(home, '.harness', 'memory'),
+    memory: env.MEMORIES_HOME || join(harness.data, 'memory'),
   }
 }
 

@@ -26,6 +26,7 @@ import { isViewerPackage } from './manifest.js'
 import { resolveDshCommand } from './materialize.js'
 import { isShellNoise, killProcessGroup, spawnDshCommand } from './shell.js'
 import type { ViewerLedger } from './viewerLedger.js'
+import { errorKind } from '../lib/log.js'
 import { viewerTarget } from '../lib/viewerWire.js'
 
 /** The viewer that will actually run for a harness: its own, or the package it points at. */
@@ -307,7 +308,7 @@ export class DshViewerManager {
       state.rescanTimer.unref?.()
     }
     watcher.on('add', bump).on('change', bump).on('unlink', bump)
-      .on('error', (error: unknown) => this.log(`[dsh] artifact watch error · ${error instanceof Error ? error.message : error}`))
+      .on('error', (error: unknown) => this.log(`[dsh] artifact watch error · ${errorKind(error)}`))
     state.watcher = watcher
   }
 
@@ -317,7 +318,7 @@ export class DshViewerManager {
     try {
       port = await (this.deps.freePort ?? freeLoopbackPort)()
     } catch (error) {
-      await this.fail(state, `[dsh] ${state.dsh.id} viewer: no free port · ${error instanceof Error ? error.message : error}`)
+      await this.fail(state, `[dsh] ${state.dsh.id} viewer: no free port · ${errorKind(error)}`)
       return
     }
     if (state.stopping) return
@@ -340,8 +341,8 @@ export class DshViewerManager {
         purpose: 'viewer',
       })
     } catch (error) {
-      // Windows without Git Bash (shell.ts says what to install), or an argument spawn refuses.
-      await this.fail(state, `[dsh] ${state.dsh.id} viewer could not start · ${error instanceof Error ? error.message : error}`)
+      // Windows without Git Bash, SHELL_UNAVAILABLE (shell.ts says what to install), or an argument spawn refuses.
+      await this.fail(state, `[dsh] ${state.dsh.id} viewer could not start · ${errorKind(error)}`)
       return
     }
     state.child = child
@@ -350,13 +351,14 @@ export class DshViewerManager {
     const onData = (chunk: Buffer): void => {
       for (const line of chunk.toString('utf8').split('\n')) {
         if (!line.trim() || isShellNoise(line)) continue
-        if (logged++ < LOG_LINE_LIMIT) this.log(`[dsh] ${state.dsh.id} viewer · ${line}`)
+        // Its size only: a viewer reads the person's workspace, and what it prints can quote their work.
+        if (logged++ < LOG_LINE_LIMIT) this.log(`[dsh] ${state.dsh.id} viewer printed a line of ${line.length} chars`)
       }
     }
     child.stdout?.on('data', onData)
     child.stderr?.on('data', onData)
     child.on('error', (error) => {
-      const line = `[dsh] ${state.dsh.id} viewer could not start · ${error.message}`
+      const line = `[dsh] ${state.dsh.id} viewer could not start · ${errorKind(error)}`
       if (state.child === child) void this.fail(state, line)
       else this.log(line)
     })
@@ -431,7 +433,7 @@ export class DshViewerManager {
           timer = setTimeout(() => { this.log('[viewers] VIEWER_WATCH_CLOSE_TIMEOUT'); resolve() }, 10_000)
           timer.unref?.()
         })])
-      } catch { this.log('[viewers] VIEWER_WATCH_CLOSE_FAILED') }
+      } catch (error) { this.log(`[viewers] VIEWER_WATCH_CLOSE_FAILED · ${errorKind(error)}`) }
       finally { clearTimeout(timer) }
     }
   }

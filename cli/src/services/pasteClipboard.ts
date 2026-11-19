@@ -1,4 +1,5 @@
 /** One bounded clipboard reservation across panes and worker replacement. Core owns final input. */
+import { errorKind } from '../lib/log.js'
 import type { PasteClipboardRequest, PasteClipboardResult } from '../core/api.js'
 import { openPreparedPaste, PasteArtifactCleanupUnconfirmed } from '../lib/pasteArtifact.js'
 import { isWsl, startClipboardOwner, type ClipboardOwner } from './pasteClipboardNative.js'
@@ -23,7 +24,7 @@ export function createPasteClipboard(dataDir: string, deps: {
     if (job.claiming) return
     if (job.lease && !job.leaseSettled && !job.releasing) {
       if ((job.inputSettled && (job.written || job.settled) || job.ready && !job.written && job.settled) && (!job.cancelled || job.settled)) {
-        job.releasing = job.lease.release().catch(() => { log('PASTE_CLIPBOARD_RELEASE_FAILED') }).then(() => {
+        job.releasing = job.lease.release().catch((caughtFailure) => { log(('PASTE_CLIPBOARD_RELEASE_FAILED') + ' · ' + errorKind(caughtFailure)) }).then(() => {
           job.leaseSettled = true; settle(job)
         })
       } else if (job.abandoned && job.written) {
@@ -68,7 +69,7 @@ export function createPasteClipboard(dataDir: string, deps: {
         job.owner = (deps.start ?? startClipboardOwner)(file)
       } catch (error) {
         if (error instanceof PasteArtifactCleanupUnconfirmed) {
-          log('PASTE_FILE_CLOSE_FAILED')
+          log(`PASTE_FILE_CLOSE_FAILED · ${errorKind(error)}`)
           job.owner = { ready: Promise.resolve(failed('PASTE_FILE_CLOSE_FAILED')), settled: new Promise<void>(() => {}), cancel() {} }
         } else {
           job.ready = true; job.settled = true; job.resolve(failed('PASTE_INVALID_ARTIFACT')); settle(job); return
@@ -82,7 +83,7 @@ export function createPasteClipboard(dataDir: string, deps: {
     }).catch((error: unknown) => {
       job.claiming = false; job.ready = true; job.settled = true; job.leaseSettled = true
       const reason = error instanceof Error && /^PASTE_[A-Z_]{1,40}$/.test(error.message) ? error.message : 'PASTE_CLIPBOARD_RESERVATION_FAILED'
-      log(reason); job.resolve(failed(reason)); settle(job)
+      log(`PASTE_CLIPBOARD_RESERVATION_FAILED · ${errorKind(error)}`); job.resolve(failed(reason)); settle(job)
     })
   }
   return {
@@ -111,7 +112,7 @@ export function createPasteClipboard(dataDir: string, deps: {
     },
     release(generation: string, corePid = process.pid): Promise<void> {
       const job = jobs.get(generation)
-      if (!job) return reservation.release(corePid, generation).catch(() => { log('PASTE_CLIPBOARD_RELEASE_FAILED') })
+      if (!job) return reservation.release(corePid, generation).catch((caughtFailure) => { log(('PASTE_CLIPBOARD_RELEASE_FAILED') + ' · ' + errorKind(caughtFailure)) })
       if ((job.request.corePid ?? process.pid) !== corePid) return Promise.resolve()
       job.released = true; job.inputSettled = true
       if (!job.ready) cancelJob(job)

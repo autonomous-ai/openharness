@@ -17,7 +17,7 @@
  * aside (its record follows it), nor one whose resume is in flight.
  */
 import { conversationKey } from '../../lib/conversationIdentity.js'
-import { sid } from '../../lib/log.js'
+import { errorKind, sid } from '../../lib/log.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import type { StoppedAgentStore } from '../../lib/stoppedAgents.js'
 
@@ -86,7 +86,7 @@ export function createConversationOwners(deps: ConversationOwnersDeps) {
             return liveOwner ? liveOwner.agentId === owner.agentId : deps.stoppedAgents.current(owner)
           })) continue
         } catch (error) {
-          console.warn(`[agent] ${sid(row.agentId)} could not be set aside for ${sid(owner.agentId)} · ${error instanceof Error ? error.message : error}`)
+          console.warn(`[agent] ${sid(row.agentId)} could not be set aside for ${sid(owner.agentId)} · ${errorKind(error)}`)
           continue
         }
         setAside.push(row.agentId)

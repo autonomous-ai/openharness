@@ -1,9 +1,10 @@
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'fs'
+import { mkdtempSync, rmSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { afterAll, describe, expect, it } from 'vitest'
 import { env } from '../config/env.js'
 import { runGrokOneShot, runRouterOneShot } from './oneshot.js'
+import { writeExecutable } from '../testing/executableFixture.js'
 
 // What an engine prints when it fails can echo its prompt (the spoken task, agent names), and these
 // errors reach the logs: they carry what failed and how much stderr, never the text.
@@ -15,8 +16,7 @@ describe.skipIf(process.platform === 'win32')('a failed one-shot', () => {
   const fake = (name: string, body: string): string => {
     const file = join(dir, name)
     // Read one byte of the prompt first, so the worker's write never meets a closed pipe.
-    writeFileSync(file, `#!/bin/sh\nhead -c 1 >/dev/null\n${body}\n`)
-    chmodSync(file, 0o755)
+    writeExecutable(file, `#!/bin/sh\nhead -c 1 >/dev/null\n${body}\n`)
     return file
   }
   const failed = async (run: Promise<unknown>) => {

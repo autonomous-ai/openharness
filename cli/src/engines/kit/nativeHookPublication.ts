@@ -1,4 +1,5 @@
 /** Core owns native destinations and publication. Setup supplies only bounded replacement bytes. */
+import { errorKind } from '../../lib/log.js'
 import { randomUUID } from 'node:crypto'
 import { lstatSync } from 'node:fs'
 import type { NativeSetup } from './nativeSetup.js'
@@ -93,8 +94,8 @@ export async function publishNativeFiles(destinations: readonly NativeHookDestin
     if (!proof.current()) return false
     options.confirmed?.(proof)
     return true
-  } catch {
-    console.warn('[hooks] NATIVE_HOOK_PREPARATION_HELD')
+  } catch (caughtFailure) {
+    console.warn(('[hooks] NATIVE_HOOK_PREPARATION_HELD') + ' · ' + errorKind(caughtFailure))
     return false
   }
 }

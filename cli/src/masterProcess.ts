@@ -29,7 +29,7 @@ import { MINIMUM_NODE_MAJOR, managedNodePath, nodeMajorOf } from './lib/nodeRunt
 import { currentCli, harnessLaunchPath } from './lib/windows/installLayout.js'
 import { launchDetached } from './lib/windows/launcher.js'
 import { leanFingerprint, readLeanBundle, releaseLeanClaim, writeLeanBundle, type LeanBundle } from './harnessd/leanBundle.js'
-import { ts } from './lib/log.js'
+import { errorKind, ts } from './lib/log.js'
 import { confirm as confirmUpdate, pendingVersion, putNodeBack, restore as restoreUpdate, unjudgedUpdate } from './lib/selfUpdate.js'
 import { keepStaged, ptyUnjudged, rollBackStaged } from './lib/windows/ptyUpdate.js'
 import { SERVICES_EXPLICIT_ENV } from './harnessd/workerContract.js'
@@ -160,8 +160,8 @@ export function handoverAlive(pid: number, kill: (pid: number, signal: 0) => voi
 
 /**
  * Under harness-launch.exe the master has no stderr: an error that ended it left no word of why. So, once it writes
- * the daemon's log itself, such an error is written there, at once (the process is about to end), and it exits 1, as
- * Node does on an uncaught error or an unhandled rejection.
+ * the daemon's log itself, such an error's kind is written there, at once (the process is about to end), and it exits
+ * 1, as Node does on an uncaught error or an unhandled rejection.
  */
 export function writeFatalTo(
   fd: number,
@@ -170,7 +170,7 @@ export function writeFatalTo(
 ): void {
   const fatal = (what: string) => (error: unknown): void => {
     try {
-      writeSync(fd, `${ts()} [harnessd] the master stopped on ${what}: ${error instanceof Error ? error.stack ?? error.message : format(error)}\n`)
+      writeSync(fd, `${ts()} [harnessd] the master stopped on ${what}: ${errorKind(error)}\n`)
     } catch { /* the log cannot be written: the line is lost, never the exit */ }
     exit(1)
   }
@@ -213,7 +213,7 @@ export function windowsMaster(scriptPath: string, deps: WindowsMasterDeps = proc
       output = deps.openLog()
     } catch (error) {
       // A log it cannot open (a full disk, a file held by a scan) costs the master its lines, never the daemon.
-      console.error(`${ts()} [harnessd] could not open the daemon log (${error instanceof Error ? error.message : String(error)}) — running without it`)
+      console.error(`${ts()} [harnessd] could not open the daemon log (${errorKind(error)}) — running without it`)
     }
     if (output !== undefined) {
       deps.redirect(output)
@@ -432,7 +432,7 @@ export function startMasterFromBundle(bundlePath: string, deps: BundleMasterDeps
     const lean = readLeanBundle(deps.read(bundlePath))
     written = lean ? { lean, path: deps.write(lean) } : null
   } catch (error) {
-    fromBundle(`the lean bundle could not be written out (${error instanceof Error ? error.message : String(error)}): the master runs from ${bundlePath}`)
+    fromBundle(`the lean bundle could not be written out (${errorKind(error)}): the master, the core and the services run from cli.js`)
     return
   }
   if (!written) { fromBundle(`no lean bundle in ${bundlePath}: the master runs from it`); return }
@@ -471,6 +471,6 @@ export function startMasterFromBundle(bundlePath: string, deps: BundleMasterDeps
     deps.execve(node, [node, ...process.execArgv, leanPath, '__harnessd'], leanEnv)
   } catch (error) {
     // Only what `process.execve` refuses before it begins: arguments it cannot take.
-    fromBundle(`the master could not re-execute on ${leanPath} (${error instanceof Error ? error.message : String(error)}): it runs from ${bundlePath}`, { path: leanPath, fingerprint })
+    fromBundle(`the master could not re-execute on the lean bundle (${errorKind(error)}): it runs from cli.js, the core and the services from the lean bundle`, { path: leanPath, fingerprint })
   }
 }

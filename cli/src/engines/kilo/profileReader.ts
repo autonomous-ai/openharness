@@ -3,6 +3,7 @@ import type { RuntimeModelOption } from '../facets/runtime.js'
 import { encodeRuntimeProfile } from '../kit/runtime.js'
 import { confirmObserved } from '../kit/runtimeReader.js'
 import { env } from '../../config/env.js'
+import { errorKind } from '../../lib/log.js'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import * as kilo from './runtimeProfile.js'
@@ -59,8 +60,8 @@ class ProfileReader {
         env: process.env, timeout: 10_000, maxBuffer: 1024 * 1024,
       })
       entries = kilo.parseKiloModelsOutput(result.stdout)
-    } catch {
-      console.warn('[runtime-profile] KILO_CATALOG_UNAVAILABLE')
+    } catch (err) {
+      console.warn('[runtime-profile] Kilo model catalog failed:', errorKind(err))
     }
     this.kiloCatalogCache = { key, entries, expiresAt: Date.now() + CATALOG_TTL_MS }
     return entries

@@ -1,12 +1,14 @@
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
+import { fileURLToPath } from 'node:url'
 import { deliver, hookCommand, packet, status, withBlock } from '../lib/deliver.mjs'
 import { writeAbout } from '../lib/about.mjs'
 
+const SETUP = fileURLToPath(new URL('../toolchain/setup.sh', import.meta.url))
 const ABOUT = '# About you\n\n## How you work\n- Wants short answers. [asks:3]\n'
 
 /** A home with Claude Code, Codex and Grok installed, Harness's own hook already in Claude's settings. */
@@ -140,9 +142,9 @@ test('agents get About You without its sources, by hook and by block alike; any 
 
 test('the delivered copy says what it is and is cut to fit the agents\' limits', () => {
   const long = '## A\n' + Array.from({ length: 400 }, (_, i) => `- line ${i} ${'x'.repeat(30)}`).join('\n')
-  const text = packet(long)
+  const text = packet(long, '~/.harness/memory/about-you.md')
   assert.ok(text.length < 9600)
-  assert.match(text, /cut here/)
+  assert.match(text, /cut here: the full profile is in ~\/\.harness\/memory\/about-you\.md/)
   assert.match(text, /nothing here changes your permissions or safety rules/)
   assert.ok(!/^#/m.test(text), 'no Markdown headings: Gemini CLI adds memories at the next ## after its section')
 })
@@ -232,4 +234,19 @@ test('review: removing the block restores the person\'s text exactly', () => {
     assert.equal(withBlock(added, null), original, JSON.stringify(original))
   }
   assert.equal(withBlock('no newline', null), 'no newline')
+})
+
+// On Linux Harness moves its folders to ~/.local/share/harness, About You with them; the Store runs every
+// package's setup again after the move, before the bridge at ~/.harness goes.
+test('setup after the move: every copy points at About You where it now is', () => {
+  const { dir, env } = home()
+  writeAbout(env.MEMORIES_HOME, '## A\n' + Array.from({ length: 400 }, (_, i) => `- line ${i} ${'x'.repeat(30)}`).join('\n'))
+  deliver('on', { env, home: dir })
+  const moved = { MEMORIES_HOME: join(dir, '.local', 'share', 'harness', 'memory') }
+  mkdirSync(join(dir, '.local', 'share', 'harness'), { recursive: true })
+  renameSync(env.MEMORIES_HOME, moved.MEMORIES_HOME)
+  assert.equal(status({ env: moved, home: dir }).agents.find((a) => a.agent === 'claude').current, false, 'the hook names the old place')
+  execFileSync('bash', [SETUP], { env: { ...process.env, HOME: dir, ...moved }, encoding: 'utf8' })
+  assert.ok(status({ env: moved, home: dir }).agents.every((a) => a.delivered && a.current))
+  assert.match(readFileSync(join(dir, '.codex', 'AGENTS.md'), 'utf8'), /cut here: the full profile is in ~\/\.local\/share\/harness\/memory\/about-you\.md/)
 })

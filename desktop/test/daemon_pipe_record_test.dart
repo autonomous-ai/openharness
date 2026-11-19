@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/core/harness_home.dart';
 import 'package:harness/ws/daemon_pipe_record.dart';
 
 const _id = '0123456789abcdef0123456789abcdef';
@@ -40,11 +41,57 @@ void main() {
           defaultDaemonDataDir(
             environment: {'HOME': '/Users/me'},
             isWindows: false,
+            look: HomeLook(
+              linux: false,
+              environment: const {},
+              exists: (path) => throw StateError('looked at $path off Linux'),
+            ),
           ),
           '/Users/me/.harness/cli/data',
         );
       },
     );
+
+    test('on a fresh Linux home it is in the XDG data root', () {
+      expect(
+        defaultDaemonDataDir(
+          environment: {'HOME': '/home/me'},
+          isWindows: false,
+          look: HomeLook(
+            linux: true,
+            environment: const {},
+            exists: (path) => false,
+          ),
+        ),
+        '/home/me/.local/share/harness/cli/data',
+      );
+    });
+
+    test('reads the XDG variables of the environment it is handed', () {
+      expect(
+        defaultDaemonDataDir(
+          environment: {'HOME': '/home/t', 'XDG_DATA_HOME': '/x'},
+          isWindows: false,
+        ),
+        // Off Linux the rule reads no variable.
+        Platform.isLinux ? '/x/harness/cli/data' : '/home/t/.harness/cli/data',
+      );
+    });
+
+    test('a Windows profile keeps the .harness layout on a Linux host', () {
+      expect(
+        defaultDaemonDataDir(
+          environment: {'USERPROFILE': r'C:\Users\me'},
+          isWindows: true,
+          look: HomeLook(
+            linux: true,
+            environment: const {},
+            exists: (path) => throw StateError('looked at $path for Windows'),
+          ),
+        ),
+        r'C:\Users\me\.harness\cli\data',
+      );
+    });
 
     test('takes ADAPTER_DATA_DIR first, and is null with no home', () {
       expect(

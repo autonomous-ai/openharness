@@ -23,6 +23,7 @@ import { boundedJsonBytes } from '../lib/boundedJsonBytes.js'
 import { serviceConnector } from './localConnection.js'
 
 const connectLocal = serviceConnector({ dataDir: config.ADAPTER_DATA_DIR, port: config.PORT })
+import { errorKind } from '../lib/log.js'
 
 type Payload = Record<string, unknown>
 
@@ -101,7 +102,6 @@ export function serviceFaults(env: NodeJS.ProcessEnv, name: string): ServiceFaul
   return faults
 }
 
-const describe = (error: unknown): string => (error instanceof Error ? error.message : String(error))
 /** Another of the owner's machines (Asker.machine), as the core said it; read as none when malformed. */
 const machineOf = (value: unknown): { machineId: string; label: string | null } | null => {
   const m = value as { machineId?: unknown; label?: unknown } | null
@@ -281,7 +281,7 @@ export function runServiceProcess(options: ServiceProcessOptions): ServiceProces
   const onFrame = (ws: WebSocket, raw: WebSocket.RawData, isBinary = false): void => {
     if (isBinary) {
       try { options.onBinary?.(raw instanceof Buffer ? new Uint8Array(raw.buffer, raw.byteOffset, raw.byteLength) : new Uint8Array(Buffer.concat(raw as Buffer[]))) }
-      catch (error) { log(`[service ${options.name}] binary frame failed · ${describe(error)}`) }
+      catch (error) { log(`[service ${options.name}] binary frame failed · ${errorKind(error)}`) }
       return
     }
     let frame: { type?: unknown; payload?: Payload; asker?: { local?: unknown; owner?: unknown; accountOwner?: unknown; guest?: unknown; machine?: unknown; connection?: unknown; requestId?: unknown; rpcRoute?: unknown; door?: unknown } }
@@ -302,7 +302,7 @@ export function runServiceProcess(options: ServiceProcessOptions): ServiceProces
       // An event that fails is this service's alone: logged, and the next one handled as usual. Thrown
       // out of the socket's listener it ended the process, and every request in flight with it.
       const kind = typeof payload.kind === 'string' ? payload.kind : 'event'
-      const failed = (error: unknown): void => log(`[service ${options.name}] ${kind} failed · ${describe(error)}`)
+      const failed = (error: unknown): void => log(`[service ${options.name}] ${kind} failed · ${errorKind(error)}`)
       try {
         if (faults.calls.has(kind)) throw new Error(`injected fault: ${options.name}.${kind}`)
         void Promise.resolve(options.onEvent?.(payload)).catch(failed)
@@ -312,7 +312,7 @@ export function runServiceProcess(options: ServiceProcessOptions): ServiceProces
     if (frame.type === 'service_connection_closed') {
       for (const [closed, asked] of answering) if (asked === payload.connection) closed.abort()
       if (typeof payload.connection !== 'string') return
-      try { options.onConnectionClosed?.(payload.connection) } catch (error) { log(`[service ${options.name}] connection closed failed · ${describe(error)}`) }
+      try { options.onConnectionClosed?.(payload.connection) } catch (error) { log(`[service ${options.name}] connection closed failed · ${errorKind(error)}`) }
       return
     }
     if (typeof frame.type === 'string' && frame.type.startsWith('service_read_')) {
@@ -383,7 +383,7 @@ export function runServiceProcess(options: ServiceProcessOptions): ServiceProces
         return handle(payload, asker, closed.signal)
       })
       .catch((error: unknown) => {
-        log(`[service ${options.name}] ${type} failed · ${describe(error)}`)
+        log(`[service ${options.name}] ${type} failed · ${errorKind(error)}`)
         return { error: 'SERVICE_FAILED', service: options.name }
       })
       .then((result) => {
@@ -412,7 +412,7 @@ export function runServiceProcess(options: ServiceProcessOptions): ServiceProces
     for (const [id, waiting] of pending) { pending.delete(id); waiting.reject(new Error('the core went away')) }
     for (const closed of answering.keys()) closed.abort()
     if (wasOpen) {
-      try { options.onDisconnected?.() } catch (error) { log(`[service ${options.name}] disconnect failed · ${describe(error)}`) }
+      try { options.onDisconnected?.() } catch (error) { log(`[service ${options.name}] disconnect failed · ${errorKind(error)}`) }
     } else reportFailure('SERVICE_CONNECT_UNAVAILABLE')
     if (stopped) return
     const delay = code === REFUSED ? Math.max(backoff, refusedBackoffMs) : backoff

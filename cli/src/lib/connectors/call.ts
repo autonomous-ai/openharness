@@ -7,12 +7,14 @@
  * unusable credential · 4 host not allowed for this connector. On any failure nothing is written to
  * stdout, so a following `| jq` sees empty input instead of an error body it could mistake for a result.
  */
-import { readFileSync, realpathSync, statSync } from 'node:fs'
-import { homedir } from 'node:os'
-import { basename, extname, join, resolve } from 'node:path'
+import { closeSync, constants, fstatSync, openSync, readFileSync, realpathSync, statSync, type BigIntStats } from 'node:fs'
+import { homedir, userInfo } from 'node:os'
+import platformPath, { type PlatformPath } from 'node:path'
 import { randomUUID } from 'node:crypto'
+import { harnessRoots, legacyHarnessHome } from '../../config/harnessHome.js'
 import { bearer, connectorsDir, ConnectorError, type Store, type Token } from './store.js'
 import { ready } from './renew.js'
+import { appDataFolders } from '../windows/knownFolders.js'
 
 const TIMEOUT_MS = 60_000
 export const MAX_RESPONSE_BYTES = 8 * 1024 * 1024
@@ -39,21 +41,156 @@ export function hostAllowed(code: string, host: string): boolean {
   return (OFFICIAL_HOSTS[code] ?? []).some(allowed => host === allowed || host.endsWith('.' + allowed))
 }
 
-/** An `@path` upload: plain media or a document, never from where credentials or configs live. */
-export function uploadPath(raw: string, env: NodeJS.ProcessEnv = process.env): string {
-  const home = env.HOME || homedir()
-  const path = raw.replace(/^~(?=$|\/)/, home)
-  let real: string
-  try { real = realpathSync(path) } catch { throw new CallFailure(2, `cannot read upload ${raw}`) }
-  const forbidden = [connectorsDir(env), join(home, '.ssh'), join(home, '.gnupg'), join(home, '.config'), join(home, '.local/share'),
-    join(home, '.harness'), join(home, '.codex'), join(home, '.claude'), '/etc', '/proc', '/sys'].map(dir => { try { return realpathSync(dir) } catch { return resolve(dir) } })
-  if (forbidden.some(dir => real === dir || real.startsWith(dir + '/')) || !statSync(real).isFile()) {
-    throw new CallFailure(2, `refusing to upload ${raw}: not a media file the helper may send`)
+/** `~` before a separator is home; on posix a backslash is part of a name, so only Windows takes `~\`. */
+export function expandHome(raw: string, home: string, p: PlatformPath = platformPath): string {
+  return raw.replace(p.sep === '\\' ? /^~(?=$|[\\/])/ : /^~(?=$|\/)/, home)
+}
+
+/**
+ * A Windows path through a share, as given or resolved: the fence compares local folders, and a share may be any of
+ * them, as the local disk's admin share (`\\localhost\C$`) is. Two separators of either kind start a share or a device
+ * path, and Windows passes `\??\` on as the NT path it is. Of those only a drive's `\\?\C:\` is local: Windows takes a
+ * `..` in `\\.\C:\..\UNC\host\share` back to the `\\.\` prefix, but never normalizes `\\?\`. On posix, realpath reads
+ * `//` as `/`.
+ */
+export function unc(path: string, p: PlatformPath = platformPath): boolean {
+  return p.sep === '\\' && /^[\\/]([\\/]|\?\?[\\/])/.test(path) && !/^\\\\\?\\[a-z]:\\/i.test(path)
+}
+
+/**
+ * Where credentials or configs live, under each home: HOME and USERPROFILE (Windows' HOME) are the caller's to set, so
+ * `homes` brings the ones no variable moves. On Windows, apps keep theirs in AppData (browsers' profiles, sign-in caches).
+ */
+export function forbiddenDirs(env: NodeJS.ProcessEnv, homes: (string | undefined)[], p: PlatformPath = platformPath,
+  platform: NodeJS.Platform = process.platform): string[] {
+  const windows = p.sep === '\\'
+  const all = [env.HOME, env.USERPROFILE, ...homes].filter((home): home is string => !!home)
+  const names = ['.ssh', '.gnupg', '.config', '.local/share', '.codex', '.claude', ...(windows ? ['AppData'] : [])]
+  // Windows' path module gets Windows' roots on any platform; elsewhere the platform's own rule, so Linux's never runs on macOS.
+  // A ~/.harness beside the moved Linux roots too: a stray an old build made after the move holds what it wrote there.
+  const os = windows ? 'win32' : platform
+  const harness = (home: string): string[] => [...harnessRoots(home, os), legacyHarnessHome(home, os)]
+  const appData = windows ? [env.APPDATA, env.LOCALAPPDATA].filter((dir): dir is string => !!dir) : []
+  return [...new Set([connectorsDir(env), ...all.flatMap(home => [...names.map(dir => p.join(home, dir)), ...harness(home)]), ...appData, '/etc', '/proc', '/sys'])]
+}
+
+/**
+ * The temporary folders left open inside the fenced AppData, where downloads and agents' files land: the account's own on
+ * Windows, and `Temp` under each Local AppData the registry names, as AppData moved elsewhere keeps its own. Never TEMP or
+ * TMP, nor one under HOME or USERPROFILE: the caller sets those, and so could make the folder a link into AppData. The
+ * registry is not the caller's to shape.
+ */
+export function tempDirs(home: string | undefined, local: string[], p: PlatformPath = platformPath): string[] {
+  return [...(home && p.sep === '\\' ? [p.join(home, 'AppData', 'Local', 'Temp')] : []), ...local.map(dir => p.join(dir, 'Temp'))]
+}
+
+export interface Identity { dev: bigint, ino: bigint }
+export type Verdict = 'open' | 'fenced' | 'unknown'
+
+/** `statSync(path, { bigint: true })`'s dev and ino, following links; undefined when it cannot be read. */
+export function identity(path: string): Identity | undefined {
+  try {
+    const { dev, ino } = statSync(path, { bigint: true })
+    return { dev, ino }
+  } catch { return undefined }
+}
+
+/**
+ * Each folder's identity, read by its absolute path; one on a share is dropped unread, one not named or not there
+ * skipped. Reading a folder on a share connects to it and may wait on the network. A relative name is read from the
+ * working folder, which may be on a share, so its absolute path is the one checked and read; the name as given is
+ * checked too, as `resolve()` turns `\??\UNC\…` into a path on the working drive.
+ */
+export function identities(dirs: (string | undefined)[], identify: (path: string) => Identity | undefined = identity,
+  p: PlatformPath = platformPath): Identity[] {
+  return dirs.flatMap(dir => {
+    if (!dir) return []
+    const path = p.resolve(dir)
+    const id = unc(dir, p) || unc(path, p) ? undefined : identify(path)
+    return id ? [id] : []
+  })
+}
+
+/**
+ * Whether a folder of `forbidden` holds `real`, walked from the file itself up to the root. Folders are told apart by
+ * identity, never by path: another case, an 8.3 short name, a `\\?\` prefix, a `subst` drive, a link and a case-folded
+ * folder on Linux each spell one folder in a way a compare of paths reads as another. Inside a temporary folder only a
+ * forbidden folder inside it fences the file: AppData, which holds Windows' own, does not. So each folder is asked
+ * "forbidden?" before "temporary?", and a forbidden folder that is a temporary one still fences. A folder that cannot be
+ * read, or has the number 0 some file systems give every file, cannot be told from a forbidden one. The root is the
+ * exception: Windows' FAT driver gives a drive's root the number 0 and every other folder its own, so the root is told
+ * apart by its device. The file itself comes first, so a file system with no numbers is still refused.
+ */
+export function walk(real: string, identify: (path: string) => Identity | undefined, forbidden: Identity[], temps: Identity[],
+  p: PlatformPath = platformPath): Verdict {
+  const among = (ids: Identity[], id: Identity): boolean => ids.some(other => other.dev === id.dev && other.ino === id.ino)
+  for (let path = real; ; path = p.dirname(path)) {
+    const id = identify(path)
+    if (!id || (id.ino === 0n && p.dirname(path) !== path)) return 'unknown'
+    if (among(forbidden, id)) return 'fenced'
+    if (among(temps, id) || p.dirname(path) === path) return 'open'
   }
-  if (!UPLOAD_SUFFIXES.includes(extname(real).toLowerCase()) || !UPLOAD_SUFFIXES.includes(extname(path).toLowerCase())) {
-    throw new CallFailure(2, `refusing to upload ${raw}: only ${UPLOAD_SUFFIXES.join(', ')} files`)
+}
+
+/** The account's own home; an account with no passwd entry (a container's bare uid) has none, and `userInfo` throws. */
+function accountHome(): string | undefined {
+  try { return userInfo().homedir } catch { return undefined }
+}
+
+/**
+ * An `@path` upload: plain media or a document, never from where credentials or configs live. The bytes are read from
+ * the descriptor that was checked, so a path swapped for another file between the check and the read sends nothing of
+ * that file. A writer that renames the forbidden folders themselves while this runs is not kept out: it could copy the
+ * file out of them anyway.
+ */
+export function uploadFile(raw: string, env: NodeJS.ProcessEnv = process.env, warn: (line: string) => void = () => undefined): { name: string, content: Buffer } {
+  const refused = (): CallFailure => new CallFailure(2, `refusing to upload ${raw}: not a media file the helper may send`)
+  const media = (path: string): void => {
+    if (!UPLOAD_SUFFIXES.includes(platformPath.extname(path).toLowerCase())) throw new CallFailure(2, `refusing to upload ${raw}: only ${UPLOAD_SUFFIXES.join(', ')} files`)
+    // Before Windows 11 a reserved name is the device whatever its extension or folder (COM1.txt is the serial port), and
+    // a stat opens it as an open does.
+    if (platformPath.sep === '\\' && /^(con|prn|aux|nul|com[0-9¹²³]|lpt[0-9¹²³]|conin\$|conout\$) *(\.|:|$)/i.test(platformPath.basename(path))) throw refused()
   }
-  return real
+  const read = <T>(step: () => T): T => { try { return step() } catch { throw new CallFailure(2, `cannot read upload ${raw}`) } }
+  const given = expandHome(raw, env.HOME || homedir())
+  // Windows opens a share to resolve a path through it. A relative path is on a share when the working folder is, so its
+  // absolute form is checked too; the text as given as well, as `resolve()` turns `\??\UNC\…` into a path on the working
+  // drive. The resolved path is checked again below: a link may lead there. Only this check reads the absolute form: the
+  // file is opened by the path as given, where a `..` after a link climbs from the link's target, as the kernel reads it.
+  if (unc(given) || unc(platformPath.resolve(given))) throw refused()
+  // Nothing is opened that is not named as media or a document.
+  media(given)
+  // Nor what is not a file, links followed: opening a device acts on it, as a serial port's DTR line toggles and resets
+  // the board behind it.
+  if (!read(() => statSync(given)).isFile()) throw refused()
+  // An open for reading waits for a FIFO's writer, one put here since the stat too; O_NONBLOCK returns at once. Windows
+  // has no such flag.
+  const fd = read(() => openSync(given, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0)))
+  try {
+    const open = read(() => fstatSync(fd, { bigint: true }))
+    if (!open.isFile()) throw refused()
+    // Links followed, so the walk climbs the folders that hold the file, not a link's. The file system's own answer
+    // (`native`) is where it found the file: on Windows a mapped drive resolves to its share.
+    const real = read(() => realpathSync.native(given))
+    // Refused before the walk, which reads each folder above the file: nothing on a share is read.
+    if (unc(real)) throw refused()
+    media(real)
+    // The path names another file than the open one: it moved after the open, and the walk would check the wrong one.
+    // A hard link's other names, which may be inside a forbidden folder, are found by no path the fence can check. They
+    // are counted here, after realpath: one made since the open may be the name realpath took, outside that folder.
+    let named: BigIntStats | undefined
+    try { named = statSync(real, { bigint: true }) } catch { named = undefined }
+    if (!named || named.dev !== open.dev || named.ino !== open.ino || named.nlink > 1n) throw refused()
+    const account = accountHome()
+    // Asked only now, so a path refused by its own checks starts no process. A failed read refuses nothing: the AppData
+    // under each home stays fenced, and the line says a moved one may not be.
+    const known = appDataFolders(account, failure => warn(`upload check: ${failure}; a moved AppData folder may not be fenced`))
+    const forbidden = identities([...forbiddenDirs(env, [homedir(), account]), ...known.roaming, ...known.local])
+    const verdict = walk(real, identity, forbidden, identities(tempDirs(account, known.local)))
+    if (verdict === 'unknown') throw new CallFailure(2, `cannot check upload ${raw}`)
+    if (verdict === 'fenced') throw refused()
+    return { name: platformPath.basename(real), content: read(() => readFileSync(fd)) }
+  } finally { closeSync(fd) }
 }
 
 interface Options { query: [string, string][], json: string | null, data: [string, string][], form: [string, string][], header: [string, string][] }
@@ -81,16 +218,16 @@ export function parseCallArgs(args: string[], stdin: () => string): Options {
   return options
 }
 
-function multipart(fields: [string, string][], env: NodeJS.ProcessEnv): { body: Buffer, type: string } {
+function multipart(fields: [string, string][], env: NodeJS.ProcessEnv, warn: (line: string) => void): { body: Buffer, type: string } {
   const boundary = randomUUID().replace(/-/g, '')
   const chunks: Buffer[] = []
   for (const [key, value] of fields) {
     let head = `--${boundary}\r\nContent-Disposition: form-data; name="${key}"`
     let content: Buffer
     if (value.startsWith('@')) {
-      const path = uploadPath(value.slice(1), env)
-      content = readFileSync(path)
-      head += `; filename="${basename(path)}"\r\nContent-Type: application/octet-stream`
+      const file = uploadFile(value.slice(1), env, warn)
+      content = file.content
+      head += `; filename="${file.name}"\r\nContent-Type: application/octet-stream`
     } else content = Buffer.from(value)
     chunks.push(Buffer.from(head + '\r\n\r\n'), content, Buffer.from('\r\n'))
   }
@@ -128,7 +265,7 @@ export async function call(vault: Store, code: string, method: string, url: stri
   let body: Buffer | string | undefined
   if (options.json !== null) { body = options.json; headers['Content-Type'] ??= 'application/json' }
   else if (options.data.length) { body = new URLSearchParams(options.data).toString(); headers['Content-Type'] ??= 'application/x-www-form-urlencoded' }
-  else if (options.form.length) { const form = multipart(options.form, env); body = form.body; headers['Content-Type'] = form.type }
+  else if (options.form.length) { const form = multipart(options.form, env, io.err); body = form.body; headers['Content-Type'] = form.type }
   let response: Response
   try {
     response = await fetch(parsed, { method: method.toUpperCase(), headers, body, redirect: 'manual', signal: AbortSignal.timeout(TIMEOUT_MS) })

@@ -97,14 +97,15 @@ it('rejects Codex delegated rollouts without rejecting a main session or an unwr
 })
 
 it('rejects a hook when its engine admission check throws, and leaves other engines available', () => {
-  vi.spyOn(console, 'warn').mockImplementation(() => {})
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
   vi.spyOn(engineHooks.codex, 'admit')
-    .mockImplementationOnce(() => { throw new Error('reader failed') })
-    .mockImplementationOnce(() => { throw 'reader failed again' })
+    .mockImplementationOnce(() => { throw new Error('could not read /Users/dee/.codex/sessions/rollout-1.jsonl') })
+    .mockImplementationOnce(() => { throw 'reader failed on /Users/dee/.codex' })
   expect(admitHook('codex', {})).toEqual({ accepted: false, reason: 'engine_hook_failed' })
   expect(admitHook('codex', {})).toEqual({ accepted: false, reason: 'engine_hook_failed' })
   expect(admitHook('claude', {})).toEqual({ accepted: true })
-  expect(console.warn).toHaveBeenCalledWith('[hooks] codex admission failed:', 'reader failed')
+  expect(warn.mock.calls).toEqual([['[hooks] codex admission failed:', 'Error'], ['[hooks] codex admission failed:', 'string']])
+  expect(JSON.stringify(warn.mock.calls)).not.toContain('/Users/dee')
 })
 
 it('does not emit an end when core rejects a stale closure proposal', async () => {

@@ -132,6 +132,35 @@ describe('windowFacade', () => {
     expect(w.vscode.commands).toEqual(['workbench.action.terminal.scrollUp', 'workbench.action.terminal.scrollDown'])
   })
 
+  it('pageKey sends ESC[5~ toward older lines and ESC[6~ toward newer to the terminal with that shell, each with no newline; false for a pid no terminal has', async () => {
+    const w = watched()
+    const shell = w.vscode.open()
+    shell.resolve(101)
+    const other = w.vscode.open()
+    other.resolve(202)
+    await flush()
+    expect([w.facade.pageKey(101, true), w.facade.pageKey(101, false), w.facade.pageKey(303, true)]).toEqual([true, true, false])
+    expect(shell.sent).toEqual([
+      ['\x1b[5~', false],
+      ['\x1b[6~', false],
+    ])
+    expect(other.sent).toEqual([])
+  })
+
+  it('nothing but pageKey writes to a terminal', async () => {
+    const w = watched()
+    const shell = w.vscode.open()
+    shell.resolve(101)
+    w.vscode.activate(shell.terminal)
+    await flush()
+    w.facade.state()
+    w.facade.show(101)
+    w.facade.raise()
+    await w.facade.scrollLine(true)
+    w.facade.dispose()
+    expect(shell.sent).toEqual([])
+  })
+
   it('raise runs workbench.action.focusWindow, once', () => {
     const w = watched()
     w.facade.raise()

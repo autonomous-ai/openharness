@@ -134,11 +134,11 @@ describe('a failing service never takes the core down', () => {
     expect(await client.request('project_preview', { path: '/no/such/folder' })).not.toHaveProperty('service')
     expect(await client.request('machine_resources', {})).not.toHaveProperty('error')
     for (const line of [
-      '[service search] touch failed · injected fault: search.touch',
-      '[service search] session_search failed · injected fault: search.session_search',
-      '[service workspaces] nameBranches failed · injected fault: workspaces.nameBranches',
+      '[service search] touch failed · Error',
+      '[service search] session_search failed · Error',
+      '[service workspaces] nameBranches failed · Error',
       // The recaps failing on every turn event: those turns have no recap, and every one of them still ends.
-      '[service recaps] lifecycle failed · injected fault: recaps.lifecycle',
+      '[service recaps] lifecycle failed · Error',
     ]) await until(line, () => d.log().includes(line) || null, 15_000, 250)
     const agent = await row(client, agentId)
     expect(agent?.sessionId).toBeTruthy()
@@ -155,7 +155,7 @@ describe('a failing service never takes the core down', () => {
     onTestFailed(() => { console.log(`---- daemon log\n${daemon?.log().split('\n').slice(-80).join('\n')}`) })
     await daemon.start()
     for (const service of EVERY_PROCESS_FAILING.split(',')) {
-      expect(daemon.log()).toContain(`[services] ${service} did not start · injected fault: ${service} · the core runs without it`)
+      expect(daemon.log()).toContain(`[services] ${service} did not start · Error · the core runs without it`)
     }
     const client = await LocalClient.connect(daemon)
     const agentId = await boundAgent(daemon, client, 'no-services')
@@ -217,8 +217,8 @@ describe('a failing service never takes the core down', () => {
       .toMatchObject({ error: 'SERVICE_UNAVAILABLE', service: 'viewers' })
     await until('search to be switched off', () => daemon!.log().includes('[services] search switched off after 5 failures'), 15_000)
     await until('the viewers to be switched off', () => daemon!.log().includes('[services] viewers switched off after 5 failures'), 15_000)
-    expect(daemon.log()).toContain('[services] search.touch failed · injected fault: search.touch')
-    expect(daemon.log()).toContain('[services] viewers.surface failed · injected fault: viewers.surface')
+    expect(daemon.log()).toContain('[services] search.touch failed · Error')
+    expect(daemon.log()).toContain('[services] viewers.surface failed · Error')
 
     // Off, search says so; the agent's row still carries everything the core owns.
     expect(await client.request('session_search', { query: 'turn' })).toMatchObject({ error: 'SERVICE_UNAVAILABLE', service: 'search' })
@@ -256,7 +256,7 @@ describe('a failing service never takes the core down', () => {
     // request says search is off. Its other request, and the core's, go on.
     expect(answers.slice(0, 5)).toEqual(Array(5).fill(expect.objectContaining({ error: 'SERVICE_FAILED', service: 'search' })))
     expect(answers[5]).toMatchObject({ error: 'SERVICE_UNAVAILABLE', service: 'search', retryable: false })
-    expect(daemon.log()).toContain('[services] search.session_search failed · injected fault: search.session_search')
+    expect(daemon.log()).toContain('[services] search.session_search failed · Error')
     expect((await client.request('agents_list', {})).agents).toEqual([])
     client.close()
   })
@@ -288,7 +288,7 @@ describe('a failing service never takes the core down', () => {
     for (const service of ['usage', 'monitor', 'projects', 'recaps']) {
       await until(`${service} to connect`, () => d.log().includes(`[services] ${service} connected`) || null, 30_000, 200)
     }
-    expect(d.log()).toContain('[service workspaces] did not start · injected fault: workspaces')
+    expect(d.log()).toContain('[service workspaces] did not start · Error')
     const client = await LocalClient.connect(d)
     const agentId = await boundAgent(d, client, 'edge-without-workspaces')
     expect((await client.request('fs_list_dir', {})).error).toBeUndefined()
@@ -336,8 +336,8 @@ describe('a failing service never takes the core down', () => {
     expect(await client.request('grid_models_list', {})).toMatchObject({ error: 'SERVICE_FAILED', service: 'models' })
     // The October 6 bundled run received the RPC before the master's stdout delivered this same
     // fault. They are separate streams: the reply is not a barrier on the captured daemon log.
-    await until('the model service fault to reach the daemon log', () => d.log().includes('[service models] grid_models_list failed · injected fault: models.grid_models_list'))
-    expect(d.log()).toContain('[service models] grid_models_list failed · injected fault: models.grid_models_list')
+    await until('the model service fault to reach the daemon log', () => d.log().includes('[service models] grid_models_list failed · Error'))
+    expect(d.log()).toContain('[service models] grid_models_list failed · Error')
     // Its other requests are still its own answers: with no agent here, no Model/Effort choices.
     expect(await client.request('models_list', {})).toMatchObject({ models: [] })
     expect(await client.request('grid_fleet_capabilities', {})).toMatchObject({ protocol: 1 })
@@ -362,15 +362,15 @@ describe('a failing service never takes the core down', () => {
     await ended
     // ⌘K started the devices (core/devicesWake.ts); the window's tab, as a desktop says it, reaches the dial.
     client.send('app_panes', { agentIds: [agentId], foreground: true })
-    await until('the dial to fail', () => daemon?.log().includes('[devices] dial failed · injected fault: dial') || null, 15_000, 100)
+    await until('the dial to fail', () => daemon?.log().includes('[devices] dial failed · Error') || null, 15_000, 100)
     expect(daemon.coresStarted()).toBe(1)
     client.close()
   })
 
   it('with the fleet not starting, or failing on every call, ⌘K says so and the core runs its agents on', async () => {
     for (const [faults, reason, said] of [
-      ['fleet', 'no agent list yet', '[devices] fleet did not start · injected fault: fleet · the devices run without it'],
-      ['fleet.routeTask,fleet.routeSend', 'the fleet service is unavailable', '[devices] fleet.routeSend failed · injected fault: fleet.routeSend'],
+      ['fleet', 'no agent list yet', '[devices] fleet did not start · Error · the devices run without it'],
+      ['fleet.routeTask,fleet.routeSend', 'the fleet service is unavailable', '[devices] fleet.routeSend failed · Error'],
     ]) {
       daemon = await IsolatedDaemon.create({ env: { HARNESSD_TEST_FAULTS: faults } })
       const d = daemon
@@ -392,8 +392,8 @@ describe('a failing service never takes the core down', () => {
   it('with the devices not starting in the core\'s process, or the Devices tab failing, ⌘K and the tab say so and the core runs on', async () => {
     // In their own process this is e2e/devicesProcess.e2e.ts's crash loop; here, the service host's guard.
     for (const [faults, said] of [
-      ['devices', '[services] devices did not start · injected fault: devices · the core runs without it'],
-      ['devices.harness_devices_list', '[services] devices.harness_devices_list failed · injected fault: devices.harness_devices_list'],
+      ['devices', '[services] devices did not start · Error · the core runs without it'],
+      ['devices.harness_devices_list', '[services] devices.harness_devices_list failed · Error'],
     ]) {
       daemon = await IsolatedDaemon.create({ env: { HARNESSD_TEST_FAULTS: faults, ...IN_THE_CORE } })
       const d = daemon

@@ -11,6 +11,7 @@
  */
 import type { CoreApi, TurnDelivery } from '../core/api.js'
 import type { SessionInputProgress } from '../lib/sessionInput.js'
+import { errorKind } from '../lib/log.js'
 
 type Payload = Record<string, unknown>
 type DeliveryTurns = Pick<CoreApi['turns'], 'deliver' | 'cancelDelivery' | 'onDelivery'>
@@ -54,7 +55,7 @@ export function turnsLink(query: (query: string, payload: Payload) => Promise<Pa
   const tell = (event: TurnDelivery): void => {
     for (const listener of listeners) {
       try { listener(event) } catch (error) {
-        log(`[deliveries] a listener failed on ${event.deliveryId.slice(0, 40)} · ${error instanceof Error ? error.message : String(error)}`)
+        log(`[deliveries] a listener failed on ${event.deliveryId.slice(0, 40)} · ${errorKind(error)}`)
       }
     }
   }

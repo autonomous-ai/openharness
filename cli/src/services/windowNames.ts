@@ -25,6 +25,7 @@ import { isTerminalEngine } from '../engines/types.js'
 import { isAutomaticName } from '../lib/agentNames.js'
 import type { OneShotEngine } from '../lib/disposableOneShotPool.js'
 import { opencodeBinAsync } from '../lib/engineBin.js'
+import { errorKind } from '../lib/log.js'
 import { runRouterOneShot } from '../lib/oneshot.js'
 import { describeScmProject } from '../scm/scmProjects.js'
 import { internalOnThrow } from './requestErrors.js'
@@ -159,7 +160,7 @@ export function startWindowNames(core: CoreApi, deps: WindowNamesDeps = {}): Ser
     try {
       writeFileSync(`${file}.tmp`, JSON.stringify([...names]))
       renameSync(`${file}.tmp`, file)
-    } catch (error) { console.error('[window-names] could not keep the names:', String(error)) }
+    } catch (error) { console.error('[window-names] could not keep the names:', errorKind(error)) }
   }
 
   /** The first valid name a small model gives the window; null when none does. */

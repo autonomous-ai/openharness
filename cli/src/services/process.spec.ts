@@ -345,7 +345,7 @@ describe('a service in its own process', () => {
       { type: 'session_other_result', payload: { error: 'SERVICE_FAILED', service: 'search', requestId: 'r3' } },
     ]))
     // What went wrong is logged here, as the core's host logs it, and not told to whoever asked.
-    expect(lines).toEqual(expect.arrayContaining(['[service search] session_tail failed · index gone', '[service search] session_other failed · not an error']))
+    expect(lines).toEqual(expect.arrayContaining(['[service search] session_tail failed · Error', '[service search] session_other failed · string']))
   })
 
   it('tells each handler who asked, as the core established it, and the least it could be when that is missing', async () => {
@@ -447,7 +447,7 @@ describe('a service in its own process', () => {
     socket().say({ type: 'service_connection_closed', payload: { connection: 'conn-a' } })
     expect(order).toEqual(['aborted', 'closed conn-a'])
     socket().say({ type: 'service_connection_closed', payload: { connection: 'conn-x' } })
-    expect(lines.some((line) => line.includes('connection closed failed') && line.includes('kept nothing'))).toBe(true)
+    expect(lines).toContain('[service search] connection closed failed · Error')
     // Not a connection's name: nobody to tell.
     socket().say({ type: 'service_connection_closed', payload: { connection: 7 } })
     expect(closedConnections).toEqual(['conn-a', 'conn-x'])
@@ -516,7 +516,7 @@ describe('a service in its own process', () => {
     // A binary frame its handler cannot take is logged, and the link goes on.
     onBinary.mockImplementationOnce(() => { throw new Error('bad bytes') })
     socket().emit('message', Buffer.from([7]), true)
-    expect(lines).toContain('[service search] binary frame failed · bad bytes')
+    expect(lines).toContain('[service search] binary frame failed · Error')
     socket().drop()
     expect(onDisconnected).toHaveBeenCalledOnce()
     // Gone: bytes cannot be sent, and a notice is dropped rather than thrown.
@@ -528,7 +528,7 @@ describe('a service in its own process', () => {
     socket().open()
     socket().say({ type: 'connected', payload: {} })
     socket().drop()
-    expect(lines).toContain('[service search] disconnect failed · stuck')
+    expect(lines).toContain('[service search] disconnect failed · Error')
     // A socket that refuses the bytes as they are written: not sent.
     vi.advanceTimersByTime(400)
     const failing = new FakeSocket('x', true)
@@ -670,8 +670,8 @@ describe('a service in its own process', () => {
     expect(requests.session_search).not.toHaveBeenCalled()
     expect(onEvent.mock.calls).toEqual([[{ kind: 'deleteHistory', sessionId: 's1' }]])
     expect(lines).toEqual(expect.arrayContaining([
-      '[service search] session_search failed · injected fault: search.session_search',
-      '[service search] touch failed · injected fault: search.touch',
+      '[service search] session_search failed · Error',
+      '[service search] touch failed · Error',
     ]))
   })
 
@@ -685,9 +685,9 @@ describe('a service in its own process', () => {
     } })
     socket().open()
     for (const kind of ['throws', 'rejects', undefined, 'fine']) socket().say({ type: 'service_event', payload: kind ? { kind } : {} })
-    await vi.waitFor(() => expect(lines).toContain('[service search] rejects failed · index closed'))
+    await vi.waitFor(() => expect(lines).toContain('[service search] rejects failed · Error'))
     expect(heard).toEqual(['throws', 'rejects', undefined, 'fine'])
-    expect(lines).toEqual(expect.arrayContaining(['[service search] throws failed · bad row', '[service search] event failed · not an error']))
+    expect(lines).toEqual(expect.arrayContaining(['[service search] throws failed · Error', '[service search] event failed · string']))
   })
 
   it('says it connected on the console by default', () => {

@@ -1140,4 +1140,22 @@ describe('the log holds none of a turn\'s words', () => {
     expect(said()).toContain('RELEASED by timeout')
     expect(['capybaraledger', 'narwhalinvoice'].filter((word) => said().includes(word))).toEqual([])
   })
+
+  it('a final answer that cannot be read, a recap that fails and a catch-up that fails say their kind', async () => {
+    const opts = { send: () => {}, sendWeb: () => {}, hasDevice: () => true, dataDir: dir, summarize: async () => 'Recap\n\nBody' }
+    const unreadable = async (): Promise<never> => { throw new Error('ENOENT: /Users/someone/axolotlnotes.jsonl') }
+    const turn = [
+      { type: 'turn_started', payload: { userMessage: 'q' } },
+      { type: 'text_delta', payload: { content: 'answer' } },
+      { type: 'turn_ended', payload: {} },
+    ] as LiveEvent[]
+    new CommanderMirror({ ...opts, readLastTurn: unreadable }).ingest(turn, 'read')
+    new CommanderMirror({ ...opts, summarize: async () => { throw new TypeError('the model said axolotlnotes') } }).ingest(turn, 'summary')
+    new CommanderMirror({ ...opts, readLastTurn: unreadable }).catchUp('caughtup')
+    await vi.runAllTimersAsync()
+    expect(lines).toContain('[recap] read JSON session read failed: Error — no verified final result')
+    expect(lines).toContainEqual(expect.stringMatching(/^\[recap\] summary FAILED after \d+ms: TypeError$/))
+    expect(lines).toContain('[recap] caughtup catch-up failed: Error')
+    expect(said()).not.toContain('axolotlnotes')
+  })
 })

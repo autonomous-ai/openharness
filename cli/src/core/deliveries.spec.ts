@@ -118,8 +118,8 @@ describe('delivered turns', () => {
     deliveries.turns.onDelivery(after)
     expect(() => deliveries.settled(event('d1'))).not.toThrow()
     expect(after).toHaveBeenCalledWith(event('d1'))
-    expect(deps.log).toHaveBeenCalledWith(expect.stringContaining('a full disk'))
-    expect(deps.log).toHaveBeenCalledWith(expect.stringContaining('not an error'))
+    expect(deps.log).toHaveBeenCalledWith('[deliveries] a listener failed on d1 · Error')
+    expect(deps.log).toHaveBeenCalledWith('[deliveries] a listener failed on d1 · string')
   })
 
   it('writes a process\'s delivery and tells that process alone what became of it, its first word included', () => {
@@ -266,7 +266,7 @@ describe('delivered turns', () => {
       const deliveries = createDeliveries({ submit: vi.fn(), cancel: vi.fn(() => false), tell: vi.fn(), deliverers: new Set() })
       deliveries.turns.onDelivery(() => { throw new Error('boom') })
       deliveries.settled(event('d1'))
-      expect(warn).toHaveBeenCalledWith(expect.stringContaining('boom'))
+      expect(warn).toHaveBeenCalledWith('[deliveries] a listener failed on d1 · Error')
     } finally {
       warn.mockRestore()
     }

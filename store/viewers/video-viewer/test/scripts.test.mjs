@@ -41,6 +41,8 @@ function bin(tools, extra = {}) {
 function home(node) {
   const root = mkdtempSync(join(tmpdir(), 'video-viewer-home-'))
   roots.push(root)
+  // Still on ~/.harness, so Harness's runtime is ~/.harness/runtime on Linux too (runtimes.sh's rule).
+  mkdirSync(join(root, '.harness'))
   if (node) {
     const harnessBin = bin([], { node })
     mkdirSync(join(root, '.harness', 'runtime'), { recursive: true })

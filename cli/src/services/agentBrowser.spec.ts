@@ -1,5 +1,6 @@
 import type { BrowserRuntime, BrowserRuntimeSlot } from './agentBrowserRuntime.js'
 import type { ChildProcess } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { EventEmitter } from 'node:events'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer, type AddressInfo, type Server } from 'node:net'
@@ -242,6 +243,25 @@ async function lookupProxy(answer: Record<string, unknown> = { status: 'success'
   await new Promise<void>(done => server.listen(0, '127.0.0.1', done))
   return (server.address() as AddressInfo).port
 }
+
+describe('the daemon\'s label on its containers', () => {
+  const labelOf = (path: string) => createHash('sha256').update(path).digest('hex').slice(0, 16)
+  const moved = { env: {}, exists: (path: string) => path === '/h/.local/share/harness', isFile: (path: string) => path === '/h/.local/share/harness/.harness-root' }
+  const notMoved = { env: {}, exists: (path: string) => path === '/h/.harness', isFile: () => false }
+
+  it('the label is the folder\'s old spelling when the data folder is the default one under the XDG roots', () => {
+    expect(daemonIdOf('/h/.local/share/harness/cli/data', '/h', 'linux', moved)).toBe(labelOf('/h/.harness/cli/data'))
+  })
+
+  it('a data folder set by ADAPTER_DATA_DIR labels as given', () => {
+    expect(daemonIdOf('/srv/harness-data', '/h', 'linux', moved)).toBe(labelOf('/srv/harness-data'))
+  })
+
+  it('macOS and a legacy home label as before', () => {
+    expect(daemonIdOf('/h/.harness/cli/data', '/h', 'darwin', moved)).toBe(labelOf('/h/.harness/cli/data'))
+    expect(daemonIdOf('/h/.harness/cli/data', '/h', 'linux', notMoved)).toBe(labelOf('/h/.harness/cli/data'))
+  })
+})
 
 describe('the agent browser service', () => {
   it('declares its requests and answers each', () => {
@@ -702,7 +722,7 @@ describe('the agent browser service', () => {
     const log = vi.spyOn(console, 'log')
     port.purged('a1')
     // The delete ends at the state file it cannot record in, and says so.
-    await eventually(() => expect(log).toHaveBeenCalledWith(expect.stringMatching(/^agent browser a1: not deleted: /)))
+    await eventually(() => expect(log).toHaveBeenCalledWith('agent browser a1: not deleted · PodmanError STATE_UNREADABLE'))
     expect(asked().filter(line => / rm |^rm /.test(line))).toEqual([])
   })
 
@@ -1120,7 +1140,7 @@ describe('the person\'s Start and Stop', () => {
     mkdirSync(join(dataDir, `agent-browser.json.${process.pid}.tmp`))
     expect(await sw.requests.agent_browser_stop!({ agentId: 'a1' }, LOCAL)).toEqual({ ok: true })
     expect(sw.port.published('a1')).toBeUndefined()
-    expect(log).toHaveBeenCalledWith(expect.stringMatching(/^agent browser a1: its Stop was not kept: /))
+    expect(log).toHaveBeenCalledWith('agent browser a1: its Stop was not kept · EISDIR')
     await eventually(() => expect(secretsRemoved('a1')).toBe(2))
   })
 
@@ -1198,7 +1218,7 @@ describe('the person\'s Start and Stop', () => {
     writeFileSync(join(dataDir, 'agent-browser.json'), '{ not json')
     const log = vi.spyOn(console, 'log')
     const sw = startSwitching([session('a1')])
-    expect(log).toHaveBeenCalledWith(expect.stringMatching(/^agent browser a1: its Browser flag was not taken in: /))
+    expect(log).toHaveBeenCalledWith('agent browser a1: its Browser flag was not taken in · PodmanError STATE_UNREADABLE')
     rmSync(join(dataDir, 'agent-browser.json'))
     sw.end('a1')
     sw.attach('a1')

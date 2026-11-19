@@ -13,6 +13,7 @@ import { join } from 'node:path'
 import { createExternalSessions, type ExternalReaderOptions } from './externalSessions.js'
 import { externalProviders } from '../lib/sessionSearch/externals/index.js'
 import type { CoreApi, CorePorts, ServiceRequests } from '../core/api.js'
+import { errorKind } from '../lib/log.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import { SessionSearchIndex, folderWords, type SearchSource } from '../lib/sessionSearch/indexer.js'
 import { SESSION_SEARCH_FILE, SessionSearchStore, type ExternalHit } from '../lib/sessionSearch/store.js'
@@ -128,7 +129,7 @@ function openIndex(core: CoreApi, readers: ReturnType<typeof createExternalSessi
     index.start()
     return index
   } catch (error) {
-    console.error('[search] could not open the session index:', error instanceof Error ? error.message : error)
+    console.error('[search] could not open the session index:', errorKind(error))
     return null
   }
 }

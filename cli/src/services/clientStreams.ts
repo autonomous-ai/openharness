@@ -1,4 +1,5 @@
 /** The service side of the shared relay. Public IDs are restored by core, never by a service choosing a recipient. */
+import { errorKind } from '../lib/log.js'
 import { clientStreamId, replyStreamId, type ClientStreamEndpoint, type ClientStreamEvent, type ClientStreamSpec,
   type StreamPayload } from '../lib/clientStreamContract.js'
 import type { CoreConnection } from './process.js'
@@ -94,7 +95,7 @@ export function createServiceClientStreams(spec: ClientStreamSpec, endpoint: () 
       core = connection
       void connection.query('client_streams', {}).then(answer => {
         if (core === connection && answer.ok !== true) console.warn(`[streams] ${spec.service} UNAVAILABLE`)
-      }, () => { if (core === connection) console.warn(`[streams] ${spec.service} UNAVAILABLE`) })
+      }, (caughtFailure) => { if (core === connection) console.warn((`[streams] ${spec.service} UNAVAILABLE`) + ' · ' + errorKind(caughtFailure)) })
     },
     disconnected(): void { if (core) { core = null; close() } },
   }

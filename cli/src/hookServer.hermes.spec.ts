@@ -352,7 +352,7 @@ it('contains an asynchronous onRegistered rejection after publishing exactly onc
   const wanted = '20261009_120000_666666'
   f.store(f.home, [[wanted, 'cli']])
   await f.hook(wanted)
-  await vi.waitFor(() => expect(warning).toHaveBeenCalledWith('[hooks] committed admission notification failed', expect.any(Error)))
+  await vi.waitFor(() => expect(warning).toHaveBeenCalledWith('[hooks] committed admission notification failed', 'Error'))
   expect(f.current().sessionId).toBe(wanted)
   expect(f.registered).toHaveBeenCalledOnce()
 })

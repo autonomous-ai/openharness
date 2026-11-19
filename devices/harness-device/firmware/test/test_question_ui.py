@@ -7,7 +7,7 @@ import os
 import re
 import subprocess
 import tempfile
-from native_shapes import defines
+from native_shapes import defines, typedef
 
 native = Path(__file__).resolve().parent / '../main/ui/habitat'
 source = (native / 'ui_habitat.c').read_text()
@@ -28,10 +28,11 @@ code = r'''
 static bool cable_client_supports(uint32_t features) { (void)features; return true; }
 '''
 code += defines('ID_MAX','CABLE_NAME_MAX','CABLE_READ_TOKEN_MAX','CABLE_CAP_V','CABLE_CAP_A')
-code += defines('QUESTION_MAX','OPTION_MAX','PANE_RESULT_BYTES','UI_FONT','Q_ROWS',source=source)
+code += defines('QUESTION_MAX','OPTION_MAX','PANE_RESULT_BYTES','UI_FONT','Q_ROWS','NOTICES',source=source)
 code += defines('FACE_CX', source=source)
 code += source[source.index('typedef enum {'):source.index('typedef struct {\n    char id[ID_MAX], name[CABLE_NAME_MAX]')]
 code += source[source.index('typedef struct {\n    char key[256]'):source.index('static EXT_RAM_BSS_ATTR struct {')]
+code += typedef('cable_notif_t')
 code += r'''
 typedef struct cJSON { const char *string, *valuestring; int type; double valuedouble; struct cJSON *child, *next; } cJSON;
 enum { JSTRING=1, JTRUE=2, JARRAY=3, JOBJECT=4, JNUMBER=5 };
@@ -50,7 +51,7 @@ static cJSON object(cJSON *children,int n) {
     for (int i=0;i<n;i++) children[i].next=i+1<n ? &children[i+1] : NULL;
     return (cJSON){.type=JOBJECT,.child=n ? children : NULL};
 }
-static struct { question_t q; bool voice_open,voice_waiting,touch_down; uint32_t voice_question_revision,notice_sequence; int voice_question_index; view_t voice_return; char title[80],message[256]; view_t view; int offset,pressed,hit_count,active,notice_count; char pending_focus[ID_MAX],opening_notice[ID_MAX]; bool connected; hit_t hits[24]; } s;
+static struct { question_t q; bool voice_open,voice_waiting,touch_down; uint32_t voice_question_revision; int voice_question_index; view_t voice_return; char title[80],message[256]; view_t view; int offset,pressed,hit_count,active,notice_count; char pending_focus[ID_MAX],opening_notice[ID_MAX]; bool connected; hit_t hits[24]; notice_receipt_t notice_reads[NOTICES]; } s;
 typedef struct { char id[64],name[96]; } agent_t;
 static agent_t agents[2]={{.id="a",.name="Research helper"},{.id="b",.name="Remote helper"}};
 static bool b_known;
@@ -87,12 +88,16 @@ static bool queue(action_t a) {
     if (congested) return false;
     queued=a; if (a.kind==A_ANSWER) queued_answers++; return true;
 }
-static void notice_add(const char *id,const char *name,const char *machine,const char *text,bool question,bool failed) {
+static cable_notif_t filed;
+static int forgets;
+static cable_notif_t *notice_add(const char *id,const char *name,const char *machine,const char *text,bool question,bool failed) {
     assert(!failed); // Asking a question cannot manufacture a failure notification.
-    (void)id;(void)name;(void)machine;(void)text;assert(question);notices++;
+    (void)name;(void)machine;assert(question);notices++;
+    memset(&filed,0,sizeof filed);snprintf(filed.agent_id,sizeof filed.agent_id,"%s",id);
+    snprintf(filed.summary,sizeof filed.summary,"%s",text);filed.question=true;return &filed;
 }
-static void notice_forget_read(const char *id) { assert(id && *id); }
-static void notice_remove(const char *id,bool all) { assert(id && all);removed++; }
+static void notice_forget_read(const char *id,bool questions_too) { assert(id && *id && questions_too);forgets++; }
+static void notice_remove_question(const char *id) { assert(id && *id);removed++; }
 static void cable_client_question_read(const char *id,const char *fetch) { assert(id && fetch);reads++; }
 static bool cable_client_answer_reviewed(const char *id,const char *fetch,const char *token,const uint8_t *choices,const char drafts[][48],int n) {
     assert(!strcmp(id,"a") && fetch[0] && !strcmp(token,"token-a") && n>0 && n<=4);
@@ -111,13 +116,16 @@ static bool cable_client_answer_reviewed(const char *id,const char *fetch,const 
 code += '#include <limits.h>\n#include "focus_faces.h"\n'
 for name in ['focus_face_for','focus_chord','focus_put','focus_span','focus_take','focus_rows','ui_rows','ui_can_display','ui_wrap','text_in']:
     code += function(name)
+code += 'static void dispatch(action_t a);\n'
 for name in ['notice_sync_view','copy','control','text','center','heading','question_view','question_rows',
              'question_text','render_question','render_choices','render_answer_review',
              'open_question','question_answer','question_move','send_answer',
-             'question_load','ui_question_show','ui_question_state','ui_answer_receipt','ui_question_close','ui_focus_project','ui_voice_question']:
+             'question_load','notice_question_read','ui_question_show','ui_question_state','ui_answer_receipt','ui_question_close','ui_focus_project','ui_voice_question']:
     code += function(name)
 actions = source.split('    case A_QUESTION_CHOICES:\n',1)[1].split('    case A_INBOX:',1)[0]
-code += 'static void dispatch(action_t a) { switch(a.kind) { case A_QUESTION_CHOICES:\n'+actions+'default: break; } }\n'
+# A voice discard only ends voice here: test_voice_ui runs the real one.
+code += 'static void dispatch(action_t a) { switch(a.kind) { case A_VOICE_ABORT: voice_close(); view(HOME); break;\n'
+code += 'case A_QUESTION_CHOICES:\n'+actions+'default: break; } }\n'
 worker = source.split('static void worker(',1)[1].split('        case A_QUESTION_READ:',1)[1].split('        default:',1)[0]
 code += 'static void work(action_t a) { switch(a.kind) { case A_QUESTION_READ:'+worker+'default: break; } }\n'
 code += r'''
@@ -190,6 +198,11 @@ static void render(const char *dir,const char *name) {
     }
     fclose(out);
 }
+static bool shows(const char *words) {
+    static ht_scene_t scene;ht_scene_clear(&scene,BG);s.hit_count=0;render_question(&scene);
+    for(int i=0;i<scene.count;i++) if(strstr(scene.runs[i].text,words)) return true;
+    return false;
+}
 int main(int argc,char **argv) {
     const char *dir=argc>1 ? argv[1] : NULL;
     reset(false);assert(s.q.item[0].can_text);recording();
@@ -229,9 +242,22 @@ int main(int argc,char **argv) {
     receipt("token-a",true);assert(!s.q.valid && s.view==HOME && removed==1);
     reset(false);act(A_QUESTION_CHOICES,0);act(A_CHOICE,1);act(A_QUESTION_REVIEW,0);act(A_ANSWER,0);
     action_t old=queued;ui_question_close("a","old-question");assert(s.q.valid);
-    ui_question_show("b","Other","M2","q-b",NULL);assert(s.q.valid && s.q.pending && !strcmp(s.q.agent,"a"));
-    ui_question_show("a","Research","M2","q-new",NULL);assert(!s.q.valid && s.q.error[0]);
+    ui_question_show("b","Other","M2","q-b",NULL,false);assert(s.q.valid && s.q.pending && !strcmp(s.q.agent,"a"));
+    ui_question_show("a","Research","M2","q-new",NULL,false);assert(!s.q.valid && s.q.error[0]);
     work(old);assert(!sent_answers); // Queued command cannot answer a replacement question.
+    // "Open the alert again." points at the new question: once it closes, the screen goes with it.
+    assert(s.view==QUESTION);ui_question_close("a","q-new");assert(s.view==HOME);
+    // The load deadline's screen holds no question id; that agent's close still takes it.
+    memset(&s,0,sizeof s);s.connected=true;s.pressed=-1;open_question();assert(s.q.loading && s.view==QUESTION);
+    s.q.loading=false;strcpy(s.q.error,"Question did not arrive. Open the alert again.");
+    ui_question_close("a","q-late");assert(s.view==HOME);
+    // Voice open over the question when it closes: voice ends and the dial goes home, so the speech result that
+    // follows is dropped, not "Question changed" pointing at an alert row already gone.
+    reset(false);recording();ui_question_close("a","q-a");assert(!s.voice_open && s.view==HOME);
+    spoken("token-a","Late");assert(s.view==HOME && !s.q.item[0].draft[0]);
+    // A new question of the agent replacing it still says "Question changed": the alert to open again is the new one.
+    reset(false);recording();ui_question_show("a","Research","M2","q-new",NULL,false);
+    spoken("token-a","Late");assert(s.view==MESSAGE && !strcmp(s.title,"Question changed") && !s.voice_open);
     reset(false);view(HOME);state("a",s.q.fetch,"token-a",false,long_question);assert(s.view==HOME);
     reset(false);s.view=MESSAGE;visit.available=true;strcpy(visit.agent,"b");b_known=false;
     ui_focus_project("b");assert(!strcmp(s.pending_focus,"b") && s.view==MESSAGE);
@@ -239,11 +265,40 @@ int main(int argc,char **argv) {
     // A question does NOT change the screen — the home face shows it in the recap's place — but it
     // does wake the display, and it still counts in the bell until it is answered.
     reset(false);view(HOME);wakes=0;notices=0;
-    assert(ui_question_show("b","Other","M2","q-b2",NULL) && s.view==HOME && wakes==1 && notices==1 && !read_now);
+    assert(ui_question_show("b","Other","M2","q-b2",NULL,false) && s.view==HOME && wakes==1 && notices==1 && !read_now);
     // The pane on the face already shows its question: still filed, but read at once, no wake, no beep.
     wakes=0;notices=0;face_agent="b";
-    assert(!ui_question_show("b","Other","M2","q-b3",NULL) && wakes==0 && notices==1 && read_now==1);
+    assert(!ui_question_show("b","Other","M2","q-b3",NULL,false) && wakes==0 && notices==1 && read_now==1);
     face_agent="";
+    // Filed again with no ring (tier list: a question the dial was told, back on its drawer): no wake, no beep, the
+    // receipts kept, and the row read when a receipt holds that agent's question with the same words, whatever its token.
+    {
+        cJSON fields[]={{.string="key",.type=JSTRING,.valuestring=""},
+            {.string="q",.type=JSTRING,.valuestring="Deploy now?"}};
+        cJSON question=object(fields,2),questions={.type=JARRAY,.child=&question};
+        reset(false);view(HOME);wakes=0;notices=0;forgets=0;read_now=0;
+        assert(!ui_question_show("b","Other","M2","q-b4",&questions,true) && s.view==HOME && !wakes && notices==1 && !forgets && !read_now);
+        assert(!filed.read_on_dial);                          // never read: it comes back unread
+        notice_receipt_t *r=&s.notice_reads[3];
+        strcpy(r->id,"b");strcpy(r->summary,"Deploy now?");strcpy(r->token,"turn-7");r->question=true;
+        assert(!ui_question_show("b","Other","M2","q-b4",&questions,true) && filed.read_on_dial && !forgets);
+        strcpy(r->summary,"Deploy later?");                   // other words: another question
+        assert(!ui_question_show("b","Other","M2","q-b4",&questions,true) && !filed.read_on_dial);
+        strcpy(r->summary,"Deploy now?");r->question=false;   // its news's receipt is not its question's
+        assert(!ui_question_show("b","Other","M2","q-b4",&questions,true) && !filed.read_on_dial);
+        r->question=true;strcpy(r->id,"c");                   // another agent's
+        assert(!ui_question_show("b","Other","M2","q-b4",&questions,true) && !filed.read_on_dial);
+        // An alert still forgets the read, wakes and asks for the beep.
+        strcpy(r->id,"b");wakes=0;
+        assert(ui_question_show("b","Other","M2","q-b4",&questions,false) && wakes==1 && forgets==1 && !filed.read_on_dial);
+        // The pane on the face: read at once, as an alert's is.
+        face_agent="b";read_now=0;
+        assert(!ui_question_show("b","Other","M2","q-b4",&questions,true) && read_now==1);
+        face_agent="";
+        // The question being read on screen is left as it is.
+        reset(false);wakes=0;
+        assert(!ui_question_show("a","Research","M2","q-a",&questions,true) && s.view==QUESTION && s.q.valid && !s.q.error[0] && !wakes);
+    }
     // A permission prompt that waits in the agent's own app (the host's services/devices.ts): one option, which the host's
     // inbox needs, and no canText. Filed with its prompt for the face, drawable on the question screen, closed by its id.
     {
@@ -253,11 +308,32 @@ int main(int argc,char **argv) {
             {.string="options",.type=JARRAY,.child=&option}};
         cJSON question=object(fields,3),questions={.type=JARRAY,.child=&question};
         reset(false);view(HOME);wakes=0;notices=0;removed=0;
-        assert(ui_question_show("b","in-orca","M2","shown:p1",&questions) && s.view==HOME && wakes==1 && notices==1);
+        assert(ui_question_show("b","in-orca","M2","shown:p1",&questions,false) && s.view==HOME && wakes==1 && notices==1);
         question_load(&questions);
         assert(s.q.valid && s.q.supported && s.q.count==1 && s.q.item[0].count==1 && !s.q.item[0].can_text);
         view(QUESTION);render(dir,"shown-only");
         ui_question_close("b","shown:p1");assert(removed==1);
+    }
+    // A question the dial cannot answer says what is asked: its first question's words, then [ on desktop ].
+    {
+        static const char *plan="Approve this plan? It moves the parser into its own module, deletes the old reader, renames the public API, rewrites every test that touches them and ends on the word zebra";
+        cJSON fields[]={{.string="key",.type=JSTRING,.valuestring=""},
+            {.string="q",.type=JSTRING,.valuestring=plan},
+            {.string="options",.type=JARRAY}};
+        cJSON question=object(fields,3),questions={.type=JARRAY,.child=&question};
+        reset(false);question_load(&questions);view(QUESTION);
+        assert(s.q.valid && !s.q.supported && ui_rows(plan,UI_FONT,336)>5);
+        assert(shows("Approve this") && !shows("This question needs") && shows("[ on desktop ]") && s.hit_count==2);
+        assert(!shows("zebra"));                               // cut at the five lines
+        render(dir,"unanswerable");
+        // A letter Inter does not draw: the sentence, as before.
+        fields[1].valuestring="Approve \xe9\x9b\xaa?";question_load(&questions);
+        assert(!s.q.supported && shows("This question needs") && !shows("Approve") && shows("[ on desktop ]"));
+        // No words, an error, or a question answered elsewhere: as before.
+        fields[1].valuestring="";question_load(&questions);assert(shows("This question needs"));
+        fields[1].valuestring="Approve this plan?";question_load(&questions);
+        COPY(s.q.error,"Could not load the question.");assert(shows("Could not load") && !shows("Approve"));
+        s.q.error[0]=0;s.q.valid=false;assert(shows("Answered elsewhere.") && !shows("Approve"));
     }
     // The ESP32 compiler's -O0 restrict analysis sees the enclosing global s,
     // not the disjoint options/answer fields. Exercise every selected subset

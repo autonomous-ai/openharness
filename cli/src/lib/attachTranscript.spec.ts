@@ -1,6 +1,6 @@
 import { claudeAttachRules } from '../engines/claude/attach.js'
 import { codexAttachRules } from '../engines/codex/attach.js'
-import { appendFileSync, chmodSync, mkdtempSync, rmSync, truncateSync, writeFileSync } from 'node:fs'
+import { appendFileSync, chmodSync, mkdtempSync, rmSync, statSync, truncateSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -511,7 +511,7 @@ describe('the review of the first cut', () => {
       expect(read).toMatchObject({ next: Buffer.byteLength(content), records: 3, failed: false })
       expect(folded).toEqual([codex.started('t1'), codex.user('a'), codex.complete('t1')])
       expect(warn).toHaveBeenCalledOnce()
-      expect(warn.mock.calls[0][0]).toContain('4 record(s) could not be taken in: Error: profile')
+      expect(warn.mock.calls[0][0]).toContain('4 record(s) could not be taken in: Error')
       const watcher = new Watcher()
       const lines: string[] = []
       watcher.on('line', (event: LineEvent) => lines.push(event.text))
@@ -520,6 +520,45 @@ describe('the review of the first cut', () => {
       await watcher.pollSession('s')
       await watcher.stop()
       expect(lines).toEqual([record])
+    } finally { warn.mockRestore() }
+  })
+
+  it('names the kind of a record\'s failure, never the record\'s words, which a parse error quotes', async () => {
+    writeFileSync(file, [codex.started('t1'), codex.user('SECRET-LINE-MARKER'), codex.complete('t1')].join('\n') + '\n')
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      // A consumer reading a record's text as JSON throws "Unexpected token 'S', "SECRET-…" is not valid JSON".
+      const fold = (line: string) => { if (line.includes('SECRET')) JSON.parse('SECRET-LINE-MARKER') }
+      await attachTranscript(file, codexAttachRules(() => []), { profile: () => {}, fold })
+      expect(warn).toHaveBeenCalledOnce()
+      expect(warn.mock.calls[0][0]).toBe('[attach] 1 record(s) could not be taken in: SyntaxError')
+      expect(warn.mock.calls[0][0]).not.toContain('SECRET')
+    } finally { warn.mockRestore() }
+  })
+
+  it('names a control boundary lost to a transcript that shrank under the read', async () => {
+    // Past one 64 KiB read, so the second read comes up short once the file is cut.
+    const records = Array.from({ length: 2_000 }, (_, i) => codex.user(`prompt ${i}`))
+    writeFileSync(file, [codex.started('t1'), ...records].join('\n') + '\n')
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      let cut = false
+      const fold = () => { if (!cut) { cut = true; truncateSync(file, 10) } }
+      await attachTranscript(file, codexAttachRules(() => []), { profile: () => {}, fold, close: () => {} },
+        { fromStart: true, closes: [{ offset: 0, reason: 'cancel' }] })
+      expect(warn.mock.calls.map((call) => call[0])).toEqual(['[attach] a transcript could not be read: ENGINE_CONTROL_BOUNDARY_CHANGED'])
+    } finally { warn.mockRestore() }
+  })
+
+  it('names a control boundary lost to a transcript that is no longer the file the boundary was taken on', async () => {
+    writeFileSync(file, [codex.started('t1'), codex.user('a')].join('\n') + '\n')
+    const { dev, ino } = statSync(file)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const boundary = { offset: 0, device: dev, inode: ino + 1, digest: 'a'.repeat(64) }
+      await attachTranscript(file, codexAttachRules(() => []), { profile: () => {}, fold: () => {}, close: () => {} },
+        { fromStart: true, closes: [{ offset: 0, reason: 'cancel', boundary }] })
+      expect(warn.mock.calls.map((call) => call[0])).toEqual(['[attach] a transcript could not be read: ENGINE_CONTROL_BOUNDARY_CHANGED'])
     } finally { warn.mockRestore() }
   })
 

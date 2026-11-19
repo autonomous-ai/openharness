@@ -15,9 +15,10 @@ import {
   writeFileSync
 } from 'node:fs'
 import { createServer } from 'node:net'
-import { homedir, tmpdir } from 'node:os'
+import { tmpdir } from 'node:os'
 import { basename, dirname, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { harnessRoots } from './local-daemon.mjs'
 
 const ownPath = realpathSync(fileURLToPath(import.meta.url))
 const repo = resolve(dirname(ownPath), '../..')
@@ -103,7 +104,7 @@ function runtimeAssets(config, source, runtimeRoot) {
 export async function startPlayground({
   id,
   workspace,
-  runtimeRoot = join(homedir(), '.harness/dsh/autonomous'),
+  runtimeRoot = join(harnessRoots().data, 'dsh', 'autonomous'),
   signal
 } = {}) {
   signal?.throwIfAborted()
@@ -280,7 +281,7 @@ if (isMain) {
   const args = process.argv.slice(2)
   if (!args.length || args[0] === '--help' || args[0] === '--list') {
     console.log(
-      'Try a native playground from this checkout:\n\n  node store/tools/try-hands-on.mjs mujoco|strudel|circuitjs\n  --workspace /path/to/project   Keep working in a chosen folder; existing source is retained.\n  --runtime-root /path/to/cache  Existing harness packages (default: ~/.harness/dsh/autonomous).\n\nEach launch prints a local URL and project path. Ctrl-C stops the preview server; saved work stays in the project.\nThe launcher uses installed native assets. It does not download or install them.'
+      'Try a native playground from this checkout:\n\n  node store/tools/try-hands-on.mjs mujoco|strudel|circuitjs\n  --workspace /path/to/project   Keep working in a chosen folder; existing source is retained.\n  --runtime-root /path/to/cache  Existing harness packages (default: Harness\'s dsh folder).\n\nEach launch prints a local URL and project path. Ctrl-C stops the preview server; saved work stays in the project.\nThe launcher uses installed native assets. It does not download or install them.'
     )
   } else {
     let preview

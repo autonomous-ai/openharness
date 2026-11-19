@@ -16,6 +16,7 @@ import { performance } from 'node:perf_hooks'
 
 import type { LiveEvent } from '../normalize.js'
 import { forEachLine, lineNormalizer, lineTime, skipPredicate } from '../transcriptReader.js'
+import { errorKind } from '../log.js'
 import { TurnCollector } from './turns.js'
 import type { ExternalHit, IndexedSession, SearchHit, SessionSearchStore, SessionTail } from './store.js'
 
@@ -225,7 +226,7 @@ export class SessionSearchIndex {
     if (retry >= CHECKPOINT_RETRIES) return
     this.checkpointRetry = setTimeout(() => {
       try { this.checkpointAfterDelete(retry + 1) }
-      catch (error) { this.opts.log?.(`[search] checkpoint after a delete failed: ${error instanceof Error ? error.message : String(error)}`) }
+      catch (error) { this.opts.log?.(`[search] checkpoint after a delete failed: ${errorKind(error)}`) }
     }, 1_000 * 2 ** retry)
     this.checkpointRetry.unref?.()
   }
@@ -260,7 +261,7 @@ export class SessionSearchIndex {
     if (pending) clearTimeout(pending)
     const timer = setTimeout(() => {
       this.touches.delete(sessionId)
-      void this.refreshTouched(sessionId).catch(() => this.opts.log?.('[search] source discovery failed'))
+      void this.refreshTouched(sessionId).catch((caughtFailure) => this.opts.log?.(('[search] source discovery failed') + ' · ' + errorKind(caughtFailure)))
     }, this.opts.touchDelayMs ?? 1_500)
     timer.unref?.()
     this.touches.set(sessionId, timer)
@@ -287,7 +288,7 @@ export class SessionSearchIndex {
       try { await this.sweepSources() }
       catch (error) {
         this.discoveryFailed = true
-        this.opts.log?.(`[search] source discovery failed: ${error instanceof Error ? error.message : String(error)}`)
+        this.opts.log?.(`[search] source discovery failed: ${errorKind(error)}`)
       }
       this.initialized = true
       this.discovering = false
@@ -439,7 +440,7 @@ export class SessionSearchIndex {
         try {
           await this.pass(source)
         } catch (error) {
-          this.opts.log?.(`[search] ${sessionId.slice(0, 8)} index pass failed: ${error instanceof Error ? error.message : String(error)}`)
+          this.opts.log?.(`[search] ${sessionId.slice(0, 8)} index pass failed: ${errorKind(error)}`)
         }
         this.settle(sessionId)
       }

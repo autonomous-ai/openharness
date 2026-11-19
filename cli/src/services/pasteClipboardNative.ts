@@ -1,4 +1,5 @@
 /** Clipboard subprocess ownership belongs to the paste component, including Linux's forked selection owner. */
+import { errorKind } from '../lib/log.js'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { release } from 'node:os'
 import type { Writable } from 'node:stream'
@@ -67,7 +68,7 @@ export function startClipboardOwner(file: File, options: {
     // The live watcher owns this group until its tie is released; no unrelated PID is selected.
     try { process.kill(-child.pid, 'SIGKILL') } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ESRCH') {
-        failure = 'PASTE_CLIPBOARD_STOP_FAILED'; console.warn('[paste] PASTE_CLIPBOARD_STOP_FAILED')
+        failure = 'PASTE_CLIPBOARD_STOP_FAILED'; console.warn(`[paste] PASTE_CLIPBOARD_STOP_FAILED · ${errorKind(error)}`)
       }
     }
   }

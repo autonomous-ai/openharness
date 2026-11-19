@@ -1,4 +1,5 @@
 /** Bounded first-use transport for supported old Desktop frames. Interpretation stays behind the lazy door. */
+import { errorKind } from './log.js'
 import type { createLegacyDeviceWindowState, LegacyDeviceWindowHooks } from './legacyDeviceWindowState.js'
 
 type Owner = ReturnType<typeof createLegacyDeviceWindowState>
@@ -28,11 +29,11 @@ export function createLegacyDeviceWindowLoader(deps: {
   const refuse = (connection: string, reason: string): void => {
     if (!deps.live(connection)) return
     try { deps.refused(connection, reason) }
-    catch { log('[local-ws] LEGACY_DESK_REPLY_FAILED') }
+    catch (caughtFailure) { log(('[local-ws] LEGACY_DESK_REPLY_FAILED') + ' · ' + errorKind(caughtFailure)) }
   }
   const closed = (connection: string): void => {
     try { owner?.closed(connection) }
-    catch { log('[local-ws] LEGACY_DESK_CLOSE_FAILED'); refuse(connection, 'LEGACY_DESK_CLOSE_FAILED') }
+    catch (caughtFailure) { log(('[local-ws] LEGACY_DESK_CLOSE_FAILED') + ' · ' + errorKind(caughtFailure)); refuse(connection, 'LEGACY_DESK_CLOSE_FAILED') }
     finally { release(connection) }
   }
   const fail = (own: Pending, reason: string, extra?: string): void => {
@@ -50,12 +51,12 @@ export function createLegacyDeviceWindowLoader(deps: {
     try {
       const accepted = owner!.receive(connection, frame.type, frame.payload as Record<string, unknown> | undefined)
       if (frame.type === 'app_swarms' && (accepted || !failedTabs.has(connection))) release(connection)
-    } catch {
+    } catch (caughtFailure) {
       if (frame.type === 'app_swarms') {
         failedTabs.add(connection)
         if (!heldTabs.has(connection)) { heldTabs.add(connection); deps.pending(connection, true) }
       }
-      log('[local-ws] LEGACY_DESK_DELIVERY_FAILED')
+      log(('[local-ws] LEGACY_DESK_DELIVERY_FAILED') + ' · ' + errorKind(caughtFailure))
       refuse(connection, 'LEGACY_DESK_DELIVERY_FAILED')
     } finally {
       if (!deps.live(connection)) closed(connection)
@@ -79,9 +80,9 @@ export function createLegacyDeviceWindowLoader(deps: {
           if (!decoded || typeof decoded !== 'object' || typeof (decoded as Frame).type !== 'string') throw new Error('invalid frame')
           frame = decoded as Frame
         }
-        catch {
+        catch (caughtFailure) {
           if (row.tab && deps.live(row.connection)) failedTabs.add(row.connection)
-          log('[local-ws] LEGACY_DESK_FRAME_INVALID'); refuse(row.connection, 'LEGACY_DESK_FRAME_INVALID')
+          log(('[local-ws] LEGACY_DESK_FRAME_INVALID') + ' · ' + errorKind(caughtFailure)); refuse(row.connection, 'LEGACY_DESK_FRAME_INVALID')
           if (!deps.live(row.connection)) release(row.connection)
           continue
         }

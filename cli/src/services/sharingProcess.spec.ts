@@ -87,8 +87,8 @@ describe('Share in its own process', () => {
       options.onConnected!(core({ daemon: { command: 'x', port: 1, machineId: 'm' } }).connection)
       expect(await options.requests.observer!({ connId: 'observer:ken', type: 'observer_boom' }, OWNER)).toEqual({})
       expect(await options.requests.observer!({ connId: 'observer:ken', type: 'observer_odd' }, OWNER)).toEqual({})
-      expect(warn).toHaveBeenCalledWith(expect.stringContaining('an unreadable frame'))
-      expect(warn).toHaveBeenCalledWith(expect.stringContaining('odd'))
+      expect(warn).toHaveBeenCalledWith("[service sharing] an observer's frame failed · Error")
+      expect(warn).toHaveBeenCalledWith("[service sharing] an observer's frame failed · string")
     } finally {
       warn.mockRestore()
     }

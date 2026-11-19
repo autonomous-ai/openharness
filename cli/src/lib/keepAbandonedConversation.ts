@@ -12,7 +12,7 @@
  * who clear often would pile up stopped rows.
  */
 import { randomUUID } from 'node:crypto'
-import { sid } from './log.js'
+import { errorKind, sid } from './log.js'
 import type { RegisteredSession } from './registry.js'
 import type { StoppedAgentStore } from './stoppedAgents.js'
 
@@ -46,7 +46,7 @@ export function createKeepAbandonedConversation({ stoppedAgents, publishStoppedA
       if (saved) void publishStoppedAgent(saved).catch(() => {})
       console.log(`[agent] ${sid(left.agentId)} kept the conversation it left, ${sid(left.sessionId)}, as stopped harness ${sid(kept.agentId)}`)
     } catch (error) {
-      console.warn(`[agent] ${sid(left.agentId)} could not keep the conversation it left, ${sid(left.sessionId)} · ${error instanceof Error ? error.message : error}`)
+      console.warn(`[agent] ${sid(left.agentId)} could not keep the conversation it left, ${sid(left.sessionId)} · ${errorKind(error)}`)
     }
   }
   return (left: RegisteredSession): Promise<void> => {

@@ -304,6 +304,15 @@ describe('questions', () => {
     expect(log.mock.calls[1][0]).toBe('[question] asked')
   })
 
+  it('logs the size of a question, never its words', () => {
+    const { asking } = setup()
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    given(asking.questionWatcher).onQuestion('s1', 'r1', [{ q: 'SECRET-QUESTION-MARKER?', options: [] }])
+    const line = log.mock.calls.map(([said]) => String(said)).find((said) => said === '[question] asked')
+    expect(line).toBe('[question] asked')
+    expect(line).not.toContain('SECRET')
+  })
+
   it.each([true, false])('preserves permission metadata only for approval dialogs (%s)', permission => {
     const { deps, asking } = setup()
     given(asking.questionWatcher).onQuestion('s1', 'r1', [], { permission, dialog: 'Run printf hi?' })

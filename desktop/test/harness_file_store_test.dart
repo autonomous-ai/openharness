@@ -3,13 +3,31 @@ import 'dart:io';
 
 import 'package:harness/auth/auth_session.dart';
 import 'package:harness/core/harness_file_store.dart';
+import 'package:harness/core/harness_home.dart';
 import 'package:harness/core/posix_file_mode.dart';
+import 'package:harness/core/uninstall_marker.dart';
 import 'package:harness/settings/config_store.dart';
 import 'package:flutter_test/flutter_test.dart';
+
+import 'support/scratch_home_look.dart';
 
 void main() {
   late Directory scratch;
   late Directory dataDirectory;
+
+  /// macOS or Windows: the rule must not look.
+  final offLinux = HomeLook(
+    linux: false,
+    environment: const {},
+    exists: (path) => throw StateError('looked at $path off Linux'),
+  );
+
+  /// A fresh Linux home: no Harness folder yet.
+  final freshLinux = HomeLook(
+    linux: true,
+    environment: const {},
+    exists: (path) => false,
+  );
 
   setUp(() async {
     scratch = await Directory.systemTemp.createTemp('desktop-file-store-test-');
@@ -25,10 +43,82 @@ void main() {
   test('defaults to the Desktop directory beneath Harness home', () {
     final path = HarnessFileStore.defaultDirectoryPath(
       environment: {'HOME': '/Users/tester'},
+      look: offLinux,
     );
 
     expect(path, '/Users/tester/.harness/desktop-app-v2');
   }, skip: Platform.isWindows);
+
+  test('names a sibling under Harness home', () {
+    String sibling(HarnessEntry entry) => HarnessFileStore.defaultDirectoryPath(
+      environment: {'HOME': '/Users/tester'},
+      entry: entry,
+      look: offLinux,
+    );
+
+    expect(sibling(HarnessEntry.logs), '/Users/tester/.harness/logs');
+    expect(sibling(HarnessEntry.flasher), '/Users/tester/.harness/flasher');
+    expect(
+      sibling(HarnessEntry.uninstalling),
+      '/Users/tester/.harness/uninstalling',
+    );
+  }, skip: Platform.isWindows);
+
+  test('on Linux the store is in the data root and a state sibling in the state root', () {
+    String path({HarnessEntry? entry}) => HarnessFileStore.defaultDirectoryPath(
+      environment: {'HOME': '/home/tester'},
+      entry: entry,
+      look: freshLinux,
+    );
+
+    expect(path(), '/home/tester/.local/share/harness/desktop-app-v2');
+    expect(
+      path(entry: HarnessEntry.logs),
+      '/home/tester/.local/state/harness/logs',
+    );
+  }, skip: Platform.isWindows);
+
+  test('reads the XDG variables of the environment it is handed', () {
+    expect(
+      HarnessFileStore.defaultDirectoryPath(
+        environment: {'HOME': '/home/t', 'XDG_DATA_HOME': '/x'},
+      ),
+      // Off Linux the rule reads no variable.
+      Platform.isLinux
+          ? '/x/harness/desktop-app-v2'
+          : '/home/t/.harness/desktop-app-v2',
+    );
+  }, skip: Platform.isWindows);
+
+  test(
+    'a data root Desktop\'s own store made before the CLI switches nothing',
+    () async {
+      final home = '${scratch.path}/home';
+      final look = scratchHomeLook(scratch.path);
+      String path() => HarnessFileStore.defaultDirectoryPath(
+        environment: {'HOME': home},
+        look: look,
+      );
+
+      // Desktop first, on a fresh machine: its store makes the data root.
+      final first = path();
+      expect(first, '$home/.local/share/harness/desktop-app-v2');
+      await HarnessFileStore(directory: Directory(first)).write('k', 'v');
+      // Then a CLI that keeps ~/.harness: the machine is on ~/.harness.
+      Directory('$home/.harness').createSync();
+
+      expect(path(), '$home/.harness/desktop-app-v2');
+    },
+    skip: Platform.isWindows,
+  );
+
+  test('with no home', () {
+    expect(
+      () => HarnessFileStore.defaultDirectoryPath(environment: {}),
+      throwsStateError,
+    );
+    expect(UninstallMarker.path(environment: {}), isNull);
+  });
 
   test(
     'persists values across instances without losing concurrent writes',

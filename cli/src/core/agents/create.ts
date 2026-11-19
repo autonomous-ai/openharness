@@ -22,9 +22,10 @@ import { engineLabel } from '../../lib/agentNames.js'
 import { createAndRegisterPane } from '../../lib/createAgentPane.js'
 import {
   buildEngineCommandArgv, buildEngineLaunchArgv, engineLaunchEnv, namedAgentArgs, permissionModeApproves, permissionModeFlags,
-  refusePermissionFlagIfUnsupported, supportsFirstPrompt, supportsNamedAgent, typedFirstPrompt, NamedAgentUnsupportedError,
+  launchAttempts, refusePermissionFlagIfUnsupported, supportsFirstPrompt, supportsNamedAgent, typedFirstPrompt, NamedAgentUnsupportedError,
 } from '../../lib/engineLaunch.js'
 import { joinedInstructions, launchSettingsArgs } from '../../engines/kit/launchValues.js'
+import { errorKind } from '../../lib/log.js'
 import { machineMcpLaunchArgs } from '../../lib/machineMcp.js'
 import { writeGridConfigDir } from '../../lib/gridConfigDir.js'
 import { describeGridLaunch, gridConfigHandOff, gridConflictingEnvToClear, type GridLaunchAnswer, type GridLaunchMachine, type GridLaunchRequest, type GridWebSearchStatus } from '../../lib/gridLaunchWire.js'
@@ -256,7 +257,7 @@ export function createAgentCreator({
         if (materialized.created.some(item => item.startsWith('template'))) console.warn('[trust] TEMPLATE_TRUST_UNCONFIRMED')
       } catch (error) {
         const detail = `could not prepare the workspace for ${dsh} · ${error instanceof Error ? error.message : error}`
-        console.warn(`[agent] create ${dsh} refused · ${detail}`)
+        console.warn(`[agent] create ${dsh} refused · could not prepare the workspace for ${dsh} · ${errorKind(error)}`)
         return { ok: false, error: 'DSH_MATERIALIZE_FAILED', detail }
       }
       const prepared = await dshLaunch.launch({ dsh, workspace: cwd, engine, key: label, account: dshAccount },
@@ -291,7 +292,7 @@ export function createAgentCreator({
           gridLaunch.args = [...gridLaunch.args, ...handOff.args]
         } catch (error) {
           const detail = `could not write ${engine}'s grid configuration · ${error instanceof Error ? error.message : error}`
-          console.warn(`[agent] create ${engine} refused · ${detail}`)
+          console.warn(`[agent] create ${engine} refused · could not write ${engine}'s grid configuration · ${errorKind(error)}`)
           return { ok: false, error: 'GRID_CONFIG_FAILED', detail, unavailable: 'native' }
         }
       }
@@ -316,7 +317,7 @@ export function createAgentCreator({
           const profile = engine === 'codex' && environment ? nativeHookLocations(environment).CODEX_HOME : engine === 'claude' ? claudeHome : codexHome
           await prepareFolderTrust?.({ engine, cwd, profile, environment, empty: true }, trustCurrent)
         }
-      } catch { console.warn('[trust] FOLDER_TRUST_UNAVAILABLE') }
+      } catch (caughtFailure) { console.warn(('[trust] FOLDER_TRUST_UNAVAILABLE') + ' · ' + errorKind(caughtFailure)) }
       if (!trustCurrent()) return stale()
     }
     if (!current()) return stale()
@@ -399,7 +400,7 @@ export function createAgentCreator({
       engine,
       cwd,
       sessionLabel: label,
-      argv,
+      argv: launchAttempts(argv, () => buildEngineLaunchArgv(engine, launchOptions)),
       // Windows: the workspace to start in and the shell the pane becomes after the engine (lib/windows/engineStart.ts).
       paneLaunch: windowsPaneLaunch(engine, { ...launchOptions, held }),
       // Windows: the variables the argv's `/usr/bin/env` prefix carries elsewhere, last (engineLaunchEnv).

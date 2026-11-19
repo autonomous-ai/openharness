@@ -12,11 +12,11 @@
  */
 
 import { readFile } from 'node:fs/promises'
-import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { daemonDataDir } from './localDaemon.mjs'
 
 export function registryPath(env = process.env) {
-  return env.HPS_REGISTRY || join(env.HARNESS_HOME || join(homedir(), '.harness'), 'cli', 'data', 'registry.json')
+  return env.HPS_REGISTRY || join(env.HARNESS_HOME ? join(env.HARNESS_HOME, 'cli', 'data') : daemonDataDir(env), 'registry.json')
 }
 
 /** `{ byId, rows }`, or an empty pair when there is no registry to read (a machine that has never run

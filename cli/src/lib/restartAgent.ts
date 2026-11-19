@@ -13,6 +13,7 @@ import type { AgentEngine } from '../engines/types.js'
 import type { RegisteredSession, ProcessIdentity } from './registry.js'
 import type { TerminateOutcome } from './deleteAgentFallback.js'
 import { permissionModeApproves } from './engineLaunch.js'
+import { errorKind } from './log.js'
 
 /**
  * Whether the relaunch approves on its own — from the ROW first, and the live process only for a row
@@ -183,7 +184,7 @@ export async function restartAgent(
   let preparedFork: string | null = null
   if (resumeSessionId && session.continueInFork && deps.prepareFork) {
     try { preparedFork = await deps.prepareFork() } catch (error) {
-      deps.log(`[restart] ${session.engine} could not prepare the move, continuing in a plain fork: ${error instanceof Error ? error.message : error}`)
+      deps.log(`[restart] ${session.engine} could not prepare the move, continuing in a plain fork: ${errorKind(error)}`)
     }
     if (!current()) return changed
   }

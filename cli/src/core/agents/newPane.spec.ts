@@ -82,12 +82,12 @@ describe('watching a new pane', () => {
     expect(releaseHold).not.toHaveBeenCalled()
   })
 
-  it.each([new Error('unavailable'), 'unavailable'])('reports a background bind failure after confirmed readiness: %s', async error => {
+  it.each([[new Error('unavailable'), 'Error'], ['unavailable', 'string']])('reports a background bind failure after confirmed readiness: %s', async (error, kind) => {
     const { deps, watch } = setup()
     vi.mocked(resolvePaneEngineProcess).mockResolvedValue(identity)
     vi.mocked(deps.triggerHint).mockRejectedValueOnce(error)
     await watch('claude', pending, spawned, ['claude'], undefined)
-    expect(console.warn).toHaveBeenCalledWith('[agent] background bind failed · claude · unavailable')
+    expect(console.warn).toHaveBeenCalledWith(`[agent] background bind failed · claude · ${kind}`)
   })
 
   it('leaves the bound exit announcement to the retained-session transition', async () => {
@@ -303,7 +303,7 @@ describe('watching a new pane', () => {
     await worse.watch('claude', pending, spawned, ['claude'], undefined)
     await vi.advanceTimersByTimeAsync(0)
     expect(warn.mock.calls.map(([line]) => String(line)).filter((line) => line.includes('background bind failed'))).toEqual([
-      '[agent] background bind failed · claude · worse',
+      '[agent] background bind failed · claude · string',
     ])
   })
 
@@ -602,7 +602,7 @@ describe('watching a new pane', () => {
     await watch('claude', pending, spawned, ['claude'], undefined)
     expect(resolvePaneEngineProcess).not.toHaveBeenCalled()
     expect(deps.registry.setLaunch).not.toHaveBeenCalled()
-    expect(warn.mock.calls.map(([line]) => String(line))).toEqual(['[agent] create watch failed · claude · readiness publication unavailable'])
+    expect(warn.mock.calls.map(([line]) => String(line))).toEqual(['[agent] create watch failed · claude · readiness publication unavailable · Error'])
   })
 
   it('reports a watch that fails', async () => {
@@ -612,8 +612,8 @@ describe('watching a new pane', () => {
     await watch('claude', pending, spawned, ['claude'], undefined)
     await watch('claude', pending, spawned, ['claude'], undefined)
     expect(warn.mock.calls.map(([line]) => String(line))).toEqual([
-      '[agent] create watch failed · claude · readiness publication unavailable',
-      '[agent] create watch failed · claude · readiness publication unavailable',
+      '[agent] create watch failed · claude · readiness publication unavailable · Error',
+      '[agent] create watch failed · claude · readiness publication unavailable · string',
     ])
   })
 })

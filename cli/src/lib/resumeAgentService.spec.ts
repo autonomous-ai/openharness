@@ -914,12 +914,12 @@ describe('production resume handler', () => {
     const error = vi.spyOn(console, 'error').mockImplementation(() => {})
     vi.mocked(deps.attachSession).mockRejectedValueOnce(new Error('transcript unreadable'))
     expect(await start()).toMatchObject({ ok: true })
-    await vi.waitFor(() => expect(error).toHaveBeenCalledWith(`[resume] ${saved.agentId.slice(0, 8)} attach failed:`, 'transcript unreadable'))
+    await vi.waitFor(() => expect(error).toHaveBeenCalledWith(`[resume] ${saved.agentId.slice(0, 8)} attach failed:`, 'Error'))
     vi.mocked(deps.attachSession).mockRejectedValueOnce('gone')
     for (const row of registry.list()) (await removeRegistryAgent(registry, row.agentId))
     deps.stoppedAgents.finishResume(saved.agentId)
     expect(await start()).toMatchObject({ ok: true })
-    await vi.waitFor(() => expect(error).toHaveBeenCalledWith(`[resume] ${saved.agentId.slice(0, 8)} attach failed:`, 'gone'))
+    await vi.waitFor(() => expect(error).toHaveBeenCalledWith(`[resume] ${saved.agentId.slice(0, 8)} attach failed:`, 'string'))
     error.mockRestore()
   })
 
@@ -1080,7 +1080,7 @@ describe('production resume handler', () => {
     expect(registry.byAgent(saved.agentId)).toBeUndefined()
   })
   // On 2026-10-26, 10 of 17 failed resumes were a preparation failure, and nothing said which check refused.
-  it('reports why preparation failed, in the reply and the daemon log', async () => {
+  it('reports which check refused the preparation, in the reply and the daemon log', async () => {
     const warned = vi.spyOn(console, 'warn').mockImplementation(() => {})
     vi.mocked(deps.prepareSessionResume).mockImplementationOnce(() => {
       throw new ResumePreparationError('changed_during', 'Codex rollout changed during resume preparation; retry after its writer stops')
@@ -1088,7 +1088,7 @@ describe('production resume handler', () => {
     expect(await start()).toEqual({ ok: false, error: 'RESUME_PREPARATION_FAILED', reason: 'changed_during',
       detail: 'Codex is still writing this conversation. Try again once it stops.' })
     expect(warned.mock.calls.map(call => call.join(' '))).toContainEqual(expect.stringContaining(
-      'resume preparation failed: changed_during: Codex rollout changed during resume preparation; retry after its writer stops'))
+      'resume preparation failed: changed_during: ResumePreparationError'))
     expect(create).not.toHaveBeenCalled()
   })
 

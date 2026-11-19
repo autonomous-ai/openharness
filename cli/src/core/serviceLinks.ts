@@ -336,8 +336,8 @@ export function createServiceLinks(options: ServiceLinksOptions) {
               if (current()) connected.read = undefined
             }, failure => {
               if (!current()) return
-              const code = failure instanceof Error && ['READ_NOT_DECLARED', 'SESSION_READ_TOO_LARGE'].includes(failure.message)
-                ? failure.message : 'READ_UNAVAILABLE'
+              const code = failure instanceof Error && failure.message === 'READ_NOT_DECLARED' ? 'READ_NOT_DECLARED'
+                : failure instanceof Error && failure.message === 'SESSION_READ_TOO_LARGE' ? 'SESSION_READ_TOO_LARGE' : 'READ_UNAVAILABLE'
               if (failure instanceof Error && failure.message === 'SESSION_READ_TIMEOUT') {
                 reading.closed.abort(); close(1013, 'Read timeout')
               } else { connected.read = undefined; error(code) }

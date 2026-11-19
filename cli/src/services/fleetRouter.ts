@@ -15,6 +15,7 @@
 import type { ForkResult, SendResult } from '../core/api.js'
 import type { FleetRouting, ForkOutcome, SelectResult } from './fleet.js'
 import { extendShortRecap } from '../lib/deviceRecap.js'
+import { errorKind } from '../lib/log.js'
 import { transcriptActivityAt } from '../lib/transcriptActivity.js'
 import type { RouterContinuity } from '../lib/voiceRouter.js'
 import type { RecentTurn } from '../cable/cableHost.js'
@@ -484,7 +485,7 @@ export class FleetRouter implements FleetRouting {
           }
           if (stale) this.remoteAgents.set(m.id, { agents: [], at: failedAt, asked: failedAt })
           if (asking.agents.length && stale) {
-            this.local.log(`cable: ${m.name} dropped off the carousel (${message})`)
+            this.local.log(`cable: ${m.name} dropped off the carousel (${errorKind(err)})`)
           }
         })
         .finally(() => this.inFlight.delete(m.id))

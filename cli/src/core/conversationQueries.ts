@@ -1,3 +1,4 @@
+import { errorKind } from '../lib/log.js'
 import { HandoffError, type PreparedHandoff } from '../lib/handoffAuthority.js'
 import type { ServiceQueryAuthority } from './serviceLinks.js'
 /** The handoff's read-only queries. The core owns these facts; all file rendering and git work stays
@@ -23,9 +24,9 @@ export function conversationReads(wiring: HandoffWiring, directory: string, dead
       ready = bound
       return bound
     })
-    .catch(() => {
+    .catch((caughtFailure) => {
       pending = undefined
-      console.error('[handoff] initialization failed: HANDOFF_UNAVAILABLE')
+      console.error(('[handoff] initialization failed: HANDOFF_UNAVAILABLE') + ' · ' + errorKind(caughtFailure))
       throw new HandoffError('HANDOFF_UNAVAILABLE')
     })
   const cold: HandoffReads = {

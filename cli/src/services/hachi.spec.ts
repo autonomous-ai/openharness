@@ -210,7 +210,7 @@ describe('Hachi\'s wakes, from what its harnesses push', () => {
     away.close()
     t.tick(4 * 60_000)
     await t.look()
-    expect(t.log).toHaveBeenCalledWith('[hachi] could not follow what Hachi started on Mac mini: closed. Asked again at the next look.')
+    expect(t.log).toHaveBeenCalledWith('[hachi] could not follow what Hachi started on Mac mini: Error. Asked again at the next look.')
     await t.look()
     expect(t.lineFor('machine-2', 'far')).not.toBe(away)
     // Handed to the person, it is no longer Hachi's to follow.
@@ -339,11 +339,11 @@ describe('Hachi\'s wakes, what can go wrong', () => {
     // This daemon too old to push to a tool.
     here.watch = async () => false
     await t.look()
-    expect(t.log).toHaveBeenCalledWith('[hachi] could not follow what Hachi started on studio: this daemon does not push to tools. Asked again at the next look.')
+    expect(t.log).toHaveBeenCalledWith('[hachi] could not follow what Hachi started on studio: Error. Asked again at the next look.')
     t.service.stop()
   })
 
-  it('says a look that failed, by its message or what was thrown, and looks once at a time', async () => {
+  it('says a look that failed, by its kind, and looks once at a time', async () => {
     setAgentSettingsForTest(dir, { hachi: true })
     let fail: unknown = null
     const t = setup([hachiRow()])
@@ -356,7 +356,7 @@ describe('Hachi\'s wakes, what can go wrong', () => {
     await t.look()
     fail = 'gone'
     await t.look()
-    expect(t.log.mock.calls.map(([line]) => line)).toEqual(expect.arrayContaining(['[hachi] a look failed: the core went away', '[hachi] a look failed: gone']))
+    expect(t.log.mock.calls.map(([line]) => line)).toEqual(expect.arrayContaining(['[hachi] a look failed: Error', '[hachi] a look failed: string']))
     // Asked twice while one runs: once more after it.
     fail = null
     const run = t.files.get('every')!

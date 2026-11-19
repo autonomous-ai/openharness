@@ -1,29 +1,32 @@
 /**
- * Harness's VS Code extension set up once a computer, against a fake VS Code: its app there or not, its record of
- * extensions in memory, and a `code` that records each run and answers from a list; the two records the setup reads and
- * writes are in memory too. The real `code`, /Applications and ~/.vscode are never touched.
+ * Harness's VS Code extension set up once a computer, against a fake VS Code or Cursor: its app there or not, its record
+ * of extensions in memory, and a CLI that records each run and answers from a list; the two records the setup reads and
+ * writes are in memory too. The real `code` and `cursor`, /Applications, ~/.vscode and ~/.cursor are never touched.
  */
 import { describe, expect, it } from 'vitest'
 import type { DialRemoved, Read, SetupCount } from '../devices/dialSkillFiles.js'
-import { VSCODE_EXTENSION_ID, type VscodeExtensionDeps } from '../devices/vscodeExtension.js'
+import { VSCODE_EXTENSION_ID, type VscodeEditor, type VscodeExtensionDeps } from '../devices/vscodeExtension.js'
 import { createVscodeExtensionSetup } from './vscodeExtensionSetup.js'
 
 const INSTALL = '--install-extension'
 const UNINSTALL = '--uninstall-extension'
 const HOUR = 3_600_000
 const OK = { code: 0, timedOut: false }
-const RECORD = '/Users/someone/.vscode/extensions/extensions.json'
+const RECORDS: Record<VscodeEditor, string> = {
+  vscode: '/Users/someone/.vscode/extensions/extensions.json',
+  cursor: '/Users/someone/.cursor/extensions/extensions.json',
+}
 
 /** Lets a timer's pass finish. */
 const settled = () => new Promise((resolve) => setImmediate(resolve))
 
 /**
- * A computer with VS Code ([app]) and a dial attached here once ([dial]), the extension [installed] at that version or
- * not, and a CLI that carries the extension at [build] (null: none built). A run of `code` that exits 0 leaves the
- * extension at [build] after an install and gone after an uninstall.
+ * A computer with the [editor], VS Code unless named, ([app]) and a dial attached here once ([dial]), the extension
+ * [installed] at that version or not, and a CLI that carries the extension at [build] (null: none built). A run of the
+ * editor's CLI that exits 0 leaves the extension at [build] after an install and gone after an uninstall.
  */
-function rig({ platform = 'darwin', app = true, dial = true, installed, build = '0.6.60' }: {
-  platform?: NodeJS.Platform; app?: boolean; dial?: boolean; installed?: string; build?: string | null
+function rig({ editor = 'vscode', platform = 'darwin', app = true, dial = true, installed, build = '0.6.60' }: {
+  editor?: VscodeEditor; platform?: NodeJS.Platform; app?: boolean; dial?: boolean; installed?: string; build?: string | null
 } = {}) {
   const state = {
     app, installed, build,
@@ -42,12 +45,14 @@ function rig({ platform = 'darwin', app = true, dial = true, installed, build = 
   const counted: Array<[SetupCount] | [SetupCount, string]> = []
   const timers: Array<{ ms: number; run: () => void }> = []
   const vscode: VscodeExtensionDeps = {
+    editor,
+    real: (path) => path,
     platform,
     home: '/Users/someone',
     pathVar: '',
     exists: () => state.app,
     executable: () => state.app,
-    read: (path) => path === RECORD && state.installed !== undefined
+    read: (path) => path === RECORDS[editor] && state.installed !== undefined
       ? JSON.stringify([{ identifier: { id: VSCODE_EXTENSION_ID }, version: state.installed }]) : null,
     run: async (_file, args) => {
       runs.push(args[0])
@@ -298,5 +303,34 @@ describe('Harness\'s VS Code extension, set up once a computer', () => {
     expect(r.runs).toEqual([])
     expect(r.state.record).toEqual({ dial: true })
     expect(r.counted).toEqual([])
+  })
+})
+
+describe('Cursor\'s setup, beside VS Code\'s', () => {
+  it('reads Cursor\'s removal alone: VS Code\'s does not stop it, its own does', async () => {
+    const r = rig({ editor: 'cursor' })
+    r.state.removed = { vscode: true }
+    await r.setup.pass()
+    expect(r.runs).toEqual([INSTALL])
+    expect(r.counted).toEqual([['set up']])
+    const off = rig({ editor: 'cursor' })
+    off.state.removed = { cursor: true }
+    await off.setup.pass()
+    expect(off.runs).toEqual([])
+  })
+
+  it('VS Code\'s setup is not stopped by Cursor\'s removal', async () => {
+    const r = rig()
+    r.state.removed = { cursor: true }
+    await r.setup.pass()
+    expect(r.runs).toEqual([INSTALL])
+  })
+
+  it('a disable of Cursor that lands while its install runs takes it out again, and records nothing', async () => {
+    const r = rig({ editor: 'cursor' })
+    r.state.during = (flag) => { if (flag === INSTALL) r.state.removed = { cursor: true } }
+    await r.setup.pass()
+    expect(r.runs).toEqual([INSTALL, UNINSTALL])
+    expect(r.state.record).toEqual({ dial: true })
   })
 })

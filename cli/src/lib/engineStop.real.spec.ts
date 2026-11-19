@@ -22,6 +22,7 @@ import { isolatedTmux, type IsolatedTmux } from '../testing/isolatedTmux.js'
 import { resolveBinaryOnPath } from './binaryOnPath.js'
 import { buildEngineLaunchArgv } from './engineLaunch.js'
 import { ENGINE_EXIT_PANE_OPTION } from './tmux.js'
+import { writeExecutable } from '../testing/executableFixture.js'
 
 const tmuxBin = resolveBinaryOnPath('tmux')
 const real = process.env.RUN_REAL_TMUX_DISCOVERY === '1' && tmuxBin ? describe : describe.skip
@@ -77,7 +78,7 @@ function fixture(runaway: '' | 'ttou' | 'tstp' = '', wrapped = false) {
   const log = join(dir, 'engine.log')
   writeFileSync(log, '')
   const engine = join(dir, 'engine')
-  writeFileSync(engine, `#!${process.execPath}
+  writeExecutable(engine, `#!${process.execPath}
 const fs = require('node:fs');
 const { spawn } = require('node:child_process');
 const log = (line) => fs.appendFileSync(${JSON.stringify(log)}, line + '\\n');
@@ -112,7 +113,7 @@ process.stdin.on('data', (data) => {
   log('key ' + JSON.stringify(key));
 });
 setInterval(() => {}, 1000);
-`, { mode: 0o755 })
+`)
   const lines = () => readFileSync(log, 'utf8').split('\n').filter(Boolean)
   return { dir, engine, lines, count: (prefix: string) => lines().filter((line) => line.startsWith(prefix)).length }
 }

@@ -18,7 +18,7 @@ import type { AgentEngine } from '../../engines/types.js'
 import { pollsQuestions, type QuestionWatcher } from '../../lib/questionController.js'
 import { attachTranscript, type AttachRead } from '../../lib/attachTranscript.js'
 import { AttachTracker } from '../../lib/attachTracker.js'
-import { sid } from '../../lib/log.js'
+import { errorKind, sid } from '../../lib/log.js'
 import { foldTranscript, TranscriptFold } from '../../engines/kit/transcriptFold.js'
 import type { LiveEvent } from '../../engines/kit/events.js'
 import type { RegisteredSession } from '../../lib/registry.js'
@@ -133,7 +133,7 @@ export function createAttach({
         return
       }
       void attachSession(resolve(session.agentId)!, false, replayCursorFromStart, replayFromStart).catch(error => console.error(
-        `[agent] ${sid(session.agentId)} attach retry failed: ${error instanceof Error ? error.message : error}`))
+        `[agent] ${sid(session.agentId)} attach retry failed: ${errorKind(error)}`))
     }, 1_000 * 2 ** retries.attempts++)
     retries.timer.unref()
   }
@@ -179,8 +179,8 @@ export function createAttach({
       // The control obligation already exists. A failed status notification must
       // never make its caller replay that Stop after a later explicit Cancel.
       try { announceSession(latest) }
-      catch (error) { console.warn('[agent] interpretation hold notification failed', error) }
-      void attachSession(latest, true).catch(error => console.warn(`[agent] recovery held: ${String(error)}`))
+      catch (error) { console.warn('[agent] interpretation hold notification failed', errorKind(error)) }
+      void attachSession(latest, true).catch(error => console.warn(`[agent] recovery held: ${errorKind(error)}`))
     }
   }
   const holdStop = (session: RegisteredSession, force = false): boolean => {
@@ -440,11 +440,24 @@ export function createAttach({
     // The other engines' fold and tail are their worker's: what the core keeps is the turn the fold left, and what its
     // records said of the profile, never the records.
     let opened: StreamOpened | null = null
+    // A stream opened for a binding that moved on meanwhile is not its: the attach that follows opens its own, wherever
+    // this one gives up. One left open made that attach only re-attach, with no history and no question watcher (a
+    // hookless Hermes resume its terminal record confirmed while its profile was read, e2e/readerClose.e2e.ts).
+    const movedOn = (): false => {
+      // A store's own unavailable state arrives in its first frames. Keep its reader polling for recovery;
+      // only a different binding invalidates the stream that was just installed.
+      const latest = resolve(session.agentId)
+      const itsHold = opened?.frames.some(frame => frame.hold && frame.hold === latest?.identityHold)
+      if (opened && !(itsHold && latest && paneReadIdentity({ ...latest, identityHold: session.identityHold }) === paneReadIdentity(session))) {
+        others.forget(session.sessionId)
+      }
+      return false
+    }
     if (other) {
       let store: string | null
-      try { store = keepsStore(session.engine) ? await storeOf(session) : null } catch {
+      try { store = keepsStore(session.engine) ? await storeOf(session) : null } catch (error) {
         if (current()) others.unavailable(session)
-        console.warn(`[agent] ${sid(session.agentId)} transcript held · engine=${session.engine} · its store reader is unavailable`)
+        console.warn(`[agent] ${sid(session.agentId)} transcript held · engine=${session.engine} · its store reader is unavailable · ${errorKind(error)}`)
         return true
       }
       if (!current()) return false
@@ -454,17 +467,7 @@ export function createAttach({
       }
       opened = await others.open(session, { live: replayLive, abandon: !closes && !!relaunch?.engineStarted,
         held: !!session.interpretationHold, store })
-      // A stream opened for a binding that moved on meanwhile is not its: the attach that follows opens its own.
-      if (!current()) {
-        // A store's own unavailable state arrives in its first frames. Keep its reader polling for recovery;
-        // only a different binding invalidates the stream that was just installed.
-        const latest = resolve(session.agentId)
-        const itsHold = opened?.frames.some(frame => frame.hold && frame.hold === latest?.identityHold)
-        if (opened && !(itsHold && latest && paneReadIdentity({ ...latest, identityHold: session.identityHold }) === paneReadIdentity(session))) {
-          others.forget(session.sessionId)
-        }
-        return false
-      }
+      if (!current()) return movedOn()
       if (!opened) {
         console.warn(`[agent] ${sid(session.agentId)} transcript held · engine=${session.engine} · its live stream is unavailable`)
         return true
@@ -477,7 +480,7 @@ export function createAttach({
     if (!profileHydration?.config) await runtimeProfiles.ingestConfig(session, true)
     if (!current()) {
       if (prepared) remote!.discard(prepared)
-      return false
+      return movedOn()
     }
     // From here to the release in `attachSession` nothing is awaited for a held tail, so the hold cannot
     // expire between installing the new normalizer and handing it the tail.
@@ -515,10 +518,10 @@ export function createAttach({
         // still reports the last turn as open, and after a daemon restart nothing is ever coming to close it. The pane
         // is the one place the answer exists; ask it. Its chips are read from the same capture. A close names the turn
         // the fold left: one a newer record began since is left to its own records.
-        const agentId = session.agentId, identity = paneReadIdentity(session), turn = opened.turn.identity
-        const capturing = captureTerminal(agentId, paneLines)
+        const turn = opened.turn.identity
+        const capturing = captureTerminal(session.agentId, paneLines)
         const [, capture] = await Promise.all([runtimeProfiles.capturePane(session, () => capturing, paneLines, true), capturing])
-        if (paneReadIdentity(resolve(agentId)) !== identity) return keepLiveNormalizer('changed binding while its pane was read')
+        if (!current()) return movedOn()
         const closeHistory = async (): Promise<boolean> => {
           if (await others.closeIf(session.sessionId, turn)) { historyTurnOpen = false; return true }
           historySuperseded = true
@@ -534,7 +537,7 @@ export function createAttach({
         historyCurrent = () => others.get(session.sessionId)?.turn.identity === settledTurn
       } else if (paneLines) await runtimeProfiles.capturePane(session, captureTerminal, paneLines, true)
     }
-    if (!current()) return false
+    if (!current()) return movedOn()
     // Close the old engine's turn before starting the tail: addSession may synchronously deliver a
     // new turn written after resume. Closing afterward would abandon that new turn instead.
     // The other engines' worker closed it as it folded, before it started their tail (or the pane's check did, above).
@@ -566,7 +569,7 @@ export function createAttach({
       // that brings the path must read the file whole rather than from its end.
       neverFoldedHistory.add(session.sessionId)
     }
-    if (!current()) return false
+    if (!current()) return movedOn()
     if (session.interpretationHold) {
       if (closes && fromEnd!.next < closes.at(-1)!.offset) return keepLiveNormalizer('did not reach its cancellation boundary')
       replacement!.check(recoveryPlan!)
@@ -583,7 +586,7 @@ export function createAttach({
       recoveryReady = true
       if (opened) others.release(session.sessionId)
       else void watcher.pollSession(session.sessionId).catch(error => console.warn(
-        `[agent] ${sid(session.agentId)} recovered tail read failed: ${error instanceof Error ? error.message : error}`))
+        `[agent] ${sid(session.agentId)} recovered tail read failed: ${errorKind(error)}`))
     }
     if (!session.interpretationHold && relaunch) relaunchMarks!.complete(session.sessionId, relaunch)
     // Marked on the FOLD, not on the emission. A live fold that happened to produce nothing — the file
@@ -683,7 +686,7 @@ export function createAttach({
     // forget's remove revokes it even while the first filesystem lookup is pending.
     if (session.engine === 'cursor' && !session.transcriptPath) {
       void cursorDiscovery.add(session.sessionId).catch(error => console.error(
-        `[cursor-discovery] lookup failed: ${error instanceof Error ? error.message : error}`))
+        `[cursor-discovery] lookup failed: ${errorKind(error)}`))
     }
     const key = session.sessionId
     pendingAttaches.set(key, (pendingAttaches.get(key) ?? 0) + 1)

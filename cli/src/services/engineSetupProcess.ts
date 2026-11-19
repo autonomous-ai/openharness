@@ -1,3 +1,4 @@
+import { errorKind } from '../lib/log.js'
 import { join } from 'node:path'
 import { startEngineSetup } from './engineSetup.js'
 import { runServiceProcess, type ServiceProcess } from './process.js'
@@ -37,7 +38,7 @@ export function runEngineSetupService(options: {
           || !writeBrowserShim(answer.command, join(options.dataDir, 'bin', 'harness-browser'))) {
           console.warn('[engine-setup] BROWSER_SHIM_UNAVAILABLE')
         }
-      }).catch(() => { if (current) console.warn('[engine-setup] BROWSER_SHIM_UNAVAILABLE') }).finally(finish)
+      }).catch((caughtFailure) => { if (current) console.warn(('[engine-setup] BROWSER_SHIM_UNAVAILABLE') + ' · ' + errorKind(caughtFailure)) }).finally(finish)
     },
     onDisconnected: () => { cancel(); setup.disconnect() },
   })

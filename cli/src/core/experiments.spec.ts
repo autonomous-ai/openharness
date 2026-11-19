@@ -25,8 +25,8 @@ describe('the experiments on as the core starts', () => {
     notices.notice({ type: 'desk_changed', revision: 4 })
     expect(heard.mock.calls).toEqual([[{ type: 'desk_changed', revision: 3 }]])
     expect(tell).toHaveBeenCalledTimes(2)
-    expect(log).toHaveBeenCalledWith(expect.stringContaining('boom'))
-    expect(log).toHaveBeenCalledWith(expect.stringContaining('odd'))
+    expect(log).toHaveBeenCalledWith("[experiments] a notice's listener failed · Error")
+    expect(log).toHaveBeenCalledWith("[experiments] a notice's listener failed · string")
   })
 
   it('logs to the console when given no log of its own', () => {
@@ -35,7 +35,7 @@ describe('the experiments on as the core starts', () => {
       const notices = createAccountNotices(() => {})
       notices.onNotice(() => { throw new Error('boom') })
       notices.notice({ type: 'desk_changed', revision: 1 })
-      expect(warn).toHaveBeenCalledWith(expect.stringContaining('boom'))
+      expect(warn).toHaveBeenCalledWith("[experiments] a notice's listener failed · Error")
     } finally {
       warn.mockRestore()
     }
@@ -207,7 +207,8 @@ describe('the account\'s agent experiments, kept for this computer', () => {
     for (let i = 0; i < 4; i++) await t.sync.sync()
     expect(kept()).toEqual(OFF)
     expect(t.want).not.toHaveBeenCalled()
-    expect(log.mock.calls).toEqual([[expect.stringContaining('offline')], [expect.stringContaining('odd')]])
+    expect(log.mock.calls).toEqual([["[experiments] the account's experiments could not be read · Error"],
+      ["[experiments] the account's experiments could not be read · string"]])
   })
 
   it('says, rather than throws, when the copy cannot be kept', async () => {
@@ -215,10 +216,10 @@ describe('the account\'s agent experiments, kept for this computer', () => {
     const t = setup({ log, dataDir: join(dataDir, 'missing') })
     answer(account({ agent_messages: true }))
     await t.sync.sync()
-    expect(log).toHaveBeenCalledWith(expect.stringContaining("the agents' settings could not be kept"))
+    expect(log).toHaveBeenCalledWith("[experiments] the agents' settings could not be kept · ENOENT")
     answers.push(async () => { throw 'odd' })
     await t.sync.sync()
-    expect(log).toHaveBeenLastCalledWith(expect.stringContaining('odd'))
+    expect(log).toHaveBeenLastCalledWith("[experiments] the account's experiments could not be read · string")
     expect(t.want).not.toHaveBeenCalled()
   })
 
@@ -227,7 +228,7 @@ describe('the account\'s agent experiments, kept for this computer', () => {
     try {
       const t = setup()
       await t.sync.sync()
-      expect(warn).toHaveBeenCalledWith(expect.stringContaining('nothing to answer'))
+      expect(warn).toHaveBeenCalledWith("[experiments] the account's experiments could not be read · Error")
     } finally {
       warn.mockRestore()
     }
@@ -301,19 +302,19 @@ describe('the account\'s agent experiments, kept for this computer', () => {
     expect(t.want).toHaveBeenCalledOnce()
   })
 
-  it('names in its log the agent that turned one on with the person\'s yes, which is only its word', async () => {
+  it('says in its log that an agent turned one on with the person\'s yes, which is only its word, and not the agent\'s name', async () => {
     const lines: string[] = []
     const t = setup({ log: (line) => lines.push(line) })
     answer(account({}))
     answers.push(async () => account({ agents_tell_agents: true }))
-    expect(await t.sync.settingsWrite({ agentsTellAgents: true, byAgent: 'Claude Code' }))
+    expect(await t.sync.settingsWrite({ agentsTellAgents: true, byAgent: 'SECRET-NAME-MARKER' }))
       .toEqual({ status: 200, body: { ...OFF, agentsTellAgents: true, signedIn: true } })
-    expect(lines).toEqual(['[settings] agentsTellAgents on by Claude Code, which says the person said yes'])
-    // The summary switch grants by turning off: the agent's word is named for it too.
+    expect(lines).toEqual(['[settings] agentsTellAgents on by an agent, which says the person said yes'])
+    // The summary switch grants by turning off: the agent's word is said for it too.
     answer(account({ agent_messages_hide_summary: true }))
     answers.push(async () => account({}))
     await t.sync.settingsWrite({ agentMessagesHideSummary: false, byAgent: 'Codex' })
-    expect(lines.at(-1)).toBe('[settings] agentMessagesHideSummary off by Codex, which says the person said yes')
+    expect(lines.at(-1)).toBe('[settings] agentMessagesHideSummary off by an agent, which says the person said yes')
     // Not for the person's own write, nor for a name that says nothing.
     answer(account({ agents_tell_agents: true }))
     answers.push(async () => account({}))

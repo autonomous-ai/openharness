@@ -22,6 +22,7 @@ use std::process::{Command, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::breakaway::{CREATE_BREAKAWAY_FROM_JOB, CREATE_NEW_PROCESS_GROUP};
+use crate::harness_home::{Root, harness_root, home};
 
 /// The CLI runs as a console program whose console nobody sees. It does not also get `DETACHED_PROCESS`, because
 /// Windows ignores `CREATE_NO_WINDOW` beside it ("Process Creation Flags"). The CLI would then have no console at
@@ -58,10 +59,10 @@ pub fn parse(args: &[OsString]) -> Result<Invocation, String> {
     Err(format!("missing `--` before the CLI's arguments\n{USAGE}"))
 }
 
-/// `%USERPROFILE%\.harness`, the folder install.ps1 installs into (`HOME` off Windows, for the tests).
+/// `%USERPROFILE%\.harness`, the folder install.ps1 installs into (`HOME` off Windows, for the tests): the data root,
+/// which holds `cli` and `bin`.
 pub fn default_root(env: impl Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
-    let home = env("USERPROFILE").or_else(|| env("HOME")).filter(|home| !home.is_empty())?;
-    Some(PathBuf::from(home).join(".harness"))
+    home(env).map(|home| harness_root(&home, Root::Data))
 }
 
 #[derive(Debug, PartialEq, Eq)]

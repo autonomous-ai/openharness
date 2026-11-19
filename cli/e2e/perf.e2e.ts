@@ -15,7 +15,8 @@
  * latency and errors, and compares every answer sent with the one the engine's transcript recorded.
  * PERF_QUESTION_SECONDS (default PERF_SECONDS) is that window's length.
  * PERF_BUNDLE_SOURCE identifies an externally built baseline bundle; its bytes are hashed either way.
- * On macOS set HARNESS_PROCESS_IMAGES_ARTIFACT to a verified local build for release-like discovery.
+ * On macOS the run's bundle carries the process-image helper a release embeds (harness/processImages.ts), and the
+ * report says whether the bundle measured carries it.
  */
 import { execFile, execFileSync } from 'node:child_process'
 import { randomBytes, randomUUID, createHash } from 'node:crypto'
@@ -28,6 +29,7 @@ import { TerminalBinaryKind } from '../src/lib/terminalBinary.js'
 import { LocalClient } from './harness/client.js'
 import { CLI_ROOT, until } from './harness/daemon.js'
 import { harnessdProcesses } from './harness/endurance.js'
+import { bundledProcessImages } from './harness/processImages.js'
 import { startPhoneMachine, type PhoneMachine } from './harness/fleet.js'
 import { askAndAnswer, compareAnswers, engineAnswers, QUESTION_KINDS, summarizeAnswers, type QuestionEngine, type QuestionOutcome } from './harness/questionWork.js'
 
@@ -175,6 +177,9 @@ describe.runIf(process.env.PERF === '1')('core CPU and memory under a working de
     const nodeOptions = [`--require=${JSON.stringify(preload)}`]
     if (profile) nodeOptions.push('--cpu-prof', `--cpu-prof-dir=${JSON.stringify(artifactDir)}`)
     const git = (...args: string[]) => execFileSync('git', args, { cwd: CLI_ROOT, encoding: 'utf8', timeout: 5_000 }).trim()
+    // From the bundle measured, not from the setting: every Mac run names a helper (harness/processImages.ts), and a
+    // baseline built elsewhere (PERF_BUNDLE_SOURCE) carries its own, or none and looks its processes up with `lsof`.
+    const helperSha256 = bundledProcessImages(readFileSync(bundle, 'utf8'))
     const report: Record<string, any> = {
       schema: 1, state: 'running', startedAt: new Date().toISOString(), artifactDir,
       source: { commit: git('rev-parse', 'HEAD'), tree: git('rev-parse', 'HEAD^{tree}'),
@@ -188,8 +193,7 @@ describe.runIf(process.env.PERF === '1')('core CPU and memory under a working de
       instrumentation: { profile, heaps, delayResolutionMs: 10, rssSampleEveryMs: 1_000, cpuPercentBasis: 'one logical CPU',
         scope: measureWorkers ? 'core PID and both engine worker PIDs (engine-claude, engine-codex) by in-process probe; the master by ps, reported separately; excludes other services, engines and tmux' : 'core PID only; the master by ps, reported separately; excludes services, engines and tmux', heapPausesOutsideWindows: true },
       loadAverage: { start: loadavg() },
-      nativeProcessImages: process.env.HARNESS_PROCESS_IMAGES_ARTIFACT
-        ? { mode: 'embedded', artifactSha256: sha(process.env.HARNESS_PROCESS_IMAGES_ARTIFACT) } : { mode: 'fallback' },
+      nativeProcessImages: helperSha256 ? { mode: 'embedded', helperSha256 } : { mode: 'fallback' },
       limitations: ['Fake engines and a loopback fake backend; no real model latency or token streaming.',
         'Cable access disabled for isolation; not a measurement of USB discovery.', 'Heap snapshots force GC after each measured window.'],
       phases: [], snapshots: [],

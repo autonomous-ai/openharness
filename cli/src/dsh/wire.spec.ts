@@ -75,6 +75,14 @@ describe('dshListRows', () => {
     expect(offered).toMatchObject({ description: 'Typeset.', category: 'Documents', author: 'Autonomous', viewerUse: 'autonomous/doc-viewer' })
   })
 
+  it('an installed row says needsSetup when its record is needs-setup', () => {
+    const manifest = { spec: 1 as const, id: 'acme/thing', name: 'Thing', engine: 'claude' as const }
+    expect(dshListRows([{ ...installed(manifest), setup: 'needs-setup' }], [])[0]).toMatchObject({ installed: true, needsSetup: true })
+    for (const row of [{ ...installed(manifest), setup: 'pending' as const }, installed(manifest)]) {
+      expect(dshListRows([row], [])[0]).not.toHaveProperty('needsSetup')
+    }
+  })
+
   it('reads this machine\'s index and the bundled registry when given nothing', () => {
     const saved = env.DSH_DIR
     env.DSH_DIR = mkdtempSync(join(tmpdir(), 'dsh-wire-'))

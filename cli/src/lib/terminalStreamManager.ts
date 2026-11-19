@@ -277,6 +277,15 @@ export function terminalEngineCapabilities(
   }))
 }
 
+/** The person writes the file's name (AGENTS.md rule 7), so a log keeps only a 1-6 character
+ * alphanumeric extension (jpeg, xlsx, gz): a longer one could be the person's words, so it logs as
+ * 'other', and an odd one could be part of the name itself, so it logs nothing. */
+function loggedExtension(filename: string | undefined): { ext?: string } {
+  const ext = filename?.match(/\.([A-Za-z0-9]+)$/)?.[1]
+  if (!ext) return {}
+  return { ext: ext.length <= 6 ? ext.toLowerCase() : 'other' }
+}
+
 export class TerminalStreamManager {
   private readonly streams = new Map<string, ActiveStream>()
   private readonly controllerByAgent = new Map<string, string>()

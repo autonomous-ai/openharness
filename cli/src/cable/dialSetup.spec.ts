@@ -256,6 +256,21 @@ describe('createDialSetup', () => {
     expect(readSetup(r.dataDir).vscode).toBe('0.6.60')
   })
 
+  it('Cursor\'s version is recorded beside VS Code\'s, and each save keeps the other', async () => {
+    const r = rig()
+    await r.setup.attached()
+    expect(r.setup.cursor()).toEqual({ dial: true })
+    expect(r.setup.recordVscode('0.6.60')).toBe(true)
+    expect(r.setup.recordCursor('0.6.61')).toBe(true)
+    expect(r.setup.cursor()).toEqual({ dial: true, version: '0.6.61' })
+    expect(r.setup.vscode()).toEqual({ dial: true, version: '0.6.60' })
+    expect(readSetup(r.dataDir)).toMatchObject({ vscode: '0.6.60', cursor: '0.6.61' })
+    // A version a read would drop is not saved, and the one before stays.
+    expect(r.setup.recordCursor('0.6.62 beta')).toBe(false)
+    expect(r.setup.cursor()).toEqual({ dial: true, version: '0.6.61' })
+    expect(readSetup(r.dataDir)).toMatchObject({ vscode: '0.6.60', cursor: '0.6.61' })
+  })
+
   it('a record that could not be read leaves the VS Code extension\'s part not known', async () => {
     const r = rig()
     const file = join(r.dataDir, DIAL_SETUP_FILE)

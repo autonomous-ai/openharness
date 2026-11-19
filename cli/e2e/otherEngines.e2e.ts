@@ -214,8 +214,11 @@ console.log('fixture-pi-ready'); setInterval(() => {}, 1000);
     c.close()
     const from = d.log().length
     await d.restart()
-    const restarted = d.log().slice(from)
-    expect(restarted.slice(0, restarted.indexOf('[harnessd] core ready'))).not.toContain('service engine-others started')
+    // A protocol-1 core asks for no worker at bind (core/main.ts othersLive). The restored Pi's ended turn is recapped
+    // once it attaches, and that read starts the worker on demand, racing the core's ready: only the attach orders it.
+    const attachedLine = `[agent] ${agent.id.slice(0, 8)} attached · engine=pi`
+    const restarted = await until('the restored Pi attached', () => d.log().slice(from).includes(attachedLine) && d.log().slice(from) || null, 15_000, 50)
+    expect(restarted.slice(0, restarted.indexOf(attachedLine))).not.toContain('service engine-others started')
   })
 
   it.each(['shared', 'independent'] as const)('answers at once while the worker is killed or frozen, the agent working on, and reads again once it is back (%s connection)', async connection => {

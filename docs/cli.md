@@ -4,10 +4,11 @@ One thing to know from the start: **the daemon only knows about panes it created
 start from the app are tmux sessions named `harness-*`, owned by the daemon. A `claude` you launch
 by hand in your own tmux is not picked up. Another machine needs Node ≥ 20 and tmux; `sqlite3` only
 for the engines that keep their conversations in SQLite (OpenCode, Kilo, Hermes, Devin). There is no
-token to copy between machines: a durable computer id under `~/.harness` keeps later starts attached
-to the same machine record.
+token to copy between machines: a durable computer id in Harness's folder
+([where Harness keeps its files](#where-harness-keeps-its-files)) keeps later starts attached to the same machine
+record.
 
-`harness` is one pure-JS bundle run by the managed Node under `~/.harness/cli`. Everything below
+`harness` is one pure-JS bundle in that folder's `cli`, run by the managed Node. Everything below
 works the same on a headless Linux server; the app is not required on a machine, only the daemon.
 
 | Command | What it does |
@@ -28,9 +29,10 @@ works the same on a headless Linux server; the app is not required on a machine,
 | `harness grid login [--force] [--json]` · `harness grid logout` | Sign the `grid` CLI in with this computer's account, no second browser. |
 | `harness grid env <grid>` | `<grid>`'s relay address and key as shell exports, through the harness's own `grid`: `eval "$(harness grid env <grid>)"` before pointing an OpenAI-compatible client at `$OPENAI_BASE_URL`. |
 | `harness flash [flags]` | Re-flash a plugged-in Harness device over USB. Flags pass straight to the flasher. |
-| `harness device notify "<one line>" [--json]` | For an agent: ring this computer's dial when it needs the person to act. One line, 120 characters at most. The dial shows it whole under the agent's name, pinned, with one option, "In <app>", until that agent's next turn starts or the person taps "In <app>". Prints `shown`, `no dial` or `limited`, exit 0 for each. On Windows, and where the devices run inside the core (Harness OS), it prints `no dial`. Claude Code and Codex run it without a permission question. |
+| `harness device notify "<one line>" [--json]` | For an agent: ring this computer's dial when it needs the person to act. One line, 120 characters at most. The dial shows it whole under the agent's name, pinned, with one option, "In <app>", until that agent's next turn starts or the person taps "In <app>". A notice still pending when the daemon restarts comes back in the dial's list without ringing again, for up to 24 hours. Prints `shown`, `no dial` or `limited`, exit 0 for each. On Windows, and where the devices run inside the core (Harness OS), it prints `no dial`. Claude Code and Codex run it without a permission question. |
 | `harness device claude status [--json]` · `enable` · `disable` | From the first dial plugged in on this computer, the devices service sets Claude Code up by itself, once, and keeps it current as Harness updates: its `harness-device` plugin and the `dial` skill in each home it knows. These take that away or bring it back. Whether the dial is on for Claude Code: its plugin is on and `disable` has not removed it · clear the removal, install the plugin, or turn it on, and write the skill to `$CLAUDE_CONFIG_DIR/skills/dial/SKILL.md` (`~/.claude` by default) and back into each home the devices service set up · uninstall the plugin and remove the skill from the homes Harness wrote it into, but for a skills folder Codex holds it in; Harness leaves them removed until `enable`. With no `claude` found while the plugin is on, it says so and exits 1. `enable` and `disable` also turn the plugin on or off in each Orca account's Claude Code home; a home that fails says so in one line. A `dial` skill the person wrote is never changed. |
 | `harness device codex status [--json]` · `enable` · `disable` | From the first dial plugged in on this computer, the devices service writes the `dial` skill, which tells Codex of the dial, into each Codex home it knows, once, and keeps it current as Harness updates. These take that away or bring it back. Whether the dial is on for Codex: a dial was plugged in here or `enable` ran, and `disable` has not removed it · clear the removal and write the skill to `$CODEX_HOME/skills/dial/SKILL.md` (`~/.codex` by default) and back into each home the devices service set up · remove the skill from the homes Harness wrote it into, but for a skills folder Claude Code holds it in; Harness leaves it removed until `enable`. A `dial` skill the person wrote is never changed. |
+| `harness device vscode enable` · `disable` · `harness device cursor enable` · `disable` | From the first dial plugged in on this computer, the devices service installs Harness's extension into VS Code and into Cursor by itself, once, through each editor's own CLI, and keeps it current as Harness updates. These take that away or bring it back, one editor at a time: `disable` uninstalls it, and Harness leaves it removed · `enable` clears that and installs it. Each prints one JSON line, `{"vscode":"on","version":"…"}` or `{"cursor":"off"}`. |
 | `harness autonomous-device discover\|status\|list\|pair\|revoke` | Pair Autonomous OS devices found on the LAN, directly, with no relay. |
 | `harness autonomous-device addon state\|propose\|proposal` | Read what a paired device publishes, and propose what it might do ([device add-ons](autonomous-device-addons.md)). |
 
@@ -42,6 +44,41 @@ page and never a transcript. Configuration is environment
 variables (`BACKEND_WS_URL`, `WEB_URL`, `ADAPTER_DATA_DIR`, `ADAPTER_COMPUTER_ID`, `PORT`, and the
 per-engine home directories); [`cli/README.md`](cli/README.md) has the full table and the
 `.env.example`.
+
+## Where Harness keeps its files
+
+On macOS and Windows everything is in `~/.harness` (`%USERPROFILE%\.harness`). On Linux Harness keeps its files in
+two folders, the data root `$XDG_DATA_HOME/harness` (by default `~/.local/share/harness`) and the state root
+`$XDG_STATE_HOME/harness` (by default `~/.local/state/harness`); a variable that is unset, empty or not an absolute
+path is ignored. Which folders a Linux process uses:
+
+1. The data root exists: the two roots.
+2. Else `~/.harness` exists: `~/.harness` for both, not moved yet.
+3. Else the two roots, a fresh install.
+
+| Root | What it holds |
+|---|---|
+| data | `auth` (the SSO session), `computer-id`, `cli` (the CLI; `cli/data` is the daemon's data folder), `connections`, `agent-messages`, `bin`, `dsh` (installed harnesses), `claude-profiles`, `desktop-app-v2` and Desktop's other `desktop-app*` folders, `viewer-app-v2`, `tui`, `devices`, `lessons`, `grid-fleet`, `community`, `memory`, and anything not listed here |
+| state | `logs`, `runtime` (managed Node, tmux, PTY host), `hook-routes`, `s` (short socket folders), `run`, `shell-requests`, `pty`, `uninstalling`, `flasher`, `monitor` |
+
+Every `~/.harness/<entry>` in these docs is in the root this table names. An override such as `ADAPTER_DATA_DIR`
+still wins.
+
+An existing `~/.harness` moves to the two roots the next time Harness starts (`harness start`, its `-f` and
+`--if-down` forms, or systemd's start). The move waits while an update awaits its verdict, another start is moving,
+an override names a folder inside `~/.harness`, tmux is older than 3.0 with a Harness pane open, or a PTY host runs;
+a `~/.harness` that is itself a link never moves. `harness status` says why a move waits or failed, and what to do.
+Agents already running keep working through links left in `~/.harness`, which go within minutes of the last one
+ending. Afterwards a Harness older than this one starts as a new, signed-out computer.
+
+Each process reads `XDG_DATA_HOME` and `XDG_STATE_HOME` itself, so set them for your whole session
+(`~/.config/environment.d/` or `~/.profile`), not only in your shell's rc file, or the app and the terminal find
+different folders. `harness service install` carries them into the systemd unit. Harness OS keeps the default
+folders: its services start without your `XDG_DATA_HOME` and `XDG_STATE_HOME`.
+
+After the move the Store sets each installed harness up again, two at a time.
+A harness whose setup fails says `Needs setup` on its Store page, and `needs setup` in `harness dsh list`.
+`harness dsh update <owner/name>` or the page's `Update` button sets it up again.
 
 ## The daemon's environment
 
@@ -89,7 +126,7 @@ WebSocket at `ws://127.0.0.1:18473/api/local-ws` takes a `machine_select` frame 
 and answers them with `<type>_result`. Since 0.4.21 every loopback request (REST and this WebSocket)
 shows the daemon's local credential, `X-Harness-Local: <credential>` (or `Authorization: Bearer
 <credential>`): the contents of the 0600 `hook-credential` file in `ADAPTER_DATA_DIR`
-(`~/.harness/cli/data`). Without it the daemon answers 401; `/api/status` then gives only its public fields. Selecting one of your other machines proxies the request
+(`~/.harness/cli/data`, on Linux in the data root). Without it the daemon answers 401; `/api/status` then gives only its public fields. Selecting one of your other machines proxies the request
 through this daemon's link to it.
 
 What it answers: `agents_list`, `agent_create`, `agent_restart`, `agent_retarget`, `agent_delete`,
@@ -286,6 +323,7 @@ activity, then the screen, then two idle looks on one turn for one here. The fir
 | `started` | installing or starting | |
 | `working` | it works (a draft in its box counts) | `ask`: the last thing it was told |
 | `needs_person` | a question or a permission; for a cloud harness, its maker's own state | `question`: its last words, to `--chars` (4000) |
+| `held` | Harness cannot follow it until the person acts | `namedState`: what to do; a new line when it changes |
 | `background` | idle after a turn, with background commands it started still running | `backgroundCommands`: how many; a new line each time the number changes |
 | `done` | idle after a turn, once none runs | `summary`: its last answer, to `--chars`; `truncated`; `tools`; `backgroundCommands` |
 | `idle` | idle with nothing asked of it, past its start | `backgroundCommands` |
@@ -353,9 +391,11 @@ commands, and the person for one that needs the person; `close` says how many of
 agent's `ps` ends with its idle one to read, its busy ones to wait for, or a start, and shows its own first and at
 most 15 rows (`--all` shows every one).
 A harness waiting on a question or a permission is shown as `needs the person` (JSON keeps `needs-input` and adds
-`needsPerson: true`). A refusal (`SPAWN_LIMIT`, `TURNED_OFF`, `NOT_YOURS`) exits 5, with `code`, `reason` and
-`next` in its JSON. `harness help agents` prints the commands, states, exit codes and rules on one screen, and
-`harness --help` starts with it when an agent runs it.
+`needsPerson: true`). An agent Harness cannot follow until the person acts is shown as `held`, with what to do
+(`namedState`; JSON adds `needsPerson: true`): `wait` ends on it with exit 3. A named state Harness recovers from by
+itself does not end `wait`: `show` prints it, and so does `wait` when its time is up. A refusal (`SPAWN_LIMIT`,
+`TURNED_OFF`, `NOT_YOURS`) exits 5, with `code`, `reason` and `next` in its JSON. `harness help agents` prints the
+commands, states, exit codes and rules on one screen, and `harness --help` starts with it when an agent runs it.
 
 ## Your devices
 

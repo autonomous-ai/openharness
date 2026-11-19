@@ -78,7 +78,7 @@ describe('namedNode', () => {
     expect(namedNode(node, 'harnessd-messages', runtime, { fs: readOnly.fs, platform: 'darwin' })).toBe(node)
     expect(log.mock.calls.map(([line]) => line)).toEqual([
       '[harnessd] harnessd runs as node (no node binary)',
-      '[harnessd] harnessd-core runs as node (EXDEV)',
+      '[harnessd] harnessd-core runs as node (Error)',
     ])
   })
 

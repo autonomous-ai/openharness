@@ -1,3 +1,4 @@
+import { errorKind } from '../../lib/log.js'
 import type { AgentCreationOutcome, AgentCreationReceipts, CreationAuthority, CreationHold } from '../../lib/agentCreationReceipt.js'
 import type { PendingCreationDiscovery } from '../../lib/pendingCreationWire.js'
 
@@ -132,8 +133,8 @@ export function createPendingLaunches({ receipts, prepare, discovery }: {
             if (entry.value && !pending.has(entry.value)) remember(entry.value, 0)
           }
         }
-      } catch {
-        console.warn('[creation] CREATION_DISCOVERY_UNAVAILABLE')
+      } catch (caughtFailure) {
+        console.warn(('[creation] CREATION_DISCOVERY_UNAVAILABLE') + ' · ' + errorKind(caughtFailure))
         scan = undefined; scanAt = Date.now() + 2_000
       }
       // Receipt replies have their own deadline. Neither they nor a stalled

@@ -1,4 +1,5 @@
 /** Workspace file preparation runs with the component that writes the instructions. */
+import { errorKind } from '../lib/log.js'
 import { PROJECT_INSTRUCTION_FILES } from '../dsh/adapters.js'
 import { scmLaunchContracts, type ScmLaunchContract } from './launch.js'
 
@@ -16,6 +17,6 @@ export async function prepareScmWrite(cwd: string, paths: readonly string[], scm
 export async function prepareInstructionWrites(cwd: string | null | undefined, scms: readonly ScmLaunchContract[] = scmLaunchContracts): Promise<void> {
   if (!cwd) return
   try { await prepareScmWrite(cwd, PROJECT_INSTRUCTION_FILES, scms) }
-  catch { console.warn('[scm] INSTRUCTION_PREPARATION_FAILED') }
+  catch (caughtFailure) { console.warn(('[scm] INSTRUCTION_PREPARATION_FAILED') + ' · ' + errorKind(caughtFailure)) }
 }
 

@@ -1,3 +1,4 @@
+import { errorKind } from './lib/log.js'
 import { createClientStreamQueue, type ClientStreamQuota } from './lib/clientStreamQueue.js'
 import { CLIENT_STREAM_QUEUE_BYTES } from './lib/clientStreamContract.js'
 import { randomUUID } from 'node:crypto'
@@ -752,7 +753,7 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
       legacyDeviceState.closed(connId)
       if (wasWindow && boundMachineId) {
         try { options.onAppDisconnect?.(boundMachineId, connId) }
-        catch { console.warn('[local-ws] APP_DISCONNECT_FAILED') }
+        catch (caughtFailure) { console.warn(('[local-ws] APP_DISCONNECT_FAILED') + ' · ' + errorKind(caughtFailure)) }
       }
       if (serviceLink) { serviceLink.closed(); serviceLink = null }
       else if (relay) { relay.detach(); relay = null }

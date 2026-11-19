@@ -636,13 +636,13 @@ describe('re-executing', () => {
     stopped[1]()
     await settle({ ok: true, detail: PROBE_ANSWER })
     expect(outcomes).toEqual(['refused', 'kept'])
-    expect(calls.slice(-3)).toEqual(['remove marker', '[harnessd] could not re-execute this master (E2BIG) — keeping it', 'start children'])
+    expect(calls.slice(-3)).toEqual(['remove marker', '[harnessd] could not re-execute this master (Error) — keeping it', 'start children'])
 
     const odd = make({ execve: () => { throw 'odd' } })
     odd.reexec(state(), (outcome) => outcomes.push(outcome))
     stopped[2]()
     await settle({ ok: true, detail: PROBE_ANSWER })
-    expect(calls).toContain('[harnessd] could not re-execute this master (odd) — keeping it')
+    expect(calls).toContain('[harnessd] could not re-execute this master (string) — keeping it')
   })
 
   it('never execs onto a node binary or a bundle that is not there: that exec could not be caught', async () => {
@@ -661,20 +661,20 @@ describe('re-executing', () => {
   })
 
   it('carries on as itself, and does not end, when its marker cannot be written (a full disk)', async () => {
-    const full = make({ writeMarker: () => { throw new Error('ENOSPC: no space left on device, write') } })
+    const full = make({ writeMarker: () => { throw Object.assign(new Error('ENOSPC: no space left on device, write'), { code: 'ENOSPC' }) } })
     full.reexec(state(), (outcome) => outcomes.push(outcome))
     stopped[0]()
     await settle({ ok: true, detail: PROBE_ANSWER })
     expect(execs).toEqual([])
     expect(outcomes).toEqual(['kept'])
-    expect(calls.slice(-2)).toEqual(['[harnessd] could not leave the re-execution marker (ENOSPC: no space left on device, write) — keeping this master', 'start children'])
+    expect(calls.slice(-2)).toEqual(['[harnessd] could not leave the re-execution marker (ENOSPC) — keeping this master', 'start children'])
 
     const odd = make({ writeMarker: () => { throw 'read-only' } })
     odd.reexec(state(), (outcome) => outcomes.push(outcome))
     stopped[1]()
     await settle({ ok: true, detail: PROBE_ANSWER })
     expect(outcomes).toEqual(['kept', 'kept'])
-    expect(calls).toContain('[harnessd] could not leave the re-execution marker (read-only) — keeping this master')
+    expect(calls).toContain('[harnessd] could not leave the re-execution marker (string) — keeping this master')
   })
 
   it('does not finish a stopping master until its cancelled probe has actually settled', async () => {
@@ -879,7 +879,7 @@ describe('handing over, where there is no exec (Windows)', () => {
   const NO_CLAIM = '[harnessd] the new master took over but never claimed the pid file — keeping this master'
   const BOUND = 1_000 + HANDOVER_CUTOFF_MS + HANDOVER_CUTOFF_MARGIN_MS
   const HANDED = '[harnessd] handed over to the new master (pid 5151) — leaving'
-  const NOT_YET = '[harnessd] could not take the handover back yet (EBUSY) — trying again'
+  const NOT_YET = '[harnessd] could not take the handover back yet (Error) — trying again'
   const EXIT_3 = '[harnessd] could not start the new master (exit 3) — keeping this master'
   const busy = (times = Infinity) => { let n = 0; return () => { if (n++ < times) throw new Error('EBUSY'); calls.push('take back'); return true } }
 
@@ -970,7 +970,7 @@ describe('handing over, where there is no exec (Windows)', () => {
     calls = []
     // A pid file that cannot be read.
     await run(make({ takeBack: tookIt, readPid: () => { throw new Error('EBUSY') } }).reexec)
-    expect(calls.slice(-3)).toEqual(['[harnessd] the new master took over, and the pid file cannot be read (EBUSY) — leaving', 'unlock', 'leave'])
+    expect(calls.slice(-3)).toEqual(['[harnessd] the new master took over, and the pid file cannot be read (Error) — leaving', 'unlock', 'leave'])
     expect(outcomes).toEqual([])
   })
 
@@ -1005,7 +1005,7 @@ describe('handing over, where there is no exec (Windows)', () => {
     calls = []
     // lib/daemonSpawnLock.ts's acquireSpawnLock rejects when it is busy (`SpawnLockBusyError`).
     await run(make({ lock: () => Promise.reject(new Error('held by pid 77')) }).reexec)
-    expect(calls.slice(-2)).toEqual(['[harnessd] could not take the daemon spawn lock (held by pid 77) — keeping this master', 'start children'])
+    expect(calls.slice(-2)).toEqual(['[harnessd] could not take the daemon spawn lock (Error) — keeping this master', 'start children'])
     calls = []
     await run(make({}, { exists: () => false }).reexec)
     expect(calls.slice(-3)).toEqual(['unlock', '[harnessd] C:\\h\\cli\\0.5.1\\cli.js is not there to hand over to — keeping this master', 'start children'])
@@ -1014,14 +1014,14 @@ describe('handing over, where there is no exec (Windows)', () => {
     expect(calls.slice(-3)).toEqual(['unlock', '[harnessd] the handover token "../tok" is not one a file can be named by — keeping this master', 'start children'])
     calls = []
     await run(make({ claim: () => { throw new Error('EACCES') } }).reexec)
-    expect(calls.slice(-3)).toEqual(['unlock', '[harnessd] could not claim the pid file (EACCES) — keeping this master', 'start children'])
+    expect(calls.slice(-3)).toEqual(['unlock', '[harnessd] could not claim the pid file (Error) — keeping this master', 'start children'])
     calls = []
-    await run(make({}, { writeMarker: () => { throw new Error('ENOSPC') } }).reexec)
+    await run(make({}, { writeMarker: () => { throw Object.assign(new Error('ENOSPC: no space left on device, write'), { code: 'ENOSPC' }) } }).reexec)
     expect(calls.slice(-3)).toEqual(['unlock', '[harnessd] could not leave the re-execution marker (ENOSPC) — keeping this master', 'start children'])
     calls = []
-    // A throw that is not an Error still names itself in the log (the String(error) branch).
+    // A throw that is not an Error still names its kind in the log.
     await run(make({}, { writeMarker: () => { throw 'EROFS' } }).reexec)
-    expect(calls.slice(-3)).toEqual(['unlock', '[harnessd] could not leave the re-execution marker (EROFS) — keeping this master', 'start children'])
+    expect(calls.slice(-3)).toEqual(['unlock', '[harnessd] could not leave the re-execution marker (string) — keeping this master', 'start children'])
     expect(launched).toEqual([])
     expect(outcomes).toEqual(['kept', 'kept', 'kept', 'kept', 'kept', 'kept', 'kept'])
   })
@@ -1031,10 +1031,10 @@ describe('handing over, where there is no exec (Windows)', () => {
     expect(calls.slice(-6)).toEqual(['take back', 'remove marker', 'claim', 'unlock', EXIT_3, 'start children'])
     calls = []
     await run(make({ launch: () => Promise.reject(new Error('spawn EACCES')) }).reexec)
-    expect(calls.slice(-5)).toEqual(['take back', 'remove marker', 'unlock', '[harnessd] the handover failed (spawn EACCES) — keeping this master', 'start children'])
+    expect(calls.slice(-5)).toEqual(['take back', 'remove marker', 'unlock', '[harnessd] the handover failed (Error) — keeping this master', 'start children'])
     calls = []
     await run(make({ sleep: () => Promise.reject(new Error('gone')) }).reexec)
-    expect(calls.slice(-5)).toEqual(['take back', 'remove marker', 'unlock', '[harnessd] the handover failed (gone) — keeping this master', 'start children'])
+    expect(calls.slice(-5)).toEqual(['take back', 'remove marker', 'unlock', '[harnessd] the handover failed (Error) — keeping this master', 'start children'])
     expect(outcomes).toEqual(['kept', 'kept', 'kept'])
   })
 
@@ -1071,12 +1071,12 @@ describe('handing over, where there is no exec (Windows)', () => {
     calls = []; outcomes = []; clock.now = 1_000
     // A sleep that fails is only a pause cut short: still bounded by the clock.
     await run(make({ takeBack: busy(), sleep: async (ms) => { clock.now += ms; throw new Error('gone') } }).reexec)
-    expect(calls.slice(-2)).toEqual(['[harnessd] the handover failed (gone), and no new master can take over any more — keeping this master', 'start children'])
+    expect(calls.slice(-2)).toEqual(['[harnessd] the handover failed (Error), and no new master can take over any more — keeping this master', 'start children'])
   })
 
   it('stays when it cannot claim the pid file back, saying so', async () => {
     await run(make({ launch: async () => 'exit 3', readPid: () => { throw new Error('EBUSY') } }).reexec)
-    expect(calls.slice(-5)).toEqual(['remove marker', '[harnessd] could not claim the pid file back (EBUSY)', 'unlock', EXIT_3, 'start children'])
+    expect(calls.slice(-5)).toEqual(['remove marker', '[harnessd] could not claim the pid file back (Error)', 'unlock', EXIT_3, 'start children'])
     expect(outcomes).toEqual(['kept'])
   })
 

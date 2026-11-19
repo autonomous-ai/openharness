@@ -166,9 +166,10 @@ setInterval(() => {}, 1000);
     DISABLE_HOOK_INSTALL: 'true', ADAPTER_UPDATE_DISABLE: 'true', ANALYTICS_ENABLED: 'false', RECAP_FORCE: 'false',
     RECAP_WITHOUT_DEVICE: 'false', CABLE_DISABLE: 'true', CABLE_FW_DISABLE: 'true',
     TMUX_REAP_INTERVAL_MS: '5000', TERMINAL_RECONCILE_INTERVAL_MS: '5000', TERMINAL_BACKENDS: 'tmux', CLAUDE_PROJECTS_DIR: join(root, 'claude-projects'),
-    // The developer's own HOME: the devices would bring the developer's VS Code extension current with this build's
-    // (cable/vscodeExtensionSetup.ts). They look for VS Code's `code` here alone, where there is none.
-    HARNESS_VSCODE_BIN: join(root, 'no-vscode', 'code') }
+    // The developer's own HOME: the devices would bring the developer's VS Code and Cursor extension current with this
+    // build's (cable/vscodeExtensionSetup.ts). They look for VS Code's `code` and Cursor's `cursor` here alone, where
+    // there is none.
+    HARNESS_VSCODE_BIN: join(root, 'no-vscode', 'code'), HARNESS_CURSOR_BIN: join(root, 'no-cursor', 'cursor') }
   const dshSource = join(root, 'harness-source')
   await mkdir(join(dshSource, 'template'), { recursive: true })
   await mkdir(join(dshSource, 'skills/example'), { recursive: true })

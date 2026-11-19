@@ -90,6 +90,16 @@ describe('commandAvailableInInteractiveShell', () => {
 })
 
 describe('commandOutputInInteractiveShell', () => {
+  it('names a refused Windows launch without logging its path or arguments', async () => {
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      Object.defineProperty(process, 'platform', { ...platform, value: 'win32' })
+      expect(await commandOutputInInteractiveShell('openclaw', 'C:\\private\\secret.cmd', ['private&argument'])).toBeNull()
+      expect(warn).toHaveBeenCalledWith('[engine] openclaw not run · WindowsBatchLaunchRefused')
+    } finally { Object.defineProperty(process, 'platform', platform); warn.mockRestore() }
+  })
+
   it('returns both streams and the exit status from the shell a launch uses, and nothing for a hung command', async () => {
     const binDir = mkdtempSync(join(tmpdir(), 'harness-engine-output-'))
     dirs.push(binDir)

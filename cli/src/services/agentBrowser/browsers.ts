@@ -5,6 +5,7 @@
  * agent runs in order; different agents run side by side, and a move holds both agents' queues.
  */
 import { randomUUID } from 'node:crypto'
+import { errorKind } from '../../lib/log.js'
 import { browserLimit, type Containers } from './containers.js'
 import { PodmanError, type Podman } from './podman.js'
 import { defaultSettings, settingsHash, type BrowserHost, type BrowserSettings } from './settings.js'
@@ -37,8 +38,7 @@ const BUILDING: BrowserState = { state: 'setup', step: 'building' }
 const failed = (error: string): BrowserState => ({ state: 'failed', error })
 
 /** A failed or timed-out podman call (`podman_failed`), or anything unnamed, is Podman not running. */
-function failedState(error: unknown): string {
-  const state = error instanceof PodmanError ? error.state : ''
+function failedState(state: string): string {
   return FAILED_STATES.has(state) ? state : 'podman_down'
 }
 
@@ -188,7 +188,7 @@ export class Browsers {
         this.deps.closeViewers(from)
         // The volume stays: it is what moves.
         await this.deps.containers.stop(saved.browsers[from]!.profile ?? from).catch((error: unknown) => {
-          this.deps.log(`agent browser ${from}: the browser that moved was not stopped: ${(error as Error).message}`)
+          this.deps.log(`agent browser ${from}: the browser that moved was not stopped · ${errorKind(error)}`)
         })
       }
       let moved = false
@@ -223,7 +223,7 @@ export class Browsers {
     try {
       this.deps.state.update(s => { if (!s.deleting.includes(agentId)) s.deleting.push(agentId) })
     } catch (error) {
-      this.deps.log(`agent browser ${agentId}: not deleted: ${(error as Error).message}`)
+      this.deps.log(`agent browser ${agentId}: not deleted · ${errorKind(error)}`)
       return
     }
     await this.queue(agentId, () => this.remove(agentId))
@@ -281,7 +281,7 @@ export class Browsers {
     try {
       running = await this.deps.containers.running()
     } catch (error) {
-      this.deps.log(`agent browser: could not list running browsers: ${(error as Error).message}`)
+      this.deps.log(`agent browser: could not list running browsers · ${errorKind(error)}`)
       return
     }
     for (const agentId of running) {
@@ -297,7 +297,7 @@ export class Browsers {
     try {
       running = new Set(await this.deps.containers.running())
     } catch (error) {
-      if (!this.listingFailed) this.deps.log(`agent browser: could not list running browsers: ${(error as Error).message}`)
+      if (!this.listingFailed) this.deps.log(`agent browser: could not list running browsers · ${errorKind(error)}`)
       this.listingFailed = true
       return
     }
@@ -315,7 +315,7 @@ export class Browsers {
       saved = this.deps.state.read()
     } catch (error) {
       // Every browser shows state_unreadable as it starts, until a person fixes or removes the file.
-      this.deps.log(`agent browser: ${(error as Error).message}; nothing is removed or started`)
+      this.deps.log(`agent browser: the state file cannot be read; nothing is removed or started · ${errorKind(error)}`)
       return
     }
     for (const agentId of saved.deleting) await this.queue(agentId, () => this.remove(agentId))
@@ -323,7 +323,7 @@ export class Browsers {
       const swept = await this.deps.containers.sweep(agentId => Object.hasOwn(this.deps.state.read().browsers, agentId))
       if (swept > 0) this.deps.log(`agent browser: removed ${swept} containers this daemon no longer lists`)
     } catch (error) {
-      this.deps.log(`agent browser: could not sweep containers: ${(error as Error).message}`)
+      this.deps.log(`agent browser: could not sweep containers · ${errorKind(error)}`)
     }
     // An install cut off is never run again by itself: it would raise the password dialog nobody asked for.
     if (saved.setup?.step === 'installing') {
@@ -338,9 +338,9 @@ export class Browsers {
     try {
       await this.deps.setup.run(this.deps.state.read().setup ?? { step: null })
     } catch (error) {
-      const state = failedState(error)
+      const state = failedState(error instanceof PodmanError ? error.state : '')
       this.deps.measure('agent_browser_setup_failed')
-      this.deps.log(`agent browser: setup failed (${state}): ${(error as Error).message}`)
+      this.deps.log(`agent browser: setup failed · ${errorKind(error)}`)
       this.setupShown = failed(state)
       for (const agentId of this.waiting) this.fail(agentId, state)
       return
@@ -412,15 +412,15 @@ export class Browsers {
       }
       // Left up, it would run unseen and count against the limit.
       await this.deps.containers.stop(profile).catch((error: unknown) => {
-        this.deps.log(`agent browser ${agentId}: the browser that was not ready was not removed: ${(error as Error).message}`)
+        this.deps.log(`agent browser ${agentId}: the browser that was not ready was not removed · ${errorKind(error)}`)
       })
       throw new PodmanError('browser_stopped', `the browser was not ready within ${READY_TRIES} s`)
     } catch (error) {
       if (!current()) return
       this.deps.measure('agent_browser_start_failed')
-      const state = failedState(error)
+      const state = failedState(error instanceof PodmanError ? error.state : '')
       if (state === 'needs_setup') return this.needsSetup(agentId)
-      this.fail(agentId, state, (error as Error).message)
+      this.fail(agentId, state, errorKind(error))
     } finally {
       // Ready, it runs and Podman lists it; anything else, it holds no slot.
       if (claimed) this.starting.delete(agentId)
@@ -478,7 +478,10 @@ export class Browsers {
   private restartLater(agentId: string, code: number): void {
     const restart = this.restarts.get(agentId) ?? { count: 0, readyAt: null }
     if (restart.readyAt !== null && this.now() - restart.readyAt >= STEADY_MS) restart.count = 0
-    if (restart.count >= MAX_RESTARTS) return this.fail(agentId, 'browser_stopped', `it exited ${MAX_RESTARTS + 1} times in a row (last ${code})`)
+    if (restart.count >= MAX_RESTARTS) {
+      this.deps.log(`agent browser ${agentId}: the browser exited (${code}) ${MAX_RESTARTS + 1} times in a row`)
+      return this.fail(agentId, 'browser_stopped')
+    }
     const delay = FIRST_RESTART_MS * 2 ** restart.count
     restart.count += 1
     restart.readyAt = null
@@ -516,10 +519,11 @@ export class Browsers {
     return this.generations.get(agentId) ?? 0
   }
 
-  private fail(agentId: string, error: string, why?: string): void {
+  /** `kind`, a caught error's, is said in place of the state: a PodmanError's kind already names its state. */
+  private fail(agentId: string, error: string, kind?: string): void {
     this.set(agentId, failed(error))
     this.deps.measure(`agent_browser_failed_${error}`)
-    this.deps.log(`agent browser ${agentId}: failed (${error})${why ? `: ${why}` : ''}`)
+    this.deps.log(`agent browser ${agentId}: failed ${kind ? `· ${kind}` : `(${error})`}`)
   }
 
   private set(agentId: string, next: BrowserState): void {
@@ -531,7 +535,7 @@ export class Browsers {
 
   private queue(agentId: string, work: () => Promise<void>): Promise<void> {
     return this.inQueues([agentId], work).catch((error: unknown) => {
-      this.deps.log(`agent browser ${agentId}: ${(error as Error).message}`)
+      this.deps.log(`agent browser ${agentId}: its queued work failed · ${errorKind(error)}`)
     })
   }
 

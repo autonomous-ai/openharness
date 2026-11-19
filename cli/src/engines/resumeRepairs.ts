@@ -2,6 +2,7 @@
 import { closeSync, constants, fsyncSync, lstatSync, mkdirSync, openSync, rmSync, rmdirSync, writeFileSync } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
 import { homeRoots } from '../lib/engineHomes.js'
+import { errorKind } from '../lib/log.js'
 import { readPrivateStateFile, secureStateDirectory, syncStateDirectory } from '../lib/secureState.js'
 import { launchContract } from './launches.js'
 import { NativeFiles } from './kit/nativeFiles.js'
@@ -35,8 +36,8 @@ function receiptValid(value: unknown): value is Receipt {
     && value.route.some(fact => fact.path === dirname(stage))
 }
 
-export function createResumeRepairWorker(deps: { directory: string; log?: (name: string) => void; ownerAlive?: (pid: number) => boolean }) {
-  const log = deps.log ?? ((name: string) => console.warn(`[resume] ${name}`))
+export function createResumeRepairWorker(deps: { directory: string; log?: (line: string) => void; ownerAlive?: (pid: number) => boolean }) {
+  const log = deps.log ?? ((line: string) => console.warn(`[resume] ${line}`))
   const slots: Array<Receipt | 'invalid' | null> = [null, null]
   const recovering = new Set<number>()
   const timers = new Map<string, ReturnType<typeof setTimeout>>()
@@ -87,7 +88,7 @@ export function createResumeRepairWorker(deps: { directory: string; log?: (name:
       slots[index] = null
       recovering.delete(index)
       return true
-    } catch { log('RESUME_REPAIR_CLEANUP_FAILED'); return false }
+    } catch (error) { log(`RESUME_REPAIR_CLEANUP_FAILED · ${errorKind(error)}`); return false }
   }
   for (let index = 0; index < slots.length; index++) {
     try {

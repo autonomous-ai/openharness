@@ -210,7 +210,7 @@ describe('Browsers', () => {
     expect(shown(r, 'a1')).toBe('failed/podman_install_failed')
     expect(shown(r, 'a2')).toBe('failed/podman_install_failed')
     expect(r.measured).toContain('agent_browser_setup_failed')
-    expect(r.logged.join('\n')).toContain('User canceled')
+    expect(r.logged).toContain('agent browser: setup failed · PodmanError PODMAN_INSTALL_FAILED')
     r.setup.run.mockRejectedValueOnce(new PodmanError('podman_manual', 'pkexec is not installed'))
     await r.browsers.retry('a1')
     expect(shown(r, 'a1')).toBe('failed/podman_manual')
@@ -218,6 +218,16 @@ describe('Browsers', () => {
     expect(r.setup.run).toHaveBeenCalledTimes(3)
     expect(shown(r, 'a1')).toBe('ready')
     expect(shown(r, 'a2')).toBe('ready')
+  })
+
+  it('setup that fails with no Podman state of its own is Podman not running, logged by its kind', async () => {
+    const r = rig()
+    r.availability.value = { state: 'needs_setup' }
+    await r.browsers.start('a1')
+    r.setup.run.mockRejectedValueOnce(new Error('spawn EACCES'))
+    await r.browsers.setUp()
+    expect(shown(r, 'a1')).toBe('failed/podman_down')
+    expect(r.logged).toContain('agent browser: setup failed · Error')
   })
 
   it('start starts a stopped machine first', async () => {
@@ -288,24 +298,25 @@ describe('Browsers', () => {
   })
 
   it('failures are named', async () => {
-    const cases: Array<[string, (r: ReturnType<typeof rig>) => void]> = [
-      ['podman_old', r => { r.availability.value = { state: 'podman_old' } }],
-      ['podman_memory', r => { r.availability.value = { state: 'podman_memory' } }],
-      ['podman_down', r => { r.podman.available.mockRejectedValue(new PodmanError('podman_down', 'Podman is not running')) }],
-      ['podman_down', r => { r.availability.value = { state: 'stopped' }; r.podman.startMachine.mockRejectedValue(new PodmanError('podman_down', 'machine did not start')) }],
+    // The state the panel shows, and the kind the log line names in its place.
+    const cases: Array<[string, string, (r: ReturnType<typeof rig>) => void]> = [
+      ['podman_old', 'PodmanError PODMAN_OLD', r => { r.availability.value = { state: 'podman_old' } }],
+      ['podman_memory', 'PodmanError PODMAN_MEMORY', r => { r.availability.value = { state: 'podman_memory' } }],
+      ['podman_down', 'PodmanError PODMAN_DOWN', r => { r.podman.available.mockRejectedValue(new PodmanError('podman_down', 'Podman is not running')) }],
+      ['podman_down', 'PodmanError PODMAN_DOWN', r => { r.availability.value = { state: 'stopped' }; r.podman.startMachine.mockRejectedValue(new PodmanError('podman_down', 'machine did not start')) }],
       // A podman call that failed or timed out is Podman not running, the failure the panel has copy for.
-      ['podman_down', r => { r.containers.start.mockRejectedValue(new PodmanError('podman_failed', 'podman create timed out after 30000 ms')) }],
-      ['podman_down', r => { r.containers.start.mockRejectedValue(new Error('spawn EACCES')) }],
-      ['image_failed', r => { r.image.mockRejectedValue(new PodmanError('image_failed', 'E: Unable to locate package')) }],
-      ['browser_limit', r => { r.podman.memoryBytes.mockResolvedValue(3 * GiB); r.running.add('other') }],
+      ['podman_down', 'PodmanError PODMAN_FAILED', r => { r.containers.start.mockRejectedValue(new PodmanError('podman_failed', 'podman create timed out after 30000 ms')) }],
+      ['podman_down', 'Error', r => { r.containers.start.mockRejectedValue(new Error('spawn EACCES')) }],
+      ['image_failed', 'PodmanError IMAGE_FAILED', r => { r.image.mockRejectedValue(new PodmanError('image_failed', 'E: Unable to locate package')) }],
+      ['browser_limit', 'PodmanError BROWSER_LIMIT', r => { r.podman.memoryBytes.mockResolvedValue(3 * GiB); r.running.add('other') }],
     ]
-    for (const [state, arrange] of cases) {
+    for (const [state, kind, arrange] of cases) {
       const r = rig()
       arrange(r)
       await r.browsers.start('a1')
       expect(shown(r, 'a1')).toBe(`failed/${state}`)
       expect(r.measured).toEqual(['agent_browser_start_failed', `agent_browser_failed_${state}`])
-      expect(r.logged).toEqual([expect.stringContaining(state)])
+      expect(r.logged).toEqual([`agent browser a1: failed · ${kind}`])
     }
   })
 
@@ -379,7 +390,10 @@ describe('Browsers', () => {
     await vi.advanceTimersByTimeAsync(120_000)
     await again
     expect(shown(r, 'a2')).toBe('failed/browser_stopped')
-    expect(r.logged.join('\n')).toContain('podman rm timed out')
+    expect(r.logged.slice(-2)).toEqual([
+      'agent browser a2: the browser that was not ready was not removed · PodmanError PODMAN_FAILED',
+      'agent browser a2: failed · PodmanError BROWSER_STOPPED',
+    ])
   })
 
   it('a start whose listing Podman answered says so, for the event stream to try again', async () => {
@@ -437,6 +451,7 @@ describe('Browsers', () => {
     r.crash('a1', 137)
     await vi.advanceTimersByTimeAsync(60_000)
     expect(shown(r, 'a1')).toBe('failed/browser_stopped')
+    expect(r.logged.slice(-2)).toEqual(['agent browser a1: the browser exited (137) 4 times in a row', 'agent browser a1: failed (browser_stopped)'])
     expect(r.containers.start).toHaveBeenCalledTimes(4)
     // Retry starts over.
     await r.browsers.retry('a1')
@@ -612,7 +627,7 @@ describe('Browsers', () => {
     expect(recorded).toEqual(['a1'])
     expect(r.closed).toEqual(['a1'])
     expect(r.state.read().deleting).toEqual(['a1'])
-    expect(r.logged.join('\n')).toContain('timed out')
+    expect(r.logged).toContain('agent browser a1: its queued work failed · PodmanError PODMAN_FAILED')
     r.containers.remove.mockRejectedValueOnce(new PodmanError('podman_failed', 'podman rm timed out after 30000 ms'))
     await r.browsers.delete('a1')
     expect(r.state.read().deleting).toEqual(['a1'])
@@ -646,7 +661,7 @@ describe('Browsers', () => {
     r.containers.running.mockRejectedValueOnce(new PodmanError('podman_failed', 'podman ps timed out after 30000 ms'))
     await r.browsers.stopAllBut(() => false)
     expect(r.containers.stop).toHaveBeenCalledTimes(1)
-    expect(r.logged.at(-1)).toBe('agent browser: could not list running browsers: podman ps timed out after 30000 ms')
+    expect(r.logged.at(-1)).toBe('agent browser: could not list running browsers · PodmanError PODMAN_FAILED')
   })
 
   it('startup keeps profiles until an explicit purge, and sweeps only unlisted containers', async () => {
@@ -680,7 +695,7 @@ describe('Browsers', () => {
     const r = rig()
     r.containers.sweep.mockRejectedValue(new PodmanError('podman_failed', 'podman ps failed: machine is not running'))
     await r.browsers.resume()
-    expect(r.logged).toEqual([expect.stringContaining('machine is not running')])
+    expect(r.logged).toEqual(['agent browser: could not sweep containers · PodmanError PODMAN_FAILED'])
   })
 
   it('an unreadable state file removes nothing and is named', async () => {
@@ -697,7 +712,7 @@ describe('Browsers', () => {
     }
     expect(readFileSync(path, 'utf8')).toBe('{"browsers": {')
     expect(r.measured).toContain('agent_browser_failed_state_unreadable')
-    expect(r.logged.length).toBeGreaterThan(0)
+    expect(r.logged).toContain('agent browser: the state file cannot be read; nothing is removed or started · PodmanError STATE_UNREADABLE')
   })
 
   it('saveSettings with a changed hash restarts the browser and keeps the volume; a human-input-only change does not', async () => {
@@ -776,14 +791,14 @@ describe('Browsers', () => {
     expect(r.containers.start).toHaveBeenCalledTimes(3)
     r.containers.running.mockRejectedValueOnce(new PodmanError('podman_failed', 'podman ps timed out after 30000 ms'))
     await r.browsers.reconcile()
-    expect(r.logged.at(-1)).toContain('timed out')
+    expect(r.logged.at(-1)).toBe('agent browser: could not list running browsers · PodmanError PODMAN_FAILED')
   })
 
   it('a listing that keeps failing is logged once, until one works again', async () => {
     const r = rig()
     r.containers.running.mockRejectedValue(new PodmanError('podman_failed', 'podman ps failed: machine is not running'))
     for (let i = 0; i < 3; i++) await r.browsers.reconcile()
-    expect(r.logged).toEqual([expect.stringContaining('machine is not running')])
+    expect(r.logged).toEqual(['agent browser: could not list running browsers · PodmanError PODMAN_FAILED'])
     r.containers.running.mockResolvedValueOnce([])
     await r.browsers.reconcile()
     await r.browsers.reconcile()
@@ -880,7 +895,7 @@ describe('Browsers, named by a profile', () => {
     await r.browsers.start('a1')
     r.containers.stop.mockRejectedValueOnce(new PodmanError('podman_failed', 'podman rm timed out after 30000 ms'))
     expect(await r.browsers.move('a1', 'b1')).toBe(true)
-    expect(r.logged).toEqual([expect.stringMatching(/^agent browser a1: .*podman rm timed out/), 'agent browser b1: took the browser of a1'])
+    expect(r.logged).toEqual(['agent browser a1: the browser that moved was not stopped · PodmanError PODMAN_FAILED', 'agent browser b1: took the browser of a1'])
     expect(Object.keys(r.state.read().browsers)).toEqual(['b1'])
     expect(shown(r, 'a1')).toBe('none')
   })

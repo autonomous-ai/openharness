@@ -186,14 +186,14 @@ describe('the probe a re-executing master asks a bundle', () => {
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})
     try {
       expect(probeMaster({ env: { [RESUME_ENV]: '{"restarts":"many"}' }, execArgv: [], version: '9.9.9' })).toBe(1)
-      expect(log).toHaveBeenCalledWith('harnessd-probe failed: the state it would be handed is not one this master can read')
+      expect(log).toHaveBeenCalledWith('harnessd-probe failed: Error')
     } finally { log.mockRestore() }
-    // A failure that is not an Error is reported all the same: here, the answer itself could not be said.
+    // A failure that is not an Error names its kind all the same: here, the answer itself could not be said.
     const said: string[] = []
     let first = true
     const say = (line: string) => { if (first) { first = false; throw 'stdout closed' } said.push(line) }
     expect(probeMaster({ env: { HARNESSD_SERVICES: 'search' }, execArgv: [], version: '' }, say)).toBe(1)
-    expect(said).toEqual(['harnessd-probe failed: stdout closed'])
+    expect(said).toEqual(['harnessd-probe failed: string'])
   })
 })
 
@@ -435,7 +435,7 @@ describe('runMaster', { timeout: 60_000 }, () => {
       await until('the restarted core to bind', () => supervisor.status().state === 'running' && ups.length === 2)
       expect(ups).toEqual([process.execPath, process.execPath])
       expect(logged.mock.calls.map(([line]) => String(line)).filter((line) => line.includes('after its core came up'))).toEqual([
-        expect.stringMatching(/\[harnessd\] what the master does after its core came up failed: the launcher is read-only$/)])
+        expect.stringMatching(/\[harnessd\] what the master does after its core came up failed: Error$/)])
       signals.get('SIGTERM')!()
       await until('the master to finish', () => exits.length > 0)
       expect(exits).toEqual([0])
@@ -463,7 +463,7 @@ describe('runMaster', { timeout: 60_000 }, () => {
     })
     try {
       await until('the core to be running', () => supervisor.status().state === 'running')
-      expect(log.mock.calls.map((call) => String(call[0]))).toContainEqual(expect.stringContaining('[harnessd] could not write the pid file: ENOENT'))
+      expect(log.mock.calls.map((call) => String(call[0]))).toContainEqual(expect.stringMatching(/\[harnessd\] could not write the pid file: ENOENT$/))
       signals.get('SIGTERM')!()
       await until('the master to finish', () => exits.length > 0)
       expect(exits).toEqual([0])
@@ -1106,7 +1106,7 @@ describe('runMaster', { timeout: 60_000 }, () => {
           expect(existsSync(file), why).toBe(false)
         }
         expect(lines.filter((line) => line.endsWith('[harnessd] the master that started this one (pid 999999) stopped waiting for it — leaving'))).toHaveLength(4)
-        expect(lines.some((line) => line.includes('[harnessd] could not take over from pid 999999 (ENOENT'))).toBe(true)
+        expect(lines.some((line) => line.endsWith('[harnessd] could not take over from pid 999999 (ENOENT) — leaving'))).toBe(true)
         // Handed over to, with no marker file to take over at all.
         const alone: number[] = []
         runMaster({

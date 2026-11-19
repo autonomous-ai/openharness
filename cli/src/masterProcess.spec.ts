@@ -10,6 +10,7 @@ import { NODE_MIGRATION_FILE, failedNode, nodeMigration } from './lib/nodeMigrat
 import { launchDetached } from './lib/windows/launcher.js'
 import { PTY_PROTOCOL } from './lib/ptyHost/protocol.js'
 import type { WindowsMasterDeps } from './masterProcess.js'
+import { writeExecutable } from './testing/executableFixture.js'
 
 const runMaster = vi.hoisted(() => vi.fn((_config: Record<string, unknown>) => 'supervisor'))
 vi.mock('./harnessd/master.js', async (real) => ({ ...await real<object>(), runMaster }))
@@ -177,10 +178,10 @@ describe('a master started on cli.js', () => {
     const failing = deps({ execve: () => { throw new Error('E2BIG') } })
     startMasterFromBundle('/cli/cli.js', failing.given)
     expect(failing.calls.starts).toEqual([{ scriptPath: '/cli/cli.js', packaged: true, serviceScriptPath: '/data/lean/harnessd-aaaa.mjs', leanFingerprint: PRINT }])
-    expect(failing.calls.logs[0]).toContain('could not re-execute on /data/lean/harnessd-aaaa.mjs (E2BIG)')
+    expect(failing.calls.logs).toEqual(['[harnessd] the master could not re-execute on the lean bundle (Error): it runs from cli.js, the core and the services from the lean bundle'])
     const thrown = deps({ execve: () => { throw 'refused' } })
     startMasterFromBundle('/cli/cli.js', thrown.given)
-    expect(thrown.calls.logs[0]).toContain('(refused)')
+    expect(thrown.calls.logs[0]).toContain('(string)')
   })
 
   it('never execs onto a node binary or a lean bundle that is not there: that exec could not be caught', () => {
@@ -206,8 +207,9 @@ describe('a master started on cli.js', () => {
   it('runs everything from cli.js when the lean bundle is not there to use, and says why', () => {
     const cases: Array<[Partial<Deps>, string]> = [
       [{ probe: () => ({ ok: false, detail: 'SyntaxError' }) }, 'did not answer its probe (SyntaxError)'],
-      [{ write: () => { throw new Error('ENOSPC') } }, 'could not be written out (ENOSPC)'],
-      [{ read: () => { throw 'EACCES' } }, 'could not be written out (EACCES)'],
+      [{ write: () => { throw Object.assign(new Error('ENOSPC: no space left on device, write'), { code: 'ENOSPC' }) } },
+        '[harnessd] the lean bundle could not be written out (ENOSPC): the master, the core and the services run from cli.js'],
+      [{ read: () => { throw 'EACCES' } }, 'could not be written out (string)'],
     ]
     for (const [over, said] of cases) {
       const { given, calls } = deps(over)
@@ -342,7 +344,7 @@ describe('the master on Windows', () => {
       expect(config.stopByMessage).toBe(true)
       expect(lost.seen.redirected).toEqual([])
       expect(lost.seen.fatal).toEqual([])
-      expect(error).toHaveBeenCalledWith(expect.stringContaining('could not open the daemon log (EACCES: permission denied)'))
+      expect(error).toHaveBeenCalledWith(expect.stringContaining('could not open the daemon log (EACCES)'))
     } finally { error.mockRestore() }
   })
 
@@ -419,8 +421,10 @@ describe('the master on Windows', () => {
       listeners.get('unhandledRejection')!('a reason that is no Error')
       closeSync(fd)
       const text = readFileSync(file, 'utf8')
-      expect(text).toMatch(/^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d\.\d{3} \[harnessd\] the master stopped on an uncaught error: Error: boom\n    at /)
-      expect(text).toContain('[harnessd] the master stopped on an unhandled rejection: a reason that is no Error\n')
+      // Its kind, never its stack: Export logs sends the log off the machine.
+      expect(text).toMatch(/^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d\.\d{3} \[harnessd\] the master stopped on an uncaught error: Error\n/)
+      expect(text).toContain('[harnessd] the master stopped on an unhandled rejection: string\n')
+      expect(text).not.toContain('boom')
       expect(exits).toEqual([1, 1])
       // A log it can no longer write costs the line, never the exit.
       listeners.get('uncaughtException')!(new Error('again'))
@@ -618,7 +622,7 @@ describe('starting the master', () => {
       // A paired host whose CLI build never went in: it says it speaks a protocol above this build's.
       mkdirSync(join(ptyRoot, '0.11.0'), { recursive: true })
       const host = join(ptyRoot, '0.11.0', 'harness-pty.exe')
-      writeFileSync(host, `#!/bin/sh\necho '{"version":"0.11.0","protocol":${PTY_PROTOCOL + 1},"features":["seed"]}'\n`, { mode: 0o755 })
+      writeExecutable(host, `#!/bin/sh\necho '{"version":"0.11.0","protocol":${PTY_PROTOCOL + 1},"features":["seed"]}'\n`)
       writeFileSync(join(ptyRoot, 'current-pty'), '0.11.0')
       writeFileSync(join(ptyRoot, 'pty-pending.json'), JSON.stringify({ version: '0.11.0', previous: '0.10.0' }))
       runMaster.mockClear()

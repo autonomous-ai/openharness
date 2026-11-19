@@ -4,6 +4,7 @@ import { mkdir, realpath, rename, rm, stat } from 'node:fs/promises'
 import { isAbsolute, join } from 'node:path'
 import { z } from 'zod'
 import type { AgentEngine } from '../engines/types.js'
+import { errorKind } from '../lib/log.js'
 import { readPrivateStateFile, secureStateDirectory } from '../lib/secureState.js'
 import type { SessionInputDelivery } from '../lib/sessionInput.js'
 import { materializeInputs, snapshotArtifacts } from './artifacts.js'
@@ -88,7 +89,7 @@ export class OrchestratorService {
         this.runs.set(run.id, run)
       } catch (error) {
         // Keep corrupt files untouched and refuse a new start with the same id.
-        console.warn(`[orchestrator] could not read ${name}: ${error instanceof Error ? error.message : 'invalid state'}`)
+        console.warn(`[orchestrator] could not read ${name}: ${errorKind(error)}`)
       }
     }
     this.loaded = true

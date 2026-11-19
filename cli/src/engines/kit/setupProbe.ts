@@ -1,4 +1,5 @@
 /** A probe's deadline and cleanup survive its setup process being killed or frozen. No public command route. */
+import { errorKind } from '../../lib/log.js'
 import { ChildProcess, spawn, type execFile, type ExecFileException, type ExecFileOptions } from 'node:child_process'
 import { managedNodePath } from '../../lib/nodeRuntime.js'
 import { ownProcessGroup } from '../../lib/windows/noWindow.js'
@@ -93,7 +94,7 @@ export function createSetupProbeExecutor() {
     warmed = true
     // One speculative keeper after first use, within the same admission; its own timer expires it unused.
     if (children.size < 8) {
-      try { spare = start() } catch { console.warn('[engine-setup] SETUP_PROBE_WARMUP_UNAVAILABLE') }
+      try { spare = start() } catch (caughtFailure) { console.warn(('[engine-setup] SETUP_PROBE_WARMUP_UNAVAILABLE') + ' · ' + errorKind(caughtFailure)) }
     }
   }
   const execute = (captured: number, file: string, args: string[], options: ExecFileOptions, callback: Callback): ChildProcess => {

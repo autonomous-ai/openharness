@@ -43,6 +43,7 @@ import {
 import { gridModelsPayload } from '../lib/gridModelsPayload.js'
 import { resolveGridTarget } from '../lib/gridTarget.js'
 import { LocalModels } from '../lib/localModels.js'
+import { errorKind } from '../lib/log.js'
 import { nvidiaComputeApps } from '../lib/gpuProcesses.js'
 import type { NewAgentModel } from '../lib/newAgentModel.js'
 import type { RuntimeModelOption } from '../lib/runtimeProfile.js'
@@ -308,8 +309,8 @@ function modelsRequests(core: CoreApi, grid: GridSetUp, privateGridName: () => P
       if (payload.setup && await setUpWithin(() => grid.ensure({ ownGrid: true }), 8_000) === 'pending') {
         console.warn('[models] LAUNCH_SETUP_PENDING')
       }
-      const account = dshAccountIn({ privateGrid: await privateGridName().catch(() => {
-        console.warn('[models] LAUNCH_CONTEXT_UNAVAILABLE')
+      const account = dshAccountIn({ privateGrid: await privateGridName().catch((caughtFailure) => {
+        console.warn(('[models] LAUNCH_CONTEXT_UNAVAILABLE') + ' · ' + errorKind(caughtFailure))
         return null
       }) })
       if (!account) { console.warn('[models] LAUNCH_CONTEXT_INVALID'); return { error: 'CONTEXT_INVALID' } }
@@ -379,7 +380,7 @@ function modelsRequests(core: CoreApi, grid: GridSetUp, privateGridName: () => P
         }
       } catch (error) {
         // Logged and answered as the socket did while this was a case of its own.
-        console.error('[backend] dispatch models_list failed:', error)
+        console.error('[backend] dispatch models_list failed:', errorKind(error))
         return { error: 'INTERNAL' }
       }
     },

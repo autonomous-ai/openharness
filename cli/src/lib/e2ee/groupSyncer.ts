@@ -20,6 +20,7 @@ import type { MachinePeerStore } from './machinePeers.js'
 import type { LinkedPeer } from './manager.js'
 import type { PairedClient } from './store.js'
 import { parseMember, parseRoster, rosterDigest, type GroupMember, type MergeResult, type Roster, type TrustGroupStore } from './trustGroup.js'
+import { errorKind } from '../log.js'
 
 /** The device key log's side of a `group_sync` (deviceLogSyncer.ts): its head rides every exchange, so
  *  two devices shown different logs find out, and one that is behind is handed what it is missing. */
@@ -366,7 +367,7 @@ export class GroupSyncer {
         }
         this.deps.trust({ pub: m.pub, machineId: m.machineId, kind: m.kind, label: m.label })
       } catch (err) {
-        this.deps.log?.(`[group] could not apply ${m.pub.slice(0, 8)}: ${err instanceof Error ? err.message : String(err)}`)
+        this.deps.log?.(`[group] could not apply ${m.pub.slice(0, 8)}: ${errorKind(err)}`)
       }
     }
     for (const m of result.dropped) {
@@ -384,7 +385,7 @@ export class GroupSyncer {
       }
       this.deps.untrust(pub)
     } catch (err) {
-      this.deps.log?.(`[group] could not remove ${pub.slice(0, 8)}: ${err instanceof Error ? err.message : String(err)}`)
+      this.deps.log?.(`[group] could not remove ${pub.slice(0, 8)}: ${errorKind(err)}`)
     }
   }
 }

@@ -29,7 +29,7 @@ import { encryptRpcResult, rpcResultType } from '../lib/e2ee/applicationFrames.j
 import { b64d, fingerprint, isWrapped, type WrappedPayload } from '../lib/e2ee/core.js'
 import { E2eeManager, type LinkedPeer, type PairResult } from '../lib/e2ee/manager.js'
 import { MachinePeerStore } from '../lib/e2ee/machinePeers.js'
-import { logFrame, sid } from '../lib/log.js'
+import { errorKind, logFrame, sid } from '../lib/log.js'
 import { BACKEND_ONLY_DOWN_TYPES, GATEWAY_REQUEST_TYPES, isLocalClientId, logSafeType } from '../lib/relayFrames.js'
 import { createHarnessWatches } from './harnessWatch.js'
 import { encodeTerminalHop, TerminalBinaryKind, TerminalHopDirection, type TerminalBinaryClear } from '../lib/terminalBinary.js'
@@ -333,7 +333,7 @@ export class RelayGateway implements GatewayPort {
       const at = Date.now()
       if (at - this.usageFailureSaidAt < 60_000) return
       this.usageFailureSaidAt = at
-      console.warn(`[usage] a measured request could not be counted: ${error instanceof Error ? error.message : String(error)}`)
+      console.warn(`[usage] a measured request could not be counted: ${errorKind(error)}`)
     }
   }
   private usageFailureSaidAt = -Infinity
@@ -571,7 +571,7 @@ export class RelayGateway implements GatewayPort {
       .then(() => this.requestGate)
       .then(() => this.dispatchDown(frame, connId, transport))
       .catch((err) => {
-        console.error('[backend] down-frame dispatch failed:', err instanceof Error ? err.message : err)
+        console.error('[backend] down-frame dispatch failed:', errorKind(err))
       })
       .finally(() => {
         if (chains.get(key) === next) chains.delete(key)
@@ -598,10 +598,10 @@ export class RelayGateway implements GatewayPort {
         console.log(`[typing] in conn=${sid(connId)} stream=${sid(clear.streamId)} ${clear.kind === TerminalBinaryKind.paste ? 'paste' : `seq=${clear.seq}`} ${clear.bytes.length}B via=${via}`)
       }
       void Promise.resolve(this.core.binary(connId, clear, encodeTerminalLocal(clear) ?? undefined)).catch((err) => {
-        console.error('[backend] binary terminal dispatch failed:', err instanceof Error ? err.message : err)
+        console.error('[backend] binary terminal dispatch failed:', errorKind(err))
       })
     } catch (err) {
-      console.error('[backend] binary terminal dispatch failed:', err instanceof Error ? err.message : err)
+      console.error('[backend] binary terminal dispatch failed:', errorKind(err))
     }
   }
 
@@ -917,7 +917,7 @@ export class RelayGateway implements GatewayPort {
           return
       }
     } catch (err) {
-      console.error(`[backend] dispatch ${type} failed:`, err)
+      console.error(`[backend] dispatch ${type} failed:`, errorKind(err))
       if (payload.requestId !== undefined) this.reply(connId, type, payload.requestId, { error: 'INTERNAL' })
     }
   }

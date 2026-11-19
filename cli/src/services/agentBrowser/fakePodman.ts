@@ -4,12 +4,16 @@
  */
 import type * as ChildProcesses from 'node:child_process'
 import type { ChildProcess } from 'node:child_process'
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { wholeLines } from '../../testing/wholeLines.js'
 
 /** Each fake's script path: whether it was removed, and its children still running. */
 const fakes = new Map<string, { removed: boolean; running: Set<ChildProcess> }>()
+// The real spawnSync, from trackingFakes: this module is loaded from the specs' node:child_process mock, so importing
+// that module (or testing/executableFixture.ts) here never resolves.
+let realSpawnSync: typeof ChildProcesses.spawnSync | undefined
 
 /**
  * node:child_process for a spec that starts fakes, installed with
@@ -20,6 +24,7 @@ const fakes = new Map<string, { removed: boolean; running: Set<ChildProcess> }>(
  * fake (CI, 2026-11-10).
  */
 export function trackingFakes(real: typeof ChildProcesses): typeof ChildProcesses {
+  realSpawnSync = real.spawnSync
   const started = <T extends (...args: never[]) => ChildProcess>(start: T): T => ((file: string, args: string[], ...rest: unknown[]) => {
     const fake = [file, ...args].map(arg => fakes.get(arg)).find(Boolean)
     if (fake?.removed) throw Object.assign(new Error(`spawn ${file} ENOENT: the fake podman was removed`), { code: 'ENOENT' })
@@ -78,14 +83,19 @@ setTimeout(() => {
 `
 
 export function fakePodman(): FakePodman {
+  if (!realSpawnSync) throw new Error('fakePodman needs trackingFakes as the spec\'s node:child_process')
   const dir = mkdtempSync(join(tmpdir(), 'fake-podman-'))
   const path = join(dir, 'podman')
   const fake = { removed: false, running: new Set<ChildProcess>() }
   fakes.set(path, fake)
   const replies: Record<string, FakeReply> = {}
   const save = () => writeFileSync(join(dir, 'replies.json'), JSON.stringify(replies))
-  writeFileSync(path, `#!${process.execPath}\n${SCRIPT}`)
+  // Run once as a bare script before any deadline runs it: macOS checks a new executable on its first exec, queued
+  // machine-wide, and that pushed a spec's first `podman info` past its 5 s (testing/executableFixture.ts).
+  writeFileSync(path, '#!/bin/sh\n')
   chmodSync(path, 0o755)
+  realSpawnSync(path)
+  writeFileSync(path, `#!${process.execPath}\n${SCRIPT}`)
   save()
   writeFileSync(join(dir, 'pids.log'), '')
   return {
@@ -97,9 +107,9 @@ export function fakePodman(): FakePodman {
     calls() {
       const log = join(dir, 'calls.jsonl')
       if (!existsSync(log)) return []
-      return readFileSync(log, 'utf8').trim().split('\n').map(line => JSON.parse(line) as FakeCall)
+      return wholeLines(log).map(line => JSON.parse(line) as FakeCall)
     },
-    pids: () => readFileSync(join(dir, 'pids.log'), 'utf8').split('\n').filter(Boolean).map(Number),
+    pids: () => wholeLines(join(dir, 'pids.log')).map(Number),
     async remove() {
       fake.removed = true
       await Promise.all([...fake.running].map(child => new Promise(done => child.once('exit', done))))

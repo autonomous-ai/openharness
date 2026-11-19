@@ -1,7 +1,7 @@
 /**
  * Every test process gets its own config and state directories.
  *
- * The rules and tickets live in the person's real `~/.config/harness/` and `~/.harness/monitor/`. A test
+ * The rules and tickets live in the person's real `~/.config/harness/` and `<state root>/monitor/`. A test
  * that forgot to redirect them once wrote fake pins and a fake ticket into a real machine's files — so
  * the redirect is not left to each test to remember. It happens here, before any module loads, and the
  * real paths are refused outright if anything still reaches for them.
@@ -9,6 +9,7 @@
 import { mkdtempSync } from 'node:fs'
 import { tmpdir, homedir } from 'node:os'
 import { join } from 'node:path'
+import { harnessRoots } from '../lib/localDaemon.mjs'
 
 const root = mkdtempSync(join(tmpdir(), 'harness-monitor-test-'))
 process.env.HARNESS_MONITOR_CONFIG = join(root, 'config', 'policy.jsonc')
@@ -17,7 +18,7 @@ process.env.HARNESS_MONITOR_TEST_ROOT = root
 // The daemon's local credential lives in its data folder: a test must never read the person's.
 process.env.ADAPTER_DATA_DIR = join(root, 'harness-data')
 
-const real = [join(homedir(), '.config', 'harness'), join(homedir(), '.harness', 'monitor')]
+const real = [join(homedir(), '.config', 'harness'), join(harnessRoots().state, 'monitor')]
 export function assertNotReal(path) {
   for (const dir of real) if (String(path).startsWith(dir)) throw new Error(`A test reached a real path: ${path}`)
 }

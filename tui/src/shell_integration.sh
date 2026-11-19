@@ -1,4 +1,31 @@
 # Loaded only in shells opened by Harness. Never installed in user startup files.
+# >>> harness state root
+# The folder Harness keeps its state in, by harness_home.rs's rule: on Linux the
+# XDG state folder, but ~/.harness while it exists and the XDG data folder holds
+# no .harness-root file; elsewhere ~/.harness. An unset, empty or relative XDG
+# variable is ignored.
+_hn_state_root() (
+    _hn_legacy="$HOME/.harness"
+    # `command`: a shell function or alias named uname never decides the folder.
+    if [ "$(command uname -s)" != Linux ]; then
+        printf '%s\n' "$_hn_legacy"
+        exit
+    fi
+    # A trailing slash goes, so `$XDG_STATE_HOME/` names the folder hn uses.
+    case "${XDG_DATA_HOME-}" in
+        /*) _hn_data="${XDG_DATA_HOME%/}/harness" ;;
+        *) _hn_data="$HOME/.local/share/harness" ;;
+    esac
+    case "${XDG_STATE_HOME-}" in
+        /*) _hn_state="${XDG_STATE_HOME%/}/harness" ;;
+        *) _hn_state="$HOME/.local/state/harness" ;;
+    esac
+    if [ ! -f "$_hn_data/.harness-root" ] && [ -e "$_hn_legacy" ]; then
+        _hn_state=$_hn_legacy
+    fi
+    printf '%s\n' "$_hn_state"
+)
+# <<< harness state root
 _hn_request() (
     exec 4<>/dev/tty
     [ -t 4 ] || { printf '%s\n' 'Run this command at an interactive Harness prompt.' >&2; exit 1; }
@@ -66,7 +93,7 @@ _hn_request() (
     _hn_nonce=$(od -An -N16 -tx1 /dev/urandom | tr -d ' \r\n')
     [ "${#_hn_nonce}" = 32 ] || _hn_fail 'Could not create a shell request.'
     _hn_id="$$-$_hn_nonce"
-    _hn_dir="$HOME/.harness/shell-requests/$_HN_CONTEXT"
+    _hn_dir="$(_hn_state_root)/shell-requests/$_HN_CONTEXT"
     umask 077
     mkdir -p -- "$_hn_dir" || _hn_fail
     _hn_fifo="$_hn_dir/$_hn_id"

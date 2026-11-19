@@ -19,7 +19,7 @@
 import type { ChildProcess } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { RfbShaper, type StreamProfile } from './rfbShaper.js'
-import { sid } from '../../lib/log.js'
+import { errorKind, sid } from '../../lib/log.js'
 import type { AGENT_BROWSER_CLOSE_REASONS, ProductUsageMetric } from '../../lib/productUsageContract.js'
 import { TERMINAL_BINARY_HEADER_BYTES, TerminalBinaryKind, type TerminalBinaryClear } from '../../lib/terminalBinary.js'
 
@@ -122,7 +122,7 @@ export class BrowserStreamManager {
       child = exec.spawn()
     } catch (error) {
       // Podman not found after all, or the exec refused at once: the panel is told, and asks again.
-      console.warn(`[agent-browser] stream exec for ${sid(agentId)} did not start: ${(error as Error).message}`)
+      console.warn(`[agent-browser] stream exec for ${sid(agentId)} did not start · ${errorKind(error)}`)
       return refuse('NOT_READY')
     }
     const local = asker.local
@@ -143,7 +143,7 @@ export class BrowserStreamManager {
     // A child that died closes its stdin under a write: the exit below is what ends the stream.
     child.stdin?.on('error', () => {})
     child.on('error', (error) => {
-      console.warn(`[agent-browser] stream ${sid(stream.id)} exec failed: ${error.message}`)
+      console.warn(`[agent-browser] stream ${sid(stream.id)} exec failed · ${errorKind(error)}`)
       this.end(stream, 'agent')
     })
     child.on('exit', (code, signal) => {

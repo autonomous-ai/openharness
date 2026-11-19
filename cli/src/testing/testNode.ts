@@ -26,7 +26,7 @@ const NAMED = 5
  * One run of [node]. A fresh copy's first start is the slow one, so the run pays it here once; and a copy that cannot
  * start fails the run before any test. Node puts the copy's standard error in the error's message.
  */
-const firstStart = (node: string): void => {
+export const firstStart = (node: string): void => {
   execFileSync(node, ['-e', ''], { stdio: ['ignore', 'ignore', 'pipe'], timeout: 60_000 })
 }
 

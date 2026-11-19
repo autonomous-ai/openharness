@@ -96,6 +96,39 @@ import 'package:harness_mobile/notify/notifications_ask.dart';
 
 import 'voice_input_controller.dart';
 
+/// The chip in Chat UI's composer: the engine as people know it, then the model and effort the daemon saw it running
+/// (`Claude Opus 5.5 · Medium`) — read the way the desktop reads it — or the grid model it was moved to.
+///
+/// OpenCode's own footer comes first for an OpenCode agent ([opencodeOnScreen], `terminal/opencode_footer.dart`): it
+/// names the model as people know it (`DeepSeek V4.1 Flash Free`) where the machine has only its id
+/// (`opencode/deepseek-v4.1-flash-free`), and it is the one place that names any before OpenCode's first session.
+@visibleForTesting
+String? chatModelChip(
+  Agent? agent,
+  ({String name, String? effort})? Function() opencodeOnScreen,
+) {
+  if (agent == null || agent.engine == null) return null;
+  final engine = engineIdentity(
+    agent.engine,
+    displayName: agent.engineDisplayName,
+  ).label;
+  final grid = agent.gridModel;
+  if (grid != null && grid.isNotEmpty) return '$engine $grid';
+  final reported = runtimeModelDetails(
+    agent.selectedModel,
+    agentId: agent.id,
+    engine: agent.engine,
+  );
+  final running =
+      (agent.engine == 'opencode' ? opencodeOnScreen() : null) ??
+      (reported == null
+          ? null
+          : (name: reported.name, effort: reported.effort as String?));
+  return running == null
+      ? engine
+      : '$engine ${modelLabelWithEffort(running.name, running.effort)}';
+}
+
 /// One agent's terminal, filling the phone. The header says whose it is and whether it is live;
 /// everything below it is the same [TerminalPanel] a desktop tile draws, minus that tile's own
 /// header.
@@ -1668,21 +1701,8 @@ class _TerminalPageState extends State<TerminalPage>
     return session.sendComposerText(text);
   }
 
-  /// The chip in Chat UI's composer: the engine as people know it, then the model and effort the
-  /// daemon saw it running (`Claude Opus 5.5 · Medium`) — read the way the desktop reads it — or the
-  /// grid model it was moved to.
-  /// [_chatModelLabel], with what OpenCode's footer says where the machine names no model: an OpenCode agent nobody
-  /// has written to has no session yet, and so no model the machine reads (`terminal/opencode_footer.dart`).
-  String? _chatModelOnScreen(Agent? agent) {
-    final label = _chatModelLabel(agent);
-    if (agent?.engine != 'opencode' || agent?.selectedModel != null) {
-      return label;
-    }
-    final shown = _opencodeOnScreen();
-    return shown == null
-        ? label
-        : '$label ${modelLabelWithEffort(shown.name, shown.effort)}';
-  }
+  String? _chatModelOnScreen(Agent? agent) =>
+      chatModelChip(agent, _opencodeOnScreen);
 
   /// The model and effort OpenCode's footer names, kept between reads: the footer is off the screen while OpenCode
   /// redraws, as the terminal first fills and each time the keyboard resizes it (45 rows to 24 and back, measured on a
@@ -1697,24 +1717,6 @@ class _TerminalPageState extends State<TerminalPage>
   }
 
   ({String name, String? effort})? _footerModel;
-
-  static String? _chatModelLabel(Agent? agent) {
-    if (agent == null || agent.engine == null) return null;
-    final engine = engineIdentity(
-      agent.engine,
-      displayName: agent.engineDisplayName,
-    ).label;
-    final grid = agent.gridModel;
-    if (grid != null && grid.isNotEmpty) return '$engine $grid';
-    final running = runtimeModelDetails(
-      agent.selectedModel,
-      agentId: agent.id,
-      engine: agent.engine,
-    );
-    return running == null
-        ? engine
-        : '$engine ${modelLabelWithEffort(running.name, running.effort)}';
-  }
 
   /// Chat UI's `+`: a picture or a file for the agent, the same ways the key strip's `img` offers —
   /// and only those the machine's CLI can take.
@@ -3134,9 +3136,7 @@ class _TerminalPageState extends State<TerminalPage>
                               // The terminal's redraws too only while the chip reads OpenCode's footer: a rebuild of
                               // the composer per chunk drawn is a cost no other agent pays.
                               listenable:
-                                  session != null &&
-                                      agent?.engine == 'opencode' &&
-                                      agent?.selectedModel == null
+                                  session != null && agent?.engine == 'opencode'
                                   ? Listenable.merge([
                                       chat,
                                       session.outputTicks,

@@ -153,7 +153,7 @@ const copilotRuns = (line: string) => spawnSync('powershell.exe', ['-NoProfile',
     expect(await installCommandCodeHooks(PORT, { environment })).toBe(false)
     // One line, no stack.
     expect(error.mock.calls).toEqual([
-      ['[hooks] Command Code hooks are not installed: a hook argument holds one of " % ! & | < > ^ ( ), which cmd.exe reads as more than text'],
+      ['[hooks] Command Code hooks are not installed · a hook argument holds one of " % ! & | < > ^ ( ), which cmd.exe reads as more than text'],
     ])
     expect(existsSync(join(home, '.commandcode'))).toBe(false)
     // Inside PowerShell's single quotes these are text: Copilot's line, and Codex's.

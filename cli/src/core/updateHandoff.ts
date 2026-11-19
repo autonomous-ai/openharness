@@ -26,6 +26,7 @@
  * Moved out of `runForeground` (src/architecture.spec.ts).
  */
 
+import { errorKind } from '../lib/log.js'
 import { patientDeadline } from '../lib/patientExec.js'
 import { PROBE_ANSWER, PROBE_TIMEOUT_MS } from '../harnessd/protocol.js'
 
@@ -60,17 +61,16 @@ export function createUpdateHandoff(deps: UpdateHandoffDeps) {
   let started = false
   let restarting = false
   const deadlineMs = deps.teardownDeadlineMs ?? TEARDOWN_DEADLINE_MS
-  const message = (error: unknown): string => error instanceof Error ? error.message : String(error)
 
   /** Every step, in order, each failure said and passed; given up on, all the same, after the deadline. */
   const releaseAll = async (teardown: readonly TeardownStep[]): Promise<void> => {
-    try { await deps.beforeTeardown?.() } catch (error) { deps.error(`[update] the moves did not settle (${message(error)}) — handing over all the same`) }
+    try { await deps.beforeTeardown?.() } catch (error) { deps.error(`[update] the moves did not settle (${errorKind(error)}) — handing over all the same`) }
     let at = '', abandoned = false
     const steps = (async () => {
       for (const [name, release] of teardown) {
         if (abandoned) return
         at = name
-        try { await release() } catch (error) { deps.error(`[update] ${name} did not let go (${message(error)}) — handing over all the same`) }
+        try { await release() } catch (error) { deps.error(`[update] ${name} did not let go (${errorKind(error)}) — handing over all the same`) }
       }
       at = ''
     })()

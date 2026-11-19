@@ -1,3 +1,4 @@
+import { errorKind } from '../lib/log.js'
 import { createSetupProbeExecutor } from '../engines/kit/setupProbe.js'
 /** Optional installation and probing, with the core's explicit commit before an installer can start. */
 import { randomUUID } from 'node:crypto'
@@ -139,7 +140,7 @@ export function startEngineSetup(directory: string, given?: NativeSetup) {
           if (kind === 'files' && error instanceof HookScriptMissing) {
             console.warn('[engine-setup] HOOK_SCRIPT_MISSING'); return { files: null, error: 'HOOK_SCRIPT_MISSING' }
           }
-          console.warn(`[engine-setup] ${kind === 'trust' ? 'TRUST' : kind === 'settings' ? 'SETTINGS' : kind === 'files' ? 'FILE' : 'INSTALLATION'}_PREPARATION_FAILED`); return unavailable()
+          console.warn(`[engine-setup] ${kind === 'trust' ? 'TRUST' : kind === 'settings' ? 'SETTINGS' : kind === 'files' ? 'FILE' : 'INSTALLATION'}_PREPARATION_FAILED · ${errorKind(error)}`); return unavailable()
         })
         .then(result => { entry.finished = true; return result })
       return Promise.race([readiness, entry.result])

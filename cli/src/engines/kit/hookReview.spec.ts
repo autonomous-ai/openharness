@@ -100,8 +100,10 @@ describe('Harness’s own Codex hooks, recorded as reviewed', () => {
 
   it('installs the hooks and records them, so Codex runs them without asking; a second start changes nothing', async () => {
     const codexHome = home()
-    vi.spyOn(console, 'log').mockImplementation(() => {})
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
     await installHookSettings('codex', hooks.settings, 19473, codexHome)
+    // The file by its name, never its path: the path names the person's home.
+    expect(log).toHaveBeenCalledWith("[hooks] recorded Harness's own Codex hooks as reviewed → config.toml")
     const installed = JSON.parse(readFileSync(join(codexHome, 'hooks.json'), 'utf8'))
     const config = readFileSync(join(codexHome, 'config.toml'), 'utf8')
     for (const [key, hash] of reviewRecords(record, join(codexHome, 'hooks.json'), installed)) {
@@ -227,7 +229,7 @@ describe('Harness’s own Codex hooks, recorded as reviewed', () => {
     expect(await installHookSettings('codex', hooks.settings, 19473, codexHome)).toBe(false)
     expect(readFileSync(join(codexHome, 'config.toml'), 'utf8')).toBe('[hooks]\nstate = {}\n')
     expect(existsSync(join(codexHome, 'hooks.json'))).toBe(false)
-    expect(error).toHaveBeenCalledWith(hooks.settings.messages.failed, expect.objectContaining({ name: 'HookPreparationHeld' }))
+    expect(error).toHaveBeenCalledWith(hooks.settings.messages.failed, 'the hook review configuration cannot be safely updated')
   })
 
   it('keys a symlinked hooks.json by its own name in CODEX_HOME, not its target, as Codex does', async () => {
@@ -261,7 +263,8 @@ describe('Harness’s own Codex hooks, recorded as reviewed', () => {
   it('never throws: an unreadable settings path is a hook Codex asks about, as before', async () => {
     const error = vi.spyOn(console, 'error').mockImplementation(() => {})
     expect(await recordReviewed(record, '/nonexistent-home', '/nonexistent-home/hooks.json')).toBe(false)
-    expect(error).toHaveBeenCalled()
+    expect(error.mock.calls.map(call => call[0])).toEqual([record.messages.skipped.replace('{config}', 'config.toml')])
+    expect(error.mock.calls.flat().join(' ')).not.toContain('/nonexistent-home')
   })
 })
 

@@ -223,7 +223,7 @@ export function createExternalResumes(deps: ExternalResumeDeps) {
     const result = await createAndRegisterPane({
       tmuxBackend: { create: req => backend.create({ ...req, current: () => !stopped && archive.current() }), kill: runtime => backend.killHeld!(runtime, intent.token, () => true) },
       registry: deps.registry, engine: input.engine, sessionLabel: buildHarnessSessionLabel(input.engine),
-      argv: heldPaneArgv(externalUnavailable().detail, intent.token), cwd: null, externalResume: intent,
+      argv: () => heldPaneArgv(externalUnavailable().detail, intent.token), cwd: null, externalResume: intent,
       codexHome: input.codexHome, bypassPermission: input.bypassPermission, permissionMode: input.permissionMode,
       defaultName: input.name ?? (answer.ok ? answer.session?.title : undefined),
     })

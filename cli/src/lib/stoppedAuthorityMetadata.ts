@@ -1,4 +1,5 @@
 /** Metadata only: final archive authority stays in core without reading an archive's contents. */
+import { errorKind } from './log.js'
 import { createHash } from 'node:crypto'
 import { lstatSync, opendirSync, type BigIntStats, type Dir } from 'node:fs'
 import { join } from 'node:path'
@@ -57,7 +58,7 @@ export function stoppedArchiveWitness(directory: string, options: ScanOptions = 
   } finally {
     if (dir) {
       try { dir.closeSync() }
-      catch { uncertain.add(dir); console.error('[session-storage] authority descriptor close failed; restart required'); throw new SessionStorageUnavailable('cleanup-unconfirmed') }
+      catch (caughtFailure) { uncertain.add(dir); console.error(('[session-storage] authority descriptor close failed; restart required') + ' · ' + errorKind(caughtFailure)); throw new SessionStorageUnavailable('cleanup-unconfirmed') }
     }
   }
 }

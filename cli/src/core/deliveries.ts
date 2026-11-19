@@ -15,6 +15,7 @@ import { randomUUID } from 'node:crypto'
 import type { CoreApi, DeliveryOptions, TurnDelivery } from './api.js'
 import type { SessionInputProgress } from '../lib/sessionInput.js'
 import type { ServiceQueryAuthority } from './serviceLinks.js'
+import { errorKind } from '../lib/log.js'
 
 type Payload = Record<string, unknown>
 
@@ -113,7 +114,7 @@ export function createDeliveries(deps: DeliveriesDeps) {
     if (event.state !== 'queued' && event.state !== 'delivered' && quiet.delete(event.deliveryId) && event.state === 'started') deps.quietStarted?.(event.sessionId)
     for (const listener of listeners) {
       try { listener(event) } catch (error) {
-        log(`[deliveries] a listener failed on ${event.deliveryId.slice(0, 40)} · ${error instanceof Error ? error.message : String(error)}`)
+        log(`[deliveries] a listener failed on ${event.deliveryId.slice(0, 40)} · ${errorKind(error)}`)
       }
     }
     const maker = makers.get(event.deliveryId)
@@ -125,7 +126,7 @@ export function createDeliveries(deps: DeliveriesDeps) {
 
   const input = (event: SessionInputProgress): void => {
     for (const listener of inputListeners) {
-      try { listener(event) } catch { log('[input] an input listener failed') }
+      try { listener(event) } catch (caughtFailure) { log(('[input] an input listener failed') + ' · ' + errorKind(caughtFailure)) }
     }
     const maker = event.deliveryId ? makers.get(event.deliveryId) : undefined
     if (maker?.current?.()) deps.tellInput?.(maker.service, event)

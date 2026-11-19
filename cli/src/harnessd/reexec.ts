@@ -28,6 +28,7 @@ import { captureChild, type CaptureStart, type OwnedTask } from './childCapture.
 import { linkSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
 import { readWorkerProbe, type WorkerProbe } from './workerContract.js'
+import { errorKind } from '../lib/log.js'
 import { PROBE_ANSWER, PROBE_COMMAND, PROBE_HANDOVER, PROBE_TIMEOUT_MS } from './protocol.js'
 import { signedExitCode, type ExitReason, type ReexecOutcome, type ResumeState } from './supervisor.js'
 
@@ -361,7 +362,6 @@ export function createReexec(deps: ReexecDeps): {
   let replacing = false
   let handing: Promise<void> | null = null
   let handedOver = false
-  const message = (error: unknown): string => error instanceof Error ? error.message : String(error)
 
   /**
    * Windows. The replacement holds the machine once it took the handover (`takeHandover`) and the pid file names it, so
@@ -370,7 +370,7 @@ export function createReexec(deps: ReexecDeps): {
   const handOver = async (h: HandOverDeps, next: string, state: ResumeState, carryOn: (outcome: ReexecOutcome) => void): Promise<void> => {
     let busy = 'the daemon spawn lock is busy'
     const release = await h.lock().catch((error: unknown) => {
-      busy = `could not take the daemon spawn lock (${message(error)})`
+      busy = `could not take the daemon spawn lock (${errorKind(error)})`
       return null
     })
     if (deps.stopping()) { release?.(); return }
@@ -388,7 +388,7 @@ export function createReexec(deps: ReexecDeps): {
     const token = h.token()
     // A name for the handover's decision file (`takeBackHandover`): with any other, every handover would only time out.
     if (!HANDOVER_TOKEN.test(token)) { stay(`the handover token ${JSON.stringify(token)} is not one a file can be named by`); return }
-    try { h.claim() } catch (error) { stay(`could not claim the pid file (${message(error)})`); return }
+    try { h.claim() } catch (error) { stay(`could not claim the pid file (${errorKind(error)})`); return }
     // Now, not as the re-execution began: stopping the children and the probe took up to PROBE_TIMEOUT_MS of it.
     const at = deps.now()
     // No replacement takes the handover or claims the pid file after its cutoff (`mayClaimPidFile`): past that and
@@ -397,7 +397,7 @@ export function createReexec(deps: ReexecDeps): {
     try {
       deps.writeMarker({ pid: deps.pid, from: deps.own, to: next, at, handover: token })
     } catch (error) {
-      stay(`could not leave the re-execution marker (${message(error)})`)
+      stay(`could not leave the re-execution marker (${errorKind(error)})`)
       return
     }
 
@@ -430,7 +430,7 @@ export function createReexec(deps: ReexecDeps): {
       try {
         return h.takeBack(token)
       } catch (error) {
-        if (!unknownSaid) deps.log(`[harnessd] could not take the handover back yet (${message(error)}) — trying again`)
+        if (!unknownSaid) deps.log(`[harnessd] could not take the handover back yet (${errorKind(error)}) — trying again`)
         unknownSaid = true
         return null
       }
@@ -441,7 +441,7 @@ export function createReexec(deps: ReexecDeps): {
       try {
         if (h.readPid() !== deps.pid) h.claim()
       } catch (error) {
-        deps.log(`[harnessd] could not claim the pid file back (${message(error)})`)
+        deps.log(`[harnessd] could not claim the pid file back (${errorKind(error)})`)
       }
       stay(why)
     }
@@ -482,7 +482,7 @@ export function createReexec(deps: ReexecDeps): {
           try {
             named = h.readPid()
           } catch (error) {
-            leave(`the new master took over, and the pid file cannot be read (${message(error)})`)
+            leave(`the new master took over, and the pid file cannot be read (${errorKind(error)})`)
             return
           }
           if (named !== null && named !== deps.pid && runs(named) !== false) { leave(`the new master took over, and the pid file names pid ${named}`); return }
@@ -533,7 +533,7 @@ export function createReexec(deps: ReexecDeps): {
         if (deps.stopping()) return null
       }
     }
-    const outcome = await wait().catch((error: unknown) => (deps.stopping() ? null : `the handover failed (${message(error)})`))
+    const outcome = await wait().catch((error: unknown) => (deps.stopping() ? null : `the handover failed (${errorKind(error)})`))
     if (outcome === null) { await stop(); return }
     if (typeof outcome === 'string') { await settle(outcome); return }
     leave(`handed over to the new master (pid ${outcome})`)
@@ -649,7 +649,7 @@ export function createReexec(deps: ReexecDeps): {
             // which ends a master that has no core and no services running at this point. Without the
             // marker a re-execution that never came up would be taken for one in progress, so this master
             // keeps its code and starts the core on the new bundle itself, judging it as every update.
-            deps.log(`[harnessd] could not leave the re-execution marker (${error instanceof Error ? error.message : String(error)}) — keeping this master`)
+            deps.log(`[harnessd] could not leave the re-execution marker (${errorKind(error)}) — keeping this master`)
             carryOn('kept')
             return
           }
@@ -670,7 +670,7 @@ export function createReexec(deps: ReexecDeps): {
           } catch (error) {
             // Only what `process.execve` refuses before it begins: arguments it cannot take.
             deps.removeMarker()
-            deps.log(`[harnessd] could not re-execute this master (${error instanceof Error ? error.message : String(error)}) — keeping it`)
+            deps.log(`[harnessd] could not re-execute this master (${errorKind(error)}) — keeping it`)
             // Preparation released its claim before exec. Reacquire and prove it once, without another exec.
             if (deps.prepareProbe) check(result => carryOn(result.ok ? 'kept' : 'refused'))
             else carryOn('kept')

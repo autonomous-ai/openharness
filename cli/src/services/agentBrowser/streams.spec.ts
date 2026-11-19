@@ -439,7 +439,7 @@ describe('what a browser stream ignores and how it fails', () => {
     h.manager.close('local:w', { streamId })
     h.children[0].emit('error', new Error('kill EPERM'))
     expect(h.closes()).toEqual([['local:w', streamId, 'closed']])
-    expect(warn.mock.calls.flat().join(' ')).toContain('exec failed: kill EPERM')
+    expect(warn.mock.calls.flat().join(' ')).toMatch(/exec failed · Error$/)
   })
 
   it('a child that dies under a write to its stdin ends the stream only by its exit', () => {
@@ -565,7 +565,7 @@ describe('closing a browser stream', () => {
     try {
       h.spawn.mockImplementationOnce(() => { throw new Error('Podman is not installed') })
       expect(h.open('local:w')).toBe('NOT_READY')
-      expect(warn.mock.calls.some(([line]) => String(line).includes('did not start: Podman is not installed'))).toBe(true)
+      expect(warn.mock.calls.some(([line]) => / did not start · Error$/.test(String(line)))).toBe(true)
     } finally {
       warn.mockRestore()
     }

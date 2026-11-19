@@ -10,6 +10,7 @@
  * `mirror` keeps the calls the rest of the core made into the commander mirror when it ran here, so the
  * funnel, the heartbeats, cancel, fork, binding and purge each say what happened in their own words.
  */
+import { errorKind } from '../../lib/log.js'
 import type { LiveEvent } from '../../engines/kit/events.js'
 import { lastFullText, recentAsks, recentRecaps, type RecentRecap, type SessionRecaps } from '../../lib/recapReads.js'
 import { projectDisplayName, type RegisteredSession } from '../../lib/registry.js'
@@ -118,7 +119,7 @@ export function createRecaps({
   const mirror: TurnRecaps = {
     failure: failure => {
       try { tell({ kind: 'failure', failure }) }
-      catch { console.warn('[recaps] FAILURE_UNAVAILABLE') }
+      catch (caughtFailure) { console.warn(('[recaps] FAILURE_UNAVAILABLE') + ' · ' + errorKind(caughtFailure)) }
     },
     ingest: (events, sessionId, options) => {
       const ends = events.some((event) => event.type === 'turn_ended')

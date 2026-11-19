@@ -3,6 +3,7 @@ import { workerPreparer } from './scripts/lib/workerPreparer.mjs'
 import { readdirSync, statSync, readFileSync } from 'fs'
 import { join } from 'path'
 import { readDshRegistry } from './scripts/lib/dshRegistry.mjs'
+import { readOrcaPluginBundle } from './scripts/lib/orcaPluginBundle.mjs'
 import { readVscodeExtensionBundle } from './scripts/lib/vscodeExtensionBundle.mjs'
 import { readBuiltinBundle, readHachiBundle, readHarnessMonitorBundle, readMemoriesBundle, readModelManagerBundle } from './scripts/lib/modelManagerBundle.mjs'
 import { fileURLToPath } from 'node:url'
@@ -76,6 +77,8 @@ try {
       __STATUS_LINE_SCRIPT__: JSON.stringify(readFileSync('hook/statusline.mjs', 'utf8')),
       // Harness's VS Code extension (src/devices/vscodeExtension.ts), at this CLI's version: the two ship together.
       __VSCODE_EXTENSION__: JSON.stringify(await readVscodeExtensionBundle(version)),
+      // Harness's Orca plugin, at this CLI's version: `harness device orca` installs it from the data folder.
+      __ORCA_PLUGIN__: JSON.stringify(readOrcaPluginBundle(version)),
     },
     logLevel: 'info',
   })

@@ -13,7 +13,7 @@ import { ensureUtf8Locale } from './lib/childLocale.js'
 import { harnessdEnv, holdHarnessdEnv } from './lib/harnessdEnv.js'
 import { readOrMintComputerId } from './lib/computerIdentity.js'
 import { unixSocketPath } from './lib/localSocket.js'
-import { ignoreLogWriteErrors, installTimestampedConsole } from './lib/log.js'
+import { errorKind, ignoreLogWriteErrors, installTimestampedConsole } from './lib/log.js'
 import { hostServices, type ServiceHost, type ServiceHostOptions, type ServiceProcess } from './services/process.js'
 
 export interface ServiceProcessOptions {
@@ -45,6 +45,7 @@ export const SERVICE_RUNNERS: ReadonlyMap<string, () => Promise<Runner>> = new M
   ['engineProbe', async () => (await import('./services/engineProbeProcess.js')).runEngineProbeService],
   ['goals', async () => (await import('./services/goalsProcess.js')).runGoalsService],
   ['hachi', async () => (await import('./services/hachiProcess.js')).runHachiService],
+  ['homeBridge', async () => (await import('./services/homeBridgeProcess.js')).runHomeBridgeService],
   ['shell', async () => (await import('./services/shellProcess.js')).runShellService],
   ['handoff', async () => (await import('./services/handoffProcess.js')).runHandoffService],
   ['connectors', async () => (await import('./services/connectorsProcess.js')).runConnectorsService],
@@ -78,12 +79,11 @@ export interface ServiceProcessDeps {
   platform?: NodeJS.Platform
 }
 
-const describe = (error: unknown): string => (error instanceof Error ? error.message : String(error))
-
 /**
  * Run the services [named] (`search`, or `workspaces,usage`) until the master stops them; exits 2 for a
- * name this build does not know. Throws when none of them starts, as a lone service whose start throws
- * always did: the process ends, and the master decides whether to try again.
+ * name this build does not know. Exits 1 when none of them starts, as a lone service whose start threw
+ * always did: the process ends, and the master decides whether to try again. Never by throwing on: Node
+ * would print the error whole, its words and its stack, into the daemon's log.
  */
 export async function startServiceProcess(named: string | undefined, deps: ServiceProcessDeps = {}): Promise<ServiceProcess> {
   // First, before any service starts a child that would inherit them: the viewers' servers, an engine's
@@ -126,7 +126,6 @@ export async function startServiceProcess(named: string | undefined, deps: Servi
     token: harnessdEnv().HARNESSD_SERVICE_TOKEN ?? '',
   }
   const running: ServiceProcess[] = []
-  let failure: unknown = null
   for (const [name, run] of loaded) {
     try {
       running.push(run(options))
@@ -134,11 +133,10 @@ export async function startServiceProcess(named: string | undefined, deps: Servi
       // One service that cannot start is off, and the others in its process run on: the core answers its
       // requests SERVICE_UNAVAILABLE, as for any service that is down. In-process, the core's host does
       // the same with a start that throws (core/serviceHost.ts).
-      failure ??= error
-      console.error(`[service ${name}] did not start · ${describe(error)}`)
+      console.error(`[service ${name}] did not start · ${errorKind(error)}`)
     }
   }
-  if (!running.length) throw failure
+  if (!running.length) return exit(1)
   const host = (deps.host ?? hostServices)({ name: processName, services: names })
   for (const service of running) host.add(service)
   return {

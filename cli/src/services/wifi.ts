@@ -19,6 +19,7 @@ import { join } from 'node:path'
 import type { AgentCreateRequest, AgentView, CoreApi, CorePorts, ServiceRequests, WifiPort } from '../core/api.js'
 import { submissionPolicy } from '../engines/submissionPolicies.js'
 import { startDevicePart } from '../lib/autonomous-device/parts.js'
+import { errorKind } from '../lib/log.js'
 import { deviceRelayOverGateway } from '../lib/autonomous-device/overGateway.js'
 import { devicePeerKey } from '../lib/autonomous-device/peerEndpoint.js'
 import { DeviceResultJournal } from '../lib/autonomous-device/resultJournal.js'
@@ -103,7 +104,7 @@ export function startWifi(core: CoreApi, ports: CorePorts, deps: WifiDeps = {}):
   }
   const changed = (): void => {
     notices++
-    if (!viewing) void refresh().catch(() => { console.warn('[wifi] CORE_VIEW_UNAVAILABLE') })
+    if (!viewing) void refresh().catch((caughtFailure) => { console.warn(('[wifi] CORE_VIEW_UNAVAILABLE') + ' · ' + errorKind(caughtFailure)) })
   }
   /** A summary card's whole answer, while the service reads it. */
   let fullText: string | undefined
@@ -362,7 +363,7 @@ export function startWifi(core: CoreApi, ports: CorePorts, deps: WifiDeps = {}):
       const payload = frame.payload as Record<string, unknown>
       if (payload.kind === 'summary') {
         try { await origin!.barrier(String(frame.agentId)) }
-        catch { console.warn('[wifi] SESSION_SUMMARY_UNAVAILABLE'); throw new Error('SESSION_SUMMARY_UNAVAILABLE') }
+        catch (caughtFailure) { console.warn(('[wifi] SESSION_SUMMARY_UNAVAILABLE') + ' · ' + errorKind(caughtFailure)); throw new Error('SESSION_SUMMARY_UNAVAILABLE') }
         if (!current()) return
       }
       const session = await core.conversations.resolve(String(frame.agentId))

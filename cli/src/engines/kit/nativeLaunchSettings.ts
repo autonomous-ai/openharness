@@ -1,4 +1,5 @@
 /** Optional settings are component snapshots; the core retains only final launch authority. */
+import { errorKind } from '../../lib/log.js'
 import { randomUUID } from 'node:crypto'
 import type { NativeSetup } from './nativeSetup.js'
 import { boundedLaunchSettingsInput, launchSettingsCandidate, type LaunchSettingsInput } from './launchSettingsWire.js'
@@ -28,8 +29,8 @@ export async function prepareLaunchSettings(engine: string, environment: Readonl
     if (!boundedLaunchSettingsInput(input)) return null
     const candidate = launchSettingsCandidate(await setup.prepareSettings(input, randomUUID(), current), input)
     return candidate && current() ? { values: Object.freeze({ ...candidate.values }), current } : null
-  } catch {
-    console.warn('[launch-settings] OPTIONAL_PREPARATION_UNAVAILABLE')
+  } catch (caughtFailure) {
+    console.warn(('[launch-settings] OPTIONAL_PREPARATION_UNAVAILABLE') + ' · ' + errorKind(caughtFailure))
     return null
   }
 }

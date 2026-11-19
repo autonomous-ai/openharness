@@ -250,7 +250,7 @@ void main() {
 
     test('over the Unix socket when the transport uses it', () async {
       final (_, path) = await serve('0.4.20');
-      final transport = LocalDaemonTransport(candidate: path)..useSocket();
+      final transport = LocalDaemonTransport(candidate: () => path)..useSocket();
       expect(await readDaemonVersion(base, transport), '0.4.20');
     });
 

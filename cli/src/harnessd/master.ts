@@ -9,7 +9,7 @@ import { randomBytes } from 'node:crypto'
 import { existsSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { performance } from 'node:perf_hooks'
-import { ignoreLogWriteErrors, trimLogFile, ts } from '../lib/log.js'
+import { errorKind, ignoreLogWriteErrors, trimLogFile, ts } from '../lib/log.js'
 import { folderFingerprint } from './leanBundle.js'
 import type { ExecutionArtifact } from './executionArtifacts.js'
 import type { OwnedTask } from './childCapture.js'
@@ -250,9 +250,9 @@ export function coreHandle(child: ChildProcess, log: (line: string) => void = (l
     for (const listener of exits) listener(code, signal)
   }
   child.on('exit', exit)
-  child.on('error', () => {
+  child.on('error', (caughtFailure) => {
     if (child.pid === undefined) exit(1, null)
-    else if (!exited) log('[harnessd] child operation failed — retaining ownership until its actual exit')
+    else if (!exited) log(('[harnessd] child operation failed — retaining ownership until its actual exit') + ' · ' + errorKind(caughtFailure))
   })
   return {
     pid: child.pid,
@@ -263,7 +263,7 @@ export function coreHandle(child: ChildProcess, log: (line: string) => void = (l
       const finish = (delivered: boolean): void => {
         if (done) return
         done = true
-        try { settled?.(delivered) } catch { log('[harnessd] child_channel_callback_failed') }
+        try { settled?.(delivered) } catch (caughtFailure) { log(('[harnessd] child_channel_callback_failed') + ' · ' + errorKind(caughtFailure)) }
       }
       try { child.send(message, error => finish(!error)) } catch { finish(false) }
     },
@@ -290,7 +290,7 @@ export function probeMaster(config: { env: NodeJS.ProcessEnv; execArgv: string[]
     say(`${PROBE_ANSWER} · protocol ${status.protocol} · v${status.masterVersion} · ${PROBE_HANDOVER} · worker-cohort ${WORKER_CONTRACT} ${WORKER_PLAN}`)
     return 0
   } catch (error) {
-    say(`harnessd-probe failed: ${error instanceof Error ? error.message : String(error)}`)
+    say(`harnessd-probe failed: ${errorKind(error)}`)
     return 1
   }
 }
@@ -364,7 +364,7 @@ export function runMaster(config: MasterConfig): Supervisor {
   const takeOver = ({ from, token }: { from: number; token: string }): boolean => {
     const leaving = (why: string): false => { log(`[harnessd] ${why} — leaving`); return false }
     const stopped = `the master that started this one (pid ${from}) stopped waiting for it`
-    const write = (pid: number): string | null => { try { writePidFile(pid); return null } catch (error) { return (error as Error).message } }
+    const write = (pid: number): string | null => { try { writePidFile(pid); return null } catch (error) { return errorKind(error) } }
     if (!markerFile || !takeHandover(markerFile, token, process.pid) || !mayClaimPidFile(markerFile, token)) return leaving(stopped)
     const failed = write(process.pid)
     if (failed !== null) return leaving(`could not take over from pid ${from} (${failed})`)
@@ -420,9 +420,9 @@ export function runMaster(config: MasterConfig): Supervisor {
   let releaseFailed = false
   const releaseExecution = (): boolean => {
     if (!execution) return true
-    try { execution.artifact.release(); execution = null; return true } catch {
+    try { execution.artifact.release(); execution = null; return true } catch (caughtFailure) {
       releaseFailed = true
-      log('[harnessd] worker_artifact_release_failed — retaining ownership; restart the supervisor before selecting another build')
+      log(('[harnessd] worker_artifact_release_failed — retaining ownership; restart the supervisor before selecting another build') + ' · ' + errorKind(caughtFailure))
       return false
     }
   }
@@ -431,8 +431,10 @@ export function runMaster(config: MasterConfig): Supervisor {
     // reexec calls this only after reap/release, including failed-exec reacquisition. Admission below
     // alone reuses the prepared handle; an accidental second preparation is refused by its owner.
     const failed = (error: unknown): null => {
-      const reason = error instanceof Error && /^worker_artifact_(request_refused|source_unavailable|source_changed|source_close_unsettled|reserved_name|publish_failed|cleanup_unsettled|in_use)$/.test(error.message)
-        ? error.message : 'worker_artifact_prepare_failed'
+      const reason = ['worker_artifact_request_refused', 'worker_artifact_source_unavailable', 'worker_artifact_source_changed',
+        'worker_artifact_source_close_unsettled', 'worker_artifact_reserved_name', 'worker_artifact_publish_failed',
+        'worker_artifact_cleanup_unsettled', 'worker_artifact_in_use'].find(code => error instanceof Error && error.message === code)
+        ?? 'worker_artifact_prepare_failed'
       const action = reason.endsWith('_unsettled') || reason === 'worker_artifact_in_use' ? 'restart the supervisor' : 'restore a supported selected build'
       log(`[harnessd] ${reason} — ${action}; no children will start`)
       return null
@@ -472,8 +474,8 @@ export function runMaster(config: MasterConfig): Supervisor {
     let child: ChildProcess
     try {
       child = spawn(named(name), args, { env: environment, stdio: ['ignore', output, output, 'ipc'] })
-    } catch {
-      log('[harnessd] child_process_spawn_failed — no PID was created; retrying through the supervisor')
+    } catch (caughtFailure) {
+      log(('[harnessd] child_process_spawn_failed — no PID was created; retrying through the supervisor') + ' · ' + errorKind(caughtFailure))
       return null
     }
     return coreHandle(child, log)
@@ -585,7 +587,7 @@ export function runMaster(config: MasterConfig): Supervisor {
     // On a full disk the claim fails, and the master carries on without it: it was thrown out of the
     // core's `bound` message, and took the master down.
     claimPidFile: () => {
-      try { writePidFile() } catch (error) { log(`[harnessd] could not write the pid file: ${(error as Error).message}`) }
+      try { writePidFile() } catch (error) { log(`[harnessd] could not write the pid file: ${errorKind(error)}`) }
     },
     // Removed as this master exits, below: once a handover under way (Windows) is decided.
     releasePidFile: () => { releaseOnExit = true },
@@ -625,7 +627,7 @@ export function runMaster(config: MasterConfig): Supervisor {
     // which is never a reason for the master to stop.
     coreUp: () => {
       if (markerFile) removeMarker(markerFile)
-      try { config.coreUp?.(node) } catch (error) { log(`[harnessd] what the master does after its core came up failed: ${(error as Error).message}`) }
+      try { config.coreUp?.(node) } catch (error) { log(`[harnessd] what the master does after its core came up failed: ${errorKind(error)}`) }
     },
   }, options, { version: config.version, resume, unjudgedUpdate: unjudged })
   for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP'] as const) onSignal(signal, () => stopAll(signal))

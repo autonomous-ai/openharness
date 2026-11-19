@@ -12,6 +12,7 @@
 import chokidar, { type FSWatcher } from 'chokidar'
 import { existsSync, mkdirSync, readFileSync } from 'node:fs'
 import { basename, dirname } from 'node:path'
+import { errorKind } from '../lib/log.js'
 import { viewerTarget } from '../lib/viewerWire.js'
 
 export type DshPhaseState = 'done' | 'active' | 'pending' | 'failed'
@@ -138,7 +139,7 @@ export class DshVerdictWatcher {
       mkdirSync(dir, { recursive: true })
     } catch (error) {
       // mkdirSync throws only system errors (a file where a directory should be, no permission).
-      this.deps.log?.(`[dsh] verdict dir ${dir} could not be created · ${(error as Error).message}`)
+      this.deps.log?.(`[dsh] verdict dir could not be created · ${errorKind(error)}`)
       return
     }
     const name = basename(file)
@@ -157,7 +158,7 @@ export class DshVerdictWatcher {
       .on('add', (path: string) => { if (relevant(path)) schedule() })
       .on('change', (path: string) => { if (relevant(path)) schedule() })
       .on('unlink', (path: string) => { if (relevant(path)) schedule() })
-      .on('error', (error: unknown) => this.deps.log?.(`[dsh] verdict watch error · ${error instanceof Error ? error.message : error}`))
+      .on('error', (error: unknown) => this.deps.log?.(`[dsh] verdict watch error · ${errorKind(error)}`))
     this.watched.set(agentId, entry)
     // What is already there counts: a restored agent's last verdict is still its verdict.
     if (existsSync(file)) this.publish(agentId, entry)

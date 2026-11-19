@@ -3,6 +3,7 @@ import type { RuntimeCatalogModel, RuntimeModelOption, RuntimeSession } from '..
 import { addOption, encodeRuntimeProfile, RUNTIME_EFFORTS } from '../kit/runtime.js'
 import { confirmObserved } from '../kit/runtimeReader.js'
 import { env } from '../../config/env.js'
+import { errorKind } from '../../lib/log.js'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import * as opencode from './runtimeProfile.js'
@@ -100,8 +101,8 @@ class ProfileReader {
     if (!entries.length) {
       try {
         entries = opencode.parseOpencodeModelsOutput(await run(['models']))
-      } catch {
-        console.warn('[runtime-profile] OPENCODE_CATALOG_UNAVAILABLE')
+      } catch (err) {
+        console.warn('[runtime-profile] OpenCode model catalog failed:', errorKind(err))
       }
     }
     this.catalogs.delete(key)

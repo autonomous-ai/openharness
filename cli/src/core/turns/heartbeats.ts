@@ -6,6 +6,7 @@
  * Moved verbatim out of `runForeground` (the core boundary, step 7: docs/design/2026-10-03-harnessd.md).
  */
 import { correlateAgentEvent, turnHeartbeatFrame } from '../../lib/agentEvent.js'
+import { errorKind } from '../../lib/log.js'
 import type { TurnRecaps } from './recaps.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import type { RuntimeActivityReader } from '../../lib/runtimeActivity.js'
@@ -67,7 +68,7 @@ export function createHeartbeats({ bySession, sessionTurnOpen, agentIdFor, runti
       const deviceBusy = mirror.heartbeat(sessionId)
       if (!sessionTurnOpen(sessionId) && !deviceBusy) stopHeartbeat(sessionId)
     }
-    const timer = setInterval(() => { void beat().catch(error => console.error('[activity] probe failed:', String(error))) }, TURN_HEARTBEAT_MS)
+    const timer = setInterval(() => { void beat().catch(error => console.error('[activity] probe failed:', errorKind(error))) }, TURN_HEARTBEAT_MS)
     heartbeats.set(sessionId, timer)
   }
   return { heartbeats, turnStartedAt, stopHeartbeat, startHeartbeat, tell }

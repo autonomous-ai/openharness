@@ -10,8 +10,6 @@ use harness_device::loginitem::SystemLoginItem;
 use harness_device::runner::{Doors, Runner};
 use harness_device::state::{JsonStateFile, StateFile};
 use harness_device::tabs;
-#[cfg(target_os = "macos")]
-use harness_device::tray_macos;
 use harness_device::types::{Action, Clock, Effect, Event, Log, MenuAction, MenuItem, SystemClock, View};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
@@ -38,7 +36,7 @@ fn view(shared: tauri::State<Shared>) -> Option<View> {
     shared.view.lock().unwrap().clone()
 }
 
-/// An action that is not one of the six never gets here: its JSON does not parse.
+/// An action that is not one of the five never gets here: its JSON does not parse.
 #[tauri::command]
 fn act(action: Action, shared: tauri::State<Shared>) {
     let _ = shared.events.send(Event::Act(action));
@@ -105,8 +103,7 @@ fn start(handle: &AppHandle, events: Sender<Event>, queue: Receiver<Event>) -> t
     );
 
     let (clicks, chosen) = (events.clone(), events.clone());
-    #[cfg_attr(not(target_os = "macos"), allow(unused_variables))]
-    let tray = TrayIconBuilder::with_id(TRAY)
+    TrayIconBuilder::with_id(TRAY)
         .icon(tauri::include_image!("icons/tray.png"))
         .icon_as_template(true)
         .tooltip("Harness")
@@ -123,18 +120,6 @@ fn start(handle: &AppHandle, events: Sender<Event>, queue: Receiver<Event>) -> t
             }
         })
         .build(handle)?;
-    // Desktop's dark artwork on a dark bar (tray_macos.rs), at the size Tauri gave tray.png: the tray's click target
-    // was framed to the button at that size.
-    #[cfg(target_os = "macos")]
-    tray.with_inner_tray_icon(|inner| {
-        let button =
-            objc2::MainThreadMarker::new().zip(inner.ns_status_item()).and_then(|(main, item)| item.button(main));
-        if let Some(button) = button
-            && let Some(image) = button.image().and_then(|light| tray_macos::image(light.size()))
-        {
-            button.setImage(Some(&image));
-        }
-    })?;
 
     let (app, first) = App::new(saved, runner.find_cli(), SystemDesktopApp.installed(), clock.now());
     let looping = handle.clone();
@@ -301,6 +286,7 @@ fn menu_id(action: MenuAction) -> &'static str {
     match action {
         MenuAction::Install => "install",
         MenuAction::SignIn => "sign_in",
+        MenuAction::Orca => "orca",
         MenuAction::SoundOn => "sound_on",
         MenuAction::SoundOff => "sound_off",
         MenuAction::NotifyFull => "notify_full",
@@ -309,12 +295,13 @@ fn menu_id(action: MenuAction) -> &'static str {
         MenuAction::OpenHarness => "open_harness",
         MenuAction::About => "about",
         MenuAction::Quit => "quit",
+        MenuAction::ExportLogs => "export_logs",
     }
 }
 
 fn menu_action(id: &str) -> Option<MenuAction> {
     use MenuAction::*;
-    [Install, SignIn, SoundOn, SoundOff, NotifyFull, NotifyYou, Update, OpenHarness, About, Quit]
+    [Install, SignIn, Orca, SoundOn, SoundOff, NotifyFull, NotifyYou, Update, OpenHarness, About, Quit, ExportLogs]
         .into_iter()
         .find(|action| menu_id(*action) == id)
 }
@@ -325,19 +312,34 @@ mod tests {
     use harness_device::types::{Phase, Screen};
 
     fn view(screen: Screen, phase: Phase, lines: &[&str]) -> View {
-        View { screen, phase, lines: lines.iter().map(|line| line.to_string()).collect() }
+        View { screen, phase, lines: lines.iter().map(|line| line.to_string()).collect(), update: false }
     }
 
     #[test]
     fn every_menu_action_has_its_own_id() {
         use MenuAction::*;
-        let actions = [Install, SignIn, SoundOn, SoundOff, NotifyFull, NotifyYou, Update, OpenHarness, About, Quit];
+        let actions = [
+            Install,
+            SignIn,
+            Orca,
+            SoundOn,
+            SoundOff,
+            NotifyFull,
+            NotifyYou,
+            Update,
+            OpenHarness,
+            About,
+            Quit,
+            ExportLogs,
+        ];
         for action in actions {
             assert_eq!(menu_action(menu_id(action)), Some(action));
         }
         let ids: std::collections::HashSet<_> = actions.into_iter().map(menu_id).collect();
-        assert_eq!(ids.len(), 10);
+        assert_eq!(ids.len(), 12);
         assert_eq!(menu_id(About), "about");
+        assert_eq!(menu_id(ExportLogs), "export_logs");
+        assert_eq!(menu_id(Orca), "orca");
         assert_eq!(menu_id(NotifyFull), "notify_full");
         assert_eq!(menu_id(NotifyYou), "notify_you");
         assert_eq!(menu_action("sound"), None);

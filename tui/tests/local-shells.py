@@ -20,6 +20,7 @@ import sys
 import tempfile
 import time
 from account_fixture import signed_in_account
+import harness_home
 
 TUI = Path(__file__).resolve().parents[1]
 PORT = int(os.environ.get('HN_LOCAL_TEST_PORT', '19441'))
@@ -184,7 +185,11 @@ try:
     print('PASS split, new window, popup and natural exit', flush=True)
 
     mock_log = open(BASE / 'mock.log', 'w')
-    mock = subprocess.Popen([NODE, str(TUI / 'tests/mock-daemon.mjs'), str(PORT)], env=ENV, stdout=mock_log, stderr=subprocess.STDOUT)
+    # The mock's socket sits where a daemon on this computer puts it, not at its default ~/.harness: hn finds it by
+    # its own rule.
+    mock = subprocess.Popen([NODE, str(TUI / 'tests/mock-daemon.mjs'), str(PORT)],
+                            env={**ENV, 'ADAPTER_DATA_DIR': str(harness_home.path(HOME, ENV, 'cli') / 'data')},
+                            stdout=mock_log, stderr=subprocess.STDOUT)
     wait(lambda: 'Mock Claude' in hn('list-harnesses', check=False).stdout, 'Harness daemon arrives', 15)
     send("printf 'WITH_DAEMON:%s:%s\\n' \"$$\" \"$HNE_PERSIST\"")
     wait(lambda: f'WITH_DAEMON:{pid}:remembered' in capture(), 'original local shell survives daemon arrival')

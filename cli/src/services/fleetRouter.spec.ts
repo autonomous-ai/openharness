@@ -175,7 +175,7 @@ describe('which machine an agent is on', () => {
     expect((await settled(router)).map((a) => a.id)).toEqual(['r1'])
     vi.spyOn(Date, 'now').mockReturnValue(now + 60_000)
     await settled(router)
-    expect(log).toHaveBeenCalledWith('cable: office-imac dropped off the carousel (cloud blip)')
+    expect(log).toHaveBeenCalledWith('cable: office-imac dropped off the carousel (Error)')
     expect(await router.listAgentsFlat()).toEqual([])
     // Already empty: a later failure past the grace has nothing to drop and says nothing.
     log.mockClear()
@@ -218,7 +218,7 @@ describe('which machine an agent is on', () => {
       vi.spyOn(Date, 'now').mockReturnValue(now + later)
       await settled(router)
     }
-    expect(log).toHaveBeenCalledWith('cable: office-imac dropped off the carousel (agents_list timed out)')
+    expect(log).toHaveBeenCalledWith('cable: office-imac dropped off the carousel (Error)')
     expect(link.resetSession).toHaveBeenCalledWith('other')
     expect(fleet.reachable('other')).toMatchObject({ ok: false })
   })
@@ -239,7 +239,7 @@ describe('which machine an agent is on', () => {
     }
     vi.spyOn(Date, 'now').mockReturnValue(now + 95_000)
     await settled(router)
-    expect(log).toHaveBeenCalledWith('cable: office-imac dropped off the carousel (UNSUPPORTED)')
+    expect(log).toHaveBeenCalledWith('cable: office-imac dropped off the carousel (Error)')
     expect(await router.listAgentsFlat()).toEqual([])
     // It answers, so it is up: its session stays, and nothing about it is called unreachable.
     expect(link.resetSession).not.toHaveBeenCalled()
@@ -308,7 +308,7 @@ describe('which machine an agent is on', () => {
     expect(await at(75_000)).toEqual(['r1'])
     expect(log).not.toHaveBeenCalledWith(expect.stringContaining('dropped off the carousel'))
     await at(85_000)
-    expect(log).toHaveBeenCalledWith('cable: office-imac dropped off the carousel (UNSUPPORTED)')
+    expect(log).toHaveBeenCalledWith('cable: office-imac dropped off the carousel (Error)')
     expect(await router.listAgentsFlat()).toEqual([])
   })
 

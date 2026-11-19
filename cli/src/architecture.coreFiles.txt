@@ -5,6 +5,7 @@
 backendSocket.ts
 config/env.ts
 config/envFields.ts
+config/harnessHome.ts
 config/loadEnv.ts
 config/terminalConfig.ts
 config/testIsolation.ts
@@ -401,7 +402,6 @@ lib/questionApproval.ts
 lib/questionController.ts
 lib/recapReads.ts
 lib/recordReadWire.ts
-lib/redactSecrets.ts
 lib/registry.ts
 lib/registryPersistence.ts
 lib/relayFrames.ts

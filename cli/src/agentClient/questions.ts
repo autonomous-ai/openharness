@@ -1,3 +1,4 @@
+import { errorKind } from '../lib/log.js'
 import { randomUUID } from 'node:crypto'
 import { AgentClientError, connectSocket, DEFAULT_TIMEOUT_MS, type ClientSocket, type Connect, type Where } from './daemon.js'
 
@@ -128,7 +129,7 @@ export function observeQuestions(where: Where, listener: QuestionListener, conne
       entry.timer.unref?.()
       pending.set(questionId, entry)
       try { socket!.send(JSON.stringify(frame)) }
-      catch { console.warn('[questions] QUESTION_ANSWER_UNAVAILABLE'); fail('QUESTION_OBSERVATION_UNAVAILABLE') }
+      catch (caughtFailure) { console.warn(('[questions] QUESTION_ANSWER_UNAVAILABLE') + ' · ' + errorKind(caughtFailure)); fail('QUESTION_OBSERVATION_UNAVAILABLE') }
     })
   }
   return { ready, answer, close: () => fail('QUESTION_OBSERVATION_CLOSED', false) }

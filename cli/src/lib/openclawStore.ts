@@ -21,6 +21,7 @@ import { nativeHeldFiles, nativeOpenFiles } from './nativeConversation.js'
 import { observeNativeFile } from '../engines/kit/nativeFileObservation.js'
 import { nativeText, nativeUnavailable } from '../engines/kit/nativeEvidence.js'
 import type { ProcessIdentity } from './terminalTypes.js'
+import { errorKind } from './log.js'
 
 /** A TUI keeps its state folder for its whole life; a pid read again after this long may be another process. */
 const CACHE_MS = 60_000
@@ -51,7 +52,7 @@ export async function openclawStateDir(pid: number, openFiles: (pid: number) => 
     held = stateDirOfOpenFiles(await openFiles(pid))
   } catch (error) {
     // Windows has neither /proc nor lsof; a TUI that exited has no files.
-    once(`[openclaw] open files of ${pid} unreadable · ${error instanceof Error ? error.message : String(error)}`)
+    once(`[openclaw] open files of ${pid} unreadable · ${errorKind(error)}`)
   }
   if (!held) return null
   if (cache.size >= CACHE_LIMIT) cache.clear()

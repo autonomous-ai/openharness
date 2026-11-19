@@ -8,7 +8,7 @@ import { createAndRegisterPane } from '../../lib/createAgentPane.js'
 import { WindowsBatchLaunchRefused } from '../../lib/windows/launch.js'
 import { enginePathOverride } from '../../lib/engineBin.js'
 import { windowsAfterExit, windowsHeldPaneArgv } from '../../lib/windows/engineStart.js'
-import { buildEngineCommandArgv, buildEngineLaunchArgv, engineLaunchEnv, refusePermissionFlagIfUnsupported, supportsNamedAgent } from '../../lib/engineLaunch.js'
+import { buildEngineCommandArgv, buildEngineLaunchArgv, engineLaunchEnv, launchAttempts, refusePermissionFlagIfUnsupported, supportsNamedAgent } from '../../lib/engineLaunch.js'
 import { planFork } from '../../lib/forkAgent.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import { createAgentForker, type ForkAgentDeps } from './fork.js'
@@ -35,6 +35,7 @@ vi.mock('../../lib/engineLaunch.js', async (real) => ({
   buildEngineCommandArgv: vi.fn(() => ['claude']),
   buildEngineLaunchArgv: vi.fn(() => ['zsh', '-lc', 'claude']),
   engineLaunchEnv: vi.fn(() => undefined),
+  launchAttempts: vi.fn((first: string[] | (() => string[])) => () => typeof first === 'function' ? first() : first),
   namedAgentArgs: vi.fn((_engine: string, agent: string) => ['--agent', agent]),
   refusePermissionFlagIfUnsupported: vi.fn(async () => null),
   supportsNamedAgent: vi.fn(() => true),
@@ -104,7 +105,7 @@ describe('forking an agent', () => {
       vi.mocked(buildEngineLaunchArgv).mockReturnValueOnce(held)
       expect(await setup(source()).fork({ agentId: 'a1', name: null, prompt: null })).toMatchObject({ ok: true })
       const pane = vi.mocked(createAndRegisterPane).mock.calls[0]![0]
-      expect(pane.argv).toBe(held)
+      expect(typeof pane.argv === 'function' ? pane.argv() : pane.argv).toBe(held)
       expect(pane.paneLaunch).not.toHaveProperty('afterExit')
       expect(buildEngineLaunchArgv).toHaveBeenCalledOnce()
     } finally { Object.defineProperty(process, 'platform', platform) }
@@ -272,6 +273,17 @@ describe('forking an agent', () => {
     expect(request.env?.HOME).toBe(root)
     expect(request.env?.CODEX_HOME).toBe(finalHome)
     if (engine === 'codex') expect(request.codexHome).toBe(finalHome)
+  })
+
+  it('builds a retry pane\'s launch again with the same options, as the first pane\'s shell removed its one-time file', async () => {
+    expect(await setup().fork({ agentId: 'a1', name: null, prompt: null })).toMatchObject({ ok: true })
+    expect(vi.mocked(createAndRegisterPane).mock.calls[0]![0].argv).toBe(vi.mocked(launchAttempts).mock.results.at(-1)!.value)
+    const command = vi.mocked(createAndRegisterPane).mock.calls[0]![0].argv
+    if (typeof command !== 'function') throw new Error('command must remain deferred')
+    const built = vi.mocked(buildEngineLaunchArgv).mock.results.length
+    command()
+    expect(vi.mocked(buildEngineLaunchArgv).mock.results).toHaveLength(built + 1)
+    expect(vi.mocked(buildEngineLaunchArgv).mock.calls[built]).toEqual(vi.mocked(buildEngineLaunchArgv).mock.calls[built - 1])
   })
 
   it('keeps its source\'s Claude account on its row', async () => {

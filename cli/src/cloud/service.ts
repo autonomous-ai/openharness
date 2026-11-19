@@ -19,6 +19,7 @@ import type { SessionOwnerCore, OwnerDelivery } from '../lib/sessionOwnerWire.js
 import type { SessionFacts } from '../lib/sessionPresentation.js'
 import { CLOUD_AGENT_IDS, CLOUD_AGENTS, SAID_MAX, cloudAgentFrame, cloudHarnessIn, cloudRequestRefusal, isCloudAgent, repositoryOf, type CloudAgentId, type CloudCard, type CloudHarness } from '../lib/cloudAgents.js'
 import { deriveTurnSummary } from '../lib/deviceRecap.js'
+import { errorKind } from '../lib/log.js'
 import { splitSummary } from '../lib/recapReads.js'
 import { connectionFor, connectionsBridge, type Bridge } from './bridge.js'
 import { cursorAdapter } from './cursor.js'
@@ -282,7 +283,7 @@ export function startCloudService(options: CloudServiceOptions) {
       
         entry.failures += 1
         const said = error instanceof CloudError ? error.message : `${CLOUD_AGENTS[entry.harness.agent].name} could not be reached.`
-        log(`[cloud] ${agentId} look failed (${entry.failures}): ${error instanceof Error ? error.name : 'error'}`)
+        log(`[cloud] ${agentId} look failed (${entry.failures}): ${errorKind(error)}`)
         if (entry.harness.activity !== said) { entry.harness.activity = said; touched(entry, reservation) }
         schedule(agentId, Math.min(BACKOFF_MAX_MS, WORKING_MS * 2 ** entry.failures))
         return

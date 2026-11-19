@@ -18,6 +18,7 @@
  * hour, as anything another agent started.
  */
 import type { Ledger, LedgerMember, Started } from '../agentClient/ledger.js'
+import { errorKind } from '../lib/log.js'
 import type { RegisteredSession } from '../lib/registry.js'
 
 /** How long a Hachi harness must be seen gone before what it started is handed over without a stop. */
@@ -54,13 +55,13 @@ export function createHachiHandOver(deps: HachiHandOverDeps) {
         const line = { at: deps.now(), from, handed: { machineId: row.child.machineId, agentId: row.child.agentId } }
         if (row.child.machineId !== from.machineId) {
           try { await deps.tell(row.child.machineId, { action: 'handed', row: line }) } catch (error) {
-            deps.log(`[hachi] could not hand ${row.child.name || row.child.agentId.slice(0, 8)} to the person on its machine yet: ${error instanceof Error ? error.message : String(error)}. Asked again at the next look.`)
+            deps.log(`[hachi] could not hand ${row.child.agentId.slice(0, 8)} to the person on its machine yet: ${errorKind(error)}. Asked again at the next look.`)
             continue
           }
         }
         deps.ledger.append(line)
         deps.count('hachi_handed_to_person')
-        deps.log(`[hachi] handed ${row.child.name || row.child.agentId.slice(0, 8)} to the person: Hachi closed.`)
+        deps.log(`[hachi] handed ${row.child.agentId.slice(0, 8)} to the person: Hachi closed.`)
       }
     } finally {
       handing.delete(agentId)

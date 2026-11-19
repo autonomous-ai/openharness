@@ -316,6 +316,23 @@ it('defers history publication if identity becomes held during pane hydration', 
   expect(run.deps.emit).not.toHaveBeenCalled()
 })
 
+// A hookless Hermes resume is attached with its row unbound, and its terminal record's confirmation binds the row
+// (agents/bind.ts): the attach that gives up on it leaves the attach after it a session to open, not a stream to find.
+it.each([['hermes', 'profile'], ['opencode', 'pane']] as const)('leaves its %s stream to the next attach when the binding moves on while its %s is read', async (engine, read) => {
+  vi.spyOn(console, 'log').mockImplementation(() => {})
+  const run = setup(), row = session(engine, undefined, { boundAt: null })
+  const moveOn = () => { bindings.set(row.agentId, { ...row, boundAt: 1 }) }
+  if (read === 'profile') vi.mocked(run.deps.runtimeProfiles.ingestConfig).mockImplementationOnce(async () => { moveOn(); return false })
+  else vi.mocked(run.deps.captureTerminal).mockImplementationOnce(async () => { moveOn(); return 'pane' })
+  expect(await run.attach.attachSession(row)).toBe(false)
+  expect(run.normalizers.hasState(row.sessionId)).toBe(false)
+  expect(await run.attach.attachSession(bindings.get(row.agentId)!)).toBe(true)
+  // The next attach read the conversation itself, and watches it for a question.
+  expect(made(engine)).toHaveLength(2)
+  expect(run.deps.questionWatcher.start).toHaveBeenCalledExactlyOnceWith(row.sessionId)
+  run.attach.forget(row.sessionId)
+})
+
 describe('the order of an attach of another engine\'s session', () => {
   it('loads the engine\'s code, then folds, then starts the tail: no line can come before its normalizer', async () => {
     let loaded!: () => void
@@ -410,11 +427,11 @@ it('discards a queued attach whose binding was forgotten while every reader slot
   expect(run.deps.terminalGone).toHaveBeenCalledOnce()
 })
 
-it.each([new Error('unavailable'), 'unavailable'])('contains a failed core locator without rejecting the binding: %s', async error => {
+it.each([[new Error('unavailable'), 'Error'], ['unavailable', 'string']])('contains a failed core locator without rejecting the binding: %s', async (error, kind) => {
   const log = vi.spyOn(console, 'error').mockImplementation(() => {})
   const run = setup({ cursorDiscovery: { add: vi.fn(async () => { throw error }) } })
   expect(await run.attach.attachSession(session('cursor'))).toBe(true)
-  expect(log).toHaveBeenCalledWith('[cursor-discovery] lookup failed: unavailable')
+  expect(log).toHaveBeenCalledWith(`[cursor-discovery] lookup failed: ${kind}`)
 })
 
 it.each(['terminal probe', 'optional module'] as const)('attaches a newly located Cursor file after its pathless %s was superseded', async phase => {
@@ -745,7 +762,7 @@ describe('attaching a session', () => {
       expect(run.normalizers.liveParsers.has('terminal-s')).toBe(true)
       expect(run.profile.commit).toHaveBeenCalled()
       expect(error.mock.calls).toEqual([
-        ['[transcripts] the runtime profile could not take in a line of terminal; the line goes on to its engine: profile unreadable'],
+        ['[transcripts] the runtime profile could not take in a line of terminal; the line goes on to its engine: string'],
       ])
     })
 
@@ -964,6 +981,20 @@ describe('attaching a session', () => {
         run.attach.forget(s.sessionId)
       },
     )
+
+    it('leaves its agy stream to the next attach when the binding moves on while its pane is read', async () => {
+      const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+      vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const run = setup(), row = session('agy', transcript([{ events: [started()], open: true }]), { boundAt: null })
+      vi.mocked(run.deps.captureTerminal).mockImplementationOnce(async () => { bindings.set(row.agentId, { ...row, boundAt: 1 }); return 'pane' })
+      expect(await run.attach.attachSession(row)).toBe(false)
+      expect(run.normalizers.hasState(row.sessionId)).toBe(false)
+      expect(await run.attach.attachSession(bindings.get(row.agentId)!)).toBe(true)
+      // The next attach read the conversation itself.
+      expect(made('agy')).toHaveLength(2)
+      expect(log.mock.calls.some(([line]) => String(line).includes('attached · engine=agy'))).toBe(true)
+      run.attach.forget(row.sessionId)
+    })
 
     it('tells the recaps when the last turn was already over at attach, never for one open or killed', async () => {
       vi.spyOn(console, 'log').mockImplementation(() => {})
@@ -1545,7 +1576,7 @@ describe('attaching a session', () => {
         expect(vi.getTimerCount()).toBe(0)
       })
 
-      it.each([new Error('probe failed'), 'probe failed'])('says when it fails: %s', async error => {
+      it.each([[new Error('probe failed'), 'Error'], ['probe failed', 'string']])('says when it fails: %s', async (error, kind) => {
         fakeTimers(); quiet()
         const log = vi.spyOn(console, 'error').mockImplementation(() => {})
         const run = setup(), row = session('claude', transcript([CLAUDE_PROMPT]))
@@ -1555,7 +1586,7 @@ describe('attaching a session', () => {
         vi.mocked(run.deps.terminalGone).mockRejectedValueOnce(error)
         await vi.advanceTimersByTimeAsync(1_000)
         await until(() => log.mock.calls.length > 0)
-        expect(log.mock.calls).toEqual([['[agent] claude-a attach retry failed: probe failed']])
+        expect(log.mock.calls).toEqual([[`[agent] claude-a attach retry failed: ${kind}`]])
         expect(vi.getTimerCount()).toBe(0)
       })
     })
@@ -1872,7 +1903,7 @@ it('keeps normal Stop on its existing path and contains a rejected recovery sche
   expect(run.attach.holdStop(row)).toBe(false)
   vi.spyOn(run.attach.attaches, 'attach').mockRejectedValueOnce(new Error('scheduler unavailable'))
   run.attach.holdInterpretation(row, 'waiting for evidence')
-  await vi.waitFor(() => expect(warn).toHaveBeenCalledWith(expect.stringContaining('scheduler unavailable')))
+  await vi.waitFor(() => expect(warn).toHaveBeenCalledWith('[agent] recovery held: Error'))
   expect(row.interpretationHold).toBe('waiting for evidence')
   run.attach.forget(row.sessionId)
 })
@@ -2041,9 +2072,13 @@ it.each(['missing', 'unavailable', 'rebound', 'failed-after-rebind'])('preserves
     return kind === 'missing' ? null : '/db/store'
   } })
   const unavailable = vi.spyOn(run.others.streams, 'unavailable')
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
   const answer = await run.attach.attachSession(row)
   expect(answer).toBe(kind !== 'rebound')
   expect(unavailable).toHaveBeenCalledTimes(kind === 'unavailable' ? 1 : 0)
+  if (kind === 'unavailable' || kind === 'failed-after-rebind') {
+    expect(warn).toHaveBeenCalledWith('[agent] opencode transcript held · engine=opencode · its store reader is unavailable · Error')
+  }
   expect(inWorker(run, row.sessionId)).toBeUndefined()
 })
 

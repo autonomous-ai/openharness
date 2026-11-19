@@ -3,13 +3,14 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, expect, it, vi } from 'vitest'
 import { majorVersion, nativeVersionProbe, parseRelease, probedVersion, releaseAtLeast, type Release } from './nativeVersion.js'
+import { writeExecutable } from '../../testing/executableFixture.js'
 
 const roots: string[] = []
 const rule = { output: /(\d+)\.\d+\.\d+/, args: ['--version'], timeoutMs: 2_000 }
 function fixture(source: string) {
   const root = mkdtempSync(join(tmpdir(), 'native-version-probe-')); roots.push(root)
   const file = join(root, 'engine')
-  writeFileSync(file, `#!${process.execPath}\n${source}\n`, { mode: 0o700 })
+  writeExecutable(file, `#!${process.execPath}\n${source}\n`)
   return file
 }
 afterEach(() => { vi.unstubAllEnvs(); vi.resetModules(); for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }) })
@@ -44,7 +45,10 @@ it('discards a version answer if the selected executable is replaced while it ru
 })
 
 it('bounds a native process that never answers', async () => {
-  const file = fixture('setInterval(() => {}, 1000)')
+  // Not `fixture`: a process meant to be cut off needs no admission run first, which would only spend this case's 2 s.
+  const root = mkdtempSync(join(tmpdir(), 'native-version-probe-')); roots.push(root)
+  const file = join(root, 'engine')
+  writeFileSync(file, `#!${process.execPath}\nsetInterval(() => {}, 1000)\n`, { mode: 0o700 })
   const bounded = { ...rule, timeoutMs: 80 }
   expect(await majorVersion(bounded, nativeVersionProbe(bounded, () => file), new Map())).toBeNull()
 }, 2_000)
@@ -114,7 +118,7 @@ it('keeps the production resolver asynchronous when only the interactive shell c
   const file = fixture("console.log('2.0.18')")
   const root = roots.at(-1)!, engine = join(root, 'opencode'), shell = join(root, 'shell'), release = join(root, 'allow-shell')
   renameSync(file, engine)
-  writeFileSync(shell, `#!${process.execPath}\nconst fs = require('node:fs');\nconst timer = setInterval(() => { if (fs.existsSync(${JSON.stringify(release)})) { clearInterval(timer); console.log('__HARNESS_ENGINE_PATH__=' + ${JSON.stringify(root)}); } }, 10)\n`, { mode: 0o700 })
+  writeExecutable(shell, `#!${process.execPath}\nconst fs = require('node:fs');\nconst timer = setInterval(() => { if (fs.existsSync(${JSON.stringify(release)})) { clearInterval(timer); console.log('__HARNESS_ENGINE_PATH__=' + ${JSON.stringify(root)}); } }, 10)\n`)
   vi.stubEnv('HOME', root); vi.stubEnv('USERPROFILE', root); vi.stubEnv('PATH', join(root, 'empty-path'))
   vi.stubEnv('SHELL', shell); vi.stubEnv('NODE_ENV', 'production'); vi.stubEnv('OPENCODE_PATH', '')
   vi.resetModules()

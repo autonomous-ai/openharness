@@ -38,7 +38,7 @@ describe('SerialLink over harness-serial (any OS, the stand-in)', () => {
     const closed = vi.fn()
     const link = await SerialLink.openWindows('COM3', () => {}, closed, fake)
     try {
-      await vi.waitFor(() => expect(closed).toHaveBeenCalledExactlyOnceWith('closed: The device is not connected.'))
+      await vi.waitFor(() => expect(closed).toHaveBeenCalledExactlyOnceWith('PORT_CLOSED'))
     } finally { await link.close() }
   })
 

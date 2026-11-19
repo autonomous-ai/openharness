@@ -11,6 +11,7 @@ import { binaryVersion, discoveredHostDead, ensurePtyHost, forgetExitedHost, lis
 import { currentPtyVersion, ptyHostBinary } from './binary.js'
 import { discoveryFileName } from './instance.js'
 import { helloProof, PTY_PROTOCOL, SUPPORTED_PTY_PROTOCOLS } from './protocol.js'
+import { writeExecutable } from '../../testing/executableFixture.js'
 
 const exe = process.platform === 'win32' ? 'harness-pty.exe' : 'harness-pty'
 const cleanup: Array<() => unknown> = []
@@ -162,7 +163,9 @@ describe('listDiscoveries', () => {
 function fakeBinary(mode: 'serve' | 'fail' | 'quiet' | 'deaf', options: { instance?: string; versionLine?: string; file?: string } = {}): string {
   const instance = options.instance ?? LEGACY
   const name = discoveryFileName(instance)!
-  return executable(options.file ?? path.join(tempDir('bin-'), exe), `#!${process.execPath}
+  const file = options.file ?? path.join(tempDir('bin-'), exe)
+  mkdirSync(path.dirname(file), { recursive: true })
+  writeExecutable(file, `#!${process.execPath}
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import net from 'node:net'
@@ -216,6 +219,7 @@ server.listen(endpoint, () => {
 })
 }
 `)
+  return file
 }
 
 /** A home whose spawned fake hosts are killed after the test. */

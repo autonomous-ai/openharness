@@ -1,3 +1,4 @@
+import { errorKind } from '../lib/log.js'
 import type { Asker, RouteAnswer, SendResult } from '../core/api.js'
 import { ROUTE_COMMAND_TYPES } from '../lib/relayFrames.js'
 
@@ -25,8 +26,8 @@ export function createOwnerCommands(deps: {
       const agentId = payload.agentId
       if (typeof agentId !== 'string' || !agentId.length || agentId.length > 160) return { error: 'INVALID_REQUEST' }
       return await deps.send(agentId, text)
-    } catch {
-      deps.log('[devices] owner command COMMAND_UNAVAILABLE')
+    } catch (caughtFailure) {
+      deps.log(('[devices] owner command COMMAND_UNAVAILABLE') + ' · ' + errorKind(caughtFailure))
       return { ...UNAVAILABLE }
     } finally { pending.delete(active) }
   }

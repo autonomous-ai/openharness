@@ -10,6 +10,7 @@ import { applyProfileEvidence, encodeRuntimeProfile, fillConfiguredEffort, recor
 export { encodeRuntimeProfile, runtimeModelLabel } from '../engines/kit/runtime.js'
 import { engineNow, isOtherEngine, loadEngine } from '../engines/inProcess.js'
 import { processIdentityKey } from './terminalRuntime.js'
+import { errorKind } from './log.js'
 
 const blankState = (): RuntimeState => ({ model: null, effort: null, mode: 'unknown', cliVersion: null, observedAt: null })
 
@@ -95,7 +96,7 @@ export class RuntimeProfileState {
       return reader
     } catch (error) {
       this.failedReaders.add(engine)
-      console.warn(`[runtime-profile] ${engine} reader unavailable:`, error instanceof Error ? error.message : String(error))
+      console.warn(`[runtime-profile] ${engine} reader unavailable:`, errorKind(error))
       return null
     }
   }
@@ -409,7 +410,7 @@ export class RuntimeProfileState {
       if (this.states.has(sessionId)) return
       for (const reader of readers) {
         try { reader.forget?.(sessionId) }
-        catch (error) { console.warn(`[runtime-profile] ${reader.engine} cleanup failed:`, error instanceof Error ? error.message : String(error)) }
+        catch (error) { console.warn(`[runtime-profile] ${reader.engine} cleanup failed:`, errorKind(error)) }
       }
     })
   }

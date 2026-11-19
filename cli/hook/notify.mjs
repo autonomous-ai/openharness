@@ -23,6 +23,7 @@ import {
   accessSync,
   closeSync,
   constants,
+  existsSync,
   fchmodSync,
   fstatSync,
   fsyncSync,
@@ -142,9 +143,27 @@ function agyStopStatus(input) {
   return input.fullyIdle === false ? 'waiting' : failed || input.error ? 'error' : undefined
 }
 
+/**
+ * Harness's data and state folders, by the rule of src/config/harnessHome.ts: on Linux the XDG ones once the data one
+ * holds its marker (`.harness-root`, a file: a folder of its name is none), else ~/.harness while that exists, else the
+ * XDG ones (a variable counts only as an absolute path); ~/.harness elsewhere.
+ */
+function harnessRoots() {
+  const legacy = join(homedir(), '.harness')
+  if (process.platform !== 'linux') return { data: legacy, state: legacy }
+  const base = (name, ...fallback) => isAbsolute(process.env[name] || '') ? process.env[name] : join(homedir(), ...fallback)
+  const xdg = { data: join(base('XDG_DATA_HOME', '.local', 'share'), 'harness'), state: join(base('XDG_STATE_HOME', '.local', 'state'), 'harness') }
+  return isRegularFile(join(xdg.data, '.harness-root')) || !existsSync(legacy) ? xdg : { data: legacy, state: legacy }
+}
+
+/** A regular file, through a link as the installers' `test -f` looks; a folder, or nothing, is none. */
+function isRegularFile(path) {
+  try { return statSync(path).isFile() } catch { return false }
+}
+
 function paths() {
-  const cliDir = join(homedir(), '.harness', 'cli')
-  const dataDir = routed?.dataDir ?? argValue('--data-dir', process.env.ADAPTER_DATA_DIR || join(cliDir, 'data'))
+  // Every installed command names its data folder: the rule is looked up only for one that does not.
+  const dataDir = routed?.dataDir ?? (argValue('--data-dir', '') || process.env.ADAPTER_DATA_DIR || join(harnessRoots().data, 'cli', 'data'))
   const claudeProjectsDir = argValue('--claude-projects-dir', process.env.CLAUDE_PROJECTS_DIR || join(homedir(), '.claude', 'projects'))
   const codexHome = argValue('--codex-home', process.env.CODEX_HOME || join(homedir(), '.codex'))
   const grokHome = argValue('--grok-home', process.env.GROK_HOME || join(homedir(), '.grok'))
@@ -282,9 +301,11 @@ function boundedPrompt(prompt) {
 
 /**
  * POST one hook event to the daemon. Resolves true when it answered 2xx, false when it could not be
- * reached or refused, 'held' for live admission backpressure, and 'late' when it took the request but
- * did not answer within the budget. Neither live hold is permission for an offline registry write.
+ * reached, 'refused' when it answered anything else, 'held' for live admission backpressure, and 'late'
+ * when it took the request but did not answer within the budget. Only false permits an offline registry write.
  *
+ * 'refused' is a daemon that runs: a 500 taken for an outage wrote the hook's own row in place of the
+ * agent's, which the daemon's next save took in, and the agent it had created was gone (e2e/scale.e2e.ts).
  * 'late' is not "the daemon is down", and nothing may be written behind its back for it: the request is
  * in its socket, and it handles it once it gets to it. A daemon whose event loop is held for a few
  * seconds (or one simply slow to answer a session-start, which waits for a discovery pass) used to get
@@ -292,9 +313,10 @@ function boundedPrompt(prompt) {
  * permission mode or close plan the daemon kept, merged over its own at its next save
  * (e2e/stall.e2e.ts).
  */
-/** This process's start, epoch ms: the engine ran the hook then. */
+/** This process's start, epoch ms: the engine ran the hook then. One reading Node took as it started: two clock
+ *  reads here, with a pause between them, put it before the turn's opening record (CI 44381432197, Linux). */
 const DELIVERY_ID = randomUUID()
-const FIRED_AT = Date.now() - Math.round(process.uptime() * 1000)
+const FIRED_AT = Math.floor(performance.timeOrigin)
 
 /** Mirrors MAX_SOCKET_PATH_BYTES in src/lib/localSocket.ts. */
 const MAX_SOCKET_PATH_BYTES = 96
@@ -316,8 +338,24 @@ function privateSocket(file) {
 function socketIn(dataDir, port) {
   const beside = join(dataDir, `daemon-${port}.sock`)
   if (Buffer.byteLength(beside) <= MAX_SOCKET_PATH_BYTES) return beside
-  const short = join(homedir(), '.harness', 's', createHash('sha256').update(dataDir).digest('hex').slice(0, 16), `daemon-${port}.sock`)
+  const root = runtimeShortRoot() ?? join(harnessRoots().state, 's')
+  const short = join(root, createHash('sha256').update(dataDir).digest('hex').slice(0, 16), `daemon-${port}.sock`)
   return Buffer.byteLength(short) <= MAX_SOCKET_PATH_BYTES ? short : null
+}
+
+/**
+ * Where short folders go on Linux when the account has its own runtime folder, as src/lib/localSocket.ts finds it:
+ * `$XDG_RUNTIME_DIR/harness` when the variable names an absolute path to a real folder, not a link, of this account's,
+ * mode 0700. Null otherwise.
+ */
+function runtimeShortRoot() {
+  const dir = process.env.XDG_RUNTIME_DIR
+  if (process.platform !== 'linux' || !dir || !isAbsolute(dir)) return null
+  try {
+    const seen = lstatSync(dir)
+    const uid = typeof process.getuid === 'function' ? process.getuid() : null
+    return seen.isDirectory() && seen.uid === uid && (seen.mode & 0o7777) === 0o700 ? join(dir, 'harness') : null
+  } catch { return null }
 }
 
 function daemonSocket(port, dataDir) {
@@ -445,7 +483,7 @@ function post(port, path, body, onResponse, facts = {}) {
           if (ok && onResponse && response.length <= 16_384) {
             try { onResponse(JSON.parse(response)) } catch { /* Unavailable context never blocks a turn. */ }
           }
-          resolve(ok)
+          resolve(ok || 'refused')
         })
       }
     )
@@ -648,21 +686,51 @@ function relayedPrompt(engine, event, input) {
 }
 
 /** The shells an engine runs its hook through: `/bin/sh -c` is dash on Debian and Ubuntu, bash on Fedora and Arch,
- *  BusyBox's on Alpine, and each runs as `sh`; an engine that asks for bash or dash by name runs it so. */
-const HOOK_SHELLS = new Set(['sh', 'dash', 'bash'])
+ *  BusyBox's on Alpine, and each runs as `sh`; an engine that asks for a shell by name, the person's own zsh or fish
+ *  among them, runs it so. */
+const HOOK_SHELLS = new Set(['sh', 'dash', 'bash', 'zsh', 'fish'])
 
 /**
- * The engine's pid, which the devices keep for a paneless agent (cable/hosts/observed.ts). On Linux dash keeps an
- * engine's `sh -c` as the hook's parent, and it exits with the hook: the devices walked from a pid already gone,
- * refused a tap on the agent's tmux pane and dropped the agent 30 s later (GitHub run 43721656615). The shell's parent
- * is the engine, read from /proc, never the environment. macOS's /bin/sh is a bash that execs the hook, so its parent
- * is the engine already, with no `ps` on the engine's wait.
+ * Whether a shell's command line (/proc's, NUL-separated) has it run a command string: before its first operand, `-c`
+ * or a single-dash cluster holding `c` (`-lc`, `-ec`). `-o pipefail`, `+o` and `-O extglob` take the next word as
+ * their own, so it is no operand; a long option (`--norc`) is no cluster, whatever its letters.
  */
-function observedCallerPid() {
+function runsCommandString(cmdline) {
+  const words = cmdline.split('\0')
+  for (let index = 1; index < words.length; index++) {
+    const word = words[index]
+    const cluster = /^-[^-]/.test(word)
+    if (cluster && word.includes('c')) return true
+    if ((cluster || word.startsWith('+')) && /[oO]/.test(word)) index++
+    // The first operand (a script), `-`, `--` or another `+` word: the scan reads no further, and the shell is named.
+    else if (!cluster && !/^--./.test(word)) return false
+  }
+  return false
+}
+
+/**
+ * The hook's caller, the nearest ancestor that outlives it: the core checks it against the engine's recorded process
+ * (core/engines/hooks.ts), and the devices keep it for a paneless agent (cable/hosts/observed.ts). On Linux dash keeps
+ * an engine's `sh -c` as the hook's parent, and it exits with the hook: the devices kept a pid already gone and dropped
+ * the agent (GitHub run 43721656615), and a core held for a second read its process table after the shell had exited
+ * and refused the Stop as unbound (e2e/stallHook.e2e.ts). So the climb passes every command shell in a row, at most 8
+ * on the engine's wait, read from /proc, never the environment. Only command shells: an engine may itself be a shell
+ * that runs a script, and a person's pane shell runs no `-c`, so the climb stops at either and never names a process
+ * above the engine. A process /proc cannot show is named, as nothing above it can be read. A shell left to init, its
+ * engine gone, is named itself: pid 1 never exits, and the devices would keep the agent. macOS's /bin/sh is a bash
+ * that execs the hook, so its parent is the engine already, with nothing to climb.
+ */
+function hookCallerPid() {
   if (process.platform !== 'linux') return process.ppid
-  const parent = linuxOwnerBirth(process.ppid)
-  // A shell left to init, its engine gone, is named itself: pid 1 never exits, and the devices would keep the agent.
-  return parent && HOOK_SHELLS.has(parent.command) && parent.parentPid > 1 ? parent.parentPid : process.ppid
+  let pid = process.ppid
+  for (let step = 0; step < 8; step++) {
+    const shell = linuxOwnerBirth(pid)
+    if (!shell || !HOOK_SHELLS.has(shell.command) || shell.parentPid <= 1) break
+    const cmdline = readProcField(pid, 'cmdline')
+    if (cmdline === null || !runsCommandString(cmdline)) break
+    pid = shell.parentPid
+  }
+  return pid
 }
 
 /** The core refuses an event whose title is longer (core/observedHook.ts): the hook cuts it to this instead. */
@@ -703,7 +771,7 @@ function observedBody(engine, event, input) {
     : Array.isArray(input.workspacePaths) ? input.workspacePaths[0]
       : input.cwd || input.workspaceRoot || (engine === 'devin' ? process.cwd() : undefined)
   const body = {
-    engine, sessionId, event: kind, cwd: path(cwd), callerPid: observedCallerPid(),
+    engine, sessionId, event: kind, cwd: path(cwd), callerPid: hookCallerPid(),
     transcriptPath: path(input.transcript_path || input.transcriptPath), hostHints: hostHints(),
   }
   if (relayedPrompt(engine, event, input)) body.relayed = true
@@ -845,7 +913,7 @@ function terminalHookFields(tmuxPane) {
   const runtimeHints = []
   if (tmuxPane) runtimeHints.push({ backend: 'tmux', paneId: tmuxPane })
   else if (PTY_PANE) runtimeHints.push({ backend: 'ptyhost', instance: PTY_PANE.instance, paneId: PTY_PANE.paneId })
-  return { tmuxPane, runtimeHints, callerPid: process.ppid }
+  return { tmuxPane, runtimeHints, callerPid: hookCallerPid() }
 }
 
 function sleep(ms) {
@@ -1006,11 +1074,11 @@ async function ownPane(pane) {
 }
 
 /**
- * Where every daemon on this computer says it listens, one file per pane tag (src/lib/hookRoutes.ts,
- * which hookNotify.spec.ts keeps this equal to).
+ * Where every daemon on this computer says it listens, one file per pane tag (src/lib/hookRoutes.ts), by default
+ * in the state folder.
  */
 function hookRoutesDir() {
-  return process.env.HARNESS_HOOK_ROUTES_DIR || join(homedir(), '.harness', 'hook-routes')
+  return process.env.HARNESS_HOOK_ROUTES_DIR || join(harnessRoots().state, 'hook-routes')
 }
 
 /**

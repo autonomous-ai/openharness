@@ -1,4 +1,5 @@
 /** Optional source policy and its one derived artifact belong to engineSetup. */
+import { errorKind } from '../lib/log.js'
 import { lstatSync } from 'node:fs'
 import { dirname, join, parse, resolve } from 'node:path'
 import { agentSettingsFromText } from '../lib/agentSettings.js'
@@ -119,8 +120,8 @@ export async function prepareNativeLaunchSettings(input: LaunchSettingsInput, da
     } else verify()
     verify()
     return (!outputCurrent || outputCurrent()) && active() ? candidate : null
-  } catch {
-    console.warn('[launch-settings] OPTIONAL_PREPARATION_UNAVAILABLE')
+  } catch (caughtFailure) {
+    console.warn(('[launch-settings] OPTIONAL_PREPARATION_UNAVAILABLE') + ' · ' + errorKind(caughtFailure))
     return null
   }
 }

@@ -1,6 +1,7 @@
 /** Shared account settings and authority for agent launches. Feature startup policy lives in edge. */
 import { AGENT_SETTING_EXPERIMENTS, AGENT_SETTING_NAMES, agentSettingsFromAnswer, ownsAgentSettings, readAgentSettings, saveAgentSettings, type AgentSettings } from '../lib/agentSettings.js'
 import type { AuthSession } from '../lib/authSession.js'
+import { errorKind } from '../lib/log.js'
 import type { BackendNotice } from './api.js'
 
 /** How often the core reads the account's experiments again when nothing else asks: a safety net for a `desk_changed`
@@ -59,7 +60,7 @@ export function createAgentSettingsSync(deps: {
     if (!ownsAgentSettings(owner, now)) return answer
     const before = readAgentSettings(deps.dataDir, now)
     try { saveAgentSettings(deps.dataDir, owner, said.settings) } catch (error) {
-      log(`[experiments] the agents' settings could not be kept · ${String(error)}`)
+      log(`[experiments] the agents' settings could not be kept · ${errorKind(error)}`)
       return answer
     }
     if (said.settings.agentMessages !== before.agentMessages) deps.messagesChanged()
@@ -71,7 +72,7 @@ export function createAgentSettingsSync(deps: {
     const asked = deps.session()
     if (!asked?.machineId) return
     try { heard(await deps.backend('GET', EXPERIMENTAL_SETTINGS), asked) } catch (error) {
-      log(`[experiments] the account's experiments could not be read · ${error instanceof Error ? error.message : String(error)}`)
+      log(`[experiments] the account's experiments could not be read · ${errorKind(error)}`)
     }
   }
 
@@ -144,9 +145,10 @@ export function createAgentSettingsSync(deps: {
         if (!agentSettingsFromAnswer(written)) return failed(written)
       }
       // Turned on by an agent on the person's yes (agentClient/settings.ts): Harness has only its word for that yes.
+      // Its name is the person's words, so the log says only that an agent did.
       const byAgent = (body as Record<string, unknown>).byAgent
       if (typeof byAgent === 'string' && byAgent.trim()) {
-        log(`[settings] ${changes.map(([key, enabled]) => `${key} ${enabled ? 'on' : 'off'}`).join(', ')} by ${byAgent.trim().slice(0, 40)}, which says the person said yes`)
+        log(`[settings] ${changes.map(([key, enabled]) => `${key} ${enabled ? 'on' : 'off'}`).join(', ')} by an agent, which says the person said yes`)
       }
       return { status: 200, body: { ...readAgentSettings(deps.dataDir, deps.session()), signedIn: true } }
     },
@@ -167,7 +169,7 @@ export function createAccountNotices(tell: (notice: BackendNotice) => void, log:
     },
     notice(notice: BackendNotice): void {
       for (const listener of listeners) {
-        try { listener(notice) } catch (error) { log(`[experiments] a notice's listener failed · ${error instanceof Error ? error.message : String(error)}`) }
+        try { listener(notice) } catch (error) { log(`[experiments] a notice's listener failed · ${errorKind(error)}`) }
       }
       tell(notice)
     },

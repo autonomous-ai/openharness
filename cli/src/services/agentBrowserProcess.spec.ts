@@ -160,7 +160,7 @@ describe('the agent browser in its own process', () => {
     const { options, move } = setup()
     move.mockRejectedValue(new Error('closing'))
     options.onEvent!({ kind: 'moved', from: 'a1', session: { agentId: 'b1' }, on: true })
-    await vi.waitFor(() => expect(log).toHaveBeenCalledWith('agent browser b1: browser_move_failed (no_answer)'))
+    await vi.waitFor(() => expect(log).toHaveBeenCalledWith('agent browser b1: browser_move_failed (no_answer) · Error'))
     log.mockRestore()
   })
 

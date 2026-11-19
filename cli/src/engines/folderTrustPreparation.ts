@@ -1,4 +1,5 @@
 /** Core keeps eligibility and file publication; setup owns the optional trust/MCP interpretation. */
+import { errorKind } from '../lib/log.js'
 import { realpathSync, statSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { launchHomeOf } from '../lib/engineHomes.js'
@@ -75,6 +76,6 @@ export function createFolderTrustPreparation(setup: Pick<NativeSetup, 'prepareTr
         }, { current: active, timeoutMs: 5000, retainConflicts: true, published: index => { if (index === 0) trustPublished = true } })
       if (!confirmed) console.warn('[trust] FOLDER_TRUST_UNAVAILABLE')
       return confirmed
-    } catch { console.warn('[trust] FOLDER_TRUST_UNAVAILABLE'); return false }
+    } catch (caughtFailure) { console.warn(('[trust] FOLDER_TRUST_UNAVAILABLE') + ' · ' + errorKind(caughtFailure)); return false }
   }
 }

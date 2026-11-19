@@ -1,4 +1,5 @@
 /** Core-owned profile snapshots and transactions. Vendor interpretation happens only in the worker. */
+import { errorKind } from '../../lib/log.js'
 import type { RuntimeAnswer, RuntimeOperation } from '../../engines/worker/runtimeProtocol.js'
 import { RUNTIME_RECORDS, RUNTIME_REQUEST_BYTES, RUNTIME_WAIT_MS } from '../../engines/worker/runtimeProtocol.js'
 import type { ProfileEvidence, RuntimeContext, RuntimeControl, RuntimeDisplay, RuntimeProfile, RuntimeRecord, RuntimeSession, RuntimeState } from '../../engines/facets/runtime.js'
@@ -246,8 +247,8 @@ export function createRuntimeSessions(deps: RuntimeSessionDeps) {
   const refreshConfig = (view: View, silent: boolean): void => {
     const revision = view.revision
     queueMicrotask(() => {
-      if (valid(view) && view.revision === revision) void read(deps.resolve(view.agentId)!, { kind: 'config' }, silent).catch(() => {
-        console.warn('[runtime-profile] ENGINE_UNAVAILABLE')
+      if (valid(view) && view.revision === revision) void read(deps.resolve(view.agentId)!, { kind: 'config' }, silent).catch((caughtFailure) => {
+        console.warn(('[runtime-profile] ENGINE_UNAVAILABLE') + ' · ' + errorKind(caughtFailure))
       })
     })
   }

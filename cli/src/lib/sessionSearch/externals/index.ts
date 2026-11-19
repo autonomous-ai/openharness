@@ -17,6 +17,7 @@ import { loadEngine, type InProcessModules, type OtherEngine } from '../../../en
 import { claudeProjectsRoots, codexHomeRoots } from '../../engineHomes.js'
 import type { ExternalEngine, ExternalProvider } from './types.js'
 import { externalReadFailed } from '../evidence.js'
+import { errorKind } from '../../log.js'
 
 export interface ExternalPaths {
   claudeProjectsDir: string
@@ -84,7 +85,7 @@ function loaded<Name extends OtherEngine>(engine: ExternalEngine, name: Name, bu
       try {
         return build(code)
       } catch (error) {
-        console.error(`[engine ${name}] adoption reader unavailable · ${error instanceof Error ? error.message : error}`)
+        console.error(`[engine ${name}] adoption reader unavailable · ${errorKind(error)}`)
         return null
       }
     }))

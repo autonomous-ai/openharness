@@ -1,3 +1,4 @@
+import { errorKind } from '../lib/log.js'
 import { SERVICE_REQUESTS_MAX } from '../core/api.js'
 import { requestOnce } from '../agentClient/requestOnce.js'
 import { connectSocket, type Connect, type Where } from '../agentClient/daemon.js'
@@ -20,7 +21,7 @@ export async function storeLaunchContext(where: Where, setup: boolean, current: 
   const backendAccount = async (): Promise<DshAccount> => {
     let name: unknown = null
     try { name = await backendName?.() ?? null }
-    catch { console.warn('[store] LAUNCH_ACCOUNT_UNAVAILABLE') }
+    catch (caughtFailure) { console.warn(('[store] LAUNCH_ACCOUNT_UNAVAILABLE') + ' · ' + errorKind(caughtFailure)) }
     const account = dshAccountIn({ privateGrid: name })
     if (!account) console.warn('[store] LAUNCH_ACCOUNT_INVALID')
     return account ?? { privateGrid: null }

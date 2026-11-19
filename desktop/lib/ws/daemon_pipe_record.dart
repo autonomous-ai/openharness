@@ -4,6 +4,7 @@ import 'dart:typed_data';
 
 import 'package:path/path.dart' as p;
 
+import '../core/harness_home.dart';
 import '../core/home_dir.dart';
 
 /// The daemon's Windows pipe, as the core records it, and the token that
@@ -45,11 +46,13 @@ final _tokenText = RegExp(r'^[0-9a-f]{64}\n?$');
 /// The record is a few dozen bytes; anything much larger is not one.
 const _maxRecordBytes = 4096;
 
-/// The daemon's data folder: `ADAPTER_DATA_DIR`, else `.harness\cli\data` in
-/// the home folder (`%USERPROFILE%` on Windows). Null with no home at all.
+/// The daemon's data folder: `ADAPTER_DATA_DIR`, else `cli\data` in Harness's
+/// data root (`%USERPROFILE%\.harness` on Windows). Null with no home at all.
+/// [look] is for tests: the root is found by it, this computer's by default.
 String? defaultDaemonDataDir({
   Map<String, String>? environment,
   bool? isWindows,
+  HomeLook? look,
 }) {
   final env = environment ?? Platform.environment;
   final windows = isWindows ?? Platform.isWindows;
@@ -57,7 +60,17 @@ String? defaultDaemonDataDir({
   if (override != null && override.isNotEmpty) return override;
   final home = maybeHomeDir(environment: env, isWindows: windows);
   if (home == null) return null;
-  return (windows ? p.windows : p.posix).join(home, '.harness', 'cli', 'data');
+  final context = windows ? p.windows : p.posix;
+  // The Linux rule never runs for a Windows path, whatever the host: no
+  // Windows profile has the XDG roots.
+  final harness = windows
+      ? HarnessHome.at(context.join(home, harnessHomeName), join: context.join)
+      : HarnessHome.of(
+          home,
+          join: context.join,
+          look: look ?? platformHomeLook(environment: env),
+        );
+  return context.join(harness.path(HarnessEntry.cli), 'data');
 }
 
 /// The pipe and token of the daemon on [port] in [dataDir], or null when there

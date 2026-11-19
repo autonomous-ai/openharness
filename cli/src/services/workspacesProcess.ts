@@ -14,6 +14,7 @@
 import type { AgentView, CoreApi } from '../core/api.js'
 import { ACCOUNT_BACKEND_OFF, CONVERSATIONS_OFF, AGENT_ACTIONS_OFF, DAEMON_UNKNOWN, DELIVERIES_OFF, emptyPorts, LANE_OFF, resolveAgent, TERMINALS_OFF } from '../core/api.js'
 import { gitProjectFolderOf } from '../lib/gitProjectFolder.js'
+import { errorKind } from '../lib/log.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import type { WorkspaceTarget, WorktreeReview } from '../lib/worktreeDeletion.js'
 import { runServiceProcess, type CoreConnection, type ServiceProcess } from './process.js'
@@ -182,7 +183,7 @@ export function runWorkspacesService(options: WorkspacesServiceOptions): Service
       // The core reads it as it arrives, so only a connection that ends loses it, and the next one says it again; a
       // failure is still said, as creates that need git wait until it is heard.
       void connection.query('folders', { instructions: true }).catch((error: unknown) => {
-        console.warn(`[workspaces] could not tell the core this process makes folders · ${error instanceof Error ? error.message : String(error)}`)
+        console.warn(`[workspaces] could not tell the core this process makes folders · ${errorKind(error)}`)
       })
     },
     onDisconnected: () => {

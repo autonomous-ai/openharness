@@ -7,6 +7,7 @@ import { loadEngine } from '../../engines/inProcess.js'
 import { HERMES_SANDBOX_HOLD } from '../../engines/hermes/contract.js'
 import { OPENCLAW_STATES } from '../../engines/openclaw/contract.js'
 import { OTHER_ENGINE_STATES } from '../../engines/otherEngines.js'
+import { IdentityReadUnavailable } from '../../engines/kit/identityScan.js'
 import { OpenclawLive } from '../../engines/openclaw/live.js'
 import { continuationOf } from '../../engines/sessionFiles.js'
 import { env } from '../../config/env.js'
@@ -16,6 +17,8 @@ import type { RegisteredSession } from '../../lib/registry.js'
 import { findLiveSession, findResumedTranscript } from '../../lib/sessionRepair.js'
 import type { DiscoveredTerminalAgent } from '../../lib/terminalAgentDiscovery.js'
 import { TerminalAgentReconciler } from '../../lib/terminalAgentReconciler.js'
+import { AttachTracker } from '../../lib/attachTracker.js'
+import { paneReadIdentity } from '../transcripts/readIdentity.js'
 import { createBinding, statBirthMs, type BindDeps, type RegisteredMeta } from './bind.js'
 import { createInput } from '../input.js'
 import type { TerminalActionResult } from '../../lib/terminalTypes.js'
@@ -204,8 +207,8 @@ describe('binding a registered session to its agent', () => {
     await registered(run, entry, meta({ isNew: true }))
     owners.settle.mockImplementationOnce(() => { throw 'plain' })
     await registered(run, entry, meta({ isNew: true }))
-    expect(warn).toHaveBeenCalledWith('[agent] a1 could not settle who owns s1: stopped store unreadable')
-    expect(warn).toHaveBeenCalledWith('[agent] a1 could not settle who owns s1: plain')
+    expect(warn).toHaveBeenCalledWith('[agent] a1 could not settle who owns s1: Error')
+    expect(warn).toHaveBeenCalledWith('[agent] a1 could not settle who owns s1: string')
     // Each new binding is still announced after a failed settle (the one that was not new announces nothing).
     expect(run.deps.announceSession).toHaveBeenCalledTimes(3)
   })
@@ -217,13 +220,13 @@ describe('binding a registered session to its agent', () => {
     run.byAgent.set('a1', entry)
     vi.mocked(run.deps.stoppedAgents.save).mockImplementationOnce(() => { throw Object.assign(new Error('ENOSPC: no space left on device'), { code: 'ENOSPC' }) })
     await registered(run, entry, meta({ isNew: true }))
-    expect(error).toHaveBeenCalledWith('[agent] a1 could not save the record it resumes from: ENOSPC: no space left on device')
+    expect(error).toHaveBeenCalledWith('[agent] a1 could not save the record it resumes from: ENOSPC')
     expect(run.deps.stoppedAgents.finishResume).toHaveBeenCalledWith('a1')
     expect(run.deps.announceSession).toHaveBeenCalledWith(entry)
     expect(run.deps.clients.send).toHaveBeenCalledWith(expect.objectContaining({ type: 'session_synced' }))
     vi.mocked(run.deps.stoppedAgents.save).mockImplementationOnce(() => { throw 'disk gone' })
     await registered(run, entry, meta({ isNew: true }))
-    expect(error).toHaveBeenLastCalledWith('[agent] a1 could not save the record it resumes from: disk gone')
+    expect(error).toHaveBeenLastCalledWith('[agent] a1 could not save the record it resumes from: string')
   })
 
   it('completes a resumed binding while its optional attachment stays pending', async () => {
@@ -572,7 +575,7 @@ describe('binding a running process to its session', () => {
     expect(run.deps.attachSession).toHaveBeenCalledOnce()
   })
 
-  it.each([new Error('identity read limit'), 'identity read limit'])('holds only the unreadable native identity and finishes the discovery/readiness pass: %s', async error => {
+  it.each([[new Error('identity read limit'), 'Error'], ['identity read limit', 'string']])('holds only the unreadable native identity and finishes the discovery/readiness pass: %s', async (error, kind) => {
     const run = setup()
     const rows = [agent({ engine: 'muse', agentId: 'held', sessionId: '', runtimes: [], active: true,
       processIdentity: { pid: 42, executable: 'muse', startMarker: '2026-10-09T00:00:00Z' } }),
@@ -603,7 +606,7 @@ describe('binding a running process to its session', () => {
       expect(run.deps.stoppedAgents.save).toHaveBeenCalledExactlyOnceWith(rows[1], expect.any(Function))
       expect(onRemoved).not.toHaveBeenCalled(); expect(onDormant).not.toHaveBeenCalled()
       expect(onProbeStatus).toHaveBeenCalledWith({ ready: true, error: null })
-      expect(console.log).toHaveBeenCalledWith('[discovery] held binding held · identity read limit')
+      expect(console.log).toHaveBeenCalledWith(`[discovery] held binding held · ${kind}`)
     } finally { reconciler.stop() }
   })
 
@@ -647,7 +650,7 @@ describe('binding a running process to its session', () => {
         expect(onProbeStatus).toHaveBeenCalledWith({ ready: true, error: null })
         expect(onRemoved).not.toHaveBeenCalled(); expect(onDormant).not.toHaveBeenCalled()
         expect(run.deps.stoppedAgents.save).toHaveBeenCalledExactlyOnceWith(rows[1], expect.any(Function))
-        expect(console.log).toHaveBeenCalledWith('[discovery] held binding held · native evidence unavailable')
+        expect(console.log).toHaveBeenCalledWith('[discovery] held binding held · Error')
         vi.mocked(continuationOf).mockResolvedValue({ sessionId: 'resumed', transcriptPath: '/t/resumed.jsonl' })
         await run.binding.bindObservedAgent(held)
         expect(rows[0]!.sessionId).toBe('resumed')
@@ -665,13 +668,13 @@ describe('binding a running process to its session', () => {
     expect(console.log).not.toHaveBeenCalled()
   })
 
-  it.each([new Error('reader unavailable'), 'reader unavailable'])('contains an optional attachment failure after binding', async error => {
+  it.each([[new Error('reader unavailable'), 'Error'], ['reader unavailable', 'string']])('contains an optional attachment failure after binding', async (error, kind) => {
     const log = vi.spyOn(console, 'error').mockImplementation(() => {})
     const run = setup({ attachSession: vi.fn(async () => { throw error }) })
     vi.mocked(run.deps.registry.byProcess).mockReturnValue(agent({ sessionId: '' }))
     vi.mocked(run.deps.registry.register).mockResolvedValue({ entry: agent(), ...meta({ isNew: true }) } as never)
     await run.binding.bindObservedAgent(observed({ resumeSessionId: 'resumed' }))
-    await vi.waitFor(() => expect(log).toHaveBeenCalledWith('[agent] a1 transcript attachment is unavailable: reader unavailable'))
+    await vi.waitFor(() => expect(log).toHaveBeenCalledWith(`[agent] a1 transcript attachment is unavailable: ${kind}`))
     expect(run.deps.registry.register).toHaveBeenCalledOnce()
     expect(run.deps.registry.confirmSessionUnbound).not.toHaveBeenCalled()
   })
@@ -738,7 +741,9 @@ describe('binding a running process to its session', () => {
     await run.binding.bindObservedAgent(observed({ engine: 'copilot' }))
     expect(run.deps.registry.register).not.toHaveBeenCalled()
     expect(row.sessionId).toBe('s1')
-    expect(console.log).toHaveBeenCalledWith(expect.stringContaining('process conversation changed during transcript lookup'))
+    // The hold keeps the words; the log names the kind alone.
+    expect(run.deps.registry.setIdentityHold).toHaveBeenCalledWith('a1', expect.stringContaining('process conversation changed during transcript lookup'))
+    expect(console.log).toHaveBeenCalledWith('[discovery] a1 binding held · IdentityReadUnavailable IDENTITY_UNAVAILABLE')
   })
 
   describe('an agent that already has a session', () => {
@@ -1063,18 +1068,23 @@ describe('binding a running process to its session', () => {
         runtimes: seen.runtimes, primaryRuntimeKey: seen.primaryRuntimeKey, processIdentity: seen.processIdentity, hookEvent: 'HermesTerminal' }, { current: expect.any(Function) })
       expect(run.deps.attachSession).toHaveBeenCalledOnce()
       expect(findLiveSession).not.toHaveBeenCalled()
-      // A refused commit follows nothing; a successful same-session confirmation still follows its committed identity.
-      vi.mocked(run.deps.registry.register).mockResolvedValueOnce(null).mockReturnValueOnce({ entry: agent({ engine: 'hermes', sessionId: 'S' }), ...meta() } as never)
+      // A rotation the registry refused attaches nothing more; one that was not new is followed as a hook's re-register is.
+      vi.mocked(run.deps.registry.register).mockResolvedValueOnce(null)
       await run.binding.bindObservedAgent(seen)
+      expect(run.deps.attachSession).toHaveBeenCalledOnce()
+      const kept = agent({ engine: 'hermes', sessionId: 'S' })
+      vi.mocked(run.deps.registry.register).mockResolvedValueOnce({ entry: kept, ...meta() } as never)
       await run.binding.bindObservedAgent(seen)
       expect(run.deps.attachSession).toHaveBeenCalledTimes(2)
-      // Nor is either said to be a switch: a refused one is tried again in the repair's rhythm.
+      expect(run.deps.attachSession).toHaveBeenLastCalledWith(kept, false, false, false)
+      // Neither is said to be a switch: a refused one is tried again in the repair's rhythm.
       expect(said()).toEqual(['[discovery] a1 switched hermes session old → S'])
     })
 
-    it('follows a resumed Hermes confirmation without reporting a switch', async () => {
+    it('confirms a resumed Hermes without a switch, and follows the binding it confirmed', async () => {
       const { run } = withRecord({ sessionId: 'S', resumeOnly: true, lastHookAt: 0 })
-      vi.mocked(run.deps.registry.register).mockResolvedValue({ entry: agent({ engine: 'hermes', sessionId: 'S' }), ...meta() } as never)
+      const confirmed = agent({ engine: 'hermes', sessionId: 'S' })
+      vi.mocked(run.deps.registry.register).mockResolvedValue({ entry: confirmed, ...meta() } as never)
       follow.mockResolvedValue({ sessionId: 'S' })
       await run.binding.bindObservedAgent(hermes())
       expect(run.deps.registry.register).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ sessionId: 'S', source: 'hermes-terminal', hookEvent: 'HermesTerminal' }), { current: expect.any(Function) })
@@ -1091,6 +1101,43 @@ describe('binding a running process to its session', () => {
       expect(run.deps.registry.register).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'new', source: 'hermes-terminal' }), { current: expect.any(Function) })
       expect(run.deps.attachSession).toHaveBeenCalledOnce()
     })
+
+    it.each([["the resume's, of the row before it", true], ["a hook's, of the row it confirmed", false]] as const)(
+      'reads a confirmed Hermes resume once, while an attach still reads: %s', async (_reading, resumed) => {
+        const { run, entry } = withRecord({ sessionId: 'S', resumeOnly: true, lastHookAt: 0, boundAt: null })
+        const confirmed = agent({ ...entry, boundAt: 1, lastHookAt: 1 })
+        // Two attaches of one session as attach.ts runs them: one read at a time (lib/attachTracker.ts), a plain attach
+        // of the same binding joining the read in flight, and a read whose binding moved on meanwhile giving it up.
+        const tracker = new AttachTracker<string>()
+        const reads: string[] = []
+        let finish!: () => void
+        const held = new Promise<void>(resolve => { finish = resolve })
+        vi.mocked(run.deps.attachSession).mockImplementation((session, reset = false) => {
+          const identity = paneReadIdentity(session)
+          return tracker.attach(session, reset, async () => {
+            reads.push(identity)
+            await held
+            return paneReadIdentity(run.deps.registry.byAgent(session.agentId)) === identity
+          }, identity)
+        })
+        if (resumed) void run.deps.attachSession(entry)
+        vi.mocked(run.deps.registry.register).mockImplementation(async () => {
+          run.byAgent.set(entry.agentId, confirmed)
+          // A hook's re-register of the same binding, attaching it as the commit lands.
+          if (!resumed) void run.deps.attachSession(confirmed)
+          return { entry: confirmed, ...meta() } as never
+        })
+        follow.mockResolvedValue({ sessionId: 'S' })
+        await run.binding.bindObservedAgent(hermes())
+        expect(run.deps.attachSession).toHaveBeenCalledTimes(2)
+        expect(run.deps.attachSession).toHaveBeenLastCalledWith(confirmed, false, false, false)
+        expect(reads).toHaveLength(1)
+        finish()
+        const attached = await Promise.all(vi.mocked(run.deps.attachSession).mock.results.map(result => result.value))
+        expect(attached).toEqual(resumed ? [false, true] : [true, true])
+        expect(reads).toEqual([...resumed ? [paneReadIdentity(entry)] : [], paneReadIdentity(confirmed)])
+      },
+    )
 
     it('does nothing while a record waits', async () => {
       for (const sessionId of ['', 'old']) {
@@ -1179,7 +1226,7 @@ describe('binding a running process to its session', () => {
       expect(run.deps.announceSession).toHaveBeenCalledTimes(2)
       expect(run.deps.announceSession).toHaveBeenLastCalledWith(row)
       expect(said()).toEqual([
-        '[discovery] a1 binding held · a native child changed during inspection',
+        '[discovery] a1 binding held · Error',
         '[discovery] a1 binding released · its native evidence was read completely',
       ])
       // Nothing more is said while its reads go on completing.
@@ -1193,6 +1240,23 @@ describe('binding a running process to its session', () => {
       expect(row).not.toHaveProperty('identityHold')
       expect(run.deps.announceSession).toHaveBeenCalledTimes(4)
       expect(run.deps.registry.register).not.toHaveBeenCalled()
+    })
+
+    // A hold only the person can clear lasts hours: a line on every 5 s pass buried the log (12 lines a minute).
+    it('logs a hold once, and again only when its words change or it comes back after a release', async () => {
+      const run = setup()
+      inRegistry(run)
+      const incomplete = new IdentityReadUnavailable('', 'This Harness install is incomplete. Reinstall Harness.')
+      vi.mocked(findLiveSession).mockRejectedValueOnce(incomplete).mockRejectedValueOnce(incomplete).mockRejectedValueOnce(incomplete)
+        .mockRejectedValueOnce(unsettled).mockResolvedValueOnce(null).mockRejectedValueOnce(incomplete)
+      for (let pass = 0; pass < 6; pass++) await run.binding.bindObservedAgent(codex())
+      // The log names the hold's kind; its words are on the row (setIdentityHold), which clients are sent.
+      expect(said()).toEqual([
+        '[discovery] a1 binding held · IdentityReadUnavailable IDENTITY_UNAVAILABLE',
+        '[discovery] a1 binding held · Error',
+        '[discovery] a1 binding released · its native evidence was read completely',
+        '[discovery] a1 binding held · IdentityReadUnavailable IDENTITY_UNAVAILABLE',
+      ])
     })
 
     it('is let go when the resume lookup that failed completes and finds no transcript', async () => {
@@ -1235,7 +1299,7 @@ describe('binding a running process to its session', () => {
       expect(run.deps.attachSession).not.toHaveBeenCalled()
     })
 
-    it.each([new Error('reader unavailable'), 'reader unavailable'])('logs a stream that cannot attach, and the agent stays let go: %s', async error => {
+    it.each([[new Error('reader unavailable'), 'Error'], ['reader unavailable', 'string']])('logs a stream that cannot attach, and the agent stays let go: %s', async (error, kind) => {
       const log = vi.spyOn(console, 'error').mockImplementation(() => {})
       const run = setup({ attachSession: vi.fn(async () => { throw error }) })
       const row = inRegistry(run, { engine: 'copilot', sessionId: 's1' }), seen = observed({ engine: 'copilot' })
@@ -1243,7 +1307,7 @@ describe('binding a running process to its session', () => {
       await run.binding.bindObservedAgent(seen)
       await run.binding.bindObservedAgent(seen)
       expect(said().at(-1)).toBe('[discovery] a1 binding released · its native evidence was read completely')
-      await vi.waitFor(() => expect(log).toHaveBeenCalledWith('[agent] a1 transcript attachment is unavailable: reader unavailable'))
+      await vi.waitFor(() => expect(log).toHaveBeenCalledWith(`[agent] a1 transcript attachment is unavailable: ${kind}`))
       expect(log).toHaveBeenCalledTimes(1)
       expect(row).not.toHaveProperty('identityHold')
       expect(run.deps.announceSession).toHaveBeenCalledTimes(2)
@@ -1310,7 +1374,7 @@ describe('binding a running process to its session', () => {
       await run.binding.bindObservedAgent(seen)
       expect(row.identityHold).toBe('the native record changed during the read')
       expect(run.deps.announceSession).toHaveBeenCalledTimes(1)
-      expect(said().at(-1)).toBe('[discovery] a1 binding held · the native record changed during the read')
+      expect(said().at(-1)).toBe('[discovery] a1 binding held · Error')
       // Nothing refuses on the next pass: let go.
       await run.binding.bindObservedAgent(seen)
       expect(row).not.toHaveProperty('identityHold')
@@ -1595,7 +1659,7 @@ describe('binding an OpenClaw pane, read from its screen', () => {
     }
   })
 
-  it.each([new Error('reader unavailable'), 'reader unavailable'])('a stream that cannot attach once the state clears is logged, and the state still goes', async (error) => {
+  it.each([[new Error('reader unavailable'), 'Error'], ['reader unavailable', 'string']])('a stream that cannot attach once the state clears is logged, and the state still goes', async (error, kind) => {
     const log = vi.spyOn(console, 'error').mockImplementation(() => {})
     let shown = screen('screen-no-gateway-attached')
     const run = setup({ capturePane: vi.fn(async () => shown), attachSession: vi.fn(async () => { throw error }) })
@@ -1606,7 +1670,7 @@ describe('binding an OpenClaw pane, read from its screen', () => {
     shown = screen('screen-no-gateway-reconnected')
     await run.binding.bindObservedAgent(tui())
     expect(row).not.toHaveProperty('identityHold')
-    await vi.waitFor(() => expect(log).toHaveBeenCalledWith('[agent] a1 transcript attachment is unavailable: reader unavailable'))
+    await vi.waitFor(() => expect(log).toHaveBeenCalledWith(`[agent] a1 transcript attachment is unavailable: ${kind}`))
   })
 
   it('a state the registry no longer holds is not announced cleared again', async () => {
@@ -1957,12 +2021,12 @@ describe('binding an OpenClaw pane, read from its screen', () => {
       expect(run.deps.submitAgent).not.toHaveBeenCalled()
     })
 
-    it.each([new Error('disk full'), 'disk full'])('a registry that cannot save keeps the task and types nothing', async (failure) => {
+    it.each([[new Error('disk full'), 'Error'], ['disk full', 'string']])('a registry that cannot save keeps the task and types nothing', async (failure, kind) => {
       const error = vi.spyOn(console, 'error').mockImplementation(() => {})
       const run = handing(() => ready)
       vi.mocked(run.deps.registry.takeFirstTask).mockImplementation(() => { throw failure })
       await run.binding.bindObservedAgent(tui())
-      await vi.waitFor(() => expect(error).toHaveBeenCalledWith('[agent] a1 first task kept · disk full'))
+      await vi.waitFor(() => expect(error).toHaveBeenCalledWith(`[agent] a1 first task kept · ${kind}`))
       expect(run.deps.submitAgent).not.toHaveBeenCalled()
     })
 
@@ -1973,7 +2037,7 @@ describe('binding an OpenClaw pane, read from its screen', () => {
       const run = handing(() => ready, { submitAgent: vi.fn(() => { throw new Error('pane gone') }) })
       vi.mocked(run.deps.registry.takeFirstTask).mockResolvedValue(TASK)
       await run.binding.bindObservedAgent(tui())
-      await vi.waitFor(() => expect(error).toHaveBeenCalledWith('[agent] a1 first task not typed · pane gone'))
+      await vi.waitFor(() => expect(error).toHaveBeenCalledWith('[agent] a1 first task not typed · Error'))
     })
 
     // The reconcile pass holds registry saves back until it commits (core/main.ts): a removal not yet saved is undone

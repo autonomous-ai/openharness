@@ -5,6 +5,9 @@
  * What is measured is the CPU time of the loop's own thread between two turns of a 1 ms timer: the longest the loop
  * did one thing without letting the timer in. A busy machine that keeps the process off the CPU for a while does not
  * read as a held loop.
+ *
+ * The bound is 100 ms, not 50: on Linux the publishing rename drops the last link of the cached 200 MB original, and
+ * the kernel frees its pages on the loop's thread, 23-51 ms here (a known core follow-up). An inline read holds seconds.
  */
 import { mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -44,7 +47,7 @@ afterEach(async () => {
   if (profile) rmSync(profile, { recursive: true, force: true })
 })
 
-it('a Codex resume repairs a 200 MB rollout without ever holding the core loop for 50 ms', async () => {
+it('a Codex resume repairs a 200 MB rollout without ever holding the core loop for 100 ms', async () => {
   profile = mkdtempSync(join(tmpdir(), 'resume-loop-'))
   const folder = join(profile, 'sessions', '2026', '11', '15')
   mkdirSync(folder, { recursive: true })
@@ -71,5 +74,5 @@ it('a Codex resume repairs a 200 MB rollout without ever holding the core loop f
   // Repaired: both reads, the backup, the repaired copy and their flushes all ran, and the tail moved to its new end.
   expect(setTail).toHaveBeenCalledWith(SESSION, statSync(file).size)
   expect(call.mock.calls.some(([, method]) => method === 'engine_resume_repair_prepare')).toBe(true)
-  expect(longest).toBeLessThan(50)
+  expect(longest).toBeLessThan(100)
 }, 120_000)

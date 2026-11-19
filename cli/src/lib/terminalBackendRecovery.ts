@@ -1,4 +1,5 @@
 import type { AgentEngine } from '../engines/types.js'
+import { errorKind } from './log.js'
 import type { TerminalBackend } from './terminalBackend.js'
 
 /** Retry a backend missing at boot only when its executable has arrived. New installs can finish
@@ -25,7 +26,7 @@ export function createTerminalBackendRecovery<B extends TerminalBackend>(deps: {
         ready = backend
         return backend
       } catch (error) {
-        console.warn(`[terminal] ${backend.name} recovery failed: ${error instanceof Error ? error.message : String(error)}`)
+        console.warn(`[terminal] ${backend.name} recovery failed: ${errorKind(error)}`)
         return null
       }
     })().finally(() => { pending = null })

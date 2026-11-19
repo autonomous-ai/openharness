@@ -1,3 +1,4 @@
+import { HookPreparationHeld } from '../../engines/kit/hookHeld.js'
 import { nativeFactory } from '../../testing/sessionFactories.js'
 import { localPendingCreationDiscovery } from '../../testing/pendingCreation.js'
 import { gridLaunchInProcess } from '../../testing/gridLaunchInProcess.js'
@@ -12,7 +13,7 @@ import { incompatibleHarnessEngine } from '../../dsh/compatibility.js'
 import { createAndRegisterPane } from '../../lib/createAgentPane.js'
 import { enginePathOverride } from '../../lib/engineBin.js'
 import { windowsAfterExit, windowsHeldPaneArgv } from '../../lib/windows/engineStart.js'
-import { buildEngineCommandArgv, buildEngineLaunchArgv, engineLaunchEnv, namedAgentArgs, permissionModeFlags, refusePermissionFlagIfUnsupported, supportsFirstPrompt } from '../../lib/engineLaunch.js'
+import { buildEngineCommandArgv, buildEngineLaunchArgv, engineLaunchEnv, launchAttempts, namedAgentArgs, permissionModeFlags, refusePermissionFlagIfUnsupported, supportsFirstPrompt } from '../../lib/engineLaunch.js'
 import { writeGridConfigDir } from '../../lib/gridConfigDir.js'
 import { describeGridLaunch, type GridLaunchAnswer, type GridLaunchRequest } from '../../lib/gridLaunchWire.js'
 import { ENUMERATION_ATTEMPTS } from '../../engines/kit/nativeFiles.js'
@@ -91,6 +92,7 @@ vi.mock('../../lib/engineLaunch.js', async (real) => ({
   buildEngineCommandArgv: vi.fn(() => ['claude']),
   buildEngineLaunchArgv: vi.fn(() => ['zsh', '-lc', 'claude']),
   engineLaunchEnv: vi.fn(() => undefined),
+  launchAttempts: vi.fn((first: string[] | (() => string[])) => () => typeof first === 'function' ? first() : first),
   namedAgentArgs: vi.fn((_engine: string, agent: string) => ['--agent', agent]),
   permissionModeApproves: vi.fn(() => true),
   permissionModeFlags: vi.fn(() => ['--permission-mode']),
@@ -233,7 +235,7 @@ describe('creating an agent', () => {
       vi.mocked(buildEngineLaunchArgv).mockReturnValueOnce(held)
       expect(await setup().create(request())).toMatchObject({ ok: true })
       const pane = vi.mocked(createAndRegisterPane).mock.calls[0]![0]
-      expect(pane.argv).toBe(held)
+      expect(typeof pane.argv === 'function' ? pane.argv() : pane.argv).toBe(held)
       expect(pane.paneLaunch).not.toHaveProperty('afterExit')
       expect(buildEngineLaunchArgv).toHaveBeenCalledOnce()
     } finally { Object.defineProperty(process, 'platform', platform) }
@@ -830,6 +832,11 @@ describe('creating an agent', () => {
       vi.mocked(materializeWorkspace).mockRejectedValueOnce(new Error('disk full')).mockRejectedValueOnce('worse')
       expect(await create(request({ dsh: 'blender' }))).toMatchObject({ error: 'DSH_MATERIALIZE_FAILED', detail: 'could not prepare the workspace for blender · disk full' })
       expect(await create(request({ dsh: 'blender' }))).toMatchObject({ detail: 'could not prepare the workspace for blender · worse' })
+      // The reply keeps the words; the log names the kind alone.
+      expect(vi.mocked(console.warn).mock.calls.map(([line]) => String(line))).toEqual([
+        '[agent] create blender refused · could not prepare the workspace for blender · Error',
+        '[agent] create blender refused · could not prepare the workspace for blender · string',
+      ])
       launchDsh.mockResolvedValueOnce({ ok: false, error: 'DSH_RUNTIME', detail: 'no runtime', thrown: 'Error: no runtime' })
       expect(await create(request({ dsh: 'blender' }))).toEqual({ ok: false, error: 'DSH_RUNTIME', detail: 'no runtime' })
       launchDsh.mockResolvedValueOnce({ ok: false, error: 'DSH_UNAVAILABLE', detail: 'Store unavailable', unavailable: 'store' })
@@ -858,10 +865,16 @@ describe('creating an agent', () => {
       capabilities.mockResolvedValueOnce({ sessionEnv: false })
       expect(await create(request({ grid }))).toMatchObject({ error: 'TMUX_TOO_OLD_FOR_GRID' })
       const configured = { ok: true, override: grid, launch: { env: {}, args: [], webSearch: 'off', configDir: { envVar: 'PI_CONFIG', files: {}, links: [] } } }
-      buildGridLaunch.mockResolvedValueOnce(configured as never).mockResolvedValueOnce(configured as never)
+      buildGridLaunch.mockResolvedValueOnce(configured as never).mockResolvedValueOnce(configured as never).mockResolvedValueOnce(configured as never)
       vi.mocked(writeGridConfigDir).mockRejectedValueOnce(new Error('read-only')).mockRejectedValueOnce('worse')
+        .mockRejectedValueOnce(new HookPreparationHeld('the generated configuration directory is not private'))
       expect(await create(request({ grid }))).toMatchObject({ error: 'GRID_CONFIG_FAILED', detail: "could not write claude's grid configuration · read-only" })
       expect(await create(request({ grid }))).toMatchObject({ detail: "could not write claude's grid configuration · worse" })
+      expect(await create(request({ grid }))).toMatchObject({ error: 'GRID_CONFIG_FAILED' })
+      expect(console.warn).toHaveBeenCalledWith("[agent] create claude refused · could not write claude's grid configuration · Error")
+      expect(console.warn).toHaveBeenCalledWith("[agent] create claude refused · could not write claude's grid configuration · string")
+      // The reply retains the hold reason; the log keeps only its type.
+      expect(console.warn).toHaveBeenCalledWith("[agent] create claude refused · could not write claude's grid configuration · HookPreparationHeld")
     })
 
 
@@ -884,6 +897,17 @@ describe('creating an agent', () => {
       expect(deps.watchNewPane).toHaveBeenCalledWith('claude', pending, { runtime: { paneId: '%1' } }, ['claude'], undefined)
       const pane = vi.mocked(createAndRegisterPane).mock.calls[0][0]
       expect(pane).toMatchObject({ engine: 'claude', sessionLabel: expect.any(String), grid: null, gridLaunchRecord: null, dsh: null, dshRuntime: null, defaultName: null })
+    })
+
+    it('builds a retry pane\'s launch again with the same options, as the first pane\'s shell removed its one-time file', async () => {
+      expect(await setup().create(request())).toMatchObject({ ok: true })
+      expect(vi.mocked(createAndRegisterPane).mock.calls[0][0].argv).toBe(vi.mocked(launchAttempts).mock.results.at(-1)!.value)
+      const command = vi.mocked(createAndRegisterPane).mock.calls[0]![0].argv
+      if (typeof command !== 'function') throw new Error('command must remain deferred')
+      const built = vi.mocked(buildEngineLaunchArgv).mock.results.length
+      command()
+      expect(vi.mocked(buildEngineLaunchArgv).mock.results).toHaveLength(built + 1)
+      expect(vi.mocked(buildEngineLaunchArgv).mock.calls[built]).toEqual(vi.mocked(buildEngineLaunchArgv).mock.calls[built - 1])
     })
 
     it('sends the launch\'s Windows variables (no /usr/bin/env there) with the pane env, after its own', async () => {

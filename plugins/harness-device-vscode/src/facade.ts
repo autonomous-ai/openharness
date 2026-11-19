@@ -4,6 +4,10 @@
 import type { ApiTerminal, Disposable, VscodeApi } from './vscodeApi'
 import { windowState, type WindowFacade } from './window'
 
+// The only text the extension ever writes to a terminal: the PageUp and PageDown keys, as an xterm sends them.
+const PAGE_UP = '\x1b[5~'
+const PAGE_DOWN = '\x1b[6~'
+
 export function windowFacade(api: VscodeApi): WindowFacade & Disposable {
   // A terminal is a key from the moment it is asked; its value stays undefined until its pid resolves.
   const pids = new Map<ApiTerminal, number | undefined>()
@@ -28,6 +32,7 @@ export function windowFacade(api: VscodeApi): WindowFacade & Disposable {
     }
   }
   const pidOf = (terminal: ApiTerminal | undefined) => (terminal ? pids.get(terminal) : undefined)
+  const terminalOf = (pid: number) => api.window.terminals.find((each) => pids.get(each) === pid)
 
   readAll()
   const subscriptions = [
@@ -58,7 +63,7 @@ export function windowFacade(api: VscodeApi): WindowFacade & Disposable {
       }
     },
     show(pid) {
-      const terminal = api.window.terminals.find((each) => pids.get(each) === pid)
+      const terminal = terminalOf(pid)
       if (!terminal) return false
       terminal.show(false)
       return true
@@ -69,6 +74,13 @@ export function windowFacade(api: VscodeApi): WindowFacade & Disposable {
     },
     async scrollLine(up) {
       await api.commands.executeCommand(up ? 'workbench.action.terminal.scrollUp' : 'workbench.action.terminal.scrollDown')
+    },
+    pageKey(pid, up) {
+      const terminal = terminalOf(pid)
+      if (!terminal) return false
+      // No newline: Enter would answer whatever the agent is showing.
+      terminal.sendText(up ? PAGE_UP : PAGE_DOWN, false)
+      return true
     },
     dispose() {
       disposed = true

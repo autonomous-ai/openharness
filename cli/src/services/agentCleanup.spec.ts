@@ -93,8 +93,8 @@ describe('closing the harnesses a closed harness started', () => {
     await settle()
     expect(closeStarted.mock.calls).toEqual([['a', 'now'], ['b', 'now']])
     expect(log.mock.calls.map(([line]) => line)).toEqual([
-      '[agent-cleanup] closed a (a): the harness that started it was closed. Its conversation is kept.',
-      '[agent-cleanup] closed b (b): the harness that started it was closed. Its conversation is kept.',
+      '[agent-cleanup] closed a: the harness that started it was closed. Its conversation is kept.',
+      '[agent-cleanup] closed b: the harness that started it was closed. Its conversation is kept.',
     ])
     expect(sessions.map((s) => s.agentId)).toEqual(['other', 'mine'])
   })
@@ -107,8 +107,8 @@ describe('closing the harnesses a closed harness started', () => {
     closeStarted.mockImplementationOnce(async () => { sessions.splice(0, 1); return { closed: true, withoutConversation: true } })
     await cleanup.closeStartedBy('lead')
     expect(log.mock.calls.map(([line]) => line)).toEqual([
-      '[agent-cleanup] closed unbound (unbound): the harness that started it was closed. It had not started a conversation, so none was kept.',
-      '[agent-cleanup] closed bound (bound): the harness that started it was closed. Its conversation is kept.',
+      '[agent-cleanup] closed unbound: the harness that started it was closed. It had not started a conversation, so none was kept.',
+      '[agent-cleanup] closed bound: the harness that started it was closed. Its conversation is kept.',
     ])
     expect(sessions).toEqual([])
   })
@@ -138,7 +138,7 @@ describe('closing the harnesses a closed harness started', () => {
   it('tries one that would not close again, a moment later, and says it once the tries are spent', async () => {
     const refuse: Record<string, AgentCloseResult> = { stuck: { error: 'CLOSE_FAILED', detail: 'Could not save its screen.' }, odd: { error: 'AGENT_CHANGED' },
       blip: { error: 'IDENTITY_UNAVAILABLE' } }
-    const { cleanup, stopped, closeStarted, log, waited } = setup([kid('stuck', { defaultName: undefined, title: 'Fix the login test' }), kid('odd', { defaultName: undefined }), kid('blip')], {},
+    const { cleanup, stopped, closeStarted, log, waited } = setup([kid('stuck', { defaultName: undefined, title: 'SECRET-TITLE-MARKER' }), kid('odd', { defaultName: undefined }), kid('blip')], {},
       { refuse, wait: async (ms) => { waited.push(ms); delete refuse.blip } })
     stopped('lead')
     await settle()
@@ -146,10 +146,11 @@ describe('closing the harnesses a closed harness started', () => {
     expect(closeStarted.mock.calls.filter(([id]) => id === 'blip')).toHaveLength(2)
     expect(closeStarted.mock.calls.filter(([id]) => id === 'stuck')).toHaveLength(CASCADE_TRIES)
     expect(waited).toEqual(Array(CASCADE_TRIES - 1).fill(CASCADE_RETRY_MS))
+    // A harness's name or title holds the person's words: the log says it by its id.
     expect(log.mock.calls.map(([line]) => line)).toEqual([
-      '[agent-cleanup] closed blip (blip): the harness that started it was closed. Its conversation is kept.',
-      '[agent-cleanup] could not close Fix the login test (stuck) (the harness that started it was closed): Could not save its screen.',
-      '[agent-cleanup] could not close a harness (odd) (the harness that started it was closed): AGENT_CHANGED',
+      '[agent-cleanup] closed blip: the harness that started it was closed. Its conversation is kept.',
+      '[agent-cleanup] could not close stuck (the harness that started it was closed): Could not save its screen.',
+      '[agent-cleanup] could not close odd (the harness that started it was closed): AGENT_CHANGED',
     ])
     // Stopped meanwhile: not tried again.
     const halted = setup([kid('stuck')], {}, { refuse: { stuck: { error: 'CLOSE_FAILED' } } })
@@ -159,7 +160,7 @@ describe('closing the harnesses a closed harness started', () => {
     const failing = setup([], {}, { refresh: async () => { throw new Error('the core is gone') } })
     failing.stopped('lead-agent-id')
     await settle()
-    expect(failing.log).toHaveBeenCalledWith('[agent-cleanup] could not close what lead-age started: the core is gone')
+    expect(failing.log).toHaveBeenCalledWith('[agent-cleanup] could not close what lead-age started: Error')
     // The real wait: a timer that holds nothing open.
     vi.useFakeTimers()
     const timed = setup([kid('stuck')], {}, { refuse: { stuck: { error: 'CLOSE_FAILED' } }, wait: undefined })
@@ -239,7 +240,7 @@ describe('handing what Hachi started to the person, however Hachi closes', () =>
     expect(ledger.parentOf({ machineId: 'machine-1', agentId: 'api' })).toBeNull()
     // The other machine was asleep: still Hachi's there and here, asked again at the next look.
     expect(ledger.childrenOf({ machineId: 'machine-1', agentId: 'hachi' }).map((r) => r.child.agentId)).toEqual(['far'])
-    expect(t.log).toHaveBeenCalledWith('[hachi] could not hand far to the person on its machine yet: asleep. Asked again at the next look.')
+    expect(t.log).toHaveBeenCalledWith('[hachi] could not hand far to the person on its machine yet: Error. Asked again at the next look.')
     reachable = true
     t.advance(LOOK_EVERY_MS)
     await t.cleanup.look()
@@ -264,7 +265,7 @@ describe('closing a harness another agent started once it has sat idle', () => {
     await cleanup.look()
     // The person's own harness is never asked about, and one whose last move is not known is left alone.
     expect(closeStarted.mock.calls).toEqual([['done', 'idle']])
-    expect(log.mock.calls).toEqual([['[agent-cleanup] closed done (done): another agent started it, and it has sat idle 30 minutes. Its conversation is kept.']])
+    expect(log.mock.calls).toEqual([['[agent-cleanup] closed done: another agent started it, and it has sat idle 30 minutes. Its conversation is kept.']])
   })
 
   it('counts a harness starting again (resumed, restored) as moving: the person resumed it to read it', async () => {
@@ -323,7 +324,7 @@ describe('closing a harness another agent started once it has sat idle', () => {
     delete refuse.busy
     await cleanup.look()
     expect(closeStarted).toHaveBeenCalledTimes(2)
-    expect(log.mock.calls.map(([line]) => line)).toEqual([expect.stringMatching(/^\[agent-cleanup\] closed busy \(busy\): .* idle 3\d minutes/)])
+    expect(log.mock.calls.map(([line]) => line)).toEqual([expect.stringMatching(/^\[agent-cleanup\] closed busy: .* idle 3\d minutes/)])
     // Refused, then gone: nothing is kept for it, and back it is a new run, seen from then.
     const gone = setup([kid('x')], { x: IDLE_CLOSE_MS }, { refuse: { x: { error: 'SESSION_NOT_IDLE' } } })
     await gone.cleanup.look()
@@ -352,7 +353,7 @@ describe('closing a harness another agent started once it has sat idle', () => {
     t.advance(ASK_AGAIN_MS)
     await t.cleanup.look()
     expect(t.closeStarted.mock.calls).toEqual([['kid', 'idle'], ['kid', 'idle']])
-    expect(t.log.mock.calls).toEqual([['[agent-cleanup] left kid (kid) open: 2 background commands running']])
+    expect(t.log.mock.calls).toEqual([['[agent-cleanup] left kid open: 2 background commands running']])
     // Two hours after its last answer: closed whatever runs, one line with the count.
     delete refuse.kid
     quiet.kid = BACKGROUND_CLOSE_MS
@@ -360,7 +361,7 @@ describe('closing a harness another agent started once it has sat idle', () => {
     t.advance(BACKGROUND_CLOSE_MS)
     await t.cleanup.look()
     expect(t.closeStarted).toHaveBeenLastCalledWith('kid', 'idle', true)
-    expect(t.log).toHaveBeenLastCalledWith(expect.stringMatching(/^\[agent-cleanup\] closed kid \(kid\): another agent started it, and it has sat idle \d+ minutes, with 2 background commands running\. Its conversation is kept\.$/))
+    expect(t.log).toHaveBeenLastCalledWith(expect.stringMatching(/^\[agent-cleanup\] closed kid: another agent started it, and it has sat idle \d+ minutes, with 2 background commands running\. Its conversation is kept\.$/))
     // Gone, it is forgotten: back and refused again, it is said again.
     await t.cleanup.look()
     sessions.push(kid('kid'))
@@ -369,7 +370,7 @@ describe('closing a harness another agent started once it has sat idle', () => {
     await t.cleanup.look()
     t.advance(IDLE_CLOSE_MS)
     await t.cleanup.look()
-    expect(t.log).toHaveBeenLastCalledWith('[agent-cleanup] left kid (kid) open: 1 background command running')
+    expect(t.log).toHaveBeenLastCalledWith('[agent-cleanup] left kid open: 1 background command running')
     expect(t.log).toHaveBeenCalledTimes(3)
   })
 
@@ -382,8 +383,8 @@ describe('closing a harness another agent started once it has sat idle', () => {
     await t.cleanup.closeStartedBy('gone')
     expect(t.closeStarted.mock.calls).toEqual([['old', 'idle', true], ['orphan', 'now']])
     expect(t.log.mock.calls.map(([line]) => line)).toEqual([
-      '[agent-cleanup] closed old (old): another agent started it, and it has sat idle 120 minutes. Its conversation is kept.',
-      '[agent-cleanup] closed orphan (orphan): the harness that started it was closed. Its conversation is kept.',
+      '[agent-cleanup] closed old: another agent started it, and it has sat idle 120 minutes. Its conversation is kept.',
+      '[agent-cleanup] closed orphan: the harness that started it was closed. Its conversation is kept.',
     ])
   })
 
@@ -396,7 +397,7 @@ describe('closing a harness another agent started once it has sat idle', () => {
     advance(ASK_AGAIN_MS)
     await cleanup.look()
     expect(closeStarted).toHaveBeenCalledTimes(2)
-    expect(log.mock.calls.map(([line]) => line)).toEqual([expect.stringMatching(/^\[agent-cleanup\] could not close broken \(broken\) \(another agent started it, .*\): Could not save its screen\.$/)])
+    expect(log.mock.calls.map(([line]) => line)).toEqual([expect.stringMatching(/^\[agent-cleanup\] could not close broken \(another agent started it, .*\): Could not save its screen\.$/)])
     ;(core.agents.live as ReturnType<typeof vi.fn>).mockReturnValueOnce([])
     await cleanup.look()
     await cleanup.look()
@@ -430,7 +431,7 @@ describe('closing a harness another agent started once it has sat idle', () => {
     const { tick, log } = setup([], {}, { refresh: async () => { throw 'no core' } })
     tick()!()
     await settle()
-    expect(log).toHaveBeenCalledWith('[agent-cleanup] a look failed: no core')
+    expect(log).toHaveBeenCalledWith('[agent-cleanup] a look failed: string')
     vi.useFakeTimers()
     const core = fakeCore({ dataDir: dir, agents: { live: vi.fn(() => []) } })
     const timed = createAgentCleanup(core, { log: vi.fn() })
@@ -475,7 +476,7 @@ describe('erasing what a deleted harness was told', () => {
     expect(await cleanup.port.forgetTold('kid')).toBe(false)
     expect(Date.now() - began).toBeLessThan(1_500)
     expect(readFileSync(ledgerPath(dir), 'utf8')).toContain('fix the login')
-    expect(log.mock.calls).toEqual([['[agent-cleanup] could not erase what kid was told: The agent ledger is busy. Try again.']])
+    expect(log.mock.calls).toEqual([['[agent-cleanup] could not erase what kid was told: LedgerBusyError']])
   })
 
   it('says it did not, and why in the log, when the ledger could not be rewritten', async () => {
@@ -483,7 +484,7 @@ describe('erasing what a deleted harness was told', () => {
     writeFileSync(join(dir, 'agent-client'), '')
     const { cleanup, log } = setup([])
     expect(await cleanup.port.forgetTold('kid-0123456789')).toBe(false)
-    expect(log.mock.calls).toEqual([[expect.stringMatching(/^\[agent-cleanup\] could not erase what kid-0123 was told: /)]])
+    expect(log.mock.calls).toEqual([[expect.stringMatching(/^\[agent-cleanup\] could not erase what kid-0123 was told: E[A-Z]+$/)]])
   })
 })
 
@@ -515,7 +516,7 @@ describe('what the cleanup keeps and how it runs', () => {
     const core = fakeCore({ dataDir: join(blocked, 'data') })
     const log = vi.fn()
     createAgentCleanup(core, { log, every: () => () => {} }).typed('kid')
-    expect(log).toHaveBeenCalledWith(expect.stringMatching(/^\[agent-cleanup\] could not keep which harnesses the person joined: /))
+    expect(log).toHaveBeenCalledWith(expect.stringMatching(/^\[agent-cleanup\] could not keep which harnesses the person joined: E[A-Z]+$/))
   })
 
   it('closes nothing, and knows no time, on a core that offers neither', async () => {
@@ -529,7 +530,7 @@ describe('what the cleanup keeps and how it runs', () => {
     await cleanup.look()
     expect(core.agents.live).toHaveBeenCalledTimes(2)
     await cleanup.closeStartedBy('lead')
-    expect(log).toHaveBeenCalledWith('[agent-cleanup] could not close a (a) (the harness that started it was closed): UNSUPPORTED')
+    expect(log).toHaveBeenCalledWith('[agent-cleanup] could not close a (the harness that started it was closed): UNSUPPORTED')
   })
 
   it('starts as the agent cleanup\'s port', () => {

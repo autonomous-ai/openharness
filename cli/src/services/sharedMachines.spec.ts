@@ -257,10 +257,10 @@ describe('shared machines', () => {
       expect(log).toHaveBeenCalledWith(expect.stringContaining('could not update the trust stores'))
       port.shared.mockRejectedValueOnce(new Error('boom'))
       await fire()
-      expect(log).toHaveBeenCalledWith('read failed: boom')
+      expect(log).toHaveBeenCalledWith('read failed: Error')
       port.shared.mockRejectedValueOnce('odd')
       await fire()
-      expect(log).toHaveBeenCalledWith('read failed: odd')
+      expect(log).toHaveBeenCalledWith('read failed: string')
     })
 
     it('runs one read at a time, and one asked for meanwhile right after', async () => {

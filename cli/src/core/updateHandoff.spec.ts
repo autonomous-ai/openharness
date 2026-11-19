@@ -53,7 +53,7 @@ describe('the update handoff', () => {
     // Without a master too, after the probe; one that throws is said, and the teardown goes on.
     const other = make({ supervised: false, beforeTeardown: async () => { throw new Error('boom') } })
     await other.handoff.handOver([step(other.calls, 'the backend')])
-    expect(other.calls).toContain('[update] the moves did not settle (boom) — handing over all the same')
+    expect(other.calls).toContain('[update] the moves did not settle (Error) — handing over all the same')
     expect(other.calls.indexOf('release the backend')).toBeGreaterThan(other.calls.indexOf('probe the master'))
   })
 
@@ -66,8 +66,8 @@ describe('the update handoff', () => {
     ])
     expect(calls).toEqual([
       '[update] applying 1.0.0 → 2.0.0 — restarting daemon',
-      'release the timers', '[update] the timers did not let go (a teardown step that throws) — handing over all the same',
-      'release the hook server', '[update] the hook server did not let go (odd) — handing over all the same',
+      'release the timers', '[update] the timers did not let go (Error) — handing over all the same',
+      'release the hook server', '[update] the hook server did not let go (string) — handing over all the same',
       'release the backend', '[update] handing 2.0.0 to harnessd', 'exit 75',
     ])
   })
@@ -118,7 +118,7 @@ describe('the update handoff', () => {
     expect(calls).toEqual([
       'probe the master',
       '[update] handing 1.0.0 to a harnessd master, which runs the updater — this core is leaving',
-      'release the registry', 'release the backend', '[update] the backend did not let go (no) — handing over all the same',
+      'release the registry', 'release the backend', '[update] the backend did not let go (Error) — handing over all the same',
       'start a master, exit',
     ])
     // Leaving, it hands nothing else over.

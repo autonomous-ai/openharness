@@ -13,8 +13,11 @@ import { HARNESS_AGENT_COMMANDS, HARNESS_AGENT_TOOLS, HARNESS_AGENT_VERBS, type 
 import { prepareReviewed } from './hookReview.js'
 import { managedNodePath } from '../../lib/nodeRuntime.js'
 import { isMessagesBlock, messagesCommand, MESSAGES_HOOK_SOURCE } from './messagesHook.js'
-import { HOOK_SCRIPT, hookArgv, hooksNotInstalled, hooksNotOnWindows, identitySettings, isManagedHook, requireHookScript, foreignHookBlocks, quoteHookCommand, withoutOwnHooks, type CommandHook, type HookBlock, type Settings } from './notifyHooks.js'
+import { HOOK_SCRIPT, hookArgv, isNamedHold, hooksNotInstalled, hooksNotOnWindows, identitySettings, isManagedHook, requireHookScript, foreignHookBlocks, quoteHookCommand, withoutOwnHooks, type CommandHook, type HookBlock, type Settings } from './notifyHooks.js'
 import { HookPreparationHeld, type HookPreparationFiles, type HookPreparationAttempt } from './nativeHookFiles.js'
+import { errorKind } from '../../lib/log.js'
+import { HookScriptMissing } from './hookHeld.js'
+import { engineName } from '../../lib/agentNames.js'
 import type { NativeHookOptions } from './nativeLocations.js'
 import { hostPlatform } from './windowsFiles.js'
 
@@ -60,15 +63,16 @@ export async function installHookSettings(engine: HookEngine, settings: HookSett
       if (platform !== 'win32') {
         const required = files.map(file => access.inspect(file))
         const verifyRequired = () => { attempt.verify(); for (const file of required) file.verify() }
-        if (settings.inbox || settings.allow) await installMessagesBlock(settings, home, attempt, verifyRequired, access)
+        if (settings.inbox || settings.allow) await installMessagesBlock(engine, settings, home, attempt, verifyRequired, access)
       }
       return true
     }, { ...options, identity: JSON.stringify([engine, identitySettings(settings, platform), port, home, entry.args ? [entry.command, entry.args] : entry.command, env.HARNESS_AGENT_MESSAGES_DIR]) })
   } catch (err) {
-    const line = hooksNotInstalled(engine, err, platform)
-    if (line) { access.report('error', line); return false }
+    // A hold's reason is fixed words (hookHeld.ts); HookScriptMissing's names a path, so that one is said by its kind.
+    const held = err instanceof HookPreparationHeld && !(err instanceof HookScriptMissing) ? err.reason : errorKind(err)
+    if (isNamedHold(err, platform)) { access.report('error', `${hooksNotInstalled(engine)} · ${held}`); return false }
     access.report('error', settings.messages.failed.replace(/\{(file|script|port)\}/g, (_, name: string) =>
-      name === 'file' ? files[0] : name === 'script' ? HOOK_SCRIPT : String(port)), err)
+      name === 'file' ? files[0] : name === 'script' ? HOOK_SCRIPT : String(port)), held)
     return false
   }
 }
@@ -81,7 +85,7 @@ export async function installHookSettings(engine: HookEngine, settings: HookSett
  * harmless only while the required hooks remain exactly as confirmed; an uncertain partial write holds launch.
  * A message can still reach an idle agent, typed, and a command not allowed asks, as before.
  */
-async function installMessagesBlock(settings: HookSettings, home: string, attempt: HookPreparationAttempt, verifyRequired: () => void, access: HookPreparationFiles): Promise<void> {
+async function installMessagesBlock(engine: HookEngine, settings: HookSettings, home: string, attempt: HookPreparationAttempt, verifyRequired: () => void, access: HookPreparationFiles): Promise<void> {
   const file = join(home, settings.file)
   const root = env.HARNESS_AGENT_MESSAGES_DIR
   const inboxCommand = messagesCommand(root)
@@ -113,12 +117,14 @@ async function installMessagesBlock(settings: HookSettings, home: string, attemp
     published.verify(); approval?.verify()
     if (inbox) await access.write(join(root, 'hook.mjs'), MESSAGES_HOOK_SOURCE, 0o700, attempt)
   } catch (err) {
-    const reason = err instanceof Error ? err.message : err
-    if (blockChanged) access.report('warn', `[hooks] Agent Messages' hook not installed in ${file} (messages reach its agents once they are idle):`, reason)
+    // A hold's reason is fixed words (hookHeld.ts); HookScriptMissing's names a path, so that one is said by its kind.
+    const held = err instanceof HookPreparationHeld && !(err instanceof HookScriptMissing) ? err.reason : errorKind(err)
+    // The file by its fixed name and its engine's, never its path, which names the person's home.
+    if (blockChanged) access.report('warn', `[hooks] Agent Messages' hook not installed in ${engineName(engine)}'s ${settings.file} (messages reach its agents once they are idle):`, held)
     else {
       // The hook was already in place and only the allowance was refused (a read-only file): its script is
       // still kept current, and the log names what failed rather than calling the hook missing.
-      access.report('warn', `[hooks] could not allow Harness's agent commands in ${file} (the engine asks before each one):`, reason)
+      access.report('warn', `[hooks] could not allow Harness's agent commands in ${engineName(engine)}'s ${settings.file} (the engine asks before each one):`, held)
       if (inbox) try { await access.write(join(root, 'hook.mjs'), MESSAGES_HOOK_SOURCE, 0o700, attempt) } catch { /* the hook runs nothing it cannot find; messages wait for idle */ }
     }
     verifyRequired()
@@ -126,7 +132,7 @@ async function installMessagesBlock(settings: HookSettings, home: string, attemp
   if (allow && 'file' in allow) {
     // Each path written as a Starlark string's contents: the file's rules are `prefix_rule(pattern=["…"])`.
     try { await access.write(join(home, allow.file), `${RULES_HEADER}${harnessRules(allow.rules, (path) => JSON.stringify(path).slice(1, -1)).flat().join('\n')}\n`, 0o600, attempt) } catch (err) {
-      access.report('warn', `[hooks] could not allow Harness's agent commands in ${join(home, allow.file)} (the engine asks before each one):`, err instanceof Error ? err.message : err)
+      access.report('warn', `[hooks] could not allow Harness's agent commands in ${engineName(engine)}'s ${allow.file} (the engine asks before each one):`, errorKind(err))
     }
   }
 }
@@ -249,7 +255,11 @@ async function installNotifyHooks(settings: HookSettings, port: number, home: st
       if (!sameHook(existingHook)) { changed = true; updated = true }
       if (settings.upToDate.matcher && existing.matcher !== matcher) changed = true
     }
-    current.hooks[event] = [...foreign, { ...(matcher ? { matcher } : {}), hooks: [{ type: 'command', command: entry.command, ...(entry.args ? { args: entry.args } : {}), timeout: timeout ?? settings.timeout }] }]
+    // Ours where ours was, after what is left of a block it shared, else last: Codex keys a hook's review by its place, so
+    // ours moved after the person's hooks would move theirs, and Codex would ask for their review again. Every block
+    // before the first of ours is foreign.
+    const at = existing ? blocks.indexOf(existing) + (existing.hooks.some((hook) => !isOurs({ hooks: [hook] })) ? 1 : 0) : foreign.length
+    current.hooks[event] = [...foreign.slice(0, at), { ...(matcher ? { matcher } : {}), hooks: [{ type: 'command', command: entry.command, ...(entry.args ? { args: entry.args } : {}), timeout: timeout ?? settings.timeout }] }, ...foreign.slice(at)]
   }
   // Ours out of every event this release does not declare: one it dropped, or one a newer release added before a
   // rollback. Everyone else's blocks stay, Agent Messages' too. The lists as they were find the review records by place.

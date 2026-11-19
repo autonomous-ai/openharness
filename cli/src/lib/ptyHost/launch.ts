@@ -9,6 +9,7 @@ import net from 'node:net'
 import path from 'node:path'
 import { env } from '../../config/env.js'
 import { PTY_HOST_BINARY, VERSION_DIR, currentPtyVersion, ptyHostBinary, type PtyHostBinaryOptions } from './binary.js'
+import { errorKind } from '../log.js'
 import { scrubTerminalContext } from '../terminalEnvironment.js'
 import { PtyHostClient, type PtyHostDiscovery } from './client.js'
 import { discoveryFileName, hostInstanceName, instanceProtocol } from './instance.js'
@@ -176,8 +177,8 @@ function readBinaryVersionAsync(binary: string): Promise<ReadVersion | null> {
     }
     keepVersion(key, stamp, value)
     return value
-  }, () => {
-    console.error('[terminal] PTY_VERSION_UNAVAILABLE: target unknown')
+  }, (error: unknown) => {
+    console.error(`[terminal] PTY_VERSION_UNAVAILABLE: target unknown · ${errorKind(error)}`)
     return null
   }).finally(() => { versionFlights.delete(key) })
   versionFlights.set(key, reading)
@@ -566,7 +567,7 @@ export function removeUnusedPtyVersions(home: string, runtimeDir: string = env.A
       rmSync(dir, { recursive: true, force: true })
       removed.push(name)
     } catch (error) {
-      console.error(`[terminal] ptyhost: could not remove ${dir}: ${(error as Error).message}`)
+      console.error(`[terminal] ptyhost: could not remove terminal host ${name}: ${errorKind(error)}`)
     }
   }
   return removed

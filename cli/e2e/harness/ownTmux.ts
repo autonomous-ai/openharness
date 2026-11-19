@@ -7,6 +7,7 @@ import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { observedAgentId } from '../../src/cable/hosts/observed.js'
 import { until, type IsolatedDaemon } from './daemon.js'
+import { tabUnder, type FakeApp } from './outsideAgent.js'
 
 /** The variables a pane needs to run the fake engine against this daemon, as e2e/hookclient.e2e.ts passes them. */
 const ENGINE_ENV = ['HOME', 'ZDOTDIR', 'PATH', 'CODEX_HOME', 'CLAUDE_PATH', 'CODEX_PATH']
@@ -19,13 +20,24 @@ export class InOwnTmux {
   /** The dial's id for it. */
   get id(): string { return observedAgentId('claude', this.sessionId) }
 
-  static async start(d: IsolatedDaemon, session: string, folder: string): Promise<InOwnTmux> {
+  /** In a new session, [session]. */
+  static start(d: IsolatedDaemon, session: string, folder: string): Promise<InOwnTmux> {
+    return InOwnTmux.begin(d, folder, ['new-session', '-d', '-s', session])
+  }
+
+  /** In a new window of [session], made in the background: the session's active window stays the one it had. */
+  static startIn(d: IsolatedDaemon, session: string, folder: string): Promise<InOwnTmux> {
+    return InOwnTmux.begin(d, folder, ['new-window', '-d', '-t', `${session}:`])
+  }
+
+  /** [made] is the tmux command that makes its pane. */
+  private static async begin(d: IsolatedDaemon, folder: string, made: readonly string[]): Promise<InOwnTmux> {
     const cwd = join(d.projectsDir, folder)
     mkdirSync(cwd, { recursive: true })
     const from = d.hookLog().length
     // The private server's environment is the daemon's allowlist (src/testing/daemonEnvironment.ts): no host hint
     // from the developer's shell reaches the pane.
-    const pane = await d.tmux.run('new-session', '-d', '-P', '-F', '#{pane_id}', '-s', session, '-c', cwd,
+    const pane = await d.tmux.run(...made, '-P', '-F', '#{pane_id}', '-c', cwd,
       ...ENGINE_ENV.flatMap((name) => ['-e', `${name}=${d.env[name]}`]),
       d.env.CLAUDE_PATH!)
     // Its conversation, as its SessionStart hook named it: the only engine starting now.
@@ -38,6 +50,35 @@ export class InOwnTmux {
   async type(text: string): Promise<void> {
     await this.d.tmux.run('send-keys', '-t', this.pane, '-l', text)
     await this.d.tmux.run('send-keys', '-t', this.pane, 'Enter')
+  }
+}
+
+/**
+ * A client of the person's attached to [session] from a tab of a fake [app] (outsideAgent.ts tabUnder), as a person
+ * types `tmux attach` in Terminal: it has a tty, and its parents name the app. Resolved once tmux lists it.
+ */
+export async function tabClient(d: IsolatedDaemon, session: string, app: FakeApp):
+  Promise<{ pid: number; tty(): Promise<string>; close(): Promise<void> }> {
+  const tab = await tabUnder(d, app, ['tmux', '-S', d.tmux.socket, '-f', '/dev/null', 'attach-session', '-t', session],
+    { ...d.tmux.env, TERM: 'xterm-256color' })
+  const tty = async (): Promise<string | undefined> => {
+    const lines = await d.tmux.run('list-clients', '-F', '#{client_pid} #{client_tty}')
+    return lines.split('\n').find((line) => line.startsWith(`${tab.pid} `))?.slice(`${tab.pid} `.length)
+  }
+  try {
+    await until(`a client on ${session} in a ${app} tab`, tty, 30_000, 50)
+  } catch (error) {
+    await tab.close()
+    throw error
+  }
+  return {
+    pid: tab.pid,
+    async tty() {
+      const found = await tty()
+      if (!found) throw new Error(`client ${tab.pid} is not attached`)
+      return found
+    },
+    close: () => tab.close(),
   }
 }
 

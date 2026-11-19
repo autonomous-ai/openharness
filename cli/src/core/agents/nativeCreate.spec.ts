@@ -8,6 +8,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import type { CreateAgentDeps } from './create.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import type { TerminalCommand } from '../../lib/terminalTypes.js'
+import { writeExecutable } from '../../testing/executableFixture.js'
 
 const spawn = vi.hoisted(() => vi.fn())
 vi.mock('../../lib/createAgentPane.js', () => ({ createAndRegisterPane: spawn }))
@@ -22,7 +23,7 @@ beforeEach(() => {
   vi.stubEnv('USERPROFILE', join(root, 'home'))
   for (const key of ['XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'ZDOTDIR', 'CODEX_PATH', 'CLAUDE_CONFIG_DIR', 'HARNESS_OS']) vi.stubEnv(key, '')
   const bin = join(root, 'bin'); mkdirSync(bin)
-  writeFileSync(join(bin, 'codex'), '#!/bin/sh\nif [ "$1" = --version ]; then printf "codex-cli 0.160.0\\n"; else printf "%s\\n" "--no-daemon --approve-for-me"; fi\n', { mode: 0o700 })
+  writeExecutable(join(bin, 'codex'), '#!/bin/sh\nif [ "$1" = --version ]; then printf "codex-cli 0.160.0\\n"; else printf "%s\\n" "--no-daemon --approve-for-me"; fi\n')
   vi.stubEnv('SHELL', '/bin/sh'); vi.stubEnv('PATH', bin)
   writeFileSync(join(process.env.CODEX_HOME!, 'config.toml'), 'model_provider = "openai"\n')
   vi.spyOn(console, 'log').mockImplementation(() => {})

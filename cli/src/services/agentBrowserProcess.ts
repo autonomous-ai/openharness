@@ -22,6 +22,7 @@
  */
 import type { CoreApi } from '../core/api.js'
 import { CLIENT_STREAMS, type ClientStreamEndpoint } from '../lib/clientStreamContract.js'
+import { errorKind } from '../lib/log.js'
 import type { ProductUsageMetric } from '../lib/productUsageContract.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import { createFramePublisher } from './framePublisher.js'
@@ -185,7 +186,7 @@ export function runAgentBrowserService(options: AgentBrowserServiceOptions): Ser
           } else {
             console.log(`agent browser ${session.agentId}: browser_move_failed (${typeof answer?.error === 'string' ? answer.error.toLowerCase() : 'no_answer'})`)
           }
-        }).catch(() => { console.log(`agent browser ${session.agentId}: browser_move_failed (no_answer)`) })
+        }).catch((error: unknown) => { console.log(`agent browser ${session.agentId}: browser_move_failed (no_answer) · ${errorKind(error)}`) })
         return
       }
     },

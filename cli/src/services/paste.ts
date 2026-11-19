@@ -1,4 +1,5 @@
 /** Bounded file-drop storage in the edge process. This component cannot type into a terminal. */
+import { errorKind } from '../lib/log.js'
 import { constants, type BigIntStats } from 'node:fs'
 import { lstat, mkdir, open, opendir, rename, unlink, type FileHandle } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -43,11 +44,14 @@ export function createPasteFiles(dataDir: string, deps: PasteDeps = {}): Omit<Pa
   // A replay must not replace a published file after its active upload slot was released.
   const retained = new Map<string, number>()
   const expiry: Entry[] = []
-  let bytesUsed = 0, filesUsed = 0, fault: string | null = null, stopped = false
+  let bytesUsed = 0, filesUsed = 0, fault: { error: string } | null = null, stopped = false
   let expiryTimer: ReturnType<typeof setTimeout> | undefined
   let expiring: Promise<void> | undefined
   const fail = (code: string) => { log(code); return { error: code } }
-  const failure = (error: unknown) => fail(error instanceof Error && /^PASTE_[A-Z_]+$/.test(error.message) ? error.message : 'PASTE_STORAGE_FAILED')
+  const failure = (error: unknown) => {
+    log(`PASTE_STORAGE_FAILED · ${errorKind(error)}`)
+    return { error: error instanceof Error && /^PASTE_[A-Z_]+$/.test(error.message) ? error.message : 'PASTE_STORAGE_FAILED' }
+  }
   let facts: NativePathFact[] = []
   const verify = () => verifyNativePathFacts(facts)
 
@@ -93,7 +97,7 @@ export function createPasteFiles(dataDir: string, deps: PasteDeps = {}): Omit<Pa
         } catch (error) {
           if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
             forget(entry)
-          } else { fault = 'PASTE_CLEANUP_FAILED'; log(fault) }
+          } else { fault = { error: 'PASTE_CLEANUP_FAILED' }; log(`PASTE_CLEANUP_FAILED · ${errorKind(error)}`) }
         }
       }))
     }
@@ -151,8 +155,7 @@ export function createPasteFiles(dataDir: string, deps: PasteDeps = {}): Omit<Pa
     schedule()
   }
   const initialized = inventory().catch((error: unknown) => {
-    fault = error instanceof Error && /^PASTE_[A-Z_]+$/.test(error.message) ? error.message : 'PASTE_STORAGE_FAILED'
-    log(fault)
+    fault = failure(error)
   })
   const ownedStage = async (upload: Upload, missingOkay = false): Promise<boolean> => {
     if (!upload.fileKey) throw new Error('PASTE_STAGING_UNCONFIRMED')
@@ -184,7 +187,7 @@ export function createPasteFiles(dataDir: string, deps: PasteDeps = {}): Omit<Pa
         bytesUsed -= upload.request.totalBytes; filesUsed--
       }
       active.delete(upload.request.generation)
-    } catch { fault = 'PASTE_CLEANUP_FAILED'; log(fault) } })()
+    } catch (error) { fault = { error: 'PASTE_CLEANUP_FAILED' }; log(`PASTE_CLEANUP_FAILED · ${errorKind(error)}`) } })()
     return upload.cleaning
   }
   const cancel = (generation: string | null): void => {
@@ -212,7 +215,7 @@ export function createPasteFiles(dataDir: string, deps: PasteDeps = {}): Omit<Pa
     })
   return {
     async begin(request) {
-      if (stopped || fault) return fail(fault ?? 'PASTE_UNAVAILABLE')
+      if (stopped || fault) return fail(fault?.error ?? 'PASTE_UNAVAILABLE')
       if (!UUID.test(request.generation) || !UUID.test(request.streamId) || !request.connection || request.connection.length > 512
         || !request.filename || request.filename.length > 4096 || !Number.isSafeInteger(request.totalBytes)
         || request.kind !== undefined && request.kind !== 'image' && request.kind !== 'file'
@@ -228,7 +231,7 @@ export function createPasteFiles(dataDir: string, deps: PasteDeps = {}): Omit<Pa
       active.set(request.generation, upload); bytesUsed += request.totalBytes; filesUsed++
       arm(upload)
       upload.ready = initialized.then(async () => {
-        if (fault) throw new Error(fault)
+        if (fault) throw new Error(fault.error)
         if (retained.has(request.generation)) throw new Error('PASTE_UPLOAD_BUSY')
         // Inventory may have discovered old files after this begin reserved its slot.
         if (filesUsed > PASTE_LIMITS.files || bytesUsed > PASTE_LIMITS.storedBytes) throw new Error('PASTE_CAPACITY')

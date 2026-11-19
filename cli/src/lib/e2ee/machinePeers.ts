@@ -15,6 +15,7 @@
 import { mkdirSync, readFileSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { env } from '../../config/env.js'
+import { errorKind } from '../log.js'
 import { b64d, fingerprint } from './core.js'
 
 const DIR = join(env.ADAPTER_DATA_DIR, 'e2e')
@@ -114,7 +115,7 @@ export class MachinePeerStore {
       writeGone(gone)
     } catch (err) {
       for (const id of back) backInMemory.add(id)
-      console.warn(`[relay] could not record ${back.length} machine(s) as back on the list, kept in memory: ${err instanceof Error ? err.message : String(err)}`)
+      console.warn(`[relay] could not record ${back.length} machine(s) as back on the list, kept in memory: ${errorKind(err)}`)
     }
     return true
   }

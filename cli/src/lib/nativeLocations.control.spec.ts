@@ -99,7 +99,9 @@ it('Copilot binding retains its previous conversation when native ownership move
   const binding = (await import('../core/agents/bind.js')).createBinding(deps)
   await binding.bindObservedAgent(observed)
   expect(register).not.toHaveBeenCalled(); expect(row.sessionId).toBe('previous')
-  expect(console.log).toHaveBeenCalledWith(expect.stringContaining('process conversation changed'))
+  // The reason stays on the row; the log names only the kind.
+  expect(row.identityHold).toContain('process conversation changed')
+  expect(console.log).toHaveBeenCalledWith(expect.stringContaining('binding held · IdentityReadUnavailable IDENTITY_UNAVAILABLE'))
   await binding.bindObservedAgent(observed)
   expect(register).toHaveBeenCalledWith(expect.objectContaining({ sessionId: B, transcriptPath: undefined }),
     { current: expect.any(Function) })

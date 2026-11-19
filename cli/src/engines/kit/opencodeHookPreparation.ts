@@ -1,4 +1,5 @@
 /** The existing OpenCode publisher coordination, shared by core and explicit CLI installation. */
+import { errorKind } from '../../lib/log.js'
 import { hookPreparationRoutes, type HookPreparationOptions, type HookPreparationProof } from './nativeHookFiles.js'
 import type { NativeHookOptions } from './nativeLocations.js'
 import type { OpencodeLaunchSnapshot } from '../launchControl.js'
@@ -61,7 +62,7 @@ export async function prepareOpencodeHooks(paths: readonly string[], port: numbe
     try { routes.verify(); return await publish(major, { ...options, timeoutMs: Math.max(0, deadline - performance.now()), confirmed: proof => installation.proofs.push(proof), identity: JSON.stringify([port, snapshot?.identity, major]),
       current: () => group.current.port === port && group.current.executable === installation.executable
         && group.current.major === major && performance.now() < deadline && snapshot?.current() !== false && options.current?.() !== false }) } catch (error) {
-      console.error('[hooks] OpenCode preparation held:', error)
+      console.error('[hooks] OpenCode preparation held:', errorKind(error))
       return false
     }
   })()
