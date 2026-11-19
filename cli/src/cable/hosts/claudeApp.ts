@@ -10,11 +10,17 @@ import { createAppLink, type AppLinkDeps } from './appLink.js'
 import { APP_BUNDLES } from './hostDetect.js'
 
 /** The check the Claude app makes of a session its `claude://code/continue` link names (read in the app, 2026-11-14). */
-const CLAUDE_SESSION = /^local_[A-Za-z0-9-]{1,64}$/
+export const CLAUDE_SESSION = /^local_[A-Za-z0-9-]{1,64}$/
+
+/** The key a session is known by on the Claude app's page: the store's source lists the same session by it, so a live
+ *  agent's row and the store's row are one. */
+export function claudePaneKey(localId: string): string {
+  return `claude-app:${localId}`
+}
 
 export function createClaudeAppAdapter(
   deps: AppLinkDeps,
-): HostAdapter & Required<Pick<HostAdapter, 'canShow' | 'show'>> {
+): HostAdapter & Required<Pick<HostAdapter, 'canShow' | 'show' | 'paneKey'>> {
   return {
     id: 'claude',
     tap: 'instead',
@@ -30,6 +36,7 @@ export function createClaudeAppAdapter(
       if (place.app !== 'claude' || !scanned || !CLAUDE_SESSION.test(scanned)) return undefined
       return { adapter: 'claude', id: scanned }
     },
+    paneKey: (pane) => claudePaneKey(pane.id),
     // No forward of its own: a link that fails leaves the opener's fallback to bring the app, by the hook's bundle id
     // or, for a session only the open scan found, by this adapter's bundle (observed.ts target(), open.ts).
     ...createAppLink(deps, {
