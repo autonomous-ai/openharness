@@ -1,5 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { mkdtempSync } from 'fs'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { mkdtempSync, readFileSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { ed25519 } from '@noble/curves/ed25519'
@@ -11,6 +11,7 @@ import { DeviceLogStore } from './deviceLogStore.js'
 import { checkDevAck, signDevAck, type DevAck } from './deviceAck.js'
 import { DeviceLogSyncer, devLogDivergence, type DeviceKeysSeen, type DeviceLogAppendAnswer, type DeviceLogFetched, type DeviceLogRebaseline } from './deviceLogSyncer.js'
 import { ADOPTED_SIGN_IN } from '../authSession.js'
+import { StateFileUnreadable } from '../secureState.js'
 import { b64d, fingerprint } from './core.js'
 
 const b64 = (u: Uint8Array): string => Buffer.from(u).toString('base64')
@@ -1659,7 +1660,8 @@ describe('DeviceLogSyncer — departed keys, sign-ins and kept accounts', () => 
       const other = FakeBackend.of('acct-2')
       t.backend.fetch.mockImplementation(other.fetch)
       await t.syncer.refresh()
-      expect(seen).toEqual([{ from: ACCT, to: 'acct-2', live: ACCT, archived: false }])
+      // The departing log is kept before the stores move: an archive that cannot take it stops the switch first.
+      expect(seen).toEqual([{ from: ACCT, to: 'acct-2', live: ACCT, archived: true }])
       expect(t.store.read()).toMatchObject({ state: { acct: 'acct-2' }, preLog: [phone.pub] })
       // And back: the kept log comes back, and so do its stores.
       who.user = 'u3'
@@ -2599,5 +2601,71 @@ describe('DeviceLogSyncer — "It\'s mine", once for the account', () => {
       expect(there.list().pending).toEqual([])
       expect(there.list().members.find((m) => m.pub === phone.pub)?.confirmed).toEqual({ by: me.pub, label: 'my-mac', at: 6_000 })
     })
+  })
+})
+
+describe('DeviceLogSyncer — a log that cannot be read', () => {
+  const TORN = '{"state":{"acct":"'
+  const tornLog = (): string => {
+    const path = join(mkdtempSync(join(tmpdir(), 'devlog-')), 'devlog.json')
+    writeFileSync(path, TORN)
+    return path
+  }
+
+  // The reader's retries wait on Atomics.wait: recorded, not slept. Its one line per file is the reader's own test.
+  beforeEach(() => {
+    vi.spyOn(Atomics, 'wait').mockReturnValue('timed-out')
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+  })
+  afterEach(() => { vi.restoreAllMocks() })
+
+  it('a log that cannot be read stops the syncer, and nothing is written', async () => {
+    const path = tornLog()
+    const log = vi.fn()
+    const t = setup({ store: new DeviceLogStore(path), log, seen: async () => ({ seen: {}, since: 0 }) })
+    t.backend.add(box2, 'machine', MID2, 'box2')
+    await t.syncer.refresh()
+    expect(log).toHaveBeenCalledWith('[devlog] refresh failed: StateFileUnreadable')
+    await t.syncer.register()
+    await t.syncer.sweepStale()
+    expect(readFileSync(path, 'utf8')).toBe(TORN)
+    expect(t.backend.fetch).not.toHaveBeenCalled()
+    expect(t.backend.append).not.toHaveBeenCalled()
+    expect(t.calls.adopt).not.toHaveBeenCalled()
+    // The trust group swaps no roster, and trusts nobody new, on a log it cannot read.
+    expect(t.syncer.current()).toBe(false)
+    expect(() => t.syncer.suspendedKeys()).toThrow(StateFileUnreadable)
+  })
+
+  it('a removal is refused, not thrown at a caller that started it and walked away', async () => {
+    const t = setup({ store: new DeviceLogStore(tornLog()) })
+    await expect(t.syncer.remove(box2.pub)).resolves.toEqual({
+      ok: false, error: 'UNAVAILABLE', detail: 'devlog.json cannot be read (not valid JSON). Move it aside to start over.',
+    })
+    expect(t.calls.drop).not.toHaveBeenCalled()
+    expect(t.backend.append).not.toHaveBeenCalled()
+  })
+
+  it('an archive that cannot be read stops a switch of accounts before the trust stores move', async () => {
+    const path = join(mkdtempSync(join(tmpdir(), 'devlog-')), 'devlog.json')
+    const archive = path.replace(/\.json$/, '.archive.json')
+    const switchAccount = vi.fn()
+    const log = vi.fn()
+    const who = { user: 'u1', acct: ACCT }
+    const t = setup({ store: new DeviceLogStore(path), signIn: () => who.user, signInAcct: () => who.acct, switchAccount, log })
+    t.backend.add(box2, 'machine', MID2, 'box2')
+    await t.syncer.register()
+    writeFileSync(archive, TORN)
+    const live = readFileSync(path, 'utf8')
+    who.user = 'u2'
+    who.acct = 'acct-2'
+    t.backend.fetch.mockImplementation(FakeBackend.of('acct-2').fetch)
+    // Run on every read: a switch made and then cut short would move the stores again each time.
+    await t.syncer.refresh()
+    await t.syncer.refresh()
+    expect(log).toHaveBeenCalledWith('[devlog] refresh failed: StateFileUnreadable')
+    expect(switchAccount).not.toHaveBeenCalled()
+    expect(readFileSync(path, 'utf8')).toBe(live)
+    expect(readFileSync(archive, 'utf8')).toBe(TORN)
   })
 })
