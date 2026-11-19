@@ -14,11 +14,13 @@ use harness_device::runner::{Doors, Runner};
 use harness_device::state::{JsonStateFile, StateFile};
 use harness_device::tabs;
 use harness_device::tick;
+use harness_device::tray::{TrayIcon, tray_icon};
 use harness_device::types::{Action, Clock, Effect, Event, Log, MenuAction, MenuItem, SystemClock, View};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
+use tauri::image::Image;
 use tauri::menu::{CheckMenuItem, IsMenuItem, Menu, MenuItem as NativeItem, PredefinedMenuItem, Submenu};
 use tauri::tray::{MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager, WindowEvent};
@@ -120,10 +122,31 @@ fn start(handle: &AppHandle, events: Sender<Event>, queue: Receiver<Event>) -> t
         }),
     );
 
+    // Watched before it is read, so a change in between is told, not lost. Its first notice reaches the main thread
+    // after this setup, once the tray is built.
+    #[cfg(windows)]
+    let light_panel = {
+        use harness_device::theme_windows::{PERSONALIZE, read, watch};
+        let (setting, log) = (handle.clone(), log.clone());
+        watch(PERSONALIZE, move |light| {
+            let (handle, log) = (setting.clone(), log.clone());
+            let _ = setting.run_on_main_thread(move || {
+                if let Some(tray) = handle.tray_by_id(TRAY)
+                    && let Err(error) = tray.set_icon(Some(tray_image(tray_icon("windows", light))))
+                {
+                    log.line(&format!("tray: {error}"));
+                }
+            });
+        });
+        read(PERSONALIZE)
+    };
+    #[cfg(not(windows))]
+    let light_panel = false;
+    let icon = tray_icon(std::env::consts::OS, light_panel);
     let (clicks, chosen) = (events.clone(), events.clone());
     TrayIconBuilder::with_id(TRAY)
-        .icon(tauri::include_image!("icons/tray.png"))
-        .icon_as_template(true)
+        .icon(tray_image(icon))
+        .icon_as_template(icon == TrayIcon::Template)
         .tooltip("Harness")
         .on_menu_event(move |_, event| {
             if let Some(action) = menu_action(event.id().as_ref()) {
@@ -182,6 +205,13 @@ fn start(handle: &AppHandle, events: Sender<Event>, queue: Receiver<Event>) -> t
         }
     });
     Ok(())
+}
+
+fn tray_image(icon: TrayIcon) -> Image<'static> {
+    match icon {
+        TrayIcon::Template | TrayIcon::Dark => tauri::include_image!("icons/tray.png"),
+        TrayIcon::Light => tauri::include_image!("icons/tray-light.png"),
+    }
 }
 
 /// What the timer tells now: the desktop app running, and on Linux what a click on the icon would tell.
