@@ -560,8 +560,11 @@ void main() {
   test(
     'startChecking calls onUpdateAvailable only when a newer build exists',
     () async {
+      // Each wait ends when that updater's first check has finished, never on a fixed time. A check
+      // calls onUpdateAvailable right after onCheckCompleted, so it has been called by then.
       final urlUpToDate = await serveMetadataAndZip(manifestVersion: '1.0.0');
       final noUpdates = <UpdateInfo>[];
+      final firstCheck = Completer<DesktopUpdateCheck>();
       final t1 =
           DesktopUpdater(
             isWindows: false,
@@ -573,16 +576,21 @@ void main() {
           ).startChecking(
             interval: const Duration(days: 1),
             currentVersion: '1.0.0',
+            onCheckCompleted: firstCheck.complete,
             onUpdateAvailable: noUpdates.add,
           );
       addTearDown(t1.cancel);
-      await Future<void>.delayed(const Duration(milliseconds: 100));
+      expect(
+        (await firstCheck.future).status,
+        DesktopUpdateCheckStatus.upToDate,
+      );
       expect(noUpdates, isEmpty);
 
       await server?.close(force: true);
       server = null;
       final urlNewer = await serveMetadataAndZip(manifestVersion: newVersion);
       final found = <UpdateInfo>[];
+      final newerCheck = Completer<DesktopUpdateCheck>();
       final t2 =
           DesktopUpdater(
             isWindows: false,
@@ -594,10 +602,11 @@ void main() {
           ).startChecking(
             interval: const Duration(days: 1),
             currentVersion: '1.0.0',
+            onCheckCompleted: newerCheck.complete,
             onUpdateAvailable: found.add,
           );
       addTearDown(t2.cancel);
-      await Future<void>.delayed(const Duration(milliseconds: 100));
+      await newerCheck.future;
       expect(found, hasLength(1));
       expect(found.single.version, newVersion);
     },
