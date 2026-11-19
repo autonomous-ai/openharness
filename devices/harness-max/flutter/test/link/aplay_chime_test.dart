@@ -36,12 +36,12 @@ void main() {
       expect(h.getUint32(4, Endian.little), wav.length - 8);
     });
 
-    test('is beep_tone\'s ~2 kHz square at 2700 (the owner\'s level, 19 Nov), silent in the gap', () {
+    test('is beep_tone\'s ~2 kHz square at 2700 (the owner\'s level, 19 Nov), all but silent in the gap', () {
       expect(_sample(wav, 0), -2700);
       expect(_sample(wav, 4), 2700);
       expect(_sample(wav, 1279), 2700);
-      expect(_sample(wav, 1280), 0); // the gap: 80 ms in
-      expect(_sample(wav, 2239), 0);
+      expect(_sample(wav, 1280).abs(), 1); // the gap: 80 ms in
+      expect(_sample(wav, 2239).abs(), 1);
       expect(_sample(wav, 2240), -2700); // the second tone: 140 ms in
       expect(_sample(wav, 3519), 2700);
     });
@@ -61,6 +61,14 @@ void main() {
     expect(s.first.abs(), lessThan(50)); // no click going in
     expect(s.last.abs(), lessThan(50)); // nor going out
     expect(s.toSet().length, greaterThan(500), reason: 'a curve, not a square');
+  });
+
+  test('no sound holds a sample of digital silence: the board\'s codec mutes on it and swallows the next tone', () {
+    for (final sound in ChimeSound.values) {
+      final wav = chimeWav(sound);
+      final n = (wav.length - 44) ~/ 2;
+      expect([for (var i = 0; i < n; i++) _sample(wav, i)], everyElement(isNot(0)), reason: sound.name);
+    }
   });
 
   test('the first chime sets the codec\'s DAC to its volume, then plays the beep on the speaker', () async {

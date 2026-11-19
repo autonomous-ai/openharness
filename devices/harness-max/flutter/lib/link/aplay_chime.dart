@@ -155,7 +155,10 @@ Uint8List _wav(Int16List samples) {
   tag(36, 'data');
   b.setUint32(40, 2 * n, Endian.little);
   for (var i = 0; i < n; i++) {
-    b.setInt16(44 + 2 * i, samples[i], Endian.little);
+    // The board's ES8389 mutes on digital silence and comes back slowly: the 60 ms gap between two tones swallowed the
+    // second (the mic heard it ~20 times fainter, 19 Nov). A ±1 floor, far below hearing, keeps it from muting.
+    final v = samples[i];
+    b.setInt16(44 + 2 * i, v == 0 ? (i.isOdd ? 1 : -1) : v, Endian.little);
   }
   return b.buffer.asUint8List();
 }
