@@ -5,7 +5,8 @@
  * throwaway HOME, never in anyone's own `~/.codex`.
  */
 import { appendFileSync, mkdirSync, renameSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { userInfo } from 'node:os'
+import { join, resolve } from 'node:path'
 import { builtinSqlite, type DatabaseLike } from '../lib/sqliteBuiltin.js'
 
 /** Written to every row's title, name, first message and preview: a reader that lets any of them out shows it. */
@@ -50,6 +51,10 @@ export interface CodexAppFixture {
 }
 
 export function codexAppFixture(home: string): CodexAppFixture {
+  // The account's own home, from the user database: a test or a benchmark moves HOME, which homedir() follows.
+  if (resolve(home) === join(userInfo().homedir, '.codex')) {
+    throw new Error('the Codex app fixture never writes the real ~/.codex')
+  }
   const store = join(home, 'state_5.sqlite')
   const statePath = join(home, '.codex-global-state.json')
 
