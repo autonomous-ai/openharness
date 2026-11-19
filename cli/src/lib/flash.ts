@@ -23,11 +23,12 @@
  */
 
 import { spawn } from 'child_process'
-import { mkdirSync, readFileSync, writeFileSync } from 'fs'
+import { mkdirSync, readFileSync } from 'fs'
 import { dirname, join } from 'path'
 import { env } from '../config/env.js'
 import { FLASHER_DIR } from './flasherDir.js'
 import { completeFlash } from './flashRecovery.js'
+import { atomicWriteFile } from './secureState.js'
 
 const FETCH_TIMEOUT_MS = 20_000
 
@@ -121,7 +122,8 @@ function defaultsFor(platform: NodeJS.Platform): { deps: FlashDeps; cached: stri
       },
       writeCache: (body) => {
         mkdirSync(dirname(cached), { recursive: true })
-        writeFileSync(cached, body, { mode: 0o755 })
+        // Whole or not at all: the cache is what runs offline, and a truncated copy would be run.
+        atomicWriteFile(cached, body, 'cache', { mode: 0o755 })
       },
       run: realRun(script),
       log: (line) => console.log(line),

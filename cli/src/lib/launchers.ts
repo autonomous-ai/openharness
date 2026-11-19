@@ -5,10 +5,11 @@
  * Its own module so the hn updater, which the core runs, can repair `hn` without loading the managed
  * runtimes' installer (runtimeInstall.ts), whose grid half is the models service's.
  */
-import { accessSync, constants, linkSync, lstatSync, mkdtempSync, readFileSync, readlinkSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { accessSync, constants, lstatSync, readFileSync, readlinkSync, realpathSync } from 'node:fs'
 import { isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { env } from '../config/env.js'
 import { errorKind } from './log.js'
+import { atomicWriteFile } from './secureState.js'
 
 /** The trailing `exec …` line, which is the only line any launcher we ship varies. */
 const EXEC_LINE = /^exec .*$/m
@@ -35,12 +36,9 @@ export function ensureLauncher(node: string, log: (message: string) => void = ()
   const next = current.replace(EXEC_LINE, `exec ${shellQuote(node)} ${shellQuote(cli)} "$@"`)
   if (next === current) return false
 
-  const temporary = `${launcher}.tmp-${process.pid}`
   try {
-    writeFileSync(temporary, next, { mode: 0o755 })
-    renameSync(temporary, launcher)
+    atomicWriteFile(launcher, next, 'cache', { mode: 0o755 })
   } catch (error) {
-    try { rmSync(temporary, { force: true }) } catch { /* never written */ }
     // A read-only bin dir, a launcher owned by another user: said, and not worth failing a start over.
     log(`  ✗ could not repoint bin/harness at the new Node: ${errorKind(error)}`)
     return false
@@ -59,7 +57,6 @@ export function ensureLauncher(node: string, log: (message: string) => void = ()
  * equally to hn. Publish the complete script without replacing any existing file or symlink.
  */
 export function ensureHnLauncher(scriptPath: string): boolean {
-  let temporary: string | undefined
   try {
     const cli = join(env.ADAPTER_CLI_DIR, 'cli.js')
     if (realpathSync(scriptPath) !== realpathSync(cli)) return false
@@ -72,17 +69,11 @@ export function ensureHnLauncher(scriptPath: string): boolean {
     const exec = EXEC_LINE.exec(readFileSync(launcher, 'utf8'))
     if (!exec || !(exec[0].includes(cli) || exec[0].includes(shellQuote(cli)))) return false
 
-    temporary = mkdtempSync(join(env.HARNESS_BIN_DIR, '.hn-'))
-    const staged = join(temporary, 'hn')
-    writeFileSync(staged, `#!/bin/sh\nexec ${shellQuote(launcher)} tui "$@"\n`, { mode: 0o755 })
-    // link, unlike rename, fails if another process or the user has already created hn.
-    linkSync(staged, hn)
-    return true
+    // Exclusive: another process or the person may have made hn meanwhile, and theirs stays.
+    return atomicWriteFile(hn, `#!/bin/sh\nexec ${shellQuote(launcher)} tui "$@"\n`, 'cache', { exclusive: true, mode: 0o755 })
   } catch {
     // A read-only bin dir or a racing install must not prevent the CLI or daemon from running.
     return false
-  } finally {
-    if (temporary) { try { rmSync(temporary, { recursive: true, force: true }) } catch { /* best effort */ } }
   }
 }
 

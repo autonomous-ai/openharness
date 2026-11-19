@@ -1,11 +1,12 @@
 /** Identify the command users actually run before reporting that hn is up to date. */
 import { execFile } from 'node:child_process'
-import { accessSync, closeSync, constants, copyFileSync, lstatSync, mkdtempSync, openSync, readFileSync, readlinkSync, readSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
+import { accessSync, closeSync, constants, copyFileSync, lstatSync, mkdtempSync, openSync, readFileSync, readlinkSync, readSync, realpathSync, statSync, symlinkSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { promisify } from 'node:util'
 import { env } from '../config/env.js'
 import { resolveBinaryOnPath } from '../lib/binaryOnPath.js'
 import { ensureHnLauncher } from '../lib/launchers.js'
+import { atomicWriteFile } from '../lib/secureState.js'
 import { installedTuiPath } from './paths.js'
 
 const run = promisify(execFile)
@@ -107,17 +108,13 @@ export async function repairHnLauncher(script: string, log: (line: string) => vo
   if (!exec || !(exec.includes(cli) || exec.includes(quote(cli)))) throw new Error('The harness launcher is not managed; hn was left unchanged.')
   if (identity(state.path) !== state.identity) throw new Error('The hn launcher changed during installation; run `harness tui --install` again.')
   const backup = mkdtempSync(join(env.HARNESS_BIN_DIR, '.hn-backup-'))
-  const staged = join(backup, 'new-hn')
-  try {
-    const target = linkedTarget(state.path)
-    // The backup lives one directory deeper; resolve relative links so it still runs the old build.
-    if (target !== null) symlinkSync(target, join(backup, 'hn'))
-    else copyFileSync(state.path, join(backup, 'hn'), constants.COPYFILE_EXCL)
-    writeFileSync(staged, launcherSource(), { mode: 0o755 })
-    if (identity(state.path) !== state.identity) throw new Error('The hn launcher changed during installation; run `harness tui --install` again.')
-    renameSync(staged, state.path)
-    log(`  ✓ hn now follows automatic updates. Previous launcher: ${join(backup, 'hn')}`)
-  } finally { rmSync(staged, { force: true }) }
+  const target = linkedTarget(state.path)
+  // The backup lives one directory deeper; resolve relative links so it still runs the old build.
+  if (target !== null) symlinkSync(target, join(backup, 'hn'))
+  else copyFileSync(state.path, join(backup, 'hn'), constants.COPYFILE_EXCL)
+  if (identity(state.path) !== state.identity) throw new Error('The hn launcher changed during installation; run `harness tui --install` again.')
+  atomicWriteFile(state.path, launcherSource(), 'cache', { mode: 0o755 })
+  log(`  ✓ hn now follows automatic updates. Previous launcher: ${join(backup, 'hn')}`)
 }
 
 export async function reportHnLauncher(log: (line: string) => void): Promise<void> {

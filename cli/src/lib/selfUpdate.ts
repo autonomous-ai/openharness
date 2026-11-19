@@ -21,6 +21,7 @@ import { env } from '../config/env.js'
 import { SpawnLockBusyError, describeSpawnLockOwner } from './daemonSpawnLock.js'
 import { errorKind } from './log.js'
 import { MINIMUM_NODE_MAJOR, managedNodePath, nodeMajorOf } from './nodeRuntime.js'
+import { atomicWriteFile, jsonArray, readState } from './secureState.js'
 import { failedNode, recordNodeMigration, type NodeMigration } from './nodeMigration.js'
 import type { NodeMigrationReason } from './runtimeInstall.js'
 import { patientDeadline } from './patientExec.js'
@@ -54,20 +55,9 @@ function readJson(file: string): unknown {
   try { return JSON.parse(readFileSync(file, 'utf8')) } catch { return null }
 }
 
-/** Written whole and renamed into place; a write cut short (a full disk) leaves nothing behind. */
+/** Written whole; a write cut short (a full disk) leaves nothing behind. */
 function writeJson(file: string, value: unknown): void {
-  writeWhole(file, `${JSON.stringify(value)}\n`)
-}
-
-function writeWhole(file: string, bytes: string | Buffer, mode?: number): void {
-  const tmp = `${file}.tmp`
-  try {
-    writeFileSync(tmp, bytes, mode === undefined ? undefined : { mode })
-    renameSync(tmp, file)
-  } catch (error) {
-    try { rmSync(tmp, { force: true }) } catch { /* not a file this call wrote */ }
-    throw error
-  }
+  atomicWriteFile(file, `${JSON.stringify(value)}\n`, 'cache')
 }
 
 const sha256 = (bytes: Buffer): string => createHash('sha256').update(bytes).digest('hex')
@@ -115,8 +105,8 @@ export function unjudgedUpdate(dir: string, fingerprint: string | null): string 
 
 /** The versions this machine rolled back, oldest first. */
 export function rejectedVersions(dir: string): string[] {
-  const rejected = readJson(join(dir, REJECTED))
-  return Array.isArray(rejected) ? rejected.filter((version): version is string => typeof version === 'string') : []
+  const rejected = readState(join(dir, REJECTED), 'cache', jsonArray)
+  return rejected.state === 'ok' ? rejected.value.filter((version): version is string => typeof version === 'string') : []
 }
 
 /** Strict semver-greater on the `X.Y.Z` core (ignores pre-release/build). Unparseable → false, so a
@@ -476,7 +466,7 @@ function stageVersion(dir: string, cliBuf: Buffer, notifyBuf: Buffer, version: s
   } catch (error) {
     try {
       if (before === null) rmSync(note, { force: true })
-      else writeWhole(note, before)
+      else atomicWriteFile(note, before, 'cache')
     } catch { /* the pointer did not move: the build in use is unchanged either way */ }
     throw error
   }
@@ -524,7 +514,7 @@ export function restore(dir: string, platform: NodeJS.Platform = process.platfor
 /** `current-node` on [node], as runtimeInstall writes it: the path and the platform's line end, readable by this
  *  account alone, whole or not at all. Throws when it cannot be written. */
 function nameNode(node: string, platform: NodeJS.Platform): void {
-  writeWhole(join(env.ADAPTER_RUNTIME_DIR, 'current-node'), `${node}${platform === 'win32' ? '\r\n' : '\n'}`, 0o600)
+  atomicWriteFile(join(env.ADAPTER_RUNTIME_DIR, 'current-node'), `${node}${platform === 'win32' ? '\r\n' : '\n'}`, 'cache')
 }
 
 /**

@@ -15,6 +15,7 @@ import { delimiter, dirname, isAbsolute, join, resolve, sep } from 'node:path'
 import { defaultCodexHome, listCodexProfiles } from '../codexProfiles.js'
 import { errorKind } from '../log.js'
 import { managedNodePath } from '../nodeRuntime.js'
+import { atomicWriteFile } from '../secureState.js'
 import { MCP_SHIM_SOURCE } from './mcpShimSource.js'
 import { CODE, locked, writePrivate, type Store } from './store.js'
 import { transport } from './rest.js'
@@ -153,11 +154,7 @@ export type McpEntry = { url: string } | { command: string; args: string[] }
 function writeShim(vault: Store): string {
   const path = join(vault.root, 'mcp-shim.mjs')
   mkdirSync(vault.root, { recursive: true, mode: 0o700 })
-  if (!existsSync(path) || readFileSync(path, 'utf8') !== MCP_SHIM_SOURCE) {
-    const staged = `${path}.${process.pid}.tmp`
-    writeFileSync(staged, MCP_SHIM_SOURCE, { mode: 0o600 })
-    renameSync(staged, path)
-  }
+  if (!existsSync(path) || readFileSync(path, 'utf8') !== MCP_SHIM_SOURCE) atomicWriteFile(path, MCP_SHIM_SOURCE, 'cache')
   return path
 }
 

@@ -9,12 +9,13 @@
  * sign-in. Every removal is written to harness.log with the command and the processes above it.
  */
 import { execFileSync } from 'child_process'
-import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, readlinkSync, renameSync, rmSync, writeFileSync } from 'fs'
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readlinkSync } from 'fs'
 import { dirname, join } from 'path'
 import { env } from '../config/env.js'
 import { redactArgv } from './agentCreateDiagnosis.js'
 import { redactSecretsInText } from './redactSecrets.js'
 import { clearAuthSession } from './authSession.js'
+import { atomicWriteFile } from './secureState.js'
 
 /** What the desktop app's Sign out button passes to `harness logout`: a person asked, in the app. */
 export const SIGN_OUT_BUTTON_FLAG = '--from-sign-out-button'
@@ -167,20 +168,15 @@ function cutTo(line: string, max: number): string {
   return kept + ellipsis
 }
 
-/** Written beside the file and renamed over it, so a crash or a second removal at once never leaves it half written (the review
- *  of #4221); its person's alone, whatever mode a file there had before. */
+/** Written whole, so a crash or a second removal at once never leaves it half written (the review of #4221); its person's
+ *  alone, whatever mode a file there had before. */
 function keepRemoval(line: string): void {
-  const file = join(env.ADAPTER_DATA_DIR, REMOVALS_FILE), temporary = `${file}.${process.pid}.tmp`
+  const file = join(env.ADAPTER_DATA_DIR, REMOVALS_FILE)
   try {
     const before = existsSync(file) ? readFileSync(file, 'utf8').split('\n').filter(Boolean) : []
     // Every line kept, those from before too: no secret a command line carried, and at most [REMOVAL_LINE_MAX] bytes (the third
     // review of #4221: the file keeps command lines with no age limit).
     const kept = [...before.slice(-(REMOVALS_KEPT - 1)), line].map(keptLine)
-    writeFileSync(temporary, kept.join('\n') + '\n', { mode: 0o600 })
-    chmodSync(temporary, 0o600)
-    renameSync(temporary, file)
-  } catch {
-    // A record, not a gate, as harness.log's line is.
-    try { rmSync(temporary, { force: true }) } catch { /* nothing was left */ }
-  }
+    atomicWriteFile(file, kept.join('\n') + '\n', 'cache')
+  } catch { /* a record, not a gate, as harness.log's line is */ }
 }
