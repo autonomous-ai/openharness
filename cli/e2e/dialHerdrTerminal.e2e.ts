@@ -16,7 +16,7 @@
  *
  * macOS only, with herdr and `cc` installed: off macOS the lookup answers nothing.
  */
-import { execFile, execFileSync, spawn, type ChildProcess } from 'node:child_process'
+import { execFile, spawn, type ChildProcess } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { writeFileSync } from 'node:fs'
 import { dirname, isAbsolute, join, relative, sep } from 'node:path'
@@ -27,7 +27,7 @@ import { devicesListenerPath } from '../src/devices/listenerPath.js'
 import { CLI_ROOT, IsolatedDaemon, until } from './harness/daemon.js'
 import { Desk } from './harness/desk.js'
 import type { DialMessage, FakeDial } from './harness/fakeDial.js'
-import { herdrBinary, ownHerdrsOnly, PrivateHerdr } from './harness/herdrServer.js'
+import { herdrBinary, othersNow, ownHerdrsOnly, PrivateHerdr } from './harness/herdrServer.js'
 import { InOrca } from './harness/inOrca.js'
 import { Outside } from './harness/outsideAgent.js'
 
@@ -42,21 +42,6 @@ const EVERYDAY_PORT = '18473'
 
 // How `harness hardware watch` is started: the run's bundle when there is one (E2E_BUNDLE), as the daemon runs.
 const CLI_ENTRY = process.env.E2E_BUNDLE_PATH ? [process.env.E2E_BUNDLE_PATH] : ['--import', 'tsx', 'src/cli.ts']
-
-/** The pids of the herdr processes outside this worker's tree, from the whole table: names are matched and dropped, and
- *  nothing is asked of those processes. */
-function othersNow(): number[] {
-  const rows = execFileSync('/bin/ps', ['-axo', 'pid=,ppid=,comm='], { encoding: 'utf8' }).split('\n').flatMap((line) => {
-    const row = /^\s*(\d+)\s+(\d+)\s+(.*?)\s*$/.exec(line)
-    return row ? [{ pid: Number(row[1]), ppid: Number(row[2]), herdr: row[3].split('/').pop() === 'herdr' }] : []
-  })
-  const parent = new Map(rows.map((row) => [row.pid, row.ppid]))
-  const ours = (pid: number): boolean => {
-    for (let at = pid, step = 0; at > 0 && step < 64; at = parent.get(at) ?? 0, step++) if (at === process.pid) return true
-    return false
-  }
-  return rows.filter((row) => row.herdr && !ours(row.pid)).map((row) => row.pid)
-}
 
 describe.skipIf(process.platform !== 'darwin' || !herdrBinary)("an agent in the person's herdr, on the page of the app that holds its client", () => {
   let daemon: IsolatedDaemon | undefined

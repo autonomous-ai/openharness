@@ -225,6 +225,21 @@ export class PrivateHerdr {
   }
 }
 
+/** The pids of the herdr processes outside this worker's tree, from the whole table: names are matched and dropped, and
+ *  nothing is asked of those processes. */
+export function othersNow(): number[] {
+  const rows = execFileSync('/bin/ps', ['-axo', 'pid=,ppid=,comm='], { encoding: 'utf8' }).split('\n').flatMap((line) => {
+    const row = /^\s*(\d+)\s+(\d+)\s+(.*?)\s*$/.exec(line)
+    return row ? [{ pid: Number(row[1]), ppid: Number(row[2]), herdr: row[3].split('/').pop() === 'herdr' }] : []
+  })
+  const parent = new Map(rows.map((row) => [row.pid, row.ppid]))
+  const ours = (pid: number): boolean => {
+    for (let at = pid, step = 0; at > 0 && step < 64; at = parent.get(at) ?? 0, step++) if (at === process.pid) return true
+    return false
+  }
+  return rows.filter((row) => row.herdr && !ours(row.pid)).map((row) => row.pid)
+}
+
 /**
  * The daemon's process table holds no herdr but the test's: a herdr of the developer's runs on the Mac that runs the tests,
  * and the daemon's herdr lookup must never read it (PM, 2026-11-19). A `ps` first on the daemon's PATH, admitted before
