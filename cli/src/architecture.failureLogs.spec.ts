@@ -34,7 +34,7 @@ const SRC = __dirname
 
 /** What a command prints on the terminal of the person who ran it, not in a log: these files print only that. */
 const TERMINAL = [
-  'cli.ts', // the commands; its lines that reach a log are kept to the rule by hand
+  'cli.ts', // the commands; a core run here fails in core/main.ts, its other lines that reach a log keep the rule by hand
   'remoteCommand.ts', // harness remote
   'shellLaunch.ts', // harness shell-launch, in the pane it starts
   'devices/client.ts', // harness hardware
@@ -48,7 +48,7 @@ const TERMINAL = [
   'lib/machineEngines.ts', // harness machines engines
   'lib/updateCommand.ts', // harness update
   'lib/windows/ptyUpdateCommand.ts', // harness update, its terminal host step
-  'lib/daemonState.ts', // onError, how a command fails
+  'lib/daemonState.ts', // onError, how a command fails; never a core's (core/main.ts)
 ]
 
 const unwrap = (node: ts.Expression): ts.Expression =>

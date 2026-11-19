@@ -338,7 +338,7 @@ export function runMaster(config: MasterConfig): Supervisor {
   const takeOver = ({ from, token }: { from: number; token: string }): boolean => {
     const leaving = (why: string): false => { log(`[harnessd] ${why} — leaving`); return false }
     const stopped = `the master that started this one (pid ${from}) stopped waiting for it`
-    const write = (pid: number): string | null => { try { writePidFile(pid); return null } catch (error) { return (error as Error).message } }
+    const write = (pid: number): string | null => { try { writePidFile(pid); return null } catch (error) { return errorKind(error) } }
     if (!markerFile || !takeHandover(markerFile, token, process.pid) || !mayClaimPidFile(markerFile, token)) return leaving(stopped)
     const failed = write(process.pid)
     if (failed !== null) return leaving(`could not take over from pid ${from} (${failed})`)

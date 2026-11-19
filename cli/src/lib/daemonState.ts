@@ -75,11 +75,11 @@ export function removePidFileIf(pid: number | undefined, deps: { readPid: () => 
 }
 
 /** How a command fails: say why, let go of the pid file if it is this process's, and exit. Commands alone fail
- *  this way, on the terminal of the person who ran one; the core logs a failed start's kind itself (core/main.ts). */
+ *  this way, on the terminal of the person who ran one; a core logs a failed start's kind itself, also one a command
+ *  runs in its own process (core/main.ts `runCoreInForeground`). */
 export const onError = (err: unknown, code = 1): never => {
   console.error('Failed to start adapter:', err)
-  // A daemon that claimed the pid file (port bound) and then failed to finish starting must not leave
-  // that file naming a corpse — the next `harness start` would refuse on it. Only ours, though.
+  // A pid file left naming a process that is gone, the next `harness start` would refuse on. Only ours, though.
   removePidFileIf(process.pid)
   process.exit(code)
 }

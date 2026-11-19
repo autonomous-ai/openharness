@@ -487,7 +487,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
 
   // Last-resort net: a stray throw in ANY long-lived callback (a malformed JSONL line, a hostile backend
   // frame, a timer) must NEVER take the daemon down — there is no supervisor. Log it and keep running.
-  // (Startup errors still fail loudly: they reject the runForeground promise → `enterSafeMode`, not these.)
+  // (Startup errors still fail loudly: they reject the runForeground promise → `enterSafeMode`, or under
+  // `runCoreInForeground` its own catch, not these.)
   process.on('unhandledRejection', (reason) => {
     console.error(`[fatal-guard] unhandledRejection: ${errorKind(reason)}`)
   })
@@ -3405,6 +3406,17 @@ async function runForeground(session: AuthSession | null): Promise<void> {
 }
 
 /**
+ * A start-up that threw, and does not stay up: only its kind goes to the log, which Export logs sends, never its words
+ * or its stack. The pid file goes if it is this core's: one left naming a process that is gone, the next
+ * `harness start` would refuse on.
+ */
+const failStart = (err: unknown, code: number): never => {
+  console.error(`Failed to start adapter: ${errorKind(err)}`)
+  removePidFileIf(process.pid)
+  process.exit(code)
+}
+
+/**
  * The daemon's start-up threw. STAY UP anyway, waiting for a fix.
  *
  * Exiting here is what made one bad build unrecoverable: the desktop app answers a dead port by running
@@ -3426,11 +3438,8 @@ const enterSafeMode = (err: unknown): void => {
     console.error(`[safe-mode] not staying up — ${disposition.reason}`)
     // Under harnessd, said for good: any other exit, the master restarts, and a core that another daemon
     // keeps from running was restarted for as long as its master lived (e2e/twodaemons.e2e.ts). Except
-    // what stands in the way is leaving too: then the master starts this core again. The pid file goes if it is
-    // this core's: one left naming a process that is gone, the next `harness start` would refuse on.
-    console.error(`Failed to start adapter: ${errorKind(err)}`)
-    removePidFileIf(process.pid)
-    process.exit(coreLink.supervised && !disposition.retry ? CORE_EXIT_STOP : 1)
+    // what stands in the way is leaving too: then the master starts this core again.
+    failStart(err, coreLink.supervised && !disposition.retry ? CORE_EXIT_STOP : 1)
   }
   // The marker keeps the stack, for `harness status`; the log, which Export logs sends, gets only the kind.
   const detail = err instanceof Error ? (err.stack ?? err.message) : String(err)
@@ -3514,5 +3523,6 @@ export function runCoreInForeground(session: AuthSession | null, scriptPath: str
   holdHarnessdEnv()
   dropAgentSessionEnv()
   SCRIPT_PATH = scriptPath
-  return runForeground(session)
+  // Never the command's `onError`, which prints the error whole: this process is the daemon, and that is its log.
+  return runForeground(session).catch((err: unknown) => failStart(err, 1))
 }
