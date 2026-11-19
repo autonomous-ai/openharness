@@ -123,7 +123,7 @@ describe('Finished after 1.5 s of quiet', () => {
     const { mirror } = setup({ decideTier, sendWeb: () => { throw new Error('socket closed') } })
     mirror.ingest(turn, 's')
     await vi.runAllTimersAsync()
-    expect(error.mock.calls.filter(([line]) => String(line).startsWith('[recap]'))).toHaveLength(1)
+    expect(error.mock.calls.filter(([line]) => String(line).startsWith('[recap]'))).toEqual([['[recap] s recap not sent: Error']])
   })
 
   it('a turn held for its sub-agents gets the window from when the hold is let go', async () => {

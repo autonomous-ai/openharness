@@ -953,7 +953,7 @@ describe('a build that fails on its own merits (e2e/updateHostile.e2e.ts)', () =
   const ticks = (n: number) => new Promise((resolve) => setTimeout(resolve, n * 10 + 5))
 
   it.each([
-    ['whose bytes do not match its manifest', (state: { cli: Buffer; named?: string }) => { state.named = sha(Buffer.from('other bytes')) }, 'does not match its manifest (sha256 mismatch'],
+    ['whose bytes do not match its manifest', (state: { cli: Buffer; named?: string }) => { state.named = sha(Buffer.from('other bytes')) }, 'does not match its manifest (DigestMismatchError) —'],
     ['that fails its canary', (state: { cli: Buffer; named?: string }) => { state.cli = Buffer.from('process.exit(3)\n') }, 'failed its canary (exit 3)'],
     // Found by QA on a quiet machine: a canary can finish after the test's fixed 55 ms wait.
     ['that fails its delayed canary', (state: { cli: Buffer; named?: string }) => { state.cli = Buffer.from('setTimeout(() => process.exit(3), 150)\n') }, 'failed its canary (exit 3)'],

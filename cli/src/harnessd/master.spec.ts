@@ -184,14 +184,14 @@ describe('the probe a re-executing master asks a bundle', () => {
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})
     try {
       expect(probeMaster({ env: { [RESUME_ENV]: '{"restarts":"many"}' }, execArgv: [], version: '9.9.9' })).toBe(1)
-      expect(log).toHaveBeenCalledWith('harnessd-probe failed: the state it would be handed is not one this master can read')
+      expect(log).toHaveBeenCalledWith('harnessd-probe failed: Error')
     } finally { log.mockRestore() }
-    // A failure that is not an Error is reported all the same: here, the answer itself could not be said.
+    // A failure that is not an Error names its kind all the same: here, the answer itself could not be said.
     const said: string[] = []
     let first = true
     const say = (line: string) => { if (first) { first = false; throw 'stdout closed' } said.push(line) }
     expect(probeMaster({ env: { HARNESSD_SERVICES: 'search' }, execArgv: [], version: '' }, say)).toBe(1)
-    expect(said).toEqual(['harnessd-probe failed: stdout closed'])
+    expect(said).toEqual(['harnessd-probe failed: string'])
   })
 })
 

@@ -444,7 +444,7 @@ describe('DshViewerManager, the rest of a viewer\'s life', () => {
     await other.start('a2', d, '/ws')
     expect(spawned).toEqual([])
     expect(urls).toEqual([])
-    expect(logs).toEqual(['[dsh] acme/thing viewer: no free port · EMFILE', '[dsh] acme/thing viewer: no free port · no ports left'])
+    expect(logs).toEqual(['[dsh] acme/thing viewer: no free port · Error', '[dsh] acme/thing viewer: no free port · string'])
   })
 
   it('a stop while the port is being found, or while the viewer comes up, publishes nothing', async () => {
@@ -621,7 +621,8 @@ describe('DshViewerManager, the rest of a viewer\'s life', () => {
       }) as typeof spawnDshCommand
       const { logs, urls, manager } = setup({ spawn: noGitBash })
       await manager.start('a1', watched(), workspace)
-      expect(logs).toContain("[dsh] acme/thing viewer could not start · This harness's viewer needs Git Bash on Windows, and it was not found. Install Git for Windows from https://git-scm.com/download/win (or run: winget install --id Git.Git -e), then try again.")
+      // The log names its kind; what to install is said where the person reads it, as the harness's install is refused.
+      expect(logs).toContain('[dsh] acme/thing viewer could not start · Error')
       expect(watchers).toHaveLength(1)
       expect(watchers[0].closed).toBe(true)
       // The agents' scans attach every live agent again; the same viewer that just failed is not started each time.

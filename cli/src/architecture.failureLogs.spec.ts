@@ -6,16 +6,20 @@
  * code, so that a comment or a string naming an error is no finding.
  *
  * A log call is a `console` call, or a call named `log`, `warn`, `error` or `info`, bare or on anything but `console`
- * and `Math`, whose value is not thrown. An error is what a catch or an error handler binds, a name on the left of
+ * and `Math`, or a call of one picked by `??`, `||` or `?:`, or of a name a parameter's default or a `const` binds to
+ * one, whose value is not thrown. An error is what a catch or an error handler binds, a name on the left of
  * `instanceof` in the expression at hand, a name spelled as one (`e`, `err`, `error`, `ex`, `exception`, `…Error`,
  * `…Err`) that is not a parameter typed `string`, and the `.cause` of any of these. A log call is found when it prints
  * an error's `.message`, `.stack` or `.toString()`, an error whole (as itself, in a template, a sum, an object or a
- * branch, handed to any function but `errorKind`, or built in place), or a local made from either; when it runs in a
- * catch that binds nothing; and when it says "fail" in a catch that binds one and names nothing it caught.
+ * branch, handed to any function but `errorKind`, or built in place), or a local made from either (its initializer, or
+ * a value a `let` is given later); when it runs in a catch that binds nothing; and when it says "fail" in a catch that
+ * binds one and names nothing it caught. What a function of the file's own logs of a parameter (a function, a `const`
+ * one, a method called on `this`), and what a `writeSync` writes, are found the same way, but for the catch they run in.
  *
- * Its limits: a logger under another name, text carried two locals away, a catch with a binding that logs without the
- * word "fail", and an error's `.reason`, `.detail`, `.stderr`, `.stdout` and `.path`, which a follow-up adds with the
- * lines that log stored strings (docs/plans/2026-11-19-log-failure-kinds-plan.md, answer 6).
+ * Its limits: a logger under another name, text carried two locals away or through a local of the function that logs
+ * it, a catch with a binding that logs without the word "fail", and an error's `.reason`, `.detail`, `.stderr`,
+ * `.stdout` and `.path`, which a follow-up adds with the lines that log stored strings
+ * (docs/plans/2026-11-19-log-failure-kinds-plan.md, answer 6).
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join, sep } from 'node:path'
@@ -31,6 +35,8 @@ const TERMINAL = [
   'shellLaunch.ts', // harness shell-launch, in the pane it starts
   'devices/client.ts', // harness hardware
   'orchestrator/command.ts', // harness orchestrator
+  'agentClient/settings.ts', // harness agent settings, from cli.ts alone: its `err` is the person's own terminal
+  'lib/autonomous-device/addonCommand.ts', // harness addon, from cli.ts alone: its `print` is the command's JSON answer
   'lib/apiCommand.ts', // harness api
   'lib/newCommand.ts', // harness new
   'lib/flash.ts', // harness flash
@@ -47,17 +53,95 @@ const unwrap = (node: ts.Expression): ts.Expression =>
 
 const LOGGERS = ['log', 'warn', 'error', 'info']
 
-/** `console.*`, or a logger by its name on anything but `console` and `Math`; `throw contract.error(…)` builds an error. */
-const isLogCall = (call: ts.CallExpression): boolean => {
-  let at: ts.Node = call
-  while (ts.isParenthesizedExpression(at.parent) || ts.isAsExpression(at.parent)) at = at.parent
-  if (ts.isThrowStatement(at.parent)) return false
-  const callee = unwrap(call.expression)
-  if (ts.isIdentifier(callee)) return LOGGERS.includes(callee.text)
+/**
+ * `console.*`, a logger by its name on anything but `console` and `Math`, one picked by `??`, `||` or `?:`
+ * (`(deps.log ?? console.warn)(…)`), and a name a parameter's default or a `const` binds to one (`say = console.log`).
+ */
+const isLogger = (node: ts.Expression): boolean => {
+  const callee = unwrap(node)
+  if (ts.isConditionalExpression(callee)) return isLogger(callee.whenTrue) || isLogger(callee.whenFalse)
+  if (ts.isBinaryExpression(callee)) {
+    return [ts.SyntaxKind.QuestionQuestionToken, ts.SyntaxKind.BarBarToken].includes(callee.operatorToken.kind)
+      && (isLogger(callee.left) || isLogger(callee.right))
+  }
+  if (ts.isIdentifier(callee)) {
+    if (LOGGERS.includes(callee.text)) return true
+    const declaration = declarationOf(callee)
+    return !!declaration && (ts.isParameter(declaration) || ts.isVariableDeclaration(declaration))
+      && !!declaration.initializer && isLogger(declaration.initializer)
+  }
   if (!ts.isPropertyAccessExpression(callee)) return false
   const on = unwrap(callee.expression)
   if (ts.isIdentifier(on) && on.text === 'console') return [...LOGGERS, 'debug'].includes(callee.name.text)
   return !(ts.isIdentifier(on) && on.text === 'Math') && LOGGERS.includes(callee.name.text)
+}
+
+/** A logger called; `throw contract.error(…)` builds an error. */
+const isLogCall = (call: ts.CallExpression): boolean => {
+  let at: ts.Node = call
+  while (ts.isParenthesizedExpression(at.parent) || ts.isAsExpression(at.parent)) at = at.parent
+  return !ts.isThrowStatement(at.parent) && isLogger(call.expression)
+}
+
+/** The master writes its fatal line to the log's fd with `writeSync` (masterProcess.ts `writeFatalTo`). */
+const isWriteSync = (call: ts.CallExpression): boolean => {
+  const callee = unwrap(call.expression)
+  return (ts.isIdentifier(callee) ? callee.text : ts.isPropertyAccessExpression(callee) ? callee.name.text : '') === 'writeSync'
+}
+
+/**
+ * The function of the file's own a call runs: a function or a `const` function by its name, or a method or function
+ * property of the class `this` is.
+ */
+const calleeOf = (call: ts.CallExpression): ts.SignatureDeclaration | undefined => {
+  const callee = unwrap(call.expression)
+  const fn = (node: ts.Node | undefined): ts.SignatureDeclaration | undefined => {
+    const value = node && (ts.isVariableDeclaration(node) || ts.isPropertyDeclaration(node)) && node.initializer ? unwrap(node.initializer) : node
+    return value && (ts.isFunctionDeclaration(value) || ts.isMethodDeclaration(value) || ts.isArrowFunction(value)
+      || ts.isFunctionExpression(value)) ? value : undefined
+  }
+  if (ts.isIdentifier(callee)) return fn(declarationOf(callee))
+  if (!ts.isPropertyAccessExpression(callee) || callee.expression.kind !== ts.SyntaxKind.ThisKeyword) return undefined
+  for (let at = call.parent; at; at = at.parent) {
+    if (ts.isClassLike(at)) {
+      return fn(at.members.find((member) => member.name && (ts.isIdentifier(member.name) || ts.isPrivateIdentifier(member.name))
+        && member.name.text === callee.name.text))
+    }
+    // `this` is not the class's in a function of its own or an object's method.
+    if (ts.isFunctionDeclaration(at) || ts.isFunctionExpression(at) || (ts.isMethodDeclaration(at) && ts.isObjectLiteralExpression(at.parent))) return undefined
+  }
+  return undefined
+}
+
+const forwarded = new WeakMap<ts.SignatureDeclaration, Set<number>>()
+
+/** The parameters, by index, a function hands a logger, itself or through the functions of the file's own it calls. */
+const forwardedBy = (fn: ts.SignatureDeclaration): Set<number> => {
+  const known = forwarded.get(fn)
+  if (known) return known
+  const at = new Set<number>()
+  // Kept before it is known: a function that calls itself reads what is found so far.
+  forwarded.set(fn, at)
+  const visit = (node: ts.Node): void => {
+    if (ts.isCallExpression(node)) {
+      const logged = loggedArguments(node)
+      fn.parameters.forEach((only, index) => {
+        if (logged.length && firstPrinted(logged, true, { tested: new Set(), locals: false, only })) at.add(index)
+      })
+    }
+    ts.forEachChild(node, visit)
+  }
+  if ('body' in fn && fn.body) visit(fn.body)
+  return at
+}
+
+/** What a call writes to the log: a log call's or a `writeSync`'s arguments, and those a function of the file's own forwards. */
+const loggedArguments = (call: ts.CallExpression): readonly ts.Expression[] => {
+  if (isLogCall(call) || isWriteSync(call)) return call.arguments
+  const fn = calleeOf(call)
+  if (!fn) return []
+  const at = forwardedBy(fn)
+  return call.arguments.filter((_, index) => at.has(index))
 }
 
 const ERROR_EVENTS = ['error', 'unhandledRejection', 'uncaughtException']
@@ -116,8 +200,11 @@ const declarationOf = (identifier: ts.Identifier): ts.Node | undefined => {
 
 const ERROR_NAME = /^(e|err|error|ex|exception)$|(Error|Err)$/
 
-/** What the expression at hand holds: the names it tests with `instanceof`, and whether a local made from an error counts. */
-type Hand = { tested: Set<string>, locals: boolean }
+/**
+ * What the expression at hand holds: the names it tests with `instanceof`, and whether a local made from an error counts.
+ * [only] reads one parameter as the error and nothing else: what a function prints of it is what it logs of its callers'.
+ */
+type Hand = { tested: Set<string>, locals: boolean, only?: ts.ParameterDeclaration }
 
 const handOf = (nodes: readonly ts.Node[], locals: boolean): Hand => {
   const tested = new Set<string>()
@@ -134,6 +221,7 @@ const handOf = (nodes: readonly ts.Node[], locals: boolean): Hand => {
 
 /** `error`, `local` (a `const` or `let` made from an error's words or the error, rule 3) or neither. */
 const nameOf = (identifier: ts.Identifier, hand: Hand): 'error' | 'local' | undefined => {
+  if (hand.only) return declarationOf(identifier) === hand.only ? 'error' : undefined
   if (hand.tested.has(identifier.text)) return 'error'
   const declaration = declarationOf(identifier)
   if (declaration && ts.isVariableDeclaration(declaration) && ts.isCatchClause(declaration.parent)) return 'error'
@@ -143,11 +231,24 @@ const nameOf = (identifier: ts.Identifier, hand: Hand): 'error' | 'local' | unde
   }
   if (ERROR_NAME.test(identifier.text)) return 'error'
   if (hand.locals && declaration && ts.isVariableDeclaration(declaration) && ts.isIdentifier(declaration.name)
-    && declaration.initializer && ts.isVariableDeclarationList(declaration.parent)
-    && declaration.parent.flags & (ts.NodeFlags.Const | ts.NodeFlags.Let)
-    // Two locals away is a limit: the initializer is read without following its own locals.
-    && printed(declaration.initializer, true, handOf([declaration.initializer], false))) return 'local'
+    && ts.isVariableDeclarationList(declaration.parent) && declaration.parent.flags & (ts.NodeFlags.Const | ts.NodeFlags.Let)
+    // Two locals away is a limit: a value is read without following its own locals.
+    && valuesOf(declaration).some((value) => printed(value, true, handOf([value], false)))) return 'local'
   return undefined
+}
+
+/** What a local is given: its initializer and, for a `let`, every value assigned or added to it where it is declared. */
+const valuesOf = (declaration: ts.VariableDeclaration): ts.Expression[] => {
+  const values = declaration.initializer ? [declaration.initializer] : []
+  if (!(declaration.parent.flags & ts.NodeFlags.Let)) return values
+  const name = declaration.name.getText()
+  const visit = (node: ts.Node): void => {
+    if (ts.isBinaryExpression(node) && [ts.SyntaxKind.EqualsToken, ts.SyntaxKind.PlusEqualsToken].includes(node.operatorToken.kind)
+      && ts.isIdentifier(node.left) && node.left.text === name && declarationOf(node.left) === declaration) values.push(node.right)
+    ts.forEachChild(node, visit)
+  }
+  visit(declaration.parent.parent.parent)
+  return values
 }
 
 const isBuilt = (node: ts.Expression): boolean => ts.isNewExpression(node)
@@ -158,7 +259,7 @@ const isError = (node: ts.Expression, hand: Hand): boolean => {
   const inner = unwrap(node)
   if (ts.isIdentifier(inner)) return nameOf(inner, hand) === 'error'
   if (ts.isPropertyAccessExpression(inner) && inner.name.text === 'cause') return isError(inner.expression, hand)
-  return isBuilt(inner)
+  return !hand.only && isBuilt(inner)
 }
 
 const PASSING_OPERATORS = [
@@ -278,8 +379,9 @@ function failureLogs(code: string, file = 'file.ts'): string[] {
   const source = ts.createSourceFile(file, code, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS)
   const found: string[] = []
   const visit = (node: ts.Node): void => {
-    if (ts.isCallExpression(node) && isLogCall(node)) {
-      const finding = firstPrinted(node.arguments, true, handOf(node.arguments, true)) ?? hidden(node)
+    if (ts.isCallExpression(node)) {
+      // A `writeSync` and a function of the file's own are read for what they log, not for the catch they run in.
+      const finding = firstPrinted(loggedArguments(node), true, handOf(node.arguments, true)) ?? (isLogCall(node) ? hidden(node) : undefined)
       if (finding) found.push(`${file}:${source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1}: ${finding}`)
     }
     ts.forEachChild(node, visit)
@@ -321,6 +423,16 @@ it.each([
   "run().catch(() => { saved = false; log('[x] LIVE_REATTACH_FAILED') })",
   "try { run() } catch (error) { if (strict) throw wrap(error); console.error('[x] save failed') }",
   "socket.on('error', (err) => { const status = /^Unexpected server response: (\\d{3})$/.exec(err.message)?.[1]; console.error(`[x] socket error: ${status}`) })",
+  "try { run() } catch (error) { (deps.log ?? console.warn)(`[x] paused · ${error instanceof Error ? error.message : String(error)}`) }",
+  "try { run() } catch (err) { (failed ? console.error : console.log)(`[x] ${String(err)}`) }",
+  "function probe(say: (line: string) => void = console.log) { try { run() } catch (error) { say(`[x] failed: ${(error as Error).message}`) } }",
+  "class Viewer { private fail(state: State, line: string) { this.log(line); this.halt(state) } start() { try { run() } catch (error) { void this.fail(this.state, `[x] could not start · ${error instanceof Error ? error.message : error}`) } } }",
+  "class Mirror { private trace(id: string, line: string, isError = false) { (isError ? console.error : console.log)(`[recap] ${line}`) } end() { work().catch((err) => this.trace('s', `failed: ${err instanceof Error ? err.message : String(err)}`, true)) } }",
+  "const say = (line: string): void => { if (line !== said) { said = line; log(line) } }; proc.on('error', (error) => { say(`[x] could not start: ${error.message}`) })",
+  "function once(line: string) { if (said.has(line)) return; console.warn(line) } try { run() } catch (error) { once(`[x] unreadable · ${String(error)}`) }",
+  "const stay = (why: string) => deps.log(`[x] ${why} — keeping`); const keep = (why: string) => { removeMarker(); stay(why) }; run().catch((error) => keep(`failed (${describe(error)})`))",
+  "let busy = 'the lock is busy'; await lock().catch((error) => { busy = `could not take the lock (${message(error)})` }); deps.log(`[x] ${busy}`)",
+  "process.on('uncaughtException', (error) => { writeSync(fd, `[x] stopped: ${error instanceof Error ? error.stack ?? error.message : format(error)}\\n`) })",
 ])('finds %s', (code) => expect(failureLogs(code)).not.toEqual([]))
 
 it.each([
@@ -344,6 +456,16 @@ it.each([
   "const depth = Math.log(error)",
   "setTimeout(() => console.log('[x] retrying'), 100)",
   "socket.on('error', (err) => { const status = Number(/^Unexpected server response: (\\d{3})$/.exec(err.message)?.[1]); console.error(`[x] socket error: ${errorKind(err)}${status ? ` · Unexpected server response: ${status}` : ''}`) })",
+  "try { run() } catch (error) { (deps.log ?? console.warn)(`[x] paused · ${errorKind(error)}`) }",
+  "try { run() } catch (err) { (failed ? console.error : console.log)(`[x] ${errorKind(err)}`) }",
+  "function probe(say: (line: string) => void = console.log) { try { run() } catch (error) { say(`[x] failed: ${errorKind(error)}`) } }",
+  "class Viewer { private fail(state: State, line: string) { this.log(line); this.halt(state) } start() { try { run() } catch (error) { void this.fail(this.state, `[x] could not start · ${errorKind(error)}`) } } }",
+  "const say = (line: string): void => { if (line !== said) { said = line; log(line) } }; proc.on('error', (error) => { say(`[x] could not start: ${errorKind(error)}`) })",
+  "let busy = 'the lock is busy'; await lock().catch((error) => { busy = `could not take the lock (${errorKind(error)})` }); deps.log(`[x] ${busy}`)",
+  "process.on('uncaughtException', (error) => { writeSync(fd, `[x] stopped: ${errorKind(error)}\\n`) })",
+  // A function's own words are checked only where it logs them: here the error's go to the reply, its kind to the log.
+  "const refused = (id: string, error: unknown, detail: string) => { log(`[x] ${id} refused · ${errorKind(error)}`); reply({ detail }) }; try { run() } catch (error) { refused('a', error, (error as Error).message) }",
+  "const sizeOf = (line: string) => log(`[x] a line of ${line.length} chars`); try { run() } catch (error) { sizeOf((error as Error).message) }",
   // Not yet: the follow-up task moves these two to `finds` when it adds the stored fields (answer 6).
   "try { run() } catch (error) { console.warn(`[x] not unpacked (${error.reason})`) }",
   "try { run() } catch (error) { console.error('[x] git refused:', (error as { stderr?: string }).stderr) }",
