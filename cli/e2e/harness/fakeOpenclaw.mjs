@@ -7,9 +7,10 @@
 //     state folder as `openclawDefaultStateDir` does, keeps `<state>/state/openclaw.sqlite` open for its whole run (the
 //     daemon finds the folder from the files the process holds), and creates the agent store from `schema.sql` when it
 //     is missing. With `noToken` it prints what `screen-no-token.txt` recorded and exits 1;
-//   - draws whole screens at the pane's size, only shapes recorded from 2026.11.2 (`__fixtures__/screen-*.txt`) or by
-//     the reproduction of docs/plans/2026-11-19-openclaw-show-goal-design.md: the banner with no footer, then the
-//     title, the chat (system lines one space in), the status line, the footer and the input box between two rules.
+//   - draws whole screens at the pane's size, its scrollback cleared as pi-tui's full render clears it, only shapes
+//     recorded from 2026.11.2 (`__fixtures__/screen-*.txt`) or by the reproduction of
+//     docs/plans/2026-11-19-openclaw-show-goal-design.md: the banner with no footer, then the title, the chat (system
+//     lines one space in), the status line, the footer and the input box between two rules.
 //     Its startup draws `connecting | idle`, then `⠙ starting up • Ns | subscribing to session events` while its
 //     history loads, ` history failed: …` in the chat when the load fails, then `gateway connected | idle`
 //     (`gateway reconnected` after a drop), which reads `connected` from 4 s on, drawn by the next render as the TUI
@@ -114,6 +115,9 @@ export function run(options) {
   process.removeAllListeners('warning')
   const { DatabaseSync } = process.getBuiltinModule('node:sqlite')
   const log = (event) => appendFileSync(options.events, `${JSON.stringify({ at: Date.now(), ...event })}\n`)
+  // Where the steps start, read before the TUI says it started: the test appends a TUI's steps once it reads that, and
+  // read later, after the stores open, the first ones were skipped.
+  let offset = statSync(options.steps).size
   log({ started: args })
   if (options.noToken) {
     // The recorder marked the exit with a line of its own, `[exit 1]`: not OpenClaw's.
@@ -295,7 +299,9 @@ export function run(options) {
       lines.push(...wrapped(status, width), ...wrapped(`agent ${agentId} | session ${short()} | ${ui.model} | deliver:off | tokens ${ui.tokens}`, width))
       lines.push('─'.repeat(width), ...cut(ui.box, width), '─'.repeat(width))
     }
-    process.stdout.write(`\x1b[H\x1b[2J${lines.slice(-(process.stdout.rows || 24)).join('\r\n')}`)
+    // As pi-tui's full render: screen, home, then scrollback cleared. Without the last, tmux keeps each cleared screen in
+    // the scrollback the daemon reads, and a line the TUI no longer draws (` history failed:`) was read there for good.
+    process.stdout.write(`\x1b[2J\x1b[H\x1b[3J${lines.slice(-(process.stdout.rows || 24)).join('\r\n')}`)
   }
   let ttl = null
   /**
@@ -544,7 +550,6 @@ export function run(options) {
       process.exit(line.exit)
     }
   }
-  let offset = statSync(options.steps).size
   let partial = ''
   const follow = () => {
     const size = statSync(options.steps).size
