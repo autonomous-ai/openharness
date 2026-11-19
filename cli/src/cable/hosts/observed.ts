@@ -10,7 +10,7 @@ import { errorKind } from '../../lib/log.js'
 import { roundDrawable } from '../roundGlyphs.js'
 import type { HostAdapter, Outer, Pane } from './adapter.js'
 import { CODEX_THREAD, type CodexQueue, type CodexQueueFailure, type CodexRan } from './codexQueue.js'
-import { APP_BUNDLES, detectApp, detectHost, hostDisplayName, UNKNOWN_APP } from './hostDetect.js'
+import { agentPlaceName, APP_BUNDLES, detectApp, detectHost, UNKNOWN_APP } from './hostDetect.js'
 import type { Delivery } from './inbox.js'
 import { bundleOf, type OpenTarget } from './open.js'
 import { MAX_TEXT } from './orca.js'
@@ -326,7 +326,7 @@ export class ObservedSource implements HostSource {
     const noAnswer = (): SendResult => refuse('no-answer', `${name} did not answer.`)
     // Its session ended: its terminal holds a shell now, where these words would run.
     if (!e || !actions || !this.live(e)) return noAnswer()
-    const waiting = (): SendResult => refuse('waiting', `${name} is waiting for your answer in ${hostDisplayName(e.agent.host)}.`)
+    const waiting = (): SendResult => refuse('waiting', `${name} is waiting for your answer in ${agentPlaceName(e.agent)}.`)
     const busy = (): SendResult => refuse('busy', `${name} is busy. Say it when it is done.`)
     const typer = this.first(e, words)
     if (this.queueable(e, actions)) {
