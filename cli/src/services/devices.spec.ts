@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 
 import type { CableHostWiring, DaemonCableHost } from '../cable/cableHost.js'
 import { AppFilter, FRONT_SETTLE_MS } from '../cable/hosts/appFilter.js'
 import type { CodexRunEnd } from '../cable/hosts/codexQueue.js'
+import type { ClaudeAppSession } from '../cable/hosts/claudeAppStore.js'
 import { CMUX_APP_BINARY, type CmuxClient, type CmuxInputState, type CmuxSession } from '../cable/hosts/cmuxCli.js'
 import { hcClientDeps, type HcClient, type HcPrompt, type HcSubscriber, type HcTerminal } from '../cable/hosts/hcClient.js'
 import { herdrClientDeps, type HerdrAnswer, type HerdrClient, type HerdrEntry, type HerdrPrompt, type HerdrSubscriber } from '../cable/hosts/herdrClient.js'
@@ -35,6 +36,7 @@ import { claudeProjectsRoots, codexHomeRoots } from '../lib/engineHomes.js'
 import type { ExternalProvider, ProcessView } from '../lib/sessionSearch/externals/types.js'
 import type { TierInput } from '../lib/notifyTier.js'
 import type { RegisteredSession } from '../lib/registry.js'
+import { claudeAppFixture } from '../testing/claudeAppFixture.js'
 import { fakeCmux, touchStore } from '../testing/fakeCmux.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import { herdrAppStatus } from '../testing/herdrAppStatus.js'
@@ -446,7 +448,7 @@ afterEach(() => {
   vi.unstubAllEnvs()
 })
 
-function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolean; testDialPort?: string; readUsage?: DevicesDeps['readUsage']; now?: () => number; decideTier?: DevicesDeps['decideTier'] | null; refresh?: DevicesDeps['refresh']; orca?: DevicesDeps['orca']; orcaReads?: DevicesDeps['orcaReads']; codex?: DevicesDeps['codex']; herdr?: DevicesDeps['herdr']; hc?: DevicesDeps['hc']; cmux?: DevicesDeps['cmux'] | null; opencode?: DevicesDeps['opencode']; listen?: DevicesDeps['listen']; tty?: DevicesDeps['tty']; claude?: DevicesDeps['claude'] | null; orcaHomes?: ReturnType<typeof fakeOrcaHomes> | null; vscodeExtension?: DevicesDeps['vscodeExtension'] | null; cursorExtension?: DevicesDeps['cursorExtension'] | null; claudeFullscreen?: null; claudeManagedSettings?: string } = {}) {
+function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolean; testDialPort?: string; readUsage?: DevicesDeps['readUsage']; now?: () => number; decideTier?: DevicesDeps['decideTier'] | null; refresh?: DevicesDeps['refresh']; orca?: DevicesDeps['orca']; orcaReads?: DevicesDeps['orcaReads']; codex?: DevicesDeps['codex']; herdr?: DevicesDeps['herdr']; hc?: DevicesDeps['hc']; cmux?: DevicesDeps['cmux'] | null; opencode?: DevicesDeps['opencode']; claudeAppStore?: DevicesDeps['claudeAppStore']; listen?: DevicesDeps['listen']; tty?: DevicesDeps['tty']; claude?: DevicesDeps['claude'] | null; orcaHomes?: ReturnType<typeof fakeOrcaHomes> | null; vscodeExtension?: DevicesDeps['vscodeExtension'] | null; cursorExtension?: DevicesDeps['cursorExtension'] | null; claudeFullscreen?: null; claudeManagedSettings?: string } = {}) {
   const core = over.core ?? fakeCore({ dataDir })
   // None, and no read under way, unless the spec gives its own; null leaves the devices to read this computer's.
   const orcaHomes = over.orcaHomes ?? fakeOrcaHomes()
@@ -470,6 +472,9 @@ function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolea
     // Null: no client given, so the devices build their own.
     cmux: over.cmux === null ? undefined : over.cmux ?? noCmux,
     opencode: over.opencode ?? opencode,
+    // None unless the spec gives its own: on macOS the devices read the Claude app's store under the suite's throwaway
+    // home, where there is none.
+    claudeAppStore: over.claudeAppStore,
     decideTier: over.decideTier === null ? undefined : over.decideTier ?? (async () => ({ tier: 'alert', by: 'test', detail: '', ms: 0 })),
     faults: new Set(over.faults ?? []),
     log: (line) => { logs.push(line) },
@@ -8241,6 +8246,276 @@ describe("opencode's sessions, over its local server (docs/plans/2026-11-17-dial
       '[opencode] closed · ended', '[opencode] retry · 1']))
     const secrets = ['ses_secret1', 'per_secret2', 'Nebula', 'secret-folder', 'secret tests']
     expect(logs.filter((line) => secrets.some((secret) => line.includes(secret)))).toEqual([])
+  })
+})
+
+describe("the Claude app's Code sessions, from its store (docs/plans/2026-11-19-dial-claude-app-sessions-design.md)", () => {
+  /** The store's root in the suite's throwaway home, never the person's own. */
+  const ROOT = join(homedir(), 'Library', 'Application Support', 'Claude', 'claude-code-sessions')
+  const ACCOUNT_DIR = join(ROOT, 'acc')
+  const ORG_DIR = join(ACCOUNT_DIR, 'org')
+  /** Claude Code's id of a session, and the Claude app's id of it; a second session of the store. */
+  const SESSION = '0b7c2f4e-8a1d-4c3b-9e5f-6a7b8c9d0e1f'
+  const LOCAL = 'local_8d1f2c3a-4b5e-4f60-9a7b-1c2d3e4f5a6b'
+  const SECOND = '5d6e7f80-1a2b-4c3d-8e9f-0a1b2c3d4e5f'
+  const LOCAL_SECOND = 'local_2e3f4a5b-6c7d-4e8f-9a0b-1c2d3e4f5a6b'
+  const BUNDLE = 'com.anthropic.claudefordesktop'
+  const ID = observedAgentId('claude', SESSION)
+  /** The observed source drops an ended session 10 s after its end. */
+  const ENDED_MS = 11_000
+  const continued = (local: string): [string, string[], number] => ['/usr/bin/open', ['-b', BUNDLE, `claude://code/continue?session=${local}`], 10_000]
+  /** Claude Code in the Claude app, as its hook says, unless other hints are given. */
+  const hook = (event: ObservedHookEvent['event'], over: Partial<ObservedHookEvent> = {}): ObservedHookEvent => ({
+    engine: 'claude', sessionId: SESSION, event, cwd: '/work/api', callerPid: 4242, transcriptPath: `/t/${SESSION}.jsonl`,
+    hostHints: { __CFBundleIdentifier: BUNDLE, CLAUDE_CODE_HOST_SESSION_ID: LOCAL }, ...over,
+  })
+  /** Claude Code in Ghostty, its own session. */
+  const inGhostty = (port: DevicesPort) => port.observed(hook('session-start', { sessionId: 'g-1', hostHints: { TERM_PROGRAM: 'ghostty' } }))
+  /** A session of the store: in /work/api, titled Fix the build. */
+  const session = (over: Partial<ClaudeAppSession> = {}): ClaudeAppSession =>
+    ({ localId: LOCAL, sessionId: SESSION, cwd: '/work/api', title: 'Fix the build', lastActivityAt: 1, ...over })
+  const host = () => seen.dial as unknown as DaemonCableHost
+  /** A dial on the cable, on this computer's agents: no window. */
+  const attach = (port: DevicesPort) => { seen.host.watching!(true); port.swarms(null) }
+  const listed = async () => (await host().listAgentSnapshot()).agents.map(({ id, name, caps }) => ({ id, name, caps }))
+  const ids = async () => (await listed()).map(({ id }) => id)
+  /** The list a dial that says appFilter reads with no window. */
+  const appList = async (port: DevicesPort) => { port.swarms(null); return (await host().listAgentSnapshot({ apps: true })).apps }
+  /** The fake timers' clock is the devices' too: the settle and the 2 s echo move together. */
+  const wait = (ms: number) => vi.advanceTimersByTimeAsync(ms)
+  const flush = () => wait(0)
+  beforeEach(() => { vi.useFakeTimers() })
+
+  /**
+   * The devices on macOS with a reader of the store the test answers, the dial not attached yet. Each of its five calls is
+   * recorded; `read` answers the test's sessions, and while `hold` is set waits until the test lands it. Every `open` is a
+   * recorded run, nothing executed, the next `failing` of them answering code 1. `live` attaches the dial and lets the
+   * first pass land; `changed` is the latest watch of that folder telling a change, and its pass landing.
+   */
+  const withStore = (over: Parameters<typeof start>[0] = {}) => {
+    const fake = { sessions: [session()], calls: [] as unknown[][], hold: false, held: [] as Array<() => void>, failing: 0 }
+    const store: NonNullable<DevicesDeps['claudeAppStore']> = {
+      folders: async () => { fake.calls.push(['folders']); return { accounts: [ACCOUNT_DIR], orgs: [ORG_DIR] } },
+      files: async () => { fake.calls.push(['files']) },
+      touch: async (folder, name) => { fake.calls.push(['touch', folder, name]) },
+      read: async () => {
+        fake.calls.push(['read'])
+        if (fake.hold) await new Promise<void>((resolve) => { fake.held.push(resolve) })
+        return { sessions: fake.sessions, parsed: fake.sessions.length, skipped: 0, over: 0, more: false }
+      },
+      forget: () => { fake.calls.push(['forget']) },
+    }
+    const onMac = {
+      ...orca, platform: 'darwin' as const,
+      run: async (file: string, args: string[], timeoutMs: number) => {
+        orcaRuns.push([file, args, timeoutMs])
+        if (fake.failing === 0) return { code: 0, stdout: '' }
+        fake.failing--
+        return { code: 1, stdout: '' }
+      },
+    }
+    const listener = fakeListener()
+    const started = start({ faults: ['fleet'], listen: listener.listen, orca: onMac, now: () => Date.now(), tty: async () => undefined,
+      claudeAppStore: store, ...over })
+    const front = async (to: string) => {
+      expect(listener.front(to)).toBeUndefined()
+      await wait(FRONT_SETTLE_MS)
+    }
+    const attached = (sessionId: string) => { expect(listener.attach(sessionId)).toBeUndefined() }
+    const live = async () => {
+      attach(started.port)
+      await flush()
+    }
+    const changed = async (folder: string, file?: string) => {
+      const [, watch] = watchedFolders.calls.filter(([folders]) => (folders as string[])[0] === folder).at(-1)!
+      ;(watch as (file?: string) => void)(file)
+      await wait(250)
+    }
+    return { ...started, fake, listener, front, attached, live, changed }
+  }
+
+  it('on macOS with a dial attached its sessions are listed sf, idle, on the Claude app\'s page; detached, the source stops, its watches close and the reader forgets', async () => {
+    const { fake, live } = withStore()
+    // No dial: the store is not read.
+    expect(fake.calls).toEqual([])
+    await live()
+    expect(await listed()).toEqual([{ id: ID, name: 'Fix the build', caps: 'sf' }])
+    expect(host().hostOf(ID)).toBe('claude')
+    expect(host().appOf(ID)).toBe('claude')
+    // Idle: no turn is told.
+    expect(calls('turnStarted')).toEqual([])
+    expect(watchedFolders.calls).toEqual(expect.arrayContaining([[[ROOT, dirname(ROOT)], expect.any(Function)],
+      [[ACCOUNT_DIR], expect.any(Function)], [[ORG_DIR], expect.any(Function)]]))
+    expect(logs).toEqual(expect.arrayContaining(['[claude-app] watch · on', '[claude-app] listed · 1 sessions']))
+    seen.host.watching!(false)
+    expect(await listed()).toEqual([])
+    expect(watchedFolders.stopped).toBe(watchedFolders.calls.length)
+    expect(fake.calls.at(-1)).toEqual(['forget'])
+  })
+
+  it.each([['off macOS', 'linux', true], ['with HARNESS_DEVICE_OBSERVED off', 'darwin', false]] as const)('%s there is no source', async (_, platform, on) => {
+    const switched = env as { HARNESS_DEVICE_OBSERVED: boolean }
+    switched.HARNESS_DEVICE_OBSERVED = on
+    onTestFinished(() => { switched.HARNESS_DEVICE_OBSERVED = true })
+    const { fake, live } = withStore({ orca: { ...orca, platform } })
+    await live()
+    expect(fake.calls).toEqual([])
+    expect(watchedFolders.calls.filter(([folders]) => (folders as string[]).includes(ROOT))).toEqual([])
+  })
+
+  it('a change of a session\'s file reaches the dial\'s list', async () => {
+    const { fake, live, changed } = withStore()
+    await live()
+    const before = fake.calls.length
+    fake.sessions = [session({ localId: LOCAL_SECOND, sessionId: SECOND, title: 'Ship it', lastActivityAt: 2 }), session()]
+    await changed(ORG_DIR, `${LOCAL_SECOND}.json`)
+    expect(await listed()).toEqual(expect.arrayContaining([{ id: ID, name: 'Fix the build', caps: 'sf' },
+      { id: observedAgentId('claude', SECOND), name: 'Ship it', caps: 'sf' }]))
+    expect(await listed()).toHaveLength(2)
+    expect(fake.calls.slice(before)).toEqual([['touch', ORG_DIR, `${LOCAL_SECOND}.json`], ['read']])
+  })
+
+  it('a tap on a store row is one open of the continue link, and is the dial\'s own move and link', async () => {
+    const { listener, front, attached, live } = withStore()
+    await live()
+    await front('claude')
+    // The session the app shows, kept for its settle.
+    attached(SESSION)
+    expect(calls('followLocal')).toEqual([[ID, 'attach']])
+    expect(await host().openAgent(ID)).toBeUndefined()
+    expect(orcaRuns).toEqual([continued(LOCAL)])
+    attached(SESSION)
+    expect(logs).toContain('[device] attach · skipped · echo')
+    // A look away and back inside 2 s: the app settles in front again 1 s later.
+    expect(listener.front('orca')).toBeUndefined()
+    await front('claude')
+    expect(logs).toContain('[device] settle · skipped · echo')
+    expect(calls('followLocal')).toEqual([[ID, 'attach']])
+  })
+
+  it('a tap whose link fails brings the app by its bundle, said in one line with no id', async () => {
+    const { fake, live } = withStore()
+    await live()
+    fake.failing = 1
+    expect(await host().openAgent(ID)).toBeUndefined()
+    expect(orcaRuns).toEqual([continued(LOCAL), ['/usr/bin/open', ['-b', BUNDLE], 10_000]])
+    expect(logs).toContain('[device] open · claude · fallback')
+    expect(logs.filter((line) => line.includes(LOCAL))).toEqual([])
+  })
+
+  it('a rest with the Claude app in front shows the session by the noted adapter; with another app in front it has no pane', async () => {
+    const { front, attached, live } = withStore()
+    await live()
+    await front('claude')
+    expect(host().swipeSwitches(ID)).toBe(true)
+    host().swipeEnded(ID, 'rest')
+    await flush()
+    expect(orcaRuns).toEqual([continued(LOCAL)])
+    attached(SESSION)
+    expect(logs).toContain('[device] attach · skipped · echo')
+    // No pane: the dial sends no rest, and nothing more runs.
+    await front('orca')
+    expect(host().swipeSwitches(ID)).toBe(false)
+    expect(orcaRuns).toEqual([continued(LOCAL)])
+  })
+
+  it('a hooked session the store also lists is one row, the hook\'s; once its session ended the store\'s idle row has its place and its tap', async () => {
+    const { port, live } = withStore()
+    await live()
+    port.observed(hook('session-start'))
+    // The hook's: named by its folder, as its record gives no name.
+    expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'sf' }])
+    port.observed(hook('session-end'))
+    expect(await listed()).toEqual([{ id: ID, name: 'Fix the build', caps: 'sf' }])
+    expect(await host().openAgent(ID)).toBeUndefined()
+    expect(orcaRuns).toEqual([continued(LOCAL)])
+    // The observed source's tick drops its ended copy: the store's row stays.
+    await wait(40_000)
+    expect(await listed()).toEqual([{ id: ID, name: 'Fix the build', caps: 'sf' }])
+  })
+
+  it('a hooked session whose id the store has not caught up with folds by the app\'s own id', async () => {
+    const { fake, port, live } = withStore()
+    fake.sessions = [session({ sessionId: SECOND })]
+    await live()
+    expect(await ids()).toEqual([observedAgentId('claude', SECOND)])
+    port.observed(hook('session-start'))
+    expect(await ids()).toEqual([ID])
+  })
+
+  // Review Focus 1: the person resumes one of the app's sessions in a terminal.
+  it('a store session hooked from Ghostty is one row on Ghostty\'s page, and the store\'s again once it ended', async () => {
+    const { port, live } = withStore()
+    await live()
+    const ghostty = { hostHints: { TERM_PROGRAM: 'ghostty' } }
+    port.observed(hook('session-start', ghostty))
+    expect(await ids()).toEqual([ID])
+    expect(host().appOf(ID)).toBe('ghostty')
+    port.observed(hook('session-end', ghostty))
+    expect(await listed()).toEqual([{ id: ID, name: 'Fix the build', caps: 'sf' }])
+    expect(host().appOf(ID)).toBe('claude')
+  })
+
+  it('the store\'s rows weigh nothing in the dial\'s default app', async () => {
+    const { port, fake, front, live } = withStore()
+    fake.sessions = Array.from({ length: 16 }, (_, i) =>
+      session({ localId: `local_${i}`, sessionId: `5d6e7f80-1a2b-4c3d-8e9f-0a1b2c3d4e${String(i).padStart(2, '0')}`, title: `Task ${i}` }))
+    inGhostty(port)
+    await live()
+    const apps = await appList(port)
+    expect(apps?.shown).toBe('ghostty')
+    expect(apps?.apps).toContainEqual(expect.objectContaining({ id: 'claude', count: 16 }))
+    await front('claude')
+    expect((await appList(port))?.shown).toBe('claude')
+    await front('ghostty')
+    expect((await appList(port))?.shown).toBe('ghostty')
+    expect(host().pickApp('claude')).toBe('switched')
+    expect((await appList(port))?.shown).toBe('claude')
+  })
+
+  // The PM, 2026-11-19 (1b): the app settled in front shows its page as soon as its rows come.
+  it.each(['after', 'before'] as const)('the Claude app in front before its rows arrive shows the Claude page, the store\'s first read coming %s the dial\'s first list', async (order) => {
+    const { port, fake, front, live } = withStore()
+    await front('claude')
+    // No Code process: no hook names the store's session.
+    inGhostty(port)
+    fake.hold = order === 'after'
+    await live()
+    if (order === 'after') {
+      expect((await appList(port))?.shown).toBe('ghostty')
+      fake.held.splice(0).forEach((land) => land())
+      await flush()
+      const apps = await appList(port)
+      expect(apps?.shown).toBe('claude')
+      expect(apps?.apps).toContainEqual(expect.objectContaining({ id: 'claude', count: 1 }))
+      expect(logs).toContain('[device] app filter: switched · front')
+    } else {
+      expect((await appList(port))?.shown).toBe('claude')
+    }
+    for (let i = 0; i < 3; i++) expect((await appList(port))?.shown).toBe('claude')
+  })
+
+  it('the app\'s settle turns the dial to a session only the store still lists', async () => {
+    const { port, front, attached, live } = withStore()
+    await live()
+    port.observed(hook('session-start'))
+    port.observed(hook('session-end'))
+    await wait(ENDED_MS)
+    await front('orca')
+    attached(SESSION)
+    expect(logs).toContain('[device] attach · skipped · not in front')
+    await front('claude')
+    expect(calls('followLocal')).toEqual([[ID, 'attach']])
+  })
+
+  it.skipIf(process.platform === 'win32')('with no reader given the devices read the store under the home folder', async () => {
+    vi.useRealTimers()
+    onTestFinished(() => rmSync(join(homedir(), 'Library'), { recursive: true, force: true }))
+    claudeAppFixture(ROOT).write({ localId: LOCAL, cliSessionId: SESSION, cwd: '/work/api', title: 'Fix the build', lastActivityAt: Date.now() })
+    const { port } = start({ faults: ['fleet'], orca: { ...orca, platform: 'darwin' }, tty: async () => undefined })
+    attach(port)
+    await vi.waitFor(() => expect(logs).toContain('[claude-app] listed · 1 sessions'))
+    expect(await listed()).toEqual([{ id: ID, name: 'Fix the build', caps: 'sf' }])
   })
 })
 
