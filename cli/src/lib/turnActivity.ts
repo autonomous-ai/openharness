@@ -40,6 +40,8 @@ export class TurnActivity {
     runtime(sessionId: string): ActivityRuntime | undefined
     probe(sessionId: string): Promise<ActivityState>
     drain(sessionId: string): Promise<void>
+    /** A turn ended: what its runtime showed until then is not compared with what it shows next. */
+    ended?(sessionId: string): void
     now?: () => number
   }) {}
   private now(): number { return this.deps.now?.() ?? performance.now() }
@@ -76,7 +78,7 @@ export class TurnActivity {
       if (type === 'turn_ended' && entry.state !== 'working') this.set(entry, 'idle')
       return
     }
-    if (type === 'turn_ended') this.set(entry, 'idle')
+    if (type === 'turn_ended') { this.set(entry, 'idle'); this.deps.ended?.(sessionId) }
     // While withheld, records still land (a tool's output, a late reply after the Stop) with no work behind them.
     else if (type === 'turn_started' || (PROGRESS.has(type) && !runtime?.withheld)) this.set(entry, 'working')
   }
