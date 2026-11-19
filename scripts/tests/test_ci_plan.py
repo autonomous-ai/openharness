@@ -92,10 +92,8 @@ class SelectionTests(unittest.TestCase):
             "backend/src/app.ts": {"backend"}, "companions/src/a.ts": {"companions"},
             "website/app/page.tsx": {"website"}, "os/root/usr/lib/session": {"os"},
             "provider/spec.md": {"provider"}, "devices/harness-device/firmware/main/main.c": {"firmware"},
-            "devices/harness-pro/firmware/main/app/pro_app.c": {"firmware", "pro", "max"},
-            "devices/harness-pro/README.md": {"firmware", "pro", "max"}, "devices/harness-pro-other/x.c": {"firmware"},
-            "devices/harness-max/firmware/main/app/max_app.c": {"firmware", "max"},
-            "devices/harness-max-other/x.c": {"firmware"},
+            "devices/harness-pro/firmware/main/app/pro_app.c": {"firmware", "pro"},
+            "devices/harness-pro/README.md": {"firmware", "pro"}, "devices/harness-pro-other/x.c": {"firmware"},
             "mobile/pubspec.lock": {"mobile"}, "daemons/tools/card.mjs": {"daemons"},
             "pty/src/stream.rs": {"pty"},
             "device-app/src-tauri/src/lib.rs": {"device-app"}, "device-app/ui/src/main.ts": {"device-app"},
@@ -105,8 +103,14 @@ class SelectionTests(unittest.TestCase):
 
     def test_harness_max_runs_its_own_build_and_goldens_and_a_pro_change_runs_them_too(self):
         # Harness Max compiles the Pro's sources where they are, so a Pro-only change can break Max's build.
-        self.assertEqual(planner.JOBS["max"], {"max-firmware-build", "max-golden"})
+        self.assertEqual(planner.JOBS["max"], {"max-host-checks", "max-firmware-build", "max-golden"})
         self.assertEqual(planner.MANUAL["max"], {"max"})
+        # Max owns only its own folder: the Pro's stays the Pro's, and Max reads it (PR_READS).
+        for path, expected in {"devices/harness-max/firmware/main/app/max_app.c": {"firmware", "max"},
+                               "devices/harness-max-other/x.c": {"firmware"},
+                               "devices/harness-pro/firmware/main/app/pro_app.c": {"firmware", "pro"}}.items():
+            with self.subTest(path=path):
+                self.assertEqual(planner.owners(path), expected)
         self.assertEqual(planner.select(["devices/harness-max/firmware/main/app/max_app.c"])[0], {"firmware", "max"})
         self.assertEqual(planner.select(["devices/harness-pro/firmware/main/cable/pro_cable.c"])[0],
                          {"firmware", "pro", "max"})
@@ -114,6 +118,20 @@ class SelectionTests(unittest.TestCase):
         # A Pro change on main is an input of Max's result, so Update branch does not reuse it.
         self.assertTrue(planner.reads("max", "devices/harness-pro/firmware/main/display/terminal.h"))
         self.assertFalse(planner.reads("pro", "devices/harness-max/firmware/main/app/max_app.c"))
+
+    def test_harness_max_adds_jobs_of_its_own_and_leaves_the_dial_and_pro_jobs_as_they_were(self):
+        workflow = (Path(__file__).resolve().parents[2] / ".github/workflows/ci.yml").read_text()
+        jobs = dict(re.findall(r"(?m)^  ([\w-]+):\n((?:(?:    .*)?\n)+)", workflow))
+        # A Max failure never fails a Dial or Pro job: none of them builds, tests or even names Max.
+        for job in ("firmware-checks", "pro-firmware-build", "pro-golden"):
+            with self.subTest(job=job):
+                self.assertNotIn("harness-max", jobs[job])
+                self.assertNotIn("max", re.findall(r"needs\.plan\.outputs\.(\w+)", jobs[job]))
+        # Max's host contracts run in its own job, set up as the firmware host job is.
+        host = jobs["max-host-checks"]
+        for text in ("needs.plan.outputs.max == 'true'", "clang-18", "pillow==12.1.1", "CJSON_DIR",
+                     "bash devices/harness-max/firmware/test/run.sh"):
+            self.assertIn(text, host)
 
     def test_the_device_app_runs_its_own_suite_and_no_other(self):
         for path in ("device-app/src-tauri/src/keepalive.rs", "device-app/src-tauri/Cargo.lock",

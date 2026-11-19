@@ -565,11 +565,32 @@ jobs:
           bash devices/harness-pro/firmware/test/run.sh
           python3 devices/harness-pro/firmware/test/test_tree_isolation.py
           python3 devices/harness-pro/firmware/test/test_fonts.py
+
+  # Harness Max's host contracts in a job of its own: a Max failure never fails the Dial's and the Pro's firmware-checks.
+  max-host-checks:
+    concurrency:
+      group: ci-${{ github.event_name }}-${{ github.event.action || 'run' }}-${{ github.event.pull_request.number || github.run_id }}-max-host-checks
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+    needs: plan
+    if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.max == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.CI_SOURCE_SHA }}
+      - name: Use Clang for the host sanitizer contracts, as firmware-checks
+        run: |
+          clang-18 --version
+          mkdir -p "$RUNNER_TEMP/firmware-bin"
+          ln -s "$(command -v clang-18)" "$RUNNER_TEMP/firmware-bin/cc"
+          echo "$RUNNER_TEMP/firmware-bin" >> "$GITHUB_PATH"
       - name: Run the Harness Max host contracts
         env:
           PRO_FONT: ${{ github.workspace }}/devices/harness-pro/firmware/fonts/LiberationSans-Regular.ttf
           CJSON_DIR: ${{ runner.temp }}/cJSON
         run: |
+          python3 -m pip install --user --break-system-packages pillow==12.1.1
           # The demo daemon parses with cJSON: the release ESP-IDF 5.5.4 carries, as this job has no ESP-IDF.
           git clone --quiet --depth 1 --branch v1.7.19 https://github.com/DaveGamble/cJSON.git "$CJSON_DIR"
           bash devices/harness-max/firmware/test/run.sh
@@ -852,7 +873,7 @@ jobs:
     name: ci/required
     needs: [plan, process-checks, desktop-tests, companion-subsystems, cli-typecheck, cli-tests, tui-test,
             backend-desk, backend-integration, website-checks, os-checks, provider-checks, firmware-checks, pro-firmware-build, pro-golden,
-            max-firmware-build, max-golden, mobile-checks, daemons-checks, pty-checks, device-app-checks]
+            max-host-checks, max-firmware-build, max-golden, mobile-checks, daemons-checks, pty-checks, device-app-checks]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 3

@@ -33,7 +33,7 @@ SUITES = CORE | EXTRA | {"pro", "max"}
 JOBS = {
     "cli": {"cli-typecheck", "cli-tests"},
     "pro": {"pro-firmware-build", "pro-golden"},
-    "max": {"max-firmware-build", "max-golden"},
+    "max": {"max-host-checks", "max-firmware-build", "max-golden"},
     "desktop": {"desktop-tests"},
     # backend-integration: the Super Tab integration suite (backend/integration) in four shards (task #2459).
     "tui": {"tui-test"}, "backend": {"backend-desk", "backend-integration"}, "companions": {"companion-subsystems"},
@@ -65,8 +65,6 @@ ALSO.update({"plugins/harness-device-vscode/": "cli"})
 ALSO.update({"plugins/harness-device-orca/": "cli"})
 # Narrower directories that add a suite on top of their component's (the ESP32-P4 builds and golden screens).
 SUBCOMPONENTS = {"devices/harness-pro/": "pro", "devices/harness-max/": "max"}
-# Harness Max compiles the Pro's sources where they are, so a Pro change runs Max's build and goldens too.
-ALSO.update({"devices/harness-pro/": "max"})
 
 # Reuse after Update branch. Reusing an earlier result needs every file a suite may read outside its own directory,
 # because main's commits were never tested together with this PR: these sets are broad on purpose, as the scan misses a
@@ -89,6 +87,8 @@ DEPENDS = {
                 "desktop/lib/daemons/roster.g.dart", "mobile/lib/daemons/plates.g.dart", "mobile/lib/daemons/roster.g.dart"),
     "firmware": ("cli/scripts/", "cli/src/", "daemons/plates/tux.mjs", "daemons/review/traits.html",
                  "daemons/tools/illustrated/daemon_art.py", "daemons/tools/plate.mjs", "desktop/assets/model-icons/claude.png"),
+    # Harness Max compiles the Pro's sources where they are.
+    "max": ("devices/harness-pro/",),
     # Its tools also import the web release scripts; its tests see only the sparse inputs.
     "desktop": ci.SOURCE_INPUTS["desktop"] + ("website/scripts/harness-web-assets.mjs", "website/scripts/precompress.mjs"),
     "mobile": ("backend/src/types/productHealthContract.ts", "backend/src/types/productUsage.ts", "cli/src/",
@@ -141,6 +141,9 @@ PR_READS = {
     "firmware": ("cli/src/cable/hosts/hostDetect.ts", "cli/src/services/devices.ts", "daemons/plates/tux.mjs",
                  "daemons/review/traits.html", "daemons/tools/illustrated/daemon_art.py", "daemons/tools/plate.mjs",
                  "desktop/assets/model-icons/claude.png"),
+    # Harness Max compiles the Pro's sources where they are: a Pro-only change runs Max's jobs too. The folder, not its
+    # files: Max builds all of it.
+    "max": ("devices/harness-pro/",),
     # Its tests run in a sparse checkout (ci.SOURCE_INPUTS["desktop"]) and read these from it. By hand: the phone's P2P and
     # E2EE files test/p2p/mobile_parity_test.dart compares (its paths are built), the phone's lockfile, store/ (its
     # agents, branding and hands-on list) and docs/images/ (the Store's example images store_discover_test.dart opens);
