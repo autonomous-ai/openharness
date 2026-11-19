@@ -499,6 +499,13 @@ export async function inspect(t: { daemon: Daemon; frame: Frame }): Promise<{ sc
   return { screen, background: screen === 'idle' && Number.isInteger(n) && (n as number) >= 0 ? n as number : null }
 }
 
+/** Whether the end of the work [screen] shows is pushed: working by the daemon's word, or by the screen in a turn the
+ *  daemon holds open (its activity unknown), whose end it pushes. The screen alone, the daemon saying idle, is a run its
+ *  pane still draws after its turn ended (OpenClaw, a moment), and that pane going idle is pushed by nothing. */
+function endPushed(frame: Frame, screen: Screen | null): boolean {
+  return screen === 'working' && stateOf(frame) !== 'idle'
+}
+
 /** The last turn, from the end of the transcript, a page at a time: never the whole file (the attach OOM). */
 async function readLastTurn(t: { daemon: Daemon; frame: Frame }, pages = 4) {
   if (t.frame.location === 'cloud') {
@@ -1564,9 +1571,9 @@ export function waitCommand(argv: readonly string[], deps: ClientDeps = {}): Pro
         if (listed === 'starting') { pushedNext.delete(t); idle.delete(t); return null }
         // The daemon says it is working: no need to read its screen.
         const { screen, background: running } = frame.activity?.state === 'working' ? { screen: 'working' as const, background: null } : await inspect(t)
-        // Working, by the daemon's word or the screen's: what comes next is pushed, whatever it is (its turn's end, its
-        // activity, a question, which the daemon looks for on the screen of a harness a tool follows). Not a draft.
-        if (screen === 'working' && !t.remote) pushedNext.add(t)
+        // Working, and what comes next is pushed, whatever it is (its turn's end, its activity, a question, which the
+        // daemon looks for on the screen of a harness a tool follows). Not a draft.
+        if (endPushed(frame, screen) && !t.remote) pushedNext.add(t)
         else pushedNext.delete(t)
         if (screen === 'working') { sawWorking.add(t); idle.delete(t); return null }
         // Idle with background commands still running is not done: its engine tells it when they end, and it usually
@@ -1760,7 +1767,7 @@ function follower(s: Setup, o: Opened, h: Target, say: (event: WatchEvent, turn:
     if (listed === 'starting') { idle = null; return 'started' }
     const { screen, background } = frame.activity?.state === 'working' ? { screen: 'working' as const, background: null } : await inspect(h)
     running = background
-    if (screen === 'working' || screen === 'draft') { sawWorking = true; idle = null; pushedNext = screen === 'working'; return 'working' }
+    if (screen === 'working' || screen === 'draft') { sawWorking = true; idle = null; pushedNext = endPushed(frame, screen); return 'working' }
     if (screen === 'needs-input') { idle = null; pushedNext = true; return 'needs_person' }
     // Not done while they run (wait's rule); their end is pushed by nothing, so it is looked at again each interval.
     if (running) { idle = null; return 'background' }
