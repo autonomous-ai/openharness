@@ -126,10 +126,13 @@ export interface BindDeps {
   owners?: Pick<ConversationOwners, 'settle'>
   /** The agent's pane as it shows now, or null when it cannot be read: OpenClaw's TUI names its session nowhere else. */
   capturePane: (agentId: string) => Promise<string | null>
+  /** The revision of a session's turn activity as it is now (lib/turnActivity.ts), read before its pane is captured. */
+  activityRevision: (sessionId: string) => number | undefined
   /** Tells an OpenClaw session's live stream what its pane read on this pass (engines/openclaw/live.ts), and hands the
-   *  capture on to the model chip: the footer draws the model, and this is the pane's one capture. Whether a stream
-   *  took the reading: an agent bound but not yet attached has none. */
-  openclawPaneRead: (sessionId: string, reading: { ready: boolean; gatewayLost: boolean; running: boolean }, capture: string) => boolean
+   *  capture on to the model chip, as the footer draws the model, and to the turn activity with [revision], its
+   *  revision read before the capture: what landed after the capture wins over it (core rule 6). This is the pane's one
+   *  capture. Whether a stream took the reading: an agent bound but not yet attached has none. */
+  openclawPaneRead: (sessionId: string, reading: { ready: boolean; gatewayLost: boolean; running: boolean }, capture: string, revision: number | undefined) => boolean
   /** Whether a bound OpenClaw session's pane may show anything its last read did not (live.ts `paneDue`). */
   openclawPaneDue: (sessionId: string) => boolean
   /** The state folder an OpenClaw TUI holds open, or null when its open files cannot be read (lib/openclawStore.ts). */
@@ -152,7 +155,7 @@ interface BindPass {
 
 export function createBinding({
   registry, mirror, forgetSession, clients, attachSession, announceSession, stoppedAgents, syncRecapPool,
-  input, submitFirstTask, deviceInput, homes, owners, capturePane, openclawPaneRead, openclawPaneDue, openclawStateDir, hermesTerminal,
+  input, submitFirstTask, deviceInput, homes, owners, capturePane, activityRevision, openclawPaneRead, openclawPaneDue, openclawStateDir, hermesTerminal,
   followsLive,
 }: BindDeps) {
   /**
@@ -470,11 +473,12 @@ export function createBinding({
   const handOverAttached = async (agentId: string): Promise<void> => {
     const row = registry.byAgent(agentId)
     if (!row?.firstTask) return
+    const revision = activityRevision(row.sessionId)
     const capture = await capturePane(agentId).catch(() => null)
     if (!capture) return
     const screen = readOpenclawScreen(capture)
     if (screen.state === 'ready' && screen.box === '' && screen.key === row.sessionId
-      && openclawPaneRead(row.sessionId, { ready: true, gatewayLost: screen.gatewayLost, running: screen.running }, capture)) handOverFirstTask(agentId)
+      && openclawPaneRead(row.sessionId, { ready: true, gatewayLost: screen.gatewayLost, running: screen.running }, capture, revision)) handOverFirstTask(agentId)
   }
   const ownTranscript = (engine: 'cursor' | 'grok' | 'agy' | 'copilot', sessionId: string, cwd: string): Promise<string | null> =>
     transcriptOf(engine, engine === 'cursor' ? cursorDataDir() : homes[engine], sessionId, cwd)
@@ -593,6 +597,7 @@ export function createBinding({
       const taskWaits = firstTaskWaits(agent)
       const waiting = taskWaits || input.awaitingConfirmation(agent.agentId)
       if (agent.sessionId && !waiting && !openclawPaneDue(agent.sessionId)) return
+      const revision = agent.sessionId ? activityRevision(agent.sessionId) : undefined
       const captured = await read(() => capturePane(agent.agentId), (screen) => !screen)
       if (!captured?.value || !current()) return
       const screen = readOpenclawScreen(captured.value)
@@ -605,7 +610,7 @@ export function createBinding({
       // Told on every pass, the ones that say a state too: a pass that reads the Gateway gone is what lets the stream
       // close a turn its restart left `running`. A history that did not load is under a status line that says idle.
       const ready = screen.state === 'ready' || screen.state === 'no-history'
-      const streamed = !!agent.sessionId && openclawPaneRead(agent.sessionId, { ready, gatewayLost: screen.gatewayLost, running: screen.running }, captured.value)
+      const streamed = !!agent.sessionId && openclawPaneRead(agent.sessionId, { ready, gatewayLost: screen.gatewayLost, running: screen.running }, captured.value, revision)
       const held = openclawScreenHold(screen, agent, gatewayGoneMs(agent.agentId, screen))
       const ours = !agent.identityHold || OPENCLAW_HOLDS.has(agent.identityHold) || isOpenclawLocalStopped(agent.identityHold)
       if (held) {

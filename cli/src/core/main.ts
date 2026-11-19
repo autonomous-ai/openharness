@@ -2053,12 +2053,13 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // OpenClaw's session key is on its TUI's footer and nowhere else. The scrollback above the screen keeps its title,
     // the only place a Gateway on another host shows, a while longer into a conversation.
     capturePane: (agentId) => captureTerminal(agentId, 200),
-    openclawPaneRead: (sessionId, reading, capture) => {
+    activityRevision: (sessionId) => turnActivity.snapshot(sessionId)?.revision,
+    openclawPaneRead: (sessionId, reading, capture, revision) => {
       const streamed = otherStreams.paneRead(sessionId, reading)
       const session = registry.bySession(sessionId)
       // As the footer poll beside the other engines' panes reads them: a profile that cannot be read leaves the chip as it was.
       if (session) void Promise.resolve(runtimeProfiles.ingestPane(session, capture)).catch(() => undefined)
-      if (session) void activity.paneRead(session, capture).catch(() => undefined)
+      if (session) void activity.paneRead(session, capture, revision).catch(() => undefined)
       return streamed
     },
     openclawPaneDue: (sessionId) => otherStreams.paneDue(sessionId),
