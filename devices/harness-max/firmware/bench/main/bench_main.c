@@ -5,6 +5,7 @@
 // that no panel scans.
 #include <inttypes.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "bench_raster.h"
@@ -338,7 +339,16 @@ static void present_partials(void)
 static struct { double build, present; } s_motion[BENCH_MOTION_FRAMES];
 static ht_scene_t *s_motion_last;
 static bool s_motion_shown;
-static struct { int steps; double ms, longest; } s_ahead;
+// The warming's steps as max_app.c takes them: one under the lock, or out of it WARM_STEP_US of bands (max_app.c's).
+enum { AHEAD_STEPS = 4096, WARM_STEP_US = 3000, OVER_US = 4000 };
+static struct { int steps, locked, over; double ms, locked_max, step_ms[AHEAD_STEPS]; } s_ahead;
+static int64_t s_ahead_until;
+static bool ahead_on(void) { return esp_timer_get_time() < s_ahead_until; }
+static int by_time(const void *a, const void *b)
+{
+    const double x = *(const double *)a, y = *(const double *)b;
+    return x < y ? -1 : x > y;
+}
 
 // A frame of a motion as the render task paints it: the scene built over the other buffer, then presented.
 static void motion_frame(uint32_t now, int f)
@@ -359,14 +369,22 @@ static void motion_frame(uint32_t now, int f)
 // step, timed.
 static void motion_ahead(uint32_t now)
 {
-    s_ahead.steps = 0;
-    s_ahead.ms = s_ahead.longest = 0;
-    for (bool more = true; more; s_ahead.steps++) {
+    s_ahead.steps = s_ahead.locked = s_ahead.over = 0;
+    s_ahead.ms = s_ahead.locked_max = 0;
+    for (bool more = true; more && s_ahead.steps < AHEAD_STEPS; s_ahead.steps++) {
         const int64_t t0 = esp_timer_get_time();
-        more = max_ui_warm(now);
-        const double ms = (esp_timer_get_time() - t0) / 1000.0;
+        s_ahead_until = t0 + WARM_STEP_US;
+        const bool out = max_ui_warm_paint(ahead_on);
+        if (!out) more = max_ui_warm(now);
+        const int64_t us = esp_timer_get_time() - t0;
+        const double ms = us / 1000.0;
+        if (!out) {
+            s_ahead.locked++;
+            if (ms > s_ahead.locked_max) s_ahead.locked_max = ms;
+        }
+        s_ahead.over += us > OVER_US;
+        s_ahead.step_ms[s_ahead.steps] = ms;
         s_ahead.ms += ms;
-        if (ms > s_ahead.longest) s_ahead.longest = ms;
         vTaskDelay(1);   // the idle task's turn
     }
 }
@@ -407,9 +425,14 @@ static void motions(void)
                    run == 2 ? "warm" : run ? "ahead" : "cold", frames, first, sum / frames, worst, 1000.0 * frames / sum,
                    1000.0 / worst, build / frames, build_max, present / frames, present_max,
                    fb_is_want() ? "same" : "DIFFERS");
-            if (run == 1)
-                printf("%-14s painted ahead in %d steps, %.1f ms, the longest %.2f ms\n", "", s_ahead.steps, s_ahead.ms,
-                       s_ahead.longest);
+            if (run == 1) {
+                const int n = s_ahead.steps;
+                qsort(s_ahead.step_ms, (size_t)n, sizeof s_ahead.step_ms[0], by_time);
+                printf("%-14s painted ahead in %d steps (%d under the lock), %.1f ms: a step p50 %.2f p95 %.2f max %.2f ms,"
+                       " %d over %d ms; under the lock max %.2f ms\n",
+                       "", n, s_ahead.locked, s_ahead.ms, n ? s_ahead.step_ms[n / 2] : 0, n ? s_ahead.step_ms[n * 95 / 100] : 0,
+                       n ? s_ahead.step_ms[n - 1] : 0, s_ahead.over, OVER_US / 1000, s_ahead.locked_max);
+            }
         }
     }
     max_ui_share(false);

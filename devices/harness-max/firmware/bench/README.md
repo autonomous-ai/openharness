@@ -85,8 +85,9 @@ reads 480 x 1920 x 2 bytes 60 times a second (about 110 MB/s) from PSRAM, so PSR
   `fps` (frames over their time) and `min` (the worst frame's), and the build and present means and maxima. `cold`
   starts with no pet cell baked and no sliver or pet image kept (an agent's first open); the open and the close run
   twice more: `ahead`, the same start, then painted ahead while the page rests as the render task does it
-  (`max_ui_warm`; the line after it: its steps, their time and the longest, which is how long a touch can wait on
-  it), and `warm`, the motion once more. `framebuffer` must say `same`: the framebuffer after the last frame against
+  (`max_ui_warm` under the lock, `max_ui_warm_paint` out of it, 3 ms of bands a step, as `max_app.c` takes them; the
+  line after it: its steps and how many held the lock, their time, a step's p50, p95 and max, the steps over 4 ms,
+  and the longest under the lock, which is how long a touch can wait on it), and `warm`, the motion once more. `framebuffer` must say `same`: the framebuffer after the last frame against
   the CPU's raster and turn of its scene.
 - **(b) CPU turn**: `max_turn_pixels` of a 1920 x 24 strip, and of the 20 strips of the glass.
 - **(c) PPA SRM turn**: each quarter turn and mirror the PPA has, against `max_turn_pixels`: exactly one should say
