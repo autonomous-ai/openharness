@@ -3052,6 +3052,17 @@ describe('ObservedSource panes', () => {
     expect(counted(actions.count)).toEqual(['no-answer', 'no-answer'])
   })
 
+  // On Linux no hint names VS Code: the agent's host is the unknown terminal, its app the one its caller runs under.
+  it('an agent waiting in an app its hints do not name is waiting in that app, not in Terminal', async () => {
+    const typer: HostAdapter = { id: 'typer', tap: 'before', paneOf: () => ({ adapter: 'typer', id: 'p1' }),
+      canFocus: () => true, focus: async () => true, canType: () => true, type: async () => true }
+    const { src, ev } = setup({ actions: { ...fakeActions({}, 'linux').actions, adapters: [typer] }, apps: async () => new Map([[100, 'vscode']]) })
+    src.ingest(ev('session-start'))
+    await vi.waitFor(() => expect(src.list()[0]).toMatchObject({ host: 'terminal', app: 'vscode' }))
+    src.ingest(ev('needs-input'))
+    expect(await src.send(src.list()[0], '1')).toEqual({ ok: false, reason: 'proj is waiting for your answer in VS Code.' })
+  })
+
   // herdr types into a working agent as readily as an idle one: the source's idle rules decide, as for Orca.
   it('a hooked agent in a herdr pane lists voice, and takes words only at its prompt', async () => {
     const { actions } = fakeActions()
