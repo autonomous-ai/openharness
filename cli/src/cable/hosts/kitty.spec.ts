@@ -35,8 +35,8 @@ vi.mock('../../lib/binaryOnPath.js', async (real) => {
 
 const FAKE_KITTEN = '/fake/bin/kitten'
 const {
-  env, envFromConf, envRemoteControlOff, focusWindow, sendText, sendKey, sendTextBackslash, kittyAt, kittyPlusKitten,
-  remoteControlOff, noSocket, missingWindow,
+  env, envFromConf, envRemoteControlOff, focusWindow, sendText, sendTextBackslash, sendKeyOtherActive,
+  sendTextOtherActive, enter, kittyAt, kittyPlusKitten, remoteControlOff, noSocket, missingWindow,
 } = RECORDED_KITTY
 /** kitten where the finder found it, off the devices' PATH. */
 const FOUND = async (): Promise<TmuxPathOutcome> => ({ state: 'adopted', path: FAKE_KITTEN, from: '/fake/bin' })
@@ -61,7 +61,7 @@ function recorder(over: Partial<KittyDeps> = {}, answer: Record<string, { code: 
       if (answer[verb]) return { code: answer[verb].code, stdout: '' }
       if (to !== env.KITTY_LISTEN_ON) return { code: noSocket.code, stdout: '' }
       if (match !== 'id:1' && match !== 'id:2') return { code: missingWindow.code, stdout: '' }
-      return { code: verb === 'send-key' ? sendKey.code : verb === 'send-text' ? sendText.code : focusWindow.code, stdout: '' }
+      return { code: verb === 'send-text' ? sendText.code : focusWindow.code, stdout: '' }
     },
     kitty: FOUND,
     platform: 'linux',
@@ -83,7 +83,7 @@ const OWN = pane(`1@${env.KITTY_LISTEN_ON}`)
 const ran = (args: readonly string[], file = FAKE_KITTEN): Call => ({ file, args: args.slice(1), timeoutMs: 10_000 })
 const typing = (text: string, id = '1', to: string = env.KITTY_LISTEN_ON): Call[] => [
   ran(['kitten', '@', '--to', to, 'send-text', '--match', `id:${id}`, '--', text]),
-  ran(['kitten', '@', '--to', to, 'send-key', '--match', `id:${id}`, 'enter']),
+  ran(['kitten', '@', '--to', to, 'send-text', '--match', `id:${id}`, '--', '\\r']),
 ]
 
 describe('the kitty adapter', () => {
@@ -165,10 +165,28 @@ describe('the kitty adapter', () => {
     expect(calls).toEqual([ran(focusWindow.args)])
   })
 
-  it('types the words with the recorded send-text, then send-key', async () => {
+  it('types the words with the recorded send-text, then Enter as send-text to the same window', async () => {
     const { calls, adapter } = recorder()
     expect(await adapter.type(OWN, 'hello agent', 'claude')).toBe(true)
-    expect(calls).toEqual([ran(sendText.args), ran(sendKey.args)])
+    expect(calls).toEqual([ran(sendText.args), ran(enter.args)])
+    for (const { args } of calls) expect(args).not.toContain('send-key')
+  })
+
+  // kitty 0.32.2's send-key goes to the active window whatever --match names: Enter there would run another window's
+  // line. Replayed from what landed in each window with window 2 active; a call not recorded fails.
+  it('Enter reaches the agent\'s window when another window is active', async () => {
+    const landed: Record<string, string> = { 1: '', 2: '' }
+    const { adapter } = recorder({
+      run: async (_file, args) => {
+        const seen = [sendKeyOtherActive, sendTextOtherActive, enter].find((recorded) =>
+          JSON.stringify(recorded.args.slice(1)) === JSON.stringify(args))
+        if (!seen) throw new Error(`not recorded: ${args.join(' ')}`)
+        for (const [window, bytes] of Object.entries(seen.landed)) landed[window] += bytes
+        return { code: seen.code, stdout: '' }
+      },
+    })
+    expect(await adapter.type(OWN, 'words', 'claude')).toBe(true)
+    expect(landed).toEqual({ 1: 'words\r', 2: '' })
   })
 
   // kitty reads Python escapes in send-text: a lone backslash lands as an escape. The recorded words that landed as typed
@@ -246,8 +264,14 @@ describe('the kitty adapter', () => {
     expect(calls).toEqual([ran(missingWindow.args), typing('hello', '99')[0]])
   })
 
-  it('a send-key that fails is false', async () => {
-    const { calls, adapter } = recorder({}, { 'send-key': { code: 1 } })
+  it('an Enter that fails is false', async () => {
+    const calls: Call[] = []
+    const { adapter } = recorder({
+      run: async (file, args, timeoutMs) => {
+        calls.push({ file, args, timeoutMs })
+        return { code: args.at(-1) === enter.args.at(-1) ? 1 : 0, stdout: '' }
+      },
+    })
     expect(await adapter.type(OWN, 'hello', 'claude')).toBe(false)
     expect(calls).toEqual(typing('hello'))
   })
@@ -316,7 +340,7 @@ describe('kitty\'s binary', () => {
     const { calls, adapter } = recorder({ kitty: async () => ({ state: 'adopted', path: '/usr/bin/kitty', from: '/usr/bin' }) })
     expect(await adapter.focus(OWN)).toBe(true)
     expect(await adapter.type(OWN, 'hello agent', 'claude')).toBe(true)
-    expect(calls).toEqual([focusWindow, sendText, sendKey].map(({ args }) => ran(args, '/usr/bin/kitty')))
+    expect(calls).toEqual([focusWindow, sendText, enter].map(({ args }) => ran(args, '/usr/bin/kitty')))
     for (const { args } of calls) expect(args).not.toContain('+kitten')
   })
 

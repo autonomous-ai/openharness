@@ -11,7 +11,14 @@
  * file through the window's tty (Enter arrives as `\n` there). `kitten @ --to unix:/tmp/kitty launch --title other`
  * opened the second window and `set-window-title --match id:1 agent` named the first. Every command ran from outside
  * kitty, as the daemon runs; each value is its exact argv, exit code and output. The socket kitty made was
- * `srwxr-xr-x u u /tmp/kitty`, and kitty removed it when it quit.
+ * `srwxr-xr-x u u /tmp/kitty`, and kitty removed it when it quit. The Enter after each line was `send-key --match id:1
+ * enter` then, with window 1 focused; `sendKeyOtherActive` shows why the adapter sends `enter` instead.
+ *
+ * The values with window 2 active (`sendKeyOtherActive`, `sendTextOtherActive`, `enter`) were recorded the same day in
+ * the same way, with python3 3.12.3-0ubuntu2.1 also installed: `kitty -o allow_remote_control=socket-only --listen-on
+ * unix:/tmp/kitty python3 raw.py w1`, then `kitten @ --to unix:/tmp/kitty launch --type=window python3 raw.py w2`,
+ * which made window 2 active (`ls` said so before and after). `raw.py` puts its tty in raw mode and appends each read
+ * to its file as Python's repr, so `landed` is the bytes each window's program read, untranslated, keyed by window id.
  */
 export const RECORDED_KITTY = {
   source: 'recorded',
@@ -155,13 +162,13 @@ export const RECORDED_KITTY = {
     ']\n',
   /** Run after `launch` opened window 2; `ls` after it says window 1 is focused. It printed nothing. */
   focusWindow: { args: ['kitten', '@', '--to', 'unix:/tmp/kitty', 'focus-window', '--match', 'id:1'], code: 0 },
-  /** `landed` is what reached the window's program after this and `sendKey`. Printed nothing. */
+  /** `landed` is what reached the window's program after this and Enter. Printed nothing. */
   sendText: {
     args: ['kitten', '@', '--to', 'unix:/tmp/kitty', 'send-text', '--match', 'id:1', '--', 'hello agent'],
     code: 0,
     landed: 'hello agent\n',
   },
-  /** `sent` is the argument after `--` of the same `send-text`, then `sendKey`. kitty reads Python escapes in it:
+  /** `sent` is the argument after `--` of the same `send-text`, then Enter. kitty reads Python escapes in it:
    *  a lone backslash is read as an escape (`\n` lands a newline, `\x1b` an escape byte), and doubling every
    *  backslash lands the words as typed. Each exited 0 and printed nothing. */
   sendTextBackslash: [
@@ -172,8 +179,26 @@ export const RECORDED_KITTY = {
     { sent: '\\\\x1b[31m', landed: '\\x1b[31m\n' },
     { sent: 'c:\\\\new', landed: 'c:\\new\n' },
   ],
-  /** Printed nothing. */
-  sendKey: { args: ['kitten', '@', '--to', 'unix:/tmp/kitty', 'send-key', '--match', 'id:1', 'enter'], code: 0 },
+  /** kitty 0.32.2 sends the key to the active window, whatever `--match` names: a shell there would run its line. It
+   *  printed nothing. */
+  sendKeyOtherActive: {
+    args: ['kitten', '@', '--to', 'unix:/tmp/kitty', 'send-key', '--match', 'id:1', 'enter'],
+    code: 0,
+    landed: { 1: '', 2: '\r' },
+  },
+  /** `send-text` reaches the window `--match` names, the active one or not. Printed nothing. */
+  sendTextOtherActive: {
+    args: ['kitten', '@', '--to', 'unix:/tmp/kitty', 'send-text', '--match', 'id:1', '--', 'words'],
+    code: 0,
+    landed: { 1: 'words', 2: '' },
+  },
+  /** Enter as the adapter sends it, after `sendTextOtherActive`: `\r` as two characters, which kitty reads as the
+   *  carriage return the Enter key sends, to the matched window alone. Printed nothing. */
+  enter: {
+    args: ['kitten', '@', '--to', 'unix:/tmp/kitty', 'send-text', '--match', 'id:1', '--', '\\r'],
+    code: 0,
+    landed: { 1: '\r', 2: '' },
+  },
   /** `kitty @` reaches the same `kitten @` (here `ls`, printing the same JSON). */
   kittyAt: { args: ['kitty', '@', '--to', 'unix:/tmp/kitty', 'ls'], code: 0 },
   /** `kitty +kitten @` is not a form 0.32.2 takes: stdout empty, stderr the list of kittens and this last line. */

@@ -3375,7 +3375,7 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     const KITTY = { KITTY_WINDOW_ID: '5', KITTY_LISTEN_ON: 'unix:@kitty-1' }
     const kittyAsked = (listenOn: string, ...args: string[]): Run => ['kitten', ['@', '--to', listenOn, ...args], 10_000]
     const kittyWords = [kittyAsked('unix:@kitty-1', 'send-text', '--match', 'id:5', '--', 'run the tests'),
-      kittyAsked('unix:@kitty-1', 'send-key', '--match', 'id:5', 'enter')]
+      kittyAsked('unix:@kitty-1', 'send-text', '--match', 'id:5', '--', '\\r')]
     /** The devices' runs recorded, Zellij's listing naming its pane 3 a terminal. */
     const listing = (base: typeof orca) => ({ ...base, run: async (file: string, args: string[], timeoutMs: number) => {
       orcaRuns.push([file, args, timeoutMs])
