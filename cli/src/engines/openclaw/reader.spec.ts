@@ -146,9 +146,10 @@ describe('readOpenclawSince', () => {
     expect(seqs(await since(path, 'agent:main:plain', -1))).toEqual([0, 1, 3])
     expect(seqs(await since(path, 'agent:main:plain', -1))).toEqual([0, 1, 3])
     const lines = error.mock.calls.map((call) => String(call[0])).filter((line) => line.includes('unreadable'))
+    // The step that failed, in fixed words: zstd's own code is not a code-shaped token, so its kind alone says only Error.
     expect(lines).toEqual([
-      expect.stringMatching(new RegExp(`^\\[openclaw\\] ${sid('agent:main:plain')} seq 2 unreadable · `)),
-      expect.stringMatching(new RegExp(`^\\[openclaw\\] ${sid('agent:main:plain')} seq 6 unreadable · `)),
+      `[openclaw] ${sid('agent:main:plain')} seq 2 unreadable · json · SyntaxError`,
+      `[openclaw] ${sid('agent:main:plain')} seq 6 unreadable · zstd · Error`,
     ])
     // No row text and no key reaches the log.
     expect(lines.join('\n')).not.toContain('{bad')

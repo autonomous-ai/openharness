@@ -232,7 +232,7 @@ describe('creating an agent', () => {
       else expect(result.ok).toBe(true)
       expect(preTrustCodexProject, JSON.stringify(vi.mocked(console.warn).mock.calls)).toHaveBeenCalledTimes(expected ? 1 : 0)
       if (expected) expect(preTrustCodexProject).toHaveBeenCalledWith(cwd, mode === 'legacy' ? null : '/fixture/selected')
-      if (mode === 'error' || mode === 'thrown text') expect(console.warn).toHaveBeenCalledWith(`[agent] pre-trust skipped · ${mode === 'error' ? 'Error' : 'string'}`)
+      if (mode === 'error' || mode === 'thrown text') expect(console.warn).toHaveBeenCalledWith(`[agent] pre-trust skipped · codex · ${mode === 'error' ? 'Error' : 'string'}`)
     })
 
   // A Claude Code agent in an empty project here is trusted as a Codex one is, in the profile it reads.
@@ -726,8 +726,8 @@ describe('creating an agent', () => {
       vi.mocked(preTrustClaudeProject).mockImplementationOnce(() => { throw new Error('settings locked') }).mockImplementationOnce(() => { throw 'worse' })
       expect(await create(request({ dsh: 'blender' }))).toMatchObject({ ok: true })
       expect(await create(request({ dsh: 'blender' }))).toMatchObject({ ok: true })
-      expect(console.warn).toHaveBeenCalledWith('[dsh] pre-trust skipped · Error')
-      expect(console.warn).toHaveBeenCalledWith('[dsh] pre-trust skipped · string')
+      expect(console.warn).toHaveBeenCalledWith('[dsh] pre-trust skipped · claude · Error')
+      expect(console.warn).toHaveBeenCalledWith('[dsh] pre-trust skipped · claude · string')
       vi.mocked(materializeWorkspace).mockResolvedValueOnce({ warnings: [], created: ['AGENTS.md'], kept: [] } as never)
       await create(request({ dsh: 'blender' }))
       expect(preTrustClaudeProject).toHaveBeenCalledTimes(3)

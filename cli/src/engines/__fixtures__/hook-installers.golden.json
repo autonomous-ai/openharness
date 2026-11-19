@@ -175,13 +175,13 @@
   "runs": [
    {
     "logs": [
-     "error [hooks] failed to write settings.json: HookPreparationHeld"
+     "error [hooks] failed to write settings.json: the hook settings do not have the declared object shape"
     ],
     "threw": null
    },
    {
     "logs": [
-     "error [hooks] failed to write settings.json: HookPreparationHeld"
+     "error [hooks] failed to write settings.json: the hook settings do not have the declared object shape"
     ],
     "threw": null
    }
@@ -202,13 +202,13 @@
   "runs": [
    {
     "logs": [
-     "error [hooks] failed to write settings.json: HookPreparationHeld"
+     "error [hooks] failed to write settings.json: the hook settings do not have the declared object shape"
     ],
     "threw": null
    },
    {
     "logs": [
-     "error [hooks] failed to write settings.json: HookPreparationHeld"
+     "error [hooks] failed to write settings.json: the hook settings do not have the declared object shape"
     ],
     "threw": null
    }
@@ -229,13 +229,13 @@
   "runs": [
    {
     "logs": [
-     "error [hooks] failed to write settings.json: HookPreparationHeld"
+     "error [hooks] failed to write settings.json: the hook settings do not have the declared object shape"
     ],
     "threw": null
    },
    {
     "logs": [
-     "error [hooks] failed to write settings.json: HookPreparationHeld"
+     "error [hooks] failed to write settings.json: the hook settings do not have the declared object shape"
     ],
     "threw": null
    }
@@ -256,13 +256,13 @@
   "runs": [
    {
     "logs": [
-     "error [hooks] failed to write settings.json: HookPreparationHeld"
+     "error [hooks] failed to write settings.json: the hook settings do not have the declared object shape"
     ],
     "threw": null
    },
    {
     "logs": [
-     "error [hooks] failed to write settings.json: HookPreparationHeld"
+     "error [hooks] failed to write settings.json: the hook settings do not have the declared object shape"
     ],
     "threw": null
    }
@@ -283,13 +283,13 @@
   "runs": [
    {
     "logs": [
-     "error [hooks] failed to write settings.json: HookPreparationHeld"
+     "error [hooks] failed to write settings.json: the hook settings do not have the declared object shape"
     ],
     "threw": null
    },
    {
     "logs": [
-     "error [hooks] failed to write settings.json: HookPreparationHeld"
+     "error [hooks] failed to write settings.json: the hook settings do not have the declared object shape"
     ],
     "threw": null
    }
@@ -310,13 +310,13 @@
   "runs": [
    {
     "logs": [
-     "error [hooks] failed to write settings.json: HookPreparationHeld"
+     "error [hooks] failed to write settings.json: the hook settings do not have the declared object shape"
     ],
     "threw": null
    },
    {
     "logs": [
-     "error [hooks] failed to write settings.json: HookPreparationHeld"
+     "error [hooks] failed to write settings.json: the hook settings do not have the declared object shape"
     ],
     "threw": null
    }
@@ -337,13 +337,13 @@
   "runs": [
    {
     "logs": [
-     "error [hooks] failed to write settings.json: HookPreparationHeld"
+     "error [hooks] failed to write settings.json: the hook settings do not have the declared object shape"
     ],
     "threw": null
    },
    {
     "logs": [
-     "error [hooks] failed to write settings.json: HookPreparationHeld"
+     "error [hooks] failed to write settings.json: the hook settings do not have the declared object shape"
     ],
     "threw": null
    }
@@ -364,13 +364,13 @@
   "runs": [
    {
     "logs": [
-     "error [hooks] failed to write settings.json: HookPreparationHeld"
+     "error [hooks] failed to write settings.json: a hook event is not a list"
     ],
     "threw": null
    },
    {
     "logs": [
-     "error [hooks] failed to write settings.json: HookPreparationHeld"
+     "error [hooks] failed to write settings.json: a hook event is not a list"
     ],
     "threw": null
    }
@@ -391,13 +391,13 @@
   "runs": [
    {
     "logs": [
-     "error [hooks] failed to write settings.json: HookPreparationHeld"
+     "error [hooks] failed to write settings.json: a hook block has an unconfirmed shape"
     ],
     "threw": null
    },
    {
     "logs": [
-     "error [hooks] failed to write settings.json: HookPreparationHeld"
+     "error [hooks] failed to write settings.json: a hook block has an unconfirmed shape"
     ],
     "threw": null
    }
@@ -418,13 +418,13 @@
   "runs": [
    {
     "logs": [
-     "error [hooks] failed to write settings.json: HookPreparationHeld"
+     "error [hooks] failed to write settings.json: a hook block has an unconfirmed shape"
     ],
     "threw": null
    },
    {
     "logs": [
-     "error [hooks] failed to write settings.json: HookPreparationHeld"
+     "error [hooks] failed to write settings.json: a hook block has an unconfirmed shape"
     ],
     "threw": null
    }
@@ -987,13 +987,13 @@
   "runs": [
    {
     "logs": [
-     "error [hooks] failed to write settings.json: HookPreparationHeld"
+     "error [hooks] failed to write settings.json: the settings file changed before publication"
     ],
     "threw": null
    },
    {
     "logs": [
-     "error [hooks] failed to write settings.json: HookPreparationHeld"
+     "error [hooks] failed to write settings.json: the settings file changed before publication"
     ],
     "threw": null
    }
@@ -1013,13 +1013,13 @@
   "runs": [
    {
     "logs": [
-     "error [hooks] failed to write settings.json: HookPreparationHeld"
+     "error [hooks] failed to write settings.json: the settings file changed before publication"
     ],
     "threw": null
    },
    {
     "logs": [
-     "error [hooks] failed to write settings.json: HookPreparationHeld"
+     "error [hooks] failed to write settings.json: the settings file changed before publication"
     ],
     "threw": null
    }
@@ -1039,13 +1039,13 @@
   "runs": [
    {
     "logs": [
-     "error [hooks] failed to write settings.json: HookPreparationHeld"
+     "error [hooks] failed to write settings.json: the settings file is read-only"
     ],
     "threw": null
    },
    {
     "logs": [
-     "error [hooks] failed to write settings.json: HookPreparationHeld"
+     "error [hooks] failed to write settings.json: the settings file is read-only"
     ],
     "threw": null
    }
@@ -1067,14 +1067,14 @@
    {
     "logs": [
      "log [hooks] Claude Code session, turn, wait and subagent hooks already installed",
-     "warn [hooks] Agent Messages' hook not installed (messages reach its agents once they are idle): HookPreparationHeld"
+     "warn [hooks] Agent Messages' hook not installed in Claude Code's settings.json (messages reach its agents once they are idle): the settings file is read-only"
     ],
     "threw": null
    },
    {
     "logs": [
      "log [hooks] Claude Code session, turn, wait and subagent hooks already installed",
-     "warn [hooks] Agent Messages' hook not installed (messages reach its agents once they are idle): HookPreparationHeld"
+     "warn [hooks] Agent Messages' hook not installed in Claude Code's settings.json (messages reach its agents once they are idle): the settings file is read-only"
     ],
     "threw": null
    }
@@ -1203,13 +1203,13 @@
   "runs": [
    {
     "logs": [
-     "error [hooks] failed to write settings.json: HookPreparationHeld"
+     "error [hooks] failed to write settings.json: the settings file is not a bounded file owned by this account"
     ],
     "threw": null
    },
    {
     "logs": [
-     "error [hooks] failed to write settings.json: HookPreparationHeld"
+     "error [hooks] failed to write settings.json: the settings file is not a bounded file owned by this account"
     ],
     "threw": null
    }
@@ -1490,8 +1490,8 @@
     "logs": [
      "log [hooks] installed Codex session and turn hooks → <root>/moved/codex-work/hooks.json",
      "log [hooks] Codex asks to review hooks it has not seen; Harness records its own as reviewed",
-     "log [hooks] recorded Harness's own Codex hooks as reviewed → <root>/moved/codex-work/config.toml",
-     "log [hooks] recorded Harness's own Codex hooks as reviewed → <root>/moved/codex-work/config.toml"
+     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml",
+     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml"
     ],
     "threw": null
    },
@@ -1538,8 +1538,8 @@
     "logs": [
      "log [hooks] installed Codex session and turn hooks → <root>/moved/codex-work/hooks.json",
      "log [hooks] Codex asks to review hooks it has not seen; Harness records its own as reviewed",
-     "log [hooks] recorded Harness's own Codex hooks as reviewed → <root>/moved/codex-work/config.toml",
-     "log [hooks] recorded Harness's own Codex hooks as reviewed → <root>/moved/codex-work/config.toml"
+     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml",
+     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml"
     ],
     "threw": null
    },
@@ -1692,13 +1692,13 @@
   "runs": [
    {
     "logs": [
-     "error [hooks] failed to write Codex hooks.json: HookPreparationHeld"
+     "error [hooks] failed to write Codex hooks.json: the hook settings do not have the declared object shape"
     ],
     "threw": null
    },
    {
     "logs": [
-     "error [hooks] failed to write Codex hooks.json: HookPreparationHeld"
+     "error [hooks] failed to write Codex hooks.json: the hook settings do not have the declared object shape"
     ],
     "threw": null
    }
@@ -1719,13 +1719,13 @@
   "runs": [
    {
     "logs": [
-     "error [hooks] failed to write Codex hooks.json: HookPreparationHeld"
+     "error [hooks] failed to write Codex hooks.json: the hook settings do not have the declared object shape"
     ],
     "threw": null
    },
    {
     "logs": [
-     "error [hooks] failed to write Codex hooks.json: HookPreparationHeld"
+     "error [hooks] failed to write Codex hooks.json: the hook settings do not have the declared object shape"
     ],
     "threw": null
    }
@@ -1746,13 +1746,13 @@
   "runs": [
    {
     "logs": [
-     "error [hooks] failed to write Codex hooks.json: HookPreparationHeld"
+     "error [hooks] failed to write Codex hooks.json: the hook settings do not have the declared object shape"
     ],
     "threw": null
    },
    {
     "logs": [
-     "error [hooks] failed to write Codex hooks.json: HookPreparationHeld"
+     "error [hooks] failed to write Codex hooks.json: the hook settings do not have the declared object shape"
     ],
     "threw": null
    }
@@ -1773,13 +1773,13 @@
   "runs": [
    {
     "logs": [
-     "error [hooks] failed to write Codex hooks.json: HookPreparationHeld"
+     "error [hooks] failed to write Codex hooks.json: the hook settings do not have the declared object shape"
     ],
     "threw": null
    },
    {
     "logs": [
-     "error [hooks] failed to write Codex hooks.json: HookPreparationHeld"
+     "error [hooks] failed to write Codex hooks.json: the hook settings do not have the declared object shape"
     ],
     "threw": null
    }
@@ -1800,13 +1800,13 @@
   "runs": [
    {
     "logs": [
-     "error [hooks] failed to write Codex hooks.json: HookPreparationHeld"
+     "error [hooks] failed to write Codex hooks.json: the hook settings do not have the declared object shape"
     ],
     "threw": null
    },
    {
     "logs": [
-     "error [hooks] failed to write Codex hooks.json: HookPreparationHeld"
+     "error [hooks] failed to write Codex hooks.json: the hook settings do not have the declared object shape"
     ],
     "threw": null
    }
@@ -1827,13 +1827,13 @@
   "runs": [
    {
     "logs": [
-     "error [hooks] failed to write Codex hooks.json: HookPreparationHeld"
+     "error [hooks] failed to write Codex hooks.json: the hook settings do not have the declared object shape"
     ],
     "threw": null
    },
    {
     "logs": [
-     "error [hooks] failed to write Codex hooks.json: HookPreparationHeld"
+     "error [hooks] failed to write Codex hooks.json: the hook settings do not have the declared object shape"
     ],
     "threw": null
    }
@@ -1854,13 +1854,13 @@
   "runs": [
    {
     "logs": [
-     "error [hooks] failed to write Codex hooks.json: HookPreparationHeld"
+     "error [hooks] failed to write Codex hooks.json: the hook settings do not have the declared object shape"
     ],
     "threw": null
    },
    {
     "logs": [
-     "error [hooks] failed to write Codex hooks.json: HookPreparationHeld"
+     "error [hooks] failed to write Codex hooks.json: the hook settings do not have the declared object shape"
     ],
     "threw": null
    }
@@ -1881,13 +1881,13 @@
   "runs": [
    {
     "logs": [
-     "error [hooks] failed to write Codex hooks.json: HookPreparationHeld"
+     "error [hooks] failed to write Codex hooks.json: a hook event is not a list"
     ],
     "threw": null
    },
    {
     "logs": [
-     "error [hooks] failed to write Codex hooks.json: HookPreparationHeld"
+     "error [hooks] failed to write Codex hooks.json: a hook event is not a list"
     ],
     "threw": null
    }
@@ -1908,13 +1908,13 @@
   "runs": [
    {
     "logs": [
-     "error [hooks] failed to write Codex hooks.json: HookPreparationHeld"
+     "error [hooks] failed to write Codex hooks.json: a hook block has an unconfirmed shape"
     ],
     "threw": null
    },
    {
     "logs": [
-     "error [hooks] failed to write Codex hooks.json: HookPreparationHeld"
+     "error [hooks] failed to write Codex hooks.json: a hook block has an unconfirmed shape"
     ],
     "threw": null
    }
@@ -1935,13 +1935,13 @@
   "runs": [
    {
     "logs": [
-     "error [hooks] failed to write Codex hooks.json: HookPreparationHeld"
+     "error [hooks] failed to write Codex hooks.json: a hook block has an unconfirmed shape"
     ],
     "threw": null
    },
    {
     "logs": [
-     "error [hooks] failed to write Codex hooks.json: HookPreparationHeld"
+     "error [hooks] failed to write Codex hooks.json: a hook block has an unconfirmed shape"
     ],
     "threw": null
    }
@@ -1963,8 +1963,8 @@
    {
     "logs": [
      "log [hooks] Codex session and turn hooks already installed → <root>/moved/codex-work/hooks.json",
-     "log [hooks] recorded Harness's own Codex hooks as reviewed → <root>/moved/codex-work/config.toml",
-     "log [hooks] recorded Harness's own Codex hooks as reviewed → <root>/moved/codex-work/config.toml"
+     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml",
+     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml"
     ],
     "threw": null
    },
@@ -2011,8 +2011,8 @@
     "logs": [
      "log [hooks] installed Codex session and turn hooks → <root>/moved/codex-work/hooks.json",
      "log [hooks] Codex asks to review hooks it has not seen; Harness records its own as reviewed",
-     "log [hooks] recorded Harness's own Codex hooks as reviewed → <root>/moved/codex-work/config.toml",
-     "log [hooks] recorded Harness's own Codex hooks as reviewed → <root>/moved/codex-work/config.toml"
+     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml",
+     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml"
     ],
     "threw": null
    },
@@ -2059,8 +2059,8 @@
     "logs": [
      "log [hooks] installed Codex session and turn hooks → <root>/moved/codex-work/hooks.json",
      "log [hooks] Codex asks to review hooks it has not seen; Harness records its own as reviewed",
-     "log [hooks] recorded Harness's own Codex hooks as reviewed → <root>/moved/codex-work/config.toml",
-     "log [hooks] recorded Harness's own Codex hooks as reviewed → <root>/moved/codex-work/config.toml"
+     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml",
+     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml"
     ],
     "threw": null
    },
@@ -2107,8 +2107,8 @@
     "logs": [
      "log [hooks] installed Codex session and turn hooks → <root>/moved/codex-work/hooks.json",
      "log [hooks] Codex asks to review hooks it has not seen; Harness records its own as reviewed",
-     "log [hooks] recorded Harness's own Codex hooks as reviewed → <root>/moved/codex-work/config.toml",
-     "log [hooks] recorded Harness's own Codex hooks as reviewed → <root>/moved/codex-work/config.toml"
+     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml",
+     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml"
     ],
     "threw": null
    },
@@ -2155,8 +2155,8 @@
     "logs": [
      "log [hooks] installed Codex session and turn hooks → <root>/moved/codex-work/hooks.json",
      "log [hooks] Codex asks to review hooks it has not seen; Harness records its own as reviewed",
-     "log [hooks] recorded Harness's own Codex hooks as reviewed → <root>/moved/codex-work/config.toml",
-     "log [hooks] recorded Harness's own Codex hooks as reviewed → <root>/moved/codex-work/config.toml"
+     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml",
+     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml"
     ],
     "threw": null
    },
@@ -2202,8 +2202,8 @@
    {
     "logs": [
      "log [hooks] Codex session and turn hooks already installed → <root>/moved/codex-work/hooks.json",
-     "log [hooks] recorded Harness's own Codex hooks as reviewed → <root>/moved/codex-work/config.toml",
-     "log [hooks] recorded Harness's own Codex hooks as reviewed → <root>/moved/codex-work/config.toml"
+     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml",
+     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml"
     ],
     "threw": null
    },
@@ -2249,8 +2249,8 @@
    {
     "logs": [
      "log [hooks] Codex session and turn hooks already installed → <root>/moved/codex-work/hooks.json",
-     "log [hooks] recorded Harness's own Codex hooks as reviewed → <root>/moved/codex-work/config.toml",
-     "log [hooks] recorded Harness's own Codex hooks as reviewed → <root>/moved/codex-work/config.toml"
+     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml",
+     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml"
     ],
     "threw": null
    },
@@ -2296,8 +2296,8 @@
    {
     "logs": [
      "log [hooks] Codex session and turn hooks already installed → <root>/moved/codex-work/hooks.json",
-     "log [hooks] recorded Harness's own Codex hooks as reviewed → <root>/moved/codex-work/config.toml",
-     "log [hooks] recorded Harness's own Codex hooks as reviewed → <root>/moved/codex-work/config.toml"
+     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml",
+     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml"
     ],
     "threw": null
    },
@@ -2343,8 +2343,8 @@
    {
     "logs": [
      "log [hooks] Codex session and turn hooks already installed → <root>/moved/codex-work/hooks.json",
-     "log [hooks] recorded Harness's own Codex hooks as reviewed → <root>/moved/codex-work/config.toml",
-     "log [hooks] recorded Harness's own Codex hooks as reviewed → <root>/moved/codex-work/config.toml"
+     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml",
+     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml"
     ],
     "threw": null
    },
@@ -2391,8 +2391,8 @@
     "logs": [
      "log [hooks] installed Codex session and turn hooks → <root>/moved/codex-work/hooks.json",
      "log [hooks] Codex asks to review hooks it has not seen; Harness records its own as reviewed",
-     "log [hooks] recorded Harness's own Codex hooks as reviewed → <root>/moved/codex-work/config.toml",
-     "log [hooks] recorded Harness's own Codex hooks as reviewed → <root>/moved/codex-work/config.toml"
+     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml",
+     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml"
     ],
     "threw": null
    },
@@ -2438,8 +2438,8 @@
    {
     "logs": [
      "log [hooks] Codex session and turn hooks already installed → <root>/moved/codex-work/hooks.json",
-     "log [hooks] recorded Harness's own Codex hooks as reviewed → <root>/moved/codex-work/config.toml",
-     "log [hooks] recorded Harness's own Codex hooks as reviewed → <root>/moved/codex-work/config.toml"
+     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml",
+     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml"
     ],
     "threw": null
    },
@@ -2486,8 +2486,8 @@
     "logs": [
      "log [hooks] installed Codex session and turn hooks → <root>/moved/codex-work/hooks.json",
      "log [hooks] Codex asks to review hooks it has not seen; Harness records its own as reviewed",
-     "log [hooks] recorded Harness's own Codex hooks as reviewed → <root>/moved/codex-work/config.toml",
-     "log [hooks] recorded Harness's own Codex hooks as reviewed → <root>/moved/codex-work/config.toml"
+     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml",
+     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml"
     ],
     "threw": null
    },
@@ -2534,8 +2534,8 @@
     "logs": [
      "log [hooks] installed Codex session and turn hooks → <root>/moved/codex-work/hooks.json",
      "log [hooks] Codex asks to review hooks it has not seen; Harness records its own as reviewed",
-     "log [hooks] recorded Harness's own Codex hooks as reviewed → <root>/moved/codex-work/config.toml",
-     "log [hooks] recorded Harness's own Codex hooks as reviewed → <root>/moved/codex-work/config.toml"
+     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml",
+     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml"
     ],
     "threw": null
    },
@@ -2582,8 +2582,8 @@
     "logs": [
      "log [hooks] installed Codex session and turn hooks → <root>/moved/codex-work/hooks.json",
      "log [hooks] Codex asks to review hooks it has not seen; Harness records its own as reviewed",
-     "log [hooks] recorded Harness's own Codex hooks as reviewed → <root>/moved/codex-work/config.toml",
-     "log [hooks] recorded Harness's own Codex hooks as reviewed → <root>/moved/codex-work/config.toml"
+     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml",
+     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml"
     ],
     "threw": null
    },
@@ -2630,8 +2630,8 @@
     "logs": [
      "log [hooks] installed Codex session and turn hooks → <root>/moved/codex-work/hooks.json",
      "log [hooks] Codex asks to review hooks it has not seen; Harness records its own as reviewed",
-     "log [hooks] recorded Harness's own Codex hooks as reviewed → <root>/moved/codex-work/config.toml",
-     "log [hooks] recorded Harness's own Codex hooks as reviewed → <root>/moved/codex-work/config.toml"
+     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml",
+     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml"
     ],
     "threw": null
    },
@@ -2678,8 +2678,8 @@
     "logs": [
      "log [hooks] installed Codex session and turn hooks → <root>/moved/codex-work/hooks.json",
      "log [hooks] Codex asks to review hooks it has not seen; Harness records its own as reviewed",
-     "log [hooks] recorded Harness's own Codex hooks as reviewed → <root>/moved/codex-work/config.toml",
-     "log [hooks] recorded Harness's own Codex hooks as reviewed → <root>/moved/codex-work/config.toml"
+     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml",
+     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml"
     ],
     "threw": null
    },
@@ -2729,8 +2729,8 @@
    {
     "logs": [
      "log [hooks] Codex session and turn hooks already installed → <root>/moved/codex-work/hooks.json",
-     "log [hooks] recorded Harness's own Codex hooks as reviewed → <root>/moved/codex-work/config.toml",
-     "log [hooks] recorded Harness's own Codex hooks as reviewed → <root>/moved/codex-work/config.toml"
+     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml",
+     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml"
     ],
     "threw": null
    },
@@ -2779,13 +2779,13 @@
   "runs": [
    {
     "logs": [
-     "error [hooks] failed to write Codex hooks.json: HookPreparationHeld"
+     "error [hooks] failed to write Codex hooks.json: the settings file changed before publication"
     ],
     "threw": null
    },
    {
     "logs": [
-     "error [hooks] failed to write Codex hooks.json: HookPreparationHeld"
+     "error [hooks] failed to write Codex hooks.json: the settings file changed before publication"
     ],
     "threw": null
    }
@@ -2805,13 +2805,13 @@
   "runs": [
    {
     "logs": [
-     "error [hooks] failed to write Codex hooks.json: HookPreparationHeld"
+     "error [hooks] failed to write Codex hooks.json: the settings file changed before publication"
     ],
     "threw": null
    },
    {
     "logs": [
-     "error [hooks] failed to write Codex hooks.json: HookPreparationHeld"
+     "error [hooks] failed to write Codex hooks.json: the settings file changed before publication"
     ],
     "threw": null
    }
@@ -2831,13 +2831,13 @@
   "runs": [
    {
     "logs": [
-     "error [hooks] failed to write Codex hooks.json: HookPreparationHeld"
+     "error [hooks] failed to write Codex hooks.json: the settings file is read-only"
     ],
     "threw": null
    },
    {
     "logs": [
-     "error [hooks] failed to write Codex hooks.json: HookPreparationHeld"
+     "error [hooks] failed to write Codex hooks.json: the settings file is read-only"
     ],
     "threw": null
    }
@@ -2859,15 +2859,15 @@
    {
     "logs": [
      "log [hooks] Codex session and turn hooks already installed → <root>/moved/codex-work/hooks.json",
-     "log [hooks] recorded Harness's own Codex hooks as reviewed → <root>/moved/codex-work/config.toml",
-     "warn [hooks] Agent Messages' hook not installed (messages reach its agents once they are idle): HookPreparationHeld"
+     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml",
+     "warn [hooks] Agent Messages' hook not installed in Codex's hooks.json (messages reach its agents once they are idle): the settings file is read-only"
     ],
     "threw": null
    },
    {
     "logs": [
      "log [hooks] Codex session and turn hooks already installed → <root>/moved/codex-work/hooks.json",
-     "warn [hooks] Agent Messages' hook not installed (messages reach its agents once they are idle): HookPreparationHeld"
+     "warn [hooks] Agent Messages' hook not installed in Codex's hooks.json (messages reach its agents once they are idle): the settings file is read-only"
     ],
     "threw": null
    }
@@ -2980,8 +2980,8 @@
     "logs": [
      "log [hooks] installed Codex session and turn hooks → <root>/moved/codex-work/hooks.json",
      "log [hooks] Codex asks to review hooks it has not seen; Harness records its own as reviewed",
-     "log [hooks] recorded Harness's own Codex hooks as reviewed → <root>/moved/codex-work/config.toml",
-     "log [hooks] recorded Harness's own Codex hooks as reviewed → <root>/moved/codex-work/config.toml"
+     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml",
+     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml"
     ],
     "threw": null
    },
@@ -3026,13 +3026,13 @@
   "runs": [
    {
     "logs": [
-     "error [hooks] failed to write Codex hooks.json: HookPreparationHeld"
+     "error [hooks] failed to write Codex hooks.json: the settings file is not a bounded file owned by this account"
     ],
     "threw": null
    },
    {
     "logs": [
-     "error [hooks] failed to write Codex hooks.json: HookPreparationHeld"
+     "error [hooks] failed to write Codex hooks.json: the settings file is not a bounded file owned by this account"
     ],
     "threw": null
    }
@@ -3054,8 +3054,8 @@
     "logs": [
      "log [hooks] installed Codex session and turn hooks → <root>/moved/codex-work/hooks.json",
      "log [hooks] Codex asks to review hooks it has not seen; Harness records its own as reviewed",
-     "log [hooks] recorded Harness's own Codex hooks as reviewed → <root>/moved/codex-work/config.toml",
-     "log [hooks] recorded Harness's own Codex hooks as reviewed → <root>/moved/codex-work/config.toml"
+     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml",
+     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml"
     ],
     "threw": null
    },
@@ -3107,8 +3107,8 @@
     "logs": [
      "log [hooks] installed Codex session and turn hooks → <root>/home/.codex/hooks.json",
      "log [hooks] Codex asks to review hooks it has not seen; Harness records its own as reviewed",
-     "log [hooks] recorded Harness's own Codex hooks as reviewed → <root>/home/.codex/config.toml",
-     "log [hooks] recorded Harness's own Codex hooks as reviewed → <root>/home/.codex/config.toml"
+     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml",
+     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml"
     ],
     "threw": null
    },
@@ -3155,8 +3155,8 @@
     "logs": [
      "log [hooks] installed Codex session and turn hooks → <root>/home/.codex/hooks.json",
      "log [hooks] Codex asks to review hooks it has not seen; Harness records its own as reviewed",
-     "log [hooks] recorded Harness's own Codex hooks as reviewed → <root>/home/.codex/config.toml",
-     "log [hooks] recorded Harness's own Codex hooks as reviewed → <root>/home/.codex/config.toml"
+     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml",
+     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml"
     ],
     "threw": null
    },
@@ -3230,8 +3230,8 @@
     "logs": [
      "log [hooks] installed Codex session and turn hooks → <root>/home/.codex/hooks.json",
      "log [hooks] Codex asks to review hooks it has not seen; Harness records its own as reviewed",
-     "log [hooks] recorded Harness's own Codex hooks as reviewed → <root>/home/.codex/config.toml",
-     "log [hooks] recorded Harness's own Codex hooks as reviewed → <root>/home/.codex/config.toml"
+     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml",
+     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml"
     ],
     "threw": null
    },
@@ -3278,8 +3278,8 @@
     "logs": [
      "log [hooks] installed Codex session and turn hooks → <root>/home/.codex/hooks.json",
      "log [hooks] Codex asks to review hooks it has not seen; Harness records its own as reviewed",
-     "log [hooks] recorded Harness's own Codex hooks as reviewed → <root>/home/.codex/config.toml",
-     "log [hooks] recorded Harness's own Codex hooks as reviewed → <root>/home/.codex/config.toml"
+     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml",
+     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml"
     ],
     "threw": null
    },
@@ -3325,8 +3325,8 @@
    {
     "logs": [
      "log [hooks] Codex session and turn hooks already installed → <root>/home/.codex/hooks.json",
-     "log [hooks] recorded Harness's own Codex hooks as reviewed → <root>/home/.codex/config.toml",
-     "log [hooks] recorded Harness's own Codex hooks as reviewed → <root>/home/.codex/config.toml"
+     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml",
+     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml"
     ],
     "threw": null
    },
@@ -3373,8 +3373,8 @@
     "logs": [
      "log [hooks] installed Codex session and turn hooks → <root>/home/.codex/hooks.json",
      "log [hooks] Codex asks to review hooks it has not seen; Harness records its own as reviewed",
-     "log [hooks] recorded Harness's own Codex hooks as reviewed → <root>/home/.codex/config.toml",
-     "log [hooks] recorded Harness's own Codex hooks as reviewed → <root>/home/.codex/config.toml"
+     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml",
+     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml"
     ],
     "threw": null
    },

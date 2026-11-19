@@ -86,7 +86,7 @@ describe('the notify.mjs a hook line names', () => {
 })
 
 // B4.1 review: a hook line a runner would misread is refused (quoteHookCommand). That refusal is an install that
-// failed, logged with its kind like any other, never a rejected promise the daemon reports with a stack trace.
+// failed, logged with what holds it like any other, never a rejected promise the daemon reports with a stack trace.
 describe('a hook argument the Windows runner refuses', () => {
   it('fails the install for PowerShell (Codex): a typographic quote in the home it names', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'win-hooks-')); dirs.push(dir)
@@ -95,7 +95,7 @@ describe('a hook argument the Windows runner refuses', () => {
     vi.spyOn(console, 'log').mockImplementation(() => {})
     expect(await installHookSettings('codex', codex.settings, 19473, home, {}, 'win32')).toBe(false)
     // One line, no stack (B4.10 review).
-    expect(error.mock.calls).toEqual([['[hooks] Codex hooks are not installed · HookPreparationHeld']])
+    expect(error.mock.calls).toEqual([['[hooks] Codex hooks are not installed · a hook argument holds a double or typographic quote, which PowerShell passes on differently']])
     expect(existsSync(home)).toBe(false)
   })
 
@@ -106,12 +106,12 @@ describe('a hook argument the Windows runner refuses', () => {
     vi.spyOn(console, 'log').mockImplementation(() => {})
     const rule = { ...COPILOT_HOOK_SETTINGS, file: join(copilotHome, 'hooks', 'harness.json') }
     expect(await installNativeHookSettings(rule, 19473, { environment: { HOME: dir, COPILOT_HOME: copilotHome } }, 'win32')).toBe(false)
-    expect(error.mock.calls).toEqual([['[hooks] Copilot hooks are not installed · HookPreparationHeld']])
+    expect(error.mock.calls).toEqual([['[hooks] Copilot hooks are not installed · a hook argument holds a double or typographic quote, which PowerShell passes on differently']])
     expect(existsSync(copilotHome)).toBe(false)
   })
 
-  // Any held preparation is one line on Windows; off Windows the log is what it always was: the failure line and the error's kind.
-  it('is one line on Windows for any held install, and the failure line with its kind off Windows', async () => {
+  // Any held preparation is one line on Windows; off Windows the log is what it always was: the failure line and what holds it.
+  it('is one line on Windows for any held install, and the failure line with what holds it off Windows', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'win-hooks-')); dirs.push(dir)
     const error = vi.spyOn(console, 'error').mockImplementation(() => {})
     vi.spyOn(console, 'log').mockImplementation(() => {})
@@ -122,15 +122,15 @@ describe('a hook argument the Windows runner refuses', () => {
     expect(await installHookSettings('claude', claude.settings, 19473, claudeHome, {}, 'win32')).toBe(false)
     expect(await installNativeHookSettings(rule, 19473, {}, 'win32')).toBe(false)
     expect(error.mock.calls).toEqual([
-      ['[hooks] Claude Code hooks are not installed · HookPreparationHeld'],
-      ['[hooks] Command Code hooks are not installed · HookPreparationHeld'],
+      ['[hooks] Claude Code hooks are not installed · the hook settings do not have the declared object shape'],
+      ['[hooks] Command Code hooks are not installed · the hooks member is not an object'],
     ])
     error.mockClear()
     expect(await installHookSettings('claude', claude.settings, 19473, claudeHome, {}, 'linux')).toBe(false)
     expect(await installNativeHookSettings(rule, 19473, {}, 'linux')).toBe(false)
     expect(error.mock.calls).toEqual([
-      [claude.settings.messages.failed, 'HookPreparationHeld'],
-      [COMMANDCODE_HOOK_SETTINGS.messages.failed, 'HookPreparationHeld'],
+      [claude.settings.messages.failed, 'the hook settings do not have the declared object shape'],
+      [COMMANDCODE_HOOK_SETTINGS.messages.failed, 'the hooks member is not an object'],
     ])
   })
 })
