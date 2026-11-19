@@ -276,6 +276,53 @@ void main() {
     });
   });
 
+  group('order moving the row, while the row scrolls back', () {
+    testWidgets('the agent just talked to moving to the front as the row scrolls back still brings it there',
+        (tester) async {
+      final m = mockupModel();
+      m.agentById('auth-refactor')!.state = AgentState.idle;
+      m.agentById('rate-limiter')!.state = AgentState.idle;
+      await _show(tester, m);
+      m
+        ..page = BarPage.agent
+        ..selectedId = 'docs-sweep'
+        ..changed();
+      await tester.pump();
+      await _rest(tester);
+      m
+        ..page = BarPage.overview
+        ..changed();
+      await tester.pump();
+      // the widths have settled (420 ms) and the row is on its way back to docs-sweep
+      await tester.pump(const Duration(milliseconds: 500));
+      await tester.pump(const Duration(milliseconds: 100));
+      m
+        ..agentById('docs-sweep')!.state = AgentState.working
+        ..changed();
+      await tester.pump();
+      await _rest(tester);
+      expect(_scrolled(tester), closeTo(0, .01));
+    });
+
+    testWidgets('a finger on the row keeps it where the finger takes it', (tester) async {
+      final m = mockupModel();
+      await _show(tester, m);
+      final g = await tester.startGesture(const Offset(1300, 160));
+      await g.moveBy(const Offset(-200, 0));
+      await g.moveBy(const Offset(-200, 0));
+      await tester.pump();
+      final held = _scrolled(tester);
+      expect(held, greaterThan(kCellW / 2));
+      m
+        ..agentById('docs-sweep')!.state = AgentState.asking
+        ..changed();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 200));
+      expect(_scrolled(tester), closeTo(held, .01));
+      await g.up();
+    });
+  });
+
   group('dots', () {
     testWidgets('one per agent in its state\'s colour; the three cells on the glass lit', (tester) async {
       await _show(tester, mockupModel());

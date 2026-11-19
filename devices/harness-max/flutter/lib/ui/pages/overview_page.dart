@@ -50,6 +50,12 @@ class _OverviewPageState extends State<OverviewPage> with SingleTickerProviderSt
   /// The row's agents (ids) as last laid out, to see one move up past the cells before the glass.
   List<String> _order = const [];
 
+  /// Where the row's own scroll (back from an open agent, to its front) is taking it, null when none runs.
+  double? _going;
+
+  /// A finger is on the row, or the fling it gave still runs: the page leaves the row to it.
+  bool _finger = false;
+
   BarModel get model => widget.model;
 
   @override
@@ -128,17 +134,24 @@ class _OverviewPageState extends State<OverviewPage> with SingleTickerProviderSt
 
   /// The row is by need (BarModel.row): an agent that moves up past the cells before the glass (the one just talked to
   /// starting work, one coming to wait on the person) would go out of sight, so the row goes to its front. A row that
-  /// is closing goes there once its widths settle; a finger on the row keeps it.
+  /// is closing goes there once its widths settle, one scrolling back goes there instead; a finger on the row keeps it.
   void _frontIfPassed() {
-    final before = ((_back ?? _pixels) / kCellW).round();
+    if (_finger) return;
+    final before = ((_back ?? _going ?? _pixels) / kCellW).round();
     if (before <= 0) return;
     final now = [for (final a in model.row) a.id];
     if (setEquals(_order.take(before).toSet(), now.take(before).toSet())) return;
     if (_back != null) {
       _back = 0;
-    } else if (_scroll.hasClients && !_scroll.position.isScrollingNotifier.value) {
-      _scroll.animateTo(0, duration: kRowMove, curve: kRowEase);
+    } else {
+      _scrollTo(0);
     }
+  }
+
+  void _scrollTo(double to) {
+    if (!_scroll.hasClients) return;
+    _going = to;
+    _scroll.animateTo(to, duration: kRowMove, curve: kRowEase);
   }
 
   void _follow() {
@@ -152,15 +165,21 @@ class _OverviewPageState extends State<OverviewPage> with SingleTickerProviderSt
     final back = _back;
     if (back == null) return;
     // Scrolling first, so the snapping row the rebuild brings takes over this scroll rather than snapping on its own.
-    if (_scroll.hasClients) _scroll.animateTo(back, duration: kRowMove, curve: kRowEase);
+    _scrollTo(back);
     setState(() => _back = null);
   }
 
-  /// A finger takes the row: the page stops moving it.
-  bool _dragged(ScrollStartNotification n) {
-    if (n.dragDetails == null) return false;
-    _carry = null;
-    if (_back != null) setState(() => _back = null);
+  /// A finger takes the row: the page stops moving it until the row comes to rest.
+  bool _scrolled(ScrollNotification n) {
+    if (n is ScrollEndNotification) {
+      _finger = false;
+      _going = null;
+    } else if (n is ScrollStartNotification && n.dragDetails != null) {
+      _finger = true;
+      _going = null;
+      _carry = null;
+      if (_back != null) setState(() => _back = null);
+    }
     return false;
   }
 
@@ -254,8 +273,8 @@ class _OverviewPageState extends State<OverviewPage> with SingleTickerProviderSt
           ),
       ]),
     );
-    return NotificationListener<ScrollStartNotification>(
-      onNotification: _dragged,
+    return NotificationListener<ScrollNotification>(
+      onNotification: _scrolled,
       child: Stack(fit: StackFit.expand, children: [
         row,
         ListenableBuilder(
