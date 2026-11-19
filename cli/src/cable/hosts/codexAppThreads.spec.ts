@@ -91,17 +91,17 @@ describe('the query', () => {
     expect(result.order).toEqual([uuid(1)])
   })
 
-  it('a missing store, a missing table or a missing column is a failed read', async () => {
+  it('a missing store, a missing table or a missing column is a failed read of its kind', async () => {
     const none = fixture('none')
     mkdirSync(none.home, { recursive: true })
-    expect(await new CodexAppThreads(none.home).read()).toEqual({ ok: false })
+    expect(await new CodexAppThreads(none.home).read()).toEqual({ ok: false, kind: 'ENOENT' })
 
     const renamed = fixture('renamed')
     renamed.threads([thread(1, 10)])
     const writer = renamed.writer()
     writer.exec('ALTER TABLE threads RENAME TO t2')
     writer.close()
-    expect(await new CodexAppThreads(renamed.home).read()).toEqual({ ok: false })
+    expect(await new CodexAppThreads(renamed.home).read()).toEqual({ ok: false, kind: 'ERR_SQLITE_ERROR' })
 
     const old = fixture('old')
     const maker = old.writer()
@@ -109,13 +109,13 @@ describe('the query', () => {
       archived INTEGER NOT NULL DEFAULT 0, updated_at_ms INTEGER)`)
     maker.exec(`INSERT INTO threads (id, source, cwd) VALUES ('${uuid(1)}', 'vscode', '/work/a')`)
     maker.close()
-    expect(await new CodexAppThreads(old.home).read()).toEqual({ ok: false })
+    expect(await new CodexAppThreads(old.home).read()).toEqual({ ok: false, kind: 'ERR_SQLITE_ERROR' })
   })
 
-  it('no SQLite binding is a failed read', async () => {
+  it('no SQLite binding is a failed read: missing', async () => {
     const fx = fixture()
     fx.threads([thread(1, 10)])
-    expect(await new CodexAppThreads(fx.home, { sqlite: () => null }).read()).toEqual({ ok: false })
+    expect(await new CodexAppThreads(fx.home, { sqlite: () => null }).read()).toEqual({ ok: false, kind: 'missing' })
   })
 
   it('a thread\'s time is recency_at_ms, else updated_at_ms, else 0', async () => {
@@ -207,7 +207,7 @@ describe('the JSON file', () => {
     ['appended to', false, (fx) => appendFileSync(stateOf(fx), ' '.repeat(10))],
     ['replaced by a new file', false, (fx) => fx.state(GOOD)],
     ['appended to after a good parse', true, (fx) => appendFileSync(stateOf(fx), ' '.repeat(10))],
-  ])('a JSON file %s during its read is a failed read; once it holds still it is parsed', async (_, parsedFirst, change) => {
+  ])('a JSON file %s during its read is a failed read, changed; once it holds still it is parsed', async (_, parsedFirst, change) => {
     const fx = fixture()
     fx.threads([thread(1, 10)])
     fx.state(GOOD)
@@ -223,17 +223,17 @@ describe('the JSON file', () => {
       expect((await ok(reader)).listed[0]!.inProject).toBe(true)
       fx.state({ ...GOOD, padTo: 200 })
     }
-    expect(await reader.read()).toEqual({ ok: false })
+    expect(await reader.read()).toEqual({ ok: false, kind: 'changed' })
     expect((await ok(reader)).listed[0]!.inProject).toBe(true)
   })
 
-  it('a JSON file that cannot be opened is a failed read, not one with no projects; once it opens it is parsed', async () => {
+  it('a JSON file that cannot be opened is a failed read of its kind, not one with no projects; once it opens it is parsed', async () => {
     const fx = fixture()
     fx.threads([thread(1, 10)])
     fx.state(GOOD)
     chmodSync(stateOf(fx), 0o000)
     const reader = new CodexAppThreads(fx.home)
-    expect(await reader.read()).toEqual({ ok: false })
+    expect(await reader.read()).toEqual({ ok: false, kind: 'EACCES' })
     chmodSync(stateOf(fx), 0o644)
     expect((await ok(reader)).listed[0]!.inProject).toBe(true)
   })
@@ -282,7 +282,7 @@ describe('the store\'s connection', () => {
     const writer = fx.writer()
     writer.exec('ALTER TABLE threads RENAME TO t2')
     expect(existsSync(storeOf(fx) + '-wal')).toBe(true)
-    expect(await new CodexAppThreads(fx.home).read()).toEqual({ ok: false })
+    expect(await new CodexAppThreads(fx.home).read()).toEqual({ ok: false, kind: 'ERR_SQLITE_ERROR' })
     writer.exec('PRAGMA wal_checkpoint(TRUNCATE)')
     writer.close()
     expect(existsSync(storeOf(fx) + '-wal')).toBe(false)
@@ -305,17 +305,17 @@ describe('the store\'s connection', () => {
     writer.exec(`UPDATE threads SET recency_at_ms = 20 WHERE id = '${uuid(1)}'`)
     const reader = new CodexAppThreads(fx.home)
     const started = performance.now()
-    expect(await reader.read()).toEqual({ ok: false })
+    expect(await reader.read()).toEqual({ ok: false, kind: 'ERR_SQLITE_ERROR' })
     expect(performance.now() - started).toBeLessThan(1_000)
     writer.close()
     expect((await ok(reader)).order).toEqual([uuid(1)])
   })
 
-  it('a store that is a FIFO is a failed read and never waits', async () => {
+  it('a store that is a FIFO is a failed read, special, and never waits', async () => {
     const fx = fixture()
     mkdirSync(fx.home, { recursive: true })
     execFileSync('mkfifo', [storeOf(fx)])
-    expect(await new CodexAppThreads(fx.home).read()).toEqual({ ok: false })
+    expect(await new CodexAppThreads(fx.home).read()).toEqual({ ok: false, kind: 'special' })
   })
 })
 

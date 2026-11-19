@@ -7,7 +7,7 @@ import { capsLetters, type HostAgent, type PaneSwitch } from './types.js'
 
 const T = 1_763_000_000_000
 const LOG =
-  /^\[codex-app\] (watch · (on|none)|listed · \d+ threads · \d+ in projects|read · (\d+ ms · \d+ rows · \d+ skipped|failed))$/
+  /^\[codex-app\] (watch · (on|none)|listed · \d+ threads · \d+ in projects|read · (\d+ ms · \d+ rows · \d+ skipped|failed · [A-Za-z][A-Za-z0-9_$]*( [A-Z][A-Z0-9_]+)?))$/
 const pad = (n: number) => String(n).padStart(12, '0')
 /** The n-th thread: a Codex id, a folder and a name of its own, older as n grows. */
 const thread = (n: number, over: Partial<CodexAppThread> = {}): CodexAppThread => ({
@@ -23,7 +23,7 @@ const ok = (listed: CodexAppThread[], over: { order?: CodexAppThread[]; rows?: n
   rows: over.rows ?? (over.order ?? listed).length,
   skipped: over.skipped ?? 0,
 })
-const FAILED: CodexAppRead = { ok: false }
+const FAILED: CodexAppRead = { ok: false, kind: 'ENOENT' }
 /** The rank the sidebar's order gives: each thread's agent at its place. */
 const rankOf = (order: CodexAppThread[]): RingRank => new Map(order.map((one, at) => [agentOf(one), at]))
 /** Lets what the source was answered be taken in. */
@@ -55,6 +55,8 @@ describe("the ChatGPT app's source (docs/plans/2026-11-19-dial-chatgpt-ring-and-
     const watches: Array<{ changed: (file?: string) => void; stopped: boolean }> = []
     const log: string[] = []
     const ranks: Array<RingRank | undefined> = []
+    /** What rank() throws, when set. */
+    const ranking: { error?: Error } = {}
     let changes = 0
     const focus = vi.fn(async (_threadId: string, _agentId: string) => true)
     const canShow = vi.fn((_threadId: string) => true)
@@ -87,7 +89,10 @@ describe("the ChatGPT app's source (docs/plans/2026-11-19-dial-chatgpt-ring-and-
       focus,
       canShow,
       show,
-      rank: (rank) => { ranks.push(rank) },
+      rank: (rank) => {
+        if (ranking.error) throw ranking.error
+        ranks.push(rank)
+      },
       monotonic: () => clock.now,
       log: (line) => {
         log.push(line)
@@ -97,7 +102,7 @@ describe("the ChatGPT app's source (docs/plans/2026-11-19-dial-chatgpt-ring-and-
     const source = new CodexAppSource(deps)
     source.onChange(() => { changes++ })
     return {
-      source, home, answers, watches, log, ranks, focus, canShow, show,
+      source, home, answers, watches, log, ranks, ranking, focus, canShow, show,
       get changes() { return changes },
       /** The reader's calls, in order. */
       calls: () => [...calls],
@@ -261,7 +266,7 @@ describe("the ChatGPT app's source (docs/plans/2026-11-19-dial-chatgpt-ring-and-
   describe('failed reads', () => {
     it('a failed read keeps the last good list and rank, and says read · failed once a run', async () => {
       const [a, b, c] = [thread(1), thread(2), thread(3)]
-      const failed = (s: Setup) => s.log.filter((line) => line === '[codex-app] read · failed')
+      const failed = (s: Setup) => s.log.filter((line) => line.startsWith('[codex-app] read · failed'))
       const s = await started(ok([a, b]))
       await after(s, FAILED)
       // The JSON file the app wrote mid-read: the reader gives it as any other failed read.
@@ -282,7 +287,7 @@ describe("the ChatGPT app's source (docs/plans/2026-11-19-dial-chatgpt-ring-and-
       s.source.stop()
       s.source.start()
       await s.land(FAILED)
-      expect(s.log.filter((line) => line === '[codex-app] read · failed')).toHaveLength(2)
+      expect(s.log.filter((line) => line === '[codex-app] read · failed · ENOENT')).toHaveLength(2)
     })
 
     it('a good read with no projects is taken: its order replaces the last', async () => {
@@ -301,7 +306,15 @@ describe("the ChatGPT app's source (docs/plans/2026-11-19-dial-chatgpt-ring-and-
       expect(s.source.paneNames().size).toBe(0)
       expect(s.ranks).toEqual([])
       expect(s.changes).toBe(0)
-      expect(s.log).toEqual(['[codex-app] watch · on', '[codex-app] read · failed'])
+      expect(s.log).toEqual(['[codex-app] watch · on', '[codex-app] read · failed · ENOENT'])
+    })
+
+    it('a rank that throws is a failed read of its kind, never its words', async () => {
+      const s = setup()
+      s.ranking.error = new TypeError("Cannot read '/work/p1'")
+      s.source.start()
+      await s.land()
+      expect(s.log.at(-1)).toBe('[codex-app] read · failed · TypeError')
     })
 
     it('a listener that throws costs the listeners after it nothing, is no failed read, and throws nothing', async () => {
@@ -313,7 +326,7 @@ describe("the ChatGPT app's source (docs/plans/2026-11-19-dial-chatgpt-ring-and-
       await s.land()
       expect(heard).toBe(1)
       expect(s.changes).toBe(1)
-      expect(s.log).not.toContain('[codex-app] read · failed')
+      expect(s.log.filter((line) => line.startsWith('[codex-app] read · failed'))).toEqual([])
       expect(() => s.source.stop()).not.toThrow()
       expect(heard).toBe(2)
     })
