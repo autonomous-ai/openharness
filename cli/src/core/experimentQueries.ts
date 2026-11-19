@@ -123,9 +123,11 @@ export async function answerExperimentQuery(core: Core, experiments: ReadonlySet
   // This door is bound by composition to the exact authenticated service; factory admission is shared with native creation.
   if (OWNER_QUERIES.has(query)) {
     if (authority?.current?.() !== true || !owners) return { error: 'SERVICE_UNAVAILABLE' }
+    // The link adds routing metadata; exact session-data admission must still reject every other extra field.
+    const { query: _query, requestId: _requestId, ...value } = payload
     switch (query) {
-      case 'session_owner_begin': return await owners.begin(payload as unknown as OwnerBegin)
-      case 'session_owner_append': return await owners.append(payload as unknown as OwnerAppend)
+      case 'session_owner_begin': return await owners.begin(value as unknown as OwnerBegin)
+      case 'session_owner_append': return await owners.append(value as unknown as OwnerAppend)
       case 'session_owner_end': return await owners.end(text(payload.transfer))
       case 'session_owner_cancel': return await owners.cancel(text(payload.transfer))
       case 'session_owner_checkpoint': return await owners.checkpoint(text(payload.factory))
