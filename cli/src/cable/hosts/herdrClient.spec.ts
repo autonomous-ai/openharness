@@ -9,6 +9,7 @@ import {
   createHerdrClient, herdrClientDeps, herdrSocketPath, MAX_LINE_BYTES,
   type HerdrClientDeps, type HerdrEntry, type HerdrSubscriber,
 } from './herdrClient.js'
+import { MAX_TEXT } from './orca.js'
 
 const ENTRIES: HerdrEntry[] = [{ type: 'pane.agent_detected' }, { type: 'pane.closed' }, { type: 'pane.exited' }]
 
@@ -385,13 +386,13 @@ describe.skipIf(process.platform === 'win32')('the herdr client (docs/specs/2026
     expect((await server.got('agent.prompt', 1)).request).toMatchObject({ params: { target: 'w1:p1', text: 'fix it rm -rf / [2J' } })
   })
 
-  it('an empty text, one blank once its control characters are spaces, one over 2000 characters, a pane id or a kind not in its form: failed, bad_request, and nothing connects', async () => {
+  it('an empty text, one blank once its control characters are spaces, one over MAX_TEXT characters, a pane id or a kind not in its form: failed, bad_request, and nothing connects', async () => {
     server.agents = [agent('w1:p1', 'claude', 'idle')]
     const herdr = client()
     for (const [pane, kind, text] of [
       ['w1:p1', 'claude', ''],
       ['w1:p1', 'claude', '\n\t'],
-      ['w1:p1', 'claude', 'x'.repeat(2001)],
+      ['w1:p1', 'claude', 'x'.repeat(MAX_TEXT + 1)],
       ['w1', 'claude', 'go'],
       ['--help', 'claude', 'go'],
       ['w1:p1; rm -rf /', 'claude', 'go'],
@@ -400,7 +401,12 @@ describe.skipIf(process.platform === 'win32')('the herdr client (docs/specs/2026
       expect(await herdr.prompt(pane, kind, text), `${pane} ${kind} ${text.length}`).toEqual({ outcome: 'failed', fault: 'bad_request' })
     }
     expect(server.connections).toBe(0)
-    expect(await herdr.prompt('w1:p1', 'claude', 'x'.repeat(2000))).toEqual({ outcome: 'sent' })
+  })
+
+  it('a text of 20,000 characters is sent whole', async () => {
+    server.agents = [agent('w1:p1', 'claude', 'idle')]
+    expect(await client().prompt('w1:p1', 'claude', 'x'.repeat(20_000))).toEqual({ outcome: 'sent' })
+    expect((await server.got('agent.prompt', 1)).request).toMatchObject({ params: { target: 'w1:p1', text: 'x'.repeat(20_000) } })
   })
 
   it('socketStamp is none without a socket of this user\'s, and another once a server starts again at the same path', async () => {

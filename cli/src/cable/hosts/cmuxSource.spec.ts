@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import { CMUX_AUTOMATION_OFF, type CmuxPrompt, type CmuxSession, type CmuxSessions } from './cmuxCli.js'
 import { CmuxSource, type CmuxSourceDeps } from './cmuxSource.js'
+import { MAX_TEXT } from './orca.js'
 import type { HostAgent, PaneSwitch } from './types.js'
 
 /** The wall clock the test starts at. */
@@ -509,7 +510,7 @@ describe('the cmux source (docs/plans/2026-11-17-dial-cmux-design.md)', () => {
         record({ surface: S3, pid: 103, lifecycle: 'running' }),
       ])
       const [idle, waiting, working] = s.source.list()
-      expect(await s.source.send(idle, 'x'.repeat(2001))).toEqual({ ok: false, reason: 'Too long. Say it shorter.' })
+      expect(await s.source.send(idle, 'x'.repeat(MAX_TEXT + 1))).toEqual({ ok: false, reason: 'Too long. Say it shorter.' })
       expect(await s.source.send({ ...idle, id: 'gone', name: 'ghost' }, 'hi')).toEqual({ ok: false, reason: 'ghost did not answer.' })
       expect(await s.source.send(waiting, 'hi')).toEqual({ ok: false, reason: 'api is waiting for your answer in cmux.' })
       expect(await s.source.send(working, 'hi')).toEqual({ ok: false, reason: 'api is busy. Say it when it is done.' })
@@ -536,6 +537,16 @@ describe('the cmux source (docs/plans/2026-11-17-dial-cmux-design.md)', () => {
       await started(s, [record({ word: 'hermes-agent', kind: 'hermes' })])
       await s.source.send(s.source.list()[0], 'run the tests')
       expect(s.prompt.mock.calls).toEqual([[`${W}/${S1}`, 'hermes', 'run the tests']])
+    })
+
+    // Ten minutes of fast speech is about 13,000 characters, and a carried passage rides with it.
+    it('an idle agent takes a text of 10,000 or 20,000 characters whole', async () => {
+      const s = setup()
+      await started(s, [record()])
+      for (const text of ['x'.repeat(10_000), 'x'.repeat(20_000)]) {
+        expect(await s.source.send(s.source.list()[0], text)).toEqual({ ok: true })
+        expect(s.prompt).toHaveBeenLastCalledWith(`${W}/${S1}`, 'claude', text)
+      }
     })
 
     it('focus, hasPane and showPane hand the pane and the id on, and paneAt tells that pane; an unknown id is false, false, failed and none', async () => {

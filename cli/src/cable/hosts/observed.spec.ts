@@ -12,7 +12,7 @@ import type { HerdrPrompt } from './herdrClient.js'
 import { type Delivery, Inbox } from './inbox.js'
 import { askedLine, countWord, observedAgentId, type ObservedActions, ObservedSource, type ObservedDeps, type PromptSource } from './observed.js'
 import type { OpenTarget } from './open.js'
-import { createOrcaAdapter, type OrcaDeps } from './orca.js'
+import { createOrcaAdapter, MAX_TEXT, type OrcaDeps } from './orca.js'
 import { createTabsAdapter, type TabApp } from './tabs.js'
 import { createTmuxAdapter } from './tmux.js'
 import type { HostAgent, PaneSwitch, TypeResult } from './types.js'
@@ -1877,14 +1877,14 @@ describe('ObservedSource actions', () => {
     expect(countWord({ refused: orca })).toBe('refused (orca)')
   })
 
-  it('a text over 2000 characters is refused before any route', async () => {
+  it('a text over MAX_TEXT characters is refused before any route', async () => {
     const { actions, ready } = fakeActions()
     const { src, ev } = setup({ actions })
     ready.add('s1')
     // Waiting too: the length is what the person can fix by saying it again.
     src.ingest(ev('turn-start', withHandle))
     src.ingest(ev('needs-input', withHandle))
-    expect(await src.send(src.list()[0], 'a'.repeat(2001))).toEqual({ ok: false, reason: 'Too long. Say it shorter.' })
+    expect(await src.send(src.list()[0], 'a'.repeat(MAX_TEXT + 1))).toEqual({ ok: false, reason: 'Too long. Say it shorter.' })
     expect(actions.toMod).not.toHaveBeenCalled()
     expect(actions.orcaSend).not.toHaveBeenCalled()
   })
@@ -1960,7 +1960,7 @@ describe('ObservedSource actions', () => {
     await src.send(agent('orca'), 'x')
     await src.send(agent('working'), 'x')
     await src.send(agent('asking'), 'x')
-    await src.send(agent('none'), 'x'.repeat(2001))
+    await src.send(agent('none'), 'x'.repeat(MAX_TEXT + 1))
     await src.send(agent('none'), 'x')
     expect(counted(actions.count)).toEqual(['mod', 'orca', 'busy', 'waiting', 'too-long', 'no-answer'])
   })
@@ -2522,10 +2522,32 @@ describe('ObservedSource and codex queue', () => {
     expect(actions.codexQueue.send.mock.calls).toEqual([[THREAD, 'next', false]])
   })
 
-  it('a text over 2000 characters is refused before the queue', async () => {
+  it('a text over MAX_TEXT characters is refused before the queue', async () => {
     const { src, actions } = given(cx)
-    expect(await src.send(src.list()[0], 'a'.repeat(2001))).toEqual({ ok: false, reason: 'Too long. Say it shorter.' })
+    expect(await src.send(src.list()[0], 'a'.repeat(MAX_TEXT + 1))).toEqual({ ok: false, reason: 'Too long. Say it shorter.' })
     expect(actions.codexQueue.send).not.toHaveBeenCalled()
+  })
+
+  // Ten minutes of fast speech is about 13,000 characters, and a carried passage rides with it.
+  it('a text of 10,000 or 20,000 characters reaches the mod, Codex\'s queue and an Orca terminal whole', async () => {
+    for (const text of ['x'.repeat(10_000), 'x'.repeat(20_000)]) {
+      const mod = fakeActions()
+      const toMod = setup({ actions: mod.actions })
+      mod.ready.add('s1')
+      toMod.src.ingest(toMod.ev('turn-stop', { hostHints: inOrca.hostHints }))
+      expect(await toMod.src.send(toMod.src.list()[0], text)).toEqual({ ok: true })
+      expect(mod.actions.toMod.mock.calls).toEqual([['s1', text]])
+
+      const orca = fakeActions()
+      const toOrca = setup({ actions: orca.actions })
+      toOrca.src.ingest(toOrca.ev('turn-stop', { hostHints: inOrca.hostHints }))
+      expect(await toOrca.src.send(toOrca.src.list()[0], text)).toEqual({ ok: true })
+      expect(orca.actions.orcaSend.mock.calls).toEqual([[HANDLE, text]])
+
+      const { src, actions } = given(cx)
+      expect(await src.send(src.list()[0], text)).toEqual({ ok: true })
+      expect(actions.codexQueue.send.mock.calls).toEqual([[THREAD, text, false]])
+    }
   })
 })
 
@@ -4207,7 +4229,7 @@ describe('ObservedSource and what a turn\'s start was', () => {
       ['missed', ['turn-stop'], {}, 'next', 'no-answer'],
       [undefined, ['turn-start'], withHandle.hostHints, 'next', 'busy'],
       [undefined, ['turn-start', 'needs-input'], withHandle.hostHints, 'next', 'waiting'],
-      [undefined, ['turn-stop'], withHandle.hostHints, 'x'.repeat(2001), 'too-long'],
+      [undefined, ['turn-stop'], withHandle.hostHints, 'x'.repeat(MAX_TEXT + 1), 'too-long'],
     ] as const) {
       const { actions, ready } = fakeActions({ toMod: vi.fn(async (): Promise<Delivery> => mod ?? 'taken') })
       const { src, ev } = setup({ actions })
