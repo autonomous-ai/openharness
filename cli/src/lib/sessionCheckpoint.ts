@@ -46,8 +46,9 @@ async function pagedRows(database: string, table: string, where: string, session
 }
 
 /** Native SQLite files can have live WAL writers. Export this conversation's rows through a
- * read-only connection; never copy an incomplete .db or replace an engine's shared store. */
-async function databaseHistory(s: RegisteredSession): Promise<Record<string, unknown>> {
+ * read-only connection; never copy an incomplete .db or replace an engine's shared store. Null for an OpenClaw key its
+ * Gateway never wrote: there is nothing to save, and OpenClaw keeps its own store (OPENCLAW_STORE_KEPT). */
+async function databaseHistory(s: RegisteredSession): Promise<Record<string, unknown> | null> {
   let database: string
   /** Table and filter; a conversation table is paged, the others hold one row. */
   let selections: [string, string, Paged?][]
@@ -68,6 +69,7 @@ async function databaseHistory(s: RegisteredSession): Promise<Record<string, unk
     case 'openclaw': {
       const found = await openclawSessionDb(s.sessionId, { pid: s.processIdentity?.pid ?? 0, stateDir: s.openclawStateDir })
       if (!found) throw new SessionCheckpointError('Could not read the saved conversation. The session has not been closed.')
+      if (!existsSync(found)) return null
       database = found
       // Every window the key has had, with each row as the reader reads it. A compressed row is kept as hex: JSON has
       // no bytes. It is sized as twice its blob: sizing the hex itself would read every blob.
@@ -93,6 +95,7 @@ async function databaseHistory(s: RegisteredSession): Promise<Record<string, unk
   for (const [table, where, paged] of selections) {
     const rows = paged ? await pagedRows(database, table, where, s.sessionId, paged)
       : await sqliteReadAll(database, `SELECT * FROM ${table} WHERE ${where};`, [s.sessionId]).then((read) => read.ok ? read.rows : null)
+    if (s.engine === 'openclaw' && table === selections[0][0] && rows?.length === 0) return null
     if (!rows || (table === selections[0][0] && rows.length !== 1)) {
       throw new SessionCheckpointError('Could not read the saved conversation. The session has not been closed.')
     }
@@ -227,6 +230,7 @@ export class SessionCheckpointStore {
         if (reuseCheckpoint) { authority!.verify(); saveScreen(); return }
       } else {
         const history = await databaseHistory(s)
+        if (!history) return
         const handle = await open(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600)
         // not a state file: a new O_EXCL temporary, renamed into place; the plan's follow-up moves it to the helper
         try { await handle.writeFile(JSON.stringify({ version: 1, sessionId: s.sessionId, engine: s.engine, ...history })) }
