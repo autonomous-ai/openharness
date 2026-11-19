@@ -8,24 +8,26 @@ import { windowsDialWatch } from './windowsSerial.js'
  * has the same switch: harness-serial's watch says whether this daemon's session
  * is the console session (WTSGetActiveConsoleSessionId). Linux asks logind which
  * user holds seat0's active session through `loginctl`, its public reader: the
- * seat file under /run/systemd/seats says not to parse it. While a dial is
- * plugged in the fleet asks every 2 s, so the answer is the last reading,
- * taken at most every 8 s. */
+ * seat file under /run/systemd/seats says not to parse it. The fleet asks every
+ * 2 s, so the answer is the last reading, taken at most every 8 s and only
+ * while a dial is on USB (`dialHere`): an empty desk starts no process. */
 export function isUsbConsoleUser({
+  dialHere = true,
   platform = process.platform,
   uid = process.getuid?.(),
   consoleUid = () => statSync('/dev/console').uid,
   windowsConsole = () => windowsDialWatch().console(),
   linuxSeat = realLinuxSeat,
 }: {
+  dialHere?: boolean
   platform?: NodeJS.Platform
   uid?: number
   consoleUid?: () => number
   windowsConsole?: () => boolean
-  linuxSeat?: () => boolean
+  linuxSeat?: (dialHere: boolean) => boolean
 } = {}): boolean {
   if (platform === 'win32') return windowsConsole()
-  if (platform === 'linux') return linuxSeat()
+  if (platform === 'linux') return linuxSeat(dialHere)
   if (platform !== 'darwin') return true
   try { return uid !== undefined && uid !== 0 && uid === consoleUid() }
   catch { return false }
@@ -43,14 +45,15 @@ const SEAT_EVERY_MS = 8_000
 const SEAT_TIMEOUT_MS = 10_000
 const SESSION_ID = /^[A-Za-z0-9_-]{1,64}$/
 
-/** Answers the last reading of seat0's owner, true before the first, and starts
- * a reading without waiting for it so the fleet's synchronous check stays so. */
-export function linuxSeatOwner(deps: SeatDeps): () => boolean {
+/** Answers the last reading of seat0's owner, true before the first, and, while
+ * a dial is on USB, starts a reading without waiting for it so the fleet's
+ * synchronous check stays so. */
+export function linuxSeatOwner(deps: SeatDeps): (dialHere: boolean) => boolean {
   let owner = true
   let reading = false
   let began = -Infinity
-  return () => {
-    if (!reading && deps.now() - began >= SEAT_EVERY_MS) {
+  return (dialHere) => {
+    if (dialHere && !reading && deps.now() - began >= SEAT_EVERY_MS) {
       reading = true
       began = deps.now()
       void readSeatOwner(deps).then((answer) => {
@@ -87,9 +90,9 @@ function runFile(file: string, args: string[], timeoutMs: number): Promise<{ cod
   })
 }
 
-let linuxSeat: (() => boolean) | undefined
+let linuxSeat: ((dialHere: boolean) => boolean) | undefined
 
-function realLinuxSeat(): boolean {
+function realLinuxSeat(dialHere: boolean): boolean {
   linuxSeat ??= linuxSeatOwner({ run: runFile, now: Date.now, uid: process.getuid?.() })
-  return linuxSeat()
+  return linuxSeat(dialHere)
 }
