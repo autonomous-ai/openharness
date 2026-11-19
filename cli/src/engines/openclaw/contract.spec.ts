@@ -35,6 +35,8 @@ const SHOWN: Record<string, { key: string | null; url: string | null }> = {
   'screen-main-heartbeat.txt': { key: 'agent:main:main', url: 'ws://127.0.0.1:18789' },
   'screen-model-switch.txt': { key: 'agent:main:model-switch', url: 'ws://127.0.0.1:18789' },
   'screen-multi-tool.txt': { key: 'agent:main:multi-tool', url: 'ws://127.0.0.1:18789' },
+  'screen-narrow-history-refused.txt': { key: 'agent:main:plain', url: 'ws://127.0.0.1:18789' },
+  'screen-narrow-starting-up.txt': { key: 'agent:main:plain', url: 'ws://127.0.0.1:18789' },
   'screen-no-gateway-attached.txt': { key: 'agent:main:plain', url: 'ws://127.0.0.1:18789' },
   'screen-no-gateway-bare.txt': { key: 'agent:main:rewind', url: 'ws://127.0.0.1:18789' },
   'screen-no-gateway-reconnected.txt': { key: 'agent:main:plain', url: 'ws://127.0.0.1:18789' },
@@ -209,6 +211,9 @@ describe('the OpenClaw contract', () => {
     ['startup-failed', { state: null, status: 'startup failed | idle', box: '', running: false, gatewayLost: false }],
     ['answer-history-words', { state: 'ready', status: 'connected | idle', box: '', running: false, gatewayLost: false }],
     ['plain', { state: 'ready', status: 'connected | idle', box: '', running: false, gatewayLost: false }],
+    // 40 columns: the title, the status line, the system lines, the footer and the box each wrap.
+    ['narrow-starting-up', { state: 'starting', status: '⠙ starting up • 0s | subscribing to session events', box: '', running: false, gatewayLost: false }],
+    ['narrow-history-refused', { state: 'no-history', status: 'connected | idle', box: 'Say hello from scenario proxy-histdrop 1795078028664', historyFailures: 1 }],
   ])('screen-%s reads as the TUI drew it', (name, reading) => {
     expect(readOpenclawScreen(fixture(`screen-${name}.txt`))).toMatchObject(reading)
   })
@@ -223,6 +228,22 @@ describe('the OpenClaw contract', () => {
     expect(lost('disconnected | idle')).toBe(true)
     // First on an idle line: the activity a refused message left says nothing of the connection.
     expect(lost('connected | disconnected')).toBe(false)
+  })
+
+  it('reads a status line the TUI wrapped in a narrow pane whole, and never a part of it as one', () => {
+    const narrow = fixture('screen-narrow-starting-up.txt')
+    const drawn = (status: string) => readOpenclawScreen(narrow.replace('\n\n ⠙ starting up • 0s | subscribing to\n session events', status))
+    // A busy line is drawn under a blank line of its own (pi-tui's Loader): its last part alone reads as no status.
+    expect(drawn('\n\n ⠋ finishing context • 1m 5s | gateway\n reconnected'))
+      .toMatchObject({ state: 'busy', status: '⠋ finishing context • 1m 5s | gateway reconnected', gatewayLost: false })
+    // Any other is drawn right under the chat.
+    expect(drawn('\n gateway disconnected: connect\n ECONNREFUSED 127.0.0.1:18789 | idle'))
+      .toMatchObject({ state: 'no-gateway', status: 'gateway disconnected: connect ECONNREFUSED 127.0.0.1:18789 | idle', gatewayLost: true })
+    expect(drawn('\n\n hello there\n connected | idle')).toMatchObject({ state: 'ready', status: 'connected | idle' })
+    // A refusal wrapped under 54 columns is still one.
+    const refused = fixture('screen-narrow-history-refused.txt').replace(' history failed: gateway request\n timeout for chat.history\n\n', '')
+    expect(refused).toContain(' session history not ready — wait or\n retry /session\n')
+    expect(readOpenclawScreen(refused)).toMatchObject({ state: 'no-history', historyFailures: 0 })
   })
 
   it('a spinner line with a timer is a run, in minutes too, and starting up stays starting', () => {

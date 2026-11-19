@@ -60,6 +60,11 @@ back in its input box with the cursor at its end. The box shows 7 lines (30% of 
 reads `↑ 1 more`. `connected | disconnected` is the status a connection leaves after such a refusal (the TUI resets only
 a `starting up` activity when it connects).
 
+`screen-narrow-starting-up.txt` and `screen-narrow-history-refused.txt` are `screen-starting-up.txt` and
+`screen-history-refused.txt` drawn the same way at 40 columns, where the title, the status line, the system lines, the
+footer and the box each wrap. The busy status line has the blank line pi-tui's `Loader` draws above it, which the
+120-column compositions leave out.
+
 `screen-gateway-starting.txt` and `screen-starting-up-disconnected.txt` are `screen-starting-up.txt` with the status
 lines a cold Gateway drew on a slow Linux machine (arm64 Debian 12, 0.6 CPU, OpenClaw 2026.11.2) for 85–110 s:
 `<spinner> starting up • Ns | gateway starting` (the Gateway's answer while it starts, `resolveGatewayDisconnectState`
