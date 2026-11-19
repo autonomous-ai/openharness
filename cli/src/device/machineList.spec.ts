@@ -6,9 +6,23 @@
 import { existsSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { MachineListCache, sameComputer, withStaleMarker } from './machineList.js'
+
+// Pass-through until a test fills the disk: a write then stops part way, as ENOSPC leaves it.
+const disk = vi.hoisted(() => ({ full: false }))
+vi.mock('node:fs', async original => {
+  const actual = await original<typeof import('node:fs')>()
+  return { ...actual,
+    writeFileSync: (...args: Parameters<typeof actual.writeFileSync>) => {
+      if (!disk.full) return actual.writeFileSync(...args)
+      actual.writeFileSync(args[0], String(args[1]).slice(0, 8))
+      throw Object.assign(new Error('ENOSPC: fixture'), { code: 'ENOSPC' })
+    },
+  }
+})
+afterEach(() => { disk.full = false; vi.restoreAllMocks() })
 
 const DIR = (): string => mkdtempSync(join(tmpdir(), 'machines-'))
 
@@ -352,5 +366,33 @@ describe('MachineListCache disk writes', () => {
 
     cache.adopt({ machines: [row({ machineId: 'm2' })] })   // a real change still lands
     expect(statSync(path).mtimeMs).not.toBe(first)
+  })
+})
+
+describe('MachineListCache file that cannot be read', () => {
+  it('a torn file is set aside, not written over', () => {
+    const dir = DIR()
+    const path = join(dir, 'machines.json')
+    writeFileSync(path, '{"machines":[{"machineId":"m1"')
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const cache = new MachineListCache(ok([]), () => 'aabbccdd', () => {}, dir, () => OWNER)
+    expect(cache.find('m1')).toBeUndefined()
+
+    cache.adopt({ machines: [row()] })
+    expect(readFileSync(`${path}.unreadable`, 'utf8')).toBe('{"machines":[{"machineId":"m1"')
+    expect(JSON.parse(readFileSync(path, 'utf8')).machines).toHaveLength(1)
+  })
+
+  it('a save that fails part way leaves the old file', () => {
+    const dir = DIR()
+    const path = join(dir, 'machines.json')
+    const cache = new MachineListCache(ok([]), () => 'aabbccdd', () => {}, dir, () => OWNER)
+    cache.adopt({ machines: [row()] })
+    const before = readFileSync(path, 'utf8')
+
+    disk.full = true
+    cache.adopt({ machines: [row(), row({ machineId: 'm2' })] })   // best effort: it does not throw
+    disk.full = false
+    expect(readFileSync(path, 'utf8')).toBe(before)
   })
 })

@@ -1,8 +1,24 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'fs'
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import type * as CodexProfilesModule from './codexProfiles.js'
+
+// Pass-through, recording what the shared writer does on disk: the renames and the opens.
+const disk = vi.hoisted(() => ({ events: [] as string[] }))
+vi.mock('node:fs', async original => {
+  const actual = await original<typeof import('node:fs')>()
+  return { ...actual,
+    renameSync: (...args: Parameters<typeof actual.renameSync>) => {
+      disk.events.push(`rename ${String(args[1])}`)
+      return actual.renameSync(...args)
+    },
+    openSync: (...args: Parameters<typeof actual.openSync>) => {
+      disk.events.push(`open ${String(args[0])}`)
+      return actual.openSync(...args)
+    },
+  }
+})
 
 const host = vi.hoisted(() => ({ win32: false }))
 vi.mock('../engines/kit/windowsFiles.js', async original => {
@@ -85,6 +101,23 @@ describe('codexProfiles', () => {
     expect(linkCodexProfile(folder)).toEqual({ path: folder, label: '.codex-linked' })
     const persisted = JSON.parse(readFileSync(join(dataDir, 'codex-profiles.json'), 'utf8'))
     expect(persisted).toEqual([folder])
+  })
+
+  // Windows cannot flush a folder (syncStateDirectory skips it) and has no mode bits to refuse.
+  it.skipIf(process.platform === 'win32')('the list is written by the shared helper', async () => {
+    const { linkCodexProfile } = await loadModule()
+    const file = join(dataDir, 'codex-profiles.json')
+    const folder = join(home, '.codex-linked')
+    mkdirSync(folder)
+    disk.events = []
+    linkCodexProfile(folder)
+    const renamed = disk.events.indexOf(`rename ${file}`)
+    expect(renamed).toBeGreaterThanOrEqual(0)
+    expect(disk.events.indexOf(`open ${dataDir}`, renamed)).toBeGreaterThan(renamed)
+
+    chmodSync(file, 0o660)
+    expect(() => linkCodexProfile(join(home, '.codex-linked'))).toThrow('state file is group/world writable')
+    expect(statSync(file).mode & 0o777).toBe(0o660)
   })
 
   it('linkCodexProfile refuses a folder that does not exist', async () => {
