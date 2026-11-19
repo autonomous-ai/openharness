@@ -11,7 +11,8 @@ import { RUN_TIMEOUT_MS } from './orca.js'
 export interface KwinRaiseDeps extends RaiseRun {
   /** `<runtime>/harness`, private to this login. */
   dir: string
-  /** Writes the file 0600, making `dir` 0700 first when it is not there. */
+  /** Writes the file 0600, making `dir` first when it is not there; throws when `dir` or its parent is not this
+   *  account's own folder, 0700. */
   write(path: string, text: string): void
   /** Never throws: a file already gone is no error. */
   remove(path: string): void

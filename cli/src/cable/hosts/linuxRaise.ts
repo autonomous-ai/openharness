@@ -4,8 +4,8 @@
  * that owns one (its terminal's or its editor's), else its app's by class. Which desktop answers is found once at
  * start, and again after a raise fails: the person may have logged out and into another desktop since.
  */
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { rmSync, writeFileSync } from 'node:fs'
+import { privateFolder, runtimeShortRoot } from '../../lib/localSocket.js'
 import { windowClasses } from './frontApp.js'
 import { desktopLine, findLinuxDesktop, linuxDesktopDeps, type LinuxDesktop } from './linuxDesktop.js'
 import { createGnomeRaise } from './linuxRaiseGnome.js'
@@ -88,13 +88,18 @@ export function systemLinuxRaise(apps: OrcaDeps, log: (line: string) => void): L
         case 'gnome': return createGnomeRaise(apps, found.bus)
         case 'x11': return createX11Raise(apps, found.display, found.xauthority)
         case 'kwin': {
-          // In this login's runtime dir, which only it can enter: KWin reads the script from there as the same account.
-          const dir = join(found.runtimeDir, 'harness')
+          // KWin runs whatever script is at the path it is handed, and a script can call any bus method as this login:
+          // only a runtime dir this account owns, 0700, keeps another account from putting one there first
+          // (XDG_RUNTIME_DIR=/tmp is a world-writable one). None such, no raise.
+          const dir = runtimeShortRoot({ XDG_RUNTIME_DIR: found.runtimeDir })
+          if (dir === null) return { raise: async () => false }
           return createKwinRaise({
             ...apps,
             dir,
             write: (path, text) => {
-              mkdirSync(dir, { recursive: true, mode: 0o700 })
+              // Checked again at each write, as the daemon's own short socket folders are: a link or another account's
+              // folder throws, and the raise answers false with nothing written.
+              privateFolder(dir)
               // not a state file: a script KWin reads once, removed when its raise ends
               writeFileSync(path, text, { mode: 0o600 })
             },
