@@ -18,11 +18,13 @@ pub enum Root {
     State,
 }
 
-/// What the app builds through the helper: the installed CLI (data) and its node runtime (state).
+/// What the app builds through the helper: the installed CLI (data), its node runtime (state) and, on Windows, the
+/// `harness` command's folder (data).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Entry {
     Cli,
     Runtime,
+    Bin,
 }
 
 impl Entry {
@@ -30,12 +32,13 @@ impl Entry {
         match self {
             Entry::Cli => "cli",
             Entry::Runtime => "runtime",
+            Entry::Bin => "bin",
         }
     }
 
     pub fn root(self) -> Root {
         match self {
-            Entry::Cli => Root::Data,
+            Entry::Cli | Entry::Bin => Root::Data,
             Entry::Runtime => Root::State,
         }
     }

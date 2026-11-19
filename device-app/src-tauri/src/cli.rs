@@ -74,6 +74,7 @@ struct Lookup {
 
 /// The desktop app's order: `over`, then the managed runtime with its `cli.js`, then `~/.local/bin/harness`, then a
 /// `harness` in one of PATH's absolute folders. A Finder-launched app has launchd's bare PATH, hence the first two.
+/// Windows has its own layout (`installed_windows`).
 pub fn find_cli(home: &Path, path_var: Option<&OsStr>, over: Option<&Path>) -> Option<Invocation> {
     find_cli_with(home, path_var, over, |name| env::var_os(name))
 }
@@ -82,11 +83,12 @@ pub fn find_cli(home: &Path, path_var: Option<&OsStr>, over: Option<&Path>) -> O
 fn find_cli_with(home: &Path, path_var: Option<&OsStr>, over: Option<&Path>, xdg: Env) -> Option<Invocation> {
     let (program, prefix) = match over {
         Some(over) => (over.to_path_buf(), Vec::new()),
-        None => installed_with(
-            home,
-            path_var,
-            &Look { linux: cfg!(target_os = "linux"), env: &xdg, exists: &Path::exists, file: &Path::is_file },
-        )?,
+        None => {
+            let installed = if cfg!(windows) { installed_windows } else { installed_with };
+            let look =
+                Look { linux: cfg!(target_os = "linux"), env: &xdg, exists: &Path::exists, file: &Path::is_file };
+            installed(home, path_var, &look)?
+        }
     };
     let locale =
         ["LC_ALL", "LC_CTYPE", "LANG"].into_iter().find_map(|name| env::var_os(name).filter(|value| !value.is_empty()));
@@ -110,11 +112,15 @@ fn installed_with(home: &Path, path_var: Option<&OsStr>, look: &Look) -> Option<
     if launcher.is_file() {
         return Some((launcher, Vec::new()));
     }
-    let on_path = env::split_paths(path_var?)
+    Some((on_path(path_var?, "harness")?, Vec::new()))
+}
+
+/// The first file `name` in one of PATH's absolute folders.
+fn on_path(path_var: &OsStr, name: &str) -> Option<PathBuf> {
+    env::split_paths(path_var)
         .filter(|folder| folder.is_absolute())
-        .map(|folder| folder.join("harness"))
-        .find(|file| file.is_file())?;
-    Some((on_path, Vec::new()))
+        .map(|folder| folder.join(name))
+        .find(|file| file.is_file())
 }
 
 /// The node `current-node` names, when it is there and lies under the runtime folder.
@@ -124,6 +130,53 @@ fn managed_node(runtime: &Path) -> Option<PathBuf> {
     (inside && node.is_file()).then_some(node)
 }
 
+/// The CLI install.ps1 lays down: its managed runtime with its `cli.js`, then `bin/harness.exe`, then a `harness.exe`
+/// in one of PATH's absolute folders. The runtime is read by `pty/src/launcher.rs` `resolve`'s rules, so the app takes
+/// exactly the installs `harness.exe` takes.
+fn installed_windows(home: &Path, path_var: Option<&OsStr>, look: &Look) -> Option<(PathBuf, Vec<OsString>)> {
+    let roots = harness_roots_with(home, look);
+    if let Some(managed) = windows_managed(&roots.path(Entry::Runtime), &roots.path(Entry::Cli)) {
+        return Some(managed);
+    }
+    let bin = roots.path(Entry::Bin).join("harness.exe");
+    if bin.is_file() {
+        return Some((bin, Vec::new()));
+    }
+    Some((on_path(path_var?, "harness.exe")?, Vec::new()))
+}
+
+/// The node.exe `runtime/current-node` names, which must resolve inside `runtime`, and the `cli.js` of the one version
+/// folder `cli/current` names, which must resolve inside `cli`: a link or a `..` that leads out is no install.
+fn windows_managed(runtime: &Path, cli: &Path) -> Option<(PathBuf, Vec<OsString>)> {
+    let node = PathBuf::from(pointer(&runtime.join("current-node"))?);
+    if !(node.is_absolute() && node.is_file() && resolves_inside(runtime, &node)) {
+        return None;
+    }
+    let version = pointer(&cli.join("current")).filter(|version| one_folder(version))?;
+    let cli_js = cli.join(version).join("cli.js");
+    (cli_js.is_file() && resolves_inside(cli, &cli_js)).then(|| (node, vec![cli_js.into_os_string()]))
+}
+
+/// A pointer file's first line, as Node reads it: a leading byte order mark (Notepad's, Windows PowerShell 5.1's)
+/// dropped, then trimmed.
+fn pointer(file: &Path) -> Option<String> {
+    let text = fs::read_to_string(file).ok()?;
+    Some(text.strip_prefix('\u{feff}').unwrap_or(&text).lines().next()?.trim().to_string())
+}
+
+/// Whether a version names one folder: never empty, `.`, any `..`, a separator, or a `:` (a drive or an NTFS stream).
+fn one_folder(version: &str) -> bool {
+    !version.is_empty() && version != "." && !version.contains("..") && !version.contains(['/', '\\', ':', '\0'])
+}
+
+/// Whether `file` resolves inside `folder`, both resolved, so a `..`, a junction or a link that leads out is caught.
+fn resolves_inside(folder: &Path, file: &Path) -> bool {
+    match (fs::canonicalize(folder), fs::canonicalize(file)) {
+        (Ok(folder), Ok(file)) => file != folder && file.starts_with(folder),
+        _ => false,
+    }
+}
+
 /// The fake CLI's path, for tests: a release build never reads it.
 pub fn cli_override(debug: bool, var: Option<OsString>) -> Option<PathBuf> {
     var.filter(|var| debug && !var.is_empty()).map(PathBuf::from)
@@ -131,9 +184,28 @@ pub fn cli_override(debug: bool, var: Option<OsString>) -> Option<PathBuf> {
 
 /// What the child's environment changes: `harness` on its PATH names the launcher, and its output is UTF-8.
 pub fn child_env(home: &Path, path_var: Option<&OsStr>, locale: Option<&OsStr>) -> Vec<(OsString, OsString)> {
-    let mut path = home.join(".local").join("bin").into_os_string();
+    child_env_for(cfg!(windows), home, path_var, locale)
+}
+
+/// `child_env` on Windows or on unix. Windows' PATH puts install.ps1's `bin` first and joins with `;`, and no locale
+/// sets its programs' output encoding, so it gets no `LC_ALL`.
+fn child_env_for(
+    windows: bool,
+    home: &Path,
+    path_var: Option<&OsStr>,
+    locale: Option<&OsStr>,
+) -> Vec<(OsString, OsString)> {
+    let (first, separator) = if windows {
+        // Off Linux the roots are `<home>/.harness`, read from nothing the look holds.
+        let nothing = |_: &Path| false;
+        let look = Look { linux: false, env: &|_| None, exists: &nothing, file: &nothing };
+        (harness_roots_with(home, &look).path(Entry::Bin), ";")
+    } else {
+        (home.join(".local").join("bin"), ":")
+    };
+    let mut path = first.into_os_string();
     if let Some(rest) = path_var.filter(|rest| !rest.is_empty()) {
-        path.push(":");
+        path.push(separator);
         path.push(rest);
     }
     let mut env = vec![("PATH".into(), path)];
@@ -141,7 +213,7 @@ pub fn child_env(home: &Path, path_var: Option<&OsStr>, locale: Option<&OsStr>) 
         let locale = locale.to_string_lossy().to_lowercase();
         locale.contains("utf-8") || locale.contains("utf8")
     });
-    if !utf8 {
+    if !windows && !utf8 {
         env.push(("LC_ALL".into(), "C.UTF-8".into()));
     }
     env
