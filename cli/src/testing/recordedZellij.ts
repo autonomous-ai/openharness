@@ -345,6 +345,36 @@ export const RECORDED_ZELLIJ = {
     code: 1,
     stderr: 'Session \'gone\' not found. The following sessions are active:\ns1\n',
   },
+  /** `action list-clients`, which takes no flag but `--help`, recorded later the same day in a disposable
+   *  `rust:1-bookworm` container (Debian 12.15, arm64, Podman on macOS) with the same release binary, its sha256 checked,
+   *  and the same config, user `u` (uid 1000): `s1` and `s2` started with `attach --create-background`, then
+   *  `zellij attach s1` run under `script -qfc` (a pseudo-terminal) once, and once more. It prints a header, then a row
+   *  per client, padded to the header's columns: the client's id, the pane it shows, that pane's command (`N/A` for a
+   *  shell at its prompt). It names no client's process or tty. `none` is `s1` before the first attach, `one` after it,
+   *  `two` after the second; `s2`, with no client, printed `none` throughout. A session that is not running: exit 1,
+   *  stdout empty, `missingSession`'s stderr. `ps` is `ps -axo pid=,ppid=,comm=` with one client, piped to `cat -A` (the
+   *  `cat` row) and its `$` line ends taken off: each server (29 is `zellij --server /tmp/zellij-1000/contract_version_1/s1`, 62 is `s2`'s) has init
+   *  for its parent, as it leaves the client that started it, and is the parent of its pane's shell (50, 83); the
+   *  client (103, `zellij attach s1`) is under the pseudo-terminal that ran it (101), in the recording's shell (21). */
+  listClients: {
+    args: ['zellij', '--session', 's1', 'action', 'list-clients'],
+    code: 0,
+    none: 'CLIENT_ID ZELLIJ_PANE_ID RUNNING_COMMAND\n',
+    one: 'CLIENT_ID ZELLIJ_PANE_ID RUNNING_COMMAND\n1         terminal_0     N/A            \n',
+    two: 'CLIENT_ID ZELLIJ_PANE_ID RUNNING_COMMAND\n1         terminal_0     N/A            \n2         terminal_0     N/A            \n',
+    ps:
+      '      1       0 bash\n' +
+      '     20       1 su\n' +
+      '     21      20 bash\n' +
+      '     29       1 zellij\n' +
+      '     50      29 bash\n' +
+      '     62       1 zellij\n' +
+      '     83      62 bash\n' +
+      '    101      21 script\n' +
+      '    103     101 zellij\n' +
+      '    134      21 ps\n' +
+      '    135      21 cat\n',
+  },
   /** `zellij --session s1 subscribe --format json --pane-id 0 --pane-id 1` while `focus-pane-id` moved focus to
    *  pane 1 and back to pane 0 (2 s apart), then `echo hi` was typed into pane 1. `lines` is what it printed, in order:
    *  one initial `pane_update` per pane, nothing for either focus move, two updates for the typing; the last line came
