@@ -5,20 +5,25 @@
  * - `status` follows Orca and the records: `setup`, `on`, `off` once removed, and `absent` for an Orca that is not running;
  * - `enable` installs it, passing Orca's fingerprint only for the pinned access, and records it; more access is held;
  * - `disable` marks it removed and uninstalls it, and a later `enable` brings it back;
- * - `connect` is gone.
+ * - `connect` is gone;
+ * - the devices' process of a daemon on the same build sets it up at a dial's attach, with no command, and keeps a
+ *   `disable`.
  *
- * It is the only test that reads the `__ORCA_PLUGIN__` a build inlined. No daemon is started: the harness gives each
+ * It is the only test that reads the `__ORCA_PLUGIN__` a build inlined. The command's cases start no daemon; the
+ * devices' case starts one on the same bundle, as a daemon from the sources carries no plugin. The harness gives each
  * test a throwaway home and data folder, and its launcher, first on PATH and the Orca app's own (HARNESS_ORCA_APP_BIN),
  * is the fake, so neither PATH nor /Applications reaches the real Orca every session here runs inside.
  */
 import { execFileSync, spawn } from 'node:child_process'
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs'
+import { existsSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, relative } from 'node:path'
-import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, describe, expect, it, onTestFailed } from 'vitest'
 import { harnessPath, thisComputer } from '../src/config/harnessHome.js'
+import { readSetup } from '../src/devices/dialSkillFiles.js'
 import { fakeOrcaCli, type FakeOrcaCli } from '../src/testing/fakeOrcaCli.js'
-import { CLI_ROOT, IsolatedDaemon } from './harness/daemon.js'
+import { CLI_ROOT, IsolatedDaemon, until } from './harness/daemon.js'
+import { Desk } from './harness/desk.js'
 
 const { extensionVersion } = await import('../scripts/lib/vscodeExtensionBundle.mjs') as { extensionVersion: (version: string) => string }
 
@@ -151,5 +156,69 @@ describe('harness device orca, from the built CLI', () => {
       expect(err).toContain('harness device orca enable')
     }
     expect(orca.calls()).toEqual([])
+  })
+})
+
+describe('the devices process sets the plugin up', () => {
+  let daemon: IsolatedDaemon | undefined
+  let desk: Desk | undefined
+  afterEach(async () => {
+    await desk?.close()
+    await daemon?.close()
+    daemon = undefined
+    desk = undefined
+  })
+
+  it("a dial's attach installs and approves the plugin with no command; after a disable a replug asks Orca nothing; enable brings it back", async () => {
+    // A daemon on the file's bundle, its dials on a desk, as devicesProcess.e2e.ts starts one.
+    const d = await IsolatedDaemon.create({ scriptPath: bundle, env: {
+      CABLE_DISABLE: 'false',
+      HARNESSD_SERVICE_INITIAL_BACKOFF_MS: '200',
+      HARNESSD_SERVICE_MAX_BACKOFF_MS: '1000',
+    } })
+    daemon = d
+    const file = join(d.root, 'dials.json')
+    d.env.HARNESSD_TEST_DIAL_PORT = file
+    writeFileSync(file, '[]')
+    const theDesk = new Desk(file)
+    desk = theDesk
+    // The fake written through the daemon's `bin/orca` link into its launcher, which the devices find as Orca's own.
+    const orca = fakeOrcaCli(join(d.root, 'orca-cli'), join(dirname(d.env.CLAUDE_PATH!), 'orca'))
+    const harness = (...words: string[]) => new Promise<{ code: number | null; out: string; err: string }>((resolve) => {
+      const child = spawn(process.execPath, [bundle, ...words], { cwd: d.root, env: d.env, stdio: ['ignore', 'pipe', 'pipe'] })
+      let out = ''
+      let err = ''
+      child.stdout.on('data', (chunk: Buffer) => { out += chunk.toString() })
+      child.stderr.on('data', (chunk: Buffer) => { err += chunk.toString() })
+      child.on('close', (code) => resolve({ code, out, err }))
+    })
+    const version = extensionVersion((await harness('--version')).out.trim())
+    orca.holds({ key: KEY, version, fingerprint: FP, grants: PINNED })
+    const folder = harnessPath('orca-plugin', d.env.HOME!, process.platform, thisComputer(d.env))
+    onTestFailed(() => { console.log(`---- daemon log\n${d.log().split('\n').slice(-200).join('\n')}`) })
+    await d.start()
+
+    await theDesk.plug('E2E-A', 'e2:e0:00:00:00:0a')
+    await until('the plugin set up', () => readSetup(d.dataDir).orca === version || null, 60_000, 200)
+    const calls = orca.calls()
+    const install = calls.indexOf(`plugin install ${folder} --json`)
+    expect(install).toBeGreaterThanOrEqual(0)
+    expect(calls.indexOf(`plugin install ${folder} --approve ${FP} --json`)).toBeGreaterThan(install)
+    expect(orca.entry()).toMatchObject({ status: 'running', version, source: { kind: 'local-path', reference: realpathSync(folder) } })
+    await until('the set up counted', () => d.log().includes('[device] orca plugin · orca · set up') || null, 15_000, 100)
+    expect(d.log().split('\n').filter((line) => [FP, folder, KEY, WORKSPACE_READ].some((secret) => line.includes(secret)))).toEqual([])
+
+    expect(await harness('device', 'orca', 'disable')).toEqual({ code: 0, out: '{"orca":"off"}\n', err: '' })
+    const before = orca.calls().length
+    await theDesk.unplug('E2E-A')
+    const dial = await theDesk.plug('E2E-A', 'e2:e0:00:00:00:0a')
+    const since = dial.messages.length
+    dial.send({ t: 'agents.list' })
+    await dial.next((m) => m.t === 'agents.end', 45_000, 'agents.end', since)
+    // A removed pass returns in the attach's own moment, before the list is answered.
+    expect(orca.calls().slice(before).filter((call) => call === 'status --json' || /^plugin (install|update|enable) /.test(call))).toEqual([])
+
+    expect(await harness('device', 'orca', 'enable')).toEqual({ code: 0, out: '{"orca":"on"}\n', err: '' })
+    expect(orca.entry()).toMatchObject({ status: 'running', version })
   })
 })
