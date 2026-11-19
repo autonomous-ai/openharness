@@ -174,8 +174,11 @@ static void attention(const char *id, max_attn_t kind, uint32_t from)
     max_m.attn = kind;
     max_m.attn_from = from;
 }
+// Each render is the page drawn afresh: App Detail's row at rest where the model sends it (its motion is
+// test_max_motion.c's).
 static void render_at(uint32_t now)
 {
+    max_m.row.drawn = false;
     ht_scene_clear(&S, ht_rgb(HT_THEME_CANVAS));
     max_ui_render(&S, now);
 }
@@ -396,7 +399,16 @@ static void test_agent_page(void)
     render_at(T0);
     CHECK(HITS_ARE(MAX_HIT_APPS, MAX_HIT_AGENT_X, MAX_HIT_BODY, MAX_HIT_BELL));
     CHECK(max_m.cell_hits == 2 && !strcmp(max_m.cell_id[0], "b") && !strcmp(max_m.cell_id[1], "d"));
-    CHECK(runs_of(POD_VEIL) == 2 && max_m.cell_box[0].w == max_m.cell_box[1].w && max_m.cell_box[0].w < DX(200));
+    CHECK(max_m.cell_box[0].w == max_m.cell_box[1].w && max_m.cell_box[0].w < DX(200) && !runs_of(POD_VEIL));
+    for (int i = 0; i < 2; i++) {   // each sliver one layer, dimmed and blurred off the glass, exactly its box
+        int layers = 0;
+        for (int k = 0; k < S.count; k++) {
+            const ht_rect_t b = ht_run_bounds(&S.runs[k]);
+            layers += S.runs[k].pro_kind == K_IMAGE && b.x == max_m.cell_box[i].x && b.w == max_m.cell_box[i].w &&
+                      b.y == 0 && b.h == HT_HEIGHT;
+        }
+        CHECK(layers == 1);
+    }
     const max_box_t panel = box_of(find_hit(MAX_HIT_BODY, 0));
     CHECK(panel.x == max_m.cell_box[0].x + max_m.cell_box[0].w && max_m.cell_box[1].x == panel.x + panel.w);
     const max_hit_t *x = find_hit(MAX_HIT_AGENT_X, 0);

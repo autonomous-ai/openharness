@@ -1,10 +1,10 @@
 // The finger on the pages (max_ui.h): a tap acts on what the last render drew (its hits first, then App Detail's
-// cells or the slivers beside the open agent), a sideways swipe scrolls the row a cell at a time or moves the form's
-// choice. A tap on a card's button or the form queues its message in the outbox. While a recording is up the glass is
-// its send: X cancels it, any other tap sends it (a sliver too: it opens nothing). Only the Dial's tap counts then
-// (MAX_TAP_*): a hold or a slide is the dead zone, and the mic stays open. A touch that opens the mic lets go before
-// MAX_HOLD_MS, and touches that begin within MAX_GUARD_MS of a voice action are part of it. The clock's side of a
-// recording is max_ui_talk_due.
+// cells or the slivers beside the open agent), a sideways drag on the row moves it with the finger (max_ui_row.c), a
+// sideways swipe moves the form's choice. A tap on a card's button or the form queues its message in the outbox.
+// While a recording is up the glass is its send: X cancels it, any other tap sends it (a sliver too: it opens
+// nothing). Only the Dial's tap counts then (MAX_TAP_*): a hold or a slide is the dead zone, and the mic stays open. A
+// touch that opens the mic lets go before MAX_HOLD_MS, and touches that begin within MAX_GUARD_MS of a voice action are
+// part of it. The clock's side of a recording is max_ui_talk_due.
 #include <stdio.h>
 #include <string.h>
 
@@ -347,34 +347,20 @@ static max_act_t tap(int x, int y, uint32_t now_ms)
         if (on_hit(&max_m.hits[i], x, y)) h = &max_m.hits[i];
     if (max_m.talk == MAX_TALK_RECORDING) return recording_tap(h, now_ms);
     if (h) return press(h, now_ms);
-    for (int i = 0; i < max_m.cell_hits && i < MAX_CELLS; i++)
+    for (int i = 0; i < max_m.cell_hits && i < MAX_ROW_HITS; i++)
         if (inside(max_m.cell_box[i], x, y)) return open_cell(max_m.cell_id[i], now_ms);
     return nothing();
 }
 
-// A sideways swipe of dx px: to the left shows what comes next. The row moves a cell for each cell's width the finger
-// went, at least one, and comes to rest on a cell's edge; the open agent's row rests.
+// A sideways swipe of dx px over the form: to the left is its next choice. (The row follows the finger itself.)
 static max_act_t swipe(int dx, uint32_t now_ms)
 {
     const int step = dx < 0 ? 1 : -1;
     if (max_m.talk == MAX_TALK_RECORDING) return nothing();   // a slide is the dead zone: the mic stays open
-    if (max_form_open()) {   // over the page: its choice moves, unless a spoken name is on its way
-        if (max_m.talk == MAX_TALK_IDLE && max_m.form.page.revision == max_m.form_revision &&
-            max_form_command(MAX_FORM_MOVE, step, now_ms))
-            max_m.dirty = true;
-        return nothing();
-    }
-    if (max_m.view == MAX_VIEW_OVERVIEW) {
-        const int w = max_m.cell_hits ? max_m.cell_box[0].w : 0, cells = w ? (iabs(dx) + w / 2) / w : 1;
-        const int last = max_row_last();
-        int first = max_m.row_first + step * (cells > 1 ? cells : 1);
-        if (first > last) first = last;
-        if (first < 0) first = 0;
-        if (first != max_m.row_first) {
-            max_m.row_first = first;
-            max_m.dirty = true;
-        }
-    }
+    // Over the page: its choice moves, unless a spoken name is on its way.
+    if (max_form_open() && max_m.talk == MAX_TALK_IDLE && max_m.form.page.revision == max_m.form_revision &&
+        max_form_command(MAX_FORM_MOVE, step, now_ms))
+        max_m.dirty = true;
     return nothing();
 }
 
@@ -396,24 +382,32 @@ max_act_t max_ui_touch(bool down, int x, int y, uint32_t now_ms)
             max_m.down_at = now_ms;
             max_m.far2 = 0;
             max_m.held = max_m.guarding && !reached(max_m.guard_until, now_ms);
+            max_row_down(x, now_ms);
         } else {
             reach(x, y);
             if (iabs(x - max_m.down_x) > MAX_TAP_SLOP || iabs(y - max_m.down_y) > MAX_TAP_SLOP)
                 max_m.moved = true;   // out and back is still a drag
+            max_row_move(x, now_ms);
         }
         return nothing();
     }
     max_m.idle_from = now_ms;   // a person at the bar: Ambient waits for them
     if (!max_m.down || max_m.update_pct >= 0) {   // no contact, or nothing to touch while the image is written
         max_m.down = false;
+        max_row_cancel();
         return nothing();
     }
     reach(x, y);
     max_m.down = false;
+    if (max_row_up(x, now_ms)) return nothing();   // it dragged the row: the row settles, nothing else happens
     const int dx = x - max_m.down_x, dy = y - max_m.down_y;
     if (!max_m.moved && iabs(dx) <= MAX_TAP_SLOP && iabs(dy) <= MAX_TAP_SLOP) return tap(max_m.down_x, max_m.down_y, now_ms);
     if (iabs(dx) >= MAX_SWIPE_PX && iabs(dx) * 2 > iabs(dy) * 3) return swipe(dx, now_ms);
     return nothing();
 }
 
-void max_ui_touch_cancel(void) { max_m.down = false; }
+void max_ui_touch_cancel(void)
+{
+    max_m.down = false;
+    max_row_cancel();
+}

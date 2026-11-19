@@ -14,7 +14,7 @@ enum {
     PAD_L = DX(26), PAD_T = DY(20), PAD_R = DX(22), PAD_B = DY(16),
     BAND_H = DY(96), BAND_Y = HT_HEIGHT - PAD_B - BAND_H, BAND_R = DX(20), BAND_PAD = DX(22),
     TOP_H = BAND_Y - DY(12) - PAD_T, PET_W = DX(190), PET_H = DY(150), WORDS_GAP = DX(22), X_ROOM = DX(64),
-    NAME_H = DY(38), NAME_GAP = DX(14), TASK_GAP = DY(10), GLOW_H = DY(160),
+    NAME_H = DY(38), NAME_GAP = DX(14), TASK_GAP = DY(10), GLOW_H = PANEL_GLOW_H,
     X_HIT_W = DX(92), X_HIT_H = DY(88), X_D = DY(52), X_ICON = DY(28), X_CY = DY(44), X_RIGHT = DX(46),
     LIVE_W = DX(140), LIVE_DOT = DX(12), LISTEN_CY = BAND_Y + DY(30), CLOCK_CY = BAND_Y + DY(62),
     WAVE_CY = BAND_Y + DY(32), WAVE_HALF = DY(21), SAY_CY = BAND_Y + DY(71),
@@ -134,17 +134,29 @@ static void words(ht_scene_t *s, const max_agent_t *a, int x, int r)
 
 void max_draw_agent(ht_scene_t *s, const max_agent_t *a, int x, int w, uint32_t now_ms)
 {
-    const bool talking = max_m.talk != MAX_TALK_IDLE && !strcmp(max_m.talk_id, a->id);
     const unsigned pct = glow_pct(a), ink = max_chip_ink(a);
     ht_pro_rect(s, x, 0, w - 1, HT_HEIGHT, 0, C(PANEL));
     if (pct) pod_grad_aa_dither(s, x, 0, w - 1, GLOW_H, 0, C(max_mix(ink, PANEL, pct)), C(PANEL));
     ht_pro_rect(s, x, 0, w, RAIL_H, 0, C(max_rail_ink(a)));
     ht_pro_rect(s, x + w - 1, 0, 1, HT_HEIGHT, 0, C(LINE));
-    // The pet, centred down the space over the band, on the glow's colour at its middle.
+    max_agent_body(s, a, x, w, 256, PANEL, GLOW_H, now_ms);
+}
+
+void max_agent_body(ht_scene_t *s, const max_agent_t *a, int x, int w, unsigned keep, unsigned under, int glow_h,
+                    uint32_t now_ms)
+{
+    const bool talking = max_m.talk != MAX_TALK_IDLE && !strcmp(max_m.talk_id, a->id);
+    const unsigned pct = glow_pct(a), ink = max_chip_ink(a);
+    // The pet, centred down the space over the band, on the glow's colour at its middle; coming in, veiled toward the
+    // glow under it.
     const int pet_cx = x + PAD_L + PET_W / 2, mid = PAD_T + TOP_H / 2;
-    const unsigned ground = mid < GLOW_H ? max_mix(ink, PANEL, pct * (unsigned)(GLOW_H - mid) / GLOW_H) : PANEL;
+    const unsigned ground =
+        mid < glow_h ? max_mix(ink, under, pct * (unsigned)(glow_h - mid) / (unsigned)glow_h) : under;
     const pod_scene_t scene = max_pet_scene(a, true);
+    const int from = s->count;
     max_pet(s, a->engine, scene, pet_cx, mid + PET_H / 2, PET_W / 2, PET_H, ground, now_ms, false);
+    if (keep < 256) max_fade_runs(s, from, max_mix(ink, under, pct), under, glow_h, keep);
+    max_tint(under, keep);
     max_motion(now_ms, max_pet_next_ms(a->engine, scene, now_ms));
     words(s, a, x + PAD_L + PET_W + WORDS_GAP, x + w - PAD_R - X_ROOM);
     band(s, a, x, w, talking, now_ms);
@@ -156,4 +168,5 @@ void max_draw_agent(ht_scene_t *s, const max_agent_t *a, int x, int w, uint32_t 
     // The rest of the panel: a tap sends what is being said, or opens the mic.
     if (max_m.talk == MAX_TALK_RECORDING ? talking : max_m.talk == MAX_TALK_IDLE && max_takes_voice(a))
         max_hit(x, 0, w, HT_HEIGHT, MAX_HIT_BODY, 0);
+    max_tint(0, 256);
 }

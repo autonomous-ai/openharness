@@ -5,7 +5,11 @@
 #include "pod/pod_pet.h"
 #include "pro_canvas.h"
 
-#define C(rgb) ht_rgb(rgb)
+#define C(rgb) ht_rgb(max_tinted(rgb))
+// What fades by its colours (a word, a chip, a panel coming in): every colour C() takes is `keep` of 256 its own, the
+// rest `toward`, the colour under it, until max_tint(0, 256).
+void max_tint(unsigned toward, unsigned keep);
+unsigned max_tinted(unsigned rgb);
 // The dial's tokens, as Diego's mockup draws them (the spec's Tokens), and the few shades the mockup adds.
 enum {
     GROUND = 0x000000, FG = 0xEAEAF0, INK = 0xEFE7DE, RECAP = 0xD6D6D2, DIM = 0xADA6AD, REST = 0x9A9AA6,
@@ -24,6 +28,13 @@ enum {
 // scales to the demo bar's 415. The text keeps its size at both heights.
 #define DX(px) ((px) * 1297 / 1000)
 #define DY(px) MAX_Y((px) * 3 / 2)
+// App Detail's row between the app column and the bell (V3 kRowW 1172): three cells to the glass while no agent is
+// open; open, the agent (kOpenW 900) between two slivers (kSliverW 136), which fill the row as the cells did.
+enum {
+    APP_W = DX(196), BELL_W = DX(112), ROW_X = APP_W, ROW_W = HT_WIDTH - APP_W - BELL_W, CELL_W = ROW_W / MAX_CELLS,
+    SLIVER_W = DX(136), OPEN_W = ROW_W - 2 * SLIVER_W,
+    PANEL_GLOW_H = DY(160),   // the open agent's glow, from its top
+};
 enum {
     ROW_BYTES = HT_TEXT_BYTES,
     MAX_ROWS = 8,               // the most rows max_wrap lays out
@@ -120,12 +131,34 @@ uint32_t max_pet_next_ms(const char *engine, pod_scene_t scene, uint32_t now_ms)
 // Something drawn moves on by the clock alone in `ms`: the render task wakes for it (max_motion_ms).
 void max_motion(uint32_t now_ms, uint32_t ms);
 
+// ---- App Detail's row off the glass (max_ui_layer.c) ----
+// Paints one agent of the row from the glass's x.
+typedef void (*max_paint_t)(ht_scene_t *s, int x, const void *arg);
+// A frame of the row begins: the layers painted for the last one are done with.
+void max_layer_frame(void);
+// The glass's [l, r) of an agent x..x + w, painted where it lies and dimmed and blurred `dim` (MAX_ONE whole) of the
+// way, this frame: an agent between looks.
+void max_layer_fresh(ht_scene_t *s, int x, int w, int l, int r, int dim, max_paint_t paint, const void *arg);
+// The glass's [l, r) of a settled sliver from x (SLIVER_W wide), dimmed and blurred whole: painted from x 0 and kept
+// while what it paints stays the same.
+void max_layer_kept(ht_scene_t *s, int x, int l, int r, max_paint_t paint, const void *arg);
+// How many layers were rasterised so far (a test's count of what was kept).
+unsigned max_layer_painted(void);
+
 // ---- the pages, each over the whole glass ----
 // App Detail: the app column, the row of agents and the bell; an agent open across the row while the agent page is up.
 void max_draw_overview(ht_scene_t *s, uint32_t now_ms);                          // max_ui_overview.c
 void max_draw_ambient(ht_scene_t *s);                                            // max_ui_overview.c
 // The open agent in the row, x..x + w over the glass's height (max_ui_agent.c).
 void max_draw_agent(ht_scene_t *s, const max_agent_t *a, int x, int w, uint32_t now_ms);
+// Its pet, words, band and X without its ground, glow and rail, over `under` and its glow glow_h px down: as it fades
+// in or out, `keep` of 256 there (its words by their colours, its pet veiled toward that glow), its hits recorded all
+// the same.
+void max_agent_body(ht_scene_t *s, const max_agent_t *a, int x, int w, unsigned keep, unsigned under, int glow_h,
+                    uint32_t now_ms);
+// The runs from `from` on (a pet), veiled 256 - keep of 256 over their box toward what lies under them: `top` at the
+// glass's top to `bottom` gh px down, `bottom` below.
+void max_fade_runs(ht_scene_t *s, int from, unsigned top, unsigned bottom, int gh, unsigned keep);
 void max_draw_attention(ht_scene_t *s, const max_agent_t *a, uint32_t now_ms);   // max_ui_card.c
 void max_draw_inbox(ht_scene_t *s, uint32_t now_ms);                             // max_ui_lists.c
 void max_draw_apps(ht_scene_t *s);                                               // max_ui_lists.c

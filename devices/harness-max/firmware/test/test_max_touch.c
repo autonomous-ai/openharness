@@ -3,12 +3,19 @@
 // recording is up the glass is its send: X cancels, any other tap sends (a sliver too); only the Dial's tap counts
 // then, and a voice action's guard takes the touches right after it.
 #include "max_test.h"
+#include "max_ui_motion.h"
 
 static const char *const ABCDE[] = {"a", "b", "c", "d", "e"};
 // More agents than two pages of cells hold.
 static const char *const XS[] = {"x0", "x1", "x2", "x3", "x4", "x5", "x6", "x7", "x8", "x9", "x10", "x11"};
 _Static_assert(2 * MAX_CELLS + 1 <= sizeof XS / sizeof XS[0], "XS holds more than two pages of cells");
 
+static bool near_px(int got, int want)
+{
+    if (got >= want - 1 && got <= want + 1) return true;
+    fprintf(stderr, "  got %d px, want %d\n", got, want);
+    return false;
+}
 // The finger's clock: each touch a second after the last, past the guard a voice action leaves (MAX_GUARD_MS).
 static uint32_t T;
 static max_act_t tap_at(int x, int y, uint32_t now)
@@ -130,7 +137,7 @@ static void test_cell_tap(void)
     // While the last words are still being sent the page opens with the mic closed.
     max_show(MAX_VIEW_OVERVIEW);
     overview_drawn();
-    swipe_left();   // c a b d: d is the row's last
+    max_m.row_first = max_row_last();   // scrolled to its end: c a b d, d the row's last
     overview_drawn();
     max_ui_talk(MAX_TALK_SENDING, 0);
     act = tap_box(cell_of("d"));
@@ -163,38 +170,149 @@ static void test_drag_is_not_a_tap(void)
     CHECK(max_ui_touch(false, x, y, 200).kind == MAX_ACT_NONE);
 }
 
-// A sideways swipe scrolls App Detail's row a cell for each cell's width the finger went (at least one), within the
-// row there is; an open agent's row rests.
-static void test_swipe_scrolls_the_row(void)
+// ---- the row under the finger (max_ui_row.c), on the row as a render lays it out ----
+
+static int row_px(uint32_t now)
 {
-    linked(XS, 2 * MAX_CELLS + 1);   // seven: the row's last cells from 4
-    overview_drawn();
-    CHECK(swipe_left().kind == MAX_ACT_NONE && max_m.row_first == 1 && max_m.dirty);
-    overview_drawn();
-    swipe_left();
-    CHECK(max_m.row_first == 2);
-    overview_drawn();
-    drag(HT_WIDTH - 100, HT_HEIGHT / 2, -(2 * 280 + 141), 0);   // past two and a half cells: three
-    CHECK(max_m.row_first == 4);
-    max_m.dirty = false;
-    overview_drawn();
-    swipe_left();   // the row's end: no further
-    CHECK(max_m.row_first == 4 && !max_m.dirty);
-    swipe_right();
-    CHECK(max_m.row_first == 3);
-    // Too short, or more down than across: the row stays.
-    drag(HT_WIDTH / 2, 100, -(MAX_SWIPE_PX - 1), 0);
-    drag(HT_WIDTH / 2, 60, -120, 300);
-    CHECK(max_m.row_first == 3);
-    // An agent open: the row rests.
-    agent_page("x5");
-    CHECK(swipe_left().kind == MAX_ACT_NONE && swipe_right().kind == MAX_ACT_NONE);
-    CHECK(max_m.view == MAX_VIEW_AGENT && !strcmp(max_ui_selected(), "x5"));
-    // Three agents fill the glass: a swipe does nothing.
-    linked(ABCDE, 3);
-    overview_drawn();
-    swipe_left();
-    CHECK(max_m.row_first == 0 && !max_m.dirty);
+    static max_place_t at[MAX_AGENTS];
+    int px;
+    max_row_layout(now, at, &px);
+    return px;
+}
+// App Detail with n agents at rest, drawn.
+static void row_drawn(int n)
+{
+    linked(XS, n);
+    max_show(MAX_VIEW_OVERVIEW);
+    T += 1000;
+    render(T);
+}
+// A drag from (x, y) at T + 1000: past the slop at 20 ms, then to dx by 40 ms; let go `rest` ms later. The row takes
+// the finger from where it passed the slop (Flutter's DragStartBehavior.start): the row moves dx + 30.
+static max_act_t drag_row(int x, int y, int dx, uint32_t rest)
+{
+    T += 1000;
+    max_ui_touch(true, x, y, T);
+    max_ui_touch(true, x + (dx < 0 ? -30 : 30), y, T + 20);
+    max_ui_touch(true, x + dx, y, T + 40);
+    return max_ui_touch(false, x + dx, y, T + 40 + rest);
+}
+
+// The row follows the finger px by px from where it passes the slop, within the row there is; a contact within the
+// slop moves nothing. Every move asks for a frame.
+static void test_drag_follows_the_finger(void)
+{
+    row_drawn(2 * MAX_CELLS + 1);   // seven: the row's last cells from 4
+    const int x = ROW_X + 700, y = HT_HEIGHT / 2;
+    T += 1000;
+    max_ui_touch(true, x, y, T);
+    max_ui_touch(true, x - MAX_TAP_SLOP, y, T + 20);
+    CHECK(!max_m.row.drag && row_px(T + 20) == 0 && !max_m.dirty);
+    max_ui_touch(true, x - 100, y, T + 40);
+    CHECK(max_m.row.drag && row_px(T + 40) == 0 && max_m.dirty);
+    max_ui_touch(true, x - 400, y, T + 60);
+    CHECK(row_px(T + 60) == 300);
+    render(T + 60);   // the first cell cut by the row's left end, and its hit with it
+    CHECK(!strcmp(max_m.cell_id[0], "x0") && max_m.cell_box[0].x == ROW_X && max_m.cell_box[0].w == CELL_W - 300);
+    CHECK(max_m.cell_hits == 4 && max_m.cell_box[3].x + max_m.cell_box[3].w == ROW_X + ROW_W);
+    max_ui_touch(true, x + 200, y, T + 80);   // back past the row's start: it stops there
+    CHECK(row_px(T + 80) == 0);
+    max_ui_touch(true, x - 3000, y, T + 100);   // past its end: its last cells
+    CHECK(row_px(T + 100) == 4 * CELL_W);
+    // Not on the columns beside the row, nor over the form.
+    row_drawn(7);
+    drag_row(ROW_X - 20, y, -300, 0);
+    drag_row(ROW_X + ROW_W + 10, y, -300, 0);
+    CHECK(row_px(T + 500) == 0 && max_m.row_first == 0);
+    max_ui_form_open("form-1", T);
+    drag_row(x, y, -300, 0);
+    CHECK(row_px(T + 500) == 0 && max_m.row_first == 0);
+}
+
+// Let go, the row settles on a cell's edge as V3's SnapPhysics: the nearest when the finger had stopped or was slow,
+// the next one the way it went when flung, eased by kRowEase over 420 ms; row_first is that cell.
+static void test_release_settles(void)
+{
+    row_drawn(7);
+    const int x = ROW_X + 700, y = HT_HEIGHT / 2;
+    CHECK(drag_row(x, y, -230, 60).kind == MAX_ACT_NONE);   // 200 px, then a rest before the lift: no fling
+    CHECK(max_m.row_first == 0 && row_px(T + 100) == 200 && max_m.dirty);
+    render(T + 100);
+    CHECK(near_px(row_px(T + 310), 11) && row_px(T + 520) == 0 && max_motion_ms(T + 100) == MAX_ROW_FRAME_MS);
+    drag_row(x, y, -330, 60);   // 300 px of 507, at rest: the nearer edge is the next cell's
+    CHECK(max_m.row_first == 1 && row_px(T + 520) == CELL_W);
+    // Flung: 200 px in 40 ms, let go at once, it goes on to the next cell; back the other way, to the one before.
+    row_drawn(7);
+    drag_row(x, y, -230, 10);
+    CHECK(max_m.row_first == 1 && row_px(T + 50) == 200 && row_px(T + 470) == CELL_W);
+    render(T + 470);
+    drag_row(x, y, 130, 10);   // 100 px back from the first cell's edge: flung, to the row's start
+    CHECK(max_m.row_first == 0 && row_px(T + 470) == 0);
+    // A flick too short to be a fling (under 23 px in its last 100 ms) settles on the nearest edge.
+    row_drawn(7);
+    T += 1000;
+    max_ui_touch(true, x, y, T);
+    max_ui_touch(true, x - 30, y, T + 200);
+    max_ui_touch(true, x - 230, y, T + 400);
+    max_ui_touch(true, x - 245, y, T + 480);
+    max_ui_touch(false, x - 245, y, T + 490);
+    CHECK(max_m.row_first == 0 && row_px(T + 1000) == 0);
+    // Three agents fill the row: it does not move.
+    row_drawn(3);
+    drag_row(x, y, -300, 10);
+    CHECK(max_m.row_first == 0 && row_px(T + 50) == 0);
+}
+
+// Taps keep the Dial's rules while the row moves, and act on what the last render drew: a cell as it lies mid-settle,
+// a sliver mid-carry; one within the guard of a voice action is part of it.
+static void test_taps_while_moving(void)
+{
+    row_drawn(7);
+    const int y = HT_HEIGHT / 2;
+    drag_row(ROW_X + 700, y, -230, 10);   // flung to the next cell
+    render(T + 150);
+    const max_box_t *b = cell_of("x2");
+    CHECK(b && max_row_moving(T + 150));
+    CHECK(tap_at(b->x + b->w / 2, y, T + 160).kind == MAX_ACT_OPEN_TALK && !strcmp(max_ui_selected(), "x2"));
+    // Opened by the model mid-carry, a sliver as drawn opens its own agent.
+    row_drawn(7);
+    max_open("x4");
+    render(T + 1);
+    render(T + 150);
+    b = cell_of("x3");
+    CHECK(b && max_row_moving(T + 150) && b->w < CELL_W && b->w > SLIVER_W);
+    CHECK(tap_at(b->x + b->w / 2, y, T + 160).kind == MAX_ACT_OPEN_TALK && !strcmp(max_ui_selected(), "x3"));
+    // Within the guard of the mic that tap opened, a tap on another agent is part of it; after, it opens.
+    render(T + 300);
+    b = cell_of("x4");
+    CHECK(b && tap_at(b->x + b->w / 2, y, T + 320).kind == MAX_ACT_NONE && !strcmp(max_ui_selected(), "x3"));
+    render(T + 1200);
+    b = cell_of("x4");
+    CHECK(tap_at(b->x + b->w / 2, y, T + 1220).kind == MAX_ACT_OPEN_TALK);
+    CHECK(!strcmp(max_ui_selected(), "x4"));
+}
+
+// Open, the row follows a finger that starts on a sliver and rests where it is let go, a fling or not; a drag that
+// starts on the open agent is its own: the row stays. While the mic is open a drag moves the row and nothing else:
+// nothing is sent, nothing cancelled.
+static void test_drag_while_open(void)
+{
+    row_drawn(7);
+    max_open("x3");
+    render(T + 1);
+    render(T + 600);
+    const int y = HT_HEIGHT / 2, at = row_px(T + 600);
+    CHECK(at == 2 * SLIVER_W && max_m.row.open_l == ROW_X + SLIVER_W);
+    drag_row(ROW_X + SLIVER_W + 300, y, -200, 10);   // on the open agent
+    CHECK(row_px(T + 500) == at && !max_m.row.drag && max_m.view == MAX_VIEW_AGENT);
+    drag_row(ROW_X + 50, y, 130, 10);   // on the sliver before it, flung: it rests 100 px on
+    CHECK(row_px(T + 50) == at - 100 && row_px(T + 600) == at - 100 && !strcmp(max_ui_selected(), "x3"));
+    render(T + 600);
+    max_ui_talk(MAX_TALK_RECORDING, T + 600);
+    max_copy(max_m.talk_id, sizeof max_m.talk_id, "x3");
+    take(0);
+    CHECK(drag_row(ROW_X + 30, y, 230, 10).kind == MAX_ACT_NONE && row_px(T + 600) == at - 300);
+    CHECK(max_m.talk == MAX_TALK_RECORDING && take(0) == 0 && max_m.view == MAX_VIEW_AGENT);
 }
 
 // Inbox as drawn: Close, then a card for each notice.
@@ -899,7 +1017,10 @@ int main(void)
 {
     test_cell_tap();
     test_drag_is_not_a_tap();
-    test_swipe_scrolls_the_row();
+    test_drag_follows_the_finger();
+    test_release_settles();
+    test_taps_while_moving();
+    test_drag_while_open();
     test_inbox();
     test_apps();
     test_ambient_wakes();

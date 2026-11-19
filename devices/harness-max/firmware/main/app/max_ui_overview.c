@@ -2,40 +2,45 @@
 // and name, the grid glyph to Apps, how many agents, and a dot an agent while the row scrolls), the row of agents by
 // need three cells to the glass, and the bell column (the round bell, the yellow badge of unread notices). A cell: a
 // status rail, a faint glow of its chip's colour from the top, its pet holding one frame, its name, the line of its
-// task and its state chip. An agent open (the agent page) lies across the row, the agents beside it dimmed slivers: its
-// pet smaller and lower, its words gone. Ambient: the clock large, the date, a few still stars, the agents' pets
-// relaxing, and what the bar has to say ("All quiet").
+// task and its state chip. An agent open (the agent page) lies across the row, the agents beside it dimmed and blurred
+// slivers: its pet smaller and lower, its words gone. The row moves as V3's (max_ui_row.c): an agent opening widens
+// over its neighbours as they narrow, its face fading and its panel coming in, and the row follows the finger.
+// Ambient: the clock large, the date, a few still stars, the agents' pets relaxing, and what the bar has to say ("All
+// quiet").
 #include <stdio.h>
 #include <string.h>
 
 #include "max_ui_draw.h"
 
 enum {
-    APP_W = DX(196), BELL_W = DX(112), ROW_X = APP_W, ROW_W = HT_WIDTH - APP_W - BELL_W, CELL_W = ROW_W / MAX_CELLS,
-    SLIVER_W = DX(136), OPEN_W = ROW_W - 2 * SLIVER_W,
     APP_PAD = DX(26), APP_ICON = DY(60), GRID = DY(20), CELL_PAD = DX(22), TASK_W = DX(330),
     PET_FOOT = DY(136), PET_HALF = DX(75), PET_H = DY(108), NAME_CY = DY(164), TASK_Y = DY(186), CHIP_CY = DY(285),
     SLIVER_FOOT = DY(188), SLIVER_HALF = DX(45), SLIVER_PET_H = DY(65),   // the cell's pet at .6, 52 px lower
+    SLIVER_DX = (SLIVER_W - CELL_W) / 2,                                  // the face in a sliver's middle
     GLOW_H = DY(138), BADGE = DY(24), DOT = DX(9), DOT_GAP = DX(7),
-    VEIL_K = 157,   // a sliver keeps 98/255 of its light: brightness .62 at opacity .62 (V3 dimMatrix)
 };
+
+static int imin(int a, int b) { return a < b ? a : b; }
+static int imax(int a, int b) { return a > b ? a : b; }
 
 // A column's top rail and the line along its right edge.
 static void rail(ht_scene_t *s, int x, int w, int h, unsigned rgb) { ht_pro_rect(s, x, 0, w, h, 0, C(rgb)); }
 static void right_line(ht_scene_t *s, int x, int w) { ht_pro_rect(s, x + w - 1, 0, 1, HT_HEIGHT, 0, C(LINE)); }
 
-// One dot an agent of the row in its chip's colour, lit while it is on the glass: only while the row scrolls.
-static void row_dots(ht_scene_t *s, int x, int cy, const int *row, int n, int first, int shown)
+// One dot an agent of the row in its chip's colour, lit while at least half of it is on the glass (easing as V3's
+// dots): only while the row scrolls.
+static void row_dots(ht_scene_t *s, int x, int cy, const max_place_t *row, int n, uint32_t now_ms)
 {
     for (int i = 0; i < n && x + DOT <= APP_W - DX(10); i++, x += DOT + DOT_GAP) {
-        const unsigned c = max_chip_ink(&max_m.agents[row[i]]);
-        max_dot(s, x, cy, DOT, i >= first && i < first + shown ? c : max_mix(c, GROUND, 28));
+        const unsigned c = max_chip_ink(row[i].a);
+        const int lit = row[i].look ? max_tween_at(&row[i].look->dot, now_ms) : MAX_ONE;
+        max_dot(s, x, cy, DOT, lit >= MAX_ONE ? c : max_mix(c, GROUND, 28 + 72 * (unsigned)lit / MAX_ONE));
     }
 }
 
 // The shown app, its icon over its name, the grid glyph after the name while Apps can open, how many agents it has,
 // and the row's dots. With no `apps` frame the computer's name stands alone. The block is centred down the column.
-static void app_column(ht_scene_t *s, const int *row, int n, int first, int shown)
+static void app_column(ht_scene_t *s, const max_place_t *row, int n, uint32_t now_ms)
 {
     rail(s, 0, APP_W, RAIL_H, SIDE_RAIL);
     right_line(s, 0, APP_W);
@@ -56,8 +61,7 @@ static void app_column(ht_scene_t *s, const int *row, int n, int first, int show
         snprintf(count, sizeof count, n == 1 ? "1 agent" : "%d agents", n);
         max_text(s, APP_PAD, count_cy, APP_W - 2 * APP_PAD, &ph_rg_24, REST, count);
     }
-    if (dots) row_dots(s, APP_PAD, DY(top + block - 5), row, n, first, shown);
-    if (apps) max_hit(0, 0, APP_W, HT_HEIGHT, MAX_HIT_APPS, 0);
+    if (dots) row_dots(s, APP_PAD, DY(top + block - 5), row, n, now_ms);
 }
 
 // The bell in its round, and the count of unread notices on a yellow badge over its top right.
@@ -84,24 +88,21 @@ static unsigned glow_pct(const max_agent_t *a)
 {
     return a->state == MAX_ASKING ? 18 : a->state == MAX_FAILED ? 14 : a->state == MAX_IDLE ? 0 : 8;
 }
-
-// A sliver's colours before its veil: saturate(.55), as the Filter Effects spec writes it, in thousandths.
-static unsigned desaturate(unsigned rgb)
+// The glow's colour at height y: pct % of ink at the top, nothing gh px down, over `under`.
+static unsigned glow_at(unsigned ink, unsigned pct, unsigned under, int gh, int y)
 {
-    const unsigned r = rgb >> 16 & 255, g = rgb >> 8 & 255, b = rgb & 255;
-    return (646 * r + 322 * g + 32 * b) / 1000 << 16 | (96 * r + 872 * g + 32 * b) / 1000 << 8 |
-           (96 * r + 322 * g + 582 * b) / 1000;
+    return y < gh ? max_mix(ink, under, pct * (unsigned)(gh - y) / (unsigned)gh) : under;
 }
+// a over b, `t` of MAX_ONE of the way to a.
+static unsigned mix_q(unsigned a, unsigned b, int t) { return max_mix(a, b, (unsigned)(t * 100 / MAX_ONE)); }
 
-// A cell's ground: the glow of its chip's colour from the top, its rail, its right line. Returns the glow's colour at
-// height y, for the pet's one-colour ground.
-static unsigned cell_ground(ht_scene_t *s, int x, int w, const max_agent_t *a, bool sliver, int y)
+// A cell's ground: the glow of its chip's colour from the top, its rail, its right line.
+static void cell_ground(ht_scene_t *s, int x, int w, const max_agent_t *a)
 {
-    const unsigned pct = glow_pct(a), ink = sliver ? desaturate(max_chip_ink(a)) : max_chip_ink(a);
+    const unsigned pct = glow_pct(a), ink = max_chip_ink(a);
     if (pct) pod_grad_aa_dither(s, x, 0, w, GLOW_H, 0, C(max_mix(ink, GROUND, pct)), C(GROUND));
-    rail(s, x, w, RAIL_H, sliver ? desaturate(max_rail_ink(a)) : max_rail_ink(a));
+    rail(s, x, w, RAIL_H, max_rail_ink(a));
     right_line(s, x, w);
-    return y < GLOW_H ? max_mix(ink, GROUND, pct * (unsigned)(GLOW_H - y) / GLOW_H) : GROUND;
 }
 
 // Up to `rows` rows of t, word-wrapped to w, each centred on cx, from y down.
@@ -113,76 +114,192 @@ static void centred_rows(ht_scene_t *s, int cx, int y, int w, int rows, unsigned
     for (int i = 0; i < n; i++) max_text_centered(s, cx, y + i * f->height + f->height / 2, w, f, rgb, lines[i]);
 }
 
-// One agent's cell while none is open: its pet holding one frame, its name, the line of its task, its chip.
-static void cell(ht_scene_t *s, int x, int w, const max_agent_t *a)
+// What lies under a cell's face: its ground and its glow (gh px of pct % of ink from the top).
+typedef struct { unsigned ink, pct, under; int gh; } under_t;
+
+// A cell's face, a cell wide from fx (V3 _Face): its pet holding one frame, `sl` of the way to a sliver's (.6 the size,
+// 52 px lower), its name, the line of its task and its chip; the pet `pet` and the words `words` of MAX_ONE there over
+// what lies under them.
+static void face(ht_scene_t *s, int fx, const max_agent_t *a, int sl, int pet, int words, const under_t *u)
 {
-    const unsigned ground = cell_ground(s, x, w, a, false, PET_FOOT - PET_H / 2);
-    const int cx = x + w / 2, inner = w - 2 * CELL_PAD, half = inner / 2 < PET_HALF ? inner / 2 : PET_HALF;
-    max_pet(s, a->engine, max_pet_scene(a, false), cx, PET_FOOT, half, PET_H, ground, 0, true);
+    const int cx = fx + CELL_W / 2, inner = CELL_W - 2 * CELL_PAD;
+    const int half = PET_HALF - (PET_HALF - SLIVER_HALF) * sl / MAX_ONE;
+    const int h = PET_H - (PET_H - SLIVER_PET_H) * sl / MAX_ONE;
+    const int foot = PET_FOOT + (SLIVER_FOOT - PET_FOOT) * sl / MAX_ONE;
+    const int from = s->count;
+    const unsigned ground = glow_at(u->ink, u->pct, u->under, u->gh, foot - h / 2);
+    max_pet(s, a->engine, max_pet_scene(a, false), cx, foot, half, h, ground, 0, true);
+    if (pet < MAX_ONE)
+        max_fade_runs(s, from, max_mix(u->ink, u->under, u->pct), u->under, u->gh, (unsigned)pet * 256 / MAX_ONE);
+    const unsigned keep = (unsigned)words * 256 / MAX_ONE;
+    if (!keep) return;
+    max_tint(u->under, keep);
     max_text_centered(s, cx, NAME_CY, inner, &ph_sb_34, FG, a->name);
     const char *task = max_summary(a);
-    const int task_w = inner < TASK_W ? inner : TASK_W;
-    centred_rows(s, cx, TASK_Y, task_w, 2, task[0] ? DIM : FAINT, task[0] ? task : "No task yet");
+    centred_rows(s, cx, TASK_Y, inner < TASK_W ? inner : TASK_W, 2, task[0] ? DIM : FAINT,
+                 task[0] ? task : "No task yet");
     const int chip = max_chip_w(a, false, inner);
     max_chip(s, cx - chip / 2, CHIP_CY, a, false, inner);
+    max_tint(0, 256);
 }
 
-// An agent beside the open one: dimmed (its colours desaturated, then all of it veiled), its pet smaller and lower in
-// the sliver's middle, its words gone.
-static void sliver(ht_scene_t *s, int x, const max_agent_t *a)
+// One agent's cell while none is open: its pet holding one frame, its name, the line of its task, its chip.
+static void cell(ht_scene_t *s, int x, const max_agent_t *a)
 {
-    const unsigned ground = cell_ground(s, x, SLIVER_W, a, true, SLIVER_FOOT - SLIVER_PET_H / 2);
-    max_pet(s, a->engine, max_pet_scene(a, false), x + SLIVER_W / 2, SLIVER_FOOT, SLIVER_HALF, SLIVER_PET_H, ground, 0,
-            true);
-    pod_veil(s, x, 0, SLIVER_W, HT_HEIGHT, x + SLIVER_W, true, 0, HT_HEIGHT, C(GROUND), C(GROUND), C(GROUND), VEIL_K);
+    cell_ground(s, x, CELL_W, a);
+    const under_t u = {max_chip_ink(a), glow_pct(a), GROUND, GLOW_H};
+    face(s, x, a, 0, MAX_ONE, MAX_ONE, &u);
 }
 
-// A cell or a sliver the finger can open, as drawn.
+// A sliver at rest beside the open agent, before its dimming: its ground, its face in its middle, the pet smaller and
+// lower, the words gone.
+static void sliver(ht_scene_t *s, int x, const void *arg)
+{
+    const max_agent_t *a = arg;
+    cell_ground(s, x, SLIVER_W, a);
+    const under_t u = {max_chip_ink(a), glow_pct(a), GROUND, GLOW_H};
+    face(s, x + SLIVER_DX, a, MAX_ONE, MAX_ONE, 0, &u);
+}
+
+// An agent of the row between looks: its parts at now (MAX_ONE whole).
+typedef struct {
+    const max_agent_t *a;
+    int w, sl, words, face, dim, ground, panel;
+    bool cover;   // something drawn before spills over it: its ground first
+    uint32_t now;
+} item_t;
+
+// The whole cell as V3 stacks it: its ground going to the panel's, the glow, the rail and the line, the face (moved
+// to a sliver's middle, its pet and words fading), and the open agent's panel over it at its opacity.
+static void paint_item(ht_scene_t *s, int x, const void *arg)
+{
+    const item_t *it = arg;
+    const max_agent_t *a = it->a;
+    const unsigned g = mix_q(PANEL, GROUND, it->ground);
+    const under_t u = {max_chip_ink(a), glow_pct(a), mix_q(PANEL, g, it->panel),
+                       GLOW_H + (PANEL_GLOW_H - GLOW_H) * it->panel / MAX_ONE};
+    if (it->cover || u.under != GROUND) ht_pro_rect(s, x, 0, it->w, HT_HEIGHT, 0, C(u.under));
+    // While a pet fades by a veil its glow is not dithered: the veil mixes toward the same rows, so no box shows.
+    const bool veiled = it->face < MAX_ONE || (it->panel && it->panel < MAX_ONE);
+    const uint16_t top = C(max_mix(u.ink, u.under, u.pct));
+    if (u.pct && veiled) pod_grad_aa(s, x, 0, it->w, u.gh, 0, top, C(u.under));
+    else if (u.pct) pod_grad_aa_dither(s, x, 0, it->w, u.gh, 0, top, C(u.under));
+    rail(s, x, it->w, RAIL_H, max_rail_ink(a));
+    right_line(s, x, it->w);
+    const int seen = it->face * (MAX_ONE - it->panel) / MAX_ONE;
+    if (seen) face(s, x + SLIVER_DX * it->sl / MAX_ONE, a, it->sl, seen, it->words * seen / MAX_ONE, &u);
+    if (it->panel) max_agent_body(s, a, x, OPEN_W, (unsigned)it->panel * 256 / MAX_ONE, u.under, u.gh, it->now);
+}
+
+// A cell or a sliver the finger can open, as on the glass.
 static void cell_hit(int x, int w, const max_agent_t *a)
 {
     const int i = max_m.cell_hits;
-    if (i >= MAX_CELLS) return;
+    if (i >= MAX_ROW_HITS) return;
     max_m.cell_box[i] = (max_box_t){(int16_t)x, 0, (int16_t)w, (int16_t)HT_HEIGHT};
     max_copy(max_m.cell_id[i], sizeof max_m.cell_id[i], a->id);
     max_m.cell_hits = i + 1;
 }
+// The hits recorded from h on cut to the glass's [l, r); none when they are not the open agent's (V3's panel takes
+// no finger while it fades out).
+static void cut_hits(int h, int l, int r, bool keep)
+{
+    int k = h;
+    for (int i = h; keep && i < max_m.hit_count; i++) {
+        max_hit_t t = max_m.hits[i];
+        const int x0 = imax(t.x, l), x1 = imin(t.x + t.w, r);
+        if (x1 <= x0) continue;
+        t.x = (int16_t)x0;
+        t.w = (int16_t)(x1 - x0);
+        max_m.hits[k++] = t;
+    }
+    max_m.hit_count = k;
+}
+
+typedef enum { AS_CELL, AS_SLIVER, AS_OPEN, AS_ON_GLASS, AS_LAYER } kind_t;
+static kind_t kind_of(const item_t *it)
+{
+    if (!it->sl && !it->dim && it->words == MAX_ONE && it->face == MAX_ONE && !it->ground && !it->panel &&
+        it->w == CELL_W)
+        return AS_CELL;
+    if (it->sl == MAX_ONE && it->dim == MAX_ONE && !it->words && it->face == MAX_ONE && !it->ground && !it->panel &&
+        it->w == SLIVER_W)
+        return AS_SLIVER;
+    if (!it->sl && !it->dim && !it->face && it->ground == MAX_ONE && it->panel == MAX_ONE && it->w == OPEN_W)
+        return AS_OPEN;
+    // Not dimmed and at least a cell wide, its face fits it: drawn on the glass. Else off it, cut and dimmed.
+    return !it->dim && it->w >= CELL_W ? AS_ON_GLASS : AS_LAYER;
+}
+static item_t item_of(const max_place_t *p, uint32_t now_ms)
+{
+    const max_look_t *l = p->look;
+    return (item_t){p->a, p->w, max_tween_at(&l->sl, now_ms), max_tween_at(&l->words, now_ms),
+                    max_tween_at(&l->face, now_ms), max_tween_at(&l->dim, now_ms), max_tween_at(&l->ground, now_ms),
+                    max_tween_at(&l->panel, now_ms), false, now_ms};
+}
+// How far right of x what is drawn on the glass for it reaches: the open agent's panel is laid out at its full width.
+static int reach(const item_t *it, kind_t k)
+{
+    return k == AS_CELL ? CELL_W : imax(it->w, it->panel ? OPEN_W : CELL_W);
+}
 
 void max_draw_overview(ht_scene_t *s, uint32_t now_ms)
 {
-    int row[MAX_AGENTS];
-    const int n = max_m.link ? max_row(row) : 0;
-    const max_agent_t *open = max_m.view == MAX_VIEW_AGENT ? max_find(max_m.selected) : NULL;
-    int at = -1;   // the open agent's place in the row
-    for (int i = 0; open && i < n; i++)
-        if (&max_m.agents[row[i]] == open) at = i;
-    if (at < 0) open = NULL;
-    const int last = n > MAX_CELLS ? n - MAX_CELLS : 0, scrolled = max_m.row_first > last ? last : max_m.row_first;
-    const int first = open ? max_open_first(at, n) : scrolled < 0 ? 0 : scrolled;
-    const int shown = n - first < MAX_CELLS ? n - first : MAX_CELLS;
-    app_column(s, row, n, first, shown);
+    max_row_step(now_ms);
+    static max_place_t row[MAX_AGENTS];   // the render task's 4 KB frame holds less
+    const int n = max_row_layout(now_ms, row, NULL);
+    max_m.row.drawn = true;
+    // What is drawn on the glass itself and reaches past the row's ends: the columns are drawn after the row then,
+    // each over its own ground.
+    bool spill_l = false, spill_r = false;
+    for (int i = 0; i < n; i++) {
+        const item_t it = item_of(&row[i], now_ms);
+        const kind_t k = kind_of(&it);
+        if (k == AS_SLIVER || k == AS_LAYER || row[i].x + row[i].w <= ROW_X || row[i].x >= ROW_X + ROW_W) continue;
+        spill_l |= row[i].x < ROW_X;
+        spill_r |= row[i].x + reach(&it, k) > ROW_X + ROW_W;
+    }
+    if (max_m.apps_known) max_hit(0, 0, APP_W, HT_HEIGHT, MAX_HIT_APPS, 0);   // the first hit, wherever it is drawn
+    if (!spill_l) app_column(s, row, n, now_ms);
     if (!n) {
         max_text_centered(s, ROW_X + ROW_W / 2, HT_HEIGHT / 2, ROW_W - 40, &ph_rg_36, REST,
                           max_m.link ? "No agents yet" : "Not connected");
         bell_column(s);
         return;
     }
-    int x = ROW_X;
-    for (int i = first; i < first + shown; i++) {
-        const max_agent_t *a = &max_m.agents[row[i]];
-        if (!open) {
-            cell(s, x, CELL_W, a);
-            cell_hit(x, CELL_W, a);
-            x += CELL_W;
-        } else if (a == open) {
-            max_draw_agent(s, a, x, OPEN_W, now_ms);
-            x += OPEN_W;
+    max_layer_frame();
+    int drawn = ROW_X;   // how far right what was drawn on the glass reaches
+    for (int i = 0; i < n; i++) {
+        const max_place_t *p = &row[i];
+        const int l = imax(p->x, ROW_X), r = imin(p->x + p->w, ROW_X + ROW_W);
+        if (l >= r) continue;
+        item_t it = item_of(p, now_ms);
+        const kind_t k = kind_of(&it);
+        const bool open = !strcmp(p->a->id, max_m.row.open);
+        const int h = max_m.hit_count;
+        if (open) {
+            max_m.row.open_l = (int16_t)l;
+            max_m.row.open_r = (int16_t)r;
         } else {
-            sliver(s, x, a);
-            cell_hit(x, SLIVER_W, a);
-            x += SLIVER_W;
+            cell_hit(l, r - l, p->a);
         }
+        it.cover = p->x < drawn;
+        if (it.cover && (k == AS_CELL || k == AS_OPEN)) ht_pro_rect(s, l, 0, r - l, HT_HEIGHT, 0, C(GROUND));
+        if (k == AS_CELL) cell(s, p->x, p->a);
+        else if (k == AS_SLIVER) max_layer_kept(s, p->x, l, r, sliver, p->a);
+        else if (k == AS_OPEN) max_draw_agent(s, p->a, p->x, OPEN_W, now_ms);
+        else if (k == AS_ON_GLASS) paint_item(s, p->x, &it);
+        else max_layer_fresh(s, p->x, p->w, l, r, it.dim, paint_item, &it);
+        if (k != AS_SLIVER && k != AS_LAYER) drawn = imax(drawn, p->x + reach(&it, k));
+        cut_hits(h, l, r, open);
     }
+    if (spill_l) {
+        ht_pro_rect(s, 0, 0, APP_W, HT_HEIGHT, 0, C(GROUND));
+        app_column(s, row, n, now_ms);
+    }
+    if (spill_r) ht_pro_rect(s, ROW_X + ROW_W, 0, BELL_W, HT_HEIGHT, 0, C(GROUND));
     bell_column(s);
+    if (max_row_moving(now_ms)) max_motion(now_ms, MAX_ROW_FRAME_MS);
 }
 
 // ---- Ambient ----

@@ -235,6 +235,35 @@ unsigned max_mix(unsigned a, unsigned b, unsigned pct)
     for (int sh = 0; sh <= 16; sh += 8) out |= ((((a >> sh) & 0xff) * pct + ((b >> sh) & 0xff) * (100 - pct)) / 100) << sh;
     return out;
 }
+static unsigned s_toward, s_keep = 256;
+void max_tint(unsigned toward, unsigned keep)
+{
+    s_toward = toward;
+    s_keep = keep < 256 ? keep : 256;
+}
+unsigned max_tinted(unsigned rgb)
+{
+    if (s_keep >= 256) return rgb;
+    unsigned out = 0;
+    for (int sh = 0; sh <= 16; sh += 8)
+        out |= ((((rgb >> sh) & 0xff) * s_keep + ((s_toward >> sh) & 0xff) * (256 - s_keep) + 128) >> 8) << sh;
+    return out;
+}
+void max_fade_runs(ht_scene_t *s, int from, unsigned top, unsigned bottom, int gh, unsigned keep)
+{
+    if (keep >= 256 || from >= s->count) return;
+    ht_rect_t b = ht_run_bounds(&s->runs[from]);
+    for (int i = from + 1; i < s->count; i++) {
+        const ht_rect_t r = ht_run_bounds(&s->runs[i]);
+        const int x1 = b.x + b.w > r.x + r.w ? b.x + b.w : r.x + r.w;
+        const int y1 = b.y + b.h > r.y + r.h ? b.y + b.h : r.y + r.h;
+        b.x = b.x < r.x ? b.x : r.x;
+        b.y = b.y < r.y ? b.y : r.y;
+        b.w = (int16_t)(x1 - b.x);
+        b.h = (int16_t)(y1 - b.y);
+    }
+    pod_veil(s, b.x, b.y, b.w, b.h, b.x + b.w, true, 0, gh, ht_rgb(top), ht_rgb(bottom), 0, (256 - keep) * 255 / 256);
+}
 void max_hit(int x, int y, int w, int h, max_hit_kind_t kind, int arg)
 {
     if (max_m.hit_count >= MAX_HITS) return;
@@ -549,7 +578,11 @@ void max_ui_render(ht_scene_t *s, uint32_t now_ms)
     max_m.hit_count = 0;
     max_m.card_id[0] = 0;
     max_m.dirty = false;
+    max_m.row.had = max_m.row.drawn;   // whether the row was on the glass just before (max_row_step)
+    max_m.row.drawn = false;
+    max_m.row.open_l = max_m.row.open_r = 0;
     s_moving = false;
+    max_tint(0, 256);
     if (max_m.update_pct >= 0) {
         update_screen(s);
     } else {

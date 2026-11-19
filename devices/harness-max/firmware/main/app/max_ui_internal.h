@@ -208,6 +208,48 @@ typedef struct {
     int16_t x, y, w, h;
 } max_box_t;
 
+// ---- App Detail's row in motion (max_ui_row.c), as V3's OverviewPage moves it ----
+#define MAX_ONE 4096                // a look's whole, as its parts count (Q12)
+#define MAX_ROW_MS 420u             // the row's move (V3 kRowMove), its carry, its way back and a settle
+#define MAX_ROW_FRAME_MS 16u        // a frame while anything in the row moves
+#define MAX_ROW_HITS 8              // the cells and slivers on the glass at once, cut by its ends
+#define MAX_TRACK 8                 // the finger's last moves, for its speed as it lets go
+// The curves V3 eases by: kRowEase Cubic(.2, .8, .2, 1), Curves.ease, and the open agent's fade in, Interval(140 /
+// 440, 1, ease).
+typedef enum { MAX_EASE_ROW, MAX_EASE, MAX_EASE_LATE } max_curve_t;
+// One value easing from `from` at `at` to `to` over `ms`, as an implicit animation: a new end starts again from where
+// it is. At rest when ms is 0 or it has run.
+typedef struct {
+    int32_t from, to;
+    uint32_t at;
+    uint16_t ms;
+    uint8_t curve;
+} max_tween_t;
+// An agent's look in the row, each part (MAX_ONE whole) as V3's cell eases it: its width in px (the row's move), `sl`
+// how far it went to a sliver (its pet smaller and lower, its face to the sliver's middle), its words' and its face's
+// opacity, its dimming, its ground going to the panel's, the open agent's panel over it, and its dot in the app column.
+typedef struct {
+    char id[ID_MAX];
+    max_tween_t w, sl, words, face, dim, ground, panel, dot;
+} max_look_t;
+typedef struct {
+    max_look_t looks[MAX_AGENTS];
+    int look_count;
+    max_tween_t px;                 // the row's scroll: how far its start lies left of the row's left edge
+    char open[ID_MAX];              // the open agent as the looks were sent ("" none)
+    int first;                      // row_first as the scroll was sent
+    bool had, drawn;                // the render before this one drew the row; this one did
+    bool back;                      // an agent closed: the scroll to row_first waits for the cells' width
+    uint32_t back_at;
+    int16_t open_l, open_r;         // the open agent's window as drawn: a drag there is its own, not the row's
+    // The finger on the row: it may drag it (grab); it does (drag), the row at drag_px when the finger was at drag_x.
+    bool grab, drag;
+    int drag_x, drag_px;
+    int16_t track_x[MAX_TRACK];
+    uint32_t track_t[MAX_TRACK];
+    uint8_t track_n;
+} max_row_t;
+
 typedef struct {
     bool link;
     char computer[CABLE_NAME_MAX];
@@ -265,9 +307,10 @@ typedef struct {
     uint32_t idle_from;              // since when nothing works or waits (Ambient)
     bool wall_known;                 // the wall clock (max_ui_wall): Ambient's clock and date, else no clock
     uint8_t wall_hour, wall_min, wall_wday, wall_mday, wall_mon;   // local time; wday 0 = Sunday, mon 0 = January
+    max_row_t row;                   // App Detail's row in motion (max_ui_row.c)
     // What the last render drew, for the finger and the clock.
-    max_box_t cell_box[MAX_CELLS];   // the row's cells, or the slivers beside the open agent
-    char cell_id[MAX_CELLS][ID_MAX];
+    max_box_t cell_box[MAX_ROW_HITS];   // the row's cells, or the slivers beside the open agent, as on the glass
+    char cell_id[MAX_ROW_HITS][ID_MAX];
     int cell_hits;
     max_hit_t hits[MAX_HITS];        // the card's buttons, the pager and New, the form's choices
     int hit_count;
@@ -386,6 +429,31 @@ const char *max_status_word(const max_agent_t *);
 const char *max_summary(const max_agent_t *);
 // The letters pro_agent_row_t.caps carries as MAX_CAP_* bits (NULL: all).
 uint8_t max_caps_of(const char *letters);
+
+// ---- App Detail's row in motion (max_ui_row.c) ----
+// The curve at t, both Q16, as Flutter's Cubic.transform finds it (and Interval's).
+int32_t max_ease(max_curve_t curve, int32_t t);
+int32_t max_tween_at(const max_tween_t *, uint32_t now_ms);
+bool max_tween_done(const max_tween_t *, uint32_t now_ms);
+// One agent of the row as it lies on the glass at now_ms: x from the glass's left, its width.
+typedef struct {
+    const max_agent_t *a;
+    const max_look_t *look;          // NULL until a render laid it out
+    int x, w;
+} max_place_t;
+// The row laid out at now_ms, in its order; the scroll into *px when given. Returns the count.
+int max_row_layout(uint32_t now_ms, max_place_t out[MAX_AGENTS], int *px);
+// The render's side (max_draw_overview): every look sent where the page is now (an agent opened or closed, the row
+// scrolled by the model), as V3's implicit animations; a page the row was not on just before snaps there.
+void max_row_step(uint32_t now_ms);
+// Something in the row still moves at now_ms: the render task wants frames.
+bool max_row_moving(uint32_t now_ms);
+// The finger's side (max_ui_touch.c): a contact down at x, moved to x, let go at x (true when it dragged the row),
+// or lost.
+void max_row_down(int x, uint32_t now_ms);
+void max_row_move(int x, uint32_t now_ms);
+bool max_row_up(int x, uint32_t now_ms);
+void max_row_cancel(void);
 
 // ---- questions (max_ui_ask.c) ----
 max_ask_t *max_ask_of(const char *agent);
