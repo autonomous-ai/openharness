@@ -84,6 +84,33 @@ describe('the Claude app adapter', () => {
     for (const hostSession of forged) expect(adapter.paneOf(scanned({ hostSession })), hostSession).toBeUndefined()
   })
 
+  // Linux has no bundle id: the scan's app says it is the Claude app's agent.
+  it('on Linux, with no bundle id, paneOf takes the hook\'s session under the Claude app alone', () => {
+    const { adapter } = recorder({ platform: 'linux' })
+    const hooked = (app: string): Place => ({ host: 'unknown', app, hints: { CLAUDE_CODE_HOST_SESSION_ID: SESSION } })
+    expect(adapter.paneOf(hooked('claude'))).toEqual(pane(SESSION))
+    expect(adapter.paneOf(hooked('vscode'))).toBeUndefined()
+    expect(adapter.paneOf({ ...hooked('claude'), hints: { CLAUDE_CODE_HOST_SESSION_ID: 'local_a&x=1' } })).toBeUndefined()
+    expect(adapter.paneOf({ ...hooked('claude'), hints: { __CFBundleIdentifier: 'com.mitchellh.ghostty', CLAUDE_CODE_HOST_SESSION_ID: SESSION } })).toBeUndefined()
+  })
+
+  it('on Linux a tap runs xdg-open with the continue link once the claude scheme has an app', async () => {
+    const calls: Call[] = []
+    const { adapter } = recorder({
+      platform: 'linux',
+      onPath: (name) => `/usr/bin/${name}`,
+      run: async (file, args, timeoutMs) => {
+        calls.push({ file, args, timeoutMs })
+        return { code: 0, stdout: file === '/usr/bin/xdg-mime' ? 'claude-desktop.desktop\n' : '' }
+      },
+    })
+    expect(await adapter.focus(pane(SESSION))).toBe(true)
+    expect(calls).toEqual([
+      { file: '/usr/bin/xdg-mime', args: ['query', 'default', 'x-scheme-handler/claude'], timeoutMs: 10_000 },
+      { file: '/usr/bin/xdg-open', args: [`claude://code/continue?session=${SESSION}`], timeoutMs: 10_000 },
+    ])
+  })
+
   it('the hook\'s hints win over the record\'s id', () => {
     const { adapter } = recorder()
     expect(adapter.paneOf(scanned({ hints: { __CFBundleIdentifier: CLAUDE, CLAUDE_CODE_HOST_SESSION_ID: OTHER } }))).toEqual(pane(OTHER))
