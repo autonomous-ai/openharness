@@ -16,7 +16,19 @@ test_app_icons fails at either height when a page draws Harness at a size not ma
 from pathlib import Path
 from PIL import Image
 
-APPS = {"harness": "harness.png"}   # V3's key (app_icon.dart: lower case, letters and digits only): its file
+# V3's keys (app_icon.dart appIconAsset: lower case, letters and digits only) and each one's file; the other names V3
+# gives the same app share its pictures.
+APPS = {
+    "harness": "harness.png",
+    "orca": "orca.png",
+    "herdr": "herdr.png",
+    "vscode": "visual-studio-code.png",
+    "cursor": "cursor.png",
+    "claude": "claude.png",
+    "chatgpt": "chatgpt.png",
+    "terminal": "terminal.png",
+}
+ALIASES = {"visualstudiocode": "vscode", "code": "vscode", "claudedesktop": "claude", "codex": "chatgpt"}
 DESIGN = {
     22: "Inbox: a notice's app (max_ui_lists.c NOTE_ICON)",
     28: "Attention: the agent's app (max_ui_card.c AT_ICON)",
@@ -58,7 +70,8 @@ def main() -> None:
                 name = f"i_{app}_{s}"
                 c.append(f"static const uint16_t {name}_px[{s * s}] = {{{','.join(map(str, rgb565(r)))}}};")
                 c.append(f"static const uint8_t {name}_a[{s * s}] = {{{','.join(map(str, r.getchannel('A').tobytes()))}}};")
-                rows.append(f'    {{"{app}", {{{name}_px, {name}_a, {s}, {s}, 0, NULL}}}},')
+                for key in [app] + [k for k, v in ALIASES.items() if v == app]:
+                    rows.append(f'    {{"{key}", {{{name}_px, {name}_a, {s}, {s}, 0, NULL}}}},')
                 total[height] += s * s * 3
     c.append("#endif")
     rows.append("#endif")

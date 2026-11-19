@@ -644,6 +644,13 @@ static void test_ambient(void)
 // ---- the apps' icons ----
 
 // Whether app's own icon is drawn at size px, with no letter over it.
+// Two names of one app draw the same pre-rendered picture.
+static bool same_icon(const char *a, const char *b, int size)
+{
+    const ht_pro_bitmap_t *x = max_icon_find(a, size), *y = max_icon_find(b, size);
+    return x && y && x->pixels == y->pixels;
+}
+
 static bool icon_drawn(const char *app, int size)
 {
     const ht_pro_bitmap_t *b = max_icon_find(app, size);
@@ -655,7 +662,7 @@ static bool icon_drawn(const char *app, int size)
     return false;
 }
 
-// Harness draws its own symbol (V3's assets/apps/harness.png, its own white tile), pre-rendered by
+// Every app V3 has an icon for draws it (V3's assets/apps, each its own tile; Harness's its symbol), pre-rendered by
 // scripts/gen_app_icons.py at each size a page draws an app: never its letter. An app without one keeps its letter.
 static void test_app_icons(void)
 {
@@ -666,18 +673,22 @@ static void test_app_icons(void)
     // Apps: Harness's card its symbol, Orca's its letter.
     show(MAX_VIEW_APPS, NULL);
     render_at(T0);
-    CHECK(icon_drawn("harness", DY(72)) && word("O"));
+    CHECK(icon_drawn("harness", DY(72)) && icon_drawn("orca", DY(72)) && !word("O"));
     // Inbox: a notice's app, by its name; Attention: the agent's app.
     inbox(2);   // Harness's, then Orca's
     show(MAX_VIEW_INBOX, NULL);
     render_at(T0);
-    CHECK(icon_drawn("Harness", DY(22)) && !word("H") && word("O"));
+    CHECK(icon_drawn("Harness", DY(22)) && icon_drawn("Orca", DY(22)) && !word("H") && !word("O"));
     attention("e", MAX_ATTN_ASK, T0);
     render_at(T0);
     CHECK(icon_drawn("harness", DY(28)) && !word("H"));
-    // V3's key: case and anything but letters and digits aside; none for another app, nor at a size no page draws.
+    // V3's key: case and anything but letters and digits aside, V3's other names for the same app; none for an app
+    // V3 has no icon for, nor at a size no page draws.
     CHECK(max_icon_find("HARNESS", DY(60)) == max_icon_find("harness", DY(60)));
-    CHECK(!max_icon_find("orca", DY(60)) && !max_icon_find("harness", DY(60) + 1) && !max_icon_find(NULL, DY(60)));
+    CHECK(same_icon("VS Code", "visualstudiocode", DY(60)) && same_icon("codex", "ChatGPT", DY(72)));
+    CHECK(max_icon_find("herdr", DY(28)) && max_icon_find("cursor", DY(28)) && max_icon_find("Claude Desktop", DY(28)));
+    CHECK(max_icon_find("terminal", DY(22)) && !max_icon_find("ghostty", DY(60)));
+    CHECK(!max_icon_find("harness", DY(60) + 1) && !max_icon_find(NULL, DY(60)));
 }
 
 // ---- the toast and the notice ----
