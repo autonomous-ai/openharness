@@ -19,6 +19,9 @@ describe('gallery', () => {
     expect(STATES).toHaveLength(9)
     expect(new Set(STATES.map(({ view }) => `${view.screen}.${view.phase}`))).toEqual(new Set(CONTRACT_PAIRS))
     expect(STATES.find((state) => state.name === 'Install · working')?.view.lines).toEqual(['Installing tmux…'])
+    expect(STATES.find((state) => state.name === 'Install · working, terminal')?.view.lines).toEqual([
+      'Finish in the terminal…',
+    ])
 
     const root = document.createElement('div')
     draw(root)
