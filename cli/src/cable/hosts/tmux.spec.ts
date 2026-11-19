@@ -26,6 +26,7 @@ function recorder(over: Partial<TmuxDeps & { platform: NodeJS.Platform }> = {}, 
     },
     processes: async () => TABLE,
     log: (line) => { logs.push(line) },
+    front: () => 'terminal-app',
     platform: 'darwin',
     ...over,
   }
@@ -66,13 +67,13 @@ const HARNESS_PANES = [
 
 describe('the tmux adapter', () => {
   // It takes no platform: tmux's own command is the same on each (the Linux tap below).
-  it('its id is tmux, it taps before its app, it can focus on every platform, and it has no show and no type', () => {
+  it('its id is tmux, it taps before its app, it can focus on every platform, it shows, and it has no type', () => {
     const { adapter } = recorder()
     expect(adapter.id).toBe('tmux')
     expect(adapter.tap).toBe('before')
     expect(adapter.canFocus({ adapter: 'tmux', id: '%3:100' })).toBe(true)
-    expect(adapter.show).toBeUndefined()
-    expect(adapter.canShow).toBeUndefined()
+    expect(adapter.show).toBeTypeOf('function')
+    expect(adapter.canShow).toBeTypeOf('function')
     expect(adapter.type).toBeUndefined()
   })
 
@@ -100,8 +101,13 @@ describe('the tmux adapter', () => {
 
   it('a pane id not in its form runs nothing', async () => {
     const { calls, adapter } = recorder({}, [], OWN)
-    for (const id of ['%3', '%3:', ':100', '%3:0', '%3:100; rm -rf /', '%3:100:1', '-t:100', '%3 :100']) {
+    const ids = ['%3', '%3:', ':100', '%3:0', '%3:100; rm -rf /', '%3:100:1', '-t:100', '%3 :100',
+      // An app field that is no app: a number, a display name, a second field, an empty one.
+      '%3:100:Terminal', '%3:100:terminal-app:x', '%3:100:', '%3:100:nope']
+    for (const id of ids) {
       expect(await adapter.focus({ adapter: 'tmux', id }), id).toBe(false)
+      expect(await adapter.show!({ adapter: 'tmux', id }, 'a1'), id).toBe('failed')
+      expect(adapter.canShow!({ adapter: 'tmux', id }), id).toBe(false)
     }
     expect(calls).toEqual([])
   })
@@ -112,6 +118,71 @@ describe('the tmux adapter', () => {
     const failed = recorder({}, [1], OWN)
     await failed.opener.open('a1', target(IN_GHOSTTY))
     for (const line of [...refused.logs, ...failed.logs]) for (const id of [PANE, '90', '100', '4242', 'ttys004', '/']) expect(line).not.toContain(id)
+  })
+})
+
+const WITH_APP = { adapter: 'tmux', id: '%3:100:terminal-app' }
+/** The pane's window, then the pane, made active on the pane's own session, in one run of tmux. */
+const selected: Call = run('tmux', 'select-window', '-t', PANE, ';', 'select-pane', '-t', PANE)
+
+describe('a pane with its app', () => {
+  const place = (outer?: { app: string; tty?: string }) => ({ host: 'tmux', app: 'tmux', hints: { TMUX_PANE: PANE }, pid: 100, outer })
+
+  it('paneOf adds the outer app when it is one of the apps', () => {
+    const { adapter } = recorder()
+    expect(adapter.paneOf(place({ app: 'terminal-app', tty: '/dev/ttys004' }))).toEqual(WITH_APP)
+    expect(adapter.paneOf(place({ app: 'nope' }))).toEqual({ adapter: 'tmux', id: '%3:100' })
+    expect(adapter.paneOf(place())).toEqual({ adapter: 'tmux', id: '%3:100' })
+  })
+
+  it('canShow: only a pane with an app, only while that app is in front', () => {
+    expect(recorder().adapter.canShow!(WITH_APP)).toBe(true)
+    for (const front of ['ghostty', undefined]) expect(recorder({ front: () => front }).adapter.canShow!(WITH_APP), String(front)).toBe(false)
+    expect(recorder().adapter.canShow!({ adapter: 'tmux', id: '%3:100' })).toBe(false)
+  })
+
+  it('show selects the pane\'s window and pane on its own session, after the same checks as a tap', async () => {
+    const { calls, logs, adapter } = recorder({}, [], OWN)
+    expect(await adapter.show!(WITH_APP, 'a1')).toBe('ok')
+    // No client is listed or switched: the session's own active pane moves, for every client on it.
+    expect(calls).toEqual([asked, selected])
+    expect(logs).toEqual([])
+  })
+
+  it('show refuses another process\'s pane or a Harness pane, with one line', async () => {
+    for (const pane of [says(4242), ...HARNESS_PANES]) {
+      const refused = recorder({}, [], { ...OWN, pane })
+      expect(await refused.adapter.show!(WITH_APP, 'a1'), pane).toBe('failed')
+      expect(refused.calls, pane).toEqual([asked])
+      expect(refused.logs, pane).toEqual(['[device] open · tmux · not its pane'])
+    }
+  })
+
+  it('show that tmux does not answer, a process table not read, or a select that fails, is failed', async () => {
+    const cases: Array<[Array<number | null>, { pane?: string }, Call[]]> = [
+      [[1], OWN, [asked]],
+      [[0, 1], OWN, [asked, selected]],
+      [[], { pane: '' }, [asked]],
+    ]
+    for (const [codes, said, expected] of cases) {
+      const failed = recorder({}, codes, said)
+      expect(await failed.adapter.show!(WITH_APP, 'a1')).toBe('failed')
+      expect([failed.calls, failed.logs]).toEqual([expected, []])
+    }
+    const unread = recorder({ processes: async () => { throw new Error('process table not read') } }, [], OWN)
+    expect(await unread.adapter.show!(WITH_APP, 'a1')).toBe('failed')
+    expect(unread.calls).toEqual([asked])
+  })
+
+  it('a tap on a pane with its app runs the same select, never switch-client, then its app comes forward', async () => {
+    const { calls, logs, opener } = recorder({}, [], OWN)
+    expect(await opener.open('a1', { bundle: 'com.apple.Terminal', pane: WITH_APP })).toBe(true)
+    expect(calls).toEqual([asked, selected, forward('com.apple.Terminal')])
+    expect(logs).toEqual([])
+    const refused = recorder({}, [], { ...OWN, pane: says(4242) })
+    expect(await refused.opener.open('a1', { bundle: 'com.apple.Terminal', pane: WITH_APP })).toBe(true)
+    expect(refused.calls).toEqual([asked, forward('com.apple.Terminal')])
+    expect(refused.logs).toEqual(['[device] open · tmux · not its pane'])
   })
 })
 
