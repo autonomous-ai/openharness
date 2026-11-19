@@ -118,8 +118,8 @@ export interface ObservedDeps {
   herdrTerminal?(pid: number): string | undefined
   /** The place of an agent nested in a multiplexer whose own pty is no tab (outer.ts firstOuter of herdrOuter.ts's and
    *  tmux.ts's lookups), by its event's hints and caller: undefined at once when it is not nested; else the app holding
-   *  that multiplexer's client and the client's tty, `{}` when none was found, never rejected. Absent, nothing is
-   *  learned. */
+   *  that multiplexer's client, the client's tty and its process, `{}` when none was found, never rejected. Absent,
+   *  nothing is learned. */
   outer?: OuterLookup
 }
 
@@ -521,10 +521,11 @@ export class ObservedSource implements HostSource {
   }
 
   /** A live agent's latest process, the one whose window a raise brings forward, and its app; none once its session
-   *  ended, as its window holds something else now. */
+   *  ended, as its window holds something else now. Nested in a multiplexer, the process is the client its app holds:
+   *  the agent's own is under the multiplexer's server, which owns no window. */
   windowOf(agentId: string): { pid: number; app: string } | undefined {
     const e = this.entries.get(agentId)
-    return e && this.live(e) ? { pid: e.caller ?? e.pid, app: e.agent.app } : undefined
+    return e && this.live(e) ? { pid: e.outer?.pid ?? e.caller ?? e.pid, app: e.agent.app } : undefined
   }
 
   /** The pane its caller last placed it at in that adapter (setPaneNames), as shownOnly reads it; never one of its panes. */
@@ -626,7 +627,7 @@ export class ObservedSource implements HostSource {
     entry.tty = entry.outer?.tty
     void answer.then((place) => {
       if (entry.outerAsk !== ask || !this.live(entry)) return
-      entry.outer = place.app ? { app: place.app, tty: place.tty } : undefined
+      entry.outer = place.app ? { app: place.app, tty: place.tty, pid: place.pid } : undefined
       entry.tty = entry.outer?.tty
       this.placeApp(entry, ask.hints, ask.pid)
       this.locate(entry)

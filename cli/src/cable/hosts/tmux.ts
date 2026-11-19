@@ -223,8 +223,8 @@ export interface TmuxOuterDeps {
   bundleId(bundle: string): Promise<string | undefined>
 }
 
-/** The app that holds the tmux client showing an agent's pane, and that client's tty when it names a tab. */
-interface ClientPlace { app?: string; tty?: string }
+/** The app that holds the tmux client showing an agent's pane, that client's tty when it names a tab, and its process. */
+interface ClientPlace { app?: string; tty?: string; pid?: number }
 /** The step of a lookup that could not be read, as its line names it: no tmux found, the pane's facts, the process
  *  table, the session's clients, the client's app. */
 type NotRead = 'tmux' | 'pane' | 'processes' | 'clients' | 'app'
@@ -266,7 +266,7 @@ export function createTmuxOuter(deps: TmuxOuterDeps): OuterLookup {
     const app = apps.get(client.pid)
     if (!app) return {}
     // A tty out of form names no tab: a control client has none, and Linux's are no tab the dial selects.
-    return TAB_TTY.test(client.tty) ? { app, tty: client.tty } : { app }
+    return TAB_TTY.test(client.tty) ? { app, tty: client.tty, pid: client.pid } : { app, pid: client.pid }
   }
 
   async function lookUp(id: string, pid: number): Promise<ClientPlace> {

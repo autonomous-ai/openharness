@@ -11,10 +11,13 @@
  */
 import type { PaneSwitch, TypeResult } from './types.js'
 
-/** The terminal app holding a multiplexer's client, and that client's tab: the place the person sees the agent in. */
+/** The terminal app holding a multiplexer's client, that client's tab and its process: the place the person sees the
+ *  agent in. The agent's own process is under the multiplexer's server, which owns no window: the client's is the one in
+ *  the app's window (the dial-linux spec, 2.2). */
 export interface Outer {
   app: string
   tty?: string
+  pid?: number
 }
 
 /** Where an outside agent runs, from its latest hook event and what was learnt of its process. */
@@ -61,7 +64,7 @@ export interface HostAdapter {
    *  app forward with no fallback line. */
   focus(pane: Pane): Promise<boolean | 'refused'>
   /** The process whose window holds the pane, as its last `focus` found it; asked once after a `focus` that answered
-   *  true, and forgotten then. Absent, or none: the agent's own process. */
+   *  true, and forgotten then. Absent, or none: the agent's window as the observed source knows it (windowOf). */
   windowPid?(pane: Pane): number | undefined
   /** Whether a rest can show the pane inside its app now (the app in front, a watch open): asked at each look. */
   canShow?(pane: Pane): boolean
