@@ -8,11 +8,19 @@ import { MachinePeerStore, machinePeerFiles } from './machinePeers.js'
 const FILE = join(env.ADAPTER_DATA_DIR, 'e2e', 'machinePeers.json')
 const GONE_FILE = join(env.ADAPTER_DATA_DIR, 'e2e', 'machinePeers-gone.json')
 
-// Pass-through until a test fills the disk: a write then stops part way, as ENOSPC leaves it.
-const disk = vi.hoisted(() => ({ full: false }))
+// Pass-through until a test fills the disk: a write then stops part way, as ENOSPC leaves it. `failedReads`: the next
+// reads of the gone list that fail (EIO), as a scanner or a full descriptor table fails them.
+const disk = vi.hoisted(() => ({ full: false, failedReads: 0 }))
 vi.mock('node:fs', async original => {
   const actual = await original<typeof import('node:fs')>()
   return { ...actual,
+    readFileSync: ((...args: Parameters<typeof actual.readFileSync>) => {
+      if (disk.failedReads > 0 && String(args[0]).endsWith('machinePeers-gone.json')) {
+        disk.failedReads--
+        throw Object.assign(new Error('EIO: fixture'), { code: 'EIO' })
+      }
+      return actual.readFileSync(...args)
+    }) as typeof actual.readFileSync,
     writeFileSync: (...args: Parameters<typeof actual.writeFileSync>) => {
       if (!disk.full) return actual.writeFileSync(...args)
       actual.writeFileSync(args[0], String(args[1]).slice(0, 8))
@@ -22,7 +30,7 @@ vi.mock('node:fs', async original => {
 })
 
 beforeEach(() => { rmSync(FILE, { force: true }); rmSync(GONE_FILE, { force: true }) })
-afterEach(() => { disk.full = false; vi.restoreAllMocks() })
+afterEach(() => { disk.full = false; disk.failedReads = 0; vi.restoreAllMocks() })
 
 /** A machine the backend said was deleted (remoteRelay.ts): unpinned and remembered, so the trust group does not pin it
  *  again (groupSyncer.ts), until the account's machine list shows it again. */
@@ -120,6 +128,23 @@ describe('a pin file that cannot be read', () => {
     expect(peers.restore([a])).toBe(true)
     expect(peers.gone().has(a)).toBe(false)
     expect(readFileSync(GONE_FILE, 'utf8')).toBe('["' + b)
+  })
+
+  // A read that failed read nothing: the marks it holds must not be written over by those in memory alone.
+  it('a gone list a read failed on is not written over by a mark or a return', async () => {
+    const { READ_TRIES } = await import('../secureState.js')
+    const peers = new MachinePeerStore()
+    peers.markGone(b)
+    peers.markGone(c)
+    disk.failedReads = READ_TRIES
+    expect(() => peers.markGone(a)).toThrow(StateFileUnreadable)
+    expect(JSON.parse(readFileSync(GONE_FILE, 'utf8'))).toEqual([b, c])
+    expect(peers.gone().has(a)).toBe(true)
+    // Back in memory: the mark only this process held goes, and the file keeps the others.
+    disk.failedReads = READ_TRIES
+    expect(peers.restore([a])).toBe(true)
+    expect(peers.gone().has(a)).toBe(false)
+    expect(JSON.parse(readFileSync(GONE_FILE, 'utf8'))).toEqual([b, c])
   })
 
   it('a file made whole again is used', () => {
