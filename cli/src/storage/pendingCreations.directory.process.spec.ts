@@ -32,7 +32,7 @@ function seed(path = directory, value: unknown = pending, key = id) {
 async function found() { const ids = new Set<string>(); for await (const value of storage.creations.scan()) if (value) ids.add(value); return [...ids].sort() }
 
 type Fault = 'admission-close' | 'primary-iterator' | 'marker-iterator' | 'claim' | 'result' | 'hold'
-  | 'bind-refused' | 'bind-replaced' | 'cwd-lost' | 'none'
+  | 'bind-refused' | 'bind-replaced' | 'cwd-lost' | 'count-classification' | 'none'
 function fixture(fault: Fault, initialCwd?: string) {
   const file = join(root, 'directory-fixture.mjs'), evidence = join(root, 'directory-evidence.json')
   // Filesystem faults live inside the real admitted child. The Vitest worker never changes cwd.
@@ -47,7 +47,7 @@ function fixture(fault: Fault, initialCwd?: string) {
     const displaced = ${JSON.stringify(join(root, 'displaced'))}, evidence = ${JSON.stringify(evidence)};
     const fault = ${JSON.stringify(fault)}, id = ${JSON.stringify(id)};
     const original = fs.existsSync(directory) ? fs.statSync(directory, { bigint: true }).ino : null;
-    const notes = { swapped: false, restored: false, reads: [], entries: [], closed: [], changes: 0 };
+    const notes = { swapped: false, restored: false, reads: [], entries: [], closed: [], changes: 0, classificationChecks: [] };
     const save = () => fs.writeFileSync(evidence, JSON.stringify(notes), { mode: 0o600 });
     const chdir = process.chdir.bind(process);
     let refused = false;
@@ -67,13 +67,24 @@ function fixture(fault: Fault, initialCwd?: string) {
       fs.renameSync(directory, alternate); fs.renameSync(displaced, directory);
       notes.restored = true; save();
     };
-    const open = fs.openSync, close = fs.closeSync, opendir = asyncFs.opendir;
+    const open = fs.openSync, close = fs.closeSync, opendir = asyncFs.opendir, lstat = fs.lstatSync;
+    let classificationChecks = null;
+    fs.lstatSync = (...args) => {
+      const value = lstat(...args);
+      if (classificationChecks && args[1]?.bigint && (args[0] === '.' || args[0] === directory)) {
+        classificationChecks.push(args[0] === '.' ? 'cwd' : 'absolute');
+      }
+      return value;
+    };
     const files = new Map();
     let classified = false;
     fs.openSync = (...args) => {
       const path = String(args[0]);
       const part = path.endsWith(id + '.json.claim') ? 'claim' : path.endsWith(id + '.json.result') ? 'result'
         : path.endsWith(id + '.hold') ? 'hold' : path.endsWith(id + '.json') ? 'primary' : null;
+      if ((part === 'primary' || fault === 'count-classification' && path.split('/').pop().startsWith('directory-proof-fixture-') && path.endsWith('.json')) && classificationChecks) {
+        notes.classificationChecks.push(classificationChecks); classificationChecks = null; save();
+      }
       if (part === fault && !notes.swapped) swap();
       try {
         const fd = open(...args);
@@ -110,6 +121,7 @@ function fixture(fault: Fault, initialCwd?: string) {
         const entry = await read();
         if (entry && which) {
           notes.entries.push({ which, name: entry.name }); save();
+          if (fault === 'count-classification' && which === 'primary' && entry.name.endsWith('.json')) classificationChecks = [];
           if (which === 'primary' && entry.name === id + '.json') {
             classified = true;
             if (fault === 'cwd-lost' && !notes.swapped) { chdir(alternate); notes.swapped = true; save(); }
@@ -126,9 +138,20 @@ function fixture(fault: Fault, initialCwd?: string) {
   useEntry(file)
   return () => JSON.parse(readFileSync(evidence, 'utf8')) as {
     swapped: boolean; restored: boolean; changes: number; reads: Array<{ part: string; from: string }>;
-    entries: Array<{ which: string; name: string }>; closed: string[]
+    entries: Array<{ which: string; name: string }>; closed: string[]; classificationChecks: string[][]
   }
 }
+
+it('uses one fresh directory proof per classified receipt in the actual child', async () => {
+  for (let n = 0; n < 32; n++) seed(directory, terminal, `directory-proof-fixture-${n}`)
+  const evidence = fixture('count-classification')
+  expect(await found()).toEqual([])
+  const observed = evidence()
+  expect(observed.classificationChecks).toHaveLength(32)
+  expect(observed.classificationChecks).toEqual(Array.from({ length: 32 }, () => ['cwd', 'absolute']))
+  expect(observed.closed).toEqual(['primary'])
+  expect(observed.changes).toBe(1)
+})
 
 it.skipIf(process.platform === 'win32')('keeps a pending primary after its admission closes and the absolute directory changes', async () => {
   seed(); seed(join(root, 'alternate'), terminal)
