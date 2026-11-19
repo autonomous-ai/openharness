@@ -1,5 +1,5 @@
 // The ChatGPT app's threads, read from a fixture Codex home in a temp folder: no test reads anyone's own ~/.codex.
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readSync, renameSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -19,6 +19,7 @@ afterEach(() => rmSync(root, { recursive: true, force: true }))
 const fixture = (name = '.codex'): CodexAppFixture => codexAppFixture(join(root, name))
 const storeOf = (fx: CodexAppFixture) => join(fx.home, 'state_5.sqlite')
 const stateOf = (fx: CodexAppFixture) => join(fx.home, '.codex-global-state.json')
+const indexOf = (fx: CodexAppFixture) => join(fx.home, 'session_index.jsonl')
 /** A lowercase UUID, as Codex names its threads; a higher n sorts later. */
 const uuid = (n: number) => `00000000-0000-4000-8000-${n.toString(16).padStart(12, '0')}`
 const local = (projectId: string) => ({ projectKind: 'local', projectId })
@@ -299,6 +300,27 @@ describe('names', () => {
     const result = await ok(new CodexAppThreads(fx.home))
     expect(result.listed.map((t) => t.name)).toEqual(['Fix the build', 'n'.repeat(64), 'alpha', 'codex', 'beta'])
     expect(JSON.stringify(result)).not.toContain(NEVER_READ)
+  })
+
+  // A FIFO opened to be read waits for a writer for good, and the event loop with it, so vitest's timeout would never
+  // fire: the read runs in a child the test can kill.
+  it.each<[string, (fx: CodexAppFixture) => void]>([
+    ['a FIFO', (fx) => execFileSync('mkfifo', [indexOf(fx)])],
+    ['a link to a FIFO', (fx) => {
+      execFileSync('mkfifo', [join(root, 'fifo')])
+      symlinkSync(join(root, 'fifo'), indexOf(fx))
+    }],
+  ])('a session index that is %s gives folder names and never waits', (_, make) => {
+    const fx = fixture()
+    fx.threads([thread(1, 10)])
+    make(fx)
+    const reader = new URL('./codexAppThreads.ts', import.meta.url).href
+    const script = `const { CodexAppThreads } = await import(${JSON.stringify(reader)})
+      console.log(JSON.stringify(await new CodexAppThreads(process.argv[1]).read()))`
+    const child = spawnSync(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', script, fx.home],
+      { encoding: 'utf8', timeout: 10_000 })
+    expect(child.signal).toBeNull()
+    expect((JSON.parse(child.stdout) as Extract<CodexAppRead, { ok: true }>).listed.map((t) => t.name)).toEqual(['t1'])
   })
 })
 
