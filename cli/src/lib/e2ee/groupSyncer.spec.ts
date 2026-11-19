@@ -9,12 +9,14 @@ type Frame = Record<string, unknown>
 let C: typeof import('./core.js')
 let G: typeof import('./trustGroup.js')
 let S: typeof import('./groupSyncer.js')
+let Sx: typeof import('../secureState.js')
 
 beforeAll(async () => {
   process.env.ADAPTER_DATA_DIR = mkdtempSync(join(tmpdir(), 'e2ee-groupsync-'))
   C = await import('./core.js')
   G = await import('./trustGroup.js')
   S = await import('./groupSyncer.js')
+  Sx = await import('../secureState.js')
 })
 
 afterEach(() => { vi.useRealTimers() })
@@ -545,6 +547,68 @@ describe('GroupSyncer — suspended keys', () => {
     await a.syncer.syncAll()
     expect(spy).not.toHaveBeenCalled()
     for (const n of f.nodes) n.syncer.stop()
+  })
+})
+
+describe('GroupSyncer — a trust file it cannot read', () => {
+  type Broken = 'the block list' | 'the device log'
+  const unreadable = (base: string) => (): never => { throw new Sx.StateFileUnreadable(base, 'not valid JSON') }
+
+  /** Machine A pins and trusts B. Its store answers every merge with N in and B out, as a peer's roster would; the
+   *  real store refuses to merge while its block list cannot be read (trustGroup.spec.ts), so this one stands for a
+   *  list that broke between the merge and its apply. */
+  function machine(broken?: Broken) {
+    const key = (): string => C.b64e(C.newIdentity().pub)
+    const self = { pub: key(), kind: 'machine' as const, label: 'a', machineId: 'a'.repeat(32), at: S.SELF_STAMP }
+    const b = { pub: key(), kind: 'machine' as const, label: 'b', machineId: 'b'.repeat(32), at: 10 }
+    const n = { pub: key(), kind: 'machine' as const, label: 'n', machineId: 'c'.repeat(32), at: 20 }
+    const roster = { members: [n], removed: [{ pub: b.pub, at: 30 }] }
+    const store = {
+      read: () => roster,
+      merge: () => ({ roster, upserted: [n], dropped: [b] }),
+      blocked: broken === 'the block list' ? unreadable('group-blocked.json') : () => new Set<string>(),
+      block: broken === 'the block list' ? unreadable('group-blocked.json') : () => {},
+    }
+    const peers = new MemPeers()
+    peers.pin(b.machineId, b.pub, b.label)
+    const trusted = new Set([b.pub])
+    const log = vi.fn()
+    const syncer = new S.GroupSyncer({
+      store: store as unknown as import('./trustGroup.js').TrustGroupStore,
+      peers: peers as unknown as import('./machinePeers.js').MachinePeerStore,
+      self: () => self,
+      trust: (peer) => { trusted.add(peer.pub) },
+      untrust: (pub) => { trusted.delete(pub) },
+      paired: () => [],
+      request: async () => null,
+      suspended: broken === 'the device log' ? unreadable('devlog.json') : undefined,
+      log,
+    })
+    return { syncer, peers, trusted, b, n, log }
+  }
+
+  it.each<Broken>(['the block list', 'the device log'])('nobody new is pinned or trusted while %s cannot be read', (broken) => {
+    const { syncer, peers, trusted, b, n, log } = machine(broken)
+    syncer.handle(C.b64e(C.newIdentity().pub), { members: [], removed: [] })
+    expect(peers.get(n.machineId)).toBeNull()
+    expect(trusted.has(n.pub)).toBe(false)
+    // A member the group removed is still forgotten here.
+    expect(peers.get(b.machineId)).toBeNull()
+    expect(trusted.has(b.pub)).toBe(false)
+    expect(log).toHaveBeenCalledWith(`[group] ${broken} cannot be read: nobody new is pinned or trusted`)
+  })
+
+  // "Cannot tell" is not "blocked": the device key log shows every NEW DEVICE alert, and a failure never hides one.
+  it('a key it cannot tell is blocked reads as not blocked', () => {
+    const { syncer, b } = machine('the block list')
+    expect(syncer.isBlocked(b.pub)).toBe(false)
+  })
+
+  it('an unpair still unpins and untrusts when the block cannot be written', () => {
+    const { syncer, peers, trusted, b } = machine('the block list')
+    expect(() => syncer.unpaired(b.pub)).toThrow(Sx.StateFileUnreadable)
+    expect(peers.get(b.machineId)).toBeNull()
+    expect(trusted.has(b.pub)).toBe(false)
   })
 })
 
