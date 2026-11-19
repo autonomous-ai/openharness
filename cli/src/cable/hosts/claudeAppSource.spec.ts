@@ -349,7 +349,7 @@ describe("the Claude app's source (docs/plans/2026-11-19-dial-claude-app-session
     it('ten changes during a pass give one more pass, not ten', async () => {
       const s = await started()
       const mark = s.calls().length
-      s.fire(ACCOUNT, 'org')
+      s.fire(ACCOUNT, undefined)
       for (let i = 0; i < 10; i++) s.fire(ORG, undefined)
       await s.land()
       s.gap()

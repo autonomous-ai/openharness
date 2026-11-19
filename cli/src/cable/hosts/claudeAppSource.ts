@@ -12,7 +12,7 @@
  *
  * A log line says only fixed words and counts: the store names people's folders and sessions.
  */
-import { basename, dirname } from 'node:path'
+import { basename, dirname, join, sep } from 'node:path'
 import { CLAUDE_SESSION, claudePaneKey } from './claudeApp.js'
 import type { ClaudeAppSession, ClaudeAppStore, StoreFolders, StoreRead } from './claudeAppStore.js'
 import { observedAgentId } from './observed.js'
@@ -195,7 +195,25 @@ export class ClaudeAppSource implements HostSource {
    *  writes as it runs: only the root's own name, or no name, looks again. */
   private rootChanged(file?: string): void {
     if (this.there === false && file !== undefined && file !== basename(this.deps.root)) return
+    if (file !== undefined) this.unwatchBelow(join(this.deps.root, file))
     this.relist()
+  }
+
+  /** An event of an account's watch, which may name one of its orgs. */
+  private accountChanged(account: string, file?: string): void {
+    if (file !== undefined) this.unwatchBelow(join(account, file))
+    this.relist()
+  }
+
+  /** Stops the watches of a folder an event named, and of those below it: a folder removed ends its watch for good
+   *  (folderWatch.ts), so one made again before the next listing would keep a watch that hears nothing. The listing
+   *  sets them again. */
+  private unwatchBelow(folder: string): void {
+    for (const [watched, stop] of this.watches) {
+      if (watched !== folder && !watched.startsWith(folder + sep)) continue
+      stop()
+      this.watches.delete(watched)
+    }
   }
 
   private orgChanged(org: string, file?: string): void {
@@ -295,7 +313,7 @@ export class ClaudeAppSource implements HostSource {
    *  file. */
   private watchFolders({ accounts, orgs }: StoreFolders): void {
     const wanted = new Map<string, (file?: string) => void>([
-      ...accounts.map((folder) => [folder, () => this.relist()] as const),
+      ...accounts.map((folder) => [folder, (file?: string) => this.accountChanged(folder, file)] as const),
       ...orgs.map((folder) => [folder, (file?: string) => this.orgChanged(folder, file)] as const),
     ])
     for (const [folder, stop] of this.watches) {
