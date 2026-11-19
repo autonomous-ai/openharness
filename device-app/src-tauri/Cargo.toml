@@ -45,6 +45,10 @@ sysinfo = "0.40"
 [target.'cfg(target_os = "linux")'.dependencies]
 x11rb = "0.14"
 
+# The Win32 calls (child processes, the app in front, the login item, the theme). Tauri's own copy: no new crate.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Wdk_System_Threading", "Win32_Foundation", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_Diagnostics_ToolHelp", "Win32_System_IO", "Win32_System_JobObjects", "Win32_System_Registry", "Win32_System_Threading", "Win32_UI_Accessibility", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+
 [build-dependencies]
 # As `cargo tauri build` writes it back: any other form, and every build rewrites this line.
 tauri-build = { version = "2", features = [] }
