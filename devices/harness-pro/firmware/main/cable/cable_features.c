@@ -15,6 +15,7 @@ uint32_t cable_features_parse(const cJSON *welcome)
         if (!strcmp(item->valuestring, "resync")) result |= CABLE_FEATURE_RESYNC;
         if (!strcmp(item->valuestring, "form")) result |= CABLE_FEATURE_FORM;
         if (!strcmp(item->valuestring, "question.review")) result |= CABLE_FEATURE_QUESTION_REVIEW;
+        if (!strcmp(item->valuestring, "question.tier")) result |= CABLE_FEATURE_QUESTION_TIER;
     }
     return result;
 }

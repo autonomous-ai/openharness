@@ -301,8 +301,9 @@ void pro_app_question(const char *id, const char *request, const char *text)
 }
 
 void pro_app_ask(const char *id, const char *request, const char *text, const pro_ask_item_t *items, int n,
-                 bool permission)
+                 bool permission, bool listed)
 {
+    (void)listed;
     if (!id_ok(id)) return;
     const bool review = pro_cable_supports(CABLE_FEATURE_QUESTION_REVIEW);   // the reviewed path, when the daemon has it
     lock();

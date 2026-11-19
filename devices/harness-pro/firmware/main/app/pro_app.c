@@ -575,9 +575,9 @@ void pro_app_question_close(const char *id)
 // The Pro answers on the computer and starts no agent: pro_app_question already shows the prompt, and the replies to
 // the Max's answering and New Harness never come, since the Pro sends neither.
 void pro_app_ask(const char *id, const char *request, const char *text, const pro_ask_item_t *items, int n,
-                 bool permission)
+                 bool permission, bool listed)
 {
-    (void)id; (void)request; (void)text; (void)items; (void)n; (void)permission;
+    (void)id; (void)request; (void)text; (void)items; (void)n; (void)permission; (void)listed;
 }
 void pro_app_question_state(const char *id, const char *fetch, bool ok, const char *request, const char *token,
                             bool submitted, const char *error, const pro_ask_item_t *items, int n)

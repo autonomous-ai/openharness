@@ -84,7 +84,8 @@ void pro_app_summary(const char *id, const char *text, const char *recap, const 
 // ---- notifications ----
 // notif.replace: the whole unread list (the daemon sends it on greeting; at most 8 items, one per agent). Strings are never
 // NULL ("" when absent); token is "" without one (and only ever a valid readToken, [A-Za-z0-9_-]{1,63}). No banner, no beep.
-typedef struct { const char *agent_id, *name, *summary, *token; } pro_notif_row_t;
+// `question`: the row is the agent's open question (`summary` its words), which may come in no `question` frame.
+typedef struct { const char *agent_id, *name, *summary, *token; bool question; } pro_notif_row_t;
 void pro_app_notif_replace(const pro_notif_row_t *rows, int n);
 // notif.seen: read elsewhere. token is NULL without one.
 void pro_app_notif_seen(const char *id, const char *token);
@@ -108,13 +109,18 @@ typedef struct {
     bool multi, whole;
 } pro_ask_item_t;
 // The same `question` as pro_app_question, right after it, with its questions. n is 0 when the request is not one the
-// daemon's inbox would hold (no questions, more than 4, one without a key, a prompt or options, a key twice).
+// daemon's inbox would hold (no questions, more than 4, one without a key, a prompt or options, a key twice), which is
+// also the daemon's summary frame: the first question's words only, the whole question read by question.read.
 // permission: the daemon marks it a permission prompt (`permission: true`), answered by approving or denying.
+// listed: `tier: "list"`, a question the daemon re-files because the device was told it before (only to a device whose
+// hello says questionTier; the welcome's `question.tier` says the daemon means it).
 void pro_app_ask(const char *id, const char *request, const char *text, const pro_ask_item_t *items, int n,
-                 bool permission);
+                 bool permission, bool listed);
 // question.state, the reply to pro_cable_question_read. `fetch` is the requestId that read sent. ok: `request` and
-// `token` are under PRO_TOKEN_BYTES and n is 1..4; submitted: an answer is in already. Not ok: `error` is the daemon's
-// words (NULL when it sent none, or the reply was malformed), and request, token and items are NULL.
+// `token` are under PRO_TOKEN_BYTES and n is 1..4, or 0 with items NULL for a question the daemon holds as its summary
+// alone (one it cannot take an answer for: answered on the computer); submitted: an answer is in already. Not ok:
+// `error` is the daemon's words (NULL when it sent none, or the reply was malformed), and request, token and items are
+// NULL.
 void pro_app_question_state(const char *id, const char *fetch, bool ok, const char *request, const char *token,
                             bool submitted, const char *error, const pro_ask_item_t *items, int n);
 // answer.receipt, the reply to pro_cable_answer_reviewed. pending: taken, not yet confirmed by the terminal. Not ok:

@@ -457,15 +457,15 @@ static void test_question_chimes_once(void)
     fresh();
     now += 60000;   // past the last chime's coalescing window
     BEEPS = 0;
-    pro_app_ask("a", "r1", "Proceed?", NULL, 0, false);
+    pro_app_ask("a", "r1", "Proceed?", NULL, 0, false, false);
     CHECK(BEEPS == 1);
     now += 60000;
     fresh();
-    pro_app_ask("a", "r1", "Proceed?", NULL, 0, false);
+    pro_app_ask("a", "r1", "Proceed?", NULL, 0, false, false);
     CHECK(BEEPS == 1);
     pro_app_question_close("a");
     now += 60000;
-    pro_app_ask("a", "r2", "And this?", NULL, 0, false);
+    pro_app_ask("a", "r2", "And this?", NULL, 0, false, false);
     CHECK(BEEPS == 2);
     // A failed turn is an alert too, but a second alert within 30 s does not chime again.
     pro_app_turn("b", "started", "", 0);
@@ -484,7 +484,7 @@ static void test_reviewed_answer_is_sent_after_the_lock(void)
     fresh();
     FEATURES = CABLE_FEATURE_FORM | CABLE_FEATURE_QUESTION_REVIEW;
     SENDS = OPENS = 0;
-    pro_app_ask("a", "toolu_1", DB.q, &DB, 1, false);
+    pro_app_ask("a", "toolu_1", DB.q, &DB, 1, false, false);
     CHECK(SENDS == 0 && max_m.view == MAX_VIEW_ATTENTION);   // nothing goes from the cable_link task's callback
     drawn_page(MAX_VIEW_ATTENTION);
     contact(HT_WIDTH - 2, HT_HEIGHT - 2, 0, 0);   // where nothing is drawn
@@ -497,7 +497,7 @@ static void test_reviewed_answer_is_sent_after_the_lock(void)
     pro_app_answer_receipt("a", "q1", "tok", true, false, NULL);
     CHECK(!strcmp(max_m.notice, "Sent") && max_find("a")->state == MAX_WORKING);
     // The daemon refuses it: its words.
-    pro_app_ask("a", "toolu_2", DB.q, &DB, 1, true);
+    pro_app_ask("a", "toolu_2", DB.q, &DB, 1, true, false);
     drawn_page(MAX_VIEW_ATTENTION);
     contact(HT_WIDTH - 2, HT_HEIGHT - 2, 0, 0);   // where nothing is drawn
     pro_app_question_state("a", "q2", true, "toolu_2", "tok2", false, NULL, &DB, 1);
@@ -514,7 +514,7 @@ static void test_plain_answer_and_a_full_port(void)
     fresh();
     FEATURES = CABLE_FEATURE_FORM;
     SENDS = 0;
-    pro_app_ask("a", "toolu_1", DB.q, &DB, 1, false);
+    pro_app_ask("a", "toolu_1", DB.q, &DB, 1, false, false);
     attention_drawn(2);
     PORT_FULL = true;
     tap_on(find_hit(MAX_HIT_OPTION, 0));

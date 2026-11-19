@@ -2054,11 +2054,11 @@ static pod_out_t tap_notif(const char *id) {
 }
 static void notify_replace_seen_and_read(void) {
     notif_setup();
-    pro_notif_row_t rows[] = {{"a1", "Alpha", "Renamed the module.", "tok_a1"}, {"a2", "Bravo", "Fixed the parser.", ""}, {"nobody", "Ghost", "Gone.", "tok_g"}};
+    pro_notif_row_t rows[] = {{"a1", "Alpha", "Renamed the module.", "tok_a1", false}, {"a2", "Bravo", "Fixed the parser.", "", false}, {"nobody", "Ghost", "Gone.", "tok_g", false}};
     pro_app_notif_replace(rows, 3);
     render();
     CHECK(BEEPS == 0 && banner() == NULL && U.model.unread_count == 3);   // the whole list; no beep, no toast
-    pro_notif_row_t one[] = {{"a2", "Bravo", "Fixed the parser.", "tok_a2"}};
+    pro_notif_row_t one[] = {{"a2", "Bravo", "Fixed the parser.", "tok_a2", false}};
     pro_app_notif_replace(one, 1);                                                                 // replaces, not adds
     CHECK(U.model.unread_count == 1 && !strcmp(U.model.unread[0].token, "tok_a2"));
     pro_app_notif_replace(rows, 3);

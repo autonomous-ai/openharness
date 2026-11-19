@@ -91,12 +91,14 @@ assert pairs == [
     ("settings", "{"),
 ], pairs
 # Harness Max compiles this file and says "max": the same hello and appFilter, so the daemon sends it the shown app's
-# ring and `apps` (docs/specs/2026-11-14-dial-app-filter.md). The Pro never says it.
+# ring and `apps` (docs/specs/2026-11-14-dial-app-filter.md), and questionTier, so a question it was told before comes
+# back as a silent `tier: "list"` row (docs/plans/2026-11-18-dial-drawer-limits-design.md). The Pro says neither.
 max_pairs = [tuple(x.split("=", 1)) for x in max_lines[1:] if not x.startswith("S.")]
 want_max = [("board", "max") if k == "board" else (k, v) for k, v in pairs]
-want_max.insert(want_max.index(("ota", "v1")) + 1, ("appFilter", "v1"))
+at = want_max.index(("ota", "v1")) + 1
+want_max[at:at] = [("appFilter", "v1"), ("questionTier", "v1")]
 assert max_pairs == want_max, max_pairs
-assert "appFilter" not in {k for k, _ in pairs}
+assert "appFilter" not in {k for k, _ in pairs} and "questionTier" not in {k for k, _ in pairs}
 keys = {k for k, _ in pairs}
 for round_only in ("carry", "draft", "speech", "form", "visit", "workspace", "selection", "metrics", "pcm16"):
     assert round_only not in keys and round_only not in body, f"hello mentions {round_only}"
