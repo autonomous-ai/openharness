@@ -2,6 +2,9 @@
 # (src-tauri/tests/fake-harness.cmd).
 #
 #   pwsh device-app/scripts/e2e/windows.ps1 -Installer <setup.exe> [-Out <folder>]
+#   pwsh device-app/scripts/e2e/windows.ps1 -Update <OUT> [-Out <folder>]
+#
+# -Update installs update-pair.sh's 0.0.1 from OUT, serves OUT on 127.0.0.1:8765 and checks that 0.0.1 becomes 0.0.2.
 #
 # Prints `ok: <check>` for each check, `note:` for what it saw but does not judge, and stops at the first
 # `FAILED: <check>`, exiting 1. It stops before it starts, exiting 2, when this account has a Harness Device, its data or
@@ -13,11 +16,17 @@
 # account's own: run it as a throwaway user or on a throwaway machine. One check changes the machine and runs only on a
 # GitHub-hosted runner (RUNNER_ENVIRONMENT): the install line's, which an Image File Execution Options entry sends to a
 # stand-in for Windows PowerShell so the line is seen, never run.
-param([Parameter(Mandatory)][string]$Installer, [string]$Out)
+[CmdletBinding(DefaultParameterSetName = 'install')]
+param(
+  [Parameter(Mandatory, ParameterSetName = 'install')][string]$Installer,
+  [Parameter(Mandatory, ParameterSetName = 'update')][string]$Update,
+  [string]$Out)
 $ErrorActionPreference = 'Stop'
 
-# Every wait ends on what it waits for, bounded by this.
+# Every wait ends on what it waits for, bounded by this; an update by UPDATE_WAIT, from the launch.
 $WAIT = 60
+$UPDATE_WAIT = 300
+$PORT = 8765
 # `harness start --if-down` runs in seconds 10 to 19 of a minute, after two downs of the watch.
 $START_WAIT = 150
 $RUN_VALUE = 'Harness Device'
@@ -57,6 +66,17 @@ function Stop-Before([string]$why) {
   exit 2
 }
 
+if ($Update) {
+  if (-not (Test-Path -LiteralPath $Update -PathType Container)) { Stop-Before "no update pair at $Update" }
+  $Update = (Resolve-Path -LiteralPath $Update).Path
+  $pair = @(Get-ChildItem -Path (Join-Path $Update '0.0.1\Harness-Device-windows-*-setup.exe'))
+  if ($pair.Count -ne 1) { Stop-Before "$Update\0.0.1 holds one installer, not $($pair.Count)" }
+  $Installer = $pair[0].FullName
+  $updated = Join-Path $Update "0.0.2\$($pair[0].Name)"
+  foreach ($file in @($updated, (Join-Path $Update 'metadata.json'))) {
+    if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { Stop-Before "no $file" }
+  }
+}
 if (-not (Test-Path -LiteralPath $Installer -PathType Leaf)) { Stop-Before "no installer at $Installer" }
 $Installer = (Resolve-Path -LiteralPath $Installer).Path
 if (-not (Test-Path -LiteralPath $fakeCli -PathType Leaf)) { Stop-Before "no fake CLI at $fakeCli" }
@@ -94,6 +114,7 @@ $apps = Join-Path $work 'apps'
 $evidence = Join-Path $work 'evidence'
 foreach ($folder in @($fake, $tools, $apps, $evidence)) { New-Item -ItemType Directory -Force -Path $folder | Out-Null }
 $consoles = Join-Path $work 'consoles.log'
+$served = Join-Path $work 'served.log'
 
 $script:failure = $null
 $script:app = $null
@@ -515,6 +536,8 @@ function Show-Diagnosis {
   }
   Write-Host '--- the console windows seen'
   Lines-Of $consoles | ForEach-Object { Write-Host $_ }
+  Write-Host '--- the requests served'
+  Lines-Of $served | ForEach-Object { Write-Host $_ }
   Write-Host '--- the processes'
   Get-Process -Name 'harness-device', 'powershell', 'cmd', 'PING' -ErrorAction SilentlyContinue |
     Format-Table Id, ProcessName, SessionId, StartTime -AutoSize | Out-String -Width 200 | Write-Host
@@ -544,8 +567,8 @@ function Clean-Up {
     New-Item -ItemType Directory -Force -Path $Out | Out-Null
     Keep-Fake
     Copy-Item -Path (Join-Path $evidence '*') -Destination $Out -Recurse -Force -ErrorAction SilentlyContinue
-    Copy-Item -Path (Join-Path $logs 'app-*.log'), $consoles, (Join-Path $tools 'powershell.record') -Destination $Out `
-      -Force -ErrorAction SilentlyContinue
+    Copy-Item -Path (Join-Path $logs 'app-*.log'), $consoles, (Join-Path $tools 'powershell.record'), $served `
+      -Destination $Out -Force -ErrorAction SilentlyContinue
   }
   # The uninstaller copies itself away and returns at once: what it removes is waited for.
   if ($script:installed -and (Test-Path -LiteralPath (Join-Path $installDir 'uninstall.exe'))) {
@@ -568,6 +591,134 @@ function Clean-Up {
     Remove-Item -LiteralPath $vendorKey -ErrorAction SilentlyContinue
   }
   Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+function Report-Failure($record) {
+  if ($script:failure) { Write-Host "FAILED: $script:failure" }
+  else { Write-Host "FAILED: the script stopped: $($record.Exception.Message) $($record.InvocationInfo.PositionMessage)" }
+  Show-Diagnosis
+}
+
+# --- The update: 0.0.1 from update-pair.sh, installed, finds 0.0.2 at 127.0.0.1:8765 and becomes it
+
+# Serves the folder it is given on 127.0.0.1:8765, one request at a time, and writes `ready`, then each request's line,
+# to the file it is given.
+$serverSource = @'
+using System;
+using System.IO;
+using System.Net;
+using System.Net.Sockets;
+using System.Text;
+static class Serve {
+  static void Main(string[] args) {
+    string root = Path.GetFullPath(args[0]).TrimEnd('\\') + "\\";
+    TcpListener listener = new TcpListener(IPAddress.Loopback, int.Parse(args[2]));
+    listener.Start();
+    File.AppendAllText(args[1], "ready\n");
+    while (true) {
+      using (TcpClient client = listener.AcceptTcpClient()) {
+        try { Answer(client.GetStream(), root, args[1]); } catch (IOException) { }
+      }
+    }
+  }
+  static void Answer(NetworkStream stream, string root, string log) {
+    StreamReader reader = new StreamReader(stream, Encoding.ASCII);
+    string request = reader.ReadLine();
+    if (request == null) return;
+    for (string header = reader.ReadLine(); !string.IsNullOrEmpty(header); header = reader.ReadLine()) { }
+    File.AppendAllText(log, request + "\n");
+    string[] parts = request.Split(' ');
+    string path = parts.Length > 1 ? Uri.UnescapeDataString(parts[1].Split('?')[0]).TrimStart('/') : "";
+    string file = Path.GetFullPath(Path.Combine(root, path.Replace('/', '\\')));
+    bool found = file.StartsWith(root, StringComparison.OrdinalIgnoreCase) && File.Exists(file);
+    byte[] body = found ? File.ReadAllBytes(file) : new byte[0];
+    byte[] head = Encoding.ASCII.GetBytes((found ? "HTTP/1.1 200 OK" : "HTTP/1.1 404 Not Found") +
+      "\r\nContent-Length: " + body.Length + "\r\nConnection: close\r\n\r\n");
+    stream.Write(head, 0, head.Length);
+    stream.Write(body, 0, body.Length);
+  }
+}
+'@
+
+function Checked([int]$count) { @(Lines-Of $served | Where-Object { $_.StartsWith('GET /metadata.json ') }).Count -ge $count }
+
+function Installed-Version {
+  try { (Get-Item -LiteralPath $exe).VersionInfo.ProductVersion } catch { $null }
+}
+
+function Update-Checks {
+  if (-not $csc) { Fail 'the .NET Framework compiler (csc.exe) is on this Windows' }
+  $server = Build-Tool 'serve' 'winexe' $serverSource @()
+  $started.Add((Start-Process -FilePath $server -ArgumentList "`"$Update`" `"$served`" $PORT" -PassThru))
+  if (-not (Wait-For { (Lines-Of $served) -contains 'ready' })) { Fail "the pair is served on 127.0.0.1:$PORT" }
+
+  # Seeded before the install, so no launch ever reaches the install line on its own.
+  Save-State $true $true $true
+  $script:installed = $true
+  $script:ranInstaller = $true
+  $setup = Start-Process -FilePath $Installer -ArgumentList '/S' -PassThru
+  $null = $setup.Handle
+  if (-not $setup.WaitForExit(300000)) { Fail 'the installer ends within 5 minutes' }
+  if ($setup.ExitCode -ne 0) { Fail "the installer exits 0, not $($setup.ExitCode)" }
+  $running = @(Get-Process -Name 'harness-device' -ErrorAction SilentlyContinue)
+  if ($running.Count) {
+    $running | Stop-Process -Force
+    if (-not (Wait-For { -not (Get-Process -Name 'harness-device' -ErrorAction SilentlyContinue) })) { Fail 'the app started by the installer ends' }
+  }
+  if ((Installed-Version) -ne '0.0.1') { Fail "/S installs 0.0.1, not $(Installed-Version)" }
+  Ok '/S installs 0.0.1'
+
+  # cliSeen and askedSignIn: nothing is installed and no window opens. The login item is the run's to write, so the
+  # update is seen to keep it.
+  Save-State $true $true $false
+  Use-Fake $false
+  $deadline = [DateTime]::UtcNow.AddSeconds($UPDATE_WAIT)
+  $left = { [Math]::Max(1, [int]($deadline - [DateTime]::UtcNow).TotalSeconds) }
+  Launch 'update'
+  if (-not (Wait-For { Logged 'login item: registered' })) { Fail 'the first run registers the login item' }
+  $quoted = "`"$exe`""
+  if ((Run-Value) -ine $quoted) { Fail "the Run value $RUN_VALUE is the quoted exe, not $(Run-Value)" }
+  if (-not (Wait-For { Logged 'update: found 0.0.2' } (& $left))) { Fail '0.0.1 logs update: found 0.0.2' }
+  if (-not (Wait-For { Logged 'update: installing 0.0.2' } (& $left))) { Fail '0.0.1 logs update: installing 0.0.2' }
+  Ok '0.0.1 logs update: found 0.0.2, then update: installing 0.0.2'
+
+  # The plugin ends the app as it starts the installer, which starts the app again when it is done.
+  if (-not (Wait-For { $script:app.HasExited })) { Fail '0.0.1 ends for the install' }
+  if (-not (Wait-For { (Installed-Version) -eq '0.0.2' } (& $left))) {
+    Fail "the installed harness-device.exe is 0.0.2, not $(Installed-Version)"
+  }
+  Ok 'the installed harness-device.exe is 0.0.2'
+  $old = $script:app.Id
+  $relaunched = {
+    @(Get-Process -Name 'harness-device' -ErrorAction SilentlyContinue |
+      Where-Object { $_.Id -ne $old -and $_.Path -and $_.Path -ieq $exe }).Count -gt 0
+  }
+  if (-not (Wait-For $relaunched (& $left))) { Fail 'the app runs again after the update' }
+  # 0.0.1 checked once: a second check is the relaunched app's.
+  if (-not (Wait-For { Checked 2 } (& $left))) { Fail 'the relaunched app checks the manifest' }
+  Ok 'the app runs again, 0.0.2, and checks the manifest'
+  if ((Run-Value) -ine $quoted) { Fail "the update keeps the Run value $RUN_VALUE, the quoted exe: it is $(Run-Value)" }
+  Ok "the update keeps the Run value $RUN_VALUE"
+
+  # A check starts only once the one before it was answered, so the third request shows the relaunched app's first
+  # check, the second, was answered: any update it found is logged by then.
+  if (-not (Wait-For { Checked 3 } (& $left))) { Fail 'the relaunched app checks again, a minute later' }
+  if ((Times-Logged 'update: found 0.0.2') -ne 1) { Fail '0.0.2 finds no update: one update: found in the log' }
+  Ok '0.0.2 checks the manifest and finds no update'
+}
+
+if ($Update) {
+  $code = 0
+  try {
+    Update-Checks
+    Write-Host '0 FAILED'
+  } catch {
+    Report-Failure $_
+    $code = 1
+  } finally {
+    Clean-Up
+  }
+  exit $code
 }
 
 $code = 0
@@ -812,9 +963,7 @@ try {
   Ok 'uninstall.exe /S removes the folder, the Start Menu shortcut, the uninstall entry and the Run value'
   Write-Host '0 FAILED'
 } catch {
-  if ($script:failure) { Write-Host "FAILED: $script:failure" }
-  else { Write-Host "FAILED: the script stopped: $($_.Exception.Message) $($_.InvocationInfo.PositionMessage)" }
-  Show-Diagnosis
+  Report-Failure $_
   $code = 1
 } finally {
   Clean-Up

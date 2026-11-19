@@ -3,6 +3,7 @@
 # (sni-watcher.py), X11, headless sway and a scripted Hyprland (hypr-fake.py).
 #
 #   bash device-app/scripts/e2e/linux.sh <AppImage>
+#   bash device-app/scripts/e2e/linux.sh --update OUT   update-pair.sh's 0.0.1 becomes 0.0.2 from 127.0.0.1:8765
 #
 # Prints `ok: <check>` for each check, `note:` for what it saw but does not judge, and stops at the first
 # `FAILED: <check>`, exiting 1. Everything it runs is its own and goes with it: a scratch HOME and XDG folders, its own
@@ -19,11 +20,23 @@ fi
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 fake_cli="$(dirname "$(dirname "$here")")/src-tauri/tests/fake-harness"
 python=/usr/bin/python3
-# Every wait ends on what it waits for, bounded by this: a slow arm64 runner starts the AppImage in seconds.
+# Every wait ends on what it waits for, bounded by this: a slow arm64 runner starts the AppImage in seconds. An update
+# by UPDATE_WAIT, from the launch.
 WAIT=60
+UPDATE_WAIT=300
+PORT=8765
 
+update=""
+if [[ $# -eq 2 && "$1" == --update && -d "$2" ]]; then
+  update="$(cd "$2" && pwd)"
+  case "$(uname -m)" in
+    x86_64) released=Harness-Device-linux-x64.AppImage ;;
+    aarch64) released=Harness-Device-linux-arm64.AppImage ;;
+  esac
+  set -- "$update/0.0.1/${released:-}"
+fi
 [[ $# -eq 1 && -f "$1" ]] || {
-  echo "usage: linux.sh <AppImage>" >&2
+  echo "usage: linux.sh <AppImage> | linux.sh --update OUT (update-pair.sh's, for this arch)" >&2
   exit 2
 }
 
@@ -77,6 +90,8 @@ fail() {
   cat "$fake/calls.log" 2>/dev/null
   echo "--- the tray items registered"
   cat "$work/tray-items" 2>/dev/null
+  echo "--- the requests served"
+  cat "$work/server.log" 2>/dev/null
   echo "--- the app's output"
   tail -n 40 "$work/app.out" 2>/dev/null
   exit 1
@@ -97,8 +112,7 @@ started() { pids+=("$!"); }
 base=(HOME="$home" USER="$(id -un)" LOGNAME="$(id -un)" SHELL=/bin/sh LANG=C.UTF-8
   PATH="$work/bin:/usr/local/bin:/usr/bin:/bin"
   XDG_CONFIG_HOME="$config" XDG_DATA_HOME="$data_home" XDG_CACHE_HOME="$work/cache" XDG_STATE_HOME="$work/state"
-  XDG_RUNTIME_DIR="$runtime" DBUS_SESSION_BUS_ADDRESS="$DBUS_SESSION_BUS_ADDRESS" NO_AT_BRIDGE=1
-  HARNESS_DEVICE_CLI="$fake_cli" FAKE_HARNESS="$fake")
+  XDG_RUNTIME_DIR="$runtime" DBUS_SESSION_BUS_ADDRESS="$DBUS_SESSION_BUS_ADDRESS" NO_AT_BRIDGE=1)
 [[ -z "${APPIMAGE_EXTRACT_AND_RUN:-}" ]] || base+=(APPIMAGE_EXTRACT_AND_RUN="$APPIMAGE_EXTRACT_AND_RUN")
 
 # --- The display, its window manager, the tray host
@@ -262,6 +276,52 @@ save_state() {
 # shellcheck disable=SC2016 # the entry's text, which no shell here expands
 run_line='/bin/sh -c "[ -x \\"\\$0\\" ] && exec \\"\\$0\\"; exec \\"\\$1\\" start"'
 own_exec="Exec=$run_line \"$appimage\" \"$home/.local/bin/harness\""
+
+# --- The update: 0.0.1 from update-pair.sh, with no CLI and nothing in its way, finds 0.0.2 at 127.0.0.1:8765 and
+# becomes it
+
+checked() { [[ "$(grep -c '"GET /metadata.json ' "$work/server.log")" -ge "$1" ]]; }
+# Tauri starts the new AppImage, which stays in the session's process group, then the old one exits.
+relaunched() {
+  local pid
+  for pid in $(pgrep -g "$app_pid"); do
+    [[ "$(readlink "/proc/$pid/exe")" == */usr/bin/harness-device ]] && ! gone "$pid" && return 0
+  done
+  return 1
+}
+
+if [[ -n "$update" ]]; then
+  # cliSeen, askedSignIn and loginItem: nothing is installed and no window opens.
+  save_state true true
+  "$python" -m http.server "$PORT" --bind 127.0.0.1 --directory "$update" >"$work/server.log" 2>&1 &
+  started
+  waits curl -fs -o /dev/null "http://127.0.0.1:$PORT/0.0.1/" || fail "the manifest is served on 127.0.0.1:$PORT"
+
+  from=$SECONDS
+  launch XDG_SESSION_TYPE=x11
+  WAIT=$UPDATE_WAIT waits logged "update: found 0.0.2" || fail "0.0.1 logs update: found 0.0.2"
+  WAIT=$((UPDATE_WAIT - SECONDS + from)) waits logged "update: installed 0.0.2" \
+    || fail "0.0.1 logs update: installed 0.0.2"
+  ok "0.0.1 logs update: found 0.0.2, then update: installed 0.0.2"
+  [[ "$(sha256sum <"$appimage")" == "$(sha256sum <"$update/0.0.2/$released")" ]] || fail "the AppImage is 0.0.2's"
+  ok "the AppImage is 0.0.2's, byte for byte"
+
+  waits gone "$app_pid" || fail "0.0.1 ends for the relaunch"
+  waits relaunched || fail "the app runs again after the update"
+  # 0.0.1 checked once: a second check is the relaunched app's.
+  WAIT=$((UPDATE_WAIT - SECONDS + from)) waits checked 2 || fail "the relaunched app checks the manifest"
+  logged "instance: already running" && fail "the relaunched app takes the lock 0.0.1 let go"
+  ok "the app runs again, 0.0.2, past its own lock, and checks the manifest"
+
+  # A check starts only once the one before it was answered, so the third request shows the relaunched app's first
+  # check, the second, was answered: any update it found is logged by then.
+  WAIT=$((UPDATE_WAIT - SECONDS + from)) waits checked 3 || fail "the relaunched app checks again, a minute later"
+  [[ "$(times_logged "update: found 0.0.2")" -eq 1 ]] || fail "0.0.2 finds no update: one update: found in the log"
+  ok "0.0.2 checks the manifest and finds no update"
+  echo "0 FAILED"
+  exit 0
+fi
+base+=(HARNESS_DEVICE_CLI="$fake_cli" FAKE_HARNESS="$fake")
 
 # --- 1, 3, 7, 8, 9: X11, the tray host there, the first run
 

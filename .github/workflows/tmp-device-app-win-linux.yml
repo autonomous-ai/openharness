@@ -173,3 +173,72 @@ jobs:
           path: ${{ runner.temp }}/device-app-e2e
           retention-days: 3
           if-no-files-found: ignore
+
+  # The app updates itself from a local manifest: update-pair.sh builds 0.0.1 and 0.0.2 as a release does, signed with
+  # a key pair made in the run, and the driver's update mode serves them on 127.0.0.1:8765. The Windows arm64 pair is
+  # built beside the x64 one and kept for the Windows ARM VM, for 3 days.
+  update-e2e:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-22.04, ubuntu-22.04-arm, windows-latest]
+    runs-on: ${{ matrix.runner }}
+    # A cold Tauri CLI, two release builds (four on Windows), then the run, which waits a minute for a second check.
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      # What linux.sh runs: a display, a window manager, X clients, a session bus, the Python of its probes, FUSE for
+      # the AppImage.
+      - if: runner.os == 'Linux'
+        run: >-
+          sudo bash scripts/apt-install.sh xvfb openbox xdotool xterm dbus-x11 python3-dbus python3-gi libfuse2
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.CLI_NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: device-app/ui/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: device-app/src-tauri
+          shared-key: device-app-tmp-update-${{ matrix.runner }}
+      # The release's own setup: this OS's Rust targets and packages, the Tauri CLI, the window's packages, minisign.
+      - name: Release tools
+        shell: bash
+        run: bash device-app/scripts/release-setup.sh
+      - name: Update pair
+        shell: bash
+        env:
+          DEVICE_TARGET: ${{ runner.os == 'Windows' && 'x86_64-pc-windows-msvc' || '' }}
+        run: bash device-app/scripts/e2e/update-pair.sh "$RUNNER_TEMP/pair"
+      - name: End to end
+        if: runner.os == 'Linux'
+        run: bash device-app/scripts/e2e/linux.sh --update "$RUNNER_TEMP/pair"
+      - name: End to end
+        if: runner.os == 'Windows'
+        run: >-
+          pwsh -NoProfile -File device-app/scripts/e2e/windows.ps1 -Update "$env:RUNNER_TEMP\pair"
+          -Out "$env:RUNNER_TEMP\device-app-update"
+      - name: Update pair, arm64
+        if: runner.os == 'Windows'
+        shell: bash
+        env:
+          DEVICE_TARGET: aarch64-pc-windows-msvc
+        run: bash device-app/scripts/e2e/update-pair.sh "$RUNNER_TEMP/pair-arm64"
+      - if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: device-app-windows-arm64-update
+          path: ${{ runner.temp }}/pair-arm64
+          retention-days: 3
+          if-no-files-found: error
+      # The app's log and the requests served, for a failure.
+      - if: failure() && runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: device-app-update-e2e-${{ matrix.runner }}
+          path: ${{ runner.temp }}/device-app-update
+          retention-days: 3
+          if-no-files-found: ignore
