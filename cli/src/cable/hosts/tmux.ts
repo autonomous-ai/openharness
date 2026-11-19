@@ -1,22 +1,26 @@
 /**
  * A pane in the person's own tmux (docs/specs/2026-11-15-device-wave1-checks.md, F1 "The tap"): a tap switches one of
- * their clients to the pane a hook named, then the app around tmux comes forward as every app does. That switch is the
- * one thing done there, only once the pane's process is checked to be the agent's or one of its parents, and it never
- * moves a client on a session Harness made: nothing is typed, made or closed (Q1). Beside it, a lookup reads which client
- * shows a pane's session, to place the agent on the page of the app that holds it (createTmuxOuter). tmux is the daemon's:
- * the name on its PATH, with no `-L` or `-S`. Each value came from a hook or from tmux, so it is checked against its form,
- * and tmux runs with no shell.
+ * their clients to the pane a hook named, then the app around tmux comes forward as every app does. A pane whose app is
+ * known (the one holding the client that shows its session) is instead made its own session's active window and pane, at
+ * a tap and at a rest while that app is in front (docs/plans/2026-11-19-dial-tmux-terminal-design.md): every client on
+ * that session shows it, and none is moved to another session. Those are the two things done there, each only once the
+ * pane's process is checked to be the agent's or one of its parents, and never on a session Harness made: nothing is
+ * typed, made or closed (Q1). Beside them, a lookup reads which client shows a pane's session, to place the agent on the
+ * page of the app that holds it (createTmuxOuter). tmux is the daemon's: the name on its PATH, with no `-L` or `-S`. Each
+ * value came from a hook or from tmux, so it is checked against its form, and tmux runs with no shell.
  */
 import { HARNESS_OWNER_OPTION, isHarnessSession, paneOwnerFormat } from '../../lib/harnessSessionLabel.js'
 import type { HostAdapter, Pane, Place } from './adapter.js'
+import { APP_IDS } from './hostDetect.js'
 import { RUN_TIMEOUT_MS, type OrcaDeps } from './orca.js'
 import { parentChain, scannedApps, type ProcessName } from './scannedApp.js'
 import { TAB_TTY } from './tabs.js'
 
 const TMUX_PANE_ID = /^%[0-9]{1,9}$/
 const PID = /^[1-9][0-9]{0,9}$/
-/** This adapter's pane: tmux's pane id and the agent's process, `%3:100`, as the hook's event named them. */
-const PANE_AND_PID = /^(%[0-9]{1,9}):([1-9][0-9]{0,9})$/
+/** This adapter's pane: tmux's pane id and the agent's process, `%3:100`, as the hook's event named them, and the app
+ *  holding the client that shows its session when one was found, `%3:100:terminal-app`. */
+const PANE_AND_PID = /^(%[0-9]{1,9}):([1-9][0-9]{0,9})(?::([a-z-]{1,32}))?$/
 /** The pane, in one call: its process, its session, and the tag of the daemon that made it, as the hook reads them
  *  (`describePane`). The tag is the pane's option and, read on any tmux so no `tmux -V` is asked, the one its start
  *  command carries before tmux 3.0 (a newer tmux never puts it there). Before 3.0 the option is the window's: it counts
@@ -43,6 +47,8 @@ export interface TmuxDeps {
   /** The machine's processes, as the open scan reads them; it rejects when the table cannot be read. */
   processes(): Promise<readonly ProcessName[]>
   log(line: string): void
+  /** The app in front (cableHost.latestFront()): a rest shows a pane only in the app the person is looking at. */
+  front(): string | undefined
 }
 
 /** What tmux says of a pane: its process, and whether it is the person's by the rule the hook and the client filter
@@ -59,6 +65,14 @@ async function paneFacts(run: TmuxDeps['run'], id: string): Promise<{ pid: numbe
  *  person's (`-L`) can have a pane of the same id, and a process the table does not hold is in no pane. */
 function holdsPane(rows: readonly ProcessName[], pid: number, panePid: number): boolean {
   return parentChain(pid, new Map(rows.map((p) => [p.pid, p]))).some((p) => p.pid === panePid)
+}
+
+/** The parts of this adapter's pane id; nothing when it is out of form, its app field one no listed app's. */
+function paneParts(pane: Pane): { id: string; pid: number; app?: string } | undefined {
+  const parts = PANE_AND_PID.exec(pane.id)
+  if (!parts) return undefined
+  const [, id, pid, app] = parts
+  return app === undefined || APP_IDS.includes(app) ? { id, pid: Number(pid), app } : undefined
 }
 
 export function createTmuxAdapter(deps: TmuxDeps): HostAdapter {
@@ -89,31 +103,54 @@ export function createTmuxAdapter(deps: TmuxDeps): HostAdapter {
     return 'refused'
   }
 
+  /** Whether the pane may be shown: only once tmux names the pane's process and it is the agent's or one of its parents,
+   *  as a second tmux server of the person's (`-L`) can have a pane of the same id. And only while the pane is still the
+   *  person's: the hook checked that at its last event, and a pane can move into a session Harness made since (Q1). */
+  async function checkedPane(id: string, agentPid: number): Promise<boolean | 'refused'> {
+    const facts = await paneFacts(deps.run, id)
+    if (!facts) return false
+    if (!facts.persons) return notItsPane()
+    const rows = await deps.processes().catch(() => undefined)
+    if (!rows) return false
+    return holdsPane(rows, agentPid, facts.pid) || notItsPane()
+  }
+
+  /** The pane's window, then the pane, made active on the pane's own session, in one run of tmux. */
+  async function select(id: string): Promise<boolean> {
+    return (await deps.run('tmux', ['select-window', '-t', id, ';', 'select-pane', '-t', id], RUN_TIMEOUT_MS)).code === 0
+  }
+
   return {
     id: 'tmux',
     tap: 'before',
-    // The pane carries the hook's caller, the agent's process: the pane's own is checked against it at the tap.
+    // The pane carries the hook's caller, the agent's process: the pane's own is checked against it at the tap. And the
+    // app holding its session's client, when one was found: that app's tab is where the person sees the pane.
     paneOf(place: Place): Pane | undefined {
       const id = place.hints.TMUX_PANE
-      return id && TMUX_PANE_ID.test(id) && PID.test(String(place.pid)) ? { adapter: 'tmux', id: `${id}:${place.pid}` } : undefined
+      if (!id || !TMUX_PANE_ID.test(id) || !PID.test(String(place.pid))) return undefined
+      const app = place.outer && APP_IDS.includes(place.outer.app) ? `:${place.outer.app}` : ''
+      return { adapter: 'tmux', id: `${id}:${place.pid}${app}` }
     },
     canFocus: () => true,
-    /** The person's client is switched to the pane only once tmux names the pane's process and it is the agent's or one
-     *  of its parents: a second tmux server of theirs (`-L`) can have a pane of the same id. And only while the pane is
-     *  still the person's: the hook checked that at its last event, and a pane can move into a session Harness made
-     *  since (Q1). */
+    /** A pane with its app is selected on its own session: the tap raises that app's tab, whose client shows the session.
+     *  Without one, the person's client used last is switched to the pane. */
     async focus(pane) {
-      const ids = PANE_AND_PID.exec(pane.id)
-      if (!ids) return false
-      const [, id, agentPid] = ids
-      const facts = await paneFacts(deps.run, id)
-      if (!facts) return false
-      if (!facts.persons) return notItsPane()
-      const rows = await deps.processes().catch(() => undefined)
-      if (!rows) return false
-      if (!holdsPane(rows, Number(agentPid), facts.pid)) return notItsPane()
+      const parts = paneParts(pane)
+      if (!parts) return false
+      const checked = await checkedPane(parts.id, parts.pid)
+      if (checked !== true) return checked
+      if (parts.app) return select(parts.id)
       const client = await personsClient()
-      return !!client && (await deps.run('tmux', ['switch-client', '-c', client, '-t', id], RUN_TIMEOUT_MS)).code === 0
+      return !!client && (await deps.run('tmux', ['switch-client', '-c', client, '-t', parts.id], RUN_TIMEOUT_MS)).code === 0
+    },
+    // A rest never switches a client: only the session's own pane moves, and only in the app the person looks at.
+    canShow(pane) {
+      const app = paneParts(pane)?.app
+      return app !== undefined && app === deps.front()
+    },
+    async show(pane) {
+      const parts = paneParts(pane)
+      return parts && (await checkedPane(parts.id, parts.pid)) === true && (await select(parts.id)) ? 'ok' : 'failed'
     },
   }
 }

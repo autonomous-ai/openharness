@@ -484,7 +484,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
    *  values name the terminal the tmux server began in, and herdr inside tmux carries tmux's pane. Herdr and cmux come
    *  after tmux, as a tmux inside their terminal is the nearer host, and before the terminals: each tells its programs
    *  they run in Ghostty, whose tabs hold none of them. */
-  const tmux = noting(createTmuxAdapter({ run: apps.run, processes: readProcessNames, log }))
+  const tmux = noting(createTmuxAdapter({ run: apps.run, processes: readProcessNames, log, front: () => cableHost.latestFront() }))
   const orca = createOrcaAdapter(apps, { worktreeOf: (handle) => orcaWorktrees.get(handle), log, switching: (handle) => orcaSwitches.note(handle) })
   const adapters: readonly HostAdapter[] = [herdrNoted, tmux, herdrAppNoted, cmuxAppNoted, ...[
     createWeztermAdapter(apps),
