@@ -117,6 +117,22 @@ describe('the WezTerm adapter', () => {
     expect(app.calls).toEqual([send('7', 'hello', APP_WEZTERM), send('7', '\r', APP_WEZTERM)])
   })
 
+  // canType runs at every look, each second for each WezTerm agent, and finding wezterm walks PATH.
+  it('wezterm is looked for once; again only while none was found, or after a run that failed', async () => {
+    const found: Array<string | null> = [null, FAKE_PATH_WEZTERM]
+    let looks = 0
+    const { adapter } = recorder({ onPath: () => { looks++; return found.length ? found.shift()! : FAKE_PATH_WEZTERM } }, [1])
+    expect(adapter.canType!(pane('7'))).toBe(false)
+    for (let look = 0; look < 3; look++) expect(adapter.canType!(pane('7'))).toBe(true)
+    expect(looks).toBe(2)
+    expect(await adapter.focus(pane('7'))).toBe(false)
+    expect(adapter.canType!(pane('7'))).toBe(true)
+    expect(looks).toBe(3)
+    expect(await adapter.focus(pane('7'))).toBe(true)
+    expect(adapter.canType!(pane('7'))).toBe(true)
+    expect(looks).toBe(3)
+  })
+
   it('paneOf takes a pane number, and refuses any other', () => {
     const { adapter } = recorder()
     expect(adapter.paneOf(place({ WEZTERM_PANE: '7' }))).toEqual(pane('7'))
