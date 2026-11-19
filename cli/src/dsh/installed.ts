@@ -107,7 +107,9 @@ export function setupsPending(records: readonly InstalledDshRecord[] = readInsta
 
 /** Sets or (null) removes one record's mark. */
 export function markSetup(id: string, setup: SetupMark | null): void {
-  writeInstalledIndex(readInstalledIndex().map((row) => {
+  // As upsertInstalledRecord: an index that cannot be read throws, rather than be written as none.
+  const records = (requireState(indexPath(), jsonArray, 'cache') ?? []).filter(validRecord)
+  writeInstalledIndex(records.map((row) => {
     if (row.id !== id) return row
     const { setup: _previous, ...record } = row
     return setup ? { ...record, setup } : record
