@@ -87,6 +87,38 @@ export class NativePaths {
 
   snapshot(): NativePathFact[] {
     this.verify()
+    return this.facts()
+  }
+
+  /** Publication checks sibling routes at one fence. Verify common ancestors once, after every walk,
+   * so a later sibling cannot replace an earlier route before that route's final check. */
+  static snapshots(group: readonly NativePaths[]): NativePathFact[][] {
+    if (!group.length || group.length > 32) return nativeUnavailable('the native route group exceeds its limit')
+    // A single destination has no shared facts; the measured union allocation only adds cost.
+    if (group.length === 1) {
+      if (!group[0].parts.size) return nativeUnavailable('the native route group is incomplete')
+      return [group[0].snapshot()]
+    }
+    const parts = new Map<string, Part>()
+    let budget = group[0].budget
+    for (const paths of group) {
+      if (!paths.parts.size || paths.windows !== group[0].windows) return nativeUnavailable('the native route group is incomplete')
+      if (paths.budget.remaining() < budget.remaining()) budget = paths.budget
+      for (const [path, part] of paths.parts) {
+        paths.budget.step()
+        const previous = parts.get(path)
+        if (previous && (identity(previous.info) !== identity(part.info) || previous.target !== part.target
+          || (part.target !== undefined && version(previous.info!) !== version(part.info!)))) {
+          return nativeUnavailable('a native route changed between grouped observations')
+        }
+        parts.set(path, part)
+      }
+    }
+    verifyParts(parts, budget)
+    return group.map(paths => paths.facts())
+  }
+
+  private facts(): NativePathFact[] {
     return [...this.parts].map(([path, part]) => ({ path, identity: identity(part.info),
       ...(part.target !== undefined ? { alias: { target: part.target, version: version(part.info!) } } : {}) }))
   }

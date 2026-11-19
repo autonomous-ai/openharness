@@ -102,6 +102,8 @@ it.each(routeVerifiers)('$name refuses an original fact missing from the verifie
   vi.spyOn(NativePaths.prototype, 'snapshot').mockImplementation(function (this: NativePaths) {
     return snapshot.call(this).filter(fact => fact.path !== root)
   })
+  const snapshots = NativePaths.snapshots
+  vi.spyOn(NativePaths, 'snapshots').mockImplementation(group => snapshots(group).map(facts => facts.filter(fact => fact.path !== root)))
   expect(() => observed.verify()).toThrow(IdentityReadUnavailable)
 })
 

@@ -448,10 +448,14 @@ export function hookPreparationRoutes(files: readonly string[]): { verify(): voi
   })
   const verifyRoutes = () => {
     const directories = new Map<string, BigIntStats>()
-    for (const { file, key, facts, aliases } of reservations) {
-      const fresh = new NativePaths(new NativeEvidenceBudget()), located = fresh.resolveSync(file, true, directories)
-      const target = located?.path ?? join(directoryPath(dirname(file)), basename(file))
-      const snapshot = fresh.snapshot()
+    const current = reservations.map(reservation => {
+      const fresh = new NativePaths(new NativeEvidenceBudget()), located = fresh.resolveSync(reservation.file, true, directories)
+      const target = located?.path ?? join(directoryPath(dirname(reservation.file)), basename(reservation.file))
+      return { ...reservation, fresh, target }
+    })
+    const snapshots = NativePaths.snapshots(current.map(route => route.fresh))
+    for (const [index, { target, key, facts, aliases }] of current.entries()) {
+      const snapshot = snapshots[index]
       if (facts.length) verifyRetainedPathSnapshot(facts, snapshot)
       if (target !== key || snapshot.some(fact => fact.alias && !aliases.has(fact.path))) {
         throw new HookPreparationHeld('the reserved destination route changed')

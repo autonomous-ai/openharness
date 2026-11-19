@@ -14,9 +14,9 @@ beforeEach(() => { root = realpathSync(mkdtempSync(join(tmpdir(), 'native-route-
 afterEach(() => { effects.onStat = undefined; rmSync(root, { recursive: true, force: true }) })
 
 const callers = [
-  { name: 'destination routes', reads: 4 },
-  { name: 'preparation observations', reads: 8 },
-  { name: 'completed proof', reads: 8 },
+  { name: 'destination routes', reads: 2, aliasReads: 4, fallbackReads: 3 },
+  { name: 'preparation observations', reads: 6, aliasReads: 10, fallbackReads: 7 },
+  { name: 'completed proof', reads: 6, aliasReads: 10, fallbackReads: 7 },
 ] as const
 type Caller = typeof callers[number]['name']
 async function withVerifier(caller: Caller, files: string[], exercise: (verify: () => void) => void): Promise<void> {
@@ -81,12 +81,12 @@ it.each(callers.flatMap(caller => (caller.name === 'destination routes' ? ['repl
   },
 )
 
-it.each(callers)('$name checks an existing common alias in every walk and final snapshot', async ({ name, reads }) => {
+it.each(callers)('$name checks an existing common alias in every walk and grouped final snapshot', async ({ name, aliasReads }) => {
   const fixture = siblings(); fixture.aliasAncestor()
   await withVerifier(name, fixture.files, verify => {
     let observed = 0
     effects.onStat = file => { if (file === fixture.shared) observed++ }
-    try { verify(); expect(observed).toBe(reads === 4 ? 6 : 12) }
+    try { verify(); expect(observed).toBe(aliasReads) }
     finally { effects.onStat = undefined }
   })
 })
@@ -109,7 +109,7 @@ it.each(callers)('$name gives a nested proof its own provisional reads', async (
   }).catch(error => { expect(error).toBeInstanceOf(HookPreparationHeld) })
 })
 
-it.each(callers)('$name falls back to fresh provisional reads after 256 directories', async ({ name, reads }) => {
+it.each(callers)('$name falls back to fresh provisional reads after 256 directories', async ({ name, fallbackReads }) => {
   const branches = ['first', 'second', 'third'].map(branch => join(root, branch, ...Array.from({ length: 90 }, () => 'd')))
   for (const branch of branches) mkdirSync(branch, { recursive: true })
   const files = [...branches.map(branch => join(branch, 'one.json')), join(branches[2], 'two.json')]
@@ -117,7 +117,7 @@ it.each(callers)('$name falls back to fresh provisional reads after 256 director
   await withVerifier(name, files, verify => {
     let observed = 0
     effects.onStat = file => { if (file === branches[2]) observed++ }
-    try { verify(); expect(observed).toBe(reads) }
+    try { verify(); expect(observed).toBe(fallbackReads) }
     finally { effects.onStat = undefined }
   })
 })
@@ -130,4 +130,18 @@ it('runs every custom observation at each original preparation fence', async () 
     attempt.verify(); expect(custom).toHaveBeenCalledTimes(2)
   })
   expect(custom).toHaveBeenCalledTimes(4)
+})
+
+it('checks an earlier private directory after the final sibling walk', () => {
+  const fixture = siblings(), routes = hookPreparationRoutes(fixture.files)
+  let changed = false
+  effects.onStat = file => {
+    if (file !== fixture.files[2]) return
+    effects.onStat = undefined; changed = true
+    const first = join(fixture.shared, 'one'), moved = join(root, 'old-one')
+    renameSync(first, moved); mkdirSync(first)
+    renameSync(join(moved, 'config.json'), fixture.files[0])
+  }
+  expect(() => routes.verify()).toThrow(/changed/)
+  expect(changed).toBe(true)
 })

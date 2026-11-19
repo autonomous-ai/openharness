@@ -33,6 +33,16 @@ afterEach(() => { vi.mocked(fs.lstatSync).mockReset(); vi.mocked(fs.readlinkSync
 const paths = () => new NativePaths(new NativeEvidenceBudget(), 'win32')
 
 describe('NativePaths on Windows', () => {
+  it('groups sibling snapshots while keeping drive ancestry and absent leaves', () => {
+    const one = paths(), two = paths()
+    one.resolveSync('C:\\Users\\u\\.claude\\settings.json')
+    two.resolveSync('C:\\Users\\u\\.claude\\missing.json', true)
+    const expected = [one.snapshot(), two.snapshot()]
+    vi.mocked(fs.lstatSync).mockClear()
+    expect(NativePaths.snapshots([one, two])).toEqual(expected)
+    expect(vi.mocked(fs.lstatSync).mock.calls.filter(args => args[0] === 'C:\\Users\\u')).toHaveLength(1)
+  })
+
   it('forks the selected Windows route with a new budget and refuses reparse points', () => {
     const file = 'C:\\Users\\u\\.claude\\settings.json', base = paths()
     base.resolveSync(file)
