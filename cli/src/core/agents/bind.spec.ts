@@ -2256,6 +2256,18 @@ describe('binding an OpenClaw pane, read from its screen', () => {
         expect(run.deps.capturePane).toHaveBeenCalledTimes(2)
       })
 
+      // Named, rather than left to the daemon's last-resort unhandled-rejection line.
+      it('a hand-over that fails once the stream of the session it binds is up is said', async () => {
+        const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+        const { run } = streaming({ sessionId: '' })
+        run.byAgent.clear()
+        vi.mocked(run.deps.registry.register).mockResolvedValue({ entry: pane({ sessionId: 'agent:main:plain', firstTask: TASK }), ...meta({ isNew: true }) } as never)
+        vi.mocked(run.deps.openclawPaneRead).mockImplementation(() => { throw new Error('stream gone') })
+        await run.binding.bindObservedAgent(tui())
+        await vi.waitFor(() => expect(error).toHaveBeenCalledWith('[agent] a1 first task not handed over · Error'))
+        expect(run.deps.submitFirstTask).not.toHaveBeenCalled()
+      })
+
       it('the pass that clears a Gateway hold hands the task over once the stream it attaches is up', async () => {
         const { run, row } = streaming({ identityHold: OPENCLAW_STATES.noGateway })
         await run.binding.bindObservedAgent(tui())
