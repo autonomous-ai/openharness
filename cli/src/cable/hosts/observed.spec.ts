@@ -3866,9 +3866,9 @@ describe('ObservedSource outer place', () => {
   /** A source whose outer places the test answers by hand, in the order they were asked, as the tmux lookup answers an
    *  event in a tmux pane; an event in no tmux pane is not nested. A tty read answers at once. */
   function nested(over: Partial<Fakes> = {}, adapt = (adapters: readonly HostAdapter[]) => adapters, deps: Partial<ObservedDeps> = {}) {
-    const asks: Array<{ answer(place: { app?: string; tty?: string }): Promise<unknown> }> = []
+    const asks: Array<{ answer(place: { app?: string; tty?: string; pid?: number }): Promise<unknown> }> = []
     const outer = vi.fn((hints: Readonly<Record<string, string>>, _pid: number) => (hints.TMUX_PANE
-      ? new Promise<{ app?: string; tty?: string }>((resolve) => {
+      ? new Promise<{ app?: string; tty?: string; pid?: number }>((resolve) => {
         asks.push({ answer: (place) => { resolve(place); return vi.advanceTimersByTimeAsync(0) } })
       })
       : undefined))
@@ -3895,6 +3895,19 @@ describe('ObservedSource outer place', () => {
     expect(await t.src.focus(t.agent())).toBe(true)
     expect(t.actions.open.mock.calls[0][1].bundle).toBe('com.apple.Terminal')
     expect(t.tty).not.toHaveBeenCalled()
+  })
+
+  // A process under tmux's server owns no window: the one that holds the pane is its client's (the dial-linux spec, 2.2).
+  it('windowOf: a nested agent is in its client\'s window, and in its own process\'s once no client holds it', async () => {
+    const t = nested()
+    t.src.ingest(t.ev('session-start', inTmux()))
+    const { id } = t.agent()
+    expect(t.src.windowOf(id)).toEqual({ pid: 100, app: 'tmux' })
+    await t.asks[0].answer({ ...CLIENT, pid: 4300 })
+    expect(t.src.windowOf(id)).toEqual({ pid: 4300, app: 'terminal-app' })
+    t.src.ingest(t.ev('turn-start', inTmux()))
+    await t.asks[1].answer({})
+    expect(t.src.windowOf(id)).toEqual({ pid: 100, app: 'tmux' })
   })
 
   it('needs-input and turn-stop keep it, and ask nothing', async () => {
