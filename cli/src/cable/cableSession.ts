@@ -155,8 +155,10 @@ const APP_SWITCH_REPAINT_MS = 1_000
 /** What a `voice.begin` without an `sr` is assumed to be — firmware old enough not to say. */
 const DEFAULT_VOICE_RATE = 16_000
 
-/** A voice turn longer than this is a stuck dial, not a person talking. 16 kHz mono 16-bit ≈ 32 KB/s. */
-const VOICE_MAX_BYTES = 10 * 60 * 32_000
+/** A voice turn longer than this is a stuck dial, not a person talking. 16 kHz mono 16-bit ≈ 32 KB/s. Both dials
+ *  stop at 600 s on a tick after the 600 s have passed, so a recording run to that stop passes 600 s by up to a
+ *  tick; 15 s leaves room for it and still bounds a stuck dial. */
+const VOICE_MAX_BYTES = (10 * 60 + 15) * 32_000
 
 /** What a `swarms` item's `members` says about one member id (see CableSession.memberMeta). */
 export interface SwarmMemberMeta { id: string; name: string; engine: string; machine: string; online: boolean }
@@ -2471,7 +2473,7 @@ export class CableSession {
       if (!current()) return
       if (inWindow.t === 'sent') {
         this.log(`cable: the window routed the spoken task → ${inWindow.agentId.slice(0, 8)}`)
-        await reply({
+        await reply(this.withinCap({
           t: 'voice.transcript',
           routeId: '',
           text: transcript,
@@ -2481,7 +2483,7 @@ export class CableSession {
           // that follows the window's focus brings both along a moment later.
           agentName: agents.find((a) => a.id === inWindow.agentId)?.name ?? '',
           needsConfirm: false,
-        })
+        }))
         return
       }
       if (inWindow.t === 'cancelled') {
@@ -2565,8 +2567,8 @@ export class CableSession {
       this.passageCarry.clear(carried.id)
       this.voiceCarryId = undefined
     }
-    await reply({ t: 'voice.transcript', routeId: '', text: transcript, agentId, agentName, needsConfirm: false,
-      ...(carried ? { carryId: carried.id } : {}) })
+    await reply(this.withinCap({ t: 'voice.transcript', routeId: '', text: transcript, agentId, agentName, needsConfirm: false,
+      ...(carried ? { carryId: carried.id } : {}) }))
   }
 
   private cancelSearchVoice(): void {
@@ -3331,13 +3333,17 @@ export class CableSession {
   }
 
   /**
-   * A frame over the cap makes `encodeCableFrame` throw, `send` closes the link, and the reconnect sends the
-   * same frame again. `full` is the one optional part of a summary, so it is what goes.
+   * A frame over the cap makes `encodeCableFrame` throw and `send` drops it, so the dial never hears the message.
+   * `full` is the one optional part of a summary, so it is what goes. A `voice.transcript`'s `text` goes too: neither
+   * firmware reads it (round `cable_client.c`, Pro `pro_cable.c` `handle_voice_transcript`), and a long recording's
+   * words would otherwise cost the dial its "sent". The margin holds the `uploadId` a voice reply adds and the `seq`
+   * `send` adds.
    */
   private withinCap(msg: Message): Message {
-    if (!('full' in msg) || Buffer.byteLength(JSON.stringify(msg), 'utf8') <= CABLE_MAX_PAYLOAD - 256) return msg
-    const { full: _full, ...rest } = msg as Message & { full?: string }
-    return rest
+    const drop = msg.t === 'voice.transcript' ? 'text' : 'full'
+    if (!(drop in msg) || Buffer.byteLength(JSON.stringify(msg), 'utf8') <= CABLE_MAX_PAYLOAD - 256) return msg
+    const { [drop]: _dropped, ...rest } = msg
+    return rest as Message
   }
 
   /** The whole answer behind a card, from the host's newest stored turn, if that turn IS this card's. */
