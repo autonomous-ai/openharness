@@ -19,7 +19,7 @@
 import { randomUUID } from 'node:crypto'
 import { existsSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { dirname, isAbsolute, join } from 'node:path'
 import { env } from '../config/env.js'
 import { DEVICES_FALLBACKS, DEVICES_REQUESTS, type CoreApi, type CorePorts, type DeviceHookPort, type DevicesPort, type RouteAnswer, type SendResult, type ServiceRequests, type WindowFocus } from '../core/api.js'
 import { CableFleet, testDialDiscovery, type CableFleetOptions } from '../cable/cableFleet.js'
@@ -38,6 +38,8 @@ import { CmuxSource } from '../cable/hosts/cmuxSource.js'
 import { createCursorFolderAdapter, isFolder } from '../cable/hosts/cursorFolder.js'
 import { watchNearest } from '../cable/hosts/folderWatch.js'
 import { createCodexAppAdapter } from '../cable/hosts/codexApp.js'
+import { CodexAppSource, type CodexAppSourceDeps } from '../cable/hosts/codexAppSource.js'
+import { CodexAppThreads } from '../cable/hosts/codexAppThreads.js'
 import { APP_BUNDLES } from '../cable/hosts/hostDetect.js'
 import { codexQueueDeps, createCodexQueue, type CodexQueueDeps } from '../cable/hosts/codexQueue.js'
 import { createHcClient, hcClientDeps, hcPaneKey, hcSocketPath, type HcClient } from '../cable/hosts/hcClient.js'
@@ -150,6 +152,11 @@ export interface DevicesDeps {
   opencode?: OpencodeClient
   /** For this service's tests: the reader of the Claude app's store (cable/hosts/claudeAppStore.ts). */
   claudeAppStore?: ClaudeAppSourceDeps['store']
+  /** For this service's tests: the reader of the ChatGPT app's threads (cable/hosts/codexAppThreads.ts). */
+  codexAppThreads?: CodexAppSourceDeps['threads']
+  /** For this service's tests: an app bundle's id from its Info.plist; `readBundleId` (cable/hosts/scannedApp.ts) by
+   *  default. */
+  bundleId?: (app: string) => Promise<string | undefined>
   /** Opens the devices' own listener with these handlers (services/devicesListener.ts). Given by the devices process
    *  alone: inside the core's process (`HARNESSD_SERVICES=none`, Harness OS) there is none, so the core's process opens
    *  no socket for the devices, and the dial follows no app in front there. */
@@ -376,6 +383,11 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   const herdrAdapter = createHerdrAdapter({ ...apps, client: herdrClient })
   /** `HARNESS_OPEN_BIN`: the end-to-end tests' fake `open`, run for each `open -b` (cable/hosts/open.ts). */
   const openBin = process.env.HARNESS_OPEN_BIN
+  /** `HARNESS_APPLICATIONS_DIR`, an absolute path alone: where the ChatGPT app is looked for in place of /Applications.
+   *  /Applications is the computer's whatever the home, so the end-to-end harness points it inside the daemon's root, as
+   *  it does `HARNESS_CODEX_APP_BIN` (cable/hosts/codexQueue.ts). */
+  const appsDir = process.env.HARNESS_APPLICATIONS_DIR
+  const chatGptApps = [join(appsDir && isAbsolute(appsDir) ? appsDir : '/Applications', 'ChatGPT.app'), join(homedir(), 'Applications', 'ChatGPT.app')]
   /** Where Herdr Core's socket is, from the daemon's own environment: the client reads it, and the hc source watches for
    *  it. */
   const hcAt = hcClientDeps()
@@ -395,6 +407,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   const cmuxClient = deps.cmux ?? createCmuxClient({ ...cmuxClientDeps(), platform: apps.platform })
   /** cmux is installed, as the last attach found it: only then are a hooked agent's words offered to it. */
   let cmuxFound = false
+  /** The looks for the ChatGPT app, one each attach and detach: a look that lands after a newer one began starts nothing. */
+  let codexAppLooks = 0
   const cmuxApp = createCmuxAppAdapter({ ...apps, client: cmuxClient, bin: openBin, found: () => cmuxFound,
     inFront: () => cableHost.latestFront() === 'cmux', kindAt: (surface) => cmuxSource?.kindAt(surface) })
   const cmuxPane = (pane: string): Pane => ({ adapter: cmuxApp.id, id: pane })
@@ -482,6 +496,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   /** The ChatGPT app's adapter as the dial's verbs reach it. No echo to guard: the Codex app sends no attach for the
    *  follow to take as a person's. */
   const codexNoted = noting(codexApp)
+  const codexPane = (threadId: string): Pane => ({ adapter: codexApp.id, id: threadId })
   /** Each Orca terminal's worktree, by handle, from the latest layout read that landed (below): a rest's or a tap's
    *  switch activates it first. */
   let orcaWorktrees: ReadonlyMap<string, string> = new Map()
@@ -735,6 +750,32 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     monotonic,
     log,
   }) : null
+  /** The ChatGPT app's own Codex home, in the person's home: the app's, not the `CODEX_HOME` Harness runs Codex under. */
+  const codexAppHome = join(homedir(), '.codex')
+  /** The ChatGPT app's Codex threads, with or without a process, listed from its metadata when a file of it changes, in
+   *  its sidebar's order (docs/plans/2026-11-19-dial-chatgpt-ring-and-follow-design.md). It runs only while a dial is
+   *  attached, behind the observed agents' switch, on macOS alone, and only with the ChatGPT app installed
+   *  (dialAttached). A thread with a process is the observed source's copy, which holds its row while it runs
+   *  (registry.ts). */
+  const codexAppSource = observed && apps.platform === 'darwin' ? new CodexAppSource({
+    threads: deps.codexAppThreads ?? new CodexAppThreads(codexAppHome),
+    watch: (changed) => watchNearest([codexAppHome], changed),
+    after: timerIn('codex-app'),
+    // Through the opener, as a hooked agent's tap. The noted adapter notes the dial's move, once.
+    focus: (threadId, agentId) => opener.open(agentId, { bundle: APP_BUNDLES.codex, pane: codexPane(threadId) }),
+    canShow: (threadId) => codexApp.canShow(codexPane(threadId)),
+    // The noted copy keeps the show the ChatGPT app's adapter has.
+    show: (threadId, agentId) => codexNoted.show!(codexPane(threadId), agentId),
+    rank: (rank) => cableHost.setRank('codex', rank),
+    monotonic,
+    log,
+  }) : null
+  const bundleId = deps.bundleId ?? readBundleId
+  /** Whether the ChatGPT app is installed: the first of its places whose bundle has the app's id. */
+  const chatGptInstalled = async (): Promise<boolean> => {
+    for (const app of chatGptApps) if (await bundleId(app) === APP_BUNDLES.codex) return true
+    return false
+  }
   /** The ones the dial lists, each with its source: the merged list's, not each source's own, as a copy a stronger source
    *  also holds (a Harness agent's session, a hooked agent's pane) is that one's row and must get no second card. */
   const outsideEntries = (): HostEntry[] => registry.entries().filter((entry) => entry.source !== cableHost.harness)
@@ -1025,7 +1066,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   })
   // What the dial lists with no window, or with one in the apps view: this computer's harness agents, and the ones outside
   // a pane unless switched off.
-  const registry = new HostRegistry([cableHost.harness, observed, herdr, hcSource, cmuxSource, opencode, claudeAppSource].filter((source) => source !== null))
+  const registry = new HostRegistry([cableHost.harness, observed, herdr, hcSource, cmuxSource, opencode, claudeAppSource, codexAppSource].filter((source) => source !== null))
   cableHost.setRegistry(registry)
   // The dial's log lives with the app's, one file a day (dialLog.ts). The old unbounded `dial.log` in the
   // data folder is cut down to a pointer, for anyone with a bookmark.
@@ -1401,6 +1442,10 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   cmuxSource?.onChange(() => part.call('dial', outsideTurn))
   opencode?.onChange(() => part.call('dial', outsideTurn))
   claudeAppSource?.onChange(() => part.call('dial', outsideTurn))
+  // Before the dial's look, so a hooked copy of a listed thread is named as the app names it; setPaneNames tells only a
+  // change. No thread is placed at the app's pane: a terminal thread's tap stays its terminal's.
+  codexAppSource?.onChange(() => part.call('codex-app', () => observed!.setPaneNames('codex', codexAppSource.paneNames(), new Map())))
+  codexAppSource?.onChange(() => part.call('dial', outsideTurn))
   /** One of the observed source's timers, each run guarded as a notice is: one that throws is logged and the next runs. */
   const every = (ms: number, run: () => unknown): ReturnType<typeof setInterval> => {
     const timer = setInterval(() => part.call('observed', run), ms)
@@ -1660,8 +1705,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     log('[device] orca watch · ended')
   }
 
-  /** The scan, the reminders, herdr's and Herdr Core's sockets, opencode's service and the Claude app's store, for an
-   *  attached dial alone. */
+  /** The scan, the reminders, herdr's and Herdr Core's sockets, opencode's service, the Claude app's store and the ChatGPT
+   *  app's metadata, for an attached dial alone. */
   let attached: ReturnType<typeof setInterval>[] = []
   const dialAttached = (on: boolean): void => {
     dialOn = on
@@ -1689,6 +1734,17 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     })
     part.call('opencode', () => on ? opencode.start() : opencode.stop())
     if (claudeAppSource) part.call('claude-app', () => on ? claudeAppSource.start() : claudeAppSource.stop())
+    // Only with the ChatGPT app installed, looked for at each attach as cmux is: a Mac with Codex CLI alone gets no ChatGPT
+    // page of threads a tap cannot open. A look that lands after the dial went, or after a newer attach's look began,
+    // starts nothing.
+    if (codexAppSource) part.call('codex-app', () => {
+      const look = ++codexAppLooks
+      if (!on) return codexAppSource.stop()
+      return chatGptInstalled().then((found) => {
+        if (look !== codexAppLooks) return
+        return found ? codexAppSource.start() : codexAppSource.stop()
+      })
+    })
     if (!on) {
       // The next attach checks Orca's ring afresh, and a read under way lands on nothing.
       orcaRing = { again: false }
