@@ -219,22 +219,26 @@ export const ORCA_APPROVED: {
  *  when it is no list. */
 const grantList = (value: unknown): unknown[] | undefined => value === undefined ? [] : Array.isArray(value) ? value : undefined
 
+/** Whether [value] holds no field but [fields]. */
+const onlyFields = (value: Record<string, unknown>, fields: readonly string[]): boolean =>
+  Object.keys(value).every((field) => fields.includes(field))
+
 /** Whether an approval's `data` asks for nothing beyond ORCA_APPROVED, for [key] at [version]. A field of another shape
- *  is not within it. */
+ *  is not within it, and neither is one the pin does not name: a grant Orca adds later is access never agreed to. */
 export function withinApproved(data: unknown, key: string, version: string): boolean {
   if (!isObject(data) || data.pluginKey !== key || data.version !== version) return false
   const { grants } = data
   if (!isObject(grants) || grants.execution !== ORCA_APPROVED.execution) return false
+  if (!onlyFields(grants, ['execution', 'executionDescription', 'capabilities', 'contributions', 'replacements'])) return false
   const capabilities = grantList(grants.capabilities)
   const contributions = grantList(grants.contributions)
   const replacements = grantList(grants.replacements)
   if (capabilities === undefined || contributions === undefined || replacements === undefined || replacements.length > 0) return false
   // Orca counts a capability by its whole object, so a field beside its kind and words (a scope) is access the pin
-  // never agreed to.
-  return capabilities.every((capability) => isObject(capability)
-      && Object.keys(capability).every((field) => field === 'kind' || field === 'description')
+  // never agreed to; a contribution is held to its kind, name and detail the same way.
+  return capabilities.every((capability) => isObject(capability) && onlyFields(capability, ['kind', 'description'])
       && typeof capability.kind === 'string' && ORCA_APPROVED.capabilities.includes(capability.kind))
-    && contributions.every((contribution) => isObject(contribution)
+    && contributions.every((contribution) => isObject(contribution) && onlyFields(contribution, ['kind', 'name', 'detail'])
       && typeof contribution.kind === 'string' && typeof contribution.name === 'string'
       && ORCA_APPROVED.contributions.includes(`${contribution.kind}/${contribution.name}`))
 }
