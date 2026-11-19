@@ -11,8 +11,9 @@
  * app's or a terminal's, so one read runs at a time, and the changes during it give one more after it, at least 1 s
  * after its start: a busy machine costs one read a second.
  *
- * A log line says only fixed words and counts: the app's metadata names people's folders and threads.
+ * A log line says only fixed words, counts and a failure's kind: the app's metadata names people's folders and threads.
  */
+import { errorKind } from '../../lib/log.js'
 import type { CodexAppRead, CodexAppThread, CodexAppThreads } from './codexAppThreads.js'
 import { observedAgentId, type PaneName } from './observed.js'
 import type { RingRank } from './select.js'
@@ -223,22 +224,22 @@ export class CodexAppSource implements HostSource {
       const read = await this.deps.threads.read()
       if (this.stops !== stops) return
       if (!read.ok) {
-        this.fail()
+        this.fail(read.kind)
         return
       }
       this.take(read, this.deps.monotonic() - began)
       this.failed = false
-    } catch {
-      // Nothing throws into the devices process. The error is not said: it can name the home's path.
-      this.fail()
+    } catch (error) {
+      // Nothing throws into the devices process. The kind is said, never the error's words: they can name the home.
+      this.fail(errorKind(error))
     } finally {
       pass.under = false
       this.next()
     }
   }
 
-  private fail(): void {
-    if (!this.failed) this.deps.log('[codex-app] read · failed')
+  private fail(kind: string): void {
+    if (!this.failed) this.deps.log(`[codex-app] read · failed · ${kind}`)
     this.failed = true
   }
 

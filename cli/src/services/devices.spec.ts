@@ -312,7 +312,7 @@ const noCmux: CmuxClient = {
 /** The ChatGPT app's threads as every spec but their own has them: no Codex home, so no spec reads the throwaway home's. */
 const noCodexApp: NonNullable<DevicesDeps['codexAppThreads']> = {
   there: () => false,
-  read: async () => ({ ok: false }),
+  read: async () => ({ ok: false, kind: 'ENOENT' }),
   forget: () => {},
 }
 /** What the devices asked of opencode's service: recorded, so no spec reaches the developer's own opencode. It has no

@@ -22,8 +22,8 @@ import type { DialMessage, FakeDial } from './harness/fakeDial.js'
 /** What the round dial's firmware says in its greeting: it holds one app's ring (docs/specs/2026-11-14-dial-app-filter.md). */
 const FILTER = { appFilter: 'v1' }
 const CODEX_APP = 'com.openai.codex'
-/** Every line the source says: fixed words and counts, never a name, folder, path or id. */
-const LINE = /^\[codex-app\] (watch · (on|none)|listed · \d+ threads · \d+ in projects|read · \d+ ms · \d+ rows · \d+ skipped|read · failed)$/
+/** Every line the source says: fixed words, counts and a failure's kind, never a name, folder, path or id. */
+const LINE = /^\[codex-app\] (watch · (on|none)|listed · \d+ threads · \d+ in projects|read · \d+ ms · \d+ rows · \d+ skipped|read · failed · [A-Za-z][A-Za-z0-9_$]*( [A-Z][A-Z0-9_]+)?)$/
 /** The app's bundle as the devices read it (`plutil`): its id and nothing else of the app. */
 const INFO_PLIST = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

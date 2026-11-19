@@ -199,14 +199,16 @@ dial.
   `HostAgent.resting` comment in `types.ts` name it beside the Claude app's store;
   `docs/specs/2026-11-15-device-host-adapter.md` lists it.
 
-### Log lines (counts and fixed words only: never a title, folder, path or id)
+### Log lines (counts, fixed words and a failure's kind only: never a title, folder, path or id)
 
 - `[codex-app] watch · on` / `· none`, once per change of whether the home is there.
 - `[codex-app] listed · <n> threads · <p> in projects`, when either count changes.
 - `[codex-app] read · <ms> ms · <rows> rows · <skipped> skipped`, at the first read of an attach and when a read is the
   slowest of this attach.
-- `[codex-app] read · failed`, once per run of failed reads: the error is not said, as it can name the home's path and
-  so the account's name.
+- `[codex-app] read · failed · <kind>`, once per run of failed reads: the kind is errorKind's (`ENOENT`, `EACCES`,
+  `ERR_SQLITE_ERROR`), else `missing` (no SQLite binding), `special` (the store is not a regular file) or `changed` (the
+  JSON file changed during its read). The error's words are never said, as they can name the home's path and so the
+  account's name.
 
 ## Out of scope
 

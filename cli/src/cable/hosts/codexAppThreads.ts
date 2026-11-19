@@ -6,11 +6,13 @@
  * title or first message (docs/plans/2026-11-19-dial-chatgpt-ring-and-follow-design.md, D4).
  *
  * Each read opens its own read-only connection and closes it before it ends: a handle kept open would hold the app's
- * `-wal` and `-shm` after the app quits. Nothing is logged here; the listing source says what a read cost, in counts.
+ * `-wal` and `-shm` after the app quits. Nothing is logged here; the listing source says what a read cost, in counts,
+ * and a failed read's kind.
  */
 import { closeSync, constants, fstatSync, lstatSync, openSync, readSync, statSync, type Stats } from 'node:fs'
 import { basename, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { errorKind } from '../../lib/log.js'
 import { codexThreadName, resetCodexThreadNames } from '../../lib/sessionTitle.js'
 import { builtinSqlite, idleWalStore, type DatabaseConstructor } from '../../lib/sqliteBuiltin.js'
 import type { SqliteRow } from '../../lib/sqliteRead.js'
@@ -53,7 +55,12 @@ export interface CodexAppThread {
 
 export type CodexAppRead =
   | { ok: true; order: readonly string[]; listed: readonly CodexAppThread[]; rows: number; skipped: number }
-  | { ok: false }
+  | { ok: false; kind: string }
+
+/** A failed read: errorKind's kind of the error caught, else a fixed word. Never the error's words: they can name the
+ *  home's path, and so the account's name. */
+type Failed = Extract<CodexAppRead, { ok: false }>
+const failed = (kind: string): Failed => ({ ok: false, kind })
 
 /** For tests: the store's binding, and the one read of the JSON file's open descriptor. */
 export interface CodexAppSeams {
@@ -139,11 +146,11 @@ export class CodexAppThreads {
     try { return statSync(this.home).isDirectory() } catch { return false }
   }
 
-  /** The threads, or `{ ok: false }` when either file could not be read as it is now. Never throws. */
+  /** The threads, or a failed read of its kind when either file could not be read as it is now. Never throws. */
   async read(): Promise<CodexAppRead> {
     try {
       const rows = this.query()
-      if (!rows) return { ok: false }
+      if ('ok' in rows) return rows
       const kept: Kept[] = []
       let skipped = 0
       for (const row of rows) {
@@ -155,7 +162,7 @@ export class CodexAppThreads {
         kept.push({ id, cwd, at: time(row.recency_at_ms) || time(row.updated_at_ms) })
       }
       const projects = this.readProjects(kept.map((thread) => thread.id))
-      if (!projects) return { ok: false }
+      if ('ok' in projects) return projects
       this.projects = projects
       const placeOf = (thread: Kept) => projects.places.get(thread.id) ?? MAX_PROJECTS
       const order = [...kept].sort((a, b) => placeOf(a) - placeOf(b) || newest(a, b))
@@ -172,8 +179,8 @@ export class CodexAppThreads {
         rows: rows.length,
         skipped,
       }
-    } catch {
-      return { ok: false }
+    } catch (error) {
+      return failed(errorKind(error))
     }
   }
 
@@ -206,39 +213,36 @@ export class CodexAppThreads {
     return byId
   }
 
-  private query(): readonly SqliteRow[] | null {
+  /** The store's rows. A missing file, table or column, or a store held locked, throws: read() gives its kind. */
+  private query(): readonly SqliteRow[] | Failed {
     const Database = this.sqlite()
-    if (!Database) return null
+    if (!Database) return failed('missing')
     const path = join(this.home, STORE)
+    // SQLite's own open of a FIFO waits for a writer for good: only a regular file is a store.
+    if (!statSync(path).isFile()) return failed('special')
+    // An idle WAL store opened read-only would get a -wal and -shm made beside it; immutable, it gets none.
+    let location: string | URL = path
+    if (idleWalStore(path)) {
+      location = pathToFileURL(path)
+      location.search = 'immutable=1'
+    }
+    const db = new Database(location, { readOnly: true })
     try {
-      // SQLite's own open of a FIFO waits for a writer for good: only a regular file is a store.
-      if (!statSync(path).isFile()) return null
-      // An idle WAL store opened read-only would get a -wal and -shm made beside it; immutable, it gets none.
-      let location: string | URL = path
-      if (idleWalStore(path)) {
-        location = pathToFileURL(path)
-        location.search = 'immutable=1'
-      }
-      const db = new Database(location, { readOnly: true })
-      try {
-        db.exec(`PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS}`)
-        return db.prepare(QUERY).all()
-      } finally {
-        db.close()
-      }
-    } catch {
-      return null
+      db.exec(`PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS}`)
+      return db.prepare(QUERY).all()
+    } finally {
+      db.close()
     }
   }
 
   /**
-   * The sidebar's projects for `ids`, or null when the file changed while it was read (the app writing it) or could not
-   * be opened: the last parse is then kept as it was, so the projects do not flash to Recent and back. The file is
-   * parsed again only when its size or mtime changed, or a thread comes that the last parse was not kept for. A file
-   * that held still and is not the app's (missing, a link, too large, not JSON, of another shape) names no project until
-   * it next changes.
+   * The sidebar's projects for `ids`, or a failed read when the file changed while it was read (the app writing it) or
+   * could not be opened: the last parse is then kept as it was, so the projects do not flash to Recent and back. The
+   * file is parsed again only when its size or mtime changed, or a thread comes that the last parse was not kept for. A
+   * file that held still and is not the app's (missing, a link, too large, not JSON, of another shape) names no project
+   * until it next changes.
    */
-  private readProjects(ids: readonly string[]): Projects | null {
+  private readProjects(ids: readonly string[]): Projects | Failed {
     const path = join(this.home, STATE)
     let found: Stats
     try { found = lstatSync(path) } catch { return noProjects('none') }
@@ -253,7 +257,7 @@ export class CodexAppThreads {
       // Gone since its lstat, or a link put in its place, it held still. Any other failure (EACCES, EMFILE, EINTR) says
       // nothing of the file: kept as no projects, it would put every thread under Recent until the app next writes it.
       const code = (error as NodeJS.ErrnoException).code
-      return code === 'ENOENT' || code === 'ELOOP' ? noProjects(stampOf(found)) : null
+      return code === 'ENOENT' || code === 'ELOOP' ? noProjects(stampOf(found)) : failed(errorKind(error))
     }
     try {
       const opened = fstatSync(fd)
@@ -261,10 +265,10 @@ export class CodexAppThreads {
       const bytes = this.readState(fd, MAX_STATE_BYTES + 1)
       const after = fstatSync(fd)
       let now: Stats
-      try { now = lstatSync(path) } catch { return null }
+      try { now = lstatSync(path) } catch { return failed('changed') }
       const stamp = stampOf(opened)
       // Appended to, or a new file renamed over it: what was read may be half of one write.
-      if (stampOf(after) !== stamp || stampOf(now) !== stamp || now.ino !== opened.ino) return null
+      if (stampOf(after) !== stamp || stampOf(now) !== stamp || now.ino !== opened.ino) return failed('changed')
       return parseProjects(bytes, stamp, ids)
     } finally {
       closeSync(fd)
