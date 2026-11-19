@@ -4,9 +4,17 @@
  * that owns one (its terminal's or its editor's), else its app's by class. Which desktop answers is found once at
  * start, and again after a raise fails: the person may have logged out and into another desktop since.
  */
-import { desktopLine, type LinuxDesktop } from './linuxDesktop.js'
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { windowClasses } from './frontApp.js'
+import { desktopLine, findLinuxDesktop, linuxDesktopDeps, type LinuxDesktop } from './linuxDesktop.js'
+import { createGnomeRaise } from './linuxRaiseGnome.js'
+import { createHyprlandRaise } from './linuxRaiseHyprland.js'
+import { createKwinRaise } from './linuxRaiseKwin.js'
+import { createSwayRaise } from './linuxRaiseSway.js'
+import { createX11Raise } from './linuxRaiseX11.js'
 import type { OrcaDeps } from './orca.js'
-import { parentChain, type ProcessName } from './scannedApp.js'
+import { parentChain, readProcessNames, type ProcessName } from './scannedApp.js'
 
 /** The agent's process and its parents, nearest first, and its app's class spellings. */
 export interface RaiseTarget { pids: readonly number[]; classes: readonly string[] }
@@ -64,4 +72,46 @@ export function createLinuxRaise(deps: LinuxRaiseDeps): LinuxRaise {
       return false
     },
   }
+}
+
+/** This login's raise: its desktop found from this process's own variables and sockets, each desktop's backend running
+ *  through [apps]' runner, the parents from `ps`, and each app's classes from its fixed table. */
+export function systemLinuxRaise(apps: OrcaDeps, log: (line: string) => void): LinuxRaise {
+  const desktop = linuxDesktopDeps(apps)
+  let scripts = 0
+  return createLinuxRaise({
+    find: () => findLinuxDesktop(desktop),
+    backend: (found) => {
+      switch (found.kind) {
+        case 'sway': return createSwayRaise(apps, found.socket)
+        case 'hyprland': return createHyprlandRaise(apps, found.signature)
+        case 'gnome': return createGnomeRaise(apps, found.bus)
+        case 'x11': return createX11Raise(apps, found.display, found.xauthority)
+        case 'kwin': {
+          // In this login's runtime dir, which only it can enter: KWin reads the script from there as the same account.
+          const dir = join(found.runtimeDir, 'harness')
+          return createKwinRaise({
+            ...apps,
+            dir,
+            write: (path, text) => {
+              mkdirSync(dir, { recursive: true, mode: 0o700 })
+              // not a state file: a script KWin reads once, removed when its raise ends
+              writeFileSync(path, text, { mode: 0o600 })
+            },
+            remove: (path) => {
+              try {
+                rmSync(path, { force: true })
+              } catch {
+                // Left in this login's own folder: the raise answers all the same, and the next one takes another name.
+              }
+            },
+            name: () => `${process.pid}-${++scripts}`,
+          }, found.bus)
+        }
+      }
+    },
+    processes: () => readProcessNames(),
+    classes: windowClasses,
+    log,
+  })
 }
