@@ -9,14 +9,13 @@
  * anything for a remote machine) to this machine's own state directory.
  */
 
-import { closeSync, constants, fchmodSync, fsyncSync, openSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'fs'
-import { randomUUID } from 'crypto'
+import { realpathSync, statSync } from 'fs'
 import { homedir } from 'os'
 import { join } from 'path'
 import { env } from '../config/env.js'
 import { homeIsAbsolute } from '../engines/kit/homeAdoption.js'
 import { discoverCodexProfiles } from './codexProfileDiscovery.js'
-import { hardenPrivateStateFileIfPresent, readPrivateStateFile, secureStateDirectory } from './secureState.js'
+import { atomicWriteJson, readPrivateStateFile, secureStateDirectory } from './secureState.js'
 
 export interface CodexProfile {
   path: string
@@ -46,29 +45,10 @@ function readLinkedPaths(): Set<string> {
   return new Set()
 }
 
-function atomicWriteJson(file: string, value: unknown): void {
-  hardenPrivateStateFileIfPresent(file)
-  const temporary = `${file}.${process.pid}.${randomUUID()}.tmp`
-  let renamed = false
-  try {
-    const fd = openSync(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600)
-    try {
-      writeFileSync(fd, JSON.stringify(value, null, 2))
-      fchmodSync(fd, 0o600)
-      fsyncSync(fd)
-    } finally {
-      closeSync(fd)
-    }
-    renameSync(temporary, file)
-    renamed = true
-  } finally {
-    if (!renamed) rmSync(temporary, { force: true })
-  }
-}
-
 function writeLinkedPaths(paths: Set<string>): void {
   secureStateDirectory(env.ADAPTER_DATA_DIR)
-  atomicWriteJson(FILE, [...paths].slice(0, MAX_LINKED))
+  // 'trust': the old file's owner and mode are checked, as this file always was.
+  atomicWriteJson(FILE, [...paths].slice(0, MAX_LINKED), 'trust')
 }
 
 /** Validate + resolve a folder path the same way for both linking and re-checking a saved one. */
