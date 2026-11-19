@@ -480,7 +480,8 @@ describe('an update under hostile conditions', () => {
     server.faults = ['stall']
     server.offer = { version: '43.0.13' }
     // Before, the check waited out undici's five-minute body timeout, every later check skipped meanwhile.
-    await until('the stalled download to be given up', () => machine.log().slice(from).includes('cli-43.0.13.js sent nothing for 2000 ms'), 60_000)
+    // The log says the kind alone, which a stall and an overrun deadline share: nothing else shows which it was.
+    await until('the stalled download to be given up', () => machine.log().slice(from).includes('[update] check failed (will retry): TransferStalledError'), 60_000)
     await machine.settled('43.0.13', { rejected: ['43.0.10', '43.0.11'] })
     expect(server.downloadsOf('43.0.13')).toBe(2)
   }, 300_000)
@@ -494,7 +495,7 @@ describe('an update under hostile conditions', () => {
     const from = machine.log().length
     server.offer = { version: '43.0.15' }
     await machine.settled('43.0.15', { rejected: ['43.0.10', '43.0.11'] })
-    expect(machine.log().slice(from)).toMatch(/\[update\] [^\n]* did not let go \(a teardown step that throws\) — handing over all the same/)
+    expect(machine.log().slice(from)).toMatch(/\[update\] [^\n]* did not let go \(Error\) — handing over all the same/)
     expect(machine.log().slice(from)).not.toContain('restart failed — staying on current build')
   }, 300_000)
 })

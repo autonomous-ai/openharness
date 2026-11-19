@@ -119,7 +119,7 @@ describe('the Wi-Fi device\'s local routes', () => {
       expect(await ask(d, method, path, { body }), `${method} ${path}`).toEqual(answer)
       expect(Date.now() - at, `${method} ${path} answered at once`).toBeLessThan(2_000)
     }
-    expect(d.log()).toContain('gateway_http failed · injected fault')
+    expect(d.log()).toContain('gateway_http failed · Error')
     expect(d.coresStarted()).toBe(1)
   })
 
