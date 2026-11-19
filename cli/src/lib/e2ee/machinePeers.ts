@@ -12,10 +12,11 @@
  * writes it, not only after a restart. The file is tiny and read rarely (once per fresh relay dial),
  * so reading fresh every time costs nothing.
  */
-import { mkdirSync, readFileSync, writeFileSync } from 'fs'
+import { mkdirSync } from 'fs'
 import { join } from 'path'
 import { env } from '../../config/env.js'
 import { errorKind } from '../log.js'
+import { atomicWriteFile, atomicWriteJson, jsonArray, readState, requireState, type TrustFile } from '../secureState.js'
 import { b64d, fingerprint } from './core.js'
 
 const DIR = join(env.ADAPTER_DATA_DIR, 'e2e')
@@ -40,25 +41,41 @@ export interface MachinePeer {
   shared?: true
 }
 
-function readAll(): Map<string, MachinePeer> {
+/** Both files, for whoever names the trust files that cannot be read. */
+export function machinePeerFiles(): TrustFile[] {
+  return [{ file: FILE, parse: jsonArray }, { file: GONE_FILE, parse: jsonArray }]
+}
+
+function peersIn(list: unknown[] | null): Map<string, MachinePeer> {
   const peers = new Map<string, MachinePeer>()
-  try {
-    const arr = JSON.parse(readFileSync(FILE, 'utf-8')) as MachinePeer[]
-    for (const p of arr) {
-      if (p?.machineId && p?.pub) peers.set(p.machineId, p)
-    }
-  } catch { /* none yet */ }
+  for (const p of (list ?? []) as MachinePeer[]) {
+    if (p?.machineId && p?.pub) peers.set(p.machineId, p)
+  }
   return peers
+}
+
+/** The pins. A file that cannot be read pins nobody: a machine not pinned is neither dialled nor trusted. */
+function readAll(): Map<string, MachinePeer> {
+  const read = readState(FILE, 'trust', jsonArray)
+  return peersIn(read.state === 'ok' ? read.value : null)
+}
+
+/** The pins a change starts from. A file that cannot be read throws StateFileUnreadable: written over, every pin in it
+ *  but the one changed would be lost. */
+function readForChange(): Map<string, MachinePeer> {
+  return peersIn(requireState(FILE, jsonArray))
 }
 
 function writeAll(peers: Map<string, MachinePeer>): void {
   mkdirSync(DIR, { recursive: true, mode: 0o700 })
-  writeFileSync(FILE, JSON.stringify([...peers.values()], null, 2), { mode: 0o600 })
+  atomicWriteJson(FILE, [...peers.values()], 'trust')
 }
 
+/** Throws StateFileUnreadable while the file cannot be read: the marks in it are not known, so it is not written over. */
 function writeGone(gone: Set<string>): void {
+  requireState(GONE_FILE, jsonArray)
   mkdirSync(DIR, { recursive: true, mode: 0o700 })
-  writeFileSync(GONE_FILE, JSON.stringify([...gone].slice(-GONE_MAX)), { mode: 0o600 })
+  atomicWriteFile(GONE_FILE, JSON.stringify([...gone].slice(-GONE_MAX)), 'trust')
 }
 
 export class MachinePeerStore {
@@ -67,13 +84,13 @@ export class MachinePeerStore {
   }
 
   pin(machineId: string, pub: string, label: string, at = Date.now(), shared = false): void {
-    const peers = readAll()
+    const peers = readForChange()
     peers.set(machineId, { machineId, pub, label, linkedAt: at, ...(shared ? { shared: true as const } : {}) })
     writeAll(peers)
   }
 
   unlink(machineId: string): boolean {
-    const peers = readAll()
+    const peers = readForChange()
     if (!peers.delete(machineId)) return false
     writeAll(peers)
     return true
@@ -92,11 +109,9 @@ export class MachinePeerStore {
 
   /** Machines marked gone. */
   gone(): Set<string> {
-    let kept: string[] = []
-    try {
-      const raw = JSON.parse(readFileSync(GONE_FILE, 'utf-8')) as unknown
-      if (Array.isArray(raw)) kept = raw.filter((id): id is string => typeof id === 'string')
-    } catch { /* none yet, or unreadable: the marks in memory still hold */ }
+    const read = readState(GONE_FILE, 'trust', jsonArray)
+    // None yet, or unreadable: the marks in memory still hold.
+    const kept = read.state === 'ok' ? read.value.filter((id): id is string => typeof id === 'string') : []
     return new Set([...kept.filter((id) => !backInMemory.has(id)), ...goneInMemory])
   }
 

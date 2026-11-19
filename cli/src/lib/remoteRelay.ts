@@ -405,7 +405,12 @@ export class RemoteRelayPool {
       if (recent.length < DENIED_TRIES) return
     }
     this.denials.delete(machineId)
-    this.peers.unlink(machineId)
+    try {
+      this.peers.unlink(machineId)
+    } catch (err) {
+      // A pin file that cannot be read or written. Nothing above catches: this runs in the socket's message handler.
+      console.warn(`[relay] could not drop the pin of a machine that denied this one: ${err instanceof Error ? err.message : String(err)}`)
+    }
   }
 
   /** Background CLI jobs (a monitor pane polling `agents_list`, a script) must not replace the
