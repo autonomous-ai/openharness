@@ -206,11 +206,11 @@ curl -fsSL https://raw.githubusercontent.com/autonomous-ai/openharness/main/plug
     <thead><tr><th>Code</th><th>Meaning</th></tr></thead>
     <tbody>
       <tr><td><code>0</code></td><td>Done. For <code>wait</code>: every harness is idle; read it with <code>harness show</code>.</td></tr>
-      <tr><td><code>1</code></td><td>Failed. The message says what to run next.</td></tr>
+      <tr><td><code>1</code></td><td>Failed. For <code>wait</code>: a harness's launch failed; <code>harness show</code> says why. Otherwise the message says what to run next.</td></tr>
       <tr><td><code>2</code></td><td>The command was used wrongly; the usage follows.</td></tr>
       <tr><td><code>3</code></td><td><code>wait</code>: a harness needs the person (a question, a permission, or a
         problem only they can fix). Tell the person; only they can answer or fix it.</td></tr>
-      <tr><td><code>4</code></td><td><code>wait</code>: a harness stopped or is gone.</td></tr>
+      <tr><td><code>4</code></td><td><code>wait</code>: a harness stopped, never started or is gone.</td></tr>
       <tr><td><code>5</code></td><td>Refused: your limits, the person's setting, or a harness you did not start. Do not
         retry it; tell the person, or do the work yourself.</td></tr>
       <tr><td><code>124</code></td><td><code>wait</code>: timed out while a harness was still working. Wait again, or
@@ -218,7 +218,7 @@ curl -fsSL https://raw.githubusercontent.com/autonomous-ai/openharness/main/plug
     </tbody>
   </table>
   </div>
-  <p>When several apply, <code>wait</code> exits with the first of 124, 3 and 4.</p>
+  <p>When several apply, <code>wait</code> exits with the first of 124, 3, 1 and 4.</p>
 
   <h2 id="parallel">Run Claude Code agents in parallel</h2>
   <pre><code>harness new claude --name api-tests -- "Make the tests in api/ pass. Change only files in api/. Answer with what you changed and why."
