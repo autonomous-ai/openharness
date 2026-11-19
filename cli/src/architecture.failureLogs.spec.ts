@@ -23,8 +23,12 @@
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join, sep } from 'node:path'
-import ts from 'typescript'
+import typescript from 'typescript'
 import { expect, it } from 'vitest'
+
+// Vitest hands a test an imported package through a proxy that runs at every read, and the scan reads TypeScript's
+// functions millions of times: through the alias, the package is read once, and the scan takes half the time.
+import ts = typescript
 
 const SRC = __dirname
 
@@ -166,34 +170,47 @@ const isErrorHandler = (fn: ts.Node): fn is ts.ArrowFunction | ts.FunctionExpres
   }
 }
 
-const binds = (name: ts.BindingName, text: string): boolean => ts.isIdentifier(name)
-  ? name.text === text
-  : name.elements.some((element) => !ts.isOmittedExpression(element) && binds(element.name, text))
+const namesOf = (name: ts.BindingName): string[] => ts.isIdentifier(name)
+  ? [name.text]
+  : name.elements.flatMap((element) => ts.isOmittedExpression(element) ? [] : namesOf(element.name))
+
+const scopes = new WeakMap<ts.Node, ReadonlyMap<string, ts.Node>>()
+
+/**
+ * The names a scope declares, each to its first declaration: a catch's, a function's parameters, a `for`'s locals, a
+ * block's locals, functions and classes. Indexed once per scope: a lookup that read every statement of every block
+ * around it, for each name of each call, was most of the time the scan spent past parsing.
+ */
+const declaredIn = (scope: ts.Node): ReadonlyMap<string, ts.Node> | undefined => {
+  const known = scopes.get(scope)
+  if (known) return known
+  const names = new Map<string, ts.Node>()
+  const add = (name: ts.BindingName, declaration: ts.Node): void => {
+    for (const text of namesOf(name)) if (!names.has(text)) names.set(text, declaration)
+  }
+  if (ts.isCatchClause(scope)) {
+    if (scope.variableDeclaration) add(scope.variableDeclaration.name, scope.variableDeclaration)
+  } else if (ts.isFunctionLike(scope)) {
+    scope.parameters.forEach((parameter) => add(parameter.name, parameter))
+  } else if (ts.isForStatement(scope) || ts.isForOfStatement(scope) || ts.isForInStatement(scope)) {
+    if (scope.initializer && ts.isVariableDeclarationList(scope.initializer)) {
+      scope.initializer.declarations.forEach((declaration) => add(declaration.name, declaration))
+    }
+  } else if (ts.isBlock(scope) || ts.isSourceFile(scope) || ts.isModuleBlock(scope) || ts.isCaseClause(scope) || ts.isDefaultClause(scope)) {
+    for (const statement of scope.statements) {
+      if (ts.isVariableStatement(statement)) statement.declarationList.declarations.forEach((declaration) => add(declaration.name, declaration))
+      else if ((ts.isFunctionDeclaration(statement) || ts.isClassDeclaration(statement)) && statement.name) add(statement.name, statement)
+    }
+  } else return undefined
+  scopes.set(scope, names)
+  return names
+}
 
 /** Where [identifier] is declared, the nearest scope first: a catch, a parameter, a local, a function or class. */
 const declarationOf = (identifier: ts.Identifier): ts.Node | undefined => {
-  const text = identifier.text
-  const among = (list: ts.VariableDeclarationList): ts.VariableDeclaration | undefined =>
-    list.declarations.find((declaration) => binds(declaration.name, text))
   for (let scope: ts.Node | undefined = identifier.parent; scope; scope = scope.parent) {
-    if (ts.isCatchClause(scope) && scope.variableDeclaration && binds(scope.variableDeclaration.name, text)) return scope.variableDeclaration
-    if (ts.isFunctionLike(scope)) {
-      const parameter = scope.parameters.find((candidate) => binds(candidate.name, text))
-      if (parameter) return parameter
-    }
-    if ((ts.isForStatement(scope) || ts.isForOfStatement(scope) || ts.isForInStatement(scope))
-      && scope.initializer && ts.isVariableDeclarationList(scope.initializer)) {
-      const declaration = among(scope.initializer)
-      if (declaration) return declaration
-    }
-    if (ts.isBlock(scope) || ts.isSourceFile(scope) || ts.isModuleBlock(scope) || ts.isCaseClause(scope) || ts.isDefaultClause(scope)) {
-      for (const statement of scope.statements) {
-        const declaration = ts.isVariableStatement(statement) ? among(statement.declarationList)
-          : (ts.isFunctionDeclaration(statement) || ts.isClassDeclaration(statement)) && statement.name?.text === text ? statement
-          : undefined
-        if (declaration) return declaration
-      }
-    }
+    const declaration = declaredIn(scope)?.get(identifier.text)
+    if (declaration) return declaration
   }
   return undefined
 }
@@ -376,12 +393,17 @@ const hidden = (call: ts.CallExpression): string | undefined => {
 
 /** Each log call in [code] that prints an error's words or hides its kind, as `<file>:<line>: <what it found>`. */
 function failureLogs(code: string, file = 'file.ts'): string[] {
-  const source = ts.createSourceFile(file, code, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS)
+  // The rule reads no JSDoc: leaving it unparsed takes a tenth off the parse.
+  const source = ts.createSourceFile(file, code, { languageVersion: ts.ScriptTarget.Latest, jsDocParsingMode: ts.JSDocParsingMode.ParseNone },
+    true, ts.ScriptKind.TS)
   const found: string[] = []
   const visit = (node: ts.Node): void => {
     if (ts.isCallExpression(node)) {
       // A `writeSync` and a function of the file's own are read for what they log, not for the catch they run in.
-      const finding = firstPrinted(loggedArguments(node), true, handOf(node.arguments, true)) ?? (isLogCall(node) ? hidden(node) : undefined)
+      const logged = loggedArguments(node)
+      // The hand is read only for a call that logs: read for every call, a chain's arguments were walked once per link.
+      const finding = (logged.length ? firstPrinted(logged, true, handOf(node.arguments, true)) : undefined)
+        ?? (isLogCall(node) ? hidden(node) : undefined)
       if (finding) found.push(`${file}:${source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1}: ${finding}`)
     }
     ts.forEachChild(node, visit)
