@@ -1467,6 +1467,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // Declared further down: read when an error is reported, never now.
     agentIdFor: (sessionId) => agentIdFor(sessionId),
     openTurn: (sessionId, text) => otherStreams.openTurn(sessionId, text),
+    sending: (sessionId) => activity.turnActivity.observe(sessionId, 'turn_started'),
     // Reassigned further down (the funnel): always the current one.
     emit: (sessionId, events) => emitSessionEvents(sessionId, events),
     // Declared further down: read as a prompt is typed, never now.

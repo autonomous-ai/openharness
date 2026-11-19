@@ -51,6 +51,8 @@ export interface InputDeps {
   agentIdFor: (sessionId: string) => string
   /** Command Code's turn opened on our paste, from outside its transcript, in its worker (core/engines/otherStreams.ts). */
   openTurn: (sessionId: string, text: string) => Promise<LiveEvent[]>
+  /** An OpenClaw's run began with our paste: it is working from now (core/turns/activity.ts), on the lease any work is. */
+  sending?: (sessionId: string) => void
   emit: (sessionId: string, events: LiveEvent[]) => void
   /** A prompt is about to be typed, and `capture` is the pane as read right before: what is on it belongs
    *  to the turns before the one it starts (the question watcher's, lib/askQuestion.ts `notePrompt`). */
@@ -200,6 +202,9 @@ export function sessionInputDeps(
       // `id` is whatever the caller addressed the agent by — in the inject path it is the AGENT id, not
       // the session id, and the normalizer map is keyed by session. Resolve before looking anything up.
       const session = resolve(id)
+      // OpenClaw draws the run at once (`sending`), and its first row comes only when its Gateway writes it, 15-45 s on a
+      // slow one: until then nothing else tells the agent's frame it works, and `ps` read it idle.
+      if (session?.engine === 'openclaw' && session.sessionId) deps.sending?.(session.sessionId)
       if (session?.engine !== 'commandcode' || !session.sessionId) return
       const sessionId = session.sessionId
       void openTurn(sessionId, content).then(events => { if (events.length) emit(sessionId, events) })
