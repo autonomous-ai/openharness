@@ -186,6 +186,20 @@ void max_layer_light(ht_scene_t *s, int lx, int lw, int l, int r, unsigned base,
 unsigned max_layer_painted(void);
 // Every kept layer and pet image dropped, the pets' pixels scribbled over (a test's fresh start).
 void max_layer_forget(void);
+// The frame being drawn: what max_layer_warm keeps from.
+uint32_t max_layer_now(void);
+// What a warming step met: room for all it drew, a paint left for the next step (a step paints one), or no room.
+typedef enum { MAX_WARM_DONE, MAX_WARM_MORE, MAX_WARM_FULL } max_warm_t;
+// A step of frames drawn off the glass to paint what a motion will show (max_ui_warm.c) begins, from `from` (a
+// max_layer_now) on, or the step ends (0). In it no image or layer used since `from` is given up for one (the glass's
+// and what the warming made stay), one image or layer is painted at most (a step stays about one image's work), its
+// blurs are done as asked, and its agents between looks are left uncut (their cuts and edges are each frame's own).
+// Returns what the step that ends met.
+max_warm_t max_layer_warm(uint32_t from);
+
+// max_ui_render into s, cleared, for a frame the glass never shows: when the glass's own next frame is due
+// (max_motion_ms) stays as the glass's last render left it.
+void max_render_aside(ht_scene_t *s, uint32_t now_ms);   // max_ui_view.c
 
 // ---- the pages, each over the whole glass ----
 // App Detail: the app column, the row of agents and the bell; an agent open across the row while the agent page is up.

@@ -220,6 +220,7 @@ static int images(void)   // but the row's faded ends
 }
 static void test_drawn(void)
 {
+    max_layer_forget();   // the tests before may have left these agents' images kept
     row_of(5);
     CHECK(images() == 0 && max_m.cell_hits == 3);
     max_open("c");

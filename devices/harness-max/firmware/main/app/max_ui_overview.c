@@ -364,7 +364,10 @@ void max_draw_overview(ht_scene_t *s, uint32_t now_ms)
     }
     if (spill_r) ht_pro_rect(s, ROW_X + ROW_W, 0, BELL_W, HT_HEIGHT, 0, C(GROUND));
     bell_column(s);
-    if (max_row_moving(now_ms)) max_motion(now_ms, MAX_ROW_FRAME_MS);
+    if (max_row_moving(now_ms)) {
+        max_motion(now_ms, MAX_ROW_FRAME_MS);
+        max_m.row.moves++;
+    }
 }
 
 // ---- Ambient ----

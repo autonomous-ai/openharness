@@ -59,6 +59,7 @@ static const char *TAG = "max";
 #define HEARTBEAT_MS 60000u
 #define CHIME_COALESCE_MS 30000     // one chime of a sound for its alerts of this long (V3's, the Pro's beep's)
 #define ASKED_MAX 32                // pro_app_agents sends at most 32 agents
+#define WARM_ROOM_US 16000          // a step painted ahead only with a frame's time left before the next is due
 
 static EXT_RAM_BSS_ATTR ht_scene_t s_scene[2];
 
@@ -624,6 +625,19 @@ static bool take_scene(ht_scene_t *scene)
     return fresh;
 }
 
+// What a tap on App Detail's row would show next, painted ahead while it rests (max_ui_warm): a step at a time (about
+// one image's work under the lock), while nothing changed and the next frame is more than WARM_ROOM_US away. A touch
+// or a message waits one step at most; the glass's own frames come on time.
+static void warm_ahead(int64_t wake_at)
+{
+    for (bool more = true; more && wake_at - esp_timer_get_time() > WARM_ROOM_US;) {
+        lock();
+        more = !s_dirty && max_ui_warm(ms());
+        unlock();
+        ESP_ERROR_CHECK(esp_task_wdt_reset());
+    }
+}
+
 static void heartbeat(uint32_t frames, uint32_t raster_max_us, uint32_t frame_max_us)
 {
     static uint32_t last;
@@ -704,6 +718,7 @@ static void render_task(void *arg)
             unlock();
         }
         heartbeat(frames, raster_max_us, frame_max_us);
+        if (on) warm_ahead(wake_at);
         // Painting used part of this pass's budget; and the recorder's clocks need a tick at least once a second.
         const int64_t remaining = (wake_at - esp_timer_get_time() + 999) / 1000;
         wake_ms = remaining > 0 ? (uint32_t)remaining : 1;

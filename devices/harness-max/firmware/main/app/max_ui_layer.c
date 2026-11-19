@@ -20,11 +20,13 @@ enum {
     KEPT = 8,              // slivers kept: as many as lie on the glass with the open agent dragged half off
     KEPT_RUNS = 48,        // the runs a kept sliver's key holds (its ground and its pet); more draws it on the glass
     LAYER_W = SLIVER_W,    // a kept layer's width
-    PETS = 96,             // pets' images kept: an open's or a close's every step, for the agents it moves (five
-                           // that all look different take 74; fewer, each step's image evicts one the next run needs)
+    PETS = 160,            // pets' images kept: an open's or a close's every step, for the agents it moves (five
+                           // that all look different take 74; fewer, each step's image evicts one the next run needs),
+                           // and what max_ui_warm paints ahead: Overview's every open takes about 110
     PET_RUNS = 40,         // the runs a pet scene takes at most (terminal.h)
     PET_PX = 256 * 256,    // the largest pet the row draws (the open agent's) and the blur's reach around it
-    POOL_PX = 1536 * 1024, // the pets' images' pixels: a close's take over a million (4.5 MB of PSRAM with alpha)
+    POOL_PX = 2560 * 1024, // the pets' images' pixels: a close's take over a million, Overview's every open ahead 2.1
+                           // million (7.5 MB of PSRAM with alpha)
     DIM_STEP = MAX_ONE / 16,   // a pet's dim's steps: half of one is under a level of RGB565 (its brightness 1.2 %)
     PATCH_PX = 96 * 1024,  // a frame's cut ends and blurred rails
     LINE_W = ROW_W + 4 * BLUR_R,   // the widest row a blur reads: a rail across the row and its reach past both ends
@@ -87,6 +89,9 @@ static EXT_RAM_BSS_ATTR uint32_t s_ar[LINE_W], s_ag[LINE_W];   // a row's sums s
 static int s_patch_used, s_edges_used;   // px of s_patch and s_edges this frame took
 static int s_pool_next;    // where the pool's next image goes
 static uint32_t s_frame = 1, s_painted, s_revision;
+static uint32_t s_warm;    // warming (max_layer_warm): what was used from this frame on stays
+static unsigned s_step;    // s_painted when the warming step began: it paints one
+static bool s_full, s_more;   // the step found no room; it left a paint to the next
 
 static int imin(int a, int b) { return a < b ? a : b; }
 static int imax(int a, int b) { return a > b ? a : b; }
@@ -100,6 +105,24 @@ void max_layer_frame(void)
     s_patch_used = s_edges_used = 0;
 }
 unsigned max_layer_painted(void) { return s_painted; }
+uint32_t max_layer_now(void) { return s_frame; }
+max_warm_t max_layer_warm(uint32_t from)
+{
+    const max_warm_t met = s_full ? MAX_WARM_FULL : s_more ? MAX_WARM_MORE : MAX_WARM_DONE;
+    s_warm = from;
+    s_step = s_painted;
+    s_full = s_more = false;
+    return met;
+}
+// An image or a layer last used in `used` stays: this frame shows it, or warming keeps it.
+static bool held(uint32_t used) { return used == s_frame || (s_warm && (int32_t)(used - s_warm) >= 0); }
+// Whether this frame may paint an image or a layer: a warming step's first, the rest left to the next.
+static bool may_paint(void)
+{
+    if (!s_warm || s_painted == s_step) return true;
+    s_more = true;
+    return false;
+}
 void max_layer_forget(void)
 {
     for (int i = 0; i < KEPT; i++) s_kept[i].full = false;
@@ -481,7 +504,7 @@ static void job_run(const job_t *j, work_t *w)
 }
 static void job_ask(const job_t *j)
 {
-    if (s_share && s_jobs_count < JOBS) s_jobs[s_jobs_count++] = *j;
+    if (s_share && !s_warm && s_jobs_count < JOBS) s_jobs[s_jobs_count++] = *j;
     else job_run(j, &s_work[0]);   // nobody else is at work while the scene is built
 }
 // A frame whose blurs were never done (it was built and never shown): the pets they were for are given up.
@@ -546,7 +569,7 @@ static int place(int area)
         const pet_t *shown = NULL;
         for (int i = 0; i < PETS && !shown; i++) {
             const pet_t *c = &s_pets[i];
-            if (c->full && c->used == s_frame && c->at < at + area && at < c->at + c->w * c->h) shown = c;
+            if (c->full && held(c->used) && c->at < at + area && at < c->at + c->w * c->h) shown = c;
         }
         if (!shown) {
             for (int i = 0; i < PETS; i++) {
@@ -582,11 +605,13 @@ static pet_t *take(const pet_t *k)
             spare = c;
             break;
         }
-        if (c->used != s_frame && (!spare || c->used < spare->used)) spare = c;
+        if (!held(c->used) && (!spare || c->used < spare->used)) spare = c;
     }
-    if (!spare) return NULL;
-    const int at = place(k->w * k->h);
-    if (at < 0) return NULL;
+    const int at = spare ? place(k->w * k->h) : -1;
+    if (at < 0) {
+        s_full |= s_warm != 0;
+        return NULL;
+    }
     *spare = *k;
     spare->full = true;
     spare->at = at;
@@ -602,12 +627,26 @@ static pet_t *undimmed(const pet_t *k, const ht_run_t *runs)
     s_bare.dim = 0;
     pet_t *p = find(&s_bare);
     if (p) return p;
-    if (!(p = take(&s_bare))) return NULL;
+    if (!may_paint() || !(p = take(&s_bare))) return NULL;
     uint16_t *px = &s_pool_px[p->at];
     uint8_t *a = &s_pool_a[p->at];
     ht_scene_clear(&s_one, p->ground);
     memcpy(s_one.runs, runs, (size_t)p->count * sizeof runs[0]);
     s_one.count = p->count;
+    // A frame below 1x on one colour is baked for the frames that draw it again (pod_cell_flat); drawn into this image
+    // once, on nothing but that colour, it is resampled straight in: the same pixels, no room taken from the bakes the
+    // glass draws from (a warming's frames would fill it).
+    for (int i = 0; i < p->count; i++) {
+        ht_run_t *r = &s_one.runs[i];
+        if (r->pro_kind != POD_CELL || r->text[0] != 1 || r->fg != p->ground) continue;
+        const ht_rect_t b = ht_run_bounds(r);
+        bool bare = true;
+        for (int j = 0; j < i && bare; j++) {
+            const ht_rect_t u = ht_run_bounds(&s_one.runs[j]);
+            bare = u.x >= b.x + b.w || b.x >= u.x + u.w || u.y >= b.y + b.h || b.y >= u.y + u.h;
+        }
+        if (bare) r->text[0] = 0;
+    }
     ht_raster(&s_one, (ht_rect_t){k->x, k->y, p->w, p->h}, px);
     for (int i = 0; i < p->w * p->h; i++) {
         const bool on = px[i] != p->ground;
@@ -626,7 +665,7 @@ static pet_t *dimmed_pet(const pet_t *k, const ht_run_t *runs)
     pet_t *u = undimmed(k, runs);
     if (!u) return NULL;
     u->used = s_frame;   // kept while its dim is made
-    if (!(p = take(k))) return NULL;
+    if (!may_paint() || !(p = take(k))) return NULL;
     const job_t j = {.src = &s_pool_px[u->at], .alpha = &s_pool_a[u->at], .kx = kernel_x(p->dim),
                      .ky = kernel_y(p->dim), .d = max_dim_of(p->dim), .dims = true, .sw = p->w, .sh = p->h, .ow = p->w,
                      .oh = p->h, .out = &s_pool_px[p->at], .out_a = &s_pool_a[p->at], .pet = p};
@@ -711,6 +750,7 @@ static uint16_t *patch_px(int area)
 
 void max_layer_light(ht_scene_t *s, int lx, int lw, int l, int r, unsigned base, unsigned peak)
 {
+    if (s_warm) return;   // a frame's own
     int x0 = imax(imax(l, lx), 0), x1 = imin(imin(r, lx + lw), HT_WIDTH);
     // Off the rail it keeps a column of the rail's own colour at the end it left or comes in at: the scene's runs keep
     // their places from frame to frame, so the damage stays the light's (ht_damage compares the runs in order).
@@ -908,7 +948,7 @@ static int edges(int x, int w, int l, int r, int dim, int out)
 void max_layer_cut(ht_scene_t *s, int from, int x, int w, int l, int r, int dim)
 {
     const int n = s->count - from;
-    if (n <= 0) return;
+    if (n <= 0 || s_warm) return;
     // What the agent's own layer would hold: what a cut end and the edges are rasterised from.
     ht_scene_clear(&s_sub, s->background);
     memcpy(s_sub.runs, &s->runs[from], (size_t)n * sizeof s->runs[0]);
@@ -954,11 +994,12 @@ void max_layer_kept(ht_scene_t *s, int x, int l, int r, max_paint_t paint, const
         kept_t *c = &s_kept[i];
         if (c->full && c->count == s_sub.count && !memcmp(c->runs, s_sub.runs, (size_t)c->count * sizeof c->runs[0]))
             k = c;
-        else if (c->used != s_frame && (!spare || c->used < spare->used))   // the longest unseen, never this frame's
+        else if (!held(c->used) && (!spare || c->used < spare->used))   // the longest unseen, never this frame's
             spare = c;
     }
     if (!k) {
-        if (!spare || s_sub.count > KEPT_RUNS) {
+        s_full |= s_warm && !spare;
+        if (!spare || s_sub.count > KEPT_RUNS || !may_paint()) {
             on_glass(s, x, l, r, paint, arg);
             return;
         }

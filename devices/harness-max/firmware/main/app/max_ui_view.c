@@ -489,6 +489,15 @@ void max_motion(uint32_t now_ms, uint32_t ms)
     if (!s_moving || (int32_t)(due - s_due) < 0) s_due = due;
     s_moving = true;
 }
+void max_render_aside(ht_scene_t *s, uint32_t now_ms)
+{
+    const bool moving = s_moving;
+    const uint32_t due = s_due;
+    ht_scene_clear(s, 0);   // the render sets its ground
+    max_ui_render(s, now_ms);
+    s_moving = moving;
+    s_due = due;
+}
 uint32_t max_motion_ms(uint32_t now_ms)
 {
     if (!s_moving) return MAX_WAKE_MS;

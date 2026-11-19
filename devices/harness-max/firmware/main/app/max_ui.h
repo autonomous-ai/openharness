@@ -139,6 +139,14 @@ bool max_ui_tick(uint32_t now_ms);
 // How long the render task may sleep before max_ui_tick has something to do (bounded, at least 1).
 uint32_t max_ui_next_wake_ms(uint32_t now_ms);
 
+// ---- the glass at rest (render task) ----
+// What a motion the finger can start next will paint, painted ahead off the glass while App Detail's row rests (no
+// finger on it, no overlay over it, nothing of it moving): the open agent's close first, then each agent's open from
+// its cell or sliver, every one's first frames first, so whichever comes first starts warm. A frame of one a call, and
+// at most one image or layer painted in it. Leaves the model as it was and draws nothing on the glass. True while
+// there is more to paint: call it again while the render task has nothing else to do.
+bool max_ui_warm(uint32_t now_ms);
+
 // ---- drawing (render task) ----
 // Draw the model into `scene`, which the caller has cleared. Keeps the hit areas for max_ui_touch.
 void max_ui_render(ht_scene_t *scene, uint32_t now_ms);

@@ -250,6 +250,7 @@ typedef struct {
     uint32_t track_t[MAX_TRACK];
     uint8_t track_n;
     max_tween_t fade_l, fade_r;     // the row's faded ends (MAX_ONE shown): while more of it lies that way
+    uint32_t moves;                 // the renders it moved in: a motion since may have used what max_ui_warm painted
 } max_row_t;
 // An overlay (the toast, the done note, the notice) as the last render drew it: up, or fading out from when it went.
 typedef struct {
@@ -314,6 +315,7 @@ typedef struct {
     uint32_t idle_from;              // since when nothing works or waits (Ambient)
     bool wall_known;                 // the wall clock (max_ui_wall): Ambient's clock and date, else no clock
     uint8_t wall_hour, wall_min, wall_wday, wall_mday, wall_mon;   // local time; wday 0 = Sunday, mon 0 = January
+    // From the row to cell_box: what a render carries to the next (max_ui_warm.c carries it along a motion it draws).
     max_row_t row;                   // App Detail's row in motion (max_ui_row.c)
     // The render's own clocks (max_ui_view.c): what loops, from when the page came up (page_from, the page drawn as
     // page_face: the agent page is App Detail's); the band's colours easing between talking and not for band_id; the
@@ -343,6 +345,7 @@ typedef struct {
     bool held;                       // it began inside the guard, or the clock ended the talk under it: no voice of it
     bool guarding;                   // a voice action's guard runs until guard_until (MAX_GUARD_MS)
     uint32_t guard_until;
+    uint32_t warm_key;               // what max_ui_warm's motions are of (0: none yet)
 } max_model_t;
 
 extern max_model_t max_m;
