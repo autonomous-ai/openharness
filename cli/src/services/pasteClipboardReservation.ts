@@ -118,41 +118,47 @@ export function createClipboardReservation(dataDir: string, deps: {
     // Release removes an existing namespace entry; only claim must publish its parent first.
     await remove(`${instance(corePid)}-${generation}`)
   }
+  let preparing = false
   return {
     async claim(corePid, generation) {
       if (!UUID.test(generation)) throw new Error('PASTE_INVALID_UPLOAD')
       const token = `${instance(corePid)}-${generation}`
-      await initialize()
-      for (let attempt = 0; attempt < 2; attempt++) {
-        try { await mkdir(directory, { mode: 0o700 }) }
-        catch (error) {
-          if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
-          if (attempt === 0 && await recover()) continue
-          return null
+      // Another local claim must not recover this owner's unfinished directory as a crash prefix.
+      if (preparing) return null
+      preparing = true
+      try {
+        await initialize()
+        for (let attempt = 0; attempt < 2; attempt++) {
+          try { await mkdir(directory, { mode: 0o700 }) }
+          catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
+            if (attempt === 0 && await recover()) continue
+            return null
+          }
+          try {
+            const parent = await inspect(directory)
+            if (!parent || !owned(parent.info, true)) throw unsafe()
+            const path = join(directory, token)
+            const fd = await open(path, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600)
+            try { parent.paths.verify(); await fd.sync(); parent.paths.verify() } finally { await fd.close() }
+            await syncDirectory(directory); parent.paths.verify()
+            await syncDirectory(root); parent.paths.verify()
+            const child = await inspect(path)
+            if (!child || !owned(child.info)) throw unsafe()
+            // Final bounded synchronous fence: no asynchronous preparation follows it. Another creator
+            // delayed before token creation may add its name later, but cannot pass the same sole-token test.
+            const entries = opendirSync(directory, { bufferSize: 2 })
+            try { if (entries.readSync()?.name !== token || entries.readSync() !== null) throw unsafe() }
+            finally { entries.closeSync() }
+            parent.paths.verify(); child.paths.verify()
+            return { release: () => release(corePid, generation) }
+          } catch (error) {
+            await remove(token)
+            throw error
+          }
         }
-        try {
-          const parent = await inspect(directory)
-          if (!parent || !owned(parent.info, true)) throw unsafe()
-          const path = join(directory, token)
-          const fd = await open(path, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600)
-          try { parent.paths.verify(); await fd.sync(); parent.paths.verify() } finally { await fd.close() }
-          await syncDirectory(directory); parent.paths.verify()
-          await syncDirectory(root); parent.paths.verify()
-          const child = await inspect(path)
-          if (!child || !owned(child.info)) throw unsafe()
-          // Final bounded synchronous fence: no asynchronous preparation follows it. Another creator
-          // delayed before token creation may add its name later, but cannot pass the same sole-token test.
-          const entries = opendirSync(directory, { bufferSize: 2 })
-          try { if (entries.readSync()?.name !== token || entries.readSync() !== null) throw unsafe() }
-          finally { entries.closeSync() }
-          parent.paths.verify(); child.paths.verify()
-          return { release: () => release(corePid, generation) }
-        } catch (error) {
-          await remove(token)
-          throw error
-        }
-      }
-      return null
+        return null
+      } finally { preparing = false }
     },
     release,
   }

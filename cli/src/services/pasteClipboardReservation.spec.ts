@@ -255,6 +255,36 @@ describe.skipIf(process.platform === 'win32')('clipboard reservation across work
     await (first ?? second)!.release()
   })
 
+  it.each(['root', 'held'] as const)('refuses another claim while this worker publishes its %s directory', async (phase) => {
+    const f = await fixture(), a = randomUUID(), b = randomUUID(), paused = deferred(), resume = deferred()
+    let intercepted = false
+    vi.mocked(mkdir).mockImplementation(async (...args) => {
+      const value = await filesystem.mkdir(...args)
+      if (String(args[0]) === (phase === 'root' ? f.directory : f.held) && !intercepted) {
+        intercepted = true; paused.resolve(); await resume.promise
+      }
+      return value
+    })
+    const attempted = f.reservation.claim(PID, a).then((claim) => ({ claim }), (error: unknown) => ({ error }))
+    await paused.promise
+    let competing: Awaited<ReturnType<typeof f.reservation.claim>> = null
+    try {
+      competing = await f.reservation.claim(PID, b)
+      expect(competing).toBeNull()
+      resume.resolve()
+      const result = await attempted
+      expect(result).toHaveProperty('claim', expect.anything())
+      expect(await readFile(f.token(a), 'utf8')).toBe('')
+    } finally {
+      resume.resolve()
+      const result = await attempted
+      await competing?.release()
+      if ('claim' in result) await result.claim?.release()
+    }
+    const successor = await f.reservation.claim(PID, b)
+    expect(successor).not.toBeNull(); await successor!.release()
+  })
+
   it('refuses malformed tokens and bounded malformed or multiple marker children', async () => {
     const f = await fixture()
     await expect(f.reservation.claim(PID, 'not-a-token')).rejects.toThrow('PASTE_INVALID_UPLOAD')
@@ -305,6 +335,9 @@ describe.skipIf(process.platform === 'win32')('clipboard reservation across work
       return filesystem.mkdir(...args)
     })
     await expect(f.reservation.claim(PID, randomUUID())).rejects.toThrow('fixture IO')
+    vi.mocked(mkdir).mockImplementation(filesystem.mkdir)
+    const successor = await f.reservation.claim(PID, randomUUID())
+    expect(successor).not.toBeNull(); await successor!.release()
   })
 
   it('recovers when another releaser removed the directory after mkdir found it occupied', async () => {
