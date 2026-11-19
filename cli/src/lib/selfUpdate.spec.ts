@@ -20,7 +20,8 @@ import { directorySyncSupported } from './secureState.js'
 
 // Pass-through, recording each path opened for writing, each rename's target and each flush (of a file or a folder). A
 // write under `refuse` fails, as on a full disk.
-const disk = vi.hoisted(() => ({ events: [] as string[], refuse: '' }))
+// `failRead`: reads of a path ending so fail (EIO), after `goodReads` more of them succeed.
+const disk = vi.hoisted(() => ({ events: [] as string[], refuse: '', failRead: '', goodReads: 0 }))
 vi.mock('node:fs', async original => {
   const actual = await original<typeof import('node:fs')>()
   const writing = (target: unknown): void => {
@@ -35,9 +36,13 @@ vi.mock('node:fs', async original => {
     writeFileSync: (...args: Parameters<typeof actual.writeFileSync>) => { if (typeof args[0] !== 'number') writing(args[0]); return actual.writeFileSync(...args) },
     renameSync: (...args: Parameters<typeof actual.renameSync>) => { disk.events.push(`rename ${String(args[1])}`); return actual.renameSync(...args) },
     fsyncSync: (fd: number) => { disk.events.push(actual.fstatSync(fd).isDirectory() ? 'flush folder' : 'flush file'); return actual.fsyncSync(fd) },
+    readFileSync: ((...args: Parameters<typeof actual.readFileSync>) => {
+      if (disk.failRead && String(args[0]).endsWith(disk.failRead) && disk.goodReads-- <= 0) throw Object.assign(new Error('EIO: fixture'), { code: 'EIO' })
+      return actual.readFileSync(...args)
+    }) as typeof actual.readFileSync,
   }
 })
-afterEach(() => { disk.events = []; disk.refuse = '' })
+afterEach(() => { disk.events = []; disk.refuse = ''; disk.failRead = ''; disk.goodReads = 0 })
 
 // The pointer file's writer (B1), with a switch to make it fail.
 const pointer = vi.hoisted(() => ({ fail: false }))
@@ -419,6 +424,20 @@ describe('a rolled-back version', () => {
     stage(dir, Buffer.from('v3'), Buffer.from('n3'), '3.0.0')
     confirm(dir)
     expect(rejectedVersions(dir)).toEqual([])
+  })
+
+  // A read that failed read nothing: the versions rolled back before must not be written over as none.
+  it('a kept version is taken off a list it read once, and a list it cannot read is not written', () => {
+    const dir = tempDir()
+    writeFileSync(join(dir, 'update-rejected.json'), JSON.stringify(['1.5.0', '2.0.0']))
+    writeFileSync(join(dir, 'update-pending.json'), '{"version":"2.0.0","at":1}\n')
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    disk.failRead = 'update-rejected.json'
+    disk.goodReads = 1
+    confirm(dir)
+    disk.failRead = ''
+    expect(rejectedVersions(dir)).toEqual(['1.5.0'])
+    vi.restoreAllMocks()
   })
 
   it('keeps the last ten, each once, and reads anything else as none', () => {
