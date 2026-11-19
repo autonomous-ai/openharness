@@ -1788,6 +1788,15 @@ describe('binding an OpenClaw pane, read from its screen', () => {
     ])
   })
 
+  // Its status line says idle (engines/openclaw/live.ts): read as not, a turn a Gateway restart left `running` under a
+  // history that then failed to load was never closed.
+  it('tells the stream a pane whose history did not load reads idle', async () => {
+    const run = setup({ capturePane: vi.fn(async () => screen('screen-history-failed')) })
+    vi.mocked(run.deps.registry.byProcess).mockReturnValue(pane({ sessionId: 'agent:main:plain' }))
+    await run.binding.bindObservedAgent(tui())
+    expect(vi.mocked(run.deps.openclawPaneRead).mock.calls.map(([, reading]) => reading)).toEqual([{ ready: true, gatewayLost: false, running: false }])
+  })
+
   // A run with no session in the store for 30 s is a store the Gateway does not write (engines/openclaw/live.ts).
   it('tells the stream when the pane reads a run in progress', async () => {
     let shown = screen('screen-abort-running')
@@ -2115,6 +2124,17 @@ describe('binding an OpenClaw pane, read from its screen', () => {
       await run.binding.bindObservedAgent(tui())
       expect(run.deps.openclawPaneRead).toHaveBeenCalled()
       expect(run.deps.registry.takeFirstTask).not.toHaveBeenCalled()
+    })
+
+    // A quiet pane is read every 30 s (live.ts `paneDue`): a history that did not load reads idle, and the `/session` that
+    // reloads it, and the task after it, came up to 30 s late.
+    it('a pane is read on every pass while its first task waits, on the row or handed over, its stream quiet or not', async () => {
+      const run = handing(() => screen('screen-history-failed'), { openclawPaneDue: vi.fn(() => false) })
+      await run.binding.bindObservedAgent(tui())
+      vi.mocked(run.deps.registry.byProcess).mockReturnValue(pane({ sessionId: 'agent:main:plain' }))
+      vi.mocked(run.deps.input.firstTaskWaiting).mockReturnValue(true)
+      await run.binding.bindObservedAgent(tui())
+      expect(run.deps.capturePane).toHaveBeenCalledTimes(2)
     })
 
     it('ready, busy, ready hands it over once', async () => {
