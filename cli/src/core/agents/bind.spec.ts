@@ -21,6 +21,7 @@ import { AttachTracker } from '../../lib/attachTracker.js'
 import { paneReadIdentity } from '../transcripts/readIdentity.js'
 import { createBinding, statBirthMs, type BindDeps, type RegisteredMeta } from './bind.js'
 import { createInput } from '../input.js'
+import { SessionInputController } from '../../lib/sessionInput.js'
 import type { TerminalActionResult } from '../../lib/terminalTypes.js'
 import { readInlineScreen } from '../../testing/inlineScreen.js'
 import { inlineSubmission } from '../../testing/inlineSubmission.js'
@@ -2219,7 +2220,8 @@ describe('binding an OpenClaw pane, read from its screen', () => {
       const run = handing(() => ready)
       vi.mocked(run.deps.registry.takeFirstTask).mockImplementation(() => { throw failure })
       await run.binding.bindObservedAgent(tui())
-      await vi.waitFor(() => expect(error).toHaveBeenCalledWith(`[agent] a1 first task kept · ${kind}`))
+      await vi.waitFor(() => expect(error).toHaveBeenCalledWith(`[agent] a1 first task handoff failed · ${kind}`))
+      expect(run.deps.registry.setLaunch).not.toHaveBeenCalled()
       expect(run.deps.submitFirstTask).not.toHaveBeenCalled()
     })
 
@@ -2249,7 +2251,7 @@ describe('binding an OpenClaw pane, read from its screen', () => {
       await vi.waitFor(() => expect(run.deps.submitFirstTask).toHaveBeenCalledWith('a1', TASK))
     })
 
-    it.each(['removed', 'rebound', 'held', 'failed'] as const)('does not remove a first task when its owner is %s before the transaction commits', async change => {
+    it.each(['removed', 'rebound', 'held', 'failed', 'replacement task', 'deleted'] as const)('does not remove a first task when its owner is %s before the transaction commits', async change => {
       let commit = () => {}
       const run = handing(() => ready)
       vi.mocked(run.deps.registry.afterTransaction).mockImplementation(((action: () => unknown) =>
@@ -2259,6 +2261,8 @@ describe('binding an OpenClaw pane, read from its screen', () => {
       if (change === 'removed') run.byAgent.delete('a1')
       else if (change === 'rebound') row.sessionId = 'agent:main:other'
       else if (change === 'held') row.identityHold = OPENCLAW_STATES.noGateway
+      else if (change === 'replacement task') row.firstTask = 'A new task'
+      else if (change === 'deleted') vi.mocked(isRecentlyDeleted).mockReturnValue(true)
       else row.launch = { state: 'failed', error: 'FIRST_TASK_NOT_TAKEN' }
       commit()
       await new Promise(resolve => setImmediate(resolve))
@@ -2298,6 +2302,105 @@ describe('binding an OpenClaw pane, read from its screen', () => {
       expect(run.deps.submitFirstTask).not.toHaveBeenCalled()
     })
 
+    it('reports a consumed task when storage release fails after its removal', async () => {
+      vi.spyOn(console, 'error').mockImplementation(() => {})
+      const run = handing(() => ready)
+      const row = run.byAgent.get('a1')!
+      vi.mocked(run.deps.registry.takeFirstTask).mockImplementationOnce(async () => {
+        delete row.firstTask
+        throw new Error('source release failed after durable publication')
+      })
+      await run.binding.bindObservedAgent(tui())
+      await vi.waitFor(() => expect(row.launch).toMatchObject({ state: 'failed', error: 'FIRST_TASK_NOT_TAKEN' }))
+      expect(run.deps.input.forget).toHaveBeenCalledWith('a1')
+      expect(run.deps.submitFirstTask).not.toHaveBeenCalled()
+    })
+
+    it('reports a latched registry that cannot save the consumed-task failure', async () => {
+      const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+      const run = handing(() => ready)
+      vi.mocked(run.deps.registry.takeFirstTask).mockImplementationOnce(async () => {
+        delete run.byAgent.get('a1')!.firstTask
+        throw new Error('cleanup unconfirmed')
+      })
+      vi.mocked(run.deps.registry.setLaunch).mockImplementation(() => { throw new Error('registry requires restart') })
+      await run.binding.bindObservedAgent(tui())
+      await vi.waitFor(() => expect(error).toHaveBeenCalledWith('[agent] a1 first task outcome unavailable · Error'))
+      expect(run.deps.submitFirstTask).not.toHaveBeenCalled()
+    })
+
+    it.each(['retry', 'overlap'] as const)('keeps first-task withdrawal owned by the latest matching handoff (%s)', async mode => {
+      vi.spyOn(console, 'error').mockImplementation(() => {})
+      const run = handing(() => ready), row = run.byAgent.get('a1')!
+      const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
+        getSession: () => row, validateRuntime: async () => true, inject: async () => true,
+        sendKey: async () => true, capture: async () => ready, onError: vi.fn(),
+      })
+      vi.mocked(run.deps.input.expectFirstTask).mockImplementation((id, content) => controller.expectFirstTask(id, content))
+      if (mode === 'retry') {
+        vi.mocked(run.deps.registry.takeFirstTask).mockRejectedValueOnce(new Error('not saved'))
+        await run.binding.bindObservedAgent(tui())
+        await new Promise(resolve => setImmediate(resolve))
+        expect(controller.firstTaskWaiting('a1')).toBe(true)
+        let finish!: (task: string) => void
+        vi.mocked(run.deps.registry.takeFirstTask).mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+        await run.binding.bindObservedAgent(tui())
+        await vi.waitFor(() => expect(finish).toBeTypeOf('function'))
+        run.binding.whileChanging(() => true)
+        delete row.firstTask
+        finish(TASK)
+        await new Promise(resolve => setImmediate(resolve))
+        expect(controller.firstTaskWaiting('a1')).toBe(false)
+        expect(run.deps.submitFirstTask).not.toHaveBeenCalled()
+      } else {
+        const commits: Array<() => void> = []
+        vi.mocked(run.deps.registry.afterTransaction).mockImplementation(((action: () => unknown) =>
+          new Promise(resolve => { commits.push(() => resolve(action())) })) as never)
+        await run.binding.bindObservedAgent(tui())
+        row.evidenceRevision = (row.evidenceRevision ?? 0) + 1
+        await run.binding.bindObservedAgent(tui())
+        expect(commits).toHaveLength(2)
+        commits[0]()
+        await new Promise(resolve => setImmediate(resolve))
+        expect(controller.firstTaskWaiting('a1')).toBe(true)
+        vi.mocked(run.deps.registry.takeFirstTask).mockImplementationOnce(async () => { delete row.firstTask; return TASK })
+        commits[1]()
+        await vi.waitFor(() => expect(run.deps.submitFirstTask).toHaveBeenCalledWith('a1', TASK))
+        expect(controller.firstTaskWaiting('a1')).toBe(true)
+      }
+      controller.forget('a1')
+    })
+
+    it.each([
+      ['before removal', 'changing'], ['after removal', 'changing'], ['after removal', 'deleted'],
+    ] as const)('withdraws a first-task handoff when a lifecycle takes ownership %s (%s)', async (at, change) => {
+      vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const run = handing(() => ready)
+      const row = run.byAgent.get('a1')!
+      const withdraw = vi.fn()
+      vi.mocked(run.deps.input.expectFirstTask).mockReturnValue(withdraw)
+      let finish!: () => void
+      if (at === 'before removal') {
+        vi.mocked(run.deps.registry.afterTransaction).mockImplementation(((action: () => unknown) =>
+          new Promise(resolve => { finish = () => resolve(action()) })) as never)
+      } else {
+        vi.mocked(run.deps.registry.takeFirstTask).mockImplementationOnce(() => new Promise(resolve => {
+          finish = () => { delete row.firstTask; row.evidenceRevision = 1; row.identityHold = OPENCLAW_STATES.noGateway; resolve(TASK) }
+        }))
+      }
+      await run.binding.bindObservedAgent(tui())
+      await vi.waitFor(() => expect(finish).toBeTypeOf('function'))
+      if (change === 'changing') run.binding.whileChanging(() => true)
+      else vi.mocked(isRecentlyDeleted).mockReturnValue(true)
+      finish()
+      await new Promise(resolve => setImmediate(resolve))
+      if (at === 'before removal') expect(run.deps.registry.takeFirstTask).not.toHaveBeenCalled()
+      expect(run.deps.registry.setLaunch).not.toHaveBeenCalled()
+      expect(run.deps.input.forget).not.toHaveBeenCalled()
+      expect(withdraw).toHaveBeenCalledOnce()
+      expect(run.deps.submitFirstTask).not.toHaveBeenCalled()
+    })
+
     it.each(['removed', 'rebound', 'replacement task'] as const)('does not fail a replacement after a consumed task is %s', async change => {
       const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
       let saved!: (task: string) => void
@@ -2314,7 +2417,7 @@ describe('binding an OpenClaw pane, read from its screen', () => {
       await new Promise(resolve => setImmediate(resolve))
       expect(run.deps.registry.setLaunch).not.toHaveBeenCalled()
       expect(run.deps.submitFirstTask).not.toHaveBeenCalled()
-      expect(warn).toHaveBeenCalledWith('[agent] a1 first task not handed over · launch changed after removal')
+      expect(warn).toHaveBeenCalledWith('[agent] a1 first task not handed over · launch changed')
     })
 
     it('a pane that moved to another key binds it, and hands the task to that session once its stream is up', async () => {
@@ -2392,7 +2495,7 @@ describe('binding an OpenClaw pane, read from its screen', () => {
         expect(run.deps.submitFirstTask).toHaveBeenCalledOnce()
       })
 
-      it.each(['removed', 'rebound', 'held', 'failed'] as const)('discards the attached pane reading after its agent is %s', async change => {
+      it.each(['removed', 'rebound', 'held', 'failed', 'changing', 'deleted'] as const)('discards the attached pane reading after its agent is %s', async change => {
         const { run, row } = streaming({ identityHold: OPENCLAW_STATES.noGateway })
         let finish!: (value: string) => void
         vi.mocked(run.deps.capturePane).mockResolvedValueOnce(ready).mockImplementationOnce(() =>
@@ -2403,10 +2506,27 @@ describe('binding an OpenClaw pane, read from its screen', () => {
         if (change === 'removed') run.byAgent.delete('a1')
         else if (change === 'rebound') row.sessionId = 'agent:main:other'
         else if (change === 'held') row.identityHold = OPENCLAW_STATES.noGateway
+        else if (change === 'changing') run.binding.whileChanging(() => true)
+        else if (change === 'deleted') vi.mocked(isRecentlyDeleted).mockReturnValue(true)
         else row.launch = { state: 'failed', error: 'FIRST_TASK_NOT_TAKEN' }
         finish(ready)
         await new Promise(resolve => setImmediate(resolve))
         expect(run.deps.openclawPaneRead).toHaveBeenCalledTimes(reads)
+        expect(run.deps.input.expectFirstTask).not.toHaveBeenCalled()
+        expect(run.deps.submitFirstTask).not.toHaveBeenCalled()
+      })
+
+      it.each(['changing', 'deleted'] as const)('does not begin an attached handoff while its agent is %s', async change => {
+        const { run } = streaming({ identityHold: OPENCLAW_STATES.noGateway })
+        vi.mocked(run.deps.attachSession).mockImplementationOnce(async () => {
+          if (change === 'changing') run.binding.whileChanging(() => true)
+          else vi.mocked(isRecentlyDeleted).mockReturnValue(true)
+          return true
+        })
+        await run.binding.bindObservedAgent(tui())
+        await new Promise(resolve => setImmediate(resolve))
+        expect(run.deps.attachSession).toHaveBeenCalledOnce()
+        expect(run.deps.capturePane).toHaveBeenCalledOnce()
         expect(run.deps.input.expectFirstTask).not.toHaveBeenCalled()
         expect(run.deps.submitFirstTask).not.toHaveBeenCalled()
       })

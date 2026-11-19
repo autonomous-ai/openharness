@@ -67,6 +67,15 @@ describe('the event funnel', () => {
     } finally { input.forget('a1') }
   })
 
+  it('publishes a live user row before its input confirmation can act on it', () => {
+    const { funnel, deps, calls } = setup('openclaw')
+    vi.mocked(deps.input.onUserMessage).mockImplementation(() => { calls.push('input user') })
+    funnel('s1', [{ type: 'user_message', payload: { content: 'go' } }])
+    expect(calls.indexOf('send user_message')).toBeLessThan(calls.indexOf('input user'))
+    expect(vi.mocked(deps.turnActivity.observe).mock.invocationCallOrder[0])
+      .toBeLessThan(vi.mocked(deps.input.onUserMessage).mock.invocationCallOrder[0])
+  })
+
   it('enqueues dispatch and started notices before a read response requested at the earlier app send point', async () => {
     vi.spyOn(console, 'log').mockImplementation(() => {})
     const wire: ServiceFrame[] = [], token = 't'.repeat(48)

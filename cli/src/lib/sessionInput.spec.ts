@@ -1119,6 +1119,22 @@ describe('SessionInputController', () => {
       controller.forget('s1')
     })
 
+    it('withdraws only the first-task expectation owned by a cancelled handoff', () => {
+      const { controller } = paneController(() => readyPane())
+      const withdrawn = controller.expectFirstTask('s1', 'Say hello')
+      expect(withdrawn).toBeTypeOf('function')
+      withdrawn?.()
+      expect(controller.firstTaskWaiting('s1')).toBe(false)
+      const replacement = controller.expectFirstTask('s1', 'Say hello')
+      withdrawn?.()
+      expect(controller.firstTaskWaiting('s1')).toBe(true)
+      controller.forget('s1')
+      controller.expectFirstTask('s1', 'Say hello')
+      replacement?.()
+      expect(controller.firstTaskWaiting('s1')).toBe(true)
+      controller.forget('s1')
+    })
+
     it('a first task is never given up: it waits, said to the frame, until its user row confirms it', async () => {
       vi.useFakeTimers()
       let pane = startingPane()

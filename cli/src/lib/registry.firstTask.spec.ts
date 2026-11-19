@@ -99,6 +99,40 @@ it('returns a consumed task receipt when a hold arrives during source release', 
   expect(registry.byAgent(row.agentId)?.identityHold).toBe('Gateway unavailable')
 })
 
+it('restores an unconfirmed removal when its authority is withdrawn during settlement', async () => {
+  const { registry, row } = await bound()
+  const publication = await import('./sessionPublication.js')
+  const prepare = publication.prepareSessionPublication
+  let current = true
+  vi.spyOn(publication, 'prepareSessionPublication').mockImplementationOnce(async (...args) => {
+    const prepared = await prepare(...args)
+    const settle = prepared.settle.bind(prepared)
+    prepared.settle = async () => { await settle(); current = false }
+    return prepared
+  })
+  await expect(registry.takeFirstTask(row.agentId, { current: () => current })).rejects.toThrow()
+  expect(registry.byAgent(row.agentId)?.firstTask).toBe(TASK)
+  expect(disk()[0]).not.toHaveProperty('firstTask')
+  await registry.flush()
+  expect(disk()[0].firstTask).toBe(TASK)
+  expect(registry.byAgent(row.agentId)?.firstTask).toBe(TASK)
+})
+
+it('keeps an admitted removal when its source release fails', async () => {
+  const { registry, row } = await bound()
+  const { sessionStorage: storage } = await import('./sessionStorage.js')
+  const retain = storage.retain.bind(storage)
+  vi.spyOn(storage, 'retain').mockImplementationOnce(async (...args) => {
+    const source = await retain(...args)
+    const release = source.release.bind(source)
+    source.release = async () => { await release(); throw new Error('fixture release failure') }
+    return source
+  })
+  await expect(registry.takeFirstTask(row.agentId)).rejects.toThrow('admitted write cleanup failed; restart required')
+  expect(registry.byAgent(row.agentId)).not.toHaveProperty('firstTask')
+  expect(disk()[0]).not.toHaveProperty('firstTask')
+})
+
 it('an unbound agent keeps its task', async () => {
   const { registry, row } = await pending()
   expect((await registry.takeFirstTask(row.agentId))).toBeNull()

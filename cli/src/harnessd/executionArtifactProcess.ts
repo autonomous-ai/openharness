@@ -6,6 +6,8 @@ import { PROBE_TIMEOUT_MS } from './protocol.js'
 
 declare const __WORKER_ARTIFACT_PREPARER__: string | undefined
 export const PREPARATION_CODE_BYTES = 128 * 1024
+// Publishing a full cohort needs its own bound; the lightweight probe's deadline also killed valid slow preparations.
+export const PREPARATION_TIMEOUT_MS = 60_000
 export const embeddedPreparer = (): string | undefined => typeof __WORKER_ARTIFACT_PREPARER__ === 'undefined' ? undefined : __WORKER_ARTIFACT_PREPARER__
 
 export function createArtifactPreparation(options: { directory: string; node: string; keepMasterEntry?: string; code?: string; start?: CaptureStart }) {
@@ -21,11 +23,13 @@ export function createArtifactPreparation(options: { directory: string; node: st
     // No login environment or feature state is needed to read and publish an owned code image.
     const env = Object.fromEntries(['SystemRoot', 'WINDIR', 'TEMP', 'TMP'].flatMap(name => process.env[name] ? [[name, process.env[name]!]] : []))
     active = true
-    const running = captureChild(options.node, ['--input-type=module'], env, PROBE_TIMEOUT_MS, options.start, input)
+    const startedAt = Date.now()
+    const running = captureChild(options.node, ['--input-type=module'], env, PREPARATION_TIMEOUT_MS, options.start, input)
     return { cancel: running.cancel, result: running.result.then(result => {
       if (!result.started) { active = false; throw new Error('worker_artifact_source_unavailable') }
       // Until a complete typed reply proves otherwise, a candidate may have been published under our PID.
       unsettled = true
+      if (result.failure === `no answer within ${PREPARATION_TIMEOUT_MS} ms`) console.warn('[harnessd] worker_artifact_preparation_timed_out')
       if (result.failure || result.code !== 0 || result.err || Buffer.byteLength(result.out) > PREPARATION_REPLY_BYTES) throw new Error('worker_artifact_cleanup_unsettled')
       let reply: unknown
       try { reply = JSON.parse(result.out) } catch { throw new Error('worker_artifact_cleanup_unsettled') }
@@ -38,6 +42,8 @@ export function createArtifactPreparation(options: { directory: string; node: st
       }
       if (value.ok !== true || Object.keys(value).some(key => !['ok', 'artifact'].includes(key))) throw new Error('worker_artifact_cleanup_unsettled')
       const artifact = adoptExecutionArtifact(originalScript, expected, value.artifact, options)
+      const elapsed = Date.now() - startedAt
+      if (elapsed > PROBE_TIMEOUT_MS) console.warn(`[harnessd] worker_artifact_preparation_slow · ms=${elapsed}`)
       unsettled = false
       let released = false
       return { ...artifact, release: () => { if (!released) { artifact.release(); released = true; active = false } } }

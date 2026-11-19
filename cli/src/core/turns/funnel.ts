@@ -81,7 +81,6 @@ export function funnelFor({
       const event = events[index]
       const agentId = agentIdFor(sessionId)
       const replay = !!(opts?.resumed || opts?.replay)
-      if (!replay && event.type === 'user_message') input.onUserMessage(agentId, event.payload.content)
       turnActivity.observe(sessionId, event.type, replay)
       if (!replay && isProgressEvent(event.type)) working?.(agentId)
       if (!replay && event.type === 'turn_started') {
@@ -114,6 +113,7 @@ export function funnelFor({
         else if (!replay && quietTurnOpen?.(sessionId)) frame.subagent = true
       }
       clients.send(withoutOutputTail(frame), { id, index, count: events.length, ...(opts?.replay ? { replay: true as const } : {}) })
+      if (!replay && event.type === 'user_message') input.onUserMessage(agentId, event.payload.content)
       if (event.type === 'turn_started' || event.type === 'turn_ended') search?.touch(sessionId)
       if (event.type === 'turn_started') {
         turnStartedAt.set(sessionId, Date.now())

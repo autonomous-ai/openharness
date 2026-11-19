@@ -431,13 +431,14 @@ export function createBinding({
    * The agent's first task, taken off its row. This pass runs inside the reconcile pass's registry transaction
    * (core/main.ts), which holds saves back: taken after it commits, the removal is saved before the task is typed, so a
    * daemon that stops in between never types it twice. A pass that reads the pane again before then takes nothing. Null
-   * when there is none, or when the removal could not be saved, which is said.
+   * when there is none. A failure is distinct: storage release can fail after the removal was saved.
    */
-  const takeFirstTask = (agentId: string, current: () => boolean): Promise<string | null> =>
-    registry.afterTransaction(() => current() ? registry.takeFirstTask(agentId, { current }) : null).catch((error) => {
-      console.error(`[agent] ${sid(agentId)} first task kept · ${errorKind(error)}`)
-      return null
-    })
+  const takeFirstTask = (agentId: string, current: () => boolean): Promise<{ task: string | null; failed: boolean }> =>
+    registry.afterTransaction(() => current() ? registry.takeFirstTask(agentId, { current }) : null)
+      .then(task => ({ task, failed: false }), error => {
+        console.error(`[agent] ${sid(agentId)} first task handoff failed · ${errorKind(error)}`)
+        return { task: null, failed: true }
+      })
   /**
    * Types the agent's first task as the person's own message, under the agent: its turn is confirmed there
    * (core/turns/funnel.ts), and under the session key it was failed as not accepted. A submit that throws has the task
@@ -445,31 +446,46 @@ export function createBinding({
    */
   const handOverFirstTask = (agentId: string): void => {
     const row = registry.byAgent(agentId)
-    if (!row?.firstTask || row.identityHold || row.launch?.state === 'failed') return
+    if (changing(agentId) || isRecentlyDeleted(agentId) || !row?.firstTask || row.identityHold || row.launch?.state === 'failed') return
     const selected = structuredClone(row)
     const current = () => {
       const latest = registry.byAgent(agentId)
-      return !latest?.identityHold && matchesLaunchReceipt(latest, selected)
+      return !changing(agentId) && !isRecentlyDeleted(agentId) && !latest?.identityHold
+        && (!latest?.firstTask || latest.firstTask === selected.firstTask) && matchesLaunchReceipt(latest, selected)
+    }
+    const revoked = () => {
+      const latest = registry.byAgent(agentId)
+      // A hold or startup completion can arrive after durable removal, while its storage source releases.
+      // Fail that same launch visibly; a replacement or foreground lifecycle owns its own outcome.
+      const completed = latest?.launch === undefined || latest.launch.state === 'ready'
+        ? { ...selected, launch: latest?.launch } : selected
+      if (!changing(agentId) && !isRecentlyDeleted(agentId) && latest && !latest.firstTask
+        && matchesLaunchReceipt({ ...latest, evidenceRevision: selected.evidenceRevision }, completed)) {
+        failFirstTask(latest)
+      } else {
+        withdraw?.()
+        console.warn(`[agent] ${sid(agentId)} first task not handed over · launch changed`)
+      }
     }
     // Expected before its row lets it go: the frame reads starting from the one or the other all the way to its turn.
-    input.expectFirstTask(agentId, row.firstTask)
-    void takeFirstTask(agentId, current).then((task) => {
-      if (!task) return
+    const withdraw = input.expectFirstTask(agentId, row.firstTask)
+    void takeFirstTask(agentId, current).then(({ task, failed }) => {
+      if (failed) {
+        if (registry.byAgent(agentId)?.firstTask !== selected.firstTask) revoked()
+        return
+      }
+      if (!task) {
+        if (!current()) withdraw?.()
+        return
+      }
       if (!current()) {
-        const latest = registry.byAgent(agentId)
-        // A hold or startup completion can arrive after durable removal, while its storage source releases.
-        // Fail that same launch visibly; never fail a replacement owner or a launch carrying a new task.
-        const completed = latest?.launch === undefined || latest.launch.state === 'ready'
-          ? { ...selected, launch: latest?.launch } : selected
-        if (latest && !latest.firstTask && matchesLaunchReceipt({ ...latest, evidenceRevision: selected.evidenceRevision }, completed)) {
-          failFirstTask(latest)
-        } else console.warn(`[agent] ${sid(agentId)} first task not handed over · launch changed after removal`)
+        revoked()
         return
       }
       console.log(`[agent] ${sid(agentId)} first task handed over`)
       try { submitFirstTask(agentId, task) }
       catch (error) { console.error(`[agent] ${sid(agentId)} first task not typed · ${errorKind(error)}`) }
-    })
+    }).catch(error => console.error(`[agent] ${sid(agentId)} first task outcome unavailable · ${errorKind(error)}`))
   }
   /**
    * A first task OpenClaw did not take within its bound fails the launch with it, so every verb says so and the person
@@ -501,12 +517,12 @@ export function createBinding({
    */
   const handOverAttached = async (agentId: string): Promise<void> => {
     const row = registry.byAgent(agentId)
-    if (!row?.firstTask || row.identityHold || row.launch?.state === 'failed') return
+    if (changing(agentId) || isRecentlyDeleted(agentId) || !row?.firstTask || row.identityHold || row.launch?.state === 'failed') return
     const selected = structuredClone(row)
     const revision = activityRevision(row.sessionId)
     const capture = await capturePane(agentId).catch(() => null)
     const latest = registry.byAgent(agentId)
-    if (!capture || latest?.identityHold || !matchesLaunchReceipt(latest, selected)) return
+    if (changing(agentId) || isRecentlyDeleted(agentId) || !capture || latest?.identityHold || !matchesLaunchReceipt(latest, selected)) return
     const screen = readOpenclawScreen(capture)
     if (screen.state === 'ready' && screen.box === '' && screen.key === row.sessionId
       && openclawPaneRead(row.sessionId, { ready: true, gatewayLost: screen.gatewayLost, running: screen.running }, capture, revision)) handOverFirstTask(agentId)

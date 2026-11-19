@@ -203,7 +203,7 @@ interface InputState {
   pastedAt: number
   /** The agent's first task is the controller's, from when it is expected until a turn takes it ([firstTaskEnded]): it
    *  is never given up here ([firstTaskWaiting]). */
-  firstTask: string | null
+  firstTask: { fingerprint: string } | null
   /** A message waits for its OpenClaw pane to be able to send ([OPENCLAW_NOT_READY]): nothing of it is typed. */
   paneWait: boolean
   /** The receipt of the person's message typed last, until it is settled ([settle]). */
@@ -420,11 +420,18 @@ export class SessionInputController {
    * from here ([firstTaskWaiting]), as the row no longer does once the task leaves it. Said from the paste, the agent
    * read idle with no ask between the two, about 350 ms (e2e/openclawShow.e2e.ts).
    */
-  expectFirstTask(id: string, content: string): void {
+  expectFirstTask(id: string, content: string): (() => void) | undefined {
     const state = this.state(id)
-    if (state.firstTask) return
-    state.firstTask = fingerprint(content)
-    this.deps.onWaitChanged?.(id)
+    const expected = fingerprint(content), waiting = state.firstTask !== null
+    if (state.firstTask && state.firstTask.fingerprint !== expected) return
+    const task = state.firstTask = { fingerprint: expected }
+    if (!waiting) this.deps.onWaitChanged?.(id)
+    // A restart can take ownership while durable removal releases its source. Its withdrawn handoff
+    // must not leave this expectation on the new launch. Each matching handoff claims withdrawal so
+    // an earlier pass cannot clear a newer pass's expectation, including after a failed removal.
+    return () => {
+      if (this.states.get(id) === state && state.firstTask === task) this.firstTaskEnded(id, state)
+    }
   }
 
   private countWait(id: string, by: 1 | -1): void {
@@ -565,7 +572,7 @@ export class SessionInputController {
   }
 
   /**
-   * A first task waits no more: a turn took it, the person stopped it, or the agent is gone. Nothing else ends its
+   * A first task waits no more: a turn took it, the person stopped or replaced its launch, or the agent is gone. Nothing else ends its
    * wait, a message given up included: the binding pass's bound fails the launch instead (core/agents/bind.ts), so a
    * task lost after it left its row is never read as idle with no ask. The agent's frame says so (`onWaitChanged`).
    */
@@ -827,7 +834,7 @@ export class SessionInputController {
       return
     }
     // A person's intervening turn cannot confirm the first task or discard its submission evidence.
-    if (state.firstTask && state.awaitingFingerprint === state.firstTask && fingerprint(userMessage) !== state.firstTask) {
+    if (state.firstTask && state.awaitingFingerprint === state.firstTask.fingerprint && fingerprint(userMessage) !== state.firstTask.fingerprint) {
       state.turnOpen = true
       return
     }
@@ -858,7 +865,7 @@ export class SessionInputController {
     state.settleTimer = null
     state.settling = false
     state.turnOpen = true
-    if (state.firstTask && fingerprint(userMessage) === state.firstTask) this.firstTaskEnded(sessionId, state)
+    if (state.firstTask && fingerprint(userMessage) === state.firstTask.fingerprint) this.firstTaskEnded(sessionId, state)
     // Cursor does not clear its composer when it accepts a prompt: the submitted text stays on the "→"
     // line for the whole turn and long after it, so the terminal reads as if the question is still
     // waiting to be sent. Clearing before the NEXT paste (see inject) stops the two from running
@@ -921,7 +928,7 @@ export class SessionInputController {
       if (!state.operation.writing) void this.verifyComposer(sessionId, state, state.operation, false)
       return
     }
-    if (state.firstTask && state.awaitingFingerprint === state.firstTask) {
+    if (state.firstTask && state.awaitingFingerprint === state.firstTask.fingerprint) {
       state.turnOpen = false
       const session = this.controlSession(sessionId)
       if (session) this.armSubmitCheck(sessionId, session, state)
@@ -1205,7 +1212,7 @@ export class SessionInputController {
         await write(() => this.deps.sendKey(session.agentId, 'C-u', current))
         if (!current()) { gone(); return }
       }
-      const result = await this.injectWhenLeased(state, () => !!state.firstTask && state.firstTask === fingerprint(content), () => write(() => {
+      const result = await this.injectWhenLeased(state, () => !!state.firstTask && state.firstTask.fingerprint === fingerprint(content), () => write(() => {
         if (!current()) return Promise.resolve(terminalActionNotStarted('caller_gone'))
         operation.writing = true
         operation.dispatched = true
@@ -1517,7 +1524,7 @@ export class SessionInputController {
   }
 
   private async retryOpenclaw(sessionId: string, session: RegisteredSession, state: InputState): Promise<void> {
-    const firstTask = !!state.firstTask && state.firstTask === state.awaitingFingerprint
+    const firstTask = !!state.firstTask && state.firstTask.fingerprint === state.awaitingFingerprint
     // A write that may have gone through is given up, but a first task's, which is never given up here: its box says
     // whether OpenClaw refused it, and an unread pane gets no Enter.
     if (state.ambiguousDispatch && !firstTask) {

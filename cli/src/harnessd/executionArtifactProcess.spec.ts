@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { fingerprint } from './bundleFingerprint.js'
-import { createArtifactPreparation, embeddedPreparer, PREPARATION_CODE_BYTES } from './executionArtifactProcess.js'
+import { createArtifactPreparation, embeddedPreparer, PREPARATION_CODE_BYTES, PREPARATION_TIMEOUT_MS } from './executionArtifactProcess.js'
 import { prepareArtifact, preparationRequest, PREPARATION_DATA_BYTES, type PreparationRequest } from './executionArtifactChild.js'
 import { adoptExecutionArtifact, type ArtifactMetadata } from './executionArtifacts.js'
 import * as artifactModule from './executionArtifacts.js'
@@ -22,7 +22,7 @@ describe('owned artifact preparation', () => {
     writeFileSync(source, '// inert full CLI\n' + leanBlock({ 'harnessd.mjs': '// service', 'harnessd-core.mjs': '// core' }))
     expected = fingerprint(source)!
   })
-  afterEach(() => { rmSync(root, { recursive: true, force: true }); vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.unstubAllEnvs() })
+  afterEach(() => { rmSync(root, { recursive: true, force: true }); vi.restoreAllMocks(); vi.useRealTimers(); vi.unstubAllGlobals(); vi.unstubAllEnvs() })
   const request = (): PreparationRequest => ({ originalScript: source, directory, expected, parentPid: process.pid })
   const rig = (keepMasterEntry?: string) => {
     let answer: object, sent = ''
@@ -71,6 +71,37 @@ describe('owned artifact preparation', () => {
     previous.release()
     expect(() => fixture.owner.prepare(source, expected)).toThrow('worker_artifact_in_use')
     fixture.close(); (await next.result).release()
+  })
+
+  it('lets a slow cohort publication finish beyond the lightweight probe deadline', async () => {
+    vi.useFakeTimers()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const fixture = rig(), running = fixture.owner.prepare(source, expected)
+    const result = running.result.then(image => ({ image }), error => ({ error }))
+    await vi.advanceTimersByTimeAsync(16_000)
+    const killed = fixture.child.kill.mock.calls.length
+    fixture.close()
+    const outcome = await result
+    if ('image' in outcome) outcome.image.release()
+    expect(killed).toBe(0)
+    expect(outcome).toHaveProperty('image')
+    expect(warn).toHaveBeenCalledWith('[harnessd] worker_artifact_preparation_slow · ms=16000')
+  })
+
+  it('terminates at its own preparation deadline and keeps custody until actual close', async () => {
+    vi.useFakeTimers()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const fixture = rig(), running = fixture.owner.prepare(source, expected), settled = vi.fn()
+    const result = running.result.then(settled, error => { settled(); return error })
+    await vi.advanceTimersByTimeAsync(PREPARATION_TIMEOUT_MS - 1)
+    expect(fixture.child.kill).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(1)
+    expect(fixture.child.kill).toHaveBeenCalledWith('SIGKILL')
+    expect(settled).not.toHaveBeenCalled()
+    fixture.child.emit('close', null, 'SIGKILL')
+    expect(await result).toMatchObject({ message: 'worker_artifact_cleanup_unsettled' })
+    expect(warn).toHaveBeenCalledWith('[harnessd] worker_artifact_preparation_timed_out')
+    expect(() => fixture.owner.prepare(source, expected)).toThrow('worker_artifact_cleanup_unsettled')
   })
 
   it('preserves the original master claim and forwards only the minimal OS environment', async () => {
