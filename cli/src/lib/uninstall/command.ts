@@ -7,9 +7,9 @@
  *     otherwise start it again in the middle;
  *  3. the daemon, then whatever the terminal host still runs (before anything under runtime/pty goes);
  *  4. the hooks, once no daemon is left to write them back on its next start;
- *  5. the launchers and the PATH entry, then the files. On Windows a program cannot delete the node.exe it runs from,
- *     nor bin\harness.exe while it waits for that node.exe, so the files go in a cmd.exe that waits for this process
- *     to exit (removal.ts).
+ *  5. the launchers, Linux's login entry and the PATH entry, then the files. On Windows a program cannot delete the
+ *     node.exe it runs from, nor bin\harness.exe while it waits for that node.exe, so the files go in a cmd.exe that
+ *     waits for this process to exit (removal.ts).
  * A service that would not go, or a daemon that would not stop, ends it before anything is deleted: what was left
  * would start a program that is no longer there. Everything after that is reported, and the rest is still done.
  *
@@ -152,6 +152,8 @@ export interface UninstallDeps {
   /** mac and Linux: the launchers in ~/.local/bin (on Windows they are in ~\.harness\bin, with the rest). A launcher
    *  removed is its path; one that could not be, the path and why. */
   removeLaunchers(): Array<string | { path: string; failed: string }>
+  /** loginEntry.ts removeLoginEntry: Linux's login entry, only when it is the installer's own. */
+  removeLoginEntry(): string | { path: string; failed: string } | null
   removePathEntry(): PathStep
   listEntries(dir: string): RootEntry[]
   exists(path: string): boolean
@@ -474,6 +476,9 @@ async function removeHarness(deps: UninstallDeps, daemon: number | null, keepDat
         if (typeof launcher === 'string') deps.out(`✓ removed ${deps.tildify(launcher)}`)
         else problems.push(`could not remove ${deps.tildify(launcher.path)} (${launcher.failed}): delete it yourself`)
       }
+      const entry = deps.removeLoginEntry()
+      if (typeof entry === 'string') deps.out(`✓ removed ${deps.tildify(entry)}`)
+      else if (entry) problems.push(`could not remove ${deps.tildify(entry.path)} (${entry.failed}): delete it yourself`)
     })
   }
 
