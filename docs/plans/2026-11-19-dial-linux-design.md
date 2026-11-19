@@ -67,8 +67,9 @@ The entry:
 - `install.sh`, both modes (standalone, and the Desktop app installing its CLI with `--desktop`), on Linux only, writes
   `<config>/autostart/harnessd.desktop`, where `<config>` is `$XDG_CONFIG_HOME` when it is absolute, else
   `~/.config` (the rule `harnessd/platform.ts` already follows for the unit's folder, `:411`, `:440`). It is a
-  `Type=Application` entry whose `Exec=` is the launcher's absolute path and `start`, with `NoDisplay=true` and
-  `X-GNOME-Autostart-enabled=true`; its name is `Harness`. Written atomically (a temp file in the same folder, then
+  `Type=Application` entry whose `Exec=` is the launcher's absolute path and `start`, with
+  `X-GNOME-Autostart-enabled=true`; its name is `Harness`. No `NoDisplay=true`: GNOME's Startup Applications hides
+  such an entry, and that is where the person turns it off (changed in the final review, below). Written atomically (a temp file in the same folder, then
   a rename), and only when the file is missing or its `Exec=` is exactly install.sh's own `<launcher> start` line. A
   file with another `Exec=` (the Linux Device app's, built by device-app-win-linux, which then owns the login entry) is
   left as it is, and so is one with `Hidden=true` (harness-pm, 2026-11-19). Tests cover both.
@@ -420,6 +421,12 @@ and reads as on a Mac. Where Linux forces a difference, this table names it and 
 
 Linux (all of it). macOS: Zellij and kitty (part 3), WezTerm `type` (part 1) and the shared opener paths, unit-tested there and on CI's Linux; no
 macOS behavior changes otherwise. Windows: no change.
+
+## Changed in the final review
+
+- The login entry has no `NoDisplay=true`: GNOME's Startup Applications hides such entries, and that is where the
+  person turns it off. Linux follows macOS, where the item shows in Login Items. An older entry that has the line is
+  still the installer's own (only `Exec=` is compared), so the next install rewrites it.
 
 ## Design (docs/feature-design-rules.md)
 

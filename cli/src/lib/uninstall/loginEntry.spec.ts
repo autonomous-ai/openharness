@@ -3,9 +3,9 @@ import { loginEntryExec, removeLoginEntry } from './loginEntry.js'
 
 const LAUNCHER = '/home/u/.local/bin/harness'
 const ENTRY = '/home/u/.config/autostart/harnessd.desktop'
-/** The six lines install.sh writes (write_login_entry). */
+/** The five lines install.sh writes (write_login_entry). */
 const own = (exec = `"${LAUNCHER}" start`, ...more: string[]) =>
-  ['[Desktop Entry]', 'Type=Application', 'Name=Harness', `Exec=${exec}`, 'NoDisplay=true', 'X-GNOME-Autostart-enabled=true', ...more, ''].join('\n')
+  ['[Desktop Entry]', 'Type=Application', 'Name=Harness', `Exec=${exec}`, 'X-GNOME-Autostart-enabled=true', ...more, ''].join('\n')
 
 function fake(files: Record<string, string>, overrides: Partial<Parameters<typeof removeLoginEntry>[0]> = {}) {
   const read: string[] = []

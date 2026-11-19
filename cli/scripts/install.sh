@@ -170,7 +170,7 @@ write_login_entry() {
   _login_staged="$_login_entry.$$.tmp"
   if mkdir -p "$(dirname "$_login_entry")" \
       && printf '%s\n' '[Desktop Entry]' 'Type=Application' 'Name=Harness' "Exec=$(login_entry_exec)" \
-        'NoDisplay=true' 'X-GNOME-Autostart-enabled=true' > "$_login_staged" \
+        'X-GNOME-Autostart-enabled=true' > "$_login_staged" \
       && chmod 644 "$_login_staged" && mv -f "$_login_staged" "$_login_entry"; then
     echo "  ✓ Starts at login"
   else
