@@ -1,0 +1,80 @@
+# Temporary: Harness Device's tests on Windows and Linux for feat/device-app-win-linux and its task branches. Removed
+# before the branch merges. No secrets, nothing signed, nothing published.
+name: tmp device-app win-linux (temporary)
+
+on:
+  push:
+    branches: [feat/device-app-win-linux, feat/device-app-win-linux-t*]
+    paths: ['device-app/**', '.github/workflows/tmp-device-app-win-linux.yml']
+
+permissions:
+  contents: read
+
+# One run per branch: a newer push makes the older run's result moot.
+concurrency:
+  group: tmp-device-app-win-linux-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CLI_NODE_VERSION: 24.22.2
+
+jobs:
+  windows-unit:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: device-app/src-tauri
+          shared-key: device-app-tmp
+      - name: Rust unit tests
+        run: cargo test --locked --lib --manifest-path device-app/src-tauri/Cargo.toml
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.CLI_NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: device-app/ui/package-lock.json
+      # The binary embeds ui/dist, so the bundle is built before main.rs compiles.
+      - name: UI bundle
+        working-directory: device-app/ui
+        run: npm ci --no-audit --no-fund && npm run build
+      - name: Binary
+        run: cargo build --locked --manifest-path device-app/src-tauri/Cargo.toml
+
+  linux-unit:
+    runs-on: ubuntu-latest
+    # apt-install.sh can take about 19.5 minutes to give up in a mirror outage, and a cold Tauri compile follows.
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      # Copied from ci.yml's device-app-checks, from the apt install to the Rust unit tests.
+      - run: >-
+          sudo bash scripts/apt-install.sh libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev
+          xvfb openbox xdotool xterm
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.CLI_NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: device-app/ui/package-lock.json
+      # The binary embeds ui/dist, so the bundle is built before the Rust tests compile it.
+      - name: UI tests and bundle
+        working-directory: device-app/ui
+        run: |
+          npm ci --no-audit --no-fund
+          npx tsc --noEmit
+          npx vitest run
+          npm run build
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: device-app/src-tauri
+          shared-key: device-app-pr
+          cache-bin: false
+      - name: Rust unit tests
+        run: cargo test --locked --manifest-path device-app/src-tauri/Cargo.toml
