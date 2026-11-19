@@ -14,8 +14,27 @@ export interface NativeFileObservation {
 
 /** No whole-store read: content is optional and limited by the caller's small declaration. */
 export function observeNativeFile(path: string, options: { maxBytes?: number; missingOkay?: boolean } = {}): NativeFileObservation {
+  const group = observeNativeFiles([{ path, ...options }])
+  return { ...group.files[0], verify: group.verify }
+}
+
+/** Up to three files share one inspection budget and fresh route fence, never cached verification. */
+export function observeNativeFiles(entries: readonly { path: string; maxBytes?: number; missingOkay?: boolean }[], base?: NativePaths): {
+  files: Omit<NativeFileObservation, 'verify'>[]
+  verify(): void
+} {
+  if (entries.length < 1 || entries.length > 3) nativeUnavailable('the native file group exceeds its member limit')
   const budget = new NativeEvidenceBudget()
-  const paths = new NativePaths(budget)
+  const paths = base?.fork(budget) ?? new NativePaths(budget)
+  const observations = entries.map(entry => { budget.step(); return inspectNativeFile(entry.path, entry, paths, budget) })
+  const verifyRoute = paths.retain()
+  const verify = () => { verifyRoute(); for (const file of observations) file.verify() }
+  verify()
+  return { files: observations.map(({ verify: _verify, ...file }) => file), verify }
+}
+
+function inspectNativeFile(path: string, options: { maxBytes?: number; missingOkay?: boolean }, paths: NativePaths,
+  budget: NativeEvidenceBudget): NativeFileObservation {
   const location = paths.resolveSync(path, options.missingOkay)
   let bytes: Buffer | undefined, before: string | undefined
   if (location) {
@@ -47,9 +66,7 @@ export function observeNativeFile(path: string, options: { maxBytes?: number; mi
       if (fd !== undefined) { try { closeSync(fd) } catch { nativeUnavailable('the native file could not be closed') } }
     }
   }
-  const verifyRoute = paths.retain()
   const verify = () => {
-    verifyRoute()
     if (location) {
       try {
         if (version(lstatSync(location.path, { bigint: true })) !== before) nativeUnavailable('the native file changed while saving')
@@ -59,6 +76,5 @@ export function observeNativeFile(path: string, options: { maxBytes?: number; mi
       }
     }
   }
-  verify()
   return { path: location?.path ?? path, key: location ? nativeFileKey(location.info) : null, ...(bytes && { bytes }), verify }
 }

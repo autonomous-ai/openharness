@@ -110,12 +110,15 @@ export class NativePaths {
     return this.retainParts([...this.parts])
   }
 
+  /** Copy observed facts. A new generation must fork its original base, before sidecars were added. */
+  fork(budget: NativeEvidenceBudget): NativePaths {
+    const next = new NativePaths(budget, this.windows ? 'win32' : 'linux')
+    for (const [path, part] of this.parts) next.parts.set(path, part)
+    return next
+  }
+
   private retainParts(retained: [string, Part][]): () => void {
-    return () => {
-      const fresh = new NativePaths(new NativeEvidenceBudget(), this.windows ? 'win32' : 'linux')
-      for (const [path, part] of retained) fresh.parts.set(path, part)
-      fresh.verify()
-    }
+    return () => verifyParts(retained, new NativeEvidenceBudget())
   }
 
   private *walk(path: string, missingOkay: boolean): Generator<string, Location, Part> {
@@ -211,23 +214,27 @@ export class NativePaths {
   /** No asynchronous work follows the caller's last header fence. Unrelated directory
    * contents may change; replacing an ordinary ancestor or any alias may not. */
   verify(): void {
-    for (const [path, before] of this.parts) {
-      this.budget.step()
-      let now: BigIntStats | null
-      try { now = lstatSync(path, { bigint: true }) }
-      catch (error) {
-        if ((error as NodeJS.ErrnoException).code === 'ENOENT') now = null
-        else return nativeUnavailable('a native location became unreadable')
-      }
-      let target: string | undefined
-      if (before.target !== undefined && now?.isSymbolicLink()) {
-        try { target = readlinkSync(path) } catch { return nativeUnavailable('a native alias became unreadable') }
-      }
-      if (identity(now) !== identity(before.info)
-        || (before.target !== undefined && (!now || version(now) !== version(before.info!)
-          || target !== before.target))) {
-        return nativeUnavailable('a native path or alias changed during inspection')
-      }
+    verifyParts(this.parts, this.budget)
+  }
+}
+
+function verifyParts(parts: Iterable<[string, Part]>, budget: NativeEvidenceBudget): void {
+  for (const [path, before] of parts) {
+    budget.step()
+    let now: BigIntStats | null
+    try { now = lstatSync(path, { bigint: true }) }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') now = null
+      else return nativeUnavailable('a native location became unreadable')
+    }
+    let target: string | undefined
+    if (before.target !== undefined && now?.isSymbolicLink()) {
+      try { target = readlinkSync(path) } catch { return nativeUnavailable('a native alias became unreadable') }
+    }
+    if (identity(now) !== identity(before.info)
+      || (before.target !== undefined && (!now || version(now) !== version(before.info!)
+        || target !== before.target))) {
+      return nativeUnavailable('a native path or alias changed during inspection')
     }
   }
 }

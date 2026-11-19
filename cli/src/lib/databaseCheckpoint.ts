@@ -2,7 +2,7 @@
 import { join } from 'node:path'
 import { env } from '../config/env.js'
 import { hermesDbPath } from '../engines/hermes/contract.js'
-import { observeNativeFile } from '../engines/kit/nativeFileObservation.js'
+import { observeNativeFiles } from '../engines/kit/nativeFileObservation.js'
 import { NativeEvidenceBudget, nativeUnavailable } from '../engines/kit/nativeEvidence.js'
 import { NativePaths, nativeFileKey } from '../engines/kit/nativePaths.js'
 import type { ExportSource } from '../engines/worker/storageProtocol.js'
@@ -44,10 +44,12 @@ export async function databaseCheckpointEvidence(s: RegisteredSession, current: 
   }
   const source = { path: location.path, key: nativeFileKey(location.info), database: declared }
   const fresh = (): DatabaseCheckpointProof => {
-    locationProof?.(); verifyRoute()
-    const files = [source.path, source.path + '-wal', source.path + '-journal']
-      .map((path, index) => observeNativeFile(path, { missingOkay: index > 0 }))
-    const verify = () => { locationProof?.(); verifyRoute(); for (const file of files) file.verify() }
+    locationProof?.()
+    // Fence the selected route before an open could traverse a replaced ancestor.
+    verifyRoute()
+    const files = observeNativeFiles([{ path: source.path },
+      { path: source.path + '-wal', missingOkay: true }, { path: source.path + '-journal', missingOkay: true }], paths)
+    const verify = () => { locationProof?.(); files.verify() }
     verify()
     return { source, verify, fresh }
   }

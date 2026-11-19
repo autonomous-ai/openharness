@@ -33,6 +33,16 @@ afterEach(() => { vi.mocked(fs.lstatSync).mockReset(); vi.mocked(fs.readlinkSync
 const paths = () => new NativePaths(new NativeEvidenceBudget(), 'win32')
 
 describe('NativePaths on Windows', () => {
+  it('forks the selected Windows route with a new budget and refuses reparse points', () => {
+    const file = 'C:\\Users\\u\\.claude\\settings.json', base = paths()
+    base.resolveSync(file)
+    const fork = base.fork(new NativeEvidenceBudget())
+    expect(fork.resolveSync(file)?.path).toBe(file)
+    expect(fork.snapshot()).toEqual(base.snapshot())
+    expect(() => fork.resolveSync('C:\\Users\\u\\dotfiles\\settings.json')).toThrow(/reparse point/)
+    expect(() => base.fork(new NativeEvidenceBudget(-1)).resolveSync(file)).toThrow(/deadline/)
+  })
+
   it('reuses only provisional directories and still charges every step and reads every snapshot fact', () => {
     const directories = new Map<string, fs.BigIntStats>(), file = 'C:\\Users\\u\\.claude\\settings.json'
     const originalBudget = new NativeEvidenceBudget(), originalSteps = vi.spyOn(originalBudget, 'step')
