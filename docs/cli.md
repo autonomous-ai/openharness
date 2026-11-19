@@ -482,7 +482,8 @@ forward. What each desktop needs:
 
 The daemon's log says which it found, once at start and again when it changes: `[device] raise · sway` (`hyprland`,
 `kwin`, `gnome`, `x11`), or `[device] raise · none · <why>`, `<why>` one of `no desktop session`,
-`gnome without the extension`, `unknown compositor`, `no swaymsg`, `no hyprctl`, `no wmctrl`.
+`gnome without the extension`, `unknown compositor`, `no swaymsg`, `no hyprctl`, `no wmctrl`. A raise that brought
+nothing forward says `[device] raise · <desktop> · failed`, once until a raise ends otherwise.
 
 **Links.** An agent in an app opens by the app's own link, through `xdg-open`, when an app has registered the link's
 scheme (`xdg-mime query default x-scheme-handler/<scheme>`). With none, the tap falls back to the pane.

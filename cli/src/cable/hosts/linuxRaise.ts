@@ -41,6 +41,8 @@ const byProcess = (desktop: LinuxDesktop): boolean => desktop.kind !== 'gnome'
 export function createLinuxRaise(deps: LinuxRaiseDeps): LinuxRaise {
   let desktop: LinuxDesktop | undefined
   let said: string | undefined
+  // The failure last logged: once, until a raise ends otherwise.
+  let failed: string | undefined
   let looking: Promise<void> | undefined
   // One look at a time: raises that fail together share it. A look that throws found nothing: unhandled, it would reject
   // every raise waiting on it.
@@ -71,10 +73,17 @@ export function createLinuxRaise(deps: LinuxRaiseDeps): LinuxRaise {
       const classes = app === undefined ? [] : deps.classes(app)
       if (pids.length === 0 && classes.length === 0) return false
       try {
-        if (await deps.backend(found).raise({ pids, classes })) return true
+        if (await deps.backend(found).raise({ pids, classes })) {
+          failed = undefined
+          return true
+        }
       } catch {
         // A backend that throws found no window, as one that answers false.
       }
+      // Which desktop's raise, never its window, process or error: a tap that brings nothing is seen in the log.
+      const line = `[device] raise · ${found.kind} · failed`
+      if (line !== failed) deps.log(line)
+      failed = line
       void look()
       return false
     },
