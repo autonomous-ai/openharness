@@ -333,16 +333,18 @@ export type OrcaRemove = { orca: 'off' } | { orca: 'off'; error: 'not-running' |
 const OFF: OrcaRemove = { orca: 'off' }
 
 /** Uninstalls the plugin from Orca, whichever folder Orca holds it from. With no Orca that could hold it (none here,
- *  a CLI from the sources, an Orca below its engines) there is nothing to uninstall. It writes no record and says
- *  nothing but the folder's code: the folder is written for Orca to name the plugin's key. */
+ *  a CLI from the sources, an Orca below its engines) there is nothing to uninstall. A running Orca whose answer cannot
+ *  be read fails, as in orcaSetUp: the devices' pass keeps an owed removal with no hour only for an Orca not running.
+ *  It writes no record and says nothing but the folder's code: the folder is written for Orca to name the plugin's
+ *  key. */
 export async function orcaRemove(deps: OrcaPluginDeps): Promise<OrcaRemove> {
   const asking = await reach(deps)
   if ('why' in asking) {
-    if (asking.why === 'not-running' || asking.why === 'unread') return { orca: 'off', error: 'not-running' }
-    return asking.why === 'folder' ? { orca: 'off', error: 'failed' } : OFF
+    if (asking.why === 'not-running') return { orca: 'off', error: 'not-running' }
+    return asking.why === 'folder' || asking.why === 'unread' ? { orca: 'off', error: 'failed' } : OFF
   }
   const entry = await entryOf(deps, asking.orca, asking.key)
-  if (entry === null) return { orca: 'off', error: 'not-running' }
+  if (entry === null) return { orca: 'off', error: 'failed' }
   if (entry === undefined) return OFF
   const answer = await change(deps, asking.orca, ['uninstall', asking.key])
   return answer === 'ok' ? OFF : { orca: 'off', error: answer === 'timeout' ? 'timeout' : 'failed' }

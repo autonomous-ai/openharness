@@ -76,7 +76,8 @@ export function createOrcaPluginSetup(deps: OrcaPluginSetupDeps): OrcaPluginSetu
     undoOwed = true
     const change = await deps.remove()
     if (!('error' in change)) undoOwed = false
-    // Orca quit: still owed, with nothing counted and no hour, so the next start, attach or settle takes it out.
+    // Orca quit: still owed, with nothing counted and no hour, so the next attach or settle takes it out. It is held in
+    // memory only: a restart before then forgets it.
     else if (change.error !== 'not-running') failed(change.error)
   }
 

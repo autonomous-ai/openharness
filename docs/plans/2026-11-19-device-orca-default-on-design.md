@@ -99,9 +99,11 @@ This replaces `orcaConnect`. It is one function for the devices' pass and for `e
   - Outside the pinned set: `held`, with nothing approved.
 - A deadline passed: `finished()` as today (`on` or `timeout`).
 - Results: `on`, `held`, `off` (removed, no `force`), `absent` with `not-running` or `old` (Orca not here, not reachable
-  or too old, Windows, a run from the sources), or `failed` with a fixed code (`timeout`, `failed`, `folder`).
+  or too old, Windows, a run from the sources), or `failed` with a fixed code (`timeout`, `failed`, `folder`). An
+  answer after a status that said Orca is reachable that cannot be read is `failed`, never `not-running`.
 - `disable`'s uninstall is `orcaRemove(deps)`: `orca plugin uninstall <key> --json`, only for an entry with the plugin's
-  key. Orca not running: `not-running`.
+  key. Orca not running: `not-running`; an answer after its status that cannot be read: `failed`, so the devices' pass
+  counts it and waits its hour rather than asking again at each settle.
 
 ### The devices' pass (`cli/src/cable/orcaPluginSetup.ts`, new, beside `vscodeExtensionSetup.ts`)
 
@@ -121,8 +123,8 @@ This replaces `orcaConnect`. It is one function for the devices' pass and for `e
 - Each result:
   - `on`: record the version. The count is `set up`, or `updated` for a plugin that was installed. A
     `harness device orca disable` that landed while the install ran is honoured: `orcaRemove` then, as the editor
-    setup's `undo` does. With Orca not running then, it stays owed, with nothing counted and no hour: the next start,
-    attach or settle runs it.
+    setup's `undo` does. With Orca not running then, it stays owed, with nothing counted and no hour: the next attach or
+    settle runs it (owed in memory, as the editors' is, so a restart before then forgets it).
   - `off`: record the version. The count is `left removed`, once per version.
   - `held`: record the version as `orcaHeld`, never as `orca`, so it is not asked again until the next CLI and never
     counts as "set up before" (a plugin held before it was ever installed is still installed by a later CLI that
