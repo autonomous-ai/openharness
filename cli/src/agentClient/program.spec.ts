@@ -133,6 +133,17 @@ describe('the program harness records', () => {
     expect(warn).toHaveBeenCalledWith('[state] program-harnesses.json could not be read (not valid JSON); kept as program-harnesses.json.unreadable, starting empty.')
   })
 
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('a program-harnesses.json this account cannot read is not written over', () => {
+    const records = new ProgramRecords(dir)
+    records.put(row('a'))
+    const before = readFileSync(records.path, 'utf8')
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    chmodSync(records.path, 0o000)
+    expect(() => records.put(row('b'))).toThrow('program-harnesses.json could not be read (EACCES)')
+    chmodSync(records.path, 0o600)
+    expect(readFileSync(records.path, 'utf8')).toBe(before)
+  })
+
   it('runs two ensures of one name one after the other', async () => {
     const order: string[] = []
     const one = withProgramLock(dir, 'lamp', async () => { order.push('a+'); await new Promise((r) => setTimeout(r, 60)); order.push('a-') })

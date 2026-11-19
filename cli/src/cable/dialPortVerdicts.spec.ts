@@ -1,4 +1,4 @@
-import { constants, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { chmodSync, constants, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -79,6 +79,19 @@ describe('verdicts on USB boards', () => {
     expect(JSON.parse(readFileSync(file, 'utf8'))).toHaveProperty('AA:01')
     expect(warn).toHaveBeenCalledWith(
       '[state] dial-ports.json could not be read (not valid JSON); kept as dial-ports.json.unreadable, starting empty.')
+  })
+
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('a dial-ports.json this account cannot read is not written over', () => {
+    const file = join(mkdtempSync(join(tmpdir(), 'verdicts-')), 'dial-ports.json')
+    new DialVerdicts(file).markForeign(board('7'))
+    const before = readFileSync(file, 'utf8')
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    chmodSync(file, 0o000)
+    const verdicts = new DialVerdicts(file)
+    verdicts.markForeign(board('1'))
+    verdicts.markDial(board('2'))
+    chmodSync(file, 0o600)
+    expect(readFileSync(file, 'utf8')).toBe(before)
   })
 
   it('the save goes through a temporary file of its own renamed onto the target', () => {

@@ -5,10 +5,15 @@ import { join } from 'path'
 import type * as CodexProfilesModule from './codexProfiles.js'
 
 // Pass-through, recording what the shared writer does on disk: the renames and the opens.
-const disk = vi.hoisted(() => ({ events: [] as string[] }))
+// And a read of [failRead] fails, as EMFILE (too many open files) does for a moment.
+const disk = vi.hoisted(() => ({ events: [] as string[], failRead: '' }))
 vi.mock('node:fs', async original => {
   const actual = await original<typeof import('node:fs')>()
   return { ...actual,
+    readFileSync: ((...args: Parameters<typeof actual.readFileSync>) => {
+      if (disk.failRead && args[0] === disk.failRead) throw Object.assign(new Error('EMFILE: fixture'), { code: 'EMFILE' })
+      return actual.readFileSync(...args)
+    }) as typeof actual.readFileSync,
     renameSync: (...args: Parameters<typeof actual.renameSync>) => {
       disk.events.push(`rename ${String(args[1])}`)
       return actual.renameSync(...args)
@@ -136,6 +141,23 @@ describe('codexProfiles', () => {
     expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual([folder])
     expect(warn).toHaveBeenCalledWith(
       '[state] codex-profiles.json could not be read (not valid JSON); kept as codex-profiles.json.unreadable, starting empty.')
+  })
+
+  it('a profile list that cannot be read for a moment is not written over', async () => {
+    const { linkCodexProfile } = await loadModule()
+    const file = join(dataDir, 'codex-profiles.json')
+    const kept = join(home, '.codex-kept')
+    const folder = join(home, '.codex-linked')
+    mkdirSync(kept)
+    mkdirSync(folder)
+    writeFileSync(file, JSON.stringify([kept]), { mode: 0o600 })
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    disk.failRead = file
+    try {
+      expect(() => linkCodexProfile(folder)).toThrow('codex-profiles.json could not be read (EMFILE)')
+    } finally { disk.failRead = '' }
+    expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual([kept])
+    expect(existsSync(`${file}.unreadable`)).toBe(false)
   })
 
   // Windows has no mode bits to refuse.

@@ -9,6 +9,18 @@ import type * as ClaudeProfilesModule from './claudeProfiles.js'
 let dataDir = ''
 let home = ''
 const machineId = 'machine-1'
+// A read of this path fails, as EMFILE (too many open files) does for a moment.
+const failing = vi.hoisted(() => ({ read: '' }))
+vi.mock('node:fs', async original => {
+  const actual = await original<typeof import('node:fs')>()
+  return { ...actual,
+    readFileSync: ((...args: Parameters<typeof actual.readFileSync>) => {
+      if (failing.read && args[0] === failing.read) throw Object.assign(new Error('EMFILE: fixture'), { code: 'EMFILE' })
+      return actual.readFileSync(...args)
+    }) as typeof actual.readFileSync,
+  }
+})
+
 const host = vi.hoisted(() => ({ win32: false }))
 vi.mock('../engines/kit/windowsFiles.js', async original => {
   const actual = await original<typeof import('../engines/kit/windowsFiles.js')>()
@@ -35,6 +47,7 @@ describe('claudeProfiles', () => {
   })
 
   afterEach(() => {
+    failing.read = ''
     vi.restoreAllMocks()
     rmSync(dataDir, { recursive: true, force: true })
     rmSync(home, { recursive: true, force: true })
@@ -125,6 +138,22 @@ describe('claudeProfiles', () => {
     expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual([folder])
     expect(warn).toHaveBeenCalledWith(
       '[state] claude-profiles.json could not be read (not valid JSON); kept as claude-profiles.json.unreadable, starting empty.')
+  })
+
+  it('a profile list that cannot be read for a moment is not written over', async () => {
+    const { linkClaudeProfile } = await loadModule()
+    const file = join(dataDir, 'claude-profiles.json')
+    const kept = join(home, 'kept')
+    const folder = join(home, 'custom')
+    mkdirSync(kept)
+    mkdirSync(folder)
+    writeFileSync(file, JSON.stringify([kept]), { mode: 0o600 })
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    failing.read = file
+    expect(() => linkClaudeProfile(folder, machineId)).toThrow('claude-profiles.json could not be read (EMFILE)')
+    failing.read = ''
+    expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual([kept])
+    expect(existsSync(`${file}.unreadable`)).toBe(false)
   })
 
   // Windows has no mode bits to refuse.

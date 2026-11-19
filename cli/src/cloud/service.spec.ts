@@ -1,7 +1,7 @@
 /**
  * The cloud service against scripted makers: never a real Fo, Devin or Cursor, and a throwaway data folder.
  */
-import { mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from 'node:fs'
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -609,5 +609,19 @@ describe('the saved list', () => {
     expect(JSON.parse(readFileSync(file(), 'utf8')).harnesses).toHaveLength(1)
     expect(warn).toHaveBeenCalledWith('[state] harnesses.json could not be read (not valid JSON); kept as harnesses.json.unreadable, starting empty.')
     service.stop()
+  })
+
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('a harnesses.json this account cannot read is not written over', async () => {
+    const first = start({ 'devin-cloud': maker() })
+    await create(first)
+    first.stop()
+    const before = readFileSync(file(), 'utf8')
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    chmodSync(file(), 0o000)
+    const service = start({ 'devin-cloud': maker() })
+    await create(service)
+    service.stop()
+    chmodSync(file(), 0o600)
+    expect(readFileSync(file(), 'utf8')).toBe(before)
   })
 })

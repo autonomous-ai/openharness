@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -532,6 +532,16 @@ describe('what the cleanup keeps and how it runs', () => {
     expect(readFileSync(`${joinedPath(dir)}.unreadable`, 'utf8')).toBe('{"')
     expect(JSON.parse(readFileSync(joinedPath(dir), 'utf8'))).toEqual({ version: 1, joined: { kid: NOW } })
     expect(warn).toHaveBeenCalledWith('[state] agent-cleanup.json could not be read (not valid JSON); kept as agent-cleanup.json.unreadable, starting empty.')
+  })
+
+  // Read as none, the next join would forget every harness the person joined before, and cleanup could close them.
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('an agent-cleanup.json this account cannot read is not written over', () => {
+    setup([]).cleanup.port.typed('kid')
+    const before = readFileSync(joinedPath(dir), 'utf8')
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    chmodSync(joinedPath(dir), 0o000)
+    try { setup([]).cleanup.port.typed('other') } finally { chmodSync(joinedPath(dir), 0o600) }
+    expect(readFileSync(joinedPath(dir), 'utf8')).toBe(before)
   })
 
   it('the save goes through a temporary file renamed onto the target', () => {

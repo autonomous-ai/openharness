@@ -175,6 +175,21 @@ describe('harness goal, kept by the service', () => {
     warn.mockRestore()
   })
 
+  // Read as none, the next goal would be written over every goal kept.
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('a goals.json this account cannot read is not written over, and says so', async () => {
+    await open()
+    const file = goalsPath(dir)
+    const before = readFileSync(file, 'utf8')
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    chmodSync(file, 0o000)
+    try {
+      const notRead = { error: 'NOT_READ', message: 'Harness could not read the goals on this computer. Try again in a moment.' }
+      expect(await ask('goal_open', { title: 'another' })).toEqual(notRead)
+      expect(await ask('goal_list', {})).toEqual(notRead)
+    } finally { chmodSync(file, 0o600) }
+    expect(readFileSync(file, 'utf8')).toBe(before)
+  })
+
   it('the save goes through a temporary file renamed onto the target', async () => {
     disk.events = []
     await open()

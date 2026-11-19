@@ -13,6 +13,8 @@ const fault = vi.hoisted(() => ({
   renames: 0,
   link: undefined as string | undefined,
   sync: undefined as ((fd: number) => void) | undefined,
+  read: undefined as ((file: string) => void) | undefined,
+  rm: undefined as ((path: string) => void) | undefined,
 }))
 const errno = (code: string) => Object.assign(new Error(`${code}: fixture`), { code })
 vi.mock('node:fs', async original => {
@@ -36,6 +38,16 @@ vi.mock('node:fs', async original => {
       fault.sync?.(fd)
       return actual.fsyncSync(fd)
     },
+    // After the real read of a path: a hook may throw what the read could have, or change the file once it was read.
+    readFileSync: ((...args: Parameters<typeof actual.readFileSync>) => {
+      const value = actual.readFileSync(...args)
+      if (typeof args[0] === 'string') fault.read?.(args[0])
+      return value
+    }) as typeof actual.readFileSync,
+    rmSync: (...args: Parameters<typeof actual.rmSync>) => {
+      fault.rm?.(String(args[0]))
+      return actual.rmSync(...args)
+    },
   }
 })
 
@@ -47,7 +59,7 @@ beforeEach(() => { pauses = vi.spyOn(Atomics, 'wait').mockReturnValue('timed-out
 const dirs: string[] = []
 afterEach(() => {
   vi.restoreAllMocks()
-  Object.assign(fault, { write: undefined, rename: undefined, renames: 0, link: undefined, sync: undefined })
+  Object.assign(fault, { write: undefined, rename: undefined, renames: 0, link: undefined, sync: undefined, read: undefined, rm: undefined })
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true })
 })
 
@@ -347,7 +359,8 @@ describe('atomicWriteFile', () => {
     expect(readdirSync(dir)).toEqual(['f'])
   })
 
-  it.each(['EPERM', 'ENOTSUP', 'EXDEV', 'ENOSYS'])('exclusive: where link is refused (%s) it copies, still exclusive', code => {
+  // EISDIR: Windows' answer on exFAT and FAT, whose ERROR_INVALID_FUNCTION libuv maps to it.
+  it.each(['EPERM', 'ENOTSUP', 'EXDEV', 'ENOSYS', 'EISDIR'])('exclusive: where link is refused (%s) it copies, still exclusive', code => {
     const dir = folder(), f = join(dir, 'f')
     fault.link = code
     expect(atomicWriteFile(f, 'first', 'trust', { exclusive: true })).toBe(true)
@@ -381,6 +394,23 @@ describe('atomicWriteFile', () => {
     expect((failure as Error).cause).toMatchObject({ code: 'EIO' })
     expect(readFileSync(f, 'utf8')).toBe('first')
     expect(readdirSync(dir)).toEqual(['f'])
+  })
+
+  // Windows: a scanner can hold the temporary file's name for a moment (EBUSY). What is left there nothing reads.
+  it('exclusive: a publish that landed is true though its temporary name cannot be removed', () => {
+    const f = join(folder(), 'f')
+    fault.rm = () => { throw errno('EBUSY') }
+    expect(atomicWriteFile(f, 'id', 'cache', { exclusive: true })).toBe(true)
+    expect(readFileSync(f, 'utf8')).toBe('id')
+  })
+
+  it('a write that fails throws its own error, not its cleanup\'s', () => {
+    const dir = folder(), f = join(dir, 'f')
+    writeFileSync(f, 'old')
+    fault.write = () => { throw errno('ENOSPC') }
+    fault.rm = () => { throw errno('EBUSY') }
+    expect(() => atomicWriteFile(f, 'new', 'trust')).toThrow(/ENOSPC/)
+    expect(readFileSync(f, 'utf8')).toBe('old')
   })
 
   it.skipIf(WINDOWS)('trust refuses a target another account could write; cache replaces it', () => {
@@ -453,6 +483,14 @@ describe('readState', () => {
     expect(readState(stateFile('summaries.json'), 'cache', parse)).toEqual({ state: 'missing' })
     expect(probeState(stateFile('paired.json'), parse)).toEqual({ state: 'missing' })
     expect(parse).not.toHaveBeenCalled()
+    expect(warn).not.toHaveBeenCalled()
+  })
+
+  it('a file under a path that is not a folder is missing', () => {
+    const file = stateFile('data')
+    writeFileSync(file, '')
+    expect(readState(join(file, 'summaries.json'), 'cache', jsonObject)).toEqual({ state: 'missing' })
+    expect(readState(join(file, 'paired.json'), 'trust', jsonArray)).toEqual({ state: 'missing' })
     expect(warn).not.toHaveBeenCalled()
   })
 
@@ -554,7 +592,7 @@ describe('readState', () => {
     expect(probeState(wrongType, jsonArray)).toEqual({ state: 'unreadable', failure: 'unexpected content' })
     const folder = stateFile('group-blocked.json')
     mkdirSync(folder)
-    expect(probeState(folder, jsonArray)).toEqual({ state: 'unreadable', failure: 'EISDIR' })
+    expect(probeState(folder, jsonArray)).toEqual({ state: 'unreadable', failure: 'EISDIR', readFailed: true })
   })
 
   it('no line holds the folder or the file\'s text', () => {
@@ -596,6 +634,74 @@ describe('readState', () => {
     expect(readFileSync(file, 'utf8')).toBe(torn)
     expect(readState(file, 'cache', jsonArray)).toEqual({ state: 'missing' })
     expect(warn).toHaveBeenCalledTimes(1)
+  })
+
+  // Nothing was read to judge (EMFILE, EIO, Windows' EBUSY or EPERM while a scanner holds the file): a good file stays
+  // where it is, and the next read tries again.
+  it.each(['EMFILE', 'EBUSY', 'EIO'])('a read that fails (%s) is neither remembered nor set aside', code => {
+    const file = stateFile('summaries.json')
+    writeFileSync(file, whole)
+    fault.read = () => { throw errno(code) }
+    const failed = { state: 'unreadable', failure: code, readFailed: true }
+    expect(readState(file, 'cache', jsonArray)).toEqual(failed)
+    expect(readState(file, 'trust', jsonArray)).toEqual(failed)
+    expect(pausedFor()).toEqual(Array(2 * (READ_TRIES - 1)).fill(READ_WAIT_MS))
+    expect(readdirSync(dirname(file))).toEqual(['summaries.json'])
+    expect(readFileSync(file, 'utf8')).toBe(whole)
+    fault.read = undefined
+    expect(readState(file, 'cache', jsonArray)).toEqual({ state: 'ok', value: [{ identityPub: 'k' }] })
+    expect(readState(file, 'trust', jsonArray)).toEqual({ state: 'ok', value: [{ identityPub: 'k' }] })
+  })
+
+  it('a read that fails is said once, and never as a file to move aside', () => {
+    const file = stateFile('paired.json')
+    writeFileSync(file, whole)
+    fault.read = () => { throw errno('EMFILE') }
+    readState(file, 'trust', jsonArray)
+    readState(file, 'cache', jsonArray)
+    let failure: unknown
+    try { requireState(file, jsonArray) } catch (error) { failure = error }
+    expect(warn).toHaveBeenCalledExactlyOnceWith('[state] paired.json could not be read (EMFILE); left as it is, read again next time.')
+    expect(failure).toBeInstanceOf(StateFileUnreadable)
+    expect(failure).toMatchObject({ base: 'paired.json', failure: 'EMFILE', message: 'paired.json could not be read (EMFILE), so it was not changed.' })
+    fault.read = undefined
+    expect(requireState(file, jsonArray)).toEqual([{ identityPub: 'k' }])
+  })
+
+  it.skipIf(WINDOWS || process.getuid?.() === 0)('a file this account cannot read is left as it is, and read once it can', () => {
+    const file = stateFile('machinePeers.json')
+    writeFileSync(file, whole)
+    chmodSync(file, 0o000)
+    expect(readState(file, 'cache', jsonArray)).toEqual({ state: 'unreadable', failure: 'EACCES', readFailed: true })
+    expect(() => requireState(file, jsonArray)).toThrow(StateFileUnreadable)
+    expect(readdirSync(dirname(file))).toEqual(['machinePeers.json'])
+    chmodSync(file, 0o600)
+    expect(readFileSync(file, 'utf8')).toBe(whole)
+    expect(readState(file, 'trust', jsonArray)).toEqual({ state: 'ok', value: [{ identityPub: 'k' }] })
+  })
+
+  // An older build writing in place: the bytes read were torn, but the file a writer put there since is whole.
+  it('a file replaced after its last read is read again, not set aside', () => {
+    const file = stateFile('summaries.json')
+    writeFileSync(file, torn)
+    let reads = 0
+    fault.read = () => { if (++reads === READ_TRIES) writeFileSync(file, whole) }
+    expect(readState(file, 'cache', jsonArray)).toEqual({ state: 'ok', value: [{ identityPub: 'k' }] })
+    expect(readdirSync(dirname(file))).toEqual(['summaries.json'])
+    expect(warn).not.toHaveBeenCalled()
+  })
+
+  it('requireState of a cache file: set aside and null when it cannot be parsed, thrown when it cannot be read', () => {
+    const file = stateFile('pets.json')
+    writeFileSync(file, '{"all":')
+    expect(requireState(file, jsonObject, 'cache')).toBeNull()
+    expect(readFileSync(`${file}.unreadable`, 'utf8')).toBe('{"all":')
+    writeFileSync(file, '{"all":null}')
+    fault.read = () => { throw errno('EMFILE') }
+    expect(() => requireState(file, jsonObject, 'cache')).toThrow(StateFileUnreadable)
+    expect(readFileSync(file, 'utf8')).toBe('{"all":null}')
+    fault.read = undefined
+    expect(requireState(file, jsonObject, 'cache')).toEqual({ all: null })
   })
 
   it('jsonArray and jsonObject take their own shape only', () => {

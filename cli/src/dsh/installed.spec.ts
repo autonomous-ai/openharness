@@ -1,7 +1,7 @@
 // What is installed on this machine: the index file, each record resolved to its manifest, the short
 // cache in front of both, and finding a harness by an id it went by before (`formerly`).
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { env } from '../config/env.js'
@@ -235,5 +235,17 @@ describe('the installed index', () => {
     expect(readFileSync(`${indexFile()}.unreadable`, 'utf8')).toBe('[{"')
     expect(readInstalledIndex().map((row) => row.id)).toEqual(['acme/one'])
     expect(warn).toHaveBeenCalledWith('[state] installed.json could not be read (not valid JSON); kept as installed.json.unreadable, starting empty.')
+  })
+
+  // Nothing was read (EACCES here; EMFILE or a Windows scanner's EBUSY in the field), so an install cannot know the rest.
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('an installed.json that cannot be read is not written over', () => {
+    writeInstalledIndex([record('acme/one')])
+    const before = readFileSync(indexFile(), 'utf8')
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    chmodSync(indexFile(), 0o000)
+    expect(() => upsertInstalledRecord(record('acme/two'))).toThrow('installed.json could not be read (EACCES)')
+    chmodSync(indexFile(), 0o600)
+    expect(readFileSync(indexFile(), 'utf8')).toBe(before)
+    expect(readdirSync(dshRootDir())).toEqual(['installed.json'])
   })
 })

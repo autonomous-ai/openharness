@@ -504,6 +504,25 @@ describe('a file that cannot be parsed', () => {
     expect(warn).toHaveBeenCalledWith(setAside(DIAL_SETUP_FILE))
   })
 
+  // The first read saw a torn file, the read again failed (EMFILE): nothing says what the file holds now.
+  it('a torn dial-skill.json whose read again fails is left as it is', () => {
+    const dataDir = aDataDir()
+    const file = join(dataDir, DIAL_SKILL_FILE)
+    writeFileSync(file, '{"homes":')
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const read = fs.readFileSync
+    vi.spyOn(fs, 'readFileSync').mockImplementation(((path: fs.PathOrFileDescriptor, ...rest: unknown[]) => {
+      if (path === file) throw Object.assign(new Error('EMFILE: fixture'), { code: 'EMFILE' })
+      return (read as (...args: unknown[]) => unknown)(path, ...rest)
+    }) as typeof fs.readFileSync)
+
+    expect(readPluginHomes(dataDir)).toEqual({ homes: [], unread: true })
+    expect(writePluginHomes(dataDir, [home])).toBe('EMFILE')
+
+    expect(readdirSync(dataDir)).toEqual([DIAL_SKILL_FILE])
+    expect(readFileSync(file, 'utf8')).toBe('{"homes":')
+  })
+
   it('a file past the bound reads as today', () => {
     const dataDir = aDataDir()
     // Torn as well: past the bound it is not read, so not parsed either.

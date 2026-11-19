@@ -1,5 +1,5 @@
 import {
-  constants, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync,
+  chmodSync, constants, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync,
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -247,19 +247,35 @@ describe('the file of pending notices', () => {
     expect(store(file).noticeFile.load()).toStrictEqual([card(1), card(2, { who: WHO })])
   })
 
-  it('a path that cannot be read is set aside, and the next write puts the file there', () => {
+  // Nothing was read to judge (a folder there, EACCES, EMFILE, a Windows scanner's EBUSY): what is there stays.
+  it('a path that cannot be read is left, and nothing is written over it', () => {
     const folder = aFolder()
     const file = join(folder, NOTICES_FILE)
     mkdirSync(file)
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const { noticeFile, pending, logs } = store(file, [card(1)])
     expect(noticeFile.load()).toEqual([])
-    expect(logs).toEqual([])
-    expect(warn).toHaveBeenCalledWith(`[state] ${NOTICES_FILE} could not be read (EISDIR); kept as ${NOTICES_FILE}.unreadable, starting empty.`)
+    expect(warn).toHaveBeenCalledWith(`[state] ${NOTICES_FILE} could not be read (EISDIR); left as it is, read again next time.`)
     noticeFile.changed()
     pending[0].run()
-    expect(readdirSync(folder).sort()).toEqual([NOTICES_FILE, `${NOTICES_FILE}.unreadable`])
-    expect(store(file).noticeFile.load()).toEqual([card(1)])
+    expect(logs).toEqual([])
+    expect(readdirSync(folder)).toEqual([NOTICES_FILE])
+  })
+
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('a file this account cannot read is not written over', () => {
+    const file = aFile()
+    const kept = store(file, [card(2)])
+    kept.noticeFile.changed()
+    kept.pending[0].run()
+    const before = readFileSync(file, 'utf8')
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    chmodSync(file, 0o000)
+    const { noticeFile, pending } = store(file, [card(1)])
+    expect(noticeFile.load()).toEqual([])
+    noticeFile.changed()
+    pending[0].run()
+    chmodSync(file, 0o600)
+    expect(readFileSync(file, 'utf8')).toBe(before)
   })
 
   it('a write that fails says the error\'s code, and the next change tries again', () => {

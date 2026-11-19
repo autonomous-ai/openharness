@@ -1,9 +1,9 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { PENDING_TASKS_FILE } from './contract.js'
-import { loadCursorPendingTasks } from './pendingTasks.js'
+import { loadCursorPendingTasks, removeCursorPendingTasks } from './pendingTasks.js'
 
 // How the watched path is changed, by either fs API: opened for writing in place, or a file renamed onto it.
 const disk = vi.hoisted(() => ({ watch: '', changes: [] as string[] }))
@@ -82,5 +82,16 @@ describe('the Cursor pending tasks file', () => {
     expect(existsSync(file)).toBe(false)
     expect(warn).toHaveBeenCalledWith(
       `[state] ${PENDING_TASKS_FILE} could not be read (not valid JSON); kept as ${PENDING_TASKS_FILE}.unreadable, starting empty.`)
+  })
+
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('a file this account cannot read is neither deleted nor written over', async () => {
+    const before = JSON.stringify([task()])
+    writeFileSync(file, before)
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    chmodSync(file, 0o000)
+    expect(await loadCursorPendingTasks(dataDir)).toEqual([])
+    await removeCursorPendingTasks(dataDir, 's1')
+    chmodSync(file, 0o600)
+    expect(readFileSync(file, 'utf8')).toBe(before)
   })
 })

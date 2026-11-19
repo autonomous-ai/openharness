@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { spawn, type ChildProcess } from 'node:child_process'
-import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { ProcessRow } from '../lib/processTable.js'
@@ -201,5 +201,18 @@ describe('the viewer ledger on disk', () => {
     expect(readFileSync(`${file}.unreadable`, 'utf8')).toBe('[{"')
     expect(ledger.read()).toEqual([entry])
     expect(warn).toHaveBeenCalledWith('[state] viewers.json could not be read (not valid JSON); kept as viewers.json.unreadable, starting empty.')
+  })
+
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('a viewers.json that cannot be read is not written over', () => {
+    const ledger = new ViewerLedger({ file })
+    ledger.add(entry)
+    const before = readFileSync(file, 'utf8')
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    chmodSync(file, 0o000)
+    ledger.add({ ...entry, pid: 102 })
+    ledger.remove(entry.pid)
+    chmodSync(file, 0o600)
+    expect(readFileSync(file, 'utf8')).toBe(before)
+    expect(readdirSync(dir)).toEqual(['viewers.json'])
   })
 })

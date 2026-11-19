@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
+import { chmod, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -133,6 +133,24 @@ describe('durable session Git history', () => {
       expect(JSON.parse(await readFile(file, 'utf8')).branches.map((b: { branch: string }) => b.branch)).toEqual(['feature'])
       expect(warn).toHaveBeenCalledWith(
         `[state] ${name} could not be read (not valid JSON); kept as ${name}.unreadable, starting empty.`)
+    } finally { warn.mockRestore() }
+  })
+
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('a history this account cannot read is not written over', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'git-history-')); dirs.push(dir)
+    const first = new SessionGitHistoryStore(dir)
+    await first.observe(target, context('main'))
+    await first.settled()
+    const file = join(dir, (await readdir(dir)).find(n => n.endsWith('.json'))!)
+    const before = await readFile(file, 'utf8')
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      await chmod(file, 0o000)
+      const store = new SessionGitHistoryStore(dir)
+      await store.observe(target, context('feature'))
+      await store.settled()
+      await chmod(file, 0o600)
+      expect(await readFile(file, 'utf8')).toBe(before)
     } finally { warn.mockRestore() }
   })
 })

@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs'
 import { failedNode, nodeMigration } from './nodeMigration.js'
 import { tmpdir } from 'os'
 import { dirname, join } from 'path'
@@ -510,6 +510,18 @@ describe('the update records, written whole', () => {
     expect(readFileSync(`${rejected}.unreadable`, 'utf8')).toBe('[{"')
     expect(rejectedVersions(dir)).toEqual(['2.0.0'])
     expect(warn).toHaveBeenCalledWith('[state] update-rejected.json could not be read (not valid JSON); kept as update-rejected.json.unreadable, starting empty.')
+  })
+
+  // Read as none, a rollback would forget every version rolled back before, and the updater would offer them again.
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('an update-rejected.json this account cannot read is not written over', () => {
+    const dir = tempDir()
+    const rejected = join(dir, 'update-rejected.json')
+    writeFileSync(rejected, '["1.5.0"]')
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    chmodSync(rejected, 0o000)
+    rollBack(dir)
+    chmodSync(rejected, 0o600)
+    expect(readFileSync(rejected, 'utf8')).toBe('["1.5.0"]')
   })
 })
 

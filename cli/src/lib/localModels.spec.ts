@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest'
-import { mkdtemp, mkdir, writeFile, readFile, readdir, rm, stat, statfs, readlink } from 'node:fs/promises'
+import { chmod, mkdtemp, mkdir, writeFile, readFile, readdir, rm, stat, statfs, readlink } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { createHash } from 'node:crypto'
@@ -462,6 +462,21 @@ describe('local model discovery and lifecycle', () => {
     // And the save went through a temporary file renamed onto it.
     expect(disk.renamed.filter(([, to]) => to === file).map(([from]) => from)).toEqual([expect.stringMatching(/\.tmp$/)])
     expect(disk.opened).not.toContain(file)
+  })
+
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('a known-models file this account cannot read is not written over', async () => {
+    catalogCards = []; serving = true
+    await writeFile(join(home, 'models', 'Small-Q4.gguf'), Buffer.alloc(64))
+    await writeFile(join(records, 'remote.json'), JSON.stringify({ node_id: 'local-node', engines: [{ models: ['Small-Q4.gguf'] }] }))
+    await writeFile(join(records, 'remote.heartbeat'), '')
+    await mkdir(stateDir, { recursive: true })
+    const file = join(stateDir, `${createHash('sha256').update('home').digest('hex').slice(0, 24)}.known.json`)
+    await writeFile(file, '[]')
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    await chmod(file, 0o000)
+    await service.list('home').catch(() => {})
+    await chmod(file, 0o600)
+    expect(await readFile(file, 'utf8')).toBe('[]')
   })
 
   it('the receipt\'s save goes through a temporary file renamed onto the target', async () => {

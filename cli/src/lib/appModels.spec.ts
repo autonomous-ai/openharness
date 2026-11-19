@@ -1,4 +1,4 @@
-import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -325,5 +325,15 @@ describe('the engines this daemon started, on disk', () => {
     expect(readFileSync(file, 'utf8')).toBe(JSON.stringify([started]))
     expect(warn).toHaveBeenCalledWith(
       '[state] app-engines.json could not be read (not valid JSON); kept as app-engines.json.unreadable, starting empty.')
+  })
+
+  // Read as none, a start's or a stop's write would forget every engine this daemon started.
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('an app-engines.json this account cannot read is refused, not read as none', async () => {
+    await writeAppRecords(file, [started])
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    chmodSync(file, 0o000)
+    await expect(readAppRecords(file)).rejects.toThrow('app-engines.json could not be read (EACCES)')
+    chmodSync(file, 0o600)
+    expect(readFileSync(file, 'utf8')).toBe(JSON.stringify([started]))
   })
 })

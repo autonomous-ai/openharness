@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { constants } from 'node:fs'
+import { chmodSync, constants } from 'node:fs'
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -377,6 +377,20 @@ describe('PetStore', () => {
     expect(JSON.parse(await readFile(join(dir, 'pets.json'), 'utf8'))).toEqual({ all: a.id, engines: {} })
     expect(warn).toHaveBeenCalledWith(
       '[state] pets.json could not be read (not valid JSON); kept as pets.json.unreadable, starting empty.')
+  })
+
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('a pets.json this account cannot read is not written over', async () => {
+    const a = await store.prepare(await source(142))
+    await store.apply('all', a.id)
+    const file = join(dir, 'pets.json')
+    const before = await readFile(file, 'utf8')
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    chmodSync(file, 0o000)
+    const locked = new PetStore(dir)
+    await expect(locked.apply('claude', a.id)).rejects.toThrow('pets.json could not be read (EACCES)')
+    await expect(locked.reset('all')).rejects.toThrow('pets.json could not be read (EACCES)')
+    chmodSync(file, 0o600)
+    expect(await readFile(file, 'utf8')).toBe(before)
   })
 
   it('each save goes through a temporary file of its own renamed onto the target', async () => {

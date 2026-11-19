@@ -1,12 +1,16 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { adoptComputerId, readOrMintComputerId } from './computerIdentity.js'
 
 /** A second command that runs while the first is publishing its new id: `during`, run once, at the moment it lands. */
 const race = vi.hoisted(() => {
-  const state = { file: '', during: undefined as (() => void) | undefined }
+  const state = {
+    file: '', during: undefined as (() => void) | undefined,
+    // What a read of the id file fails with (EMFILE: too many open files), and whether a folder flush fails.
+    readFails: undefined as string | undefined, folderFlushFails: false,
+  }
   const take = () => { const during = state.during; state.during = undefined; return during }
   const wrap = (actual: typeof import('fs')) => ({
     ...actual,
@@ -23,6 +27,14 @@ const race = vi.hoisted(() => {
     linkSync: (...args: Parameters<typeof actual.linkSync>) => {
       if (args[1] === state.file) take()?.()
       return actual.linkSync(...args)
+    },
+    readFileSync: ((...args: Parameters<typeof actual.readFileSync>) => {
+      if (state.readFails && args[0] === state.file) throw Object.assign(new Error(`${state.readFails}: fixture`), { code: state.readFails })
+      return actual.readFileSync(...args)
+    }) as typeof actual.readFileSync,
+    fsyncSync: (fd: number) => {
+      if (state.folderFlushFails && actual.fstatSync(fd).isDirectory()) throw Object.assign(new Error('EIO: fixture'), { code: 'EIO' })
+      return actual.fsyncSync(fd)
     },
   })
   return { state, wrap }
@@ -55,7 +67,7 @@ function seed(path: string, value: string): void {
 
 beforeEach(() => { home = mkdtempSync(join(tmpdir(), 'computer-identity-')) })
 afterEach(() => {
-  race.state.during = undefined
+  Object.assign(race.state, { during: undefined, readFails: undefined, folderFlushFails: false })
   rmSync(home, { recursive: true, force: true })
 })
 
@@ -113,6 +125,36 @@ describe('readOrMintComputerId', () => {
     expect(id).toMatch(/^[0-9a-f-]{36}$/)
     expect(existsSync(`${canonical()}.unreadable`)).toBe(true)
     expect(readFileSync(canonical(), 'utf-8')).toBe(`${id}\n`)
+  })
+
+  // A read that fails has read nothing: the id may be one the backend binds this computer to, so it is never replaced.
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('an id file this account cannot read stops the command, and stays', () => {
+    seed(canonical(), 'bound-id')
+    chmodSync(canonical(), 0o000)
+    expect(() => readOrMintComputerId(canonical())).toThrow(`could not establish a computer id at ${canonical()}: it cannot be read (EACCES)`)
+    chmodSync(canonical(), 0o600)
+    expect(readFileSync(canonical(), 'utf-8')).toBe('bound-id\n')
+    expect(existsSync(`${canonical()}.unreadable`)).toBe(false)
+  })
+
+  it('an id file a read fails on for a moment keeps its id', () => {
+    seed(canonical(), 'bound-id')
+    race.state.file = canonical()
+    race.state.readFails = 'EMFILE'
+    expect(() => readOrMintComputerId(canonical())).toThrow('it cannot be read (EMFILE)')
+    race.state.readFails = undefined
+    expect(readOrMintComputerId(canonical())).toBe('bound-id')
+    expect(existsSync(`${canonical()}.unreadable`)).toBe(false)
+  })
+
+  // Windows cannot flush a folder, so a publish there is never left unconfirmed.
+  it.skipIf(process.platform === 'win32')('an id that landed is this computer\'s though its folder did not confirm it', () => {
+    mkdirSync(root(), { recursive: true })
+    race.state.folderFlushFails = true
+    const id = readOrMintComputerId(canonical())
+    expect(readFileSync(canonical(), 'utf-8')).toBe(`${id}\n`)
+    race.state.folderFlushFails = false
+    expect(readOrMintComputerId(canonical())).toBe(id)
   })
 
   it('two commands minting at once agree', () => {

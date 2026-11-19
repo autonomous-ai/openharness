@@ -1,4 +1,4 @@
-import { copyFileSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, copyFileSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -497,6 +497,17 @@ describe('restorePty', () => {
     expect(readFileSync(`${file}.unreadable`, 'utf8')).toBe('[{"')
     expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual(['0.11.0'])
     expect(warn).toHaveBeenCalledWith('[state] pty-rejected.json could not be read (not valid JSON); kept as pty-rejected.json.unreadable, starting empty.')
+  })
+
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('a pty-rejected.json this account cannot read is not written over', () => {
+    installPreparedPty(staged(), root, realFs)
+    const file = join(ptyRoot, 'pty-rejected.json')
+    writeFileSync(file, '["0.9.0"]')
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    chmodSync(file, 0o000)
+    expect(() => restorePty(root)).toThrow('pty-rejected.json could not be read (EACCES)')
+    chmodSync(file, 0o600)
+    expect(readFileSync(file, 'utf8')).toBe('["0.9.0"]')
   })
 
   it('adds to the rejected list without repeating a version', () => {

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs'
+import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { CommanderMirror, type CommanderFrame, type CommanderMirrorOpts, type TierTurn } from './commander.js'
@@ -1209,6 +1209,17 @@ describe('the recap files are never written over or left half-written', () => {
     await turn(build(), 's2')
     expect(readFileSync(join(dir, 'summaries-history.json.unreadable'), 'utf8')).toBe('{"s1":["a recap')
     expect(build().recent('s2')).toHaveLength(1)
+  })
+
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('a history this account cannot read is not written over, and the others are still saved', async () => {
+    await turn(build(), 's1')
+    const history = join(dir, 'summaries-history.json')
+    const before = readFileSync(history, 'utf8')
+    chmodSync(history, 0o000)
+    await turn(build(), 's2')
+    chmodSync(history, 0o600)
+    expect(readFileSync(history, 'utf8')).toBe(before)
+    expect(Object.keys(JSON.parse(readFileSync(join(dir, 'summaries.json'), 'utf8')))).toEqual(['s1', 's2'])
   })
 
   it('a save that fails part way leaves the four files whole', async () => {

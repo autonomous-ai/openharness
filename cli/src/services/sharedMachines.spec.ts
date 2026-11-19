@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fakeCore } from '../testing/fakeCore.js'
@@ -313,6 +313,36 @@ describe('shared machines', () => {
     expect(readPolicy(file)).toEqual({ emails: [], sameDomain: false, folders: [{ path: '/Users/dee/docs', write: false }] })
     expect(warn).toHaveBeenCalledWith('[state] shared-machines.json could not be read (not valid JSON); kept as shared-machines.json.unreadable, starting empty.')
     warn.mockRestore()
+  })
+
+  // Read as off, a change of folders would write every address shared with over.
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('a shared-machines.json this account cannot read is not written over', async () => {
+    const before = JSON.stringify({ emails: ['a@b.io'], sameDomain: false, folders: [] })
+    writeFileSync(file, before)
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    chmodSync(file, 0o000)
+    try {
+      await expect(start(null)({ action: 'set_folders', folders: [{ path: '/Users/dee/docs', write: false }] }, owner))
+        .rejects.toThrow('shared-machines.json could not be read (EACCES)')
+    } finally { chmodSync(file, 0o600) }
+    expect(readFileSync(file, 'utf8')).toBe(before)
+  })
+
+  // Read as off, a refresh would tell the backend to stop sharing, write the file over and take the guests' folders.
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('a refresh that cannot read the policy tells and writes nothing', async () => {
+    const before = JSON.stringify({ emails: ['ann@gmail.com'], sameDomain: false, folders: [] })
+    writeFileSync(file, before)
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const port = fakePort({ policy: vi.fn(async () => policy({ emails: ['ann@gmail.com'], members: [ann] })) })
+    chmodSync(file, 0o000)
+    try {
+      start(port)
+      await fire()
+    } finally { chmodSync(file, 0o600) }
+    expect(port.publish).not.toHaveBeenCalled()
+    expect(port.trust).not.toHaveBeenCalled()
+    expect(readFileSync(file, 'utf8')).toBe(before)
+    expect(log).toHaveBeenCalledWith('read failed: StateFileUnreadable')
   })
 
   it('the save goes through a temporary file renamed onto the target', async () => {

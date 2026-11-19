@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync, type PathLike } from 'node:fs'
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync, type PathLike } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -1014,5 +1014,16 @@ describe('the counts file is written whole and never written over', () => {
     expect(readFileSync(`${file}.unreadable`, 'utf8')).toBe('{"')
     expect(JSON.parse(readFileSync(file, 'utf8'))).toMatchObject({ revision: 0 })
     expect(warn).toHaveBeenCalledWith('[state] counts.json could not be read (not valid JSON); kept as counts.json.unreadable, starting empty.')
+  })
+
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('a counts.json this account cannot read is not written over', async () => {
+    usage.counter('create_requests'); await usage.sync(); await usage.stop()
+    const before = readFileSync(file, 'utf8')
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    chmodSync(file, 0o000)
+    usage = createProductUsage({ file, now: () => now, request })
+    await usage.sync(); usage.counter('create_requests'); await usage.sync(); await usage.stop()
+    chmodSync(file, 0o600)
+    expect(readFileSync(file, 'utf8')).toBe(before)
   })
 })
