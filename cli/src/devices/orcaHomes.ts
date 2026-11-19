@@ -34,8 +34,9 @@ export const ORCA_HOMES_MAX_BYTES = 256 * 1024
 export const ORCA_HOMES_REFRESH_MS = 5 * 60_000
 
 const APP_ORCA = '/Applications/Orca.app/Contents/Resources/bin/orca'
-/** Where Orca installs its launcher: in the app on macOS, in `resources/bin` beside its binary on Linux. */
-const LAUNCHER = /\/(?:Orca\.app\/Contents\/Resources|resources)\/bin\/orca$/
+/** Where Orca installs its launcher: in the app on macOS, in `resources/bin` beside its binary on Linux, where it is
+ *  linked as `orca-ide` beside the screen reader's `orca`. */
+const LAUNCHER = /\/(?:Orca\.app\/Contents\/Resources|resources)\/bin\/orca(?:-ide)?$/
 
 const none = (): OrcaHomes => ({ claude: [], codex: [] })
 
@@ -62,10 +63,11 @@ function orcaApp(): string {
   return app && isAbsolute(app) ? app : APP_ORCA
 }
 
-/** Orca's CLI: its launcher on PATH, else, on macOS, the app's own. */
+/** Orca's CLI: its launcher on PATH (on Linux `orca-ide` first), else, on macOS, the app's own. */
 export function orcaBinary(deps: OrcaBinaryDeps): string | null {
   const app = orcaApp()
-  return deps.onPath('orca', orcaLauncher) ?? (deps.platform === 'darwin' && deps.exists(app) ? app : null)
+  const onPath = (deps.platform === 'linux' ? deps.onPath('orca-ide', orcaLauncher) : null) ?? deps.onPath('orca', orcaLauncher)
+  return onPath ?? (deps.platform === 'darwin' && deps.exists(app) ? app : null)
 }
 
 /** This computer's real `orca`. */
