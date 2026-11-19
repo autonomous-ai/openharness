@@ -34,6 +34,7 @@ const SERVICE_NAMES: Record<string, string> = { launchd: 'launchd', systemd: 'sy
  * console.log's last lines (the summary) could be dropped when a script captures them (gridCredentials.ts says the same).
  */
 function line(fd: 1 | 2, text: string): void {
+  // not a state file: stdout or stderr
   try { writeSync(fd, `${text}\n`) } catch { /* no stream to write to */ }
 }
 

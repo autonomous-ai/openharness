@@ -232,6 +232,7 @@ export class Ledger {
 
   append(row: Started | Pending | Closed | Told | Handed): void {
     this.locked(() => {
+      // not a state file: rows appended under the lock; its reader skips a torn last row
       appendFileSync(this.path, `${JSON.stringify(row)}\n`, { mode: 0o600 })
       // Past its size the file becomes the previous one, by a rename: a reader sees each line in one file or the other.
       if (statSync(this.path).size > ROTATE_BYTES) renameSync(this.path, this.previous)

@@ -360,6 +360,7 @@ function startMasterHere(): void {
   let log: number | 'ignore' = 'ignore'
   try {
     prepareLogFile(LOG_FILE, LEGACY_LOG_FILE)
+    // not a state file: the daemon's log, appended
     log = openSync(LOG_FILE, 'a')
   } catch (e) { console.error(`[update] the master starts without the log: ${errorKind(e)}`) }
   const { ADAPTER_UPDATED_TO: _handedOver, HARNESSD_SAFE_MODE: _safeMode, ...inherited } = harnessdEnv()

@@ -130,6 +130,7 @@ export function createWindowsInstallations({ directory, spawn = nodeSpawn, alive
       const path = Object.keys(env).filter((key) => key.toLowerCase() === 'path').map((key) => { const value = env[key]; delete env[key]; return value }).find(Boolean)
       env.PATH = path ? `${at.nodeDir};${path}` : at.nodeDir
       rmSync(log, { force: true })
+      // not a state file: the installer's output log, a new file each run
       const output = openSync(log, 'w')
       let child
       try {

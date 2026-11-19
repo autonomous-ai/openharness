@@ -192,6 +192,7 @@ export class StoppedAgentStore {
     try { fd = openSync(file, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600) }
     catch (error) { if ((error as NodeJS.ErrnoException).code === 'EEXIST') return null; throw error }
     const token = randomUUID()
+    // not a state file: an O_EXCL reservation, filled and flushed; the plan's follow-up moves it to the helper
     try { writeFileSync(fd, JSON.stringify({ token })); fsyncSync(fd) } finally { closeSync(fd) }
     this.syncDirectory()
     return token

@@ -135,6 +135,7 @@ export function removeSignIn(reason: string, asked: SignOutAsked, chain: () => r
     // `harness reset` has just emptied the folder the log lives in.
     mkdirSync(env.ADAPTER_DATA_DIR, { recursive: true })
     // Redacted and cut as the kept file has it (AGENTS.md standard 7: no secret reaches a log).
+    // not a state file: the removal line, appended to the log
     appendFileSync(join(env.ADAPTER_DATA_DIR, 'harness.log'), keptLine(line) + '\n')
   } catch { /* the log is a record, not a gate */ }
   if (line) keepRemoval(line)

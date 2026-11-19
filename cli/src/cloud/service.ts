@@ -136,6 +136,7 @@ export function startCloudService(options: CloudServiceOptions) {
   }
   const record = (entry: Entry, message: TranscriptMessage): void => {
     mkdirSync(dir, { recursive: true, mode: 0o700 })
+    // not a state file: a transcript, appended line by line; its reader skips a torn last line
     appendFileSync(transcriptFile(entry.harness.agentId), `${JSON.stringify(message)}\n`, { mode: 0o600 })
     entry.harness.messages += 1
     if (message.from === 'agent') {

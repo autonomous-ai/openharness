@@ -85,12 +85,25 @@ const STATE_MODULES: readonly string[] = [
   'agentClient/ledger.ts',
   'gateway/productUsage.ts',
   'lib/autonomous-device/direct.ts',
+  'lib/sessionCheckpoint.ts',
+  'lib/stoppedAgents.ts',
+  'lib/daemonSafeMode.ts',
 ]
 
-const WRITE_IN_PLACE = /\bwriteFile(Sync)?\s*\(/
+// Every way to put bytes in a file by its name or an open descriptor: a write, an append, a stream, a truncate, a copy,
+// and an open that empties or appends (`wx` creates a new file only; what fills it matches on its own).
+const WRITE_IN_PLACE = new RegExp([
+  /\bwriteFile(Sync)?\s*\(/,
+  /\bappendFile(Sync)?\s*\(/,
+  /\bcreateWriteStream\s*\(/,
+  /\btruncateSync\s*\(|\.truncate\s*\(/,
+  /\bcopyFile(Sync)?\s*\(/,
+  /\bwriteSync\s*\(/,
+  /\bopenSync\s*\([^)]*['"](w|a)(?!x)/,
+].map((pattern) => pattern.source).join('|'))
 const MARKER = 'not a state file:'
 
-/** Every `writeFile` / `writeFileSync` call outside a comment line, unless it or the line above is marked. */
+/** Every write in place outside a comment line, unless it or the line above is marked. */
 function hits(source: string): Array<{ line: number; text: string }> {
   const lines = source.split('\n')
   const found: Array<{ line: number; text: string }> = []
@@ -108,6 +121,13 @@ describe('state writes guard', () => {
   it('finds a write in place', () => {
     expect(hits('writeFileSync(file, data)')).toHaveLength(1)
     expect(hits('await fs.promises.writeFile(file, data)')).toHaveLength(1)
+    for (const write of ['appendFileSync(file, line)', 'await appendFile(file, line)', 'createWriteStream(file)',
+      'truncateSync(file, 0)', 'await handle.truncate(0)', 'copyFileSync(from, file)', 'await copyFile(from, file)',
+      "const fd = openSync(file, 'w')", "openSync(file, 'w+')", "openSync(file, 'a', 0o600)", 'writeSync(fd, data)',
+    ]) expect(hits(write), write).toHaveLength(1)
+    for (const other of ["openSync(file, 'r')", "openSync(lock, 'wx', 0o600)", 'ftruncateSync(fd, 0)', 'truncate(text, 60)']) {
+      expect(hits(other), other).toEqual([])
+    }
     expect(hits('// writeFileSync(file)')).toEqual([])
     expect(hits('writeFileSync(archive, bytes) // not a state file: a one-shot download')).toEqual([])
   })

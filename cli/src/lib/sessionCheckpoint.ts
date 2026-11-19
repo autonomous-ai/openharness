@@ -228,6 +228,7 @@ export class SessionCheckpointStore {
       } else {
         const history = await databaseHistory(s)
         const handle = await open(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600)
+        // not a state file: a new O_EXCL temporary, renamed into place; the plan's follow-up moves it to the helper
         try { await handle.writeFile(JSON.stringify({ version: 1, sessionId: s.sessionId, engine: s.engine, ...history })) }
         finally { await handle.close() }
       }

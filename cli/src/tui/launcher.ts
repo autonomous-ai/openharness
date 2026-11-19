@@ -111,6 +111,7 @@ export async function repairHnLauncher(script: string, log: (line: string) => vo
   const target = linkedTarget(state.path)
   // The backup lives one directory deeper; resolve relative links so it still runs the old build.
   if (target !== null) symlinkSync(target, join(backup, 'hn'))
+  // not a state file: a backup copy, made new (COPYFILE_EXCL)
   else copyFileSync(state.path, join(backup, 'hn'), constants.COPYFILE_EXCL)
   if (identity(state.path) !== state.identity) throw new Error('The hn launcher changed during installation; run `harness tui --install` again.')
   atomicWriteFile(state.path, launcherSource(), 'cache', { mode: 0o755 })

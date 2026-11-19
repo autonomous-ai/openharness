@@ -179,6 +179,7 @@ function putInPlace(fs: PtyInstallFs, ready: string, bin: string, name: string, 
 function replaceBinFile(fs: PtyInstallFs, source: string, bin: string, name: string, done: Replaced[]): void {
   const temporary = freshName(bin, `.${name}.new`)
   try {
+    // not a state file: a binary copied to a temporary name, then renamed into place
     fs.copyFile(source, temporary)
     putInPlace(fs, temporary, bin, name, done, true)
   } finally {

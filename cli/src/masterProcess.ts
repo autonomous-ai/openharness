@@ -157,6 +157,7 @@ export function writeFatalTo(
 ): void {
   const fatal = (what: string) => (error: unknown): void => {
     try {
+      // not a state file: the master's last line, appended to its log
       writeSync(fd, `${ts()} [harnessd] the master stopped on ${what}: ${errorKind(error)}\n`)
     } catch { /* the log cannot be written: the line is lost, never the exit */ }
     exit(1)
@@ -169,9 +170,11 @@ export const processWindowsMasterDeps = (): WindowsMasterDeps => ({
   cliDir: env.ADAPTER_CLI_DIR,
   currentCli: (root) => currentCli(root),
   exists: existsSync,
+  // not a state file: the daemon's log, appended
   openLog: () => openSync(DAEMON_LOG_FILE, 'a'),
   redirect: (fd) => {
     for (const name of ['log', 'info', 'warn', 'error'] as const) {
+      // not a state file: each console line, appended to the daemon's log
       console[name] = (...args: unknown[]) => { try { writeSync(fd, `${format(...args)}\n`) } catch { /* a full disk costs the line */ } }
     }
   },

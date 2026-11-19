@@ -232,6 +232,7 @@ export function appEngineOps(env: NodeJS.ProcessEnv, request: typeof fetch = fet
     // start reads its port from. Removed, that file stays that engine's alone.
     const file = join(logDir, logName)
     await rm(file, { force: true })
+    // not a state file: the engine's own output log, a new file each start
     const log = openSync(file, 'w', 0o600)
     try {
       // Its own process group, so it outlives this daemon and Stop ends it with whatever it started.
