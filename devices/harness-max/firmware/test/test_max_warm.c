@@ -533,6 +533,37 @@ static void test_edge_keys(void)
     CHECK(cut_frame(x, w, rail, middle, &worked) == cold[0] && !worked);
 }
 
+// A frame below 1x baked on one colour (pod_cell_flat) is the very pixels the resampler writes onto that ground: the
+// Max's bake weighs a frame's pixels down a row of the glass first, then across. Claude's and Codex's asking frames
+// and the small pet's, at every zoom below 1x in eighths from 1/2 and in odd sixteenths from 5, on a light ground and a dark one, against
+// the same frame drawn plain over a rect of that colour.
+static void test_bake_same(void)
+{
+    static ht_scene_t a, b;
+    static uint16_t pa[400 * 400], pb[400 * 400];
+    const ht_cell_frame_t *frames[] = {&pod_claude_ask.frames[0], &pod_codex_ask.frames[0], &pod_pet_for("claude")->cells[0]};
+    static const uint32_t GROUNDS[] = {0xF2F2F7, 0x1C1C1E};
+    for (size_t fi = 0; fi < sizeof frames / sizeof frames[0]; fi++)
+        for (size_t gi = 0; gi < 2; gi++)
+            for (unsigned m = 0; m < 10; m++) {   // 4..7 eighths, then 5..15 odd sixteenths
+                const ht_cell_frame_t *f = frames[fi];
+                const uint16_t ground = ht_rgb(GROUNDS[gi]);
+                const bool s16 = m >= 4;
+                const unsigned z = s16 ? 5 + 2 * (m - 4) : 4 + m;
+                pod_cell_bake_reset();
+                ht_scene_clear(&a, 0), ht_scene_clear(&b, 0);
+                ht_pro_rect(&a, 3, 5, 397, 395, 0, ground), ht_pro_rect(&b, 3, 5, 397, 395, 0, ground);
+                CHECK(s16 ? pod_cell16(&a, 7, 9, f, z) : pod_cell(&a, 7, 9, f, z));
+                CHECK(s16 ? pod_cell_flat16(&b, 7, 9, f, z, ground) : pod_cell_flat(&b, 7, 9, f, z, ground));
+                const ht_rect_t box = {0, 0, 400, 400};
+                ht_raster(&a, box, pa);
+                const unsigned bakes = pod_cell_bakes();
+                ht_raster(&b, box, pb);
+                CHECK(pod_cell_bakes() == bakes + 1);   // baked, not resampled in place
+                CHECK(!memcmp(pa, pb, sizeof pa));
+            }
+}
+
 int main(void)
 {
     test_ahead();
@@ -546,6 +577,7 @@ int main(void)
     test_not_resting();
     test_again();
     test_edge_keys();
+    test_bake_same();
     printf("test_max_warm: %d checks passed\n", checks);
     return 0;
 }
