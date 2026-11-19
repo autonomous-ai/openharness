@@ -390,11 +390,14 @@ export class CableFleet {
     this.host.onDialStatus?.({ ...(primary ?? { attached: false }), devices })
   }
 
-  /** Every device this computer can see, newest reading. Ordered as they were discovered. */
+  /**
+   * Every device this computer can see, newest reading. Ordered as they were discovered. A port that
+   * never opened keeps a row while it has a problem, so the person reads why (no access to the tty).
+   */
   devices(): DialStatus[] {
     const told = [...this.unanswered].filter(([, held]) => held.stage === 'told')
       .map(([id]): DialStatus => ({ id, attached: false, board: 'pro', problem: UNANSWERED_NOTICE }))
-    return [...[...this.entries.values()].map(e => e.status).filter(s => s.attached || s.settings), ...told]
+    return [...[...this.entries.values()].map(e => e.status).filter(s => s.attached || s.settings || s.problem), ...told]
   }
 
   /**
