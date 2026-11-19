@@ -45,6 +45,12 @@ target_compile_definitions(${COMPONENT_LIB} PRIVATE HT_WIDTH=1920 HT_HEIGHT=480 
 max_glass(${COMPONENT_LIB})
 target_compile_options(${COMPONENT_LIB} PRIVATE -Wno-format-truncation)
 
+# Off unless asked for: the blur's period-4 reuse (max_ui_layer.c's MAX_BLUR_PERIOD4), never in the product. In a build
+# directory of its own, since CMake keeps the setting: idf.py -B build-period4 -DMAX_BLUR_PERIOD4=1 build
+if(MAX_BLUR_PERIOD4)
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE MAX_BLUR_PERIOD4)
+endif()
+
 set(PRO_FONTS_C ${CMAKE_BINARY_DIR}/pro_fonts.c)
 max_bake_fonts(${PRO_FONTS_C})
 target_sources(${COMPONENT_LIB} PRIVATE ${PRO_FONTS_C})

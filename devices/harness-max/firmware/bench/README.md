@@ -28,6 +28,10 @@ idf.py -DPRO_PYTHON=$HOME/.venvs/harness-fw/bin/python build
 The image is `build/harness_max_bench.bin` (about 3.9 MB; the app slot is 0x7E0000). ESP-IDF reads `sdkconfig.defaults`
 only when it creates `sdkconfig`: delete `bench/sdkconfig` after changing the defaults.
 
+`idf.py -B build-period4 -DMAX_BLUR_PERIOD4=1 build` builds the bench with the blur's period-4 reuse (max_ui_layer.c's
+MAX_BLUR_PERIOD4, never in the product) into `build-period4/`, to time it against `build/`: its report's header says
+so. `test/blur_same.sh` checks it paints every motion's frames as the product's build does.
+
 ## Flash
 
 Only the app, into the `ota_1` slot of a board whose bootloader (ESP-IDF 5.5.4) and partition table are the Pro's:

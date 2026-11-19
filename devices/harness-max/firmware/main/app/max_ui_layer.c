@@ -408,12 +408,21 @@ static inline uint32_t halve(uint32_t sum) { return (sum + 0x00800080u) >> 8 & 0
 // What one task's blur works in: the image as lanes and how many rows down from each pixel are the same, how many
 // rows above each are each the same as the next, a row blurred down and how many columns left of each are the same,
 // and the row's sums across.
+// MAX_BLUR_PERIOD4, the bench's alone (bench/main/CMakeLists.txt) till the chip says whether it pays: where the pixels
+// repeat four apart (the dither's period, as a dithered gradient's do), the blur takes what it works out four pixels
+// left's, down, across and out. Every pixel the same (test/blur_same.sh).
 typedef struct {
     uint32_t lanes[2][PET_PX];
     uint8_t same[PET_PX];
+#ifdef MAX_BLUR_PERIOD4
+    uint8_t beat[PET_PX];   // how many rows down from each pixel are each the same as four pixels left
+#endif
     uint16_t rows[HT_HEIGHT];
     uint32_t row[2][LINE_W + 2 * BLUR_R];
     uint8_t flat[LINE_W + 2 * BLUR_R];
+#ifdef MAX_BLUR_PERIOD4
+    uint8_t flat4[LINE_W + 2 * BLUR_R];   // how many columns left of each are each the same as four columns left
+#endif
     uint32_t sum[2][LINE_W];
 } work_t;
 static EXT_RAM_BSS_ATTR work_t s_work[WORKERS];
@@ -427,6 +436,9 @@ static void blur(work_t *w, const uint16_t *src, const uint8_t *alpha, int sw, i
 {
     uint32_t *const rb = w->lanes[0], *const ga = w->lanes[1];
     uint8_t *const same = w->same, *const flat = w->flat;
+#ifdef MAX_BLUR_PERIOD4
+    uint8_t *const beat = w->beat, *const flat4 = w->flat4;
+#endif
     const int ya = imax(0, oy - BLUR_R), yb = imin(sh, oy + oh + BLUR_R);   // the rows the taps read
     for (int i = ya * sw; i < yb * sw; i++) {
         rb[i] = (uint32_t)(src[i] >> 11) << 16 | (src[i] & 31u);
@@ -439,6 +451,16 @@ static void blur(work_t *w, const uint16_t *src, const uint8_t *alpha, int sw, i
         for (int x = 0; x < sw; x++) same[(size_t)(yb - 1) * sw + x] = 1;
         for (int i = (yb - 1) * sw - 1; i >= ya * sw; i--)
             same[i] = rb[i] == rb[i + sw] && ga[i] == ga[i + sw] ? (uint8_t)imin(2 * BLUR_R + 1, same[i + sw] + 1) : 1;
+#ifdef MAX_BLUR_PERIOD4
+        for (int y = yb - 1; y >= ya; y--) {
+            const size_t i = (size_t)y * sw;
+            for (int x = 0; x < sw && x < 4; x++) beat[i + x] = 0;
+            for (int x = 4; x < sw; x++)
+                beat[i + x] = rb[i + x] == rb[i + x - 4] && ga[i + x] == ga[i + x - 4]
+                                  ? (uint8_t)(y == yb - 1 ? 1 : imin(2 * BLUR_R + 1, beat[i + x + sw] + 1))
+                                  : 0;
+        }
+#endif
     }
     // A row whose taps read only rows the same as the last row's read: its sums are the last row's (a sliver's sides
     // below its glow, every row the same).
@@ -464,6 +486,12 @@ static void blur(work_t *w, const uint16_t *src, const uint8_t *alpha, int sw, i
                     r1[j] = rb[i], r2[j] = ga[i];
                     continue;
                 }
+#ifdef MAX_BLUR_PERIOD4
+                if (j >= 4 && cy >= ty - 1 && beat[i - (size_t)(ty - 1) * sw] >= 2 * ty - 1) {   // as four left
+                    r1[j] = r1[j - 4], r2[j] = r2[j - 4];
+                    continue;
+                }
+#endif
                 uint32_t v1 = ky[0] * rb[i], v2 = ky[0] * ga[i];
                 for (int t = 1; t < ty; t++) {
                     uint32_t u1 = 0, u2 = 0;
@@ -478,12 +506,24 @@ static void blur(work_t *w, const uint16_t *src, const uint8_t *alpha, int sw, i
                 for (int j = 1; j < ow + 2 * BLUR_R; j++)
                     flat[j] = r1[j] == r1[j - 1] && r2[j] == r2[j - 1] ? (uint8_t)imin(2 * BLUR_R + 1, flat[j - 1] + 1)
                                                                        : 1;
+#ifdef MAX_BLUR_PERIOD4
+                for (int j = 0; j < 4; j++) flat4[j] = 0;
+                for (int j = 4; j < ow + 2 * BLUR_R; j++)
+                    flat4[j] = r1[j] == r1[j - 4] && r2[j] == r2[j - 4] ? (uint8_t)imin(2 * BLUR_R + 1, flat4[j - 1] + 1)
+                                                                        : 0;
+#endif
             }
             for (int x = 0, j = BLUR_R; x < ow; x++, j++) {   // across
                 if (tx == 1 || flat[j + tx - 1] >= 2 * tx - 1) {
                     s1[x] = r1[j] << 8, s2[x] = r2[j] << 8;
                     continue;
                 }
+#ifdef MAX_BLUR_PERIOD4
+                if (x >= 4 && tx > 1 && flat4[j + tx - 1] >= 2 * tx - 1) {
+                    s1[x] = s1[x - 4], s2[x] = s2[x - 4];
+                    continue;
+                }
+#endif
                 uint32_t v1 = kx[0] * r1[j], v2 = kx[0] * r2[j];
                 for (int t = 1; t < tx; t++)
                     v1 += kx[t] * (r1[j - t] + r1[j + t]), v2 += kx[t] * (r2[j - t] + r2[j + t]);
@@ -493,6 +533,13 @@ static void blur(work_t *w, const uint16_t *src, const uint8_t *alpha, int sw, i
         uint16_t *o = out + (size_t)y * ow;
         uint8_t *oa = out_a ? out_a + (size_t)y * ow : NULL;
         for (int x = 0; x < ow; x++) {
+#ifdef MAX_BLUR_PERIOD4
+            if (x >= 4 && s1[x] == s1[x - 4] && s2[x] == s2[x - 4]) {   // the dither's period: four pixels left's
+                o[x] = o[x - 4];
+                if (oa) oa[x] = oa[x - 4];
+                continue;
+            }
+#endif
             uint32_t r = s1[x] >> 16, b = s1[x] & 0xFFFF, g = s2[x] >> 16;
             if (alpha) {
                 const uint32_t a = s2[x] & 0xFFFF;   // of 255 * 256
