@@ -30,27 +30,28 @@ void main() {
   group('a question or a failure', () {
     final wav = chimeWav(ChimeSound.ask);
 
-    test('is a 16 kHz mono 16-bit WAV of two tones with a gap: 220 ms, between a 50 ms lead and a 300 ms tail', () {
+    test('is a 16 kHz mono 16-bit WAV of two 110 ms tones 160 ms apart: 380 ms, between a 50 ms lead and a 300 ms tail',
+        () {
       final h = ByteData.sublistView(wav);
       expect(String.fromCharCodes(wav.sublist(0, 4)), 'RIFF');
       expect(String.fromCharCodes(wav.sublist(8, 12)), 'WAVE');
       expect(h.getUint16(22, Endian.little), 1); // mono
       expect(h.getUint32(24, Endian.little), 16000);
       expect(h.getUint16(34, Endian.little), 16);
-      expect(h.getUint32(40, Endian.little), (800 + 3520 + 4800) * 2);
-      expect(wav.length, 44 + (800 + 3520 + 4800) * 2);
+      expect(h.getUint32(40, Endian.little), (800 + 6080 + 4800) * 2);
+      expect(wav.length, 44 + (800 + 6080 + 4800) * 2);
       expect(h.getUint32(4, Endian.little), wav.length - 8);
-      expect(_own(wav), 3520);
+      expect(_own(wav), 6080);
     });
 
     test('is beep_tone\'s ~2 kHz square at 2700 (the owner\'s level, 19 Nov), all but silent in the gap', () {
       expect(_at(wav, 0), -2700);
       expect(_at(wav, 4), 2700);
-      expect(_at(wav, 1279), 2700);
-      expect(_at(wav, 1280).abs(), 1); // the gap: 80 ms in
-      expect(_at(wav, 2239).abs(), 1);
-      expect(_at(wav, 2240), -2700); // the second tone: 140 ms in
-      expect(_at(wav, 3519), 2700);
+      expect(_at(wav, 1759), 2700);
+      expect(_at(wav, 1760).abs(), 1); // the gap: 110 ms in
+      expect(_at(wav, 4319).abs(), 1);
+      expect(_at(wav, 4320), -2700); // the second tone: 270 ms in
+      expect(_at(wav, 6079), 2700);
     });
 
     test('a failure sounds as a question does', () {

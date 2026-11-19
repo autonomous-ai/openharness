@@ -1,6 +1,6 @@
 // The chime on the board's speaker through ALSA's aplay (no plugins on flutter-pi), each sound a WAV on aplay's stdin:
-// a question or a failure two of the C build's beep tones (~2 kHz squares of 80 ms, 60 ms apart, linux/audio/
-// beep_tone.h) at well under its loudness, a finished turn two soft sine notes.
+// a question or a failure two of the C build's ~2 kHz square tones (linux/audio/beep_tone.h), longer and further apart
+// and well under its loudness, a finished turn two soft sine notes.
 import 'dart:io';
 import 'dart:math' as math;
 import 'dart:typed_data';
@@ -101,10 +101,11 @@ Uint8List chimeWav(ChimeSound sound) => _wavs[sound] ??= _wav(switch (sound) {
       ChimeSound.done => _soft(),
     });
 
-/// beep_tone's square tones: [count] of 80 ms at ~2 kHz, 60 ms apart, at [peak].
+/// beep_tone's ~2 kHz square, [count] tones of 110 ms 160 ms apart at [peak]: its own 80 ms, 60 ms apart, ran together
+/// into one sound on the board (the owner heard two as one, 19 Nov).
 Int16List _tones(int count, int peak) {
-  const tone = _rate * 80 ~/ 1000, gap = _rate * 60 ~/ 1000, half = _rate ~/ 2000 ~/ 2;
-  final out = Int16List(_rate * (count * 80 + (count - 1) * 60) ~/ 1000);
+  const tone = _rate * 110 ~/ 1000, gap = _rate * 160 ~/ 1000, half = _rate ~/ 2000 ~/ 2;
+  final out = Int16List(count * tone + (count - 1) * gap);
   for (var i = 0; i < out.length; i++) {
     final phase = i % (tone + gap);
     out[i] = phase < tone ? (((phase ~/ half) & 1) == 1 ? peak : -peak) : 0;
