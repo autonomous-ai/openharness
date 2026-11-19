@@ -103,7 +103,7 @@ function setup(over: Partial<BindDeps> = {}) {
     announceSession: vi.fn(),
     stoppedAgents: { save: vi.fn(), finishResume: vi.fn(), get: vi.fn(() => null) },
     syncRecapPool: vi.fn(),
-    input: { forget: vi.fn(), awaitingConfirmation: vi.fn(() => false), firstTaskWaiting: vi.fn(() => false), typeCommand: vi.fn(async () => true), expectFirstTask: vi.fn() },
+    input: { forget: vi.fn(), awaitingConfirmation: vi.fn(() => false), waitsForPane: vi.fn(() => false), firstTaskWaiting: vi.fn(() => false), typeCommand: vi.fn(async () => true), expectFirstTask: vi.fn() },
     submitFirstTask: vi.fn(),
     deviceInput: { forget: vi.fn() },
     homes: { copilot: '/copilot', grok: '/grok', agy: '/agy' },
@@ -2421,6 +2421,9 @@ describe('binding an OpenClaw pane, read from its screen', () => {
     it.each([
       ['its first task, handed over and not confirmed', 'firstTaskWaiting'],
       ['a message typed and not confirmed', 'awaitingConfirmation'],
+      // Found in review: a message is typed only once its pane can send (core/input.ts), so one waiting for a history that
+      // did not load was never typed, never awaited confirmation, and no `/session` let its pane send it.
+      ['a message waiting, untyped, for its pane to be able to send', 'waitsForPane'],
     ] as const)('types it while %s', async (_, waiting) => {
       vi.mocked(run.deps.registry.byProcess).mockReturnValue(pane({ sessionId: 'agent:main:plain' }))
       vi.mocked(run.deps.input[waiting]).mockReturnValue(true)

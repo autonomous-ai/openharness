@@ -1214,6 +1214,29 @@ describe('SessionInputController', () => {
         controller.forget('s1')
       })
 
+      // Found in review: the binding pass types `/session` only while a message of Harness's waits on the agent, and a
+      // message waiting here, untyped, awaits no confirmation: nothing let its pane send it.
+      it('says it waits for its pane while it does, and no more once it is typed or given up', async () => {
+        vi.useFakeTimers()
+        const { controller, canSend } = waitingPane()
+
+        expect(controller.waitsForPane('s1')).toBe(false)
+        controller.submit('s1', 'Say hello')
+        await vi.advanceTimersByTimeAsync(5_000)
+        expect(controller.waitsForPane('s1')).toBe(true)
+        canSend()
+        await vi.advanceTimersByTimeAsync(1_000)
+        expect(controller.waitsForPane('s1')).toBe(false)
+        controller.forget('s1')
+
+        const given = waitingPane()
+        given.controller.submit('s1', 'Say hello')
+        await vi.advanceTimersByTimeAsync(181_000)
+        expect(given.onError).toHaveBeenCalled()
+        expect(given.controller.waitsForPane('s1')).toBe(false)
+        given.controller.forget('s1')
+      })
+
       it.each([
         ['a person\'s message', undefined],
         ['a delivery', 'delivery-1'],
