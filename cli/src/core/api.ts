@@ -715,8 +715,9 @@ export const WINDOW_NAMES_REQUESTS = ['window_name'] as const
 export const ENGINE_PROBE_REQUESTS = ['engines_probe'] as const
 /** Hachi's goals (`harness goal`, services/goals.ts), in the edge host: asked by the Hachi harness alone. */
 export const GOALS_REQUESTS = ['goal_open', 'goal_add', 'goal_done', 'goal_list'] as const
-/** Change agent's handoff file, prepared in the edge host (services/handoff.ts). */
-export const HANDOFF_REQUESTS = ['agent_handoff_prepare', 'agent_handoff_complete'] as const
+/** Change agent's handoff file, prepared in the edge host (services/handoff.ts), and the conversation itself moved
+ *  between Claude Code and Codex there (services/sessionMigrate.ts). */
+export const HANDOFF_REQUESTS = ['agent_handoff_prepare', 'agent_handoff_complete', 'agent_session_migrate'] as const
 /** Connected services for every local agent, and their MCP bridge, in the edge host (services/connectors.ts). */
 export const CONNECTORS_REQUESTS = ['connectors'] as const
 /** Sharing this machine with other accounts, and adding machines shared with this one, in the edge host
