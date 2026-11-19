@@ -108,6 +108,20 @@ describe('install.ps1, as written', () => {
     expect(start).toContain('$process.WaitForExit()')
     expect(start).not.toMatch(/Start-Process/)
   })
+
+  // Harness Device turns these lines into its install step's copy by how they start (its fixed table in
+  // the app's Rust): a change to one of them is a change there too.
+  it('keeps the step lines Harness Device names', () => {
+    for (const line of [
+      'Write-Host "  Downloading Node ',
+      'Write-Host "  Downloading Harness ',
+      'Write-Host "  Downloading the terminal host ',
+      'Write-Host "  OK ',
+      'Write-Host "Harness could not be installed. The step that failed: ',
+    ]) {
+      expect(source).toContain(line)
+    }
+  })
 })
 
 const windows = process.platform === 'win32'
