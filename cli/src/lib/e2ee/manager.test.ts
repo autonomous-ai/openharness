@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 
@@ -185,6 +185,16 @@ function machine(extra: Partial<ConstructorParameters<typeof makeManager>[0]> = 
   return { mgr, sent, takeLast, lastFor }
 }
 
+/** paired.json as a reader finds it mid-write: the manager made over it cannot save a pairing. */
+const TORN_PAIRED = '[{"identityPub":"'
+const SAVE_FAILED = '[e2ee] the pairing could not be saved: paired.json cannot be read (not valid JSON). Move it aside to start over.'
+function tearPaired(): string {
+  const file = join(process.env.ADAPTER_DATA_DIR as string, 'e2e', 'paired.json')
+  mkdirSync(join(file, '..'), { recursive: true })
+  writeFileSync(file, TORN_PAIRED)
+  return file
+}
+
 /** Drive a full pairing + session for one connection; returns the established web peer. */
 async function fullPair(h: ReturnType<typeof machine>, conn: string, role: 'web' | 'device' = 'web'): Promise<WebPeer> {
   const web = new WebPeer(role)
@@ -322,6 +332,27 @@ describe('E2eeManager pairing', () => {
     expect(result).toEqual({ ok: false, error: 'CODE_MISMATCH' })
     const last = takeLast('e2e_pake').payload as Record<string, unknown>
     expect(last.error).toBe('CODE_MISMATCH')
+  })
+
+  it('a pairing that cannot be saved is not a wrong code', async () => {
+    const file = tearPaired()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const h = machine()
+      // One more than the rate limit's three: a counted failure would refuse the last.
+      for (let i = 0; i < 4; i++) {
+        const conn = `torn-${i}`
+        const web = new WebPeer()
+        h.mgr.handleFrame(conn, web.intent(C.newPairId()))
+        const code = C.newPairCode(); web.setCode(code)
+        const pairing = h.mgr.onPair(code)
+        h.mgr.handleFrame(conn, web.onPake(h.lastFor(conn, 'e2e_pake')!)!) // r2 → r3
+        h.mgr.handleFrame(conn, web.onPake(h.lastFor(conn, 'e2e_pake')!)!) // r4 → the save fails
+        expect(await pairing).toEqual({ ok: false, error: 'TIMEOUT' })
+      }
+      expect(warn).toHaveBeenCalledWith(SAVE_FAILED)
+      expect(readFileSync(file, 'utf8')).toBe(TORN_PAIRED)
+    } finally { warn.mockRestore() }
   })
 
   it('e2e_status reports supported + enabled + not-paired for an unknown browser', () => {
@@ -619,6 +650,30 @@ describe('E2eeManager persistent remote-password pairing', { timeout: PW_SCRYPT_
     const final = takeLast('e2e_pw_pake').payload as Record<string, unknown>
     expect(final).toMatchObject({ round: 5, error: 'WRONG_PASSWORD' })
     expect(mgr.listPaired().length).toBe(0)
+  })
+
+  it('a pairing that cannot be saved is not a wrong password', async () => {
+    const file = tearPaired()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const { mgr, lastFor } = machine()
+      await mgr.setRemotePassword(PASSWORD)
+      // Five counted failures would lock the password out.
+      for (let i = 0; i < 5; i++) {
+        const joiner = new PwPeer()
+        const conn = `pwtorn-${i}`
+        mgr.handleFrame(conn, await joiner.intent(PASSWORD))
+        mgr.handleFrame(conn, joiner.onPake(lastFor(conn, 'e2e_pw_pake')!)!) // r2 → r3
+        mgr.handleFrame(conn, joiner.onPake(lastFor(conn, 'e2e_pw_pake')!)!) // r4 → the save fails
+        expect(lastFor(conn, 'e2e_pw_pake')?.payload).toMatchObject({ round: 5, error: 'TIMEOUT' })
+      }
+      const next = new PwPeer()
+      mgr.handleFrame('pwtorn-next', await next.intent(PASSWORD))
+      expect(lastFor('pwtorn-next', 'e2e_pw_pake')?.payload).toMatchObject({ round: 1 }) // not locked out
+      mgr.dropSession('pwtorn-next')
+      expect(warn).toHaveBeenCalledWith(SAVE_FAILED)
+      expect(readFileSync(file, 'utf8')).toBe(TORN_PAIRED)
+    } finally { warn.mockRestore() }
   })
 
   it('locks out after repeated wrong passwords, rejecting further intents before any crypto runs', async () => {
