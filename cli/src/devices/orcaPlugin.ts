@@ -164,12 +164,18 @@ async function find(deps: OrcaPluginDeps, force: boolean): Promise<Found> {
     if (before === undefined) return NOT_RUNNING
     return { state: before ? 'off' : 'offer', how: 'install', ...asking }
   }
+  return stateOf(entry, asking, deps.folder)
+}
+
+/** The state of the plugin's [entry] in Orca's list, the first rule that holds: find()'s, and what a change waits for
+ *  (`current`) once its deadline passed. */
+function stateOf(entry: Record<string, unknown>, asking: Asking, folder: string): Found {
   const { version, status, source } = entry
   if (typeof version !== 'string' || typeof status !== 'string') return NOT_RUNNING
   if (entry.isDev === true) return OTHER
   // Harness enables or updates only an entry it installed from its own folder, never code put elsewhere, such as a
   // pending install from a person's checkout: that one is installed from the folder, which Orca counts as a moved source.
-  const how: How = !fromFolder(source, deps.folder) ? 'install' : version !== asking.version ? 'update' : 'enable'
+  const how: How = !fromFolder(source, folder) ? 'install' : version !== asking.version ? 'update' : 'enable'
   if (status === 'disabled') return { state: 'off', how, ...asking }
   if (status === 'pending' || entry.needsReconsent === true) return { state: 'approve', how, ...asking }
   if (how !== 'enable') return { state: 'behind', how, ...asking }
@@ -252,12 +258,10 @@ export function withinApproved(data: unknown, key: string, version: string): boo
 /** Each install, update, enable or uninstall. */
 export const ORCA_CHANGE_MS = 60_000
 
-/** Whether Orca lists the plugin as a change asked for it: at the version cli.js carries, from the plugin's folder,
- *  waiting on no approval and not disabled. */
+/** Whether Orca lists the plugin as a change asked for it: current, by the rules find() reads it with. */
 async function finished(deps: OrcaPluginDeps, { orca, key, version }: Asking): Promise<boolean> {
   const entry = await entryOf(deps, orca, key)
-  return isObject(entry) && entry.version === version && fromFolder(entry.source, deps.folder)
-    && typeof entry.status === 'string' && entry.status !== 'pending' && entry.status !== 'disabled' && entry.needsReconsent !== true
+  return isObject(entry) && stateOf(entry, { orca, key, version }, deps.folder).state === 'current'
 }
 
 /** Orca's answer to `plugin <args> --json` (an install, update, enable or uninstall): `ok`, its deadline passed, the
