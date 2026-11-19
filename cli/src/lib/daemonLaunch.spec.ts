@@ -54,6 +54,16 @@ describe('connectFailure', () => {
     const { connectFailure } = await load()
     expect(connectFailure(line, 18473)).toMatchObject(expected)
   })
+
+  // Another request's failure in the start window names its own kind, not the backend link's.
+  it.each([
+    '[update] check failed (will retry): TypeError CERT_HAS_EXPIRED',
+    '[update] check failed (will retry): TypeError ENOTFOUND',
+    '[update] check failed (will retry): TypeError ECONNREFUSED',
+  ])('reads no backend failure in %s', async (line) => {
+    const { connectFailure } = await load()
+    expect(connectFailure(line, 1)).toBeNull()
+  })
 })
 
 describe('waitForReady', () => {

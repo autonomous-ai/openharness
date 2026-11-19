@@ -550,6 +550,20 @@ describe('the review of the first cut', () => {
     } finally { warn.mockRestore() }
   })
 
+  it('names a control boundary lost to a transcript that shrank under the read', async () => {
+    // Past one 64 KiB read, so the second read comes up short once the file is cut.
+    const records = Array.from({ length: 2_000 }, (_, i) => codex.user(`prompt ${i}`))
+    writeFileSync(file, [codex.started('t1'), ...records].join('\n') + '\n')
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      let cut = false
+      const fold = () => { if (!cut) { cut = true; truncateSync(file, 10) } }
+      await attachTranscript(file, codexAttachRules(() => []), { profile: () => {}, fold, close: () => {} },
+        { fromStart: true, closes: [{ offset: 0, reason: 'cancel' }] })
+      expect(warn.mock.calls.map((call) => call[0])).toEqual(['[attach] a transcript could not be read: ENGINE_CONTROL_BOUNDARY_CHANGED'])
+    } finally { warn.mockRestore() }
+  })
+
   it('names thinking blocks so no two windows of one session share an id, and one window keeps its names', async () => {
     const records = claudeScenario()
     const ids = async (cut: number) => {

@@ -533,8 +533,10 @@ describe('the updater when things go wrong', () => {
       withLock: async (fn) => {
         attempts++
         if (attempts === 1) throw new SpawnLockBusyError(null)
-        if (attempts === 2) throw new Error('disk full')
-        if (attempts === 3) throw 'lock folder vanished' // not an Error: still logged, still retried
+        if (attempts === 2) throw new SpawnLockBusyError(null, 'not a lock this CLI made: /home/someone/.harness/spawn.lock — remove it by hand (EACCES)')
+        if (attempts === 3) throw new SpawnLockBusyError({ pid: 4242, startMarker: 's', token: 't', purpose: 'update', since: Date.now() })
+        if (attempts === 4) throw new Error('disk full')
+        if (attempts === 5) throw 'lock folder vanished' // not an Error: still logged, still retried
         return fn()
       },
       onStaged: (version) => { staged.push(version) },
@@ -542,7 +544,13 @@ describe('the updater when things go wrong', () => {
     // Staging stops the updater for good, so nothing is left running.
     await vi.waitFor(() => expect(staged).toEqual(['9.9.9']), { timeout: 5_000 })
     expect(downloads, 'downloaded once: later checks reuse the bytes already verified').toBe(2)
-    expect(logs).toContain('[update] 9.9.9 is ready but the daemon spawn lock is held (SpawnLockBusyError) — trying again next check')
+    const busy = logs.filter((line) => line.includes('is ready but the daemon spawn lock is'))
+    expect(busy.slice(0, 2)).toEqual([
+      '[update] 9.9.9 is ready but the daemon spawn lock is held by an unknown process — trying again next check',
+      '[update] 9.9.9 is ready but the daemon spawn lock is not a lock this CLI made — remove it by hand — trying again next check',
+    ])
+    expect(busy[2]).toMatch(/^\[update\] 9\.9\.9 is ready but the daemon spawn lock is held \(being updated by pid 4242 for \d+s\) — trying again next check$/)
+    expect(busy).toHaveLength(3)
     expect(logs.filter((line) => line.startsWith('[update] check failed'))).toEqual(['[update] check failed (will retry): Error', '[update] check failed (will retry): string'])
   })
 })
@@ -1175,9 +1183,9 @@ describe('a link that stalls without dropping (e2e/updateHostile.e2e.ts)', () =>
     })
     const started = Date.now()
     await expect(downloadVerified({ url: 'https://updates.test/quiet.js', sha256: 'x' }, limits))
-      .rejects.toThrow(new TransferStalledError('https://updates.test/quiet.js sent nothing for 60 ms'))
+      .rejects.toThrow(expect.objectContaining({ code: 'TRANSFER_STALLED', message: 'https://updates.test/quiet.js sent nothing for 60 ms' }))
     await expect(downloadVerified({ url: 'https://updates.test/trickle.js', sha256: 'x' }, limits))
-      .rejects.toThrow('https://updates.test/trickle.js took longer than 400 ms in all')
+      .rejects.toThrow(expect.objectContaining({ code: 'TRANSFER_DEADLINE', message: 'https://updates.test/trickle.js took longer than 400 ms in all' }))
     await expect(downloadVerified({ url: 'https://updates.test/silent.js', sha256: 'x' }, limits))
       .rejects.toBeInstanceOf(TransferStalledError)
     await expect(fetchManifest('https://updates.test/silent.json', 'adapter', limits)).rejects.toBeInstanceOf(TransferStalledError)
@@ -1271,7 +1279,7 @@ describe('a link that stalls without dropping (e2e/updateHostile.e2e.ts)', () =>
     try {
       await vi.waitFor(() => expect(staged).toEqual(['9.9.9']), { timeout: 5_000 })
       expect(attempts).toBe(2)
-      expect(errors).toEqual(['[update] check failed (will retry): TransferStalledError'])
+      expect(errors).toEqual(['[update] check failed (will retry): TransferStalledError TRANSFER_STALLED'])
     } finally { poller.stop() }
     expect(MANIFEST_LIMITS.deadlineMs).toBeLessThan(DOWNLOAD_LIMITS.deadlineMs)
   })

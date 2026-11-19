@@ -193,7 +193,22 @@ describe('startPtyUpdater', () => {
     expect(busy).toBe(2)
     expect(h.events.filter((e) => e.startsWith('prepare'))).toHaveLength(1)
     expect(h.lines.filter((l) => l.includes('terminal host 0.11.0 is ready but the daemon spawn lock is')))
-      .toEqual(['[update] terminal host 0.11.0 is ready but the daemon spawn lock is held (SpawnLockBusyError) — trying again next check'])
+      .toEqual(['[update] terminal host 0.11.0 is ready but the daemon spawn lock is held by an unknown process — trying again next check'])
+  })
+
+  it('a lock this CLI did not make is named in fixed words, never by its path', async () => {
+    let busy = 0
+    const h = harness({
+      withLock: async (fn) => {
+        if (h.events.some((e) => e.startsWith('prepare')) && busy++ === 0) {
+          throw new SpawnLockBusyError(null, 'not a lock this CLI made: C:\\Users\\someone\\.harness\\spawn.lock — remove it by hand (EPERM)')
+        }
+        return fn()
+      },
+    })
+    await vi.waitFor(() => expect(h.staged).toEqual(['0.11.0']), { timeout: 2_000 })
+    expect(h.lines.filter((l) => l.includes('terminal host 0.11.0 is ready but the daemon spawn lock is')))
+      .toEqual(['[update] terminal host 0.11.0 is ready but the daemon spawn lock is not a lock this CLI made — remove it by hand — trying again next check'])
   })
 
   it('readyToStage installs a prepared payload, and returns null when there is none', async () => {
