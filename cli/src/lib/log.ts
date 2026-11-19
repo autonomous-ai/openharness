@@ -7,7 +7,7 @@
  */
 
 import { createHash } from 'node:crypto'
-import { closeSync, existsSync, openSync, readSync, renameSync, statSync, writeFileSync } from 'fs'
+import { closeSync, existsSync, openSync, readSync, renameSync, statSync, writeFileSync } from 'node:fs'
 
 function pad(n: number, width = 2): string {
   return String(n).padStart(width, '0')
