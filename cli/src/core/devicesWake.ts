@@ -7,7 +7,6 @@
  * - **a dial's port**: a USB modem's callout node in /dev (`cu.usbmodem*` on macOS, `ttyACM*` or `ttyUSB*` on
  *   Linux), looked for every two seconds, the dial's own scan's cadence (#909). A listing of /dev and nothing
  *   more: no `ioreg`, no open, no read of a port. The devices' own scan then decides whether it is a dial.
- * - **a device over TCP** (`HARNESS_CABLE_TCP`, development alone), as the core starts: it has no node in /dev.
  * - **Windows USB dial discovery**, as the core starts: its native watcher belongs to the devices' process,
  *   so that process must start before the first dial is connected, without waiting for a Devices request.
  * - **a paired Wi-Fi device**, as the core starts: one the gateway's pairings name as a device, or one its direct
@@ -75,8 +74,6 @@ export interface DevicesWakeDeps {
   cableDisabled?: boolean
   /** `HARNESSD_TEST_DIAL_PORT`: the end-to-end suite's dials. */
   testDialPort?: string
-  /** `HARNESS_CABLE_TCP` names a device over TCP (cable/cableTcp.ts): it has no node in /dev to be looked for. */
-  cableTcp?: boolean
   platform?: NodeJS.Platform
   listDev?: () => string[]
   read?: (file: string) => string
@@ -139,10 +136,6 @@ export function createDevicesWake(deps: DevicesWakeDeps) {
       for (const [service, why] of early.splice(0)) if (outOfProcess.has(service)) want(service, why)
       if (wifiDeviceSaved(deps.dataDir, read)) ask('wifi', 'a paired Wi-Fi device')
       if (!outOfProcess.has('devices') || asked.has('devices') || deps.cableDisabled) return
-      if (deps.cableTcp) {
-        ask('devices', 'HARNESS_CABLE_TCP names a device')
-        return
-      }
       if ((deps.platform ?? process.platform) === 'win32') {
         ask('devices', 'Windows USB dial discovery')
         return

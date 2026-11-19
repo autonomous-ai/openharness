@@ -3,6 +3,9 @@
  * this computer, carrying the frames a dial carries over USB (devices/harness-pro/docs/cable.md). Nothing on the
  * socket proves who listens at the address, so its session answers no permission prompt (cableSession.ts
  * `allowPermissions`), and the fleet keeps it out of everything that is about USB ports (cableFleet.ts `tcp`).
+ * Only the devices' process reads the variable (services/devicesProcess.ts): it dials once that process runs for any of
+ * its own reasons (core/devicesWake.ts: a dial's port, a Devices request, a paired Wi-Fi device). Nothing in the core
+ * starts it for a device over TCP, as an experiment never touches the core.
  */
 import type { CablePort, PortOpener } from './cableSession.js'
 import { SerialLink } from './serial.js'
