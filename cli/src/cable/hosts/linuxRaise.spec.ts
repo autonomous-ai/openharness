@@ -265,8 +265,10 @@ describe('systemLinuxRaise', () => {
     const signature = 'abc_1_x'
     await socket(join(folder, 'hypr', signature, '.socket.sock'))
     session({ XDG_RUNTIME_DIR: folder })
+    // `version`'s exit code alone: no reply of it was recorded (RECORDED_HYPRLAND).
     const { runs, lines, raise } = machine((args) =>
-      args.includes('clients') ? { code: 0, stdout: RECORDED_HYPRLAND.clients.stdout } : undefined)
+      args.includes('version') ? { code: 0, stdout: '' }
+        : args.includes('clients') ? { code: 0, stdout: RECORDED_HYPRLAND.clients.stdout } : undefined)
     await vi.waitFor(() => expect(lines).toEqual(['[device] raise · hyprland']))
     await raise.raise({ app: 'kitty' })
     expect(runs).toContainEqual(['/usr/bin/hyprctl', ['-i', signature, 'clients', '-j'], 10_000])

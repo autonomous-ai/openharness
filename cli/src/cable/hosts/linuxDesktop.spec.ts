@@ -47,6 +47,10 @@ function login({ env = {}, files = {}, tools = TOOLS, answers = {} }: Login = {}
 }
 
 const swayAsk = (path: string) => `/usr/bin/swaymsg -s ${path} -t get_version`
+/** Hyprland answering `version` on each signature's socket. Its exit code alone: no `version` reply was recorded, and one
+ *  with no Hyprland on the socket exits 4 (RECORDED_HYPRLAND.noSocket). */
+const hyprland = (...signatures: string[]): Record<string, Answer> =>
+  Object.fromEntries(signatures.map((signature) => [`/usr/bin/hyprctl -i ${signature} version`, { code: 0, stdout: '' }]))
 const sway = (...paths: string[]): Record<string, Answer> =>
   Object.fromEntries(paths.map((path) => [swayAsk(path), { code: 0, stdout: '{}' }]))
 
@@ -99,19 +103,30 @@ describe('findLinuxDesktop', () => {
       { kind: 'sway', socket: SWAY_SOCKET }],
     // Hyprland
     ['Hyprland from HYPRLAND_INSTANCE_SIGNATURE',
-      { env: { HYPRLAND_INSTANCE_SIGNATURE: HYPR_2 }, files: { [HYPR_SOCKET(HYPR_1)]: socket(), [HYPR_SOCKET(HYPR_2)]: socket() } },
+      { env: { HYPRLAND_INSTANCE_SIGNATURE: HYPR_2 }, files: { [HYPR_SOCKET(HYPR_1)]: socket(), [HYPR_SOCKET(HYPR_2)]: socket() },
+        answers: hyprland(HYPR_1, HYPR_2) },
       { kind: 'hyprland', signature: HYPR_2 }],
-    ['Hyprland from its folder alone', { files: { [HYPR_SOCKET(HYPR_1)]: socket() } }, { kind: 'hyprland', signature: HYPR_1 }],
+    ['Hyprland from its folder alone', { files: { [HYPR_SOCKET(HYPR_1)]: socket() }, answers: hyprland(HYPR_1) }, { kind: 'hyprland', signature: HYPR_1 }],
+    // Hyprland leaves its folder and socket behind when it crashes.
+    ['a Hyprland socket that does not answer is no Hyprland', { files: { [HYPR_SOCKET(HYPR_1)]: socket() } }, NO_SESSION],
+    ['a stale Hyprland folder beside a live one: the live one',
+      { files: { [HYPR_SOCKET(HYPR_1)]: socket(), [HYPR_SOCKET(HYPR_2)]: socket() }, answers: hyprland(HYPR_2) }, { kind: 'hyprland', signature: HYPR_2 }],
+    ['a stale HYPRLAND_INSTANCE_SIGNATURE with its socket beside a live folder: the folder',
+      { env: { HYPRLAND_INSTANCE_SIGNATURE: HYPR_2 }, files: { [HYPR_SOCKET(HYPR_1)]: socket(), [HYPR_SOCKET(HYPR_2)]: socket() }, answers: hyprland(HYPR_1) },
+      { kind: 'hyprland', signature: HYPR_1 }],
     ['a signature out of form is no Hyprland',
       { env: { HYPRLAND_INSTANCE_SIGNATURE: '../../tmp/x' }, files: { '/run/user/tmp/x/.socket.sock': socket() } }, NO_SESSION],
     ['a stale signature beside a live folder: the folder',
-      { env: { HYPRLAND_INSTANCE_SIGNATURE: 'unknown_1795100000_9' }, files: { [HYPR_SOCKET(HYPR_1)]: socket() } }, { kind: 'hyprland', signature: HYPR_1 }],
+      { env: { HYPRLAND_INSTANCE_SIGNATURE: 'unknown_1795100000_9' }, files: { [HYPR_SOCKET(HYPR_1)]: socket() }, answers: hyprland(HYPR_1) },
+      { kind: 'hyprland', signature: HYPR_1 }],
     // hyprctl reads an `-i` value with no `_` as an instance's number (T4's recording).
-    ['a signature with no _ is no Hyprland', { env: { HYPRLAND_INSTANCE_SIGNATURE: 'abc' }, files: { [HYPR_SOCKET('abc')]: socket() } }, NO_SESSION],
-    ['a signature with one _ is no Hyprland', { files: { [HYPR_SOCKET('abc_1')]: socket() } }, NO_SESSION],
-    ['a signature over 128 characters is no Hyprland', { files: { [HYPR_SOCKET(`${'a'.repeat(110)}_1795101025_1726482416`)]: socket() } }, NO_SESSION],
+    ['a signature with no _ is no Hyprland', { env: { HYPRLAND_INSTANCE_SIGNATURE: 'abc' }, files: { [HYPR_SOCKET('abc')]: socket() }, answers: hyprland('abc') },
+      NO_SESSION],
+    ['a signature with one _ is no Hyprland', { files: { [HYPR_SOCKET('abc_1')]: socket() }, answers: hyprland('abc_1') }, NO_SESSION],
+    ['a signature over 128 characters is no Hyprland',
+      { files: { [HYPR_SOCKET(`${'a'.repeat(110)}_1795101025_1726482416`)]: socket() }, answers: hyprland(`${'a'.repeat(110)}_1795101025_1726482416`) }, NO_SESSION],
     ['a Hyprland socket of another uid is no Hyprland',
-      { env: { HYPRLAND_INSTANCE_SIGNATURE: HYPR_1 }, files: { [HYPR_SOCKET(HYPR_1)]: socket(1001) } }, NO_SESSION],
+      { env: { HYPRLAND_INSTANCE_SIGNATURE: HYPR_1 }, files: { [HYPR_SOCKET(HYPR_1)]: socket(1001) }, answers: hyprland(HYPR_1) }, NO_SESSION],
     ['a Hyprland socket with no hyprctl', { files: { [HYPR_SOCKET(HYPR_1)]: socket() }, tools: ['wmctrl'] }, { kind: 'none', why: 'no hyprctl' }],
     // KDE
     ['KDE from DBUS_SESSION_BUS_ADDRESS',
@@ -139,7 +154,7 @@ describe('findLinuxDesktop', () => {
     ['GNOME from the runtime bus alone', { files: { [`${RUNTIME}/bus`]: socket(), [`${RUNTIME}/wayland-0`]: socket() }, answers: gnome() },
       { kind: 'gnome', bus: BUS }],
     ['GNOME without the extension, from WAYLAND_DISPLAY',
-      { env: { WAYLAND_DISPLAY: 'wayland-0' }, files: { [`${RUNTIME}/bus`]: socket() }, answers: gnome(BUS, false) },
+      { env: { WAYLAND_DISPLAY: 'wayland-0' }, files: { [`${RUNTIME}/bus`]: socket(), [`${RUNTIME}/wayland-0`]: socket() }, answers: gnome(BUS, false) },
       { kind: 'none', why: 'gnome without the extension' }],
     ['GNOME without the extension, from the Wayland socket alone',
       { files: { [`${RUNTIME}/bus`]: socket(), [`${RUNTIME}/wayland-0`]: socket() }, answers: gnome(BUS, false) },
@@ -147,7 +162,8 @@ describe('findLinuxDesktop', () => {
     ['GNOME without the extension on X11 is X11',
       { env: { DISPLAY: ':0' }, files: { [`${RUNTIME}/bus`]: socket() }, answers: gnome(BUS, false) }, { kind: 'x11', display: ':0' }],
     ['GNOME with no gdbus is an unknown compositor',
-      { env: { WAYLAND_DISPLAY: 'wayland-0' }, files: { [`${RUNTIME}/bus`]: socket() }, tools: ['dbus-send', 'wmctrl'], answers: gnome() },
+      { env: { WAYLAND_DISPLAY: 'wayland-0' }, files: { [`${RUNTIME}/bus`]: socket(), [`${RUNTIME}/wayland-0`]: socket() }, tools: ['dbus-send', 'wmctrl'],
+        answers: gnome() },
       { kind: 'none', why: 'unknown compositor' }],
     // X11
     ['X11 from DISPLAY', { env: { DISPLAY: ':1.0' } }, { kind: 'x11', display: ':1.0' }],
@@ -170,12 +186,20 @@ describe('findLinuxDesktop', () => {
     ['an auth file of another uid is none', { env: { DISPLAY: ':0' }, files: { [`${RUNTIME}/xauth_AbCdEf`]: file(1001) } },
       { kind: 'x11', display: ':0' }],
     // Nothing above
-    ['a DISPLAY beside WAYLAND_DISPLAY is an unknown compositor', { env: { DISPLAY: ':0', WAYLAND_DISPLAY: 'wayland-0' } },
+    ['a DISPLAY beside WAYLAND_DISPLAY is an unknown compositor',
+      { env: { DISPLAY: ':0', WAYLAND_DISPLAY: 'wayland-0' }, files: { [`${RUNTIME}/wayland-0`]: socket() } }, { kind: 'none', why: 'unknown compositor' }],
+    ['an absolute WAYLAND_DISPLAY is its socket', { env: { DISPLAY: ':0', WAYLAND_DISPLAY: '/work/wl' }, files: { '/work/wl': socket() } },
       { kind: 'none', why: 'unknown compositor' }],
-    ['a DISPLAY beside a Wayland socket alone is an unknown compositor', { env: { DISPLAY: ':0' }, files: { [`${RUNTIME}/wayland-1`]: socket() } },
-      { kind: 'none', why: 'unknown compositor' }],
+    ['a WAYLAND_DISPLAY with no socket is no Wayland', { env: { DISPLAY: ':0', WAYLAND_DISPLAY: 'wayland-0' } }, { kind: 'x11', display: ':0' }],
+    ['a WAYLAND_DISPLAY of another uid is no Wayland',
+      { env: { DISPLAY: ':0', WAYLAND_DISPLAY: 'wayland-1' }, files: { [`${RUNTIME}/wayland-1`]: socket(1001) } }, { kind: 'x11', display: ':0' }],
+    // A compositor that crashed leaves its socket: the session's own variables say which it runs now.
+    ['a DISPLAY beside a Wayland socket alone is X11', { env: { DISPLAY: ':0' }, files: { [`${RUNTIME}/wayland-1`]: socket() } },
+      { kind: 'x11', display: ':0' }],
+    ['a Wayland socket beside an X socket, with neither variable, is an unknown compositor',
+      { files: { [`${RUNTIME}/wayland-0`]: socket(), '/tmp/.X11-unix/X0': socket() } }, { kind: 'none', why: 'unknown compositor' }],
     ['an empty WAYLAND_DISPLAY is no Wayland', { env: { DISPLAY: ':0', WAYLAND_DISPLAY: '' } }, { kind: 'x11', display: ':0' }],
-    ['a Wayland socket of another uid is no Wayland', { env: { DISPLAY: ':0' }, files: { [`${RUNTIME}/wayland-1`]: socket(1001) } },
+    ['a Wayland socket of another uid is no Wayland', { files: { [`${RUNTIME}/wayland-1`]: socket(1001), '/tmp/.X11-unix/X0': socket() } },
       { kind: 'x11', display: ':0' }],
     ['nothing at all', {}, NO_SESSION],
     ['a relative XDG_RUNTIME_DIR is ignored',
@@ -190,6 +214,13 @@ describe('findLinuxDesktop', () => {
     const { calls, find } = login({ files: Object.fromEntries(paths.map((path) => [path, socket()])), answers: sway(paths[4]) })
     await expect(find()).resolves.toEqual(NO_SESSION)
     expect(calls.map(({ args }) => args[1])).toEqual(paths.slice(0, 4))
+  })
+
+  it('asks at most four Hyprland sockets', async () => {
+    const signatures = [1, 2, 3, 4, 5].map((n) => `unknown_179510102${n}_1`)
+    const { calls, find } = login({ files: Object.fromEntries(signatures.map((signature) => [HYPR_SOCKET(signature), socket()])), answers: hyprland(signatures[4]) })
+    await expect(find()).resolves.toEqual(NO_SESSION)
+    expect(calls.map(({ args }) => args[1])).toEqual(signatures.slice(0, 4))
   })
 
   it('every command runs within 10 s', async () => {
