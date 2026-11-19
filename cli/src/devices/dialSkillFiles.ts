@@ -1,12 +1,14 @@
 // The dial skill's two files in the daemon's data folder, which outlive the devices' process. dial-skill.json says what
-// `harness device <engine> disable`, `harness device vscode disable` and `harness device cursor disable` removed, the
-// skills folders the command wrote into, the Orca homes its `enable` turned Claude Code's plugin on in (`pluginHomes`),
-// and that a connect of Orca's own plugin once succeeded (`orcaConnected`); its one writer is that command, and the
-// devices service leaves what it removed alone. dial-setup.json is the devices service's own record of a dial's setup:
-// a dial attached here once, the CLI versions that last set Claude Code's plugin and Harness's extension in VS Code and
-// in Cursor up, the skills folders it wrote into, and the Orca homes it turned the plugin on in (`pluginHomes`); its
-// one writer is that service. A `disable` finds every folder in both. Each file keeps its own list of Orca homes, so
-// neither has a second writer, and a home in either counts as turned on once.
+// `harness device <engine|vscode|cursor|orca> disable` removed (`removed.orca` is Orca's own plugin), the skills folders
+// the command wrote into, the Orca homes its `enable` turned Claude Code's plugin on in (`pluginHomes`), and that an
+// `orca enable` (or 0.1.9's connect) set Orca's own plugin up (`orcaConnected`); its one writer is that command, and
+// the devices service leaves what it removed alone. dial-setup.json is the devices service's own record of a dial's
+// setup: a dial attached here once, the CLI versions that last set Claude Code's plugin and Harness's extension in VS
+// Code and in Cursor up, the version of Orca's plugin that last set it up or found it removed (`orca`) and the one held
+// for asking more access than Harness approves (`orcaHeld`), the skills folders it wrote into, and the Orca homes it
+// turned Claude Code's plugin on in (`pluginHomes`); its one writer is that service. A `disable` finds every folder in
+// both. Each file keeps its own list of Orca homes, so neither has a second writer, and a home in either counts as
+// turned on once.
 import { randomUUID } from 'node:crypto'
 import { closeSync, fsyncSync, openSync, readSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
@@ -32,12 +34,12 @@ const VERSION = /^[0-9A-Za-z.+-]{1,64}$/
 
 export interface DialSkillHomes { claude: string[]; codex: string[] }
 
-/** What `harness device <engine> disable`, `harness device vscode disable` and `harness device cursor disable` removed;
- *  a key is absent when it removed nothing. */
-export interface DialRemoved { claude?: true; codex?: true; vscode?: true; cursor?: true }
+/** What `harness device <engine|vscode|cursor|orca> disable` removed; a key is absent when it removed nothing. */
+export interface DialRemoved { claude?: true; codex?: true; vscode?: true; cursor?: true; orca?: true }
 
-/** [pluginHomes]: the Orca homes the devices turned Claude Code's plugin on in, by real path. */
-export interface DialSetupRecord { dial: boolean; plugin?: string; vscode?: string; cursor?: string; homes: DialSkillHomes; pluginHomes: string[] }
+/** [orca]: the version of Orca's plugin that last set it up or found it removed; [orcaHeld]: the one held for asking
+ *  more access. [pluginHomes]: the Orca homes the devices turned Claude Code's plugin on in, by real path. */
+export interface DialSetupRecord { dial: boolean; plugin?: string; vscode?: string; cursor?: string; orca?: string; orcaHeld?: string; homes: DialSkillHomes; pluginHomes: string[] }
 
 /** A file read: [unread] when it is there but could not be read (EACCES, EIO, EMFILE), so it reads as empty, and
  *  nothing may be written from that read: it would lose what the file holds. */
@@ -153,6 +155,7 @@ const removedOf = (file: Record<string, unknown>): DialRemoved => {
   if (marks.codex === true) removed.codex = true
   if (marks.vscode === true) removed.vscode = true
   if (marks.cursor === true) removed.cursor = true
+  if (marks.orca === true) removed.orca = true
   return removed
 }
 
@@ -183,7 +186,7 @@ const rewriteSetting = (dataDir: string, change: (setting: DialSetting) => void)
   change(setting)
   const { removed, homes, pluginHomes, orcaConnected } = setting
   return writeJson(join(dataDir, DIAL_SKILL_FILE), {
-    ...(removed.claude || removed.codex || removed.vscode || removed.cursor ? { removed } : {}),
+    ...(Object.keys(removed).length ? { removed } : {}),
     ...(homes.claude.length || homes.codex.length ? { homes } : {}),
     ...(pluginHomes.length ? { pluginHomes } : {}),
     ...(orcaConnected ? { orcaConnected } : {}),
@@ -196,7 +199,7 @@ export function writeRemoved(dataDir: string, what: keyof DialRemoved, removed: 
   return rewriteSetting(dataDir, (setting) => {
     if (removed) setting.removed[what] = true
     else delete setting.removed[what]
-    // An editor's removal has no skills folders: only an engine's are written.
+    // An editor's removal, or Orca's plugin's, has no skills folders: only an engine's are written.
     if (written && (what === 'claude' || what === 'codex')) setting.homes[what] = homesOf(written)
   })
 }
@@ -209,13 +212,14 @@ export function writePluginHomes(dataDir: string, homes: string[]): string | und
   })
 }
 
-/** Whether a connect of Orca's plugin once succeeded: Harness then offers it no more. Only true counts. */
+/** Whether Orca's plugin was set up by an `enable` (or 0.1.9's connect): one the person removed in Orca since is then
+ *  not set up again. Only true counts. */
 export function readOrcaConnected(dataDir: string): Read<{ connected: boolean }> {
   return orUnread(() => ({ connected: settingOf(dataDir).orcaConnected === true }), { connected: false })
 }
 
 /** undefined once saved, else the error's code. Nothing clears it: a person who removed the plugin in Orca is not
- *  offered it again. */
+ *  set up again. */
 export function writeOrcaConnected(dataDir: string): string | undefined {
   return rewriteSetting(dataDir, (setting) => {
     setting.orcaConnected = true
@@ -231,6 +235,8 @@ const setupOf = (value: unknown): DialSetupRecord => {
     ...(typeof file.plugin === 'string' && VERSION.test(file.plugin) ? { plugin: file.plugin } : {}),
     ...(typeof file.vscode === 'string' && VERSION.test(file.vscode) ? { vscode: file.vscode } : {}),
     ...(typeof file.cursor === 'string' && VERSION.test(file.cursor) ? { cursor: file.cursor } : {}),
+    ...(typeof file.orca === 'string' && VERSION.test(file.orca) ? { orca: file.orca } : {}),
+    ...(typeof file.orcaHeld === 'string' && VERSION.test(file.orcaHeld) ? { orcaHeld: file.orcaHeld } : {}),
     homes: writtenOf(file),
     pluginHomes: homesOf(file.pluginHomes),
   }
@@ -240,9 +246,9 @@ export function readSetup(dataDir: string): Read<DialSetupRecord> {
   return orUnread(() => setupOf(readJson(join(dataDir, DIAL_SETUP_FILE), MAX_FILE_BYTES)), setupOf(undefined))
 }
 
-/** undefined once saved; else the error's code: EINVAL for a plugin, VS Code or Cursor value a read would drop, so the
- *  plugin or the extension would read as never set up. */
+/** undefined once saved; else the error's code: EINVAL for a version a read would drop, so the plugin or the extension
+ *  would read as never set up, or Orca's plugin as never held. */
 export function writeSetup(dataDir: string, record: DialSetupRecord): string | undefined {
-  if ([record.plugin, record.vscode, record.cursor].some((version) => version !== undefined && !VERSION.test(version))) return 'EINVAL'
+  if ([record.plugin, record.vscode, record.cursor, record.orca, record.orcaHeld].some((version) => version !== undefined && !VERSION.test(version))) return 'EINVAL'
   return writeJson(join(dataDir, DIAL_SETUP_FILE), setupOf(record))
 }
