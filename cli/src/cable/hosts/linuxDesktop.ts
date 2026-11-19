@@ -33,8 +33,9 @@ export interface LinuxDesktopDeps {
 
 type Why = Extract<LinuxDesktop, { kind: 'none' }>['why']
 
-// sway names its socket for its uid and pid, Hyprland its folder for its instance; one left by a compositor that crashed
-// stays. Four of each bound the calls that ask whether one answers a folder of stale ones could cost.
+// sway names its socket for its uid and pid, Hyprland its folder for its instance, and one left by a compositor that
+// crashed stays: each is asked whether its compositor answers, four of each at most, which bounds what a folder of stale
+// ones costs.
 const SWAY_SOCKET = /^sway-ipc\.([0-9]+)\.[0-9]+\.sock$/
 const ASKED = 4
 // Hyprland's `<commit>_<unix time>_<random>`: `hyprctl -i` reads a value with no `_` as an instance's number, so a
