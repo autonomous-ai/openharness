@@ -292,9 +292,11 @@ export class ClaudeAppStore {
         top = newest([...top, time])
         continue
       }
-      // Two files of one session: the newest activity is kept, the other counted.
+      // Two files of one session: the newest sort time is kept, then the newest activity, the other counted. Sort time
+      // first: a copy whose activity is newer but whose mtime is older can lie past where the walk stops, so choosing
+      // it would depend on how many other sessions there are.
       skipped++
-      if (other.session.lastActivityAt >= gave.lastActivityAt) continue
+      if (other.time > time || (other.time === time && other.session.lastActivityAt >= gave.lastActivityAt)) continue
       kept.set(gave.sessionId, { session: gave, name: file.name, time })
       top = newest([...kept.values()].map((one) => one.time))
     }
