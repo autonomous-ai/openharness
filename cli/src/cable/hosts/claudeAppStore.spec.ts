@@ -335,11 +335,12 @@ describe.skipIf(process.platform === 'win32')('the Claude app\'s store', () => {
       expect(localIds(read)).toEqual(range(1, 16).map(local))
     })
 
-    it('a lastActivityAt ahead of the file\'s mtime sorts by the mtime', async () => {
+    it('a lastActivityAt ahead of the file\'s mtime sorts by the mtime, and is handed out as the mtime', async () => {
+      // A time in the future would pin the session first on the dial's ring.
       const s = await twenty({ 2: { lastActivityAt: T + 9_000_000 } })
       for (const read of [s.first, await s.reader.read()]) {
         expect(localIds(read)).toEqual(range(1, 16).map(local))
-        expect(read.sessions[1]!.lastActivityAt).toBe(T + 9_000_000)
+        expect(read.sessions[1]!.lastActivityAt).toBe(T - 2000)
       }
     })
   })
