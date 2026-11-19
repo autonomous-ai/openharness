@@ -4,35 +4,50 @@
  * mode 0600 (pairs are rare — no debounce needed). The identity key is the root of trust; losing it
  * forces every browser to re-pair.
  */
-import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'fs'
+import { mkdirSync, readdirSync, rmSync } from 'fs'
 import { join } from 'path'
 import { env } from '../../config/env.js'
+import { atomicWriteJson, jsonArray, jsonObject, probeState, readState, requireState, type AtomicWriteOptions, type TrustFile } from '../secureState.js'
 import { newIdentity, newPairId, b64e, b64d, fingerprint, type Identity, type PairRole } from './core.js'
 import { stretchPassword } from './passwordPake.js'
 
 const DIR = join(env.ADAPTER_DATA_DIR, 'e2e')
 const IDENTITY_FILE = join(DIR, 'identity.json')
 const PAIRED_FILE = join(DIR, 'paired.json')
+const REMOTE_PASSWORD_FILE = join(DIR, 'remotePassword.json')
+
+/** identity.json's content: a key pair of 32 bytes a side. Anything else is not this computer's identity. */
+function parseIdentity(text: string): Identity {
+  const raw = jsonObject(text)
+  if (typeof raw.priv !== 'string' || typeof raw.pub !== 'string') throw new TypeError('not an identity')
+  const identity = { priv: b64d(raw.priv), pub: b64d(raw.pub) }
+  if (identity.priv.length !== 32 || identity.pub.length !== 32) throw new TypeError('not an identity')
+  return identity
+}
+
+/** The trust files this store keeps, each with the parse it reads it with. */
+export function e2eeStoreFiles(): TrustFile[] {
+  return [
+    { file: IDENTITY_FILE, parse: parseIdentity },
+    { file: PAIRED_FILE, parse: jsonArray },
+    { file: REMOTE_PASSWORD_FILE, parse: jsonObject },
+  ]
+}
 
 /** This computer's identity public key (base64) as already on disk, or null. Unlike `E2eeStore.init()`
  *  it never creates a key and writes nothing, so a read-only command can show the fingerprint without
  *  minting an identity as a side effect. */
 export function peekIdentityPub(): string | null {
-  try {
-    const raw = JSON.parse(readFileSync(IDENTITY_FILE, 'utf-8')) as { pub?: unknown }
-    return typeof raw.pub === 'string' && raw.pub ? raw.pub : null
-  } catch { return null }
+  const identity = peekIdentity()
+  return identity ? b64e(identity.pub) : null
 }
 
 /** This computer's identity keypair as already on disk, or null. Like `peekIdentityPub` it never creates one: a key
- *  made by a command that only needs to sign with the existing one would be on no device key log. */
+ *  made by a command that only needs to sign with the existing one would be on no device key log. Logs nothing: a
+ *  read-only command says nothing of a file it does not change. */
 export function peekIdentity(): Identity | null {
-  try {
-    const raw = JSON.parse(readFileSync(IDENTITY_FILE, 'utf-8')) as { priv?: unknown; pub?: unknown }
-    if (typeof raw.priv !== 'string' || typeof raw.pub !== 'string' || !raw.priv || !raw.pub) return null
-    const identity = { priv: b64d(raw.priv), pub: b64d(raw.pub) }
-    return identity.priv.length === 32 && identity.pub.length === 32 ? identity : null
-  } catch { return null }
+  const read = probeState(IDENTITY_FILE, parseIdentity)
+  return read.state === 'ok' ? read.value : null
 }
 
 /** Whether an identity was retired here (`identity.json.removed-*`, left by signing this device out of
@@ -40,7 +55,6 @@ export function peekIdentity(): Identity | null {
 export function identitySpent(): boolean {
   try { return readdirSync(DIR).some((f) => f.startsWith('identity.json.removed-')) } catch { return false }
 }
-const REMOTE_PASSWORD_FILE = join(DIR, 'remotePassword.json')
 
 // Remote-password lockout tuning (anti online-guessing for a reusable, human-memorable secret — see
 // notePwFailure()/pwLockedUntil()). Distinct regime from the live pairing code's RATE_MAX=3/5min in
@@ -80,72 +94,87 @@ export interface PairedClient {
 /** What a password-linked peer is: another harness machine (which also serves, so it can be dialed back)
  *  or a viewer app (mobile / viewer desktop — dial-out only). */
 export type PeerKind = 'machine' | 'viewer'
-/** How long `init()` waits for another process's just-created identity file to be written (10 × 20 ms). */
-const IDENTITY_READ_RETRIES = 10
-const IDENTITY_READ_RETRY_MS = 20
-const sleepSync = (ms: number): void => { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms) }
 
-function writeSecure(file: string, data: unknown, flag: 'w' | 'wx' = 'w'): void {
+/** Every file here is a trust file: written whole, never over one another account could write. */
+function writeTrustFile(file: string, data: unknown, options?: AtomicWriteOptions): boolean {
   mkdirSync(DIR, { recursive: true, mode: 0o700 })
-  writeFileSync(file, JSON.stringify(data, null, 2), { mode: 0o600, flag })
+  return atomicWriteJson(file, data, 'trust', options)
+}
+
+/**
+ * The identity on disk, or a new one. `harness login` and a booting daemon can both get here: the new key is
+ * published only if no file is there yet, so exactly one is ever minted and the loser reads the winner's. A file that
+ * cannot be read is never replaced (a new key would lose every pairing): `requireState` throws.
+ */
+function identityOnDisk(): Identity {
+  for (;;) {
+    const found = requireState(IDENTITY_FILE, parseIdentity)
+    if (found) return found
+    const id = newIdentity()
+    if (writeTrustFile(IDENTITY_FILE, { priv: b64e(id.priv), pub: b64e(id.pub) }, { exclusive: true })) return id
+    // Another process published its key first: the next read finds it.
+  }
+}
+
+function pairedSet(entries: unknown[]): Map<string, PairedClient> {
+  const paired = new Map<string, PairedClient>()
+  for (const p of entries as Array<(PairedClient & { role?: PairRole }) | null>) {
+    if (p?.identityPub) paired.set(p.identityPub, { ...p, role: p.role === 'device' ? 'device' : 'web' })
+  }
+  return paired
+}
+
+/** A record of another shape or version is no password, as it always was. */
+function passwordRecord(raw: Record<string, unknown> | null): RemotePasswordRecord | null {
+  if (raw?.v !== 1 || typeof raw.stretched !== 'string' || typeof raw.setAt !== 'number') return null
+  return {
+    v: 1,
+    stretched: raw.stretched,
+    setAt: raw.setAt,
+    recentFailures: Array.isArray(raw.recentFailures) ? raw.recentFailures.filter((n): n is number => typeof n === 'number') : [],
+    lockedUntil: typeof raw.lockedUntil === 'number' ? raw.lockedUntil : undefined,
+    lockoutCount: typeof raw.lockoutCount === 'number' ? raw.lockoutCount : undefined,
+  }
 }
 
 export class E2eeStore {
   private identity: Identity | null = null
   private paired = new Map<string, PairedClient>() // key = identityPub (base64)
   private remotePassword: RemotePasswordRecord | null = null
+  // The file could not be read at the last load: what is held above is the fail-closed empty value, not the
+  // file's, so a change reads it again first and is refused while it still cannot be read.
+  private pairedUnreadable = false
+  private remotePasswordUnreadable = false
 
   /** Load or create the computer identity keypair; load the paired set + remote-password state.
    *  Idempotent. */
   init(): Identity {
     if (this.identity) return this.identity
-    const readIdentity = (): Identity => {
-      const raw = JSON.parse(readFileSync(IDENTITY_FILE, 'utf-8')) as { priv: string; pub: string }
-      return { priv: b64d(raw.priv), pub: b64d(raw.pub) }
-    }
-    // `harness login` and a booting daemon can both get here: exclusive create so exactly one key is
-    // ever minted, and the loser adopts the winner's instead of overwriting it. The create makes the
-    // file before its bytes land, so a loser that reads it empty waits a moment and reads again; only
-    // a file still unreadable after that is taken as broken and replaced, as before.
-    for (let attempt = 0; !this.identity; attempt++) {
-      try { this.identity = readIdentity(); break } catch { /* missing, half-written or broken */ }
-      const id = newIdentity()
-      try {
-        writeSecure(IDENTITY_FILE, { priv: b64e(id.priv), pub: b64e(id.pub) }, 'wx')
-        this.identity = id
-      } catch (err) {
-        if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err
-        if (attempt < IDENTITY_READ_RETRIES) { sleepSync(IDENTITY_READ_RETRY_MS); continue }
-        writeSecure(IDENTITY_FILE, { priv: b64e(id.priv), pub: b64e(id.pub) })
-        this.identity = id
-      }
-    }
+    this.identity = identityOnDisk()
     this.reloadPaired()
-    try {
-      const raw = JSON.parse(readFileSync(REMOTE_PASSWORD_FILE, 'utf-8')) as Partial<RemotePasswordRecord>
-      if (raw?.v === 1 && typeof raw.stretched === 'string' && typeof raw.setAt === 'number') {
-        this.remotePassword = {
-          v: 1,
-          stretched: raw.stretched,
-          setAt: raw.setAt,
-          recentFailures: Array.isArray(raw.recentFailures) ? raw.recentFailures.filter((n) => typeof n === 'number') : [],
-          lockedUntil: typeof raw.lockedUntil === 'number' ? raw.lockedUntil : undefined,
-          lockoutCount: typeof raw.lockoutCount === 'number' ? raw.lockoutCount : undefined,
-        }
-      }
-    } catch { /* none yet */ }
+    const password = readState(REMOTE_PASSWORD_FILE, 'trust', jsonObject)
+    this.remotePasswordUnreadable = password.state === 'unreadable'
+    this.remotePassword = passwordRecord(password.state === 'ok' ? password.value : null)
     return this.identity
   }
 
   /** Read paired.json again, as it is on disk now (accountTrust.ts swaps it when the account changes). */
   reloadPaired(): void {
-    this.paired.clear()
-    try {
-      const arr = JSON.parse(readFileSync(PAIRED_FILE, 'utf-8')) as Array<PairedClient & { role?: PairRole }>
-      for (const p of arr) {
-        if (p?.identityPub) this.paired.set(p.identityPub, { ...p, role: p.role === 'device' ? 'device' : 'web' })
-      }
-    } catch { /* none yet */ }
+    const read = readState(PAIRED_FILE, 'trust', jsonArray)
+    this.pairedUnreadable = read.state === 'unreadable'
+    this.paired = pairedSet(read.state === 'ok' ? read.value : [])
+  }
+
+  private requirePaired(): void {
+    if (!this.pairedUnreadable) return
+    this.paired = pairedSet(requireState(PAIRED_FILE, jsonArray) ?? [])
+    this.pairedUnreadable = false
+  }
+
+  private requireRemotePassword(): void {
+    if (!this.remotePasswordUnreadable) return
+    this.remotePassword = passwordRecord(requireState(REMOTE_PASSWORD_FILE, jsonObject))
+    this.remotePasswordUnreadable = false
   }
 
   getIdentity(): Identity {
@@ -174,6 +203,7 @@ export class E2eeStore {
   }
 
   addPaired(identityPubB64: string, label: string, at: number, role: PairRole = 'web', peer?: { machineId?: string; kind?: PeerKind; shared?: boolean; sharedWith?: string }): void {
+    this.requirePaired()
     this.paired.set(identityPubB64, {
       identityPub: identityPubB64, label, pairedAt: at, role,
       ...(peer?.machineId ? { machineId: peer.machineId } : {}),
@@ -181,17 +211,19 @@ export class E2eeStore {
       ...(peer?.shared ? { shared: true as const } : {}),
       ...(peer?.shared && peer.sharedWith ? { sharedWith: peer.sharedWith } : {}),
     })
-    writeSecure(PAIRED_FILE, [...this.paired.values()])
+    writeTrustFile(PAIRED_FILE, [...this.paired.values()])
   }
 
   removePaired(identityPubB64: string): void {
-    if (this.paired.delete(identityPubB64)) writeSecure(PAIRED_FILE, [...this.paired.values()])
+    this.requirePaired()
+    if (this.paired.delete(identityPubB64)) writeTrustFile(PAIRED_FILE, [...this.paired.values()])
   }
 
   /** Revoke ALL paired browsers. Returns the number removed. */
   clear(): number {
+    this.requirePaired()
     const n = this.paired.size
-    if (n) { this.paired.clear(); writeSecure(PAIRED_FILE, []) }
+    if (n) { this.paired.clear(); writeTrustFile(PAIRED_FILE, []) }
     return n
   }
 
@@ -212,16 +244,18 @@ export class E2eeStore {
    *  Rotating the password always clears any existing lockout — a fresh secret invalidates whatever
    *  guessing history applied to the old one. */
   async setRemotePassword(machineId: string, password: string): Promise<{ fingerprint: string }> {
+    this.requireRemotePassword()
     const stretched = await stretchPassword(password, machineId)
     const record: RemotePasswordRecord = { v: 1, stretched: b64e(stretched), setAt: Date.now(), recentFailures: [] }
     this.remotePassword = record
-    writeSecure(REMOTE_PASSWORD_FILE, record)
+    writeTrustFile(REMOTE_PASSWORD_FILE, record)
     return { fingerprint: fingerprint(stretched) }
   }
 
   /** Remove the remote password. Until a new one is set, `harness link connect` against this machine
    *  always fails with NO_REMOTE_PASSWORD (checked before any crypto runs). */
   clearRemotePassword(): void {
+    this.requireRemotePassword()
     this.remotePassword = null
     try { rmSync(REMOTE_PASSWORD_FILE, { force: true }) } catch { /* already gone */ }
   }
@@ -251,6 +285,7 @@ export class E2eeStore {
    *  repeated lockouts (not just repeated failures) escalate the wait. No-op if no password is set —
    *  there is nothing to guess. */
   notePwFailure(): { lockedUntil: number | null } {
+    this.requireRemotePassword()
     const record = this.remotePassword
     if (!record) return { lockedUntil: null }
     const now = Date.now()
@@ -264,18 +299,19 @@ export class E2eeStore {
       record.lockedUntil = now + Math.min(PW_LOCKOUT_BASE_MS * 2 ** (count - 1), PW_LOCKOUT_MAX_MS)
       record.recentFailures = [] // fresh window once locked — it takes another full THRESHOLD after unlock
     }
-    writeSecure(REMOTE_PASSWORD_FILE, record)
+    writeTrustFile(REMOTE_PASSWORD_FILE, record)
     return { lockedUntil: record.lockedUntil ?? null }
   }
 
   /** A successful pairing proves the password is known to its owner's machines: the failures and the
    *  lockout escalation that came before it no longer describe anyone's guessing, so both start over. */
   notePwSuccess(): void {
+    this.requireRemotePassword()
     const record = this.remotePassword
     if (!record || (record.recentFailures.length === 0 && !record.lockoutCount)) return
     record.recentFailures = []
     record.lockoutCount = 0
-    writeSecure(REMOTE_PASSWORD_FILE, record)
+    writeTrustFile(REMOTE_PASSWORD_FILE, record)
   }
 
   /** Current lockout, or null if unset/expired. An expired `lockedUntil` is treated as not-locked

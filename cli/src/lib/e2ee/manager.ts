@@ -19,6 +19,8 @@ import * as C from './core.js'
 import { parseTerminalBinaryEnvelope, type TerminalBinaryClear } from '../terminalBinary.js'
 import { deriveTerminalBinaryKey, openTerminalBinary, sealTerminalBinary } from './terminalSeal.js'
 import { E2eeStore, type PeerKind } from './store.js'
+import { errorKind } from '../log.js'
+import { StateFileUnreadable } from '../secureState.js'
 import { pwCpaceGenerator, pwContext } from './passwordPake.js'
 import { ReplayWindow } from './replayWindow.js'
 
@@ -729,8 +731,11 @@ export class E2eeManager {
         resolve({ ok: true, label: slot.label, fingerprint: fp })
         return true
       }
-    } catch {
-      this.failPair('CODE_MISMATCH')
+    } catch (error) {
+      if (!(error instanceof StateFileUnreadable)) { this.failPair('CODE_MISMATCH'); return true }
+      // This machine's own file failed, not the code: no wrong-code answer, and no try of the rate limit used.
+      console.warn(`[e2ee] the pairing could not be saved: ${errorKind(error)}`)
+      this.failPair('TIMEOUT', false)
     }
     return true
   }
@@ -818,8 +823,11 @@ export class E2eeManager {
         this.clearPwSlot(connId)
         return true
       }
-    } catch {
-      this.failPwPair(connId, 'WRONG_PASSWORD', true)
+    } catch (error) {
+      if (!(error instanceof StateFileUnreadable)) { this.failPwPair(connId, 'WRONG_PASSWORD', true); return true }
+      // This machine's own file failed, not the password: no wrong-password answer, and nothing toward the lockout.
+      console.warn(`[e2ee] the pairing could not be saved: ${errorKind(error)}`)
+      this.failPwPair(connId, 'TIMEOUT')
     }
     return true
   }
@@ -968,10 +976,11 @@ export class E2eeManager {
     if (slot.active?.roundTimer) clearTimeout(slot.active.roundTimer)
     if (slot.active) slot.active.roundTimer = setTimeout(() => this.failPair('TIMEOUT'), ROUND_TIMEOUT_MS)
   }
-  private failPair(error: Extract<PairResult, { ok: false }>['error']): void {
+  /** `counted`: false only for a failure that proves nothing about the code (this machine could not save it). */
+  private failPair(error: Extract<PairResult, { ok: false }>['error'], counted = true): void {
     const slot = this.slot
     if (!slot?.active) return
-    this.attempts.push(this.now()) // a failed handshake counts toward the anti-guessing rate limit
+    if (counted) this.attempts.push(this.now()) // a failed handshake counts toward the anti-guessing rate limit
     const resolve = slot.active.resolve
     if (error === 'CODE_MISMATCH') {
       this.deps.sendTo(slot.connId, { type: 'e2e_pake', payload: { pairId: slot.pairIdB64, round: 5, error } })
