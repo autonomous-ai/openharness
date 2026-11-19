@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import type * as CodexProfilesModule from './codexProfiles.js'
@@ -48,6 +48,7 @@ describe('codexProfiles', () => {
   })
 
   afterEach(() => {
+    vi.restoreAllMocks()
     rmSync(dataDir, { recursive: true, force: true })
     rmSync(home, { recursive: true, force: true })
     delete process.env.ADAPTER_DATA_DIR
@@ -118,6 +119,40 @@ describe('codexProfiles', () => {
     chmodSync(file, 0o660)
     expect(() => linkCodexProfile(join(home, '.codex-linked'))).toThrow('state file is group/world writable')
     expect(statSync(file).mode & 0o777).toBe(0o660)
+  })
+
+  it('a torn profile list is set aside, not written over', async () => {
+    const { linkCodexProfile } = await loadModule()
+    const file = join(dataDir, 'codex-profiles.json')
+    // What a reader saw while another process was writing it.
+    writeFileSync(file, '["/a', { mode: 0o600 })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const folder = join(home, '.codex-linked')
+    mkdirSync(folder)
+
+    expect(linkCodexProfile(folder)).toEqual({ path: folder, label: '.codex-linked' })
+
+    expect(readFileSync(`${file}.unreadable`, 'utf8')).toBe('["/a')
+    expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual([folder])
+    expect(warn).toHaveBeenCalledWith(
+      '[state] codex-profiles.json could not be read (not valid JSON); kept as codex-profiles.json.unreadable, starting empty.')
+  })
+
+  // Windows has no mode bits to refuse.
+  it.skipIf(process.platform === 'win32')('a list another account could write is not set aside', async () => {
+    const { linkCodexProfile, listCodexProfiles } = await loadModule()
+    const file = join(dataDir, 'codex-profiles.json')
+    const folder = join(home, '.codex-linked')
+    mkdirSync(folder)
+    writeFileSync(file, JSON.stringify([folder]))
+    chmodSync(file, 0o664)
+    expect(listCodexProfiles([], emptyDiscovery)).toEqual([])
+
+    writeFileSync(file, '["/a')
+    expect(listCodexProfiles([], emptyDiscovery)).toEqual([])
+    expect(existsSync(`${file}.unreadable`)).toBe(false)
+    expect(() => linkCodexProfile(folder)).toThrow('state file is group/world writable')
+    expect(readFileSync(file, 'utf8')).toBe('["/a')
   })
 
   it('linkCodexProfile refuses a folder that does not exist', async () => {

@@ -469,3 +469,51 @@ describe('that Orca was connected', () => {
     expect(readFileSync(file, 'utf8')).toBe(before)
   })
 })
+
+describe('a file that cannot be parsed', () => {
+  const empty = { dial: false, homes: { claude: [], codex: [] }, pluginHomes: [] }
+  const setAside = (base: string): string => `[state] ${base} could not be read (not valid JSON); kept as ${base}.unreadable, starting empty.`
+  const home = '/Users/someone/Library/Application Support/orca/0/claude'
+
+  it('a torn dial-skill.json is set aside, not written over', () => {
+    const dataDir = aDataDir()
+    const file = join(dataDir, DIAL_SKILL_FILE)
+    // What a reader saw while another process was writing it.
+    writeFileSync(file, '{"homes":')
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    expect(writePluginHomes(dataDir, [home])).toBeUndefined()
+
+    expect(readFileSync(`${file}.unreadable`, 'utf8')).toBe('{"homes":')
+    expect(readPluginHomes(dataDir)).toEqual({ homes: [home] })
+    expect(warn).toHaveBeenCalledWith(setAside(DIAL_SKILL_FILE))
+  })
+
+  it('a torn dial-setup.json is set aside, not written over', () => {
+    const dataDir = aDataDir()
+    const file = join(dataDir, DIAL_SETUP_FILE)
+    writeFileSync(file, '{"dial":')
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const record = { dial: true, plugin: '0.6.59', homes: { claude: [], codex: [] }, pluginHomes: [home] }
+
+    expect(readSetup(dataDir)).toEqual(empty)
+    expect(writeSetup(dataDir, record)).toBeUndefined()
+
+    expect(readFileSync(`${file}.unreadable`, 'utf8')).toBe('{"dial":')
+    expect(readSetup(dataDir)).toEqual(record)
+    expect(warn).toHaveBeenCalledWith(setAside(DIAL_SETUP_FILE))
+  })
+
+  it('a file past the bound reads as today', () => {
+    const dataDir = aDataDir()
+    // Torn as well: past the bound it is not read, so not parsed either.
+    const torn = `{"pad":"${'x'.repeat(256 * 1024)}`
+    for (const name of [DIAL_SKILL_FILE, DIAL_SETUP_FILE]) writeFileSync(join(dataDir, name), torn)
+
+    expect(readPluginHomes(dataDir)).toEqual({ homes: [] })
+    expect(readSetup(dataDir)).toEqual(empty)
+
+    expect(readdirSync(dataDir).sort()).toEqual([DIAL_SETUP_FILE, DIAL_SKILL_FILE])
+    for (const name of [DIAL_SKILL_FILE, DIAL_SETUP_FILE]) expect(readFileSync(join(dataDir, name), 'utf8')).toBe(torn)
+  })
+})

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { basename, join } from 'path'
 import { harnessPath } from '../config/harnessHome.js'
@@ -35,6 +35,7 @@ describe('claudeProfiles', () => {
   })
 
   afterEach(() => {
+    vi.restoreAllMocks()
     rmSync(dataDir, { recursive: true, force: true })
     rmSync(home, { recursive: true, force: true })
     delete process.env.ADAPTER_DATA_DIR
@@ -107,6 +108,40 @@ describe('claudeProfiles', () => {
     const again = await loadModule()
     expect(again.listClaudeProfiles([], { home, environment: {}, machineId }).map((p) => p.path)).toEqual([home, folder])
     expect(listClaudeProfiles([folder, join(home, 'gone'), 'relative'], { home, environment: {}, machineId })).toHaveLength(2)
+  })
+
+  it('a torn profile list is set aside, not written over', async () => {
+    const { linkClaudeProfile } = await loadModule()
+    const file = join(dataDir, 'claude-profiles.json')
+    // What a reader saw while another process was writing it.
+    writeFileSync(file, '["/a', { mode: 0o600 })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const folder = join(home, 'custom')
+    mkdirSync(folder)
+
+    expect(linkClaudeProfile(folder, machineId)).toEqual({ profile: expect.objectContaining({ path: folder }) })
+
+    expect(readFileSync(`${file}.unreadable`, 'utf8')).toBe('["/a')
+    expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual([folder])
+    expect(warn).toHaveBeenCalledWith(
+      '[state] claude-profiles.json could not be read (not valid JSON); kept as claude-profiles.json.unreadable, starting empty.')
+  })
+
+  // Windows has no mode bits to refuse.
+  it.skipIf(process.platform === 'win32')('a list another account could write is not set aside', async () => {
+    const { linkClaudeProfile, readLinkedPaths } = await loadModule()
+    const file = join(dataDir, 'claude-profiles.json')
+    const folder = join(home, 'custom')
+    mkdirSync(folder)
+    writeFileSync(file, JSON.stringify([folder]))
+    chmodSync(file, 0o664)
+    expect(readLinkedPaths()).toEqual(new Set())
+
+    writeFileSync(file, '["/a')
+    expect(readLinkedPaths()).toEqual(new Set())
+    expect(existsSync(`${file}.unreadable`)).toBe(false)
+    expect(() => linkClaudeProfile(folder, machineId)).toThrow('state file is group/world writable')
+    expect(readFileSync(file, 'utf8')).toBe('["/a')
   })
 
   it('refuses a relative path with INVALID_PATH, a missing folder or file with NOT_FOUND', async () => {
