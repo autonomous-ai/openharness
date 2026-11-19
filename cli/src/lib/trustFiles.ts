@@ -27,10 +27,12 @@ export function trustFiles(): TrustFile[] {
   return [...live, ...kept]
 }
 
-/** One line for each of [files] that cannot be read, with its full path and the fix. Logs nothing, moves nothing. */
+/** One line for each of [files] that cannot be read, with its full path and the fix: moving it aside fixes one whose
+ *  bytes cannot be parsed, not one a read failed on (its code says why). Logs nothing, moves nothing. */
 export function unreadableTrustLines(files: readonly TrustFile[] = trustFiles()): string[] {
   return files.flatMap(({ file, parse }) => {
     const read = probeState(file, parse)
-    return read.state === 'unreadable' ? [`  ! ${file} cannot be read (${read.failure}) · move it aside to start over`] : []
+    if (read.state !== 'unreadable') return []
+    return [read.readFailed ? `  ! ${file} could not be read (${read.failure})` : `  ! ${file} cannot be read (${read.failure}) · move it aside to start over`]
   })
 }
