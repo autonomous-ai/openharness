@@ -235,8 +235,8 @@ class LocalCliDiscovery {
   final bool Function() _uninstalling;
 
   /// What the waits and the spawn backoff are timed on: a stopwatch by default, and a test's own
-  /// clock otherwise. Monotonic, so a wall clock set back (NTP, a person changing the time) can
-  /// neither hold a respawn off nor stretch a wait for the length of the step.
+  /// clock otherwise. Monotonic, so a wall clock that jumps (NTP, a person changing the time) can
+  /// neither hold a respawn off nor stretch a wait or cut it short.
   final Duration Function() _clock;
 
   /// The daemon's local transport: a Windows pipe, Unix socket, or loopback

@@ -560,8 +560,8 @@ void main() {
   test(
     'startChecking calls onUpdateAvailable only when a newer build exists',
     () async {
-      // Each wait ends when the first check has finished, never on a fixed time. A check calls
-      // onUpdateAvailable right after onCheckCompleted, so it has been called by then.
+      // Each wait ends when that updater's first check has finished, never on a fixed time. A check
+      // calls onUpdateAvailable right after onCheckCompleted, so it has been called by then.
       final urlUpToDate = await serveMetadataAndZip(manifestVersion: '1.0.0');
       final noUpdates = <UpdateInfo>[];
       final firstCheck = Completer<DesktopUpdateCheck>();

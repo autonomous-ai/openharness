@@ -132,8 +132,9 @@ void main() {
 
     // A run-id lease as a flash writes it, so the real lease check holds the
     // spawn end to end through the file.
-    File('${scratch.path}/flashing.${'e' * 32}')
-        .writeAsStringSync('${DateTime.now().millisecondsSinceEpoch ~/ 1000}\n');
+    File(
+      '${scratch.path}/flashing.${'e' * 32}',
+    ).writeAsStringSync('${DateTime.now().millisecondsSinceEpoch ~/ 1000}\n');
 
     // Flashing stops the daemon first, so discovery finds nothing and the
     // old code went straight on to start it again — taking back the port
