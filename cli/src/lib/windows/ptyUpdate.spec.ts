@@ -14,8 +14,9 @@ import {
 } from './ptyUpdate.js'
 
 // Pass-through, noting each path written or opened by name and each rename's target; a rename onto a file named
-// [failRenameOnto] fails as a disk error does.
-const io = vi.hoisted(() => ({ written: [] as string[], renamedOnto: [] as string[], failRenameOnto: null as string | null }))
+// [failRenameOnto] fails as a disk error does, and so do the next [failReads] reads of a file named [failReadOf].
+const io = vi.hoisted(() => ({ written: [] as string[], renamedOnto: [] as string[], failRenameOnto: null as string | null,
+  failReadOf: null as string | null, failReads: 0 }))
 vi.mock('node:fs', async (original) => {
   const actual = await original<typeof import('node:fs')>()
   const { basename } = await import('node:path')
@@ -31,7 +32,14 @@ vi.mock('node:fs', async (original) => {
     }
     return actual.renameSync(...args)
   }
-  const wrapped = { writeFileSync, openSync, renameSync }
+  const readFileSync = ((...args: Parameters<typeof actual.readFileSync>) => {
+    if (io.failReads > 0 && basename(String(args[0])) === io.failReadOf) {
+      io.failReads--
+      throw Object.assign(new Error(`injected EIO reading ${io.failReadOf}`), { code: 'EIO' })
+    }
+    return actual.readFileSync(...args)
+  }) as typeof actual.readFileSync
+  const wrapped = { writeFileSync, openSync, renameSync, readFileSync }
   return { ...actual, ...wrapped, default: { ...actual, ...wrapped } }
 })
 
@@ -54,6 +62,8 @@ afterEach(() => {
   io.written.length = 0
   io.renamedOnto.length = 0
   io.failRenameOnto = null
+  io.failReadOf = null
+  io.failReads = 0
   for (const poller of pollers.splice(0)) poller.stop()
   vi.useRealTimers()
   rmSync(root, { recursive: true, force: true })
@@ -638,6 +648,20 @@ describe('takeBackPty', () => {
     takeBackPty(root, (l) => lines.push(l), '  ', '  ✗ ')
     expect(pointer()).toBe('0.11.0')
     expect(lines).toEqual(['  ✗ terminal host 0.11.0 could not be taken back out: 0.10.0 is no longer there to go back to — it stays'])
+  })
+
+  // A read that failed read nothing: had it been taken as no rejection, the rejection from before (a version installed
+  // anyway, by name) would be taken back as if this restore had added it.
+  it('a rejection from before stays when the list could not be read before the restore', async () => {
+    const { READ_TRIES } = await import('../secureState.js')
+    pairedIn()
+    writeFileSync(join(ptyRoot, 'pty-rejected.json'), JSON.stringify(['0.11.0']))
+    io.failReadOf = 'pty-rejected.json'
+    io.failReads = READ_TRIES
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    takeBackPty(root, () => {}, '')
+    expect(pointer()).toBe('0.10.0')
+    expect(rejectedPtyVersions(root)).toEqual(['0.11.0'])
   })
 
   it('on a failure, says the marker stays for the next master, which may keep it', () => {
