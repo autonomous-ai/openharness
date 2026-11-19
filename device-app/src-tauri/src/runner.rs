@@ -2,12 +2,12 @@
 
 use crate::account::{self, Login, NO_RESULT};
 use crate::cli::{self, Cli, HarnessCli, START_DEADLINE};
-use crate::desktop;
 use crate::follow::{AX_SETTINGS, CHATGPT_BUNDLE, ChatgptFollow, FollowDoor, Heard, Observer, Shown, TRUST_AGAIN};
 use crate::front::{FrontFeed, FrontSource};
 use crate::install::{self, Shell};
 use crate::loginitem::LoginItem;
 use crate::logs;
+use crate::open::Opener;
 use crate::state::StateFile;
 use crate::tabs::{Out, POLL_EVERY, Select, TabApp, TabFollow, TabScripts};
 use crate::types::{Effect, Event, ExportFailure, Log, LoginEvent};
@@ -31,8 +31,8 @@ pub struct Doors {
     pub login_item: Arc<dyn LoginItem>,
     pub state: Arc<dyn StateFile>,
     pub log: Arc<dyn Log>,
-    /// `open` with these arguments (`desktop::run_open`).
-    pub open: Arc<dyn Fn(&[&str]) -> io::Result<()> + Send + Sync>,
+    /// What opens a page, the logs' zip and the desktop app (`open::system`).
+    pub open: Arc<dyn Opener>,
     /// Which app is in front (`front::system`), started once with the runner.
     pub front: Arc<dyn FrontSource>,
     /// The terminal apps' tab scripts (`tabs::system`), which only the runner's tab thread calls.
@@ -360,8 +360,8 @@ impl Runner {
                     watch.notify(mode);
                 }
             }
-            Effect::OpenUrl(url) => shared.open(&[&url], "browser"),
-            Effect::OpenDesktop => shared.open(&desktop::open_desktop_args(), "desktop app"),
+            Effect::OpenUrl(url) => shared.open(|open| open.url(&url), "browser"),
+            Effect::OpenDesktop => shared.open(|open| open.desktop(), "desktop app"),
             // On the caller's thread: one ServiceManagement call, once at start.
             Effect::RegisterLoginItem => {
                 let registered = shared.doors.login_item.register();
@@ -398,13 +398,10 @@ impl Runner {
                 }
                 None => shared.answer(Event::LogsExported(Err(ExportFailure::NoAnswer))),
             },
-            Effect::Reveal(zip) => {
-                let args = logs::reveal_args(std::env::consts::OS, &zip);
-                shared.open(&args.iter().map(String::as_str).collect::<Vec<_>>(), "logs");
-            }
+            Effect::Reveal(zip) => shared.open(|open| open.reveal(&zip), "logs"),
             // On the caller's thread: macOS shows its own dialog and does not wait for it.
             Effect::AskAx => shared.doors.follow.prompt(),
-            Effect::OpenAxSettings => shared.open(&[AX_SETTINGS], "accessibility settings"),
+            Effect::OpenAxSettings => shared.open(|open| open.url(AX_SETTINGS), "accessibility settings"),
         }
         None
     }
@@ -672,9 +669,9 @@ impl Shared {
         }
     }
 
-    /// A failure is logged without the arguments: a sign-in URL carries its state in its query.
-    fn open(&self, args: &[&str], what: &str) {
-        if let Err(error) = (self.doors.open)(args) {
+    /// A failure is logged without what was opened: a sign-in URL carries its state in its query.
+    fn open(&self, open: impl FnOnce(&dyn Opener) -> io::Result<()>, what: &str) {
+        if let Err(error) = open(&*self.doors.open) {
             self.doors.log.line(&format!("{what}: could not open: {error}"));
         }
     }
@@ -1563,7 +1560,7 @@ mod tests {
         assert_eq!(door.with(|state| state.prompts), 1);
         assert!(w.doubles.opened.lock().unwrap().is_empty());
         assert_eq!(w.runner.run(Effect::OpenAxSettings), None);
-        assert_eq!(*w.doubles.opened.lock().unwrap(), [vec![AX_SETTINGS.to_string()]]);
+        assert_eq!(*w.doubles.opened.lock().unwrap(), [format!("url {AX_SETTINGS}")]);
         assert_eq!(door.with(|state| state.prompts), 1);
     }
 

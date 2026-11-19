@@ -3,13 +3,14 @@
 
 use harness_device::app::App;
 use harness_device::cli::cli_override;
-use harness_device::desktop::{DesktopApp, SystemDesktopApp, run_open};
+use harness_device::desktop::{DesktopApp, SystemDesktopApp};
 use harness_device::follow;
 use harness_device::front;
 use harness_device::install::system_shell;
 use harness_device::instance::Instance;
 use harness_device::log::FileLog;
 use harness_device::loginitem::SystemLoginItem;
+use harness_device::open;
 use harness_device::runner::{Doors, Runner};
 use harness_device::state::{JsonStateFile, StateFile};
 use harness_device::tabs;
@@ -102,10 +103,7 @@ fn start(handle: &AppHandle, events: Sender<Event>, queue: Receiver<Event>) -> t
         login_item: Arc::new(SystemLoginItem),
         state,
         log: log.clone(),
-        open: {
-            let log = log.clone();
-            Arc::new(move |args: &[&str]| run_open(args, log.clone()))
-        },
+        open: open::system(log.clone()),
         front: front::system(log.clone()),
         tabs: tabs::system(),
         updater: harness_device::update::system(handle),

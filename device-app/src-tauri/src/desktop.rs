@@ -1,11 +1,7 @@
-//! The desktop app: installed, running, and opening it.
+//! The desktop app: installed and running. `open.rs` opens it.
 
-use crate::types::Log;
 use std::ffi::OsStr;
-use std::io;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
-use std::sync::Arc;
 
 pub const DESKTOP_BUNDLE_ID: &str = "ai.autonomous.harness";
 
@@ -130,36 +126,6 @@ pub fn running_among(os: &str, mut executables: impl Iterator<Item = String>) ->
         let file = if windows { exe.rsplit(['/', '\\']).next() } else { exe.rsplit('/').next() }.unwrap_or_default();
         names.iter().any(|name| if windows { name.eq_ignore_ascii_case(file) } else { *name == file })
     })
-}
-
-pub fn open_desktop_args() -> [&'static str; 2] {
-    ["-b", DESKTOP_BUNDLE_ID]
-}
-
-/// By its full path on macOS: a PATH the app was started with never decides what opens a sign-in URL.
-#[cfg(target_os = "macos")]
-const OPEN: &str = "/usr/bin/open";
-#[cfg(not(target_os = "macos"))]
-const OPEN: &str = "xdg-open";
-
-/// Starts `open` with these arguments and does not wait for it. An exit that is not 0 is a log line without the
-/// arguments: a sign-in URL carries its state in its query.
-pub fn run_open(args: &[&str], log: Arc<dyn Log>) -> io::Result<()> {
-    let mut command = Command::new(OPEN);
-    command.args(args).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
-    let mut child = {
-        let _spawning = crate::cli::spawn_lock();
-        command.spawn()?
-    };
-    // Reaped off the caller's thread, so each click leaves no zombie behind.
-    std::thread::spawn(move || match child.wait() {
-        Ok(status) if !status.success() => log.line(&match status.code() {
-            Some(code) => format!("open: exit {code}"),
-            None => "open: killed by a signal".to_string(),
-        }),
-        _ => {}
-    });
-    Ok(())
 }
 
 #[cfg(test)]

@@ -1,5 +1,151 @@
 //! Opening things: a page, a file in its folder, the desktop app. Windows and Linux have no single `open` program.
 
+use crate::desktop::{self, DESKTOP_BUNDLE_ID};
+use crate::types::Log;
+use std::env::consts::OS;
+use std::io;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::sync::Arc;
+
+/// What the app opens, each with arguments fixed in Rust: nothing from the webview becomes one.
+pub trait Opener: Send + Sync {
+    /// A page, in the person's browser.
+    fn url(&self, url: &str) -> io::Result<()>;
+    /// The logs' zip in its folder, selected where the file manager can.
+    fn reveal(&self, zip: &Path) -> io::Result<()>;
+    /// The desktop app.
+    fn desktop(&self) -> io::Result<()>;
+}
+
+pub fn system(log: Arc<dyn Log>) -> Arc<dyn Opener> {
+    Arc::new(SystemOpener { log })
+}
+
+/// What runs a URL on this OS: by its full path on macOS, so a PATH the app was started with never decides what opens
+/// a sign-in URL. None on Windows, whose shell opens it.
+pub fn url_args(os: &str, url: &str) -> Option<(&'static str, Vec<String>)> {
+    match os {
+        "macos" => Some(("/usr/bin/open", vec![url.into()])),
+        "windows" => None,
+        _ => Some(("xdg-open", vec![url.into()])),
+    }
+}
+
+/// The URL Windows' shell may open: a web page, nothing it would run. Its handler puts the URL in a browser's command
+/// line between quotes, so a quote, a space or a control character keeps it out too.
+pub fn shell_url(url: &str) -> Option<&str> {
+    let one_word = !url.chars().any(|c| c == '"' || c.is_whitespace() || c.is_control());
+    (url.starts_with("https://") && one_word).then_some(url)
+}
+
+/// What shows the zip: selected in Finder (`-R`) and in Explorer; Linux's `xdg-open` cannot select a file, so it
+/// opens its folder.
+pub fn reveal_args(os: &str, zip: &Path) -> (&'static str, Vec<String>) {
+    match os {
+        "macos" => ("/usr/bin/open", vec!["-R".into(), zip.display().to_string()]),
+        "windows" => ("explorer.exe", vec![explorer_select(zip)]),
+        _ => ("xdg-open", vec![zip.parent().unwrap_or(zip).display().to_string()]),
+    }
+}
+
+/// Explorer's own syntax, which it reads from its command line as written: the path quoted, as it may hold a space.
+/// The quotes hold all of it: Windows forbids `"` in a path, and `logs::parse` keeps none.
+pub fn explorer_select(zip: &Path) -> String {
+    format!(r#"/select,"{}""#, zip.display())
+}
+
+/// What opens the desktop app on macOS, by its bundle id. Elsewhere it is `desktop::desktop_app()`, run with no
+/// argument.
+pub fn desktop_args(os: &str) -> Option<(&'static str, Vec<String>)> {
+    (os == "macos").then(|| ("/usr/bin/open", vec!["-b".into(), DESKTOP_BUNDLE_ID.into()]))
+}
+
+struct SystemOpener {
+    log: Arc<dyn Log>,
+}
+
+impl Opener for SystemOpener {
+    #[cfg(not(windows))]
+    fn url(&self, url: &str) -> io::Result<()> {
+        let (program, args) = url_args(OS, url).ok_or(io::ErrorKind::Unsupported)?;
+        start(Command::new(program).args(args), Some(&self.log))
+    }
+
+    #[cfg(windows)]
+    fn url(&self, url: &str) -> io::Result<()> {
+        shell_open(shell_url(url).ok_or(io::ErrorKind::InvalidInput)?)
+    }
+
+    #[cfg(not(windows))]
+    fn reveal(&self, zip: &Path) -> io::Result<()> {
+        let (program, args) = reveal_args(OS, zip);
+        start(Command::new(program).args(args), Some(&self.log))
+    }
+
+    /// Explorer by its full path: a bare name is looked for in the app's own folder first. It exits 1 when it has
+    /// shown the zip, so how it ends is not logged.
+    #[cfg(windows)]
+    fn reveal(&self, zip: &Path) -> io::Result<()> {
+        use std::os::windows::process::CommandExt;
+        let (program, args) = reveal_args(OS, zip);
+        let root = std::env::var_os("SystemRoot").filter(|root| !root.is_empty()).unwrap_or(r"C:\Windows".into());
+        let mut command = Command::new(Path::new(&root).join(program));
+        for arg in &args {
+            command.raw_arg(arg);
+        }
+        start(&mut command, None)
+    }
+
+    fn desktop(&self) -> io::Result<()> {
+        let (program, args) = match desktop_args(OS) {
+            Some((program, args)) => (PathBuf::from(program), args),
+            None => (desktop::desktop_app().ok_or(io::ErrorKind::NotFound)?, Vec::new()),
+        };
+        start(Command::new(program).args(args), Some(&self.log))
+    }
+}
+
+/// Starts `command` and does not wait for it. With `log`, an exit that is not 0 is a log line without the arguments:
+/// a sign-in URL carries its state in its query.
+fn start(command: &mut Command, log: Option<&Arc<dyn Log>>) -> io::Result<()> {
+    command.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+    // Its own process group: a signal to the app's (a Ctrl-C where it was started from a shell) never reaches what it
+    // opened.
+    #[cfg(unix)]
+    std::os::unix::process::CommandExt::process_group(command, 0);
+    let mut child = {
+        let _spawning = crate::cli::spawn_lock();
+        command.spawn()?
+    };
+    let log = log.cloned();
+    // Reaped off the caller's thread, so each click leaves no zombie behind.
+    std::thread::spawn(move || match (child.wait(), log) {
+        (Ok(status), Some(log)) if !status.success() => log.line(&match status.code() {
+            Some(code) => format!("open: exit {code}"),
+            None => "open: killed by a signal".to_string(),
+        }),
+        _ => {}
+    });
+    Ok(())
+}
+
+/// The shell's `open` on an https URL: the default browser, as Windows has no program to run for it.
+#[cfg(windows)]
+fn shell_open(url: &str) -> io::Result<()> {
+    use std::ptr;
+    use windows_sys::Win32::UI::Shell::ShellExecuteW;
+    use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+    let wide = |text: &str| text.encode_utf16().chain([0]).collect::<Vec<u16>>();
+    let (verb, file) = (wide("open"), wide(url));
+    // SAFETY: both strings end in a NUL and outlive the call; the null ones ask for no window, parameters or folder.
+    let done = unsafe {
+        ShellExecuteW(ptr::null_mut(), verb.as_ptr(), file.as_ptr(), ptr::null(), ptr::null(), SW_SHOWNORMAL)
+    };
+    // Above 32 is success, for old programs' sake; at or under it, the reason is the thread's last error.
+    if done as usize > 32 { Ok(()) } else { Err(io::Error::last_os_error()) }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

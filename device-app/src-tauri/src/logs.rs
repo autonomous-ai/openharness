@@ -1,4 +1,4 @@
-//! `harness logs export --json`: the zip it wrote, read from its answer before `open` is run with it.
+//! `harness logs export --json`: the zip it wrote, read from its answer before it is shown (`open.rs`).
 
 use crate::cli::{Cli, LINE_MAX};
 use crate::types::{ExportFailure, Exported, Output};
@@ -25,7 +25,7 @@ fn export_within(cli: &dyn Cli, home: &Path, deadline: Duration) -> Result<Expor
 }
 
 /// The zip a finished run names: `path` in its last line, as the desktop app reads it. What the CLI prints is outside
-/// text, and the path becomes a menu line and an argument of `open`. The file is not looked for on disk.
+/// text, and the path becomes a menu line and an argument of what shows it. The file is not looked for on disk.
 pub fn parse(output: &Output) -> Result<PathBuf, ExportFailure> {
     if output.timed_out {
         return Err(ExportFailure::TimedOut);
@@ -34,22 +34,24 @@ pub fn parse(output: &Output) -> Result<PathBuf, ExportFailure> {
     let Some(Ok(Value::Object(answer))) = line.map(serde_json::from_str::<Value>) else {
         return Err(ExportFailure::NoAnswer);
     };
-    let path = answer.get("path").and_then(Value::as_str).filter(|path| bundle_path(path));
+    let path = answer.get("path").and_then(Value::as_str).filter(|path| bundle_path(path, cfg!(windows)));
     path.map(PathBuf::from).ok_or(ExportFailure::NoFile)
 }
 
-/// Absolute, so `open` never reads it as an option; one short line; its file name `harness-logs-YYYYMMDD-HHMM.zip`,
-/// whole.
-fn bundle_path(path: &str) -> bool {
+/// Absolute, so what shows it never reads it as an option; one short line; its file name
+/// `harness-logs-YYYYMMDD-HHMM.zip`, whole. On Windows, no `"`: Explorer reads the path between quotes.
+fn bundle_path(path: &str, windows: bool) -> bool {
     // Every line break, not only the control characters: the menu shows the path on one line.
     let one_line = !path.chars().any(|c| c.is_control() || matches!(c, '\u{2028}' | '\u{2029}'));
-    // The text after the last `/`, not `file_name`, which skips a trailing `/`.
-    let name = path.rsplit('/').next().unwrap_or_default();
+    // The text after the last separator, not `file_name`, which skips a trailing one. Windows takes both; a unix file
+    // name may hold a `\`.
+    let name = if windows { path.rsplit(['/', '\\']).next() } else { path.rsplit('/').next() }.unwrap_or_default();
     let digits = |part: &str, len: usize| part.len() == len && part.bytes().all(|byte| byte.is_ascii_digit());
     let stamp = name.strip_prefix("harness-logs-").and_then(|rest| rest.strip_suffix(".zip"));
     path.len() <= PATH_MAX
         && Path::new(path).is_absolute()
         && one_line
+        && !(windows && path.contains('"'))
         && stamp.and_then(|stamp| stamp.split_once('-')).is_some_and(|(day, time)| digits(day, 8) && digits(time, 4))
 }
 
@@ -58,16 +60,6 @@ pub fn shown(zip: &Path, home: &Path) -> String {
     match zip.strip_prefix(home) {
         Ok(rest) => Path::new("~").join(rest).display().to_string(),
         Err(_) => zip.display().to_string(),
-    }
-}
-
-/// What `open` is run with: `-R <zip>` on `macos`, which shows it selected in Finder; elsewhere the zip's folder, as
-/// `xdg-open` cannot select a file.
-pub fn reveal_args(os: &str, zip: &Path) -> Vec<String> {
-    if os == "macos" {
-        vec!["-R".into(), zip.display().to_string()]
-    } else {
-        vec![zip.parent().unwrap_or(zip).display().to_string()]
     }
 }
 
