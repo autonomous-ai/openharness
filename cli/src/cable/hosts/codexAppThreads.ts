@@ -11,7 +11,7 @@
 import { closeSync, constants, fstatSync, lstatSync, openSync, readSync, statSync, type Stats } from 'node:fs'
 import { basename, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { codexThreadName } from '../../lib/sessionTitle.js'
+import { codexThreadName, resetCodexThreadNames } from '../../lib/sessionTitle.js'
 import { builtinSqlite, idleWalStore, type DatabaseConstructor } from '../../lib/sqliteBuiltin.js'
 import type { SqliteRow } from '../../lib/sqliteRead.js'
 import { CODEX_THREAD } from './codexQueue.js'
@@ -169,9 +169,11 @@ export class CodexAppThreads {
     }
   }
 
-  /** Drops the JSON file's last parse, so the next read parses it afresh. */
+  /** Drops the JSON file's last parse and the names read of Codex's index, so nothing of the app's metadata is kept while
+   *  no dial is attached. Nothing else in the devices process asks codexThreadName, so its cache goes whole. */
   forget(): void {
     this.projects = undefined
+    resetCodexThreadNames()
   }
 
   /** Whether Codex's session index is a regular file: codexThreadName opens it to read it, and a FIFO, or a link to one,
