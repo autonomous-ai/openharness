@@ -30,6 +30,7 @@
 import { stat } from 'node:fs/promises'
 import { scanRecordsBackward, streamRecords } from './transcriptTail.js'
 import type { RuntimeField } from './runtimeProfile.js'
+import { boundaryChanged } from './transcriptBoundary.js'
 import { closeFileIdentity, replayCloses, type TranscriptClose } from './transcriptControls.js'
 import { errorKind } from './log.js'
 
@@ -246,8 +247,7 @@ export async function replayAttachSpan(
     if (observe) feed(observe, line)
     feed(fold, line)
   }, isWholeRecord, undefined, closeFileIdentity(closes))
-  // The code as `code` too: `attachTranscript`'s log line names a failure by its code, never its words.
-  if (!read && closes.length) throw Object.assign(new Error('ENGINE_CONTROL_BOUNDARY_CHANGED'), { code: 'ENGINE_CONTROL_BOUNDARY_CHANGED' })
+  if (!read && closes.length) throw boundaryChanged()
   if (read) closeThrough(read.next)
   // The error's kind only: a parse error's message quotes the record, which is the person's transcript.
   if (failures) console.warn(`[attach] ${failures} record(s) could not be taken in: ${errorKind(firstFailure)}`)

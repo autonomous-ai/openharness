@@ -340,7 +340,7 @@ export class Browsers {
     } catch (error) {
       const state = failedState(error instanceof PodmanError ? error.state : '')
       this.deps.measure('agent_browser_setup_failed')
-      this.deps.log(`agent browser: setup failed (${state}) · ${errorKind(error)}`)
+      this.deps.log(`agent browser: setup failed · ${errorKind(error)}`)
       this.setupShown = failed(state)
       for (const agentId of this.waiting) this.fail(agentId, state)
       return
@@ -478,7 +478,10 @@ export class Browsers {
   private restartLater(agentId: string, code: number): void {
     const restart = this.restarts.get(agentId) ?? { count: 0, readyAt: null }
     if (restart.readyAt !== null && this.now() - restart.readyAt >= STEADY_MS) restart.count = 0
-    if (restart.count >= MAX_RESTARTS) return this.fail(agentId, 'browser_stopped', `it exited ${MAX_RESTARTS + 1} times in a row (last ${code})`)
+    if (restart.count >= MAX_RESTARTS) {
+      this.deps.log(`agent browser ${agentId}: the browser exited (${code}) ${MAX_RESTARTS + 1} times in a row`)
+      return this.fail(agentId, 'browser_stopped')
+    }
     const delay = FIRST_RESTART_MS * 2 ** restart.count
     restart.count += 1
     restart.readyAt = null
@@ -516,10 +519,11 @@ export class Browsers {
     return this.generations.get(agentId) ?? 0
   }
 
-  private fail(agentId: string, error: string, why?: string): void {
+  /** `kind`, a caught error's, is said in place of the state: a PodmanError's kind already names its state. */
+  private fail(agentId: string, error: string, kind?: string): void {
     this.set(agentId, failed(error))
     this.deps.measure(`agent_browser_failed_${error}`)
-    this.deps.log(`agent browser ${agentId}: failed (${error})${why ? `: ${why}` : ''}`)
+    this.deps.log(`agent browser ${agentId}: failed ${kind ? `· ${kind}` : `(${error})`}`)
   }
 
   private set(agentId: string, next: BrowserState): void {
