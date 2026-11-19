@@ -100,7 +100,11 @@ it.skipIf(process.platform === 'win32')('groups all considered query names in 64
 
 it('retains final detection when a nonmatching archive changes in place during the awaited scan', async () => {
   write('first'); write('second')
-  beforeRead(count => { if (count === 2) write('first', 'wanted') })
+  let alreadyRead: string
+  beforeRead((count, name) => {
+    if (count === 1) alreadyRead = name!.slice(0, -5)
+    if (count === 2) write(alreadyRead, 'wanted')
+  })
   await expect(query()).rejects.toMatchObject({ code: 'changed' })
 })
 

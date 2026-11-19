@@ -44,6 +44,8 @@ export interface LaunchWorld {
   setGridLaunch: (agentId: string, record: unknown) => void
   /** This account's private grid, as the socket knows it (BackendSocket.gridName). */
   gridName?: () => string | null
+  /** The Models context request made by Store, including its Model Manager setup request. */
+  gridContext?: (setup: boolean) => Promise<{ privateGrid: string | null }>
   /** Where Harness makes project folders here (lib/projectFolder.ts `projectsRoot`, the core's): the saved APIs' note
    *  goes only into one. Named by each spec, so no launch reads the home of whoever runs it. */
   projectsRoot: string
@@ -77,8 +79,9 @@ export function launchShapes(world: LaunchWorld) {
       return wire(await models(asked))
     },
   }))
-  const store = storeLaunchPort()
+  const store = storeLaunchPort(undefined, undefined, undefined, world.gridContext ?? (async () => ({ privateGrid: gridName() })))
   const link = createStoreLink({ clients: { dshInstallStatus: () => {} } } as never, async (type, payload) => {
+    if (type === 'dshContext') return wire(await store.dshContext(payload as never))
     if (type === 'dshDescribe') return wire(await store.dshDescribe(payload as never))
     if (type === 'dshMaterialize') {
       const request = dshMaterializeRequestIn(wire(payload))

@@ -75,11 +75,13 @@ type Manager = InstanceType<Awaited<ReturnType<typeof loadCore>>['RuntimeProfile
 async function loadCore() {
   const { RuntimeProfileState } = await import('../lib/runtimeProfileState.js')
   const { RuntimeProfileController } = await import('../lib/runtimeControl.js')
+  const { createModelControls } = await import('../core/engines/modelControls.js')
+  const { modelControlFor } = await import('./modelControls.js')
   const { encodeRuntimeProfile } = await import('../engines/kit/runtime.js')
   const { createRuntimeTransport } = await import('../core/engines/runtimeTransport.js')
   const { otherRuntimeRequests } = await import('./others/runtimeRequests.js')
   const { createOtherStreams } = await import('./others/streams.js')
-  return { RuntimeProfileState, RuntimeProfileController, encodeRuntimeProfile, createRuntimeTransport, otherRuntimeRequests, createOtherStreams }
+  return { RuntimeProfileState, RuntimeProfileController, createModelControls, modelControlFor, encodeRuntimeProfile, createRuntimeTransport, otherRuntimeRequests, createOtherStreams }
 }
 let core: Awaited<ReturnType<typeof loadCore>>
 const configReads = new Set<Promise<boolean>>()
@@ -260,8 +262,18 @@ describe('the other engines\' runtime profiles, through the core', () => {
       const m = manager()
       const s = sessionOf(engine, 'switch')
       const keys: unknown[] = []
+      const controls = core.createModelControls({
+        handles: () => false, inline: core.modelControlFor, resolve: () => s,
+        call: async () => { throw new Error('No remote model worker in this fixture') },
+        catalog: session => m.codexCatalog(session), capture: async () => '',
+        text: async (target, text) => { keys.push(['text', target, text]); return true },
+        literal: async (target, text) => { keys.push(['literal', target, text]); return true },
+        key: async (target, key) => { keys.push(['key', target, key]); return true },
+        waitForModel: (id, ms) => m.waitForModel(id, ms), waitForProfile: (id, ms) => m.waitForProfile(id, ms),
+        confirmEffort: (id, effort) => m.confirmEffort(id, effort),
+      })
       const controller = new core.RuntimeProfileController({
-        modelControlFor: () => undefined,
+        modelControlFor: controls.forSession,
         readScreen: async () => null,
         manager: m as never,
         getSession: () => s,

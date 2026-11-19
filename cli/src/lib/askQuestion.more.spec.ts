@@ -667,9 +667,9 @@ describe('QuestionWatcher — polling', () => {
     device = true; driving = true; await tick(); await tick()
     driving = false; await tick(); await tick()
     expect(log.mock.calls.map(([line]) => String(line))).toEqual([
-      '[question] s1 watcher paused · no device',
-      '[question] s1 watcher paused · driving an answer',
-      '[question] s1 watcher polling',
+      '[question] watcher paused · no device',
+      '[question] watcher paused · driving an answer',
+      '[question] watcher polling',
     ])
     expect(capture).toHaveBeenCalledTimes(2)   // only the two unpaused ticks read the pane
   })

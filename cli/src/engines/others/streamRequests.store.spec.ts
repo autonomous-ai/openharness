@@ -122,7 +122,7 @@ describe('Hermes store lookup in the other engines worker', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const t = setup()
     expect(await t.read()).toEqual({ version: STREAM_VERSION, error: 'ENGINE_UNAVAILABLE' })
-    expect(warn).toHaveBeenCalledExactlyOnceWith('[engine-others] store lookup unavailable')
+    expect(warn).toHaveBeenCalledExactlyOnceWith('[engine-others] store lookup unavailable · Error')
     edit(home, 'INSERT INTO sessions VALUES (?)', id())
     expect(await t.read()).toEqual(reply(home))
     expect(await t.read()).toEqual(reply(home))

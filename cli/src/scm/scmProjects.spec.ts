@@ -112,7 +112,7 @@ describe('the SCM seam, with git as its only implementation', { timeout: 30_000 
     try {
       const failing = { kind: 'git', prepareWrite: async () => { throw new Error('/private/project has secret content') } }
       await expect(prepareInstructionWrites(repo, [failing as unknown as ScmProject])).resolves.toBeUndefined()
-      expect(warn.mock.calls).toEqual([['[scm] INSTRUCTION_PREPARATION_FAILED']])
+      expect(warn.mock.calls).toEqual([['[scm] INSTRUCTION_PREPARATION_FAILED · Error']])
     } finally { warn.mockRestore() }
   })
 

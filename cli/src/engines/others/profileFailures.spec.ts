@@ -24,6 +24,7 @@ it.each(['opencode', 'pi', 'kilo', 'devin', 'commandcode', 'cursor'] as const)('
     state: blankRuntimeState(), refreshConfig: () => {} } as InlineRuntimeContext
   expect(await module.createRuntimeProfileReader().models!(context)).toEqual([])
   expect(execFile).toHaveBeenCalled()
-  expect(warn.mock.calls).toEqual([[`[runtime-profile] ${engine.toUpperCase()}_CATALOG_UNAVAILABLE`]])
+  const names = { opencode: 'OpenCode', pi: 'Pi', kilo: 'Kilo', devin: 'Devin', commandcode: 'Command Code', cursor: 'Cursor' }
+  expect(warn.mock.calls).toEqual([[`[runtime-profile] ${names[engine]} model catalog failed:`, 'Error']])
   expect(JSON.stringify(warn.mock.calls)).not.toContain('PRIVATE_NATIVE_OUTPUT')
 })

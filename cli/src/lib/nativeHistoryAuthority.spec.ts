@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import type { RegisteredSession } from './registry.js'
 import type { PurgeDeps } from './purgeAgentService.js'
+import { stoppedFixture } from '../testing/stoppedFixture.js'
 
 vi.mock('node:child_process', () => {
   const forbidden = () => { throw Error('Host binaries are forbidden in native history authority tests') }
@@ -101,8 +102,8 @@ it.each(['before Stop', 'during Stop', 'during Stop before worktree deletion'])(
   let live: RegisteredSession | undefined = row, saved: RegisteredSession | null = null
   const stop = vi.fn(async () => { saved = row; live = undefined; if (moment.startsWith('during Stop')) writeFileSync(catalog, '{') })
   const removed = vi.fn(), deleted = vi.fn()
-  const service = new PurgeAgentService({ live: () => live, sessions: () => [row],
-    stopped: { get: () => saved, beginResume: () => 'fixture-reservation', finishResume: () => {}, remove: removed },
+  const service = new PurgeAgentService({ live: () => live, liveSessions: () => live ? [live] : [],
+    stopped: { ...stoppedFixture(() => saved ? [saved] : []), beginResume: () => 'fixture-reservation', finishResume: () => {}, remove: removed },
     checkpoints: { deletionFiles: () => [] }, stop, restarting: () => false, deleted, worktrees: () => worktrees.worktreeAnswers(worktrees),
   } as unknown as PurgeDeps)
   const request = { agentId: row.agentId, sessionId: ID, createdAt: row.registeredAt }

@@ -44,7 +44,6 @@ vi.mock('../lib/createAgentPane.js', () => ({
     return { ok: false, error: 'RECORDED', detail: 'the pane is not opened by this spec' }
   }),
 }))
-vi.mock('../engines/launchControl.js', async (real) => ({ ...await real<object>(), opencodeMajorVersion: vi.fn(() => 2) }))
 vi.mock('../lib/engineBin.js', async (real) => ({ ...await real<object>(), enginePathOverride: vi.fn(() => null) }))
 // A create's and a fork's label is new each time, and their session's runtime is keyed on it: one per engine here.
 vi.mock('../lib/harnessSessionLabel.js', async (real) => ({ ...await real<object>(), buildHarnessSessionLabel: vi.fn((engine: string) => `harness-${engine}-golden`) }))
@@ -195,6 +194,10 @@ beforeAll(async () => {
   shapes = (gridName = null) => launchShapes({
     dataDir: join(root, 'data'), machine: () => ({ ...M1 }), capabilities: async () => ({ sessionEnv: pane.tmux }),
     readCodexConfig: () => null, setGridLaunch: async () => {}, gridName: () => gridName, projectsRoot: join(root, 'work'),
+    gridContext: async setup => {
+      if (setup) gridSetups.push('ensure ownGrid=true')
+      return { privateGrid: gridName }
+    },
   })
 }, 30_000)
 
@@ -241,13 +244,11 @@ const paneOf = (call: Record<string, unknown> | undefined): unknown => call ? {
 
 const pending = { agentId: 'created', sessionId: '', engine: 'claude' } as RegisteredSession
 const gridSetups: string[] = []
-const createRest = (privateGrid: string | null) => ({
+const createRest = () => ({
   createBackend: { capabilities: async () => ({ sessionEnv: pane.tmux }) } as never, registry: { setLaunch: () => pending } as never,
   adoptableSession: async () => ({ ok: false, error: 'UNUSED' }) as never, heldBy: async () => 'none' as const, takeOverWhenIdle: async () => {},
   watchNewPane: (async () => {}) as never, announceSession: () => {}, attach: () => {}, hookPort: 4242, hooksDisabled: true,
   installOpencodePlugin: async () => true, terminalHintMachineName: () => 'this-mac', blocksFolder: () => false,
-  gridSetup: () => async (request: { ownGrid: boolean }) => { gridSetups.push(`ensure ownGrid=${request.ownGrid}`); return {} as never },
-  privateGridName: async () => privateGrid,
 })
 
 async function createCase(engine: AgentEngine, dsh: string, options: { files?: Record<string, string>; grid?: GridLaunchOverride; privateGrid?: string } = {}): Promise<unknown> {
@@ -256,7 +257,7 @@ async function createCase(engine: AgentEngine, dsh: string, options: { files?: R
   gridSetups.length = 0
   resetHome()
   const cwd = work(options.files)
-  const { value, lines } = await logged(() => shapes().create(createRest(options.privateGrid ?? null) as never)({
+  const { value, lines } = await logged(() => shapes(options.privateGrid ?? null).create(createRest() as never)({
     engine, cwd, bypassPermission: false, permissionMode: null, grid: options.grid ?? null, codexHome: null, dsh, prompt: null, name: null,
     agent: null, resumeSessionId: null, takeOver: null,
   } as never))

@@ -453,6 +453,7 @@ async function stopFixture() {
   })
   const kill = vi.fn(async () => ({ state: 'succeeded' as const, dispatch: 'executed' as const }))
   const stop = createStopAgentService({ registry, stoppedAgents, restartJobs: new AgentRestartCoordinator(), stopJobs: new Map(),
+    paneInfo: async () => ({ tty: '', command: 'hermes', path: '/fixture/work', pid: processIdentity.pid }),
     backendFor: () => ({ kill }), agentReconciler: { suppress: vi.fn(), holdRoute: vi.fn(), releaseRoute: vi.fn(), nudge: vi.fn() },
     forgetSession, markDeleted: vi.fn(), clearDeleted: vi.fn(), stopNative: vi.fn(async () => {}),
   })

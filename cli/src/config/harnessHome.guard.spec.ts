@@ -80,6 +80,7 @@ function withoutComments(lines: string[], shell: boolean): string[] {
 const onLine = (...lines: string[]) => (hit: Hit): boolean => lines.includes(hit.code)
 
 const ALLOWED: { files: string[], hit: (hit: Hit) => boolean, why: string }[] = [
+  { files: ['core/storeLink.ts'], hit: onLine("const runtime = join(identity.workspace, '.harness', 'runtime', createHash('sha256').update(request.key).digest('hex'))"), why: 'Workspace-local runtime validated against the Store request; not the account home' },
   { files: ['hook/notify.mjs'], hit: () => true, why: 'Runs as an installed copy with no import from src; its bytes feed Codex\'s trusted hash' },
   { files: ['engines/kit/notifyHooks.ts'], hit: onLine(String.raw`const LEGACY_SCRIPT = /\/\.harness\/cli\/(?:hook\/)?notify\.mjs$/`), why: 'LEGACY_SCRIPT: what old installs wrote' },
   { files: ['lib/localSocket.ts'], hit: onLine(String.raw`if (!inRuntime && !/[\\/]\.?harness[\\/]s[\\/][0-9a-f]{16}$/.test(folder)) return`), why: 'prepareShortFolder checks the shape of a folder it is handed' },

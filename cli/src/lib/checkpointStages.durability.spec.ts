@@ -92,6 +92,7 @@ it('flushes both exports completely while flushing each owner filename only on c
     await writeFile(join(directory, `${'a'.repeat(64)}.json`), JSON.stringify({ version: 1, file: basename(destination()) }), { mode: 0o600 })
     await lease.close()
     await expect(stat(slot)).rejects.toMatchObject({ code: 'ENOENT' })
+    await rm(destination())
   }
   expect(io.flushes.filter(value => value.path === record && value.kind === 'file')).toHaveLength(8)
   expect(io.flushes.filter(value => value.path === slot && value.kind === 'directory')).toHaveLength(process.platform === 'win32' ? 0 : 2)

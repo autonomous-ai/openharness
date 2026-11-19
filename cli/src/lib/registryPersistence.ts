@@ -143,9 +143,9 @@ export class RegistryWriteQueue {
         }
         catch (error) {
           // A caller may wrap a failed close; the shared custody latch still owns this writer and shutdown.
-          try { stateFileCustodyHealthy() } catch {
+          try { stateFileCustodyHealthy() } catch (cleanupError) {
             this.failedClose = true
-            console.error('[registry] state file cleanup unconfirmed; restart required')
+            console.error(`[registry] state file cleanup unconfirmed; restart required · ${errorKind(cleanupError)}`)
           }
           // A cleanup failure cannot undo an already visible, unadmitted rename.
           // Keep the caller's uncertain result even when discard or source release is what failed last.

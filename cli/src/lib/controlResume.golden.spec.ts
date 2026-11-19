@@ -1,3 +1,4 @@
+import { closeSessionStorageFixture } from '../testing/sessionStorageFixture.js'
 import { removeRegistryAgent } from '../testing/registryFixtures.js'
 /** Healthy resume composition recorded from the former code, with no host engine or terminal. */
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
@@ -6,14 +7,17 @@ import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { afterAll, expect, it, vi } from 'vitest'
 
-vi.mock('node:child_process', () => {
+vi.mock('node:child_process', async original => {
+  const actual = await original<typeof import('node:child_process')>()
+  const { spawnSessionStorageFixture } = await import('../testing/sessionStorageFixture.js')
   const forbidden = () => { throw Error('Host binaries are forbidden in the resume golden') }
   return { exec: forbidden, execSync: forbidden,
     execFile: (command: string, args: string[], _options: unknown, done: (error: null, value: string) => void) => {
       if (command !== 'ps' || JSON.stringify(args) !== JSON.stringify(['-p', String(process.pid), '-o', 'lstart='])) forbidden()
       done(null, 'fixture-start')
     }, execFileSync: forbidden,
-    spawn: forbidden, spawnSync: forbidden, fork: forbidden }
+    spawn: (command: string, args: string[], options: import('node:child_process').SpawnOptions) => spawnSessionStorageFixture(actual.spawn, command, args, options),
+    spawnSync: forbidden, fork: forbidden }
 })
 vi.mock('node:perf_hooks', async original => ({ ...await original<object>(), performance: { now: () => 0 } }))
 vi.mock('./loginShellEnv.js', () => ({ loginShellEnvironment: () => ({}) }))
@@ -48,6 +52,7 @@ it.each(['linux', 'darwin'])('keeps healthy native resume composition on %s', as
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'control-resume-golden-')))
   const log = vi.spyOn(console, 'log').mockImplementation(() => {})
   let owned: typeof import('./registry.js')['registry'] | undefined
+  let ownedStorage: typeof import('./sessionStorage.js')['sessionStorage'] | undefined
   try {
     Object.defineProperty(process, 'platform', { ...descriptor, value: platform })
     vi.useFakeTimers({ toFake: ['Date'], now: Date.parse('2026-10-10T08:00:00Z') })
@@ -61,6 +66,7 @@ it.each(['linux', 'darwin'])('keeps healthy native resume composition on %s', as
     writeFileSync(join(root, 'ADAPTER_DATA_DIR', 'engine-homes.json'), '{}')
     vi.resetModules()
     const { registry } = await import('./registry.js')
+    ownedStorage = (await import('./sessionStorage.js')).sessionStorage
     owned = registry
     const { StoppedAgentStore } = await import('./stoppedAgents.js')
     const { AgentRestartCoordinator } = await import('./restartAgent.js')
@@ -78,7 +84,7 @@ it.each(['linux', 'darwin'])('keeps healthy native resume composition on %s', as
       const saved = { ...original, sessionId: engine === 'terminal' ? '' : ID, transcriptPath: engine === 'terminal' ? null : file,
         processIdentity: { pid: 7000, executable: '<engine>', startMarker: 'prior-process' } }
       ;(await removeRegistryAgent(registry, saved.agentId))
-      const stopped = new StoppedAgentStore(join(root, 'saved', engine)); stopped.save(saved)
+      const stopped = new StoppedAgentStore(); await stopped.save(saved)
       const events: unknown[] = []
       const terminal: ResumeAgentServiceDeps['createBackend'] & ReturnType<ResumeAgentServiceDeps['backendFor']> = {
           create: async request => { await request.onDispatch?.(); const command = typeof request.command === 'function' ? request.command() : request.command; events.push(['create', command]); return { state: 'succeeded', dispatch: 'executed',
@@ -109,6 +115,7 @@ it.each(['linux', 'darwin'])('keeps healthy native resume composition on %s', as
     }
   } finally {
     await owned?.flush({ exiting: true }).catch(() => {})
+    if (ownedStorage) await closeSessionStorageFixture(ownedStorage)
     log.mockRestore(); vi.useRealTimers(); vi.unstubAllEnvs(); vi.resetModules()
     Object.defineProperty(process, 'platform', descriptor)
     rmSync(root, { recursive: true, force: true })

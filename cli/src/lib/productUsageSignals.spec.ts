@@ -531,3 +531,12 @@ it('reduces hn\'s observations to the Desktop\'s flow and milestone counters, an
     }
   }
 })
+
+it.each([
+  ['CWD_CHANGED', 'invalid'], ['WORKSPACE_IN_USE', 'invalid'], ['DSH_WORKSPACE_MISSING', 'invalid'], ['SESSION_OWNER_INVALID', 'invalid'],
+] as const)('classifies %s with an existing published failure kind', (error, failure) => {
+  expect(failureKind(error)).toBe(failure)
+  const emit = vi.fn()
+  productUsageLaunch('agent_create_status', 'fixture-creation-one', emit)(error, 'failed', false, undefined)
+  expect(emit).toHaveBeenCalledWith({ id: 'fixture-creation-one', phase: 'failed', failure })
+})

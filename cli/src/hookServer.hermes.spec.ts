@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, expect, it, vi } from 'vitest'
 import type { Server } from 'node:http'
+import { closeSessionStorageFixture } from './testing/sessionStorageFixture.js'
 
 const failures = vi.hoisted(() => new Map<string, string>())
 const inspection = vi.hoisted(() => ({ read: undefined as ((path: string) => void) | undefined, prepare: undefined as (() => Promise<void>) | undefined, captured: undefined as (() => void) | undefined }))
@@ -16,25 +17,21 @@ vi.mock('node:fs/promises', async original => {
     inspection.read?.(path)
     return result
   }
-  return { ...fs, lstat: guarded('lstat'), opendir: guarded('opendir'), open: async (...args: Parameters<typeof fs.open>) => {
-    const handle = await fs.open(...args), sync = handle.sync.bind(handle)
-    handle.sync = async () => {
-      await sync()
-      if (String(args[0]).includes('registry.json.') && String(args[0]).endsWith('.tmp')) await inspection.prepare?.()
-    }
-    return handle
-  } }
+  return { ...fs, lstat: guarded('lstat'), opendir: guarded('opendir') }
 })
 
 let root = ''
 let server: Server | undefined
 let registryForCleanup: typeof import('./lib/registry.js')['registry'] | undefined
+let storageForCleanup: typeof import('./lib/sessionStorage.js')['sessionStorage'] | undefined
 afterEach(async () => {
   if (server) await new Promise<void>(resolve => server!.close(() => resolve()))
   server = undefined
   inspection.prepare = undefined
   inspection.captured = undefined
   await registryForCleanup?.flush().catch(() => {})
+  if (storageForCleanup) await closeSessionStorageFixture(storageForCleanup)
+  storageForCleanup = undefined
   registryForCleanup = undefined
   vi.restoreAllMocks(); vi.unstubAllEnvs()
   failures.clear()
@@ -55,6 +52,14 @@ async function fixture(options: { waitOnResolution?: number; sharedGateway?: boo
   })
   const { registry } = await import('./lib/registry.js')
   registryForCleanup = registry
+  const { sessionStorage } = await import('./lib/sessionStorage.js')
+  storageForCleanup = sessionStorage
+  const prepare = sessionStorage.prepare.bind(sessionStorage)
+  vi.spyOn(sessionStorage, 'prepare').mockImplementation(async (...args) => {
+    const image = await prepare(...args)
+    if (args[0].kind === 'registry') await inspection.prepare?.()
+    return image
+  })
   const { startHookServer } = await import('./hookServer.js')
   const { readHookCredential } = await import('./lib/hookAuth.js')
   const { markDeleted } = await import('./lib/deletedSessions.js')

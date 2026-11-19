@@ -140,7 +140,7 @@ it('retains failure reporting when the final read-only output check finds change
     return true
   }) })
   expect(await launch.prepareSettings!(fixture.home, () => true)).toBeNull()
-  expect(warn).toHaveBeenCalledExactlyOnceWith('[launch-settings] OPTIONAL_PREPARATION_UNAVAILABLE')
+  expect(warn).toHaveBeenCalledExactlyOnceWith('[launch-settings] OPTIONAL_PREPARATION_UNAVAILABLE · HookPreparationHeld')
   expect(readFileSync(script, 'utf8')).toBe('peer replacement')
 })
 

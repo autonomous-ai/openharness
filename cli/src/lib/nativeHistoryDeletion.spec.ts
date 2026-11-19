@@ -1,3 +1,4 @@
+import { stoppedFixture } from '../testing/stoppedFixture.js'
 import * as fs from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
@@ -34,7 +35,7 @@ async function setup(over: Partial<PurgeDeps> = {}, rows = [row]) {
   const live = new Map(rows.map(entry => [entry.agentId, entry])), saved = new Map<string, RegisteredSession>()
   const deleted = vi.fn(), stop = vi.fn(async (id: string) => { saved.set(id, live.get(id)!); live.delete(id) })
   const service = new PurgeAgentService({ live: (id: string) => live.get(id), liveSessions: () => [...live.values(), ...saved.values()],
-    stopped: { get: (id: string) => saved.get(id) ?? null, beginResume: () => 'fixture-reservation',
+    stopped: { ...stoppedFixture(() => [...saved.values()]), beginResume: () => 'fixture-reservation',
       finishResume: () => {}, remove: (id: string) => saved.delete(id) },
     checkpoints: { deletionFiles: () => [] }, stop, restarting: () => false, deleted,
     worktrees: () => deletion.worktreeAnswers(deletion), ...over,

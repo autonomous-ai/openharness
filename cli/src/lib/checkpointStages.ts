@@ -1,21 +1,22 @@
 /** Four durable reservations. An unsettled writer keeps its slot across core replacement. */
 import { constants, lstatSync, mkdirSync, openSync, writeFileSync, ftruncateSync, fstatSync, fsync,
-  unlinkSync, rmdirSync, renameSync, type BigIntStats } from 'node:fs'
+  unlinkSync, rmdirSync, linkSync, type BigIntStats } from 'node:fs'
 import { lstat, open, type FileHandle } from 'node:fs/promises'
-import { createHash } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
 import { basename, dirname, join } from 'node:path'
+import { errorKind } from './log.js'
 import { nativeFileKey } from '../engines/kit/nativePaths.js'
 import { exportReceipt, STORAGE_CHUNK_BYTES, STORAGE_IN_FLIGHT, STORAGE_STAGE_BYTES, STORAGE_EXPORT_WAIT_MS, type ExportReceipt, type ExportStage,
   type ExportOwnership } from '../engines/worker/storageProtocol.js'
 import { closeStateFileDescriptor, directorySyncSupported, readPrivateStateFile, secureStateDirectory, syncStateDirectory } from './secureState.js'
 
-function privateFile(stat: BigIntStats): void {
-  if (!stat.isFile() || stat.nlink !== 1n || (process.platform !== 'win32' && (stat.mode & 0o777n) !== 0o600n)
+function privateFile(stat: BigIntStats, links = 1n): void {
+  if (!stat.isFile() || stat.nlink !== links || (process.platform !== 'win32' && (stat.mode & 0o777n) !== 0o600n)
     || (process.getuid && stat.uid !== BigInt(process.getuid()))) throw new Error('unsafe checkpoint stage')
 }
 function version(stat: BigIntStats): string { return `${nativeFileKey(stat)}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}` }
-function identity(path: string, key: string): BigIntStats {
-  const stat = lstatSync(path, { bigint: true }); privateFile(stat)
+function identity(path: string, key: string, links = 1n): BigIntStats {
+  const stat = lstatSync(path, { bigint: true }); privateFile(stat, links)
   if (nativeFileKey(stat) !== key) throw new Error('checkpoint stage changed')
   return stat
 }
@@ -40,14 +41,16 @@ function absent(pid: number): boolean {
   try { process.kill(pid, 0); return false } catch (error) { return (error as NodeJS.ErrnoException).code === 'ESRCH' }
 }
 const historyName = (value: unknown): value is string => typeof value === 'string' && /^[a-f0-9]{64}-[a-f0-9-]{36}\.history$/.test(value)
-interface Owner { version: 1; core: number; writer: number | null; settled: boolean; key: string; destination?: string }
-function readOwner(path: string): Owner {
-  const value = JSON.parse(readPrivateStateFile(path, 1024)) as Owner
-  if (value.version !== 1 || !Number.isSafeInteger(value.core) || value.core <= 0 || typeof value.settled !== 'boolean'
+type Owner = { core: number; writer: number | null; settled: boolean; key: string; destination?: string }
+  & ({ version: 1 } | { version: 2; lease: string })
+function readOwner(path: string): { owner: Owner; text: string } {
+  const text = readPrivateStateFile(path, 1024), value = JSON.parse(text) as Owner
+  if ((value.version !== 1 && (value.version !== 2 || typeof value.lease !== 'string' || !/^[a-f0-9]{32}$/.test(value.lease)))
+    || !Number.isSafeInteger(value.core) || value.core <= 0 || typeof value.settled !== 'boolean'
     || (value.writer !== null && (!Number.isSafeInteger(value.writer) || value.writer <= 0))
     || typeof value.key !== 'string' || !/^\d+:\d+$/.test(value.key)
     || (value.destination !== undefined && !historyName(value.destination))) throw new Error('checkpoint owner unavailable')
-  return value
+  return { owner: value, text }
 }
 function retained(): void { console.error('[checkpoint] STAGE_CLEANUP_UNAVAILABLE') }
 function expired(): Error { return Object.assign(new Error('checkpoint disk wait expired'), { code: 'CHECKPOINT_STAGE_TIMEOUT' }) }
@@ -79,44 +82,75 @@ export class CheckpointStages {
         secureStateDirectory(directory, false)
         found = true
         const key = nativeFileKey(lstatSync(directory, { bigint: true }))
-        const owner = readOwner(join(directory, 'owner.json'))
+        const { owner, text } = readOwner(join(directory, 'owner.json'))
         if (!absent(owner.core) || (!owner.settled && owner.writer !== null && !absent(owner.writer))) { retained(); continue }
-        this.remove(directory, key, owner)
+        this.remove(directory, key, owner, text, true)
       } catch (error) { if (found || (error as NodeJS.ErrnoException).code !== 'ENOENT') retained() }
     }
   }
 
-  private remove(directory: string, key: string, owner: Owner): void {
+  private remove(directory: string, key: string, owner: Owner, expected = JSON.stringify(owner), recovering = false): void {
     directoryIdentity(directory, key)
-    let orphan: string | undefined
-    if (owner.destination) {
-      const target = join(dirname(this.directory), owner.destination)
-      let exists = false
-      try { identity(target, owner.key); exists = true }
-      catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
-      if (exists) {
-        const manifest = join(dirname(this.directory), `${owner.destination.slice(0, 64)}.json`)
-        let committed = false
-        try {
-          const saved = JSON.parse(readPrivateStateFile(manifest, 16384)) as { version: unknown; file: unknown }
-          if (saved.version !== 1 || !historyName(saved.file)) throw new Error('checkpoint manifest unavailable')
-          committed = saved.file === owner.destination
-        } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
-        if (!committed) orphan = target
-      }
-    }
-    // Exclusive across cores. A crash while reaping reserves this same slot for manual inspection.
-    const cleanup = join(directory, 'cleanup')
+    // A stale reaper may have read a slot that another core has since reclaimed and leased again.
+    const cleanup = join(directory, 'cleanup'), record = join(directory, 'owner.json')
     mkdirSync(cleanup, { mode: 0o700 })
-    directoryIdentity(directory, key)
-    const path = join(directory, 'history.tmp')
-    try { identity(path, owner.key); unlinkSync(path) }
-    catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
-    if (orphan) { identity(orphan, owner.key); unlinkSync(orphan); syncStateDirectory(dirname(this.directory)) }
-    unlinkSync(join(directory, 'owner.json'))
-    rmdirSync(cleanup)
-    rmdirSync(directory)
-    syncStateDirectory(this.directory)
+    const cleanupKey = nativeFileKey(lstatSync(cleanup, { bigint: true }))
+    let mutated = false
+    try {
+      directoryIdentity(directory, key)
+      const actual = readOwner(record)
+      const same = recovering ? actual.text === expected
+        : owner.version === 2 && actual.owner.version === 2 && actual.owner.lease === owner.lease
+      if (!same || (recovering && (!absent(owner.core)
+        || (!owner.settled && owner.writer !== null && !absent(owner.writer))))) throw new Error('checkpoint owner changed')
+      const path = join(directory, 'history.tmp')
+      let orphan: string | undefined, published = false
+      if (owner.destination) {
+        const target = join(dirname(this.directory), owner.destination)
+        try { identity(target, owner.key, owner.version === 2 ? 2n : 1n); published = true }
+        catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
+        if (published) {
+          // The live pin prevents inode reuse. A saved dev:ino alone never authorizes an unlink after a crash.
+          if (owner.version === 2) identity(path, owner.key, 2n)
+          const manifest = join(dirname(this.directory), `${owner.destination.slice(0, 64)}.json`)
+          let committed = false
+          try {
+            const saved = JSON.parse(readPrivateStateFile(manifest, 16384)) as { version: unknown; file: unknown }
+            if (saved.version !== 1 || !historyName(saved.file)) throw new Error('checkpoint manifest unavailable')
+            committed = saved.file === owner.destination
+          } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
+          if (!committed) {
+            if (owner.version === 1) throw new Error('checkpoint generation unavailable')
+            orphan = target
+          }
+        }
+      }
+      // Remove an uncommitted destination before its pin. A crash after an unlink reserves this slot.
+      directoryIdentity(directory, key)
+      if (orphan) {
+        identity(path, owner.key, 2n); identity(orphan, owner.key, 2n)
+        mutated = true
+        unlinkSync(orphan); syncStateDirectory(dirname(this.directory))
+      }
+      try {
+        identity(path, owner.key, owner.version === 2 && published && !orphan ? 2n : 1n)
+        mutated = true
+        unlinkSync(path)
+      } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
+      mutated = true
+      unlinkSync(record)
+      rmdirSync(cleanup)
+      rmdirSync(directory)
+      syncStateDirectory(this.directory)
+    } catch (error) {
+      // A refused proof changed nothing: allow a later recovery to inspect it again.
+      if (!mutated) {
+        directoryIdentity(directory, key)
+        directoryIdentity(cleanup, cleanupKey)
+        rmdirSync(cleanup)
+      }
+      throw error
+    }
   }
 
   async acquire(deadline = performance.now() + STORAGE_EXPORT_WAIT_MS): Promise<CheckpointStage> {
@@ -140,7 +174,7 @@ export class CheckpointStages {
       let key: string
       try { const before = await file.stat({ bigint: true }); privateFile(before); key = nativeFileKey(before) }
       catch (error) { await file.close(); throw error }
-      let owner: Owner = { version: 1, core: process.pid, writer: null, settled: false, key }
+      let owner: Owner = { version: 2, lease: randomBytes(16).toString('hex'), core: process.pid, writer: null, settled: false, key }
       let recordKey: string | undefined, ownerWrite: Promise<void> | undefined
       const writeOwner = (next: Owner): Promise<void> => {
         if (ownerWrite) throw new Error('checkpoint owner update busy')
@@ -155,7 +189,13 @@ export class CheckpointStages {
             if (recordKey && recordKey !== openedKey) throw new Error('checkpoint stage changed')
             directoryIdentity(directory, directoryKey)
             identity(record, openedKey)
-            ftruncateSync(fd, 0); writeFileSync(fd, JSON.stringify(next))
+            if (recordKey) {
+              const saved = readOwner(record).owner
+              if (saved.version !== 2 || owner.version !== 2 || saved.lease !== owner.lease) throw new Error('checkpoint owner changed')
+            }
+            // Keep the previous complete owner if a write is refused before any bytes reach disk.
+            const text = JSON.stringify(next)
+            writeFileSync(fd, text); ftruncateSync(fd, Buffer.byteLength(text))
             const written = fstatSync(fd, { bigint: true }); privateFile(written)
             const verifyOwner = () => {
               directoryIdentity(directory, directoryKey)
@@ -241,7 +281,12 @@ export class CheckpointStages {
             if (version(identity(path, key)) !== verified) throw new Error('checkpoint stage changed')
             allowed()
             current()
-            renameSync(path, destination)
+            // Keep the original name until cleanup; this pins the inode even if the core dies.
+            try { linkSync(path, destination) }
+            catch (error) {
+              console.error(`[checkpoint] STAGE_PIN_UNAVAILABLE · ${errorKind(error)}`)
+              throw Object.assign(new Error('checkpoint publication link unavailable'), { code: 'CHECKPOINT_STAGE_PIN_UNAVAILABLE' })
+            }
             verified = undefined
           })()
           // Retain the destination through actual descriptor close, not just its journal write or bounded reply.

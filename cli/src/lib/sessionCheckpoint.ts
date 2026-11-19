@@ -213,6 +213,9 @@ export class SessionCheckpointStore {
       if ((error as { code?: unknown } | null)?.code === 'CHECKPOINT_STAGES_BUSY') {
         throw new SessionCheckpointError('History saving is held by unfinished operations. Stop and restart Harness; if it remains held, contact support. Its existing history is kept.')
       }
+      if ((error as { code?: unknown } | null)?.code === 'CHECKPOINT_STAGE_PIN_UNAVAILABLE') {
+        throw new SessionCheckpointError('History saving is unavailable on this filesystem. Its existing history is kept; check that the data folder supports hard links.')
+      }
       if ((error as { code?: unknown } | null)?.code === 'CHECKPOINT_STAGE_TIMEOUT') {
         console.error('[checkpoint] STAGE_OPERATION_TIMEOUT')
         throw new SessionCheckpointError('History saving timed out while waiting for disk. Its existing history is kept; try again.')

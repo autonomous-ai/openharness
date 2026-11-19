@@ -136,7 +136,7 @@ describe('native clipboard process ownership', () => {
   it('settles a child without pipes and ignores a closed tie error', async () => {
     const f = fixture()
     Object.assign(f.child, { stdout: null, stderr: null })
-    const owner = startClipboardOwner(f.file)
+    const owner = startClipboardOwner(f.file, { platform: 'darwin' })
     f.tie.emit('error', new Error('closed'))
     f.child.emit('error', new Error('spawn failed'))
     f.end(1); await owner.settled

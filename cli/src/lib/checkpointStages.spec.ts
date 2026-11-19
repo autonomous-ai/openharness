@@ -21,7 +21,17 @@ it('admits four exact stages, then refuses until a slot has actually been remove
   await leases[0].close()
   const next = await acquire(stages)
   expect(next.stage.path).toBe(leases[0].stage.path)
-  expect(next.stage.key).not.toBe(leases[0].stage.key)
+  const previous = leases[0], destination = join(dirname(directory), `${'a'.repeat(64)}-${'b'.repeat(36)}.history`)
+  const owner = await readFile(join(dirname(next.stage.path), 'owner.json'), 'utf8')
+  await expect(previous.writer(process.pid)).rejects.toThrow()
+  await expect(previous.settled()).rejects.toThrow()
+  await expect(previous.verify(receipt('history'))).rejects.toThrow()
+  await expect(previous.publish(destination, () => {})).rejects.toThrow()
+  await previous.close()
+  expect(await readFile(join(dirname(next.stage.path), 'owner.json'), 'utf8')).toBe(owner)
+  await writeFile(next.stage.path, 'history'); await next.verify(receipt('history'))
+  await next.publish(destination, () => {})
+  expect(await readFile(destination, 'utf8')).toBe('history')
 })
 
 it('checks bytes, hash, inode and private-link identity before accepting output', async () => {
@@ -119,7 +129,7 @@ it('two cores share four reservations, and cancellation at the final publication
   await expect(stat(destination)).rejects.toMatchObject({ code: 'ENOENT' })
 })
 
-it.each(['uncommitted', 'committed', 'malformed', 'replaced'] as const)('recovers the exact rename-before-manifest crash window: %s', async state => {
+it.each(['uncommitted', 'committed', 'malformed', 'replaced'] as const)('recovers the exact publication-before-manifest crash window: %s', async state => {
   vi.spyOn(console, 'error').mockImplementation(() => {})
   const stages = new CheckpointStages(join(directory, '.stages')), lease = await acquire(stages)
   const name = `${'a'.repeat(64)}-${'b'.repeat(8)}-${'b'.repeat(4)}-${'b'.repeat(4)}-${'b'.repeat(4)}-${'b'.repeat(12)}.history`
@@ -127,14 +137,20 @@ it.each(['uncommitted', 'committed', 'malformed', 'replaced'] as const)('recover
   await lease.writer(424242); await lease.settled()
   await writeFile(lease.stage.path, 'history'); await lease.verify(receipt('history'))
   await lease.publish(destination, () => {})
+  const pinned = await stat(lease.stage.path, { bigint: true }), published = await stat(destination, { bigint: true })
+  expect([pinned.dev, pinned.ino, pinned.nlink]).toEqual([published.dev, published.ino, 2n])
   if (state === 'committed') await writeFile(manifest, JSON.stringify({ version: 1, file: name }), { mode: 0o600 })
   if (state === 'malformed') await writeFile(manifest, '{incomplete', { mode: 0o600 })
-  if (state === 'replaced') { await rm(destination); await writeFile(destination, 'another history', { mode: 0o600 }) }
+  if (state === 'replaced') {
+    await rm(destination); await writeFile(destination, 'another history', { mode: 0o600 })
+    expect((await stat(destination, { bigint: true })).ino).not.toBe(pinned.ino)
+  }
   vi.spyOn(process, 'kill').mockImplementation(pid => { if (pid === process.pid) throw Object.assign(new Error(), { code: 'ESRCH' }); return true })
   const next = new CheckpointStages(join(directory, '.stages'))
   await next.prepare()
   if (state === 'uncommitted') await expect(stat(destination)).rejects.toMatchObject({ code: 'ENOENT' })
   else expect(await readFile(destination, 'utf8')).toBe(state === 'replaced' ? 'another history' : 'history')
+  if (state === 'committed') expect((await stat(destination)).nlink).toBe(1)
   const allocated = await acquire(next)
   expect(allocated.stage.path === lease.stage.path).toBe(state === 'uncommitted' || state === 'committed')
 })

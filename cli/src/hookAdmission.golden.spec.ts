@@ -1,3 +1,4 @@
+import { closeSessionStorageFixture } from './testing/sessionStorageFixture.js'
 /** Healthy HTTP hook behavior recorded from main before pending native admission is moved. */
 import type { Server } from 'node:http'
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
@@ -7,7 +8,9 @@ import { fileURLToPath } from 'node:url'
 import { afterAll, expect, it, vi } from 'vitest'
 import type { RegisteredSession } from './lib/registry.js'
 
-vi.mock('node:child_process', () => {
+vi.mock('node:child_process', async original => {
+  const actual = await original<typeof import('node:child_process')>()
+  const { spawnSessionStorageFixture } = await import('./testing/sessionStorageFixture.js')
   const forbidden = () => { throw Error('Host binaries are forbidden in the hook admission golden') }
   // The simulated platform cannot probe the host's process generation.
   const execFile = (file: string, args: string[], _options: unknown, callback: (error: Error | null, stdout: string) => void) => {
@@ -15,7 +18,8 @@ vi.mock('node:child_process', () => {
     queueMicrotask(() => callback(null, 'fixture-start'))
   }
   return { exec: forbidden, execSync: forbidden, execFile, execFileSync: forbidden,
-    spawn: forbidden, spawnSync: forbidden, fork: forbidden }
+    spawn: (command: string, args: string[], options: import('node:child_process').SpawnOptions) => spawnSessionStorageFixture(actual.spawn, command, args, options),
+    spawnSync: forbidden, fork: forbidden }
 })
 vi.mock('node:perf_hooks', async original => ({ ...await original<object>(), performance: { now: () => 0 } }))
 vi.mock('./lib/loginShellEnv.js', () => ({ loginShellEnvironment: () => ({}) }))
@@ -51,6 +55,8 @@ it.each(['linux', 'darwin'])('preserves healthy native hook admission on %s', as
   }
   const log = vi.spyOn(console, 'log').mockImplementation(() => {})
   const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+  let ownedStorage: typeof import('./lib/sessionStorage.js')['sessionStorage'] | undefined
+  let ownedRegistry: typeof import('./lib/registry.js')['registry'] | undefined
   try {
     Object.defineProperty(process, 'platform', { ...originalPlatform, value: platform })
     vi.useFakeTimers({ toFake: ['Date'], now: Date.parse('2026-10-10T00:00:00Z') })
@@ -69,6 +75,8 @@ it.each(['linux', 'darwin'])('preserves healthy native hook admission on %s', as
     write(codex, meta(B)); write(child, meta(CHILD, { subagent: { thread_spawn: { parent_thread_id: B, depth: 1 } } }))
     vi.resetModules()
     const { registry } = await import('./lib/registry.js')
+    ownedRegistry = registry
+    ownedStorage = (await import('./lib/sessionStorage.js')).sessionStorage
     const { startHookServer } = await import('./hookServer.js')
     const { readHookCredential } = await import('./lib/hookAuth.js')
     const agents = new Map<string, RegisteredSession>()
@@ -113,10 +121,15 @@ it.each(['linux', 'darwin'])('preserves healthy native hook admission on %s', as
     check('callbacks', { registered, prompts, promptHooks, turns, ends })
     check('bindings', registry.list().map(shape).sort((a, b) => a!.agent!.localeCompare(b!.agent!)))
   } finally {
-    if (server) await new Promise<void>(resolve => server!.close(() => resolve()))
-    log.mockRestore(); warn.mockRestore(); vi.useRealTimers(); vi.unstubAllEnvs(); vi.resetModules()
-    Object.defineProperty(process, 'platform', originalPlatform)
-    rmSync(root, { recursive: true, force: true })
+    try {
+      if (server) await new Promise<void>(resolve => server!.close(() => resolve()))
+      try { await ownedRegistry?.flush({ exiting: true }) }
+      finally { if (ownedStorage) await closeSessionStorageFixture(ownedStorage) }
+      rmSync(root, { recursive: true, force: true })
+    } finally {
+      log.mockRestore(); warn.mockRestore(); vi.useRealTimers(); vi.unstubAllEnvs(); vi.resetModules()
+      Object.defineProperty(process, 'platform', originalPlatform)
+    }
   }
 }, 30_000)
 

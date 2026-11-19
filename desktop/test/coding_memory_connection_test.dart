@@ -123,6 +123,7 @@ void main() {
       'payload': {
         'machineId': 'local-fixture',
         'localProtocolVersion': 1,
+        'eventsProtocol': 1,
         'tool': true,
       },
     });

@@ -14,12 +14,21 @@ import type { CloudAdapter } from './types.js'
 const diskFault = vi.hoisted(() => ({ pending: false, intentRename: false, failWrites: 0, hits: 0, writes: 0 }))
 vi.mock('node:fs', async importOriginal => {
   const actual = await importOriginal<typeof import('node:fs')>()
-  return { ...actual, writeFileSync: (...args: Parameters<typeof actual.writeFileSync>) => {
-    if (String(args[0]).endsWith('.tmp')) {
+  // The secure writer writes through its opened descriptor; bind each fault to that temporary file.
+  const paths = new Map<number, string>()
+  return { ...actual, openSync: (...args: Parameters<typeof actual.openSync>) => {
+    const fd = actual.openSync(...args)
+    paths.set(fd, String(args[0]))
+    return fd
+  }, closeSync: (fd: number) => {
+    try { return actual.closeSync(fd) } finally { paths.delete(fd) }
+  }, writeFileSync: (...args: Parameters<typeof actual.writeFileSync>) => {
+    const path = typeof args[0] === 'number' ? paths.get(args[0]) ?? '' : String(args[0])
+    if (path.endsWith('.tmp')) {
       diskFault.writes++
       if (diskFault.failWrites > 0) { diskFault.failWrites--; diskFault.hits++; throw new Error('fixture provider write failed') }
     }
-    if (diskFault.pending && String(args[0]).endsWith('.tmp') && typeof args[1] === 'string') {
+    if (diskFault.pending && path.endsWith('.tmp') && typeof args[1] === 'string') {
       const saved = JSON.parse(args[1])
       if (saved.publication?.pending?.owners.some((owner: { busy: boolean }) => !owner.busy)) {
         diskFault.pending = false; diskFault.hits++

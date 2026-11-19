@@ -1445,8 +1445,8 @@ describe('TerminalStreamManager', () => {
       })
     })
 
-    // A file's name is written by the person (AGENTS.md rule 7): the log keeps its extension and size only.
-    it('logs an upload begin with the extension and size, never the file name', async () => {
+    // Filenames belong to the paste component; the core records only the declared upload kind and size.
+    it('logs an upload begin with its kind and size, never the file name', async () => {
       const lines: { event: string; fields: Record<string, unknown> }[] = []
       manager = newManager({ diagnostic: (event, fields) => lines.push({ event, fields }) })
       const streamId = await openStream()
@@ -1458,12 +1458,12 @@ describe('TerminalStreamManager', () => {
 
       const begins = lines.filter((l) => l.event === 'chunked_upload_begin')
       expect(begins).toHaveLength(3)
-      expect(begins[0].fields).toMatchObject({ uploadKind: 'file', totalBytes: fileContent.length, ext: 'pdf' })
+      expect(begins[0].fields).toMatchObject({ uploadKind: 'file', totalBytes: fileContent.length })
       expect(JSON.stringify(lines)).not.toMatch(/SECRET-NAME-MARKER/i)
     })
 
-    // A 7-10 letter "extension" can itself be the person's words, so only 1-6 characters are kept.
-    it('logs a long extension as other and keeps a short one', async () => {
+    // Even a short extension can be personal content; it stays out of the core's diagnostic.
+    it('keeps both long and short extensions out of diagnostics', async () => {
       const lines: { event: string; fields: Record<string, unknown> }[] = []
       manager = newManager({ diagnostic: (event, fields) => lines.push({ event, fields }) })
       const streamId = await openStream()
@@ -1472,8 +1472,9 @@ describe('TerminalStreamManager', () => {
         await manager.handleFrame('web-1', 'terminal_chunked_upload_cancel', { streamId })
       }
 
-      const exts = lines.filter((l) => l.event === 'chunked_upload_begin').map((l) => l.fields.ext)
-      expect(exts).toEqual(['other', 'docx', 'gz'])
+      const begins = lines.filter((l) => l.event === 'chunked_upload_begin')
+      expect(begins).toHaveLength(3)
+      for (const { fields } of begins) expect(fields).not.toHaveProperty('ext')
       expect(JSON.stringify(lines)).not.toMatch(/diaryentry/i)
     })
 

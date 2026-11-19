@@ -306,7 +306,8 @@ jobs:
       fail-fast: false
       matrix:
         shard: [1, 2, 3, 4]
-    runs-on: ubuntu-latest
+    # Native launch goldens inspect their private programs through zsh; 26.04 has no zsh package yet.
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     defaults:
       run:
@@ -320,6 +321,7 @@ jobs:
           node-version: ${{ env.CLI_NODE_VERSION }}
           cache: npm
           cache-dependency-path: cli/package-lock.json
+      - run: sudo apt-get update && sudo apt-get install -y zsh
       - run: npm ci --no-audit --no-fund
       # Vitest partitions files using the same config in every shard. Keep the
       # existing worker cap/isolation: subprocess fixtures still need spare CPUs.
