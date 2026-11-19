@@ -284,6 +284,47 @@ describe('atomicWriteFile', () => {
     expect(readdirSync(dir)).toEqual(['f'])
   })
 
+  // What a write flushed, in order: a file (the temporary one, or a copy) or the folder.
+  function flushes(): string[] {
+    const synced: string[] = []
+    fault.sync = fd => { synced.push(fstatSync(fd).isDirectory() ? 'folder' : 'file') }
+    return synced
+  }
+  // Windows cannot flush a folder (syncStateDirectory).
+  const fileAndFolder = directorySyncSupported() ? ['file', 'folder'] : ['file']
+
+  it('a trust write flushes the file, then its folder', () => {
+    const synced = flushes()
+    expect(atomicWriteFile(join(folder(), 'f'), 'new', 'trust')).toBe(true)
+    expect(synced).toEqual(fileAndFolder)
+  })
+
+  // A cache file can be rebuilt, and the rename alone keeps a reader from half of one. Flushed, a full recap save took
+  // 90-143 ms instead of 12 (2026-11-19); a power cut that leaves the file empty is the set-aside read (readState).
+  it('a cache write is renamed whole and flushes nothing, unless asked to be durable', () => {
+    const dir = folder(), f = join(dir, 'f')
+    writeFileSync(f, 'old')
+    const synced = flushes()
+    expect(atomicWriteFile(f, 'new', 'cache')).toBe(true)
+    expect(readFileSync(f, 'utf8')).toBe('new')
+    expect(readdirSync(dir)).toEqual(['f'])
+    expect(synced).toEqual([])
+    expect(atomicWriteFile(f, 'newer', 'cache', { durable: true })).toBe(true)
+    expect(readFileSync(f, 'utf8')).toBe('newer')
+    expect(synced).toEqual(fileAndFolder)
+  })
+
+  // Made once and never written again (the computer id the backend binds this computer to): a power cut that lost it
+  // would leave no later write to put it back.
+  it('exclusive: flushed whatever its kind, a copy too', () => {
+    const synced = flushes()
+    expect(atomicWriteFile(join(folder(), 'f'), 'id', 'cache', { exclusive: true })).toBe(true)
+    expect(synced.splice(0)).toEqual(fileAndFolder)
+    fault.link = 'EXDEV'
+    expect(atomicWriteFile(join(folder(), 'g'), 'id', 'cache', { exclusive: true })).toBe(true)
+    expect(synced).toEqual(['file', ...fileAndFolder])
+  })
+
   it('exclusive: one creator wins and the other reads the winner\'s', () => {
     const dir = folder(), f = join(dir, 'f')
     expect(atomicWriteFile(f, 'first', 'trust', { exclusive: true })).toBe(true)

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs'
+import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { CommanderMirror, type CommanderFrame, type CommanderMirrorOpts, type TierTurn } from './commander.js'
@@ -7,17 +7,23 @@ import type { Tier } from './notifyTier.js'
 import { isLocalOnly, withoutUpdate } from './cardUpdate.js'
 import type { LiveEvent } from './normalize.js'
 import { BODY_MAX_CHARS, RECAP_MAX_CHARS, deriveTurnSummary } from './deviceRecap.js'
+import { directorySyncSupported } from './secureState.js'
 
-// A disk that fills mid-write: half the bytes land, then ENOSPC. Under both module names, since the mirror and the
-// state writer import it under different ones.
+// A disk that fills mid-write: half the bytes land, then ENOSPC; and what the writer flushed, in order. Under both
+// module names, since the mirror and the state writer import it under different ones.
 const disk = vi.hoisted(() => ({
   full: false,
+  synced: [] as string[],
   wrap: (actual: typeof import('node:fs')) => ({ ...actual,
     writeFileSync: (...args: Parameters<typeof actual.writeFileSync>) => {
       if (!disk.full) return actual.writeFileSync(...args)
       const [target, data] = args
       actual.writeFileSync(target, typeof data === 'string' ? data.slice(0, data.length / 2) : data)
       throw Object.assign(new Error('no space left on device'), { code: 'ENOSPC' })
+    },
+    fsyncSync: (fd: number) => {
+      disk.synced.push(actual.fstatSync(fd).isDirectory() ? 'folder' : 'file')
+      return actual.fsyncSync(fd)
     } }),
 }))
 vi.mock('fs', async original => disk.wrap(await original<typeof import('node:fs')>()))
@@ -1184,7 +1190,7 @@ describe('the recap files are never written over or left half-written', () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     vi.spyOn(console, 'error').mockImplementation(() => {})
   })
-  afterEach(() => { disk.full = false; vi.useRealTimers(); vi.restoreAllMocks(); rmSync(dir, { recursive: true, force: true }) })
+  afterEach(() => { disk.full = false; disk.synced = []; vi.useRealTimers(); vi.restoreAllMocks(); rmSync(dir, { recursive: true, force: true }) })
 
   const build = () => new CommanderMirror({ send: () => {}, sendWeb: () => {}, hasDevice: () => true, dataDir: dir,
     summarize: async () => 'Recap\n\nBody' })
@@ -1215,6 +1221,29 @@ describe('the recap files are never written over or left half-written', () => {
     const after = held()
     for (const text of after) expect(() => JSON.parse(text)).not.toThrow()
     expect(after).toEqual(before)
+  })
+
+  // A full history's save took 90-143 ms with every file and its folder flushed, 12 without (2026-11-19): the timer's
+  // saves are renamed whole only. The one as the process stops is flushed, so a restart loses no recap.
+  it('the timer\'s save flushes nothing; the save as the process stops flushes each file and the folder', async () => {
+    const mirror = build()
+    await turn(mirror, 's1')
+    expect(disk.synced).toEqual([])
+    // The next turn's save is still waiting on its timer as the process stops: the flushed save is that one.
+    mirror.ingest([
+      { type: 'turn_started', payload: { userMessage: 'question s2' } },
+      { type: 'text_delta', payload: { content: 'answer s2' } },
+      { type: 'turn_ended', payload: {} },
+    ] as LiveEvent[], 's2')
+    await vi.advanceTimersByTimeAsync(0)
+    expect(Object.keys(JSON.parse(held()[0]!))).toEqual(['s1'])
+    mirror.saveBeforeStop()
+    expect(disk.synced).toEqual(FILES.flatMap(() => directorySyncSupported() ? ['file', 'folder'] : ['file']))
+    expect(Object.keys(JSON.parse(held()[0]!))).toEqual(['s1', 's2'])
+    // Nothing is saved after it: a later save, not flushed, would put an unflushed file in its place.
+    const flushed = FILES.map((name) => statSync(join(dir, name)).ino)
+    await vi.runAllTimersAsync()
+    expect(FILES.map((name) => statSync(join(dir, name)).ino)).toEqual(flushed)
   })
 
   it('the timer\'s save and the strict save write the same bytes', async () => {
