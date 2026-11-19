@@ -94,8 +94,7 @@ Status, 19 Nov: everything above is in `feat/harness-max-v4` and the Orange Pi r
 with V3's icons, App Detail, an agent opened with the mic on, checked on the bar). The host tests pass at 480 and 415,
 the 38 goldens match, the Linux build's tests pass on the Mac and on the board, and `harness_max.bin` is 0x431d40
 bytes of `ota_0`'s 0x7e0000 (47% free). Not yet run: `--usb` against the Mac's real daemon, which needs the branch CLI
-installed on the Mac. Deviations from V3, for the P4's renderer: no blur or motion on the slivers, no width animation
-when an agent opens, a swipe moves the row a cell at a time.
+installed on the Mac.
 
 Frame speed, 19 Nov evening (`feat/harness-max-v4-perf`, in V4). The bench (`devices/harness-max/firmware/bench`)
 ran on the desk Pro's chip from its spare `ota_1` slot, the Pro's own firmware in `ota_0` untouched and its `ota_1`
@@ -106,6 +105,26 @@ next is drawn (`main/display/max_present.c`): a whole glass 15–20 ms end to en
 (86% of the glass changes) 16.6 ms, the listening band 9.7 ms; every framebuffer pixel as the old path's on all 38
 screens. Reports: `bench/results/`. The Orange Pi flips two buffers on vblank (no tearing) and its longest raster fell
 from 24.7 ms to 4.1 ms.
+
+Motion, 19–20 Nov (`feat/harness-max-v4-motion`, in V4 at `e9c3c9ae80`). V3's row motion runs in C by the clock:
+the width animation when an agent opens and closes (420 ms, V3's curve), the panel fading in and out, the slivers
+blurred and moving, the swipe that follows the finger and snaps, and V3's loops (the chip's dot, the rail's sweep,
+the asking glow, the talk band, the toast and notes). While App Detail rests, the render task paints ahead each open
+and close the finger can start (`main/app/max_ui_warm.c`), so the first frame of a motion is a warm one. On the
+chip, without the panel: an open 36 fps (27.6 ms mean, 37.8 ms worst), a close 42 fps (23.5 / 41.3 ms), the first
+frame 18 ms (open) and 36 ms (close), down from 76 ms and 182 ms cold; the swipe 55–61 fps; the loops over 200 fps.
+Two fixes came with it: a race in ESP-IDF 5.5.4's PPA driver left a frame's last strip waiting (`max_strips.c` now
+kicks it, and falls back to the CPU instead of aborting), and the Pro's `ht_damage` lines up the scenes' common tail
+when a run is added or dropped (the listening band 64k px a frame, from 735k). Still open: a step of the paint-ahead
+takes 17 ms on average on the chip, 88 ms at worst, and holds the UI lock meanwhile (loops and taps wait); the next
+round budgets each step to about 4 ms.
+
+Deviations from V3 that remain: the pages switch without V3's cross-fade (a cross-faded frame costs 6–10 whole
+glasses); the cell pets hold their pose; the words and chips fade without V3's blur; the overlay, the asking chip and
+the halo fade as tints toward the ground, not by alpha (only off on a ground that is not black); the rail and glow
+stand still while an agent opens or closes; a moving pet's size steps on the motion's 16 ms frames (15 ms at most
+behind the clock); with four or more different Claude or Codex agents the paint-ahead pool is full, so the later
+frames of the last motion are cold; a swipe is not painted ahead.
 
 ### M2: On Pro hardware
 
@@ -185,7 +204,7 @@ No wake word is planned: one tap talks.
 | Risk | Effect | What we do |
 |---|---|---|
 | The cable protocol changes daily on `main` | The bar breaks against a released daemon | M1 now, then merge `main` weekly until M4 |
-| App Detail's sliding row on the P4's strip renderer | Frames too long, a stutter | Measured on the chip: 16.6 ms for a row shifted 40 px, without the panel; measure again with it in M3 |
+| App Detail's motion on the P4's strip renderer | Frames too long, a stutter | Measured on the chip without the panel: open 36 fps, close 42 fps, swipe 55–61 fps, first frames warm; the paint-ahead's steps budgeted next; measure again with the panel in M3 |
 | One framebuffer on the P4 | Motion tears on the 8.8" panel | A second framebuffer flipped on refresh, verified at M3 |
 | The Orange Pi shows the picture at 2/3 | Smaller than the 8.8" panel's pixels, larger than its millimetres | Judge type sizes in mm: 1280 px on the 11.9" bar is about 255 mm wide, the 8.8" panel about 217 mm |
 | The demo hides gaps of the real path | The inbox and empty apps behave differently with the real daemon | Test each milestone on `--usb`, not only `--demo` |
