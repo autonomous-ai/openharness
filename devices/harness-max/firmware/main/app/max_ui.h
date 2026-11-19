@@ -36,6 +36,14 @@ bool max_ui_question(const char *id, const char *request, const char *text, cons
 // with no Attention and no toast; its Inbox notice keeps its place and whether it was read.
 bool max_ui_question_quiet(const char *id, const char *request, const char *text, const pro_ask_item_t *items, int n,
                            bool permission, bool review, uint32_t now_ms);
+// Either, as pro_app_ask has it, with the frame's agent name: an agent off the ring is filed under it. A question of an
+// agent off the ring waits for it (it asks quietly when it joins), its notice in Inbox meanwhile.
+bool max_ui_question_from(const char *id, const char *name, const char *request, const char *text,
+                          const pro_ask_item_t *items, int n, bool permission, bool review, bool quiet, uint32_t now_ms);
+// notif.replace's rows, the drawer replaced whole. A question row makes its ring agent ask that question, quietly (one
+// that asks keeps its own); one of an agent off the ring waits for it, as above; news rows file nothing (Inbox keeps
+// the bar's own turns). `review` as max_ui_question.
+bool max_ui_notices(const pro_notif_row_t *rows, int n, bool review, uint32_t now_ms);
 bool max_ui_question_close(const char *id);
 // The replies of the reviewed path, as pro_app_question_state and pro_app_answer_receipt.
 bool max_ui_question_state(const char *id, const char *fetch, bool ok, const char *request, const char *token,

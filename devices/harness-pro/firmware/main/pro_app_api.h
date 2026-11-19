@@ -113,9 +113,10 @@ typedef struct {
 // also the daemon's summary frame: the first question's words only, the whole question read by question.read.
 // permission: the daemon marks it a permission prompt (`permission: true`), answered by approving or denying.
 // listed: `tier: "list"`, a question the daemon re-files because the device was told it before (only to a device whose
-// hello says questionTier; the welcome's `question.tier` says the daemon means it).
-void pro_app_ask(const char *id, const char *request, const char *text, const pro_ask_item_t *items, int n,
-                 bool permission, bool listed);
+// hello says questionTier; the welcome's `question.tier` says the daemon means it). name: the frame's agent name, NULL
+// without one (the Max names a question of an agent off its ring by it).
+void pro_app_ask(const char *id, const char *name, const char *request, const char *text, const pro_ask_item_t *items,
+                 int n, bool permission, bool listed);
 // question.state, the reply to pro_cable_question_read. `fetch` is the requestId that read sent. ok: `request` and
 // `token` are under PRO_TOKEN_BYTES and n is 1..4, or 0 with items NULL for a question the daemon holds as its summary
 // alone (one it cannot take an answer for: answered on the computer); submitted: an answer is in already. Not ok:

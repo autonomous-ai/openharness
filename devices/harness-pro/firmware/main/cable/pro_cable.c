@@ -856,7 +856,7 @@ static void handle_question(const char *id, const cJSON *p)
     copy_cut(s_text, PRO_QUESTION_BYTES, prompt ? prompt : "Needs your answer");
     const char *tier = str_of(p, "tier");
     pro_app_question(id, request, s_text);
-    pro_app_ask(id, request, s_text, s_ask_items, read_items(questions), flag(p, "permission"),
+    pro_app_ask(id, str_of(p, "name"), request, s_text, s_ask_items, read_items(questions), flag(p, "permission"),
                 tier && !strcmp(tier, "list"));
 }
 

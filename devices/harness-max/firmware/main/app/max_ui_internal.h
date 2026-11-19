@@ -101,6 +101,17 @@ typedef struct {
     char note[MAX_ERROR_BYTES];     // FAILED: why; SENT: what the daemon said
 } max_ask_t;
 
+// A question of an agent off the ring (max_ui_ask.c): the daemon holds the bar to it (a drawer row, a `question` of an
+// agent in another app, one whose agent left the ring) and gives it no second time, so it waits here for its agent.
+#define MAX_PARKED 16
+typedef struct {
+    char agent[ID_MAX];
+    char request[PRO_TOKEN_BYTES];  // "" for a drawer row's (or one too long to echo): the read names it
+    char text[MAX_QUESTION_BYTES];
+    uint32_t key;                   // its request and words: the same one again is no news
+    bool permission, review;
+} max_parked_t;
+
 // ---- New Harness (max_ui_form.c), after the Dial's form.c ----
 #define MAX_FORM_WAIT_MS 3500u      // a command's reply; the desktop gives up at 2 s
 #define MAX_FORM_POLL_MS 1000u      // the page read again while it is up; MAX_FORM_BUSY_MS while the desktop works
@@ -196,6 +207,8 @@ typedef struct {
     cable_machine_t machines[CABLE_MAX_MACHINES];
     int machine_count;
     max_ask_t asks[MAX_AGENTS];      // the open questions, one an agent, by agent id
+    max_parked_t parked[MAX_PARKED]; // the questions of agents off the ring, oldest first
+    int parked_count;
     uint32_t ask_serial;             // names the reads (max_ask_t fetch)
     bool offers_form;                // the welcome offered `form`: New is under the pager
     max_form_t form;
@@ -308,6 +321,15 @@ void max_attend(max_agent_t *, max_attn_t why, uint32_t now_ms);
 // A question back quietly (max_ui_question_quiet): its notice, and nothing more. The same notice keeps its place and
 // whether it was read; one Inbox does not hold comes in unread.
 void max_file_question(const max_agent_t *, uint32_t now_ms);
+// The same for an agent off the ring, by the name the daemon gave (its engine and app unknown here); `quiet` as above,
+// else an unread notice on top. True when Inbox changed.
+bool max_file_notice(const char *id, const char *name, const char *text, bool quiet, uint32_t now_ms);
+// The ring changes (max_ui_agents): an asking agent that leaves parks its question, before its ask goes; one that joins
+// with a parked question asks it, quietly.
+void max_park_leaver(const max_agent_t *);
+void max_unpark_joined(uint32_t now_ms);
+// Its question ended off the ring (a close, a turn that moved on).
+void max_unpark(const char *id);
 // Attention leaves `except`'s question (answered, or gone): the question that has waited longest takes it, else
 // Overview.
 void max_next_question(const char *except, uint32_t now_ms);

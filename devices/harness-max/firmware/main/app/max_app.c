@@ -254,10 +254,14 @@ void pro_app_summary(const char *id, const char *text, const char *recap, const 
     leave();
 }
 
-// The Max keeps its own Inbox from the turns and questions it sees (max_ui.h): the daemon's list adds nothing.
+// The daemon's drawer: its question rows are questions it gives the bar no other way (max_ui_notices), filed silently,
+// as they rang before. Its news rows add nothing: the bar keeps its own Inbox from the turns it sees.
 void pro_app_notif_replace(const pro_notif_row_t *rows, int n)
 {
-    (void)rows; (void)n;
+    const bool review = pro_cable_supports(CABLE_FEATURE_QUESTION_REVIEW);
+    lock();
+    changed_if(max_ui_notices(rows, n, review, ms()));
+    leave();
 }
 
 void pro_app_notif_seen(const char *id, const char *token)
@@ -300,8 +304,8 @@ void pro_app_question(const char *id, const char *request, const char *text)
     (void)id; (void)request; (void)text;
 }
 
-void pro_app_ask(const char *id, const char *request, const char *text, const pro_ask_item_t *items, int n,
-                 bool permission, bool listed)
+void pro_app_ask(const char *id, const char *name, const char *request, const char *text, const pro_ask_item_t *items,
+                 int n, bool permission, bool listed)
 {
     if (!id_ok(id)) return;
     const bool review = pro_cable_supports(CABLE_FEATURE_QUESTION_REVIEW);   // the reviewed path, when the daemon has it
@@ -309,8 +313,7 @@ void pro_app_ask(const char *id, const char *request, const char *text, const pr
     // for mutes a question (the round dial's rule).
     const bool quiet = listed && pro_cable_supports(CABLE_FEATURE_QUESTION_TIER);
     lock();
-    const bool changed = (quiet ? max_ui_question_quiet : max_ui_question)(id, request, text, items, n, permission,
-                                                                          review, ms());
+    const bool changed = max_ui_question_from(id, name, request, text, items, n, permission, review, quiet, ms());
     changed_if(changed);
     // Remembered either way: the same question rung later is not news.
     if (changed && ask_is_new(id, ask_key(request, text)) && !quiet) alert_locked();

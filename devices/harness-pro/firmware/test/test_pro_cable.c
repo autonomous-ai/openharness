@@ -148,11 +148,12 @@ static void put_items(char *dst, const pro_ask_item_t *items, int n)
     }
 }
 static pro_ask_item_t rec_items[PRO_ASK_ITEMS];
-void pro_app_ask(const char *id, const char *request, const char *text, const pro_ask_item_t *items, int n,
-                 bool permission, bool listed)
+void pro_app_ask(const char *id, const char *name, const char *request, const char *text, const pro_ask_item_t *items,
+                 int n, bool permission, bool listed)
 {
     ev_t *e = add(EV_ASK, id); put(e->a, text); snprintf(e->d, sizeof e->d, "%s", request); e->n1 = n; e->n2 = permission;
     e->n3 = listed;
+    snprintf(e->c, sizeof e->c, "%s", name ? name : "<null>");
     put_items(e->b, items, n);
     if (n > 0) memcpy(rec_items, items, (size_t)n * sizeof *items);
 }
@@ -1287,6 +1288,7 @@ static void test_question_items(void)
     CHECK(!strcmp(evs[1].a, "Which database?"));
     CHECK(!strcmp(evs[1].b, "k1|Which database?|Dev/Staging|0|1; k2|Which checks?|Lint/Types/Tests|1|1"));
     CHECK(evs[1].n2 == 0);   // no `permission`: a plain question
+    CHECK(!strcmp(evs[1].c, "A"));   // its agent's name: the Max files the question of an agent off its ring by it
 
     // A permission prompt is marked `permission: true`; anything but true is a plain question.
     const char *marks[] = {"true", "false", "1", "\"true\""};
@@ -1298,6 +1300,7 @@ static void test_question_items(void)
         CHECK(nev == 2 && evs[1].kind == EV_ASK && evs[1].n1 == 1 && evs[1].n2 == (i == 0));
     }
     CHECK(evs[1].n3 == 0);   // no `tier`: the frame is news
+    CHECK(!strcmp(evs[1].c, "<null>"));   // no name: none
 
     // The summary the daemon sends now (cableSession.ts giveQuestion): the first question's words, no key, no options;
     // `tier: "list"` re-files one the bar was told before. Only "list" is listed; the words are the prompt either way.

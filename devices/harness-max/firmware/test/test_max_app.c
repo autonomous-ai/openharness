@@ -457,15 +457,15 @@ static void test_question_chimes_once(void)
     fresh();
     now += 60000;   // past the last chime's coalescing window
     BEEPS = 0;
-    pro_app_ask("a", "r1", "Proceed?", NULL, 0, false, false);
+    pro_app_ask("a", NULL, "r1", "Proceed?", NULL, 0, false, false);
     CHECK(BEEPS == 1);
     now += 60000;
     fresh();
-    pro_app_ask("a", "r1", "Proceed?", NULL, 0, false, false);
+    pro_app_ask("a", NULL, "r1", "Proceed?", NULL, 0, false, false);
     CHECK(BEEPS == 1);
     pro_app_question_close("a");
     now += 60000;
-    pro_app_ask("a", "r2", "And this?", NULL, 0, false, false);
+    pro_app_ask("a", NULL, "r2", "And this?", NULL, 0, false, false);
     CHECK(BEEPS == 2);
     // A failed turn is an alert too, but a second alert within 30 s does not chime again.
     pro_app_turn("b", "started", "", 0);
@@ -482,12 +482,42 @@ static void test_listed_question_is_silent(void)
     now += 60000;   // past the last chime's coalescing window
     BEEPS = 0;
     pro_app_sleep();
-    pro_app_ask("a", "r1", "Proceed?", NULL, 0, false, true);
+    pro_app_ask("a", NULL, "r1", "Proceed?", NULL, 0, false, true);
     CHECK(BEEPS == 0 && pro_app_asleep() && max_m.view == MAX_VIEW_OVERVIEW);
     CHECK(max_find("a")->state == MAX_ASKING && max_m.inbox[0].unread && LOCK_DEPTH == 0);
     FEATURES = CABLE_FEATURE_FORM | CABLE_FEATURE_QUESTION_REVIEW;
-    pro_app_ask("b", "r2", "And this?", NULL, 0, false, true);
+    pro_app_ask("b", NULL, "r2", "And this?", NULL, 0, false, true);
     CHECK(BEEPS == 1 && !pro_app_asleep() && max_m.view == MAX_VIEW_ATTENTION && !strcmp(max_m.attn_id, "b"));
+}
+
+// A question of an agent off the ring (another app's) rings once and files its notice under the frame's name; the page
+// stays, as its agent is not on the bar.
+static void test_question_off_the_ring_rings_once(void)
+{
+    fresh();
+    now += 60000;
+    BEEPS = 0;
+    pro_app_ask("zz", "Zed", "r9", "Ship it?", NULL, 0, false, false);
+    CHECK(BEEPS == 1 && max_m.view == MAX_VIEW_OVERVIEW && !strcmp(max_m.inbox[0].name, "Zed"));
+    CHECK(!strcmp(max_m.inbox[0].text, "Ship it?") && max_m.inbox[0].unread && LOCK_DEPTH == 0);
+    now += 60000;
+    pro_app_ask("zz", "Zed", "r9", "Ship it?", NULL, 0, false, false);
+    CHECK(BEEPS == 1);
+}
+
+// notif.replace: a question row makes its ring agent ask, silently (the daemon sends no `question` for it); news rows
+// file nothing.
+static void test_drawer_rows(void)
+{
+    fresh();
+    now += 60000;
+    BEEPS = 0;
+    const int inbox = max_m.inbox_count;
+    const pro_notif_row_t rows[] = {{"c", "c", "Keep the dark gradient?", "", true}, {"d", "d", "Done.", "t1", false}};
+    pro_app_notif_replace(rows, 2);
+    CHECK(max_find("c")->state == MAX_ASKING && !strcmp(max_find("c")->question, "Keep the dark gradient?"));
+    CHECK(BEEPS == 0 && max_m.view == MAX_VIEW_OVERVIEW && max_m.inbox_count == inbox + 1 && LOCK_DEPTH == 0);
+    CHECK(max_find("d")->state != MAX_DONE);
 }
 
 // ---- answering and New Harness ----
@@ -501,7 +531,7 @@ static void test_reviewed_answer_is_sent_after_the_lock(void)
     fresh();
     FEATURES = CABLE_FEATURE_FORM | CABLE_FEATURE_QUESTION_REVIEW;
     SENDS = OPENS = 0;
-    pro_app_ask("a", "toolu_1", DB.q, &DB, 1, false, false);
+    pro_app_ask("a", NULL, "toolu_1", DB.q, &DB, 1, false, false);
     CHECK(SENDS == 0 && max_m.view == MAX_VIEW_ATTENTION);   // nothing goes from the cable_link task's callback
     drawn_page(MAX_VIEW_ATTENTION);
     contact(HT_WIDTH - 2, HT_HEIGHT - 2, 0, 0);   // where nothing is drawn
@@ -519,7 +549,7 @@ static void test_reviewed_answer_is_sent_after_the_lock(void)
     pro_app_answer_receipt("a", fetch, "tok", true, false, NULL);
     CHECK(!strcmp(max_m.notice, "Sent") && max_find("a")->state == MAX_WORKING);
     // The daemon refuses it: its words.
-    pro_app_ask("a", "toolu_2", DB.q, &DB, 1, true, false);
+    pro_app_ask("a", NULL, "toolu_2", DB.q, &DB, 1, true, false);
     drawn_page(MAX_VIEW_ATTENTION);
     contact(HT_WIDTH - 2, HT_HEIGHT - 2, 0, 0);   // where nothing is drawn
     snprintf(fetch, sizeof fetch, "%s", max_ask_of("a")->fetch);
@@ -537,7 +567,7 @@ static void test_plain_answer_and_a_full_port(void)
     fresh();
     FEATURES = CABLE_FEATURE_FORM;
     SENDS = 0;
-    pro_app_ask("a", "toolu_1", DB.q, &DB, 1, false, false);
+    pro_app_ask("a", NULL, "toolu_1", DB.q, &DB, 1, false, false);
     attention_drawn(2);
     PORT_FULL = true;
     tap_on(find_hit(MAX_HIT_OPTION, 0));
@@ -623,6 +653,8 @@ int main(void)
     test_asleep_refuses_the_finger();
     test_question_chimes_once();
     test_listed_question_is_silent();
+    test_question_off_the_ring_rings_once();
+    test_drawer_rows();
     test_reviewed_answer_is_sent_after_the_lock();
     test_plain_answer_and_a_full_port();
     test_new_harness();

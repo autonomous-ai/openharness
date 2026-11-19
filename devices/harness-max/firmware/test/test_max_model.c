@@ -156,7 +156,8 @@ static void test_question(void)
     CHECK(max_ui_question_close("b"));
     CHECK(b->state == MAX_WORKING && b->question[0] == 0);
     CHECK(!max_ui_question_close("b"));
-    CHECK(!max_ui_question("zz", "r", "?", NULL, 0, false, false, 0));
+    // An agent off the ring: its notice, and it waits for its agent (test_max_ask.c), which does not appear for it.
+    CHECK(max_ui_question("zz", "r", "?", NULL, 0, false, false, 0) && !max_find("zz") && max_m.inbox[0].id[0] == 'z');
     // A turn that ends while it asks ends the question too.
     max_ui_question("b", "r3", "Push?", NULL, 0, false, false, 6000);
     max_ui_turn("b", "done", "", 0, 7000);
@@ -410,7 +411,8 @@ static void test_quiet_question(void)
     CHECK(max_ui_question("a", "r1", "Deploy?", NULL, 0, false, false, 1000));
     CHECK(max_m.view == MAX_VIEW_ATTENTION && max_m.inbox[0].unread);
     CHECK(max_show(MAX_VIEW_INBOX) && max_show(MAX_VIEW_OVERVIEW) && max_unread() == 0);
-    roster(ABC + 1, 2);   // a's row is cut from the ring, its question with it; it comes back and the daemon refiles
+    max_ui_link(false, NULL, 2000);   // the bar loses its questions with the link; back, the daemon refiles a's
+    max_ui_link(true, "MacBook Pro", 2000);
     roster(ABC, 3);
     CHECK(max_find("a")->state != MAX_ASKING);
     const uint32_t idle = max_m.idle_from;

@@ -170,13 +170,82 @@ static void take_question(max_ask_t *k, const max_agent_t *a, const char *reques
     }
 }
 
-static bool question(const char *id, const char *request, const char *text, const pro_ask_item_t *items, int n,
-                     bool permission, bool review, bool quiet, uint32_t now_ms)
+// ---- questions off the ring ----
+
+static max_parked_t *parked_of(const char *id)
 {
-    max_agent_t *a = max_find(id);
-    if (!a) return false;
+    for (int i = 0; id && i < max_m.parked_count; i++)
+        if (!strcmp(max_m.parked[i].agent, id)) return &max_m.parked[i];
+    return NULL;
+}
+
+void max_unpark(const char *id)
+{
+    max_parked_t *p = parked_of(id);
+    if (!p) return;
+    memmove(p, p + 1, (size_t)(&max_m.parked[max_m.parked_count] - (p + 1)) * sizeof *p);
+    max_m.parked_count--;
+}
+
+// Keep it for its agent; false when it is the one kept already. Full: the oldest goes.
+static bool park(const char *id, const char *request, const char *text, uint32_t key, bool permission, bool review)
+{
+    max_parked_t *p = parked_of(id);
+    if (p && p->key == key) return false;
+    if (!p) {
+        if (max_m.parked_count == MAX_PARKED) max_unpark(max_m.parked[0].agent);
+        p = &max_m.parked[max_m.parked_count++];
+    }
+    memset(p, 0, sizeof *p);
+    max_copy(p->agent, sizeof p->agent, id);
+    exact(p->request, sizeof p->request, request);
+    max_copy(p->text, sizeof p->text, text);
+    p->key = key;
+    p->permission = permission;
+    p->review = review;
+    return true;
+}
+
+static bool id_fits(const char *id) { return id && id[0] && strnlen(id, ID_MAX) < ID_MAX; }
+
+void max_park_leaver(const max_agent_t *a)
+{
+    const max_ask_t *k = max_ask_of(a->id);
+    const char *request = k ? k->request : "";
+    park(a->id, request, a->question, ask_hash(request, a->question, NULL, 0), k && k->permission,
+         k && k->path == MAX_PATH_REVIEWED);
+}
+
+static bool question(const char *id, const char *name, const char *request, const char *text,
+                     const pro_ask_item_t *items, int n, bool permission, bool review, bool quiet, uint32_t now_ms);
+
+void max_unpark_joined(uint32_t now_ms)
+{
+    static max_parked_t p;   // its copy: asking it takes it off the list (over the cable_link task's frame budget)
+    for (int i = 0; i < max_m.parked_count;) {
+        const max_agent_t *a = max_find(max_m.parked[i].agent);
+        if (!a) {
+            i++;
+            continue;
+        }
+        p = max_m.parked[i];
+        max_unpark(p.agent);
+        if (a->state != MAX_ASKING)
+            question(p.agent, NULL, p.request[0] ? p.request : NULL, p.text, NULL, 0, p.permission, p.review, true,
+                     now_ms);
+    }
+}
+
+static bool question(const char *id, const char *name, const char *request, const char *text,
+                     const pro_ask_item_t *items, int n, bool permission, bool review, bool quiet, uint32_t now_ms)
+{
     if (!items || n < 0 || n > PRO_ASK_ITEMS) n = 0;
     const uint32_t key = ask_hash(request, text, items, n);
+    max_agent_t *a = max_find(id);
+    if (!a) {   // off the ring: it waits for its agent, its notice in Inbox meanwhile
+        if (!id_fits(id) || !park(id, request, text, key, permission, review)) return false;
+        return max_file_notice(id, name && name[0] ? name : id, text, quiet, now_ms);
+    }
     if (a->state == MAX_ASKING && a->ask_key == key) return false;   // the same question, re-sent: it keeps its place
     max_set_state(a, MAX_ASKING, now_ms);
     max_copy(a->question, sizeof a->question, text);
@@ -194,13 +263,34 @@ static bool question(const char *id, const char *request, const char *text, cons
 bool max_ui_question(const char *id, const char *request, const char *text, const pro_ask_item_t *items, int n,
                      bool permission, bool review, uint32_t now_ms)
 {
-    return question(id, request, text, items, n, permission, review, false, now_ms);
+    return question(id, NULL, request, text, items, n, permission, review, false, now_ms);
 }
 
 bool max_ui_question_quiet(const char *id, const char *request, const char *text, const pro_ask_item_t *items, int n,
                            bool permission, bool review, uint32_t now_ms)
 {
-    return question(id, request, text, items, n, permission, review, true, now_ms);
+    return question(id, NULL, request, text, items, n, permission, review, true, now_ms);
+}
+
+bool max_ui_question_from(const char *id, const char *name, const char *request, const char *text,
+                          const pro_ask_item_t *items, int n, bool permission, bool review, bool quiet, uint32_t now_ms)
+{
+    return question(id, name, request, text, items, n, permission, review, quiet, now_ms);
+}
+
+bool max_ui_notices(const pro_notif_row_t *rows, int n, bool review, uint32_t now_ms)
+{
+    // The daemon now holds the bar to these rows' questions and no other: it gives any other again by its own rule.
+    max_m.parked_count = 0;
+    bool changed = false;
+    for (int i = 0; rows && i < n; i++) {
+        const pro_notif_row_t *r = &rows[i];
+        if (!r->question || !id_fits(r->agent_id) || !r->summary || !r->summary[0]) continue;   // news: the bar's own
+        const max_agent_t *a = max_find(r->agent_id);
+        if (a && a->state == MAX_ASKING) continue;   // its own question, as the daemon gave it
+        changed |= question(r->agent_id, r->name, NULL, r->summary, NULL, 0, false, review, true, now_ms);
+    }
+    return changed;
 }
 
 // Answered, here or elsewhere: the turn and its clock go on.
@@ -214,6 +304,7 @@ static void answered(max_agent_t *a)
 
 bool max_ui_question_close(const char *id)
 {
+    max_unpark(id);
     max_agent_t *a = max_find(id);
     if (!a || a->state != MAX_ASKING) return false;
     answered(a);

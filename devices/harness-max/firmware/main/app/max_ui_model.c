@@ -180,17 +180,18 @@ void max_next_question(const char *except, uint32_t now_ms)
     else max_show(MAX_VIEW_OVERVIEW);
 }
 
-// The notice's words: the question, or what the turn said (a failure's error, a summary's text). `quiet`: the same
-// notice is left as it is.
-static void inbox_add(const max_agent_t *a, max_attn_t why, bool quiet, uint32_t now_ms)
+// A notice of who (its name, engine and app kept: the agent may leave the ring before it is read), why and its words.
+// `quiet`: the same notice is left as it is (and false comes back: Inbox did not change).
+static bool inbox_put(const char *id, const char *name, const char *engine, const char *app, max_attn_t why,
+                      const char *words, bool quiet, uint32_t now_ms)
 {
     static char text[MAX_QUESTION_BYTES];   // with the scan below, over the cable_link task's frame budget
-    max_copy(text, sizeof text, why == MAX_ATTN_ASK ? a->question : a->note);
+    max_copy(text, sizeof text, words);
     int j = 0;   // the same notice again (a question re-sent after the link came back) moves up instead
-    while (j < max_m.inbox_count && (max_m.inbox[j].kind != why || strcmp(max_m.inbox[j].id, a->id) ||
+    while (j < max_m.inbox_count && (max_m.inbox[j].kind != why || strcmp(max_m.inbox[j].id, id) ||
                                      strcmp(max_m.inbox[j].text, text)))
         j++;
-    if (quiet && j < max_m.inbox_count) return;
+    if (quiet && j < max_m.inbox_count) return false;
     if (j == max_m.inbox_count) {
         if (max_m.inbox_count < MAX_INBOX) max_m.inbox_count++;
         j = max_m.inbox_count - 1;   // full: the oldest goes
@@ -198,14 +199,22 @@ static void inbox_add(const max_agent_t *a, max_attn_t why, bool quiet, uint32_t
     memmove(&max_m.inbox[1], &max_m.inbox[0], (size_t)j * sizeof max_m.inbox[0]);
     max_inbox_t *n = &max_m.inbox[0];
     memset(n, 0, sizeof *n);
-    max_copy(n->id, sizeof n->id, a->id);
-    max_copy(n->name, sizeof n->name, a->name);
-    max_copy(n->engine, sizeof n->engine, a->engine);
-    max_copy(n->app, sizeof n->app, max_app_of(a));   // kept: the agent may leave the ring before it is read
+    max_copy(n->id, sizeof n->id, id);
+    max_copy_label(n->name, sizeof n->name, name);
+    max_copy(n->engine, sizeof n->engine, engine);
+    max_copy(n->app, sizeof n->app, app);
     n->kind = why;
     memcpy(n->text, text, sizeof n->text);
     n->at = now_ms;
     n->unread = true;
+    return true;
+}
+
+// The notice's words: the question, or what the turn said (a failure's error, a summary's text).
+static void inbox_add(const max_agent_t *a, max_attn_t why, bool quiet, uint32_t now_ms)
+{
+    inbox_put(a->id, a->name, a->engine, max_app_of(a), why, why == MAX_ATTN_ASK ? a->question : a->note, quiet,
+              now_ms);
 }
 
 // A failure that came without words: its summary fills the newest notice of it.
@@ -238,6 +247,12 @@ void max_attend(max_agent_t *a, max_attn_t why, uint32_t now_ms)
 }
 
 void max_file_question(const max_agent_t *a, uint32_t now_ms) { inbox_add(a, MAX_ATTN_ASK, true, now_ms); }
+
+bool max_file_notice(const char *id, const char *name, const char *text, bool quiet, uint32_t now_ms)
+{
+    if (!quiet) max_m.idle_from = now_ms;
+    return inbox_put(id, name, "", "", MAX_ATTN_ASK, text, quiet, now_ms);
+}
 
 static bool busy(void)
 {
@@ -395,6 +410,7 @@ bool max_ui_link(bool up, const char *machine, uint32_t now_ms)
     max_m.selected[0] = max_m.attn_id[0] = max_m.toast_id[0] = 0;
     max_m.page = max_m.cell_page = 0;
     memset(max_m.asks, 0, sizeof max_m.asks);
+    max_m.parked_count = 0;
     max_form_reset();
     max_m.out_count = 0;
     max_show(MAX_VIEW_AMBIENT);
@@ -429,8 +445,11 @@ bool max_ui_agents(const pro_agent_row_t *rows, int n, uint32_t now_ms)
         a->caps = max_caps_of(r->caps);
     }
     max_m.count = k;
-    for (int i = 0; i < MAX_AGENTS; i++)   // a question goes with its agent
+    for (int j = 0; j < old; j++)   // a question goes with its agent, and waits off the ring for it
+        if (s_old[j].state == MAX_ASKING && !max_find(s_old[j].id)) max_park_leaver(&s_old[j]);
+    for (int i = 0; i < MAX_AGENTS; i++)
         if (max_m.asks[i].agent[0] && !max_find(max_m.asks[i].agent)) max_m.asks[i].agent[0] = 0;
+    max_unpark_joined(now_ms);
     bool changed = k != old || memcmp(max_m.agents, s_old, (size_t)k * sizeof s_old[0]);
     if (!max_find(max_m.selected)) max_m.selected[0] = 0;   // its page goes (settle)
     const int last = max_cell_pages() - 1;
@@ -574,7 +593,11 @@ static bool turn(max_agent_t *a, const char *kind, const char *text, int elapsed
 bool max_ui_turn(const char *id, const char *kind, const char *text, int elapsed_s, uint32_t now_ms)
 {
     max_agent_t *a = max_find(id);
-    if (!a || !kind) return false;
+    if (!kind) return false;
+    if (!a) {   // off the ring: a turn that moves on ends a question waiting for it
+        if (!strcmp(kind, "started") || !strcmp(kind, "done") || !strcmp(kind, "error")) max_unpark(id);
+        return false;
+    }
     s_before = *a;
     if (!turn(a, kind, text, elapsed_s, now_ms) || !memcmp(&s_before, a, sizeof *a)) return settle(now_ms);
     max_m.idle_from = now_ms;
