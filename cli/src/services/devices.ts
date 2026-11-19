@@ -61,7 +61,7 @@ import { HostRegistry, type HostEntry } from '../cable/hosts/registry.js'
 import { appRoots, learnApps, readBundleId, readProcessNames } from '../cable/hosts/scannedApp.js'
 import { createScrollLines } from '../cable/hosts/scrollLines.js'
 import { createTabsAdapter, readTty, type Tab } from '../cable/hosts/tabs.js'
-import { createTmuxAdapter, createTmuxOuter } from '../cable/hosts/tmux.js'
+import { createTmuxAdapter, createTmuxOuter, tmuxFinder } from '../cable/hosts/tmux.js'
 import type { HostAgent, HostAgentState } from '../cable/hosts/types.js'
 import { watchSocket } from '../cable/hosts/unixSocket.js'
 import { createVscodeAdapter, termPid } from '../cable/hosts/vscode.js'
@@ -505,7 +505,9 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
    *  values name the terminal the tmux server began in, and herdr inside tmux carries tmux's pane. Herdr and cmux come
    *  after tmux, as a tmux inside their terminal is the nearer host, and before the terminals: each tells its programs
    *  they run in Ghostty, whose tabs hold none of them. */
-  const tmux = noting(createTmuxAdapter({ run: apps.run, processes: readProcessNames, log, front: () => cableHost.latestFront() }))
+  // One lookup of tmux for the tap and the client lookup (createTmuxOuter, below).
+  const tmuxAt = tmuxFinder()
+  const tmux = noting(createTmuxAdapter({ run: apps.run, tmux: tmuxAt, processes: readProcessNames, log, front: () => cableHost.latestFront() }))
   const orca = createOrcaAdapter(apps, { worktreeOf: (handle) => orcaWorktrees.get(handle), log, switching: (handle) => orcaSwitches.note(handle) })
   const adapters: readonly HostAdapter[] = [herdrNoted, tmux, herdrAppNoted, cmuxAppNoted, ...[
     createWeztermAdapter(apps),
@@ -615,7 +617,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   hookIds ? (pid): string | undefined => hcSource?.terminalOf(pid) : undefined,
   // An agent in a pane of the person's tmux is on the page of the app holding the client that shows it, on every
   // platform: the lookup answers nothing at once for an agent in no tmux pane.
-  createTmuxOuter({ run: apps.run, processes: readProcessNames, log, now: monotonic, platform: apps.platform,
+  createTmuxOuter({ run: apps.run, tmux: tmuxAt, processes: readProcessNames, log, now: monotonic, platform: apps.platform,
     roots: appRoots(homedir()), bundleId: readBundleId })) : null
   // Orca is asked only for the parts that use its homes, the first time as the devices start: the start pass waits for
   // that read (at most its 5 s), so an Orca home gets the skill with the default one.
