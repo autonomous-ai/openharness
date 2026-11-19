@@ -11,7 +11,8 @@
  * cannot start at all still gets its fix (docs/design/2026-10-06-core-boundary-next.md, "Updaters").
  *
  * Once it has staged a build it exits with `SERVICE_EXIT_RESTART`, and the master starts it again at once:
- * a staging is the updater's last act on the bundle it runs, and the next check is the new build's.
+ * a staging is its last act. A restart still on the old immutable cohort waits for handover; the
+ * replacement cohort's updater makes the next check.
  *
  * On Windows it checks the terminal host's payload too (lib/windows/ptyUpdate.ts), under a master that judges one
  * (`HARNESSD_JUDGES_PTY`). A host alone is staged and told as `ptyVersion`; a host and a build found at one check go

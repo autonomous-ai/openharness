@@ -732,6 +732,7 @@ export function startSelfUpdater(opts: {
   let toldRejected: string | null = null
   let toldWaiting: string | null = null
   let toldProtocol: string | null = null
+  let toldHandover: string | null = null
   /** What the protocol rule says of a build that needs host protocol [needs]: null when it may be staged, else the
    *  protocol the installed host speaks. */
   const hostShortOf = (needs: number): number | null => {
@@ -760,6 +761,15 @@ export function startSelfUpdater(opts: {
   const platform = opts.platform ?? process.platform
   /** Windows: the version `cli\current` names now. Null on macOS and Linux, and when the pointer cannot be read. */
   const pointed = (): string | null => platform === 'win32' ? currentCli(dirname(opts.dir))?.version ?? null : null
+  const waitingForHandover = (): boolean => {
+    const pending = readPending(opts.dir)
+    // A restarted updater still belongs to its master's immutable cohort until handover. Running
+    // another canary here left it behind when that master stopped its children (native #4416).
+    if (!pending?.sha256 || pending.version === opts.currentVersion || pending.sha256 !== liveSha256(opts.dir, platform)) return false
+    if (toldHandover !== pending.version) console.log(`[update] ${pending.version} is staged — waiting for its updater to take over`)
+    toldHandover = pending.version
+    return true
+  }
   const download = opts.limits ?? DOWNLOAD_LIMITS
   const manifest: TransferLimits = {
     idleMs: Math.min(download.idleMs, MANIFEST_LIMITS.idleMs), deadlineMs: Math.min(download.deadlineMs, MANIFEST_LIMITS.deadlineMs),
@@ -786,7 +796,7 @@ export function startSelfUpdater(opts: {
     checking = true
     try {
       const entry = await fetchManifest(opts.url, opts.key, manifest)
-      if (halted || !entry) return
+      if (halted || !entry || waitingForHandover()) return
       // On Windows a master superseded by a newer build (one another process staged, or the installer put in)
       // still runs from its own version folder, and its own version is older than what is installed: judged
       // against it, it would stage an older build over the newer one and move the pointer back (found in
@@ -864,7 +874,7 @@ export function startSelfUpdater(opts: {
       // Downloaded and verified OUTSIDE the lock (that can take a while on a slow link and touches
       // nothing shared); swapped and handed off INSIDE it.
       await withLock(async () => {
-        if (halted) return
+        if (halted || waitingForHandover()) return
         // Asked again under the lock: the download and the canary took seconds or minutes since the check
         // above, and the installer or another process may have put a newer build in meanwhile. The next
         // check's gate then refuses it, so this is said once.
