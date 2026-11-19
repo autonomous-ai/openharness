@@ -1266,7 +1266,7 @@ export class SessionInputController {
     }
     // An empty box sent the message, and other text in it is the person's, which an Enter would send. With no reading,
     // the blind Enters every engine gets, and no more.
-    if (screen ? openclawBoxHolds(screen.box, state.awaitingContent ?? '') : state.retries < SUBMIT_MAX_RETRIES && !state.ambiguousDispatch) {
+    if (screen ? openclawBoxHolds(screen.box, state.awaitingContent ?? '', screen.boxHidden) : state.retries < SUBMIT_MAX_RETRIES && !state.ambiguousDispatch) {
       await this.resubmit(sessionId, session, state)
       return
     }
