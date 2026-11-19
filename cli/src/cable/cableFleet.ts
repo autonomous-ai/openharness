@@ -176,6 +176,10 @@ export class CableFleet {
   }
 
   private async reconcile(): Promise<void> {
+    const ports = await this.discover()
+    if (this.stopped) return
+    // Whose screen it is costs Linux two `loginctl` processes: not asked while there is no dial to own or release.
+    if (!ports.length && !this.entries.size && !this.unanswered.size) return
     if (!this.canUseUsb()) {
       if (!this.waitingForConsole) this.host.log('cable: USB belongs to the account at this computer\'s screen — releasing this connection')
       this.waitingForConsole = true
@@ -185,8 +189,6 @@ export class CableFleet {
       return
     }
     this.waitingForConsole = false
-    const ports = await this.discover()
-    if (this.stopped) return
     const present = new Map<string, DialPort>()
     for (const port of ports) {
       const serial = port.serialNumber?.toUpperCase()

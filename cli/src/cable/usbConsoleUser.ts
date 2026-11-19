@@ -8,8 +8,9 @@ import { windowsDialWatch } from './windowsSerial.js'
  * has the same switch: harness-serial's watch says whether this daemon's session
  * is the console session (WTSGetActiveConsoleSessionId). Linux asks logind which
  * user holds seat0's active session through `loginctl`, its public reader: the
- * seat file under /run/systemd/seats says not to parse it. The fleet asks every
- * 2 s, so the answer is the last reading, taken at most every 8 s. */
+ * seat file under /run/systemd/seats says not to parse it. While a dial is
+ * plugged in the fleet asks every 2 s, so the answer is the last reading,
+ * taken at most every 8 s. */
 export function isUsbConsoleUser({
   platform = process.platform,
   uid = process.getuid?.(),
