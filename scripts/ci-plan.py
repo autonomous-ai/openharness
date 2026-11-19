@@ -87,7 +87,8 @@ DEPENDS = {
                 "desktop/lib/daemons/roster.g.dart", "mobile/lib/daemons/plates.g.dart", "mobile/lib/daemons/roster.g.dart"),
     "firmware": ("cli/scripts/", "cli/src/", "daemons/plates/tux.mjs", "daemons/review/traits.html",
                  "daemons/tools/illustrated/daemon_art.py", "daemons/tools/plate.mjs", "desktop/assets/model-icons/claude.png"),
-    # Harness Max compiles the Pro's sources where they are.
+    # Harness Max still builds Pro sources: a Pro change on main reruns a Max PR's Max jobs rather than reusing them.
+    # For reuse alone: a Pro-only PR selects no Max job (PR_READS has no "max"), and flows as on main.
     "max": ("devices/harness-pro/",),
     # Its tools also import the web release scripts; its tests see only the sparse inputs.
     "desktop": ci.SOURCE_INPUTS["desktop"] + ("website/scripts/harness-web-assets.mjs", "website/scripts/precompress.mjs"),
@@ -141,9 +142,6 @@ PR_READS = {
     "firmware": ("cli/src/cable/hosts/hostDetect.ts", "cli/src/services/devices.ts", "daemons/plates/tux.mjs",
                  "daemons/review/traits.html", "daemons/tools/illustrated/daemon_art.py", "daemons/tools/plate.mjs",
                  "desktop/assets/model-icons/claude.png"),
-    # Harness Max compiles the Pro's sources where they are: a Pro-only change runs Max's jobs too. The folder, not its
-    # files: Max builds all of it.
-    "max": ("devices/harness-pro/",),
     # Its tests run in a sparse checkout (ci.SOURCE_INPUTS["desktop"]) and read these from it. By hand: the phone's P2P and
     # E2EE files test/p2p/mobile_parity_test.dart compares (its paths are built), the phone's lockfile, store/ (its
     # agents, branding and hands-on list) and docs/images/ (the Store's example images store_discover_test.dart opens);

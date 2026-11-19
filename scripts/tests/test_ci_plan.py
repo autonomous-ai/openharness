@@ -101,19 +101,20 @@ class SelectionTests(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertEqual(planner.owners(path), expected)
 
-    def test_harness_max_runs_its_own_build_and_goldens_and_a_pro_change_runs_them_too(self):
-        # Harness Max compiles the Pro's sources where they are, so a Pro-only change can break Max's build.
+    def test_harness_max_runs_its_own_jobs_on_its_own_paths_and_a_pro_change_runs_none_of_them(self):
+        # A Pro-only PR flows as on main: Max's jobs neither run nor are required for it. Max takes in a Pro change when
+        # main is merged into it, where Update branch reruns it (DEPENDS) rather than reusing its result.
         self.assertEqual(planner.JOBS["max"], {"max-host-checks", "max-firmware-build", "max-golden"})
         self.assertEqual(planner.MANUAL["max"], {"max"})
-        # Max owns only its own folder: the Pro's stays the Pro's, and Max reads it (PR_READS).
+        # Max owns only its own folder: the Pro's stays the Pro's.
         for path, expected in {"devices/harness-max/firmware/main/app/max_app.c": {"firmware", "max"},
                                "devices/harness-max-other/x.c": {"firmware"},
                                "devices/harness-pro/firmware/main/app/pro_app.c": {"firmware", "pro"}}.items():
             with self.subTest(path=path):
                 self.assertEqual(planner.owners(path), expected)
         self.assertEqual(planner.select(["devices/harness-max/firmware/main/app/max_app.c"])[0], {"firmware", "max"})
-        self.assertEqual(planner.select(["devices/harness-pro/firmware/main/cable/pro_cable.c"])[0],
-                         {"firmware", "pro", "max"})
+        self.assertEqual(planner.select(["devices/harness-pro/firmware/main/cable/pro_cable.c"])[0], {"firmware", "pro"})
+        self.assertNotIn("max", planner.PR_READS)
         self.assertEqual(planner.select(["devices/harness-device/firmware/main/main.c"])[0], {"firmware"})
         # A Pro change on main is an input of Max's result, so Update branch does not reuse it.
         self.assertTrue(planner.reads("max", "devices/harness-pro/firmware/main/display/terminal.h"))
@@ -507,6 +508,42 @@ class ReuseFixture(unittest.TestCase):
         self.assertIn(reason, plan["reuse"]["reason"])
         self.assertEqual(plan["required_jobs"], sorted({"process-checks"} | set().union(*(planner.JOBS[s] for s in plan["suites"]))))
 
+
+
+class HarnessMaxPlanTests(ReuseFixture):
+    """Harness Max's jobs are required by a PR that changes Max, and by no other: Diego's Pro and Dial PRs flow as on main."""
+
+    MAX_JOBS = {"max-host-checks", "max-firmware-build", "max-golden"}
+
+    def test_a_pro_only_change_requires_no_max_job(self):
+        head = self.branch(self.base, ["devices/harness-pro/firmware/main/cable/pro_cable.c"], "pro-only")
+        plan = self.plan(head, self.base)
+        self.assertEqual(plan["suites"], ["firmware", "pro"])
+        self.assertEqual(plan["required_jobs"], sorted({"process-checks", "firmware-checks"} | planner.JOBS["pro"]))
+        self.assertFalse(self.MAX_JOBS & set(plan["required_jobs"]))
+
+    def test_a_dial_only_change_requires_no_max_job(self):
+        head = self.branch(self.base, ["devices/harness-device/firmware/main/main.c"], "dial-only")
+        plan = self.plan(head, self.base)
+        self.assertEqual(plan["required_jobs"], ["firmware-checks", "process-checks"])
+
+    def test_a_max_change_requires_the_max_jobs(self):
+        for paths in (["devices/harness-max/firmware/main/app/max_app.c"],
+                      ["devices/harness-max/firmware/main/app/max_app.c", "devices/harness-pro/firmware/main/app/pro_app.c"]):
+            with self.subTest(paths=paths):
+                head = self.branch(self.base, paths, "max-" + str(len(paths)))
+                plan = self.plan(head, self.base)
+                self.assertIn("max", plan["suites"])
+                self.assertLessEqual(self.MAX_JOBS, set(plan["required_jobs"]))
+                self.assertIn("firmware-checks", plan["required_jobs"])
+
+    def test_a_max_result_is_not_reused_over_a_pro_change_on_main(self):
+        # The weekly merge of main into Max: the Pro's sources Max still builds moved, so Max runs again.
+        _, main, head = self.scenario(["devices/harness-max/firmware/main/app/max_app.c"],
+                                      ["devices/harness-pro/firmware/main/display/terminal.c"])
+        plan = self.plan(head, main)
+        self.assertNotIn("max", plan["reused"])
+        self.assertLessEqual(self.MAX_JOBS, set(plan["required_jobs"]))
 
 
 class ReuseTests(ReuseFixture):
