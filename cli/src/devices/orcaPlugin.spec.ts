@@ -9,7 +9,12 @@ import { join } from 'node:path'
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 import { fakeOrcaCli, type FakeOrcaCli } from '../testing/fakeOrcaCli.js'
 import { DIAL_SKILL_FILE, writeOrcaConnected } from './dialSkillFiles.js'
-import { orcaConnect, type OrcaPluginDeps, type OrcaPluginFiles, orcaPluginRun, type OrcaPluginState, orcaStatus } from './orcaPlugin.js'
+import { orcaConnect, type OrcaPluginDeps, type OrcaPluginFiles, orcaPluginRun, type OrcaPluginState, orcaStatus, withinApproved } from './orcaPlugin.js'
+
+// @ts-expect-error — plain ESM with no declaration file
+const { readOrcaPluginBundle } = await import('../../scripts/lib/orcaPluginBundle.mjs') as {
+  readOrcaPluginBundle: (version: string) => string
+}
 
 const KEY = 'local.harness-device'
 /** The plugin as a build carries it: a manifest at 1.2.3 and one source. */
@@ -323,6 +328,78 @@ const installed = (folder: string) => ({
   result: { pluginKey: KEY, version: '1.2.3', previousVersion: null, contentHash: 'c0ffee0123456789', approval: 'approve-flag', source: { kind: 'local-path', reference: folder } },
 })
 const FAILED = { connect: 'failed', error: 'failed' }
+
+/** The name Orca 1.4.262 lists a contribution of each kind by (pluginContributionSummary); it lists no `settings`. */
+const NAMED: Record<string, (item: any) => string> = {
+  panels: (item) => item.title, commands: (item) => item.title, events: (item) => item.on, hooks: (item) => item.event,
+  languagePacks: (item) => item.locale, keybindings: (item) => item.key, vmRecipes: (item) => item.path,
+  themes: (item) => item.title, terminalThemes: (item) => item.title, iconThemes: (item) => item.title,
+  fonts: (item) => item.family, syntaxes: (item) => item.title, customEditors: (item) => item.title,
+  newFiles: (item) => item.title, statusBarItems: (item) => item.text || item.id,
+}
+/** The grants Orca lists for [manifest], by its rules (pluginApprovalGrants, Orca 1.4.262). A capability keeps every
+ *  field the manifest gives it: Orca counts one by its whole object, so a scope added to the manifest is more access. */
+const grantsOf = (manifest: any) => {
+  const contributes: Record<string, any[]> = manifest.contributes ?? {}
+  const replacements = (contributes.commands ?? []).filter((command) => command.replaces)
+    .map((command) => ({ command: command.title, action: command.replaces }))
+  return {
+    execution: manifest.execution,
+    capabilities: manifest.capabilities.map((capability: object) => ({ ...capability, description: 'Orca words it' })),
+    contributions: Object.entries(NAMED).flatMap(([kind, name]) => (contributes[kind] ?? []).map((item) => ({ kind, name: name(item) }))),
+    ...(replacements.length > 0 ? { replacements } : {}),
+  }
+}
+
+describe('withinApproved', () => {
+  const PANEL = { kind: 'panels', name: 'Harness Device' }
+  const EVENT = { kind: 'events', name: 'workspace.changed' }
+  /** The `data` of Orca's refusal, changed by [over]. */
+  const data = (over: Parameters<typeof approval>[1]) => approval('approval_required', over).error.data
+
+  it('the grants Orca would list for the shipped orca-plugin.json are within it: a manifest that adds access fails here', () => {
+    const manifest = JSON.parse(JSON.parse(readOrcaPluginBundle('1.2.3'))['orca-plugin.json'])
+    expect(withinApproved({ pluginKey: KEY, version: '1.2.3', approvalFingerprint: FINGERPRINT, grants: grantsOf(manifest) }, KEY, '1.2.3')).toBe(true)
+  })
+
+  it("Orca 1.4.262's whole refusal is within it", () => {
+    expect(withinApproved(approval('approval_required').error.data, KEY, '1.2.3')).toBe(true)
+  })
+
+  it.each<[string, Parameters<typeof approval>[1]]>([
+    ['execution trusted-host', { grants: { execution: 'trusted-host' } }],
+    ['a second capability', { grants: { capabilities: [{ kind: 'workspace:read', description: WORKSPACE_READ }, { kind: 'agent:read', description: 'x' }] } }],
+    ['a scoped capability', { grants: { capabilities: [{ kind: 'workspace:read', description: 'x', scope: { workspaces: '*' } }] } }],
+    ['a command', { grants: { contributions: [PANEL, EVENT, { kind: 'statusBarItems', name: 'Dial' }, { kind: 'commands', name: 'Harness' }] } }],
+    ['the panel retitled', { grants: { contributions: [{ kind: 'panels', name: 'Dial' }, EVENT, { kind: 'statusBarItems', name: 'Dial' }] } }],
+    ['a replacement', { grants: { replacements: [{ command: 'x', action: 'open' }] } }],
+  ])('more access is not: %s', (_, over) => {
+    expect(withinApproved(data(over), KEY, '1.2.3')).toBe(false)
+  })
+
+  it('no replacements: absent or empty', () => {
+    expect(withinApproved(data({ grants: { replacements: [] } }), KEY, '1.2.3')).toBe(true)
+  })
+
+  it.each<[string, unknown]>([
+    ['data null', null],
+    ['grants a string', data({ data: { grants: 'trusted-worker' } })],
+    ['capabilities an object', data({ grants: { capabilities: { kind: 'workspace:read', description: WORKSPACE_READ } } })],
+    ['a capability a string', data({ grants: { capabilities: ['workspace:read'] } })],
+    ['contributions an object', data({ grants: { contributions: {} } })],
+    ['a contribution with no name', data({ grants: { contributions: [PANEL, EVENT, { kind: 'statusBarItems' }] } })],
+    ['a contribution named by a list', data({ grants: { contributions: [PANEL, EVENT, { kind: 'statusBarItems', name: ['Dial'] }] } })],
+    ['execution a number', data({ grants: { execution: 1 } })],
+    ['replacements an object', data({ grants: { replacements: {} } })],
+  ])('a field of another shape is not: %s', (_, value) => {
+    expect(withinApproved(value, KEY, '1.2.3')).toBe(false)
+  })
+
+  it('another key or version is not', () => {
+    expect(withinApproved(data({ data: { pluginKey: 'local.other' } }), KEY, '1.2.3')).toBe(false)
+    expect(withinApproved(data({ data: { version: '1.2.4' } }), KEY, '1.2.3')).toBe(false)
+  })
+})
 
 describe('connect', () => {
   it('with no fingerprint it asks Orca and passes --approve to nobody', async () => {
