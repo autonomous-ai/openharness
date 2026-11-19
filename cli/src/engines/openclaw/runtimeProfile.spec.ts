@@ -27,10 +27,10 @@ describe('OpenClaw pane state', () => {
     expect(openclawPaneState(screen(name))).toBe(state)
   })
 
-  it('reads a streaming or connecting status as busy', () => {
+  it('reads a streaming status as busy, and a connecting one as starting', () => {
     const base = screen('plain')
     expect(openclawPaneState(base.replace(' connected | idle', ' ⠋ streaming • 3s | connected'))).toBe('busy')
-    expect(openclawPaneState(base.replace(' connected | idle', ' ⠋ connecting • 1s'))).toBe('busy')
+    expect(openclawPaneState(base.replace(' connected | idle', ' ⠋ connecting • 1s'))).toBe('starting')
   })
 
   it('is null for a screen that is not OpenClaw', () => {
@@ -89,6 +89,17 @@ describe('OpenClaw pane inspection', () => {
     expect(inspectRuntimePane('openclaw', screen('abort-running')).idle).toBe(false)
     expect(inspectRuntimePane('openclaw', screen('no-gateway')).idle).toBe(false)
     expect(inspectRuntimePane('openclaw', 'plain shell').idle).toBe(false)
+  })
+
+  it('a pane whose history did not load is never idle, and sees the refused message left in its box', () => {
+    expect(inspectRuntimePane('openclaw', screen('history-refused'))).toEqual({ idle: false, plan: false, dialog: false, draft: true })
+    expect(inspectRuntimePane('openclaw', screen('history-failed'))).toEqual({ idle: false, plan: false, dialog: false, draft: false })
+  })
+
+  it('is not idle while starting or sending', () => {
+    for (const name of ['connecting', 'starting-up', 'sending', 'waiting', 'running-quiet']) {
+      expect(inspectRuntimePane('openclaw', screen(name)), name).toEqual({ idle: false, plan: false, dialog: false, draft: false })
+    }
   })
 
   it('sees a draft in the composer', () => {

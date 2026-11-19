@@ -2,8 +2,9 @@ import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
-  OPENCLAW_COLUMNS, OPENCLAW_KEY, OPENCLAW_LAUNCH, OPENCLAW_LOCAL, OPENCLAW_STATES, OPENCLAW_STORE_KEPT, isOpenclawLocalStopped,
-  openclawAgentDb, openclawDefaultStateDir, openclawFolderInUse, openclawLocalStopped, readOpenclawScreen,
+  OPENCLAW_COLUMNS, OPENCLAW_FIRST_TASK, OPENCLAW_KEY, OPENCLAW_LAUNCH, OPENCLAW_LOCAL, OPENCLAW_STATES, OPENCLAW_STORE_KEPT,
+  isOpenclawLocalStopped, openclawAgentDb, openclawBoxHolds, openclawDefaultStateDir, openclawFolderInUse, openclawLocalStopped,
+  readOpenclawScreen,
 } from './contract.js'
 
 const FIXTURES = join(import.meta.dirname, '__fixtures__')
@@ -21,8 +22,14 @@ const SHOWN: Record<string, { key: string | null; url: string | null }> = {
   'screen-abort-running.txt': { key: 'agent:main:abort', url: 'ws://127.0.0.1:18789' },
   'screen-abort.txt': { key: 'agent:main:abort', url: 'ws://127.0.0.1:18789' },
   'screen-approval.txt': { key: 'agent:main:approval', url: 'ws://127.0.0.1:18789' },
+  'screen-answer-history-words.txt': { key: 'agent:main:plain', url: 'ws://127.0.0.1:18789' },
+  'screen-banner.txt': { key: null, url: null },
+  'screen-connecting.txt': { key: 'agent:main:plain', url: 'ws://127.0.0.1:18789' },
+  'screen-disconnected.txt': { key: 'agent:main:plain', url: 'ws://127.0.0.1:18789' },
   'screen-fail-model.txt': { key: 'agent:main:fail', url: 'ws://127.0.0.1:18789' },
   'screen-fail.txt': { key: 'agent:main:fail', url: 'ws://127.0.0.1:18789' },
+  'screen-history-failed.txt': { key: 'agent:main:plain', url: 'ws://127.0.0.1:18789' },
+  'screen-history-refused.txt': { key: 'agent:main:plain', url: 'ws://127.0.0.1:18789' },
   'screen-main-heartbeat.txt': { key: 'agent:main:main', url: 'ws://127.0.0.1:18789' },
   'screen-model-switch.txt': { key: 'agent:main:model-switch', url: 'ws://127.0.0.1:18789' },
   'screen-multi-tool.txt': { key: 'agent:main:multi-tool', url: 'ws://127.0.0.1:18789' },
@@ -41,9 +48,14 @@ const SHOWN: Record<string, { key: string | null; url: string | null }> = {
   'screen-reset-new.txt': { key: 'agent:main:tui-652cc362-2631-416e-bf1c-6ac369311a20', url: 'ws://127.0.0.1:18789' },
   'screen-reset.txt': { key: 'agent:main:reset', url: 'ws://127.0.0.1:18789' },
   'screen-rewind.txt': { key: 'agent:main:rewind', url: 'ws://127.0.0.1:18789' },
+  'screen-running-quiet.txt': { key: 'agent:main:plain', url: 'ws://127.0.0.1:18789' },
+  'screen-sending.txt': { key: 'agent:main:plain', url: 'ws://127.0.0.1:18789' },
+  'screen-starting-up.txt': { key: 'agent:main:plain', url: 'ws://127.0.0.1:18789' },
+  'screen-startup-failed.txt': { key: 'agent:main:plain', url: 'ws://127.0.0.1:18789' },
   'screen-tool.txt': { key: 'agent:main:tool', url: 'ws://127.0.0.1:18789' },
   'screen-two-panes-main-a.txt': { key: 'agent:main:main', url: 'ws://127.0.0.1:18789' },
   'screen-two-panes-main-b.txt': { key: 'agent:main:main', url: null },
+  'screen-waiting.txt': { key: 'agent:main:plain', url: 'ws://127.0.0.1:18789' },
 }
 
 const LOOPBACK = new Set(['127.0.0.1', 'localhost', '[::1]'])
@@ -173,8 +185,66 @@ describe('the OpenClaw contract', () => {
     const running = fixture('screen-abort-running.txt')
     expect(readOpenclawScreen(running)).toMatchObject({ state: 'busy', running: true })
     expect(readOpenclawScreen(running.replace('running •', 'streaming •'))).toMatchObject({ state: 'busy', running: true })
-    expect(readOpenclawScreen(running.replace('running •', 'connecting •'))).toMatchObject({ state: 'busy', running: false })
+    expect(readOpenclawScreen(running.replace('running •', 'connecting •'))).toMatchObject({ state: 'starting', running: false })
     for (const idle of ['screen-plain.txt', 'screen-no-gateway.txt', 'screen-no-token.txt']) expect(readOpenclawScreen(fixture(idle)).running, idle).toBe(false)
+  })
+
+  // Launch to ready, a run, and a history load that failed, as the TUI draws them (`__fixtures__/MISSING.md`).
+  it.each([
+    ['banner', { key: null, state: null, status: null, box: null, running: false, gatewayLost: false }],
+    ['connecting', { state: 'starting', status: 'connecting | idle', box: '', running: false, gatewayLost: false }],
+    ['starting-up', { state: 'starting', status: '⠙ starting up • 0s | subscribing to session events', box: '', running: false, gatewayLost: false }],
+    ['sending', { state: 'busy', status: '⠋ sending • 0s | connected', box: '', running: false, gatewayLost: false }],
+    ['waiting', { state: 'busy', status: '⠼ flibbertigibbeting… • 0s | connected', box: '', running: false, gatewayLost: false }],
+    ['running-quiet', { state: 'busy', status: '⠦ running • 45s | connected', box: '', running: true, gatewayLost: false }],
+    ['history-failed', { state: 'no-history', status: 'gateway connected | idle', box: '', running: false, gatewayLost: false }],
+    ['history-refused', { state: 'no-history', status: 'connected | idle', box: 'Say hello from scenario proxy-histdrop 1795078028664', running: false, gatewayLost: false }],
+    ['disconnected', { state: null, status: 'disconnected | idle', box: '', running: false, gatewayLost: true }],
+    ['startup-failed', { state: null, status: 'startup failed | idle', box: '', running: false, gatewayLost: false }],
+    ['answer-history-words', { state: 'ready', status: 'connected | idle', box: '', running: false, gatewayLost: false }],
+    ['plain', { state: 'ready', status: 'connected | idle', box: '', running: false, gatewayLost: false }],
+  ])('screen-%s reads as the TUI drew it', (name, reading) => {
+    expect(readOpenclawScreen(fixture(`screen-${name}.txt`))).toMatchObject(reading)
+  })
+
+  it('a spinner line with a timer is a run, in minutes too, and starting up stays starting', () => {
+    const plain = fixture('screen-plain.txt')
+    const status = (line: string) => readOpenclawScreen(plain.replace(' connected | idle', ` ${line}`)).state
+    expect(status('⠋ finishing context • 1m 5s | connected')).toBe('busy')
+    expect(status('⠋ kerfuffling… • 12s | gateway connected')).toBe('busy')
+    expect(status('⠋ starting up • 3s | connected')).toBe('starting')
+    expect(status('⠋ connecting…')).toBe('starting')
+  })
+
+  it('only a history line OpenClaw drew in the chat makes a ready pane one whose history did not load', () => {
+    const plain = fixture('screen-plain.txt')
+    const above = (line: string) => readOpenclawScreen(plain.replace(' connected | idle', `${line}\n connected | idle`)).state
+    expect(above(' history failed: gateway request timeout for chat.history')).toBe('no-history')
+    expect(above(' session history not ready — wait or retry /session')).toBe('no-history')
+    expect(above('session history not ready — wait or retry /session')).toBe('ready')
+    expect(above('  history failed: quoted')).toBe('ready')
+    // A run under the line is a run: the history loaded since.
+    expect(readOpenclawScreen(plain.replace(' connected | idle', ' history failed: x\n ⠦ running • 3s | connected')).state).toBe('busy')
+  })
+
+  it('the box holds a message when it starts with the message, wrapped or not', () => {
+    const message = 'Say hello from scenario proxy-histdrop 1795078028664 and then list the files here'
+    const wrapped = fixture('screen-history-refused.txt')
+      .replace('Say hello from scenario proxy-histdrop 1795078028664', 'Say hello from scenario proxy-histdrop\n1795078028664 and then list the files here  ')
+    const box = readOpenclawScreen(wrapped).box
+    expect(box).toBe('Say hello from scenario proxy-histdrop 1795078028664 and then list the files here')
+    expect(openclawBoxHolds(box, message)).toBe(true)
+    expect(openclawBoxHolds(box, 'Say  hello\nfrom scenario proxy-histdrop')).toBe(true)
+    expect(openclawBoxHolds('hi', 'hi')).toBe(true)
+    expect(openclawBoxHolds(box, 'Something else entirely')).toBe(false)
+    expect(openclawBoxHolds('Say hello from', message)).toBe(false)
+    expect(openclawBoxHolds('', message)).toBe(false)
+    expect(openclawBoxHolds(null, message)).toBe(false)
+    expect(openclawBoxHolds('anything', '  ')).toBe(false)
+  })
+
+  it('says a first task OpenClaw did not take', () => {
+    expect(OPENCLAW_FIRST_TASK).toEqual({ error: 'FIRST_TASK_NOT_TAKEN', detail: 'OpenClaw did not take the first task. Close it and start it again.' })
   })
 
   it('the default state folder is the one OpenClaw resolves', () => {
@@ -201,7 +271,7 @@ describe('the OpenClaw contract', () => {
   it('reads a local run off its status line', () => {
     expect(readOpenclawScreen(local('local ready | idle'))).toMatchObject({ key: 'agent:main:plain', url: null, state: 'ready', running: false, stopped: null })
     expect(readOpenclawScreen(local('local ready')).state).toBe('ready')
-    expect(readOpenclawScreen(local('starting local runtime'))).toMatchObject({ state: 'busy', running: false })
+    expect(readOpenclawScreen(local('starting local runtime'))).toMatchObject({ state: 'starting', running: false })
     expect(readOpenclawScreen(local('⠏ running • 6s | local ready'))).toMatchObject({ state: 'busy', running: true })
     expect(readOpenclawScreen(local('local runtime stopped: boom | idle'))).toMatchObject({ state: 'local-stopped', stopped: 'boom' })
     expect(readOpenclawScreen(local('local runtime stopped | idle'))).toMatchObject({ state: 'local-stopped', stopped: '' })
