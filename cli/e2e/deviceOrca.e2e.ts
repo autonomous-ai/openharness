@@ -1,10 +1,11 @@
 /**
- * `harness device orca status` and `connect` from the built `cli.js` (docs/plans/2026-11-18-connect-orca-design.md),
- * run as the Harness app runs them, against a fake `orca` (testing/fakeOrcaCli.ts):
+ * `harness device orca status|enable|disable` from the built `cli.js` (docs/plans/2026-11-19-device-orca-default-on-design.md),
+ * run as a person runs them, against a fake `orca` (testing/fakeOrcaCli.ts) that holds the plugin's approvals:
  * - the build's own plugin is written into Harness's data root, private, at the build's version, before Orca is asked;
- * - `status` follows what Orca lists: `offer`, `current`, `behind`, `off`, and `absent` for an Orca that is not running;
- * - `connect` prints the access Orca lists and passes no fingerprint; only `connect --approve` installs, and records it;
- * - a plugin `behind` is updated, and one the person removed is never installed again.
+ * - `status` follows Orca and the records: `setup`, `on`, `off` once removed, and `absent` for an Orca that is not running;
+ * - `enable` installs it, passing Orca's fingerprint only for the pinned access, and records it; more access is held;
+ * - `disable` marks it removed and uninstalls it, and a later `enable` brings it back;
+ * - `connect` is gone.
  *
  * It is the only test that reads the `__ORCA_PLUGIN__` a build inlined. No daemon is started: the harness gives each
  * test a throwaway home and data folder, and its launcher, first on PATH and the Orca app's own (HARNESS_ORCA_APP_BIN),
@@ -25,6 +26,12 @@ const KEY = 'local.harness-device'
 const FP = 'ap1-0123456789abcdef0123456789abcdef'
 const EXECUTION = 'Runs its own code in a separate Node.js process on the Orca host, with your user account’s access to that machine.'
 const WORKSPACE_READ = 'Read your projects and workspaces (names, branches, paths and agent status) and the terminals in them, and get notified when they change'
+/** The access Orca 1.4.262 lists for the plugin as it ships, in its shape: what Harness approves. */
+const PINNED = {
+  execution: 'trusted-worker', executionDescription: EXECUTION,
+  capabilities: [{ kind: 'workspace:read', description: WORKSPACE_READ }],
+  contributions: [{ kind: 'panels', name: 'Harness Device' }, { kind: 'events', name: 'workspace.changed' }, { kind: 'statusBarItems', name: 'Dial' }],
+}
 const PLUGIN_ROOT = join(CLI_ROOT, '..', 'plugins', 'harness-device-orca')
 
 let bundleDir: string | null = null
@@ -72,16 +79,9 @@ describe('harness device orca, from the built CLI', () => {
     return { d, orca, harness }
   }
 
-  /** An Orca that is running, at a version the plugin takes, listing [plugins]. */
-  const running = (orca: FakeOrcaCli, plugins: unknown[] = []) => {
-    orca.answer('status', { id: 'req-1', ok: true, result: { app: { running: true }, runtime: { reachable: true, appVersion: '1.4.262' } } })
-    orca.answer('plugin inspect', { id: 'req-2', ok: true, result: { plugin: { pluginKey: KEY } } })
-    orca.answer('plugin list', { id: 'req-3', ok: true, result: { plugins } })
-  }
-  const listed = (version: string, reference: string) => ({
-    pluginKey: KEY, name: 'Harness Device', version, status: 'running', needsReconsent: false, isDev: false,
-    source: { kind: 'local-path', reference },
-  })
+  /** The plugin's version in this build: what Orca is asked to install. */
+  const builtVersion = async (harness: Awaited<ReturnType<typeof machine>>['harness']): Promise<string> =>
+    extensionVersion((await harness('--version')).out.trim())
   /** The plugin's folder where the paths rule puts it for the machine's home and settings, as the command finds it. */
   const pluginFolder = (d: IsolatedDaemon): string => harnessPath('orca-plugin', d.env.HOME!, process.platform, thisComputer(d.env))
   const record = (d: IsolatedDaemon): Record<string, unknown> => {
@@ -89,12 +89,13 @@ describe('harness device orca, from the built CLI', () => {
     return existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown> : {}
   }
 
-  it('offers the plugin, shows what Orca lists, installs it only with the fingerprint, then follows the list', async () => {
+  it("status, enable, disable and enable again, against an Orca that holds the plugin's approvals", async () => {
     const { d, orca, harness } = await machine()
-    running(orca)
+    const version = await builtVersion(harness)
+    orca.holds({ key: KEY, version, fingerprint: FP, grants: PINNED })
     const folder = pluginFolder(d)
 
-    expect(await harness('device', 'orca', 'status', '--json')).toEqual({ code: 0, out: '{"orca":"offer"}\n', err: '' })
+    expect(await harness('device', 'orca', 'status', '--json')).toEqual({ code: 0, out: '{"orca":"setup"}\n', err: '' })
     expect(orca.calls()[0]).toBe('status --json')
     expect(orca.calls()).toContain(`plugin inspect ${folder} --json`)
     // The build's plugin: its manifest and every source that is not a test, private to the person.
@@ -104,50 +105,33 @@ describe('harness device orca, from the built CLI', () => {
     ]))
     expect(statSync(folder).mode & 0o777).toBe(0o700)
     for (const name of sources) expect(readFileSync(join(folder, 'src', name), 'utf8'), name).toBe(readFileSync(join(PLUGIN_ROOT, 'src', name), 'utf8'))
-    const built = (await harness('--version')).out.trim()
-    const version = extensionVersion(built)
     expect(JSON.parse(readFileSync(join(folder, 'orca-plugin.json'), 'utf8'))).toMatchObject({ id: 'harness-device', version })
 
-    orca.answer('plugin install', {
-      id: 'req-4', ok: false,
-      error: {
-        code: 'approval_required', message: `${KEY} ${version} needs approval before it can run.\nFingerprint: ${FP}`,
-        data: {
-          pluginKey: KEY, name: 'Harness Device', version, approvalFingerprint: FP,
-          grants: { executionDescription: EXECUTION, capabilities: [{ kind: 'workspace:read', description: WORKSPACE_READ }] },
-        },
-      },
-    }, 3)
-    const asked = await harness('device', 'orca', 'connect', '--json')
-    expect({ code: asked.code, err: asked.err }).toEqual({ code: 0, err: '' })
-    expect(JSON.parse(asked.out)).toStrictEqual({
-      connect: 'approve', name: 'Harness Device', version, fingerprint: FP, grants: [EXECUTION, WORKSPACE_READ], update: false,
-    })
-    expect(orca.calls().at(-1)).toBe(`plugin install ${folder} --json`)
-    expect(orca.calls().filter((call) => call.includes('--approve'))).toEqual([])
-    expect(record(d)).not.toHaveProperty('orcaConnected')
-
-    orca.answer('plugin install', { id: 'req-5', ok: true, result: { pluginKey: KEY, version } })
-    expect(await harness('device', 'orca', 'connect', '--approve', FP, '--json')).toEqual({ code: 0, out: '{"connect":"done"}\n', err: '' })
-    expect(orca.calls().at(-1)).toBe(`plugin install ${folder} --approve ${FP} --json`)
+    expect(await harness('device', 'orca', 'enable')).toEqual({ code: 0, out: '{"orca":"on"}\n', err: '' })
+    expect(orca.calls().slice(-2)).toEqual([`plugin install ${folder} --json`, `plugin install ${folder} --approve ${FP} --json`])
     expect(record(d)).toMatchObject({ orcaConnected: true })
+    expect(record(d)).not.toHaveProperty('removed')
+    expect(await harness('device', 'orca', 'status', '--json')).toEqual({ code: 0, out: '{"orca":"on"}\n', err: '' })
 
-    running(orca, [listed(version, folder)])
-    expect(await harness('device', 'orca', 'status', '--json')).toEqual({ code: 0, out: '{"orca":"current"}\n', err: '' })
-
-    // Older than any build: the sources' package.json is 0.0.1.
-    running(orca, [listed('0.0.0', folder)])
-    expect(await harness('device', 'orca', 'status', '--json')).toEqual({ code: 0, out: '{"orca":"behind"}\n', err: '' })
-    orca.answer('plugin update', { id: 'req-6', ok: true, result: { pluginKey: KEY, version } })
-    expect(await harness('device', 'orca', 'connect', '--json')).toEqual({ code: 0, out: '{"connect":"done"}\n', err: '' })
-    expect(orca.calls().at(-1)).toBe(`plugin update ${KEY} --json`)
-
-    // The person removed the plugin in Orca.
-    running(orca)
-    const before = orca.calls().length
+    expect(await harness('device', 'orca', 'disable')).toEqual({ code: 0, out: '{"orca":"off"}\n', err: '' })
+    expect(orca.calls().at(-1)).toBe(`plugin uninstall ${KEY} --json`)
+    expect(orca.entry()).toBeUndefined()
+    expect(record(d).removed).toEqual({ orca: true })
     expect(await harness('device', 'orca', 'status', '--json')).toEqual({ code: 0, out: '{"orca":"off"}\n', err: '' })
-    expect(await harness('device', 'orca', 'connect', '--json')).toEqual({ code: 1, out: '{"connect":"failed","error":"off"}\n', err: '' })
-    expect(orca.calls().slice(before).filter((call) => call.startsWith('plugin install'))).toEqual([])
+
+    expect(await harness('device', 'orca', 'enable')).toEqual({ code: 0, out: '{"orca":"on"}\n', err: '' })
+    expect(orca.entry()).toMatchObject({ status: 'running', version })
+    expect(record(d)).not.toHaveProperty('removed')
+  })
+
+  it('more access than the pin: enable holds it and approves nothing', async () => {
+    const { orca, harness } = await machine()
+    const version = await builtVersion(harness)
+    const capabilities = [...PINNED.capabilities, { kind: 'agent:read', description: 'Read your agents' }]
+    orca.holds({ key: KEY, version, fingerprint: FP, grants: { ...PINNED, capabilities } })
+    expect(await harness('device', 'orca', 'enable')).toEqual({ code: 1, out: '{"orca":"held"}\n', err: '' })
+    expect(orca.calls().filter((call) => call.includes('--approve'))).toEqual([])
+    expect(orca.entry()).toBeUndefined()
   })
 
   it('an Orca that is not running is absent, and nothing is written', async () => {
@@ -156,5 +140,16 @@ describe('harness device orca, from the built CLI', () => {
     expect(await harness('device', 'orca', 'status', '--json')).toEqual({ code: 0, out: '{"orca":"absent"}\n', err: '' })
     expect(orca.calls()).toEqual(['status --json'])
     expect(existsSync(pluginFolder(d))).toBe(false)
+  })
+
+  it('connect is gone: the usage, exit 1, Orca asked nothing', async () => {
+    const { orca, harness } = await machine()
+    orca.holds({ key: KEY, version: '0.0.1', fingerprint: FP, grants: PINNED })
+    for (const words of [['connect', '--json'], ['connect', '--approve', FP, '--json']]) {
+      const { code, out, err } = await harness('device', 'orca', ...words)
+      expect({ words, code, out }).toEqual({ words, code: 1, out: '' })
+      expect(err).toContain('harness device orca enable')
+    }
+    expect(orca.calls()).toEqual([])
   })
 })
