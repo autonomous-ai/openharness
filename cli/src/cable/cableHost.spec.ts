@@ -2614,6 +2614,16 @@ describe('the dial reaches the fleet through the core\'s port', () => {
       await vi.waitFor(() => expect(none.swiped).toHaveBeenCalledWith('failed'))
     })
 
+    it('a rest on an agent that has left its pane since the turn shows nothing and tells failed', async () => {
+      let inPane = true
+      const { host, showPane, swiped } = withPane(async () => 'ok', { hasPane: vi.fn((_agent: HostAgent) => inPane) })
+      expect(host.swipeSwitches('o1')).toBe(true)
+      inPane = false
+      host.swipeEnded('o1', 'rest')
+      await vi.waitFor(() => expect(swiped).toHaveBeenCalledWith('failed'))
+      expect(showPane).not.toHaveBeenCalled()
+    })
+
     it('nothing of a swipe reaches the fleet or the core\'s doors', async () => {
       const { host, swiped, heard } = withPane()
       host.focus('o1')
