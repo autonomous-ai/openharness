@@ -257,6 +257,7 @@ void main() {
     File identityFile, {
     Future<void> Function()? spawnCommand,
     Future<void> Function()? stopCommand,
+    bool Function()? flashing,
   }) => LocalCliDiscovery(
     config: AppConfig(
       apiBaseUrl: 'https://harness-api.autonomous.ai',
@@ -265,6 +266,9 @@ void main() {
     identity: LocalMachineIdentity(computerIdFile: identityFile),
     spawnCommand: spawnCommand,
     stopCommand: stopCommand,
+    // Never this computer's own: a dial really being flashed held every spawning test at once.
+    flashing: flashing ?? () => false,
+    uninstalling: () => false,
   );
 
   test('supervision asks checkOwner once per daemon pid, and never for one that is not ready', () async {
@@ -653,6 +657,24 @@ void main() {
     expect(spawnCount, 1);
   });
 
+  test(
+    'ensureRunning starts no daemon while a dial is being flashed',
+    () async {
+      const computerId = '0123456789abcdef0123456789abcdef';
+      final identityFile = File('${scratch.path}/computer-id')
+        ..writeAsStringSync(computerId);
+      var spawned = false;
+      final probe = await discoveryFor(
+        await freePort(),
+        identityFile,
+        spawnCommand: () async => spawned = true,
+        flashing: () => true,
+      ).ensureRunning();
+      expect(probe.state, LocalCliProbeState.down);
+      expect(spawned, isFalse);
+    },
+  );
+
   test('runHarnessStart treats a non-zero exit as a failed spawn', () async {
     final failing = HarnessCliRunner(
       runProcess: (exe, args, {environment}) async =>
@@ -733,12 +755,12 @@ void main() {
         readProbe: () async =>
             const LocalCliProbe.down('fixture daemon is down'),
         spawnCommand: () async => spawnCount++,
+        uninstalling: () => uninstalling,
       );
       final timer = discovery.startSupervising(
         checkInterval: const Duration(milliseconds: 20),
         graceStep: const Duration(milliseconds: 10),
         graceWindow: const Duration(milliseconds: 20),
-        uninstalling: () => uninstalling,
       );
       addTearDown(timer.cancel);
 
@@ -750,6 +772,39 @@ void main() {
       expect(spawnCount, greaterThan(0));
     },
   );
+
+  // `harness flash` stops the daemon and hands the dial's serial port to esptool: a daemon started
+  // meanwhile takes the port back mid-write.
+  test('startSupervising starts no daemon while a dial is being flashed', () {
+    fakeAsync((async) {
+      var flashing = true;
+      var running = false;
+      var spawnCount = 0;
+      final discovery = _SupervisionProbe(
+        readProbe: () async => running
+            ? const LocalCliProbe.notReady('fixture daemon is starting')
+            : const LocalCliProbe.down('fixture daemon is down'),
+        spawnCommand: () async {
+          spawnCount++;
+          running = true;
+        },
+        flashing: () => flashing,
+      );
+      const interval = Duration(milliseconds: 20);
+      final timer = discovery.startSupervising(checkInterval: interval);
+      try {
+        async.elapse(interval * 10);
+        expect(spawnCount, 0);
+
+        flashing = false;
+        // Two quiet ticks, the default `spawnAfter`.
+        async.elapse(interval * 2);
+        expect(spawnCount, 1);
+      } finally {
+        timer.cancel();
+      }
+    });
+  });
 
   test('startSupervising spawns harness start while down, and stops once discovery succeeds', () async {
     const computerId = '0123456789abcdef0123456789abcdef';
@@ -963,6 +1018,82 @@ void main() {
     expect(spawnCount, lessThan(6));
   });
 
+  test(
+    'startSupervising spawns again once the backoff has run out on its clock',
+    () {
+      fakeAsync((async) {
+        var spawnCount = 0;
+        final discovery = _SupervisionProbe(
+          readProbe: () async =>
+              const LocalCliProbe.down('fixture daemon is down'),
+          spawnCommand: () async {
+            spawnCount++;
+            throw const ProcessException('harness', ['start'], 'lock is held');
+          },
+          monotonicClock: () => async.elapsed,
+        );
+        const interval = Duration(milliseconds: 20);
+        const backoff = Duration(milliseconds: 200);
+        final timer = discovery.startSupervising(
+          checkInterval: interval,
+          initialBackoff: backoff,
+          maxBackoff: backoff,
+          spawnAfter: 1,
+        );
+        try {
+          async.elapse(interval);
+          expect(spawnCount, 1);
+
+          async.elapse(backoff - interval);
+          expect(spawnCount, 1, reason: 'still backing off');
+
+          async.elapse(interval);
+          expect(spawnCount, 2, reason: 'the backoff has run out');
+        } finally {
+          timer.cancel();
+        }
+      });
+    },
+  );
+
+  test('startSupervising gives up on a spawn that never binds once the grace window has run out on its clock', () {
+    fakeAsync((async) {
+      var spawnCount = 0;
+      final discovery = _SupervisionProbe(
+        readProbe: () async =>
+            const LocalCliProbe.down('fixture daemon is down'),
+        spawnCommand: () async => spawnCount++,
+        monotonicClock: () => async.elapsed,
+      );
+      const interval = Duration(milliseconds: 20);
+      final timer = discovery.startSupervising(
+        checkInterval: interval,
+        // Probes at 55, 90 and 125 ms, none on a tick; the window closes at 120 ms.
+        graceStep: const Duration(milliseconds: 35),
+        graceWindow: const Duration(milliseconds: 100),
+        initialBackoff: Duration.zero,
+        maxBackoff: Duration.zero,
+        spawnAfter: 1,
+      );
+      try {
+        async.elapse(interval);
+        expect(spawnCount, 1);
+
+        async.elapse(const Duration(milliseconds: 100));
+        expect(spawnCount, 1, reason: 'still inside the grace window');
+
+        async.elapse(interval);
+        expect(
+          spawnCount,
+          2,
+          reason: 'the window closed, the next tick spawns',
+        );
+      } finally {
+        timer.cancel();
+      }
+    });
+  });
+
   // Signed-out daemons now serve local agents in guest mode, so supervision must continue.
   test(
     'startSupervising keeps the guest daemon alive after sign-out',
@@ -1121,7 +1252,16 @@ class _SupervisionProbe extends LocalCliDiscovery {
   _SupervisionProbe({
     required this.readProbe,
     required Future<void> Function() spawnCommand,
-  }) : super(config: AppConfig.dev, spawnCommand: spawnCommand);
+    bool Function()? flashing,
+    bool Function()? uninstalling,
+    super.monotonicClock,
+  }) : super(
+         config: AppConfig.dev,
+         spawnCommand: spawnCommand,
+         // Never this computer's own: a dial really being flashed held every supervision test at once.
+         flashing: flashing ?? () => false,
+         uninstalling: uninstalling ?? () => false,
+       );
 
   final Future<LocalCliProbe> Function() readProbe;
 
