@@ -224,7 +224,7 @@ master too old to run it starts it beside itself, still in its own process (`src
   cross src/core/wifiLink.ts and src/core/wifi.ts, pending extraction. `e2e/wifiDevice.e2e.ts` proves the
   device path with a fake device on the relay.
   Their process runs only once there is a device (`onDemand`, asked for since protocol 4): a dial's port in
-  /dev, a paired Wi-Fi device or its session, or a request for them (src/core/devicesWake.ts);
+  /dev, a paired Wi-Fi device or its session, or a request for them (src/services/componentStartup.ts);
   what a Wi-Fi device sends while it starts is held by the gateway. `e2e/devicesOnDemand.e2e.ts` proves it.
   The mod's inbox poll reaches the devices as a request with a deadline (src/core/deviceHookCalls.ts).
   The core asks only while a dial watches, so a poll never starts their process; a client that goes

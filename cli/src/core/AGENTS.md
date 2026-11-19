@@ -124,14 +124,12 @@ The core stays small and secure, in the code and at run time: read
   handed to the devices and kept nowhere in the core. `wifiLink.ts`: the Wi-Fi service's input facts and
   window notifications, shared Create grant and remaining machine/recent reads. Transcript and event
   observation, focus revision, relay sessions, hello state, held requests and presence live in the
-  gateway and devices processes; desk gestures use the component's local request door. `devicesWake.ts`: when
-  that process is asked for, once there is a device (a dial's port in /dev, a paired Wi-Fi device).
+  gateway and devices processes; desk gestures use the component's local request door.
   `agentLife.ts`: what happens to agents (each look at a live one, its end, a stop, a purge, a pane's new agent), for the
   services that follow them (`CoreApi.agents.follow`, `follow_agents` from a service's process); it names no service, and
   holds for one in its own process only the kinds its process says it hears (`harnessd/services.ts` `hears`).
   Browser admission and its runtime stay in `../services/agentBrowserRuntime.ts`; the core's shared relay reads no
   Browser state, starts no browser command, and forwards validated binary buffers without reframing them.
-  `modelsWake.ts`: when models' process is asked for as the core starts, once grid is in use here.
-  `gatewayWake.ts`: when the gateway's process is asked for as the core starts, before it binds: signed in, or
-  anything paired here. `viewersWake.ts`: when the viewers' process (the viewers and the Store) is asked for: a
-  harness here, or as the core starts, the release's own harnesses to put in place or viewer servers to stop.
+  Optional startup discovery lives in the edge host's `services/componentStartup.ts`. Core requests gateway
+  for signed-in session transport before binding; shared requests and agent stream declarations request
+  components as needed. Feature paths and the USB discovery timer stay outside core.

@@ -48,3 +48,38 @@ One-worker affected batch: harnessd/services.spec, harnessd/protocol.spec, harne
 ## Expected source paths
 
 Master metadata/supervision: harnessd/services.ts, serviceSupervisor.ts, protocol.ts, workerContract.ts and their callers/tests. Component: serviceProcess.ts, new services/componentStartup.ts and componentStartupProcess.ts, moved wake policy modules/tests (possibly consolidate small Grid/gateway/viewer checks). Core: main.ts wiring, experiments.ts saved-state deletion, api.ts EXPERIMENTS state deletion, lib/clientStreamContract.ts state deletion, architecture.coreFiles.txt and import-boundary test. Docs: applicable AGENTS references and this Design. No account credential module or Desktop change.
+
+## Implementation and evidence, 19 November
+
+The edge host now owns three runtime modules (218 lines): startup policy, bounded state observations and
+its master channel. Four core wake modules (282 lines) are removed, along with saved-state policy in
+core/experiments.ts and corresponding composition/state declarations. No new process, core socket,
+credential reader or persistent state is added. Requests use coreLink.want directly; the redundant
+experiment forwarding member is removed. Shared account notices/settings stay in core.
+
+- Initial caller RED: `20261118T234203.409981Z-45661`, two expected failures and one authority control.
+  The final protocol uses explicit subscribe-before-snapshot instead of unsolicited startup messages,
+  so a listener installed after child creation cannot lose its initial snapshot.
+- Initial affected batch: `20261119T083450.165264Z-8180`, 300 passes and three failures (two stale
+  catalogue/test assumptions and the expected plan mismatch); types exposed the added message union and
+  untyped test spies. All failures are retained.
+- Additional regression RED: `20261119T083649.231624Z-10197`, a peer notice overwrote a retained
+  core update with undefined. The core channel now handles only explicit update messages. This run's
+  sandbox prevented the runner's final ps cleanup check; its actual assertion and failure log remain.
+- `20261119T083829.053288Z-12372`: types pass; adding the full lean release suite to a 180-second batch
+  exceeded that outer limit. Individual release tests allow up to 300 seconds. No pass is claimed.
+- Separated affected checks: `20261119T084239.718939Z-16871`, 329 callers pass; three real packaged
+  lean-role/import checks pass (25 other cases unselected). Full packaged release acceptance remains
+  root-owned for the combined final source.
+- Scoped final runtime: `20261119T084450.666340Z-19113`, 263 cases pass; all three new component files,
+  core/experiments.ts and harnessd/coreLink.ts reach 100% statements/branches/functions/lines. Its types
+  caught the last call through the removed forwarding member; the call now uses coreLink directly.
+- Required full supervisor gate: `20261119T084639.642995Z-21047`, 605 tests pass, one existing skip,
+  all 22 test files pass and every runtime file reaches 100% in all four coverage measures. Source types
+  pass. Private synchronous callbacks no longer repeat unreachable ending checks; actual current-child
+  and recipient lifecycle fences remain. The complete gate exercises those fences and callback failures.
+
+Worker contract remains 7. The exact host-plan stamp changes with the added runner and declared rights;
+root must regenerate it while integrating Paste. Mac unit and actual bundle checks above do not claim
+Linux/native Windows or final startup/idle cost acceptance. Final process-isolation, failure/restart,
+combined core coverage, artifact verification and matched cost measurements remain in the core plan.
