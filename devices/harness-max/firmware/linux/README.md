@@ -12,9 +12,10 @@ list of portable sources; `../main/CMakeLists.txt` adds the ESP32-P4 drivers to 
   into the glass under one lock) over an SDL window (`MAX_LINUX_OUTPUT=sdl`, the mouse is the finger) or DRM/KMS plus
   evdev touch (`MAX_LINUX_OUTPUT=drm`, `/dev/dri/card0`). `glass_fit.c` scales and turns the glass to the output, and
   maps a touch back. DRM keeps two buffers: each frame is painted whole into the one off screen (what it changed and
-  what the frame before changed) and flipped to on the next vblank, so nothing tears. Where the driver refuses the
-  second buffer or a flip, the log says so once (`no second scanout buffer` / `page flip refused`) and the one buffer
-  on screen is painted as each strip lands, as before.
+  what the frame before changed) and flipped to on the next vblank, so nothing tears; the frame waits for that
+  vblank, so the next one is built from what the finger did until then. Where the driver refuses the second buffer or
+  a flip, the log says so once (`no second scanout buffer` / `page flip refused`) and the one buffer on screen is
+  painted as each strip lands, as before.
 - `audio/`: `audio/audio_capture.h` and the chimes (`../main/app/max_chime.h`) over SDL (macOS) or ALSA (Linux): the
   microphone is the capture device `HARNESS_MAX_MIC` names (`default` when unset). No microphone: recording fails as
   on a device whose codec does not answer. The chimes are V3's as tuned on the bar (`bar_chime.c`): each between 50 ms
@@ -110,9 +111,12 @@ when V3 was deployed last).
   libinput and flutter-pi do, and the Near app records the same offset on this panel, so it is the panel's own; it is
   not corrected here. Make targets near that corner wider than they look.
 - The board bakes the text in Liberation Sans, the Mac in Helvetica (the Pro's font choice in `../sources.cmake`).
-- Frame time on the bar (measured 2026-11-17, the unit's A76 pair, `ondemand` governor): a clock or status change
-  0.4-0.6 ms, a lane change up to 9 ms, a full-screen change about 47 ms, the first frame 58 ms (102 ms when not
-  pinned to the A76 pair, hence `CPUAffinity=`). The scaled paint is at most 3 ms of a frame; the rest is the
-  renderer. The program idles at about 2% of one core. These predate the page flip: a frame now also waits, at most a
-  refresh, for the last one's flip before it is painted, and paints the last frame's change again into the other
-  buffer.
+- Frame time on the bar (measured 2026-11-20, V4, the unit's A76 pair at 2 GHz): a whole-picture change is about
+  9 ms of scaled paint (`glass_fit_paint`, which is most of any large frame here) and 1-2 ms of strips; a motion in
+  App Detail (an open, a close, a swipe of the cells) shows a frame every refresh (58 Hz) with 8-11 ms of work in
+  each. `frame_max_us` counts the frame's wait for its own flip, so a motion's frames read 17-18 ms. A tap's release
+  reaches the glass 12-37 ms after the finger lifts; a press waits for the touch task's poll, every 20 ms while no
+  finger is down (4 ms while one is). The unit sets the pair's governor to `performance` while the bar runs and puts
+  the one it had back when it stops: the image's `ondemand` looks every 200 ms, so a tap after a rest painted its
+  first frames at 416 MHz, 50-57 ms each (V4's `frame_max_us=56571`, logged during a screen recording; the same
+  frames come without one). The first frame is about 40 ms after start.
