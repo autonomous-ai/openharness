@@ -187,7 +187,7 @@ function machine(extra: Partial<ConstructorParameters<typeof makeManager>[0]> = 
 
 /** paired.json as a reader finds it mid-write: the manager made over it cannot save a pairing. */
 const TORN_PAIRED = '[{"identityPub":"'
-const SAVE_FAILED = '[e2ee] the pairing could not be saved: paired.json cannot be read (not valid JSON). Move it aside to start over.'
+const SAVE_FAILED = '[e2ee] the pairing could not be saved: StateFileUnreadable'
 function tearPaired(): string {
   const file = join(process.env.ADAPTER_DATA_DIR as string, 'e2e', 'paired.json')
   mkdirSync(join(file, '..'), { recursive: true })
@@ -513,13 +513,14 @@ describe('E2eeManager revoke', () => {
   it('an unpairing the rest of the daemon could not finish stands, and is said', async () => {
     const { StateFileUnreadable } = await import('../secureState.js')
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    const h = machine({ onUnpaired: () => { throw new StateFileUnreadable('group-blocked.json', 'not valid JSON') } })
-    const web = await fullPair(h, 'cu')
-    const fp = C.fingerprint(web.identity.pub)
-    expect(h.mgr.revoke(fp).ok).toBe(true)
-    expect(h.mgr.listPaired()).toEqual([])
-    expect(warn).toHaveBeenCalledWith(`[e2ee] ${fp} is unpaired, but not all of it was done: group-blocked.json cannot be read (not valid JSON). Move it aside to start over.`)
-    warn.mockRestore()
+    try {
+      const h = machine({ onUnpaired: () => { throw new StateFileUnreadable('group-blocked.json', 'not valid JSON') } })
+      const web = await fullPair(h, 'cu')
+      const fp = C.fingerprint(web.identity.pub)
+      expect(h.mgr.revoke(fp).ok).toBe(true)
+      expect(h.mgr.listPaired()).toEqual([])
+      expect(warn).toHaveBeenCalledWith(`[e2ee] ${fp} is unpaired, but not all of it was done: StateFileUnreadable`)
+    } finally { warn.mockRestore() }
   })
 
   it('a reconnect hello from a revoked identity is answered with e2e_denied (unpaired)', async () => {
