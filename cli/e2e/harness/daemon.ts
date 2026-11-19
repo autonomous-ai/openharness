@@ -488,6 +488,11 @@ esac
       // /Applications is the computer's, whatever the home, so the devices look for the app's own Codex CLI here alone,
       // in place of /Applications and ~/Applications. Missing until a test writes its own (harness/codexAppCli.ts).
       HARNESS_CODEX_APP_BIN: join(own, 'ChatGPT.app', 'Contents', 'Resources', 'codex-cli', 'CodexCLI.app', 'Contents', 'MacOS', 'codex'),
+      // Nor does a fake dial's attach start the ChatGPT app's source on the developer's app (services/devices.ts):
+      // /Applications is the computer's, whatever the home, so the devices look here in its place; ~/Applications is
+      // already the throwaway home's. Missing until a test writes its own, so no e2e file passes or fails by whether
+      // this Mac has the ChatGPT app.
+      HARNESS_APPLICATIONS_DIR: join(own, 'Applications'),
       // Claude Code's and Codex's hooks, installed as on a person's computer, into this home and CODEX_HOME
       // (assertHooksContained), and run by the fake engines. Every other engine's installer writes into
       // folders these tests have no engine for.
