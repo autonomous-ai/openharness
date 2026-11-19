@@ -806,6 +806,28 @@ it('says when a parked linked Stop closes nothing once its registration is accep
   expect(onTurnStop).not.toHaveBeenCalled()
 })
 
+it('counts a parked linked Stop in the hook receipts\' byte budget until its registration settles', async () => {
+  const owner = (await registry.openProcessAgent({ engine: 'cursor', tmuxPane: '%3', cwd: root,
+    processIdentity: { pid: 7103, startMarker: 'fixture-start', executable: '<engine>' } }))!.entry
+  ;(await registry.register({ engine: 'cursor', sessionId: A, tmuxPane: '%3', cwd: root, processIdentity: owner.processIdentity! }))
+  const onTurnStop = vi.fn(), onAdmissionStop = vi.fn((_row: unknown, unmatched: boolean) => unmatched)
+  // Room for the registration, its 200 KB parked Stop, or the 100 KB prompt below: never all three.
+  const f = await httpFixture(() => false, 65_536, { onTurnStop, onAdmissionStop }, 250_000)
+  const delivery = { id: 'fixture-stop-parked-budget-01', firedAt: Date.now() }
+  const body = { engine: 'cursor', sessionId: A, transcriptPath: undefined, tmuxPane: '%3', hookEvent: 'stop', prompt: undefined }
+  const flush = hold(), registration = f.post(body, delivery)
+  await flush.entered
+  f.replyGrace()!()
+  expect((await registration).body).toEqual({ pending: true })
+  expect((await f.post({ ...body, prompt: 'x'.repeat(100_000) }, delivery, 'turn-stop')).body).toEqual({ pending: true })
+  const prompt = { ...body, hookEvent: 'beforeSubmitPrompt', prompt: 'y'.repeat(50_000) }, next = { id: 'fixture-prompt-after-park-01' }
+  expect(await f.post(prompt, next)).toEqual({ status: 429, body: expect.objectContaining({ error: 'HOOK_ADMISSION_BUSY' }) })
+  flush.release()
+  await vi.waitFor(() => expect(onTurnStop).toHaveBeenCalledOnce())
+  // Claimed, the parked Stop no longer holds its bytes.
+  expect((await f.post(prompt, next)).status).toBe(200)
+})
+
 it('claims a linked Stop once when it queued only behind the slow registry write of its agent\'s earlier hook', async () => {
   const owner = (await registry.openProcessAgent({ engine: 'cursor', tmuxPane: '%3', cwd: root,
     processIdentity: { pid: 7103, startMarker: 'fixture-start', executable: '<engine>' } }))!.entry
