@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:dio/dio.dart';
 import 'package:fake_async/fake_async.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/config.dart';
@@ -112,6 +113,7 @@ void main() {
         localCliBaseUrl: 'http://127.0.0.1:${server!.port}',
       ),
       identity: LocalMachineIdentity(computerIdFile: identityFile),
+      dio: _noDeadlineDio(),
     ).discover();
     expect(endpoint?.computerId, computerId);
     expect(
@@ -148,6 +150,7 @@ void main() {
         localCliBaseUrl: 'http://127.0.0.1:${server!.port}',
       ),
       identity: LocalMachineIdentity(computerIdFile: identityFile),
+      dio: _noDeadlineDio(),
     ).discover();
 
     // Not a reason to hold the window: tiles wait as intent and attach as agents arrive.
@@ -190,6 +193,7 @@ void main() {
         localCliBaseUrl: 'http://127.0.0.1:${server!.port}',
       ),
       identity: LocalMachineIdentity(computerIdFile: identityFile),
+      dio: _noDeadlineDio(),
     ).discover();
     expect(mismatch, isNull);
   });
@@ -263,6 +267,7 @@ void main() {
       localCliBaseUrl: 'http://127.0.0.1:$port',
     ),
     identity: LocalMachineIdentity(computerIdFile: identityFile),
+    dio: _noDeadlineDio(),
     spawnCommand: spawnCommand,
     stopCommand: stopCommand,
     // Never this computer's own: a dial really being flashed held every spawning test at once.
@@ -374,6 +379,7 @@ void main() {
           computerIdFile: identityFile,
           environment: {'HOME': scratch.path},
         ),
+        dio: _noDeadlineDio(),
       ).discover();
       final projects = endpoint!.agentProjects;
       expect(projects.keys, ['first', 'same']);
@@ -1363,6 +1369,11 @@ void main() {
     });
   });
 }
+
+/// A status client with no deadline. These tests ask what an answer means, and on a loaded machine
+/// the app's 400 ms budget turned a slow answer from a real loopback server into "timed out": a
+/// null endpoint, or a spurious second onReady.
+Dio _noDeadlineDio() => Dio();
 
 /// Control probe results while exercising the real supervisor, ensureRunning and restart, and their
 /// timers.
