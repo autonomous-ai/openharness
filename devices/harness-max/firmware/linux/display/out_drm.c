@@ -193,7 +193,7 @@ void max_output_paint(const uint16_t *glass, int x, int y, int w, int h)
 void max_output_show(void)
 {
     if (s_dark || !s_flipping) return;   // one buffer was painted as the rectangles came
-    glass_fit_rect_t out[2];
+    glass_fit_rect_t out[GLASS_FIT_FLIP_MAX];
     const int n = glass_fit_flip(&s_damage, out);
     if (!n) return;
     const int back = s_front ^ 1;   // off screen: the last frame waited for its flip (below)

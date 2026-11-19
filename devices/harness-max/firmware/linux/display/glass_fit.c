@@ -1,6 +1,7 @@
 #include "glass_fit.h"
 
 #include <math.h>
+#include <stdint.h>
 #include <string.h>
 
 glass_fit_t glass_fit(int glass_w, int glass_h, int out_w, int out_h)
@@ -154,23 +155,43 @@ glass_fit_rect_t glass_fit_union(glass_fit_rect_t a, glass_fit_rect_t b)
     return (glass_fit_rect_t){x0, y0, x1 - x0, y1 - y0};
 }
 
-void glass_fit_flip_add(glass_fit_flip_t *f, glass_fit_rect_t r) { f->pending = glass_fit_union(f->pending, r); }
-
-int glass_fit_flip(glass_fit_flip_t *f, glass_fit_rect_t out[2])
+// r into the rectangles set[0..*n), at most cap of them: joined with every one their union costs no pixels to join
+// (repeatedly, as a union can reach another), else kept apart; with no room, joined with the one it grows least.
+static void rects_add(glass_fit_rect_t *set, int *n, int cap, glass_fit_rect_t r)
 {
-    const glass_fit_rect_t now = f->pending, last = f->last;
-    if (rect_empty(now)) return 0;
-    f->last = now;
-    f->pending = (glass_fit_rect_t){0, 0, 0, 0};
-    // One paint of the union when it is no more pixels than the two apart (an overlap is painted twice either way).
-    const glass_fit_rect_t both = glass_fit_union(now, last);
-    if (area(both) <= area(now) + (rect_empty(last) ? 0 : area(last))) {
-        out[0] = both;
-        return 1;
+    if (rect_empty(r)) return;
+    for (;;) {
+        int join = -1;
+        for (int i = 0; i < *n && join < 0; i++)
+            if (area(glass_fit_union(set[i], r)) <= area(set[i]) + area(r)) join = i;
+        if (join < 0 && *n == cap) {
+            int64_t least = INT64_MAX;
+            for (int i = 0; i < *n; i++) {
+                const int64_t grows = area(glass_fit_union(set[i], r)) - area(set[i]);
+                if (grows < least) least = grows, join = i;
+            }
+        }
+        if (join < 0) {
+            set[(*n)++] = r;
+            return;
+        }
+        r = glass_fit_union(set[join], r);   // out of the set, and in again as the union
+        set[join] = set[--*n];
     }
-    out[0] = now;
-    out[1] = last;
-    return 2;
+}
+
+void glass_fit_flip_add(glass_fit_flip_t *f, glass_fit_rect_t r) { rects_add(f->pending, &f->pending_n, GLASS_FIT_RECTS, r); }
+
+int glass_fit_flip(glass_fit_flip_t *f, glass_fit_rect_t out[GLASS_FIT_FLIP_MAX])
+{
+    if (!f->pending_n) return 0;
+    int n = 0;
+    for (int i = 0; i < f->pending_n; i++) out[n++] = f->pending[i];
+    for (int i = 0; i < f->last_n; i++) rects_add(out, &n, GLASS_FIT_FLIP_MAX, f->last[i]);
+    memcpy(f->last, f->pending, sizeof f->last);
+    f->last_n = f->pending_n;
+    f->pending_n = 0;
+    return n;
 }
 
 bool glass_fit_touch(const glass_fit_t *f, int ox, int oy, int *gx, int *gy)
