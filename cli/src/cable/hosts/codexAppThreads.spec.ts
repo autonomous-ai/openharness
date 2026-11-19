@@ -266,6 +266,19 @@ describe('the store\'s connection', () => {
     expect(existsSync(storeOf(fx) + '-shm')).toBe(false)
   })
 
+  it('no connection outlives a failed read: a writer can checkpoint and remove the WAL after it', async () => {
+    const fx = fixture()
+    fx.threads([thread(1, 10)])
+    const writer = fx.writer()
+    writer.exec('ALTER TABLE threads RENAME TO t2')
+    expect(existsSync(storeOf(fx) + '-wal')).toBe(true)
+    expect(await new CodexAppThreads(fx.home).read()).toEqual({ ok: false })
+    writer.exec('PRAGMA wal_checkpoint(TRUNCATE)')
+    writer.close()
+    expect(existsSync(storeOf(fx) + '-wal')).toBe(false)
+    expect(existsSync(storeOf(fx) + '-shm')).toBe(false)
+  })
+
   it('an idle store is read immutable and leaves no -wal or -shm', async () => {
     const fx = fixture()
     fx.threads([thread(1, 10)])

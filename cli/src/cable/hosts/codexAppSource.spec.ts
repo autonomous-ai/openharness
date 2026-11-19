@@ -245,6 +245,19 @@ describe("the ChatGPT app's source (docs/plans/2026-11-19-dial-chatgpt-ring-and-
     expect(s.ranks[1]).not.toBe(s.ranks[0])
   })
 
+  it('a new rank is set before the change is told, so the dial\'s next list has it', async () => {
+    const [a, b] = [thread(1), thread(2)]
+    const s = setup()
+    const ranked: number[] = []
+    s.source.onChange(() => { ranked.push(s.ranks.length) })
+    s.answers.read = ok([a, b])
+    s.source.start()
+    await s.land()
+    s.advance(1_000)
+    await after(s, ok([b, a]))
+    expect(ranked).toEqual([1, 2])
+  })
+
   describe('failed reads', () => {
     it('a failed read keeps the last good list and rank, and says read · failed once a run', async () => {
       const [a, b, c] = [thread(1), thread(2), thread(3)]
