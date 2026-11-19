@@ -48,6 +48,9 @@ const GATEWAY_HOLD_MS = 10_000
  *  which a load that fails again answers with one more `history failed:` line. */
 const SESSION_RETRY_MS = 20_000
 const SESSION_TRIES = 5
+/** How long a `/session`'s load is left to end when no line says it failed: OpenClaw's history request times out at
+ *  30 s, and a newer `/session` drops the load in flight (its tui `setSession`). */
+const SESSION_LOAD_MS = 35_000
 /** How long an OpenClaw's first task waits, not counting the time its agent is held, before its launch fails. */
 const FIRST_TASK_BOUND_MS = 180_000
 
@@ -191,11 +194,12 @@ export function createBinding({
     return 0
   }
   /**
-   * The `/session` tries on each agent's pane since its history last failed to load, agentId → how many and when the
-   * last. A pass that reads any other state forgets them: a reconnect or a load that worked ends the run. Cleared at
-   * 256 entries rather than aged: a try then comes sooner, and OpenClaw takes a `/session` at any time.
+   * The `/session` tries on each agent's pane since its history last failed to load, agentId → how many, when the last,
+   * and how many `history failed:` lines the pane showed then. A pass that reads any other state forgets them: a
+   * reconnect or a load that worked ends the run. Cleared at 256 entries rather than aged: a try then comes sooner, and
+   * OpenClaw takes a `/session` at any time.
    */
-  const sessionTries = new Map<string, { tries: number; lastAt: number }>()
+  const sessionTries = new Map<string, { tries: number; lastAt: number; failures: number }>()
   /**
    * How long each agent's first task has waited, agentId → when this daemon first saw it wait, the time it was held
    * since, and since when it is held now. A first task once waited for ever: typed into a TUI whose history had not
@@ -646,13 +650,15 @@ export function createBinding({
       if (screen.state === 'no-history' && screen.box === '' && screen.key
         && (agent.firstTask || input.firstTaskWaiting(agent.agentId) || input.awaitingConfirmation(agent.agentId))) {
         const now = Date.now()
-        const tried = sessionTries.get(agent.agentId) ?? { tries: 0, lastAt: -Infinity }
-        if (tried.tries < SESSION_TRIES && now - tried.lastAt >= SESSION_RETRY_MS) {
+        const tried = sessionTries.get(agent.agentId) ?? { tries: 0, lastAt: -Infinity, failures: 0 }
+        // The next is typed once the last load failed, or had its time: one typed while a load is in flight drops it.
+        const ended = screen.historyFailures > tried.failures || now - tried.lastAt >= SESSION_LOAD_MS
+        if (tried.tries < SESSION_TRIES && now - tried.lastAt >= SESSION_RETRY_MS && ended) {
           // Counted before it is typed and not waited for: a pass while it is typed types no second one, and this pass is
           // the serial discovery pass, every other agent's behind it.
           const tries = tried.tries + 1
           if (sessionTries.size >= 256) sessionTries.clear()
-          sessionTries.set(agent.agentId, { tries, lastAt: now })
+          sessionTries.set(agent.agentId, { tries, lastAt: now, failures: screen.historyFailures })
           console.log(`[discovery] ${sid(agent.agentId)} openclaw · history not loaded · /session ${tries}/${SESSION_TRIES}`)
           void input.typeCommand(agent.agentId, `/session ${screen.key}`).catch(() => false).then((typed) => {
             if (!typed) console.warn(`[discovery] ${sid(agent.agentId)} openclaw · /session ${tries}/${SESSION_TRIES} not typed`)
