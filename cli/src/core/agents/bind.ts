@@ -201,41 +201,47 @@ export function createBinding({
    */
   const sessionTries = new Map<string, { tries: number; lastAt: number; failures: number }>()
   /**
-   * How long each agent's first task has waited, agentId → when this daemon first saw it wait, the time it was held
-   * since, and since when it is held now. A first task once waited for ever: typed into a TUI whose history had not
-   * loaded, it was refused, given up with a log line, and `show` said idle (reproduction, 2026-11-19). The time held
-   * is not counted, so a person who starts the Gateway late still gets the task typed. In memory, as holds are: after a
-   * restart the count starts again from the new daemon's first pass, late, never early; cleared at 256 entries too.
+   * How long each agent's first task has waited, agentId → when this daemon first saw it wait, the time it was paused
+   * since, and since when it is paused now. A first task once waited for ever: typed into a TUI whose history had not
+   * loaded, it was refused, given up with a log line, and `show` said idle (reproduction, 2026-11-19). The time held,
+   * or starting, is not counted, so a person who starts the Gateway late, or a Gateway slow to start, still gets the task
+   * typed. In memory, as holds are: after a restart the count starts again from the new daemon's first pass, late, never
+   * early; cleared at 256 entries too.
    */
-  const firstTaskClock = new Map<string, { seenAt: number; heldMs: number; heldSince?: number }>()
+  const firstTaskClock = new Map<string, { seenAt: number; pausedMs: number; pausedSince?: number }>()
+  /** Whether the agent's first task waits, on its row or handed over and not yet confirmed. Its clock goes once it does not. */
+  const firstTaskWaits = (agent: RegisteredSession): boolean => {
+    const waits = !!agent.firstTask || input.firstTaskWaiting(agent.agentId)
+    if (!waits) firstTaskClock.delete(agent.agentId)
+    return waits
+  }
   /**
-   * Whether the agent's first task, on its row or typed and not yet confirmed, has waited FIRST_TASK_BOUND_MS unheld,
-   * from the latest of its TUI's start, its registration and this daemon's first pass over it. A resume keeps its old
-   * `registeredAt`, so the row's own time alone would fail a resumed task at once. Kept up to date on every pass.
+   * Whether the agent's waiting first task has waited FIRST_TASK_BOUND_MS, from the latest of its TUI's start, its
+   * registration and this daemon's first pass over it. A resume keeps its old `registeredAt`, so the row's own time alone
+   * would fail a resumed task at once. Paused while the agent is held, and while its pane reads starting (its TUI still
+   * reaching its Gateway, or the Gateway starting): no TUI can take a task then. Never while the pane shows a run with the
+   * task typed: OpenClaw at work on it, its user row late. Kept up to date on every pass that reads the pane.
    */
-  const firstTaskOverdue = (agent: RegisteredSession, tui: DiscoveredTerminalAgent['processIdentity']): boolean => {
-    if (!agent.firstTask && !input.firstTaskWaiting(agent.agentId)) {
-      firstTaskClock.delete(agent.agentId)
-      return false
-    }
+  const firstTaskOverdue = (agent: RegisteredSession, tui: DiscoveredTerminalAgent['processIdentity'], screen: OpenclawScreen): boolean => {
     const now = Date.now()
     let clock = firstTaskClock.get(agent.agentId)
     if (!clock) {
       if (firstTaskClock.size >= 256) firstTaskClock.clear()
-      clock = { seenAt: now, heldMs: 0 }
+      clock = { seenAt: now, pausedMs: 0 }
       firstTaskClock.set(agent.agentId, clock)
     }
-    if (agent.identityHold) {
-      clock.heldSince ??= now
+    if (agent.identityHold || screen.state === 'starting') {
+      clock.pausedSince ??= now
       return false
     }
-    if (clock.heldSince !== undefined) {
-      clock.heldMs += now - clock.heldSince
-      delete clock.heldSince
+    if (clock.pausedSince !== undefined) {
+      clock.pausedMs += now - clock.pausedSince
+      delete clock.pausedSince
     }
+    if (screen.state === 'busy' && input.awaitingConfirmation(agent.agentId)) return false
     const started = Date.parse(tui.startMarker)
     const from = Math.max(agent.registeredAt, Number.isFinite(started) ? started : 0, clock.seenAt)
-    return now - from - clock.heldMs >= FIRST_TASK_BOUND_MS
+    return now - from - clock.pausedMs >= FIRST_TASK_BOUND_MS
   }
   /**
    * The hold a failed native read set, agentId → that hold as the row stored it: its reason, and the row's
@@ -583,16 +589,17 @@ export function createBinding({
       // One a message was typed into is read on every pass until the message is confirmed: the run it starts shows on the
       // pane before the store, which may never show it (live.ts NO_SESSION_MS counts from the first pass that reads it).
       // So is one whose first task waits: a history that did not load reads idle, and its `/session` and the task wait.
-      // A first task past its bound is failed before that: its pane need not be read for it.
-      if (firstTaskOverdue(agent, observed.processIdentity)) {
-        failFirstTask(agent)
-        return
-      }
-      const waiting = !!agent.firstTask || input.firstTaskWaiting(agent.agentId) || input.awaitingConfirmation(agent.agentId)
+      const taskWaits = firstTaskWaits(agent)
+      const waiting = taskWaits || input.awaitingConfirmation(agent.agentId)
       if (agent.sessionId && !waiting && !openclawPaneDue(agent.sessionId)) return
       const captured = await read(() => capturePane(agent.agentId), (screen) => !screen)
       if (!captured?.value || !current()) return
       const screen = readOpenclawScreen(captured.value)
+      // A first task past its bound is failed before anything else is read off the pane: nothing is typed after it.
+      if (taskWaits && firstTaskOverdue(agent, observed.processIdentity, screen)) {
+        failFirstTask(agent)
+        return
+      }
       if (screen.state !== 'no-history') sessionTries.delete(agent.agentId)
       // Told on every pass, the ones that say a state too: a pass that reads the Gateway gone is what lets the stream
       // close a turn its restart left `running`. A history that did not load is under a status line that says idle.
