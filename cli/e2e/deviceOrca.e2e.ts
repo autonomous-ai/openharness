@@ -7,7 +7,7 @@
  * - `disable` marks it removed and uninstalls it, and a later `enable` brings it back;
  * - `connect` is gone;
  * - the devices' process of a daemon on the same build sets it up at a dial's attach, with no command, and keeps a
- *   `disable`.
+ *   `disable` through a CLI update's start and a replug.
  *
  * It is the only test that reads the `__ORCA_PLUGIN__` a build inlined. The command's cases start no daemon; the
  * devices' case starts one on the same bundle, as a daemon from the sources carries no plugin. The harness gives each
@@ -20,7 +20,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join, relative } from 'node:path'
 import { afterAll, afterEach, beforeAll, describe, expect, it, onTestFailed } from 'vitest'
 import { harnessPath, thisComputer } from '../src/config/harnessHome.js'
-import { readSetup } from '../src/devices/dialSkillFiles.js'
+import { readSetup, writeSetup } from '../src/devices/dialSkillFiles.js'
 import { fakeOrcaCli, type FakeOrcaCli } from '../src/testing/fakeOrcaCli.js'
 import { CLI_ROOT, IsolatedDaemon, until } from './harness/daemon.js'
 import { Desk } from './harness/desk.js'
@@ -169,7 +169,7 @@ describe('the devices process sets the plugin up', () => {
     desk = undefined
   })
 
-  it("a dial's attach installs and approves the plugin with no command; after a disable a replug asks Orca nothing; enable brings it back", async () => {
+  it("a dial's attach installs and approves the plugin with no command; after a disable a CLI update's start and a replug ask Orca nothing; enable brings it back", async () => {
     // A daemon on the file's bundle, its dials on a desk, as devicesProcess.e2e.ts starts one.
     const d = await IsolatedDaemon.create({ scriptPath: bundle, env: {
       CABLE_DISABLE: 'false',
@@ -209,16 +209,33 @@ describe('the devices process sets the plugin up', () => {
     expect(d.log().split('\n').filter((line) => [FP, folder, KEY, WORKSPACE_READ].some((secret) => line.includes(secret)))).toEqual([])
 
     expect(await harness('device', 'orca', 'disable')).toEqual({ code: 0, out: '{"orca":"off"}\n', err: '' })
-    const before = orca.calls().length
     await theDesk.unplug('E2E-A')
+    // As after a CLI update: the record holds an older version, so only the removal keeps the start's and the attach's
+    // passes from asking Orca. A build from the sources is 0.0.1.
+    const older = '0.0.0'
+    expect(version).not.toBe(older)
+    await d.stop()
+    const { unread, ...setup } = readSetup(d.dataDir)
+    expect(unread).toBeUndefined()
+    expect(writeSetup(d.dataDir, { ...setup, orca: older })).toBeUndefined()
+    const before = orca.calls().length
+    await d.start()
+    const asked = () => orca.calls().slice(before).filter((call) => call === 'status --json' || /^plugin (install|update|enable) /.test(call))
     const dial = await theDesk.plug('E2E-A', 'e2:e0:00:00:00:0a')
     const since = dial.messages.length
     dial.send({ t: 'agents.list' })
     await dial.next((m) => m.t === 'agents.end', 45_000, 'agents.end', since)
     // A removed pass returns in the attach's own moment, before the list is answered.
-    expect(orca.calls().slice(before).filter((call) => call === 'status --json' || /^plugin (install|update|enable) /.test(call))).toEqual([])
+    expect(asked()).toEqual([])
 
     expect(await harness('device', 'orca', 'enable')).toEqual({ code: 0, out: '{"orca":"on"}\n', err: '' })
     expect(orca.entry()).toMatchObject({ status: 'running', version })
+    // The same record with the removal cleared: the next attach's pass asks Orca, finds it current and records it. A
+    // pass runs only after the one before it ends, so Orca has by then heard every pass since the start: this one alone,
+    // beside `enable`.
+    await theDesk.unplug('E2E-A')
+    await theDesk.plug('E2E-A', 'e2:e0:00:00:00:0a')
+    await until('the plugin recorded', () => readSetup(d.dataDir).orca === version || null, 60_000, 200)
+    expect(asked()).toEqual(['status --json', `plugin install ${folder} --json`, `plugin install ${folder} --approve ${FP} --json`, 'status --json'])
   })
 })
