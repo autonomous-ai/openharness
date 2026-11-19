@@ -276,19 +276,28 @@ export const OPENCLAW_LAUNCH = {
 } as const
 
 /**
- * A box holds a message when it starts with the message's first 32 characters, whitespace runs collapsed: the TUI
- * wraps a long message over several lines, which the box joins by a space. A box scrolled over it ([hidden]) shows
- * only a part: its end under lines hidden above, its start over lines hidden below, a part between with both. Those
- * are compared with all whitespace removed, as the TUI also breaks a word longer than a line.
+ * A paste over 10 lines or 1000 characters, as pi-tui's editor draws it in the box: `[paste #1 +12 lines]`, or
+ * `[paste #1 1250 chars]` counted after it makes each line break one `\n` and each tab four spaces (`handlePaste`).
+ */
+const PASTE_MARKER = /^\[paste #\d+ (?:\+(\d+) lines|(\d+) chars)\]$/
+
+/**
+ * A box holds a message when it shows all of it and nothing else, compared with all whitespace removed: the TUI
+ * wraps a long message over lines the box joins by a space, breaking a word longer than a line. Any other text in it
+ * is the person's, which an Enter would send. A box scrolled over the message ([hidden]) shows a part: its end under
+ * lines hidden above, its start over lines hidden below, a part between with both. A long paste shows as its marker.
  */
 export function openclawBoxHolds(box: string | null, message: string, hidden: OpenclawBoxHidden = NOT_SCROLLED): boolean {
-  if (hidden.above || hidden.below) {
-    const shown = box?.replace(/\s+/g, '') ?? ''
-    const whole = message.replace(/\s+/g, '')
-    return !!shown && (hidden.above && hidden.below ? whole.includes(shown) : hidden.above ? whole.endsWith(shown) : whole.startsWith(shown))
+  const pasted = box ? PASTE_MARKER.exec(box) : null
+  if (pasted) {
+    const text = message.replace(/\r\n?/g, '\n')
+    return pasted[1] ? Number(pasted[1]) === text.split('\n').length : Number(pasted[2]) === text.replace(/\t/g, '    ').length
   }
-  const start = message.replace(/\s+/g, ' ').trim().slice(0, 32)
-  return !!start && !!box && box.replace(/\s+/g, ' ').startsWith(start)
+  const shown = box?.replace(/\s+/g, '') ?? ''
+  const whole = message.replace(/\s+/g, '')
+  if (!shown) return false
+  return hidden.above && hidden.below ? whole.includes(shown) : hidden.above ? whole.endsWith(shown)
+    : hidden.below ? whole.startsWith(shown) : whole === shown
 }
 
 /** A first task OpenClaw never took: the launch fails with it, and every verb says it. */
