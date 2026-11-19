@@ -27,8 +27,11 @@ function recorder(over: Partial<OrcaDeps> = {}, codes: Array<number | null> = []
 
 const place = (hints: Record<string, string>, host = 'wezterm'): Place => ({ host, app: 'wezterm', hints })
 const pane = (id: string) => ({ adapter: 'wezterm', id })
-const activate = (file: string, id: string): Call => ({ file, args: ['cli', 'activate-pane', '--pane-id', id], timeoutMs: 10_000 })
-const send = (id: string, text: string, file = FAKE_PATH_WEZTERM): Call => ({ file, args: ['cli', 'send-text', '--pane-id', id, '--no-paste', '--', text], timeoutMs: 10_000 })
+// Every command says --no-auto-start: with no WezTerm running, `wezterm cli` would start a mux server that outlives it.
+const activate = (file: string, id: string): Call =>
+  ({ file, args: ['cli', '--no-auto-start', 'activate-pane', '--pane-id', id], timeoutMs: 10_000 })
+const send = (id: string, text: string, file = FAKE_PATH_WEZTERM): Call =>
+  ({ file, args: ['cli', '--no-auto-start', 'send-text', '--pane-id', id, '--no-paste', '--', text], timeoutMs: 10_000 })
 
 describe('the WezTerm adapter', () => {
   it('its id is wezterm, it taps before its app, it types, and it has no show', () => {
