@@ -216,6 +216,11 @@ vi.mock('../cable/hosts/scannedApp.js', async (real) => ({
   readProcessNames: readers.processes,
   readBundleId: readers.bundleId,
 }))
+// Where tmux is: on the PATH, so no spec asks the developer's login shell.
+vi.mock('../lib/tmuxOnPath.js', async (real) => ({
+  ...await real<typeof import('../lib/tmuxOnPath.js')>(),
+  ensureTmuxOnPath: async () => ({ state: 'present' }),
+}))
 // What a session's own process record gives: never this machine's ~/.claude.
 vi.mock('../cable/hosts/record.js', () => ({ readRecord: readers.record }))
 vi.mock('../cable/hosts/lastAnswer.js', async (real) => ({
