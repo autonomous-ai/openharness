@@ -770,10 +770,19 @@ export function startHookServer(
           // The registration itself owns this native Stop, even if its second
           // HTTP delivery outruns source recovery. Never close a later live turn.
           // Its client leaves on pending and never sends it again: acceptance claims it.
-          if (!settled || stopRetained) {
-            if (!settled) parkedStop = { stop, firedAt }
+          if (!settled) {
+            // Its bytes join its registration's receipt, inside the same budget, until settling rewrites that receipt.
+            const receipt = history.records.get(deliveryId)
+            const bytes = retainedBytes + 2 * JSON.stringify(stop).length
+            if (!receipt || receiptBytes - receipt.bytes + bytes > bytesCapacity) {
+              return { status: 429, reply: { pending: false, error: 'HOOK_ADMISSION_BUSY',
+                detail: 'Hook acknowledgement storage is full; this Stop was not kept.' } }
+            }
+            saveReceipt(history.records, deliveryId, { ...receipt, bytes })
+            parkedStop = { stop, firedAt }
             return { status: 200, reply: { pending: true } }
           }
+          if (stopRetained) return { status: 200, reply: { pending: true } }
           if (stopCurrent && !stopCurrent()) stopInvocationClaimed = true
           if (stopInvocationClaimed) return { status: 200, reply: { ok: true, duplicate: true } }
           const owner = await verifiedBoundMutation(stop, handlers)
