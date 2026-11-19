@@ -118,6 +118,52 @@ void main() {
     dial.dispose();
   });
 
+  test('a board that never greeted is shown while plugged in, never saved to the library', () async {
+    final storage = MemoryStore();
+    final dial = DialState();
+    final controller = DevicesController(
+      dial: dial,
+      accountId: 'a',
+      storage: storage,
+      sendSettings: (_, _) async => true,
+    );
+    await controller.load();
+    // Any ESP32-S3 board on the desk whose port cannot be opened: a row with only its problem, and no MAC ever.
+    report(dial, [
+      DialStatus.fromJson({
+        'id': 'ESP-BOARD',
+        'attached': false,
+        'problem': 'No access to the dial yet. Log out and in.',
+      }),
+    ]);
+    expect(controller.devices, hasLength(1));
+    await controller.settled;
+    controller.dispose();
+    report(dial, []);
+    final next = DevicesController(
+      dial: dial,
+      accountId: 'a',
+      storage: storage,
+      sendSettings: (_, _) async => true,
+    );
+    await next.load();
+    expect(next.devices, isEmpty);
+    // Once it greets with a MAC it is a dial, and kept.
+    report(dial, [deviceStatus('ESP-BOARD', mac: 'e5:e5')]);
+    await next.settled;
+    next.dispose();
+    final after = DevicesController(
+      dial: dial,
+      accountId: 'a',
+      storage: storage,
+      sendSettings: (_, _) async => true,
+    );
+    await after.load();
+    expect(after.devices.single.status.mac, 'e5:e5');
+    after.dispose();
+    dial.dispose();
+  });
+
   test('a failed library read cannot overwrite saved devices; retry merges new arrivals', () async {
     final storage = _ReadFailureStore();
     final dial = DialState();
