@@ -6,7 +6,7 @@ pub trait LoginItem: Send + Sync {
 
 pub struct SystemLoginItem;
 
-/// What ServiceManagement says of the app's login item.
+/// What the OS says of the app's login item (ServiceManagement on macOS).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Status {
     NotRegistered,
@@ -47,7 +47,7 @@ impl LoginItem for SystemLoginItem {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", windows)))]
 impl LoginItem for SystemLoginItem {
     fn register(&self) -> Result<(), String> {
         Err("Login items are not supported here.".into())
@@ -78,7 +78,7 @@ mod tests {
         assert_eq!(from(Status::NotFound), (Ok(()), 1));
     }
 
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", windows)))]
     #[test]
     fn there_is_none_off_a_mac() {
         assert_eq!(SystemLoginItem.register(), Err("Login items are not supported here.".to_string()));
