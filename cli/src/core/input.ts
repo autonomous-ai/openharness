@@ -270,8 +270,7 @@ export function createInput(deps: InputDeps) {
     }
     return true
   }
-  /** Where a message to [id] goes, and its text as the agent's engine takes it; logged as received. */
-  const received = (id: string, content: string, deliveryId?: string): { target: string; text: string } => {
+  const submitAgent = (id: string, content: string, deliveryId?: string, receipt?: MessageReceipt): void => {
     const record = resolve(id)
     const sessionId = record?.sessionId ?? id
     const engine = record?.engine ?? 'claude'
@@ -285,20 +284,11 @@ export function createInput(deps: InputDeps) {
       console.log(`[msg] ${sid(sessionId)} slash-command adapted for engine=${engine}`)
     }
     if (log) console.log(`[msg] ${sid(sessionId)} recv · engine=${engine} · bytes=${Buffer.byteLength(adapted, 'utf8')}`)
-    return { target: record?.agentId ?? sessionId, text: adapted }
-  }
-  const submitAgent = (id: string, content: string, deliveryId?: string, receipt?: MessageReceipt): void => {
-    const { target, text } = received(id, content, deliveryId)
-    input.submit(target, text, deliveryId, receipt)
-  }
-  // The task an agent was started with: the controller keeps it until its user row confirms it (sessionInput.ts
-  // `firstTaskWaiting`), so the binding pass can bound it from the agent's launch.
-  const submitFirstTask = (agentId: string, task: string): void => {
-    const { target, text } = received(agentId, task)
-    input.submit(target, text, undefined, undefined, { firstTask: true })
+    const target = record?.agentId ?? sessionId
+    input.submit(target, adapted, deliveryId, receipt)
   }
   const messageRequest = createMessageRequest((id, content, receipt) => submitAgent(id, content, undefined, receipt), deps.typed)
-  return { input, deviceInput, acquireTerminalControl, submitAgent, submitFirstTask, messageRequest }
+  return { input, deviceInput, acquireTerminalControl, submitAgent, messageRequest }
 }
 
 /**

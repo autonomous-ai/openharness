@@ -102,9 +102,9 @@ export interface BindDeps {
   announceSession: (session: RegisteredSession) => void
   stoppedAgents: Pick<StoppedAgentStore, 'save' | 'finishResume' | 'get'>
   syncRecapPool: () => void
-  input: Pick<SessionInputController, 'forget' | 'awaitingConfirmation' | 'firstTaskWaiting' | 'typeCommand'>
-  /** Types an agent's first task into its pane as the person's own message, kept until its user row confirms it
-   *  (core/input.ts `submitFirstTask`). */
+  input: Pick<SessionInputController, 'forget' | 'awaitingConfirmation' | 'firstTaskWaiting' | 'typeCommand' | 'expectFirstTask'>
+  /** Types an agent's first task into its pane as the person's own message (core/input.ts `submitAgent`), which the input
+   *  keeps from its hand-over until a turn takes it (`expectFirstTask`). */
   submitFirstTask: (agentId: string, task: string) => void
   deviceInput: Pick<AutonomousDeviceInput, 'forget'>
   /** Where Copilot, Grok and agy keep their sessions. */
@@ -419,6 +419,8 @@ export function createBinding({
    * off the row already: it is said, not put back.
    */
   const handOverFirstTask = (agentId: string): void => {
+    // Expected before its row lets it go: the frame reads starting from the one or the other all the way to its turn.
+    input.expectFirstTask(agentId)
     void takeFirstTask(agentId).then((task) => {
       if (!task) return
       console.log(`[agent] ${sid(agentId)} first task handed over`)
