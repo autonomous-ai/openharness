@@ -450,13 +450,14 @@ export function createBinding({
   /**
    * A first task OpenClaw did not take within its bound fails the launch with it, so every verb says so and the person
    * can start it again; taken off the row and out of the controller, it is typed nowhere after this. Discovery leaves
-   * the failed launch alone while the same TUI runs (discovery.ts).
+   * the failed launch alone while the same TUI runs (discovery.ts). The launch fails first: the registry lets the task
+   * of a row with no session go only then.
    */
   const failFirstTask = (agent: RegisteredSession): void => {
     firstTaskClock.delete(agent.agentId)
+    registry.setLaunch(agent.agentId, { state: 'failed', ...OPENCLAW_FIRST_TASK })
     void takeFirstTask(agent.agentId)
     input.forget(agent.agentId)
-    registry.setLaunch(agent.agentId, { state: 'failed', ...OPENCLAW_FIRST_TASK })
     announceSession(agent)
     console.log(`[agent] ${sid(agent.agentId)} first task not taken · ${OPENCLAW_FIRST_TASK.error}`)
   }

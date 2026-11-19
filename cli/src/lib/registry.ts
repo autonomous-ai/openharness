@@ -2779,7 +2779,10 @@ class Registry {
     }, authority.expires)
   }
 
-  /** The task is returned only after its removal is durable, to at most one caller. */
+  /**
+   * The task is returned only after its removal is durable, to at most one caller. An unbound agent keeps it, as a task is
+   * typed only into a session read, unless its launch failed: nothing types it then (core/agents/bind.ts `failFirstTask`).
+   */
   async takeFirstTask(agentId: string): Promise<string | null> {
     this.writer.assertOpen()
     const verify = this.ownerGuard(agentId)
@@ -2787,7 +2790,7 @@ class Registry {
       verify()
       const row = this.agents.get(agentId)
       const task = row?.firstTask
-      if (!row?.sessionId || !task) return null
+      if ((!row?.sessionId && row?.launch?.state !== 'failed') || !task) return null
       const next = { ...row }
       delete next.firstTask
       const receipt = await this.persist(deadline, true, false, undefined, { agentId, candidate: next, verify })
