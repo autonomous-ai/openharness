@@ -12,6 +12,7 @@ import { patientDeadline } from '../lib/patientExec.js'
 import { windowsEngineArgv } from '../lib/windows/launch.js'
 import { engineHooks } from './hooks.js'
 import * as hooks from './nativeHooks.js'
+import { HookPreparationHeld, HookScriptMissing } from './kit/hookHeld.js'
 import { captureLaunchExecutable, LAUNCH_LOCATION_VARIABLES } from './kit/launchExecutable.js'
 import { homeIsNetworkOrDevice, networkHomeSentence } from './kit/homeAdoption.js'
 import { startupOwnedFlag } from './kit/launchStartup.js'
@@ -291,7 +292,9 @@ export async function inspectNativeLaunch(engine: AgentEngine, source: NativeLau
         valid = true; prepared = true
         return true
       } catch (error) {
-        console.warn(`[launch] native hook preparation held · ${errorKind(error)}`)
+        // A hold's reason is fixed words (hookHeld.ts); HookScriptMissing's names a path, so that one is said by its kind.
+        const held = error instanceof HookPreparationHeld && !(error instanceof HookScriptMissing) ? error.reason : errorKind(error)
+        console.warn(`[launch] native hook preparation held · ${held}`)
         return false
       } finally { preparing = false }
     },
