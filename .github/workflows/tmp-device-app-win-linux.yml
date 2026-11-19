@@ -118,3 +118,58 @@ jobs:
         run: cargo tauri build --ci --debug --bundles appimage -- --locked
       - name: End to end
         run: bash device-app/scripts/e2e/linux.sh device-app/src-tauri/target/debug/bundle/appimage/*.AppImage
+
+  # The installed app against the fake CLI: device-app/scripts/e2e/windows.ps1, on x64 and arm64, each built where it
+  # runs. The arm64 installer is kept for the Windows ARM VM's checks, unsigned and for 3 days.
+  windows-e2e:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [windows-latest, windows-11-arm]
+    runs-on: ${{ matrix.runner }}
+    # A cold Tauri CLI and app compile, the NSIS bundle, then the run, whose wait on harness start takes up to minutes.
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.CLI_NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: device-app/ui/package-lock.json
+      # The bundle's beforeBuildCommand builds the window with these.
+      - name: UI packages
+        working-directory: device-app/ui
+        run: npm ci --no-audit --no-fund
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: device-app/src-tauri
+          shared-key: device-app-tmp-e2e-${{ matrix.runner }}
+      - name: Tauri CLI
+        run: cargo install tauri-cli --version 2.12.4 --locked
+      # A debug build reads HARNESS_DEVICE_CLI, the fake CLI windows.ps1 points it at.
+      - name: Installer
+        working-directory: device-app/src-tauri
+        run: cargo tauri build --ci --debug --bundles nsis -- --locked
+      - if: matrix.runner == 'windows-11-arm'
+        uses: actions/upload-artifact@v4
+        with:
+          name: device-app-windows-arm64-debug
+          path: device-app/src-tauri/target/debug/bundle/nsis/*-setup.exe
+          retention-days: 3
+          if-no-files-found: error
+      - name: End to end
+        run: |
+          $setup = @(Get-ChildItem device-app/src-tauri/target/debug/bundle/nsis/*-setup.exe)
+          if ($setup.Count -ne 1) { throw "one installer, not $($setup.Count)" }
+          pwsh -NoProfile -File device-app/scripts/e2e/windows.ps1 -Installer $setup[0].FullName -Out "$env:RUNNER_TEMP\device-app-e2e"
+      # The app's log and the fake CLI's files of each part, for a failure.
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: device-app-windows-e2e-${{ matrix.runner }}
+          path: ${{ runner.temp }}/device-app-e2e
+          retention-days: 3
+          if-no-files-found: ignore
