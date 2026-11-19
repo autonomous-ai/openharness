@@ -2,11 +2,12 @@ import { cleanUsageContext, type NODE_HELD_REASONS, type ProductUsageContext } f
 import type { NodeStatus } from '../lib/nodeStatus.js'
 import { cleanHealthState, createProductHealth, type HealthState } from './productHealth.js'
 import { reportFailure } from './reportFailure.js'
-import { mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
-import { mkdir, rename, writeFile } from 'node:fs/promises'
+import { mkdirSync, statSync } from 'node:fs'
+import { mkdir } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { engineAccount } from '../lib/engineAccount.js'
+import { atomicWriteFile, jsonObject, readState } from '../lib/secureState.js'
 import { loginShellEnvironment } from '../lib/loginShellEnv.js'
 import { launchEngine, type ProductUsageLaunchSignal } from '../lib/productUsageSignals.js'
 import { LAUNCH_ERROR_CODES, PRODUCT_USAGE_ACTIONS, PRODUCT_USAGE_AUTOMATIC_ACTIONS, PRODUCT_USAGE_DAYS,
@@ -146,7 +147,8 @@ export function createProductUsage(deps: ProductUsageDeps) {
   try {
     if (statSync(deps.file).size > MAX_QUEUE_BYTES) throw new Error('Usage queue exceeds its bound')
     // Reconstruct every field; even a corrupted local file cannot introduce a new upload property.
-    const saved = JSON.parse(readFileSync(deps.file, 'utf8')) as State
+    const read = readState(deps.file, 'cache', jsonObject)
+    const saved = (read.state === 'ok' ? read.value : {}) as unknown as State
     if (Number.isSafeInteger(saved.revision) && saved.revision >= 0) {
       state = fresh(saved.revision)
       state.health = cleanHealthState(saved.health, now())
@@ -180,7 +182,7 @@ export function createProductUsage(deps: ProductUsageDeps) {
         if (Buffer.byteLength(JSON.stringify(restored)) <= 8192) state.pending = restored
       }
     }
-  } catch { /* Missing or unreadable telemetry must not affect a session. */ }
+  } catch { /* Missing, past its bound or of another shape: telemetry must not affect a session. */ }
 
   const health = createProductHealth(add, now, state.health)
 
@@ -224,12 +226,11 @@ export function createProductUsage(deps: ProductUsageDeps) {
   /** The final state, on disk before stop() returns. `harness stop`, an update, a sign-in's restart, a service
    *  install and an OS logout end the process right after it, and the asynchronous write went with it: every
    *  planned stop read as an unclean restart (health_cli_unclean_restart, 69 to 170 on 2026-10-16, production
-   *  counters). Its own temporary file, so it never interleaves with a write still on its way; at most 256 KiB. */
+   *  counters). At most 256 KiB. */
   function writeFinal(value: string): boolean {
     try {
       mkdirSync(dirname(deps.file), { recursive: true, mode: 0o700 })
-      writeFileSync(deps.file + '.final.tmp', value, { mode: 0o600 })
-      renameSync(deps.file + '.final.tmp', deps.file)
+      atomicWriteFile(deps.file, value, 'cache')
       return true
     } catch { return false }
   }
@@ -246,10 +247,9 @@ export function createProductUsage(deps: ProductUsageDeps) {
           if (deps.write) await deps.write(deps.file, value)
           else {
             await mkdir(dirname(deps.file), { recursive: true, mode: 0o700 })
-            await writeFile(deps.file + '.tmp', value, { mode: 0o600 })
             // Stopped meanwhile: the final state is on disk, and this older snapshot must not go over it.
             if (final !== null) break
-            await rename(deps.file + '.tmp', deps.file)
+            atomicWriteFile(deps.file, value, 'cache')
           }
         } while (writeAgain && final === null)
         return true

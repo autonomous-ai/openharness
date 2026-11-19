@@ -13,9 +13,10 @@
  * also need `programs-reply`?) is one line to change.
  */
 import { createHash, timingSafeEqual } from 'node:crypto'
-import { closeSync, constants, lstatSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { closeSync, constants, lstatSync, mkdirSync, openSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { lockOwnerAlive, lockStartMarker, processLockIdentity, type LockGeneration } from '../lib/processLiveness.js'
+import { atomicWriteFile, jsonObject, readState } from '../lib/secureState.js'
 import { AgentClientError } from './daemon.js'
 
 /** The least a token holds: 32 bytes, 256 bits, the issue's floor. */
@@ -124,9 +125,9 @@ export class ProgramRecords {
   get path(): string { return programFilePath(this.dataDir) }
 
   all(): ProgramHarness[] {
-    let parsed: unknown
-    try { parsed = JSON.parse(readFileSync(this.path, 'utf8')) } catch { return [] }
-    const rows = (parsed as Partial<ProgramFile> | null)?.harnesses
+    const read = readState(this.path, 'cache', jsonObject)
+    if (read.state !== 'ok') return []
+    const rows = (read.value as Partial<ProgramFile>).harnesses
     if (!rows || typeof rows !== 'object') return []
     return Object.values(rows).map(harnessOf).filter((h): h is ProgramHarness => !!h)
   }
@@ -146,9 +147,7 @@ export class ProgramRecords {
       change(rows)
       const file: ProgramFile = { v: 1, harnesses: Object.fromEntries(rows) }
       mkdirSync(this.dataDir, { recursive: true })
-      const tmp = `${this.path}.${process.pid}.tmp`
-      writeFileSync(tmp, JSON.stringify(file), { mode: 0o600 })
-      renameSync(tmp, this.path)
+      atomicWriteFile(this.path, JSON.stringify(file), 'cache')
     })
   }
 

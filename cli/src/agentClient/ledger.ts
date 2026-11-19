@@ -25,6 +25,7 @@
 import { appendFileSync, closeSync, constants, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { lockOwnerAlive, lockStartMarker, processLockIdentity, type LockGeneration } from '../lib/processLiveness.js'
+import { atomicWriteFile } from '../lib/secureState.js'
 
 export interface LedgerMember { machineId: string; agentId: string }
 /** A starter: the harness that ran `harness new`, its name and engine, and whether it is the Hachi harness
@@ -260,14 +261,7 @@ export class Ledger {
         }
         if (!dropped) continue
         // A new file renamed over the old: a reader sees the whole file before or after, and no copy of the words stays.
-        const temp = `${file}.tmp`
-        try {
-          writeFileSync(temp, Buffer.concat(kept), { mode: 0o600 })
-          renameSync(temp, file)
-        } catch (error) {
-          rmSync(temp, { force: true })
-          throw error
-        }
+        atomicWriteFile(file, Buffer.concat(kept), 'cache')
         gone += dropped
       }
       return gone
