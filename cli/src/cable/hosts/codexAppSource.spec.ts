@@ -283,16 +283,18 @@ describe("the ChatGPT app's source (docs/plans/2026-11-19-dial-chatgpt-ring-and-
       expect(s.log).toEqual(['[codex-app] watch · on', '[codex-app] read · failed'])
     })
 
-    it('a listener that throws throws nothing into the devices process, and the next change reads', async () => {
+    it('a listener that throws costs the listeners after it nothing, is no failed read, and throws nothing', async () => {
       const s = setup()
+      let heard = 0
       s.source.onChange(() => { throw new Error('broken') })
+      s.source.onChange(() => { heard++ })
       s.source.start()
       await s.land()
-      expect(s.log.at(-1)).toBe('[codex-app] read · failed')
-      s.advance(1_000)
-      s.fire(undefined)
-      expect(s.reads()).toBe(2)
-      await s.land()
+      expect(heard).toBe(1)
+      expect(s.changes).toBe(1)
+      expect(s.log).not.toContain('[codex-app] read · failed')
+      expect(() => s.source.stop()).not.toThrow()
+      expect(heard).toBe(2)
     })
   })
 
