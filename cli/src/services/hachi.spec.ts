@@ -421,7 +421,7 @@ describe('Hachi\'s wakes, what can go wrong', () => {
   })
 
   it('runs on its own defaults: the daemon\'s socket, real timers and file watches', async () => {
-    vi.useFakeTimers()
+    vi.useFakeTimers({ now: NOW })
     setAgentSettingsForTest(dir, { hachi: true })
     startedByHachi('api')
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})
