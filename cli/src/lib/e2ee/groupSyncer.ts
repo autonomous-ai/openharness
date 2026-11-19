@@ -16,6 +16,7 @@
  */
 import type { Frame, LocalClientSink } from '../../backendSocket.js'
 import type { RelaySession } from '../remoteRelay.js'
+import { StateFileUnreadable } from '../secureState.js'
 import type { MachinePeerStore } from './machinePeers.js'
 import type { LinkedPeer } from './manager.js'
 import type { PairedClient } from './store.js'
@@ -160,10 +161,11 @@ export class GroupSyncer {
   }
 
   /** This machine's user unpaired `pub` (`harness unpair`): stop trusting and dialing it HERE, and keep
-   *  it that way — without this the next round would put back what the roster still names. */
+   *  it that way — without this the next round would put back what the roster still names. Forgotten
+   *  first: a block list that cannot be written still leaves the key untrusted here. */
   unpaired(pub: string): void {
-    this.deps.store.block(pub)
     this.forget(pub)
+    this.deps.store.block(pub)
   }
 
   /** Keys the device key log holds (deviceLogSyncer.ts): members of the group like any link, stamped
@@ -198,9 +200,15 @@ export class GroupSyncer {
     return this.deps.store.read().members.some((m) => m.pub === pub)
   }
 
-  /** Whether this machine's user unpaired `pub` here. */
+  /** Whether this machine's user unpaired `pub` here. A block list that cannot be read blocks nobody:
+   *  "cannot tell" is not "blocked", and the device key log must still show every NEW DEVICE alert. */
   isBlocked(pub: string): boolean {
-    return this.deps.store.blocked().has(pub)
+    try {
+      return this.deps.store.blocked().has(pub)
+    } catch (err) {
+      if (err instanceof StateFileUnreadable) return false
+      throw err
+    }
   }
 
   /** A session to `machineId` just opened: a good moment to compare rosters, unless we just did. */
@@ -353,13 +361,12 @@ export class GroupSyncer {
 
   private apply(result: MergeResult): void {
     const selfMachine = this.deps.self().machineId
-    const blocked = this.deps.store.blocked()
-    const suspended = this.deps.suspended?.() ?? new Set<string>()
+    const keptOut = this.keptOut()
     // A machine the backend said was deleted (remoteRelay.ts) stays in other members' rosters; pinning it again is what made
     // the relay dial it for good. It is trusted as before: a deleted machine's identity is spent (gateway/start.ts).
     const gone = this.deps.peers.gone()
     for (const m of result.upserted) {
-      if (blocked.has(m.pub) || suspended.has(m.pub)) continue
+      if (!keptOut || keptOut.has(m.pub)) continue
       try {
         if (m.kind === 'machine' && m.machineId && m.machineId !== selfMachine && !gone.has(m.machineId)) {
           const pin = this.deps.peers.get(m.machineId)
@@ -373,6 +380,21 @@ export class GroupSyncer {
     for (const m of result.dropped) {
       this.forget(m.pub)
       try { this.onDropped?.(m.pub) } catch { /* the removal here stands */ }
+    }
+  }
+
+  /** Keys never pinned or trusted here: blocked, or suspended by a fork. Null while the block list or the
+   *  device log cannot be read: either may be what keeps a member out, so nobody new comes in meanwhile. */
+  private keptOut(): ReadonlySet<string> | null {
+    let reading = 'the block list'
+    try {
+      const blocked = this.deps.store.blocked()
+      reading = 'the device log'
+      return new Set([...blocked, ...(this.deps.suspended?.() ?? [])])
+    } catch (err) {
+      if (!(err instanceof StateFileUnreadable)) throw err
+      this.deps.log?.(`[group] ${reading} cannot be read: nobody new is pinned or trusted`)
+      return null
     }
   }
 
