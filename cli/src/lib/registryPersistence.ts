@@ -18,6 +18,9 @@ const WAIT_MS = 20
 const OWNERLESS_MS = 5_000
 const CAPACITY = 64
 const OWNER_BYTES = 4_096
+// A lock is there (a folder renamed over a folder; Windows refuses one over any folder), or Windows holds the
+// new folder for a moment (an antivirus or indexer): either way the turn waits like any busy one.
+const PUBLISH_REFUSED = ['EEXIST', 'ENOTEMPTY', 'EPERM', 'EACCES', 'EBUSY']
 
 type PersistencePhase = 'queue' | 'lock' | 'prepare' | 'publish'
 const reported = new Map<PersistencePhase, number>()
@@ -332,6 +335,12 @@ function removeLockNow(lock: string, identity: { ino: number; dev: number }, exp
   return true
 }
 
+/** Best effort and never recursive, as `removeLockNow`: a folder left behind blocks nobody. */
+async function removeTemporaryLock(folder: string): Promise<void> {
+  await fs.unlink(join(folder, 'owner.json')).catch(() => {})
+  await fs.rmdir(folder).catch(() => {})
+}
+
 /** Kept byte/protocol compatible with the last thirty days' synchronous writers. */
 export async function registryFileLock<T>(directory: string, deadline: RegistryWriteDeadline,
   apply: (checkOwner: () => void) => Promise<T>): Promise<T> {
@@ -366,13 +375,16 @@ export async function registryFileLock<T>(directory: string, deadline: RegistryW
         if (owner?.token === token && owner.pid === process.pid) removeLockNow(lock, identity, owner)
       } catch (error) { console.warn(`[registry] lock cleanup refused an unsafe owner · ${errorKind(error)}`) }
     }
+    // Built aside with its owner in it, then renamed into place. Made with mkdir and filled after, a core killed in
+    // between left a lock with no owner, which the next core waited 5 s for, past its 2 s budget: master.e2e.ts on
+    // Linux CI (run 44406838335, shard 7).
+    const temporary = `${lock}.${process.pid}.${randomUUID()}.tmp`
+    let built = false
     try {
-      await fs.mkdir(lock, { mode: 0o700 })
-      created = true
+      await fs.mkdir(temporary, { mode: 0o700 })
+      built = true
       check()
-      identity = await fs.lstat(lock)
-      check()
-      const handle = await fs.open(ownerFile, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0), 0o600)
+      const handle = await fs.open(join(temporary, 'owner.json'), constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0), 0o600)
       try {
         check()
         await handle.writeFile(JSON.stringify({ pid: process.pid, startMarker: ownGeneration?.startsWith('ps-c:') ? '' : ownGeneration ?? '',
@@ -382,61 +394,68 @@ export async function registryFileLock<T>(directory: string, deadline: RegistryW
         check()
       } finally { await handle.close() }
       check()
-      checkOwner()
-      entered = true
-      measure('lock', started)
-      try { return await apply(checkOwner) }
-      finally {
-        const cleanup = removeOwned()
-        if (deadline.retain) deadline.retain(cleanup)
-        else await cleanup
-        created = false
+      // A rename replaces an empty folder on macOS and Linux, so look first: only an older build's folder made since
+      // can be replaced, and that build's O_EXCL create of its owner then fails, so it does not enter.
+      if (!lstatSync(lock, { throwIfNoEntry: false })) {
+        try { await fs.rename(temporary, lock); built = false; created = true }
+        catch (error) { if (!PUBLISH_REFUSED.includes((error as NodeJS.ErrnoException).code ?? '')) throw error }
+      }
+      if (created) {
+        // Known before anything can end this turn, so a lock it holds is always removed, never left to a live owner.
+        identity = lstatSync(lock)
+        check()
+        checkOwner()
+        entered = true
+        measure('lock', started)
+        try { return await apply(checkOwner) }
+        finally {
+          const cleanup = removeOwned()
+          if (deadline.retain) deadline.retain(cleanup)
+          else await cleanup
+          created = false
+        }
       }
     } catch (error) {
-      if (entered) throw error
-      if (created) {
-        await removeOwned()
-        // No token means no safe deletion once setup yielded. The old ownerless
-        // debris rule reclaims it; never erase a new owner's directory here.
-        throw error
+      if (!entered && created) await removeOwned()
+      throw error
+    } finally { if (built) await removeTemporaryLock(temporary) }
+    // Busy: the lock is there, or the publish was refused for a moment. The ownerless rule below stays for the empty
+    // folders older builds can still leave; this one never leaves its lock without its owner.
+    check()
+    let owner: Owner | undefined
+    let since = Date.now()
+    let lockIdentity: { ino: number; dev: number } | undefined
+    try {
+      const stat = await fs.lstat(lock)
+      lockIdentity = stat
+      since = stat.mtimeMs
+      const ownerUid = uid()
+      if (!stat.isDirectory() || stat.isSymbolicLink() || (ownerUid !== null && stat.uid !== ownerUid)
+        || (process.platform !== 'win32' && (stat.mode & 0o777) !== 0o700)) throw new RegistryPersistenceUnavailable('registry lock has unsafe owner, mode, or type')
+      const ownerStat = await fs.lstat(ownerFile)
+      since = Math.max(since, ownerStat.mtimeMs)
+      if (!ownerStat.isFile() || ownerStat.isSymbolicLink() || (ownerUid !== null && ownerStat.uid !== ownerUid)
+        || (process.platform !== 'win32' && (ownerStat.mode & 0o777) !== 0o600)) throw new RegistryPersistenceUnavailable('registry lock owner has unsafe owner, mode, or type')
+      owner = await readOwner(ownerFile) ?? undefined
+    } catch (error) { if (error instanceof RegistryPersistenceUnavailable) throw error }
+    check()
+    if (!(Number(owner?.pid) > 0 && owner?.token)) {
+      if (Date.now() - since > OWNERLESS_MS && lockIdentity) {
+        const current = await fs.lstat(lock).catch(() => null)
+        if (current?.ino === lockIdentity.ino && current.dev === lockIdentity.dev
+          && removeLockNow(lock, lockIdentity)) continue
       }
-      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
+    } else if (!await alive(Number(owner!.pid), lockStartMarker(owner), expires - performance.now())) {
       check()
-      let owner: Owner | undefined
-      let since = Date.now()
-      let lockIdentity: { ino: number; dev: number } | undefined
       try {
-        const stat = await fs.lstat(lock)
-        lockIdentity = stat
-        since = stat.mtimeMs
-        const ownerUid = uid()
-        if (!stat.isDirectory() || stat.isSymbolicLink() || (ownerUid !== null && stat.uid !== ownerUid)
-          || (process.platform !== 'win32' && (stat.mode & 0o777) !== 0o700)) throw new RegistryPersistenceUnavailable('registry lock has unsafe owner, mode, or type')
-        const ownerStat = await fs.lstat(ownerFile)
-        since = Math.max(since, ownerStat.mtimeMs)
-        if (!ownerStat.isFile() || ownerStat.isSymbolicLink() || (ownerUid !== null && ownerStat.uid !== ownerUid)
-          || (process.platform !== 'win32' && (ownerStat.mode & 0o777) !== 0o600)) throw new RegistryPersistenceUnavailable('registry lock owner has unsafe owner, mode, or type')
-        owner = await readOwner(ownerFile) ?? undefined
-      } catch (error) { if (error instanceof RegistryPersistenceUnavailable) throw error }
-      check()
-      if (!(Number(owner?.pid) > 0 && owner?.token)) {
-        if (Date.now() - since > OWNERLESS_MS && lockIdentity) {
-          const current = await fs.lstat(lock).catch(() => null)
-          if (current?.ino === lockIdentity.ino && current.dev === lockIdentity.dev
-            && removeLockNow(lock, lockIdentity)) continue
+        const current = await readOwner(ownerFile)
+        if (current && sameOwner(current, owner!) && !await alive(Number(current.pid), lockStartMarker(current), expires - performance.now())) {
+          check()
+          if (lockIdentity && removeLockNow(lock, lockIdentity, current)) continue
         }
-      } else if (!await alive(Number(owner!.pid), lockStartMarker(owner), expires - performance.now())) {
-        check()
-        try {
-          const current = await readOwner(ownerFile)
-          if (current && sameOwner(current, owner!) && !await alive(Number(current.pid), lockStartMarker(current), expires - performance.now())) {
-            check()
-            if (lockIdentity && removeLockNow(lock, lockIdentity, current)) continue
-          }
-        } catch (error) { if (error instanceof RegistryPersistenceUnavailable) throw error }
-      }
-      check()
-      await new Promise(resolve => setTimeout(resolve, Math.min(WAIT_MS, Math.max(1, expires - performance.now()))))
+      } catch (error) { if (error instanceof RegistryPersistenceUnavailable) throw error }
     }
+    check()
+    await new Promise(resolve => setTimeout(resolve, Math.min(WAIT_MS, Math.max(1, expires - performance.now()))))
   }
 }
