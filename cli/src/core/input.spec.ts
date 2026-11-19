@@ -189,6 +189,40 @@ describe('the session input controller\'s dependencies', () => {
     expect([...run.calls, ...unread.calls].filter((call) => call.startsWith('submit'))).toEqual(['submit oc hi'])
   })
 
+  // Found end to end (e2e/openclawShow.e2e.ts rows 4 and 5): a pane whose history failed to load can send no message, and
+  // only `/session` loads it again; held back as a message is, the binding pass's `/session` was never typed.
+  it('types an OpenClaw pane\'s own command into a pane that cannot send yet, only with an empty box, while a message waits', async () => {
+    vi.useFakeTimers()
+    try {
+      const openclawPane = (name: string) => readFileSync(new URL(`../engines/openclaw/__fixtures__/${name}`, import.meta.url), 'utf8')
+      const command = '/session agent:main:oc'
+      vi.spyOn(console, 'log').mockImplementation(() => {})
+      vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const run = deps()
+      const { input, submitAgent } = createInput(run.deps)
+      const typed = () => run.calls.filter((call) => call.startsWith('submit'))
+      run.setPane(openclawPane('screen-history-failed.txt'))
+      submitAgent('oc', 'hi')
+      await vi.advanceTimersByTimeAsync(5_500)
+      expect(typed()).toEqual([])
+      // Text in the box, the person's or a message OpenClaw refused, would go with the command's Enter; a pane not read
+      // may hold some.
+      for (const pane of [openclawPane('screen-history-refused.txt'), null]) {
+        run.setPane(pane)
+        expect(await input.typeCommand('oc', command)).toBe(false)
+      }
+      const unread = createInput(deps({ readScreen: async () => null }).deps)
+      expect(await unread.input.typeCommand('oc', command)).toBe(false)
+      run.setPane(openclawPane('screen-history-failed.txt'))
+      expect(await input.typeCommand('oc', command)).toBe(true)
+      expect(typed()).toEqual([`submit oc ${command}`])
+      run.setPane(openclawPane('screen-plain.txt'))
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(typed()).toEqual([`submit oc ${command}`, 'submit oc hi'])
+      input.forget('oc')
+    } finally { vi.useRealTimers() }
+  })
+
   it('reads the pane after its engine has answered, so a dialog opened during the wait is seen', async () => {
     const run = deps()
     const wired = sessionInputDeps(run.deps, () => lock(run.calls))

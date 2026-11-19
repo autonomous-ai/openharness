@@ -870,15 +870,16 @@ describe('SessionInputController', () => {
     const startingPane = (box = '') => openclawScreen('screen-starting-up.txt', box)
     const paneController = (pane: () => string | null) => {
       const inject = vi.fn(async (_id: string, _text: string) => true)
+      const injectCommand = vi.fn(async (_id: string, _line: string) => true)
       const sendKey = vi.fn(async (_id: string, _key: string) => true)
       const onError = vi.fn()
       const onWaitChanged = vi.fn()
       const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
         getSession: () => session('openclaw'),
         validateRuntime: async () => true,
-        inject, sendKey, capture: async () => pane(), onError, onWaitChanged,
+        inject, injectCommand, sendKey, capture: async () => pane(), onError, onWaitChanged,
       })
-      return { controller, inject, sendKey, onError, onWaitChanged }
+      return { controller, inject, injectCommand, sendKey, onError, onWaitChanged }
     }
 
     it('a message OpenClaw put back in its box while it started up is sent with one Enter at the first ready read', async () => {
@@ -1093,8 +1094,8 @@ describe('SessionInputController', () => {
       controller.forget('s1')
     })
 
-    it('types an OpenClaw command only while nothing is pending for its pane', async () => {
-      const { controller, inject } = paneController(() => readyPane())
+    it('types an OpenClaw command only while nothing is pending for its pane, as a command, not a message', async () => {
+      const { controller, inject, injectCommand } = paneController(() => readyPane())
       const command = '/session agent:main:plain'
 
       controller.submit('s1', 'Say hello')
@@ -1104,8 +1105,19 @@ describe('SessionInputController', () => {
       expect(await controller.typeCommand('s1', command)).toBe(false)
       controller.onTurnEnded('s1')
       expect(await controller.typeCommand('s1', command)).toBe(true)
-      expect(inject.mock.calls).toEqual([['h1', 'Say hello'], ['h1', command]])
+      expect(inject.mock.calls).toEqual([['h1', 'Say hello']])
+      expect(injectCommand.mock.calls).toEqual([['h1', command]])
       controller.forget('s1')
+    })
+
+    it('types no command into a pane it was given no way to type one into', async () => {
+      const inject = vi.fn(async () => true)
+      const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
+        getSession: () => session('openclaw'), validateRuntime: async () => true, inject, sendKey: async () => true, onError: vi.fn() })
+
+      expect(await controller.typeCommand('s1', '/session agent:main:plain')).toBe(false)
+      expect(inject).not.toHaveBeenCalled()
+      expect(controller.controlHeld('s1')).toBe(false)
     })
 
     // Found in review: an Enter retry of a message with no delivery id checked only the agent's process once it answered,
@@ -1161,19 +1173,19 @@ describe('SessionInputController', () => {
     // stayed in the box under the next paste.
     describe('a message its OpenClaw pane cannot send yet', () => {
       const notReady: TerminalActionResult = { state: 'failed', dispatch: 'not_started', reason: 'openclaw_not_ready' }
-      /** A pane that types nothing (core/input.ts reads it unable to send) until `canSend`, but the pane's own command. */
+      /** A pane that types no message (core/input.ts reads it unable to send) until `canSend`, and its own command at once. */
       const waitingPane = () => {
         let ready = false
         let commandDone: (() => void) | null = null
         const typed: string[] = []
         const inject = vi.fn(async (_id: string, text: string): Promise<boolean | TerminalActionResult> => {
-          if (text.startsWith('/session')) {
-            typed.push(text)
-            await new Promise<void>((done) => { commandDone = done })
-            return true
-          }
           if (!ready) return notReady
           typed.push(text)
+          return true
+        })
+        const injectCommand = vi.fn(async (_id: string, line: string) => {
+          typed.push(line)
+          await new Promise<void>((done) => { commandDone = done })
           return true
         })
         const onError = vi.fn()
@@ -1181,7 +1193,7 @@ describe('SessionInputController', () => {
         const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
           getSession: () => session('openclaw'),
           validateRuntime: async () => true,
-          inject, sendKey: vi.fn(async () => true), capture: async () => readyPane(), onError, onDelivery,
+          inject, injectCommand, sendKey: vi.fn(async () => true), capture: async () => readyPane(), onError, onDelivery,
         })
         return { controller, inject, onError, onDelivery, typed, canSend: () => { ready = true }, finishCommand: () => commandDone?.() }
       }
