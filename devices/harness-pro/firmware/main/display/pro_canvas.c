@@ -5,7 +5,19 @@
 enum { PRO_TEXT = 1, PRO_RECT, PRO_IMAGE, PRO_RECT_AA, PRO_RECT_AA_STROKE };
 static int min_(int a, int b) { return a < b ? a : b; }
 static int max_(int a, int b) { return a > b ? a : b; }
-static inline uint16_t over(uint16_t fg, uint16_t bg, unsigned a) { return ht_pro_over(fg, bg, a); }
+// ht_pro_over's sums with red and blue side by side in one word, 16 bits apart (a channel's sum stays below 2^13, so
+// neither lane carries into the other): two multiplies a pixel fewer. Each lane rounds as ht_pro_over's channel does,
+// so every pixel is the same (checked for every pair of colours and coverage).
+static inline uint16_t over(uint16_t fg, uint16_t bg, unsigned a)
+{
+    if (a == 255) return fg;
+    const unsigned b = 255 - a;
+    uint32_t rb = ((fg & 0xF800u) << 5 | (fg & 31u)) * a + ((bg & 0xF800u) << 5 | (bg & 31u)) * b + 0x00800080u;
+    unsigned g = ((fg >> 5) & 63) * a + ((bg >> 5) & 63) * b + 128;
+    rb = (rb + ((rb >> 8) & 0x001F001Fu)) >> 8 & 0x001F001Fu;
+    g = (g + (g >> 8)) >> 8;
+    return (uint16_t)((rb >> 5 & 0xF800u) | g << 5 | (rb & 31u));
+}
 
 // Two pixels to a 32-bit store (the RV32's widest), four stores a turn: rectangles are most of what a screen paints, and
 // a 16-bit store loop costs three instructions a pixel on the ESP32-P4. may_alias: the words write pixels read back as
@@ -47,6 +59,34 @@ static void image_span(uint16_t *dst, const uint16_t *src, const uint8_t *alpha,
     }
     for (; i < count; i++) {
         unsigned a = alpha[i];
+        if (a) dst[i] = over(src[i], dst[i], a);
+    }
+}
+
+// An image's span at opacity o (1..254): coverage a * o / 255, as (x + 1 + (x >> 8)) >> 8 is x / 255 for x below
+// 65535, with no divide. Four coverages at a time as image_span: none skipped, all whole at o itself.
+static void faded_span(uint16_t *dst, const uint16_t *src, const uint8_t *alpha, int count, unsigned o)
+{
+    int i = 0;
+    if (!alpha) {
+        for (; i < count; i++) dst[i] = over(src[i], dst[i], o);
+        return;
+    }
+    for (; i + 4 <= count; i += 4) {
+        uint32_t coverage;
+        memcpy(&coverage, alpha + i, sizeof coverage); // alpha rows may be unaligned
+        if (!coverage) continue;
+        if (coverage == UINT32_MAX) {
+            for (int j = i; j < i + 4; j++) dst[j] = over(src[j], dst[j], o);
+            continue;
+        }
+        for (int j = i; j < i + 4; j++) {
+            const unsigned x = alpha[j] * o, a = (x + 1 + (x >> 8)) >> 8;
+            if (a) dst[j] = over(src[j], dst[j], a);
+        }
+    }
+    for (; i < count; i++) {
+        const unsigned x = alpha[i] * o, a = (x + 1 + (x >> 8)) >> 8;
         if (a) dst[i] = over(src[i], dst[i], a);
     }
 }
@@ -348,11 +388,8 @@ void ht_pro_raster(const ht_run_t *r, ht_rect_t clip, uint16_t *out)
             size_t src=(size_t)(y-r->y)*r->bitmap.width+x0-r->x;
             uint16_t *dst=out+(y-clip.y)*clip.w+x0-clip.x;
             if (r->radius) {   // faded (ht_pro_image_faded): every pixel's coverage scaled by the opacity
-                for (int i = 0; i < x1-x0; i++) {
-                    unsigned a = r->bitmap.alpha ? r->bitmap.alpha[src+i] : 255;
-                    a = a * r->radius / 255;
-                    if (a) dst[i] = over(r->bitmap.pixels[src+i], dst[i], a);
-                }
+                faded_span(dst, r->bitmap.pixels + src, r->bitmap.alpha ? r->bitmap.alpha + src : NULL, x1-x0,
+                           r->radius);
             } else {
                 image_span(dst, r->bitmap.pixels + src, r->bitmap.alpha ? r->bitmap.alpha + src : NULL, x1-x0);
             }

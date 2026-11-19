@@ -55,17 +55,24 @@ static void dump(const char *name, const ht_scene_t *s)
            (unsigned long long)random_clips);
 }
 
-// Something under the runs to blend over: every RGB565 colour once (256 x 256), or noise with a ragged alpha.
+// Something under the runs to blend over: every RGB565 colour once (256 x 256), or noise with a ragged alpha, or with
+// an alpha in runs of none, whole and partial (a pet's, whose spans skip and copy four at a time), plain or faded.
 static uint16_t every_colour[256 * 256], noise[256 * 256];
-static uint8_t noise_alpha[256 * 256];
+static uint8_t noise_alpha[256 * 256], run_alpha[256 * 256];
 static const ht_pro_bitmap_t EVERY = {every_colour, NULL, 256, 256, 0, NULL};
 static const ht_pro_bitmap_t NOISE = {noise, noise_alpha, 256, 256, 0, NULL};
+static const ht_pro_bitmap_t RUNS = {noise, run_alpha, 256, 256, 0, NULL};
 
 static void ground(ht_scene_t *s)
 {
     ht_scene_clear(s, (uint16_t)next());
     for (int i = pick(0, 4); i > 0; i--) ht_pro_image(s, pick(-128, HT_WIDTH - 128), pick(-128, HT_HEIGHT - 128), &NOISE);
     if (next() & 1) ht_pro_image(s, pick(0, HT_WIDTH - 256), pick(0, HT_HEIGHT - 256), &EVERY);
+    for (int i = pick(0, 3); i > 0; i--) {
+        const ht_pro_bitmap_t *b = next() % 3 ? &RUNS : &EVERY;
+        const unsigned opacity = next() & 1 ? 255 : (unsigned)pick(1, 254);
+        ht_pro_image_faded(s, pick(-128, HT_WIDTH - 128), pick(-128, HT_HEIGHT - 128), b, opacity);
+    }
 }
 static void size(int *w, int *h, int min)
 {
@@ -147,6 +154,11 @@ int main(void)
         noise[i] = (uint16_t)next();
         const uint32_t a = next() % 4;
         noise_alpha[i] = a == 0 ? 0 : a == 1 ? 255 : (uint8_t)next();
+    }
+    for (int i = 0; i < 256 * 256;) {
+        const uint32_t a = next() % 3;
+        for (int n = pick(1, 12); n > 0 && i < 256 * 256; n--, i++)
+            run_alpha[i] = a == 0 ? 0 : a == 1 ? 255 : (uint8_t)next();
     }
     printf("raster_dump %dx%d\n", HT_WIDTH, HT_HEIGHT);
     for (int i = 0; i < SCREEN_COUNT; i++) {
