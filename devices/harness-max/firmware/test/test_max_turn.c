@@ -89,6 +89,37 @@ static void test_strips(void)
     check_rect((max_rect_t){1900, 470, 20, 10});
 }
 
+// The P4's PPA turns a block counter-clockwise by a quarter or three (driver/ppa.h, PPA_SRM_ROTATION_ANGLE_90/270),
+// as seen on a raster whose rows run down: one quarter takes (x, y) of a w x h block to (y, w - 1 - x) of an h x w one.
+// MAX_TURN_CCW_DEGREES is the angle the PPA path asks for; turned that way, every strip must be max_turn_pixels'.
+static void ccw(const uint16_t *src, int w, int h, int degrees, uint16_t *dst)
+{
+    for (int y = 0; y < h; y++)
+        for (int x = 0; x < w; x++) {
+            int px = x, py = y, pw = w;
+            for (int q = 0; q < degrees / 90; q++) {
+                const int nx = py, ny = pw - 1 - px;
+                pw = pw == w ? h : w;
+                px = nx, py = ny;
+            }
+            dst[py * pw + px] = src[y * w + x];
+        }
+}
+
+static void test_ppa_angle(void)
+{
+    CHECK(MAX_TURN_CCW_DEGREES == 90 || MAX_TURN_CCW_DEGREES == 270);
+    static uint16_t src[W * 24], cpu[W * 24], ppa[W * 24];
+    const int shapes[][2] = {{W, 24}, {77, 11}, {3, 24}, {20, 10}, {1, 1}, {2, 2}};
+    for (size_t s = 0; s < sizeof shapes / sizeof shapes[0]; s++) {
+        const int w = shapes[s][0], h = shapes[s][1];
+        for (int i = 0; i < w * h; i++) src[i] = (uint16_t)(i * 2654435761u >> 16);
+        max_turn_pixels(src, w, h, cpu);
+        ccw(src, w, h, MAX_TURN_CCW_DEGREES, ppa);
+        for (int i = 0; i < w * h; i++) CHECK(ppa[i] == cpu[i]);
+    }
+}
+
 static void test_touch_round_trip(void)
 {
     for (int y = 0; y < H; y += 7)
@@ -113,6 +144,7 @@ int main(void)
     test_one_pixel();
     test_strips();
     test_touch_round_trip();
+    test_ppa_angle();
     printf("test_max_turn: %d checks passed\n", checks);
     return 0;
 }
