@@ -224,7 +224,8 @@ dial.
 ## Design (docs/feature-design-rules.md)
 
 1. **Growth:** nothing is stored. The source holds at most 200 thread rows (each under 4.5 KiB with its folder), 64
-   project ids and the names of the 16 listed threads, in RAM, dropped at the last detach with the rank.
+   project ids and the names of the 16 listed threads, and `codexThreadName` the names it read of Codex's index (at most
+   its last MiB, 10,000 names), in RAM, all dropped at the last detach with the rank.
 2. **Concurrency:** one read at a time in the devices process. The SQLite read is a WAL reader (never blocks the app's
    writer) or immutable when the store is idle. The files are never written, so the app sees no lock.
 3. **Read cost:** one indexed query of at most 200 rows, and the JSON file only when it changed. The plan measures a
