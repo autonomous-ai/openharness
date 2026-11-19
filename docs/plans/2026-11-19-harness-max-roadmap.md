@@ -97,6 +97,16 @@ bytes of `ota_0`'s 0x7e0000 (47% free). Not yet run: `--usb` against the Mac's r
 installed on the Mac. Deviations from V3, for the P4's renderer: no blur or motion on the slivers, no width animation
 when an agent opens, a swipe moves the row a cell at a time.
 
+Frame speed, 19 Nov evening (`feat/harness-max-v4-perf`, in V4). The bench (`devices/harness-max/firmware/bench`)
+ran on the desk Pro's chip from its spare `ota_1` slot, the Pro's own firmware in `ota_0` untouched and its `ota_1`
+put back byte for byte after. Before: a whole glass took 27 ms (App Detail) to 57 ms (an agent) to rasterise on one
+core, plus 14 ms to turn; the listening band 26 ms a frame. After the faster compositor (fills, veil and outlined
+rects, byte-identical), the strips shared by both cores and the PPA turning each strip into the framebuffer while the
+next is drawn (`main/display/max_present.c`): a whole glass 15–20 ms end to end (50–65 fps), the row shifted 40 px
+(86% of the glass changes) 16.6 ms, the listening band 9.7 ms; every framebuffer pixel as the old path's on all 38
+screens. Reports: `bench/results/`. The Orange Pi flips two buffers on vblank (no tearing) and its longest raster fell
+from 24.7 ms to 4.1 ms.
+
 ### M2: On Pro hardware
 
 The owner's Harness Pro is a P4 v3.2 with a 720 x 720 ST7703I panel, GT911 touch, ES7210 mics and an ES8311 speaker.
@@ -111,7 +121,9 @@ First V4 is only built for it (19 Nov). Next, decide one of:
 
 The bring-up list of first light holds: the panel lights, touch lands where the finger is, the picture is the right
 way up, and these are recorded: the longest frame (full glass, one cell, the open agent's slide), the time to turn a
-strip, free internal RAM and PSRAM. App Detail's motion is cut to what the P4 draws in time.
+strip, free internal RAM and PSRAM. The bench's frame times are without a panel: the panel's refresh reads about
+110 MB/s more from PSRAM, so they are measured again here, and the P4 gets a second framebuffer flipped on refresh
+(today it draws into the one being scanned, which tears during motion).
 
 Done when: V4 runs on the P4 with the 8.8" panel against the Mac's daemon, as on the Orange Pi.
 
@@ -156,6 +168,9 @@ No wake word is planned: one tap talks.
 - 19 Nov: App Detail; Harness first among apps; the order by need; the chimes.
 - 19 Nov: the product is the C firmware on the Pro's hardware with the 8.8" panel; V3 becomes the reference; the
   Orange Pi runs the C build at the panel's exact 1920 x 480; the desk Pro is built for, not flashed.
+- 19 Nov: V3's row motion comes to the C build (the width animation, the slivers' blur and motion, the swipe that
+  follows the finger); the bench may run on the desk Pro from its spare `ota_1` slot, put back after; the Pro's
+  compositor gets faster where its pixels stay byte for byte the same (the Pro gains it at its next build).
 - The machines rail of the first plan is gone: the app column (the Dial's app filter) replaced it.
 
 ## Open
@@ -170,7 +185,8 @@ No wake word is planned: one tap talks.
 | Risk | Effect | What we do |
 |---|---|---|
 | The cable protocol changes daily on `main` | The bar breaks against a released daemon | M1 now, then merge `main` weekly until M4 |
-| App Detail's sliding row on the P4's strip renderer | Frames too long, a stutter | Measure in M3; slide less, or snap |
+| App Detail's sliding row on the P4's strip renderer | Frames too long, a stutter | Measured on the chip: 16.6 ms for a row shifted 40 px, without the panel; measure again with it in M3 |
+| One framebuffer on the P4 | Motion tears on the 8.8" panel | A second framebuffer flipped on refresh, verified at M3 |
 | The Orange Pi shows the picture at 2/3 | Smaller than the 8.8" panel's pixels, larger than its millimetres | Judge type sizes in mm: 1280 px on the 11.9" bar is about 255 mm wide, the 8.8" panel about 217 mm |
 | The demo hides gaps of the real path | The inbox and empty apps behave differently with the real daemon | Test each milestone on `--usb`, not only `--demo` |
 | Approvals only over USB | A LAN demo cannot approve | Demo approvals on `--usb` |
