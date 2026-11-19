@@ -198,8 +198,8 @@ describe('the OpenClaw contract', () => {
     ['connecting', { state: 'starting', status: 'connecting | idle', box: '', running: false, gatewayLost: false }],
     ['starting-up', { state: 'starting', status: '⠙ starting up • 0s | subscribing to session events', box: '', running: false, gatewayLost: false, gatewayStarting: false }],
     // A cold Gateway on a slow machine: the TUI starts up for over a minute, the Gateway answering it is starting.
-    ['gateway-starting', { state: 'starting', status: '⠙ starting up • 20s | gateway starting', box: '', running: false, gatewayLost: false, gatewayStarting: true }],
-    ['starting-up-disconnected', { state: 'starting', status: '⠴ starting up • 25s | disconnected', box: '', running: false, gatewayLost: false, gatewayStarting: false }],
+    ['gateway-starting', { state: 'starting', status: '⠙ starting up • 20s | gateway starting', box: '', running: false, gatewayLost: true, gatewayStarting: true }],
+    ['starting-up-disconnected', { state: 'starting', status: '⠴ starting up • 25s | disconnected', box: '', running: false, gatewayLost: true, gatewayStarting: false }],
     ['sending', { state: 'busy', status: '⠋ sending • 0s | connected', box: '', running: false, gatewayLost: false }],
     ['waiting', { state: 'busy', status: '⠼ flibbertigibbeting… • 0s | connected', box: '', running: false, gatewayLost: false }],
     ['running-quiet', { state: 'busy', status: '⠦ running • 45s | connected', box: '', running: true, gatewayLost: false }],
@@ -211,6 +211,18 @@ describe('the OpenClaw contract', () => {
     ['plain', { state: 'ready', status: 'connected | idle', box: '', running: false, gatewayLost: false }],
   ])('screen-%s reads as the TUI drew it', (name, reading) => {
     expect(readOpenclawScreen(fixture(`screen-${name}.txt`))).toMatchObject(reading)
+  })
+
+  it('reads the Gateway lost off the connection part of the status line, last on a busy line', () => {
+    const plain = fixture('screen-plain.txt')
+    const lost = (line: string) => readOpenclawScreen(plain.replace(' connected | idle', `\n ${line}`)).gatewayLost
+    expect(lost('⠋ running • 6s | disconnected')).toBe(true)
+    expect(lost('⠙ starting up • 20s | gateway starting')).toBe(true)
+    expect(lost('⠋ running • 6s | connected')).toBe(false)
+    expect(lost('gateway disconnected: closed | idle')).toBe(true)
+    expect(lost('disconnected | idle')).toBe(true)
+    // First on an idle line: the activity a refused message left says nothing of the connection.
+    expect(lost('connected | disconnected')).toBe(false)
   })
 
   it('a spinner line with a timer is a run, in minutes too, and starting up stays starting', () => {
