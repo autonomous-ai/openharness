@@ -95,6 +95,9 @@ export function createLinuxRaise(deps: LinuxRaiseDeps): LinuxRaise {
 export function systemLinuxRaise(apps: OrcaDeps, log: (line: string) => void): LinuxRaise {
   const desktop = linuxDesktopDeps(apps)
   let scripts = 0
+  // KWin gives a script's id to the next one loaded once it is unloaded (RECORDED_KWIN.loadScript): one KDE raise at a
+  // time, so none runs or unloads a script another raise loaded.
+  let kwinTurn: Promise<unknown> = Promise.resolve()
   return createLinuxRaise({
     find: () => findLinuxDesktop(desktop),
     backend: (found) => {
@@ -109,7 +112,7 @@ export function systemLinuxRaise(apps: OrcaDeps, log: (line: string) => void): L
           // (XDG_RUNTIME_DIR=/tmp is a world-writable one). None such, no raise.
           const dir = runtimeShortRoot({ XDG_RUNTIME_DIR: found.runtimeDir })
           if (dir === null) return { raise: async () => false }
-          return createKwinRaise({
+          const kwin = createKwinRaise({
             ...apps,
             dir,
             write: (path, text) => {
@@ -128,6 +131,13 @@ export function systemLinuxRaise(apps: OrcaDeps, log: (line: string) => void): L
             },
             name: () => `${process.pid}-${++scripts}`,
           }, found.bus)
+          return {
+            raise: (target) => {
+              const turn = kwinTurn.then(() => kwin.raise(target))
+              kwinTurn = turn.catch(() => false)
+              return turn
+            },
+          }
         }
       }
     },
