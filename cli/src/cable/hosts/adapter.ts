@@ -11,6 +11,12 @@
  */
 import type { PaneSwitch, TypeResult } from './types.js'
 
+/** The terminal app holding a multiplexer's client, and that client's tab: the place the person sees the agent in. */
+export interface Outer {
+  app: string
+  tty?: string
+}
+
 /** Where an outside agent runs, from its latest hook event and what was learnt of its process. */
 export interface Place {
   host: string                                  // detectHost
@@ -24,6 +30,9 @@ export interface Place {
   /** The Claude app's own id of a session the open scan found, from the session's record (record.ts), until its first
    *  hook; only the Claude app's adapter reads it. */
   hostSession?: string
+  /** The app and tab of the terminal holding the multiplexer's client the agent runs in, from observed.ts; only the tmux
+   *  and tabs adapters read it. */
+  outer?: Outer
 }
 
 /** What a page guard knows of the agent: whether it waits on the person, the folder its session started in (its
