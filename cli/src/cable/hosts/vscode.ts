@@ -15,8 +15,9 @@
  * terminal has the pane `term:<its pid>`, and Harness's own extension in the window that holds the terminal shows it on
  * a `{"show":<shell pid>}` line (vscodeTerminals.ts), a tap's with `"raise":true` so that window comes in front of
  * the editor's others. The terminal is asked for again at each verb, since a window comes and goes between looks. The
- * adapter's one `tap` is `'instead'`, for the tab's link, so a terminal's tap runs the editor's own `open -b` itself once
- * its line is queued; off macOS the line alone is the tap. The dial's scroll sends that window the stroke's lines on a
+ * adapter's one `tap` is `'instead'`, for the tab's link, so a terminal's tap brings the editor itself once its line is
+ * queued: by its own `open -b` on macOS, by the devices' raise of the pane's process on Linux (docs/plans/
+ * 2026-11-19-dial-linux-design.md §§ 1.6, 2); elsewhere the line alone is the tap. The dial's scroll sends that window the stroke's lines on a
  * `{"scroll":<lines>,"pid":<shell>}` line while the editor is in front (§4): the extension runs them only while that
  * terminal is the active one, so the adapter has no `onScreen`. A stroke whose `pageKeys` passed carries `"page":true`,
  * and the extension also presses Claude Code's page keys in that terminal
@@ -27,6 +28,7 @@ import { createAppLink, type AppLinkDeps } from './appLink.js'
 import { APP_BUNDLES } from './hostDetect.js'
 import { openPath } from './open.js'
 import { RUN_TIMEOUT_MS } from './orca.js'
+import type { LinuxRaise } from './linuxRaise.js'
 import { isPid, type VscodeTerminals } from './vscodeTerminals.js'
 
 /** What tells the editors apart: the bundle id their hooks carry and `open -b` names, and the link's scheme. */
@@ -55,7 +57,11 @@ export function termPid(paneId: string): number | undefined {
 
 export function createVscodeAdapter(
   editor: keyof typeof EDITORS,
-  deps: AppLinkDeps & { terminals: Pick<VscodeTerminals, 'terminalOf' | 'show' | 'scroll' | 'pageKeys'> },
+  deps: AppLinkDeps & {
+    terminals: Pick<VscodeTerminals, 'terminalOf' | 'show' | 'scroll' | 'pageKeys'>
+    /** Brings a window forward on Linux; none elsewhere. */
+    raise?: LinuxRaise['raise']
+  },
 ): HostAdapter & Required<Pick<HostAdapter, 'canShow' | 'show'>> {
   const { bundle: editorBundle, scheme } = EDITORS[editor]
   const mac = deps.platform === 'darwin'
@@ -99,9 +105,10 @@ export function createVscodeAdapter(
       if (pid === undefined) return tab.focus(pane)
       const terminal = deps.terminals.terminalOf(pid)
       if (!terminal || !deps.terminals.show(terminal, true)) return false
-      // The show is queued: the editor still has to come forward, and whether `open` did is not the terminal's outcome,
-      // as the opener's own `open -b` after a pane is not.
+      // The show is queued: the editor still has to come forward, and whether `open` or the raise did is not the
+      // terminal's outcome, as the opener's own `open -b` after a pane is not.
       if (mac) await deps.run(openBin, ['-b', editorBundle], RUN_TIMEOUT_MS)
+      else if (deps.raise) await deps.raise({ pid, app: editor })
       return true
     },
     canShow(pane) {
