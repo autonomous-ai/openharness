@@ -77,8 +77,11 @@ import { DialLog } from '../cable/dialLog.js'
 import { DialVerdicts } from '../cable/dialPortVerdicts.js'
 import { createDialSetup } from '../cable/dialSetup.js'
 import { claudeFound, type ClaudeRun } from '../devices/claudePlugin.js'
-import { readRemoved, SETUP_COUNTS } from '../devices/dialSkillFiles.js'
+import { readOrcaConnected, readRemoved, SETUP_COUNTS } from '../devices/dialSkillFiles.js'
 import { createOrcaHomesCache, orcaHomesDeps, readOrcaHomes, type OrcaHomesCache } from '../devices/orcaHomes.js'
+import { orcaPluginRun, type OrcaPluginRun } from '../devices/orcaPlugin.js'
+import { createOrcaPluginSetup, orcaPluginParts } from '../cable/orcaPluginSetup.js'
+import { harnessPath } from '../config/harnessHome.js'
 import { vscodeExtensionDeps, type VscodeExtensionDeps } from '../devices/vscodeExtension.js'
 import { WindowForm } from '../cable/windowForm.js'
 import { createWindowRouter } from '../cable/windowRoute.js'
@@ -186,6 +189,9 @@ export interface DevicesDeps {
   /** For this service's tests: how Cursor and Harness's extension in it are found and `cursor` is run; the real ones by
    *  default. */
   cursorExtension?: VscodeExtensionDeps
+  /** For this service's tests: Orca's CLI, the plugin's files and its folder; this computer's `orca` and
+   *  `harnessPath('orca-plugin', homedir())` when unset (devices/orcaPlugin.ts). */
+  orcaPlugin?: OrcaPluginRun & { folder: string }
 }
 
 /** ⌘K's answer while the fleet is not running: it never started, so there is no list to weigh. */
@@ -596,6 +602,21 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     after: timerIn('cursorExtension'),
     count: (kind, reason) => extensionCount('cursor', kind, reason),
   }) : null
+  // Harness Device's plugin for Orca, set up once a dial has attached here (cable/orcaPluginSetup.ts), in the devices'
+  // own process alone, as the editors': inside the core's there is no listener for the plugin to talk to. A part of its
+  // own, so a throw in Orca's CLI is never the dial's. `err` says nothing: a folder not written is counted `folder`, and
+  // its error's code is never logged. `HARNESS_ORCA_APP_BIN`: the end-to-end tests' Orca (devices/orcaHomes.ts).
+  const orcaCount = createEngineTally('[device] orca plugin', ['orca'], SETUP_COUNTS, log)
+  const orcaSetup = skill ? createOrcaPluginSetup({
+    ...orcaPluginParts({ ...(deps.orcaPlugin ?? { ...orcaPluginRun(), folder: harnessPath('orca-plugin', homedir()) }), dataDir: core.dataDir, err: () => {} }),
+    removed: () => readRemoved(core.dataDir),
+    connected: () => readOrcaConnected(core.dataDir),
+    recorded: () => skill.orca(),
+    record: (version) => skill.recordOrca(version),
+    recordHeld: (version) => skill.recordOrcaHeld(version),
+    after: timerIn('orcaPlugin'),
+    count: (kind, reason) => orcaCount('orca', kind, reason),
+  }) : null
   const observed = env.HARNESS_DEVICE_OBSERVED ? observedSource(core.dataDir, log, orcaHomes, {
     adapters,
     modReady: (sessionId) => inbox.ready(sessionId),
@@ -627,6 +648,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     // cursor()).
     if (vscodeSetup && !stopped) part.call('vscodeExtension', () => vscodeSetup.pass())
     if (cursorSetup && !stopped) part.call('cursorExtension', () => cursorSetup.pass())
+    if (orcaSetup && !stopped) part.call('orcaPlugin', () => orcaSetup.pass())
   })
   /** An open scan, once Orca's homes are read again where the last read is old (at most its 5 s): a session in an account
    *  added since is found by this scan. */
@@ -954,6 +976,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       if (on && skill) part.call('skill', () => skill.attached())
       if (on && vscodeSetup) part.call('vscodeExtension', () => vscodeSetup.pass())
       if (on && cursorSetup) part.call('cursorExtension', () => cursorSetup.pass())
+      if (on && orcaSetup) part.call('orcaPlugin', () => orcaSetup.pass())
       dialAttached(on)
       part.call('dialStream', () => dial.attached(on))
     },
@@ -1039,6 +1062,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     appSettled: (app) => {
       if (app === 'claude') part.call('dial', claudeSettled)
       if (app === 'orca' && observed) part.call('orca', () => orcaSettled(observed))
+      // Orca is often not running at the start or the attach: its coming to the front is the pass's next chance.
+      if (app === 'orca' && orcaSetup) part.call('orcaPlugin', () => orcaSetup.pass())
       part.call('dial', () => tabSettled(app))
     },
     appPicked: () => log('[device] app filter: picker'),
