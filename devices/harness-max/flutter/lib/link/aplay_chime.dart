@@ -132,7 +132,12 @@ Int16List _soft() {
   return out;
 }
 
-Uint8List _wav(Int16List samples) {
+/// Near silence before and after each sound: the board drops a play's first and last moments (two tones were heard as
+/// one, three as two, 19 Nov), so those fall on these instead of the sound.
+const int _lead = _rate * 50 ~/ 1000, _tail = _rate * 300 ~/ 1000;
+
+Uint8List _wav(Int16List sound) {
+  final samples = Int16List(_lead + sound.length + _tail)..setAll(_lead, sound);
   final n = samples.length;
   final b = ByteData(44 + 2 * n);
   void tag(int at, String s) {
