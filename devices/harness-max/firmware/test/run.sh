@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Host tests for Harness Max's screen (main/app/max_ui_*.c) over the Pro's compositor at both glass heights, and the
-# strip turn (main/display/max_turn.c) when it is there. Needs no arguments and no board. Fonts are generated into a temp
-# directory: PRO_FONT=/path/to/font.ttf overrides the generator's default, as the Pro's run.sh.
+# Host tests for Harness Max's screen (main/app/max_ui_*.c) over the Pro's compositor at both glass heights, its frame
+# path on two tasks (main/display/max_present.c), and the strip turn (main/display/max_turn.c) when it is there. Needs
+# no arguments and no board. Fonts are generated into a temp directory: PRO_FONT=/path/to/font.ttf overrides the
+# generator's default, as the Pro's run.sh.
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 fw="$(cd "$here/.." && pwd)"
@@ -32,6 +33,9 @@ build_obj() {   # build_obj <height> <limit-bytes> <source>...
         objs+=("$o")
     done
 }
+# test_max_present's FreeRTOS and ESP-IDF calls: the Linux build's (linux/esp/).
+present=(-DPROJECT_VER='"host-test"' -DPRO_DISPLAY_W=1920 -I"$here" -I"$fw/main/display" -I"$fw/linux/esp/include")
+linux_rtos=("$fw/linux/esp/rtos.c" "$fw/linux/esp/esp.c")
 for h in ${MAX_HEIGHTS:-480 415}; do
     echo "== 1920 x $h"
     glass "$h"
@@ -55,7 +59,21 @@ for h in ${MAX_HEIGHTS:-480 415}; do
     cc "${cflags[@]}" -DPRO_DISPLAY_W=1920 -DPRO_DISPLAY_H="$h" -I"$fw/main" -I"$pro/test/host_esp" \
         -Wframe-larger-than=1024 -o "$out/$h-test_max_app" "$fw/main/app/max_app.c" "$here/test_max_app.c" "${objs[@]}"
     "$out/$h-test_max_app"
+
+    # Max's frame path (main/display/max_present.c), its render task and helper on the Linux build's FreeRTOS
+    # (pthreads), over a fake panel: the glass is the scene's whichever task painted a strip. Render-task frames (4 KB).
+    cc "${cflags[@]}" "${present[@]}" -DPRO_DISPLAY_H="$h" -Wframe-larger-than=4096 -o "$out/$h-test_max_present" \
+        "$here/test_max_present.c" "$fw/main/display/max_present.c" "${linux_rtos[@]}" "${objs[@]}"
+    "$out/$h-test_max_present"
 done
+
+# The same under ThreadSanitizer, on the ESP32-P4's glass: what the two tasks share, the compositor included.
+glass 480
+cflags=("${cflags[@]/-fsanitize=*/-fsanitize=thread}")
+cc "${cflags[@]}" "${present[@]}" -DPRO_DISPLAY_H=480 -o "$out/test_max_present_tsan" "$here/test_max_present.c" \
+    "$fw/main/display/max_present.c" "${linux_rtos[@]}" "$fw"/main/app/max_ui_*.c "$pro/main/display/terminal.c" \
+    "$pro/main/display/pro_canvas.c" "$pro"/main/pod/{pod_draw,pod_pet,pets,pets_ask,pets_codex,engine_logos}.c "$out/pro_fonts.c"
+"$out/test_max_present_tsan"
 
 # The strip turn into the portrait panel (the platform's), on the ESP32-P4's glass.
 if [[ -f "$here/test_max_turn.c" ]]; then

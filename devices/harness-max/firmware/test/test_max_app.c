@@ -17,6 +17,7 @@
 #include "cable/cable_features.h"
 #include "cable/cable_link.h"
 #include "cable/pro_cable.h"
+#include "display/max_present.h"
 #include "pro_app_api.h"
 #include "pro_display.h"
 #include "pro_frame.h"
@@ -196,7 +197,7 @@ void pro_frame_init(void) {}
 static uint32_t PUSHED_PX;
 static int PRESENTS, SHOWS;
 static bool OWED;
-uint32_t pro_frame_present(const ht_scene_t *prev, const ht_scene_t *next, uint32_t *pushed_px)
+uint32_t max_present(const ht_scene_t *prev, const ht_scene_t *next, uint32_t *pushed_px)
 {
     (void)prev; (void)next;
     CHECK(!OWED);   // the last frame was shown before the next is painted

@@ -25,6 +25,7 @@
 #include "cable/cable_link.h"
 #include "cable/pro_cable.h"
 #include "display/max_frame.h"
+#include "display/max_present.h"
 #include "pro_app_api.h"
 #include "pro_display.h"
 #include "pro_frame.h"
@@ -680,7 +681,7 @@ static void render_task(void *arg)
             if (!fresh) s_scene[front ^ 1] = s_scene[front];
             const int64_t started = esp_timer_get_time();
             uint32_t pushed_px = 0;
-            const uint32_t raster_us = pro_frame_present(painted && !force ? &s_scene[front] : NULL, &s_scene[front ^ 1], &pushed_px);
+            const uint32_t raster_us = max_present(painted && !force ? &s_scene[front] : NULL, &s_scene[front ^ 1], &pushed_px);
             if (pushed_px) max_frame_show();   // in the frame's time: a flipping output waits for the screen here
             const uint32_t frame_us = (uint32_t)(esp_timer_get_time() - started);
             if (pushed_px) {   // a scene identical to the last one paints nothing: it is no frame

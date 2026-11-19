@@ -4,10 +4,12 @@ The Max firmware's own sources, built as a Linux (or macOS) program: the same ap
 protocol as the ESP32-P4 image, over Linux drivers. A board change is a build target. `../sources.cmake` is the one
 list of portable sources; `../main/CMakeLists.txt` adds the ESP32-P4 drivers to it, this directory adds:
 
-- `esp/`: the FreeRTOS and ESP-IDF calls the shared sources make, on pthreads and the C library. NVS is a text file,
+- `esp/`: the FreeRTOS and ESP-IDF calls the shared sources make, on pthreads and the C library (the frame's helper
+  task is a thread). NVS is a text file,
   `~/.config/harness-max/nvs`. The firmware updater refuses every image (the version is `0.0.99-dev` and the board
   `harness-max-linux`, which the daemon never offers one).
-- `display/`: `pro_display.h` over an SDL window (`MAX_LINUX_OUTPUT=sdl`, the mouse is the finger) or DRM/KMS plus
+- `display/`: `pro_display.h` and the frame path's strips (`../main/display/max_strips.h`: both tasks' strips copied
+  into the glass under one lock) over an SDL window (`MAX_LINUX_OUTPUT=sdl`, the mouse is the finger) or DRM/KMS plus
   evdev touch (`MAX_LINUX_OUTPUT=drm`, `/dev/dri/card0`). `glass_fit.c` scales and turns the glass to the output, and
   maps a touch back. DRM keeps two buffers: each frame is painted whole into the one off screen (what it changed and
   what the frame before changed) and flipped to on the next vblank, so nothing tears. Where the driver refuses the

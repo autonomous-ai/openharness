@@ -15,6 +15,7 @@ idf_component_register(
         "board/max_i2c.c"
         "display/max_display.c"
         "display/max_panel.c"
+        "display/max_strips.c"
         "display/max_touch.c"
         "display/max_turn.c"
         "display/max_turn_ppa.c"
