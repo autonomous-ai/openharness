@@ -64,8 +64,18 @@ const COPILOT_SUBMIT_VERIFY_MS = 6_000
 const OPENCLAW_SUBMIT_VERIFY_MS = 10_000
 // OpenClaw puts a message it refused back into its input box (Gateway not connected, history not loaded, a run going)
 // and sends nothing until its pane can. Two Enters on a pane that could not send gave a first task up with a log line
-// only (reproduced on a cold Gateway, 2026-11-19): the windows on such a pane are not counted, up to this long from the paste.
+// only (reproduced on a cold Gateway, 2026-11-19): a message waits for such a pane, untyped, up to this long, and once
+// typed, its windows on one are not counted, up to this long from the paste.
 const OPENCLAW_NOT_READY_MAX_MS = 180_000
+/** How often a message waiting for its OpenClaw pane to be able to send reads it again: one capture a second, typed
+ *  within a second of the `/session` that lets the pane send. */
+const OPENCLAW_PANE_RETRY_MS = 1_000
+/**
+ * Why a message was not typed into an OpenClaw pane, nothing written: the pane could not send it (core/input.ts). Typed,
+ * it would be refused back into the input box, where nothing sends it: the binding pass types `/session` only into an
+ * empty box (core/agents/bind.ts). It waits here instead.
+ */
+export const OPENCLAW_NOT_READY = 'openclaw_not_ready'
 const CURSOR_TURN_SETTLE_MS = 750
 const SUBMIT_MAX_RETRIES = 2
 /** How long a paste the control lease refused, before a byte was written, waits for the lease, and how
@@ -148,6 +158,8 @@ interface InputState {
   /** The agent's first task is the controller's, from when it is expected until a turn takes it ([firstTaskEnded]): it
    *  is never given up here ([firstTaskWaiting]). */
   firstTask: boolean
+  /** A message waits for its OpenClaw pane to be able to send ([OPENCLAW_NOT_READY]): nothing of it is typed. */
+  paneWait: boolean
   /** The receipt of the person's message typed last, until it is settled ([settle]). */
   awaitingReceipt?: MessageReceipt
   controlLocked: boolean
@@ -218,6 +230,12 @@ function heldBack(delivery: boolean | TerminalActionResult): MessageHold | null 
 function leaseRefused(delivery: boolean | TerminalActionResult): boolean {
   return typeof delivery !== 'boolean' && delivery.state === 'failed' && delivery.dispatch === 'not_started'
     && (delivery.reason === TERMINAL_LEASE_REFUSED || passingHold(delivery.reason))
+}
+
+/** A write its OpenClaw pane held back, nothing written: the pane could not send it yet ([OPENCLAW_NOT_READY]). */
+function paneNotReady(delivery: boolean | TerminalActionResult): boolean {
+  return typeof delivery !== 'boolean' && delivery.state === 'failed' && delivery.dispatch === 'not_started'
+    && delivery.reason === OPENCLAW_NOT_READY
 }
 
 function fingerprint(content: string): string {
@@ -319,9 +337,14 @@ export class SessionInputController {
    * LEASE_WAIT_MS, rather than fail the message; nothing was written, so asking again can never type
    * it twice. Found end to end: a message sent as a resume was confirmed was refused 140 ms later and
    * lost, and a real engine takes seconds to confirm.
+   *
+   * An OpenClaw pane that cannot send the message yet ([OPENCLAW_NOT_READY]) is waited for the same way, up to
+   * OPENCLAW_NOT_READY_MAX_MS, and for a first task as long as it waits ([firstTaskEnded]): the binding pass bounds
+   * that. It is not read again while a command of the pane's own is typed (`typeCommand`), which the message would run
+   * into in the box.
    */
-
   private async injectWhenLeased(
+    state: InputState,
     write: () => Promise<boolean | TerminalActionResult>,
     current: () => boolean,
     held: () => boolean,
@@ -333,10 +356,19 @@ export class SessionInputController {
     if (held()) return refused()
     if (!current()) return { state: 'failed', dispatch: 'not_started', reason: TERMINAL_LEASE_REFUSED }
     let delivery = await write()
-    while (leaseRefused(delivery) && now() < deadline) {
-      await sleep(LEASE_RETRY_MS)
+    let notReadySince: number | undefined
+    for (;;) {
+      const notReady = paneNotReady(delivery)
+      if (notReady) {
+        notReadySince ??= now()
+        if (!state.firstTask && now() - notReadySince >= OPENCLAW_NOT_READY_MAX_MS) break
+      } else if (!leaseRefused(delivery) || now() >= deadline) break
+      state.paneWait = notReady
+      await sleep(notReady ? OPENCLAW_PANE_RETRY_MS : LEASE_RETRY_MS)
+      state.paneWait = false
       if (held()) return refused()
       if (!current()) break
+      if (notReady && state.controlLocked) continue
       delivery = await write()
     }
     return delivery
@@ -351,6 +383,7 @@ export class SessionInputController {
         awaitingContent: null,
         pastedAt: 0,
         firstTask: false,
+        paneWait: false,
         controlLocked: false,
         cancelling: 0,
         afterCancel: { writes: [], sent: [] },
@@ -547,7 +580,8 @@ export class SessionInputController {
    * the pane sat on the dialog looking like a hung agent, with nothing logged.
    *
    * Every other guard still applies: another writer holding the lock, a submit awaiting confirmation, a
-   * settling turn, or queued messages all still refuse.
+   * settling turn, or queued messages all still refuse; queued ones not while the message ahead of them waits for
+   * its pane to be able to send (`paneWait`), typed nowhere yet.
    */
   acquireControl(sessionId: string, opts?: { forAnswer?: boolean }): (() => void) | null {
     const session = this.controlSession(sessionId)
@@ -562,7 +596,8 @@ export class SessionInputController {
     const state = this.state(sessionId)
     this.dropExpired(sessionId, state)
     const turnBlocks = state.turnOpen && !opts?.forAnswer
-    if (state.controlLocked || state.cancelling || turnBlocks || state.awaitingFingerprint || state.settling || state.queue.length > 0) return null
+    const queued = state.queue.length > 0 && !state.paneWait
+    if (state.controlLocked || state.cancelling || turnBlocks || state.awaitingFingerprint || state.settling || queued) return null
     state.controlLocked = true
     let released = false
     return () => {
@@ -577,13 +612,15 @@ export class SessionInputController {
 
   /**
    * Types [line] and its Enter, a command of the engine's own (OpenClaw's `/session <key>`), into [id]'s pane through
-   * `inject`, under the pane's write lock, only while nothing is pending for the pane: no message awaiting confirmation
-   * or being written, none queued, no caller holding it, no turn open. Held as a control is, so a message sent
-   * meanwhile waits for it. Whether it was typed.
+   * `inject`, under the pane's write lock, only while nothing typed is pending for the pane: no message awaiting
+   * confirmation or being written, none queued, no caller holding it, no turn open. A message waiting for the pane to
+   * be able to send, and those queued behind it, are typed nowhere yet: the command is what lets the pane send them.
+   * Held as a control is, so a message sent meanwhile waits for it. Whether it was typed.
    */
   async typeCommand(id: string, line: string): Promise<boolean> {
     const session = this.controlSession(id)
-    if (!session || this.states.get(id)?.writes) return false
+    const state = this.states.get(id)
+    if (!session || (state?.writes && !state.paneWait)) return false
     const release = this.acquireControl(id)
     if (!release) return false
     try {
@@ -877,7 +914,7 @@ export class SessionInputController {
       }
     }
     if (!current()) { gone(); return }
-    const delivery = await this.injectWhenLeased(() => this.deps.inject(session.agentId, content),
+    const delivery = await this.injectWhenLeased(state, () => this.deps.inject(session.agentId, content),
       current, () => this.deps.moveGate?.refused(session.agentId) === true)
     const accepted = typeof delivery === 'boolean'
       ? delivery
@@ -892,6 +929,11 @@ export class SessionInputController {
       console.warn(`[inject] ${sid(sessionId)} typed, not sent · engine=${session.engine} · ${withheld} opened before Enter`)
       receipt?.('withheld')
       this.deps.onError(sessionId, messageWithheldText(session.engine, withheld))
+      return
+    }
+    if (paneNotReady(delivery)) {
+      receipt?.('not_submitted')
+      this.paneNeverReady(sessionId, session)
       return
     }
     if (!accepted) {
@@ -986,7 +1028,7 @@ export class SessionInputController {
       }
       if (state.cancelled || this.states.get(sessionId) !== state) return
       state.writing = true
-      const delivery = await this.injectWhenLeased(() => (deliveryId.startsWith('team:') && this.deps.injectTeam
+      const delivery = await this.injectWhenLeased(state, () => (deliveryId.startsWith('team:') && this.deps.injectTeam
         ? this.deps.injectTeam(session.agentId, content, deliveryId) : this.deps.inject(session.agentId, content)),
       () => !state.cancelled && this.states.get(sessionId) === state, () => this.deps.moveGate?.refused(session.agentId) === true)
       state.writing = false
@@ -1012,6 +1054,11 @@ export class SessionInputController {
         this.finishDelivery(sessionId, state, 'rejected', held)
         // An Agent Messages turn is automatic, and its mailbox hears of the refusal; anyone else's is a person's to see.
         if (!deliveryId.startsWith('team:')) this.deps.onError(sessionId, messageHoldText(session.engine, held))
+        return
+      }
+      if (paneNotReady(delivery)) {
+        this.finishDelivery(sessionId, state, 'rejected', 'not_submitted')
+        this.paneNeverReady(sessionId, session)
         return
       }
       const accepted = typeof delivery === 'boolean'
@@ -1233,6 +1280,13 @@ export class SessionInputController {
     state.ambiguousDispatch = false
     this.settle(state, 'not_submitted')
     this.finishDelivery(sessionId, state, 'unknown', 'not_submitted')
+    this.deps.onError(sessionId, 'The agent did not accept the message. Please try again.')
+  }
+
+  /** A message its OpenClaw pane could not send for OPENCLAW_NOT_READY_MAX_MS, typed nowhere: the person is told the
+   *  agent did not take it. */
+  private paneNeverReady(sessionId: string, session: RegisteredSession): void {
+    console.warn(`[inject] ${sid(sessionId)} not typed · engine=${session.engine} · its pane could not send for ${OPENCLAW_NOT_READY_MAX_MS / 1000} s`)
     this.deps.onError(sessionId, 'The agent did not accept the message. Please try again.')
   }
 

@@ -17,7 +17,7 @@ import { sid } from '../lib/log.js'
 import type { LiveEvent } from '../engines/kit/events.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import type { MoveGate } from '../lib/hostMove/gate.js'
-import { SessionInputController, type MessageReceipt, type SessionInputDelivery, type SessionInputDeps } from '../lib/sessionInput.js'
+import { OPENCLAW_NOT_READY, SessionInputController, type MessageReceipt, type SessionInputDelivery, type SessionInputDeps } from '../lib/sessionInput.js'
 import { passingHold } from '../lib/messageHolds.js'
 import { pasteComesAsKeys, pasteOnScreen } from '../lib/pasteOnScreen.js'
 import type { ScreenReader } from '../lib/screenReader.js'
@@ -139,6 +139,15 @@ export function messageWriter({ readScreen, resolve, terminal: { captureTerminal
 const ENTER_CHECK_TRIES = 12
 const ENTER_CHECK_RETRY_MS = 250
 
+/**
+ * What holds a message from an OpenClaw pane as read: one the pane cannot send yet (Gateway not connected, history not
+ * loaded, a run going) OpenClaw puts back in its input box, where nothing sends it. So it is typed only into a pane
+ * ready with an empty box, its idle reading (engines/openclaw/runtimeProfile.ts), and waits for one (lib/sessionInput.ts).
+ */
+function openclawHold(session: RegisteredSession, screen: ScreenReading | null): string | null {
+  return session.engine === 'openclaw' && !screen?.pane.idle ? OPENCLAW_NOT_READY : null
+}
+
 /** What holds a typed delivery from the pane as read: the same draft and dialog checks as a person's own message. */
 function paneHold(screen: ScreenReading | null): string | null {
   return screen ? screen.teamHold : 'team_waiting_unavailable'
@@ -173,8 +182,9 @@ export function sessionInputDeps(
     },
     beforeTeamWrite: async (session) => (await readTeamHold(deps, session)).hold,
     validateRuntime: validateTerminal,
-    // Typed into the pane as it stands, a draft or a running turn included, under the pane's write lock.
-    inject: (id, text) => deviceInput().legacyWrite(id, () => writeMessage(id, text)),
+    // Typed into the pane as it stands, a draft or a running turn included (an OpenClaw's, only once it can send), under
+    // the pane's write lock.
+    inject: (id, text) => deviceInput().legacyWrite(id, () => writeMessage(id, text, openclawHold)),
     // An Agent Messages turn waits for a ready composer, and for its mailbox to still want it written.
     injectTeam: (id, text, deliveryId) => deviceInput().legacyWrite(id, async () => {
       if (!resolve(id)) return terminalActionNotStarted('team_waiting_unavailable')
