@@ -14,6 +14,7 @@ import { stopDaemonProcess } from '../daemonStop.js'
 import { gridCredentialsPath, gridCredentialsExist } from '../gridCredentials.js'
 import { ownedBinEntries } from '../launchers.js'
 import { runtimeShortRoot } from '../localSocket.js'
+import { settlePidFile } from '../pidFileSettle.js'
 import { platformDaemonDeps } from '../platformDaemon.js'
 import { removePath } from '../removePath.js'
 import { atomicWriteFile } from '../secureState.js'
@@ -57,6 +58,7 @@ export async function uninstallDeps(options: { tildify: (path: string) => string
     markUninstalling: () => { try { atomicWriteFile(marker, `${Math.floor(Date.now() / 1000)}\n`, 'cache') } catch { /* see above */ } },
     unmarkUninstalling: () => { rmSync(marker, { force: true }) },
     ask: options.ask,
+    settlePid: () => settlePidFile(),
     daemonPid: () => { const pid = readPid(); return pid !== null && isAlive(pid) ? pid : null },
     alive: isAlive,
     // The port the daemon saved when it started (lib/daemonRecord.ts): another user's daemon may have had the configured

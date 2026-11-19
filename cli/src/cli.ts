@@ -44,6 +44,7 @@ import { registry } from './lib/registry.js'
 import { readSafeModeMarker } from './lib/daemonSafeMode.js'
 import { SpawnLockBusyError, describeSpawnLockBusyPlainly, describeSpawnLockFailure, describeSpawnLockOwner, describeSpawnLockWaitPlainly, readSpawnLockOwner, withSpawnLock } from './lib/daemonSpawnLock.js'
 import { didNotStopSentence, leftRunning, stopDaemonOrExit, stopDaemonProcess } from './lib/daemonStop.js'
+import { settlePidFile } from './lib/pidFileSettle.js'
 import { AT_LOGON_FLAG, clearTaskStopped, installedPlatform, launchMaster, osDaemonUnit, platformDaemonDeps, serviceDefinition, startThroughTask, startUnderPlatform, taskStoppedThisBoot, waitForMaster } from './lib/platformDaemon.js'
 import { processIfDownDeps, releaseAbandonedLock, runningDaemon, startIfDown } from './lib/startIfDown.js'
 import { isInstalledCopy } from './lib/installedCopy.js'
@@ -1126,8 +1127,15 @@ let startedByTheTask = false
  */
 async function runningDaemonPid(underLock: boolean = false): Promise<number | null> {
   if (process.platform === 'win32') return runningDaemon(processIfDownDeps(process.platform, {}, { forget: underLock }))
-  const pid = readPid()
+  const pid = await settledPid()
   return pid && isAlive(pid) ? pid : null
+}
+
+/** The pid file's pid, once a pid file that cannot be read has been asked of the daemon or set aside
+ *  (lib/pidFileSettle.ts). */
+async function settledPid(): Promise<number | null> {
+  await settlePidFile()
+  return readPid()
 }
 
 /**
@@ -1352,7 +1360,7 @@ async function updateCommand(force: boolean): Promise<void> {
   // relaunch there is no pid file for several seconds, and anything that spawns `harness start` on
   // "no daemon" (the desktop app does, every few seconds) used to land a second child in that gap.
   await withSpawnLock('update', async () => {
-    const running = readPid()
+    const running = await settledPid()
     const wasRunning = !!(running && isAlive(running))
     const relaunch = async (): Promise<void> => {
       await new Promise((r) => setTimeout(r, 1000)) // grace for the backend to release the one-machine claim
@@ -1469,7 +1477,7 @@ async function logout(): Promise<void> {
 async function restartDaemonForIdentity(restartIfDown = false): Promise<void> {
   // OUR daemon, by its pid file and private socket. A login in another HOME must never restart a
   // different OS user's daemon just because it happens to hold the default TCP port.
-  const pid = readPid()
+  const pid = await settledPid()
   if (!pid || !isAlive(pid)) {
     if (!restartIfDown) return
     console.log('  starting the daemon again on this account…')
@@ -1508,7 +1516,7 @@ async function runningDaemonStatus(): Promise<{
 } | null> {
   try {
     const body = await localDaemonStatus(env.ADAPTER_DATA_DIR, env.PORT)
-      ?? await legacyDaemonStatus(daemonPort(), readPid(), computerId(), env.ADAPTER_DATA_DIR)
+      ?? await legacyDaemonStatus(daemonPort(), await settledPid(), computerId(), env.ADAPTER_DATA_DIR)
     if (!body) return null
     const status = body as {
       version?: unknown; sessions?: unknown; machineId?: unknown; connected?: unknown
@@ -2096,7 +2104,7 @@ async function remotePasswordSetCommand(json: boolean, stdin: boolean): Promise<
   console.log(`    fingerprint  ${result.fingerprint}   — verify it matches on the joining machine after \`harness link connect\`\n`)
   console.log(`  ▸ Run this on the OTHER machine:  harness link connect ${session.machineId}`)
   console.log('  ⚠ Anyone with this password can link a machine to this one. Keep it private.\n')
-  if (!readPid()) console.log('  Start the adapter with `harness start` if joins are being rejected.\n')
+  if (!await settledPid()) console.log('  Start the adapter with `harness start` if joins are being rejected.\n')
   process.exit(0)
 }
 
@@ -2682,7 +2690,7 @@ async function machinesDeleteCommand(id: string | undefined, assumeYes: boolean)
 
 /** `harness status` — print the info block with the current running state. */
 async function status(): Promise<void> {
-  const pid = readPid()
+  const pid = await settledPid()
   const alive = pid != null && isAlive(pid)
   const session = readAuthSession()
   const daemonStatus = alive ? await runningDaemonStatus() : null
@@ -2891,13 +2899,16 @@ switch (cmd) {
     // account: the desktop app reads that line and does not wait for a restart it observes anyway.
     // Capture before sign-in: the daemon can exit cleanly when its identity changes, and the installed
     // service treats a clean exit as an intentional stop.
-    const daemonWasRunning = isDaemonRunning()
-    loginCommand(foreground, flags.includes('--force'), flags.includes('--json'), {
-      entryPoint: entryPointFlag(),
-      ticket: flags.find((f) => f.startsWith('--ticket='))?.slice('--ticket='.length) || undefined,
-      method: signInMethodFlag(flags) ?? (flags.includes('--json') || !process.stdin.isTTY ? undefined : 'ask'),
-    })
-      .then((outcome) => outcome.signedIn ? restartDaemonForIdentity(outcome.stoppedDaemon || daemonWasRunning) : undefined)
+    settlePidFile()
+      .then(() => {
+        const daemonWasRunning = isDaemonRunning()
+        return loginCommand(foreground, flags.includes('--force'), flags.includes('--json'), {
+          entryPoint: entryPointFlag(),
+          ticket: flags.find((f) => f.startsWith('--ticket='))?.slice('--ticket='.length) || undefined,
+          method: signInMethodFlag(flags) ?? (flags.includes('--json') || !process.stdin.isTTY ? undefined : 'ask'),
+        })
+          .then((outcome) => outcome.signedIn ? restartDaemonForIdentity(outcome.stoppedDaemon || daemonWasRunning) : undefined)
+      })
       .catch(onError)
     break
   }

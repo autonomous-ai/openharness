@@ -16,12 +16,15 @@ import { dirname } from 'node:path'
 import { PLATFORM_LABEL, type PlatformState, type ServiceDefinition } from '../harnessd/platform.js'
 import { describeSpawnLockOwner, readSpawnLockOwner, withSpawnLock, type SpawnLockPurpose } from './daemonSpawnLock.js'
 import { stopDaemonProcess } from './daemonStop.js'
+import { settlePidFile } from './pidFileSettle.js'
 import {
   CARRIED_ENV, PLATFORM_START_WAIT_MS, PLATFORM_STOP_WAIT_MS, TASK_RUN_WAIT_MS, describeState, platformDaemonDeps, serviceDefinition, waitForMaster, waitGone,
   type PlatformDaemonDeps,
 } from './platformDaemon.js'
 
 export interface ServiceCommandDeps extends PlatformDaemonDeps {
+  /** Ask the daemon about a pid file that cannot be read, or set it aside (./pidFileSettle.ts). */
+  settlePid(): Promise<unknown>
   /** What the platform would run for this install. */
   definition(): ServiceDefinition
   /** The installed bundle the definition runs is there. */
@@ -155,6 +158,7 @@ async function installService(deps: ServiceCommandDeps): Promise<number> {
   // runs one whenever the daemon looks down) goes through the platform too, and must not land between
   // the stop and the registration.
   return deps.withLock('start', async () => {
+    await deps.settlePid()
     const pid = deps.readPid()
     const running = pid !== null && deps.isAlive(pid)
     const before = service.inspect()
@@ -200,6 +204,7 @@ async function uninstallService(deps: ServiceCommandDeps): Promise<number> {
     deps.out(`harnessd is not installed with ${name}; nothing to remove.`)
     return 0
   }
+  await deps.settlePid()
   const pid = deps.readPid()
   // The platform's own master is the daemon: once it goes, the daemon is started the usual way.
   const platformRan = pid !== null && deps.isAlive(pid) && before.pid === pid
@@ -326,6 +331,7 @@ async function installTask(deps: ServiceCommandDeps): Promise<number> {
     deps.err(`  ${registered.detail}`)
     return 1
   }
+  await deps.settlePid()
   const running = deps.readPid()
   let up = running !== null && deps.isAlive(running) ? running : null
   if (up === null) {
@@ -385,6 +391,7 @@ export function serviceCommandDeps(options: { relaunch: () => Promise<void>; til
   const base = platformDaemonDeps()
   return {
     ...base,
+    settlePid: () => settlePidFile(),
     definition: () => serviceDefinition({ logFile: base.logFile }),
     bundleExists: (path) => existsSync(path),
     ensureDir: (path) => { mkdirSync(path, { recursive: true, mode: 0o700 }) },

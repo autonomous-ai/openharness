@@ -138,6 +138,8 @@ export interface UninstallDeps {
   markUninstalling(): void
   unmarkUninstalling(): void
   ask(question: string): Promise<string>
+  /** Ask the daemon about a pid file that cannot be read, or set it aside (../pidFileSettle.ts). */
+  settlePid(): Promise<unknown>
   daemonPid(): number | null
   alive(pid: number): boolean
   stopAgents(): Promise<AgentsStopped>
@@ -378,6 +380,7 @@ export async function uninstallCommand(argv: readonly string[], deps: UninstallD
     // A root the last step would refuse is refused now, before a harness, the service, the daemon or another root is
     // touched (I1).
     for (const root of deps.roots) deps.checkRemovable(planFor(deps, root, keepData))
+    await deps.settlePid()
     daemon = deps.daemonPid()
     if (!yes) {
       if (!deps.isTTY) { deps.err('✗ harness uninstall asks before it removes anything. Run it in a terminal, or add --yes. Nothing was removed.'); return 1 }
