@@ -78,8 +78,12 @@ describe.skipIf(!swayInstalled)("a tap focuses the agent's window on sway", () =
     expect(await desktop.focused()).toBe(other)
 
     // 2. A tap focuses the agent's foot through `swaymsg [pid=…] focus`.
+    const since = dial.messages.length
     dial.send({ t: 'agent.open', agentId: id })
     await until("the agent's window focused", async () => await desktop.focused() === agent, 30_000, 100)
+    // The opener answered true: the dial turns to the agent, and no toast says it did not open.
+    await dial.next((m) => m.t === 'focus' && m.agentId === id, 30_000, 'the focus on the agent', since)
+    expect(dial.messages.slice(since).filter((m) => m.t === 'toast')).toEqual([])
   }
 
   it('a daemon given only its runtime folder finds sway there, and a tap focuses the agent\'s foot', () => tapFocuses('XDG_RUNTIME_DIR'))
