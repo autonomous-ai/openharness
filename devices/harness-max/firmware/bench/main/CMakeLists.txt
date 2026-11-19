@@ -1,6 +1,7 @@
 # The bench's one component: bench_main.c, the bench's portable timing code (../bench_*.c, also built on the host by
 # ../profile.sh), and from the product what draws and turns the glass: Max's screens (../../main/app/max_ui*.c) and their
-# demo scenes (../../test/max_render.c), the Pro's compositor, and the strip turn (CPU and PPA).
+# demo scenes (../../test/max_render.c), the Pro's compositor, the strip turn (CPU and PPA) and the frame path that
+# shares the strips between the cores and turns them into the framebuffer (max_present.c, max_strips.c).
 include(${CMAKE_CURRENT_LIST_DIR}/../../sources.cmake)
 set(BENCH ${CMAKE_CURRENT_LIST_DIR}/..)
 
@@ -9,6 +10,8 @@ idf_component_register(
         "bench_main.c"
         "${BENCH}/bench_raster.c"
         "${BENCH}/bench_scenes.c"
+        "${MAX_FW}/main/display/max_present.c"
+        "${MAX_FW}/main/display/max_strips.c"
         "${MAX_FW}/main/display/max_turn.c"
         "${MAX_FW}/main/display/max_turn_ppa.c"
         ${MAX_UI_SRCS}

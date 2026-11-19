@@ -1,9 +1,9 @@
 # Harness Max display bench
 
 How long Harness Max's display path takes on an ESP32-P4, with the product's own scenes: the 38 screens of
-`../test/max_render.c` (the goldens'), built and rasterised as `main/display/max_display.c` does it, the strip turn on
-the CPU and on the PPA, a cached layer's copy, and the glass split over both cores. It prints a report every 5 s,
-forever.
+`../test/max_render.c` (the goldens'), built and rasterised in strips, the strip turn on the CPU and on the PPA, a
+cached layer's copy, the glass split over both cores, and the product's own frame path (`main/display/max_present.c`
+and `max_strips.c`) end to end into a framebuffer. It prints a report every 5 s, forever.
 
 It is an ESP-IDF app of its own, never part of the product image (the product builds from `..` and never looks in
 here). It runs on any ESP32-P4 v3.x with 32 MB of PSRAM, such as a Harness Pro, because it uses the SoC alone: the CPU,
@@ -62,7 +62,17 @@ reads 480 x 1920 x 2 bytes 60 times a second (about 110 MB/s) from PSRAM, so PSR
   where a repaint's time goes, and what a pixel of each kind costs on the chip (`ns/px`; `background` is the fill
   under every strip).
 - **(a) partial frames**: what changes most often, as `pro_frame_present` repaints it: the listening band (ten times a
-  second while the person talks), the agent page's counter (once a second), an Overview cell's line.
+  second while the person talks), the agent page's counter (once a second), an Overview cell's line, and a synthetic
+  frame of motion (`overview +40 px`: Overview with every run but the glass-wide ones 40 px to the right, 86% of the
+  glass). After each, its three costliest run kinds: ms, and the thousands of pixels they cover.
+- **(f) the product's frame**: `max_present` as the render task calls it, into a 480 x 1920 framebuffer in PSRAM that
+  no panel scans, in wall time (it waits for the PPA and the other core). Four ways: `1c`/`2c` the render task alone or
+  with the helper on core 0, `cpu`/`ppa` the strips turned by `max_turn_pixels` and copied in as the panel's
+  `draw_bitmap` does, or turned by the PPA straight into the framebuffer while the next strip is rasterised. `2c ppa` is
+  the product; `fps` is its rate, `raster` both cores' raster time in it. `framebuffer` must say `same` on every line: the
+  framebuffer after each frame, in every way, against the CPU's raster and turn of the whole scene. Whole screens first
+  (with means and maxima for Overview's, the agent page's and every screen), then the partial frames of (a), each
+  from its `before` painted whole; the last line is the helper task's unused stack.
 - **(b) CPU turn**: `max_turn_pixels` of a 1920 x 24 strip, and of the 20 strips of the glass.
 - **(c) PPA SRM turn**: each quarter turn and mirror the PPA has, against `max_turn_pixels`: exactly one should say
   `SAME`, and it should be `ccw 270` with no mirror (`MAX_TURN_CCW_DEGREES`, what the product asks for). Then its time
@@ -78,3 +88,7 @@ What to do with it:
   PPA path is one commit, `Harness Max: the PPA turns the strips ...`; revert it.
 - The full-repaint frame time (`build` + `warm` + 20 turns) against the 16-33 ms a moving row needs says whether motion
   can repaint whole strips or needs damage-sized frames, two cores, or cached layers ((d)).
+- (f)'s `2c ppa` is what the glass gets. The targets: an Overview-class screen whole in 16 ms or less, an agent page in
+  25, the listening band in 8; `overview +40 px` says what a frame of a moving row costs. If any line says `DIFFERS`, or
+  the PPA refused a turn, the frame path is wrong on the chip: `1c cpu` is the old path's shape (one core, the CPU's
+  turn and a copy), and `max_present_cores(1)` or `max_strips_use_ppa(false)` take the product back to it.

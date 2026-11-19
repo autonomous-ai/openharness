@@ -1,12 +1,17 @@
 // Harness Max's display bench on an ESP32-P4: how long the product's display path takes with the product's own scenes,
 // printed as a report every 5 s, forever (README.md says how to read it). It uses the SoC alone (CPU, memory, the PPA
 // and its 2D-DMA): no pin, bus or device of the board it runs on, no flash write, and it never marks its image valid.
+// The product's frame path (max_present.c, max_strips.c) runs here as it does on the glass, into a framebuffer in PSRAM
+// that no panel scans.
 #include <inttypes.h>
 #include <stdio.h>
 #include <string.h>
 
 #include "bench_raster.h"
 #include "bench_scenes.h"
+#include "max_present.h"
+#include "max_strips.h"
+#include "max_strips_p4.h"
 #include "max_turn.h"
 #include "max_turn_ppa.h"
 #include "pod/pod_draw.h"
@@ -26,6 +31,7 @@
 #define REPORT_US 5000000
 #define STRIP_BYTES ((size_t)PRO_STRIP_PX * sizeof(uint16_t))
 #define GLASS_PX ((size_t)HT_WIDTH * HT_HEIGHT)
+#define FB_BYTES (GLASS_PX * sizeof(uint16_t))
 // A cached layer as wide as Overview's row of cells, and where it lands on the glass.
 #define LAYER_W 1169
 #define LAYER_H HT_HEIGHT
@@ -35,10 +41,12 @@ _Static_assert(HT_WIDTH == MAX_GLASS_W && HT_HEIGHT == MAX_GLASS_H, "the bench d
 
 // The scenes live in PSRAM, as the product's (max_app.c's s_scene).
 static EXT_RAM_BSS_ATTR ht_scene_t s_scene, s_before, s_after;
-static uint16_t *s_strip, *s_strip2;   // internal, DMA-capable: each core's strip (max_display.c's s_strip)
-static uint16_t *s_band;               // internal, DMA-capable: the turned strip (max_display.c's s_band)
+static uint16_t *s_strip, *s_strip2;   // internal, DMA-capable: each core's strip (max_strips.c's, a worker's block)
+static uint16_t *s_band;               // internal, DMA-capable: a turned strip
 static uint16_t *s_ref;                // PSRAM: the CPU's turn, to hold the PPA's against
 static uint16_t *s_fb;                 // PSRAM: the panel's 480 x 1920 framebuffer, or the 1920 x 480 glass
+static uint16_t *s_want;               // PSRAM: the framebuffer a frame must leave
+static bool s_ppa;                     // max_strips.c has the PPA
 static uint16_t *s_layer;              // PSRAM: a LAYER_W x LAYER_H layer
 static ppa_client_handle_t s_srm;
 static uint32_t s_ticks_per_us;
@@ -59,6 +67,20 @@ static double ms_of(uint64_t c) { return (double)c / s_ticks_per_us / 1000.0; }
             if (d_ < best_) best_ = d_;                                                                                 \
         }                                                                                                               \
         ms_of(best_);                                                                                                   \
+    })
+
+// The same in wall time, for what waits: the product's frame blocks on the PPA and on the other core, and a core's cycle
+// counter may stop while it waits.
+#define BEST_WALL_MS(reps, stmt)                                                                                        \
+    ({                                                                                                                  \
+        int64_t best_ = INT64_MAX;                                                                                      \
+        for (int rep_ = 0; rep_ < (reps); rep_++) {                                                                     \
+            const int64_t t_ = esp_timer_get_time();                                                                    \
+            stmt;                                                                                                       \
+            const int64_t d_ = esp_timer_get_time() - t_;                                                               \
+            if (d_ < best_) best_ = d_;                                                                                 \
+        }                                                                                                               \
+        best_ / 1000.0;                                                                                                 \
     })
 
 static void pattern(uint16_t *px, size_t n, unsigned seed)
@@ -132,15 +154,181 @@ static void screens(void)
 
 static void partials(void)
 {
-    printf("(a) partial frames: ht_damage, then each rectangle in strips as pro_frame_present (best of 5)\n");
+    printf("(a) partial frames: ht_damage, then each rectangle in strips as pro_frame_present (best of 5); the costliest "
+           "run kinds, ms (k px)\n");
     printf("%-24s %5s %8s %8s\n", "frame", "rects", "px", "ms");
+    static bench_kinds_t kinds;
     for (int i = 0; i < bench_partial_count(); i++) {
         bench_partial(i, &s_before, &s_after);
         int rects = 0;
         const uint32_t px = bench_frame(&s_before, &s_after, s_strip, &rects);
         const double ms = BEST_MS(5, bench_frame(&s_before, &s_after, s_strip, NULL));
-        printf("%-24s %5d %8" PRIu32 " %8.3f\n", bench_partial_name(i), rects, px, ms);
+        printf("%-24s %5d %8" PRIu32 " %8.3f ", bench_partial_name(i), rects, px, ms);
+        memset(&kinds, 0, sizeof kinds);
+        bench_frame_kinds(&s_before, &s_after, s_strip, &kinds, cycles);
+        for (int shown = 0, done[BENCH_KINDS] = {0}; shown < 3; shown++) {
+            int top = -1;
+            for (int k = 0; k < BENCH_KINDS; k++)
+                if (!done[k] && kinds.ticks[k] && (top < 0 || kinds.ticks[k] > kinds.ticks[top])) top = k;
+            if (top < 0) break;
+            done[top] = 1;
+            printf(" %s %.2f (%.0f)", bench_kind_name((bench_kind_t)top), ms_of(kinds.ticks[top]),
+                   (double)kinds.px[top] / 1000);
+        }
+        printf("\n");
     }
+}
+
+// ---- (f) the product's frame, end to end ----
+
+// max_strips.c's copy of a strip the CPU turned, as the panel's draw_bitmap does it without its 2D-DMA: the rows
+// copied in, then the rows they are in written back for the panel's DMA to read.
+static void fb_copy(int x, int y, int w, int h, const uint16_t *band)
+{
+    for (int r = 0; r < h; r++)
+        memcpy(s_fb + (size_t)(y + r) * HT_HEIGHT + x, band + (size_t)r * w, (size_t)w * sizeof band[0]);
+    esp_cache_msync(s_fb + (size_t)y * HT_HEIGHT, (size_t)h * HT_HEIGHT * sizeof s_fb[0],
+                    ESP_CACHE_MSYNC_FLAG_DIR_C2M | ESP_CACHE_MSYNC_FLAG_UNALIGNED);
+}
+
+// The framebuffer `scene` leaves: each strip rasterised and turned by the CPU, apart from the product's path.
+static void want_of(const ht_scene_t *scene)
+{
+    for (int y = 0; y < HT_HEIGHT; y += PRO_STRIP_LINES) {
+        ht_raster(scene, (ht_rect_t){0, (int16_t)y, HT_WIDTH, PRO_STRIP_LINES}, s_band);
+        max_turn_pixels(s_band, HT_WIDTH, PRO_STRIP_LINES, s_ref);
+        const max_rect_t at = max_turn_rect((max_rect_t){0, y, HT_WIDTH, PRO_STRIP_LINES});
+        for (int row = 0; row < at.h; row++)
+            memcpy(s_want + (size_t)(at.y + row) * HT_HEIGHT + at.x, s_ref + (size_t)row * at.w,
+                   (size_t)at.w * sizeof s_ref[0]);
+    }
+}
+// A framebuffer no frame leaves, in memory: the frame must write every pixel it is checked on.
+static void fb_spoil(void)
+{
+    memset(s_fb, 0x5a, FB_BYTES);
+    esp_cache_msync(s_fb, FB_BYTES, ESP_CACHE_MSYNC_FLAG_DIR_C2M);
+}
+static bool fb_is_want(void)
+{
+    esp_cache_msync(s_fb, FB_BYTES, ESP_CACHE_MSYNC_FLAG_DIR_M2C);   // what the PPA wrote, not what the cache held
+    return !memcmp(s_fb, s_want, FB_BYTES);
+}
+
+static const struct {
+    const char *name;
+    int cores;
+    bool ppa;
+} MODES[] = {{"1c cpu", 1, false}, {"1c ppa", 1, true}, {"2c cpu", 2, false}, {"2c ppa", 2, true}};
+enum { MODE_COUNT = sizeof MODES / sizeof MODES[0], PRODUCT = MODE_COUNT - 1 };
+
+static bool use_mode(int m)
+{
+    if (MODES[m].ppa && !s_ppa) return false;
+    max_present_cores(MODES[m].cores);
+    max_strips_use_ppa(MODES[m].ppa);
+    return true;
+}
+static void print_modes(const double *ms)
+{
+    for (int m = 0; m < MODE_COUNT; m++)
+        if (ms[m] < 0) printf(" %7s", "-");
+        else printf(" %7.2f", ms[m]);
+}
+
+// A frame from `prev` (NULL: the whole glass) to `next` in every mode: checked once against s_want, then timed.
+static bool modes(const ht_scene_t *prev, const ht_scene_t *next, int reps, double *ms, uint32_t *raster_us)
+{
+    bool same = true;
+    for (int m = 0; m < MODE_COUNT; m++) {
+        ms[m] = -1;
+        if (!use_mode(m)) continue;
+        fb_spoil();
+        if (prev) max_present(NULL, prev, NULL);
+        max_present(prev, next, NULL);
+        same = same && fb_is_want();
+        uint32_t us = 0;
+        ms[m] = BEST_WALL_MS(reps, us = max_present(prev, next, NULL));
+        if (m == PRODUCT) *raster_us = us;
+    }
+    use_mode(PRODUCT);
+    return same;
+}
+
+typedef struct {
+    const char *prefix;
+    double sum[MODE_COUNT], max[MODE_COUNT];
+    int n;
+} tally_t;
+
+static void present_screens(void)
+{
+    printf("(f) the product's frame (max_present.c, max_strips.c) end to end into a %dx%d framebuffer in PSRAM, no panel "
+           "scanning it: whole glass, warm, best of 2, ms. cpu: max_turn_pixels and a copy as draw_bitmap's; ppa: the PPA "
+           "turns each %d-line strip straight into the framebuffer while the next is rasterised. 1c: the render task "
+           "alone; 2c: with the helper on core 0. fps, raster: the product's (2c ppa); raster sums both cores. %s\n",
+           HT_HEIGHT, HT_WIDTH, MAX_STRIP_LINES, s_ppa ? "" : "NO PPA: its columns are -");
+    printf("%-24s %7s %7s %7s %7s %6s %7s %s\n", "screen", MODES[0].name, MODES[1].name, MODES[2].name, MODES[3].name,
+           "fps", "raster", "framebuffer");
+    tally_t tally[] = {{.prefix = "overview"}, {.prefix = "agent"}, {.prefix = ""}};
+    const int tallies = sizeof tally / sizeof tally[0];
+    const int n = bench_screen_count();
+    int differ = 0;
+    for (int i = 0; i < n; i++) {
+        bench_screen(i, &s_scene);
+        want_of(&s_scene);
+        double ms[MODE_COUNT];
+        uint32_t raster_us = 0;
+        const bool same = modes(NULL, &s_scene, 2, ms, &raster_us);
+        differ += !same;
+        printf("%-24s", bench_screen_name(i));
+        print_modes(ms);
+        printf(" %6.1f %7.2f %s\n", ms[PRODUCT] > 0 ? 1000.0 / ms[PRODUCT] : 0.0, raster_us / 1000.0,
+               same ? "same" : "DIFFERS");
+        for (int t = 0; t < tallies; t++) {
+            if (strncmp(bench_screen_name(i), tally[t].prefix, strlen(tally[t].prefix))) continue;
+            tally[t].n++;
+            for (int m = 0; m < MODE_COUNT; m++) {
+                tally[t].sum[m] += ms[m];
+                if (ms[m] > tally[t].max[m]) tally[t].max[m] = ms[m];
+            }
+        }
+        vTaskDelay(1);   // the idle task's turn: the task watchdog watches it
+    }
+    for (int t = 0; t < tallies; t++) {
+        double mean[MODE_COUNT];
+        for (int m = 0; m < MODE_COUNT; m++) mean[m] = tally[t].sum[m] / tally[t].n;
+        printf("%-16s%3d mean", *tally[t].prefix ? tally[t].prefix : "every screen", tally[t].n);
+        print_modes(mean);
+        printf(" %6.1f\n%-20s max", mean[PRODUCT] > 0 ? 1000.0 / mean[PRODUCT] : 0.0, "");
+        print_modes(tally[t].max);
+        printf(" %6.1f\n", tally[t].max[PRODUCT] > 0 ? 1000.0 / tally[t].max[PRODUCT] : 0.0);
+    }
+    printf("framebuffer as the CPU's raster and turn: %d/%d screens in every mode%s\n", n - differ, n,
+           s_ppa && !max_strips_ppa() ? "; the PPA REFUSED a turn" : "");
+}
+
+static void present_partials(void)
+{
+    printf("(f) partial frames through the product's frame: `before` whole, then the frame to `after`, best of 3, ms\n");
+    printf("%-24s %7s %4s %7s %7s %7s %7s %6s %7s %s\n", "frame", "px", "%", MODES[0].name, MODES[1].name, MODES[2].name,
+           MODES[3].name, "fps", "raster", "framebuffer");
+    for (int i = 0; i < bench_partial_count(); i++) {
+        bench_partial(i, &s_before, &s_after);
+        want_of(&s_after);
+        uint32_t px = 0;
+        max_present(&s_before, &s_after, &px);
+        double ms[MODE_COUNT];
+        uint32_t raster_us = 0;
+        const bool same = modes(&s_before, &s_after, 3, ms, &raster_us);
+        printf("%-24s %7" PRIu32 " %4.0f", bench_partial_name(i), px, 100.0 * px / GLASS_PX);
+        print_modes(ms);
+        printf(" %6.1f %7.2f %s\n", ms[PRODUCT] > 0 ? 1000.0 / ms[PRODUCT] : 0.0, raster_us / 1000.0,
+               same ? "same" : "DIFFERS");
+    }
+    const TaskHandle_t helper = xTaskGetHandle("max_raster");
+    printf("the frame's helper: %s, %u bytes of its stack never used\n", helper ? "up" : "NOT STARTED",
+           helper ? (unsigned)uxTaskGetStackHighWaterMark(helper) : 0u);
 }
 
 // ---- (b) and (c): the strip turn on the CPU and on the PPA ----
@@ -314,6 +502,8 @@ static void report(unsigned pass)
            (unsigned)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024));
     screens();
     partials();
+    present_screens();
+    present_partials();
     turns();
     copies();
     printf("==== end of pass %u ====\n", pass);
@@ -334,15 +524,20 @@ void app_main(void)
 {
     s_ticks_per_us = esp_rom_get_cpu_ticks_per_us();
     const uint32_t internal_dma = MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA;
-    s_strip = heap_caps_malloc(STRIP_BYTES, internal_dma);
-    s_strip2 = heap_caps_malloc(STRIP_BYTES, internal_dma);
+    // The product's strips first, as max_display.c sets them up: the bench's two strips are its two workers' blocks.
+    const esp_err_t strips = max_strips_init(fb_copy);
+    s_ppa = max_strips_ppa();
+    s_strip = strips == ESP_OK ? max_strip_buffer(0, 0) : NULL;
+    s_strip2 = strips == ESP_OK ? max_strip_buffer(1, 0) : NULL;
     s_band = heap_caps_malloc(STRIP_BYTES, internal_dma);
     s_ref = heap_caps_malloc(STRIP_BYTES, MALLOC_CAP_SPIRAM);
-    s_fb = heap_caps_malloc(GLASS_PX * sizeof(uint16_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_CACHE_ALIGNED);
+    s_fb = heap_caps_malloc(FB_BYTES, MALLOC_CAP_SPIRAM | MALLOC_CAP_CACHE_ALIGNED);
+    s_want = heap_caps_malloc(FB_BYTES, MALLOC_CAP_SPIRAM);
     s_layer = heap_caps_malloc((size_t)LAYER_W * LAYER_H * sizeof(uint16_t), MALLOC_CAP_SPIRAM);
+    max_strips_framebuffer(s_fb);
     const ppa_client_config_t srm = {.oper_type = PPA_OPERATION_SRM};
     const esp_err_t ppa = ppa_register_client(&srm, &s_srm);
-    if (!s_strip || !s_strip2 || !s_band || !s_ref || !s_fb || !s_layer || ppa != ESP_OK) {
+    if (!s_strip || !s_strip2 || !s_band || !s_ref || !s_fb || !s_want || !s_layer || ppa != ESP_OK) {
         printf("bench: no memory or no PPA (%s); free internal %u KB, PSRAM %u KB\n", esp_err_to_name(ppa),
                (unsigned)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024),
                (unsigned)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024));
