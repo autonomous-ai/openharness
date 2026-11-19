@@ -8,9 +8,10 @@
  * 2026-11-19-dial-linux-design.md § 1.6), and with no CLI found, or on Windows, nothing runs.
  *
  * The folder came from a hook and becomes a command's argument: its form is checked at `paneOf` and again before
- * `open` or `cursor`, which takes it as one argument with no shell, and it must be a folder at each look and again at the tap. It is
- * the person's own path, so the adapter takes no `log` and writes no line: an error it catches, whose message may name
- * the folder, goes nowhere, and a tap's outcome is the opener's line, by the adapter's id alone (open.ts).
+ * `open` or `cursor`, which takes it as one argument with no shell, and it must be a folder at each look and again at
+ * the tap. It is the person's own path, so the adapter takes no `log` and writes no line: an error it catches, whose
+ * message may name the folder, goes nowhere, and a tap's outcome is the opener's line, by the adapter's id alone
+ * (open.ts).
  */
 import { statSync } from 'node:fs'
 import { isAbsolute } from 'node:path'

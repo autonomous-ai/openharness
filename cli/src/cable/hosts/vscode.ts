@@ -17,10 +17,10 @@
  * the editor's others. The terminal is asked for again at each verb, since a window comes and goes between looks. The
  * adapter's one `tap` is `'instead'`, for the tab's link, so a terminal's tap brings the editor itself once its line is
  * queued: by its own `open -b` on macOS, by the devices' raise of the pane's process on Linux (docs/plans/
- * 2026-11-19-dial-linux-design.md §§ 1.6, 2); elsewhere the line alone is the tap. The dial's scroll sends that window the stroke's lines on a
- * `{"scroll":<lines>,"pid":<shell>}` line while the editor is in front (§4): the extension runs them only while that
- * terminal is the active one, so the adapter has no `onScreen`. A stroke whose `pageKeys` passed carries `"page":true`,
- * and the extension also presses Claude Code's page keys in that terminal
+ * 2026-11-19-dial-linux-design.md §§ 1.6, 2); elsewhere the line alone is the tap. The dial's scroll sends that window
+ * the stroke's lines on a `{"scroll":<lines>,"pid":<shell>}` line while the editor is in front (§4): the extension runs
+ * them only while that terminal is the active one, so the adapter has no `onScreen`. A stroke whose `pageKeys` passed
+ * carries `"page":true`, and the extension also presses Claude Code's page keys in that terminal
  * (docs/plans/2026-11-18-dial-vscode-claude-fullscreen-scroll-design.md).
  */
 import type { HostAdapter, Pane, Place } from './adapter.js'

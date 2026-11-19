@@ -1,6 +1,7 @@
 /**
  * The Claude app (docs/specs/2026-11-15-device-host-adapter.md): its session opens by its `claude://code/continue`
- * link (appLink.ts), sent to the app alone by its bundle id, which brings the app forward itself. The session id came
+ * link (appLink.ts), which brings the app forward itself: on macOS sent to the app alone by its bundle id; on Linux,
+ * which has none, to the scheme's app, for a session the scan's app says is the Claude app's. The session id came
  * from a hook, or from the session's own record for one only the open scan found
  * (docs/plans/2026-11-18-dial-claude-app-swipe-before-hook-design.md), so it is checked against its form before it
  * reaches the link.
