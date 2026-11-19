@@ -172,7 +172,7 @@ static void runs_added(void)
     const int at = b.count / 2;
     memmove(&b.runs[at + 1], &b.runs[at], (size_t)(b.count - at) * sizeof b.runs[0]);
     b.count++;
-    ht_scene_t one;
+    static ht_scene_t one;
     ht_scene_clear(&one, b.background);
     CHECK(ht_pro_rect(&one, 300, 100, 20, 10, 0, 0xF800));
     b.runs[at] = one.runs[0];
