@@ -12,8 +12,10 @@ import type { RunningProcess } from '../../lib/sessionSearch/externals/types.js'
 import { frontAppId } from './frontApp.js'
 import { APP_IDS, UNKNOWN_APP } from './hostDetect.js'
 
-/** All the walk reads of a process: no command line to hand on. Its tty is the terminal it runs on; none on none. */
-export type ProcessName = Pick<RunningProcess, 'pid' | 'ppid' | 'executable'> & { tty?: string }
+/** All the walk reads of a process: no command line to hand on. */
+export type ProcessName = Pick<RunningProcess, 'pid' | 'ppid' | 'executable'>
+/** A process and the terminal it runs on (readTtyName); none on none. */
+export type PtyProcess = ProcessName & { tty?: string }
 
 export const WALK_PARENTS = 16
 export const BUNDLES_A_PASS = 16
@@ -24,6 +26,9 @@ const BUNDLE_ID_MAX_BYTES = 1024
 // that many rows at the longest name macOS prints (MAXPATHLEN).
 export const PS_TIMEOUT_MS = 3_000
 export const PS_MAX_BYTES = 1024 * 1024
+// One process's terminal: 2.4 ms on macOS, and a name of a few characters.
+const TTY_TIMEOUT_MS = 1_000
+const TTY_MAX_BYTES = 256
 const MAX_PATH = 1024
 const BUNDLE_ID = /^[A-Za-z0-9.-]{1,128}$/
 const CONTROL = /[\u0000-\u001f\u007f]/
@@ -62,24 +67,34 @@ export async function readBundleId(bundle: string, exec: Exec = execText): Promi
   return id && BUNDLE_ID.test(id) ? id : undefined
 }
 
-/** `ps -axo pid=,ppid=,tty=,comm=` rows; a line that is no row is passed over. A process on no terminal has no tty: ps
- *  says `?` on Linux, `??` on macOS. */
+/** `ps -axo pid=,ppid=,comm=` rows; a line that is no row is passed over. */
 export function parseProcessNames(stdout: string): ProcessName[] {
   const rows: ProcessName[] = []
   for (const line of stdout.split('\n')) {
-    const row = /^\s*(\d+)\s+(\d+)\s+(\S+)\s+(\S.*?)\s*$/.exec(line)
-    if (row) rows.push({ pid: Number(row[1]), ppid: Number(row[2]), ...(/^\?+$/.test(row[3]) ? {} : { tty: row[3] }), executable: row[4] })
+    const row = /^\s*(\d+)\s+(\d+)\s+(\S.*?)\s*$/.exec(line)
+    if (row) rows.push({ pid: Number(row[1]), ppid: Number(row[2]), executable: row[3] })
   }
   return rows
 }
 
-/** Each process's pid, parent, tty and name, `comm` last: before another column macOS cuts it to 16 characters (`-ww`
- *  does not help), which leaves no `.app` in an app's path. On Linux it is the task's name either way. */
+/** Each process's pid, parent and name, `comm` last: before another column macOS cuts it to 16 characters (`-ww` does
+ *  not help), which leaves no `.app` in an app's path. On Linux it is the task's name either way. No tty: that column
+ *  made every read three times as slow on macOS (27 ms to 82 ms, 638 processes); readTtyName reads one process's. */
 export async function readProcessNames(exec: Exec = execText): Promise<ProcessName[]> {
-  const rows = parseProcessNames(await exec('ps', ['-axo', 'pid=,ppid=,tty=,comm='], { timeout: PS_TIMEOUT_MS, maxBuffer: PS_MAX_BYTES }) ?? '')
+  const rows = parseProcessNames(await exec('ps', ['-axo', 'pid=,ppid=,comm='], { timeout: PS_TIMEOUT_MS, maxBuffer: PS_MAX_BYTES }) ?? '')
   // `ps` lists itself at the least: no row is a read that failed. The error names nothing it printed: a name is outside text.
   if (!rows.length) throw new Error('process table not read')
   return rows
+}
+
+/** The terminal one process runs on, as ps names it (`ttys004`, `pts/2`); none on none (`??` on macOS, `?` on Linux).
+ *  One pid a run: on macOS a `ps -p` of two or more took 53 ms, of one 2.4 ms. It rejects when ps failed, as it does
+ *  for a process gone, saying nothing of the process. */
+export async function readTtyName(pid: number, exec: Exec = execText): Promise<string | undefined> {
+  const out = await exec('ps', ['-o', 'tty=', '-p', String(pid)], { timeout: TTY_TIMEOUT_MS, maxBuffer: TTY_MAX_BYTES })
+  if (out === null) throw new Error('tty not read')
+  const tty = out.trim()
+  return /^\?*$/.test(tty) ? undefined : tty
 }
 
 export interface ScannedAppDeps {
@@ -166,12 +181,26 @@ const PTY_HOSTS: Readonly<Record<string, string>> = {
  * keeps that pane's variables. None when the process runs on no terminal, the walk ends first, or that process is no
  * host the dial types into. Its name is matched and dropped, never kept.
  */
-export function ptyOwner(pid: number, rows: readonly ProcessName[]): string | undefined {
+export function ptyOwner(pid: number, rows: readonly PtyProcess[]): string | undefined {
   const [own, ...parents] = parentChain(pid, new Map(rows.map((p) => [p.pid, p])))
   if (own?.tty === undefined) return undefined
   const maker = parents.find((p) => p.tty !== own.tty)
   const name = maker && basename(maker.executable)
   return name !== undefined && Object.hasOwn(PTY_HOSTS, name) ? PTY_HOSTS[name] : undefined
+}
+
+/** ptyOwner over [rows], which hold no terminal: the caller's and its parents' are read one at a time ([tty],
+ *  readTtyName), up to the first on another terminal or none, past which ptyOwner never looks. */
+export async function readPtyOwner(
+  pid: number, rows: readonly ProcessName[], tty: (pid: number) => Promise<string | undefined>,
+): Promise<string | undefined> {
+  const read: PtyProcess[] = []
+  for (const p of parentChain(pid, new Map(rows.map((r) => [r.pid, r])))) {
+    const on = await tty(p.pid)
+    read.push(on === undefined ? p : { ...p, tty: on })
+    if (on === undefined || on !== read[0].tty) break
+  }
+  return ptyOwner(pid, read)
 }
 
 /** The app each of these processes runs in, read from this machine. */

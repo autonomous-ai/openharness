@@ -13,7 +13,7 @@ import { binaryOnPath } from '../../lib/binaryOnPath.js'
 import { binaryFinder, resolveViaLoginShell, tmuxInstallDirectories, type TmuxPathOutcome } from '../../lib/tmuxOnPath.js'
 import type { HostAdapter, Pane, Place } from './adapter.js'
 import { CONTROL, MAX_TEXT, RUN_TIMEOUT_MS, type OrcaDeps } from './orca.js'
-import { parentChain, ptyOwner, type ProcessName } from './scannedApp.js'
+import { parentChain, readPtyOwner, type ProcessName } from './scannedApp.js'
 import type { ClientLookup } from './tmux.js'
 
 // Zellij takes spaces and `:` in a session name too; this form keeps a name no argument parser reads as a flag, and
@@ -133,14 +133,17 @@ const isZellij = (p: ProcessName): boolean => p.executable === 'zellij' || p.exe
  * where its hints place it. Only for a caller on a terminal a Zellij server made, as a pane's process is: a terminal
  * started from a pane is under the server too, and keeps the pane's variables.
  */
-export function zellijClients(deps: ZellijDeps): ClientLookup {
+export function zellijClients(deps: ZellijDeps & { tty(pid: number): Promise<string | undefined> }): ClientLookup {
   return {
     id: 'zellij',
     target: (hints) => hinted(deps.platform, hints)?.session,
     async client(session, pid, rows) {
       const table = await rows().catch(() => undefined)
       if (!table) return 'processes'
-      if (ptyOwner(pid, table) !== 'zellij') return undefined
+      // The table holds no terminal: the caller's and its parents' are read (scannedApp.ts readTtyName).
+      const owner = await readPtyOwner(pid, table, deps.tty).catch(() => null)
+      if (owner === null) return 'processes'
+      if (owner !== 'zellij') return undefined
       const byPid = new Map(table.map((p) => [p.pid, p]))
       const listed = await action(deps, session, ['list-clients'])
       if (!listed) return 'zellij'

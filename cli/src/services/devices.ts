@@ -62,7 +62,7 @@ import { createOrcaAdapter, createOrcaReads, orcaDeps, type OrcaFocusWatch, type
 import { firstOuter } from '../cable/hosts/outer.js'
 import { readRecord } from '../cable/hosts/record.js'
 import { HostRegistry, type HostEntry } from '../cable/hosts/registry.js'
-import { appRoots, learnApps, ptyOwner, readBundleId, readProcessNames } from '../cable/hosts/scannedApp.js'
+import { appRoots, learnApps, readBundleId, readProcessNames, readPtyOwner, readTtyName } from '../cable/hosts/scannedApp.js'
 import { createScrollLines } from '../cable/hosts/scrollLines.js'
 import { createTabsAdapter, readTty, type Tab } from '../cable/hosts/tabs.js'
 import { createOuter, createTmuxAdapter, tmuxClients } from '../cable/hosts/tmux.js'
@@ -673,9 +673,9 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   // it: each lookup answers nothing at once for an agent in none of its panes. herdr's first: herdr inside the person's
   // tmux is the nearer host, and keeps tmux's answer when herdr's finds no app.
   firstOuter(createHerdrOuter({ ...outerDeps, atime: ttyAtime }), createOuter(outerDeps,
-    [tmuxClients({ run: apps.run, tmux: tmuxAt }), zellijClients({ run: apps.run, zellij: zellijAt, platform: apps.platform })])),
+    [tmuxClients({ run: apps.run, tmux: tmuxAt }), zellijClients({ run: apps.run, zellij: zellijAt, platform: apps.platform, tty: readTtyName })])),
   // Windows has no `ps`: there no terminal's pane is read as the agent's own, and none takes its words.
-  apps.platform === 'win32' ? undefined : async (pid) => ptyOwner(pid, await readProcessNames())) : null
+  apps.platform === 'win32' ? undefined : async (pid) => readPtyOwner(pid, await readProcessNames(), readTtyName)) : null
   // Orca is asked only for the parts that use its homes, the first time as the devices start: the start pass waits for
   // that read (at most its 5 s), so an Orca home gets the skill with the default one.
   if (skill || observed) void orcaHomes.refresh().then(() => {

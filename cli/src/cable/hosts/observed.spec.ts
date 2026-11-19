@@ -3022,7 +3022,8 @@ describe('ObservedSource and the host that owns its caller\'s terminal', () => {
   // caller's would add a read of the process table to its hook for nothing.
   it('a caller whose hints name no WezTerm, kitty or Zellij pane is never read', () => {
     const s = owned()
-    for (const hostHints of [{ TMUX_PANE: '%3' }, { TERM_PROGRAM: 'ghostty' }, {}]) s.src.ingest(s.ev('session-start', { hostHints }))
+    const others: Array<Record<string, string>> = [{ TMUX_PANE: '%3' }, { TERM_PROGRAM: 'ghostty' }, {}]
+    for (const hostHints of others) s.src.ingest(s.ev('session-start', { hostHints }))
     s.src.ingest(s.ev('session-start', { hostHints: { WEZTERM_PANE: '7' }, callerPid: 200 }))
     s.src.ingest(s.ev('session-start', { hostHints: { KITTY_WINDOW_ID: '5' }, callerPid: 300 }))
     expect(s.ptyOwner.mock.calls).toEqual([[200], [300]])

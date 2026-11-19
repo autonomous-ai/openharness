@@ -126,6 +126,10 @@ export interface ObservedDeps {
   outer?: OuterLookup
 }
 
+/** The hints of the panes that take words only on the terminal their host made (Place.ptyOwner: wezterm.ts, kitty.ts,
+ *  zellij.ts): no other caller's terminal is read. */
+const PTY_HINTS = ['WEZTERM_PANE', 'KITTY_WINDOW_ID', 'ZELLIJ_PANE_ID']
+
 /** Whether a caller's app is learnt from its parents: its hints name none, or name VS Code by TERM_PROGRAM alone, which
  *  Cursor's terminal says too. Only a bundle id tells the two apart, and Linux has none. */
 function walked(hints: Readonly<Record<string, string>>): boolean {
@@ -621,13 +625,13 @@ export class ObservedSource implements HostSource {
   }
 
   /**
-   * The host that made its caller's terminal (Place.ptyOwner), read once per process in the background, as its tty is:
-   * until it lands, a terminal's or a multiplexer's pane only holds the agent, and takes no words. An answer lands only
-   * while that process is still its caller. A read that failed said nothing of the host: a later event reads it again, no
-   * sooner than TTY_RETRY_MS.
+   * The host that made its caller's terminal (Place.ptyOwner), read once per process in the background, as its tty is,
+   * and only for a caller whose hints name a pane that asks it (PTY_HINTS): until it lands, a terminal's or a
+   * multiplexer's pane only holds the agent, and takes no words. An answer lands only while that process is still its
+   * caller. A read that failed said nothing of the host: a later event reads it again, no sooner than TTY_RETRY_MS.
    */
   private learnPtyOwner(entry: Entry, pid: number): void {
-    if (!this.deps.ptyOwner) return
+    if (!this.deps.ptyOwner || !PTY_HINTS.some((key) => entry.hints[key] !== undefined)) return
     const now = this.deps.now()
     if (entry.ptyPid === pid && (entry.ptyFailedAt === undefined || now - entry.ptyFailedAt < TTY_RETRY_MS)) return
     entry.ptyPid = pid
