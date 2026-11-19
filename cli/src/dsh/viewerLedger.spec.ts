@@ -1,10 +1,36 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { spawn, type ChildProcess } from 'node:child_process'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { ProcessRow } from '../lib/processTable.js'
 import { ViewerLedger, processStartedAt, windowsViewerLeftovers } from './viewerLedger.js'
+
+// Pass-through, recording which paths are opened for writing and renamed onto, until a test fills the disk: a write
+// then stops part way, as ENOSPC leaves it.
+const disk = vi.hoisted(() => ({ full: false, writes: [] as string[], renames: [] as [string, string][] }))
+vi.mock('node:fs', async original => {
+  const actual = await original<typeof import('node:fs')>()
+  const writing = (flags: unknown) => typeof flags === 'number'
+    ? (flags & (actual.constants.O_WRONLY | actual.constants.O_RDWR)) !== 0
+    : typeof flags === 'string' && /[wa+]/.test(flags)
+  return { ...actual,
+    openSync: (...args: Parameters<typeof actual.openSync>) => {
+      if (typeof args[0] === 'string' && writing(args[1])) disk.writes.push(args[0])
+      return actual.openSync(...args)
+    },
+    writeFileSync: (...args: Parameters<typeof actual.writeFileSync>) => {
+      if (typeof args[0] === 'string') disk.writes.push(args[0])
+      if (!disk.full) return actual.writeFileSync(...args)
+      actual.writeFileSync(args[0], String(args[1]).slice(0, 8))
+      throw Object.assign(new Error('ENOSPC: fixture'), { code: 'ENOSPC' })
+    },
+    renameSync: (...args: Parameters<typeof actual.renameSync>) => {
+      disk.renames.push([String(args[0]), String(args[1])])
+      return actual.renameSync(...args)
+    },
+  }
+})
 
 // Windows has no `ps`, so nothing was ever reaped, and a viewer's parent is gone once it runs (Git Bash's fork): twelve generations
 // of one viewer were running on DESKTOP-0TFH0OJ on 2026-11-04.
@@ -129,5 +155,51 @@ describe('ViewerLedger', () => {
     ledger.add({ pid: child.pid!, agentId: 'a', dshId: 'x/y', viewerDir: '/v' })
     expect(ledger.reapOrphans().map((e) => e.pid)).toEqual([child.pid])
     await exited
+  })
+})
+
+describe('the viewer ledger on disk', () => {
+  let dir: string
+  let file: string
+  beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'viewer-ledger-')); file = join(dir, 'viewers.json') })
+  afterEach(() => { disk.full = false; vi.restoreAllMocks(); rmSync(dir, { recursive: true, force: true }) })
+
+  const entry = { pid: 101, startedAt: 42, agentId: 'a', dshId: 'x/y', viewerDir: '/v' }
+
+  it('the save goes through a temporary file renamed onto the target', () => {
+    disk.writes = []
+    disk.renames = []
+    new ViewerLedger({ file }).add(entry)
+    expect(disk.writes).not.toContain(file)
+    expect(disk.renames.filter(([, to]) => to === file)).toEqual([[expect.stringMatching(/\.tmp$/), file]])
+  })
+
+  it('a file at the old temporary name is left alone', () => {
+    const old = `${file}.${process.pid}.tmp`
+    writeFileSync(old, 'someone else')
+    new ViewerLedger({ file }).add(entry)
+    expect(readFileSync(old, 'utf8')).toBe('someone else')
+  })
+
+  it('a save that fails part way leaves the old file, and no temporary one', () => {
+    const ledger = new ViewerLedger({ file })
+    ledger.add(entry)
+    const before = readFileSync(file, 'utf8')
+    disk.full = true
+    ledger.add({ ...entry, pid: 102 })   // best effort: it does not throw
+    disk.full = false
+    expect(readFileSync(file, 'utf8')).toBe(before)
+    expect(readdirSync(dir)).toEqual(['viewers.json'])
+  })
+
+  it('a torn viewers.json is set aside, not written over', () => {
+    writeFileSync(file, '[{"')
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const ledger = new ViewerLedger({ file })
+    expect(ledger.read()).toEqual([])
+    ledger.add(entry)
+    expect(readFileSync(`${file}.unreadable`, 'utf8')).toBe('[{"')
+    expect(ledger.read()).toEqual([entry])
+    expect(warn).toHaveBeenCalledWith('[state] viewers.json could not be read (not valid JSON); kept as viewers.json.unreadable, starting empty.')
   })
 })
