@@ -478,6 +478,10 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   /** The Claude app's adapter as the dial's verbs reach it, a hooked agent's and a store row's alike: a rest's continue
    *  link is the dial's own move, and the app's attach that follows is its echo. */
   const claudeNoted = noting({ ...claude, show: (pane, agentId) => { noteLink(agentId); return claude.show(pane, agentId) } })
+  const codexApp = createCodexAppAdapter({ ...apps, bin: openBin, inFront: () => cableHost.latestFront() === 'codex', log })
+  /** The ChatGPT app's adapter as the dial's verbs reach it. No echo to guard: the Codex app sends no attach for the
+   *  follow to take as a person's. */
+  const codexNoted = noting(codexApp)
   /** Each Orca terminal's worktree, by handle, from the latest layout read that landed (below): a rest's or a tap's
    *  switch activates it first. */
   let orcaWorktrees: ReadonlyMap<string, string> = new Map()
@@ -494,9 +498,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     { ...orca,
       show: (pane: Pane, agentId: string) => { orcaSwitches.note(pane.id); return orca.show(pane, agentId) },
       focus: (pane: Pane) => { orcaSwitches.note(pane.id); return orca.focus(pane) } },
-  ].map(noting), claudeNoted, ...[
-    // No echo to guard: the Codex app sends no attach for the follow to take as a person's.
-    createCodexAppAdapter({ ...apps, bin: openBin, inFront: () => cableHost.latestFront() === 'codex', log }),
+  ].map(noting), claudeNoted, codexNoted, ...[
     // No echo to guard: VS Code sends no attach for the follow to take as a person's.
     createVscodeAdapter('vscode', { ...apps, bin: openBin, inFront: () => cableHost.latestFront() === 'vscode', terminals: vscode }),
     createVscodeAdapter('cursor', { ...apps, bin: openBin, inFront: () => cableHost.latestFront() === 'cursor', terminals: vscode }),
