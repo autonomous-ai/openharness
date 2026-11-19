@@ -1,4 +1,114 @@
-//! Linux: one command in a terminal the person sees, its exit code read back from a file beside it.
+//! Linux: one command in a terminal the person sees, its exit code read back from a file beside it. In a terminal so
+//! `sudo` in the command can ask for the person's password; the app never sees it.
+
+use crate::cli;
+use crate::types::Output;
+use std::fs::{self, DirBuilder, Permissions};
+use std::io;
+use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+use std::os::unix::process::CommandExt;
+use std::path::Path;
+use std::process::{Command, Stdio};
+use std::thread;
+use std::time::{Duration, Instant};
+
+/// Desktop's order (`_defaultOpenTerminal`): the terminal Debian and Ubuntu name as the default, then the two most
+/// common. Each takes the script's path after its flag.
+pub const CANDIDATES: [(&str, &str); 3] = [("x-terminal-emulator", "-e"), ("gnome-terminal", "--"), ("xterm", "-e")];
+/// None of CANDIDATES is on this computer.
+pub const NO_TERMINAL: &str = "No terminal found.";
+/// How often the result is read. Desktop reads it every 5 s; here the Install screen waits on it.
+const READ_EVERY: Duration = Duration::from_secs(1);
+
+/// Before the line: the result is written whole (a temp file, then a rename), so a read never sees half of it. A
+/// closed terminal (HUP), a Ctrl-C (INT) or a kill (TERM) writes 129 at once, so the app does not wait out its
+/// deadline.
+const SCRIPT_HEAD: &str = r#"#!/bin/sh
+# Harness: setup's host half, in a terminal so sudo can ask for a password.
+result="$(dirname "$0")/host.exit"
+finish() { printf '%s\n' "$1" > "$result.tmp" && mv "$result.tmp" "$result"; }
+trap 'finish 129; exit 129' HUP INT TERM
+"#;
+/// After the line: a failure keeps the terminal open until Enter, so the person can read why.
+const SCRIPT_TAIL: &str = r#"status=$?
+finish "$status"
+if [ "$status" -ne 0 ]; then
+  printf '\nSetup failed. Press Enter to close. '
+  read -r _
+fi
+exit "$status"
+"#;
+
+/// The script the terminal runs: `line`, its exit code then written to `host.exit` beside the script.
+pub fn script(line: &str) -> String {
+    format!("{SCRIPT_HEAD}{line}\n{SCRIPT_TAIL}")
+}
+
+/// The code in `result`, read at once, then every READ_EVERY until `deadline` has passed on `now`'s clock; None then.
+/// A file missing, unreadable or not a whole number is still pending, as Desktop reads it.
+pub fn wait_result(
+    result: &Path,
+    deadline: Duration,
+    now: &dyn Fn() -> Instant,
+    pause: &dyn Fn(Duration),
+) -> Option<i32> {
+    let end = now() + deadline;
+    loop {
+        if let Some(code) = fs::read_to_string(result).ok().and_then(|text| text.trim().parse().ok()) {
+            return Some(code);
+        }
+        let left = end.saturating_duration_since(now());
+        if left.is_zero() {
+            return None;
+        }
+        pause(left.min(READ_EVERY));
+    }
+}
+
+/// Writes `script(line)` to `host.sh` in `folder`, both the person's alone (0700), and has `start` open it in the first
+/// of CANDIDATES that is there: one that is not (NotFound) moves on, any other error is the answer. Then waits up to
+/// `deadline` for its code. Output holds no stdout or stderr: what the line prints is the person's, in the terminal.
+pub fn run(
+    folder: &Path,
+    line: &str,
+    deadline: Duration,
+    start: &dyn Fn(&str, &str, &Path) -> io::Result<()>,
+) -> io::Result<Output> {
+    DirBuilder::new().recursive(true).mode(0o700).create(folder)?;
+    // An existing folder or script keeps its mode: one left open to others since is closed again.
+    fs::set_permissions(folder, Permissions::from_mode(0o700))?;
+    let script_path = folder.join("host.sh");
+    fs::write(&script_path, script(line))?;
+    fs::set_permissions(&script_path, Permissions::from_mode(0o700))?;
+    // An earlier run's code would read as this run's.
+    let result = folder.join("host.exit");
+    if let Err(error) = fs::remove_file(&result)
+        && error.kind() != io::ErrorKind::NotFound
+    {
+        return Err(error);
+    }
+    CANDIDATES
+        .iter()
+        .map(|(program, flag)| start(program, flag, &script_path))
+        .find(|started| !matches!(started, Err(error) if error.kind() == io::ErrorKind::NotFound))
+        .unwrap_or_else(|| Err(io::Error::new(io::ErrorKind::NotFound, NO_TERMINAL)))?;
+    let code = wait_result(&result, deadline, &Instant::now, &thread::sleep);
+    Ok(Output { code, timed_out: code.is_none(), ..Output::default() })
+}
+
+/// Starts `program flag script` in its own process group, so a signal to the app's group (a Ctrl-C where the app was
+/// started from a shell) does not close the person's terminal, and reaps it on a thread. How it ends says nothing:
+/// gnome-terminal's ends at once and leaves the window to its server, so the run's end is read from `host.exit` alone.
+pub fn start(program: &str, flag: &str, script: &Path) -> io::Result<()> {
+    let mut command = Command::new(program);
+    command.arg(flag).arg(script).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).process_group(0);
+    let mut child = {
+        let _spawning = cli::spawn_lock();
+        command.spawn()?
+    };
+    thread::spawn(move || child.wait());
+    Ok(())
+}
 
 #[cfg(test)]
 mod tests {
