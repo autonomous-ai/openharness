@@ -1,11 +1,11 @@
 import { createHash, randomBytes } from 'node:crypto'
-import { existsSync, mkdirSync, readdirSync, renameSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs'
 import { mkdir, realpath, rename, rm, stat } from 'node:fs/promises'
 import { isAbsolute, join } from 'node:path'
 import { z } from 'zod'
 import type { AgentEngine } from '../engines/types.js'
 import { errorKind } from '../lib/log.js'
-import { readPrivateStateFile, secureStateDirectory } from '../lib/secureState.js'
+import { atomicWriteFile, readPrivateStateFile, secureStateDirectory } from '../lib/secureState.js'
 import type { SessionInputDelivery } from '../lib/sessionInput.js'
 import { materializeInputs, snapshotArtifacts } from './artifacts.js'
 import { OrchestratorError, Run, RunId, StartSpec, TaskSpec, requireThat, validatePlan, type Task } from './model.js'
@@ -105,10 +105,7 @@ export class OrchestratorService {
     const timer = this.dirty.get(run.id)
     if (timer) clearTimeout(timer)
     this.dirty.delete(run.id)
-    const path = join(this.deps.stateDir, `${run.id}.json`)
-    const temporary = `${path}.${randomBytes(6).toString('hex')}.tmp`
-    writeFileSync(temporary, JSON.stringify(run), { mode: 0o600, flag: 'wx' })
-    renameSync(temporary, path)
+    atomicWriteFile(join(this.deps.stateDir, `${run.id}.json`), JSON.stringify(run), 'cache')
   }
   private changed(run: Run, durable = true): void {
     run.revision++
