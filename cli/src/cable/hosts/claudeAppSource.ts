@@ -108,7 +108,7 @@ export class ClaudeAppSource implements HostSource {
   private slowest: number | undefined
   private said: number | undefined
   private over = 0
-  /** Whether the last pass failed, so a run of failures says one line. */
+  /** Whether the last pass of this start failed, so a run of failures says one line. */
   private failed = false
 
   constructor(private readonly deps: ClaudeAppSourceDeps) {}
@@ -117,6 +117,7 @@ export class ClaudeAppSource implements HostSource {
     if (this.running) return
     this.running = true
     this.slowest = undefined
+    this.failed = false
     const { root } = this.deps
     // Held before the folders are listed, so a store made between the two is still heard.
     this.unwatch = this.deps.watch([root, dirname(root)], (file) => this.rootChanged(file))

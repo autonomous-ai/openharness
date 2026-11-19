@@ -100,7 +100,7 @@ export class CodexAppSource implements HostSource {
   /** The slowest read said this start, and the counts last said. */
   private slowest: number | undefined
   private said: string | undefined
-  /** Whether the last read failed, so a run of failures says one line. */
+  /** Whether the last read of this start failed, so a run of failures says one line. */
   private failed = false
 
   constructor(private readonly deps: CodexAppSourceDeps) {}
@@ -109,6 +109,7 @@ export class CodexAppSource implements HostSource {
     if (this.running) return
     this.running = true
     this.slowest = undefined
+    this.failed = false
     const there = this.deps.threads.there()
     if (there !== this.there) {
       this.there = there
