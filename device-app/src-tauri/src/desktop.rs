@@ -1,7 +1,9 @@
 //! The desktop app: installed, running, and opening it.
 
 use crate::types::Log;
+use std::ffi::OsStr;
 use std::io;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Arc;
 
@@ -30,9 +32,8 @@ impl DesktopApp for SystemDesktopApp {
 
 #[cfg(not(target_os = "macos"))]
 impl DesktopApp for SystemDesktopApp {
-    /// Not looked up off a Mac in this wave.
     fn installed(&self) -> bool {
-        false
+        desktop_app().is_some()
     }
 
     fn running(&self) -> bool {
@@ -51,6 +52,63 @@ impl DesktopApp for SystemDesktopApp {
             .filter_map(|process| process.exe())
             .map(|exe| exe.to_string_lossy().into_owned());
         running_among(std::env::consts::OS, executables)
+    }
+}
+
+/// The program an entry's `Exec=` line starts: a quoted first word unescaped, else the text up to the first space.
+/// The same reading as the desktop app's own `_execTarget`, which writes the entry.
+pub fn exec_target(entry: &str) -> Option<String> {
+    let value = entry.lines().find_map(|line| line.strip_prefix("Exec="))?.trim();
+    let Some(quoted) = value.strip_prefix('"') else {
+        return Some(value.split(' ').next().unwrap_or_default().to_string());
+    };
+    let mut target = String::new();
+    let mut chars = quoted.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '"' => return Some(target),
+            '\\' => target.push(chars.next()?),
+            c => target.push(c),
+        }
+    }
+    None
+}
+
+/// The AppImage the desktop app's launcher entry starts, while it is on disk. The entry is the one the desktop app
+/// and its installer write: `<data>/applications/harness.desktop`.
+pub fn linux_desktop_app(
+    data_home: Option<&OsStr>,
+    home: &Path,
+    read: &dyn Fn(&Path) -> Option<String>,
+    is_file: &dyn Fn(&Path) -> bool,
+) -> Option<PathBuf> {
+    // A relative XDG_DATA_HOME is invalid by the base directory spec, and ignored.
+    let data = match data_home.map(Path::new).filter(|data| data.is_absolute()) {
+        Some(data) => data.to_path_buf(),
+        None => home.join(".local").join("share"),
+    };
+    let target = PathBuf::from(exec_target(&read(&data.join("applications").join("harness.desktop"))?)?);
+    (target.is_absolute() && is_file(&target)).then_some(target)
+}
+
+/// The launcher the desktop app's per-user install leaves in `%LOCALAPPDATA%\Programs\Harness`.
+pub fn windows_desktop_app(local_app_data: Option<&OsStr>, is_file: &dyn Fn(&Path) -> bool) -> Option<PathBuf> {
+    let local = local_app_data.filter(|local| !local.is_empty())?;
+    let launcher = Path::new(local).join("Programs").join("Harness").join("Harness.exe");
+    is_file(&launcher).then_some(launcher)
+}
+
+/// This OS's desktop app, installed; macOS finds it by its bundle instead.
+pub fn desktop_app() -> Option<PathBuf> {
+    let is_file = |path: &Path| path.is_file();
+    match std::env::consts::OS {
+        "linux" => {
+            let read = |path: &Path| std::fs::read_to_string(path).ok();
+            let data_home = std::env::var_os("XDG_DATA_HOME");
+            linux_desktop_app(data_home.as_deref(), &std::env::home_dir()?, &read, &is_file)
+        }
+        "windows" => windows_desktop_app(std::env::var_os("LOCALAPPDATA").as_deref(), &is_file),
+        _ => None,
     }
 }
 
@@ -107,8 +165,6 @@ pub fn run_open(args: &[&str], log: Arc<dyn Log>) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::ffi::OsStr;
-    use std::path::{Path, PathBuf};
 
     #[test]
     fn the_names_come_from_the_desktop_packaging() {
