@@ -30,10 +30,10 @@ const FOOTER_START = /^\s*agent \S+(?: \([^)]*\))? \| session /
  * The title, the first line the TUI draws: `openclaw tui - <gateway url> - agent <id>[ (<name>)] - session <key>`. It
  * scrolls off a long conversation. A remote TUI still holds this machine's state database open, so only this URL tells
  * a local Gateway from one on another host. It word-wraps like the footer: a Harness key (`harness-<uuid>`) makes it
- * about 103 characters, so under that many columns the URL is read off its first line and the session off its lines
- * joined.
+ * about 103 characters, so under that many columns the URL is read off its first line, which may end with it or the
+ * dash after it (a loopback one at 40 columns), and the session off its lines joined.
  */
-const TITLE_START = /^\s*openclaw tui - (wss?:\/\/\S+) - agent /
+const TITLE_START = /^\s*openclaw tui - (wss?:\/\/\S+)(?: -|$)/
 const TITLE = /^openclaw tui - wss?:\/\/\S+ - agent ([A-Za-z0-9_-]{1,64})(?: \([^)]*\))? - session ([A-Za-z0-9._:-]{1,128})$/
 
 /**
@@ -87,10 +87,19 @@ const STATUS = {
   gatewayStarting: / \| gateway starting$/,
 }
 
+/** The status lines the TUI draws, a local runtime's stop aside. */
+const DRAWN = [STATUS.ready, STATUS.starting, STATUS.busy, STATUS.gatewayLost, STATUS.localStopped]
+
+/** A busy status line's spinner: pi-tui's `Loader` frames. */
+const SPINNER = /^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] /
+
 /** The local runtime's stop and its reason, as OpenClaw prints it: the line's wrapped continuations joined. */
 const LOCAL_RUNTIME_STOPPED = /^local runtime stopped(?:: (.*?))?(?: \| idle)?$/
-/** How far above the footer the stop line is looked for: a long reason wraps the status line onto the lines under it. */
-const STOPPED_LINES = 4
+/**
+ * How far above the footer the status line is read: a narrow pane wraps it, and a long stop reason, onto the lines
+ * under its first.
+ */
+const STATUS_LINES = 4
 const REASON_MAX = 200
 const CONTROL = /[\u0000-\u001f\u007f-\u009f]/g
 
@@ -105,7 +114,7 @@ const NO_TOKEN = /^Missing gateway auth token\./
  * A model's code block, a tool's output or an earlier TUI in the same pane can show the same words one column in too,
  * so only lines under a blank one, from this TUI's title down, are read as its own.
  */
-const NO_HISTORY = /^ (?:history failed: |session history not ready — wait or retry \/session$)/
+const NO_HISTORY = /^ (?:history failed: |session history not ready\b)/
 const HISTORY_FAILED = /^ history failed: /
 
 export type OpenclawPaneState = 'ready' | 'busy' | 'starting' | 'no-history' | 'no-gateway' | 'no-token' | 'remote' | 'local-stopped'
@@ -206,13 +215,29 @@ function readBox(lines: readonly string[]): Pick<OpenclawScreen, 'box' | 'boxHid
 }
 
 /**
- * The reason a local runtime stopped with, read off the non-blank lines above the footer (`above`, the status line
- * last): its stop line joined with the lines it wrapped onto. Null when there is none, or when the status line is
- * another of the TUI's own, so a stop line the model wrote above it in the chat is not taken for one.
+ * The status line, joined with the lines a narrow pane wrapped it onto. A busy one is every line under the blank line
+ * pi-tui's `Loader` draws above its spinner; any other is drawn right under the chat, so it is the fewest lines above
+ * the footer that read as a status. The blank line is looked for first: a busy line's last part can read as a status
+ * by itself (`reconnected`, `local ready`). Null when no lines read as one.
  */
-function readStopped(above: readonly string[]): string | null {
-  const said = above.at(-1) ?? ''
-  if ([STATUS.ready, STATUS.starting, STATUS.busy, STATUS.gatewayLost, STATUS.localStopped].some((status) => status.test(said))) return null
+function readStatus(lines: readonly string[], start: number): string | null {
+  const drawn = lines.slice(Math.max(0, start - STATUS_LINES), start).map((line) => line.trim())
+  const loader = drawn.lastIndexOf('')
+  if (loader >= 0 && SPINNER.test(drawn[loader + 1] ?? '')) return drawn.slice(loader + 1).join(' ')
+  for (let from = drawn.length - 1; from > loader; from--) {
+    const said = drawn.slice(from).join(' ')
+    if (DRAWN.some((status) => status.test(said))) return said
+  }
+  return null
+}
+
+/**
+ * The reason a local runtime stopped with, read off the non-blank lines above the footer (`above`, the status line
+ * last): its stop line joined with the lines it wrapped onto. Null when there is none, or when the status line ([said])
+ * is another of the TUI's own, so a stop line the model wrote above it in the chat is not taken for one.
+ */
+function readStopped(above: readonly string[], said: string): string | null {
+  if (DRAWN.some((status) => status.test(said))) return null
   const at = lastIndex(above, (line) => line.startsWith('local runtime stopped'))
   const stopped = at >= 0 ? LOCAL_RUNTIME_STOPPED.exec(above.slice(at).join(' ')) : null
   if (!stopped) return null
@@ -238,9 +263,9 @@ export function readOpenclawScreen(capture: string): OpenclawScreen {
   const shown = FOOTER.exec(footer)
   // A title on screen that cannot be read whole agrees with no footer.
   const agrees = titled < 0 || (!!title && !!shown && title[1] === shown[1] && title[2] === shown[2])
-  const above = lines.slice(0, start).map((line) => line.trim()).filter((line) => line).slice(-STOPPED_LINES)
-  const said = above.at(-1) ?? ''
-  const stopped = readStopped(above)
+  const above = lines.slice(0, start).map((line) => line.trim()).filter((line) => line).slice(-STATUS_LINES)
+  const said = readStatus(lines, start) ?? above.at(-1) ?? ''
+  const stopped = readStopped(above, said)
   const chat = systemLines(lines, Math.max(titled, 0), start)
   const state: OpenclawPaneState | null = remote ? 'remote'
     : stopped !== null || STATUS.localStopped.test(said) ? 'local-stopped'
