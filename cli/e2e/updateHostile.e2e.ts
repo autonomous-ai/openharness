@@ -367,7 +367,7 @@ describe('an update under hostile conditions', () => {
     await until('two downloads cut short', () => server.downloadsOf('43.0.3') >= 2, 90_000)
     expect(await machine.version()).toBe('43.0.2')
     await machine.settled('43.0.3', { rejected: [] })
-    expect(machine.log().slice(from)).toContain('sha256 mismatch')
+    expect(machine.log().slice(from)).toContain('[update] 43.0.3 does not match its manifest (DigestMismatchError)')
   }, 300_000)
 
   /** A build that cannot be installed must cost one download now and then, not one at every check. */
