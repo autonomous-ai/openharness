@@ -6,7 +6,8 @@
  *
  * The store is the app's, written while it runs, so nothing here writes it: no file is made, changed or locked, and
  * the app sees no reader. A file caught mid-write, too large, a link, or with a field of the wrong form is skipped and
- * counted, and read again at its next change.
+ * counted, and read again at its next change; one whose read failed is skipped and counted, and read again at the next
+ * read.
  *
  * A working turn writes its file several times a second and a person can have hundreds of sessions, so each file's
  * size and mtime are held and only a new or changed file is parsed, and a read walks the files newest first and stops
@@ -15,7 +16,7 @@
  * Nothing here logs: the source (claudeAppSource.ts) says the counts, in log lines of fixed words. No call rejects.
  */
 import { constants, type Stats } from 'node:fs'
-import { lstat, open, readdir } from 'node:fs/promises'
+import { lstat, open, readdir, type FileHandle } from 'node:fs/promises'
 import { join } from 'node:path'
 import { CLAUDE_SESSION } from './claudeApp.js'
 import { MAX_CWD } from './herdrSource.js'
@@ -126,23 +127,28 @@ function placeOf(file: Held): number {
 /** The newest sort times, at most as many as are listed. */
 const newest = (times: number[]): number[] => times.sort((a, b) => b - a).slice(0, MAX_LISTED)
 
-/** A file's text, or none: a link is never followed, a FIFO never waited on, and no more than 1 MiB + 1 byte read. */
+/** A file's text, or none for a file refused: a link is never followed, a FIFO never waited on, and no more than 1 MiB +
+ *  1 byte read. A read that fails (no access, too many open files, an I/O error) rejects: it says nothing of the file,
+ *  so the caller tries it again. */
 async function textOf(path: string): Promise<string | undefined> {
+  let handle: FileHandle
   try {
-    const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK)
-    try {
-      // What was opened is checked again: the name can have been swapped since its lstat.
-      const stats = await handle.stat()
-      if (!stats.isFile() || stats.size > MAX_FILE_BYTES) return undefined
-      // One byte past its size tells a file that grew since its stat.
-      const buffer = Buffer.alloc(stats.size + 1)
-      const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0)
-      return bytesRead > stats.size ? undefined : buffer.toString('utf8', 0, bytesRead)
-    } finally {
-      await handle.close()
-    }
-  } catch {
-    return undefined
+    handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK)
+  } catch (error) {
+    // O_NOFOLLOW's refusal of a link.
+    if ((error as NodeJS.ErrnoException).code === 'ELOOP') return undefined
+    throw error
+  }
+  try {
+    // What was opened is checked again: the name can have been swapped since its lstat.
+    const stats = await handle.stat()
+    if (!stats.isFile() || stats.size > MAX_FILE_BYTES) return undefined
+    // One byte past its size tells a file that grew since its stat.
+    const buffer = Buffer.alloc(stats.size + 1)
+    const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0)
+    return bytesRead > stats.size ? undefined : buffer.toString('utf8', 0, bytesRead)
+  } finally {
+    await handle.close()
   }
 }
 
@@ -263,7 +269,15 @@ export class ClaudeAppStore {
           break
         }
         parsed++
-        gave = sessionOf(file, await textOf(file.path))
+        let text: string | undefined
+        try {
+          text = await textOf(file.path)
+        } catch {
+          // Not held: a failed read is tried again at the next read, within its bound of parses.
+          skipped++
+          continue
+        }
+        gave = sessionOf(file, text)
         file.parsed = { size: file.size, mtime: file.mtime, gave }
       }
       if (gave === 'archived') continue
