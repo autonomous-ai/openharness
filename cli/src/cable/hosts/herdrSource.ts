@@ -65,7 +65,6 @@ export interface HerdrSourceDeps {
   now(): number
   monotonic(): number
   uuid(): string
-  platform: NodeJS.Platform
   log(line: string): void
   count(what: 'herdr' | 'busy' | 'waiting' | 'too-long' | 'no-answer'): void
 }

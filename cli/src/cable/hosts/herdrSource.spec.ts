@@ -81,7 +81,6 @@ describe.skipIf(process.platform === 'win32')('the herdr source (docs/specs/2026
       now: () => wall,
       monotonic: () => mono,
       uuid: () => `u${++ids}`,
-      platform: process.platform,
       log: (line) => {
         log.push(line)
         settle()
@@ -1000,17 +999,6 @@ describe.skipIf(process.platform === 'win32')('the herdr source (docs/specs/2026
     s.source.start()
     await listRead(1)
     expect(subscribe).toHaveBeenCalledTimes(1)
-  })
-
-  // The client there dials herdr's pipe and stamps its marker (herdrClient.ts): the source waits on it as on a socket.
-  it('on Windows start starts the attempts', async () => {
-    server.agents = [agent('w1:p1')]
-    const s = setup({ platform: 'win32' })
-    const subscribe = vi.spyOn(s.client, 'subscribe')
-    s.source.start()
-    expect(subscribe).toHaveBeenCalledTimes(1)
-    await listRead(1)
-    await s.until(() => row(s, 'w1:p1') !== undefined)
   })
 
   it('voice', async () => {

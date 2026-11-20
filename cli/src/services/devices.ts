@@ -703,8 +703,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     await source.scanOpen()
   }
   /** herdr's agents, hook or no hook, listed and followed over herdr's own socket (docs/specs/2026-11-16-device-herdr.md).
-   *  It runs only while a dial is attached, as the open scan does, behind the observed agents' switch, and never on
-   *  Windows, where herdr's socket is a named pipe (herdrSource.ts). */
+   *  It runs only while a dial is attached, as the open scan does, behind the observed agents' switch, on every platform:
+   *  on Windows over herdr's named pipe (herdrClient.ts). */
   const herdr = observed ? new HerdrSource({
     client: herdrClient,
     watch: (changed) => watchSocket(herdrAt, changed),
@@ -716,7 +716,6 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     now: Date.now,
     monotonic,
     uuid: randomUUID,
-    platform: apps.platform,
     log,
     count: voiced,
   }) : null

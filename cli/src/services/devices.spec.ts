@@ -6338,8 +6338,16 @@ describe('herdr\'s agents, over its socket (docs/specs/2026-11-16-device-herdr.m
     nothingAsked(withHerdr())
   })
 
-  it('on Windows nothing is subscribed or watched', () => {
-    nothingAsked(withHerdr({ orca: { ...onMac, platform: 'win32' } }))
+  // The client there speaks herdr's pipe, and stamps its marker (herdrClient.ts).
+  it('on Windows herdr is subscribed, and with no marker its folder watched, as on a Mac', () => {
+    const { port, herdr } = withHerdr({ orca: { ...onMac, platform: 'win32' } })
+    attach(port)
+    expect(herdr.subs.map(({ entries }) => entries)).toEqual([[{ type: 'pane.agent_detected' }, { type: 'pane.closed' }, { type: 'pane.exited' }]])
+    seen.host.watching!(false)
+    herdr.stamp = undefined
+    attach(port)
+    expect(herdr.subs).toHaveLength(1)
+    expect(watched.calls).toEqual([[herdrClientDeps(), expect.any(Function)]])
   })
 
   // With no herdr installed, no folder is watched (~/.config, or the home folder, recursive on macOS) for a socket that
