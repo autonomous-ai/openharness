@@ -99,7 +99,7 @@ pub fn runs(os: &str) -> &'static [Run] {
 }
 
 /// Runs one of an install's runs, behind a trait so no test runs the script or reaches the network. `sink` gets each
-/// line as it arrives; a run in a terminal hands it none.
+/// line as it arrives; a run in a terminal hands it none, and is NotFound where there is no terminal.
 pub trait Shell: Send + Sync {
     fn run(&self, run: &Run, deadline: Duration, sink: &mut dyn FnMut(&str)) -> io::Result<Output>;
 }
@@ -161,7 +161,8 @@ pub fn system_shell(data: PathBuf) -> SystemShell {
 /// `runs(os)`, in order, each within INSTALL_DEADLINE. A unix line's exit code is `/bin/sh`'s, not curl's: a curl
 /// that fails hands sh nothing, and sh exits 0. So an install counts only when `cli_there()` finds a CLI after its runs.
 /// Err holds the last lines of the run that failed, or of the last run. `on_step` is told each step as it changes: a
-/// run in a terminal is FINISH_IN_TERMINAL, then GETTING_READY once it has ended well.
+/// run in a terminal is FINISH_IN_TERMINAL, then GETTING_READY once it has ended well, or at once where there is no
+/// terminal and it runs behind the screen.
 pub fn install(
     os: &str,
     shell: &dyn Shell,
@@ -173,28 +174,46 @@ pub fn install(
     let mut step = None;
     for run in runs(os) {
         let flag = run.flag;
-        let in_terminal = run.place == Place::Terminal;
-        if in_terminal {
+        let terminal = (run.place == Place::Terminal).then(|| {
             step = Some(FINISH_IN_TERMINAL);
             on_step(FINISH_IN_TERMINAL);
-        }
-        let mut step_lines = 0usize;
-        let mut sink = |raw: &str| {
-            let Some(line) = clean(raw) else { return };
-            if is_step_line(os, &line) {
-                step_lines = step_lines.saturating_add(1);
-                if step_lines <= STEP_LINES_LOGGED {
-                    log.line(&format!("install: {}", logged(&line, STEP_LINE_CHARS)));
-                } else if step_lines == STEP_LINES_LOGGED + 1 {
-                    log.line(&format!("install: {flag} more step lines not logged"));
-                }
+            shell.run(run, INSTALL_DEADLINE, &mut |_| {})
+        });
+        // No terminal here: the line runs behind the screen, as on macOS, and where it needs a password install.sh's
+        // own lines say what to run.
+        let terminal = match terminal {
+            Some(Err(error)) if error.kind() == io::ErrorKind::NotFound => {
+                log.line(&format!("install: {flag} no terminal; run here"));
+                step = Some(GETTING_READY);
+                on_step(GETTING_READY);
+                None
             }
-            if let Some(next) = step_of(os, &line).filter(|next| step != Some(*next)) {
-                step = Some(next);
-                on_step(next);
-            }
+            terminal => terminal,
         };
-        let output = shell.run(run, INSTALL_DEADLINE, &mut sink).map_err(|error| {
+        let in_terminal = terminal.is_some();
+        let output = match terminal {
+            Some(output) => output,
+            None => {
+                let mut step_lines = 0usize;
+                let mut sink = |raw: &str| {
+                    let Some(line) = clean(raw) else { return };
+                    if is_step_line(os, &line) {
+                        step_lines = step_lines.saturating_add(1);
+                        if step_lines <= STEP_LINES_LOGGED {
+                            log.line(&format!("install: {}", logged(&line, STEP_LINE_CHARS)));
+                        } else if step_lines == STEP_LINES_LOGGED + 1 {
+                            log.line(&format!("install: {flag} more step lines not logged"));
+                        }
+                    }
+                    if let Some(next) = step_of(os, &line).filter(|next| step != Some(*next)) {
+                        step = Some(next);
+                        on_step(next);
+                    }
+                };
+                shell.run(&Run { place: Place::Background, ..*run }, INSTALL_DEADLINE, &mut sink)
+            }
+        }
+        .map_err(|error| {
             log.line(&format!("install: {flag} could not start: {error}"));
             vec![error.to_string()]
         })?;
