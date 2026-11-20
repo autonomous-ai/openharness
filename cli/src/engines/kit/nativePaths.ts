@@ -37,6 +37,9 @@ export function verifyNativePathFacts(facts: readonly NativePathFact[], budget =
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return nativeUnavailable('the retained route became unreadable')
       info = null
     }
+    // A newly created leaf needs its caller's file/alias refusal, before the
+    // generic route or within-fence device comparison hides that distinction.
+    if (fact.identity === null && info !== null) checkFile?.(fact.path, info)
     // Saved facts cross reboots; two passes of one live fence must also keep the device stable.
     if (devices) {
       const device = info?.dev ?? null

@@ -26,7 +26,7 @@ export interface HookPreparationProof {
 const MAX_BYTES = 1024 * 1024
 const missing = (error: unknown) => (error as NodeJS.ErrnoException).code === 'ENOENT'
 type HookFileVerifier = (directories?: Map<string, BigIntStats>) => void
-const completeHookFiles = new WeakMap<HookFileVerifier, { facts: readonly NativePathFact[]; target: string; stamp: string | null }>()
+const hookFileFacts = new WeakMap<HookFileVerifier, { facts: readonly NativePathFact[]; target: string; stamp: string | null }>()
 
 /**
  * The directories each attempt has flushed. On macOS every fsync is F_FULLFSYNC, a full drive flush (25-35 ms on an
@@ -209,7 +209,11 @@ export function inspectHookFile(file: string, defaultMode = 0o666) {
     throw new HookPreparationHeld('the configuration parent exceeds its path limit')
   }
   verify()
-  if (complete) completeHookFiles.set(verify, { facts: retained, target, stamp: before })
+  // The walk stops at its first absent component. A null target therefore has
+  // existing parents; keep that fact so a new file or alias invalidates the observation.
+  const fixedRoute = complete || (facts.some(fact => fact.path === target && fact.identity === null)
+    && facts.every(fact => fact.identity !== null || fact.path === target))
+  if (fixedRoute) hookFileFacts.set(verify, { facts, target, stamp: before })
   return {
     content, directory, mode, stamp: before,
     verify, prepare,
@@ -329,9 +333,9 @@ export function hookFileVerifier(files: readonly { observed: ReturnType<typeof i
 
 function observationVerifier(checks: readonly HookFileVerifier[]): (() => void) | undefined {
   if (!checks.length || checks.length > 32) return undefined
-  const observed = checks.map(check => completeHookFiles.get(check))
+  const observed = checks.map(check => hookFileFacts.get(check))
   if (observed.some(file => !file)) return undefined
-  if (checks.length === 1) return checks[0]
+  if (checks.length === 1 && observed[0]!.stamp !== null) return checks[0]
   const union = new Map<string, NativePathFact>()
   const versions = new Map<string, string | null>()
   for (const file of observed) {
@@ -349,16 +353,21 @@ function observationVerifier(checks: readonly HookFileVerifier[]): (() => void) 
   const facts = [...union.values()], reverse = [...facts].reverse()
   const checkFile = (path: string, info: BigIntStats | null) => {
     const expected = versions.get(path)
+    if (expected === null && info?.isSymbolicLink()) {
+      throw new HookPreparationHeld('the settings route gained an unconfirmed alias')
+    }
     if (expected !== undefined && (info ? version(info) : null) !== expected) {
       throw new HookPreparationHeld('the settings file changed before publication')
     }
   }
+  const checkAbsentFile = observed.some(file => file!.stamp === null)
+    ? (path: string, info: BigIntStats | null) => { if (versions.get(path) === null) checkFile(path, info) } : undefined
   // Close/Resume profiles show repeated reconstruction of complete sibling routes.
   // The second pass checks file versions while walking back to their ancestors:
   // a later file read must not leave an already-checked shared ancestor stale.
   return () => {
     const budget = new NativeEvidenceBudget(), devices = new Map<string, bigint | null>()
-    verifyNativePathFacts(facts, budget, devices)
+    verifyNativePathFacts(facts, budget, devices, checkAbsentFile)
     verifyNativePathFacts(reverse, budget, devices, checkFile)
     budget.step()
   }

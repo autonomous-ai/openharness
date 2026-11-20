@@ -96,7 +96,8 @@ it.each(callers)('$name shares only provisional sibling reads and starts a fresh
 })
 
 it.each(callers.flatMap(caller => ['file', 'parents'].map(missing => ({ ...caller, missing }))))(
-  '$name reuses observed ancestry for missing $missing and still starts a fresh pass', async ({ name, missingReads: reads, missing }) => {
+  '$name reuses observed ancestry for missing $missing and still starts a fresh pass', async ({ name, reads: fixedReads, missingReads, missing }) => {
+    const reads = missing === 'file' ? fixedReads : missingReads
     const fixture = siblings()
     for (const file of fixture.files) rmSync(missing === 'file' ? file : dirname(file), { recursive: true })
     const files = missing === 'file' ? fixture.files : fixture.files.map(file => join(dirname(file), 'unwritten/deeper/config.json'))
