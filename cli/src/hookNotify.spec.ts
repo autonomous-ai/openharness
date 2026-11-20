@@ -4,8 +4,9 @@ import { createServer, type IncomingHttpHeaders } from 'http'
 import { connect as netConnect, createServer as createNetServer } from 'net'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
-import { dirname, join } from 'path'
+import { dirname, join, win32 } from 'path'
 import { fileURLToPath, pathToFileURL } from 'url'
+import { runInNewContext } from 'vm'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { APP_BUNDLES } from './cable/hosts/hostDetect.js'
 import { observedTitle } from './cable/hosts/observedTitle.js'
@@ -2445,6 +2446,21 @@ describe('the hook finds Harness\'s folders by the rule', () => {
     const home = homeWith('.harness')
     const env = asOn('linux', home, { ADAPTER_DATA_DIR: 'data' })
     expect(await reachesData(join(home, 'data'), env, shortHome())).toBe(true)
+  })
+})
+
+// Node picks its path rules as it starts, so a hook run with a preload's win32 platform still joins as POSIX does: the
+// hook's own homePath is run here, from its text, with Windows paths and a Windows home.
+describe('the hook\'s Harness folder override, with Windows paths', () => {
+  const hookHomePath = (): ((value: string) => string) => {
+    const source = /^function homePath\(value\) \{\n[\s\S]*?\n\}$/m.exec(readFileSync(HOOK, 'utf8'))?.[0]
+    if (!source) throw new Error('hook/notify.mjs has no homePath')
+    return runInNewContext(`(${source})`, { ...win32, homedir: () => 'C:\\Users\\me' }) as (value: string) => string
+  }
+
+  it('is under the home: relative, root-relative on its drive and drive-relative; absolute as given; empty as it is', () => {
+    expect(['data', '\\data', 'C:data', 'D:\\data', ''].map(hookHomePath()))
+      .toEqual(['C:\\Users\\me\\data', 'C:\\data', 'C:\\Users\\me\\data', 'D:\\data', ''])
   })
 })
 
