@@ -96,8 +96,18 @@ void main() {
     );
   });
 
+  // A folder from the root of no named drive is on whichever drive Desktop
+  // works in: not where the installer put it.
   test('a registered folder that is not absolute is not the place', () {
-    for (final registered in [null, '', '""', r'Apps\Harness Device']) {
+    for (final registered in [
+      null,
+      '',
+      '""',
+      r'Apps\Harness Device',
+      r'\Harness Device',
+      '/Harness Device',
+      r'D:Harness Device',
+    ]) {
       expect(
         deviceAppPlace(
           platform: TargetPlatform.windows,
@@ -115,6 +125,7 @@ void main() {
       <String, String>{},
       {'LOCALAPPDATA': ''},
       {'LOCALAPPDATA': r'AppData\Local'},
+      {'LOCALAPPDATA': r'\Users\p\AppData\Local'},
     ]) {
       expect(
         deviceAppPlace(
