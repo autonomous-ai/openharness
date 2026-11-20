@@ -61,6 +61,18 @@ it('makes its Node at the first place, starts it once, and links it into every t
   expect(statSync(node).ino).not.toBe(statSync(realpathSync(process.execPath)).ino)
 })
 
+// Workers place their first Node at once: the first whole one in place stays, so every link is of one file, and
+// Windows never has to replace a file another test may be running.
+it('keeps the Node another worker put in place first, and leaves none of its own', () => {
+  const folder = scratch()
+  const node = runNode(folder, undefined, []), path = join(folder, 'test', 'node')
+  const theirs = 'another worker\'s Node'
+  placeNode(path, [], undefined, node, () => writeFileSync(node, theirs))
+  expect(statSync(node).size).toBe(theirs.length)
+  expect(statSync(path).ino).toBe(statSync(node).ino)
+  expect(readdirSync(dirname(node))).toEqual([basename(node)])
+})
+
 it('says which Node it could not make, and leaves none in its place', () => {
   const folder = scratch()
   const node = runNode(folder, undefined, []), path = join(folder, 'test', 'node')
