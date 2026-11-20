@@ -126,14 +126,15 @@ fn the_windows_and_linux_icons_are_the_macos_drawings() {
     {
         assert_drawing(name, &bytes(name), size, kind);
     }
-    // An ICO is a 6-byte header with the image count at 4, a 16-byte entry per image (width at 0, where 0 means 256;
-    // length at 8; offset at 12), then the images, each a PNG.
+    // An ICO is a 6-byte header with the image count at 4, a 16-byte entry per image (width at 0 and height at 1, where
+    // 0 means 256; length at 8; offset at 12), then the images, each a PNG.
     let ico = bytes("icons/icon.ico");
     let u32_at = |i: usize| u32::from_le_bytes(ico[i..i + 4].try_into().unwrap()) as usize;
     let count = u16::from_le_bytes([ico[4], ico[5]]) as usize;
     let mut sizes = Vec::new();
     for entry in (0..count).map(|i| 6 + 16 * i) {
         let size = if ico[entry] == 0 { 256 } else { ico[entry] as usize };
+        assert_eq!(ico[entry + 1], ico[entry], "icons/icon.ico {size} px entry: height differs from width");
         let kind = match size {
             16 | 24 | 48 => "ic04",
             32 => "ic05",
