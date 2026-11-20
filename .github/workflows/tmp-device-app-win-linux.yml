@@ -106,10 +106,12 @@ jobs:
         working-directory: device-app/ui
         run: npm ci --no-audit --no-fund
       - uses: dtolnay/rust-toolchain@stable
+      # Restored, never saved: each leg's Tauri tree would push other components' caches out of the repository's 10 GB.
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: device-app/src-tauri
           shared-key: device-app-tmp-e2e-${{ matrix.runner }}
+          save-if: false
       - name: Tauri CLI
         run: cargo install tauri-cli --version 2.12.4 --locked
       # A debug build reads HARNESS_DEVICE_CLI, the fake CLI linux.sh points it at.
@@ -143,10 +145,12 @@ jobs:
         working-directory: device-app/ui
         run: npm ci --no-audit --no-fund
       - uses: dtolnay/rust-toolchain@stable
+      # Restored, never saved, as linux-e2e's.
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: device-app/src-tauri
           shared-key: device-app-tmp-e2e-${{ matrix.runner }}
+          save-if: false
       - name: Tauri CLI
         run: cargo install tauri-cli --version 2.12.4 --locked
       # A debug build reads HARNESS_DEVICE_CLI, the fake CLI windows.ps1 points it at.
@@ -161,6 +165,7 @@ jobs:
           retention-days: 3
           if-no-files-found: error
       - name: End to end
+        shell: pwsh
         run: |
           $setup = @(Get-ChildItem device-app/src-tauri/target/debug/bundle/nsis/*-setup.exe)
           if ($setup.Count -ne 1) { throw "one installer, not $($setup.Count)" }
@@ -200,10 +205,12 @@ jobs:
           cache: npm
           cache-dependency-path: device-app/ui/package-lock.json
       - uses: dtolnay/rust-toolchain@stable
+      # Restored, never saved, as linux-e2e's.
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: device-app/src-tauri
           shared-key: device-app-tmp-update-${{ matrix.runner }}
+          save-if: false
       # The release's own setup: this OS's Rust targets and packages, the Tauri CLI, the window's packages, minisign.
       - name: Release tools
         shell: bash
