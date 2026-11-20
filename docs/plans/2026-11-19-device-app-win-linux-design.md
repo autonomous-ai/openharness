@@ -201,8 +201,11 @@ stdin (`front_line`, `FrontFeed`), never logged. The CLI already maps exe names 
 
 ### 7. Tray, icons, window, About, single instance (`main.rs`, `tauri.conf.json`, `icons/`)
 
-- **Icons:** macOS keeps its template icon. Windows and Linux get two PNG variants of the same glyph: a dark one for
-  light panels and a light one for dark panels. Windows picks by `HKCU\...\Themes\Personalize\SystemUsesLightTheme` and
+- **Icons:** every OS uses the current artwork from main (#4443, the Pixel H): `icon.png` on the Harness green tile,
+  and `tray.png`, one 36×36 template image (black, alpha only). macOS keeps the template. Windows and Linux do not tint
+  a template image, so they draw the same Pixel H in the colour that reads on the bar (named difference):
+  - `tray.png` itself (black) on a light bar;
+  - `tray-light.png`, the same alpha in white, on a dark bar. Windows picks by `HKCU\...\Themes\Personalize\SystemUsesLightTheme` and
   follows changes pushed by `RegNotifyChangeKeyValue` (no poll); when the key cannot be followed, the log has
   `tray: theme not followed` and the icon stays the dark taskbar's. Linux uses the light glyph (named difference). The
   bundle gets `icon.ico` (Windows) and the PNG sizes Linux needs, generated from the existing `icon.png`.
@@ -269,6 +272,28 @@ stdin (`front_line`, `FrontFeed`), never logged. The CLI already maps exe names 
 `ci.yml`'s `device-app-checks` gains a `windows-latest` leg running `cargo test --locked --lib` (today Linux only). No
 new workflow. The end-to-end checks below that need a long build run in a temporary workflow if the plan needs one.
 
+### 10. Getting the app: the website and Desktop (`website/`, `desktop/lib/devices/`)
+
+Added after the final review (Ken, 2026-11-20): a Windows or Linux person must have a way to get the app, as on
+macOS, or the release is a partial ship. The same pull request carries both:
+
+- **Website.** `/device/download-windows` and `/device/download-linux`, made like `/device/download-macos`: the same
+  fixed manifest URL, the same allowed prefixes, and a 302 to the manifest's URL for that platform. The arch comes
+  from the request when it can be told, and is x64 otherwise. `/device` gets the matching buttons, with 1-2 word copy.
+  Until a release carries Windows or Linux, the routes answer as `/device/download-macos` does before its first
+  release.
+- **Desktop.** On Windows and Linux, Desktop offers and installs Harness Device the way it does on macOS: the same
+  trigger (#4426: a dial is plugged in), the same screens and copy. Only these steps change per OS:
+  - `device_app_manifest.dart` reads the platform's keys (`device-windows-x64`/`-arm64`, `device-linux-x64`/`-arm64`).
+  - `device_app_installer.dart` downloads the file and checks its sha256 and size, then installs it:
+    - Windows: runs the NSIS installer silently (`/S`, per user, no admin).
+    - Linux: puts the AppImage in place and makes it executable.
+  - It then starts the app.
+  - Desktop's probe finds an installed and running copy on each OS.
+
+  The plan names the AppImage's place and the probe's rule. A Flutter test clicks through the flow as a person does.
+  The design doc and gallery change only if the UI does.
+
 ## Named differences (OS limits)
 
 | Difference | Windows | Linux | Why |
@@ -277,7 +302,7 @@ new workflow. The end-to-end checks below that need a long build run in a tempor
 | App in front | WinEvent hook | X11, sway, Hyprland; **none on GNOME/KDE Wayland** | GNOME and KDE Wayland give no other program the focused window |
 | Tray click refresh | as macOS | from the 5 s tick, same throttles | Tauri emits no tray click on Linux (menu only) |
 | Tray shown at all | always | needs a StatusNotifier host; **stock GNOME needs the AppIndicator extension** (Ubuntu ships it) | GNOME has no tray of its own; the app logs `tray: no host` once when no watcher has come on the session bus within 30 s of start |
-| Tray icon colour | follows light/dark | light glyph | no common way to read a panel's colour on Linux |
+| Tray icon colour | the Pixel H in black on a light taskbar, white on a dark one, following the theme | the Pixel H in white | Windows and Linux do not tint a template image as macOS does; Linux has no common way to read a panel's colour |
 | Self-update | NSIS passive install | AppImage only; a dev run does not update | the updater replaces an AppImage, not a distro package |
 | Login item | Run key + Startup Apps toggle | the shared `harnessd.desktop` | one entry with the CLI (dial-linux) |
 | Install halves | one `install.ps1 -Desktop` run | `--host` in a visible terminal, as Desktop | install.ps1 has no host half; tmux on Linux needs `sudo apt` |
