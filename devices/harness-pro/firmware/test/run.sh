@@ -138,6 +138,7 @@ python3 "$here/test_pro_app.py"
 python3 "$here/test_pro_hello.py"
 
 python3 "$here/test_logos.py"
+python3 "$here/test_app_icons.py"
 
 # The voice path: pro_app's gate and effects over the real audio/pro_voice.c state machine, with the recorder, the
 # cable and the clock as host fakes (the 9 replays of the round firmware plus the link-drop and timer cases).
