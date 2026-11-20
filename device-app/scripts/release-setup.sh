@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 # Installs what release-build.sh and release-check.sh need on a fresh macOS, Linux or Windows runner (RELEASE.md).
+# `release-setup.sh tauri-cli` installs only Rust and the Tauri CLI, for the job that makes the CLI the Windows signing
+# job runs, where no app code may run.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -9,6 +11,12 @@ app="$(dirname "$here")"
 if [[ "${GITHUB_ACTIONS:-}" != true ]]; then
   echo "release-setup: runs on GitHub Actions only (it installs tools)" >&2
   exit 1
+fi
+
+mode="${1:-}"
+if ! [[ $# -le 1 && ("$mode" == "" || "$mode" == tauri-cli) ]]; then
+  echo "usage: release-setup.sh [tauri-cli]" >&2
+  exit 2
 fi
 
 case "$(uname -s)" in
@@ -22,7 +30,12 @@ case "$(uname -s)" in
     ;;
 esac
 
+# The version that wrote Cargo.lock.
+tauri_cli=(cargo install tauri-cli --version 2.12.4 --locked)
 rustup toolchain install stable --profile minimal
+if [[ "$mode" == tauri-cli ]]; then
+  exec "${tauri_cli[@]}"
+fi
 case "$os" in
   macos) rustup target add aarch64-apple-darwin x86_64-apple-darwin ;;
   # Tauri's Linux packages: the webview, the tray, SVG icons, and libxdo, which its menu crate links; `file`, which its
@@ -35,8 +48,7 @@ case "$os" in
   # Both arches build on one x64 runner.
   windows) rustup target add x86_64-pc-windows-msvc aarch64-pc-windows-msvc ;;
 esac
-# The version that wrote Cargo.lock.
-cargo install tauri-cli --version 2.12.4 --locked
+"${tauri_cli[@]}"
 (cd "$app/ui" && npm ci --no-audit --no-fund)
 # release-check.sh verifies the update signature with it. Neither Ubuntu 22.04's apt nor any package source on the
 # Windows runner has it: there it is minisign's own release, pinned by its sha256. Each pin is the sha256 of an asset

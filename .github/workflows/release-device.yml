@@ -7,9 +7,11 @@ run-name: Harness Device ${{ inputs.publish && 'release' || 'candidate' }} ${{ i
 # The build's code (crates' build scripts, npm packages) runs before any secret exists. `build` holds the Apple and
 # updater secrets, and `build-linux` the updater key, only in the steps after `Compile`, on the same runner (code that
 # means harm could leave something for a later step). Windows compiles in `build-windows`, with no secret and no
-# identity, and is signed in `sign-windows`, which compiles and installs nothing. Only `sign-windows` may mint the OIDC
-# token Azure's signing needs, and only `publish` the one a GCS credential needs, so no job that runs the build's code
-# can get either.
+# identity, and is signed in `sign-windows`, which compiles and installs nothing: the Tauri CLI it runs comes from
+# `tauri-cli-windows`, where no app code runs, and the Windows sums publish checks are taken there too. Only
+# `sign-windows` and `publish` may mint an OIDC token, and neither runs the build's code. Which credential each token
+# gets is the identity providers' to decide: Azure's federated credential trusts the `release` environment, which only
+# `sign-windows` is in; GCP's workload identity provider must refuse that environment's subject.
 
 on:
   workflow_dispatch:
@@ -199,9 +201,44 @@ jobs:
         if: always()
         run: security delete-keychain "$KEYCHAIN_PATH" || true
 
+  # The Tauri CLI sign-windows runs, made where no app code runs: the app's code is not checked out, and a crate's build
+  # script or an npm package that could replace a CLI on a runner never runs here. No secret and no identity.
+  tauri-cli-windows:
+    needs: version
+    if: inputs.platforms == 'all'
+    runs-on: windows-latest
+    # The Tauri CLI's install takes about 10 minutes on Windows.
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            /device-app/scripts/
+          sparse-checkout-cone-mode: false
+
+      - name: Install the Tauri CLI
+        run: bash device-app/scripts/release-setup.sh tauri-cli
+
+      - name: Take the Tauri CLI
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Path tauri | Out-Null
+          Copy-Item -LiteralPath (Get-Command cargo-tauri).Source -Destination tauri
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tauri-cli-windows
+          path: tauri
+          retention-days: 1
+          if-no-files-found: error
+
   # Windows compiles here, with no secret and no identity: no environment, no id-token. Both arches build on x64, as
-  # the signing action does not run on Windows Arm. The Tauri CLI built here goes on with the exe, so sign-windows
-  # installs nothing.
+  # the signing action does not run on Windows Arm.
   build-windows:
     needs: version
     if: inputs.platforms == 'all'
@@ -243,14 +280,13 @@ jobs:
       - name: Compile
         run: bash device-app/scripts/release-build.sh compile "$VERSION"
 
-      # In one folder, so the artifact holds the two files and none of the folders above them.
-      - name: Take the exe and the Tauri CLI
+      # In a folder of its own, so the artifact holds the exe and none of the folders above it.
+      - name: Take the exe
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           New-Item -ItemType Directory -Path unsigned | Out-Null
           Copy-Item -LiteralPath "device-app/src-tauri/target/$env:DEVICE_TARGET/release/harness-device.exe" -Destination unsigned
-          Copy-Item -LiteralPath (Get-Command cargo-tauri).Source -Destination unsigned
 
       - uses: actions/upload-artifact@v4
         with:
@@ -264,7 +300,7 @@ jobs:
   # build script or package runs here. The app's exe is signed before NSIS packs it, the installer after, and the
   # update signature last, so it covers the bytes that ship.
   sign-windows:
-    needs: [version, build-windows]
+    needs: [version, tauri-cli-windows, build-windows]
     runs-on: windows-latest
     timeout-minutes: 30
     environment: release
@@ -294,13 +330,17 @@ jobs:
           pattern: device-windows-*-unsigned
           path: unsigned
 
-      # Both arches' jobs built the same x64 Tauri CLI. Each exe goes in a folder of its own: they share a name, and the
-      # signing action signs every unsigned program under the folder it is given.
+      - uses: actions/download-artifact@v4
+        with:
+          name: tauri-cli-windows
+          path: tauri
+
+      # Each exe goes in a folder of its own: they share a name, and the signing action signs every unsigned program
+      # under the folder it is given.
       - name: Take the Tauri CLI and the exes
         run: |
           set -euo pipefail
-          mkdir tauri sign
-          mv unsigned/device-windows-x64-unsigned/cargo-tauri.exe tauri/
+          mkdir sign
           cygpath -w "$PWD/tauri" >>"$GITHUB_PATH"
           for arch in x64 arm64; do
             mkdir "sign/$arch"
@@ -353,14 +393,20 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: bash device-app/scripts/release-build.sh sign-update "$VERSION" out
 
+      # Here, as the files are made: `publish` refuses files that differ from these. Windows runners have python, not
+      # python3.
+      - name: Record the checksums
+        run: python device-app/scripts/device-manifest.py sums --dir out --part windows --out out/sums.json
+
       - uses: actions/upload-artifact@v4
         with:
-          name: device-windows-signed
+          name: harness-device-${{ needs.version.outputs.version }}-windows
           path: out
-          retention-days: 1
+          retention-days: 7
           if-no-files-found: error
 
-  # No identity and no secret: release-setup.sh runs npm packages.
+  # Checks what sign-windows made, with no identity and no secret, and hands nothing on: publish takes sign-windows's
+  # artifact and its sums.
   check-windows:
     needs: [version, sign-windows]
     runs-on: windows-latest
@@ -392,7 +438,7 @@ jobs:
 
       - uses: actions/download-artifact@v4
         with:
-          name: device-windows-signed
+          name: harness-device-${{ needs.version.outputs.version }}-windows
           path: out
 
       # Against the committed key, as on macOS. sed, not Python, reads it: Python's print ends its line with CRLF
@@ -402,17 +448,6 @@ jobs:
           set -euo pipefail
           PUBKEY="$(sed -n 's/^ *"pubkey": *"\([^"]*\)",*$/\1/p' device-app/src-tauri/tauri.conf.json)"
           bash device-app/scripts/release-check.sh out "$VERSION" "$PUBKEY" --signed
-
-      # Windows runners have python, not python3.
-      - name: Record the checksums
-        run: python device-app/scripts/device-manifest.py sums --dir out --part windows --out out/sums.json
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: harness-device-${{ needs.version.outputs.version }}-windows
-          path: out
-          retention-days: 7
-          if-no-files-found: error
 
   build-linux:
     needs: version

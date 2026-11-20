@@ -57,9 +57,10 @@ The first release, with Diego's go. The bucket holds no manifest yet, so both na
 |---|---|---|
 | `version` | ubuntu | Checks the version, the run's ref, and that the run's commit is on `main`; with `publish=true`, that the tag is annotated and its message (the notes) is not empty. |
 | `build` | macos-15 | Compiles, then bundles, signs, notarizes and checks; keeps the three files and their sha256 and size as a run artifact for 7 days. |
+| `tauri-cli-windows` | windows, with `all` | Installs the Tauri CLI `sign-windows` runs, with no app code checked out; no secret, no identity. |
 | `build-windows` | windows, x64 and arm64, with `all` | Compiles `harness-device.exe` for its arch; no secret, no identity. |
-| `sign-windows` | windows, with `all` | Signs both exes, bundles each installer with the Tauri CLI, signs the installers, then writes their update signatures. Compiles and installs nothing. |
-| `check-windows` | windows, with `all` | Checks the installers; keeps them and their sums for 7 days. |
+| `sign-windows` | windows, with `all` | Signs both exes, bundles each installer with that Tauri CLI, signs the installers, writes their update signatures, then records their sums; keeps them for 7 days. Compiles and installs nothing. |
+| `check-windows` | windows, with `all` | Checks the installers `sign-windows` made; hands nothing on. |
 | `build-linux` | ubuntu-22.04 x64 and ubuntu-22.04-arm, with `all` | Compiles, then bundles the AppImage and signs it as an update, checks it; keeps it for 7 days. |
 | `publish` | ubuntu, only with `publish=true` | Checks each artifact against the sums its build recorded, uploads to GCS, writes the manifest, verifies the public downloads. With `all` it waits for every build. |
 
@@ -73,8 +74,10 @@ The first release, with Diego's go. The bucket holds no manifest yet, so both na
 - **Windows signs in order** (`sign-windows`): the app's exe with Authenticode through Azure Artifact Signing
   ([Windows code signing](../docs/windows-code-signing.md)), always, since Smart App Control blocks an unsigned
   program; then NSIS packs it, with `--no-binary-patching`, so Tauri writes nothing into the signed exe and it keeps
-  its signature; then the installer is signed; then the update signature, last, over the bytes that ship. Only this
-  job may mint the OIDC token Azure needs, and it runs only the Tauri CLI.
+  its signature; then the installer is signed; then the update signature, last, over the bytes that ship. This job
+  runs no build code: the Tauri CLI comes from `tauri-cli-windows`, which checks out no app code, so a crate's build
+  script or an npm package cannot replace the program that runs beside the signing identity and the updater key. The
+  sums `publish` checks are recorded here too, as the files are made.
 - **Each AppImage builds on its own arch**, on the oldest Ubuntu the desktop app supports: an AppImage carries the
   libraries of the machine that bundled it.
 - **Two notarizations.** Tauri notarizes and staples the app; it signs the dmg but does not notarize it, so the
@@ -86,7 +89,9 @@ The first release, with Diego's go. The bucket holds no manifest yet, so both na
   the app and the dmg. On Windows (`--signed`): each installer's update signature and its version, and its
   Authenticode signature. On Linux: the AppImage's arch and its update signature and version. Each prints
   `ok: <check>`, or `FAILED: <check>` and stops.
-- **Nothing reaches GCS without `publish`.** Only that job holds `id-token: write`; `build` has no GCS credential.
+- **Nothing reaches GCS without `publish`.** Only it and `sign-windows` hold `id-token: write`, and only `publish`
+  authenticates to GCP; that `sign-windows`'s token (subject `…:environment:release`) gets no GCS credential is GCP's
+  workload identity provider's condition to hold. `build` has no GCS credential.
   `publish` uploads the files to `gs://s3-autonomous-upgrade-3/harness/device/<version>/` with no-clobber and a
   year-long cache, writes `metadata.json` only over the generation it read (`no-cache`), then reads the manifest back
   and downloads each file it names from the CDN, comparing it with the build's.
