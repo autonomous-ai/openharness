@@ -65,6 +65,16 @@ does Windows.
     - Until a test key for Claude Code and Codex reaches the VM (Ken), the mod, `claude link` and the permission hook
       are built against Claude Code's documented API with unit tests. They are labeled "not yet checked on a real
       Claude Code/Codex", and Ken checks them once on a real one before the merge.
+12. **Plan answers (2026-11-20, after the VM probe).**
+    - The Dell: the run stops its owner's Harness daemon to free `COM3` and starts it again as before, in the
+      owner's console session; then it checks the daemon runs and holds `COM3`. The checks run in that console session
+      under the owner's account, with the run's own data folder. No test user is made there.
+    - Ken presses and speaks into the real dial, from one short list for one sitting. The run does everything firmware,
+      the serial line or a test hook can do. The dial's settings are written only after being read first; they are
+      written back exactly and checked.
+    - The panel hint (part C, "What tells the apps apart") stays, its answer kept per editor by the hook.
+    - Cursor is found on PATH and in its per-user folder only.
+    - The VM's console steps need no person: the agent signs the test user in by autologon and removes it after.
 
 ## How it works today (the parts this changes)
 
@@ -167,14 +177,24 @@ item). The transport for them is in place and tested.
 - an `.exe` runs as it is;
 - an npm shim goes through `windowsLaunchCommand` / `parseNpmCmdShim` / `windowsEngineArgv`
   (`lib/windows/launch.ts`) to `node.exe <script>` or the package's `.exe`;
-- an Electron app's own launcher (`code.cmd`, `cursor.cmd`, `orca.cmd` in the app's `bin` folder) is read for the
-  app's `.exe` and its CLI script, and run as that `.exe` with `ELECTRON_RUN_AS_NODE=1` and the script;
-- any other batch file is refused.
+- an Electron app's own launcher (`code.cmd`, `cursor.cmd` in the app's `bin` folder) is read for the app's `.exe`
+  and its CLI script, and run as that `.exe` with `ELECTRON_RUN_AS_NODE=1` and the script, read again at every start
+  (VS Code's script sits under a folder named by its build's commit);
+- any other batch file is refused, `orca.cmd` included.
+
+*Corrected 2026-11-20 after the VM probe (plan Task 1): this listed `orca.cmd` as an Electron launcher. It is not: it
+passes `%*` to a native `resources\bin\orca.exe` and refuses `orchestration send|reply`, which `cmd.exe` would
+reparse. Orca is run as that `orca.exe` (below).*
 
 The real launchers are read on the VM before this code is written.
 
 **VS Code and Cursor lookup on Windows.** `devices/vscodeExtension.ts` `installed()` (`:70-82`) finds `code` and
-`cursor` on Windows: on PATH, then the per-user and machine install folders. It runs them with the resolver above.
+`cursor` on Windows: on PATH, then the per-user install folder, then, for VS Code alone, its machine install folder
+(`%ProgramFiles%\Microsoft VS Code`). It runs them with the resolver above.
+
+*Corrected 2026-11-20 after the VM probe (plan Task 1): this said per-user and machine folders for both. Only per-user
+installs of Cursor were seen, so Cursor is found on PATH and in its per-user folder. A machine-wide Cursor path is
+added once a real install shows one.*
 
 **Claude Code plugin and dial skill.**
 - `claudePlugin.ts` `supports()` takes `win32`, and `claudeRunner` runs `claude` with the resolver above.
@@ -221,11 +241,14 @@ is read and no PowerShell runs. On Unix the uid check stays.
   confirmed against a real herdr on the VM before the code is written.
 
 **Orca on Windows.**
-- `orcaHomes.ts` `orcaBinary` finds Orca's launcher `orca.cmd` in `<Orca>\resources\bin\` (on PATH, or the default
-  per-user install folder). The launcher pattern takes `\` and `.cmd`. This is a Windows branch beside dial-linux's
-  `orca-ide`.
-- Every Orca call (`orca.ts` `send`, `switchTo`, `watch-focus`; `orcaHomes.ts`) runs the launcher with the resolver
-  above.
+- `orcaHomes.ts` `orcaBinary` finds Orca's CLI `orca.exe` in `<Orca>\resources\bin\` (on PATH, or the default
+  per-user install folder, since Orca's installer does not put `resources\bin` on PATH). The launcher pattern takes
+  `\` and `.exe`. This is a Windows branch beside dial-linux's `orca-ide`.
+- Every Orca call (`orca.ts` `send`, `switchTo`, `watch-focus`; `orcaHomes.ts`) runs `orca.exe` through the resolver
+  above, which runs an `.exe` as it is.
+
+*Corrected 2026-11-20 after the VM probe (plan Task 1): this named `orca.cmd`, which only forwards to `orca.exe`,
+refuses message bodies, and is a batch file the resolver refuses.*
 - Stopping `watch-focus` uses `lib/windows/terminate.ts` / `treeKill.ts` in place of signals, with
   `ownProcessGroup()` so no window flashes.
 
@@ -261,6 +284,16 @@ What tells the apps apart on Windows:
 - Cursor and VS Code both set `TERM_PROGRAM=vscode`. On Windows the hook (`cli/hook/notify.mjs`) tells them apart
   from what it can read in its own environment (the app folder in `VSCODE_GIT_ASKPASS_NODE` or a like variable), and
   sends the existing host id. It reads no other process's environment.
+  *Corrected 2026-11-20 after the VM probe (plan Task 1): `VSCODE_GIT_ASKPASS_NODE` is in the editor's integrated
+  terminals only. Claude Code's extension starts `claude` with the extension host's environment, which has
+  `VSCODE_PID` and no such variable, so for a session started from the extension's panel the hook reads the image
+  name of `VSCODE_PID`'s row in the one process table part D already reads: an image name, never an environment.
+  The hook does this only when `VSCODE_PID` is set, within the table read's timeout. A hook is a new process each
+  time, so it keeps the answer per editor in a small owner-only file of its own in the data folder
+  (`hook-editors.json`: written whole, read through one bounded reader, at most 16 entries). The key is the pid plus a
+  hash of the editor's own pipe name from `VSCODE_IPC_HOOK`, so a pid that another editor reuses misses. Only the
+  hook reads or writes that file, never the core.
+  Alacritty sets no Windows variable of its own but `ALACRITTY_LOG`, which the hook takes as Alacritty's sign.*
 - No new host id is added. The firmware holds 16 apps.
 - Windows Terminal has no host id. A session there is not raised (none), as a session in an unknown terminal is not
   on a Mac.
@@ -357,10 +390,13 @@ Reviewed revision: this file. Each line: answered / N/A because …
      it with the folder.
    - `devices.json`: one file, rewritten on each devices start and removed when the devices process closes. A crash
      leaves it, and the pid check then reads it as gone.
-   - The nonce window: bounded at 4,096 per pipe (existing). No other record.
+   - The nonce window: bounded at 4,096 per pipe (existing).
+   - `hook-editors.json` (Windows, the hook's alone): at most 16 entries of a pid, a 16-hex hash and a bundle id,
+     read up to 4,096 bytes, the newest kept. `harness reset` deletes it with the folder. No other record.
 2. **Concurrency.** The token is published by a hard link, so concurrent starts agree. `devices.json` is written to
    a temp file and renamed. Clients read it at each call. There is one listener per devices process. Two devices
-   processes each serve their own pipe, and the record names the last writer.
+   processes each serve their own pipe, and the record names the last writer. Two hooks writing `hook-editors.json`
+   at once each write it whole; the last rename wins, and the entry lost is read again from the table next time.
 3. **Read cost.** Each client call reads two files of under 200 bytes, plus the pid check:
    - the cheap check is `process.kill(pid, 0)`, on every call;
    - the process table (`recordedProcessDead`) is read when the record changes, after a connection error, or at most
@@ -375,7 +411,8 @@ Reviewed revision: this file. Each line: answered / N/A because …
    - A newer extension with an older CLI gets no `devicesPipe` and stays `unplugged`.
    - On macOS and Linux nothing changes.
    - A pty host without `raise` answers exit 2, which reads as `none`.
-6. **Migration and rollback.** N/A: no data migrates. A rollback leaves `devices-token` and `devices.json` unread.
+6. **Migration and rollback.** N/A: no data migrates. A rollback leaves `devices-token`, `devices.json` and
+   `hook-editors.json` unread.
 7. **Audience.**
    - The pipe accepts only requests that prove `devices-token`, a file in this account's profile.
    - The client sends nothing until the recorded process is alive, and takes no answer without the proof.
@@ -390,8 +427,9 @@ Reviewed revision: this file. Each line: answered / N/A because …
    - a refused raise, which the person sees as the taskbar flash and which is counted.
 
    `link` reports `devicesReady: false`, and the extension shows `unplugged`.
-10. **Platforms.** Windows 11 x64 and arm64. The UTM VM is arm64, and windows.yml covers x64 and arm64. macOS and
-    Linux keep their paths, guarded by their existing tests.
+10. **Platforms.** Windows 11 x64 and arm64. The UTM VM is arm64, and windows.yml covers x64 and arm64. A real x64
+    PC with a real dial (the Dell) runs the real-dial and x64 hand checks. macOS and Linux keep their paths, guarded
+    by their existing tests.
 
 ## Verification (outline; the plan details it)
 
@@ -405,7 +443,15 @@ Reviewed revision: this file. Each line: answered / N/A because …
   VM, never Ken's own apps or accounts.
 - Part C: the raise measured on the VM, in the person's session (not over SSH, which lands in session 0), with the
   window recording of docs/windows-rules.md §1 to prove nothing flashes.
-- Never Ken's real apps or accounts. The real dial stays on Ken's Mac, and serial uses the stand-in.
+- Never Ken's real apps or accounts, nor the Dell owner's. Serial on the VM uses the stand-in; the real dial is checked
+  on the Dell (x64, `COM3`) by an isolated desk with its own data folder, in the owner's console session, that touches
+  only what it installs. The one exception: the owner's Harness daemon is stopped to free `COM3` and started again as
+  before afterwards, and the run checks it runs and holds `COM3` again. The dial is left as it was found: the run
+  writes its settings only after reading them first, writes them back exactly, and checks them. It does not greet a
+  dial that holds a custom pet, which a new desk would remove. Ken presses and speaks into the dial from one short list,
+  and the run does every other step.
+  *Corrected 2026-11-20: this said the real dial stays on the Mac; a real Windows x64 PC with a real dial became
+  available for testing.*
 
 ## Left to the builder
 
