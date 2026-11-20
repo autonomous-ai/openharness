@@ -59,7 +59,13 @@ fn subscribe(display: &str) -> Result<(RustConnection, Window, Atom, Atom), Box<
 }
 
 /// Up to `length` values of a window's 32-bit property: none when it is unset, of another type, or the window is gone.
-fn property32(conn: &impl Connection, window: Window, property: Atom, kind: AtomEnum, length: u32) -> Vec<u32> {
+pub(crate) fn property32(
+    conn: &impl Connection,
+    window: Window,
+    property: Atom,
+    kind: AtomEnum,
+    length: u32,
+) -> Vec<u32> {
     let reply = conn.get_property(false, window, property, kind, 0, length).ok().and_then(|cookie| cookie.reply().ok());
     reply.and_then(|reply| reply.value32().map(Iterator::collect)).unwrap_or_default()
 }
