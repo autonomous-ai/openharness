@@ -294,6 +294,22 @@ it('cannot authorize an effect after a complete verifier changes during its comp
   expect(effect).toBe(false)
 })
 
+it('refuses a fallback replacing an observation that its current iteration already visited', async () => {
+  const fixture = siblings()
+  let changed = false, effect = false
+  await expect(runHookPreparation(fixture.files, async attempt => {
+    attempt.observe('changes an earlier dependency', () => {
+      if (changed) return
+      changed = true
+      attempt.observe(fixture.files[0], () => { throw new HookPreparationHeld('the replacement refused publication') })
+    })
+    attempt.verify()
+    effect = true
+  })).rejects.toThrow(/observations changed/)
+  expect(changed).toBe(true)
+  expect(effect).toBe(false)
+})
+
 it('checks an earlier private directory after the final sibling walk', () => {
   const fixture = siblings(), routes = hookPreparationRoutes(fixture.files)
   let changed = false

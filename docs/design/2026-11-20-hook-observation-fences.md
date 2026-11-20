@@ -73,10 +73,43 @@ packaging and architecture checks with the same import graph (635 tests, six
 skipped; `20261120T090334.695168Z-51170`). Independent review approves the final
 source (`20261120T090950.615654Z-63661`), conditional on the now-passing final
 checks. Its additional compiled-fence replacement control passes with the full
-batch suite (`20261120T091349.297922Z-68400`). The only subsequent runtime-source
-change is an explanatory ordering comment. NativeEvidenceBudget allows 32,768
+batch suite (`20261120T091349.297922Z-68400`). At commit `153f737199`, the only subsequent runtime-source
+change was an explanatory ordering comment. NativeEvidenceBudget allows 32,768
 steps; this bounded union uses at most 513. Production observe calls are after
 publication/removal, outside the synchronous fence.
 
 This source approval is not performance acceptance. Helper measurement and a
 fresh packaged Close/Resume comparison remain required; all prior holds remain.
+
+## Incomplete-route correction
+
+The fixed eight-arm helper comparison against `209a7e2d00` passes all custody and
+functional checks (`20261120T091718.797817Z-74231`). Complete-route CPU falls
+38–61% across the three callers and both orders. However, attempt verification
+with missing parents costs 6.30%/5.09% more CPU, and completed proofs cost
+4.07%/4.25% more there. The completed missing-leaf case also regresses. The
+predeclared comparison retains these holds; no packaged comparison was run.
+
+When a batch cannot use the complete-route optimization, keep its original caller
+loop and collection representation. Do not dispatch it through an additional
+closure over a converted array. Compiling returns no optimized verifier in that
+case. Optional-source fallback keeps its original object loop; attempt fallback
+keeps its live Map iteration; completed-proof fallback keeps its original record
+loop. Each still creates one fresh provisional directory map per call. A revision
+counter rejects observation replacement during either branch, including replacing
+an entry the fallback loop already visited. The two-pass complete-route proof is
+unchanged. This changes no stored data, bounds, identity, protocol, platform or
+publication authority from the design above.
+
+The helper result is the pre-change performance failure. Rerun the same fixed
+eight-arm workload against the corrected source, retaining all earlier results.
+The production comparison remains gated on resolving the fallback regression.
+
+The correction passes the 25 affected test files and typecheck
+(`20261120T092155.252151Z-81996`); independent source review approves it
+(`20261120T092159.420762Z-82077`). Runtime and regression-test bytes are unchanged
+from that review. The optional-source caller creates its observations locally
+and never mutates the array or replaces an observation after capture. Initial
+attempt population occurs before its work callback, between verification fences.
+The measured fallback regression is not attributed to one closure with certainty;
+the repeated fixed workload must establish whether this correction removes it.

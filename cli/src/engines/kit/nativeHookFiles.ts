@@ -321,28 +321,27 @@ export function inspectHookFile(file: string, defaultMode = 0o666) {
 
 /** Capture only the verifiers, never a successful check. Every invocation reads the filesystem afresh. */
 export function hookFileVerifier(files: readonly { observed: ReturnType<typeof inspectHookFile> }[]): () => void {
-  return observationVerifier(files.map(file => file.observed.verify))
+  return observationVerifier(files.map(file => file.observed.verify)) ?? (() => {
+    const directories = new Map<string, BigIntStats>()
+    for (const file of files) file.observed.verify(directories)
+  })
 }
 
-function observationVerifier(checks: readonly HookFileVerifier[]): () => void {
-  const fallback = () => {
-    const directories = new Map<string, BigIntStats>()
-    for (const check of checks) check(directories)
-  }
-  if (!checks.length || checks.length > 32) return fallback
+function observationVerifier(checks: readonly HookFileVerifier[]): (() => void) | undefined {
+  if (!checks.length || checks.length > 32) return undefined
   const observed = checks.map(check => completeHookFiles.get(check))
-  if (observed.some(file => !file)) return fallback
+  if (observed.some(file => !file)) return undefined
   if (checks.length === 1) return checks[0]
   const union = new Map<string, NativePathFact>()
   const versions = new Map<string, string | null>()
   for (const file of observed) {
-    if (versions.has(file!.target) && versions.get(file!.target) !== file!.stamp) return fallback
+    if (versions.has(file!.target) && versions.get(file!.target) !== file!.stamp) return undefined
     versions.set(file!.target, file!.stamp)
     for (const fact of file!.facts) {
       const previous = union.get(fact.path)
       if (previous && (previous.identity !== fact.identity || previous.alias?.target !== fact.alias?.target
-        || previous.alias?.version !== fact.alias?.version)) return fallback
-      if (!union.has(fact.path) && union.size >= 256) return fallback
+        || previous.alias?.version !== fact.alias?.version)) return undefined
+      if (!union.has(fact.path) && union.size >= 256) return undefined
       union.set(fact.path, fact)
     }
   }
@@ -409,7 +408,11 @@ function preparationProof(files: readonly string[], verifyRoutes: () => void): H
   const proof = { files: confirmed.map(({ verify: _verify, ...file }) => file), current: () => {
     try {
       verifyRoutes()
-      verifyFiles()
+      if (verifyFiles) verifyFiles()
+      else {
+        const directories = new Map<string, BigIntStats>()
+        for (const file of confirmed) file.verify(directories)
+      }
       return true
     } catch { return false }
   } }
@@ -586,19 +589,25 @@ export async function runHookPreparation<T>(files: readonly string[], work: (att
   }
   const observations = new Map<string, (directories?: Map<string, BigIntStats>) => void>()
   let verifyObservations = observationVerifier([])
+  let observationRevision = 0
   const verify = () => {
     check()
     verifyRoutes()
-    const checked = verifyObservations
-    checked()
+    const checked = observationRevision
+    if (verifyObservations) verifyObservations()
+    else {
+      const directories = new Map<string, BigIntStats>()
+      for (const inspect of observations.values()) inspect(directories)
+    }
     // Metadata reads consume no dependency authority. Fence dependencies once after them, even in nested attempts.
     options.verify?.(); check()
-    if (checked !== verifyObservations) throw new HookPreparationHeld('the settings observations changed during verification')
+    if (checked !== observationRevision) throw new HookPreparationHeld('the settings observations changed during verification')
   }
   const attempt: HookPreparationAttempt = {
     check, verify,
     observe: (file, inspect) => {
       observations.set(file, inspect)
+      observationRevision++
       verifyObservations = observationVerifier([...observations.values()])
     },
     async flush(fd) {
