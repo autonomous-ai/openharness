@@ -13,16 +13,24 @@ export interface PetDialState {
 //   map  - always sent first, so the dial knows which pack stands for what even before the bytes arrive
 //   send - mapped ids the dial does not hold, de-duplicated, "all" first then engines by name (a stable order, so a
 //          retry or a second dial sees the same sequence)
-//   drop - ids the dial holds that nothing maps any more (its 4-pack budget is for packs in use)
-export function planPetSync(mapping: PetMapping, held: string[]): { map: PetMapping; send: string[]; drop: string[] } {
+//   drop  - ids this computer sent (own) that the dial holds and nothing maps any more (its 4-pack budget is for packs
+//           in use)
+//   spare - ids the dial holds that another computer sent and nothing here maps: kept until the dial needs the slot
+export function planPetSync(
+  mapping: PetMapping,
+  held: string[],
+  own: ReadonlySet<string>,
+): { map: PetMapping; send: string[]; drop: string[]; spare: string[] } {
   const mapped: string[] = []
   if (mapping.all) mapped.push(mapping.all)
   for (const engine of Object.keys(mapping.engines).sort()) mapped.push(mapping.engines[engine])
   const unique = [...new Set(mapped)]
   const holding = new Set(held)
+  const unmapped = [...holding].filter((id) => !unique.includes(id))
   return {
     map: { all: mapping.all, engines: { ...mapping.engines } },
     send: unique.filter((id) => !holding.has(id)),
-    drop: [...new Set(held)].filter((id) => !unique.includes(id)),
+    drop: unmapped.filter((id) => own.has(id)),
+    spare: unmapped.filter((id) => !own.has(id)),
   }
 }

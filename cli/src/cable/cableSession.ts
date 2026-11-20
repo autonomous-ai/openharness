@@ -2275,7 +2275,8 @@ export class CableSession {
   private async runPetSync(): Promise<void> {
     const store = this.host.pets?.()
     if (!store || !this.petsSupported || !this.link?.isOpen || this.greetedMac === null) return
-    const plan = planPetSync(store.mapping(), [...this.petHeld])
+    // Every held pack counts as own, so today's drops stay as they are (Task 2 passes the packs this computer sent).
+    const plan = planPetSync(store.mapping(), [...this.petHeld], new Set(this.petHeld))
     const mapKey = JSON.stringify(plan.map)
     if (mapKey !== this.petMapSent) {
       this.petMapSent = mapKey
