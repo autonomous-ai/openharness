@@ -7,7 +7,7 @@ use std::io::{self, BufReader, Read};
 use std::net::Shutdown;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 /// The Hyprland door: its own connection to the event socket for each observation, and Harness's switch.
 pub struct HyprlandFollow {
@@ -124,13 +124,34 @@ pub fn follow(
     }
 }
 
-/// An observation: dropped, it shuts the event stream down, which ends its thread's read.
-struct Observation(UnixStream);
+/// What an observation and its thread share: whether it was dropped, and once connected, the connection's other end.
+#[derive(Default)]
+struct Shared {
+    stopped: bool,
+    stream: Option<UnixStream>,
+}
+
+/// An observation: dropped, it shuts its connection down, which wakes its thread out of the read it waits in, or ends
+/// a thread still connecting once it connects. Returns at once either way.
+struct Observation(Arc<Mutex<Shared>>);
 
 impl Drop for Observation {
     fn drop(&mut self) {
-        let _ = self.0.shutdown(Shutdown::Both);
+        let mut shared = self.0.lock().unwrap();
+        shared.stopped = true;
+        if let Some(stream) = &shared.stream {
+            let _ = stream.shutdown(Shutdown::Both);
+        }
     }
+}
+
+/// Keeps `ends` for the observation to shut down; false when it was already dropped.
+fn kept(shared: &Mutex<Shared>, ends: UnixStream) -> bool {
+    let mut shared = shared.lock().unwrap();
+    if !shared.stopped {
+        shared.stream = Some(ends);
+    }
+    !shared.stopped
 }
 
 /// Follows the Hyprland instance under `runtime_dir`. No socket there is NoObserver once.
@@ -155,20 +176,24 @@ fn observe_events(
     chatgpt: impl Fn(u32) -> bool + Send + 'static,
     heard: Box<dyn Fn(Heard) + Send + Sync>,
 ) -> Box<dyn Send> {
+    let shared = Arc::new(Mutex::new(Shared::default()));
+    let held = shared.clone();
     let heard: Arc<dyn Fn(Heard) + Send + Sync> = Arc::from(heard);
-    // The events are connected before the first ask, so a change between the two is not missed.
-    let Ok((stop, events)) = connect().and_then(|events| Ok((events.try_clone()?, events))) else {
-        heard(Heard::NoObserver);
-        return Box::new(());
-    };
     let told = heard.clone();
-    let spawned = std::thread::Builder::new()
-        .name("chatgpt-observer".into())
-        .spawn(move || follow(events, &|| ask(&requests), &chatgpt, &*told));
+    // Connecting can wait on a stalled Hyprland: never on the runner's follow thread.
+    let spawned = std::thread::Builder::new().name("chatgpt-observer".into()).spawn(move || {
+        // The events are connected before the first ask, so a change between the two is not missed.
+        let Ok((ends, events)) = connect().and_then(|events| Ok((events.try_clone()?, events))) else {
+            return told(Heard::NoObserver);
+        };
+        if kept(&held, ends) {
+            follow(events, &|| ask(&requests), &chatgpt, &*told);
+        }
+    });
     if spawned.is_err() {
         heard(Heard::NoObserver);
     }
-    Box::new(Observation(stop))
+    Box::new(Observation(shared))
 }
 
 #[cfg(test)]
