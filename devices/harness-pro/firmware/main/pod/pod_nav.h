@@ -7,14 +7,16 @@
 #include "pod/pod_model.h"
 
 typedef enum { POD_V_TABS, POD_V_TAB, POD_V_AGENT, POD_V_RECAP, POD_V_TALK, POD_V_INBOX } pod_view_t;
-enum { POD_TAB_RECENT = -1 };   // the Recent list: the agents with the most recent tasks, from every tab
+// POD_TAB_RECENT: the Recent list, the agents with the most recent tasks, from every tab. POD_TAB_APP: an app's ring, the agents
+// of the app shown (pod_app_agents), tab_id the app id. -2 is left free: home_at reads a TAB frame's tab as a Home page.
+enum { POD_TAB_RECENT = -1, POD_TAB_APP = -3 };
 
 typedef struct {
     pod_view_t view;
-    int8_t tab;            // TAB frame: the tab index or POD_TAB_RECENT. Agent frames: the tab they came from.
+    int8_t tab;            // TAB frame: the tab index, POD_TAB_RECENT or POD_TAB_APP. Agent frames: the tab they came from.
                            // Only a cache: tab_id names the tab, and pod_nav_sync re-resolves the index after
                            // every model change (a tab inserted before this one moves it).
-    char tab_id[SWARM_ID_MAX];   // the tab's swarm id; empty for the Recent list
+    char tab_id[SWARM_ID_MAX];   // the tab's swarm id, or the app id of an app's ring; empty for the Recent list
     char agent[ID_MAX];
     int16_t scroll;        // the first row shown (the Tabs grid's rows of covers, a tab's agents, a recap's lines)
 } pod_frame_t;
@@ -52,7 +54,8 @@ typedef enum {
     // The pill's two cells, on Home only (depth 1, while the pill shows). Device-local: no effect. Apps lands on the first app card,
     // Tabs on the window's selected tab (else the first). A tap on the cell already chosen does nothing.
     POD_A_HOME_TABS, POD_A_HOME_APPS,
-    POD_A_PICK_APP      // arg: index into model->apps (the hit's id: the app id), on Home only: APP_PICK for a row with agents; the stack stays
+    POD_A_PICK_APP      // arg: index into model->apps (the hit's id: the app id), on Home only: APP_PICK for a row with agents. When the
+                        // ring is already here (pod_nav_open_app) its room opens at once, else the stack stays; Harness never opens one
 } pod_action_t;
 
 typedef enum { POD_FX_NONE, POD_FX_VOICE_BEGIN, POD_FX_VOICE_END, POD_FX_VOICE_ABORT, POD_FX_AGENT_OPEN,
@@ -82,7 +85,8 @@ int pod_nav_list(const pod_nav_t *, const pod_model_t *, const pod_agent_t *out[
 // Opening an agent (a tap on a row, PREV/NEXT, follow) marks its unread entry read here: pod_model_unread_read.
 // The host's surface moved to this agent (cable `focus`): replace the stack with TABS -> TAB -> AGENT or RECAP (the usual
 // opens-on-recap rule). The tab is the window's selected one when it holds the agent, else the first that does, else
-// Recent; the TAB frame's scroll shows the agent's row. Not a task: Recent does not change. Emits no AGENT_OPEN: the
+// the app's ring when it is one of the app shown's agents, else Recent (the one choice OPEN_NOTIF and FOLLOW make too);
+// the TAB frame's scroll shows the agent's row. Not a task: Recent does not change. Emits no AGENT_OPEN: the
 // host already is there. Does nothing for an unknown agent, while TALK is on top, or when the agent is already open.
 // Returns true when the stack changed.
 // The label of the top frame's Back, from the frame below it: "Recent" (came from the Recent list), the tab's name
@@ -90,3 +94,7 @@ int pod_nav_list(const pod_nav_t *, const pod_model_t *, const pod_agent_t *out[
 const char *pod_nav_origin(const pod_nav_t *, const pod_model_t *);
 bool pod_nav_follow(pod_nav_t *, pod_model_t *, const char *agent_id, uint32_t now_ms);
 bool pod_nav_follow_tab(pod_nav_t *, pod_model_t *);   // The app window's selected tab changed: Home's card or the room follows (device-local)
+// The app's ring is here: Home on the app's card (Apps chosen when the pill shows), then TAB (POD_TAB_APP, the app id) and the
+// room of the app's first agent (on its recap by the usual rule). No effect: the pick already brought the app forward. False,
+// the stack untouched, when the app is not the app shown, has no agents, or TALK is on top.
+bool pod_nav_open_app(pod_nav_t *, pod_model_t *, const char *app_id);
