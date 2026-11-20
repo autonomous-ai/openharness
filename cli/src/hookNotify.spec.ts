@@ -924,6 +924,65 @@ describe('hook notify terminal scope', () => {
     }])
   })
 
+  describe('on Windows, where every file looks writable by everyone', () => {
+    /** A data folder, a transcript, and the NODE_OPTIONS of a preload that reports modes as NTFS does to Node: a
+     *  folder 0o777 and a file 0o666, whatever was asked (fchmod changes nothing there). */
+    function ntfs() {
+      const dir = mkdtempSync(join(tmpdir(), 'adapter-hook-offline-ntfs-'))
+      tmpDirs.push(dir)
+      const claudeProjectsDir = join(dir, 'claude-projects'), dataDir = join(dir, 'data')
+      mkdirSync(join(claudeProjectsDir, 'demo'), { recursive: true })
+      const transcript = (session: string) => {
+        const path = join(claudeProjectsDir, 'demo', `${session}.jsonl`)
+        writeFileSync(path, '{}\n')
+        return path
+      }
+      const preload = join(dir, 'ntfs-modes.mjs')
+      writeFileSync(preload, `import fs from 'node:fs'; import { syncBuiltinESMExports } from 'node:module';
+const ntfs = (stat) => {
+  if (!stat || !(stat.isFile() || stat.isDirectory())) return stat;
+  const bits = stat.isDirectory() ? 0o777 : 0o666;
+  stat.mode = typeof stat.mode === 'bigint' ? stat.mode | BigInt(bits) : stat.mode | bits;
+  return stat;
+};
+for (const name of ['statSync', 'lstatSync', 'fstatSync']) { const original = fs[name]; fs[name] = (...args) => ntfs(original(...args)); }
+syncBuiltinESMExports();\n`)
+      return { dataDir, claudeProjectsDir, transcript, env: { NODE_OPTIONS: `--import ${pathToFileURL(preload).href}` } }
+    }
+
+    it('a hook with no daemon records its session, and a later hook reads it', async () => {
+      const { dataDir, claudeProjectsDir, transcript, env } = ntfs()
+      const start = (session: string) => runHook({
+        port: 9, tmuxPane: '%7', processEngine: 'claude', windowsProcessTable: true, dataDir, claudeProjectsDir, env,
+        input: { hook_event_name: 'SessionStart', session_id: session, transcript_path: transcript(session), cwd: '/tmp/demo' },
+      })
+      const rows = () => JSON.parse(readFileSync(join(dataDir, 'registry.json'), 'utf8')) as Array<Record<string, unknown>>
+
+      await start('session-a')
+      expect(rows()).toMatchObject([{ sessionId: 'session-a', engine: 'claude', processIdentity: { pid: 7001 } }])
+      const first = rows()[0]
+
+      // The same agent resumed into another session: only a hook that read the row keeps its id.
+      await start('session-b')
+      expect(rows()).toMatchObject([{ sessionId: 'session-b', agentId: first.agentId, registeredAt: first.registeredAt }])
+    })
+
+    it('takes over the lock a dead hook left', async () => {
+      const { dataDir, claudeProjectsDir, transcript, env } = ntfs()
+      const lock = join(dataDir, 'registry.json.lock')
+      mkdirSync(lock, { recursive: true, mode: 0o700 })
+      writeFileSync(join(lock, 'owner.json'), JSON.stringify({ pid: 2_147_483_646, startMarker: '', token: 'gone' }), { mode: 0o600 })
+
+      await runHook({
+        port: 9, tmuxPane: '%7', processEngine: 'claude', windowsProcessTable: true, dataDir, claudeProjectsDir, env,
+        input: { hook_event_name: 'SessionStart', session_id: 'session-a', transcript_path: transcript('session-a'), cwd: '/tmp/demo' },
+      })
+
+      expect(JSON.parse(readFileSync(join(dataDir, 'registry.json'), 'utf8'))).toMatchObject([{ sessionId: 'session-a' }])
+      expect(existsSync(lock)).toBe(false)
+    })
+  })
+
   it('leaves a corrupt offline registry byte-identical instead of replacing it', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'adapter-hook-offline-corrupt-'))
     tmpDirs.push(dir)
