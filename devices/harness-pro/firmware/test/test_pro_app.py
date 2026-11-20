@@ -2072,6 +2072,19 @@ static void apps_reach_the_model(void) {
     CHECK(LOCK_DEPTH == 0);
 }
 
+// A live link that moves to another computer (a welcome naming another machine: pro_app_link(true) while linked) forgets
+// the last one's apps, since an older daemon there sends none to replace them. That welcome's apps.switch, said first, stays.
+static void apps_forgotten_on_another_computer(void) {
+    setup();
+    static const cable_app_t rows[1] = {{"codex", "ChatGPT", 3, 1, 2}};
+    pro_app_apps(rows, 1, "codex");
+    pro_app_apps_switch(true);
+    CHECK(U.model.app_count == 1);
+    pro_app_link(true, "box");
+    CHECK(U.model.app_count == 0 && U.model.app_shown[0] == 0 && U.model.apps_switch);
+    CHECK(LOCK_DEPTH == 0);
+}
+
 // A question's entry goes whenever the question ends: a new turn, a finished turn, a link drop.
 static void notify_question_entry_ends_with_question(void) {
     notif_room();
@@ -2496,7 +2509,7 @@ int main(int argc, char **argv) {
         {"pro_app_test_voice_paths", pro_app_test_voice_paths}, {"pro_app_test_touch_rules", pro_app_test_touch_rules},
         {"pro_app_test_roster_and_swarms", pro_app_test_roster_and_swarms}, {"side_button", side_button}, {"side_button_console", side_button_console}, {"question_needs_the_link", question_needs_the_link},
         {"notify_banner_beep_and_expiry", notify_banner_beep_and_expiry}, {"notify_tap_opens_and_swipe_dismisses", notify_tap_opens_and_swipe_dismisses},
-        {"notify_never_over_talk", notify_never_over_talk}, {"notify_tiers", notify_tiers}, {"notify_question_and_error", notify_question_and_error}, {"notify_entries_expire", notify_entries_expire}, {"notify_question_entry_ends_with_question", notify_question_entry_ends_with_question}, {"notify_question_resent_after_relink_is_quiet", notify_question_resent_after_relink_is_quiet}, {"notify_question_same_prompt_new_request_beeps", notify_question_same_prompt_new_request_beeps}, {"question_list_tier_is_quiet", question_list_tier_is_quiet}, {"agents_carry_app_and_view", agents_carry_app_and_view}, {"voice_needs_the_v_cap", voice_needs_the_v_cap}, {"see_it_notice_lasts_two_seconds", see_it_notice_lasts_two_seconds}, {"apps_reach_the_model", apps_reach_the_model},{"notify_replace_seen_and_read", notify_replace_seen_and_read},
+        {"notify_never_over_talk", notify_never_over_talk}, {"notify_tiers", notify_tiers}, {"notify_question_and_error", notify_question_and_error}, {"notify_entries_expire", notify_entries_expire}, {"notify_question_entry_ends_with_question", notify_question_entry_ends_with_question}, {"notify_question_resent_after_relink_is_quiet", notify_question_resent_after_relink_is_quiet}, {"notify_question_same_prompt_new_request_beeps", notify_question_same_prompt_new_request_beeps}, {"question_list_tier_is_quiet", question_list_tier_is_quiet}, {"agents_carry_app_and_view", agents_carry_app_and_view}, {"voice_needs_the_v_cap", voice_needs_the_v_cap}, {"see_it_notice_lasts_two_seconds", see_it_notice_lasts_two_seconds}, {"apps_reach_the_model", apps_reach_the_model}, {"apps_forgotten_on_another_computer", apps_forgotten_on_another_computer}, {"notify_replace_seen_and_read", notify_replace_seen_and_read},
         {"ota_screen_and_touch", ota_screen_and_touch}, {"voice_refused_while_updating", voice_refused_while_updating},
         {"update_gate", update_gate}, {"ota_failed_returns", ota_failed_returns}, {"ota_keeps_awake", ota_keeps_awake},
         {"ota_notifications_quiet", ota_notifications_quiet}, {"updated_notice", updated_notice},
