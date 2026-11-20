@@ -86,11 +86,10 @@ fi
 case "$os" in
   macos) rustup target add aarch64-apple-darwin x86_64-apple-darwin ;;
   # Tauri's Linux packages: the webview, the tray, SVG icons, and libxdo, which its menu crate links; `file`, which its
-  # AppImage bundler runs.
+  # AppImage bundler runs. Through PR CI's installer, which rides out an outage of the runner's Ubuntu mirrors.
   linux)
-    sudo apt-get update
-    sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev \
-      libxdo-dev file
+    sudo bash "$(dirname "$app")/scripts/apt-install.sh" libwebkit2gtk-4.1-dev libayatana-appindicator3-dev \
+      librsvg2-dev libxdo-dev file
     ;;
   # Both arches build on one x64 runner.
   windows) rustup target add x86_64-pc-windows-msvc aarch64-pc-windows-msvc ;;
