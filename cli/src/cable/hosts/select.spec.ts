@@ -349,21 +349,42 @@ describe('AppRings', () => {
     expect(order()).toEqual(['orca', 'vscode', 'ghostty'])
   })
 
-  it('count and waiting follow the agents', () => {
+  it('count, waiting and working follow the agents', () => {
     const rings = new AppRings()
     const list = [...row(18).map(at('ghostty')), at('orca')(agent('o'))]
     list[0] = needs(list[0])
     list[17] = needs(list[17])
+    list[1] = working(list[1])
+    list[2] = working(list[2])
     rings.update(list)
     expect(rings.apps()).toEqual([
-      { id: 'ghostty', count: 18, waiting: 2 },
-      { id: 'orca', count: 1, waiting: 0 },
+      { id: 'ghostty', count: 18, waiting: 2, working: 2 },
+      { id: 'orca', count: 1, waiting: 0, working: 0 },
     ])
     rings.update([needs(list[18]), list[1]])
     expect(rings.apps()).toEqual([
-      { id: 'ghostty', count: 1, waiting: 0 },
-      { id: 'orca', count: 1, waiting: 1 },
+      { id: 'ghostty', count: 1, waiting: 0, working: 1 },
+      { id: 'orca', count: 1, waiting: 1, working: 0 },
     ])
+  })
+
+  it('working counts the mid-turn agents of the same list as count, an ended or resting one too', () => {
+    const rings = new AppRings()
+    const g = (id: string, over: Partial<HostAgent>) => at('ghostty')(agent(id, over))
+    rings.update([
+      g('i', { state: 'idle' }),
+      g('w', { state: 'working' }),
+      g('n', { state: 'needs-you' }),
+      g('d', { state: 'done' }),
+      g('e', { state: 'error' }),
+      g('k', { state: 'working', ended: true }),
+      g('r', { state: 'idle', resting: true }),
+    ])
+    expect(rings.apps()).toEqual([{ id: 'ghostty', count: 7, waiting: 1, working: 2 }])
+    for (const a of rings.apps()) {
+      expect(a.working).toBeGreaterThanOrEqual(0)
+      expect(a.working).toBeLessThanOrEqual(a.count)
+    }
   })
 
   it('an agent whose app changes leaves its ring and joins the other at the end', () => {
@@ -378,8 +399,8 @@ describe('AppRings', () => {
     expect(ringIds(rings, 'terminal')).toEqual(['t'])
     expect(ringIds(rings, 'ghostty')).toEqual(['g1', 'g2', 's'])
     expect(rings.apps()).toEqual([
-      { id: 'terminal', count: 1, waiting: 0 },
-      { id: 'ghostty', count: 3, waiting: 0 },
+      { id: 'terminal', count: 1, waiting: 0, working: 0 },
+      { id: 'ghostty', count: 3, waiting: 0, working: 0 },
     ])
   })
 
@@ -387,7 +408,7 @@ describe('AppRings', () => {
     const rings = new AppRings()
     const pending = row(3, 'p').map((a) => ({ ...a, appPending: true as const }))
     rings.update([...pending, agent('t'), ...row(2, 'g').map(at('ghostty'))])
-    expect(rings.apps()).toContainEqual({ id: 'terminal', count: 4, waiting: 0 })
+    expect(rings.apps()).toContainEqual({ id: 'terminal', count: 4, waiting: 0, working: 0 })
     expect(ringIds(rings, 'terminal')).toEqual(['p1', 'p2', 'p3', 't'])
   })
 
@@ -400,7 +421,7 @@ describe('AppRings', () => {
     rings.update([agent('p', { app: 'ghostty', lastActivityAt: 50 }), g1, g2])
     expect(ringIds(rings, 'ghostty')).toEqual(['g1', 'g2', 'p'])
     expect(rings.ring('terminal')).toEqual({ rows: [], total: 0 })
-    expect(rings.apps()).toEqual([{ id: 'ghostty', count: 3, waiting: 0 }])
+    expect(rings.apps()).toEqual([{ id: 'ghostty', count: 3, waiting: 0, working: 0 }])
   })
 
   describe('counts, of the agents given', () => {
@@ -427,7 +448,7 @@ describe('AppRings', () => {
       const [g1, g2] = row(2, 'g').map(at('ghostty'))
       rings.update([g1, g2])
       expect([...rings.counts([g1, at('vscode')(agent('v'))]).all]).toEqual([['ghostty', 1], ['vscode', 1]])
-      expect(rings.apps()).toEqual([{ id: 'ghostty', count: 2, waiting: 0 }])
+      expect(rings.apps()).toEqual([{ id: 'ghostty', count: 2, waiting: 0, working: 0 }])
       expect(ringIds(rings, 'ghostty')).toEqual(['g1', 'g2'])
     })
 
@@ -457,7 +478,7 @@ describe('AppRings', () => {
     it('a resting agent is on its app\'s page and in its ring', () => {
       const rings = new AppRings()
       rings.update([resting('c1'), resting('c2')])
-      expect(rings.apps()).toEqual([{ id: 'claude', count: 2, waiting: 0 }])
+      expect(rings.apps()).toEqual([{ id: 'claude', count: 2, waiting: 0, working: 0 }])
       expect(ringIds(rings, 'claude')).toEqual(['c1', 'c2'])
     })
   })
@@ -474,7 +495,7 @@ describe('AppRings', () => {
   it('the map is bounded: 20 agents with 20 unknown app ids make one terminal ring', () => {
     const rings = new AppRings()
     rings.update(row(20).map((a, i) => at(`unknown-${i}`)(a)))
-    expect(rings.apps()).toEqual([{ id: 'terminal', count: 20, waiting: 0 }])
+    expect(rings.apps()).toEqual([{ id: 'terminal', count: 20, waiting: 0, working: 0 }])
     expect(rings.ring('terminal').rows).toHaveLength(RING_PLACES)
     expect(rings.ring('terminal').total).toBe(20)
     expect(rings.ring('unknown-0')).toEqual({ rows: [], total: 0 })
