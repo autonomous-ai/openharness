@@ -2065,6 +2065,59 @@ describe('binding an OpenClaw pane, read from its screen', () => {
       expect(await passes([0, at])).toEqual([said])
     })
 
+    // OpenClaw draws a refused sign-in as the Gateway gone, its activity after the `|` saying why: "Gateway not running"
+    // named the wrong fix.
+    describe('a sign-in the Gateway refused', () => {
+      const APPROVAL = OPENCLAW_STATES.approval
+      const REFUSED = OPENCLAW_STATES.signInRefused
+      const PAIRING = screen('screen-pairing')
+      const BARE = screen('screen-pairing-bare')
+      const TOKEN = screen('screen-token-mismatch')
+
+      it('a device waiting for approval holds with what to run once 10 s passed, and says so once', async () => {
+        expect(await passes([0, PAIRING], [5, PAIRING], [10, PAIRING], [15, PAIRING])).toEqual([undefined, undefined, APPROVAL, APPROVAL])
+        expect(run.deps.announceSession).toHaveBeenCalledOnce()
+        expect(logged()).toEqual([`[discovery] a1 openclaw · ${APPROVAL}`])
+      })
+
+      // The 5 s `gateway disconnected:` line falls between two passes: read only on the bare line, it is the same outage.
+      it('read only on the bare disconnected line from the first pass, it still holds for approval once 10 s passed', async () => {
+        expect(await passes([0, BARE], [5, BARE], [10, BARE], [15, PAIRING], [20, BARE])).toEqual([undefined, undefined, APPROVAL, APPROVAL, APPROVAL])
+        expect(logged()).toEqual([`[discovery] a1 openclaw · ${APPROVAL}`])
+      })
+
+      it.each([
+        ['a token mismatch', TOKEN],
+        ['a sign-in rate limit', TOKEN.replace('gateway authentication needs attention', 'gateway authentication temporarily rate-limited')],
+        ['a proxy that rejected it', TOKEN.replace('gateway authentication needs attention', 'identity-aware proxy rejected connection')],
+      ])('%s holds as a refused sign-in once 10 s passed', async (_, refused) => {
+        expect(await passes([0, refused], [5, refused], [10, refused])).toEqual([undefined, undefined, REFUSED])
+        expect(logged()).toEqual([`[discovery] a1 openclaw · ${REFUSED}`])
+      })
+
+      it('an outage that turns into a pairing request changes its sentence, said once each', async () => {
+        expect(await passes([0, LOST], [10, LOST], [15, PAIRING], [20, BARE], [25, PAIRING]))
+          .toEqual([undefined, NO_GATEWAY, APPROVAL, APPROVAL, APPROVAL])
+        expect(run.deps.announceSession).toHaveBeenCalledTimes(2)
+        expect(logged()).toEqual([`[discovery] a1 openclaw · ${NO_GATEWAY}`, `[discovery] a1 openclaw · ${APPROVAL}`])
+      })
+
+      it.each([
+        ['approval', PAIRING, APPROVAL],
+        ['a refused sign-in', TOKEN, REFUSED],
+      ])('%s is held through a try to connect and cleared by a connected line', async (_, refused, said) => {
+        expect(await passes([0, refused], [10, refused], [12, status('connecting | idle')], [15, status('connected | idle')]))
+          .toEqual([undefined, said, said, undefined])
+        expect(logged()).toContain('[discovery] a1 openclaw · working again')
+      })
+
+      it('never holds a local run', async () => {
+        row.openclawLocal = '/run/skill-1'
+        expect(await passes([0, PAIRING], [10, PAIRING], [20, TOKEN], [30, TOKEN])).toEqual([undefined, undefined, undefined, undefined])
+        expect(run.deps.announceSession).not.toHaveBeenCalled()
+      })
+    })
+
     it('remembers 256 outages at most: one more starts them over, so a hold comes late, never early', async () => {
       await passes([0, LOST])
       for (let i = 0; i < 256; i++) {
@@ -2637,6 +2690,16 @@ describe('binding an OpenClaw pane, read from its screen', () => {
       expect(row).not.toHaveProperty('identityHold')
       await vi.waitFor(() => expect(run.deps.submitFirstTask).toHaveBeenCalledWith('a1', TASK))
       expect(run.deps.registry.setLaunch).not.toHaveBeenCalled()
+    })
+
+    it('held for its device\'s approval through 5 minutes it is never failed', async () => {
+      const pairing = screen('screen-pairing')
+      expect(await pass(0, pairing)).toBe(false)
+      expect(await pass(10, pairing)).toBe(false)
+      expect(row.identityHold).toBe(OPENCLAW_STATES.approval)
+      for (let second = 15; second < 310; second += 30) expect(await pass(second, pairing)).toBe(false)
+      expect(await pass(310, ready)).toBe(false)
+      expect(row).not.toHaveProperty('identityHold')
     })
 
     it('held 2 minutes in the middle, the bound comes 2 minutes later', async () => {
