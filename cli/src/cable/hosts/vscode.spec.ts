@@ -3,6 +3,7 @@ import type { PageAgent, Place } from './adapter.js'
 import { detectApp, detectHost } from './hostDetect.js'
 import { bundleOf, createOpenActions, type OpenTarget } from './open.js'
 import { createVscodeAdapter, termPid } from './vscode.js'
+import type { WindowsRaise } from './windowsRaise.js'
 
 const OPEN = '/usr/bin/open'
 /** A Claude Code session's id, as its hook names it. */
@@ -480,6 +481,58 @@ describe('a tap on a terminal on Linux raises its editor', () => {
     expect(await t.focus()).toBe(true)
     expect(t.calls).toEqual([forward(VSCODE)])
     expect(t.raises).toEqual([])
+  })
+})
+
+// Windows has no `open -b`: the devices' raise brings the editor forward by its bundle, and opens the tab's link
+// (windowsRaise.ts).
+describe('a tap on Windows raises its editor', () => {
+  const HELD: Terminal = { window: 'w1', shell: 4000 }
+  const CURSOR = 'com.todesktop.230313mzl4w4u92'
+  /** The recorder on Windows, holding a raise that notes each call with how many shows were written before it, and
+   *  answers [answer]. */
+  const tapped = (editor: 'vscode' | 'cursor', answer = true) => {
+    const raised: Array<{ call: string[]; shows: number }> = []
+    const note = async (call: string[]) => { raised.push({ call, shows: r.windows.shows.length }); return answer }
+    const windows: WindowsRaise = {
+      app: (bundle) => note(['app', bundle]),
+      link: (url, bundle) => note(['link', url, String(bundle)]),
+      cursorFolder: (folder) => note(['cursorFolder', folder]),
+      desktop: () => note(['desktop']),
+    }
+    const r = recorder({ platform: 'win32', windows }, [], editor)
+    r.windows.held = HELD
+    return { ...r, raised, focus: (id = 'term:4242') => r.adapter.focus({ adapter: editor, id }) }
+  }
+
+  it.each([['vscode', VSCODE], ['cursor', CURSOR]] as const)('%s: the terminal is shown, then the editor comes forward by its bundle', async (editor, bundle) => {
+    const t = tapped(editor)
+    expect(t.adapter.canFocus({ adapter: editor, id: 'term:4242' })).toBe(true)
+    expect(await t.focus()).toBe(true)
+    expect(t.windows.shows).toEqual([{ terminal: HELD, tap: true }])
+    expect(t.raised).toEqual([{ call: ['app', bundle], shows: 1 }])
+    expect(t.calls).toEqual([])
+  })
+
+  it('a raise that answers false leaves the tap true: the show was queued', async () => {
+    const t = tapped('vscode', false)
+    expect(await t.focus()).toBe(true)
+    expect(t.raised).toEqual([{ call: ['app', VSCODE], shows: 1 }])
+  })
+
+  it('a show that cannot be written raises nothing', async () => {
+    const t = tapped('vscode')
+    t.windows.writes = false
+    expect(await t.focus()).toBe(false)
+    expect(t.raised).toEqual([])
+  })
+
+  it('the extension\'s tab opens by its link, sent with the editor\'s bundle', async () => {
+    const t = tapped('vscode')
+    expect(t.adapter.canFocus({ adapter: 'vscode', id: UUID })).toBe(true)
+    expect(await t.focus(UUID)).toBe(true)
+    expect(t.raised).toEqual([{ call: ['link', link(UUID), VSCODE], shows: 0 }])
+    expect(t.calls).toEqual([])
   })
 })
 

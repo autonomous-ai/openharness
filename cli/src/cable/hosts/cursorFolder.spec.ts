@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { describe, expect, it, onTestFinished, vi } from 'vitest'
 import type { Place } from './adapter.js'
 import { createCursorFolderAdapter, isFolder, type CursorFolderDeps } from './cursorFolder.js'
+import type { WindowsRaise } from './windowsRaise.js'
 
 const CURSOR = 'com.todesktop.230313mzl4w4u92'
 const MARKER = '/work/SECRET-FOLDER-MARKER'
@@ -242,6 +243,45 @@ describe('the Cursor folder adapter on Linux', () => {
     const { adapter, folders } = rig({ platform: 'linux', run: () => Promise.reject(new Error(`spawn ${MARKER} failed`)) })
     folders.add('/work/api')
     expect(await adapter.focus(pane('/work/api'))).toBe(false)
+  })
+})
+
+// Windows has no `open -b`: the raise opens the folder with Cursor's CLI, then brings Cursor forward (windowsRaise.ts).
+describe('the Cursor folder adapter on Windows', () => {
+  /** The rig on Windows, holding a raise whose cursorFolder notes its folder and answers the next of [answers], then
+   *  true. */
+  function onWindows(answers: boolean[] = []) {
+    const folders: string[] = []
+    const windows: WindowsRaise = {
+      app: async () => { throw new Error('no app') },
+      link: async () => { throw new Error('no link') },
+      cursorFolder: async (folder) => { folders.push(folder); return answers.length ? answers.shift()! : true },
+      desktop: async () => { throw new Error('no desktop') },
+    }
+    return { ...rig({ platform: 'win32', windows }), opened: folders }
+  }
+
+  it('a tap hands the folder to the raise and answers what it answered; nothing runs and the CLI is not looked for here', async () => {
+    const r = onWindows([true, false])
+    r.folders.add('/work/api')
+    expect(r.adapter.canFocus(pane('/work/api'))).toBe(true)
+    expect(await r.adapter.focus(pane('/work/api'))).toBe(true)
+    expect(await r.adapter.focus(pane('/work/api'))).toBe(false)
+    expect(r.opened).toEqual(['/work/api', '/work/api'])
+    expect(r.calls).toEqual([])
+    expect(r.clis).not.toHaveBeenCalled()
+  })
+
+  it('a path that is no folder, or not in its form, reaches nothing', async () => {
+    const r = onWindows()
+    expect(r.adapter.canFocus(pane('/work/gone'))).toBe(false)
+    expect(await r.adapter.focus(pane('/work/gone'))).toBe(false)
+    for (const [what, id] of OUT_OF_FORM) {
+      r.folders.add(id)
+      expect(r.adapter.canFocus(pane(id)), what).toBe(false)
+      expect(await r.adapter.focus(pane(id)), what).toBe(false)
+    }
+    expect(r.opened).toEqual([])
   })
 })
 

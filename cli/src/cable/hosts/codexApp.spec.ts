@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { Place } from './adapter.js'
 import { createCodexAppAdapter } from './codexApp.js'
+import type { WindowsRaise } from './windowsRaise.js'
 
 const THREAD = '01a1de76-a3b7-7270-b39e-1245893274c1'
 const CODEX_APP = 'com.openai.codex'
@@ -171,6 +172,42 @@ describe('the Codex app on Linux', () => {
       expect(await adapter.focus(pane(THREAD)), String(code)).toBe(false)
       expect(calls).toEqual([xdgMime, xdgOpen])
       expect(logs).toEqual([])
+    }
+  })
+})
+
+// Windows has no `open -b`: the raise opens the link, and brings the app when it failed (windowsRaise.ts).
+describe('the Codex app on Windows', () => {
+  /** The recorder on Windows, holding a raise that notes each call and answers the next of [answers], then true. */
+  function onWindows(answers: boolean[] = []) {
+    const asked: string[][] = []
+    const answer = async (call: string[]) => { asked.push(call); return answers.length ? answers.shift()! : true }
+    const windows: WindowsRaise = {
+      app: (bundle) => answer(['app', bundle]),
+      link: (url, bundle) => answer(['link', url, String(bundle)]),
+      cursorFolder: (folder) => answer(['cursorFolder', folder]),
+      desktop: () => answer(['desktop']),
+    }
+    return { ...recorder({ platform: 'win32', windows }), asked }
+  }
+  const linked = ['link', `codex://threads/${THREAD}`, CODEX_APP]
+
+  it('a tap sends the thread\'s link with the app\'s bundle, and runs nothing', async () => {
+    const { asked, calls, logs, adapter } = onWindows()
+    expect(adapter.canFocus(pane(THREAD))).toBe(true)
+    expect(await adapter.focus(pane(THREAD))).toBe(true)
+    expect(asked).toEqual([linked])
+    expect(calls).toEqual([])
+    expect(logs).toEqual([])
+  })
+
+  it('a link that failed brings the app forward once, in one line with no thread id, and answers what it answered', async () => {
+    for (const app of [true, false]) {
+      const { asked, calls, logs, adapter } = onWindows([false, app])
+      expect(await adapter.focus(pane(THREAD)), String(app)).toBe(app)
+      expect(asked).toEqual([linked, ['app', CODEX_APP]])
+      expect(logs).toEqual([FALLBACK])
+      expect(calls).toEqual([])
     }
   })
 })
