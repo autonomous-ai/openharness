@@ -2178,6 +2178,24 @@ mod tests {
     }
 
     #[test]
+    fn chatgpt_exe_in_front_reads_the_permission_before_the_offer_is_judged_as_the_bundle_id_does() {
+        let door = ChatgptDoor::answering(true, false);
+        let (w, fronts) = world_following(VSCODE, &door);
+        w.fake.script("hardware watch --json", &ATTACHED);
+        assert_eq!(w.runner.run(Effect::SpawnWatch), None);
+        w.next_in_any_order(&[a_dial(), follow(false, true)]);
+        fronts.tell("ChatGPT.exe");
+        assert_eq!(w.next(), Event::FollowOffer);
+        // Switched on since: the read as ChatGPT comes to the front finds it, nothing is offered, and it observes.
+        fronts.tell(VSCODE);
+        door.trust(&[true]);
+        fronts.tell("ChatGPT.exe");
+        assert_eq!(w.next(), follow(true, true));
+        door.observed(1);
+        assert_eq!(w.rest(), [Event::WatchExit(Some(0))]);
+    }
+
+    #[test]
     fn no_observer_is_one_log_line_each_time_observing_starts() {
         let door = ChatgptDoor::answering(false, true);
         let (w, fronts) = world_following(CHATGPT_BUNDLE, &door);

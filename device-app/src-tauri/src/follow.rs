@@ -468,6 +468,76 @@ mod tests {
     }
 
     #[test]
+    fn chatgpt_exe_in_any_case_and_chatgpt_are_chatgpt_in_front_as_the_bundle_id_is() {
+        for value in [CHATGPT_BUNDLE, "ChatGPT.exe", "chatgpt.EXE", "ChatGPT"] {
+            let mut follow = offering(VS_CODE);
+            follow.front(value);
+            assert!(follow.take_offer(), "{value}");
+            follow.trusted(true);
+            assert!(follow.observes(), "{value}");
+            assert!(matches!(follow.observer(), Observer::Start(_)), "{value}");
+        }
+        // Linux's program name is matched exactly, and a macOS bundle's file name is no front value.
+        for value in ["chatgpt", "ChatGPT.app"] {
+            let mut follow = offering(VS_CODE);
+            follow.front(value);
+            assert!(!follow.take_offer(), "{value}");
+            follow.trusted(true);
+            assert!(!follow.observes(), "{value}");
+        }
+    }
+
+    #[test]
+    fn a_program_is_installed_only_as_a_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let program = dir.path().join("ChatGPT");
+        std::fs::write(&program, "").unwrap();
+        assert!(program_installed(&program));
+        assert!(!program_installed(dir.path()));
+        assert!(!program_installed(&dir.path().join("missing")));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_process_runs_the_program_its_exe_links_to() {
+        let proc_root = tempfile::tempdir().unwrap();
+        let program = Path::new("/usr/lib/chatgpt/ChatGPT");
+        let link = |pid: u32, to: &str| {
+            std::fs::create_dir(proc_root.path().join(pid.to_string())).unwrap();
+            std::os::unix::fs::symlink(to, proc_root.path().join(pid.to_string()).join("exe")).unwrap();
+        };
+        link(7, "/usr/lib/chatgpt/ChatGPT");
+        link(8, "/usr/local/bin/ChatGPT");
+        assert!(runs_program(proc_root.path(), 7, program));
+        assert!(!runs_program(proc_root.path(), 8, program));
+        assert!(!runs_program(proc_root.path(), 9, program));
+    }
+
+    #[test]
+    fn the_switch_starts_as_given_and_tells_each_change_once() {
+        assert!(FollowSwitch::new(true).on());
+        assert!(!FollowSwitch::new(false).on());
+        let switch = FollowSwitch::new(true);
+        // Before start there is no one to tell.
+        switch.set(false);
+        assert!(!switch.on());
+        switch.set(true);
+        let told = Arc::new(Mutex::new(0));
+        let count = told.clone();
+        switch.start(Box::new(move || *count.lock().unwrap() += 1));
+        switch.set(true);
+        assert_eq!(*told.lock().unwrap(), 0);
+        switch.set(false);
+        assert!(!switch.on());
+        assert_eq!(*told.lock().unwrap(), 1);
+        switch.set(false);
+        assert_eq!(*told.lock().unwrap(), 1);
+        switch.set(true);
+        assert!(switch.on());
+        assert_eq!(*told.lock().unwrap(), 2);
+    }
+
+    #[test]
     fn installed_is_looked_for_once_each_attach() {
         let mut follow = ChatgptFollow::default();
         assert!(!follow.take_look());
