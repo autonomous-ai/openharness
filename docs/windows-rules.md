@@ -143,9 +143,10 @@ everywhere), [Process Creation Flags](https://learn.microsoft.com/en-us/windows/
   timeout or the host's kill; with none, it ends at once. The held pane listened for SIGHUP beside Ctrl-C and
   Ctrl-Break, so every respawn over it waited the host's 2 s grace (`RESPAWN_GRACE`, `pty/src/panes.rs`): six panes
   reopened after a reboot, two past the daemon's 5 s deadline (#4517's VM run). A process a respawn replaces listens
-  for SIGINT and SIGBREAK only (`windowsHeldPaneArgv`, `cli/src/lib/windows/engineStart.ts`). Tests:
-  `cli/src/lib/windows/engineStart.spec.ts` ("ends on a hangup"), `cli/src/lib/ptyHostBackend.restart.spec.ts` (a
-  respawn over the held pane under 2 s).
+  for SIGINT and SIGBREAK only: the held pane (`windowsHeldPaneArgv`, `cli/src/lib/windows/engineStart.ts`) and a
+  move's waiting pane (`moveWaitingArgv`, `cli/src/core/agents/hostMove.ts`). Tests:
+  `cli/src/lib/windows/engineStart.spec.ts` ("ends on a hangup"), `cli/src/core/agents/hostMove.spec.ts` ("the new
+  pane ends on a hangup"), `cli/src/lib/ptyHostBackend.restart.spec.ts` (a respawn over the held pane under 2 s).
 - **A Store app's install folder is asked, never built.** The Store's ChatGPT app is package `OpenAI.Codex`, in
   `%ProgramFiles%\WindowsApps\OpenAI.Codex_<version>_<arch>__<publisher id>`: a folder named for each version, which
   a standard user cannot list. Its window is `ChatGPT.exe`'s, and it holds a Codex of its own,
