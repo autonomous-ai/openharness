@@ -610,16 +610,22 @@ void pro_app_talk_over(void)
     pro_app_unlock();
 }
 
-// UH pod_voice_block_reason (R8), with the open-question set standing in for the notice list.
-const char *pro_app_voice_block_reason(const char *agent_id)
+// UH pod_voice_block_reason (R8), with the open-question set standing in for the notice list. *see_it (when given) says
+// the reason is "See it in <App>", which shows for 2 s as the round dial's hint.
+static const char *block_reason(const char *agent_id, bool *see_it)
 {
     const char *why = NULL;
+    if (see_it) *see_it = false;
     pro_app_lock();
     const pod_agent_t *pa = id_ok(agent_id) ? pod_model_find(&s_pod.model, agent_id) : NULL;
     if (pod_ui_updating(&s_pod) || atomic_load(&s_updating)) {   // the flag alone: an offer's gate holds voice off before its screen
         why = "Updating";   // a recording over a firmware write would starve it (owner, 2026-10-11)
     } else if (!s_linked) {
         why = "Not connected";
+    } else if (pa && !(pa->caps & POD_CAP_V)) {
+        // Its app takes no voice: where to go comes before every other reason, since nothing here can make it talk.
+        why = pod_host_see_it(pa->host);
+        if (see_it) *see_it = true;
     } else if (pa) {
         const cable_machine_t *mach = NULL;
         for (int i = 0; i < POD_AGENTS_MAX && !mach; i++) {
@@ -638,6 +644,8 @@ const char *pro_app_voice_block_reason(const char *agent_id)
     return why;   // a literal, valid after the unlock
 }
 
+const char *pro_app_voice_block_reason(const char *agent_id) { return block_reason(agent_id, NULL); }
+
 void pro_app_voice_result(int kind, const char *text)
 {
     if (!pro_voice_open()) return;   // a reply nobody waits for
@@ -655,7 +663,8 @@ void pro_app_voice_result(int kind, const char *text)
 // Pod asked to record (R8, P3). The gate and the recorder run without the lock; the refusal path takes it.
 static void voice_begin_effect(const char *agent)
 {
-    const char *why = pro_app_voice_block_reason(agent);
+    bool see_it;
+    const char *why = block_reason(agent, &see_it);
     const bool was_open = pro_voice_open();
     if (!why) {
         pro_voice_begin(agent);
@@ -667,7 +676,9 @@ static void voice_begin_effect(const char *agent)
         // A start that was refused must not leave Talk up, and says why for a moment.
         pro_app_lock();
         pod_ui_talk_over(&s_pod);
-        pod_ui_notice(&s_pod, why ? why : !s_linked ? "Not connected" : was_open ? "Still sending the last message" : "Can't talk right now", ms());
+        const uint32_t now = ms();
+        pod_ui_notice(&s_pod, why ? why : !s_linked ? "Not connected" : was_open ? "Still sending the last message" : "Can't talk right now", now);
+        if (see_it) s_pod.notice_until = now + 2000;
         change();
         pro_app_unlock();
     }
