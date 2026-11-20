@@ -6,7 +6,7 @@
  * inline door (services/inline.ts `startDevices`) until Windows services run in their own process; elsewhere never the
  * core's.
  */
-import { execFile } from 'node:child_process'
+import { type ChildProcess, execFile } from 'node:child_process'
 import { homedir } from 'node:os'
 import { delimiter, dirname, join } from 'node:path'
 import { resolveBinaryOnPath } from '../lib/binaryOnPath.js'
@@ -68,27 +68,35 @@ export function claudeRunner(bin: string, env?: NodeJS.ProcessEnv, platform: Nod
       return
     }
     let answered = false
+    let deadline: ReturnType<typeof setTimeout> | undefined
     const answer = (result: ClaudeAnswer): void => {
       if (answered) return
       answered = true
       clearTimeout(deadline)
       resolve(result)
     }
+    let child: ChildProcess
+    try {
+      child = execFile(program.file, program.args,
+        { encoding: 'utf8', killSignal: 'SIGKILL', maxBuffer: MAX_OUTPUT_BYTES, env: program.env ?? env, windowsHide: true },
+        (error, stdout, stderr) => {
+          // A missing file or output past the bound has no exit code: it is no answer.
+          const code = !error ? 0 : typeof error.code === 'number' ? error.code : null
+          answer({ code, stdout, stderr })
+        })
+    } catch {
+      // A start the system refuses at once (ENOTDIR, EINVAL) throws rather than emits: no answer, and no time to end.
+      answer({ code: null, stdout: '', stderr: '' })
+      return
+    }
     // Killed, and answered by itself, as orcaHomes' run: a child stuck where even SIGKILL waits never closes, and
     // execFile answers only at its close.
-    const deadline = setTimeout(() => {
+    if (!answered) deadline = setTimeout(() => {
       child.kill('SIGKILL')
       child.stdout?.destroy()
       child.stderr?.destroy()
       answer({ code: null, stdout: '', stderr: '' })
     }, timeoutMs)
-    const child = execFile(program.file, program.args,
-      { encoding: 'utf8', killSignal: 'SIGKILL', maxBuffer: MAX_OUTPUT_BYTES, env: program.env ?? env, windowsHide: true },
-      (error, stdout, stderr) => {
-        // A missing file or output past the bound has no exit code: it is no answer.
-        const code = !error ? 0 : typeof error.code === 'number' ? error.code : null
-        answer({ code, stdout, stderr })
-      })
     // Nothing is asked on stdin: a `claude` that waits for it would only run out its time.
     child.stdin?.end()
   })
