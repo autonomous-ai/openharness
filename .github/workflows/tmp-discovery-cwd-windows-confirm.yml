@@ -1,8 +1,9 @@
 # Temporary: removed before fix/discovery-cwd-windows-confirm merges. No secrets, no sign-in, nothing signed, published
-# or deployed. It tries to reproduce, on the RELEASED Harness CLI, a Windows report: every agent tab stuck on "Waiting
-# to confirm the native engine process", and "Not confirmed" after a daemon restart. The cause is not proven; each
-# scenario below varies one suspect (a restart, odd PATH entries, a deleted working folder) and records what the
-# daemon logged and what launch state it kept.
+# or deployed. It reproduces, on the RELEASED Harness CLI, a Windows report: every agent tab stuck on "Waiting to confirm
+# the native engine process", and "Not confirmed" after a daemon restart (run 44758521149). Each scenario varies one
+# suspect (a restart, a deleted working folder, odd PATH entries) and records what the daemon logged and what launch
+# state it kept. Then it installs this branch's build over the release, as an update would, and runs the scenarios
+# again: the before and the after on one runner, and the install folder the Windows ARM VM round installs.
 name: tmp discovery cwd windows confirm (temporary)
 
 on:
@@ -27,9 +28,16 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        runner: [windows-latest, windows-11-arm]
+        include:
+          - runner: windows-latest
+            arch: x64
+          - runner: windows-11-arm
+            arch: arm64
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 35
+    timeout-minutes: 70
+    env:
+      NODE_VERSION: v24.22.2
+      CLI_VERSION: 0.0.0-dev.ci${{ github.run_id }}
     steps:
       # A Node on PATH for npm, on both runners alike (the arm image is not promised one). Harness itself runs on its
       # own Node, which its installer lays down.
@@ -48,7 +56,10 @@ jobs:
           $Results = Join-Path $Out 'results.csv'
           New-Item -ItemType Directory -Force -Path $Out | Out-Null
           # The lines that tell the suspected causes apart.
-          $Pattern = 'process table unavailable|ENGINE_LOOKUP|executable ownership unavailable|create timed out|create ready|create failed|\[restore\]|RESUME_UNCONFIRMED|process.cwd|ENOENT|EPERM'
+          $Pattern = 'process table unavailable|ENGINE_LOOKUP|executable ownership unavailable|\[engine\] PATH|create timed out|create ready|create failed|\[restore\]|RESUME_UNCONFIRMED|process.cwd|ENOENT|EPERM'
+          # Scenario C's daemon PATH: a folder the user cannot list (icacls deny RX, made in scenario C), a quoted
+          # entry, an unexpanded %VAR%, `.` and a missing drive.
+          $OddPath = @('C:\work\denied', '"C:\Program Files\nodejs"', '%SystemRoot%\system32', '.', 'Q:\tools')
           # The harness command first, as the installer's PATH entry gives it to a new terminal. Claude Code's native
           # build last, so the npm one is the `claude` found and both shapes are on PATH.
           $env:Path = "$(Split-Path $H);$env:Path"
@@ -81,6 +92,26 @@ jobs:
             return [pscustomobject]@{ Code = $code; Text = $text }
           }
 
+          function Start-WithOddPath([string]$Tag) {
+            # Only the daemon gets the odd PATH: `harness new` and `harness ps` run as before.
+            $saved = $env:Path
+            $env:Path = (($OddPath + $env:Path) -join ';')
+            try { return Invoke-Harness $Tag @('start') } finally { $env:Path = $saved }
+          }
+
+          function Build-Name {
+            # Which CLI the harness command runs: this branch's dev build once it is installed, else the release.
+            $current = (Read-Shared (Join-Path $env:USERPROFILE '.harness\cli\current')).Trim()
+            if ($current -like '0.0.0-dev*') { return 'branch' } else { return 'release' }
+          }
+
+          function Ps-Errors([string]$Scenario) {
+            # Git's `ps`, run for a spawn lock's start marker, rejects its options: one line after each harness stop
+            # and harness start on 0.6.78 (run 44758521149). Counted in that scenario's own stop and start.
+            $text = foreach ($tag in "stop-$Scenario", "start-$Scenario") { foreach ($ext in 'out', 'err') { Read-Shared (Join-Path $Out "$tag.$ext") } }
+            return @(($text -join "`n") -split "`r?`n" | Where-Object { $_ -match 'ps: unknown option' }).Count
+          }
+
           function Registry-Rows {
             # The launch of each agent as the daemon keeps it (registry.json). Only what tells a confirmed launch from
             # an unconfirmed one is kept: no launch tokens, transcripts or session ids. No launch means ready, as the
@@ -106,10 +137,10 @@ jobs:
             Say "```````n</details>`n"
           }
 
-          function Watch-Launches([string]$Scenario, [string[]]$Ids, [switch]$Except, [int]$Seconds, [int]$MinSeconds = 0, [int]$Expected = 2) {
+          function Watch-Launches([string]$Scenario, [string[]]$Ids, [switch]$Except, [int]$Seconds, [int]$MinSeconds = 0, [int]$Expected = 2, [string]$PsOf = $Scenario) {
             # Every 10 s, until each agent's launch is ready or failed, or time is up: `harness ps` as a person reads it,
             # and the launch state the daemon keeps, which ps does not show. The agents watched are [Ids], or with
-            # -Except every agent but those.
+            # -Except every agent but those. [PsOf] is the scenario whose stop and start the ps errors are counted in.
             $start = Get-Date; $i = 0; $rows = @()
             do {
               $i++
@@ -126,9 +157,10 @@ jobs:
               $agents = @($rows | Where-Object { $_.engine -eq $engine })
               $confirmed = if (-not $agents.Count) { 'no agent' } elseif (@($agents | Where-Object { $_.launch -ne 'ready' }).Count) { 'no' } else { 'yes' }
               [pscustomobject]@{
-                Scenario = $Scenario; Engine = $engine; Confirmed = $confirmed; Seconds = $seconds
+                Scenario = $Scenario; Build = (Build-Name); Engine = $engine; Confirmed = $confirmed; Seconds = $seconds
                 Launch = (@($agents | ForEach-Object { "$($_.launch)$(if ($_.error) { " $($_.error)" })" }) -join ', ')
                 Detail = (@($agents | ForEach-Object { $_.detail } | Where-Object { $_ } | Select-Object -Unique) -join ' / ')
+                PsErrors = (Ps-Errors $PsOf)
               } | Export-Csv -LiteralPath $Results -Append -NoTypeInformation
             }
             Say "Scenario ${Scenario} after ${seconds}s, launches the daemon keeps:"
@@ -137,17 +169,53 @@ jobs:
             Say ("<details><summary>harness ps --json --all</summary>`n`n``````json`n" + $ps + "`n```````n</details>`n")
           }
 
-          function New-Agents([string]$Scenario, [string]$Folder) {
+          function New-Agents([string]$Scenario, [string]$Folder, [string]$PsOf = $Scenario) {
             # A person's `harness new` from the project folder, one Claude Code and one Codex. Signed out, the daemon
             # serves itself on this computer's id. Neither engine is signed in: each still runs in its pane (a login
-            # or trust screen), which is all the launch's confirmation needs.
+            # or trust screen), which is all the launch's confirmation needs. Their ids go to ids-<Scenario>.txt, for
+            # a later step to watch them again.
             New-Item -ItemType Directory -Force -Path $Folder | Out-Null
             $before = @(Registry-Rows | ForEach-Object { $_.agentId })
             foreach ($engine in 'claude', 'codex') {
               $r = Invoke-Harness "new-$Scenario-$engine" @('new', $engine, $Folder, '--json') -Cwd $Folder -Seconds 120
               Say "harness new $engine (scenario $Scenario) -> exit $($r.Code)`n``````text`n$($r.Text)`n``````"
             }
-            Watch-Launches $Scenario -Ids $before -Except -Seconds 240
+            Watch-Launches $Scenario -Ids $before -Except -Seconds 240 -PsOf $PsOf
+            Registry-Rows | Where-Object { $before -notcontains $_.agentId } | ForEach-Object { $_.agentId } |
+              Set-Content -LiteralPath (Join-Path $Out "ids-$Scenario.txt")
+          }
+
+          function Restart-Scenario([string]$Scenario) {
+            # Agents outlive the daemon (the terminal host is its own process); the restart restores and re-confirms them.
+            Say "## Scenario ${Scenario}: harness stop, harness start ($(Build-Name) build)"
+            $ids = @(Registry-Rows | Where-Object { $_.engine -in 'claude', 'codex' } | ForEach-Object { $_.agentId })
+            $null = Invoke-Harness "stop-$Scenario" @('stop')
+            $from = (Log-Lines).Count
+            $r = Invoke-Harness "start-$Scenario" @('start')
+            Say "harness start -> exit $($r.Code)"
+            # At least 90 s: the rows are ready from the scenarios before until the restore pass looks at them again.
+            Watch-Launches $Scenario -Ids $ids -Seconds 180 -MinSeconds 90 -Expected $ids.Count
+            Dump-Log $Scenario $from
+          }
+
+          function Gone-Scenario([string]$Scenario, [string]$Project) {
+            # The fix branch's topic: a daemon whose working folder is gone. Windows is expected to refuse the delete
+            # while a process works in the folder; the run records whether it did.
+            Say "## Scenario ${Scenario}: daemon started in C:\work\gone, then the folder deleted ($(Build-Name) build)"
+            $null = Invoke-Harness "stop-$Scenario" @('stop')
+            New-Item -ItemType Directory -Force -Path 'C:\work\gone' | Out-Null
+            $from = (Log-Lines).Count
+            $r = Invoke-Harness "start-$Scenario" @('start') -Cwd 'C:\work\gone'
+            Say "harness start -> exit $($r.Code)"
+            # Another process, as a person deleting the folder in Explorer or a terminal would be.
+            $deleted = pwsh -NoProfile -Command {
+              try { Remove-Item -LiteralPath 'C:\work\gone' -Recurse -Force -ErrorAction Stop; 'Remove-Item: done' }
+              catch { "Remove-Item refused: $($_.Exception.Message)" }
+              if (Test-Path -LiteralPath 'C:\work\gone') { 'the folder is still there' } else { 'the folder is gone' }
+            }
+            Say "``````text`n$(($deleted | Out-String).Trim())`n``````"
+            New-Agents $Scenario $Project
+            Dump-Log $Scenario $from
           }
           '@
           Set-Content -LiteralPath (Join-Path $env:RUNNER_TEMP 'repro.ps1') -Value $helpers
@@ -184,6 +252,7 @@ jobs:
           # The version the report came from. Another one still runs every scenario, and is said here.
           if ($version -notmatch '^v?0\.6\.78$') { Say "**Note: the report is on 0.6.78; this run installed $version.**" }
 
+      # The before, on the release. C runs last, so its agents are left as 0.6.78 leaves them for the after to pick up.
       - name: 'Scenario A: baseline'
         continue-on-error: true
         timeout-minutes: 9
@@ -196,21 +265,19 @@ jobs:
           New-Agents 'A' 'C:\work\proj-a'
           Dump-Log 'A' $from
 
-      # Agents outlive the daemon (the terminal host is its own process); the restart restores and re-confirms them.
       - name: 'Scenario B: daemon restart'
         continue-on-error: true
         timeout-minutes: 5
         run: |
           . (Join-Path $env:RUNNER_TEMP 'repro.ps1')
-          Say "## Scenario B: harness stop, harness start"
-          $ids = @(Registry-Rows | Where-Object { $_.engine -in 'claude', 'codex' } | ForEach-Object { $_.agentId })
-          $null = Invoke-Harness 'stop-B' @('stop')
-          $from = (Log-Lines).Count
-          $r = Invoke-Harness 'start-B' @('start')
-          Say "harness start -> exit $($r.Code)"
-          # At least 90 s: the rows are ready from scenario A until the restore pass looks at them again.
-          Watch-Launches 'B' -Ids $ids -Seconds 180 -MinSeconds 90 -Expected $ids.Count
-          Dump-Log 'B' $from
+          Restart-Scenario 'B'
+
+      - name: 'Scenario D: working folder deleted'
+        continue-on-error: true
+        timeout-minutes: 9
+        run: |
+          . (Join-Path $env:RUNNER_TEMP 'repro.ps1')
+          Gone-Scenario 'D' 'C:\work\proj-d'
 
       # The suspect in engineBin.ts: one PATH entry whose fs error is not ENOENT, ENOTDIR or EACCES fails the whole
       # ownership snapshot. Windows maps ERROR_ACCESS_DENIED to EPERM, and odd entries may give EINVAL or UNKNOWN.
@@ -223,7 +290,6 @@ jobs:
           $null = Invoke-Harness 'stop-C' @('stop')
           New-Item -ItemType Directory -Force -Path 'C:\work\denied' | Out-Null
           icacls 'C:\work\denied' /deny "$($env:USERNAME):(RX)"
-          $odd = @('C:\work\denied', '"C:\Program Files\nodejs"', '%SystemRoot%\system32', '.', 'Q:\tools')
           # The codes Windows gives for each entry, from the Node the daemon runs on: the evidence for the mapping.
           $probe = Join-Path $Out 'probe.cjs'
           @'
@@ -244,43 +310,118 @@ jobs:
           $node = 'node'
           $pointer = Join-Path $env:USERPROFILE '.harness\runtime\current-node'
           if (Test-Path -LiteralPath $pointer) { $node = (Get-Content -LiteralPath $pointer -TotalCount 1).Trim() }
-          $env:PROBE_ENTRIES = ConvertTo-Json -Compress -InputObject @($odd + (Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps'))
+          $env:PROBE_ENTRIES = ConvertTo-Json -Compress -InputObject @($OddPath + (Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps'))
           Say "Error codes from ``$node`` ($(& $node --version)), in the home folder:`n"
           Say "| entry | stat | opendir | access X_OK | access entry\claude.exe |`n|---|---|---|---|---|"
           Push-Location $env:USERPROFILE
           try { Say ((& $node $probe 2>&1 | Out-String).Trim()) } finally { Pop-Location }
           Say ''
-          # Only the daemon gets the odd PATH: `harness new` and `harness ps` below run as before.
-          $saved = $env:Path
-          $env:Path = (($odd + $env:Path) -join ';')
           $from = (Log-Lines).Count
-          try { $r = Invoke-Harness 'start-C' @('start') } finally { $env:Path = $saved }
+          $r = Start-WithOddPath 'start-C'
           Say "harness start -> exit $($r.Code)"
           New-Agents 'C' 'C:\work\proj-c'
           Dump-Log 'C' $from
 
-      # The fix branch's topic: a daemon whose working folder is gone. Windows is expected to refuse the delete while
-      # a process works in the folder; the run records whether it did.
-      - name: 'Scenario D: working folder deleted'
+      # This branch's build, as windows.yml's install job makes it: the bundle, Node checked against nodejs.org, and an
+      # install manifest of both.
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24.22.2
+          cache: npm
+          cache-dependency-path: cli/package-lock.json
+      - name: Bundle this branch's CLI
+        timeout-minutes: 15
+        working-directory: cli
+        env:
+          ADAPTER_VERSION: ${{ env.CLI_VERSION }}
+        run: |
+          npm ci
+          npm run bundle
+      - name: Fetch Node for Windows, checked against nodejs.org's SHASUMS256.txt
+        timeout-minutes: 5
+        run: |
+          $zip = "node-$env:NODE_VERSION-win-${{ matrix.arch }}.zip"
+          Invoke-WebRequest "https://nodejs.org/dist/$env:NODE_VERSION/$zip" -OutFile "$env:RUNNER_TEMP\$zip"
+          $sums = (Invoke-WebRequest "https://nodejs.org/dist/$env:NODE_VERSION/SHASUMS256.txt").Content
+          $want = (($sums -split "`n") | Where-Object { $_ -match " $([regex]::Escape($zip))$" }) -replace ' .*', ''
+          $got = (Get-FileHash "$env:RUNNER_TEMP\$zip" -Algorithm SHA256).Hash.ToLower()
+          if (-not $want -or $got -ne $want) { throw "$zip is $got, SHASUMS256.txt says '$want'" }
+      - name: Write the install manifest of this build, with the release's terminal host
+        timeout-minutes: 5
+        run: |
+          # The release's own host files and version, so the install moves only the CLI: install.ps1 keeps a complete
+          # version folder it already has. The files are install.ps1's $HarnessPtyFiles.
+          $ptyRoot = Join-Path $env:USERPROFILE '.harness\runtime\pty'
+          $ptyVersion = (Get-Content -LiteralPath (Join-Path $ptyRoot 'current-pty') -TotalCount 1).Trim()
+          $payload = "$env:RUNNER_TEMP\pty-payload"
+          New-Item -ItemType Directory -Force $payload | Out-Null
+          foreach ($name in 'harness-pty.exe', 'harness-launch.exe', 'harness.exe', 'conpty.dll', 'OpenConsole.exe', 'harness-serial.exe', 'harness-tui.exe') {
+            Copy-Item -LiteralPath (Join-Path (Join-Path $ptyRoot $ptyVersion) $name) -Destination $payload
+          }
+          node cli/scripts/windows-install-manifest.mjs --out "$env:RUNNER_TEMP\manifest" --cli-dir cli/dist `
+            --pty-dir $payload --node-zip "$env:RUNNER_TEMP\node-$env:NODE_VERSION-win-${{ matrix.arch }}.zip" `
+            --version $env:CLI_VERSION --pty-version $ptyVersion
+          if ($LASTEXITCODE -ne 0) { throw "windows-install-manifest.mjs exited $LASTEXITCODE" }
+          Get-Content "$env:RUNNER_TEMP\manifest\install-manifest.json"
+      # Right away, so the VM round has it even when a scenario after fails.
+      - name: Upload the install folder, for the VM round
+        uses: actions/upload-artifact@v4
+        with:
+          name: discovery-cwd-windows-confirm-install-${{ matrix.runner }}
+          path: ${{ runner.temp }}/manifest
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Install this branch's build over the release
+        timeout-minutes: 8
+        run: |
+          . (Join-Path $env:RUNNER_TEMP 'repro.ps1')
+          Say "## The update onto this branch's build"
+          # Stopped first: install.ps1 would restart a running daemon itself, with this step's PATH, and the start that
+          # matters is scenario C-after's, with the odd PATH. The agents keep running in the terminal host.
+          $null = Invoke-Harness 'stop-update' @('stop')
+          # No update may replace the build under test: a -dev version the updater never replaces, and the updater off
+          # too, at user level and for every step after this one, whose `harness start` the daemon inherits.
+          [Environment]::SetEnvironmentVariable('ADAPTER_UPDATE_DISABLE', 'true', 'User')
+          'ADAPTER_UPDATE_DISABLE=true' >> $env:GITHUB_ENV
+          $env:ADAPTER_UPDATE_DISABLE = 'true'
+          # This build is signed only by a release: installed unsigned, as only a test may.
+          $env:HARNESS_ALLOW_UNSIGNED = '1'
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File cli\scripts\install.ps1 -Manifest "$env:RUNNER_TEMP\manifest\install-manifest.json" -NoService
+          if ($LASTEXITCODE -ne 0) { throw "install.ps1 exited $LASTEXITCODE" }
+          $version = (& $H version 2>&1 | Select-Object -First 1 | Out-String).Trim()
+          Say "harness version: ``$version``"
+          if ($version -ne $env:CLI_VERSION) { throw "harness version is $version, not $env:CLI_VERSION" }
+
+      # The after, on this branch's build: C first, so the agents 0.6.78 left unconfirmed are looked at again.
+      - name: 'Scenario C-after: odd PATH entries, on the branch build'
+        continue-on-error: true
+        timeout-minutes: 14
+        run: |
+          . (Join-Path $env:RUNNER_TEMP 'repro.ps1')
+          Say "## Scenario C-after: daemon PATH with odd entries, C's agents and new ones ($(Build-Name) build)"
+          $stuck = @(Get-Content -LiteralPath (Join-Path $Out 'ids-C.txt') -ErrorAction SilentlyContinue | Where-Object { $_ })
+          $from = (Log-Lines).Count
+          $r = Start-WithOddPath 'start-C-after'
+          Say "harness start -> exit $($r.Code)"
+          Watch-Launches 'C-after' -Ids $stuck -Seconds 240 -Expected $stuck.Count
+          New-Agents 'C-after-new' 'C:\work\proj-c-after' -PsOf 'C-after'
+          Dump-Log 'C-after' $from
+
+      - name: 'Scenario B-after: daemon restart, on the branch build'
+        continue-on-error: true
+        timeout-minutes: 5
+        run: |
+          . (Join-Path $env:RUNNER_TEMP 'repro.ps1')
+          Restart-Scenario 'B-after'
+
+      - name: 'Scenario D-after: working folder deleted, on the branch build'
         continue-on-error: true
         timeout-minutes: 9
         run: |
           . (Join-Path $env:RUNNER_TEMP 'repro.ps1')
-          Say "## Scenario D: daemon started in C:\work\gone, then the folder deleted"
-          $null = Invoke-Harness 'stop-D' @('stop')
-          New-Item -ItemType Directory -Force -Path 'C:\work\gone' | Out-Null
-          $from = (Log-Lines).Count
-          $r = Invoke-Harness 'start-D' @('start') -Cwd 'C:\work\gone'
-          Say "harness start -> exit $($r.Code)"
-          # Another process, as a person deleting the folder in Explorer or a terminal would be.
-          $deleted = pwsh -NoProfile -Command {
-            try { Remove-Item -LiteralPath 'C:\work\gone' -Recurse -Force -ErrorAction Stop; 'Remove-Item: done' }
-            catch { "Remove-Item refused: $($_.Exception.Message)" }
-            if (Test-Path -LiteralPath 'C:\work\gone') { 'the folder is still there' } else { 'the folder is gone' }
-          }
-          Say "``````text`n$(($deleted | Out-String).Trim())`n``````"
-          New-Agents 'D' 'C:\work\proj-d'
-          Dump-Log 'D' $from
+          Gone-Scenario 'D-after' 'C:\work\proj-d-after'
 
       - name: Stop, collect the logs and write the summary
         if: always()
@@ -296,10 +437,10 @@ jobs:
             Set-Content -LiteralPath (Join-Path $logs $name) -Value (Read-Shared $_.FullName) -NoNewline
           }
           Say "## Result ($env:RUNNER_OS, ${{ matrix.runner }})`n"
-          Say "| scenario | engine | confirmed | launch | detail | seconds |`n|---|---|---|---|---|---|"
+          Say "| scenario | build | engine | confirmed | launch | detail | seconds | ps errors |`n|---|---|---|---|---|---|---|---|"
           if (Test-Path -LiteralPath $Results) {
             Import-Csv -LiteralPath $Results | ForEach-Object {
-              Say "| $($_.Scenario) | $($_.Engine) | $($_.Confirmed) | $($_.Launch) | $($_.Detail) | $($_.Seconds) |"
+              Say "| $($_.Scenario) | $($_.Build) | $($_.Engine) | $($_.Confirmed) | $($_.Launch) | $($_.Detail) | $($_.Seconds) | $($_.PsErrors) |"
             }
           }
           Say ''
