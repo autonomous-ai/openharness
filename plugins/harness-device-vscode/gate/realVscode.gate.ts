@@ -171,13 +171,16 @@ function macExecutable(named: string): string {
   return name === undefined ? named : join(contents, 'MacOS', name)
 }
 
-/** What VS Code, its CLI and its shells get as their home and PATH: the throwaway's, and the system's programs alone. */
+/** What VS Code, its CLI and its shells get as their home and PATH: the throwaway's, and the system's programs alone. On
+ *  Windows their temp folder too, inside the root: VS Code leaves a folder of its own in the account's (2026-11-20). */
 function throwawayEnv(): Record<string, string> {
   if (!WINDOWS) return { HOME: home, PATH: '/usr/bin:/bin' }
   return {
     USERPROFILE: home,
     LOCALAPPDATA: join(home, 'AppData', 'Local'),
     APPDATA: join(home, 'AppData', 'Roaming'),
+    TEMP: join(root, 'tmp'),
+    TMP: join(root, 'tmp'),
     PATH: join(process.env.SystemRoot ?? 'C:\\Windows', 'System32'),
   }
 }
@@ -279,8 +282,10 @@ describe('the extension in a real, throwaway VS Code', () => {
     const cli = resolveCliPathFromVSCodeExecutablePath(executable)
     expect(inside(cli)).toBe(true)
     mkdirSync(home)
-    // A profile's own folders, which Windows' programs expect in it.
-    if (WINDOWS) for (const folder of ['Local', 'Roaming']) mkdirSync(join(home, 'AppData', folder), { recursive: true })
+    // A profile's own folders, which Windows' programs expect in it, and the throwaway's temp folder.
+    if (WINDOWS) {
+      for (const folder of [join(home, 'AppData', 'Local'), join(home, 'AppData', 'Roaming'), join(root, 'tmp')]) mkdirSync(folder, { recursive: true })
+    }
     if (app !== undefined) assertRebranded(app)
     const args = ['--install-extension', vsix, '--force', '--user-data-dir', userData, '--extensions-dir', extensions]
     // The gate's PATH: the CLI is a script that finds its shell's tools there.
