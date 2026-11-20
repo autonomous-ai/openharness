@@ -3,6 +3,7 @@ import { fsyncSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, wr
 import { tmpdir } from 'os'
 import { join } from 'path'
 import type { registry as Registry } from './registry.js'
+import { REGISTRY_WRITE_DEADLINE_MS } from './registryPersistence.js'
 
 // Rows are compared without regard to key order. These cases check that this hides only key order:
 // another writer's real changes still land, local real changes still write, and the file keeps its format.
@@ -57,10 +58,11 @@ async function freshRegistry(): Promise<typeof Registry> {
 }
 
 beforeEach(async () => {
-  deadline.holdRegistryDeadline(Number.POSITIVE_INFINITY)
+  // No test here means the write deadline to pass: how fast this machine writes the registry never fails them.
+  deadline.holdRegistryDeadline(REGISTRY_WRITE_DEADLINE_MS)
   vi.resetModules()
   loaded.length = 0
-  // Only row timestamps are fixed; real lock retries and write deadlines must still advance.
+  // Only row timestamps are fixed; real lock retries must still advance.
   vi.useFakeTimers({ toFake: ['Date'] })
   vi.setSystemTime(1790900000000)
   directory = mkdtempSync(join(tmpdir(), 'registry-fingerprint-'))

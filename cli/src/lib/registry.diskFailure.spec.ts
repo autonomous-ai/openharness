@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { namesTheDisk } from '../harnessd/supervisor.js'
 import { errorKind } from './log.js'
 import type { registry as Registry } from './registry.js'
+import { REGISTRY_WRITE_DEADLINE_MS } from './registryPersistence.js'
 
 const refuse = vi.hoisted(() => ({ code: undefined as string | undefined, directorySync: undefined as string | undefined }))
 vi.mock('node:perf_hooks', async original => ({ ...await original<object>(), performance: { now: () => 0 } }))
@@ -34,7 +35,8 @@ let AtomicWriteUnconfirmed: typeof import('./secureState.js').AtomicWriteUnconfi
 const input = { agentId: 'persisted-agent', engine: 'claude' as const, tmuxPane: '%1',
   processIdentity: { pid: 101, executable: '/fixture/claude', startMarker: 'fixture-101' } }
 beforeEach(async () => {
-  deadline.holdRegistryDeadline(Number.POSITIVE_INFINITY)
+  // No test here means the write deadline to pass: how fast this machine writes the registry never fails them.
+  deadline.holdRegistryDeadline(REGISTRY_WRITE_DEADLINE_MS)
   vi.resetModules()
   directory = mkdtempSync(join(tmpdir(), 'registry-disk-'))
   for (const key of ['ADAPTER_DATA_DIR', 'CLAUDE_PROJECTS_DIR', 'CODEX_HOME', 'CURSOR_HOME']) vi.stubEnv(key, directory)

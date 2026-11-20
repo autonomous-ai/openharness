@@ -17,6 +17,7 @@ import { createRetainExitedSession } from './retainExitedSession.js'
 import { StoppedAgentStore } from './stoppedAgents.js'
 import { MoveGate } from './hostMove/gate.js'
 import { AtomicWriteUnconfirmed } from './secureState.js'
+import { REGISTRY_WRITE_DEADLINE_MS } from './registryPersistence.js'
 import type { TerminalBackend } from './terminalBackend.js'
 import { createBinding } from '../core/agents/bind.js'
 import { createStopAgentService } from './stopAgentService.js'
@@ -88,6 +89,7 @@ const terminal = { name: 'tmux', holdOpen: async () => ({ state: 'succeeded' }),
   rootProcess: async () => null, inventory: async () => ({ state: 'available', roots: [] }), paneState, releaseHold } as unknown as TerminalBackend
 let row: RegisteredSession
 let directory: string
+let writeDeadline: ReturnType<typeof deadline.holdRegistryDeadline>
 const deferred = () => { let resolve!: () => void; const promise = new Promise<void>(done => { resolve = done }); return { promise, resolve } }
 function holdImage(match: (rows: RegisteredSession[]) => boolean) {
   const entered = deferred(), held = deferred()
@@ -98,7 +100,8 @@ function holdImage(match: (rows: RegisteredSession[]) => boolean) {
 const persisted = (): RegisteredSession[] => JSON.parse(readFileSync(join(env.ADAPTER_DATA_DIR, 'registry.json'), 'utf8'))
 
 beforeEach(async () => {
-  deadline.holdRegistryDeadline(Number.POSITIVE_INFINITY)
+  // Only queue expiry means the write deadline to pass: how fast this machine writes the registry never fails the rest.
+  writeDeadline = deadline.holdRegistryDeadline(REGISTRY_WRITE_DEADLINE_MS)
   vi.clearAllMocks()
   vi.mocked(resolvePaneEngineProcess).mockResolvedValue(newProcess)
   paneState.mockResolvedValue({ dead: false, engineExit: null })
@@ -537,6 +540,8 @@ it.each((['name', 'model'] as const).flatMap(choice => ['owner', 'uncertain', 'q
     await held.entered
     const pending = update.agentUpdate(request, reply)
     try {
+      // The update queues its write a few turns after the call, so its deadline passes once it is held.
+      await vi.waitFor(() => { writeDeadline.expire(); expect(reply).toHaveBeenCalled() })
       await pending
       expect(reply).toHaveBeenCalledExactlyOnceWith({ error: 'PERSISTENCE_UNCONFIRMED' })
     } finally { held.release(); await blocking }

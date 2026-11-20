@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import type { ExternalResumeIntent } from './externalResume.js'
 import type { RegisteredSession } from './registry.js'
+import { REGISTRY_WRITE_DEADLINE_MS } from './registryPersistence.js'
 import { createExternalResumes } from '../core/agents/externalResume.js'
 import { stopExternalOwner } from '../core/agents/externalOwner.js'
 vi.mock('node:perf_hooks', async original => ({ ...await original<object>(), performance: { now: () => 0 } }))
@@ -15,7 +16,9 @@ vi.mock('./bootId.js', async original => ({ ...await original<object>(), current
 const instances = new Set<typeof import('./registry.js')['registry']>()
 let root: string
 beforeEach(() => {
-  deadline.holdRegistryDeadline(Number.POSITIVE_INFINITY)
+  // No test here means the write deadline to pass: how fast this machine writes the registry never fails them.
+  // Nor the resumes' 2 s re-check: on a loaded disk each check's own write would run the next at once, without end.
+  deadline.holdRegistryDeadline(REGISTRY_WRITE_DEADLINE_MS, { hold: [2_000] })
   root = mkdtempSync(join(tmpdir(), 'registry-adoption-'))
   vi.stubEnv('ADAPTER_DATA_DIR', root)
   vi.stubEnv('CLAUDE_PROJECTS_DIR', root)
