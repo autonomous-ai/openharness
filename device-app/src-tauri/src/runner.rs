@@ -1505,6 +1505,31 @@ mod tests {
         }
     }
 
+    /// A log a test can wait on: the follow thread writes it from its own thread.
+    #[derive(Default)]
+    struct WaitedLog {
+        lines: Mutex<Vec<String>>,
+        wrote: Condvar,
+    }
+
+    impl WaitedLog {
+        /// Waits until `line` has been written `n` times, and gives how many times it has.
+        fn until(&self, line: &str, n: usize) -> usize {
+            let count = |lines: &Vec<String>| lines.iter().filter(|said| *said == line).count();
+            let lines = self.lines.lock().unwrap();
+            let (lines, _) = self.wrote.wait_timeout_while(lines, WAIT, |lines| count(lines) < n).unwrap();
+            assert!(count(&lines) >= n, "{lines:?}");
+            count(&lines)
+        }
+    }
+
+    impl Log for WaitedLog {
+        fn line(&self, text: &str) {
+            self.lines.lock().unwrap().push(text.into());
+            self.wrote.notify_all();
+        }
+    }
+
     impl ChatgptWindow for ChatgptDoor {
         fn installed(&self) -> bool {
             self.with(|state| {
@@ -2201,18 +2226,28 @@ mod tests {
     fn an_observation_that_does_not_start_is_one_log_line_each_time_observing_starts() {
         let door = ChatgptDoor::answering(false, true);
         door.with(|state| state.refuses = true);
-        let (w, fronts) = world_following(CHATGPT_BUNDLE, &door);
+        let (log, fronts) = (
+            Arc::new(WaitedLog::default()),
+            Arc::new(Fronts { now: CHATGPT_BUNDLE.into(), changed: Mutex::default() }),
+        );
+        let (source, follow_door, to) = (fronts.clone(), door.clone(), log.clone());
+        let w = world_where(move |doors| {
+            doors.front = source;
+            doors.follow = follow_door;
+            doors.log = to;
+        });
+        assert!(w.runner.find_cli());
         assert_eq!(w.next(), follow(true, false));
         w.fake.script("hardware watch --json", &ATTACHED);
         assert_eq!(w.answer(Effect::SpawnWatch), a_dial());
-        door.observed(1);
-        let said = |w: &World| w.fake.log().lines().iter().filter(|line| *line == "chatgpt: no observer").count();
-        // The next start waits at the gate: the follow thread is done with the first.
+        // The follow thread is done with the first once it has said so: a start before then would drop its line.
+        log.until("chatgpt: no observer", 1);
+        // The next start waits at the gate.
         door.gate(true);
         fronts.tell(VSCODE);
         fronts.tell(CHATGPT_BUNDLE);
         door.observed(2);
-        assert_eq!(said(&w), 1);
+        assert_eq!(log.until("chatgpt: no observer", 1), 1);
         door.gate(false);
         assert_eq!(w.answer(Effect::StopWatch), Event::WatchExit(Some(0)));
     }
