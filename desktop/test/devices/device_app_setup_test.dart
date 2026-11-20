@@ -19,6 +19,33 @@ const _signer = MacSigner(
   name: 'Autonomous Inc.',
 );
 
+const _setupExe =
+    r'C:\Users\Nguyễn Văn A\AppData\Local\Temp\h\Harness-Device-setup.exe';
+const _desktopExe =
+    r'C:\Users\Nguyễn Văn A\AppData\Local\Programs\Harness\app\1.3.91\harness-desktop.exe';
+const _ours = WindowsSigner(
+  status: 'Valid',
+  subject:
+      'CN=AUTONOMOUS INC., O=AUTONOMOUS INC., L=Redlands, S=California, C=US',
+  identity: '1.3.6.1.4.1.311.97.585055327.208923272.208213867.148721407',
+);
+const _unsigned = WindowsSigner(status: 'NotSigned', subject: '', identity: '');
+
+/// The Windows check of [_setupExe] when Desktop is signed by [desktop] and
+/// the installer by [installer]; each read is added to [reads].
+Future<bool> _windowsCheck({
+  required WindowsSigner desktop,
+  required WindowsSigner installer,
+  List<String>? reads,
+}) => deviceAppInstallerSignedLikeDesktop(
+  _setupExe,
+  runningExe: () => _desktopExe,
+  read: ({required file, required runningExe}) async {
+    reads?.add('file: $file, runningExe: $runningExe');
+    return (running: desktop, file: installer);
+  },
+);
+
 AppNotifier _app({DeviceAppOffer? offer}) => AppNotifier(
   config: AppConfig.dev,
   authSession: AuthSession(),
@@ -112,6 +139,80 @@ void main() {
         isFalse,
       );
       expect(verified, 0);
+    });
+
+    test(
+      'windows: a Desktop with no signature keeps the sha256 check alone',
+      () async {
+        expect(
+          await _windowsCheck(desktop: _unsigned, installer: _unsigned),
+          isTrue,
+        );
+      },
+    );
+
+    test('windows: an installer signed by Desktop\'s signer passes', () async {
+      final reads = <String>[];
+      expect(
+        await _windowsCheck(desktop: _ours, installer: _ours, reads: reads),
+        isTrue,
+      );
+      expect(reads, ['file: $_setupExe, runningExe: $_desktopExe']);
+    });
+
+    // A manifest someone else wrote can name any installer with a matching
+    // sha256; on Windows Desktop runs it, so only our signer may have made it.
+    test(
+      'windows: an installer signed by someone else, or not at all, is refused',
+      () async {
+        const lookalike = WindowsSigner(
+          status: 'Valid',
+          subject: 'CN=AUTONOMOUS INC., O=AUTONOMOUS INC., L=Redlands, S=California, C=US',
+          identity: '1.3.6.1.4.1.311.97.1.2.3.4',
+        );
+        const changed = WindowsSigner(
+          status: 'HashMismatch',
+          subject: 'CN=AUTONOMOUS INC., O=AUTONOMOUS INC., L=Redlands, S=California, C=US',
+          identity:
+              '1.3.6.1.4.1.311.97.585055327.208923272.208213867.148721407',
+        );
+        for (final installer in [lookalike, _unsigned, changed]) {
+          expect(
+            await _windowsCheck(desktop: _ours, installer: installer),
+            isFalse,
+            reason: installer.status,
+          );
+        }
+      },
+    );
+
+    test('windows: a Desktop whose signature is broken refuses', () async {
+      for (final status in ['HashMismatch', 'Unreadable']) {
+        expect(
+          await _windowsCheck(
+            desktop: WindowsSigner(
+              status: status,
+              subject: _ours.subject,
+              identity: _ours.identity,
+            ),
+            installer: _ours,
+          ),
+          isFalse,
+          reason: status,
+        );
+      }
+    });
+
+    test('windows: a signature that cannot be read refuses', () async {
+      expect(
+        await deviceAppInstallerSignedLikeDesktop(
+          _setupExe,
+          runningExe: () => _desktopExe,
+          read: ({required file, required runningExe}) async =>
+              throw cannotCheckSignature,
+        ),
+        isFalse,
+      );
     });
   });
 

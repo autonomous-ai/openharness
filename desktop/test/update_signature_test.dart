@@ -1,5 +1,10 @@
+import 'dart:io';
+
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/bootstrap/environment_provisioner.dart'
+    show windowsPowerShellPath;
 import 'package:harness/update/update_signature.dart';
+import 'package:path/path.dart' as p;
 
 /// `codesign -dv --verbose=2` of the published 1.3.89 Apple Silicon bundle.
 const _released = '''
@@ -375,4 +380,62 @@ void main() {
       );
     },
   );
+
+  group('the signer pair', () {
+    // A path in the script's text would be parsed as PowerShell: a file
+    // named with a quote or `$(...)` would run as code.
+    test(
+      'the signer pair script takes its paths from the environment only',
+      () {
+        final script = windowsSignerPairScript;
+        expect(
+          RegExp(r'\$env:(\w+)').allMatches(script).map((m) => m[1]).toSet(),
+          {'HARNESS_SIGNER_RUNNING', 'HARNESS_SIGNER_FILE'},
+        );
+        expect(
+          script,
+          contains(r'running = Read-Signer $env:HARNESS_SIGNER_RUNNING'),
+        );
+        expect(
+          script,
+          contains(r'file = Read-Signer $env:HARNESS_SIGNER_FILE'),
+        );
+      },
+    );
+
+    // One reading of a signer: the pair must not drift from what the
+    // updater's report calls the same signer (the Security module loaded by
+    // path, the identity EKUs, an unreadable file as Unreadable).
+    test('the report and the pair read signers with one prelude', () {
+      const load =
+          r"Import-Module -Name (Join-Path $PSHOME 'Modules\Microsoft.PowerShell.Security\Microsoft.PowerShell.Security.psd1')";
+      expect(windowsSignerPrelude, contains(load));
+      expect(windowsSignerPrelude, contains(r'function Signer($signature) {'));
+      expect(windowsSignerPrelude, contains(r'function Read-Signer($path) {'));
+      for (final script in [windowsReportScript, windowsSignerPairScript]) {
+        expect(script, startsWith(windowsSignerPrelude));
+        expect('function Signer('.allMatches(script), hasLength(1));
+        expect('function Read-Signer('.allMatches(script), hasLength(1));
+      }
+    });
+
+    test('readWindowsSignerPair reads powershell.exe as Valid and an empty exe as unsigned', () async {
+      final scratch = Directory.systemTemp.createTempSync('signer-pair-');
+      addTearDown(() => scratch.deleteSync(recursive: true));
+      final empty = p.join(scratch.path, 'Harness-Device-setup.exe');
+      File(empty).writeAsBytesSync(const []);
+
+      final pair = await readWindowsSignerPair(
+        file: empty,
+        runningExe: windowsPowerShellPath(Platform.environment),
+      );
+      expect(pair.running.status, 'Valid');
+      expect(pair.running.subject, contains('Microsoft'));
+      // An empty file has no PE header, so Windows may call it UnknownError
+      // (no signature format claims it) rather than NotSigned. Either is
+      // unsigned, and neither is the Unreadable of a path never checked.
+      expect(pair.file.status, anyOf('NotSigned', 'UnknownError'));
+      expect(pair.file.subject, isEmpty);
+    }, skip: !Platform.isWindows);
+  });
 }
