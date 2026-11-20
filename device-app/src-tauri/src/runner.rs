@@ -1801,15 +1801,18 @@ mod tests {
         scripts.gate(false);
         scripts.still(2);
 
+        // A world of its own: the call let go above may still be at the gate, and the gate shut again would hold it.
+        let scripts = Scripts::answering(&[TTY]);
+        let (w, _fronts) = world_with_tabs(TERMINAL, &scripts);
         let detaching = [r#"{"attached":true}"#, "@wait detach", r#"{"attached":false}"#, "@stdin"];
         w.fake.script("hardware watch --json", &detaching);
         scripts.gate(true);
         assert_eq!(w.answer(Effect::SpawnWatch), a_dial());
-        scripts.polls(2);
+        scripts.polls(1);
         w.fake.touch("detach");
         assert_eq!(w.next(), no_dial());
         scripts.gate(false);
-        scripts.still(4);
+        scripts.still(2);
     }
 
     #[test]
@@ -2205,14 +2208,16 @@ mod tests {
         assert_eq!(w.next(), follow(true, false));
         w.fake.script("hardware watch --json", &ATTACHED);
         assert_eq!(w.answer(Effect::SpawnWatch), a_dial());
-        door.observed(1);
-        let said = |w: &World| w.fake.log().lines().iter().filter(|line| *line == "chatgpt: no observer").count();
-        // The next start waits at the gate: the follow thread is done with the first.
+        let said = |lines: &[String]| lines.iter().filter(|line| *line == "chatgpt: no observer").count();
+        // The follow thread is done with the first start once it has said so: a stop before then would drop its line,
+        // and a gate shut before then would hold it.
+        w.fake.log().until(|lines| said(lines) == 1);
+        // The next start waits at the gate.
         door.gate(true);
         fronts.tell(VSCODE);
         fronts.tell(CHATGPT_BUNDLE);
         door.observed(2);
-        assert_eq!(said(&w), 1);
+        assert_eq!(said(&w.fake.log().lines()), 1);
         door.gate(false);
         assert_eq!(w.answer(Effect::StopWatch), Event::WatchExit(Some(0)));
     }
