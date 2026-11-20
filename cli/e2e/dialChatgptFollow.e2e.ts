@@ -125,7 +125,7 @@ describe.skipIf(process.platform === 'win32')('the dial follows the ChatGPT thre
 
     // 2. The watch as Harness Device runs it, under the daemon's environment only: this daemon's data folder and the
     // devices' socket in it, never this computer's. ChatGPT is in front from its first line.
-    const env = { ...d.env, TMUX_PANE: '' }
+    const env: NodeJS.ProcessEnv = { ...d.env, TMUX_PANE: '' }
     expect(env.ADAPTER_DATA_DIR).toBe(d.dataDir)
     expect(d.dataDir.startsWith(d.root + sep)).toBe(true)
     expect(devicesListenerPath(d.dataDir, process.platform, env.HOME)).toBe(join(d.dataDir, 'devices.sock'))
