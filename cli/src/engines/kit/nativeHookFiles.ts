@@ -25,6 +25,8 @@ export interface HookPreparationProof {
 }
 const MAX_BYTES = 1024 * 1024
 const missing = (error: unknown) => (error as NodeJS.ErrnoException).code === 'ENOENT'
+type HookFileVerifier = (directories?: Map<string, BigIntStats>) => void
+const completeHookFiles = new WeakMap<HookFileVerifier, { facts: readonly NativePathFact[]; target: string; stamp: string | null }>()
 
 /**
  * The directories each attempt has flushed. On macOS every fsync is F_FULLFSYNC, a full drive flush (25-35 ms on an
@@ -207,6 +209,7 @@ export function inspectHookFile(file: string, defaultMode = 0o666) {
     throw new HookPreparationHeld('the configuration parent exceeds its path limit')
   }
   verify()
+  if (complete) completeHookFiles.set(verify, { facts: retained, target, stamp: before })
   return {
     content, directory, mode, stamp: before,
     verify, prepare,
@@ -316,13 +319,51 @@ export function inspectHookFile(file: string, defaultMode = 0o666) {
   }
 }
 
-/** The measured optional-source proof repeatedly walks common ancestors. Share only provisional directory reads
- * inside this synchronous pass; every observation's snapshot and final leaf proof remain fresh. */
-export function verifyHookFiles(files: readonly { observed: ReturnType<typeof inspectHookFile> }[]): void {
-  const directories = new Map<string, BigIntStats>()
-  for (const file of files) file.observed.verify(directories)
+/** Capture only the verifiers, never a successful check. Every invocation reads the filesystem afresh. */
+export function hookFileVerifier(files: readonly { observed: ReturnType<typeof inspectHookFile> }[]): () => void {
+  return observationVerifier(files.map(file => file.observed.verify))
 }
 
+function observationVerifier(checks: readonly HookFileVerifier[]): () => void {
+  const fallback = () => {
+    const directories = new Map<string, BigIntStats>()
+    for (const check of checks) check(directories)
+  }
+  if (!checks.length || checks.length > 32) return fallback
+  const observed = checks.map(check => completeHookFiles.get(check))
+  if (observed.some(file => !file)) return fallback
+  if (checks.length === 1) return checks[0]
+  const union = new Map<string, NativePathFact>()
+  const versions = new Map<string, string | null>()
+  for (const file of observed) {
+    if (versions.has(file!.target) && versions.get(file!.target) !== file!.stamp) return fallback
+    versions.set(file!.target, file!.stamp)
+    for (const fact of file!.facts) {
+      const previous = union.get(fact.path)
+      if (previous && (previous.identity !== fact.identity || previous.alias?.target !== fact.alias?.target
+        || previous.alias?.version !== fact.alias?.version)) return fallback
+      if (!union.has(fact.path) && union.size >= 256) return fallback
+      union.set(fact.path, fact)
+    }
+  }
+  // NativePaths captures ancestors before descendants; Map updates preserve their first position.
+  const facts = [...union.values()], reverse = [...facts].reverse()
+  const checkFile = (path: string, info: BigIntStats | null) => {
+    const expected = versions.get(path)
+    if (expected !== undefined && (info ? version(info) : null) !== expected) {
+      throw new HookPreparationHeld('the settings file changed before publication')
+    }
+  }
+  // Close/Resume profiles show repeated reconstruction of complete sibling routes.
+  // The second pass checks file versions while walking back to their ancestors:
+  // a later file read must not leave an already-checked shared ancestor stale.
+  return () => {
+    const budget = new NativeEvidenceBudget(), devices = new Map<string, bigint | null>()
+    verifyNativePathFacts(facts, budget, devices)
+    verifyNativePathFacts(reverse, budget, devices, checkFile)
+    budget.step()
+  }
+}
 
 export interface HookPreparationAttempt {
   /** The original caller and deadline still authorize another effect. */
@@ -364,11 +405,11 @@ function preparationProof(files: readonly string[], verifyRoutes: () => void): H
     const observed = inspectHookFile(file)
     return { file, target: located?.path ?? join(directoryPath(dirname(file)), basename(file)), stamp: observed.stamp, facts: paths.snapshot(), verify: observed.verify }
   })
+  const verifyFiles = observationVerifier(confirmed.map(file => file.verify))
   const proof = { files: confirmed.map(({ verify: _verify, ...file }) => file), current: () => {
     try {
       verifyRoutes()
-      const directories = new Map<string, BigIntStats>()
-      for (const file of confirmed) file.verify(directories)
+      verifyFiles()
       return true
     } catch { return false }
   } }
@@ -544,18 +585,22 @@ export async function runHookPreparation<T>(files: readonly string[], work: (att
     }
   }
   const observations = new Map<string, (directories?: Map<string, BigIntStats>) => void>()
+  let verifyObservations = observationVerifier([])
   const verify = () => {
     check()
     verifyRoutes()
-    // Share only provisional directory walks; every observation still verifies its final snapshot afresh.
-    const directories = new Map<string, BigIntStats>()
-    for (const inspect of observations.values()) inspect(directories)
+    const checked = verifyObservations
+    checked()
     // Metadata reads consume no dependency authority. Fence dependencies once after them, even in nested attempts.
     options.verify?.(); check()
+    if (checked !== verifyObservations) throw new HookPreparationHeld('the settings observations changed during verification')
   }
   const attempt: HookPreparationAttempt = {
     check, verify,
-    observe: (file, inspect) => { observations.set(file, inspect) },
+    observe: (file, inspect) => {
+      observations.set(file, inspect)
+      verifyObservations = observationVerifier([...observations.values()])
+    },
     async flush(fd) {
       check()
       if (!MAX_FLUSHES) throw new HookPreparationHeld('filesystem capacity cannot spare a disk confirmation')
@@ -588,6 +633,7 @@ export async function runHookPreparation<T>(files: readonly string[], work: (att
   const actual = Promise.resolve().then(() => {
     verify()
     for (const file of files) observations.set(file, inspectHookFile(file).verify)
+    verifyObservations = observationVerifier([...observations.values()])
     return work(attempt)
   }).then(result => {
     verify()

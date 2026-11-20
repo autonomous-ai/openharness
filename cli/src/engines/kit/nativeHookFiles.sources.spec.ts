@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync,
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { inspectHookFile, verifyHookFiles } from './nativeHookFiles.js'
+import { inspectHookFile, hookFileVerifier } from './nativeHookFiles.js'
 import { statusLineScript } from './statusLine.js'
 const effects = vi.hoisted(() => ({ onStat: undefined as ((file: unknown) => void) | undefined }))
 vi.mock('node:fs', async original => {
@@ -14,9 +14,65 @@ beforeEach(() => { root = mkdtempSync(join(tmpdir(), 'optional-source-proof-')) 
 afterEach(() => { effects.onStat = undefined; rmSync(root, { recursive: true, force: true }) })
 function capture(paths: string[]) {
   const observations = paths.map(file => ({ observed: inspectHookFile(file) }))
-  return { current: () => { try { verifyHookFiles(observations); return true } catch { return false } } }
+  const verify = hookFileVerifier(observations)
+  return { current: () => { try { verify(); return true } catch { return false } } }
 }
 describe('one synchronous source-verification pass', () => {
+  it.each([false, true])('checks complete sibling sources in two fresh route passes (alias=%s)', alias => {
+    const shared = join(realpathSync(root), 'complete'), selected = join(realpathSync(root), 'selected')
+    mkdirSync(shared)
+    if (alias) symlinkSync(shared, selected)
+    const files = ['one.json', 'two.json', 'three.json'].map(name => {
+      writeFileSync(join(shared, name), '{}')
+      return join(alias ? selected : shared, name)
+    })
+    const prepared = capture(files)
+    for (let call = 0; call < 2; call++) {
+      let sharedReads = 0, aliasReads = 0
+      effects.onStat = file => { if (file === shared) sharedReads++; if (file === selected) aliasReads++ }
+      try {
+        expect(prepared.current()).toBe(true)
+        expect(sharedReads).toBe(2)
+        expect(aliasReads).toBe(alias ? 2 : 0)
+      } finally { effects.onStat = undefined }
+    }
+    writeFileSync(join(shared, 'one.json'), 'changed')
+    expect(prepared.current()).toBe(false)
+  })
+
+  it('refuses conflicting observations of the same complete source', () => {
+    const file = join(root, 'conflict.json')
+    writeFileSync(file, 'first')
+    const first = inspectHookFile(file)
+    const replacement = join(root, 'replacement.json')
+    writeFileSync(replacement, 'second'); renameSync(replacement, file)
+    const second = inspectHookFile(file)
+    expect(hookFileVerifier([{ observed: first }, { observed: second }])).toThrow(/changed/)
+    expect(readFileSync(file, 'utf8')).toBe('second')
+  })
+
+  it.each(['replacement', 'alias'] as const)('checks common ancestry after a later source read causes a %s', change => {
+    const shared = join(realpathSync(root), 'late'), displaced = join(realpathSync(root), 'displaced')
+    mkdirSync(shared)
+    const names = ['one', 'two', 'three']
+    const files = names.map(name => {
+      const folder = join(shared, name); mkdirSync(folder)
+      const file = join(folder, 'config.json'); writeFileSync(file, '{}'); return file
+    })
+    const prepared = capture(files)
+    let reads = 0, changed = false
+    effects.onStat = file => {
+      if (file !== files[1] || ++reads !== 2) return
+      changed = true; effects.onStat = undefined
+      renameSync(shared, displaced)
+      if (change === 'alias') symlinkSync(displaced, shared)
+      else { mkdirSync(shared); for (const name of names) renameSync(join(displaced, name), join(shared, name)) }
+    }
+    expect(prepared.current()).toBe(false)
+    expect(changed).toBe(true)
+    for (const file of files) expect(readFileSync(file, 'utf8')).toBe('{}')
+  })
+
   function sharedSources() {
     const shared = join(realpathSync(root), 'shared'), displaced = join(realpathSync(root), 'displaced')
     const folders = ['data', '.codex', 'work']

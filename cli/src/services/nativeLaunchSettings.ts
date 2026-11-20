@@ -7,7 +7,7 @@ import { launchContract } from '../engines/launches.js'
 import { nativeHookLocations } from '../engines/kit/nativeLocations.js'
 import { instructionValueIn } from '../engines/kit/attribution.js'
 import { preparedStatusLine, statusLineScript } from '../engines/kit/statusLine.js'
-import { HookPreparationHeld, inspectHookFile, verifyHookFiles, type HookPreparationProof } from '../engines/kit/nativeHookFiles.js'
+import { HookPreparationHeld, inspectHookFile, hookFileVerifier, type HookPreparationProof } from '../engines/kit/nativeHookFiles.js'
 import { publishNativeFiles } from '../engines/kit/nativeHookPublication.js'
 import { HOOK_TOTAL_LIMIT } from '../engines/kit/nativeHookWire.js'
 import { boundedLaunchSettingsInput, launchSettingsCandidate, LAUNCH_SETTINGS_TIMEOUT_MS,
@@ -71,6 +71,7 @@ export async function prepareNativeLaunchSettings(input: LaunchSettingsInput, da
       if (bytes > HOOK_TOTAL_LIMIT) throw new HookPreparationHeld('the launch settings sources exceed their size limit')
       return { file, observed }
     })
+    const verifySources = hookFileVerifier(observations)
     const destination = input.engine === 'claude' ? join(dataDir, 'statusline', 'statusline.mjs') : null
     const artifactRoute = () => {
       if (!destination) return
@@ -87,7 +88,7 @@ export async function prepareNativeLaunchSettings(input: LaunchSettingsInput, da
     }
     const verify = () => {
       if (!active()) throw new HookPreparationHeld('the optional preparation was revoked')
-      verifyHookFiles(observations); artifactRoute()
+      verifySources(); artifactRoute()
       if (!active()) throw new HookPreparationHeld('the optional preparation was revoked')
     }
     const captured = new Map(observations.map(({ file, observed }) => [file, observed.content]))

@@ -14,9 +14,9 @@ beforeEach(() => { root = realpathSync(mkdtempSync(join(tmpdir(), 'native-route-
 afterEach(() => { effects.onStat = undefined; rmSync(root, { recursive: true, force: true }) })
 
 const callers = [
-  { name: 'destination routes', reads: 2, aliasReads: 2, fallbackReads: 3 },
-  { name: 'preparation observations', reads: 6, aliasReads: 8, fallbackReads: 7 },
-  { name: 'completed proof', reads: 6, aliasReads: 8, fallbackReads: 7 },
+  { name: 'destination routes', reads: 2, missingReads: 2, aliasReads: 2, fallbackReads: 3 },
+  { name: 'preparation observations', reads: 4, missingReads: 6, aliasReads: 4, fallbackReads: 7 },
+  { name: 'completed proof', reads: 4, missingReads: 6, aliasReads: 4, fallbackReads: 7 },
 ] as const
 type Caller = typeof callers[number]['name']
 async function withVerifier(caller: Caller, files: string[], exercise: (verify: () => void) => void): Promise<void> {
@@ -96,7 +96,7 @@ it.each(callers)('$name shares only provisional sibling reads and starts a fresh
 })
 
 it.each(callers.flatMap(caller => ['file', 'parents'].map(missing => ({ ...caller, missing }))))(
-  '$name reuses observed ancestry for missing $missing and still starts a fresh pass', async ({ name, reads, missing }) => {
+  '$name reuses observed ancestry for missing $missing and still starts a fresh pass', async ({ name, missingReads: reads, missing }) => {
     const fixture = siblings()
     for (const file of fixture.files) rmSync(missing === 'file' ? file : dirname(file), { recursive: true })
     const files = missing === 'file' ? fixture.files : fixture.files.map(file => join(dirname(file), 'unwritten/deeper/config.json'))
@@ -258,6 +258,40 @@ it('runs every custom observation at each original preparation fence', async () 
     attempt.verify(); expect(custom).toHaveBeenCalledTimes(2)
   })
   expect(custom).toHaveBeenCalledTimes(4)
+})
+
+it('cannot authorize an effect after an observation is added during verification', async () => {
+  const fixture = siblings()
+  let inserted = false, effect = false
+  await expect(runHookPreparation(fixture.files, async attempt => {
+    attempt.observe('inserts a dependency', () => {
+      if (inserted) return
+      inserted = true
+      attempt.observe('new dependency', () => { throw new HookPreparationHeld('the new dependency refused publication') })
+    })
+    attempt.verify()
+    effect = true
+  })).rejects.toThrow(/changed|refused/)
+  expect(inserted).toBe(true)
+  expect(effect).toBe(false)
+})
+
+it('cannot authorize an effect after a complete verifier changes during its compiled fence', async () => {
+  const fixture = siblings(), extra = join(root, 'extra.json')
+  writeFileSync(extra, '{}')
+  const replacement = inspectHookFile(extra)
+  let reads = 0, changed = false, effect = false
+  await expect(runHookPreparation(fixture.files, async attempt => {
+    effects.onStat = file => {
+      // The reservation reads the first leaf twice; its third read is the compiled observation pass.
+      if (file !== fixture.files[0] || ++reads !== 3) return
+      effects.onStat = undefined; changed = true
+      attempt.observe(fixture.files[0], replacement.verify)
+    }
+    try { attempt.verify(); effect = true } finally { effects.onStat = undefined }
+  })).rejects.toThrow(/observations changed/)
+  expect(changed).toBe(true)
+  expect(effect).toBe(false)
 })
 
 it('checks an earlier private directory after the final sibling walk', () => {
