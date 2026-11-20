@@ -29,12 +29,15 @@ fi
 printf '%s\\n' "$#" >> "$STUB_LOG/ran"
 `;
 const sums = (text: string) => ({ sha256: createHash("sha256").update(text).digest("hex"), size: Buffer.byteLength(text) });
+/** The pattern that finds a process whose command is `path`: its regex characters escaped, anchored at the start. */
+const commandPattern = (path: string) => `^${path.replace(/[\][\\.*^$+?(){}|]/g, "\\$&")}( |$)`;
 
 /**
  * Stub uname, curl, plutil, ditto, lipo, open, pgrep and mv, first on PATH, steered by STUB_* variables; shasum,
  * sha256sum, sed and the rest are real. curl serves the manifest at its URL and the release file at any other,
  * recording each URL. plutil answers the manifest's desktop-macos fields from files and an app's version from its
- * Info.plist, which ditto writes beside the executable it unpacks. mv records whether something is at the place, moves,
+ * Info.plist, which ditto writes beside the executable it unpacks. pgrep matches its pattern as the extended regex it is
+ * against the command lines in the log's `processes`. mv records whether something is at the place, moves,
  * then, the first time, sends STUB_MV_SIGNAL to the script. Written once: macOS checks each new executable on its first
  * run.
  */
@@ -61,7 +64,12 @@ mkdir -p "$app/MacOS" && cp "$3" "$app/MacOS/Harness" && chmod 755 "$app/MacOS/H
 );
 stub("lipo", "echo x86_64 arm64");
 stub("open", `printf '%s\\n' "$@" >> "$STUB_LOG/open"`);
-stub("pgrep", "exit 1");
+stub(
+  "pgrep",
+  `printf '%s\\0' "$@" >> "$STUB_LOG/pgrep" && printf '\\n' >> "$STUB_LOG/pgrep"
+for pattern; do :; done
+[ -f "$STUB_LOG/processes" ] && grep -Eq -- "$pattern" "$STUB_LOG/processes"`,
+);
 stub(
   "mv",
   `if [ -e "$STUB_PLACE" ]; then echo there; else echo none; fi >> "$STUB_LOG/mv"
@@ -78,6 +86,10 @@ afterAll(() => rmSync(bin, { recursive: true, force: true }));
 interface Options {
   /** The URL the manifest names, over the release's own. */
   url?: string;
+  /** The app folder, under the run's folder. */
+  appDir?: string;
+  /** A process's command line, made from the app's executable, which runs before the script does. */
+  running?: (executable: string) => string;
   /** Files written before the run, by path under the run's folder. */
   before?: Record<string, string>;
   /** A signal `--appimage-extract` sends the script, as a Ctrl-C or a closed terminal does. */
@@ -105,12 +117,15 @@ function install(os: "Darwin" | "Linux", options: Options = {}) {
     writeFileSync(join(dir, path), text);
   }
 
-  const place = join(dir, "app", APP_NAMES[os]);
+  const appDir = join(dir, options.appDir ?? "app");
+  const place = join(appDir, APP_NAMES[os]);
+  const executable = os === "Darwin" ? join(place, "Contents", "MacOS", "Harness") : place;
+  if (options.running) writeFileSync(join(log, "processes"), `${options.running(executable)}\n`);
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     PATH: `${bin}:${process.env.PATH}`,
     HOME: join(dir, "home"),
-    HARNESS_DESKTOP_APP_DIR: join(dir, "app"),
+    HARNESS_DESKTOP_APP_DIR: appDir,
     HARNESS_DESKTOP_METADATA_URL: MANIFEST_URL,
     STUB_OS: os,
     STUB_LOG: log,
@@ -127,11 +142,13 @@ function install(os: "Darwin" | "Linux", options: Options = {}) {
     env,
   });
   const read = (name: string) => (existsSync(join(log, name)) ? readFileSync(join(log, name), "utf8") : "");
-  const executable = os === "Darwin" ? join(place, "Contents", "MacOS", "Harness") : place;
   return {
     result,
     dir,
     place,
+    executable,
+    /** Each pgrep call's arguments. */
+    pgrep: read("pgrep").split("\0\n").filter(Boolean).map((call) => call.split("\0")),
     requested: read("requested").split("\n").filter(Boolean),
     /** Each curl call's arguments. */
     curl: read("curl").split("\0\n").filter(Boolean).map((call) => call.split("\0")),
@@ -307,6 +324,36 @@ describe("desktop-install.sh", () => {
     expect(run.result.status).toBe(1);
     expect(run.result.stderr).toContain("desktop metadata points outside the Harness desktop release bucket");
     expect(run.requested).toEqual([MANIFEST_URL]);
+  });
+
+  // pgrep -f reads an extended regex: unescaped, each of these paths fails to match itself, or is no regex at all.
+  it.each([
+    ["Darwin", "Apps+x"],
+    ["Darwin", "Apps (old)"],
+    ["Linux", "opt+x"],
+    ["Linux", "a$b"],
+    ["Linux", "a[b"],
+  ] as const)("%s refuses while Harness runs from an app folder a regex reads otherwise: %s", (os, appDir) => {
+    const run = install(os, { appDir, running: (executable) => executable });
+
+    expect(run.result.status).toBe(1);
+    expect(run.result.stderr).toBe(
+      `Harness desktop installer: Harness is running from ${run.place}. Quit it, then run this installer again.\n`,
+    );
+    // On Linux the place is this user's own: another user's process naming it is not Harness here. A Mac's
+    // /Applications is everyone's.
+    expect(run.pgrep).toEqual([
+      os === "Linux"
+        ? ["-u", String(process.getuid!()), "-f", commandPattern(run.executable)]
+        : ["-f", commandPattern(run.executable)],
+    ]);
+  });
+
+  it.each(["Darwin", "Linux"] as const)("%s installs while a process only names the app, as an editor does", (os) => {
+    const run = install(os, { running: (executable) => `vi ${executable}` });
+
+    expect(run.result.status).toBe(0);
+    expect(run.placed).toBe(os === "Darwin" ? ARCHIVE : APPIMAGE);
   });
 
   it("Linux replaces the AppImage in one move: something is always at the place", () => {

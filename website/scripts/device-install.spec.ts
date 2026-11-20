@@ -26,6 +26,9 @@ const ICON_BYTES = "the image icon";
 const releaseUrl = (arch: string, prefix = DEVICE_ASSET_PREFIXES[0], version = VERSION) =>
   `${prefix}${version}/Harness-Device-linux-${arch}.AppImage`;
 
+/** The pattern that finds a process whose command is `path`: its regex characters escaped, anchored at the start. */
+const commandPattern = (path: string) => `^${path.replace(/[\][\\.*^$+?(){}|]/g, "\\$&")}( |$)`;
+
 interface Options {
   os?: string;
   machine?: string;
@@ -35,7 +38,8 @@ interface Options {
   /** What the manifest says of this arch's AppImage, over what the served file is. */
   entry?: { url?: string; sha256?: string; size?: number };
   metadataUrl?: string;
-  running?: boolean;
+  /** A process's command line, made from the place, which runs before the script does. */
+  running?: (place: string) => string;
   /** Whether `--appimage-extract` gives the icon. */
   icon?: boolean;
   /** Files written before the run, by path under the run's folder. */
@@ -46,9 +50,10 @@ interface Options {
 
 /**
  * Stub uname, curl, pgrep, setsid and mv, first on PATH, steered by STUB_* variables; sha256sum, sed and the rest are
- * real. curl serves the manifest at its URL and the AppImage at any other, recording each URL. mv records whether
- * something is at the place, then moves. Written once: macOS checks each new executable on its first run, which costs a
- * quarter of a second per file.
+ * real. curl serves the manifest at its URL and the AppImage at any other, recording each URL. pgrep matches its
+ * pattern as the extended regex it is against the command lines in the log's `processes`. mv records whether something
+ * is at the place, then moves. Written once: macOS checks each new executable on its first run, which costs a quarter of
+ * a second per file.
  */
 const bin = mkdtempSync(join(tmpdir(), "harness-device-install-bin-"));
 const stub = (name: string, body: string) => writeFileSync(join(bin, name), `#!/bin/sh\n${body}\n`, { mode: 0o755 });
@@ -64,7 +69,12 @@ printf '%s\\n' "$url" >> "$STUB_LOG/requested"
 printf '%s\\0' "$@" >> "$STUB_LOG/curl" && printf '\\n' >> "$STUB_LOG/curl"
 if [ "$url" = "$STUB_MANIFEST_URL" ]; then cp "$STUB_SERVED/metadata.json" "$out"; else cp "$STUB_SERVED/app" "$out"; fi`,
 );
-stub("pgrep", `printf '%s\\0' "$@" > "$STUB_LOG/pgrep"\n[ -n "$STUB_RUNNING" ]`);
+stub(
+  "pgrep",
+  `printf '%s\\0' "$@" >> "$STUB_LOG/pgrep" && printf '\\n' >> "$STUB_LOG/pgrep"
+for pattern; do :; done
+[ -f "$STUB_LOG/processes" ] && grep -Eq -- "$pattern" "$STUB_LOG/processes"`,
+);
 stub("setsid", `printf '%s\\0' "$@" > "$STUB_LOG/setsid"\n[ "$1" = -f ] && shift\n"$@"`);
 stub("mv", `if [ -e "$STUB_PLACE" ]; then echo there; else echo none; fi >> "$STUB_LOG/mv"\nexec /bin/mv "$@"`);
 
@@ -135,7 +145,6 @@ function install(options: Options = {}) {
     STUB_LOG: log,
     STUB_SERVED: served,
     STUB_MANIFEST_URL: options.metadataUrl ?? DEVICE_MANIFEST_URL,
-    STUB_RUNNING: options.running ? "1" : "",
     STUB_ICON: options.icon === false ? "" : "1",
   };
   delete env.XDG_DATA_HOME;
@@ -145,6 +154,7 @@ function install(options: Options = {}) {
   }
   if (options.metadataUrl) env.HARNESS_DEVICE_METADATA_URL = options.metadataUrl;
   const placed = join(homeAbsolute, PLACE);
+  if (options.running) writeFileSync(join(log, "processes"), `${options.running(placed)}\n`);
   env.STUB_PLACE = placed;
   env.STUB_SIGNAL = options.signal ?? "";
   // exec keeps the pid: the script's own, for the stub that signals it.
@@ -162,7 +172,8 @@ function install(options: Options = {}) {
     requested: read("requested").split("\n").filter(Boolean),
     /** Each curl call's arguments. */
     curl: read("curl").split("\0\n").filter(Boolean).map((call) => call.split("\0")),
-    pgrep: read("pgrep").split("\0").slice(0, -1),
+    /** Each pgrep call's arguments. */
+    pgrep: read("pgrep").split("\0\n").filter(Boolean).map((call) => call.split("\0")),
     setsid: read("setsid").split("\0").slice(0, -1),
     ran: read("ran").split("\n").filter(Boolean),
     /** At each mv, whether something was at the place. */
@@ -331,16 +342,37 @@ describe("device-install.sh", () => {
   });
 
   it("refuses while the app runs from the place", () => {
-    const run = install({ running: true, before: { [`home/p${PLACE}`]: "the copy that runs" } });
+    const run = install({ running: (place) => place, before: { [`home/p${PLACE}`]: "the copy that runs" } });
 
     expect(run.result.status).toBe(1);
     expect(run.result.stderr).toBe(
       `Harness Device installer: Harness Device is running from ${run.place}. Quit it, then run this installer again.\n`,
     );
-    expect(run.pgrep).toEqual(["-f", run.place]);
+    expect(run.pgrep).toEqual([["-u", String(process.getuid!()), "-f", commandPattern(run.place)]]);
     expect(run.requested).toEqual([DEVICE_MANIFEST_URL]);
     expect(run.placed).toBe("the copy that runs");
     expect(run.setsid).toEqual([]);
+  });
+
+  // pgrep -f reads an extended regex: unescaped, each of these paths fails to match itself, or is no regex at all.
+  it.each(["/home/john+doe", "/home/a$b", "/home/p (old)", "/home/a[b"])(
+    "refuses while the app runs from a home whose path a regex reads otherwise: %s",
+    (home) => {
+      const run = install({ home, running: (place) => place });
+
+      expect(run.result.status).toBe(1);
+      expect(run.result.stderr).toBe(
+        `Harness Device installer: Harness Device is running from ${run.place}. Quit it, then run this installer again.\n`,
+      );
+      expect(run.setsid).toEqual([]);
+    },
+  );
+
+  it("installs while a process only names the place, as an editor does", () => {
+    const run = install({ running: (place) => `vi ${place}` });
+
+    expect(run.result.status).toBe(0);
+    expect(run.placed).toBe(APP);
   });
 
   it.each(vectors.entries)("writes the entry the app writes: $appImage, icon $icon", (vector) => {
