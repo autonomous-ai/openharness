@@ -62,7 +62,7 @@ The first release, with Diego's go. The bucket holds no manifest yet, so both na
 | `build-windows` | windows, x64 and arm64, with `all` | Compiles `harness-device.exe` for its arch; no secret, no identity. |
 | `sign-windows` | windows, with `all` | Signs both exes, bundles each installer with that Tauri CLI, signs the installers, writes their update signatures, then records their sums; keeps them for 7 days. Compiles and installs nothing. |
 | `check-windows` | windows, with `all` | Checks the installers `sign-windows` made; hands nothing on. |
-| `build-linux` | ubuntu-22.04 x64 and ubuntu-22.04-arm, with `all` | Compiles, then bundles the AppImage and signs it as an update, checks it; keeps it for 7 days. |
+| `build-linux` | ubuntu-22.04 x64 and ubuntu-22.04-arm, with `all` | Compiles, bundles the AppImage, then signs it as an update in a step of its own, checks it; keeps it for 7 days. |
 | `publish` | ubuntu, only with `publish=true` | Checks each artifact against the sums its build recorded, uploads to GCS, writes the manifest, verifies the public downloads. With `all` it waits for every build. |
 
 - **Every run's commit is on `main`.** With `publish=true` the run's ref must be `refs/tags/v<version>_device`; without
@@ -71,7 +71,9 @@ The first release, with Diego's go. The bucket holds no manifest yet, so both na
 - **The build's code runs before any secret exists.** `Compile` runs the crates' build scripts and the UI's npm
   packages before the keychain or any secret exists, and refuses a signing secret in its environment; `Bundle and
   sign`, which holds them, runs only the Tauri CLI. Both steps share one runner, so this stops a build script that
-  reads or prints its environment, not one that leaves something behind for the later step to run.
+  reads or prints its environment, not one that leaves something behind for the later step to run. On Linux the
+  bundle holds no secret either, as Tauri's AppImage bundler downloads and runs linuxdeploy and its plugins unpinned:
+  `Sign the update`, after it, holds the updater key and runs only the Tauri CLI's signer.
 - **Windows signs in order** (`sign-windows`): the app's exe with Authenticode through Azure Artifact Signing
   ([Windows code signing](../docs/windows-code-signing.md)), always, since Smart App Control blocks an unsigned
   program; then NSIS packs it, with `--no-binary-patching`, so Tauri writes nothing into the signed exe and it keeps
@@ -98,8 +100,8 @@ The first release, with Diego's go. The bucket holds no manifest yet, so both na
   and downloads each file it names from the CDN, comparing it with the build's.
 
 The scripts the jobs run: `scripts/release-setup.sh` (the runner's tools), `scripts/release-build.sh` (`compile`, then
-`bundle` under the fixed names above; on Windows `sign-update` after Authenticode), `scripts/release-check.sh` and
-`scripts/device-manifest.py`.
+`bundle` under the fixed names above; on Windows, after Authenticode, and on Linux `sign-update`),
+`scripts/release-check.sh` and `scripts/device-manifest.py`.
 
 ## The manifest
 

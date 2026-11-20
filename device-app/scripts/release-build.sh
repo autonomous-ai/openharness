@@ -4,10 +4,13 @@
 #
 # - `release-build.sh compile VERSION [CONFIG_JSON]` compiles the app, and refuses a signing secret in its environment.
 # - `release-build.sh bundle VERSION OUT_DIR [CONFIG_JSON]` bundles what compile built into an empty OUT_DIR, under the
-#   fixed names the manifest and the website use: on macOS the dmg and the update archive, signed and notarized; on
-#   Linux the AppImage; each with its update signature. On Windows the installer alone: Authenticode signs it next.
-# - `release-build.sh sign-update VERSION OUT_DIR`, on Windows, writes the update signature of each installer in
-#   OUT_DIR once Authenticode signed it, so the signature covers the bytes that ship.
+#   fixed names the manifest and the website use: on macOS the dmg and the update archive, signed and notarized, with
+#   the archive's update signature. On Windows the installer alone: Authenticode signs it next. On Linux the AppImage
+#   alone: Tauri's AppImage bundler downloads and runs linuxdeploy and its plugins unpinned, so it never runs with the
+#   updater key.
+# - `release-build.sh sign-update VERSION OUT_DIR`, on Windows and Linux, writes the update signature of each installer
+#   or AppImage in OUT_DIR, with only the Tauri CLI running: on Windows once Authenticode signed the installer, so the
+#   signature covers the bytes that ship.
 #
 # The target is universal-apple-darwin on macOS and the host's on Linux. On Windows DEVICE_TARGET names it,
 # x86_64-pc-windows-msvc or aarch64-pc-windows-msvc: both are built on one x64 runner.
@@ -48,13 +51,16 @@ case "$(uname -s)" in
 esac
 
 if [[ "$step" == sign-update ]]; then
-  [[ "$os" == windows ]] || die "sign-update is for Windows: elsewhere bundle writes the update signature"
   shopt -s nullglob
-  installers=("$1"/*-setup.exe)
-  [[ ${#installers[@]} -gt 0 ]] || die "OUT_DIR holds no installer"
-  for installer in "${installers[@]}"; do
+  case "$os" in
+    windows) kind=installer updates=("$1"/*-setup.exe) ;;
+    linux) kind=AppImage updates=("$1"/*.AppImage) ;;
+    *) die "sign-update is for Windows and Linux: on macOS bundle writes the update signature" ;;
+  esac
+  [[ ${#updates[@]} -gt 0 ]] || die "OUT_DIR holds no $kind"
+  for update in "${updates[@]}"; do
     # The version goes in the signature's trusted comment, which the app requires (requireSignedVersion).
-    cargo tauri signer sign --app-version "$version" "$installer"
+    cargo tauri signer sign --app-version "$version" "$update"
   done
   exit 0
 fi
@@ -81,9 +87,9 @@ if [[ "$step" == bundle ]]; then
   [[ -z "$(ls -A "$out")" ]] || die "OUT_DIR is not empty"
 fi
 
-# Windows' update signature comes from sign-update, after Authenticode changed the installer's bytes.
+# Windows' and Linux's update signatures come from sign-update.
 updater=true
-[[ "$os" != windows ]] || updater=false
+[[ "$os" == macos ]] || updater=false
 # Later --config values win, so the caller's CONFIG_JSON overrides the release's own.
 configs=(--config "{\"version\":\"$version\",\"bundle\":{\"createUpdaterArtifacts\":$updater}}")
 if [[ $# -eq 1 ]]; then
@@ -125,7 +131,7 @@ case "$os" in
     ;;
   linux)
     appimage="$bundle/appimage/Harness Device_${version}_$bundle_arch.AppImage"
-    files=("$appimage" "Harness-Device-linux-$arch.AppImage" "$appimage.sig" "Harness-Device-linux-$arch.AppImage.sig")
+    files=("$appimage" "Harness-Device-linux-$arch.AppImage")
     ;;
   windows)
     files=("$bundle/nsis/Harness Device_${version}_$bundle_arch-setup.exe" "Harness-Device-windows-$arch-setup.exe")

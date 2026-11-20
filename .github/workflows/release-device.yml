@@ -483,12 +483,16 @@ jobs:
       - name: Compile
         run: bash device-app/scripts/release-build.sh compile "$VERSION"
 
-      # Only the Tauri CLI runs here: it makes the AppImage and signs it as an update.
-      - name: Bundle and sign the update
+      # With no secret: Tauri's AppImage bundler downloads and runs linuxdeploy and its plugins, unpinned.
+      - name: Bundle
+        run: bash device-app/scripts/release-build.sh bundle "$VERSION" "$RUNNER_TEMP/out"
+
+      # The only step that holds the updater key: only the Tauri CLI's signer runs here.
+      - name: Sign the update
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        run: bash device-app/scripts/release-build.sh bundle "$VERSION" "$RUNNER_TEMP/out"
+        run: bash device-app/scripts/release-build.sh sign-update "$VERSION" "$RUNNER_TEMP/out"
 
       # Against the committed key, as on macOS.
       - name: Check the build
