@@ -3489,6 +3489,19 @@ describe('hook notify: a session outside a pane', () => {
       expect(existsSync(log)).toBe(false)
     })
 
+    // A herdr pane inside WezTerm or Warp: herdr's own bundle names no window a tap can raise on Windows, the terminal's
+    // does (cable/hosts/windowsRaise.ts WINDOWS_APPS).
+    it.each<[string, Record<string, string>, string]>([
+      ['WezTerm', { TERM_PROGRAM: 'WezTerm', WEZTERM_PANE: '3' }, APP_BUNDLES.wezterm],
+      ['Warp', { TERM_PROGRAM: 'WarpTerminal' }, APP_BUNDLES.warp],
+      ['herdr inside WezTerm', { HERDR_PANE_ID: 'w1:p2', WEZTERM_PANE: '3' }, APP_BUNDLES.wezterm],
+      ['herdr inside Warp', { HERDR_PANE_ID: 'w1:p2', TERM_PROGRAM: 'WarpTerminal' }, APP_BUNDLES.warp],
+    ])('in %s, the terminal\'s own variable names it, and no table is read', async (_case, env, bundle) => {
+      const log = runLog()
+      expect(await hints({ windowsAncestors: underCode, psRunLog: log, env })).toEqual({ ...env, __CFBundleIdentifier: bundle })
+      expect(existsSync(log)).toBe(false)
+    })
+
     it('a Claude Code hook with none of the three names no app and reads no table', async () => {
       const log = runLog()
       expect(await hints({ windowsAncestors: underCode, psRunLog: log })).toEqual({})
