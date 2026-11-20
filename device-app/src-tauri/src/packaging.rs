@@ -24,10 +24,11 @@ fn png_size(name: &str) -> (u32, u32) {
     (at(16), at(20))
 }
 
-/// Tauri's NSIS uninstaller deletes the Run value named after the product, and only on a real uninstall: an update
-/// runs the old uninstaller with `/UPDATE`, which keeps it. So the login item's value must carry the product's name.
+/// Tauri's NSIS uninstaller deletes the Run value named after the product, and not on an update, which runs the old
+/// uninstaller with `/UPDATE`. So the login item's value must carry the product's name: an uninstall removes it, and
+/// an update keeps it.
 #[test]
-fn the_uninstaller_removes_the_run_value_only_on_a_real_uninstall() {
+fn the_run_value_is_named_after_the_product() {
     assert_eq!(config("tauri.conf.json")["productName"], RUN_VALUE);
     assert_eq!(config("tauri.windows.conf.json").get("productName"), None);
 }
