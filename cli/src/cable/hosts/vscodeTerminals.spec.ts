@@ -51,7 +51,7 @@ function fakeStream() {
  *  test moves; each timer kept, and whether it was cancelled, to be run by hand; and every line logged. */
 function harness(table: ReadonlyArray<readonly [number, number]> = TREE) {
   let at = 0
-  const reads: Array<{ resolve(rows: Array<{ pid: number; ppid: number }>): void; reject(error: Error): void }> = []
+  const reads: Array<{ resolve(rows: Array<{ pid: number; ppid: number; startMarker?: string }>): void; reject(error: Error): void }> = []
   const groupReads: Array<{ resolve(groups: ProcessGroups | undefined): void; reject(error: Error): void }> = []
   const timers: Array<{ ms: number; run: () => void; cancelled: boolean }> = []
   const logged: string[] = []
@@ -94,8 +94,9 @@ function harness(table: ReadonlyArray<readonly [number, number]> = TREE) {
     },
     state: (window: string, shells: unknown, over: Record<string, unknown> = {}) =>
       report.handle({ type: 'vscode-state', window, terminals: shells, active: null, focused: true, ...over }, new AbortController().signal),
-    answer: async (rows = table) => {
-      reads.shift()!.resolve(rows.map(([pid, ppid]) => ({ pid, ppid })))
+    /** The read in flight answered with [rows], each with its start marker in [started] when that names it. */
+    answer: async (rows = table, started: Readonly<Record<number, string>> = {}) => {
+      reads.shift()!.resolve(rows.map(([pid, ppid]) => ({ pid, ppid, ...(started[pid] ? { startMarker: started[pid] } : {}) })))
       await landed()
     },
     fail: async () => {
@@ -216,6 +217,24 @@ describe('VS Code\'s windows', () => {
     h.state(W1, [900])
     await h.answer()
     expect(h.terminals.terminalOf(900)).toStrictEqual({ window: W1, shell: 900 })
+  })
+
+  // Windows hands a freed pid to the next process and never reparents: a shell on the old pid of an agent's parent,
+  // started after it, is another process, and pairing them would raise the wrong terminal.
+  it('a parent that started after its child ends the chain, where the table says when each started', async () => {
+    const stale = harness()
+    stale.open(W1)
+    stale.terminals.agents([900])
+    stale.state(W1, [700])
+    await stale.answer(TREE, { 600: 'w:100', 700: 'w:500', 800: 'w:300', 900: 'w:400' })
+    expect(stale.terminals.terminalOf(900)).toBeUndefined()
+
+    const inOrder = harness()
+    inOrder.open(W1)
+    inOrder.terminals.agents([900])
+    inOrder.state(W1, [700])
+    await inOrder.answer(TREE, { 600: 'w:100', 700: 'w:200', 800: 'w:300', 900: 'w:400' })
+    expect(inOrder.terminals.terminalOf(900)).toStrictEqual({ window: W1, shell: 700 })
   })
 
   it('a pid in no window has no terminal', async () => {
@@ -816,12 +835,12 @@ describe('the process table the match reads', () => {
   const row = (pid: number, parentPid: number): ProcessRow =>
     ({ pid, parentPid, executable: 'node', startMarker: 'w:1', args: 'node SECRET-TOKEN rotate the key' })
 
-  it('reads each process\'s parent from the process table, Windows included', async () => {
+  it('reads each process\'s parent and start from the process table, Windows included', async () => {
     const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
     Object.defineProperty(process, 'platform', { ...platform, value: 'win32' })
     setProcessTableSource(async () => [row(600, 1), row(700, 600)])
     try {
-      expect(await readProcessParents()).toEqual([{ pid: 600, ppid: 1 }, { pid: 700, ppid: 600 }])
+      expect(await readProcessParents()).toEqual([{ pid: 600, ppid: 1, startMarker: 'w:1' }, { pid: 700, ppid: 600, startMarker: 'w:1' }])
     } finally {
       setProcessTableSource(null)
       Object.defineProperty(process, 'platform', platform)
@@ -835,7 +854,7 @@ describe('the process table the match reads', () => {
   })
 
   it.skipIf(process.platform === 'win32')('this machine\'s holds this process under its parent', async () => {
-    expect(await readProcessParents()).toContainEqual({ pid: process.pid, ppid: process.ppid })
+    expect(await readProcessParents()).toContainEqual(expect.objectContaining({ pid: process.pid, ppid: process.ppid }))
   })
 })
 
