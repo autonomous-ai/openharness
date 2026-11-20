@@ -598,6 +598,10 @@ impl Shared {
                             shared.heard(start, heard);
                         }
                     }));
+                    // None while the rules observe is seen in the log; the rules say it once per start.
+                    if observation.is_none() {
+                        self.heard(start, Heard::NoObserver);
+                    }
                 }
                 Step::Look => {
                     let installed = door.installed();
