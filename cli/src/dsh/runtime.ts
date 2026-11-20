@@ -3,7 +3,7 @@
  * key. Toolchains and skill assets stay at their installed package paths, as in spec 1.
  */
 import { ignoreHarnessRuntime } from '../lib/harnessRuntimeIgnore.js'
-import { atomicWriteFile } from '../lib/secureState.js'
+import { AtomicWriteUnconfirmed, atomicWriteFile } from '../lib/secureState.js'
 import { createHash } from 'node:crypto'
 import { existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, realpathSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
@@ -113,7 +113,13 @@ function isLink(path: string): boolean {
 function writeManagedFile(path: string, body: string, durable: boolean): void {
   if (isLink(path)) throw new Error(`Refusing to replace a symlink: ${path}`)
   const mode = existsSync(path) ? lstatSync(path).mode & 0o777 : 0o600
-  atomicWriteFile(path, body, 'cache', { mode, durable })
+  try {
+    atomicWriteFile(path, body, 'cache', { mode, durable })
+  } catch (error) {
+    // The file is whole in place: a file system that refuses a folder's flush leaves only its durability unconfirmed,
+    // and the launch goes on, as it did when only the file was flushed.
+    if (!(error instanceof AtomicWriteUnconfirmed)) throw error
+  }
 }
 
 /** Older versions appended a marker without an end marker. Remove only text that exactly matches
