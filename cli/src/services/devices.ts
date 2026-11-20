@@ -168,9 +168,10 @@ export interface DevicesDeps {
   /** For this service's tests: an app bundle's id from its Info.plist; `readBundleId` (cable/hosts/scannedApp.ts) by
    *  default. */
   bundleId?: (app: string) => Promise<string | undefined>
-  /** Opens the devices' own listener with these handlers (services/devicesListener.ts). Given by the devices process
-   *  alone: inside the core's process (`HARNESSD_SERVICES=none`, Harness OS) there is none, so the core's process opens
-   *  no socket for the devices, and the dial follows no app in front there. */
+  /** Opens the devices' own listener with these handlers (services/devicesListener.ts). Given by the devices process,
+   *  and on Windows inside the core's too, where every service runs, until Windows services run in their own process
+   *  (services/inline.ts). Elsewhere inside the core's process (`HARNESSD_SERVICES=none`, Harness OS) there is none, so
+   *  the core's process opens no socket for the devices, and the dial follows no app in front there. */
   listen?: (handlers: Readonly<Record<string, ListenerHandler | ListenerStreamHandler>>, log: (line: string) => void) => Promise<DevicesListener | null>
   /** For this service's tests: how an agent's tty is read; `ps` by default (cable/hosts/tabs.ts). */
   tty?: (pid: number) => Promise<string | undefined>
@@ -315,7 +316,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   // The Notifications setting (docs/plans/2026-11-16-dial-agent-notify-design.md) is this computer's, not the dial's: the
   // windows and the watch hear it with every dial status, and the owner's other machines and the Devices tab never do.
   // Only once the devices' own listener opened, the one door a change comes in by: with none (services inside the core,
-  // or a listener that failed to open) the menu must not offer a setting no click can change.
+  // off Windows, or a listener that failed to open) the menu must not offer a setting no click can change.
   const notifyMode = new NotifyModeStore(join(core.dataDir, NOTIFY_MODE_FILE))
   let listenerOpen = false
   const sayStatus = (status: DialStatus): void => core.clients.sendLocal({ type: 'dial_status',
@@ -598,9 +599,11 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
    *  skill reach them too (docs/plans/2026-11-17-new-user-onboarding-design.md, "C. Orca homes"). */
   const orcaHomes = deps.orcaHomes ?? orcaHomesCache(monotonic, log)
   // The dial skill in each home an engine's sessions use and Claude Code's plugin, set up once a dial has attached on this
-  // computer (cable/dialSetup.ts), in the devices' own process alone: inside the core's (`HARNESSD_SERVICES=none`) there
-  // is no listener, so a skill would name a `harness device notify` that cannot ring. A part of its own, so a throw in a
-  // person's home is never the dial's.
+  // computer (cable/dialSetup.ts), wherever the devices have their listener: their own process, and on Windows the
+  // core's, until Windows services run in their own process (services/inline.ts). Elsewhere inside the core's
+  // (`HARNESSD_SERVICES=none`) there is none, so a skill would name a `harness device notify` that cannot ring. A part
+  // of its own, so a throw in a person's home is never the dial's, nor the core's; each `claude` it runs has its time
+  // (devices/claudePlugin.ts).
   const skill = deps.listen ? createDialSetup({
     dataDir: core.dataDir,
     platform: apps.platform,
@@ -627,11 +630,11 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     if (skill && !stopped) part.call('skill', () => skill.started())
   }
   // Harness's VS Code extension, set up once a computer in VS Code and once in Cursor through the dial setup's record
-  // (cable/vscodeExtensionSetup.ts), in the devices' own process alone, as the dial setup: inside the core's the core
-  // would run the editor's `code` or `cursor`. Each editor's setup a part of its own, so a throw in one editor's files is
-  // never the dial's, and a fault or a failed pass's hour in one never holds the other. `HARNESS_VSCODE_BIN` and
-  // `HARNESS_CURSOR_BIN`: the end-to-end tests' VS Code and Cursor, so a daemon under test finds none of this computer's
-  // own (devices/vscodeExtension.ts).
+  // (cable/vscodeExtensionSetup.ts), where the dial setup runs: on Windows the core's process runs the editor's `code`
+  // or `cursor` then, each run in its time (devices/vscodeExtension.ts VSCODE_RUN_MS). Each editor's setup a part of
+  // its own, so a throw in one editor's files is never the dial's, and a fault or a failed pass's hour in one never
+  // holds the other. `HARNESS_VSCODE_BIN` and `HARNESS_CURSOR_BIN`: the end-to-end tests' VS Code and Cursor, so a
+  // daemon under test finds none of this computer's own (devices/vscodeExtension.ts).
   const extensionCount = createEngineTally('[device] vscode extension', ['vscode', 'cursor'], SETUP_COUNTS, log)
   const vscodeSetup = skill ? createVscodeExtensionSetup({
     vscode: deps.vscodeExtension ?? vscodeExtensionDeps('vscode', process.env.HARNESS_VSCODE_BIN),
@@ -649,10 +652,11 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     after: timerIn('cursorExtension'),
     count: (kind, reason) => extensionCount('cursor', kind, reason),
   }) : null
-  // Harness Device's plugin for Orca, set up once a dial has attached here (cable/orcaPluginSetup.ts), in the devices'
-  // own process alone, as the editors': inside the core's there is no listener for the plugin to talk to. A part of its
-  // own, so a throw in Orca's CLI is never the dial's. `err` says nothing: a folder not written is counted `folder`, and
-  // its error's code is never logged. `HARNESS_ORCA_APP_BIN`: the end-to-end tests' Orca (devices/orcaHomes.ts).
+  // Harness Device's plugin for Orca, set up once a dial has attached here (cable/orcaPluginSetup.ts), where the
+  // editors' is: where there is no listener there is none for the plugin to talk to. Each `orca` it runs has its time
+  // (devices/orcaPlugin.ts). A part of its own, so a throw in Orca's CLI is never the dial's. `err` says nothing: a
+  // folder not written is counted `folder`, and its error's code is never logged. `HARNESS_ORCA_APP_BIN`: the
+  // end-to-end tests' Orca (devices/orcaHomes.ts).
   const orcaCount = createEngineTally('[device] orca plugin', ['orca'], SETUP_COUNTS, log)
   const orcaSetup = skill ? createOrcaPluginSetup({
     ...orcaPluginParts({ ...(deps.orcaPlugin ?? { ...orcaPluginRun(), folder: harnessPath('orca-plugin', homedir()) }), dataDir: core.dataDir, err: () => {} }),
