@@ -12,7 +12,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from PIL import Image
+from PIL import Image, ImageDraw
 
 PRO = Path(__file__).resolve().parents[1]
 _spec = importlib.util.spec_from_file_location("gen_app_icons", PRO / "scripts" / "gen_app_icons.py")
@@ -104,9 +104,11 @@ class GeneratorTests(unittest.TestCase):
                     self.assertTrue(within_a_step_of_half(bottom, top), (r, g, b))
 
     def test_shadow_is_cleared_and_cropped(self):
+        # A rounded tile over its drop shadow, as macOS draws an app icon: the crop drops the shadow around the tile's
+        # box, and only the clearing of alpha < 64 drops the shadow left in the box's corners, beside the rounding.
         im = Image.new("RGBA", (512, 512), (0, 0, 0, 0))
-        im.paste(Image.new("RGBA", (480, 480), (0, 0, 0, 40)), (16, 16))   # the drop shadow's ring, 40 px wide
-        im.paste(Image.new("RGBA", (400, 400), (0x1F, 0x9C, 0xF0, 255)), (56, 56))
+        im.paste(Image.new("RGBA", (480, 480), (0, 0, 0, 40)), (16, 16))   # the drop shadow, 40 px wider each side
+        ImageDraw.Draw(im).rounded_rectangle((56, 56, 455, 455), radius=90, fill=(0x1F, 0x9C, 0xF0, 255))
         for s in gen.SIZES:
             px, alpha = gen.icon(im, s)
             self.assertEqual((len(px), len(alpha)), (s * s, s * s))
