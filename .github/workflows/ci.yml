@@ -1341,7 +1341,18 @@ jobs:
         with:
           ref: ${{ env.CI_SOURCE_SHA }}
       - name: Every cross-read is declared
-        run: python3 -m unittest discover -s scripts/tests -p test_ci_plan.py -k test_every_cross_read_in_this_repository_is_declared -v
+        # The planner tests that need every file: with this set, a missing file fails them instead of skipping.
+        env:
+          CROSS_READ_SCAN_REQUIRED: '1'
+        shell: bash
+        run: |
+          python3 -m unittest discover -s scripts/tests -p test_ci_plan.py -v \
+            -k test_every_cross_read_in_this_repository_is_declared \
+            -k test_the_dial_host_files_are_the_ones_cli_e2e_leaves_out \
+            -k test_every_declared_input_exists \
+            -k test_every_desktop_file_the_phone_tests_read_selects_mobile 2>&1 | tee "$RUNNER_TEMP/scan.log"
+          # A renamed test matches no -k and would leave the scan passing without it.
+          grep -Eq '^Ran 4 tests in ' "$RUNNER_TEMP/scan.log" || { echo "::error::the scan ran fewer or more than its 4 tests"; exit 1; }
 
   required:
     name: ci/required
