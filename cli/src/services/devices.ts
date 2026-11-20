@@ -345,8 +345,9 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     (line) => log(`[cable] ${line}`), core.dataDir, () => null, false)
   // Each read of the core's agents, as a list is built (once a second with a dial attached), lets a restored notice
   // waiting for a Harness agent find it (`lookHarness`): a dial can attach before the first read. Inside the core's
-  // process there is no refresh and no listener, so no notice is made there.
-  const refresh = deps.refresh && ((): Promise<void> => deps.refresh!().then(() => lookHarness()))
+  // process the agents are read directly, with no refresh, and the look runs all the same: on Windows the devices there
+  // have their listener (services/inline.ts), so a notice is made and restored there too.
+  const refresh = (): Promise<void> => (deps.refresh?.() ?? Promise.resolve()).then(() => lookHarness())
   const fleet: Fleet | null = part.start('fleet', () => startFleet(core, { machines, desk: () => desk, refresh }).fleet, FLEET_FALLBACKS)
 
   // ── the window bridges ─────────────────────────────────────────────────────────────────────────────
