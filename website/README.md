@@ -34,7 +34,7 @@ retired; only the host routes below were kept.
 | `/device/download-windows` | 302 to the installer (`device-windows-x64-exe` or `device-windows-arm64-exe`) in the device manifest, the arch from the request's Client Hints, x64 otherwise; 503 until a release carries it |
 | `/device/download-linux` | 302 to the AppImage (`device-linux-x64-appimage` or `device-linux-arm64-appimage`) in the device manifest, the arch from the request's Client Hints (and its user agent), x64 otherwise; 503 until a release carries it |
 | `/flash-circle.sh` | The dial firmware flasher script |
-| `/install.sh`, `/cli/install.sh`, `/desktop/install.sh` | Redirect to the installers on `cdn.autonomous.ai` |
+| `/install.sh`, `/cli/install.sh`, `/desktop/install.sh`, `/device/install.sh` | Redirect to the installers on `cdn.autonomous.ai` |
 | `ac.autonomous.ai`, `fleet.autonomous.ai` | Redirect to `harness.autonomous.ai` |
 
 `/agents` and `/llms.txt` describe commands agents run as written. `scripts/agents-site.spec.ts` checks every
@@ -44,6 +44,8 @@ both unchanged. Change them with the CLI and the [harness skill](../plugins/harn
 
 The CLI installer is `cli/scripts/install.sh`. The desktop installer's source is
 `scripts/desktop-install.sh` here, published with `scripts/upload-desktop-install-sh.sh`.
+The Harness Device installer's source is `scripts/device-install.sh`, published by
+`release-device.yml` with every release that carries Linux.
 
 ## Releasing
 

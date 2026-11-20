@@ -1,0 +1,192 @@
+#!/bin/sh
+# Harness Device installer for Linux: `curl -fsSL https://harness.autonomous.ai/device/install.sh | bash`. That URL
+# redirects (next.config.js) to https://cdn.autonomous.ai/harness/device/install.sh, which release-device.yml uploads
+# from this file with every release that carries Linux, before the manifest names a Linux AppImage. It does not ship
+# with a web deploy.
+#
+# Installs the AppImage the device manifest names for this computer's arch, checked by size and sha256, at Desktop's
+# place for it, lists it in the app list when nothing is listed there yet, and starts it. No sudo and no FUSE: the
+# AppImage runs on a runtime that needs no libfuse2, and its icon comes out with --appimage-extract.
+set -eu
+
+METADATA_URL="${HARNESS_DEVICE_METADATA_URL:-https://storage.googleapis.com/s3-autonomous-upgrade-3/harness/device/metadata.json}"
+
+fail() {
+  printf '%s\n' "Harness Device installer: $*" >&2
+  exit 1
+}
+
+require_command() {
+  command -v "$1" >/dev/null 2>&1 || fail "required command is unavailable: $1"
+}
+
+PLATFORM="$(uname -s)"
+[ "$PLATFORM" = Linux ] || fail "this installer is for Linux (found: $PLATFORM)."
+
+MACHINE_ARCH="$(uname -m)"
+case "$MACHINE_ARCH" in
+  aarch64 | arm64)
+    RELEASE_ARCH="arm64"
+    ;;
+  x86_64 | amd64)
+    RELEASE_ARCH="x64"
+    ;;
+  *)
+    fail "Harness Device does not support this Linux architecture ($MACHINE_ARCH)."
+    ;;
+esac
+
+OTA_KEY="device-linux-$RELEASE_ARCH-appimage"
+APP_DIR="$HOME/.local/opt"
+# Desktop's place for the app: one name with no version or arch, so the app's updater replaces it in place.
+DESTINATION="$APP_DIR/Harness-Device.AppImage"
+
+cleanup() {
+  if [ -n "${STAGING_DIR:-}" ] && [ -d "$STAGING_DIR" ]; then
+    rm -rf "$STAGING_DIR"
+  fi
+}
+
+for command_name in curl sha256sum mktemp pgrep grep sed setsid; do
+  require_command "$command_name"
+done
+
+mkdir -p "$APP_DIR"
+STAGING_DIR="$(mktemp -d "$APP_DIR/.harness-device-install.XXXXXX")" || fail "could not create an install staging directory in $APP_DIR"
+trap cleanup EXIT HUP INT TERM
+
+METADATA_FILE="$STAGING_DIR/metadata.json"
+CANDIDATE="$STAGING_DIR/Harness-Device-linux-$RELEASE_ARCH.AppImage"
+
+printf '%s\n' "Fetching the latest Harness Device release…"
+curl -fL --retry 3 --connect-timeout 15 "$METADATA_URL" -o "$METADATA_FILE" \
+  || fail "could not download device metadata"
+
+# No jq or python3, which a stock Ubuntu may lack: the manifest is device-manifest.py's json.dump with indent=2, one
+# "key": value per line, so sed and grep, which every Debian and Ubuntu has, take this arch's entry out of it.
+METADATA_BLOCK="$(sed -n "/\"${OTA_KEY}\": {/,/^  }/p" "$METADATA_FILE")"
+[ -n "$METADATA_BLOCK" ] || fail "device metadata is missing the $OTA_KEY entry"
+
+metadata_value() {
+  printf '%s\n' "$METADATA_BLOCK" | grep "\"$1\":" | head -n1 \
+    | sed -E 's/.*"'"$1"'": *"?([^",]*)"?,?$/\1/' \
+    | tr -d '[:space:]'
+}
+
+VERSION="$(metadata_value version)"
+ASSET_URL="$(metadata_value url)"
+EXPECTED_SHA256="$(metadata_value sha256 | tr '[:upper:]' '[:lower:]')"
+EXPECTED_SIZE="$(metadata_value size)"
+
+[ -n "$VERSION" ] && [ -n "$ASSET_URL" ] && [ -n "$EXPECTED_SHA256" ] && [ -n "$EXPECTED_SIZE" ] \
+  || fail "device metadata is missing $OTA_KEY.version/url/sha256/size"
+printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' \
+  || fail "device metadata has an invalid version"
+# The whole URL is fixed, its folder the X.Y.Z checked above: a glob would let `../..` through, and curl collapses dot
+# segments. The CDN and the bucket behind it are both accepted, as website/src/lib/deviceRelease.ts accepts them.
+case "$ASSET_URL" in
+  "https://cdn.autonomous.ai/harness/device/$VERSION/Harness-Device-linux-$RELEASE_ARCH.AppImage") ;;
+  "https://storage.googleapis.com/s3-autonomous-upgrade-3/harness/device/$VERSION/Harness-Device-linux-$RELEASE_ARCH.AppImage") ;;
+  *) fail "device metadata points outside the Harness Device release bucket" ;;
+esac
+printf '%s' "$EXPECTED_SHA256" | grep -Eq '^[0-9a-f]{64}$' \
+  || fail "device metadata has an invalid SHA-256"
+case "$EXPECTED_SIZE" in
+  *[!0-9]* | '') fail "device metadata has an invalid AppImage size" ;;
+esac
+
+if pgrep -f "$DESTINATION" >/dev/null 2>&1; then
+  fail "Harness Device is running from $DESTINATION. Quit it, then run this installer again."
+fi
+
+printf '%s\n' "Downloading Harness Device ${VERSION}…"
+curl -fL --retry 3 --connect-timeout 15 "$ASSET_URL" -o "$CANDIDATE" \
+  || fail "could not download Harness Device $VERSION"
+
+ACTUAL_SIZE="$(wc -c < "$CANDIDATE" | tr -d '[:space:]')"
+[ "$ACTUAL_SIZE" = "$EXPECTED_SIZE" ] \
+  || fail "downloaded AppImage size does not match the release metadata"
+
+# From stdin: sha256sum escapes a file name that holds a backslash, and its line then starts with one.
+ACTUAL_SHA256="$(sha256sum < "$CANDIDATE")"
+[ "${ACTUAL_SHA256%% *}" = "$EXPECTED_SHA256" ] \
+  || fail "downloaded AppImage checksum does not match the release metadata"
+
+chmod 755 "$CANDIDATE"
+
+# The staging directory lives in APP_DIR, so both moves remain on the same filesystem. If the second move fails, restore
+# the previous install before reporting the failure.
+BACKUP="$STAGING_DIR/previous-Harness-Device.AppImage"
+if [ -e "$DESTINATION" ]; then
+  mv "$DESTINATION" "$BACKUP" || fail "could not prepare the existing Harness Device install for replacement"
+fi
+if ! mv "$CANDIDATE" "$DESTINATION"; then
+  if [ -e "$BACKUP" ]; then
+    mv "$BACKUP" "$DESTINATION" || true
+  fi
+  fail "could not install Harness Device $VERSION"
+fi
+
+# The app-list entry and its icon, by the rule every writer follows (tests/fixtures/app-list-entry-vectors.json), and
+# only when there is no entry: the app started below applies the whole rule on its first run, so this script reads no
+# Exec= line. None of this fails the install.
+case "${XDG_DATA_HOME:-}" in
+  /*) DATA_HOME="$XDG_DATA_HOME" ;;
+  *)
+    case "$HOME" in
+      /*) DATA_HOME="$HOME/.local/share" ;;
+      *) DATA_HOME= ;;
+    esac
+    ;;
+esac
+
+# Desktop's quoteLauncherExec: every % doubled, and the path quoted, with " ` $ \ escaped, when it holds a character a
+# launcher would split or expand on.
+exec_value() {
+  doubled="$(printf '%s\n' "$1" | sed 's/%/%%/g')"
+  case "$1" in
+    *[[:space:]\"\'\\\$\`\<\>\~\|\&\;\*\?\#\(\)]*)
+      printf '"%s"\n' "$(printf '%s\n' "$doubled" | sed 's/["`$\\]/\\&/g')"
+      ;;
+    *) printf '%s\n' "$doubled" ;;
+  esac
+}
+
+# A temp file beside it, then a rename, as every writer writes the entry and its icon: nothing reads half of one.
+put() {
+  if cat > "$1.$$.tmp" && mv -f "$1.$$.tmp" "$1"; then
+    return 0
+  fi
+  rm -f "$1.$$.tmp"
+  return 1
+}
+
+ENTRY="$DATA_HOME/applications/harness-device.desktop"
+ICON="$DATA_HOME/icons/harness-device.png"
+ICON_MEMBER="usr/share/icons/hicolor/128x128/apps/harness-device.png"
+if [ -n "$DATA_HOME" ] && [ ! -e "$ENTRY" ]; then
+  case "$DESTINATION$DATA_HOME" in
+    # A control character would break the entry's lines: the app's own rule writes nothing either.
+    *[[:cntrl:]]*) ;;
+    *)
+      (
+        # The image's own icon, the file the app reads under its APPDIR; stdin is the script itself under `| bash`.
+        if (cd "$STAGING_DIR" && "$DESTINATION" --appimage-extract "$ICON_MEMBER" >/dev/null 2>&1 </dev/null) \
+          && mkdir -p "$DATA_HOME/icons" && put "$ICON" < "$STAGING_DIR/squashfs-root/$ICON_MEMBER"; then
+          ICON_LINE="Icon=$ICON"
+        fi
+        mkdir -p "$DATA_HOME/applications" && {
+          printf '%s\n' '[Desktop Entry]' 'Type=Application' 'Name=Harness Device' \
+            'Comment=The app for your Harness device.' "Exec=$(exec_value "$DESTINATION")"
+          if [ -n "${ICON_LINE:-}" ]; then printf '%s\n' "$ICON_LINE"; fi
+          printf '%s\n' 'Terminal=false' 'Categories=Utility;' 'StartupWMClass=harness-device'
+        } | put "$ENTRY"
+      ) || true
+      ;;
+  esac
+fi
+
+printf '%s\n' "Harness Device $VERSION installed at $DESTINATION"
+# A session of its own: piped from curl, the script has no job control, so a plain & would leave the app in the
+# terminal's process group, and closing the terminal would end it.
+setsid -f "$DESTINATION" >/dev/null 2>&1 </dev/null

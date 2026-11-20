@@ -560,6 +560,7 @@ jobs:
           sparse-checkout: |
             /device-app/scripts/
             /.github/actions/setup-gcloud/
+            /website/scripts/device-install.sh
           sparse-checkout-cone-mode: false
 
       # Each build's artifact in a folder of its own: each job recorded the sums of its own part.
@@ -607,6 +608,17 @@ jobs:
           workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
       - uses: ./.github/actions/setup-gcloud
+
+      # Before the manifest names a Linux AppImage, so /device never shows the one line while its script is missing; at
+      # every such release, so no person has to remember it. no-store: the CDN keeps a positive max-age for a month
+      # (website/scripts/upload-desktop-install-sh.sh).
+      - name: Publish the one-line Linux installer
+        if: inputs.platforms == 'all'
+        run: |
+          set -euo pipefail
+          sh -n website/scripts/device-install.sh
+          gcloud storage cp website/scripts/device-install.sh gs://s3-autonomous-upgrade-3/harness/device/install.sh \
+            --content-type="text/x-shellscript; charset=utf-8" --cache-control="no-cache, no-store, must-revalidate"
 
       # The release's files first, then the manifest, written only if no one else wrote it since it was read.
       - name: Publish

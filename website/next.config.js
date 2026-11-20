@@ -78,6 +78,9 @@ module.exports = {
       // URL (`-fsSL` already follows redirects).
       { source: '/cli/install.sh', destination: 'https://cdn.autonomous.ai/harness/cli/install.sh', permanent: true },
       { source: '/desktop/install.sh', destination: 'https://cdn.autonomous.ai/harness/desktop/install.sh', permanent: true },
+      // Harness Device's one line on Linux; release-device.yml uploads scripts/device-install.sh there with every release
+      // that carries Linux.
+      { source: '/device/install.sh', destination: 'https://cdn.autonomous.ai/harness/device/install.sh', permanent: true },
     ]
   },
   // Image optimization for mobile
