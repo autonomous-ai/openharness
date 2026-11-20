@@ -2,12 +2,236 @@
 //! offer the Follow ChatGPT screen. The window's title is private like a tty: it goes on the watch's stdin and nowhere
 //! else, never into the log, an Event, the state file or the window.
 
+use crate::tabs::Out;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::Duration;
+
+/// The ChatGPT app's bundle id, the CLI's too: the app that runs Codex threads.
+pub const CHATGPT_BUNDLE: &str = "com.openai.codex";
+/// The CLI keeps a title of up to 256 UTF-16 units (a JavaScript string's length): past it, the empty title, so the
+/// two never disagree.
+pub const TITLE_MAX: usize = 256;
+/// The bytes of a line, the `\n` the watch's writer adds included: macOS's PIPE_BUF. The watch's stdin is non-blocking
+/// and only a write this short goes whole, so a slow watch never sees a title torn.
+pub const THREAD_LINE_MAX: usize = 512;
+/// The Accessibility list can change just after macOS posts its notice: the permission is read once more this late.
+pub const TRUST_AGAIN: Duration = Duration::from_secs(1);
+/// System Settings' Accessibility list, the one argument `open` takes for it.
+pub const AX_SETTINGS: &str = "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility";
+
+/// `{"thread":"…"}`, one line. No title, one past TITLE_MAX units, one with a control character (Unicode Cc, as the
+/// CLI's rule) and one whose line would pass THREAD_LINE_MAX bytes are the empty title.
+pub fn thread_line(title: Option<&str>) -> String {
+    let kept = title.filter(|title| title.encode_utf16().count() <= TITLE_MAX && !title.chars().any(char::is_control));
+    let line = serde_json::json!({ "thread": kept.unwrap_or_default() }).to_string();
+    if line.len() < THREAD_LINE_MAX {
+        line
+    } else {
+        serde_json::json!({ "thread": "" }).to_string()
+    }
+}
+
+/// The CLI's rule: `ChatGPT.app` in `applications`, then in `home`'s Applications, whose bundle id is CHATGPT_BUNDLE.
+pub fn chatgpt_installed(home: &Path, applications: &Path, bundle_id: &dyn Fn(&Path) -> Option<String>) -> bool {
+    [applications.join("ChatGPT.app"), home.join("Applications").join("ChatGPT.app")]
+        .iter()
+        .any(|app| bundle_id(app).as_deref() == Some(CHATGPT_BUNDLE))
+}
+
+/// What an observation hears.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Heard {
+    /// The focused window's title; None with no focused window.
+    Title(Option<String>),
+    /// The observer could not be made: nothing follows until the next start.
+    NoObserver,
+}
+
+/// The ChatGPT app's window. The app pushes each change: nothing polls.
+pub trait ChatgptWindow: Send + Sync {
+    /// Whether the ChatGPT app is installed.
+    fn installed(&self) -> bool;
+    /// None when the app in front is not ChatGPT. Otherwise the observation, which stops when dropped: `heard` gets
+    /// the title now, once, then at each change, or NoObserver once.
+    fn observe(&self, heard: Box<dyn Fn(Heard) + Send + Sync>) -> Option<Box<dyn Send>>;
+}
+
+/// Whether Harness may use Accessibility.
+pub trait AxTrust: Send + Sync {
+    fn trusted(&self) -> bool;
+    /// macOS's own prompt.
+    fn prompt(&self);
+    /// `changed` is called each time the permission may have changed.
+    fn start(&self, changed: Box<dyn Fn() + Send + Sync>);
+}
+
+pub trait FollowDoor: ChatgptWindow + AxTrust {}
+
+impl<T: ChatgptWindow + AxTrust> FollowDoor for T {}
+
+/// Reads nothing and asks nothing: a platform with no ChatGPT app to follow.
+pub struct NoFollow;
+
+impl ChatgptWindow for NoFollow {
+    fn installed(&self) -> bool {
+        false
+    }
+
+    fn observe(&self, _heard: Box<dyn Fn(Heard) + Send + Sync>) -> Option<Box<dyn Send>> {
+        None
+    }
+}
+
+impl AxTrust for NoFollow {
+    fn trusted(&self) -> bool {
+        false
+    }
+
+    fn prompt(&self) {}
+
+    fn start(&self, _changed: Box<dyn Fn() + Send + Sync>) {}
+}
+
+/// The door this platform has: none yet, until macOS gets its own.
+pub fn system(#[expect(unused_variables)] home: PathBuf) -> Arc<dyn FollowDoor> {
+    Arc::new(NoFollow)
+}
+
+/// What to do with the observation.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Observer {
+    /// Start one, numbered: a title heard by an earlier one is dropped.
+    Start(u64),
+    Stop,
+    Same,
+}
+
+/// What the menu's item shows.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Shown {
+    pub trusted: bool,
+    pub installed: bool,
+}
+
+/// When to observe the ChatGPT window, what to tell the watch, and when to offer the Follow ChatGPT screen. It calls
+/// no door: the runner does, and hands each answer here.
+#[derive(Default)]
+pub struct ChatgptFollow {
+    chatgpt: bool,
+    /// Whether the front source has told its first value: ChatGPT in front as the app starts is no offer.
+    fronted: bool,
+    watching: bool,
+    attached: bool,
+    trusted: bool,
+    installed: bool,
+    /// The number of the last start, and whether it observes now.
+    start: u64,
+    started: bool,
+    /// The line written last in this start.
+    last: Option<String>,
+    /// Whether this start has said `chatgpt: no observer`.
+    no_observer: bool,
+    offer: bool,
+    look: bool,
+}
+
+impl ChatgptFollow {
+    /// The bundle id of the app in front.
+    pub fn front(&mut self, bundle: &str) {
+        let chatgpt = bundle == CHATGPT_BUNDLE;
+        if self.fronted && chatgpt && !self.chatgpt {
+            self.offer = self.watching && self.attached && self.installed && !self.trusted;
+        }
+        self.chatgpt = chatgpt;
+        self.fronted = true;
+    }
+
+    /// A new watch has a dial of its own: it is detached until it says otherwise.
+    pub fn watching(&mut self, on: bool) {
+        self.watching = on;
+        self.attached = false;
+    }
+
+    pub fn attached(&mut self, on: bool) {
+        // Each status says attached: only a new attach looks for the app again, which may have come or gone since.
+        self.look |= on && !self.attached;
+        self.attached = on;
+    }
+
+    pub fn trusted(&mut self, on: bool) {
+        self.trusted = on;
+    }
+
+    pub fn installed(&mut self, on: bool) {
+        self.installed = on;
+    }
+
+    pub fn observes(&self) -> bool {
+        self.chatgpt && self.watching && self.attached && self.trusted
+    }
+
+    pub fn observer(&mut self) -> Observer {
+        match (self.observes(), self.started) {
+            (true, false) => {
+                self.start += 1;
+                self.started = true;
+                // Each start writes its first title: the dial may have moved since that thread was written.
+                self.last = None;
+                self.no_observer = false;
+                Observer::Start(self.start)
+            }
+            (false, true) => {
+                self.started = false;
+                Observer::Stop
+            }
+            _ => Observer::Same,
+        }
+    }
+
+    /// What the observation numbered `start` heard. One stopped may still hear a title, after the next one started:
+    /// it is dropped.
+    pub fn heard(&mut self, start: u64, heard: Heard) -> Out {
+        let mut out = Out::default();
+        if !self.started || start != self.start {
+            return out;
+        }
+        match heard {
+            Heard::Title(title) => {
+                let line = thread_line(title.as_deref());
+                if self.last.as_ref() != Some(&line) {
+                    self.last = Some(line.clone());
+                    out.line = Some(line);
+                }
+            }
+            Heard::NoObserver if !self.no_observer => {
+                self.no_observer = true;
+                out.log.push("chatgpt: no observer".into());
+            }
+            Heard::NoObserver => {}
+        }
+        out
+    }
+
+    /// Whether to offer the Follow ChatGPT screen, once for each time ChatGPT came to the front untrusted.
+    pub fn take_offer(&mut self) -> bool {
+        std::mem::take(&mut self.offer)
+    }
+
+    /// Whether to read again if ChatGPT is installed: once after each attach.
+    pub fn take_look(&mut self) -> bool {
+        std::mem::take(&mut self.look)
+    }
+
+    pub fn shown(&self) -> Shown {
+        Shown { trusted: self.trusted, installed: self.installed }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tabs::Out;
     use serde_json::json;
-    use std::path::Path;
     use std::sync::Mutex;
 
     const VS_CODE: &str = "com.microsoft.VSCode";
@@ -304,7 +528,7 @@ mod tests {
 
     #[test]
     fn no_follow_reads_nothing_and_asks_nothing() {
-        let heard = std::sync::Arc::new(Mutex::new(0));
+        let heard = Arc::new(Mutex::new(0));
         let count = heard.clone();
         assert!(!NoFollow.installed());
         assert!(NoFollow.observe(Box::new(move |_| *count.lock().unwrap() += 1)).is_none());
