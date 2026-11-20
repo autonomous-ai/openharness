@@ -111,7 +111,7 @@ mod tests {
     use crate::types::Output;
     use std::cell::{Cell, RefCell};
     use std::fs;
-    use std::io::{self, BufRead, BufReader};
+    use std::io::{self, BufRead, BufReader, Write};
     use std::os::unix::fs::PermissionsExt;
     use std::os::unix::process::CommandExt;
     use std::path::{Path, PathBuf};
@@ -182,22 +182,24 @@ mod tests {
         assert_eq!(CANDIDATES, [("x-terminal-emulator", "-e"), ("gnome-terminal", "--"), ("xterm", "-e")]);
         let data = tempfile::tempdir().unwrap();
         let folder = data.path().join("setup");
-        let script_path = folder.join("host.sh");
         let tried = RefCell::new(Vec::new());
         let output = run(&folder, HOST, WAIT, &|program, flag, script| {
             tried.borrow_mut().push((program.to_string(), flag.to_string(), script.to_path_buf()));
             if program == "x-terminal-emulator" {
                 return Err(io::ErrorKind::NotFound.into());
             }
-            fs::write(script.with_file_name("host.exit"), "0\n")
+            fs::write(script.with_extension("exit"), "0\n")
         })
         .unwrap();
         assert_eq!(output, Output { code: Some(0), ..Output::default() });
+        let tried = tried.into_inner();
+        let script_path = &tried[0].2;
+        assert_eq!(script_path.parent(), Some(folder.as_path()));
         assert_eq!(
-            tried.into_inner(),
+            tried,
             [
                 ("x-terminal-emulator".to_string(), "-e".to_string(), script_path.clone()),
-                ("gnome-terminal".to_string(), "--".to_string(), script_path),
+                ("gnome-terminal".to_string(), "--".to_string(), script_path.clone()),
             ]
         );
 
@@ -229,18 +231,53 @@ mod tests {
     }
 
     #[test]
-    fn an_old_result_is_removed_first() {
+    fn an_older_runs_files_are_removed_first() {
         let folder = tempfile::tempdir().unwrap();
-        let result = folder.path().join("host.exit");
-        fs::write(&result, "0\n").unwrap();
-        let there_at_start = Cell::new(true);
+        let older = ["host.sh", "host.exit", "host-1.sh", "host-1.exit"];
+        for name in older {
+            fs::write(folder.path().join(name), "0\n").unwrap();
+        }
+        let left = RefCell::new(Vec::new());
         let output = run(folder.path(), HOST, Duration::ZERO, &|_, _, script| {
-            there_at_start.set(script.with_file_name("host.exit").exists());
+            left.replace(older.iter().filter(|name| script.with_file_name(name).exists()).copied().collect());
             Ok(())
         })
         .unwrap();
-        assert!(!there_at_start.get());
+        assert_eq!(left.into_inner(), Vec::<&str>::new());
         assert!(output.timed_out);
+    }
+
+    #[test]
+    fn an_older_runs_result_never_ends_a_new_run() {
+        let data = tempfile::tempdir().unwrap();
+        let folder = data.path().join("setup");
+        // The first run's terminal is left at its line, which says `ready`, then waits for a line on its stdin.
+        let older = RefCell::new(None);
+        let first = run(&folder, "echo ready; read -r _", Duration::ZERO, &|_, _, script| {
+            let mut child = {
+                let _spawning = spawn_lock();
+                Command::new("/bin/sh").arg(script).stdin(Stdio::piped()).stdout(Stdio::piped()).spawn()?
+            };
+            let mut ready = String::new();
+            BufReader::new(child.stdout.take().unwrap()).read_line(&mut ready)?;
+            assert_eq!(ready, "ready\n");
+            older.replace(Some(child));
+            Ok(())
+        })
+        .unwrap();
+        assert!(first.timed_out);
+
+        // A second run begins; only then does the first terminal's line end well, and its script write its result. Its
+        // line is harmless: a shared script, rewritten under the first terminal's shell, has that shell run part of it.
+        let older = RefCell::new(older.into_inner().unwrap());
+        let second = run(&folder, "true", Duration::ZERO, &|_, _, _| {
+            let mut older = older.borrow_mut();
+            older.stdin.take().unwrap().write_all(b"\n")?;
+            assert_eq!(older.wait()?.code(), Some(0));
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(second, Output { timed_out: true, ..Output::default() });
     }
 
     #[test]
@@ -281,15 +318,19 @@ mod tests {
     fn the_folder_and_the_script_are_the_persons_alone() {
         let data = tempfile::tempdir().unwrap();
         let folder = data.path().join("setup");
-        let script_path = folder.join("host.sh");
-        run(&folder, HOST, Duration::ZERO, &|_, _, _| Ok(())).unwrap();
-        assert_eq!((mode(&folder), mode(&script_path)), (0o700, 0o700));
-        assert_eq!(fs::read_to_string(&script_path).unwrap(), script(HOST));
+        // Each run's script, and its mode, as the terminal is handed it.
+        let scripts = RefCell::new(Vec::new());
+        let start = |_: &str, _: &str, script: &Path| -> io::Result<()> {
+            scripts.borrow_mut().push((mode(script), fs::read_to_string(script)?));
+            Ok(())
+        };
+        run(&folder, HOST, Duration::ZERO, &start).unwrap();
+        assert_eq!(mode(&folder), 0o700);
 
         // Left open to others since: the person's alone again.
         fs::set_permissions(&folder, fs::Permissions::from_mode(0o755)).unwrap();
-        fs::set_permissions(&script_path, fs::Permissions::from_mode(0o644)).unwrap();
-        run(&folder, HOST, Duration::ZERO, &|_, _, _| Ok(())).unwrap();
-        assert_eq!((mode(&folder), mode(&script_path)), (0o700, 0o700));
+        run(&folder, HOST, Duration::ZERO, &start).unwrap();
+        assert_eq!(mode(&folder), 0o700);
+        assert_eq!(scripts.into_inner(), [(0o700, script(HOST)), (0o700, script(HOST))]);
     }
 }
