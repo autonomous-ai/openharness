@@ -418,6 +418,78 @@ sit above it. This matches `codex/hookContract.ts`'s `win32Runner: 'powershell'`
   `[claude-code:unrecognized_model]` on stderr and ran.
 - `findstr /L /M /G:<the key file> <these notes>` prints nothing. The search reads the key from its file.
 
+## Task 15
+
+**Follow.** `$.process.spawn` is there in Claude Code 2.1.328 and streams: each piece arrives 2-30 ms after the child
+wrote it, a second apart, all before the child exits (section 1). The follow form that landed in
+`cli/src/deviceClaude/inbox.ts` stands.
+
+**The child neither sees its parent gone nor fails a write within 30 s, when it writes nothing in that time.** On
+Windows, leaving the loop kills nothing. The spawned `node.exe parent.js` (a direct child of `claude.exe`) and its
+child both still ran 5 s and 30 s later, and the parent check said "alive" every time. What leaving the loop does is
+close Claude Code's end of the stdout pipe, 2-3 s later. From then on the child's next write fails with `EPIPE`, at
+once, even 37 s later (section 2). So the follower does not end by `parentAlive()`: `harness.exe` waits on `node.exe`
+and is never killed. It ends at its next write (step 6), which comes when its held poll answers (at most 30 s) or after
+step 5's 60 s wait. Until then its poll stays held in the core, unless a newer poll for the session replaces it, and a
+text the core hands to that hold is written into the closed pipe and lost. `inbox.ts`'s header says Claude Code ends
+the loop by killing `harness.exe`; on Windows it does not.
+
+Read 2026-11-20 on the UTM Windows 11 ARM64 VM (build 26200), as the owned test user over SSH (session 0), as Task 2
+ran. Claude Code 2.1.328 (`$.session.version()`: base 2.1.328, built 2026-11-18), by `<profile>\.local\bin\claude.exe`,
+not upgraded. It ran with the test key as "The VM" says: read from its file into the starting PowerShell's own
+environment, never on a command line. The model was `deepseek/deepseek-v4.1-flash`, with a throwaway `CLAUDE_CONFIG_DIR`
+in the profile. `claude -p` loaded a throwaway mod by `--plugin-dir` (outside the repo, never committed);
+`claude plugin validate` passed it. Its `session.start` hook ran the checks in turn, then held the session open 45 s
+with a `$.process.run` of a sleeping `node.exe`, so the 30 s look below came while the session still ran. The children
+were `C:\Program Files\nodejs\node.exe` (v24.20.0). The process table came from `harness-pty ps --json`, the VM's own
+release build at `C:\work\oh\pty\target\release\harness-pty.exe` (`version`: 0.1.0, protocol 2; built 2026-10-17 from an
+older tree, not this branch). Four runs: one to try, then three with the parent and child logging more. They were
+`write` (the child writes a line a second), `quiet` (it writes only the three lines the mod reads) and `late` (quiet,
+then writing again from its 40th line). Every file was checked for the key before it was read off the VM; none held it.
+The throwaway folder (mod, config, scripts, logs) is removed; the key file, the test user and the apps stay.
+
+### 1. Is it there, and does it stream
+
+- `typeof $.process.spawn` cannot be asked: `claude plugin validate` refuses `$.process.spawn` read as a value ("used as
+  a value … instead of called"). The call answers instead. It returns an async generator (`next` a function, `result`
+  an object), and the validator lists `$.process.spawn` among the module's calls. Which release first had it is not
+  known from here: the VM has only 2.1.328, and it has it.
+- `$.process.spawn({ argv: [<node.exe>, '-e', <a line a second, five times; the exit time on stderr>] })`, with
+  `$.clock.now()` taken at each piece. One run's times, in ms after the child's own timestamp in the line:
+
+  | Piece | Arrived |
+  | --- | --- |
+  | stdout `line 1` | +30 |
+  | stdout `line 2` | +6 |
+  | stdout `line 3` | +8 |
+  | stdout `line 4` | +5 |
+  | stdout `line 5` | +4 |
+  | stderr `exit` | +4 |
+
+  The stream then returned `{ code: 0, signal: null }`, 30 ms after the last piece. The four runs were the same: 2-30 ms
+  late, about 1 s apart. Each piece was one whole line as the child wrote it, and stderr came as pieces of its own.
+- In section 2's check the first piece came 190-250 ms after the call, through two `node.exe` starts.
+
+### 2. A parent and its child, after the loop is left
+
+`$.process.spawn` of `node.exe parent.js`. The parent starts `node.exe child.js` with `stdio: 'inherit'` and waits on it
+(`spawnSync`), as `harness.exe` starts `node.exe` (`pty/src/command.rs` `run_resolved`). The parent's own parent was
+`claude.exe` itself. The child wrote its pid, then a line a second, checked `process.kill(process.ppid, 0)` before each
+line and every 100 ms, logged each write's callback, and on the first failed write logged its code and exited. The mod
+left the `for await` loop after three pieces.
+
+| Run | +5 s (`ps --json`) | +30 s (`ps --json`) | The child's writes after the loop was left | The parent check |
+| --- | --- | --- | --- | --- |
+| `write` (twice) | both gone | both gone | +1.0 s and +2.0 s written; +3.0 s `EPIPE`, then it exited | alive, every check, to the end |
+| `quiet` | both running | both running | none | alive, every check, until its cap at +42 s |
+| `late` | both running | both running | the first, at +37.4 s: `EPIPE`, then it exited | alive, every check, to the end |
+
+- The parent was never killed. Its log shows it returning from `spawnSync` each time, a few ms after its child ended,
+  and exiting with the child's status. In `write` both were gone at +5 s only because the child had exited on `EPIPE`.
+- The write that fails, fails in the write's callback (`code=EPIPE`). No `error` event came first, and the write did
+  not throw.
+- Not tried: whether the two outlive `claude.exe` itself. Every child had exited before the session ended.
+
 ## Task 37
 
 **Nothing here contradicts Task 27 or Task 30, so Task 38 does not run.** Every window belongs to the program
