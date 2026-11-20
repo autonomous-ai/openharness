@@ -79,14 +79,16 @@ The real dial is left as the first look found it:
   `settings.set` takes (brightness, character, muted, quiet, straightTitle, focusFace, scrollReversed, voiceLang, and
   uiSkin and followCompanion when the first look has them), one `dial_settings` writes the first look's values back for
   exactly those fields, and the dial's own answer is checked within 10 s. It prints `settings: unchanged`,
-  `settings: restored (<fields>)` or `settings: not restored (…)`.
+  `settings: restored (<fields>)` or `settings: not restored (…)`. A dial the daemon has not attached (it never
+  greeted) is left to the last look.
 - **A last look.** Once the daemon has let the port go, the desk looks at the dial again and prints `pets: unchanged`
-  or `pets: changed`.
+  or `pets: changed`; for a dial that was not attached, also `settings: unchanged` or `settings: changed (<fields>)`
+  against the first look.
 
 Exit codes: 1 not on Windows, or the desk failed (it says what); 2 bad arguments, before anything starts; 3 a port is
 busy (the daemon's `--port`, or the COM port still held after 10 s); 4 the dial must not be greeted (no `hello` in 20 s,
-or pets the desk would drop); 5 the settings were not restored, or a look `--against` found them changed; 6 the dial's
-pets changed. A desk refuses port 18473, the account's own daemon's.
+or pets the desk would drop); 5 the settings were not restored, or a look found them changed (`--against`, or the last
+look of a dial that was not attached); 6 the dial's pets changed. A desk refuses port 18473, the account's own daemon's.
 
 ## console.ps1
 

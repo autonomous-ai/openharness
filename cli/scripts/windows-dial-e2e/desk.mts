@@ -9,8 +9,8 @@
  *   [--quit-on <file>]`): a sealed daemon on it, that leaves its settings and its pets as the first look found them.
  *
  * Exit codes: 1 not on Windows, or the desk failed (it says what); 2 bad arguments, before anything starts; 3 a port is
- * busy; 4 the dial must not be greeted (no hello, or pets the desk would drop); 5 the settings were not restored;
- * 6 the dial's pets changed.
+ * busy; 4 the dial must not be greeted (no hello, or pets the desk would drop); 5 the settings were not restored, or a
+ * look found them changed; 6 the dial's pets changed.
  */
 import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:net'
@@ -400,7 +400,7 @@ async function realMode(mode: Extract<Mode, { kind: 'real' }>): Promise<void> {
     if (command === 'list') say(rows ?? JSON.stringify({ rows: null }))
     else process.stderr.write('commands: list | quit\n')
   }, () => void (async () => {
-    const settings = await restoreSettings(watch, first)
+    let settings = await restoreSettings(watch, first)
     watch.close()
     await daemon.close()
     await backend.close()
@@ -409,11 +409,18 @@ async function realMode(mode: Extract<Mode, { kind: 'real' }>): Promise<void> {
       const after = await look(mode.com, mode.serialBin)
       pets = samePets(first.petIds, after.petIds) ? 0 : 6
       say(pets ? 'pets: changed' : 'pets: unchanged')
+      if (settings === null) {
+        const changed = settingsChanged(first, after.settings)
+        say(changed.length ? `settings: changed (${changed.join(', ')})` : 'settings: unchanged')
+        settings = changed.length ? 5 : 0
+      }
     } catch (error) {
       if (!(error instanceof DeskStop)) throw error
       say(`pets: not checked (${error.message})`)
+      if (settings === null) say('settings: not checked')
       pets = error.code
     }
+    // Settings no look read stay unknown: the look's own stop (3, 4) is the code then.
     await end(settings || pets)
   })().catch(stop))
 }
@@ -421,10 +428,11 @@ async function realMode(mode: Extract<Mode, { kind: 'real' }>): Promise<void> {
 /**
  * The settings `settings.set` takes, back to the first read's where the dial holds others now (a press on its menus,
  * say): one dial_settings with those fields, then the dial's own answer checked within 10 s. 5 when not restored.
+ * null when the dial is not attached (it never greeted the daemon, say): the last look then compares them.
  */
-async function restoreSettings(watch: LocalClient, first: DialRead): Promise<number> {
+async function restoreSettings(watch: LocalClient, first: DialRead): Promise<number | null> {
   const status = watch.frames.findLast((frame) => frame.type === 'dial_status')?.payload as { attached?: boolean; id?: string; settings?: Record<string, unknown> } | undefined
-  if (!status?.attached) { say('settings: not restored (the dial is not attached)'); return 5 }
+  if (!status?.attached) return null
   const changed = settingsChanged(first, status.settings)
   if (!changed.length) { say('settings: unchanged'); return 0 }
   const since = watch.frames.length
