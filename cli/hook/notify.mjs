@@ -1878,7 +1878,8 @@ function removeLockOwnedBy(lockDir, token) {
 }
 
 function processStartMarker(pid) {
-  if (!Number.isSafeInteger(pid) || pid <= 0) return null
+  // Windows has no /proc, and a `ps` on its PATH is Git's, which knows no Windows pid: a lock names its owner by pid alone.
+  if (process.platform === 'win32' || !Number.isSafeInteger(pid) || pid <= 0) return null
   try {
     const stat = readFileSync(`/proc/${pid}/stat`, 'utf8')
     const fields = stat.slice(stat.lastIndexOf(')') + 2).trim().split(/\s+/)
