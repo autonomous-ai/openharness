@@ -6,7 +6,8 @@ import { terminalRouteKey } from '../../lib/terminalRuntime.js'
 const identity = (row: RegisteredSession | undefined) => row && JSON.stringify([
   row.registeredAt, row.boundAt, row.sessionId, row.engine, row.cwd, row.processIdentity,
   row.codexHome, row.claudeHome, row.dsh, row.dshRuntime, row.agent, row.gridLaunch, row.scmLaunch,
-  row.subscriptionModel, row.permissionMode, row.bypassPermission, row.active,
+  // Discovery may name auto after launch; an unnamed approving launch already uses its flags.
+  row.subscriptionModel, row.permissionMode ?? (row.bypassPermission ? 'auto' : undefined), row.bypassPermission, row.active,
   row.runtimes.map(terminalRouteKey).sort(), row.launch?.state === 'ready' ? undefined : row.launch, row.externalResume,
 ])
 
