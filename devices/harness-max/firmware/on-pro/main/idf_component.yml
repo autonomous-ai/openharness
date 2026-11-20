@@ -1,0 +1,7 @@
+# The Pro's panel, touch and codec drivers, at the versions the Pro runs (../dependencies.lock is the Pro's).
+dependencies:
+  idf:
+    version: ">=5.5.0"
+  waveshare/esp_lcd_st7703: "^2.0.0"
+  espressif/esp_lcd_touch_gt911: "^1.1.0"
+  espressif/esp_codec_dev: "*"

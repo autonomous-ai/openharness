@@ -84,6 +84,14 @@ if [[ -f "$here/test_max_turn.c" ]]; then
     "$out/test_max_turn"
 fi
 
+# The glass shrunk into a band of the desk Harness Pro's panel, for the stopgap image built in on-pro/ (max_shrink.c).
+if [[ -f "$fw/on-pro/main/max_shrink.c" ]]; then
+    glass 480
+    cc "${cflags[@]}" -I"$fw/on-pro/main" -o "$out/test_max_shrink" "$fw/on-pro/main/max_shrink.c" \
+        "$here/test_max_shrink.c" -lm
+    "$out/test_max_shrink"
+fi
+
 # The ESP32-P4's strips (main/display/max_strips.c) over a fake PPA that lands a turn, leaves it waiting for the next,
 # never lands it or refuses it, on the Linux build's FreeRTOS.
 glass 480
