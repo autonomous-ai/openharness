@@ -270,6 +270,15 @@ class SelectionTests(unittest.TestCase):
                 self.assertIn("cli", planner.select([path])[0])
                 self.assertTrue(planner.reads("cli", path))
 
+    def test_the_pro_app_icon_art_selects_the_firmware_suite(self):
+        # The Pro's run.sh fails when main/pod/app_icons.c no longer matches .github/assets/apps (gen_app_icons.py
+        # --check, and test_app_icons.py reads the README): a PR that changes only the art must run it, or a stale bake
+        # reaches main and fails the next firmware PR.
+        for path in (".github/assets/apps/vscode.png", ".github/assets/apps/README.md"):
+            with self.subTest(path=path):
+                self.assertEqual(planner.select([path])[0], {"firmware"})
+        self.assertEqual(planner.select([".github/assets/engines/claude.png"])[0], set())
+
     def test_the_store_example_images_select_the_desktop_suite(self):
         # store_discover_test.dart opens each Store example image from the repository; seven are in docs/images/ (SEC-1).
         self.assertEqual(planner.select(["docs/images/poster.png"])[0], {"desktop"})

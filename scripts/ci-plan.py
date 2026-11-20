@@ -140,10 +140,11 @@ PR_READS = {
                 "desktop/lib/daemons/illustrated_alignment.g.dart", "desktop/lib/daemons/plates.g.dart",
                 "desktop/lib/daemons/roster.g.dart", "mobile/lib/daemons/plates.g.dart", "mobile/lib/daemons/roster.g.dart"),
     # test_touch_ui.py holds the dial's host names and busy fuse to the daemon's (cli/src/cable/hosts/hostDetect.ts,
-    # cli/src/services/devices.ts REMIND_MS).
-    "firmware": ("cli/src/cable/hosts/hostDetect.ts", "cli/src/services/devices.ts", "daemons/plates/tux.mjs",
-                 "daemons/review/traits.html", "daemons/tools/illustrated/daemon_art.py", "daemons/tools/plate.mjs",
-                 "desktop/assets/model-icons/claude.png"),
+    # cli/src/services/devices.ts REMIND_MS). The Pro's run.sh checks main/pod/app_icons.c against every file in
+    # .github/assets/apps (gen_app_icons.py --check, test_app_icons.py); .github/ already reruns every suite on reuse.
+    "firmware": (".github/assets/apps/", "cli/src/cable/hosts/hostDetect.ts", "cli/src/services/devices.ts",
+                 "daemons/plates/tux.mjs", "daemons/review/traits.html", "daemons/tools/illustrated/daemon_art.py",
+                 "daemons/tools/plate.mjs", "desktop/assets/model-icons/claude.png"),
     # Its tests run in a sparse checkout (ci.SOURCE_INPUTS["desktop"]) and read these from it. By hand: the phone's P2P and
     # E2EE files test/p2p/mobile_parity_test.dart compares (its paths are built), the phone's lockfile, store/ (its
     # agents, branding and hands-on list) and docs/images/ (the Store's example images store_discover_test.dart opens);
