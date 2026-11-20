@@ -9,7 +9,7 @@
  * every other before the process exits.
  */
 import { homedir } from 'node:os'
-import { isAbsolute, join } from 'node:path'
+import { resolve } from 'node:path'
 
 /** Why a variable's value cannot be used; collected per variable, as zod's `fieldErrors` were. */
 export class EnvIssue extends Error {}
@@ -54,10 +54,11 @@ export const url = (accept: (url: URL) => boolean): EnvField<string | undefined>
 // and log in two. So it is relative to the home in every process, as a service started in the home already read
 // it, and none is refused (harness-pm, 2026-11-21: no refusal; home in every process).
 
-/** An absolute value as given; a relative one joined to the home (the folder enterHome enters), never the current
- *  folder; '' stays ''. */
+/** The value resolved against the home (the folder enterHome enters), never the current folder or drive: an absolute
+ *  one names its own folder, a relative one is under the home, and on Windows a root-relative one (`\data`) or a
+ *  drive-relative one (`C:data`) is on the home's drive; '' stays ''. */
 export function homePath(value: string, home: string = homedir()): string {
-  return !value || isAbsolute(value) ? value : join(home, value)
+  return value ? resolve(home, value) : value
 }
 
 /** A Harness folder or file override: unset or '' → [fallback], so no override can make the home itself the folder;
