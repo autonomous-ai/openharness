@@ -995,6 +995,17 @@ static void send_shapes(void)
     CHECK(nsent == 1 && !strcmp(sent[0], "{\"t\":\"fw.progress\",\"written\":4096,\"resend\":true}"));
 }
 
+// app.pick goes out only with an id that could have arrived whole (CABLE_APP_ID_MAX): a cut one would pick another app.
+static void app_pick_shapes(void)
+{
+    welcome(); reset();
+    CHECK(pro_cable_send_app_pick("codex") && nsent == 1);
+    CHECK(!strcmp(sent[0], "{\"t\":\"app.pick\",\"app\":\"codex\"}"));
+    CHECK(!pro_cable_send_app_pick(NULL) && !pro_cable_send_app_pick("") && !pro_cable_send_app_pick("abcdefghijklmnop"));
+    CHECK(nsent == 1);
+    CHECK(pro_cable_send_app_pick("abcdefghijklmno") && nsent == 2);
+}
+
 // A frame lost on the way in outside a transfer: ask for the snapshot once, not again within 2 s, never mid-transfer.
 // A welcome that advertises `resync` gets the one request; an older daemon's gets the old swarms.list + agents.list.
 static void link_resync_with(const char *welcome_json, bool new_daemon)
@@ -1260,6 +1271,7 @@ int main(void)
     fw_confirms_on_welcome();
     session_down_aborts_then_new_offer_ok();
     send_shapes();
+    app_pick_shapes();
     link_resync();
     seq_gaps();
     self_replug();
