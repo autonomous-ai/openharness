@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/core/linux_app_image.dart';
 import 'package:harness/devices/device_app_launcher.dart';
 
 /// The rule every writer of the entry follows (the Device app, Desktop, the
@@ -81,6 +82,22 @@ void main() {
         reason: vector['appImage'] as String,
       );
       entryIn(dataHome).deleteSync();
+    }
+  }, skip: Platform.isWindows);
+
+  test("the Exec= line is the vectors'", () async {
+    for (final vector in (_vectors['exec'] as List).cast<Map>()) {
+      final path = vector['path'] as String;
+      final exec = vector['exec'] as String?;
+      if (exec != null) {
+        expect(quoteLauncherExec(path), exec, reason: path);
+        // What it writes, it reads back as the same path.
+        expect(launcherExecTarget('[Desktop Entry]\nExec=$exec\n'), path);
+        continue;
+      }
+      // A path no Exec= line can hold: nothing is written.
+      await write(rooted(path));
+      expect(entryIn(data()).existsSync(), isFalse, reason: path);
     }
   }, skip: Platform.isWindows);
 
