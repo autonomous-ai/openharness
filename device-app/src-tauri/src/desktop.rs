@@ -87,11 +87,41 @@ pub fn linux_desktop_app(
     (target.is_absolute() && is_file(&target)).then_some(target)
 }
 
-/// The launcher the desktop app's per-user install leaves in `%LOCALAPPDATA%\Programs\Harness`.
-pub fn windows_desktop_app(local_app_data: Option<&OsStr>, is_file: &dyn Fn(&Path) -> bool) -> Option<PathBuf> {
-    let local = local_app_data.filter(|local| !local.is_empty())?;
-    let launcher = Path::new(local).join("Programs").join("Harness").join("Harness.exe");
-    is_file(&launcher).then_some(launcher)
+/// The launcher the desktop app's per-user install leaves in `<user programs>\Harness`: the shell's
+/// FOLDERID_UserProgramFiles, as Desktop's own installer resolves it, else `%LOCALAPPDATA%\Programs`, each only when
+/// absolute.
+pub fn windows_desktop_app(
+    user_programs: Option<&Path>,
+    local_app_data: Option<&OsStr>,
+    is_file: &dyn Fn(&Path) -> bool,
+) -> Option<PathBuf> {
+    let programs = match user_programs {
+        Some(programs) => programs.to_path_buf(),
+        None => Path::new(local_app_data?).join("Programs"),
+    };
+    let launcher = programs.join("Harness").join("Harness.exe");
+    (launcher.is_absolute() && is_file(&launcher)).then_some(launcher)
+}
+
+/// FOLDERID_UserProgramFiles, there or not yet, as Desktop's Harness.exe asks for it. Redirected on some managed PCs.
+#[cfg(windows)]
+fn user_programs() -> Option<PathBuf> {
+    use std::os::windows::ffi::OsStringExt;
+    use windows_sys::Win32::System::Com::CoTaskMemFree;
+    use windows_sys::Win32::UI::Shell::{FOLDERID_UserProgramFiles, KF_FLAG_DONT_VERIFY, SHGetKnownFolderPath};
+    let mut out = std::ptr::null_mut();
+    // SAFETY: a known folder id and flags, no token, and `out` receives a string the shell allocates.
+    let code = unsafe {
+        SHGetKnownFolderPath(&FOLDERID_UserProgramFiles, KF_FLAG_DONT_VERIFY as u32, std::ptr::null_mut(), &mut out)
+    };
+    let path = (code >= 0 && !out.is_null()).then(|| {
+        // SAFETY: on success `out` is a NUL-terminated string, read up to its NUL.
+        let length = (0..).take_while(|&i| unsafe { *out.add(i) } != 0).count();
+        PathBuf::from(std::ffi::OsString::from_wide(unsafe { std::slice::from_raw_parts(out, length) }))
+    });
+    // SAFETY: freed whatever the answer, once: the shell may allocate it on a failure too.
+    unsafe { CoTaskMemFree(out.cast_const().cast()) };
+    path
 }
 
 /// This OS's desktop app, installed; macOS finds it by its bundle instead.
@@ -103,7 +133,10 @@ pub fn desktop_app() -> Option<PathBuf> {
             let data_home = std::env::var_os("XDG_DATA_HOME");
             linux_desktop_app(data_home.as_deref(), &std::env::home_dir()?, &read, &is_file)
         }
-        "windows" => windows_desktop_app(std::env::var_os("LOCALAPPDATA").as_deref(), &is_file),
+        #[cfg(windows)]
+        "windows" => {
+            windows_desktop_app(user_programs().as_deref(), std::env::var_os("LOCALAPPDATA").as_deref(), &is_file)
+        }
         _ => None,
     }
 }
