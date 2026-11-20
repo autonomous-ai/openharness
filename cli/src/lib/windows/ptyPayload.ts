@@ -175,7 +175,7 @@ async function unzipWithTool(zip: Buffer, dest: string): Promise<void> {
   const name = 'payload.zip'
   writeFileSync(join(dest, name), zip)
   const [cmd, args] = process.platform === 'win32'
-    ? [join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'tar.exe'), ['-xf', name]] as const
+    ? [systemProgram('tar.exe'), ['-xf', name]] as const
     : ['unzip', ['-q', '-o', name]] as const
   try {
     await new Promise<void>((resolve, reject) => {

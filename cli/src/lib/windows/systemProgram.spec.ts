@@ -16,6 +16,8 @@ const BARE = new RegExp(String.raw`(?:\b(?:spawn|spawnSync|execFile|execFileSync
 /** Files that name one bare, and why that runs System32's. */
 const RESOLVED_ELSEWHERE: Record<string, string> = {
   'harnessd/platform.ts': 'defaultPlatformDeps runs each command of the Task Scheduler service from System32 (windowsProgram)',
+  // CreateProcessW looks in the PTY host's own folders before System32, and it runs in its home (ptyHost/launch.ts).
+  'lib/windows/shell.ts': "a pane's shell, which the PTY host starts",
 }
 
 describe('Windows programs by their full paths', () => {
