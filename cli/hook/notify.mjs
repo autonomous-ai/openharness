@@ -992,7 +992,9 @@ function syncStateDirectory(directory) {
  * On Windows NTFS gives Node no owner, and its mode bits read as writable by everyone (src/lib/secureState.ts,
  * windowsStateRoots), so the owner and mode checks below would refuse every folder and file there, and a hook with no
  * daemon could never record its session. There, as the daemon does, a folder must be a folder, and a file is read as
- * the hook reads its other Windows state (readWindowsStateFile): no link, within its size, inside the profile or folder.
+ * the hook reads its other Windows state (readWindowsStateFile): no link, within its size, inside the profile or the
+ * hook's data folder. Never inside its own folder alone: the environment may name that one anywhere
+ * (HARNESS_HOOK_ROUTES_DIR), and a folder this check passes is no proof of whose it is.
  */
 function secureStateDirectory(directory, create = true) {
   if (create) mkdirSync(directory, { recursive: true, mode: 0o700 })
@@ -1035,7 +1037,7 @@ function inspectPrivateStateFile(fd, maxBytes = Number.MAX_SAFE_INTEGER) {
 }
 
 function readPrivateStateFile(file, maxBytes = Number.MAX_SAFE_INTEGER) {
-  if (process.platform === 'win32') return readWindowsStateFile(dirname(file), file, maxBytes)
+  if (process.platform === 'win32') return readWindowsStateFile(paths().dataDir, file, maxBytes)
   const fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK)
   try {
     inspectPrivateStateFile(fd, maxBytes)
