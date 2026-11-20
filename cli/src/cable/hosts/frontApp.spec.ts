@@ -35,6 +35,9 @@ const EXES: [string, string][] = [
   ['ghostty', 'ghostty'],
   ['harness', 'harness'],
   ['Harness', 'harness'],
+  // The Claude app's window on Windows is its claude.exe's (dial-windows VM notes, Task 37 §1).
+  ['Claude.exe', 'claude'],
+  ['claude.exe', 'claude'],
 ]
 
 // The Claude and ChatGPT apps' Linux processes, by the comm their recording shows (ChatGPT's as recorded, capitalised).
@@ -49,7 +52,7 @@ describe('frontAppId', () => {
     expect(detectApp({ __CFBundleIdentifier: bundle })).toBe(id)
   })
 
-  it.each(EXES)('Code.exe, Cursor.exe, WindowsTerminal.exe, ChatGPT.exe, wezterm-gui, kitty, ghostty and harness map: %s', (exe, id) => {
+  it.each(EXES)('Code.exe, Cursor.exe, WindowsTerminal.exe, ChatGPT.exe, Claude.exe, wezterm-gui, kitty, ghostty and harness map: %s', (exe, id) => {
     expect(frontAppId(exe)).toBe(id)
   })
 
@@ -60,8 +63,8 @@ describe('frontAppId', () => {
   it.each(['com.apple.Safari', 'org.alacritty', 'net.kovidgoyal.kitty-quick-access', 'alacritty', '', 'x'.repeat(128),
     'constructor', '__proto__', 'toString', 'COM.MITCHELLH.GHOSTTY', 'com.openai.chat', 'codex', 'Codex.exe',
     'com.cmuxterm.app.nightly', 'cmux',
-    // The Linux processes' names are Linux's alone.
-    'claude-desktop.exe'])(
+    // The Linux processes' names are Linux's alone, and the Claude app's claude.exe is Windows' alone.
+    'claude-desktop.exe', 'claude'])(
     'an unknown app, the empty string and a 128-character string are none: %j', (value) => {
       expect(frontAppId(value)).toBe(FRONT_NONE)
     })
