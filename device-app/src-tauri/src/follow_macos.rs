@@ -279,8 +279,10 @@ unsafe extern "C-unwind" fn notified(
 /// Whether a notification may change the thread's title: the focus moved, or the focused window's own title changed.
 /// Another element's title (a tab, a button, a line of the page ChatGPT shows) is not read: each read is two calls into
 /// ChatGPT, and an app whose page tree is on changes such titles many times a second. Elements compare with CFEqual.
+/// With no window known (none yet, or a read ChatGPT did not answer in time), any title change is read until one is
+/// found: else the observer would hear no title until the focus moves.
 fn reads_again(focus_changed: bool, element: &AXUIElement, window: Option<&AXUIElement>) -> bool {
-    focus_changed || window == Some(element)
+    focus_changed || window.is_none_or(|window| window == element)
 }
 
 /// The focused window; None with no window, or on any error (a ChatGPT that does not answer in time included).
