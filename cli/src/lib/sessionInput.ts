@@ -2,7 +2,7 @@ import type { ScreenReader } from './screenReader.js'
 import type { SubmissionReader } from './submissionReader.js'
 import { createHash } from 'crypto'
 import { composerHolds, composerShown, normalizedTerminalText, visibleTerminal } from '../engines/kit/submission.js'
-import { openclawBoxHolds, readOpenclawScreen } from '../engines/openclaw/contract.js'
+import { openclawBoxExactly, openclawBoxHolds, openclawClearKeys, readOpenclawScreen, type OpenclawBoxHidden } from '../engines/openclaw/contract.js'
 import { launchBound } from '../core/engines/sessionBinding.js'
 import type { RegisteredSession } from './registry.js'
 import { errorKind, sid } from './log.js'
@@ -160,6 +160,11 @@ interface InputState {
   firstTask: boolean
   /** A message waits for its OpenClaw pane to be able to send ([OPENCLAW_NOT_READY]): nothing of it is typed. */
   paneWait: boolean
+  /** The message awaiting confirmation was cleared from its OpenClaw box ([clearRefused]), which happens once a message:
+   *  kept across its paste again, and for a first task until the first task ends, across its hand-over again. */
+  cleared: boolean
+  /** Ctrl+U is being pressed into the box ([clearRefused]): what it shows is what is left of Harness's message. */
+  clearing: boolean
   /** The receipt of the person's message typed last, until it is settled ([settle]). */
   awaitingReceipt?: MessageReceipt
   controlLocked: boolean
@@ -212,6 +217,9 @@ export interface SessionInputDeps {
   onWaiting?: (sessionId: string, reason: 'engine_starting') => void
   /** An agent's `waitingFor` changed (its first message began to wait, or its last stopped): its frame is pushed again. */
   onWaitChanged?: (id: string) => void
+  /** An OpenClaw first task's move on its row from typed back to waiting untyped (lib/registry.ts), made before its box is
+   *  cleared: true once it is saved. False, or absent, and nothing is pressed. */
+  untypeFirstTask?: (id: string, text: string) => Promise<boolean>
   /** Clock and timer for the lease wait; real ones by default. */
   now?: () => number
   sleep?: (ms: number) => Promise<void>
@@ -344,13 +352,14 @@ export class SessionInputController {
    * An OpenClaw pane that cannot send the message yet ([OPENCLAW_NOT_READY]) is waited for the same way, up to
    * OPENCLAW_NOT_READY_MAX_MS, and for a first task as long as it waits ([firstTaskEnded]): the binding pass bounds
    * that. It is not read again while a command of the pane's own is typed (`typeCommand`), which the message would run
-   * into in the box.
+   * into in the box. A message typed once already and cleared ([clearRefused]) counts that wait from [firstPaste].
    */
   private async injectWhenLeased(
     state: InputState,
     write: () => Promise<boolean | TerminalActionResult>,
     current: () => boolean,
     held: () => boolean,
+    firstPaste?: number,
   ): Promise<boolean | TerminalActionResult> {
     const now = this.deps.now ?? Date.now
     const sleep = this.deps.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)))
@@ -359,7 +368,7 @@ export class SessionInputController {
     if (held()) return refused()
     if (!current()) return { state: 'failed', dispatch: 'not_started', reason: TERMINAL_LEASE_REFUSED }
     let delivery = await write()
-    let notReadySince: number | undefined
+    let notReadySince = firstPaste
     for (;;) {
       const notReady = paneNotReady(delivery)
       if (notReady) {
@@ -387,6 +396,8 @@ export class SessionInputController {
         pastedAt: 0,
         firstTask: false,
         paneWait: false,
+        cleared: false,
+        clearing: false,
         controlLocked: false,
         cancelling: 0,
         afterCancel: { writes: [], sent: [] },
@@ -434,6 +445,7 @@ export class SessionInputController {
   private firstTaskEnded(sessionId: string, state: InputState): void {
     if (!state.firstTask) return
     state.firstTask = false
+    state.cleared = false
     this.deps.onWaitChanged?.(sessionId)
   }
 
@@ -532,7 +544,8 @@ export class SessionInputController {
     return this.scheduleWrite(sessionId, content, deliveryId, said)
   }
 
-  private scheduleWrite(sessionId: string, content: string, deliveryId?: string, receipt?: MessageReceipt): Promise<void> {
+  /** [firstPaste]: when a message typed again after it was cleared ([clearRefused]) was first pasted. */
+  private scheduleWrite(sessionId: string, content: string, deliveryId?: string, receipt?: MessageReceipt, firstPaste?: number): Promise<void> {
     const state = this.state(sessionId)
     let pending: HeldInput | undefined
     if (state.writes) {
@@ -551,7 +564,7 @@ export class SessionInputController {
       // On its way before a cancel began, its turn to be typed came while the Ctrl-C is: it goes on after it.
       if (state.cancelling) {
         this.holdForCancel(sessionId, state, pending?.bytes ?? Buffer.byteLength(content, 'utf8'), deliveryId, receipt, 'writes',
-          () => void this.scheduleWrite(sessionId, content, deliveryId, receipt))
+          () => void this.scheduleWrite(sessionId, content, deliveryId, receipt, firstPaste))
         return Promise.resolve()
       }
       const current = this.controlSession(sessionId)
@@ -561,7 +574,7 @@ export class SessionInputController {
         if (!deliveryId?.startsWith('team:')) this.deps.onError(sessionId, 'This harness is no longer available.')
         return Promise.resolve()
       }
-      return this.inject(sessionId, current, content, deliveryId, receipt)
+      return this.inject(sessionId, current, content, deliveryId, receipt, firstPaste)
     }
     const running = state.writes ? state.writes.then(write, write) : write()
     const clear = (): void => {
@@ -872,7 +885,7 @@ export class SessionInputController {
   }
 
   /** Preserve the established injection path for every caller that opts out of receipts. */
-  private async injectLegacy(sessionId: string, session: RegisteredSession, content: string, receipt?: MessageReceipt): Promise<void> {
+  private async injectLegacy(sessionId: string, session: RegisteredSession, content: string, receipt?: MessageReceipt, firstPaste?: number): Promise<void> {
     const state = this.state(sessionId)
     const current = (): boolean => this.states.get(sessionId) === state && this.controlSession(sessionId) !== undefined
     const gone = (outcome: MessageOutcome = 'agent_gone'): void => {
@@ -924,7 +937,7 @@ export class SessionInputController {
     }
     if (!current()) { gone(); return }
     const delivery = await this.injectWhenLeased(state, () => this.deps.inject(session.agentId, content),
-      current, () => this.deps.moveGate?.refused(session.agentId) === true)
+      current, () => this.deps.moveGate?.refused(session.agentId) === true, firstPaste)
     const accepted = typeof delivery === 'boolean'
       ? delivery
       : delivery.state === 'succeeded' || delivery.dispatch === 'possibly_executed'
@@ -967,21 +980,31 @@ export class SessionInputController {
     state.retries = 0
     state.observes = 0
     state.ambiguousDispatch = typeof delivery !== 'boolean' && delivery.dispatch === 'possibly_executed'
-    state.pastedAt = (this.deps.now ?? Date.now)()
+    this.pasted(state, firstPaste)
     this.deps.onSubmitted?.(sessionId, content)
     this.armSubmitCheck(sessionId, session, state)
   }
 
-  private async inject(sessionId: string, session: RegisteredSession, content: string, deliveryId?: string, receipt?: MessageReceipt): Promise<void> {
+  /**
+   * The message awaiting confirmation was pasted: its bound runs from now, or from [firstPaste] for one typed again after
+   * it was cleared, which stays cleared. Any other message may be cleared once of its own, but a first task, which is
+   * one message until it ends, its hand-over again included.
+   */
+  private pasted(state: InputState, firstPaste: number | undefined): void {
+    state.pastedAt = firstPaste ?? (this.deps.now ?? Date.now)()
+    if (firstPaste === undefined && !state.firstTask) state.cleared = false
+  }
+
+  private async inject(sessionId: string, session: RegisteredSession, content: string, deliveryId?: string, receipt?: MessageReceipt, firstPaste?: number): Promise<void> {
     if (this.refuseHeldMessage(sessionId, deliveryId, receipt)) return
     const state = this.state(sessionId)
     if (!deliveryId) {
       // A local submission keeps its original scheduling. Overlap removes our ability
       // to attribute a later terminal turn to the lamp; it must not block local input.
       this.finishDelivery(sessionId, state, 'unknown', 'prompt_mismatch')
-      if (!receipt) return this.injectLegacy(sessionId, session, content)
+      if (!receipt) return this.injectLegacy(sessionId, session, content, undefined, firstPaste)
       // A write that threw may have typed something: unknown, and thrown on as before.
-      return this.injectLegacy(sessionId, session, content, receipt).catch((error: unknown) => {
+      return this.injectLegacy(sessionId, session, content, receipt, firstPaste).catch((error: unknown) => {
         receipt('ambiguous')
         throw error
       })
@@ -1039,7 +1062,7 @@ export class SessionInputController {
       state.writing = true
       const delivery = await this.injectWhenLeased(state, () => (deliveryId.startsWith('team:') && this.deps.injectTeam
         ? this.deps.injectTeam(session.agentId, content, deliveryId) : this.deps.inject(session.agentId, content)),
-      () => !state.cancelled && this.states.get(sessionId) === state, () => this.deps.moveGate?.refused(session.agentId) === true)
+      () => !state.cancelled && this.states.get(sessionId) === state, () => this.deps.moveGate?.refused(session.agentId) === true, firstPaste)
       state.writing = false
       if (state.cancelled || this.states.get(sessionId) !== state) return
       if (typeof delivery !== 'boolean' && delivery.state === 'failed' && delivery.dispatch === 'not_started' && delivery.reason === 'held') {
@@ -1086,7 +1109,7 @@ export class SessionInputController {
       state.retries = 0
       state.observes = 0
       state.ambiguousDispatch = typeof delivery !== 'boolean' && delivery.dispatch === 'possibly_executed'
-      state.pastedAt = (this.deps.now ?? Date.now)()
+      this.pasted(state, firstPaste)
       state.dispatching = false
       this.delivery(sessionId, state.deliveryId, 'delivered')
       if (state.observedStart !== undefined) {
@@ -1251,7 +1274,8 @@ export class SessionInputController {
    * OpenClaw's pane says what became of a message before any Enter: one it refused (Gateway not connected, history not
    * loaded, a run going) is back in its input box, and its status line says when it can send. Only the user row
    * confirms one, so a window ends here: on a pane that cannot send, waiting without counting it; on a ready one, an
-   * Enter only when its box holds the message (never a second paste).
+   * Enter only when its box holds the message (never a second paste). One its history did not load refused is cleared
+   * from the box ([clearRefused]).
    */
   private async retryOpenclaw(sessionId: string, session: RegisteredSession, state: InputState): Promise<void> {
     // A write that may have gone through is given up, but a first task's, which is never given up here: its box says
@@ -1263,6 +1287,8 @@ export class SessionInputController {
     const capture = await this.deps.capture?.(session.agentId)
     if (this.states.get(sessionId) !== state || !state.awaitingFingerprint || state.turnOpen) return
     const screen = capture ? readOpenclawScreen(capture) : null
+    if (screen?.state === 'no-history' && !state.cleared && openclawBoxExactly(screen.box, screen.boxHidden, state.awaitingContent ?? '')
+      && await this.clearRefused(sessionId, session, state)) return
     if (screen && screen.state !== 'ready') {
       if (state.firstTask || (this.deps.now ?? Date.now)() - state.pastedAt < OPENCLAW_NOT_READY_MAX_MS) this.armSubmitCheck(sessionId, session, state)
       else this.notAccepted(sessionId, session, state, `its pane could not send for ${OPENCLAW_NOT_READY_MAX_MS / 1000} s`)
@@ -1281,6 +1307,73 @@ export class SessionInputController {
     }
     state.retries++
     this.armSubmitCheck(sessionId, session, state)
+  }
+
+  /**
+   * A message OpenClaw refused into its box while its history did not load was never sent: OpenClaw sends nothing until
+   * a load works, and the binding pass types `/session`, which loads it again, only into an empty box. So a box that
+   * shows exactly the message, whole, is cleared, once a message: Ctrl+U `openclawClearKeys` times (never Ctrl+C, on which
+   * OpenClaw exits while disconnected), then the box is read again, and anything left there (the person typed meanwhile)
+   * stops it. Emptied, a message waits untyped as any message does while the pane cannot send, its bound still from its
+   * first paste, and is typed again from the empty box: its one send. A first task goes back to its row before the first
+   * key, so a daemon that stops meanwhile types it again only into an empty box; its wait here then ends, and the binding
+   * pass types it from the row. Whether the paste is awaited no more; false only while it still is.
+   */
+  private async clearRefused(sessionId: string, session: RegisteredSession, state: InputState): Promise<boolean> {
+    const content = state.awaitingContent ?? ''
+    const keys = openclawClearKeys(content)
+    if (keys === null) return false
+    state.cleared = true
+    const awaited = (): boolean => this.states.get(sessionId) === state && !!state.awaitingFingerprint && !state.turnOpen
+    if (state.firstTask) {
+      const untyped = await this.deps.untypeFirstTask?.(session.agentId, content).catch(() => false)
+      if (!awaited()) return true
+      if (!untyped) {
+        console.warn(`[inject] ${sid(sessionId)} openclaw · refused first task not cleared · its row could not take it back`)
+        return false
+      }
+    }
+    let pressed = 0
+    let left: string | null = null
+    state.clearing = true
+    try {
+      for (; pressed < keys; pressed++) {
+        const key = await this.deps.sendKey(session.agentId, 'C-u').catch(() => false)
+        if (!awaited()) return true
+        if (typeof key === 'boolean' ? !key : key.state !== 'succeeded') break
+      }
+      const capture = await this.deps.capture?.(session.agentId).catch(() => null)
+      if (!awaited()) return true
+      left = capture ? readOpenclawScreen(capture).box : null
+    } finally {
+      state.clearing = false
+    }
+    const emptied = left === ''
+    if (emptied) console.log(`[inject] ${sid(sessionId)} openclaw · refused message cleared · ${pressed} keys`)
+    else console.warn(`[inject] ${sid(sessionId)} openclaw · refused message not cleared · ${pressed} keys, its box not empty`)
+    // Back on its row, a first task is typed from there, only into an empty box, whatever is left: an Enter on this paste
+    // could send it twice.
+    if (!emptied && !state.firstTask) return false
+    const { awaitingReceipt, deliveryId, pastedAt } = state
+    state.awaitingFingerprint = null
+    state.awaitingContent = null
+    state.ambiguousDispatch = false
+    if (state.firstTask) return true
+    state.awaitingReceipt = undefined
+    void this.scheduleWrite(sessionId, content, deliveryId, awaitingReceipt, pastedAt)
+    return true
+  }
+
+  /**
+   * Whether what [id]'s OpenClaw box shows is Harness's: a write or a command of its own is being typed into the pane (a
+   * message waiting untyped for the pane to be able to send is not), the box is being cleared, or it shows exactly,
+   * whole, the message awaiting confirmation. Any other text is the person's, which Harness never clears.
+   */
+  ownsBox(id: string, box: string | null, hidden: OpenclawBoxHidden): boolean {
+    const state = this.states.get(id)
+    if (!state) return false
+    if (state.controlLocked || state.clearing || (state.writes !== undefined && !state.paneWait)) return true
+    return state.awaitingContent !== null && openclawBoxExactly(box, hidden, state.awaitingContent)
   }
 
   /** The message awaiting confirmation is given up, [why]: the person is told the agent did not accept it. */
