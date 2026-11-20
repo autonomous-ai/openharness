@@ -1,11 +1,11 @@
-import { lstatSync, rmSync, watch, type FSWatcher } from 'node:fs'
+import { lstatSync, realpathSync, rmSync, symlinkSync, utimesSync, watch, writeFileSync, type FSWatcher } from 'node:fs'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { once } from 'node:events'
 import { createServer, type Server, type Socket } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { connectLines, socketStampOf, watchSocket, type LineEnd } from './unixSocket.js'
+import { connectLines, markerStampOf, socketStampOf, watchSocket, type LineEnd } from './unixSocket.js'
 
 // Each watch as it is, recorded, so a spec can make one fail.
 vi.mock('node:fs', async (real) => {
@@ -259,5 +259,52 @@ describe.skipIf(process.platform === 'win32')('another program\'s Unix socket', 
     } finally {
       stopWatch()
     }
+  })
+})
+
+// herdr on Windows writes a marker file where its socket would be, and listens on a named pipe named after it.
+describe('a marker file\'s stamp, herdr\'s on Windows', () => {
+  let root: string
+  let marker: string
+
+  beforeEach(async () => {
+    // The profile is compared by its real path: a run's folders are under /tmp on macOS, a link to /private/tmp.
+    root = realpathSync(await mkdtemp(join(tmpdir(), 'mk-')))
+    marker = join(root, 'herdr.sock')
+    writeFileSync(marker, '4242:1763600000000000000')
+  })
+  afterEach(async () => { await rm(root, { recursive: true, force: true }) })
+
+  it('is <inode>:<mtime in ns> for a real file inside the root', () => {
+    const file = lstatSync(marker, { bigint: true })
+    expect(markerStampOf(marker, [root])).toBe(`${file.ino}:${file.mtimeNs}`)
+  })
+
+  it('is none for a link, a folder, a file outside the root, and a missing one', async () => {
+    const link = join(root, 'linked.sock')
+    symlinkSync(marker, link)
+    const folder = join(root, 'folder.sock')
+    await mkdir(folder)
+    const outside = realpathSync(await mkdtemp(join(tmpdir(), 'mk-out-')))
+    try {
+      const away = join(outside, 'herdr.sock')
+      writeFileSync(away, '4242:1763600000000000000')
+      expect(markerStampOf(link, [root])).toBeUndefined()
+      expect(markerStampOf(folder, [root])).toBeUndefined()
+      expect(markerStampOf(away, [root])).toBeUndefined()
+      expect(markerStampOf(join(root, 'none.sock'), [root])).toBeUndefined()
+    } finally {
+      await rm(outside, { recursive: true, force: true })
+    }
+  })
+
+  it('is another once herdr writes the marker again', () => {
+    const stamp = markerStampOf(marker, [root])
+    expect(stamp).toEqual(expect.any(String))
+    writeFileSync(marker, '4343:1763600001000000000')
+    // A second later, as a herdr that started again writes it: a file's time in quick succession can be the same tick.
+    const later = new Date(Date.now() + 1000)
+    utimesSync(marker, later, later)
+    expect(markerStampOf(marker, [root])).not.toBe(stamp)
   })
 })

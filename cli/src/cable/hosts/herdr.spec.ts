@@ -140,11 +140,15 @@ describe('the herdr adapter', () => {
     expect(recorder().adapter.paneKey(pane('w1:p2'))).toBe('herdr:w1:p2')
   })
 
-  // herdr's socket on Windows is a named pipe the client does not speak: a tap is the command there, as everywhere.
-  it('on Windows it has no type, and a tap runs the same command', async () => {
-    const { calls, adapter } = recorder({ platform: 'win32' })
-    expect(adapter.type).toBeUndefined()
-    expect(adapter.canType).toBeUndefined()
+  // The client speaks herdr's pipe on Windows (herdrClient.ts): the words go over it, and a tap is the command, as
+  // everywhere.
+  it('on Windows it types while herdr\'s marker is there, and a tap runs the same command', async () => {
+    const { calls, adapter, prompt, socketStamp } = recorder({ platform: 'win32' })
+    expect(adapter.canType!(pane('w1:p2'))).toBe(true)
+    socketStamp.mockReturnValue(undefined)
+    expect(adapter.canType!(pane('w1:p2'))).toBe(false)
+    expect(await adapter.type!(pane('w1:p2'), 'next', 'claude')).toBe(true)
+    expect(prompt.mock.calls).toEqual([['w1:p2', 'claude', 'next']])
     expect(adapter.paneOf(place({ HERDR_PANE_ID: 'w1:p2' }))).toEqual(pane('w1:p2'))
     expect(await adapter.focus(pane('w1:p2'))).toBe(true)
     expect(calls).toEqual([focusCall('w1:p2')])
