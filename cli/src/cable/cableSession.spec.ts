@@ -3595,6 +3595,55 @@ describe('spoken output search purpose', () => {
       }
     })
 
+    it('a memory refusal right after this computer swapped its own pack is offered once more after 1.5 s', async () => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      try {
+        const store = fakeStore({ all: B, engines: {} })
+        const { session, port } = await connect(makeHost({ pets: () => store as unknown as PetStore }))
+        const drops = () => port.sent.filter((m) => m.t === 'pet.drop').map((m) => m.id)
+        const offers = () => port.sent.filter((m) => m.t === 'pet.offer').map((m) => m.id)
+        port.say({ ...hello, pets: 1, petIds: [B] })
+        await vi.advanceTimersByTimeAsync(5)
+        store.current = { all: A, engines: {} }
+        await session.petsChanged()
+        expect(drops()).toEqual([B])
+        expect(offers()).toEqual([A])
+        // No spare pack to free: the dropped one's memory is still settling, so the same pack is offered once more.
+        port.say({ t: 'pet.error', id: A, reason: 'memory' })
+        await vi.advanceTimersByTimeAsync(1_000)
+        expect(offers()).toEqual([A])
+        await vi.advanceTimersByTimeAsync(600)
+        expect(offers()).toEqual([A, A])
+        expect(drops()).toEqual([B])
+        await session.stop()
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('a busy refusal (the dial holds more than its hello said) drops a spare pack and offers again after 1.5 s', async () => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      try {
+        const store = fakeStore({ all: A, engines: {} })
+        const { session, port } = await connect(makeHost({ pets: () => store as unknown as PetStore }))
+        const drops = () => port.sent.filter((m) => m.t === 'pet.drop').map((m) => m.id)
+        const offers = () => port.sent.filter((m) => m.t === 'pet.offer').map((m) => m.id)
+        port.say({ ...hello, pets: 1, petIds: [F[0], F[1], F[2]] })
+        await vi.advanceTimersByTimeAsync(5)
+        expect(drops()).toEqual([])
+        expect(offers()).toEqual([A])
+        port.say({ t: 'pet.error', id: A, reason: 'busy' })
+        await vi.advanceTimersByTimeAsync(1_000)
+        expect(drops()).toEqual([F[0]])
+        expect(offers()).toEqual([A])
+        await vi.advanceTimersByTimeAsync(600)
+        expect(offers()).toEqual([A, A])
+        await session.stop()
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
     it('two computers: a second computer with no pets keeps the first one\'s packs', async () => {
       const first = fakeStore({ all: A, engines: {} })
       const one = await connect(makeHost({ pets: () => first as unknown as PetStore }))
