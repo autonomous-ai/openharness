@@ -150,6 +150,12 @@ DEVICE_APP_BUILDS = {"device-app-e2e": DEVICE_APP_PACKAGES, "device-app-desktop"
 # diskfull.e2e.ts needs macOS, the agent browser's Podman file runs by hand (about 50 minutes), and dial-hosts the files
 # that need the hosts installed (cli/e2e/harness/dialHosts.ts's DIAL_HOST_FILES, which the CI config leaves out).
 LINUX_E2E_NEVER = {"cli/e2e/dialWindows.e2e.ts", "cli/e2e/diskfull.e2e.ts", "cli/e2e/agentBrowserPodman.e2e.ts"}
+# What every e2e file runs on but none tests itself: the jobs' setup action (its real backend, which dial-hosts does not
+# ask for), the harness, Vitest's e2e configs and the timing hints. A change to one runs linux-e2e's canary, a short file
+# (two daemons on the real backend, one case) beside the PR's own; the canary's own deletion runs it, so that PR fails.
+LINUX_E2E_CANARY = "cli/e2e/twoAccounts.spike.e2e.ts"
+LINUX_E2E_CANARY_PATHS = (".github/actions/cli-e2e-setup/", "cli/e2e/harness/", "cli/vitest.e2e*.config.ts",
+                          "cli/ci-e2e-durations.json", LINUX_E2E_CANARY)
 DIAL_HOST_FILES = ("cli/e2e/dialHost*.e2e.ts", "cli/e2e/deviceHerdr.e2e.ts")
 # dial-hosts: those files, the adapters and test helpers they drive, and the job's own definition.
 DIAL_HOST_PATHS = (
@@ -223,9 +229,10 @@ DEPENDS.update({
     "windows-e2e": DEPENDS["cli"] + DEPENDS["pty"] + DEPENDS["tui"] + (
         "cli/", "tests/", "plugins/", "pty/", "serial/", "term/", "tui/", "website/"),
     # device-app/src-tauri/: dialAppFilterOnDial.e2e.ts starts the Device app's debug build (with a dial, by hand).
+    # .github/actions/, in both: their setup action's folder (a shared input), where the scan also places the action's
+    # `../backend`.
     "linux-e2e": DEPENDS["cli"] + ("cli/", "tests/", "plugins/harness-device-orca/", "plugins/harness-device-vscode/",
-                                   "backend/", "device-app/src-tauri/"),
-    # .github/actions/: its setup action's folder (a shared input), where the scan also places the action's `../backend`.
+                                   "backend/", "device-app/src-tauri/", ".github/actions/"),
     "dial-hosts": DEPENDS["cli"] + ("cli/", "tests/", "plugins/harness-device-orca/", "plugins/harness-device-vscode/",
                                     ".github/actions/"),
     "device-app-e2e": DEPENDS["device-app"] + ("device-app/",),
@@ -441,6 +448,11 @@ def linux_e2e_file(path):
             and not dial_hosts_path(path))
 
 
+def linux_e2e_canary_path(path):
+    """What linux-e2e runs its canary for."""
+    return any(listed(entry, path) for entry in LINUX_E2E_CANARY_PATHS)
+
+
 def dial_hosts_path(path):
     """What the dial-hosts job runs: its files (a "*" stays within e2e/, as Vitest's glob does), adapters and helpers."""
     return any(listed(entry, path) for entry in (*DIAL_HOST_FILES, *DIAL_HOST_PATHS))
@@ -449,7 +461,7 @@ def dial_hosts_path(path):
 def e2e_owners(path):
     """The end-to-end suites whose own paths include this path."""
     suites = {"windows-e2e"} if windows_e2e(path) else set()
-    if linux_e2e_file(path):
+    if linux_e2e_file(path) or linux_e2e_canary_path(path):
         suites.add("linux-e2e")
     if dial_hosts_path(path):
         suites.add("dial-hosts")
@@ -467,15 +479,15 @@ def owns(suite, path):
 
 def select(paths, present=None):
     """Each changed path runs its owners' suites, the end-to-end suites whose own paths include it, and every suite
-    that declares reading it (PR_READS). linux-e2e runs a file only when the diff leaves it in the tree (present: the
-    paths it adds or modifies; None, all of them)."""
+    that declares reading it (PR_READS). linux-e2e runs an e2e file only when the diff leaves it in the tree (present:
+    the paths it adds or modifies; None, all of them), and its canary for any change to what it runs for."""
     selected, reasons = set(), {}
     for path in paths:
         if not isinstance(path, str) or not path or path.startswith("/") or ".." in path.split("/"):
             raise ValueError("invalid changed path")
         scopes = owners(path) | e2e_owners(path) | {
             suite for suite, entries in PR_READS.items() if any(covers(entry, path) for entry in entries)}
-        if present is not None and path not in present:
+        if present is not None and path not in present and not linux_e2e_canary_path(path):
             scopes.discard("linux-e2e")
         selected |= scopes
         reasons[path] = sorted(scopes)
@@ -1019,8 +1031,8 @@ def make_plan(root, event_name, event, scope="full", source=None, evidence=None,
 def e2e_plan(paths, running, root=None, head=None, present=None, files=None):
     """What the running end-to-end suites' jobs read besides their flags: whether windows-e2e adds arm64 (for a
     Windows-only path, or a run by hand, which names none), the Device packages to build, and linux-e2e's files
-    (cli/-relative; a run by hand's files, else the present paths') and rows, or the full suite above
-    LINUX_E2E_FILES_MAX files."""
+    (cli/-relative; a run by hand's files, else the present paths' and the canary for what it runs for) and rows, or the
+    full suite above LINUX_E2E_FILES_MAX files."""
     arm64 = "windows-e2e" in running and (not paths or any(windows_only(path) for path in paths))
     builds = [dict(bundle=bundle, arch=arch) for bundle, arch in DEVICE_APP_PACKAGES
               if any((bundle, arch) in DEVICE_APP_BUILDS.get(suite, ()) for suite in running)]
@@ -1028,6 +1040,11 @@ def e2e_plan(paths, running, root=None, head=None, present=None, files=None):
     if "linux-e2e" in running:
         if files is None:
             files = [path for path in paths if (present is None or path in present) and linux_e2e_file(path)]
+            if any(linux_e2e_canary_path(path) for path in paths):
+                if git(root, "ls-tree", "-r", "--name-only", head, "--", LINUX_E2E_CANARY) != LINUX_E2E_CANARY:
+                    raise ValueError(f"linux-e2e: its canary {LINUX_E2E_CANARY} is not at {head[:12]}; name another "
+                                     "real-backend e2e file as LINUX_E2E_CANARY in scripts/ci-plan.py")
+                files.append(LINUX_E2E_CANARY)
         for path in files:
             if not E2E_FILE.fullmatch(path):
                 raise ValueError(f"linux-e2e: {path!r} is not a plain file name; name e2e files with letters, digits, "
