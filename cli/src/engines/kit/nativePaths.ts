@@ -8,6 +8,11 @@ import { hostPlatform } from './windowsFiles.js'
 export const nativeFileKey = (info: Pick<BigIntStats, 'dev' | 'ino'>) => `${info.dev}:${info.ino}`
 const identity = (info: BigIntStats | null) => info && `${nativeFileKey(info)}:${info.mode}:${info.uid}`
 const version = (info: BigIntStats) => `${identity(info)}:${info.size}:${info.mtimeNs}:${info.ctimeNs}`
+// Live evidence already owns native fields; string encodings belong only to saved facts.
+const sameIdentity = (a: BigIntStats | null, b: BigIntStats | null): boolean => a === null || b === null ? a === b
+  : a.dev === b.dev && a.ino === b.ino && a.mode === b.mode && a.uid === b.uid
+const sameVersion = (a: BigIntStats, b: BigIntStats): boolean => sameIdentity(a, b)
+  && a.size === b.size && a.mtimeNs === b.mtimeNs && a.ctimeNs === b.ctimeNs
 /** Saved evidence outlives a reboot, and st_dev does not: macOS numbers /dev/diskN as disks appear at boot, so one
  * restart moved a user's data volume from 1,4 to 1,7 and held every launch for good (2026-10-16). Saved identities
  * and versions lead with st_dev; they are compared without it. */
@@ -106,8 +111,8 @@ export class NativePaths {
       for (const [path, part] of paths.parts) {
         paths.budget.step()
         const previous = parts.get(path)
-        if (previous && (identity(previous.info) !== identity(part.info) || previous.target !== part.target
-          || (part.target !== undefined && version(previous.info!) !== version(part.info!)))) {
+        if (previous && (!sameIdentity(previous.info, part.info) || previous.target !== part.target
+          || (part.target !== undefined && !sameVersion(previous.info!, part.info!)))) {
           return nativeUnavailable('a native route changed between grouped observations')
         }
         parts.set(path, part)
@@ -262,8 +267,8 @@ function verifyParts(parts: Iterable<[string, Part]>, budget: NativeEvidenceBudg
     if (before.target !== undefined && now?.isSymbolicLink()) {
       try { target = readlinkSync(path) } catch { return nativeUnavailable('a native alias became unreadable') }
     }
-    if (identity(now) !== identity(before.info)
-      || (before.target !== undefined && (!now || version(now) !== version(before.info!)
+    if (!sameIdentity(now, before.info)
+      || (before.target !== undefined && (!now || !sameVersion(now, before.info!)
         || target !== before.target))) {
       return nativeUnavailable('a native path or alias changed during inspection')
     }

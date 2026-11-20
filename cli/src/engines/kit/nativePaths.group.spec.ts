@@ -1,20 +1,26 @@
-import { chmodSync, lutimesSync, mkdirSync, mkdtempSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, lutimesSync, mkdirSync, mkdtempSync, realpathSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { NativeEvidenceBudget } from './nativeEvidence.js'
 import { NativePaths } from './nativePaths.js'
-const observations = vi.hoisted(() => ({ reads: 0, count: false }))
+const observations = vi.hoisted(() => ({ reads: 0, count: false, change: null as { path: string; field: string } | null }))
 vi.mock('node:fs', async original => {
   const fs = await original<typeof import('node:fs')>()
   return { ...fs, lstatSync: (...args: Parameters<typeof fs.lstatSync>) => {
     if (observations.count) observations.reads++
-    return fs.lstatSync(...args)
+    const info = fs.lstatSync(...args)
+    const change = observations.change
+    if (change?.path === String(args[0])) {
+      const value = (info as unknown as Record<string, bigint>)[change.field]
+      return Object.assign(Object.create(Object.getPrototypeOf(info)), info, { [change.field]: value + 1n })
+    }
+    return info
   } }
 })
 let root: string
 beforeEach(() => { root = realpathSync(mkdtempSync(join(tmpdir(), 'native-route-group-'))) })
-afterEach(() => { observations.count = false; rmSync(root, { recursive: true, force: true }) })
+afterEach(() => { observations.count = false; observations.change = null; rmSync(root, { recursive: true, force: true }) })
 function observe(file: string) {
   const paths = new NativePaths(new NativeEvidenceBudget()); paths.resolveSync(file, true); return paths
 }
@@ -64,4 +70,49 @@ it('charges the shared final verification to the selected original work budget',
   observations.reads = 0; observations.count = true
   expect(() => NativePaths.snapshots([paths, paths])).toThrow(/work limit/)
   expect(observations.reads).toBe(1)
+})
+
+// Caller contracts for the fields compared by live route evidence. Timestamp churn
+// in ordinary directories is allowed; alias versions and all identities are not.
+for (const kind of ['directory', 'alias'] as const) {
+  it.each(['dev', 'ino', 'mode', 'uid', 'size', 'mtimeNs', 'ctimeNs'])(`keeps retained ${kind} %s semantics`, field => {
+    const directory = join(root, 'target'), alias = join(root, 'alias')
+    mkdirSync(directory)
+    const route = kind === 'alias' ? alias : directory
+    if (kind === 'alias') symlinkSync(directory, alias)
+    const paths = observe(join(route, 'missing')), verify = paths.retain()
+    observations.change = { path: route, field }
+    if (kind === 'alias' || ['dev', 'ino', 'mode', 'uid'].includes(field)) expect(verify).toThrow(/during inspection/)
+    else expect(verify).not.toThrow()
+  })
+  it.each(['dev', 'ino', 'mode', 'uid', 'size', 'mtimeNs', 'ctimeNs'])(`keeps grouped ${kind} %s semantics`, field => {
+    const directory = join(root, 'target'), alias = join(root, 'alias')
+    mkdirSync(directory)
+    const route = kind === 'alias' ? alias : directory
+    if (kind === 'alias') symlinkSync(directory, alias)
+    const before = observe(join(route, 'missing'))
+    observations.change = { path: route, field }
+    const after = observe(join(route, 'missing'))
+    expect(() => after.snapshot()).not.toThrow()
+    const verify = () => NativePaths.snapshots([before, after])
+    if (kind === 'alias' || ['dev', 'ino', 'mode', 'uid'].includes(field)) expect(verify).toThrow(/between grouped observations/)
+    else expect(verify).not.toThrow()
+  })
+}
+
+it.each(['create', 'remove'])('refuses a retained leaf when its presence changes by %s', change => {
+  const file = join(root, 'leaf')
+  if (change === 'remove') writeFileSync(file, '{}')
+  const verify = observe(file).retain()
+  if (change === 'remove') unlinkSync(file)
+  else writeFileSync(file, '{}')
+  expect(verify).toThrow(/during inspection/)
+})
+it('refuses a grouped present-to-absent leaf before accepting the newer observation', () => {
+  const file = join(root, 'leaf'); writeFileSync(file, '{}')
+  const before = observe(file)
+  unlinkSync(file)
+  const after = observe(file)
+  expect(() => after.snapshot()).not.toThrow()
+  expect(() => NativePaths.snapshots([before, after])).toThrow(/between grouped observations/)
 })
