@@ -170,4 +170,6 @@ String quoteLauncherExec(String path) {
 /// What `Exec=` quotes, the list the Device app's exec_value holds: Unicode's
 /// White_Space, which a launcher may split an argument on (KDE's does), and
 /// what the Desktop Entry spec reserves.
-final _quoted = RegExp(r'''[\x09-\x0d \x85\xa0  -     　"'\\$`<>~|&;*?#()]''');
+final _quoted = RegExp(
+  r'''[\x09-\x0d \x85\xa0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000"'\\$`<>~|&;*?#()]''',
+);
