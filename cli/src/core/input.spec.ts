@@ -119,6 +119,18 @@ describe('the session input controller\'s dependencies', () => {
     expect(given.clients.send).toHaveBeenCalledWith({ type: 'message_waiting', agentId: 'a1', dbSessionId: 's1', payload: { reason: 'engine_starting' } })
   })
 
+  it('moves a first task back to wait on its row, and lets it go once a turn took it, through what it was given', async () => {
+    const untype = vi.fn(async () => true)
+    const taken = vi.fn()
+    const wired = sessionInputDeps(deps({ firstTask: { untype, taken } }).deps, () => lock([]))
+    expect(await wired.untypeFirstTask!('oc', 'Say hello')).toBe(true)
+    wired.onFirstTaskTaken!('oc')
+    expect(untype.mock.calls).toEqual([['oc', 'Say hello']])
+    expect(taken.mock.calls).toEqual([['oc']])
+    const none = sessionInputDeps(deps().deps, () => lock([]))
+    expect('untypeFirstTask' in none || 'onFirstTaskTaken' in none).toBe(false)
+  })
+
   it('hands the controller the move gate when it was given one, and none otherwise', () => {
     const { deps: given } = deps()
     expect('moveGate' in sessionInputDeps(given, () => lock([]))).toBe(false)
@@ -573,6 +585,20 @@ describe('createInput', () => {
     expect(acquire).toHaveBeenLastCalledWith('unknown-agent', undefined)
     release()
     expect(released).toEqual(['input', 'terminal', 'input'])
+  })
+
+  it('lets an agent\'s typed first task go from its row once a turn takes it', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    const taken = vi.fn()
+    const run = deps({ firstTask: { untype: vi.fn(async () => true), taken } })
+    run.setPane(readFileSync(new URL('../engines/openclaw/__fixtures__/screen-plain.txt', import.meta.url), 'utf8'))
+    const { input, submitAgent } = createInput(run.deps)
+    input.expectFirstTask('oc')
+    submitAgent('oc', 'Say hello')
+    await vi.waitFor(() => expect(input.awaitingConfirmation('oc')).toBe(true))
+    input.onTurnStarted('oc', 'Say hello')
+    expect(taken.mock.calls).toEqual([['oc']])
+    input.forget('oc')
   })
 
   it('submits a message under the agent\'s id, adapting a slash command its engine lacks', () => {
