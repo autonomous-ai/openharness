@@ -59,10 +59,10 @@ name them. It names local paths: it stays on the machine.
   on the real dial through the signed helper, with `CABLE_FW_DISABLE=true`, which no flag turns off: the dial is never
   flashed. It is signed in to a FakeBackend on 127.0.0.1 alone, which hears every recording as `--speech` (at most 200
   characters). It prints the daemon's `[device]` and `cable:` lines, with a mac or a serial cut to its last 4
-  characters. stdin takes `list` (how many rows the daemon last sent the dial), `pane <name>` and `quit`; the dial's
-  presses are the person's. `pane` is not on Windows: the e2e's stand-in engine starts through a Unix wrapper, and the
-  only way Windows' program resolver runs a script engine is an npm shim, a batch file. So the dial's words reach an
-  agent only through herdr or another app here; on the VM they are checked with the engines of the test user.
+  characters. stdin takes `list` (how many rows the daemon last sent the dial) and `quit`; the dial's presses are the
+  person's. No stand-in engine runs here: the e2e's starts through a Unix wrapper, and the only way Windows' program
+  resolver runs a script engine is an npm shim, a batch file. So the dial's words reach an agent only through herdr or
+  another app here; on the VM they are checked with the engines of the test user.
 
 `--quit-on <file>` (both desks): the desk quits once `<file>` exists, checked once a second. A desk in a `console.ps1`
 task has no stdin to type into. `quit` stops the daemon; a sealed desk then deletes its root.
@@ -113,9 +113,10 @@ modes. The unsealed stand-in is for this user only.
 Every step through `console.ps1`, in the owner's console session; SSH runs only what needs no desktop. Ports 18478 and
 18479.
 
-1. `harness status`: keep `running` or `stopped` and the version, nothing else.
+1. The owner quits Harness Desktop for the run: open, it starts its daemon again, which takes `COM3`. Then
+   `harness status`: keep `running` or `stopped` and the version, nothing else.
 2. If it runs, `harness stop`. Then the first look, `--dial-read COM3 --out <run>\first-read.json`, must exit 0; exit 3
-   means something took `COM3` again (the owner's Harness Desktop may have started its daemon): stop the run.
+   means something took `COM3` again: stop the run.
 3. The desks: the sealed stand-in (`--port 18479`) and the real dial (`--dial COM3 --speech <text>
    --first-read <run>\first-read.json --pets-from <the owner's pets folder> --port 18478 --quit-on <run>\quit`), each
    with `-NoWait`, then quit through its `--quit-on` file and `-Stop`. A real-dial desk that ends 4, 5 or 6 stops the
@@ -124,7 +125,7 @@ Every step through `console.ps1`, in the owner's console session; SSH runs only 
    and `pets: unchanged`.
 5. If the daemon ran in 1: `harness start`, then `harness status` says running at the version kept in 1, and
    `--dial-read COM3 --out <run>\held.json` exits 3 and writes nothing. A daemon stopped in 1 is left so; the run checks
-   only that `COM3` is free.
+   only that `COM3` is free. Then the owner opens Harness Desktop again.
 6. Clean up: stop the desks, `harness stop` on each root, delete the roots, the reads and the copied folder.
 
 Nothing with a full serial, the owner's account name or a personal path leaves the Dell: the desks' first lines and the

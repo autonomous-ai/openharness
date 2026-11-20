@@ -398,9 +398,6 @@ async function realMode(mode: Extract<Mode, { kind: 'real' }>): Promise<void> {
 
   commands(mode.quitOn, ([command]) => {
     if (command === 'list') say(rows ?? JSON.stringify({ rows: null }))
-    // No stand-in engine runs on Windows: the e2e's fake engine starts through a shebang wrapper, and the only engine path
-    // Windows' program resolver takes for a script is an npm shim, a batch file.
-    else if (command === 'pane') process.stderr.write('pane: not on Windows: no stand-in engine starts here without a batch file; the dial\'s words are checked on the VM\n')
     else process.stderr.write('commands: list | quit\n')
   }, () => void (async () => {
     const settings = await restoreSettings(watch, first)
