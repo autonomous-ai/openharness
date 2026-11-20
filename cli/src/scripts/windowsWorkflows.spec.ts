@@ -49,6 +49,15 @@ describe('the Windows release workflows', () => {
     expect(paths.split(', ')).toContain("'src/testing/windowsPowerShell.spec.ts'")
   })
 
+  // Vitest takes each name as a filter, so a spec that was deleted or renamed matches nothing and fails nothing.
+  it('names only specs and folders that exist in its Windows spec lists', () => {
+    const lists = [...read('windows.yml').matchAll(/^ +\$paths = @\((.+)\)$/gm)].map((found) => found[1])
+    expect(lists).toHaveLength(2)
+    const missing = lists.flatMap((list) => [...list.matchAll(/'([^']+)'/g)].map((found) => found[1]))
+      .filter((path) => !existsSync(join(process.cwd(), path)))
+    expect(missing).toEqual([])
+  })
+
   // With every step run the arm64 job takes about 43 minutes and the x64 job 16 (2026-11-14). One limit of 40 for both
   // cancelled arm64 in its last test step, and the install job was skipped (run 43565271777). The job's name lists the
   // matrix without the limit, so the jobs keep the names they had.

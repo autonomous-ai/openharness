@@ -213,7 +213,7 @@ class SelectionTests(unittest.TestCase):
         for path in ("cli/src/devices/listenerPipe.ts", "cli/src/cable/hosts/kitty.ts", "cli/src/lib/windows/program.ts",
                      "cli/hook/notify.mjs", "plugins/harness-device/hooks/hooks.json", "plugins/harness-device-orca/src/dial.ts",
                      "plugins/harness-device-vscode/src/loop.ts", "cli/src/lib/secureState.spec.ts",
-                     "cli/src/lib/secureState.ts", "cli/src/lib/uninstall/steps.ts", "cli/src/superTabs/start.ts",
+                     "cli/src/lib/secureState.ts", "cli/src/lib/uninstall/steps.ts", "cli/src/lib/tied.ts",
                      "website/src/app/flash-circle.ps1/flash-circle.ps1", "tui/src/main.rs", "tui/Cargo.toml"):
             with self.subTest(path=path):
                 self.assertIn("windows-e2e", planner.select([path])[0])
