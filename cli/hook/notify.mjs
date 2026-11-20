@@ -559,6 +559,22 @@ function postObserved(port, body) {
  * in an hc terminal keeps that terminal's address, and is the nearer host. cmux's ids come after them: a multiplexer
  * started in a cmux terminal keeps cmux's ids, and is the nearer host. CLAUDE_CODE_ENTRYPOINT is last, the first the
  * cap drops: without it a tap still brings the app forward.
+ *
+ * On Windows no app sets __CFBundleIdentifier, and Cursor and VS Code both set TERM_PROGRAM=vscode: the hook finds the
+ * app itself (windowsAppBundle) and sends its bundle id in that hint, never one the environment claims. The first of
+ * three that answers:
+ * - VSCODE_GIT_ASKPASS_NODE, which an editor sets in its integrated terminals alone: the editor's own program
+ *   (`Code.exe`, `Cursor.exe`). No process is started.
+ * - VSCODE_PID, for a session started from Claude Code's extension panel, which runs with the extension host's
+ *   environment and has no askpass variable (read on the VM, 2026-11-20): the image name of that pid's row in the pty
+ *   host's table, the one the caller's climb reads (hookCallerPid). An image name, never another process's
+ *   environment. A hook with no table read yet pays a pty host start for it, so the answer is kept per editor
+ *   (keepEditor), and a hook whose kept answer matches starts none. The key is the pid and the editor's pipe
+ *   (VSCODE_IPC_HOOK), not the process's start time: the start time is in the table alone, so checking it would cost
+ *   the start the kept answer saves, while the pipe's name is in this hook's own environment and differs between
+ *   editors and versions, so a pid another editor reuses misses.
+ * - ALACRITTY_LOG, the one variable Alacritty sets on Windows (its log file, whose path is never read): Alacritty.
+ * WezTerm and Warp need nothing here: WEZTERM_PANE and TERM_PROGRAM name them on Windows too (read from their source).
  */
 const HOST_HINTS = ['TERM_PROGRAM', '__CFBundleIdentifier', 'HERDR_PANE_ID', 'REX_BLOCK', 'ZELLIJ', 'ZELLIJ_PANE_ID',
   'ZELLIJ_SESSION_NAME', 'TMUX_PANE', 'HC_TERMINAL_ID', 'CMUX_SURFACE_ID', 'CMUX_WORKSPACE_ID', 'KITTY_WINDOW_ID',
@@ -573,7 +589,8 @@ const MAX_HINTS = 10
 /** A character the core refuses in a path or hint (core/observedHook.ts): one there is forged. */
 const CONTROL = /[\u0000-\u001f\u007f]/
 
-function hostHints() {
+/** [appBundle] is the app windowsAppBundle found, sent on Windows in place of the environment's __CFBundleIdentifier. */
+function hostHints(appBundle) {
   const hints = {}
   for (const name of HOST_HINTS) {
     // The core refuses a whole event with more hints than MAX_HINTS, one over 64 characters or one with a control
@@ -595,10 +612,40 @@ function hostHints() {
       || process.env.HERDR_PANE_ID || process.env.HERDR_SESSION || process.env.HC_TERMINAL_ID)) continue
     // Skipped before the cap counts it too.
     if (WHOLE_HINTS.includes(name) && process.env[name]?.length > 64) continue
-    const value = process.env[name]?.slice(0, 64)
+    const own = name === '__CFBundleIdentifier' && process.platform === 'win32' ? appBundle : process.env[name]
+    const value = own?.slice(0, 64)
     if (value && !CONTROL.test(value)) hints[name] = value
   }
   return hints
+}
+
+/** Each editor's Windows program, as `path.win32.basename` names it in lower case, and the bundle id the devices know
+ *  the editor by (cable/hosts/hostDetect.ts APP_BUNDLES). */
+const WINDOWS_EDITORS = new Map([['code.exe', 'com.microsoft.VSCode'], ['cursor.exe', 'com.todesktop.230313mzl4w4u92']])
+
+/** The bundle id of the editor whose program [path] names, any case, or undefined. */
+function editorBundle(path) {
+  return WINDOWS_EDITORS.get(win32.basename(path).toLowerCase())
+}
+
+/** On Windows, the bundle id of the app a session outside a pane runs in, from the three inputs HOST_HINTS names, or
+ *  undefined. Only the id leaves this process: never a path, a pid or a pipe's name. */
+async function windowsAppBundle() {
+  const askpass = process.env.VSCODE_GIT_ASKPASS_NODE
+  if (askpass !== undefined) return editorBundle(askpass)
+  const pid = /^\d{1,10}$/.test(process.env.VSCODE_PID ?? '') ? Number(process.env.VSCODE_PID) : 0
+  if (pid > 0) {
+    const ipc = editorIpcKey()
+    const file = join(paths().dataDir, EDITORS_FILE)
+    const kept = ipc && readEditors(file).find((entry) => entry.pid === pid && entry.ipc === ipc)
+    if (kept) return kept.app
+    const row = (await windowsListedRows())?.find((candidate) => candidate.pid === pid)
+    const app = row && editorBundle(row.executable)
+    // Only an answer the table gave is kept: no row, or no table, is asked again next time.
+    if (app && ipc) keepEditor(file, { pid, ipc, app })
+    return app
+  }
+  return process.env.ALACRITTY_LOG ? 'org.alacritty' : undefined
 }
 
 /** The endpoint variables that say an engine is routed through OpenRouter: these names exactly. Their values never leave this process. */
@@ -840,9 +887,10 @@ function observedTitle(value) {
  * out rather than cost the whole event (core/observedHook.ts), and so are the paths of a body over the 4096 bytes the
  * core reads (hookServer.ts): the transcript's first, as the devices can do without it, then the folder. The title is
  * never dropped: at most 64 characters, it fits beside the hints and ids once both paths are gone, so a body without
- * one always means the session said none.
+ * one always means the session said none. On Windows the app it runs in is looked up (windowsAppBundle) only for an
+ * event it tells, so an event it drops starts no pty host.
  */
-function observedBody(engine, event, input) {
+async function observedBody(engine, event, input) {
   const kind = observedEvent(engine, event, input)
   const sessionId = input.session_id || input.conversation_id || input.sessionId || input.conversationId
   if (!kind || typeof sessionId !== 'string') return null
@@ -853,7 +901,8 @@ function observedBody(engine, event, input) {
       : input.cwd || input.workspaceRoot || (engine === 'devin' ? process.cwd() : undefined)
   const body = {
     engine, sessionId, event: kind, cwd: path(cwd), callerPid: CALLER_PID,
-    transcriptPath: path(input.transcript_path || input.transcriptPath), hostHints: hostHints(),
+    transcriptPath: path(input.transcript_path || input.transcriptPath),
+    hostHints: hostHints(process.platform === 'win32' ? await windowsAppBundle() : undefined),
   }
   if (relayedPrompt(engine, event, input)) body.relayed = true
   const title = kind === 'session-start' || kind === 'turn-start' ? observedTitle(input.session_title) : undefined
@@ -1891,6 +1940,63 @@ function writeRegistry(file, sessions, current = () => true) {
   }
 }
 
+/**
+ * The editor each panel hook's VSCODE_PID named (windowsAppBundle), kept in the data folder so the next hook of that
+ * editor starts no pty host. On Windows alone, and only the hook reads or writes it. At most EDITORS_MAX entries of a
+ * pid, the key of the editor's pipe (editorIpcKey) and a bundle id, the newest first: never a path or a pipe's name.
+ */
+const EDITORS_FILE = 'hook-editors.json'
+const EDITORS_MAX = 16
+const EDITORS_MAX_BYTES = 4096
+
+/** The key of the editor this hook runs under: the first 16 hex digits of the SHA-256 of its pipe's name
+ *  (`\\.\pipe\<hex>-<version>-main-sock`), or null when VSCODE_IPC_HOOK holds none: then nothing is read or kept. */
+function editorIpcKey() {
+  const pipe = process.env.VSCODE_IPC_HOOK ?? ''
+  return /^\\\\\.\\pipe\\[^\\]{1,200}$/.test(pipe) ? createHash('sha256').update(pipe).digest('hex').slice(0, 16) : null
+}
+
+/** The kept answers. A file missing, over EDITORS_MAX_BYTES, not JSON, of another shape or a link reads as none. */
+function readEditors(file) {
+  try {
+    const editors = JSON.parse(readWindowsStateFile(dirname(file), file, EDITORS_MAX_BYTES)).editors
+    const apps = [...WINDOWS_EDITORS.values()]
+    const valid = Array.isArray(editors) && editors.length <= EDITORS_MAX && editors.every((entry) =>
+      Number.isSafeInteger(entry?.pid) && entry.pid > 0 && typeof entry.ipc === 'string' && /^[0-9a-f]{16}$/.test(entry.ipc)
+      && apps.includes(entry.app))
+    return valid ? editors.map(({ pid, ipc, app }) => ({ pid, ipc, app })) : []
+  } catch { return [] }
+}
+
+/**
+ * Puts [entry] first among the kept answers, the EDITORS_MAX newest kept, written whole: a temporary file renamed over
+ * the old one (a link there is replaced, never followed), so a reader sees the old list or the new. It is the hook's
+ * copy of atomicWriteJson and readState (src/lib/secureState.ts), because this file imports nothing from src/. As
+ * there on Windows, no owner or mode is checked (NTFS gives Node neither, which is why writeRegistry's checks would
+ * refuse every file there): the file is read as the hook reads its other Windows state (readWindowsStateFile), and
+ * like a cache it is not flushed, since one a power cut empties reads as none and is written again. Two hooks writing
+ * at once each write it whole: the last rename wins, and the entry lost is read from the table next time. Never
+ * throws: a failed write keeps nothing.
+ */
+function keepEditor(file, entry) {
+  const editors = [entry, ...readEditors(file).filter(({ pid, ipc }) => pid !== entry.pid || ipc !== entry.ipc)]
+  const tmp = `${file}.${process.pid}.${randomUUID()}.tmp`
+  let renamed = false
+  try {
+    const fd = openSync(tmp, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600)
+    try {
+      writeFileSync(fd, JSON.stringify({ editors: editors.slice(0, EDITORS_MAX) }, null, 2))
+      fchmodSync(fd, 0o600)
+    } finally { closeSync(fd) }
+    renameSync(tmp, file)
+    renamed = true
+  } catch { /* nothing kept */ } finally {
+    if (!renamed) {
+      try { rmSync(tmp, { force: true }) } catch { /* ignore */ }
+    }
+  }
+}
+
 function cursorPendingFile() {
   return join(paths().dataDir, 'cursor-pending-tasks.json')
 }
@@ -2275,7 +2381,7 @@ async function main() {
   if (paneless) {
     // agy's sub-agents fire hooks of their own; only a top-level conversation is a session (agyIsPaneConversation).
     if (engine === 'agy' && !agyIsPaneConversation(paths(), input.conversationId)) return
-    const body = observedBody(engine, event, input)
+    const body = await observedBody(engine, event, input)
     if (body) await postObserved(port, body)
     return
   }
