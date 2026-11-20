@@ -5,8 +5,8 @@ Linux. People see it as **Harness**: only its installed name stays `Harness Devi
 Device.app` beside the desktop app's `Harness.app`, the `Harness Device` folder, Start menu entry and Run value on
 Windows, where the desktop app owns `Harness`), and the bundle id, binary, release files and update path keep the
 Harness Device name, so installed apps keep updating. It installs the `harness` CLI, keeps the daemon running, shows
-the dial's state in its menu, and offers sign-in once and, on a Mac with the ChatGPT app, Follow ChatGPT. It also
-exports the logs (`Export logs`), through the CLI. It has no row for Claude Code, Codex or Orca: the devices service
+the dial's state in its menu, and offers sign-in once and, with the ChatGPT app, Follow ChatGPT (not on GNOME or KDE
+on Wayland). It also exports the logs (`Export logs`), through the CLI. It has no row for Claude Code, Codex or Orca: the devices service
 sets them up. Rust and Tauri 2 in `src-tauri/`; the window's three screens are plain TypeScript in `ui/`.
 
 ## Toolchain
@@ -92,10 +92,19 @@ sets them up. Rust and Tauri 2 in `src-tauri/`; the window's three screens are p
   is; GNOME and KDE on Wayland give it to no other program, so there it is not followed.
   The one Event derived from it is the offer cue, `Event::FollowOffer`: valueless, never logged.
 - **The ChatGPT window's title is private as a tty.** It is written to the watch's stdin and nowhere else
-  (`follow.rs`). A `chatgpt:` log line is fixed words, never a title.
+  (`follow.rs`), from whichever door the session has: Accessibility on macOS (`follow_macos.rs`), a WinEvent hook on
+  Windows (`follow_windows.rs`), and on Linux X11, sway or Hyprland (`follow_x11.rs`, `follow_sway.rs`,
+  `follow_hyprland.rs`), the same window system the app in front comes from. GNOME and KDE on Wayland have no door.
+  A `chatgpt:` log line is fixed words, never a title.
 - **What Accessibility reads.** Only ChatGPT's focused window's `AXTitle`, and only while ChatGPT is in front, a watch
   runs, the dial is attached and Harness is trusted. It sets nothing and performs no action; `follow.rs`'s test holds
   `follow_macos.rs` to it.
+- **What the other doors read.** Only the title of ChatGPT's window in front, under the same conditions, with
+  Harness's own saved switch (the `Follow ChatGPT` item, on until turned off) in place of the permission: no other OS
+  gates reading a window's title. Windows reads the window's native text (`GetWindowTextW`) at a foreground or name
+  change, for a process whose program is under `\WindowsApps\OpenAI.Codex_`; X11 its `_NET_WM_NAME`, else `WM_NAME`;
+  sway the focused container's `name`; Hyprland the active window's `title`. On Linux the window's process must run
+  `/usr/lib/chatgpt/ChatGPT`. Each sets nothing and performs no action.
 - **Fixed scripts.** Every AppleScript is fixed text in `tabs_macos.rs`, for an app from its own list of three. A tty
   passes the tty check and reaches a script only as a handler parameter, never in its text.
 - **A tab's tty is private.** It is written to the watch's stdin and nowhere else. A `tabs:` log line names Terminal,

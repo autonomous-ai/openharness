@@ -350,7 +350,7 @@ Each part has its check:
 | Difference | Windows | Linux | Why |
 |---|---|---|---|
 | Terminal-tab follow (Terminal/iTerm2/Ghostty) | none | none | AppleScript only; Windows Terminal has no list/select API; Ghostty on Linux offers no list/focus |
-| Follow ChatGPT (AX title) | none | none | macOS only: no Accessibility title source elsewhere; `follow::system` gives a door with no ChatGPT app, so the item and its screen never show |
+| Follow ChatGPT | the native window title (`GetWindowTextW`) | X11, sway, Hyprland by the native title; **none on GNOME/KDE Wayland** | No permission gates the title off macOS, so there is no screen and the item is Harness's own switch; GNOME and KDE Wayland give no other program the focused window |
 | App in front | WinEvent hook | X11, sway, Hyprland; **none on GNOME/KDE Wayland** | GNOME and KDE Wayland give no other program the focused window |
 | Tray click refresh | as macOS | from the 5 s tick, same throttles | Tauri emits no tray click on Linux (menu only) |
 | Tray shown at all | always | needs a StatusNotifier host; **stock GNOME needs the AppIndicator extension** (Ubuntu ships it) | GNOME has no tray of its own; the app logs `tray: no host` once when no watcher has come on the session bus within 30 s of start |
