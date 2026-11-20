@@ -202,7 +202,7 @@ pub enum LoginEvent {
     Done(Result<(), String>),
 }
 
-/// What happened. WatchExit(None): ended by a signal. UpdateChecked(Some): a strictly newer release.
+/// What happened. WatchExit(None): it was killed. UpdateChecked(Some): a strictly newer release.
 /// UpdateDownloaded: that release is downloaded and its signature checked; nothing is replaced yet. InstallStep:
 /// `'static`, so only the step table's fixed copy can be one, never a line of the script's.
 #[derive(Clone, Debug, PartialEq, Eq)]

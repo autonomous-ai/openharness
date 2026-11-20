@@ -245,7 +245,7 @@ pub fn install(
         } else {
             log.line(&match output.code {
                 Some(code) => format!("install: {flag} exit {code}"),
-                None => format!("install: {flag} killed by a signal"),
+                None => format!("install: {flag} killed"),
             });
             (output.code != Some(0)).then_some(NOT_INSTALLED)
         };
@@ -499,7 +499,7 @@ mod tests {
         let killed = Ok(Output { code: None, ..Output::default() });
         let ran = install_with(vec![killed], true);
         assert_eq!(ran.result, Err(texts(&[NOT_INSTALLED])));
-        assert_eq!(ran.log, ["install: --host killed by a signal"]);
+        assert_eq!(ran.log, ["install: --host killed"]);
         let ran = install_with(vec![ended(0, "", ""), ended(1, "", "")], true);
         assert_eq!(ran.result, Err(texts(&[NOT_INSTALLED])));
         assert_eq!(ran.journal, [within_ten_minutes(HOST), within_ten_minutes(DESKTOP)]);
