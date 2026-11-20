@@ -3,15 +3,42 @@
 import { randomBytes } from 'node:crypto'
 import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ensureDaemonToken, newPipePath, readDaemonToken } from '../lib/windows/pipeAuth.js'
 import {
   createDevicesProof, createRecordProof, DEVICES_RECORD_FILE, DEVICES_TOKEN_FILE, devicesPipe, devicesRecordPath,
   PROOF_MAX_AGE_MS, readDevicesRecord, removeDevicesRecord, writeDevicesRecord,
 } from './listenerPipe.js'
 
+// Renames refused before the real one: Windows refuses a rename over a file another process holds open, for a moment.
+const fault = vi.hoisted(() => ({ refusedRenames: 0 }))
+vi.mock('node:fs', async (original) => {
+  const actual = await original<typeof import('node:fs')>()
+  return { ...actual, renameSync: (...args: Parameters<typeof actual.renameSync>) => {
+    if (fault.refusedRenames > 0) {
+      fault.refusedRenames--
+      throw Object.assign(new Error('EPERM: fixture'), { code: 'EPERM' })
+    }
+    return actual.renameSync(...args)
+  } }
+})
+
 const dirs: string[] = []
-afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }) })
+afterEach(() => {
+  fault.refusedRenames = 0
+  for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true })
+})
+
+/** [run] with this process as Windows: the writer's retry reads process.platform. */
+function asWindows<T>(run: () => T): T {
+  const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
+  Object.defineProperty(process, 'platform', { ...platform, value: 'win32' })
+  try {
+    return run()
+  } finally {
+    Object.defineProperty(process, 'platform', platform)
+  }
+}
 
 /** A data folder the token checks take: owner-only, under /tmp's short path. */
 function dataDir(): string {
@@ -34,6 +61,18 @@ describe('the devices record', () => {
     expect(statSync(devicesRecordPath(dir)).mode & 0o777).toBe(0o600)
     expect(readdirSync(dir)).toEqual(['devices.json'])
     expect(readDevicesRecord(dir)).toEqual({ pipe, pid: 4242 })
+  })
+
+  it('on Windows a rename refused for a moment is tried again, and the record ends up in place', () => {
+    const dir = dataDir()
+    const pipe = pipeIn(dir)
+    writeDevicesRecord(dir, { pipe: pipeIn(dir), pid: 4242 })
+    fault.refusedRenames = 1
+    asWindows(() => writeDevicesRecord(dir, { pipe, pid: 4343 }))
+    expect(fault.refusedRenames).toBe(0)
+    expect(readDevicesRecord(dir)).toEqual({ pipe, pid: 4343 })
+    expect(statSync(devicesRecordPath(dir)).mode & 0o777).toBe(0o600)
+    expect(readdirSync(dir)).toEqual(['devices.json'])
   })
 
   it('reads nothing from a missing, malformed or oversized record', () => {
