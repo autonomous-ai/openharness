@@ -45,8 +45,12 @@ unsigned ph_mix(unsigned a, unsigned b, unsigned pct);
 // One POD_A_ENTER_TAB hit (arg = the tab index, id = the tab's id) over the card; none for a tab with 0 agents. No tabs: the "Harness" wordmark (ph_bd_84, as the round dial's), centred, no hits.
 // While pod_home_switch (a window and another app with agents), every page, the wordmark too, has the Tabs | Apps pill at its foot: 252 x 46 at (234, 640),
 // the cell of the list Home shows (pod_home_apps) filled, and two hits, POD_A_HOME_TABS over x 180..360 and POD_A_HOME_APPS over x 360..540, y 624..720 (arg 0).
+// While Home lists apps, each page POD_HOME_APP0 + k is an app card: the tab card's body from the app's m->apps row (name, count, working, waiting
+// as "N asking"; never "All done"), in pod_app_style's card_top -> card_bottom (else PH_RAISED -> PH_GROUND), its icon72 44 px in from the right
+// edge on the name's line (the name cut LABEL_GAP short of it), marks only for the app shown's agents (pod_app_agents). Neighbours: gradient and
+// name, no icon. One POD_A_PICK_APP hit over the card (arg = the row in m->apps, id = the app id).
 void ph_view_home(pod_out_frame_t *, const pod_nav_t *, pod_model_t *, uint32_t now_ms);
-// Whether Home has something that moves (a working agent's equaliser, an asking agent's pulse) and the ms to its next step (the 66 ms beat, else 1000).
+// Whether Home has something that moves (a working agent's equaliser, an asking agent's pulse; on an app card its row's working or waiting) and the ms to its next step (the 66 ms beat, else 1000).
 bool ph_home_moves(const pod_nav_t *, const pod_model_t *);
 bool ph_home_brand(const pod_nav_t *, const pod_model_t *);   // Home shows the first screen (the wordmark): no tabs, no notices, linked or not
 uint32_t ph_home_next_ms(const pod_nav_t *, const pod_model_t *, uint32_t now_ms);

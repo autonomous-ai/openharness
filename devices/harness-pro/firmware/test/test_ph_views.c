@@ -1511,14 +1511,14 @@ int main(void) {
         CHECK(pick_hit(2, "vscode") && !text_run("Harness"));
 
         // an app with no style: the Pro's own dark, no icon, the name at the full width
-        static const pod_app_t plain[3] = {{"harness", "Harness", 4, 1, 1}, {"rex", "Rex", 1, 0, 0}, {"vscode", "VS Code", 3, 1, 0}};
+        static const pod_app_t plain[3] = {{"harness", "Harness", 4, 1, 1}, {"rex", "Rex mmmmmmmmmmmmmmmmmmm", 1, 0, 0}, {"vscode", "VS Code", 3, 1, 0}};
         CHECK(!pod_app_style("rex"));
         pod_model_apps(&M, plain, 3, "codex");
         N.stack[0].scroll = POD_HOME_APP0;
         fresh(); ph_view_home(&F, &N, &M, now);
         CHECK(card_grad(ht_rgb(PH_RAISED), ht_rgb(PH_GROUND)) && images_in(0, 720) == 0);
         nm = app_name();
-        CHECK(nm && !strcmp(nm->text, "Rex") && nm->w == 452 && pick_hit(1, "rex"));
+        CHECK(nm && !strncmp(nm->text, "Rex m", 5) && ht_pro_width(nm->pro_font, nm->text) > 364 && nm->w <= 452 && pick_hit(1, "rex"));   // past where an icon would start
         CHECK(!ph_home_moves(&N, &M));   // 0 working, 0 asking: still
         N.stack[0].scroll = POD_HOME_APP0 + 1;
         CHECK(ph_home_moves(&N, &M));    // vscode: only asking
@@ -1547,7 +1547,8 @@ int main(void) {
         pod_nav_sync(&N, &M);
         N.stack[0].scroll = POD_HOME_APP0;
         fresh(); ph_view_home(&F, &N, &M, now);
-        CHECK(text_run("+3") && text_run("7") && text_run("1 working") && text_run("1 asking") && text_run("Notices") && text_run("VS Code"));
+        CHECK(text_run("+3") && text_run("7") && text_run("1 working") && text_run("1 asking") && text_run("VS Code"));
+        CHECK(aa_at(-372, 96, 464, 481, 41, ph_mix(PH_LETTER, PH_HOME_BG, 45)) == 1);   // the Notices letter peeks left (its name is off the glass)
         CHECK(images_in(480, 600) == 4 && dots_in(480, 600) == 4 && pick_hit(1, "codex"));
         CHECK(ph_runs(&F) + 2 <= HT_RUNS && F.hit_count <= 32);
         printf("runs home-app-worst %d\n", ph_runs(&F));
@@ -1587,9 +1588,10 @@ int main(void) {
         fresh(); ph_view_home(&F, &N, &M, now);
         check_no_pill();
         CHECK(card_grad(ht_rgb(PH_RAISED), ht_rgb(PH_GROUND)) && app_name() && !strcmp(app_name()->text, "Harness") && pick_hit(0, "harness"));
+        CHECK(text_run("ChatGPT") && text_run("ChatGPT")->pro_font == &ph_sb_34 && text_run("ChatGPT")->x >= 628);   // codex peeks right
         N.stack[0].scroll = POD_HOME_APP0 + 2;
         fresh(); ph_view_home(&F, &N, &M, now);
-        CHECK(pick_hit(2, "vscode") && text_run("ChatGPT") && text_run("ChatGPT")->pro_font == &ph_sb_34);
+        CHECK(pick_hit(2, "vscode") && text_run("VS Code"));
     }
     printf("test_ph_views: %d checks ok\n", checks);
     return 0;
