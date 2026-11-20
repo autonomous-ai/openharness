@@ -126,6 +126,8 @@ interface RunHookOpts {
   grokHome?: string
   devinHome?: string
   input?: Record<string, unknown>
+  /** The hook's stdin as it is, in place of [input]'s JSON. */
+  stdin?: string
   /** The command lines the hook is run through, outermost first: each hands the rest of the line on as `"$0" "$@"`. */
   via?: string[][]
   /** Linux's /proc as the hook's climb reads it, faked on any platform (`process.platform` reads 'linux'): the hook's
@@ -340,7 +342,7 @@ fs.readFileSync = (path, ...args) => {
     child.stdout.on('data', (chunk) => { stdout += chunk })
     child.on('error', reject)
     child.on('close', (code) => code === 0 ? resolve(stdout) : reject(new Error(`notify.mjs exited ${code}`)))
-    child.stdin.end(JSON.stringify(opts.input ?? {
+    child.stdin.end(opts.stdin ?? JSON.stringify(opts.input ?? {
       hook_event_name: 'SessionEnd',
       session_id: 'session-test',
       reason: 'logout',
@@ -2493,8 +2495,9 @@ function record(dataDir: string, port: number, fields: Record<string, unknown>):
 }
 
 /** What a hook run as on Windows posts over the daemon's pipe (a Unix socket named for it, as the W1 cases reach one): a
- *  Codex Stop from a pty host's pane, in a new data folder, unless [opts] or [pane] say otherwise. */
-async function onWindows(opts: Partial<RunHookOpts>, pane = true): Promise<Array<{ url: string; body: Record<string, unknown> }>> {
+ *  Codex Stop from a pty host's pane, in a new data folder, unless [opts] or [pane] say otherwise. It waits for [posts]
+ *  of them. */
+async function onWindows(opts: Partial<RunHookOpts>, pane = true, posts = 1): Promise<Array<{ url: string; body: Record<string, unknown> }>> {
   const { dataDir, token, id, socket, preload } = windowsData(opts.dataDir)
   record(dataDir, 9, { pipe: `\\\\.\\pipe\\harness-${id}`, pid: process.pid })
   const requests: Array<{ url: string; body: Record<string, unknown> }> = []
@@ -2510,7 +2513,7 @@ async function onWindows(opts: Partial<RunHookOpts>, pane = true): Promise<Array
     env: { ...env, ...opts.env },
   })
   // A paneless post is not waited for (postObserved).
-  await received(requests)
+  await received(requests, posts)
   return requests
 }
 
@@ -3395,60 +3398,54 @@ describe('hook notify: a session outside a pane', () => {
       expect(existsSync(log)).toBe(false)
     })
 
-    it.each<[string, string, Record<string, string>, string]>([
-      ['9001', 'Code.exe', { __CFBundleIdentifier: VSCODE }, 'ps --json --ancestors 9001\n'],
-      ['9001', 'Cursor.exe', { __CFBundleIdentifier: CURSOR }, 'ps --json --ancestors 9001\n'],
-      ['9007', 'Code.exe', {}, 'ps --json --ancestors 9007\n'],
-      ['abc', 'Code.exe', {}, ''],
-      ['0', 'Code.exe', {}, ''],
-    ])('from the extension\'s panel, VSCODE_PID %s with %s at 9001 names %j, from that pid\'s chain alone: %j', async (pid, editor, named, reads) => {
+    /** The one read of the hook's own chain: its parent's row and that one's parents'. */
+    const ownChain = `ps --json --ancestors ${process.pid}\n`
+
+    it.each<[string, string, Record<string, string>, boolean]>([
+      ['9001', 'Code.exe', { __CFBundleIdentifier: VSCODE }, true],
+      ['9001', 'Cursor.exe', { __CFBundleIdentifier: CURSOR }, true],
+      ['9007', 'Code.exe', {}, true],
+      ['abc', 'Code.exe', {}, false],
+      ['0', 'Code.exe', {}, false],
+    ])('from the extension\'s panel, VSCODE_PID %s with %s at 9001 names %j, reading the hook\'s own chain: %s', async (pid, editor, named, reads) => {
       const log = runLog()
       expect(await hints({ windowsAncestors: [win('claude.exe'), win(editor)], psRunLog: log, env: { ...panel, VSCODE_PID: pid } }))
         .toEqual({ ...named, ...panel })
-      expect(existsSync(log) ? readFileSync(log, 'utf8') : '').toBe(reads)
+      expect(existsSync(log) ? readFileSync(log, 'utf8') : '').toBe(reads ? ownChain : '')
+    })
+
+    it('from the panel, a VSCODE_PID past the 9 rows of the hook\'s chain names no editor', async () => {
+      const log = runLog()
+      // Code.exe is pid 9009, the tenth row: the host lists the hook's parent and 8 of its parents.
+      const far = [win('claude.exe'), ...Array.from({ length: 8 }, () => win('bash.exe')), win('Code.exe')]
+      expect(await hints({ windowsAncestors: far, psRunLog: log, env: { ...panel, VSCODE_PID: '9009' } })).toEqual(panel)
+      expect(readFileSync(log, 'utf8')).toBe(ownChain)
     })
 
     it('from the panel, a helper that fails names no editor', async () => {
       expect(await hints({ env: { ...panel, VSCODE_PID: '9001', HARNESS_PTY_BIN: failingHelper() } })).toEqual(panel)
     })
 
-    /** The rows of Codex in the panel: its hook under PowerShell, under codex.exe (9001), under VS Code (9002). */
-    const codexInPanel = () => {
-      const row = (pid: number, parentPid: number, nativeArgv: string[]) =>
-        ({ pid, parentPid, executable: nativeArgv[0], startMarker: `w:${pid}`, args: nativeArgv.join(' '), nativeArgv })
-      return [row(process.pid, 9001, powershell.argv), row(9001, 9002, ['codex.exe']), row(9002, 9003, ['Code.exe'])]
-    }
-    const codexInPanelPosts = async (helper: string) => {
-      const requests = await onWindows({ env: { ...noHints, VSCODE_PID: '9002', HARNESS_PTY_BIN: helper } }, false)
+    it('Codex in the panel: one read of its own chain names the caller and the editor', async () => {
+      const log = runLog()
+      const requests = await onWindows({ psRunLog: log, windowsAncestors: [powershell, win('codex.exe'), win('Code.exe')],
+        env: { ...noHints, VSCODE_PID: '9002' } }, false)
       expect(requests).toEqual([{ url: '/api/hook/observed', body: expect.objectContaining({
         engine: 'codex', callerPid: 9001, hostHints: { __CFBundleIdentifier: VSCODE } }) }])
-    }
-
-    it('Codex in the panel: its own chain and the editor\'s, read together, name the caller and the editor', async () => {
-      const dir = folder('adapter-hook-editor-'), log = join(dir, 'ps-runs'), helper = join(dir, 'harness-pty')
-      const rows = codexInPanel()
-      // The hook's own chain is answered only once the editor's has been asked for: read one after the other, the
-      // climb's read fails, and the hook names the shell.
-      writeExecutable(helper, `#!/bin/sh
-echo "$*" >> '${log}'
-if [ "$*" = "ps --json --ancestors 9002" ]; then printf '%s\\n' '${JSON.stringify({ rows: rows.slice(2) })}'; exit 0; fi
-[ "$*" = "ps --json --ancestors ${process.pid}" ] || exit 2
-tries=0
-until grep -q 'ancestors 9002' '${log}'; do
-  tries=$((tries + 1)); [ $tries -gt 200 ] && exit 1; sleep 0.05
-done
-printf '%s\\n' '${JSON.stringify({ rows })}'
-`)
-      await codexInPanelPosts(helper)
-      expect(readFileSync(log, 'utf8').split('\n').filter(Boolean).sort())
-        .toEqual([`ps --json --ancestors ${process.pid}`, 'ps --json --ancestors 9002'].sort())
+      expect(readFileSync(log, 'utf8')).toBe(ownChain)
     })
 
     it('Codex in the panel, with a host that takes no --ancestors and lists the whole table (0.6.22): the same caller and editor', async () => {
       const helper = join(folder('adapter-hook-editor-'), 'harness-pty')
-      const table = { rows: [{ pid: 4, parentPid: 0, executable: 'System', startMarker: '', args: 'System', nativeArgv: ['System'] }, ...codexInPanel()] }
+      // The hook's PowerShell under codex.exe (9001), under VS Code (9002), each started after its parent.
+      const row = (pid: number, parentPid: number, nativeArgv: string[], started: number) =>
+        ({ pid, parentPid, executable: nativeArgv[0], startMarker: `w:${started}`, args: nativeArgv.join(' '), nativeArgv })
+      const table = { rows: [{ pid: 4, parentPid: 0, executable: 'System', startMarker: '', args: 'System', nativeArgv: ['System'] },
+        row(process.pid, 9001, powershell.argv, 3), row(9001, 9002, ['codex.exe'], 2), row(9002, 9003, ['Code.exe'], 1)] }
       writeExecutable(helper, `#!/bin/sh\n[ "$1 $2" = "ps --json" ] || exit 2\nprintf '%s\\n' '${JSON.stringify(table)}'\n`)
-      await codexInPanelPosts(helper)
+      const requests = await onWindows({ env: { ...noHints, VSCODE_PID: '9002', HARNESS_PTY_BIN: helper } }, false)
+      expect(requests).toEqual([{ url: '/api/hook/observed', body: expect.objectContaining({
+        engine: 'codex', callerPid: 9001, hostHints: { __CFBundleIdentifier: VSCODE } }) }])
     })
 
     it('a Claude Code hook with none of the three names no app and reads no table', async () => {
@@ -3561,12 +3558,11 @@ printf '%s\\n' '${JSON.stringify({ rows })}'
 
       it('holds sixteen', async () => {
         const dataDir = data()
-        const editors = [win('claude.exe'), ...Array.from({ length: 20 }, () => win('Code.exe'))]
-        for (let pid = 9001; pid <= 9020; pid++) {
-          expect(await named({ dataDir, windowsAncestors: editors, env: { VSCODE_PID: String(pid) } })).toBe(VSCODE)
-        }
-        expect(JSON.parse(readFileSync(kept(dataDir), 'utf8')).editors.map((editor: { pid: number }) => editor.pid))
-          .toEqual(Array.from({ length: 16 }, (_, index) => 9020 - index))
+        // Twenty editors' pipes, each a new key for the pid.
+        const pipes = Array.from({ length: 20 }, (_, index) => `\\\\.\\pipe\\${index}a1b2c3d-1.106.0-main-sock`)
+        for (const pipe of pipes) expect(await named({ dataDir, env: { VSCODE_IPC_HOOK: pipe } })).toBe(VSCODE)
+        expect(JSON.parse(readFileSync(kept(dataDir), 'utf8')).editors.map((editor: { ipc: string }) => editor.ipc))
+          .toEqual(pipes.slice(4).reverse().map(key))
       })
 
       // Each file would name Cursor if it were read.
@@ -3756,6 +3752,17 @@ describe('hook notify: the caller a hook names', () => {
     expect(await onWindows({ engine: 'claude', windowsAncestors: [powershell, win('claude.exe')], psRunLog: runs })).toEqual([
       { url: '/api/hook/turn-stop', body: expect.objectContaining({ callerPid: pidAt(0) }) },
     ])
+    expect(existsSync(runs)).toBe(false)
+  })
+
+  // An event the hook drops is told to no one: it starts no pty host for a caller it would never name.
+  it.each<[string, Partial<RunHookOpts>]>([
+    ['a PermissionRequest outside a pane', { input: { hook_event_name: 'PermissionRequest', session_id: 'sess-1', tool_name: 'shell' } }],
+    ['a subagent\'s Stop', { input: { hook_event_name: 'Stop', session_id: 'sess-1', source: { subagent: 'review' } } }],
+    ['input that is not JSON', { stdin: '{"hook_event_name":' }],
+  ])('on Windows a Codex hook that drops %s starts no pty host', async (_case, opts) => {
+    const runs = psRunLog()
+    expect(await onWindows({ windowsAncestors: [powershell, codexExe], psRunLog: runs, ...opts }, false, 0)).toEqual([])
     expect(existsSync(runs)).toBe(false)
   })
 
