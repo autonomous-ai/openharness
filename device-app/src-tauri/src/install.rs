@@ -217,7 +217,7 @@ pub fn install(
             log.line(&format!("install: {flag} could not start: {error}"));
             vec![error.to_string()]
         })?;
-        last = clean_lines(&output);
+        last = clean_lines(os, &output);
         let failed = if output.timed_out {
             log.line(&format!("install: {flag} timed out after {} s", INSTALL_DEADLINE.as_secs()));
             Some(TIMED_OUT)
@@ -269,9 +269,11 @@ fn clean(line: &str) -> Option<String> {
 }
 
 /// Each clean line of stdout, then of stderr (Output keeps them apart; a script's error is on stderr, so it comes
-/// last).
-fn clean_lines(output: &Output) -> Vec<String> {
-    output.stdout.lines().chain(output.stderr.lines()).filter_map(clean).collect()
+/// last). On Windows, without the lines Windows PowerShell writes below an error's first line, `At line:` and those
+/// that begin `+`: the last lines would be those alone, and not the one that says why.
+fn clean_lines(os: &str, output: &Output) -> Vec<String> {
+    let lines = output.stdout.lines().chain(output.stderr.lines()).filter_map(clean);
+    lines.filter(|line| os != "windows" || !(line.starts_with('+') || line.starts_with("At line:"))).collect()
 }
 
 /// The last LAST_LINES of `lines`, each cut to LINE_CHARS, and logged: they are the failure's only lines in the log.
