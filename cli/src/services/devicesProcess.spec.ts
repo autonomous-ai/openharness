@@ -20,7 +20,8 @@ vi.mock('./devices.js', () => ({
 vi.mock('./process.js', () => ({
   runServiceProcess: (options: unknown) => { real.linked.push(options); return { stop: () => {} } },
 }))
-vi.mock('./devicesListener.js', () => ({
+vi.mock('./devicesListener.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('./devicesListener.js')>(),
   openDevicesListener: async (options: unknown) => { real.listened.push(options); return null },
 }))
 

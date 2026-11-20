@@ -137,6 +137,9 @@ state-folder check the daemon's token uses (`secureStateDirectory` / `requireWin
 not a link). One devices process runs per data folder (harnessd starts one). A second one would write a record
 naming its own pipe, and clients follow the record. On macOS and Linux nothing changes.
 
+Corrected 2026-11-20: on Windows every service runs inside the core's process, so the devices started there open this
+same pipe through the services' inline door (`services/inline.ts`), until Windows services run in their own process.
+
 **`devicesListenerPath` becomes a target.** On Windows the answer is `{pipe, token}` read from `devices.json` and
 `devices-token`, or null when the record is missing, the token is missing or bad, or the recorded pid is proven gone
 (the `daemonPipe` check, with the same `HostLiveness`). The record is read at each call, because each start picks a

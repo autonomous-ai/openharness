@@ -27,10 +27,11 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Socket } from 'node:net'
 import { lstatSync, type Stats } from 'node:fs'
 import { dirname } from 'node:path'
+import { devicesListenerPath } from '../devices/listenerPath.js'
 import { DEVICES_TOKEN_FILE, removeDevicesRecord, writeDevicesRecord } from '../devices/listenerPipe.js'
 import { listenLocalSocket, type LocalSocketServer } from '../lib/localSocket.js'
 import { errorKind } from '../lib/log.js'
-import { ensureDaemonToken } from '../lib/windows/pipeAuth.js'
+import { ensureDaemonToken, newPipePath } from '../lib/windows/pipeAuth.js'
 import type { DialAgent } from '../cable/cableSession.js'
 import { APP_IDS } from '../cable/hosts/hostDetect.js'
 import { FRONT_NONE } from '../cable/hosts/frontApp.js'
@@ -131,6 +132,23 @@ class PerSecond {
       this.oldest = (this.oldest + 1) % this.limit
     }
   }
+}
+
+/**
+ * How the devices open their listener on [dataDir]'s socket, or on Windows a pipe with a new name each start, as the
+ * daemon's: the same in their own process (services/devicesProcess.ts) and in the core's (services/inline.ts).
+ */
+export function listenForDevices(
+  dataDir: string,
+  platform: NodeJS.Platform,
+  open: typeof openDevicesListener = openDevicesListener,
+): (handlers: DevicesListenerOptions['handlers'], log: (line: string) => void) => Promise<DevicesListener | null> {
+  return (handlers, log) => open({
+    path: devicesListenerPath(dataDir, platform),
+    pipe: platform === 'win32' ? { path: newPipePath(), dataDir } : undefined,
+    handlers,
+    log,
+  })
 }
 
 /**

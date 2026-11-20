@@ -24,14 +24,12 @@ import { validUsage } from '../lib/agentUsageWire.js'
 import { AGENT_ACTIONS_OFF, DAEMON_UNKNOWN, DELIVERIES_OFF, emptyPorts, resolveAgent, TERMINALS_OFF, type CoreApi, type CorePorts, type DevicesPort, type ForkResult, type ServiceRequests, type WindowFocus } from '../core/api.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import type { RuntimeModelOption } from '../lib/runtimeProfile.js'
-import { devicesListenerPath } from '../devices/listenerPath.js'
 import { accountLink } from './accountLink.js'
 import { startDevices, type DevicesDeps } from './devices.js'
-import { openDevicesListener } from './devicesListener.js'
+import { listenForDevices, openDevicesListener } from './devicesListener.js'
 import { runServiceProcess, type CoreConnection, type ServiceProcess, type ServiceProcessOptions } from './process.js'
 import { processCoreApi, UNASKED } from './processCoreApi.js'
 import { harnessdEnv } from '../lib/harnessdEnv.js'
-import { newPipePath } from '../lib/windows/pipeAuth.js'
 
 /** An agent as the core lists it for the dial: with the name the apps show and the model it runs. */
 type Viewed = RegisteredSession & { displayName?: string; runtimeProfile?: string | null }
@@ -220,17 +218,8 @@ export function runDevicesService(options: DevicesServiceOptions): ServiceProces
     faults: faultsOf(processEnv.HARNESSD_TEST_FAULTS),
     refresh,
     onCoreGone: (run) => { coreGone = run },
-    // Their own listener, in this process alone: the devices started inside the core's process are given none. On
-    // Windows a pipe with a new name each start, as the daemon's.
-    listen: (handlers, log) => {
-      const platform = options.platform ?? process.platform
-      return (options.openListener ?? openDevicesListener)({
-        path: devicesListenerPath(options.dataDir, platform),
-        pipe: platform === 'win32' ? { path: newPipePath(), dataDir: options.dataDir } : undefined,
-        handlers,
-        log,
-      })
-    },
+    // Their own listener: the devices started inside the core's process are given none but on Windows (services/inline.ts).
+    listen: listenForDevices(options.dataDir, options.platform ?? process.platform, options.openListener ?? openDevicesListener),
   }
   const requests = (options.start ?? startDevices)(api, ports, deps)
   const port = ports.devices as DevicesPort
