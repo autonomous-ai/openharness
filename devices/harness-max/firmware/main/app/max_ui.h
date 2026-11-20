@@ -126,8 +126,9 @@ typedef enum { MAX_TALK_IDLE, MAX_TALK_RECORDING, MAX_TALK_SENDING } max_talk_t;
 // recording's clock and its listening (max_ui_level).
 bool max_ui_talk(max_talk_t state, uint32_t now_ms);
 // The daemon's reply to a send, as the Pro's pro_app_voice_result. ok: the words went to agent_id ("" none known),
-// which shows Working until its turn speaks (or MAX_SENT_WAIT_MS); its page stays on the SEND scene until that turn
-// begins. Not ok: the page lets the send go at once (the app puts the daemon's words up). True when the screen changed.
+// which shows Working until its turn speaks (or MAX_SENT_WAIT_MS); its page, once the SEND scene has played, shrinks
+// back into Overview. Not ok: it shrinks back at once (the app puts the daemon's words up). True when the screen
+// changed.
 bool max_ui_voice_result(bool ok, const char *agent_id, uint32_t now_ms);
 // The local wall clock, once a tick: known false where the device has none (an ESP32 the daemon never set). Hour 0..23,
 // minute 0..59, weekday 0..6 from Sunday, day of the month 1..31, month 0..11. True when the minute shown changed.

@@ -3,7 +3,7 @@
 // and state chip, the line of its task, the mic's band across its foot, and X at its top right. The panel is one tap:
 // it opens the mic, or sends what is being said. The band, live: "Listening" and its clock, the waveform of the mic's
 // level ("Say it…" until speech is heard), "Tap to send" by its ring (the quiet after speech sends nothing: the Pro's);
-// sent, "Sending" until the agent's turn begins, its pet on the SEND scene (the Pro's voice screen). At rest one quiet
+// sent, "Sending" while it settles, its pet on the SEND scene (the Pro's voice screen), then Overview. At rest one quiet
 // line: "Tap to talk", "Mic opens in a moment…" (a cell's tap, for MAX_TALK_DELAY_MS), "Mic closed · tap to talk", or
 // where to talk to an agent the bar cannot record for. As V3's: its rail, glow and chip loop, the band's colours ease
 // between talking and not, and the live dot pulses in its glow.
@@ -192,7 +192,7 @@ void max_agent_body(ht_scene_t *s, const max_agent_t *a, int x, int w, unsigned 
     max_icon_x(s, x_cx - X_ICON / 2, X_CY - X_ICON / 2, X_ICON, FG);
     max_hit(x + w - X_HIT_W, 0, X_HIT_W, X_HIT_H, MAX_HIT_AGENT_X, 0);
     // The rest of the panel: a tap sends what is being said, or opens the mic.
-    // Sent, nothing until its turn begins: no second recording (the Pro's).
+    // Sent, nothing while the send settles: no second recording (the Pro's).
     if (max_m.talk == MAX_TALK_RECORDING ? talking
                                          : max_m.talk == MAX_TALK_IDLE && max_takes_voice(a) && !max_send_holds(a->id))
         max_hit(x, 0, w, HT_HEIGHT, MAX_HIT_BODY, 0);

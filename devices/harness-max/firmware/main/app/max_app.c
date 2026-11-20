@@ -410,8 +410,8 @@ static void talk_sync(void)
     unlock();
 }
 
-// As the Pro's: an error leaves the SEND scene, a sent clip stays on it until its agent's turn begins, the agent
-// Working until its turn speaks.
+// As the Pro's, the agent Working until its turn speaks; the page's SEND scene, played, shrinks back into Overview,
+// and an error's at once.
 void pro_app_voice_result(int kind, const char *text)
 {
     if (!pro_voice_open()) return;   // a reply nobody waits for
@@ -473,6 +473,7 @@ static void talk_send(void)
     if (pro_voice_open() && pro_voice_start_pending()) {
         pro_voice_end(false);
         lock();
+        talk_locked(pro_voice_open(), pro_voice_waiting());   // the mic shut first: the page it left shrinks back
         changed_if(max_ui_voice_result(false, NULL, ms()));   // nothing went: no SEND scene
         unlock();
         pro_app_notice("Not sent");

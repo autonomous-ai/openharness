@@ -43,7 +43,7 @@ static void void_contact(void)
 // ---- a recording ----
 
 // What was recorded goes, and the notice names who to (the form's spoken name needs none: the form shows it). The
-// agent's page stays up and its pet plays SEND until its turn begins (the Pro's voice screen, max_send_begin).
+// agent's page stays up and its pet plays SEND until the send settles, then shrinks back (max_send_begin).
 static max_act_t send_talk(uint32_t now_ms)
 {
     max_send_begin(now_ms);
@@ -238,7 +238,7 @@ static max_act_t press(const max_hit_t *h, uint32_t now_ms)
     case MAX_HIT_DONE_NOTE: open_done(); break;
     case MAX_HIT_BODY: {   // the mic, or the computer when the bar cannot listen for it now
         const max_agent_t *a = view == MAX_VIEW_AGENT ? max_find(max_m.selected) : NULL;
-        if (!a || max_m.held || max_send_holds(a->id)) break;   // sent: no second recording until its turn begins
+        if (!a || max_m.held || max_send_holds(a->id)) break;   // sent: no second recording while it settles
         if (max_can_talk(a) && max_takes_voice(a)) return talk_to(a, MAX_ACT_TALK);
         return act_for(MAX_ACT_OPEN, a->id);
     }

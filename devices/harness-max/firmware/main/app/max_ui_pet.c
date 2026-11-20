@@ -18,7 +18,7 @@ pod_scene_t max_pet_scene(const max_agent_t *a, bool page)
 {
     if (page && max_m.talk != MAX_TALK_IDLE && !strcmp(max_m.talk_id, a->id))
         return max_m.talk == MAX_TALK_RECORDING ? POD_SCENE_LISTEN : POD_SCENE_SEND;
-    if (page && max_send_holds(a->id)) return POD_SCENE_SEND;   // sent: until its turn begins (the Pro's voice screen)
+    if (page && max_send_holds(a->id)) return POD_SCENE_SEND;   // sent: until the send settles (the Pro's voice screen)
     if (a->state == MAX_ASKING) return POD_SCENE_ASK;
     if (a->state == MAX_WORKING) return POD_SCENE_WORK;
     // On its page an agent with nothing to say relaxes, as the dial's Focus (mockup sceneFor).
@@ -70,6 +70,16 @@ int max_pet(ht_scene_t *s, const char *engine, pod_scene_t scene, int cx, int fo
     pod_pet_draw_flat(s, cx - box / 2, cy - box / 2, box, engine, scene, still ? STILL_MS : now_ms,
                       scene == POD_SCENE_SEND ? s_send_from : 0, ground, f.zoom8);
     return foot - f.h;
+}
+
+uint32_t max_pet_send_ms(const char *engine)
+{
+    const ht_pet_t *pet = pod_pet_for(engine);
+    const ht_pet_scene_t *e = pet ? pet->sending_scene : NULL;
+    if (!e || !e->steps) return 0;
+    // A step shorter than the beat lasts one beat (pod_pet.c beat_step_ms): the bar draws its pets on the beat.
+    const uint32_t step_ms = e->step_ms < POD_PH_ANIM_MS ? POD_PH_ANIM_MS : e->step_ms;
+    return e->steps * step_ms;
 }
 
 uint32_t max_pet_next_ms(const char *engine, pod_scene_t scene, uint32_t now_ms)

@@ -56,9 +56,10 @@ enum { MAX_CAP_VOICE = 1, MAX_CAP_FOCUS = 2, MAX_CAP_ANSWER = 4, MAX_CAPS_ALL = 
 #define MAX_TALK_DELAY_MS 1000u     // a cell's tap opens its agent, and the mic this long after (the owner, 20 Nov: at
                                     // once was hurried)
 #define MAX_TALK_MAX_MS 600000u     // the longest recording (the Pro's 600 s cap): then it is sent
-// After a send the agent's page stays up and its pet plays the SEND scene until its turn begins (the Pro's voice
-// screen, pod_nav.c release_send); the words taken, the agent shows Working on the bar's word alone until its turn
-// speaks (pod_model_sent). With no turn in this long, both go back (the Pro's POD_SENT_WAIT_MS).
+// After a send the agent's page stays up and its pet plays the SEND scene (the Pro's voice screen, pod_nav.c); the
+// words taken or its turn begun, once the scene has played, the agent's pane shrinks back into the row (Overview), at
+// once when the send failed (the owner, 20 Nov). Taken, the agent shows Working on the bar's word alone until its turn
+// speaks (pod_model_sent). With neither in this long, both go back (the Pro's POD_SENT_WAIT_MS).
 #define MAX_SENT_WAIT_MS 30000u
 #define MAX_AMBIENT_MS 60000u       // nobody touched and nothing works or waits this long: Ambient
 #define MAX_ATTN_END_MS 8000u       // a done or failed turn's Attention goes back to Overview after this
@@ -319,13 +320,15 @@ typedef struct {
     bool talk_soon;                  // a cell's tap opened talk_id's page: the clock opens its mic at talk_soon_at
     uint32_t talk_soon_at;           // (max_ui_talk_due), unless the page went first or a recording began
     // A send to sent_id's agent (the Pro's nav->sending): its page plays the SEND scene from send_from, and takes no
-    // second recording, until its turn begins or MAX_SENT_WAIT_MS passes (the model's settle); leaving the page ends
-    // it.
+    // second recording, until the words are taken or its turn begins and the scene has played (send_play_ms), the
+    // send fails, or MAX_SENT_WAIT_MS passes (the model's settle): then the pane shrinks back. Leaving the page
+    // ends it.
     bool sending;
     bool sent_seen;                  // its words were taken (max_ui_voice_result)
     bool sent_asked;                 // it was asking when they went: they are its answer
     char sent_id[ID_MAX];
     uint32_t send_from;
+    uint32_t send_play_ms;           // the SEND scene's one play for its pet (max_pet_send_ms)
     uint8_t levels[MAX_LEVELS];      // the mic's levels, oldest first
     int level_count;
     uint32_t idle_from;              // since when nothing works or waits (Ambient)
@@ -400,8 +403,10 @@ bool max_done_shown(uint32_t now_ms);
 bool max_can_talk(const max_agent_t *);
 // Words just went to the agent of talk_id: its page, when up, holds the SEND scene from now (max_m.sending).
 void max_send_begin(uint32_t now_ms);
-// The page holds the SEND scene for this agent: the words went and its turn has not begun.
+// The page holds the SEND scene for this agent: the words went and the send has not settled.
 bool max_send_holds(const char *id);
+// How long the engine's pet takes to play its SEND scene once, on the Pets beat (max_ui_pet.c); 0 with no such scene.
+uint32_t max_pet_send_ms(const char *engine);
 
 // ---- Demo V2: which page is up (max_ui_model.c) ----
 // Put this page up; leaving Inbox marks every notice read. Opening an agent holds the row's order until it closes;

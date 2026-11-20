@@ -60,11 +60,13 @@ with `MAX_Y`, the text keeps its size).
   Nothing heard in 10 s: the mic closes, the band says "Mic closed · tap to talk", and the page stays to be read. A tap
   on the page then opens the mic again. The full voice rules (owner, 20 Nov) are in "Voice rules" below.
 - After a send (since 20 Nov, the Pro's voice screen): the notice "Sent to <name>", and the agent's page stays up. Its
-  pet plays the SEND scene (the letter into the mailbox) and the band says "Sending", its clock stopped, until the
-  agent's turn begins; then the page shows its Working pet. Once the daemon takes the words the agent shows Working at
-  once ("Starting…" until its turn says more), on its cell too. With no turn in 30 s both go back. An error lets the
-  page go at once, with the daemon's words. Words that answered a question: the next question waiting takes the glass
-  when the turn begins.
+  pet plays the SEND scene (the letter into the mailbox) once and the band says "Sending", its clock stopped. Once the
+  daemon takes the words (or the agent's turn begins) and the scene has played (Claude 2.64 s, Codex 2.1 s, Muse
+  2.82 s; at once for an engine with no pet), the agent's pane shrinks back into the row (Overview), its cell showing
+  the new state: Working at once on the daemon's word ("Starting…" until its turn says more). An error ("Didn't catch
+  that", "Not sent") shrinks it back at once, with the words why. With neither in 30 s it shrinks back anyway and the
+  agent's state before comes back. Words that answered a question: the next question waiting takes the glass instead
+  of Overview (owner, 20 Nov: success, failure or Working, the pane shrinks back and the status updates).
 - On the strip, a tap on another agent sends what was said (when something was heard; else it cancels) and shows that
   agent with the mic closed. Back does the same and goes to Overview. A sideways swipe browses the ring the same way.
 - The words are not shown as they are spoken: the daemon transcribes the recording after it is sent.
@@ -98,10 +100,12 @@ Everything else is the Pro's:
 - 600 s is the longest recording: then it is sent.
 - The recording's agent leaving the ring drops it, heard or not.
 - When the clock opens or ends the talk under a finger, that touch acts on nothing when it lets go.
-- After a send the page stays on the SEND scene and takes no second recording until the agent's turn begins (a turn
-  started after the tap, or any turn event once the daemon took the words), or 30 s (`MAX_SENT_WAIT_MS`, the Pro's
-  `POD_SENT_WAIT_MS`). The words taken, the agent is Working on the bar's word alone (the Pro's `pod_model_sent`)
-  until a turn event, or 30 s, when its state before comes back. Leaving the page lets the send go.
+- After a send the page stays on the SEND scene and takes no second recording until the send settles: the scene played
+  once (`max_pet_send_ms`) and the daemon took the words or the agent's turn began (a turn started after the tap, or
+  any turn event once the words were taken); an error at once; else 30 s (`MAX_SENT_WAIT_MS`, the Pro's
+  `POD_SENT_WAIT_MS`). Settled, the pane shrinks back into Overview by the row's own move (420 ms, then the scroll
+  back). The words taken, the agent is Working on the bar's word alone (the Pro's `pod_model_sent`) until a turn
+  event, or 30 s, when its state before comes back. Leaving the page lets the send go where it is.
 
 ### Voice rules (owner, 18 Nov 2026, replaced on the firmware 20 Nov): the Dial's, with two changes
 
