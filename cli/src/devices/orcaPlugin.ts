@@ -23,7 +23,6 @@ export const ORCA_ANSWER_MAX_BYTES = 256 * 1024
 export type OrcaPluginFiles = Readonly<Record<string, string>>
 /** The real things: Orca's CLI and what cli.js carries. */
 export interface OrcaPluginRun {
-  platform: NodeJS.Platform
   /** Orca's CLI (`orcaBinary`), null when it is not here. */
   orca(): string | null
   /** `orcaHomesDeps().run`: no shell; `code` null for a kill, a binary that could not start or output past maxBytes. */
@@ -189,7 +188,6 @@ function stateOf(entry: Record<string, unknown>, asking: Asking, folder: string)
 export function orcaPluginRun(): OrcaPluginRun {
   const deps = orcaHomesDeps()
   return {
-    platform: deps.platform,
     orca: () => orcaBinary(deps),
     run: deps.run,
     files: () => typeof __ORCA_PLUGIN__ === 'string' ? JSON.parse(__ORCA_PLUGIN__) as OrcaPluginFiles : null,

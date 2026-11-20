@@ -485,7 +485,6 @@ describe('orcaPluginParts', () => {
       'plugin uninstall': {},
     }
     const deps: OrcaPluginDeps = {
-      platform: 'darwin',
       orca: () => '/nowhere/orca',
       run: async (_file, args) => {
         calls.push(args.join(' '))

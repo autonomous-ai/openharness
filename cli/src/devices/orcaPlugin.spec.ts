@@ -58,7 +58,6 @@ function setup(over: Partial<OrcaPluginDeps> = {}) {
   const before = orca.calls().length
   const said: string[] = []
   const deps: OrcaPluginDeps = {
-    platform: 'darwin',
     orca: () => orca.bin,
     run: REAL.run,
     files: () => FILES,
@@ -103,13 +102,6 @@ describe('orcaStatus', () => {
     expect(await orcaStatus(deps)).toEqual({ orca: 'absent' })
     expect(calls()).toEqual([])
     expect(existsSync(folder)).toBe(false)
-  })
-
-  it('on Windows Orca is asked, as elsewhere', async () => {
-    const { deps, folder, calls } = setup({ platform: 'win32' })
-    up([])
-    expect(await orcaStatus(deps)).toEqual({ orca: 'setup' })
-    expect(calls()).toEqual(['status --json', `plugin inspect ${folder} --json`, 'plugin list --json'])
   })
 
   it('no orca is absent', async () => {

@@ -493,7 +493,6 @@ function fakeOrcaPlugin({ running = true, installed = null, folder = join(dataDi
   const state = { running, version: installed }
   const answer = (code: number, json: unknown) => ({ code, stdout: JSON.stringify(json), timedOut: false })
   const deps: orcaPluginModule.OrcaPluginRun & { folder: string } = {
-    platform: 'darwin',
     orca: () => '/nowhere/orca',
     run: async (_file, args) => {
       runs.push(args.join(' '))

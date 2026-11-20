@@ -1314,7 +1314,7 @@ describe('harness device orca status, enable and disable', () => {
 
   /** Orca's CLI as `harness device` is handed it: the fake `orca`, run through the real `run`. */
   const orcaRun = (files: OrcaPluginFiles | null = FILES): OrcaPluginRun =>
-    ({ platform: 'darwin', orca: () => fake.bin, run: orcaPluginRun().run, files: () => files })
+    ({ orca: () => fake.bin, run: orcaPluginRun().run, files: () => files })
 
   /** An Orca that runs and holds the plugin's approvals at 1.2.3 for [grants], listing no plugin; the fake's calls from
    *  now on. */
