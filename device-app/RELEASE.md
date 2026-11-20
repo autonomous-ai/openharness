@@ -8,10 +8,11 @@ One release carries, under one version:
 | Windows 10 or 11, x64 and arm64 | `Harness-Device-windows-<arch>-setup.exe` (NSIS, per user) and its `.sig` | Authenticode, the app's exe and the installer |
 | Linux, x64 and arm64 | `Harness-Device-linux-<arch>.AppImage` and its `.sig` | the update signature only |
 
-Each `.sig` is the updater's signature. The page is `https://harness.autonomous.ai/device`, with a button per OS; its
-links `/device/download-macos`, `/device/download-windows` and `/device/download-linux` follow the manifest. The last
-two pick x64 or arm64 from the browser's Client Hints (Linux also from its user agent), x64 when it cannot tell, and
-answer 503 until a release carries their keys. An installed app finds a newer release and installs it on its own.
+Each `.sig` is the updater's signature. The page is `https://harness.autonomous.ai/device`, which lists every
+installer the manifest names and offers the one for the visitor's computer. The links `/device/download-macos`,
+`/device/download-windows` and `/device/download-linux` follow the manifest too. The last two pick x64 or arm64 from
+the browser's Client Hints (Linux also from its user agent), x64 when it cannot tell, and answer 503 until a release
+carries their keys. An installed app finds a newer release and installs it on its own.
 
 Windows and Linux ship only when a release asks for them: `platforms` is `macos` by default, and `all` builds and
 publishes the three. Once Windows and Linux are live, `publish` refuses a macOS-only release: the manifest has one
@@ -143,17 +144,18 @@ manifest:
 The app is universal, so the arm64 pair names the same files as the other pair. A release with `all` adds, each with
 its own file:
 
-| Updater key (`platforms`) | Download key | File |
-|---|---|---|
-| `windows-x86_64` | `device-windows-x64` | `Harness-Device-windows-x64-setup.exe` |
-| `windows-aarch64` | `device-windows-arm64` | `Harness-Device-windows-arm64-setup.exe` |
-| `linux-x86_64` | `device-linux-x64` | `Harness-Device-linux-x64.AppImage` |
-| `linux-aarch64` | `device-linux-arm64` | `Harness-Device-linux-arm64.AppImage` |
+| Updater key (`platforms`) | Desktop's key | Website's key | File |
+|---|---|---|---|
+| `windows-x86_64` | `device-windows-x64` | `device-windows-x64-exe` | `Harness-Device-windows-x64-setup.exe` |
+| `windows-aarch64` | `device-windows-arm64` | `device-windows-arm64-exe` | `Harness-Device-windows-arm64-setup.exe` |
+| `linux-x86_64` | `device-linux-x64` | `device-linux-x64-appimage` | `Harness-Device-linux-x64.AppImage` |
+| `linux-aarch64` | `device-linux-arm64` | `device-linux-arm64-appimage` | `Harness-Device-linux-arm64.AppImage` |
 
-The app reads `platforms` (its updater ignores the rest). The website reads `device-macos-dmg`, `device-windows-*` and
-`device-linux-*`. Desktop reads `device-macos-arm64`/`device-macos`, `device-windows-*` and `device-linux-*`; on
-Windows it runs the installer with `/S`, and on Linux it puts the AppImage at `~/.local/opt/Harness-Device.AppImage`
-and lists it in the app list as `harness-device.desktop`, removed at Desktop's next launch once the AppImage is gone.
+The app reads `platforms` (its updater ignores the rest). The website reads only installer keys,
+`device-<os>[-<arch>]-<package>`: `device-macos-dmg`, `device-macos-arm64-dmg` and the website's keys above. Desktop
+reads `device-macos-arm64`/`device-macos` and Desktop's keys above; on Windows it runs the installer with `/S`, and on
+Linux it puts the AppImage at `~/.local/opt/Harness-Device.AppImage` and lists it in the app list as
+`harness-device.desktop`, removed at Desktop's next launch once the AppImage is gone.
 
 ## Keys
 

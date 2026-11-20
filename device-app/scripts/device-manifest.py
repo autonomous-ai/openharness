@@ -35,13 +35,14 @@ PARTS = {
 }
 # The parts a release carries. Temporary: the first Windows and Linux release makes "all" the only choice.
 PLATFORMS = {"macos": ("macos",), "all": tuple(PARTS)}
-# Tauri's key, Desktop's key and the file of each Windows and Linux update: unlike the universal Mac archive, each arch
-# has a file of its own.
+# Tauri's key, Desktop's key, the website's key and the file of each Windows and Linux update: unlike the universal Mac
+# archive, each arch has a file of its own, which is also the installer a person downloads. The website reads only
+# installer keys, device-<os>-<arch>-<package>, as it reads device-macos-dmg.
 UPDATES = (
-    ("windows-x86_64", "device-windows-x64", "Harness-Device-windows-x64-setup.exe"),
-    ("windows-aarch64", "device-windows-arm64", "Harness-Device-windows-arm64-setup.exe"),
-    ("linux-x86_64", "device-linux-x64", "Harness-Device-linux-x64.AppImage"),
-    ("linux-aarch64", "device-linux-arm64", "Harness-Device-linux-arm64.AppImage"),
+    ("windows-x86_64", "device-windows-x64", "device-windows-x64-exe", "Harness-Device-windows-x64-setup.exe"),
+    ("windows-aarch64", "device-windows-arm64", "device-windows-arm64-exe", "Harness-Device-windows-arm64-setup.exe"),
+    ("linux-x86_64", "device-linux-x64", "device-linux-x64-appimage", "Harness-Device-linux-x64.AppImage"),
+    ("linux-aarch64", "device-linux-arm64", "device-linux-arm64-appimage", "Harness-Device-linux-arm64.AppImage"),
 )
 # A release's files never change, so caches may keep them; the manifest must be read fresh every time.
 ASSET_CACHE = "public, max-age=31536000, immutable"
@@ -144,7 +145,7 @@ def check_sums(folder, path, part):
 def file_entries(version, folder, base_url, platforms="macos"):
     """What the manifest says of this build: its version, the update archive for both Macs, and an entry in Desktop's
     shape for the archive and the dmg, once per Mac; with all, each Windows and Linux file as its arch's update and in
-    Desktop's shape."""
+    Desktop's shape, under Desktop's key and the website's."""
     parse(version)
     folder = Path(folder)
     sums = file_sums(folder, release_files(platforms))
@@ -161,9 +162,10 @@ def file_entries(version, folder, base_url, platforms="macos"):
                "device-macos": entry(ARCHIVE), "device-macos-dmg": entry(DMG),
                "device-macos-arm64": entry(ARCHIVE), "device-macos-arm64-dmg": entry(DMG)}
     if platforms == "all":
-        for key, desktop_key, name in UPDATES:
+        for key, desktop_key, installer_key, name in UPDATES:
             entries["platforms"][key] = update(name)
             entries[desktop_key] = entry(name)
+            entries[installer_key] = entry(name)
     return entries
 
 
@@ -302,7 +304,7 @@ def verify(version, folder, manifest_url=ORIGIN_MANIFEST, base_url=CDN_BASE, tri
     sums = file_sums(folder, release_files(platforms))
     named = [(manifest["platforms"]["darwin-aarch64"]["url"], ARCHIVE), (manifest["device-macos-dmg"]["url"], DMG)]
     if platforms == "all":
-        named += [(manifest["platforms"][key]["url"], name) for key, _, name in UPDATES]
+        named += [(manifest["platforms"][key]["url"], name) for key, *_, name in UPDATES]
     for url, name in named:
         download_matches(url, sums[name], tries, pause)
 

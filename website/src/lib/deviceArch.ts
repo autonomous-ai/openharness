@@ -1,10 +1,10 @@
 /**
  * Which build of the Harness Device app a download request wants, read on the server. Chromium sends
- * the arch hints only after this site asked for them (`/device` answers with `Accept-CH`), so a click
- * from `/device`, or any visit after one, carries them; a link pasted into a fresh Chromium does not.
+ * the arch hints only after this site asked for them (`/device` answers with `Accept-CH`), so a request
+ * after a visit to `/device` carries them; a link pasted into a fresh Chromium does not.
  */
 
-export type DeviceArch = "x64" | "arm64";
+import type { DeviceArch } from "@/lib/deviceRelease";
 
 /** A Client Hint is a structured-field string: `"arm"`, quotes included. */
 function hint(headers: Headers, name: string): string | null {

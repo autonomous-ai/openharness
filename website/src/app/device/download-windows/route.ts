@@ -13,7 +13,7 @@ export const dynamic = "force-dynamic";
 export async function GET(request: Request): Promise<Response> {
   return resolveManifestDownload({
     manifestUrl: DEVICE_MANIFEST_URL,
-    field: `device-windows-${deviceArch(request.headers, "windows")}`,
+    field: `device-windows-${deviceArch(request.headers, "windows")}-exe`,
     allowedPrefixes: DEVICE_ASSET_PREFIXES,
     extension: ".exe",
     product: "Harness",

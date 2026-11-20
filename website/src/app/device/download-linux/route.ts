@@ -13,7 +13,7 @@ export const dynamic = "force-dynamic";
 export async function GET(request: Request): Promise<Response> {
   return resolveManifestDownload({
     manifestUrl: DEVICE_MANIFEST_URL,
-    field: `device-linux-${deviceArch(request.headers, "linux")}`,
+    field: `device-linux-${deviceArch(request.headers, "linux")}-appimage`,
     allowedPrefixes: DEVICE_ASSET_PREFIXES,
     extension: ".AppImage",
     product: "Harness",
