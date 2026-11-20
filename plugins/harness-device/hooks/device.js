@@ -1,5 +1,6 @@
 // The voice half of harness-device: it keeps one long poll open to the Harness daemon, and a prompt the person says
-// at the dial comes back as its answer and is submitted as theirs. A waiting prompt is the PermissionRequest hook's to tell.
+// at the dial comes back as its answer and is submitted as theirs. A waiting prompt is the PermissionRequest hook's to
+// tell, but on Windows the mod's (below).
 // When the Claude app shows this session, the mod posts its own session id, and nothing else, to the devices process's
 // own socket, so the dial can turn to it; never through the daemon's core.
 // On Windows a mod reaches no pipe and has no HMAC (docs/plans/2026-11-19-dial-windows-vm-notes.md, Task 2), so the mod
@@ -11,6 +12,7 @@ const DEVICES = 'http://harness/'
 const LINK = ['device', 'claude', 'link', '--json']
 const FOLLOW = ['device', 'claude', 'inbox']
 const TELL = ['device', 'claude', 'attach']
+const ASKED = ['device', 'claude', 'asked']
 const SENT = '{"sent":true}'
 // No launcher, no daemon, no dial watching: the daemon answers at once, so ask again only this often.
 const RETRY_MS = 60_000
@@ -26,6 +28,8 @@ const RELINK_MS = 30_000
 // `link` reads one file and checks one socket, and `attach` sends one message, so each answers as the CLI starts; under
 // RELINK_MS, so two never run at once.
 const RELINK_TIMEOUT_MS = 5_000
+// `asked` bounds its post at 1 s: the hook's own timeout.
+const ASKED_TIMEOUT_MS = 5_000
 // Windows: a follower that ran this long was holding polls, so the next starts after RESTART_MS and the count of quick
 // ends starts over. Quick ends in a row start again after 1, 2, 4, 8 and 16 s, and the sixth waits OLD_HARNESS_MS.
 const RAN_MS = 60_000
@@ -65,6 +69,18 @@ export const register = (on) => {
     state.held = false
     state.shown += 1
     return detached
+  })
+  // Claude Code waits on the PermissionRequest hooks before the person can answer, and on Windows without Git Bash it
+  // starts the plugin's hook in Windows PowerShell, 3-6 s (the VM notes, Task 2). So there the mod, which hears the
+  // prompt above that hook, tells of it, from a timer so the prompt waits on no `asked`. The variable, set for the hooks
+  // Claude Code starts after, says so: the hook's Windows halves then run nothing. Where this hook is passed over (an
+  // organization's Claude Code) or the variable is not set, the hook tells, as before the mod did.
+  on('classic.PermissionRequest', async ($, e, next) => {
+    if (state.windows) {
+      const set = await $.env.set('HARNESS_DEVICE_MOD_ASKS', '1').catch(() => ({ deny: 'refused' }))
+      if (!set.deny) $.clock.after(0, () => void ask($, e).catch(() => {}))
+    }
+    return next(e)
   })
 }
 
@@ -390,6 +406,17 @@ async function told($) {
   const { profile, launcher } = await harnessOf($)
   const out = await $.process.run([launcher, ...TELL, await $.session.id()], { timeoutMs: RELINK_TIMEOUT_MS, cwd: profile })
   return out.stdout.split('\n')[0] === SENT
+}
+
+/**
+ * Windows: tells the daemon a prompt waits through `harness device claude asked`, the hook's input on its stdin, as the
+ * hook gives it. What it prints and how it exits are dropped, as the hook drops them: they decide nothing.
+ * @param {Engine} $
+ * @param {unknown} input
+ */
+async function ask($, input) {
+  const { profile, launcher } = await harnessOf($)
+  await $.process.run([launcher, ...ASKED], { stdin: JSON.stringify(input), timeoutMs: ASKED_TIMEOUT_MS, cwd: profile })
 }
 
 /**
