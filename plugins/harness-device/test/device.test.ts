@@ -43,19 +43,21 @@ type World = {
   reads: string[]
   /** How long each read of a file takes, by the clock. */
   readMs: number
+  /** How many processes the mod started with $.process.spawn: Windows' way, never this world's. */
+  spawns: number
 }
 
 /**
  * Sets the world beneath the mod. `launchers` are the argv[0]s that start, and `exitCode` is what each exits with, as
  * the launcher's `link` exits 1 too while the plugin is off; `answers` are the daemon's answers, one per poll, the last
  * repeated. `configDir` is CLAUDE_CONFIG_DIR, and `settings: 'unreadable'` makes every read of a file fail. `devices` is
- * the devices' socket the launcher prints, '' for none.
+ * the devices' socket the launcher prints, '' for none. `platform` is the session's, macOS unless given.
  */
 function world(
   on: On,
-  { launchers = [LOCAL], exitCode = 0, answers, configDir, settings = 'readable', devices = DEVICES }: {
+  { launchers = [LOCAL], exitCode = 0, answers, configDir, settings = 'readable', devices = DEVICES, platform = 'macos' }: {
     launchers?: string[]; exitCode?: number; answers: Answer[]; configDir?: string; settings?: 'readable' | 'unreadable'
-    devices?: string
+    devices?: string; platform?: 'macos' | 'linux'
   },
 ): World {
   const steps: World['steps'] = []
@@ -68,8 +70,13 @@ function world(
   const clock = mock.clock(on, { now: 1_000_000 })
   const w: World = {
     clock, runs: [], inits: [], polls: [], attaches: [], devices, devicesRefuse: false, submitted: [], envAsked: [], steps,
-    enabled: true, reads: [], readMs: 0,
+    enabled: true, reads: [], readMs: 0, spawns: 0,
   }
+  on('session.info', () => ({ value: { transcriptPath: '', platform } }))
+  on('process.spawn', async function* () {
+    w.spawns += 1
+    return { deny: 'not on this platform' }
+  })
   const env: Record<string, string> = {
     HOME,
     ORCA_PAIRING_CODE: 'pairing-secret',
@@ -122,7 +129,7 @@ function world(
   return w
 }
 
-async function start($: Engine, w: World) {
+async function start($: Engine, w: { clock: Clock }) {
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
   await w.clock.settle()
 }
@@ -221,7 +228,7 @@ test('no launcher at all stays idle and asks again in 60 s', async ($, on) => {
   expect(w.polls).toHaveLength(0)
 })
 
-// An older Harness with no `device` word, or one with no socket here (Windows): no answer comes before an update.
+// An older Harness with no `device` word: no answer comes before an update.
 test('a launcher that starts but exits non-zero is asked again in 10 minutes, not before', async ($, on) => {
   const w = world(on, { exitCode: 1, answers: [held(25_000)] })
   await start($, w)
@@ -695,4 +702,337 @@ test('only HOME and CLAUDE_CONFIG_DIR are read with an attach sent', async ($, o
   await w.clock.settle()
   expect(w.attaches).toHaveLength(1)
   expect(new Set(w.envAsked)).toEqual(new Set(['HOME', 'CLAUDE_CONFIG_DIR']))
+})
+
+for (const platform of ['macos', 'linux'] as const) {
+  test(`on ${platform} the mod links and polls over the sockets, and starts no process of its own`, async ($, on) => {
+    const w = world(on, { answers: [held(25_000)], platform })
+    await start($, w)
+    await attach($)
+    await w.clock.advance(25_000)
+    expect(w.runs).toEqual([[LOCAL, ...LINK]])
+    expect(w.polls).toHaveLength(2)
+    expect(w.attaches).toEqual([ATTACH])
+    expect(w.spawns).toBe(0)
+  })
+}
+
+// Windows: Claude Code's mods reach no pipe and have no HMAC (docs/plans/2026-11-19-dial-windows-vm-notes.md, Task 2),
+// so the mod runs the harness command, which proves the tokens in its own process: `inbox` holds the session's poll and
+// prints a JSON line for each answer, and `attach` tells the devices the app shows the session. Each `process.spawn`
+// here is one `inbox` run, printing what the test gives it.
+const PROFILE = "C:\\Users\\Nguyễn Văn A' & 100%"
+const EXE = `${PROFILE}\\.harness\\bin\\harness.exe`
+const SETTINGS = `${PROFILE}\\.claude\\settings.json`
+const INBOX = ['device', 'claude', 'inbox', SESSION]
+const TELL = ['device', 'claude', 'attach', SESSION]
+/** A child that runs past the end of any test. */
+const HOLD = 24 * 60 * MINUTE
+const line = (said: object) => `${JSON.stringify(said)}\n`
+/** The path the mod gave a $.fs call: off Windows the kit resolves `C:\…` against the plugin's folder, as relative. */
+const asked = (path: string) => path.slice(path.indexOf('C:\\'))
+/** One `inbox` run: in order, a piece on stdout (a string), one on stderr, or a wait in ms; then it exits 0. */
+type Child = (string | number | { stderr: string })[] | 'cannot start'
+/** One `inbox` the mod started: its argv and folder, when, and whether the mod left its loop before it exited. */
+type Spawned = { argv: string[]; cwd: string | undefined; at: number; left: boolean }
+
+type WindowsWorld = {
+  clock: Clock
+  spawns: Spawned[]
+  /** Each `attach` the mod ran: its argv and init. */
+  runs: { argv: string[]; init: unknown }[]
+  /** What each `attach` run does: it prints `{"sent":true}` unless a test says otherwise. */
+  attach: (clock: Clock) => Promise<Run>
+  /** Whether the install's harness.exe is in the profile. */
+  installed: boolean
+  /** Each path the mod asked $.fs.exists about. */
+  looked: string[]
+  submitted: unknown[]
+  reads: string[]
+  envAsked: string[]
+  /** How many fetches the mod sent: none reach a pipe from here. */
+  fetches: number
+  enabled: boolean
+  /** In order, each timer of the mod's that fired and each `inbox` it started. */
+  steps: ('timer' | 'spawn')[]
+}
+
+/** The world beneath the mod on Windows: `children` are the `inbox` runs, one per spawn, the last repeated. */
+function windows(on: On, { children, configDir }: { children: Child[]; configDir?: string }): WindowsWorld {
+  const steps: WindowsWorld['steps'] = []
+  // Before the clock's own hook, so above it: it hears each of the mod's waits fire, just before the mod's function runs.
+  on('clock.after', { ms: [0, 1_000, 2_000, 4_000, 8_000, 16_000, MINUTE, 10 * MINUTE] }, async (_, e, next) => {
+    const fired = await next(e)
+    steps.push('timer')
+    return fired
+  })
+  const clock = mock.clock(on, { now: 1_000_000 })
+  const w: WindowsWorld = {
+    clock, spawns: [], runs: [], attach: async () => ({ exitCode: 0, stdout: '{"sent":true}\n' }), installed: true,
+    looked: [], submitted: [], reads: [], envAsked: [], fetches: 0, enabled: true, steps,
+  }
+  const env: Record<string, string> = {
+    USERPROFILE: PROFILE,
+    HOME: PROFILE,
+    ORCA_PAIRING_CODE: 'pairing-secret',
+    ...(configDir ? { CLAUDE_CONFIG_DIR: configDir } : {}),
+  }
+  on('session.info', () => ({ value: { transcriptPath: '', platform: 'windows' } }))
+  on('env.get', (_, e) => {
+    w.envAsked.push(e.name)
+    return { value: env[e.name] }
+  })
+  on('fs.exists', (_, e) => {
+    w.looked.push(asked(e.path))
+    return { value: w.installed && asked(e.path) === EXE }
+  })
+  on('fs.read', (_, e) => {
+    w.reads.push(asked(e.path))
+    return { value: JSON.stringify({ enabledPlugins: w.enabled ? { 'harness-device@openharness': true } : {} }) }
+  })
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  on('session.attach', (_, e) => ({ clientId: e.clientId }))
+  on('session.detach', (_, e) => ({ clientId: e.clientId }))
+  on('session.id', () => ({ value: SESSION }))
+  on('process.spawn', async function* (_, e) {
+    const spawned: Spawned = { argv: [...e.argv], cwd: e.cwd, at: clock.now(), left: false }
+    w.spawns.push(spawned)
+    steps.push('spawn')
+    const child = children[Math.min(w.spawns.length, children.length) - 1]!
+    if (child === 'cannot start') return { deny: `ENOENT: Command '${e.argv[0]}' not found` }
+    let exited = false
+    try {
+      for (const step of child) {
+        if (typeof step === 'number') await clock.sleep(step)
+        else if (typeof step === 'string') yield { stream: 'stdout' as const, text: step }
+        else yield { stream: 'stderr' as const, text: step.stderr }
+      }
+      exited = true
+      return { value: { code: 0, signal: null } }
+    } finally {
+      spawned.left = !exited
+    }
+  })
+  on('process.run', async (_, e) => {
+    w.runs.push({ argv: [...e.argv], init: e.init })
+    const run = await w.attach(clock)
+    if (run === 'cannot start') return { deny: 'cannot start' }
+    if (run === 'killed') return { deny: 'timed out' }
+    return { value: { ...run, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
+  on('http.fetch', () => {
+    w.fetches += 1
+    return { deny: 'a network location is not reached from here' }
+  })
+  on('prompt.submit', (_, e) => {
+    w.submitted.push(e)
+    return { text: e.text }
+  })
+  return w
+}
+
+/** The time between each `inbox` start and the next. */
+const gaps = (w: WindowsWorld) => w.spawns.slice(1).map((spawned, i) => spawned.at - w.spawns[i]!.at)
+const texts = (w: WindowsWorld) => w.submitted.map((submitted) => (submitted as { text: string }).text)
+
+test("on Windows the follower is the install's harness.exe, run in the profile, with the session id", async ($, on) => {
+  const w = windows(on, { children: [[HOLD]] })
+  await start($, w)
+  expect(w.spawns.map(({ argv, cwd }) => ({ argv, cwd }))).toEqual([{ argv: [EXE, ...INBOX], cwd: PROFILE }])
+  expect(w.looked).toEqual([EXE])
+})
+
+test('no harness.exe in the profile: harness on PATH', async ($, on) => {
+  const w = windows(on, { children: [[HOLD]] })
+  w.installed = false
+  await start($, w)
+  expect(w.spawns.map(({ argv, cwd }) => ({ argv, cwd }))).toEqual([{ argv: ['harness', ...INBOX], cwd: PROFILE }])
+})
+
+test('harness on no PATH: looked for again every 60 s, outside the restart bound', async ($, on) => {
+  const w = windows(on, { children: ['cannot start'] })
+  w.installed = false
+  await start($, w)
+  expect(w.spawns).toHaveLength(1)
+  await w.clock.advance(MINUTE - 1)
+  expect(w.spawns).toHaveLength(1)
+  await w.clock.advance(1)
+  expect(w.spawns).toHaveLength(2)
+  expect(w.looked).toEqual([EXE, EXE])
+  await w.clock.advance(6 * MINUTE)
+  expect(gaps(w)).toEqual(Array(7).fill(MINUTE))
+})
+
+test('a text cut across two pieces is submitted once, whole, as the user', async ($, on) => {
+  const said = 'hi & 100% "x"\nnext'
+  const whole = line({ text: said })
+  const w = windows(on, { children: [[whole.slice(0, 5), whole.slice(5), HOLD]] })
+  await start($, w)
+  expect(w.submitted).toHaveLength(1)
+  expect(w.submitted[0]).toMatchObject({ text: said, origin: { asUser: true } })
+})
+
+test('two lines in one piece are two submits, in order', async ($, on) => {
+  const w = windows(on, { children: [[line({ text: 'one' }) + line({ text: 'two' }), HOLD]] })
+  await start($, w)
+  expect(texts(w)).toEqual(['one', 'two'])
+})
+
+test('a hold that ended with nothing, a line of another shape and stderr submit nothing, and the follower runs on', async ($, on) => {
+  const w = windows(on, {
+    children: [['{}\n', 'not json\n', 'null\n', '[1]\n', line({ text: '' }), '{"text":', { stderr: 'x\n' }, '"hi"}\n', HOLD]],
+  })
+  await start($, w)
+  expect(texts(w)).toEqual(['hi'])
+  await w.clock.advance(10 * MINUTE)
+  expect(w.spawns).toHaveLength(1)
+})
+
+test('the plugin off in the settings: a text submits nothing', async ($, on) => {
+  const w = windows(on, { children: [[HOLD, line({ text: 'run the tests' }), HOLD]] })
+  await start($, w)
+  w.enabled = false
+  await w.clock.advance(HOLD)
+  expect(w.reads).toEqual([SETTINGS])
+  expect(w.submitted).toHaveLength(0)
+})
+
+test('with CLAUDE_CONFIG_DIR set, the settings are read there', async ($, on) => {
+  const w = windows(on, { children: [[line({ text: 'hi' }), HOLD]], configDir: 'C:\\Users\\dee\\profile-b' })
+  await start($, w)
+  expect(w.reads).toEqual(['C:\\Users\\dee\\profile-b\\settings.json'])
+})
+
+test('{"off":true}, then the end: the next follower 10 minutes later, not before', async ($, on) => {
+  const w = windows(on, { children: [['{"off":true}\n'], [HOLD]] })
+  await start($, w)
+  await w.clock.advance(10 * MINUTE - 1)
+  expect(w.spawns).toHaveLength(1)
+  await w.clock.advance(1)
+  expect(w.spawns).toHaveLength(2)
+})
+
+const quick: Record<string, Child> = { 'exits at once': [], 'cannot start': 'cannot start' }
+for (const [how, child] of Object.entries(quick)) {
+  test(`a harness.exe that ${how}: again after 1, 2, 4, 8 and 16 s, the sixth after 10 minutes, then 1 s`, async ($, on) => {
+    const w = windows(on, { children: [child] })
+    await start($, w)
+    await w.clock.advance(31_000 + 10 * MINUTE + 1_000)
+    expect(gaps(w)).toEqual([1_000, 2_000, 4_000, 8_000, 16_000, 10 * MINUTE, 1_000])
+  })
+}
+
+test('a follower that ran 60 s starts again after 1 s, and the count starts over; one that ran less is a quick end', async ($, on) => {
+  const w = windows(on, { children: [[], [MINUTE - 1], [MINUTE], []] })
+  await start($, w)
+  await w.clock.advance(1_000 + MINUTE - 1 + 2_000 + MINUTE + 1_000 + 1_000 + 2_000)
+  expect(gaps(w)).toEqual([1_000, MINUTE - 1 + 2_000, MINUTE + 1_000, 1_000, 2_000])
+})
+
+test('a line over 131,072 characters leaves the loop, and the follower starts again by the bound', async ($, on) => {
+  const w = windows(on, { children: [['x'.repeat(100_000), 'x'.repeat(31_073), HOLD], [HOLD]] })
+  await start($, w)
+  expect(w.spawns[0]!.left).toBe(true)
+  await w.clock.advance(999)
+  expect(w.spawns).toHaveLength(1)
+  await w.clock.advance(1)
+  expect(w.spawns).toHaveLength(2)
+})
+
+test('a line of 131,072 characters is read and the follower runs on', async ($, on) => {
+  const w = windows(on, { children: [['x'.repeat(131_072), '\n', line({ text: 'hi' }), HOLD]] })
+  await start($, w)
+  expect(w.spawns[0]!.left).toBe(false)
+  expect(texts(w)).toEqual(['hi'])
+})
+
+test('every follower starts from a timer of its own', async ($, on) => {
+  const w = windows(on, { children: [[], [HOLD]] })
+  await start($, w)
+  await w.clock.advance(1_000)
+  expect(w.steps.join(' ')).toBe('timer spawn timer spawn')
+})
+
+test('one follower per session: two attaches and a detach start none', async ($, on) => {
+  const w = windows(on, { children: [[HOLD]] })
+  await start($, w)
+  await attach($)
+  await attach($)
+  await detach($)
+  await w.clock.advance(10 * MINUTE)
+  expect(w.spawns).toHaveLength(1)
+})
+
+// The attach's cases hold no child: the kit waits a second of real time at each step while one runs.
+const EXITS: Child[] = [[]]
+
+test('an attach runs harness.exe attach in the profile once, and the app back on the session runs it again', async ($, on) => {
+  const w = windows(on, { children: EXITS })
+  await start($, w)
+  await attach($)
+  await attach($)
+  await w.clock.settle()
+  expect(w.runs).toEqual([{ argv: [EXE, ...TELL], init: { timeoutMs: 5_000, cwd: PROFILE } }])
+  await detach($)
+  await attach($)
+  await w.clock.settle()
+  expect(w.runs).toHaveLength(2)
+})
+
+test('an attach and a detach before its timer run nothing', async ($, on) => {
+  const w = windows(on, { children: EXITS })
+  await start($, w)
+  await attach($)
+  await detach($)
+  await w.clock.settle()
+  expect(w.runs).toHaveLength(0)
+})
+
+const notSent: Record<string, (clock: Clock) => Promise<Run>> = {
+  'prints {"sent":false}': async () => ({ exitCode: 0, stdout: '{"sent":false}\n' }),
+  'prints another line': async () => ({ exitCode: 0, stdout: '{}\n' }),
+  'exits non-zero': async () => ({ exitCode: 4, stdout: '' }),
+  'cannot start': async () => 'cannot start',
+  'is killed at its 5 s': slow(5_000, 'killed'),
+}
+for (const [how, run] of Object.entries(notSent)) {
+  test(`an attach that ${how} is held: an attach within 30 s runs nothing, one after runs again`, async ($, on) => {
+    const w = windows(on, { children: EXITS })
+    await start($, w)
+    w.attach = run
+    await attach($)
+    await w.clock.settle()
+    expect(w.runs).toHaveLength(1)
+    await w.clock.advance(29_999)
+    await attach($)
+    await w.clock.settle()
+    expect(w.runs).toHaveLength(1)
+    await w.clock.advance(1)
+    await attach($)
+    await w.clock.settle()
+    expect(w.runs).toHaveLength(2)
+  })
+}
+
+test('a detach while the attach runs: nothing runs after it', async ($, on) => {
+  const w = windows(on, { children: EXITS })
+  await start($, w)
+  w.attach = slow(1_000, { exitCode: 0, stdout: '{"sent":false}\n' })
+  await attach($)
+  await w.clock.settle()
+  await detach($)
+  await w.clock.advance(10 * MINUTE)
+  expect(w.runs).toHaveLength(1)
+})
+
+test('no fetch at all, only the settings file is read, and only USERPROFILE and CLAUDE_CONFIG_DIR', async ($, on) => {
+  const w = windows(on, { children: [[line({ text: 'hi' }), '{}\n', MINUTE], ['{"off":true}\n']] })
+  await start($, w)
+  await attach($)
+  await w.clock.advance(20 * MINUTE)
+  expect(w.spawns.length).toBeGreaterThan(2)
+  expect(w.runs).toHaveLength(1)
+  expect(w.fetches).toBe(0)
+  expect(new Set(w.reads)).toEqual(new Set([SETTINGS]))
+  expect(new Set(w.envAsked)).toEqual(new Set(['USERPROFILE', 'CLAUDE_CONFIG_DIR']))
 })
