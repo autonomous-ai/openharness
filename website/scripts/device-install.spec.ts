@@ -340,8 +340,9 @@ describe("device-install.sh", { timeout: 20_000 }, () => {
     expect(run.opt).toEqual([]);
   });
 
+  // A body longer than the size stops the download itself: the size check sees a shorter one.
   it.each([
-    ["size", { size: 1 }, "downloaded AppImage size does not match the release metadata"],
+    ["size", { size: APP_SUMS.size + 1 }, "downloaded AppImage size does not match the release metadata"],
     ["sha256", { sha256: "0".repeat(64) }, "downloaded AppImage checksum does not match the release metadata"],
   ])("refuses a %s that does not match, and leaves nothing at the place", (_, entry, reason) => {
     const run = install({ entry });

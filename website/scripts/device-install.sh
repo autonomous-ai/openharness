@@ -25,14 +25,16 @@ require_command() {
 
 # download <bytes> <url> <file>: https only, through any redirect too; a transfer under 1 KiB/s for a minute ends
 # instead of hanging the line. At most <bytes>, so a server that never stops sending cannot fill the disk: curl's
-# --max-filesize stops a transfer whose size the server names, and before curl 8.4 (Ubuntu 22.04's 7.81) no other; the
-# file size limit stops the rest. It counts 512-byte blocks, 1 KiB ones in bash: at most twice the bytes there.
+# --max-filesize stops a transfer whose size the server names, and before curl 8.4 (Ubuntu 22.04's 7.81) no other; head
+# stops the rest, one byte past <bytes> to show the body was larger. head writes the file, so the cap binds that write
+# alone, where a file size limit on curl binds all it writes and counts blocks of a size each shell picks. curl writes
+# /dev/stdout by name: a retry after some bytes then fails, unable to rewind the pipe, where `-o -` would send them
+# twice. Its status comes out past the pipe on fd 3.
 download() {
-  (
-    ulimit -f "$((($1 + 511) / 512))" \
-      && curl -fL --retry 3 --connect-timeout 15 --proto '=https' --proto-redir '=https' --speed-limit 1024 \
-        --speed-time 60 --max-filesize "$1" "$2" -o "$3"
-  )
+  DOWNLOAD_STATUS="$({ { curl -fL --retry 3 --connect-timeout 15 --proto '=https' --proto-redir '=https' \
+    --speed-limit 1024 --speed-time 60 --max-filesize "$1" "$2" -o /dev/stdout 3>&-; echo "$?" >&3; } \
+    | head -c "$(($1 + 1))" > "$3" 3>&-; } 3>&1)"
+  [ "$DOWNLOAD_STATUS" = 0 ] && [ "$(wc -c < "$3" | tr -d '[:space:]')" -le "$1" ]
 }
 
 PLATFORM="$(uname -s)"
