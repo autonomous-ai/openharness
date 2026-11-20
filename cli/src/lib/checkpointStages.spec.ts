@@ -5,6 +5,8 @@ import { link, mkdir, mkdtemp, open, readFile, rm, stat, symlink, writeFile } fr
 import { basename, dirname, join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { CheckpointStages, type CheckpointStage } from './checkpointStages.js'
+import type { ExportOwnership } from '../engines/worker/storageProtocol.js'
+type ExposedStage = CheckpointStage & ExportOwnership
 import { STORAGE_STAGE_BYTES } from '../engines/worker/storageProtocol.js'
 
 let directory: string, root: string
@@ -13,19 +15,18 @@ beforeEach(async () => { root = await mkdtemp(join(tmpdir(), 'checkpoint-stages-
 afterEach(async () => { for (const lease of leases.splice(0)) await lease.close(); vi.restoreAllMocks(); await rm(root, { recursive: true, force: true }) })
 const receipt = (text: string) => ({ bytes: Buffer.byteLength(text), sha256: createHash('sha256').update(text).digest('hex') })
 const target = () => join(root, `${'a'.repeat(64)}-${'b'.repeat(36)}.history`)
-async function acquire(stages = new CheckpointStages(directory), destination = target()) { const lease = await stages.acquire(destination); leases.push(lease); return lease }
+async function acquire(stages = new CheckpointStages(directory), destination = target(), writer = process.pid) { const lease = await stages.acquire(destination, writer); leases.push(lease); return { ...lease, ...lease.handoff() } }
 
 it('admits four exact stages, then refuses until a slot has actually been removed', async () => {
   const stages = new CheckpointStages(directory)
-  for (let i = 0; i < 4; i++) await acquire(stages)
-  await expect(stages.acquire(target())).rejects.toThrow('busy')
+  for (let i = 0; i < 4; i++) leases.push(await stages.acquire(target(), process.pid))
+  await expect(stages.acquire(target(), process.pid)).rejects.toThrow('busy')
   await leases[0].close()
   const next = await acquire(stages)
-  expect(next.stage.path).toBe(leases[0].stage.path)
+  expect(next.stage.path).toBe(join(directory, '0', 'history.tmp'))
   const previous = leases[0], destination = join(dirname(directory), `${'a'.repeat(64)}-${'b'.repeat(36)}.history`)
   const owner = await readFile(join(dirname(next.stage.path), 'owner.json'), 'utf8')
-  await expect(previous.writer(process.pid)).rejects.toThrow()
-  await expect(previous.settled()).rejects.toThrow()
+  expect(() => previous.handoff()).toThrow()
   await expect(previous.verify(receipt('history'))).rejects.toThrow()
   await expect(previous.publish(() => {})).rejects.toThrow()
   await previous.close()
@@ -49,7 +50,6 @@ it('checks bytes, hash, inode and private-link identity before accepting output'
 
 it('a restarted core retains every unresolved slot while an earlier writer can still hold it', async () => {
   const previous = await acquire()
-  await previous.writer(process.pid)
   const worker = await open(previous.stage.path, constants.O_WRONLY)
   try {
     const nextCore = new CheckpointStages(directory)
@@ -82,8 +82,7 @@ it('startup considers only four fixed names and reserves missing or invalid owne
 
 it('reclaims only after both the old core and its unsettled writer are positively absent', async () => {
   vi.spyOn(console, 'error').mockImplementation(() => {})
-  const lease = await acquire(), record = join(dirname(lease.stage.path), 'owner.json')
-  await lease.writer(424242)
+  const lease = await acquire(undefined, undefined, 424242), record = join(dirname(lease.stage.path), 'owner.json')
   const owner = JSON.parse(await readFile(record, 'utf8'))
   await writeFile(record, JSON.stringify({ ...owner, core: 313131 }))
   const gone = new Set<number>([313131])
@@ -105,8 +104,8 @@ it('reclaims only after both the old core and its unsettled writer are positivel
 
 it('reclaims a completed worker only after its core is gone, and never repeats an uncertain cleanup', async () => {
   vi.spyOn(console, 'error').mockImplementation(() => {})
-  const completed = await acquire()
-  await completed.writer(424242); await completed.settled()
+  const completed = await acquire(undefined, undefined, 424242)
+  await completed.settled()
   const next = new CheckpointStages(directory)
   await next.prepare()
   expect((await acquire(next)).stage.path).not.toBe(completed.stage.path)
@@ -135,8 +134,7 @@ it.each(['uncommitted', 'committed', 'malformed', 'replaced'] as const)('recover
   const stages = new CheckpointStages(join(directory, '.stages'))
   const name = `${'a'.repeat(64)}-${'b'.repeat(8)}-${'b'.repeat(4)}-${'b'.repeat(4)}-${'b'.repeat(4)}-${'b'.repeat(12)}.history`
   const destination = join(directory, name), manifest = join(directory, `${'a'.repeat(64)}.json`)
-  const lease = await acquire(stages, destination)
-  await lease.writer(424242)
+  const lease = await acquire(stages, destination, 424242)
   await writeFile(lease.stage.path, 'history'); await lease.settled(); await lease.verify(receipt('history'))
   await lease.publish(() => {})
   const pinned = await stat(lease.stage.path, { bigint: true }), published = await stat(destination, { bigint: true })
@@ -160,8 +158,7 @@ it.each(['uncommitted', 'committed', 'malformed', 'replaced'] as const)('recover
 
 it('recovers a settled destination before verification or publication without requiring the writer to exit', async () => {
   vi.spyOn(console, 'error').mockImplementation(() => {})
-  const lease = await acquire(), record = join(dirname(lease.stage.path), 'owner.json')
-  await lease.writer(424242)
+  const lease = await acquire(undefined, undefined, 424242), record = join(dirname(lease.stage.path), 'owner.json')
   await writeFile(lease.stage.path, 'history'); await lease.settled()
   expect(JSON.parse(await readFile(record, 'utf8'))).toMatchObject({ settled: true, destination: basename(target()) })
   vi.spyOn(process, 'kill').mockImplementation(pid => {
@@ -171,4 +168,17 @@ it('recovers a settled destination before verification or publication without re
   await new CheckpointStages(directory).prepare()
   await expect(stat(lease.stage.path)).rejects.toMatchObject({ code: 'ENOENT' })
   await expect(stat(target())).rejects.toMatchObject({ code: 'ENOENT' })
+})
+
+it.each([1, 2])('recovers an old version-%s owner whose writer is still null', async version => {
+  vi.spyOn(console, 'error').mockImplementation(() => {})
+  const lease = await acquire(), record = join(dirname(lease.stage.path), 'owner.json')
+  const previous = JSON.parse(await readFile(record, 'utf8'))
+  const owner = { ...previous, version, core: 424242, writer: null }
+  if (version === 1) delete owner.lease
+  await writeFile(record, JSON.stringify(owner))
+  const kill = vi.spyOn(process, 'kill').mockImplementation(() => { throw Object.assign(new Error(), { code: 'ESRCH' }) })
+  await new CheckpointStages(directory).prepare()
+  await expect(stat(record)).rejects.toMatchObject({ code: 'ENOENT' })
+  expect(kill.mock.calls.map(([pid]) => pid)).toEqual([424242, 424242])
 })

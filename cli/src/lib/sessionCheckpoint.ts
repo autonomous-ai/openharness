@@ -12,7 +12,7 @@ import { atomicWriteJson, readPrivateStateFile, secureStateDirectory } from './s
 import { findResumedTranscript } from './sessionRepair.js'
 import { CheckpointStages, type CheckpointStage } from './checkpointStages.js'
 import { databaseCheckpointEvidence, type DatabaseCheckpointProof } from './databaseCheckpoint.js'
-import type { ExportStage, ExportReceipt, ExportOwnership, ExportSource } from '../engines/worker/storageProtocol.js'
+import { STORAGE_EXPORT_WAIT_MS, type ExportReceipt, type ExportReservation, type ExportSource } from '../engines/worker/storageProtocol.js'
 
 export class SessionCheckpointError extends Error {
   readonly code = 'HISTORY_NOT_SAVED'
@@ -37,7 +37,7 @@ type Checkpoint = {
 }
 
 export interface CheckpointDeps {
-  exportDatabase?(session: RegisteredSession, stage: ExportStage, ownership: ExportOwnership, source: ExportSource): Promise<ExportReceipt>
+  exportDatabase?(session: RegisteredSession, source: ExportSource, reservation: ExportReservation): Promise<ExportReceipt>
 }
 export class SessionCheckpointStore {
   private readonly stages: CheckpointStages
@@ -75,10 +75,12 @@ export class SessionCheckpointStore {
     const file = `${key}-${randomUUID()}.history`
     let temporary = join(this.directory, `${file}.tmp`)
     let stage: CheckpointStage | undefined
-    let databaseStageRequested = false
+    let databaseStageRequested = false, allocationActive = true
+    let databaseDeadline: number | undefined
+    const stageExpired = () => Object.assign(new Error('checkpoint disk wait expired'), { code: 'CHECKPOINT_STAGE_TIMEOUT' })
     let databaseProof = options.databaseProof
     const current = () => {
-      if (stage && performance.now() >= stage.deadline) throw Object.assign(new Error('checkpoint disk wait expired'), { code: 'CHECKPOINT_STAGE_TIMEOUT' })
+      if (databaseDeadline !== undefined && performance.now() >= databaseDeadline) throw stageExpired()
       if (options.current?.() === false) throw new SessionCheckpointError('The session changed while saving. Its previous checkpoint is kept.')
       databaseProof?.verify()
     }
@@ -171,13 +173,48 @@ export class SessionCheckpointStore {
         }
         if (!this.deps.exportDatabase) throw new SessionCheckpointError('Could not read the saved conversation. The session has not been closed.')
         databaseStageRequested = true
-        stage = await this.stages.acquire(destination)
-        current()
-        temporary = stage.stage.path
-        const receipt = await this.deps.exportDatabase(s, stage.stage, stage, databaseProof.source).catch(() => {
+        const deadline = databaseDeadline = performance.now() + STORAGE_EXPORT_WAIT_MS
+        let allocationStarted = false, allocationFinished = false
+        let allocationFailure: { error: unknown } | undefined
+        const reservation: ExportReservation = {
+          deadline,
+          acquire: async pid => {
+            // Only the first active call may record a failure. A duplicate must
+            // not replace a later worker failure with its own refusal.
+            if (!allocationActive) throw stageExpired()
+            if (allocationStarted) throw new Error('checkpoint reservation already claimed')
+            allocationStarted = true
+            try {
+              current()
+              const acquired = await this.stages.acquire(destination, pid, deadline)
+              if (!allocationActive) {
+                await acquired.close()
+                throw stageExpired()
+              }
+              // Ownership changes synchronously. If current() refuses, finally
+              // owns this unexposed lease; no worker has received its path.
+              stage = acquired
+              current()
+              const lease = acquired.handoff()
+              temporary = lease.stage.path
+              return lease
+            } catch (error) {
+              if (allocationActive) allocationFailure = { error }
+              throw error
+            } finally {
+              if (allocationActive) allocationFinished = true
+            }
+          },
+        }
+        const receipt = await this.deps.exportDatabase(s, databaseProof.source, reservation).catch(() => {
+          if (allocationFailure) throw allocationFailure.error
+          // The outer timer can win just before a fractional clock deadline.
+          // A pending first allocation still needs the stage timeout refusal.
+          if (allocationStarted && !allocationFinished) throw stageExpired()
           throw new SessionCheckpointError('Could not read the saved conversation. The session has not been closed.')
         })
         current()
+        if (!stage) throw new SessionCheckpointError('Could not read the saved conversation. The session has not been closed.')
         await stage.verify(receipt)
         if (receipt.empty) {
           if (s.engine !== 'openclaw' || previous) throw new SessionCheckpointError('Could not read the saved conversation. The session has not been closed.')
@@ -222,6 +259,7 @@ export class SessionCheckpointStore {
       }
       throw new SessionCheckpointError('Could not back up this conversation to disk. Check free space and try again; its existing history is kept.')
     } finally {
+      allocationActive = false
       if (stage) await stage.close()
       else if (!databaseStageRequested) await rm(temporary, { force: true }).catch(() => {})
       if (!databaseStageRequested && !committed) await rm(destination, { force: true }).catch(() => {})

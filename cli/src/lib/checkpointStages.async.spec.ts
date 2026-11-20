@@ -4,6 +4,8 @@ import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { CheckpointStages, type CheckpointStage } from './checkpointStages.js'
+import type { ExportOwnership } from '../engines/worker/storageProtocol.js'
+type ExposedStage = CheckpointStage & ExportOwnership
 
 const disk = vi.hoisted(() => ({
   paths: new Map<number, string>(), openings: new Map<number, number>(), nextOpen: 0, held: new Map<number, { release(error?: NodeJS.ErrnoException): Promise<void> }>(),
@@ -79,12 +81,12 @@ afterEach(async () => {
   await rm(root, { recursive: true, force: true })
 })
 const manager = () => new CheckpointStages(join(root, '.stages'))
-const record = (lease: CheckpointStage) => join(dirname(lease.stage.path), 'owner.json')
+const record = (lease: ExposedStage) => join(dirname(lease.stage.path), 'owner.json')
 const destination = () => join(root, `${'a'.repeat(64)}-${'b'.repeat(36)}.history`)
 const turn = () => new Promise<void>(resolve => setImmediate(resolve))
-async function acquire() { const lease = await manager().acquire(destination()); leases.push(lease); return lease }
-async function ready(lease: CheckpointStage) {
-  await lease.writer(process.pid); await lease.settled()
+async function acquire() { const lease = await manager().acquire(destination(), process.pid); leases.push(lease); return { ...lease, ...lease.handoff() } }
+async function ready(lease: ExposedStage) {
+  await lease.settled()
   await writeFile(lease.stage.path, 'history')
   await lease.verify({ bytes: 7, sha256: createHash('sha256').update('history').digest('hex') })
 }
@@ -102,10 +104,11 @@ it.each(['owner file', 'owner directory'] as const)('keeps the main loop availab
   const slot = join(root, '.stages', '0'), target = kind === 'owner file' ? join(slot, 'owner.json') : slot
   const waiting = hold(target)
   let answered = false
-  const acquiring = manager().acquire(destination()).then(lease => { answered = true; leases.push(lease); return lease })
+  const acquiring = manager().acquire(destination(), process.pid).then(lease => { answered = true; leases.push(lease); return { ...lease, ...lease.handoff() } })
   const fd = await entered(waiting, acquiring), opened = disk.openings.get(fd)!
   try {
     await turn(); expect(answered).toBe(false)
+    expect(JSON.parse(await readFile(join(slot, 'owner.json'), 'utf8'))).toMatchObject({ writer: process.pid, settled: false })
     expect(fs.fstatSync(fd)).toBeTruthy()
     expect(disk.closed.some(value => value.opened === opened)).toBe(false)
   } finally { await release(fd) }
@@ -115,19 +118,18 @@ it.each(['owner file', 'owner directory'] as const)('keeps the main loop availab
   expect(disk.closed.filter(value => value.opened === opened)).toHaveLength(1)
 })
 
-it.each(['writer', 'settled'] as const)('keeps %s durability pending without blocking the main loop', async phase => {
+it('keeps settlement durability pending without blocking the main loop', async () => {
   const lease = await acquire()
-  if (phase === 'settled') await lease.writer(process.pid)
   disk.closed.length = 0
   const waiting = hold(record(lease))
   let answered = false
-  const work = (phase === 'writer' ? lease.writer(process.pid) : lease.settled()).then(() => { answered = true })
+  const work = lease.settled().then(() => { answered = true })
   const fd = await entered(waiting, work), opened = disk.openings.get(fd)!
   try {
     await turn(); expect(answered).toBe(false)
     expect(fs.fstatSync(fd).isFile()).toBe(true)
     expect(disk.closed.some(value => value.opened === opened)).toBe(false)
-    await expect(lease.writer(process.pid)).rejects.toThrow()
+    expect(() => lease.handoff()).toThrow()
     await expect(lease.settled()).rejects.toThrow(/busy/)
     await expect(lease.verify({ bytes: 7, sha256: 'a'.repeat(64) })).rejects.toThrow(/busy/)
     await expect(stat(destination())).rejects.toMatchObject({ code: 'ENOENT' })
@@ -138,11 +140,10 @@ it.each(['writer', 'settled'] as const)('keeps %s durability pending without blo
   expect(disk.closed.filter(value => value.opened === opened)).toHaveLength(1)
 })
 
-it.each(['writer', 'settled'] as const)('close drains the actual %s callback before cleanup and refuses its late continuation', async phase => {
+it('close drains the actual settlement callback before cleanup and refuses its late continuation', async () => {
   const lease = await acquire()
-  if (phase === 'settled') await lease.writer(process.pid)
   const waiting = hold(record(lease))
-  const work = (phase === 'writer' ? lease.writer(process.pid) : lease.settled())
+  const work = lease.settled()
   const refused = work.catch(error => error), fd = await entered(waiting, work)
   let closed = false
   const closing = lease.close().then(() => { closed = true })
@@ -155,13 +156,12 @@ it.each(['writer', 'settled'] as const)('close drains the actual %s callback bef
   expect(await refused).toMatchObject({ code: 'CHECKPOINT_STAGE_TIMEOUT' })
   await closing
   await expect(stat(destination())).rejects.toMatchObject({ code: 'ENOENT' })
-  if (phase === 'writer') expect(await stat(record(lease))).toBeTruthy()
-  else await expect(stat(record(lease))).rejects.toMatchObject({ code: 'ENOENT' })
+  await expect(stat(record(lease))).rejects.toMatchObject({ code: 'ENOENT' })
 })
 
 it('closes a late acquired owner exactly once after its initial flush outlives the reply deadline', async () => {
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] })
-  const path = join(root, '.stages', '0', 'owner.json'), waiting = hold(path), work = manager().acquire(destination())
+  const path = join(root, '.stages', '0', 'owner.json'), waiting = hold(path), work = manager().acquire(destination(), process.pid)
   const refused = work.catch(error => error), fd = await entered(waiting, work), opened = disk.openings.get(fd)!
   await vi.advanceTimersByTimeAsync(30_000)
   expect(await refused).toMatchObject({ code: 'CHECKPOINT_STAGE_TIMEOUT' })
@@ -171,30 +171,32 @@ it('closes a late acquired owner exactly once after its initial flush outlives t
   await Promise.all(disk.history); await turn()
   expect(disk.closed.filter(value => value.opened === opened)).toHaveLength(1)
   expect(() => fs.fstatSync(fd)).toThrow()
+  expect(fs.readdirSync(join(root, '.stages'))).toEqual([])
 })
 
-it('keeps all four physical slots and exact journal descriptors owned beyond their reply deadlines', async () => {
+it('keeps all four unexposed slots and exact journal descriptors owned beyond their reply deadlines', async () => {
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] })
-  const active = await Promise.all(Array.from({ length: 4 }, acquire))
   const fds: number[] = [], results: Promise<unknown>[] = []
-  for (const lease of active) {
-    const waiting = hold(record(lease)), work = lease.writer(process.pid)
+  for (let index = 0; index < 4; index++) {
+    const path = join(root, '.stages', String(index), 'owner.json'), waiting = hold(path)
+    const work = manager().acquire(destination(), process.pid)
     results.push(work.catch(error => error)); fds.push(await entered(waiting, work))
   }
   await vi.advanceTimersByTimeAsync(30_000)
   expect(await Promise.all(results)).toEqual(Array.from({ length: 4 }, () => expect.objectContaining({ code: 'CHECKPOINT_STAGE_TIMEOUT' })))
-  await Promise.all(active.map(lease => lease.close()))
   for (const fd of fds) expect(fs.fstatSync(fd).isFile()).toBe(true)
-  await expect(manager().acquire(destination())).rejects.toThrow('busy')
+  await expect(manager().acquire(destination(), process.pid)).rejects.toThrow('busy')
   for (const fd of fds) await release(fd)
   await Promise.all(disk.history); await turn()
   for (const fd of fds) expect(() => fs.fstatSync(fd)).toThrow()
-  await expect(manager().acquire(destination())).rejects.toThrow('busy')
+  const next = await manager().acquire(destination(), process.pid); leases.push(next)
+  await next.close()
+  expect(fs.readdirSync(join(root, '.stages'))).toEqual([])
 })
 
 it.each(['inode', 'bytes', 'mode', 'link', 'slot'] as const)('refuses changed owner %s while an actual journal callback is held', async change => {
   if (change === 'mode' && process.platform === 'win32') return
-  const lease = await acquire(), path = record(lease), waiting = hold(path), work = lease.writer(process.pid)
+  const lease = await acquire(), path = record(lease), waiting = hold(path), work = lease.settled()
   const result = work.catch(error => error), fd = await entered(waiting, work)
   if (change === 'inode') { fs.renameSync(path, `${path}.before`); fs.writeFileSync(path, 'unrelated', { mode: 0o600 }) }
   else if (change === 'bytes') fs.writeFileSync(path, 'unrelated', { mode: 0o600 })
@@ -319,7 +321,7 @@ it('refuses publication while a second actual verification still holds an earlie
 
 // An uncertain close deliberately poisons this module instance; keep that terminal failure last.
 it('never retries an uncertain owner descriptor close or reuses its reserved slot', async () => {
-  const lease = await acquire(), path = record(lease), waiting = hold(path), work = lease.writer(process.pid)
+  const lease = await acquire(), path = record(lease), waiting = hold(path), work = lease.settled()
   const result = work.catch(error => error), fd = await entered(waiting, work), opened = disk.openings.get(fd)!
   disk.closeFailure = path
   await release(fd)
@@ -329,5 +331,5 @@ it('never retries an uncertain owner descriptor close or reuses its reserved slo
   expect(disk.closed.filter(value => value.opened === opened)).toHaveLength(1)
   expect(await stat(path)).toBeTruthy()
   expect(await stat(lease.stage.path)).toBeTruthy()
-  await expect(manager().acquire(destination())).rejects.toMatchObject({ code: 'STATE_FILE_CLEANUP_UNCONFIRMED' })
+  await expect(manager().acquire(destination(), process.pid)).rejects.toMatchObject({ code: 'STATE_FILE_CLEANUP_UNCONFIRMED' })
 })

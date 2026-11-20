@@ -4,7 +4,7 @@ import { readdirSync, renameSync, writeFileSync } from 'node:fs'
 import { link, mkdtemp, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { SessionCheckpointStore } from './sessionCheckpoint.js'
+import { SessionCheckpointStore, type CheckpointDeps } from './sessionCheckpoint.js'
 import { exportDatabase } from '../engines/others/checkpoint.js'
 import type { StorageEngine } from '../engines/worker/storageProtocol.js'
 import { STORAGE_EXPORT_WAIT_MS } from '../engines/worker/storageProtocol.js'
@@ -69,15 +69,23 @@ beforeEach(async () => {
   row = (await registry.openPendingAgent({ engine: 'codex', cwd: '/tmp', codexHome: home, runtimes: [{ backend: 'tmux', paneId: '%777' }] }))!
   Object.assign(row, { sessionId: 'conversation', transcriptPath: history })
   directory = join(root, 'checkpoints')
-  store = new SessionCheckpointStore(directory, { exportDatabase: async (s, stage, ownership, source) => { const receipt = await exportDatabase(s.engine as StorageEngine, s, stage, source); await ownership.settled(); return receipt } })
+  store = new SessionCheckpointStore(directory, { exportDatabase: async (s, source, reservation) => {
+    const ownership = await reservation.acquire(process.pid)
+    const receipt = await exportDatabase(s.engine as StorageEngine, s, ownership.stage, source)
+    await ownership.settled()
+    return receipt
+  } })
 })
 afterEach(async () => { Object.assign(env, originalStoreHomes); vi.restoreAllMocks(); for (const s of registry.list()) (await removeRegistryAgent(registry, s.agentId)); await rm(root, { recursive: true, force: true }) })
 const manifest = async () => JSON.parse(await readFile(join(directory, (await readdir(directory)).find(f => /^[a-f0-9]{64}\.json$/.test(f))!), 'utf8'))
 
 it('refuses a worker empty-history receipt for any engine other than OpenClaw', async () => {
   row = { ...row, engine: 'hermes', transcriptPath: null, hermesHome: root }
-  const empty = new SessionCheckpointStore(directory, { exportDatabase: async () => ({ empty: true, bytes: 0,
-    sha256: 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855' }) })
+  const empty = new SessionCheckpointStore(directory, { exportDatabase: async (_session, _source, reservation) => {
+    const ownership = await reservation.acquire(process.pid)
+    await ownership.settled()
+    return { empty: true, bytes: 0, sha256: 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855' }
+  } })
   await expect(empty.save(row)).rejects.toMatchObject({ code: 'HISTORY_NOT_SAVED' })
   expect(await readdir(directory)).toEqual(['.stages'])
   expect(await readdir(join(directory, '.stages'))).toEqual([])
@@ -392,7 +400,8 @@ it('does not publish a checkpoint after the close operation is cancelled while c
 it('delegates database export into a core-created stage and publishes only its verified bytes', async () => {
   Object.assign(row, { engine: 'hermes', transcriptPath: null })
   const contents = JSON.stringify({ version: 1, sessionId: row.sessionId, engine: 'hermes', database: '/profile/state.db', tables: { sessions: [{ id: row.sessionId }], messages: [] } })
-  const exportDatabase = vi.fn(async (_session, stage, ownership) => {
+  const exportDatabase = vi.fn<NonNullable<CheckpointDeps['exportDatabase']>>(async (_session, _source, reservation) => {
+    const ownership = await reservation.acquire(process.pid), { stage } = ownership
     expect((await stat(stage.path)).size).toBe(0)
     await writeFile(stage.path, contents)
     await ownership.settled()
@@ -411,7 +420,8 @@ it('refuses a stage substituted after verification instead of publishing unverif
   Object.assign(row, { engine: 'hermes', transcriptPath: null })
   const contents = '{"version":1,"tables":{}}'
   let checks = 0
-  const delegated = new SessionCheckpointStore(directory, { exportDatabase: async (_session, stage, ownership) => {
+  const delegated = new SessionCheckpointStore(directory, { exportDatabase: async (_session, _source, reservation) => {
+    const ownership = await reservation.acquire(process.pid), { stage } = ownership
     await writeFile(stage.path, contents)
     await ownership.settled()
     faults.checked = async path => {
@@ -430,7 +440,8 @@ it('keeps a substituted publication target when cancellation enters staged clean
   Object.assign(row, { engine: 'hermes', transcriptPath: null })
   const contents = '{"version":1,"tables":{}}'
   const { createHash } = await import('node:crypto')
-  const delegated = new SessionCheckpointStore(directory, { exportDatabase: async (_session, stage, ownership) => {
+  const delegated = new SessionCheckpointStore(directory, { exportDatabase: async (_session, _source, reservation) => {
+    const ownership = await reservation.acquire(process.pid), { stage } = ownership
     await writeFile(stage.path, contents)
     await ownership.settled()
     return { bytes: Buffer.byteLength(contents), sha256: createHash('sha256').update(contents).digest('hex') }
@@ -454,8 +465,8 @@ it('keeps a substituted publication target when cancellation enters staged clean
 it('bounds held verification reads without releasing any of the four live slots or publishing late', async () => {
   Object.assign(row, { engine: 'hermes', transcriptPath: null })
   const contents = 'x'.repeat(300_000), { createHash } = await import('node:crypto')
-  const exportDatabase = vi.fn(async (_session, stage, ownership) => {
-    await ownership.writer(process.pid)
+  const exportDatabase = vi.fn<NonNullable<CheckpointDeps['exportDatabase']>>(async (_session, _source, reservation) => {
+    const ownership = await reservation.acquire(process.pid), { stage } = ownership
     await writeFile(stage.path, contents)
     await ownership.settled()
     return { bytes: Buffer.byteLength(contents), sha256: createHash('sha256').update(contents).digest('hex') }
@@ -478,7 +489,7 @@ it('bounds held verification reads without releasing any of the four live slots 
     expect(answers).toHaveLength(4)
     expect(answers.every(error => (error as { code: string }).code === 'HISTORY_NOT_SAVED')).toBe(true)
     await expect(delegated.save(row)).rejects.toThrow('held by unfinished operations')
-    expect(exportDatabase).toHaveBeenCalledTimes(5)
+    expect(exportDatabase).toHaveBeenCalledTimes(6)
     expect(await manifest()).toEqual(previous)
   } finally {
     release(); await Promise.all(saves); await allClosed
@@ -492,8 +503,8 @@ it('checks native generation after the final descriptor close and before staged 
   Object.assign(row, { engine: 'hermes', transcriptPath: null })
   const { createHash } = await import('node:crypto')
   const contents = 'retained rows'
-  const delegated = new SessionCheckpointStore(directory, { exportDatabase: async (_session, stage, ownership) => {
-    await ownership.writer(process.pid)
+  const delegated = new SessionCheckpointStore(directory, { exportDatabase: async (_session, _source, reservation) => {
+    const ownership = await reservation.acquire(process.pid), { stage } = ownership
     await writeFile(stage.path, contents)
     await ownership.settled()
     return { bytes: contents.length, sha256: createHash('sha256').update(contents).digest('hex') }
@@ -515,8 +526,8 @@ it('checks native generation after the final descriptor close and before staged 
 it.each(['acquisition', 'descriptor close'] as const)('bounds a held %s and closes the exact late descriptor without publishing', async phase => {
   Object.assign(row, { engine: 'hermes', transcriptPath: null })
   const contents = 'history', { createHash } = await import('node:crypto')
-  const exportDatabase = vi.fn(async (_session, stage, ownership) => {
-    await ownership.writer(process.pid)
+  const exportDatabase = vi.fn<NonNullable<CheckpointDeps['exportDatabase']>>(async (_session, _source, reservation) => {
+    const ownership = await reservation.acquire(process.pid), { stage } = ownership
     await writeFile(stage.path, contents)
     await ownership.settled()
     return { bytes: contents.length, sha256: createHash('sha256').update(contents).digest('hex') }
@@ -543,11 +554,13 @@ it.each(['acquisition', 'descriptor close'] as const)('bounds a held %s and clos
     expect(await manifest()).toEqual(previous)
     // Database ownership includes acquisition: native-path cleanup cannot add an unbounded disk wait after expiry.
     expect(rm).not.toHaveBeenCalled()
-    expect(exportDatabase).toHaveBeenCalledTimes(phase === 'acquisition' ? 1 : 2)
+    expect(exportDatabase).toHaveBeenCalledTimes(2)
   } finally {
     release(); await saving; await completedClose
     vi.useRealTimers()
   }
+  await new Promise<void>(resolve => setImmediate(resolve))
+  expect(await readdir(join(directory, '.stages'))).toEqual([])
   expect(await manifest()).toEqual(previous)
 })
 
@@ -556,8 +569,8 @@ it('journals the planned checkpoint destination with confirmed export settlement
   const contents = 'retained database history', { createHash } = await import('node:crypto')
   row = { ...row, engine: 'hermes', transcriptPath: null, hermesHome: root }
   let settledOwner: { settled?: boolean; destination?: string } | undefined
-  const delegated = new SessionCheckpointStore(directory, { exportDatabase: async (_session, stage, ownership) => {
-    await ownership.writer(process.pid)
+  const delegated = new SessionCheckpointStore(directory, { exportDatabase: async (_session, _source, reservation) => {
+    const ownership = await reservation.acquire(process.pid), { stage } = ownership
     await writeFile(stage.path, contents)
     await ownership.settled()
     settledOwner = JSON.parse(await readFile(join(stage.path, '..', 'owner.json'), 'utf8'))

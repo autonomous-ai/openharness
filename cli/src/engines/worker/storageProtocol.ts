@@ -19,7 +19,8 @@ export interface ExportStage { path: string; key: string }
 export interface ExportSource { path: string; key: string; database: string }
 export interface ExportReceipt { bytes: number; sha256: string; empty?: true }
 /** Core-only callbacks; these never cross IPC or grant worker publication authority. */
-export interface ExportOwnership { readonly deadline: number; writer(pid: number): Promise<void>; settled(): Promise<void> }
+export interface ExportOwnership { readonly deadline: number; readonly stage: ExportStage; settled(): Promise<void> }
+export interface ExportReservation { readonly deadline: number; acquire(pid: number): Promise<ExportOwnership> }
 export interface StorageLifetime { pid: number; nonce: string }
 export function storageLifetime(value: unknown): value is StorageLifetime {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false

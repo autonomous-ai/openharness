@@ -38,10 +38,10 @@ beforeEach(async () => {
   vi.mocked(readDescriptorEvidence).mockReset().mockResolvedValue({ descriptors:
     [{ fd: '3', path: held, kind: 'REG', device: info.dev, inode: info.ino }], verify: async () => {} })
   dispatched = vi.fn()
-  store = new SessionCheckpointStore(directory, { exportDatabase: async (_s, stage, ownership, source) => {
+  store = new SessionCheckpointStore(directory, { exportDatabase: async (_s, source, reservation) => {
+    const ownership = await reservation.acquire(process.pid), { stage } = ownership
     dispatched(source)
     const content = readFileSync(source.path)
-    await ownership.writer(process.pid)
     writeFileSync(stage.path, content)
     duringExport()
     await ownership.settled()

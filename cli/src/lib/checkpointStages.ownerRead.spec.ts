@@ -4,6 +4,8 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { CheckpointStages, type CheckpointStage } from './checkpointStages.js'
+import type { ExportOwnership } from '../engines/worker/storageProtocol.js'
+type ExposedStage = CheckpointStage & ExportOwnership
 
 const reads = vi.hoisted(() => ({ path: '', opens: 0, calls: 0, cap: 1024, empty: false,
   mutate: undefined as (() => void) | undefined, descriptors: new Set<number>() }))
@@ -42,20 +44,17 @@ afterEach(async () => {
 })
 async function acquire() {
   reads.path = join(root, '.stages', '0', 'owner.json')
-  const lease = await new CheckpointStages(join(root, '.stages')).acquire(target())
+  const lease = await new CheckpointStages(join(root, '.stages')).acquire(target(), process.pid)
   leases.push(lease); reads.opens = 0
-  return lease
+  return { ...lease, ...lease.handoff() }
 }
 const target = () => join(root, `${'a'.repeat(64)}-${'b'.repeat(36)}.history`)
 const owner = async () => JSON.parse(await readFile(reads.path, 'utf8'))
 
-it.skipIf(process.platform === 'win32').each(['writer', 'settled', 'destination'] as const)(
+it.skipIf(process.platform === 'win32').each(['settled', 'destination'] as const)(
   'checks the %s owner without another open', async operation => {
     const lease = await acquire(), previous = await owner()
-    if (operation === 'writer') {
-      await lease.writer(process.pid)
-      expect(await owner()).toEqual({ ...previous, writer: process.pid })
-    } else if (operation === 'settled') {
+    if (operation === 'settled') {
       await lease.settled()
       expect(await owner()).toEqual({ ...previous, settled: true, destination: target().split('/').at(-1) })
     } else {

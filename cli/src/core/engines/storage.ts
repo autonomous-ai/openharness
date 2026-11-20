@@ -4,7 +4,7 @@ import type { BackgroundSession } from '../../lib/backgroundCommands.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import { backgroundCount, STORAGE_BACKGROUND, STORAGE_BACKGROUND_WAIT_MS, STORAGE_CAPABILITIES,
   STORAGE_IN_FLIGHT, STORAGE_REPLY_BYTES, STORAGE_VERSION, STORAGE_EXPORT, STORAGE_EXPORT_WAIT_MS, STORAGE_ENGINES,
-  STORAGE_LIFETIME, storageLifetime, exportReceipt, type ExportStage, type ExportReceipt, type ExportOwnership,
+  STORAGE_LIFETIME, storageLifetime, exportReceipt, type ExportStage, type ExportReceipt, type ExportReservation,
   type StorageEngine, type StorageLifetime, type StorageSession, type ExportSource } from '../../engines/worker/storageProtocol.js'
 import { createSnapshotTransport, type SnapshotTransportDeps } from './snapshotTransport.js'
 import { boundedControl } from './controlTransport.js'
@@ -30,12 +30,12 @@ export function createEngineStorage(deps: EngineStorageDeps) {
   return {
     connected: (service: string) => { transport.connected(service); exports.connected(service) },
     disconnected: (service: string) => { transport.disconnected(service); exports.disconnected(service) },
-    async exportDatabase(session: RegisteredSession, stage: ExportStage, ownership: ExportOwnership, source: ExportSource): Promise<ExportReceipt> {
+    async exportDatabase(session: RegisteredSession, source: ExportSource, reservation: ExportReservation): Promise<ExportReceipt> {
       if (!STORAGE_ENGINES.includes(session.engine as StorageEngine) || !session.sessionId) throw new Error('checkpoint engine unsupported')
       const captured: StorageSession = { sessionId: session.sessionId, hermesHome: session.hermesHome,
         openclawStateDir: session.openclawStateDir, pid: session.processIdentity?.pid ?? 0 }
       let active = true
-      const deadline = ownership.deadline
+      const deadline = reservation.deadline
       const current = () => active && performance.now() < deadline
       try {
         const receipt = await boundedControl(admitted(async () => {
@@ -56,11 +56,11 @@ export function createEngineStorage(deps: EngineStorageDeps) {
             if (!current() || !await deps.serviceProcess?.('engine-others', lifetime.pid, Math.ceil(deadline - performance.now()))) throw new Error('checkpoint writer unavailable')
           }
           if (!current()) throw new Error('checkpoint unavailable')
-          await ownership.writer(lifetime?.pid ?? process.pid)
+          const ownership = await reservation.acquire(lifetime?.pid ?? process.pid)
           if (!current()) throw new Error('checkpoint unavailable')
           const exported = deps.isolated
-            ? await exports.read(session.engine, STORAGE_EXPORT, { session: captured, stage, source, lifetime }, exportReceipt) as ExportReceipt
-            : await deps.inlineExport?.(session.engine as StorageEngine, captured, stage, source, current)
+            ? await exports.read(session.engine, STORAGE_EXPORT, { session: captured, stage: ownership.stage, source, lifetime }, exportReceipt) as ExportReceipt
+            : await deps.inlineExport?.(session.engine as StorageEngine, captured, ownership.stage, source, current)
           if (!current() || !exportReceipt(exported)) throw new Error('checkpoint unavailable')
           await ownership.settled()
           if (!current()) throw new Error('checkpoint unavailable')

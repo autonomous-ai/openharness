@@ -4,6 +4,8 @@ import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { CheckpointStages, type CheckpointStage } from './checkpointStages.js'
+import type { ExportOwnership } from '../engines/worker/storageProtocol.js'
+type ExposedStage = CheckpointStage & ExportOwnership
 
 const fault = vi.hoisted(() => ({ reused: undefined as { path: string; ino: bigint; dev: bigint } | undefined,
   stat: false, open: false, write: false, link: false }))
@@ -56,10 +58,10 @@ afterEach(async () => {
 })
 const stages = () => new CheckpointStages(join(root, '.stages'))
 const target = () => join(root, `${'a'.repeat(64)}-${'b'.repeat(36)}.history`)
-const ownerPath = (lease: CheckpointStage) => join(dirname(lease.stage.path), 'owner.json')
+const ownerPath = (lease: ExposedStage) => join(dirname(lease.stage.path), 'owner.json')
 const receipt = () => ({ bytes: 7, sha256: createHash('sha256').update('history').digest('hex') })
-async function acquire() { const lease = await stages().acquire(target()); leases.push(lease); return lease }
-async function publish(lease: CheckpointStage) {
+async function acquire() { const lease = await stages().acquire(target(), process.pid); leases.push(lease); return { ...lease, ...lease.handoff() } }
+async function publish(lease: ExposedStage) {
   await writeFile(lease.stage.path, 'history'); await lease.settled(); await lease.verify(receipt()); await lease.publish(() => {})
 }
 function deadCore() { vi.spyOn(process, 'kill').mockImplementation(() => { throw Object.assign(new Error(), { code: 'ESRCH' }) }) }
@@ -94,13 +96,14 @@ it('rereads the owner under the cleanup lock before deleting a newer reservation
 })
 
 it('checks core absence again after taking the cleanup lock', async () => {
-  const lease = await acquire()
+  const lease = await acquire(); await lease.settled()
   let checks = 0
   vi.spyOn(process, 'kill').mockImplementation(() => {
     if (++checks === 1) throw Object.assign(new Error(), { code: 'ESRCH' })
     return true
   })
   await stages().prepare()
+  expect(checks).toBe(2)
   expect(await stat(ownerPath(lease))).toBeTruthy()
   expect(await stat(lease.stage.path)).toBeTruthy()
 })
@@ -109,7 +112,7 @@ it('a stale lease cannot overwrite a newer owner that reused the record inode', 
   const lease = await acquire(), path = ownerPath(lease)
   const newer = JSON.stringify({ ...JSON.parse(await readFile(path, 'utf8')), lease: 'e'.repeat(32) })
   await writeFile(path, newer)
-  await expect(lease.writer(process.pid)).rejects.toThrow('changed')
+  await expect(lease.settled()).rejects.toThrow('changed')
   expect(await readFile(path, 'utf8')).toBe(newer)
   await lease.close()
   expect(await readFile(path, 'utf8')).toBe(newer)
@@ -139,7 +142,7 @@ it('reconsiders a retained generation once its unreadable manifest is repaired',
 })
 
 it.each(process.platform === 'win32' ? ['open', 'write'] as const : ['stat', 'write'] as const)('releases its settled writer after a failed owner %s without waiting for core restart', async failure => {
-  const lease = await acquire(); await lease.writer(process.pid)
+  const lease = await acquire()
   fault[failure] = true
   await expect(lease.settled()).rejects.toThrow(`injected ${failure}`)
   expect(fault[failure]).toBe(false)

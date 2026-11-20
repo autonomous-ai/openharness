@@ -8,7 +8,8 @@ import { builtinSqlite, closeSqliteHandles, type DatabaseLike } from './sqliteBu
 import { sqliteReadAll } from './sqliteRead.js'
 import type { StorageEngine } from '../engines/worker/storageProtocol.js'
 import type { CheckpointDeps } from './sessionCheckpoint.js'
-const workerExport: CheckpointDeps = { exportDatabase: async (s, stage, ownership, source) => {
+const workerExport: CheckpointDeps = { exportDatabase: async (s, source, reservation) => {
+  const ownership = await reservation.acquire(process.pid), { stage } = ownership
   const receipt = await (await import('../engines/others/checkpoint.js')).exportDatabase(s.engine as StorageEngine,
     { sessionId: s.sessionId, hermesHome: s.hermesHome, openclawStateDir: s.openclawStateDir, pid: s.processIdentity?.pid }, stage, source)
   await ownership.settled()
@@ -122,7 +123,10 @@ it('closes an OpenClaw session the Gateway never wrote with no checkpoint, and r
   writeFileSync(path, 'not a database')
   await expect(save()).rejects.toBeInstanceOf(SessionCheckpointError)
   expect(readdirSync(directory)).toEqual(['.stages'])
-  expect(readdirSync(join(directory, '.stages'))).toEqual([])
+  // This fixture now reserves the real live writer, like engine storage. A failed export has no settlement.
+  expect(readdirSync(join(directory, '.stages'))).toEqual(['0'])
+  expect(JSON.parse(readFileSync(join(directory, '.stages', '0', 'owner.json'), 'utf8')))
+    .toMatchObject({ core: process.pid, writer: process.pid, settled: false })
 })
 
 it.each(['absent', 'empty'] as const)('refuses %s OpenClaw history after saving a nonempty checkpoint', async mode => {

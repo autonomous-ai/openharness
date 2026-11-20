@@ -6,7 +6,10 @@ import { EngineReadError } from '../../engines/worker/protocol.js'
 
 const source = { path: '/profile/state.db', key: '2:3', database: '/profile/state.db' }
 const lifetime = { pid: 42, nonce: 'a'.repeat(36) }
-const ownership = () => ({ deadline: performance.now() + STORAGE_EXPORT_WAIT_MS, writer: vi.fn(async () => {}), settled: vi.fn() })
+const ownership = () => {
+  const deadline = performance.now() + STORAGE_EXPORT_WAIT_MS, settled = vi.fn(async () => {})
+  return { deadline, settled, acquire: vi.fn(async (_pid: number) => ({ deadline, stage: { path: '/stage', key: '1:2' }, settled })) }
+}
 const session = { engine: 'hermes', agentId: 'a', sessionId: '20261112_100000_bbbbbb', hermesHome: '/profile', processIdentity: null } as const
 function setup(answer: unknown = 3) {
   const call = vi.fn(async (_service: string, method: string, _payload: Record<string, unknown>) => method === STORAGE_CAPABILITIES
@@ -19,7 +22,7 @@ function setup(answer: unknown = 3) {
 afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks() })
 
 it.each(['ENGINE_UNAVAILABLE', 'ENGINE_STALE_REPLY'] as const)('waits once for a replacement before assigning a checkpoint writer after %s', async code => {
-  const receipt = { bytes: 17, sha256: 'b'.repeat(64) }, stage = { path: '/stage', key: '1:2' }, owner = ownership()
+  const receipt = { bytes: 17, sha256: 'b'.repeat(64) }, owner = ownership()
   let reconnect!: () => void
   const linked = new Promise<void>(resolve => { reconnect = resolve })
   const ready = vi.fn(() => linked)
@@ -31,15 +34,15 @@ it.each(['ENGINE_UNAVAILABLE', 'ENGINE_STALE_REPLY'] as const)('waits once for a
   })
   const storage = createEngineStorage({ isolated: true, call, ready, serviceProcess: async () => true })
   storage.connected('engine-others')
-  const pending = storage.exportDatabase(session as RegisteredSession, stage, owner, source)
+  const pending = storage.exportDatabase(session as RegisteredSession, source, owner)
   void pending.catch(() => {})
   await vi.waitFor(() => expect(ready).toHaveBeenCalledOnce())
-  expect(owner.writer).not.toHaveBeenCalled()
+  expect(owner.acquire).not.toHaveBeenCalled()
   expect(call.mock.calls.some(([, method]) => method === STORAGE_EXPORT)).toBe(false)
   storage.disconnected('engine-others'); storage.connected('engine-others'); reconnect()
   expect(await pending).toEqual(receipt)
   expect(ready).toHaveBeenCalledWith('hermes', expect.any(Number))
-  expect(owner.writer).toHaveBeenCalledExactlyOnceWith(lifetime.pid)
+  expect(owner.acquire).toHaveBeenCalledExactlyOnceWith(lifetime.pid)
   expect(call.mock.calls.filter(([, method]) => method === STORAGE_EXPORT)).toHaveLength(1)
   expect(owner.settled).toHaveBeenCalledOnce()
 })
@@ -51,16 +54,16 @@ it('keeps reconnect waits inside the original deadline and admission until actua
   const call = vi.fn(async () => ({ error: 'SERVICE_UNAVAILABLE' }))
   const storage = createEngineStorage({ isolated: true, call, ready, serviceProcess: async () => true })
   const owners = Array.from({ length: 4 }, ownership)
-  const pending = owners.map(owner => storage.exportDatabase(session as RegisteredSession, { path: '/stage', key: '1:2' }, owner, source).catch(error => error))
+  const pending = owners.map(owner => storage.exportDatabase(session as RegisteredSession, source, owner).catch(error => error))
   await vi.advanceTimersByTimeAsync(0)
   expect(ready).toHaveBeenCalledTimes(4)
   await vi.advanceTimersByTimeAsync(STORAGE_EXPORT_WAIT_MS)
   expect((await Promise.all(pending)).every(error => error.message === 'checkpoint unavailable')).toBe(true)
-  await expect(storage.exportDatabase(session as RegisteredSession, { path: '/stage', key: '1:2' }, ownership(), source)).rejects.toThrow('busy')
+  await expect(storage.exportDatabase(session as RegisteredSession, source, ownership())).rejects.toThrow('busy')
   const before = call.mock.calls.length
   reconnect(); await vi.advanceTimersByTimeAsync(0)
   expect(call).toHaveBeenCalledTimes(before)
-  expect(owners.every(owner => owner.writer.mock.calls.length === 0 && owner.settled.mock.calls.length === 0)).toBe(true)
+  expect(owners.every(owner => owner.acquire.mock.calls.length === 0 && owner.settled.mock.calls.length === 0)).toBe(true)
 })
 
 it.each(['malformed', 'export', 'repeat'] as const)('never replays %s failure after the one observational recovery', async phase => {
@@ -73,7 +76,7 @@ it.each(['malformed', 'export', 'repeat'] as const)('never replays %s failure af
   })
   const storage = createEngineStorage({ isolated: true, call, ready, serviceProcess: async () => true })
   storage.connected('engine-others')
-  await expect(storage.exportDatabase(session as RegisteredSession, { path: '/stage', key: '1:2' }, owner, source)).rejects.toThrow()
+  await expect(storage.exportDatabase(session as RegisteredSession, source, owner)).rejects.toThrow()
   expect(ready).toHaveBeenCalledTimes(phase === 'repeat' ? 1 : 0)
   expect(call.mock.calls.filter(([, method]) => method === STORAGE_LIFETIME)).toHaveLength(phase === 'repeat' ? 2 : 1)
   expect(call.mock.calls.filter(([, method]) => method === STORAGE_EXPORT)).toHaveLength(phase === 'export' ? 1 : 0)
@@ -89,9 +92,9 @@ it('does not wait for a replacement when the failed observation consumed the dea
   })
   const storage = createEngineStorage({ isolated: true, call, ready })
   storage.connected('engine-others')
-  await expect(storage.exportDatabase(session as RegisteredSession, { path: '/stage', key: '1:2' }, owner, source)).rejects.toThrow('checkpoint unavailable')
+  await expect(storage.exportDatabase(session as RegisteredSession, source, owner)).rejects.toThrow('checkpoint unavailable')
   expect(ready).not.toHaveBeenCalled()
-  expect(owner.writer).not.toHaveBeenCalled()
+  expect(owner.acquire).not.toHaveBeenCalled()
 })
 
 it('sends only captured Hermes identity and returns the worker count', async () => {
@@ -143,14 +146,14 @@ it('uses only explicit compatibility composition, including an absent reader', a
 it('exports a captured database into the exact stage and fences a replaced connection', async () => {
   const receipt = { bytes: 17, sha256: 'a'.repeat(64) }, stage = { path: '/stage', key: '1:2' }
   const t = setup(receipt)
-  expect(await t.storage.exportDatabase(session as RegisteredSession, stage, ownership(), source)).toEqual(receipt)
+  expect(await t.storage.exportDatabase(session as RegisteredSession, source, ownership())).toEqual(receipt)
   expect(t.call).toHaveBeenLastCalledWith('engine-others', STORAGE_EXPORT, { version: 1, engine: 'hermes', stage, source, lifetime,
     session: { sessionId: session.sessionId, hermesHome: '/profile', openclawStateDir: undefined, pid: 0 } }, expect.any(Number))
-  await expect(t.storage.exportDatabase({ ...session, engine: 'claude' } as RegisteredSession, stage, ownership(), source)).rejects.toThrow('unsupported')
-  await expect(t.storage.exportDatabase({ ...session, sessionId: '' } as RegisteredSession, stage, ownership(), source)).rejects.toThrow('unsupported')
+  await expect(t.storage.exportDatabase({ ...session, engine: 'claude' } as RegisteredSession, source, ownership())).rejects.toThrow('unsupported')
+  await expect(t.storage.exportDatabase({ ...session, sessionId: '' } as RegisteredSession, source, ownership())).rejects.toThrow('unsupported')
   let finish!: (answer: Record<string, unknown>) => void
   t.call.mockImplementation(() => new Promise(resolve => { finish = resolve as never }))
-  const late = t.storage.exportDatabase(session as RegisteredSession, stage, ownership(), source)
+  const late = t.storage.exportDatabase(session as RegisteredSession, source, ownership())
   t.storage.disconnected('engine-others')
   finish({ version: 1, answer: lifetime })
   await expect(late).rejects.toThrow('STALE')
@@ -158,18 +161,18 @@ it('exports a captured database into the exact stage and fences a replaced conne
 
 it('bounds compatibility exports and revokes their late writers without fallback', async () => {
   vi.useFakeTimers()
-  const receipt = { bytes: 17, sha256: 'a'.repeat(64) }, stage = { path: '/stage', key: '1:2' }, call = vi.fn()
+  const receipt = { bytes: 17, sha256: 'a'.repeat(64) }, call = vi.fn()
   const saved = { ...session, processIdentity: { pid: 42 } } as RegisteredSession
   const available = createEngineStorage({ call, isolated: false, inlineExport: async (_engine, snapshot, _stage, selected, current) => {
     expect(selected).toEqual(source); expect(snapshot.pid).toBe(42); expect(current()).toBe(true); return receipt
   } })
-  expect(await available.exportDatabase(saved, stage, ownership(), source)).toEqual(receipt)
-  await expect(createEngineStorage({ call, isolated: false }).exportDatabase(saved, stage, ownership(), source)).rejects.toThrow('unavailable')
+  expect(await available.exportDatabase(saved, source, ownership())).toEqual(receipt)
+  await expect(createEngineStorage({ call, isolated: false }).exportDatabase(saved, source, ownership())).rejects.toThrow('unavailable')
   let allowed!: () => boolean
   const frozen = createEngineStorage({ call, isolated: false, inlineExport: (_engine, _snapshot, _stage, selected, current) => {
     allowed = current; return new Promise(() => {})
   } })
-  const late = expect(frozen.exportDatabase(saved, stage, ownership(), source)).rejects.toThrow('unavailable')
+  const late = expect(frozen.exportDatabase(saved, source, ownership())).rejects.toThrow('unavailable')
   await vi.advanceTimersByTimeAsync(STORAGE_EXPORT_WAIT_MS)
   await late
   expect(allowed()).toBe(false)
@@ -177,13 +180,13 @@ it('bounds compatibility exports and revokes their late writers without fallback
 })
 
 it('never assigns a stage to a worker without independent master evidence', async () => {
-  const stage = { path: '/stage', key: '1:2' }, t = setup(), owner = ownership()
+  const t = setup(), owner = ownership()
   for (const serviceProcess of [undefined, async () => false]) {
     const storage = createEngineStorage({ call: t.call, isolated: true, serviceProcess })
     storage.connected('engine-others')
-    await expect(storage.exportDatabase(session as RegisteredSession, stage, owner, source)).rejects.toThrow('writer unavailable')
+    await expect(storage.exportDatabase(session as RegisteredSession, source, owner)).rejects.toThrow('writer unavailable')
   }
-  expect(owner.writer).not.toHaveBeenCalled()
+  expect(owner.acquire).not.toHaveBeenCalled()
   expect(t.call.mock.calls.some(([, method]) => method === STORAGE_EXPORT)).toBe(false)
 })
 
@@ -197,9 +200,9 @@ it('a deadline during attestation or durable assignment cannot dispatch or settl
       if (phase === 'attestation') await held
       return true
     } })
-    if (phase === 'assignment') owner.writer.mockImplementation(() => held)
+    if (phase === 'assignment') owner.acquire.mockImplementation(async () => { await held; return { deadline: owner.deadline, stage, settled: owner.settled } })
     storage.connected('engine-others')
-    const answer = expect(storage.exportDatabase(session as RegisteredSession, stage, owner, source)).rejects.toThrow('unavailable')
+    const answer = expect(storage.exportDatabase(session as RegisteredSession, source, owner)).rejects.toThrow('unavailable')
     await vi.advanceTimersByTimeAsync(STORAGE_EXPORT_WAIT_MS)
     await answer; release(); await vi.advanceTimersByTimeAsync(0)
     expect(t.call.mock.calls.some(([, method]) => method === STORAGE_EXPORT)).toBe(false)
@@ -211,8 +214,8 @@ it('refuses dispatch when synchronous work consumed the deadline before its time
   const now = vi.spyOn(performance, 'now').mockReturnValueOnce(0).mockReturnValue(STORAGE_EXPORT_WAIT_MS)
   const owner = ownership(), inlineExport = vi.fn()
   await expect(createEngineStorage({ isolated: false, call: vi.fn(), inlineExport })
-    .exportDatabase(session as RegisteredSession, { path: '/stage', key: '1:2' }, owner, source)).rejects.toThrow('unavailable')
-  expect(owner.writer).not.toHaveBeenCalled(); expect(inlineExport).not.toHaveBeenCalled(); now.mockRestore()
+    .exportDatabase(session as RegisteredSession, source, owner)).rejects.toThrow('unavailable')
+  expect(owner.acquire).not.toHaveBeenCalled(); expect(inlineExport).not.toHaveBeenCalled(); now.mockRestore()
 })
 
 it('keeps one aggregate inline admission until timed-out underlying reads actually settle', async () => {
@@ -223,7 +226,7 @@ it('keeps one aggregate inline admission until timed-out underlying reads actual
   const pending = Array.from({ length: 4 }, () => storage.background(session))
   await vi.advanceTimersByTimeAsync(STORAGE_BACKGROUND_WAIT_MS)
   expect(await Promise.all(pending)).toEqual([null, null, null, null])
-  await expect(storage.exportDatabase(session as RegisteredSession, { path: '/stage', key: '1:2' }, ownership(), source)).rejects.toThrow('busy')
+  await expect(storage.exportDatabase(session as RegisteredSession, source, ownership())).rejects.toThrow('busy')
   release(); await vi.advanceTimersByTimeAsync(0)
   expect(await storage.background(session)).toBe(0)
 })
@@ -236,7 +239,7 @@ it('awaits durable writer settlement before returning the checkpoint receipt', a
   owner.settled.mockImplementation(async () => { entered(); await held })
   const storage = createEngineStorage({ isolated: false, call: vi.fn(), inlineExport: async () => receipt })
   let returned = false
-  const exporting = storage.exportDatabase(session as RegisteredSession, { path: '/stage', key: '1:2' }, owner, source)
+  const exporting = storage.exportDatabase(session as RegisteredSession, source, owner)
     .then(value => { returned = true; return value })
   await waiting
   try {
@@ -258,15 +261,14 @@ it('retains four unsettled journal callbacks after their reply deadlines without
     return owner
   })
   const storage = createEngineStorage({ isolated: false, call: vi.fn(), inlineExport: async () => receipt })
-  const stage = { path: '/stage', key: '1:2' }
-  const results = owners.map(owner => storage.exportDatabase(session as RegisteredSession, stage, owner, source).catch(error => error))
+  const results = owners.map(owner => storage.exportDatabase(session as RegisteredSession, source, owner).catch(error => error))
   await waiting
   try {
     await vi.advanceTimersByTimeAsync(STORAGE_EXPORT_WAIT_MS)
     expect((await Promise.all(results)).every(result => result instanceof Error)).toBe(true)
-    await expect(storage.exportDatabase(session as RegisteredSession, stage, ownership(), source)).rejects.toThrow('busy')
+    await expect(storage.exportDatabase(session as RegisteredSession, source, ownership())).rejects.toThrow('busy')
   } finally { release(); await vi.advanceTimersByTimeAsync(0) }
-  expect(await storage.exportDatabase(session as RegisteredSession, stage, ownership(), source)).toEqual(receipt)
+  expect(await storage.exportDatabase(session as RegisteredSession, source, ownership())).toEqual(receipt)
 })
 
 it('refuses an expired receipt between completed settlement and delivery to its caller', async () => {
@@ -277,7 +279,7 @@ it('refuses an expired receipt between completed settlement and delivery to its 
     queueMicrotask(() => queueMicrotask(() => { clock.mockReturnValue(STORAGE_EXPORT_WAIT_MS) }))
   })
   const storage = createEngineStorage({ isolated: false, call: vi.fn(), inlineExport: async () => receipt })
-  await expect(storage.exportDatabase(session as RegisteredSession, { path: '/stage', key: '1:2' }, owner, source))
+  await expect(storage.exportDatabase(session as RegisteredSession, source, owner))
     .rejects.toThrow('unavailable')
   expect(owner.settled).toHaveBeenCalledOnce()
 })

@@ -61,10 +61,10 @@ beforeEach(async () => {
   exportedSource = undefined
   vi.mocked(nativeOpenFiles).mockReset()
   vi.mocked(nativeHeldFiles).mockReset()
-  store = new SessionCheckpointStore(directory, { exportDatabase: async (_s, stage, ownership, source) => {
+  store = new SessionCheckpointStore(directory, { exportDatabase: async (_s, source, reservation) => {
+    const ownership = await reservation.acquire(process.pid), { stage } = ownership
     exportedSource = source
     const bytes = readFileSync(database)
-    await ownership.writer(process.pid)
     writeFileSync(stage.path, bytes)
     duringExport?.()
     await ownership.settled()

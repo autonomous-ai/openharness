@@ -6,7 +6,7 @@ import { createHash, randomBytes } from 'node:crypto'
 import { basename, dirname, join } from 'node:path'
 import { errorKind } from './log.js'
 import { nativeFileKey } from '../engines/kit/nativePaths.js'
-import { exportReceipt, STORAGE_CHUNK_BYTES, STORAGE_IN_FLIGHT, STORAGE_STAGE_BYTES, STORAGE_EXPORT_WAIT_MS, type ExportReceipt, type ExportStage,
+import { exportReceipt, STORAGE_CHUNK_BYTES, STORAGE_IN_FLIGHT, STORAGE_STAGE_BYTES, STORAGE_EXPORT_WAIT_MS, type ExportReceipt,
   type ExportOwnership } from '../engines/worker/storageProtocol.js'
 import { closeStateFileDescriptor, directorySyncSupported, readPrivateStateFile, secureStateDirectory, syncStateDirectory } from './secureState.js'
 
@@ -76,8 +76,9 @@ async function beforeDeadline<T>(work: Promise<T>, deadline: number): Promise<T>
   const end = left <= 0 ? Promise.reject(expired()) : new Promise<never>((_, reject) => { timer = setTimeout(() => reject(expired()), left) })
   try { return await Promise.race([end, work]) } finally { clearTimeout(timer) }
 }
-export interface CheckpointStage extends ExportOwnership {
-  stage: ExportStage
+export interface CheckpointStage {
+  readonly deadline: number
+  handoff(): ExportOwnership
   verify(receipt: ExportReceipt): Promise<void>
   publish(current: () => void): Promise<void>
   close(): Promise<void>
@@ -169,9 +170,11 @@ export class CheckpointStages {
     }
   }
 
-  async acquire(destination: string, deadline = performance.now() + STORAGE_EXPORT_WAIT_MS): Promise<CheckpointStage> {
+  async acquire(destination: string, writer: number, deadline = performance.now() + STORAGE_EXPORT_WAIT_MS): Promise<CheckpointStage> {
+    if (!Number.isSafeInteger(writer) || writer <= 0) throw new Error('checkpoint writer unavailable')
+    if (!Number.isFinite(deadline) || performance.now() >= deadline) throw expired()
     if (dirname(destination) !== dirname(this.directory) || !historyName(basename(destination))) throw new Error('checkpoint destination refused')
-    const work = this.create(destination, deadline)
+    const work = this.create(destination, writer, deadline)
     try { return await beforeDeadline(work, deadline) }
     catch (error) {
       // The kernel may complete open/stat after the caller has left. Its returned descriptor remains ours to close.
@@ -180,7 +183,7 @@ export class CheckpointStages {
     }
   }
 
-  private async create(destination: string, deadline: number): Promise<CheckpointStage> {
+  private async create(destination: string, writer: number, deadline: number): Promise<CheckpointStage> {
     secureStateDirectory(this.directory)
     for (let slot = 0; slot < STORAGE_IN_FLIGHT; slot++) {
       const directory = this.path(slot), path = join(directory, 'history.tmp'), record = join(directory, 'owner.json')
@@ -191,7 +194,7 @@ export class CheckpointStages {
       let key: string
       try { const before = await file.stat({ bigint: true }); privateFile(before); key = nativeFileKey(before) }
       catch (error) { await file.close(); throw error }
-      let owner: Owner = { version: 2, lease: randomBytes(16).toString('hex'), core: process.pid, writer: null, settled: false, key }
+      let owner: Owner = { version: 2, lease: randomBytes(16).toString('hex'), core: process.pid, writer, settled: false, key }
       let recordKey: string | undefined, confirmedOwner: string | undefined, ownerWrite: Promise<void> | undefined
       const retainOwner = process.platform !== 'win32'
       let ownerFd: number | undefined
@@ -272,25 +275,28 @@ export class CheckpointStages {
         if (saved.text !== confirmedOwner) throw new Error('checkpoint owner changed')
         if (version(identity(record, recordKey!)) !== version(before)) throw new Error('checkpoint stage changed')
       }
-      let closed = false, verified: string | undefined, verification: Promise<void> | undefined, cleanup: Promise<void> | undefined
+      let closed = false, exposed = false, verified: string | undefined, verification: Promise<void> | undefined, cleanup: Promise<void> | undefined
       let descriptorClose: Promise<void> | undefined, publication: Promise<void> | undefined
       const closeDescriptor = () => descriptorClose ??= file.close()
       const current = () => { if (closed || performance.now() >= deadline) throw expired() }
       return {
         deadline,
-        stage: { path, key },
-        writer: async pid => {
+        // Only this synchronous handoff exposes a writer path. A late create
+        // that was never handed off can still release its slot after timeout.
+        handoff: () => {
           current()
-          if (publication) throw new Error('checkpoint publication busy')
-          if (owner.writer !== null || !Number.isSafeInteger(pid) || pid <= 0) throw new Error('checkpoint writer unavailable')
-          await beforeDeadline(writeOwner({ ...owner, writer: pid }), deadline)
-          current()
-        },
-        settled: async () => {
-          current()
-          if (publication) throw new Error('checkpoint publication busy')
-          await beforeDeadline(writeOwner({ ...owner, settled: true, destination: basename(destination) }), deadline)
-          current()
+          if (exposed) throw new Error('checkpoint lease already exposed')
+          exposed = true
+          return {
+            deadline,
+            stage: { path, key },
+            settled: async () => {
+              current()
+              if (publication) throw new Error('checkpoint publication busy')
+              await beforeDeadline(writeOwner({ ...owner, settled: true, destination: basename(destination) }), deadline)
+              current()
+            },
+          }
         },
         verify: async receipt => {
           current()
@@ -355,7 +361,7 @@ export class CheckpointStages {
             await publication?.catch(() => {})
             await verification?.catch(() => {})
             try { await closeDescriptor() } finally { closeOwner() }
-            if (owner.writer !== null && !owner.settled) { retained(); return }
+            if (exposed && owner.writer !== null && !owner.settled) { retained(); return }
             identity(record, recordKey!)
             this.remove(directory, directoryKey, owner)
           })().catch(retained)
