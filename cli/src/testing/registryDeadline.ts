@@ -24,14 +24,16 @@ const due = new Map<unknown, Timer<number>>()
 /**
  * Runs each timer of [timers] whose bound [chosen] picks, taken out as it runs, as the host's clock would: one a callback
  * sets runs at a later pass, one a callback clears does not run, and one that throws is thrown on its own once the pass
- * is over, which goes on without it.
+ * is over, which goes on without it. Returns how many it ran.
  */
-function runPass<Bound>(timers: Map<unknown, Timer<Bound>>, chosen: (ms: Bound) => boolean): void {
+function runPass<Bound>(timers: Map<unknown, Timer<Bound>>, chosen: (ms: Bound) => boolean): number {
+  let ran = 0
   for (const [timer, entry] of [...timers]) {
     if (timers.get(timer) !== entry || !chosen(entry.ms)) continue
-    timers.delete(timer)
+    timers.delete(timer); ran++
     try { entry.run() } catch (error) { queueMicrotask(() => { throw error }) }
   }
+  return ran
 }
 
 /** An `fs/promises` whose registry image (`registry.json.*.tmp`) syncs fire every real wait still due. */
@@ -69,7 +71,7 @@ function armsWriteDeadline(): boolean {
  * Holds every write deadline the registry's write queue arms, and every timer of each `hold` bound, until the test runs
  * it; `vi.restoreAllMocks` ends it. A registry image sync fires every other wait from 250 ms up to, not including,
  * `deadlineMs`: a sync that outlived the deadline would have expired its write. Every other timer runs on the host's
- * clock alone.
+ * clock alone. `expire()` and `fire(ms)` throw, by name, when they hold none to run.
  */
 export function holdRegistryDeadline(deadlineMs: number, options?: { hold?: readonly number[] }): {
   expire(): void
@@ -78,7 +80,9 @@ export function holdRegistryDeadline(deadlineMs: number, options?: { hold?: read
   deadlines(): number
 } {
   held.clear(); due.clear()
-  const run = (ms: number | typeof DEADLINE) => runPass(held, (bound) => bound === ms)
+  const run = (ms: number | typeof DEADLINE, name: string) => {
+    if (!runPass(held, (bound) => bound === ms)) throw new Error(`no held ${name}`)
+  }
   vi.spyOn(globalThis, 'setTimeout').mockImplementation(((callback: Callback, ms?: number, ...args: unknown[]) => {
     const bound = armsWriteDeadline() ? DEADLINE : ms !== undefined && options?.hold?.includes(ms) ? ms : undefined
     if (bound !== undefined) {
@@ -95,5 +99,5 @@ export function holdRegistryDeadline(deadlineMs: number, options?: { hold?: read
   vi.spyOn(globalThis, 'clearTimeout').mockImplementation(((timer?: Parameters<typeof clearTimeout>[0]) => {
     held.delete(timer); due.delete(timer); realClear(timer)
   }) as typeof clearTimeout)
-  return { expire: () => run(DEADLINE), fire: run, deadlines: () => [...held.values()].filter((entry) => entry.ms === DEADLINE).length }
+  return { expire: () => run(DEADLINE, 'write deadline'), fire: (ms) => run(ms, `${ms} ms timer`), deadlines: () => [...held.values()].filter((entry) => entry.ms === DEADLINE).length }
 }

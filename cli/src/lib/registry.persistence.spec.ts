@@ -334,7 +334,8 @@ it('retains a durably published result past reply expiry while cleanup keeps the
   let nextRan = false
   let second: Promise<unknown> | undefined
   try {
-    timers.expire()
+    // Its deadline went with its result, which no expiry can take back now.
+    expect(() => timers.expire()).toThrow('no held write deadline')
     await new Promise(resolve => setImmediate(resolve))
     second = registry.setClosePlan(input.agentId, null).then(row => { nextRan = true; return row })
     expect(nextRan).toBe(false)
@@ -406,7 +407,8 @@ it('retains exit ownership after its write deadline until an active cleanup sett
   let settled = false
   exitFlush = registry.flush({ exiting: true }).catch(() => {}).then(() => { settled = true })
   try {
-    timers.expire()
+    // The exit's write is not even queued while the cleanup holds the writer: no deadline of its own to run out.
+    expect(() => timers.expire()).toThrow('no held write deadline')
     await new Promise(resolve => setImmediate(resolve))
     expect(settled).toBe(false)
   } finally { release(); await accepted; await exitFlush }
