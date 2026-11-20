@@ -309,6 +309,9 @@ void pro_app_link(bool up, const char *machine)
         s_linked = true;
         s_lib_pending = false;
         s_sweep_offset = 0;
+        // Another computer on a live link: the last one's apps are not its, and an older daemon there sends none to replace
+        // them. Its welcome said apps.switch just before this; the agents.end it is asked for says the view.
+        if (was) pod_model_apps(&s_pod.model, NULL, 0, "");
         const pod_out_t fx = pod_ui_link(&s_pod, true);
         if (was) s_pod.sweep.restart = true;   // another computer: look the library up again
         settle(fx);
