@@ -186,8 +186,8 @@ interface InputState {
    *  ([expectFirstTask]), or submitted and waiting for its write to start ([submitFirstTask]). A message sent meanwhile is
    *  queued behind it ([heldBehindFirstTask]). */
   firstTaskAhead: boolean
-  /** The first task as its row holds it, which the row is asked for it by, and its fingerprint as typed (the row's text
-   *  as the engine takes it, lib/goalCommand.ts), which tells its turn from any other. */
+  /** The first task as its row holds it, which the row is asked for it by, and its [turnKey] as typed (the row's text as
+   *  the engine takes it, lib/goalCommand.ts), which tells its turn from any other. */
   firstTaskRow: string | null
   firstTaskFingerprint: string | null
   /** The first task is done with while its row says it waits untyped: the person stopped it before it was typed
@@ -308,6 +308,15 @@ function fingerprint(content: string): string {
   return createHash('sha256').update(content.replace(/\r\n/g, '\n').trim()).digest('hex')
 }
 
+/**
+ * A first task as the turn that takes it records it, which tells that turn from any other: OpenClaw's editor makes each
+ * pasted tab four spaces and drops every other control character (pi-tui `handlePaste`, engines/openclaw/contract.ts),
+ * so it is compared with all of them and every space removed, as its box is (`openclawBoxHolds`).
+ */
+function turnKey(content: string): string {
+  return fingerprint(content.replace(/[\s\x00-\x1f\x7f]+/g, ''))
+}
+
 /** Engine-aware prompt injection. Terminal TUIs get a bounded per-session FIFO while a turn is busy. */
 export class SessionInputController {
   private states = new Map<string, InputState>()
@@ -411,7 +420,7 @@ export class SessionInputController {
     }
     const typed = adaptSlashCommand(task, session.engine)
     state.firstTaskRow = task
-    state.firstTaskFingerprint = fingerprint(typed)
+    state.firstTaskFingerprint = turnKey(typed)
     state.firstTaskAhead = true
     state.queue.unshift({ content: typed, bytes: Buffer.byteLength(typed, 'utf8'), expiresAt: Infinity, first: true })
     if (!state.firstTask) {
@@ -437,8 +446,8 @@ export class SessionInputController {
     const typed = adaptSlashCommand(text, session.engine)
     state.firstTask = true
     state.firstTaskRow = text
-    state.firstTaskFingerprint = fingerprint(typed)
-    state.awaitingFingerprint = state.firstTaskFingerprint
+    state.firstTaskFingerprint = turnKey(typed)
+    state.awaitingFingerprint = fingerprint(typed)
     state.awaitingContent = typed
     state.retries = 0
     state.observes = 0
@@ -867,7 +876,7 @@ export class SessionInputController {
     state.turnOpen = true
     // The row keeps a typed first task until a turn takes it (lib/registry.ts `firstTaskTyped`): this is that turn when it is
     // the task's text. Another's, a message ahead of it say, takes nothing.
-    if (state.firstTask && state.firstTaskFingerprint === observedFingerprint) {
+    if (state.firstTask && state.firstTaskFingerprint === turnKey(userMessage)) {
       this.deps.onFirstTaskTaken?.(sessionId)
       this.firstTaskEnded(sessionId, state)
     }
