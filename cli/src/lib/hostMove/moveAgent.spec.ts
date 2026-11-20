@@ -336,6 +336,16 @@ describe('moveAgent', () => {
     expect(h.routes.size).toBe(0)
   })
 
+  // The host client gives create and respawn the host's own waits and a cold start (ptyHost/client.ts); a move onto a
+  // host just installed is that cold start, and a shorter bound here would win.
+  it('a create or a respawn the host answers after 6 s still moves', async () => {
+    for (const slow of [{ createSeeded: vi.fn(() => after(6_000, { ok: true as const, runtime: NEW })) },
+      { respawn: vi.fn(() => after(6_000, { ok: true })) }]) {
+      const h = harness(slow)
+      expect(await run(h.deps), Object.keys(slow)[0]).toEqual({ moved: true, resumed: true })
+    }
+  })
+
   it('a create answered after its bound closes the pane it made', async () => {
     const h = harness({ createSeeded: vi.fn(() => after(60_000, { ok: true as const, runtime: NEW })) })
     expect(await run(h.deps)).toMatchObject({ moved: false, fellBack: false })
