@@ -4,7 +4,9 @@
  * Code or in Cursor, which runs VS Code's extensions. Harness never writes the editor's files itself: it reads the
  * editor's record of its extensions, and hands the editor a `.vsix` packed here from the extension cli.js carries. It
  * runs in the `harness` command's own process (`harness device vscode|cursor …`) and in the devices' process, which sets
- * the extension up once a computer (cable/vscodeExtensionSetup.ts); never in the core's.
+ * the extension up once a computer (cable/vscodeExtensionSetup.ts). On Windows that is the core's process, where the
+ * devices run through the inline door (services/inline.ts `startDevices`) until Windows services run in their own
+ * process; elsewhere never the core's.
  */
 import { spawn } from 'node:child_process'
 import { accessSync, closeSync, constants, existsSync, fstatSync, mkdtempSync, openSync, readSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'

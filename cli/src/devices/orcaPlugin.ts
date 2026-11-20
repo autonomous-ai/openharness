@@ -4,9 +4,10 @@
  * (`orca plugin install|update|enable|uninstall`). Orca installs the plugin from a folder in Harness's data root that
  * holds the files cli.js carries (orcaPluginFolder.ts), written before Orca is asked about it; a folder that cannot be
  * written is said through `err` by its error's code. It runs in the `harness` command's process (`harness device orca`)
- * and in the devices' process (cable/orcaPluginSetup.ts), never in the core's. Orca's answers are outside text: each is
- * read up to ORCA_ANSWER_MAX_BYTES, only the fields named here are read, and nothing of them is logged
- * (docs/plans/2026-11-19-device-orca-default-on-design.md).
+ * and in the devices' process (cable/orcaPluginSetup.ts): on Windows the core's, where the devices run through the
+ * inline door (services/inline.ts `startDevices`) until Windows services run in their own process; elsewhere never the
+ * core's. Orca's answers are outside text: each is read up to ORCA_ANSWER_MAX_BYTES, only the fields named here are
+ * read, and nothing of them is logged (docs/plans/2026-11-19-device-orca-default-on-design.md).
  */
 import { realpathSync } from 'node:fs'
 import { readOrcaConnected, readRemoved, readSetup } from './dialSkillFiles.js'

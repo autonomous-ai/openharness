@@ -2,7 +2,9 @@
  * Claude Code's harness-device plugin: whether it is installed and on, and installing, turning on, updating or
  * uninstalling it, all through Claude Code's own `claude plugin` commands. Harness never writes Claude Code's settings
  * itself. It runs in the `harness` command's own process (`harness device claude …`) and in the devices' process, which
- * sets the plugin up once a dial has attached; never in the core's.
+ * sets the plugin up once a dial has attached. On Windows that is the core's process, where the devices run through the
+ * inline door (services/inline.ts `startDevices`) until Windows services run in their own process; elsewhere never the
+ * core's.
  */
 import { execFile } from 'node:child_process'
 import { homedir } from 'node:os'

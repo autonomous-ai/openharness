@@ -1,9 +1,11 @@
 /**
  * The devices' pipe on Windows (spec "The devices pipe's API"): `devices.json` in the data folder names the pipe and
- * the devices process's pid, and `devices-token` proves each request and answer, as the daemon's token proves its
- * pipe (lib/windows/pipeAuth.ts). Each start serves a new pipe, so clients read the record at each call, and dial it
- * only while the recorded process is not proven gone: once it is, any account can create a pipe of that name.
- * Outside the core: the core never opens this pipe.
+ * the pid of the process the devices run in, and `devices-token` proves each request and answer, as the daemon's token
+ * proves its pipe (lib/windows/pipeAuth.ts). Each start serves a new pipe, so clients read the record at each call, and
+ * dial it only while the recorded process is not proven gone: once it is, any account can create a pipe of that name.
+ * On Windows the devices run in the core's process, so the record holds the core's pid, and the core's process serves
+ * this pipe through the inline door alone (services/inline.ts `startDevices`), until Windows services run in their own
+ * process. The core's own code never opens it.
  */
 import { closeSync, fstatSync, openSync, readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
