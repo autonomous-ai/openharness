@@ -76,7 +76,7 @@ interface ComputerOptions {
   platform?: NodeJS.Platform
   pathVar?: string
   disk?: Record<string, string>
-  answers?: Array<{ code: number | null; timedOut: boolean }>
+  answers?: Array<{ code: number | null; timedOut: boolean; refused?: true }>
   files?: VscodeExtensionFiles | null
   write?: VscodeExtensionDeps['write']
   bin?: string
@@ -251,6 +251,13 @@ describe('vscodeEnable', () => {
     for (const folder of c.folders) expect(existsSync(folder)).toBe(false)
   })
 
+  // On Windows a batch file that is not the editor's own launcher is never run: counted by its own word.
+  it('an install whose launcher Harness does not run says launcher', async () => {
+    const c = computer({ disk: MAC, answers: [{ code: null, timedOut: false, refused: true }] })
+    expect(await vscodeEnable(c.deps)).toEqual({ state: 'off', error: 'launcher' })
+    expect(c.folders.map(existsSync)).toEqual([false])
+  })
+
   it('a failed install still removes the file', async () => {
     for (const answer of [{ code: 1, timedOut: false }, { code: null, timedOut: true }]) {
       const c = computer({ disk: MAC, answers: [answer] })
@@ -281,6 +288,7 @@ describe('vscodeDisable', () => {
     ['exit 1', 'failed', { disk: { ...MAC, [RECORD]: record('1.2.3') }, answers: [{ code: 1, timedOut: false }] }, 1],
     ['a run past its time', 'timeout', { disk: { ...MAC, [RECORD]: record('1.2.3') }, answers: [{ code: null, timedOut: true }] }, 1],
     ['no CLI in the app', 'no-code', { disk: { [APP]: '', [RECORD]: record('1.2.3') } }, 0],
+    ['a launcher Harness does not run', 'launcher', { disk: { ...MAC, [RECORD]: record('1.2.3') }, answers: [{ code: null, timedOut: false, refused: true }] }, 1],
   ])('a disable that leaves it on, with %s, says %s', async (_, error, options, runs) => {
     const c = computer(options)
     expect(await vscodeDisable(c.deps)).toEqual({ state: 'on', version: '1.2.3', error })
@@ -698,13 +706,14 @@ describe('the real run on Windows', () => {
     expect(options.detached).toBeUndefined()
   })
 
-  it('a launcher Harness does not start answers as a program that could not start, and starts nothing', async () => {
+  it('a launcher Harness does not start answers refused, and starts nothing', async () => {
     const other = join(scratch, 'other.cmd')
     writeFileSync(other, '@echo off\r\nstart calc %*\r\n')
-    expect(await vscodeExtensionDeps('vscode').run(other, ['--install-extension', 'x.vsix'], 30_000)).toEqual({ code: null, timedOut: false })
+    const refused = { code: null, timedOut: false, refused: true }
+    expect(await vscodeExtensionDeps('vscode').run(other, ['--install-extension', 'x.vsix'], 30_000)).toEqual(refused)
     const { launcher, exe } = installVscode()
     rmSync(exe)
-    expect(await vscodeExtensionDeps('vscode').run(launcher, ['--install-extension', 'x.vsix'], 30_000)).toEqual({ code: null, timedOut: false })
+    expect(await vscodeExtensionDeps('vscode').run(launcher, ['--install-extension', 'x.vsix'], 30_000)).toEqual(refused)
     expect(starts).toEqual([])
   })
 

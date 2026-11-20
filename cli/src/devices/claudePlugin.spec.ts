@@ -454,6 +454,22 @@ describe('the Claude desktop app on Windows', () => {
   })
 })
 
+// On Windows a batch file that is no npm shim is never run (claudeRunner): nothing ran, which the devices count by its
+// own word rather than as a Claude Code that is too old or failed.
+describe('a claude launcher Harness does not run', () => {
+  it('fails at step launcher, asked nothing after its --version', async () => {
+    for (const act of [claudeEnable, claudeSetUp, claudeUpdate, claudeHomeEnable, claudeDisable, claudeHomeDisable]) {
+      const asked: string[] = []
+      const run: ClaudeRun = async (args) => {
+        asked.push(args.join(' '))
+        return { code: null, stdout: '', stderr: '', refused: true }
+      }
+      expect(await act({ run, platform: 'win32' })).toEqual({ ok: false, error: 'Harness cannot run this claude launcher.', step: 'launcher' })
+      expect(asked).toEqual(['--version'])
+    }
+  })
+})
+
 describe('calls to claude', () => {
   it('the install waits 60 s and the list 15 s', async () => {
     const claude = fakeClaude({ 'plugin list --json': list() })
@@ -694,12 +710,12 @@ describe('claudeRunner on Windows', () => {
     expect(options.detached).toBeUndefined()
   })
 
-  it('a batch file it does not know is no answer, and nothing is started', async () => {
+  it('a batch file it does not know is refused, and nothing is started', async () => {
     const dir = throwawayPath()
     const batch = join(dir, 'claude.cmd')
     writeFileSync(batch, '@echo off\r\nstart calc %*\r\n')
     const started = vi.spyOn(childProcess, 'execFile')
-    expect(await claudeRunner(batch, undefined, 'win32')(['--version'], 15_000)).toEqual({ code: null, stdout: '', stderr: '' })
+    expect(await claudeRunner(batch, undefined, 'win32')(['--version'], 15_000)).toEqual({ code: null, stdout: '', stderr: '', refused: true })
     expect(started).not.toHaveBeenCalled()
   })
 })
