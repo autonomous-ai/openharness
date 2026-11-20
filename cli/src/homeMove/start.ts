@@ -8,7 +8,8 @@ import { spawnSync } from 'node:child_process'
 import * as fs from 'node:fs'
 import { createConnection } from 'node:net'
 import { homedir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { join } from 'node:path'
+import { homePath } from '../config/envFields.js'
 import { HARNESS_ROOT_MARKER, harnessRoot, holdsMarker, legacyHarnessHome, thisComputer, xdgRoots } from '../config/harnessHome.js'
 import { isBridge, procNow } from './bridge.js'
 import { checkMove, withEnvFile, type ConditionDeps, type Hold } from './conditions.js'
@@ -191,7 +192,7 @@ function say(lines: readonly string[], environment: NodeJS.ProcessEnv, deps: Sta
   for (const line of lines) deps.print?.(line)
   try {
     const folder = environment.ADAPTER_DATA_DIR
-      ? resolve(environment.ADAPTER_DATA_DIR)
+      ? homePath(environment.ADAPTER_DATA_DIR, deps.home)
       : join(harnessRoot('data', deps.home, 'linux', thisComputer(environment)), 'cli', 'data')
     fs.mkdirSync(folder, { recursive: true, mode: 0o700 })
     fs.appendFileSync(join(folder, 'harness.log'), lines.map((line) => `${line}\n`).join(''), { mode: 0o600 })

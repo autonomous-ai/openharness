@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { parseEnv } from 'node:util'
-import { envFilePath } from '../config/envFields.js'
+import { envFilePath, homePath } from '../config/envFields.js'
 import { holdsMarker, legacyHarnessHome, xdgRoots } from '../config/harnessHome.js'
 import { harnessPaneOwner } from '../lib/harnessSessionLabel.js'
 import { isBridge } from './bridge.js'
@@ -52,22 +52,23 @@ export async function checkMove(deps: ConditionDeps): Promise<MoveCheck> {
   if (isBridge(legacy)) return NO_HOLD
   // The process that moved starts itself again from the new paths: one that cannot would run on the old ones.
   if (!deps.hasExecve) return NO_HOLD
-  const dataDir = env.ADAPTER_DATA_DIR || join(legacy, 'cli', 'data')
+  // A relative override is the home's, as config/env.ts reads it in every process.
+  const dataDir = homePath(env.ADAPTER_DATA_DIR ?? '', home) || join(legacy, 'cli', 'data')
   // A start that finds a daemon starts nothing.
   if (await daemonRuns(deps, env, legacy, dataDir)) return NO_HOLD
   // A rollback would run the previous build against moved folders.
-  if (fs.existsSync(join(env.ADAPTER_CLI_DIR || join(legacy, 'cli'), 'update-pending.json'))) return waiting('update-pending')
+  if (fs.existsSync(join(homePath(env.ADAPTER_CLI_DIR ?? '', home) || join(legacy, 'cli'), 'update-pending.json'))) return waiting('update-pending')
   const realLegacy = fs.realpathSync(legacy)
   const override = OVERRIDE_NAMES.find((name) => {
-    const value = env[name]
-    return !!value && (inside(legacy, resolve(value)) || inside(realLegacy, realPath(deps, resolve(value))))
+    const value = homePath(env[name] ?? '', home)
+    return !!value && (inside(legacy, value) || inside(realLegacy, realPath(deps, value)))
   })
   if (override) return skipped(override)
   // Before 3.0 a pane's tag is in its start command, which nothing can change.
   const oldTag = harnessPaneOwner(dataDir)
   if (!hasPaneOptions(deps.tmux.version()) && deps.tmux.tags(false).includes(oldTag)) return waiting('old-tmux')
   // A PTY host keeps its panes' tags inside it.
-  if (deps.ptyHostRuns(env.HARNESS_PTY_DIR || join(legacy, 'pty'))) return waiting('pty-host')
+  if (deps.ptyHostRuns(homePath(env.HARNESS_PTY_DIR ?? '', home) || join(legacy, 'pty'))) return waiting('pty-host')
   const plan = planMove(home, env, fs.readdirSync(legacy))
   // The data folder as it really is: one a link keeps out of the tree stays where it is, and keeps its tag.
   const newTag = harnessPaneOwner(movedPath({ ...plan, legacy: realLegacy }, realPath(deps, resolve(dataDir))))
