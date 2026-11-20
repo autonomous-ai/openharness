@@ -1314,9 +1314,9 @@ describe('SessionInputController', () => {
        * an empty box) is sent while its history is loaded, and while it is not, put back into the box whole, the pane then
        * reading `no-history`. `/session` makes it ready, its history loaded unless [loads] is false. Ctrl+U deletes to its
        * line's start, and at the start joins the line above (pi-tui's editor). The box draws each line wrapped at 100
-       * columns.
+       * columns. [moveGate] holds the agent's messages while it changes host.
        */
-      const openclaw = ({ loads = true, untypes = true } = {}) => {
+      const openclaw = ({ loads = true, untypes = true, moveGate }: { loads?: boolean; untypes?: boolean; moveGate?: MoveGate } = {}) => {
         let box: string[] = []
         let refused = false
         let loaded = false
@@ -1375,8 +1375,9 @@ describe('SessionInputController', () => {
           validateRuntime: async () => true,
           inject, injectCommand, sendKey, capture: async () => pane(), onError, onDelivery, onFirstTaskTaken,
           ...(untypes ? { untypeFirstTask } : {}),
+          ...(moveGate ? { moveGate } : {}),
         })
-        return Object.assign(fake, { controller, untypeFirstTask, onFirstTaskTaken, onError, onDelivery, session: () => controller.typeCommand('s1', command) })
+        return Object.assign(fake, { controller, inject, untypeFirstTask, onFirstTaskTaken, onError, onDelivery, session: () => controller.typeCommand('s1', command) })
       }
 
       it.each([
@@ -1554,6 +1555,26 @@ describe('SessionInputController', () => {
         await vi.advanceTimersByTimeAsync(10_000)
         expect(fake.keys).toEqual(['C-u', 'C-u'])
         expect(fake.box()).toBe('')
+        fake.controller.forget('s1')
+      })
+
+      // Found in review: typed again straight into the pane, a cleared message went past the move gate the queue's drain
+      // goes through, so while its agent changed host it could reach the pane being replaced.
+      it('a message cleared while its agent changes host is typed again only once the move ends', async () => {
+        vi.useFakeTimers()
+        const gate = new MoveGate()
+        const fake = openclaw({ moveGate: gate })
+
+        fake.controller.submit('s1', 'Say hello')
+        await vi.advanceTimersByTimeAsync(0)
+        gate.hold('h1')
+        await vi.advanceTimersByTimeAsync(15_000)
+        expect(fake.keys).toEqual(['C-u'])
+        expect(fake.inject).toHaveBeenCalledTimes(1)
+        void gate.release('h1')
+        await vi.advanceTimersByTimeAsync(1_000)
+        expect(fake.inject.mock.calls.length).toBeGreaterThan(1)
+        expect(fake.controller.waitsForPane('s1')).toBe(true)
         fake.controller.forget('s1')
       })
 
@@ -1950,6 +1971,36 @@ describe('SessionInputController', () => {
           fake.controller.onTurnEnded('s1')
           await vi.advanceTimersByTimeAsync(1_000)
           expect(fake.typed).toEqual(['And then this'])
+          expect(fake.onError).not.toHaveBeenCalled()
+          fake.controller.forget('s1')
+        })
+
+        // Found in review: a message waiting for its pane went ahead of the task once it was cleared back to its row, and its
+        // turn let go of the task's row while the task waited behind it.
+        it('a message already waiting for its pane gives way to it once it is cleared back to its row', async () => {
+          vi.useFakeTimers()
+          const fake = openclaw()
+          fake.show('Say hello')
+          fake.refuse()
+
+          fake.controller.submit('s1', 'And then this')
+          await vi.advanceTimersByTimeAsync(2_000)
+          expect(fake.controller.waitsForPane('s1')).toBe(true)
+          expect(fake.controller.adoptTypedFirstTask('s1', 'Say hello')).toBe(true)
+          await vi.advanceTimersByTimeAsync(10_000)
+          expect(fake.keys).toEqual(['C-u'])
+          expect(await fake.session()).toBe(true)
+          await vi.advanceTimersByTimeAsync(5_000)
+          expect(fake.sent).toEqual([])
+          fake.controller.expectFirstTask('s1')
+          fake.controller.submitFirstTask('s1', 'Say hello')
+          await vi.advanceTimersByTimeAsync(1_000)
+          expect(fake.sent).toEqual(['Say hello'])
+          fake.controller.onTurnStarted('s1', 'Say hello')
+          fake.controller.onTurnEnded('s1')
+          await vi.advanceTimersByTimeAsync(1_000)
+          expect(fake.sent).toEqual(['Say hello', 'And then this'])
+          expect(fake.onFirstTaskTaken.mock.calls).toEqual([['s1']])
           expect(fake.onError).not.toHaveBeenCalled()
           fake.controller.forget('s1')
         })
