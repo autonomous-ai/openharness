@@ -38,6 +38,9 @@ sets them up. Rust and Tauri 2 in `src-tauri/`; the window's three screens are p
   `scripts/e2e/macos.sh`, `scripts/e2e/windows.ps1 -Installer <debug installer>` and
   `scripts/e2e/linux.sh <AppImage>` (a fake tray host, X11, sway and a scripted Hyprland). `scripts/e2e/update-pair.sh`
   builds 0.0.1 and 0.0.2 for each driver's update check (`macos.sh --update`, and the same in the other two).
+  `scripts/e2e/appimage-starts.sh <AppImage> <name>`: does an AppImage start from its FUSE mount with no `libfuse2`.
+  `scripts/e2e/linux-install.sh <AppImage>`: the one-line install on Ubuntu 24.04 with no `libfuse2`, against a fake
+  CDN; GitHub-hosted runners only, as it changes `/etc/hosts` and the trust store.
 - `python3 -m unittest discover -s scripts -p 'test_*.py'`: the release rules. How a release is cut:
   [RELEASE.md](RELEASE.md).
 
@@ -75,6 +78,9 @@ sets them up. Rust and Tauri 2 in `src-tauri/`; the window's three screens are p
   AppImage's and the launcher's paths, each in single quotes inside its `sh -c` text, so systemd's autostart
   generator, which escapes `$`, reads it as GLib does; a path holding `'`, `"`, `$`, a backtick, a backslash or a
   control character gets no entry (`loginitem_linux.rs`). The desktop session runs it, never the app.
+  At every launch from an AppImage it also writes the app-list entry `harness-device.desktop` and its icon, taken
+  from inside the image, when the rule of `tests/fixtures/app-list-entry-vectors.json` says so, and logs
+  `app list: entry written|kept|not written (…)` (`app_list.rs`). Written, never run by the app.
 - **Children start clean.** On Windows every child runs with no console, in a job of its own that the daemon leaves:
   the job ends what a child left behind when the child ends, and every child with the app. Its stdin sits behind a
   queue that never blocks the app (`child_windows.rs`, `stdin_queue.rs`). On Linux every child gets the person's
