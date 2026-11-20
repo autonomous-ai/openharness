@@ -10,8 +10,8 @@
 # D-Bus session, Xvfb display, window manager and compositor, a fake xdg-open and a fake desktop app; never an account,
 # a backend or a person's apps. On a GitHub-hosted runner only, a last part runs the app's own install lines: the CDN's
 # install script, sudo for its packages, and the CLI it installs, signed out, with a backend that does not resolve.
-# It needs xvfb openbox xdotool xterm sway foot dbus-x11 python3-dbus python3-gi and FUSE for the AppImage (libfuse2);
-# where FUSE is missing, APPIMAGE_EXTRACT_AND_RUN=1 runs it unpacked.
+# It needs xvfb openbox xdotool x11-utils xterm sway foot dbus-x11 python3-dbus python3-gi and FUSE for the AppImage
+# (libfuse2); where FUSE is missing, APPIMAGE_EXTRACT_AND_RUN=1 runs it unpacked.
 set -euo pipefail
 
 # Its own session bus, which ends with it.
@@ -21,6 +21,8 @@ fi
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 fake_cli="$(dirname "$(dirname "$here")")/src-tauri/tests/fake-harness"
+# The app-list entry's one rule, which the app's, Desktop's and the website's tests read too.
+vectors="$(dirname "$(dirname "$(dirname "$here")")")/tests/fixtures/app-list-entry-vectors.json"
 python=/usr/bin/python3
 # Every wait ends on what it waits for, bounded by this: a slow arm64 runner starts the AppImage in seconds. An update
 # by UPDATE_WAIT, from the launch.
@@ -63,6 +65,8 @@ runtime="$work/run"
 fake="$work/fake"
 data="$data_home/ai.autonomous.harness.device"
 entry="$config/autostart/harnessd.desktop"
+applications="$data_home/applications"
+app_entry="$applications/harness-device.desktop"
 mkdir -p "$home/My Apps" "$home/Desktop" "$config" "$data_home" "$runtime" "$fake" "$work/bin" "$work/procs" \
   "$work/apps" "$work/cache" "$work/state" "$work/tmp"
 chmod 700 "$runtime"
@@ -113,6 +117,8 @@ cleanup() {
     WAIT=10 waits gone "$pid" || kill -KILL "$pid" 2>/dev/null
   done
   wait 2>/dev/null
+  # The read-only applications folder of a check that failed.
+  chmod -R u+w "$work"
   rm -rf "$work"
 }
 trap cleanup EXIT
@@ -324,6 +330,20 @@ save_state() {
 # The entry's Exec= for this AppImage and the launcher in the scratch HOME: loginitem_linux.rs exec_line.
 own_exec="Exec=/bin/sh -c \"[ -x '$appimage' ] && exec '$appimage'; exec '$home/.local/bin/harness' start\""
 
+# The app-list entry for this AppImage and data home: the vectors' entry for a folder with a space, with its icon.
+"$python" - "$vectors" "$appimage" "$data_home" >"$work/app-list.expected" <<'PY'
+import json, sys
+vectors, appimage, data_home = sys.argv[1:]
+with open(vectors, encoding="utf-8") as file:
+    case = next(c for c in json.load(file)["entries"] if c["icon"] and " " in c["appImage"])
+sys.stdout.write(case["entry"].replace(case["appImage"], appimage).replace(case["dataHome"], data_home))
+PY
+wm_class="$(sed -n 's/^StartupWMClass=//p' "$work/app-list.expected")"
+# The entry's bytes and time, to tell a run that left it.
+stamp() { sha256sum <"$app_entry" && stat -c %y "$app_entry"; }
+# The app-list entry this AppImage would write, naming another file.
+app_entry_for() { sed "s|^Exec=.*|Exec=\"$1\"|" "$work/app-list.expected" >"$app_entry"; }
+
 # --- The update: 0.0.1 from update-pair.sh, with no CLI and nothing in its way, finds 0.0.2 at 127.0.0.1:8765 and
 # becomes it
 
@@ -394,6 +414,19 @@ cmp -s "$work/entry.expected" "$entry" || fail "the first run writes harnessd.de
 [[ "$(ls -A "$config/autostart")" == harnessd.desktop ]] || fail "the login item is the one harnessd.desktop"
 ok "the first run writes the one harnessd.desktop, with the app's Exec="
 
+waits logged "app list: entry written" || fail "the first run lists the app: the log has app list: entry written"
+cmp -s "$work/app-list.expected" "$app_entry" \
+  || fail "the first run lists the app: harness-device.desktop is the vectors'"
+# The icon is the image's own, as Desktop and the one-line installer extract it.
+icon_member=usr/share/icons/hicolor/128x128/apps/harness-device.png
+mkdir "$work/extract"
+(cd "$work/extract" && "$appimage" --appimage-extract "$icon_member" >/dev/null) \
+  || fail "the AppImage extracts its icon"
+icon="$data_home/icons/harness-device.png"
+cmp -s "$work/extract/squashfs-root/$icon_member" "$icon" || fail "the first run lists the app: its icon is the image's"
+cmp -s -n 8 <(printf '\x89PNG\r\n\x1a\n') "$icon" || fail "the first run lists the app: its icon is a PNG"
+ok "the first run lists the app: harness-device.desktop is the vectors' entry for this AppImage, its icon a PNG"
+
 cp "$(command -v xterm)" "$work/procs/code"
 env -i "${base[@]}" xterm -T e2e-xterm -e sleep 600 >>"$work/xterm.out" 2>&1 &
 started
@@ -439,6 +472,7 @@ stop_app
 
 stop_watcher
 cp "$entry" "$work/entry.before"
+stamp >"$work/app-list.before"
 launch XDG_SESSION_TYPE=wayland
 waits logged "$MENU" || fail "Wayland: the menu reads as on X11"
 waits logged "tray: no host" || fail "with no tray host, the log has tray: no host"
@@ -454,12 +488,20 @@ ok "a Wayland session with neither sway nor Hyprland tells no app and logs no fr
 cmp -s "$work/entry.before" "$entry" || fail "a second run leaves the entry's bytes"
 ok "a second run leaves harnessd.desktop as it is"
 stop_app
+# The run is over: whatever the app did to the entry, it has done.
+logged "app list: entry written" && fail "a second run leaves the app-list entry: the log has app list: entry written"
+stamp | cmp -s "$work/app-list.before" - || fail "a second run leaves the app-list entry, byte for byte and mtime"
+ok "a second run leaves the entry, byte for byte and mtime"
 
 # --- 4, 7: sway, an entry the person turned off
 
 printf '%s\n' '[Desktop Entry]' 'Type=Application' 'Name=Harness' 'Exec="/opt/other/harness" start' 'Hidden=true' \
   >"$entry"
 cp "$entry" "$work/entry.before"
+mkdir "$work/other"
+: >"$work/other/Harness-Device.AppImage"
+app_entry_for "$work/other/Harness-Device.AppImage"
+stamp >"$work/app-list.before"
 
 printf 'xwayland disable\n' >"$work/sway.conf"
 env -i "${base[@]}" WLR_BACKENDS=headless WLR_LIBINPUT_NO_DEVICES=1 WLR_RENDERER=pixman sway -c "$work/sway.conf" \
@@ -493,6 +535,9 @@ ok "sway: the watch is told foot, kitty, then foot again, each as it takes the f
 cmp -s "$work/entry.before" "$entry" || fail "an entry with Hidden=true and another Exec= is left as it is"
 ok "an entry turned off (Hidden=true), with another Exec=, is left as it is"
 stop_app
+logged "app list: entry written" && fail "an entry naming another AppImage on disk is left: the log has entry written"
+stamp | cmp -s "$work/app-list.before" - || fail "an entry naming another AppImage on disk is left alone"
+ok "an entry naming another AppImage on disk is left alone"
 kill "$sway_pid"
 
 # --- 5, 7: Hyprland, the installer's entry
@@ -502,6 +547,7 @@ installers() {
   printf '%s\n' '[Desktop Entry]' 'Type=Application' 'Name=Harness' "$1" 'X-GNOME-Autostart-enabled=true' 'X-E2E=kept'
 }
 installers "Exec=\"$home/.local/bin/harness\" start" >"$entry"
+app_entry_for "$work/gone/Harness-Device.AppImage"
 cp "$(command -v sleep)" "$work/procs/alacritty"
 cp "$(command -v sleep)" "$work/procs/wezterm-gui"
 "$work/procs/alacritty" 600 &
@@ -527,6 +573,10 @@ ok "Hyprland: the watch is told alacritty, then wezterm-gui, the exe name of eac
 waits logged "login item: updated" || fail "an entry that is on, with the installer's Exec=, is taken over"
 installers "$own_exec" | cmp -s - "$entry" || fail "a taken-over entry has the app's Exec= and keeps the rest"
 ok "an entry that is on, with the installer's Exec=, takes the app's Exec= and the log has login item: updated"
+waits logged "app list: entry written" \
+  || fail "an entry naming a file that is gone: the log has app list: entry written"
+cmp -s "$work/app-list.expected" "$app_entry" || fail "an entry naming a file that is gone is written again"
+ok "an entry naming a file that is gone is written again"
 stop_app
 exec {hypr_in}>&-
 
@@ -537,12 +587,28 @@ save_state false true
 mkdir -p "$data_home/applications"
 printf '%s\n' '[Desktop Entry]' 'Type=Application' 'Name=Harness' "Exec=\"$work/apps/Harness.AppImage\" %U" \
   >"$data_home/applications/harness.desktop"
+# An app-list entry to write, in a folder the app cannot write to.
+rm "$app_entry"
+chmod 555 "$applications"
 start_watcher
 launch XDG_SESSION_TYPE=x11
 waits logged "menu: Plug in your device | Sign in… | Open Harness | Export logs | About | Quit" \
   || fail "with the desktop app installed, the menu has Open Harness"
 [[ ! -e "$entry" ]] || fail "a deleted entry stays deleted"
 ok "a deleted harnessd.desktop stays deleted"
+
+waits tray_registered || fail "with a read-only applications folder the tray still registers"
+not_written="app list: entry not written (error 13)"
+waits logged "$not_written" || fail "with a read-only applications folder the log says $not_written"
+ok "with a read-only applications folder the tray still registers and the log says $not_written"
+
+# xprop's first string, the instance, is what GNOME matches StartupWMClass to (the vectors' startupWMClassSource).
+waits xdotool search --onlyvisible --name '^Harness$' >/dev/null || fail "the Sign in window shows"
+window="$(xdotool search --onlyvisible --name '^Harness$' | head -n 1)"
+class="$(xprop -id "$window" WM_CLASS | sed -n 's/^WM_CLASS(STRING) = "\([^"]*\)".*/\1/p')"
+[[ "$class" == "$wm_class" ]] \
+  || fail "StartupWMClass is the window's WM_CLASS: the window's is '$class', not '$wm_class'"
+ok "StartupWMClass is the window's WM_CLASS"
 
 # Return takes the window's primary answer, Sign in, once the page has drawn it.
 sign_in() {
@@ -562,6 +628,7 @@ waits test -s "$work/desktop-app.log" || fail "Open Harness runs the desktop app
 ok "Open Harness runs the desktop app's AppImage"
 probe desktop-app "the desktop app"
 stop_app
+chmod 755 "$applications"
 
 [[ ${#broken[@]} -eq 0 ]] \
   || fail "a GTK program xdg-open or the desktop app starts runs in the environment the AppImage hands it: ${broken[*]}"

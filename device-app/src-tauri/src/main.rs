@@ -189,6 +189,16 @@ fn start(handle: &AppHandle, events: Sender<Event>, queue: Receiver<Event>) -> t
             }
         });
     }
+    // The app-list entry, off the main thread too: a slow or failing disk neither holds nor fails the launch.
+    #[cfg(target_os = "linux")]
+    {
+        let log = log.clone();
+        thread::spawn(move || {
+            if let Some(line) = harness_device::app_list::system() {
+                log.line(&line);
+            }
+        });
+    }
 
     let (app, first) = App::new(
         saved,
