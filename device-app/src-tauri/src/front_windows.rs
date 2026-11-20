@@ -14,8 +14,8 @@ use {
     },
     windows_sys::Win32::UI::Accessibility::{HWINEVENTHOOK, SetWinEventHook, UnhookWinEvent},
     windows_sys::Win32::UI::WindowsAndMessaging::{
-        DispatchMessageW, EVENT_SYSTEM_FOREGROUND, GetForegroundWindow, GetMessageW, GetWindowThreadProcessId, MSG,
-        WINEVENT_OUTOFCONTEXT,
+        DispatchMessageW, EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_MINIMIZEEND, EVENT_SYSTEM_SWITCHEND,
+        GetForegroundWindow, GetMessageW, GetWindowThreadProcessId, MSG, WINEVENT_OUTOFCONTEXT,
     },
 };
 
@@ -44,23 +44,28 @@ thread_local! {
     static CHANGED: OnceCell<Box<dyn Fn(String) + Send + Sync>> = const { OnceCell::new() };
 }
 
-/// Sets the hook, tells the window in front now, then runs this thread's message loop, inside which the hook is called.
-/// The hook is set first, so a change before the first value waits in the queue and is not missed.
+/// The events after which the window in front may have changed, as hook ranges: the foreground's own, and the end of
+/// an Alt+Tab and of a minimize or a restore (a minimize's start is between them), for which Windows may raise none.
+#[cfg(windows)]
+const EVENTS: [(u32, u32); 2] =
+    [(EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND), (EVENT_SYSTEM_SWITCHEND, EVENT_SYSTEM_MINIMIZEEND)];
+
+/// Sets the hooks, tells the window in front now, then runs this thread's message loop, inside which the hooks are
+/// called. The hooks are set first, so a change before the first value waits in the queue and is not missed.
 #[cfg(windows)]
 fn follow(changed: Box<dyn Fn(String) + Send + Sync>) -> Stop {
-    // SAFETY: no module (the procedure is in this process), and `foreground` lives as long as the process.
-    let hook: HWINEVENTHOOK = unsafe {
-        SetWinEventHook(
-            EVENT_SYSTEM_FOREGROUND,
-            EVENT_SYSTEM_FOREGROUND,
-            ptr::null_mut(),
-            Some(foreground),
-            0,
-            0,
-            WINEVENT_OUTOFCONTEXT,
-        )
+    let hooks: [HWINEVENTHOOK; 2] = EVENTS.map(|(first, last)| {
+        // SAFETY: no module (the procedure is in this process), and `foreground` lives as long as the process.
+        unsafe { SetWinEventHook(first, last, ptr::null_mut(), Some(foreground), 0, 0, WINEVENT_OUTOFCONTEXT) }
+    });
+    let unhook = || {
+        for hook in hooks.into_iter().filter(|hook| !hook.is_null()) {
+            // SAFETY: set by this thread, and unhooked once.
+            unsafe { UnhookWinEvent(hook) };
+        }
     };
-    if hook.is_null() {
+    if hooks.iter().any(|hook| hook.is_null()) {
+        unhook();
         return Stop::NotFollowed;
     }
     // SAFETY: takes no argument.
@@ -75,16 +80,18 @@ fn follow(changed: Box<dyn Fn(String) + Send + Sync>) -> Stop {
         // SAFETY: `message` was filled by GetMessageW.
         unsafe { DispatchMessageW(&message) };
     }
-    // SAFETY: the hook was set by this thread and is unhooked once.
-    unsafe { UnhookWinEvent(hook) };
+    unhook();
     Stop::Ended
 }
 
+/// Tells the window in front now, whichever window and event called it: a late or a stray event is put right by the
+/// next one, and FrontFeed drops a value told again.
 #[cfg(windows)]
-unsafe extern "system" fn foreground(_: HWINEVENTHOOK, _: u32, window: HWND, _: i32, _: i32, _: u32, _: u32) {
+unsafe extern "system" fn foreground(_: HWINEVENTHOOK, _: u32, _: HWND, _: i32, _: i32, _: u32, _: u32) {
     CHANGED.with(|cell| {
         if let Some(changed) = cell.get() {
-            changed(app(window));
+            // SAFETY: takes no argument.
+            changed(app(unsafe { GetForegroundWindow() }));
         }
     });
 }
