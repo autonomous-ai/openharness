@@ -10,6 +10,7 @@ import { delimiter, dirname, join } from 'node:path'
 import { resolveBinaryOnPath } from '../lib/binaryOnPath.js'
 import { agentCommandOwnershipSnapshotAsync, ENGINE_CLI_ALIASES, enginePathOverride, executableFileIdentity, installedEngineBin } from '../lib/engineBin.js'
 import { ENGINE_INSTALL, engineInstallPaths } from '../lib/engineInstall.js'
+import { windowsProgram } from '../lib/windows/program.js'
 import { DIAL_PLUGIN_ID } from './dialSkill.js'
 
 export const MARKETPLACE = 'openharness'
@@ -48,10 +49,20 @@ const NO_ANSWER = 'Claude Code did not answer.'
 const UNLISTED = 'Claude Code did not list its plugins.'
 
 /** [bin] run with no shell, its stdin closed; [env] the child's environment, the process's own by default. Its time
- *  ends it with SIGKILL, as the engine lookup's shell: a `claude` that does not end on TERM would hold the pass. */
-export function claudeRunner(bin: string, env?: NodeJS.ProcessEnv): ClaudeRun {
+ *  ends it with SIGKILL, as the engine lookup's shell: a `claude` that does not end on TERM would hold the pass. On
+ *  Windows an npm install's `claude.cmd` is started as the program it runs, hidden; a batch file that is not such a
+ *  shim only cmd.exe could run, and is no answer. */
+export function claudeRunner(bin: string, env?: NodeJS.ProcessEnv, platform: NodeJS.Platform = process.platform): ClaudeRun {
   return (args, timeoutMs) => new Promise((resolve) => {
-    const child = execFile(bin, args, { encoding: 'utf8', timeout: timeoutMs, killSignal: 'SIGKILL', maxBuffer: MAX_OUTPUT_BYTES, env },
+    let program
+    try {
+      program = windowsProgram(bin, args, { platform, environment: env ?? process.env })
+    } catch {
+      resolve({ code: null, stdout: '', stderr: '' })
+      return
+    }
+    const child = execFile(program.file, program.args,
+      { encoding: 'utf8', timeout: timeoutMs, killSignal: 'SIGKILL', maxBuffer: MAX_OUTPUT_BYTES, env: program.env ?? env, windowsHide: true },
       (error, stdout, stderr) => {
         // A kill (the timeout), a missing file or output past the bound has no exit code: it is no answer.
         const code = !error ? 0 : typeof error.code === 'number' ? error.code : null
@@ -64,14 +75,20 @@ export function claudeRunner(bin: string, env?: NodeJS.ProcessEnv): ClaudeRun {
 
 /** The Claude Code binary as Harness finds it for its own agents, run with no shell; null when it is not installed. */
 export function claudeRun(): ClaudeRun | null {
-  const bin = installedEngineBin('claude')
+  const bin = claudeInstalled()
   return bin ? claudeRunner(bin) : null
 }
 
 /** Claude Code as claudeRun() finds it, pointed at [home] on this child alone. null: no `claude`. */
 export function claudeRunIn(home: string): ClaudeRun | null {
-  const bin = installedEngineBin('claude')
+  const bin = claudeInstalled()
   return bin ? claudeRunner(bin, pointedAt(home, process.env)) : null
+}
+
+/** engineBin's lookup names a file as it is spelled, and on Windows `claude` is `claude.exe` or an npm `claude.cmd`:
+ *  there the nearby lookup, which tries Windows' extensions, finds it on PATH and where the installers put it. */
+function claudeInstalled(): string | null {
+  return process.platform === 'win32' ? claudeNearby() : installedEngineBin('claude')
 }
 
 /** [env] for a child pointed at [home]: ~/.claude is Claude Code's own default, which it reads with no CLAUDE_CONFIG_DIR. */
@@ -98,15 +115,16 @@ function claudeNearby(): string | null {
 /**
  * Claude Code as the daemon finds it for its own agents; null when it is not on this computer or the lookup failed.
  * With [shell] the lookup reads the person's interactive PATH, which the devices' own (launchd's bare one) may lack, by
- * starting their login shell; without it, it looks only where no shell is started. The child gets the folder `claude`
- * is in first, so an npm install's `#!/usr/bin/env node` finds the node beside it. It is pointed at [home] whatever
- * CLAUDE_CONFIG_DIR the daemon was started with (an Orca profile's shell), so the plugin goes into the home whose
- * settings the devices read; ~/.claude is Claude Code's own default and needs none.
+ * starting their login shell; without it, it looks only where no shell is started. Windows has no login shell to read,
+ * and the devices there have the person's own PATH: both look where no shell is started (claudeInstalled). The child
+ * gets the folder `claude` is in first, so an npm install's `#!/usr/bin/env node` finds the node beside it. It is
+ * pointed at [home] whatever CLAUDE_CONFIG_DIR the daemon was started with (an Orca profile's shell), so the plugin goes
+ * into the home whose settings the devices read; ~/.claude is Claude Code's own default and needs none.
  */
 export async function claudeFound(home: string, shell: boolean): Promise<ClaudeRun | null> {
   let bin: string | null
   try {
-    bin = shell ? installedEngineBin('claude', await agentCommandOwnershipSnapshotAsync()) : claudeNearby()
+    bin = shell && process.platform !== 'win32' ? installedEngineBin('claude', await agentCommandOwnershipSnapshotAsync()) : claudeNearby()
   } catch {
     return null
   }
@@ -123,18 +141,28 @@ function atLeast(version: string, min: string): boolean {
   return true
 }
 
-async function versionOf(run: ClaudeRun): Promise<string | null> {
+/** On Windows `claude` on PATH can be the Claude desktop app's `Claude.exe`, whose `--version` names no Claude Code and
+ *  whose every other call opens its window: there a version counts only beside "Claude Code", and a run without one is
+ *  asked nothing more. */
+async function versionOf(run: ClaudeRun, platform: NodeJS.Platform): Promise<string | null> {
   const { code, stdout } = await run(['--version'], LOCAL_MS)
-  return code === 0 ? VERSION.exec(stdout)?.[0] ?? null : null
+  if (code !== 0 || (platform === 'win32' && !stdout.includes('Claude Code'))) return null
+  return VERSION.exec(stdout)?.[0] ?? null
 }
 
 function supports(platform: NodeJS.Platform, claudeVersion: string | null): boolean {
-  return (platform === 'darwin' || platform === 'linux') && !!claudeVersion && atLeast(claudeVersion, MIN_CLAUDE)
+  return (platform === 'darwin' || platform === 'linux' || platform === 'win32') && !!claudeVersion && atLeast(claudeVersion, MIN_CLAUDE)
 }
 
 /** [run] when its Claude Code can take the plugin, asked with one `--version`: an old one is asked nothing more. */
 async function supportedRun({ run, platform }: ClaudeDeps): Promise<ClaudeRun | null> {
-  return run && supports(platform, await versionOf(run)) ? run : null
+  return run && supports(platform, await versionOf(run, platform)) ? run : null
+}
+
+/** [run], and on Windows only once its `--version` says it is Claude Code (versionOf): a disable there has nothing of
+ *  the desktop app's to take out. */
+async function claudeCodeRun({ run, platform }: ClaudeDeps): Promise<ClaudeRun | null> {
+  return run && (platform !== 'win32' || await versionOf(run, platform)) ? run : null
 }
 
 /** A call's failure: the first line Claude Code wrote about it, or [none] when it wrote nothing. */
@@ -163,8 +191,10 @@ async function userEntry(run: ClaudeRun): Promise<{ ok: true; entry?: Record<str
 
 /** A list that cannot be read shows the plugin as not installed: the status has no failure to give. */
 export async function claudeStatus({ run, platform }: ClaudeDeps): Promise<ClaudeStatus> {
-  if (!run) return { supported: false, installed: false, enabled: false, claudeVersion: null }
-  const claudeVersion = await versionOf(run)
+  const none: ClaudeStatus = { supported: false, installed: false, enabled: false, claudeVersion: null }
+  if (!run) return none
+  const claudeVersion = await versionOf(run, platform)
+  if (!claudeVersion && platform === 'win32') return none
   const listed = await userEntry(run)
   const entry = listed.ok ? listed.entry : undefined
   return { supported: supports(platform, claudeVersion), installed: !!entry, enabled: entry?.enabled === true, claudeVersion }
@@ -215,7 +245,8 @@ export async function claudeSetUp(deps: ClaudeDeps): Promise<ClaudeSetup> {
 }
 
 /** Uninstalls the plugin and keeps the marketplace, which the harness plugin may come from too. */
-export async function claudeDisable({ run }: ClaudeDeps): Promise<ClaudeResult> {
+export async function claudeDisable(deps: ClaudeDeps): Promise<ClaudeResult> {
+  const run = await claudeCodeRun(deps)
   if (!run) return { ok: true }
   const listed = await userEntry(run)
   if (!listed.ok) return listed
@@ -241,7 +272,8 @@ export async function claudeHomeEnable(deps: ClaudeDeps): Promise<ClaudeResult> 
 }
 
 /** Turns it off in such a home's settings and leaves its files: an uninstall here would remove what every home names. */
-export async function claudeHomeDisable({ run }: ClaudeDeps): Promise<ClaudeResult> {
+export async function claudeHomeDisable(deps: ClaudeDeps): Promise<ClaudeResult> {
+  const run = await claudeCodeRun(deps)
   if (!run) return { ok: true }
   const listed = await userEntry(run)
   if (!listed.ok) return listed
