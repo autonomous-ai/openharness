@@ -4,6 +4,7 @@
 A PR runs the unit suite of each component it changes and of each suite that reads a changed file (PR_READS), and each
 end-to-end suite (E2E: windows-e2e, linux-e2e, dial-hosts, device-app-e2e, device-app-update, device-app-desktop,
 device-app-install) whose own path list names a changed file; linux-e2e runs the CLI e2e files the PR adds or modifies.
+A change to this planner, its test or the tables it reads runs the repository-wide cross-read scan on a full checkout.
 Merge groups run only the plan and process checks: the PR run already covered the code.
 After GitHub merges main into a PR head whose ci/required passed, a component whose
 inputs main's new commits left untouched reuses that run's result instead of running
@@ -36,7 +37,7 @@ EXTRA = {"website", "os", "provider", "firmware", "mobile", "daemons", "pty", "d
 # End to end on Windows and Linux, each selected by its own path list (below).
 E2E = {"windows-e2e", "linux-e2e", "dial-hosts", "device-app-e2e", "device-app-update", "device-app-desktop",
        "device-app-install"}
-SUITES = CORE | EXTRA | {"pro"} | E2E
+SUITES = CORE | EXTRA | {"pro", "cross-read-scan"} | E2E
 JOBS = {
     "cli": {"cli-typecheck", "cli-tests"},
     "pro": {"pro-firmware-build", "pro-golden"},
@@ -48,9 +49,11 @@ JOBS = {
     # file to its own result, in both of its modes; dial-hosts calls cli-e2e-dial-hosts.yml.
     "windows-e2e": {"windows-e2e"}, "device-app-e2e": {"device-app-linux", "device-app-windows"},
     "linux-e2e": {"linux-e2e", "linux-e2e-summary"},
-    **{name: {name} for name in ("dial-hosts", "device-app-update", "device-app-desktop", "device-app-install")},
+    **{name: {name} for name in ("dial-hosts", "device-app-update", "device-app-desktop", "device-app-install",
+                                 "cross-read-scan")},
 }
-# all: every component's suite. The end-to-end suites cost far more runner time; each runs by its own scope.
+# all: every component's suite and the cross-read scan. The end-to-end suites cost far more runner time; each runs by
+# its own scope.
 MANUAL = {"full": CORE, "all": SUITES - E2E, "process": set(), **{name: {name} for name in SUITES}}
 # Each component's own directory selects its suite. Everything else (docs, workflows,
 # scripts, store, fixtures) is covered by the plan's actionlint and process checks.
@@ -75,6 +78,11 @@ ALSO.update({"desktop/test/support/real_fonts.dart": "mobile"})
 ALSO.update({"plugins/harness-device-vscode/": "cli"})
 # Orca's plugin: the CLI's build inlines the folder.
 ALSO.update({"plugins/harness-device-orca/": "cli"})
+# test_ci_plan.CrossReadTests' repository-wide scan skips in process-checks' sparse checkout, where two undeclared reads
+# slipped in: its own job runs it on a full checkout, for a change to the planner, its test or the tables it reads
+# (DEPENDS takes the desktop's from record-ci-validation.py).
+ALSO.update({path: "cross-read-scan" for path in ("scripts/ci-plan.py", "scripts/tests/test_ci_plan.py",
+                                                  "scripts/record-ci-validation.py")})
 # Narrower directories that add a suite on top of their component's (the ESP32-P4 build and golden screens).
 SUBCOMPONENTS = {"devices/harness-pro/": "pro"}
 
@@ -218,6 +226,9 @@ DEPENDS.update({
     "device-app-update": DEPENDS["device-app"] + ("device-app/",),
     "device-app-desktop": DEPENDS["device-app"] + DEPENDS["desktop"] + ("device-app/", "desktop/"),
     "device-app-install": DEPENDS["device-app"] + ("device-app/", "website/scripts/device-install.sh"),
+    # Every component's files and the docs their strings may name: the scan reads them all.
+    "cross-read-scan": tuple(sorted({path.split("/", 1)[0] + "/" for path in (*COMPONENTS, *ALSO, *SUBCOMPONENTS)}
+                                    | {"docs/"})),
 })
 
 # Selection. The files each suite reads outside its own directory, as narrow as the scan shows: a PR that changes one

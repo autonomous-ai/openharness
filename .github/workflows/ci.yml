@@ -19,7 +19,7 @@ on:
       scope:
         description: 'Affected component; full for core suites, all for every component'
         type: choice
-        options: [full, cli, tui, backend, desktop, process, all, companions, website, os, provider, firmware, pro, mobile, daemons, pty, device-app, windows-e2e, linux-e2e, dial-hosts, device-app-e2e, device-app-update, device-app-desktop, device-app-install]
+        options: [full, cli, tui, backend, desktop, process, all, companions, website, os, provider, firmware, pro, mobile, daemons, pty, device-app, windows-e2e, linux-e2e, dial-hosts, device-app-e2e, device-app-update, device-app-desktop, device-app-install, cross-read-scan]
         default: full
       e2e_files:
         description: 'With scope linux-e2e: the cli/e2e files to run, separated by spaces'
@@ -95,6 +95,7 @@ jobs:
       device-app-desktop: ${{ steps.select.outputs.device-app-desktop }}
       device-app-install: ${{ steps.select.outputs.device-app-install }}
       device-app-builds: ${{ steps.select.outputs.device-app-builds }}
+      cross-read-scan: ${{ steps.select.outputs.cross-read-scan }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -1322,13 +1323,34 @@ jobs:
           if [[ ${#found[@]} -ne 1 ]]; then echo "one AppImage, not ${#found[@]}"; exit 1; fi
           bash device-app/scripts/e2e/linux-install.sh "${found[0]}"
 
+  # test_ci_plan.CrossReadTests' repository-wide scan, which skips in process-checks' sparse checkout: here on a full
+  # one, for a change to the planner, its test or the tables it reads (scripts/ci-plan.py ALSO).
+  cross-read-scan:
+    concurrency:
+      group: ci-${{ github.event_name }}-${{ github.event.action || 'run' }}-${{ github.event.pull_request.number || github.run_id }}-cross-read-scan
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+    needs: plan
+    if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.cross-read-scan == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    # The checkout, then the scan: about 20 seconds locally.
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.CI_SOURCE_SHA }}
+      - name: Every cross-read is declared
+        run: python3 -m unittest discover -s scripts/tests -p test_ci_plan.py -k test_every_cross_read_in_this_repository_is_declared -v
+
   required:
     name: ci/required
     needs: [plan, process-checks, desktop-tests, companion-subsystems, cli-typecheck, cli-tests, tui-test,
             backend-desk, backend-integration, website-checks, os-checks, provider-checks, firmware-checks, pro-firmware-build, pro-golden,
             mobile-checks, daemons-checks, pty-checks, device-app-checks, windows-e2e, linux-e2e, linux-e2e-summary,
             dial-hosts, device-app-build,
-            device-app-linux, device-app-windows, device-app-update, device-app-desktop, device-app-install]
+            device-app-linux, device-app-windows, device-app-update, device-app-desktop, device-app-install,
+            cross-read-scan]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 3
