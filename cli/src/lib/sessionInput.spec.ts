@@ -1943,6 +1943,23 @@ describe('SessionInputController', () => {
           fake.controller.forget('s1')
         })
 
+        // Found in the fix review: OpenClaw's editor makes each pasted tab four spaces and drops other control characters
+        // (pi-tui `handlePaste`, engines/openclaw/contract.ts), so the turn of a task with a tab was read as another's: its
+        // wait never ended, and the binding pass's bound failed the launch of an agent at work on it.
+        it('its turn ends its wait as OpenClaw records it, a tab as four spaces', async () => {
+          vi.useFakeTimers()
+          const fake = openclaw()
+          await fake.session()
+
+          fake.controller.submitFirstTask('s1', 'Say\thello\u0007')
+          await vi.advanceTimersByTimeAsync(1_000)
+          expect(fake.controller.firstTaskWaiting('s1')).toBe(true)
+          fake.controller.onTurnStarted('s1', 'Say    hello')
+          expect(fake.controller.firstTaskWaiting('s1')).toBe(false)
+          expect(fake.onFirstTaskTaken.mock.calls).toEqual([['s1']])
+          fake.controller.forget('s1')
+        })
+
         // Found in review: handed over while a caller held the pane, a first task cleared once before was queued behind
         // itself, and typed never.
         it.each([
