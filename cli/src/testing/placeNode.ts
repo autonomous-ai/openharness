@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { chmodSync, constants, copyFileSync, existsSync, linkSync, mkdirSync, readdirSync, realpathSync, renameSync, rmSync, symlinkSync } from 'node:fs'
+import { chmodSync, constants, copyFileSync, existsSync, linkSync, mkdirSync, readdirSync, realpathSync, rmSync, symlinkSync } from 'node:fs'
 import { cpus } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { inject } from 'vitest'
@@ -71,8 +71,9 @@ export const firstStart = (node: string): void => {
 
 /**
  * The run's Node at [node]: a copy of this Node, started once by [start] under a name of its own beside [node], then
- * renamed to it, so [node] is never a copy that has not run. Workers that place their first Node at once may each make
- * one: each rename puts a whole, started copy there, and a link already made keeps the one it linked.
+ * linked in, so [node] is never a copy that has not run. Workers that place their first Node at once may each make one:
+ * the first in place stays (a link fails where a file is), so every test links the one file, and nothing replaces a file
+ * a test may be running, which Windows refuses. A name left by a worker killed midway goes with the run's folder.
  */
 function makeRunNode(node: string, start: (node: string) => void): void {
   const made = `${node}-${randomUUID()}`
@@ -80,10 +81,11 @@ function makeRunNode(node: string, start: (node: string) => void): void {
     mkdirSync(dirname(node), { recursive: true })
     copyNode(made)
     start(made)
-    renameSync(made, node)
+    try { linkSync(made, node) } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error }
   } catch (error) {
-    rmSync(made, { force: true })
     throw new Error(`The run's Node, a copy of ${process.execPath}, could not be made at ${node}: ${(error as Error).message}`, { cause: error })
+  } finally {
+    rmSync(made, { force: true })
   }
 }
 
