@@ -107,9 +107,9 @@ void pro_app_notif_seen(const char *id, const char *token)
 {
     ev_t *e = add(EV_NSEEN, id); put(e->a, token ? token : "(none)");
 }
-void pro_app_question(const char *id, const char *request, const char *text)
+void pro_app_question(const char *id, const char *request, const char *text, bool list)
 {
-    ev_t *e = add(EV_QUESTION, id); (void)request; put(e->a, text);
+    ev_t *e = add(EV_QUESTION, id); (void)request; put(e->a, text); e->n1 = list;
 }
 void pro_app_question_close(const char *id) { add(EV_QCLOSE, id); }
 void pro_app_focus(const char *id) { add(EV_FOCUS, id); }
@@ -1178,6 +1178,22 @@ static void features_apps_switch_and_question_tier(void)
     CHECK(features_of("{\"features\":[\"apps.switch\",3]}") == 0);
 }
 
+// `tier: "list"` (a question told again) is silent only when the welcome listed question.tier; anything else is an alert.
+static void question_tier_list(void)
+{
+    feed("{\"t\":\"welcome\",\"machine\":{\"id\":\"m1\",\"name\":\"Mac\"},\"features\":[\"question.tier\"]}");
+    const char *tiers[] = { ",\"tier\":\"list\"", ",\"tier\":\"alert\"", "", ",\"tier\":7", ",\"tier\":\"List\"" };
+    for (int i = 0; i < 5; i++) {
+        reset();
+        feedf("{\"t\":\"question\",\"agentId\":\"a\",\"id\":\"q\"%s,\"questions\":[{\"q\":\"x\"}]}", tiers[i]);
+        CHECK(nev == 1 && evs[0].kind == EV_QUESTION && evs[0].n1 == (i == 0));
+    }
+    welcome();   // its features do not list question.tier
+    reset();
+    feed("{\"t\":\"question\",\"agentId\":\"a\",\"id\":\"q\",\"tier\":\"list\",\"questions\":[{\"q\":\"x\"}]}");
+    CHECK(nev == 1 && evs[0].kind == EV_QUESTION && evs[0].n1 == 0);
+}
+
 int main(void)
 {
     pro_cable_start();   // the lock and the machine table; no tasks run on the host
@@ -1204,6 +1220,7 @@ int main(void)
     self_replug();
     replug_spares_a_frame_in_flight();
     features_apps_switch_and_question_tier();
+    question_tier_list();
     printf("test_pro_cable: %d checks passed\n", checks);
     return 0;
 }

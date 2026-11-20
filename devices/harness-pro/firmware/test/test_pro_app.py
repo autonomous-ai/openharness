@@ -910,7 +910,7 @@ static void *cable_task(void *arg) {
     pro_app_turn("a1", "verb", "Reading...", -1);
     pro_app_turn("a1", "activity", "Reading files", 3);
     pro_app_turn("a1", "step", "Read - pod_model.c", -1);
-    pro_app_question("a3", "r1", "Which branch?");
+    pro_app_question("a3", "r1", "Which branch?", false);
     pro_app_question_close("a3");
     pro_app_summary("a2", "Fixed the parser.", "Fixed the parser. Added two tests.", "Fixed the parser. Added two tests. Then more.", false, POD_TIER_SILENT);
     pro_app_focus("a4");
@@ -1495,15 +1495,15 @@ static void pro_app_test_summary_and_question(void) {
     pro_app_summary("a3", "done", NULL, NULL, false, POD_TIER_SILENT);
     CHECK(agent("a3")->recap[0] == 0);
     // Questions: held while open, closed by the daemon or by a new turn.
-    pro_app_question("a1", "r1", "Which branch?");
+    pro_app_question("a1", "r1", "Which branch?", false);
     CHECK(pro_app_question_open("a1") && agent("a1")->state == POD_ASKING);
     pro_app_question_close("a1");
     CHECK(!pro_app_question_open("a1"));
-    pro_app_question("a1", "r1", NULL);
+    pro_app_question("a1", "r1", NULL, false);
     CHECK(pro_app_question_open("a1") && !strcmp(agent("a1")->question, "Needs your answer"));
     pro_app_turn("a1", "started", "", 0);
     CHECK(!pro_app_question_open("a1"));
-    pro_app_question("zz", "r1", "ghost?");
+    pro_app_question("zz", "r1", "ghost?", false);
     CHECK(!pro_app_question_open("zz"));
 }
 
@@ -1575,7 +1575,7 @@ static void pro_app_test_voice_gate(void) {
     CHECK(!strcmp(pro_app_voice_block_reason("a3"), "Link this computer in Harness."));
     CHECK(!strcmp(pro_app_voice_block_reason("a4"), "Choose an agent pane."));
     CHECK(pro_app_voice_block_reason("nobody") == NULL);        // unknown: allowed
-    pro_app_question("a1", "r1", "Which?");
+    pro_app_question("a1", "r1", "Which?", false);
     CHECK(!strcmp(pro_app_voice_block_reason("a1"), "Answer its question first."));
     pro_app_question_close("a1");
     CHECK(pro_app_voice_block_reason("a1") == NULL);
@@ -1610,7 +1610,7 @@ static void pro_app_test_voice_paths(void) {
     CHECK(top() == POD_V_AGENT && !pod_ui_talking(&U) && U.notice_on && !strcmp(U.notice, "Can't talk right now"));
     // A gate refusal never reaches the recorder
     V.refuse = false;
-    pro_app_question("a1", "r1", "Which?");
+    pro_app_question("a1", "r1", "Which?", false);
     render();
     CHECK(hit(POD_A_TALK, 0) == NULL);                         // no screen draws a Talk button; the gate still meets a stale hit
     tap_stale_talk();
@@ -1771,10 +1771,10 @@ static void side_button_discards_hands_free(void) {
 static void question_needs_the_link(void) {
     setup();
     pro_app_link(false, NULL);
-    pro_app_question("a1", "r1", "Which one?");
+    pro_app_question("a1", "r1", "Which one?", false);
     CHECK(!pro_app_question_open("a1"));
     pro_app_link(true, "mac");
-    pro_app_question("a1", "r1", "Which one?");
+    pro_app_question("a1", "r1", "Which one?", false);
     CHECK(pro_app_question_open("a1"));
 }
 
@@ -1889,11 +1889,11 @@ static void notify_tiers(void) {
 // A question is an alert; a failed turn files a failed entry as an alert.
 static void notify_question_and_error(void) {
     notif_room();   // a1's room, now = 5300
-    pro_app_question("a3", "r1", "Which branch?");
+    pro_app_question("a3", "r1", "Which branch?", false);
     render();
     CHECK(BEEPS == 1 && banner() && !strcmp(banner()->id, "a3") && pod_model_unread_find(&U.model, "a3"));
     now += 10000;
-    pro_app_question("a2", "r1", "Which file?");
+    pro_app_question("a2", "r1", "Which file?", false);
     CHECK(BEEPS == 1);   // coalesced
     pro_app_question_close("a3");
     pro_app_question_close("a2");
@@ -1901,13 +1901,13 @@ static void notify_question_and_error(void) {
     // Asleep: the question wakes the glass.
     pro_app_sleep();
     now += 40000;
-    pro_app_question("a3", "r1", "Again?");
+    pro_app_question("a3", "r1", "Again?", false);
     CHECK(!pro_app_asleep() && BEEPS == 2);
     // Its own room: no beep, nothing filed.
     pro_app_question_close("a3");
     notif_setup();
     pod_ui_focus(&U, "a3", now);
-    pro_app_question("a3", "r1", "Here?");
+    pro_app_question("a3", "r1", "Here?", false);
     CHECK(BEEPS == 0 && U.model.unread_count == 0);
     // turn.error: a failed entry, an alert.
     notif_room();
@@ -1921,19 +1921,19 @@ static void notify_question_and_error(void) {
 // The daemon re-sends an open question after a link drop: the row returns, but the glass does not wake or beep again.
 static void notify_question_resent_after_relink_is_quiet(void) {
     notif_room();
-    pro_app_question("a3", "r1", "Which branch?");
+    pro_app_question("a3", "r1", "Which branch?", false);
     CHECK(BEEPS == 1);
     pro_app_link(false, NULL);
     pro_app_link(true, "mac");
     pro_app_sleep();
     now += 40000;   // past the beep coalescing, so only the repeat check can silence it
-    pro_app_question("a3", "r1", "Which branch?");
+    pro_app_question("a3", "r1", "Which branch?", false);
     CHECK(pro_app_question_open("a3") && pod_model_unread_find(&U.model, "a3") && BEEPS == 1 && pro_app_asleep());
-    pro_app_question("a3", "r2", "A different one?");   // another prompt is news
+    pro_app_question("a3", "r2", "A different one?", false);   // another prompt is news
     CHECK(BEEPS == 2 && !pro_app_asleep());
     pro_app_question_close("a3");
     now += 40000;
-    pro_app_question("a3", "r3", "A different one?");   // answered, then asked again: news
+    pro_app_question("a3", "r3", "A different one?", false);   // answered, then asked again: news
     CHECK(BEEPS == 3);
 }
 
@@ -1941,27 +1941,41 @@ static void notify_question_resent_after_relink_is_quiet(void) {
 // Code's approvals all read "Do you want to proceed?").
 static void notify_question_same_prompt_new_request_beeps(void) {
     notif_room();
-    pro_app_question("a3", "r1", "Do you want to proceed?");
+    pro_app_question("a3", "r1", "Do you want to proceed?", false);
     CHECK(BEEPS == 1);
     pro_app_link(false, NULL);   // the close of r1 is lost with the link
     pro_app_link(true, "mac");
     now += 40000;
-    pro_app_question("a3", "r2", "Do you want to proceed?");
+    pro_app_question("a3", "r2", "Do you want to proceed?", false);
     CHECK(BEEPS == 2);
+}
+
+// A question told again (`tier: "list"`) while the glass is dark: filed as an open question, yet dark and silent.
+static void question_list_tier_is_quiet(void) {
+    notif_room();
+    pro_app_sleep();
+    pro_app_question("a3", "r1", "Which branch?", true);
+    render();
+    const pod_unread_t *e = pod_model_unread_find(&U.model, "a3");
+    CHECK(pro_app_question_open("a3") && agent("a3")->state == POD_ASKING && e && e->ask);
+    CHECK(BEEPS == 0 && pro_app_asleep() && !U.ban_on);
+    CHECK(!strcmp(pro_app_voice_block_reason("a3"), "Answer its question first."));
+    pro_app_question("a2", "r1", "Which file?", false);   // a new one is still an alert
+    CHECK(BEEPS == 1 && !pro_app_asleep());
 }
 
 // A question's entry goes whenever the question ends: a new turn, a finished turn, a link drop.
 static void notify_question_entry_ends_with_question(void) {
     notif_room();
-    pro_app_question("a3", "r1", "Which branch?");
+    pro_app_question("a3", "r1", "Which branch?", false);
     CHECK(pod_model_unread_find(&U.model, "a3"));
     pro_app_turn("a3", "started", "Working", 0);
     CHECK(!pod_model_unread_find(&U.model, "a3"));
-    pro_app_question("a2", "r1", "Which file?");
+    pro_app_question("a2", "r1", "Which file?", false);
     CHECK(pod_model_unread_find(&U.model, "a2"));
     pro_app_summary("a2", "t", "Done.", NULL, false, POD_TIER_SILENT);
     CHECK(!pod_model_unread_find(&U.model, "a2"));   // a silent end files nothing, and the question's entry is gone
-    pro_app_question("a3", "r1", "Again?");
+    pro_app_question("a3", "r1", "Again?", false);
     CHECK(pod_model_unread_find(&U.model, "a3"));
     pro_app_link(false, NULL);
     CHECK(!pod_model_unread_find(&U.model, "a3"));
@@ -2374,7 +2388,7 @@ int main(int argc, char **argv) {
         {"pro_app_test_voice_paths", pro_app_test_voice_paths}, {"pro_app_test_touch_rules", pro_app_test_touch_rules},
         {"pro_app_test_roster_and_swarms", pro_app_test_roster_and_swarms}, {"side_button", side_button}, {"side_button_console", side_button_console}, {"question_needs_the_link", question_needs_the_link},
         {"notify_banner_beep_and_expiry", notify_banner_beep_and_expiry}, {"notify_tap_opens_and_swipe_dismisses", notify_tap_opens_and_swipe_dismisses},
-        {"notify_never_over_talk", notify_never_over_talk}, {"notify_tiers", notify_tiers}, {"notify_question_and_error", notify_question_and_error}, {"notify_entries_expire", notify_entries_expire}, {"notify_question_entry_ends_with_question", notify_question_entry_ends_with_question}, {"notify_question_resent_after_relink_is_quiet", notify_question_resent_after_relink_is_quiet}, {"notify_question_same_prompt_new_request_beeps", notify_question_same_prompt_new_request_beeps}, {"notify_replace_seen_and_read", notify_replace_seen_and_read},
+        {"notify_never_over_talk", notify_never_over_talk}, {"notify_tiers", notify_tiers}, {"notify_question_and_error", notify_question_and_error}, {"notify_entries_expire", notify_entries_expire}, {"notify_question_entry_ends_with_question", notify_question_entry_ends_with_question}, {"notify_question_resent_after_relink_is_quiet", notify_question_resent_after_relink_is_quiet}, {"notify_question_same_prompt_new_request_beeps", notify_question_same_prompt_new_request_beeps}, {"question_list_tier_is_quiet", question_list_tier_is_quiet}, {"notify_replace_seen_and_read", notify_replace_seen_and_read},
         {"ota_screen_and_touch", ota_screen_and_touch}, {"voice_refused_while_updating", voice_refused_while_updating},
         {"update_gate", update_gate}, {"ota_failed_returns", ota_failed_returns}, {"ota_keeps_awake", ota_keeps_awake},
         {"ota_notifications_quiet", ota_notifications_quiet}, {"updated_notice", updated_notice},
