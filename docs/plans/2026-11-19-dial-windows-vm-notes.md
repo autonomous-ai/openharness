@@ -613,6 +613,48 @@ The open points of this task, as far as this run reached:
   accepted, and `daemon-token` and the daemon's record were written.
 - **The vscode stream without VS Code, and `daemon:true` in `link`:** not reached.
 
+## Task 25
+
+**Passes on the VM, in the test user's console session: VS Code 1.147.0 (`win32-arm64-archive`).** The extension,
+packed as `enable` packs it, reached the devices over their pipe through the real `harness.exe`. It reported the shells
+of two terminals on one `vscode` stream, a `show` made the terminal it named active, the scroll lines ran, and a page
+line's five PageUps reached the fake alt-screen app as `ESC[5~` five times, with nothing else. VS Code exited with code 0
+and the stream ended `gone`.
+
+Run 2026-11-20 on the same VM: build 26200, ARM64, Node v24.20.0, vitest 4.1.10, `@vscode/test-electron` 2.5.2. The
+tree was this branch at 7f56673462 with this task's changes, synced with `vm-sync.sh --cli`, `plugins/` copied with
+`tar`; `cli`'s `package-lock.json` matched the VM's installed one. `cargo build --release --bins` in `pty`.
+- The command, in `cli`: `set HARNESS_EXE_BIN=C:\work\oh\pty\target\release\harness.exe`, then
+  `npm run test:vscode`. It ran as a one-shot task in session 1 through `desktop-e2e.sh run`, from a temporary script
+  that was never committed and was removed afterwards.
+- The gate's root was in `<profile>\AppData\Local\Temp`, inside the profile, as the pipe's token needs. VS Code got
+  `USERPROFILE`, `LOCALAPPDATA` and `APPDATA` under the root, and a PATH of `%SystemRoot%\System32` alone.
+
+| Run | Gate (6 cases) | Files; cases | Time |
+| --- | --- | --- | --- |
+| 1 | 4 passed; the scroll and page cases timed out | 1 failed, 2 passed; 2 failed, 14 passed, 10 skipped | 405.5 s |
+| 2, after fix 1 | 4 passed; 4 `vscode` streams opened for 1, so the first ended `replaced` | 1 failed, 2 passed; 2 failed, 14 passed, 10 skipped | 333.0 s |
+| 3, after fix 2 | 6 passed | 3 passed; 16 passed, 10 skipped | 315.9 s |
+| 4, the same tree | 6 passed | 3 passed; 16 passed, 10 skipped | 286.8 s |
+
+The 10 skipped are the Mac's (the app's rebranding, `/bin/sh` processes, the preferences named from `~`).
+
+What failed, and the fix in this task:
+1. **A watch hears no write to a file another process holds open.** The scroll and page cases wait on the extension's
+   output channel file, which VS Code keeps open. On the VM, a probe wrote 5 lines into a file a second process held
+   open: `fs.watch` saw none of them, and saw 1 event only once the file was closed. `fs.watchFile` saw all 5. On
+   Windows the gate now reads the file's size every 250 ms.
+2. **A synchronous PowerShell stalled the devices' listener.** The gate takes each shell's start time from
+   Win32_Process through PowerShell, which takes over a second to start on the VM. Taken synchronously, it blocked the
+   gate's process, where the listener runs, past the extension's 2 s for a stream's head, and the extension opened its
+   stream again. The read is now asynchronous.
+
+Clean-up: after the runs no `Code.exe` of the test user's was running, and no `harness-vscode-gate-*` root was left in
+its temp folder. The throwaway VS Code left one empty folder in that temp folder, outside the root:
+`vscode-stable-undefined-arm64`, made during run 1. It was removed by hand, with the temporary script and its log.
+
+On the Mac (`cd cli && npm run test:vscode`), with the final tree: 3 files, 26 passed, 237.9 s.
+
 ## Task 26
 
 **`cargo test --locked --lib -- raise::`: 6 passed. `cargo test --locked --test raise`: over SSH, 2 passed and 1
