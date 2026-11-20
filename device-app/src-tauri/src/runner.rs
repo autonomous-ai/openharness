@@ -1801,15 +1801,18 @@ mod tests {
         scripts.gate(false);
         scripts.still(2);
 
+        // A world of its own: the call let go above may still be at the gate, and the gate shut again would hold it.
+        let scripts = Scripts::answering(&[TTY]);
+        let (w, _fronts) = world_with_tabs(TERMINAL, &scripts);
         let detaching = [r#"{"attached":true}"#, "@wait detach", r#"{"attached":false}"#, "@stdin"];
         w.fake.script("hardware watch --json", &detaching);
         scripts.gate(true);
         assert_eq!(w.answer(Effect::SpawnWatch), a_dial());
-        scripts.polls(2);
+        scripts.polls(1);
         w.fake.touch("detach");
         assert_eq!(w.next(), no_dial());
         scripts.gate(false);
-        scripts.still(4);
+        scripts.still(2);
     }
 
     #[test]
