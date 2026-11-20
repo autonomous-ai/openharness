@@ -19,3 +19,9 @@ it.each(['claude', 'codex'] as const)('ends the wait for %s on no line of anothe
 it('ends the wait for Codex on its own malformed file', () => {
   expect(installOutcome('codex').test('[hooks] Codex hooks file is invalid JSON; leaving it unchanged: /root/home/.codex/hooks.json')).toBe(true)
 })
+
+// Two of Claude Code's outcomes name no engine, and no other engine says them: they still end its wait.
+it('ends the wait for Claude Code on an updated install and on a failed write', () => {
+  expect(installOutcome('claude').test('[hooks] updated (path/port changed) → /root/hook.mjs --port 4100 in /root/home/.claude/settings.json')).toBe(true)
+  expect(installOutcome('claude').test('[hooks] failed to write settings.json: EACCES')).toBe(true)
+})

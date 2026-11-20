@@ -193,12 +193,13 @@ const HOOK_ENGINES = new Set(['claude', 'codex', ...Object.keys(NATIVE_HOOK_PATH
 const HOOK_INSTALL_MESSAGES = { claude: claudeHooks.settings.messages, codex: codexHooks.settings.messages }
 type HookInstallEngine = keyof typeof HOOK_INSTALL_MESSAGES
 /**
- * A line saying how [engine]'s hook install went: any line its contract declares but `after`, which only follows one
- * of them, `{…}` standing for anything. Any outcome counts, a failed write or a malformed file too: the install is
- * over, and what came of it is the test's to judge.
+ * A line saying how [engine]'s hook install went: the first line of each message its contract declares but `after`,
+ * `{…}` standing for anything. Any outcome counts, a failed write or a malformed file too: the install is over, and
+ * what came of it is the test's to judge. A message's later lines, like `after`, only follow a first one, and may be
+ * another engine's too: Codex's "fix the file, then restart harness login" is also Grok's and Agy's.
  */
 export const installOutcome = (engine: HookInstallEngine): RegExp => new RegExp(Object.entries(HOOK_INSTALL_MESSAGES[engine])
-  .filter(([key]) => key !== 'after').flatMap(([, said]) => [said ?? []].flat())
+  .filter(([key]) => key !== 'after').flatMap(([, said]) => [said ?? []].flat().slice(0, 1))
   .map((template) => template.split(/\{\w+\}/).map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('.*'))
   .join('|'))
 /** The shell profiles a login shell in a pane reads, where a person moves an engine's home. */
