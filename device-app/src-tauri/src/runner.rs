@@ -3,6 +3,7 @@
 use crate::account::{self, Login, NO_RESULT};
 use crate::cli::{self, Cli, HarnessCli, START_DEADLINE};
 use crate::desktop;
+use crate::follow::{AX_SETTINGS, FollowDoor};
 use crate::front::{FrontFeed, FrontSource};
 use crate::install::{self, NOT_SUPPORTED, Shell};
 use crate::loginitem::LoginItem;
@@ -38,6 +39,8 @@ pub struct Doors {
     pub tabs: Arc<dyn TabScripts>,
     /// None where the app does not update itself.
     pub updater: Option<Arc<dyn AppUpdater>>,
+    /// The ChatGPT window and the Accessibility permission (`follow::system`).
+    pub follow: Arc<dyn FollowDoor>,
 }
 
 pub struct Runner(Arc<Shared>);
@@ -258,6 +261,9 @@ impl Runner {
                 let args = logs::reveal_args(std::env::consts::OS, &zip);
                 shared.open(&args.iter().map(String::as_str).collect::<Vec<_>>(), "logs");
             }
+            // On the caller's thread: macOS shows its own dialog and does not wait for it.
+            Effect::AskAx => shared.doors.follow.prompt(),
+            Effect::OpenAxSettings => shared.open(&[AX_SETTINGS], "accessibility settings"),
         }
         None
     }

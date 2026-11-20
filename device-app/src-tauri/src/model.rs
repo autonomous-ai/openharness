@@ -67,6 +67,12 @@ pub fn menu(state: &AppState) -> Vec<MenuItem> {
             ],
         ));
     }
+    // Checked when Harness may use Accessibility. Each check carries what its click does: the screen while unchecked,
+    // the Accessibility list once checked, where the permission is taken back.
+    if state.follow.installed && state.dial.as_ref().is_some_and(|dial| dial.attached) {
+        let action = if state.follow.trusted { MenuAction::FollowSettings } else { MenuAction::FollowChatgpt };
+        items.push(MenuItem::Check(action, "Follow ChatGPT".into(), state.follow.trusted));
+    }
     match &state.app_update {
         // The app's own update; the dial line's "Updating device…" is the firmware's.
         AppUpdate::Installing => items.push(MenuItem::Text("Updating Harness…".into())),
@@ -95,12 +101,16 @@ pub fn menu(state: &AppState) -> Vec<MenuItem> {
     items
 }
 
-/// The screen the window should show next, in the order they chain: install, then sign-in.
+/// The screen the window should show next, in the order they chain: install, sign-in, then Follow ChatGPT, which
+/// never covers the two before it.
 pub fn due(state: &AppState) -> Option<Screen> {
     if matches!(state.cli, CliState::Installing | CliState::InstallFailed) {
         return Some(Screen::Install);
     }
-    (state.signed_in == Some(false) && !state.saved.asked_sign_in).then_some(Screen::SignIn)
+    if state.signed_in == Some(false) && !state.saved.asked_sign_in {
+        return Some(Screen::SignIn);
+    }
+    (state.follow.waiting && !state.follow.trusted).then_some(Screen::Follow)
 }
 
 /// The menu as one log line: its labels joined by ` | `, without separators. A submenu is its label and its checked
