@@ -54,10 +54,11 @@ interface Options {
 }
 
 /**
- * Stub uname, curl, pgrep, setsid, mv and sleep, first on PATH, steered by STUB_* variables; sha256sum, sed and the rest
- * are real. curl serves the manifest at its URL and the AppImage at any other, recording each URL. pgrep matches its
- * pattern as the extended regex it is against the command lines in the log's `processes`. mv records whether something
- * is at the place, then moves. sleep records how long it was asked to wait, and returns. Written once: macOS checks each
+ * Stub uname, curl, pgrep, setsid, mv, sync and sleep, first on PATH, steered by STUB_* variables; sha256sum, sed and the
+ * rest are real. curl serves the manifest at its URL and the AppImage at any other, recording each URL. pgrep matches
+ * its pattern as the extended regex it is against the command lines in the log's `processes`. mv records whether
+ * something is at the place, then moves. sync records each file it is given that is there. sleep records how long it
+ * was asked to wait, and returns. Written once: macOS checks each
  * new executable on its first run, which costs a quarter of a second per file.
  */
 const bin = mkdtempSync(join(tmpdir(), "harness-device-install-bin-"));
@@ -83,6 +84,7 @@ for pattern; do :; done
 stub("setsid", `printf '%s\\0' "$@" > "$STUB_LOG/setsid"\n[ "$1" = -f ] && shift\n"$@"`);
 stub("mv", `if [ -e "$STUB_PLACE" ]; then echo there; else echo none; fi >> "$STUB_LOG/mv"\nexec /bin/mv "$@"`);
 stub("sleep", `printf '%s\\n' "$*" >> "$STUB_LOG/sleep"`);
+stub("sync", `for file; do [ ! -f "$file" ] || printf '%s\\n' "$file" >> "$STUB_LOG/sync"; done`);
 
 /**
  * The AppImage: it takes its icon out for `--appimage-extract <member>`, as the runtime does with no FUSE. Started, it
@@ -196,6 +198,8 @@ exec sh "$0"`;
     setsid: read("setsid").split("\0").slice(0, -1),
     ran: read("ran").split("\n").filter(Boolean),
     sleep: read("sleep").split("\n").filter(Boolean),
+    /** Each file flushed, while it was there. */
+    synced: read("sync").split("\n").filter(Boolean),
     /** At each mv, whether something was at the place. */
     mv: read("mv").split("\n").filter(Boolean),
     opt: files(join(homeAbsolute, ".local", "opt")),
@@ -206,6 +210,8 @@ exec sh "$0"`;
   };
 }
 
+/** A folder without the `/`s that end it, as every writer reads HOME and XDG_DATA_HOME. */
+const folder = (path: string) => path.replace(/\/+$/, "");
 const entryAt = (dataHome: string) => join(dataHome, "applications", "harness-device.desktop");
 const iconAt = (dataHome: string) => join(dataHome, "icons", "harness-device.png");
 
@@ -418,10 +424,10 @@ describe("device-install.sh", { timeout: 20_000 }, () => {
     expect(run.placed).toBe(APP);
   });
 
-  it.each(vectors.entries)("writes the entry the app writes: $appImage, icon $icon", (vector) => {
+  it.each(vectors.entries)("writes the entry the app writes: $appImage, $dataHome, icon $icon", (vector) => {
     const home = vector.appImage.slice(0, -PLACE.length);
-    const run = install({ home, icon: vector.icon });
-    const dataHome = run.dir + vector.dataHome;
+    const run = install({ home, xdgDataHome: vector.dataHome, icon: vector.icon });
+    const dataHome = run.dir + folder(vector.dataHome);
 
     expect(run.result.status).toBe(0);
     expect(readFileSync(entryAt(dataHome), "utf8")).toBe(vector.entry.replaceAll(home, run.home));
@@ -453,22 +459,39 @@ describe("device-install.sh", { timeout: 20_000 }, () => {
     expect(run.listed).toEqual([]);
   });
 
-  // Each vectors' path stands for a home: its folder, under which the script installs to the place.
-  it.each(vectors.exec)("a home with a space, a percent and a dollar is quoted as the app quotes it: $path", (vector) => {
-    const tail = vector.path.endsWith(PLACE) ? PLACE : vector.path.slice(vector.path.lastIndexOf("/"));
-    const home = vector.path.slice(0, -tail.length);
-    const run = install({ home });
-    const entry = entryAt(`${run.home}/.local/share`);
+  // Past the vectors: the rest of Unicode's White_Space, quoted; characters that look blank but are not White_Space,
+  // left bare; C1's ends, control characters.
+  const blank = (c: string, exec: (path: string) => string | null) => {
+    const path = `/home/p/a${c}b/H.AppImage`;
+    return { path, exec: exec(path) };
+  };
+  const execCases = [
+    ...vectors.exec,
+    ...[" ", " ", " ", " ", " ", " ", " "].map((c) => blank(c, (path) => `"${path}"`)),
+    ...["᠎", "​", "⁠"].map((c) => blank(c, (path) => path)),
+    ...["\u0080", "\u009f"].map((c) => blank(c, () => null)),
+  ];
 
-    expect(run.result.status).toBe(0);
-    if (vector.exec === null) {
-      // A control character would break the entry's lines: like the app, the script writes nothing.
-      expect(run.listed).toEqual([]);
-    } else {
-      const exec = vector.exec.replace("/home", `${run.dir}/home`).replace(tail, PLACE);
-      expect(readFileSync(entry, "utf8").split("\n")).toContain(`Exec=${exec}`);
-    }
-  });
+  // Each path stands for a home: its folder, under which the script installs to the place. The script's list is its own,
+  // so under the C locale, where the shell reads a byte at a time as dash always does, it quotes the same.
+  it.each(["", "C"].flatMap((locale) => execCases.map((vector) => ({ ...vector, locale }))))(
+    "a home is quoted as the app quotes it: $path, locale '$locale'",
+    (vector) => {
+      const tail = vector.path.endsWith(PLACE) ? PLACE : vector.path.slice(vector.path.lastIndexOf("/"));
+      const home = vector.path.slice(0, -tail.length);
+      const run = install({ home, env: vector.locale ? { LC_ALL: vector.locale } : {} });
+      const entry = entryAt(`${run.home}/.local/share`);
+
+      expect(run.result.status).toBe(0);
+      if (vector.exec === null) {
+        // A control character would break the entry's lines: like the app, the script writes nothing.
+        expect(run.listed).toEqual([]);
+      } else {
+        const exec = vector.exec.replace("/home", `${run.dir}/home`).replace(tail, PLACE);
+        expect(readFileSync(entry, "utf8").split("\n")).toContain(`Exec=${exec}`);
+      }
+    },
+  );
 
   // HOME is where the script installs: an AppImage and an Exec= line under a relative one are paths no launcher can run.
   it.each([
@@ -484,19 +507,59 @@ describe("device-install.sh", { timeout: 20_000 }, () => {
     expect(files(run.dir).filter((name) => !/^(log|served)\//.test(name))).toEqual([]);
   });
 
+  // `/` alone, without the `/` that ends it, is no folder.
+  it("refuses a HOME that is only /, before any download", () => {
+    const run = install({ env: { HOME: "/" } });
+
+    expect(run.result.status).toBe(1);
+    expect(run.result.stderr).toBe("Harness Device installer: HOME must be an absolute path\n");
+    expect(run.requested).toEqual([]);
+  });
+
+  it("puts the entry under HOME when XDG_DATA_HOME is only /", () => {
+    const run = install({ env: { XDG_DATA_HOME: "/" } });
+
+    expect(run.result.status).toBe(0);
+    expect(run.listed).toEqual([
+      "home/p/.local/share/applications/harness-device.desktop",
+      "home/p/.local/share/icons/harness-device.png",
+    ]);
+  });
+
   // The vectors whose HOME is unset, empty or relative are refused above.
   it.each(vectors.dataHome.filter((vector) => vector.env.HOME?.startsWith("/")))(
     "puts the entry in the data home the app uses: $env",
     (vector) => {
       const run = install({ home: vector.env.HOME, xdgDataHome: vector.env.XDG_DATA_HOME });
+      const dataHome = run.dir + vector.dataHome!;
 
       expect(run.result.status).toBe(0);
       expect(run.listed).toEqual([
         `${vector.dataHome!.slice(1)}/applications/harness-device.desktop`,
         `${vector.dataHome!.slice(1)}/icons/harness-device.png`,
       ]);
+      // No doubled `/` in its paths: the AppImage under HOME, the icon under the data home.
+      const entry = readFileSync(entryAt(dataHome), "utf8").split("\n");
+      expect(entry).toContain(`Exec=${run.dir}${folder(vector.env.HOME!)}${PLACE}`);
+      expect(entry).toContain(`Icon=${iconAt(dataHome)}`);
     },
   );
+
+  // The name the app and Desktop write to, so a run stopped mid-write leaves one file the next write replaces; flushed,
+  // so a crash after the rename cannot leave it empty.
+  it("writes each file to <file>.tmp, flushed, then renamed over it", () => {
+    const share = "home/p/.local/share";
+    const run = install({
+      before: {
+        [`${share}/applications/harness-device.desktop.tmp`]: "half",
+        [`${share}/icons/harness-device.png.tmp`]: "half",
+      },
+    });
+
+    expect(run.result.status).toBe(0);
+    expect(files(join(run.dir, share))).toEqual(["applications/harness-device.desktop", "icons/harness-device.png"]);
+    expect(run.synced).toEqual([`${iconAt(join(run.dir, share))}.tmp`, `${entryAt(join(run.dir, share))}.tmp`]);
+  });
 
   it.each(vectors.decisions.filter((vector) => vector.existing !== null))(
     "an entry already there is left for the app: $name",

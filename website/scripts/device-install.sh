@@ -45,14 +45,22 @@ case "$MACHINE_ARCH" in
     ;;
 esac
 
+# FOLDER: $1 without the `/`s that end it, as every writer reads HOME and XDG_DATA_HOME, so a name goes after one `/`
+# and `/` alone is no folder.
+folder() {
+  FOLDER="$1"
+  while [ "${FOLDER%/}" != "$FOLDER" ]; do FOLDER="${FOLDER%/}"; done
+}
+
 # The app goes under HOME: under a relative one, the AppImage and its Exec= line would be paths no launcher can run.
-case "${HOME:-}" in
-  /*) ;;
+folder "${HOME:-}"
+case "$FOLDER" in
+  /*) HOME_DIR="$FOLDER" ;;
   *) fail "HOME must be an absolute path" ;;
 esac
 
 OTA_KEY="device-linux-$RELEASE_ARCH-appimage"
-APP_DIR="$HOME/.local/opt"
+APP_DIR="$HOME_DIR/.local/opt"
 # Desktop's place for the app: one name with no version or arch, so the app's updater replaces it in place.
 DESTINATION="$APP_DIR/Harness-Device.AppImage"
 
@@ -149,40 +157,51 @@ mv -f "$CANDIDATE" "$DESTINATION" || fail "could not install Harness Device $VER
 # The app-list entry and its icon, by the rule every writer follows (tests/fixtures/app-list-entry-vectors.json), and
 # only when there is no entry: the app started below applies the whole rule on its first run, so this script reads no
 # Exec= line. None of this fails the install.
-case "${XDG_DATA_HOME:-}" in
-  /*) DATA_HOME="$XDG_DATA_HOME" ;;
-  *) DATA_HOME="$HOME/.local/share" ;;
+folder "${XDG_DATA_HOME:-}"
+case "$FOLDER" in
+  /*) DATA_HOME="$FOLDER" ;;
+  *) DATA_HOME="$HOME_DIR/.local/share" ;;
 esac
 
-# Desktop's quoteLauncherExec: every % doubled, and the path quoted, with " ` $ \ escaped, when it holds a character a
-# launcher would split or expand on.
+# The lists below are UTF-8 bytes read in the C locale, not the locale's classes: dash reads a byte at a time, and a
+# UTF-8 locale's [[:space:]] and [[:cntrl:]] are not the app's lists (macOS's hold U+200B, which the app leaves bare). What Exec= quotes, as the app's exec_value and Desktop's quoteLauncherExec:
+# Unicode's White_Space (U+0009-000D, space, U+0085, U+00A0, U+1680, U+2000-200A, U+2028, U+2029, U+202F, U+205F,
+# U+3000), which a launcher may split an argument on, and what the Desktop Entry spec reserves.
+# shellcheck disable=SC2016 # the $ and ` are characters of the list, not expansions
+QUOTED="$(printf '[\t-\r "'\''\\$`<>~|&;*?#()]|\302[\205\240]|\341\232\200|\342\200[\200-\212\250\251\257]|\342\201\237|\343\200\200')"
+# C1, U+0080-009F: the control characters past C0 and DEL.
+C1="$(printf '\302[\200-\237]')"
+
+# Every % doubled; then, when the path holds a character of QUOTED, the path quoted with " ` $ \ escaped, and the
+# string escape laid over that, every \ doubled again: the spec reads a value's escapes before its quotes.
 exec_value() {
   doubled="$(printf '%s\n' "$1" | sed 's/%/%%/g')"
-  case "$1" in
-    *[[:space:]\"\'\\\$\`\<\>\~\|\&\;\*\?\#\(\)]*)
-      printf '"%s"\n' "$(printf '%s\n' "$doubled" | sed 's/["`$\\]/\\&/g')"
-      ;;
-    *) printf '%s\n' "$doubled" ;;
-  esac
+  if printf '%s\n' "$1" | LC_ALL=C grep -Eq -- "$QUOTED"; then
+    printf '"%s"\n' "$(printf '%s\n' "$doubled" | LC_ALL=C sed 's/["`$\\]/\\&/g; s/\\/\\\\/g')"
+  else
+    printf '%s\n' "$doubled"
+  fi
 }
 
-# A temp file beside it, then a rename, as every writer writes the entry and its icon: nothing reads half of one.
+# <file>.tmp beside it, flushed, then a rename, as the app and Desktop write the entry and its icon: nothing reads half
+# of one, a crash after the rename leaves no empty one, and a run stopped mid-write leaves a file the next replaces.
 put() {
-  if cat > "$1.$$.tmp" && mv -f "$1.$$.tmp" "$1"; then
+  if cat > "$1.tmp" && sync "$1.tmp" && mv -f "$1.tmp" "$1"; then
     return 0
   fi
-  rm -f "$1.$$.tmp"
+  rm -f "$1.tmp"
   return 1
 }
 
 ENTRY="$DATA_HOME/applications/harness-device.desktop"
 ICON="$DATA_HOME/icons/harness-device.png"
 ICON_MEMBER="usr/share/icons/hicolor/128x128/apps/harness-device.png"
-# The app's own rule writes nothing for a path with a control character, which would break the entry's lines, or one
-# that is not UTF-8, which a key file cannot hold.
+# The app's own rule writes nothing for a path with a control character (C0, DEL or C1), which would break the entry's
+# lines, or one that is not UTF-8, which a key file cannot hold.
 fits_entry() {
-  case "$1" in *[[:cntrl:]]*) return 1 ;; esac
-  printf '%s' "$1" | iconv -f UTF-8 -t UTF-8 >/dev/null 2>&1
+  [ "$(printf '%s' "$1" | LC_ALL=C tr -d '\001-\037\177')" = "$1" ] \
+    && ! printf '%s\n' "$1" | LC_ALL=C grep -q -- "$C1" \
+    && printf '%s' "$1" | iconv -f UTF-8 -t UTF-8 >/dev/null 2>&1
 }
 
 if [ ! -e "$ENTRY" ] && fits_entry "$DESTINATION$DATA_HOME"; then
