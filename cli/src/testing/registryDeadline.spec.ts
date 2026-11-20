@@ -91,8 +91,10 @@ it('runs a held timer of another bound on fire(ms) only', () => {
 it('runs a real wait from 250 ms once a registry image syncs, before its time', async () => {
   deadline.holdRegistryDeadline(DEADLINE_MS)
   const ran = vi.fn()
-  setTimeout(ran, 300)
+  // Near the deadline: a slow sync outlasts a short wait, which the host's clock then runs whether the sync does or not.
+  const timer = setTimeout(ran, 4_900)
   await syncRegistryImage()
+  clearTimeout(timer)
   expect(ran).toHaveBeenCalledOnce()
 })
 
