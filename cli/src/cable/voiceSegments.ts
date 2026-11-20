@@ -151,11 +151,12 @@ export class VoiceSegments {
       this.failed(attempt, segment, new Error('Voice upload timed out. Try again'))
     }, ATTEMPT_TIMEOUT_MS)
     // The transcriber may ignore the signal (it awaits the access token before fetch): answered() and failed() drop
-    // an answer to an attempt that timed out or was aborted, so it is never used.
-    this.transcribe(segment.pcm, controller.signal).then(
-      text => this.answered(attempt, text),
-      error => this.failed(attempt, segment, error),
-    )
+    // an answer to an attempt that timed out or was aborted, so it is never used. A throw in either (a transcript that
+    // is not text: it is the backend's JSON) fails the recording, as it failed the turn when Done posted it whole; left
+    // on this promise it would end the devices process, and finish() would never settle.
+    this.transcribe(segment.pcm, controller.signal)
+      .then(text => this.answered(attempt, text), error => this.failed(attempt, segment, error))
+      .catch((error: unknown) => { if (!this.stopped) this.stop(error) })
   }
 
   private answered(attempt: Attempt, text: string): void {
