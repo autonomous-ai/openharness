@@ -7,6 +7,7 @@ import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
+import { powershellPath, systemProgram } from './powershell.js'
 
 const PROGRAMS = ['cmd', 'icacls', 'powershell', 'reg', 'schtasks', 'taskkill', 'tasklist', 'whoami']
 /** One of them by its bare name, as what a call runs: a spawn's or a runner's first argument, or a command's `file`. */
@@ -17,6 +18,16 @@ const RESOLVED_ELSEWHERE: Record<string, string> = {
 }
 
 describe('Windows programs by their full paths', () => {
+  it("name System32 in the first of SystemRoot and windir that is a drive's folder, else C:\\Windows", () => {
+    expect(systemProgram('whoami.exe', { SystemRoot: 'D:\\Win', windir: 'E:\\Win' })).toBe('D:\\Win\\System32\\whoami.exe')
+    expect(systemProgram('whoami.exe', { windir: 'E:\\Win' })).toBe('E:\\Win\\System32\\whoami.exe')
+    expect(systemProgram('whoami.exe', {})).toBe('C:\\Windows\\System32\\whoami.exe')
+    // An empty or relative value would name a folder under the one the command runs in.
+    expect(systemProgram('whoami.exe', { SystemRoot: '', windir: 'E:\\Win' })).toBe('E:\\Win\\System32\\whoami.exe')
+    expect(systemProgram('whoami.exe', { SystemRoot: 'Windows', windir: '.' })).toBe('C:\\Windows\\System32\\whoami.exe')
+    expect(powershellPath({ SystemRoot: '' })).toBe('C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe')
+  })
+
   it('the check finds a bare name as what a call runs', () => {
     const found = (text: string) => [...text.matchAll(BARE)].length
     expect(found("spawn('taskkill', ['/pid'])")).toBe(1)

@@ -201,6 +201,8 @@ describe('the default dependencies', { timeout: FAKE_COMMANDS_TIMEOUT_MS }, () =
       // Windows' folder by windir when SystemRoot is not set, else where Windows installs.
       expect(defaultPlatformDeps({ env: { PATH: fake.bin, windir: 'D:\\Win' } }).run('schtasks', []).error).toContain('D:\\Win\\System32\\schtasks.exe')
       expect(defaultPlatformDeps({ env: { PATH: fake.bin } }).run('schtasks', []).error).toContain('C:\\Windows\\System32\\schtasks.exe')
+      // An empty or relative value would name a folder under the one the command runs in.
+      expect(defaultPlatformDeps({ env: { PATH: fake.bin, SystemRoot: '', windir: 'Windows' } }).run('schtasks', []).error).toContain('C:\\Windows\\System32\\schtasks.exe')
       expect(fake.calls()).toEqual([])
     } finally {
       Object.defineProperty(process, 'platform', platform)
