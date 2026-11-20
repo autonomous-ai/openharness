@@ -65,6 +65,20 @@ describe('the herdr adapter', () => {
     }
   })
 
+  it('paneOf takes an id with herdr\'s letters, w2:pE', () => {
+    const { adapter } = recorder()
+    expect(adapter.paneOf(place({ HERDR_PANE_ID: 'w2:pE' }))).toEqual(pane('w2:pE'))
+    expect(adapter.paneOf({ ...place({ HERDR_PANE_ID: 'w2:pE' }), outer: { app: 'terminal-app', tty: '/dev/ttys004' } }))
+      .toEqual(pane('w2:pE:terminal-app'))
+  })
+
+  it('focus and show run herdr agent focus w2:pE', async () => {
+    const { calls, adapter } = recorder()
+    expect(await adapter.focus(pane('w2:pE'))).toBe(true)
+    expect(await adapter.show!(pane('w2:pE:terminal-app'), 'agent-1')).toBe('ok')
+    expect(calls).toEqual([focusCall('w2:pE'), focusCall('w2:pE')])
+  })
+
   it('focus focuses the agent', async () => {
     const { calls, adapter } = recorder({}, [0, 1, null])
     expect(await adapter.focus(pane('w1:p2'))).toBe(true)

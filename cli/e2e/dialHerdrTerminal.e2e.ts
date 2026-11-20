@@ -113,12 +113,14 @@ describe.skipIf(process.platform !== 'darwin' || !herdrBinary)("an agent in the 
     await d.start()
     const dial = await desk.plug('E2E-A', 'e2:e0:00:00:00:0a', FILTER)
     await dial.next((m) => m.t === 'agents.end', 45_000, 'the first list')
-    const herdr = await PrivateHerdr.start(d)
+    // Pane ids with letters, as a person's herdr gives once a workspace has had nine panes: `w2:pE`, never `w1:p1` alone.
+    const herdr = await PrivateHerdr.start(d, { lettered: true })
     server = herdr
     const client = await herdr.tabClient('terminal-app')
     closing.push(() => client.close())
     const b = await herdr.hooked('b')
     const agent = await herdr.hooked('in-herdr')
+    for (const { pane } of [b, agent]) expect(pane).toMatch(/:p[0-9A-Z]*[A-Z]/)
     await herdr.report(b.pane, 'idle')
     await herdr.report(agent.pane, 'idle')
     for (const listed of [b, agent]) await dial.next((m) => m.t === 'agent' && m.id === listed.id, 45_000, `${listed.id} listed`)

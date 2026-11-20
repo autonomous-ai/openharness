@@ -21,8 +21,11 @@ import { isAbsolute, join } from 'node:path'
 import { CONTROL, MAX_TEXT, RUN_TIMEOUT_MS } from './orca.js'
 import { connectLines, socketStampOf, type SocketFault } from './unixSocket.js'
 
-/** herdr's pane id, `w1:p1` (its own guide). */
-export const HERDR_PANE = /^w[0-9]{1,9}:p[0-9]{1,9}$/
+/** herdr's pane id, `w2:pE`: its workspace and pane numbers in herdr's own base 32 over
+ *  `123456789ABCDEFGHJKMNPQRSTVWXYZ0` (src/workspace.rs `encode_public_number`, 0.8.0 to 0.9.5), so a workspace's tenth
+ *  pane is `pA`. The one definition of the form, which herdr.ts builds on too. */
+export const HERDR_PANE_FORM = 'w[0-9A-HJKMNP-TV-Z]{1,9}:p[0-9A-HJKMNP-TV-Z]{1,9}'
+export const HERDR_PANE = new RegExp(`^${HERDR_PANE_FORM}$`)
 /** An agent's kind as herdr names it: `claude`, `codex`, … */
 export const HERDR_KIND = /^[a-z][a-z0-9_-]{0,31}$/
 /** The longest line read from herdr. A list of 64 agents is a few dozen KiB; a line that keeps coming is not herdr. */

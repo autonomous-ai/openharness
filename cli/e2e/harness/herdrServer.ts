@@ -28,6 +28,10 @@ import { forgetGroup, leaderGone, watchGroup } from './reaper.js'
 
 const execFileAsync = promisify(execFile)
 
+/** Panes opened, at most, to bring a workspace's pane ids to a letter: herdr counts them from p1 in base 32, `pA` the
+ *  tenth. */
+const MAX_OPENS = 16
+
 /** sun_path's room, its last byte the terminator: a longer socket path fails to bind. */
 const SOCKET_ROOM = 103
 
@@ -55,6 +59,9 @@ export const herdrBinary: string | null = dialHost('herdr', (() => {
 })())
 
 export class PrivateHerdr {
+  /** With `lettered`, the root pane of the workspace whose splits are its panes. */
+  private lettered?: string
+
   private constructor(private readonly d: IsolatedDaemon, private readonly server: ChildProcess, private readonly config: string,
     readonly socket: string) {}
 
@@ -80,7 +87,11 @@ export class PrivateHerdr {
     return config
   }
 
-  static async start(d: IsolatedDaemon): Promise<PrivateHerdr> {
+  /**
+   * With `lettered`, its panes are splits of one workspace whose ids carry a letter (`w2:pB` on), as a person's herdr
+   * that has run a while: a fresh server's are digits alone.
+   */
+  static async start(d: IsolatedDaemon, { lettered = false } = {}): Promise<PrivateHerdr> {
     const config = await PrivateHerdr.install(d)
     const socket = join(config, 'herdr', 'herdr.sock')
     const server = spawn(herdrBinary!, ['server'], {
@@ -99,6 +110,7 @@ export class PrivateHerdr {
       if (exited !== undefined) throw new Error(`the private herdr exited (${exited}) before it answered`)
       // A plain workspace in front, so that an agent's pane is never the focused one.
       await herdr.rpc('workspace.create', { focus: true })
+      if (lettered) await herdr.toLetters()
     } catch (error) {
       await herdr.stop()
       throw error
@@ -133,10 +145,32 @@ export class PrivateHerdr {
     })
   }
 
-  /** A workspace in <projectsDir>/<folder>, not focused: its pane id. The pane holds its shell. */
+  /** A workspace of its own whose next pane id carries a letter: panes opened and closed in it until one did, as herdr
+   *  never gives an id twice. */
+  private async toLetters(): Promise<void> {
+    const root = ((await this.rpc('workspace.create')).root_pane as { pane_id: string }).pane_id
+    for (let opened = 0; opened < MAX_OPENS; opened++) {
+      const pane = await this.split(root)
+      await this.rpc('pane.close', { pane_id: pane })
+      if (/:p[0-9A-Z]*[A-Z]/.test(pane)) {
+        this.lettered = root
+        return
+      }
+    }
+    throw new Error(`no pane id with a letter in ${MAX_OPENS} panes`)
+  }
+
+  private async split(target: string, cwd?: string): Promise<string> {
+    const split = await this.rpc('pane.split', { target_pane_id: target, direction: 'right', ...(cwd ? { cwd } : {}) })
+    return (split.pane as { pane_id: string }).pane_id
+  }
+
+  /** A pane in <projectsDir>/<folder>, not focused: its pane id. The pane holds its shell. A workspace of its own, or
+   *  with `lettered` a split of the lettered one. */
   async pane(folder: string): Promise<string> {
     const cwd = join(this.d.projectsDir, folder)
     await mkdir(cwd, { recursive: true })
+    if (this.lettered) return this.split(this.lettered, cwd)
     const created = await this.rpc('workspace.create', { cwd })
     return (created.root_pane as { pane_id: string }).pane_id
   }
