@@ -446,8 +446,8 @@ describe('codex queue', () => {
     expect(calls).toEqual([])
   })
 
-  // The ChatGPT app and its CLI are macOS's: elsewhere there is nothing to look for.
-  it('off macOS the app\'s codex is never asked for', async () => {
+  // The ChatGPT app and its CLI are macOS's and Windows': on Linux there is nothing to look for.
+  it('on Linux the app\'s codex is never asked for', async () => {
     const appBinary = vi.fn(() => APP_CODEX)
     const { calls, queue } = recorder({ platform: 'linux', appBinary })
     expect(queue.can(true)).toBe(true)
@@ -499,18 +499,28 @@ describe('codex queue', () => {
 })
 
 describe('codex queue on Windows', () => {
-  // PATH there is the daemon's own, with no login shell, and the ChatGPT app's own Codex is not known there
-  // (docs/plans/2026-11-19-dial-windows-vm-notes.md `## Task 1`, section 4).
-  it('can() is true with a codex there, for an app session too, and neither the login shell nor the app\'s codex is asked', async () => {
+  // PATH there is the daemon's own, with no login shell. The ChatGPT app holds a Codex of its own, which runs its
+  // threads (docs/plans/2026-11-19-dial-windows-vm-notes.md `## Task 37`, section 2), as on macOS.
+  it('an app session runs the app\'s own codex, another session the codex on PATH, and the login shell is never read', async () => {
     const readLoginShell = vi.fn()
-    const appBinary = vi.fn(() => APP_CODEX)
-    const { calls, queue } = recorder({ platform: 'win32', readLoginShell, appBinary })
+    const { calls, queue } = recorder({ platform: 'win32', readLoginShell, appBinary: () => APP_CODEX })
     expect(queue.can(false)).toBe(true)
     expect(queue.can(true)).toBe(true)
     expect(await queue.send(THREAD, 'hi', true)).toEqual({ outcome: 'queued' })
-    expect(calls.map(([file]) => file)).toEqual([FAKE_CODEX])
+    expect(await queue.send(THREAD, 'hi', false)).toEqual({ outcome: 'queued' })
+    expect(calls.map(([file]) => file)).toEqual([APP_CODEX, FAKE_CODEX])
     expect(readLoginShell).not.toHaveBeenCalled()
-    expect(appBinary).not.toHaveBeenCalled()
+
+    // A package with none: the codex on PATH.
+    const none = recorder({ platform: 'win32' })
+    expect(await none.queue.send(THREAD, 'hi', true)).toEqual({ outcome: 'queued' })
+    expect(none.calls.map(([file]) => file)).toEqual([FAKE_CODEX])
+  })
+
+  it('can() is true for an app session with only the app\'s codex, and false for another session', () => {
+    const { queue } = recorder({ platform: 'win32', appBinary: () => APP_CODEX, binary: () => null })
+    expect(queue.can(true)).toBe(true)
+    expect(queue.can(false)).toBe(false)
   })
 
   it('send runs codex queue with a text cmd.exe would split or expand as one argument', async () => {
@@ -560,6 +570,95 @@ describe('codex queue on Windows', () => {
       expect(given).toEqual([script, ...args])
       expect(how).toMatchObject({ cwd: dir, env, windowsHide: true })
       expect(how.shell).toBeUndefined()
+    })
+
+    /** The ChatGPT app's package as Windows installs it, in a folder named for its version, with its codex.exe. */
+    function appPackage(version: string) {
+      const folder = join(dir, `OpenAI.Codex_${version}_arm64__2p2nqsd0c76g0`)
+      const codex = join(folder, 'app', 'resources', 'codex.exe')
+      mkdirSync(dirname(codex), { recursive: true })
+      return { folder, codex: executable(codex) }
+    }
+
+    /** A package query that waits for the test to answer each ask. */
+    function packageQuery() {
+      const asked: string[] = []
+      const answers: Array<(folder: string | null) => void> = []
+      const query = (name: string) => {
+        asked.push(name)
+        return new Promise<string | null>((resolve) => answers.push(resolve))
+      }
+      return { asked, answers, query }
+    }
+
+    it('the app\'s codex is the OpenAI.Codex package\'s, asked once in the background; the codex on PATH answers until it has', async () => {
+      vi.useFakeTimers({ toFake: ['performance'] })
+      onTestFinished(() => { vi.useRealTimers() })
+      const app = appPackage('26.1117.3838.0')
+      const { asked, answers, query } = packageQuery()
+      const { appBinary } = codexQueueDeps(query)
+      expect(appBinary()).toBeNull()
+      vi.advanceTimersByTime(30_000)
+      expect(appBinary()).toBeNull()
+      // One ask at a time.
+      expect(asked).toEqual(['OpenAI.Codex'])
+      answers[0]!(app.folder)
+      await settled()
+      expect(appBinary()).toBe(app.codex)
+      // Asking starts a PowerShell: a codex.exe that is there is never asked for again.
+      vi.advanceTimersByTime(600_000)
+      expect(appBinary()).toBe(app.codex)
+      expect(asked).toHaveLength(1)
+    })
+
+    it('a package with no codex.exe, or none, is asked again after 30 s, and one whose codex.exe went (an update) at once', async () => {
+      vi.useFakeTimers({ toFake: ['performance'] })
+      onTestFinished(() => { vi.useRealTimers() })
+      const { asked, answers, query } = packageQuery()
+      const { appBinary } = codexQueueDeps(query)
+      expect(appBinary()).toBeNull()
+      answers[0]!(join(dir, 'empty-package'))
+      await settled()
+      expect(appBinary()).toBeNull()
+      vi.advanceTimersByTime(29_999)
+      expect(appBinary()).toBeNull()
+      expect(asked).toHaveLength(1)
+      vi.advanceTimersByTime(1)
+      expect(appBinary()).toBeNull()
+      expect(asked).toHaveLength(2)
+      answers[1]!(null)
+      await settled()
+      vi.advanceTimersByTime(30_000)
+      expect(appBinary()).toBeNull()
+      expect(asked).toHaveLength(3)
+
+      const old = appPackage('26.1117.3838.0')
+      answers[2]!(old.folder)
+      await settled()
+      expect(appBinary()).toBe(old.codex)
+      // The update removes the old version's folder; the new one is in a folder named for its version.
+      rmSync(old.folder, { recursive: true })
+      const updated = appPackage('26.1201.1000.0')
+      vi.advanceTimersByTime(30_000)
+      expect(appBinary()).toBeNull()
+      expect(asked).toHaveLength(4)
+      answers[3]!(updated.folder)
+      await settled()
+      expect(appBinary()).toBe(updated.codex)
+    })
+
+    it('a package query that fails is no app codex, and is asked again after 30 s', async () => {
+      vi.useFakeTimers({ toFake: ['performance'] })
+      onTestFinished(() => { vi.useRealTimers() })
+      const asked: string[] = []
+      const { appBinary } = codexQueueDeps(async (name) => { asked.push(name); throw new Error('no PowerShell') })
+      expect(appBinary()).toBeNull()
+      await settled()
+      expect(appBinary()).toBeNull()
+      expect(asked).toHaveLength(1)
+      vi.advanceTimersByTime(30_000)
+      expect(appBinary()).toBeNull()
+      expect(asked).toHaveLength(2)
     })
 
     it('a batch file only cmd.exe could run is not started', async () => {
