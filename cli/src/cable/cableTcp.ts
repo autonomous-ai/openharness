@@ -9,6 +9,7 @@
  */
 import type { CablePort, PortOpener } from './cableSession.js'
 import { SerialLink } from './serial.js'
+import { errorKind } from '../lib/log.js'
 
 export interface CableTcpAddress {
   /** A name, an IPv4 address, or an IPv6 one without its brackets. */
@@ -88,8 +89,8 @@ export function tcpOpener(address: CableTcpAddress, options: TcpOpenerOptions): 
       return port
     } catch (error) {
       if (waitMs === 0) {
-        const why = (error as NodeJS.ErrnoException | null)?.code ?? (error instanceof Error ? error.message : String(error))
-        options.log(`cable: ${path} not reachable (${why}) — trying again, waiting up to ${maxMs / 1000} s`)
+        // Its kind and code alone (ECONNREFUSED), never its words: the daemon's log leaves the machine (lib/log.ts).
+        options.log(`cable: ${path} not reachable (${errorKind(error)}) — trying again, waiting up to ${maxMs / 1000} s`)
       }
       waitMs = waitMs === 0 ? minMs : Math.min(waitMs * 2, maxMs)
       notBefore = now() + waitMs

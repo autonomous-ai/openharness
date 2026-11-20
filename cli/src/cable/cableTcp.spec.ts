@@ -82,6 +82,15 @@ describe('the TCP opener', () => {
     expect(connect).toHaveBeenCalledTimes(7)
     expect(log).toHaveBeenCalledTimes(3)
   })
+
+  // The daemon's log leaves the machine (Export logs): a failure is named by its kind, never by its words.
+  it('names a failure without a code by its kind, never its words', async () => {
+    const log = vi.fn()
+    const connect = vi.fn(async (): Promise<CablePort> => { throw new Error('/Users/someone/secret-project refused') })
+    const open = tcpOpener(address, { connect, log, now: () => 0, minMs: 100, maxMs: 350 })
+    expect(await open(() => {}, () => {})).toBeNull()
+    expect(log.mock.calls).toEqual([['cable: tcp:board.local:7000 not reachable (Error) — trying again, waiting up to 0.35 s']])
+  })
 })
 
 /** Frames the daemon wrote to one socket, decoded. */
