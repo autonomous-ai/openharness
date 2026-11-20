@@ -254,7 +254,9 @@ async function isOn($, settingsPath) {
 
 /**
  * Windows: one follower, then the next from a timer, so a reload (which cancels the module's timers and ends the loop)
- * leaves none beside the new copy's. Bounded: a `harness` that ends at once starts six times in about 10.5 minutes.
+ * starts no other beside the new copy's. Leaving the loop kills nothing there: Claude Code closes the follower's stdout,
+ * and it ends at its next write, within a minute, while the new copy's poll ends its hold in the core (the VM notes,
+ * Task 15). Bounded: a `harness` that ends at once starts six times in about 10.5 minutes.
  * @param {Engine} $
  * @param {State} state
  */
@@ -325,7 +327,7 @@ async function followOnce($) {
       if (stream !== 'stdout') continue
       const lines = (rest + text).split('\n')
       rest = lines.pop() ?? ''
-      // Leaving the loop ends the child.
+      // Leaving the loop closes the child's stdout: it ends at its next write (the VM notes, Task 15).
       if (rest.length > MAX_LINE || lines.some((line) => line.length > MAX_LINE)) return 'ended'
       for (const line of lines) {
         const said = parsed(line)

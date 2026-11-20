@@ -23,7 +23,9 @@ tokens in its own process, and the mod is handed no token or other credential.
 
 With no dial attached, no Harness daemon running, or no Harness CLI (`~/.local/bin/harness`, on Windows
 `%USERPROFILE%\.harness\bin\harness.exe`, then `harness` on `PATH`), the hook tells nothing, and Claude Code carries
-on as it would without the plugin. On Windows the hook runs in Git Bash, or in PowerShell when there is none.
+on as it would without the plugin. On Windows the hook runs in Git Bash, or in PowerShell when there is none, and the
+prompt shows once it ends: about 2-3 s later in Git Bash, 3-5 s in PowerShell. A PowerShell slower than the hook's 5 s
+rings nothing at the dial for that prompt, which still waits in the session.
 
 ## What it never does
 
