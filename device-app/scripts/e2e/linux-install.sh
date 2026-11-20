@@ -11,6 +11,9 @@
 # (with a space, as a person's may have) on a display and session bus of its own; the Device app's state is seeded so
 # it installs nothing and opens no window.
 #
+# It needs xvfb, xauth, dbus-x11, openssl, python3 and curl, and what every Ubuntu desktop has and a bare runner lacks:
+# libegl1 libgles2 libgbm1 libharfbuzz0b libfribidi0 libwayland-client0 (scripts/apt-install.sh installs them).
+#
 # Prints `ok: <check>` for each check and stops at the first `FAILED: <check>`, exiting 1. It removes libfuse2 for
 # good and changes /etc/hosts and the trust store, so it runs only on a GitHub-hosted runner, which is thrown away
 # after, never on a self-hosted one; it puts /etc/hosts and the trust store back and ends what it started.
