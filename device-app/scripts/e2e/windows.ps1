@@ -53,6 +53,10 @@ $uninstallKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\Harne
 $runKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
 $approvedKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run'
 $ifeoKey = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\powershell.exe'
+# Which program hosts the account's console windows (Settings' default terminal app), and conhost's id there.
+$consoleHostKey = 'HKCU:\Console\%%Startup'
+$CONSOLE_HOST_VALUES = @('DelegationConsole', 'DelegationTerminal')
+$CONHOST = '{B23D10C0-E52E-411E-9D5B-C09FDF709C7D}'
 # The installer's own key, named by the publisher Tauri takes from the identifier.
 $vendorKey = 'HKCU:\Software\autonomous'
 $productKey = 'HKCU:\Software\autonomous\Harness Device'
@@ -123,6 +127,8 @@ $script:app = $null
 $script:installed = $false
 $script:ranInstaller = $false
 $script:ifeo = $null
+# Once the run hosts consoles in conhost: whether the key was there, and each value before (null when absent).
+$script:consoleHost = $null
 $script:phase = 'start'
 $started = New-Object System.Collections.Generic.List[System.Diagnostics.Process]
 $tokens = New-Object System.Collections.Generic.List[string]
@@ -624,13 +630,40 @@ function Show-Diagnosis {
     Format-Table Id, ProcessName, SessionId, StartTime -AutoSize | Out-String -Width 200 | Write-Host
 }
 
+# Where Windows Terminal hosts consoles (windows-latest), a console's window is WindowsTerminal.exe's, or a tab in one
+# already open, so no console window could be traced to what opened it: for the run, conhost hosts them, whose window
+# names its process.
+function Use-Conhost {
+  $before = @{ key = (Test-Path -LiteralPath $consoleHostKey) }
+  foreach ($name in $CONSOLE_HOST_VALUES) {
+    $before[$name] = (Get-ItemProperty -LiteralPath $consoleHostKey -Name $name -ErrorAction SilentlyContinue).$name
+  }
+  $script:consoleHost = $before
+  if (-not $before.key) { New-Item -Path $consoleHostKey | Out-Null }
+  foreach ($name in $CONSOLE_HOST_VALUES) {
+    New-ItemProperty -LiteralPath $consoleHostKey -Name $name -PropertyType String -Value $CONHOST -Force | Out-Null
+  }
+}
+
+function Restore-ConsoleHost {
+  $before = $script:consoleHost
+  if (-not $before) { return }
+  foreach ($name in $CONSOLE_HOST_VALUES) {
+    if ($null -eq $before[$name]) { Remove-ItemProperty -LiteralPath $consoleHostKey -Name $name -ErrorAction SilentlyContinue }
+    else { Set-ItemProperty -LiteralPath $consoleHostKey -Name $name -Value $before[$name] }
+  }
+  if (-not $before.key) { Remove-Item -LiteralPath $consoleHostKey -ErrorAction SilentlyContinue }
+  $script:consoleHost = $null
+}
+
 function Clean-Up {
   $ErrorActionPreference = 'Continue'
-  # The machine-wide entry first: nothing else may reach the stand-in.
+  # The machine-wide entry first: nothing else may reach the stand-in. Then the account's console host.
   if ($script:ifeo) {
     Remove-ItemProperty -LiteralPath $ifeoKey -Name 'Debugger' -ErrorAction SilentlyContinue
     if ($script:ifeo -eq 'key') { Remove-Item -LiteralPath $ifeoKey -ErrorAction SilentlyContinue }
   }
+  Restore-ConsoleHost
   Use-Fake $false
   Get-Process -Name 'harness-device' -ErrorAction SilentlyContinue |
     Where-Object { $_.Path -and $_.Path -ieq $exe } | Stop-Process -Force -ErrorAction SilentlyContinue
@@ -813,6 +846,7 @@ try {
 
   # --- 6, from here: every console window shown on this desktop
 
+  Use-Conhost
   $started.Add((Start-Process -FilePath $watcher -ArgumentList "`"$consoles`"" -PassThru))
   if (-not (Wait-For { (Lines-Of $consoles) -contains 'ready' })) { Fail "the console watcher hooks the desktop: $(Lines-Of $consoles)" }
   # It must see a console window when one opens and trace it to the process that opened it, or the check means nothing.
