@@ -351,6 +351,16 @@ describe('runtime validation and file ownership', () => {
     }
   })
 
+  it('fails the launch when a file cannot be written', async () => {
+    const real = await vi.importActual<typeof import('../lib/secureState.js')>('../lib/secureState.js')
+    vi.mocked(atomicWriteFile).mockImplementation(() => { throw Object.assign(new Error('disk full'), { code: 'ENOSPC' }) })
+    try {
+      expect(() => prepareHarnessLaunch(pkg, ws, 'codex', 'key')).toThrow('disk full')
+    } finally {
+      vi.mocked(atomicWriteFile).mockImplementation(real.atomicWriteFile)
+    }
+  })
+
   it('keeps the mode of the person\'s instruction file', () => {
     write(join(ws, 'AGENTS.md'), '# Repository rules\n')
     chmodSync(join(ws, 'AGENTS.md'), 0o644)
