@@ -314,6 +314,7 @@ macOS, or the release is a partial ship. The same pull request carries both:
 | Tray click refresh | as macOS | from the 5 s tick, same throttles | Tauri emits no tray click on Linux (menu only) |
 | Tray shown at all | always | needs a StatusNotifier host; **stock GNOME needs the AppIndicator extension** (Ubuntu ships it) | GNOME has no tray of its own; the app logs `tray: no host` once when no watcher has come on the session bus within 30 s of start |
 | Tray icon colour | the Pixel H in black on a light taskbar, white on a dark one, following the theme | the Pixel H in white | Windows and Linux do not tint a template image as macOS does; Linux has no common way to read a panel's colour |
+| Shortcuts | a Desktop shortcut and a Start Menu entry, both made by the installer and removed by its uninstall | none (the app is an AppImage; Desktop lists it in the app list) | Windows keeps the installer's Desktop shortcut (Ken, 2026-11-20); macOS has none |
 | Self-update | NSIS passive install | AppImage only; a dev run does not update | the updater replaces an AppImage, not a distro package |
 | Login item | Run key + Startup Apps toggle | the shared `harnessd.desktop` | one entry with the CLI (dial-linux) |
 | Install halves | one `install.ps1 -Desktop` run | `--host` in a visible terminal, as Desktop | install.ps1 has no host half; tmux on Linux needs `sudo apt` |
