@@ -2,8 +2,7 @@
 //!
 //! Spoken on the socket itself, not through `swaymsg`: one fixed protocol, and no program to run.
 
-use crate::front::Stop;
-use crate::front_x11::exe_name;
+use crate::front::{Stop, exe_name};
 use serde_json::Value;
 use std::io::{self, Read, Write};
 use std::path::Path;

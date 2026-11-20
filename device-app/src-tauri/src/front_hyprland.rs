@@ -1,7 +1,6 @@
 //! The app in front on Hyprland: the event socket says the window changed, the request socket names it.
 
-use crate::front::Stop;
-use crate::front_x11::exe_name;
+use crate::front::{Stop, exe_name};
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
@@ -33,7 +32,7 @@ impl FrontSource for HyprlandFront {
             let runtime_dir = std::env::var_os("XDG_RUNTIME_DIR").filter(|dir| !dir.is_empty());
             let signature = std::env::var("HYPRLAND_INSTANCE_SIGNATURE");
             let (Some(runtime_dir), Ok(signature)) = (runtime_dir, signature) else { return Stop::NotFollowed };
-            watch(Path::new(&runtime_dir), &signature, Path::new("/proc"), &*changed)
+            follow_instance(Path::new(&runtime_dir), &signature, Path::new("/proc"), &*changed)
         });
     }
 }
@@ -129,7 +128,7 @@ fn next_line(events: &mut impl BufRead, line: &mut Vec<u8>) -> io::Result<bool> 
 }
 
 /// Follows the Hyprland instance under `runtime_dir`. No socket there is `NotFollowed`.
-fn watch(runtime_dir: &Path, signature: &str, proc_root: &Path, changed: &dyn Fn(String)) -> Stop {
+fn follow_instance(runtime_dir: &Path, signature: &str, proc_root: &Path, changed: &dyn Fn(String)) -> Stop {
     let Some((events, requests)) = sockets(runtime_dir, signature) else { return Stop::NotFollowed };
     let Ok(events) = UnixStream::connect(events) else { return Stop::NotFollowed };
     follow(events, &|| ask(&requests), proc_root, changed)
@@ -355,13 +354,13 @@ mod tests {
             stream.write_all(b"activewindowv2>>55d1c0a0\n").unwrap();
         });
         let told = RefCell::new(Vec::new());
-        let stop = watch(runtime.path(), "s", proc_root.path(), &|value| told.borrow_mut().push(value));
+        let stop = follow_instance(runtime.path(), "s", proc_root.path(), &|value| told.borrow_mut().push(value));
         assert_eq!((stop, told.into_inner()), (Stop::Ended, vec!["kitty".to_string(), "code".to_string()]));
         emitter.join().unwrap();
         assert_eq!(server.join().unwrap().len(), 2);
         // No Hyprland there, or a signature that is not a folder name: nothing to follow.
         let empty = tempfile::tempdir().unwrap();
-        assert_eq!(watch(empty.path(), "s", proc_root.path(), &|_| {}), Stop::NotFollowed);
-        assert_eq!(watch(runtime.path(), "..", proc_root.path(), &|_| {}), Stop::NotFollowed);
+        assert_eq!(follow_instance(empty.path(), "s", proc_root.path(), &|_| {}), Stop::NotFollowed);
+        assert_eq!(follow_instance(runtime.path(), "..", proc_root.path(), &|_| {}), Stop::NotFollowed);
     }
 }

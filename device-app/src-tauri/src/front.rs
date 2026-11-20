@@ -116,6 +116,16 @@ pub fn session_is_x11(session_type: Option<&str>, wayland_display: Option<&str>,
     session_type != Some("wayland") && !set(wayland_display) && set(display)
 }
 
+/// The file name of `/proc/<pid>/exe`, which the watch maps to an app (`code`, `ghostty`): what X11, sway and Hyprland
+/// tell. None when the process is gone or is another person's.
+#[cfg(any(target_os = "linux", all(test, unix)))]
+pub fn exe_name(proc_root: &std::path::Path, pid: u32) -> Option<String> {
+    let exe = std::fs::read_link(proc_root.join(pid.to_string()).join("exe")).ok()?;
+    let name = exe.file_name()?.to_str()?;
+    // The kernel's mark on a binary replaced while it runs (a package upgrade): still the same app.
+    Some(name.strip_suffix(" (deleted)").unwrap_or(name).to_string())
+}
+
 /// `{"front":"…"}`, one line: the value cut to FRONT_MAX characters. A value with a character that is not `kept` is the
 /// empty value.
 pub fn front_line(value: &str) -> String {
@@ -270,6 +280,31 @@ mod tests {
         assert_eq!(front(&[wayland.as_slice(), &empty].concat()), LinuxFront::Hyprland);
         let empty = [("SWAYSOCK", ""), ("HYPRLAND_INSTANCE_SIGNATURE", "")];
         assert_eq!(front(&[wayland.as_slice(), &empty].concat()), LinuxFront::None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_exe_name_is_the_file_name_of_the_proc_link() {
+        use std::{fs, os::unix::fs::symlink};
+        let proc_root = tempfile::tempdir().unwrap();
+        fs::create_dir(proc_root.path().join("4242")).unwrap();
+        // The link's target need not exist: only its name is read.
+        symlink("/usr/share/code/code", proc_root.path().join("4242").join("exe")).unwrap();
+        assert_eq!(exe_name(proc_root.path(), 4242), Some("code".into()));
+        // A binary replaced while it runs (a package upgrade) is still the same app.
+        fs::create_dir(proc_root.path().join("4343")).unwrap();
+        symlink("/usr/bin/ghostty (deleted)", proc_root.path().join("4343").join("exe")).unwrap();
+        assert_eq!(exe_name(proc_root.path(), 4343), Some("ghostty".into()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_process_that_is_gone_has_no_name() {
+        let proc_root = tempfile::tempdir().unwrap();
+        assert_eq!(exe_name(proc_root.path(), 4242), None);
+        // Another person's process: its folder is there and its link cannot be read.
+        std::fs::create_dir(proc_root.path().join("4343")).unwrap();
+        assert_eq!(exe_name(proc_root.path(), 4343), None);
     }
 
     const WAIT: std::time::Duration = std::time::Duration::from_secs(5);

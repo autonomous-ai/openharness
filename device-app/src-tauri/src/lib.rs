@@ -25,8 +25,7 @@ pub mod front_macos;
 pub mod front_sway;
 #[cfg(any(windows, test))]
 pub mod front_windows;
-// Its tests use unix links.
-#[cfg(any(target_os = "linux", all(test, unix)))]
+#[cfg(target_os = "linux")]
 pub mod front_x11;
 pub mod harness_home;
 pub mod install;
