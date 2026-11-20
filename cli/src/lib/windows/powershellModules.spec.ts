@@ -4,6 +4,12 @@
  * autoload on, the first command a 5.1 process had to find cost it 22-29 s on windows-11-arm (docs/windows-rules.md);
  * with it off, a command of a module not imported is "not recognized". Read as text, so this names that before Windows
  * does; windows.yml runs the scripts themselves (peerAccount.windows.real.spec.ts and the other real specs).
+ *
+ * Importing a module can run commands of another: CimCmdlets' Set-Alias (its OnImport, CimCmdletModuleInitialize.cs in
+ * PowerShell's source), NetTCPIP's New-Alias (NetIPConfiguration.psm1 and Test-NetConnection.psm1, beside its CDXML) and
+ * Appx's Set-Alias (Appx.psm1), all Utility's. With autoload off and no Utility, those imports stopped the peer,
+ * listener and uninstall scripts on both Windows runners (windows.yml run 44827687986: "The term 'New-Alias' is not
+ * recognized"). So Utility is the first module every such script imports.
  */
 import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -16,11 +22,13 @@ import { START_OUTSIDE_JOB } from '../uninstall/removal.js'
 import { READ_USER_PATH, WRITE_USER_PATH } from '../uninstall/windowsPath.js'
 import { ELEVATED_PS1, uacPromptScript } from './elevated.js'
 import { buildWindowsGuestInstallScript, buildWindowsGuestProcessorScript } from './guestScript.js'
-import { modulesByPath, type PowershellModule } from './powershell.js'
+import { modulesByPath, POWERSHELL_PRELUDE, type PowershellModule } from './powershell.js'
 import { SIGNATURES_SCRIPT } from './ptySignatures.js'
 import { SCRIPT as STORE_PACKAGE_SCRIPT } from './storePackage.js'
 
 const AUTOLOAD_OFF = "$PSModuleAutoLoadingPreference = 'None'"
+const UTILITY = 'Microsoft.PowerShell.Utility'
+const UTILITY_FIRST = `${AUTOLOAD_OFF}\nImport-Module -Name "$PSHOME\\Modules\\${UTILITY}" -ErrorAction Stop`
 /** Microsoft.PowerShell.Core's: in every session, autoload or not. */
 const CORE = new Set(['ForEach-Object', 'Import-Module', 'Out-Null', 'Where-Object'])
 /** Where Windows PowerShell 5.1 keeps each command these scripts call. */
@@ -43,8 +51,9 @@ const BY_PATH = /^Import-Module -Name "\$PSHOME\\Modules\\([\w.]+)"( -ErrorActio
 
 /**
  * What is wrong with [script]: a command that runs before autoload is off, one whose module is not imported before it,
- * one no module here is known to hold, an import by any other path or one that goes on when it fails, and a module
- * imported for none of its commands.
+ * one no module here is known to hold, an import by any other path or one that goes on when it fails, a script that
+ * turns autoload off and imports another module, or none, before Utility, and a module but Utility imported for none of
+ * its commands.
  */
 function problems(script: string): string[] {
   // A comment line names commands too, and runs none.
@@ -71,7 +80,8 @@ function problems(script: string): string[] {
     used.add(module)
     if (!(imported.get(module)! < match.index)) found.add(`${cmdlet} needs ${module} imported before it`)
   }
-  for (const module of imported.keys()) if (!used.has(module)) found.add(`${module} is imported for none of its commands`)
+  if (off >= 0 && imported.keys().next().value !== UTILITY) found.add(`${UTILITY} is not the first module imported`)
+  for (const module of imported.keys()) if (module !== UTILITY && !used.has(module)) found.add(`${module} is imported for none of its commands`)
   return [...found]
 }
 
@@ -109,7 +119,7 @@ const rows = Object.entries(SCRIPTS).flatMap(([file, scripts]) => Object.entries
 
 describe('the check', () => {
   it('names a command that runs before autoload is off, Core ones too', () => {
-    expect(problems(`Where-Object { $_ }\n${AUTOLOAD_OFF}`)).toEqual(['Where-Object runs with autoload on'])
+    expect(problems(`Where-Object { $_ }\n${UTILITY_FIRST}`)).toEqual(['Where-Object runs with autoload on'])
   })
 
   it('names a Management or Utility command whose module is not imported before it', () => {
@@ -120,11 +130,11 @@ describe('the check', () => {
   })
 
   it('names a command no module here is known to hold', () => {
-    expect(problems(`${AUTOLOAD_OFF}\nGet-HarnessThing`)).toEqual(['Get-HarnessThing is in no module this spec knows'])
+    expect(problems(`${UTILITY_FIRST}\nGet-HarnessThing`)).toEqual(['Get-HarnessThing is in no module this spec knows'])
   })
 
   it('names an import by any other path, and a module imported for none of its commands', () => {
-    expect(problems([AUTOLOAD_OFF, "Import-Module -Name (Join-Path $PSHOME 'Modules\\Appx\\Appx.psd1')",
+    expect(problems([UTILITY_FIRST, "Import-Module -Name (Join-Path $PSHOME 'Modules\\Appx\\Appx.psd1')",
       'Import-Module -Name "$PSHOME\\Modules\\NetTCPIP" -ErrorAction Stop'].join('\n'))).toEqual([
       "Import-Module -Name (Join-Path $PSHOME 'Modules\\Appx\\Appx.psd1') is not by its folder in $PSHOME",
       'Join-Path needs Microsoft.PowerShell.Management imported before it',
@@ -133,19 +143,25 @@ describe('the check', () => {
   })
 
   it('names an import that goes on when it fails', () => {
-    expect(problems([AUTOLOAD_OFF, 'Import-Module -Name "$PSHOME\\Modules\\Microsoft.PowerShell.Management"', 'Join-Path $a b'].join('\n'))).toEqual([
+    expect(problems([UTILITY_FIRST, 'Import-Module -Name "$PSHOME\\Modules\\Microsoft.PowerShell.Management"', 'Join-Path $a b'].join('\n'))).toEqual([
       'Import-Module -Name "$PSHOME\\Modules\\Microsoft.PowerShell.Management" goes on when it fails',
     ])
   })
 
   it("takes Core commands, the script's own functions and its comments", () => {
-    expect(problems(`# Get-HarnessThing\n${AUTOLOAD_OFF}\nfunction Get-Own { 1 }\nGet-Own | ForEach-Object { $_ } | Out-Null`)).toEqual([])
+    expect(problems(`# Get-HarnessThing\n${UTILITY_FIRST}\nfunction Get-Own { 1 }\nGet-Own | ForEach-Object { $_ } | Out-Null`)).toEqual([])
+  })
+
+  it('names a script that turns autoload off and imports another module, or none, before Utility', () => {
+    expect(problems([AUTOLOAD_OFF, 'Import-Module -Name "$PSHOME\\Modules\\CimCmdlets" -ErrorAction Stop', 'Get-CimInstance Win32_Process'].join('\n')))
+      .toEqual([`${UTILITY} is not the first module imported`])
+    expect(problems(`${AUTOLOAD_OFF}\n[Console]::Out.Write('x')`)).toEqual([`${UTILITY} is not the first module imported`])
   })
 })
 
 describe('PowerShell scripts import their modules by path, with autoload off', () => {
-  it('modulesByPath turns autoload off, then imports each module by its folder in $PSHOME, stopping if one fails', () => {
-    expect(modulesByPath('Microsoft.PowerShell.Utility', 'NetTCPIP')).toBe([
+  it('modulesByPath turns autoload off, then imports Utility and each module by its folder in $PSHOME, stopping if one fails', () => {
+    expect(modulesByPath('NetTCPIP')).toBe([
       AUTOLOAD_OFF,
       'Import-Module -Name "$PSHOME\\Modules\\Microsoft.PowerShell.Utility" -ErrorAction Stop',
       'Import-Module -Name "$PSHOME\\Modules\\NetTCPIP" -ErrorAction Stop',
@@ -154,6 +170,11 @@ describe('PowerShell scripts import their modules by path, with autoload off', (
 
   it.each(rows)('%s %s', (_file, _name, script) => {
     expect(problems(script())).toEqual([])
+  })
+
+  // runPowershell puts it before each script, where autoload is still on.
+  it('the prelude calls no command', () => {
+    expect(problems(POWERSHELL_PRELUDE)).toEqual([])
   })
 
   const src = fileURLToPath(new URL('../..', import.meta.url))
