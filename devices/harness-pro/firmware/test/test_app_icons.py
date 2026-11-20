@@ -196,6 +196,21 @@ class CommittedTests(unittest.TestCase):
         for app in ("harness", "terminal"):
             self.assertNotIn(app, self.rows)
 
+    def test_art_is_clean(self):
+        # Square RGBA, 512 px or the vendor's largest down to 128, and no ancillary PNG chunk (ICC profile, text, EXIF,
+        # time): nothing sips or a vendor wrote besides the pixels reaches the repo.
+        for path in sorted(gen.SRC.glob("*.png")):
+            with Image.open(path) as im:
+                self.assertEqual((im.mode, im.width), ("RGBA", im.height), path.name)
+                self.assertTrue(128 <= im.width <= 512, path.name)
+            data, i, ancillary = path.read_bytes(), 8, []
+            while i < len(data):
+                kind = data[i + 4:i + 8].decode("latin-1")
+                if kind[0].islower():
+                    ancillary.append(kind)
+                i += 12 + int.from_bytes(data[i:i + 4], "big")
+            self.assertEqual(ancillary, [], path.name)
+
     def test_alpha_not_empty(self):
         arrays = re.findall(r"static const uint8_t (a_\w+_a)\[\d+\] = \{([^}]*)\};", self.c)
         self.assertEqual(len(arrays), len(self.rows) * len(gen.SIZES))

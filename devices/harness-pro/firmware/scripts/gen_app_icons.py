@@ -3,7 +3,7 @@
 
     python3 scripts/gen_app_icons.py [--check]   # needs Pillow; run from anywhere
 
-Reads each app's official icon (.github/assets/apps/<id>.png, square RGBA, any size of at least 72 px; ids in APPS).
+Reads each app's official icon (.github/assets/apps/<id>.png, square RGBA, 128 to 512 px; ids in APPS).
 Icon: cropped to its alpha >= 128 box (the tile, not the macOS drop shadow), padded square with transparency, resized
 with LANCZOS to every size in SIZES; alpha < 64 is then cleared so the shadow leaves no grey haze on a coloured card.
 Card colour: measured on the source as given, opaque pixels only (alpha >= 250): the most frequent saturated colour
