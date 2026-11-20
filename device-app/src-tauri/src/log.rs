@@ -128,8 +128,10 @@ static HOME: LazyLock<Option<Regex>> = LazyLock::new(|| {
 
 /// `home` as a whole path segment, so `/Users/a` leaves `/Users/ab` and `/Users/a.b` alone: it ends at a character
 /// no user name holds, at the end of the text, or at dots before either (a sentence's end). None for a home of `/` or
-/// nothing. A Windows path's letters match in either case and `\` and `/` are one separator there; its user names
-/// hold spaces and accents, so only a character Windows refuses in one ends it.
+/// nothing. A Windows path's letters match in either case, and any run of `\` and `/` is one separator there (JSON
+/// doubles each `\`). It ends at a character Windows refuses in a user name, and also at a space, a quote or a
+/// parenthesis, which a user name may hold but which end a path far more often: another person's name that goes on
+/// after one is cut there, which hides more, never less.
 fn home_rule(home: &str, windows: bool) -> Option<Regex> {
     let separators: &[char] = if windows { &['\\', '/'] } else { &['/'] };
     let home = home.trim_end_matches(separators);
@@ -138,7 +140,7 @@ fn home_rule(home: &str, windows: bool) -> Option<Regex> {
     }
     let (path, end) = if windows {
         let segments: Vec<String> = home.split(separators).map(regex::escape).collect();
-        (format!("(?i:{})", segments.join(r"[\\/]")), r#"[\\/"\[\]:;|=,+*?<>]"#)
+        (format!("(?i:{})", segments.join(r"[\\/]+")), r#"[\\/"\[\]:;|=,+*?<>'()`\s]"#)
     } else {
         (regex::escape(home), r"[^A-Za-z0-9_.\-]")
     };
