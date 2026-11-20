@@ -32,6 +32,7 @@ import { leanFingerprint, readLeanBundle, releaseLeanClaim, writeLeanBundle, typ
 import { errorKind, ts } from './lib/log.js'
 import { confirm as confirmUpdate, pendingVersion, putNodeBack, restore as restoreUpdate, unjudgedUpdate } from './lib/selfUpdate.js'
 import { keepStaged, ptyUnjudged, rollBackStaged } from './lib/windows/ptyUpdate.js'
+import { enterHome } from './lib/workingFolder.js'
 import { VERSION } from './version.js'
 
 /** Where a master re-executing on a new bundle leaves word of it, until that master's core is up. */
@@ -235,6 +236,9 @@ export function startMaster(
   start: MasterStart, exit: (code: number) => void = (code) => process.exit(code),
   platform: NodeJS.Platform = process.platform, windows: () => Partial<MasterConfig> = () => windowsMaster(start.scriptPath),
 ): ReturnType<typeof runMaster> {
+  // First, so the core, the services, tmux and the PTY host it starts inherit the home: started in a folder deleted
+  // since (the firmware flash's worktree), every core it started there failed to read its folder, an update's too.
+  const homeLine = enterHome()
   // Before it starts anything: on Linux an absent locale makes tmux and ps mangle their output, and the
   // core and the services inherit this environment (lib/childLocale.ts). launchd and systemd start the
   // master with no `harness start` before it to have set it.
@@ -252,6 +256,8 @@ export function startMaster(
   // and an aside file may hold the only copy of a path a rollback puts back. Taken only while a host is on probation.
   const lock = () => tryAcquireSpawnLockSync('update')
   const masterLog = (line: string) => console.log(`${ts()} ${line}`)
+  // Once the Windows log is in place: before it, this line would reach no one there.
+  if (homeLine) masterLog(homeLine)
   const installed = isInstalledCopy(start.scriptPath, env.ADAPTER_CLI_DIR)
   return runMaster({
     env: masterEnv(process.env, unixSocketPath(env.ADAPTER_DATA_DIR, env.PORT), undefined, platform),

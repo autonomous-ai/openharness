@@ -278,7 +278,8 @@ import { RuntimeProfileState, type RuntimeModelOption } from '../lib/runtimeProf
 import { createRuntimeProfiles } from './engines/runtimeProfiles.js'
 import { createRuntimeTransport } from './engines/runtimeTransport.js'
 import { RuntimeProfileController } from '../lib/runtimeControl.js'
-import { installTimestampedConsole, sid, errorKind, prepareLogFile, trimLogFile, LOG_CHECK_INTERVAL_MS } from '../lib/log.js'
+import { installTimestampedConsole, sid, errorKind, prepareLogFile, trimLogFile, LOG_CHECK_INTERVAL_MS, ts } from '../lib/log.js'
+import { enterHome } from '../lib/workingFolder.js'
 
 // Daemon stdout/stderr. Capped at LOG_MAX_BYTES — see prepareLogFile/trimLogFile in lib/log.ts.
 const LOG_FILE = DAEMON_LOG_FILE
@@ -3544,6 +3545,10 @@ export function runCore(scriptPath: string): void {
 
 /** `harness start -f` with `HARNESS_NO_MASTER=1`, and a start under tsx: the core alone, in the process of the command that asked for it. */
 export function runCoreInForeground(session: AuthSession | null, scriptPath: string): Promise<void> {
+  // The core with no master (HARNESS_NO_MASTER=1, a start from the sources) works in the home too: started in a folder
+  // deleted since (the firmware flash's worktree), it failed every read of its folder (lib/workingFolder.ts).
+  const homeLine = enterHome()
+  if (homeLine) console.log(`${ts()} ${homeLine}`)
   holdHarnessdEnv()
   dropAgentSessionEnv()
   SCRIPT_PATH = scriptPath
