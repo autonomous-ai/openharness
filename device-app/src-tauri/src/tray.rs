@@ -35,4 +35,16 @@ mod tests {
         assert_eq!(tray_icon("linux", false), TrayIcon::Light);
         assert_eq!(tray_icon("linux", true), TrayIcon::Light);
     }
+
+    #[test]
+    fn the_light_glyph_is_trays_in_white() {
+        use tauri::image::Image;
+        let light = include_bytes!("../icons/tray-light.png");
+        // A PNG's width and height are the big-endian u32s at bytes 16..24, in its IHDR chunk.
+        assert_eq!(light[16..24], [0, 0, 0, 36, 0, 0, 0, 36]);
+        let light = Image::from_bytes(light).unwrap();
+        assert!(light.rgba().chunks(4).all(|pixel| pixel[..3] == [255, 255, 255]), "a pixel is not white");
+        let alpha = |image: &Image| image.rgba().chunks(4).map(|pixel| pixel[3]).collect::<Vec<_>>();
+        assert_eq!(alpha(&light), alpha(&Image::from_bytes(include_bytes!("../icons/tray.png")).unwrap()));
+    }
 }
