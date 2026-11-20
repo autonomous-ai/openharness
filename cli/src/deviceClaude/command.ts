@@ -2,8 +2,9 @@
  * `harness device claude …` and `harness device codex …`: status, enable and disable, the way to take away or bring back
  * what the devices service sets up by itself once a dial has attached here, and three words the harness-device plugin
  * runs that a person never types: `asked` (its PermissionRequest hook), `link` (its mod, for the daemon's socket and the
- * devices' listener's) and `inbox <session id>` (its mod on Windows, whose runtime can neither reach the daemon's pipe
- * nor sign for it: this process holds the session's poll and proves the daemon's token, inbox.ts). `disable` marks the
+ * devices' listener's), and `inbox <session id>` and `attach <session id>` (its mod on Windows, whose runtime can
+ * neither reach the daemon's pipe nor the devices' nor sign for either: this process holds the session's poll and
+ * proves the daemon's token, inbox.ts, and tells the devices the Claude app shows a session). `disable` marks the
  * engine removed in dial-skill.json, which the devices service then leaves alone, and removes Harness's skill from the
  * engine's default home, from each folder an enable wrote and from each the service recorded in dial-setup.json.
  * `enable` clears the mark and writes the skill into the engine's default home and back into each folder the service
@@ -35,6 +36,7 @@ import { harnessPath } from '../config/harnessHome.js'
 import { claudeDisable, claudeEnable, claudeHomeDisable, claudeHomeEnable, claudeStatus, type ClaudeResult, type ClaudeRun } from '../devices/claudePlugin.js'
 import { claudePluginState, ownDirectory, removeSkill, skillsFolderOf, skillWanted, writeSkill } from '../devices/dialSkill.js'
 import { listable, MAX_HOMES, readRemoved, readSetup, readWritten, writeOrcaConnected, writePluginHomes, writeRemoved, type DialEngine } from '../devices/dialSkillFiles.js'
+import { tellDevices } from '../devices/listenerClient.js'
 import { devicesListenerPath } from '../devices/listenerPath.js'
 import { devicesPipe, devicesRecordPath } from '../devices/listenerPipe.js'
 import { NOTICE_USAGE, runNotice } from '../devices/notice.js'
@@ -48,9 +50,9 @@ import { daemonPost, runAsked } from './asked.js'
 import { createDaemonProof, followInbox, parentAlive } from './inbox.js'
 import { claudePluginOn, claudeSettingsPath } from './plugin.js'
 
-/** `asked`, `link`, `inbox`, `orca link` and `vscode link` are left out: they are the plugins', and typed by hand they
- *  only wait on stdin or the dial, or print a path. `vscode status`, `cursor status` and `orca status` are too: each app
- *  shows whether Harness's extension or plugin is on. */
+/** `asked`, `link`, `inbox`, `attach`, `orca link` and `vscode link` are left out: they are the plugins', and typed by
+ *  hand they only wait on stdin or the dial, print a path or turn the dial. `vscode status`, `cursor status` and
+ *  `orca status` are too: each app shows whether Harness's extension or plugin is on. */
 export const DEVICE_USAGE = `Harness device (with a dial plugged in, Claude Code and Codex are set up to ring it, and VS Code, Cursor and Orca to follow it; disable takes that away, enable brings it back):
   harness device claude status [--json]  whether the dial is on for Claude Code (its harness-device plugin on, and not removed), and its version
   harness device claude enable           set Claude Code up again: the plugin and the dial skill (Claude Code 2.1.287 or later), in each Orca account too
@@ -98,6 +100,8 @@ export interface DeviceDeps {
   pipes?: { daemon(dataDir: string, port: number): Promise<PipeTarget | null>; devices(dataDir: string): Promise<PipeTarget | null> }
   /** One line and a newline on stdout, false once a write failed or stdout errored: `inbox` ends on it. */
   write(line: string): Promise<boolean>
+  /** How `attach` reaches the devices' listener: `tellDevices` by default. */
+  tell?: (dataDir: string, message: { type: string } & Record<string, unknown>) => Promise<boolean>
   out(line: string): void
   err(line: string): void
 }
@@ -114,6 +118,7 @@ export async function runDeviceCommand(argv: string[], deps: DeviceDeps): Promis
       proof: createDaemonProof(), write: deps.write, wait: (ms) => sleep(ms), parentAlive,
     })
   }
+  if (words.length <= 3 && words[0] === 'claude' && words[1] === 'attach') return attachSession(words[2] ?? '', deps)
   if (words.length === 2 && (words[0] === 'orca' || words[0] === 'vscode') && words[1] === 'link') return devicesLink(deps)
   if (words.length === 2 && words[0] === 'codex') return codexCommand(words[1], json, deps)
   if (words.length === 2 && (words[0] === 'vscode' || words[0] === 'cursor')) return vscodeCommand(words[0], words[1], json, deps)
@@ -301,6 +306,18 @@ const DEFAULT_OFF_FAILED = 'Could not turn off Claude Code outside Orca.'
  */
 function pluginActs(dataDir: string): boolean {
   return claudePluginOn(claudeSettingsPath()) && readRemoved(dataDir).claude !== true
+}
+
+/** The devices listener's SESSION_ID (services/devicesListener.ts): an id it would refuse is not sent. */
+const SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+
+/** The mod's `session.attach` (plugins/harness-device/hooks/device.js): the dial turns to the session the Claude app
+ *  shows. One line, never an exit code or stderr: the mod reads only whether it was sent. */
+async function attachSession(sessionId: string, deps: DeviceDeps): Promise<number> {
+  const tell = deps.tell ?? tellDevices
+  const sent = SESSION_ID.test(sessionId) && pluginActs(deps.dataDir) && await tell(deps.dataDir, { type: 'attach', sessionId })
+  await deps.write(JSON.stringify({ sent }))
+  return 0
 }
 
 /** The command's own Claude Code home, where Claude Code's user settings are. */
