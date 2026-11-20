@@ -34,14 +34,14 @@ pub fn read(key: &str) -> bool {
 /// Tells `changed` each time HKCU's `key` turns light or dark. Windows pushes every write to the key; a write that
 /// leaves the colour as it was tells nothing.
 #[cfg(windows)]
-pub fn watch(key: &'static str, changed: impl Fn(bool) + Send + 'static) {
-    watch_under(HKEY_CURRENT_USER, key, changed)
+pub fn follow(key: &str, changed: impl Fn(bool) + Send + 'static) {
+    follow_under(HKEY_CURRENT_USER, key, changed)
 }
 
-/// `watch` under any open key, which a test makes in a hive of its own. The first notice is asked for before this
+/// `follow` under any open key, which a test makes in a hive of its own. The first notice is asked for before this
 /// returns, so a change made after it is never missed.
 #[cfg(windows)]
-fn watch_under(root: HKEY, key: &str, changed: impl Fn(bool) + Send + 'static) {
+fn follow_under(root: HKEY, key: &str, changed: impl Fn(bool) + Send + 'static) {
     let key = wide(key);
     let mut opened: HKEY = ptr::null_mut();
     // SAFETY: the subkey is NUL-terminated and outlives the call; `opened` receives the key.
@@ -51,17 +51,17 @@ fn watch_under(root: HKEY, key: &str, changed: impl Fn(bool) + Send + 'static) {
     // Auto-reset: each wait takes one notice.
     // SAFETY: no attributes and no name; a null handle is checked below.
     let event = unsafe { CreateEventW(ptr::null(), 0, 0, ptr::null()) };
-    let watched = Watched { key: opened, event };
-    if event.is_null() || !watched.ask() {
+    let followed = Followed { key: opened, event };
+    if event.is_null() || !followed.ask() {
         return;
     }
     // Asked before read: a change in between is a notice still to come.
-    let mut last = watched.light();
+    let mut last = followed.light();
     thread::spawn(move || {
-        let watched = watched;
-        // SAFETY: the event is open until `watched` drops, after the loop.
-        while unsafe { WaitForSingleObject(watched.event, INFINITE) } == WAIT_OBJECT_0 && watched.ask() {
-            let now = watched.light();
+        let followed = followed;
+        // SAFETY: the event is open until `followed` drops, after the loop.
+        while unsafe { WaitForSingleObject(followed.event, INFINITE) } == WAIT_OBJECT_0 && followed.ask() {
+            let now = followed.light();
             if now != last {
                 last = now;
                 changed(now);
@@ -70,19 +70,19 @@ fn watch_under(root: HKEY, key: &str, changed: impl Fn(bool) + Send + 'static) {
     });
 }
 
-/// The watched key and the event its notices set, closed together.
+/// The followed key and the event its notices set, closed together.
 #[cfg(windows)]
-struct Watched {
+struct Followed {
     key: HKEY,
     event: HANDLE,
 }
 
-// SAFETY: registry and event handles may be used from any thread; only the watch's own thread uses these once made.
+// SAFETY: registry and event handles may be used from any thread; only the follow's own thread uses these once made.
 #[cfg(windows)]
-unsafe impl Send for Watched {}
+unsafe impl Send for Followed {}
 
 #[cfg(windows)]
-impl Watched {
+impl Followed {
     /// Asks for the next write to the key's values. Thread-agnostic: the notice outlives the thread that asked.
     fn ask(&self) -> bool {
         let filter = REG_NOTIFY_CHANGE_LAST_SET | REG_NOTIFY_THREAD_AGNOSTIC;
@@ -96,7 +96,7 @@ impl Watched {
 }
 
 #[cfg(windows)]
-impl Drop for Watched {
+impl Drop for Followed {
     fn drop(&mut self) {
         // SAFETY: each is closed once; a null event was never opened.
         unsafe {
@@ -151,7 +151,7 @@ mod tests {
     /// program sees.
     #[cfg(windows)]
     #[test]
-    fn the_watch_tells_a_change_once() {
+    fn following_tells_a_change_once() {
         use std::ptr;
         use std::sync::mpsc;
         use std::time::Duration;
@@ -179,7 +179,7 @@ mod tests {
         set(0);
 
         let (told, tells) = mpsc::channel();
-        watch_under(root, "Personalize", move |light| {
+        follow_under(root, "Personalize", move |light| {
             let _ = told.send(light);
         });
         let wait = Duration::from_secs(10);

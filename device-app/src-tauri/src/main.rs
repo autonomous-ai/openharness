@@ -139,9 +139,9 @@ fn start(handle: &AppHandle, events: Sender<Event>, queue: Receiver<Event>) -> t
     // after this setup, once the tray is built.
     #[cfg(windows)]
     let light_panel = {
-        use harness_device::theme_windows::{PERSONALIZE, read, watch};
+        use harness_device::theme_windows::{PERSONALIZE, follow, read};
         let (setting, log) = (handle.clone(), log.clone());
-        watch(PERSONALIZE, move |light| {
+        follow(PERSONALIZE, move |light| {
             let (handle, log) = (setting.clone(), log.clone());
             let _ = setting.run_on_main_thread(move || {
                 if let Some(tray) = handle.tray_by_id(TRAY)
