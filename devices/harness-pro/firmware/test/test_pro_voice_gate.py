@@ -247,10 +247,10 @@ static void situation(void) {
     members.count[0] = 2; snprintf(members.id[0][0], ID_MAX, "a1"); snprintf(members.id[0][1], ID_MAX, "a2");
     pod_ui_swarms(&U, sw, 1, &members, "s0", NULL, 0);
     pro_app_link(true, "mac");
-    ROWS[0] = (pro_agent_row_t){"a1", "Alpha", "claude", "m-a", "Mac"};
-    ROWS[1] = (pro_agent_row_t){"a2", "Bravo", "codex", "m-a", "Mac"};
-    ROWS[2] = (pro_agent_row_t){"a3", "Charlie", "claude", "m-b", "Box"};
-    pro_app_agents(ROWS, 3);
+    ROWS[0] = (pro_agent_row_t){"a1", "Alpha", "claude", "m-a", "Mac", NULL, 0};
+    ROWS[1] = (pro_agent_row_t){"a2", "Bravo", "codex", "m-a", "Mac", NULL, 0};
+    ROWS[2] = (pro_agent_row_t){"a3", "Charlie", "claude", "m-b", "Box", NULL, 0};
+    pro_app_agents(ROWS, 3, false, true);
     machines("online", "online");
     render();
 }
@@ -467,7 +467,7 @@ static void voice_link_drop_ends_talk(void) {
     // Reconnect: the next recording starts clean.
     sender_done();
     pro_app_link(true, "mac");
-    pro_app_agents(ROWS, 3);
+    pro_app_agents(ROWS, 3, false, true);
     machines("online", "online");
     render();
     press();

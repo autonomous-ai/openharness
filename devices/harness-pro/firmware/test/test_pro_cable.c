@@ -45,6 +45,8 @@ static cable_swarm_t rec_swarms[SWARMS_MAX];
 static cable_swarm_members_t rec_members;
 static cable_tile_t rec_tiles[SWARM_TILES_MAX];
 static char rec_agent_ids[POD_AGENTS_MAX][ID_MAX];
+static char rec_agent_hosts[POD_AGENTS_MAX][16];
+static uint8_t rec_agent_caps_off[POD_AGENTS_MAX];
 
 static ev_t *add(int kind, const char *id)
 {
@@ -58,11 +60,15 @@ static ev_t *add(int kind, const char *id)
 static void put(char *dst, const char *s) { snprintf(dst, 2400, "%s", s ? s : "<null>"); }
 
 void pro_app_link(bool up, const char *machine) { ev_t *e = add(EV_LINK, NULL); e->n1 = up; put(e->a, machine); }
-void pro_app_agents(const pro_agent_row_t *rows, int n)
+void pro_app_agents(const pro_agent_row_t *rows, int n, bool machine_view, bool tab_open)
 {
     ev_t *e = add(EV_AGENTS, NULL);
-    e->n1 = n;
-    for (int i = 0; i < n && i < POD_AGENTS_MAX; i++) snprintf(rec_agent_ids[i], ID_MAX, "%s", rows[i].id);
+    e->n1 = n; e->n2 = machine_view; e->n3 = tab_open;
+    for (int i = 0; i < n && i < POD_AGENTS_MAX; i++) {
+        snprintf(rec_agent_ids[i], ID_MAX, "%s", rows[i].id);
+        snprintf(rec_agent_hosts[i], sizeof rec_agent_hosts[i], "%s", rows[i].host ? rows[i].host : "");
+        rec_agent_caps_off[i] = rows[i].caps_off;
+    }
     if (n > 0) { put(e->a, rows[0].name); put(e->b, rows[0].machine); put(e->c, rows[0].engine); }
 }
 void pro_app_swarms(const cable_swarm_t *items, int n, const cable_swarm_members_t *members, const char *selected,
@@ -1194,6 +1200,45 @@ static void question_tier_list(void)
     CHECK(nev == 1 && evs[0].kind == EV_QUESTION && evs[0].n1 == 0);
 }
 
+// `host` is kept only whole (under 16 B); `caps` grants exactly its letters s v f a, and only a string counts.
+static void agent_host_and_caps(void)
+{
+    welcome();
+    reset();
+    feed("{\"t\":\"agents.begin\"}");
+    feed("{\"t\":\"agent\",\"id\":\"a1\",\"engine\":\"claude\"}");
+    feed("{\"t\":\"agent\",\"id\":\"a2\",\"host\":\"codex\",\"caps\":\"sf\"}");
+    feed("{\"t\":\"agent\",\"id\":\"a3\",\"caps\":\"\"}");
+    feed("{\"t\":\"agent\",\"id\":\"a4\",\"caps\":\"xyz\"}");
+    feed("{\"t\":\"agent\",\"id\":\"a5\",\"caps\":\"vz\"}");
+    feed("{\"t\":\"agent\",\"id\":\"a6\",\"caps\":3}");
+    feed("{\"t\":\"agent\",\"id\":\"a7\",\"host\":\"abcdefghijklmnop\"}");
+    feed("{\"t\":\"agent\",\"id\":\"a8\",\"host\":\"abcdefghijklmno\"}");
+    feed("{\"t\":\"agents.end\"}");
+    CHECK(nev == 1 && evs[0].kind == EV_AGENTS && evs[0].n1 == 8);
+    static const char *ids[] = {"a1", "a2", "a3", "a4", "a5", "a6", "a7", "a8"};
+    static const char *hosts[] = {"", "codex", "", "", "", "", "", "abcdefghijklmno"};
+    static const uint8_t off[] = {0, POD_CAP_V | POD_CAP_A, 15, 15, 15 & ~POD_CAP_V, 0, 0, 0};
+    for (int i = 0; i < 8; i++)
+        CHECK(!strcmp(rec_agent_ids[i], ids[i]) && !strcmp(rec_agent_hosts[i], hosts[i]) && rec_agent_caps_off[i] == off[i]);
+}
+
+// `view` counts only as "machine", `tab` only as a non-empty string; an older daemon sends neither.
+static void agents_end_view_and_tab(void)
+{
+    welcome();
+    static const char *ends[] = {"", ",\"view\":\"machine\",\"tab\":\"\"", ",\"view\":\"apps\",\"tab\":\"t1\"",
+                                 ",\"view\":\"Machine\",\"tab\":7"};
+    static const long view[] = {0, 1, 0, 0}, tab[] = {0, 0, 1, 0};
+    for (int i = 0; i < 4; i++) {
+        reset();
+        feed("{\"t\":\"agents.begin\"}");
+        feed("{\"t\":\"agent\",\"id\":\"a1\"}");
+        feedf("{\"t\":\"agents.end\"%s}", ends[i]);
+        CHECK(nev == 1 && evs[0].kind == EV_AGENTS && evs[0].n2 == view[i] && evs[0].n3 == tab[i]);
+    }
+}
+
 int main(void)
 {
     pro_cable_start();   // the lock and the machine table; no tasks run on the host
@@ -1221,6 +1266,8 @@ int main(void)
     replug_spares_a_frame_in_flight();
     features_apps_switch_and_question_tier();
     question_tier_list();
+    agent_host_and_caps();
+    agents_end_view_and_tab();
     printf("test_pro_cable: %d checks passed\n", checks);
     return 0;
 }

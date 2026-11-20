@@ -595,7 +595,7 @@ static void pets_start_on_link(void) {
     pro_agent_row_t rows[3] = {{.id = "a1", .name = "Alpha", .engine = "claude", .machine = "mac"},
                                {.id = "a2", .name = "Bravo", .engine = "codex", .machine = "mac"},
                                {.id = "a3", .name = "Charlie", .engine = "claude", .machine = "mac"}};
-    pro_app_agents(rows, 3);
+    pro_app_agents(rows, 3, false, true);
     CHECK(U.nav.depth == 1 && R.opens == 0);            // no tabs yet: nothing to enter
     cable_swarm_t sw[2] = {{.agents = 2, .panes = 2}, {.agents = 1, .panes = 1}};
     snprintf(sw[0].id, sizeof sw[0].id, "s0"); snprintf(sw[0].name, sizeof sw[0].name, "Backend");
@@ -879,7 +879,7 @@ static void *cable_task(void *arg) {
     (void)arg;
     pro_app_test_reset();
     pro_app_link(true, "mac");
-    pro_app_agents(NULL, 0);
+    pro_app_agents(NULL, 0, false, true);
     pro_app_swarms(NULL, 0, NULL, NULL, NULL, 0);
     pro_app_tick();                                          // the sweep begins and asks for offset 0
     pro_library_row_t lib[6] = {
@@ -901,11 +901,11 @@ static void *cable_task(void *arg) {
     pro_app_swarms(CS, SWARMS_MAX, &CM, "s3", CT, SWARM_TILES_MAX);
     for (int n = 0; n < POD_AGENTS_MAX; n++) {
         snprintf(CIDS[n], ID_MAX, "a%d", n + 1);
-        CA[n] = (pro_agent_row_t){CIDS[n], "Agent", "claude", "m1", "mac"};
+        CA[n] = (pro_agent_row_t){CIDS[n], "Agent", "claude", "m1", "mac", NULL, 0};
     }
-    pro_app_agents(CA, POD_AGENTS_MAX);
-    pro_app_agents(NULL, 0);
-    pro_app_agents(CA, POD_AGENTS_MAX);
+    pro_app_agents(CA, POD_AGENTS_MAX, false, true);
+    pro_app_agents(NULL, 0, false, true);
+    pro_app_agents(CA, POD_AGENTS_MAX, false, true);
     pro_app_turn("a1", "started", "Thinking...", 0);
     pro_app_turn("a1", "verb", "Reading...", -1);
     pro_app_turn("a1", "activity", "Reading files", 3);
@@ -1565,11 +1565,11 @@ static void pro_app_test_voice_gate(void) {
     snprintf(m[1].id, sizeof m[1].id, "m-link"); snprintf(m[1].name, sizeof m[1].name, "Pc"); snprintf(m[1].state, sizeof m[1].state, "needs-link");
     pro_app_machines(m, 2, "m-off");
     static pro_agent_row_t rows[4];
-    rows[0] = (pro_agent_row_t){"a1", "Alpha", "claude", "m-ok", "Mac"};
-    rows[1] = (pro_agent_row_t){"a2", "Bravo", "codex", "m-off", "Box"};
-    rows[2] = (pro_agent_row_t){"a3", "Charlie", "claude", "m-link", "Pc"};
-    rows[3] = (pro_agent_row_t){"a4", "Shell", "terminal", "m-ok", "Mac"};
-    pro_app_agents(rows, 4);
+    rows[0] = (pro_agent_row_t){"a1", "Alpha", "claude", "m-ok", "Mac", NULL, 0};
+    rows[1] = (pro_agent_row_t){"a2", "Bravo", "codex", "m-off", "Box", NULL, 0};
+    rows[2] = (pro_agent_row_t){"a3", "Charlie", "claude", "m-link", "Pc", NULL, 0};
+    rows[3] = (pro_agent_row_t){"a4", "Shell", "terminal", "m-ok", "Mac", NULL, 0};
+    pro_app_agents(rows, 4, false, true);
     CHECK(pro_app_voice_block_reason("a1") == NULL);
     CHECK(!strcmp(pro_app_voice_block_reason("a2"), "This computer is offline."));
     CHECK(!strcmp(pro_app_voice_block_reason("a3"), "Link this computer in Harness."));
@@ -1683,10 +1683,10 @@ static void pro_app_test_roster_and_swarms(void) {
     setup();
     static pro_agent_row_t rows[POD_AGENTS_MAX + 4];
     static char ids[POD_AGENTS_MAX + 4][ID_MAX];
-    for (int i = 0; i < POD_AGENTS_MAX + 4; i++) { snprintf(ids[i], ID_MAX, "r%d", i); rows[i] = (pro_agent_row_t){ids[i], NULL, "claude", "m", "mac"}; }
+    for (int i = 0; i < POD_AGENTS_MAX + 4; i++) { snprintf(ids[i], ID_MAX, "r%d", i); rows[i] = (pro_agent_row_t){ids[i], NULL, "claude", "m", "mac", NULL, 0}; }
     rows[1] = rows[0];                                         // a duplicate id
     rows[2].id = "";                                           // no id
-    pro_app_agents(rows, POD_AGENTS_MAX + 4);
+    pro_app_agents(rows, POD_AGENTS_MAX + 4, false, true);
     CHECK(agent("r0") && !strcmp(agent("r0")->name, "r0"));      // the name falls back to the id
     CHECK(agent("r3") != NULL && agent("a1") == NULL);
     int held_n = 0;
@@ -1962,6 +1962,30 @@ static void question_list_tier_is_quiet(void) {
     CHECK(!strcmp(pro_app_voice_block_reason("a3"), "Answer its question first."));
     pro_app_question("a2", "r1", "Which file?", false);   // a new one is still an alert
     CHECK(BEEPS == 1 && !pro_app_asleep());
+}
+
+// The roster brings each agent's app and caps, and agents.end the view and the tab, into the model under the one lock.
+static void agents_carry_app_and_view(void) {
+    setup();
+    pro_agent_row_t rows[3] = {{.id = "a1", .name = "Alpha", .engine = "claude", .machine = "mac"},
+                               {.id = "a2", .name = "Bravo", .engine = "codex", .machine = "mac", .host = "codex",
+                                .caps_off = POD_CAP_V | POD_CAP_A},
+                               {.id = "a3", .name = "Charlie", .engine = "claude", .machine = "mac", .host = "claude",
+                                .caps_off = POD_CAPS_ALL & ~POD_CAP_S}};
+    pro_app_agents(rows, 3, true, false);
+    CHECK(agent("a1")->caps == POD_CAPS_ALL && !strcmp(agent("a1")->host, ""));
+    CHECK(agent("a2")->caps == (POD_CAP_S | POD_CAP_F) && !strcmp(agent("a2")->host, "codex"));
+    CHECK(agent("a3")->caps == POD_CAP_S && !strcmp(agent("a3")->host, "claude"));
+    CHECK(U.model.machine_view && U.model.has_window);   // setup's swarms listed two tabs
+    pro_app_agents(rows, 3, false, true);
+    CHECK(!U.model.machine_view && U.model.has_window);
+    // A library-only agent never had an `agent` row: everything is allowed.
+    now += 1000;
+    pro_app_tick();
+    static const pro_library_row_t lib[1] = {{"far", "Stylist", "codex", "Box", "idle", 5}};
+    pro_app_library(lib, 1, 0, 1);
+    CHECK(agent("far") && agent("far")->caps == POD_CAPS_ALL);
+    CHECK(LOCK_DEPTH == 0);
 }
 
 // A question's entry goes whenever the question ends: a new turn, a finished turn, a link drop.
@@ -2388,7 +2412,7 @@ int main(int argc, char **argv) {
         {"pro_app_test_voice_paths", pro_app_test_voice_paths}, {"pro_app_test_touch_rules", pro_app_test_touch_rules},
         {"pro_app_test_roster_and_swarms", pro_app_test_roster_and_swarms}, {"side_button", side_button}, {"side_button_console", side_button_console}, {"question_needs_the_link", question_needs_the_link},
         {"notify_banner_beep_and_expiry", notify_banner_beep_and_expiry}, {"notify_tap_opens_and_swipe_dismisses", notify_tap_opens_and_swipe_dismisses},
-        {"notify_never_over_talk", notify_never_over_talk}, {"notify_tiers", notify_tiers}, {"notify_question_and_error", notify_question_and_error}, {"notify_entries_expire", notify_entries_expire}, {"notify_question_entry_ends_with_question", notify_question_entry_ends_with_question}, {"notify_question_resent_after_relink_is_quiet", notify_question_resent_after_relink_is_quiet}, {"notify_question_same_prompt_new_request_beeps", notify_question_same_prompt_new_request_beeps}, {"question_list_tier_is_quiet", question_list_tier_is_quiet}, {"notify_replace_seen_and_read", notify_replace_seen_and_read},
+        {"notify_never_over_talk", notify_never_over_talk}, {"notify_tiers", notify_tiers}, {"notify_question_and_error", notify_question_and_error}, {"notify_entries_expire", notify_entries_expire}, {"notify_question_entry_ends_with_question", notify_question_entry_ends_with_question}, {"notify_question_resent_after_relink_is_quiet", notify_question_resent_after_relink_is_quiet}, {"notify_question_same_prompt_new_request_beeps", notify_question_same_prompt_new_request_beeps}, {"question_list_tier_is_quiet", question_list_tier_is_quiet}, {"agents_carry_app_and_view", agents_carry_app_and_view},{"notify_replace_seen_and_read", notify_replace_seen_and_read},
         {"ota_screen_and_touch", ota_screen_and_touch}, {"voice_refused_while_updating", voice_refused_while_updating},
         {"update_gate", update_gate}, {"ota_failed_returns", ota_failed_returns}, {"ota_keeps_awake", ota_keeps_awake},
         {"ota_notifications_quiet", ota_notifications_quiet}, {"updated_notice", updated_notice},
