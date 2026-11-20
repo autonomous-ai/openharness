@@ -271,6 +271,14 @@ bool pro_cable_send_open(const char *agent_id)
     return send_json(root);
 }
 
+bool pro_cable_send_app_pick(const char *app)
+{
+    if (!app || !app[0] || strlen(app) >= CABLE_APP_ID_MAX) return false;
+    cJSON *root = msg("app.pick");
+    msg_string(&root, "app", app);
+    return send_json(root);
+}
+
 
 bool pro_cable_send_scroll(pro_scroll_phase_t phase, int dy, int velocity)
 {
