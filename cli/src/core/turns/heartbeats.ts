@@ -57,7 +57,8 @@ export function createHeartbeats({ bySession, sessionTurnOpen, agentIdFor, runti
       // First: an end whose Stop never came goes on here, and the turn it closes is not checked as open.
       turns.beat(sessionId)
       if (sessionTurnOpen(sessionId)) await turnActivity.check(sessionId)
-      if (!heartbeats.has(sessionId)) return
+      // Stopped while the check ran, or replaced: by a claim watch (a cancel's late output) or a new turn's heartbeat.
+      if (heartbeats.get(sessionId) !== timer) return
       const activity = turnActivity.snapshot(sessionId)
       if (activity) {
         const said = `${activity.state}:${activity.epoch}`
@@ -71,7 +72,27 @@ export function createHeartbeats({ bySession, sessionTurnOpen, agentIdFor, runti
     const timer = setInterval(() => { void beat().catch(error => console.error('[activity] probe failed:', errorKind(error))) }, TURN_HEARTBEAT_MS)
     heartbeats.set(sessionId, timer)
   }
-  return { heartbeats, turnStartedAt, stopHeartbeat, startHeartbeat, tell }
+  /**
+   * Working with no turn open (TurnActivity's `claimed`: a paste, a pane read as busy, output after a cancel) has no beat
+   * to tell its end, so `wait` and `watch` would sleep to their backstop. It is told now, and its end on the beat that
+   * reads it; its renewals tell nothing, so a claim is two frames. In the beats' map, a turn's heartbeat replaces it and
+   * shutdown clears it. It probes nothing and forgets no reading: the next pane read is compared with the last.
+   */
+  const watchClaim = (sessionId: string): void => {
+    if (heartbeats.has(sessionId)) return
+    tell(sessionId)
+    const timer = setInterval(() => {
+      // An open turn's heartbeat says the rest, and an agent no longer active has no one to tell.
+      if (bySession(sessionId)?.active && !sessionTurnOpen(sessionId)) {
+        if (turnActivity.snapshot(sessionId)?.state === 'working') return
+        tell(sessionId)
+      }
+      clearInterval(timer)
+      heartbeats.delete(sessionId)
+    }, TURN_HEARTBEAT_MS)
+    heartbeats.set(sessionId, timer)
+  }
+  return { heartbeats, turnStartedAt, stopHeartbeat, startHeartbeat, watchClaim, tell }
 }
 
 export type Heartbeats = ReturnType<typeof createHeartbeats>

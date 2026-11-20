@@ -1351,6 +1351,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     nativeActivity: (session) => nativeControls.activity(session),
     withheld: (sessionId) => turnHooksRef?.withheld(sessionId) ?? false,
     atWork: (sessionId) => turnHooksRef?.atWork(sessionId) ?? false,
+    // Declared further down: read when a claim starts, never now.
+    claimed: (sessionId) => turnBeats.watchClaim(sessionId),
   })
   const runtimeActivity = activity.runtimeActivity
   const turnActivity = activity.turnActivity

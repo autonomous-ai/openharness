@@ -27,9 +27,11 @@ export interface TurnActivityDeps {
   withheld: (sessionId: string) => boolean
   /** Work is known to go on with nothing in the transcript: the lead's subagents run. */
   atWork: (sessionId: string) => boolean
+  /** The session turned working with no turn open (TurnActivity's `claimed`): the heartbeats watch it (heartbeats.ts). */
+  claimed?: (sessionId: string) => void
 }
 
-export function createTurnActivity({ readScreen, terminals, bySession, sessionTurnOpen, drain, nativeActivity, withheld, atWork }: TurnActivityDeps) {
+export function createTurnActivity({ readScreen, terminals, bySession, sessionTurnOpen, drain, nativeActivity, withheld, atWork, claimed }: TurnActivityDeps) {
   const runtimeActivity = new RuntimeActivityReader({
     readScreen,
     codex: session => nativeActivity(session),
@@ -50,6 +52,7 @@ export function createTurnActivity({ readScreen, terminals, bySession, sessionTu
     // An OpenClaw draws its run a moment after the run's end lands in its store: that last timer, read by a pass against
     // one the turn's heartbeat read, would claim work for the lease after the answer. The next run's timers start anew.
     ended: sessionId => runtimeActivity.forget(sessionId),
+    claimed,
   })
   async function probe(sessionId: string, read: (session: RegisteredSession) => Promise<ActivityState>): Promise<ActivityState> {
     // The hooks know better than the pane: a wait shows no spinner's end, and a lead's subagents run off screen.
