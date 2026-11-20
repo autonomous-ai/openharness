@@ -19,7 +19,8 @@ export interface LoopInputs {
   /** '' when there is none. */
   home: string
   path: string
-  run(file: string, args: readonly string[], bounds: { path: string; timeoutMs: number; maxBytes: number; signal: AbortSignal }): Promise<Ran>
+  /** Run in `cwd`, which on Windows is also looked in for a bare `file` before `path`. */
+  run(file: string, args: readonly string[], bounds: { path: string; cwd: string; timeoutMs: number; maxBytes: number; signal: AbortSignal }): Promise<Ran>
   /** POST `body` to `/` on the target and hold its answer open. Null when it cannot connect, a pipe's answer does not
    *  prove the token, or it is aborted before the head. */
   connect(target: Target, body: string, signal: AbortSignal): Promise<Answer | null>
@@ -41,14 +42,14 @@ export function nodeInputs(): LoopInputs {
     platform: process.platform,
     home: homeOrNone(),
     path: process.env.PATH ?? '',
-    run(file, args, { path, timeoutMs, maxBytes, signal }) {
+    run(file, args, { path, cwd, timeoutMs, maxBytes, signal }) {
       return new Promise((settle) => {
         execFile(
           file,
           args,
           // A bare name is looked up in the child's PATH, so the given one decides which file runs. Hidden: on Windows
           // a console program started by the extension host, which has no console, would flash one up.
-          { env: { ...process.env, PATH: path }, timeout: timeoutMs, maxBuffer: maxBytes, killSignal: 'SIGKILL', signal, windowsHide: true },
+          { cwd, env: { ...process.env, PATH: path }, timeout: timeoutMs, maxBuffer: maxBytes, killSignal: 'SIGKILL', signal, windowsHide: true },
           (error, stdout) => {
             if (!error) settle(stdout)
             else settle((error as NodeJS.ErrnoException).code === 'ENOENT' ? MISSING : null)

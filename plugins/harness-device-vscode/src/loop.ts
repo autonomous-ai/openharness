@@ -273,12 +273,15 @@ export function startLoop(
   // The launcher in the home first (where Harness installs it: ~/.local/bin, on Windows %USERPROFILE%\.harness\bin),
   // then one on PATH, as plugins/harness-device/hooks/device.js looks. Only absolute folders: a relative or empty one
   // is the extension host's working folder, which can be the folder VS Code opened, in Restricted Mode an untrusted one.
+  // Each runs in the home, as Windows looks for a bare name in the working folder before PATH. With no absolute home
+  // nothing runs: there is no folder of the account's own to run in, and no Harness, which keeps its state there.
   const path = inputs.path.split(paths.delimiter).filter((folder) => paths.isAbsolute(folder)).join(paths.delimiter)
   const launcher = windows ? ['.harness', 'bin', 'harness.exe'] : ['.local', 'bin', 'harness']
   async function launch(signal: AbortSignal): Promise<Ran> {
-    const files = paths.isAbsolute(inputs.home) ? [paths.join(inputs.home, ...launcher), 'harness'] : ['harness']
-    for (const file of files) {
-      const ran = await inputs.run(file, LINK_ARGS, { path, timeoutMs: LINK_TIMEOUT_MS, maxBytes: LINK_MAX_BYTES, signal })
+    const home = inputs.home
+    if (!paths.isAbsolute(home)) return MISSING
+    for (const file of [paths.join(home, ...launcher), 'harness']) {
+      const ran = await inputs.run(file, LINK_ARGS, { path, cwd: home, timeoutMs: LINK_TIMEOUT_MS, maxBytes: LINK_MAX_BYTES, signal })
       if (ran !== MISSING) return ran
     }
     return MISSING
