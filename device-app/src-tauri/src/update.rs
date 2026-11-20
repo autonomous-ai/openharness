@@ -223,6 +223,32 @@ mod tests {
         assert_eq!(target("freebsd", mounted, Some(appimage)), None);
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn an_appimage_this_program_does_not_run_from_is_not_updated() {
+        use std::ffi::OsStr;
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("H.AppImage");
+        std::fs::write(&file, "").unwrap();
+        let mount = dir.path().join(".mount_HarnesAbC123");
+        std::fs::create_dir(&mount).unwrap();
+        let (path, folder) = (Some(file.as_os_str()), Some(mount.as_os_str()));
+        let mounted = mount.canonicalize().unwrap().join("usr/bin/harness-device");
+        assert_eq!(appimage_file(path, folder, &mounted), Some(file.clone()));
+
+        // APPIMAGE and APPDIR as a program started from another AppImage's terminal inherits them: this test runs from
+        // no such mount. A relative APPDIR, or none, is no AppImage's either.
+        let exe = std::env::current_exe().unwrap();
+        for (mount, exe) in
+            [(folder, exe.as_path()), (Some(OsStr::new(".mount_HarnesAbC123")), &mounted), (None, &mounted)]
+        {
+            let appimage = appimage_file(path, mount, exe);
+            assert_eq!(appimage, None, "{mount:?}");
+            assert_eq!(target("linux", exe, appimage.as_deref()), None, "{mount:?}");
+            assert!(!enabled(false, "linux", "0.0.1", appimage.is_some()), "{mount:?}");
+        }
+    }
+
     #[test]
     fn only_a_plain_version_is_an_update() {
         for version in ["0.1.3", "10.20.30"] {
