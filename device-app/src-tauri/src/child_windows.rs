@@ -156,3 +156,31 @@ impl Group {
         status.code().filter(|_| !self.0.killed.load(Ordering::SeqCst))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ffi::c_void;
+    use windows_sys::Win32::Foundation::WAIT_OBJECT_0;
+    use windows_sys::Win32::System::Threading::{CreateThread, THREAD_CREATE_SUSPENDED};
+
+    unsafe extern "system" fn returns(_: *mut c_void) -> u32 {
+        0
+    }
+
+    #[test]
+    fn resume_starts_a_suspended_thread_listed_after_running_ones() {
+        // This test process stands for a suspended child that something else put a thread in first: a thread that
+        // runs is listed before the suspended one, and resume must not stop at it.
+        // SAFETY: a suspended thread of this process that only returns; OwnedHandle closes its handle.
+        let thread = unsafe {
+            CreateThread(ptr::null(), 0, Some(returns), ptr::null(), THREAD_CREATE_SUSPENDED, ptr::null_mut())
+        };
+        assert!(!thread.is_null(), "{}", io::Error::last_os_error());
+        // SAFETY: a new handle, which nothing else owns.
+        let thread = unsafe { OwnedHandle::from_raw_handle(thread) };
+        resume(std::process::id()).unwrap();
+        // SAFETY: the handle is open while `thread` lives.
+        assert_eq!(unsafe { WaitForSingleObject(thread.as_raw_handle(), 5_000) }, WAIT_OBJECT_0);
+    }
+}
