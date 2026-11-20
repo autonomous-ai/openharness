@@ -516,6 +516,13 @@ class SelectionTests(unittest.TestCase):
             with self.subTest(text=text):
                 self.assertEqual(leg_of(text), expected)
 
+    def test_the_planner_reads_every_job_of_ci_yml(self):
+        # An edit to a job runs its suite only while the planner finds the job's block in the real file.
+        jobs = planner.ci_jobs((REPOSITORY / ".github/workflows/ci.yml").read_text())
+        self.assertLessEqual(set().union(*planner.JOBS.values()) | {"plan", "process-checks", "device-app-build", "required"},
+                             set(jobs))
+        self.assertIn("    uses: ./.github/workflows/windows.yml\n", jobs["windows-e2e"])
+
     def test_the_cli_ptyhost_backend_and_the_vendored_terminal_also_belong_to_the_pty_suite(self):
         for path, expected in {
             "cli/src/lib/ptyHost/stream.ts": {"cli", "pty"}, "cli/src/lib/ptyHostBackend.ts": {"cli", "pty"},

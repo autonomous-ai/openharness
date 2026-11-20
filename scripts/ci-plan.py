@@ -497,6 +497,30 @@ def select(paths, present=None):
     return selected, reasons
 
 
+CI_WORKFLOW = ".github/workflows/ci.yml"
+
+
+def ci_jobs(text):
+    """ci.yml's jobs: each id under `jobs:` and its block of lines indented below it."""
+    body = text.split("\njobs:\n", 1)[1] if "\njobs:\n" in text else ""
+    return dict(re.findall(r"(?m)^  ([\w-]+):\n((?:(?:    .*)?\n)*)", body))
+
+
+def edited_job_suites(root, base, head):
+    """The suites whose ci.yml jobs head edits, adds or removes: a job's definition is part of what its suite tests.
+    device-app-build's are the Device suites that install its packages; the plan, process and gate jobs run none."""
+    def jobs(commit):
+        try:
+            return ci_jobs(git(root, "show", f"{commit}:{CI_WORKFLOW}") + "\n")
+        except subprocess.CalledProcessError:
+            return {}  # No ci.yml there: every job of the other side changed.
+
+    old, new = jobs(base), jobs(head)
+    edited = {job for job in old.keys() | new.keys() if old.get(job) != new.get(job)}
+    return ({suite for suite, names in JOBS.items() if names & edited}
+            | (set(DEVICE_APP_BUILDS) if "device-app-build" in edited else set()))
+
+
 def covers(entry, path):
     return path == entry or (entry.endswith("/") and path.startswith(entry))
 
@@ -1002,6 +1026,10 @@ def make_plan(root, event_name, event, scope="full", source=None, evidence=None,
         paths = changed_paths(root, base, head)
         present = set(changed_paths(root, base, head, present_only=True))
         suites, reasons = select(paths, present)
+        if CI_WORKFLOW in paths:
+            edited = edited_job_suites(root, base, head)
+            suites |= edited
+            reasons[CI_WORKFLOW] = sorted(set(reasons[CI_WORKFLOW]) | edited)
         if event_name == "merge_group":
             suites = set()  # The PR run tested these changes; releases test the rest.
     else:
@@ -1034,8 +1062,8 @@ def make_plan(root, event_name, event, scope="full", source=None, evidence=None,
 def e2e_plan(paths, running, root=None, head=None, present=None, files=None):
     """What the running end-to-end suites' jobs read besides their flags: whether windows-e2e adds arm64 (for a
     Windows-only path, or a run by hand, which names none), the Device packages to build, and linux-e2e's files
-    (cli/-relative; a run by hand's files, else the present paths' and the canary for what it runs for) and rows, or the
-    full suite above LINUX_E2E_FILES_MAX files."""
+    (cli/-relative; a run by hand's files, else the present paths' and the canary for what it runs for or when its job's
+    definition changed alone) and rows, or the full suite above LINUX_E2E_FILES_MAX files."""
     arm64 = "windows-e2e" in running and (not paths or any(windows_only(path) for path in paths))
     builds = [dict(bundle=bundle, arch=arch) for bundle, arch in DEVICE_APP_PACKAGES
               if any((bundle, arch) in DEVICE_APP_BUILDS.get(suite, ()) for suite in running)]
@@ -1043,7 +1071,7 @@ def e2e_plan(paths, running, root=None, head=None, present=None, files=None):
     if "linux-e2e" in running:
         if files is None:
             files = [path for path in paths if (present is None or path in present) and linux_e2e_file(path)]
-            if any(linux_e2e_canary_path(path) for path in paths):
+            if not files or any(linux_e2e_canary_path(path) for path in paths):
                 if git(root, "ls-tree", "-r", "--name-only", head, "--", LINUX_E2E_CANARY) != LINUX_E2E_CANARY:
                     raise ValueError(f"linux-e2e: its canary {LINUX_E2E_CANARY} is not at {head[:12]}; name another "
                                      "real-backend e2e file as LINUX_E2E_CANARY in scripts/ci-plan.py")
