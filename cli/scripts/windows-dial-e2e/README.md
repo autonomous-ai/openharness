@@ -97,7 +97,7 @@ Run over SSH as the account whose console session it is, from the folder it is i
 - `console.ps1 -Script run-desk.ps1 -ArgsJson '["--dial-read","COM3","--out","C:\\…\\first-read.json","--serial-bin","C:\\…\\harness-serial.exe"]'`
   waits for the script (`-TimeoutSec`, 600 by default), prints its output and `exit <code>`, and exits with that code.
 - `-NoWait` prints the task's name (`harness-dial-check-<32 hex>`) and returns; `<this folder>\<name>.log` grows as the
-  script writes.
+  script writes, in UTF-8 (`Get-Content -Encoding UTF8` reads it whole).
 - `-Stop <name>` waits up to 90 s for the task to end (write the desk's `--quit-on` file first), ends what is left,
   prints the log and `exit <code>`, and deletes the task and its files.
 

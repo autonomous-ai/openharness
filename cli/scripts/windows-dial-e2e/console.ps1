@@ -4,8 +4,8 @@
 # password is stored: an interactive task runs only in the session already signed in. The task starts the script through
 # Windows' own conhost.exe with no window (`--headless`), so nothing flashes on the screen and nothing is compiled here:
 # Smart App Control runs only signed programs (desktop/scripts/windows-e2e/session-run.ps1 does the same for the VM's
-# test user with a program it builds). Its output goes to <this folder>\<name>.log as it comes; the task is named
-# harness-dial-check-<random>.
+# test user with a program it builds). Its output goes to <this folder>\<name>.log in UTF-8 as it comes; the task is
+# named harness-dial-check-<random>.
 #   Waiting (the default): prints the output and `exit <code>` once the script ends, within -TimeoutSec, then deletes the
 #     task and its files; a script still running then is ended with everything it started (exit 124).
 #   -NoWait: prints the task's name and returns; the log grows as the script writes, to be read over SSH.
@@ -21,14 +21,16 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
+# UTF-8 with no BOM, here and in the wrapper: Windows PowerShell reads a program's output, and writes its own, in the OEM
+# code page, which turns a profile's Vietnamese letters into `?`.
+$utf8 = New-Object Text.UTF8Encoding $false
+[Console]::OutputEncoding = $utf8
 $dir = $PSScriptRoot
 $me = [Security.Principal.WindowsIdentity]::GetCurrent()
 
 function Files([string]$Name) {
-  @{ wrapper = Join-Path $dir "$Name.ps1"; log = Join-Path $dir "$Name.log"; done = Join-Path $dir "$Name.done"; doneTemp = Join-Path $dir "$Name.done.tmp" }
+  @{ wrapper = Join-Path $dir "$Name.ps1"; call = Join-Path $dir "$Name.json"; log = Join-Path $dir "$Name.log"; done = Join-Path $dir "$Name.done"; doneTemp = Join-Path $dir "$Name.done.tmp" }
 }
-
-function Quote([string]$Text) { "'" + $Text.Replace("'", "''") + "'" }
 
 # The task, and what its script started: the task's PowerShell runs the wrapper, and a desk and its daemon run under it,
 # whose tree taskkill ends while its parents still stand.
@@ -55,8 +57,8 @@ if ($Stop) {
   while (-not (Test-Path -LiteralPath $files.done) -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 300 }
   $code = Exit-Code $files.done
   End-Task $Stop
-  if (Test-Path -LiteralPath $files.log) { Get-Content -LiteralPath $files.log }
-  Remove-Item -LiteralPath $files.wrapper, $files.log, $files.done, $files.doneTemp -Force -ErrorAction SilentlyContinue
+  if (Test-Path -LiteralPath $files.log) { Get-Content -LiteralPath $files.log -Encoding UTF8 }
+  Remove-Item -LiteralPath $files.wrapper, $files.call, $files.log, $files.done, $files.doneTemp -Force -ErrorAction SilentlyContinue
   Write-Output "exit $code"
   exit $code
 }
@@ -74,23 +76,32 @@ if (-not $console -or -not [string]::Equals($console, $me.Name, [StringCompariso
 
 $name = 'harness-dial-check-' + [guid]::NewGuid().ToString('N')
 $files = Files $name
-$call = (@(Quote $path) + @($words | ForEach-Object { Quote $_ })) -join ' '
-@"
-`$ErrorActionPreference = 'Continue'
-`$global:LASTEXITCODE = 0
-`$code = 0
-[IO.File]::WriteAllText($(Quote $files.log), '')
+# The script and its arguments are data the wrapper reads, never text in its code: a quote of any kind (straight,
+# curly, double) in a path or an argument cannot end a string there.
+[IO.File]::WriteAllText($files.call, (ConvertTo-Json -Compress -InputObject @{ script = $path; args = $words }), $utf8)
+# The same for every task: it finds its files beside itself, by its own name.
+@'
+[Console]::OutputEncoding = New-Object Text.UTF8Encoding $false
+$ErrorActionPreference = 'Continue'
+$global:LASTEXITCODE = 0
+$code = 0
+$base = $PSCommandPath -replace '\.ps1$', ''
+$log = "$base.log"
+[IO.File]::WriteAllText($log, '')
 try {
-  & $call *>&1 | ForEach-Object { Add-Content -LiteralPath $(Quote $files.log) -Value "`$_" -Encoding utf8 }
-  if (`$null -ne `$LASTEXITCODE) { `$code = `$LASTEXITCODE }
+  $call = [IO.File]::ReadAllText("$base.json") | ConvertFrom-Json
+  $program = $call.script
+  $words = @($call.args)
+  & $program @words *>&1 | ForEach-Object { Add-Content -LiteralPath $log -Value "$_" -Encoding utf8 }
+  if ($null -ne $LASTEXITCODE) { $code = $LASTEXITCODE }
 } catch {
-  Add-Content -LiteralPath $(Quote $files.log) -Value "`$_" -Encoding utf8
-  `$code = 1
+  Add-Content -LiteralPath $log -Value "$_" -Encoding utf8
+  $code = 1
 }
 # Whole: a reader never finds the file empty.
-[IO.File]::WriteAllText($(Quote $files.doneTemp), "`$code")
-[IO.File]::Move($(Quote $files.doneTemp), $(Quote $files.done))
-"@ | Set-Content -LiteralPath $files.wrapper -Encoding utf8
+[IO.File]::WriteAllText("$base.done.tmp", "$code")
+[IO.File]::Move("$base.done.tmp", "$base.done")
+'@ | Set-Content -LiteralPath $files.wrapper -Encoding utf8
 
 $conhost = Join-Path $env:SystemRoot 'System32\conhost.exe'
 $shell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
@@ -114,12 +125,12 @@ try {
     }
     Start-Sleep -Milliseconds 300
   }
-  if (Test-Path -LiteralPath $files.log) { Get-Content -LiteralPath $files.log }
+  if (Test-Path -LiteralPath $files.log) { Get-Content -LiteralPath $files.log -Encoding UTF8 }
   $code = Exit-Code $files.done
 } finally {
   if (-not $keep) {
     End-Task $name
-    Remove-Item -LiteralPath $files.wrapper, $files.log, $files.done, $files.doneTemp -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $files.wrapper, $files.call, $files.log, $files.done, $files.doneTemp -Force -ErrorAction SilentlyContinue
   }
 }
 Write-Output "exit $code"
