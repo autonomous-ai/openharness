@@ -834,6 +834,41 @@ class GitPlanTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, re.escape(planner.LINUX_E2E_CANARY)):
             self.plan()
 
+    def test_a_change_to_a_jobs_definition_in_ci_yml_runs_its_suite(self):
+        # Answer P5: a job's block is part of what its suite tests. device-app-build serves the Device suites that
+        # install its packages; the plan, process and gate jobs run no suite.
+        def workflow(edited=(), added=()):
+            jobs = ["plan", "process-checks", "cli-tests", "linux-e2e", "dial-hosts", "device-app-build",
+                    "device-app-update", "required", *added]
+            blocks = "".join(f"  # {job} comes next\n  {job}:\n    runs-on: ubuntu-24.04\n"
+                             f"    steps:\n      - run: echo {'edited' if job in edited else 'base'}\n\n" for job in jobs)
+            return f"name: CI\non:\n  pull_request:\n    types: [opened]\njobs:\n{blocks}"
+
+        self.write(".github/workflows/ci.yml", workflow())
+        self.write(planner.LINUX_E2E_CANARY)
+        self.hints({})
+        self.base = self.commit()
+        for edited, added, suites in (
+                (("linux-e2e", "device-app-build"), (), {"linux-e2e", "device-app-e2e", "device-app-desktop",
+                                                          "device-app-install"}),
+                (("cli-tests",), (), {"cli"}), ((), ("cross-read-scan",), {"cross-read-scan"}),
+                (("plan", "process-checks", "required"), (), set())):
+            with self.subTest(edited=edited, added=added):
+                self.git("checkout", "-q", "--detach", self.base)
+                self.write(".github/workflows/ci.yml", workflow(edited, added))
+                self.commit()
+                plan = self.plan()
+                self.assertEqual(set(plan["suites"]), suites)
+                self.assertEqual(plan["reasons"][".github/workflows/ci.yml"], sorted(suites))
+                # linux-e2e has no file of its own then: it runs the canary.
+                self.assertEqual(plan["e2e"]["linux_files"],
+                                 [planner.LINUX_E2E_CANARY.removeprefix("cli/")] if "linux-e2e" in suites else [])
+        # A comment between jobs is in no job's block.
+        self.git("checkout", "-q", "--detach", self.base)
+        self.write(".github/workflows/ci.yml", workflow().replace("# dial-hosts comes next", "# the dial's hosts"))
+        self.commit()
+        self.assertEqual(self.plan()["suites"], [])
+
     def test_a_pr_that_only_deletes_an_e2e_file_runs_no_linux_e2e(self):
         self.write("cli/e2e/c.e2e.ts")
         self.base = self.commit()
