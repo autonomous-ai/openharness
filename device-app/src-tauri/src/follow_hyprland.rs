@@ -1,6 +1,166 @@
 //! The ChatGPT follow on Hyprland: the event socket says the active window or its title changed, and the request
 //! socket's `j/activewindow` gives its `title` and `pid`.
 
+use crate::follow::{AxTrust, CHATGPT_PROGRAM, ChatgptWindow, FollowSwitch, Heard, program_installed, runs_program};
+use crate::front_hyprland::{ANSWER_MAX, active_pid, active_window, ask, next_line, sockets};
+use std::io::{self, BufReader, Read};
+use std::net::Shutdown;
+use std::os::unix::net::UnixStream;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+/// The Hyprland door: its own connection to the event socket for each observation, and Harness's switch.
+pub struct HyprlandFollow {
+    switch: Arc<FollowSwitch>,
+}
+
+impl HyprlandFollow {
+    pub fn new(switch: Arc<FollowSwitch>) -> HyprlandFollow {
+        HyprlandFollow { switch }
+    }
+}
+
+impl ChatgptWindow for HyprlandFollow {
+    fn installed(&self) -> bool {
+        program_installed(Path::new(CHATGPT_PROGRAM))
+    }
+
+    fn observe(&self, heard: Box<dyn Fn(Heard) + Send + Sync>) -> Option<Box<dyn Send>> {
+        let runtime_dir = std::env::var_os("XDG_RUNTIME_DIR").filter(|dir| !dir.is_empty()).map(PathBuf::from);
+        let signature = std::env::var("HYPRLAND_INSTANCE_SIGNATURE").unwrap_or_default();
+        // The window's own process: another program named ChatGPT in front is not followed.
+        let chatgpt = |pid| runs_program(Path::new("/proc"), pid, Path::new(CHATGPT_PROGRAM));
+        Some(observe_instance(runtime_dir.as_deref(), &signature, chatgpt, heard))
+    }
+}
+
+impl AxTrust for HyprlandFollow {
+    fn trusted(&self) -> bool {
+        self.switch.on()
+    }
+
+    fn prompt(&self) {}
+
+    fn start(&self, changed: Box<dyn Fn() + Send + Sync>) {
+        self.switch.start(changed);
+    }
+
+    fn switch(&self, on: bool) {
+        self.switch.set(on);
+    }
+}
+
+/// An event line the door reads.
+#[derive(Debug, PartialEq, Eq)]
+pub enum HyprEvent {
+    /// `activewindowv2`: the active window's address, None for no window.
+    Active(Option<String>),
+    /// `windowtitle` or `windowtitlev2`: the address of a window whose title changed.
+    Title(String),
+    Other,
+}
+
+/// The event `line` is. A title event's own title is outside text, never read: the title is asked for.
+pub fn hypr_event(line: &str) -> HyprEvent {
+    if let Some(window) = active_window(line) {
+        return HyprEvent::Active((!window.is_empty()).then(|| window.to_string()));
+    }
+    let address = line.strip_prefix("windowtitle>>").or_else(|| {
+        line.strip_prefix("windowtitlev2>>").and_then(|rest| rest.split_once(',')).map(|(address, _)| address)
+    });
+    match address {
+        Some(address) if !address.is_empty() && address.bytes().all(|byte| byte.is_ascii_hexdigit()) => {
+            HyprEvent::Title(address.to_string())
+        }
+        _ => HyprEvent::Other,
+    }
+}
+
+/// The active window's title in `j/activewindow`'s answer. None for `{}` (no window), no title string, or an answer
+/// over ANSWER_MAX.
+pub fn active_title(answer: &[u8]) -> Option<String> {
+    if answer.len() > ANSWER_MAX {
+        return None;
+    }
+    let answer: serde_json::Value = serde_json::from_slice(answer).ok()?;
+    Some(answer.get("title")?.as_str()?.to_string())
+}
+
+/// Says the active window's title now, then at each change of the active window or of its title, until the events
+/// end. A window whose process is not `chatgpt`, no window, or an ask that fails is the empty title. A title asked
+/// for twice is said twice: the rules write a line only when it changed.
+pub fn follow(
+    events: impl Read,
+    ask: &dyn Fn() -> io::Result<Vec<u8>>,
+    chatgpt: &dyn Fn(u32) -> bool,
+    heard: &dyn Fn(Heard),
+) {
+    let title = || {
+        let answer = ask().ok()?;
+        active_pid(&answer).filter(|&pid| chatgpt(pid)).and_then(|_| active_title(&answer))
+    };
+    heard(Heard::Title(title()));
+    let mut events = BufReader::new(events);
+    let mut line = Vec::new();
+    // Known from the first `activewindowv2` on: Hyprland sends one again after each title change of the active window.
+    let mut active: Option<String> = None;
+    while let Ok(read) = next_line(&mut events, &mut line) {
+        if !read {
+            continue;
+        }
+        let Ok(line) = std::str::from_utf8(&line) else { continue };
+        match hypr_event(line) {
+            HyprEvent::Active(None) => {
+                active = None;
+                heard(Heard::Title(None));
+            }
+            HyprEvent::Active(window) => {
+                active = window;
+                heard(Heard::Title(title()));
+            }
+            HyprEvent::Title(window) if active.as_ref() == Some(&window) => heard(Heard::Title(title())),
+            HyprEvent::Title(_) | HyprEvent::Other => {}
+        }
+    }
+}
+
+/// An observation: dropped, it shuts the event stream down, which ends its thread's read.
+struct Observation(UnixStream);
+
+impl Drop for Observation {
+    fn drop(&mut self) {
+        let _ = self.0.shutdown(Shutdown::Both);
+    }
+}
+
+/// Follows the Hyprland instance under `runtime_dir` on a thread of its own. No socket there, or no thread, is
+/// NoObserver once.
+fn observe_instance(
+    runtime_dir: Option<&Path>,
+    signature: &str,
+    chatgpt: impl Fn(u32) -> bool + Send + 'static,
+    heard: Box<dyn Fn(Heard) + Send + Sync>,
+) -> Box<dyn Send> {
+    let heard: Arc<dyn Fn(Heard) + Send + Sync> = Arc::from(heard);
+    // The events are connected before the first ask, so a change between the two is not missed.
+    let connected = runtime_dir.and_then(|dir| sockets(dir, signature)).and_then(|(events, requests)| {
+        let events = UnixStream::connect(events).ok()?;
+        Some((events.try_clone().ok()?, events, requests))
+    });
+    let Some((stop, events, requests)) = connected else {
+        heard(Heard::NoObserver);
+        return Box::new(());
+    };
+    let told = heard.clone();
+    let spawned = std::thread::Builder::new()
+        .name("follow-hyprland".into())
+        .spawn(move || follow(events, &|| ask(&requests), &chatgpt, &*told));
+    if spawned.is_err() {
+        heard(Heard::NoObserver);
+    }
+    Box::new(Observation(stop))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

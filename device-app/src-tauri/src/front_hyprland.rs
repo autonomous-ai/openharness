@@ -101,7 +101,7 @@ pub fn follow(
 
 /// Reads the next line into `line`, without its newline. False for a line over LINE_MAX, which is read past and not
 /// kept. An error at the end: a half line there is no event.
-fn next_line(events: &mut impl BufRead, line: &mut Vec<u8>) -> io::Result<bool> {
+pub(crate) fn next_line(events: &mut impl BufRead, line: &mut Vec<u8>) -> io::Result<bool> {
     line.clear();
     let mut over = false;
     loop {
@@ -136,7 +136,7 @@ fn follow_instance(runtime_dir: &Path, signature: &str, proc_root: &Path, change
 
 /// `j/activewindow` on a connection of its own, as Hyprland answers one request per connection: the answer read to its
 /// end, or to one byte past ANSWER_MAX.
-fn ask(requests: &Path) -> io::Result<Vec<u8>> {
+pub(crate) fn ask(requests: &Path) -> io::Result<Vec<u8>> {
     let mut stream = UnixStream::connect(requests)?;
     stream.set_read_timeout(Some(ASK_WAIT))?;
     stream.set_write_timeout(Some(ASK_WAIT))?;
