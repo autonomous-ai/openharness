@@ -479,22 +479,19 @@ export function createBinding({
   /** The agents whose store read about a typed first task is out: one at a time each, as a read outlasts its pass's wait. */
   const storeReads = new Set<string>()
   /**
-   * Whether OpenClaw's store holds a user row written after [at], under the agent's key or one it moved off last, and none
-   * after [adoptedAt] when given: a later one is the adopted task's turn's to confirm (core/turns/funnel.ts), as a task
-   * typed here is. A store that cannot say, has not answered within STORE_READ_MS, or is still read from an earlier pass,
-   * does not.
+   * Whether OpenClaw's store holds a user row written after [at], under the agent's key or one it moved off last, and at
+   * [adoptedAt] or before when given: a later one is the adopted task's turn's to confirm (core/turns/funnel.ts), as a
+   * task typed here is, or the person's next message's. A store that cannot say, has not answered within STORE_READ_MS,
+   * or is still read from an earlier pass, does not.
    */
   const storeShowsTaken = async (agent: RegisteredSession, pid: number, at: number, adoptedAt: number | undefined): Promise<boolean> => {
     if (storeReads.has(agent.agentId)) return false
     storeReads.add(agent.agentId)
     const keys = [agent.sessionId, ...(agent.earlierSessionIds ?? []).slice(0, EARLIER_KEYS_ASKED)]
     const pane = { pid, stateDir: agent.openclawStateDir }
-    // A row under any key says yes; no says no only when every key does.
-    const since = async (time: number): Promise<boolean | null> => {
-      const said = await Promise.all(keys.map((key) => openclawUserRowSince(key, pane, time).catch(() => null)))
-      return said.includes(true) ? true : said.includes(null) ? null : false
-    }
-    const read = (async () => await since(at) === true && (adoptedAt === undefined || await since(adoptedAt) === false))()
+    // A row under any key says yes.
+    const read = Promise.all(keys.map((key) => openclawUserRowSince(key, pane, at, undefined, adoptedAt).catch(() => null)))
+      .then((said) => said.includes(true))
       .finally(() => storeReads.delete(agent.agentId))
     let timer: NodeJS.Timeout | undefined
     const late = new Promise<false>((resolve) => { timer = setTimeout(resolve, STORE_READ_MS, false) })

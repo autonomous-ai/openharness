@@ -101,12 +101,12 @@ export async function openclawSessionDb(
   return (await sessionStore(key, pane, openFiles))?.database ?? null
 }
 
-const USER_ROW_SINCE = `SELECT 1 FROM transcript_events WHERE message_role = 'user' AND created_at > ?
+const USER_ROW_SINCE = `SELECT 1 FROM transcript_events WHERE message_role = 'user' AND created_at > ? AND created_at <= ?
   AND session_id IN (SELECT session_id FROM session_windows WHERE session_key = ?) LIMIT 1;`
 
 /**
- * Whether `key`'s store holds a user message written after `since`, in any window the key has had: OpenClaw took a
- * task typed into its box. False when the TUI's own folder has no store yet (no message was ever taken); null for no
+ * Whether `key`'s store holds a user message written after `since`, and at `until` or before when given, in any window
+ * the key has had: OpenClaw took a task typed into its box. False when the TUI's own folder has no store yet (no message was ever taken); null for no
  * key, a read that fails, or a missing store in OpenClaw's default folder, used only because the TUI's folder is
  * unknown: its real store may be elsewhere.
  */
@@ -115,11 +115,12 @@ export async function openclawUserRowSince(
   pane: { pid: number; stateDir?: string | null },
   since: number,
   openFiles?: (pid: number) => Promise<string[]>,
+  until = Number.MAX_SAFE_INTEGER,
 ): Promise<boolean | null> {
   const store = await sessionStore(key, pane, openFiles)
   if (!store) return null
   const { database, fallback } = store
   try { await access(database) } catch { return fallback ? null : false }
-  const read = await sqliteReadAll(database, USER_ROW_SINCE, [since, key])
+  const read = await sqliteReadAll(database, USER_ROW_SINCE, [since, until, key])
   return read.ok ? read.rows.length > 0 : null
 }
