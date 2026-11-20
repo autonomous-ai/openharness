@@ -79,6 +79,11 @@ jobs:
       device-app: ${{ steps.select.outputs.device-app }}
       windows-e2e: ${{ steps.select.outputs.windows-e2e }}
       windows-e2e-arm64: ${{ steps.select.outputs.windows-e2e-arm64 }}
+      linux-e2e: ${{ steps.select.outputs.linux-e2e }}
+      linux-e2e-files: ${{ steps.select.outputs.linux-e2e-files }}
+      linux-e2e-shards: ${{ steps.select.outputs.linux-e2e-shards }}
+      linux-e2e-full: ${{ steps.select.outputs.linux-e2e-full }}
+      dial-hosts: ${{ steps.select.outputs.dial-hosts }}
       device-app-e2e: ${{ steps.select.outputs.device-app-e2e }}
       device-app-update: ${{ steps.select.outputs.device-app-update }}
       device-app-desktop: ${{ steps.select.outputs.device-app-desktop }}
@@ -107,6 +112,7 @@ jobs:
           .github/workflows/website-checks.yml .github/workflows/experience-checks.yml
           .github/workflows/authoring-browser-checks.yml .github/workflows/home-assistant-checks.yml
           .github/workflows/desktop-logging-checks.yml .github/workflows/windows.yml .github/workflows/backend-cache.yml
+          .github/workflows/cli-e2e-dial-hosts.yml
       - id: select
         env:
           CI_SCOPE: ${{ inputs.scope || 'full' }}
@@ -828,6 +834,134 @@ jobs:
     with:
       x64_only: ${{ needs.plan.outputs.windows-e2e-arm64 != 'true' }}
 
+  # The e2e files a pull request adds or changes, on Linux set up as cli-e2e.yml's nightly shards (one action), spread
+  # over the plan's runners by their timing hints. Above 40 changed files the plan gives no list and eight rows: every
+  # file the CI config includes, as the nightly. The files reach the commands only through env: a name is never shell.
+  linux-e2e:
+    concurrency:
+      group: ci-${{ github.event_name }}-${{ github.event.action || 'run' }}-${{ github.event.pull_request.number || github.run_id }}-linux-e2e-${{ strategy.job-index }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+    needs: plan
+    if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.linux-e2e == 'true'
+    name: linux-e2e (${{ matrix.shard }})
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(needs.plan.outputs.linux-e2e-shards) }}
+    # 24.04, as the nightly shards: 26.04 has no zsh or tcsh package.
+    runs-on: ubuntu-24.04
+    # As a nightly shard: about nine minutes of tests at most, plus install and the bundle.
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: cli
+    env:
+      LANG: C.UTF-8
+      SHELL: /bin/zsh
+      E2E_FILES: ${{ needs.plan.outputs.linux-e2e-files }}
+      E2E_FULL: ${{ needs.plan.outputs.linux-e2e-full }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.CI_SOURCE_SHA }}
+      - uses: ./.github/actions/cli-e2e-setup
+        with:
+          node-version: ${{ env.CLI_NODE_VERSION }}
+          packages: tcsh dash
+          real-backend: 'true'
+      # Vitest runs every file when it is given none: an empty list runs the full suite only when the plan says so.
+      - name: The plan gave files or a full run
+        run: |
+          if [[ -z "$E2E_FILES" && "$E2E_FULL" != true ]]; then
+            echo "linux-e2e: the plan gave no file and no full run"
+            exit 1
+          fi
+      # The file list before sharding: the summary holds the run to it.
+      - name: Discover the selected files
+        env:
+          SHARD: ${{ matrix.shard }}
+        run: |
+          read -ra files <<<"$E2E_FILES"
+          npx vitest list --config vitest.e2e.ci.config.ts --filesOnly --json="$RUNNER_TEMP/inventory-$SHARD.json" "${files[@]}"
+      - name: Run the selected files
+        env:
+          SHARD: ${{ matrix.shard }}
+          SHARDS: ${{ strategy.job-total }}
+          E2E_BUNDLE: '1'
+          E2E_ARTIFACTS_DIR: ${{ runner.temp }}/e2e-daemon-logs
+        run: |
+          read -ra files <<<"$E2E_FILES"
+          npx vitest run --config vitest.e2e.ci.config.ts --shard="$SHARD/$SHARDS" \
+            --reporter=default --reporter=json --outputFile.json="$RUNNER_TEMP/result-$SHARD.json" "${files[@]}"
+      - name: Preserve inventory and test results
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-e2e-shard-${{ matrix.shard }}
+          path: |
+            ${{ runner.temp }}/inventory-${{ matrix.shard }}.json
+            ${{ runner.temp }}/result-${{ matrix.shard }}.json
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 7
+      - name: Preserve the failing tests' daemon logs
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-e2e-daemon-logs-${{ matrix.shard }}
+          path: ${{ runner.temp }}/e2e-daemon-logs/
+          if-no-files-found: ignore
+          overwrite: true
+          retention-days: 7
+
+  # Exactly the selected files ran, each passing and collecting a case; a file whose every case skips passes and the
+  # job summary lists it. In the full mode, the nightly's rule: every discovered file once, every shard passing.
+  linux-e2e-summary:
+    needs: [plan, linux-e2e]
+    if: ${{ !cancelled() && needs.plan.outputs.ready == 'true' && needs.plan.outputs.linux-e2e == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.CI_SOURCE_SHA }}
+          sparse-checkout: scripts/verify-cli-test-shards.py
+          sparse-checkout-cone-mode: false
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: linux-e2e-shard-*
+          path: ${{ runner.temp }}/linux-e2e-shards
+          merge-multiple: true
+      - name: Require the selected files, each with a case, and every shard passing
+        env:
+          SHARDS: ${{ needs.plan.outputs.linux-e2e-shards }}
+          E2E_FILES: ${{ needs.plan.outputs.linux-e2e-files }}
+          E2E_FULL: ${{ needs.plan.outputs.linux-e2e-full }}
+          E2E_TEST_RESULT: ${{ needs.linux-e2e.result }}
+        run: |
+          args=(--suite e2e --root "$GITHUB_WORKSPACE/cli" --shards "$(jq length <<<"$SHARDS")"
+            --tests-result "$E2E_TEST_RESULT" --output "$RUNNER_TEMP/linux-e2e-summary.json"
+            --step-summary "$GITHUB_STEP_SUMMARY")
+          if [[ "$E2E_FULL" != true ]]; then args+=(--selected "$E2E_FILES"); fi
+          python3 scripts/verify-cli-test-shards.py "$RUNNER_TEMP/linux-e2e-shards" "${args[@]}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-e2e-summary
+          path: ${{ runner.temp }}/linux-e2e-summary.json
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 7
+
+  # The dial's hosts (herdr, WezTerm, Zellij, kitty, an X11 desktop and sway), for a change to their e2e files, their
+  # adapters or this job's definition: the workflow cli-e2e.yml's nightly calls.
+  dial-hosts:
+    concurrency:
+      group: ci-${{ github.event_name }}-${{ github.event.action || 'run' }}-${{ github.event.pull_request.number || github.run_id }}-dial-hosts
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+    needs: plan
+    if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.dial-hosts == 'true'
+    uses: ./.github/workflows/cli-e2e-dial-hosts.yml
+
   # Harness Device's debug packages, each built once for the Device suites that run (the plan's device-app-builds) and
   # handed to their jobs as artifacts. A debug build reads HARNESS_DEVICE_CLI, the fake CLI the drivers point it at.
   # Outside the suites' jobs, so a reused suite never builds; ci/required needs it, so a failed build fails the gate.
@@ -1184,7 +1318,8 @@ jobs:
     name: ci/required
     needs: [plan, process-checks, desktop-tests, companion-subsystems, cli-typecheck, cli-tests, tui-test,
             backend-desk, backend-integration, website-checks, os-checks, provider-checks, firmware-checks, pro-firmware-build, pro-golden,
-            mobile-checks, daemons-checks, pty-checks, device-app-checks, windows-e2e, device-app-build,
+            mobile-checks, daemons-checks, pty-checks, device-app-checks, windows-e2e, linux-e2e, linux-e2e-summary,
+            dial-hosts, device-app-build,
             device-app-linux, device-app-windows, device-app-update, device-app-desktop, device-app-install]
     if: always()
     runs-on: ubuntu-latest
