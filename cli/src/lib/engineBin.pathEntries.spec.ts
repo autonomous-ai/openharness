@@ -1,6 +1,6 @@
 import { accessSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, statSync, utimesSync, writeFileSync, type StatSyncOptions } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { delimiter, join, sep } from 'node:path'
+import { delimiter, dirname, join, sep } from 'node:path'
 import { afterEach, beforeEach, expect, it, vi, type MockInstance } from 'vitest'
 import { executableFileIdentity } from './engineBin.js'
 import { engineProcessMatch } from './processTable.js'
@@ -188,6 +188,18 @@ it('a hung folder gives no candidate file to a path that names a file in it eith
  expect(answered).toBe(true)
  expect(await pass).toEqual([join(good, 'codex')])
  expect(readsOf(join(hung, 'codex'))).toBe(0)
+})
+it('on Windows, a path that names a file in a hung folder in another case is not read either', async () => {
+ // Windows compares paths in any case: PATH says C:\Users\Ken\.local\bin, CODEX_PATH may say c:\users\ken\...
+ // On a case-sensitive disk that file is simply not there: what counts is that the pass does not read it.
+ const { bad: hung, good } = badThenGood('hung'), file = join(dirname(hung), 'HUNG', 'codex')
+ vi.stubEnv('CODEX_PATH', file); hold.opendir.add(hung); hold.under.add(hung); vi.useFakeTimers()
+ const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
+ Object.defineProperty(process, 'platform', { ...platform, value: 'win32' })
+ try {
+  expect(await foundAfterTheBound()).toEqual([join(good, 'codex')])
+ } finally { Object.defineProperty(process, 'platform', platform) }
+ expect(readsOf(file)).toBe(0)
 })
 it('is not read again while that read is outstanding, and is read again once it ends', async () => {
  const { bad: hung, good } = badThenGood('hung'); hold.opendir.add(hung); vi.useFakeTimers()
