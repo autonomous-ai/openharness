@@ -93,7 +93,15 @@
     },
     {
       "path": "/home/p/a\"b$c`d\\e/H.AppImage",
-      "exec": "\"/home/p/a\\\"b\\$c\\`d\\\\e/H.AppImage\""
+      "exec": "\"/home/p/a\\\\\"b\\\\$c\\\\`d\\\\\\\\e/H.AppImage\""
+    },
+    {
+      "path": "/home/p/a\\\\b/H.AppImage",
+      "exec": "\"/home/p/a\\\\\\\\\\\\\\\\b/H.AppImage\""
+    },
+    {
+      "path": "/home/p/a\\sb/H.AppImage",
+      "exec": "\"/home/p/a\\\\\\\\sb/H.AppImage\""
     },
     {
       "path": "/home/p/naïve/H.AppImage",
@@ -403,6 +411,28 @@
         "/home/p/.local/share/icons/harness-device.png"
       ],
       "write": true
+    },
+    {
+      "name": "its own entry in an earlier writer's Exec= quoting (\\\" with no string escape)",
+      "appImage": "/home/p/a\"b$c/Harness-Device.AppImage",
+      "wanted": "[Desktop Entry]\nType=Application\nName=Harness Device\nComment=The app for your Harness device.\nExec=\"/home/p/a\\\\\"b\\\\$c/Harness-Device.AppImage\"\nIcon=/home/p/.local/share/icons/harness-device.png\nTerminal=false\nCategories=Utility;\nStartupWMClass=harness-device\n",
+      "existing": "[Desktop Entry]\nType=Application\nName=Harness Device\nComment=The app for your Harness device.\nExec=\"/home/p/a\\\"b\\$c/Harness-Device.AppImage\"\nIcon=/home/p/.local/share/icons/harness-device.png\nTerminal=false\nCategories=Utility;\nStartupWMClass=harness-device\n",
+      "onDisk": [
+        "/home/p/a\"b$c/Harness-Device.AppImage",
+        "/home/p/.local/share/icons/harness-device.png"
+      ],
+      "write": true
+    },
+    {
+      "name": "its own entry in an earlier writer's Exec= quoting (\\\" with no string escape), hidden",
+      "appImage": "/home/p/a\"b$c/Harness-Device.AppImage",
+      "wanted": "[Desktop Entry]\nType=Application\nName=Harness Device\nComment=The app for your Harness device.\nExec=\"/home/p/a\\\\\"b\\\\$c/Harness-Device.AppImage\"\nIcon=/home/p/.local/share/icons/harness-device.png\nTerminal=false\nCategories=Utility;\nStartupWMClass=harness-device\n",
+      "existing": "[Desktop Entry]\nType=Application\nName=Harness Device\nComment=The app for your Harness device.\nExec=\"/home/p/a\\\"b\\$c/Harness-Device.AppImage\"\nIcon=/home/p/.local/share/icons/harness-device.png\nTerminal=false\nCategories=Utility;\nStartupWMClass=harness-device\nNoDisplay=true\n",
+      "onDisk": [
+        "/home/p/a\"b$c/Harness-Device.AppImage",
+        "/home/p/.local/share/icons/harness-device.png"
+      ],
+      "write": false
     }
   ]
 }
