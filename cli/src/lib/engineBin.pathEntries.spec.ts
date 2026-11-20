@@ -176,6 +176,19 @@ it('a hung folder gives no candidate file, not even for a name its listing could
  expect(await foundAfterTheBound()).toEqual([join(good, 'codex')])
  expect(readsOf(join(hung, 'cödex'))).toBe(0)
 })
+it('a hung folder gives no candidate file to a path that names a file in it either', async () => {
+ // An engine's own path (CODEX_PATH) or an install location (~/.local/bin/codex) in a PATH folder that hung.
+ const { bad: hung, good } = badThenGood('hung'); vi.stubEnv('CODEX_PATH', join(hung, 'codex'))
+ hold.opendir.add(hung); hold.under.add(hung); vi.useFakeTimers()
+ const pass = found()
+ let answered = false
+ void pass.then(() => { answered = true }, () => { answered = true })
+ await vi.advanceTimersByTimeAsync(engineBin.PATH_ENTRY_TIMEOUT_MS)
+ // By the folder's own bound, never the pass's 10 s deadline: a read of that file would hold the pass in turn.
+ expect(answered).toBe(true)
+ expect(await pass).toEqual([join(good, 'codex')])
+ expect(readsOf(join(hung, 'codex'))).toBe(0)
+})
 it('is not read again while that read is outstanding, and is read again once it ends', async () => {
  const { bad: hung, good } = badThenGood('hung'); hold.opendir.add(hung); vi.useFakeTimers()
  expect(await foundAfterTheBound()).toEqual([join(good, 'codex')])
