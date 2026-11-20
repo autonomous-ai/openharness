@@ -200,3 +200,7 @@ printf '%s\n' "Harness Device $VERSION installed at $DESTINATION"
 # A session of its own: piped from curl, the script has no job control, so a plain & would leave the app in the
 # terminal's process group, and closing the terminal would end it.
 setsid -f "$DESTINATION" >/dev/null 2>&1 </dev/null
+# A start that fails ends at once: no FUSE, a home mounted noexec, another arch's userland, missing libraries. The app,
+# once up, runs until it is quit, its runtime as the place itself. So it has started if that still runs a moment later.
+sleep 3
+running || fail "Harness Device did not start: run \"$DESTINATION\" in a terminal to see why."
