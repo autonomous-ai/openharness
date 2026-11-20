@@ -23,9 +23,20 @@ vi.mock('node:fs', async (original) => {
   } }
 })
 
+// The table the default proof reads on Windows: here pid 4242 started an hour ago.
+const table = vi.hoisted(() => ({ reads: 0 }))
+vi.mock('../lib/windows/processTable.js', () => ({
+  windowsProcessRows: async () => {
+    table.reads++
+    return [{ pid: 4242, executable: 'node.exe', startMarker: `w:${(BigInt(Date.now() - 3_600_000) + 11_644_473_600_000n) * 10_000n}` }]
+  },
+}))
+
 const dirs: string[] = []
 afterEach(() => {
+  vi.restoreAllMocks()
   fault.refusedRenames = 0
+  table.reads = 0
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true })
 })
 
@@ -144,6 +155,20 @@ describe('devicesPipe', () => {
     ensureDaemonToken(dir, DEVICES_TOKEN_FILE)
     writeDevicesRecord(dir, { pipe: pipeIn(dir), pid: 4242 })
     expect(await devicesPipe(dir, createDevicesProof({ liveness: { alive: () => false } }))).toBeNull()
+  })
+
+  // The devices are this account's: a pid that answers EPERM is another account's process, one that took the pid since
+  // the devices exited and could have made a pipe of its name.
+  it("is nothing when the recorded pid is another account's process, and no table is read", async () => {
+    const dir = dataDir()
+    ensureDaemonToken(dir, DEVICES_TOKEN_FILE)
+    writeDevicesRecord(dir, { pipe: pipeIn(dir), pid: 4242 })
+    const kill = vi.spyOn(process, 'kill').mockImplementation(() => {
+      throw Object.assign(new Error('EPERM: fixture'), { code: 'EPERM' })
+    })
+    expect(await devicesPipe(dir, createDevicesProof())).toBeNull()
+    expect(kill).toHaveBeenCalledWith(4242, 0)
+    expect(table.reads).toBe(0)
   })
 
   // Review Focus 1: the devices process crashed and its pid was given to a process that started after the record.
