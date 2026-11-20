@@ -611,7 +611,7 @@ their live test run in phase 4, on Task 1's `device-app-windows` jobs (x64, arm6
   with `runs_program("/proc", pid, CHATGPT_PROGRAM)` (through `observe_with(check, heard)`), then its title, or
   `Title(None)`; at each `PropertyNotify` that `reads` takes for the active window, the title again. The box's `Drop`
   shuts the connection's socket down (`shutdown(2)` on its fd), which wakes `wait_for_event`; a connect that fails is
-  `NoObserver`. `installed()` is `program_installed(CHATGPT_PROGRAM)`. One `#[ignore]` test, `follow_x11_live`: under
+  `NoObserver`. `installed()` is `program_installed(CHATGPT_PROGRAM)`. One `#[ignore]` test, `follow_x11_xvfb`: under
   `DISPLAY`, the test makes a window with `_NET_WM_PID` its own pid, sets the root's `_NET_ACTIVE_WINDOW` itself (it is
   its own window manager), observes with the check pointed at its own pid, changes `_NET_WM_NAME` twice, then deletes
   it and sets `WM_NAME`, and hears the three titles in order.
@@ -805,7 +805,7 @@ person's own apps or homes.
    - Harness Device: a `rust:1-bookworm` container with `libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev
      libxdo-dev xvfb sway foot`, `CARGO_TARGET_DIR` on a volume: `cargo test --locked --lib` (all Linux rules, the
      `follow_x11` cases among them); then `Xvfb -displayfd 3` on a free display and `DISPLAY=:<n> cargo test --locked
-     --lib -- --ignored follow_x11_live --nocapture`; then a headless sway (`WLR_BACKENDS=headless
+     --lib -- --ignored follow_x11_xvfb --nocapture`; then a headless sway (`WLR_BACKENDS=headless
      WLR_LIBINPUT_NO_DEVICES=1 sway &`, its `SWAYSOCK` exported) and `cargo test --locked --lib -- --ignored
      follow_sway_live --nocapture`. Expected: each `... ok`. If headless sway does not start in the image, the report
      says so with sway's own error, and `SwayFollow` rests on its fixture cases (spec).
