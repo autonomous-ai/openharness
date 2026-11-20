@@ -1,9 +1,13 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
+import 'package:path/path.dart' as p;
+
 import '../core/linux_app_image.dart';
 import '../core/runtime_platform.dart';
 import '../logging/app_log.dart';
+import 'device_app.dart';
 
 /// Linux: Harness Device's entry in the desktop's app list. An AppImage
 /// registers nothing itself, so Desktop writes the entry when it installs the
@@ -57,9 +61,10 @@ Future<List<int>?> extractDeviceAppIcon(String appImage) async {
   }
 }
 
-/// Writes the entry that starts [appImage], and its icon, unless an entry
-/// already starts another file still on disk (a person's own). Never throws:
-/// an entry is not worth failing an install over. The log names no path.
+/// Writes the entry that starts [appImage], and its icon, unless an entry is
+/// there that is not this one's and starts no file that is gone (a person's
+/// own, which may start a program by name). Never throws: an entry is not
+/// worth failing an install over. The log names no path.
 Future<void> writeDeviceAppLauncher(
   String appImage, {
   Map<String, String>? environment,
@@ -73,9 +78,11 @@ Future<void> writeDeviceAppLauncher(
     final entry = _entry(dataHome);
     if (await entry.exists()) {
       final target = launcherExecTarget(await entry.readAsString());
-      if (target != null && target != appImage && await File(target).exists()) {
-        return;
-      }
+      final gone =
+          target != null &&
+          p.posix.isAbsolute(target) &&
+          !await File(target).exists();
+      if (target != appImage && !gone) return;
     }
     final iconBytes = await extractIcon(appImage);
     final icon = _icon(dataHome);
@@ -110,22 +117,28 @@ Future<void> writeDeviceAppLauncher(
   }
 }
 
-/// Removes the entry and its icon once the file the entry starts is gone:
-/// a person deleted the AppImage, and Desktop has no other way to hear of it.
-/// An entry with no `Exec=`, or whose file is there, stays. Never throws.
+/// Removes the entry and its icon once the app's place, which the entry
+/// starts, is gone: a person deleted the AppImage, and Desktop has no other
+/// way to hear of it. Any other entry, and one whose file is there, stays: only
+/// the entry Desktop wrote is Desktop's to remove. Never throws.
 Future<void> forgetGoneDeviceAppLauncher({
   Map<String, String>? environment,
 }) async {
   if (!RuntimePlatform.isLinux && environment == null) return;
   try {
-    final dataHome = launcherDataHome(
-      environment ?? RuntimePlatform.environment,
-    );
+    final env = environment ?? RuntimePlatform.environment;
+    final dataHome = launcherDataHome(env);
     if (dataHome == null) return;
     final entry = _entry(dataHome);
     if (!await entry.exists()) return;
     final target = launcherExecTarget(await entry.readAsString());
-    if (target == null || await File(target).exists()) return;
+    final place = deviceAppPlace(
+      platform: TargetPlatform.linux,
+      environment: env,
+    );
+    if (target == null || target != place || await File(target).exists()) {
+      return;
+    }
     await entry.delete();
     final icon = _icon(dataHome);
     if (await icon.exists()) await icon.delete();
