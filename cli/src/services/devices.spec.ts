@@ -6509,18 +6509,20 @@ describe('herdr\'s agents, over its socket (docs/specs/2026-11-16-device-herdr.m
     expect(watched.calls).toEqual([[herdrClientDeps(), expect.any(Function)]])
   })
 
-  // herdr's zip puts it on no PATH (docs/plans/2026-11-19-dial-windows-vm-notes.md, Task 2 §2): there its folder, which
-  // holds its marker once it has run, says it is installed, and a tap runs the herdr the client saw write the marker.
-  it('on Windows with no herdr on PATH, its folder says it is installed, and a tap runs the herdr that wrote the marker', async () => {
-    const folder = dirname(herdrClientDeps().socketPath)
-    let ran = false
-    const started = withHerdr({ orca: { ...onMac, platform: 'win32',
-      onPath: (name: string) => (name === 'herdr' ? null : onMac.onPath(name)), exists: (path: string) => ran && path === folder } })
-    nothingAsked(started)
-    seen.host.watching!(false)
-    ran = true
-    started.herdr.stamp = '1:1'
-    await started.live()
+  // herdr's zip puts it on no PATH (docs/plans/2026-11-19-dial-windows-vm-notes.md, Task 2 §2), and its folder appears
+  // only when it first runs: a herdr first run after the dial came is found with the dial left plugged in, as one on a
+  // Mac's PATH is (the VM notes, Final head §6). A tap runs the herdr the client saw write the marker.
+  it('on Windows a herdr on no PATH, first run after the dial came, is listed, and a tap runs the herdr that wrote the marker', async () => {
+    const { port, herdr } = withHerdr({ orca: { ...onMac, platform: 'win32',
+      onPath: (name: string) => (name === 'herdr' ? null : onMac.onPath(name)), exists: () => false } })
+    herdr.stamp = undefined
+    attach(port)
+    expect(watched.calls).toEqual([[herdrClientDeps(), expect.any(Function)]])
+    // herdr runs: its folder and marker appear, and the watch tells it.
+    herdr.stamp = '1:1'
+    ;(watched.calls[0][1] as () => void)()
+    herdr.subs[0].to.started()
+    await vi.advanceTimersByTimeAsync(0)
     const [{ id }] = await listed()
     expect(await host().openAgent(id)).toBeUndefined()
     expect(orcaRuns).toEqual([['C:\\herdr\\herdr.exe', ['agent', 'focus', PANE], 10_000]])
