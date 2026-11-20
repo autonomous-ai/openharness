@@ -84,7 +84,7 @@ import { HERMES_SYSTEM_MANAGED_DIR, type GridLaunchMachine } from '../lib/gridLa
 import { writeGridConfigDir } from '../lib/gridConfigDir.js'
 import { clearDeleted, isRecentlyDeleted, markDeleted } from '../lib/deletedSessions.js'
 import { findLiveSession, findResumedTranscript } from '../lib/sessionRepair.js'
-import { openclawStateDir } from '../lib/openclawStore.js'
+import { openclawStateDir, openclawUserRowSince } from '../lib/openclawStore.js'
 import { processSessionOf } from '../engines/sessionStores.js'
 import { createHandoffDependencies } from './handoffDependencies.js'
 import { TmuxBackend } from '../lib/tmuxBackend.js'
@@ -1351,6 +1351,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     nativeActivity: (session) => nativeControls.activity(session),
     withheld: (sessionId) => turnHooksRef?.withheld(sessionId) ?? false,
     atWork: (sessionId) => turnHooksRef?.atWork(sessionId) ?? false,
+    // Declared further down: read when a claim starts, never now.
+    claimed: (sessionId) => turnBeats.watchClaim(sessionId),
   })
   const runtimeActivity = activity.runtimeActivity
   const turnActivity = activity.turnActivity
@@ -1481,6 +1483,13 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     moveGate,
     // Its waitingFor changed: every window gets the agent's frame again.
     sync: (id) => { const session = registry.resolve(id); if (session) syncSession(session) },
+    // A first task typed stays on its row until a turn takes it (core/input.ts). Typed again as the binding pass types it,
+    // once the pass's registry transaction commits (core/agents/bind.ts `takeFirstTask`).
+    firstTask: {
+      untype: (agentId, text) => registry.untypeFirstTask(agentId, text),
+      retype: (agentId) => registry.afterTransaction(() => registry.takeFirstTask(agentId)),
+      taken: (agentId) => registry.firstTaskTaken(agentId),
+    },
     // Claude Code's and Codex's readers start on demand in a process of their own: a message waits for its engine's (26 s at load 40).
     engineStarting: (engine) => isolatedScreen(engine) ? serviceLinksRef?.whenStarting(READER_SERVICES[engine as ReaderEngine]) ?? null : null,
   })
@@ -2047,7 +2056,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     syncRecapPool,
     input,
     // A first task is the person's own message, which the controller keeps from its hand-over until a turn takes it.
-    submitFirstTask: (agentId, task) => inputs.submitAgent(agentId, task),
+    submitFirstTask: (agentId, task) => input.submitFirstTask(agentId, task),
     deviceInput,
     homes: { copilot: env.COPILOT_HOME, grok: env.GROK_HOME, agy: env.AGY_HOME },
     // OpenClaw's session key is on its TUI's footer and nowhere else. The scrollback above the screen keeps its title,
@@ -2064,6 +2073,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     },
     openclawPaneDue: (sessionId) => otherStreams.paneDue(sessionId),
     openclawStateDir: (pid) => openclawStateDir(pid),
+    // A first task typed before a restart is settled by OpenClaw's own store: a user row since it was typed.
+    openclawUserRowSince,
     followsLive: (sessionId) => otherStreams.follows(sessionId),
     hermesTerminal: createHermesTerminal({
       platform: process.platform,

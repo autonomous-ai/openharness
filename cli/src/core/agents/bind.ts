@@ -18,9 +18,11 @@ import { sessionStoreOf } from '../../engines/sessionStoreContracts.js'
 import type { TurnRecaps } from '../turns/recaps.js'
 import { paneReadIdentity } from '../transcripts/readIdentity.js'
 import type { AutonomousDeviceInput } from '../deviceInput.js'
+import { openclawStartingUntil } from '../../lib/agentFrame.js'
 import { isRecentlyDeleted } from '../../lib/deletedSessions.js'
 import { transcriptIsFirstTurn } from '../../lib/firstTurnReplay.js'
 import { errorKind, sid } from '../../lib/log.js'
+import type { openclawUserRowSince } from '../../lib/openclawStore.js'
 import { startMarkerMs } from '../../lib/processProof.js'
 import { matchesLaunchReceipt, projectDisplayName, type registry, type RegisteredSession } from '../../lib/registry.js'
 import type { SessionInputController } from '../../lib/sessionInput.js'
@@ -39,8 +41,14 @@ export const REPAIR_RETRY_MS = 60_000
  *  then settle into the slow rhythm for processes that will never resolve. */
 const REPAIR_EAGER_ATTEMPTS = 24   // ≈2 min at the 5s sweep
 
+/**
+ * What an OpenClaw agent says while its Gateway is gone, by what the TUI's activity says of its sign-in: each names its
+ * own fix. Each is cleared only by a line the Gateway answered.
+ */
+const GATEWAY_HOLDS = { approval: OPENCLAW_STATES.approval, refused: OPENCLAW_STATES.signInRefused, gone: OPENCLAW_STATES.noGateway }
+const GATEWAY_HOLD_SAID = new Set<string>(Object.values(GATEWAY_HOLDS))
 /** What an OpenClaw agent says while its pane shows a screen its TUI cannot work for Harness on. */
-const OPENCLAW_HOLDS = new Set<string>(Object.values(OPENCLAW_SCREEN_HOLDS))
+const OPENCLAW_HOLDS = new Set<string>([...Object.values(OPENCLAW_SCREEN_HOLDS), ...GATEWAY_HOLD_SAID, OPENCLAW_STATES.boxHeld])
 /** What the other engines' reader says on a row while its worker is out or it rebuilds the live view. */
 const OTHER_ENGINE_HOLDS = new Set<string>(Object.values(OTHER_ENGINE_STATES))
 /** How long OpenClaw's Gateway is gone before its agent is held: a drop the TUI reconnects from by itself is not. */
@@ -55,6 +63,12 @@ const SESSION_LOAD_MS = 35_000
 /** How long an OpenClaw's first task waits, not counting the time its agent is held or its TUI starts, before its launch
  *  fails. */
 const FIRST_TASK_BOUND_MS = 180_000
+/** How long the serial discovery pass waits for OpenClaw's store about a typed first task, every other agent behind it: a
+ *  read waits up to 5 s on a locked database. A store slower than this says nothing this pass. */
+const STORE_READ_MS = 1_000
+/** The keys an agent moved off last (`/new`) asked about its typed first task besides its own: its user row is under the
+ *  key the pane was on as OpenClaw took it. More moves than this within the task's bound are not a case. */
+const EARLIER_KEYS_ASKED = 3
 
 /**
  * The status line says the Gateway answered: the TUI connected, its history loaded or not, or the Gateway said it is
@@ -82,7 +96,7 @@ function openclawScreenHold(screen: OpenclawScreen, agent: RegisteredSession, ga
     if (screen.stopped !== null) return openclawLocalStopped(screen.stopped)
     return isOpenclawLocalStopped(agent.identityHold) ? agent.identityHold : openclawLocalStopped(null)
   }
-  if (openclawGatewayGone(screen)) return gatewayGoneMs < GATEWAY_HOLD_MS || agent.openclawLocal ? undefined : OPENCLAW_STATES.noGateway
+  if (openclawGatewayGone(screen)) return gatewayGoneMs < GATEWAY_HOLD_MS || agent.openclawLocal ? undefined : GATEWAY_HOLDS[screen.signIn ?? 'gone']
   return screen.state && !agent.openclawLocal ? OPENCLAW_SCREEN_HOLDS[screen.state] : undefined
 }
 
@@ -107,7 +121,7 @@ export type RegisteredMeta = {
 }
 
 export interface BindDeps {
-  registry: Pick<typeof registry, 'inheritName' | 'confirmSessionUnbound' | 'byAgent' | 'byProcess' | 'register' | 'has' | 'bySession' | 'setIdentityHold' | 'revalidateBinding' | 'setOpenclawStateDir' | 'takeFirstTask' | 'afterTransaction' | 'setLaunch'>
+  registry: Pick<typeof registry, 'inheritName' | 'confirmSessionUnbound' | 'byAgent' | 'byProcess' | 'register' | 'has' | 'bySession' | 'setIdentityHold' | 'revalidateBinding' | 'setOpenclawStateDir' | 'takeFirstTask' | 'firstTaskTaken' | 'afterTransaction' | 'setLaunch'>
   mirror: Pick<TurnRecaps, 'inheritSummary'>
   forgetSession: (id: string, opts?: { force?: boolean; keepAgent?: boolean; agentId?: string }) => Promise<void>
   /** The app. */
@@ -116,7 +130,7 @@ export interface BindDeps {
   announceSession: (session: RegisteredSession) => void
   stoppedAgents: Pick<StoppedAgentStore, 'save' | 'finishResume' | 'get'>
   syncRecapPool: () => void
-  input: Pick<SessionInputController, 'forget' | 'awaitingConfirmation' | 'waitsForPane' | 'firstTaskWaiting' | 'typeCommand' | 'expectFirstTask'>
+  input: Pick<SessionInputController, 'forget' | 'awaitingConfirmation' | 'waitsForPane' | 'firstTaskWaiting' | 'typeCommand' | 'expectFirstTask' | 'ownsBox' | 'adoptTypedFirstTask' | 'firstTaskConfirmed'>
   /** Types an agent's first task into its pane as the person's own message (core/input.ts `submitAgent`), which the input
    *  keeps from its hand-over until a turn takes it (`expectFirstTask`). */
   submitFirstTask: (agentId: string, task: string) => void
@@ -138,6 +152,8 @@ export interface BindDeps {
   openclawPaneDue: (sessionId: string) => boolean
   /** The state folder an OpenClaw TUI holds open, or null when its open files cannot be read (lib/openclawStore.ts). */
   openclawStateDir: (pid: number) => Promise<string | null>
+  /** Whether OpenClaw's store holds a user row for a session key written after a time; null when it cannot say. */
+  openclawUserRowSince: typeof openclawUserRowSince
   /** What a Hermes's record of its own terminal says (hermesTerminal.ts). Absent, a Hermes is bound by its hooks and the repair. */
   hermesTerminal?: ReturnType<typeof createHermesTerminal>
   /** Whether the session's live stream is still held, to be resumed where it stopped, by its reader itself. */
@@ -157,7 +173,7 @@ interface BindPass {
 export function createBinding({
   registry, mirror, forgetSession, clients, attachSession, announceSession, stoppedAgents, syncRecapPool,
   input, submitFirstTask, deviceInput, homes, owners, capturePane, activityRevision, openclawPaneRead, openclawPaneDue, openclawStateDir, hermesTerminal,
-  followsLive,
+  followsLive, openclawUserRowSince,
 }: BindDeps) {
   /**
    * Forks whose engine session has not reported in yet, agentId → the SOURCE's sessionId. A fork's tile
@@ -214,9 +230,12 @@ export function createBinding({
    * early; cleared at 256 entries too.
    */
   const firstTaskClock = new Map<string, { seenAt: number; pausedMs: number; pausedSince?: number }>()
-  /** Whether the agent's first task waits, on its row or handed over and not yet confirmed. Its clock goes once it does not. */
+  /**
+   * Whether the agent's first task waits: on its row untyped, or typed and not yet confirmed (a mark a restart keeps), or
+   * handed over and not yet confirmed. Its clock goes once it does not.
+   */
   const firstTaskWaits = (agent: RegisteredSession): boolean => {
-    const waits = !!agent.firstTask || input.firstTaskWaiting(agent.agentId)
+    const waits = !!agent.firstTask || !!agent.firstTaskTyped || input.firstTaskWaiting(agent.agentId)
     if (!waits) firstTaskClock.delete(agent.agentId)
     return waits
   }
@@ -224,8 +243,9 @@ export function createBinding({
    * Whether the agent's waiting first task has waited FIRST_TASK_BOUND_MS, from the latest of its TUI's start, its
    * registration and this daemon's first pass over it. A resume keeps its old `registeredAt`, so the row's own time alone
    * would fail a resumed task at once. Paused while the agent is held, and while its pane reads starting (its TUI still
-   * reaching its Gateway, or the Gateway starting): no TUI can take a task then. Never while the pane shows a run with the
-   * task typed: OpenClaw at work on it, its user row late. Kept up to date on every pass that reads the pane.
+   * reaching its Gateway, or the Gateway starting): no TUI can take a task then. Not while the box holds the person's
+   * text: a draft nobody clears would keep the task waiting for ever. Never while the pane shows a run with the task
+   * typed: OpenClaw at work on it, its user row late. Kept up to date on every pass that reads the pane.
    */
   const firstTaskOverdue = (agent: RegisteredSession, tui: DiscoveredTerminalAgent['processIdentity'], screen: OpenclawScreen): boolean => {
     const now = Date.now()
@@ -235,7 +255,7 @@ export function createBinding({
       clock = { seenAt: now, pausedMs: 0 }
       firstTaskClock.set(agent.agentId, clock)
     }
-    if (agent.identityHold || screen.state === 'starting') {
+    if ((agent.identityHold && agent.identityHold !== OPENCLAW_STATES.boxHeld) || screen.state === 'starting') {
       clock.pausedSince ??= now
       return false
     }
@@ -246,6 +266,20 @@ export function createBinding({
     if (screen.state === 'busy' && input.awaitingConfirmation(agent.agentId)) return false
     const from = Math.max(agent.registeredAt, startMarkerMs(tui.startMarker) ?? 0, clock.seenAt)
     return now - from - clock.pausedMs >= FIRST_TASK_BOUND_MS
+  }
+  /**
+   * The end of each unbound OpenClaw's starting minute already announced, agentId → that end
+   * (lib/agentFrame.ts `openclawStartingUntil`). A frame reads `starting` off the clock, so nothing else tells a window
+   * or a watch that it ended. Keyed by the end, so a TUI started again has its own minute announced. Cleared at 256
+   * entries rather than aged: an agent is then announced once more, never missed.
+   */
+  const startingAnnounced = new Map<string, number>()
+  const announceStartingEnd = (agent: RegisteredSession): void => {
+    const until = openclawStartingUntil(agent)
+    if (until === null || Date.now() < until || startingAnnounced.get(agent.agentId) === until) return
+    if (startingAnnounced.size >= 256) startingAnnounced.clear()
+    startingAnnounced.set(agent.agentId, until)
+    announceSession(agent)
   }
   /**
    * The hold a failed native read set, agentId → that hold as the row stored it: its reason, and the row's
@@ -437,6 +471,61 @@ export function createBinding({
       return null
     })
   /**
+   * The agents whose typed first task the input adopted here, agentId → when: one an earlier daemon typed, or one the
+   * input forgot. Cleared at 256 entries rather than aged: an adopted task then counts as one typed here, which its turn
+   * confirms, or the bound fails.
+   */
+  const firstTasksAdopted = new Map<string, number>()
+  /** The agents whose store read about a typed first task is out: one at a time each, as a read outlasts its pass's wait. */
+  const storeReads = new Set<string>()
+  /**
+   * Whether OpenClaw's store holds a user row written after [at], under the agent's key or one it moved off last, and at
+   * [adoptedAt] or before when given: a later one is the adopted task's turn's to confirm (core/turns/funnel.ts), as a
+   * task typed here is, or the person's next message's. A store that cannot say, has not answered within STORE_READ_MS,
+   * or is still read from an earlier pass, does not.
+   */
+  const storeShowsTaken = async (agent: RegisteredSession, pid: number, at: number, adoptedAt: number | undefined): Promise<boolean> => {
+    if (storeReads.has(agent.agentId)) return false
+    storeReads.add(agent.agentId)
+    const keys = [agent.sessionId, ...(agent.earlierSessionIds ?? []).slice(0, EARLIER_KEYS_ASKED)]
+    const pane = { pid, stateDir: agent.openclawStateDir }
+    // A row under any key says yes.
+    const read = Promise.all(keys.map((key) => openclawUserRowSince(key, pane, at, undefined, adoptedAt).catch(() => null)))
+      .then((said) => said.includes(true))
+      .finally(() => storeReads.delete(agent.agentId))
+    let timer: NodeJS.Timeout | undefined
+    const late = new Promise<false>((resolve) => { timer = setTimeout(resolve, STORE_READ_MS, false) })
+    try { return await Promise.race([read, late]) }
+    finally { clearTimeout(timer) }
+  }
+  /**
+   * The typed first tasks whose removal failed, agentId → the mark's `at`: said once a mark, as every pass tries again.
+   * Cleared at 256 entries rather than aged: a failure is then said once more.
+   */
+  const removalsFailed = new Map<string, number>()
+  /**
+   * A typed first task OpenClaw's store shows taken leaves its row, the mark typed at [at] only, once the pass's
+   * transaction commits (the registry waits for it, as for `takeFirstTask`); then the controller's wait for it ends and the
+   * row, as the registry holds it now, is pushed, no longer starting. A removal not made (not saved, or the mark gone
+   * already) confirms nothing: the next pass reads the store again.
+   */
+  const confirmTypedFirstTask = (agentId: string, at: number): void => {
+    void registry.firstTaskTaken(agentId, at).then((taken) => {
+      if (!taken) return
+      input.firstTaskConfirmed(agentId)
+      const row = registry.byAgent(agentId)
+      if (row) announceSession(row)
+      console.log(`[agent] ${sid(agentId)} first task confirmed`)
+    }, (error: unknown) => {
+      // The registry's try again (RegistryOwnershipChanged among them, as a restarted daemon takes the registry over): the
+      // next pass settles it, so it is no failure.
+      if (error instanceof IdentityReadUnavailable || removalsFailed.get(agentId) === at) return
+      if (removalsFailed.size >= 256) removalsFailed.clear()
+      removalsFailed.set(agentId, at)
+      console.error(`[agent] ${sid(agentId)} first task typed kept · ${errorKind(error)}`)
+    })
+  }
+  /**
    * Types the agent's first task as the person's own message, under the agent: its turn is confirmed there
    * (core/turns/funnel.ts), and under the session key it was failed as not accepted. A submit that throws has the task
    * off the row already: it is said, not put back.
@@ -595,16 +684,43 @@ export function createBinding({
       // One a message was typed into is read on every pass until the message is confirmed: the run it starts shows on the
       // pane before the store, which may never show it (live.ts NO_SESSION_MS counts from the first pass that reads it).
       // So is one whose first task, or a message waiting untyped for the pane to be able to send, waits: a history that
-      // did not load reads idle, and its `/session` and the message wait.
+      // did not load reads idle, and its `/session` and the message wait. So is one held for the person's text in its box:
+      // a message given up leaves the pane as quiet as it was, and only a read lets the hold go.
       const taskWaits = firstTaskWaits(agent)
+      // A waiting first task keeps it starting (agentStarting): its end is announced by the turn that takes it.
+      if (!taskWaits) announceStartingEnd(agent)
       const waiting = taskWaits || input.awaitingConfirmation(agent.agentId) || input.waitsForPane(agent.agentId)
-      if (agent.sessionId && !waiting && !openclawPaneDue(agent.sessionId)) return
+      if (agent.sessionId && !waiting && agent.identityHold !== OPENCLAW_STATES.boxHeld && !openclawPaneDue(agent.sessionId)) return
+      // A first task typed and not confirmed. One the input awaits as typed here is its turn's to confirm: the store, read
+      // before the live reader opens that turn, would end the input's wait with OpenClaw at work, and a message waiting
+      // behind the task would be typed into the run. Any other, typed before a restart or forgotten by the input (its state
+      // folder changed, say), OpenClaw's store settles, though the daemon was down when its user row landed, so a mark an
+      // older daemon left is settled the same, at any age; one adopted, only by a user row from before its adoption. Until
+      // then, the input awaits it as one typed here (an Enter or a clear, never a paste), asked on every pass until it
+      // takes it: a write under way or an open turn refuses it. The bound below runs from this daemon's first pass, and never
+      // fails one the store shows taken. The pane is read all the same: a removal that keeps failing stops no hold.
+      let taken = false
+      if (agent.firstTaskTyped) {
+        const { text, at } = agent.firstTaskTyped
+        const awaited = input.firstTaskWaiting(agent.agentId)
+        const adoptedAt = awaited ? firstTasksAdopted.get(agent.agentId) : undefined
+        if (!awaited || adoptedAt !== undefined) {
+          taken = await storeShowsTaken(agent, observed.processIdentity.pid, at, adoptedAt)
+          if (!current()) return
+          if (taken) confirmTypedFirstTask(agent.agentId, at)
+          else if (!awaited && input.adoptTypedFirstTask(agent.agentId, text)) {
+            if (firstTasksAdopted.size >= 256) firstTasksAdopted.clear()
+            firstTasksAdopted.set(agent.agentId, Date.now())
+            console.log(`[agent] ${sid(agent.agentId)} first task typed earlier · awaiting confirmation`)
+          }
+        }
+      }
       const revision = agent.sessionId ? activityRevision(agent.sessionId) : undefined
       const captured = await read(() => capturePane(agent.agentId), (screen) => !screen)
       if (!captured?.value || !current()) return
       const screen = readOpenclawScreen(captured.value)
       // A first task past its bound is failed before anything else is read off the pane: nothing is typed after it.
-      if (taskWaits && firstTaskOverdue(agent, observed.processIdentity, screen)) {
+      if (taskWaits && !taken && firstTaskOverdue(agent, observed.processIdentity, screen)) {
         failFirstTask(agent)
         return
       }
@@ -613,7 +729,11 @@ export function createBinding({
       // close a turn its restart left `running`. A history that did not load is under a status line that says idle.
       const ready = screen.state === 'ready' || screen.state === 'no-history'
       const streamed = !!agent.sessionId && openclawPaneRead(agent.sessionId, { ready, gatewayLost: screen.gatewayLost, running: screen.running }, captured.value, revision)
+      // Text in the box that Harness did not type and does not own blocks a message of Harness's: an Enter would send it
+      // with the person's, and Harness never clears the person's (decision 1). Only they can, so the agent says so. Told the
+      // pane's state: on one that can send, Harness's message scrolled in its box is what its Enter would send.
       const held = openclawScreenHold(screen, agent, gatewayGoneMs(agent.agentId, screen))
+        ?? (ready && waiting && !!screen.box && !input.ownsBox(agent.agentId, screen.box, screen.boxHidden, screen.state) ? OPENCLAW_STATES.boxHeld : undefined)
       const ours = !agent.identityHold || OPENCLAW_HOLDS.has(agent.identityHold) || isOpenclawLocalStopped(agent.identityHold)
       if (held) {
         // A hold another reason set (the store unreadable, an identity read that failed) is that reason's to clear.
@@ -626,10 +746,14 @@ export function createBinding({
       }
       if (agent.identityHold && ours) {
         // A remote TUI's title scrolls off a long conversation: only a title naming this machine's Gateway clears it.
-        // The Gateway's only a line it answered does: a bare `disconnected` between two tries is the same outage.
+        // The Gateway's and a sign-in's only a line it answered does: a bare `disconnected` between two tries is the same
+        // outage.
+        // The person's text in the box only an empty box does, or nothing of Harness's left to wait behind it: a run or an
+        // overlay can still hide that text.
         // The others only a footer does: an overlay or autocomplete that hides it shows no state at all.
         const clears = agent.identityHold === OPENCLAW_STATES.remote ? !!screen.url
-          : agent.identityHold === OPENCLAW_STATES.noGateway ? openclawGatewayAnswered(screen) : !!screen.footer
+          : GATEWAY_HOLD_SAID.has(agent.identityHold) ? openclawGatewayAnswered(screen)
+            : agent.identityHold === OPENCLAW_STATES.boxHeld ? screen.box === '' || !waiting : !!screen.footer
         if (!clears) return
         if (registry.setIdentityHold(agent.agentId, undefined)) {
           console.log(`[discovery] ${sid(agent.agentId)} openclaw · working again`)

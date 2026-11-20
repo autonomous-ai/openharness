@@ -164,6 +164,17 @@ describe('turn activity', () => {
     expect(readers.turnActivity.snapshot('s4')?.state).toBe('working')
   })
 
+  // Nothing else tells the windows of it: the heartbeats watch a claim with no turn open (core/turns/heartbeats.ts).
+  it('a pane the binding pass read as busy with no turn open is a claim, told once', async () => {
+    const claimed = vi.fn()
+    const { readers } = setup({ claimed })
+    await readers.paneRead(claw, running(41))
+    expect(claimed).not.toHaveBeenCalled()
+    await readers.paneRead(claw, running(46))
+    await readers.paneRead(claw, running(51))
+    expect(claimed).toHaveBeenCalledExactlyOnceWith('s4')
+  })
+
   it('a pane the binding pass read claims nothing while withheld', async () => {
     const { readers } = setup({ withheld: () => true })
     await readers.paneRead(claw, running(41))

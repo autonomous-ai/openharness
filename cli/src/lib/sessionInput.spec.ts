@@ -6,6 +6,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { SessionInputController } from './sessionInput.js'
+import { readOpenclawScreen } from '../engines/openclaw/contract.js'
 import { MoveGate } from './hostMove/gate.js'
 import type { RegisteredSession } from './registry.js'
 import { TERMINAL_LEASE_REFUSED, type ProcessIdentity, type TerminalActionResult } from './terminalTypes.js'
@@ -905,14 +906,16 @@ describe('SessionInputController', () => {
 
     // At tmux's default 80x24 the box shows 7 lines (pi-tui's editor: 30% of the rows, at least 5): a long message
     // OpenClaw refused and put back, its cursor at the end, shows its last lines under `↑ 1 more`.
+    const longMessage = 'Read the build log in ci/last-run.txt and find the first test that failed. Explain in two sentences why it '
+      + 'failed, quoting the assertion message exactly as the log prints it. Then open the test file, find the code under '
+      + 'test, and propose the smallest change to the code (not the test) that would make the assertion pass. Do not edit '
+      + 'any file yet: list the change as a unified diff, say which other tests call the same function, and say whether any '
+      + 'of them would change their result. Finish with one line that starts with VERDICT: and names the file you would change.'
+    const scrolled = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'engines', 'openclaw', '__fixtures__', 'screen-box-scrolled.txt'), 'utf8')
+
     it('a long message OpenClaw put back in a box that shows only its end is sent with one Enter', async () => {
       vi.useFakeTimers()
-      const message = 'Read the build log in ci/last-run.txt and find the first test that failed. Explain in two sentences why it '
-        + 'failed, quoting the assertion message exactly as the log prints it. Then open the test file, find the code under '
-        + 'test, and propose the smallest change to the code (not the test) that would make the assertion pass. Do not edit '
-        + 'any file yet: list the change as a unified diff, say which other tests call the same function, and say whether any '
-        + 'of them would change their result. Finish with one line that starts with VERDICT: and names the file you would change.'
-      const scrolled = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'engines', 'openclaw', '__fixtures__', 'screen-box-scrolled.txt'), 'utf8')
+      const message = longMessage
       const { controller, sendKey, onError } = paneController(() => scrolled)
 
       controller.submit('s1', message)
@@ -971,7 +974,7 @@ describe('SessionInputController', () => {
 
       expect(controller.firstTaskWaiting('s1')).toBe(false)
       controller.expectFirstTask('s1')
-      controller.submit('s1', 'Say hello')
+      controller.submitFirstTask('s1', 'Say hello')
       await vi.advanceTimersByTimeAsync(4 * 60_000)
       pane = readyPane()
       await vi.advanceTimersByTimeAsync(60_000)
@@ -991,7 +994,7 @@ describe('SessionInputController', () => {
       const { controller, sendKey, onError, onWaitChanged } = paneController(() => null)
 
       controller.expectFirstTask('s1')
-      controller.submit('s1', 'Say hello')
+      controller.submitFirstTask('s1', 'Say hello')
       await vi.advanceTimersByTimeAsync(5 * 60_000)
       expect(sendKey).toHaveBeenCalledTimes(2)
       expect(onError).not.toHaveBeenCalled()
@@ -1010,7 +1013,7 @@ describe('SessionInputController', () => {
 
       controller.expectFirstTask('s1')
       expect(controller.firstTaskWaiting('s1')).toBe(true)
-      controller.submit('s1', 'Say hello')
+      controller.submitFirstTask('s1', 'Say hello')
       await vi.waitFor(() => expect(inject).toHaveBeenCalled())
       expect(controller.firstTaskWaiting('s1')).toBe(true)
       paste(true)
@@ -1030,7 +1033,7 @@ describe('SessionInputController', () => {
       inject.mockResolvedValueOnce(false)
 
       controller.expectFirstTask('s1')
-      controller.submit('s1', 'Say hello')
+      controller.submitFirstTask('s1', 'Say hello')
       await vi.advanceTimersByTimeAsync(5 * 60_000)
       expect(onError).toHaveBeenCalled()
       expect(controller.firstTaskWaiting('s1')).toBe(true)
@@ -1051,7 +1054,7 @@ describe('SessionInputController', () => {
         inject.mockResolvedValueOnce(maybe as never)
 
         controller.expectFirstTask('s1')
-        controller.submit('s1', 'Say hello')
+        controller.submitFirstTask('s1', 'Say hello')
         await vi.advanceTimersByTimeAsync(10_000)
         expect(sendKey.mock.calls).toEqual([['h1', 'Enter']])
         pane = readyPane()
@@ -1073,7 +1076,7 @@ describe('SessionInputController', () => {
         inject.mockResolvedValueOnce(maybe as never)
 
         controller.expectFirstTask('s1')
-        controller.submit('s1', 'Say hello')
+        controller.submitFirstTask('s1', 'Say hello')
         await vi.advanceTimersByTimeAsync(5 * 60_000)
         expect(sendKey).not.toHaveBeenCalled()
         expect(onError).not.toHaveBeenCalled()
@@ -1087,7 +1090,7 @@ describe('SessionInputController', () => {
       const { controller } = paneController(() => readyPane())
 
       controller.expectFirstTask('s1')
-      controller.submit('s1', 'Say hello')
+      controller.submitFirstTask('s1', 'Say hello')
       await vi.waitFor(() => expect(controller.awaitingConfirmation('s1')).toBe(true))
       expect(await controller.cancelConfirmed('s1')).toBe(true)
       expect(controller.firstTaskWaiting('s1')).toBe(false)
@@ -1216,6 +1219,25 @@ describe('SessionInputController', () => {
 
       // Found in review: the binding pass types `/session` only while a message of Harness's waits on the agent, and a
       // message waiting here, untyped, awaits no confirmation: nothing let its pane send it.
+      // Found in review: read again each second, the wait read false while the pane was read, and the binding pass, which
+      // reads it once a pass, let go of its hold on the person's text and set it again a pass later.
+      it('says it waits for its pane through each read of it, and owns the box only while one could type into it', async () => {
+        vi.useFakeTimers()
+        const { controller, inject } = waitingPane()
+        const write = inject.getMockImplementation()!
+        const during: Array<[boolean, boolean]> = []
+        inject.mockImplementation(async (id, text) => {
+          during.push([controller.waitsForPane('s1'), controller.ownsBox('s1', 'my own words', { above: 0, below: 0 })])
+          return write(id, text)
+        })
+
+        controller.submit('s1', 'Say hello')
+        await vi.advanceTimersByTimeAsync(3_500)
+        expect(during).toEqual([[false, true], [true, true], [true, true], [true, true]])
+        expect(controller.ownsBox('s1', 'my own words', { above: 0, below: 0 })).toBe(false)
+        controller.forget('s1')
+      })
+
       it('says it waits for its pane while it does, and no more once it is typed or given up', async () => {
         vi.useFakeTimers()
         const { controller, canSend } = waitingPane()
@@ -1262,7 +1284,7 @@ describe('SessionInputController', () => {
         const { controller, inject, typed, onError } = waitingPane()
 
         controller.expectFirstTask('s1')
-        controller.submit('s1', 'Say hello')
+        controller.submitFirstTask('s1', 'Say hello')
         await vi.advanceTimersByTimeAsync(10 * 60_000)
         expect(onError).not.toHaveBeenCalled()
         expect(controller.firstTaskWaiting('s1')).toBe(true)
@@ -1271,6 +1293,58 @@ describe('SessionInputController', () => {
         await vi.advanceTimersByTimeAsync(60_000)
         expect(inject).toHaveBeenCalledTimes(tries)
         expect(typed).toEqual([])
+      })
+
+      // Found in the fix review: handed over while a message waited for its pane, the task was chained behind that write
+      // through the full-queue check, and the messages queued behind it filled the queue: it was refused, typed nowhere,
+      // and every message waited behind a task that was gone.
+      it('a first task handed over behind a message waiting for its pane is never refused for a full queue', async () => {
+        vi.useFakeTimers()
+        const { controller, typed, onError, canSend } = waitingPane()
+
+        controller.submit('s1', 'Early')
+        await vi.advanceTimersByTimeAsync(2_500)
+        controller.expectFirstTask('s1')
+        for (let i = 0; i < 8; i++) controller.submit('s1', `Later ${i}`)
+        controller.submitFirstTask('s1', 'Say hello')
+        canSend()
+        await vi.advanceTimersByTimeAsync(1_000)
+        expect(typed).toEqual(['Say hello'])
+        expect(onError).not.toHaveBeenCalled()
+        controller.forget('s1')
+      })
+
+      it('nor is one whose turn to be typed comes while a Stop presses Ctrl-C: stopped, its row lets it go', async () => {
+        vi.useFakeTimers()
+        let pressed: (() => void) | null = null
+        const typed: string[] = []
+        const onError = vi.fn()
+        const onFirstTaskTaken = vi.fn()
+        const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
+          getSession: () => session('openclaw'),
+          validateRuntime: async () => true,
+          inject: vi.fn(async (_id: string, text: string): Promise<boolean | TerminalActionResult> => {
+            typed.push(text)
+            return notReady
+          }),
+          sendKey: vi.fn(() => new Promise<boolean>((done) => { pressed = () => done(true) })),
+          capture: async () => readyPane(), onError, onFirstTaskTaken,
+        })
+
+        controller.submit('s1', 'Early')
+        await vi.advanceTimersByTimeAsync(2_500)
+        controller.expectFirstTask('s1')
+        for (let i = 0; i < 8; i++) controller.submit('s1', `Later ${i}`)
+        controller.submitFirstTask('s1', 'Say hello')
+        controller.cancel('s1')
+        // The message waiting for its pane gives way, and the task's turn to be typed comes while the key is pressed.
+        await vi.advanceTimersByTimeAsync(1_000)
+        pressed!()
+        await vi.advanceTimersByTimeAsync(1_000)
+        expect(onFirstTaskTaken).toHaveBeenCalledTimes(1)
+        expect(typed.filter((text) => text === 'Say hello')).toEqual([])
+        expect(onError).not.toHaveBeenCalled()
+        controller.forget('s1')
       })
 
       it('lets the pane\'s own command be typed meanwhile, tries nothing while it is, and is typed after it', async () => {
@@ -1297,6 +1371,996 @@ describe('SessionInputController', () => {
         expect(onError).not.toHaveBeenCalled()
         controller.forget('s1')
       })
+    })
+
+    // Found end to end (e2e/openclawShow.e2e.ts row 21): a message typed while OpenClaw's history load failed was refused
+    // back into its box, where nothing sent it, as the binding pass types `/session` only into an empty box; it was given
+    // up after 3 minutes and stayed there, every later message waiting behind it.
+    describe('a message OpenClaw refused into its box while its history did not load', () => {
+      const notReady: TerminalActionResult = { state: 'failed', dispatch: 'not_started', reason: 'openclaw_not_ready' }
+      const whole = { above: 0, below: 0 }
+      /** A message of several lines, written as its lines. */
+      const lines = (...each: string[]) => each.join('\n')
+      const command = '/session agent:main:plain'
+      /**
+       * OpenClaw as these messages meet it. A message typed (core/input.ts types one only into a pane that reads ready with
+       * an empty box) is sent while its history is loaded, and while it is not, put back into the box whole, the pane then
+       * reading `no-history`. `/session` makes it ready, its history loaded unless [loads] is false. Ctrl+U deletes to its
+       * line's start, and at the start joins the line above (pi-tui's editor). The box draws each line wrapped at 100
+       * columns. [moveGate] holds the agent's messages while it changes host.
+       */
+      const openclaw = ({ loads = true, untypes = true, moveGate }: { loads?: boolean; untypes?: boolean; moveGate?: MoveGate } = {}) => {
+        let box: string[] = []
+        let refused = false
+        let loaded = false
+        let scrolled = false
+        const typed: string[] = []
+        const sent: string[] = []
+        const keys: string[] = []
+        const draw = () => box.map((line) => line.match(/.{1,100}/g)?.join('\n') ?? '').join('\n')
+        const pane = () => {
+          const drawn = refused ? openclawScreen('screen-history-refused.txt', draw()) : readyPane(draw())
+          return scrolled ? drawn.replace(/^─+$/m, `${'─'.repeat(55)} ↑ 1 more ${'─'.repeat(55)}`) : drawn
+        }
+        const inject = vi.fn(async (_id: string, text: string): Promise<boolean | TerminalActionResult> => {
+          const reading = readOpenclawScreen(pane())
+          if (reading.state !== 'ready' || reading.box !== '') return notReady
+          typed.push(text)
+          if (loaded) sent.push(text)
+          else {
+            box = text.split('\n')
+            refused = true
+          }
+          return true
+        })
+        const injectCommand = vi.fn(async () => {
+          refused = false
+          loaded = loads
+          return true
+        })
+        const fake = {
+          typed,
+          sent,
+          keys,
+          /** What the person types into the box before Harness's [count]th key lands. */
+          beforeKey: (_count: number) => {},
+          /** The box as the person or OpenClaw left it. */
+          show: (...shown: string[]) => { box = shown },
+          /** OpenClaw refused what its box shows: its history did not load. */
+          refuse: () => { refused = true },
+          type: (line: string) => { box.push(line) },
+          scroll: () => { scrolled = true },
+          box: () => readOpenclawScreen(pane()).box,
+        }
+        const sendKey = vi.fn(async (_id: string, key: string) => {
+          keys.push(key)
+          fake.beforeKey(keys.length)
+          if (key === 'C-u' && box.at(-1)) box[box.length - 1] = ''
+          else if (key === 'C-u' && box.length > 1) box.pop()
+          return true
+        })
+        const capture = vi.fn(async (_id: string): Promise<string | null> => pane())
+        const untypeFirstTask = vi.fn(async (_id: string, _text: string) => true)
+        const retypeFirstTask = vi.fn(async (_id: string, _text: string) => true)
+        const onFirstTaskTaken = vi.fn()
+        const onError = vi.fn()
+        const onDelivery = vi.fn()
+        const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
+          getSession: () => session('openclaw'),
+          validateRuntime: async () => true,
+          inject, injectCommand, sendKey, capture, onError, onDelivery, onFirstTaskTaken,
+          ...(untypes ? { untypeFirstTask, retypeFirstTask } : {}),
+          ...(moveGate ? { moveGate } : {}),
+        })
+        return Object.assign(fake, { controller, inject, sendKey, capture, untypeFirstTask, retypeFirstTask, onFirstTaskTaken, onError, onDelivery,
+          session: () => controller.typeCommand('s1', command) })
+      }
+
+      it.each([
+        ['a person\'s message', undefined],
+        ['a delivery', 'delivery-1'],
+      ])('%s is cleared from a box that shows exactly it, and sent once from the empty box when the pane can send', async (_, deliveryId) => {
+        vi.useFakeTimers()
+        const fake = openclaw()
+        const receipt = vi.fn()
+
+        fake.controller.submit('s1', 'Say hello', deliveryId, receipt)
+        await vi.advanceTimersByTimeAsync(10_000)
+        expect(fake.keys).toEqual(['C-u'])
+        expect(fake.box()).toBe('')
+        expect(fake.controller.awaitingConfirmation('s1')).toBe(false)
+        expect(fake.controller.waitsForPane('s1')).toBe(true)
+        expect(await fake.session()).toBe(true)
+        await vi.advanceTimersByTimeAsync(1_000)
+        expect(fake.sent).toEqual(['Say hello'])
+        fake.controller.onTurnStarted('s1', 'Say hello')
+        await vi.advanceTimersByTimeAsync(5 * 60_000)
+        expect(fake.sent).toEqual(['Say hello'])
+        expect(fake.keys).toEqual(['C-u'])
+        expect(fake.onError).not.toHaveBeenCalled()
+        if (deliveryId) expect(fake.onDelivery).toHaveBeenLastCalledWith({ sessionId: 's1', deliveryId, state: 'started' })
+        else expect(receipt.mock.calls).toEqual([['started']])
+        fake.controller.forget('s1')
+      })
+
+      it.each([
+        ['one more character in it', (fake: ReturnType<typeof openclaw>) => fake.show('Say hello!')],
+        ['the person\'s line after it', (fake: ReturnType<typeof openclaw>) => fake.type('and my own words')],
+        ['it scrolled', (fake: ReturnType<typeof openclaw>) => fake.scroll()],
+      ])('a box with %s is never cleared: the message keeps its bound', async (_, change) => {
+        vi.useFakeTimers()
+        const fake = openclaw()
+
+        fake.controller.submit('s1', 'Say hello')
+        await vi.advanceTimersByTimeAsync(0)
+        change(fake)
+        await vi.advanceTimersByTimeAsync(179_000)
+        expect(fake.onError).not.toHaveBeenCalled()
+        await vi.advanceTimersByTimeAsync(2_000)
+        expect(fake.onError).toHaveBeenCalledWith('s1', 'The agent did not accept the message. Please try again.')
+        expect(fake.keys).toEqual([])
+        expect(fake.typed).toEqual(['Say hello'])
+        fake.controller.forget('s1')
+      })
+
+      it('a box that shows a paste marker is never cleared: it does not show the text', async () => {
+        vi.useFakeTimers()
+        const fake = openclaw()
+        const message = Array.from({ length: 12 }, (_, i) => `Step ${i + 1}: check the build`).join('\n')
+
+        fake.controller.submit('s1', message)
+        await vi.advanceTimersByTimeAsync(0)
+        fake.show('[paste #1 +12 lines]')
+        await vi.advanceTimersByTimeAsync(5 * 60_000)
+        expect(fake.keys).toEqual([])
+        expect(fake.onError).toHaveBeenCalledWith('s1', 'The agent did not accept the message. Please try again.')
+        fake.controller.forget('s1')
+      })
+
+      // Review Focus 2: OpenClaw's editor clears n lines, its cursor at the end, in at most 2n−1 presses (a blank line takes
+      // one fewer, and a press on an empty box changes nothing); a line the box wraps is one line of the editor.
+      it.each([
+        ['three lines', 5, lines('Plan the release', 'List the risks', 'Name an owner for each')],
+        ['blank lines among them', 5, lines('Plan the release', '', 'Name an owner for each')],
+        ['one long line the box wraps', 1, Array.from({ length: 40 }, (_, i) => `step${i + 1}`).join(' ')],
+      ])('a message of %s is cleared with %i presses, then sent once', async (_, presses, message) => {
+        vi.useFakeTimers()
+        const fake = openclaw()
+
+        fake.controller.submit('s1', message)
+        await vi.advanceTimersByTimeAsync(10_000)
+        expect(fake.keys).toEqual(Array(presses).fill('C-u'))
+        expect(fake.box()).toBe('')
+        await fake.session()
+        await vi.advanceTimersByTimeAsync(1_000)
+        fake.controller.onTurnStarted('s1', message)
+        await vi.advanceTimersByTimeAsync(60_000)
+        expect(fake.sent).toEqual([message])
+        expect(fake.keys).toHaveLength(presses)
+        expect(fake.onError).not.toHaveBeenCalled()
+        fake.controller.forget('s1')
+      })
+
+      it('a message of more than 64 lines is never cleared', async () => {
+        vi.useFakeTimers()
+        const fake = openclaw()
+        const message = Array.from({ length: 65 }, (_, i) => `Line ${i + 1}`).join('\n')
+
+        fake.controller.submit('s1', message)
+        await vi.advanceTimersByTimeAsync(5 * 60_000)
+        expect(fake.keys).toEqual([])
+        expect(fake.onError).toHaveBeenCalledWith('s1', 'The agent did not accept the message. Please try again.')
+        fake.controller.forget('s1')
+      })
+
+      // Review Focus 1: the box is read again after the presses, and whatever is left there stops them.
+      it('the box changed under the presses: nothing more is pressed and the message keeps its bound', async () => {
+        vi.useFakeTimers()
+        const fake = openclaw()
+        const message = lines('Plan the release', 'List the risks', 'Name an owner for each')
+        fake.beforeKey = (count) => { if (count === 1) fake.type('and my own words') }
+
+        fake.controller.submit('s1', message)
+        await vi.advanceTimersByTimeAsync(10_000)
+        expect(fake.keys).toEqual(Array(5).fill('C-u'))
+        expect(fake.box()).toBe('Plan the release')
+        await vi.advanceTimersByTimeAsync(169_000)
+        expect(fake.onError).not.toHaveBeenCalled()
+        await vi.advanceTimersByTimeAsync(2_000)
+        expect(fake.onError).toHaveBeenCalledWith('s1', 'The agent did not accept the message. Please try again.')
+        expect(fake.keys).toHaveLength(5)
+        expect(fake.typed).toEqual([message])
+        fake.controller.forget('s1')
+      })
+
+      it('a message is cleared once: refused again after its second paste, it is given up 3 minutes after its first', async () => {
+        vi.useFakeTimers()
+        const fake = openclaw({ loads: false })
+
+        fake.controller.submit('s1', 'Say hello')
+        await vi.advanceTimersByTimeAsync(10_000)
+        expect(fake.keys).toEqual(['C-u'])
+        await fake.session()
+        await vi.advanceTimersByTimeAsync(1_000)
+        expect(fake.typed).toEqual(['Say hello', 'Say hello'])
+        expect(fake.box()).toBe('Say hello')
+        await vi.advanceTimersByTimeAsync(168_000)
+        expect(fake.onError).not.toHaveBeenCalled()
+        await vi.advanceTimersByTimeAsync(5_000)
+        expect(fake.onError).toHaveBeenCalledWith('s1', 'The agent did not accept the message. Please try again.')
+        expect(fake.keys).toEqual(['C-u'])
+        expect(fake.sent).toEqual([])
+        fake.controller.forget('s1')
+      })
+
+      it.each([
+        ['a person\'s message', undefined],
+        ['a delivery', 'delivery-1'],
+      ])('%s cleared waits untyped 3 minutes from its first paste, not from the clear', async (_, deliveryId) => {
+        vi.useFakeTimers()
+        const fake = openclaw()
+        const receipt = vi.fn()
+
+        fake.controller.submit('s1', 'Say hello', deliveryId, receipt)
+        await vi.advanceTimersByTimeAsync(10_000)
+        expect(fake.keys).toEqual(['C-u'])
+        await vi.advanceTimersByTimeAsync(169_000)
+        expect(fake.onError).not.toHaveBeenCalled()
+        await vi.advanceTimersByTimeAsync(2_000)
+        expect(fake.onError).toHaveBeenCalledWith('s1', 'The agent did not accept the message. Please try again.')
+        if (deliveryId) expect(fake.onDelivery).toHaveBeenLastCalledWith({ sessionId: 's1', deliveryId, state: 'rejected', reason: 'not_submitted' })
+        else expect(receipt.mock.calls).toEqual([['not_submitted']])
+        expect(fake.controller.waitsForPane('s1')).toBe(false)
+        expect(fake.sent).toEqual([])
+        fake.controller.forget('s1')
+      })
+
+      it('each message is cleared once: the next one refused is cleared too', async () => {
+        vi.useFakeTimers()
+        const fake = openclaw({ loads: false })
+
+        fake.controller.submit('s1', 'Say hello')
+        await vi.advanceTimersByTimeAsync(10_000)
+        await fake.session()
+        await vi.advanceTimersByTimeAsync(180_000)
+        expect(fake.onError).toHaveBeenCalledTimes(1)
+        expect(fake.keys).toEqual(['C-u'])
+        fake.show()
+        await fake.session()
+        fake.controller.submit('s1', 'And then this')
+        await vi.advanceTimersByTimeAsync(10_000)
+        expect(fake.keys).toEqual(['C-u', 'C-u'])
+        expect(fake.box()).toBe('')
+        fake.controller.forget('s1')
+      })
+
+      // Found in review: typed again straight into the pane, a cleared message went past the move gate the queue's drain
+      // goes through, so while its agent changed host it could reach the pane being replaced.
+      it('a message cleared while its agent changes host is typed again only once the move ends', async () => {
+        vi.useFakeTimers()
+        const gate = new MoveGate()
+        const fake = openclaw({ moveGate: gate })
+
+        fake.controller.submit('s1', 'Say hello')
+        await vi.advanceTimersByTimeAsync(0)
+        gate.hold('h1')
+        await vi.advanceTimersByTimeAsync(15_000)
+        expect(fake.keys).toEqual(['C-u'])
+        expect(fake.inject).toHaveBeenCalledTimes(1)
+        void gate.release('h1')
+        await vi.advanceTimersByTimeAsync(1_000)
+        expect(fake.inject.mock.calls.length).toBeGreaterThan(1)
+        expect(fake.controller.waitsForPane('s1')).toBe(true)
+        fake.controller.forget('s1')
+      })
+
+      it('a message queued behind a cleared one is typed after it', async () => {
+        vi.useFakeTimers()
+        const fake = openclaw()
+
+        fake.controller.submit('s1', 'Say hello')
+        await vi.advanceTimersByTimeAsync(0)
+        fake.controller.submit('s1', 'And then this')
+        await vi.advanceTimersByTimeAsync(10_000)
+        expect(fake.keys).toEqual(['C-u'])
+        expect(await fake.session()).toBe(true)
+        await vi.advanceTimersByTimeAsync(1_000)
+        fake.controller.onTurnStarted('s1', 'Say hello')
+        fake.controller.onTurnEnded('s1')
+        await vi.advanceTimersByTimeAsync(1_000)
+        expect(fake.sent).toEqual(['Say hello', 'And then this'])
+        expect(fake.onError).not.toHaveBeenCalled()
+        fake.controller.forget('s1')
+      })
+
+      it('owns the box while it clears it, and not while the message waits untyped', async () => {
+        vi.useFakeTimers()
+        const fake = openclaw()
+        const owned: boolean[] = []
+        fake.beforeKey = () => { owned.push(fake.controller.ownsBox('s1', 'Say hel', whole)) }
+
+        fake.controller.submit('s1', 'Say hello')
+        await vi.advanceTimersByTimeAsync(10_000)
+        expect(owned).toEqual([true])
+        expect(fake.controller.waitsForPane('s1')).toBe(true)
+        expect(fake.controller.ownsBox('s1', 'my own words', whole)).toBe(false)
+        fake.controller.forget('s1')
+      })
+
+      describe('a first task', () => {
+        it('goes back to its row before the first key, and waits there with no error: the binding pass types it again', async () => {
+          vi.useFakeTimers()
+          const fake = openclaw()
+          const order: string[] = []
+          fake.untypeFirstTask.mockImplementation(async () => {
+            order.push('untyped')
+            return true
+          })
+          fake.beforeKey = () => { order.push('C-u') }
+
+          fake.controller.expectFirstTask('s1')
+          fake.controller.submitFirstTask('s1', 'Say hello')
+          await vi.advanceTimersByTimeAsync(10_000)
+          expect(fake.untypeFirstTask.mock.calls).toEqual([['h1', 'Say hello']])
+          expect(order).toEqual(['untyped', 'C-u'])
+          expect(fake.box()).toBe('')
+          expect(fake.controller.awaitingConfirmation('s1')).toBe(false)
+          expect(fake.controller.firstTaskWaiting('s1')).toBe(true)
+          expect(await fake.session()).toBe(true)
+          await vi.advanceTimersByTimeAsync(5 * 60_000)
+          expect(fake.typed).toEqual(['Say hello'])
+          expect(fake.onError).not.toHaveBeenCalled()
+          fake.controller.expectFirstTask('s1')
+          fake.controller.submitFirstTask('s1', 'Say hello')
+          await vi.advanceTimersByTimeAsync(1_000)
+          expect(fake.sent).toEqual(['Say hello'])
+          fake.controller.onTurnStarted('s1', 'Say hello')
+          expect(fake.controller.firstTaskWaiting('s1')).toBe(false)
+          expect(fake.keys).toEqual(['C-u'])
+          fake.controller.forget('s1')
+        })
+
+        it.each([
+          ['its row does not move it back', true],
+          ['nothing can move it back', false],
+        ])('is not cleared when %s: nothing is pressed, and its row is asked again at each window', async (_, untypes) => {
+          vi.useFakeTimers()
+          const fake = openclaw({ untypes })
+          fake.untypeFirstTask.mockResolvedValue(false)
+
+          fake.controller.expectFirstTask('s1')
+          fake.controller.submitFirstTask('s1', 'Say hello')
+          await vi.advanceTimersByTimeAsync(30_000)
+          expect(fake.untypeFirstTask).toHaveBeenCalledTimes(untypes ? 3 : 0)
+          await vi.advanceTimersByTimeAsync(5 * 60_000)
+          expect(fake.keys).toEqual([])
+          expect(fake.retypeFirstTask).not.toHaveBeenCalled()
+          expect(fake.controller.awaitingConfirmation('s1')).toBe(true)
+          expect(fake.controller.firstTaskWaiting('s1')).toBe(true)
+          expect(fake.onError).not.toHaveBeenCalled()
+          fake.controller.forget('s1')
+        })
+
+        // Found in review: an untype that threw (one made inside a binding pass's registry transaction does) counted as the
+        // task's one clear, so it was never tried again, and the task failed at its bound in the box.
+        it('is cleared at the next window when its row could not take it back at the first', async () => {
+          vi.useFakeTimers()
+          const fake = openclaw()
+          fake.untypeFirstTask.mockRejectedValueOnce(new Error('Cannot acknowledge a close intent inside an uncommitted registry transaction'))
+          const warn = vi.spyOn(console, 'warn')
+
+          fake.controller.expectFirstTask('s1')
+          fake.controller.submitFirstTask('s1', 'Say hello')
+          await vi.advanceTimersByTimeAsync(10_000)
+          const said = warn.mock.calls.flat().filter((line) => String(line).includes('first task not taken back · Error'))
+          warn.mockRestore()
+          expect(fake.keys).toEqual([])
+          expect(said).toHaveLength(1)
+          await vi.advanceTimersByTimeAsync(10_000)
+          expect(fake.untypeFirstTask).toHaveBeenCalledTimes(2)
+          expect(fake.keys).toEqual(['C-u'])
+          expect(fake.box()).toBe('')
+          expect(fake.controller.awaitingConfirmation('s1')).toBe(false)
+          expect(fake.controller.firstTaskWaiting('s1')).toBe(true)
+          fake.controller.forget('s1')
+        })
+
+        // Found in review: nothing read the box between the saved untype and the first Ctrl+U, so text the person typed
+        // meanwhile was deleted with the task.
+        it('is not cleared from a box the person typed into while its row was written: typed again there, it is awaited', async () => {
+          vi.useFakeTimers()
+          const fake = openclaw()
+          fake.untypeFirstTask.mockImplementation(async () => {
+            fake.type('and my own words')
+            return true
+          })
+          const pressed: string[] = []
+          fake.beforeKey = () => { pressed.push(fake.box() ?? '') }
+
+          fake.controller.expectFirstTask('s1')
+          fake.controller.submitFirstTask('s1', 'Say hello')
+          await vi.advanceTimersByTimeAsync(10_000)
+          expect(pressed).toEqual([])
+          expect(fake.box()).toContain('and my own words')
+          expect(fake.retypeFirstTask.mock.calls).toEqual([['h1', 'Say hello']])
+          expect(fake.controller.awaitingConfirmation('s1')).toBe(true)
+          expect(fake.controller.firstTaskWaiting('s1')).toBe(true)
+          fake.controller.forget('s1')
+        })
+
+        // Found in review: a clear cut short left its row saying the task waits untyped while the box still showed it: the
+        // agent was held for text Harness did not type, and a hand-over once the box emptied would type it a second time.
+        it.each([
+          ['its first Ctrl+U is refused', (fake: ReturnType<typeof openclaw>) => { fake.sendKey.mockResolvedValueOnce(false) }],
+          ['its box cannot be read after the keys', (fake: ReturnType<typeof openclaw>) => {
+            fake.beforeKey = () => { fake.capture.mockResolvedValueOnce(null) }
+          }],
+          ['a turn ends while its row is written', (fake: ReturnType<typeof openclaw>) => {
+            fake.untypeFirstTask.mockImplementationOnce(async () => {
+              fake.controller.onTurnEnded('s1')
+              return true
+            })
+          }],
+        ])('a clear that does not finish, %s, types it again on its row, and it is awaited and never pasted again', async (_, cut) => {
+          vi.useFakeTimers()
+          const fake = openclaw()
+          cut(fake)
+
+          fake.controller.expectFirstTask('s1')
+          fake.controller.submitFirstTask('s1', 'Say hello')
+          await vi.advanceTimersByTimeAsync(10_000)
+          expect(fake.retypeFirstTask.mock.calls).toEqual([['h1', 'Say hello']])
+          expect(fake.retypeFirstTask.mock.invocationCallOrder[0]).toBeGreaterThan(fake.untypeFirstTask.mock.invocationCallOrder[0])
+          expect(fake.controller.awaitingConfirmation('s1')).toBe(true)
+          expect(fake.controller.firstTaskWaiting('s1')).toBe(true)
+          await vi.advanceTimersByTimeAsync(5 * 60_000)
+          expect(fake.typed).toEqual(['Say hello'])
+          expect(fake.onError).not.toHaveBeenCalled()
+          fake.controller.forget('s1')
+        })
+
+        it('taken by its turn while its row is written, it is typed again there and let go', async () => {
+          vi.useFakeTimers()
+          const fake = openclaw()
+          fake.untypeFirstTask.mockImplementation(async () => {
+            fake.controller.onTurnStarted('s1', 'Say hello')
+            return true
+          })
+
+          fake.controller.expectFirstTask('s1')
+          fake.controller.submitFirstTask('s1', 'Say hello')
+          await vi.advanceTimersByTimeAsync(10_000)
+          expect(fake.keys).toEqual([])
+          expect(fake.retypeFirstTask.mock.calls).toEqual([['h1', 'Say hello']])
+          expect(fake.onFirstTaskTaken.mock.calls).toEqual([['s1'], ['s1']])
+          expect(fake.onFirstTaskTaken.mock.invocationCallOrder[1]).toBeGreaterThan(fake.retypeFirstTask.mock.invocationCallOrder[0])
+          expect(fake.controller.firstTaskWaiting('s1')).toBe(false)
+          fake.controller.forget('s1')
+        })
+
+        it('a clear cut short whose row cannot be typed again is left to its row: no key from here', async () => {
+          vi.useFakeTimers()
+          const fake = openclaw()
+          fake.sendKey.mockResolvedValueOnce(false)
+          fake.retypeFirstTask.mockResolvedValue(false)
+
+          fake.controller.expectFirstTask('s1')
+          fake.controller.submitFirstTask('s1', 'Say hello')
+          await vi.advanceTimersByTimeAsync(10_000)
+          expect(fake.controller.awaitingConfirmation('s1')).toBe(false)
+          expect(fake.controller.firstTaskWaiting('s1')).toBe(true)
+          await vi.advanceTimersByTimeAsync(5 * 60_000)
+          expect(fake.keys).toEqual([])
+          expect(fake.typed).toEqual(['Say hello'])
+          fake.controller.forget('s1')
+        })
+
+        it('is cleared once, across its hand-over again', async () => {
+          vi.useFakeTimers()
+          const fake = openclaw({ loads: false })
+
+          fake.controller.expectFirstTask('s1')
+          fake.controller.submitFirstTask('s1', 'Say hello')
+          await vi.advanceTimersByTimeAsync(10_000)
+          expect(fake.keys).toEqual(['C-u'])
+          await fake.session()
+          fake.controller.expectFirstTask('s1')
+          fake.controller.submitFirstTask('s1', 'Say hello')
+          await vi.advanceTimersByTimeAsync(10 * 60_000)
+          expect(fake.typed).toEqual(['Say hello', 'Say hello'])
+          expect(fake.box()).toBe('Say hello')
+          expect(fake.keys).toEqual(['C-u'])
+          expect(fake.untypeFirstTask).toHaveBeenCalledTimes(1)
+          expect(fake.onError).not.toHaveBeenCalled()
+          expect(fake.controller.firstTaskWaiting('s1')).toBe(true)
+          fake.controller.forget('s1')
+        })
+
+        it('a message sent while it is back on its row waits behind it, and behind those queued before', async () => {
+          vi.useFakeTimers()
+          const fake = openclaw()
+
+          fake.controller.expectFirstTask('s1')
+          fake.controller.submitFirstTask('s1', 'Say hello')
+          await vi.advanceTimersByTimeAsync(0)
+          fake.controller.submit('s1', 'And then this')
+          await vi.advanceTimersByTimeAsync(10_000)
+          expect(fake.box()).toBe('')
+          fake.controller.submit('s1', 'And this last')
+          await vi.advanceTimersByTimeAsync(2_000)
+          expect(await fake.session()).toBe(true)
+          await vi.advanceTimersByTimeAsync(5_000)
+          expect(fake.sent).toEqual([])
+          fake.controller.expectFirstTask('s1')
+          fake.controller.submitFirstTask('s1', 'Say hello')
+          await vi.advanceTimersByTimeAsync(1_000)
+          for (const message of ['Say hello', 'And then this']) {
+            fake.controller.onTurnStarted('s1', message)
+            fake.controller.onTurnEnded('s1')
+            await vi.advanceTimersByTimeAsync(1_000)
+          }
+          expect(fake.sent).toEqual(['Say hello', 'And then this', 'And this last'])
+          expect(fake.onError).not.toHaveBeenCalled()
+          fake.controller.forget('s1')
+        })
+
+        // Found in review: a message sent between the hand-over (`expectFirstTask`) and the task's submit was pasted first,
+        // and its turn let the row's typed task go while the task still waited behind it.
+        it('a message sent between its hand-over and its submit waits behind it, and only its own turn lets its row go', async () => {
+          vi.useFakeTimers()
+          const fake = openclaw()
+          await fake.session()
+
+          fake.controller.expectFirstTask('s1')
+          fake.controller.submit('s1', 'And then this')
+          await vi.advanceTimersByTimeAsync(1_000)
+          expect(fake.typed).toEqual([])
+          fake.controller.submitFirstTask('s1', 'Say hello')
+          await vi.advanceTimersByTimeAsync(1_000)
+          expect(fake.sent).toEqual(['Say hello'])
+          for (const message of ['Say hello', 'And then this']) {
+            fake.controller.onTurnStarted('s1', message)
+            fake.controller.onTurnEnded('s1')
+            await vi.advanceTimersByTimeAsync(1_000)
+          }
+          expect(fake.sent).toEqual(['Say hello', 'And then this'])
+          expect(fake.onFirstTaskTaken.mock.calls).toEqual([['s1']])
+          expect(fake.onError).not.toHaveBeenCalled()
+          fake.controller.forget('s1')
+        })
+
+        it('a turn of other text while it awaits its own neither ends its wait nor lets its row go', async () => {
+          vi.useFakeTimers()
+          const fake = openclaw()
+          await fake.session()
+
+          fake.controller.submitFirstTask('s1', 'Say hello')
+          await vi.advanceTimersByTimeAsync(1_000)
+          expect(fake.controller.firstTaskWaiting('s1')).toBe(true)
+          fake.controller.onTurnStarted('s1', 'my own words')
+          expect(fake.controller.firstTaskWaiting('s1')).toBe(true)
+          expect(fake.onFirstTaskTaken).not.toHaveBeenCalled()
+          fake.controller.forget('s1')
+        })
+
+        // Found in the fix review: OpenClaw's editor makes each pasted tab four spaces and drops other control characters
+        // (pi-tui `handlePaste`, engines/openclaw/contract.ts), so the turn of a task with a tab was read as another's: its
+        // wait never ended, and the binding pass's bound failed the launch of an agent at work on it.
+        it('its turn ends its wait as OpenClaw records it, a tab as four spaces', async () => {
+          vi.useFakeTimers()
+          const fake = openclaw()
+          await fake.session()
+
+          fake.controller.submitFirstTask('s1', 'Say\thello\u0007')
+          await vi.advanceTimersByTimeAsync(1_000)
+          expect(fake.controller.firstTaskWaiting('s1')).toBe(true)
+          fake.controller.onTurnStarted('s1', 'Say    hello')
+          expect(fake.controller.firstTaskWaiting('s1')).toBe(false)
+          expect(fake.onFirstTaskTaken.mock.calls).toEqual([['s1']])
+          fake.controller.forget('s1')
+        })
+
+        // Found in review: handed over while a caller held the pane, a first task cleared once before was queued behind
+        // itself, and typed never.
+        it.each([
+          ['the first time', async (fake: ReturnType<typeof openclaw>) => { await fake.session() }],
+          ['again after its clear', async (fake: ReturnType<typeof openclaw>) => {
+            fake.controller.expectFirstTask('s1')
+            fake.controller.submitFirstTask('s1', 'Say hello')
+            await vi.advanceTimersByTimeAsync(10_000)
+            expect(fake.keys).toEqual(['C-u'])
+            await fake.session()
+          }],
+        ])('handed over %s while a caller holds the pane, it is typed once the caller lets go', async (_, before) => {
+          vi.useFakeTimers()
+          const fake = openclaw()
+          await before(fake)
+
+          const release = fake.controller.acquireControl('s1')!
+          fake.controller.expectFirstTask('s1')
+          fake.controller.submitFirstTask('s1', 'Say hello')
+          await vi.advanceTimersByTimeAsync(5_000)
+          expect(fake.sent).toEqual([])
+          release()
+          await vi.advanceTimersByTimeAsync(1_000)
+          expect(fake.sent).toEqual(['Say hello'])
+          expect(fake.onError).not.toHaveBeenCalled()
+          fake.controller.forget('s1')
+        })
+
+        // Found in review: a launch task the backend began with `/loop` was typed as OpenClaw takes it, and compared with
+        // its row's text, which never matched: its row was never asked to take it back, and an adopted one got no Enter.
+        it('one its engine has no /loop for is typed as the engine takes it, and its row is asked for it as it was given', async () => {
+          vi.useFakeTimers()
+          const fake = openclaw()
+
+          fake.controller.expectFirstTask('s1')
+          fake.controller.submitFirstTask('s1', '/loop Say hello')
+          await vi.advanceTimersByTimeAsync(10_000)
+          expect(fake.typed).toEqual(['Say hello'])
+          expect(fake.untypeFirstTask.mock.calls).toEqual([['h1', '/loop Say hello']])
+          expect(fake.keys).toEqual(['C-u'])
+          fake.controller.forget('s1')
+
+          const adopted = openclaw()
+          adopted.show('Say hello')
+          expect(adopted.controller.adoptTypedFirstTask('s1', '/loop Say hello')).toBe(true)
+          expect(adopted.controller.ownsBox('s1', 'Say hello', whole)).toBe(true)
+          await vi.advanceTimersByTimeAsync(10_000)
+          expect(adopted.keys).toEqual(['Enter'])
+          adopted.controller.onTurnStarted('s1', 'Say hello')
+          expect(adopted.onFirstTaskTaken.mock.calls).toEqual([['s1']])
+          adopted.controller.forget('s1')
+        })
+
+        // Found in review: stopped while back on its row, a first task was typed by the hand-over after the Stop.
+        it.each([
+          ['while back on its row', ['Say hello'], async (fake: ReturnType<typeof openclaw>) => {
+            fake.controller.expectFirstTask('s1')
+            fake.controller.submitFirstTask('s1', 'Say hello')
+            await vi.advanceTimersByTimeAsync(10_000)
+            expect(fake.box()).toBe('')
+            expect(await fake.controller.cancelConfirmed('s1')).toBe(true)
+            expect(fake.controller.firstTaskWaiting('s1')).toBe(false)
+            await fake.session()
+            fake.controller.expectFirstTask('s1')
+            expect(fake.controller.firstTaskWaiting('s1')).toBe(false)
+            fake.controller.submitFirstTask('s1', 'Say hello')
+          }],
+          ['while it waits for a caller to let go of the pane', [], async (fake: ReturnType<typeof openclaw>) => {
+            await fake.session()
+            const release = fake.controller.acquireControl('s1')!
+            fake.controller.expectFirstTask('s1')
+            fake.controller.submitFirstTask('s1', 'Say hello')
+            expect(await fake.controller.cancelConfirmed('s1')).toBe(true)
+            release()
+          }],
+        ])('stopped %s, it is typed no more, and its row lets it go', async (_, typed, stop) => {
+          vi.useFakeTimers()
+          const fake = openclaw()
+
+          await stop(fake)
+          await vi.advanceTimersByTimeAsync(60_000)
+          expect(fake.typed).toEqual(typed)
+          expect(fake.sent).toEqual([])
+          expect(fake.onFirstTaskTaken.mock.calls).toEqual([['s1']])
+          expect(fake.controller.firstTaskWaiting('s1')).toBe(false)
+          fake.controller.forget('s1')
+        })
+      })
+
+      // Decision 7: a daemon that stopped between typing the first task and its confirmation left it on the row as typed
+      // (lib/registry.ts `firstTaskTyped`); the daemon after it awaits it again (core/agents/bind.ts), and never pastes it.
+      describe('a first task an earlier daemon typed', () => {
+        it('gets one Enter from a ready box that holds exactly it, and is never pasted', async () => {
+          vi.useFakeTimers()
+          const fake = openclaw()
+          fake.show('Say hello')
+
+          expect(fake.controller.adoptTypedFirstTask('s1', 'Say hello')).toBe(true)
+          expect(fake.controller.firstTaskWaiting('s1')).toBe(true)
+          expect(fake.controller.awaitingConfirmation('s1')).toBe(true)
+          await vi.advanceTimersByTimeAsync(10_000)
+          expect(fake.keys).toEqual(['Enter'])
+          fake.show()
+          await vi.advanceTimersByTimeAsync(5 * 60_000)
+          expect(fake.keys).toEqual(['Enter'])
+          expect(fake.typed).toEqual([])
+          expect(fake.onError).not.toHaveBeenCalled()
+          fake.controller.onTurnStarted('s1', 'Say hello')
+          expect(fake.controller.firstTaskWaiting('s1')).toBe(false)
+          fake.controller.forget('s1')
+        })
+
+        it('in a box whose history did not load, goes back to its row before the first key, then is cleared', async () => {
+          vi.useFakeTimers()
+          const fake = openclaw()
+          const order: string[] = []
+          fake.untypeFirstTask.mockImplementation(async () => {
+            order.push('untyped')
+            return true
+          })
+          fake.beforeKey = () => { order.push('C-u') }
+          fake.show('Say hello')
+          fake.refuse()
+
+          expect(fake.controller.adoptTypedFirstTask('s1', 'Say hello')).toBe(true)
+          await vi.advanceTimersByTimeAsync(10_000)
+          expect(fake.untypeFirstTask.mock.calls).toEqual([['h1', 'Say hello']])
+          expect(order).toEqual(['untyped', 'C-u'])
+          expect(fake.box()).toBe('')
+          expect(fake.controller.awaitingConfirmation('s1')).toBe(false)
+          expect(fake.controller.firstTaskWaiting('s1')).toBe(true)
+          await vi.advanceTimersByTimeAsync(5 * 60_000)
+          expect(fake.typed).toEqual([])
+          expect(fake.keys).toEqual(['C-u'])
+          expect(fake.onError).not.toHaveBeenCalled()
+          fake.controller.forget('s1')
+        })
+
+        // Found in review: on a pane it could not read it got the blind Enters a message typed here gets, though this daemon
+        // never pasted it and the box may hold the person's draft.
+        it.each([
+          ['in an empty box on a ready pane, which sent it', (_fake: ReturnType<typeof openclaw>) => {}],
+          ['on a pane it cannot read', (fake: ReturnType<typeof openclaw>) => { fake.capture.mockResolvedValue(null) }],
+        ])('%s, gets no key', async (_, pane) => {
+          vi.useFakeTimers()
+          const fake = openclaw()
+          pane(fake)
+
+          expect(fake.controller.adoptTypedFirstTask('s1', 'Say hello')).toBe(true)
+          await vi.advanceTimersByTimeAsync(5 * 60_000)
+          expect(fake.keys).toEqual([])
+          expect(fake.typed).toEqual([])
+          expect(fake.onError).not.toHaveBeenCalled()
+          expect(fake.controller.firstTaskWaiting('s1')).toBe(true)
+          fake.controller.forget('s1')
+        })
+
+        it.each([
+          ['a second time', ({ controller }: ReturnType<typeof paneController>) => { controller.adoptTypedFirstTask('s1', 'Say hello') }],
+          ['while a first task of this daemon\'s is expected', ({ controller }: ReturnType<typeof paneController>) => controller.expectFirstTask('s1')],
+          ['while a message awaits its turn', async ({ controller }: ReturnType<typeof paneController>) => {
+            controller.submit('s1', 'And then this')
+            await vi.waitFor(() => expect(controller.awaitingConfirmation('s1')).toBe(true))
+          }],
+          ['while a message is being typed', ({ controller, inject }: ReturnType<typeof paneController>) => {
+            inject.mockImplementationOnce(() => new Promise<boolean>(() => {}))
+            controller.submit('s1', 'And then this')
+          }],
+          ['while a turn is open', ({ controller }: ReturnType<typeof paneController>) => controller.onTurnStarted('s1', 'And then this')],
+        ])('is not taken %s', async (_, before) => {
+          const given = paneController(() => readyPane('Say hello'))
+
+          await before(given)
+          expect(given.controller.adoptTypedFirstTask('s1', 'Say hello')).toBe(false)
+          given.controller.forget('s1')
+        })
+
+        it('is not taken for an agent that is gone', () => {
+          const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
+            getSession: () => undefined, validateRuntime: async () => true, inject: async () => true, sendKey: async () => true, onError: () => {} })
+
+          expect(controller.adoptTypedFirstTask('s1', 'Say hello')).toBe(false)
+          expect(controller.firstTaskWaiting('s1')).toBe(false)
+        })
+
+        // Review Focus 3: a message sent while it is unconfirmed waits behind it and is never pasted ahead of it.
+        it('a message sent while it awaits its turn waits behind it, and is typed once that turn has ended', async () => {
+          vi.useFakeTimers()
+          const fake = openclaw()
+          fake.show('Say hello')
+
+          fake.controller.adoptTypedFirstTask('s1', 'Say hello')
+          fake.controller.submit('s1', 'And then this')
+          await vi.advanceTimersByTimeAsync(10_000)
+          expect(fake.keys).toEqual(['Enter'])
+          fake.show()
+          await vi.advanceTimersByTimeAsync(60_000)
+          expect(fake.typed).toEqual([])
+          fake.controller.onTurnStarted('s1', 'Say hello')
+          await vi.advanceTimersByTimeAsync(1_000)
+          expect(fake.typed).toEqual([])
+          fake.controller.onTurnEnded('s1')
+          await vi.advanceTimersByTimeAsync(1_000)
+          expect(fake.typed).toEqual(['And then this'])
+          expect(fake.onError).not.toHaveBeenCalled()
+          fake.controller.forget('s1')
+        })
+
+        it('a message already waiting for its pane is not typed while it awaits its turn, even into an empty box', async () => {
+          vi.useFakeTimers()
+          const fake = openclaw()
+          fake.show('Say hello')
+
+          fake.controller.submit('s1', 'And then this')
+          await vi.advanceTimersByTimeAsync(2_000)
+          expect(fake.controller.waitsForPane('s1')).toBe(true)
+          expect(fake.controller.adoptTypedFirstTask('s1', 'Say hello')).toBe(true)
+          await vi.advanceTimersByTimeAsync(10_000)
+          expect(fake.keys).toEqual(['Enter'])
+          fake.show()
+          await vi.advanceTimersByTimeAsync(60_000)
+          expect(fake.typed).toEqual([])
+          fake.controller.onTurnStarted('s1', 'Say hello')
+          fake.controller.onTurnEnded('s1')
+          await vi.advanceTimersByTimeAsync(1_000)
+          expect(fake.typed).toEqual(['And then this'])
+          expect(fake.onError).not.toHaveBeenCalled()
+          fake.controller.forget('s1')
+        })
+
+        // Found in review: a message waiting for its pane went ahead of the task once it was cleared back to its row, and its
+        // turn let go of the task's row while the task waited behind it.
+        it('a message already waiting for its pane gives way to it once it is cleared back to its row', async () => {
+          vi.useFakeTimers()
+          const fake = openclaw()
+          fake.show('Say hello')
+          fake.refuse()
+
+          fake.controller.submit('s1', 'And then this')
+          await vi.advanceTimersByTimeAsync(2_000)
+          expect(fake.controller.waitsForPane('s1')).toBe(true)
+          expect(fake.controller.adoptTypedFirstTask('s1', 'Say hello')).toBe(true)
+          await vi.advanceTimersByTimeAsync(10_000)
+          expect(fake.keys).toEqual(['C-u'])
+          expect(await fake.session()).toBe(true)
+          await vi.advanceTimersByTimeAsync(5_000)
+          expect(fake.sent).toEqual([])
+          fake.controller.expectFirstTask('s1')
+          fake.controller.submitFirstTask('s1', 'Say hello')
+          await vi.advanceTimersByTimeAsync(1_000)
+          expect(fake.sent).toEqual(['Say hello'])
+          fake.controller.onTurnStarted('s1', 'Say hello')
+          fake.controller.onTurnEnded('s1')
+          await vi.advanceTimersByTimeAsync(1_000)
+          expect(fake.sent).toEqual(['Say hello', 'And then this'])
+          expect(fake.onFirstTaskTaken.mock.calls).toEqual([['s1']])
+          expect(fake.onError).not.toHaveBeenCalled()
+          fake.controller.forget('s1')
+        })
+
+        it('confirmed by its user row, waits no more, with no key and no error, and a message behind it goes on', async () => {
+          vi.useFakeTimers()
+          const fake = openclaw()
+          await fake.session()
+          fake.show('Say hello')
+
+          fake.controller.adoptTypedFirstTask('s1', 'Say hello')
+          fake.controller.submit('s1', 'And then this')
+          await vi.advanceTimersByTimeAsync(5_000)
+          fake.show()
+          fake.controller.firstTaskConfirmed('s1')
+          expect(fake.controller.firstTaskWaiting('s1')).toBe(false)
+          await vi.advanceTimersByTimeAsync(1_000)
+          expect(fake.sent).toEqual(['And then this'])
+          fake.controller.firstTaskConfirmed('s1')
+          expect(fake.controller.awaitingConfirmation('s1')).toBe(true)
+          expect(fake.keys).toEqual([])
+          expect(fake.onError).not.toHaveBeenCalled()
+          expect(fake.onFirstTaskTaken).not.toHaveBeenCalled()
+          fake.controller.forget('s1')
+        })
+      })
+
+      // The row keeps a typed first task until a turn takes it (lib/registry.ts `firstTaskTyped`): only that turn lets it go.
+      it.each([
+        ['an earlier daemon typed', (controller: SessionInputController) => { controller.adoptTypedFirstTask('s1', 'Say hello') }],
+        ['typed here', (controller: SessionInputController) => {
+          controller.expectFirstTask('s1')
+          controller.submitFirstTask('s1', 'Say hello')
+        }],
+      ])('a turn that takes a first task %s lets its row go once; a stop or a forget does not', async (_, give) => {
+        vi.useFakeTimers()
+        const taken = openclaw()
+        give(taken.controller)
+        await vi.advanceTimersByTimeAsync(0)
+        taken.controller.onTurnStarted('s1', 'Say hello')
+        taken.controller.onTurnEnded('s1')
+        taken.controller.onTurnStarted('s1', 'And then this')
+        expect(taken.onFirstTaskTaken.mock.calls).toEqual([['s1']])
+        taken.controller.forget('s1')
+
+        const stopped = openclaw()
+        give(stopped.controller)
+        await vi.advanceTimersByTimeAsync(0)
+        expect(await stopped.controller.cancelConfirmed('s1')).toBe(true)
+        stopped.controller.onTurnStarted('s1', 'Say hello')
+        const forgotten = openclaw()
+        give(forgotten.controller)
+        await vi.advanceTimersByTimeAsync(0)
+        forgotten.controller.forget('s1')
+        forgotten.controller.onTurnStarted('s1', 'Say hello')
+        expect(stopped.onFirstTaskTaken).not.toHaveBeenCalled()
+        expect(forgotten.onFirstTaskTaken).not.toHaveBeenCalled()
+        stopped.controller.forget('s1')
+        forgotten.controller.forget('s1')
+      })
+
+      // Found building the adoption (decision 7): a message queued behind a first task cleared back to its row refused the
+      // `/session` its pane needed, so the task failed at its bound; and let past it, the message would go first.
+      it.each([
+        ['typed here', (fake: ReturnType<typeof openclaw>) => {
+          fake.controller.expectFirstTask('s1')
+          fake.controller.submitFirstTask('s1', 'Say hello')
+        }],
+        ['an earlier daemon typed', (fake: ReturnType<typeof openclaw>) => {
+          fake.show('Say hello')
+          fake.refuse()
+          fake.controller.adoptTypedFirstTask('s1', 'Say hello')
+        }],
+      ])('a message queued behind a first task %s and cleared to its row lets its /session be typed, and goes once a turn took the task', async (_, give) => {
+        vi.useFakeTimers()
+        const fake = openclaw()
+
+        give(fake)
+        await vi.advanceTimersByTimeAsync(0)
+        fake.controller.submit('s1', 'And then this')
+        await vi.advanceTimersByTimeAsync(10_000)
+        expect(fake.keys).toEqual(['C-u'])
+        expect(fake.box()).toBe('')
+        expect(await fake.session()).toBe(true)
+        await vi.advanceTimersByTimeAsync(5_000)
+        expect(fake.sent).toEqual([])
+        fake.controller.expectFirstTask('s1')
+        fake.controller.submitFirstTask('s1', 'Say hello')
+        await vi.advanceTimersByTimeAsync(1_000)
+        expect(fake.sent).toEqual(['Say hello'])
+        fake.controller.onTurnStarted('s1', 'Say hello')
+        await vi.advanceTimersByTimeAsync(1_000)
+        expect(fake.sent).toEqual(['Say hello'])
+        fake.controller.onTurnEnded('s1')
+        await vi.advanceTimersByTimeAsync(1_000)
+        expect(fake.sent).toEqual(['Say hello', 'And then this'])
+        expect(fake.onError).not.toHaveBeenCalled()
+        fake.controller.forget('s1')
+      })
+    })
+
+    // Found in review: on a pane that can send, Harness's own refused message, scrolled in its box, read as the person's
+    // text, and the agent was held for it until Harness's own Enter sent it.
+    it('owns, on a pane that can send, a box its Enter would send, and on one whose history did not load only the whole message', async () => {
+      const { controller } = paneController(() => scrolled)
+      const shown = readOpenclawScreen(scrolled)
+
+      controller.submit('s1', longMessage)
+      await vi.waitFor(() => expect(controller.awaitingConfirmation('s1')).toBe(true))
+      expect(shown.state).toBe('ready')
+      expect(controller.ownsBox('s1', shown.box, shown.boxHidden, 'ready')).toBe(true)
+      expect(controller.ownsBox('s1', 'my own words', shown.boxHidden, 'ready')).toBe(false)
+      expect(controller.ownsBox('s1', shown.box, shown.boxHidden, 'no-history')).toBe(false)
+      expect(controller.ownsBox('s1', shown.box, shown.boxHidden)).toBe(false)
+      controller.forget('s1')
+    })
+
+    it('owns the box while it types into it, and while it shows exactly, whole, the message awaiting confirmation', async () => {
+      let paste!: (done: boolean) => void
+      let command!: (done: boolean) => void
+      const { controller, inject, injectCommand } = paneController(() => readyPane())
+      const whole = { above: 0, below: 0 }
+      inject.mockImplementationOnce(() => new Promise<boolean>((done) => { paste = done }))
+
+      expect(controller.ownsBox('s1', 'Say hello', whole)).toBe(false)
+      controller.submit('s1', 'Say hello')
+      await vi.waitFor(() => expect(inject).toHaveBeenCalled())
+      expect(controller.ownsBox('s1', 'Say hel', whole)).toBe(true)
+      paste(true)
+      await vi.waitFor(() => expect(controller.ownsBox('s1', 'my own words', whole)).toBe(false))
+      expect(controller.ownsBox('s1', 'Say hello', whole)).toBe(true)
+      expect(controller.ownsBox('s1', 'Say  hello', whole)).toBe(true)
+      expect(controller.ownsBox('s1', 'Say hello!', whole)).toBe(false)
+      expect(controller.ownsBox('s1', 'Say hello', { above: 1, below: 0 })).toBe(false)
+      expect(controller.ownsBox('s1', '', whole)).toBe(false)
+      controller.onTurnStarted('s1', 'Say hello')
+      controller.onTurnEnded('s1')
+      expect(controller.ownsBox('s1', 'Say hello', whole)).toBe(false)
+      injectCommand.mockImplementationOnce(() => new Promise<boolean>((done) => { command = done }))
+      const typing = controller.typeCommand('s1', '/session agent:main:plain')
+      expect(controller.ownsBox('s1', '/session agent:main', whole)).toBe(true)
+      command(true)
+      expect(await typing).toBe(true)
+      expect(controller.ownsBox('s1', '/session agent:main', whole)).toBe(false)
+      controller.forget('s1')
     })
   })
 

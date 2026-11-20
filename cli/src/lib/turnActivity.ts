@@ -42,6 +42,8 @@ export class TurnActivity {
     drain(sessionId: string): Promise<void>
     /** A turn ended: what its runtime showed until then is not compared with what it shows next. */
     ended?(sessionId: string): void
+    /** The session turned working with no turn open: no turn's heartbeat tells this claim's end (core/turns/heartbeats.ts). */
+    claimed?(sessionId: string): void
     now?: () => number
   }) {}
   private now(): number { return this.deps.now?.() ?? performance.now() }
@@ -62,6 +64,12 @@ export class TurnActivity {
   }
   /** A Working claim reads as an expired one does, now: unknown while a turn is open, idle with none. */
   withdraw(sessionId: string): void { this.entry(sessionId, true) }
+  /** A claim with no turn open is told [deps.claimed] as it starts; a renewal tells nothing. */
+  private work(sessionId: string, entry: Entry): void {
+    const claim = entry.state !== 'working' && !this.deps.runtime(sessionId)?.turnOpen
+    this.set(entry, 'working')
+    if (claim) this.deps.claimed?.(sessionId)
+  }
   private set(entry: Entry, state: ActivityState): void {
     entry.state = state
     entry.until = state === 'working' ? this.now() + WORK_EVIDENCE_MS : 0
@@ -80,7 +88,7 @@ export class TurnActivity {
     }
     if (type === 'turn_ended') { this.set(entry, 'idle'); this.deps.ended?.(sessionId) }
     // While withheld, records still land (a tool's output, a late reply after the Stop) with no work behind them.
-    else if (type === 'turn_started' || (PROGRESS.has(type) && !runtime?.withheld)) this.set(entry, 'working')
+    else if (type === 'turn_started' || (PROGRESS.has(type) && !runtime?.withheld)) this.work(sessionId, entry)
   }
   snapshot(sessionId: string): ActivityFrame | undefined {
     const entry = this.entry(sessionId)
@@ -106,7 +114,8 @@ export class TurnActivity {
       // A completion, a new prompt, or a replaced process wins over a probe
       // started before it. Failed reads never mean idle.
       if (this.entry(sessionId) !== entry || entry.revision !== revision) return
-      if (result === 'working' || (result === 'idle' && entry.state !== 'working')) this.set(entry, result)
+      if (result === 'working') this.work(sessionId, entry)
+      else if (result === 'idle' && entry.state !== 'working') this.set(entry, result)
     }
     entry.pending = run().catch(() => {}).finally(() => { entry.pending = undefined })
     await entry.pending

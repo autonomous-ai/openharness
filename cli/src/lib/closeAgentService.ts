@@ -22,7 +22,7 @@ export type AgentClosePlan = {
 export type AgentCloseRequest = { agentId: string; sessionId: string; createdAt: string; mode: CloseMode; onlyIfHidden?: boolean; background?: 'refuse' | 'count' }
 /** `withoutConversation`: the record the close saved, or the one a harness closed already was kept as, holds no
  *  conversation a resume could bring back, so none is kept: closed while still starting, before Harness could read its
- *  conversation, or its engine never bound one.
+ *  conversation, its engine never bound one, or its engine's own store holds none (OpenClaw).
  *  `backgroundCommands`: how many an idle harness still runs; `null` when Harness cannot know. */
 export type AgentCloseResult = { closed?: true; withoutConversation?: true; deferred?: true; cancelled?: true; error?: string; detail?: string; activity?: CloseActivity; backgroundCommands?: number | null }
 
@@ -138,6 +138,9 @@ export interface CloseAgentServiceDeps {
   atStartupQuestion?(s: RegisteredSession): Promise<boolean>
   /** How many background commands its engine still runs; `null` when Harness cannot know. */
   backgroundCommands?(s: RegisteredSession): Promise<number | null>
+  /** Whether the engine's own store holds nothing a resume would bring back: an engine that binds its id before it
+   *  takes any task (OpenClaw) has an id and may still have kept none. */
+  conversationEmpty?(s: RegisteredSession): Promise<boolean>
   now?: () => number
   sleep?: (ms: number) => Promise<void>
 }
@@ -181,7 +184,7 @@ export class CloseAgentService {
 
   request(request: AgentCloseRequest): Promise<AgentCloseResult> {
     const current = this.deps.registry.byAgent(request.agentId)
-    if (!matches(current, request, this.now())) return Promise.resolve(this.changed(request))
+    if (!matches(current, request, this.now())) return this.changed(request)
     if (request.mode === 'cancel') return this.cancel(request.agentId).then(() => ({ cancelled: true }))
 
     // A job answers only a request of its own kind. When any job running for the agent answered every
@@ -215,10 +218,15 @@ export class CloseAgentService {
    * AGENT_CHANGED". Anything else is AGENT_CHANGED. Said of the record it was kept as: answered `{ closed: true }`
    * alone, `harness close` said "Its conversation is kept" of one kept with none.
    */
-  private changed(request: AgentCloseRequest): AgentCloseResult {
+  private async changed(request: AgentCloseRequest): Promise<AgentCloseResult> {
     const kept = request.mode === 'idle' || request.mode === 'now' || request.mode === 'inspect' ? this.deps.closedAlready?.(request) : null
     if (!kept) return { error: 'AGENT_CHANGED' }
-    return keptNone(kept) ? { closed: true, withoutConversation: true } : { closed: true }
+    return keptNone(kept) || await this.conversationEmpty(kept) ? { closed: true, withoutConversation: true } : { closed: true }
+  }
+
+  /** A store that cannot be read says nothing: the conversation counts as kept. */
+  private async conversationEmpty(s: RegisteredSession): Promise<boolean> {
+    try { return await this.deps.conversationEmpty?.(s) ?? false } catch { return false }
   }
 
   private async execute(request: AgentCloseRequest, target: string, revision: number): Promise<AgentCloseResult> {
@@ -344,9 +352,9 @@ export class CloseAgentService {
           if (this.deps.idleCurrent?.(latest) === false) idleRevoked = true
           return !idleRevoked
         },
-        checkpoint: (s, phase) => {
+        checkpoint: async (s, phase) => {
           // The record saved before the stop is the one a resume starts from.
-          if (phase === 'before' && keptNone(s)) unkept = true
+          if (phase === 'before' && (keptNone(s) || await this.conversationEmpty(s))) unkept = true
           return this.deps.checkpoint(s, phase)
         },
         confirmUnusedConversation: async captured => {
