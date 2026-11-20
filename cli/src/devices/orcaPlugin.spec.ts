@@ -95,14 +95,19 @@ function up(plugins: unknown[]): void {
 }
 
 describe('orcaStatus', () => {
-  it('on Windows, and from the sources, nothing is run and no folder is written', async () => {
-    for (const over of [{ platform: 'win32' as const }, { files: () => null }]) {
-      const { deps, folder, calls } = setup(over)
-      up([])
-      expect(await orcaStatus(deps)).toEqual({ orca: 'absent' })
-      expect(calls()).toEqual([])
-      expect(existsSync(folder)).toBe(false)
-    }
+  it('from the sources, nothing is run and no folder is written', async () => {
+    const { deps, folder, calls } = setup({ files: () => null })
+    up([])
+    expect(await orcaStatus(deps)).toEqual({ orca: 'absent' })
+    expect(calls()).toEqual([])
+    expect(existsSync(folder)).toBe(false)
+  })
+
+  it('on Windows Orca is asked, as elsewhere', async () => {
+    const { deps, folder, calls } = setup({ platform: 'win32' })
+    up([])
+    expect(await orcaStatus(deps)).toEqual({ orca: 'setup' })
+    expect(calls()).toEqual(['status --json', `plugin inspect ${folder} --json`, 'plugin list --json'])
   })
 
   it('no orca is absent', async () => {
@@ -748,7 +753,7 @@ describe('orcaSetUp', () => {
   })
 
   it('no Orca to ask', async () => {
-    for (const over of [{ platform: 'win32' as const }, { files: () => null }, { orca: () => null }]) {
+    for (const over of [{ files: () => null }, { orca: () => null }]) {
       const { deps, folder, calls } = setup(over)
       holds()
       expect(await orcaSetUp(deps, { force: true })).toStrictEqual({ orca: 'absent', error: 'not-running' })
@@ -873,7 +878,7 @@ describe('orcaRemove', () => {
   })
 
   it('no Orca to ask: off, nothing but status', async () => {
-    for (const over of [{ platform: 'win32' as const }, { files: () => null }, { orca: () => null }]) {
+    for (const over of [{ files: () => null }, { orca: () => null }]) {
       const { deps, calls } = setup(over)
       holds()
       expect(await orcaRemove(deps)).toStrictEqual({ orca: 'off' })
