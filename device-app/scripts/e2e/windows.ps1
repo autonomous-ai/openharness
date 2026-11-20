@@ -141,6 +141,8 @@ $script:ranInstaller = $false
 $script:ifeo = $null
 # Once the run hosts consoles in conhost: whether the key was there, and each value before (null when absent).
 $script:consoleHost = $null
+# The console host key, when the run made it: Clean-Up removes it last.
+$script:consoleKeyMade = $false
 $script:phase = 'start'
 $started = New-Object System.Collections.Generic.List[System.Diagnostics.Process]
 $tokens = New-Object System.Collections.Generic.List[string]
@@ -689,7 +691,7 @@ function Restore-ConsoleHost {
     if ($null -eq $before[$name]) { Remove-ItemProperty -LiteralPath $consoleHostKey -Name $name -ErrorAction SilentlyContinue }
     else { Set-ItemProperty -LiteralPath $consoleHostKey -Name $name -Value $before[$name] }
   }
-  if (-not $before.key) { Remove-Item -LiteralPath $consoleHostKey -ErrorAction SilentlyContinue }
+  $script:consoleKeyMade = -not $before.key
   $script:consoleHost = $null
 }
 
@@ -742,6 +744,9 @@ function Clean-Up {
   }
   if ($Screens) { Screens-Clean }
   Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
+  # Removed only now: on Windows 11 the key came back, empty, after Restore-ConsoleHost had removed it while what the
+  # run started was still running.
+  if ($script:consoleKeyMade) { Remove-Item -LiteralPath $consoleHostKey -Recurse -Force -ErrorAction SilentlyContinue }
 }
 
 function Report-Failure($record) {
@@ -884,7 +889,8 @@ if ($Screens) {
   # The shots' $script: names (deskIcon, trayMenu, aboutWindow) differ from the script's own ($shortcut, $MENU, $ABOUT):
   # PowerShell ignores case, and a $script: write replaces the script's variable of that name.
   $script:theme = $null
-  $script:notifyBefore = @()
+  # NotifyIconSettings' subkeys before the app first starts; null until then.
+  $script:notifyBefore = $null
   $script:misses = New-Object System.Collections.Generic.List[string]
 
   $screensSource = @'
@@ -1002,11 +1008,14 @@ namespace E2E {
     $script:theme = $null
   }
 
-  # Explorer's entries for this install's tray icon (NotifyIconSettings), which it makes as the icon first shows.
+  # Explorer's entries for this install's tray icon (NotifyIconSettings), which it makes as the icon first shows: by
+  # path, or as a subkey new since the app started, since Explorer may save one with no ExecutablePath (Windows 11).
   function Notify-Entries {
     @(Get-ChildItem -LiteralPath $notifyKey -ErrorAction SilentlyContinue |
-        Where-Object { $notifyPaths -contains $_.GetValue('ExecutablePath') })
+        Where-Object { $notifyPaths -contains $_.GetValue('ExecutablePath') -or (New-Notify $_) })
   }
+
+  function New-Notify($entry) { $null -ne $script:notifyBefore -and $script:notifyBefore -notcontains $entry.PSChildName }
 
   # The Explorer window showing the export's folder, as the shell lists its windows, or null.
   function Export-Window {
@@ -1033,9 +1042,7 @@ namespace E2E {
     if ($window) { $window.Quit() }
     Restore-Taskbar
     foreach ($entry in Notify-Entries) {
-      if ($script:notifyBefore -notcontains $entry.PSChildName) {
-        Remove-Item -LiteralPath $entry.PSPath -Recurse -ErrorAction SilentlyContinue
-      }
+      if (New-Notify $entry) { Remove-Item -LiteralPath $entry.PSPath -Recurse -ErrorAction SilentlyContinue }
     }
   }
 
@@ -1315,7 +1322,7 @@ namespace E2E {
     if (-not ('E2E.Screens' -as [type])) { Add-Type -TypeDefinition $screensSource }
     [E2E.Screens]::DpiAware()
     New-Item -ItemType Directory -Force -Path $Screens | Out-Null
-    $script:notifyBefore = @(Notify-Entries | ForEach-Object { $_.PSChildName })
+    $script:notifyBefore = @(Get-ChildItem -LiteralPath $notifyKey -ErrorAction SilentlyContinue | ForEach-Object { $_.PSChildName })
     # Dark before the app starts, which draws its first icon for the taskbar it finds.
     Set-Taskbar 0
 
