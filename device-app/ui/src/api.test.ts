@@ -23,6 +23,12 @@ describe('api', () => {
     expect(invoke).toHaveBeenCalledWith('act', { action: 'later' })
   })
 
+  it('sends Allow by its name', async () => {
+    vi.mocked(invoke).mockResolvedValue(undefined)
+    await act('allow')
+    expect(invoke).toHaveBeenCalledWith('act', { action: 'allow' })
+  })
+
   it('hands each view event its payload and resolves to the unlisten function', async () => {
     const unlisten = vi.fn()
     vi.mocked(listen).mockResolvedValue(unlisten)

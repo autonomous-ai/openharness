@@ -122,6 +122,21 @@ describe('screens', () => {
     expect(act).toHaveBeenCalledWith('retry')
   })
 
+  it('follow: Allow, Not now', async () => {
+    await mount(at('follow', 'offer'))
+    expect(heading()).toBe('Follow ChatGPT')
+    expect(text()).toContain(
+      "Your dial moves to the thread you open in ChatGPT. Harness reads only the ChatGPT window's title, while ChatGPT is in front.",
+    )
+    expect(buttons()).toEqual(['Not now', 'Allow'])
+    // Return takes Allow.
+    expect(document.activeElement?.textContent).toBe('Allow')
+    click('Allow')
+    expect(act).toHaveBeenCalledWith('allow')
+    click('Not now')
+    expect(act).toHaveBeenCalledWith('later')
+  })
+
   it('a screen Rust no longer sends draws nothing', async () => {
     await mount(at('sign_in', 'offer'))
     for (const [screen, phase] of [['claude', 'offer'], ['codex', 'offer'], ['orca', 'approve']]) {
@@ -152,6 +167,7 @@ describe('screens', () => {
       ['sign_in', 'working', null],
       ['sign_in', 'browser', null],
       ['sign_in', 'failed', 'Retry'],
+      ['follow', 'offer', 'Allow'],
     ]
     await mount(null)
     for (const [screen, phase, label] of table) {
@@ -198,6 +214,12 @@ describe('screens', () => {
     push(at('sign_in', 'offer'))
     expect(alert()).toBeNull()
     expect(described()).toBe('Add your other computers to your device.')
+
+    push(at('follow', 'offer'))
+    expect(document.activeElement?.textContent).toBe('Allow')
+    expect(described()).toBe(
+      "Your dial moves to the thread you open in ChatGPT. Harness reads only the ChatGPT window's title, while ChatGPT is in front.",
+    )
   })
 
   it('the primary button has the focus on every screen that has one, and no other button', async () => {
