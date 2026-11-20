@@ -282,7 +282,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn an_appimage_is_replaceable_only_when_it_and_its_folder_are_writable() {
+    fn an_appimage_is_replaceable_when_its_folder_is_writable() {
         use std::fs;
         use std::os::unix::fs::PermissionsExt;
         // Root writes anywhere: no mode below would refuse it.
@@ -300,11 +300,12 @@ mod tests {
         set(folder.path(), 0o555);
         let folder_shut = replaceable("linux", &appimage);
         set(folder.path(), 0o755);
+        // The plugin renames the AppImage away and writes a new one in its place: the file's own mode is not asked.
         set(&appimage, 0o555);
-        let appimage_shut = replaceable("linux", &appimage);
+        let read_only = replaceable("linux", &appimage);
         set(&appimage, 0o755);
         assert!(!folder_shut);
-        assert!(!appimage_shut);
+        assert!(read_only);
         assert!(!replaceable("linux", &folder.path().join("Gone.AppImage")));
     }
 
