@@ -65,8 +65,15 @@ export interface RealDialOptions extends Omit<WindowsDaemonOptions, 'own' | 'cap
   dial: { port: string; serialBin: string }
 }
 
-/** What a daemon of the account reads of its profile and apps, passed on as they are when it is not sealed (`own`). */
-const ACCOUNT_NAMES = ['USERPROFILE', 'LOCALAPPDATA', 'APPDATA', 'TEMP', 'TMP', 'ProgramFiles', 'ProgramFiles(x86)', 'ProgramW6432', 'ProgramData', 'USERNAME']
+/** What a daemon of the account reads of its profile and apps, passed on as they are when it is not sealed (`own`).
+ *  The engine homes too: a caller that names a throwaway one keeps the daemon's dial setup out of the account's own
+ *  ~/.claude and ~/.codex, which it filled on the VM when they were dropped (2026-11-20). */
+const ACCOUNT_NAMES = ['USERPROFILE', 'LOCALAPPDATA', 'APPDATA', 'TEMP', 'TMP', 'ProgramFiles', 'ProgramFiles(x86)', 'ProgramW6432', 'ProgramData', 'USERNAME', 'CLAUDE_CONFIG_DIR', 'CODEX_HOME']
+
+/** The homes of a daemon of the account (`own`) on [profile]: what of ACCOUNT_NAMES [inherited] sets, and its hooks set up. */
+export function ownHomes(profile: string, inherited: NodeJS.ProcessEnv): Record<string, string> {
+  return { HOME: profile, ...Object.fromEntries(ACCOUNT_NAMES.flatMap((name) => inherited[name] ? [[name, inherited[name]!]] : [])), DISABLE_HOOK_INSTALL: 'false' }
+}
 
 export interface WindowsDaemon<Dial extends FakeDial | null = FakeDial> {
   dataDir: string
@@ -177,7 +184,7 @@ export async function startWindowsDaemon(options: WindowsDaemonOptions | RealDia
   // The profile, every engine home and every editor: the root's, which name engines and editors that are not there, or
   // the account's own.
   const homes: Record<string, string> = own
-    ? { HOME: profile, ...Object.fromEntries(ACCOUNT_NAMES.flatMap((name) => process.env[name] ? [[name, process.env[name]!]] : [])), DISABLE_HOOK_INSTALL: 'false' }
+    ? ownHomes(profile, process.env)
     : {
         ...sealed,
         DISABLE_HOOK_INSTALL: 'true',

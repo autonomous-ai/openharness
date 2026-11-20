@@ -47,7 +47,8 @@ can name them. It names local paths: it stays on the machine.
   `say <row> <text>` (the dial sends the text, `turn.send`), `pick <app>` (`app.pick`, a host id), `quit`. Each message
   the daemon sends the dial is printed as one JSON line, its keepalive pings aside.
 - **The stand-in, the account's own**: the same with `--own-account`. It uses the engines, editors and apps of the
-  account it runs as, and sets their hooks up, with Harness's folders in `%USERPROFILE%\.harness-dial-check`, kept
+  account it runs as, and sets their hooks up (in the `CLAUDE_CONFIG_DIR` and `CODEX_HOME` it is run with, when set),
+  with Harness's folders in `%USERPROFILE%\.harness-dial-check`, kept
   after `quit`. **Only the VM's test user, never a person's own account.**
 - **The look**: `desk.mjs --dial-read <COMn> --out <file> --serial-bin <exe> [--against <first read>]`. It opens the
   port with `harness-serial.exe open`, waits up to 20 s for the dial's own `hello` (a dial in a session greets every
@@ -96,7 +97,8 @@ look of a dial that was not attached); 6 the dial's pets changed. A desk refuses
 
 ## console.ps1
 
-Run over SSH as the account whose console session it is, from the folder it is in:
+Run over SSH as the account whose console session it is, from the folder it is in. That account must be the owner or
+an administrator: over SSH a standard user is denied `Get-CimInstance Win32_ComputerSystem`, which finds the session.
 
 - `console.ps1 -Script run-desk.ps1 -ArgsJson '["--dial-read","COM3","--out","C:\\…\\first-read.json","--serial-bin","C:\\…\\harness-serial.exe"]'`
   waits for the script (`-TimeoutSec`, 600 by default), prints its output and `exit <code>`, and exits with that code.
