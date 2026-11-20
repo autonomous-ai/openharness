@@ -133,34 +133,33 @@ pub(crate) mod tests {
     pub(crate) fn assert_outside(printed: &str) {
         let child: Vars =
             printed.lines().filter_map(|line| line.split_once('=')).map(|(n, v)| (n.into(), v.into())).collect();
-        for name in from_an_appimage(&[]).keys().filter(|name| *name != "PATH" && *name != "XDG_DATA_DIRS") {
+        for name in from_an_appimage(&[]).keys().filter(|name| *name != "PATH") {
             assert!(!child.contains_key(name), "{name:?} reached the child:\n{printed}");
         }
         assert_eq!(child.get(OsStr::new("PATH")), Some(&PERSON_PATH.into()), "{printed}");
-        assert_eq!(child.get(OsStr::new("XDG_DATA_DIRS")), Some(&"/usr/share:".into()), "{printed}");
         assert_eq!(child.get(OsStr::new("HOME")), env::var_os("HOME").as_ref(), "{printed}");
     }
 
     #[test]
     fn the_appimages_variables_go_and_the_persons_stay() {
-        let mut person = vars(&LAUNCHED);
-        // The GTK hook's own `/usr/share`, after its folder in the AppImage, stays: a folder every system lists.
-        person.insert("XDG_DATA_DIRS".into(), "/usr/share:".into());
-        assert_eq!(without_appimage(from_an_appimage(&LAUNCHED)), Some(person));
+        // XDG_DATA_DIRS too, which the person did not have: unset, its spec's default folders are searched again.
+        assert_eq!(without_appimage(from_an_appimage(&LAUNCHED)), Some(vars(&LAUNCHED)));
     }
 
     #[test]
     fn a_list_keeps_the_persons_own_entries() {
-        let lists = [
-            ("PATH", "/home/p/.local/bin:/usr/bin:/bin"),
-            ("LD_LIBRARY_PATH", "/opt/lib"),
-            ("PYTHONPATH", "/home/p/py"),
-            ("QT_PLUGIN_PATH", "/opt/qt/plugins"),
-            ("XDG_DATA_DIRS", "/usr/local/share/:/usr/share/"),
-        ];
-        let mut person = vars(&lists);
-        person.insert("XDG_DATA_DIRS".into(), "/usr/share:/usr/local/share/:/usr/share/".into());
-        assert_eq!(without_appimage(from_an_appimage(&lists)), Some(person));
+        // An Ubuntu session's XDG_DATA_DIRS, in its order, and one that starts with the `/usr/share` the GTK hook adds.
+        let ubuntu = "/usr/share/ubuntu:/usr/local/share/:/usr/share/:/var/lib/snapd/desktop";
+        for data_dirs in [ubuntu, "/usr/share:/usr/local/share"] {
+            let lists = [
+                ("PATH", "/home/p/.local/bin:/usr/bin:/bin"),
+                ("LD_LIBRARY_PATH", "/opt/lib"),
+                ("PYTHONPATH", "/home/p/py"),
+                ("QT_PLUGIN_PATH", "/opt/qt/plugins"),
+                ("XDG_DATA_DIRS", data_dirs),
+            ];
+            assert_eq!(without_appimage(from_an_appimage(&lists)), Some(vars(&lists)), "{data_dirs}");
+        }
     }
 
     #[test]
