@@ -572,7 +572,7 @@ function Open-Page([string]$token) {
     Fail "the shell opens the sign-in page: the log has $($refused[0])"
   } else {
     Note "the shell handed the sign-in page to $((@($script:opened | ForEach-Object { $_.Name }) | Sort-Object -Unique) -join ', ')"
-    Ok 'the sign-in page opens through the shell (ShellExecuteW, with no COM set up on its thread)'
+    Ok 'the sign-in page opens through the shell (ShellExecuteW, on a thread of its own with COM set up)'
   }
   Stop-Tree @($script:opened | ForEach-Object { [int]$_.ProcessId })
 }
@@ -950,8 +950,8 @@ try {
   Stop-App
   foreach ($process in $fronts.Values) { Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue }
 
-  # --- A page from the app: the sign-in window starts harness login, whose URL the shell opens (ShellExecuteW on the
-  # app's loop thread, which never initialises COM)
+  # --- A page from the app: the sign-in window starts harness login, whose URL the shell opens (ShellExecuteW on a
+  # thread of its own, in a single-threaded COM apartment)
 
   $token = [guid]::NewGuid().ToString('N')
   $tokens.Add($token)

@@ -72,9 +72,18 @@ impl Opener for SystemOpener {
         start(Command::new(program).args(args), Some(&self.log))
     }
 
+    /// On a thread of its own: the shell may wait on the browser's handler, and the app has one event loop. A failure
+    /// is the runner's line for it.
     #[cfg(windows)]
     fn url(&self, url: &str) -> io::Result<()> {
-        shell_open(shell_url(url).ok_or(io::ErrorKind::InvalidInput)?)
+        let url = shell_url(url).ok_or(io::ErrorKind::InvalidInput)?.to_string();
+        let log = self.log.clone();
+        std::thread::spawn(move || {
+            if let Err(error) = shell_open(&url) {
+                log.line(&format!("browser: could not open: {error}"));
+            }
+        });
+        Ok(())
     }
 
     #[cfg(not(windows))]
@@ -132,20 +141,31 @@ pub(crate) fn start(command: &mut Command, log: Option<&Arc<dyn Log>>) -> io::Re
     Ok(())
 }
 
-/// The shell's `open` on an https URL: the default browser, as Windows has no program to run for it.
+/// The shell's `open` on an https URL: the default browser, as Windows has no program to run for it. COM first, in a
+/// single-threaded apartment without OLE1 DDE, as ShellExecute asks: a browser may be registered as a COM verb.
 #[cfg(windows)]
 fn shell_open(url: &str) -> io::Result<()> {
     use std::ptr;
+    use windows_sys::Win32::System::Com::{
+        COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE, CoInitializeEx, CoUninitialize,
+    };
     use windows_sys::Win32::UI::Shell::ShellExecuteW;
     use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
     let wide = |text: &str| text.encode_utf16().chain([0]).collect::<Vec<u16>>();
     let (verb, file) = (wide("open"), wide(url));
+    // SAFETY: this thread's own apartment, set up before the shell call; nothing is reserved.
+    let com = unsafe { CoInitializeEx(ptr::null(), (COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE) as u32) };
     // SAFETY: both strings end in a NUL and outlive the call; the null ones ask for no window, parameters or folder.
     let done = unsafe {
         ShellExecuteW(ptr::null_mut(), verb.as_ptr(), file.as_ptr(), ptr::null(), ptr::null(), SW_SHOWNORMAL)
     };
     // Above 32 is success, for old programs' sake; at or under it, the reason is the thread's last error.
-    if done as usize > 32 { Ok(()) } else { Err(io::Error::last_os_error()) }
+    let opened = if done as usize > 32 { Ok(()) } else { Err(io::Error::last_os_error()) };
+    if com >= 0 {
+        // SAFETY: once, for the CoInitializeEx above that succeeded, on the same thread.
+        unsafe { CoUninitialize() };
+    }
+    opened
 }
 
 #[cfg(test)]
