@@ -113,6 +113,8 @@ interface RunHookOpts {
   /** Run as on Windows: the process table comes from `harness-pty ps --json` (a fake), and `ps` fails. */
   windowsProcessTable?: boolean
   env?: Record<string, string>
+  /** The folder the hook runs in: an agent's project. */
+  cwd?: string
   dataDir?: string
   claudeProjectsDir?: string
   codexHome?: string
@@ -338,6 +340,7 @@ fs.readFileSync = (path, ...args) => {
     const [command, ...argv] = [...(opts.via ?? []).flat(), process.execPath, ...args]
     const child = spawn(command, argv, {
       env,
+      cwd: opts.cwd,
       stdio: ['pipe', 'pipe', 'inherit'],
     })
     let stdout = ''
@@ -2297,19 +2300,19 @@ describe('the hook finds Harness\'s folders by the rule', () => {
   }
 
   /** A hook whose command names no data folder reaches the daemon serving [dataDir]. */
-  async function reachesData(dataDir: string, env: Record<string, string>): Promise<boolean> {
+  async function reachesData(dataDir: string, env: Record<string, string>, cwd?: string): Promise<boolean> {
     const daemon = await daemonIn(dataDir)
-    await runHook({ port: daemon.port, tmuxPane: '%42', env })
+    await runHook({ port: daemon.port, tmuxPane: '%42', env, cwd })
     return daemon.requests.length === 1
   }
 
   /** A hook in another daemon's pane follows that daemon's route record in [routes]. */
-  async function followsRoute(routes: string, home: string, env: Record<string, string>): Promise<boolean> {
+  async function followsRoute(routes: string, home: string, env: Record<string, string>, cwd?: string): Promise<boolean> {
     const ownerDir = join(home, 'owner'), ownDir = join(home, 'own')
     const owner = await daemonIn(ownerDir)
     const own = await daemonIn(ownDir)
     publishHookRoute(ownerDir, owner.port, routes)
-    await runHook({ port: own.port, dataDir: ownDir, tmuxPane: '%7', paneOwner: harnessPaneOwner(ownerDir), env })
+    await runHook({ port: own.port, dataDir: ownDir, tmuxPane: '%7', paneOwner: harnessPaneOwner(ownerDir), env, cwd })
     return owner.requests.length === 1 && own.requests.length === 0
   }
 
@@ -2429,6 +2432,19 @@ describe('the hook finds Harness\'s folders by the rule', () => {
     const env = asOn('linux', home, { ADAPTER_DATA_DIR: join(home, 'mine', 'data'), HARNESS_HOOK_ROUTES_DIR: join(home, 'mine', 'routes') })
     expect(await reachesData(join(home, 'mine', 'data'), env)).toBe(true)
     expect(await followsRoute(join(home, 'mine', 'routes'), home, env)).toBe(true)
+  })
+
+  // As every other process reads them (config/envFields.ts homePath): the hook runs in the agent's project.
+  it('a relative HARNESS_HOOK_ROUTES_DIR is the home\'s, not the project\'s', async () => {
+    const home = homeWith('.harness')
+    const env = asOn('linux', home, { HARNESS_HOOK_ROUTES_DIR: 'routes' })
+    expect(await followsRoute(join(home, 'routes'), home, env, shortHome())).toBe(true)
+  })
+
+  it('a relative ADAPTER_DATA_DIR is the home\'s, not the project\'s', async () => {
+    const home = homeWith('.harness')
+    const env = asOn('linux', home, { ADAPTER_DATA_DIR: 'data' })
+    expect(await reachesData(join(home, 'data'), env, shortHome())).toBe(true)
   })
 })
 
