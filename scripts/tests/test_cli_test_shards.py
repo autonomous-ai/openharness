@@ -176,5 +176,116 @@ class EndToEndShardTests(ShardTests):
         self.assertFalse(output.exists())
 
 
+class SelectedFilesTests(unittest.TestCase):
+    """A pull request's own e2e files: exactly the selected set ran, each collecting at least one case."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.directory = Path(self.tmp.name).resolve()
+        self.root = self.directory / "cli"
+        self.files = {"e2e/a.e2e.ts": [("passed", "a works")],
+                      "e2e/b.e2e.ts": [("passed", "b works"), ("skipped", "b skips on macOS")]}
+
+    def write(self, shards=2):
+        # Every shard discovers the same files; each file's results land on one shard.
+        names = sorted(self.files)
+        for shard in range(1, shards + 1):
+            mine = names[shard - 1::shards]
+            cases = [case for name in mine for case in self.files[name]]
+            count = lambda status: sum(1 for state, _ in cases if state == status)
+            (self.directory / f"inventory-{shard}.json").write_text(
+                json.dumps([{"file": str(self.root / name)} for name in names]))
+            (self.directory / f"result-{shard}.json").write_text(json.dumps({
+                "success": True, "numFailedTests": 0, "numFailedTestSuites": 0, "numPendingTestSuites": 0,
+                "numPassedTests": count("passed"), "numPendingTests": count("skipped"), "numTodoTests": 0,
+                "numTotalTests": len(cases),
+                "testResults": [{"name": str(self.root / name), "status": "passed", "message": "",
+                                 "assertionResults": [{"status": state, "fullName": title, "failureMessages": []}
+                                                      for state, title in self.files[name]]} for name in mine],
+            }))
+
+    def verify(self, selected=("e2e/a.e2e.ts", "e2e/b.e2e.ts"), shards=2):
+        self.write(shards)
+        return verifier.verify(self.directory, self.root, shards, "success", None, suite="e2e",
+                               selected=None if selected is None else list(selected))
+
+    def command(self, *extra, suite="e2e"):
+        self.write()
+        command = [sys.executable, str(SCRIPT), str(self.directory), "--root", str(self.root), "--shards", "2",
+                   "--tests-result", "success", "--contracts-result", "success", "--suite", suite,
+                   "--output", str(self.directory / "summary.json"), *extra]
+        return subprocess.run(command, capture_output=True, text=True, timeout=5)
+
+    def test_selected_files_pass_with_each_files_skipped_cases_listed(self):
+        summary = self.verify()
+        self.assertEqual(summary["status"], "passed")
+        self.assertEqual(summary["skipped_by_file"], {"e2e/b.e2e.ts": ["b skips on macOS"]})
+        self.assertEqual(summary["all_skipped"], [])
+
+    def test_a_selected_file_whose_every_case_skipped_passes_listed(self):
+        self.files["e2e/b.e2e.ts"] = [("skipped", "b skips on macOS"), ("skipped", "b also skips")]
+        summary = self.verify()
+        self.assertEqual(summary["status"], "passed")
+        self.assertEqual(summary["all_skipped"], ["e2e/b.e2e.ts"])
+
+    def test_a_selected_file_that_collected_no_test_fails_naming_it(self):
+        self.files["e2e/b.e2e.ts"] = []
+        with self.assertRaisesRegex(ValueError, r"collected no test: e2e/b\.e2e\.ts"):
+            self.verify()
+
+    def test_a_file_the_plan_did_not_select_fails(self):
+        # Vitest's positional filters match substrings: e2e/a.e2e.ts also picks e2e/sub/a.e2e.ts.
+        self.files["e2e/sub/a.e2e.ts"] = [("passed", "sub a works")]
+        with self.assertRaisesRegex(ValueError, r"unexpected=\['e2e/sub/a\.e2e\.ts'\]"):
+            self.verify()
+
+    def test_a_selected_file_missing_from_the_run_fails(self):
+        with self.assertRaisesRegex(ValueError, r"missing=\['e2e/c\.e2e\.ts'\]"):
+            self.verify(selected=("e2e/a.e2e.ts", "e2e/b.e2e.ts", "e2e/c.e2e.ts"))
+
+    def test_a_selected_file_that_failed_to_load_fails(self):
+        self.write()
+        result = self.directory / "result-1.json"
+        report = json.loads(result.read_text())
+        report["testResults"][0] = {"name": str(self.root / "e2e/a.e2e.ts"), "status": "failed",
+                                    "message": "Failed to load url ./missing"}
+        report.update(success=False, numFailedTestSuites=1, numPassedTests=0, numTotalTests=0)
+        result.write_text(json.dumps(report))
+        # Named, not only the shard's failed flag.
+        with self.assertRaisesRegex(ValueError, r"file failed: e2e/a\.e2e\.ts"):
+            verifier.verify(self.directory, self.root, 2, "success", None, suite="e2e",
+                            selected=["e2e/a.e2e.ts", "e2e/b.e2e.ts"])
+
+    def test_selected_is_for_the_end_to_end_suite_only(self):
+        for extra in (("--selected", "e2e/a.e2e.ts"), ("--step-summary", str(self.directory / "step.md"))):
+            with self.subTest(extra=extra[0]):
+                result = self.command(*extra, suite="unit")
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("usage:", result.stderr)
+                self.assertIn("end-to-end suite", result.stderr)
+
+    def test_the_step_summary_lists_the_skipped_cases_per_file(self):
+        step = self.directory / "step.md"
+        result = self.command("--selected", "e2e/a.e2e.ts e2e/b.e2e.ts", "--step-summary", str(step))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        text = step.read_text()
+        self.assertIn("| e2e/b.e2e.ts | 1 | 1 |", text)
+        self.assertIn("b skips on macOS", text)
+        self.assertNotIn("Every case skipped", text)
+
+    def test_the_step_summary_says_macos_only_files_are_not_verified(self):
+        self.files["e2e/c.e2e.ts"] = [("skipped", "c runs on macOS only")]
+        for selected in (("--selected", "e2e/a.e2e.ts e2e/b.e2e.ts e2e/c.e2e.ts"), ()):
+            with self.subTest(selected=bool(selected)):
+                step = self.directory / f"step-{bool(selected)}.md"
+                result = self.command(*selected, "--step-summary", str(step))
+                self.assertEqual(result.returncode, 0, result.stderr)
+                text = step.read_text()
+                self.assertIn("Every case skipped", text)
+                self.assertIn("e2e/c.e2e.ts", text)
+                self.assertIn("macOS-only files are not verified by PR CI.", text)
+
+
 if __name__ == "__main__":
     unittest.main()
