@@ -110,7 +110,8 @@ pub fn due(state: &AppState) -> Option<Screen> {
     if state.signed_in == Some(false) && !state.saved.asked_sign_in {
         return Some(Screen::SignIn);
     }
-    (state.follow.waiting && !state.follow.trusted).then_some(Screen::Follow)
+    let follow = state.follow;
+    (follow.waiting && follow.installed && !follow.trusted).then_some(Screen::Follow)
 }
 
 /// The menu as one log line: its labels joined by ` | `, without separators. A submenu is its label and its checked
