@@ -65,9 +65,9 @@ class ValidationTests(unittest.TestCase):
             self.assertGreater(check["duration_seconds"], 0)
         self.assertEqual(receipt["source"], receipt["source_after"])
 
-    def test_two_flutter_tests_in_one_folder_never_overlap(self):
+    def flutter_stand_in(self):
+        # Fails if another copy is running, and holds until `.harness/go` exists, so an overlap leaves `.harness/overlap`.
         state = self.root / ".harness"
-        (self.root / "app").mkdir()
         tool = self.root / "tools" / "flutter"
         tool.parent.mkdir()
         tool.write_text(
@@ -84,10 +84,18 @@ class ValidationTests(unittest.TestCase):
             "os.remove(os.path.join(state, 'flutter-running'))\n"
         )
         tool.chmod(0o755)
+        return tool
+
+    def beside_flutter(self):
+        # It can only pass while a flutter test runs beside it, so it proves other checks still run in parallel.
+        return self.check("other", "from pathlib import Path; import time\nwhile not Path('.harness/flutter-running').exists(): time.sleep(.02)\nPath('.harness/go').touch()", 5)
+
+    def test_two_flutter_tests_in_one_folder_never_overlap(self):
+        state = self.root / ".harness"
+        (self.root / "app").mkdir()
+        tool = self.flutter_stand_in()
         flutter = [{"name": name, "argv": [str(tool), "test", name], "cwd": "app", "timeout_seconds": 5} for name in ("first", "second")]
-        # `other` can only pass while a flutter test runs beside it, so it proves other checks still run in parallel.
-        other = self.check("other", "from pathlib import Path; import time\nwhile not Path('.harness/flutter-running').exists(): time.sleep(.02)\nPath('.harness/go').touch()", 5)
-        result, receipt = self.run_plan([*flutter, other])
+        result, receipt = self.run_plan([*flutter, self.beside_flutter()])
         self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
         self.assertEqual(receipt["status"], "passed")
         checks = {c["name"]: c for c in receipt["checks"]}
@@ -96,6 +104,22 @@ class ValidationTests(unittest.TestCase):
         self.assertGreaterEqual(
             datetime.fromisoformat(checks["second"]["started_at"]), datetime.fromisoformat(checks["first"]["finished_at"]),
         )
+
+    def test_desktop_test_commands_hold_the_desktop_folder(self):
+        tool = self.flutter_stand_in()
+        (self.root / "desktop").mkdir()
+        (self.root / "scripts").mkdir()
+        (self.root / "scripts" / "test-desktop.py").write_text(f"import subprocess, sys\nsys.exit(subprocess.call([{str(tool)!r}]))\n")
+        (self.root / "Makefile").write_text(f"desktop-test:\n\t{tool}\n")
+        desktop = [
+            {"name": "script", "argv": [sys.executable, "scripts/test-desktop.py", "test/a_test.dart"], "timeout_seconds": 5},
+            {"name": "make", "argv": ["make", "desktop-test", "ARGS=test/b_test.dart"], "timeout_seconds": 5},
+            {"name": "verbose", "argv": [str(tool), "-v", "test"], "cwd": "desktop", "timeout_seconds": 5},
+        ]
+        result, receipt = self.run_plan([*desktop, self.beside_flutter()])
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        self.assertEqual({c["name"]: c["status"] for c in receipt["checks"]}, dict.fromkeys(("script", "make", "verbose", "other"), "passed"))
+        self.assertFalse((self.root / ".harness" / "overlap").exists())
 
     def test_failure_does_not_hide_other_results(self):
         result, receipt = self.run_plan([self.check("bad", "import sys; sys.exit(7)"), self.check("good", "print('ok')")])
