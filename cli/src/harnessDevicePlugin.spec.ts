@@ -116,6 +116,15 @@ describe('the harness-device plugin', () => {
     expect(windows.trimEnd().endsWith('; exit 0')).toBe(true)
   })
 
+  // On Windows the mod tells of the prompt itself and sets HARNESS_DEVICE_MOD_ASKS for the hooks Claude Code starts
+  // after (hooks/device.js): the hook then reads its input, so Claude Code's write of a long one never fails, and exits.
+  it('the Windows form, with HARNESS_DEVICE_MOD_ASKS set, reads its input and exits 0 before it looks for the launcher', () => {
+    const windows = windowsForm(permissionHook().command)
+    const told = windows.indexOf('if ($env:HARNESS_DEVICE_MOD_ASKS) { $null = [Console]::In.ReadToEnd(); exit 0 };')
+    expect(told).toBeGreaterThan(windows.indexOf("$PSModuleAutoLoadingPreference = 'None';"))
+    expect(told).toBeLessThan(windows.indexOf('$env:USERPROFILE\\.harness\\bin\\harness.exe'))
+  })
+
   it('hooks.json loads the voice mod, hooks/device.js', () => {
     expect(json(pluginRoot, 'hooks', 'hooks.json').modules).toEqual(['./device.js'])
   })
@@ -182,6 +191,21 @@ describe('the harness-device plugin', () => {
     expect(readFileSync(`${inProfile}.argv`, 'utf8')).toBe('device\nclaude\nasked\n')
     expect(readFileSync(`${inProfile}.stdin`, 'utf8')).toBe(INPUT)
     expect(existsSync(`${onPath}.argv`)).toBe(false)
+    expect(result).toMatchObject({ status: 0, stdout: '', stderr: '' })
+  })
+
+  // Git Bash on Windows runs this script too, where the mod tells of the prompt itself and sets HARNESS_DEVICE_MOD_ASKS.
+  posix('with HARNESS_DEVICE_MOD_ASKS set it runs no launcher, reads its whole input and exits 0 with no output', () => {
+    const profile = tempDir()
+    const record = join(profile, 'rec')
+    fakeLauncher(join(profile, '.harness', 'bin', 'harness.exe'), record)
+    // Past a pipe's buffer: a hook that left it unread would fail Claude Code's write.
+    const input = JSON.stringify({ ...JSON.parse(INPUT), tool_name: 'Write', tool_input: { content: 'x'.repeat(1 << 20) } })
+    const result = spawnSync(HOOK, [], {
+      input, env: { HOME: tempDir(), PATH: '/usr/bin:/bin', USERPROFILE: profile, HARNESS_DEVICE_MOD_ASKS: '1' }, encoding: 'utf8',
+    })
+    expect(existsSync(`${record}.argv`)).toBe(false)
+    expect(result.error).toBeUndefined()
     expect(result).toMatchObject({ status: 0, stdout: '', stderr: '' })
   })
 
@@ -253,6 +277,16 @@ describe.runIf(process.platform === 'win32')('the harness-device hook on Windows
         expect(result, `exit ${code}`).toMatchObject({ status: 0, stdout: '', stderr: '' })
       }
     }, 60_000)
+
+    it(`${runner.name}: with HARNESS_DEVICE_MOD_ASKS set, runs no launcher, prints nothing and exits 0`, () => {
+      const { profile, cwd, env } = place()
+      standIn(profile, cwd, 0)
+      const result = runner.run(permissionHook().command, {
+        cwd, input, encoding: 'utf8', env: { ...env, CLAUDE_PLUGIN_ROOT: runner.root, HARNESS_DEVICE_MOD_ASKS: '1' },
+      })
+      expect(existsSync(join(cwd, 'argv.json'))).toBe(false)
+      expect(result).toMatchObject({ status: 0, stdout: '', stderr: '' })
+    }, 30_000)
 
     it(`${runner.name}: with no launcher, prints nothing and exits 0`, () => {
       const { cwd, env } = place()

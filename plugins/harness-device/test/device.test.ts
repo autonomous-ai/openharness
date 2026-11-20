@@ -45,6 +45,10 @@ type World = {
   readMs: number
   /** How many processes the mod started with $.process.spawn: Windows' way, never this world's. */
   spawns: number
+  /** Each variable the mod set, with its value. */
+  envSet: [string, string | undefined][]
+  /** How many times the hooks beneath the mod ran for a permission prompt: the plugin's own hook among them. */
+  beneath: number
 }
 
 /**
@@ -70,8 +74,16 @@ function world(
   const clock = mock.clock(on, { now: 1_000_000 })
   const w: World = {
     clock, runs: [], inits: [], polls: [], attaches: [], devices, devicesRefuse: false, submitted: [], envAsked: [], steps,
-    enabled: true, reads: [], readMs: 0, spawns: 0,
+    enabled: true, reads: [], readMs: 0, spawns: 0, envSet: [], beneath: 0,
   }
+  on('env.set', (_, e) => {
+    w.envSet.push([e.name, e.value])
+    return { value: {} }
+  })
+  on('classic.PermissionRequest', () => {
+    w.beneath += 1
+    return {}
+  })
   on('session.info', () => ({ value: { transcriptPath: '', platform } }))
   on('process.spawn', async function* () {
     w.spawns += 1
@@ -133,6 +145,9 @@ async function start($: Engine, w: { clock: Clock }) {
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
   await w.clock.settle()
 }
+
+/** Claude Code about to ask the person to allow a tool call: its PermissionRequest hooks run, the plugin's beneath. */
+const prompt = ($: Engine) => $.classic.PermissionRequest({ tool_name: 'Bash', tool_input: { command: 'npm test' } })
 
 /** A poll the daemon holds `ms` before it answers `{}`. */
 const held = (ms: number) => async (clock: Clock) => {
@@ -715,6 +730,17 @@ for (const platform of ['macos', 'linux'] as const) {
     expect(w.attaches).toEqual([ATTACH])
     expect(w.spawns).toBe(0)
   })
+
+  // The plugin's hook tells there, as before the mod heard the prompt: a second tell would ring the dial twice.
+  test(`on ${platform} a permission prompt is the hook's to tell: the mod sets nothing and runs nothing`, async ($, on) => {
+    const w = world(on, { answers: [held(25_000)], platform })
+    await start($, w)
+    await prompt($)
+    await w.clock.settle()
+    expect(w.beneath).toBe(1)
+    expect(w.runs).toEqual([[LOCAL, ...LINK]])
+    expect(w.envSet).toEqual([])
+  })
 }
 
 // Windows: Claude Code's mods reach no pipe and have no HMAC (docs/plans/2026-11-19-dial-windows-vm-notes.md, Task 2),
@@ -755,6 +781,12 @@ type WindowsWorld = {
   enabled: boolean
   /** In order, each timer of the mod's that fired and each `inbox` it started. */
   steps: ('timer' | 'spawn')[]
+  /** Each variable the mod set, with its value. */
+  envSet: [string, string | undefined][]
+  /** What each $.env.set answers: made, held by the engine (`{ deny }` resolved), or refused (rejected). */
+  envSetAnswer: 'made' | 'held' | 'refused'
+  /** Each time the hooks beneath the mod ran for a permission prompt: their input, and the variables set by then. */
+  beneath: { e: unknown; set: [string, string | undefined][] }[]
 }
 
 /** The world beneath the mod on Windows: `children` are the `inbox` runs, one per spawn, the last repeated. */
@@ -769,8 +801,19 @@ function windows(on: On, { children, configDir }: { children: Child[]; configDir
   const clock = mock.clock(on, { now: 1_000_000 })
   const w: WindowsWorld = {
     clock, spawns: [], runs: [], attach: async () => ({ exitCode: 0, stdout: '{"sent":true}\n' }), installed: true,
-    looked: [], submitted: [], reads: [], envAsked: [], fetches: 0, enabled: true, steps,
+    looked: [], submitted: [], reads: [], envAsked: [], fetches: 0, enabled: true, steps, envSet: [], envSetAnswer: 'made',
+    beneath: [],
   }
+  on('env.set', (_, e) => {
+    if (w.envSetAnswer === 'refused') return { deny: 'refused' }
+    if (w.envSetAnswer === 'held') return { value: { deny: 'held by the organization' } }
+    w.envSet.push([e.name, e.value])
+    return { value: {} }
+  })
+  on('classic.PermissionRequest', (_, e) => {
+    w.beneath.push({ e, set: [...w.envSet] })
+    return {}
+  })
   const env: Record<string, string> = {
     USERPROFILE: PROFILE,
     HOME: PROFILE,
@@ -1057,4 +1100,71 @@ test('no fetch at all, only the settings file is read, and only USERPROFILE and 
   expect(w.fetches).toBe(0)
   expect(new Set(w.reads)).toEqual(new Set([SETTINGS]))
   expect(new Set(w.envAsked)).toEqual(new Set(['USERPROFILE', 'CLAUDE_CONFIG_DIR']))
+})
+
+// Claude Code waits on the PermissionRequest hook before the person can answer, and on Windows it starts the hook in
+// Windows PowerShell where there is no Git Bash, 3-6 s on the VM (docs/plans/2026-11-19-dial-windows-vm-notes.md, Task
+// 2). So there the mod tells of the prompt itself, through `harness device claude asked`, and sets
+// HARNESS_DEVICE_MOD_ASKS for the hooks beneath it, the plugin's own among them, which then run nothing.
+const ASKED = ['device', 'claude', 'asked']
+
+test("on Windows a permission prompt is told by the install's harness.exe asked, in the profile, its stdin the hook's input", async ($, on) => {
+  const w = windows(on, { children: EXITS })
+  await start($, w)
+  await prompt($)
+  await w.clock.settle()
+  expect(w.beneath).toHaveLength(1)
+  expect(w.runs).toEqual([{ argv: [EXE, ...ASKED], init: { stdin: JSON.stringify(w.beneath[0]!.e), timeoutMs: 5_000, cwd: PROFILE } }])
+})
+
+test("the variable is set before the hooks beneath run, so the plugin's hook runs nothing", async ($, on) => {
+  const w = windows(on, { children: EXITS })
+  await start($, w)
+  await prompt($)
+  expect(w.beneath.map(({ set }) => set)).toEqual([[['HARNESS_DEVICE_MOD_ASKS', '1']]])
+})
+
+test('the prompt waits on no asked: it starts from a timer, once the hooks beneath have answered', async ($, on) => {
+  const w = windows(on, { children: EXITS })
+  await start($, w)
+  w.attach = slow(MINUTE, { exitCode: 0, stdout: '' })
+  await prompt($)
+  expect(w.runs).toHaveLength(0)
+  await w.clock.settle()
+  expect(w.runs).toHaveLength(1)
+})
+
+// What a PermissionRequest hook prints is Claude Code's decision: a launcher of any version must never decide the prompt.
+test("what asked prints and how it exits decide nothing: the answer is the hooks' beneath", async ($, on) => {
+  const w = windows(on, { children: EXITS })
+  await start($, w)
+  w.attach = async () => ({ exitCode: 2, stdout: '{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}' })
+  expect(await prompt($)).toEqual({})
+  await w.clock.settle()
+  expect(w.runs).toHaveLength(1)
+})
+
+// Unset, the hook beneath tells, as it does where the mod's hook is passed over (an organization's Claude Code).
+for (const answer of ['held', 'refused'] as const) {
+  test(`the variable ${answer} by the engine: the mod runs nothing, and the hooks beneath run`, async ($, on) => {
+    const w = windows(on, { children: EXITS })
+    await start($, w)
+    w.envSetAnswer = answer
+    await prompt($)
+    await w.clock.settle()
+    expect(w.beneath).toHaveLength(1)
+    expect(w.runs).toHaveLength(0)
+  })
+}
+
+test('an asked that cannot start tells nothing, and the next prompt is told again', async ($, on) => {
+  const w = windows(on, { children: EXITS })
+  await start($, w)
+  w.attach = async () => 'cannot start'
+  await prompt($)
+  await w.clock.settle()
+  await prompt($)
+  await w.clock.settle()
+  expect(w.runs).toHaveLength(2)
+  expect(w.beneath).toHaveLength(2)
 })
