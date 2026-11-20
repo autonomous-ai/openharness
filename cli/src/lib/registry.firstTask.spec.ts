@@ -57,13 +57,47 @@ it('a bind keeps it', async () => {
   expect(registry.byAgent(row.agentId)?.firstTask).toBe(TASK)
 })
 
-it('taking it removes it from the file before it is returned, once', async () => {
+// Typed, not yet confirmed: a daemon restarted before OpenClaw's turn confirms it reads it typed and never pastes it again.
+it('taking it marks it typed on the file before it is returned, once, and the next daemon reads it so', async () => {
   const { registry, row } = await bound()
+  const before = Date.now()
   expect((await registry.takeFirstTask(row.agentId))).toBe(TASK)
+  const typed = disk()[0].firstTaskTyped!
   expect(disk()[0]).not.toHaveProperty('firstTask')
+  expect(typed.text).toBe(TASK)
+  expect(typed.at).toBeGreaterThanOrEqual(before)
+  expect(typed.at).toBeLessThanOrEqual(Date.now())
   expect((await registry.takeFirstTask(row.agentId))).toBeNull()
   const next = await load()
   expect(next.registry.byAgent(row.agentId)).not.toHaveProperty('firstTask')
+  expect(next.registry.byAgent(row.agentId)?.firstTaskTyped).toEqual({ text: TASK, at: typed.at })
+  expect(lines.filter(line => line.includes(`[agent] ${row.agentId.slice(0, 8)} first task typed`))).toHaveLength(1)
+  expect(lines.filter(line => line.includes(TASK))).toEqual([])
+})
+
+it('untyping puts it back to wait untyped, only while the typed task is that text', async () => {
+  const { registry, row } = await bound()
+  await registry.takeFirstTask(row.agentId)
+  expect(await registry.untypeFirstTask(row.agentId, `${TASK}!`)).toBe(false)
+  expect(disk()[0].firstTaskTyped?.text).toBe(TASK)
+  expect(await registry.untypeFirstTask(row.agentId, TASK)).toBe(true)
+  expect(disk()[0].firstTask).toBe(TASK)
+  expect(disk()[0]).not.toHaveProperty('firstTaskTyped')
+  expect(await registry.untypeFirstTask(row.agentId, TASK)).toBe(false)
+  expect(await registry.untypeFirstTask('gone', TASK)).toBe(false)
+  expect((await registry.takeFirstTask(row.agentId))).toBe(TASK)
+  expect(disk()[0].firstTaskTyped?.text).toBe(TASK)
+})
+
+it('confirming it removes the typed task, once', async () => {
+  const { registry, row } = await bound()
+  await registry.takeFirstTask(row.agentId)
+  expect(await registry.firstTaskTaken(row.agentId)).toBe(true)
+  expect(disk()[0]).not.toHaveProperty('firstTaskTyped')
+  expect(disk()[0]).not.toHaveProperty('firstTask')
+  expect(await registry.firstTaskTaken(row.agentId)).toBe(false)
+  expect(await registry.firstTaskTaken('gone')).toBe(false)
+  expect((await registry.takeFirstTask(row.agentId))).toBeNull()
 })
 
 it('an unbound agent keeps its task', async () => {
@@ -80,13 +114,35 @@ it('an unbound agent whose launch failed gives its task up', async () => {
   registry.setLaunch(row.agentId, { state: 'failed', error: 'FIRST_TASK_NOT_TAKEN' })
   expect((await registry.takeFirstTask(row.agentId))).toBe(TASK)
   expect(disk()[0]).not.toHaveProperty('firstTask')
+  expect(disk()[0]).not.toHaveProperty('firstTaskTyped')
 })
 
-it('a registry that cannot save keeps the task', async () => {
+it('a bound agent whose launch failed gives its typed task up, never to be typed', async () => {
+  const { registry, row } = await bound()
+  await registry.takeFirstTask(row.agentId)
+  expect(disk()[0].firstTaskTyped?.text).toBe(TASK)
+  registry.setLaunch(row.agentId, { state: 'failed', error: 'FIRST_TASK_NOT_TAKEN' })
+  expect((await registry.takeFirstTask(row.agentId))).toBeNull()
+  expect(disk()[0]).not.toHaveProperty('firstTaskTyped')
+  expect(disk()[0]).not.toHaveProperty('firstTask')
+})
+
+it('a registry that cannot save keeps the task untyped', async () => {
   const { registry, row } = await bound()
   writeFileSync(join(root, 'registry.json'), '{unreadable', { mode: 0o600 })
   await expect((async () => (await registry.takeFirstTask(row.agentId)))()).rejects.toThrow()
   expect(registry.byAgent(row.agentId)?.firstTask).toBe(TASK)
+  expect(registry.byAgent(row.agentId)).not.toHaveProperty('firstTaskTyped')
+})
+
+it('a registry that cannot save keeps a typed task typed', async () => {
+  const { registry, row } = await bound()
+  await registry.takeFirstTask(row.agentId)
+  writeFileSync(join(root, 'registry.json'), '{unreadable', { mode: 0o600 })
+  await expect(registry.untypeFirstTask(row.agentId, TASK)).rejects.toThrow()
+  await expect(registry.firstTaskTaken(row.agentId)).rejects.toThrow()
+  expect(registry.byAgent(row.agentId)?.firstTaskTyped?.text).toBe(TASK)
+  expect(registry.byAgent(row.agentId)).not.toHaveProperty('firstTask')
 })
 
 it('inside a reconcile transaction it is taken only after the commit', async () => {
@@ -99,6 +155,17 @@ it('inside a reconcile transaction it is taken only after the commit', async () 
   })
   await expect(taken).resolves.toBe(TASK)
   expect(disk()[0]).not.toHaveProperty('firstTask')
+  expect(disk()[0].firstTaskTyped?.text).toBe(TASK)
+})
+
+it('a bind keeps the typed task', async () => {
+  const { registry, row } = await bound()
+  await registry.takeFirstTask(row.agentId)
+  const typed = registry.byAgent(row.agentId)!.firstTaskTyped
+  expect(typed?.text).toBe(TASK)
+  const bind = (await registry.register({ engine: 'openclaw', sessionId: SESSION, runtimes, cwd: root }))!
+  expect(bind.entry.firstTaskTyped).toEqual(typed)
+  expect(disk()[0].firstTaskTyped).toEqual(typed)
 })
 
 it('the shell an archived agent leaves behind carries no task', async () => {
@@ -119,10 +186,51 @@ it('an agent whose engine exits to its shell drops the task, and says so', async
   expect(lines.filter(line => line.includes(TASK))).toEqual([])
 })
 
+it('an agent whose engine exits after its task was typed drops the typed task', async () => {
+  const { registry, row } = await bound()
+  await registry.takeFirstTask(row.agentId)
+  expect(disk()[0].firstTaskTyped?.text).toBe(TASK)
+  expect((await releaseRegistryEngine(registry, row.agentId))!.firstTaskTyped).toBeUndefined()
+  await registry.flush()
+  expect(disk()[0]).not.toHaveProperty('firstTaskTyped')
+  expect(lines.filter(line => line.includes('first task dropped'))).toEqual([])
+})
+
 it('a saved row keeps only a text task', async () => {
   const { strictPersistedRow } = await pending()
   const row = disk()[0]
   expect(strictPersistedRow({ ...row, firstTask: 42 })!.firstTask).toBeUndefined()
   expect(strictPersistedRow({ ...row, firstTask: '' })!.firstTask).toBeUndefined()
   expect(strictPersistedRow({ ...row, firstTask: 'x' })!.firstTask).toBe('x')
+})
+
+const MALFORMED_TYPED: unknown[] = ['x', null, 1, { text: '', at: 1 }, { text: 42, at: 1 }, { text: 'x' }, { text: 'x', at: 0 },
+  { text: 'x', at: -1 }, { text: 'x', at: Infinity }, { text: 'x', at: '1' }]
+
+it('a saved row keeps a typed task only as a text and a moment, over an untyped one', async () => {
+  const { strictPersistedRow } = await pending()
+  const row = disk()[0]
+  for (const firstTaskTyped of MALFORMED_TYPED) {
+    const read = strictPersistedRow({ ...row, firstTaskTyped })!
+    expect(read).not.toHaveProperty('firstTaskTyped')
+    expect(read.firstTask).toBe(TASK)
+  }
+  const read = strictPersistedRow({ ...row, firstTaskTyped: { text: 'x', at: 5, more: true } })!
+  expect(read.firstTaskTyped).toEqual({ text: 'x', at: 5 })
+  expect(read).not.toHaveProperty('firstTask')
+})
+
+it('the next daemon reads a typed task over an untyped one, and drops a malformed one', async () => {
+  const { row } = await pending()
+  const saved = disk()[0]
+  writeFileSync(join(root, 'registry.json'), JSON.stringify([{ ...saved, firstTaskTyped: { text: TASK, at: 5 } }]), { mode: 0o600 })
+  const typed = (await load()).registry.byAgent(row.agentId)!
+  expect(typed.firstTaskTyped).toEqual({ text: TASK, at: 5 })
+  expect(typed).not.toHaveProperty('firstTask')
+  for (const firstTaskTyped of MALFORMED_TYPED) {
+    writeFileSync(join(root, 'registry.json'), JSON.stringify([{ ...saved, firstTaskTyped }]), { mode: 0o600 })
+    const untyped = (await load()).registry.byAgent(row.agentId)!
+    expect(untyped).not.toHaveProperty('firstTaskTyped')
+    expect(untyped.firstTask).toBe(TASK)
+  }
 })
