@@ -78,9 +78,6 @@ module.exports = {
       // URL (`-fsSL` already follows redirects).
       { source: '/cli/install.sh', destination: 'https://cdn.autonomous.ai/harness/cli/install.sh', permanent: true },
       { source: '/desktop/install.sh', destination: 'https://cdn.autonomous.ai/harness/desktop/install.sh', permanent: true },
-      // Harness Device's one line on Linux; release-device.yml uploads scripts/device-install.sh there with every release
-      // that carries Linux.
-      { source: '/device/install.sh', destination: 'https://cdn.autonomous.ai/harness/device/install.sh', permanent: true },
     ]
   },
   // Image optimization for mobile
@@ -110,6 +107,11 @@ module.exports = {
         // Older desktop builds consume snapshots without following redirects.
         { source: '/explore/:id/snapshot', destination: '/hub/:id/snapshot' },
         { source: '/explore/:id/download', destination: '/hub/:id/download' },
+        // Harness Device's one line on Linux, served from the CDN in place: no /device/... path redirects, so the
+        // home page's redirect to /device reaches no other page. Before the files, so no /device route can take it;
+        // the CDN's headers, its content type among them, pass through. release-device.yml uploads
+        // scripts/device-install.sh there with every release that carries Linux.
+        { source: '/device/install.sh', destination: 'https://cdn.autonomous.ai/harness/device/install.sh' },
         // `hn view` links open the web app's viewer at /?viewer=1 (tui/src/viewer.rs).
         { source: '/', has: [{ type: 'query', key: 'viewer' }], destination: '/harness-web/index.html' },
         { source: '/s/:id', destination: '/harness-web/index.html' },
