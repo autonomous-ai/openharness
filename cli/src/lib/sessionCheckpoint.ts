@@ -8,7 +8,7 @@ import { engineKeepsTranscriptFile, type RegisteredSession } from './registry.js
 import { controlTranscriptEvidence } from '../engines/transcriptBindings.js'
 import { IdentityReadUnavailable } from '../engines/kit/identityScan.js'
 import { nativeFileKey } from '../engines/kit/nativePaths.js'
-import { atomicWriteJson, readPrivateStateFile, secureStateDirectory } from './secureState.js'
+import { AtomicWriteUnconfirmed, atomicWriteJson, readPrivateStateFile, secureStateDirectory, syncStateDirectory } from './secureState.js'
 import { findResumedTranscript } from './sessionRepair.js'
 import { CheckpointStages, type CheckpointStage } from './checkpointStages.js'
 import { databaseCheckpointEvidence, type DatabaseCheckpointProof } from './databaseCheckpoint.js'
@@ -41,6 +41,7 @@ export interface CheckpointDeps {
 }
 export class SessionCheckpointStore {
   private readonly stages: CheckpointStages
+  private publicationUnconfirmed = false
   constructor(private readonly directory = join(env.ADAPTER_DATA_DIR, 'session-checkpoints'), private readonly deps: CheckpointDeps = {}) {
     this.stages = new CheckpointStages(join(directory, '.stages'))
   }
@@ -85,9 +86,14 @@ export class SessionCheckpointStore {
       databaseProof?.verify()
     }
     const destination = join(this.directory, file)
-    let committed = false
+    let published = false
     let previous: Checkpoint | null = null
     try {
+      if (this.publicationUnconfirmed) {
+        // A visible manifest cannot be reused until its earlier directory write is confirmed.
+        syncStateDirectory(this.directory)
+        this.publicationUnconfirmed = false
+      }
       current()
       try { previous = JSON.parse(readPrivateStateFile(manifest, 16384)) as Checkpoint } catch (e) {
         if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e
@@ -238,10 +244,20 @@ export class SessionCheckpointStore {
       current()
       authority?.verify()
       saveScreen()
-      // Publish only after data is durable. A failed save keeps the preceding checkpoint intact.
+      // Publish only after data is durable; an unconfirmed rename must retain both histories.
       current()
-      atomicWriteJson(manifest, checkpoint, 'trust')
-      committed = true
+      try {
+        atomicWriteJson(manifest, checkpoint, 'trust')
+        published = true
+      } catch (error) {
+        if (error instanceof AtomicWriteUnconfirmed) {
+          // The rename happened: removing its history would leave a dangling manifest.
+          published = true
+          this.publicationUnconfirmed = true
+          console.error('[checkpoint] MANIFEST_DURABILITY_UNCONFIRMED')
+        }
+        throw error
+      }
       if (previous?.file && previous.file !== file && previousFileSafe(previous.file)) {
         await rm(join(this.directory, previous.file), { force: true }).catch(() => {})
       }
@@ -262,7 +278,7 @@ export class SessionCheckpointStore {
       allocationActive = false
       if (stage) await stage.close()
       else if (!databaseStageRequested) await rm(temporary, { force: true }).catch(() => {})
-      if (!databaseStageRequested && !committed) await rm(destination, { force: true }).catch(() => {})
+      if (!databaseStageRequested && !published) await rm(destination, { force: true }).catch(() => {})
     }
   }
 }
