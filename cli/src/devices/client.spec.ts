@@ -378,7 +378,7 @@ describe('harness hardware watch', () => {
 const frontLine = (value: string) => `${JSON.stringify({ front: value })}\n`
 const front = (run: ReturnType<typeof watch>, value: string) => run.stdin.emit('data', frontLine(value))
 const told = (run: ReturnType<typeof watch>) => run.tell.mock.calls.map(([message]) => message)
-const apps = (run: ReturnType<typeof watch>) => told(run).map(message => message.app)
+const apps = (run: ReturnType<typeof watch>) => told(run).map(message => 'app' in message ? message.app : undefined)
 const coreFrames = (run: ReturnType<typeof watch>) => run.socket.send.mock.calls.map(([data]) => JSON.parse(data).type)
 // The pause the watch makes after each tell (client.ts): a change that comes in it is told as it ends.
 const TELL_GAP_MS = 100
@@ -420,7 +420,7 @@ describe('harness hardware watch: the app in front', () => {
   it('the raw value is never sent or printed', async () => {
     const raw = /mitchellh|code\.exe|safari/i
     // A listener that refuses none, so a tell that fails is read too.
-    const tell = vi.fn(async (message: Told) => message.app !== 'none')
+    const tell = vi.fn(async (message: Told) => message.type !== 'front' || message.app !== 'none')
     const run = watch({ tell })
     front(run, 'com.mitchellh.ghostty')
     await opened(run.socket)
@@ -573,7 +573,8 @@ describe('harness hardware watch: the app in front', () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
     const sent: number[] = [], taken: Array<{ app: string; at: number }> = []
     // The listener's rate on one connection: ten in any second.
-    const tell = vi.fn(async ({ app }: Told) => {
+    const tell = vi.fn(async (message: Told) => {
+      const app = 'app' in message ? message.app : ''
       const at = Date.now()
       sent.push(at)
       if (taken.length >= 10 && at - taken.at(-10)!.at < 1_000) return false
