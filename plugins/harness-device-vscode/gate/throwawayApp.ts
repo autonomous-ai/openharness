@@ -175,7 +175,8 @@ function powershellArgs(script: string): string[] {
   const encoded = Buffer.from(`[Console]::OutputEncoding = [Text.Encoding]::UTF8; ${script}`, 'utf16le').toString('base64')
   return ['-NoProfile', '-NonInteractive', '-EncodedCommand', encoded]
 }
-const POWERSHELL_OPTIONS = { encoding: 'utf8', windowsHide: true, maxBuffer: 64 * 1024 * 1024 } as const
+/** A PowerShell that hangs is ended at a clean-up step's bound (CLEAN_UP_MS), not left beside the gate. */
+const POWERSHELL_OPTIONS = { encoding: 'utf8', windowsHide: true, maxBuffer: 64 * 1024 * 1024, timeout: 30_000 } as const
 /** Never synchronous: the gate's devices listener runs in its process, and a PowerShell takes over a second to start on
  *  the VM, past the extension's 2 s for a stream's head (4 streams for 1, 2026-11-20). */
 const powershell = async (script: string): Promise<string> =>
