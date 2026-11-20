@@ -104,6 +104,20 @@ elf_machine() {
     "$(od -An -tx1 -j18 -N2 "$1" | tr -d ' \n')" == "$2" ]]
 }
 
+# The runtime in front of the AppImage, which Tauri's bundler takes from upstream unpinned (release-build.sh): one
+# linked dynamically, the kind that needs libfuse2, names a program interpreter (PT_INTERP, p_type 3) and the static
+# one names none. ELF64 little-endian: e_phoff at 32, e_phentsize at 54, e_phnum at 56, each p_type first in its entry.
+static_runtime() {
+  local offset size count index
+  offset="$(od -An -tu8 -j32 -N8 "$1" | tr -d ' \n')" &&
+    size="$(od -An -tu2 -j54 -N2 "$1" | tr -d ' \n')" &&
+    count="$(od -An -tu2 -j56 -N2 "$1" | tr -d ' \n')" &&
+    ((count > 0)) &&
+    for ((index = 0; index < count; index++)); do
+      [[ "$(od -An -tu4 -j$((offset + index * size)) -N4 "$1" | tr -d ' \n')" != 3 ]] || return 1
+    done
+}
+
 # Get-AuthenticodeSignature only reads the file. Its path reaches PowerShell through the environment, not the
 # command's text: the $env in single quotes is PowerShell's.
 # shellcheck disable=SC2016
@@ -159,6 +173,7 @@ case "$os" in
     appimage="$dir/Harness-Device-linux-$arch.AppImage"
     check "the AppImage and its update signature" with_signature "$appimage"
     check "the AppImage is $(uname -m)" elf_machine "$appimage" "$machine"
+    check "the AppImage's runtime is static: it needs no libfuse2" static_runtime "$appimage"
     check "the AppImage's update signature" update_signed "$appimage"
     check "the update signature is for $version" signed_version "$appimage"
     ;;

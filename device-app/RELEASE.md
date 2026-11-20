@@ -106,8 +106,8 @@ The first Windows and Linux release:
   (`requireSignedVersion`); the dmg holds the app and an `Applications` link; `spctl` and `stapler validate` accept
   the app and the dmg. On Windows (`--signed`): each installer's update signature and its version, its Authenticode
   signature, and the `harness-device.exe` it packs (read out with 7-Zip): its Authenticode signature, kept through
-  NSIS, and its version. On Linux: the AppImage's arch and its update signature and version. Each prints
-  `ok: <check>`, or `FAILED: <check>` and stops.
+  NSIS, and its version. On Linux: the AppImage's arch, its static runtime, and its update signature and version.
+  Each prints `ok: <check>`, or `FAILED: <check>` and stops.
 - **Nothing reaches GCS without `publish`.** Only it and `sign-windows` hold `id-token: write`, and only `publish`
   authenticates to GCP; that `sign-windows`'s token (subject `…:environment:release`) gets no GCS credential is GCP's
   workload identity provider's condition to hold. `build` has no GCS credential.
@@ -160,8 +160,9 @@ on Linux it puts the AppImage at `~/.local/opt/Harness-Device.AppImage` and list
 ## Linux
 
 **No `libfuse2`.** The AppImage starts on the static type2 runtime Tauri's bundler puts in front of it: `file -L`
-reads `static-pie linked`. Desktop's AppImage, from `appimagetool`, is the same. `scripts/e2e/appimage-starts.sh`
-proves an AppImage starts from its FUSE mount on a computer without `libfuse2`.
+reads `static-pie linked`. The bundler takes that runtime from upstream unpinned, so `release-check.sh` refuses one that
+names a program interpreter, as a runtime linked to `libfuse2` does. Desktop's AppImage, from `appimagetool`, is the
+same. `scripts/e2e/appimage-starts.sh` proves an AppImage starts from its FUSE mount on a computer without `libfuse2`.
 
 **The one line:** `curl -fsSL https://harness.autonomous.ai/device/install.sh | bash`. Its source is
 `website/scripts/device-install.sh`; `/device/install.sh` redirects for good to
