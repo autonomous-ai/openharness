@@ -16,8 +16,9 @@ import { DIAL_PLUGIN_ID } from './dialSkill.js'
 export const MARKETPLACE = 'openharness'
 export const MIN_CLAUDE = '2.1.287'
 
-/** A call's exit code (null: it did not exit, as at a kill) and what it wrote. */
-export interface ClaudeAnswer { code: number | null; stdout: string; stderr: string }
+/** A call's exit code (null: it did not exit, as at a kill) and what it wrote. [refused]: on Windows a batch file
+ *  Harness does not run (claudeRunner), so nothing ran. */
+export interface ClaudeAnswer { code: number | null; stdout: string; stderr: string; refused?: true }
 export type ClaudeRun = (args: string[], timeoutMs: number) => Promise<ClaudeAnswer>
 
 export interface ClaudeDeps {
@@ -33,7 +34,7 @@ export interface ClaudeStatus {
 }
 
 /** Which call failed: a fixed word the devices count, where Claude Code's own line could name a path. */
-export type ClaudeStep = 'unsupported' | 'list' | 'marketplace' | 'install' | 'enable' | 'disable' | 'uninstall' | 'update'
+export type ClaudeStep = 'unsupported' | 'launcher' | 'list' | 'marketplace' | 'install' | 'enable' | 'disable' | 'uninstall' | 'update'
 export type ClaudeResult = { ok: true } | { ok: false; error: string; step: ClaudeStep }
 /** What the devices' setup did: installed or updated the plugin; found it current, on as it should be; or found it absent,
  *  not on as the person left it, and ran nothing for it. */
@@ -47,20 +48,21 @@ const LOCAL_MS = 15_000
 /** `claude plugin list --json` grows with every installed plugin; past this the output is not ours to read. */
 const MAX_OUTPUT_BYTES = 1024 * 1024
 const UNSUPPORTED: ClaudeFailure = { ok: false, error: `Claude Code ${MIN_CLAUDE} or later is needed.`, step: 'unsupported' }
+const LAUNCHER: ClaudeFailure = { ok: false, error: 'Harness cannot run this claude launcher.', step: 'launcher' }
 const NO_ANSWER = 'Claude Code did not answer.'
 const UNLISTED = 'Claude Code did not list its plugins.'
 
 /** [bin] run with no shell, its stdin closed; [env] the child's environment, the process's own by default. Its time
  *  ends it with SIGKILL, as the engine lookup's shell: a `claude` that does not end on TERM would hold the pass. On
  *  Windows an npm install's `claude.cmd` is started as the program it runs, hidden; a batch file that is not such a
- *  shim only cmd.exe could run, and is no answer. */
+ *  shim only cmd.exe could run, and is refused. */
 export function claudeRunner(bin: string, env?: NodeJS.ProcessEnv, platform: NodeJS.Platform = process.platform): ClaudeRun {
   return (args, timeoutMs) => new Promise((resolve) => {
     let program
     try {
       program = windowsProgram(bin, args, { platform, environment: env ?? process.env })
     } catch {
-      resolve({ code: null, stdout: '', stderr: '' })
+      resolve({ code: null, stdout: '', stderr: '', refused: true })
       return
     }
     const child = execFile(program.file, program.args,
@@ -161,9 +163,13 @@ function supports(platform: NodeJS.Platform, claudeVersion: string | null): bool
   return (platform === 'darwin' || platform === 'linux' || platform === 'win32') && !!claudeVersion && atLeast(claudeVersion, MIN_CLAUDE)
 }
 
-/** [run] when its Claude Code can take the plugin, asked with one `--version`: an old one is asked nothing more. */
-async function supportedRun({ run, platform }: ClaudeDeps): Promise<ClaudeRun | null> {
-  return run && supports(platform, versionIn(await askVersion(run), platform)) ? run : null
+/** [run] when its Claude Code can take the plugin, asked with one `--version`: an old one is asked nothing more, nor a
+ *  launcher Harness does not run. */
+async function supportedRun({ run, platform }: ClaudeDeps): Promise<ClaudeRun | ClaudeFailure> {
+  if (!run) return UNSUPPORTED
+  const answer = await askVersion(run)
+  if (answer.refused) return LAUNCHER
+  return supports(platform, versionIn(answer, platform)) ? run : UNSUPPORTED
 }
 
 /** [run], and on Windows only once its `--version` answered: the desktop app's answer has nothing of Claude Code's to
@@ -171,6 +177,7 @@ async function supportedRun({ run, platform }: ClaudeDeps): Promise<ClaudeRun | 
 async function claudeCodeRun({ run, platform }: ClaudeDeps): Promise<ClaudeRun | ClaudeFailure | null> {
   if (!run || platform !== 'win32') return run
   const answer = await askVersion(run)
+  if (answer.refused) return LAUNCHER
   if (answer.code !== 0) return failure(answer.stderr, 'list')
   return desktopApp(answer, platform) ? null : run
 }
@@ -236,7 +243,7 @@ async function install(run: ClaudeRun): Promise<ClaudeFailure | null> {
 
 export async function claudeEnable(deps: ClaudeDeps): Promise<ClaudeResult> {
   const run = await supportedRun(deps)
-  if (!run) return UNSUPPORTED
+  if (typeof run !== 'function') return run
   const listed = await userEntry(run)
   if (!listed.ok) return listed
   if (!listed.entry) return await install(run) ?? { ok: true }
@@ -248,7 +255,7 @@ export async function claudeEnable(deps: ClaudeDeps): Promise<ClaudeResult> {
  *  person turned off is theirs: only `harness device claude enable` turns it back on. */
 export async function claudeSetUp(deps: ClaudeDeps): Promise<ClaudeSetup> {
   const run = await supportedRun(deps)
-  if (!run) return UNSUPPORTED
+  if (typeof run !== 'function') return run
   const listed = await userEntry(run)
   if (!listed.ok) return listed
   if (listed.entry) return { ok: true, outcome: listed.entry.enabled === true ? 'current' : 'absent' }
@@ -276,7 +283,7 @@ export async function claudeDisable(deps: ClaudeDeps): Promise<ClaudeResult> {
  *  there already, so only this home's settings change. One already on there runs nothing more. */
 export async function claudeHomeEnable(deps: ClaudeDeps): Promise<ClaudeResult> {
   const run = await supportedRun(deps)
-  if (!run) return UNSUPPORTED
+  if (typeof run !== 'function') return run
   const listed = await userEntry(run)
   if (!listed.ok) return listed
   if (listed.entry?.enabled === true) return { ok: true }
@@ -301,7 +308,7 @@ export async function claudeHomeDisable(deps: ClaudeDeps): Promise<ClaudeResult>
  */
 export async function claudeUpdate(deps: ClaudeDeps): Promise<ClaudeSetup> {
   const run = await supportedRun(deps)
-  if (!run) return UNSUPPORTED
+  if (typeof run !== 'function') return run
   const before = await userEntry(run)
   if (!before.ok) return before
   if (before.entry?.enabled !== true) return { ok: true, outcome: 'absent' }

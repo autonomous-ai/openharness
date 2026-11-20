@@ -22,8 +22,10 @@ export const VSCODE_RUN_MS = 60_000
 export const VSCODE_RECORD_MAX_BYTES = 8 * 1024 * 1024
 export type VscodeEditor = 'vscode' | 'cursor'
 export type VscodeStatus = { state: 'absent' } | { state: 'off' } | { state: 'on'; version: string }
-export type VscodeFailure = 'no-code' | 'timeout' | 'failed'
+/** `launcher`: on Windows a batch file that is not the editor's own launcher, never run (lib/windows/program.ts). */
+export type VscodeFailure = 'no-code' | 'launcher' | 'timeout' | 'failed'
 export type VscodeChange = VscodeStatus | (VscodeStatus & { error: VscodeFailure })
+export interface VscodeRan { code: number | null; timedOut: boolean; refused?: true }
 /** The extension as cli.js carries it: its package.json's text and its one bundled file. */
 export interface VscodeExtensionFiles { manifest: string; main: string }
 export interface VscodeExtensionDeps {
@@ -43,8 +45,8 @@ export interface VscodeExtensionDeps {
   /** A file's text; null when it is missing, larger than `maxBytes` or cannot be read. */
   read(path: string, maxBytes: number): string | null
   /** The editor's own CLI, with no shell. `code` is null when it was killed or could not start; on Windows, also when
-   *  its launcher is not one Harness starts (lib/windows/program.ts). */
-  run(file: string, args: readonly string[], timeoutMs: number): Promise<{ code: number | null; timedOut: boolean }>
+   *  its launcher is not one Harness starts (lib/windows/program.ts), which is `refused`: nothing ran. */
+  run(file: string, args: readonly string[], timeoutMs: number): Promise<VscodeRan>
   /** Null in a run from the sources, which carries no built extension. */
   files(): VscodeExtensionFiles | null
   /** A new folder only this account can read. */
@@ -180,6 +182,7 @@ export async function vscodeEnable(deps: VscodeExtensionDeps): Promise<VscodeCha
     deps.write(vsix, packVsix(files))
     // --force: the same version again, or an older one, is installed as asked rather than refused.
     const ran = await deps.run(cli, ['--install-extension', vsix, '--force'], VSCODE_RUN_MS)
+    if (ran.refused) return { state: 'off', error: 'launcher' }
     if (ran.timedOut) return { state: 'off', error: 'timeout' }
     if (ran.code !== 0) return FAILED
   } catch {
@@ -198,7 +201,7 @@ export async function vscodeDisable(deps: VscodeExtensionDeps): Promise<VscodeCh
   let failure: VscodeFailure = 'no-code'
   if (cli !== null) {
     const ran = await deps.run(cli, ['--uninstall-extension', VSCODE_EXTENSION_ID], VSCODE_RUN_MS)
-    failure = ran.timedOut ? 'timeout' : 'failed'
+    failure = ran.refused ? 'launcher' : ran.timedOut ? 'timeout' : 'failed'
   }
   const after = vscodeStatus(deps)
   return after.state === 'on' ? { ...after, error: failure } : after
@@ -273,9 +276,9 @@ function readBounded(path: string, maxBytes: number): string | null {
 /** [file] run with no shell, reading and writing nothing: no output of its is used. Its time ends it with SIGKILL: a
  *  `code` that does not end on TERM would hold the command or the devices' setup. On Windows the launcher is read at
  *  every run for the editor's `.exe` and CLI script, as an update renames the script's folder. */
-function runFile(file: string, args: readonly string[], timeoutMs: number, platform: NodeJS.Platform): Promise<{ code: number | null; timedOut: boolean }> {
+function runFile(file: string, args: readonly string[], timeoutMs: number, platform: NodeJS.Platform): Promise<VscodeRan> {
   let program: Program
-  try { program = windowsProgram(file, args, { platform }) } catch { return Promise.resolve({ code: null, timedOut: false }) }
+  try { program = windowsProgram(file, args, { platform }) } catch { return Promise.resolve({ code: null, timedOut: false, refused: true }) }
   return new Promise((resolve) => {
     // A process group of its own, and the time kills the group: VS Code's `code` on macOS and Linux is a script that
     // starts Electron as a child and waits for it, so a kill of the script alone would leave the install running.
