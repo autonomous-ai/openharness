@@ -153,8 +153,10 @@ each red on `main`.
    `firstTask`, waiting untyped (typed only into an empty box on a pane that can send, the existing path); or
    `firstTaskTyped`, typed and not yet confirmed, which a daemon never pastes. A daemon that finds `firstTaskTyped`
    after a restart:
-   - counts it confirmed, and removes it, once OpenClaw's store holds a user row for the key written after `at`
-     (though the daemon was down when it landed);
+   - counts it confirmed, and removes it, once OpenClaw's store holds a user row for the key (or one of the last
+     three keys it moved off) written after `at` and before this daemon adopted it (though the daemon was down when
+     it landed); a later row is a turn the stream confirms, and a task this daemon typed itself is confirmed by its
+     turn, never read from the store (final review: a store read racing the turn's start emptied the queue);
    - reads the agent `starting` until then, with the 3-minute bound started again in memory at the restart and paused
      while held or starting, as today (a Gateway that comes back late still gets the task);
    - on a pane that can send with a box holding exactly the task, gives the one Enter the confirmation path gives;
