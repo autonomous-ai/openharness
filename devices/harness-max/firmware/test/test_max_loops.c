@@ -212,11 +212,11 @@ static void test_clock(void)
     max_m.idle_from = T0;
     render(T0);
     CHECK(max_motion_ms(T0) == MAX_WAKE_MS);
-    // Ambient loops nothing, whatever the agents do.
+    // Ambient loops nothing, whatever the agents do: the render task wakes only for its pets' next step.
     three();
     max_show(MAX_VIEW_AMBIENT);
     render(T0 + 10);
-    CHECK(max_motion_ms(T0 + 10) == MAX_WAKE_MS);
+    CHECK(max_motion_ms(T0 + 10) == max_pet_next_ms("claude", POD_SCENE_RELAX, T0 + 10));
     // A page's loops start when it comes up; the agent page's are App Detail's.
     max_show(MAX_VIEW_OVERVIEW);
     render(T0 + 500);
@@ -230,6 +230,58 @@ static void test_clock(void)
     for (uint32_t t = 1533; t < 3000; t += 33) render(T0 + t);
     CHECK(max_layer_painted() == painted && pod_cell_bakes() == bakes);
     CHECK(max_motion_ms(T0 + 2985) > 0 && max_motion_ms(T0 + 2985) <= MAX_LOOP_FRAME_MS);
+}
+
+// Ambient's pets relax as V3's (ambient_page.dart PetView): they play by the clock, and a step changes the glass only
+// where the pets stand. With no pet on it (no agents, no link, an engine shown by its logo) the render task sleeps.
+static void test_ambient_pets(void)
+{
+    static ht_scene_t before;
+    ht_damage_t d;
+    three();
+    max_show(MAX_VIEW_AMBIENT);
+    render(T0);
+    const uint32_t step = max_motion_ms(T0);
+    CHECK(step > 0 && step < MAX_WAKE_MS);
+    // Round a few of its steps the pets move, the clock, the stars and the words stay.
+    bool moved = false;
+    uint32_t t = T0;
+    for (int i = 0; i < 40; i++) {
+        t += max_motion_ms(t) ? max_motion_ms(t) : 1;
+        before = S;
+        render(t);
+        CHECK(max_motion_ms(t) > 0 && max_motion_ms(t) < MAX_WAKE_MS);
+        ht_damage(&before, &S, &d);
+        moved |= d.pixels > 0;
+        for (int k = 0; k < d.count; k++)
+            CHECK(d.rect[k].x >= DX(560) - DX(133) && d.rect[k].x + d.rect[k].w <= DX(1110) + DX(133));
+    }
+    CHECK(moved);
+    // The Pro's Codex relaxes too (V3's idled: its art had no relaxing scene).
+    const char *const one[] = {"x"};
+    max_ui_reset();
+    max_ui_link(true, "MacBook Pro", 0);
+    roster_of(one, 1, "codex");
+    max_show(MAX_VIEW_AMBIENT);
+    render(T0);
+    CHECK(pod_pet_has("codex", POD_SCENE_RELAX));
+    CHECK(max_motion_ms(T0) == max_pet_next_ms("codex", POD_SCENE_RELAX, T0));
+    // An engine with no pet: its logo holds still.
+    max_ui_reset();
+    max_ui_link(true, "MacBook Pro", 0);
+    roster_of(one, 1, "aider");
+    max_show(MAX_VIEW_AMBIENT);
+    render(T0);
+    CHECK(!pod_pet_for("aider") && max_motion_ms(T0) == MAX_WAKE_MS);
+    // No agents, or no link: nothing moves.
+    max_ui_reset();
+    max_ui_link(true, "MacBook Pro", 0);
+    max_show(MAX_VIEW_AMBIENT);
+    render(T0);
+    CHECK(max_motion_ms(T0) == MAX_WAKE_MS);
+    max_ui_reset();
+    render(T0);
+    CHECK(max_m.view == MAX_VIEW_AMBIENT && max_motion_ms(T0) == MAX_WAKE_MS);
 }
 
 // Between two loop frames the glass changes only where something loops: a working agent's rail and dot, an asking
@@ -520,6 +572,7 @@ int main(void)
     test_rail();
     test_pet_still();
     test_clock();
+    test_ambient_pets();
     test_damage();
     test_band();
     test_inbox();

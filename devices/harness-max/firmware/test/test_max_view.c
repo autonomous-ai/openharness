@@ -641,18 +641,24 @@ static void test_ambient(void)
     CHECK(word("15") && word("07") && word("Wednesday 18 November") && word("All quiet"));
     CHECK(word("15")->pro_font == &ph_num_230);
     check_glass();
-    CHECK(max_motion_ms(T0) == MAX_WAKE_MS);   // its pets relax holding one frame, its stars hold still
+    // Its pets relax as V3's, playing: the render task wakes for the first of their next steps. Its stars hold still.
+    uint32_t step = MAX_WAKE_MS;
+    for (int i = 0; i < 3; i++) {
+        const uint32_t ms = max_pet_next_ms(max_m.agents[i].engine, POD_SCENE_RELAX, T0);
+        if (pod_pet_for(max_m.agents[i].engine) && ms < step) step = ms;
+    }
+    CHECK(step < MAX_WAKE_MS && max_motion_ms(T0) == step);
     // No wall clock yet: no clock.
     max_ui_wall(false, 0, 0, 0, 1, 0);
     render_at(T0);
     CHECK(!word("15") && word("All quiet"));
     max_ui_agents(NULL, 0, T0);
     render_at(T0);
-    CHECK(word("No agents yet"));
+    CHECK(word("No agents yet") && max_motion_ms(T0) == MAX_WAKE_MS);
     max_ui_reset();
     max_m.view = MAX_VIEW_AMBIENT;
     render_at(T0);
-    CHECK(word("Not connected") && HITS_ARE(MAX_HIT_WAKE));
+    CHECK(word("Not connected") && HITS_ARE(MAX_HIT_WAKE) && max_motion_ms(T0) == MAX_WAKE_MS);
 }
 
 // ---- the apps' icons ----

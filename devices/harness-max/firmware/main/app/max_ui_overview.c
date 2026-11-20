@@ -7,8 +7,8 @@
 // slivers: its pet smaller and lower, its words gone. The row moves as V3's (max_ui_row.c): an agent opening widens
 // over its neighbours as they narrow, its face fading and its panel coming in, and the row follows the finger. An
 // agent between looks is drawn on the glass as a cell is, dimmed by its colours and cut to its window (max_ui_layer.c).
-// Ambient: the clock large, the date, a few still stars, the agents' pets relaxing, and what the bar has to say ("All
-// quiet").
+// Ambient: the clock large, the date, a few still stars, the agents' pets relaxing as V3's (they play), and what the
+// bar has to say ("All quiet").
 #include <stdio.h>
 #include <string.h>
 
@@ -408,7 +408,7 @@ static void stars(ht_scene_t *s)
     }
 }
 
-void max_draw_ambient(ht_scene_t *s)
+void max_draw_ambient(ht_scene_t *s, uint32_t now_ms)
 {
     static const char *const DAYS[] = {"Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"};
     static const char *const MONTHS[] = {"January", "February", "March", "April", "May", "June", "July", "August",
@@ -423,11 +423,15 @@ void max_draw_ambient(ht_scene_t *s)
     }
     const char *words = !max_m.link ? "Not connected" : !max_m.count ? "No agents yet" : "All quiet";
     max_text_right(s, WORDS_R, WORDS_CY, DX(320), &ph_sb_34, INK, words);
-    // The first agents of the ring, relaxing, holding one frame.
+    // The first agents of the ring relaxing as V3's (ambient_page.dart): they play, the render task waking for their
+    // next step. An engine with no pet shows its logo, which holds still.
     const int n = max_m.link && max_m.count < AMBIENT_PETS ? max_m.count : max_m.link ? AMBIENT_PETS : 0;
     const int slot = n ? (PETS_R - PETS_L) / n : 0;
-    for (int i = 0; i < n; i++)
-        max_pet(s, max_m.agents[i].engine, POD_SCENE_RELAX, PETS_L + slot * i + slot / 2, PETS_FOOT, AMBIENT_HALF,
-                AMBIENT_PET_H, GROUND, 0, true);
+    for (int i = 0; i < n; i++) {
+        const char *engine = max_m.agents[i].engine;
+        max_pet(s, engine, POD_SCENE_RELAX, PETS_L + slot * i + slot / 2, PETS_FOOT, AMBIENT_HALF, AMBIENT_PET_H, GROUND,
+                now_ms, false);
+        if (pod_pet_for(engine)) max_motion(now_ms, max_pet_next_ms(engine, POD_SCENE_RELAX, now_ms));
+    }
     max_hit(0, 0, HT_WIDTH, HT_HEIGHT, MAX_HIT_WAKE, 0);
 }

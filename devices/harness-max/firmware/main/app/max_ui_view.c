@@ -694,7 +694,7 @@ static void page(ht_scene_t *s, uint32_t now_ms)
     if (max_m.view == MAX_VIEW_ATTENTION && attn) max_draw_attention(s, attn, now_ms);
     else if (max_m.view == MAX_VIEW_INBOX) max_draw_inbox(s, now_ms);
     else if (max_m.view == MAX_VIEW_APPS) max_draw_apps(s);
-    else if (max_m.view == MAX_VIEW_AMBIENT) max_draw_ambient(s);
+    else if (max_m.view == MAX_VIEW_AMBIENT) max_draw_ambient(s, now_ms);
     else max_draw_overview(s, now_ms);
 }
 
