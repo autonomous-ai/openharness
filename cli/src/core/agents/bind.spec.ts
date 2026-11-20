@@ -21,7 +21,7 @@ import { AttachTracker } from '../../lib/attachTracker.js'
 import { paneReadIdentity } from '../transcripts/readIdentity.js'
 import { createBinding, statBirthMs, type BindDeps, type RegisteredMeta } from './bind.js'
 import { agentStarting } from '../../lib/agentFrame.js'
-import { createInput } from '../input.js'
+import { createInput, type InputDeps } from '../input.js'
 import type { TerminalActionResult } from '../../lib/terminalTypes.js'
 import { readInlineScreen } from '../../testing/inlineScreen.js'
 import { inlineSubmission } from '../../testing/inlineSubmission.js'
@@ -1498,6 +1498,35 @@ describe('binding an OpenClaw pane, read from its screen', () => {
     processIdentity: { pid: 7714, startMarker: '2026-11-10T07:40:00Z' }, ...over,
   }) as DiscoveredTerminalAgent
   const pane = (over: Partial<RegisteredSession> = {}) => agent({ engine: 'openclaw', sessionId: '', ...over } as Partial<RegisteredSession>)
+  /** The input as core/main.ts makes it, over [row] (`a1`, on `agent:main:plain`), its pane showing [shown](): what it types
+   *  and the keys it presses. */
+  const realInput = (row: RegisteredSession, shown: () => string, over: Partial<InputDeps> = {}) => {
+    const rows = (id: string) => id === 'a1' || id === 'agent:main:plain' ? row : undefined
+    const done: TerminalActionResult = { state: 'succeeded', dispatch: 'executed' }
+    const typed: string[] = [], keys: string[] = []
+    const clients = { send: vi.fn(), sendCommander: vi.fn() }
+    const inputs = createInput({
+      readScreen: readInlineScreen,
+      submission: inlineSubmission,
+      resolve: rows,
+      byAgent: rows,
+      terminal: {
+        captureTerminal: vi.fn(async () => shown()),
+        validateTerminal: vi.fn(async () => true),
+        submitTerminalAction: vi.fn(async (_id: string, text: string) => { typed.push(text); return done }),
+        keyTerminalAction: vi.fn(async (_id: string, key: string) => { keys.push(key); return done }),
+        pinTerminalControl: vi.fn(() => () => {}),
+      },
+      deliveries: { settled: vi.fn(), canWrite: vi.fn(() => true) },
+      device: () => undefined,
+      clients,
+      agentIdFor: (sessionId) => rows(sessionId)?.agentId ?? sessionId,
+      openTurn: async () => [],
+      emit: vi.fn(),
+      ...over,
+    })
+    return { inputs, typed, keys, clients }
+  }
   /** Two passes over the pane 10 s apart: a Gateway gone holds its agent only once it has been gone that long. */
   const lasting = async (run: ReturnType<typeof setup>) => {
     vi.useFakeTimers({ toFake: ['Date'] })
@@ -2370,30 +2399,7 @@ describe('binding an OpenClaw pane, read from its screen', () => {
     it('a first task handed over is confirmed when the turn starts for its agent', async () => {
       vi.useFakeTimers()
       vi.spyOn(console, 'warn').mockImplementation(() => {})
-      const row = pane({ sessionId: 'agent:main:plain' })
-      const rows = (id: string) => id === 'a1' || id === 'agent:main:plain' ? row : undefined
-      const done: TerminalActionResult = { state: 'succeeded', dispatch: 'executed' }
-      const typed: string[] = [], keys: string[] = []
-      const clients = { send: vi.fn(), sendCommander: vi.fn() }
-      const inputs = createInput({
-        readScreen: readInlineScreen,
-        submission: inlineSubmission,
-        resolve: rows,
-        byAgent: rows,
-        terminal: {
-          captureTerminal: vi.fn(async () => ready),
-          validateTerminal: vi.fn(async () => true),
-          submitTerminalAction: vi.fn(async (_id: string, text: string) => { typed.push(text); return done }),
-          keyTerminalAction: vi.fn(async (_id: string, key: string) => { keys.push(key); return done }),
-          pinTerminalControl: vi.fn(() => () => {}),
-        },
-        deliveries: { settled: vi.fn(), canWrite: vi.fn(() => true) },
-        device: () => undefined,
-        clients,
-        agentIdFor: (sessionId) => rows(sessionId)?.agentId ?? sessionId,
-        openTurn: async () => [],
-        emit: vi.fn(),
-      })
+      const { inputs, typed, keys, clients } = realInput(pane({ sessionId: 'agent:main:plain' }), () => ready)
       const run = handing(() => ready, { input: inputs.input, submitFirstTask: (agentId, task) => inputs.input.submitFirstTask(agentId, task) })
       vi.mocked(run.deps.registry.takeFirstTask).mockResolvedValue(TASK)
       await run.binding.bindObservedAgent(tui())
@@ -2969,7 +2975,7 @@ describe('binding an OpenClaw pane, read from its screen', () => {
         expect(row.identityHold).toBe(OPENCLAW_STATES.boxHeld)
         expect(logged()).toEqual([HELD])
         expect(run.deps.announceSession).toHaveBeenCalledOnce()
-        expect(run.deps.input.ownsBox).toHaveBeenCalledWith('a1', 'my own words', { above: 0, below: 0 })
+        expect(run.deps.input.ownsBox).toHaveBeenCalledWith('a1', 'my own words', { above: 0, below: 0 }, 'no-history')
         // `/session` is never typed into a box with text.
         typedNothing()
       })
@@ -3035,7 +3041,7 @@ describe('binding an OpenClaw pane, read from its screen', () => {
         vi.mocked(run.deps.input.awaitingConfirmation).mockReturnValue(true)
         await pass(0, withBox(ready, `${TASK}\nmy own words`))
         expect(row.identityHold).toBe(OPENCLAW_STATES.boxHeld)
-        expect(run.deps.input.ownsBox).toHaveBeenCalledWith('a1', `${TASK} my own words`, { above: 0, below: 0 })
+        expect(run.deps.input.ownsBox).toHaveBeenCalledWith('a1', `${TASK} my own words`, { above: 0, below: 0 }, 'ready')
         typedNothing()
       })
 
@@ -3074,6 +3080,30 @@ describe('binding an OpenClaw pane, read from its screen', () => {
         vi.mocked(run.deps.input.ownsBox).mockReturnValue(true)
         await pass(0, withBox(ready, TASK))
         expect(row).not.toHaveProperty('identityHold')
+      })
+
+      // OpenClaw put a long refused message back with its cursor at the end: the box shows its last lines under `↑ 1 more`,
+      // and the Enter Harness waits to press would send it whole. Harness's own, never the person's.
+      it('a long message Harness awaits, scrolled in its box, holds nothing', async () => {
+        vi.useFakeTimers()
+        const message = 'Read the build log in ci/last-run.txt and find the first test that failed. Explain in two sentences why it '
+          + 'failed, quoting the assertion message exactly as the log prints it. Then open the test file, find the code under '
+          + 'test, and propose the smallest change to the code (not the test) that would make the assertion pass. Do not edit '
+          + 'any file yet: list the change as a unified diff, say which other tests call the same function, and say whether any '
+          + 'of them would change their result. Finish with one line that starts with VERDICT: and names the file you would change.'
+        let shown = ready
+        const { inputs, typed } = realInput(row, () => shown)
+        run = setup({ input: inputs.input, openclawPaneRead: vi.fn(() => true) })
+        run.byAgent.set('a1', row)
+        vi.mocked(run.deps.registry.byProcess).mockReturnValue(row)
+        inputs.submitAgent('a1', message)
+        await vi.advanceTimersByTimeAsync(1_000)
+        expect(typed).toEqual([message])
+        shown = screen('screen-box-scrolled')
+        await pass(5, shown)
+        expect(row).not.toHaveProperty('identityHold')
+        expect(logged()).not.toContain(HELD)
+        inputs.input.forget('a1')
       })
 
       it('a first task waiting behind a draft holds, and its bound is not paused by it', async () => {
