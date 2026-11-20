@@ -2063,8 +2063,8 @@ describe("scripts/install.sh: where it lays Harness", () => {
 });
 
 describe("scripts/install-cli.sh: where it lays Harness", () => {
-  // The script where a checkout holds it, beside a built dist/, run with --no-build --no-restart under `home`,
-  // `uname` answering `os` and this test's Node on PATH.
+  // The script where a checkout holds it, beside a built dist/, run with --no-build --no-restart under `home`, from
+  // `scratch`, `uname` answering `os` and this test's Node on PATH.
   const runInstallCli = (scratch: string, home: string, os: string, env: Record<string, string> = {}) => {
     const cli = join(scratch, "checkout", "cli");
     mkdirSync(join(cli, "scripts"), { recursive: true });
@@ -2074,6 +2074,7 @@ describe("scripts/install-cli.sh: where it lays Harness", () => {
     writeFileSync(join(cli, "dist", "notify.mjs"), "export {}\n");
     writeUname(scratch, os);
     return spawnSync("bash", [join(cli, "scripts", "install-cli.sh"), "--no-build", "--no-restart"], {
+      cwd: scratch,
       encoding: "utf8",
       env: { HOME: home, PATH: `${scratch}:${dirname(process.execPath)}:/usr/bin:/bin`, ...env },
     });
@@ -2118,6 +2119,30 @@ describe("scripts/install-cli.sh: where it lays Harness", () => {
       expect(readFileSync(join(own, "bin", "harness"), "utf8")).toBe(`#!/bin/sh\nexec "${node}" "${join(own, "cli", "cli.js")}" "$@"\n`);
       expect(readdirSync(join(own, "cli")).sort()).toEqual(["cli.js", "notify.mjs", "package.json"]);
       expect(readdirSync(home)).toEqual([]);
+    } finally {
+      try { process.kill(daemon, "SIGKILL"); } catch { /* already stopped */ }
+      rmSync(scratch, { recursive: true, force: true });
+    }
+  });
+
+  // Every Harness program reads a relative one under the home (src/config/envFields.ts homePath), never under the
+  // folder it was started from.
+  it("lays a relative ADAPTER_CLI_DIR, ADAPTER_DATA_DIR and HARNESS_BIN_DIR under the home", () => {
+    const scratch = mkdtempSync(join(tmpdir(), "harness-install-cli-relative-"));
+    const daemon = Number(spawnSync("/bin/sh", ["-c", "sleep 60 </dev/null >/dev/null 2>&1 & echo $!"], { encoding: "utf8" }).stdout.trim());
+    try {
+      const home = join(scratch, "home");
+      const own = join(home, "own");
+      mkdirSync(join(own, "data"), { recursive: true });
+      writeFileSync(join(own, "data", "adapter.pid"), `${daemon}\n`);
+      const node = managedNode(join(home, ".harness", "runtime"));
+      const result = runInstallCli(scratch, home, "Darwin", { ADAPTER_CLI_DIR: "own/cli", ADAPTER_DATA_DIR: "own/data", HARNESS_BIN_DIR: "own/bin" });
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toContain(`stopping the running adapter (pid ${daemon})`);
+      expect(existsSync(join(own, "data", "adapter.pid"))).toBe(false);
+      expect(readFileSync(join(own, "bin", "harness"), "utf8")).toBe(`#!/bin/sh\nexec "${node}" "${join(own, "cli", "cli.js")}" "$@"\n`);
+      expect(readdirSync(join(own, "cli")).sort()).toEqual(["cli.js", "notify.mjs", "package.json"]);
+      expect(existsSync(join(scratch, "own"))).toBe(false);
     } finally {
       try { process.kill(daemon, "SIGKILL"); } catch { /* already stopped */ }
       rmSync(scratch, { recursive: true, force: true });
