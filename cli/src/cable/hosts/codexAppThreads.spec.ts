@@ -4,10 +4,16 @@ import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFile
 import { tmpdir, userInfo } from 'node:os'
 import { join } from 'node:path'
 import { performance } from 'node:perf_hooks'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { resetCodexThreadNames } from '../../lib/sessionTitle.js'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { codexThreadName, resetCodexThreadNames } from '../../lib/sessionTitle.js'
 import { codexAppFixture, NEVER_READ, type CodexAppFixture, type FixtureThread } from '../../testing/codexAppFixture.js'
 import { CodexAppThreads, MAX_STATE_BYTES, type CodexAppRead, type CodexAppSeams } from './codexAppThreads.js'
+
+// Each of codexThreadName's answers copies the environment: the tests count them, the answers stay its own.
+vi.mock('../../lib/sessionTitle.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../lib/sessionTitle.js')>()
+  return { ...actual, codexThreadName: vi.fn(actual.codexThreadName) }
+})
 
 let root: string
 beforeEach(() => {
@@ -434,6 +440,21 @@ describe('names(ids)', () => {
     expect(reader.names([uuid(1)]).get(uuid(1))).toBe('Old')
     fx.name(uuid(1), 'New')
     expect(reader.names([uuid(1)]).get(uuid(1))).toBe('New')
+  })
+
+  it('an index that held still is not asked again; one appended to is', () => {
+    const fx = fixture()
+    fx.threads([thread(1, 20), thread(2, 10)])
+    fx.name(uuid(1), 'Alpha')
+    const reader = new CodexAppThreads(fx.home)
+    const asked = vi.mocked(codexThreadName)
+    expect(reader.names([uuid(1), uuid(2)])).toEqual(new Map([[uuid(1), 'Alpha']]))
+    asked.mockClear()
+    expect(reader.names([uuid(1), uuid(2)])).toEqual(new Map([[uuid(1), 'Alpha']]))
+    expect(asked).not.toHaveBeenCalled()
+    fx.name(uuid(2), 'Bravo')
+    expect(reader.names([uuid(1), uuid(2)])).toEqual(new Map([[uuid(1), 'Alpha'], [uuid(2), 'Bravo']]))
+    expect(asked).toHaveBeenCalledTimes(2)
   })
 })
 
