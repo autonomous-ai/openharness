@@ -8,7 +8,8 @@
  * Cursor), sent to that editor alone by its bundle id (appLink.ts), on a tap and on a rest of the dial, a rest only while
  * that editor is in front. The link was read in the extension's code, not in any document, and may change with any
  * release. On Linux, which has no bundle id, the editor is the app the process scan named and the link opens by
- * `xdg-open` once its scheme has an app (docs/plans/2026-11-19-dial-linux-design.md § 1.6); elsewhere nothing runs.
+ * `xdg-open` once its scheme has an app (docs/plans/2026-11-19-dial-linux-design.md § 1.6); on Windows the link goes
+ * with the editor's bundle id to Windows' raise (windowsRaise.ts); elsewhere nothing runs.
  * Every value came from a hook, so each is checked against its form before it reaches the link.
  *
  * The integrated terminal (docs/plans/2026-11-17-dial-vscode-extension-design.md, §3): a Claude Code or Codex agent in a
@@ -17,8 +18,9 @@
  * the editor's others. The terminal is asked for again at each verb, since a window comes and goes between looks. The
  * adapter's one `tap` is `'instead'`, for the tab's link, so a terminal's tap brings the editor itself once its line is
  * queued: by its own `open -b` on macOS, by the devices' raise of the pane's process on Linux (docs/plans/
- * 2026-11-19-dial-linux-design.md §§ 1.6, 2); elsewhere the line alone is the tap. The dial's scroll sends that window
- * the stroke's lines on a `{"scroll":<lines>,"pid":<shell>}` line while the editor is in front (§4): the extension runs
+ * 2026-11-19-dial-linux-design.md §§ 1.6, 2), by Windows' raise of the editor's bundle on Windows (windowsRaise.ts);
+ * elsewhere the line alone is the tap. The dial's scroll sends that window the stroke's lines on a
+ * `{"scroll":<lines>,"pid":<shell>}` line while the editor is in front (§4): the extension runs
  * them only while that terminal is the active one, so the adapter has no `onScreen`. A stroke whose `pageKeys` passed
  * carries `"page":true`, and the extension also presses Claude Code's page keys in that terminal
  * (docs/plans/2026-11-18-dial-vscode-claude-fullscreen-scroll-design.md).
@@ -108,6 +110,7 @@ export function createVscodeAdapter(
       // The show is queued: the editor still has to come forward, and whether `open` or the raise did is not the
       // terminal's outcome, as the opener's own `open -b` after a pane is not.
       if (mac) await deps.run(openBin, ['-b', editorBundle], RUN_TIMEOUT_MS)
+      else if (deps.windows) await deps.windows.app(editorBundle)
       else if (deps.raise) await deps.raise({ pid, app: editor })
       return true
     },

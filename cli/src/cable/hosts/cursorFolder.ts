@@ -5,7 +5,8 @@
  * Cursor documents no link to one. A multi-root window (`.code-workspace`) is opened by its first root, the folder its
  * hook names, so a tap may open a second window on that folder instead of raising the workspace's. `open -b` is
  * macOS's: on Linux the tap runs Cursor's own CLI, `cursor <folder>`, which does the same (docs/plans/
- * 2026-11-19-dial-linux-design.md § 1.6), and with no CLI found, or on Windows, nothing runs.
+ * 2026-11-19-dial-linux-design.md § 1.6), and with no CLI found nothing runs. On Windows Windows' raise runs Cursor's CLI
+ * on the folder, then brings Cursor forward (windowsRaise.ts); with no raise nothing runs.
  *
  * The folder came from a hook and becomes a command's argument: its form is checked at `paneOf` and again before
  * `open` or `cursor`, which takes it as one argument with no shell, and it must be a folder at each look and again at
@@ -19,6 +20,7 @@ import type { HostAdapter, Pane, Place } from './adapter.js'
 import { APP_BUNDLES } from './hostDetect.js'
 import { openPath } from './open.js'
 import { RUN_TIMEOUT_MS, type OrcaDeps } from './orca.js'
+import type { WindowsRaise } from './windowsRaise.js'
 
 /** The longest folder path a tap opens: Linux's PATH_MAX, above macOS's 1024. */
 const CURSOR_FOLDER_MAX = 4096
@@ -34,6 +36,8 @@ export interface CursorFolderDeps {
   isFolder(path: string): boolean
   /** Cursor's own CLI on Linux; null when none is found (devices/vscodeExtension.ts cursorFolderCli). */
   cli(): string | null
+  /** Windows' way to open the folder in Cursor, where macOS runs `open -b`; none elsewhere. */
+  windows?: WindowsRaise
 }
 
 /** `statSync(path).isDirectory()`; false for a file, a path that is not there, or any error. */
@@ -69,7 +73,7 @@ export function createCursorFolderAdapter(deps: CursorFolderDeps): HostAdapter {
     const run = deps.platform === 'linux' ? cli() : null
     return run === null ? null : [run, [folder]]
   }
-  const canFocus = (pane: Pane): boolean => inForm(pane.id) && there(pane.id) && command(pane.id) !== null
+  const canFocus = (pane: Pane): boolean => inForm(pane.id) && there(pane.id) && (!!deps.windows || command(pane.id) !== null)
 
   return {
     id: 'cursor-folder',
@@ -84,7 +88,10 @@ export function createCursorFolderAdapter(deps: CursorFolderDeps): HostAdapter {
     canFocus,
     async focus(pane) {
       // Asked again: the folder may have gone, or become a file, since the look.
-      const run = inForm(pane.id) && there(pane.id) ? command(pane.id) : null
+      if (!inForm(pane.id) || !there(pane.id)) return false
+      // The raise finds Cursor's CLI at each tap and never throws.
+      if (deps.windows) return deps.windows.cursorFolder(pane.id)
+      const run = command(pane.id)
       if (run === null) return false
       let ok = false
       try {
