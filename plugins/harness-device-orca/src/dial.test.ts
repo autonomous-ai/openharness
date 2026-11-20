@@ -44,7 +44,7 @@ function world(answers: (Ran | Promise<Ran>)[], over: Partial<DialInputs> = {}) 
   let time = 0
   const timers = new Set<Timer>()
   const scheduled: number[] = []
-  const runs: { file: string; args: readonly string[]; path: string; timeoutMs: number; maxBytes: number; signal: AbortSignal; at: number }[] = []
+  const runs: { file: string; args: readonly string[]; path: string; cwd: string; timeoutMs: number; maxBytes: number; signal: AbortSignal; at: number }[] = []
   const posts: { target: Target; body: string; signal: AbortSignal }[] = []
   const replies: (number | null | Promise<number | null>)[] = []
   const watches: Watch[] = []
@@ -227,15 +227,15 @@ function feed() {
 
 const bytes = (text: string) => new TextEncoder().encode(text)
 
-test('with no launcher the state is noHarness; ~/.local/bin/harness is asked first, then harness', async () => {
+test('with no launcher the state is noHarness; ~/.local/bin/harness is asked first, then harness, each in the home', async () => {
   const w = world([MISSING, MISSING])
   await w.until(() => w.states.length > 0)
   assert.deepEqual(w.states, [{ state: 'noHarness' }])
   assert.deepEqual(
-    w.runs.map(({ file, args, path, timeoutMs, maxBytes }) => ({ file, args, path, timeoutMs, maxBytes })),
+    w.runs.map(({ file, args, path, cwd, timeoutMs, maxBytes }) => ({ file, args, path, cwd, timeoutMs, maxBytes })),
     [
-      { file: '/h/.local/bin/harness', ...LINK },
-      { file: 'harness', ...LINK },
+      { file: '/h/.local/bin/harness', ...LINK, cwd: '/h' },
+      { file: 'harness', ...LINK, cwd: '/h' },
     ]
   )
   // The first answer that is not missing is the launcher's.
@@ -244,10 +244,21 @@ test('with no launcher the state is noHarness; ~/.local/bin/harness is asked fir
   assert.deepEqual(second.states, [{ state: 'unplugged' }])
 })
 
-test('with no home only harness is asked', async () => {
-  const w = world([MISSING], { home: '' })
+// A relative folder, or an empty one, is Orca's working folder, which can be a worktree Orca opened, whose own
+// `harness` must never run. With no absolute home there is no folder of the account's own to run in, and no Harness
+// either: it keeps its state there.
+test("only PATH's absolute folders are looked in, and with no absolute home nothing is asked", async () => {
+  const w = world([MISSING, MISSING], { path: 'node_modules/.bin::/usr/bin:.:/bin:' })
   await w.until(() => w.states.length > 0)
-  assert.deepEqual(w.runs.map((run) => run.file), ['harness'])
+  assert.deepEqual(w.runs.map(({ file, path }) => ({ file, path })), [
+    { file: '/h/.local/bin/harness', path: LINK.path },
+    { file: 'harness', path: LINK.path },
+  ])
+  for (const home of ['', 'h']) {
+    const homeless = world([MISSING, MISSING], { home })
+    await homeless.until(() => homeless.states.length > 0)
+    assert.deepEqual([homeless.runs, homeless.states], [[], [{ state: 'noHarness' }]])
+  }
 })
 
 test('a launcher that prints missing is notRunning, and the next is not asked', async () => {
@@ -925,15 +936,17 @@ const windowsLine = (fields: Record<string, unknown>) => JSON.stringify({ daemon
 const WINDOWS_READY = windowsLine({ devicesPipe: PIPE, devicesToken: TOKEN, devicesReady: true, devicesRecord: RECORD })
 const WINDOWS_UNPLUGGED = windowsLine({ devicesReady: false, devicesRecord: RECORD })
 
-test('on Windows <home>\\.harness\\bin\\harness.exe is asked first, then harness', async () => {
-  const w = world([MISSING, MISSING], ON_WINDOWS)
+// In the profile: Windows looks for a bare name in the working folder before PATH.
+test("on Windows <home>\\.harness\\bin\\harness.exe is asked first, then harness in PATH's absolute folders, each in the profile", async () => {
+  const w = world([MISSING, MISSING], { ...ON_WINDOWS, path: 'C:\\Windows\\System32;.;node_modules\\.bin;;C:\\Program Files\\nodejs' })
   await w.until(() => w.states.length > 0)
   assert.deepEqual(w.states, [{ state: 'noHarness' }])
+  const path = 'C:\\Windows\\System32;C:\\Program Files\\nodejs'
   assert.deepEqual(
-    w.runs.map(({ file, args, path, timeoutMs, maxBytes }) => ({ file, args, path, timeoutMs, maxBytes })),
+    w.runs.map(({ file, args, path, cwd, timeoutMs, maxBytes }) => ({ file, args, path, cwd, timeoutMs, maxBytes })),
     [
-      { file: `${HOME}\\.harness\\bin\\harness.exe`, ...LINK },
-      { file: 'harness', ...LINK },
+      { file: `${HOME}\\.harness\\bin\\harness.exe`, ...LINK, path, cwd: HOME },
+      { file: 'harness', ...LINK, path, cwd: HOME },
     ]
   )
 })

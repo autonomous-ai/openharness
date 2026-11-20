@@ -2,7 +2,7 @@
 import { afterEach, assert, beforeEach, test } from 'orca/testing'
 import { spawnSync } from 'node:child_process'
 import { createHmac, randomBytes } from 'node:crypto'
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import { MISSING, nodeInputs } from './inputs'
 
@@ -37,8 +37,8 @@ function script(name: string, body: string): string {
   return file
 }
 
-function bounds(extra: { path?: string; timeoutMs?: number; maxBytes?: number; signal?: AbortSignal } = {}) {
-  return { path: '/usr/bin:/bin', timeoutMs: 5_000, maxBytes: 4_096, signal: new AbortController().signal, ...extra }
+function bounds(extra: { path?: string; cwd?: string; timeoutMs?: number; maxBytes?: number; signal?: AbortSignal } = {}) {
+  return { path: '/usr/bin:/bin', cwd: dir, timeoutMs: 5_000, maxBytes: 4_096, signal: new AbortController().signal, ...extra }
 }
 
 async function serve(handle: (req: IncomingMessage, res: ServerResponse, body: string) => void, socketPath = `${dir}/devices.sock`): Promise<string> {
@@ -103,6 +103,11 @@ test("a bare name is found through the PATH it is given, not the process's own",
   mkdirSync(`${dir}/bin`)
   script('bin/hdo-tool', 'echo "found $PATH"')
   assert.equal(await nodeInputs().run('hdo-tool', [], bounds({ path: `${dir}/bin` })), `found ${dir}/bin\n`)
+})
+
+test('run starts its file in the folder it is given', async () => {
+  mkdirSync(`${dir}/home`)
+  assert.equal(await nodeInputs().run('/bin/pwd', [], bounds({ cwd: `${dir}/home` })), `${realpathSync(`${dir}/home`)}\n`)
 })
 
 test('a non-zero exit, output over maxBytes and a run past its timeout are null, and the run past its timeout is killed', async () => {
