@@ -924,9 +924,9 @@ static void nav_test_home_lands_on_room_tab(void) {
 
 // ---- Home's page list: Notices (-2) while there are notices, Working (-1) while an agent works, then the tabs ----
 static const char *pages(void) {
-    static char b[96];
-    int16_t p[POD_TABS_MAX + 2];
-    int n = pod_home_pages(&M, p, POD_TABS_MAX + 2), k = 0;
+    static char b[128];
+    int16_t p[POD_HOME_PAGES_MAX];
+    int n = pod_home_pages(&N, &M, p, POD_HOME_PAGES_MAX), k = 0;
     b[k++] = '{';
     for (int i = 0; i < n; i++) k += snprintf(b + k, sizeof b - k, "%s%d", i ? "," : "", p[i]);
     b[k++] = '}'; b[k] = 0;
@@ -993,10 +993,197 @@ static void nav_test_working_card_room(void) {
     CHECK(pod_nav_follow_tab(&N, &M) && N.depth == 3 && !strcmp(top()->agent, "a4") && N.stack[0].scroll == 1);
 }
 
+// ---- Home's list knows the apps: with a window and another app the Tabs | Apps pill picks the list, with no window it is the app cards ----
+static const pod_app_t k_apps[3] = {{"harness", "Harness", 4, 1, 1}, {"codex", "ChatGPT", 2, 0, 1}, {"vscode", "VS Code", 3, 1, 0}};
+// fresh() with the daemon's app list (count / waiting / working), Harness's ring shown.
+static void fresh_apps(void) {
+    fresh();
+    pod_model_apps_switch(&M, true);
+    pod_model_apps(&M, k_apps, 3, "harness");
+}
+// The window closes: the swarms list no tab and agents.end names none.
+static void no_window(void) {
+    pod_model_swarms(&M, NULL, NULL, NULL, 0, "", NULL, 0);
+    pod_model_view(&M, true, false);
+}
+// The app list in this order (NULL ends it): k_apps' rows by id, any other id at count 1. Harness's ring shown.
+static void apps_of(const char *a, const char *b, const char *c) {
+    const char *ids[3] = {a, b, c};
+    pod_app_t r[3];
+    int n = 0;
+    memset(r, 0, sizeof r);
+    for (; n < 3 && ids[n]; n++) {
+        snprintf(r[n].id, sizeof r[n].id, "%s", ids[n]);
+        r[n].count = 1;
+        for (int k = 0; k < 3; k++) if (!strcmp(k_apps[k].id, ids[n])) r[n] = k_apps[k];
+    }
+    pod_model_apps(&M, r, n, "harness");
+}
+static const char *cards(void) {
+    static char b[64];
+    uint8_t c[POD_APPS_MAX];
+    int n = pod_home_app_cards(&M, c, POD_APPS_MAX), k = 0;
+    b[k++] = '{';
+    for (int i = 0; i < n; i++) k += snprintf(b + k, sizeof b - k, "%s%d", i ? "," : "", c[i]);
+    b[k++] = '}'; b[k] = 0;
+    return b;
+}
+static void nav_test_home_switch(void) {
+    fresh_apps();
+    CHECK(pod_home_switch(&M));
+    pod_model_apps_switch(&M, false);
+    CHECK(!pod_home_switch(&M));
+    pod_model_apps_switch(&M, true);
+    no_window();
+    CHECK(!pod_home_switch(&M));
+    pod_model_view(&M, false, true);   // the window is back
+    CHECK(pod_home_switch(&M));
+    pod_app_t r[3];
+    memcpy(r, k_apps, sizeof r);
+    r[1].count = r[2].count = 0;   // only Harness has agents: no other app
+    pod_model_apps(&M, r, 3, "harness");
+    CHECK(!pod_home_switch(&M));
+}
+static void nav_test_home_app_cards(void) {
+    fresh_apps();
+    CHECK(!strcmp(cards(), "{1,2}") && pod_home_app_cards(&M, NULL, 0) == 2);   // the pill shows: Harness is the Tabs list
+    no_window();
+    CHECK(!strcmp(cards(), "{0,1,2}"));
+    pod_app_t r[3];
+    memcpy(r, k_apps, sizeof r);
+    r[2].count = 0;
+    pod_model_apps(&M, r, 3, "harness");
+    CHECK(!strcmp(cards(), "{0,1}"));
+}
+static void nav_test_home_pages_with_apps(void) {
+    fresh_apps();   // a1 works, a4 asks
+    CHECK(!strcmp(pages(), "{-2,-1,0,1}") && !pod_home_apps(&N, &M));
+    act(POD_A_HOME_APPS, 0, 0);
+    CHECK(!strcmp(pages(), "{-2,-1,32,33}") && pod_home_apps(&N, &M) && pod_tabs_pages_of(&N, &M) == 4);
+    CHECK(pod_home_has(&N, &M, 33) && !pod_home_has(&N, &M, 34) && !pod_home_has(&N, &M, 0));
+    no_window();
+    pod_nav_sync(&N, &M);
+    CHECK(!strcmp(pages(), "{-2,-1,32,33,34}") && !N.home_apps && pod_home_apps(&N, &M));
+    pod_model_apps(&M, NULL, 0, "");
+    CHECK(!strcmp(pages(), "{-2,-1}") && !pod_home_apps(&N, &M));
+}
+static void nav_test_home_tabs_apps_cells(void) {
+    fresh_apps();
+    M.selected = 1;
+    pod_out_t o = act(POD_A_HOME_APPS, 0, 0);
+    CHECK(o.fx == POD_FX_NONE && N.home_apps && top()->scroll == 32 && !strcmp(N.home_app, "codex"));
+    o = act(POD_A_HOME_APPS, 0, 0);   // the filled cell does nothing
+    CHECK(o.fx == POD_FX_NONE && N.home_apps && top()->scroll == 32 && !strcmp(N.home_app, "codex"));
+    o = act(POD_A_HOME_TABS, 0, 0);   // the desktop's selected tab
+    CHECK(o.fx == POD_FX_NONE && !N.home_apps && top()->scroll == 1 && !N.home_app[0]);
+    act(POD_A_HOME_TABS, 0, 0);
+    CHECK(!N.home_apps && top()->scroll == 1 && !N.home_app[0]);
+    M.selected = M.tab_count;   // no tab selected: the first tab
+    act(POD_A_HOME_APPS, 0, 0);
+    act(POD_A_HOME_TABS, 0, 0);
+    CHECK(!N.home_apps && top()->scroll == 0);
+    pod_model_apps_switch(&M, false);   // no pill: no cell to tap
+    act(POD_A_HOME_APPS, 0, 0);
+    CHECK(!N.home_apps && top()->scroll == 0);
+    pod_model_apps_switch(&M, true);
+    to_agent(0, 0);
+    act(POD_A_HOME_APPS, 0, 0);   // only Home has the pill
+    CHECK(!N.home_apps && N.depth == 3 && N.stack[0].scroll == 0 && !N.home_app[0]);
+}
+static void nav_test_home_app_kept_by_id(void) {
+    fresh_apps();
+    act(POD_A_HOME_APPS, 0, 0);
+    act(POD_A_SCROLL, 1, 0);
+    CHECK(top()->scroll == 33 && !strcmp(N.home_app, "vscode"));
+    apps_of("vscode", "harness", "codex");   // reordered: the person stays on VS Code
+    pod_nav_sync(&N, &M);
+    CHECK(top()->scroll == 32 && !strcmp(N.home_app, "vscode"));
+    apps_of("harness", "vscode", NULL);   // ChatGPT goes
+    pod_nav_sync(&N, &M);
+    CHECK(top()->scroll == 32 && !strcmp(N.home_app, "vscode"));
+    fresh_apps();
+    act(POD_A_HOME_APPS, 0, 0);
+    act(POD_A_SCROLL, 1, 0);
+    apps_of("harness", "codex", "cursor");   // VS Code goes, Cursor takes its place
+    pod_nav_sync(&N, &M);
+    CHECK(top()->scroll == 33 && !strcmp(N.home_app, "cursor"));
+    act(POD_A_SCROLL, -2, 0);   // the Working card is not an app
+    CHECK(top()->scroll == -1 && !N.home_app[0]);
+}
+static void nav_test_home_pill_goes(void) {
+    fresh_apps();
+    act(POD_A_HOME_APPS, 0, 0);
+    M.selected = 1;
+    apps_of("harness", NULL, NULL);   // the last other app goes: Tabs, on the selected tab
+    pod_nav_sync(&N, &M);
+    CHECK(!N.home_apps && top()->scroll == 1 && !pod_home_apps(&N, &M));
+    pod_model_apps(&M, k_apps, 3, "harness");
+    pod_nav_sync(&N, &M);
+    CHECK(pod_home_switch(&M) && !pod_home_apps(&N, &M) && top()->scroll == 1);
+}
+static void nav_test_home_window_returns(void) {   // the PM's open question 3: Tabs, on the selected tab
+    fresh_apps();
+    no_window();
+    pod_nav_sync(&N, &M);
+    act(POD_A_SCROLL, 1, 0);
+    CHECK(top()->scroll == 33 && !strcmp(N.home_app, "codex"));
+    static const char *x[] = {"a1", "a2", "a3"}, *y[] = {"a4"};
+    const char *const *ids[2] = {x, y};
+    uint8_t cnt[2] = {3, 1};
+    cable_swarm_t it[2] = {{"s1", "Build", 3, 3}, {"s2", "Docs", 1, 1}};
+    pod_model_swarms(&M, it, ids, cnt, 2, "s2", NULL, 0);
+    pod_model_view(&M, false, true);
+    pod_nav_sync(&N, &M);
+    CHECK(!pod_home_apps(&N, &M) && top()->scroll == 1 && !N.home_app[0]);
+}
+static void nav_test_follow_tab_leaves_apps(void) {
+    fresh_apps();
+    act(POD_A_HOME_APPS, 0, 0);
+    M.selected = 1;
+    CHECK(!pod_nav_follow_tab(&N, &M) && top()->scroll == 32);
+}
+static void nav_test_app_agents(void) {
+    fresh_apps();
+    pod_model_agent_app(&M, "a2", "codex", POD_CAPS_ALL);
+    pod_model_agent_app(&M, "a3", "codex", POD_CAPS_ALL);
+    pod_model_agent_app(&M, "a4", "vscode", POD_CAPS_ALL);
+    pod_model_apps(&M, k_apps, 3, "codex");
+    const pod_agent_t *l[POD_AGENTS_MAX];
+    CHECK(pod_app_agents(&M, "codex", l, POD_AGENTS_MAX) == 2 && !strcmp(l[0]->id, "a2") && !strcmp(l[1]->id, "a3"));
+    CHECK(pod_app_agents(&M, "codex", l, 1) == 1 && !strcmp(l[0]->id, "a2"));
+    CHECK(pod_app_agents(&M, "vscode", l, POD_AGENTS_MAX) == 0);   // not the ring shown: a stale host is not the app's
+    pod_model_apps(&M, k_apps, 3, "harness");
+    CHECK(pod_app_agents(&M, "codex", l, POD_AGENTS_MAX) == 0);
+}
+static void nav_test_home_sixteen_apps(void) {
+    fresh_apps();
+    no_window();
+    pod_app_t r[POD_APPS_MAX];
+    memset(r, 0, sizeof r);
+    for (int i = 0; i < POD_APPS_MAX; i++) { snprintf(r[i].id, sizeof r[i].id, "app%d", i); r[i].count = 1; }
+    pod_model_apps(&M, r, POD_APPS_MAX, "");
+    pod_nav_sync(&N, &M);
+    CHECK(pod_tabs_pages_of(&N, &M) == 18 && !strcmp(pages(), "{-2,-1,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47}"));
+    act(POD_A_SCROLL, 47 - top()->scroll, 0);
+    CHECK(top()->scroll == 47 && !strcmp(N.home_app, "app15"));
+    act(POD_A_SCROLL, 1, 0);
+    CHECK(top()->scroll == 47);
+}
+
 int main(void) {
     nav_test_home_notices_scroll();
     nav_test_home_pages();
     nav_test_home_clamp();
+    nav_test_home_switch();
+    nav_test_home_app_cards();
+    nav_test_home_pages_with_apps();
+    nav_test_home_tabs_apps_cells();
+    nav_test_home_app_kept_by_id();
+    nav_test_home_pill_goes();
+    nav_test_home_window_returns();
+    nav_test_follow_tab_leaves_apps();
+    nav_test_app_agents();
+    nav_test_home_sixteen_apps();
     nav_test_working_card_room();
     nav_test_home_lands_on_room_tab();
     nav_test_enter_tab_pushes();
