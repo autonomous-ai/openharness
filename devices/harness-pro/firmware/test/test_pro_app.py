@@ -1988,6 +1988,72 @@ static void agents_carry_app_and_view(void) {
     CHECK(LOCK_DEPTH == 0);
 }
 
+// a1 may talk; a2 (ChatGPT) withholds voice and approval; a3 is a plain terminal without voice.
+static void no_voice_rows(void) {
+    static const pro_agent_row_t rows[3] = {{.id = "a1", .name = "Alpha", .engine = "claude", .machine = "mac"},
+                                            {.id = "a2", .name = "Bravo", .engine = "codex", .machine = "mac", .host = "codex",
+                                             .caps_off = POD_CAP_V | POD_CAP_A},
+                                            {.id = "a3", .name = "Charlie", .engine = "terminal", .machine = "mac", .host = "",
+                                             .caps_off = POD_CAP_V}};
+    pro_app_agents(rows, 3, false, true);
+}
+
+// An agent without voice says where to go before any other per-agent reason; the link checks still come first.
+static void voice_needs_the_v_cap(void) {
+    setup();
+    no_voice_rows();
+    CHECK(pro_app_voice_block_reason("a1") == NULL);
+    CHECK(pro_app_voice_block_reason("a2") == pod_host_see_it("codex"));
+    CHECK(!strcmp(pro_app_voice_block_reason("a2"), "See it in ChatGPT"));
+    CHECK(!strcmp(pro_app_voice_block_reason("a3"), "See it in Terminal"));   // before "Choose an agent pane."
+    pro_app_question("a2", "r1", "Which?", false);
+    CHECK(!strcmp(pro_app_voice_block_reason("a2"), "See it in ChatGPT"));
+    CHECK(pro_app_voice_block_reason(NULL) == NULL);   // a start with no agent: the daemon routes it
+    now += 1000;
+    pro_app_tick();
+    static const pro_library_row_t lib[1] = {{"far", "Stylist", "codex", "Box", "idle", 5}};
+    pro_app_library(lib, 1, 0, 1);
+    CHECK(agent("far") && pro_app_voice_block_reason("far") == NULL);   // no `agent` row: voice as today
+    pro_app_link(false, NULL);
+    CHECK(!strcmp(pro_app_voice_block_reason("a2"), "Not connected"));
+    CHECK(LOCK_DEPTH == 0);
+}
+
+// A tap on an agent without voice never reaches the recorder and says "See it in <App>" for 2 s; other refusals keep 3 s.
+static void see_it_notice_lasts_two_seconds(void) {
+    setup();
+    no_voice_rows();
+    render();
+    tap(POD_A_OPEN_TAB, 0);
+    tap(POD_A_OPEN_AGENT, 1);
+    CHECK(top() == POD_V_RECAP && !strcmp(cur(), "a2"));   // done, with a recap: a tap there talks too
+    tap(POD_A_TALK, 0);
+    CHECK(R.begins == 0 && !V.open && !pod_ui_talking(&U));
+    CHECK(U.notice_on && !strcmp(U.notice, "See it in ChatGPT"));
+    const int32_t left = (int32_t)(U.notice_until - now);
+    CHECK(left > 0 && left <= 2000);
+    now = U.notice_until - 1; render();
+    CHECK(U.notice_on);
+    now = U.notice_until; render();
+    CHECK(!U.notice_on);
+    setup();
+    no_voice_rows();
+    render();
+    tap(POD_A_OPEN_TAB, 0);
+    tap(POD_A_OPEN_AGENT, 0);
+    CHECK(top() == POD_V_AGENT && !strcmp(cur(), "a1"));
+    pro_app_question("a1", "r1", "Which?", false);
+    render();
+    tap_stale_talk();
+    CHECK(R.begins == 0 && !strcmp(U.notice, "Answer its question first."));
+    CHECK((int32_t)(U.notice_until - now) > 2000);
+    pro_app_question_close("a1");
+    render();
+    tap(POD_A_TALK, 0);
+    CHECK(R.begins == 1);   // all caps: it records as before
+    CHECK(LOCK_DEPTH == 0);
+}
+
 // A question's entry goes whenever the question ends: a new turn, a finished turn, a link drop.
 static void notify_question_entry_ends_with_question(void) {
     notif_room();
@@ -2412,7 +2478,7 @@ int main(int argc, char **argv) {
         {"pro_app_test_voice_paths", pro_app_test_voice_paths}, {"pro_app_test_touch_rules", pro_app_test_touch_rules},
         {"pro_app_test_roster_and_swarms", pro_app_test_roster_and_swarms}, {"side_button", side_button}, {"side_button_console", side_button_console}, {"question_needs_the_link", question_needs_the_link},
         {"notify_banner_beep_and_expiry", notify_banner_beep_and_expiry}, {"notify_tap_opens_and_swipe_dismisses", notify_tap_opens_and_swipe_dismisses},
-        {"notify_never_over_talk", notify_never_over_talk}, {"notify_tiers", notify_tiers}, {"notify_question_and_error", notify_question_and_error}, {"notify_entries_expire", notify_entries_expire}, {"notify_question_entry_ends_with_question", notify_question_entry_ends_with_question}, {"notify_question_resent_after_relink_is_quiet", notify_question_resent_after_relink_is_quiet}, {"notify_question_same_prompt_new_request_beeps", notify_question_same_prompt_new_request_beeps}, {"question_list_tier_is_quiet", question_list_tier_is_quiet}, {"agents_carry_app_and_view", agents_carry_app_and_view},{"notify_replace_seen_and_read", notify_replace_seen_and_read},
+        {"notify_never_over_talk", notify_never_over_talk}, {"notify_tiers", notify_tiers}, {"notify_question_and_error", notify_question_and_error}, {"notify_entries_expire", notify_entries_expire}, {"notify_question_entry_ends_with_question", notify_question_entry_ends_with_question}, {"notify_question_resent_after_relink_is_quiet", notify_question_resent_after_relink_is_quiet}, {"notify_question_same_prompt_new_request_beeps", notify_question_same_prompt_new_request_beeps}, {"question_list_tier_is_quiet", question_list_tier_is_quiet}, {"agents_carry_app_and_view", agents_carry_app_and_view}, {"voice_needs_the_v_cap", voice_needs_the_v_cap}, {"see_it_notice_lasts_two_seconds", see_it_notice_lasts_two_seconds},{"notify_replace_seen_and_read", notify_replace_seen_and_read},
         {"ota_screen_and_touch", ota_screen_and_touch}, {"voice_refused_while_updating", voice_refused_while_updating},
         {"update_gate", update_gate}, {"ota_failed_returns", ota_failed_returns}, {"ota_keeps_awake", ota_keeps_awake},
         {"ota_notifications_quiet", ota_notifications_quiet}, {"updated_notice", updated_notice},
