@@ -193,6 +193,7 @@ mod tests {
         visible: true,
         owned: false,
         tool: false,
+        dialog: false,
     };
     const HIDDEN: Candidate = Candidate {
         visible: false,
@@ -204,6 +205,10 @@ mod tests {
     };
     const TOOL: Candidate = Candidate {
         tool: true,
+        ..SHOWN
+    };
+    const DIALOG: Candidate = Candidate {
+        dialog: true,
         ..SHOWN
     };
 
@@ -228,6 +233,14 @@ mod tests {
     fn pick_skips_hidden_owned_and_tool_windows_and_takes_the_first_left() {
         assert_eq!(pick(&[HIDDEN, OWNED, TOOL, SHOWN, SHOWN]), Some(3));
         assert_eq!(pick(&[SHOWN, HIDDEN]), Some(0));
+    }
+
+    /// Cursor left an unowned "not responding" dialog of its own (the VM's notes, Task 37 section 1):
+    /// above its main window, a raise would bring the dialog forward instead.
+    #[test]
+    fn pick_takes_the_main_window_before_a_dialog_above_it() {
+        assert_eq!(pick(&[DIALOG, SHOWN]), Some(1));
+        assert_eq!(pick(&[HIDDEN, DIALOG]), Some(1));
     }
 
     #[test]
