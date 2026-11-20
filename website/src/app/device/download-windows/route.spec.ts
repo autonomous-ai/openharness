@@ -16,8 +16,8 @@ function manifest(body: unknown): ReturnType<typeof vi.fn<typeof fetch>> {
 function both(): Record<string, unknown> {
   return {
     ...MAC,
-    "device-windows-x64": { version: "0.2.0", url: X64, sha256: "x", size: 1 },
-    "device-windows-arm64": { version: "0.2.0", url: ARM64, sha256: "x", size: 1 },
+    "device-windows-x64-exe": { version: "0.2.0", url: X64, sha256: "x", size: 1 },
+    "device-windows-arm64-exe": { version: "0.2.0", url: ARM64, sha256: "x", size: 1 },
   };
 }
 
@@ -54,7 +54,7 @@ describe("GET /device/download-windows", () => {
     const missing = await GET(new Request(PAGE));
 
     expect(missing.status).toBe(503);
-    expect(await missing.text()).toBe("Harness download is temporarily unavailable (no usable device-windows-x64 entry).\n");
+    expect(await missing.text()).toBe("Harness download is temporarily unavailable (no usable device-windows-x64-exe entry).\n");
 
     vi.stubGlobal("fetch", vi.fn<typeof fetch>().mockResolvedValue(new Response("", { status: 403 })));
 
@@ -75,7 +75,7 @@ describe("GET /device/download-windows", () => {
       "https://cdn.autonomous.ai/harness/device/0.2.0/Harness-Device-linux-x64.AppImage#.exe",
       "https://cdn.autonomous.ai/harness/device/0.2.0/Harness-Device-linux-x64.AppImage",
     ]) {
-      manifest({ ...MAC, "device-windows-x64": { version: "0.2.0", url, sha256: "x", size: 1 } });
+      manifest({ ...MAC, "device-windows-x64-exe": { version: "0.2.0", url, sha256: "x", size: 1 } });
 
       const res = await GET(new Request(PAGE));
 

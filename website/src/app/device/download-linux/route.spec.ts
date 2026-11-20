@@ -16,8 +16,8 @@ function manifest(body: unknown): ReturnType<typeof vi.fn<typeof fetch>> {
 function both(): Record<string, unknown> {
   return {
     ...MAC,
-    "device-linux-x64": { version: "0.2.0", url: X64, sha256: "x", size: 1 },
-    "device-linux-arm64": { version: "0.2.0", url: ARM64, sha256: "x", size: 1 },
+    "device-linux-x64-appimage": { version: "0.2.0", url: X64, sha256: "x", size: 1 },
+    "device-linux-arm64-appimage": { version: "0.2.0", url: ARM64, sha256: "x", size: 1 },
   };
 }
 
@@ -65,7 +65,7 @@ describe("GET /device/download-linux", () => {
     const missing = await GET(new Request(PAGE));
 
     expect(missing.status).toBe(503);
-    expect(await missing.text()).toBe("Harness download is temporarily unavailable (no usable device-linux-x64 entry).\n");
+    expect(await missing.text()).toBe("Harness download is temporarily unavailable (no usable device-linux-x64-appimage entry).\n");
 
     vi.stubGlobal("fetch", vi.fn<typeof fetch>().mockResolvedValue(new Response("", { status: 403 })));
 
@@ -86,7 +86,7 @@ describe("GET /device/download-linux", () => {
       "https://cdn.autonomous.ai/harness/device/0.2.0/Harness-Device-windows-x64-setup.exe#.AppImage",
       "https://cdn.autonomous.ai/harness/device/0.2.0/Harness-Device-windows-x64-setup.exe",
     ]) {
-      manifest({ ...MAC, "device-linux-x64": { version: "0.2.0", url, sha256: "x", size: 1 } });
+      manifest({ ...MAC, "device-linux-x64-appimage": { version: "0.2.0", url, sha256: "x", size: 1 } });
 
       const res = await GET(new Request(PAGE));
 

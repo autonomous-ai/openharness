@@ -38,12 +38,13 @@ PARTS = {
 }
 ALL = tuple(PARTS)
 ALL_FILES = tuple(name for part in ALL for name in PARTS[part])
-# Tauri's key of each Windows and Linux update, then Desktop's key and the file both name.
+# Tauri's key of each Windows and Linux update, then Desktop's key, the website's installer key and the file all three
+# name.
 UPDATES = {
-    "windows-x86_64": ("device-windows-x64", "Harness-Device-windows-x64-setup.exe"),
-    "windows-aarch64": ("device-windows-arm64", "Harness-Device-windows-arm64-setup.exe"),
-    "linux-x86_64": ("device-linux-x64", "Harness-Device-linux-x64.AppImage"),
-    "linux-aarch64": ("device-linux-arm64", "Harness-Device-linux-arm64.AppImage"),
+    "windows-x86_64": ("device-windows-x64", "device-windows-x64-exe", "Harness-Device-windows-x64-setup.exe"),
+    "windows-aarch64": ("device-windows-arm64", "device-windows-arm64-exe", "Harness-Device-windows-arm64-setup.exe"),
+    "linux-x86_64": ("device-linux-x64", "device-linux-x64-appimage", "Harness-Device-linux-x64.AppImage"),
+    "linux-aarch64": ("device-linux-arm64", "device-linux-arm64-appimage", "Harness-Device-linux-arm64.AppImage"),
 }
 PUB_DATE = "2026-11-16T10:00:00Z"
 DMG, ARCHIVE, SIGNATURE = b"dmg bytes", b"archive bytes", "c2lnbmF0dXJl"
@@ -329,21 +330,23 @@ class ManifestTests(TempTest):
         manifest = rules.build_manifest("0.1.0", build, "Harness Device 0.1.0", PUB_DATE, CDN, platforms="all")
         self.assertEqual(list(manifest), ["version", "notes", "pub_date", "platforms", "device-macos", "device-macos-dmg",
                                           "device-macos-arm64", "device-macos-arm64-dmg",
-                                          *[desktop for desktop, _ in UPDATES.values()]])
+                                          *[key for desktop, page, _ in UPDATES.values() for key in (desktop, page)]])
         self.assertEqual(list(manifest["platforms"]), ["darwin-aarch64", "darwin-x86_64", *UPDATES])
         # Its macOS keys are a macOS release's.
         macos = rules.build_manifest("0.1.0", self.build, "Harness Device 0.1.0", PUB_DATE, CDN)
         self.assertEqual({key: manifest[key] for key in macos if key != "platforms"},
                          {key: value for key, value in macos.items() if key != "platforms"})
         self.assertEqual({key: manifest["platforms"][key] for key in macos["platforms"]}, macos["platforms"])
-        for key, (desktop, name) in UPDATES.items():
+        for key, (desktop, page, name) in UPDATES.items():
             with self.subTest(key=key):
                 url = f"{CDN}/0.1.0/{name}"
                 self.assertEqual(manifest["platforms"][key], {"url": url, "signature": f"{name}.sig bytes"})
                 data = (build / name).read_bytes()
-                self.assertEqual(manifest[desktop], {"version": "0.1.0", "url": url,
-                                                     "sha256": hashlib.sha256(data).hexdigest(), "size": len(data)})
-                self.assertEqual(list(manifest[desktop]), ["version", "url", "sha256", "size"])
+                # The installer is the update itself: Desktop's key and the website's name the same file.
+                for download in (desktop, page):
+                    self.assertEqual(manifest[download], {"version": "0.1.0", "url": url,
+                                                          "sha256": hashlib.sha256(data).hexdigest(), "size": len(data)})
+                    self.assertEqual(list(manifest[download]), ["version", "url", "sha256", "size"])
 
         notes, out = self.root / "notes.txt", self.root / "metadata.json"
         notes.write_text("Harness Device 0.1.0\n")
@@ -732,8 +735,8 @@ class VerifyTests(TempTest):
         requests.clear()
         self.publish_copy(platforms="all")
         self.verify(platforms="all")
-        self.assertEqual(requests, [*macos, *[f"/0.1.0/{name}" for _, name in UPDATES.values()]])
-        for _, name in UPDATES.values():
+        self.assertEqual(requests, [*macos, *[f"/0.1.0/{name}" for *_, name in UPDATES.values()]])
+        for *_, name in UPDATES.values():
             with self.subTest(changed=name):
                 self.publish_copy(platforms="all")
                 flip(self.served / "0.1.0" / name)
