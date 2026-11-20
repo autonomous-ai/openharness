@@ -2,7 +2,7 @@ import type { ScreenReader } from './screenReader.js'
 import type { SubmissionReader } from './submissionReader.js'
 import { createHash } from 'crypto'
 import { composerHolds, composerShown, normalizedTerminalText, visibleTerminal } from '../engines/kit/submission.js'
-import { openclawBoxExactly, openclawBoxHolds, openclawClearKeys, readOpenclawScreen, type OpenclawBoxHidden } from '../engines/openclaw/contract.js'
+import { openclawBoxExactly, openclawBoxHolds, openclawClearKeys, readOpenclawScreen, type OpenclawBoxHidden, type OpenclawScreen } from '../engines/openclaw/contract.js'
 import { launchBound } from '../core/engines/sessionBinding.js'
 import { adaptSlashCommand } from './goalCommand.js'
 import type { RegisteredSession } from './registry.js'
@@ -169,8 +169,14 @@ interface InputState {
   /** The agent's first task is the controller's, from when it is expected until a turn takes it ([firstTaskEnded]): it
    *  is never given up here ([firstTaskWaiting]). */
   firstTask: boolean
-  /** A message waits for its OpenClaw pane to be able to send ([OPENCLAW_NOT_READY]): nothing of it is typed. */
+  /** A message waits for its OpenClaw pane to be able to send ([OPENCLAW_NOT_READY]): nothing of it is typed but while the
+   *  pane is read again ([pasting]). */
   paneWait: boolean
+  /** That message is being written while its pane is read again: it is typed if the pane can send it. */
+  pasting: boolean
+  /** The message awaiting confirmation is a first task an earlier daemon typed ([adoptTypedFirstTask]): this one never
+   *  pasted it, and the box may hold the person's draft, so it gets an Enter only on a box read to hold it. */
+  adopted: boolean
   /** The message awaiting confirmation was cleared from its OpenClaw box ([clearRefused]), which happens once a message:
    *  kept across its paste again, and for a first task until the first task ends, across its hand-over again. */
   cleared: boolean
@@ -282,6 +288,11 @@ function paneNotReady(delivery: boolean | TerminalActionResult): boolean {
 /** A write that waited for its pane and gave way to the agent's first task, nothing written ([GAVE_WAY]). */
 function gaveWay(delivery: boolean | TerminalActionResult): boolean {
   return typeof delivery !== 'boolean' && delivery.state === 'failed' && delivery.reason === GAVE_WAY
+}
+
+/** A message waits for its OpenClaw pane, nothing of it being typed now ([InputState.paneWait]). */
+function waitingUntyped(state: InputState): boolean {
+  return state.paneWait && !state.pasting
 }
 
 /**
@@ -421,7 +432,7 @@ export class SessionInputController {
     const session = this.controlSession(id)
     if (!session) return false
     const state = this.state(id)
-    if (state.firstTask || state.awaitingFingerprint !== null || state.turnOpen || (state.writes && !state.paneWait)) return false
+    if (state.firstTask || state.awaitingFingerprint !== null || state.turnOpen || (state.writes && !waitingUntyped(state))) return false
     // In its box as the engine took it from that daemon ([submitFirstTask]).
     const typed = adaptSlashCommand(text, session.engine)
     state.firstTask = true
@@ -433,6 +444,7 @@ export class SessionInputController {
     state.observes = 0
     state.ambiguousDispatch = false
     this.pasted(state, undefined)
+    state.adopted = true
     this.deps.onWaitChanged?.(id)
     this.armSubmitCheck(id, session, state)
     return true
@@ -496,20 +508,26 @@ export class SessionInputController {
     if (!current()) return { state: 'failed', dispatch: 'not_started', reason: TERMINAL_LEASE_REFUSED }
     let delivery = await write()
     let notReadySince = firstPaste
-    for (;;) {
-      const notReady = paneNotReady(delivery)
-      if (notReady) {
-        notReadySince ??= now()
-        if (!state.firstTask && now() - notReadySince >= OPENCLAW_NOT_READY_MAX_MS) break
-      } else if (!leaseRefused(delivery) || now() >= deadline) break
-      state.paneWait = notReady
-      await sleep(notReady ? OPENCLAW_PANE_RETRY_MS : LEASE_RETRY_MS)
+    try {
+      for (;;) {
+        const notReady = paneNotReady(delivery)
+        if (notReady) {
+          notReadySince ??= now()
+          if (!state.firstTask && now() - notReadySince >= OPENCLAW_NOT_READY_MAX_MS) break
+          // Said from its first not-ready answer until it is typed or given up, each read of the pane included: the binding
+          // pass reads it once a pass, and a read caught between two said it no more.
+          state.paneWait = true
+        } else if (!leaseRefused(delivery) || now() >= deadline) break
+        await sleep(notReady ? OPENCLAW_PANE_RETRY_MS : LEASE_RETRY_MS)
+        if (held()) return refused()
+        if (!current()) break
+        if (notReady && state.firstTaskAhead) return { state: 'failed', dispatch: 'not_started', reason: GAVE_WAY }
+        if (notReady && (state.controlLocked || state.awaitingFingerprint !== null)) continue
+        state.pasting = true
+        try { delivery = await write() } finally { state.pasting = false }
+      }
+    } finally {
       state.paneWait = false
-      if (held()) return refused()
-      if (!current()) break
-      if (notReady && state.firstTaskAhead) return { state: 'failed', dispatch: 'not_started', reason: GAVE_WAY }
-      if (notReady && (state.controlLocked || state.awaitingFingerprint !== null)) continue
-      delivery = await write()
     }
     return delivery
   }
@@ -524,6 +542,8 @@ export class SessionInputController {
         pastedAt: 0,
         firstTask: false,
         paneWait: false,
+        pasting: false,
+        adopted: false,
         cleared: false,
         clearing: false,
         firstTaskAhead: false,
@@ -759,7 +779,7 @@ export class SessionInputController {
     const state = this.state(sessionId)
     this.dropExpired(sessionId, state)
     const turnBlocks = state.turnOpen && !opts?.forAnswer
-    const queued = state.queue.length > 0 && !state.paneWait && !heldBehindFirstTask(state)
+    const queued = state.queue.length > 0 && !waitingUntyped(state) && !heldBehindFirstTask(state)
     if (state.controlLocked || state.cancelling || turnBlocks || state.awaitingFingerprint || state.settling || queued) return null
     state.controlLocked = true
     let released = false
@@ -785,7 +805,7 @@ export class SessionInputController {
     const session = this.controlSession(id)
     const state = this.states.get(id)
     const injectCommand = this.deps.injectCommand
-    if (!session || !injectCommand || (state?.writes && !state.paneWait)) return false
+    if (!session || !injectCommand || (state?.writes && !waitingUntyped(state))) return false
     const release = this.acquireControl(id)
     if (!release) return false
     try {
@@ -1147,6 +1167,7 @@ export class SessionInputController {
    */
   private pasted(state: InputState, firstPaste: number | undefined): void {
     state.pastedAt = firstPaste ?? (this.deps.now ?? Date.now)()
+    state.adopted = false
     if (firstPaste === undefined && !state.firstTask) state.cleared = false
   }
 
@@ -1461,8 +1482,9 @@ export class SessionInputController {
       return
     }
     // An empty box sent the message, and other text in it is the person's, which an Enter would send. With no reading,
-    // the blind Enters every engine gets, and no more.
-    if (screen ? openclawBoxHolds(screen.box, state.awaitingContent ?? '', screen.boxHidden) : state.retries < SUBMIT_MAX_RETRIES && !state.ambiguousDispatch) {
+    // the blind Enters every engine gets, and no more; none for a task an earlier daemon typed, which may not be in the box.
+    if (screen ? openclawBoxHolds(screen.box, state.awaitingContent ?? '', screen.boxHidden)
+      : !state.adopted && state.retries < SUBMIT_MAX_RETRIES && !state.ambiguousDispatch) {
       await this.resubmit(sessionId, session, state)
       return
     }
@@ -1599,14 +1621,17 @@ export class SessionInputController {
 
   /**
    * Whether what [id]'s OpenClaw box shows is Harness's: a write or a command of its own is being typed into the pane (a
-   * message waiting untyped for the pane to be able to send is not), the box is being cleared, or it shows exactly,
-   * whole, the message awaiting confirmation. Any other text is the person's, which Harness never clears.
+   * message waiting untyped for the pane to be able to send is not), the box is being cleared, or it shows the message
+   * awaiting confirmation. On a pane that can send ([pane] `ready`), that is what the message's Enter would send
+   * ([retryOpenclaw]), a long one scrolled in its box included; on any other, the message exactly, whole, as only that
+   * is ever cleared (decision 1). Any other text is the person's, which Harness never clears.
    */
-  ownsBox(id: string, box: string | null, hidden: OpenclawBoxHidden): boolean {
+  ownsBox(id: string, box: string | null, hidden: OpenclawBoxHidden, pane?: OpenclawScreen['state']): boolean {
     const state = this.states.get(id)
     if (!state) return false
-    if (state.controlLocked || state.clearing || (state.writes !== undefined && !state.paneWait)) return true
-    return state.awaitingContent !== null && openclawBoxExactly(box, hidden, state.awaitingContent)
+    if (state.controlLocked || state.clearing || (state.writes !== undefined && !waitingUntyped(state))) return true
+    if (state.awaitingContent === null) return false
+    return pane === 'ready' ? openclawBoxHolds(box, state.awaitingContent, hidden) : openclawBoxExactly(box, hidden, state.awaitingContent)
   }
 
   /** The message awaiting confirmation is given up, [why]: the person is told the agent did not accept it. */
