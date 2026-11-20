@@ -73,19 +73,19 @@ void main() {
         parse(manifest, platform: TargetPlatform.windows);
     expect(
       windows({
-        'device-windows-arm64': entry(url: _windowsArm64Url),
-        'device-windows-x64': entry(url: _windowsX64Url),
+        'device-windows-arm64-exe': entry(url: _windowsArm64Url),
+        'device-windows-x64-exe': entry(url: _windowsX64Url),
       })?.url,
       _windowsArm64Url,
     );
     expect(
-      windows({'device-windows-x64': entry(url: _windowsX64Url)})?.url,
+      windows({'device-windows-x64-exe': entry(url: _windowsX64Url)})?.url,
       _windowsX64Url,
     );
     expect(
       windows({
-        'device-windows-arm64': entry(url: _windowsArm64Url, size: '12'),
-        'device-windows-x64': entry(url: _windowsX64Url),
+        'device-windows-arm64-exe': entry(url: _windowsArm64Url, size: '12'),
+        'device-windows-x64-exe': entry(url: _windowsX64Url),
       })?.url,
       _windowsX64Url,
     );
@@ -94,7 +94,7 @@ void main() {
   test('Windows x64 never takes arm64\'s', () {
     expect(
       parse(
-        {'device-windows-arm64': entry(url: _windowsArm64Url)},
+        {'device-windows-arm64-exe': entry(url: _windowsArm64Url)},
         architecture: 'x64',
         platform: TargetPlatform.windows,
       ),
@@ -103,8 +103,8 @@ void main() {
     expect(
       parse(
         {
-          'device-windows-arm64': entry(url: _windowsArm64Url),
-          'device-windows-x64': entry(url: _windowsX64Url),
+          'device-windows-arm64-exe': entry(url: _windowsArm64Url),
+          'device-windows-x64-exe': entry(url: _windowsX64Url),
         },
         architecture: 'x64',
         platform: TargetPlatform.windows,
@@ -115,8 +115,8 @@ void main() {
 
   test('Linux takes only its own arch', () {
     final both = {
-      'device-linux-arm64': entry(url: _linuxArm64Url),
-      'device-linux-x64': entry(url: _linuxX64Url),
+      'device-linux-arm64-appimage': entry(url: _linuxArm64Url),
+      'device-linux-x64-appimage': entry(url: _linuxX64Url),
     };
     expect(parse(both, platform: TargetPlatform.linux)?.url, _linuxArm64Url);
     expect(
@@ -125,13 +125,13 @@ void main() {
     );
     expect(
       parse({
-        'device-linux-x64': entry(url: _linuxX64Url),
+        'device-linux-x64-appimage': entry(url: _linuxX64Url),
       }, platform: TargetPlatform.linux),
       isNull,
     );
     expect(
       parse(
-        {'device-linux-arm64': entry(url: _linuxArm64Url)},
+        {'device-linux-arm64-appimage': entry(url: _linuxArm64Url)},
         architecture: 'x64',
         platform: TargetPlatform.linux,
       ),
@@ -141,10 +141,10 @@ void main() {
 
   test('a Mac never takes a Windows or Linux entry', () {
     final others = {
-      'device-windows-arm64': entry(url: _windowsArm64Url),
-      'device-windows-x64': entry(url: _windowsX64Url),
-      'device-linux-arm64': entry(url: _linuxArm64Url),
-      'device-linux-x64': entry(url: _linuxX64Url),
+      'device-windows-arm64-exe': entry(url: _windowsArm64Url),
+      'device-windows-x64-exe': entry(url: _windowsX64Url),
+      'device-linux-arm64-appimage': entry(url: _linuxArm64Url),
+      'device-linux-x64-appimage': entry(url: _linuxX64Url),
     };
     for (final architecture in ['arm64', 'x64']) {
       expect(parse(others, architecture: architecture), isNull);
@@ -167,8 +167,8 @@ void main() {
   test('another platform takes no entry', () {
     final all = {
       'device-macos': entry(),
-      'device-windows-x64': entry(url: _windowsX64Url),
-      'device-linux-x64': entry(url: _linuxX64Url),
+      'device-windows-x64-exe': entry(url: _windowsX64Url),
+      'device-linux-x64-appimage': entry(url: _linuxX64Url),
     };
     for (final platform in [
       TargetPlatform.android,
@@ -234,7 +234,7 @@ void main() {
       expect(parse({'device-macos': entry(url: url)}), isNull, reason: '$url');
       expect(
         parse(
-          {'device-windows-x64': entry(url: url)},
+          {'device-windows-x64-exe': entry(url: url)},
           architecture: 'x64',
           platform: TargetPlatform.windows,
         ),
@@ -243,7 +243,7 @@ void main() {
       );
       expect(
         parse({
-          'device-linux-arm64': entry(url: url),
+          'device-linux-arm64-appimage': entry(url: url),
         }, platform: TargetPlatform.linux),
         isNull,
         reason: 'linux $url',

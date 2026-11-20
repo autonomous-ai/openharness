@@ -216,8 +216,8 @@ void main() {
   /// Serves [bytes] as [platform]'s package under its x64 key.
   void publishFor(TargetPlatform platform, List<int> bytes) {
     final (key, path) = platform == TargetPlatform.windows
-        ? ('device-windows-x64', _setupPath)
-        : ('device-linux-x64', _appImagePath);
+        ? ('device-windows-x64-exe', _setupPath)
+        : ('device-linux-x64-appimage', _appImagePath);
     routes[path] = _respond(200, bytes);
     serveManifest({key: _entry(bytes, path: path)});
   }

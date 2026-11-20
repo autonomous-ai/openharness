@@ -231,7 +231,7 @@ void main() {
     final manifest = p.join(root.path, 'metadata.json');
     File(manifest).writeAsStringSync(
       jsonEncode({
-        'device-$os-$arch': {
+        'device-$os-$arch-${Platform.isWindows ? 'exe' : 'appimage'}': {
           'version': '0.0.0',
           'url': url,
           'sha256': sha256,
