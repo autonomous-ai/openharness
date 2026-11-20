@@ -78,11 +78,13 @@ ALSO.update({"desktop/test/support/real_fonts.dart": "mobile"})
 ALSO.update({"plugins/harness-device-vscode/": "cli"})
 # Orca's plugin: the CLI's build inlines the folder.
 ALSO.update({"plugins/harness-device-orca/": "cli"})
-# test_ci_plan.CrossReadTests' repository-wide scan skips in process-checks' sparse checkout, where two undeclared reads
-# slipped in: its own job runs it on a full checkout, for a change to the planner, its test or the tables it reads
-# (DEPENDS takes the desktop's from record-ci-validation.py).
+# test_ci_plan's repository-wide scan and its other full-checkout tests skip in process-checks' sparse checkout, where
+# two undeclared reads slipped in: their own job runs them on a full checkout. They guard the planner's tables only, so
+# they run for a change to the planner, its test, the tables it reads (DEPENDS takes the desktop's from
+# record-ci-validation.py) and the CLI's lists its tables copy (dialHosts.ts's DIAL_HOST_FILES, the CI config's exclude).
 ALSO.update({path: "cross-read-scan" for path in ("scripts/ci-plan.py", "scripts/tests/test_ci_plan.py",
-                                                  "scripts/record-ci-validation.py")})
+                                                  "scripts/record-ci-validation.py", "cli/e2e/harness/dialHosts.ts",
+                                                  "cli/vitest.e2e.ci.config.ts")})
 # Narrower directories that add a suite on top of their component's (the ESP32-P4 build and golden screens).
 SUBCOMPONENTS = {"devices/harness-pro/": "pro"}
 
