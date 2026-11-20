@@ -140,8 +140,12 @@ static int make_room(pod_model_t *m, const rank_t *newcomer) {
 // hold a copy of one to see whether it changed anything. It takes a 64-bit FNV-1a signature of the agent's
 // visible fields before and after instead. Left out: seen, lib_seen, src and age_s (sweep bookkeeping that is
 // never a visible change); event_ms only when `with_event` is false (a fresh stamp alone is not one).
-// A fresh slot (already zeroed): the turn stats are unknown, not zero.
-static void init_agent(pod_agent_t *a) { a->tests_passed = a->tests_failed = a->commits = a->tokens_in = a->tokens_out = -1; a->step_total = -1; }
+// A fresh slot (already zeroed): the turn stats are unknown, not zero, and nothing is withheld until its `agent` row says so.
+static void init_agent(pod_agent_t *a) {
+    a->tests_passed = a->tests_failed = a->commits = a->tokens_in = a->tokens_out = -1;
+    a->step_total = -1;
+    a->caps = POD_CAPS_ALL;
+}
 
 static uint64_t fnv_bytes(uint64_t h, const void *p, size_t n) {
     const unsigned char *b = p;
@@ -355,6 +359,14 @@ static void sync_meta_members(pod_model_t *m, const char *const *agent_ids[], co
     remove_agents(m, drop);
 }
 
+// has_window is derived from its two inputs at every feed of either, so it never disagrees with them. True if it moved.
+static bool window_changed(pod_model_t *m) {
+    bool w = m->tab_open || m->swarm_n > 0;
+    if (w == m->has_window) return false;
+    m->has_window = w;
+    return true;
+}
+
 void pod_model_swarms(pod_model_t *m, const cable_swarm_t *items, const char *const *agent_ids[],
                       const uint8_t agent_id_counts[], int n, const char *selected,
                       const cable_tile_t *tiles, int tile_count) {
@@ -370,6 +382,8 @@ void pod_model_swarms_meta(pod_model_t *m, const cable_swarm_t *items, const cha
     memset(nt, 0, sizeof nt);
     if (n < 0 || !items) n = 0;
     if (n > POD_TABS_MAX) n = POD_TABS_MAX;
+    m->swarm_n = (uint8_t)n;   // listed, not shown: a window whose tabs hold no agent is still open
+    if (window_changed(m)) m->revision++;
     if (meta) sync_meta_members(m, agent_ids, agent_id_counts, n, meta);
     if (tile_count < 0 || !tiles) tile_count = 0;
     if (tile_count > POD_PANES_MAX) tile_count = POD_PANES_MAX;
@@ -677,9 +691,87 @@ void pod_model_link(pod_model_t *m, bool up) {
     if (!up) {   // a drop forgets every open question (pro_app clears them): the daemon re-sends what is still owed
         for (int i = m->unread_count - 1; i >= 0; i--)
             if (m->unread[i].ask) unread_drop(m, i);
+        // The next session's welcome, apps and agents.end say these again; the tabs (and swarm_n) stay, as they do.
+        memset(m->apps, 0, sizeof m->apps);
+        m->app_count = 0;
+        m->app_shown[0] = 0;
+        m->apps_switch = m->machine_view = m->tab_open = false;
+        window_changed(m);
     }
     m->revision++;
 }
+
+// ── apps ─────────────────────────────────────────────────────────────────────────────────────────────
+
+void pod_model_apps(pod_model_t *m, const pod_app_t *apps, int n, const char *shown) {
+    if (n < 0 || !apps) n = 0;
+    if (n > POD_APPS_MAX) n = POD_APPS_MAX;
+    bool changed = n != m->app_count;
+    for (int i = 0; i < POD_APPS_MAX; i++) {
+        // Built zeroed (rows past n too, and every byte past a string's end), so an unchanged push compares equal.
+        pod_app_t r;
+        memset(&r, 0, sizeof r);
+        if (i < n) {
+            copy_str(r.id, sizeof r.id, apps[i].id);
+            copy_str(r.name, sizeof r.name, apps[i].name);
+            r.count = apps[i].count;
+            r.waiting = apps[i].waiting;
+            r.working = apps[i].working;
+        }
+        if (memcmp(&r, &m->apps[i], sizeof r)) { m->apps[i] = r; changed = true; }
+    }
+    m->app_count = (uint8_t)n;
+    char s[sizeof m->app_shown];
+    copy_str(s, sizeof s, shown);
+    if (strcmp(s, m->app_shown)) { memcpy(m->app_shown, s, sizeof s); changed = true; }
+    if (changed) m->revision++;
+}
+
+void pod_model_apps_switch(pod_model_t *m, bool on) {
+    if (m->apps_switch == on) return;
+    m->apps_switch = on;
+    m->revision++;
+}
+
+void pod_model_view(pod_model_t *m, bool machine_view, bool tab_open) {
+    bool changed = m->machine_view != machine_view;
+    m->machine_view = machine_view;
+    m->tab_open = tab_open;
+    if (window_changed(m) || changed) m->revision++;
+}
+
+void pod_model_agent_app(pod_model_t *m, const char *id, const char *host, uint8_t caps) {
+    int i = find_idx(m, id);
+    if (i < 0) return;
+    pod_agent_t *a = &m->agents[i];
+    char h[sizeof a->host];
+    copy_str(h, sizeof h, host);
+    caps &= POD_CAPS_ALL;
+    if (a->caps == caps && !strcmp(a->host, h)) return;
+    memcpy(a->host, h, sizeof h);
+    a->caps = caps;
+    m->revision++;
+}
+
+// The round dial's host_name table. Both strings are literals joined at compile time, so the voice gate can return
+// the notice after its lock is released. The last row is the fallback.
+#define HOST(id, name) {id, name, "See it in " name}
+static const struct { const char *id, *name, *see_it; } k_hosts[] = {
+    HOST("orca", "Orca"),       HOST("herdr", "herdr"),     HOST("rex", "Rex"),         HOST("zellij", "Zellij"),
+    HOST("tmux", "tmux"),       HOST("kitty", "kitty"),     HOST("wezterm", "WezTerm"), HOST("ghostty", "Ghostty"),
+    HOST("cmux", "cmux"),       HOST("iterm", "iTerm2"),    HOST("vscode", "VS Code"),  HOST("cursor", "Cursor"),
+    HOST("warp", "Warp"),       HOST("claude", "Claude"),   HOST("codex", "ChatGPT"),   HOST("opencode", "opencode"),
+    HOST("harness", "Harness"), HOST(NULL, "Terminal"),
+};
+#undef HOST
+static size_t host_idx(const char *host) {
+    const size_t last = sizeof k_hosts / sizeof k_hosts[0] - 1;
+    for (size_t i = 0; i < last; i++)
+        if (same(host, k_hosts[i].id)) return i;
+    return last;
+}
+const char *pod_host_name(const char *host) { return k_hosts[host_idx(host)].name; }
+const char *pod_host_see_it(const char *host) { return k_hosts[host_idx(host)].see_it; }
 
 void pod_model_sent(pod_model_t *m, const char *id, uint32_t now_ms) {
     pod_model_clock(m, now_ms);

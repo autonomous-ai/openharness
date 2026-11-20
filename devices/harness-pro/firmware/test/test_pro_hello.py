@@ -1,8 +1,8 @@
 """The Pro's hello: exactly the keys owner decision 7 names, in order, and none of the round dial's.
 
 send_hello is lifted out of main/cable/pro_cable.c and compiled against stubs that record each key and value, so this
-checks the real builder. The capability keys (swarms, recap, activity, player) are what make the daemon send the Pro
-extra fields; the round dial's carry, draft, form, visit, workspace, selection and metrics, and speech, must not appear."""
+checks the real builder. The capability keys (swarms, recap, activity, stats, player, ota, appFilter, questionTier,
+appCards) are what make the daemon send the Pro extra fields; the round dial's carry, draft, form, visit, workspace, selection and metrics, and speech, must not appear."""
 from pathlib import Path
 import re
 import subprocess
@@ -80,6 +80,9 @@ assert pairs == [
     ("stats", "turn-v1"),
     ("player", "library-v1"),
     ("ota", "v1"),
+    ("appFilter", "v1"),
+    ("questionTier", "v1"),
+    ("appCards", "v1"),
     ("mac", "aa"),
     ("settings", "{"),
 ], pairs
@@ -88,4 +91,4 @@ for round_only in ("carry", "draft", "speech", "form", "visit", "workspace", "se
     assert round_only not in keys and round_only not in body, f"hello mentions {round_only}"
 # The real hello is not conditional on a board define: nothing in it may be compiled out.
 assert "#if" not in body and "DEVICE_" not in body
-print("Pro hello: fw product proto hw board swarms recap activity stats player ota mac, and no round-dial keys")
+print("Pro hello: fw product proto hw board swarms recap activity stats player ota appFilter questionTier appCards mac, and no round-dial keys")

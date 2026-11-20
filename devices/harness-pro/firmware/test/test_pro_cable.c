@@ -12,6 +12,7 @@
 #include <string.h>
 
 #include "cable/pro_cable.h"
+#include "cJSON.h"
 #include "cable_features.h"
 #include "cable_frame.h"
 #include "cable_link.h"
@@ -35,7 +36,7 @@ static int checks;
 
 // ---- the recorder --------------------------------------------------------------------------------------
 enum { EV_STATS, EV_LINK, EV_AGENTS, EV_SWARMS, EV_LIBRARY, EV_CONTEXT, EV_TURN, EV_SUMMARY, EV_QUESTION, EV_QCLOSE, EV_FOCUS,
-       EV_VOICE, EV_MACHINES, EV_NREPLACE, EV_NSEEN };
+       EV_VOICE, EV_MACHINES, EV_NREPLACE, EV_NSEEN, EV_APPS };
 typedef struct { int kind; char id[64]; char a[2400], b[2400], c[2400], d[128]; long n1, n2, n3, n4, n5; } ev_t;
 #define EV_MAX 64
 static ev_t evs[EV_MAX];
@@ -44,6 +45,9 @@ static cable_swarm_t rec_swarms[SWARMS_MAX];
 static cable_swarm_members_t rec_members;
 static cable_tile_t rec_tiles[SWARM_TILES_MAX];
 static char rec_agent_ids[POD_AGENTS_MAX][ID_MAX];
+static char rec_agent_hosts[POD_AGENTS_MAX][16];
+static uint8_t rec_agent_caps_off[POD_AGENTS_MAX];
+static cable_app_t rec_apps[CABLE_APPS_MAX];
 
 static ev_t *add(int kind, const char *id)
 {
@@ -57,11 +61,15 @@ static ev_t *add(int kind, const char *id)
 static void put(char *dst, const char *s) { snprintf(dst, 2400, "%s", s ? s : "<null>"); }
 
 void pro_app_link(bool up, const char *machine) { ev_t *e = add(EV_LINK, NULL); e->n1 = up; put(e->a, machine); }
-void pro_app_agents(const pro_agent_row_t *rows, int n)
+void pro_app_agents(const pro_agent_row_t *rows, int n, bool machine_view, bool tab_open)
 {
     ev_t *e = add(EV_AGENTS, NULL);
-    e->n1 = n;
-    for (int i = 0; i < n && i < POD_AGENTS_MAX; i++) snprintf(rec_agent_ids[i], ID_MAX, "%s", rows[i].id);
+    e->n1 = n; e->n2 = machine_view; e->n3 = tab_open;
+    for (int i = 0; i < n && i < POD_AGENTS_MAX; i++) {
+        snprintf(rec_agent_ids[i], ID_MAX, "%s", rows[i].id);
+        snprintf(rec_agent_hosts[i], sizeof rec_agent_hosts[i], "%s", rows[i].host ? rows[i].host : "");
+        rec_agent_caps_off[i] = rows[i].caps_off;
+    }
     if (n > 0) { put(e->a, rows[0].name); put(e->b, rows[0].machine); put(e->c, rows[0].engine); }
 }
 void pro_app_swarms(const cable_swarm_t *items, int n, const cable_swarm_members_t *members, const char *selected,
@@ -106,9 +114,9 @@ void pro_app_notif_seen(const char *id, const char *token)
 {
     ev_t *e = add(EV_NSEEN, id); put(e->a, token ? token : "(none)");
 }
-void pro_app_question(const char *id, const char *request, const char *text)
+void pro_app_question(const char *id, const char *request, const char *text, bool list)
 {
-    ev_t *e = add(EV_QUESTION, id); (void)request; put(e->a, text);
+    ev_t *e = add(EV_QUESTION, id); (void)request; put(e->a, text); e->n1 = list;
 }
 void pro_app_question_close(const char *id) { add(EV_QCLOSE, id); }
 void pro_app_focus(const char *id) { add(EV_FOCUS, id); }
@@ -118,6 +126,15 @@ void pro_app_machines(const cable_machine_t *rows, int count, const char *select
     ev_t *e = add(EV_MACHINES, NULL); e->n1 = count; put(e->a, selected);
     if (count > 0) put(e->b, rows[0].name);
 }
+void pro_app_apps(const cable_app_t *rows, int n, const char *shown)
+{
+    ev_t *e = add(EV_APPS, NULL); e->n1 = n; put(e->a, shown);
+    memcpy(rec_apps, rows, (size_t)n * sizeof *rows);
+}
+// Outside evs[]: every welcome calls it, and the checks that a welcome makes one EV_LINK stay as they are.
+static int apps_switch_calls, apps_switch_at;
+static bool apps_switch_on;
+void pro_app_apps_switch(bool on) { apps_switch_calls++; apps_switch_on = on; apps_switch_at = nev; }
 
 // ---- stubs for everything below pro_cable ---------------------------------------------------------------
 static char sent[16][8192];
@@ -243,6 +260,21 @@ static bool utf8_ok(const char *s)
         while (n--) { if ((*p & 0xC0) != 0x80) return false; p++; }
     }
     return true;
+}
+// An `apps` frame of n rows a0, a1, ... whose names are name_len bytes of 'n'. The caller frees it.
+static char *apps_frame(int n, int name_len)
+{
+    char *name = repeat("n", name_len), *s = NULL;
+    size_t len = 0;
+    FILE *f = open_memstream(&s, &len);
+    CHECK(f);
+    fputs("{\"t\":\"apps\",\"shown\":\"a0\",\"apps\":[", f);
+    for (int i = 0; i < n; i++)
+        fprintf(f, "%s{\"id\":\"a%d\",\"name\":\"%s\",\"count\":3,\"waiting\":1,\"working\":1}", i ? "," : "", i, name);
+    fputs("]}", f);
+    fclose(f);
+    free(name);
+    return s;
 }
 static void welcome(void)
 {
@@ -665,6 +697,9 @@ static void *parse_heavy(void *arg)
         feed("{\"t\":\"agent\",\"id\":\"a\",\"name\":\"Alpha\",\"engine\":\"claude\",\"machineId\":\"m1\",\"machine\":\"Mac\"}");
         feed("{\"t\":\"agents.end\"}");
         feed("{\"t\":\"voice.transcript\",\"agentId\":\"a\",\"needsConfirm\":true,\"routeId\":\"r\"}");
+        char *apps = apps_frame(CABLE_APPS_MAX, 23);
+        feed(apps);
+        free(apps);
     }
     free(big);
     CHECK(nev > 10);
@@ -988,6 +1023,17 @@ static void send_shapes(void)
     CHECK(nsent == 1 && !strcmp(sent[0], "{\"t\":\"fw.progress\",\"written\":4096,\"resend\":true}"));
 }
 
+// app.pick goes out only with an id that could have arrived whole (CABLE_APP_ID_MAX): a cut one would pick another app.
+static void app_pick_shapes(void)
+{
+    welcome(); reset();
+    CHECK(pro_cable_send_app_pick("codex") && nsent == 1);
+    CHECK(!strcmp(sent[0], "{\"t\":\"app.pick\",\"app\":\"codex\"}"));
+    CHECK(!pro_cable_send_app_pick(NULL) && !pro_cable_send_app_pick("") && !pro_cable_send_app_pick("abcdefghijklmnop"));
+    CHECK(nsent == 1);
+    CHECK(pro_cable_send_app_pick("abcdefghijklmno") && nsent == 2);
+}
+
 // A frame lost on the way in outside a transfer: ask for the snapshot once, not again within 2 s, never mid-transfer.
 // A welcome that advertises `resync` gets the one request; an older daemon's gets the old swarms.list + agents.list.
 static void link_resync_with(const char *welcome_json, bool new_daemon)
@@ -1156,6 +1202,167 @@ static void replug_spares_a_frame_in_flight(void)
 }
 
 
+static uint32_t features_of(const char *json)
+{
+    cJSON *w = cJSON_Parse(json);
+    CHECK(w);
+    uint32_t f = cable_features_parse(w);
+    cJSON_Delete(w);
+    return f;
+}
+
+// The 16-entry and strings-only rules hold for the new names too.
+static void features_apps_switch_and_question_tier(void)
+{
+    CHECK(features_of("{\"features\":[\"apps.switch\",\"question.tier\",\"resync\"]}") ==
+          (CABLE_FEATURE_APPS_SWITCH | CABLE_FEATURE_QUESTION_TIER | CABLE_FEATURE_RESYNC));
+    CHECK(features_of("{\"features\":[\"apps.switch\"]}") == CABLE_FEATURE_APPS_SWITCH);
+    CHECK(features_of("{\"features\":[\"question.tier\"]}") == CABLE_FEATURE_QUESTION_TIER);
+    CHECK(features_of("{\"features\":[\"apps.switch\",\"question.tier\",\"a\",\"b\",\"c\",\"d\",\"e\",\"f\","
+                      "\"g\",\"h\",\"i\",\"j\",\"k\",\"l\",\"m\",\"n\",\"o\"]}") == 0);
+    CHECK(features_of("{\"features\":[\"apps.switch\",3]}") == 0);
+}
+
+// `tier: "list"` (a question told again) is silent only when the welcome listed question.tier; anything else is an alert.
+static void question_tier_list(void)
+{
+    feed("{\"t\":\"welcome\",\"machine\":{\"id\":\"m1\",\"name\":\"Mac\"},\"features\":[\"question.tier\"]}");
+    const char *tiers[] = { ",\"tier\":\"list\"", ",\"tier\":\"alert\"", "", ",\"tier\":7", ",\"tier\":\"List\"" };
+    for (int i = 0; i < 5; i++) {
+        reset();
+        feedf("{\"t\":\"question\",\"agentId\":\"a\",\"id\":\"q\"%s,\"questions\":[{\"q\":\"x\"}]}", tiers[i]);
+        CHECK(nev == 1 && evs[0].kind == EV_QUESTION && evs[0].n1 == (i == 0));
+    }
+    welcome();   // its features do not list question.tier
+    reset();
+    feed("{\"t\":\"question\",\"agentId\":\"a\",\"id\":\"q\",\"tier\":\"list\",\"questions\":[{\"q\":\"x\"}]}");
+    CHECK(nev == 1 && evs[0].kind == EV_QUESTION && evs[0].n1 == 0);
+}
+
+// `host` is kept only whole (under 16 B); `caps` grants exactly its letters s v f a, and only a string counts.
+static void agent_host_and_caps(void)
+{
+    welcome();
+    reset();
+    feed("{\"t\":\"agents.begin\"}");
+    feed("{\"t\":\"agent\",\"id\":\"a1\",\"engine\":\"claude\"}");
+    feed("{\"t\":\"agent\",\"id\":\"a2\",\"host\":\"codex\",\"caps\":\"sf\"}");
+    feed("{\"t\":\"agent\",\"id\":\"a3\",\"caps\":\"\"}");
+    feed("{\"t\":\"agent\",\"id\":\"a4\",\"caps\":\"xyz\"}");
+    feed("{\"t\":\"agent\",\"id\":\"a5\",\"caps\":\"vz\"}");
+    feed("{\"t\":\"agent\",\"id\":\"a6\",\"caps\":3}");
+    feed("{\"t\":\"agent\",\"id\":\"a7\",\"host\":\"abcdefghijklmnop\"}");
+    feed("{\"t\":\"agent\",\"id\":\"a8\",\"host\":\"abcdefghijklmno\"}");
+    feed("{\"t\":\"agents.end\"}");
+    CHECK(nev == 1 && evs[0].kind == EV_AGENTS && evs[0].n1 == 8);
+    static const char *ids[] = {"a1", "a2", "a3", "a4", "a5", "a6", "a7", "a8"};
+    static const char *hosts[] = {"", "codex", "", "", "", "", "", "abcdefghijklmno"};
+    static const uint8_t off[] = {0, POD_CAP_V | POD_CAP_A, 15, 15, 15 & ~POD_CAP_V, 0, 0, 0};
+    for (int i = 0; i < 8; i++)
+        CHECK(!strcmp(rec_agent_ids[i], ids[i]) && !strcmp(rec_agent_hosts[i], hosts[i]) && rec_agent_caps_off[i] == off[i]);
+}
+
+// `view` counts only as "machine", `tab` only as a non-empty string; an older daemon sends neither.
+static void agents_end_view_and_tab(void)
+{
+    welcome();
+    static const char *ends[] = {"", ",\"view\":\"machine\",\"tab\":\"\"", ",\"view\":\"apps\",\"tab\":\"t1\"",
+                                 ",\"view\":\"Machine\",\"tab\":7"};
+    static const long view[] = {0, 1, 0, 0}, tab[] = {0, 0, 1, 0};
+    for (int i = 0; i < 4; i++) {
+        reset();
+        feed("{\"t\":\"agents.begin\"}");
+        feed("{\"t\":\"agent\",\"id\":\"a1\"}");
+        feedf("{\"t\":\"agents.end\"%s}", ends[i]);
+        CHECK(nev == 1 && evs[0].kind == EV_AGENTS && evs[0].n2 == view[i] && evs[0].n3 == tab[i]);
+    }
+}
+
+static bool app_is(int i, const char *id, const char *name, int count, int waiting, int working)
+{
+    const cable_app_t *a = &rec_apps[i];
+    return !strcmp(a->id, id) && !strcmp(a->name, name) && a->count == count && a->waiting == waiting && a->working == working;
+}
+
+// The whole list each time; a list that is not an array keeps the last; `shown` is kept as sent when it fits.
+static void apps_rows(void)
+{
+    welcome();
+    reset();
+    feed("{\"t\":\"apps\",\"shown\":\"codex\",\"apps\":[{\"id\":\"codex\",\"name\":\"ChatGPT\",\"count\":3,\"waiting\":1,\"working\":2},"
+         "{\"id\":\"vscode\",\"name\":\"VS Code\",\"count\":1,\"waiting\":0}]}");
+    CHECK(nev == 1 && evs[0].kind == EV_APPS && evs[0].n1 == 2 && !strcmp(evs[0].a, "codex"));
+    CHECK(app_is(0, "codex", "ChatGPT", 3, 1, 2) && app_is(1, "vscode", "VS Code", 1, 0, 0));
+    reset();
+    feed("{\"t\":\"apps\",\"apps\":{}}");
+    feed("{\"t\":\"apps\"}");
+    CHECK(nev == 0);
+    feed("{\"t\":\"apps\",\"apps\":[]}");
+    CHECK(nev == 1 && evs[0].kind == EV_APPS && evs[0].n1 == 0 && !strcmp(evs[0].a, ""));
+    reset();
+    feed("{\"t\":\"apps\",\"shown\":\"warp\",\"apps\":[{\"id\":\"codex\",\"name\":\"ChatGPT\",\"count\":1}]}");
+    CHECK(nev == 1 && evs[0].n1 == 1 && !strcmp(evs[0].a, "warp"));   // names no row: the round keeps it too
+    static const char *shown[] = {",\"shown\":\"abcdefghijklmnop\"", "", ",\"shown\":7"};
+    for (int i = 0; i < 3; i++) {
+        reset();
+        feedf("{\"t\":\"apps\"%s,\"apps\":[]}", shown[i]);
+        CHECK(nev == 1 && evs[0].kind == EV_APPS && !strcmp(evs[0].a, ""));
+    }
+}
+
+// One row with the given count fields, and what it became.
+static void app_counts(const char *fields, int count, int waiting, int working)
+{
+    reset();
+    feedf("{\"t\":\"apps\",\"apps\":[{\"id\":\"x\",\"name\":\"X\"%s}]}", fields);
+    CHECK(nev == 1 && evs[0].kind == EV_APPS && evs[0].n1 == 1 && app_is(0, "x", "X", count, waiting, working));
+}
+
+// As the round's handle_apps: 16 rows at most, an id that does not fit or repeats is dropped, names cut on a letter,
+// counts whole and clamped to 0..255, then waiting and working to count.
+static void apps_bounds(void)
+{
+    welcome();
+    reset();
+    char *seventeen = apps_frame(17, 3);
+    feed(seventeen);
+    free(seventeen);
+    CHECK(nev == 1 && evs[0].n1 == 16 && !strcmp(rec_apps[15].id, "a15"));
+    reset();
+    feed("{\"t\":\"apps\",\"apps\":[{\"id\":\"\"},{\"id\":\"abcdefghijklmnop\"},{\"id\":3},{\"name\":\"none\"},"
+         "{\"id\":\"abcdefghijklmno\"},{\"id\":\"x\",\"name\":\"first\"},{\"id\":\"x\",\"name\":\"second\"}]}");
+    CHECK(nev == 1 && evs[0].n1 == 2 && app_is(0, "abcdefghijklmno", "", 0, 0, 0) && app_is(1, "x", "first", 0, 0, 0));
+    reset();
+    char *name = repeat("a", 22);
+    feedf("{\"t\":\"apps\",\"apps\":[{\"id\":\"x\",\"name\":\"%s\xC3\xA9\"}]}", name);
+    CHECK(nev == 1 && evs[0].n1 == 1 && !strcmp(rec_apps[0].name, name) && utf8_ok(rec_apps[0].name));
+    free(name);
+    app_counts(",\"count\":-1", 0, 0, 0);
+    app_counts(",\"count\":300,\"waiting\":300,\"working\":300", 255, 255, 255);
+    app_counts(",\"count\":\"3\"", 0, 0, 0);
+    app_counts(",\"count\":2.7", 2, 0, 0);
+    app_counts(",\"count\":1e999", 255, 0, 0);
+    app_counts(",\"count\":2,\"waiting\":5,\"working\":9", 2, 2, 2);
+    app_counts(",\"count\":0,\"waiting\":2", 0, 0, 0);
+    app_counts("", 0, 0, 0);
+}
+
+// Every welcome says apps.switch again, a keepalive one too: a daemon that restarted inside the silence window may have
+// dropped it. A first welcome says it before the link comes up.
+static void apps_switch_on_every_welcome(void)
+{
+    end_session();
+    reset();
+    apps_switch_calls = 0;
+    apps_switch_at = -1;
+    feed("{\"t\":\"welcome\",\"machine\":{\"id\":\"m1\",\"name\":\"Mac\"},\"features\":[\"apps.switch\"]}");
+    CHECK(apps_switch_calls == 1 && apps_switch_on && apps_switch_at == 0);
+    CHECK(nev == 1 && evs[0].kind == EV_LINK);
+    feed("{\"t\":\"welcome\",\"machine\":{\"id\":\"m1\",\"name\":\"Mac\"},\"features\":[]}");
+    CHECK(apps_switch_calls == 2 && !apps_switch_on);
+    CHECK(nev == 1);   // a keepalive: no new EV_LINK
+}
+
 int main(void)
 {
     pro_cable_start();   // the lock and the machine table; no tasks run on the host
@@ -1177,10 +1384,18 @@ int main(void)
     fw_confirms_on_welcome();
     session_down_aborts_then_new_offer_ok();
     send_shapes();
+    app_pick_shapes();
     link_resync();
     seq_gaps();
     self_replug();
     replug_spares_a_frame_in_flight();
+    features_apps_switch_and_question_tier();
+    question_tier_list();
+    agent_host_and_caps();
+    agents_end_view_and_tab();
+    apps_rows();
+    apps_bounds();
+    apps_switch_on_every_welcome();
     printf("test_pro_cable: %d checks passed\n", checks);
     return 0;
 }

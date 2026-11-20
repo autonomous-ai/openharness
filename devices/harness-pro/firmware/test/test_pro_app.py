@@ -595,7 +595,7 @@ static void pets_start_on_link(void) {
     pro_agent_row_t rows[3] = {{.id = "a1", .name = "Alpha", .engine = "claude", .machine = "mac"},
                                {.id = "a2", .name = "Bravo", .engine = "codex", .machine = "mac"},
                                {.id = "a3", .name = "Charlie", .engine = "claude", .machine = "mac"}};
-    pro_app_agents(rows, 3);
+    pro_app_agents(rows, 3, false, true);
     CHECK(U.nav.depth == 1 && R.opens == 0);            // no tabs yet: nothing to enter
     cable_swarm_t sw[2] = {{.agents = 2, .panes = 2}, {.agents = 1, .panes = 1}};
     snprintf(sw[0].id, sizeof sw[0].id, "s0"); snprintf(sw[0].name, sizeof sw[0].name, "Backend");
@@ -879,7 +879,7 @@ static void *cable_task(void *arg) {
     (void)arg;
     pro_app_test_reset();
     pro_app_link(true, "mac");
-    pro_app_agents(NULL, 0);
+    pro_app_agents(NULL, 0, false, true);
     pro_app_swarms(NULL, 0, NULL, NULL, NULL, 0);
     pro_app_tick();                                          // the sweep begins and asks for offset 0
     pro_library_row_t lib[6] = {
@@ -901,16 +901,16 @@ static void *cable_task(void *arg) {
     pro_app_swarms(CS, SWARMS_MAX, &CM, "s3", CT, SWARM_TILES_MAX);
     for (int n = 0; n < POD_AGENTS_MAX; n++) {
         snprintf(CIDS[n], ID_MAX, "a%d", n + 1);
-        CA[n] = (pro_agent_row_t){CIDS[n], "Agent", "claude", "m1", "mac"};
+        CA[n] = (pro_agent_row_t){CIDS[n], "Agent", "claude", "m1", "mac", NULL, 0};
     }
-    pro_app_agents(CA, POD_AGENTS_MAX);
-    pro_app_agents(NULL, 0);
-    pro_app_agents(CA, POD_AGENTS_MAX);
+    pro_app_agents(CA, POD_AGENTS_MAX, false, true);
+    pro_app_agents(NULL, 0, false, true);
+    pro_app_agents(CA, POD_AGENTS_MAX, false, true);
     pro_app_turn("a1", "started", "Thinking...", 0);
     pro_app_turn("a1", "verb", "Reading...", -1);
     pro_app_turn("a1", "activity", "Reading files", 3);
     pro_app_turn("a1", "step", "Read - pod_model.c", -1);
-    pro_app_question("a3", "r1", "Which branch?");
+    pro_app_question("a3", "r1", "Which branch?", false);
     pro_app_question_close("a3");
     pro_app_summary("a2", "Fixed the parser.", "Fixed the parser. Added two tests.", "Fixed the parser. Added two tests. Then more.", false, POD_TIER_SILENT);
     pro_app_focus("a4");
@@ -1495,15 +1495,15 @@ static void pro_app_test_summary_and_question(void) {
     pro_app_summary("a3", "done", NULL, NULL, false, POD_TIER_SILENT);
     CHECK(agent("a3")->recap[0] == 0);
     // Questions: held while open, closed by the daemon or by a new turn.
-    pro_app_question("a1", "r1", "Which branch?");
+    pro_app_question("a1", "r1", "Which branch?", false);
     CHECK(pro_app_question_open("a1") && agent("a1")->state == POD_ASKING);
     pro_app_question_close("a1");
     CHECK(!pro_app_question_open("a1"));
-    pro_app_question("a1", "r1", NULL);
+    pro_app_question("a1", "r1", NULL, false);
     CHECK(pro_app_question_open("a1") && !strcmp(agent("a1")->question, "Needs your answer"));
     pro_app_turn("a1", "started", "", 0);
     CHECK(!pro_app_question_open("a1"));
-    pro_app_question("zz", "r1", "ghost?");
+    pro_app_question("zz", "r1", "ghost?", false);
     CHECK(!pro_app_question_open("zz"));
 }
 
@@ -1565,17 +1565,17 @@ static void pro_app_test_voice_gate(void) {
     snprintf(m[1].id, sizeof m[1].id, "m-link"); snprintf(m[1].name, sizeof m[1].name, "Pc"); snprintf(m[1].state, sizeof m[1].state, "needs-link");
     pro_app_machines(m, 2, "m-off");
     static pro_agent_row_t rows[4];
-    rows[0] = (pro_agent_row_t){"a1", "Alpha", "claude", "m-ok", "Mac"};
-    rows[1] = (pro_agent_row_t){"a2", "Bravo", "codex", "m-off", "Box"};
-    rows[2] = (pro_agent_row_t){"a3", "Charlie", "claude", "m-link", "Pc"};
-    rows[3] = (pro_agent_row_t){"a4", "Shell", "terminal", "m-ok", "Mac"};
-    pro_app_agents(rows, 4);
+    rows[0] = (pro_agent_row_t){"a1", "Alpha", "claude", "m-ok", "Mac", NULL, 0};
+    rows[1] = (pro_agent_row_t){"a2", "Bravo", "codex", "m-off", "Box", NULL, 0};
+    rows[2] = (pro_agent_row_t){"a3", "Charlie", "claude", "m-link", "Pc", NULL, 0};
+    rows[3] = (pro_agent_row_t){"a4", "Shell", "terminal", "m-ok", "Mac", NULL, 0};
+    pro_app_agents(rows, 4, false, true);
     CHECK(pro_app_voice_block_reason("a1") == NULL);
     CHECK(!strcmp(pro_app_voice_block_reason("a2"), "This computer is offline."));
     CHECK(!strcmp(pro_app_voice_block_reason("a3"), "Link this computer in Harness."));
     CHECK(!strcmp(pro_app_voice_block_reason("a4"), "Choose an agent pane."));
     CHECK(pro_app_voice_block_reason("nobody") == NULL);        // unknown: allowed
-    pro_app_question("a1", "r1", "Which?");
+    pro_app_question("a1", "r1", "Which?", false);
     CHECK(!strcmp(pro_app_voice_block_reason("a1"), "Answer its question first."));
     pro_app_question_close("a1");
     CHECK(pro_app_voice_block_reason("a1") == NULL);
@@ -1610,7 +1610,7 @@ static void pro_app_test_voice_paths(void) {
     CHECK(top() == POD_V_AGENT && !pod_ui_talking(&U) && U.notice_on && !strcmp(U.notice, "Can't talk right now"));
     // A gate refusal never reaches the recorder
     V.refuse = false;
-    pro_app_question("a1", "r1", "Which?");
+    pro_app_question("a1", "r1", "Which?", false);
     render();
     CHECK(hit(POD_A_TALK, 0) == NULL);                         // no screen draws a Talk button; the gate still meets a stale hit
     tap_stale_talk();
@@ -1683,10 +1683,10 @@ static void pro_app_test_roster_and_swarms(void) {
     setup();
     static pro_agent_row_t rows[POD_AGENTS_MAX + 4];
     static char ids[POD_AGENTS_MAX + 4][ID_MAX];
-    for (int i = 0; i < POD_AGENTS_MAX + 4; i++) { snprintf(ids[i], ID_MAX, "r%d", i); rows[i] = (pro_agent_row_t){ids[i], NULL, "claude", "m", "mac"}; }
+    for (int i = 0; i < POD_AGENTS_MAX + 4; i++) { snprintf(ids[i], ID_MAX, "r%d", i); rows[i] = (pro_agent_row_t){ids[i], NULL, "claude", "m", "mac", NULL, 0}; }
     rows[1] = rows[0];                                         // a duplicate id
     rows[2].id = "";                                           // no id
-    pro_app_agents(rows, POD_AGENTS_MAX + 4);
+    pro_app_agents(rows, POD_AGENTS_MAX + 4, false, true);
     CHECK(agent("r0") && !strcmp(agent("r0")->name, "r0"));      // the name falls back to the id
     CHECK(agent("r3") != NULL && agent("a1") == NULL);
     int held_n = 0;
@@ -1771,10 +1771,10 @@ static void side_button_discards_hands_free(void) {
 static void question_needs_the_link(void) {
     setup();
     pro_app_link(false, NULL);
-    pro_app_question("a1", "r1", "Which one?");
+    pro_app_question("a1", "r1", "Which one?", false);
     CHECK(!pro_app_question_open("a1"));
     pro_app_link(true, "mac");
-    pro_app_question("a1", "r1", "Which one?");
+    pro_app_question("a1", "r1", "Which one?", false);
     CHECK(pro_app_question_open("a1"));
 }
 
@@ -1889,11 +1889,11 @@ static void notify_tiers(void) {
 // A question is an alert; a failed turn files a failed entry as an alert.
 static void notify_question_and_error(void) {
     notif_room();   // a1's room, now = 5300
-    pro_app_question("a3", "r1", "Which branch?");
+    pro_app_question("a3", "r1", "Which branch?", false);
     render();
     CHECK(BEEPS == 1 && banner() && !strcmp(banner()->id, "a3") && pod_model_unread_find(&U.model, "a3"));
     now += 10000;
-    pro_app_question("a2", "r1", "Which file?");
+    pro_app_question("a2", "r1", "Which file?", false);
     CHECK(BEEPS == 1);   // coalesced
     pro_app_question_close("a3");
     pro_app_question_close("a2");
@@ -1901,13 +1901,13 @@ static void notify_question_and_error(void) {
     // Asleep: the question wakes the glass.
     pro_app_sleep();
     now += 40000;
-    pro_app_question("a3", "r1", "Again?");
+    pro_app_question("a3", "r1", "Again?", false);
     CHECK(!pro_app_asleep() && BEEPS == 2);
     // Its own room: no beep, nothing filed.
     pro_app_question_close("a3");
     notif_setup();
     pod_ui_focus(&U, "a3", now);
-    pro_app_question("a3", "r1", "Here?");
+    pro_app_question("a3", "r1", "Here?", false);
     CHECK(BEEPS == 0 && U.model.unread_count == 0);
     // turn.error: a failed entry, an alert.
     notif_room();
@@ -1921,19 +1921,19 @@ static void notify_question_and_error(void) {
 // The daemon re-sends an open question after a link drop: the row returns, but the glass does not wake or beep again.
 static void notify_question_resent_after_relink_is_quiet(void) {
     notif_room();
-    pro_app_question("a3", "r1", "Which branch?");
+    pro_app_question("a3", "r1", "Which branch?", false);
     CHECK(BEEPS == 1);
     pro_app_link(false, NULL);
     pro_app_link(true, "mac");
     pro_app_sleep();
     now += 40000;   // past the beep coalescing, so only the repeat check can silence it
-    pro_app_question("a3", "r1", "Which branch?");
+    pro_app_question("a3", "r1", "Which branch?", false);
     CHECK(pro_app_question_open("a3") && pod_model_unread_find(&U.model, "a3") && BEEPS == 1 && pro_app_asleep());
-    pro_app_question("a3", "r2", "A different one?");   // another prompt is news
+    pro_app_question("a3", "r2", "A different one?", false);   // another prompt is news
     CHECK(BEEPS == 2 && !pro_app_asleep());
     pro_app_question_close("a3");
     now += 40000;
-    pro_app_question("a3", "r3", "A different one?");   // answered, then asked again: news
+    pro_app_question("a3", "r3", "A different one?", false);   // answered, then asked again: news
     CHECK(BEEPS == 3);
 }
 
@@ -1941,27 +1941,162 @@ static void notify_question_resent_after_relink_is_quiet(void) {
 // Code's approvals all read "Do you want to proceed?").
 static void notify_question_same_prompt_new_request_beeps(void) {
     notif_room();
-    pro_app_question("a3", "r1", "Do you want to proceed?");
+    pro_app_question("a3", "r1", "Do you want to proceed?", false);
     CHECK(BEEPS == 1);
     pro_app_link(false, NULL);   // the close of r1 is lost with the link
     pro_app_link(true, "mac");
     now += 40000;
-    pro_app_question("a3", "r2", "Do you want to proceed?");
+    pro_app_question("a3", "r2", "Do you want to proceed?", false);
     CHECK(BEEPS == 2);
+}
+
+// A question told again (`tier: "list"`) while the glass is dark: filed as an open question, yet dark and silent.
+static void question_list_tier_is_quiet(void) {
+    notif_room();
+    pro_app_sleep();
+    pro_app_question("a3", "r1", "Which branch?", true);
+    render();
+    const pod_unread_t *e = pod_model_unread_find(&U.model, "a3");
+    CHECK(pro_app_question_open("a3") && agent("a3")->state == POD_ASKING && e && e->ask);
+    CHECK(BEEPS == 0 && pro_app_asleep() && !U.ban_on);
+    CHECK(!strcmp(pro_app_voice_block_reason("a3"), "Answer its question first."));
+    pro_app_question("a2", "r1", "Which file?", false);   // a new one is still an alert
+    CHECK(BEEPS == 1 && !pro_app_asleep());
+}
+
+// The roster brings each agent's app and caps, and agents.end the view and the tab, into the model under the one lock.
+static void agents_carry_app_and_view(void) {
+    setup();
+    pro_agent_row_t rows[3] = {{.id = "a1", .name = "Alpha", .engine = "claude", .machine = "mac"},
+                               {.id = "a2", .name = "Bravo", .engine = "codex", .machine = "mac", .host = "codex",
+                                .caps_off = POD_CAP_V | POD_CAP_A},
+                               {.id = "a3", .name = "Charlie", .engine = "claude", .machine = "mac", .host = "claude",
+                                .caps_off = POD_CAPS_ALL & ~POD_CAP_S}};
+    pro_app_agents(rows, 3, true, false);
+    CHECK(agent("a1")->caps == POD_CAPS_ALL && !strcmp(agent("a1")->host, ""));
+    CHECK(agent("a2")->caps == (POD_CAP_S | POD_CAP_F) && !strcmp(agent("a2")->host, "codex"));
+    CHECK(agent("a3")->caps == POD_CAP_S && !strcmp(agent("a3")->host, "claude"));
+    CHECK(U.model.machine_view && U.model.has_window);   // setup's swarms listed two tabs
+    pro_app_agents(rows, 3, false, true);
+    CHECK(!U.model.machine_view && U.model.has_window);
+    // A library-only agent never had an `agent` row: everything is allowed.
+    now += 1000;
+    pro_app_tick();
+    static const pro_library_row_t lib[1] = {{"far", "Stylist", "codex", "Box", "idle", 5}};
+    pro_app_library(lib, 1, 0, 1);
+    CHECK(agent("far") && agent("far")->caps == POD_CAPS_ALL);
+    CHECK(LOCK_DEPTH == 0);
+}
+
+// a1 may talk; a2 (ChatGPT) withholds voice and approval; a3 is a plain terminal without voice.
+static void no_voice_rows(void) {
+    static const pro_agent_row_t rows[3] = {{.id = "a1", .name = "Alpha", .engine = "claude", .machine = "mac"},
+                                            {.id = "a2", .name = "Bravo", .engine = "codex", .machine = "mac", .host = "codex",
+                                             .caps_off = POD_CAP_V | POD_CAP_A},
+                                            {.id = "a3", .name = "Charlie", .engine = "terminal", .machine = "mac", .host = "",
+                                             .caps_off = POD_CAP_V}};
+    pro_app_agents(rows, 3, false, true);
+}
+
+// An agent without voice says where to go before any other per-agent reason; the link checks still come first.
+static void voice_needs_the_v_cap(void) {
+    setup();
+    no_voice_rows();
+    CHECK(pro_app_voice_block_reason("a1") == NULL);
+    CHECK(pro_app_voice_block_reason("a2") == pod_host_see_it("codex"));
+    CHECK(!strcmp(pro_app_voice_block_reason("a2"), "See it in ChatGPT"));
+    CHECK(!strcmp(pro_app_voice_block_reason("a3"), "See it in Terminal"));   // before "Choose an agent pane."
+    pro_app_question("a2", "r1", "Which?", false);
+    CHECK(!strcmp(pro_app_voice_block_reason("a2"), "See it in ChatGPT"));
+    CHECK(pro_app_voice_block_reason(NULL) == NULL);   // a start with no agent: the daemon routes it
+    now += 1000;
+    pro_app_tick();
+    static const pro_library_row_t lib[1] = {{"far", "Stylist", "codex", "Box", "idle", 5}};
+    pro_app_library(lib, 1, 0, 1);
+    CHECK(agent("far") && pro_app_voice_block_reason("far") == NULL);   // no `agent` row: voice as today
+    pro_app_link(false, NULL);
+    CHECK(!strcmp(pro_app_voice_block_reason("a2"), "Not connected"));
+    CHECK(LOCK_DEPTH == 0);
+}
+
+// A tap on an agent without voice never reaches the recorder and says "See it in <App>" for 2 s; other refusals keep 3 s.
+static void see_it_notice_lasts_two_seconds(void) {
+    setup();
+    no_voice_rows();
+    render();
+    tap(POD_A_OPEN_TAB, 0);
+    tap(POD_A_OPEN_AGENT, 1);
+    CHECK(top() == POD_V_RECAP && !strcmp(cur(), "a2"));   // done, with a recap: a tap there talks too
+    tap(POD_A_TALK, 0);
+    CHECK(R.begins == 0 && !V.open && !pod_ui_talking(&U));
+    CHECK(U.notice_on && !strcmp(U.notice, "See it in ChatGPT"));
+    const int32_t left = (int32_t)(U.notice_until - now);
+    CHECK(left > 0 && left <= 2000);
+    now = U.notice_until - 1; render();
+    CHECK(U.notice_on);
+    now = U.notice_until; render();
+    CHECK(!U.notice_on);
+    setup();
+    no_voice_rows();
+    render();
+    tap(POD_A_OPEN_TAB, 0);
+    tap(POD_A_OPEN_AGENT, 0);
+    CHECK(top() == POD_V_AGENT && !strcmp(cur(), "a1"));
+    pro_app_question("a1", "r1", "Which?", false);
+    render();
+    tap_stale_talk();
+    CHECK(R.begins == 0 && !strcmp(U.notice, "Answer its question first."));
+    CHECK((int32_t)(U.notice_until - now) > 2000);
+    pro_app_question_close("a1");
+    render();
+    tap(POD_A_TALK, 0);
+    CHECK(R.begins == 1);   // all caps: it records as before
+    CHECK(LOCK_DEPTH == 0);
+}
+
+// The app list and apps.switch reach the model under the one lock; the same list again costs no redraw; a drop clears them.
+static void apps_reach_the_model(void) {
+    setup();
+    (void)pro_app_test_take_dirty();
+    static const cable_app_t rows[2] = {{"codex", "ChatGPT", 3, 1, 2}, {"vscode", "VS Code", 1, 0, 0}};
+    pro_app_apps(rows, 2, "codex");
+    CHECK(LOCK_DEPTH == 0);
+    CHECK(U.model.app_count == 2 && U.model.apps[0].working == 2 && !strcmp(U.model.apps[1].id, "vscode"));
+    CHECK(!strcmp(U.model.app_shown, "codex") && pro_app_test_take_dirty());
+    pro_app_apps(rows, 2, "codex");
+    CHECK(!pro_app_test_take_dirty());
+    pro_app_apps_switch(true);
+    CHECK(LOCK_DEPTH == 0 && U.model.apps_switch && pro_app_test_take_dirty());
+    pro_app_link(false, NULL);
+    CHECK(U.model.app_count == 0 && !U.model.apps_switch && !strcmp(U.model.app_shown, ""));
+    CHECK(LOCK_DEPTH == 0);
+}
+
+// A live link that moves to another computer (a welcome naming another machine: pro_app_link(true) while linked) forgets
+// the last one's apps, since an older daemon there sends none to replace them. That welcome's apps.switch, said first, stays.
+static void apps_forgotten_on_another_computer(void) {
+    setup();
+    static const cable_app_t rows[1] = {{"codex", "ChatGPT", 3, 1, 2}};
+    pro_app_apps(rows, 1, "codex");
+    pro_app_apps_switch(true);
+    CHECK(U.model.app_count == 1);
+    pro_app_link(true, "box");
+    CHECK(U.model.app_count == 0 && U.model.app_shown[0] == 0 && U.model.apps_switch);
+    CHECK(LOCK_DEPTH == 0);
 }
 
 // A question's entry goes whenever the question ends: a new turn, a finished turn, a link drop.
 static void notify_question_entry_ends_with_question(void) {
     notif_room();
-    pro_app_question("a3", "r1", "Which branch?");
+    pro_app_question("a3", "r1", "Which branch?", false);
     CHECK(pod_model_unread_find(&U.model, "a3"));
     pro_app_turn("a3", "started", "Working", 0);
     CHECK(!pod_model_unread_find(&U.model, "a3"));
-    pro_app_question("a2", "r1", "Which file?");
+    pro_app_question("a2", "r1", "Which file?", false);
     CHECK(pod_model_unread_find(&U.model, "a2"));
     pro_app_summary("a2", "t", "Done.", NULL, false, POD_TIER_SILENT);
     CHECK(!pod_model_unread_find(&U.model, "a2"));   // a silent end files nothing, and the question's entry is gone
-    pro_app_question("a3", "r1", "Again?");
+    pro_app_question("a3", "r1", "Again?", false);
     CHECK(pod_model_unread_find(&U.model, "a3"));
     pro_app_link(false, NULL);
     CHECK(!pod_model_unread_find(&U.model, "a3"));
@@ -2374,7 +2509,7 @@ int main(int argc, char **argv) {
         {"pro_app_test_voice_paths", pro_app_test_voice_paths}, {"pro_app_test_touch_rules", pro_app_test_touch_rules},
         {"pro_app_test_roster_and_swarms", pro_app_test_roster_and_swarms}, {"side_button", side_button}, {"side_button_console", side_button_console}, {"question_needs_the_link", question_needs_the_link},
         {"notify_banner_beep_and_expiry", notify_banner_beep_and_expiry}, {"notify_tap_opens_and_swipe_dismisses", notify_tap_opens_and_swipe_dismisses},
-        {"notify_never_over_talk", notify_never_over_talk}, {"notify_tiers", notify_tiers}, {"notify_question_and_error", notify_question_and_error}, {"notify_entries_expire", notify_entries_expire}, {"notify_question_entry_ends_with_question", notify_question_entry_ends_with_question}, {"notify_question_resent_after_relink_is_quiet", notify_question_resent_after_relink_is_quiet}, {"notify_question_same_prompt_new_request_beeps", notify_question_same_prompt_new_request_beeps}, {"notify_replace_seen_and_read", notify_replace_seen_and_read},
+        {"notify_never_over_talk", notify_never_over_talk}, {"notify_tiers", notify_tiers}, {"notify_question_and_error", notify_question_and_error}, {"notify_entries_expire", notify_entries_expire}, {"notify_question_entry_ends_with_question", notify_question_entry_ends_with_question}, {"notify_question_resent_after_relink_is_quiet", notify_question_resent_after_relink_is_quiet}, {"notify_question_same_prompt_new_request_beeps", notify_question_same_prompt_new_request_beeps}, {"question_list_tier_is_quiet", question_list_tier_is_quiet}, {"agents_carry_app_and_view", agents_carry_app_and_view}, {"voice_needs_the_v_cap", voice_needs_the_v_cap}, {"see_it_notice_lasts_two_seconds", see_it_notice_lasts_two_seconds}, {"apps_reach_the_model", apps_reach_the_model}, {"apps_forgotten_on_another_computer", apps_forgotten_on_another_computer}, {"notify_replace_seen_and_read", notify_replace_seen_and_read},
         {"ota_screen_and_touch", ota_screen_and_touch}, {"voice_refused_while_updating", voice_refused_while_updating},
         {"update_gate", update_gate}, {"ota_failed_returns", ota_failed_returns}, {"ota_keeps_awake", ota_keeps_awake},
         {"ota_notifications_quiet", ota_notifications_quiet}, {"updated_notice", updated_notice},

@@ -339,19 +339,33 @@ pub trait Log: Send + Sync {
 /// A log that keeps its lines, for every task's tests.
 #[cfg(test)]
 #[derive(Default)]
-pub struct MemoryLog(std::sync::Mutex<Vec<String>>);
+pub struct MemoryLog {
+    lines: std::sync::Mutex<Vec<String>>,
+    /// A line was written: another thread may write the one a test waits on.
+    wrote: std::sync::Condvar,
+}
 
 #[cfg(test)]
 impl MemoryLog {
     pub fn lines(&self) -> Vec<String> {
-        self.0.lock().unwrap().clone()
+        self.lines.lock().unwrap().clone()
+    }
+
+    /// Waits until the lines pass `done`, 5 s at most, and gives them.
+    pub fn until(&self, done: impl Fn(&[String]) -> bool) -> Vec<String> {
+        let lines = self.lines.lock().unwrap();
+        let wait = std::time::Duration::from_secs(5);
+        let (lines, _) = self.wrote.wait_timeout_while(lines, wait, |lines| !done(lines)).unwrap();
+        assert!(done(&lines), "{lines:?}");
+        lines.clone()
     }
 }
 
 #[cfg(test)]
 impl Log for MemoryLog {
     fn line(&self, text: &str) {
-        self.0.lock().unwrap().push(text.to_string());
+        self.lines.lock().unwrap().push(text.to_string());
+        self.wrote.notify_all();
     }
 }
 
