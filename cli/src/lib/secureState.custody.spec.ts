@@ -26,6 +26,8 @@ afterEach(async () => {
 
 it.each(['directory', 'read', 'harden', 'sync'] as const)('retains a failed synchronous %s helper close and refuses another open', async kind => {
   const state = await import('./secureState.js'), close = fs.closeSync
+  // A directory already at 0700 needs no descriptor; exercise the tightening path's close.
+  if (kind === 'directory') fs.chmodSync(root, 0o750)
   const opened = vi.spyOn(fs, 'openSync')
   vi.spyOn(fs, 'closeSync').mockImplementationOnce(fd => {
     cleanup.push(() => close(fd))

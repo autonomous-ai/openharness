@@ -1,11 +1,11 @@
 /** Stopped work is durable history, separate from the registry of live terminal routes. */
-import { closeSync, constants, fsyncSync, lstatSync, openSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
+import { closeSync, constants, fstatSync, fsyncSync, lstatSync, openSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { basename, dirname, join } from 'node:path'
 import { env } from '../config/env.js'
 import { isTerminalEngine } from '../engines/types.js'
 import { projectDisplayName, strictPersistedRow, withHermesHome, type RegisteredSession } from './registry.js'
-import { readPrivateStateFile, secureStateDirectory, syncStateDirectory } from './secureState.js'
+import { closeStateFileDescriptor, directorySyncSupported, readPrivateStateFile, secureStateDirectory, stateFileCustodyHealthy, syncStateDirectory } from './secureState.js'
 import { sameProcessIdentity } from './terminalRuntime.js'
 import { conversationKey } from './conversationIdentity.js'
 import { SessionStorage, sessionStorage } from './sessionStorage.js'
@@ -250,16 +250,33 @@ export class StoppedAgentStore {
     if (!SAFE_ID.test(agentId)) return
     const file = join(this.directory, `${agentId}.resume`)
     try {
-      secureStateDirectory(this.directory, false)
-      const marker = readPrivateStateFile(file, 1024)
-      if (token !== undefined && JSON.parse(marker).token !== token) return
-      unlinkSync(file)
-      this.syncDirectory()
+      this.removeFile(file, () => {
+        secureStateDirectory(this.directory, false)
+        const marker = readPrivateStateFile(file, 1024)
+        return token === undefined || JSON.parse(marker).token === token
+      })
     } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
   }
 
   private syncDirectory(): void {
     syncStateDirectory(this.directory, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW)
+  }
+
+  private removeFile(file: string, current: () => boolean): void {
+    stateFileCustodyHealthy()
+    // Metadata checks need no descriptor. Both archive and reservation deletion must own their flush handle first.
+    const fd = directorySyncSupported()
+      ? openSync(this.directory, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW) : undefined
+    try {
+      if (!current()) return
+      if (fd !== undefined) {
+        const held = fstatSync(fd, { bigint: true }), named = lstatSync(this.directory, { bigint: true })
+        if (held.dev !== named.dev || held.ino !== named.ino) throw new RegistryPersistenceUnavailable('stopped directory changed')
+      }
+      unlinkSync(file)
+      if (fd !== undefined) { stateFileCustodyHealthy(); fsyncSync(fd) }
+      else this.syncDirectory()
+    } finally { if (fd !== undefined) closeStateFileDescriptor(fd) }
   }
 
   /** Permanent deletion is separate from Stop, which always retains this record. */
@@ -269,9 +286,11 @@ export class StoppedAgentStore {
       const saved = await this.get(agentId)
       if (!saved) return
       deadline.check()
-      if (!current() || !this.current(saved)) throw new RegistryPersistenceUnavailable('stopped owner changed')
-      unlinkSync(join(this.directory, `${agentId}.json`))
-      this.syncDirectory()
+      this.removeFile(join(this.directory, `${agentId}.json`), () => {
+        deadline.check()
+        if (!current() || !this.current(saved)) throw new RegistryPersistenceUnavailable('stopped owner changed')
+        return true
+      })
     }))
   }
 

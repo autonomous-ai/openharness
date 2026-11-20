@@ -10,6 +10,7 @@ const io = vi.hoisted(() => ({
   afterOpen: undefined as ((path: string) => void) | undefined,
   beforeStat: undefined as ((path: string) => void) | undefined,
   afterStat: undefined as ((path: string) => void) | undefined,
+  afterPathStat: undefined as ((path: string, bigint: boolean) => void) | undefined,
   beforeSync: undefined as ((path: string) => void) | undefined,
   afterSync: undefined as ((path: string) => void) | undefined,
   owners: new Set<number>(),
@@ -34,6 +35,11 @@ vi.mock('node:fs', async importOriginal => {
       io.beforeStat?.(path)
       const value = fs.fstatSync(...args)
       io.afterStat?.(path)
+      return value
+    },
+    lstatSync: (...args: Parameters<typeof fs.lstatSync>) => {
+      const value = fs.lstatSync(...args)
+      io.afterPathStat?.(String(args[0]), args[1]?.bigint === true)
       return value
     },
     closeSync: (fd: number) => { try { fs.closeSync(fd) } finally { paths.delete(fd); io.owners.delete(fd) } },
@@ -61,7 +67,7 @@ vi.mock('node:fs', async importOriginal => {
 const fs = await vi.importActual<typeof import('node:fs')>('node:fs')
 let directory: string
 const leases: CheckpointStage[] = []
-const clearFaults = () => { io.beforeOpen = io.afterOpen = io.beforeStat = io.afterStat = io.beforeSync = io.afterSync = undefined }
+const clearFaults = () => { io.beforeOpen = io.afterOpen = io.beforeStat = io.afterStat = io.beforeSync = io.afterSync = undefined; io.afterPathStat = undefined }
 beforeEach(async () => {
   directory = await mkdtemp(join(tmpdir(), 'checkpoint-owner-'))
   vi.stubEnv('ADAPTER_DATA_DIR', directory)
@@ -219,12 +225,12 @@ it.skipIf(process.platform === 'win32').each(['writer', 'settled', 'destination'
   if (phase === 'destination') { await lease.writer(process.pid); await lease.settled(); await verify(lease) }
   let flushed = false, proofs = 0
   io.afterSync = path => { if (path === record) flushed = true }
-  io.afterOpen = path => { if (flushed && path === slot) proofs++ }
+  io.afterPathStat = (path, bigint) => { if (flushed && path === slot && bigint) proofs++ }
   if (phase === 'writer') await lease.writer(process.pid)
   else if (phase === 'settled') await lease.settled()
   else await lease.publish(destination(), () => {})
   clearFaults()
-  // One proof after the owner flush; publication also checks its slot after closing the history descriptor.
+  // Count exact slot identities, separately from the private-mode probe. Publication checks again after history closes.
   expect(proofs).toBe(phase === 'destination' ? 2 : 1)
   const owner = JSON.parse(await readFile(record, 'utf8'))
   expect(owner[phase === 'destination' ? 'destination' : phase]).toBe(

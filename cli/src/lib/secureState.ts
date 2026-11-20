@@ -237,6 +237,17 @@ export function secureStateDirectory(directory: string, create = true): void {
     secureWindowsStateDirectory(directory, create)
     return
   }
+  // Close/Resume repeatedly checks private directories without retaining the descriptor.
+  // Read current metadata instead; creation and any tightening still use the opened directory.
+  if (!create) {
+    const uid = ownerUid()
+    if (uid !== null) {
+      try {
+        const stat = lstatSync(directory)
+        if (stat.isDirectory() && stat.uid === uid && (stat.mode & 0o7777) === PRIVATE_DIRECTORY_MODE) return
+      } catch { /* Preserve the original open error and permission handling below. */ }
+    }
+  }
   if (create) mkdirSync(directory, { recursive: true, mode: PRIVATE_DIRECTORY_MODE })
   const fd = openSync(
     directory,

@@ -1,6 +1,6 @@
 import { releaseRegistryEngine, removeRegistryAgent } from '../testing/registryFixtures.js'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { chmodSync, constants, existsSync, fstatSync, fsync, openSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
+import { chmodSync, constants, existsSync, fstatSync, fsync, lstatSync, openSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { createHash, randomUUID } from 'node:crypto'
@@ -8,7 +8,7 @@ import type { RegisteredSession } from './registry.js'
 import type { ChildProcess } from 'node:child_process'
 import { closeSessionStorageFixture } from '../testing/sessionStorageFixture.js'
 
-vi.mock('node:fs', async original => { const fs = await original<typeof import('node:fs')>(); return { ...fs, openSync: vi.fn(fs.openSync), readFileSync: vi.fn(fs.readFileSync), fsync: vi.fn(fs.fsync) } })
+vi.mock('node:fs', async original => { const fs = await original<typeof import('node:fs')>(); return { ...fs, openSync: vi.fn(fs.openSync), lstatSync: vi.fn(fs.lstatSync), readFileSync: vi.fn(fs.readFileSync), fsync: vi.fn(fs.fsync) } })
 
 let directory = ''
 // The first import compiles registry.js's whole module graph: seconds on a loaded Mac. Paid once here, it stays out of the
@@ -23,6 +23,7 @@ beforeEach(() => {
 })
 afterEach(async () => {
   vi.mocked(openSync).mockRestore()
+  vi.mocked(lstatSync).mockRestore()
   vi.mocked(readFileSync).mockRestore()
   vi.mocked(fsync).mockRestore()
   const outcomes = await Promise.allSettled([(await import('./registry.js')).registry.flush()])
@@ -34,6 +35,86 @@ afterEach(async () => {
 })
 
 describe('saved catalog reads', () => {
+  it.skipIf(process.platform === 'win32')('checks selected archive authority without temporary directory descriptors', async () => {
+    const { saved, store } = await fixture()
+    await store.save(saved)
+    const selected = (await store.get(saved.agentId))!
+    vi.mocked(openSync).mockClear(); vi.mocked(lstatSync).mockClear()
+    expect(store.current(selected)).toBe(true)
+    expect(openSync).not.toHaveBeenCalled(); expect(lstatSync).toHaveBeenCalledTimes(2)
+    chmodSync(join(directory, 'stopped-agents'), 0o770)
+    try { expect(store.current(selected)).toBe(false) }
+    finally { chmodSync(join(directory, 'stopped-agents'), 0o700) }
+  })
+
+  it.skipIf(process.platform === 'win32').each(['EMFILE', 'EACCES'])(
+    'retains an archive when its deletion durability handle is unavailable: %s', async code => {
+    const { saved, store } = await fixture()
+    await store.save(saved)
+    const folder = join(directory, 'stopped-agents'), file = join(folder, `${saved.agentId}.json`)
+    const before = readFileSync(file, 'utf8'), real = await vi.importActual<typeof import('node:fs')>('node:fs')
+    vi.mocked(openSync).mockImplementation((path, flags, mode) => {
+      if (String(path) === folder) throw Object.assign(new Error('fixture directory-open denial'), { code })
+      return real.openSync(path, flags, mode)
+    })
+    try {
+      await expect(store.remove(saved.agentId)).rejects.toThrow()
+      expect(readFileSync(file, 'utf8')).toBe(before)
+    } finally { vi.mocked(openSync).mockRestore() }
+    await store.remove(saved.agentId)
+    expect(existsSync(file)).toBe(false)
+  })
+
+  it.skipIf(process.platform === 'win32')('retains an archive when its directory changes after opening the deletion handle', async () => {
+    const { saved, store } = await fixture()
+    await store.save(saved)
+    const folder = join(directory, 'stopped-agents'), file = join(folder, `${saved.agentId}.json`)
+    const displaced = `${folder}-previous`, before = readFileSync(file, 'utf8')
+    const real = await vi.importActual<typeof import('node:fs')>('node:fs')
+    let moved = false
+    await expect(store.remove(saved.agentId, () => {
+      if (!moved) {
+        moved = true; renameSync(folder, displaced); real.mkdirSync(folder, { mode: 0o700 })
+        renameSync(join(displaced, `${saved.agentId}.json`), file)
+      }
+      return true
+    })).rejects.toThrow()
+    expect(moved).toBe(true); expect(readFileSync(file, 'utf8')).toBe(before)
+  })
+
+  it.skipIf(process.platform === 'win32')('refuses a deletion handle naming a different private directory', async () => {
+    const { saved, store } = await fixture()
+    await store.save(saved)
+    const folder = join(directory, 'stopped-agents'), file = join(folder, `${saved.agentId}.json`)
+    const other = join(directory, 'other-directory'), before = readFileSync(file, 'utf8')
+    const real = await vi.importActual<typeof import('node:fs')>('node:fs')
+    real.mkdirSync(other, { mode: 0o700 })
+    // The name returns to its selected directory after open, but the handle keeps the intervening generation.
+    vi.mocked(openSync).mockImplementation((path, flags, mode) => real.openSync(String(path) === folder ? other : path, flags, mode))
+    try {
+      await expect(store.remove(saved.agentId)).rejects.toThrow()
+      expect(readFileSync(file, 'utf8')).toBe(before)
+    } finally { vi.mocked(openSync).mockRestore() }
+  })
+
+  it.skipIf(process.platform === 'win32').each(['EMFILE', 'EACCES'])(
+    'retains a Resume reservation when its deletion durability handle is unavailable: %s', async code => {
+    const { saved, store } = await fixture()
+    const token = store.beginResume(saved.agentId)!
+    const folder = join(directory, 'stopped-agents'), file = join(folder, `${saved.agentId}.resume`)
+    const before = readFileSync(file, 'utf8'), real = await vi.importActual<typeof import('node:fs')>('node:fs')
+    vi.mocked(openSync).mockImplementation((path, flags, mode) => {
+      if (String(path) === folder) throw Object.assign(new Error('fixture directory-open denial'), { code })
+      return real.openSync(path, flags, mode)
+    })
+    try {
+      expect(() => store.finishResume(saved.agentId, token)).toThrow()
+      expect(readFileSync(file, 'utf8')).toBe(before)
+    } finally { vi.mocked(openSync).mockRestore() }
+    store.finishResume(saved.agentId, token)
+    expect(existsSync(file)).toBe(false)
+  })
+
   it('keeps the actual stopped public frame while display rows grant neither current authority nor a credential', async () => {
     const { saved, store, registry } = await fixture()
     await store.save(saved)
