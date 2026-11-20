@@ -2826,12 +2826,13 @@ class Registry {
 
   /**
    * Puts a typed first task back to wait untyped, only while it is [text]: durable before its box is cleared, so a
-   * restart during the clear finds it waiting, typed again only into an empty box. True once that is durable.
+   * restart during the clear finds it waiting, typed again only into an empty box. True once that is durable. Called
+   * from the input controller's timers, which can fire mid-pass, so it waits for the pass's transaction to commit.
    */
   async untypeFirstTask(agentId: string, text: string): Promise<boolean> {
     this.writer.assertOpen()
     const verify = this.ownerGuard(agentId)
-    return this.writer.run(async deadline => {
+    return this.afterTransaction(() => this.writer.run(async deadline => {
       verify()
       const row = this.agents.get(agentId)
       if (!row?.firstTaskTyped || row.firstTaskTyped.text !== text) return false
@@ -2839,22 +2840,26 @@ class Registry {
       delete next.firstTaskTyped
       const receipt = await this.persist(deadline, true, false, undefined, { agentId, candidate: next, verify })
       return !!this.committedOwner(agentId, receipt)
-    })
+    }))
   }
 
-  /** A typed first task leaves the row once its turn is confirmed: true once that is durable, false if it had none. */
-  async firstTaskTaken(agentId: string): Promise<boolean> {
+  /**
+   * A typed first task leaves the row once its turn is confirmed: true once that is durable, false if it had none. With
+   * [at], only the mark typed then goes: a store read is no evidence about a mark typed again since. Called from the turn
+   * stream, which can fire mid-pass, so it waits for the pass's transaction to commit.
+   */
+  async firstTaskTaken(agentId: string, at?: number): Promise<boolean> {
     this.writer.assertOpen()
     const verify = this.ownerGuard(agentId)
-    return this.writer.run(async deadline => {
+    return this.afterTransaction(() => this.writer.run(async deadline => {
       verify()
       const row = this.agents.get(agentId)
-      if (!row?.firstTaskTyped) return false
+      if (!row?.firstTaskTyped || (at !== undefined && row.firstTaskTyped.at !== at)) return false
       const next = { ...row }
       delete next.firstTaskTyped
       const receipt = await this.persist(deadline, true, false, undefined, { agentId, candidate: next, verify })
       return !!this.committedOwner(agentId, receipt)
-    })
+    }))
   }
 
   async setClosePlan(agentId: string, plan: RegisteredSession['closePlan'] | null, authority: RegistryAuthority = {}): Promise<RegisteredSession | null> {
