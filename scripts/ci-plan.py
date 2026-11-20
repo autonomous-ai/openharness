@@ -157,14 +157,15 @@ LINUX_E2E_CANARY = "cli/e2e/twoAccounts.spike.e2e.ts"
 LINUX_E2E_CANARY_PATHS = (".github/actions/cli-e2e-setup/", "cli/e2e/harness/", "cli/vitest.e2e*.config.ts",
                           "cli/ci-e2e-durations.json", LINUX_E2E_CANARY)
 DIAL_HOST_FILES = ("cli/e2e/dialHost*.e2e.ts", "cli/e2e/deviceHerdr.e2e.ts")
-# dial-hosts: those files, the adapters and test helpers they drive, and the job's own definition.
+# dial-hosts: those files, the code they run and the job's own definition. The daemon runs every host adapter from its
+# bundle, and the adapters share their folder's code (observed.ts finds the hosts): the whole folder, and what it and the
+# files import from the cable. The files drive them through the harness's stand-in dial and desk and each host's helper.
+# test_ci_plan walks the imports.
 DIAL_HOST_PATHS = (
-    "cli/e2e/harness/dialHosts.ts", "cli/vitest.e2e.dialHosts.config.ts", "cli/src/cable/portAccess.ts",
-    *(f"cli/src/cable/hosts/{name}.ts" for name in ("herdr", "herdrClient", "herdrOuter", "herdrSource", "kitty",
-                                                     "linuxDesktop", "linuxRaise", "linuxRaiseSway", "linuxRaiseX11",
-                                                     "wezterm", "zellij")),
-    *(f"cli/e2e/harness/{name}.ts" for name in ("herdrServer", "kittyWindow", "swayDesk", "weztermMux", "x11Desk",
-                                                 "zellijSession")),
+    "cli/e2e/harness/dialHosts.ts", "cli/vitest.e2e.dialHosts.config.ts", "cli/src/cable/hosts/",
+    *(f"cli/src/cable/{name}.ts" for name in ("cableFrame", "portAccess", "roundGlyphs")),
+    *(f"cli/e2e/harness/{name}.ts" for name in ("desk", "fakeBackend", "fakeDial", "herdrServer", "kittyWindow",
+                                                 "outsideAgent", "swayDesk", "weztermMux", "x11Desk", "zellijSession")),
     ".github/workflows/cli-e2e-dial-hosts.yml", ".github/actions/cli-e2e-setup/",
 )
 # The names linux-e2e passes on: they reach the jobs' shells through env, and Vitest as file filters, so plain names only.
