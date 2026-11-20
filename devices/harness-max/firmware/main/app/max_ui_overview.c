@@ -7,8 +7,9 @@
 // slivers: its pet smaller and lower, its words gone. The row moves as V3's (max_ui_row.c): an agent opening widens
 // over its neighbours as they narrow, its face fading and its panel coming in, and the row follows the finger. An
 // agent between looks is drawn on the glass as a cell is, dimmed by its colours and cut to its window (max_ui_layer.c).
-// Ambient: the clock large, the date, a few still stars, the demo's three pets playing as V3's, and what the bar has
+// Ambient: V3's drifting specks, the clock large, the date, the demo's three pets playing as V3's, and what the bar has
 // to say ("All quiet").
+#include <math.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -382,8 +383,6 @@ void max_draw_overview(ht_scene_t *s, uint32_t now_ms)
 enum {
     CLOCK_X = DX(64), CLOCK_CY = DY(142), DATE_CY = DY(239), WORDS_R = HT_WIDTH - DX(56), WORDS_CY = DY(143),
     PETS_FOOT = HT_HEIGHT - MAX_Y(10), PETS_MID = DX(887), PETS_GAP = DY(56),
-    PETS_L = DX(574), PETS_R = DX(1200),   // where the pets stand at 480: no star there
-    STARS = 120,
 };
 
 // The demo's three pets, whatever the ring holds (V3 ambient_page.dart _Pets, the owner's call 20 Nov, from a photo of
@@ -399,42 +398,112 @@ static const struct { const char *engine; pod_scene_t scene; int w, side; } DEMO
 };
 enum { DEMO_PET_COUNT = sizeof DEMO_PETS / sizeof DEMO_PETS[0] };
 
-static int isqrt(int v)
-{
-    int r = v, next = (v + 1) / 2;
-    while (next < r) {
-        r = next;
-        next = (r + v / r) / 2;
-    }
-    return r;
-}
+// The drift (V3 aurora.dart, the mockup's drawAurora): DRIFT_SPECKS specks in the lavender, Claude and Codex inks on a
+// slowly turning flow field, stepped at V3's 60 a second in its px (DRIFT_W x DRIFT_H) by the clock, whatever the glass
+// draws at, at most DRIFT_CATCH_UP steps a frame (a stalled glass slows the drift rather than jumping it). It comes up a
+// second in (DRIFT_WARM_MS) with Ambient. V3 draws each speck's last 24 places as 2 px squares fading by 0.9 a step;
+// here its trail is one streak from its place back along its way, DRIFT_TRAIL steps long and 2 px wide at the head, in
+// its ink at the alpha the squares' overlap reaches there. The streaks are the glass's only runs that move each frame.
+enum { DRIFT_SPECKS = 150, DRIFT_CATCH_UP = 4, DRIFT_WARM_MS = 1000, DRIFT_W = 1480, DRIFT_H = 320, DRIFT_TRAIL = 20 };
+typedef struct { float x, y, vx, vy; uint16_t ink; } speck_t;
+static EXT_RAM_BSS_ATTR speck_t s_specks[DRIFT_SPECKS];
+static struct {
+    bool up;          // the field is the Ambient of `page`
+    uint32_t page;    // max_m.page_from when it came up
+    int frames;       // the 60 Hz steps its clock has passed (V3's frames)
+} s_drift;
 
-// A still sky as the mockup's: STARS streaks in its three tints, each pointing out from the glass's middle and longer
-// toward its edges, at places a fixed sequence picks, none over the pets.
-static void stars(ht_scene_t *s)
+// V3's step(ms) at its (frames + 1)th frame: each speck moves along the field, round the edges.
+static void drift_step(void)
 {
-    static const unsigned TINTS[] = {ACCENT, CLAUDE, CODEX};
-    const int mx = HT_WIDTH / 2, my = HT_HEIGHT / 2;
-    uint32_t r = 0x2545F491u;
-    for (int i = 0; i < STARS; i++) {
-        r = r * 1664525u + 1013904223u;
-        const int x = 4 + (int)(r >> 8) % (HT_WIDTH - 8), y = 4 + (int)(r >> 20) % (HT_HEIGHT - 8);
-        if (x > PETS_L - 40 && x < PETS_R + 40 && y > PETS_FOOT - DY(200)) continue;
-        const int dx = x - mx, dy = y - my, d = isqrt(dx * dx + dy * dy);
-        if (!d) continue;
-        // The direction out from the middle in sixteenths of a px, so one step of it is a px long.
-        const int ux = dx * 16 / d, uy = dy * 16 / d, len = 3 + d * 10 / mx;
-        pod_tri(s, x * 16 - ux * len, y * 16 - uy * len, x * 16 - uy, y * 16 + ux, x * 16 + uy, y * 16 - ux,
-                C(max_mix(TINTS[i % 3], GROUND, 35 + (r >> 4) % 50)));
+    const float k = (float)(s_drift.frames + 1) * (1000.0f / 60) / 6000;
+    for (int i = 0; i < DRIFT_SPECKS; i++) {
+        speck_t *p = &s_specks[i];
+        const float ang = sinf(p->x * 0.003f + k) * 1.2f + cosf(p->y * 0.012f - k * 1.3f);
+        p->vx = cosf(ang) * 0.45f + 0.12f;
+        p->vy = sinf(ang) * 0.3f;
+        p->x += p->vx;
+        p->y += p->vy;
+        if (p->x > DRIFT_W) p->x = 0;
+        if (p->x < 0) p->x = DRIFT_W;
+        if (p->y > DRIFT_H) p->y = 0;
+        if (p->y < 0) p->y = DRIFT_H;
     }
+    s_drift.frames++;
 }
+// V3's runTo(ms, catchUp).
+static void drift_to(uint32_t ms, int catch_up)
+{
+    int due = (int)((uint64_t)ms * 60 / 1000) - s_drift.frames;
+    if (due > catch_up) {
+        s_drift.frames += due - catch_up;
+        due = catch_up;
+    }
+    for (int i = 0; i < due; i++) drift_step();
+}
+// The field as Ambient comes up: the specks where a fixed sequence puts them, each with its ink and alpha (V3's .15 to
+// .5), run a second in at once.
+static void drift_up(void)
+{
+    static const unsigned INKS[] = {ACCENT, CLAUDE, CODEX};
+    uint32_t r = 0x2545F491u;
+    for (int i = 0; i < DRIFT_SPECKS; i++) {
+        float u[3];
+        for (int k = 0; k < 3; k++) {
+            r = r * 1664525u + 1013904223u;
+            u[k] = (float)(r >> 8) / (float)(1u << 24);
+        }
+        r = r * 1664525u + 1013904223u;
+        const float a = 0.15f + u[2] * 0.35f, seen = 1 - (1 - a) * (1 - a) * (1 - a);   // three squares overlap
+        s_specks[i] = (speck_t){u[0] * DRIFT_W, u[1] * DRIFT_H, 0.12f, 0, C(max_mix(INKS[(r >> 16) % 3], GROUND,
+                                                                                   (unsigned)(seen * 100 + .5f)))};
+    }
+    s_drift.frames = 0;
+    drift_to(DRIFT_WARM_MS, DRIFT_WARM_MS * 60 / 1000);
+}
+static void drift(ht_scene_t *s, uint32_t now_ms)
+{
+    // A field ahead of its page's clock is another Ambient's that came up at the same ms.
+    const uint32_t clock = DRIFT_WARM_MS + (now_ms - max_m.page_from);
+    if (!s_drift.up || s_drift.page != max_m.page_from || s_drift.frames > (int)((uint64_t)clock * 60 / 1000)) {
+        drift_up();
+        s_drift.up = true;
+        s_drift.page = max_m.page_from;
+    }
+    drift_to(clock, DRIFT_CATCH_UP);
+    // V3's px to the glass's sixteenths of a px.
+    const float gx = HT_WIDTH * 16.0f / DRIFT_W, gy = HT_HEIGHT * 16.0f / DRIFT_H, half = DX(1) * 16 / 2.0f + 4;
+    for (int i = 0; i < DRIFT_SPECKS; i++) {
+        const speck_t *p = &s_specks[i];
+        const float vx = p->vx * gx, vy = p->vy * gy, v = sqrtf(vx * vx + vy * vy);
+        if (v <= 0) continue;
+        const float ux = vx / v, uy = vy / v, hx = p->x * gx, hy = p->y * gy;
+        const int tx = (int)(hx - vx * DRIFT_TRAIL), ty = (int)(hy - vy * DRIFT_TRAIL);
+        const int ax = (int)(hx - uy * half), ay = (int)(hy + ux * half), bx = (int)(hx + uy * half),
+                  by = (int)(hy - ux * half);
+        // Past an edge, as the speck wraps: left out until it is whole again.
+        const int lo_x = imin(tx, imin(ax, bx)), hi_x = imax(tx, imax(ax, bx));
+        const int lo_y = imin(ty, imin(ay, by)), hi_y = imax(ty, imax(ay, by));
+        if (lo_x < 0 || lo_y < 0 || hi_x >= HT_WIDTH * 16 || hi_y >= HT_HEIGHT * 16) continue;
+        pod_tri(s, tx, ty, ax, ay, bx, by, p->ink);
+    }
+    max_motion(now_ms, MAX_LOOP_FRAME_MS);
+}
+bool max_drift_speck(int i, float *x, float *y)
+{
+    if (i < 0 || i >= DRIFT_SPECKS || !s_drift.up) return false;
+    *x = s_specks[i].x;
+    *y = s_specks[i].y;
+    return true;
+}
+int max_drift_frames(void) { return s_drift.frames; }
 
 void max_draw_ambient(ht_scene_t *s, uint32_t now_ms)
 {
     static const char *const DAYS[] = {"Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"};
     static const char *const MONTHS[] = {"January", "February", "March", "April", "May", "June", "July", "August",
                                          "September", "October", "November", "December"};
-    stars(s);
+    drift(s, now_ms);
     if (max_m.wall_known) {
         char clock[8], date[40];
         snprintf(clock, sizeof clock, "%02u:%02u", max_m.wall_hour, max_m.wall_min);

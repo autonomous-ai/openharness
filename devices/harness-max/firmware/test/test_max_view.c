@@ -657,10 +657,10 @@ static void test_ambient(void)
     CHECK(word("15") && word("07") && word("Wednesday 18 November") && word("All quiet"));
     CHECK(word("15")->pro_font == &ph_num_230);
     check_glass();
-    // The demo's three pets play, whatever the ring holds: the render task wakes for the first of their next steps.
-    // Its stars hold still.
+    // The demo's three pets play and the specks drift, whatever the ring holds: the render task wakes for the drift's
+    // frame, or the first of the pets' next steps if sooner.
     const uint32_t step = max_motion_ms(T0);
-    CHECK(step < MAX_WAKE_MS && step <= max_pet_next_ms("claude", POD_SCENE_RELAX, T0) &&
+    CHECK(step > 0 && step <= MAX_LOOP_FRAME_MS && step <= max_pet_next_ms("claude", POD_SCENE_RELAX, T0) &&
           step <= max_pet_next_ms("muse", POD_SCENE_RELAX, T0) && step <= max_pet_next_ms("codex", POD_SCENE_REST, T0));
     // No wall clock yet: no clock.
     max_ui_wall(false, 0, 0, 0, 1, 0);

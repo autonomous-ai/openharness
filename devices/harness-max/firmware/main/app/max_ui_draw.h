@@ -221,6 +221,10 @@ void max_render_aside(ht_scene_t *s, uint32_t now_ms);   // max_ui_view.c
 // App Detail: the app column, the row of agents and the bell; an agent open across the row while the agent page is up.
 void max_draw_overview(ht_scene_t *s, uint32_t now_ms);                          // max_ui_overview.c
 void max_draw_ambient(ht_scene_t *s, uint32_t now_ms);                           // max_ui_overview.c
+// Ambient's drift (max_ui_overview.c), for the tests: speck i's place in V3's px (false past the last), and the 60 Hz
+// steps its clock has passed.
+bool max_drift_speck(int i, float *x, float *y);
+int max_drift_frames(void);
 // The open agent in the row, x..x + w over the glass's height (max_ui_agent.c).
 void max_draw_agent(ht_scene_t *s, const max_agent_t *a, int x, int w, uint32_t now_ms);
 // Its pet, words, band and X without its ground, glow and rail, over `under` and its glow glow_h px down: as it fades

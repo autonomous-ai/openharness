@@ -227,6 +227,12 @@ static uint32_t demo_pets_step(uint32_t t)
         if (steps[i] < ms) ms = steps[i];
     return ms;
 }
+// When Ambient next moves: its drift's frame, or its pets' next step if sooner.
+static uint32_t ambient_step(uint32_t t)
+{
+    const uint32_t pets = demo_pets_step(t);
+    return pets < MAX_LOOP_FRAME_MS ? pets : MAX_LOOP_FRAME_MS;
+}
 
 // When the cells' pets next move (they play at rest, max_ui_overview.c): the first of their next steps.
 static uint32_t cells_step(uint32_t t)
@@ -253,11 +259,11 @@ static void test_clock(void)
     max_m.idle_from = T0;
     render(T0);
     CHECK(cells_step(T0) > MAX_LOOP_FRAME_MS && cells_step(T0) < MAX_WAKE_MS && max_motion_ms(T0) == cells_step(T0));
-    // Ambient loops nothing, whatever the agents do: the render task wakes only for its pets' next step.
+    // Ambient loops nothing, whatever the agents do: the render task wakes for its drift's frame and its pets' steps.
     three();
     max_show(MAX_VIEW_AMBIENT);
     render(T0 + 10);
-    CHECK(max_motion_ms(T0 + 10) == demo_pets_step(T0 + 10));
+    CHECK(max_motion_ms(T0 + 10) == ambient_step(T0 + 10));
     // A page's loops start when it comes up; the agent page's are App Detail's.
     max_show(MAX_VIEW_OVERVIEW);
     render(T0 + 500);
@@ -283,6 +289,14 @@ static int pet_frames(ht_run_t *out, int max)
         if (S.runs[i].pro_kind == 16) out[n++] = S.runs[i];
     return n;
 }
+// The runs of `kind` on the glass, in order.
+static int runs_of(int kind, ht_run_t *out, int max)
+{
+    int n = 0;
+    for (int i = 0; i < S.count && n < max; i++)
+        if (S.runs[i].pro_kind == kind) out[n++] = S.runs[i];
+    return n;
+}
 static void ambient_of(const char *engine, int n)
 {
     static const char *const IDS[] = {"x", "y", "z", "w"};
@@ -299,7 +313,7 @@ static void test_ambient_pets(void)
     three();
     max_show(MAX_VIEW_AMBIENT);
     render(T0);
-    CHECK(max_motion_ms(T0) == demo_pets_step(T0) && demo_pets_step(T0) < MAX_WAKE_MS);
+    CHECK(max_motion_ms(T0) == ambient_step(T0));
     const int n = pet_frames(first, 8);
     CHECK(n == 3 && first[0].x < first[1].x && first[1].x < first[2].x);
     // The same three at the same clock with Codex's agents, a logo's, none, and no link.
@@ -309,26 +323,104 @@ static void test_ambient_pets(void)
         if (k < 3) ambient_of(engines[k], counts[k]);
         else max_ui_reset();   // no link: Ambient
         render(T0);
-        CHECK(max_m.view == MAX_VIEW_AMBIENT && max_motion_ms(T0) == demo_pets_step(T0));
+        CHECK(max_m.view == MAX_VIEW_AMBIENT && max_motion_ms(T0) == ambient_step(T0));
         CHECK(pet_frames(now, 8) == n && !memcmp(now, first, (size_t)n * sizeof now[0]));
     }
-    // Round its steps the pets move; the clock, the stars and the words stay.
+    // Round its frames the pets and the specks move; the clock, the date and the words stay.
     three();
+    max_ui_wall(true, 15, 7, 3, 18, 10);
     max_show(MAX_VIEW_AMBIENT);
     render(T0);
+    static ht_run_t words[8], again[8];
+    const int nw = runs_of(K_TEXT, words, 8);
+    CHECK(nw >= 3);
     bool moved = false;
-    const int left = first[0].x, right = first[2].x + first[2].w;
     uint32_t t = T0;
     for (int i = 0; i < 40; i++) {
         t += max_motion_ms(t) ? max_motion_ms(t) : 1;
         before = S;
         render(t);
-        CHECK(max_motion_ms(t) == demo_pets_step(t));
+        CHECK(max_motion_ms(t) == ambient_step(t) && S.count < HT_RUNS);
+        CHECK(runs_of(K_TEXT, again, 8) == nw && !memcmp(again, words, (size_t)nw * sizeof words[0]));
         ht_damage(&before, &S, &d);
         moved |= d.pixels > 0;
-        for (int k = 0; k < d.count; k++) CHECK(d.rect[k].x >= left - DX(40) && d.rect[k].x + d.rect[k].w <= right + DX(40));
     }
     CHECK(moved);
+}
+
+// V3's drift (aurora.dart step), as doubles give it: one 60 Hz step of `frame` (its frames after the step).
+static void v3_drift(double *x, double *y, int n, int frame)
+{
+    const double k = frame * (1000.0 / 60) / 6000;
+    for (int i = 0; i < n; i++) {
+        const double ang = sin(x[i] * 0.003 + k) * 1.2 + cos(y[i] * 0.012 - k * 1.3);
+        x[i] += cos(ang) * 0.45 + 0.12;
+        y[i] += sin(ang) * 0.3;
+        if (x[i] > 1480) x[i] = 0;
+        if (x[i] < 0) x[i] = 1480;
+        if (y[i] > 320) y[i] = 0;
+        if (y[i] < 0) y[i] = 320;
+    }
+}
+// Within tol of each other on a ring `size` round (a speck that wrapped).
+static bool near_ring(double a, double b, double size, double tol)
+{
+    double d = fabs(a - b);
+    if (size - d < d) d = size - d;
+    if (d <= tol) return true;
+    fprintf(stderr, "  got %f, want %f (within %f)\n", a, b, tol);
+    return false;
+}
+enum { SPECKS = 150 };
+static int drift_now(double *x, double *y)
+{
+    float fx, fy;
+    int n = 0;
+    while (max_drift_speck(n, &fx, &fy)) {
+        CHECK(n < SPECKS && fx >= 0 && fx <= 1480 && fy >= 0 && fy <= 320);
+        x[n] = fx;
+        y[n++] = fy;
+    }
+    return n;
+}
+
+// Ambient's specks drift as V3's (aurora.dart): 150 of them on its flow field, 60 steps a second of the clock in V3's
+// px, starting a second in when Ambient comes up, at most 4 steps a frame (a stall slows the drift, the clock jumps).
+static void test_ambient_drift(void)
+{
+    static double x[SPECKS], y[SPECKS], got_x[SPECKS], got_y[SPECKS], first_x[SPECKS], first_y[SPECKS];
+    three();
+    max_show(MAX_VIEW_AMBIENT);
+    render(T0);
+    CHECK(drift_now(first_x, first_y) == SPECKS && max_drift_frames() == 60);
+    memcpy(x, first_x, sizeof x);
+    memcpy(y, first_y, sizeof y);
+    // Frame by frame, each step V3's from where the specks stood.
+    int frames = 60;
+    for (uint32_t t = T0 + MAX_LOOP_FRAME_MS; t <= T0 + 6000; t += MAX_LOOP_FRAME_MS) {
+        render(t);
+        const int due = (int)((1000u + (t - T0)) * 60u / 1000u);
+        CHECK(due - frames <= 4);
+        while (frames < due) v3_drift(x, y, SPECKS, ++frames);
+        CHECK(max_drift_frames() == frames && drift_now(got_x, got_y) == SPECKS);
+        for (int i = 0; i < SPECKS; i++) CHECK(near_ring(got_x[i], x[i], 1480, .01) && near_ring(got_y[i], y[i], 320, .01));
+        memcpy(x, got_x, sizeof x);
+        memcpy(y, got_y, sizeof y);
+    }
+    // A stalled glass: its clock jumps, the specks take 4 steps.
+    const uint32_t late = T0 + 6000 + 10000;
+    render(late);
+    const int due = (int)((1000u + (late - T0)) * 60u / 1000u);
+    for (frames = due - 4; frames < due;) v3_drift(x, y, SPECKS, ++frames);
+    CHECK(max_drift_frames() == due && drift_now(got_x, got_y) == SPECKS);
+    for (int i = 0; i < SPECKS; i++) CHECK(near_ring(got_x[i], x[i], 1480, .01) && near_ring(got_y[i], y[i], 320, .01));
+    // Ambient again later: the field comes up as it first did.
+    max_show(MAX_VIEW_OVERVIEW);
+    render(late + 500);
+    max_show(MAX_VIEW_AMBIENT);
+    render(late + 900);
+    CHECK(max_drift_frames() == 60 && drift_now(got_x, got_y) == SPECKS);
+    CHECK(!memcmp(got_x, first_x, sizeof got_x) && !memcmp(got_y, first_y, sizeof got_y));
 }
 
 // Between two loop frames the glass changes only where something loops: a working agent's rail and dot, an asking
@@ -623,6 +715,7 @@ int main(void)
     test_pet_still();
     test_clock();
     test_ambient_pets();
+    test_ambient_drift();
     test_damage();
     test_band();
     test_inbox();
