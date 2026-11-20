@@ -98,9 +98,10 @@ List<int> _linuxAppPids() {
 }
 
 /// This user's processes that are the app on Windows, by tasklist filtered as
-/// `windowsDeviceAppRunning` filters it.
+/// `windowsDeviceAppRunning` filters it, and bounded as it is. Throws when
+/// tasklist fails: an empty list would read as every app ended.
 Future<List<int>> _windowsAppPids() async {
-  final listed = await Process.run('tasklist', [
+  final listed = await runDeviceAppTool('tasklist', [
     '/FI',
     'IMAGENAME eq $deviceAppWindowsExe',
     '/FI',
@@ -108,7 +109,10 @@ Future<List<int>> _windowsAppPids() async {
     '/FO',
     'CSV',
     '/NH',
-  ]);
+  ], timeout: const Duration(seconds: 10));
+  if (listed.exitCode != 0) {
+    throw ProcessException('tasklist', const [], 'failed', listed.exitCode);
+  }
   return [
     for (final row in const LineSplitter().convert('${listed.stdout}'))
       if (tasklistNamesDeviceApp(row))
@@ -255,19 +259,19 @@ void main() {
   /// put there. The Linux app-list entry stays, for check 8 to see it go.
   Future<void> removeApp() async {
     // Still the app: a pid that ended may be another process's now.
-    Future<List<int>> ours() async => [
+    Future<List<int>> stillRunning() async => [
       for (final pid in await appPids())
         if (started.contains(pid)) pid,
     ];
     if (Platform.isWindows) {
-      final pids = await ours();
+      final pids = await stillRunning();
       if (pids.isNotEmpty) {
         await Process.run('taskkill', [
           for (final pid in pids) ...['/PID', '$pid'],
           '/F',
         ]);
       }
-      await _until(() async => (await ours()).isEmpty);
+      await _until(() async => (await stillRunning()).isEmpty);
       final folder = p.dirname(place());
       final uninstaller = p.join(folder, 'uninstall.exe');
       if (File(uninstaller).existsSync()) {
@@ -283,11 +287,11 @@ void main() {
         ProcessSignal.sigterm,
         ProcessSignal.sigkill,
       ]) {
-        for (final pid in await ours()) {
+        for (final pid in await stillRunning()) {
           Process.killPid(pid, signal);
         }
         if (await _until(
-          () async => (await ours()).isEmpty,
+          () async => (await stillRunning()).isEmpty,
           within: const Duration(seconds: 10),
         )) {
           break;
