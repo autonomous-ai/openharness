@@ -39,7 +39,7 @@ const PLUGIN_ID = 'harness-device@openharness'
 /** @type {import('claude-code').Register} */
 export const register = (on) => {
   /** @type {State} */
-  const state = { linked: null, held: false, askedAt: null, windows: false, quick: 0 }
+  const state = { linked: null, held: false, askedAt: null, windows: false, quick: 0, shown: 0 }
   on('session.start', async ($, e, next) => {
     const started = await next(e)
     // Asked here, so an attach after the start knows it. Refused, the mod takes the socket's way, as before it asked.
@@ -51,6 +51,7 @@ export const register = (on) => {
   on('session.attach', { surface: 'desktop' }, async ($, e, next) => {
     const attached = await next(e)
     state.held = true
+    state.shown += 1
     // On Windows the harness command tells the devices. Elsewhere, unlinked, the link sends it if it has their socket.
     if (state.windows) $.clock.after(0, () => void tell($, state))
     else if (state.linked) $.clock.after(0, () => void send($, state))
@@ -60,6 +61,7 @@ export const register = (on) => {
     const detached = await next(e)
     // The app no longer shows it: an attach not sent yet must not be.
     state.held = false
+    state.shown += 1
     return detached
   })
 }
@@ -70,8 +72,9 @@ export const register = (on) => {
  * The session's own, made in `register` so a reload starts it over. `linked`: the launcher's last answer with a socket,
  * null before and once the plugin is off. `held`: the app shows this session and the devices have not been told.
  * `askedAt`: when the launcher was last asked again for the devices' socket; on Windows, when `attach` last ran, until
- * it tells. `windows`: the session runs on Windows. `quick`: the followers in a row that ended under RAN_MS.
- * @typedef {{ linked: Linked | null, held: boolean, askedAt: number | null, windows: boolean, quick: number }} State
+ * it tells. `windows`: the session runs on Windows. `quick`: the followers in a row that ended under RAN_MS. `shown`:
+ * the desktop's attaches and detaches so far, so a Windows `attach` knows whether one came while it ran.
+ * @typedef {{ linked: Linked | null, held: boolean, askedAt: number | null, windows: boolean, quick: number, shown: number }} State
  */
 
 /**
@@ -355,7 +358,8 @@ function parsed(line) {
 
 /**
  * Windows: tells the devices the app shows this session through `harness device claude attach`. Not told, the session
- * stays held unless a detach came, and the next attach runs it again, at most once in RELINK_MS.
+ * stays held unless a detach came, and the next attach runs it again, at most once in RELINK_MS. Told, while the app
+ * left the session and came back, it runs again: the devices may have heard of another session since.
  * @param {Engine} $
  * @param {State} state
  */
@@ -364,10 +368,13 @@ async function tell($, state) {
   // Checked and set with no await between, so two attaches' timers run it once.
   if (!state.held || (state.askedAt !== null && now - state.askedAt < RELINK_MS)) return
   state.askedAt = now
+  const shown = state.shown
   if (!(await told($).catch(() => false))) return
-  state.held = false
   // The app back on this session after another tells again at once.
   state.askedAt = null
+  if (state.shown === shown) state.held = false
+  // From a timer, so a reload while it ran cancels it.
+  else $.clock.after(0, () => void tell($, state))
 }
 
 /**
