@@ -20,6 +20,7 @@ import { TerminalAgentReconciler } from '../../lib/terminalAgentReconciler.js'
 import { AttachTracker } from '../../lib/attachTracker.js'
 import { paneReadIdentity } from '../transcripts/readIdentity.js'
 import { createBinding, statBirthMs, type BindDeps, type RegisteredMeta } from './bind.js'
+import { agentStarting } from '../../lib/agentFrame.js'
 import { createInput } from '../input.js'
 import type { TerminalActionResult } from '../../lib/terminalTypes.js'
 import { readInlineScreen } from '../../testing/inlineScreen.js'
@@ -90,6 +91,7 @@ function setup(over: Partial<BindDeps> = {}) {
       setOpenclawStateDir: vi.fn(() => true),
       afterTransaction: vi.fn(async (run: () => unknown) => run()),
       takeFirstTask: vi.fn(),
+      firstTaskTaken: vi.fn(async () => false),
       setLaunch: vi.fn((id: string, launch: RegisteredSession['launch']) => {
         const row = byAgent.get(id) ?? vi.mocked(deps.registry.byProcess).mock.results.at(-1)?.value
         if (row) row.launch = launch
@@ -103,7 +105,7 @@ function setup(over: Partial<BindDeps> = {}) {
     announceSession: vi.fn(),
     stoppedAgents: { save: vi.fn(), finishResume: vi.fn(), get: vi.fn(() => null) },
     syncRecapPool: vi.fn(),
-    input: { forget: vi.fn(), awaitingConfirmation: vi.fn(() => false), waitsForPane: vi.fn(() => false), firstTaskWaiting: vi.fn(() => false), typeCommand: vi.fn(async () => true), expectFirstTask: vi.fn(), ownsBox: vi.fn(() => false) },
+    input: { forget: vi.fn(), awaitingConfirmation: vi.fn(() => false), waitsForPane: vi.fn(() => false), firstTaskWaiting: vi.fn(() => false), typeCommand: vi.fn(async () => true), expectFirstTask: vi.fn(), ownsBox: vi.fn(() => false), adoptTypedFirstTask: vi.fn(() => false), firstTaskConfirmed: vi.fn() },
     submitFirstTask: vi.fn(),
     deviceInput: { forget: vi.fn() },
     homes: { copilot: '/copilot', grok: '/grok', agy: '/agy' },
@@ -112,6 +114,7 @@ function setup(over: Partial<BindDeps> = {}) {
     openclawPaneRead: vi.fn(),
     openclawPaneDue: vi.fn(() => true),
     openclawStateDir: vi.fn(async () => null),
+    openclawUserRowSince: vi.fn(async () => false),
     followsLive: vi.fn(() => false),
     ...over,
   }
@@ -2738,6 +2741,186 @@ describe('binding an OpenClaw pane, read from its screen', () => {
       expect(await pass(180)).toBe(false)
       expect(await pass(359)).toBe(false)
       expect(await pass(360)).toBe(true)
+    })
+  })
+
+  // A daemon restarted between typing the first task and its confirmation finds it on the row as typed (decision 7):
+  // OpenClaw's store, not the pane, says whether it was taken, though the daemon was down when its user row landed.
+  describe('its first task typed before a restart', () => {
+    const START = Date.parse('2026-11-19T10:00:00Z')
+    /** The TUI and the row an hour old: a daemon restarted over them counts the bound from its own first pass. */
+    const LAUNCHED = START - 3_600_000
+    const TASK = 'Fix the parser'
+    const FAILED = { state: 'failed', error: 'FIRST_TASK_NOT_TAKEN', detail: 'OpenClaw did not take the first task. Close it and start it again.' }
+    const ADOPTED = '[agent] a1 first task typed before a restart · awaiting confirmation'
+    const CONFIRMED = '[agent] a1 first task confirmed'
+    const ready = screen('screen-plain')
+    const running = screen('screen-abort-running').replace(/abort/g, 'plain')
+    let run: ReturnType<typeof setup>
+    let row: RegisteredSession
+    /** What OpenClaw's store answers: whether it holds a user row for the key written since the task was typed. */
+    let stored: boolean | null
+    beforeEach(() => {
+      vi.useFakeTimers({ toFake: ['Date'] })
+      stored = false
+      run = setup({ openclawPaneRead: vi.fn(() => true), openclawUserRowSince: vi.fn(async () => stored) })
+      row = pane({ sessionId: 'agent:main:plain', registeredAt: LAUNCHED, openclawStateDir: '/h/.openclaw', firstTaskTyped: { text: TASK, at: START - 5_000 } })
+      run.byAgent.set('a1', row)
+      vi.mocked(run.deps.registry.byProcess).mockReturnValue(row)
+      vi.mocked(run.deps.input.adoptTypedFirstTask).mockReturnValue(true)
+      // As the registry does (registry.ts): the mark leaves the row once confirmed, or with the task once its launch failed.
+      vi.mocked(run.deps.registry.firstTaskTaken).mockImplementation(async () => {
+        const had = !!row.firstTaskTyped
+        delete row.firstTaskTyped
+        return had
+      })
+      vi.mocked(run.deps.registry.takeFirstTask).mockImplementation(async () => {
+        if (row.launch?.state === 'failed') delete row.firstTaskTyped
+        return null
+      })
+    })
+    /** A pass `second`s after START, the pane showing `shown`. */
+    const pass = async (second: number, shown: string): Promise<void> => {
+      vi.setSystemTime(START + second * 1_000)
+      vi.mocked(run.deps.capturePane).mockResolvedValue(shown)
+      await run.binding.bindObservedAgent(tui({ processIdentity: { pid: 7714, startMarker: new Date(LAUNCHED).toISOString(), executable: 'openclaw' } }))
+    }
+    const logged = () => vi.mocked(console.log).mock.calls.flat().map(String)
+    /** Whether a window reads the agent starting from its row alone (lib/agentFrame.ts), the controller awaiting nothing. */
+    const starting = () => agentStarting(row, false, Date.now())
+
+    it('the store not showing it taken: the controller adopts it once, nothing is typed, and the agent reads starting', async () => {
+      for (const second of [0, 5, 10]) await pass(second, running)
+      expect(vi.mocked(run.deps.input.adoptTypedFirstTask).mock.calls).toEqual([['a1', TASK]])
+      expect(run.deps.openclawUserRowSince).toHaveBeenCalledTimes(3)
+      expect(run.deps.openclawUserRowSince).toHaveBeenCalledWith('agent:main:plain', { pid: 7714, stateDir: '/h/.openclaw' }, START - 5_000)
+      expect(run.deps.submitFirstTask).not.toHaveBeenCalled()
+      expect(run.deps.registry.afterTransaction).not.toHaveBeenCalled()
+      expect(run.deps.input.typeCommand).not.toHaveBeenCalled()
+      // The task is the person's words: never in a log line.
+      expect(logged()).toEqual([ADOPTED])
+      expect(starting()).toBe(true)
+    })
+
+    it('the store showing it taken later: off the row, the controller\'s wait ended, announced, and starting no more', async () => {
+      await pass(0, running)
+      stored = true
+      await pass(5, running)
+      await vi.waitFor(() => expect(run.deps.input.firstTaskConfirmed).toHaveBeenCalledWith('a1'))
+      expect(run.deps.registry.firstTaskTaken).toHaveBeenCalledWith('a1')
+      // Once the pass's transaction commits, as the task's own move off the row is.
+      expect(vi.mocked(run.deps.registry.afterTransaction).mock.invocationCallOrder[0])
+        .toBeLessThan(vi.mocked(run.deps.registry.firstTaskTaken).mock.invocationCallOrder[0])
+      expect(vi.mocked(run.deps.input.firstTaskConfirmed).mock.invocationCallOrder[0])
+        .toBeLessThan(vi.mocked(run.deps.announceSession).mock.invocationCallOrder[0])
+      expect(vi.mocked(run.deps.announceSession).mock.calls).toEqual([[row]])
+      expect(logged()).toEqual([ADOPTED, CONFIRMED])
+      expect(row).not.toHaveProperty('firstTaskTyped')
+      expect(starting()).toBe(false)
+      // Settled: a later pass asks the store nothing.
+      await pass(10, ready)
+      expect(run.deps.openclawUserRowSince).toHaveBeenCalledTimes(2)
+    })
+
+    // Review Focus 4: a rollback's older daemon drops the field as it loads; one that never loaded it again leaves it, days old.
+    describe('a mark an older daemon left', () => {
+      beforeEach(() => { row.firstTaskTyped = { text: TASK, at: START - 7 * 86_400_000 } })
+
+      it('on a task long taken is removed on the first pass, never adopted, and the agent never reads starting past it', async () => {
+        stored = true
+        await pass(0, ready)
+        await vi.waitFor(() => expect(row).not.toHaveProperty('firstTaskTyped'))
+        expect(starting()).toBe(false)
+        expect(run.deps.input.firstTaskConfirmed).toHaveBeenCalledWith('a1')
+        expect(run.deps.announceSession).toHaveBeenCalledWith(row)
+        expect(run.deps.input.adoptTypedFirstTask).not.toHaveBeenCalled()
+        expect(run.deps.registry.setLaunch).not.toHaveBeenCalled()
+        expect(logged()).toEqual([CONFIRMED])
+      })
+
+      it('on a task never taken fails FIRST_TASK_NOT_TAKEN 3 minutes after this daemon\'s first pass, with an empty box, never typed again', async () => {
+        await pass(0, ready)
+        await pass(179, ready)
+        expect(row.launch).toBeUndefined()
+        expect(starting()).toBe(true)
+        await pass(180, ready)
+        expect(row.launch).toEqual(FAILED)
+        await vi.waitFor(() => expect(row).not.toHaveProperty('firstTaskTyped'))
+        expect(run.deps.input.forget).toHaveBeenCalledWith('a1')
+        expect(run.deps.registry.firstTaskTaken).not.toHaveBeenCalled()
+        expect(run.deps.submitFirstTask).not.toHaveBeenCalled()
+        expect(run.deps.input.typeCommand).not.toHaveBeenCalled()
+        expect(logged()).toEqual([ADOPTED, '[agent] a1 first task not taken · FIRST_TASK_NOT_TAKEN'])
+      })
+    })
+
+    it.each([
+      ['cannot say', () => { stored = null }],
+      ['throws', () => { vi.mocked(run.deps.openclawUserRowSince).mockRejectedValue(new Error('database is locked')) }],
+    ])('a store read that %s decides nothing: the task is adopted, and its bound still runs', async (_, store) => {
+      store()
+      await pass(0, ready)
+      expect(run.deps.input.adoptTypedFirstTask).toHaveBeenCalledWith('a1', TASK)
+      await pass(180, ready)
+      expect(row.launch).toEqual(FAILED)
+      expect(run.deps.registry.firstTaskTaken).not.toHaveBeenCalled()
+    })
+
+    it('a task this daemon handed over is never adopted', async () => {
+      delete row.firstTaskTyped
+      row.firstTask = TASK
+      // As the registry does: the task moves to the typed mark as it leaves the row.
+      vi.mocked(run.deps.registry.takeFirstTask).mockImplementation(async () => {
+        row.firstTaskTyped = { text: TASK, at: Date.now() }
+        delete row.firstTask
+        return TASK
+      })
+      await pass(0, ready)
+      await vi.waitFor(() => expect(run.deps.submitFirstTask).toHaveBeenCalledWith('a1', TASK))
+      await pass(5, running)
+      expect(run.deps.openclawUserRowSince).toHaveBeenCalledWith('agent:main:plain', { pid: 7714, stateDir: '/h/.openclaw' }, START)
+      expect(run.deps.input.adoptTypedFirstTask).not.toHaveBeenCalled()
+    })
+
+    // The controller refuses while a write is under way or a turn is open: asked only once, the adoption could be lost.
+    it('an adoption the controller refuses is asked again on the next pass, and said once it takes it', async () => {
+      vi.mocked(run.deps.input.adoptTypedFirstTask).mockReturnValueOnce(false).mockReturnValue(true)
+      for (const second of [0, 5, 10]) await pass(second, running)
+      expect(run.deps.input.adoptTypedFirstTask).toHaveBeenCalledTimes(2)
+      expect(logged()).toEqual([ADOPTED])
+    })
+
+    it('a removal that cannot be saved is said and confirms nothing, nor does one that finds the mark gone', async () => {
+      const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+      stored = true
+      vi.mocked(run.deps.registry.firstTaskTaken).mockRejectedValueOnce(new Error('disk full')).mockResolvedValueOnce(false)
+      await pass(0, running)
+      await vi.waitFor(() => expect(error).toHaveBeenCalledWith('[agent] a1 first task typed kept · Error'))
+      await pass(5, running)
+      await vi.waitFor(() => expect(run.deps.registry.firstTaskTaken).toHaveBeenCalledTimes(2))
+      await new Promise((settle) => setImmediate(settle))
+      expect(run.deps.input.firstTaskConfirmed).not.toHaveBeenCalled()
+      expect(run.deps.announceSession).not.toHaveBeenCalled()
+      expect(logged()).toEqual([])
+    })
+
+    it('an agent deleted while its store is read is left alone', async () => {
+      vi.mocked(run.deps.openclawUserRowSince).mockImplementation(async () => { vi.mocked(isRecentlyDeleted).mockReturnValue(true); return true })
+      await pass(0, running)
+      await new Promise((settle) => setImmediate(settle))
+      expect(run.deps.registry.afterTransaction).not.toHaveBeenCalled()
+      expect(run.deps.input.adoptTypedFirstTask).not.toHaveBeenCalled()
+    })
+
+    it('remembers 256 adoptions at most: one more starts them over, and the controller is asked again', async () => {
+      await pass(0, running)
+      for (let i = 0; i < 256; i++) {
+        vi.mocked(run.deps.registry.byProcess).mockReturnValue(pane({ agentId: `b${i}`, sessionId: 'agent:main:plain', firstTaskTyped: { text: TASK, at: START } }))
+        await run.binding.bindObservedAgent(tui())
+      }
+      vi.mocked(run.deps.registry.byProcess).mockReturnValue(row)
+      await pass(5, running)
+      expect(vi.mocked(run.deps.input.adoptTypedFirstTask).mock.calls.filter(([id]) => id === 'a1')).toHaveLength(2)
     })
   })
 

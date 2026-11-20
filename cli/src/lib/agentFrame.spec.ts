@@ -32,6 +32,10 @@ describe('agentStarting', () => {
   it('is starting while its typed first task awaits confirmation', () => {
     expect(agentStarting(session(null), true, launched + 3_600_000)).toBe(true)
   })
+  // A daemon restarted since it was typed awaits nothing yet: the row's mark keeps it starting until it is settled.
+  it('is starting while its row holds a first task typed and not yet confirmed', () => {
+    expect(agentStarting({ ...session(null), engine: 'openclaw', firstTaskTyped: { text: 'Fix the parser', at: launched } }, false, launched + 3_600_000)).toBe(true)
+  })
   it('an OpenClaw with no session bound is starting for a minute from its launch', () => {
     expect(agentStarting(unboundOpenclaw, false, launched + 59_000)).toBe(true)
     expect(agentStarting(unboundOpenclaw, false, launched + 61_000)).toBe(false)
@@ -163,6 +167,13 @@ describe('agentFrame', () => {
     const row = { ...session(null), engine: 'openclaw' as const, firstTask: 'Fix the parser' }
     const frame = await agentFrame(row, { selectedModel: null, terminalAvailable: true, starting: () => true })
     expect(frame.starting).toBe(true)
+    expect(JSON.stringify(frame)).not.toContain('Fix the parser')
+  })
+
+  it('a first task typed never rides the agent\'s frame', async () => {
+    const row = { ...session(null), engine: 'openclaw' as const, firstTaskTyped: { text: 'Fix the parser', at: 1 } }
+    const frame = await agentFrame(row, { selectedModel: null, terminalAvailable: true, starting: () => true })
+    expect(frame).not.toHaveProperty('firstTaskTyped')
     expect(JSON.stringify(frame)).not.toContain('Fix the parser')
   })
 
