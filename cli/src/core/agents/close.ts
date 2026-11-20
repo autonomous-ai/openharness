@@ -9,6 +9,7 @@ import { IdentityReadUnavailable } from '../../engines/kit/identityScan.js'
 import { CloseAgentService, inspectCloseActivity, type CloseAgentServiceDeps, type CloseMode } from '../../lib/closeAgentService.js'
 import type { OpenTabProtection } from '../../lib/openTabProtection.js'
 import { sid } from '../../lib/log.js'
+import { openclawUserRowSince } from '../../lib/openclawStore.js'
 import { projectDisplayName, type RegisteredSession, type registry } from '../../lib/registry.js'
 import type { SessionCheckpointStore } from '../../lib/sessionCheckpoint.js'
 import type { StoppedAgentStore } from '../../lib/stoppedAgents.js'
@@ -101,6 +102,9 @@ export function createAgentClosing({
     stop: stopAgent,
     changed: announceSession,
     backgroundCommands,
+    // OpenClaw binds its key at launch, before any task: a key whose store has no user row has nothing to resume.
+    conversationEmpty: async s => s.engine === 'openclaw' && !!s.sessionId
+      && await openclawUserRowSince(s.sessionId, { pid: s.processIdentity?.pid ?? 0, stateDir: s.openclawStateDir }, 0) === false,
     // Not live, not being resumed, and kept as stopped with the conversation the close names: it was closed, and that
     // record says whether a conversation was kept. A record that cannot be read says nothing, and the close is answered
     // as changed, as before.

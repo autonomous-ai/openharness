@@ -836,23 +836,20 @@ describe('what a close says of the conversation it kept', () => {
       service = new CloseAgentService({ ...deps, conversationEmpty })
       return conversationEmpty
     }
+    const stores = [
+      ['holds nothing', async (): Promise<boolean> => true, { closed: true, withoutConversation: true }],
+      ['holds a conversation', async (): Promise<boolean> => false, { closed: true }],
+      ['cannot be read', async (): Promise<boolean> => { throw new Error('store unreadable') }, { closed: true }],
+    ] as const
     beforeEach(() => { Object.assign(row, { engine: 'openclaw', sessionId: 'agent:main:plain' }) })
 
-    it.each([
-      ['holds nothing', async () => true, { closed: true, withoutConversation: true }],
-      ['holds a conversation', async () => false, { closed: true }],
-      ['cannot be read', async () => { throw new Error('store unreadable') }, { closed: true }],
-    ] as const)('closed while its store %s, says so', async (_, answer, said) => {
+    it.each(stores)('closed while its store %s, says so', async (_, answer, said) => {
       const conversationEmpty = reading(answer)
       stopSaving()
       expect(await service.request(request('now'))).toEqual(said)
       expect(conversationEmpty).toHaveBeenCalledWith(expect.objectContaining({ agentId: row.agentId, sessionId: 'agent:main:plain' }))
     })
-    it.each([
-      ['holds nothing', async () => true, { closed: true, withoutConversation: true }],
-      ['holds a conversation', async () => false, { closed: true }],
-      ['cannot be read', async () => { throw new Error('store unreadable') }, { closed: true }],
-    ] as const)('asked again once closed, while its store %s, says so', async (_, answer, said) => {
+    it.each(stores)('asked again once closed, while its store %s, says so', async (_, answer, said) => {
       const conversationEmpty = vi.fn(answer)
       const kept = { ...row }
       service.dispose()
