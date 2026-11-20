@@ -195,7 +195,8 @@ fn follow_chatgpt_shows_only_with_a_door_that_has_the_chatgpt_app() {
 fn off_macos_the_saved_switch_is_what_the_door_trusts() {
     let door = |switch_on| crate::follow::system(std::env::temp_dir(), switch_on).trusted();
     // Windows always has its door. On Linux the door is the session's (NoFollow on CI, with no window system), so
-    // only the switch off is held here: follow::door_kind's test and each Linux door's own switch test hold the rest.
+    // only the switch off is held here: follow's door_kind test and its
+    // off_macos_the_switch_is_the_permission_and_nothing_is_asked_or_told hold the rest.
     #[cfg(windows)]
     assert!(door(true));
     assert!(!door(false));
