@@ -285,8 +285,9 @@ export default async function DevicePage() {
                   <p className={styles.sub}>{release.date}</p>
                   {release.notes.length > 0 && (
                     <ul>
-                      {release.notes.map((note) => (
-                        <li key={note}>{note}</li>
+                      {/* By position: two notes can read the same once their pull request numbers are gone. */}
+                      {release.notes.map((note, i) => (
+                        <li key={i}>{note}</li>
                       ))}
                     </ul>
                   )}
