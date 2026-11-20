@@ -1,6 +1,7 @@
 // This run's debug build of Harness Device, downloaded, verified, installed,
 // found and started by Desktop's own installer, probe and opener, on Windows
-// or Linux. From `desktop/`:
+// or Linux. The temporary workflow's desktop-device-app-e2e runs it, from
+// `desktop/`:
 //
 //   FLUTTER_TEST=1 HARNESS_DEVICE_TEST_PACKAGE=<the setup.exe or .AppImage> \
 //     flutter test -d <windows|linux> --no-pub integration_test/device_app_install_windows_linux_native_test.dart
@@ -9,9 +10,10 @@
 // with its real sha256 and size, at the CDN address a release would give it.
 // It installs the real app for this account (Windows: its installer, per
 // user; Linux: the AppImage at ~/.local/opt and its app-list entry), so it
-// runs only on a disposable runner, with a scratch HOME and XDG folders on
-// Linux: the temporary workflow's desktop-device-app-e2e. It ends the app and
-// removes what it installed.
+// refuses to run but on a CI runner (GITHUB_ACTIONS), on Linux with HOME and
+// the XDG folders in the runner's scratch (RUNNER_TEMP), and refuses an
+// account where the app is installed or runs. It ends only the app processes
+// it saw start, and removes what it installed.
 //
 // Windows' signature step is the real one. The Desktop under test is the debug
 // runner `flutter test` builds, which nothing signs, so Authenticode reads it
@@ -95,6 +97,47 @@ List<int> _linuxAppPids() {
   return pids;
 }
 
+/// This user's processes that are the app on Windows, by tasklist filtered as
+/// `windowsDeviceAppRunning` filters it.
+Future<List<int>> _windowsAppPids() async {
+  final listed = await Process.run('tasklist', [
+    '/FI',
+    'IMAGENAME eq $deviceAppWindowsExe',
+    '/FI',
+    'USERNAME eq ${Platform.environment['USERNAME']}',
+    '/FO',
+    'CSV',
+    '/NH',
+  ]);
+  return [
+    for (final row in const LineSplitter().convert('${listed.stdout}'))
+      if (tasklistNamesDeviceApp(row))
+        int.parse(row.split(',')[1].replaceAll('"', '')),
+  ];
+}
+
+/// Why this computer is no place to run, or null. The test installs the real
+/// app for this account, so a CI runner only, and on Linux every folder the
+/// app or Desktop writes is in the runner's scratch.
+String? _refusal(Map<String, String> environment) {
+  if (environment['GITHUB_ACTIONS'] != 'true') return 'not a CI runner';
+  if (!Platform.isLinux) return null;
+  final scratch = environment['RUNNER_TEMP'];
+  for (final name in const [
+    'HOME',
+    'XDG_CONFIG_HOME',
+    'XDG_DATA_HOME',
+    'XDG_CACHE_HOME',
+    'XDG_STATE_HOME',
+  ]) {
+    final folder = environment[name];
+    if (scratch == null || folder == null || !p.isWithin(scratch, folder)) {
+      return '$name is not in RUNNER_TEMP';
+    }
+  }
+  return null;
+}
+
 void main() {
   final package = Platform.environment['HARNESS_DEVICE_TEST_PACKAGE'] ?? '';
   if (!kUnderTest ||
@@ -103,6 +146,12 @@ void main() {
     throw StateError(
       'Run this Windows or Linux fixture with FLUTTER_TEST=1 and '
       'HARNESS_DEVICE_TEST_PACKAGE',
+    );
+  }
+  final refusal = _refusal(Platform.environment);
+  if (refusal != null) {
+    throw StateError(
+      'This test installs Harness Device for this account: $refusal',
     );
   }
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
@@ -146,19 +195,28 @@ void main() {
   late String sha256, base;
   HttpServer? server;
 
-  /// Set once this account was seen to have no copy: from then on what is at
-  /// the place is this test's to remove.
+  /// Set once this account was seen to have no copy and none running: from
+  /// then on what is at the place is this test's to remove.
   var ours = false;
+
+  /// The app's processes, seen once the app it opened ran: the only ones it
+  /// ends.
+  final started = <int>[];
+  Future<List<int>> appPids() async =>
+      Platform.isWindows ? await _windowsAppPids() : _linuxAppPids();
 
   /// What the server serves, by path.
   final files = <String, String>{};
 
   setUpAll(() async {
-    if (FileSystemEntity.typeSync(place(), followLinks: false) !=
-        FileSystemEntityType.notFound) {
+    final before = await probe.lookup();
+    if (before.installed ||
+        before.running ||
+        FileSystemEntity.typeSync(place(), followLinks: false) !=
+            FileSystemEntityType.notFound) {
       throw StateError(
-        'Harness Device is installed for this account already: this test '
-        'removes only the copy it installs',
+        'Harness Device is installed or runs for this account already: this '
+        'test ends and removes only the copy it installs',
       );
     }
     ours = true;
@@ -193,12 +251,23 @@ void main() {
     });
   });
 
-  /// Ends the app and removes what the install put there. The Linux
-  /// app-list entry stays, for check 8 to see it go.
+  /// Ends the app processes this test started and removes what the install
+  /// put there. The Linux app-list entry stays, for check 8 to see it go.
   Future<void> removeApp() async {
+    // Still the app: a pid that ended may be another process's now.
+    Future<List<int>> ours() async => [
+      for (final pid in await appPids())
+        if (started.contains(pid)) pid,
+    ];
     if (Platform.isWindows) {
-      await Process.run('taskkill', ['/IM', deviceAppWindowsExe, '/F']);
-      await _until(() async => !await windowsDeviceAppRunning());
+      final pids = await ours();
+      if (pids.isNotEmpty) {
+        await Process.run('taskkill', [
+          for (final pid in pids) ...['/PID', '$pid'],
+          '/F',
+        ]);
+      }
+      await _until(() async => (await ours()).isEmpty);
       final folder = p.dirname(place());
       final uninstaller = p.join(folder, 'uninstall.exe');
       if (File(uninstaller).existsSync()) {
@@ -214,11 +283,11 @@ void main() {
         ProcessSignal.sigterm,
         ProcessSignal.sigkill,
       ]) {
-        for (final pid in _linuxAppPids()) {
+        for (final pid in await ours()) {
           Process.killPid(pid, signal);
         }
         if (await _until(
-          () async => _linuxAppPids().isEmpty,
+          () async => (await ours()).isEmpty,
           within: const Duration(seconds: 10),
         )) {
           break;
@@ -335,6 +404,8 @@ void main() {
       presence = await probe.lookup();
       return presence.installed && presence.running;
     });
+    // None ran before this test opened it: these are the ones it started.
+    started.addAll(await appPids());
 
     debugPrint(
       'lookup installed ${presence.installed}, running ${presence.running}',
