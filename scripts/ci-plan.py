@@ -1127,6 +1127,9 @@ def outputs(record):
     values["linux-e2e-files"] = " ".join(e2e["linux_files"])
     values["linux-e2e-shards"] = json.dumps(list(range(1, e2e["linux_shards"] + 1)), separators=(",", ":"))
     values["linux-e2e-full"] = "true" if e2e["linux_full"] else "false"
+    # The canary runs on the real backend: in the run, it must pass a case, never skip as without that backend.
+    canary = LINUX_E2E_CANARY.removeprefix("cli/")
+    values["linux-e2e-must-pass"] = canary if e2e["linux_full"] or canary in e2e["linux_files"] else ""
     return values
 
 

@@ -4,9 +4,9 @@
 Three uses: the default suite (`--suite unit`, ci.yml, four shards beside the contract job), the
 end-to-end suite (`--suite e2e`, cli-e2e.yml, which has no contract job), and a pull request's own e2e
 files (ci.yml's linux-e2e-summary, `--suite e2e --selected`): exactly the selected files ran, each
-collecting at least one case. The summary also records each file's duration, rounded up to 100ms: the
-timing hints the next run's shards are planned with (cli/ci-test-durations.json, cli/ci-e2e-durations.json)
-are refreshed from it. It lists each file's skipped cases too, which `--step-summary` writes for the job.
+collecting at least one case, and the plan's canary (`--must-pass`) passing a case and skipping none.
+The summary also records each file's duration, rounded up to 100ms: the timing hints the next run's
+shards are planned with (cli/ci-test-durations.json, cli/ci-e2e-durations.json) are refreshed from it. It lists each file's skipped cases too, which `--step-summary` writes for the job.
 """
 import argparse
 from collections import Counter
@@ -20,7 +20,7 @@ import sys
 SUITES = {"unit": ("src/", (".spec.ts", ".test.ts")), "e2e": ("e2e/", (".e2e.ts",))}
 
 
-def verify(directory, root, shards, tests_result, contracts_result, suite="unit", selected=None):
+def verify(directory, root, shards, tests_result, contracts_result, suite="unit", selected=None, must_pass=None):
     folder, suffixes = SUITES[suite]
     selected = None if selected is None else set(selected)
     # Vitest JSON can say success even when an unhandled error makes its process
@@ -104,6 +104,14 @@ def verify(directory, root, shards, tests_result, contracts_result, suite="unit"
     empty = sorted(name for name, counts in cases_by_file.items() if not sum(counts.values()))
     if selected is not None and empty:
         raise ValueError(f"collected no test: {', '.join(empty)}")
+    # The canary skips itself without the real backend, so its skip is the broken setup it exists to catch.
+    if must_pass is not None:
+        if must_pass not in cases_by_file:
+            raise ValueError(f"{must_pass} must pass a case, but the run has no such file")
+        counts = cases_by_file[must_pass]
+        if not counts["passed"] or counts["skipped"]:
+            raise ValueError(f"{must_pass} must pass a case and skip none: {counts['passed']} passed, "
+                             f"{counts['skipped']} skipped")
     return {"schema": 1, "suite": suite, "status": "passed", "files": len(seen), **dict(totals),
             "shards": receipts, "verified_files": sorted(seen), "durations_ms": dict(sorted(durations.items())),
             "cases_by_file": {name: dict(counts) for name, counts in sorted(cases_by_file.items())},
@@ -138,18 +146,19 @@ def main():
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--selected", help="a pull request's own e2e files, cli/-relative, separated by spaces")
     parser.add_argument("--step-summary", type=Path, help="the job summary file to append the skipped cases to")
+    parser.add_argument("--must-pass", help="an e2e file, cli/-relative, that must pass a case and skip none")
     args = parser.parse_args()
     if args.shards < 1:
         parser.error("shards must be positive")
     if args.suite == "unit" and args.contracts_result is None:
         parser.error("the unit suite requires --contracts-result")
-    if args.suite == "unit" and (args.selected is not None or args.step_summary):
-        parser.error("--selected and --step-summary are for the end-to-end suite (--suite e2e)")
+    if args.suite == "unit" and (args.selected is not None or args.step_summary or args.must_pass is not None):
+        parser.error("--selected, --step-summary and --must-pass are for the end-to-end suite (--suite e2e)")
     selected = None if args.selected is None else args.selected.split()
     if selected == []:
         parser.error("--selected names no file")
     summary = verify(args.directory, args.root, args.shards, args.tests_result, args.contracts_result, args.suite,
-                     selected)
+                     selected, args.must_pass)
     args.output.write_text(json.dumps(summary, indent=2) + "\n")
     if args.step_summary:
         with args.step_summary.open("a") as handle:

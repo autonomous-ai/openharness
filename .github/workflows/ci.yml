@@ -89,6 +89,7 @@ jobs:
       linux-e2e-files: ${{ steps.select.outputs.linux-e2e-files }}
       linux-e2e-shards: ${{ steps.select.outputs.linux-e2e-shards }}
       linux-e2e-full: ${{ steps.select.outputs.linux-e2e-full }}
+      linux-e2e-must-pass: ${{ steps.select.outputs.linux-e2e-must-pass }}
       dial-hosts: ${{ steps.select.outputs.dial-hosts }}
       device-app-e2e: ${{ steps.select.outputs.device-app-e2e }}
       device-app-update: ${{ steps.select.outputs.device-app-update }}
@@ -924,7 +925,8 @@ jobs:
           retention-days: 7
 
   # Exactly the selected files ran, each passing and collecting a case; a file whose every case skips passes and the
-  # job summary lists it. In the full mode, the nightly's rule: every discovered file once, every shard passing.
+  # job summary lists it. In the full mode, the nightly's rule: every discovered file once, every shard passing. The
+  # plan's canary, when it runs, passes a case and skips none: skipped, the real backend's setup broke.
   linux-e2e-summary:
     needs: [plan, linux-e2e]
     if: ${{ !cancelled() && needs.plan.outputs.ready == 'true' && needs.plan.outputs.linux-e2e == 'true' }}
@@ -947,11 +949,13 @@ jobs:
           E2E_FILES: ${{ needs.plan.outputs.linux-e2e-files }}
           E2E_FULL: ${{ needs.plan.outputs.linux-e2e-full }}
           E2E_TEST_RESULT: ${{ needs.linux-e2e.result }}
+          E2E_MUST_PASS: ${{ needs.plan.outputs.linux-e2e-must-pass }}
         run: |
           args=(--suite e2e --root "$GITHUB_WORKSPACE/cli" --shards "$(jq length <<<"$SHARDS")"
             --tests-result "$E2E_TEST_RESULT" --output "$RUNNER_TEMP/linux-e2e-summary.json"
             --step-summary "$GITHUB_STEP_SUMMARY")
           if [[ "$E2E_FULL" != true ]]; then args+=(--selected "$E2E_FILES"); fi
+          if [[ -n "$E2E_MUST_PASS" ]]; then args+=(--must-pass "$E2E_MUST_PASS"); fi
           python3 scripts/verify-cli-test-shards.py "$RUNNER_TEMP/linux-e2e-shards" "${args[@]}"
       - uses: actions/upload-artifact@v4
         with:
