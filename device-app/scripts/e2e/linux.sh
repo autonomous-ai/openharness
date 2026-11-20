@@ -421,7 +421,8 @@ ok "Export logs hands xdg-open the zip's folder"
 setsid env -i "${base[@]}" XDG_SESSION_TYPE=x11 "$appimage" >>"$work/app.out" 2>&1 &
 second=$!
 if ! waits gone "$second"; then
-  kill -TERM -- "-$second"
+  # Its group may end between the wait and the kill: the check still fails, by name.
+  kill -TERM -- "-$second" 2>/dev/null || true
   fail "a second launch exits by itself"
 fi
 wait "$second" || fail "a second launch exits with 0"
