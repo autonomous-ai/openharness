@@ -73,17 +73,16 @@ pub fn follow(
     changed: &dyn Fn(String),
 ) -> Stop {
     let name = |answer: &[u8]| active_pid(answer).and_then(|pid| exe_name(proc_root, pid)).unwrap_or_default();
-    let Ok(answer) = ask() else { return Stop::NotFollowed };
-    changed(name(&answer));
+    // An answer that cannot be had is no app: the dial must not keep following the last one. At start too, where a
+    // Hyprland still starting may not answer yet: the next event asks again.
+    let front = || ask().map(|answer| name(&answer)).unwrap_or_default();
+    changed(front());
     let mut events = BufReader::new(events);
     let mut line = Vec::new();
     loop {
         match next_line(&mut events, &mut line) {
             Err(_) => return Stop::Ended,
-            Ok(true) if std::str::from_utf8(&line).is_ok_and(is_active_window) => {
-                // An answer that cannot be had is no app: the dial must not keep following the last one.
-                changed(ask().map(|answer| name(&answer)).unwrap_or_default());
-            }
+            Ok(true) if std::str::from_utf8(&line).is_ok_and(is_active_window) => changed(front()),
             Ok(_) => {}
         }
     }
