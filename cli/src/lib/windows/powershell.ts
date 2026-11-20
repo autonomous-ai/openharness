@@ -4,12 +4,12 @@
  * nothing in it is quoted twice by cmd and PowerShell, and its inputs in environment variables, never in its text.
  */
 import { execFile, spawnSync } from 'node:child_process'
-import { win32 } from 'node:path'
+import { systemProgram } from './systemProgram.js'
 
 export const POWERSHELL_TIMEOUT_MS = 30_000
 
 export function powershellPath(env: NodeJS.ProcessEnv = process.env): string {
-  return win32.join(env.SystemRoot ?? env.windir ?? 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
+  return systemProgram('WindowsPowerShell\\v1.0\\powershell.exe', env)
 }
 
 export function encodedCommandArgs(script: string): string[] {

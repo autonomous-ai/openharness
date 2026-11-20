@@ -12,6 +12,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileS
 import { canonicalGuestEmail, guestAnswerFile, guestRequestFile, newGuestRequestId, parseGuestSetupAnswer, parseGuestSetupRequest, type GuestSetupRequest } from './guestRequests.js'
 import { WINDOWS_GUEST_ANSWERS, WINDOWS_GUEST_REQUESTS } from './guestTree.js'
 import type { GuestSharedFolder } from './guestShare.js'
+import { systemProgram } from './systemProgram.js'
 
 export const WINDOWS_GUEST_TASK_PATH = '\\Harness\\'
 export const WINDOWS_GUEST_TASK_NAME = 'Harness Guests Setup'
@@ -62,7 +63,7 @@ const realFs: GuestSetupFs = {
 /** Starts the task through `schtasks.exe`; the caller's task security descriptor allows it unelevated. */
 export function startGuestSetupTask(): Promise<void> {
   return new Promise((resolve, reject) => {
-    const child = spawn('schtasks.exe', ['/run', '/tn', WINDOWS_GUEST_TASK], { stdio: 'ignore', windowsHide: true })
+    const child = spawn(systemProgram('schtasks.exe'), ['/run', '/tn', WINDOWS_GUEST_TASK], { stdio: 'ignore', windowsHide: true })
     child.on('error', (error) => reject(new GuestSetupError('TASK_FAILED', `Could not start the guest setup task: ${error.message}`)))
     child.on('close', (code) => code === 0
       ? resolve()

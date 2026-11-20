@@ -16,6 +16,7 @@ import { spawnSync } from 'node:child_process'
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir, uptime, userInfo } from 'node:os'
 import { dirname, isAbsolute, join, win32 } from 'node:path'
+import { systemProgram } from '../lib/windows/systemProgram.js'
 
 export type PlatformName = 'launchd' | 'systemd' | 'taskscheduler'
 
@@ -404,7 +405,9 @@ export function currentUid(proc: { getuid?: () => number } = process): number {
 
 /**
  * The real thing: commands looked up on `env.PATH` (Node searches the PATH of the environment it is
- * given), files on disk. The tests hand it a PATH holding only fake binaries and a temporary home.
+ * given), files on disk. The tests hand it a PATH holding only fake binaries and a temporary home. On Windows the
+ * commands are Windows' own (schtasks, whoami), run from System32: Node looks for a bare name in the current folder
+ * before PATH.
  */
 export function defaultPlatformDeps(options: { env?: NodeJS.ProcessEnv; uid?: number; home?: string; dataDir?: string } = {}): PlatformDeps {
   const env = options.env ?? process.env
@@ -412,7 +415,7 @@ export function defaultPlatformDeps(options: { env?: NodeJS.ProcessEnv; uid?: nu
   return {
     run: (command, args, output) => {
       // `launchctl print` lists the whole job, and a domain's listing runs to hundreds of kilobytes.
-      const result = spawnSync(command, args, {
+      const result = spawnSync(process.platform === 'win32' ? systemProgram(`${command}.exe`, env) : command, args, {
         env, encoding: 'utf8', timeout: COMMAND_TIMEOUT_MS, maxBuffer: 32 * 1024 * 1024, stdio: ['pipe', output?.stdout ?? 'pipe', 'pipe'],
       })
       return { status: result.status, stdout: result.stdout ?? '', stderr: result.stderr ?? '', ...(result.error ? { error: result.error.message } : {}) }

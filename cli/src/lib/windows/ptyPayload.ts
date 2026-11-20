@@ -15,6 +15,7 @@ import { probeVersionLine, readInstanceDiscovery } from '../ptyHost/launch.js'
 import { PTY_PROTOCOL, SHUTDOWN_PROTOCOL, SUPPORTED_PTY_PROTOCOLS } from '../ptyHost/protocol.js'
 import { windowsProcessRows } from './processTable.js'
 import { readSignatureProblems, unsignedAllowed } from './ptySignatures.js'
+import { systemProgram } from './systemProgram.js'
 import { scrubTerminalContext } from '../terminalEnvironment.js'
 import {
   DigestMismatchError, MANIFEST_LIMITS, downloadVerified, fetchWithin, isLocalDevBuild, semverGt,
@@ -220,7 +221,7 @@ async function endBinaryProcesses(binary: string): Promise<void> {
   const left = await waitUntilNone(SERVE_CANARY_IMAGES_WAIT_MS)
   if (!left.length) return
   await Promise.all(left.map((p) => new Promise<void>((resolve) => {
-    execFile('taskkill', ['/PID', String(p.pid), '/T', '/F'], { windowsHide: true, timeout: 2_000 }, () => resolve())
+    execFile(systemProgram('taskkill.exe'), ['/PID', String(p.pid), '/T', '/F'], { windowsHide: true, timeout: 2_000 }, () => resolve())
   })))
   await waitUntilNone(SERVE_CANARY_IMAGES_ENDED_MS)
 }

@@ -8,8 +8,9 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { runGuestCommand, type GuestRunner } from '../guestRunner.js'
-import { modulesByPath } from './powershell.js'
+import { modulesByPath, powershellPath } from './powershell.js'
 import { ps } from './powershellQuote.js'
+import { systemProgram } from './systemProgram.js'
 
 export type AdminResult =
   | { ok: true; stdout: string }
@@ -75,7 +76,7 @@ export function uacPromptScript(elevated: string): string {
   return [
     modulesByPath('Microsoft.PowerShell.Management'),
     'try {',
-    `  $p = Start-Process -FilePath powershell.exe -Verb RunAs -Wait -PassThru -WindowStyle Hidden -ArgumentList ${ps(`-NoProfile -ExecutionPolicy Bypass -File "${elevated}"`)}`,
+    `  $p = Start-Process -FilePath ${ps(powershellPath())} -Verb RunAs -Wait -PassThru -WindowStyle Hidden -ArgumentList ${ps(`-NoProfile -ExecutionPolicy Bypass -File "${elevated}"`)}`,
     '  exit $p.ExitCode',
     '} catch {',
     `  if ($_.Exception.NativeErrorCode -eq ${UAC_CANCELLED} -or $_.Exception.InnerException.NativeErrorCode -eq ${UAC_CANCELLED}) { exit ${UAC_CANCELLED} }`,
@@ -92,7 +93,7 @@ export function uacPromptScript(elevated: string): string {
 async function runElevatedOnWindows(runner: GuestRunner, stageDir: string, script: string, ownerSid: string): Promise<AdminResult> {
   // Every principal by SID. The owner's from this process's own token: a bare name could resolve to a same-named
   // domain or local account. SYSTEM's and Administrators' names change with the language of Windows.
-  const acl = await runner('icacls', [stageDir, '/inheritance:r', '/grant:r', `*${ownerSid}:(OI)(CI)F`, '*S-1-5-18:(OI)(CI)F', '*S-1-5-32-544:(OI)(CI)F'],
+  const acl = await runner(systemProgram('icacls.exe'), [stageDir, '/inheritance:r', '/grant:r', `*${ownerSid}:(OI)(CI)F`, '*S-1-5-18:(OI)(CI)F', '*S-1-5-32-544:(OI)(CI)F'],
     { timeoutMs: 30_000 })
   if (acl.code !== 0) {
     return { ok: false, code: 'FAILED', message: `Could not make the staging folder private: ${(acl.stderr || acl.stdout).trim() || `icacls exited ${acl.code}`}` }
@@ -104,7 +105,7 @@ async function runElevatedOnWindows(runner: GuestRunner, stageDir: string, scrip
   // Windows names cannot hold a double quote, which would end the path inside the argument list.
   if (elevated.includes('"')) throw new Error(`not a usable staging folder: ${JSON.stringify(stageDir)}`)
   // Encoded, so no quoting of the command line between Node and PowerShell can change it.
-  const result = await runner('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(uacPromptScript(elevated), 'utf16le').toString('base64')],
+  const result = await runner(powershellPath(), ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(uacPromptScript(elevated), 'utf16le').toString('base64')],
     { timeoutMs: 15 * 60_000 })
   if (result.code === UAC_CANCELLED) return { ok: false, code: 'CANCELLED', message: 'The administrator prompt was cancelled.' }
   const said = (name: string) => { try { return decodeText(readFileSync(join(stageDir, name))) } catch { return '' } }

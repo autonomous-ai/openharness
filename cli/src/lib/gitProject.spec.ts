@@ -534,13 +534,8 @@ exec '${realGit}' "$@"
 
     describe('on Windows, where taskkill cannot stop what git started', () => {
       const platform = process.platform
-      beforeEach(async () => {
-        Object.defineProperty(process, 'platform', { value: 'win32', configurable: true })
-        const bin = join(root, 'bin')
-        await mkdir(bin)
-        writeExecutable(join(bin, 'taskkill'), '#!/bin/sh\necho \'ERROR: The process with PID 1 could not be terminated.\' >&2\nexit 1\n')
-        vi.stubEnv('PATH', `${bin}:${process.env.PATH}`)
-      })
+      // taskkill is System32's, which is not here: it fails to stop git as it does where git's tree has moved on.
+      beforeEach(() => { Object.defineProperty(process, 'platform', { value: 'win32', configurable: true }) })
       afterEach(() => { Object.defineProperty(process, 'platform', { value: platform, configurable: true }) })
       /** git checks out and exits; its post-checkout hook leaves a process behind, holding git's stderr, that ends once
        *  [wait] (shell) returns by touching `ended`. */
@@ -564,7 +559,7 @@ exec '${realGit}' "$@"
         const path = await prepareGitProject(repo, { root: harnesses(), worktree: true, branchName: 'outlived', worktreeTimeout: 1_500 })
         expect(await readFile(join(root, 'ended'), 'utf8')).toBe('')
         expect(await readFile(join(path, 'src', 'value'), 'utf8')).toBe('main')
-        expect(said.mock.calls.map(call => call.join(' ')).join('\n')).toMatch(/\[worktree\] could not stop git.*could not be terminated/)
+        expect(said.mock.calls.map(call => call.join(' ')).join('\n')).toMatch(/\[worktree\] could not stop git.*taskkill/)
       }, 20_000)
 
       it('removes nothing while something git started may still be writing', async () => {

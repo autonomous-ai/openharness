@@ -75,6 +75,9 @@ everywhere), [Process Creation Flags](https://learn.microsoft.com/en-us/windows/
   a person's computer. Test from the app.
 - `-EncodedCommand` makes PowerShell write CLIXML to stderr. Use `-Command` when anyone reads the error.
   Inside `-Command`, `-ErrorAction Stop` needs `try`/`catch` for the script to end.
+- **Windows' own programs run by their full paths.** Node on Windows looks for a bare name in the folder it runs in
+  before PATH. `powershellPath()` and `systemProgram()` (`cli/src/lib/windows/systemProgram.ts`) name System32's.
+  Test: `cli/src/lib/windows/systemProgram.spec.ts`.
 
 - **A paste can arrive as keys.** The Mac gets one paste event, so Enter after it is safe. Codex on Windows gets a stream of key
   presses, and an Enter within 120 ms of the last becomes a newline in the paste (codex-rs `paste_burst.rs`): the message stays in

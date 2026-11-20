@@ -17,6 +17,7 @@ import { PLATFORM_LABEL, type PlatformState, type ServiceDefinition } from '../h
 import { describeSpawnLockOwner, readSpawnLockOwner, withSpawnLock, type SpawnLockPurpose } from './daemonSpawnLock.js'
 import { stopDaemonProcess } from './daemonStop.js'
 import { settlePidFile } from './pidFileSettle.js'
+import { systemProgram } from './windows/systemProgram.js'
 import {
   CARRIED_ENV, PLATFORM_START_WAIT_MS, PLATFORM_STOP_WAIT_MS, TASK_RUN_WAIT_MS, describeState, platformDaemonDeps, serviceDefinition, waitForMaster, waitGone,
   type PlatformDaemonDeps,
@@ -73,7 +74,7 @@ export type RegRun = (
 export function readUserEnvironment(name: string, run: RegRun = execFile as unknown as RegRun): Promise<string | null> {
   return new Promise((resolve) => {
     try {
-      run('reg', ['query', 'HKCU\\Environment', '/v', name], { timeout: USER_ENVIRONMENT_TIMEOUT_MS, windowsHide: true }, (error, stdout) => {
+      run(systemProgram('reg.exe'), ['query', 'HKCU\\Environment', '/v', name], { timeout: USER_ENVIRONMENT_TIMEOUT_MS, windowsHide: true }, (error, stdout) => {
         if (error) { resolve(null); return }
         // `    PORT    REG_SZ    18621`: names are case-insensitive on Windows.
         for (const line of String(stdout).split(/\r?\n/)) {

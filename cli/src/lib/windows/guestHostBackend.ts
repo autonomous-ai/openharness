@@ -13,6 +13,7 @@ import { guestHostHome } from './guestTree.js'
 import { PtyHostBackend } from '../ptyHostBackend.js'
 import { discoveredHostDead, reachPtyHost, readInstanceDiscovery, type HostLiveness } from '../ptyHost/launch.js'
 import type { PtyHostDiscovery } from '../ptyHost/client.js'
+import { systemProgram } from './systemProgram.js'
 
 export { guestHostHome }
 export const guestHostTask = (user: string): string => `\\Harness\\Guests\\${user}`
@@ -68,7 +69,7 @@ export async function waitForGuestHost(home: string, options: GuestHostBackendOp
 export function createGuestHostBackend(options: GuestHostBackendOptions): PtyHostBackend {
   const home = options.home ?? guestHostHome(options.user)
   const startTask = options.startTask ?? (async (task: string) => {
-    const result = await (options.runner ?? runGuestCommand)('schtasks.exe', ['/run', '/tn', task], { timeoutMs: 30_000 })
+    const result = await (options.runner ?? runGuestCommand)(systemProgram('schtasks.exe'), ['/run', '/tn', task], { timeoutMs: 30_000 })
     if (result.code !== 0) throw new Error(result.stderr.trim() || `could not start ${task} (schtasks ${result.code})`)
   })
   return new PtyHostBackend({

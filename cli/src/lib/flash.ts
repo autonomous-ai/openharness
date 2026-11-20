@@ -29,6 +29,7 @@ import { env } from '../config/env.js'
 import { FLASHER_DIR } from './flasherDir.js'
 import { completeFlash } from './flashRecovery.js'
 import { atomicWriteFile } from './secureState.js'
+import { powershellPath } from './windows/powershell.js'
 
 const FETCH_TIMEOUT_MS = 20_000
 
@@ -54,7 +55,7 @@ export function flasherScript(platform: NodeJS.Platform = process.platform): Fla
       kind: 'the PowerShell flasher',
       // -ExecutionPolicy Bypass for this one process: a user's policy may refuse scripts. The file came from fetch,
       // which marks nothing as downloaded, so no SmartScreen or zone check is involved.
-      command: (scriptPath, args) => ({ file: 'powershell.exe', args: ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', scriptPath, ...args] }),
+      command: (scriptPath, args) => ({ file: powershellPath(), args: ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', scriptPath, ...args] }),
       byHand: (url) => [`  irm ${url} -OutFile flash-circle.ps1`, '  powershell -NoProfile -ExecutionPolicy Bypass -File flash-circle.ps1'],
       missing: 'Windows PowerShell (powershell.exe) was not found, and the flasher is a PowerShell script.\nRun it yourself from a PowerShell window:',
     }
