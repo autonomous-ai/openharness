@@ -19,6 +19,8 @@ spec.loader.exec_module(planner)
 # Harness Device's four debug packages, in device-app-build's order.
 FOUR_BUILDS = [{"bundle": "appimage", "arch": "x64"}, {"bundle": "appimage", "arch": "arm64"},
                {"bundle": "nsis", "arch": "x64"}, {"bundle": "nsis", "arch": "arm64"}]
+# A plan whose linux-e2e does not run.
+NO_LINUX_E2E = {"linux_files": [], "linux_shards": 0, "linux_full": False}
 
 
 class SelectionTests(unittest.TestCase):
@@ -164,15 +166,25 @@ class SelectionTests(unittest.TestCase):
         record = dict(schema=1, kind="ci-plan", draft=False, suites=["cli", "device-app-install", "windows-e2e"],
                       reused={"cli": {}}, e2e=planner.e2e_plan(["cli/src/devices/listenerPipe.ts"], running))
         values = planner.outputs(record)
-        self.assertEqual(set(values), {"plan", "ready", "windows-e2e-arm64", "device-app-builds"} | planner.SUITES)
+        self.assertEqual(set(values), {"plan", "ready", "windows-e2e-arm64", "device-app-builds", "linux-e2e-files",
+                                       "linux-e2e-shards", "linux-e2e-full"} | planner.SUITES)
         self.assertEqual(json.loads(values["plan"]), record)
         self.assertEqual(values["ready"], "true")
         self.assertEqual((values["windows-e2e"], values["windows-e2e-arm64"]), ("true", "false"))
         self.assertEqual(values["device-app-builds"], '[{"bundle":"appimage","arch":"x64"}]')
         self.assertEqual((values["device-app-install"], values["device-app-e2e"]), ("true", "false"))
+        # linux-e2e does not run: no file and no row.
+        self.assertEqual((values["linux-e2e"], values["linux-e2e-files"], values["linux-e2e-shards"],
+                          values["linux-e2e-full"]), ("false", "", "[]", "false"))
         # A reused suite's jobs skip.
         self.assertEqual(values["cli"], "false")
         self.assertEqual(planner.outputs(dict(record, draft=True))["ready"], "false")
+        # The files reach the jobs as one line, the rows as a JSON list.
+        linux = dict(record, suites=["linux-e2e"], reused={},
+                     e2e=dict(record["e2e"], linux_files=["e2e/a.e2e.ts", "e2e/sub/b.e2e.ts"], linux_shards=2))
+        values = planner.outputs(linux)
+        self.assertEqual((values["linux-e2e"], values["linux-e2e-files"], values["linux-e2e-shards"],
+                          values["linux-e2e-full"]), ("true", "e2e/a.e2e.ts e2e/sub/b.e2e.ts", "[1,2]", "false"))
 
     def test_a_windows_only_file_runs_windows_end_to_end_on_both_architectures(self):
         # Decision 5: arm64 tests something x64 does not only for code that runs on Windows alone.
@@ -226,6 +238,52 @@ class SelectionTests(unittest.TestCase):
         self.assertIn("plugins/harness-device-vscode/src/", named)
         self.assertEqual(set(planner.WINDOWS_SPECS), named)
 
+    def test_dial_host_files_and_adapters_run_the_dial_hosts_job_not_linux_e2e(self):
+        # They need the hosts installed: the CI config leaves them out, and dial-hosts runs them all.
+        for path in ("cli/e2e/dialHostKitty.e2e.ts", "cli/e2e/deviceHerdr.e2e.ts"):
+            with self.subTest(path=path):
+                self.assertFalse(planner.linux_e2e_file(path))
+                self.assertIn("dial-hosts", planner.select([path])[0])
+                self.assertNotIn("linux-e2e", planner.select([path])[0])
+        for entry in planner.DIAL_HOST_PATHS:
+            path = entry + "x" if entry.endswith("/") else entry
+            with self.subTest(path=path):
+                self.assertIn("dial-hosts", planner.select([path])[0])
+                self.assertNotIn("linux-e2e", planner.select([path])[0])
+        # A name that only starts like one, or one in a folder below, is not a dial host's: Vitest's glob stays in e2e/.
+        for path in ("cli/e2e/deviceHerdrApp.e2e.ts", "cli/e2e/sub/dialHostKitty.e2e.ts"):
+            with self.subTest(path=path):
+                self.assertTrue(planner.linux_e2e_file(path))
+                self.assertEqual(planner.select([path])[0] & {"dial-hosts", "linux-e2e"}, {"linux-e2e"})
+
+    def test_some_files_never_run_on_linux(self):
+        # windows-e2e runs the dial on Windows, diskfull is macOS only, and the agent browser's Podman file runs by hand.
+        for path in ("cli/e2e/dialWindows.e2e.ts", "cli/e2e/diskfull.e2e.ts", "cli/e2e/agentBrowserPodman.e2e.ts"):
+            with self.subTest(path=path):
+                self.assertIn(path, planner.LINUX_E2E_NEVER)
+                self.assertFalse(planner.linux_e2e_file(path))
+                self.assertNotIn("linux-e2e", planner.select([path])[0])
+        # Every other e2e file does, the dial's Windows tools too (they run on every platform); nothing else is one.
+        for path in ("cli/e2e/startup.e2e.ts", "cli/e2e/dialWindowsTools.e2e.ts", "cli/e2e/sub/a.e2e.ts"):
+            with self.subTest(path=path):
+                self.assertTrue(planner.linux_e2e_file(path))
+                self.assertIn("linux-e2e", planner.select([path])[0])
+        for path in ("cli/e2e/harness/daemon.ts", "cli/src/lib/a.spec.ts", "cli/vitest.e2e.ci.config.ts", "tests/a.e2e.ts"):
+            with self.subTest(path=path):
+                self.assertFalse(planner.linux_e2e_file(path))
+                self.assertNotIn("linux-e2e", planner.select([path])[0])
+
+    def test_the_dial_host_files_are_the_ones_cli_e2e_leaves_out(self):
+        root = Path(__file__).resolve().parents[2]
+        source = root / "cli/e2e/harness/dialHosts.ts"
+        if not source.is_file():
+            self.skipTest("needs a full checkout (CI's process checks are sparse)")
+        listed = re.search(r"export const DIAL_HOST_FILES = \[([^\]]*)\]", source.read_text()).group(1)
+        self.assertEqual(set(planner.DIAL_HOST_FILES), {"cli/" + name for name in re.findall(r"'([^']+)'", listed)})
+        for entry in planner.DIAL_HOST_PATHS:
+            with self.subTest(entry=entry):
+                self.assertTrue((root / entry).is_dir() if entry.endswith("/") else (root / entry).is_file())
+
     def test_either_release_workflow_runs_the_device_app_suite(self):
         # Its test_release_workflow.py reads both through a path built from parts, which the scan cannot see: a change
         # to either alone, Desktop's runners or signing inputs too, must run it.
@@ -238,6 +296,17 @@ class SelectionTests(unittest.TestCase):
         workflow = (Path(__file__).resolve().parents[2] / ".github/workflows/ci.yml").read_text()
         options = re.search(r"(?m)^        options: \[(.+)\]$", workflow).group(1).split(", ")
         self.assertEqual(set(options), set(planner.MANUAL))
+        self.assertLessEqual({"linux-e2e", "dial-hosts"}, set(options))
+        # A dispatch of linux-e2e names its files; they reach the planner through env alone, never a run block.
+        self.assertIn("      e2e_files:\n"
+                      "        description: 'With scope linux-e2e: the cli/e2e files to run, separated by spaces'\n"
+                      "        type: string\n"
+                      "        default: ''\n",
+                      re.search(r"(?ms)^  workflow_dispatch:\n(.*?)^  workflow_call:", workflow).group(1))
+        select = re.search(r"(?ms)^      - id: select\n(.*?)(?=^      - )", workflow).group(1)
+        self.assertIn("          CI_E2E_FILES: ${{ inputs.e2e_files }}\n", select)
+        self.assertIn('--e2e-files="$CI_E2E_FILES"', select)
+        self.assertEqual(workflow.count("inputs.e2e_files"), 1)
         jobs = dict(re.findall(r"(?m)^  ([\w-]+):\n((?:(?:    .*)?\n)+)", workflow))
         needs = set(re.findall(r"[\w-]+", re.search(r"(?m)^    needs: \[((?:.|\n)+?)\]", jobs["required"]).group(1)))
         for suite in sorted(planner.SUITES):
@@ -246,7 +315,8 @@ class SelectionTests(unittest.TestCase):
                 for job in planner.JOBS[suite]:
                     self.assertIn(f"needs.plan.outputs.{suite} == 'true'", jobs[job])
                     self.assertIn(job, needs)
-        # What the end-to-end jobs read besides their flags (windows-e2e-arm64, device-app-builds) reaches them too.
+        # What the end-to-end jobs read besides their flags (windows-e2e-arm64, device-app-builds, linux-e2e's files,
+        # rows and mode) reaches them too.
         record = dict(draft=False, suites=[], reused={}, e2e=planner.e2e_plan([], set()))
         for output in planner.outputs(record):
             with self.subTest(output=output):
@@ -560,11 +630,126 @@ class GitPlanTests(unittest.TestCase):
         # A run by hand names no changed path: windows-e2e then runs both architectures.
         windows = planner.make_plan(self.root, "workflow_dispatch", {}, "windows-e2e")
         self.assertEqual((windows["suites"], windows["required_jobs"]), (["windows-e2e"], ["process-checks", "windows-e2e"]))
-        self.assertEqual(windows["e2e"], {"windows_arm64": True, "device_app_builds": []})
+        self.assertEqual(windows["e2e"], {"windows_arm64": True, "device_app_builds": [], **NO_LINUX_E2E})
         desktop = planner.make_plan(self.root, "workflow_dispatch", {}, "device-app-desktop")
-        self.assertEqual(desktop["e2e"], {"windows_arm64": False, "device_app_builds": FOUR_BUILDS})
+        self.assertEqual(desktop["e2e"], {"windows_arm64": False, "device_app_builds": FOUR_BUILDS, **NO_LINUX_E2E})
         self.assertEqual(planner.make_plan(self.root, "workflow_dispatch", {}, "all")["e2e"],
-                         {"windows_arm64": False, "device_app_builds": []})
+                         {"windows_arm64": False, "device_app_builds": [], **NO_LINUX_E2E})
+
+    def hints(self, durations):
+        """cli/ci-e2e-durations.json: per-file hints, keyed cli/-relative, and the 60-second default."""
+        self.write("cli/ci-e2e-durations.json", json.dumps({"schema": 1, "defaultDurationMs": 60_000, "durationMs": durations}))
+
+    def test_the_prs_added_and_modified_e2e_files_run_on_linux(self):
+        self.write("cli/e2e/b.e2e.ts")
+        self.write("cli/e2e/c.e2e.ts")
+        self.hints({"e2e/a.e2e.ts": 30_000})
+        self.base = self.commit()
+        self.write("cli/e2e/a.e2e.ts")
+        self.write("cli/e2e/b.e2e.ts", "changed")
+        (self.root / "cli/e2e/c.e2e.ts").unlink()
+        self.commit()
+        plan = self.plan()
+        self.assertIn("linux-e2e", plan["suites"])
+        self.assertEqual(plan["e2e"]["linux_files"], ["e2e/a.e2e.ts", "e2e/b.e2e.ts"])
+        self.assertEqual((plan["e2e"]["linux_shards"], plan["e2e"]["linux_full"]), (1, False))
+        self.assertNotIn("linux-e2e", plan["reasons"]["cli/e2e/c.e2e.ts"])
+        self.assertLessEqual({"linux-e2e", "linux-e2e-summary"}, set(plan["required_jobs"]))
+
+    def test_a_pr_that_only_deletes_an_e2e_file_runs_no_linux_e2e(self):
+        self.write("cli/e2e/c.e2e.ts")
+        self.base = self.commit()
+        (self.root / "cli/e2e/c.e2e.ts").unlink()
+        self.commit()
+        plan = self.plan()  # No hints file in the tree: none is read.
+        self.assertEqual(plan["paths"], ["cli/e2e/c.e2e.ts"])
+        self.assertNotIn("linux-e2e", plan["suites"])
+        self.assertEqual({key: plan["e2e"][key] for key in NO_LINUX_E2E}, NO_LINUX_E2E)
+
+    def test_files_spread_over_runners_by_their_hints(self):
+        # Answer 6: one runner per 10 hinted minutes, at most one per file and 4 in all.
+        self.hints({f"e2e/long{index}.e2e.ts": 600_000 for index in range(30)})
+        head = self.commit()
+        long = [f"cli/e2e/long{index}.e2e.ts" for index in range(30)]
+        short = [f"cli/e2e/short{index}.e2e.ts" for index in range(12)]  # at the default
+        for paths, shards in ((long[:3], 3), (short, 2), (long, 4)):
+            with self.subTest(files=len(paths), shards=shards):
+                plan = planner.e2e_plan(paths, {"linux-e2e"}, self.root, head)
+                self.assertEqual(plan["linux_shards"], shards)
+                self.assertEqual(plan["linux_files"], sorted(path.removeprefix("cli/") for path in paths))
+                self.assertFalse(plan["linux_full"])
+        # A tree without the hints fails the plan, naming the file.
+        with self.assertRaisesRegex(ValueError, "cli/ci-e2e-durations.json"):
+            planner.e2e_plan(long[:3], {"linux-e2e"}, self.root, self.base)
+
+    def test_more_than_40_files_run_the_full_suite_on_the_nightlys_shards(self):
+        # Answer 6: a big refactor stays mergeable. The base has no hints file: the full run reads none.
+        files = [f"cli/e2e/f{index:02}.e2e.ts" for index in range(41)]
+        full = planner.e2e_plan(files, {"linux-e2e"}, self.root, self.base)
+        self.assertEqual((full["linux_full"], full["linux_files"], full["linux_shards"]), (True, [], 8))
+        values = planner.outputs(dict(draft=False, suites=["linux-e2e"], reused={}, e2e=full))
+        self.assertEqual((values["linux-e2e-full"], values["linux-e2e-files"], values["linux-e2e-shards"]),
+                         ("true", "", "[1,2,3,4,5,6,7,8]"))
+        self.hints({})
+        head = self.commit()
+        listed = planner.e2e_plan(files[:40], {"linux-e2e"}, self.root, head)
+        self.assertFalse(listed["linux_full"])
+        self.assertEqual(listed["linux_files"], [path.removeprefix("cli/") for path in files[:40]])
+        self.assertLessEqual(listed["linux_shards"], 4)
+        # The full mode passes no name on, yet every name is still checked.
+        with self.assertRaisesRegex(ValueError, re.escape("cli/e2e/a b.e2e.ts")):
+            planner.e2e_plan(files + ["cli/e2e/a b.e2e.ts"], {"linux-e2e"}, self.root, head)
+
+    def test_an_e2e_file_name_outside_the_safe_set_fails_the_plan(self):
+        # Review Focus 1: the list reaches the jobs' shells through env; the plan passes on plain names alone.
+        for path in ("cli/e2e/a b.e2e.ts", "cli/e2e/$(x).e2e.ts", "cli/e2e/a;b.e2e.ts", "cli/e2e/'a.e2e.ts"):
+            with self.subTest(path=path):
+                self.git("checkout", "-q", "--detach", self.base)
+                self.write(path)
+                self.commit()
+                with self.assertRaisesRegex(ValueError, re.escape(path)):
+                    self.plan()
+
+    def test_a_dispatch_runs_the_e2e_files_it_names(self):
+        self.write("cli/e2e/a.e2e.ts")
+        self.write("cli/e2e/diskfull.e2e.ts")
+        self.write("cli/e2e/dir.e2e.ts/b.e2e.ts")
+        self.hints({})
+        self.commit()
+
+        def dispatch(scope, files):
+            return planner.make_plan(self.root, "workflow_dispatch", {}, scope, e2e_files=files)
+
+        plan = dispatch("linux-e2e", "cli/e2e/a.e2e.ts")
+        self.assertEqual((plan["suites"], plan["required_jobs"]), (["linux-e2e"], ["linux-e2e", "linux-e2e-summary",
+                                                                                   "process-checks"]))
+        self.assertEqual((plan["e2e"]["linux_files"], plan["e2e"]["linux_shards"]), (["e2e/a.e2e.ts"], 1))
+        # linux-e2e by hand needs its files, and no other scope takes any.
+        for scope, files in (("linux-e2e", ""), ("linux-e2e", "  "), ("cli", "cli/e2e/a.e2e.ts"),
+                             ("all", "cli/e2e/a.e2e.ts")):
+            with self.subTest(scope=scope, files=files), self.assertRaises(ValueError):
+                dispatch(scope, files)
+        # A file the tree does not hold (a folder is not one), or one that never runs on Linux, fails by name.
+        for path in ("cli/e2e/missing.e2e.ts", "cli/e2e/dir.e2e.ts", "cli/e2e/diskfull.e2e.ts"):
+            with self.subTest(path=path), self.assertRaisesRegex(ValueError, re.escape(path)):
+                dispatch("linux-e2e", f"cli/e2e/a.e2e.ts {path}")
+
+    def test_ci_required_takes_the_same_linux_e2e_jobs_in_both_modes(self):
+        # One job shape (the plan's Decisions): the gate holds both modes to the same two jobs.
+        paths = [f"cli/e2e/f{index:02}.e2e.ts" for index in range(41)]
+        for path in paths:
+            self.write(path)
+        self.hints({})
+        self.commit()
+        for files, full in ((paths[0], False), (" ".join(paths), True)):
+            with self.subTest(full=full):
+                plan = planner.make_plan(self.root, "workflow_dispatch", {}, "linux-e2e", e2e_files=files)
+                self.assertEqual(plan["e2e"]["linux_full"], full)
+                self.assertEqual(plan["required_jobs"], ["linux-e2e", "linux-e2e-summary", "process-checks"])
+                needs = {job: {"result": "success"} for job in plan["required_jobs"] + ["plan"]}
+                self.assertEqual(planner.verify(plan, needs, plan["head"])["status"], "passed")
+                with self.assertRaisesRegex(ValueError, "linux-e2e-summary"):
+                    planner.verify(plan, dict(needs, **{"linux-e2e-summary": {"result": "skipped"}}), plan["head"])
 
 
 class FakeEvidence:
@@ -824,6 +1009,20 @@ class ReuseTests(ReuseFixture):
                 self.assertIn("windows-e2e", plan["suites"])
                 self.assertEqual("windows-e2e" in plan["reused"], reused)
                 self.assertEqual("windows-e2e" in plan["required_jobs"], not reused)
+
+    def test_linux_e2e_reruns_when_main_changes_the_cli_its_files_run(self):
+        self.write("cli/ci-e2e-durations.json", json.dumps({"schema": 1, "defaultDurationMs": 60_000, "durationMs": {}}))
+        self.base = self.commit()
+        passed = self.branch(self.base, ["cli/e2e/a.e2e.ts"], "pr")
+        self.evidence.add(self.root, passed, planner.select(["cli/e2e/a.e2e.ts"])[0], run_id=11)
+        for index, (path, reused) in enumerate((("cli/src/a.ts", False), ("docs/guide.md", True))):
+            with self.subTest(main=path):
+                main = self.branch(self.base, [path], f"main-{index}")
+                plan = self.plan(self.update(passed, main), main)
+                self.assertIn("linux-e2e", plan["suites"])
+                self.assertEqual("linux-e2e" in plan["reused"], reused)
+                self.assertEqual("linux-e2e-summary" in plan["required_jobs"], not reused)
+                self.assertEqual(plan["e2e"]["linux_files"], [] if reused else ["e2e/a.e2e.ts"])
 
     def test_a_reused_device_app_suite_skips_while_another_rebuilds(self):
         # Review Focus 4: main changed only Desktop's half, so only the Desktop install runs again; it still needs all
