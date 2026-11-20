@@ -1732,6 +1732,29 @@ mod tests {
         assert_eq!(shows(&answer(&mut app, true)), [follow_offer()]);
     }
 
+    /// The ChatGPT app is on this Mac, without the permission.
+    fn with_chatgpt(mut app: App) -> App {
+        app.handle(follow(false, true));
+        app
+    }
+
+    #[test]
+    fn closing_sign_in_shows_the_follow_screen_waiting_behind_it() {
+        let mut app = with_chatgpt(on_sign_in());
+        assert!(!saves(&app.handle(Event::FollowOffer)));
+        let effects = app.handle(Event::WindowClosed);
+        assert!(has(&effects, &Effect::Save(Saved { asked_sign_in: true, asked_follow: true, ..SEEN })));
+        assert_eq!(shows(&effects), [follow_offer()]);
+    }
+
+    #[test]
+    fn an_offer_never_shown_is_offered_again() {
+        let mut app = with_chatgpt(on_sign_in());
+        app.handle(Event::FollowOffer);
+        assert!(!saves(&app.handle(Event::Menu(MenuAction::Quit))));
+        assert!(!app.state.saved.asked_follow);
+    }
+
     #[test]
     fn allow_asks_macos_each_time_and_opens_the_settings_after_the_first() {
         let mut app = signed_in();
