@@ -13,13 +13,14 @@
  * The agent's folder is `<stateDir>/agents/<agentId>/agent/` unless `openclaw.json` moves it
  * (`agents.entries.<id>.agentDir`). The config is read, never written.
  */
-import { readFile } from 'node:fs/promises'
+import { access, readFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { basename, dirname, isAbsolute, join } from 'node:path'
 import { env } from '../config/env.js'
 import { OPENCLAW_KEY, openclawAgentDb } from '../engines/openclaw/contract.js'
 import { errorKind } from './log.js'
 import { nativeOpenFiles } from './nativeConversation.js'
+import { sqliteReadAll } from './sqliteRead.js'
 
 /** A TUI keeps its state folder for its whole life; a pid read again after this long may be another process. */
 const CACHE_MS = 60_000
@@ -88,4 +89,25 @@ export async function openclawSessionDb(
   if (!agentId) return null
   const stateDir = pane.stateDir || (await openclawStateDir(pane.pid, openFiles) ?? env.OPENCLAW_STATE_DIR)
   return openclawAgentDb(stateDir, agentId, await configuredAgentDir(stateDir, agentId))
+}
+
+const USER_ROW_SINCE = `SELECT 1 FROM transcript_events WHERE message_role = 'user' AND created_at > ?
+  AND session_id IN (SELECT session_id FROM session_windows WHERE session_key = ?) LIMIT 1;`
+
+/**
+ * Whether `key`'s store holds a user message written after `since`, in any window the key has had: OpenClaw took a
+ * task typed into its box. False when the store does not exist yet (no message was ever taken); null for no key or a
+ * read that fails, which says nothing either way.
+ */
+export async function openclawUserRowSince(
+  key: string,
+  pane: { pid: number; stateDir?: string | null },
+  since: number,
+  openFiles?: (pid: number) => Promise<string[]>,
+): Promise<boolean | null> {
+  const database = await openclawSessionDb(key, pane, openFiles)
+  if (!database) return null
+  try { await access(database) } catch { return false }
+  const read = await sqliteReadAll(database, USER_ROW_SINCE, [since, key])
+  return read.ok ? read.rows.length > 0 : null
 }

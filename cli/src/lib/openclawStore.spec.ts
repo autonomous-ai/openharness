@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { closeSqliteHandles } from './sqliteBuiltin.js'
+import { builtinSqlite, closeSqliteHandles } from './sqliteBuiltin.js'
 import { openclawStateDir, openclawUserRowSince } from './openclawStore.js'
 
 afterEach(() => { vi.restoreAllMocks() })
@@ -35,8 +35,8 @@ describe('whether OpenClaw\'s store holds a user row for a key', () => {
 
   function plainStore(): void {
     emptyStateDir()
-    const { DatabaseSync } = process.getBuiltinModule('node:sqlite') as typeof import('node:sqlite')
-    const db = new DatabaseSync(database())
+    const Database = builtinSqlite()!
+    const db = new Database(database(), { readOnly: false })
     db.exec(readFileSync(join(fixtures, 'schema.sql'), 'utf8'))
     db.exec(readFileSync(join(fixtures, 'plain.sql'), 'utf8'))
     db.close()
