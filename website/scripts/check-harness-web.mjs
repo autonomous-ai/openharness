@@ -31,7 +31,10 @@ for (const route of ['/?viewer=1&machine=fixture-machine&agent=fixture-agent', '
   assert.match(html, /_flutter\.loader\.load\(/);
   assert.ok(html.includes(`"entrypointBaseUrl":"${assetBase}"`), 'Entrypoint must bypass previous-release caches');
   assert.ok(html.includes(`"assetBase":"${assetBase}"`), 'Fonts and assets must belong to the same release');
-  assert.ok(!html.includes('Opening Harness'), 'The page must not flash a corner loading label');
+  // The first-visit splash (#1674) carries the only loading text, and Flutter's first frame removes it.
+  assert.match(html, /<div id="harness-splash" role="status">/, 'The first visit must show the splash');
+  assert.match(html, /addEventListener\('flutter-first-frame'[\s\S]*?getElementById\('harness-splash'\)/, 'Flutter must remove the splash on its first frame');
+  assert.equal(html.split('Opening Harness').length - 1, 1, 'The loading text must live only in the splash');
   assert.ok(!html.includes('fixture-code'), 'Callback codes must not be embedded in the page');
 }
 for (const [route, type] of [
