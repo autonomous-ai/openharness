@@ -33,7 +33,7 @@ is no silent difference.
 - Changing the CLI's behavior, the devices service, the watch protocol or the devices pipe. The app talks to the CLI
   only. (A CLI test may pin install-script lines the app reads.)
 - A Linux `.deb`/`.rpm`, a Windows MSI, a Microsoft Store or Flathub package.
-- Terminal-tab follow outside macOS (see named differences).
+- Terminal-tab follow and Follow ChatGPT outside macOS (see named differences).
 - A permanent new workflow (the existing PR CI job gains a Windows leg; see CI).
 
 ## Anti-goals (a failure even if it works)
@@ -312,6 +312,7 @@ macOS, or the release is a partial ship. The same pull request carries both:
 | Difference | Windows | Linux | Why |
 |---|---|---|---|
 | Terminal-tab follow (Terminal/iTerm2/Ghostty) | none | none | AppleScript only; Windows Terminal has no list/select API; Ghostty on Linux offers no list/focus |
+| Follow ChatGPT (AX title) | none | none | macOS only: no Accessibility title source elsewhere; `follow::system` gives a door with no ChatGPT app, so the item and its screen never show |
 | App in front | WinEvent hook | X11, sway, Hyprland; **none on GNOME/KDE Wayland** | GNOME and KDE Wayland give no other program the focused window |
 | Tray click refresh | as macOS | from the 5 s tick, same throttles | Tauri emits no tray click on Linux (menu only) |
 | Tray shown at all | always | needs a StatusNotifier host; **stock GNOME needs the AppIndicator extension** (Ubuntu ships it) | GNOME has no tray of its own; the app logs `tray: no host` once when no watcher has come on the session bus within 30 s of start |

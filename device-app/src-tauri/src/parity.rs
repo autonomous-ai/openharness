@@ -1,12 +1,15 @@
 //! The menu is the same on every OS: the model and the app take no OS. The one refresh that differs, Linux's tick
 //! telling what a click tells elsewhere, is tick.rs's test; main.rs hands `tick::menu_opened` to the tray's click and
-//! `tick::tick` to the timer (`ticked`).
+//! `tick::tick` to the timer (`ticked`). Follow ChatGPT, macOS only, comes from the door main.rs hands the runner
+//! (`follow::system`), never from an OS the rules read.
 
 use crate::app::App;
+use crate::follow::{AxTrust, ChatgptWindow, NoFollow};
 use crate::install::DOWNLOADING_HARNESS;
 use crate::tick::menu_opened;
 use crate::types::{
-    Action, DialStatus, Effect, Event, Exported, LoginEvent, MenuAction, MenuItem, NotifyMode, Saved, UpdateFailure,
+    Action, DialStatus, Effect, Event, Exported, LoginEvent, MenuAction, MenuItem, NotifyMode, Saved, Screen,
+    UpdateFailure,
 };
 
 /// Second 0 of a minute.
@@ -80,6 +83,11 @@ fn the_one_os_property_of_the_rules_is_install_exits_app() {
         Event::Login(LoginEvent::Waiting("Waiting".into())),
         Event::Login(LoginEvent::Done(Ok(()))),
         Event::Auth(Some(true)),
+        Event::Follow { trusted: false, installed: true },
+        Event::FollowOffer,
+        Event::Act(Action::Allow),
+        Event::Follow { trusted: true, installed: true },
+        Event::Menu(MenuAction::FollowSettings),
         menu_opened(B + 70, true),
         Event::Menu(MenuAction::SoundOff),
         status(true),
@@ -143,4 +151,43 @@ fn the_one_os_property_of_the_rules_is_install_exits_app() {
 fn shows_the_row(effects: &[Effect]) -> bool {
     let row = MenuItem::Text("Updating Harness…".into());
     effects.iter().any(|effect| matches!(effect, Effect::Menu(items) if items.contains(&row)))
+}
+
+/// Whether the menu's last Follow ChatGPT item and its screen show, signed in with a dial attached, once the runner has
+/// told what the door answers and ChatGPT came to the front.
+fn follow_shown(trusted: bool, installed: bool) -> (bool, bool) {
+    let seen = Saved { cli_seen: true, asked_sign_in: true, login_item: true, ..Saved::default() };
+    let (mut app, mut effects) = App::new(seen, true, false, B, false);
+    for event in
+        [Event::StartDone { ok: true }, status(false), Event::Auth(Some(true)), Event::Follow { trusted, installed }]
+    {
+        effects.extend(app.handle(event));
+    }
+    effects.extend(app.handle(Event::FollowOffer));
+    let menu = effects.iter().rev().find_map(|effect| match effect {
+        Effect::Menu(items) => Some(items),
+        _ => None,
+    });
+    let item = menu.is_some_and(|items| {
+        items
+            .iter()
+            .any(|item| matches!(item, MenuItem::Check(MenuAction::FollowChatgpt | MenuAction::FollowSettings, ..)))
+    });
+    (item, app.view().is_some_and(|view| view.screen == Screen::Follow))
+}
+
+#[test]
+fn follow_chatgpt_shows_only_with_a_door_that_has_the_chatgpt_app() {
+    // macOS's door, the ChatGPT app installed and no permission yet: the item, and the offer's screen.
+    assert_eq!(follow_shown(false, true), (true, true));
+    // Windows' and Linux's: no item and no screen, from the same rules.
+    assert_eq!(follow_shown(NoFollow.trusted(), NoFollow.installed()), (false, false));
+}
+
+#[cfg(not(target_os = "macos"))]
+#[test]
+fn off_macos_the_binary_hands_the_runner_no_chatgpt_door() {
+    let door = crate::follow::system(std::env::temp_dir());
+    assert!(!door.installed() && !door.trusted());
+    assert!(door.observe(Box::new(|_: crate::follow::Heard| {})).is_none());
 }
