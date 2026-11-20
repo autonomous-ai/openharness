@@ -513,6 +513,41 @@ mod tests {
         assert_eq!(told.recv_timeout(Duration::from_secs(1)), Err(RecvTimeoutError::Disconnected));
     }
 
+    /// A panic where the hook tells (a poisoned lock in the app) would unwind into Windows, which ends the process.
+    #[cfg(windows)]
+    #[test]
+    fn a_panic_where_the_hook_tells_ends_following_not_the_app() {
+        use windows_sys::Win32::UI::WindowsAndMessaging::PM_REMOVE;
+
+        let (send, told) = mpsc::channel();
+        let heard = move |heard| match heard {
+            Heard::Title(_) => panic!("a poisoned lock"),
+            Heard::NoObserver => {
+                let _ = send.send(heard);
+            }
+        };
+        HERE.with(|cell| {
+            // No process is ChatGPT's: each event tells the empty title, and hooks nothing more.
+            let _ = cell.set(Here::new(Box::new(|_| false), Arc::new(heard)));
+        });
+        // Twice: an event queued before the loop quits.
+        for _ in 0..2 {
+            // SAFETY: called as Windows calls it, on the thread whose HERE it reads.
+            unsafe { changed(ptr::null_mut(), EVENT_SYSTEM_FOREGROUND, ptr::null_mut(), 0, 0, 0, 0) };
+        }
+        // The message loop the hook runs in is told to quit.
+        // SAFETY: MSG is plain data; all zeros is a valid value for PeekMessageW to fill.
+        let mut message: MSG = unsafe { std::mem::zeroed() };
+        let mut quit = false;
+        // SAFETY: `message` is writable; the null window takes every message of this thread.
+        while !quit && unsafe { PeekMessageW(&mut message, ptr::null_mut(), 0, 0, PM_REMOVE) } != 0 {
+            quit = message.message == WM_QUIT;
+        }
+        assert!(quit, "the hook's message loop was not told to quit");
+        // Following ends with its word, once.
+        assert_eq!(told.try_iter().collect::<Vec<_>>(), [Heard::NoObserver]);
+    }
+
     #[cfg(windows)]
     #[test]
     fn installed_answers_and_a_family_never_registered_is_not() {
