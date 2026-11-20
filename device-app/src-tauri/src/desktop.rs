@@ -52,7 +52,8 @@ impl DesktopApp for SystemDesktopApp {
 }
 
 /// The program an entry's `Exec=` line starts: a quoted first word unescaped, else the text up to the first space.
-/// The same reading as the desktop app's own `_execTarget`, which writes the entry.
+/// The desktop app writes the entry with a backslash before `"` (`_quoteExec`); its own `_execTarget` ends the word at
+/// the first `"`, escaped or not, and this reading does not.
 pub fn exec_target(entry: &str) -> Option<String> {
     let value = entry.lines().find_map(|line| line.strip_prefix("Exec="))?.trim();
     let Some(quoted) = value.strip_prefix('"') else {
@@ -78,7 +79,8 @@ pub fn linux_desktop_app(
     read: &dyn Fn(&Path) -> Option<String>,
     is_file: &dyn Fn(&Path) -> bool,
 ) -> Option<PathBuf> {
-    // A relative XDG_DATA_HOME is invalid by the base directory spec, and ignored.
+    // A relative XDG_DATA_HOME is invalid by the base directory spec, and ignored. The desktop app takes any non-empty
+    // one, so with a relative one its entry is not found here.
     let data = match data_home.map(Path::new).filter(|data| data.is_absolute()) {
         Some(data) => data.to_path_buf(),
         None => home.join(".local").join("share"),
