@@ -8,7 +8,8 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSyn
 import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { afterEach, expect, inject, it, vi } from 'vitest'
-import { beginRun, createRun, removeRun, RUN_FILE, startNode, sweep } from '../__fixtures__/vitestRun.js'
+import { beginRun, createRun, removeRun, RUN_FILE, runNode, sweep } from '../__fixtures__/vitestRun.js'
+import { placeNode } from '../testing/placeNode.js'
 
 let base: string | undefined
 afterEach(() => {
@@ -37,18 +38,45 @@ it.skipIf(process.platform === 'win32')('runs each worker in a folder of its own
 
 // macOS checks each new executable file on its first run, one at a time machine-wide: 2.1 s for a fresh copy under load.
 // The run pays it once, for the copy testing/placeNode.ts links into each test.
-it.skipIf(inject('startedNode') === '')('starts one copy of this Node in its folder, for placeNode to link', () => {
-  const node = inject('startedNode')
-  expect(node).toBe(join(inject('runFolder'), 'node', 'bin', basename(process.execPath)))
+it.skipIf(inject('startedNode') === '')('names one Node in its folder, for placeNode to link', () => {
+  expect(inject('startedNode')).toBe(join(inject('runFolder'), 'node', 'bin', basename(process.execPath)))
+})
+
+// About 2 s a run, paid by every run before: windows.yml's too, where no spec places a Node.
+it('makes no Node for a run that places none', () => {
+  const folder = scratch()
+  expect(runNode(folder, undefined, [])).toBe(join(folder, 'node', 'bin', basename(process.execPath)))
+  expect(readdirSync(folder)).toEqual([])
+})
+
+it('makes its Node at the first place, starts it once, and links it into every test that places one', () => {
+  const folder = scratch()
+  const node = runNode(folder, undefined, []), start = vi.fn<(node: string) => void>()
+  const placed = [join(folder, 'a', 'node'), join(folder, 'b', 'node')]
+  for (const path of placed) { mkdirSync(dirname(path)); placeNode(path, [], undefined, node, start) }
+  expect(start).toHaveBeenCalledOnce()
+  // Started before it is moved in, so a test never links a Node that has not run.
+  expect(start.mock.calls[0]![0]).not.toBe(node)
+  expect(placed.map((path) => statSync(path).ino)).toEqual([statSync(node).ino, statSync(node).ino])
   expect(statSync(node).ino).not.toBe(statSync(realpathSync(process.execPath)).ino)
+})
+
+it('says which Node it could not make, and leaves none in its place', () => {
+  const folder = scratch()
+  const node = runNode(folder, undefined, []), path = join(folder, 'test', 'node')
+  mkdirSync(dirname(path))
+  const start = () => { throw new Error('fixture: killed at its first start') }
+  expect(() => placeNode(path, [], undefined, node, start))
+    .toThrow(`The run's Node, a copy of ${process.execPath}, could not be made at ${node}: fixture: killed at its first start`)
+  expect(readdirSync(dirname(node))).toEqual([])
 })
 
 // Homebrew's Node loads libnode from beside the path it runs as (#4395): each test copies its own, as before. A Node that
 // Rosetta runs is refused by name in each test that places one.
-it('starts no Node for a Node with libnode beside it, nor for one that Rosetta runs', () => {
+it('names no Node for a Node with libnode beside it, nor for one that Rosetta runs', () => {
   const folder = scratch()
-  expect(startNode(folder, undefined, ['/opt/homebrew/Cellar/node/25.2.1/lib/libnode.141.dylib'])).toBe('')
-  expect(startNode(folder, { platform: 'darwin', arch: 'x64', cpu: 'Apple M1 Pro' })).toBe('')
+  expect(runNode(folder, undefined, ['/opt/homebrew/Cellar/node/25.2.1/lib/libnode.141.dylib'])).toBe('')
+  expect(runNode(folder, { platform: 'darwin', arch: 'x64', cpu: 'Apple M1 Pro' })).toBe('')
   expect(readdirSync(folder)).toEqual([])
 })
 

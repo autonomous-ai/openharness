@@ -97,7 +97,7 @@ export function beginRun(runs: string, shared: string): string {
 /** The run's Node in [root]: one copy of this Node, started once, so a test that places a Node pays no first start of its
  *  own (testing/placeNode.ts). None, '', for Homebrew's Node, with [libraries] beside it (#4395), and for a Node that Rosetta
  *  runs, which placeNode refuses by name. [machine] and [libraries] are this Node's; a spec names others. */
-export function startNode(root: string, machine?: Machine, libraries: string[] = libnode()): string {
+export function runNode(root: string, machine?: Machine, libraries: string[] = libnode()): string {
   if (underRosetta(machine) || libraries.length > 0) return ''
   const node = join(root, 'node', 'bin', basename(process.execPath))
   mkdirSync(dirname(node), { recursive: true })
@@ -110,5 +110,5 @@ export function startNode(root: string, machine?: Machine, libraries: string[] =
 export default function startRun(project: TestProject): void {
   const root = beginRun(runsBase(), tmpdir())
   project.provide('runFolder', root)
-  project.provide('startedNode', startNode(root))
+  project.provide('startedNode', runNode(root))
 }
