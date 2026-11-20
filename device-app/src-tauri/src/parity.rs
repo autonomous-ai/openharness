@@ -105,7 +105,7 @@ fn the_one_os_property_of_the_rules_is_install_exits_app() {
 
     // An update: the row shows from the install on, `update: installing` is said instead of `update: installed`, and
     // the install itself ends the app, so the watch is not stopped and nothing relaunches.
-    let found = Saved { version: 1, cli_seen: true, asked_sign_in: true, login_item: true };
+    let found = Saved { version: 1, cli_seen: true, asked_sign_in: true, login_item: true, ..Saved::default() };
     let (mut apart, mut app) = both(found, true);
     let update = [
         ticked(B + 5, false),

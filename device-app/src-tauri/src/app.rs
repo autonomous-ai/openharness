@@ -1939,7 +1939,7 @@ mod tests {
         assert!(!saves(&effects));
 
         // Remembered across a start.
-        let mut app = with_chatgpt(App::new(Saved { asked_follow: true, ..SEEN }, true, false, B).0);
+        let mut app = with_chatgpt(App::new(Saved { asked_follow: true, ..SEEN }, true, false, B, false).0);
         answer(&mut app, true);
         assert!(app.handle(Event::FollowOffer).is_empty());
     }
