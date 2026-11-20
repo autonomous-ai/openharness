@@ -1,12 +1,27 @@
 import { existsSync, linkSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { harnessPath } from '../../config/harnessHome.js'
 import { BRIDGE_FILE, makeRealFolders, readBridge, removeBridge, writeBridge, type BridgeRecord } from '../../homeMove/bridge.js'
 import { moveLockPath } from '../../homeMove/lock.js'
 import { removePath } from '../removePath.js'
 import { labelHookRemoval, lockHolder, UNINSTALL_USAGE, uninstallCommand, UninstallLockBusy, type UninstallDeps } from './command.js'
 import { checkRemovable, listEntries, RemovalRefused, removeNow } from './removal.js'
+
+/** A write whose text matches reaches the disk half way, then the disk is full. */
+const tear = vi.hoisted(() => ({ text: undefined as RegExp | undefined }))
+vi.mock('node:fs', async (original) => {
+  const actual = await original<typeof import('node:fs')>()
+  return { ...actual, writeFileSync: (...args: Parameters<typeof actual.writeFileSync>) => {
+    const [target, data] = args
+    if (!tear.text || typeof data !== 'string' || !tear.text.test(data)) return actual.writeFileSync(...args)
+    const half = data.slice(0, data.length >> 1)
+    if (typeof target === 'number') actual.writeSync(target, half)
+    else actual.writeFileSync(target, half)
+    throw Object.assign(new Error('ENOSPC: fixture, write'), { code: 'ENOSPC' })
+  } }
+})
 
 function fake(overrides: Partial<UninstallDeps> = {}) {
   const calls: string[] = []
@@ -23,6 +38,7 @@ function fake(overrides: Partial<UninstallDeps> = {}) {
     markUninstalling: () => { after('mark') },
     unmarkUninstalling: () => { after('unmark') },
     ask: async () => { calls.push('ask'); return 'n' },
+    settlePid: async () => {},
     daemonPid: () => (running ? 4242 : null),
     alive: (pid) => running && pid === 4242,
     stopAgents: async () => { calls.push('agents'); return { stopped: 2, failed: [] } },
@@ -32,6 +48,7 @@ function fake(overrides: Partial<UninstallDeps> = {}) {
     endPtyHosts: async () => { calls.push('pty'); return [] },
     removeHooks: async () => { calls.push('hooks'); return [{ file: '/Users/u/.claude/settings.json', removed: 5 }] },
     removeLaunchers: () => { calls.push('launchers'); return ['/Users/u/.local/bin/harness', '/Users/u/.local/bin/hn'] },
+    removeLoginEntry: () => null,
     removePathEntry: () => { calls.push('path'); return { kind: 'rc', edits: [{ file: '/Users/u/.zshrc', removed: 1, changedByPerson: 0 }], keptFor: [] } },
     listEntries: (dir) => (dir === '/Users/u/.harness' ? [{ name: 'auth', dir: true }, { name: 'cli', dir: true }, { name: 'runtime', dir: true }] : [{ name: 'cli.js', dir: false }, { name: 'data', dir: true }]),
     exists: () => true,
@@ -65,6 +82,30 @@ describe('harness uninstall', () => {
     expect(t.out).toContain('✓ removed the Harness daemon from launchd: it no longer starts at login')
     expect(t.out).toContain('✓ removed the PATH line Harness added to ~/.zshrc')
     expect(t.out.at(-1)).toBe('Harness is uninstalled.')
+  })
+
+  it('settles a pid file it cannot read before it asks which daemon runs', async () => {
+    const seen: string[] = []
+    const t = fake({ settlePid: async () => { seen.push('settle') }, daemonPid: () => { seen.push('daemon'); return 4242 } })
+    expect(await uninstallCommand(['--yes'], t.deps)).toBe(0)
+    // The last one is under the lock (the next case).
+    expect(seen).toEqual(['settle', 'daemon', 'settle'])
+  })
+
+  it('settles again under its lock before it asks whether the service runs the daemon', async () => {
+    // Before the lock another command held it, so a pid file that could not be read had no pid; under the lock the
+    // daemon answers, and the service that runs it is taken out.
+    const seen: string[] = []
+    let locked = false
+    let answered: number | null = null
+    const t = fake({
+      settlePid: async () => { seen.push(locked ? 'settle under lock' : 'settle'); answered = locked ? 4242 : null },
+      withLock: async (fn) => { locked = true; try { return await fn() } finally { locked = false } },
+      service: { name: 'launchd', present: () => answered !== null, unregister: () => { seen.push('service'); return { ok: true } } },
+    })
+    expect(await uninstallCommand(['--yes'], t.deps)).toBe(0)
+    expect(seen).toEqual(['settle', 'settle under lock', 'service'])
+    expect(t.out).toContain('✓ removed the Harness daemon from launchd: it no longer starts at login')
   })
 
   it('asks first in a terminal, and removes nothing on no', async () => {
@@ -632,6 +673,29 @@ describe('harness uninstall on Linux\'s two roots', () => {
     expect(outside.out).toContain('· left /srv/data: it is outside ~/.local/share/harness and ~/.local/state/harness (ADAPTER_DATA_DIR or HARNESS_AUTH_DIR names it); delete it yourself if it is Harness\'s')
   })
 
+  it('removes the login entry the installer wrote, beside the launchers', async () => {
+    const t = fake({ ...xdg, removeLoginEntry: () => '/home/u/.config/autostart/harnessd.desktop' })
+    expect(await uninstallCommand(['--yes'], t.deps)).toBe(0)
+    const lines = ['✓ removed ~/.local/bin/hn', '✓ removed ~/.config/autostart/harnessd.desktop', '✓ removed the PATH line Harness added to ~/.bashrc']
+    expect(t.out.filter((line) => lines.includes(line))).toEqual(lines)
+    // None there, or another program's: nothing is said.
+    const none = fake({ ...xdg })
+    expect(await uninstallCommand(['--yes'], none.deps)).toBe(0)
+    expect(none.out.some((line) => line.includes('autostart'))).toBe(false)
+  })
+
+  it('a login entry it could not remove is a problem, and the rest still runs', async () => {
+    const t = fake({ ...xdg, removeLoginEntry: () => ({ path: '/home/u/.config/autostart/harnessd.desktop', failed: 'EACCES' }) })
+    expect(await uninstallCommand(['--yes'], t.deps)).toBe(1)
+    expect(t.err).toEqual(['✗ Harness is uninstalled, except:', '  · could not remove ~/.config/autostart/harnessd.desktop (EACCES): delete it yourself'])
+    expect(t.out).toEqual(expect.arrayContaining(['✓ removed ~/.local/bin/hn', '✓ removed the PATH line Harness added to ~/.bashrc', '✓ removed ~/.local/share/harness', '✓ removed ~/.local/state/harness']))
+  })
+
+  it('never looks for a login entry on Windows', async () => {
+    const t = fake({ ...win, removeLoginEntry: () => { throw new Error('looked') } })
+    expect(await uninstallCommand(['--yes'], t.deps)).toBe(0)
+  })
+
   it('with one root every line is today\'s', async () => {
     const asked = (service: string, path: string, root: string, keepData: boolean) => [
       'harness uninstall removes Harness from this computer:',
@@ -649,8 +713,8 @@ describe('harness uninstall on Linux\'s two roots', () => {
       '✓ removed Harness\'s hooks from ~/.claude/settings.json',
     ]
     const done = (keepData: boolean) => (keepData ? 'Harness is uninstalled. Your sign-in and history are kept for the next install.' : 'Harness is uninstalled.')
-    const posixLines = (service: string, rc: string) => (keepData: boolean) => [
-      ...asked(service, '  · removes the harness and hn commands, and the PATH line the installer added', '~/.harness', keepData),
+    const posixLines = (service: string, rc: string, commands: string) => (keepData: boolean) => [
+      ...asked(service, commands, '~/.harness', keepData),
       '✓ removed ~/.local/bin/harness',
       '✓ removed ~/.local/bin/hn',
       `✓ removed the PATH line Harness added to ${rc}`,
@@ -663,13 +727,42 @@ describe('harness uninstall on Linux\'s two roots', () => {
       `✓ ${keepData ? 'the program in ~\\.harness' : '~\\.harness'} goes once this command has exited (anything left is listed in C:\\T\\h.log)`,
       done(keepData),
     ]
-    for (const [name, platform, lines] of [['macOS', {}, posixLines('launchd', '~/.zshrc')], ['Windows', win, windowsLines], ['Linux', legacyLinux, posixLines('systemd', '~/.bashrc')]] as const) {
+    for (const [name, platform, lines] of [
+      ['macOS', {}, posixLines('launchd', '~/.zshrc', '  · removes the harness and hn commands, and the PATH line the installer added')],
+      ['Windows', win, windowsLines],
+      ['Linux', legacyLinux, posixLines('systemd', '~/.bashrc', '  · removes the harness and hn commands, the login entry and the PATH line the installer added')],
+    ] as const) {
       for (const keepData of [false, true]) {
         const t = fake({ ...platform, isTTY: true, ask: async () => 'y' })
         expect(await uninstallCommand(keepData ? ['--keep-data'] : [], t.deps), name).toBe(0)
         expect(t.out, `${name}, --keep-data ${keepData}`).toEqual(lines(keepData))
         expect(t.err, name).toEqual([])
       }
+    }
+  })
+})
+
+describe('the uninstall marker', () => {
+  it('the marker is written whole', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'uninstall-marker-'))
+    vi.stubEnv('HOME', home)
+    vi.stubEnv('USERPROFILE', home)
+    try {
+      const marker = harnessPath('uninstalling', home)
+      mkdirSync(dirname(marker), { recursive: true })
+      writeFileSync(marker, '1700000000\n')
+      const { uninstallDeps } = await import('./deps.js')
+      const deps = await uninstallDeps({ tildify: (path) => path, ask: async () => 'n' })
+      tear.text = /^\d+\n$/
+      // Best effort: a marker that cannot be written does not stop the uninstall.
+      expect(() => deps.markUninstalling()).not.toThrow()
+      // The desktop app reads its time: the old one whole, never half a number.
+      expect(readFileSync(marker, 'utf8')).toBe('1700000000\n')
+      expect(readdirSync(dirname(marker))).toEqual(['uninstalling'])
+    } finally {
+      tear.text = undefined
+      vi.unstubAllEnvs()
+      rmSync(home, { recursive: true, force: true })
     }
   })
 })

@@ -17,7 +17,8 @@ import { TerminalBinaryKind, type TerminalBinaryClear } from '../lib/terminalBin
 import { bindMessageRequest } from '../testing/socketCore.js'
 import { dispatchDown, gatewayOf, relaySocket, upstreamOf } from '../testing/relaySocket.js'
 import type { DeviceLogTrustOutcome } from '../lib/e2ee/deviceLogSyncer.js'
-import { unknownHelloReader } from './start.js'
+import { unknownHelloReader, unpairedHandler } from './start.js'
+import { StateFileUnreadable } from '../lib/secureState.js'
 import { UI_GATED_EVENTS, UI_QUIET_MS, UI_SNAPSHOT_MAX_MS } from './gateway.js'
 import { env } from '../config/env.js'
 
@@ -189,7 +190,7 @@ describe('sealing, guarded', () => {
     expect(window.map((frame) => frame.type)).toEqual(['turn_started', 'turn_ended'])
     // Said once, then counted, so a broken seal does not flood the log with one line per event.
     expect(error).toHaveBeenCalledTimes(1)
-    expect(String(error.mock.calls[0][0])).toContain('sealing broke')
+    expect(String(error.mock.calls[0][0])).toBe('[backend] the gateway could not take a web frame · Error')
     // A terminal frame that cannot be sealed is one that was not sent: its stream closes, nothing throws.
     vi.spyOn(e2ee, 'wrapTarget').mockImplementation(() => { throw new Error('sealing broke') })
     vi.spyOn(e2ee, 'wrapTerminalBinary').mockImplementation(() => { throw new Error('sealing broke') })
@@ -885,8 +886,8 @@ describe('a client\'s terminal bytes, on their way to the core', () => {
     into.bytes(phone.sealBinary(key(3)))
     expect(core).toHaveBeenCalledTimes(3)
     await vi.waitFor(() => expect(error.mock.calls).toEqual([
-      ['[backend] binary terminal dispatch failed:', 'core threw'],
-      ['[backend] binary terminal dispatch failed:', 'core gone'],
+      ['[backend] binary terminal dispatch failed:', 'Error'],
+      ['[backend] binary terminal dispatch failed:', 'Error'],
     ]))
     await socket.stop()
   })
@@ -1013,5 +1014,16 @@ describe('unknownHelloReader', () => {
     await new Promise((resolve) => setTimeout(resolve, 0))
     expect([firstDone, againDone]).toEqual([true, true])
     expect(trustFromLog).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('unpairedHandler', () => {
+  // A block list that cannot be written made the group's side throw, and the device log kept the key: its next read
+  // trusted the unpaired device again.
+  it('takes the key out of the device log even when the group could not keep it out, and hands the throw on', () => {
+    const remove = vi.fn(async () => ({ ok: true as const }))
+    const unpaired = unpairedHandler({ unpaired: () => { throw new StateFileUnreadable('group-blocked.json', 'not valid JSON') } }, () => ({ remove }))
+    expect(() => unpaired('pub-a')).toThrow(StateFileUnreadable)
+    expect(remove).toHaveBeenCalledWith('pub-a')
   })
 })

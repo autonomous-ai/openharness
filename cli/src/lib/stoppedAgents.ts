@@ -4,8 +4,8 @@ import { randomUUID } from 'node:crypto'
 import { dirname, join } from 'node:path'
 import { env } from '../config/env.js'
 import { isTerminalEngine } from '../engines/types.js'
-import { atomicWriteJson, projectDisplayName, strictPersistedRow, withHermesHome, type RegisteredSession } from './registry.js'
-import { readPrivateStateFile, secureStateDirectory, syncStateDirectory } from './secureState.js'
+import { projectDisplayName, strictPersistedRow, withHermesHome, type RegisteredSession } from './registry.js'
+import { atomicWriteJson, readPrivateStateFile, secureStateDirectory, syncStateDirectory } from './secureState.js'
 import { sameProcessIdentity } from './terminalRuntime.js'
 import { conversationKey } from './conversationIdentity.js'
 
@@ -164,7 +164,7 @@ export class StoppedAgentStore {
     delete snapshot.previousAgentId
     // A snapshot without a tmux pane omits the legacy alias just like registry persistence.
     if (!snapshot.tmuxPane) delete (snapshot as Partial<RegisteredSession>).tmuxPane
-    atomicWriteJson(join(this.directory, `${session.agentId}.json`), { version: 1, session: snapshot })
+    atomicWriteJson(join(this.directory, `${session.agentId}.json`), { version: 1, session: snapshot }, 'trust')
     this.forgetCatalogRecord(session.agentId)
   }
 
@@ -176,7 +176,7 @@ export class StoppedAgentStore {
     if (!saved) return false
     secureStateDirectory(dirname(this.directory))
     secureStateDirectory(this.directory)
-    atomicWriteJson(join(this.directory, `${agentId}.json`), { version: 1, session: { ...saved, ...patch } })
+    atomicWriteJson(join(this.directory, `${agentId}.json`), { version: 1, session: { ...saved, ...patch } }, 'trust')
     this.forgetCatalogRecord(agentId)
     return true
   }
@@ -192,6 +192,7 @@ export class StoppedAgentStore {
     try { fd = openSync(file, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600) }
     catch (error) { if ((error as NodeJS.ErrnoException).code === 'EEXIST') return null; throw error }
     const token = randomUUID()
+    // not a state file: an O_EXCL reservation, filled and flushed; the plan's follow-up moves it to the helper
     try { writeFileSync(fd, JSON.stringify({ token })); fsyncSync(fd) } finally { closeSync(fd) }
     this.syncDirectory()
     return token

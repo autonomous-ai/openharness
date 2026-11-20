@@ -6,12 +6,12 @@
  *
  * Moved verbatim out of `runForeground` (the core boundary, step 11: docs/design/2026-10-03-harnessd.md).
  */
-import { OPENCLAW_LOCAL, openclawFolderInUse, readOpenclawScreen } from '../../engines/openclaw/contract.js'
+import { OPENCLAW_LOCAL, OPENCLAW_STATES, openclawFolderInUse, readOpenclawScreen } from '../../engines/openclaw/contract.js'
 import type { AgentEngine } from '../../engines/types.js'
 import { describeAgentCreateFailure, summarizePaneOutput } from '../../lib/agentCreateDiagnosis.js'
 import type { engineInstallRecipe } from '../../lib/engineInstall.js'
 import { commandAvailableInInteractiveShell } from '../../lib/engineLaunch.js'
-import { sid } from '../../lib/log.js'
+import { errorKind, sid } from '../../lib/log.js'
 import { matchesLaunchReceipt, RegistryOwnershipChanged, type LaunchPublication, type registry, type RegisteredSession, type RegistryAuthority } from '../../lib/registry.js'
 import { IdentityReadUnavailable } from '../../engines/kit/identityScan.js'
 import type { TerminalBackendCoordinator } from '../../lib/terminalBackendCoordinator.js'
@@ -123,7 +123,7 @@ export function createPaneWatcher({ registry, announceSession, triggerHint, capt
           // Before the hint: the pass it asks for is the one that must see this pane again.
           releaseRoute()
           void triggerHint(spawned.runtime, engine).catch((error) => {
-            console.warn(`[agent] background bind failed · ${engine} · ${error instanceof Error ? error.message : error}`)
+            console.warn(`[agent] background bind failed · ${engine} · ${errorKind(error)}`)
           })
           console.log(`[agent] create ready · ${engine}${local ? ' · local' : ''} · agent ${pending.agentId} · ${Date.now() - startedAt}ms`)
           return
@@ -183,12 +183,16 @@ export function createPaneWatcher({ registry, announceSession, triggerHint, capt
           // selects ("started and exited with status N"), and it is the true one here.
           const captured = await captureTerminal(pending.agentId, 40)
           if (!current()) return
-          // A local run another OpenClaw's lock turned away: the person gives it another folder, so it is a
-          // failed launch that says so, not a terminal.
-          if (local && openclawFolderInUse(captured ?? '')) {
-            const failed = registry.setLaunch(pending.agentId, { state: 'failed', error: 'OPENCLAW_FOLDER_IN_USE', detail: OPENCLAW_LOCAL.folderInUse })
+          // An OpenClaw the person fixes outside the pane: a local run another OpenClaw's lock turned away (it needs
+          // another folder), or a TUI whose config has no Gateway token. A failed launch that says what to do, which
+          // show finds, not a terminal.
+          const refused = local && openclawFolderInUse(captured ?? '') ? { error: 'OPENCLAW_FOLDER_IN_USE', detail: OPENCLAW_LOCAL.folderInUse }
+            : engine === 'openclaw' && readOpenclawScreen(captured ?? '').state === 'no-token' ? { error: 'OPENCLAW_NO_TOKEN', detail: OPENCLAW_STATES.noToken }
+              : null
+          if (refused) {
+            const failed = registry.setLaunch(pending.agentId, { state: 'failed', ...refused })
             if (failed) announceSession(failed)
-            console.warn(`[agent] create failed · ${engine} · ${OPENCLAW_LOCAL.folderInUse}`)
+            console.warn(`[agent] create failed · ${engine} · ${refused.detail}`)
             return
           }
           console.warn(`[agent] create · ${engine} · agent ${sid(pending.agentId)} · `
@@ -233,7 +237,7 @@ export function createPaneWatcher({ registry, announceSession, triggerHint, capt
       if (failed) announceSession(failed)
       console.warn(`[agent] create timed out · ${engine} · agent ${pending.agentId}`)
     } catch (error) {
-      console.warn(`[agent] create watch failed · ${engine} · readiness publication unavailable`)
+      console.warn(`[agent] create watch failed · ${engine} · readiness publication unavailable · ${errorKind(error)}`)
     } finally {
       releaseRoute()
     }

@@ -12,7 +12,7 @@ import { keepsStore } from '../../engines/otherEngines.js'
 import { OPENCLAW_STATES } from '../../engines/openclaw/contract.js'
 import type { StreamFrame } from '../../engines/worker/otherStreamProtocol.js'
 import type { WifiFeed } from '../wifi.js'
-import { sid } from '../../lib/log.js'
+import { errorKind, sid } from '../../lib/log.js'
 import type { LiveEvent } from '../../engines/kit/events.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import type { RuntimeProfileManager } from '../../lib/runtimeProfile.js'
@@ -94,7 +94,7 @@ export function createIngest({
         const line = readLine(evt)
         if (line) emit(evt.sessionId, line.events, line.read)
       } catch (err) {
-        console.error(`[cli] line handler error (session ${evt.sessionId}):`, err instanceof Error ? err.name : typeof err)
+        console.error(`[cli] line handler error (session ${evt.sessionId}):`, errorKind(err))
       }
     })
     // A transcript catch-up is history, including an unfinished last turn.
@@ -106,7 +106,7 @@ export function createIngest({
       const session = bySession(event.sessionId)
       if (!session || session.transcriptPath !== event.transcriptPath) return
       console.log(`[watcher] ${sid(event.sessionId)} transcript rewritten in place — attaching it again from its end`)
-      void attachSession(session, true).catch((err) => console.error(`[cli] re-attach after rewrite failed (session ${sid(event.sessionId)}):`, err instanceof Error ? err.message : err))
+      void attachSession(session, true).catch((err) => console.error(`[cli] re-attach after rewrite failed (session ${sid(event.sessionId)}):`, errorKind(err)))
     })
     watcher.on('history', (batch: HistoryEvent) => {
       try {
@@ -120,7 +120,7 @@ export function createIngest({
         // is not a fresh prompt; live runtime inspection can establish activity.
         emit(batch.sessionId, all, { replay: true })
       } catch (err) {
-        console.error(`[cli] history handler error (session ${batch.sessionId}):`, err instanceof Error ? err.name : typeof err)
+        console.error(`[cli] history handler error (session ${batch.sessionId}):`, errorKind(err))
       }
     })
   }

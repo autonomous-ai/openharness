@@ -37,6 +37,7 @@ function computer(platform: PlatformName) {
   const deps: ServiceCommandDeps = {
     service,
     logFile: join(data, 'harness.log'),
+    settlePid: async () => {},
     readPid,
     isAlive: (pid) => pid === outside.pid || pid === fake.state().pid,
     masterPlatform: () => null,
@@ -202,6 +203,19 @@ describe.each(['launchd', 'systemd'] as const)('harness service under %s', (plat
     })
   })
 
+  it('settles a pid file it cannot read under its lock, before it reads it: an install and an uninstall', async () => {
+    const seen: string[] = []
+    c.deps.settlePid = async () => { seen.push('settle') }
+    const readPid = c.deps.readPid
+    c.deps.readPid = () => { seen.push('read'); return readPid() }
+    c.deps.withLock = (_purpose, fn) => { seen.push('lock'); return fn() }
+    await expect(serviceCommand(['install'], c.deps)).resolves.toBe(0)
+    expect(seen.slice(0, 3)).toEqual(['lock', 'settle', 'read'])
+    seen.length = 0
+    await expect(serviceCommand(['uninstall'], c.deps)).resolves.toBe(0)
+    expect(seen.slice(0, 3)).toEqual(['lock', 'settle', 'read'])
+  })
+
   describe('uninstall', () => {
     it('has nothing to remove when nothing is installed', async () => {
       await expect(serviceCommand(['uninstall'], c.deps)).resolves.toBe(0)
@@ -226,6 +240,21 @@ describe.each(['launchd', 'systemd'] as const)('harness service under %s', (plat
       await expect(serviceCommand(['uninstall'], c.deps)).resolves.toBe(0)
       expect(c.clock.now).toBeGreaterThanOrEqual(12_000)
       expect(c.stops).toHaveLength(1)
+      expect(c.relaunches).toHaveLength(1)
+    })
+
+    it('starts the daemon again when its pid file could be read only under the lock', async () => {
+      // A start held the lock and its pid file read as nothing: the platform's master went, and nothing came after it.
+      await serviceCommand(['install'], c.deps)
+      let locked = false
+      c.deps.withLock = async (_purpose, fn) => { locked = true; try { return await fn() } finally { locked = false } }
+      let answered: number | null = null
+      c.deps.settlePid = async () => { answered = locked ? 4242 : null }
+      const readPid = c.deps.readPid
+      c.deps.readPid = () => readPid() ?? answered
+      writeFileSync(c.pidFile, 'x')
+      await expect(serviceCommand(['uninstall'], c.deps)).resolves.toBe(0)
+      expect(c.fake.state()).toMatchObject({ pid: null })
       expect(c.relaunches).toHaveLength(1)
     })
 
@@ -354,7 +383,7 @@ describe('harness service with Task Scheduler', () => {
     const locks: string[] = []
     const clock = { now: 0 }
     const deps: ServiceCommandDeps = {
-      service, logFile: 'C:\\d\\harness.log', readPid: () => pid, isAlive: (p) => p === pid, masterPlatform: () => null,
+      service, logFile: 'C:\\d\\harness.log', settlePid: async () => {}, readPid: () => pid, isAlive: (p) => p === pid, masterPlatform: () => null,
       now: () => clock.now, sleep: async (ms) => { clock.now += ms },
       definition: () => ({ nodePath: 'C:\\n\\node.exe', scriptPath: script, logFile: 'C:\\d\\harness.log', home: 'C:\\Users\\demo', env: over.carried ?? {}, launcherPath: launcher }),
       bundleExists: (path) => existsSync(path), ensureDir: () => {},
@@ -378,6 +407,18 @@ describe('harness service with Task Scheduler', () => {
       expect(WINDOWS_SERVICE_USAGE).not.toMatch(/tmux|comes back if it dies|launchd|systemd/)
       await expect(serviceCommand(['restart'], w.deps)).resolves.toBe(2)
       expect(w.err[0]).toBe(`Unknown command: harness service restart\n\n${WINDOWS_SERVICE_USAGE}`)
+    } finally { rmSync(w.dir, { recursive: true, force: true }) }
+  })
+
+  it('settles a pid file it cannot read before it asks whether the daemon runs', async () => {
+    const w = windows({ pid: 4040 })
+    try {
+      const seen: string[] = []
+      const readPid = w.deps.readPid
+      w.deps.settlePid = async () => { seen.push('settle') }
+      w.deps.readPid = () => { seen.push('read'); return readPid() }
+      await expect(serviceCommand(['install'], w.deps)).resolves.toBe(0)
+      expect(seen).toEqual(['settle', 'read'])
     } finally { rmSync(w.dir, { recursive: true, force: true }) }
   })
 

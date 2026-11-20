@@ -189,7 +189,7 @@ describe('the account\'s routes of the door', () => {
       expect.soft(await ask(d, method, path, options), `${method} ${path}`).toEqual(answer)
       expect.soft(Date.now() - at, `${method} ${path} answered at once`).toBeLessThan(2_000)
     }
-    expect(d.log()).toContain('gateway_http failed · injected fault')
+    expect(d.log()).toContain('gateway_http failed · Error')
     expect(d.coresStarted()).toBe(1)
   }, 120_000)
 })

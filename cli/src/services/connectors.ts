@@ -19,6 +19,7 @@ import type { Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import type { CoreApi, CorePorts, ServiceRequests } from '../core/api.js'
 import { bridgePort, bridgeSocketPath, retireBridgeKey, rotateHarnessKey, saveBridgePort, sync, syncProfileHome } from '../lib/connectors/agents.js'
+import { errorKind } from '../lib/log.js'
 import { portHolderIsThisAccount } from '../lib/peerAccount.js'
 import { createBridge, serveBridgePipe, serveBridgeSocket } from '../lib/connectors/bridge.js'
 import { services, type GatewayRow } from '../lib/connectors/catalog.js'
@@ -105,7 +106,7 @@ function listen(bridge: Server, port: number, retryMs: number, moving?: Moving):
   const again = (): void => { setTimeout(() => bridge.listen(leaving ? 0 : port, '127.0.0.1'), retryMs).unref() }
   bridge.on('error', (error: Error) => {
     tries++
-    if (tries === 1) console.warn(`[connections] bridge port ${port} is not available (${error.message}); trying again every ${retryMs} ms`)
+    if (tries === 1) console.warn(`[connections] bridge port ${port} is not available (${errorKind(error)}); trying again every ${retryMs} ms`)
     again()
     if (!moving || tries < TRIES_BEFORE_ASKING || leaving || asking) return
     if (skip > 0) { skip--; return }
@@ -138,7 +139,7 @@ function listen(bridge: Server, port: number, retryMs: number, moving?: Moving):
  *  Said once: its clients are told Harness is not running, though it is. */
 function listenSocket(vault: Store, path: string, retryMs: number, said = false): void {
   serveBridgeSocket(vault, path).catch((error: unknown) => {
-    if (!said) console.warn(`[connectors] the bridge's socket is not listening (${path}), trying again: ${error instanceof Error ? error.message : String(error)}`)
+    if (!said) console.warn(`[connectors] the bridge's socket is not listening, trying again: ${errorKind(error)}`)
     setTimeout(() => listenSocket(vault, path, retryMs, true), retryMs).unref()
   })
 }
@@ -146,7 +147,7 @@ function listenSocket(vault: Store, path: string, retryMs: number, said = false)
 /** The bridge's pipe on Windows (bridge.ts `serveBridgePipe`), a new name at each try. Said once, as the socket is. */
 function listenPipe(vault: Store, path: (() => string) | undefined, retryMs: number, said = false): void {
   serveBridgePipe(vault, path?.()).catch((error: unknown) => {
-    if (!said) console.warn(`[connectors] the bridge's pipe is not listening, trying again: ${String(error)}`)
+    if (!said) console.warn(`[connectors] the bridge's pipe is not listening, trying again: ${errorKind(error)}`)
     setTimeout(() => listenPipe(vault, path, retryMs, true), retryMs).unref()
   })
 }
@@ -183,7 +184,7 @@ export function startConnectors(core: CoreApi, ports: CorePorts, overrides: Conn
   // Windows has no socket, but a pipe (task #2162): until then the Team account, holding the port from boot, heard every tool call.
   const local = socket !== null || platform === 'win32'
   // Where a socket or pipe can be, the port takes neither key for long: Harness's own goes over it, and the agents' retires (agents.ts).
-  if (local) { try { rotateHarnessKey(vault) } catch (error) { console.warn(`[connections] could not replace Harness's key: ${(error as Error).message}`) } }
+  if (local) { try { rotateHarnessKey(vault) } catch (error) { console.warn(`[connections] could not replace Harness's key: ${errorKind(error)}`) } }
   const bridgeKeys = local
     ? { key: () => { try { return retireBridgeKey(vault) } catch { return '' } } }
     : { key: () => String(vault.file('bridge.json').key ?? ''), harnessKey: () => String(vault.file('harness-key.json').key ?? '') }
@@ -197,7 +198,7 @@ export function startConnectors(core: CoreApi, ports: CorePorts, overrides: Conn
     holderIsMine: overrides.holderIsMine ?? portHolderIsThisAccount,
     moved: (port, from) => {
       console.warn(`[connections] another account holds port ${from}; the bridge moved to port ${port}, and agents started from now on use it`)
-      try { saveBridgePort(vault, port); sync(vault, env) } catch (error) { console.warn(`[connections] could not save the bridge's new port: ${(error as Error).message}`) }
+      try { saveBridgePort(vault, port); sync(vault, env) } catch (error) { console.warn(`[connections] could not save the bridge's new port: ${errorKind(error)}`) }
       // Agents already running keep the old address: they recover here as soon as the other account lets go of it.
       const old = createBridge(vault, bridgeKeys)
       old.unref()
@@ -217,7 +218,7 @@ export function startConnectors(core: CoreApi, ports: CorePorts, overrides: Conn
   ports.connectors = {
     syncProfileHome: async (engine, folder) => {
       try { return syncProfileHome(vault, engine, folder, env) } catch (error) {
-        console.warn(`[connections] could not update ${engine}:${folder} · ${(error as Error).message}`)
+        console.warn(`[connections] could not update a ${engine} profile home · ${errorKind(error)}`)
         return []
       }
     },
@@ -238,7 +239,7 @@ export function startConnectors(core: CoreApi, ports: CorePorts, overrides: Conn
   const keepRound = (): void => {
     void keepAlive(vault, keepAliveAfter).then((failed) => {
       for (const [code, why] of Object.entries(failed)) console.warn(`[connections] could not keep ${code} signed in: ${why}`)
-    }, (error: unknown) => console.warn(`[connections] keeping connections signed in failed: ${String(error)}`))
+    }, (error: unknown) => console.warn(`[connections] keeping connections signed in failed: ${errorKind(error)}`))
   }
   setTimeout(keepRound, KEEP_ALIVE_FIRST_MS).unref()
   setInterval(keepRound, KEEP_ALIVE_EVERY_MS).unref()

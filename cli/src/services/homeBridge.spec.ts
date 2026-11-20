@@ -12,6 +12,7 @@ import { writeInstalledIndex, type InstalledDshRecord } from '../dsh/installed.j
 import { BRIDGE_FILE, makeRealFolders, writeBridge, type BridgeRecord } from '../homeMove/bridge.js'
 import type { ProcRow } from '../homeMove/oldUsers.js'
 import { writeMoveRecord, type MoveRecord } from '../homeMove/record.js'
+import { resolveBinaryOnPath } from '../lib/binaryOnPath.js'
 import { harnessPaneOwner } from '../lib/harnessSessionLabel.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import { isolatedTmux } from '../testing/isolatedTmux.js'
@@ -96,7 +97,7 @@ function handed(h: Home, over: Partial<HomeBridgeDeps> = {}) {
   const log = vi.fn()
   const deps: Partial<HomeBridgeDeps> = {
     platform: 'linux', home: h.home, environment: { HOME: h.home, HARNESS_CONNECTIONS_DIR: h.connections }, socket: h.socket,
-    bootId: () => BOOT, rows: () => [], tmux: () => NO_SERVER,
+    bootId: () => BOOT, rows: () => [], tmux: () => NO_SERVER, tmuxAt: async () => ({ state: 'present' }),
     setupsPending: async () => 0, askForStore: async () => {}, log, ...over,
   }
   return { log, given: Object.fromEntries(Object.entries(deps).filter(([, value]) => value !== undefined)) as Partial<HomeBridgeDeps> }
@@ -439,7 +440,7 @@ describe('the home bridge service', () => {
     const h = movedHome()
     const { bridge, log } = start(h, { bootId: () => null })
     await settle()
-    expect(log.mock.calls).toEqual([['home bridge: a check failed: /proc gives no boot id · tried again in 10 minutes']])
+    expect(log.mock.calls).toEqual([['home bridge: a check failed: Error · tried again in 10 minutes']])
     expect(existsSync(join(h.state, BRIDGE_FILE))).toBe(true)
     bridge.stop()
   })
@@ -599,17 +600,17 @@ describe('the home bridge service', () => {
   it('a check that throws is logged and tried again at the next one', async () => {
     fakeInterval()
     const h = movedHome()
-    const rows = vi.fn((): ProcRow[] => { throw new Error('EACCES: /proc') })
-    // Whatever the Store's count rejects with is said too.
+    const rows = vi.fn((): ProcRow[] => { throw Object.assign(new Error('EACCES: /proc'), { code: 'EACCES' }) })
+    // Whatever the Store's count rejects with is said too, by its kind.
     const setupsPending = vi.fn(async () => 0).mockRejectedValueOnce('the index is busy')
     const { log } = start(h, { rows, setupsPending })
     await settle()
-    expect(log.mock.calls).toEqual([['home bridge: a check failed: EACCES: /proc · tried again in 10 minutes']])
+    expect(log.mock.calls).toEqual([['home bridge: a check failed: EACCES · tried again in 10 minutes']])
     expect(existsSync(join(h.state, BRIDGE_FILE))).toBe(true)
     rows.mockReturnValue([])
     await vi.advanceTimersByTimeAsync(CHECK_MS)
     await settle()
-    expect(log.mock.calls.at(-1)).toEqual(['home bridge: a check failed: the index is busy · tried again in 10 minutes'])
+    expect(log.mock.calls.at(-1)).toEqual(['home bridge: a check failed: string · tried again in 10 minutes'])
     expect(existsSync(join(h.state, BRIDGE_FILE))).toBe(true)
     await vi.advanceTimersByTimeAsync(CHECK_MS)
     await settle()
@@ -619,18 +620,18 @@ describe('the home bridge service', () => {
   it('a failure that lasts is logged once, not every 10 minutes; another is logged as it comes', async () => {
     fakeInterval()
     const h = movedHome()
-    let why = 'EACCES: /proc'
-    const { bridge, log } = start(h, { rows: () => { throw new Error(why) } })
+    let why = 'EACCES'
+    const { bridge, log } = start(h, { rows: () => { throw Object.assign(new Error(`${why}: /proc`), { code: why }) } })
     await settle()
     for (let check = 0; check < 3; check++) {
       await vi.advanceTimersByTimeAsync(CHECK_MS)
       await settle()
     }
-    expect(log.mock.calls).toEqual([['home bridge: a check failed: EACCES: /proc · tried again in 10 minutes']])
-    why = 'EMFILE: /proc'
+    expect(log.mock.calls).toEqual([['home bridge: a check failed: EACCES · tried again in 10 minutes']])
+    why = 'EMFILE'
     await vi.advanceTimersByTimeAsync(CHECK_MS)
     await settle()
-    expect(log.mock.calls.at(-1)).toEqual(['home bridge: a check failed: EMFILE: /proc · tried again in 10 minutes'])
+    expect(log.mock.calls.at(-1)).toEqual(['home bridge: a check failed: EMFILE · tried again in 10 minutes'])
     expect(log).toHaveBeenCalledTimes(2)
     bridge.stop()
   })
@@ -666,6 +667,42 @@ describe('the home bridge service', () => {
     bridge.stop()
   })
 
+  // The master hands this process a PATH that may hold no tmux; only the core adopted it, on its own PATH.
+  it('runs tmux where the core found it, off this process\'s PATH: a pane carrying the new tag keeps the bridge', async () => {
+    const tmux = await isolatedTmux()
+    restore.push(() => tmux.close())
+    const binary = resolveBinaryOnPath('tmux')!
+    vi.stubEnv('TMUX', undefined)
+    vi.stubEnv('TMUX_PANE', undefined)
+    vi.stubEnv('TMUX_TMPDIR', tmux.root)
+    const h = movedHome()
+    const noTmux = join(h.home, 'bin')
+    mkdirSync(noTmux)
+    vi.stubEnv('PATH', noTmux)
+    await tmux.run('new-session', '-d', '-s', 'agent', 'sleep 600')
+    await tmux.run('set-option', '-p', '-t', 'agent', '@harness_daemon', h.bridge.newTag)
+    const pane = Number(await tmux.run('display-message', '-p', '-t', 'agent', '#{pane_pid}'))
+    const { bridge, log } = start(h, {
+      rows: () => [row({ pid: pane, name: 'sleep', exe: '/bin/sleep' })], tmux: undefined,
+      tmuxAt: async () => ({ state: 'adopted', path: binary, from: dirname(binary) }),
+    })
+    await settle()
+    expect(record(h).oldProcesses).toBe(1)
+    expect(existsSync(h.oldHome)).toBe(true)
+    expect(log).not.toHaveBeenCalled()
+    bridge.stop()
+  })
+
+  it('no tmux found has no panes, as a tmux not installed: none is run, and the bridge goes', async () => {
+    const h = movedHome()
+    const tmux = vi.fn(() => NO_SERVER)
+    const { log } = start(h, { tmux, tmuxAt: async () => ({ state: 'absent', reason: 'tmux was not found' }) })
+    await settle()
+    expect(tmux).not.toHaveBeenCalled()
+    expect(existsSync(join(h.state, BRIDGE_FILE))).toBe(false)
+    expect(log.mock.calls).toEqual([['home bridge: removed']])
+  })
+
   it('a tmux with no server has no panes, as tmux itself says it', async () => {
     const tmux = await isolatedTmux()
     restore.push(() => tmux.close())
@@ -691,16 +728,16 @@ describe('the home bridge service', () => {
     expect(existsSync(join(h.state, BRIDGE_FILE))).toBe(false)
   })
 
-  it.each<[string, ReturnType<HomeBridgeDeps['tmux']>, string]>([
-    ['did not answer in time', { status: null, stdout: '', stderr: '', error: missing('ETIMEDOUT') }, 'ETIMEDOUT'],
-    ['is not its server\'s version', { status: 1, stdout: '', stderr: 'protocol version mismatch (client 8, server 7)\n' }, 'protocol version mismatch (client 8, server 7)'],
-    ['fails with no word', { status: 2, stdout: '', stderr: '' }, 'status 2'],
-  ])('a tmux that %s says nothing of the panes: the check fails, and the bridge stays', async (_, answer, why) => {
+  it.each<[string, ReturnType<HomeBridgeDeps['tmux']>]>([
+    ['did not answer in time', { status: null, stdout: '', stderr: '', error: missing('ETIMEDOUT') }],
+    ['is not its server\'s version', { status: 1, stdout: '', stderr: 'protocol version mismatch (client 8, server 7)\n' }],
+    ['fails with no word', { status: 2, stdout: '', stderr: '' }],
+  ])('a tmux that %s says nothing of the panes: the check fails, and the bridge stays', async (_, answer) => {
     const h = movedHome()
     const { bridge, log } = start(h, { tmux: () => answer })
     await settle()
     expect(existsSync(join(h.state, BRIDGE_FILE))).toBe(true)
-    expect(log.mock.calls).toEqual([[`home bridge: a check failed: tmux could not list its panes: ${why} · tried again in 10 minutes`]])
+    expect(log.mock.calls).toEqual([['home bridge: a check failed: Error · tried again in 10 minutes']])
     bridge.stop()
   })
 

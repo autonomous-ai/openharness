@@ -16,7 +16,7 @@ import { boundConversation, nativeActivity, nativeConversation, nativeEnvelope, 
   NATIVE_CONTROL_HOST, NATIVE_CONTROL_VERSION, NATIVE_RECOVER, NATIVE_RECOVER_WAIT_MS, NATIVE_REPLY_BYTES, NATIVE_STOP,
   NATIVE_STOP_IN_FLIGHT, NATIVE_STOP_QUERIES, NATIVE_STOP_WAIT_MS, type NativeStopAnswer } from '../../engines/worker/nativeControlProtocol.js'
 import { READER_SERVICES, type ReaderEngine } from '../../engines/worker/protocol.js'
-import { sid } from '../../lib/log.js'
+import { errorKind, sid } from '../../lib/log.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import { sameProcessIdentity } from '../../lib/terminalRuntime.js'
 import type { ProcessRow } from '../../lib/processTable.js'
@@ -121,7 +121,7 @@ export function createNativeControls(deps: NativeControlsDeps) {
       const done = await recoveries.read(repair.engine, NATIVE_RECOVER, { conversation: repair.conversation }, value => typeof value === 'boolean')
       log(done ? `[stop] restored the history of ${what}, which a lost worker's stop had archived`
         : `[stop] could not restore the history of ${what}; it may still be archived on its server`)
-    } catch { log(`[stop] could not ask the engine's worker to restore ${what}; it may still be archived on its server`) }
+    } catch (error) { log(`[stop] could not ask the engine's worker to restore ${what}; it may still be archived on its server · ${errorKind(error)}`) }
   }
 
   return {
@@ -205,10 +205,10 @@ export function createNativeControls(deps: NativeControlsDeps) {
             (error: unknown) => ({ refused: error instanceof Error && nativeMessage(error.message) ? error.message : NATIVE_UNCONFIRMED })),
           NATIVE_STOP_WAIT_MS, () => new Error(NATIVE_UNCONFIRMED))
         }
-      } catch {
+      } catch (error) {
         // The worker did not answer: as when the former in-process connection to the server failed, the
         // stop is not confirmed and the client is not signalled. A step it noted stays to be undone.
-        log(`[stop] ${sid(session.agentId)} the ${engine} worker did not answer the stop; its conversation is not confirmed stopped, and its pane stays`)
+        log(`[stop] ${sid(session.agentId)} the ${engine} worker did not answer the stop; its conversation is not confirmed stopped, and its pane stays · ${errorKind(error)}`)
       }
       finally {
         grants.delete(token)

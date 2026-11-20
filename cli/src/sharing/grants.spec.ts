@@ -1,8 +1,21 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { HarnessGrantStore, inviteSchema } from './grants.js'
+
+// Pass-through, each call that could write a file recorded: what a save does to its target.
+const fsCalls = vi.hoisted(() => [] as Array<{ call: string; path: unknown; from?: unknown }>)
+vi.mock('node:fs', async original => {
+  const actual = await original<typeof import('node:fs')>()
+  return { ...actual,
+    openSync: (...args: Parameters<typeof actual.openSync>) => { fsCalls.push({ call: 'openSync', path: args[0] }); return actual.openSync(...args) },
+    writeFileSync: (...args: Parameters<typeof actual.writeFileSync>) => { fsCalls.push({ call: 'writeFileSync', path: args[0] }); return actual.writeFileSync(...args) },
+    renameSync: (...args: Parameters<typeof actual.renameSync>) => { fsCalls.push({ call: 'renameSync', path: args[1], from: args[0] }); return actual.renameSync(...args) },
+  }
+})
+/** The recorded calls on [file] itself: an open or a write of it is a write in place. */
+const callsOn = (file: string) => fsCalls.filter(c => c.path === file)
 
 const roots: string[] = []
 afterEach(() => { for (const dir of roots.splice(0)) rmSync(dir, { recursive: true, force: true }) })
@@ -57,6 +70,15 @@ describe('durable harness sharing permissions', () => {
   it('fails closed on corrupt state instead of silently forgetting permissions', () => {
     const f = fixture(); writeFileSync(f.path, '{broken')
     expect(() => new HarnessGrantStore(f.path)).toThrow('permissions file could not be read')
+  })
+  it('the save goes through a temporary file renamed onto the target', () => {
+    const f = fixture(), before = f.store.invite(f.input)
+    fsCalls.length = 0
+    f.store.synced(before.id)
+    const onto = callsOn(f.path)
+    expect(onto.map(c => c.call)).toEqual(['renameSync'])
+    expect(dirname(String(onto[0].from))).toBe(dirname(f.path))
+    expect(new HarnessGrantStore(f.path).all()[0].pending).toBe(false)
   })
 })
 

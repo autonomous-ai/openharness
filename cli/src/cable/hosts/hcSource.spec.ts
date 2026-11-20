@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { fakeHc, type FakeHc, type FakeHcTerminal } from '../../testing/fakeHc.js'
 import { createHcClient, type HcPrompt } from './hcClient.js'
 import { HcSource, type HcSourceDeps } from './hcSource.js'
+import { MAX_TEXT } from './orca.js'
 import type { HostAgent, PaneSwitch } from './types.js'
 
 /** The wall clock the test starts at. */
@@ -564,10 +565,10 @@ describe.skipIf(process.platform === 'win32')('the hc source (docs/plans/2026-11
       server.change('t7', status(word))
       await s.until(() => row(s, 't7')?.state === state)
     }
-    const sent = async () => {
+    const sent = async (text = 'run the tests') => {
       const calls = s.prompt.mock.calls.length
-      expect(await s.source.send(api(), 'run the tests')).toEqual({ ok: true })
-      expect(s.prompt.mock.calls.slice(calls)).toEqual([['t7', 'claude', 'run the tests']])
+      expect(await s.source.send(api(), text)).toEqual({ ok: true })
+      expect(s.prompt.mock.calls.slice(calls)).toEqual([['t7', 'claude', text]])
     }
     const refused = async (reason: string, text = 'run the tests', of: HostAgent = api()) => {
       const calls = s.prompt.mock.calls.length
@@ -577,8 +578,10 @@ describe.skipIf(process.platform === 'win32')('the hc source (docs/plans/2026-11
     const BUSY = 'api is busy. Say it when it is done.'
     const SILENT = 'api did not answer.'
 
-    // Idle, done, and a turn that ended idle.
+    // Idle, done, and a turn that ended idle; ten minutes of fast speech and a passage reach it whole.
     await sent()
+    await sent('x'.repeat(10_000))
+    await sent('x'.repeat(20_000))
     await to('done', 'done')
     await sent()
     await to('working', 'working')
@@ -586,21 +589,21 @@ describe.skipIf(process.platform === 'win32')('the hc source (docs/plans/2026-11
     await to('idle', 'done')
     expect(api().unseenDone).toBe(false)
     await sent()
-    expect(s.counts).toEqual(['herdr-app', 'herdr-app', 'busy', 'herdr-app'])
-    expect(server.requests.filter(({ request }) => method(request) === 'terminal.send')).toHaveLength(3)
+    expect(s.counts).toEqual(['herdr-app', 'herdr-app', 'herdr-app', 'herdr-app', 'busy', 'herdr-app'])
+    expect(server.requests.filter(({ request }) => method(request) === 'terminal.send')).toHaveLength(5)
 
     await to('blocked', 'needs-you')
     expect(await refused('api is waiting for your answer in herdr.')).toBe(0)
     // An errored agent is at no prompt (spec Q7).
     await to('error', 'error')
     expect(await refused(SILENT)).toBe(0)
-    expect(s.counts.slice(4)).toEqual(['waiting', 'no-answer'])
+    expect(s.counts.slice(6)).toEqual(['waiting', 'no-answer'])
 
     await to('idle', 'idle')
     s.counts.length = 0
     s.prompt.mockResolvedValueOnce({ outcome: 'busy' })
     expect(await refused(BUSY)).toBe(1)
-    expect(await refused('Too long. Say it shorter.', 'x'.repeat(2001))).toBe(0)
+    expect(await refused('Too long. Say it shorter.', 'x'.repeat(MAX_TEXT + 1))).toBe(0)
     server.answer('terminal.get', { error: 'not_found' })
     expect(await refused(SILENT)).toBe(1)
     const gone = api()

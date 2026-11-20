@@ -11,6 +11,7 @@
  */
 import type { HttpAnswer, ServiceRequest } from '../core/api.js'
 import { appProductUsageReport } from '../lib/appProductUsageReport.js'
+import { errorKind } from '../lib/log.js'
 import { PRODUCT_FEEDBACK } from '../lib/productUsageContract.js'
 import type { keyRoutes } from './keyRoutes.js'
 
@@ -137,15 +138,14 @@ function report(backend: AccountBackend, text: string | undefined): Route {
  */
 export function accountRoutes(backend: AccountBackend, log: (line: string) => void = (line) => console.error(line)) {
   return async (method: string, target: string, text?: string, socket = false): Promise<HttpAnswer> => {
-    const said = `${method} ${target.split('?')[0].slice(0, 80)}`
     let route: Route
     try { route = routeOf(backend, method, target, text, socket) } catch (error) {
-      log(`[gateway] ${said} failed: ${error instanceof Error ? error.message : String(error)}`)
+      log(`[gateway] ${method} failed: ${errorKind(error)}`)
       return answer(500, { error: 'INTERNAL' })
     }
     if (typeof route !== 'function') return route
     try { return await route() } catch (error) {
-      log(`[gateway] ${said} failed: ${error instanceof Error ? error.message : String(error)}`)
+      log(`[gateway] ${method} failed: ${errorKind(error)}`)
       return answer(502, { success: false, error: { code: 'PROXY_FAILED', message: error instanceof Error ? error.message : 'INTERNAL' } })
     }
   }

@@ -1,5 +1,5 @@
-// The three screens, Install, Sign in and Orca, drawn from one View. Every word is the plan's approved copy. Lines come
-// from outside (a script's output, an error, Orca's grants), so they reach the page through textContent only.
+// The three screens, Install, Sign in and Follow ChatGPT, drawn from one View. Every word is the plan's approved copy.
+// Lines come from outside (a script's output, an error), so they reach the page through textContent only.
 import type { Action, Phase, Screen, View } from './api'
 
 type Body =
@@ -12,13 +12,13 @@ type Body =
   // lines[0] when there is one.
   | { kind: 'note' }
   | { kind: 'error' }
-  // What Orca will let the plugin do, one list item per line, in Orca's words.
-  | { kind: 'grants' }
 
 interface Button {
   label: string
   action: Action
   primary?: boolean
+  // Takes the focus in place of the primary one.
+  focused?: boolean
 }
 
 interface Face {
@@ -30,7 +30,6 @@ interface Face {
 const SPINNER: Body = { kind: 'spinner' }
 const RETRY: Button = { label: 'Retry', action: 'retry', primary: true }
 const CANCEL: Button = { label: 'Cancel', action: 'cancel' }
-const ORCA = 'Connect Orca'
 
 // Rust never sends a pair missing here; one would draw nothing. Buttons are in the order drawn: secondary first,
 // primary last, as the desktop's dialogs (swarm_dialogs.dart).
@@ -49,27 +48,20 @@ const FACES: Partial<Record<`${Screen}.${Phase}`, Face>> = {
   'sign_in.working': { heading: 'Sign in', body: SPINNER, buttons: [CANCEL] },
   'sign_in.browser': { heading: 'Finish in your browser', body: { kind: 'note' }, buttons: [CANCEL] },
   'sign_in.failed': { heading: 'Sign in', body: { kind: 'error' }, buttons: [RETRY] },
-  'orca.asking': { heading: ORCA, body: { kind: 'step' }, buttons: [] },
-  'orca.approve': {
-    heading: ORCA,
-    body: { kind: 'grants' },
-    buttons: [CANCEL, { label: 'Connect', action: 'connect_orca', primary: true }],
+  'follow.offer': {
+    heading: 'Follow ChatGPT',
+    body: {
+      kind: 'sentences',
+      text: [
+        "Your dial moves to the thread you open in ChatGPT. Harness reads only the ChatGPT window's title, while ChatGPT is in front.",
+      ],
+    },
+    // It opens by itself as the person switches to ChatGPT: a Return typed for ChatGPT must not press Allow.
+    buttons: [
+      { label: 'Not now', action: 'later', focused: true },
+      { label: 'Allow', action: 'allow', primary: true },
+    ],
   },
-  'orca.done': {
-    heading: ORCA,
-    body: { kind: 'sentences', text: ['Orca connected.'] },
-    buttons: [{ label: 'Done', action: 'cancel', primary: true }],
-  },
-  'orca.failed': { heading: ORCA, body: { kind: 'error' }, buttons: [{ label: 'Close', action: 'cancel' }] },
-}
-
-// An update is Connect in every phase but its heading and the button that approves.
-function updated(face: Face): Face {
-  return {
-    ...face,
-    heading: 'Update Orca connection',
-    buttons: face.buttons.map((button) => (button.action === 'connect_orca' ? { ...button, label: 'Update' } : button)),
-  }
 }
 
 // The contract's "at most 4": the script's last lines say why it failed.
@@ -113,22 +105,14 @@ function body(kind: Body, lines: string[]): HTMLElement[] {
       error.setAttribute('role', 'alert')
       return [error]
     }
-    case 'grants': {
-      const list = element('ul', 'grants')
-      // A Tab stop, so the arrow keys scroll what does not fit before Tab reaches Cancel or Connect.
-      list.tabIndex = 0
-      list.append(...lines.map((line) => element('li', 'grant', line)))
-      return [element('p', 'body', 'Orca will let Harness Device:'), list]
-    }
   }
 }
 
 /** Draws one screen into root; null draws nothing. */
 export function render(root: HTMLElement, view: View | null, act: (action: Action) => void): void {
   root.replaceChildren()
-  const found = view && FACES[`${view.screen}.${view.phase}`]
-  if (!view || !found) return
-  const face = view.update ? updated(found) : found
+  const face = view && FACES[`${view.screen}.${view.phase}`]
+  if (!view || !face) return
 
   const screen = element('main', 'screen')
   const content = element('div', 'content')
@@ -142,21 +126,26 @@ export function render(root: HTMLElement, view: View | null, act: (action: Actio
   text.forEach((node, i) => (node.id = `body-${i}`))
   screen.append(content)
 
+  // Return takes the primary answer, as a dialog's default button does, unless another button takes the focus. A screen
+  // without either focuses nothing: the window can come up while the person types elsewhere, and Return must not press
+  // Cancel.
+  const focus = face.buttons.find((button) => button.focused) ?? face.buttons.find((button) => button.primary)
+  let focused: HTMLButtonElement | undefined
   if (face.buttons.length > 0) {
     const row = element('div', 'buttons')
-    for (const { label, action, primary } of face.buttons) {
-      const button = element('button', primary ? 'button primary' : 'button', label) as HTMLButtonElement
+    for (const each of face.buttons) {
+      const button = element('button', each.primary ? 'button primary' : 'button', each.label) as HTMLButtonElement
       button.type = 'button'
-      if (primary && text.length > 0) button.setAttribute('aria-describedby', text.map((node) => node.id).join(' '))
-      button.addEventListener('click', () => act(action))
+      if (each === focus) {
+        focused = button
+        if (text.length > 0) button.setAttribute('aria-describedby', text.map((node) => node.id).join(' '))
+      }
+      button.addEventListener('click', () => act(each.action))
       row.append(button)
     }
     screen.append(row)
   }
 
   root.append(screen)
-  // Return takes the primary answer, as a dialog's default button does. A screen without one focuses nothing: the
-  // window can come up while the person types elsewhere, and Return must not press Cancel. Nor on the Orca screen:
-  // a Return typed in another app's habit must approve nothing, so the person clicks or tabs to Connect.
-  if (view.screen !== 'orca') root.querySelector<HTMLElement>('.primary')?.focus()
+  focused?.focus()
 }

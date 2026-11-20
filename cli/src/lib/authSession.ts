@@ -1,7 +1,8 @@
-import { chmodSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'fs'
+import { chmodSync, closeSync, mkdirSync, openSync, rmSync, statSync } from 'fs'
 import { join } from 'path'
 import { randomBytes } from 'node:crypto'
 import { harnessPath } from '../config/harnessHome.js'
+import { atomicWriteFile, jsonObject, probeState, readState, requireState, type TrustFile } from './secureState.js'
 
 export interface AuthSession {
   version: 1
@@ -109,27 +110,25 @@ export function currentToken(opts: TokenOptions = {}): string | null {
   return due ? null : current.accessToken
 }
 
-function parse(raw: string): AuthSession | null {
-  try {
-    const value = JSON.parse(raw) as Partial<AuthSession>
-    if (value.version !== 1 || typeof value.accessToken !== 'string' || !value.accessToken ||
-      typeof value.computerId !== 'string' || !value.computerId ||
-      (value.autonomousEnv !== 'prod' && value.autonomousEnv !== 'stag')) return null
-    return {
-      version: 1,
-      accessToken: value.accessToken,
-      ...(typeof value.refreshToken === 'string' && value.refreshToken ? { refreshToken: value.refreshToken } : {}),
-      ...(typeof value.expiresAt === 'number' && Number.isFinite(value.expiresAt) ? { expiresAt: value.expiresAt } : {}),
-      autonomousEnv: value.autonomousEnv,
-      computerId: value.computerId,
-      ...(typeof value.machineId === 'string' && value.machineId ? { machineId: value.machineId } : {}),
-      ...(value.method === 'qr' || value.method === 'sso' ? { method: value.method } : {}),
-      ...(knownSsoClientId(value.clientId) ? { clientId: knownSsoClientId(value.clientId) } : {}),
-      updatedAt: typeof value.updatedAt === 'number' ? value.updatedAt : 0,
-      ...(typeof value.signInEpoch === 'string' && value.signInEpoch ? { signInEpoch: value.signInEpoch } : {}),
-      ...(typeof value.signInAcct === 'string' && value.signInAcct ? { signInAcct: value.signInAcct } : {}),
-    }
-  } catch { return null }
+/** The session file's object as a sign-in: null when it is of another version or shape. */
+function parse(value: Partial<AuthSession>): AuthSession | null {
+  if (value.version !== 1 || typeof value.accessToken !== 'string' || !value.accessToken ||
+    typeof value.computerId !== 'string' || !value.computerId ||
+    (value.autonomousEnv !== 'prod' && value.autonomousEnv !== 'stag')) return null
+  return {
+    version: 1,
+    accessToken: value.accessToken,
+    ...(typeof value.refreshToken === 'string' && value.refreshToken ? { refreshToken: value.refreshToken } : {}),
+    ...(typeof value.expiresAt === 'number' && Number.isFinite(value.expiresAt) ? { expiresAt: value.expiresAt } : {}),
+    autonomousEnv: value.autonomousEnv,
+    computerId: value.computerId,
+    ...(typeof value.machineId === 'string' && value.machineId ? { machineId: value.machineId } : {}),
+    ...(value.method === 'qr' || value.method === 'sso' ? { method: value.method } : {}),
+    ...(knownSsoClientId(value.clientId) ? { clientId: knownSsoClientId(value.clientId) } : {}),
+    updatedAt: typeof value.updatedAt === 'number' ? value.updatedAt : 0,
+    ...(typeof value.signInEpoch === 'string' && value.signInEpoch ? { signInEpoch: value.signInEpoch } : {}),
+    ...(typeof value.signInAcct === 'string' && value.signInAcct ? { signInAcct: value.signInAcct } : {}),
+  }
 }
 
 /** A new `signInEpoch`, for a session a sign-in by hand just made: random, then `@` and when it was
@@ -171,12 +170,12 @@ export interface SignedOutMark { at: number; reason: SignedOutReason; retryAt?: 
 /** The session on disk, and its signed-out mark when it has one ([markSignedOut]): what a refresh renews
  *  (lib/authRefresh.ts). */
 export function readStored(): { session: AuthSession; signedOut: SignedOutMark | null } | null {
-  let raw: string
-  try { raw = readFileSync(AUTH_SESSION_FILE, 'utf8') } catch { return null }
-  const session = parse(raw)
+  // One that cannot be read is signed out: the reader says so once, and every write but a person's refuses it.
+  const read = readState(AUTH_SESSION_FILE, 'trust', jsonObject)
+  if (read.state !== 'ok') return null
+  const session = parse(read.value as Partial<AuthSession>)
   if (!session) return null
-  let mark: unknown
-  try { mark = (JSON.parse(raw) as { signedOut?: unknown }).signedOut } catch { mark = undefined }
+  const mark = read.value.signedOut
   const signedOut = typeof mark === 'object' && mark !== null
     && ((mark as { reason?: unknown }).reason === 'refresh-refused' || (mark as { reason?: unknown }).reason === 'revoked')
     ? {
@@ -203,17 +202,28 @@ function ensureDir(): void {
   try { chmodSync(AUTH_DIR, 0o700) } catch { /* best effort on non-POSIX */ }
 }
 
+/** Writes the session whole. One on disk that cannot be read is refused (`StateFileUnreadable`), not replaced: only a
+ *  person signing in or out deletes it ([writeSignIn], [clearAuthSession]). */
 export function writeAuthSession(session: AuthSession): void {
   ensureDir()
-  const temp = join(AUTH_DIR, `.session.${process.pid}.${Date.now()}.tmp`)
-  try {
-    writeFileSync(temp, JSON.stringify(session) + '\n', { mode: 0o600 })
-    try { chmodSync(temp, 0o600) } catch { /* best effort on non-POSIX */ }
-    renameSync(temp, AUTH_SESSION_FILE)
-    try { chmodSync(AUTH_SESSION_FILE, 0o600) } catch { /* best effort on non-POSIX */ }
-  } finally {
-    try { rmSync(temp, { force: true }) } catch { /* ignore */ }
+  requireState(AUTH_SESSION_FILE, jsonObject)
+  atomicWriteFile(AUTH_SESSION_FILE, JSON.stringify(session) + '\n', 'trust')
+}
+
+/** A sign-in by hand: it replaces even a session that cannot be read, which it deletes first ([clearAuthSession]). One
+ *  it could not delete is still refused by the write. */
+export function writeSignIn(session: AuthSession): void {
+  const read = probeState(AUTH_SESSION_FILE, jsonObject)
+  if (read.state === 'unreadable') {
+    clearAuthSession()
+    console.warn(`[state] session.json could not be read (${read.failure}); deleted, signing in again.`)
   }
+  writeAuthSession(session)
+}
+
+/** The sign-in, for whoever names a trust file that cannot be read. */
+export function authSessionFiles(): TrustFile[] {
+  return [{ file: AUTH_SESSION_FILE, parse: jsonObject }]
 }
 
 /** Why a sign-in kept on disk is signed out: its refresh was refused, or it was revoked. */
@@ -245,10 +255,12 @@ export type Lock = <T>(action: () => Promise<T>) => Promise<T>
  * Rewrites this computer's sign-in from the newest one on disk: [change] gives the new one, or null (or the
  * same one) to leave it. Under the refresh lock, so a refresh's rotated tokens and a signed-out mark are never
  * written over, and it is read again just before the write: a sign-in marked meanwhile is left marked (follow-up
- * to the review of #1866). The sign-in written; null when there was none, or it is marked signed out.
+ * to the review of #1866). The sign-in written; null when there was none, or it is marked signed out. One that cannot be
+ * read is refused (`StateFileUnreadable`), as [writeAuthSession] refuses it, not taken for none.
  */
-export function updateAuthSession(change: (latest: AuthSession) => AuthSession | null): Promise<AuthSession | null> {
-  if (!readAuthSession()) return Promise.resolve(null)
+export async function updateAuthSession(change: (latest: AuthSession) => AuthSession | null): Promise<AuthSession | null> {
+  requireState(AUTH_SESSION_FILE, jsonObject)
+  if (!readAuthSession()) return null
   return withLock(async () => {
     const latest = readAuthSession()
     if (!latest) return null
@@ -298,6 +310,8 @@ export function readSignedOut(): SignedOutMark | null {
   return readStored()?.signedOut ?? null
 }
 
+/** Removes the sign-in (`harness logout`, `harness reset`), one that cannot be read as well: deleted, never kept aside,
+ *  where its refresh token would outlive the sign-out. */
 export function clearAuthSession(): void {
   try { rmSync(AUTH_SESSION_FILE, { force: true }) } catch { /* ignore */ }
 }

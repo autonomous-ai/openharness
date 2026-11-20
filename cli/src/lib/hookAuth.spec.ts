@@ -1,17 +1,38 @@
 import { execFileSync, spawnSync } from 'node:child_process'
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
+import {
+  chmodSync, constants, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync,
+  writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { hookCredentialMatches, hookCredentialPath, loadOrCreateHookCredential, readHookCredential } from './hookAuth.js'
+import { StateFileUnreadable } from './secureState.js'
 import { asWindows } from '../testing/windowsOpen.js'
 
-// Windows' open has no O_NOFOLLOW: asWindows says when to open as Windows does (src/testing/windowsOpen.ts).
-vi.mock('node:fs', async (importOriginal) =>
-  (await import('../testing/windowsOpen.js')).windowsOpenFs(await importOriginal<typeof import('node:fs')>()))
+type FsHook = (name: string, args: unknown[], phase: 'before' | 'after') => void
+const fsCalls = vi.hoisted(() => ({ hook: undefined as FsHook | undefined }))
+
+// Windows' open has no O_NOFOLLOW: asWindows says when to open as Windows does (src/testing/windowsOpen.ts). Each call
+// that makes, fills or publishes a file passes through fsCalls.hook, before and after, so a spec can look at the
+// credential's final path between them, or start a second daemon there.
+vi.mock('node:fs', async (importOriginal) => {
+  const fs = (await import('../testing/windowsOpen.js')).windowsOpenFs(await importOriginal<typeof import('node:fs')>())
+  const names = ['openSync', 'writeFileSync', 'fchmodSync', 'fsyncSync', 'closeSync', 'linkSync', 'copyFileSync', 'renameSync', 'rmSync'] as const
+  const watched = Object.fromEntries(names.map((name) => [name, (...args: unknown[]) => {
+    fsCalls.hook?.(name, args, 'before')
+    const result = (fs[name] as (...callArgs: unknown[]) => unknown)(...args)
+    fsCalls.hook?.(name, args, 'after')
+    return result
+  }]))
+  return { ...fs, ...watched, default: { ...fs, ...watched } }
+})
 
 const dirs: string[] = []
-afterEach(() => dirs.splice(0).forEach((dir) => rmSync(dir, { recursive: true, force: true })))
+afterEach(() => {
+  fsCalls.hook = undefined
+  dirs.splice(0).forEach((dir) => rmSync(dir, { recursive: true, force: true }))
+})
 
 describe('hook channel credential', () => {
   it('creates and reuses a high-entropy mode-0600 credential', () => {
@@ -80,8 +101,60 @@ describe('hook channel credential', () => {
     asWindows(dir, () => {
       expect(readHookCredential(dir)).toBeNull()
       // Never replaced either: the link is not this daemon's to remove.
-      expect(() => loadOrCreateHookCredential(dir)).toThrow(/EEXIST/)
+      expect(() => loadOrCreateHookCredential(dir)).toThrow(/outside your user profile/)
     })
+    expect(lstatSync(hookCredentialPath(dir)).isSymbolicLink()).toBe(true)
+  })
+
+  it('two daemons creating the credential at once read one value', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'hook-auth-'))
+    dirs.push(dir)
+    const file = hookCredentialPath(dir)
+    let second: string | undefined
+    let secondFailed: unknown
+    // The second daemon runs the moment the first has made the final path (an open that creates it), or is about to
+    // publish its complete file there (a link): whichever the first reaches.
+    fsCalls.hook = (name, [path, target], phase) => {
+      const made = name === 'openSync' && phase === 'after' && path === file && (Number(target) & constants.O_CREAT) !== 0
+      const published = name === 'linkSync' && phase === 'before' && target === file
+      if (!made && !published) return
+      fsCalls.hook = undefined
+      try { second = loadOrCreateHookCredential(dir) } catch (error) { secondFailed = error }
+    }
+
+    const first = loadOrCreateHookCredential(dir)
+
+    expect(secondFailed).toBeUndefined()
+    expect(second).toHaveLength(43)
+    expect(first).toBe(second)
+  })
+
+  it('the credential is never there empty', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'hook-auth-'))
+    dirs.push(dir)
+    const file = hookCredentialPath(dir)
+    const sizes: number[] = []
+    fsCalls.hook = () => { if (existsSync(file)) sizes.push(statSync(file).size) }
+
+    loadOrCreateHookCredential(dir)
+
+    expect(sizes.length).toBeGreaterThan(0)
+    // 43 characters and the line's end.
+    expect(sizes.filter((size) => size < 44)).toEqual([])
+  })
+
+  it('a credential that cannot be used is left, and said', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'hook-auth-'))
+    dirs.push(dir)
+    const file = hookCredentialPath(dir)
+    writeFileSync(file, 'x', { mode: 0o600 })
+
+    const failure = (() => { try { loadOrCreateHookCredential(dir) } catch (error) { return error } })()
+
+    expect(failure).toBeInstanceOf(StateFileUnreadable)
+    expect((failure as Error).message).toBe('hook-credential cannot be read (unexpected content). Move it aside to start over.')
+    expect(readFileSync(file, 'utf8')).toBe('x')
+    expect(readdirSync(dir)).toEqual(['hook-credential'])
   })
 
   it('rejects a credential FIFO without blocking', () => {

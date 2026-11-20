@@ -8,7 +8,7 @@ import {
   createOpencodeClient, EVENT_TYPES, MAX_BODY_BYTES, MAX_SERVICE_BYTES, OPENCODE_MESSAGE, opencodeClientDeps, opencodeMessageId,
   opencodeServicePath, SILENCE_MS, type OpencodeClient, type OpencodeClientDeps, type OpencodeFault,
 } from './opencodeClient.js'
-import { RUN_TIMEOUT_MS } from './orca.js'
+import { MAX_TEXT, RUN_TIMEOUT_MS } from './orca.js'
 
 const CONNECTED = { type: 'server.connected', data: {} }
 const UNAUTHORIZED: FakeAnswer = { status: 401, json: { _tag: 'UnauthorizedError', message: 'Unauthorized' } }
@@ -656,20 +656,27 @@ describe('the opencode client (docs/plans/2026-11-17-dial-opencode-design.md)', 
     expect((await server.got(POST)).body).toMatchObject({ text: 'fix it rm -rf / [2J' })
   })
 
-  it('an empty text, one blank once its control characters are spaces, one of 2001 characters, a session id or a message id not in its form: failed, and nothing connects', async () => {
+  it('an empty text, one blank once its control characters are spaces, one over MAX_TEXT characters, a session id or a message id not in its form: failed, and nothing connects', async () => {
     const server = await start()
     server.session({ id: 'ses_a1' })
     const opencode = await found(server)
     const id = opencodeMessageId()
     for (const [session, text, message] of [
-      ['ses_a1', '', id], ['ses_a1', '\n\t', id], ['ses_a1', 'x'.repeat(2001), id],
+      ['ses_a1', '', id], ['ses_a1', '\n\t', id], ['ses_a1', 'x'.repeat(MAX_TEXT + 1), id],
       ['ses', 'run the tests', id], ['ses_a1/../x', 'run the tests', id], ['ses_a1?x=1', 'run the tests', id],
       ['ses_a1', 'run the tests', 'msg_1'],
     ]) {
       expect(await opencode.prompt(session, text, message)).toBe('failed')
     }
     expect(routes(server)).toEqual(['GET /api/info'])
-    expect(await opencode.prompt('ses_a1', 'x'.repeat(2000), id)).toBe('sent')
+  })
+
+  it('a text of 20,000 characters is sent whole', async () => {
+    const server = await start()
+    server.session({ id: 'ses_a1' })
+    const opencode = await found(server)
+    expect(await opencode.prompt('ses_a1', 'x'.repeat(20_000), opencodeMessageId())).toBe('sent')
+    expect((await server.got(POST)).body).toMatchObject({ text: 'x'.repeat(20_000) })
   })
 
   it('opencodeMessageId is msg_, 12 hex characters of the time and 14 of [0-9A-Za-z]; two made in one millisecond differ and the second sorts after the first', () => {

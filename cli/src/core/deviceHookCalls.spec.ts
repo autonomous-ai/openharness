@@ -135,12 +135,12 @@ describe('createDeviceHookCalls: inbox', () => {
     expect(calls.open()).toEqual({ polls: 0 })
   })
 
-  it('a text over 2000 characters or not a string is {}', async () => {
+  it('a text over 20,000 characters or not a string is {}', async () => {
     const { calls, polls } = setup()
-    const texts: unknown[] = ['x'.repeat(2001), '', 42, null, 'x'.repeat(2000)]
+    const texts: unknown[] = ['x'.repeat(20_001), '', 42, null, 'x'.repeat(20_000), 'x'.repeat(10_000)]
     const answers = texts.map((_text, i) => calls.onInbox({ sessionId: `s${i}` }, live()))
     texts.forEach((text, i) => polls[i].resolve({ text } as InboxAnswer))
-    expect(await Promise.all(answers)).toEqual([{}, {}, {}, {}, { text: 'x'.repeat(2000) }])
+    expect(await Promise.all(answers)).toEqual([{}, {}, {}, {}, { text: 'x'.repeat(20_000) }, { text: 'x'.repeat(10_000) }])
   })
 })
 

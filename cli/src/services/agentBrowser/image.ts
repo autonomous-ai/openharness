@@ -6,6 +6,7 @@
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { errorKind } from '../../lib/log.js'
 import { browserAssetsHash, browserContextFiles } from './assets.js'
 import { PodmanError, type Podman } from './podman.js'
 
@@ -65,7 +66,7 @@ function buildOnce(podman: Podman, tag: string, log: (line: string) => void): Pr
   done.then(clear, clear)
   // Pruned once per build, however many browsers waited on it. A failure is logged here, and also thrown to a
   // caller that has no older image to run.
-  done.then(() => pruneImages(podman, tag)).catch((error: unknown) => log(`agent browser: image ${tag}: ${(error as Error).message}`))
+  done.then(() => pruneImages(podman, tag)).catch((error: unknown) => log(`agent browser: image ${tag}: its build or prune failed · ${errorKind(error)}`))
   return done
 }
 

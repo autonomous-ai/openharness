@@ -7,9 +7,9 @@
  *     otherwise start it again in the middle;
  *  3. the daemon, then whatever the terminal host still runs (before anything under runtime/pty goes);
  *  4. the hooks, once no daemon is left to write them back on its next start;
- *  5. the launchers and the PATH entry, then the files. On Windows a program cannot delete the node.exe it runs from,
- *     nor bin\harness.exe while it waits for that node.exe, so the files go in a cmd.exe that waits for this process
- *     to exit (removal.ts).
+ *  5. the launchers, Linux's login entry and the PATH entry, then the files. On Windows a program cannot delete the
+ *     node.exe it runs from, nor bin\harness.exe while it waits for that node.exe, so the files go in a cmd.exe that
+ *     waits for this process to exit (removal.ts).
  * A service that would not go, or a daemon that would not stop, ends it before anything is deleted: what was left
  * would start a program that is no longer there. Everything after that is reported, and the rest is still done.
  *
@@ -138,6 +138,8 @@ export interface UninstallDeps {
   markUninstalling(): void
   unmarkUninstalling(): void
   ask(question: string): Promise<string>
+  /** Ask the daemon about a pid file that cannot be read, or set it aside (../pidFileSettle.ts). */
+  settlePid(): Promise<unknown>
   daemonPid(): number | null
   alive(pid: number): boolean
   stopAgents(): Promise<AgentsStopped>
@@ -150,6 +152,8 @@ export interface UninstallDeps {
   /** mac and Linux: the launchers in ~/.local/bin (on Windows they are in ~\.harness\bin, with the rest). A launcher
    *  removed is its path; one that could not be, the path and why. */
   removeLaunchers(): Array<string | { path: string; failed: string }>
+  /** loginEntry.ts removeLoginEntry: Linux's login entry, only when it is the installer's own. */
+  removeLoginEntry(): string | { path: string; failed: string } | null
   removePathEntry(): PathStep
   listEntries(dir: string): RootEntry[]
   exists(path: string): boolean
@@ -208,7 +212,9 @@ function whatItDoes(deps: UninstallDeps, daemon: number | null, keepData: boolea
     '  · removes the hooks and permission rules Harness added to Claude Code, Codex and your other agents (a rule of yours that is the same as one of Harness\'s goes too)',
     deps.platform === 'win32'
       ? `  · removes ${deps.tildify(deps.binDir)} from your PATH`
-      : '  · removes the harness and hn commands, and the PATH line the installer added',
+      : deps.platform === 'linux'
+        ? '  · removes the harness and hn commands, the login entry and the PATH line the installer added'
+        : '  · removes the harness and hn commands, and the PATH line the installer added',
     keepData
       ? `  · deletes the program in ${rootsNamed(deps)}, and keeps your sign-in, this computer's identity, history and settings there`
       : `  · deletes ${rootsNamed(deps)}: your sign-in, this computer's identity, history and settings (--keep-data keeps them)`,
@@ -378,6 +384,7 @@ export async function uninstallCommand(argv: readonly string[], deps: UninstallD
     // A root the last step would refuse is refused now, before a harness, the service, the daemon or another root is
     // touched (I1).
     for (const root of deps.roots) deps.checkRemovable(planFor(deps, root, keepData))
+    await deps.settlePid()
     daemon = deps.daemonPid()
     if (!yes) {
       if (!deps.isTTY) { deps.err('✗ harness uninstall asks before it removes anything. Run it in a terminal, or add --yes. Nothing was removed.'); return 1 }
@@ -423,6 +430,8 @@ async function removeHarness(deps: UninstallDeps, daemon: number | null, keepDat
   let ended: number | null = null
   try {
     halted = await deps.withLock(async () => {
+      // Again under the lock: the settle before it may have found the lock held elsewhere, and no pid then.
+      await deps.settlePid()
       if (deps.service?.present()) {
         const removed = deps.service.unregister()
         if (!removed.ok) {
@@ -469,6 +478,9 @@ async function removeHarness(deps: UninstallDeps, daemon: number | null, keepDat
         if (typeof launcher === 'string') deps.out(`✓ removed ${deps.tildify(launcher)}`)
         else problems.push(`could not remove ${deps.tildify(launcher.path)} (${launcher.failed}): delete it yourself`)
       }
+      const entry = deps.removeLoginEntry()
+      if (typeof entry === 'string') deps.out(`✓ removed ${deps.tildify(entry)}`)
+      else if (entry) problems.push(`could not remove ${deps.tildify(entry.path)} (${entry.failed}): delete it yourself`)
     })
   }
 

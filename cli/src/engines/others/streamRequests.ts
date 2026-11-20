@@ -14,6 +14,7 @@ import {
 } from '../worker/otherStreamProtocol.js'
 import type { OtherStreams, StreamOpen } from './streams.js'
 import { env } from '../../config/env.js'
+import { errorKind } from '../../lib/log.js'
 import { hermesDbPath } from '../hermes/contract.js'
 import { openclawSessionDb } from '../../lib/openclawStore.js'
 
@@ -101,8 +102,8 @@ export function otherStreamRequests(deps: OtherStreamRequestDeps): ServiceReques
           return answer(found && !sameHermesHome(found, env.HERMES_HOME) ? { store, home: found } : { store })
         }
         return answer({ store: await openclawSessionDb(session.sessionId, { pid: session.pid as number ?? 0, stateDir: session.openclawStateDir as string | null | undefined }) })
-      } catch {
-        console.warn('[engine-others] store lookup unavailable')
+      } catch (error) {
+        console.warn(`[engine-others] store lookup unavailable · ${errorKind(error)}`)
         return failure('ENGINE_UNAVAILABLE')
       }
     },

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { RegistryOwnershipChanged, type RegisteredSession } from './registry.js'
-import { AtomicWriteUnconfirmed, RegistryPersistenceUnavailable } from './registryPersistence.js'
+import { RegistryPersistenceUnavailable } from './registryPersistence.js'
+import { AtomicWriteUnconfirmed } from './secureState.js'
 import type { DiscoveredTerminalAgent, TerminalAgentProbe } from './terminalAgentDiscovery.js'
 import type { TerminalBackend } from './terminalBackend.js'
 import { TerminalAgentReconciler } from './terminalAgentReconciler.js'
@@ -846,7 +847,7 @@ describe('a pass whose observations cannot be saved', () => {
     // first is; one pass saved; one more refused.
     const run = outage([null, full(), null, full(), null, full(), null, null, null, full()])
     for (let pass = 0; pass < 3; pass++) await run.reconciler.trigger()
-    expect(said(warn)).toEqual([['[discovery] observations not saved, kept for the next pass · Registry persistence unavailable: registry storage has no available space (ENOSPC)']])
+    expect(said(warn)).toEqual([['[discovery] observations not saved, kept for the next pass · RegistryPersistenceUnavailable']])
     await run.reconciler.trigger()
     await run.reconciler.trigger()
     expect(said(warn)).toHaveLength(2)
@@ -872,7 +873,7 @@ describe('a pass whose observations cannot be saved', () => {
     const run = outage([new RegistryOwnershipChanged('the registry owner changed while its write was being prepared')])
     try {
       ask(run.reconciler)
-      const line = '[discovery] a pass failed, the next one tries again · RegistryOwnershipChanged'
+      const line = '[discovery] a pass failed, the next one tries again · RegistryOwnershipChanged IDENTITY_UNAVAILABLE'
       await vi.waitFor(() => expect(warn).toHaveBeenCalledWith(line))
       // An unhandled rejection is reported after the microtasks of the turn that dropped it.
       await new Promise((resolve) => setImmediate(resolve))

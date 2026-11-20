@@ -736,13 +736,13 @@ Off (Settings ▸ Experimental ▸ Hachi), none of them is drawn and ⇧⌘H is 
 Harness Device is the menu-bar app for the dial (`device-app/`), named
 **Harness** wherever a person sees it; only its file stays
 `Harness Device.app`. It sets up
-Harness, keeps it running and shows the dial's state; sign-in and Orca's
-connection are the two things it offers. Claude Code and Codex need no
-setting: Harness sets them up once a dial is plugged in. The desktop app offers and installs it
-([Surface families](#surface-families), Menu-bar app offer).
+Harness, keeps it running and shows the dial's state; it offers sign-in and,
+on a Mac with the ChatGPT app, Follow ChatGPT. Claude Code, Codex and Orca
+need no setting: Harness sets them up once a dial is plugged in. The desktop
+app offers and installs it ([Surface families](#surface-families), Menu-bar app offer).
 
 Its menu is the native menu; a row with nothing to say is absent. Its window
-has three screens, Install, Sign in and Orca,
+has three screens, Install, Sign in and Follow ChatGPT,
 at 420 × 320, in plain HTML and CSS (`device-app/ui/src/styles.css`)
 with this document's tokens and type. Hover and press fills are precomputed per
 theme: the app runs from macOS 13, older than WebKit's `color-mix()`.
@@ -768,6 +768,10 @@ theme: the app runs from macOS 13, older than WebKit's `color-mix()`.
 - Geometry: dialog content inset 24; group / control gap 16 / 8; buttons are
   capsules, 32 high at least, trailing: secondary first, primary last, as the
   desktop's dialogs. The spinner stands still under Reduce Motion.
+- Focus: Return takes the primary button, as a dialog's default. Follow ChatGPT
+  focuses `Not now`, `Allow` still primary: it opens by itself as the person
+  switches to ChatGPT, where a Return they type must not allow. A screen with
+  only `Cancel` focuses nothing.
 - The menu-bar icon is the Pixel H drawn 8x8 pixels, a template image 18 points
   square (`device-app/src-tauri/icons/tray.png`): black on a light bar, white on
   a dark one. The app icon is the Pixel H, a black H of 7x7 square pixels on the
@@ -778,22 +782,10 @@ theme: the app runs from macOS 13, older than WebKit's `color-mix()`.
   the one in force checked. Notifications is the first.
 - A menu action that asks for more before it is done ends in `…`; one that acts at
   once has none.
-- Orca has two rows, one or neither, under the sign-in row and above Sound:
-  `Connect Orca…` while Orca runs without Harness's plugin, and
-  `Update Orca connection…` when Orca asks again to approve Harness's plugin.
-  Each opens the Orca screen. `Cancel` keeps the row.
-- The Orca screen's heading is `Update Orca connection` for an update, else
-  `Connect Orca`: the row clicked says which until Orca lists the access, then
-  Orca's answer does, to the end. Asking: the spinner and `Asking Orca…`, muted,
-  under it, with no button. Approve: `Orca will let Harness Device:` and Orca's own
-  lines, in its words, in a bulleted list that scrolls when it does not fit,
-  its scrollbar drawn at all times (`--muted` on `--control`, 6 wide), then
-  `Cancel` and `Connect` (`Update` for an update). The list is the first Tab
-  stop, so the arrow keys scroll it before Tab reaches a button; it shows the
-  focus boundary as a button does. Done: `Orca connected.`
-  and `Done`. Failed: `Orca isn't running.` or `Couldn't connect Orca.` in error
-  ink, and `Close`. No button has the focus: a Return typed in another app's
-  habit must approve nothing.
+- A permission another app keeps (macOS's Accessibility) is one check item,
+  checked when given. Its click always asks for more (unchecked: the Follow
+  ChatGPT screen; checked: System Settings' Accessibility list), so it has no
+  `…`; its label never changes, as every check item's.
 - The dial line names no firmware version: it reads `Updating device…`
   while the firmware updates. **About** opens macOS's standard About panel,
   brought to the front, with the app's name and version and one credits line,
@@ -809,9 +801,9 @@ The menu, top to bottom:
 ```text
   Device ready
   Signed in
-  Connect Orca…
 ✓ Sound
   Notifications ▸
+✓ Follow ChatGPT
 ──────────
   Open Harness
   Export logs
@@ -821,9 +813,9 @@ The menu, top to bottom:
 ```
 
 The [gallery](../../device-app/ui/gallery.html) shows every screen in every
-state, light and dark, the primary button focused except on the Orca screen,
-and the menu-bar icon on both bars. Build it with
-`npm run gallery` in `device-app/ui`, then open the file. A change to a screen
+state, light and dark, the primary button focused, and the menu-bar icon
+on both bars. Build it with `npm run gallery` in `device-app/ui`, then open
+the file. A change to a screen
 changes the gallery and this section in the same pull request.
 
 ## Interaction and review

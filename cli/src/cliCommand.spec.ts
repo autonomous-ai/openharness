@@ -446,7 +446,8 @@ describe('start beside a daemon that serves another account', () => {
 
     const result = await runAsync(root, ['start'], { PORT: String(port) })
 
-    expect(result.stdout).toContain('machine id not resolved yet')
+    expect(result.stdout).toMatch(/machine id not resolved yet — [A-Za-z_ ]+; starting on the computer id/)
+    expect(result.stdout).not.toContain('fetch failed')
     expect(result.stdout).toContain('dev mode — running in the foreground')
   }, ONE_RUN_TEST_MS)
 
@@ -463,6 +464,24 @@ describe('start beside a daemon that serves another account', () => {
     expect(existsSync(join(root, 'data', 'adapter.pid'))).toBe(true)
     await expect(Promise.race([daemon.exited.then(() => 'exited'), new Promise((r) => setTimeout(() => r('alive'), 300))]))
       .resolves.toBe('alive')
+  }, ONE_RUN_TEST_MS)
+})
+
+describe('start -f with no master, when its core cannot start', () => {
+  // Harness OS's unit runs the core alone in this process: what it prints is the daemon's log, which Export logs sends.
+  it('says only the failure\'s kind, never its words or its stack, and exits 1', async () => {
+    const root = freshRoot()
+    seedSession(root)
+    // Another daemon serves this data folder: the core refuses to start beside it.
+    const port = await daemonStatusServer(root, 'm_seeded')
+
+    const result = await runAsync(root, ['start', '-f'], { PORT: String(port), HARNESS_NO_MASTER: '1' })
+
+    expect(result.timedOut).toBe(false)
+    expect(result.status).toBe(1)
+    expect(result.stderr).toMatch(/Failed to start adapter: EADDRINUSE · another Harness daemon serves this data folder$/m)
+    expect(result.stdout + result.stderr).not.toContain('already serving')
+    expect(result.stdout + result.stderr).not.toMatch(/^\s+at /m)
   }, ONE_RUN_TEST_MS)
 })
 

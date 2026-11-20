@@ -9,6 +9,7 @@ import { placeholderBranch, worktreeFolderName } from './branchNames.js'
 import { redactSecretsInText } from './redactSecrets.js'
 import { withinRoots } from './pathContainment.js'
 import { ownProcessGroup } from './windows/noWindow.js'
+import { errorKind } from './log.js'
 
 const exec = promisify(execFile)
 
@@ -390,7 +391,7 @@ export async function prepareGitProject(source: string, options: GitProjectOptio
     // Harness made this branch: its cleanup may remove it, and a made-up name gives way to the session's.
     if (!existing) {
       await git(source, ['config', `branch.${branch}.${HARNESS_BRANCH_KEY}`, placeholder ? 'placeholder' : 'created']).catch((error: unknown) => {
-        console.error(`[worktree] could not mark ${branch} as Harness's, so it is not renamed after its session: ${gitReason(String((error as { stderr?: string }).stderr ?? error))}`)
+        console.error(`[worktree] could not mark ${branch} as Harness's, so it is not renamed after its session: ${errorKind(error)}`)
       })
     }
     return destination
@@ -521,7 +522,7 @@ async function removePartialWorktree(source: string, destination: string, made: 
       for (const key of ['remote', 'merge']) await git(source, ['config', '--unset', `branch.${made.branch}.${key}`]).catch(() => '')
     }
   } catch (error) {
-    console.error(`[worktree] could not remove the partial worktree at ${destination}: ${error instanceof Error ? error.message : String(error)}`)
+    console.error(`[worktree] could not remove the partial worktree: ${errorKind(error)}`)
   }
 }
 

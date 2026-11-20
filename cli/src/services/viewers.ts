@@ -25,7 +25,7 @@ import { DshViewerManager } from '../dsh/viewer.js'
 import { ViewerLedger } from '../dsh/viewerLedger.js'
 import type { AgentDshContext } from '../lib/agentFrame.js'
 import { InteractiveViewers } from '../lib/interactiveViewer.js'
-import { sid } from '../lib/log.js'
+import { errorKind, sid } from '../lib/log.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import { ViewerForwarder } from '../lib/viewerForwarder.js'
 
@@ -138,13 +138,13 @@ export function startViewers(core: CoreApi, ports: CorePorts): void {
     dshVerdicts.watch(s.agentId, join(s.cwd, dshVerdictPath(installed.manifest)))
     if (installed.manifest.viewer) {
       void dshViewers.start(s.agentId, installed, s.cwd).catch((error) => {
-        console.warn(`[dsh] ${s.dsh} viewer failed to start · ${error instanceof Error ? error.message : error}`)
+        console.warn(`[dsh] ${s.dsh} viewer failed to start · ${errorKind(error)}`)
       })
     }
   }
   const detachDsh = (agentId: string): void => {
     dshVerdicts.unwatch(agentId)
-    void dshViewers.stop(agentId).catch(() => console.warn('[viewers] VIEWER_STOP_FAILED'))
+    void dshViewers.stop(agentId).catch((error) => console.warn(`[viewers] VIEWER_STOP_FAILED · ${errorKind(error)}`))
     dshFrames.delete(agentId)
   }
   const unfollow = core.agents.follow?.((event) => {

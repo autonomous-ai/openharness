@@ -855,7 +855,7 @@ describe('PtyHostBackend on Windows: the process table and the agent signaller',
     }) as typeof process.kill)
     signalAgentProcess(900, 'SIGKILL')
     await vi.waitFor(() => expect(killed).toEqual([901, 902, 900]))
-    expect(error.mock.calls).toEqual([['[terminal] ptyhost: could not end pid 901, under pid 900: kill EPERM']])
+    expect(error.mock.calls).toEqual([['[terminal] ptyhost: could not end pid 901, under pid 900: EPERM']])
   })
 
   it('says when it could not end the process', async () => {
@@ -871,12 +871,12 @@ describe('PtyHostBackend on Windows: the process table and the agent signaller',
     const { backend } = await ready({}, { platform: 'win32', endTree })
     backend.dispose()
     backend.signalProcess(77, 'SIGTERM')
-    await vi.waitFor(() => expect(error).toHaveBeenCalledWith('[terminal] ptyhost: could not SIGTERM pid 77: spawn failed'))
+    await vi.waitFor(() => expect(error).toHaveBeenCalledWith('[terminal] ptyhost: could not SIGTERM pid 77: Error'))
     const odd = vi.fn(async () => { throw 'odd' })
     const other = (await ready({}, { platform: 'win32', endTree: odd })).backend
     other.dispose()
     other.signalProcess(78, 'SIGKILL')
-    await vi.waitFor(() => expect(error).toHaveBeenCalledWith('[terminal] ptyhost: could not SIGKILL pid 78: odd'))
+    await vi.waitFor(() => expect(error).toHaveBeenCalledWith('[terminal] ptyhost: could not SIGKILL pid 78: string'))
   })
 })
 

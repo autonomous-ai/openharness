@@ -33,6 +33,7 @@ works the same on a headless Linux server; the app is not required on a machine,
 | `harness device claude status [--json]` · `enable` · `disable` | From the first dial plugged in on this computer, the devices service sets Claude Code up by itself, once, and keeps it current as Harness updates: its `harness-device` plugin and the `dial` skill in each home it knows. These take that away or bring it back. Whether the dial is on for Claude Code: its plugin is on and `disable` has not removed it · clear the removal, install the plugin, or turn it on, and write the skill to `$CLAUDE_CONFIG_DIR/skills/dial/SKILL.md` (`~/.claude` by default) and back into each home the devices service set up · uninstall the plugin and remove the skill from the homes Harness wrote it into, but for a skills folder Codex holds it in; Harness leaves them removed until `enable`. With no `claude` found while the plugin is on, it says so and exits 1. `enable` and `disable` also turn the plugin on or off in each Orca account's Claude Code home; a home that fails says so in one line. A `dial` skill the person wrote is never changed. |
 | `harness device codex status [--json]` · `enable` · `disable` | From the first dial plugged in on this computer, the devices service writes the `dial` skill, which tells Codex of the dial, into each Codex home it knows, once, and keeps it current as Harness updates. These take that away or bring it back. Whether the dial is on for Codex: a dial was plugged in here or `enable` ran, and `disable` has not removed it · clear the removal and write the skill to `$CODEX_HOME/skills/dial/SKILL.md` (`~/.codex` by default) and back into each home the devices service set up · remove the skill from the homes Harness wrote it into, but for a skills folder Claude Code holds it in; Harness leaves it removed until `enable`. A `dial` skill the person wrote is never changed. |
 | `harness device vscode enable` · `disable` · `harness device cursor enable` · `disable` | From the first dial plugged in on this computer, the devices service installs Harness's extension into VS Code and into Cursor by itself, once, through each editor's own CLI, and keeps it current as Harness updates. These take that away or bring it back, one editor at a time: `disable` uninstalls it, and Harness leaves it removed · `enable` clears that and installs it. Each prints one JSON line, `{"vscode":"on","version":"…"}` or `{"cursor":"off"}`. |
+| `harness device orca enable` · `disable` | From the first dial plugged in on this computer, the devices service installs Harness Device's plugin into Orca by itself and keeps it current as Harness updates. Harness approves the plugin in Orca for you: its own worker process and read-only access to your workspaces; an update that asks for more access is not approved. These take that away or bring it back: `disable` uninstalls it, and Harness leaves it removed · `enable` clears that and installs it. Each prints one JSON line, `{"orca":"on"}` or `{"orca":"off"}`. |
 | `harness autonomous-device discover\|status\|list\|pair\|revoke` | Pair Autonomous OS devices found on the LAN, directly, with no relay. |
 | `harness autonomous-device addon state\|propose\|proposal` | Read what a paired device publishes, and propose what it might do ([device add-ons](autonomous-device-addons.md)). |
 
@@ -80,6 +81,15 @@ After the move the Store sets each installed harness up again, two at a time.
 A harness whose setup fails says `Needs setup` on its Store page, and `needs setup` in `harness dsh list`.
 `harness dsh update <owner/name>` or the page's `Update` button sets it up again.
 
+## A state file that cannot be read
+
+- **Trust files** (keys, pairings, linked machines, the trust group, the device log, the sign-in) are left as they are.
+  Harness trusts nobody new from one, and a command that would replace it fails with
+  `✗ <name> cannot be read (<why>)`. `harness status` lists each one after its table:
+  `! <full path> cannot be read (<why>) · move it aside to start over`. Move the file aside and Harness starts that
+  store over; put a good copy back and it reads it again.
+- **Every other state file** is moved to `<name>.unreadable`, where its bytes stay, and Harness starts it empty.
+
 ## The daemon's environment
 
 On macOS and Linux, `harness start` (with or without `-f`) gives the daemon only these variables of the shell that ran
@@ -88,7 +98,7 @@ it. Anything else in that shell never reaches the daemon, its tmux server or a p
 | Group | Variables |
 |---|---|
 | System | `PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `TMPDIR`, `TZ`, `LANG`, `LANGUAGE`, `LC_*`, `SSH_AUTH_SOCK`, `SSH_CONNECTION`, `__CF_USER_TEXT_ENCODING`, `TMUX_TMPDIR`, `ZDOTDIR`, `WSL_DISTRO_NAME` |
-| Linux desktop | `XDG_*`, `DBUS_SESSION_BUS_ADDRESS`, `DISPLAY`, `WAYLAND_DISPLAY`, `XAUTHORITY` |
+| Linux desktop | `XDG_*`, `DBUS_SESSION_BUS_ADDRESS`, `DISPLAY`, `WAYLAND_DISPLAY`, `XAUTHORITY`, `SWAYSOCK`, `HYPRLAND_INSTANCE_SIGNATURE` |
 | Network | `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`, `ALL_PROXY` and their lowercase forms, `NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE`, `SSL_CERT_DIR` |
 | Harness | `HARNESS_*`, `HARNESSD_*`, `ADAPTER_*`, `DOTENV_CONFIG_PATH`, `NODE_ENV`, and every setting of the CLI's config (`BACKEND_WS_URL`, `WEB_URL`, `PORT` and the rest) |
 | Harness OS | `npm_config_prefix`, `BROWSER` |
@@ -392,8 +402,10 @@ agent's `ps` ends with its idle one to read, its busy ones to wait for, or a sta
 most 15 rows (`--all` shows every one).
 A harness waiting on a question or a permission is shown as `needs the person` (JSON keeps `needs-input` and adds
 `needsPerson: true`). An agent Harness cannot follow until the person acts is shown as `held`, with what to do
-(`namedState`; JSON adds `needsPerson: true`): `wait` ends on it with exit 3. A named state Harness recovers from by
-itself does not end `wait`: `show` prints it, and so does `wait` when its time is up. A refusal (`SPAWN_LIMIT`,
+(`namedState`; JSON adds `needsPerson: true`): `wait` ends on it with exit 3. A harness is `starting` until it has
+taken its first task. One whose launch failed is `failed`, with why (`failure`): `wait` ends on it with exit 1; one
+its machine refused ends it with exit 4. A named state Harness recovers from by itself does not end `wait`: `show`
+prints it, and so does `wait` when its time is up. A refusal (`SPAWN_LIMIT`,
 `TURNED_OFF`, `NOT_YOURS`) exits 5, with `code`, `reason` and `next` in its JSON. `harness help agents` prints the
 commands, states, exit codes and rules on one screen, and `harness --help` starts with it when an agent runs it.
 
@@ -440,6 +452,66 @@ Phones & apps).
 
 A `history` or `dismiss` that answers *This needs a newer Harness running here* means the daemon
 still running is an older version: `harness stop && harness start`.
+
+## The dial on Linux
+
+**Starts at login.** The installer leaves a login entry, `~/.config/autostart/harnessd.desktop` (under
+`$XDG_CONFIG_HOME` when that is an absolute path), which runs `harness start` each time you log in. Turn it off where
+your desktop keeps login items (GNOME's Startup Applications, KDE's Autostart); a later install leaves it off. GNOME,
+KDE Plasma, XFCE, Cinnamon, MATE and LXQt run it; sway and Hyprland run it only with `dex` or `uwsm`. A server with
+no desktop session never runs it: use `harness service install`. `harness uninstall` removes the entry when it is
+still the installer's own; a file another app put there stays.
+
+**No access to the dial.** The dial's port belongs to a group (`dialout` on Debian, Ubuntu and Fedora, `uucp` on
+Arch). Desktop's Devices tab and `harness hardware watch` say which step is missing:
+
+| It says | It means |
+|---|---|
+| `No access to the dial. Run: sudo usermod -aG <group> $USER, then log out and in.` | Your account is not in the port's group. |
+| `No access to the dial yet. Log out and in.` | Your account is in the group; this login started before it was. |
+
+**A tap brings the window forward.** A tap focuses the agent's pane, then brings its terminal's or editor's window
+forward. What each desktop needs:
+
+| Desktop | Needs |
+|---|---|
+| sway, Hyprland, KDE Plasma | Nothing to install |
+| X11 (GNOME on X11 too) | `wmctrl` |
+| GNOME on Wayland | The Activate Window By Title extension |
+| Anything else | Nothing works: the tap chooses the pane inside its terminal only |
+
+The daemon's log says which it found, once at start and again when it changes: `[device] raise · sway` (`hyprland`,
+`kwin`, `gnome`, `x11`), or `[device] raise · none · <why>`, `<why>` one of `no desktop session`,
+`gnome without the extension`, `unknown compositor`, `no swaymsg`, `no hyprctl`, `no wmctrl`. A raise that brought
+nothing forward says `[device] raise · <desktop> · failed`, once until a raise ends otherwise.
+
+**Links.** An agent in an app opens by the app's own link, through `xdg-open`, when an app has registered the link's
+scheme (`xdg-mime query default x-scheme-handler/<scheme>`). With none, the tap falls back to the pane.
+
+| Link | Registered by |
+|---|---|
+| `vscode://` | VS Code |
+| `cursor://` | Cursor |
+| `claude://` | The Claude desktop app (Linux beta) |
+| `codex://` | The ChatGPT desktop app (Linux preview); its package also claims `http` and `https`, so it may be offered as a browser |
+
+**kitty.** The dial reaches a kitty window only with remote control on. Add to `kitty.conf`, then restart kitty:
+
+```
+allow_remote_control socket-only
+listen_on unix:/tmp/kitty
+```
+
+kitty adds its pid to that address (`/tmp/kitty-<pid>`), which is fine. An address over 64 characters is not used.
+While remote control is off, the daemon's log says `[device] kitty · remote control off` once.
+
+**Zellij** (0.44). A tap focuses the agent's pane, and the dial's words are typed into it. The dial does not follow
+Zellij's focus: Zellij does not report it.
+
+kitty and Zellij are found on the daemon's `PATH`, else where your login shell finds them, else in the usual install
+folders.
+
+**WezTerm.** The dial's words are typed into the agent's pane.
 
 ## The daemon's control interface
 

@@ -11,12 +11,14 @@
  * - Nothing here holds a credential: each call goes through the Connections bridge (cloud/bridge.ts).
  */
 import { randomBytes } from 'node:crypto'
-import { appendFileSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { appendFileSync, mkdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { CloudCore, CloudPort, CloudResult, ServiceRequests } from '../core/api.js'
 import { CLOUD_AGENT_IDS, CLOUD_AGENTS, SAID_MAX, cloudAgentFrame, cloudRequestRefusal, isCloudAgent, repositoryOf, type CloudAgentId, type CloudCard, type CloudHarness } from '../lib/cloudAgents.js'
 import { deriveTurnSummary } from '../lib/deviceRecap.js'
+import { errorKind } from '../lib/log.js'
 import { splitSummary } from '../lib/recapReads.js'
+import { atomicWriteFile, jsonObject, readState } from '../lib/secureState.js'
 import { connectionFor, connectionsBridge, type Bridge } from './bridge.js'
 import { cursorAdapter } from './cursor.js'
 import { devinAdapter } from './devin.js'
@@ -119,21 +121,26 @@ export function startCloudService(options: CloudServiceOptions) {
   }
 
   const transcriptFile = (agentId: string): string => join(dir, `${agentId}.jsonl`)
+  let unread = false
   const save = (): void => {
+    if (unread) return
     mkdirSync(dir, { recursive: true, mode: 0o700 })
-    const temp = `${stateFile}.${process.pid}.tmp`
-    writeFileSync(temp, JSON.stringify({ harnesses: [...entries.values()].map(({ harness, remote, question, changedAt, creationId }) => ({ harness, remote, question, changedAt, creationId })) }), { mode: 0o600 })
-    renameSync(temp, stateFile)
+    atomicWriteFile(stateFile, JSON.stringify({ harnesses: [...entries.values()].map(({ harness, remote, question, changedAt, creationId }) => ({ harness, remote, question, changedAt, creationId })) }), 'cache')
   }
   const transcript = (agentId: string): TranscriptMessage[] => {
     try {
       return readFileSync(transcriptFile(agentId), 'utf8').split('\n').flatMap((line) => {
-        try { return line ? [JSON.parse(line) as TranscriptMessage] : [] } catch { return [] }
+        // A line of another shape (`null`, a number for its words) is no message: its readers read its words.
+        try {
+          const message = (line ? JSON.parse(line) : null) as TranscriptMessage | null
+          return typeof message?.text === 'string' ? [message] : []
+        } catch { return [] }
       })
     } catch { return [] }
   }
   const record = (entry: Entry, message: TranscriptMessage): void => {
     mkdirSync(dir, { recursive: true, mode: 0o700 })
+    // not a state file: a transcript, appended line by line; its reader skips a torn last line
     appendFileSync(transcriptFile(entry.harness.agentId), `${JSON.stringify(message)}\n`, { mode: 0o600 })
     entry.harness.messages += 1
     if (message.from === 'agent') {
@@ -230,7 +237,7 @@ export function startCloudService(options: CloudServiceOptions) {
     
       entry.failures += 1
       const said = error instanceof CloudError ? error.message : `${CLOUD_AGENTS[entry.harness.agent].name} could not be reached.`
-      log(`[cloud] ${agentId} look failed (${entry.failures}): ${error instanceof Error ? error.name : 'error'}`)
+      log(`[cloud] ${agentId} look failed (${entry.failures}): ${errorKind(error)}`)
       if (entry.harness.activity !== said) { entry.harness.activity = said; touched(entry) }
       schedule(agentId, Math.min(BACKOFF_MAX_MS, WORKING_MS * 2 ** entry.failures))
       return
@@ -403,17 +410,18 @@ export function startCloudService(options: CloudServiceOptions) {
     },
   }
 
-  // The harnesses from before this start: told to the core again, and looked at where one was working.
-  try {
-    const saved = JSON.parse(readFileSync(stateFile, 'utf8')) as { harnesses?: Array<Omit<Entry, 'failures'>> }
-    for (const raw of saved.harnesses ?? []) {
-      if (!raw?.harness?.agentId || !isCloudAgent(raw.harness.agent) || !raw.remote?.id) continue
-      // A harness saved before it kept its last words finds them in its conversation.
-      if (typeof raw.harness.said !== 'string') raw.harness.said = transcript(raw.harness.agentId).filter((message) => message.from === 'agent').at(-1)?.text.slice(0, SAID_MAX) ?? null
-      entries.set(raw.harness.agentId, { harness: raw.harness, remote: raw.remote, question: null, changedAt: raw.changedAt ?? now(), failures: 0, heard: true,
-        ...(typeof raw.creationId === 'string' ? { creationId: raw.creationId } : {}) })
-    }
-  } catch { /* None yet. */ }
+  // The harnesses from before this start: told to the core again, and looked at where one was working. A file that
+  // cannot be read now (EACCES, EMFILE) may name them all: this run keeps its harnesses in memory and writes nothing.
+  const saved = readState(stateFile, 'cache', jsonObject)
+  unread = saved.state === 'unreadable'
+  const harnesses = saved.state === 'ok' && Array.isArray(saved.value.harnesses) ? saved.value.harnesses as Array<Omit<Entry, 'failures'>> : []
+  for (const raw of harnesses) {
+    if (!raw?.harness?.agentId || !isCloudAgent(raw.harness.agent) || !raw.remote?.id) continue
+    // A harness saved before it kept its last words finds them in its conversation.
+    if (typeof raw.harness.said !== 'string') raw.harness.said = transcript(raw.harness.agentId).filter((message) => message.from === 'agent').at(-1)?.text.slice(0, SAID_MAX) ?? null
+    entries.set(raw.harness.agentId, { harness: raw.harness, remote: raw.remote, question: null, changedAt: raw.changedAt ?? now(), failures: 0, heard: true,
+      ...(typeof raw.creationId === 'string' ? { creationId: raw.creationId } : {}) })
+  }
   for (const entry of entries.values()) if (watching(entry)) schedule(entry.harness.agentId, 1_000)
 
   return {

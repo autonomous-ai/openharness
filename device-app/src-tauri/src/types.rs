@@ -54,8 +54,8 @@ pub enum CliState {
     Removed,
 }
 
-/// state.json: `{ "version": 1, "cliSeen", "askedSignIn", "loginItem" }`. Default: version 1, all false. The keys of
-/// the Claude Code and Codex offers an older app wrote are ignored.
+/// state.json: `{ "version": 1, "cliSeen", "askedSignIn", "loginItem", "askedFollow", "askedAx" }`. Default: version
+/// 1, all false. The keys of the Claude Code and Codex offers an older app wrote are ignored.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Saved {
@@ -63,11 +63,24 @@ pub struct Saved {
     pub cli_seen: bool,
     pub asked_sign_in: bool,
     pub login_item: bool,
+    /// The Follow ChatGPT screen opened by itself. Default: a file from an app before it loads as it was.
+    #[serde(default)]
+    pub asked_follow: bool,
+    /// macOS's Accessibility prompt was called: it shows its dialog only the first time.
+    #[serde(default)]
+    pub asked_ax: bool,
 }
 
 impl Default for Saved {
     fn default() -> Self {
-        Saved { version: 1, cli_seen: false, asked_sign_in: false, login_item: false }
+        Saved {
+            version: 1,
+            cli_seen: false,
+            asked_sign_in: false,
+            login_item: false,
+            asked_follow: false,
+            asked_ax: false,
+        }
     }
 }
 
@@ -76,10 +89,9 @@ impl Default for Saved {
 pub enum Screen {
     Install,
     SignIn,
-    Orca,
+    Follow,
 }
 
-/// Asking, Approve and Done are the Orca screen's, with its Failed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Phase {
@@ -87,9 +99,6 @@ pub enum Phase {
     Working,
     Browser,
     Failed,
-    Asking,
-    Approve,
-    Done,
 }
 
 /// What the window draws: `{"screen":"sign_in","phase":"browser","lines":["…"]}`.
@@ -98,13 +107,9 @@ pub struct View {
     pub screen: Screen,
     pub phase: Phase,
     pub lines: Vec<String>,
-    /// The Orca screen of an update. In the JSON only when true, so no other screen's JSON changes.
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
-    pub update: bool,
 }
 
-/// What the window may ask: `"retry" | "sign_in" | "later" | "cancel" | "connect_orca"`. Anything else is refused.
-/// Connect carries no fingerprint: Rust keeps the one of the access the window shows.
+/// What the window may ask: `"retry" | "sign_in" | "later" | "cancel" | "allow"`. Anything else is refused.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Action {
@@ -112,15 +117,13 @@ pub enum Action {
     SignIn,
     Later,
     Cancel,
-    ConnectOrca,
+    Allow,
 }
 
-/// Orca: `Connect Orca…`, or `Update Orca connection…`; one action, two labels.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MenuAction {
     Install,
     SignIn,
-    Orca,
     SoundOn,
     SoundOff,
     NotifyFull,
@@ -130,6 +133,10 @@ pub enum MenuAction {
     About,
     Quit,
     ExportLogs,
+    /// The unchecked Follow ChatGPT item: its screen.
+    FollowChatgpt,
+    /// The checked one: System Settings' Accessibility list.
+    FollowSettings,
 }
 
 /// Text is a disabled line. Check: the action a click does, the label, whether it is checked. Submenu: its label and
@@ -175,16 +182,16 @@ pub struct AppState {
     /// What `harness --version` printed, for the About panel.
     pub cli_version: Option<String>,
     pub logs: LogsExport,
-    pub orca: OrcaState,
+    pub follow: FollowState,
 }
 
-/// The menu's Orca row: `Connect Orca…` (Offer), `Update Orca connection…` (Update), or none.
+/// Following the ChatGPT window, as the menu and the window show it. Waiting: the screen opened by itself waits behind
+/// Install or Sign in.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum OrcaState {
-    #[default]
-    None,
-    Offer,
-    Update,
+pub struct FollowState {
+    pub trusted: bool,
+    pub installed: bool,
+    pub waiting: bool,
 }
 
 /// AuthorizeUrl holds an `https:` URL only (account.rs lets no other through).
@@ -195,64 +202,24 @@ pub enum LoginEvent {
     Done(Result<(), String>),
 }
 
-/// An approval fingerprint as Orca prints one: `ap1-` and 32 lowercase hex digits. Only `parse` makes one: it is the
-/// one argument the app runs that is not fixed text.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Fingerprint(String);
-
-impl Fingerprint {
-    pub fn parse(text: &str) -> Option<Fingerprint> {
-        let digits = text.strip_prefix("ap1-")?;
-        let hex = |byte: u8| matches!(byte, b'0'..=b'9' | b'a'..=b'f');
-        (digits.len() == 32 && digits.bytes().all(hex)).then(|| Fingerprint(text.into()))
-    }
-
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-/// What the Harness Device plugin is in Orca, as `harness device orca status` says.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum OrcaStatus {
-    Absent,
-    Offer,
-    Off,
-    Approve,
-    Behind,
-    Current,
-}
-
-/// The CLI's five codes; anything else it prints is `Failed`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum OrcaError {
-    NotRunning,
-    NoPlugin,
-    Off,
-    Timeout,
-    Failed,
-}
-
-/// What `harness device orca connect` answered. Approve: the access Orca lists, a line each in Orca's words and order,
-/// and whether the plugin is installed already.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum OrcaAnswer {
-    Done,
-    Approve { fingerprint: Fingerprint, grants: Vec<String>, update: bool },
-    Failed(OrcaError),
-}
-
 /// What happened. WatchExit(None): ended by a signal. UpdateChecked(Some): a strictly newer release. InstallStep:
-/// `'static`, so only the step table's fixed copy can be one, never a line of the script's. OrcaConnect and OrcaStatus:
-/// the number of the run that answers, then its answer. OrcaStatus(_, None): the CLI could not say.
+/// `'static`, so only the step table's fixed copy can be one, never a line of the script's.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Event {
-    Tick { now: u64, desktop_running: bool },
-    MenuOpened { now: u64, desktop_installed: bool },
+    Tick {
+        now: u64,
+        desktop_running: bool,
+    },
+    MenuOpened {
+        now: u64,
+        desktop_installed: bool,
+    },
     Cli(bool),
     WatchLine(DialStatus),
     WatchExit(Option<i32>),
-    StartDone { ok: bool },
+    StartDone {
+        ok: bool,
+    },
     InstallStep(&'static str),
     InstallDone(Result<(), Vec<String>>),
     Auth(Option<bool>),
@@ -266,14 +233,18 @@ pub enum Event {
     UpdateInstalled,
     UpdateFailed(UpdateFailure),
     LogsExported(Result<Exported, ExportFailure>),
-    OrcaConnect(u64, OrcaAnswer),
-    OrcaStatus(u64, Option<OrcaStatus>),
+    /// Whether Harness may use Accessibility and the ChatGPT app is installed, at each change.
+    Follow {
+        trusted: bool,
+        installed: bool,
+    },
+    /// ChatGPT came to the front, untrusted, with the dial attached: the cue to offer the screen. It carries nothing of
+    /// the app in front.
+    FollowOffer,
 }
 
 /// What to do about it. Show(None) hides the window. ShowAbout: the About panel, with its credits line. Menu, Show,
-/// ShowAbout, Quit and Relaunch are the binary's. RunOrcaConnect and RunOrcaStatus: the run's number first, which its
-/// answer carries back. RunOrcaConnect(_, Some): only from the Connect click, with the fingerprint of the access the
-/// window showed.
+/// ShowAbout, Quit and Relaunch are the binary's.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Effect {
     FindCli,
@@ -295,8 +266,6 @@ pub enum Effect {
     Log(String),
     CheckUpdate,
     InstallUpdate,
-    RunOrcaConnect(u64, Option<Fingerprint>),
-    RunOrcaStatus(u64),
     Menu(Vec<MenuItem>),
     Show(Option<View>),
     ShowAbout(Option<String>),
@@ -305,6 +274,10 @@ pub enum Effect {
     ExportLogs,
     /// Shows the zip an export wrote.
     Reveal(std::path::PathBuf),
+    /// macOS's Accessibility prompt.
+    AskAx,
+    /// System Settings' Accessibility list.
+    OpenAxSettings,
 }
 
 /// A finished run.
@@ -448,23 +421,13 @@ mod tests {
 
     #[test]
     fn a_view_is_the_json_the_window_reads() {
-        let view = View { screen: Screen::SignIn, phase: Phase::Browser, lines: vec!["Waiting".into()], update: false };
-        // No screen's JSON but the Orca screen's gains a key: `update` is there only when true.
+        let view = View { screen: Screen::SignIn, phase: Phase::Browser, lines: vec!["Waiting".into()] };
         assert_eq!(
             serde_json::to_value(view).unwrap(),
             json!({"screen":"sign_in","phase":"browser","lines":["Waiting"]})
         );
         assert_eq!(serde_json::to_value(Screen::Install).unwrap(), json!("install"));
-        let update = View { screen: Screen::Orca, phase: Phase::Approve, lines: vec!["A".into()], update: true };
-        assert_eq!(
-            serde_json::to_value(update).unwrap(),
-            json!({"screen":"orca","phase":"approve","lines":["A"],"update":true})
-        );
-        let phases = [(Phase::Asking, "asking"), (Phase::Approve, "approve"), (Phase::Done, "done")];
-        for (phase, name) in phases {
-            let view = View { screen: Screen::Orca, phase, lines: Vec::new(), update: false };
-            assert_eq!(serde_json::to_value(view).unwrap(), json!({"screen":"orca","phase":name,"lines":[]}));
-        }
+        assert_eq!(serde_json::to_value(Screen::Follow).unwrap(), json!("follow"));
     }
 
     #[test]
@@ -474,23 +437,20 @@ mod tests {
             ("sign_in", Action::SignIn),
             ("later", Action::Later),
             ("cancel", Action::Cancel),
-            ("connect_orca", Action::ConnectOrca),
+            ("allow", Action::Allow),
         ];
         for (name, action) in asks {
             assert_eq!(serde_json::from_value::<Action>(json!(name)).unwrap(), action);
         }
-        // The offers of Claude Code and Codex are gone, and their buttons with them. Connect carries no fingerprint:
-        // Rust keeps the one Orca answered.
-        let fingerprint = "ap1-0123456789abcdef0123456789abcdef";
+        // The offers of Claude Code, Codex and Orca are gone, and their buttons with them.
         let others = [
             json!("turn_on"),
             json!("not_now"),
+            json!("connect_orca"),
             json!("quit"),
             json!("sh -c x"),
             json!(1),
             Value::Null,
-            json!({ "connect_orca": fingerprint }),
-            json!(format!("connect_orca {fingerprint}")),
         ];
         for other in others {
             assert!(serde_json::from_value::<Action>(other.clone()).is_err(), "{other}");
@@ -498,29 +458,15 @@ mod tests {
     }
 
     #[test]
-    fn a_fingerprint_is_ap1_and_32_hex_digits() {
-        let good = "ap1-0123456789abcdef0123456789abcdef";
-        assert_eq!(Fingerprint::parse(good).as_ref().map(Fingerprint::as_str), Some(good));
-        let hex = &good[4..];
-        let bad = [
-            format!("AP1-{hex}"),
-            format!("ap1-{}", &hex[1..]),
-            format!("ap1-{hex}0"),
-            format!("ap1-{}A", &hex[1..]),
-            format!(" {good}"),
-            format!("{good} "),
-            // 32 bytes, 16 characters.
-            format!("ap1-{}", "é".repeat(16)),
-            String::new(),
-        ];
-        for text in bad {
-            assert_eq!(Fingerprint::parse(&text), None, "{text:?}");
-        }
-    }
-
-    #[test]
     fn state_json_keys() {
-        let keys = json!({ "version": 1, "cliSeen": false, "askedSignIn": false, "loginItem": false });
+        let keys = json!({
+            "version": 1,
+            "cliSeen": false,
+            "askedSignIn": false,
+            "loginItem": false,
+            "askedFollow": false,
+            "askedAx": false
+        });
         assert_eq!(serde_json::to_value(Saved::default()).unwrap(), keys);
         assert_eq!(serde_json::from_value::<Saved>(keys).unwrap(), Saved::default());
     }

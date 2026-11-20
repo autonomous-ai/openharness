@@ -1,10 +1,11 @@
 import { createHash, randomBytes } from 'node:crypto'
-import { existsSync, mkdirSync, readdirSync, renameSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs'
 import { mkdir, realpath, rename, rm, stat } from 'node:fs/promises'
 import { isAbsolute, join } from 'node:path'
 import { z } from 'zod'
 import type { AgentEngine } from '../engines/types.js'
-import { readPrivateStateFile, secureStateDirectory } from '../lib/secureState.js'
+import { errorKind } from '../lib/log.js'
+import { atomicWriteFile, readPrivateStateFile, secureStateDirectory } from '../lib/secureState.js'
 import type { SessionInputDelivery } from '../lib/sessionInput.js'
 import { materializeInputs, snapshotArtifacts } from './artifacts.js'
 import { OrchestratorError, Run, RunId, StartSpec, TaskSpec, requireThat, validatePlan, type Task } from './model.js'
@@ -87,10 +88,8 @@ export class OrchestratorService {
         run.directorWorking = false
         this.runs.set(run.id, run)
       } catch (error) {
-        // Keep corrupt files untouched and refuse a new start with the same id. Not a parse error's message: it
-        // quotes the text around the fault, and a project holds the person's task.
-        const why = error instanceof SyntaxError ? 'it is not JSON' : error instanceof Error ? error.message : 'invalid state'
-        console.warn(`[orchestrator] could not read ${name}: ${why}`)
+        // Keep corrupt files untouched and refuse a new start with the same id.
+        console.warn(`[orchestrator] could not read ${name}: ${errorKind(error)}`)
       }
     }
     this.loaded = true
@@ -106,10 +105,7 @@ export class OrchestratorService {
     const timer = this.dirty.get(run.id)
     if (timer) clearTimeout(timer)
     this.dirty.delete(run.id)
-    const path = join(this.deps.stateDir, `${run.id}.json`)
-    const temporary = `${path}.${randomBytes(6).toString('hex')}.tmp`
-    writeFileSync(temporary, JSON.stringify(run), { mode: 0o600, flag: 'wx' })
-    renameSync(temporary, path)
+    atomicWriteFile(join(this.deps.stateDir, `${run.id}.json`), JSON.stringify(run), 'cache')
   }
   private changed(run: Run, durable = true): void {
     run.revision++
@@ -205,6 +201,7 @@ export class OrchestratorService {
   }
   private async launchDirector(run: Run): Promise<void> {
     try {
+      // not a state file: the director's prompt, created once and only read by the agent
       writeFileSync(join(run.root, 'ORCHESTRATOR.md'), directorPrompt(run, this.catalog(), this.deps.command), { mode: 0o600, flag: 'wx' })
       const result = await this.deps.create({
         engine: run.engine, cwd: run.root, dsh: null, bypassPermission: run.bypassPermission,
@@ -268,6 +265,7 @@ export class OrchestratorService {
       if (task.state !== 'launching' || run.state !== 'active') return
       const harness = this.catalog().find(h => h.id === task.harness)
       requireThat(harness || task.harness === `engine:${run.engine}`, 'HARNESS_UNAVAILABLE', `${task.harness} is no longer installed.`)
+      // not a state file: the worker's prompt, created once and only read by the agent
       writeFileSync(join(task.cwd, 'ORCHESTRATOR_TASK.md'), workerPrompt(run, task, this.deps.command), { mode: 0o600, flag: 'wx' })
       creating = true
       const result = await this.deps.create({

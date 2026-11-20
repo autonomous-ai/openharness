@@ -6,6 +6,17 @@ import { env } from '../config/env.js'
 import { harnessPaneOwner } from './harnessSessionLabel.js'
 import { hookRouteFile, publishHookRoute } from './hookRoutes.js'
 
+// Pass-through, recording what reaches each file: opened, written, or renamed onto.
+const disk = vi.hoisted(() => ({ events: [] as string[] }))
+vi.mock('node:fs', async original => {
+  const actual = await original<typeof import('node:fs')>()
+  return { ...actual,
+    openSync: (...args: Parameters<typeof actual.openSync>) => { disk.events.push(`open ${String(args[0])}`); return actual.openSync(...args) },
+    writeFileSync: (...args: Parameters<typeof actual.writeFileSync>) => { disk.events.push(`write ${String(args[0])}`); return actual.writeFileSync(...args) },
+    renameSync: (...args: Parameters<typeof actual.renameSync>) => { disk.events.push(`rename ${String(args[1])}`); return actual.renameSync(...args) },
+  }
+})
+
 const roots: string[] = []
 afterEach(() => {
   vi.restoreAllMocks()
@@ -90,5 +101,30 @@ describe('hook routes', () => {
     expect(env.HARNESS_HOOK_ROUTES_DIR).toBe(join(process.env.ADAPTER_DATA_DIR!, 'hook-routes'))
     const source = readFileSync(new URL('../config/env.ts', import.meta.url), 'utf8')
     expect(source).toContain("HARNESS_HOOK_ROUTES_DIR: text(harnessPath('hook-routes'))")
+  })
+})
+
+describe('a hook route on disk', () => {
+  it('the save goes through a temporary file renamed onto the target', () => {
+    const base = root()
+    const dir = join(base, 'hook-routes')
+    const dataDir = join(base, 'data')
+    mkdirSync(dataDir)
+    const file = hookRouteFile(harnessPaneOwner(dataDir), dir)
+    disk.events = []
+    publishHookRoute(dataDir, 18473, dir)
+    expect(disk.events.filter((event) => event.endsWith(` ${file}`))).toEqual([`rename ${file}`])
+  })
+
+  it('a file at the old temporary name is left alone', () => {
+    const base = root()
+    const dir = join(base, 'hook-routes')
+    const dataDir = join(base, 'data')
+    mkdirSync(dataDir)
+    mkdirSync(dir)
+    const planted = `${hookRouteFile(harnessPaneOwner(dataDir), dir)}.${process.pid}.tmp`
+    writeFileSync(planted, 'planted')
+    publishHookRoute(dataDir, 18473, dir)
+    expect(readFileSync(planted, 'utf8')).toBe('planted')
   })
 })

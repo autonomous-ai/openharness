@@ -1172,6 +1172,28 @@ describe('the dial that shows one app at a time', () => {
     expect(ids(await host.listAgentSnapshot({ apps: true }))).toEqual(['o2', 'o3', 'o1'])
   })
 
+  it('a rank set to undefined is dropped: an agent that enters next takes no place from it', async () => {
+    const agents = mixed()
+    const host = setup(agents)
+    host.setRank('orca', new Map([['o4', 0], ['o3', 1], ['o1', 2], ['o2', 3]]))
+    expect(ids(await host.listAgentSnapshot({ apps: true }))).toEqual(['o3', 'o1', 'o2'])
+    host.setRank('orca', undefined)
+    agents.push(agent('o4', 'orca'))
+    expect(ids(await host.listAgentSnapshot({ apps: true }))).toEqual(['o3', 'o1', 'o2', 'o4'])
+  })
+
+  it('a dial that does not say appFilter swipes no resting row; the app\'s page still lists them', async () => {
+    const host = setup([
+      agent('g1', 'ghostty', { state: 'working', lastActivityAt: 1 }),
+      ...['c1', 'c2', 'c3'].map((id, i) => agent(id, 'codex', { engine: 'codex', resting: true, lastActivityAt: 10 + i })),
+    ])
+    const all = await host.listAgentSnapshot()
+    expect(ids(all)).toEqual(['g1'])
+    expect(all.total).toBe(1)
+    host.pickApp('codex')
+    expect(ids(await host.listAgentSnapshot({ apps: true }))).toEqual(['c1', 'c2', 'c3'])
+  })
+
   describe('the front app\'s ring scoped (docs/plans/2026-11-18-dial-orca-tab-scope-design.md)', () => {
     const without = (...out: string[]): RingScope => ({ inScope: (id) => !out.includes(id) })
     /** A host over these agents whose settles run when `settle` says. */
@@ -1813,6 +1835,16 @@ describe('the dial that shows one app at a time', () => {
       expect(views).toEqual(['tabs window', 'apps front'])
     })
 
+    it('the app settled in front getting only resting agents turns tabs to apps at the next list a dial that says appFilter reads', async () => {
+      const agents = five()
+      const { host, views } = viewed(agents)
+      onTab(host, ['h1'])
+      settle(host, 'claude')
+      agents.push(agent('c1', 'claude', { resting: true }))
+      await host.listAgentSnapshot({ apps: true })
+      expect(views).toEqual(['tabs window', 'apps front'])
+    })
+
     it('a pick of Harness on an app\'s ring answers tabs and holds as a pick does', async () => {
       const appPicked = vi.fn()
       const { host, views } = viewed(five(), { appPicked })
@@ -2069,6 +2101,19 @@ describe('the dial that shows one app at a time', () => {
       expect(views).toEqual(['apps window', 'tabs empty'])
       settle(host, 'vscode')
       expect(views).toEqual(['apps window', 'tabs empty', 'apps front'])
+    })
+
+    it('a pick of Harness made before the window opened holds with the app in front holding only resting agents', async () => {
+      const { host, views } = viewed([...five(), agent('c1', 'claude', { resting: true }), agent('c2', 'claude', { resting: true })], { sessions })
+      await host.listAgentSnapshot({ apps: true })
+      settle(host, 'claude')
+      expect(host.pickApp('harness')).toBe('switched')
+      onTab(host, ['h1'])
+      expect(views).toEqual(['apps window'])
+      await host.listAgentSnapshot({ apps: true })
+      expect(views).toEqual(['apps window', 'tabs empty'])
+      for (let i = 0; i < 3; i++) await host.listAgentSnapshot({ apps: true })
+      expect(views).toEqual(['apps window', 'tabs empty'])
     })
 
     const H1 = { id: 'h1', name: 'h1', engine: 'claude', machineId: 'mine', machine: 'MacbookPro.local' }
@@ -2536,6 +2581,14 @@ describe('the dial reaches the fleet through the core\'s port', () => {
       expect(JSON.stringify([...failed.heard(), ...none.heard()])).not.toContain('o1')
     })
 
+    // On Linux no bundle names the Claude app or VS Code: its agent's host is the unknown terminal, its app the scan's.
+    it('a failed focus on an agent in an unknown terminal names the app it runs in', async () => {
+      for (const [app, name] of [['claude', 'Claude'], ['vscode', 'VS Code'], ['terminal', 'Terminal']]) {
+        const { host } = setup({ focus: vi.fn(async () => false), list: () => [{ ...scratch, host: 'terminal', app }] })
+        expect(await host.openAgent('o1'), app).toEqual({ ok: false, error: `${name} did not open it.` })
+      }
+    })
+
     it('an open with reason question never calls source.focus', async () => {
       const { host, observed, heard } = setup()
       expect(await host.openAgent('o1', 'question')).toBeUndefined()
@@ -2602,6 +2655,16 @@ describe('the dial reaches the fleet through the core\'s port', () => {
       const none = withPane(async () => 'ok', { showPane: undefined })
       none.host.swipeEnded('o1', 'rest')
       await vi.waitFor(() => expect(none.swiped).toHaveBeenCalledWith('failed'))
+    })
+
+    it('a rest on an agent that has left its pane since the turn shows nothing and tells failed', async () => {
+      let inPane = true
+      const { host, showPane, swiped } = withPane(async () => 'ok', { hasPane: vi.fn((_agent: HostAgent) => inPane) })
+      expect(host.swipeSwitches('o1')).toBe(true)
+      inPane = false
+      host.swipeEnded('o1', 'rest')
+      await vi.waitFor(() => expect(swiped).toHaveBeenCalledWith('failed'))
+      expect(showPane).not.toHaveBeenCalled()
     })
 
     it('nothing of a swipe reaches the fleet or the core\'s doors', async () => {

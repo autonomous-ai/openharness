@@ -282,14 +282,14 @@ describe('where a task goes', () => {
     expect(lines).toEqual([])
   })
 
-  it('logs Jev failing, with what caused it, and decides nothing', async () => {
+  it('logs Jev failing by its kind, and decides nothing', async () => {
     const lines: string[] = []
     const failing = vi.fn(async () => { throw Object.assign(new JevUnavailable('BUSY', 'OpenRouter is busy'), { cause: { code: 'UND_ERR_SOCKET' } }) })
     const verdict = await decideRoute(input({ projects: PROJECTS, agents: AGENTS }), { jev: failing, log: (line) => lines.push(line) })
-    // The verdict says the error alone, for the person; the log says its cause too, for whoever debugs it.
+    // The verdict says the error, for the person; the log says its kind, never its words.
     expect(verdict).toEqual({ kind: 'unavailable', why: 'OpenRouter is busy', weighed: 2 })
-    expect(lines).toEqual(['jev could not answer: OpenRouter is busy (UND_ERR_SOCKET)'])
-    // A cause with no code says its message; no cause, the error alone.
+    expect(lines).toEqual(['jev could not answer: JevUnavailable BUSY'])
+    // An error with no code of its own or in its cause is its type alone.
     const logged = async (error: Error) => {
       const said: string[] = []
       const answer = await decideRoute(input(), { jev: async () => { throw error }, log: (line) => said.push(line) })
@@ -297,11 +297,11 @@ describe('where a task goes', () => {
     }
     expect(await logged(new Error('fetch failed', { cause: { message: 'socket hang up' } }))).toEqual({
       answer: { kind: 'unavailable', why: 'fetch failed', weighed: 2 },
-      said: ['jev could not answer: fetch failed (socket hang up)'],
+      said: ['jev could not answer: Error'],
     })
     expect(await logged(new JevUnavailable('NO_KEY', 'no OpenRouter key on this computer'))).toEqual({
       answer: { kind: 'unavailable', why: 'no OpenRouter key on this computer', weighed: 2 },
-      said: ['jev could not answer: no OpenRouter key on this computer'],
+      said: ['jev could not answer: JevUnavailable NO_KEY'],
     })
     // Without a log it goes the same way.
     await expect(decideRoute(input(), { jev: failing })).resolves.toEqual({ kind: 'unavailable', why: 'OpenRouter is busy', weighed: 2 })

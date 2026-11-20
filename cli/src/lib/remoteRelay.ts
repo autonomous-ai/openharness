@@ -18,7 +18,7 @@ import { BACKEND_IDLE_DEADLINE_MS, watchSocketLiveness, type LivenessWatch } fro
 import type { Frame, LocalClientSink } from '../backendSocket.js'
 import type { AuthSessionManager } from './authRefresh.js'
 import { b64d, type Identity } from './e2ee/core.js'
-import { sid } from './log.js'
+import { errorKind, sid } from './log.js'
 import { DAEMON_LOCAL_ONLY_TYPES, RelayConnectError } from './relayFrames.js'
 
 export { DAEMON_LOCAL_ONLY_TYPES, RelayConnectError }
@@ -397,7 +397,7 @@ export class RemoteRelayPool {
    *  trust us, and it has not denied us DENIED_TRIES times within DENIED_WINDOW_MS yet. */
   private denied(machineId: string): void {
     const pub = this.peers.get(machineId)?.pub
-    if (pub && this.expectsTrust?.(machineId, pub)) {
+    if (pub && this.trustExpected(machineId, pub)) {
       const now = Date.now()
       const recent = (this.denials.get(machineId) ?? []).filter((at) => now - at < DENIED_WINDOW_MS)
       recent.push(now)
@@ -405,7 +405,23 @@ export class RemoteRelayPool {
       if (recent.length < DENIED_TRIES) return
     }
     this.denials.delete(machineId)
-    this.peers.unlink(machineId)
+    try {
+      this.peers.unlink(machineId)
+    } catch (err) {
+      // A pin file that cannot be read or written. Nothing above catches: this runs in the socket's message handler.
+      console.warn(`[relay] could not drop the pin of a machine that denied this one: ${errorKind(err)}`)
+    }
+  }
+
+  /** Whether the device key log says `machineId` should trust this machine. One that cannot be read says no, and the
+   *  pin goes as for any denial: this runs in the socket's message handler, which nothing above catches. */
+  private trustExpected(machineId: string, pub: string): boolean {
+    try {
+      return this.expectsTrust?.(machineId, pub) ?? false
+    } catch (err) {
+      console.warn(`[relay] could not tell whether a machine that denied this one will trust it: ${errorKind(err)}`)
+      return false
+    }
   }
 
   /** Background CLI jobs (a monitor pane polling `agents_list`, a script) must not replace the
@@ -590,7 +606,7 @@ export class RemoteRelayPool {
         return
       } catch (err) {
         // Held in memory (machinePeers.ts) and by the backoff below; never thrown out of here, where nothing would catch it.
-        console.warn(`[relay] could not keep machine=${sid(machineId)} as deleted: ${err instanceof Error ? err.message : String(err)}`)
+        console.warn(`[relay] could not keep machine=${sid(machineId)} as deleted: ${errorKind(err)}`)
       }
     }
     const count = (this.refusals.get(machineId)?.count ?? 0) + 1

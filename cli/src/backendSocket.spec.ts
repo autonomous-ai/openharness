@@ -2666,8 +2666,8 @@ describe('BackendSocket outbound queue', () => {
     socket.onRemoteAppJoined = () => { throw 'not an error' }
     socket.fromGateway.client('r3', { role: 'web', label: null, identity: 'PUB3', direct: false })
     expect(warn.mock.calls.map(([line]) => line)).toEqual([
-      '[backend] re-announcing to a remote app failed: replay broke',
-      '[backend] re-announcing to a remote app failed: not an error',
+      '[backend] re-announcing to a remote app failed: Error',
+      '[backend] re-announcing to a remote app failed: string',
     ])
     expect(socket.remoteClient('r2')?.role).toBe('web')
     expect(socket.remoteClient('r3')?.role).toBe('web')
@@ -3752,6 +3752,16 @@ describe('the models lists pushed to the windows', () => {
     expect((await socket.toProject(agent)).workspace).toBeUndefined()
     socket.workspaceProvider = (s) => (s.sessionId === 'agent:main:plain' ? '/root/.openclaw/workspace' : null)
     expect((await socket.toProject(agent)).workspace).toBe('/root/.openclaw/workspace')
+    await socket.stop()
+  })
+
+  // `harness show/ps/wait/watch` read agents_list, whose frames are built here: they say starting as pushed ones do.
+  it('says an agent is starting in every frame it builds, from the core', async () => {
+    const socket = relaySocket('token')
+    const agent = { agentId: 'a-start', sessionId: 's-start', engine: 'claude', cwd: '/tmp', runtimes: [], registeredAt: 1, active: true } as unknown as RegisteredSession
+    expect((await socket.toProject(agent)).starting).toBe(false)
+    socket.startingProvider = (s) => s.agentId === 'a-start'
+    expect((await socket.toProject(agent)).starting).toBe(true)
     await socket.stop()
   })
 

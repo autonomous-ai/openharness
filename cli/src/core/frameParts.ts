@@ -12,7 +12,7 @@ const RESERVED = new Set(['id', 'agentId', 'sessionId', 'userId', 'name', 'nameC
   'closePlan', 'closeSupported', 'launch', 'identityHold', 'namedState', 'createdAt', 'updatedAt', 'lastOpenedAt',
   'tokenUsage', 'outputStats', 'tmuxPane', 'terminal', 'engine', 'selectedModel', 'workspace', 'grid', 'codexHome',
   'claudeHome', 'launchArgs', 'forkedFrom', 'parentAgentId', 'startedBy', 'forkable', 'resumeMode', 'permissionMode',
-  'bypassPermission', 'namedAgent', 'waitingFor', 'gridLaunch', 'frameEpoch'])
+  'bypassPermission', 'namedAgent', 'waitingFor', 'starting', 'gridLaunch', 'frameEpoch'])
 
 /** Reject oversized/unsafe values before serialization; retain only detached, immutable JSON. */
 function snapshot(fields: unknown, allowed: ReadonlySet<string>): { fields: Fields; wire: string; bytes: number } | null {

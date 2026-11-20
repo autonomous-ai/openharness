@@ -431,11 +431,11 @@ it('discards a queued attach whose binding was forgotten while every reader slot
   expect(run.deps.terminalGone).toHaveBeenCalledOnce()
 })
 
-it.each([new Error('unavailable'), 'unavailable'])('contains a failed core locator without rejecting the binding: %s', async error => {
+it.each([[new Error('unavailable'), 'Error'], ['unavailable', 'string']])('contains a failed core locator without rejecting the binding: %s', async (error, kind) => {
   const log = vi.spyOn(console, 'error').mockImplementation(() => {})
   const run = setup({ cursorDiscovery: { add: vi.fn(async () => { throw error }) } })
   expect(await run.attach.attachSession(session('cursor'))).toBe(true)
-  expect(log).toHaveBeenCalledWith('[cursor-discovery] lookup failed: unavailable')
+  expect(log).toHaveBeenCalledWith(`[cursor-discovery] lookup failed: ${kind}`)
 })
 
 it.each(['terminal probe', 'optional module'] as const)('attaches a newly located Cursor file after its pathless %s was superseded', async phase => {
@@ -1590,7 +1590,7 @@ describe('attaching a session', () => {
         expect(vi.getTimerCount()).toBe(0)
       })
 
-      it.each([new Error('probe failed'), 'probe failed'])('says when it fails: %s', async error => {
+      it.each([[new Error('probe failed'), 'Error'], ['probe failed', 'string']])('says when it fails: %s', async (error, kind) => {
         fakeTimers(); quiet()
         const log = vi.spyOn(console, 'error').mockImplementation(() => {})
         const run = setup(), row = session('claude', transcript([CLAUDE_PROMPT]))
@@ -1600,7 +1600,7 @@ describe('attaching a session', () => {
         vi.mocked(run.deps.terminalGone).mockRejectedValueOnce(error)
         await vi.advanceTimersByTimeAsync(1_000)
         await until(() => log.mock.calls.length > 0)
-        expect(log.mock.calls).toEqual([['[agent] claude-a attach retry failed: probe failed']])
+        expect(log.mock.calls).toEqual([[`[agent] claude-a attach retry failed: ${kind}`]])
         expect(vi.getTimerCount()).toBe(0)
       })
     })
@@ -1917,7 +1917,7 @@ it('keeps normal Stop on its existing path and contains a rejected recovery sche
   expect(run.attach.holdStop(row)).toBe(false)
   vi.spyOn(run.attach.attaches, 'attach').mockRejectedValueOnce(new Error('scheduler unavailable'))
   run.attach.holdInterpretation(row, 'waiting for evidence')
-  await vi.waitFor(() => expect(warn).toHaveBeenCalledWith(expect.stringContaining('scheduler unavailable')))
+  await vi.waitFor(() => expect(warn).toHaveBeenCalledWith('[agent] recovery held: Error'))
   expect(row.interpretationHold).toBe('waiting for evidence')
   run.attach.forget(row.sessionId)
 })
@@ -2086,9 +2086,13 @@ it.each(['missing', 'unavailable', 'rebound', 'failed-after-rebind'])('preserves
     return kind === 'missing' ? null : '/db/store'
   } })
   const unavailable = vi.spyOn(run.others.streams, 'unavailable')
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
   const answer = await run.attach.attachSession(row)
   expect(answer).toBe(kind !== 'rebound')
   expect(unavailable).toHaveBeenCalledTimes(kind === 'unavailable' ? 1 : 0)
+  if (kind === 'unavailable' || kind === 'failed-after-rebind') {
+    expect(warn).toHaveBeenCalledWith('[agent] opencode transcript held · engine=opencode · its store reader is unavailable · Error')
+  }
   expect(inWorker(run, row.sessionId)).toBeUndefined()
 })
 

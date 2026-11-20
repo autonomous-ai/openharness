@@ -6,13 +6,14 @@
  * which would execute the command dispatcher.
  */
 
-import { readFileSync, rmSync } from 'fs'
+import { readFileSync, rmSync, statSync } from 'fs'
 import { homedir, hostname } from 'os'
 import { join } from 'path'
 import { env } from '../config/env.js'
 import { hasAuthSession } from './authSession.js'
 import { readOrMintComputerId } from './computerIdentity.js'
 import { savedDaemonPort } from './daemonRecord.js'
+import { atomicWriteFile, probeState, StateFileUnreadable } from './secureState.js'
 
 export const PID_FILE = join(env.ADAPTER_DATA_DIR, 'adapter.pid')
 /** The daemon's console: the master's and its core's stdout and stderr. Capped (lib/log.ts). */
@@ -27,11 +28,57 @@ export function daemonPort(): number {
   return savedDaemonPort(env.ADAPTER_DATA_DIR, env.PORT)
 }
 
+export type PidFileRead = { state: 'pid'; pid: number } | { state: 'missing' } | { state: 'unreadable' }
+
+/** Digits with whitespace around them, a safe integer above 0; anything else is no pid. */
+export function parsePid(text: string): number | null {
+  const digits = text.trim()
+  if (!/^\d+$/.test(digits)) return null
+  const pid = Number(digits)
+  // 0 names a process group: kill(0, 0) always succeeds.
+  return Number.isSafeInteger(pid) && pid > 0 ? pid : null
+}
+
+/** [parsePid] for the state readers (secureState.ts), which take a file whose text is no pid as unreadable. */
+export function pidOrThrow(text: string): number {
+  const pid = parsePid(text)
+  if (pid === null) throw new TypeError('not a pid')
+  return pid
+}
+
+/** The pid file: a pid, missing, or unreadable, which is never "no daemon": a file mid-write, or a broken one, can
+ *  belong to a daemon that runs. Read with the retry; logs nothing and moves nothing, since only the daemon can say
+ *  whether the file is its own. */
+export function readPidFile(file: string = PID_FILE): PidFileRead {
+  const read = probeState(file, pidOrThrow)
+  if (read.state === 'ok') return { state: 'pid', pid: read.value }
+  return { state: read.state }
+}
+
+/** Written whole: a reader in another process never finds it empty or half there. */
+export function writePidFile(pid: number, file: string = PID_FILE): void {
+  atomicWriteFile(file, `${pid}\n`, 'cache')
+}
+
+let answeredPid: number | null = null
+
+/** The master pid the daemon itself answered with while its pid file could not be read; null takes it back. */
+export function setAnsweredPid(pid: number | null): void {
+  answeredPid = pid
+}
+
+/** The pid file's pid; for a file that cannot be read, the answered pid; else null. */
 export function readPid(): number | null {
-  try {
-    const pid = parseInt(readFileSync(PID_FILE, 'utf-8').trim(), 10)
-    return Number.isFinite(pid) ? pid : null
-  } catch { return null }
+  const read = readPidFile()
+  if (read.state === 'pid') return read.pid
+  return read.state === 'unreadable' ? answeredPid : null
+}
+
+/** When the pid file was written; null when there is none, or when the pid in use is the daemon's answer. On Windows
+ *  the time tells the master from a process given its pid since: a file that cannot be read was not its claim. */
+export function pidFileWrittenMs(): number | null {
+  if (readPidFile().state !== 'pid') return null
+  try { return statSync(PID_FILE).mtimeMs } catch { return null }
 }
 
 export function isAlive(pid: number): boolean {
@@ -74,20 +121,21 @@ export function removePidFileIf(pid: number | undefined, deps: { readPid: () => 
   return true
 }
 
-/** How a command fails, and a core that will not stay up after a failed start: say why, let go of the pid
- *  file if it is this process's, and exit. The CLI's commands and the core's entry both fail this way. */
+/** How a command fails: say why, let go of the pid file if it is this process's, and exit. Commands alone fail
+ *  this way, on the terminal of the person who ran one; a core logs a failed start's kind itself, also one a command
+ *  runs in its own process (core/main.ts `runCoreInForeground`). */
 export const onError = (err: unknown, code = 1): never => {
-  console.error('Failed to start adapter:', err)
-  // A daemon that claimed the pid file (port bound) and then failed to finish starting must not leave
-  // that file naming a corpse — the next `harness start` would refuse on it. Only ours, though.
+  // A trust file that cannot be read is the person's to move aside, not a fault in Harness: no stack, and the
+  // file's full path is in `harness status`, kept out of the error itself.
+  if (err instanceof StateFileUnreadable) {
+    console.error(`✗ ${err.message}`)
+    console.error('  harness status shows where it is')
+  } else {
+    console.error('Failed to start adapter:', err)
+  }
+  // A pid file left naming a process that is gone, the next `harness start` would refuse on. Only ours, though.
   removePidFileIf(process.pid)
   process.exit(code)
-}
-
-/** Is the background daemon process alive right now? (pid file present AND that pid still exists) */
-export function isDaemonRunning(): boolean {
-  const pid = readPid()
-  return pid !== null && isAlive(pid)
 }
 
 // Pre-rename name. Adopted (renamed, keeping the inode) the first time a daemon opens the log, so a

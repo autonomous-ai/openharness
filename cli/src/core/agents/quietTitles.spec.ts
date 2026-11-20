@@ -77,8 +77,8 @@ describe('quiet titles', () => {
     await settled()
     expect(titles.quiet('a1')).toBe(false)
     expect(log.mock.calls).toEqual([
-      ['[terminal-title] read at a quiet edge failed · no tmux server'],
-      ['[terminal-title] read at a quiet edge failed · timed out'],
+      ['[terminal-title] read at a quiet edge failed · Error'],
+      ['[terminal-title] read at a quiet edge failed · string'],
     ])
   })
 

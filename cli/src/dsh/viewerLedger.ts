@@ -13,11 +13,12 @@
  * and the reaper only touches a pid whose live start time agrees with the ledger's.
  */
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { mkdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { env } from '../config/env.js'
 import type { ProcessRow } from '../lib/processTable.js'
 import { ptyHostBinary } from '../lib/ptyHost/launch.js'
+import { atomicWriteFile, jsonArray, readState } from '../lib/secureState.js'
 import { WINDOWS_PS_TIMEOUT_MS, windowsProcessTable } from '../lib/windows/processTable.js'
 import { windowsStartTime } from '../lib/windows/treeKill.js'
 import { killPidGroup } from './shell.js'
@@ -102,37 +103,41 @@ export class ViewerLedger {
   }
 
   read(): ViewerLedgerEntry[] {
-    try {
-      const parsed: unknown = JSON.parse(readFileSync(this.file, 'utf8'))
-      if (!Array.isArray(parsed)) return []
-      return parsed.filter((e): e is ViewerLedgerEntry =>
-        !!e && typeof e === 'object'
-        // > 1, never merely > 0: signalling group -1 is "every process I own".
-        && Number.isInteger((e as ViewerLedgerEntry).pid) && (e as ViewerLedgerEntry).pid > 1
-        && Number.isFinite((e as ViewerLedgerEntry).startedAt)
-        && typeof (e as ViewerLedgerEntry).agentId === 'string'
-        && typeof (e as ViewerLedgerEntry).dshId === 'string'
-        && typeof (e as ViewerLedgerEntry).viewerDir === 'string')
-    } catch { return [] }
+    return this.saved() ?? []
+  }
+
+  /** Null when the ledger cannot be read now: a change then leaves it as it is, so no entry in it is lost. */
+  private saved(): ViewerLedgerEntry[] | null {
+    const read = readState(this.file, 'cache', jsonArray)
+    if (read.state === 'unreadable') return null
+    if (read.state !== 'ok') return []
+    return read.value.filter((e): e is ViewerLedgerEntry =>
+      !!e && typeof e === 'object'
+      // > 1, never merely > 0: signalling group -1 is "every process I own".
+      && Number.isInteger((e as ViewerLedgerEntry).pid) && (e as ViewerLedgerEntry).pid > 1
+      && Number.isFinite((e as ViewerLedgerEntry).startedAt)
+      && typeof (e as ViewerLedgerEntry).agentId === 'string'
+      && typeof (e as ViewerLedgerEntry).dshId === 'string'
+      && typeof (e as ViewerLedgerEntry).viewerDir === 'string')
   }
 
   private write(entries: ViewerLedgerEntry[]): void {
     try {
       mkdirSync(dirname(this.file), { recursive: true })
-      const tmp = `${this.file}.${process.pid}.tmp`
-      writeFileSync(tmp, JSON.stringify(entries, null, 2) + '\n', { mode: 0o600 })
-      renameSync(tmp, this.file)
+      atomicWriteFile(this.file, JSON.stringify(entries, null, 2) + '\n', 'cache')
     } catch { /* best effort: a ledger that cannot be written only means no reaping next time */ }
   }
 
   add(entry: Omit<ViewerLedgerEntry, 'startedAt'> & { startedAt?: number }): void {
     if (!Number.isInteger(entry.pid) || entry.pid <= 1) return
     const startedAt = entry.startedAt ?? (this.deps.now ?? Date.now)()
-    this.write([...this.read().filter((e) => e.pid !== entry.pid), { ...entry, startedAt }])
+    const saved = this.saved()
+    if (saved) this.write([...saved.filter((e) => e.pid !== entry.pid), { ...entry, startedAt }])
   }
 
   remove(pid: number): void {
-    const entries = this.read()
+    const entries = this.saved()
+    if (!entries) return
     const kept = entries.filter((e) => e.pid !== pid)
     if (kept.length !== entries.length) this.write(kept)
   }

@@ -3,10 +3,10 @@
 A menu-bar app for the round dial, for people who do not use the Harness desktop app. People see it as **Harness**:
 only its file stays `Harness Device.app` (`productName`), beside the desktop app's `Harness.app`, and the bundle id,
 binary, release files and update path keep the Harness Device name, so installed apps keep updating. It installs the
-`harness` CLI, keeps the daemon running, shows the dial's state in its menu, and offers sign-in once. While Orca runs
-without Harness's plugin, it offers `Connect Orca…` until Orca is connected, and `Update Orca connection…` when Orca asks
-again. It also exports the logs (`Export logs`), through the CLI. It has no row for Claude Code or Codex: the devices
-service sets them up. Rust and Tauri 2 in `src-tauri/`; the window's three screens are plain TypeScript in `ui/`.
+`harness` CLI, keeps the daemon running, shows the dial's state in its menu, and offers sign-in once and, on a Mac with
+the ChatGPT app, Follow ChatGPT. It also exports the logs (`Export logs`), through the CLI. It has no row for Claude
+Code, Codex or Orca: the devices service sets them up. Rust and Tauri 2 in `src-tauri/`; the window's three screens are
+plain TypeScript in `ui/`.
 
 ## Toolchain
 
@@ -36,29 +36,32 @@ service sets them up. Rust and Tauri 2 in `src-tauri/`; the window's three scree
 - **Thin over the CLI.** The app owns no daemon logic: it runs the `harness` CLI and reads its NDJSON. It also
   fetches its own update manifest (`update.rs`), with nothing from the webview in the request.
 - **Fixed arguments.** The app runs only the CLI it found, the two install lines and `open`, each with arguments
-  fixed in Rust; `logs export --json`, `device orca status --json` and `device orca connect --json` are among them.
-  Nothing from the webview becomes a command line: it sends one of five action names (`retry`, `sign_in`, `later`,
-  `cancel`, `connect_orca`). Two arguments are not fixed text. `open -R` takes the zip the CLI's answer names, kept
-  only when it is an absolute path whose file name is `harness-logs-YYYYMMDD-HHMM.zip` (`logs.rs`); on Linux
-  `xdg-open` takes that zip's folder. The fingerprint after `--approve` is the CLI's own answer, held to
-  `^ap1-[0-9a-f]{32}$` in Rust, never anything from the webview, and the log's name of the run leaves it out. It
+  fixed in Rust; `logs export --json` and
+  `open x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility` are among them. Nothing from the
+  webview becomes a command line: it sends one of five action names (`retry`, `sign_in`, `later`, `cancel`, `allow`).
+  One argument is not fixed text. `open -R` takes the zip the CLI's answer names, kept only when it is an absolute path
+  whose file name is `harness-logs-YYYYMMDD-HHMM.zip` (`logs.rs`); on Linux `xdg-open` takes that zip's folder. It
   relaunches itself through Tauri's restart (`open -n` on its own bundle), and the updater plugin runs `touch` on the
-  bundle after the swap (the `touch` found on the person's PATH); nothing from the webview or the manifest is in
-  either.
+  bundle after the swap (the `touch` found on the person's PATH); nothing from the webview or the manifest is in either.
 - **The app in front is private.** It is written to the watch's stdin and nowhere else (`front.rs`), and never logged.
+  The one Event derived from it is the offer cue, `Event::FollowOffer`: valueless, never logged.
+- **The ChatGPT window's title is private as a tty.** It is written to the watch's stdin and nowhere else
+  (`follow.rs`). A `chatgpt:` log line is fixed words, never a title.
+- **What Accessibility reads.** Only ChatGPT's focused window's `AXTitle`, and only while ChatGPT is in front, a watch
+  runs, the dial is attached and Harness is trusted. It sets nothing and performs no action; `follow.rs`'s test holds
+  `follow_macos.rs` to it.
 - **Fixed scripts.** Every AppleScript is fixed text in `tabs_macos.rs`, for an app from its own list of three. A tty
   passes the tty check and reaches a script only as a handler parameter, never in its text.
 - **A tab's tty is private.** It is written to the watch's stdin and nowhere else. A `tabs:` log line names Terminal,
   iTerm2 or Ghostty, never a tty.
 - **One entitlement.** `src-tauri/Entitlements.plist` holds `com.apple.security.automation.apple-events` and no other
-  key: without it a build signed with the hardened runtime sends no Apple Event.
+  key: without it a build signed with the hardened runtime sends no Apple Event. Accessibility needs none.
 - **One plugin.** `tauri-plugin-updater`, called from Rust only; the capability gives the webview none of it.
 - **One log, redacted.** Every line passes `log::redact`; no email, token, URL query or path of the person's. An
   install logs its step lines (`▸`, `✓`, `✗`, at most 200 a run, each redacted, then cut to 512 characters), each
   run's result and, after a failure, the lines the screen shows; never the rest of what a run prints (`install.rs`).
   An export logs `logs: exported` or `logs: export failed:` and a fixed reason, and the menu's line as `Saved`; never
-  the zip's path. Nothing Orca lists is logged (no grant, name or fingerprint): only `orca: <state>` and
-  `orca connect: <answer>`.
+  the zip's path.
 - **No other component's path in a string.** `scripts/ci-plan.py` reads a quoted path of another component as a
   read of that folder: join path segments one by one, and name other components only in comments.
 - **`HARNESS_DEVICE_CLI`** (the fake CLI for tests) is read by debug builds only.

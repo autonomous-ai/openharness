@@ -19,7 +19,7 @@ retired; only the host routes below were kept.
 | `/agents` | Harness for agents: install, the agent commands with examples and exit codes, the plugin and skill. One plain HTML file, `public/agents/index.html`, with no script |
 | `/llms.txt` | The [llms.txt](https://llmstxt.org) summary for agents, `public/llms.txt` |
 | `/os/latest` | Redirect to the newest complete published OS release; OS tags only, stable preferred, five-minute server lookup cache |
-| `/desktop` | Desktop download page; offers the build for the visitor's OS and CPU (`src/lib/desktopPlatform.ts`), with links to every other build and the CLI command |
+| `/desktop` | Redirects (308) to `/device`: the Harness Device guide replaced the desktop download page (owner, 2026-11-20). `/desktop/download*` and `/desktop/install.sh` below stay |
 | `/hub`, `/hub/following`, `/hub/yours` | Public three-column gallery, followed creators, and your publications; `?q=`, `?category=` and `?sort=popular` narrow and order them |
 | `/hub/:id` | Full-page output viewer (full screen) beside the published conversation, comments or source files, with likes, a copyable link and the harness's public forks |
 | `/hub/:id/fork`, `/hub/:id/download` | Desktop handoff fallback and an optional project ZIP |
@@ -28,7 +28,7 @@ retired; only the host routes below were kept.
 | `/hub/publish` | Review and explicitly publish one portable session snapshot |
 | `/api/community/*` | Same-origin proxy for the backend's community API |
 | `/desktop/download-macos`, `/desktop/download/{macos-arm64,linux-x64,linux-arm64}` | Redirect to the latest build in the desktop manifest (`download-macos` is the Intel build, which every Mac runs; `macos-arm64` the Apple silicon one) |
-| `/device` | Download page for the dial's menu-bar app, Harness: one Download button for macOS |
+| `/device` | The Harness Device guide: set up, use, works with, help, and the release's notes and downloads read from the live device manifest (`src/lib/deviceRelease.ts`, revalidated every minute) |
 | `/device/download-macos` | 302 to the dmg in the device manifest (`harness/device/metadata.json`, field `device-macos-dmg`); 503 until the first release |
 | `/flash-circle.sh` | The dial firmware flasher script |
 | `/install.sh`, `/cli/install.sh`, `/desktop/install.sh` | Redirect to the installers on `cdn.autonomous.ai` |

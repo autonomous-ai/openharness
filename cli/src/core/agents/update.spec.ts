@@ -98,20 +98,20 @@ describe('a model and effort', () => {
     expect(await refused({ onRuntimeProfileUpdate: async () => { throw new Error('pane gone') } }, 'runtime-v1:x')).toEqual([['reply', { error: 'INTERNAL' }]])
   })
 
-  it('logs the name and message of an unexpected profile failure without request contents', async () => {
+  it('logs the kind of an unexpected profile failure, never its message or the request', async () => {
     const error = vi.spyOn(console, 'error').mockImplementation(() => {})
     const { heard, ask } = setup({ onRuntimeProfileUpdate: async () => { throw new TypeError('engine state disappeared') } })
     await ask({ agentId: 'a1', selectedModel: 'runtime-v1:s1:claude:private-model@high' })
     expect(heard).toEqual([['reply', { error: 'INTERNAL' }]])
-    expect(error).toHaveBeenCalledExactlyOnceWith('[agent_update] model update failed: TypeError: engine state disappeared')
+    expect(error).toHaveBeenCalledExactlyOnceWith('[agent_update] model update failed: TypeError')
   })
 
-  it('gives a non-Error exception a safe description', async () => {
+  it('names a non-Error exception by its type', async () => {
     const error = vi.spyOn(console, 'error').mockImplementation(() => {})
     const { heard, ask } = setup({ onRuntimeProfileUpdate: async () => { throw null } })
     await ask({ agentId: 'a1', selectedModel: 'runtime-v1:s1:claude:private-model@high' })
     expect(heard).toEqual([['reply', { error: 'INTERNAL' }]])
-    expect(error).toHaveBeenCalledExactlyOnceWith('[agent_update] model update failed: UnknownError: non-Error exception')
+    expect(error).toHaveBeenCalledExactlyOnceWith('[agent_update] model update failed: object')
   })
 })
 
@@ -154,6 +154,14 @@ describe('authority across durable update waits', () => {
     await ask({ agentId: 'a1', ...(kind === 'model' ? { selectedModel: 'runtime-v1:s1:claude:opus@high' } : { name: 'Kept' }) })
     expect(heard).toEqual([['reply', { error: 'PERSISTENCE_UNCONFIRMED' }]])
     expect(deps.onAgentRename).not.toHaveBeenCalled()
+  })
+
+  it('logs the kind of a failed publication, never its words', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const { deps, ask } = setup()
+    vi.mocked(deps.registry.rename).mockRejectedValueOnce(Object.assign(new Error('/Users/thao/registry.json: no space'), { code: 'ENOSPC' }))
+    await ask({ agentId: 'a1', name: 'Kept' })
+    expect(error).toHaveBeenCalledExactlyOnceWith('[agent_update] explicit choice publication failed · ENOSPC')
   })
 
   it.each(['control', 'model owner', 'rename', 'open', 'frame', 'name frame'] as const)('refuses a replacement during %s', async phase => {

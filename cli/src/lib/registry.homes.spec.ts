@@ -2,7 +2,7 @@ import { releaseRegistryEngine, unbindRegistrySession } from '../testing/registr
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { ENUMERATION_ATTEMPTS } from '../engines/kit/nativeFiles.js'
 
 const fault = vi.hoisted(() => ({ beforeVerify: undefined as (() => void) | undefined, captures: 0,
@@ -14,6 +14,43 @@ vi.mock('node:fs', async original => {
     fault.onDirectoryOpen?.()
     return directory
   } }
+})
+// A slow disk: a registry image that names `slow.image` is synced only once the test waits for the registry's writes.
+// And under load each registry image sync outlives every real wait from 250 ms up to the 5 s write deadline: each
+// one still running fires as the sync returns, if not before.
+const slow = vi.hoisted(() => ({ image: undefined as string | undefined, waited: Promise.resolve(), release: () => {},
+  due: new Map<unknown, () => void>() }))
+vi.mock('node:fs/promises', async original => {
+  const actual = await original<typeof import('node:fs/promises')>()
+  return { ...actual, open: async (...args: Parameters<typeof actual.open>) => {
+    const handle = await actual.open(...args), sync = handle.sync.bind(handle)
+    handle.sync = async () => {
+      await sync()
+      const path = String(args[0])
+      if (!(path.includes('registry.json.') && path.endsWith('.tmp'))) return
+      for (const [timer, fire] of slow.due) { slow.due.delete(timer); fire() }
+      if (slow.image && (await actual.readFile(path, 'utf8')).includes(slow.image)) await slow.waited
+    }
+    return handle
+  } }
+})
+const realTimeout = globalThis.setTimeout, realClear = globalThis.clearTimeout
+function slowTimeout(callback: (...args: unknown[]) => void, ms?: number, ...args: unknown[]) {
+  if (ms === undefined || ms < 250 || ms > 5_000) return realTimeout(callback, ms, ...args)
+  const timer = realTimeout(() => { slow.due.delete(timer); callback(...args) }, ms)
+  slow.due.set(timer, () => { realClear(timer); callback(...args) })
+  return timer
+}
+// The registry expires a write after 5 s. No test here means to, so that timer is never scheduled: how fast this
+// machine writes the registry never fails these tests.
+function ownedTimeout(callback: (...args: unknown[]) => void, ms?: number, ...args: unknown[]) {
+  return ms === 5_000 ? realTimeout(() => {}, 0) : slowTimeout(callback, ms, ...args)
+}
+beforeEach(() => {
+  vi.spyOn(globalThis, 'setTimeout').mockImplementation(ownedTimeout as typeof setTimeout)
+  vi.spyOn(globalThis, 'clearTimeout').mockImplementation(((timer?: Parameters<typeof clearTimeout>[0]) => {
+    slow.due.delete(timer); realClear(timer)
+  }) as typeof clearTimeout)
 })
 vi.mock('node:perf_hooks', async original => ({ ...await original<object>(), performance: { now: () => 0 } }))
 function observeHomeReads(): void { vi.doMock('./engineHomes.js', async original => {
@@ -29,7 +66,7 @@ vi.mock('./processLiveness.js', async original => ({ ...await original<object>()
   processLockIdentity: () => ({ startMarker: 'fixture-start', generationMarker: 'fixture-generation' }), lockOwnerAlive: () => true,
 }))
 let root: string | undefined
-afterEach(() => { fault.beforeVerify = undefined; fault.onDirectoryOpen = undefined; fault.captures = 0; vi.doUnmock('./engineHomes.js'); vi.unstubAllEnvs(); vi.resetModules(); if (root) rmSync(root, { recursive: true, force: true }) })
+afterEach(() => { slow.release(); slow.image = undefined; slow.due.clear(); vi.restoreAllMocks(); fault.beforeVerify = undefined; fault.onDirectoryOpen = undefined; fault.captures = 0; vi.doUnmock('./engineHomes.js'); vi.unstubAllEnvs(); vi.resetModules(); if (root) rmSync(root, { recursive: true, force: true }) })
 
 it('repairs a child-overwritten parent from an adopted Codex home before the login shell is read', async () => {
   // Found by QA on a quiet machine: restart searched only the default home and discarded this parent binding.
@@ -54,6 +91,9 @@ it('repairs a child-overwritten parent from an adopted Codex home before the log
   }]), { mode: 0o600 })
   vi.resetModules()
   const { registry } = await import('./registry.js')
+  slow.image = `rollout-${parentId}.jsonl`; slow.waited = new Promise<void>(done => { slow.release = done })
+  const flush = registry.flush.bind(registry)
+  vi.spyOn(registry, 'flush').mockImplementation(options => { slow.release(); return flush(options) })
   // An ancestor that changes during every look (`ENUMERATION_ATTEMPTS`); one change alone is looked at again.
   let looks = ENUMERATION_ATTEMPTS
   fault.onDirectoryOpen = () => {
@@ -65,13 +105,15 @@ it('repairs a child-overwritten parent from an adopted Codex home before the log
   expect(registry.get(parentId)).toMatchObject({ transcriptPath: child, identityHold: expect.stringContaining('ancestor changed') })
   expect(JSON.parse(readFileSync(join(root, 'registry.json'), 'utf8'))[0].transcriptPath).toBe(child)
   // A changed ancestor is incomplete evidence, even when another CI fixture
-  // caused it. The preserved binding can be repaired by the next fresh read.
-  await vi.waitFor(() => {
-    registry.load()
-    expect(registry.get(parentId)?.transcriptPath).toBe(parent)
-    expect(registry.get(parentId)?.identityHold).toBeUndefined()
-    expect(JSON.parse(readFileSync(join(root!, 'registry.json'), 'utf8'))[0].transcriptPath).toBe(parent)
-  }, { timeout: 3_000 })
+  // caused it. The preserved binding is repaired by the next fresh read, and that repair is saved.
+  registry.load()
+  await registry.flush()
+  expect(registry.get(parentId)?.transcriptPath).toBe(parent)
+  expect(registry.get(parentId)?.identityHold).toBeUndefined()
+  expect(JSON.parse(readFileSync(join(root, 'registry.json'), 'utf8'))[0].transcriptPath).toBe(parent)
+  registry.load()
+  expect(registry.get(parentId)).toMatchObject({ transcriptPath: parent })
+  expect(registry.get(parentId)?.identityHold).toBeUndefined()
 })
 
 

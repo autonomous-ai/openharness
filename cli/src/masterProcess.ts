@@ -21,7 +21,7 @@ import { PROBE_ANSWER, PROBE_TIMEOUT_MS } from './harnessd/reexec.js'
 import { dropAgentSessionEnv } from './lib/agentSessionEnv.js'
 import { ensureUtf8Locale } from './lib/childLocale.js'
 import { acquireSpawnLock, tryAcquireSpawnLockSync } from './lib/daemonSpawnLock.js'
-import { DAEMON_LOG_FILE, HARNESSD_STATUS_FILE, PID_FILE } from './lib/daemonState.js'
+import { DAEMON_LOG_FILE, HARNESSD_STATUS_FILE, PID_FILE, parsePid, readPidFile, writePidFile } from './lib/daemonState.js'
 import { isInstalledCopy } from './lib/installedCopy.js'
 import { unixSocketPath } from './lib/localSocket.js'
 import { refreshNodeReferences } from './lib/nodeReferences.js'
@@ -29,7 +29,7 @@ import { MINIMUM_NODE_MAJOR, managedNodePath, nodeMajorOf } from './lib/nodeRunt
 import { currentCli, harnessLaunchPath } from './lib/windows/installLayout.js'
 import { launchDetached } from './lib/windows/launcher.js'
 import { leanFingerprint, readLeanBundle, releaseLeanClaim, writeLeanBundle, type LeanBundle } from './harnessd/leanBundle.js'
-import { ts } from './lib/log.js'
+import { errorKind, ts } from './lib/log.js'
 import { confirm as confirmUpdate, pendingVersion, putNodeBack, restore as restoreUpdate, unjudgedUpdate } from './lib/selfUpdate.js'
 import { keepStaged, ptyUnjudged, rollBackStaged } from './lib/windows/ptyUpdate.js'
 import { VERSION } from './version.js'
@@ -125,8 +125,7 @@ export function readHandoverPid(pidFile: string = PID_FILE, read: (path: string)
   }
   // A torn or half-written file reads as null, which is harmless: the replacement writes the pid file only before the
   // cutoff, and the old master reads it for its decision at cutoff + 20 s (harnessd/reexec.ts HANDOVER_CUTOFF_MARGIN_MS).
-  const pid = Number.parseInt(text.trim(), 10)
-  return Number.isSafeInteger(pid) && pid > 0 ? pid : null
+  return parsePid(text)
 }
 
 /**
@@ -148,8 +147,8 @@ export function handoverAlive(pid: number, kill: (pid: number, signal: 0) => voi
 
 /**
  * Under harness-launch.exe the master has no stderr: an error that ended it left no word of why. So, once it writes
- * the daemon's log itself, such an error is written there, at once (the process is about to end), and it exits 1, as
- * Node does on an uncaught error or an unhandled rejection.
+ * the daemon's log itself, such an error's kind is written there, at once (the process is about to end), and it exits
+ * 1, as Node does on an uncaught error or an unhandled rejection.
  */
 export function writeFatalTo(
   fd: number,
@@ -158,7 +157,8 @@ export function writeFatalTo(
 ): void {
   const fatal = (what: string) => (error: unknown): void => {
     try {
-      writeSync(fd, `${ts()} [harnessd] the master stopped on ${what}: ${error instanceof Error ? error.stack ?? error.message : format(error)}\n`)
+      // not a state file: the master's last line, appended to its log
+      writeSync(fd, `${ts()} [harnessd] the master stopped on ${what}: ${errorKind(error)}\n`)
     } catch { /* the log cannot be written: the line is lost, never the exit */ }
     exit(1)
   }
@@ -170,9 +170,11 @@ export const processWindowsMasterDeps = (): WindowsMasterDeps => ({
   cliDir: env.ADAPTER_CLI_DIR,
   currentCli: (root) => currentCli(root),
   exists: existsSync,
+  // not a state file: the daemon's log, appended
   openLog: () => openSync(DAEMON_LOG_FILE, 'a'),
   redirect: (fd) => {
     for (const name of ['log', 'info', 'warn', 'error'] as const) {
+      // not a state file: each console line, appended to the daemon's log
       console[name] = (...args: unknown[]) => { try { writeSync(fd, `${format(...args)}\n`) } catch { /* a full disk costs the line */ } }
     }
   },
@@ -201,7 +203,7 @@ export function windowsMaster(scriptPath: string, deps: WindowsMasterDeps = proc
       output = deps.openLog()
     } catch (error) {
       // A log it cannot open (a full disk, a file held by a scan) costs the master its lines, never the daemon.
-      console.error(`${ts()} [harnessd] could not open the daemon log (${error instanceof Error ? error.message : String(error)}) — running without it`)
+      console.error(`${ts()} [harnessd] could not open the daemon log (${errorKind(error)}) — running without it`)
     }
     if (output !== undefined) {
       deps.redirect(output)
@@ -259,6 +261,8 @@ export function startMaster(
     ...windowsConfig,
     ...start,
     pidFile: PID_FILE,
+    writePidFile: (pid) => writePidFile(pid),
+    readPidFile: () => { const read = readPidFile(); return read.state === 'pid' ? read.pid : null },
     statusFile: HARNESSD_STATUS_FILE,
     logFile: DAEMON_LOG_FILE,
     // One probation for whatever the updater staged: the CLI build, the terminal host (Windows), or both. The Node the
@@ -415,7 +419,7 @@ export function startMasterFromBundle(bundlePath: string, deps: BundleMasterDeps
     const lean = readLeanBundle(deps.read(bundlePath))
     written = lean ? { lean, path: deps.write(lean) } : null
   } catch (error) {
-    fromBundle(`the lean bundle could not be written out (${error instanceof Error ? error.message : String(error)}): the master, the core and the services run from ${bundlePath}`)
+    fromBundle(`the lean bundle could not be written out (${errorKind(error)}): the master, the core and the services run from cli.js`)
     return
   }
   if (!written) { fromBundle(`no lean bundle in ${bundlePath}: the master, the core and the services run from it`); return }
@@ -454,6 +458,6 @@ export function startMasterFromBundle(bundlePath: string, deps: BundleMasterDeps
     deps.execve(node, [node, ...process.execArgv, leanPath, '__harnessd'], leanEnv)
   } catch (error) {
     // Only what `process.execve` refuses before it begins: arguments it cannot take.
-    fromBundle(`the master could not re-execute on ${leanPath} (${error instanceof Error ? error.message : String(error)}): it runs from ${bundlePath}, the core and the services from ${leanPath}`, { path: leanPath, fingerprint })
+    fromBundle(`the master could not re-execute on the lean bundle (${errorKind(error)}): it runs from cli.js, the core and the services from the lean bundle`, { path: leanPath, fingerprint })
   }
 }

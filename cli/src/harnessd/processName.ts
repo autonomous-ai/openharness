@@ -17,6 +17,7 @@
  */
 import { linkSync, mkdirSync, realpathSync, renameSync, statSync, unlinkSync } from 'node:fs'
 import { basename, dirname, isAbsolute, join, relative } from 'node:path'
+import { errorKind } from '../lib/log.js'
 
 export { baseNode } from './baseNode.js'
 
@@ -94,6 +95,6 @@ export function namedNode(node: string, name: string, runtimeDir: string | undef
   } catch (error) {
     // A link made but not renamed would otherwise stay behind, one per failed start.
     try { fs.unlink(temp) } catch { /* never made */ }
-    return fallBack(error instanceof Error ? error.message : String(error))
+    return fallBack(errorKind(error))
   }
 }

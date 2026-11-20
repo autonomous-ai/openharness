@@ -17,11 +17,12 @@
  * person's own servers and a grid's web tools, never in their place. A file that does not parse, or that others could
  * write, adds nothing: it is never half-read.
  */
-import { existsSync, lstatSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { existsSync, lstatSync, mkdirSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, isAbsolute, join, relative } from 'node:path'
 import { env } from '../config/env.js'
 import { ENGINES } from '../engines/types.js'
+import { atomicWriteFile } from './secureState.js'
 
 export const MACHINE_MCP_FILE = 'mcp-servers.json'
 /** Engines with a launch path for a machine server in this Harness, read off each binary (below). Another engine in a
@@ -114,16 +115,14 @@ export function readMachineMcp(dataDir: string = env.ADAPTER_DATA_DIR): { server
   return parsed.ok ? { servers: parsed.servers } : { servers: {}, why: `${file}: ${parsed.why}` }
 }
 
-/** Replaced whole, mode 0600 (a 0600 temporary file renamed over it), so a launch never reads half a change. */
+/** Replaced whole, mode 0600, so a launch never reads half a change. */
 export function writeMachineMcp(servers: MachineMcpServers, dataDir: string = env.ADAPTER_DATA_DIR): void {
   const file = machineMcpPath(dataDir)
   const text = `${JSON.stringify({ servers }, null, 2)}\n`
   const parsed = parseMachineMcp(text)
   if (!parsed.ok) throw new Error(parsed.why)
   mkdirSync(dirname(file), { recursive: true, mode: 0o700 })
-  const tmp = `${file}.${process.pid}.tmp`
-  writeFileSync(tmp, text, { mode: 0o600 })
-  renameSync(tmp, file)
+  atomicWriteFile(file, text, 'cache')
 }
 
 /** Whether [cwd] is in one of [projects]' folders (`~/harnesses/<name>`, as Harness makes them). */

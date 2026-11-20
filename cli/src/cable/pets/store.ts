@@ -1,7 +1,9 @@
 import { createHash } from 'node:crypto'
-import { readFileSync, statSync } from 'node:fs'
-import { mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises'
+import { statSync } from 'node:fs'
+import { mkdir, readFile, readdir, rm } from 'node:fs/promises'
 import { basename, extname, join } from 'node:path'
+import { errorKind } from '../../lib/log.js'
+import { atomicWriteFile, atomicWriteJson, jsonObject, readState, requireState } from '../../lib/secureState.js'
 import { convertPet, type ConvertedPet } from './convert.js'
 import { PACK_VERSION, encodePack } from './pack.js'
 import { PET_ROWS, PET_STATES, PetSheetError, parsePetSheet, pickPetRows, readPetSource, resolvePetRows, type PetRows, type PetSheet } from './sheet.js'
@@ -91,13 +93,13 @@ export class PetStore {
           const { pack: fresh } = buildPack(source, (await this.rows(id)) ?? undefined, version)
           // The kept source must make the pack it is named for: never overwrite or hand out another pet's bytes.
           if (fresh.subarray(6, 14).toString('hex') !== id) throw new Error(`rebuilt pack is ${fresh.subarray(6, 14).toString('hex')}, not ${id}`)
-          if (version === PACK_VERSION) await writeAtomic(join(this.dir, `${id}.hpet`), fresh)
+          if (version === PACK_VERSION) atomicWriteFile(join(this.dir, `${id}.hpet`), fresh, 'cache')
           return fresh
         } catch (err) {
           // The pack on disk still serves a dial that reads its version or newer; only an older dial than the file
           // has nothing to be given.
           if (pack[4] > version) throw err
-          console.error(`[pets] could not rebuild ${id} as version ${version}, using the stored version ${pack[4]}: ${err instanceof Error ? err.message : String(err)}`)
+          console.error(`[pets] could not rebuild ${id} as version ${version}, using the stored version ${pack[4]}: ${errorKind(err)}`)
         }
       }
     }
@@ -147,9 +149,9 @@ export class PetStore {
     return this.serial(async () => {
       await mkdir(this.dir, { recursive: true })
       // Each to a temp file and renamed, so a crash never leaves half a pack that pack() would hand to a dial.
-      await writeAtomic(join(this.dir, `${id}.hpet`), pack)
-      await writeAtomic(join(this.dir, `${id}.png`), source)
-      await writeAtomic(join(this.dir, `${id}.json`), JSON.stringify({ name, rows }))
+      atomicWriteFile(join(this.dir, `${id}.hpet`), pack, 'cache')
+      atomicWriteFile(join(this.dir, `${id}.png`), source, 'cache')
+      atomicWriteFile(join(this.dir, `${id}.json`), JSON.stringify({ name, rows }), 'cache')
       this.pending = [...this.pending.filter((p) => p !== id), id].slice(-MAX_PENDING)
       // Previews that were never applied would otherwise pile up: only the newest few are kept beside the mapped ones.
       await this.sweep()
@@ -162,7 +164,7 @@ export class PetStore {
     if (!ID_RE.test(id)) throw new PetStoreError('UNKNOWN_PET', 'That pet is not on this computer any more')
     return this.serial(async () => {
       await this.pack(id) // must exist
-      const next = this.mapping()
+      const next = this.mappingToChange()
       if (target === 'all') next.all = id
       else {
         if (!(target in next.engines) && Object.keys(next.engines).length >= MAX_ENGINES) {
@@ -180,11 +182,21 @@ export class PetStore {
   async reset(target: PetTarget): Promise<PetMapping> {
     checkTarget(target)
     return this.serial(async () => {
-      const next = this.mapping()
+      const next = this.mappingToChange()
       if (target === 'all') next.all = null
       else delete next.engines[target]
       return this.commit(next)
     })
+  }
+
+  /** The mapping a change starts from, read again. One that cannot be read now throws (StateFileUnreadable): read as
+   *  none, the change would drop every other pet. */
+  private mappingToChange(): PetMapping {
+    const file = join(this.dir, 'pets.json')
+    const stamp = stampOf(file)
+    this.map = mappingOf(requireState(file, jsonObject, 'cache'))
+    this.mapStamp = stamp
+    return { all: this.map.all, engines: { ...this.map.engines } }
   }
 
   // Calls run one at a time: each reads the mapping the previous one left.
@@ -197,7 +209,7 @@ export class PetStore {
   private async commit(next: PetMapping): Promise<PetMapping> {
     await mkdir(this.dir, { recursive: true })
     const file = join(this.dir, 'pets.json')
-    await writeAtomic(file, JSON.stringify(next, null, 2))
+    atomicWriteJson(file, next, 'cache')
     this.map = next
     this.mapStamp = stampOf(file)
     await this.sweep()
@@ -241,11 +253,6 @@ function stampOf(file: string): string {
   }
 }
 
-async function writeAtomic(file: string, data: string | Buffer): Promise<void> {
-  await writeFile(`${file}.tmp`, data)
-  await rename(`${file}.tmp`, file)
-}
-
 function checkTarget(target: string): void {
   if (target === 'all') return
   if (!ENGINE_RE.test(target) || FORBIDDEN_ENGINES.has(target)) {
@@ -254,18 +261,19 @@ function checkTarget(target: string): void {
 }
 
 function loadMapping(file: string): PetMapping {
-  const empty: PetMapping = { all: null, engines: {} }
-  try {
-    const raw = JSON.parse(readFileSync(file, 'utf8')) as { all?: unknown; engines?: unknown }
-    const all = typeof raw.all === 'string' && ID_RE.test(raw.all) ? raw.all : null
-    const engines: Record<string, string> = {}
-    if (raw.engines && typeof raw.engines === 'object') {
-      for (const [k, v] of Object.entries(raw.engines)) {
-        if (Object.keys(engines).length < MAX_ENGINES && typeof v === 'string' && ID_RE.test(v) && ENGINE_RE.test(k) && !FORBIDDEN_ENGINES.has(k)) engines[k] = v
-      }
+  // A file that cannot be parsed is set aside and maps nothing, so the next commit cannot replace it unseen.
+  const read = readState(file, 'cache', jsonObject)
+  return mappingOf(read.state === 'ok' ? read.value : null)
+}
+
+function mappingOf(raw: Record<string, unknown> | null): PetMapping {
+  if (!raw) return { all: null, engines: {} }
+  const all = typeof raw.all === 'string' && ID_RE.test(raw.all) ? raw.all : null
+  const engines: Record<string, string> = {}
+  if (raw.engines && typeof raw.engines === 'object') {
+    for (const [k, v] of Object.entries(raw.engines)) {
+      if (Object.keys(engines).length < MAX_ENGINES && typeof v === 'string' && ID_RE.test(v) && ENGINE_RE.test(k) && !FORBIDDEN_ENGINES.has(k)) engines[k] = v
     }
-    return { all, engines }
-  } catch {
-    return empty
   }
+  return { all, engines }
 }

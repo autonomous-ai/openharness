@@ -13,6 +13,36 @@ import {
   type PtyPoller, type PtyUpdaterDeps,
 } from './ptyUpdate.js'
 
+// Pass-through, noting each path written or opened by name and each rename's target; a rename onto a file named
+// [failRenameOnto] fails as a disk error does, and so do the next [failReads] reads of a file named [failReadOf].
+const io = vi.hoisted(() => ({ written: [] as string[], renamedOnto: [] as string[], failRenameOnto: null as string | null,
+  failReadOf: null as string | null, failReads: 0 }))
+vi.mock('node:fs', async (original) => {
+  const actual = await original<typeof import('node:fs')>()
+  const { basename } = await import('node:path')
+  const writeFileSync = (...args: Parameters<typeof actual.writeFileSync>) => {
+    if (typeof args[0] !== 'number') io.written.push(String(args[0]))
+    return actual.writeFileSync(...args)
+  }
+  const openSync = (...args: Parameters<typeof actual.openSync>) => { io.written.push(String(args[0])); return actual.openSync(...args) }
+  const renameSync = (...args: Parameters<typeof actual.renameSync>) => {
+    io.renamedOnto.push(String(args[1]))
+    if (io.failRenameOnto !== null && basename(String(args[1])) === io.failRenameOnto) {
+      throw Object.assign(new Error(`injected EIO onto ${io.failRenameOnto}`), { code: 'EIO' })
+    }
+    return actual.renameSync(...args)
+  }
+  const readFileSync = ((...args: Parameters<typeof actual.readFileSync>) => {
+    if (io.failReads > 0 && basename(String(args[0])) === io.failReadOf) {
+      io.failReads--
+      throw Object.assign(new Error(`injected EIO reading ${io.failReadOf}`), { code: 'EIO' })
+    }
+    return actual.readFileSync(...args)
+  }) as typeof actual.readFileSync
+  const wrapped = { writeFileSync, openSync, renameSync, readFileSync }
+  return { ...actual, ...wrapped, default: { ...actual, ...wrapped } }
+})
+
 let root: string
 let ptyRoot: string
 let bin: string
@@ -29,6 +59,11 @@ beforeEach(() => {
   for (const name of ['harness.exe', 'harness-launch.exe']) writeFileSync(join(bin, name), `old ${name}`)
 })
 afterEach(() => {
+  io.written.length = 0
+  io.renamedOnto.length = 0
+  io.failRenameOnto = null
+  io.failReadOf = null
+  io.failReads = 0
   for (const poller of pollers.splice(0)) poller.stop()
   vi.useRealTimers()
   rmSync(root, { recursive: true, force: true })
@@ -147,9 +182,9 @@ describe('startPtyUpdater', () => {
 
   it('a transient failure is retried next check with no back-off', async () => {
     let prepared = 0
-    const h = harness({ prepare: async (entry) => { prepared++; if (prepared === 1) throw new Error('ECONNRESET'); return stagingFor(entry.version) } })
+    const h = harness({ prepare: async (entry) => { prepared++; if (prepared === 1) throw Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' }); return stagingFor(entry.version) } })
     await vi.waitFor(() => expect(h.staged).toEqual(['0.11.0']), { timeout: 2_000 })
-    expect(h.lines.some((l) => l.includes('check failed') && l.includes('ECONNRESET'))).toBe(true)
+    expect(h.lines.filter((l) => l.includes('check failed'))).toEqual(['[update] terminal host check failed (will retry): ECONNRESET'])
     expect(h.lines.some((l) => l.includes('not trying it again'))).toBe(false)
   })
 
@@ -192,7 +227,23 @@ describe('startPtyUpdater', () => {
     await vi.waitFor(() => expect(h.staged).toEqual(['0.11.0']), { timeout: 2_000 })
     expect(busy).toBe(2)
     expect(h.events.filter((e) => e.startsWith('prepare'))).toHaveLength(1)
-    expect(h.lines.filter((l) => l.includes('terminal host 0.11.0 is ready but the daemon spawn lock is'))).toHaveLength(1)
+    expect(h.lines.filter((l) => l.includes('terminal host 0.11.0 is ready but the daemon spawn lock is')))
+      .toEqual(['[update] terminal host 0.11.0 is ready but the daemon spawn lock is held by an unknown process — trying again next check'])
+  })
+
+  it('a lock this CLI did not make is named in fixed words, never by its path', async () => {
+    let busy = 0
+    const h = harness({
+      withLock: async (fn) => {
+        if (h.events.some((e) => e.startsWith('prepare')) && busy++ === 0) {
+          throw new SpawnLockBusyError(null, 'not a lock this CLI made: C:\\Users\\someone\\.harness\\spawn.lock — remove it by hand (EPERM)')
+        }
+        return fn()
+      },
+    })
+    await vi.waitFor(() => expect(h.staged).toEqual(['0.11.0']), { timeout: 2_000 })
+    expect(h.lines.filter((l) => l.includes('terminal host 0.11.0 is ready but the daemon spawn lock is')))
+      .toEqual(['[update] terminal host 0.11.0 is ready but the daemon spawn lock is not a lock this CLI made — remove it by hand — trying again next check'])
   })
 
   it('readyToStage installs a prepared payload, and returns null when there is none', async () => {
@@ -232,11 +283,11 @@ describe('startPtyUpdater', () => {
   it('readyToStage never holds the CLI up: an install that fails is said and is null', async () => {
     const h = harness({
       withLock: async () => { throw new SpawnLockBusyError(null) },
-      deps: { install: () => { throw new Error('EIO: disk gone') } },
+      deps: { install: () => { throw Object.assign(new Error('EIO: disk gone'), { code: 'EIO' }) } },
     })
     await vi.waitFor(() => expect(h.events).toContain('prepare 0.11.0 unlocked'), { timeout: 2_000 })
     expect(await h.poller.readyToStage()).toBeNull()
-    expect(h.lines.some((l) => l.includes('terminal host 0.11.0') && l.includes('EIO: disk gone'))).toBe(true)
+    expect(h.lines).toContain('[update] terminal host 0.11.0 could not be installed (EIO) — trying again next check')
   })
 
   it('a host on probation is nothing to do: no download, no back-off', async () => {
@@ -445,7 +496,7 @@ describe('the start sweep', () => {
     sweepPtyLeftovers(root, (line) => failed.push(line), fs)
     expect(existsSync(join(bin, 'harness-launch.exe.old-1-1'))).toBe(true)
     expect(existsSync(join(bin, 'harness.exe.old-1-1'))).toBe(true)
-    expect(failed).toEqual(['[update] bin\\harness.exe is missing and harness.exe.old-1-1 could not be put back (held) — nothing is swept until it is'])
+    expect(failed).toEqual(['[update] bin\\harness.exe is missing and harness.exe.old-1-1 could not be put back (EBUSY) — nothing is swept until it is'])
   })
 })
 
@@ -497,7 +548,7 @@ describe("the master's rollback and keep", () => {
   it('says a host it could not keep, whose marker then holds host updates back until a start judges it again', () => {
     onProbation()
     const lines: string[] = []
-    keepStaged({ confirmCli: () => {}, ptyRoot: root, log: (l) => lines.push(l), confirmPty: () => { throw new Error('EPERM') } })
+    keepStaged({ confirmCli: () => {}, ptyRoot: root, log: (l) => lines.push(l), confirmPty: () => { throw Object.assign(new Error('EPERM: operation not permitted'), { code: 'EPERM' }) } })
     expect(lines).toEqual(['[harnessd] could not keep terminal host 0.11.0 (EPERM) — judged again at the next start'])
     expect(ptyOnProbation(root)).toBe('terminal host 0.11.0')
   })
@@ -572,6 +623,24 @@ describe('takeBackPty', () => {
     expect(lines).toEqual(['[update] terminal host 0.11.0 taken back out with the build it came with — back to 0.10.0'])
   })
 
+  it('the save goes through a temporary file renamed onto the target', () => {
+    pairedIn()
+    takeBackPty(root, () => {}, '')
+    const file = join(ptyRoot, 'pty-rejected.json')
+    // The restore's rejection, then its take-back.
+    expect(io.renamedOnto.filter((target) => target === file)).toHaveLength(2)
+    expect(io.written).not.toContain(file)
+  })
+
+  it('a file at the old temporary name is left alone', () => {
+    pairedIn()
+    const planted = join(ptyRoot, `pty-rejected.json.tmp-${process.pid}`)
+    writeFileSync(planted, 'not ours')
+    takeBackPty(root, () => {}, '')
+    expect(readFileSync(planted, 'utf8')).toBe('not ours')
+    expect(rejectedPtyVersions(root)).toEqual([])
+  })
+
   it('says the host stays when the version before it is no longer there to go back to', () => {
     pairedIn()
     rmSync(join(ptyRoot, '0.10.0'), { recursive: true })
@@ -581,10 +650,28 @@ describe('takeBackPty', () => {
     expect(lines).toEqual(['  ✗ terminal host 0.11.0 could not be taken back out: 0.10.0 is no longer there to go back to — it stays'])
   })
 
+  // A read that failed read nothing: had it been taken as no rejection, the rejection from before (a version installed
+  // anyway, by name) would be taken back as if this restore had added it.
+  it('a rejection from before stays when the list cannot be read before the restore: nothing is taken back yet', async () => {
+    const { READ_TRIES } = await import('../secureState.js')
+    pairedIn()
+    writeFileSync(join(ptyRoot, 'pty-rejected.json'), JSON.stringify(['0.11.0']))
+    io.failReadOf = 'pty-rejected.json'
+    io.failReads = READ_TRIES
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const lines: string[] = []
+    takeBackPty(root, (l) => lines.push(l), '  ', '  ✗ ')
+    // Nothing done, and said: the marker stays, and the next master takes it back out.
+    expect(pointer()).toBe('0.11.0')
+    expect(existsSync(join(ptyRoot, 'pty-pending.json'))).toBe(true)
+    expect(rejectedPtyVersions(root)).toEqual(['0.11.0'])
+    expect(lines).toEqual(['  ✗ could not take terminal host 0.11.0 back out (StateFileUnreadable) — it stays on probation: the next master takes it back out, or judges it and may keep it'])
+  })
+
   it('on a failure, says the marker stays for the next master, which may keep it', () => {
     pairedIn()
-    // The rejection the restore records first cannot be written: a folder stands where it goes.
-    mkdirSync(join(ptyRoot, 'pty-rejected.json'))
+    // The rejection the restore records first cannot be written.
+    io.failRenameOnto = 'pty-rejected.json'
     const lines: string[] = []
     takeBackPty(root, (l) => lines.push(l), '  ', '  ✗ ')
     expect(existsSync(join(ptyRoot, 'pty-pending.json'))).toBe(true)
@@ -624,7 +711,7 @@ describe("a master's start: a host this build cannot speak on probation (ptyUnju
     expect(ptyUnjudged(root, { cliPending: true, log: (l) => lines.push(l), protocol: speaks(PTY_PROTOCOL + 1), lock: () => () => {} })).toBe('terminal host 0.11.0')
     expect(ptyUnjudged(root, { cliPending: false, log: (l) => lines.push(l), protocol: speaks(null), lock: () => () => {} })).toBe('terminal host 0.11.0')
     expect(lines).toEqual([])
-    mkdirSync(join(ptyRoot, 'pty-rejected.json'))
+    io.failRenameOnto = 'pty-rejected.json'
     expect(ptyUnjudged(root, { cliPending: false, log: (l) => lines.push(l), protocol: speaks(PTY_PROTOCOL + 1), lock: () => null })).toBe('terminal host 0.11.0')
     expect(lines[0]).toBe('[harnessd] the daemon spawn lock is busy — taking terminal host 0.11.0 back out without it')
     expect(lines.at(-1)).toMatch(/could not take terminal host 0\.11\.0 back out/)

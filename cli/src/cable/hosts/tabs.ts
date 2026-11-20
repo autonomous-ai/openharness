@@ -76,10 +76,11 @@ export function createTabsAdapter(deps: TabsDeps): HostAdapter & Required<Pick<H
     id: 'tabs',
     tap: 'after',
     paneOf(place: Place): Pane | undefined {
-      // In a multiplexer inside the tab app the agent's tty is that pane's, which no tab holds. A session the open scan
-      // found has no host named yet, and its parents named the app.
-      if (place.host !== place.app && place.host !== UNKNOWN_APP) return undefined
-      const tab = tabOf({ app: place.app, tty: place.tty })
+      // In a multiplexer inside the tab app the agent's tty is that pane's pty, which no tab holds: the tab is the one
+      // holding the multiplexer's client, when the place names it. A session the open scan found has no host named yet,
+      // and its parents named the app.
+      if (!place.outer && place.host !== place.app && place.host !== UNKNOWN_APP) return undefined
+      const tab = tabOf(place.outer ?? { app: place.app, tty: place.tty })
       return tab ? { adapter: 'tabs', id: `${tab.app}:${tab.tty}` } : undefined
     },
     // Asked at each look: a watch may have opened or closed the stream since the last one.

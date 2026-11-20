@@ -7,6 +7,7 @@ export type { ShapedQuestion, QuestionRow, QuestionView, ReviewView, PaneView, F
 import { contract as amp } from '../engines/amp/contract.js'
 import { contract as kilo } from '../engines/kilo/contract.js'
 import { isApprovalDialog, walkKeys } from '../engines/kit/questionPane.js'
+import { errorKind } from './log.js'
 function multiSubmitKey(engine: AgentEngine): string { return engine === 'devin' ? 'Enter' : 'Tab' }
 const STEP_MS = 350          // let the TUI repaint between keystrokes
 const TEXT_MS = 250
@@ -274,7 +275,7 @@ export class AskQuestionController {
         native = session ? this.deps.questionControlFor(session) : undefined
         reviewed = payload.expectedQuestions ? structuredClone(payload) : undefined
       } catch (error) {
-        console.warn(`[question] ${sessionId.slice(0, 8)} answer dropped · ${(error as Error).message}`)
+        console.warn(`[question] ${sessionId.slice(0, 8)} answer dropped · ${errorKind(error)}`)
         return failed('The answer could not be prepared. Nothing was typed.')
       }
       const result = await this.drive(terminalTarget, answers, this.deps.getSession(sessionId)?.engine ?? 'claude', payload.allowPermissions !== false, { requestId, owners }, reviewed, native)

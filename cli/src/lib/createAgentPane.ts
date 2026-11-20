@@ -20,11 +20,13 @@ import type { ForkOrigin, RegisteredSession } from './registry.js'
 import type { TerminalBackend } from './terminalBackend.js'
 import type { TerminalCreateResult, TerminalRuntimeRef } from './terminalTypes.js'
 import { terminalRouteKey } from './terminalRuntime.js'
-import { AtomicWriteUnconfirmed, RegistryPersistenceUnavailable } from './registryPersistence.js'
+import { RegistryPersistenceUnavailable } from './registryPersistence.js'
+import { AtomicWriteUnconfirmed } from './secureState.js'
 import type { ExternalResumeIntent } from './externalResume.js'
 import type { WindowsPaneLaunch } from './windows/engineStart.js'
 import type { StartedBy } from './agentAttribution.js'
 import type { LaunchModel } from './launchModel.js'
+import { errorKind } from './log.js'
 
 const DEFAULT_MAX_ATTEMPTS = 3
 
@@ -191,7 +193,7 @@ export async function createAndRegisterPane<Ref extends TerminalRuntimeRef = Ter
       const closed = await deps.tmuxBackend.kill(spawned.runtime)
       if (!(error instanceof RegistryPersistenceUnavailable || error instanceof AtomicWriteUnconfirmed)) throw error
       console.warn(`[agent] create ${deps.engine} not saved · pane ${spawned.runtime.paneId} `
-        + (closed?.state === 'succeeded' ? 'closed' : `close ${closed?.state ?? 'unknown'}`))
+        + (closed?.state === 'succeeded' ? 'closed' : `close ${closed?.state ?? 'unknown'}`) + ` · ${errorKind(error)}`)
       return { ok: false, error: 'PERSISTENCE_UNCONFIRMED', detail: error.message }
     }
     if (pending) return { ok: true, spawned, pending }

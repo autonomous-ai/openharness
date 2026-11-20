@@ -630,7 +630,7 @@ describe('the models service', () => {
         const failure = new Error('catalog unreadable')
         const { ask } = setup([], { agents: { runtimeModels: vi.fn(async () => { throw failure }) } })
         expect(await ask('models_list', { agentId: 's1' })).toEqual({ error: 'INTERNAL' })
-        expect(error).toHaveBeenCalledWith('[backend] dispatch models_list failed:', failure)
+        expect(error).toHaveBeenCalledWith('[backend] dispatch models_list failed:', 'Error')
       })
     })
 
@@ -861,7 +861,7 @@ describe('the models service', () => {
         const log = vi.spyOn(console, 'error').mockImplementation(() => {})
         vi.mocked(linkCodexProfile).mockImplementationOnce(() => { throw new Error('disk full') })
         expect(await ask('codex_profile_link', { path: '/home/me/.codex-work' })).toEqual({ error: 'INTERNAL' })
-        expect(log).toHaveBeenCalledWith('[backend] dispatch codex_profile_link failed:', expect.any(Error))
+        expect(log).toHaveBeenCalledWith('[backend] dispatch codex_profile_link failed:', 'Error')
         log.mockRestore()
       })
 

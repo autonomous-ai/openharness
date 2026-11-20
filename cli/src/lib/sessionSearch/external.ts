@@ -12,6 +12,7 @@
 import { harnessTtys as readHarnessTtys, processAlive, processTtys, processView, scanMemo, type ScanMemo } from './externals/support.js'
 import type { ExternalEngine, ExternalProvider, ExternalSession, OwnerClaim, ProcessView } from './externals/types.js'
 import { externalReadFailed } from './evidence.js'
+import { errorKind } from '../log.js'
 
 export type { ExternalEngine, ExternalOrigin, ExternalProvider, ExternalSession } from './externals/types.js'
 export { processAlive } from './externals/support.js'
@@ -65,7 +66,7 @@ export class ExternalSessions {
       } catch (error) {
         externalReadFailed(error, 'session store')
         // One engine's store failing (locked, mid-migration) keeps what it said last time.
-        this.opts.log?.(`[search] ${provider.engine} sessions not read: ${error instanceof Error ? error.message : error}`)
+        this.opts.log?.(`[search] ${provider.engine} sessions not read: ${errorKind(error)}`)
         all.push(...this.lastGood.get(provider.engine) ?? [])
       }
     }
@@ -100,7 +101,7 @@ export class SessionRows {
         rows = await provider.scan(memo.context())
       } catch (error) {
         externalReadFailed(error, 'session store')
-        this.opts.log?.(`[search] ${engine} sessions not read: ${error instanceof Error ? error.message : error}`)
+        this.opts.log?.(`[search] ${engine} sessions not read: ${errorKind(error)}`)
         continue
       }
       memo.prune()
@@ -228,7 +229,7 @@ export class OpenSessions {
       try {
         for (const claim of await provider.owners(view)) claims.push({ ...claim, engine: provider.engine })
       } catch (error) {
-        this.opts.log?.(`[search] ${provider.engine} owners not read: ${error instanceof Error ? error.message : error}`)
+        this.opts.log?.(`[search] ${provider.engine} owners not read: ${errorKind(error)}`)
       }
     }
     const owners = new Map<string, SessionOwner>()

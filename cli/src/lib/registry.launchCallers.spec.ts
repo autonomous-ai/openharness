@@ -16,7 +16,7 @@ import { restoreAgents, type RestoreAgentsDeps } from './restoreAgents.js'
 import { createRetainExitedSession } from './retainExitedSession.js'
 import { StoppedAgentStore } from './stoppedAgents.js'
 import { MoveGate } from './hostMove/gate.js'
-import { AtomicWriteUnconfirmed } from './registryPersistence.js'
+import { AtomicWriteUnconfirmed } from './secureState.js'
 import type { TerminalBackend } from './terminalBackend.js'
 import { createBinding } from '../core/agents/bind.js'
 import { createStopAgentService } from './stopAgentService.js'
@@ -349,8 +349,8 @@ it('binding revalidation cannot change Stop evidence while its prepared image wa
   const store = new StoppedAgentStore(join(directory, 'revalidation-stop')), jobs = new Map<string, Promise<void>>()
   const binding = createBinding({ registry, mirror: { inheritSummary: vi.fn() }, forgetSession: vi.fn(), clients: { send: vi.fn() },
     attachSession: vi.fn(async () => true), announceSession: announce, stoppedAgents: store, syncRecapPool: vi.fn(),
-    input: { forget: vi.fn(), awaitingConfirmation: () => false }, submitAgent: vi.fn(), deviceInput: { forget: vi.fn() },
-    homes: { copilot: directory, grok: directory, agy: directory }, capturePane: async () => null,
+    input: { forget: vi.fn(), awaitingConfirmation: () => false, waitsForPane: () => false, firstTaskWaiting: () => false, typeCommand: async () => false, expectFirstTask: vi.fn() }, submitFirstTask: vi.fn(), deviceInput: { forget: vi.fn() },
+    homes: { copilot: directory, grok: directory, agy: directory }, capturePane: async () => null, activityRevision: () => undefined,
     openclawPaneRead: vi.fn(), openclawPaneDue: () => false, openclawStateDir: async () => null, followsLive: () => false })
   binding.whileChanging(id => jobs.has(id))
   const nativeEntered = deferred(), nativeDone = deferred(), deleted = vi.fn()

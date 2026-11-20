@@ -8,7 +8,7 @@ import { randomUUID } from 'node:crypto'
 import { engineName } from '../messages/model.js'
 import {
   EXIT, exactly, inspect, list, named, opened, programOf, refuseAgentWithToken, resumedAgent, run, STARTING_MS, UsageError, wantsJson, words,
-  type ClientDeps, type Opened, type Setup,
+  type ClientDeps, type Opened, type Screen, type Setup,
 } from './commands.js'
 import { AgentClientError, type Daemon } from './daemon.js'
 import { outsideCaller, stateOf, type Frame } from './model.js'
@@ -23,8 +23,11 @@ again with its conversation (OpenClaw keeps its --session key, Hermes its resume
 harness new starts it. --fresh closes the one there is and starts a new conversation. A name held by a harness without
 that token is refused NAME_TAKEN. Two ensures of one name at once make one harness.
 The token file is 0600, yours, and holds 32 or more bytes; the token never reaches the harness's terminal.
---json answers {"result":"live"|"resumed"|"new","id","name","engine","engineSession","state":"idle"|"working"|"starting",
-"why"?}: "why" says why a conversation could not go on.
+--json answers {"result":"live"|"resumed"|"new","id","name","engine","engineSession",
+"state":"idle"|"working"|"starting"|"stopped","confirmed"?,"why"?,"whyCode"?}: "state" is the one read last; a resumed
+one is watched up to 15 s and "confirmed" says whether its engine was seen up. "why" says why a conversation could not
+go on, and "whyCode" names it: ENGINE_SESSION_GONE (the engine no longer holds the conversation, so a new one was started),
+HARNESS_GONE (the harness is gone from this computer), ENGINE_EXITED (its engine stopped right after it was opened).
 Then give it words with harness reply <name> ${PROGRAM_TOKEN_FLAG} <path> -- <words>.
 Exit status: 0 ok, 5 refused (NAME_TAKEN, NOT_YOURS, BAD_TOKEN_FILE), 1 failed.
 This computer only.`
@@ -38,9 +41,15 @@ export interface EnsureDeps extends ClientDeps {
   /** Whether a live harness's engine still runs: true, false (its pane is gone, or no engine runs in it), or null when
    *  that cannot be told. `engineRuns` when left out. */
   engineAlive?: (frame: Frame) => Promise<boolean | 'pane-gone' | null>
+  /** Whether OpenClaw's Gateway holds session [key]: true, false, or null when it cannot be asked. `gatewayHolds` when
+   *  left out. */
+  sessionHeld?: (key: string) => Promise<boolean | null>
 }
 
 type EnsureResult = 'live' | 'resumed' | 'new'
+type EnsureState = 'idle' | 'working' | 'starting' | 'stopped'
+/** Why a conversation could not go on, for a program to act on. */
+type WhyCode = 'ENGINE_SESSION_GONE' | 'HARNESS_GONE' | 'ENGINE_EXITED'
 
 /** What the engine resumes the conversation by: OpenClaw's `--session` key, Hermes's session id; null before it has one. */
 function engineSession(frame: Frame): string | null {
@@ -86,11 +95,14 @@ export function ensureCommand(argv: readonly string[], deps: EnsureDeps): Promis
         const held = frames.find((f) => f.status !== 'stopped' && exactly(name)(f) && !same.some((x) => x.frame.id === f.id))
         if (!same.length && held) throw new AgentClientError('NAME_TAKEN', `"${name}" is held by a harness this token does not own. Choose another name.`)
         const live = same.find((x) => x.frame.status !== 'stopped')
-        const say = async (result: EnsureResult, frame: Frame, why?: string): Promise<number> => {
-          const state = result === 'live' ? await stateNow({ daemon: o.daemon, frame }, p.records.get(frame.id)) : 'starting'
-          const answer = { result, id: frame.id, name, engine, engineSession: engineSession(frame), state, ...(why ? { why } : {}),
+        const say = async (result: EnsureResult, frame: Frame, why?: { text: string; code: WhyCode }, settled?: Settled): Promise<number> => {
+          // The state read last, never one assumed: a resumed harness whose engine exited is said stopped (#4484).
+          const state: EnsureState = settled?.state ?? await stateNow({ daemon: o.daemon, frame }, p.records.get(frame.id))
+          const answer = { result, id: frame.id, name, engine, engineSession: engineSession(frame), state,
+            ...(result === 'resumed' ? { confirmed: settled?.confirmed ?? false } : {}),
+            ...(why ? { why: why.text, whyCode: why.code } : {}),
             ...(up.started ? { daemonStarted: true, daemonStartMs: up.ms } : {}) }
-          s.out(json ? JSON.stringify(answer) : `${name}: ${result}${why ? ` (${why})` : ''} · ${engineName(engine)} · ${state} · ${s.now() - began} ms`)
+          s.out(json ? JSON.stringify(answer) : `${name}: ${result}${why ? ` (${why.text})` : ''} · ${engineName(engine)} · ${state} · ${s.now() - began} ms`)
           return EXIT.ok
         }
         // Live by its row, and its engine checked: the daemon learns of an engine killed, or of its pane gone, only on a
@@ -115,29 +127,72 @@ export function ensureCommand(argv: readonly string[], deps: EnsureDeps): Promis
         // Closed: opened again with its conversation, unless a fresh one is asked for.
         const closedOne = flags.has('--fresh') ? undefined : dead ? live : same[0]
         if (closedOne) {
+          // A conversation its engine no longer holds is never resumed: OpenClaw's TUI would print "No session found" and
+          // exit, and every later ensure would open it again for ever (#4484). Unknown (no Gateway to ask) is no answer.
+          const key = engine === 'openclaw' && !flags.has('--local') ? engineSession(closedOne.frame) : null
+          const gone = async () => !!key && await (deps.sessionHeld ?? gatewayHolds)(key) === false
+          if (await gone()) return sessionGone(closedOne.frame, key!, false)
           const resumed = await resumeWhileBusy(s, o, closedOne.frame, name)
-          if (!(resumed instanceof AgentClientError)) {
+          if (!(resumed instanceof AgentClientError) || resumed.code === 'RESUME_UNCONFIRMED') {
+            const frame = resumed instanceof AgentClientError ? closedOne.frame : resumed.frame
             p.records.started(closedOne.frame.id, s.now())
-            return resumed.resumed
-              ? say('resumed', resumed.frame)
-              : say('new', resumed.frame, `${engineName(engine)} could not resume the earlier conversation: the same harness runs in a new one`)
-          }
-          if (resumed.code === 'RESUME_UNCONFIRMED') {
-            p.records.started(closedOne.frame.id, s.now())
-            return say('resumed', closedOne.frame, 'its conversation is not confirmed yet')
+            const settled = await settle(frame, !(resumed instanceof AgentClientError))
+            if (settled.state === 'stopped') {
+              // Its engine exited at once. Gone from the engine's store, the conversation is let go and a new one started;
+              // otherwise it is said stopped, and the next ensure tries it again.
+              if (await gone()) return sessionGone(frame, key!, true)
+              return say('resumed', frame, { text: 'its engine stopped right after it was opened again', code: 'ENGINE_EXITED' }, settled)
+            }
+            return resumed instanceof AgentClientError || resumed.resumed
+              ? say('resumed', frame, undefined, settled)
+              : say('new', frame, { text: `${engineName(engine)} could not resume the earlier conversation: the same harness runs in a new one`, code: 'ENGINE_SESSION_GONE' }, settled)
           }
           // Only a harness that can never be opened again is let go: its record gone, or its conversation. Anything else
           // (a launch that failed, a folder not there just now) is said, and the next ensure tries it again: a new
           // harness in its place would lose the conversation for good.
           if (!GONE_FOR_GOOD.has(resumed.code)) throw resumed
           p.records.forget(closedOne.frame.id)
-          return created(`the earlier harness could not be opened again (${resumed.message})`)
+          return created({ text: `the earlier harness could not be opened again (${resumed.message})`,
+            code: resumed.code === 'AGENT_NOT_FOUND' ? 'HARNESS_GONE' : 'ENGINE_SESSION_GONE' })
         }
         // A fresh start forgets the old one as the program's: it stays closed, and the name is the new one's.
         for (const x of same) p.records.forget(x.frame.id)
         return created()
 
-        async function created(why?: string): Promise<number> {
+        /** [frame] just opened again, watched until its engine is seen up (its pane idle, working or asking) or SETTLE_MS
+         *  pass: stopped when its row or its engine is gone meanwhile. A resume the daemon confirmed whose engine still
+         *  runs when the watch ends is confirmed too: on a slow machine (a lamp's arm64) OpenClaw's TUI is not drawn
+         *  within 15 s, yet the engine that would have exited ("No session found") has stayed up the whole time. */
+        async function settle(frame: Frame, daemonConfirmed: boolean): Promise<Settled> {
+          const until = s.now() + SETTLE_MS
+          for (;;) {
+            const now = (await list(o.daemon, true).catch(() => [] as Frame[])).find((f) => f.id === frame.id)
+            if (now?.status === 'stopped') return { state: 'stopped', confirmed: false }
+            const current = now ?? frame
+            const runs = current.launch?.state === 'starting' ? null : await (deps.engineAlive ?? engineRuns)(current)
+            if (runs === false || runs === 'pane-gone') return { state: 'stopped', confirmed: false }
+            const { screen } = await inspect({ daemon: o.daemon, frame: current })
+            const up = screen === 'idle' || screen === 'working' || screen === 'needs-input'
+            if (up || s.now() >= until) {
+              return { state: stateFrom(screen, current, p.records.get(frame.id)), confirmed: up || (daemonConfirmed && runs === true) }
+            }
+            // Never past SETTLE_MS by a step: a program's own timeout is close behind it.
+            await s.sleep(Math.min(SETTLE_STEP_MS, until - s.now()))
+          }
+        }
+
+        /** [frame]'s conversation gone from OpenClaw's Gateway: what is left of its row closed when [close], the record let
+         *  go, and a new harness started by the same name and token. */
+        async function sessionGone(frame: Frame, key: string, close: boolean): Promise<number> {
+          if (close) {
+            await o.daemon.request('agent_close', { agentId: frame.id, sessionId: frame.sessionId ?? '', createdAt: frame.createdAt ?? '', mode: 'now' }, 60_000)
+              .catch(() => undefined)
+          }
+          p.records.forget(frame.id)
+          return created({ text: `${engineName(engine)} no longer holds the earlier conversation (${key}): a new one was started`, code: 'ENGINE_SESSION_GONE' })
+        }
+
+        async function created(why?: { text: string; code: WhyCode }): Promise<number> {
           const local = flags.get('--local')
           const made = await deps.create([engine, ...(folder ? [folder] : []), '--name', name, PROGRAM_TOKEN_FLAG, p.file,
             ...(typeof local === 'string' ? ['--local', local] : []), '--json'])
@@ -167,6 +222,13 @@ const LOCK_WAIT_MS = 10 * 60_000
 /** How long ensure tries a resume again while the last engine is still stopping (AGENT_BUSY), and how often. */
 export const BUSY_WAIT_MS = 30_000
 const BUSY_STEP_MS = 1_000
+/** How long ensure watches a resumed harness for its engine to stay up, and how often: under 20 s, so a program's own
+ *  timeout of 30 s holds (#4484). */
+export const SETTLE_MS = 15_000
+const SETTLE_STEP_MS = 1_000
+
+/** A resumed harness as last read: its state, and whether its engine was seen up. */
+interface Settled { state: EnsureState; confirmed: boolean }
 
 /**
  * The closed harness opened again, tried again every second while the daemon answers AGENT_BUSY: its last engine is
@@ -187,11 +249,14 @@ async function resumeWhileBusy(s: Setup, o: Opened, frame: Frame, name: string):
 
 /** A live harness's state for `ensure`: idle, working, or still starting (no words taken since its engine started, and
  *  not idle yet). */
-async function stateNow(t: { daemon: Daemon; frame: Frame }, record: ProgramHarness | null): Promise<'idle' | 'working' | 'starting'> {
-  const { screen } = await inspect(t)
+async function stateNow(t: { daemon: Daemon; frame: Frame }, record: ProgramHarness | null): Promise<EnsureState> {
+  return stateFrom((await inspect(t)).screen, t.frame, record)
+}
+
+function stateFrom(screen: Screen | null, frame: Frame, record: ProgramHarness | null): EnsureState {
   if (screen === 'idle') return 'idle'
   const fresh = !record || record.inputs.every((input) => input.takenAt < record.startedAt)
-  return fresh || t.frame.launch?.state === 'starting' ? 'starting' : 'working'
+  return fresh || frame.launch?.state === 'starting' ? 'starting' : 'working'
 }
 
 /** [frame], closed, opened again with its conversation where its engine can (`agent_resume`), as `harness resume` does. */
@@ -223,4 +288,24 @@ export async function engineRuns(frame: Frame): Promise<boolean | 'pane-gone' | 
     .catch(() => null)
   if (!found) return null
   return found.ok ? true : found.unknown ? null : /has no pane$/.test(found.reason) ? 'pane-gone' : false
+}
+
+/**
+ * Whether OpenClaw's Gateway holds session [key], asked as the person asks it (`openclaw gateway call sessions.resolve`):
+ * false only when it refuses with "No session found", null whenever it could not be asked or said anything else.
+ */
+export async function gatewayHolds(key: string, call: (args: string[]) => Promise<{ ok: boolean; said: string }> = openclaw): Promise<boolean | null> {
+  const ran = await call(['gateway', 'call', 'sessions.resolve', '--params', JSON.stringify({ key }), '--json', '--timeout', '10000'])
+  if (ran.ok) return /"ok"\s*:\s*true/.test(ran.said) ? true : null
+  return /No session found/.test(ran.said) ? false : null
+}
+
+/** `openclaw` run with [args], never through a shell: whether it exited 0, and what it printed. */
+async function openclaw(args: string[]): Promise<{ ok: boolean; said: string }> {
+  const { execFile } = await import('node:child_process')
+  return new Promise((done) => {
+    // The Gateway is given 10 s (--timeout); the process 2 s more to start, so an ensure stays inside a caller's 30 s.
+    execFile('openclaw', args, { timeout: 12_000, maxBuffer: 1 << 20 },
+      (error, stdout, stderr) => done({ ok: !error, said: `${String(stdout)}\n${String(stderr)}` }))
+  })
 }

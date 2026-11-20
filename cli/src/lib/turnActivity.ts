@@ -40,6 +40,8 @@ export class TurnActivity {
     runtime(sessionId: string): ActivityRuntime | undefined
     probe(sessionId: string): Promise<ActivityState>
     drain(sessionId: string): Promise<void>
+    /** A turn ended: what its runtime showed until then is not compared with what it shows next. */
+    ended?(sessionId: string): void
     now?: () => number
   }) {}
   private now(): number { return this.deps.now?.() ?? performance.now() }
@@ -76,7 +78,7 @@ export class TurnActivity {
       if (type === 'turn_ended' && entry.state !== 'working') this.set(entry, 'idle')
       return
     }
-    if (type === 'turn_ended') this.set(entry, 'idle')
+    if (type === 'turn_ended') { this.set(entry, 'idle'); this.deps.ended?.(sessionId) }
     // While withheld, records still land (a tool's output, a late reply after the Stop) with no work behind them.
     else if (type === 'turn_started' || (PROGRESS.has(type) && !runtime?.withheld)) this.set(entry, 'working')
   }
@@ -87,14 +89,19 @@ export class TurnActivity {
       validForMs: entry.state === 'working' ? Math.max(0, Math.min(WORK_HEARTBEAT_LEASE_MS, entry.until - this.now())) : 0 }
   }
   forget(sessionId: string): void { this.entries.delete(sessionId) }
-  async check(sessionId: string): Promise<void> {
+  /**
+   * [probe], when given, reads the runtime for this check in place of the one this was built with. [since], when given,
+   * is the revision read before [probe]'s evidence was taken (a capture made before this check): a change since then is
+   * newer than that evidence and wins over it.
+   */
+  async check(sessionId: string, probe = () => this.deps.probe(sessionId), since?: number): Promise<void> {
     const entry = this.entry(sessionId)
     if (!entry || entry.pending) return entry?.pending
     const run = async () => {
       await this.deps.drain(sessionId)
       if (this.entry(sessionId) !== entry) return
-      const revision = entry.revision
-      const result = await this.deps.probe(sessionId)
+      const revision = since ?? entry.revision
+      const result = await probe()
       await this.deps.drain(sessionId)
       // A completion, a new prompt, or a replaced process wins over a probe
       // started before it. Failed reads never mean idle.

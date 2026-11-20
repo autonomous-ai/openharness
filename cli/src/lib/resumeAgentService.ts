@@ -27,6 +27,7 @@ import { isWindowsHeldPane, windowsPaneLaunch } from './windows/engineStart.js'
 import { sameProcessIdentity, sameTerminalPlacement } from './terminalRuntime.js'
 import type { TerminalRuntimeRef } from './terminalTypes.js'
 import { harnessPermissionEnvironment } from './harnessDefaults.js'
+import { errorKind } from './log.js'
 
 export interface ResumeAgentServiceDeps {
   registry: Pick<typeof liveRegistry, 'byAgent' | 'bySession' | 'resumePendingAgent' | 'setLaunch' | 'confirmLaunch'>
@@ -61,13 +62,11 @@ export interface ResumeAgentServiceDeps {
 }
 
 /** A history that could not be prepared, and which check refused it: on 2026-10-26, 10 of 17 failed resumes were
- *  this and nothing said why. The kind goes in the reply for its counter; the message of a typed failure (an engine's
- *  file label and a line number, never conversation text) only to this daemon's log. Any other error is logged by
- *  its class alone: its message can carry a profile path, a token or a line of the conversation (review of #1777). */
+ *  this and nothing said why. The check goes in the reply for its counter and in the log, beside the error's kind:
+ *  never its message, which can carry a profile path, a token or a line of the conversation (review of #1777). */
 function preparationFailed(agent: string, error: unknown) {
   const reason = error instanceof ResumePreparationError ? error.kind : 'other'
-  const said = error instanceof ResumePreparationError ? error.message : error instanceof Error ? error.name : typeof error
-  console.warn(`[resume] ${agent} · resume preparation failed: ${reason}: ${said}`)
+  console.warn(`[resume] ${agent} · resume preparation failed: ${reason}: ${errorKind(error)}`)
   return { ok: false as const, error: 'RESUME_PREPARATION_FAILED', reason,
     detail: reason === 'changed_during' ? 'Codex is still writing this conversation. Try again once it stops.'
       : 'Could not prepare the saved conversation. Its history has been retained.' }
@@ -191,7 +190,7 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
       // names it, and the row's old conversation is not being written any more.
       if (!shell && !hooked && result.resumed) {
         void attachSession(ready).catch((error) => {
-          console.error(`[resume] ${sid(saved.agentId)} attach failed:`, error instanceof Error ? error.message : error)
+          console.error(`[resume] ${sid(saved.agentId)} attach failed:`, errorKind(error))
         })
       }
       return { ...result, session: ready }

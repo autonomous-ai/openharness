@@ -13,9 +13,10 @@
  * also need `programs-reply`?) is one line to change.
  */
 import { createHash, timingSafeEqual } from 'node:crypto'
-import { closeSync, constants, lstatSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { closeSync, constants, lstatSync, mkdirSync, openSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { lockOwnerAlive, lockStartMarker, processLockIdentity, type LockGeneration } from '../lib/processLiveness.js'
+import { atomicWriteFile, jsonObject, readState, requireState } from '../lib/secureState.js'
 import { AgentClientError } from './daemon.js'
 
 /** The least a token holds: 32 bytes, 256 bits, the issue's floor. */
@@ -114,6 +115,12 @@ function harnessOf(value: unknown): ProgramHarness | null {
     createdAt: Number(v.createdAt) || 0, startedAt: Number(v.startedAt) || 0, inputs: inputs.slice(-KEPT_INPUTS) }
 }
 
+function harnessesIn(file: Record<string, unknown> | null): ProgramHarness[] {
+  const rows = (file as Partial<ProgramFile> | null)?.harnesses
+  if (!rows || typeof rows !== 'object') return []
+  return Object.values(rows).map(harnessOf).filter((h): h is ProgramHarness => !!h)
+}
+
 /**
  * The program-owned harnesses of one data folder. Reads are of a small file (one or two harnesses a computer); every
  * write takes the file's lock and replaces the file whole (write, then rename), so a reader never sees half of one.
@@ -124,11 +131,8 @@ export class ProgramRecords {
   get path(): string { return programFilePath(this.dataDir) }
 
   all(): ProgramHarness[] {
-    let parsed: unknown
-    try { parsed = JSON.parse(readFileSync(this.path, 'utf8')) } catch { return [] }
-    const rows = (parsed as Partial<ProgramFile> | null)?.harnesses
-    if (!rows || typeof rows !== 'object') return []
-    return Object.values(rows).map(harnessOf).filter((h): h is ProgramHarness => !!h)
+    const read = readState(this.path, 'cache', jsonObject)
+    return harnessesIn(read.state === 'ok' ? read.value : null)
   }
 
   get(agentId: string): ProgramHarness | null { return this.all().find((h) => h.agentId === agentId) ?? null }
@@ -142,13 +146,12 @@ export class ProgramRecords {
   /** Changes the file under its lock: [change] gets the rows by id and returns nothing; they are written back whole. */
   update(change: (rows: Map<string, ProgramHarness>) => void): void {
     withFileLockSync(`${this.path}.lock`, () => {
-      const rows = new Map(this.all().map((h) => [h.agentId, h]))
+      // A file that cannot be read now throws (StateFileUnreadable): read as none, the write would forget every harness.
+      const rows = new Map(harnessesIn(requireState(this.path, jsonObject, 'cache')).map((h) => [h.agentId, h]))
       change(rows)
       const file: ProgramFile = { v: 1, harnesses: Object.fromEntries(rows) }
       mkdirSync(this.dataDir, { recursive: true })
-      const tmp = `${this.path}.${process.pid}.tmp`
-      writeFileSync(tmp, JSON.stringify(file), { mode: 0o600 })
-      renameSync(tmp, this.path)
+      atomicWriteFile(this.path, JSON.stringify(file), 'cache')
     })
   }
 
@@ -213,6 +216,7 @@ function tryLock(lock: string, mine: string): boolean {
     if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
     return false
   }
+  // not a state file: the lock's owner; a lock that names no one is taken over once stale
   try { writeFileSync(fd, mine) } finally { closeSync(fd) }
   return true
 }

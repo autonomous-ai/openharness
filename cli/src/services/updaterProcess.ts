@@ -23,6 +23,7 @@
 import { env } from '../config/env.js'
 import { SERVICE_EXIT_RESTART, type StagedUpdate, type UpdaterMessage } from '../harnessd/protocol.js'
 import { describeSpawnLockOwner, withSpawnLock } from '../lib/daemonSpawnLock.js'
+import { errorKind } from '../lib/log.js'
 import { baseNode } from '../harnessd/baseNode.js'
 import { ensureNodeMeetsMinimum } from '../lib/runtimeInstall.js'
 import { DOWNLOAD_LIMITS, downloadVerified, isLocalDevBuild, retireCliVersions, startSelfUpdater } from '../lib/selfUpdate.js'
@@ -111,7 +112,7 @@ export function runUpdaterService(_options?: unknown, deps: UpdaterServiceDeps =
   if (!pty && deps.ptyRootDir !== undefined) {
     const root = deps.ptyRootDir
     void withLock(async () => { sweepPtyLeftovers(root, deps.log) })
-      .catch((error: unknown) => deps.log(`[update] could not sweep the terminal host's leftovers (${error instanceof Error ? error.message : String(error)}) — the next start tries again`))
+      .catch((error: unknown) => deps.log(`[update] could not sweep the terminal host's leftovers (${errorKind(error)}) — the next start tries again`))
   }
   // A host the CLI's handover took (`beforeStage`) and has not told yet: if that stage fails, a supported one is told on
   // its own, and a paired one taken back out.
@@ -173,7 +174,7 @@ export function runUpdaterService(_options?: unknown, deps: UpdaterServiceDeps =
     slotSecond: env.ADAPTER_UPDATE_SLOT_SEC,
   })
   // Never in the way of the update itself: a pass that fails is the next start's to repeat.
-  void deps.retire?.().catch((error: unknown) => deps.log(`[update] retiring older CLI builds failed: ${error instanceof Error ? error.message : String(error)}`))
+  void deps.retire?.().catch((error: unknown) => deps.log(`[update] retiring older CLI builds failed: ${errorKind(error)}`))
   // A development build is never replaced (lib/selfUpdate.ts isLocalDevBuild): it said "on" and polled in silence (G5).
   deps.log(isLocalDevBuild(installed)
     ? `[update] self-update off · v${installed} is a development build, which never takes an update`
@@ -195,7 +196,7 @@ function startPty(
   try {
     url = ptyManifestUrl(env.ADAPTER_UPDATE_URL)
   } catch (error) {
-    deps.log(`[update] no terminal host updates: ${error instanceof Error ? error.message : String(error)}`)
+    deps.log(`[update] no terminal host updates: ${errorKind(error)}`)
     return null
   }
   if (key === null) return null

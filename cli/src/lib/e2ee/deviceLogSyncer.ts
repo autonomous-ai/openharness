@@ -31,6 +31,8 @@ import {
 } from './deviceLogStore.js'
 import { devLogHistory, type DevLogHistoryRow } from './deviceHistory.js'
 import { b64d, fingerprint, verify } from './core.js'
+import { errorKind } from '../log.js'
+import { StateFileUnreadable } from '../secureState.js'
 
 export interface DeviceLogFetched { acct: string; head: DevLogHead; entries: unknown[] }
 export type DeviceLogAppendAnswer = { head: DevLogHead } | { error: string; head?: DevLogHead }
@@ -306,7 +308,7 @@ export class DeviceLogSyncer {
         await this.sleep(200 + Math.floor(Math.random() * 800) * (attempt + 1))
       }
     } catch (err) {
-      this.deps.log?.(`[devlog] register failed: ${err instanceof Error ? err.message : String(err)}`)
+      this.deps.log?.(`[devlog] register failed: ${errorKind(err)}`)
     }
   }
 
@@ -314,7 +316,7 @@ export class DeviceLogSyncer {
   refresh(): Promise<void> {
     if (this.refreshing) return this.refreshing
     this.refreshing = this.doRefresh()
-      .catch((err) => { this.deps.log?.(`[devlog] refresh failed: ${err instanceof Error ? err.message : String(err)}`) })
+      .catch((err) => { this.deps.log?.(`[devlog] refresh failed: ${errorKind(err)}`) })
       .finally(() => { this.refreshing = null })
     return this.refreshing
   }
@@ -343,7 +345,7 @@ export class DeviceLogSyncer {
       this.trustState(state, [member])
       return 'trusted'
     } catch (err) {
-      this.deps.log?.(`[devlog] could not read the log for a key: ${err instanceof Error ? err.message : String(err)}`)
+      this.deps.log?.(`[devlog] could not read the log for a key: ${errorKind(err)}`)
       return 'unavailable'
     }
   }
@@ -371,8 +373,14 @@ export class DeviceLogSyncer {
    *  not frozen on an account it was not signed in to. Before that the roster here may still be the
    *  account this machine just left, and handing it out would carry its devices into the new one. */
   current(): boolean {
-    const file = this.deps.store.read()
-    return !file.state || (this.ownsFile(file) && file.frozen?.reason !== 'invalid')
+    try {
+      const file = this.deps.store.read()
+      return !file.state || (this.ownsFile(file) && file.frozen?.reason !== 'invalid')
+    } catch (err) {
+      // A log that cannot be read may be the account this machine left: its reader has said why.
+      if (err instanceof StateFileUnreadable) return false
+      throw err
+    }
   }
 
   /** Whether the file is the log of the sign-in this machine is under (or that cannot be told). Until a
@@ -386,14 +394,36 @@ export class DeviceLogSyncer {
   /** `file`, with every key a fork suspended in another account's kept log, and active in this one,
    *  suspended (and new) here as well: it is not trusted either way, so the list says so — and "It's
    *  mine" lifts it, everywhere (a review of this list does not: it never showed that suspension). */
-  private carrySuspensions(file: DevLogFile): DevLogFile {
+  private carrySuspensions(file: DevLogFile, archived: readonly string[] = this.deps.store.archivedSuspended()): DevLogFile {
     const state = file.state
     if (!state) return file
     const selfPub = this.deps.identity().pub
     const current = file.suspended ?? []
-    const carried = this.deps.store.archivedSuspended().filter((k) => !!state.active[k] && k !== selfPub && !current.includes(k))
+    const carried = archived.filter((k) => !!state.active[k] && k !== selfPub && !current.includes(k))
     if (!carried.length) return file
     return { ...file, suspended: [...current, ...carried], pending: uniq([...(file.pending ?? []), ...carried]) }
+  }
+
+  /** What a fork suspended in the other accounts' kept logs; null when they cannot be read: a key they keep out cannot be
+   *  told from one they do not, so nobody new is trusted from a page meanwhile (its alerts and removals still go). */
+  private keptLogsSuspended(): string[] | null {
+    try {
+      return this.deps.store.archivedSuspended()
+    } catch (err) {
+      if (!(err instanceof StateFileUnreadable)) throw err
+      this.deps.log?.(`[devlog] nobody new is trusted from the log while ${err.base} cannot be read`)
+      return null
+    }
+  }
+
+  /** One thing a page or a review hands on once its head is written. A throw is said and skips nothing after it: a NEW
+   *  DEVICE alert or a removal skipped then is never handed on again, the next read finding nothing new. */
+  private handOn(what: string, step: () => void): void {
+    try {
+      step()
+    } catch (err) {
+      this.deps.log?.(`[devlog] could not ${what}: ${errorKind(err)}`)
+    }
   }
 
   /** `gone`, just taken out by `e`, kept flagged: it was new here and nobody had looked at it yet. */
@@ -519,7 +549,7 @@ export class DeviceLogSyncer {
       const adopted = this.trustState(state, missing)
       if (adopted.length) this.deps.log?.(`[devlog] trusting ${adopted.length} key(s) the log has and this machine did not: ${adopted.map((m) => fp(m.pub)).join(', ')}`)
     } catch (err) {
-      this.deps.log?.(`[devlog] could not trust what the log has: ${err instanceof Error ? err.message : String(err)}`)
+      this.deps.log?.(`[devlog] could not trust what the log has: ${errorKind(err)}`)
     }
   }
 
@@ -566,9 +596,10 @@ export class DeviceLogSyncer {
       }
       if (reset) {
         if (now) {
-          // The departing trust and log are kept, for a sign-in back to that account.
-          this.deps.switchAccount?.(now.acct, got.acct)
+          // The departing log and trust are kept, for a sign-in back to that account. The log first: an archive that
+          // cannot be read stops the switch before the stores move, or every later read would move them again.
           this.deps.store.archive(latest)
+          this.deps.switchAccount?.(now.acct, got.acct)
         }
         // Back to an account this machine was signed in to before: its log as verified then, and every
         // mark on it (frozen, suspended, pending), go on from where they were.
@@ -688,7 +719,7 @@ export class DeviceLogSyncer {
       this.deps.changed?.()
     } catch (err) {
       // The list stays as it was; the next read asks again.
-      this.deps.log?.(`[devlog] could not read which devices were confirmed: ${err instanceof Error ? err.message : String(err)}`)
+      this.deps.log?.(`[devlog] could not read which devices were confirmed: ${errorKind(err)}`)
     }
   }
 
@@ -771,8 +802,10 @@ export class DeviceLogSyncer {
     const conflictOver = !!file.conflict && (!!applied.state.active[selfPub] || !applied.state.active[file.conflict.pub])
     // A key taken into the "already on your account" list after that list was acknowledged: show it.
     const unseen = joining && file.baselineSeen !== false && applied.added.some((m) => m.pub !== selfPub)
+    // Read before the head is written: past that, nothing may throw over an alert or a removal.
+    const archived = this.keptLogsSuspended()
     const { conflict: _c, confirmed: _k, ...rest } = file
-    this.deps.store.write(this.carrySuspensions({
+    const next = this.carrySuspensions({
       ...rest,
       ...(unseen ? { baselineSeen: false } : {}),
       ...(file.conflict && !conflictOver ? { conflict: file.conflict } : {}),
@@ -787,12 +820,16 @@ export class DeviceLogSyncer {
       suspended: this.prune(file.suspended, applied.state),
       ...this.withDeparted(file.departed, departed),
       ...this.keptConfirmed(file.confirmed, applied.state),
-    }))
-    this.trustState(applied.state, bootstrap ? Object.values(applied.state.active) : [...applied.added, ...applied.relabeled])
-    for (const m of applied.removed) this.deps.drop(m.pub)
-    for (const m of toAnnounce) this.deps.announce(m)
-    for (const n of notices) this.deps.removed?.(n)
-    if (applied.state.removed.includes(selfPub)) this.deps.signedOut()
+    }, archived ?? [])
+    this.deps.store.write(next)
+    if (archived) {
+      const members = bootstrap ? Object.values(applied.state.active) : [...applied.added, ...applied.relabeled]
+      this.handOn('trust the keys the log added', () => this.trustState(applied.state, members, [...(next.suspended ?? []), ...archived]))
+    }
+    for (const m of applied.removed) this.handOn(`stop trusting ${fp(m.pub)}`, () => this.deps.drop(m.pub))
+    for (const m of toAnnounce) this.handOn(`announce ${fp(m.pub)}`, () => this.deps.announce(m))
+    for (const n of notices) this.handOn(`say ${n.fingerprint} was removed`, () => this.deps.removed?.(n))
+    if (applied.state.removed.includes(selfPub)) this.handOn('sign out', () => this.deps.signedOut())
     void this.carryOverTombstones(applied.state)
     this.deps.changed?.()
     // Its holder gone, this machine takes its own place in the account.
@@ -801,9 +838,8 @@ export class DeviceLogSyncer {
   }
 
   /** Trust those of `members` the log leaves active and nothing here holds back; returns them. */
-  private trustState(state: DevLogState, members: DevLogMember[]): DevLogMember[] {
+  private trustState(state: DevLogState, members: DevLogMember[], suspended: readonly string[] = this.suspendedKeys()): DevLogMember[] {
     const selfPub = this.deps.identity().pub
-    const suspended = this.suspendedKeys()
     const adopt = members.filter((m) => m.pub !== selfPub && state.active[m.pub] && !suspended.includes(m.pub)
       && !this.deps.blocked(m.pub) && !this.deps.tombstoned(m.pub))
     if (adopt.length) this.deps.adopt(adopt)
@@ -876,6 +912,11 @@ export class DeviceLogSyncer {
     // that drop's `onDropped` asks again at once — begun right away, the second ask found no entry and
     // appended its own removal, and this one came back NOT_IN_LOG for a key it had just taken out.
     const task = Promise.resolve().then(() => this.removeOnce(pub))
+      // A log that cannot be read is an answer, not a throw: most callers start a removal and do not wait for it.
+      .catch((err: unknown): DeviceLogRemoveResult => {
+        if (err instanceof StateFileUnreadable) return { ok: false, error: 'UNAVAILABLE', detail: err.message }
+        throw err
+      })
       .finally(() => { this.removing.delete(pub); this.inFlightRemovals.delete(pub) })
     this.inFlightRemovals.set(pub, task)
     return task
@@ -961,7 +1002,7 @@ export class DeviceLogSyncer {
         this.deps.log?.(`[devlog] removed unused device ${m.label || '(no name)'} (${fp(m.pub)}), ${when}`)
       }
     } catch (err) {
-      this.deps.log?.(`[devlog] sweep failed: ${err instanceof Error ? err.message : String(err)}`)
+      this.deps.log?.(`[devlog] sweep failed: ${errorKind(err)}`)
     }
   }
 
@@ -1031,6 +1072,8 @@ export class DeviceLogSyncer {
         this.deps.switchAccount?.(file.state.acct, next.acct)
         this.deps.store.archive(file)
       }
+      // Read before the reviewed list is written: past that, nothing may throw over an alert or a removal.
+      const archived = this.keptLogsSuspended()
       const { joining: _j, ...rest } = base
       const reviewed: DevLogFile = this.carrySuspensions({
         ...rest,
@@ -1044,14 +1087,14 @@ export class DeviceLogSyncer {
         looseRemoved: [], reviewedSeq: next.head.seq,
         ...this.withDeparted(base.departed, this.reviewDeparted(base, next, parsed, removed, selfPub, preLog)),
         ...(signIn ? { owner: signIn.epoch } : {}),
-      })
+      }, archived ?? [])
       if (!kept || !this.deps.store.restore(next.acct, () => reviewed)) this.deps.store.write(reviewed)
-      this.trustState(next, Object.values(next.active))
-      for (const m of removed) this.deps.drop(m.pub)
+      if (archived) this.handOn('trust the reviewed list', () => this.trustState(next, Object.values(next.active), [...(reviewed.suspended ?? []), ...archived]))
+      for (const m of removed) this.handOn(`stop trusting ${fp(m.pub)}`, () => this.deps.drop(m.pub))
       // The review is done: what a fork suspended is trusted again, along with the rest of the log —
       // after the drops, so a key the reviewed log removed is not pinned again on the way out.
-      this.deps.resume?.()
-      for (const m of toAnnounce) this.deps.announce(m)
+      this.handOn('trust the roster again', () => this.deps.resume?.())
+      for (const m of toAnnounce) this.handOn(`announce ${fp(m.pub)}`, () => this.deps.announce(m))
       this.deps.changed?.()
     }
     return { head: next.head, added, removed }
@@ -1210,7 +1253,7 @@ export class DeviceLogSyncer {
       if (!kept) this.deps.log?.(`[devlog] could not tell your other devices that ${member.label || '(no name)'} (${fp(pub)}) is yours: they still show it as new`)
       return kept
     } catch (err) {
-      this.deps.log?.(`[devlog] could not share "It's mine": ${err instanceof Error ? err.message : String(err)}`)
+      this.deps.log?.(`[devlog] could not share "It's mine": ${errorKind(err)}`)
       return false
     }
   }

@@ -11,11 +11,12 @@
  * mid-write) or `harness uninstall` is at work (a daemon holds the files being removed), whichever supervisor runs it:
  * this scheduled task or the Harness Device app.
  */
-import { readdirSync, readFileSync, rmSync, statSync } from 'node:fs'
+import { readdirSync, readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { harnessPath } from '../config/harnessHome.js'
-import { PID_FILE, isAlive, readPid } from './daemonState.js'
+import { PID_FILE, isAlive, pidFileWrittenMs, readPid } from './daemonState.js'
 import { FLASHER_DIR } from './flasherDir.js'
+import { settlePidFile } from './pidFileSettle.js'
 import { UNINSTALL_MARKER } from './uninstall/marker.js'
 import {
   describeSpawnLockOwner, readSpawnLockOwner, releaseAbandonedSpawnLock, spawnLockOwnerReused, type SpawnLockOwner,
@@ -29,6 +30,8 @@ import { windowsProcessRows } from './windows/processTable.js'
 export type IfDown = { start: true } | { start: false; why: string }
 
 export interface IfDownDeps {
+  /** Ask the daemon about a pid file that cannot be read, or set it aside (./pidFileSettle.ts). */
+  settlePid(): Promise<unknown>
   readPid(): number | null
   /** Whether [pid] runs harnessd's master. */
   masterRuns(pid: number): Promise<boolean>
@@ -49,6 +52,7 @@ export async function startIfDown(deps: IfDownDeps, options: { atLogon?: boolean
   else if (deps.stoppedThisBoot()) return { start: false, why: '`harness stop` stopped it since this computer started; `harness start` starts it again' }
   if (deps.flashing()) return { start: false, why: "`harness flash` holds the dial's port" }
   if (deps.uninstalling()) return { start: false, why: '`harness uninstall` is at work' }
+  await deps.settlePid()
   const pid = deps.readPid()
   if (pid !== null && await deps.masterRuns(pid)) return { start: false, why: `it runs (pid ${pid})` }
   let owner: SpawnLockOwner | null
@@ -66,7 +70,8 @@ export async function startIfDown(deps: IfDownDeps, options: { atLogon?: boolean
  * pid is proven another process now is forgotten on the way (`masterRuns`), and the start goes ahead; one that cannot
  * be told counts as running.
  */
-export async function runningDaemon(deps: Pick<IfDownDeps, 'readPid' | 'masterRuns'>): Promise<number | null> {
+export async function runningDaemon(deps: Pick<IfDownDeps, 'settlePid' | 'readPid' | 'masterRuns'>): Promise<number | null> {
+  await deps.settlePid()
   const pid = deps.readPid()
   return pid !== null && await deps.masterRuns(pid) ? pid : null
 }
@@ -88,9 +93,11 @@ export async function releaseAbandonedLock(deps: Pick<IfDownDeps, 'lockOwner' | 
 
 /** What `processIfDownDeps` reads of this computer, and the two things it may remove. */
 export interface IfDownIo {
+  settlePid(): Promise<unknown>
   readPid(): number | null
   isAlive(pid: number): boolean
-  /** When the pid file was written, which is when the master claimed it; null when it cannot be read. */
+  /** When the pid file was written, which is when the master claimed it; null when it cannot be read, or the pid in
+   *  use is the one the daemon answered with. */
   pidFileWrittenMs(): number | null
   /** Remove the pid file, only while it still names [pid]. */
   forgetPid(pid: number): void
@@ -137,9 +144,10 @@ export function flashHolds(dir: string, nowMs: number = Date.now()): boolean {
 
 function defaultIfDownIo(): IfDownIo {
   return {
+    settlePid: () => settlePidFile(),
     readPid,
     isAlive,
-    pidFileWrittenMs: () => { try { return statSync(PID_FILE).mtimeMs } catch { return null } },
+    pidFileWrittenMs: () => pidFileWrittenMs(),
     forgetPid: (pid) => { if (readPid() === pid) { try { rmSync(PID_FILE, { force: true }) } catch { /* the next tick looks again */ } } },
     rows: () => windowsProcessRows(null),
     readLockOwner: () => readSpawnLockOwner(),
@@ -169,6 +177,7 @@ export function processIfDownDeps(
   const io = { ...defaultIfDownIo(), ...overrides }
   const windows = platform === 'win32'
   return {
+    settlePid: () => io.settlePid(),
     readPid: () => io.readPid(),
     masterRuns: async (pid) => {
       if (!io.isAlive(pid)) return false

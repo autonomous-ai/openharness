@@ -14,9 +14,11 @@
  * Persisted, because Codex asks once: a daemon restarted before the app reconnects must already
  * know the last colours when it creates the next session.
  */
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { env } from '../config/env.js'
+import { errorKind } from './log.js'
+import { atomicWriteFile, jsonObject, readState } from './secureState.js'
 
 export interface HostTheme {
   background: string
@@ -45,18 +47,15 @@ export function windowStyleOf(theme: HostTheme): string {
 const fileOf = () => join(env.ADAPTER_DATA_DIR, 'host-theme.json')
 
 export function loadHostTheme(): HostTheme | null {
-  try {
-    return parseHostTheme(JSON.parse(readFileSync(fileOf(), 'utf8')))
-  } catch {
-    return null
-  }
+  const read = readState(fileOf(), 'cache', jsonObject)
+  return read.state === 'ok' ? parseHostTheme(read.value) : null
 }
 
 export function saveHostTheme(theme: HostTheme): void {
   try {
     mkdirSync(env.ADAPTER_DATA_DIR, { recursive: true, mode: 0o700 })
-    writeFileSync(fileOf(), JSON.stringify(theme, null, 2) + '\n', { mode: 0o600 })
+    atomicWriteFile(fileOf(), JSON.stringify(theme, null, 2) + '\n', 'cache')
   } catch (error) {
-    console.warn(`[theme] could not persist host theme: ${error instanceof Error ? error.message : error}`)
+    console.warn(`[theme] could not persist host theme: ${errorKind(error)}`)
   }
 }

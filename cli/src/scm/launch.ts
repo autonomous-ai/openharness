@@ -1,5 +1,6 @@
 /** Launch contracts have no repository readers: every session needs them before its service starts. */
 import { PROJECT_INSTRUCTION_FILES } from '../dsh/adapters.js'
+import { errorKind } from '../lib/log.js'
 import type { ScmLaunchRecord, ScmProject } from './types.js'
 
 export type ScmLaunchContract = Pick<ScmProject, 'kind' | 'launchEnv' | 'prepareWrite'>
@@ -28,6 +29,6 @@ export async function prepareScmWrite(cwd: string, paths: readonly string[], scm
 export async function prepareInstructionWrites(cwd: string | null | undefined, scms: readonly ScmLaunchContract[] = scmLaunchContracts): Promise<void> {
   if (!cwd) return
   try { await prepareScmWrite(cwd, PROJECT_INSTRUCTION_FILES, scms) }
-  catch (error) { console.warn(`[scm] could not prepare instruction files for writing · ${error instanceof Error ? error.message : error}`) }
+  catch (error) { console.warn(`[scm] could not prepare instruction files for writing · ${errorKind(error)}`) }
 }
 

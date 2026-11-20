@@ -9,6 +9,7 @@
  * carries, is the service's.
  */
 import type { Asker, HttpAnswer, ServiceHttpRoute, ServiceWsFrame } from './api.js'
+import { errorKind } from '../lib/log.js'
 
 /** An HTTP request as its route's service is asked it: the method, the target as the client sent it (its query too),
  *  and the body as text, for a method that carries one. */
@@ -65,9 +66,9 @@ export function createServiceRoutes(deps: ServiceRoutesDeps) {
       timer = setTimer(() => resolve(null), waitMs)
       const reply = (result: Record<string, unknown>): void => { clearTimer(timer); resolve(result) }
       if (!deps.hosted.route(type, payload, asker, reply)) reply({ error: 'SERVICE_UNAVAILABLE' })
-    } catch {
+    } catch (error) {
       if (timer !== undefined) clearTimer(timer)
-      log(`[services] ${type} SERVICE_REQUEST_FAILED`)
+      log(`[services] ${type} SERVICE_REQUEST_FAILED · ${errorKind(error)}`)
       resolve(null)
     }
   })

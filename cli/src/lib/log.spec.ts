@@ -3,7 +3,7 @@ import { closeSync, existsSync, mkdtempSync, openSync, readFileSync, rmSync, sta
 import { tmpdir } from 'os'
 import { join } from 'path'
 import {
-  ts, sid, preview, installTimestampedConsole, logFrame,
+  ts, sid, preview, installTimestampedConsole, logFrame, errorKind,
   adoptLegacyLog, prepareLogFile, trimLogFile, LOG_MAX_BYTES,
 } from './log.js'
 
@@ -194,4 +194,51 @@ describe('log file cap', () => {
     expect(existsSync(legacy)).toBe(false)
     expect(statSync(file).size).toBeLessThanOrEqual(10_000)
   })
+})
+
+describe('errorKind', () => {
+  class Held extends Error { readonly code = 'IDENTITY_UNAVAILABLE' }
+  class Changed extends Held {}
+  class Unconfirmed extends Error { constructor(cause: unknown) { super('unconfirmed', { cause }) } }
+  const disk = (code: string) => Object.assign(new Error(`${code}: refused, open '/Users/dee/.harness/cli/data/registry.json'`), { code })
+
+  it.each([
+    ['a Node fs error is its code', disk('EACCES'), 'EACCES'],
+    ['a typed error with a fixed code is both', new Changed('the owner changed in /Users/dee/work'), 'Changed IDENTITY_UNAVAILABLE'],
+    ['a built-in type is its name', new TypeError("Cannot read properties of undefined (reading 'secret')"), 'TypeError'],
+    ['a type with a code is both', Object.assign(new TypeError('The "path" argument must be of type string'), { code: 'ERR_INVALID_ARG_TYPE' }), 'TypeError ERR_INVALID_ARG_TYPE'],
+    ['a plain Error is Error', new Error('could not read /Users/dee/notes.txt'), 'Error'],
+    ['an abort is its name, not its number', new DOMException('aborted', 'AbortError'), 'AbortError'],
+    ['a wrapper shows the disk code on its cause', new Unconfirmed(disk('ENOSPC')), 'Unconfirmed ENOSPC'],
+    ['two causes deep', new Unconfirmed(new Error('storage', { cause: { code: 'EDQUOT' } })), 'Unconfirmed EDQUOT'],
+    ['a thrown string is its type', 'reader failed on /Users/dee/x', 'string'],
+    ['undefined', undefined, 'undefined'],
+    ['null', null, 'object'],
+    ['a thrown object is its type, whatever it holds', { code: 'ENOENT', message: '/Users/dee/x' }, 'object'],
+  ])('%s', (_, thrown, kind) => expect(errorKind(thrown)).toBe(kind))
+
+  it.each([['a number', 1], ['lower case', 'enoent'], ['words', 'no such file /Users/dee/x'], ['41 characters', `E${'X'.repeat(40)}`], ['one letter', 'E']])(
+    'a code that is %s is not printed', (_, code) => expect(errorKind(Object.assign(new Error('x'), { code }))).toBe('Error'))
+
+  it('a name that is not a type name is not printed', () => {
+    expect(errorKind(Object.assign(new Error('x'), { name: 'Could not read /Users/dee/x' }))).toBe('Error')
+    expect(errorKind(Object.assign(new TypeError('x'), { name: 'a b' }))).toBe('TypeError')
+    // One word that is not a class name's shape can be a file's or a person's name.
+    expect(errorKind(Object.assign(new Error('x'), { name: 'someone' }))).toBe('Error')
+  })
+
+  it('a cause that loops ends', () => {
+    const looped = new Error('x'); Object.defineProperty(looped, 'cause', { value: looped })
+    expect(errorKind(looped)).toBe('Error')
+  })
+
+  it('never throws: a getter that throws reads Error', () => {
+    for (const field of ['name', 'code', 'cause']) {
+      const hostile = new TypeError('x'); Object.defineProperty(hostile, field, { get() { throw new Error('no') } })
+      expect(errorKind(hostile)).toBe('Error')
+    }
+  })
+
+  it('the release bundle keeps class names, which a typed error\'s kind is', () =>
+    expect(readFileSync(join(__dirname, '..', '..', 'build-bundle.mjs'), 'utf8')).toMatch(/keepNames: true/))
 })

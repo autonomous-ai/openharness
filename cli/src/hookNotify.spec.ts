@@ -388,6 +388,22 @@ describe('hook notify terminal scope', () => {
     expect(firedAt).toBeLessThanOrEqual(Date.now())
   })
 
+  // CI 44381432197 (Linux): the hook paused while it read the time, its fired time came out before its turn's opening
+  // record, and the daemon held that turn's end for 2 minutes. A pause between two clock reads moves nothing: 10 s, longer
+  // than any start of the hook here, so a fired time taken from two reads always lands before the hook was started.
+  it('says when its engine ran it however long the hook pauses while it reads the time', async () => {
+    const { port, firedAts } = await collect()
+    const recordings = JSON.parse(readFileSync(new URL('./lib/__fixtures__/prompt-hooks.json', import.meta.url), 'utf8'))
+    const dir = mkdtempSync(join(tmpdir(), 'adapter-hook-paused-'))
+    tmpDirs.push(dir)
+    const preload = join(dir, 'paused.mjs')
+    writeFileSync(preload, 'const uptime = process.uptime\nprocess.uptime = () => uptime() + 10\n')
+    const before = Date.now()
+    await runHook({ port, engine: 'claude', tmuxPane: '%42', input: recordings.claude.input,
+      env: { NODE_OPTIONS: `--import ${pathToFileURL(preload).href}` } })
+    expect(Number(firedAts[0])).toBeGreaterThanOrEqual(before)
+  })
+
   it.each(['claude', 'codex', 'grok'] as const)('forwards the actual %s accepted prompt without changing the model input', async engine => {
     const { port, requests } = await collect()
     const recordings = JSON.parse(readFileSync(new URL('./lib/__fixtures__/prompt-hooks.json', import.meta.url), 'utf8'))
@@ -2532,9 +2548,13 @@ describe('hook notify posts over the daemon\'s pipe on Windows (W1)', () => {
 
 describe('hook notify: a session outside a pane', () => {
   /** The environment names the hook may send as host hints, and nothing else (spec: The hook). */
-  const HINTS = ['TERM_PROGRAM', '__CFBundleIdentifier', 'HERDR_PANE_ID', 'REX_BLOCK', 'ZELLIJ', 'TMUX_PANE',
-    'HC_TERMINAL_ID', 'CMUX_SURFACE_ID', 'CMUX_WORKSPACE_ID', 'KITTY_WINDOW_ID', 'WEZTERM_PANE', 'ORCA_AGENT_SESSION_ID',
-    'ORCA_TERMINAL_HANDLE', 'CLAUDE_CODE_HOST_SESSION_ID', 'CLAUDE_CODE_ENTRYPOINT']
+  const HINTS = ['TERM_PROGRAM', '__CFBundleIdentifier', 'HERDR_PANE_ID', 'REX_BLOCK', 'ZELLIJ', 'ZELLIJ_PANE_ID',
+    'ZELLIJ_SESSION_NAME', 'TMUX_PANE', 'HC_TERMINAL_ID', 'CMUX_SURFACE_ID', 'CMUX_WORKSPACE_ID', 'KITTY_WINDOW_ID',
+    'KITTY_LISTEN_ON', 'WEZTERM_PANE', 'ORCA_AGENT_SESSION_ID', 'ORCA_TERMINAL_HANDLE', 'CLAUDE_CODE_HOST_SESSION_ID',
+    'CLAUDE_CODE_ENTRYPOINT']
+  /** The hints a cut would turn into another value: left out whole over 64 characters. The Claude app's session id
+   *  may be longer (claudeApp.ts CLAUDE_SESSION), and cut, it would still pass as another session's. */
+  const WHOLE = ['ZELLIJ_PANE_ID', 'ZELLIJ_SESSION_NAME', 'KITTY_LISTEN_ON', 'CLAUDE_CODE_HOST_SESSION_ID']
   /** The hints sent on macOS alone: the one platform the devices try Herdr's window on, though hc runs on Linux too
    *  (spec Q5), and the one cmux runs on. */
   const CMUX_IDS = ['CMUX_SURFACE_ID', 'CMUX_WORKSPACE_ID']
@@ -2871,6 +2891,35 @@ describe('hook notify: a session outside a pane', () => {
     await received(requests)
     expect(requests).toHaveLength(1)
     expect((requests[0].body.hostHints as Record<string, string>).TERM_PROGRAM).toBe('x'.repeat(64))
+  })
+
+  // Zellij is the nearer host: its pane and session come before kitty's window and socket, so the cap drops kitty's first.
+  it('a session in Zellij inside kitty sends Zellij\'s three and kitty\'s two', async () => {
+    const { port, requests } = await collect()
+    const sent = { ZELLIJ: '0', ZELLIJ_PANE_ID: '3', ZELLIJ_SESSION_NAME: 's1', KITTY_WINDOW_ID: '1', KITTY_LISTEN_ON: 'unix:/tmp/kitty-1234' }
+    await runHook({ port, env: { ...noHints, ...sent }, input: { hook_event_name: 'Stop', session_id: 'sess-1' } })
+    await received(requests)
+    expect(requests[0].body.hostHints).toEqual(sent)
+  })
+
+  // A cut pane id, session name or socket would name another pane, session or socket: such a value is left out instead,
+  // before the cap counts it, so it costs no other hint its place.
+  it('a socket or a session name over 64 characters is left out, not cut, and takes none of the MAX_HINTS', async () => {
+    for (const name of WHOLE) {
+      for (const [value, sent] of [['x'.repeat(65), {}], ['x'.repeat(64), { [name]: 'x'.repeat(64) }]] as const) {
+        const { port, requests } = await collect()
+        await runHook({ port, env: { ...noHints, [name]: value }, input: { hook_event_name: 'Stop', session_id: 'sess-1' } })
+        await received(requests)
+        expect(requests[0].body.hostHints, `${name} of ${value.length}`).toEqual(sent)
+      }
+    }
+    const { port, requests } = await collect()
+    const set = Object.fromEntries(HINTS.filter((name) => name !== 'TMUX_PANE')
+      .map((name, index) => [name, WHOLE.includes(name) ? 'x'.repeat(65) : `hint-${index}`]))
+    await runHook({ port, ...own, env: set, input: typed })
+    await received(requests)
+    expect(Object.keys(requests[0].body.hostHints as object))
+      .toEqual(SENT.filter((name) => !['HC_TERMINAL_ID', ...CMUX_IDS, ...WHOLE].includes(name)).slice(0, MAX_HINTS))
   })
 
   // The core refuses the whole event for a path over its bound (core/observedHook.ts): the path goes, the event stays.

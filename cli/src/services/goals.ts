@@ -12,10 +12,12 @@
  * closed. Never synced and never sent to the backend. A service of its own, not the core's: a session runs without it.
  */
 import { randomBytes } from 'node:crypto'
-import { chmodSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { HACHI_GOAL_TITLE_MAX, type Asker, type CoreApi, type ServiceRequests } from '../core/api.js'
 import { HACHI_ID } from '../dsh/builtinIds.js'
+import { errorKind } from '../lib/log.js'
+import { atomicWriteFile, jsonObject, readState } from '../lib/secureState.js'
 import { sessionForPaneId } from '../lib/terminalRuntime.js'
 
 /** The requests the goals answer, declared in core/api.ts for the core to route. */
@@ -62,34 +64,31 @@ export function startGoals(core: CoreApi, deps: { now?: () => number } = {}): Se
   const file = goalsPath(core.dataDir)
 
   /** The goals kept, without those closed more than a week ago, and whether the file holds any others. A file that
-   *  cannot be read is no goals, said by its code: never its contents, which are the person's words. */
-  const read = (): { goals: Goal[]; pruned: boolean } => {
-    let kept: unknown
-    try { kept = (JSON.parse(readFileSync(file, 'utf8')) as { goals?: unknown }).goals } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code
-      if (code !== 'ENOENT') console.error(`[goals] goals.json unreadable · ${code ?? (error as Error).name}`)
-      return { goals: [], pruned: false }
-    }
+   *  cannot be parsed is set aside and is no goals; null when it cannot be read now (EACCES, EMFILE): read as no goals,
+   *  the next write would lose every goal in it. */
+  const read = (): { goals: Goal[]; pruned: boolean } | null => {
+    const saved = readState(file, 'cache', jsonObject)
+    if (saved.state === 'unreadable') return null
+    if (saved.state !== 'ok') return { goals: [], pruned: false }
+    const kept = saved.value.goals
     const all = Array.isArray(kept) ? kept : []
     const goals = all.filter(isGoal).filter((g) => g.doneAt === null || now() - g.doneAt < GOAL_KEPT_MS)
     return { goals, pruned: goals.length !== all.length }
   }
   /** Written whole and renamed into place, owner-only: the titles are the person's words. False, and a log line by its
-   *  code, when this computer could not save it. */
+   *  kind, when this computer could not save it. */
   const write = (goals: Goal[]): boolean => {
     try {
       mkdirSync(join(core.dataDir, 'hachi'), { recursive: true, mode: 0o700 })
-      const temp = `${file}.${process.pid}.tmp`
-      writeFileSync(temp, JSON.stringify({ goals }), { mode: 0o600 })
-      renameSync(temp, file)
-      chmodSync(file, 0o600)
+      atomicWriteFile(file, JSON.stringify({ goals }), 'cache')
       return true
     } catch (error) {
-      console.error(`[goals] goals.json not written · ${(error as NodeJS.ErrnoException).code}`)
+      console.error(`[goals] goals.json not written · ${errorKind(error)}`)
       return false
     }
   }
   const NOT_SAVED = { error: 'NOT_SAVED', message: 'Harness could not save the goal on this computer. Try again in a moment.' }
+  const NOT_READ = { error: 'NOT_READ', message: 'Harness could not read the goals on this computer. Try again in a moment.' }
 
   /** The Hachi harness's agent id, by the pane the request came from on this machine; anything else is no caller. */
   const hachi = (payload: Record<string, unknown>, asker: Asker): string | null => {
@@ -102,7 +101,9 @@ export function startGoals(core: CoreApi, deps: { now?: () => number } = {}): Se
     (payload: Record<string, unknown>, asker: Asker): Record<string, unknown> => {
       const hachiId = hachi(payload, asker)
       if (!hachiId) return NOT_HACHI
-      const { goals, pruned } = read()
+      const kept = read()
+      if (!kept) return NOT_READ
+      const { goals, pruned } = kept
       leftBehind(goals)
       return run(payload, goals, pruned, hachiId)
     }

@@ -4,11 +4,11 @@ import { lstat, open, rename, rm, type FileHandle } from 'node:fs/promises'
 import { createHash, randomUUID } from 'node:crypto'
 import { dirname, join } from 'node:path'
 import { env } from '../config/env.js'
-import { atomicWriteJson, engineKeepsTranscriptFile, type RegisteredSession } from './registry.js'
+import { engineKeepsTranscriptFile, type RegisteredSession } from './registry.js'
 import { controlTranscriptEvidence } from '../engines/transcriptBindings.js'
 import { IdentityReadUnavailable } from '../engines/kit/identityScan.js'
 import { nativeFileKey } from '../engines/kit/nativePaths.js'
-import { readPrivateStateFile, secureStateDirectory } from './secureState.js'
+import { atomicWriteJson, readPrivateStateFile, secureStateDirectory } from './secureState.js'
 import { readStorePages, utf8Bytes, type PageColumn } from './sqlitePage.js'
 import { sqliteReadAll, type SqliteRow } from './sqliteRead.js'
 import { hermesDbPath } from '../engines/hermes/contract.js'
@@ -46,8 +46,9 @@ async function pagedRows(database: string, table: string, where: string, session
 }
 
 /** Native SQLite files can have live WAL writers. Export this conversation's rows through a
- * read-only connection; never copy an incomplete .db or replace an engine's shared store. */
-async function databaseHistory(s: RegisteredSession): Promise<Record<string, unknown>> {
+ * read-only connection; never copy an incomplete .db or replace an engine's shared store. Null for an OpenClaw key its
+ * Gateway never wrote: there is nothing to save, and OpenClaw keeps its own store (OPENCLAW_STORE_KEPT). */
+async function databaseHistory(s: RegisteredSession): Promise<Record<string, unknown> | null> {
   let database: string
   /** Table and filter; a conversation table is paged, the others hold one row. */
   let selections: [string, string, Paged?][]
@@ -68,6 +69,7 @@ async function databaseHistory(s: RegisteredSession): Promise<Record<string, unk
     case 'openclaw': {
       const found = await openclawSessionDb(s.sessionId, { pid: s.processIdentity?.pid ?? 0, stateDir: s.openclawStateDir })
       if (!found) throw new SessionCheckpointError('Could not read the saved conversation. The session has not been closed.')
+      if (!existsSync(found)) return null
       database = found
       // Every window the key has had, with each row as the reader reads it. A compressed row is kept as hex: JSON has
       // no bytes. It is sized as twice its blob: sizing the hex itself would read every blob.
@@ -93,6 +95,7 @@ async function databaseHistory(s: RegisteredSession): Promise<Record<string, unk
   for (const [table, where, paged] of selections) {
     const rows = paged ? await pagedRows(database, table, where, s.sessionId, paged)
       : await sqliteReadAll(database, `SELECT * FROM ${table} WHERE ${where};`, [s.sessionId]).then((read) => read.ok ? read.rows : null)
+    if (s.engine === 'openclaw' && table === selections[0][0] && rows?.length === 0) return null
     if (!rows || (table === selections[0][0] && rows.length !== 1)) {
       throw new SessionCheckpointError('Could not read the saved conversation. The session has not been closed.')
     }
@@ -164,7 +167,7 @@ export class SessionCheckpointStore {
         // Save even when the native transcript is unchanged: a newly typed draft
         // belongs to the terminal, not to that transcript. Never submit it.
         atomicWriteJson(join(this.directory, `${key}.screen.json`), { version: 1, agentId: s.agentId,
-          sessionId: s.sessionId, savedAt: Date.now(), screen: options.screen })
+          sessionId: s.sessionId, savedAt: Date.now(), screen: options.screen }, 'trust')
       } }
       const checkpoint: Checkpoint = { version: 1, agentId: s.agentId, sessionId: s.sessionId,
         engine: s.engine, codexHome: s.codexHome ?? null, savedAt: Date.now(), source: null, file, bytes: 0 }
@@ -183,7 +186,7 @@ export class SessionCheckpointStore {
           throw new SessionCheckpointError('Could not save this terminal before closing it. Keep it open and try again.')
         }
         atomicWriteJson(temporary, { version: 1, agentId: s.agentId, sessionId: s.sessionId, engine: s.engine, cwd: s.cwd,
-          savedAt: checkpoint.savedAt, screen: options.screen })
+          savedAt: checkpoint.savedAt, screen: options.screen }, 'trust')
       } else if (engineKeepsTranscriptFile(s.engine)) {
         if (!source) {
           throw new SessionCheckpointError('The conversation file is unavailable. The session has not been closed.')
@@ -227,7 +230,9 @@ export class SessionCheckpointStore {
         if (reuseCheckpoint) { authority!.verify(); saveScreen(); return }
       } else {
         const history = await databaseHistory(s)
+        if (!history) return
         const handle = await open(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600)
+        // not a state file: a new O_EXCL temporary, renamed into place; the plan's follow-up moves it to the helper
         try { await handle.writeFile(JSON.stringify({ version: 1, sessionId: s.sessionId, engine: s.engine, ...history })) }
         finally { await handle.close() }
       }
@@ -242,7 +247,7 @@ export class SessionCheckpointStore {
       authority?.verify()
       saveScreen()
       // Publish only after data is durable. A failed save keeps the preceding checkpoint intact.
-      atomicWriteJson(manifest, checkpoint)
+      atomicWriteJson(manifest, checkpoint, 'trust')
       committed = true
       if (previous?.file && previous.file !== file && previousFileSafe(previous.file)) {
         await rm(join(this.directory, previous.file), { force: true }).catch(() => {})

@@ -108,7 +108,9 @@ working in. The app he is working in is the one in front, and the computer alrea
     still show it.
 - **The scan learns the app where that is cheap** (the PM, 2026-11-15): with no new permission, by walking the
   session's parent processes (`ppid`) and reading only each one's executable name or path. The scan runs its own
-  `ps -axo pid=,ppid=,comm=` (`comm` last, so macOS prints the whole path, not 16 characters), and only on a scan
+  `ps -axo pid=,ppid=,comm=` (`comm` last, so macOS prints the whole path, not 16 characters; no tty, which made each read
+  three times as slow on macOS: a hook's caller's own pane reads its chain's one process at a time,
+  [dial on Linux § 1.5](../plans/2026-11-19-dial-linux-design.md#15-wezterm-types)), and only on a scan
   with sessions whose app is not known yet. Each name is mapped to an app with the existing bundle and exe tables (a
   `.app` path's bundle id comes from that app's `Info.plist`). A bundle that was not read (past the pass's bound, or
   unreadable) ends that walk: the app stays not known yet, never an outer app's guess. Nothing else of a process is
@@ -255,8 +257,11 @@ and a desktop change. The rings are memory only too, as swipe-order decided.
 - `runDialWatch` (`cli/src/devices/client.ts`) maps the value to an app id through a table next to `hostDetect.ts`:
   the bundle ids `detectApp` knows (kitty's, WezTerm's and Harness Desktop's among them), plus the exe names: Linux's
   `code`, `cursor`, `wezterm-gui` (WezTerm's `CFBundleExecutable`, the same `Info.plist`), `kitty`, `ghostty` and
-  `harness` (Harness Desktop's, `desktop/linux/CMakeLists.txt`, `BINARY_NAME`), and
-  Windows's `Code.exe`, `Cursor.exe` and `WindowsTerminal.exe`, which nothing sends until the Windows source exists.
+  `harness` (Harness Desktop's, `desktop/linux/CMakeLists.txt`, `BINARY_NAME`), the Claude app's `claude-desktop`
+  (→ `claude`) and the ChatGPT app's `ChatGPT` (→ `codex`), as their Linux packages run (`ps -o comm=`,
+  `cli/src/testing/recordedLinuxApps.ts`), and Windows's `Code.exe`, `Cursor.exe` and `WindowsTerminal.exe`, which
+  nothing sends until the Windows source exists. The table is one for both systems (a name is lower-cased and `.exe`
+  dropped), so `ChatGPT.exe` maps to `codex` too.
   The list is closed: a new row is a new decision.
 - An app the table does not know is `none`: no listed app is in front. `none` is not an app id. It is never the
   unknown app `terminal` ("Other"): Safari in front and an agent in an unknown terminal are different things, so on

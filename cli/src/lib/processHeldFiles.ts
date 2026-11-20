@@ -17,6 +17,7 @@ import { lstat, opendir, readFile, readlink } from 'node:fs/promises'
 import { join } from 'node:path'
 import { descriptorPaths } from '../engines/kit/nativeDescriptors.js'
 import { psEnv } from './childLocale.js'
+import { errorKind } from './log.js'
 import { linuxProcessStat } from './nativeProcessControl.js'
 import { probeExecFile } from './offThreadExec.js'
 import { processView } from './processMounts.js'
@@ -52,8 +53,17 @@ export function clearHeldHomes(): void {
   said.clear()
 }
 
-/** Why a listing gave no home: its message is the outcome the log line names, never a path, a name or a content. */
-class Unlisted extends Error {}
+type Outcome = 'lsof failed' | 'lsof timed out' | 'too many descriptors' | 'pid changed' | 'unreadable' | 'unmappable' | 'bad pid' | 'two homes'
+
+/** Why a listing gave no home, in fixed words, never a path, a name or a content; the log names it by its code, the
+ *  same words as a token (`errorKind`: `Unlisted LSOF_FAILED`). */
+class Unlisted extends Error {
+  readonly code: string
+  constructor(outcome: Outcome) {
+    super(outcome)
+    this.code = outcome.toUpperCase().replaceAll(' ', '_')
+  }
+}
 
 /** The paths in `lsof -Fn` output, by process: each `n` line that starts with `/`, in the section its `p` line opens.
  *  Throws when the output is cut (no last newline), when a process asked of has no section or one not asked of has
@@ -224,7 +234,7 @@ export async function heldHome(
     home = await listedHome([selected, ...children().slice(0, ENGINE_CHILDREN_MOST)], file, platform, proc)
   } catch (error) {
     if (!(error instanceof Unlisted)) throw error
-    say(key, selected.pid, error.message)
+    say(key, selected.pid, errorKind(error))
   }
   if (!kept.has(key) && kept.size >= KEPT_MOST) kept.clear()
   kept.set(key, home !== undefined ? { home }

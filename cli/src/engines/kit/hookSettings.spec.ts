@@ -15,6 +15,28 @@ import * as preparations from './nativeHookFiles.js'
 import { reviewHash, reviewRecords } from './hookReview.js'
 import { HARNESS_AGENT_TOOLS } from '../facets/hooks.js'
 
+// How the watched path is changed: opened for writing in place, or a file renamed onto it.
+const disk = vi.hoisted(() => ({ watch: '', changes: [] as string[] }))
+vi.mock('node:fs', async original => {
+  const actual = await original<typeof import('node:fs')>()
+  const writes = (flags: unknown) => typeof flags === 'number' ? (flags & 3) !== 0 : typeof flags === 'string' && flags !== 'r'
+  return { ...actual,
+    openSync: (...args: Parameters<typeof actual.openSync>) => {
+      if (args[0] === disk.watch && writes(args[1])) disk.changes.push('write')
+      return actual.openSync(...args)
+    },
+    writeFileSync: (...args: Parameters<typeof actual.writeFileSync>) => {
+      if (args[0] === disk.watch) disk.changes.push('write')
+      return actual.writeFileSync(...args)
+    },
+    renameSync: (...args: Parameters<typeof actual.renameSync>) => {
+      if (args[1] === disk.watch) disk.changes.push('rename')
+      return actual.renameSync(...args)
+    },
+  }
+})
+afterEach(() => { disk.watch = ''; disk.changes = [] })
+
 // What every case writes and logs is engines/hookInstallers.golden.spec.ts; these are the kit's own edges.
 let root = ''
 beforeEach(() => { root = mkdtempSync(join(tmpdir(), 'hook-settings-')) })
@@ -172,7 +194,7 @@ it('reports a held malformed file even when an engine declares no malformed-file
   writeFileSync(join(home, 'hooks.json'), '{not-json')
   const { malformed: _, ...messages } = codex.settings.messages
   expect(await installHookSettings('codex', { ...codex.settings, messages }, 19473, home)).toBe(false)
-  expect(error).toHaveBeenCalledWith(codex.settings.messages.failed, expect.any(SyntaxError))
+  expect(error).toHaveBeenCalledWith(codex.settings.messages.failed, 'SyntaxError')
   expect(readFileSync(join(home, 'hooks.json'), 'utf8')).toBe('{not-json')
 })
 
@@ -359,6 +381,25 @@ it('allows Harness\'s agent commands in a Codex rules file of its own, leaving t
   expect(statSync(rules).ino).toBe(written)
 })
 
+it('the Codex rules file goes through a temporary file renamed onto it', async () => {
+  const home = join(root, 'codex'), rules = join(home, 'rules', 'harness.rules')
+  mkdirSync(join(home, 'rules'), { recursive: true })
+  writeFileSync(rules, '# an older release\n', { mode: 0o600 })
+  disk.watch = rules
+  expect(await installHookSettings('codex', codex.settings, 19473, home)).toBe(true)
+  expect(disk.changes).toEqual(['rename'])
+  expect(readFileSync(rules, 'utf8')).toBe(codexRulesFile())
+})
+
+it('a file at the Codex rules file\'s old temporary name is left alone', async () => {
+  const home = join(root, 'codex'), rules = join(home, 'rules', 'harness.rules')
+  mkdirSync(join(home, 'rules'), { recursive: true })
+  writeFileSync(`${rules}.${process.pid}.tmp`, 'planted')
+  expect(await installHookSettings('codex', codex.settings, 19473, home)).toBe(true)
+  expect(readFileSync(`${rules}.${process.pid}.tmp`, 'utf8')).toBe('planted')
+  expect(readFileSync(rules, 'utf8')).toBe(codexRulesFile())
+})
+
 it('rewrites the Codex rules file an earlier release wrote for harness send alone', async () => {
   const home = join(root, 'codex'), rules = join(home, 'rules', 'harness.rules')
   mkdirSync(join(home, 'rules'), { recursive: true })
@@ -387,7 +428,7 @@ it('allows the agent commands where an engine has no inbox, and holds nothing wh
     return path === file && ++calls === 3 ? { ...observed, content: JSON.stringify({ hooks: [] }) } : observed
   })
   expect(await installHookSettings('claude', settings, 19473, home)).toBe(true)
-  expect(warn.mock.calls.map(call => call[0])).toEqual([`[hooks] could not allow Harness's agent commands in ${file} (the engine asks before each one):`])
+  expect(warn.mock.calls.map(call => call[0])).toEqual(["[hooks] could not allow Harness's agent commands in Claude Code's settings.json (the engine asks before each one):"])
 })
 
 it('launches Codex when its rules file cannot be written, and says so', async () => {
@@ -395,7 +436,7 @@ it('launches Codex when its rules file cannot be written, and says so', async ()
   const home = join(root, 'codex'); mkdirSync(home)
   writeFileSync(join(home, 'rules'), 'a file where the folder goes')
   expect(await installHookSettings('codex', codex.settings, 19473, home)).toBe(true)
-  expect(warn).toHaveBeenCalledWith(`[hooks] could not allow Harness's agent commands in ${join(home, 'rules', 'harness.rules')} (the engine asks before each one):`, expect.any(String))
+  expect(warn).toHaveBeenCalledWith("[hooks] could not allow Harness's agent commands in Codex's rules/harness.rules (the engine asks before each one):", expect.stringMatching(/^[A-Za-z_$][\w$]*( [A-Z][A-Z0-9_]+)?$/))
   expect(JSON.parse(readFileSync(join(home, 'hooks.json'), 'utf8')).hooks.PostToolUse[0].hooks[0].command).toBe(messagesCommand(env.HARNESS_AGENT_MESSAGES_DIR))
 })
 
@@ -408,7 +449,7 @@ it.skipIf(process.getuid?.() === 0)('says only the allowance failed when a read-
   const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
   try {
     expect(await installHookSettings('claude', claude.settings, 19473, home)).toBe(true)
-    expect(warn.mock.calls.map(call => call[0])).toEqual([`[hooks] could not allow Harness's agent commands in ${file} (the engine asks before each one):`])
+    expect(warn.mock.calls.map(call => call[0])).toEqual(["[hooks] could not allow Harness's agent commands in Claude Code's settings.json (the engine asks before each one):"])
     expect(existsSync(join(env.HARNESS_AGENT_MESSAGES_DIR, 'hook.mjs'))).toBe(true)
   } finally { chmodSync(file, 0o644) }
 })

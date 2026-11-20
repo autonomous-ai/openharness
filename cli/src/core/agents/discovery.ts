@@ -10,14 +10,14 @@
  * Moved verbatim out of the reconciler's options in `runForeground` (the core boundary, step 10:
  * docs/design/2026-10-03-harnessd.md). The reconciler itself, with what it scans, stays there.
  */
-import { readOpenclawScreen } from '../../engines/openclaw/contract.js'
+import { OPENCLAW_FIRST_TASK, OPENCLAW_STATES, readOpenclawScreen } from '../../engines/openclaw/contract.js'
 import { externalResumePending } from '../../lib/externalResume.js'
 import { paneReadIdentity } from '../transcripts/readIdentity.js'
 import { isTerminalEngine } from '../../engines/types.js'
 import type { AutonomousDeviceInput } from '../deviceInput.js'
 import type { QuestionWatcher } from '../../lib/questionController.js'
 import { sameGridAssignment } from '../../lib/gridAssignmentWire.js'
-import { sid } from '../../lib/log.js'
+import { errorKind, sid } from '../../lib/log.js'
 import { matchesLaunchReceipt, type registry, type RegisteredSession, type RegistryAuthority, type LaunchPublication } from '../../lib/registry.js'
 import { IdentityReadUnavailable } from '../../engines/kit/identityScan.js'
 import { resolvePaneEngineProcess } from '../../lib/paneEngineProcess.js'
@@ -105,7 +105,7 @@ export function createDiscoveryHandlers({
   const archivedOwner = (terminal: RegisteredSession, observed: DiscoveredTerminalAgent): RegisteredSession | undefined => {
     let archived: RegisteredSession[]
     try { archived = stoppedAgents.list() } catch (error) {
-      console.warn(`[discovery] saved harnesses unreadable; ${sid(terminal.agentId)} adopts its engine as new: ${error instanceof Error ? error.message : error}`)
+      console.warn(`[discovery] saved harnesses unreadable; ${sid(terminal.agentId)} adopts its engine as new: ${errorKind(error)}`)
       return undefined
     }
     return archived.find((saved) => saved.engine === observed.engine
@@ -122,7 +122,7 @@ export function createDiscoveryHandlers({
     if (stoppedAgents.resumeReservedAt(previous) !== null) return
     let saved: RegisteredSession | null
     try { saved = stoppedAgents.get(previous) } catch (error) {
-      console.warn(`[discovery] saved harnesses unreadable; ${sid(adopted.agentId)} takes nothing of its pane: ${error instanceof Error ? error.message : error}`)
+      console.warn(`[discovery] saved harnesses unreadable; ${sid(adopted.agentId)} takes nothing of its pane: ${errorKind(error)}`)
       return
     }
     if (saved) taken(previous, adopted)
@@ -184,6 +184,10 @@ export function createDiscoveryHandlers({
   }
   const onObserved = async (observed: DiscoveredTerminalAgent, current: RegisteredSession): Promise<void> => {
     if (externalResumePending(current.externalResume)) return
+    // A first task OpenClaw never took failed the launch while its TUI ran on (bind.ts): confirming that same process
+    // would make the agent ready again and hide why. A new process in the pane is a new start, confirmed as any.
+    if (current.launch?.state === 'failed' && current.launch.error === OPENCLAW_FIRST_TASK.error
+      && sameProcessIdentity(current.processIdentity, observed.processIdentity)) return
     if (observed.engine === 'openclaw' && current.engine !== 'openclaw' && !await showsOpenclaw(observed)) return
     const wasDormant = !current.active
     // Read BEFORE the update, because the update is what overwrites it. `undefined` means the command
@@ -212,7 +216,7 @@ export function createDiscoveryHandlers({
     }
     if (revived) {
       try { stoppedAgents.remove(revived.agentId) } catch (error) {
-        console.warn(`[discovery] ${sid(revived.agentId)} archive could not be removed: ${error instanceof Error ? error.message : error}`)
+        console.warn(`[discovery] ${sid(revived.agentId)} archive could not be removed: ${errorKind(error)}`)
       }
       console.log(`[discovery] ${sid(revived.agentId)} back from the archive · its ${observed.engine} never stopped`
         + ` · ${observed.primaryRuntimeKey} · terminal ${sid(current.agentId)} gone`)
@@ -307,7 +311,7 @@ export function createDiscoveryHandlers({
         syncRecapPool()
         announceSession(active)
       }).catch((err) => {
-        console.error(`[discovery] ${sid(active.agentId)} attach failed:`, err instanceof Error ? err.message : err)
+        console.error(`[discovery] ${sid(active.agentId)} attach failed:`, errorKind(err))
       })
       return
     }
@@ -333,6 +337,18 @@ export function createDiscoveryHandlers({
     if (agent.sessionId) {
       questionWatcher.stop(agent.sessionId)
       stopHeartbeat(agent.sessionId)
+    }
+    // An OpenClaw TUI whose config has no Gateway token prints so and exits, before it binds a session. Its launch
+    // failed, saying what to run, and the agent stays for show to find instead of becoming a terminal.
+    if (agent.engine === 'openclaw' && !agent.sessionId) {
+      const read = await backend?.capture(runtime)
+      if (read?.state === 'succeeded' && readOpenclawScreen(read.value).state === 'no-token') {
+        if (!current()) return
+        const failed = registry.setLaunch(agent.agentId, { state: 'failed', error: 'OPENCLAW_NO_TOKEN', detail: OPENCLAW_STATES.noToken })
+        if (failed) announceSession(failed)
+        console.log(`[discovery] ${sid(agent.agentId)} failed · ${OPENCLAW_STATES.noToken}`)
+        return
+      }
     }
     // Preserve the conversation's public identity and give the surviving shell its own row.
     // A starting install is not an exited engine; strict uncertain starts keep their reservation.

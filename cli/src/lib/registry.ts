@@ -20,20 +20,13 @@ import { namingTitle } from './sessionTitle.js'
 import { reportedProfileHome, transcriptProject } from '../engines/discoveries.js'
 import { automaticAgentName, engineLabel, isAutomaticName } from './agentNames.js'
 import {
-  closeSync,
-  constants,
   existsSync,
-  fchmodSync,
-  fsyncSync,
   lstatSync,
   mkdirSync,
-  openSync,
   readFileSync,
   realpathSync,
   renameSync,
-  rmSync,
   statSync,
-  writeFileSync,
 } from 'fs'
 import { randomUUID } from 'crypto'
 import { join, basename, dirname, relative, isAbsolute } from 'path'
@@ -54,15 +47,15 @@ import { agyTranscriptPath } from '../engines/agy/contract.js'
 import { copilotTranscriptPath } from '../engines/copilot/contract.js'
 import { OPENCLAW_KEY } from '../engines/openclaw/contract.js'
 import { bootChanged, currentBootId } from './bootId.js'
-import { hardenPrivateStateFileIfPresent, readPrivateStateFile, secureStateDirectory, syncStateDirectory } from './secureState.js'
-import { AtomicWriteUnconfirmed, RegistryPersistenceUnavailable, RegistryWriteQueue, prepareRegistryImage, privateRegistryDirectory, readPrivateRegistryFile, registryFileLock, type RegistryWriteDeadline } from './registryPersistence.js'
+import { AtomicWriteUnconfirmed, atomicWriteJson, readPrivateStateFile, secureStateDirectory } from './secureState.js'
+import { RegistryPersistenceUnavailable, RegistryWriteQueue, prepareRegistryImage, privateRegistryDirectory, readPrivateRegistryFile, registryFileLock, type RegistryWriteDeadline } from './registryPersistence.js'
 import { mergeTerminalRuntimes, primaryRuntime, processIdentityKey, sameProcessIdentity, terminalPlacementKey, terminalRouteKey } from './terminalRuntime.js'
 import type { HookTerminalHint, ProcessIdentity, TerminalRuntimeRef } from './terminalTypes.js'
 import { externalReservations, externalResumePending, externalResumeIds, parseExternalResume, type ExternalResumeIntent } from './externalResume.js'
 import type { StartedBy } from './agentAttribution.js'
 import { PTY_HOST_INSTANCE } from './ptyHost/instance.js'
 import { isKittyGraphicsCommand } from './terminalTitle.js'
-import { sid } from './log.js'
+import { errorKind, sid } from './log.js'
 import { HOOK_GATEWAY_ENGINES } from './gatewayRuntime.js'
 
 export type { ProcessIdentity } from './terminalTypes.js'
@@ -566,7 +559,8 @@ function rowFingerprint(row: unknown): string {
 const BINDING_RECOVERY_HOLD = 'Waiting for native evidence after a concurrent binding write.'
 export class RegistryOwnershipChanged extends IdentityReadUnavailable {}
 
-/** Storage errors can quote file contents or paths. Only fixed categories cross this boundary. */
+/** Storage errors can quote file contents or paths. Only fixed categories cross this boundary, and the disk's
+ *  code on `cause`, so the log line can say `ENOSPC` or `EROFS`. */
 function persistenceFailure(error: unknown, names = false): Error {
   if (error instanceof IdentityReadUnavailable || error instanceof RegistryPersistenceUnavailable) return error
   const subject = names ? 'name storage' : 'registry storage'
@@ -582,31 +576,8 @@ function persistenceFailure(error: unknown, names = false): Error {
         : code === 'EACCES' || code === 'EPERM' ? 'access was refused'
           : code === 'ENOENT' ? 'is unavailable'
             : code === 'ELOOP' ? 'has an unsafe file type' : 'write failed'
-  const failure = new RegistryPersistenceUnavailable(`${subject} ${category}`)
+  const failure = new RegistryPersistenceUnavailable(`${subject} ${category}`, typeof code === 'string' ? code : undefined)
   return error instanceof AtomicWriteUnconfirmed ? new AtomicWriteUnconfirmed(failure) : failure
-}
-
-export function atomicWriteJson(file: string, value: unknown, exclusive = false): void {
-  const exists = hardenPrivateStateFileIfPresent(file)
-  if (exclusive && exists) return
-  const temporary = `${file}.${process.pid}.${randomUUID()}.tmp`
-  let renamed = false
-  try {
-    const fd = openSync(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600)
-    try {
-      writeFileSync(fd, JSON.stringify(value, null, 2))
-      fchmodSync(fd, 0o600)
-      fsyncSync(fd)
-    } finally { closeSync(fd) }
-    renameSync(temporary, file)
-    renamed = true
-    syncStateDirectory(dirname(file))
-  } catch (error) {
-    if (renamed) throw new AtomicWriteUnconfirmed(error)
-    throw error
-  } finally {
-    if (!renamed) rmSync(temporary, { force: true })
-  }
 }
 
 function boundedIdentityPart(value: unknown, max = 200): value is string {
@@ -1223,19 +1194,8 @@ function readSavedBoot(): string | null {
 function writeBoot(bootId: string): void {
   try {
     secureStateDirectory(env.ADAPTER_DATA_DIR)
-    atomicWriteJson(BOOT_FILE, bootId)
+    atomicWriteJson(BOOT_FILE, bootId, 'trust')
   } catch { /* registry load will remain conservative on the next restart */ }
-}
-
-/**
- * What a log says of a failed admission: the error's kind and code, each only in its own shape (a class name, a code such
- * as ENOSPC), never its message or other text (it can quote a path, a file's or a person's name). A retried create said
- * only "failed", and nothing told why its first pane was not admitted (CI, cli/e2e/scale.e2e.ts, 2026-11-19).
- */
-function admissionError(error: unknown): string {
-  const shaped = (value: unknown, shape: RegExp) => typeof value === 'string' && shape.test(value) ? value : null
-  const code = shaped((error as { code?: unknown } | null)?.code, /^[A-Z][A-Z0-9_]{0,39}$/)
-  return (error instanceof Error ? shaped(error.name, /^[A-Z][A-Za-z0-9]{0,39}$/) ?? 'Error' : typeof error) + (code ? ` ${code}` : '')
 }
 
 class Registry {
@@ -1304,7 +1264,7 @@ class Registry {
 
   private entered(engine: AgentEngine): void {
     try { this.onEnter?.(engine) }
-    catch (error) { console.warn('[registry] engine entry notification failed:', error) }
+    catch (error) { console.warn('[registry] engine entry notification failed:', errorKind(error)) }
   }
 
   private drop(entry: RegisteredSession | undefined): void {
@@ -1355,7 +1315,7 @@ class Registry {
       secureStateDirectory(env.ADAPTER_DATA_DIR)
     } catch (error) {
       this.writeBlocked = true
-      console.error('[registry] unsafe state directory; refusing to load or write state:', error)
+      console.error('[registry] unsafe state directory; refusing to load or write state:', errorKind(error))
       return
     }
     this.loadNames()
@@ -1407,7 +1367,7 @@ class Registry {
       arr = retired
       // The rollback copy is the file as found, retired runtimes and all — not the cleaned rows.
       if (arr.some((row) => row.schemaVersion !== 2)) {
-        atomicWriteJson(PRE_V2_BACKUP_FILE, stored, true)
+        atomicWriteJson(PRE_V2_BACKUP_FILE, stored, 'trust', { exclusive: true })
       }
       let changed = strippedRetired || swarmAuto || (ownModes && arr.some((row, i) => row !== parsed[i]))
       if (rebooted) {
@@ -1631,15 +1591,15 @@ class Registry {
         return
       }
       if (changed) this.save()
-      if (ownModes) atomicWriteJson(OWN_MODES_FILE, Date.now())
+      if (ownModes) atomicWriteJson(OWN_MODES_FILE, Date.now(), 'trust')
     } catch (error) {
       // Not the parse error's message: it quotes the rows around the fault, and they hold the person's harness names.
       if (error instanceof SyntaxError) this.quarantine('is not JSON')
       else if (existsSync(FILE)) {
         this.writeBlocked = true
-        console.error('[registry] registry is unreadable; refusing to overwrite it:', error instanceof Error ? error.message : error)
+        console.error('[registry] registry is unreadable; refusing to overwrite it:', errorKind(error))
       } else {
-        atomicWriteJson(OWN_MODES_FILE, Date.now())
+        atomicWriteJson(OWN_MODES_FILE, Date.now(), 'trust')
       }
       // A genuinely absent file starts empty. A file that cannot be opened safely (a symlink, another
       // owner, open permissions) is left exactly as it is, and nothing is written over it.
@@ -1669,7 +1629,7 @@ class Registry {
       console.error(`[registry] registry ${reason}; moved it aside to ${aside} and started empty`)
     } catch (error) {
       this.writeBlocked = true
-      console.error(`[registry] registry ${reason}, and it could not be moved aside (${error instanceof Error ? error.message : error}); refusing to overwrite it`)
+      console.error(`[registry] registry ${reason}, and it could not be moved aside (${errorKind(error)}); refusing to overwrite it`)
     }
   }
 
@@ -1964,7 +1924,7 @@ class Registry {
       if (entry.firstTask) firstTaskKept(agentId)
       return structuredClone(committed)
     }).catch(error => {
-      console.error(`[registry] pending admission failed · ${admissionError(error)}`)
+      console.error(`[registry] pending admission failed · ${errorKind(error)}`)
       // Read as a taken route, a storage refusal opened and closed three panes and answered "tmux pane could not
       // be registered" (e2e/diskfull.e2e.ts, 2026-11-17). Its caller answers it by name instead.
       if (error instanceof RegistryPersistenceUnavailable || error instanceof AtomicWriteUnconfirmed) throw error
@@ -2002,7 +1962,7 @@ class Registry {
       if (!committed) return null
       this.terminalAvailableAgents.add(entry.agentId)
       return structuredClone(committed)
-    }).catch(error => { console.error(`[registry] resume admission failed · ${admissionError(error)}`); return null })
+    }).catch((error) => { console.error(`[registry] resume admission failed · ${errorKind(error)}`); return null })
   }
 
   /** Readiness, its native process and the launch words are one durable authority change. */
@@ -2819,7 +2779,10 @@ class Registry {
     }, authority.expires)
   }
 
-  /** The task is returned only after its removal is durable, to at most one caller. */
+  /**
+   * The task is returned only after its removal is durable, to at most one caller. An unbound agent keeps it, as a task is
+   * typed only into a session read, unless its launch failed: nothing types it then (core/agents/bind.ts `failFirstTask`).
+   */
   async takeFirstTask(agentId: string): Promise<string | null> {
     this.writer.assertOpen()
     const verify = this.ownerGuard(agentId)
@@ -2827,7 +2790,7 @@ class Registry {
       verify()
       const row = this.agents.get(agentId)
       const task = row?.firstTask
-      if (!row?.sessionId || !task) return null
+      if ((!row?.sessionId && row?.launch?.state !== 'failed') || !task) return null
       const next = { ...row }
       delete next.firstTask
       const receipt = await this.persist(deadline, true, false, undefined, { agentId, candidate: next, verify })
@@ -3189,7 +3152,7 @@ class Registry {
     }
     const timer = options.holdSavesMs === undefined ? undefined : setTimeout(() => {
       console.warn(`[registry] a transaction has held saves back for ${options.holdSavesMs} ms; saving without waiting for it`)
-      void release().catch(() => console.error('[registry] transaction save failed'))
+      void release().catch((error) => console.error(`[registry] transaction save failed · ${errorKind(error)}`))
     }, options.holdSavesMs)
     timer?.unref?.()
     try {
@@ -3243,7 +3206,7 @@ class Registry {
       started = true
       this.pendingObservation = undefined
       await this.persist(deadline)
-    }).catch(() => { console.error('[registry] save failed') })
+    }).catch((error) => { console.error(`[registry] save failed · ${errorKind(error)}`) })
     if (!started) this.pendingObservation = pending
     void pending.finally(() => { if (this.pendingObservation === pending) this.pendingObservation = undefined })
     return pending
@@ -3646,7 +3609,7 @@ class Registry {
       })
     } catch (err) {
       if (strict) throw persistenceFailure(err)
-      console.error('[registry] save failed')
+      console.error(`[registry] save failed · ${errorKind(err)}`)
     }
     // Optional engine startup observes the complete durable publication, outside its no-yield section.
     for (const engine of entered) this.entered(engine)
@@ -3673,7 +3636,7 @@ class Registry {
       started = true
       this.pendingNames = undefined
       await this.persistNames(deadline)
-    }).catch(() => { this.namesUnsaved = true; console.error('[registry] save names failed') })
+    }).catch((error) => { this.namesUnsaved = true; console.error(`[registry] save names failed · ${errorKind(error)}`) })
     if (!started) this.pendingNames = pending
     void pending.finally(() => { if (this.pendingNames === pending) this.pendingNames = undefined })
   }

@@ -7,6 +7,7 @@
  */
 import { lstat, rm } from 'node:fs/promises'
 import { join } from 'node:path'
+import { errorKind } from '../lib/log.js'
 
 export const SWARM_LEFTOVERS: readonly string[] = [
   'super-tabs', 'swarm-github', 'uploads',
@@ -31,7 +32,7 @@ export async function removeSwarmLeftovers(deps: SwarmLeftoversDeps): Promise<nu
       await rm(path, { recursive: true, force: true })
       removed++
     } catch (error) {
-      deps.log(`could not remove ${name}, left by the Swarm (${(error as NodeJS.ErrnoException).code ?? 'unknown'}); trying again at the next start`)
+      deps.log(`could not remove ${name}, left by the Swarm (${errorKind(error)}); trying again at the next start`)
     }
   }
   if (removed > 0) deps.log(`removed ${removed} of the Swarm's files and folders from the data folder`)

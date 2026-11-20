@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { Place } from './adapter.js'
 import type { CmuxInputState } from './cmuxCli.js'
 import { createCmuxAppAdapter, type CmuxAppDeps } from './cmuxApp.js'
+import { MAX_TEXT } from './orca.js'
 import { detectApp, detectHost } from './hostDetect.js'
 
 /** cmux prints its ids in upper case. */
@@ -44,6 +45,7 @@ function recorder(over: Partial<CmuxAppDeps> = {}, codes: Array<number | null> =
       return { code: codes.length ? codes.shift()! : 0, stdout: '' }
     },
     platform: 'darwin',
+    onPath: () => null,
     inFront: () => true,
     client: {
       mode: async () => {
@@ -225,16 +227,21 @@ describe('the cmux adapter', () => {
       expect(runs).toEqual([])
     })
 
-    it('control characters become spaces; a blank text and one over 2,000 characters ask nothing and are no-answer', async () => {
+    it('control characters become spaces; a blank text and one over MAX_TEXT characters ask nothing and are no-answer', async () => {
       const { asked, adapter } = recorder()
       expect(await adapter.prompt(PANE, 'claude', 'run\nthe\ttests\u001b[2J')).toBe('sent')
       expect(asked).toEqual([['mode'], ['inputState', S], ['paste', W, S, 'run the tests [2J']])
       asked.length = 0
-      for (const text of ['', '   ', '\n\r\t', 'x'.repeat(2001)]) {
+      for (const text of ['', '   ', '\n\r\t', 'x'.repeat(MAX_TEXT + 1)]) {
         expect(await adapter.prompt(PANE, 'claude', text), JSON.stringify(text.slice(0, 8))).toBe('no-answer')
       }
       expect(asked).toEqual([])
-      expect(await adapter.prompt(PANE, 'claude', 'x'.repeat(2000))).toBe('sent')
+    })
+
+    it('a text of 20,000 characters is pasted whole', async () => {
+      const { asked, adapter } = recorder()
+      expect(await adapter.prompt(PANE, 'claude', 'x'.repeat(20_000))).toBe('sent')
+      expect(asked).toEqual([['mode'], ['inputState', S], ['paste', W, S, 'x'.repeat(20_000)]])
     })
 
     it.each(['cmuxOnly', 'off', 'password', 'somethingNew'])('mode %s is automation-off, and nothing more is asked', async (mode) => {

@@ -18,7 +18,9 @@ import { parse as parseToml } from 'smol-toml'
 import { createHash } from 'node:crypto'
 import { basename, join } from 'node:path'
 import type { HookReviewRecord } from '../facets/hooks.js'
+import { errorKind } from '../../lib/log.js'
 import { HookPreparationHeld, inspectHookFile, runHookPreparation, type HookPreparationAttempt } from './nativeHookFiles.js'
+import { HookScriptMissing } from './hookHeld.js'
 import { isMessagesBlock } from './messagesHook.js'
 import { isOurs, type HookBlock, type Settings } from './notifyHooks.js'
 
@@ -240,7 +242,8 @@ export function prepareReviewed(record: HookReviewRecord, home: string, settings
     verify: observed.verify,
     commit: async (attempt: HookPreparationAttempt) => {
       const published = await observed.replace(output, attempt)
-      if (output !== text) console.log(record.messages.recorded.replace('{config}', config))
+      // The file by its name, never its path, which names the person's home.
+      if (output !== text) console.log(record.messages.recorded.replace('{config}', record.file))
       return published
     },
   }
@@ -259,7 +262,8 @@ export async function recordReviewed(record: HookReviewRecord, home: string, set
     source.verify(); published.verify()
     return true
   }) } catch (err) {
-    console.error(record.messages.skipped.replace('{config}', config), err)
+    // A hold's reason is fixed words (hookHeld.ts); HookScriptMissing's names a path, so that one is said by its kind.
+    console.error(record.messages.skipped.replace('{config}', record.file), err instanceof HookPreparationHeld && !(err instanceof HookScriptMissing) ? err.reason : errorKind(err))
     return false
   }
 }

@@ -44,7 +44,7 @@ import { VIEWER_DOWN_TYPES } from './lib/viewerFrames.js'
 import type { TerminalStreamManager } from './lib/terminalStreamManager.js'
 import { decodeTerminalLocal, encodeTerminalLocal, TerminalBinaryKind, type TerminalBinaryClear } from './lib/terminalBinary.js'
 import { BACKEND_ONLY_DOWN_TYPES, GATEWAY_REQUEST_TYPES, isLocalClientId, logSafeType, PAIR_REQUESTS, PLATE_REQUEST, rpcResultType, type DownTransport } from './lib/relayFrames.js'
-import { sid, logFrame } from './lib/log.js'
+import { errorKind, sid, logFrame } from './lib/log.js'
 import { spreadNotice } from './lib/spreadNotice.js'
 import { eventAgentId, GUEST_REFUSALS, guestVerdict } from './core/guestPolicy.js'
 import { createToolWatches } from './core/toolWatches.js'
@@ -230,6 +230,8 @@ export class BackendSocket {
   activityFrameProvider: ((session: RegisteredSession) => ActivityFrame | null) | null = null
   /** What a message to an agent waits for now (core/input.ts `waitingFor`): its frame says so. */
   waitingForProvider: ((session: RegisteredSession) => 'engine' | null) | null = null
+  /** Whether an agent has yet to take its first task (lib/agentFrame.ts `agentStarting`): its frame says so. */
+  startingProvider: ((session: RegisteredSession) => boolean) | null = null
   /** Captures a run's service projection before asynchronous frame work. */
   framePartsProvider: ((session: RegisteredSession) => () => Readonly<Record<string, unknown>>) | null = null
   /** This machine's viewers, served to a client over its connection: the viewers' (core/viewerStreams.ts). */
@@ -444,7 +446,7 @@ export class BackendSocket {
         // The client is registered whatever its replay does: a re-announce that throws costs only itself.
         if (joined) {
           try { this.onRemoteAppJoined?.() } catch (error) {
-            console.warn(`[backend] re-announcing to a remote app failed: ${error instanceof Error ? error.message : String(error)}`)
+            console.warn(`[backend] re-announcing to a remote app failed: ${errorKind(error)}`)
           }
         }
         return
@@ -602,7 +604,7 @@ export class BackendSocket {
     } catch (error) {
       const at = Date.now()
       if (at - this.gatewayFailureSaidAt < 60_000) { this.gatewayFailuresUnsaid++; return otherwise }
-      console.error(`[backend] the gateway could not take a ${what} frame · ${error instanceof Error ? error.message : String(error)}${this.gatewayFailuresUnsaid ? ` · ${this.gatewayFailuresUnsaid} more since` : ''}`)
+      console.error(`[backend] the gateway could not take a ${what} frame · ${errorKind(error)}${this.gatewayFailuresUnsaid ? ` · ${this.gatewayFailuresUnsaid} more since` : ''}`)
       this.gatewayFailureSaidAt = at
       this.gatewayFailuresUnsaid = 0
       return otherwise
@@ -905,7 +907,7 @@ export class BackendSocket {
     // connection waited on, say, `agents_list`.
     if (this.requestsOpen && typeof type === 'string' && TERMINAL_BOOKKEEPING_TYPES.has(type)) {
       return this.dispatchDown(frame, connId, transport, role).catch((err) => {
-        console.error('[backend] down-frame dispatch failed:', err instanceof Error ? err.message : err)
+        console.error('[backend] down-frame dispatch failed:', errorKind(err))
       })
     }
     // An upload's begin and cancel go in line with its chunks, which ride the stream's input lane: a cancel
@@ -921,7 +923,7 @@ export class BackendSocket {
       .then(() => this.requestGate)
       .then(() => this.dispatchDown(frame, connId, transport, role))
       .catch((err) => {
-        console.error('[backend] down-frame dispatch failed:', err instanceof Error ? err.message : err)
+        console.error('[backend] down-frame dispatch failed:', errorKind(err))
       })
       .finally(() => {
         if (this.downChains.get(key) === next) this.downChains.delete(key)
@@ -959,7 +961,7 @@ export class BackendSocket {
       .catch(() => { /* prior failure is already logged */ })
       .then(task)
       .catch((err) => {
-        console.error(`[backend] ${what} dispatch failed:`, err instanceof Error ? err.message : err)
+        console.error(`[backend] ${what} dispatch failed:`, errorKind(err))
       })
       .finally(() => {
         if (this.streamLanes.get(key) === next) this.streamLanes.delete(key)
@@ -1177,7 +1179,7 @@ export class BackendSocket {
           const provider = this.historyProvider
           const answer = (result: Record<string, unknown>): void => {
             try { reply(type, requestId, result) }
-            catch { console.error('[backend] HISTORY_REPLY_FAILED') }
+            catch (error) { console.error(`[backend] HISTORY_REPLY_FAILED · ${errorKind(error)}`) }
           }
           if (!provider) { answer({ error: 'UNSUPPORTED' }); return }
           if (this.historyRequests >= MAX_HISTORY_REQUESTS) {
@@ -1190,7 +1192,7 @@ export class BackendSocket {
             const read = (async () => {
               try { return await provider(payload) }
               catch (error) {
-                console.error('[backend] HISTORY_READ_FAILED')
+                console.error(`[backend] HISTORY_READ_FAILED · ${errorKind(error)}`)
                 if (requestId === undefined) return
                 return error instanceof ServiceUnavailableError
                   ? { error: 'SERVICE_UNAVAILABLE', service: error.service, retryable: true } : { error: 'INTERNAL' }
@@ -1439,11 +1441,11 @@ export class BackendSocket {
       // A service on the core boundary that failed or is off (core/serviceHost.ts): the host has logged
       // it, and the client may ask again — the service can be back after the daemon restarts.
       if (err instanceof ServiceUnavailableError) {
-        console.warn(`[backend] ${type}: ${err.message}`)
+        console.warn(`[backend] ${type}: the ${err.service} service is unavailable`)
         if (requestId !== undefined) reply(type, requestId, { error: 'SERVICE_UNAVAILABLE', service: err.service, retryable: true })
         return
       }
-      console.error(`[backend] dispatch ${type} failed:`, err)
+      console.error(`[backend] dispatch ${type} failed:`, errorKind(err))
       if (requestId !== undefined) reply(type, requestId, { error: 'INTERNAL' })
     }
   }
@@ -1477,6 +1479,7 @@ export class BackendSocket {
       parts: this.framePartsProvider?.(s),
       activity: () => this.activityFrameProvider?.(s) ?? null,
       waitingFor: () => this.waitingForProvider?.(s) ?? null,
+      starting: () => this.startingProvider?.(s) ?? false,
       gridAnnotation: this.gridAnnotation,
     })
   }

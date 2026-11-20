@@ -36,6 +36,7 @@ import type { DshVerdict } from '../dsh/verdict.js'
 import { MISSING_HELPER, REPLACED_PROGRAM } from '../engines/kit/identityScan.js'
 import { OTHER_ENGINE_STATES } from '../engines/otherEngines.js'
 import { isOpenclawLocalStopped, OPENCLAW_STATES } from '../engines/openclaw/contract.js'
+import { startMarkerMs } from './processProof.js'
 
 /**
  * The grid block on the wire: where the agent's inference goes, and — when the daemon built the
@@ -156,6 +157,9 @@ export type AgentFrame = {
   /** What a message sent to it waits for before it is typed: `engine` while its engine's reader starts (lib/sessionInput.ts),
    *  as `message_waiting` said once; null when nothing. A window that connects meanwhile reads it here. */
   waitingFor: 'engine' | null
+  /** Until it has taken its first task ({@link agentStarting}). Always present: a push without the key would leave a
+   *  window showing a start that ended. */
+  starting: boolean
   /** Its sandboxed browser (AgentBrowserFrame); absent for an agent created without Browser. */
   browser?: AgentBrowserFrame
 }
@@ -199,6 +203,24 @@ export interface AgentFrameContext {
   gridAnnotation?: (grid: AgentGridTarget) => GridAnnotation | null
   /** What a message to the agent waits for now (core/input.ts); absent, nothing. Read as the frame is built. */
   waitingFor?: () => 'engine' | null
+  /** Whether the agent is starting now ({@link agentStarting}); absent, it is not. Read as the frame is built. */
+  starting?: () => boolean
+}
+
+/** How long from its launch an OpenClaw with no session bound reads as starting ({@link agentStarting}). */
+export const OPENCLAW_STARTING_MS = 60_000
+
+/**
+ * Whether [s] has yet to take its first task: the row still holds it, or it is typed and its user row has not
+ * confirmed it ([firstTaskTyped], core/input.ts). An OpenClaw learns its session only once its Gateway answers, so
+ * one with none bound is starting for a minute from its launch: the later of its row and its process's start, as an
+ * engine typed into a pane that was open first starts after its row.
+ */
+export function agentStarting(s: RegisteredSession, firstTaskTyped: boolean, now: number): boolean {
+  if (s.firstTask || firstTaskTyped) return true
+  if (s.engine !== 'openclaw' || s.sessionId) return false
+  const launched = Math.max(s.registeredAt, startMarkerMs(s.processIdentity?.startMarker ?? '') ?? 0)
+  return now - launched < OPENCLAW_STARTING_MS
 }
 
 /**
@@ -239,7 +261,7 @@ const NAMED_STATES = new Set<string>([...Object.values(OPENCLAW_STATES), ...Obje
 
 export async function agentFrame(
   s: RegisteredSession,
-  { selectedModel, workspace, terminalAvailable, parts, tokenUsage, activity: contextActivity, gridAnnotation, waitingFor }: AgentFrameContext,
+  { selectedModel, workspace, terminalAvailable, parts, tokenUsage, activity: contextActivity, gridAnnotation, waitingFor, starting }: AgentFrameContext,
 ): Promise<AgentFrame> {
   // Fork/Clone need the launch directory even before a service reports. Stopped rows have no
   // publication lease: their directory remains usable, but no stale Git observation is implied.
@@ -315,6 +337,7 @@ export async function agentFrame(
     bypassPermission: s.bypassPermission ?? null,
     namedAgent: s.agent ?? null,
     waitingFor: waitingFor?.() ?? null,
+    starting: starting?.() ?? false,
   }
   // Assigning onto the existing fields preserves their wire order; optional service fields append as before.
   return Object.assign(frame, parts?.())

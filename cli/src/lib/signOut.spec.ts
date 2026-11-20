@@ -1,9 +1,23 @@
 import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs'
 import { join } from 'path'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { env } from '../config/env.js'
 import { AUTH_SESSION_FILE } from './authSession.js'
 import { isDesktopApp, REMOVALS_FILE, removalLine, removeSignIn, SIGN_OUT_BUTTON_FLAG, signOutAsked, type Asker } from './signOut.js'
+
+// Pass-through, recording each path written to by name and each rename's target.
+const disk = vi.hoisted(() => ({ events: [] as string[] }))
+vi.mock('node:fs', async original => {
+  const actual = await original<typeof import('node:fs')>()
+  return { ...actual,
+    writeFileSync: (...args: Parameters<typeof actual.writeFileSync>) => {
+      if (typeof args[0] !== 'number') disk.events.push(`write ${String(args[0])}`)
+      return actual.writeFileSync(...args)
+    },
+    renameSync: (...args: Parameters<typeof actual.renameSync>) => { disk.events.push(`rename ${String(args[1])}`); return actual.renameSync(...args) },
+  }
+})
+afterEach(() => { disk.events = [] })
 
 // 10-27: a desktop test ran the real `harness logout` and signed the whole Mac out. Only a person asks.
 describe('who asked for the sign-in to go', () => {
@@ -125,6 +139,27 @@ describe('the removals kept apart from harness.log', () => {
     for (const secret of ['sk-live1234567890abcdef', 'abcdefghijklmnop', '0123456789abcdef0123456789abcdef']) expect(text).not.toContain(secret)
     expect(text).toContain('<redacted>')
     for (const line of text.trimEnd().split('\n')) expect(Buffer.byteLength(line)).toBeLessThanOrEqual(2_048)
+  })
+
+  it('the save goes through a temporary file renamed onto the target', () => {
+    const kept = join(env.ADAPTER_DATA_DIR, REMOVALS_FILE)
+    rmSync(kept, { force: true })
+    disk.events = []
+    removeSignIn('logout', 'terminal', () => [])
+    expect(disk.events).toContain(`rename ${kept}`)
+    expect(disk.events).not.toContain(`write ${kept}`)
+  })
+
+  it('a file at the old temporary name is left alone', () => {
+    const kept = join(env.ADAPTER_DATA_DIR, REMOVALS_FILE)
+    const old = `${kept}.${process.pid}.tmp`
+    mkdirSync(env.ADAPTER_DATA_DIR, { recursive: true })
+    writeFileSync(old, 'not this writer\'s')
+    try {
+      removeSignIn('logout', 'terminal', () => [])
+      expect(readFileSync(old, 'utf8')).toBe('not this writer\'s')
+      expect(readFileSync(kept, 'utf8')).toContain('reason=logout')
+    } finally { rmSync(old, { force: true }) }
   })
 
   it('still removes the sign-in when the kept file cannot be written', () => {

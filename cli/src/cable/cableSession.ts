@@ -24,13 +24,14 @@ import { readCompanionIdentity, type CompanionIdentity } from './companionProtoc
 
 import { CABLE_MAX_PAYLOAD, CableDecoder, CableType, encodeCableFrame } from './cableFrame.js'
 import { DialLog } from './dialLog.js'
-import { voiceLevel } from './voiceLevel.js'
+import { VoiceSegments, realTimer } from './voiceSegments.js'
 import { FirmwareTransfer, isP4Board, otaKeyFor } from './fwPush.js'
 import { PACK_VERSION } from './pets/pack.js'
 import { planPetSync } from './pets/sync.js'
 import type { PetStore } from './pets/store.js'
 import type { PetDialState } from './pets/sync.js'
 import { SerialLink, findDialPort } from './serial.js'
+import { PortAccessError } from './portAccess.js'
 import { PLAYER_PAGE_SIZE, playerPage, type PlayerSession } from './playerLibrary.js'
 import { PassageCarry, withCarriedPassage, type CarryRead } from './passageCarry.js'
 import { VoiceDraft, type DraftPin } from './voiceDraft.js'
@@ -38,6 +39,7 @@ import { dialText, noticeSummary } from './dialText.js'
 import { QuestionInbox, type ReviewedAnswer, type AnswerReceipt, type QuestionSpeech } from './questionInbox.js'
 import { notificationReadToken, type UnreadNotification } from '../lib/notificationRead.js'
 import { partitionTexts } from '../lib/questionController.js'
+import { errorKind } from '../lib/log.js'
 
 /** Bumped when the VOCABULARY changes. Separate from the frame version, which is the envelope. */
 export const CABLE_PROTO_VERSION = 3   // 3: + question.close (a question answered on another client)
@@ -159,8 +161,10 @@ const APP_SWITCH_REPAINT_MS = 1_000
 /** What a `voice.begin` without an `sr` is assumed to be — firmware old enough not to say. */
 const DEFAULT_VOICE_RATE = 16_000
 
-/** A voice turn longer than this is a stuck dial, not a person talking. 16 kHz mono 16-bit ≈ 32 KB/s. */
-const VOICE_MAX_BYTES = 10 * 60 * 32_000
+/** A voice turn longer than this is a stuck dial, not a person talking. 16 kHz mono 16-bit ≈ 32 KB/s. Both dials
+ *  stop at 600 s on a tick after the 600 s have passed, so a recording run to that stop passes 600 s by up to a
+ *  tick; 15 s leaves room for it and still bounds a stuck dial. */
+const VOICE_MAX_BYTES = (10 * 60 + 15) * 32_000
 
 /** What a `swarms` item's `members` says about one member id (see CableSession.memberMeta). */
 export interface SwarmMemberMeta { id: string; name: string; engine: string; machine: string; online: boolean }
@@ -370,8 +374,9 @@ export type CableMachineSource = 'backend' | 'local' | 'signed-out'
 export type OpenReason = 'question'
 
 /** What turned the dial to an agent from this computer: a person's prompt, a terminal tab they selected, a Claude app
- *  they attached to, or an Orca pane they focused. The outcome's log line is the cause's own. */
-export type FollowCause = 'prompt' | 'tab' | 'attach' | 'focus'
+ *  they attached to, an Orca pane they focused, or a thread they opened in the ChatGPT app. The outcome's log line is
+ *  the cause's own. */
+export type FollowCause = 'prompt' | 'tab' | 'attach' | 'focus' | 'thread'
 /** What a send answers. `message` is a sentence for the dial, shown in place of the generic one. */
 export type SendOutcome = { ok: true } | { ok: false; machine?: string; reason?: string; message?: string }
 
@@ -503,8 +508,9 @@ export interface CableHost {
   /** A finger moving on the dial's glass, on its way to whatever window is open on this computer. */
   scrolled(phase: 'down' | 'move' | 'up', dy: number, velocity: number): void
   updateAgent(agentId: string, model?: string, effort?: string): void
-  /** PCM is 16-bit mono at `sampleRate`; the daemon owns the credential this needs. */
-  transcribe(pcm: Buffer, sampleRate: number, lang: string): Promise<string>
+  /** PCM is 16-bit mono at `sampleRate`; the daemon owns the credential this needs. `signal` aborts the upload of a
+   *  recording that ended without its words being wanted; a host may ignore it. */
+  transcribe(pcm: Buffer, sampleRate: number, lang: string, signal?: AbortSignal): Promise<string>
   /** Which agent the words belong to. Scored locally first; only a genuine tie should cost a network call. */
   route(transcript: string, agents: CableAgent[]): Promise<RouteDecision>
   /**
@@ -941,8 +947,9 @@ export class CableSession {
   /** Devices already logged as having no image channel this session (the hello repeats every ~15 s). */
   private noChannelLogged = new Set<string>()
 
-  /** Voice capture in flight: PCM chunks as they arrive, plus what `voice.begin` said about them. */
-  private voice: { agentId?: string; cmd?: string; lang: string; rate: number; chunks: Buffer[]; bytes: number;
+  /** Voice capture in flight: how many PCM bytes arrived, plus what `voice.begin` said about them. The audio itself goes
+   *  to `voiceSegments`. */
+  private voice: { agentId?: string; cmd?: string; lang: string; rate: number; bytes: number;
     selectionId?: string; selection?: Promise<SelectionResult>;
     carry?: CarryRead;
     question?: { pin?: QuestionSpeech };
@@ -962,6 +969,9 @@ export class CableSession {
   private voiceDraftCreation?: { uploadId: string; id: string }
   private readonly questionInbox = new QuestionInbox()
   private voiceGeneration = 0
+  /** The current recording's uploads, from `voice.begin` until its `voice.end` is answered. Kept apart from `voice`,
+   *  which `voice.end` clears at once, so an abort, a new recording or the port closing still stops what is in flight. */
+  private voiceSegments?: VoiceSegments
   private voiceUploadId = ''
   /** A recording refused at `voice.begin` (its agent has no `v`), said on `voice.end`: today's firmware drops a voice
    *  error that arrives before the person lets go. Any later turn, abort or close moves the generation on and drops it. */
@@ -1022,10 +1032,11 @@ export class CableSession {
     void this.tick().catch((error: unknown) => this.fault(error))
   }
 
-  /** This dial's fault, told to whoever owns the session (CableHost.onFault). */
-  private fault(error: unknown, hostile = false): void {
-    this.log(`cable: ${hostile ? 'flooded' : 'fault'} · ${error instanceof Error ? error.message : String(error)}`)
-    this.host.onFault?.(error, hostile)
+  /** This dial's fault, told to whoever owns the session (CableHost.onFault). A flood is said in our own counts, which
+   *  tell the budget it broke; any other fault by its kind alone. */
+  private fault(error: unknown, flood?: string): void {
+    this.log(flood ? `cable: flooded · ${flood}` : `cable: fault · ${errorKind(error)}`)
+    this.host.onFault?.(error, flood !== undefined)
   }
 
   // ── port lifecycle ────────────────────────────────────────────────────────────────────────────────
@@ -1113,6 +1124,13 @@ export class CableSession {
    * taking an update is neither simply present nor absent, and the row says so.
    */
   private offeringTo = ''
+  /**
+   * What the person has to do before this account can open the port, as last shown on the row, or ''.
+   *
+   * Before this the refusal was a log line every 2 s and nothing was shown. Kept so the row and the log say
+   * it once, and the row is cleared when the cause is gone.
+   */
+  private openProblem = ''
 
   private lastPing = 0
 
@@ -1166,15 +1184,25 @@ export class CableSession {
         clearTimeout(timer)
       }
     } catch (err) {
+      if (err instanceof PortAccessError) {
+        if (err.problem !== this.openProblem) {
+          this.openProblem = err.problem
+          this.log(`cable: cannot open the dial: ${err.problem}`)
+          this.host.onDialStatus?.({ attached: false, problem: err.problem })
+        }
+        return
+      }
       // A port that another process holds is the ordinary case, not a fault: esptool, a serial monitor,
       // or a second daemon. Say so and try again on the next tick.
-      this.log(`cable: cannot open the dial: ${(err as Error).message}`)
+      this.log(`cable: cannot open the dial: ${errorKind(err)}`)
+      this.clearOpenProblem()
       return
     } finally {
       this.opening = false
     }
     if (!opened) return   // no dial plugged in — this daemon's resting state
     if (this.stopped) { await opened.close('stopped while opening'); return }
+    this.clearOpenProblem()
     // Nothing reaches this line holding a live port — tick() only calls in when the link is closed — but
     // assigning over one would strand it exactly as above, and the cost of being sure is one branch.
     if (this.link) await this.link.close('replaced')
@@ -1217,6 +1245,12 @@ export class CableSession {
     this.log(`cable: open on ${opened.path}`)
   }
 
+  private clearOpenProblem(): void {
+    if (!this.openProblem) return
+    this.openProblem = ''
+    this.host.onDialStatus?.({ attached: false })
+  }
+
   private onClosed(why: string): void {
     if (this.traffic.rx || this.traffic.tx) this.logLink('link at close')
     this.log(`cable: closed (${why})`)
@@ -1256,6 +1290,7 @@ export class CableSession {
     this.resetCapabilities()
     this.voice = null
     this.voiceGeneration++
+    this.abortVoiceSegments()
     // The dial keeps its running image; the half-written slot is erased again by the next accepted offer.
     this.endFirmware('interrupted by the port closing')
     // The dial discards a half-received pack when the link drops (it keeps showing the old pet), so there
@@ -1346,7 +1381,8 @@ export class CableSession {
       : this.budget.ms > CableSession.BUDGET.decodeMs ? `${Math.round(this.budget.ms)} ms of decoding` : ''
     if (over) {
       this.budget = { since: now, garbage: 0, frames: 0, ms: 0 }
-      this.fault(new Error(`${over} in a second, more than a dial sends`), true)
+      const flood = `${over} in a second, more than a dial sends`
+      this.fault(new Error(flood), flood)
     }
   }
 
@@ -1557,7 +1593,7 @@ export class CableSession {
           try {
             items = await this.host.listModels(agentId)
           } catch (err) {
-            this.log(`cable: models for ${agentId} failed (${(err as Error).message})`)
+            this.log(`cable: models for ${agentId} failed (${errorKind(err)})`)
           }
         }
         // Answered either way. An empty catalog closes the dial's picker cleanly; silence strands it on a
@@ -1677,7 +1713,7 @@ export class CableSession {
           // Another app moves no window, so no window focus will bring the dial to this agent's face: the tap's own
           // open says it. The dial does not answer a focus with one, and its echo of a swipe only marks the agent seen.
           if (!reason && this.outsideHarness(agentId)) return this.focusAgent(agentId)
-        }).catch(() => this.log('cable: agent.open → failed'))
+        }).catch((error) => this.log(`cable: agent.open → failed · ${errorKind(error)}`))
         return
       }
       case 'agent.fork': {
@@ -1735,6 +1771,7 @@ export class CableSession {
         this.passageCarry.clear(id)
         if (this.voiceCarryId === id) {
           this.voiceGeneration++
+          this.abortVoiceSegments()
           this.voice = null
           this.voiceCarryId = undefined
         }
@@ -1766,7 +1803,7 @@ export class CableSession {
       case 'turn.send':
         // Not awaited: the dial asks for no answer, and a send that waits on its agent must not hold the next frame.
         if (str('agentId') && str('text')) void Promise.resolve(this.host.sendTurn(str('agentId')!, str('text')!))
-          .catch(() => this.log('cable: turn.send → failed'))
+          .catch((error) => this.log(`cable: turn.send → failed · ${errorKind(error)}`))
         return
       case 'turn.stop': {
         const agentId = str('agentId')
@@ -1843,6 +1880,7 @@ export class CableSession {
         if (str('agentId')) this.host.updateAgent(str('agentId')!, str('model'), str('effort'))
         return
       case 'voice.begin': {
+        this.abortVoiceSegments()
         this.cancelFormVoice()
         this.cancelSearchVoice()
         this.voiceDraftCreation = undefined
@@ -1925,7 +1963,6 @@ export class CableSession {
           // speech sound fast — the transcriber is handed a container that lies about itself and answers
           // with nothing at all.
           rate: typeof msg.sr === 'number' && msg.sr > 0 ? msg.sr : DEFAULT_VOICE_RATE,
-          chunks: [],
           bytes: 0,
           form,
           carry,
@@ -1941,6 +1978,16 @@ export class CableSession {
                 .catch(() => ({ ok: false as const, error: 'Could not attach that text. Choose it again.' })),
           } : {}),
         }
+        // Missing its pin or its command already, the turn is refused at Done whatever is said: its audio would be
+        // uploaded, and the person's voice seconds spent, for an answer the dial never gets.
+        const refusedAtDone = (carry && !carry.ok) || (draft && !draft.pin) || (question && !question.pin) ||
+          (search && !search.command) || (form && !form.command) ||
+          (this.voice.selectionId && (!this.voice.agentId || !this.host.selectPassage))
+        if (!refusedAtDone) {
+          const { rate, lang } = this.voice
+          this.voiceSegments = new VoiceSegments({ rate, lang, timer: realTimer,
+            transcribe: (pcm, signal) => this.host.transcribe(pcm, rate, lang, signal) })
+        }
         return
       }
       case 'voice.abort':
@@ -1955,6 +2002,7 @@ export class CableSession {
         if (this.voice?.selectionId && this.voice.agentId) void this.host.selectPassage?.({
           op: 'cancel', agentId: this.voice.agentId, selectionId: this.voice.selectionId })
         this.voiceGeneration++
+        this.abortVoiceSegments()
         this.voice = null
         this.voiceCarryId = undefined
         return
@@ -2246,7 +2294,7 @@ export class CableSession {
     const next = this.petChain.then(() => this.runPetSync())
     this.petChain = next.catch(() => {})
     // A failed sync is this dial's log line, never a failed hello.
-    return next.catch((error: unknown) => this.log(`cable: pet sync failed: ${error instanceof Error ? error.message : String(error)}`))
+    return next.catch((error: unknown) => this.log(`cable: pet sync failed: ${errorKind(error)}`))
   }
 
   private async runPetSync(): Promise<void> {
@@ -2270,7 +2318,7 @@ export class CableSession {
       if (this.petErrors.has(id)) continue
       // The newest version both sides know: a dial that says pets:1 gets the version 1 pack of the very same id.
       const pack = await store.pack(id, Math.min(this.petDialMax, PACK_VERSION)).catch((error: unknown) => {
-        this.log(`cable: pet ${id} unreadable: ${error instanceof Error ? error.message : String(error)}`)
+        this.log(`cable: pet ${id} unreadable: ${errorKind(error)}`)
         this.petErrors.set(id, 'unreadable')
         return null
       })
@@ -2334,13 +2382,33 @@ export class CableSession {
       this.log('cable: voice over the length cap, dropped')
       this.cancelFormVoice()
       this.cancelSearchVoice()
+      this.abortVoiceSegments()
       this.voice = null
       return
     }
-    this.voice.chunks.push(chunk)
+    this.voiceSegments?.push(chunk)
+  }
+
+  /** Stops the current recording's uploads: wherever the voice generation moves on, its words are no longer wanted. */
+  private abortVoiceSegments(): void {
+    this.voiceSegments?.abort()
+    this.voiceSegments = undefined
   }
 
   private async finishVoice(review = false): Promise<void> {
+    // Only a turn's own: with no turn, the field holds a recording an earlier voice.end is still transcribing.
+    const segments = this.voice ? this.voiceSegments : undefined
+    try {
+      await this.answerVoice(segments, review)
+    } finally {
+      // Every way out that did not use the transcript stops the uploads; once finish() has settled this does nothing.
+      segments?.abort()
+      if (this.voiceSegments === segments) this.voiceSegments = undefined
+    }
+  }
+
+  private async answerVoice(segments: VoiceSegments | undefined, review: boolean): Promise<void> {
+    const arrived = performance.now()
     const turn = this.voice
     const generation = this.voiceGeneration
     const uploadId = this.voiceUploadId
@@ -2387,7 +2455,7 @@ export class CableSession {
       await reply({ t: 'voice.error', message: selection.ok ? 'Choose the text again.' : selection.error })
       return
     }
-    if (!turn || turn.bytes === 0) {
+    if (!turn || turn.bytes === 0 || !segments) {
       this.cancelFormVoice()
       this.cancelSearchVoice()
       await reply({ t: 'voice.error', message: "Didn't catch that" })
@@ -2397,15 +2465,20 @@ export class CableSession {
     const seconds = turn.bytes / (turn.rate * 2)
     this.log(`cable: voice ${seconds.toFixed(1)}s (${Math.round(turn.bytes / 1024)} KB) → stt`)
 
-    const pcm = Buffer.concat(turn.chunks)
+    // Numbers only: how many segments went up while the person talked, and how long Done waited for the rest.
+    const finished = segments.finish().finally(() => {
+      const { segments: uploaded, early, retries } = segments.counts()
+      this.log(`cable: voice segments=${uploaded} early=${early} retries=${retries} ` +
+        `tail=${Math.round(performance.now() - arrived)}ms`)
+    })
     // One line per turn, numbers only: whether an empty transcript was silence on the dial or words the
     // transcriber missed, and for which agent (OPENHARNES-18). No audio and no text.
-    const { peak, rms } = voiceLevel(pcm)
+    const { peak, rms } = segments.level()
     const heard = (transcript: string) => this.log(`cable: voice turn agent=${turn.agentId ?? 'none'} ` +
       `cmd=${turn.cmd || 'none'} lang=${turn.lang} sr=${turn.rate} peak=${peak} rms=${rms} transcript=${transcript}`)
     let transcript: string
     try {
-      transcript = (await this.host.transcribe(pcm, turn.rate, turn.lang)).trim()
+      transcript = await finished
     } catch (err) {
       heard('failed')
       if (current()) { this.cancelFormVoice(); this.cancelSearchVoice() }
@@ -2493,7 +2566,7 @@ export class CableSession {
       if (!current()) return
       if (inWindow.t === 'sent') {
         this.log(`cable: the window routed the spoken task → ${inWindow.agentId.slice(0, 8)}`)
-        await reply({
+        await reply(this.withinCap({
           t: 'voice.transcript',
           routeId: '',
           text: transcript,
@@ -2503,7 +2576,7 @@ export class CableSession {
           // that follows the window's focus brings both along a moment later.
           agentName: agents.find((a) => a.id === inWindow.agentId)?.name ?? '',
           needsConfirm: false,
-        })
+        }))
         return
       }
       if (inWindow.t === 'cancelled') {
@@ -2587,8 +2660,8 @@ export class CableSession {
       this.passageCarry.clear(carried.id)
       this.voiceCarryId = undefined
     }
-    await reply({ t: 'voice.transcript', routeId: '', text: transcript, agentId, agentName, needsConfirm: false,
-      ...(carried ? { carryId: carried.id } : {}) })
+    await reply(this.withinCap({ t: 'voice.transcript', routeId: '', text: transcript, agentId, agentName, needsConfirm: false,
+      ...(carried ? { carryId: carried.id } : {}) }))
   }
 
   private cancelSearchVoice(): void {
@@ -2654,7 +2727,7 @@ export class CableSession {
       const framed = this.seqOn ? { ...msg, seq: this.seq } : msg
       frame = encodeCableFrame(CableType.Json, Buffer.from(dialJson(framed), 'utf8'))
     } catch (err) {
-      this.log(`cable: dropped a ${String(msg.t)} frame (${(err as Error).message})`)
+      this.log(`cable: dropped a ${String(msg.t)} frame (${errorKind(err)})`)
       return false
     }
     if (this.seqOn) this.seq++
@@ -2662,7 +2735,7 @@ export class CableSession {
       await this.put(this.link, frame)
       return true
     } catch (err) {
-      this.log(`cable: write failed (${(err as Error).message})`)
+      this.log(`cable: write failed (${errorKind(err)})`)
       await this.link.close('write failed')
       return false
     }
@@ -2911,7 +2984,7 @@ export class CableSession {
     this.restoring = true
     this.restoreAgain = false
     void this.pushRestores()
-      .catch((err) => this.log(`cable: restores failed (${(err as Error).message})`))
+      .catch((err) => this.log(`cable: restores failed (${errorKind(err)})`))
       .finally(() => {
         this.restoring = false
         if (this.restoreAgain) this.restoreInBackground()
@@ -3353,13 +3426,17 @@ export class CableSession {
   }
 
   /**
-   * A frame over the cap makes `encodeCableFrame` throw, `send` closes the link, and the reconnect sends the
-   * same frame again. `full` is the one optional part of a summary, so it is what goes.
+   * A frame over the cap makes `encodeCableFrame` throw and `send` drops it, so the dial never hears the message.
+   * `full` is the one optional part of a summary, so it is what goes. A `voice.transcript`'s `text` goes too: neither
+   * firmware reads it (round `cable_client.c`, Pro `pro_cable.c` `handle_voice_transcript`), and a long recording's
+   * words would otherwise cost the dial its "sent". The margin holds the `uploadId` a voice reply adds and the `seq`
+   * `send` adds.
    */
   private withinCap(msg: Message): Message {
-    if (!('full' in msg) || Buffer.byteLength(JSON.stringify(msg), 'utf8') <= CABLE_MAX_PAYLOAD - 256) return msg
-    const { full: _full, ...rest } = msg as Message & { full?: string }
-    return rest
+    const drop = msg.t === 'voice.transcript' ? 'text' : 'full'
+    if (!(drop in msg) || Buffer.byteLength(JSON.stringify(msg), 'utf8') <= CABLE_MAX_PAYLOAD - 256) return msg
+    const { [drop]: _dropped, ...rest } = msg
+    return rest as Message
   }
 
   /** The whole answer behind a card, from the host's newest stored turn, if that turn IS this card's. */
@@ -3633,7 +3710,7 @@ export class CableSession {
     // fire-and-forgets followApp, so the session log is the only place an unexpected rejection would
     // otherwise be visible; consume it here rather than creating an unhandled rejection.
     const focused = this.appFocusTail = task.catch((err) => {
-      this.log(`cable: could not follow app focus (${(err as Error).message})`)
+      this.log(`cable: could not follow app focus (${errorKind(err)})`)
     })
     const machineTask = this.appMachineTail.then(async () => {
       await focused
@@ -3650,7 +3727,7 @@ export class CableSession {
       await this.selectMachine(machineId, isCurrent)
     })
     const selected = this.appMachineTail = machineTask.catch((err) => {
-      this.log(`cable: could not follow app machine (${(err as Error).message})`)
+      this.log(`cable: could not follow app machine (${errorKind(err)})`)
     })
     await Promise.all([focused, selected])
   }

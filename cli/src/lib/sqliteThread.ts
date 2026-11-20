@@ -23,6 +23,7 @@
 import { Worker } from 'node:worker_threads'
 import { NATIVE_READER } from './sqliteBuiltin.js'
 import type { SqliteParam, SqliteReadResult, SqliteRow } from './sqliteRead.js'
+import { errorKind } from './log.js'
 
 /** Two: one heavy read (a whole session) leaves a thread for every other poll. */
 const THREADS = 2
@@ -162,8 +163,8 @@ function start(): Thread {
     read.answer(reply.ok ? { ok: true, rows: reply.rows } : { ok: false, message: reply.message })
     dispatch()
   })
-  // An uncaught error ends the thread; `exit` follows and answers its read. Its name only: a message can quote a path.
-  thread.worker.on('error', (error) => { console.warn(`[sqlite] a read thread failed: ${error.name}`) })
+  // An uncaught error ends the thread; `exit` follows and answers its read. Its kind only: a message can quote a path.
+  thread.worker.on('error', (error) => { console.warn(`[sqlite] a read thread failed: ${errorKind(error)}`) })
   thread.worker.once('exit', () => {
     const at = threads.indexOf(thread)
     if (at < 0) return

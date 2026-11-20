@@ -2,6 +2,7 @@ import type { InlineRuntimeContext, InlineRuntimeReader } from '../facets/inline
 import type { ProfileEvidence, RuntimeModelOption } from '../facets/runtime.js'
 import { currentPaneUi, effortLabel, encodeRuntimeProfile, stripAnsi, text } from '../kit/runtime.js'
 import { env } from '../../config/env.js'
+import { errorKind } from '../../lib/log.js'
 import { join } from 'node:path'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
@@ -288,7 +289,7 @@ class ProfileReader {
         entries = parseCursorModelsOutput(result.stdout)
         this.cursorCatalogCache = { key, entries, expiresAt: Date.now() + CURSOR_CATALOG_TTL_MS }
       } catch (err) {
-        console.warn('[runtime-profile] Cursor model catalog failed:', err instanceof Error ? err.message : err)
+        console.warn('[runtime-profile] Cursor model catalog failed:', errorKind(err))
         entries = []
       }
     }

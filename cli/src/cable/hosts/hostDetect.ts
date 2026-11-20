@@ -76,6 +76,12 @@ export function hostDisplayName(id: string): string {
   return NAMES[id] ?? 'Terminal'
 }
 
+/** The name of where an agent is: its host's, or its app's when the host is a terminal the daemon does not know. On Linux
+ *  no bundle names the Claude app or VS Code, so an agent there has that host while its app came from its process. */
+export function agentPlaceName(agent: { host: string; app: string }): string {
+  return hostDisplayName(agent.host === UNKNOWN_APP ? agent.app : agent.host)
+}
+
 /** "Other" for the unknown app, so its page never reads as Apple's Terminal; a host's own name for the rest. */
 export function appDisplayName(id: string): string {
   return id === UNKNOWN_APP ? 'Other' : hostDisplayName(id)

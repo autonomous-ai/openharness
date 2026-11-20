@@ -7,6 +7,7 @@ import type { ReviewedAnswer } from '../cable/questionInbox.js'
 // dial parked on the local machine — which is where it sits most of the time — holds no socket at all.
 import { isTerminalEngine } from '../engines/types.js'
 import { isTier } from '../lib/notifyTier.js'
+import { errorKind } from '../lib/log.js'
 import { FleetError, type FleetEvent, type FleetMachine, type MachineFleet } from '../cable/machineFleet.js'
 import type { CableAgent } from '../cable/cableSession.js'
 import type { RecentTurn } from '../cable/cableHost.js'
@@ -295,7 +296,7 @@ export class DeviceFleet implements MachineFleet {
     // The far end owns what the profile means; this only reassembles the opaque string it round-trips.
     const selectedModel = `runtime-v1:${agentId}:claude:${model}@${effort || 'auto'}`
     void this.rpc(machineId, 'agent_update', { agentId, selectedModel })
-      .catch((err) => this.opts.log(`device: agent_update failed (${(err as Error).message})`))
+      .catch((err) => this.opts.log(`device: agent_update failed (${errorKind(err)})`))
   }
 
   async forkAgent(machineId: string, agentId: string): Promise<string> {
@@ -368,7 +369,7 @@ export class DeviceFleet implements MachineFleet {
 
       return turns
     } catch (err) {
-      this.opts.log(`device: agent_recent ${agentId} failed (${(err as Error).message})`)
+      this.opts.log(`device: agent_recent ${agentId} failed (${errorKind(err)})`)
       return []
     }
   }
@@ -391,7 +392,7 @@ export class DeviceFleet implements MachineFleet {
       const agents = await this.listAgents(machineId)
       for (const a of agents) await this.recentSummaries(machineId, a.id)
     } catch (err) {
-      this.opts.log(`device: recap prefetch failed (${(err as Error).message})`)
+      this.opts.log(`device: recap prefetch failed (${errorKind(err)})`)
     }
   }
 

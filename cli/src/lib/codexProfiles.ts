@@ -9,14 +9,13 @@
  * anything for a remote machine) to this machine's own state directory.
  */
 
-import { closeSync, constants, fchmodSync, fsyncSync, openSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'fs'
-import { randomUUID } from 'crypto'
+import { realpathSync, statSync } from 'fs'
 import { homedir } from 'os'
 import { join } from 'path'
 import { env } from '../config/env.js'
 import { homeIsAbsolute } from '../engines/kit/homeAdoption.js'
 import { discoverCodexProfiles } from './codexProfileDiscovery.js'
-import { hardenPrivateStateFileIfPresent, readPrivateStateFile, secureStateDirectory } from './secureState.js'
+import { atomicWriteJson, hardenPrivateStateFileIfPresent, jsonArray, readState, requireState, secureStateDirectory } from './secureState.js'
 
 export interface CodexProfile {
   path: string
@@ -36,39 +35,28 @@ function labelFor(path: string): string {
 
 function readLinkedPaths(): Set<string> {
   try {
-    const raw = JSON.parse(readPrivateStateFile(FILE, 1024 * 1024)) as unknown
-    if (Array.isArray(raw)) {
-      return new Set(raw.filter((p): p is string => typeof p === 'string').slice(0, MAX_LINKED))
-    }
+    // A list another account could write is not this reader's to set aside: no list, and the writer refuses it too.
+    hardenPrivateStateFileIfPresent(FILE, 1024 * 1024)
   } catch {
-    // Discovery still works when the optional saved list is unavailable/unreadable/malformed.
+    return new Set()
   }
-  return new Set()
+  const read = readState(FILE, 'cache', jsonArray)
+  return linkedIn(read.state === 'ok' ? read.value : [])
 }
 
-function atomicWriteJson(file: string, value: unknown): void {
-  hardenPrivateStateFileIfPresent(file)
-  const temporary = `${file}.${process.pid}.${randomUUID()}.tmp`
-  let renamed = false
-  try {
-    const fd = openSync(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600)
-    try {
-      writeFileSync(fd, JSON.stringify(value, null, 2))
-      fchmodSync(fd, 0o600)
-      fsyncSync(fd)
-    } finally {
-      closeSync(fd)
-    }
-    renameSync(temporary, file)
-    renamed = true
-  } finally {
-    if (!renamed) rmSync(temporary, { force: true })
-  }
+/** The paths a link starts from. Throws when another account could write the list, or it cannot be read now
+ *  (StateFileUnreadable): read as none, the link would drop every other profile. */
+function linkedPathsToChange(): Set<string> {
+  hardenPrivateStateFileIfPresent(FILE, 1024 * 1024)
+  return linkedIn(requireState(FILE, jsonArray, 'cache') ?? [])
 }
+
+const linkedIn = (list: unknown[]): Set<string> => new Set(list.filter((p): p is string => typeof p === 'string').slice(0, MAX_LINKED))
 
 function writeLinkedPaths(paths: Set<string>): void {
   secureStateDirectory(env.ADAPTER_DATA_DIR)
-  atomicWriteJson(FILE, [...paths].slice(0, MAX_LINKED))
+  // 'trust': the old file's owner and mode are checked, as this file always was.
+  atomicWriteJson(FILE, [...paths].slice(0, MAX_LINKED), 'trust')
 }
 
 /** Validate + resolve a folder path the same way for both linking and re-checking a saved one. */
@@ -97,7 +85,7 @@ export function resolveCodexProfilePath(path: string): CodexProfile | CodexProfi
 export function linkCodexProfile(path: string): CodexProfile | CodexProfileError {
   const profile = resolveCodexProfilePath(path)
   if ('error' in profile) return profile
-  const linked = readLinkedPaths()
+  const linked = linkedPathsToChange()
   linked.add(profile.path)
   writeLinkedPaths(linked)
   return profile

@@ -107,16 +107,16 @@ describe('one owner per conversation, stopped harnesses included', () => {
       throw 'not a record'
     })
     expect(owners.settle()).toEqual(['ok'])
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining('disk full'))
+    expect(warn).toHaveBeenCalledWith('[agent] stuck could not be set aside for owner · Error')
     expect(sent).toHaveLength(1)
   })
 
-  it('a non-Error failure is said in words too', () => {
+  it('a non-Error failure is said by its type', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const { owners, stoppedAgents } = setup([row('a', 'c1'), row('b', 'c1', { boundAt: 9000 })])
     stoppedAgents.supersede.mockImplementation(() => { throw 'plain' })
     expect(owners.settle()).toEqual([])
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining('plain'))
+    expect(warn).toHaveBeenCalledWith('[agent] a could not be set aside for b · string')
   })
 
   it('settles the conversation a stopped record holds as saved, or nothing when there is no record', () => {

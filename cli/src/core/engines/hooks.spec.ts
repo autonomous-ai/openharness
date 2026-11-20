@@ -114,8 +114,8 @@ describe('which agent a hook belongs to', () => {
     vi.mocked(processRows).mockResolvedValue(tree([300, 100], [100, 1]) as never)
     vi.mocked(deps.agentReconciler.triggerHint).mockRejectedValueOnce(new IdentityReadUnavailable('the observed process changed before publication'))
     expect(await hooks.resolveHookAgent({ engine: 'claude', runtimeHints: [hint('%1')], callerPid: 300 })).toEqual(current)
-    // Any of the pass's holds lands here: the log says which.
-    expect(console.log).toHaveBeenCalledWith(expect.stringContaining('the observed process changed before publication'))
+    // Any of the pass's holds lands here: the log names its kind, never its words.
+    expect(console.log).toHaveBeenCalledWith('[hooks] reconciliation held · IdentityReadUnavailable IDENTITY_UNAVAILABLE · checking current process evidence')
   })
 
   it.each(['committed', 'removed'] as const)('keeps Cursor resolution through a superseded reconciliation until pane %s', async outcome => {
@@ -592,7 +592,7 @@ describe('installing every engine\'s hooks', () => {
     vi.mocked(hooks.installOpencodePlugin).mockRejectedValueOnce(new Error('probe unavailable'))
     const installed = await installEngineHooks(4242)
     expect(hooks.installCopilotHooks).toHaveBeenCalledWith(...startupArgs(hooks.installCopilotHooks))
-    expect(console.warn).toHaveBeenCalledWith('[hooks] opencode install skipped · probe unavailable')
+    expect(console.warn).toHaveBeenCalledWith('[hooks] opencode install skipped · Error')
     installed.close()
   })
 
@@ -725,10 +725,10 @@ describe('installing every engine\'s hooks', () => {
 
   it('contains a rejected login-shell read and fences a late successful read after close', async () => {
     const rejected = await installEngineHooks(4242, { environment: {}, loginShell: Promise.reject('fixture unavailable') })
-    expect(console.warn).toHaveBeenCalledWith('[hooks] login-shell homes unavailable · fixture unavailable')
+    expect(console.warn).toHaveBeenCalledWith('[hooks] login-shell homes unavailable · string')
     rejected.close()
     await installEngineHooks(4242, { environment: {}, loginShell: Promise.reject(new Error('fixture failed')) })
-    expect(console.warn).toHaveBeenLastCalledWith('[hooks] login-shell homes unavailable · fixture failed')
+    expect(console.warn).toHaveBeenLastCalledWith('[hooks] login-shell homes unavailable · Error')
     let resolve!: (environment: NodeJS.ProcessEnv) => void
     const installed = await installEngineHooks(4242, { environment: {}, loginShell: new Promise(done => { resolve = done }) })
     const calls = vi.mocked(confirmHomes).mock.calls.length
@@ -754,8 +754,8 @@ describe('installing every engine\'s hooks', () => {
     vi.mocked(engineHooks.codex.install).mockImplementationOnce(() => { throw new Error('config.toml is read-only') })
     vi.mocked(hooks.installGrokHooks).mockImplementationOnce(() => { throw 'settings mid-write' })
     await installEngineHooks(4242)
-    expect(console.warn).toHaveBeenCalledWith('[hooks] codex install skipped · config.toml is read-only')
-    expect(console.warn).toHaveBeenCalledWith('[hooks] grok install skipped · settings mid-write')
+    expect(console.warn).toHaveBeenCalledWith('[hooks] codex install skipped · Error')
+    expect(console.warn).toHaveBeenCalledWith('[hooks] grok install skipped · string')
     for (const install of installs) expect(install).toHaveBeenCalledTimes(1)
   })
 })

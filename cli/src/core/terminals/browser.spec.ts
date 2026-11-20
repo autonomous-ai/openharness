@@ -90,17 +90,17 @@ describe('browser_callback', () => {
       expect(await other.browser.callback({ url: 'http://127.0.0.1:1455/auth/callback?code=c' }, 'phone-1')).toEqual({ ok: true, status: 302 })
       expect(replay).toHaveBeenCalledOnce()
     }
-    const failing = setup({ replay: vi.fn().mockResolvedValueOnce({ status: 302, location: '/success' }).mockRejectedValueOnce(new Error('ECONNRESET')) })
+    const failing = setup({ replay: vi.fn().mockResolvedValueOnce({ status: 302, location: '/success' }).mockRejectedValueOnce(Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' })) })
     failing.browser.typed('a1', { connId: 'phone-1', kind: 'phone' })
     failing.browser.open({ pane: '%7', url: CODEX })
     expect(await failing.browser.callback({ url: 'http://127.0.0.1:1455/auth/callback?code=c' }, 'phone-1')).toEqual({ ok: true, status: 302 })
     expect(failing.deps.log).toHaveBeenCalledWith('[browser] the program\'s next page on port 1455 not opened: ECONNRESET')
-    // A rejection that is not an Error is said the same way.
+    // A rejection that is not an Error is said by its type.
     const plain = setup({ replay: vi.fn().mockResolvedValueOnce({ status: 302, location: '/success' }).mockRejectedValueOnce('socket closed') })
     plain.browser.typed('a1', { connId: 'phone-1', kind: 'phone' })
     plain.browser.open({ pane: '%7', url: CODEX })
     expect(await plain.browser.callback({ url: 'http://127.0.0.1:1455/auth/callback?code=c' }, 'phone-1')).toEqual({ ok: true, status: 302 })
-    expect(plain.deps.log).toHaveBeenCalledWith('[browser] the program\'s next page on port 1455 not opened: socket closed')
+    expect(plain.deps.log).toHaveBeenCalledWith('[browser] the program\'s next page on port 1455 not opened: string')
     // A program that keeps sending the browser on is followed a few pages, never for ever.
     const loop = setup({ replay: vi.fn(async () => ({ status: 302, location: '/again' })) })
     loop.browser.typed('a1', { connId: 'phone-1', kind: 'phone' })
@@ -110,7 +110,7 @@ describe('browser_callback', () => {
   })
 
   it('says when the program refused it or could not be reached', async () => {
-    const { browser, deps } = setup({ replay: vi.fn().mockResolvedValueOnce({ status: 400, location: null }).mockRejectedValueOnce(new Error('ECONNREFUSED')).mockRejectedValueOnce('gone') })
+    const { browser, deps } = setup({ replay: vi.fn().mockResolvedValueOnce({ status: 400, location: null }).mockRejectedValueOnce(Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:35391'), { code: 'ECONNREFUSED' })).mockRejectedValueOnce('gone') })
     browser.typed('a1', { connId: 'phone-1', kind: 'phone' })
     browser.open({ pane: '%7', url: CLAUDE })
     browser.open({ pane: '%7', url: CLAUDE })
@@ -120,7 +120,7 @@ describe('browser_callback', () => {
     expect(await browser.callback({ url: 'http://127.0.0.1:35391/callback?code=x' }, 'phone-1')).toEqual({ error: 'NOT_DELIVERED' })
     // The log says what happened and where, never the code.
     expect(deps.log).toHaveBeenCalledWith('[browser] sign-in not handed to the program on port 35391: ECONNREFUSED')
-    expect(deps.log).toHaveBeenCalledWith('[browser] sign-in not handed to the program on port 35391: gone')
+    expect(deps.log).toHaveBeenCalledWith('[browser] sign-in not handed to the program on port 35391: string')
     expect(JSON.stringify(vi.mocked(deps.log).mock.calls)).not.toContain('code=')
     expect(await browser.callback({ url: 'http://localhost/callback?code=x' }, 'phone-1')).toEqual({ error: 'NOT_EXPECTED' })
     expect(deps.log).toHaveBeenLastCalledWith('[browser] a sign-in on port ? was refused: no page sent to that phone waits there')

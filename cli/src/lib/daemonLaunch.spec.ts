@@ -32,13 +32,37 @@ describe('connectFailure', () => {
     expect(connectFailure('[backend] machine busy', 1)).toMatchObject({ busy: true, fatal: true })
     expect(connectFailure('Error: listen EADDRINUSE 127.0.0.1:18473', 18473)).toMatchObject({ fatal: true })
     expect(connectFailure('Error: listen EADDRINUSE 127.0.0.1:18473', 18473)?.detail).toContain('hook port 18473')
-    expect(connectFailure('Unexpected server response: 401', 1)).toMatchObject({ deauth: true, fatal: true })
-    expect(connectFailure('Unexpected server response: 409', 1)).toMatchObject({ busy: true })
-    expect(connectFailure('Unexpected server response: 404', 1)).toMatchObject({ fatal: true, deauth: false })
-    expect(connectFailure('Unexpected server response: 502', 1)).toMatchObject({ fatal: false })
+  })
+
+  it.each([
+    ['[backend] socket error: Error · Unexpected server response: 401', { deauth: true, fatal: true }],
+    ['[backend] socket error: Error · Unexpected server response: 403', { deauth: true, fatal: true }],
+    ['[backend] socket error: Error · Unexpected server response: 409', { busy: true }],
+    ['[backend] socket error: Error · Unexpected server response: 404', { fatal: true, deauth: false }],
+    ['[backend] socket error: Error · Unexpected server response: 502', { fatal: false }],
     // Offline is not a misconfiguration: the daemon stays up and serves the loopback until DNS is back.
-    expect(connectFailure('getaddrinfo ENOTFOUND x', 1)).toMatchObject({ fatal: false })
-    expect(connectFailure('connect ECONNREFUSED', 1)).toMatchObject({ fatal: false })
+    ['[backend] socket error: ENOTFOUND', { detail: 'host not found (DNS)', fatal: false }],
+    ['[backend] socket error: EAI_AGAIN', { detail: 'host not found (DNS)', fatal: false }],
+    ['[backend] socket error: EAI_FAIL', { detail: 'host not found (DNS)', fatal: false }],
+    ['[backend] socket error: ECONNREFUSED', { detail: 'connection refused', fatal: false }],
+    ['[backend] socket error: CERT_HAS_EXPIRED', { detail: 'TLS certificate error', fatal: true }],
+    ['[backend] socket error: DEPTH_ZERO_SELF_SIGNED_CERT', { detail: 'TLS certificate error', fatal: true }],
+    ['[backend] socket error: SELF_SIGNED_CERT_IN_CHAIN', { detail: 'TLS certificate error', fatal: true }],
+    ['[backend] socket error: UNABLE_TO_VERIFY_LEAF_SIGNATURE', { detail: 'TLS certificate error', fatal: true }],
+    ['[backend] socket error: ERR_TLS_CERT_ALTNAME_INVALID', { detail: 'TLS certificate error', fatal: true }],
+  ])('reads %s, as the gateway writes it', async (line, expected) => {
+    const { connectFailure } = await load()
+    expect(connectFailure(line, 18473)).toMatchObject(expected)
+  })
+
+  // Another request's failure in the start window names its own kind, not the backend link's.
+  it.each([
+    '[update] check failed (will retry): TypeError CERT_HAS_EXPIRED',
+    '[update] check failed (will retry): TypeError ENOTFOUND',
+    '[update] check failed (will retry): TypeError ECONNREFUSED',
+  ])('reads no backend failure in %s', async (line) => {
+    const { connectFailure } = await load()
+    expect(connectFailure(line, 1)).toBeNull()
   })
 })
 
@@ -54,15 +78,15 @@ describe('waitForReady', () => {
   it('keeps waiting through transient failures and reports the last one on timeout', async () => {
     const { waitForReady } = await load()
     const deps = fakeDeps()
-    deps.log.push('connect ECONNREFUSED')
+    deps.log.push('[backend] socket error: ECONNREFUSED')
     await expect(waitForReady(0, 2_000, deps)).resolves.toEqual({ state: 'unreachable', detail: 'connection refused' })
   })
 
   it('short-circuits on fatal, deauth and busy', async () => {
     const { waitForReady } = await load()
     for (const [line, state] of [
-      ['Unexpected server response: 404', 'fatal'],
-      ['Unexpected server response: 403', 'deauth'],
+      ['[backend] socket error: Error · Unexpected server response: 404', 'fatal'],
+      ['[backend] socket error: Error · Unexpected server response: 403', 'deauth'],
       ['[backend] machine busy', 'busy'],
     ] as const) {
       const deps = fakeDeps()

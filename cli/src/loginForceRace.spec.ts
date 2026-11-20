@@ -253,8 +253,8 @@ describe('login --force beside a start that lands mid-sign-in', () => {
     expect(await login.exit).toBe(1)
     expect(await start.exit).toBe(1)
     expect(login.stdout()).toContain('starting the daemon again on this account')
-    expect(login.stderr()).toContain('A Harness daemon is already serving')
-    expect(start.stderr()).toContain('A Harness daemon is already serving')
+    expect(login.stderr()).toContain('Failed to start adapter: EADDRINUSE · another Harness daemon serves this data folder')
+    expect(start.stderr()).toContain('Failed to start adapter: EADDRINUSE · another Harness daemon serves this data folder')
 
     // Nothing acted on the old account once its daemon was stopped: no call to the backend, the
     // start's included, carried the old session's token.
@@ -307,7 +307,7 @@ describe('login after a running daemon exits cleanly during sign-in', () => {
     expect(await login.exit).toBe(1)
 
     expect(login.stdout()).toContain('starting the daemon again on this account')
-    expect(login.stderr()).toContain('A Harness daemon is already serving')
+    expect(login.stderr()).toContain('Failed to start adapter: EADDRINUSE · another Harness daemon serves this data folder')
     const results = login.stdout().trim().split('\n').filter((line) => line.startsWith('{'))
       .map((line) => JSON.parse(line) as { type: string; status?: string })
       .filter((line) => line.type === 'result')

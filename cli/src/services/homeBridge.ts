@@ -20,10 +20,13 @@ import { oldUsers, procRows, type ProcRow } from '../homeMove/oldUsers.js'
 import { OWN_FILES } from '../homeMove/plan.js'
 import { readMoveRecord, writeMoveRecord, type MoveRecord } from '../homeMove/record.js'
 import { connectorsDir } from '../lib/connectors/store.js'
+import { errorKind } from '../lib/log.js'
 import { savedDaemonPort } from '../lib/daemonRecord.js'
 import { HARNESS_OWNER_OPTION } from '../lib/harnessSessionLabel.js'
 import { publishHookRoute } from '../lib/hookRoutes.js'
 import { runtimeShortRoot, socketPathIn, unixSocketPath } from '../lib/localSocket.js'
+import { tmuxFinder } from '../lib/binaryFinder.js'
+import type { TmuxPathOutcome } from '../lib/tmuxOnPath.js'
 
 /** How often it looks for a process that could still use an old path. */
 export const CHECK_MS = 600_000
@@ -54,8 +57,10 @@ export interface HomeBridgeDeps {
   /** This boot's id (homeMove/bridge.ts). */
   bootId(): string | null
   rows(): ProcRow[]
-  /** Every pane on tmux's default server, each its process and its tag, as spawnSync gives tmux's answer. */
-  tmux(): TmuxAnswer
+  /** Where tmux is, as the core finds it (lib/binaryFinder.ts tmuxFinder); it never rejects. */
+  tmuxAt(): Promise<TmuxPathOutcome>
+  /** Every pane on tmux's default server, each its process and its tag, as spawnSync gives the answer of [binary]. */
+  tmux(binary: string): TmuxAnswer
   /** The harnesses whose setup has yet to run again after the move. */
   setupsPending(): Promise<number>
   /** Wakes the Store's process, which sets them up again as it starts. */
@@ -71,8 +76,8 @@ const IDLE = { stop: () => {}, connected: () => {} }
 const NO_SERVER = /^no server running on |^error connecting to .* \(No such file or directory\)$/m
 
 /** The default server is where the daemon makes its panes (homeMove/panes.ts); the daemon never inherits a TMUX naming another. */
-function listPanes(): TmuxAnswer {
-  return spawnSync('tmux', ['list-panes', '-a', '-F', `#{pane_pid} #{${HARNESS_OWNER_OPTION}}`], { encoding: 'utf8', timeout: TMUX_LIMIT_MS })
+function listPanes(binary: string): TmuxAnswer {
+  return spawnSync(binary, ['list-panes', '-a', '-F', `#{pane_pid} #{${HARNESS_OWNER_OPTION}}`], { encoding: 'utf8', timeout: TMUX_LIMIT_MS })
 }
 
 /** Loaded at the first check, which only a bridge brings: the Store's index module brings zod, which the edge host otherwise
@@ -109,8 +114,6 @@ export async function askForStore(open: () => Promise<Daemon> = () => openDaemon
   }
 }
 
-const said = (error: unknown): string => (error instanceof Error ? error.message : String(error))
-
 /**
  * In the core's process (no master, or `HARNESSD_SERVICES=none`): the same service, which the apps ask nothing. The core is
  * the daemon's first process here, and there from its start, so it checks at once; and so is the Store, which it never
@@ -125,7 +128,8 @@ export function startHomeBridgeInCore(core: CoreApi, given: Partial<HomeBridgeDe
 export function startHomeBridge(core: CoreApi, given: Partial<HomeBridgeDeps> = {}): { stop(): void; connected(): void } {
   const deps: HomeBridgeDeps = {
     platform: process.platform, home: homedir(), environment: process.env, socket: unixSocketPath(core.dataDir, env.PORT),
-    master: process.ppid, bootId, rows: procRows, tmux: listPanes, setupsPending: pendingSetups, askForStore,
+    // The master's PATH, this process's, may hold no tmux: it runs the one the core finds, so the core's server.
+    master: process.ppid, bootId, rows: procRows, tmuxAt: tmuxFinder(), tmux: listPanes, setupsPending: pendingSetups, askForStore,
     log: console.log, ...given,
   }
   // Nothing moves off Linux, and with no bridge.json there is no bridge to keep.
@@ -146,7 +150,7 @@ export function startHomeBridge(core: CoreApi, given: Partial<HomeBridgeDeps> = 
   const unlinkedSaid = new Set<string>()
   let running = true
   let checking = false
-  /** The last failure said, until a check gets through. */
+  /** The last failure's kind said, until a check gets through. */
   let failure: string | null = null
 
   /** The route record, a hard link where an old client looks for a socket, and the shim's files: made again at each check,
@@ -167,8 +171,11 @@ export function startHomeBridge(core: CoreApi, given: Partial<HomeBridgeDeps> = 
   }
 
   /** The processes of the panes the move retagged: they carry the new tag. A pane made since started after the move, and does not count. */
-  const panePids = (): number[] => {
-    const { status, stdout, stderr = '', error } = deps.tmux()
+  const panePids = async (): Promise<number[]> => {
+    const found = await deps.tmuxAt()
+    // No tmux found is a tmux not installed: no pane.
+    if (found.state === 'absent') return []
+    const { status, stdout, stderr = '', error } = deps.tmux(found.state === 'adopted' ? found.path : 'tmux')
     if (status !== 0) {
       // A tmux that is missing, or has no server, has no pane. Any other failure, a timeout or another version's server,
       // says nothing of them: the check is tried again.
@@ -193,7 +200,7 @@ export function startHomeBridge(core: CoreApi, given: Partial<HomeBridgeDeps> = 
     const boot = deps.bootId()
     // Without it no start time can be placed before or after the move.
     if (!boot) throw new Error('/proc gives no boot id')
-    const facts = { uid: process.getuid!(), master: deps.master, bootId: boot, roots, engines: ENGINES, apps: APPS, panePids: panePids() }
+    const facts = { uid: process.getuid!(), master: deps.master, bootId: boot, roots, engines: ENGINES, apps: APPS, panePids: await panePids() }
     const count = oldUsers(bridge, deps.rows(), facts)
     note('bridged', count)
     // A harness set up before the move runs from the old paths until its setup has run again, which the Store does as it
@@ -225,8 +232,9 @@ export function startHomeBridge(core: CoreApi, given: Partial<HomeBridgeDeps> = 
     } catch (error) {
       // /proc with no boot id, a file it could not remove: the bridge stays until a check gets through. Said once while it
       // lasts, not every 10 minutes.
-      if (said(error) !== failure) deps.log(`home bridge: a check failed: ${said(error)} · tried again in 10 minutes`)
-      failure = said(error)
+      const kind = errorKind(error)
+      if (kind !== failure) deps.log(`home bridge: a check failed: ${kind} · tried again in 10 minutes`)
+      failure = kind
     } finally {
       if (!again) checking = false
     }

@@ -6,6 +6,7 @@ import { processRows } from './processTable.js'
 import { type AgentSignal } from './processSignals.js'
 import { treeTargets, type TreeProcess } from './processTree.js'
 import { sameProcessIdentity } from './terminalRuntime.js'
+import { errorKind } from './log.js'
 
 /** Delete has already removed the UI entry; signal the saved process immediately. */
 export const TERMINATE_CHECK_MS = 0
@@ -113,7 +114,7 @@ export async function terminateDeletedAgent(
       // ESRCH = it exited between the check and the signal. Anything else (EPERM…) is a real failure to
       // enforce the delete, and the person who pressed delete has already been told it worked.
       if (code !== 'ESRCH') {
-        deps.log(`[delete] could not ${sig} ${session.engine} pid ${target}: ${err instanceof Error ? err.message : String(err)}`)
+        deps.log(`[delete] could not ${sig} ${session.engine} pid ${target}: ${errorKind(err)}`)
       }
       return false
     }

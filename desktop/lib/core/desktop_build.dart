@@ -1,11 +1,11 @@
 /// Which desktop build suits the browser asking — the Dart side of the website's
 /// `website/src/lib/desktopPlatform.ts`, kept to the same rules so the app's Download app and the
-/// website's `/desktop` offer the same build.
+/// website's `/download` offer the same build.
 ///
 /// macOS ships one universal app in two builds: every Mac runs the Intel one, and a Mac whose browser
 /// says its CPU is ARM gets the Apple silicon one. Only Chromium can say; Safari and Firefox report
 /// "Intel" on every Mac. On Linux the CPU decides whether the app runs at all, so an unknown CPU gets
-/// no build: the `/desktop` page offers both instead of guessing.
+/// no build: the `/download` page offers both instead of guessing.
 library;
 
 enum DesktopBuild {
@@ -23,10 +23,10 @@ enum DesktopBuild {
 /// The website the download routes live on.
 final kHarnessSite = Uri.parse('https://harness.autonomous.ai');
 
-/// Where Download app goes: the build's own download, or `/desktop` — which lists every build and
-/// says why none runs here — when nothing suits this browser or it could not be told.
+/// Where Download app goes: the build's own download, or `/download` — which lists every build —
+/// when nothing suits this browser or it could not be told.
 Uri desktopDownloadUri(DesktopBuild? build) =>
-    kHarnessSite.replace(path: build?.path ?? '/desktop');
+    kHarnessSite.replace(path: build?.path ?? '/download');
 
 /// User-Agent Client Hints' high-entropy CPU answer.
 typedef CpuHints = ({String architecture, String bitness});

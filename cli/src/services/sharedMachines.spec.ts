@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fakeCore } from '../testing/fakeCore.js'
@@ -21,6 +21,20 @@ vi.mock('../lib/guestAccounts.js', async (actual) => ({
   ...await actual<typeof import('../lib/guestAccounts.js')>(),
   createGuestAccounts: () => ({ ensureGuest: async () => ({ user: 'hg_0123456789ab', home: '/g', workspace: '/g/work' }) }),
 }))
+
+// Pass-through, recording each call that opens, writes or renames a file by its name.
+const disk = vi.hoisted(() => ({ events: [] as string[][] }))
+vi.mock('node:fs', async (original) => {
+  const actual = await original<typeof import('node:fs')>()
+  return { ...actual,
+    openSync: (...args: Parameters<typeof actual.openSync>) => { disk.events.push(['open', String(args[0])]); return actual.openSync(...args) },
+    writeFileSync: (...args: Parameters<typeof actual.writeFileSync>) => { disk.events.push(['write', String(args[0])]); return actual.writeFileSync(...args) },
+    renameSync: (...args: Parameters<typeof actual.renameSync>) => { disk.events.push(['rename', String(args[0]), String(args[1])]); return actual.renameSync(...args) },
+  }
+})
+/** The calls that named [file] itself; a fresh temporary name beside it (`<file>.<pid>.<uuid>.tmp`) shown as `<tmp>`. */
+const touching = (file: string) => disk.events.filter((event) => event.includes(file)).map((event) => event.map((name) =>
+  name.startsWith(`${file}.${process.pid}.`) && /^[0-9a-f-]{36}\.tmp$/.test(name.slice(`${file}.${process.pid}.`.length)) ? '<tmp>' : name))
 
 const owner: Asker = { local: true, owner: true }
 const key = (n: number) => Buffer.alloc(32, n).toString('base64')
@@ -257,10 +271,10 @@ describe('shared machines', () => {
       expect(log).toHaveBeenCalledWith(expect.stringContaining('could not update the trust stores'))
       port.shared.mockRejectedValueOnce(new Error('boom'))
       await fire()
-      expect(log).toHaveBeenCalledWith('read failed: boom')
+      expect(log).toHaveBeenCalledWith('read failed: Error')
       port.shared.mockRejectedValueOnce('odd')
       await fire()
-      expect(log).toHaveBeenCalledWith('read failed: odd')
+      expect(log).toHaveBeenCalledWith('read failed: string')
     })
 
     it('runs one read at a time, and one asked for meanwhile right after', async () => {
@@ -281,12 +295,68 @@ describe('shared machines', () => {
 
   it('reads a policy file that is missing, broken or holds what is not an address as off', () => {
     expect(readPolicy(join(dir, 'missing.json'))).toEqual({ emails: [], sameDomain: false, folders: [] })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     writeFileSync(file, '{')
     expect(readPolicy(file)).toEqual({ emails: [], sameDomain: false, folders: [] })
     writeFileSync(file, JSON.stringify({ emails: ['nope'], sameDomain: 'yes' }))
     expect(readPolicy(file)).toEqual({ emails: [], sameDomain: false, folders: [] })
     expect(normalizeEmails([7])).toBeNull()
     expect(normalizeEmails([`${'x'.repeat(250)}@a.io`])).toBeNull()
+    warn.mockRestore()
+  })
+
+  it('a torn shared-machines.json is set aside, not written over', async () => {
+    writeFileSync(file, '{"')
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    await start(null)({ action: 'set_folders', folders: [{ path: '/Users/dee/docs', write: false }] }, owner)
+    expect(readFileSync(`${file}.unreadable`, 'utf8')).toBe('{"')
+    expect(readPolicy(file)).toEqual({ emails: [], sameDomain: false, folders: [{ path: '/Users/dee/docs', write: false }] })
+    expect(warn).toHaveBeenCalledWith('[state] shared-machines.json could not be read (not valid JSON); kept as shared-machines.json.unreadable, starting empty.')
+    warn.mockRestore()
+  })
+
+  // Read as off, a change of folders would write every address shared with over.
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('a shared-machines.json this account cannot read is not written over', async () => {
+    const before = JSON.stringify({ emails: ['a@b.io'], sameDomain: false, folders: [] })
+    writeFileSync(file, before)
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    chmodSync(file, 0o000)
+    try {
+      await expect(start(null)({ action: 'set_folders', folders: [{ path: '/Users/dee/docs', write: false }] }, owner))
+        .rejects.toThrow('shared-machines.json could not be read (EACCES)')
+    } finally { chmodSync(file, 0o600) }
+    expect(readFileSync(file, 'utf8')).toBe(before)
+  })
+
+  // Read as off, a refresh would tell the backend to stop sharing, write the file over and take the guests' folders.
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('a refresh that cannot read the policy tells and writes nothing', async () => {
+    const before = JSON.stringify({ emails: ['ann@gmail.com'], sameDomain: false, folders: [] })
+    writeFileSync(file, before)
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const port = fakePort({ policy: vi.fn(async () => policy({ emails: ['ann@gmail.com'], members: [ann] })) })
+    chmodSync(file, 0o000)
+    try {
+      start(port)
+      await fire()
+    } finally { chmodSync(file, 0o600) }
+    expect(port.publish).not.toHaveBeenCalled()
+    expect(port.trust).not.toHaveBeenCalled()
+    expect(readFileSync(file, 'utf8')).toBe(before)
+    expect(log).toHaveBeenCalledWith('read failed: StateFileUnreadable')
+  })
+
+  it('the save goes through a temporary file renamed onto the target', async () => {
+    const handle = start(null)
+    disk.events = []
+    await handle({ action: 'set_folders', folders: [{ path: '/Users/dee/docs', write: false }] }, owner)
+    expect(touching(file)).toEqual([['rename', '<tmp>', file]])
+  })
+
+  it('a file at the old temporary name is left alone', async () => {
+    const old = `${file}.${process.pid}.tmp`
+    writeFileSync(old, 'not ours')
+    await start(null)({ action: 'set_folders', folders: [{ path: '/Users/dee/docs', write: false }] }, owner)
+    expect(readFileSync(old, 'utf8')).toBe('not ours')
   })
 
   it('trusts only the members its own policy names', () => {

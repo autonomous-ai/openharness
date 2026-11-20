@@ -16,6 +16,7 @@ import type { Socket } from 'node:net'
 import { patientExec, type ExecDone, type PatientExecOptions } from './patientExec.js'
 import { ptyHostBinary } from './ptyHost/launch.js'
 import { runPowershellAsync } from './windows/powershell.js'
+import { errorKind } from './log.js'
 
 /** Yes, no, or `unanswered`: the lookup did not finish in time, which is not a no. The listener answers a retryable 503. */
 export type PeerAccount = (socket: Socket) => Promise<boolean | 'unanswered'>
@@ -59,7 +60,7 @@ function lsof(peerPort: number, ownPort: number, uid: number): Promise<boolean |
         resolve('unanswered')
         return
       }
-      if (error && typeof error.code !== 'number') console.warn(`[peer] could not ask lsof who is calling: ${error.message}`)
+      if (error && typeof error.code !== 'number') console.warn(`[peer] could not ask lsof who is calling: ${errorKind(error)}`)
       resolve(lsofShowsPeer(stdout ?? '', peerPort, ownPort))
     })
   })

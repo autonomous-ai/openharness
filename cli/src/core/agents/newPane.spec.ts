@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { commandAvailableInInteractiveShell } from '../../lib/engineLaunch.js'
+import { OPENCLAW_STATES } from '../../engines/openclaw/contract.js'
 import { RegistryOwnershipChanged, type RegisteredSession } from '../../lib/registry.js'
 import { resolvePaneEngineProcess } from '../../lib/paneEngineProcess.js'
 import type { TerminalBackend } from '../../lib/terminalBackend.js'
@@ -74,12 +75,12 @@ describe('watching a new pane', () => {
     expect(releaseHold).not.toHaveBeenCalled()
   })
 
-  it.each([new Error('unavailable'), 'unavailable'])('reports a background bind failure after confirmed readiness: %s', async error => {
+  it.each([[new Error('unavailable'), 'Error'], ['unavailable', 'string']])('reports a background bind failure after confirmed readiness: %s', async (error, kind) => {
     const { deps, watch } = setup()
     vi.mocked(resolvePaneEngineProcess).mockResolvedValue(identity)
     vi.mocked(deps.triggerHint).mockRejectedValueOnce(error)
     await watch('claude', pending, spawned, ['claude'], undefined)
-    expect(console.warn).toHaveBeenCalledWith('[agent] background bind failed · claude · unavailable')
+    expect(console.warn).toHaveBeenCalledWith(`[agent] background bind failed · claude · ${kind}`)
   })
 
   it('leaves the bound exit announcement to the retained-session transition', async () => {
@@ -296,7 +297,7 @@ describe('watching a new pane', () => {
     await worse.watch('claude', pending, spawned, ['claude'], undefined)
     await vi.advanceTimersByTimeAsync(0)
     expect(warn.mock.calls.map(([line]) => String(line)).filter((line) => line.includes('background bind failed'))).toEqual([
-      '[agent] background bind failed · claude · worse',
+      '[agent] background bind failed · claude · string',
     ])
   })
 
@@ -573,6 +574,22 @@ describe('watching a new pane', () => {
     })
   })
 
+  it('fails an OpenClaw launch whose TUI left for want of a Gateway token, saying what to run, and keeps no terminal', async () => {
+    const { deps, rows, watch } = setup()
+    const entry = { ...pending, engine: 'openclaw' } as RegisteredSession
+    rows.set('a1', entry)
+    paneState.mockResolvedValue({ dead: false, engineExit: 1 } as never)
+    vi.mocked(deps.captureTerminal).mockResolvedValueOnce(
+      readFileSync(join(import.meta.dirname, '../../engines/openclaw/__fixtures__/screen-no-token.txt'), 'utf8'))
+    await watch('openclaw', entry, spawned, ['openclaw'], undefined)
+    expect(deps.registry.setLaunch).toHaveBeenCalledExactlyOnceWith('a1', { state: 'failed', error: 'OPENCLAW_NO_TOKEN', detail: OPENCLAW_STATES.noToken })
+    expect(vi.mocked(deps.announceSession).mock.calls.at(-1)![0].launch).toMatchObject({ state: 'failed', error: 'OPENCLAW_NO_TOKEN' })
+    expect(deps.registry.confirmEngineExit).not.toHaveBeenCalled()
+    expect(deps.retainExitedSession).not.toHaveBeenCalled()
+    expect(vi.mocked(console.warn).mock.calls.map(([line]) => String(line)))
+      .toContain('[agent] create failed · openclaw · OpenClaw has no Gateway token. Run openclaw onboard.')
+  })
+
   it('is ready as soon as its process is seen when the launch has no folder', async () => {
     const { deps, rows, watch } = setup()
     const entry = { ...pending, engine: 'openclaw' } as RegisteredSession
@@ -591,7 +608,7 @@ describe('watching a new pane', () => {
     await watch('claude', pending, spawned, ['claude'], undefined)
     expect(resolvePaneEngineProcess).not.toHaveBeenCalled()
     expect(deps.registry.setLaunch).not.toHaveBeenCalled()
-    expect(warn.mock.calls.map(([line]) => String(line))).toEqual(['[agent] create watch failed · claude · readiness publication unavailable'])
+    expect(warn.mock.calls.map(([line]) => String(line))).toEqual(['[agent] create watch failed · claude · readiness publication unavailable · Error'])
   })
 
   it('reports a watch that fails', async () => {
@@ -601,8 +618,8 @@ describe('watching a new pane', () => {
     await watch('claude', pending, spawned, ['claude'], undefined)
     await watch('claude', pending, spawned, ['claude'], undefined)
     expect(warn.mock.calls.map(([line]) => String(line))).toEqual([
-      '[agent] create watch failed · claude · readiness publication unavailable',
-      '[agent] create watch failed · claude · readiness publication unavailable',
+      '[agent] create watch failed · claude · readiness publication unavailable · Error',
+      '[agent] create watch failed · claude · readiness publication unavailable · string',
     ])
   })
 })

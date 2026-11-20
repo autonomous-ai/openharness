@@ -5,19 +5,21 @@
  * a hooked Claude Code in a herdr pane is one row, its hook's. A socket a stopped herdr left is said once and never
  * retried (docs/plans/2026-11-16-herdr-app-design.md).
  *
- * Skipped where herdr or `cc` is not installed, as on every GitHub runner, but for the stale socket, which runs no herdr.
- * It never starts herdr against the developer's own config, and no `herdr` the daemon runs reaches any other server.
+ * Skipped where herdr or `cc` is not installed, but for the stale socket, which runs no herdr. CI's `e2e (dial hosts)`
+ * job installs herdr, and there a missing one fails the file (harness/dialHosts.ts).
+ * It never starts herdr against the developer's own config, and no `herdr` the daemon runs reaches any other server. A
+ * herdr of the developer's may run on this Mac: each daemon's process table hides every herdr outside the test's tree
+ * (ownHerdrsOnly), so the devices' herdr lookup never asks of them.
  */
 import { execFileSync } from 'node:child_process'
 import { lstatSync, mkdirSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
-import { observedAgentId } from '../src/cable/hosts/observed.js'
 import { IsolatedDaemon, until } from './harness/daemon.js'
 import { Desk } from './harness/desk.js'
 import { FakeBackend, type FakeMachine } from './harness/fakeBackend.js'
 import type { DialMessage, FakeDial } from './harness/fakeDial.js'
-import { herdrBinary, PrivateHerdr } from './harness/herdrServer.js'
+import { herdrBinary, othersNow, ownHerdrsOnly, PrivateHerdr } from './harness/herdrServer.js'
 
 /** The machine a daemon signs in as, to hear its dial's words: the daemon asks its backend for each transcript. */
 const ME: FakeMachine = { machineId: 'c1'.repeat(16), computerId: 'e2e-device-herdr-computer', name: 'Fixture', token: 'e2e-device-herdr-token' }
@@ -56,7 +58,7 @@ afterEach(async () => {
   backend = undefined
 })
 
-const fresh = async (): Promise<{ d: IsolatedDaemon; desk: Desk; relay: FakeBackend }> => {
+const fresh = async (): Promise<{ d: IsolatedDaemon; desk: Desk; relay: FakeBackend; hidden: ReturnType<typeof ownHerdrsOnly> }> => {
   const relay = await FakeBackend.start()
   backend = relay
   relay.addMachine(ME)
@@ -64,6 +66,7 @@ const fresh = async (): Promise<{ d: IsolatedDaemon; desk: Desk; relay: FakeBack
     env: { CABLE_DISABLE: 'false', BACKEND_WS_URL: relay.wsUrl, WEB_URL: relay.httpUrl, ADAPTER_COMPUTER_ID: ME.computerId },
   })
   daemon = d
+  const hidden = ownHerdrsOnly(d)
   const file = join(d.root, 'dials.json')
   d.env.HARNESSD_TEST_DIAL_PORT = file
   writeFileSync(file, '[]')
@@ -79,7 +82,7 @@ const fresh = async (): Promise<{ d: IsolatedDaemon; desk: Desk; relay: FakeBack
     console.log(`---- hooks the engines ran\n${d.hookLog().split('\n').slice(-40).join('\n')}`)
   })
   await d.start()
-  return { d, desk: theDesk, relay }
+  return { d, desk: theDesk, relay, hidden }
 }
 
 describe.skipIf(!herdrBinary)("herdr's agents on the dial, from a private herdr server", () => {
@@ -196,18 +199,14 @@ describe.skipIf(!herdrBinary)("herdr's agents on the dial, from a private herdr 
   })
 
   it("a hooked Claude Code in a herdr pane is one row, its hook's, and gets each card once", async () => {
-    const { d, desk } = await fresh()
+    const { d, desk, hidden } = await fresh()
+    const others = othersNow()
     const herdr = await herdrFor(d)
     const dial = await desk.plug('E2E-A', 'e2:e0:00:00:00:0a')
     await dial.next((m) => m.t === 'agents.end', 45_000, 'the first list')
 
     // 1. The suite's fake Claude Code in a herdr pane: its hook runs with herdr's own HERDR_PANE_ID.
-    const pane = await herdr.pane('hooked')
-    await until('the shell in its pane', async () => /\S/.test(await herdr.screen(pane)), 20_000, 100)
-    await herdr.type(pane, '"$CLAUDE_PATH"')
-    const sessionId = await until('its SessionStart hook to run',
-      () => d.hookLog().match(/claude pid=\d+ SessionStart\(startup\) session=(\S+) ran/)?.[1], 30_000, 100)
-    const id = observedAgentId('claude', sessionId)
+    const { pane, id } = await herdr.hooked('hooked')
     await showing(dial, 'the hooked agent listed', (rows) => rows.some((row) => row.id === id))
 
     // 2. Told to herdr too: herdr lists it, and the dial still has one row for that pane, the hook's.
@@ -226,6 +225,15 @@ describe.skipIf(!herdrBinary)("herdr's agents on the dial, from a private herdr 
     await dial.next((m) => m.t === 'summary' && m.agentId === id, 45_000, 'its answer', turn)
     const cards = dial.messages.slice(turn).filter((m) => m.t === 'turn.started' || m.t === 'turn.done')
     expect(cards.map((m) => [m.t, m.agentId])).toEqual([['turn.started', id], ['turn.done', id]])
+
+    // 4. Its HERDR_PANE_ID sent the devices' herdr lookup to the table, which held the test's herdr alone: the
+    // developer's, there from start to end, were dropped from it.
+    const kept = hidden.kept()
+    expect(kept).toContain(herdr.pid)
+    const now = othersNow()
+    for (const pid of [...others, ...now]) expect(kept).not.toContain(pid)
+    const dropped = hidden.dropped()
+    for (const pid of others.filter((pid) => now.includes(pid))) expect(dropped).toContain(pid)
   })
 })
 

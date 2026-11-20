@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -11,6 +11,20 @@ import { Ledger, ledgerPath, type Told } from '../agentClient/ledger.js'
 import { GONE_MS } from './hachiHandOver.js'
 import { ASK_AGAIN_MS, BACKGROUND_CLOSE_MS, CASCADE_RETRY_MS, CASCADE_TRIES, createAgentCleanup, FORGET_LOCK_WAIT_MS, IDLE_CLOSE_MS, JOINED_MAX, joinedPath, LOOK_EVERY_MS, startAgentCleanup, type AgentCleanupDeps } from './agentCleanup.js'
 import { processLockIdentity } from '../lib/processLiveness.js'
+
+// Pass-through, recording each call that opens, writes or renames a file by its name.
+const disk = vi.hoisted(() => ({ events: [] as string[][] }))
+vi.mock('node:fs', async (original) => {
+  const actual = await original<typeof import('node:fs')>()
+  return { ...actual,
+    openSync: (...args: Parameters<typeof actual.openSync>) => { disk.events.push(['open', String(args[0])]); return actual.openSync(...args) },
+    writeFileSync: (...args: Parameters<typeof actual.writeFileSync>) => { disk.events.push(['write', String(args[0])]); return actual.writeFileSync(...args) },
+    renameSync: (...args: Parameters<typeof actual.renameSync>) => { disk.events.push(['rename', String(args[0]), String(args[1])]); return actual.renameSync(...args) },
+  }
+})
+/** The calls that named [file] itself; a fresh temporary name beside it (`<file>.<pid>.<uuid>.tmp`) shown as `<tmp>`. */
+const touching = (file: string) => disk.events.filter((event) => event.includes(file)).map((event) => event.map((name) =>
+  name.startsWith(`${file}.${process.pid}.`) && /^[0-9a-f-]{36}\.tmp$/.test(name.slice(`${file}.${process.pid}.`.length)) ? '<tmp>' : name))
 
 const NOW = Date.parse('2026-10-12T12:00:00Z')
 const MIN = 60_000
@@ -150,7 +164,7 @@ describe('closing the harnesses a closed harness started', () => {
     const failing = setup([], {}, { refresh: async () => { throw new Error('the core is gone') } })
     failing.stopped('lead-agent-id')
     await settle()
-    expect(failing.log).toHaveBeenCalledWith('[agent-cleanup] could not close what lead-age started: the core is gone')
+    expect(failing.log).toHaveBeenCalledWith('[agent-cleanup] could not close what lead-age started: Error')
     // The real wait: a timer that holds nothing open.
     vi.useFakeTimers()
     const timed = setup([kid('stuck')], {}, { refuse: { stuck: { error: 'CLOSE_FAILED' } }, wait: undefined })
@@ -230,7 +244,7 @@ describe('handing what Hachi started to the person, however Hachi closes', () =>
     expect(ledger.parentOf({ machineId: 'machine-1', agentId: 'api' })).toBeNull()
     // The other machine was asleep: still Hachi's there and here, asked again at the next look.
     expect(ledger.childrenOf({ machineId: 'machine-1', agentId: 'hachi' }).map((r) => r.child.agentId)).toEqual(['far'])
-    expect(t.log).toHaveBeenCalledWith('[hachi] could not hand far to the person on its machine yet: asleep. Asked again at the next look.')
+    expect(t.log).toHaveBeenCalledWith('[hachi] could not hand far to the person on its machine yet: Error. Asked again at the next look.')
     reachable = true
     t.advance(LOOK_EVERY_MS)
     await t.cleanup.look()
@@ -421,7 +435,7 @@ describe('closing a harness another agent started once it has sat idle', () => {
     const { tick, log } = setup([], {}, { refresh: async () => { throw 'no core' } })
     tick()!()
     await settle()
-    expect(log).toHaveBeenCalledWith('[agent-cleanup] a look failed: no core')
+    expect(log).toHaveBeenCalledWith('[agent-cleanup] a look failed: string')
     vi.useFakeTimers()
     const core = fakeCore({ dataDir: dir, agents: { live: vi.fn(() => []) } })
     const timed = createAgentCleanup(core, { log: vi.fn() })
@@ -466,7 +480,7 @@ describe('erasing what a deleted harness was told', () => {
     expect(await cleanup.port.forgetTold('kid')).toBe(false)
     expect(Date.now() - began).toBeLessThan(1_500)
     expect(readFileSync(ledgerPath(dir), 'utf8')).toContain('fix the login')
-    expect(log.mock.calls).toEqual([['[agent-cleanup] could not erase what kid was told: The agent ledger is busy. Try again.']])
+    expect(log.mock.calls).toEqual([['[agent-cleanup] could not erase what kid was told: LedgerBusyError']])
   })
 
   it('says it did not, and why in the log, when the ledger could not be rewritten', async () => {
@@ -474,7 +488,7 @@ describe('erasing what a deleted harness was told', () => {
     writeFileSync(join(dir, 'agent-client'), '')
     const { cleanup, log } = setup([])
     expect(await cleanup.port.forgetTold('kid-0123456789')).toBe(false)
-    expect(log.mock.calls).toEqual([[expect.stringMatching(/^\[agent-cleanup\] could not erase what kid-0123 was told: /)]])
+    expect(log.mock.calls).toEqual([[expect.stringMatching(/^\[agent-cleanup\] could not erase what kid-0123 was told: E[A-Z]+$/)]])
   })
 })
 
@@ -491,6 +505,7 @@ describe('what the cleanup keeps and how it runs', () => {
     expect(Object.keys(kept)).toHaveLength(JOINED_MAX)
     expect(kept.old).toBeUndefined()
     expect(kept.newest).toBe(NOW)
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
     for (const damaged of ['{ not json', '{}']) {
       writeFileSync(joinedPath(dir), damaged)
       const fresh = setup([kid('k0', { parentAgentId: 'p' })])
@@ -504,9 +519,43 @@ describe('what the cleanup keeps and how it runs', () => {
     const blocked = join(dir, 'blocked')
     writeFileSync(blocked, '')
     const core = fakeCore({ dataDir: join(blocked, 'data') })
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
     const log = vi.fn()
     createAgentCleanup(core, { log, every: () => () => {} }).port.typed('kid')
-    expect(log).toHaveBeenCalledWith(expect.stringMatching(/^\[agent-cleanup\] could not keep which harnesses the person joined: /))
+    expect(log).toHaveBeenCalledWith(expect.stringMatching(/^\[agent-cleanup\] could not keep which harnesses the person joined: E[A-Z]+$/))
+  })
+
+  it('a torn agent-cleanup.json is set aside, not written over', () => {
+    writeFileSync(joinedPath(dir), '{"')
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    setup([]).cleanup.port.typed('kid')
+    expect(readFileSync(`${joinedPath(dir)}.unreadable`, 'utf8')).toBe('{"')
+    expect(JSON.parse(readFileSync(joinedPath(dir), 'utf8'))).toEqual({ version: 1, joined: { kid: NOW } })
+    expect(warn).toHaveBeenCalledWith('[state] agent-cleanup.json could not be read (not valid JSON); kept as agent-cleanup.json.unreadable, starting empty.')
+  })
+
+  // Read as none, the next join would forget every harness the person joined before, and cleanup could close them.
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('an agent-cleanup.json this account cannot read is not written over', () => {
+    setup([]).cleanup.port.typed('kid')
+    const before = readFileSync(joinedPath(dir), 'utf8')
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    chmodSync(joinedPath(dir), 0o000)
+    try { setup([]).cleanup.port.typed('other') } finally { chmodSync(joinedPath(dir), 0o600) }
+    expect(readFileSync(joinedPath(dir), 'utf8')).toBe(before)
+  })
+
+  it('the save goes through a temporary file renamed onto the target', () => {
+    const { cleanup } = setup([])
+    disk.events = []
+    cleanup.port.typed('kid')
+    expect(touching(joinedPath(dir))).toEqual([['rename', '<tmp>', joinedPath(dir)]])
+  })
+
+  it('a file at the old temporary name is left alone', () => {
+    const old = `${joinedPath(dir)}.tmp`
+    writeFileSync(old, 'not ours')
+    setup([]).cleanup.port.typed('kid')
+    expect(readFileSync(old, 'utf8')).toBe('not ours')
   })
 
   it('closes nothing, and knows no time, on a core that offers neither', async () => {

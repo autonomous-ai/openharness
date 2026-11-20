@@ -12,7 +12,7 @@
  */
 import { existsSync, readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
-import { atomicWriteJson } from './registry.js'
+import { atomicWriteJson } from './secureState.js'
 
 /** Written while a daemon is in safe mode; removed on the way out. `harness status` reads it. */
 export const SAFE_MODE_FILE_NAME = 'adapter.safe-mode'
@@ -104,7 +104,7 @@ export function safeModeFile(dataDir: string): string {
 }
 
 export function writeSafeModeMarker(dataDir: string, marker: SafeModeMarker): void {
-  try { atomicWriteJson(safeModeFile(dataDir), marker) } catch { /* a marker is a courtesy, not the state */ }
+  try { atomicWriteJson(safeModeFile(dataDir), marker, 'trust') } catch { /* a marker is a courtesy, not the state */ }
 }
 
 export function clearSafeModeMarker(dataDir: string): void {

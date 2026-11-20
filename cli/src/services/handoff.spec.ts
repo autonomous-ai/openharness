@@ -29,6 +29,17 @@ describe('the change-agent handoff service', () => {
       expect(readdirSync(dataDir)).toEqual([])
     } finally { rmSync(dataDir, { recursive: true, force: true }) }
   })
+  it('moves a conversation through the core\'s conversation reads, the owner\'s alone', async () => {
+    const resolve = vi.fn(async () => null)
+    const handlers = startHandoff(fakeCore({ conversations: { resolve } }), emptyPorts(), undefined, {}, (reads) => ({
+      conversations: reads, probe: async () => ({ installed: true, signedIn: true }), home: async () => '/nowhere', version: async () => null }))
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    expect(await handlers.agent_session_migrate!({ agentId: 'agent', targetEngine: 'codex' }, owner)).toEqual({ error: 'UNKNOWN_AGENT' })
+    expect(resolve).toHaveBeenCalledWith('agent')
+    expect(await handlers.agent_session_migrate!({ agentId: 'agent', targetEngine: 'codex' }, { owner: false, local: false })).toEqual({ error: 'OWNER_REQUIRED' })
+    log.mockRestore()
+  })
+
   it('uses the real provider by default and preserves its unknown-agent answer', async () => {
     const handlers = startHandoff(fakeCore())
     expect(Object.keys(handlers)).toEqual([...HANDOFF_REQUESTS])

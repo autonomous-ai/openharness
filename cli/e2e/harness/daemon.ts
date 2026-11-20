@@ -377,6 +377,14 @@ export class IsolatedDaemon {
     // helper (lib/guestAccounts.ts), which may be installed on the Mac the tests run on. Refused, as for an owner who
     // never turned guest access on.
     await writeFile(join(dirs.bin, 'sudo'), '#!/bin/sh\necho "sudo: a password is required" >&2\nexit 1\n', { mode: 0o755 })
+    // Nor does it ask this computer's scheme handlers: on Linux a link opens only once xdg-mime names the scheme's app
+    // (cable/hosts/appLink.ts), and one that prints nothing names none, so no link reaches the developer's own apps.
+    await writeFile(join(dirs.bin, 'xdg-mime'), '#!/bin/sh\nexit 0\n', { mode: 0o755 })
+    // Nor does a tap raise a window on the developer's own X display. A daemon with no DISPLAY finds the lowest X server
+    // socket of root's or this account's in /tmp/.X11-unix (cable/hosts/linuxDesktop.ts), whatever its home, and
+    // /usr/bin's wmctrl is on its PATH: a wmctrl that refuses, until an X11 desk of the test's own links the real one
+    // (harness/x11Desk.ts).
+    await writeFile(join(dirs.bin, 'wmctrl'), '#!/bin/sh\nexit 1\n', { mode: 0o755 })
     // Nor does its open scan see a file held outside its root. The scan reads every `codex` on the computer
     // (sessionSearch/externals/support.ts) and the devices write the dial skill into each Codex home whose rollout one
     // holds: every daemon with a dial attached wrote it into another test's Codex homes, and deviceDialSkill.e2e.ts
@@ -488,6 +496,11 @@ esac
       // /Applications is the computer's, whatever the home, so the devices look for the app's own Codex CLI here alone,
       // in place of /Applications and ~/Applications. Missing until a test writes its own (harness/codexAppCli.ts).
       HARNESS_CODEX_APP_BIN: join(own, 'ChatGPT.app', 'Contents', 'Resources', 'codex-cli', 'CodexCLI.app', 'Contents', 'MacOS', 'codex'),
+      // Nor does a fake dial's attach start the ChatGPT app's source on the developer's app (services/devices.ts):
+      // /Applications is the computer's, whatever the home, so the devices look here in its place; ~/Applications is
+      // already the throwaway home's. Missing until a test writes its own, so no e2e file passes or fails by whether
+      // this Mac has the ChatGPT app.
+      HARNESS_APPLICATIONS_DIR: join(own, 'Applications'),
       // Claude Code's and Codex's hooks, installed as on a person's computer, into this home and CODEX_HOME
       // (assertHooksContained), and run by the fake engines. Every other engine's installer writes into
       // folders these tests have no engine for.

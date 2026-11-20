@@ -1,9 +1,9 @@
 /**
  * The devices' own local listener: the one way a local tool tells the devices process something, so the core never
- * hears it (cli/AGENTS.md, Protect the core, rule 7). `harness hardware watch` tells it the app in front, and the
- * harness-device mod the session the Claude app shows (`attach`), `harness device notify` an agent's one line for the
- * dial (`notice`), and the watch the Notifications setting (`notify`); later device routes register a handler of their
- * own beside these, each with its own body and rate limit.
+ * hears it (cli/AGENTS.md, Protect the core, rule 7). `harness hardware watch` tells it the app in front, the selected
+ * tab (`tab`), the thread the ChatGPT app shows (`thread`) and the Notifications setting (`notify`), the harness-device
+ * mod the session the Claude app shows (`attach`), and `harness device notify` an agent's one line for the dial
+ * (`notice`); later device routes register a handler of their own beside these, each with its own body and rate limit.
  *
  * Who may connect is the core's own answer (lib/localSocket.ts): a 0600 socket in a folder that is this account's
  * alone, so the kernel refuses another account's connect. Node reads no peer's uid. A client checks the socket's owner
@@ -28,6 +28,7 @@ import { APP_IDS } from '../cable/hosts/hostDetect.js'
 import { FRONT_NONE } from '../cable/hosts/frontApp.js'
 import { ORCA_HANDLE } from '../cable/hosts/orca.js'
 import { REPLACED_LINE, tabOf, type Tab } from '../cable/hosts/tabs.js'
+import { threadTitleOf } from '../cable/hosts/threadTitle.js'
 import { isNotifyMode, type NotifyMode } from '../cable/notifyMode.js'
 import { NOTICE_SESSION, noticeFolder, noticeLine, type NoticeAsk, type NoticeResult } from '../lib/dialNotice.js'
 
@@ -477,6 +478,25 @@ export function tabHandler(report: (tab: Tab) => void): ListenerHandler {
       const tab = tabOf(message)
       if (!tab) return REFUSED
       report(tab)
+    },
+  }
+}
+
+export const THREAD_PER_SECOND = 10
+/** The longest message thread takes, `{"type":"thread","title":…}` with 256 three-byte letters, is 796 bytes. */
+export const THREAD_MAX_BYTES = 1024
+
+/** The title of the ChatGPT app's window, from `harness hardware watch`: checked again by Harness Device's own rules,
+ *  then handed on. The empty title is handed on too: it clears a waiting report. It keeps nothing and logs nothing, as
+ *  a title is a person's words. */
+export function threadHandler(report: (title: string) => void): ListenerHandler {
+  return {
+    maxBytes: THREAD_MAX_BYTES,
+    perSecond: THREAD_PER_SECOND,
+    handle: ({ title }) => {
+      const checked = threadTitleOf(title)
+      if (checked === null) return REFUSED
+      report(checked)
     },
   }
 }

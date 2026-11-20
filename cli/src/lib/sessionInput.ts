@@ -2,9 +2,10 @@ import type { ScreenReader } from './screenReader.js'
 import type { SubmissionReader } from './submissionReader.js'
 import { createHash } from 'crypto'
 import { composerHolds, composerShown, normalizedTerminalText, visibleTerminal } from '../engines/kit/submission.js'
+import { openclawBoxHolds, readOpenclawScreen } from '../engines/openclaw/contract.js'
 import { launchBound } from '../core/engines/sessionBinding.js'
 import type { RegisteredSession } from './registry.js'
-import { sid } from './log.js'
+import { errorKind, sid } from './log.js'
 import { isMessageHold, messageHoldText, messageWithheldText, passingHold, type MessageHold } from './messageHolds.js'
 import type { MoveGate } from './hostMove/gate.js'
 import { enterWithheldReason, TERMINAL_LEASE_REFUSED, type TerminalActionResult } from './terminalTypes.js'
@@ -61,6 +62,20 @@ const COPILOT_SUBMIT_VERIFY_MS = 6_000
 // writes it as the run starts. A Gateway short of memory stalled 18 s at a time before writing it (lamp, 2026-11-11):
 // three 10 s windows give the row 30 s in all before the message is given up.
 const OPENCLAW_SUBMIT_VERIFY_MS = 10_000
+// OpenClaw puts a message it refused back into its input box (Gateway not connected, history not loaded, a run going)
+// and sends nothing until its pane can. Two Enters on a pane that could not send gave a first task up with a log line
+// only (reproduced on a cold Gateway, 2026-11-19): a message waits for such a pane, untyped, up to this long, and once
+// typed, its windows on one are not counted, up to this long from the paste.
+const OPENCLAW_NOT_READY_MAX_MS = 180_000
+/** How often a message waiting for its OpenClaw pane to be able to send reads it again: one capture a second, typed
+ *  within a second of the `/session` that lets the pane send. */
+const OPENCLAW_PANE_RETRY_MS = 1_000
+/**
+ * Why a message was not typed into an OpenClaw pane, nothing written: the pane could not send it (core/input.ts). Typed,
+ * it would be refused back into the input box, where nothing sends it: the binding pass types `/session` only into an
+ * empty box (core/agents/bind.ts). It waits here instead.
+ */
+export const OPENCLAW_NOT_READY = 'openclaw_not_ready'
 const CURSOR_TURN_SETTLE_MS = 750
 const SUBMIT_MAX_RETRIES = 2
 /** How long a paste the control lease refused, before a byte was written, waits for the lease, and how
@@ -138,6 +153,13 @@ interface InputState {
   turnOpen: boolean
   awaitingFingerprint: string | null
   awaitingContent: string | null
+  /** When the message awaiting confirmation was pasted. */
+  pastedAt: number
+  /** The agent's first task is the controller's, from when it is expected until a turn takes it ([firstTaskEnded]): it
+   *  is never given up here ([firstTaskWaiting]). */
+  firstTask: boolean
+  /** A message waits for its OpenClaw pane to be able to send ([OPENCLAW_NOT_READY]): nothing of it is typed. */
+  paneWait: boolean
   /** The receipt of the person's message typed last, until it is settled ([settle]). */
   awaitingReceipt?: MessageReceipt
   controlLocked: boolean
@@ -171,6 +193,9 @@ export interface SessionInputDeps {
   inject: (terminalTarget: string, content: string) => Promise<boolean | TerminalActionResult>
   /** Host serializes the preflight and paste with other terminal writers. */
   injectTeam?: (terminalTarget: string, content: string, deliveryId: string) => Promise<boolean | TerminalActionResult>
+  /** A command of the engine's own and its Enter, typed as `inject` types a message but into an empty box, whether or not
+   *  the pane can send a message yet: the command is what makes it able to ([typeCommand]). */
+  injectCommand?: (terminalTarget: string, line: string) => Promise<boolean | TerminalActionResult>
   sendKey: (terminalTarget: string, key: string) => Promise<boolean | TerminalActionResult>
   capture?: (terminalTarget: string) => Promise<string | null>
   onError: (sessionId: string, message: string) => void
@@ -208,6 +233,12 @@ function heldBack(delivery: boolean | TerminalActionResult): MessageHold | null 
 function leaseRefused(delivery: boolean | TerminalActionResult): boolean {
   return typeof delivery !== 'boolean' && delivery.state === 'failed' && delivery.dispatch === 'not_started'
     && (delivery.reason === TERMINAL_LEASE_REFUSED || passingHold(delivery.reason))
+}
+
+/** A write its OpenClaw pane held back, nothing written: the pane could not send it yet ([OPENCLAW_NOT_READY]). */
+function paneNotReady(delivery: boolean | TerminalActionResult): boolean {
+  return typeof delivery !== 'boolean' && delivery.state === 'failed' && delivery.dispatch === 'not_started'
+    && delivery.reason === OPENCLAW_NOT_READY
 }
 
 function fingerprint(content: string): string {
@@ -278,6 +309,23 @@ export class SessionInputController {
     return this.waitingEngine.has(id) ? 'engine' : null
   }
 
+  /** Whether [id]'s first task is expected, being typed, or typed, and its user row has not confirmed it yet. */
+  firstTaskWaiting(id: string): boolean {
+    return this.states.get(id)?.firstTask === true
+  }
+
+  /**
+   * [id]'s first task is about to be taken off its row and submitted (core/agents/bind.ts): from now its frame reads it
+   * from here ([firstTaskWaiting]), as the row no longer does once the task leaves it. Said from the paste, the agent
+   * read idle with no ask between the two, about 350 ms (e2e/openclawShow.e2e.ts).
+   */
+  expectFirstTask(id: string): void {
+    const state = this.state(id)
+    if (state.firstTask) return
+    state.firstTask = true
+    this.deps.onWaitChanged?.(id)
+  }
+
   private countWait(id: string, by: 1 | -1): void {
     const count = (this.waitingEngine.get(id) ?? 0) + by
     if (count > 0) this.waitingEngine.set(id, count)
@@ -292,9 +340,14 @@ export class SessionInputController {
    * LEASE_WAIT_MS, rather than fail the message; nothing was written, so asking again can never type
    * it twice. Found end to end: a message sent as a resume was confirmed was refused 140 ms later and
    * lost, and a real engine takes seconds to confirm.
+   *
+   * An OpenClaw pane that cannot send the message yet ([OPENCLAW_NOT_READY]) is waited for the same way, up to
+   * OPENCLAW_NOT_READY_MAX_MS, and for a first task as long as it waits ([firstTaskEnded]): the binding pass bounds
+   * that. It is not read again while a command of the pane's own is typed (`typeCommand`), which the message would run
+   * into in the box.
    */
-
   private async injectWhenLeased(
+    state: InputState,
     write: () => Promise<boolean | TerminalActionResult>,
     current: () => boolean,
     held: () => boolean,
@@ -306,10 +359,19 @@ export class SessionInputController {
     if (held()) return refused()
     if (!current()) return { state: 'failed', dispatch: 'not_started', reason: TERMINAL_LEASE_REFUSED }
     let delivery = await write()
-    while (leaseRefused(delivery) && now() < deadline) {
-      await sleep(LEASE_RETRY_MS)
+    let notReadySince: number | undefined
+    for (;;) {
+      const notReady = paneNotReady(delivery)
+      if (notReady) {
+        notReadySince ??= now()
+        if (!state.firstTask && now() - notReadySince >= OPENCLAW_NOT_READY_MAX_MS) break
+      } else if (!leaseRefused(delivery) || now() >= deadline) break
+      state.paneWait = notReady
+      await sleep(notReady ? OPENCLAW_PANE_RETRY_MS : LEASE_RETRY_MS)
+      state.paneWait = false
       if (held()) return refused()
       if (!current()) break
+      if (notReady && state.controlLocked) continue
       delivery = await write()
     }
     return delivery
@@ -322,6 +384,9 @@ export class SessionInputController {
         turnOpen: false,
         awaitingFingerprint: null,
         awaitingContent: null,
+        pastedAt: 0,
+        firstTask: false,
+        paneWait: false,
         controlLocked: false,
         cancelling: 0,
         afterCancel: { writes: [], sent: [] },
@@ -359,6 +424,17 @@ export class SessionInputController {
     const receipt = state.awaitingReceipt
     state.awaitingReceipt = undefined
     receipt?.(outcome)
+  }
+
+  /**
+   * A first task waits no more: a turn took it, the person stopped it, or the agent is gone. Nothing else ends its
+   * wait, a message given up included: the binding pass's bound fails the launch instead (core/agents/bind.ts), so a
+   * task lost after it left its row is never read as idle with no ask. The agent's frame says so (`onWaitChanged`).
+   */
+  private firstTaskEnded(sessionId: string, state: InputState): void {
+    if (!state.firstTask) return
+    state.firstTask = false
+    this.deps.onWaitChanged?.(sessionId)
   }
 
   /** Revoke queued work only; a paste already in progress cannot be recalled. */
@@ -507,7 +583,8 @@ export class SessionInputController {
    * the pane sat on the dialog looking like a hung agent, with nothing logged.
    *
    * Every other guard still applies: another writer holding the lock, a submit awaiting confirmation, a
-   * settling turn, or queued messages all still refuse.
+   * settling turn, or queued messages all still refuse; queued ones not while the message ahead of them waits for
+   * its pane to be able to send (`paneWait`), typed nowhere yet.
    */
   acquireControl(sessionId: string, opts?: { forAnswer?: boolean }): (() => void) | null {
     const session = this.controlSession(sessionId)
@@ -522,7 +599,8 @@ export class SessionInputController {
     const state = this.state(sessionId)
     this.dropExpired(sessionId, state)
     const turnBlocks = state.turnOpen && !opts?.forAnswer
-    if (state.controlLocked || state.cancelling || turnBlocks || state.awaitingFingerprint || state.settling || state.queue.length > 0) return null
+    const queued = state.queue.length > 0 && !state.paneWait
+    if (state.controlLocked || state.cancelling || turnBlocks || state.awaitingFingerprint || state.settling || queued) return null
     state.controlLocked = true
     let released = false
     return () => {
@@ -535,6 +613,30 @@ export class SessionInputController {
     }
   }
 
+  /**
+   * Types [line] and its Enter, a command of the engine's own (OpenClaw's `/session <key>`), into [id]'s pane through
+   * `injectCommand`, under the pane's write lock, only while nothing typed is pending for the pane: no message awaiting
+   * confirmation or being written, none queued, no caller holding it, no turn open. A message waiting for the pane to
+   * be able to send, and those queued behind it, are typed nowhere yet: the command is what lets the pane send them.
+   * Held as a control is, so a message sent meanwhile waits for it. Whether it was typed.
+   */
+  async typeCommand(id: string, line: string): Promise<boolean> {
+    const session = this.controlSession(id)
+    const state = this.states.get(id)
+    const injectCommand = this.deps.injectCommand
+    if (!session || !injectCommand || (state?.writes && !state.paneWait)) return false
+    const release = this.acquireControl(id)
+    if (!release) return false
+    try {
+      const delivery = await injectCommand(session.agentId, line)
+      return typeof delivery === 'boolean' ? delivery : delivery.state === 'succeeded'
+    } catch {
+      return false
+    } finally {
+      release()
+    }
+  }
+
   /** Whether a caller holds this pane (`acquireControl`): a question being answered, a sequence of keys. */
   controlHeld(sessionId: string): boolean {
     return this.states.get(sessionId)?.controlLocked === true
@@ -543,6 +645,11 @@ export class SessionInputController {
   /** Whether a message typed into this pane awaits the turn that confirms it. */
   awaitingConfirmation(id: string): boolean {
     return this.states.get(id)?.awaitingFingerprint != null
+  }
+
+  /** Whether a message waits, typed nowhere, for its OpenClaw pane to be able to send ([OPENCLAW_NOT_READY]). */
+  waitsForPane(id: string): boolean {
+    return this.states.get(id)?.paneWait === true
   }
 
   onTurnStarted(sessionId: string, userMessage: string): void {
@@ -573,6 +680,7 @@ export class SessionInputController {
     state.settleTimer = null
     state.settling = false
     state.turnOpen = true
+    this.firstTaskEnded(sessionId, state)
     // Cursor does not clear its composer when it accepts a prompt: the submitted text stays on the "→"
     // line for the whole turn and long after it, so the terminal reads as if the question is still
     // waiting to be sent. Clearing before the NEXT paste (see inject) stops the two from running
@@ -659,7 +767,7 @@ export class SessionInputController {
 
   cancel(sessionId: string): void {
     void this.interrupt(sessionId, true).catch((error) => {
-      console.warn(`[inject] ${sid(sessionId)} cancel failed · ${error instanceof Error ? error.message : error}`)
+      console.warn(`[inject] ${sid(sessionId)} cancel failed · ${errorKind(error)}`)
       this.deps.onError(sessionId, 'Stop did not reach this agent.')
     })
   }
@@ -728,6 +836,7 @@ export class SessionInputController {
   private interrupted(sessionId: string, state: InputState): void {
     this.finishDelivery(sessionId, state, 'unknown', 'cancelled_after_paste')
     this.settle(state, 'cancelled')
+    this.firstTaskEnded(sessionId, state)
     state.turnOpen = false
     state.awaitingFingerprint = null
     state.awaitingContent = null
@@ -743,6 +852,7 @@ export class SessionInputController {
     if (state) {
       this.finishDelivery(sessionId, state, state.writing || state.awaitingFingerprint || state.deliveryFingerprint ? 'unknown' : 'rejected', 'agent_gone')
       this.settle(state, 'ambiguous')
+      this.firstTaskEnded(sessionId, state)
       for (const item of state.queue) {
         this.delivery(sessionId, item.deliveryId, 'rejected', 'agent_gone')
         item.receipt?.('agent_gone')
@@ -813,7 +923,7 @@ export class SessionInputController {
       }
     }
     if (!current()) { gone(); return }
-    const delivery = await this.injectWhenLeased(() => this.deps.inject(session.agentId, content),
+    const delivery = await this.injectWhenLeased(state, () => this.deps.inject(session.agentId, content),
       current, () => this.deps.moveGate?.refused(session.agentId) === true)
     const accepted = typeof delivery === 'boolean'
       ? delivery
@@ -828,6 +938,11 @@ export class SessionInputController {
       console.warn(`[inject] ${sid(sessionId)} typed, not sent · engine=${session.engine} · ${withheld} opened before Enter`)
       receipt?.('withheld')
       this.deps.onError(sessionId, messageWithheldText(session.engine, withheld))
+      return
+    }
+    if (paneNotReady(delivery)) {
+      receipt?.('not_submitted')
+      this.paneNeverReady(sessionId, session)
       return
     }
     if (!accepted) {
@@ -852,6 +967,7 @@ export class SessionInputController {
     state.retries = 0
     state.observes = 0
     state.ambiguousDispatch = typeof delivery !== 'boolean' && delivery.dispatch === 'possibly_executed'
+    state.pastedAt = (this.deps.now ?? Date.now)()
     this.deps.onSubmitted?.(sessionId, content)
     this.armSubmitCheck(sessionId, session, state)
   }
@@ -921,7 +1037,7 @@ export class SessionInputController {
       }
       if (state.cancelled || this.states.get(sessionId) !== state) return
       state.writing = true
-      const delivery = await this.injectWhenLeased(() => (deliveryId.startsWith('team:') && this.deps.injectTeam
+      const delivery = await this.injectWhenLeased(state, () => (deliveryId.startsWith('team:') && this.deps.injectTeam
         ? this.deps.injectTeam(session.agentId, content, deliveryId) : this.deps.inject(session.agentId, content)),
       () => !state.cancelled && this.states.get(sessionId) === state, () => this.deps.moveGate?.refused(session.agentId) === true)
       state.writing = false
@@ -949,6 +1065,11 @@ export class SessionInputController {
         if (!deliveryId.startsWith('team:')) this.deps.onError(sessionId, messageHoldText(session.engine, held))
         return
       }
+      if (paneNotReady(delivery)) {
+        this.finishDelivery(sessionId, state, 'rejected', 'not_submitted')
+        this.paneNeverReady(sessionId, session)
+        return
+      }
       const accepted = typeof delivery === 'boolean'
         ? delivery
         : delivery.state === 'succeeded' || delivery.dispatch === 'possibly_executed'
@@ -965,6 +1086,7 @@ export class SessionInputController {
       state.retries = 0
       state.observes = 0
       state.ambiguousDispatch = typeof delivery !== 'boolean' && delivery.dispatch === 'possibly_executed'
+      state.pastedAt = (this.deps.now ?? Date.now)()
       state.dispatching = false
       this.delivery(sessionId, state.deliveryId, 'delivered')
       if (state.observedStart !== undefined) {
@@ -1057,9 +1179,11 @@ export class SessionInputController {
         this.deps.onError(sessionId, 'The agent did not accept the message. Please try again.')
         return
       }
+    } else if (session.engine === 'openclaw') {
+      await this.retryOpenclaw(sessionId, session, state)
+      return
     } else if (session.engine === 'opencode' || session.engine === 'kilo' || session.engine === 'pi' || session.engine === 'hermes' || session.engine === 'muse'
-      || session.engine === 'amp' || session.engine === 'grok' || session.engine === 'agy' || session.engine === 'copilot'
-      || session.engine === 'openclaw') {
+      || session.engine === 'amp' || session.engine === 'grok' || session.engine === 'agy' || session.engine === 'copilot') {
       // OpenCode has no composer glyph, and the submitted text stays visible in the message area, so a
       // pane scrape can't tell "still in the composer" from "already sent". Rely purely on the reader-
       // derived turn_started (a new user row in opencode.db) to clear awaitingFingerprint; if it hasn't
@@ -1117,17 +1241,73 @@ export class SessionInputController {
       }
     }
     if (state.retries >= SUBMIT_MAX_RETRIES) {
-      console.warn(`[inject] ${sid(sessionId)} not accepted · engine=${session.engine} · gave up after ${state.retries} retries`)
-      state.awaitingFingerprint = null
-      state.awaitingContent = null
-      state.ambiguousDispatch = false
-      this.settle(state, 'not_submitted')
-      this.finishDelivery(sessionId, state, 'unknown', 'not_submitted')
-      this.deps.onError(sessionId, 'The agent did not accept the message. Please try again.')
+      this.notAccepted(sessionId, session, state, `gave up after ${state.retries} retries`)
+      return
+    }
+    await this.resubmit(sessionId, session, state)
+  }
+
+  /**
+   * OpenClaw's pane says what became of a message before any Enter: one it refused (Gateway not connected, history not
+   * loaded, a run going) is back in its input box, and its status line says when it can send. Only the user row
+   * confirms one, so a window ends here: on a pane that cannot send, waiting without counting it; on a ready one, an
+   * Enter only when its box holds the message (never a second paste).
+   */
+  private async retryOpenclaw(sessionId: string, session: RegisteredSession, state: InputState): Promise<void> {
+    // A write that may have gone through is given up, but a first task's, which is never given up here: its box says
+    // whether OpenClaw refused it, and an unread pane gets no Enter.
+    if (state.ambiguousDispatch && !state.firstTask) {
+      this.failAmbiguousSubmission(sessionId, state)
+      return
+    }
+    const capture = await this.deps.capture?.(session.agentId)
+    if (this.states.get(sessionId) !== state || !state.awaitingFingerprint || state.turnOpen) return
+    const screen = capture ? readOpenclawScreen(capture) : null
+    if (screen && screen.state !== 'ready') {
+      if (state.firstTask || (this.deps.now ?? Date.now)() - state.pastedAt < OPENCLAW_NOT_READY_MAX_MS) this.armSubmitCheck(sessionId, session, state)
+      else this.notAccepted(sessionId, session, state, `its pane could not send for ${OPENCLAW_NOT_READY_MAX_MS / 1000} s`)
+      return
+    }
+    // A first task is never given up here: the binding pass bounds it from the agent's launch (core/agents/bind.ts).
+    if (state.retries >= SUBMIT_MAX_RETRIES && !state.firstTask) {
+      this.notAccepted(sessionId, session, state, `gave up after ${state.retries} retries`)
+      return
+    }
+    // An empty box sent the message, and other text in it is the person's, which an Enter would send. With no reading,
+    // the blind Enters every engine gets, and no more.
+    if (screen ? openclawBoxHolds(screen.box, state.awaitingContent ?? '', screen.boxHidden) : state.retries < SUBMIT_MAX_RETRIES && !state.ambiguousDispatch) {
+      await this.resubmit(sessionId, session, state)
       return
     }
     state.retries++
+    this.armSubmitCheck(sessionId, session, state)
+  }
+
+  /** The message awaiting confirmation is given up, [why]: the person is told the agent did not accept it. */
+  private notAccepted(sessionId: string, session: RegisteredSession, state: InputState, why: string): void {
+    console.warn(`[inject] ${sid(sessionId)} not accepted · engine=${session.engine} · ${why}`)
+    state.awaitingFingerprint = null
+    state.awaitingContent = null
+    state.ambiguousDispatch = false
+    this.settle(state, 'not_submitted')
+    this.finishDelivery(sessionId, state, 'unknown', 'not_submitted')
+    this.deps.onError(sessionId, 'The agent did not accept the message. Please try again.')
+  }
+
+  /** A message its OpenClaw pane could not send for OPENCLAW_NOT_READY_MAX_MS, typed nowhere: the person is told the
+   *  agent did not take it. */
+  private paneNeverReady(sessionId: string, session: RegisteredSession): void {
+    console.warn(`[inject] ${sid(sessionId)} not typed · engine=${session.engine} · its pane could not send for ${OPENCLAW_NOT_READY_MAX_MS / 1000} s`)
+    this.deps.onError(sessionId, 'The agent did not accept the message. Please try again.')
+  }
+
+  /** One retry of the message awaiting confirmation: its submit key, pressed again. */
+  private async resubmit(sessionId: string, session: RegisteredSession, state: InputState): Promise<void> {
+    state.retries++
     const valid = await this.deps.validateRuntime(session)
+    // Each wait may outlast the message: the agent forgotten, or its turn started, meanwhile. A key pressed then would
+    // land in a pane no message of this agent awaits.
+    if (this.states.get(sessionId) !== state || !state.awaitingFingerprint || state.turnOpen) return
     if (!valid) {
       this.finishDelivery(sessionId, state, 'unknown', 'runtime_gone_post_paste')
       this.settle(state, 'runtime_gone')
@@ -1137,12 +1317,12 @@ export class SessionInputController {
       this.deps.onError(sessionId, 'This agent process is no longer running.')
       return
     }
-    if (state.deliveryId && (this.states.get(sessionId) !== state || !state.awaitingFingerprint || state.turnOpen)) return
     // Said once the engine is known to be there: an engine that exited gets no Enter, and the log used
     // to claim one anyway.
     console.log(`[inject] ${sid(sessionId)} resubmit Enter · engine=${session.engine} · retry=${state.retries}/${SUBMIT_MAX_RETRIES}`)
     // Only the submit key is retried. The prompt body is never pasted twice.
     const delivery = await this.deps.sendKey(session.agentId, 'Enter')
+    if (this.states.get(sessionId) !== state || !state.awaitingFingerprint || state.turnOpen) return
     state.ambiguousDispatch = typeof delivery === 'boolean'
       ? !delivery
       : delivery.dispatch === 'possibly_executed'

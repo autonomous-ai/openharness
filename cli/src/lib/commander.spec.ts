@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { mkdtempSync, rmSync } from 'fs'
+import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { CommanderMirror, type CommanderFrame, type CommanderMirrorOpts, type TierTurn } from './commander.js'
@@ -7,6 +7,27 @@ import type { Tier } from './notifyTier.js'
 import { isLocalOnly, withoutUpdate } from './cardUpdate.js'
 import type { LiveEvent } from './normalize.js'
 import { BODY_MAX_CHARS, RECAP_MAX_CHARS, deriveTurnSummary } from './deviceRecap.js'
+import { directorySyncSupported } from './secureState.js'
+
+// A disk that fills mid-write: half the bytes land, then ENOSPC; and what the writer flushed, in order. Under both
+// module names, since the mirror and the state writer import it under different ones.
+const disk = vi.hoisted(() => ({
+  full: false,
+  synced: [] as string[],
+  wrap: (actual: typeof import('node:fs')) => ({ ...actual,
+    writeFileSync: (...args: Parameters<typeof actual.writeFileSync>) => {
+      if (!disk.full) return actual.writeFileSync(...args)
+      const [target, data] = args
+      actual.writeFileSync(target, typeof data === 'string' ? data.slice(0, data.length / 2) : data)
+      throw Object.assign(new Error('no space left on device'), { code: 'ENOSPC' })
+    },
+    fsyncSync: (fd: number) => {
+      disk.synced.push(actual.fstatSync(fd).isDirectory() ? 'folder' : 'file')
+      return actual.fsyncSync(fd)
+    } }),
+}))
+vi.mock('fs', async original => disk.wrap(await original<typeof import('node:fs')>()))
+vi.mock('node:fs', async original => disk.wrap(await original<typeof import('node:fs')>()))
 
 let dataDir = ''
 
@@ -1139,5 +1160,138 @@ describe('the log holds none of a turn\'s words', () => {
     await vi.advanceTimersByTimeAsync(11 * 60_000)
     expect(said()).toContain('RELEASED by timeout')
     expect(['capybaraledger', 'narwhalinvoice'].filter((word) => said().includes(word))).toEqual([])
+  })
+
+  it('a final answer that cannot be read, a recap that fails and a catch-up that fails say their kind', async () => {
+    const opts = { send: () => {}, sendWeb: () => {}, hasDevice: () => true, dataDir: dir, summarize: async () => 'Recap\n\nBody' }
+    const unreadable = async (): Promise<never> => { throw new Error('ENOENT: /Users/someone/axolotlnotes.jsonl') }
+    const turn = [
+      { type: 'turn_started', payload: { userMessage: 'q' } },
+      { type: 'text_delta', payload: { content: 'answer' } },
+      { type: 'turn_ended', payload: {} },
+    ] as LiveEvent[]
+    new CommanderMirror({ ...opts, readLastTurn: unreadable }).ingest(turn, 'read')
+    new CommanderMirror({ ...opts, summarize: async () => { throw new TypeError('the model said axolotlnotes') } }).ingest(turn, 'summary')
+    new CommanderMirror({ ...opts, readLastTurn: unreadable }).catchUp('caughtup')
+    await vi.runAllTimersAsync()
+    expect(lines).toContain('[recap] read JSON session read failed: Error — no verified final result')
+    expect(lines).toContainEqual(expect.stringMatching(/^\[recap\] summary FAILED after \d+ms: TypeError$/))
+    expect(lines).toContain('[recap] caughtup catch-up failed: Error')
+    expect(said()).not.toContain('axolotlnotes')
+  })
+})
+
+describe('the recap files are never written over or left half-written', () => {
+  const FILES = ['summaries.json', 'summaries-history.json', 'summaries-fulltext.json', 'summaries-asks.json']
+  let dir = ''
+  beforeEach(() => {
+    vi.useFakeTimers()
+    dir = mkdtempSync(join(tmpdir(), 'adapter-commander-files-'))
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+  })
+  afterEach(() => { disk.full = false; disk.synced = []; vi.useRealTimers(); vi.restoreAllMocks(); rmSync(dir, { recursive: true, force: true }) })
+
+  const build = () => new CommanderMirror({ send: () => {}, sendWeb: () => {}, hasDevice: () => true, dataDir: dir,
+    summarize: async () => 'Recap\n\nBody' })
+  async function turn(mirror: CommanderMirror, sessionId: string): Promise<void> {
+    mirror.ingest([
+      { type: 'turn_started', payload: { userMessage: 'question ' + sessionId } },
+      { type: 'text_delta', payload: { content: 'answer ' + sessionId } },
+      { type: 'turn_ended', payload: {} },
+    ] as LiveEvent[], sessionId)
+    await vi.runAllTimersAsync()
+  }
+  const held = () => FILES.map((name) => readFileSync(join(dir, name), 'utf8'))
+
+  it('a torn history is set aside, not written over', async () => {
+    writeFileSync(join(dir, 'summaries-history.json'), '{"s1":["a recap')
+    await turn(build(), 's2')
+    expect(readFileSync(join(dir, 'summaries-history.json.unreadable'), 'utf8')).toBe('{"s1":["a recap')
+    expect(build().recent('s2')).toHaveLength(1)
+  })
+
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('a history this account cannot read is not written over, and the others are still saved', async () => {
+    await turn(build(), 's1')
+    const history = join(dir, 'summaries-history.json')
+    const before = readFileSync(history, 'utf8')
+    chmodSync(history, 0o000)
+    await turn(build(), 's2')
+    chmodSync(history, 0o600)
+    expect(readFileSync(history, 'utf8')).toBe(before)
+    expect(Object.keys(JSON.parse(readFileSync(join(dir, 'summaries.json'), 'utf8')))).toEqual(['s1', 's2'])
+  })
+
+  // A read that failed at start (EMFILE, a scanner holding the file on Windows) is tried again at the next save: the run
+  // must not go on saving nothing to it until the daemon restarts, nor bring back a session deleted meanwhile.
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('a history unread at start is saved once it can be read, with what it held and without a session deleted since', async () => {
+    const first = build()
+    await turn(first, 's1')
+    await turn(first, 's2')
+    const history = join(dir, 'summaries-history.json')
+    chmodSync(history, 0o000)
+    const mirror = build()
+    chmodSync(history, 0o600)
+    mirror.deleteHistory('s1')
+    await turn(mirror, 's3')
+    expect(Object.keys(JSON.parse(readFileSync(history, 'utf8'))).sort()).toEqual(['s2', 's3'])
+    expect(mirror.recent('s2')).toHaveLength(1)
+    expect(mirror.recent('s1')).toEqual([])
+  })
+
+  it('a save that fails part way leaves the four files whole', async () => {
+    const mirror = build()
+    await turn(mirror, 's1')
+    const before = held()
+    disk.full = true
+    await turn(mirror, 's2')
+    disk.full = false
+    const after = held()
+    for (const text of after) expect(() => JSON.parse(text)).not.toThrow()
+    expect(after).toEqual(before)
+  })
+
+  // A full history's save took 90-143 ms with every file and its folder flushed, 12 without (2026-11-19): the timer's
+  // saves are renamed whole only. The one as the process stops is flushed, so a restart loses no recap.
+  it('the timer\'s save flushes nothing; the save as the process stops flushes each file and the folder', async () => {
+    const mirror = build()
+    await turn(mirror, 's1')
+    expect(disk.synced).toEqual([])
+    // The next turn's save is still waiting on its timer as the process stops: the flushed save is that one.
+    mirror.ingest([
+      { type: 'turn_started', payload: { userMessage: 'question s2' } },
+      { type: 'text_delta', payload: { content: 'answer s2' } },
+      { type: 'turn_ended', payload: {} },
+    ] as LiveEvent[], 's2')
+    await vi.advanceTimersByTimeAsync(0)
+    expect(Object.keys(JSON.parse(held()[0]!))).toEqual(['s1'])
+    mirror.saveBeforeStop()
+    expect(disk.synced).toEqual(FILES.flatMap(() => directorySyncSupported() ? ['file', 'folder'] : ['file']))
+    expect(Object.keys(JSON.parse(held()[0]!))).toEqual(['s1', 's2'])
+    // Nothing is saved after it: a later save, not flushed, would put an unflushed file in its place.
+    const flushed = FILES.map((name) => statSync(join(dir, name)).ino)
+    await vi.runAllTimersAsync()
+    expect(FILES.map((name) => statSync(join(dir, name)).ino)).toEqual(flushed)
+  })
+
+  // A deletion is asked for once: a power cut after it must not bring the session's recaps back.
+  it('a deletion flushes each file and the folder', async () => {
+    const mirror = build()
+    await turn(mirror, 's1')
+    await turn(mirror, 's2')
+    disk.synced = []
+    mirror.deleteHistory('s1')
+    expect(disk.synced).toEqual(FILES.flatMap(() => directorySyncSupported() ? ['file', 'folder'] : ['file']))
+    expect(Object.keys(JSON.parse(held()[0]!))).toEqual(['s2'])
+  })
+
+  it('the timer\'s save and the strict save write the same bytes', async () => {
+    const mirror = build()
+    await turn(mirror, 's1')
+    await turn(mirror, 's2')
+    const timed = held()
+    // Deleting a session that holds nothing saves the same maps, strictly.
+    mirror.deleteHistory('none')
+    expect(held()).toEqual(timed)
   })
 })

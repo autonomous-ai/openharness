@@ -1,20 +1,24 @@
 // The devices (services/devices.ts): what the core tells them reaches the dial and the window bridges, what
 // they say reaches the core through its API alone, and the fleet failing costs the dial nothing.
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { createServer } from 'node:net'
 import { homedir, tmpdir } from 'node:os'
-import { delimiter, dirname, join, parse } from 'node:path'
+import { delimiter, dirname, join, parse, sep } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import type { CableHostWiring, DaemonCableHost } from '../cable/cableHost.js'
 import { AppFilter, FRONT_SETTLE_MS } from '../cable/hosts/appFilter.js'
 import type { CodexRunEnd } from '../cable/hosts/codexQueue.js'
+import type { ClaudeAppSession } from '../cable/hosts/claudeAppStore.js'
+import type { CodexAppRead, CodexAppThread } from '../cable/hosts/codexAppThreads.js'
 import { CMUX_APP_BINARY, type CmuxClient, type CmuxInputState, type CmuxSession } from '../cable/hosts/cmuxCli.js'
 import { hcClientDeps, type HcClient, type HcPrompt, type HcSubscriber, type HcTerminal } from '../cable/hosts/hcClient.js'
 import { herdrClientDeps, type HerdrAnswer, type HerdrClient, type HerdrEntry, type HerdrPrompt, type HerdrSubscriber } from '../cable/hosts/herdrClient.js'
 import { HerdrSource } from '../cable/hosts/herdrSource.js'
+import type { LinuxRaise } from '../cable/hosts/linuxRaise.js'
 import { observedAgentId, ObservedSource } from '../cable/hosts/observed.js'
 import { OPENCODE_MESSAGE, opencodeClientDeps, type OpencodeAnswer, type OpencodeClient, type OpencodeEvent, type OpencodeFault, type OpencodePrompt } from '../cable/hosts/opencodeClient.js'
 import { OpencodeSource } from '../cable/hosts/opencodeSource.js'
-import type { OrcaChild, OrcaReads, OrcaTabs, OrcaTerminal } from '../cable/hosts/orca.js'
+import { MAX_TEXT, type OrcaChild, type OrcaReads, type OrcaTabs, type OrcaTerminal } from '../cable/hosts/orca.js'
 import { AppRings } from '../cable/hosts/select.js'
 import { env } from '../config/env.js'
 import { routeVoiceTask } from '../lib/voiceRouter.js'
@@ -26,6 +30,9 @@ import type { ClaudeRun } from '../devices/claudePlugin.js'
 import { DIAL_SKILL } from '../devices/dialSkill.js'
 import { readSetup, writeRemoved, writeSetup } from '../devices/dialSkillFiles.js'
 import type { OrcaHomes, OrcaHomesCache } from '../devices/orcaHomes.js'
+import * as orcaPluginModule from '../devices/orcaPlugin.js'
+import * as orcaPluginSetupModule from '../cable/orcaPluginSetup.js'
+import { harnessPath } from '../config/harnessHome.js'
 import * as vscodeExtension from '../devices/vscodeExtension.js'
 import type { VscodeEditor, VscodeExtensionDeps } from '../devices/vscodeExtension.js'
 import { devicesListenerPath } from '../devices/listenerPath.js'
@@ -35,13 +42,15 @@ import { claudeProjectsRoots, codexHomeRoots } from '../lib/engineHomes.js'
 import type { ExternalProvider, ProcessView } from '../lib/sessionSearch/externals/types.js'
 import type { TierInput } from '../lib/notifyTier.js'
 import type { RegisteredSession } from '../lib/registry.js'
+import { claudeAppFixture } from '../testing/claudeAppFixture.js'
+import { codexAppFixture } from '../testing/codexAppFixture.js'
 import { fakeCmux, touchStore } from '../testing/fakeCmux.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import { herdrAppStatus } from '../testing/herdrAppStatus.js'
 import type { Fleet, FleetDeps } from './fleet.js'
 import type { DevicesDeps } from './devices.js'
 import {
-  ATTACH_MAX_BYTES, ATTACH_PER_SECOND, FRONT_MAX_BYTES, FRONT_PER_SECOND, NOTICE_MAX_BYTES, NOTICE_PER_SECOND, NOTIFY_MAX_BYTES, NOTIFY_PER_SECOND, REFUSED, TAB_MAX_BYTES, TAB_PER_SECOND, TABS_MAX_BYTES, TABS_PER_SECOND,
+  ATTACH_MAX_BYTES, ATTACH_PER_SECOND, FRONT_MAX_BYTES, FRONT_PER_SECOND, NOTICE_MAX_BYTES, NOTICE_PER_SECOND, NOTIFY_MAX_BYTES, NOTIFY_PER_SECOND, REFUSED, TAB_MAX_BYTES, TAB_PER_SECOND, TABS_MAX_BYTES, TABS_PER_SECOND, THREAD_MAX_BYTES, THREAD_PER_SECOND,
   type DevicesListener, type ListenerHandler, type ListenerStreamHandler,
 } from './devicesListener.js'
 
@@ -58,6 +67,10 @@ const seen = vi.hoisted(() => ({
 vi.mock('../devices/claudePlugin.js', async (real) => ({ ...await real<object>() }))
 // A copy of the module, so a spec can watch the daemon's own VS Code deps be asked for, and answer with its fake.
 vi.mock('../devices/vscodeExtension.js', async (real) => ({ ...await real<object>() }))
+// Copies too, so a spec can watch the daemon's own Orca and the deps of Orca's plugin be asked for, and answer with its
+// fake.
+vi.mock('../devices/orcaPlugin.js', async (real) => ({ ...await real<object>() }))
+vi.mock('../cable/orcaPluginSetup.js', async (real) => ({ ...await real<object>() }))
 vi.mock('../cable/cableHost.js', async (real) => {
   const actual = await real<typeof import('../cable/cableHost.js')>()
   return {
@@ -178,7 +191,10 @@ const readers = vi.hoisted(() => ({
   answer: vi.fn(async (..._args: unknown[]): Promise<string | undefined> => undefined),
   apps: vi.fn(async (_pids: readonly number[]) => new Map<number, string>()),
   record: vi.fn(async (..._args: unknown[]): Promise<{ name?: string; hostSession?: string }> => ({})),
-  processes: vi.fn(async () => [] as Array<{ pid: number; ppid: number; executable: string }>),
+  processes: vi.fn(async () => [] as Array<{ pid: number; ppid: number; tty?: string; executable: string }>),
+  // A process's terminal, as its made-up row gives it: the table the devices read holds none.
+  tty: vi.fn(async (pid: number): Promise<string | undefined> => (await readers.processes()).find((p) => p.pid === pid)?.tty),
+  bundleId: vi.fn(async (_bundle: string): Promise<string | undefined> => undefined),
 }))
 vi.mock('../lib/sessionSearch/external.js', async (real) => ({
   ...await real<typeof import('../lib/sessionSearch/external.js')>(),
@@ -203,12 +219,28 @@ vi.mock('../lib/sessionSearch/externals/support.js', async (real) => ({
   processAlive: () => true,
   fileStamp: async () => null,
 }))
-// Which app each session found runs in, and the process table a tap on a tmux pane checks: made up, never this machine's
-// processes.
+// Which app each session found runs in, the process table a tap on a tmux pane checks and the bundle ids its client's
+// walk reads: made up, never this machine's processes or its `plutil`.
 vi.mock('../cable/hosts/scannedApp.js', async (real) => ({
   ...await real<typeof import('../cable/hosts/scannedApp.js')>(),
   learnApps: readers.apps,
   readProcessNames: readers.processes,
+  readTtyName: readers.tty,
+  readBundleId: readers.bundleId,
+}))
+// Where tmux is: on the PATH, so no spec asks the developer's login shell.
+vi.mock('../lib/tmuxOnPath.js', async (real) => ({
+  ...await real<typeof import('../lib/tmuxOnPath.js')>(),
+  ensureTmuxOnPath: async () => ({ state: 'present' }),
+}))
+// Where zellij and kitty's kitten are: on the PATH, so no spec asks the developer's login shell or finds their own.
+vi.mock('../cable/hosts/zellij.js', async (real) => ({
+  ...await real<typeof import('../cable/hosts/zellij.js')>(),
+  zellijFinder: () => async () => ({ state: 'present' }),
+}))
+vi.mock('../cable/hosts/kitty.js', async (real) => ({
+  ...await real<typeof import('../cable/hosts/kitty.js')>(),
+  kittyFinder: () => async () => ({ state: 'present' }),
 }))
 // What a session's own process record gives: never this machine's ~/.claude.
 vi.mock('../cable/hosts/record.js', () => ({ readRecord: readers.record }))
@@ -303,6 +335,13 @@ const noCmux: CmuxClient = {
   inputState: async () => undefined,
   paste: async () => false,
 }
+/** The ChatGPT app's threads as every spec but their own has them: no Codex home, so no spec reads the throwaway home's. */
+const noCodexApp: NonNullable<DevicesDeps['codexAppThreads']> = {
+  there: () => false,
+  read: async () => ({ ok: false, kind: 'ENOENT' }),
+  forget: () => {},
+  names: () => new Map(),
+}
 /** What the devices asked of opencode's service: recorded, so no spec reaches the developer's own opencode. It has no
  *  service.json, and its prompt fails. */
 const opencodeCalls: unknown[][] = []
@@ -317,6 +356,21 @@ const opencode: OpencodeClient = {
     return { close: () => {} }
   },
   prompt: async (...args) => { opencodeCalls.push(['prompt', ...args]); return 'failed' },
+}
+/** Linux's raise as every spec but its own has it: no desktop found, so nothing is raised. */
+const noDesktop: LinuxRaise = { ready: () => false, raise: async () => false }
+/** A raise a spec drives: whether it found a desktop, what it answers, and each window it was asked for. */
+function fakeRaise() {
+  const fake: { found: boolean; answer: boolean; raised: Array<{ pid?: number; app?: string }>; raise: LinuxRaise } = {
+    found: true,
+    answer: true,
+    raised: [],
+    raise: {
+      ready: () => fake.found,
+      raise: async (window) => { fake.raised.push(window); return fake.answer },
+    },
+  }
+  return fake
 }
 /** Orca's reads for every spec but Orca's own: nothing lands, so no other spec hears of an order or a watch. */
 const inertOrcaReads: OrcaReads = {
@@ -407,6 +461,51 @@ function fakeVscode({ installed = null, app = installed !== null, editor = 'vsco
   return { deps, runs }
 }
 
+const ORCA_KEY = 'local.harness-device'
+const ORCA_FP = `ap1-${'0123456789abcdef'.repeat(2)}`
+/** Orca's CLI and Harness Device's plugin in it as the devices see them (services/devices.ts orcaPlugin): the spec's own,
+ *  in memory, each run's arguments kept, so no spec runs the developer's `orca` or writes their ~/.harness/orca-plugin.
+ *  An Orca that is `running` answers at 1.4.262 and lists the plugin from [folder] at [installed]; an install or update
+ *  is refused without the approval's fingerprint for the pinned access, or [more] than it, and with it leaves this
+ *  build's 9.9.9. */
+function fakeOrcaPlugin({ running = true, installed = null, folder = join(dataDir, 'orca-plugin'), more = false }: { running?: boolean; installed?: string | null; folder?: string; more?: boolean } = {}) {
+  const runs: string[] = []
+  const state = { running, version: installed }
+  const answer = (code: number, json: unknown) => ({ code, stdout: JSON.stringify(json), timedOut: false })
+  const deps: orcaPluginModule.OrcaPluginRun & { folder: string } = {
+    platform: 'darwin',
+    orca: () => '/nowhere/orca',
+    run: async (_file, args) => {
+      runs.push(args.join(' '))
+      if (args[0] === 'status') return answer(0, { ok: true, result: { runtime: state.running ? { reachable: true, appVersion: '1.4.262' } : { reachable: false } } })
+      if (args[1] === 'inspect') return answer(0, { ok: true, result: { plugin: { pluginKey: ORCA_KEY } } })
+      if (args[1] === 'list') {
+        // Orca lists the folder it was handed by its real path: a throwaway data folder under macOS's /var is /private/var.
+        const entry = { pluginKey: ORCA_KEY, version: state.version, status: 'running', source: { kind: 'local-path', reference: realpathSync(folder) } }
+        return answer(0, { ok: true, result: { plugins: state.version === null ? [] : [entry] } })
+      }
+      if (args.at(-3) === '--approve' && args.at(-2) === ORCA_FP) {
+        state.version = '9.9.9'
+        return answer(0, { ok: true, result: { pluginKey: ORCA_KEY, version: '9.9.9' } })
+      }
+      return answer(3, { ok: false, error: { code: 'approval_required', data: {
+        pluginKey: ORCA_KEY, version: '9.9.9', approvalFingerprint: ORCA_FP,
+        grants: {
+          execution: 'trusted-worker',
+          capabilities: [{ kind: 'workspace:read', description: 'Read your projects' }, ...more ? [{ kind: 'agent:read', description: 'Read your agents' }] : []],
+          contributions: [{ kind: 'panels', name: 'Harness Device' }, { kind: 'statusBarItems', name: 'Dial' }, { kind: 'events', name: 'workspace.changed' }],
+        },
+      } } })
+    },
+    files: () => ({
+      'orca-plugin.json': JSON.stringify({ manifestVersion: 2, id: 'harness-device', name: 'Harness Device', version: '9.9.9', engines: { orca: '>=1.4.248' }, main: 'src/worker.ts' }),
+      'src/worker.ts': 'export const worker = true\n',
+    }),
+    folder,
+  }
+  return { deps, runs, state }
+}
+
 let dataDir: string
 let logs: string[]
 beforeEach(() => {
@@ -430,6 +529,7 @@ beforeEach(() => {
   readers.answer.mockResolvedValue(undefined)
   readers.record.mockResolvedValue({})
   readers.processes.mockResolvedValue([])
+  readers.bundleId.mockResolvedValue(undefined)
   processTable.rows = []
   processTable.reads = 0
   claudeSettings.fullscreen = true
@@ -446,8 +546,9 @@ afterEach(() => {
   vi.unstubAllEnvs()
 })
 
-function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolean; cableTcp?: string; cableTcpPermissions?: string; testDialPort?: string; readUsage?: DevicesDeps['readUsage']; now?: () => number; decideTier?: DevicesDeps['decideTier'] | null; refresh?: DevicesDeps['refresh']; orca?: DevicesDeps['orca']; orcaReads?: DevicesDeps['orcaReads']; codex?: DevicesDeps['codex']; herdr?: DevicesDeps['herdr']; hc?: DevicesDeps['hc']; cmux?: DevicesDeps['cmux'] | null; opencode?: DevicesDeps['opencode']; listen?: DevicesDeps['listen']; tty?: DevicesDeps['tty']; claude?: DevicesDeps['claude'] | null; orcaHomes?: ReturnType<typeof fakeOrcaHomes> | null; vscodeExtension?: DevicesDeps['vscodeExtension'] | null; cursorExtension?: DevicesDeps['cursorExtension'] | null; claudeFullscreen?: null; claudeManagedSettings?: string } = {}) {
+function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolean; cableTcp?: string; cableTcpPermissions?: string; testDialPort?: string; readUsage?: DevicesDeps['readUsage']; now?: () => number; decideTier?: DevicesDeps['decideTier'] | null; refresh?: DevicesDeps['refresh']; orca?: DevicesDeps['orca']; orcaReads?: DevicesDeps['orcaReads']; codex?: DevicesDeps['codex']; herdr?: DevicesDeps['herdr']; hc?: DevicesDeps['hc']; cmux?: DevicesDeps['cmux'] | null; opencode?: DevicesDeps['opencode']; claudeAppStore?: DevicesDeps['claudeAppStore']; codexAppThreads?: DevicesDeps['codexAppThreads'] | null; bundleId?: DevicesDeps['bundleId'] | null; listen?: DevicesDeps['listen']; tty?: DevicesDeps['tty']; claude?: DevicesDeps['claude'] | null; orcaHomes?: ReturnType<typeof fakeOrcaHomes> | null; vscodeExtension?: DevicesDeps['vscodeExtension'] | null; cursorExtension?: DevicesDeps['cursorExtension'] | null; orcaPlugin?: DevicesDeps['orcaPlugin'] | null; claudeFullscreen?: null; claudeManagedSettings?: string; raise?: DevicesDeps['raise'] | null } = {}) {
   const core = over.core ?? fakeCore({ dataDir })
+  const apps = over.orca ?? orca
   // None, and no read under way, unless the spec gives its own; null leaves the devices to read this computer's.
   const orcaHomes = over.orcaHomes ?? fakeOrcaHomes()
   const ports: CorePorts = emptyPorts()
@@ -464,7 +565,7 @@ function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolea
     readUsage: over.readUsage,
     now: over.now,
     refresh: over.refresh,
-    orca: over.orca ?? orca,
+    orca: apps,
     orcaReads: over.orcaReads ?? inertOrcaReads,
     codex: over.codex ?? codex,
     herdr: over.herdr ?? herdr,
@@ -472,6 +573,13 @@ function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolea
     // Null: no client given, so the devices build their own.
     cmux: over.cmux === null ? undefined : over.cmux ?? noCmux,
     opencode: over.opencode ?? opencode,
+    // None unless the spec gives its own: on macOS the devices read the Claude app's store under the suite's throwaway
+    // home, where there is none.
+    claudeAppStore: over.claudeAppStore,
+    // No Codex home and no ChatGPT app unless the spec gives its own: no spec reads the throwaway home's ~/.codex, or runs
+    // plutil on this Mac's /Applications. null leaves each out.
+    codexAppThreads: over.codexAppThreads === null ? undefined : over.codexAppThreads ?? noCodexApp,
+    bundleId: over.bundleId === null ? undefined : over.bundleId ?? (async () => undefined),
     decideTier: over.decideTier === null ? undefined : over.decideTier ?? (async () => ({ tier: 'alert', by: 'test', detail: '', ms: 0 })),
     faults: new Set(over.faults ?? []),
     log: (line) => { logs.push(line) },
@@ -486,6 +594,8 @@ function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolea
     // out.
     vscodeExtension: over.vscodeExtension === null ? undefined : over.vscodeExtension ?? fakeVscode().deps,
     cursorExtension: over.cursorExtension === null ? undefined : over.cursorExtension ?? fakeVscode({ editor: 'cursor' }).deps,
+    // An Orca that is not running unless the spec gives its own: no spec runs the developer's. null leaves it out.
+    orcaPlugin: over.orcaPlugin === null ? undefined : over.orcaPlugin ?? fakeOrcaPlugin({ running: false }).deps,
     processParents: async () => {
       processTable.reads++
       return processTable.rows
@@ -496,6 +606,9 @@ function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolea
       return claudeSettings.fullscreen
     },
     claudeManagedSettings: over.claudeManagedSettings,
+    // On Linux a raise that finds no desktop unless the spec gives its own: no spec reads this login's sockets or raises
+    // the developer's windows. null leaves it out: the devices build the system's.
+    raise: over.raise === null ? undefined : over.raise ?? (apps.platform === 'linux' ? noDesktop : undefined),
     processGroups: async (agent, shell) => {
       processGroups.reads.push([agent, shell])
       if (processGroups.held) await new Promise<void>((resolve) => { processGroups.land.push(resolve) })
@@ -684,12 +797,12 @@ describe('the devices, as the core starts them', () => {
 })
 
 describe('the devices\' own listener (services/devicesListener.ts)', () => {
-  it('the devices open their listener once, with front, attach, the tab handler, the tabs stream, the dial stream, the worktree on Orca\'s screen, the Notifications setting, the notice and VS Code\'s windows', () => {
+  it('the devices open their listener once, with front, attach, the tab handler, the ChatGPT thread, the tabs stream, the dial stream, the worktree on Orca\'s screen, the Notifications setting, the notice and VS Code\'s windows', () => {
     const listener = fakeListener()
     start({ listen: listener.listen })
     expect(listener.listen).toHaveBeenCalledTimes(1)
     const [{ handlers, log }] = listener.given
-    expect(Object.keys(handlers)).toEqual(['front', 'attach', 'tab', 'tabs', 'dial', 'orcaFront', 'notify', 'notice', 'vscode', 'vscode-state'])
+    expect(Object.keys(handlers)).toEqual(['front', 'attach', 'tab', 'thread', 'tabs', 'dial', 'orcaFront', 'notify', 'notice', 'vscode', 'vscode-state'])
     expect(handlers.orcaFront).toMatchObject({ maxBytes: 4096, perSecond: 10 })
     expect(handlers.notice).toMatchObject({ maxBytes: NOTICE_MAX_BYTES, perSecond: NOTICE_PER_SECOND })
     expect(handlers.front).toMatchObject({ maxBytes: FRONT_MAX_BYTES, perSecond: FRONT_PER_SECOND })
@@ -697,6 +810,7 @@ describe('the devices\' own listener (services/devicesListener.ts)', () => {
     expect(handlers.attach).toMatchObject({ maxBytes: ATTACH_MAX_BYTES, perSecond: ATTACH_PER_SECOND })
     expect([ATTACH_MAX_BYTES, ATTACH_PER_SECOND]).toEqual([96, 10])
     expect(handlers.tab).toMatchObject({ maxBytes: TAB_MAX_BYTES, perSecond: TAB_PER_SECOND })
+    expect(handlers.thread).toMatchObject({ maxBytes: THREAD_MAX_BYTES, perSecond: THREAD_PER_SECOND })
     expect(handlers.tabs).toMatchObject({ maxBytes: TABS_MAX_BYTES, perSecond: TABS_PER_SECOND })
     expect(handlers.dial).toMatchObject({ maxBytes: 64, perSecond: 1 })
     expect(handlers.notify).toMatchObject({ maxBytes: NOTIFY_MAX_BYTES, perSecond: NOTIFY_PER_SECOND })
@@ -769,7 +883,7 @@ describe('the devices\' own listener (services/devicesListener.ts)', () => {
 
   it('a listener that cannot open is one log line, and the devices run on', async () => {
     const { port } = start({ listen: async () => { throw new Error('listen EACCES /Users/someone/.harness/devices.sock') } })
-    await vi.waitFor(() => expect(logs).toEqual(['[devices] listener not opened · failed']))
+    await vi.waitFor(() => expect(logs).toEqual(['[devices] listener not opened · Error']))
     expect(calls('start')).toHaveLength(1)
     await port.stop()
     expect(calls('stop')).toHaveLength(1)
@@ -840,7 +954,7 @@ describe('the dial stream, for Orca\'s Harness Device plugin (docs/specs/2026-11
     }).not.toThrow()
     expect(core.clients.dialWatching).toHaveBeenCalledWith(true)
     expect(stream.lines).toEqual([{ attached: false }])
-    expect(logs).toContain('[devices] dialStream failed · injected fault: dialStream')
+    expect(logs).toContain('[devices] dialStream failed · Error')
     // Its minute count is the stream's too.
     await vi.advanceTimersByTimeAsync(60_000)
     expect(said()).toEqual(['[devices] dial stream · open'])
@@ -855,7 +969,7 @@ describe('the dial stream, for Orca\'s Harness Device plugin (docs/specs/2026-11
     expect(() => seen.host.watching!(true)).not.toThrow()
     expect(() => seen.host.dialShows!(API)).not.toThrow()
     expect(core.clients.dialWatching).toHaveBeenCalledWith(true)
-    expect(logs).toContain('[devices] dialStream failed · write broken')
+    expect(logs).toContain('[devices] dialStream failed · Error')
   })
 
   it('with no listen given the dial\'s moves reach no stream and nothing throws', () => {
@@ -1565,7 +1679,7 @@ describe('what the windows say, reaching the dial', () => {
     const { port } = start({ faults: ['dial'] })
     port.card({ type: 'commander_event', agentId: 'a1', payload: { kind: 'done' } })
     port.desk(['a1'], true)
-    expect(logs).toContain('[devices] dial failed · injected fault: dial')
+    expect(logs).toContain('[devices] dial failed · Error')
     expect(calls('turnDone')).toEqual([])
   })
 })
@@ -1634,7 +1748,7 @@ describe('⌘K, the Wi-Fi device\'s borrowed walk, the voice router and stopping
     const { port } = start({ faults: ['fleet'] })
     expect(await port.routeTask('anything')).toMatchObject({ agentId: '', reason: 'no agent list yet', candidates: [] })
     expect(await port.routeSend('a1', 'go')).toEqual({ ok: false, machine: '', reason: 'no agent list yet' })
-    expect(logs).toContain('[devices] fleet did not start · injected fault: fleet · the devices run without it')
+    expect(logs).toContain('[devices] fleet did not start · Error · the devices run without it')
     expect(seen.host.fleet!()).toBeNull()
     await port.stop()
     expect(calls('stop')).toHaveLength(1)
@@ -2404,7 +2518,7 @@ describe('agents outside a pane, from their hooks and the open sessions (cable/h
       vi.spyOn(AppRings.prototype, 'counts').mockImplementationOnce(() => { throw new Error('rings unreadable') })
       host().front('vscode')
       await vi.advanceTimersByTimeAsync(FRONT_SETTLE_MS)
-      expect(logs).toContain('[devices] dial failed · rings unreadable')
+      expect(logs).toContain('[devices] dial failed · Error')
       // The next app in front settles as before.
       host().front('ghostty')
       host().front('vscode')
@@ -2511,7 +2625,7 @@ describe('agents outside a pane, from their hooks and the open sessions (cable/h
       start({ faults: ['fleet'], listen: listener.listen })
       vi.spyOn(host(), 'front').mockImplementation(() => { throw new Error('rings unreadable') })
       expect(listener.front('vscode')).toBeUndefined()
-      expect(logs).toContain('[devices] dial failed · rings unreadable')
+      expect(logs).toContain('[devices] dial failed · Error')
     })
 
     it('an app that empties as a dial reads the list is pushed after that read, never from inside it', async () => {
@@ -2603,8 +2717,18 @@ describe('agents outside a pane, from their hooks and the open sessions (cable/h
         await vi.waitFor(() => expect(orcaRuns).toEqual([[file, ['-b', 'com.microsoft.VSCode'], 10_000]]))
       })
 
-      it('off macOS a pick runs nothing', async () => {
-        const { port } = start({ faults: ['fleet'] })
+      it('on Linux a pick brings the picked app through the raise, and logs bring · ok', async () => {
+        const linux = fakeRaise()
+        const { port } = start({ faults: ['fleet'], raise: linux.raise })
+        await twoApps(port)
+        expect(host().pickApp('vscode')).toBe('switched')
+        await vi.waitFor(() => expect(brings()).toEqual(['[device] app filter: bring · ok']))
+        expect(linux.raised).toEqual([{ app: 'vscode' }])
+        expect(orcaRuns).toEqual([])
+      })
+
+      it('on Windows a pick runs nothing', async () => {
+        const { port } = start({ faults: ['fleet'], orca: { ...orca, platform: 'win32' } })
         await twoApps(port)
         expect(host().pickApp('vscode')).toBe('switched')
         await settled()
@@ -2967,6 +3091,59 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     expect(orcaRuns).toEqual([])
   })
 
+  // On Linux a tap brings the agent's window forward through the raise (docs/plans/2026-11-19-dial-linux-design.md § 2.1).
+  describe('on Linux, the raise', () => {
+    it('a tap on a hooked agent in a WezTerm pane activates the pane, then raises its caller\'s window in WezTerm', async () => {
+      const linux = fakeRaise()
+      const { port } = startHere({ raise: linux.raise })
+      port.observed(hook('session-start', { engine: 'codex', sessionId: 'cx-1', hostHints: { TERM_PROGRAM: 'WezTerm', WEZTERM_PANE: '3' } }))
+      attach(port)
+      expect(await host().openAgent(CODEX)).toBeUndefined()
+      expect(orcaRuns).toEqual([['/opt/orca/bin/orca', ['cli', '--no-auto-start', 'activate-pane', '--pane-id', '3'], 10_000]])
+      expect(linux.raised).toEqual([{ pid: 4242, app: 'wezterm' }])
+    })
+
+    it('an agent with no pane lists f once a desktop is found, and its tap answers what the raise did', async () => {
+      const linux = fakeRaise()
+      linux.found = false
+      const { port } = startHere({ raise: linux.raise })
+      port.observed(hook('session-start', { hostHints: { TERM_PROGRAM: 'ghostty' } }))
+      attach(port)
+      expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 's' }])
+      linux.found = true
+      expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'sf' }])
+      expect(await host().openAgent(ID)).toBeUndefined()
+      linux.answer = false
+      expect(await host().openAgent(ID)).toEqual({ ok: false, error: 'Ghostty did not open it.' })
+      expect(linux.raised).toEqual([{ pid: 4242, app: 'ghostty' }, { pid: 4242, app: 'ghostty' }])
+      expect(orcaRuns).toEqual([])
+    })
+
+    /** This login's desktop as the system's raise reads it: X11 on :0, every other variable empty, so no spec reads the
+     *  developer's own sockets or session bus. */
+    const onX11 = () => {
+      for (const name of ['SWAYSOCK', 'HYPRLAND_INSTANCE_SIGNATURE', 'XDG_RUNTIME_DIR', 'WAYLAND_DISPLAY', 'DBUS_SESSION_BUS_ADDRESS', 'XAUTHORITY']) vi.stubEnv(name, '')
+      vi.stubEnv('DISPLAY', ':0')
+    }
+    const raiseLines = () => said().filter((line) => line.startsWith('[device] raise · '))
+
+    it('with none given the devices build the system\'s: it says its desktop once and runs nothing but the devices\' runner', async () => {
+      onX11()
+      const { port } = startHere({ raise: null })
+      attach(port)
+      await vi.waitFor(() => expect(raiseLines()).toEqual(['[device] raise · x11']))
+      expect(orcaRuns).toEqual([])
+    })
+
+    it('macOS builds none', async () => {
+      onX11()
+      const { port } = startHere({ orca: mac, raise: null })
+      attach(port)
+      await new Promise((done) => setImmediate(done))
+      expect(raiseLines()).toEqual([])
+    })
+  })
+
   it('a Claude Code in the Claude app opens on its session; a link that fails still brings the app forward, said in one line with no id', async () => {
     const SESSION = 'local_8d1f2c3a-4b5e-4f60-9a7b-1c2d3e4f5a6b'
     const codes = [1]
@@ -3072,9 +3249,11 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
 
   it('an agent in the person\'s own tmux lists f, and its tap checks the pane\'s process, then switches the person\'s client', async () => {
     readers.processes.mockResolvedValue([{ pid: 4242, ppid: 4000, executable: 'claude' }, { pid: 4000, ppid: 1, executable: 'zsh' }])
-    const says = ['4000|work|\n', '9999|work|\n']
-    // A Harness terminal used last, and the person's own client.
-    const clients = '1794700100|client-501|abcdef0123456789|harness-claude-1790000000000-x\n1794700050|/dev/ttys004||work\n'
+    // The client lookup's, then the tap's.
+    const says = ['4000|work|\n', '4000|work|\n', '9999|work|\n']
+    // A Harness terminal used last, and the person's own client: neither's process is in the table, so the lookup finds
+    // no app.
+    const clients = '1794700100|5001|client-501|abcdef0123456789|harness-claude-1790000000000-x\n1794700050|5004|/dev/ttys004||work\n'
     const { port } = startHere({ orca: { ...mac, run: async (file, args, timeoutMs) => {
       orcaRuns.push([file, args, timeoutMs])
       return { code: 0, stdout: args[0] === 'display-message' ? says.shift()! : args[0] === 'list-clients' ? clients : '' }
@@ -3082,17 +3261,19 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     // Warp is no tab app: no tty is read.
     port.observed(hook('session-start', { hostHints: { TMUX_PANE: '%3', TERM_PROGRAM: 'tmux', __CFBundleIdentifier: 'dev.warp.Warp-Stable' } }))
     attach(port)
+    await vi.waitFor(() => expect(said()).toEqual(['[device] tmux client · none']))
     expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'sf' }])
     expect(await host().openAgent(ID)).toBeUndefined()
     const asked: [string, string[], number] = ['tmux', ['display-message', '-p', '-t', '%3', '#{pane_pid}|#{session_name}|#{@harness_daemon}#{?#{m:/usr/bin/env HARNESS_DAEMON=*,#{pane_start_command}},#{=44:pane_start_command},#{?#{m:harness-*,#{session_name}},#{@harness_daemon},}}'], 10_000]
-    const clientsAsked: [string, string[], number] = ['tmux', ['list-clients', '-F', '#{client_activity}|#{client_name}|#{@harness_daemon}|#{session_name}'], 10_000]
+    const placesAsked: [string, string[], number] = ['tmux', ['list-clients', '-t', '%3', '-F', '#{client_activity}|#{client_pid}|#{client_tty}'], 10_000]
+    const clientsAsked: [string, string[], number] = ['tmux', ['list-clients', '-F', '#{client_activity}|#{client_pid}|#{client_name}|#{@harness_daemon}|#{session_name}'], 10_000]
     const warp: [string, string[], number] = ['/usr/bin/open', ['-b', 'dev.warp.Warp-Stable'], 10_000]
-    expect(orcaRuns).toEqual([asked, clientsAsked, ['tmux', ['switch-client', '-c', '/dev/ttys004', '-t', '%3'], 10_000], warp])
-    expect(said()).toEqual([])
+    expect(orcaRuns).toEqual([asked, placesAsked, asked, clientsAsked, ['tmux', ['switch-client', '-c', '/dev/ttys004', '-t', '%3'], 10_000], warp])
+    expect(said()).toEqual(['[device] tmux client · none'])
     // The pane holds another process now: nothing is listed or switched.
     expect(await host().openAgent(ID)).toBeUndefined()
-    expect(orcaRuns.slice(4)).toEqual([asked, warp])
-    expect(said()).toEqual(['[device] open · tmux · not its pane'])
+    expect(orcaRuns.slice(6)).toEqual([asked, warp])
+    expect(said()).toEqual(['[device] tmux client · none', '[device] open · tmux · not its pane'])
   })
 
   // The order the panes are asked in: a tmux server keeps the environment it started in, so in its pane WezTerm's and
@@ -3101,17 +3282,424 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     readers.processes.mockResolvedValue([{ pid: 4242, ppid: 4000, executable: 'claude' }, { pid: 4000, ppid: 1, executable: 'zsh' }])
     const { port } = startHere({ orca: { ...mac, run: async (file, args, timeoutMs) => {
       orcaRuns.push([file, args, timeoutMs])
-      return { code: 0, stdout: args[0] === 'display-message' ? '4000|work|\n' : args[0] === 'list-clients' ? '1794700050|/dev/ttys004||work\n' : '' }
+      return { code: 0, stdout: args[0] === 'display-message' ? '4000|work|\n' : args[0] === 'list-clients' ? '1794700050|5004|/dev/ttys004||work\n' : '' }
     } } })
     const around = { WEZTERM_PANE: '7', ORCA_TERMINAL_HANDLE: HANDLE, __CFBundleIdentifier: 'dev.warp.Warp-Stable' }
     port.observed(hook('session-start', { hostHints: { TMUX_PANE: '%3', ...around } }))
     attach(port)
+    // The client lookup first: its list names no client, so the tap switches one.
+    await vi.waitFor(() => expect(said()).toEqual(['[device] tmux client · none']))
     expect(await host().openAgent(ID)).toBeUndefined()
-    expect(orcaRuns.map(([, args]) => args[0])).toEqual(['display-message', 'list-clients', 'switch-client', '-b'])
+    expect(orcaRuns.map(([, args]) => args[0])).toEqual(['display-message', 'list-clients', 'display-message', 'list-clients', 'switch-client', '-b'])
     orcaRuns.length = 0
+    // The same pane and caller asked again within 5 s: the lookup's last answer, with no run.
     port.observed(hook('session-start', { hostHints: { HERDR_PANE_ID: 'w1:p2', TMUX_PANE: '%3', ...around } }))
     expect(await host().openAgent(ID)).toBeUndefined()
     expect(orcaRuns.map(([, args]) => args.slice(0, 2))).toEqual([['agent', 'focus'], ['-b', 'dev.warp.Warp-Stable']])
+  })
+
+  // Diego's Mac (2026-11-19): Claude Code in a pane of the tmux server the daemon started, so no bundle id, attached from
+  // a Terminal tab. The lookup's own runs are this spec's; the walk is tmux.spec.ts's.
+  it('an agent in the person\'s tmux is on the page of the app that holds its client, and a rest selects its tab, then its pane', async () => {
+    const terminal = join(homedir(), 'Applications', 'Terminal.app')
+    readers.processes.mockResolvedValue([
+      { pid: 4242, ppid: 4000, executable: 'claude' }, { pid: 4000, ppid: 1, executable: 'zsh' },
+      // The client, in its Terminal tab: under the home the devices read apps in.
+      { pid: 4300, ppid: 4298, executable: 'tmux' }, { pid: 4298, ppid: 1, executable: join(terminal, 'Contents', 'MacOS', 'Terminal') },
+    ])
+    readers.bundleId.mockImplementation(async (bundle) => bundle === terminal ? 'com.apple.Terminal' : undefined)
+    const listener = fakeListener()
+    const { port } = startHere({ listen: listener.listen, orca: { ...mac, run: async (file, args, timeoutMs) => {
+      orcaRuns.push([file, args, timeoutMs])
+      return { code: 0, stdout: args[0] === 'display-message' ? '4000|work|\n' : args[0] === 'list-clients' ? '1794700050|4300|/dev/ttys004\n' : '' }
+    } } })
+    port.observed(hook('session-start', { hostHints: { TMUX_PANE: '%3', TERM_PROGRAM: 'tmux' } }))
+    attach(port)
+    await vi.waitFor(() => expect(said()).toEqual(['[device] tmux client · found']))
+    const apps = (await host().listAgentSnapshot({ apps: true })).apps?.apps
+    expect(apps).toContainEqual(expect.objectContaining({ id: 'terminal-app', count: 1 }))
+    expect(apps?.map(({ id }) => id)).not.toContain('tmux')
+    await vi.waitFor(() => expect(calls('start')).toHaveLength(1))
+    const stream = listener.tabs()
+    expect(listener.front('terminal-app')).toBeUndefined()
+    expect(host().swipeSwitches(ID)).toBe(true)
+    host().swipeEnded(ID, 'rest')
+    await swiped('ok')
+    expect(stream.lines).toStrictEqual([{ app: 'terminal-app', tty: '/dev/ttys004' }])
+    expect(orcaRuns.at(-1)).toEqual(['tmux', ['select-window', '-t', '%3', ';', 'select-pane', '-t', '%3'], 10_000])
+  })
+
+  // Diego's Terminal tab B ran `herdr` (2026-11-19): Claude Code in a pane of his herdr server, whose hints name no app.
+  // The lookup's own runs are this spec's; its walk is herdrOuter.spec.ts's.
+  describe('an agent in the person\'s herdr, attached from a Terminal tab', () => {
+    const terminal = join(homedir(), 'Applications', 'Terminal.app')
+    /** The agent under herdr's server, and herdr's client in its Terminal tab, under the home the devices read apps in. */
+    const inHerdr = [
+      { pid: 4242, ppid: 4000, executable: 'claude' }, { pid: 4000, ppid: 3900, executable: 'zsh' },
+      { pid: 3900, ppid: 1, executable: '/opt/homebrew/bin/herdr' },
+      { pid: 4300, ppid: 4298, executable: 'herdr' }, { pid: 4298, ppid: 1, executable: join(terminal, 'Contents', 'MacOS', 'Terminal') },
+    ]
+    /** The server's client socket, and the client connected to it. */
+    const sockets = 'p3900\nf5\nd0x1111\nn/Users/u/.config/herdr/herdr-client.sock\np4300\nf3\nd0x2222\nn->0x1111\n'
+    const focused: [string, string[], number] = ['/opt/herdr/bin/herdr', ['agent', 'focus', 'w1:p2'], 10_000]
+    /** lsof and ps as herdr's lookup reads them, and tmux's display-message and list-clients as tmux's does. */
+    const run = async (file: string, args: string[], timeoutMs: number) => {
+      orcaRuns.push([file, args, timeoutMs])
+      const stdout = file === '/usr/sbin/lsof' ? sockets : file === '/bin/ps' ? '4300 ttys004\n'
+        : args[0] === 'display-message' ? '5000|work|\n' : args[0] === 'list-clients' ? '1794700050|4400|/dev/ttys005\n' : ''
+      return { code: 0, stdout }
+    }
+    const onMac = { ...mac, onPath: (name: string) => `/opt/${name}/bin/${name}`, run }
+    beforeEach(() => {
+      readers.processes.mockResolvedValue(inHerdr)
+      readers.bundleId.mockImplementation(async (bundle) => bundle === terminal ? 'com.apple.Terminal' : undefined)
+    })
+
+    it('an agent in the person\'s herdr is on the page of the app that holds its client, and a rest selects its tab, then its herdr pane', async () => {
+      const listener = fakeListener()
+      const { port } = startHere({ listen: listener.listen, orca: onMac })
+      port.observed(hook('session-start', { hostHints: { HERDR_PANE_ID: 'w1:p2' } }))
+      attach(port)
+      await vi.waitFor(() => expect(said()).toContain('[device] herdr client · found'))
+      const apps = (await host().listAgentSnapshot({ apps: true })).apps?.apps
+      expect(apps).toContainEqual(expect.objectContaining({ id: 'terminal-app', count: 1 }))
+      expect(apps?.map(({ id }) => id)).not.toContain('herdr')
+      await vi.waitFor(() => expect(calls('start')).toHaveLength(1))
+      const stream = listener.tabs()
+      expect(listener.front('terminal-app')).toBeUndefined()
+      expect(host().swipeSwitches(ID)).toBe(true)
+      host().swipeEnded(ID, 'rest')
+      await swiped('ok')
+      expect(stream.lines).toStrictEqual([{ app: 'terminal-app', tty: '/dev/ttys004' }])
+      expect(orcaRuns.at(-1)).toEqual(focused)
+      // Another app in front: herdr is left as the person left it.
+      const runs = orcaRuns.length
+      expect(listener.front('ghostty')).toBeUndefined()
+      host().swipeEnded(ID, 'rest')
+      await vi.waitFor(() => expect(said().filter((line) => line.startsWith('[device] swipe ·'))).toHaveLength(2))
+      expect(orcaRuns.slice(runs)).toEqual([])
+    })
+
+    it('a tap on it focuses its herdr pane, brings Terminal forward, then raises its tab', async () => {
+      const listener = fakeListener()
+      const { port } = startHere({ listen: listener.listen, orca: onMac })
+      port.observed(hook('session-start', { hostHints: { HERDR_PANE_ID: 'w1:p2' } }))
+      attach(port)
+      await vi.waitFor(() => expect(said()).toContain('[device] herdr client · found'))
+      await vi.waitFor(() => expect(calls('start')).toHaveLength(1))
+      const stream = listener.tabs()
+      expect(await host().openAgent(ID)).toBeUndefined()
+      expect(orcaRuns.slice(-2)).toEqual([focused, ['/usr/bin/open', ['-b', 'com.apple.Terminal'], 10_000]])
+      expect(stream.lines).toStrictEqual([{ app: 'terminal-app', tty: '/dev/ttys004', raise: true }])
+    })
+
+    it('herdr\'s lookup is asked first, and tmux\'s only when herdr\'s found no app', async () => {
+      // A second agent in a pane of the person's tmux, with no herdr among its parents; tmux's client in a Terminal tab.
+      readers.processes.mockResolvedValue([...inHerdr,
+        { pid: 5242, ppid: 5000, executable: 'claude' }, { pid: 5000, ppid: 1, executable: 'zsh' },
+        { pid: 4400, ppid: 4298, executable: 'tmux' }])
+      const { port } = startHere({ orca: onMac })
+      port.observed(hook('session-start', { hostHints: { HERDR_PANE_ID: 'w1:p2', TMUX_PANE: '%3' } }))
+      attach(port)
+      await vi.waitFor(() => expect(said()).toEqual(['[device] herdr client · found']))
+      expect(orcaRuns.filter(([file]) => file === 'tmux')).toEqual([])
+      expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'sf' }])
+      expect((await host().listAgentSnapshot({ apps: true })).apps?.apps).toContainEqual(expect.objectContaining({ id: 'terminal-app', count: 1 }))
+      port.observed(hook('session-start', { sessionId: 'sess-2', callerPid: 5242, hostHints: { HERDR_PANE_ID: 'w1:p2', TMUX_PANE: '%3' } }))
+      await vi.waitFor(() => expect(said()).toEqual(['[device] herdr client · found', '[device] herdr client · none', '[device] tmux client · found']))
+      expect(orcaRuns.filter(([file]) => file === 'tmux').map(([, args]) => args[0])).toEqual(['display-message', 'list-clients'])
+      await vi.waitFor(async () => expect((await host().listAgentSnapshot({ apps: true })).apps?.apps)
+        .toContainEqual(expect.objectContaining({ id: 'terminal-app', count: 2 })))
+    })
+  })
+
+  // Zellij after herdr and before tmux, kitty before WezTerm (docs/plans/2026-11-19-dial-linux-design.md § 3).
+  describe('Zellij and kitty', () => {
+    type Run = [string, string[], number]
+    const ZELLIJ = { ZELLIJ: '0', ZELLIJ_SESSION_NAME: 's1', ZELLIJ_PANE_ID: '3' }
+    const zellijAsked = (...args: string[]): Run => ['zellij', ['--session', 's1', 'action', ...args], 10_000]
+    const focusPane = zellijAsked('focus-pane-id', '3')
+    const zellijWords = [zellijAsked('list-panes', '--json'), zellijAsked('write-chars', '--pane-id', '3', '--', 'run the tests'),
+      zellijAsked('send-keys', '--pane-id', '3', 'Enter')]
+    /** Linux's abstract socket: no owner to read, so a tap alone. */
+    const KITTY = { KITTY_WINDOW_ID: '5', KITTY_LISTEN_ON: 'unix:@kitty-1' }
+    const kittyAsked = (listenOn: string, ...args: string[]): Run => ['kitten', ['@', '--to', listenOn, ...args], 10_000]
+    const kittyWords = (listenOn: string): Run[] => [kittyAsked(listenOn, 'send-text', '--match', 'id:5', '--', 'run the tests'),
+      kittyAsked(listenOn, 'send-text', '--match', 'id:5', '--', '\\r')]
+    /** kitty's window 5 at a socket of this account's at a path, which takes words: the devices read its owner from the
+     *  file. */
+    const kittyAt = async (): Promise<{ KITTY_WINDOW_ID: string; KITTY_LISTEN_ON: string }> => {
+      const folder = mkdtempSync('/tmp/hk-')
+      onTestFinished(() => { rmSync(folder, { recursive: true, force: true }) })
+      const server = createServer()
+      await new Promise<void>((resolve) => { server.listen(join(folder, 's'), resolve) })
+      onTestFinished(() => { server.close() })
+      return { KITTY_WINDOW_ID: '5', KITTY_LISTEN_ON: `unix:${join(folder, 's')}` }
+    }
+    /** The devices' runs recorded, Zellij's listing naming its pane 3 a terminal. */
+    const listing = (base: typeof orca) => ({ ...base, run: async (file: string, args: string[], timeoutMs: number) => {
+      orcaRuns.push([file, args, timeoutMs])
+      return { code: 0, stdout: args.includes('list-panes') ? JSON.stringify([{ id: 3, is_plugin: false, exited: false }]) : '' }
+    } })
+    const voice = () => said().filter((line) => line.startsWith('[device] voice'))
+    /** No other adapter was reached: herdr's and Herdr's sockets, Codex's queue. */
+    const noOther = () => expect([herdrCalls, hcCalls, codexRuns]).toEqual([[], [], []])
+    /** The hook's caller (4242) in a shell on a pseudo-terminal that [maker] made, a process on no terminal: whose pane
+     *  takes its words. [above] are the processes on [maker]'s own terminal, outermost last. */
+    const madeBy = (maker: string, above: Array<{ pid: number; ppid: number; tty?: string; executable: string }> = []) => {
+      readers.processes.mockResolvedValue([{ pid: 4242, ppid: 4000, tty: 'pts/5', executable: 'claude' },
+        { pid: 4000, ppid: 3900, tty: 'pts/5', executable: 'zsh' },
+        { pid: 3900, ppid: above[0]?.pid ?? 1, ...(above.length ? { tty: 'pts/2' } : {}), executable: maker }, ...above])
+    }
+    /** What a hook's reads of the process table found has landed. */
+    const settled = () => new Promise<void>((resolve) => { setImmediate(resolve) })
+
+    it('a hooked agent in a Zellij pane lists v and f; on macOS its tap focuses the pane, then brings its app forward', async () => {
+      madeBy('/opt/homebrew/bin/zellij')
+      const { port } = startHere({ orca: mac })
+      // macOS's Ghostty names itself by its bundle id, which a tap brings forward.
+      port.observed(hook('session-start', { hostHints: { ...ZELLIJ, TERM_PROGRAM: 'ghostty', __CFBundleIdentifier: 'com.mitchellh.ghostty' } }))
+      attach(port)
+      await settled()
+      expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'svf' }])
+      expect(await host().openAgent(ID)).toBeUndefined()
+      // The client lookup first: the session's listing names no client.
+      expect(orcaRuns).toEqual([zellijAsked('list-clients'), focusPane, ['/usr/bin/open', ['-b', 'com.mitchellh.ghostty'], 10_000]])
+    })
+
+    it('on Linux a tap on an agent in a Zellij pane focuses it, then raises its caller\'s window in its terminal', async () => {
+      const linux = fakeRaise()
+      const { port } = startHere({ raise: linux.raise })
+      port.observed(hook('session-start', { hostHints: { ...ZELLIJ, TERM_PROGRAM: 'ghostty' } }))
+      attach(port)
+      expect(await host().openAgent(ID)).toBeUndefined()
+      expect(orcaRuns).toEqual([focusPane])
+      expect(linux.raised).toEqual([{ pid: 4242, app: 'ghostty' }])
+    })
+
+    it('the dial\'s words to an agent in a Zellij pane run Zellij\'s three calls, and reach no other adapter', async () => {
+      madeBy('zellij')
+      const { port } = startHere({ orca: listing(orca) })
+      port.observed(hook('session-start', { hostHints: ZELLIJ }))
+      attach(port)
+      await settled()
+      expect(await host().sendTurn(ID, 'run the tests')).toEqual({ ok: true })
+      expect(orcaRuns).toEqual([zellijAsked('list-clients'), ...zellijWords])
+      expect(voice()).toEqual(['[device] voice · zellij'])
+      noOther()
+    })
+
+    // Ghostty started from a Zellij pane keeps the pane's variables: words written to the pane would run at its shell.
+    it('an agent in a terminal started from a Zellij pane lists f alone: the pane takes no words', async () => {
+      madeBy('ghostty')
+      const { port } = startHere({ orca: listing(orca) })
+      port.observed(hook('session-start', { hostHints: { ...ZELLIJ, TERM_PROGRAM: 'ghostty' } }))
+      attach(port)
+      await settled()
+      expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'sf' }])
+      expect(await host().sendTurn(ID, 'run the tests')).toMatchObject({ ok: false })
+      expect(orcaRuns).toEqual([])
+      noOther()
+    })
+
+    // Zellij's outer lookup (zellij.ts createZellijOuter); its walk is zellij.spec.ts's.
+    it('an agent in Zellij is on the page of the app that holds the session\'s one client', async () => {
+      const terminal = join(homedir(), 'Applications', 'Terminal.app')
+      readers.processes.mockResolvedValue([
+        { pid: 4242, ppid: 4000, tty: 'ttys005', executable: 'claude' }, { pid: 4000, ppid: 3900, tty: 'ttys005', executable: 'zsh' },
+        { pid: 3900, ppid: 1, executable: 'zellij' },
+        // The client, in its Terminal tab: under the home the devices read apps in.
+        { pid: 4300, ppid: 4298, tty: 'ttys002', executable: 'zellij' },
+        { pid: 4298, ppid: 1, executable: join(terminal, 'Contents', 'MacOS', 'Terminal') },
+      ])
+      readers.bundleId.mockImplementation(async (bundle) => bundle === terminal ? 'com.apple.Terminal' : undefined)
+      const { port } = startHere({ orca: { ...mac, run: async (file, args, timeoutMs) => {
+        orcaRuns.push([file, args, timeoutMs])
+        return { code: 0, stdout: args.includes('list-clients') ? 'CLIENT_ID ZELLIJ_PANE_ID RUNNING_COMMAND\n1         terminal_0     N/A            \n' : '' }
+      } } })
+      port.observed(hook('session-start', { hostHints: ZELLIJ }))
+      attach(port)
+      await vi.waitFor(() => expect(said()).toEqual(['[device] zellij client · found']))
+      expect(orcaRuns).toEqual([zellijAsked('list-clients')])
+      const apps = (await host().listAgentSnapshot({ apps: true })).apps?.apps
+      expect(apps).toContainEqual(expect.objectContaining({ id: 'terminal-app', count: 1 }))
+      expect(apps?.map(({ id }) => id)).not.toContain('zellij')
+    })
+
+    // A Zellij server started in a tmux pane gives its panes that pane's TMUX_PANE, and keeps it after the person
+    // attaches from a Terminal tab: tmux's lookup finds no app there, and Zellij's is asked next (outer.ts firstOuter).
+    it('an agent in Zellij whose hints still name a tmux pane is on the page of the app that holds Zellij\'s client', async () => {
+      const terminal = join(homedir(), 'Applications', 'Terminal.app')
+      readers.processes.mockResolvedValue([
+        { pid: 4242, ppid: 4000, tty: 'ttys005', executable: 'claude' }, { pid: 4000, ppid: 3900, tty: 'ttys005', executable: 'zsh' },
+        { pid: 3900, ppid: 1, executable: 'zellij' },
+        { pid: 4300, ppid: 4298, tty: 'ttys002', executable: 'zellij' },
+        { pid: 4298, ppid: 1, executable: join(terminal, 'Contents', 'MacOS', 'Terminal') },
+      ])
+      readers.bundleId.mockImplementation(async (bundle) => bundle === terminal ? 'com.apple.Terminal' : undefined)
+      const { port } = startHere({ orca: { ...mac, run: async (file, args, timeoutMs) => {
+        orcaRuns.push([file, args, timeoutMs])
+        // The tmux pane's shell (5000) holds none of the agent's processes.
+        const stdout = args[0] === 'display-message' ? '5000|work|\n'
+          : args.includes('list-clients') ? 'CLIENT_ID ZELLIJ_PANE_ID RUNNING_COMMAND\n1         terminal_0     N/A            \n' : ''
+        return { code: 0, stdout }
+      } } })
+      port.observed(hook('session-start', { hostHints: { ...ZELLIJ, TMUX_PANE: '%3' } }))
+      attach(port)
+      await vi.waitFor(() => expect(said()).toEqual(['[device] tmux client · none', '[device] zellij client · found']))
+      expect(orcaRuns.map(([file, args]) => [file, args.includes('list-clients') ? 'list-clients' : args[0]]))
+        .toEqual([['tmux', 'display-message'], ['zellij', 'list-clients']])
+      const apps = (await host().listAgentSnapshot({ apps: true })).apps?.apps
+      expect(apps).toContainEqual(expect.objectContaining({ id: 'terminal-app', count: 1 }))
+    })
+
+    it('on Linux a hooked agent in a kitty window lists v and f; its tap focuses the window, then raises it', async () => {
+      const linux = fakeRaise()
+      const kitty = await kittyAt()
+      madeBy('kitty')
+      const { port } = startHere({ raise: linux.raise })
+      port.observed(hook('session-start', { hostHints: kitty }))
+      attach(port)
+      await settled()
+      expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'svf' }])
+      expect(await host().openAgent(ID)).toBeUndefined()
+      expect(orcaRuns).toEqual([kittyAsked(kitty.KITTY_LISTEN_ON, 'focus-window', '--match', 'id:5')])
+      expect(linux.raised).toEqual([{ pid: 4242, app: 'kitty' }])
+    })
+
+    it('the dial\'s words to an agent in a kitty window run kitty\'s two calls, and reach no other adapter', async () => {
+      const kitty = await kittyAt()
+      madeBy('kitty')
+      const { port } = startHere()
+      port.observed(hook('session-start', { hostHints: kitty }))
+      attach(port)
+      await settled()
+      expect(await host().sendTurn(ID, 'run the tests')).toEqual({ ok: true })
+      expect(orcaRuns).toEqual(kittyWords(kitty.KITTY_LISTEN_ON))
+      expect(voice()).toEqual(['[device] voice · kitty'])
+      noOther()
+    })
+
+    // Once kitty is gone, any account may take an abstract socket's name: no owner can be read, so no words go there.
+    it('on Linux an agent at kitty\'s abstract socket lists f alone: its tap focuses the window, and it takes no words', async () => {
+      const linux = fakeRaise()
+      const { port } = startHere({ raise: linux.raise })
+      port.observed(hook('session-start', { hostHints: KITTY }))
+      attach(port)
+      expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'sf' }])
+      expect(await host().sendTurn(ID, 'run the tests')).toMatchObject({ ok: false })
+      expect(await host().openAgent(ID)).toBeUndefined()
+      expect(orcaRuns).toEqual([kittyAsked('unix:@kitty-1', 'focus-window', '--match', 'id:5')])
+      noOther()
+    })
+
+    // A socket at a path is spoken to only when it is this account's: the devices read its owner from the file.
+    it('on macOS a kitty socket of this account\'s is spoken to, and a plain file or nothing at its path is not', async () => {
+      const folder = mkdtempSync('/tmp/hk-')
+      onTestFinished(() => { rmSync(folder, { recursive: true, force: true }) })
+      const socket = join(folder, 's')
+      const server = createServer()
+      await new Promise<void>((resolve) => { server.listen(socket, resolve) })
+      onTestFinished(() => { server.close() })
+      writeFileSync(join(folder, 'f'), '')
+      const { port } = startHere({ orca: mac })
+      const kitty = { KITTY_WINDOW_ID: '5', __CFBundleIdentifier: 'net.kovidgoyal.kitty' }
+      port.observed(hook('session-start', { hostHints: { ...kitty, KITTY_LISTEN_ON: `unix:${socket}` } }))
+      attach(port)
+      expect(await host().openAgent(ID)).toBeUndefined()
+      const front: Run = ['/usr/bin/open', ['-b', 'net.kovidgoyal.kitty'], 10_000]
+      expect(orcaRuns).toEqual([kittyAsked(`unix:${socket}`, 'focus-window', '--match', 'id:5'), front])
+      orcaRuns.length = 0
+      for (const path of [join(folder, 'f'), join(folder, 'gone')]) {
+        port.observed(hook('session-start', { hostHints: { ...kitty, KITTY_LISTEN_ON: `unix:${path}` } }))
+        await host().openAgent(ID)
+      }
+      expect(orcaRuns).toEqual([front, front])
+    })
+
+    // Both carry both hosts' variables, either way round: the process that made the agent's terminal tells them apart.
+    it('an agent in Zellij inside kitty: the tap and the words are Zellij\'s, whose server made its terminal', async () => {
+      const linux = fakeRaise()
+      const kitty = await kittyAt()
+      madeBy('zellij')
+      const { port } = startHere({ orca: listing(orca), raise: linux.raise })
+      port.observed(hook('session-start', { hostHints: { ...ZELLIJ, ...kitty } }))
+      attach(port)
+      await settled()
+      expect(await host().openAgent(ID)).toBeUndefined()
+      expect(await host().sendTurn(ID, 'run the tests')).toEqual({ ok: true })
+      expect(orcaRuns).toEqual([zellijAsked('list-clients'), focusPane, ...zellijWords])
+      expect(linux.raised).toEqual([{ pid: 4242, app: 'kitty' }])
+    })
+
+    it('an agent in kitty started from a Zellij pane: the tap and the words are kitty\'s, which made its terminal', async () => {
+      const linux = fakeRaise()
+      const kitty = await kittyAt()
+      // kitty itself on the Zellij pane's terminal.
+      madeBy('kitty', [{ pid: 3800, ppid: 3700, tty: 'pts/2', executable: 'bash' }, { pid: 3700, ppid: 1, executable: 'zellij' }])
+      const { port } = startHere({ orca: listing(orca), raise: linux.raise })
+      port.observed(hook('session-start', { hostHints: { ...ZELLIJ, ...kitty } }))
+      attach(port)
+      await settled()
+      expect(await host().openAgent(ID)).toBeUndefined()
+      expect(await host().sendTurn(ID, 'run the tests')).toEqual({ ok: true })
+      expect(orcaRuns).toEqual([kittyAsked(kitty.KITTY_LISTEN_ON, 'focus-window', '--match', 'id:5'), ...kittyWords(kitty.KITTY_LISTEN_ON)])
+      expect(voice()).toEqual(['[device] voice · kitty'])
+      expect(linux.raised).toEqual([{ pid: 4242, app: 'kitty' }])
+    })
+
+    it('an agent in kitty started from an Orca terminal takes the words in kitty, which made its terminal', async () => {
+      const kitty = await kittyAt()
+      madeBy('kitty', [{ pid: 3800, ppid: 3700, tty: 'pts/2', executable: 'zsh' }, { pid: 3700, ppid: 1, executable: 'orca' }])
+      const { port } = startHere()
+      port.observed(hook('session-start', { hostHints: { ...kitty, ORCA_TERMINAL_HANDLE: HANDLE } }))
+      attach(port)
+      await settled()
+      expect(await host().sendTurn(ID, 'run the tests')).toEqual({ ok: true })
+      expect(orcaRuns).toEqual(kittyWords(kitty.KITTY_LISTEN_ON))
+      expect(voice()).toEqual(['[device] voice · kitty'])
+    })
+
+    it('an agent in an Orca terminal, Orca started from a kitty window, takes the words through Orca, which made its terminal', async () => {
+      const kitty = await kittyAt()
+      madeBy('orca')
+      const { port } = startHere()
+      port.observed(hook('session-start', { hostHints: { ...kitty, ORCA_TERMINAL_HANDLE: HANDLE } }))
+      attach(port)
+      await settled()
+      expect(await host().sendTurn(ID, 'run the tests')).toEqual({ ok: true })
+      expect(orcaRuns).toEqual([
+        ['/opt/orca/bin/orca', ['terminal', 'send', '--terminal', HANDLE, '--text=run the tests', '--enter', '--wait-submit', '5', '--json'], 10_000],
+      ])
+      expect(voice()).toEqual(['[device] voice · orca'])
+    })
+
+    // As before Zellij had an adapter: a tap on the Zellij pane that shows tmux's client would leave tmux's pane where it was.
+    it('an agent in tmux inside a Zellij pane: a tap selects its tmux pane, as tmux\'s server made its terminal', async () => {
+      madeBy('tmux: server')
+      const { port } = startHere({ orca: { ...orca, run: async (file: string, args: string[], timeoutMs: number) => {
+        orcaRuns.push([file, args, timeoutMs])
+        return { code: 0, stdout: args[0] === 'display-message' ? '4000|work|\n' : args[0] === 'list-clients' ? '1794700050|5004|/dev/pts/1||work\n' : '' }
+      } } })
+      port.observed(hook('session-start', { hostHints: { ...ZELLIJ, TMUX_PANE: '%3' } }))
+      attach(port)
+      await vi.waitFor(() => expect(said()).toContain('[device] tmux client · none'))
+      await settled()
+      orcaRuns.length = 0
+      expect(await host().openAgent(ID)).toBeUndefined()
+      expect(orcaRuns.map(([file, args]) => [file, args[0]])).toEqual([['tmux', 'display-message'], ['tmux', 'list-clients'], ['tmux', 'switch-client']])
+    })
+
+    it('a kitty session with no socket logs it once, and on macOS keeps its tap by its bundle', async () => {
+      const { port } = startHere({ orca: mac })
+      port.observed(hook('session-start', { hostHints: { KITTY_WINDOW_ID: '5', __CFBundleIdentifier: 'net.kovidgoyal.kitty' } }))
+      attach(port)
+      expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'sf' }])
+      expect(await host().openAgent(ID)).toBeUndefined()
+      expect(await host().openAgent(ID)).toBeUndefined()
+      expect(orcaRuns).toEqual([['/usr/bin/open', ['-b', 'net.kovidgoyal.kitty'], 10_000], ['/usr/bin/open', ['-b', 'net.kovidgoyal.kitty'], 10_000]])
+      expect(said()).toEqual(['[device] kitty · remote control off'])
+    })
   })
 
   // A swipe that rests on an agent in an Orca terminal shows its pane, and Orca stays where it is.
@@ -3291,13 +3879,53 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     expect(seen.cable.calls).toHaveLength(sent)
   })
 
-  it('on Linux a Claude app agent has no pane', async () => {
-    const { front } = await inClaudeApp({ orca })
-    front('claude')
+  // On Linux a link opens by xdg-open, once xdg-mime names its scheme's app (docs/plans/2026-11-19-dial-linux-design.md
+  // § 1.6): the session's app is the one the process scan named, as Linux has no bundle id.
+  const xdgMime = (scheme: string): [string, string[], number] => ['/usr/bin/xdg-mime', ['query', 'default', `x-scheme-handler/${scheme}`], 10_000]
+  const xdgOpen = (url: string): [string, string[], number] => ['/usr/bin/xdg-open', [url], 10_000]
+  /** Linux, every run recorded, xdg-mime naming `handler` as each scheme's app: none when it is empty. */
+  const onLinux = (handler: string) => ({ ...orca, onPath: (name: string) => `/usr/bin/${name}`, run: async (file: string, args: string[], timeoutMs: number) => {
+    orcaRuns.push([file, args, timeoutMs])
+    return { code: 0, stdout: file === '/usr/bin/xdg-mime' && handler ? `${handler}\n` : '' }
+  } })
+  /** An agent on Linux whose caller the scan finds in `app`, with that app in front once it is on the app's page. */
+  const inLinuxApp = async (app: string, handler: string, over: Partial<ObservedHookEvent>, more: Parameters<typeof start>[0] = {}) => {
+    vi.useFakeTimers()
+    readers.apps.mockResolvedValueOnce(new Map([[4242, app]]))
+    const listener = fakeListener()
+    const started = startHere({ ...more, orca: onLinux(handler), listen: listener.listen })
+    started.port.observed(hook('session-start', over))
+    attach(started.port)
+    await vi.waitFor(async () => expect((await host().listAgentSnapshot({ apps: true })).apps?.apps)
+      .toContainEqual(expect.objectContaining({ id: app, count: 1 })))
+    expect(listener.front(app)).toBeUndefined()
+    return started
+  }
+  const linuxClaude = (handler: string) => inLinuxApp('claude', handler, { hostHints: { CLAUDE_CODE_HOST_SESSION_ID: SESSION } })
+  const claudeLink = `claude://code/continue?session=${SESSION}`
+
+  it('on Linux, with the claude scheme\'s app known, a rest and a tap on a Claude app agent each run xdg-open on its link', async () => {
+    await linuxClaude('claude-desktop.desktop')
+    await vi.waitFor(() => expect(host().swipeSwitches(ID)).toBe(true))
+    host().swipeEnded(ID, 'rest')
+    await swiped('ok')
+    expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'sf' }])
+    expect(await host().openAgent(ID)).toBeUndefined()
+    // The scheme's app is read once, at the first look.
+    expect(orcaRuns).toEqual([xdgMime('claude'), xdgOpen(claudeLink), xdgOpen(claudeLink)])
+    expect(logs.filter((line) => [SESSION, 'sess-1', ID, claudeLink].some((secret) => line.includes(secret)))).toEqual([])
+  })
+
+  it('on Linux, with no app for the claude scheme, a Claude app agent opens nothing: the rest fails', async () => {
+    await linuxClaude('')
+    await vi.waitFor(() => expect(orcaRuns).toEqual([xdgMime('claude')]))
     expect(host().swipeSwitches(ID)).toBe(false)
     host().swipeEnded(ID, 'rest')
     await swiped('failed')
-    expect(orcaRuns).toEqual([])
+    // No f: the dial asks for no tap.
+    expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 's' }])
+    expect(orcaRuns).toEqual([xdgMime('claude')])
+    expect(logs.filter((line) => [SESSION, 'sess-1', ID, claudeLink].some((secret) => line.includes(secret)))).toEqual([])
   })
 
   it('no swipe line carries the session', async () => {
@@ -3454,13 +4082,29 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     expect(orcaRuns).toEqual([])
   })
 
-  it('on Linux a VS Code extension agent has no rest', async () => {
-    const { front } = await inVscode({ orca })
-    front('vscode')
+  const linuxVscode = (handler: string) => inLinuxApp('vscode', handler, { sessionId: UUID, hostHints: { CLAUDE_CODE_ENTRYPOINT: 'claude-vscode' } })
+
+  it('on Linux, with the vscode scheme\'s app known, a rest and a tap on a VS Code extension agent each run xdg-open on its link', async () => {
+    await linuxVscode('code.desktop')
+    await vi.waitFor(() => expect(host().swipeSwitches(V1)).toBe(true))
+    host().swipeEnded(V1, 'rest')
+    await swiped('ok')
+    expect(await listed()).toEqual([{ id: V1, name: 'api', caps: 'sf' }])
+    expect(await host().openAgent(V1)).toBeUndefined()
+    expect(orcaRuns).toEqual([xdgMime('vscode'), xdgOpen(vscodeLink(UUID)), xdgOpen(vscodeLink(UUID))])
+    expect(logs.filter((line) => [UUID, V1, vscodeLink(UUID)].some((secret) => line.includes(secret)))).toEqual([])
+  })
+
+  it('on Linux, with no app for the vscode scheme, a VS Code extension agent opens nothing: the rest fails', async () => {
+    await linuxVscode('')
+    await vi.waitFor(() => expect(orcaRuns).toEqual([xdgMime('vscode')]))
     expect(host().swipeSwitches(V1)).toBe(false)
     host().swipeEnded(V1, 'rest')
     await swiped('failed')
-    expect(orcaRuns).toEqual([])
+    // No f: the dial asks for no tap.
+    expect(await listed()).toEqual([{ id: V1, name: 'api', caps: 's' }])
+    expect(orcaRuns).toEqual([xdgMime('vscode')])
+    expect(logs.filter((line) => [UUID, V1, vscodeLink(UUID)].some((secret) => line.includes(secret)))).toEqual([])
   })
 
   it('no swipe line carries the VS Code or Cursor session, the link or the bundle', async () => {
@@ -3566,7 +4210,7 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     port.observed(hook('session-start', { hostHints: { TERM_PROGRAM: 'vscode' } }))
     attach(port)
     expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 's' }])
-    expect(logs).toContain('[devices] vscode failed · injected fault: vscode')
+    expect(logs).toContain('[devices] vscode failed · Error')
   })
 
   // The dial's scroll scrolls that terminal, line by line, while VS Code is in front and the dial shows its agent
@@ -3680,7 +4324,7 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     shows(CODEX)
     window.break()
     expect(() => host().scrolled('move', 8, 0)).not.toThrow()
-    expect(logs).toContain('[devices] dial failed · write broken')
+    expect(logs).toContain('[devices] dial failed · Error')
   })
 
   // A stroke on Claude Code drawn fullscreen, while it is its terminal's foreground program and does not ask, carries
@@ -3907,6 +4551,16 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     expect(said()).toEqual([])
   })
 
+  it.each([['VS Code', VSCODE, 'vscode'], ['Cursor', CURSOR, 'cursor']])('on Linux a tap on an agent in %s\'s terminal writes the show with the raise, then raises the agent\'s window there', async (_, bundle, app) => {
+    const linux = fakeRaise()
+    const { reported } = await inVscodeTerminal({ raise: linux.raise }, {}, bundle)
+    const window = await reported()
+    expect(await host().openAgent(ID)).toBeUndefined()
+    expect(window.lines).toEqual([{ show: SHELL, raise: true }])
+    expect(linux.raised).toEqual([{ pid: 4242, app }])
+    expect(orcaRuns).toEqual([])
+  })
+
   it('a rest shows Cursor\'s terminal while Cursor is in front, and nothing while VS Code is', async () => {
     const { reported, front } = await inVscodeTerminal({ orca: mac }, {}, CURSOR)
     const window = await reported()
@@ -4001,11 +4655,27 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     expect(logs.filter((line) => ['SECRET-', CURSOR].some((secret) => line.includes(secret)))).toEqual([])
   })
 
-  it('off macOS Cursor\'s own agent has no tap', async () => {
-    const { port } = startHere()
+  /** Cursor on Linux as the devices find it (devices/vscodeExtension.ts cursorFolderCli): its CLI [cli], or none. */
+  const linuxCursor = (cli?: string) => ({ ...fakeVscode({ editor: 'cursor' }).deps, platform: 'linux' as const, bin: cli, executable: (path: string) => path === cli })
+
+  it('on Linux with no Cursor CLI, Cursor\'s own agent has no tap', async () => {
+    const { port } = startHere({ cursorExtension: linuxCursor() })
     port.observed(hook('session-start', { engine: 'cursor', sessionId: 'cur-1', cwd: secretFolder(), hostHints: { __CFBundleIdentifier: CURSOR } }))
     attach(port)
     expect(await caps()).toEqual([{ id: observedAgentId('cursor', 'cur-1'), caps: 's' }])
+  })
+
+  it('on Linux a tap on Cursor\'s own agent runs the Cursor CLI the devices found, on its folder', async () => {
+    const cli = '/e2e/root/cursor/cursor'
+    const folder = secretFolder()
+    // No hint names Cursor: on Linux the scan does.
+    await inLinuxApp('cursor', '', { engine: 'cursor', sessionId: 'cur-1', title: 'SECRET-TITLE-MARKER', cwd: folder, hostHints: {} },
+      { cursorExtension: linuxCursor(cli) })
+    const id = observedAgentId('cursor', 'cur-1')
+    expect(await caps()).toEqual([{ id, caps: 'sf' }])
+    expect(await host().openAgent(id)).toBeUndefined()
+    expect(orcaRuns).toEqual([[cli, [folder], 10_000]])
+    expect(logs.filter((line) => ['SECRET-', 'cur-1'].some((secret) => line.includes(secret)))).toEqual([])
   })
 
   it('Claude Code\'s panel in Cursor opens by cursor://, sent to Cursor alone', async () => {
@@ -4137,7 +4807,7 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     attach(port)
     expect(await host().openAgent(CODEX)).toBeUndefined()
     expect(orcaRuns).toEqual([
-      ['/opt/wezterm/bin/wezterm', ['cli', 'activate-pane', '--pane-id', '7'], 10_000],
+      ['/opt/wezterm/bin/wezterm', ['cli', '--no-auto-start', 'activate-pane', '--pane-id', '7'], 10_000],
       ['/usr/bin/open', ['-b', 'com.github.wez.wezterm'], 10_000],
     ])
   })
@@ -4211,13 +4881,13 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     const { port } = startHere({ faults: ['inbox.inboxPoll'] })
     attach(port)
     expect(await port.inboxPoll({ pollId: 'p1', sessionId: 'sess-1' })).toEqual({ off: true })
-    expect(logs).toEqual(expect.arrayContaining(['[devices] inbox.inboxPoll failed · injected fault: inbox.inboxPoll']))
+    expect(logs).toEqual(expect.arrayContaining(['[devices] inbox.inboxPoll failed · Error']))
     // A part that did not start answers the same, and hears nothing.
     const off = startHere({ faults: ['inbox'] })
     attach(off.port)
     expect(await off.port.inboxPoll({ pollId: 'p1', sessionId: 'sess-1' })).toEqual({ off: true })
     off.port.inboxGone('p1')
-    expect(logs).toEqual(expect.arrayContaining(['[devices] inbox did not start · injected fault: inbox · the devices run without it']))
+    expect(logs).toEqual(expect.arrayContaining(['[devices] inbox did not start · Error · the devices run without it']))
   })
 
   it('an inbox part the guard switches off ends its open poll', async () => {
@@ -4557,7 +5227,7 @@ describe('a person\'s prompt in the app in front turns the dial (docs/specs/2026
     vi.spyOn(seen.cable as unknown as { followLocal: (agentId: string, cause: string) => Promise<void> }, 'followLocal')
       .mockRejectedValueOnce(new Error('dial unplugged'))
     port.observed(hook('turn-start'))
-    await vi.waitFor(() => expect(logs).toContain('[devices] dial failed · dial unplugged'))
+    await vi.waitFor(() => expect(logs).toContain('[devices] dial failed · Error'))
     port.observed(hook('turn-start'))
     expect(asked()).toEqual([[ID, 'prompt']])
   })
@@ -4970,7 +5640,7 @@ describe('the session the Claude app shows turns the dial (docs/specs/2026-11-15
       await wait(FRONT_SETTLE_MS)
     }
     await wait(0)
-    expect(logs).toContain('[devices] dial failed · dial unplugged')
+    expect(logs).toContain('[devices] dial failed · Error')
     attach(SESSION)
     expect(asked()).toEqual([[A, 'attach']])
   })
@@ -5422,7 +6092,7 @@ describe('selecting a tab moves the dial (docs/specs/2026-11-15-dial-terminal-fo
     // Acted on at the settle, inside the filter's timer.
     report('terminal-app', TTY)
     await settle('terminal-app')
-    await vi.waitFor(() => expect(logs).toContain('[devices] dial failed · dial unplugged'))
+    await vi.waitFor(() => expect(logs).toContain('[devices] dial failed · Error'))
     report('terminal-app', TTY)
     expect(asked()).toEqual([[ID, 'tab']])
   })
@@ -5459,7 +6129,7 @@ describe('selecting a tab moves the dial (docs/specs/2026-11-15-dial-terminal-fo
       .mockImplementationOnce(() => { throw new Error('dial unplugged') })
     report('terminal-app', TTY)
     seen.host.appSettled!('claude')
-    expect(logs).toContain('[devices] dial failed · dial unplugged')
+    expect(logs).toContain('[devices] dial failed · Error')
     expect(tabLines()).toEqual(['[device] tab · skipped · not in front', '[device] tab · skipped · not in front'])
   })
 })
@@ -5643,13 +6313,24 @@ describe('herdr\'s agents, over its socket (docs/specs/2026-11-16-device-herdr.m
     status('blocked')
     expect(await host().sendTurn(id, 'run the tests')).toMatchObject({ ok: false, message: 'api is waiting for your answer in herdr.' })
     status('idle')
-    expect(await host().sendTurn(id, 'x'.repeat(2001))).toMatchObject({ ok: false, message: 'Too long. Say it shorter.' })
+    expect(await host().sendTurn(id, 'x'.repeat(MAX_TEXT + 1))).toMatchObject({ ok: false, message: 'Too long. Say it shorter.' })
     herdr.prompts.push({ outcome: 'failed', fault: 'rejected', code: 'agent_not_ready' })
     expect(await host().sendTurn(id, 'run the tests')).toMatchObject({ ok: false, message: 'api did not answer.' })
     expect(said()).toEqual(['[device] voice · herdr', '[device] voice · busy', '[device] voice · waiting', '[device] voice · too-long',
       '[device] voice · no-answer'])
     // Refused by its state, nothing was typed.
     expect(herdr.asked.filter(([what]) => what === 'prompt')).toHaveLength(2)
+  })
+
+  // Ten minutes of fast speech is about 13,000 characters.
+  it('a 10,000-character text reaches an idle herdr agent whole', async () => {
+    const { herdr, live } = withHerdr()
+    await live()
+    const [{ id }] = await listed()
+    const text = 'x'.repeat(10_000)
+    expect(await host().sendTurn(id, text)).toEqual({ ok: true })
+    expect(herdr.asked.filter(([what]) => what === 'prompt')).toEqual([['prompt', PANE, 'claude', text]])
+    expect(said()).toEqual(['[device] voice · herdr'])
   })
 
   it('a tap runs herdr agent focus for the pane, brings no app forward, and is the dial\'s own move', async () => {
@@ -5750,7 +6431,7 @@ describe('herdr\'s agents, over its socket (docs/specs/2026-11-16-device-herdr.m
     port.observed(hook('session-start'))
     attach(port)
     expect(herdr.subs).toEqual([])
-    expect(logs).toContain('[devices] herdr failed · injected fault: herdr')
+    expect(logs).toContain('[devices] herdr failed · Error')
     expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'svf' }])
   })
 
@@ -6317,7 +6998,7 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
     const { port, listener } = devices({ faults: ['fleet', 'notices'] })
     expect(listener.notice({ text: LINE, engine: 'claude', sessionId: 'sess-1' })).toEqual({ result: 'no dial' })
     expect(calls('question')).toEqual([])
-    expect(logs).toContain('[devices] notices failed · injected fault: notices')
+    expect(logs).toContain('[devices] notices failed · Error')
     port.observed(hook('turn-start'))
     expect(calls('turnStarted')).toEqual([[ID, '', undefined]])
   })
@@ -6416,8 +7097,9 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
     })
 
     it('a write that fails is one line with the error\'s code', () => {
-      mkdirSync(FILE())
       const { port, listener } = devices()
+      // After the start's read, which would set a folder there aside.
+      mkdirSync(FILE())
       port.observed(hook('session-start'))
       expect(listener.notice({ text: LINE, engine: 'claude', sessionId: 'sess-1' })).toEqual({ result: 'shown' })
       vi.advanceTimersByTime(1_000)
@@ -6464,10 +7146,13 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
       expect(saved().cards).toEqual([])
     })
 
-    it('a bad file never stops the devices: one line, and the next notice replaces it', () => {
+    it('a bad file never stops the devices: it is set aside in one line, and the next notice writes a new one', () => {
       writeFileSync(FILE(), '{not json')
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
       const { port, listener } = devices()
-      expect(logs).toContain('[device] notices · file dropped · json')
+      expect(warn).toHaveBeenCalledWith(
+        '[state] dial-notices.json could not be read (not valid JSON); kept as dial-notices.json.unreadable, starting empty.')
+      expect(readFileSync(`${FILE()}.unreadable`, 'utf8')).toBe('{not json')
       port.observed(hook('session-start'))
       expect(listener.notice({ text: LINE, engine: 'claude', sessionId: 'sess-1' })).toEqual({ result: 'shown' })
       vi.advanceTimersByTime(1_000)
@@ -6795,7 +7480,7 @@ describe('Herdr\'s agents, through Herdr Core (docs/plans/2026-11-16-herdr-app-d
     changed({ status: 'blocked' })
     expect(await host().sendTurn(id, 'run the tests')).toMatchObject({ ok: false, message: 'api is waiting for your answer in herdr.' })
     changed({ status: 'idle' })
-    expect(await host().sendTurn(id, 'x'.repeat(2001))).toMatchObject({ ok: false, message: 'Too long. Say it shorter.' })
+    expect(await host().sendTurn(id, 'x'.repeat(MAX_TEXT + 1))).toMatchObject({ ok: false, message: 'Too long. Say it shorter.' })
     changed({ status: 'error' })
     expect(await host().sendTurn(id, 'run the tests')).toMatchObject({ ok: false, message: 'api did not answer.' })
     changed({ status: 'idle' })
@@ -6805,6 +7490,17 @@ describe('Herdr\'s agents, through Herdr Core (docs/plans/2026-11-16-herdr-app-d
       '[device] voice · no-answer', '[device] voice · no-answer'])
     // Refused by its state, nothing was typed.
     expect(hc.prompted).toHaveLength(2)
+  })
+
+  // Ten minutes of fast speech is about 13,000 characters.
+  it('a 10,000-character text reaches an idle Herdr agent whole', async () => {
+    const { hc, live } = withHc()
+    live()
+    const [{ id }] = await listed()
+    const text = 'x'.repeat(10_000)
+    expect(await host().sendTurn(id, text)).toEqual({ ok: true })
+    expect(hc.prompted).toEqual([['t7', 'claude', text]])
+    expect(said()).toEqual(['[device] voice · herdr-app'])
   })
 
   // hc types into any terminal by its address: only one whose program reports an agent's status is at an agent's prompt.
@@ -7031,6 +7727,18 @@ describe('Herdr\'s agents, through Herdr Core (docs/plans/2026-11-16-herdr-app-d
       expect(orcaRuns).toEqual([openHerdr])
     })
 
+    // Its terminal holds a shell now: the pane key it keeps is the registry's alone.
+    it('brings nothing once that hooked agent\'s session ended', async () => {
+      const { port, live } = withHc()
+      port.observed(hook('session-start'))
+      port.observed(hook('session-end'))
+      live([])
+      await pickHerdr(port)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(orcaRuns).toEqual([])
+      expect(brings()).toEqual([])
+    })
+
     it('brings nothing with herdr 0.8.0\'s agents alone on herdr\'s ring', async () => {
       const herdrSubs: HerdrSubscriber[] = []
       const herdrListing: HerdrClient = {
@@ -7114,7 +7822,7 @@ describe('Herdr\'s agents, through Herdr Core (docs/plans/2026-11-16-herdr-app-d
     port.observed(hook('session-start'))
     attach(port)
     expect(hc.subs).toEqual([])
-    expect(logs).toContain('[devices] herdr-app failed · injected fault: herdr-app')
+    expect(logs).toContain('[devices] herdr-app failed · Error')
     expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'sf' }])
   })
 
@@ -7531,7 +8239,7 @@ describe('Herdr\'s agents, through Herdr Core (docs/plans/2026-11-16-herdr-app-d
       shows('h1')
       vi.mocked(core.clients.sendLocal).mockImplementation(() => { throw new Error('send broken') })
       expect(() => host().scrolled('move', 8, 0)).not.toThrow()
-      expect(logs).toContain('[devices] dial failed · send broken')
+      expect(logs).toContain('[devices] dial failed · Error')
     })
 
     it('a throw after the answer is the part\'s', async () => {
@@ -7541,7 +8249,7 @@ describe('Herdr\'s agents, through Herdr Core (docs/plans/2026-11-16-herdr-app-d
       onTab(port)
       vi.mocked(core.clients.sendLocal).mockImplementation(() => { throw new Error('send broken') })
       stroke([8])
-      await vi.waitFor(() => expect(logs).toContain('[devices] dial failed · send broken'))
+      await vi.waitFor(() => expect(logs).toContain('[devices] dial failed · Error'))
       expect(scrollSaid()).toEqual([NOT_ON_SCREEN])
     })
 
@@ -7983,6 +8691,10 @@ describe("opencode's sessions, over its local server (docs/plans/2026-11-17-dial
   /** On macOS, each app's command on the path but `herdr-app`, so Herdr Core's source does not start: what a tap runs is
    *  read in `orcaRuns`. */
   const onMac = { ...orca, platform: 'darwin' as const, onPath: (name: string) => (name === 'herdr-app' ? null : `/opt/${name}/bin/${name}`) }
+  /** The watch the Claude app's store source holds on macOS beside opencode's, on its root and the app's folder: in the
+   *  throwaway home neither is there. */
+  const claudeStore = join(homedir(), 'Library', 'Application Support', 'Claude')
+  const claudeStoreWatch = [[join(claudeStore, 'claude-code-sessions'), claudeStore], expect.any(Function)]
   const host = () => seen.dial as unknown as DaemonCableHost
   /** A dial on the cable, on this computer's agents: no window. */
   const attach = (port: DevicesPort) => { seen.host.watching!(true); port.swarms(null) }
@@ -8059,7 +8771,8 @@ describe("opencode's sessions, over its local server (docs/plans/2026-11-17-dial
     seen.host.watching!(false)
     expect(oc.streams.map(({ closed }) => closed)).toEqual([true])
     expect(await listed()).toEqual([])
-    expect(watchedFolders.stopped).toBe(1)
+    // opencode's, and the Claude app store's.
+    expect(watchedFolders.stopped).toBe(2)
   })
 
   it('a turn is its cards', async () => {
@@ -8174,13 +8887,24 @@ describe("opencode's sessions, over its local server (docs/plans/2026-11-17-dial
     tell('permission.asked', { sessionID: SES, id: 'per_1' })
     expect(await host().sendTurn(id, 'run the tests')).toMatchObject({ ok: false, message: 'Fix the login test is waiting for your answer in opencode.' })
     tell('session.execution.succeeded', { sessionID: SES })
-    expect(await host().sendTurn(id, 'x'.repeat(2001))).toMatchObject({ ok: false, message: 'Too long. Say it shorter.' })
+    expect(await host().sendTurn(id, 'x'.repeat(MAX_TEXT + 1))).toMatchObject({ ok: false, message: 'Too long. Say it shorter.' })
     oc.prompts.push('failed')
     expect(await host().sendTurn(id, 'run the tests')).toMatchObject({ ok: false, message: 'Fix the login test did not answer.' })
     expect(said()).toEqual(['[device] voice · opencode', '[device] voice · busy', '[device] voice · waiting', '[device] voice · too-long',
       '[device] voice · no-answer'])
     // Refused by its state, nothing was posted.
     expect(oc.asked.filter(([what]) => what === 'prompt')).toHaveLength(2)
+  })
+
+  // Ten minutes of fast speech is about 13,000 characters.
+  it('a 10,000-character text reaches a session at rest whole', async () => {
+    const { oc, live } = withOpencode()
+    await live()
+    const [{ id }] = await listed()
+    const text = 'x'.repeat(10_000)
+    expect(await host().sendTurn(id, text)).toEqual({ ok: true })
+    expect(oc.asked.filter(([what]) => what === 'prompt')).toEqual([['prompt', SES, text, expect.stringMatching(OPENCODE_MESSAGE)]])
+    expect(said()).toEqual(['[device] voice · opencode'])
   })
 
   it('a tap opens nothing', async () => {
@@ -8235,12 +8959,12 @@ describe("opencode's sessions, over its local server (docs/plans/2026-11-17-dial
     const folders = [dirname(path), dirname(dirname(path))]
     expect(watchedFolders.calls).toEqual([])
     attach(port)
-    expect(watchedFolders.calls).toEqual([[folders, expect.any(Function)]])
+    expect(watchedFolders.calls).toEqual([[folders, expect.any(Function)], claudeStoreWatch])
     seen.host.watching!(false)
-    expect(watchedFolders.stopped).toBe(1)
+    expect(watchedFolders.stopped).toBe(2)
     // A state folder made while neither was there is watched from the next attach.
     attach(port)
-    expect(watchedFolders.calls.map(([watched]) => watched)).toEqual([folders, folders])
+    expect(watchedFolders.calls.map(([watched]) => watched)).toEqual([folders, claudeStoreWatch[0], folders, claudeStoreWatch[0]])
   })
 
   it('a state folder that is the home folder or a disk\'s root is not watched', () => {
@@ -8249,7 +8973,7 @@ describe("opencode's sessions, over its local server (docs/plans/2026-11-17-dial
       vi.stubEnv('XDG_STATE_HOME', state)
       watchedFolders.calls.length = 0
       attach(withOpencode().port)
-      expect(watchedFolders.calls).toEqual([[[join(state, 'opencode')], expect.any(Function)]])
+      expect(watchedFolders.calls).toEqual([[[join(state, 'opencode')], expect.any(Function)], claudeStoreWatch])
     }
   })
 
@@ -8258,7 +8982,8 @@ describe("opencode's sessions, over its local server (docs/plans/2026-11-17-dial
     await live()
     await port.stop()
     expect(oc.streams.map(({ closed }) => closed)).toEqual([true])
-    expect(watchedFolders.stopped).toBe(1)
+    // opencode's, and the Claude app store's.
+    expect(watchedFolders.stopped).toBe(2)
   })
 
   it('an opencode part that throws costs the dial nothing', async () => {
@@ -8267,7 +8992,7 @@ describe("opencode's sessions, over its local server (docs/plans/2026-11-17-dial
       transcriptPath: '/t/sess-1.jsonl', hostHints: {} })
     attach(port)
     expect(oc.streams).toEqual([])
-    expect(logs).toContain('[devices] opencode failed · injected fault: opencode')
+    expect(logs).toContain('[devices] opencode failed · Error')
     expect((await listed()).map(({ id }) => id)).toEqual([observedAgentId('claude', 'sess-1')])
   })
 
@@ -8286,6 +9011,845 @@ describe("opencode's sessions, over its local server (docs/plans/2026-11-17-dial
       '[opencode] closed · ended', '[opencode] retry · 1']))
     const secrets = ['ses_secret1', 'per_secret2', 'Nebula', 'secret-folder', 'secret tests']
     expect(logs.filter((line) => secrets.some((secret) => line.includes(secret)))).toEqual([])
+  })
+})
+
+describe("the Claude app's Code sessions, from its store (docs/plans/2026-11-19-dial-claude-app-sessions-design.md)", () => {
+  /** The store's root in the suite's throwaway home, never the person's own. */
+  const ROOT = join(homedir(), 'Library', 'Application Support', 'Claude', 'claude-code-sessions')
+  const ACCOUNT_DIR = join(ROOT, 'acc')
+  const ORG_DIR = join(ACCOUNT_DIR, 'org')
+  /** Claude Code's id of a session, and the Claude app's id of it; a second session of the store. */
+  const SESSION = '0b7c2f4e-8a1d-4c3b-9e5f-6a7b8c9d0e1f'
+  const LOCAL = 'local_8d1f2c3a-4b5e-4f60-9a7b-1c2d3e4f5a6b'
+  const SECOND = '5d6e7f80-1a2b-4c3d-8e9f-0a1b2c3d4e5f'
+  const LOCAL_SECOND = 'local_2e3f4a5b-6c7d-4e8f-9a0b-1c2d3e4f5a6b'
+  const BUNDLE = 'com.anthropic.claudefordesktop'
+  const ID = observedAgentId('claude', SESSION)
+  /** The observed source drops an ended session 10 s after its end. */
+  const ENDED_MS = 11_000
+  const continued = (local: string): [string, string[], number] => ['/usr/bin/open', ['-b', BUNDLE, `claude://code/continue?session=${local}`], 10_000]
+  /** Claude Code in the Claude app, as its hook says, unless other hints are given. */
+  const hook = (event: ObservedHookEvent['event'], over: Partial<ObservedHookEvent> = {}): ObservedHookEvent => ({
+    engine: 'claude', sessionId: SESSION, event, cwd: '/work/api', callerPid: 4242, transcriptPath: `/t/${SESSION}.jsonl`,
+    hostHints: { __CFBundleIdentifier: BUNDLE, CLAUDE_CODE_HOST_SESSION_ID: LOCAL }, ...over,
+  })
+  /** Claude Code in Ghostty, its own session. */
+  const inGhostty = (port: DevicesPort) => port.observed(hook('session-start', { sessionId: 'g-1', hostHints: { TERM_PROGRAM: 'ghostty' } }))
+  /** A session of the store: in /work/api, titled Fix the build. */
+  const session = (over: Partial<ClaudeAppSession> = {}): ClaudeAppSession =>
+    ({ localId: LOCAL, sessionId: SESSION, cwd: '/work/api', title: 'Fix the build', lastActivityAt: 1, ...over })
+  const host = () => seen.dial as unknown as DaemonCableHost
+  /** A dial on the cable, on this computer's agents: no window. */
+  const attach = (port: DevicesPort) => { seen.host.watching!(true); port.swarms(null) }
+  /** The page a dial that says appFilter reads, the Claude app's while it is the one app with rows: the store's resting
+   *  rows show on app pages only, never in the single machine ring (D7). */
+  const listed = async () => (await host().listAgentSnapshot({ apps: true })).agents.map(({ id, name, caps }) => ({ id, name, caps }))
+  const ids = async () => (await listed()).map(({ id }) => id)
+  /** The list a dial that says appFilter reads with no window. */
+  const appList = async (port: DevicesPort) => { port.swarms(null); return (await host().listAgentSnapshot({ apps: true })).apps }
+  /** The fake timers' clock is the devices' too: the settle and the 2 s echo move together. */
+  const wait = (ms: number) => vi.advanceTimersByTimeAsync(ms)
+  const flush = () => wait(0)
+  beforeEach(() => { vi.useFakeTimers() })
+
+  /**
+   * The devices on macOS with a reader of the store the test answers, the dial not attached yet. Each of its five calls is
+   * recorded; `read` answers the test's sessions, and while `hold` is set waits until the test lands it. Every `open` is a
+   * recorded run, nothing executed, the next `failing` of them answering code 1. `live` attaches the dial and lets the
+   * first pass land; `changed` is the latest watch of that folder telling a change, and its pass landing.
+   */
+  const withStore = (over: Parameters<typeof start>[0] = {}) => {
+    const fake = { sessions: [session()], calls: [] as unknown[][], hold: false, held: [] as Array<() => void>, failing: 0 }
+    const store: NonNullable<DevicesDeps['claudeAppStore']> = {
+      folders: async () => { fake.calls.push(['folders']); return { accounts: [ACCOUNT_DIR], orgs: [ORG_DIR] } },
+      files: async () => { fake.calls.push(['files']) },
+      touch: async (folder, name) => { fake.calls.push(['touch', folder, name]) },
+      read: async () => {
+        fake.calls.push(['read'])
+        if (fake.hold) await new Promise<void>((resolve) => { fake.held.push(resolve) })
+        return { sessions: fake.sessions, parsed: fake.sessions.length, skipped: 0, over: 0, more: false }
+      },
+      forget: () => { fake.calls.push(['forget']) },
+    }
+    const onMac = {
+      ...orca, platform: 'darwin' as const,
+      run: async (file: string, args: string[], timeoutMs: number) => {
+        orcaRuns.push([file, args, timeoutMs])
+        if (fake.failing === 0) return { code: 0, stdout: '' }
+        fake.failing--
+        return { code: 1, stdout: '' }
+      },
+    }
+    const listener = fakeListener()
+    const started = start({ faults: ['fleet'], listen: listener.listen, orca: onMac, now: () => Date.now(), tty: async () => undefined,
+      claudeAppStore: store, ...over })
+    const front = async (to: string) => {
+      expect(listener.front(to)).toBeUndefined()
+      await wait(FRONT_SETTLE_MS)
+    }
+    const attached = (sessionId: string) => { expect(listener.attach(sessionId)).toBeUndefined() }
+    const live = async () => {
+      attach(started.port)
+      await flush()
+    }
+    const changed = async (folder: string, file?: string) => {
+      const [, watch] = watchedFolders.calls.filter(([folders]) => (folders as string[])[0] === folder).at(-1)!
+      ;(watch as (file?: string) => void)(file)
+      await wait(250)
+    }
+    return { ...started, fake, listener, front, attached, live, changed }
+  }
+
+  it('on macOS with a dial attached its sessions are listed sf, idle, on the Claude app\'s page; detached, the source stops, its watches close and the reader forgets', async () => {
+    const { fake, live } = withStore()
+    // No dial: the store is not read.
+    expect(fake.calls).toEqual([])
+    await live()
+    expect(await listed()).toEqual([{ id: ID, name: 'Fix the build', caps: 'sf' }])
+    expect(host().hostOf(ID)).toBe('claude')
+    expect(host().appOf(ID)).toBe('claude')
+    // Idle: no turn is told.
+    expect(calls('turnStarted')).toEqual([])
+    expect(watchedFolders.calls).toEqual(expect.arrayContaining([[[ROOT, dirname(ROOT)], expect.any(Function)],
+      [[ACCOUNT_DIR], expect.any(Function)], [[ORG_DIR], expect.any(Function)]]))
+    expect(logs).toEqual(expect.arrayContaining(['[claude-app] watch · on', '[claude-app] listed · 1 sessions']))
+    seen.host.watching!(false)
+    expect(await listed()).toEqual([])
+    expect(watchedFolders.stopped).toBe(watchedFolders.calls.length)
+    expect(fake.calls.at(-1)).toEqual(['forget'])
+  })
+
+  it.each([['off macOS', 'linux', true], ['with HARNESS_DEVICE_OBSERVED off', 'darwin', false]] as const)('%s there is no source', async (_, platform, on) => {
+    const switched = env as { HARNESS_DEVICE_OBSERVED: boolean }
+    switched.HARNESS_DEVICE_OBSERVED = on
+    onTestFinished(() => { switched.HARNESS_DEVICE_OBSERVED = true })
+    const { fake, live } = withStore({ orca: { ...orca, platform } })
+    await live()
+    expect(fake.calls).toEqual([])
+    expect(watchedFolders.calls.filter(([folders]) => (folders as string[]).includes(ROOT))).toEqual([])
+  })
+
+  it('a change of a session\'s file reaches the dial\'s list', async () => {
+    const { fake, live, changed } = withStore()
+    await live()
+    const before = fake.calls.length
+    fake.sessions = [session({ localId: LOCAL_SECOND, sessionId: SECOND, title: 'Ship it', lastActivityAt: 2 }), session()]
+    await changed(ORG_DIR, `${LOCAL_SECOND}.json`)
+    expect(await listed()).toEqual(expect.arrayContaining([{ id: ID, name: 'Fix the build', caps: 'sf' },
+      { id: observedAgentId('claude', SECOND), name: 'Ship it', caps: 'sf' }]))
+    expect(await listed()).toHaveLength(2)
+    expect(fake.calls.slice(before)).toEqual([['touch', ORG_DIR, `${LOCAL_SECOND}.json`], ['read']])
+  })
+
+  it('a tap on a store row is one open of the continue link, and is the dial\'s own move and link', async () => {
+    const { listener, front, attached, live } = withStore()
+    await live()
+    await front('claude')
+    // The session the app shows, kept for its settle.
+    attached(SESSION)
+    expect(calls('followLocal')).toEqual([[ID, 'attach']])
+    expect(await host().openAgent(ID)).toBeUndefined()
+    expect(orcaRuns).toEqual([continued(LOCAL)])
+    attached(SESSION)
+    expect(logs).toContain('[device] attach · skipped · echo')
+    // A look away and back inside 2 s: the app settles in front again 1 s later.
+    expect(listener.front('orca')).toBeUndefined()
+    await front('claude')
+    expect(logs).toContain('[device] settle · skipped · echo')
+    expect(calls('followLocal')).toEqual([[ID, 'attach']])
+  })
+
+  it('a tap whose link fails brings the app by its bundle, said in one line with no id', async () => {
+    const { fake, live } = withStore()
+    await live()
+    fake.failing = 1
+    expect(await host().openAgent(ID)).toBeUndefined()
+    expect(orcaRuns).toEqual([continued(LOCAL), ['/usr/bin/open', ['-b', BUNDLE], 10_000]])
+    expect(logs).toContain('[device] open · claude · fallback')
+    expect(logs.filter((line) => line.includes(LOCAL))).toEqual([])
+  })
+
+  it('a rest with the Claude app in front shows the session by the noted adapter; with another app in front it has no pane', async () => {
+    const { front, attached, live } = withStore()
+    await live()
+    await front('claude')
+    expect(host().swipeSwitches(ID)).toBe(true)
+    host().swipeEnded(ID, 'rest')
+    await flush()
+    expect(orcaRuns).toEqual([continued(LOCAL)])
+    attached(SESSION)
+    expect(logs).toContain('[device] attach · skipped · echo')
+    // No pane: the dial sends no rest, and nothing more runs.
+    await front('orca')
+    expect(host().swipeSwitches(ID)).toBe(false)
+    expect(orcaRuns).toEqual([continued(LOCAL)])
+  })
+
+  it('a hooked session the store also lists is one row, the hook\'s; once its session ended the store\'s idle row has its place and its tap', async () => {
+    const { port, live } = withStore()
+    await live()
+    port.observed(hook('session-start'))
+    // The hook's: named by its folder, as its record gives no name.
+    expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'sf' }])
+    port.observed(hook('session-end'))
+    expect(await listed()).toEqual([{ id: ID, name: 'Fix the build', caps: 'sf' }])
+    expect(await host().openAgent(ID)).toBeUndefined()
+    expect(orcaRuns).toEqual([continued(LOCAL)])
+    // The observed source's tick drops its ended copy: the store's row stays.
+    await wait(40_000)
+    expect(await listed()).toEqual([{ id: ID, name: 'Fix the build', caps: 'sf' }])
+  })
+
+  it('a session the app resumes after its turn was told done is told no second done', async () => {
+    const { port, live } = withStore()
+    await live()
+    port.observed(hook('session-start'))
+    port.observed(hook('turn-start'))
+    port.observed(hook('turn-stop'))
+    await wait(STOP_HOOK_GRACE_MS)
+    expect(calls('turnDone')).toHaveLength(1)
+    // The app ends its process, and the store's row has its place until the app resumes it, inside the ended copy's 10 s.
+    port.observed(hook('session-end'))
+    expect(await listed()).toEqual([{ id: ID, name: 'Fix the build', caps: 'sf' }])
+    port.observed(hook('session-start'))
+    await flush()
+    expect(calls('turnDone')).toHaveLength(1)
+  })
+
+  it('a hooked session whose id the store has not caught up with folds by the app\'s own id; once it ended the store\'s row is the one row', async () => {
+    const { fake, port, live } = withStore()
+    fake.sessions = [session({ sessionId: SECOND })]
+    await live()
+    expect(await ids()).toEqual([observedAgentId('claude', SECOND)])
+    port.observed(hook('session-start'))
+    expect(await ids()).toEqual([ID])
+    // Decision 8: the store's id from then on.
+    port.observed(hook('session-end'))
+    expect(await ids()).toEqual([observedAgentId('claude', SECOND)])
+  })
+
+  // Review Focus 1: the person resumes one of the app's sessions in a terminal.
+  it('a store session hooked from Ghostty is one row on Ghostty\'s page, and the store\'s again once it ended', async () => {
+    const { port, live } = withStore()
+    await live()
+    const ghostty = { hostHints: { TERM_PROGRAM: 'ghostty' } }
+    port.observed(hook('session-start', ghostty))
+    expect((await host().listAgentSnapshot()).agents.map(({ id }) => id)).toEqual([ID])
+    expect(host().appOf(ID)).toBe('ghostty')
+    port.observed(hook('session-end', ghostty))
+    expect(await listed()).toEqual([{ id: ID, name: 'Fix the build', caps: 'sf' }])
+    expect(host().appOf(ID)).toBe('claude')
+  })
+
+  it('the store\'s rows weigh nothing in the dial\'s default app', async () => {
+    const { port, fake, front, live } = withStore()
+    fake.sessions = Array.from({ length: 16 }, (_, i) =>
+      session({ localId: `local_${i}`, sessionId: `5d6e7f80-1a2b-4c3d-8e9f-0a1b2c3d4e${String(i).padStart(2, '0')}`, title: `Task ${i}` }))
+    inGhostty(port)
+    await live()
+    const apps = await appList(port)
+    expect(apps?.shown).toBe('ghostty')
+    expect(apps?.apps).toContainEqual(expect.objectContaining({ id: 'claude', count: 16 }))
+    await front('claude')
+    expect((await appList(port))?.shown).toBe('claude')
+    await front('ghostty')
+    expect((await appList(port))?.shown).toBe('ghostty')
+    expect(host().pickApp('claude')).toBe('switched')
+    expect((await appList(port))?.shown).toBe('claude')
+  })
+
+  // The PM, 2026-11-19 (1b): the app settled in front shows its page as soon as its rows come.
+  it.each(['after', 'before'] as const)('the Claude app in front before its rows arrive shows the Claude page, the store\'s first read coming %s the dial\'s first list', async (order) => {
+    const { port, fake, front, live } = withStore()
+    await front('claude')
+    // No Code process: no hook names the store's session.
+    inGhostty(port)
+    fake.hold = order === 'after'
+    await live()
+    if (order === 'after') {
+      expect((await appList(port))?.shown).toBe('ghostty')
+      fake.held.splice(0).forEach((land) => land())
+      await flush()
+      const apps = await appList(port)
+      expect(apps?.shown).toBe('claude')
+      expect(apps?.apps).toContainEqual(expect.objectContaining({ id: 'claude', count: 1 }))
+      expect(logs).toContain('[device] app filter: switched · front')
+    } else {
+      expect((await appList(port))?.shown).toBe('claude')
+    }
+    for (let i = 0; i < 3; i++) expect((await appList(port))?.shown).toBe('claude')
+  })
+
+  it('the app\'s settle turns the dial to a session only the store still lists', async () => {
+    const { port, front, attached, live } = withStore()
+    await live()
+    port.observed(hook('session-start'))
+    port.observed(hook('session-end'))
+    await wait(ENDED_MS)
+    await front('orca')
+    attached(SESSION)
+    expect(logs).toContain('[device] attach · skipped · not in front')
+    await front('claude')
+    expect(calls('followLocal')).toEqual([[ID, 'attach']])
+  })
+
+  it.skipIf(process.platform === 'win32')('with no reader given the devices read the store under the home folder', async () => {
+    vi.useRealTimers()
+    // The suite's throwaway home (vitest.setup.ts), never the person's: only the Claude app's folder the fixture makes goes.
+    expect(homedir().startsWith(`${tmpdir()}${sep}`)).toBe(true)
+    onTestFinished(() => rmSync(dirname(ROOT), { recursive: true, force: true }))
+    claudeAppFixture(ROOT).write({ localId: LOCAL, cliSessionId: SESSION, cwd: '/work/api', title: 'Fix the build', lastActivityAt: Date.now() })
+    const { port } = start({ faults: ['fleet'], orca: { ...orca, platform: 'darwin' }, tty: async () => undefined })
+    attach(port)
+    await vi.waitFor(() => expect(logs).toContain('[claude-app] listed · 1 sessions'))
+    expect(await listed()).toEqual([{ id: ID, name: 'Fix the build', caps: 'sf' }])
+  })
+})
+
+describe("the ChatGPT app's threads, from its metadata (docs/plans/2026-11-19-dial-chatgpt-ring-and-follow-design.md)", () => {
+  /** The app's Codex home in the suite's throwaway home, never the person's own. */
+  const CODEX_HOME = join(homedir(), '.codex')
+  /** Where the app is looked for: /Applications, then the home's own Applications. */
+  const APPS = join('/Applications', 'ChatGPT.app')
+  const HOME_APPS = join(homedir(), 'Applications', 'ChatGPT.app')
+  const BUNDLE = 'com.openai.codex'
+  /** A thread of the app (Codex's session id), and two more. */
+  const THREAD = '7d3e9a10-2b4c-4d5e-8f60-1a2b3c4d5e6f'
+  const SECOND = '2c4e6a80-1b3d-4f5a-9c7e-0d2f4b6a8c0e'
+  const THIRD = '9e8d7c6b-5a49-4382-a1b0-c9d8e7f6a5b4'
+  const ID = observedAgentId('codex', THREAD)
+  /** THREAD's row as the reader lists it. */
+  const ROW = { id: ID, name: 'Fix the build', caps: 'sf' }
+  const opened = (thread: string): [string, string[], number] => ['/usr/bin/open', ['-b', BUNDLE, `codex://threads/${thread}`], 10_000]
+  /** A thread the reader lists: in /work/api, named Fix the build. */
+  const thread = (over: Partial<CodexAppThread> = {}): CodexAppThread =>
+    ({ id: THREAD, cwd: '/work/api', name: 'Fix the build', at: 1, inProject: false, ...over })
+  /** A read of these threads, in the sidebar's order given, else in theirs. */
+  const read = (listed: CodexAppThread[], order = listed.map(({ id }) => id)): CodexAppRead =>
+    ({ ok: true, order, listed, rows: listed.length, skipped: 0 })
+  /** Codex in the ChatGPT app on THREAD, as its hook says. */
+  const hook = (event: ObservedHookEvent['event']): ObservedHookEvent => ({
+    engine: 'codex', sessionId: THREAD, event, cwd: '/work/api', callerPid: 4242, transcriptPath: `/t/${THREAD}.jsonl`,
+    hostHints: { __CFBundleIdentifier: BUNDLE },
+  })
+  const host = () => seen.dial as unknown as DaemonCableHost
+  /** A dial on the cable, on this computer's agents: no window. */
+  const attach = (port: DevicesPort) => { seen.host.watching!(true); port.swarms(null) }
+  /** The page a dial that says appFilter reads, the ChatGPT app's while it is the one app with rows: the threads' resting
+   *  rows show on app pages only, never in the single machine ring (D7). */
+  const listed = async () => (await host().listAgentSnapshot({ apps: true })).agents.map(({ id, name, caps }) => ({ id, name, caps }))
+  const ids = async () => (await listed()).map(({ id }) => id)
+  const codexLines = () => logs.filter((line) => line.startsWith('[codex-app]'))
+  /** The fake timers' clock is the devices' too: the settle moves with it. */
+  const wait = (ms: number) => vi.advanceTimersByTimeAsync(ms)
+  const flush = () => wait(0)
+  beforeEach(() => {
+    vi.useFakeTimers()
+    // /Applications first, whatever the shell running the suite says.
+    vi.stubEnv('HARNESS_APPLICATIONS_DIR', undefined)
+  })
+
+  /**
+   * The devices on macOS with a reader of the app's threads the test answers, the dial not attached yet. The reader's
+   * calls are recorded: its home is there, `read` answers `fake.read`, and `names` Codex's name of each id asked from
+   * `fake.names`. Each bundle the look asks of is recorded and
+   * answered from `fake.ids`, the app in /Applications unless the test says otherwise, or, while `hold` is set, held until
+   * the test lands it with an id. Every `open` is a recorded run, nothing executed, the next `failing` of them answering
+   * code 1. `live` attaches the dial and lets the look and the first read land.
+   */
+  const withThreads = (over: Parameters<typeof start>[0] = {}) => {
+    const fake = {
+      read: read([thread()]),
+      calls: [] as string[],
+      asked: [] as string[],
+      ids: new Map<string, string>([[APPS, BUNDLE]]),
+      hold: false,
+      held: [] as Array<(id: string | undefined) => void>,
+      failing: 0,
+      names: new Map<string, string>(),
+    }
+    const threads: NonNullable<DevicesDeps['codexAppThreads']> = {
+      there: () => { fake.calls.push('there'); return true },
+      read: async () => { fake.calls.push('read'); return fake.read },
+      forget: () => { fake.calls.push('forget') },
+      names: (asked) => { fake.calls.push('names'); return new Map([...fake.names].filter(([id]) => asked.includes(id))) },
+    }
+    const bundleId: NonNullable<DevicesDeps['bundleId']> = async (app) => {
+      fake.asked.push(app)
+      return fake.hold ? new Promise((resolve) => { fake.held.push(resolve) }) : fake.ids.get(app)
+    }
+    const onMac = {
+      ...orca, platform: 'darwin' as const,
+      run: async (file: string, args: string[], timeoutMs: number) => {
+        orcaRuns.push([file, args, timeoutMs])
+        if (fake.failing === 0) return { code: 0, stdout: '' }
+        fake.failing--
+        return { code: 1, stdout: '' }
+      },
+    }
+    const listener = fakeListener()
+    const started = start({ faults: ['fleet'], listen: listener.listen, orca: onMac, now: () => Date.now(), tty: async () => undefined,
+      codexAppThreads: threads, bundleId, ...over })
+    const front = async (to: string) => {
+      expect(listener.front(to)).toBeUndefined()
+      await wait(FRONT_SETTLE_MS)
+    }
+    const live = async () => {
+      attach(started.port)
+      await flush()
+    }
+    return { ...started, fake, listener, front, live }
+  }
+
+  it('on macOS with a dial attached the app\'s threads are listed sf, idle, on the ChatGPT page, the Codex home alone watched; detached, the source stops, its watch closes, the reader forgets and the rank goes', async () => {
+    const { fake, live } = withThreads()
+    const rank = vi.spyOn(host(), 'setRank')
+    await flush()
+    // No dial: nothing is read, and the app is not looked for.
+    expect(fake.calls).toEqual([])
+    expect(fake.asked).toEqual([])
+    await live()
+    expect(await listed()).toEqual([ROW])
+    expect(host().appOf(ID)).toBe('codex')
+    // Idle: no turn is told.
+    expect(calls('turnStarted')).toEqual([])
+    expect(watchedFolders.calls).toEqual(expect.arrayContaining([[[CODEX_HOME], expect.any(Function)]]))
+    expect(watchedFolders.calls.filter(([folders]) => (folders as string[]).includes(homedir()))).toEqual([])
+    expect(rank.mock.lastCall).toEqual(['codex', new Map([[ID, 0]])])
+    seen.host.watching!(false)
+    expect(await listed()).toEqual([])
+    expect(watchedFolders.stopped).toBe(watchedFolders.calls.length)
+    expect(fake.calls.at(-1)).toBe('forget')
+    expect(rank.mock.lastCall).toEqual(['codex', undefined])
+  })
+
+  it.each([['off macOS', 'linux', true], ['with HARNESS_DEVICE_OBSERVED off', 'darwin', false]] as const)('%s there is no source', async (_, platform, on) => {
+    const switched = env as { HARNESS_DEVICE_OBSERVED: boolean }
+    switched.HARNESS_DEVICE_OBSERVED = on
+    onTestFinished(() => { switched.HARNESS_DEVICE_OBSERVED = true })
+    const { fake, live } = withThreads({ orca: { ...orca, platform } })
+    await live()
+    expect(fake.calls).toEqual([])
+    expect(fake.asked).toEqual([])
+  })
+
+  // The PM, 2026-11-19 (question 2): a Mac with Codex CLI alone gets no ChatGPT page of threads a tap cannot open.
+  it.each([
+    ['in /Applications', [[APPS, BUNDLE]], [APPS], true],
+    ['in ~/Applications alone', [[HOME_APPS, BUNDLE]], [APPS, HOME_APPS], true],
+    ['in neither', [], [APPS, HOME_APPS], false],
+    ['of another id in both', [[APPS, 'com.openai.chat'], [HOME_APPS, 'com.openai.chat']], [APPS, HOME_APPS], false],
+  ] as const)('the source runs only with the ChatGPT app installed, looked for in /Applications, then ~/Applications: %s', async (_, found, asked, starts) => {
+    const { fake, live } = withThreads()
+    fake.ids = new Map<string, string>(found)
+    await live()
+    expect(fake.asked).toEqual(asked)
+    expect(fake.calls).toEqual(starts ? ['there', 'read'] : [])
+    expect(await listed()).toEqual(starts ? [ROW] : [])
+    // The look says nothing: with no app, the page is today's.
+    expect(codexLines()).toEqual(starts ? expect.arrayContaining(['[codex-app] watch · on']) : [])
+  })
+
+  it('the app is looked for at each attach: gone at the next attach, the source is stopped; back, it starts', async () => {
+    const { fake, live } = withThreads()
+    await live()
+    expect(await listed()).toEqual([ROW])
+    seen.host.watching!(false)
+    fake.ids = new Map()
+    await live()
+    expect(await listed()).toEqual([])
+    expect(fake.calls.filter((call) => call === 'read')).toHaveLength(1)
+    seen.host.watching!(false)
+    fake.ids = new Map([[APPS, BUNDLE]])
+    await live()
+    expect(await listed()).toEqual([ROW])
+    expect(fake.asked).toEqual([APPS, APPS, HOME_APPS, APPS])
+  })
+
+  // Review Focus 7: each look is a plutil run, up to 1 s.
+  it('a detach while the app is looked for starts nothing; the next attach looks again', async () => {
+    const { fake, live } = withThreads()
+    fake.hold = true
+    await live()
+    expect(fake.asked).toEqual([APPS])
+    seen.host.watching!(false)
+    fake.held.shift()!(BUNDLE)
+    await flush()
+    expect(fake.calls).toEqual([])
+    expect(await listed()).toEqual([])
+    fake.hold = false
+    await live()
+    expect(fake.asked).toEqual([APPS, APPS])
+    expect(await listed()).toEqual([ROW])
+  })
+
+  it('a look that lands after a newer attach\'s look began starts nothing', async () => {
+    const { fake, live } = withThreads()
+    fake.hold = true
+    await live()
+    seen.host.watching!(false)
+    fake.hold = false
+    fake.ids = new Map()
+    await live()
+    expect(fake.asked).toEqual([APPS, APPS, HOME_APPS])
+    fake.held.shift()!(BUNDLE)
+    await flush()
+    expect(fake.calls).toEqual([])
+    expect(await listed()).toEqual([])
+  })
+
+  it.each([
+    ['/tmp/apps', [join('/tmp/apps', 'ChatGPT.app'), HOME_APPS]],
+    ['apps', [APPS, HOME_APPS]],
+  ] as const)('HARNESS_APPLICATIONS_DIR, when absolute, is looked in for the app in place of /Applications; a relative one is ignored: %s', async (dir, asked) => {
+    vi.stubEnv('HARNESS_APPLICATIONS_DIR', dir)
+    const { fake, live } = withThreads()
+    fake.ids = new Map()
+    await live()
+    expect(fake.asked).toEqual(asked)
+  })
+
+  it('the ChatGPT page\'s ring is in the reader\'s order', async () => {
+    const { fake, live } = withThreads()
+    // Newest first, as a read lists them; the sidebar puts SECOND's project first.
+    fake.read = read([thread({ at: 3 }), thread({ id: SECOND, name: 'Ship it', at: 2 }), thread({ id: THIRD, name: 'Tidy up', at: 1 })],
+      [SECOND, THREAD, THIRD])
+    await live()
+    expect(await ids()).toEqual([SECOND, THREAD, THIRD].map((id) => observedAgentId('codex', id)))
+  })
+
+  it('a hooked thread the reader does not list takes its place in the sidebar\'s order', async () => {
+    const { fake, port, live } = withThreads()
+    fake.read = read([thread({ at: 2 }), thread({ id: THIRD, name: 'Tidy up', at: 1 })], [THREAD, SECOND, THIRD])
+    await live()
+    port.observed({ ...hook('session-start'), sessionId: SECOND, transcriptPath: `/t/${SECOND}.jsonl` })
+    expect(await ids()).toEqual([THREAD, SECOND, THIRD].map((id) => observedAgentId('codex', id)))
+  })
+
+  it('a tap on a thread row is one open of its link with the ChatGPT bundle, and the dial\'s own move', async () => {
+    const { listener, live } = withThreads()
+    await live()
+    // The settle's echo is the Claude app's alone: the move shows through a Terminal tab report waiting for its settle.
+    expect(listener.front('terminal-app')).toBeUndefined()
+    expect((listener.given[0].handlers.tab as ListenerHandler)
+      .handle({ type: 'tab', app: 'terminal-app', tty: '/dev/ttys023' }, new AbortController().signal)).toBeUndefined()
+    expect(await host().openAgent(ID)).toBeUndefined()
+    expect(orcaRuns).toEqual([opened(THREAD)])
+    await wait(FRONT_SETTLE_MS)
+    expect(logs.filter((line) => line.startsWith('[device] tab'))).toEqual(['[device] tab · skipped · echo'])
+  })
+
+  it('a tap whose link fails brings the app by its bundle, said in one line with no id', async () => {
+    const { fake, live } = withThreads()
+    await live()
+    fake.failing = 1
+    expect(await host().openAgent(ID)).toBeUndefined()
+    expect(orcaRuns).toEqual([opened(THREAD), ['/usr/bin/open', ['-b', BUNDLE], 10_000]])
+    expect(logs.filter((line) => line.startsWith('[device] open'))).toEqual(['[device] open · codex · fallback'])
+    expect(logs.filter((line) => line.includes(THREAD))).toEqual([])
+  })
+
+  it('a rest with the ChatGPT app in front shows the thread by its link; with another app in front it has no pane', async () => {
+    const { front, live } = withThreads()
+    await live()
+    await front('codex')
+    expect(host().swipeSwitches(ID)).toBe(true)
+    host().swipeEnded(ID, 'rest')
+    await flush()
+    expect(orcaRuns).toEqual([opened(THREAD)])
+    // No pane: the dial sends no rest, and nothing more runs.
+    await front('orca')
+    expect(host().swipeSwitches(ID)).toBe(false)
+    expect(orcaRuns).toEqual([opened(THREAD)])
+  })
+
+  it('a hooked ChatGPT thread the reader lists is one row, under the same id, named as the reader names it', async () => {
+    const { port, live } = withThreads()
+    await live()
+    port.observed(hook('session-start'))
+    // The hook's copy, with caps of its own: named as the reader names the thread, never by its folder.
+    expect((await listed()).map(({ id, name }) => ({ id, name }))).toEqual([{ id: ID, name: 'Fix the build' }])
+  })
+
+  // On every platform: the reader the devices build is what test:core holds to 100% in CI on Linux and Windows too.
+  it('with no reader given the devices read the Codex home under the home folder', async () => {
+    vi.useRealTimers()
+    // The suite's throwaway home (vitest.setup.ts), never the person's: only the Codex home the fixture makes goes.
+    expect(homedir().startsWith(`${tmpdir()}${sep}`)).toBe(true)
+    onTestFinished(() => rmSync(CODEX_HOME, { recursive: true, force: true }))
+    codexAppFixture(CODEX_HOME).threads([{ id: THREAD, cwd: '/work/api', recencyAtMs: Date.now() }])
+    const { port } = start({ faults: ['fleet'], orca: { ...orca, platform: 'darwin' }, tty: async () => undefined, codexAppThreads: null,
+      bundleId: async (app) => app === APPS ? BUNDLE : undefined })
+    attach(port)
+    await vi.waitFor(() => expect(logs).toContain('[codex-app] listed · 1 threads · 0 in projects'), { timeout: 5_000 })
+    expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'sf' }])
+  })
+
+  it.skipIf(process.platform !== 'darwin')('with no reader or look given the devices find the app by its Info.plist and read the Codex home under the home folder', async () => {
+    vi.useRealTimers()
+    // The suite's throwaway home (vitest.setup.ts), never the person's: only the Codex home the fixture makes goes.
+    expect(homedir().startsWith(`${tmpdir()}${sep}`)).toBe(true)
+    onTestFinished(() => rmSync(CODEX_HOME, { recursive: true, force: true }))
+    codexAppFixture(CODEX_HOME).threads([{ id: THREAD, cwd: '/work/api', recencyAtMs: Date.now() }])
+    // The app's Info.plist alone, in a folder of the test's own in place of /Applications: plutil reads it.
+    const apps = join(dataDir, 'Applications')
+    mkdirSync(join(apps, 'ChatGPT.app', 'Contents'), { recursive: true })
+    writeFileSync(join(apps, 'ChatGPT.app', 'Contents', 'Info.plist'),
+      `<?xml version="1.0" encoding="UTF-8"?>\n<plist version="1.0"><dict><key>CFBundleIdentifier</key><string>${BUNDLE}</string></dict></plist>\n`)
+    vi.stubEnv('HARNESS_APPLICATIONS_DIR', apps)
+    // The suite fakes readBundleId for the tmux client's walk: this test is the one that reads a real Info.plist.
+    const { readBundleId } = await vi.importActual<typeof import('../cable/hosts/scannedApp.js')>('../cable/hosts/scannedApp.js')
+    readers.bundleId.mockImplementation((bundle) => readBundleId(bundle))
+    const { port } = start({ faults: ['fleet'], orca: { ...orca, platform: 'darwin' }, tty: async () => undefined, codexAppThreads: null, bundleId: null })
+    attach(port)
+    await vi.waitFor(() => expect(logs).toContain('[codex-app] listed · 1 threads · 0 in projects'), { timeout: 5_000 })
+    expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'sf' }])
+  })
+
+  describe('the thread opened in the ChatGPT app moves the dial (docs/plans/2026-11-20-dial-chatgpt-follow-ax-design.md)', () => {
+    /** THREAD's name, as Codex gave it and the ChatGPT window's title shows it. */
+    const TITLE = 'Fix the build'
+    /** The devices on macOS, THREAD named TITLE by Codex, the dial not attached yet (`live`). `report` is a thread line
+     *  through the listener's handler, as `harness hardware watch` tells one. */
+    const following = (over: Parameters<typeof start>[0] = {}) => {
+      const started = withThreads(over)
+      started.fake.names = new Map([[THREAD, TITLE]])
+      const report = (title: string): unknown =>
+        (started.listener.given[0].handlers.thread as ListenerHandler).handle({ type: 'thread', title }, new AbortController().signal)
+      return { ...started, report }
+    }
+    const asked = () => calls('followLocal')
+    const threadLines = () => logs.filter((line) => line.startsWith('[device] thread'))
+    const unlinked = (off: boolean) => { (seen.cable as unknown as { connected: boolean }).connected = !off }
+    const named = (calls: readonly string[]) => calls.filter((call) => call === 'names').length
+    /** An agent no app shows: the dial turning to it is a hand's move and nothing else. */
+    const ELSEWHERE = observedAgentId('claude', 'sess-elsewhere')
+
+    it('with the ChatGPT app settled in front a report follows its thread at once', async () => {
+      const { front, report, live } = following()
+      await live()
+      await front('codex')
+      expect(report(TITLE)).toBeUndefined()
+      expect(asked()).toEqual([[ID, 'thread']])
+      // What the dials make of it is theirs to count.
+      expect(threadLines()).toEqual([])
+    })
+
+    it('a report before the settle waits for it, then follows', async () => {
+      const { listener, report, live } = following()
+      await live()
+      expect(listener.front('codex')).toBeUndefined()
+      await wait(FRONT_SETTLE_MS - 1)
+      report(TITLE)
+      expect(asked()).toEqual([])
+      await wait(1)
+      expect(asked()).toEqual([[ID, 'thread']])
+    })
+
+    it('another app settling drops it, said not in front once', async () => {
+      const { front, report, live } = following()
+      await live()
+      report(TITLE)
+      await front('orca')
+      expect(threadLines()).toEqual(['[device] thread · skipped · not in front'])
+      await front('codex')
+      expect(asked()).toEqual([])
+      expect(threadLines()).toEqual(['[device] thread · skipped · not in front'])
+    })
+
+    it('an empty title drops the waiting report and says nothing', async () => {
+      const { front, report, live } = following()
+      await live()
+      report(TITLE)
+      expect(report('')).toBeUndefined()
+      await front('codex')
+      // In front, the empty title is no thread to follow.
+      report('')
+      expect(asked()).toEqual([])
+      expect(threadLines()).toEqual([])
+    })
+
+    it('no match and ambiguous are one line each, and nothing is followed', async () => {
+      const { fake, front, report, live } = following()
+      fake.read = read([thread(), thread({ id: SECOND, name: 'Twice' }), thread({ id: THIRD, name: 'Twice' })])
+      fake.names = new Map([[THREAD, TITLE], [SECOND, 'Twice'], [THIRD, 'Twice']])
+      await live()
+      await front('codex')
+      report('Nothing of that name')
+      report('Twice')
+      expect(threadLines()).toEqual(['[device] thread · skipped · no match', '[device] thread · skipped · ambiguous'])
+      expect(asked()).toEqual([])
+    })
+
+    it('the dial moving after the report is an echo', async () => {
+      const { listener, report, live } = following()
+      await live()
+      expect(listener.front('codex')).toBeUndefined()
+      report(TITLE)
+      turnTo(ELSEWHERE)
+      await wait(FRONT_SETTLE_MS)
+      expect(threadLines()).toEqual(['[device] thread · skipped · echo'])
+      expect(asked()).toEqual([])
+    })
+
+    for (const way of ['rest', 'tap'] as const) {
+      it(`the dial's own ${way} on that thread within 2 s is an echo, once`, async () => {
+        const { front, report, live } = following()
+        await live()
+        await front('codex')
+        if (way === 'rest') host().swipeEnded(ID, 'rest')
+        else expect(await host().openAgent(ID)).toBeUndefined()
+        await flush()
+        expect(orcaRuns).toEqual([opened(THREAD)])
+        await wait(1_999)
+        report(TITLE)
+        expect(threadLines()).toEqual(['[device] thread · skipped · echo'])
+        expect(asked()).toEqual([])
+        // The person opening that thread again: the switch was used up by its own echo.
+        report(TITLE)
+        expect(asked()).toEqual([[ID, 'thread']])
+      })
+    }
+
+    it('the dial\'s own switch 2 s before the report is no echo', async () => {
+      const { front, report, live } = following()
+      await live()
+      await front('codex')
+      host().swipeEnded(ID, 'rest')
+      await wait(2_000)
+      report(TITLE)
+      expect(asked()).toEqual([[ID, 'thread']])
+      expect(threadLines()).toEqual([])
+    })
+
+    it('another thread named while the dial\'s own switch of the last 2 s is unseen is an echo: the old title read late', async () => {
+      const { fake, listener, front, report, live } = following()
+      fake.read = read([thread(), thread({ id: SECOND, name: 'Ship it' })])
+      fake.names = new Map([[THREAD, TITLE], [SECOND, 'Ship it']])
+      await live()
+      await front('orca')
+      // The dial's tap on THREAD brings the app, whose window still shows SECOND.
+      expect(await host().openAgent(ID)).toBeUndefined()
+      await wait(200)
+      expect(listener.front('codex')).toBeUndefined()
+      await wait(FRONT_SETTLE_MS + 300)
+      report('Ship it')
+      await wait(300)
+      report(TITLE)
+      expect(asked()).toEqual([])
+      expect(threadLines()).toEqual(['[device] thread · skipped · echo', '[device] thread · skipped · echo'])
+      // The switch seen, the person opening SECOND moves the dial.
+      report('Ship it')
+      expect(asked()).toEqual([[observedAgentId('codex', SECOND), 'thread']])
+    })
+
+    it('a report followed at the settle within 2 s of a dial move is an echo, and one 2 s after it follows', async () => {
+      const { listener, front, report, live } = following()
+      await live()
+      turnTo(ELSEWHERE)
+      report(TITLE)
+      expect(listener.front('codex')).toBeUndefined()
+      await wait(FRONT_SETTLE_MS)
+      expect(threadLines()).toEqual(['[device] thread · skipped · echo'])
+      expect(asked()).toEqual([])
+      await front('orca')
+      turnTo(ELSEWHERE)
+      await wait(2_000 - FRONT_SETTLE_MS)
+      report(TITLE)
+      expect(listener.front('codex')).toBeUndefined()
+      await wait(FRONT_SETTLE_MS)
+      expect(asked()).toEqual([[ID, 'thread']])
+      expect(threadLines()).toEqual(['[device] thread · skipped · echo'])
+    })
+
+    it('the dial\'s answer is counted: thread · moved, and thread · skipped · no tile', () => {
+      start({ faults: ['fleet'] })
+      seen.host.localFollowed!('thread', 'moved')
+      seen.host.localFollowed!('thread', 'no-tile')
+      expect(threadLines()).toEqual(['[device] thread · moved', '[device] thread · skipped · no tile'])
+    })
+
+    it('with no dial linked nothing is followed or said', async () => {
+      const { front, report, live } = following()
+      await live()
+      await front('codex')
+      unlinked(true)
+      report(TITLE)
+      report('Nothing of that name')
+      await front('orca')
+      report(TITLE)
+      await front('vscode')
+      report(TITLE)
+      await front('codex')
+      unlinked(false)
+      expect(asked()).toEqual([])
+      expect(threadLines()).toEqual([])
+      report(TITLE)
+      expect(asked()).toEqual([[ID, 'thread']])
+    })
+
+    it('the match runs only for a report no settle, empty title, dial move or unlinked dial dropped first', async () => {
+      const { fake, listener, front, report, live } = following()
+      await live()
+      // Dropped by another app's settle, by the empty title, and by the dial moving.
+      report(TITLE)
+      await front('orca')
+      report(TITLE)
+      report('')
+      report(TITLE)
+      turnTo(ELSEWHERE)
+      expect(listener.front('codex')).toBeUndefined()
+      await wait(FRONT_SETTLE_MS)
+      // With no dial linked.
+      unlinked(true)
+      report(TITLE)
+      unlinked(false)
+      expect(named(fake.calls)).toBe(0)
+      report(TITLE)
+      expect(named(fake.calls)).toBe(1)
+      expect(asked()).toEqual([[ID, 'thread']])
+    })
+
+    it('off macOS there are no threads: a report matches none', async () => {
+      const { front, report, live } = following({ orca: { ...orca, platform: 'linux' } })
+      await live()
+      await front('codex')
+      report(TITLE)
+      expect(threadLines()).toEqual(['[device] thread · skipped · no match'])
+      expect(asked()).toEqual([])
+    })
+
+    it('the log holds no title, name or thread id', async () => {
+      const { fake, front, report, live } = following()
+      fake.read = read([thread(), thread({ id: SECOND, name: 'Twice' }), thread({ id: THIRD, name: 'Twice' })])
+      fake.names = new Map([[THREAD, TITLE], [SECOND, 'Twice'], [THIRD, 'Twice']])
+      await live()
+      report(TITLE)
+      await front('orca')
+      await front('codex')
+      report('Nothing of that name')
+      report('Twice')
+      host().swipeEnded(ID, 'rest')
+      report(TITLE)
+      report(TITLE)
+      seen.host.localFollowed!('thread', 'moved')
+      seen.host.localFollowed!('thread', 'no-tile')
+      expect(asked()).toEqual([[ID, 'thread']])
+      expect(threadLines()).toHaveLength(6)
+      for (const line of threadLines()) expect(line).toMatch(/^\[device\] thread · (moved|skipped · (echo|not in front|no match|ambiguous|no tile))$/)
+      expect(logs.filter((line) => [TITLE, 'Twice', 'Nothing of that name', THREAD, SECOND, THIRD, ID].some((secret) => line.includes(secret)))).toEqual([])
+    })
+
+    it('stopping drops the waiting report', async () => {
+      const { port, report, live } = following()
+      await live()
+      report(TITLE)
+      await port.stop()
+      seen.host.appSettled!('codex')
+      expect(asked()).toEqual([])
+      expect(threadLines()).toEqual([])
+    })
   })
 })
 
@@ -8496,7 +10060,7 @@ describe('the dial setup, from the devices\' own process (cable/dialSetup.ts)', 
     readers.rows.set('sess-9', { cwd: '/work/web', transcriptPath: null })
     readers.working.set('sess-9', false)
     await start({ faults: ['fleet', 'skill'], listen: fakeListener().listen }).orcaHomes.landed()
-    expect(logs).toContain('[devices] skill failed · injected fault: skill')
+    expect(logs).toContain('[devices] skill failed · Error')
     await vi.waitFor(() => expect(calls('start')).toHaveLength(1))
     // The scan goes on past the setup to list what it found.
     seen.host.watching!(true)
@@ -8570,7 +10134,7 @@ describe('Harness\'s VS Code extension, set up once a computer in VS Code and in
     const vscode = fakeVscode({ installed: '0.0.1' })
     // Its start pass follows the dial setup's, once Orca's homes are read.
     await start({ faults: ['fleet', 'vscodeExtension'], listen: fakeListener().listen, vscodeExtension: vscode.deps }).orcaHomes.landed()
-    expect(logs).toContain('[devices] vscodeExtension failed · injected fault: vscodeExtension')
+    expect(logs).toContain('[devices] vscodeExtension failed · Error')
     await vi.waitFor(() => expect(calls('start')).toHaveLength(1))
     await settled()
     expect(vscode.runs).toEqual([])
@@ -8652,10 +10216,126 @@ describe('Harness\'s VS Code extension, set up once a computer in VS Code and in
     const vscode = fakeVscode({ installed: '0.0.1' })
     const cursor = fakeVscode({ installed: '0.0.1', editor: 'cursor' })
     await start({ faults: ['fleet', 'cursorExtension'], listen: fakeListener().listen, vscodeExtension: vscode.deps, cursorExtension: cursor.deps }).orcaHomes.landed()
-    expect(logs).toContain('[devices] cursorExtension failed · injected fault: cursorExtension')
+    expect(logs).toContain('[devices] cursorExtension failed · Error')
     await vi.waitFor(() => expect(calls('start')).toHaveLength(1))
     await vi.waitFor(() => expect(flags(vscode)).toEqual(['--install-extension']))
     expect(cursor.runs).toEqual([])
+  })
+})
+
+describe('Harness Device\'s plugin for Orca, set up from the devices\' own process (cable/orcaPluginSetup.ts)', () => {
+  /** Lets a pass's runs be answered. */
+  const settled = () => new Promise((resolve) => setImmediate(resolve))
+  /** The tally's lines for Orca's plugin, but its day line. */
+  const counted = (line: string) => line.startsWith('[device] orca plugin · orca')
+
+  it('a dial\'s first attach installs it, approves the pinned access, records it and counts it set up', async () => {
+    const orca = fakeOrcaPlugin()
+    start({ faults: ['fleet'], listen: fakeListener().listen, orcaPlugin: orca.deps })
+    await settled()
+    // No dial here yet: the start asks Orca nothing.
+    expect(orca.runs).toEqual([])
+
+    seen.host.watching!(true)
+
+    await vi.waitFor(() => expect(readSetup(dataDir).orca).toBe('9.9.9'))
+    const { folder } = orca.deps
+    expect(orca.runs.slice(-2)).toEqual([`plugin install ${folder} --json`, `plugin install ${folder} --approve ${ORCA_FP} --json`])
+    expect(logs.filter(counted)).toEqual(['[device] orca plugin · orca · set up'])
+    expect(logs).toContainEqual(expect.stringMatching(/^\[device\] orca plugin · day \d{4}-\d\d-\d\d · orca set up 1 updated 0 failed 0 left removed 0$/))
+    // A replug asks Orca nothing more.
+    const before = orca.runs.length
+    seen.host.watching!(false)
+    seen.host.watching!(true)
+    await settled()
+    expect(orca.runs).toHaveLength(before)
+  })
+
+  it('more access than the pin: held, recorded as orcaHeld, counted failed · access; a replug asks Orca nothing more', async () => {
+    const orca = fakeOrcaPlugin({ more: true })
+    start({ faults: ['fleet'], listen: fakeListener().listen, orcaPlugin: orca.deps })
+    seen.host.watching!(true)
+    await vi.waitFor(() => expect(readSetup(dataDir).orcaHeld).toBe('9.9.9'))
+    expect(readSetup(dataDir).orca).toBeUndefined()
+    expect(orca.runs.filter((run) => run.includes('--approve'))).toEqual([])
+    expect(logs.filter(counted)).toEqual(['[device] orca plugin · orca · failed · access'])
+    const before = orca.runs.length
+    seen.host.watching!(false)
+    seen.host.watching!(true)
+    await settled()
+    expect(orca.runs).toHaveLength(before)
+  })
+
+  it('set up before at another version: brought current at the start, a dial here or not', async () => {
+    expect(writeSetup(dataDir, { dial: false, orca: '0.0.1', homes: { claude: [], codex: [] }, pluginHomes: [] })).toBeUndefined()
+    const orca = fakeOrcaPlugin({ installed: '0.0.1' })
+    start({ faults: ['fleet'], listen: fakeListener().listen, orcaPlugin: orca.deps })
+    await vi.waitFor(() => expect(readSetup(dataDir).orca).toBe('9.9.9'))
+    expect(orca.runs.slice(-2)).toEqual([`plugin update ${ORCA_KEY} --json`, `plugin update ${ORCA_KEY} --approve ${ORCA_FP} --json`])
+    expect(logs.filter(counted)).toEqual(['[device] orca plugin · orca · updated'])
+  })
+
+  it.each([['observed agents on', true], ['observed agents off', false]])('Orca settling in front runs a pass (%s)', async (_, on) => {
+    const switched = env as { HARNESS_DEVICE_OBSERVED: boolean }
+    switched.HARNESS_DEVICE_OBSERVED = on
+    onTestFinished(() => { switched.HARNESS_DEVICE_OBSERVED = true })
+    const orca = fakeOrcaPlugin({ running: false })
+    start({ faults: ['fleet'], listen: fakeListener().listen, orcaPlugin: orca.deps })
+    seen.host.watching!(true)
+    // Not running at the attach: asked whether it runs, and nothing more.
+    await vi.waitFor(() => expect(orca.runs).toEqual(['status --json']))
+    await settled()
+
+    orca.state.running = true
+    seen.host.appSettled!('orca')
+
+    await vi.waitFor(() => expect(readSetup(dataDir).orca).toBe('9.9.9'))
+    expect(logs.filter(counted)).toEqual(['[device] orca plugin · orca · set up'])
+  })
+
+  it('in the core\'s process (no listener): nothing, at a start, an attach or a settle', async () => {
+    const orca = fakeOrcaPlugin()
+    start({ faults: ['fleet'], orcaPlugin: orca.deps })
+    seen.host.watching!(true)
+    seen.host.appSettled!('orca')
+    await settled()
+    expect(orca.runs).toEqual([])
+    expect(readSetup(dataDir).orca).toBeUndefined()
+  })
+
+  it('unset: this computer\'s orca, the folder in Harness\'s data root, the core\'s data folder', async () => {
+    const own = vi.spyOn(orcaPluginModule, 'orcaPluginRun').mockReturnValue(fakeOrcaPlugin({ running: false }).deps)
+    const parts = vi.spyOn(orcaPluginSetupModule, 'orcaPluginParts')
+    start({ faults: ['fleet'], listen: fakeListener().listen, orcaPlugin: null })
+    seen.host.watching!(true)
+    await settled()
+    expect(own).toHaveBeenCalledTimes(1)
+    const folder = harnessPath('orca-plugin', homedir())
+    expect(parts.mock.calls).toEqual([[expect.objectContaining({ folder, dataDir })]])
+    // Asked whether Orca runs, and it does not: nothing is written there.
+    expect(existsSync(folder)).toBe(false)
+  })
+
+  it('a folder that cannot be written: failed · folder; no line holds its path or its code', async () => {
+    writeFileSync(join(dataDir, 'file'), '')
+    const orca = fakeOrcaPlugin({ folder: join(dataDir, 'file', 'orca-plugin') })
+    start({ faults: ['fleet'], listen: fakeListener().listen, orcaPlugin: orca.deps })
+    seen.host.watching!(true)
+    await vi.waitFor(() => expect(logs.filter(counted)).toEqual(['[device] orca plugin · orca · failed · folder']))
+    expect(logs.filter((line) => line.includes(dataDir) || line.includes('ENOTDIR'))).toEqual([])
+    expect(readSetup(dataDir).orca).toBeUndefined()
+  })
+
+  it('a throw there costs the dial nothing', async () => {
+    // Set up before at another version: without the throw, the start's pass would bring it current.
+    expect(writeSetup(dataDir, { dial: true, orca: '0.0.1', homes: { claude: [], codex: [] }, pluginHomes: [] })).toBeUndefined()
+    const orca = fakeOrcaPlugin({ installed: '0.0.1' })
+    // Its start pass follows the dial setup's, once Orca's homes are read.
+    await start({ faults: ['fleet', 'orcaPlugin'], listen: fakeListener().listen, orcaPlugin: orca.deps }).orcaHomes.landed()
+    expect(logs).toContain('[devices] orcaPlugin failed · Error')
+    await vi.waitFor(() => expect(calls('start')).toHaveLength(1))
+    await settled()
+    expect(orca.runs).toEqual([])
   })
 })
 
@@ -9089,7 +10769,7 @@ describe('Orca\'s ring follows Orca\'s tabs (docs/plans/2026-11-16-dial-orca-foc
     const { fake } = dialWith(2, { faults: ['orca'] })
     expect(await ring()).toEqual([agent(1), agent(2)])
     expect(fake.orders).toEqual([])
-    expect(logs).toContain('[devices] orca failed · injected fault: orca')
+    expect(logs).toContain('[devices] orca failed · Error')
   })
 
   it('an order read that throws as it is asked leaves the next change free to ask again', async () => {
@@ -9397,9 +11077,9 @@ describe('Orca\'s ring is the worktree on screen (docs/plans/2026-11-18-dial-orc
   it('a fault in the orca part costs the listener and the stream nothing', () => {
     const { listener } = withOrca(0, { faults: ['orca'] })
     const stream = listener.dial()
-    expect(logs).not.toContain('[devices] orca failed · injected fault: orca')
+    expect(logs).not.toContain('[devices] orca failed · Error')
     expect(listener.orcaFront([H(1)])).toBeUndefined()
-    expect(logs).toContain('[devices] orca failed · injected fault: orca')
+    expect(logs).toContain('[devices] orca failed · Error')
     expect(() => stream.end('gone')).not.toThrow()
     expect(frontLines()).toEqual([])
   })
@@ -9895,7 +11575,7 @@ describe('the dial follows the pane focused in Orca (docs/plans/2026-11-16-dial-
       port.observed(hook(1, { event: 'turn-start' }))
       expect(asked()).toEqual([[agent(1), 'prompt']])
       expect(fake.probes.count).toBe(0)
-      expect(logs).toContain('[devices] orca failed · injected fault: orca')
+      expect(logs).toContain('[devices] orca failed · Error')
     })
 
     it('no line holds a handle or an agent', async () => {

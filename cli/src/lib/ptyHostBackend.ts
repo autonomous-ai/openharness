@@ -24,6 +24,7 @@ import path from 'node:path'
 import { env } from '../config/env.js'
 import type { AgentEngine } from '../engines/types.js'
 import { harnessPaneOwner } from './harnessSessionLabel.js'
+import { errorKind } from './log.js'
 import { isHeldStartCommand } from './nativePaneHold.js'
 import { lookupPaneEngineProcess } from './paneEngineProcess.js'
 import { comparableStartMarker, processRows, setProcessTableSource, type ProcessRow } from './processTable.js'
@@ -440,7 +441,7 @@ export class PtyHostBackend implements TerminalBackend<PtyRuntimeRef> {
     void this.endTree(pid).then((outcome) => {
       if (outcome === 'failed') console.error(`[terminal] ptyhost: could not end pid ${pid} (${signal})`)
     }).catch((error: unknown) => {
-      console.error(`[terminal] ptyhost: could not ${signal} pid ${pid}: ${error instanceof Error ? error.message : String(error)}`)
+      console.error(`[terminal] ptyhost: could not ${signal} pid ${pid}: ${errorKind(error)}`)
     })
   }
 
@@ -457,7 +458,7 @@ export class PtyHostBackend implements TerminalBackend<PtyRuntimeRef> {
           deps.kill(target)
         } catch (error) {
           if (target !== pid && (error as NodeJS.ErrnoException).code !== 'ESRCH') {
-            console.error(`[terminal] ptyhost: could not end pid ${target}, under pid ${pid}: ${(error as Error).message}`)
+            console.error(`[terminal] ptyhost: could not end pid ${target}, under pid ${pid}: ${errorKind(error)}`)
           }
           throw error
         }

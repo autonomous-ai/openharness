@@ -128,17 +128,20 @@ export class AppRings {
     return { rows: this.rings.get(app)?.rows ?? [], total: this.sizes.get(app) ?? 0 }
   }
 
-  /** Each app's agents among these, and of those the ones whose app is known, by the page each is on. Counted from the
-   *  agents given, not the last update: the filter decides a settle or a pick between two list reads on the agents there
-   *  now. */
+  /** Each app's agents among these, of those the ones whose app is known (`inFront`), and of those the ones a process
+   *  runs (`known`), by the page each is on. Counted from the agents given, not the last update: the filter decides a
+   *  settle or a pick between two list reads on the agents there now. */
   counts(agents: readonly HostAgent[]): AppCounts {
     const all = new Map<string, number>()
     const known = new Map<string, number>()
+    const inFront = new Map<string, number>()
     for (const a of agents) {
       const app = pageOf(a)
       all.set(app, (all.get(app) ?? 0) + 1)
-      if (!a.appPending) known.set(app, (known.get(app) ?? 0) + 1)
+      if (a.appPending) continue
+      inFront.set(app, (inFront.get(app) ?? 0) + 1)
+      if (!a.resting) known.set(app, (known.get(app) ?? 0) + 1)
     }
-    return { all, known }
+    return { all, known, inFront }
   }
 }

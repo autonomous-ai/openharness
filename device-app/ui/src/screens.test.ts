@@ -25,7 +25,6 @@ const heading = () => page().querySelector('h1')?.textContent ?? null
 const text = () => page().textContent ?? ''
 const buttons = () => [...page().querySelectorAll('button')].map((b) => b.textContent)
 const spinner = () => page().querySelector('[role="status"]')
-const grants = () => [...page().querySelectorAll('li')].map((item) => item.textContent)
 
 function click(label: string): void {
   const button = [...page().querySelectorAll('button')].find((b) => b.textContent === label)
@@ -123,10 +122,25 @@ describe('screens', () => {
     expect(act).toHaveBeenCalledWith('retry')
   })
 
+  it('follow: Allow, Not now', async () => {
+    await mount(at('follow', 'offer'))
+    expect(heading()).toBe('Follow ChatGPT')
+    expect(text()).toContain(
+      "Your dial moves to the thread you open in ChatGPT. Harness reads only the ChatGPT window's title, while ChatGPT is in front.",
+    )
+    expect(buttons()).toEqual(['Not now', 'Allow'])
+    // Return takes Not now: the screen opens by itself.
+    expect(document.activeElement?.textContent).toBe('Not now')
+    click('Allow')
+    expect(act).toHaveBeenCalledWith('allow')
+    click('Not now')
+    expect(act).toHaveBeenCalledWith('later')
+  })
+
   it('a screen Rust no longer sends draws nothing', async () => {
     await mount(at('sign_in', 'offer'))
-    for (const screen of ['claude', 'codex']) {
-      push(at(screen as Screen, 'offer'))
+    for (const [screen, phase] of [['claude', 'offer'], ['codex', 'offer'], ['orca', 'approve']]) {
+      push(at(screen as Screen, phase as Phase))
       expect(page().childNodes).toHaveLength(0)
     }
   })
@@ -153,10 +167,7 @@ describe('screens', () => {
       ['sign_in', 'working', null],
       ['sign_in', 'browser', null],
       ['sign_in', 'failed', 'Retry'],
-      ['orca', 'asking', null],
-      ['orca', 'approve', 'Connect'],
-      ['orca', 'done', 'Done'],
-      ['orca', 'failed', null],
+      ['follow', 'offer', 'Allow'],
     ]
     await mount(null)
     for (const [screen, phase, label] of table) {
@@ -203,9 +214,15 @@ describe('screens', () => {
     push(at('sign_in', 'offer'))
     expect(alert()).toBeNull()
     expect(described()).toBe('Add your other computers to your device.')
+
+    push(at('follow', 'offer'))
+    expect(document.activeElement?.textContent).toBe('Not now')
+    expect(described()).toBe(
+      "Your dial moves to the thread you open in ChatGPT. Harness reads only the ChatGPT window's title, while ChatGPT is in front.",
+    )
   })
 
-  it('the primary button has the focus, and no other', async () => {
+  it('the primary button has the focus on every screen that has one but Follow ChatGPT, and no other button', async () => {
     await mount(at('sign_in', 'offer'))
     expect(document.activeElement?.textContent).toBe('Sign in')
 
@@ -217,103 +234,10 @@ describe('screens', () => {
     expect(document.activeElement?.textContent).not.toBe('Cancel')
     push(at('sign_in', 'browser', ['Harness is finishing an update']))
     expect(document.activeElement?.textContent).not.toBe('Cancel')
-  })
 
-  it('orca: asking, the grants, Connect, done', async () => {
-    await mount(at('orca', 'asking', ['Asking Orca…']))
-    expect(heading()).toBe('Connect Orca')
-    expect(spinner()).not.toBeNull()
-    expect(text()).toContain('Asking Orca…')
-    expect(buttons()).toEqual([])
-
-    push(at('orca', 'approve', ['Runs its own code.', 'Read your projects.']))
-    expect(heading()).toBe('Connect Orca')
-    expect(spinner()).toBeNull()
-    expect(text()).toContain('Orca will let Harness Device:')
-    expect(grants()).toEqual(['Runs its own code.', 'Read your projects.'])
-    expect(buttons()).toEqual(['Cancel', 'Connect'])
-    click('Connect')
-    expect(act).toHaveBeenCalledTimes(1)
-    expect(vi.mocked(act).mock.calls).toEqual([['connect_orca']])
-
-    push(at('orca', 'done'))
-    expect(heading()).toBe('Connect Orca')
-    expect(text()).toContain('Orca connected.')
-    expect(buttons()).toEqual(['Done'])
-    click('Done')
-    expect(act).toHaveBeenLastCalledWith('cancel')
-  })
-
-  it('orca: Cancel sends cancel', async () => {
-    await mount(at('orca', 'approve', ['Runs its own code.']))
-    click('Cancel')
-    expect(vi.mocked(act).mock.calls).toEqual([['cancel']])
-  })
-
-  it('orca: an update says so', async () => {
-    const update = (phase: Phase, lines: string[] = []): View => ({ ...at('orca', phase, lines), update: true })
-    await mount(update('asking', ['Asking Orca…']))
-    expect(heading()).toBe('Update Orca connection')
-
-    push(update('approve', ['Runs its own code.']))
-    expect(heading()).toBe('Update Orca connection')
-    expect(buttons()).toEqual(['Cancel', 'Update'])
-    click('Update')
-    expect(vi.mocked(act).mock.calls).toEqual([['connect_orca']])
-
-    push(update('done'))
-    expect(heading()).toBe('Update Orca connection')
-
-    push(update('failed', ["Couldn't connect Orca."]))
-    expect(heading()).toBe('Update Orca connection')
-  })
-
-  it('orca: a failure is one line and Close', async () => {
-    await mount(at('orca', 'failed', ["Orca isn't running."]))
-    expect(heading()).toBe('Connect Orca')
-    expect(page().querySelector('[role="alert"]')?.textContent).toBe("Orca isn't running.")
-    expect(page().querySelector('.error')?.textContent).toBe("Orca isn't running.")
-    expect(buttons()).toEqual(['Close'])
-    click('Close')
-    expect(vi.mocked(act).mock.calls).toEqual([['cancel']])
-  })
-
-  it('orca: no button has the focus', async () => {
-    await mount(null)
-    const phases: [Phase, string[]][] = [
-      ['asking', ['Asking Orca…']],
-      ['approve', ['Runs its own code.']],
-      ['done', []],
-      ['failed', ["Orca isn't running."]],
-    ]
-    for (const [phase, lines] of phases) {
-      push(at('orca', phase, lines))
-      expect([phase, document.activeElement?.tagName]).toEqual([phase, 'BODY'])
-    }
-  })
-
-  it('orca: the grants are drawn as text', async () => {
-    const outside = '<img src=x onerror=alert(1)>'
-    await mount(at('orca', 'approve', [outside]))
-    expect(page().querySelector('img')).toBeNull()
-    expect(grants()).toEqual([outside])
-  })
-
-  it('orca: ten lines of 300 characters are all in the list', async () => {
-    const lines = Array.from({ length: 10 }, (_, i) => `${i}`.padEnd(300, 'x'))
-    await mount(at('orca', 'approve', lines))
-    expect(grants()).toEqual(lines)
-  })
-
-  it('orca: the grants are the first Tab stop, and nothing has the focus', async () => {
-    const lines = Array.from({ length: 10 }, (_, i) => `${i}`.padEnd(300, 'x'))
-    await mount(at('orca', 'approve', lines))
-    // The arrow keys scroll the list before Tab reaches Cancel or Connect.
-    const stops = [...page().querySelectorAll<HTMLElement>('*')].filter((node) => node.tabIndex >= 0)
-    expect(stops.map((node) => node.tagName)).toEqual(['UL', 'BUTTON', 'BUTTON'])
-    expect(document.activeElement?.tagName).toBe('BODY')
-    const list = page().querySelector<HTMLElement>('ul')!
-    list.focus()
-    expect(document.activeElement).toBe(list)
+    // The offer opens by itself as the person switches to ChatGPT: a Return typed for ChatGPT must not press Allow.
+    push(at('follow', 'offer'))
+    expect(document.activeElement?.textContent).toBe('Not now')
+    expect(page().querySelector('.primary')?.textContent).toBe('Allow')
   })
 })

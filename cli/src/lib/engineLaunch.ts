@@ -34,6 +34,8 @@ import { shellSingleQuote } from './shellQuote.js'
 import { browserPrelude } from './browserShim.js'
 import { currentUserShell } from './userShell.js'
 import { harnessPaneOwner } from './harnessSessionLabel.js'
+import { errorKind } from './log.js'
+import { atomicWriteFile } from './secureState.js'
 
 export { shellSingleQuote }
 
@@ -534,7 +536,7 @@ export function zshNewUserGuard(environment: NodeJS.ProcessEnv = process.env): s
     const file = join(folder, '.zshenv')
     let current: string | null = null
     try { current = readFileSync(file, 'utf8') } catch { /* not written yet */ }
-    if (current !== ZSH_GUARD_ZSHENV) writeFileSync(file, ZSH_GUARD_ZSHENV, { mode: 0o600 })
+    if (current !== ZSH_GUARD_ZSHENV) atomicWriteFile(file, ZSH_GUARD_ZSHENV, 'cache')
   } catch {
     // A ZDOTDIR without its .zshenv would leave the person's own ZDOTDIR unrestored: launch as before.
     return []
@@ -580,6 +582,7 @@ function launchFile(content: (path: string) => string): string {
   mkdirSync(directory, { recursive: true, mode: 0o700 })
   sweepLaunchFiles(directory)
   const file = join(directory, `${randomUUID()}.sh`)
+  // not a state file: a fresh name, complete before tmux is started with it
   writeFileSync(file, content(file), { mode: 0o600 })
   return file
 }
@@ -1275,7 +1278,9 @@ const TYPICAL_INSTALL_SECONDS: Readonly<Record<string, number>> = { opencode: 10
 /** The progress shown while the installer's output streams into the log (argv: label, seconds, log, waiting). */
 const INSTALL_PROGRESS_JS = [
   'const fs=require("fs");const [label,sec,log,waiting]=process.argv.slice(1);const E=Number(sec)*1000;const t0=Date.now();',
+  // not a state file: the installer's log, appended as its output streams
   'const out=fs.openSync(log,"a");fs.writeSync(out,"\\n--- "+new Date().toISOString()+" installing "+label+"\\n");',
+  // not a state file: the same log
   'process.stdin.on("data",(d)=>fs.writeSync(out,d));',
   'const rows=waiting==="1"?3:2;let drawn=false;',
   'const draw=()=>{const t=Date.now()-t0;const f=Math.min(0.97,Math.max(0.04,1-1/(1+2.4*t/E)));const n=Math.round(f*24);',
@@ -1517,7 +1522,7 @@ export async function commandOutputInInteractiveShell(engine: AgentEngine, comma
       : windowsEngineArgv(engine, [command, ...args])
   } catch (error) {
     // A shim Windows will not run (lib/windows/launch.ts): the launch itself says why.
-    console.warn(`[engine] ${engine} ${args.join(' ')} not run · ${error instanceof Error ? error.message : error}`)
+    console.warn(`[engine] ${engine} ${args.join(' ')} not run · ${errorKind(error)}`)
     return null
   }
   const [file, ...argv] = run

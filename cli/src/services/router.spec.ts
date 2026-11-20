@@ -209,7 +209,7 @@ describe('the router', () => {
     expect(await startRouter(fakeCore(), made).route_decide!({ text: 'go', sessions: DESK }, OWNER))
       .toEqual({ error: 'JEV_UNAVAILABLE', detail: 'no OpenRouter key on this computer' })
     expect(lines).toEqual([
-      'jev could not answer: no OpenRouter key on this computer',
+      'jev could not answer: JevUnavailable NO_KEY',
       'nothing decided (no OpenRouter key on this computer) — 2 sessions',
     ])
     // A router with no Jev at all, with a log and without.

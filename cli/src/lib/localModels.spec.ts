@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest'
-import { mkdtemp, mkdir, writeFile, readFile, readdir, rm, stat, statfs, readlink } from 'node:fs/promises'
+import { chmod, mkdtemp, mkdir, writeFile, readFile, readdir, rm, stat, statfs, readlink } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { createHash } from 'node:crypto'
@@ -11,11 +11,27 @@ import { GridFleetRpc, type GridFleetResult } from './gridFleetRpc.js'
 import { AppStartError, type AppEngineOps, type AppEngineRecord, type AppModel } from './appModels.js'
 import { encryptDownFrame, encryptRpcResult } from './e2ee/applicationFrames.js'
 
+// Pass-through, recording what replaced a file and what was opened by name through fs/promises; `sync`: each rename's
+// target and each path opened through node:fs's synchronous calls, which a save that must not block its event loop never
+// makes.
+const disk = vi.hoisted(() => ({ renamed: [] as Array<[string, string]>, opened: [] as string[], sync: [] as string[] }))
 // The coverage audit needs real filesystem work with explicit disk/read faults at the I/O boundary.
 vi.mock('node:fs/promises', async (original) => {
   const fs = await original<typeof import('node:fs/promises')>()
-  return { ...fs, statfs: vi.fn(fs.statfs), readlink: vi.fn(fs.readlink) }
+  return { ...fs, statfs: vi.fn(fs.statfs), readlink: vi.fn(fs.readlink),
+    rename: (...args: Parameters<typeof fs.rename>) => { disk.renamed.push([String(args[0]), String(args[1])]); return fs.rename(...args) },
+    open: (...args: Parameters<typeof fs.open>) => { disk.opened.push(String(args[0])); return fs.open(...args) },
+  }
 })
+vi.mock('node:fs', async original => {
+  const actual = await original<typeof import('node:fs')>()
+  return { ...actual,
+    renameSync: (...args: Parameters<typeof actual.renameSync>) => { disk.sync.push(`rename ${String(args[1])}`); return actual.renameSync(...args) },
+    openSync: (...args: Parameters<typeof actual.openSync>) => { disk.sync.push(`open ${String(args[0])}`); return actual.openSync(...args) },
+  }
+})
+/** The synchronous writes of [file]: onto it, or of its temporary file. */
+const syncWrites = (file: string): string[] => disk.sync.filter(event => event === `rename ${file}` || event.startsWith(`open ${file}.`))
 
 const card = (id = 'org/Small-GGUF') => ({ repo_id: id, runnable: true, task: 'text-generation', format: 'GGUF',
   fit: { version: 'Q4', ctx: 131072, size: 64 },
@@ -430,6 +446,53 @@ describe('local model discovery and lifecycle', () => {
     // With no state folder yet, nothing is known.
     const blank = modelFixture({ stateDir: join(stateDir, 'none'), processEnv: { GRID_HOME: home }, run, request: request as typeof fetch, inventory })
     expect((await blank.list('team-grid')).models.map(m => m.id)).toEqual([])
+  })
+
+  it('a torn known-models file is set aside, not written over', async () => {
+    catalogCards = []; serving = true
+    await writeFile(join(home, 'models', 'Small-Q4.gguf'), Buffer.alloc(64))
+    await writeFile(join(records, 'remote.json'), JSON.stringify({ node_id: 'local-node', engines: [{ models: ['Small-Q4.gguf'] }] }))
+    await writeFile(join(records, 'remote.heartbeat'), '')
+    await mkdir(stateDir, { recursive: true })
+    const name = `${createHash('sha256').update('home').digest('hex').slice(0, 24)}.known.json`
+    const file = join(stateDir, name)
+    await writeFile(file, '[{"')
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    disk.renamed = []; disk.opened = []; disk.sync = []
+    expect((await service.list('home')).models.map(m => m.id)).toEqual(['local:Small-Q4.gguf'])
+    expect(await readFile(`${file}.unreadable`, 'utf8')).toBe('[{"')
+    expect(JSON.parse(await readFile(file, 'utf8')).map((c: { file: string }) => c.file)).toEqual(['Small-Q4.gguf'])
+    expect(warn).toHaveBeenCalledWith(`[state] ${name} could not be read (not valid JSON); kept as ${name}.unreadable, starting empty.`)
+    // And the save went through a temporary file renamed onto it.
+    expect(disk.renamed.filter(([, to]) => to === file).map(([from]) => from)).toEqual([expect.stringMatching(/\.tmp$/)])
+    expect(disk.opened).not.toContain(file)
+    expect(syncWrites(file)).toEqual([])
+  })
+
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('a known-models file this account cannot read is not written over', async () => {
+    catalogCards = []; serving = true
+    await writeFile(join(home, 'models', 'Small-Q4.gguf'), Buffer.alloc(64))
+    await writeFile(join(records, 'remote.json'), JSON.stringify({ node_id: 'local-node', engines: [{ models: ['Small-Q4.gguf'] }] }))
+    await writeFile(join(records, 'remote.heartbeat'), '')
+    await mkdir(stateDir, { recursive: true })
+    const file = join(stateDir, `${createHash('sha256').update('home').digest('hex').slice(0, 24)}.known.json`)
+    await writeFile(file, '[]')
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    await chmod(file, 0o000)
+    await service.list('home').catch(() => {})
+    await chmod(file, 0o600)
+    expect(await readFile(file, 'utf8')).toBe('[]')
+  })
+
+  it('the receipt\'s save goes through a temporary file renamed onto the target', async () => {
+    disk.renamed = []; disk.opened = []; disk.sync = []
+    await service.act('home', 'org/Small-GGUF', 'start'); await service.settled()
+    const file = join(stateDir, `${createHash('sha256').update('home').digest('hex').slice(0, 24)}.json`)
+    const saves = disk.renamed.filter(([, to]) => to === file).map(([from]) => from)
+    expect(saves.length).toBeGreaterThan(0)
+    expect(saves.every(from => from.startsWith(`${file}.`) && from.endsWith('.tmp'))).toBe(true)
+    expect(disk.opened).not.toContain(file)
+    expect(syncWrites(file)).toEqual([])
   })
 
   it('reuses an already downloaded fitting quant of the same model', async () => {
@@ -1894,6 +1957,17 @@ describe('models other apps downloaded, started in their own app', () => {
     expect(row).toMatchObject({ state: 'downloaded', canStart: true })
     expect(ops.stop).toHaveBeenCalledTimes(1)
     expect(joinedAliases.size).toBe(0)
+  })
+
+  it('the scan\'s save goes through a temporary file renamed onto the target', async () => {
+    const models = appService()
+    disk.renamed = []; disk.opened = []; disk.sync = []
+    await models.list('home'); await models.settled()
+    const file = join(stateDir, 'app-models.json')
+    expect(disk.renamed.filter(([, to]) => to === file).map(([from]) => from)).toEqual([expect.stringMatching(/\.tmp$/)])
+    expect(disk.renamed.find(([, to]) => to === file)![0].startsWith(`${file}.`)).toBe(true)
+    expect(disk.opened).not.toContain(file)
+    expect(syncWrites(file)).toEqual([])
   })
 
   it('settles a background app scan and its saved receipt before returning', async () => {

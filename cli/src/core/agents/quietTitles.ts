@@ -13,6 +13,7 @@
  * each edge waits for one more read: a title that came before the edge is judged by the stretch it came in. None is from the
  * turn that moved the edge: an engine titles a prompt with a model call, which takes longer than the read.
  */
+import { errorKind } from '../../lib/log.js'
 
 /** The most stretches kept: one is left by its agent's next turn or its end, and an end no path tells would keep it for good. */
 export const QUIET_STRETCHES_KEPT = 1_000
@@ -31,7 +32,7 @@ export function createQuietTitles(deps: QuietTitlesDeps) {
   /** Read the titles, then move [agentId]'s edge to what its turns say then; never inside the turn's start that called it. */
   const settle = (agentId: string): void => {
     void Promise.resolve().then(deps.read)
-      .catch((error: unknown) => { deps.log(`[terminal-title] read at a quiet edge failed · ${error instanceof Error ? error.message : String(error)}`) })
+      .catch((error: unknown) => { deps.log(`[terminal-title] read at a quiet edge failed · ${errorKind(error)}`) })
       .then(() => { if (said.has(agentId)) quiet.add(agentId); else quiet.delete(agentId) })
   }
   /** [agentId]'s stretch ends, if it is in one. */

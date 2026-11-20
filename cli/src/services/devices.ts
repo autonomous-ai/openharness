@@ -17,9 +17,9 @@
  * of its own: it rides the gateway's sessions, and borrows the dial's walk and stroke through the core.
  */
 import { randomUUID } from 'node:crypto'
-import { existsSync, writeFileSync } from 'node:fs'
+import { existsSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { dirname, isAbsolute, join } from 'node:path'
 import { env } from '../config/env.js'
 import { DEVICES_FALLBACKS, DEVICES_REQUESTS, type CoreApi, type CorePorts, type DeviceHookPort, type DevicesPort, type RouteAnswer, type SendResult, type ServiceRequests, type WindowFocus } from '../core/api.js'
 import { CableFleet, testDialDiscovery, type CableFleetOptions } from '../cable/cableFleet.js'
@@ -30,6 +30,8 @@ import { cableEventFor, cableStepFor, cableQuestionCloseFor, cableQuestionFor, D
 import { CableSession, SHOWN_ONLY_PREFIX, type DialStatus, type FollowCause } from '../cable/cableSession.js'
 import type { HostAdapter, Pane } from '../cable/hosts/adapter.js'
 import { createClaudeAppAdapter } from '../cable/hosts/claudeApp.js'
+import { ClaudeAppSource, type ClaudeAppSourceDeps } from '../cable/hosts/claudeAppSource.js'
+import { ClaudeAppStore } from '../cable/hosts/claudeAppStore.js'
 import { MANAGED_SETTINGS, readFullscreen } from '../cable/hosts/claudeRenderer.js'
 import { cmuxClientDeps, cmuxStoreDir, cmuxStores, createCmuxClient, type CmuxClient } from '../cable/hosts/cmuxCli.js'
 import { createCmuxAppAdapter } from '../cable/hosts/cmuxApp.js'
@@ -37,32 +39,40 @@ import { CmuxSource } from '../cable/hosts/cmuxSource.js'
 import { createCursorFolderAdapter, isFolder } from '../cable/hosts/cursorFolder.js'
 import { watchNearest } from '../cable/hosts/folderWatch.js'
 import { createCodexAppAdapter } from '../cable/hosts/codexApp.js'
+import { CodexAppSource, type CodexAppSourceDeps } from '../cable/hosts/codexAppSource.js'
+import { CodexAppThreads } from '../cable/hosts/codexAppThreads.js'
+import { APP_BUNDLES } from '../cable/hosts/hostDetect.js'
 import { codexQueueDeps, createCodexQueue, type CodexQueueDeps } from '../cable/hosts/codexQueue.js'
 import { createHcClient, hcClientDeps, hcPaneKey, hcSocketPath, type HcClient } from '../cable/hosts/hcClient.js'
 import { HcSource } from '../cable/hosts/hcSource.js'
 import { createHerdrAdapter } from '../cable/hosts/herdr.js'
 import { createHerdrAppAdapter } from '../cable/hosts/herdrApp.js'
 import { createHerdrClient, herdrClientDeps, type HerdrClient } from '../cable/hosts/herdrClient.js'
+import { createHerdrOuter, ttyAtime } from '../cable/hosts/herdrOuter.js'
 import { HerdrSource } from '../cable/hosts/herdrSource.js'
+import { createKittyAdapter, kittyFinder } from '../cable/hosts/kitty.js'
 import { Inbox } from '../cable/hosts/inbox.js'
 import { LAST_ANSWER_DEADLINE_MS, LAST_ANSWER_MAX_BYTES, readLastAnswer } from '../cable/hosts/lastAnswer.js'
+import { systemLinuxRaise, type LinuxRaise } from '../cable/hosts/linuxRaise.js'
 import { askedLine, countWord, hostDisplayName, observedAgentId, ObservedSource, type ObservedActions, type ObservedDeps, type PromptSource } from '../cable/hosts/observed.js'
 import { observedPlaces } from '../cable/hosts/observedPlaces.js'
 import { createOpenActions } from '../cable/hosts/open.js'
 import { createOpencodeClient, opencodeClientDeps, opencodeMessageId, type OpencodeClient } from '../cable/hosts/opencodeClient.js'
 import { OpencodeSource } from '../cable/hosts/opencodeSource.js'
 import { createOrcaAdapter, createOrcaReads, orcaDeps, type OrcaFocusWatch, type OrcaReadDeps, type OrcaReads, type OrcaTerminal } from '../cable/hosts/orca.js'
+import { firstOuter } from '../cable/hosts/outer.js'
 import { readRecord } from '../cable/hosts/record.js'
 import { HostRegistry, type HostEntry } from '../cable/hosts/registry.js'
-import { learnApps, readProcessNames } from '../cable/hosts/scannedApp.js'
+import { appRoots, learnApps, readBundleId, readProcessNames, readPtyOwner, readTtyName } from '../cable/hosts/scannedApp.js'
 import { createScrollLines } from '../cable/hosts/scrollLines.js'
 import { createTabsAdapter, readTty, type Tab } from '../cable/hosts/tabs.js'
-import { createTmuxAdapter } from '../cable/hosts/tmux.js'
+import { createTmuxAdapter, createTmuxOuter } from '../cable/hosts/tmux.js'
 import type { HostAgent, HostAgentState } from '../cable/hosts/types.js'
 import { watchSocket } from '../cable/hosts/unixSocket.js'
 import { createVscodeAdapter, termPid } from '../cable/hosts/vscode.js'
 import { readForeground, readProcessParents, vscodeStreams, type VscodeTerminalsDeps } from '../cable/hosts/vscodeTerminals.js'
 import { createWeztermAdapter } from '../cable/hosts/wezterm.js'
+import { createZellijAdapter, createZellijOuter, zellijFinder } from '../cable/hosts/zellij.js'
 import { createEngineTally } from '../cable/engineTally.js'
 import { createVscodeExtensionSetup } from '../cable/vscodeExtensionSetup.js'
 import { NoticeFile, NOTICES_FILE } from '../cable/noticeFile.js'
@@ -73,9 +83,12 @@ import { DialLog } from '../cable/dialLog.js'
 import { DialVerdicts } from '../cable/dialPortVerdicts.js'
 import { createDialSetup } from '../cable/dialSetup.js'
 import { claudeFound, type ClaudeRun } from '../devices/claudePlugin.js'
-import { readRemoved, SETUP_COUNTS } from '../devices/dialSkillFiles.js'
+import { readOrcaConnected, readRemoved, SETUP_COUNTS } from '../devices/dialSkillFiles.js'
 import { createOrcaHomesCache, orcaHomesDeps, readOrcaHomes, type OrcaHomesCache } from '../devices/orcaHomes.js'
-import { vscodeExtensionDeps, type VscodeExtensionDeps } from '../devices/vscodeExtension.js'
+import { orcaPluginRun, type OrcaPluginRun } from '../devices/orcaPlugin.js'
+import { createOrcaPluginSetup, orcaPluginParts } from '../cable/orcaPluginSetup.js'
+import { harnessPath } from '../config/harnessHome.js'
+import { cursorFolderCli, vscodeExtensionDeps, type VscodeExtensionDeps } from '../devices/vscodeExtension.js'
 import { WindowForm } from '../cable/windowForm.js'
 import { createWindowRouter } from '../cable/windowRoute.js'
 import { WindowSelection } from '../cable/windowSelection.js'
@@ -84,15 +97,17 @@ import { MachineListCache } from '../device/machineList.js'
 import type { NoticeAsk, NoticeResult } from '../lib/dialNotice.js'
 import { claudeProjectsRoots, codexHomeRoots, movedEngineHomes } from '../lib/engineHomes.js'
 import { harnessDevicesRequest } from '../lib/harnessDevices.js'
+import { errorKind } from '../lib/log.js'
 import { pidAlive } from '../lib/processProof.js'
 import { OpenSessions, SessionRows } from '../lib/sessionSearch/external.js'
 import { externalProviders } from '../lib/sessionSearch/externals/index.js'
 import { fileStamp, listProcesses, processAlive } from '../lib/sessionSearch/externals/support.js'
 import { setVoiceRouterDeviceConnected, setVoiceRouterSessions, shutdownVoiceRouter } from '../lib/voiceRouter.js'
 import { createTally, createTierDecider, type Tier, type TierDecision, type TierInput } from '../lib/notifyTier.js'
+import { tmuxFinder } from '../lib/binaryFinder.js'
 import { VERSION } from '../version.js'
 import { createPartGuard } from './devicesGuard.js'
-import { attachHandler, dialStream, frontHandler, noticeHandler, notifyHandler, orcaFrontHandler, tabHandler, tabsStream, type DevicesListener, type ListenerHandler, type ListenerStreamHandler } from './devicesListener.js'
+import { attachHandler, dialStream, frontHandler, noticeHandler, notifyHandler, orcaFrontHandler, tabHandler, tabsStream, threadHandler, type DevicesListener, type ListenerHandler, type ListenerStreamHandler } from './devicesListener.js'
 import { FLEET_FALLBACKS, startFleet, type Fleet } from './fleet.js'
 
 export { DEVICES_REQUESTS }
@@ -150,6 +165,13 @@ export interface DevicesDeps {
   cmux?: CmuxClient
   /** For this service's tests: opencode's service (cable/hosts/opencodeClient.ts). */
   opencode?: OpencodeClient
+  /** For this service's tests: the reader of the Claude app's store (cable/hosts/claudeAppStore.ts). */
+  claudeAppStore?: ClaudeAppSourceDeps['store']
+  /** For this service's tests: the reader of the ChatGPT app's threads (cable/hosts/codexAppThreads.ts). */
+  codexAppThreads?: CodexAppSourceDeps['threads']
+  /** For this service's tests: an app bundle's id from its Info.plist; `readBundleId` (cable/hosts/scannedApp.ts) by
+   *  default. */
+  bundleId?: (app: string) => Promise<string | undefined>
   /** Opens the devices' own listener with these handlers (services/devicesListener.ts). Given by the devices process
    *  alone: inside the core's process (`HARNESSD_SERVICES=none`, Harness OS) there is none, so the core's process opens
    *  no socket for the devices, and the dial follows no app in front there. */
@@ -179,6 +201,12 @@ export interface DevicesDeps {
   /** For this service's tests: how Cursor and Harness's extension in it are found and `cursor` is run; the real ones by
    *  default. */
   cursorExtension?: VscodeExtensionDeps
+  /** For this service's tests: Orca's CLI, the plugin's files and its folder; this computer's `orca` and
+   *  `harnessPath('orca-plugin', homedir())` when unset (devices/orcaPlugin.ts). */
+  orcaPlugin?: OrcaPluginRun & { folder: string }
+  /** For this service's tests: how a tap brings an agent's window forward on Linux; this login's desktop when unset
+   *  (cable/hosts/linuxRaise.ts systemLinuxRaise). */
+  raise?: LinuxRaise
 }
 
 /** ⌘K's answer while the fleet is not running: it never started, so there is no list to weigh. */
@@ -198,6 +226,7 @@ const FOLLOWED: Record<FollowCause | 'settle', Record<'moved' | 'no-tile', strin
   settle: { moved: '[device] settle · moved', 'no-tile': '[device] settle · skipped · no tile' },
   tab: { moved: '[device] tab · moved', 'no-tile': '[device] tab · skipped · no tile' },
   focus: { moved: '[device] focus · moved', 'no-tile': '[device] focus · skipped · no tile' },
+  thread: { moved: '[device] thread · moved', 'no-tile': '[device] thread · skipped · no tile' },
 }
 /** A tab app reports back each tab the dial selects, and Orca each pane it switches to: a report within this long of the
  *  dial's move there is that move's echo. Every move of that long is kept, as a fast swipe's late report for a place it
@@ -222,6 +251,16 @@ const LISTENER_WAIT_MS = 1_000
  *  the session it shows within about a second. Also how long any move of the dial sets the Claude app's settle aside. */
 const ATTACH_ECHO_MS = 2_000
 
+/** The uid owning the socket at [path], for kitty's: null when none is there, it is no socket, or on any error. */
+function socketOwner(path: string): number | null {
+  try {
+    const stat = statSync(path)
+    return stat.isSocket() ? stat.uid : null
+  } catch {
+    return null
+  }
+}
+
 /** Orca's account homes on this computer, read with its own `orca` (devices/orcaHomes.ts). */
 function orcaHomesCache(now: () => number, log: (line: string) => void): OrcaHomesCache {
   const system = orcaHomesDeps()
@@ -233,6 +272,7 @@ function orcaHomesCache(now: () => number, log: (line: string) => void): OrcaHom
 function observedSource(
   dataDir: string, log: (line: string) => void, orcaHomes: Pick<OrcaHomesCache, 'get'>, actions: ObservedActions,
   tty: ObservedDeps['tty'], scanned: ObservedDeps['scanned'], herdrTerminal: ObservedDeps['herdrTerminal'],
+  outer: ObservedDeps['outer'], ptyOwnerOf: ObservedDeps['ptyOwner'],
 ): ObservedSource {
   // Worked out at each read: a home the person moved is adopted while the daemon runs, and Orca's follow its last read.
   const places = observedPlaces({
@@ -257,11 +297,13 @@ function observedSource(
     log,
     actions,
     apps: learnApps,
+    ptyOwner: ptyOwnerOf,
     // Asked for Claude Code's sessions alone (observed.ts), and read only inside its own records folders.
     record: (owner) => readRecord(owner, { records: places.claude.records() }),
     tty,
     scanned,
     herdrTerminal,
+    outer,
   })
 }
 
@@ -374,9 +416,14 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   /** Where herdr's socket is, from the daemon's own environment: the client reads it, and the herdr source watches for it. */
   const herdrAt = herdrClientDeps()
   const herdrClient = deps.herdr ?? createHerdrClient(herdrAt)
-  const herdrAdapter = createHerdrAdapter({ ...apps, client: herdrClient })
+  const herdrAdapter = createHerdrAdapter({ ...apps, client: herdrClient, front: () => cableHost.latestFront() })
   /** `HARNESS_OPEN_BIN`: the end-to-end tests' fake `open`, run for each `open -b` (cable/hosts/open.ts). */
   const openBin = process.env.HARNESS_OPEN_BIN
+  /** `HARNESS_APPLICATIONS_DIR`, an absolute path alone: where the ChatGPT app is looked for in place of /Applications.
+   *  /Applications is the computer's whatever the home, so the end-to-end harness points it inside the daemon's root, as
+   *  it does `HARNESS_CODEX_APP_BIN` (cable/hosts/codexQueue.ts). */
+  const appsDir = process.env.HARNESS_APPLICATIONS_DIR
+  const chatGptApps = [join(appsDir && isAbsolute(appsDir) ? appsDir : '/Applications', 'ChatGPT.app'), join(homedir(), 'Applications', 'ChatGPT.app')]
   /** Where Herdr Core's socket is, from the daemon's own environment: the client reads it, and the hc source watches for
    *  it. */
   const hcAt = hcClientDeps()
@@ -396,10 +443,13 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   const cmuxClient = deps.cmux ?? createCmuxClient({ ...cmuxClientDeps(), platform: apps.platform })
   /** cmux is installed, as the last attach found it: only then are a hooked agent's words offered to it. */
   let cmuxFound = false
+  /** The looks for the ChatGPT app, one each attach and detach: a look that lands after a newer one began starts nothing. */
+  let codexAppLooks = 0
   const cmuxApp = createCmuxAppAdapter({ ...apps, client: cmuxClient, bin: openBin, found: () => cmuxFound,
     inFront: () => cableHost.latestFront() === 'cmux', kindAt: (surface) => cmuxSource?.kindAt(surface) })
   const cmuxPane = (pane: string): Pane => ({ adapter: cmuxApp.id, id: pane })
   const claude = createClaudeAppAdapter({ ...apps, bin: openBin, inFront: () => cableHost.latestFront() === 'claude' })
+  const claudePane = (localId: string): Pane => ({ adapter: claude.id, id: localId })
   // Harness's own Codex home, whose config `codex queue` loads; run from the home folder, so no project's .codex/ is read.
   const codexQueue = createCodexQueue({ ...(deps.codex ?? codexQueueDeps()), home: env.CODEX_HOME, cwd: homedir() })
   // The stream a watch holds open on the devices' listener: a rest or a tap on an agent in Terminal, iTerm2 or Ghostty
@@ -444,6 +494,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
         if (found >= 0) kept = kept.slice(found + 1)
         return found >= 0
       },
+      /** Whether a move made within TAB_ECHO_MS before `at` is not yet seen: the app can still report what it had. */
+      unseen(at: number): boolean { return kept.some((sent) => at - sent.at < TAB_ECHO_MS) },
       clear(): void { kept = [] },
     }
   }
@@ -475,6 +527,18 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   const herdrAppNoted = noting(herdrApp)
   /** cmux's adapter as the dial's verbs reach it: a tap or a rest on an agent cmux lists (below) is the dial's own move. */
   const cmuxAppNoted = noting(cmuxApp)
+  /** The Claude app's adapter as the dial's verbs reach it, a hooked agent's and a store row's alike: a rest's continue
+   *  link is the dial's own move, and the app's attach that follows is its echo. */
+  const claudeNoted = noting({ ...claude, show: (pane, agentId) => { noteLink(agentId); return claude.show(pane, agentId) } })
+  const codexApp = createCodexAppAdapter({ ...apps, bin: openBin, inFront: () => cableHost.latestFront() === 'codex', log })
+  /** The ChatGPT app threads the dial opened lately, by id. */
+  const codexSwitches = dialMovesTo()
+  /** The ChatGPT app's adapter as the dial's verbs reach it: a rest or a tap opens the thread's link, and the app's
+   *  window then shows that thread's title, whose report is the dial's own echo. */
+  const codexNoted = noting({ ...codexApp,
+    show: (pane, agentId) => { codexSwitches.note(pane.id); return codexApp.show(pane, agentId) },
+    focus: (pane) => { codexSwitches.note(pane.id); return codexApp.focus(pane) } })
+  const codexPane = (threadId: string): Pane => ({ adapter: codexApp.id, id: threadId })
   /** Each Orca terminal's worktree, by handle, from the latest layout read that landed (below): a rest's or a tap's
    *  switch activates it first. */
   let orcaWorktrees: ReadonlyMap<string, string> = new Map()
@@ -482,24 +546,31 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
    *  The nearest host first: a multiplexer keeps the environment it started in, so in a tmux pane WezTerm's and Orca's
    *  values name the terminal the tmux server began in, and herdr inside tmux carries tmux's pane. Herdr and cmux come
    *  after tmux, as a tmux inside their terminal is the nearer host, and before the terminals: each tells its programs
-   *  they run in Ghostty, whose tabs hold none of them. */
-  const tmux = noting(createTmuxAdapter({ run: apps.run, processes: readProcessNames, log }))
+   *  they run in Ghostty, whose tabs hold none of them. Zellij is a multiplexer as tmux is, and kitty a terminal as
+   *  WezTerm is. */
+  // One lookup of tmux and one of zellij, each for the tap, the words and the client lookup (the outer lookups, below).
+  const tmuxAt = tmuxFinder()
+  const zellijAt = zellijFinder()
+  const tmux = noting(createTmuxAdapter({ run: apps.run, tmux: tmuxAt, processes: readProcessNames, log, front: () => cableHost.latestFront() }))
   const orca = createOrcaAdapter(apps, { worktreeOf: (handle) => orcaWorktrees.get(handle), log, switching: (handle) => orcaSwitches.note(handle) })
-  const adapters: readonly HostAdapter[] = [herdrNoted, tmux, herdrAppNoted, cmuxAppNoted, ...[
+  // Cursor as found here: its folder window's tap on Linux (below) and its extension's setup run the same `cursor`.
+  const cursorExtension = deps.cursorExtension ?? vscodeExtensionDeps('cursor', process.env.HARNESS_CURSOR_BIN)
+  // Linux's way to bring a window forward, where macOS runs `open -b` (docs/plans/2026-11-19-dial-linux-design.md § 2).
+  const raise = deps.raise ?? (apps.platform === 'linux' ? systemLinuxRaise(apps, log) : undefined)
+  const adapters: readonly HostAdapter[] = [herdrNoted, noting(createZellijAdapter({ run: apps.run, zellij: zellijAt, platform: apps.platform })),
+    tmux, herdrAppNoted, cmuxAppNoted, ...[
+    createKittyAdapter({ run: apps.run, kitty: kittyFinder(), platform: apps.platform, log, uid: process.getuid?.() ?? -1, socketOwner }),
     createWeztermAdapter(apps),
     // A rest's or a tap's switch: Orca's focus line for that pane, a moment later, is the dial's own echo.
     { ...orca,
       show: (pane: Pane, agentId: string) => { orcaSwitches.note(pane.id); return orca.show(pane, agentId) },
       focus: (pane: Pane) => { orcaSwitches.note(pane.id); return orca.focus(pane) } },
-    // A rest's continue link: the app's attach that follows is the dial's own echo.
-    { ...claude, show: (pane: Pane, agentId: string) => { noteLink(agentId); return claude.show(pane, agentId) } },
-    // No echo to guard: the Codex app sends no attach for the follow to take as a person's.
-    createCodexAppAdapter({ ...apps, bin: openBin, inFront: () => cableHost.latestFront() === 'codex', log }),
+  ].map(noting), claudeNoted, codexNoted, ...[
     // No echo to guard: VS Code sends no attach for the follow to take as a person's.
-    createVscodeAdapter('vscode', { ...apps, bin: openBin, inFront: () => cableHost.latestFront() === 'vscode', terminals: vscode }),
-    createVscodeAdapter('cursor', { ...apps, bin: openBin, inFront: () => cableHost.latestFront() === 'cursor', terminals: vscode }),
+    createVscodeAdapter('vscode', { ...apps, bin: openBin, inFront: () => cableHost.latestFront() === 'vscode', terminals: vscode, raise: raise && ((window) => raise.raise(window)) }),
+    createVscodeAdapter('cursor', { ...apps, bin: openBin, inFront: () => cableHost.latestFront() === 'cursor', terminals: vscode, raise: raise && ((window) => raise.raise(window)) }),
     // After Cursor's terminals and tabs: whatever agent in Cursor they do not reach opens its folder's window.
-    createCursorFolderAdapter({ run: apps.run, platform: apps.platform, bin: openBin, isFolder }),
+    createCursorFolderAdapter({ run: apps.run, platform: apps.platform, bin: openBin, isFolder, cli: () => cursorFolderCli(cursorExtension) }),
     createTabsAdapter({
       isOpen: () => tabs.isOpen(),
       select: (tab, raise) => {
@@ -509,12 +580,14 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       },
     }),
   ].map(noting)]
-  const opener = createOpenActions({ run: apps.run, platform: apps.platform, adapters, log, bin: openBin,
-    // herdr's ring is Herdr.app's window's while it holds an agent there: one hc lists, or a hooked agent with a pane
-    // of Herdr's (herdrApp.ts paneOf). herdr 0.8.0's agents have none. Only this process's own lists are read, which
-    // the pick read a moment before: it never throws, and a pick's bring has no catch.
+  const opener = createOpenActions({ run: apps.run, platform: apps.platform, adapters, log, bin: openBin, raise,
+    windowOf: (agentId) => observed?.windowOf(agentId),
+    // herdr's ring is Herdr.app's window's while it holds an agent there: one hc lists, or a live hooked agent with a pane
+    // of Herdr's (herdrApp.ts paneOf); an ended one's terminal holds a shell now. herdr 0.8.0's agents have none. Only
+    // this process's own lists are read, which the pick read a moment before: it never throws, and a pick's bring has no
+    // catch.
     herdrApp: () => !!hcSource?.list().length
-      || !!observed?.list().some(({ paneKeys }) => paneKeys?.some((key) => key.startsWith(hcPaneKey('')))) })
+      || !!observed?.list().some(({ paneKeys, ended }) => !ended && paneKeys?.some((key) => key.startsWith(hcPaneKey('')))) })
   const bring = opener.bring
   /** The route or the refusal of the dial's words, and why a queue failed: never the words, the session, the terminal or a
    *  path. */
@@ -567,13 +640,32 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     count: (kind, reason) => extensionCount('vscode', kind, reason),
   }) : null
   const cursorSetup = skill ? createVscodeExtensionSetup({
-    vscode: deps.cursorExtension ?? vscodeExtensionDeps('cursor', process.env.HARNESS_CURSOR_BIN),
+    vscode: cursorExtension,
     removed: () => readRemoved(core.dataDir),
     recorded: () => skill.cursor(),
     record: (version) => skill.recordCursor(version),
     after: timerIn('cursorExtension'),
     count: (kind, reason) => extensionCount('cursor', kind, reason),
   }) : null
+  // Harness Device's plugin for Orca, set up once a dial has attached here (cable/orcaPluginSetup.ts), in the devices'
+  // own process alone, as the editors': inside the core's there is no listener for the plugin to talk to. A part of its
+  // own, so a throw in Orca's CLI is never the dial's. `err` says nothing: a folder not written is counted `folder`, and
+  // its error's code is never logged. `HARNESS_ORCA_APP_BIN`: the end-to-end tests' Orca (devices/orcaHomes.ts).
+  const orcaCount = createEngineTally('[device] orca plugin', ['orca'], SETUP_COUNTS, log)
+  const orcaSetup = skill ? createOrcaPluginSetup({
+    ...orcaPluginParts({ ...(deps.orcaPlugin ?? { ...orcaPluginRun(), folder: harnessPath('orca-plugin', homedir()) }), dataDir: core.dataDir, err: () => {} }),
+    removed: () => readRemoved(core.dataDir),
+    connected: () => readOrcaConnected(core.dataDir),
+    recorded: () => skill.orca(),
+    record: (version) => skill.recordOrca(version),
+    recordHeld: (version) => skill.recordOrcaHeld(version),
+    after: timerIn('orcaPlugin'),
+    count: (kind, reason) => orcaCount('orca', kind, reason),
+  }) : null
+  /** What the lookups of an agent nested in the person's herdr, tmux or Zellij read: the table, the apps and their bundle
+   *  ids. */
+  const outerDeps = { run: apps.run, processes: readProcessNames, log, now: monotonic, platform: apps.platform,
+    roots: appRoots(homedir()), bundleId: readBundleId }
   const observed = env.HARNESS_DEVICE_OBSERVED ? observedSource(core.dataDir, log, orcaHomes, {
     adapters,
     modReady: (sessionId) => inbox.ready(sessionId),
@@ -592,7 +684,15 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   }, ttyOf, skill ? (owners) => part.call('skill', () => skill.scanned(owners.values())) : undefined,
   // Only where a hook's address is taken: following another hc session, Herdr's adapter gives its terminals no pane, so
   // a session paired there would be listed twice on Herdr's page.
-  hookIds ? (pid): string | undefined => hcSource?.terminalOf(pid) : undefined) : null
+  hookIds ? (pid): string | undefined => hcSource?.terminalOf(pid) : undefined,
+  // An agent in a pane of the person's herdr, tmux or Zellij is on the page of the app holding the client that shows
+  // it: each lookup answers nothing at once for an agent in none of its panes. herdr's first: herdr inside the person's
+  // tmux is the nearer host, and keeps tmux's answer when herdr's finds no app. Zellij's last: a Zellij server started
+  // in a tmux pane gives its panes that pane's TMUX_PANE, where tmux's finds no app.
+  firstOuter(createHerdrOuter({ ...outerDeps, atime: ttyAtime }), firstOuter(createTmuxOuter({ ...outerDeps, tmux: tmuxAt }),
+    createZellijOuter({ ...outerDeps, zellij: zellijAt, tty: readTtyName }))),
+  // Windows has no `ps`: there no terminal's pane is read as the agent's own, and none takes its words.
+  apps.platform === 'win32' ? undefined : async (pid) => readPtyOwner(pid, await readProcessNames(), readTtyName)) : null
   // Orca is asked only for the parts that use its homes, the first time as the devices start: the start pass waits for
   // that read (at most its 5 s), so an Orca home gets the skill with the default one.
   if (skill || observed) void orcaHomes.refresh().then(() => {
@@ -601,6 +701,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     // cursor()).
     if (vscodeSetup && !stopped) part.call('vscodeExtension', () => vscodeSetup.pass())
     if (cursorSetup && !stopped) part.call('cursorExtension', () => cursorSetup.pass())
+    if (orcaSetup && !stopped) part.call('orcaPlugin', () => orcaSetup.pass())
   })
   /** An open scan, once Orca's homes are read again where the last read is old (at most its 5 s): a session in an account
    *  added since is found by this scan. */
@@ -703,6 +804,55 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     log,
     count: voiced,
   }) : null
+  /** The Claude app's store, in the person's home: the app's own folder, not a Harness path. */
+  const claudeAppRoot = join(homedir(), 'Library', 'Application Support', 'Claude', 'claude-code-sessions')
+  /** The Claude app's Code sessions, with or without a process, listed from its store when a file of it changes
+   *  (docs/plans/2026-11-19-dial-claude-app-sessions-design.md). It runs only while a dial is attached, behind the
+   *  observed agents' switch, on macOS alone, where the app runs. A session with a process is the observed source's
+   *  copy, which holds its row while it runs (registry.ts). */
+  const claudeAppSource = observed && apps.platform === 'darwin' ? new ClaudeAppSource({
+    store: deps.claudeAppStore ?? new ClaudeAppStore(claudeAppRoot),
+    root: claudeAppRoot,
+    watch: (folders, changed) => watchNearest(folders, changed),
+    after: timerIn('claude-app'),
+    // Through the opener, as a hooked agent's tap: noted before it, and its attach the link's echo.
+    focus: (localId, agentId) => {
+      noteMove()
+      noteLink(agentId)
+      return opener.open(agentId, { bundle: APP_BUNDLES.claude, pane: claudePane(localId) })
+    },
+    canShow: (localId) => claude.canShow(claudePane(localId)),
+    // The noted copy keeps the show the Claude app's adapter has.
+    show: (localId, agentId) => claudeNoted.show!(claudePane(localId), agentId),
+    monotonic,
+    log,
+  }) : null
+  /** The ChatGPT app's own Codex home, in the person's home: the app's, not the `CODEX_HOME` Harness runs Codex under. */
+  const codexAppHome = join(homedir(), '.codex')
+  /** The ChatGPT app's Codex threads, with or without a process, listed from its metadata when a file of it changes, in
+   *  its sidebar's order (docs/plans/2026-11-19-dial-chatgpt-ring-and-follow-design.md). It runs only while a dial is
+   *  attached, behind the observed agents' switch, on macOS alone, and only with the ChatGPT app installed
+   *  (dialAttached). A thread with a process is the observed source's copy, which holds its row while it runs
+   *  (registry.ts). */
+  const codexAppSource = observed && apps.platform === 'darwin' ? new CodexAppSource({
+    threads: deps.codexAppThreads ?? new CodexAppThreads(codexAppHome),
+    watch: (changed) => watchNearest([codexAppHome], changed),
+    after: timerIn('codex-app'),
+    // Through the opener, as a hooked agent's tap. The noted adapter notes the dial's move, once.
+    focus: (threadId, agentId) => opener.open(agentId, { bundle: APP_BUNDLES.codex, pane: codexPane(threadId) }),
+    canShow: (threadId) => codexApp.canShow(codexPane(threadId)),
+    // The noted copy keeps the show the ChatGPT app's adapter has.
+    show: (threadId, agentId) => codexNoted.show!(codexPane(threadId), agentId),
+    rank: (rank) => cableHost.setRank('codex', rank),
+    monotonic,
+    log,
+  }) : null
+  const bundleId = deps.bundleId ?? readBundleId
+  /** Whether the ChatGPT app is installed: the first of its places whose bundle has the app's id. */
+  const chatGptInstalled = async (): Promise<boolean> => {
+    for (const app of chatGptApps) if (await bundleId(app) === APP_BUNDLES.codex) return true
+    return false
+  }
   /** The ones the dial lists, each with its source: the merged list's, not each source's own, as a copy a stronger source
    *  also holds (a Harness agent's session, a hooked agent's pane) is that one's row and must get no second card. */
   const outsideEntries = (): HostEntry[] => registry.entries().filter((entry) => entry.source !== cableHost.harness)
@@ -879,6 +1029,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       if (on && skill) part.call('skill', () => skill.attached())
       if (on && vscodeSetup) part.call('vscodeExtension', () => vscodeSetup.pass())
       if (on && cursorSetup) part.call('cursorExtension', () => cursorSetup.pass())
+      if (on && orcaSetup) part.call('orcaPlugin', () => orcaSetup.pass())
       dialAttached(on)
       part.call('dialStream', () => dial.attached(on))
     },
@@ -964,10 +1115,14 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     appSettled: (app) => {
       if (app === 'claude') part.call('dial', claudeSettled)
       if (app === 'orca' && observed) part.call('orca', () => orcaSettled(observed))
+      // Orca is often not running at the start or the attach: its coming to the front is the pass's next chance.
+      if (app === 'orca' && orcaSetup) part.call('orcaPlugin', () => orcaSetup.pass())
       part.call('dial', () => tabSettled(app))
+      part.call('dial', () => threadSettled(app))
     },
     appPicked: () => log('[device] app filter: picker'),
-    // A pick on the dial brings its app to the front, on macOS only (docs/plans/2026-11-16-dial-pick-brings-app-design.md).
+    // A pick on the dial brings its app to the front, on macOS and, through the raise, on Linux
+    // (docs/plans/2026-11-16-dial-pick-brings-app-design.md).
     // A measure: the outcome, never the app; a pick with nothing to bring, or replaced by a later one, ran nothing.
     appBrought: bring && ((app) => {
       void bring(app).then((outcome) => { if (outcome) log(`[device] app filter: bring · ${outcome}`) })
@@ -993,7 +1148,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   })
   // What the dial lists with no window, or with one in the apps view: this computer's harness agents, and the ones outside
   // a pane unless switched off.
-  const registry = new HostRegistry([cableHost.harness, observed, herdr, hcSource, cmuxSource, opencode].filter((source) => source !== null))
+  const registry = new HostRegistry([cableHost.harness, observed, herdr, hcSource, cmuxSource, opencode, claudeAppSource, codexAppSource].filter((source) => source !== null))
   cableHost.setRegistry(registry)
   // The dial's log lives with the app's, one file a day (dialLog.ts). The old unbounded `dial.log` in the
   // data folder is cut down to a pointer, for anyone with a bookmark.
@@ -1343,6 +1498,9 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     for (const entry of entries) {
       const { agent } = entry
       const was = told.get(agent.id)
+      // A resting row (the Claude app's store) says nothing and keeps the record of the copy before it: the app resumes a
+      // session moments after it ended its process, and the hooked copy's done, told once, is not told again.
+      if (agent.resting && was) continue
       const card = { agentId: agent.id, text: '', recap: '', subagent: false }
       // A wait whose line changed is told again.
       const line = waiting(entry)
@@ -1380,6 +1538,11 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   hcSource?.onChange(() => part.call('dial', outsideTurn))
   cmuxSource?.onChange(() => part.call('dial', outsideTurn))
   opencode?.onChange(() => part.call('dial', outsideTurn))
+  claudeAppSource?.onChange(() => part.call('dial', outsideTurn))
+  // Before the dial's look, so a hooked copy of a listed thread is named as the app names it; setPaneNames tells only a
+  // change. No thread is placed at the app's pane: a terminal thread's tap stays its terminal's.
+  codexAppSource?.onChange(() => part.call('codex-app', () => observed!.setPaneNames('codex', codexAppSource.paneNames(), new Map())))
+  codexAppSource?.onChange(() => part.call('dial', outsideTurn))
   /** One of the observed source's timers, each run guarded as a notice is: one that throws is logged and the next runs. */
   const every = (ms: number, run: () => unknown): ReturnType<typeof setInterval> => {
     const timer = setInterval(() => part.call('observed', run), ms)
@@ -1639,7 +1802,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     log('[device] orca watch · ended')
   }
 
-  /** The scan, the reminders, herdr's and Herdr Core's sockets, and opencode's service, for an attached dial alone. */
+  /** The scan, the reminders, herdr's and Herdr Core's sockets, opencode's service, the Claude app's store and the ChatGPT
+   *  app's metadata, for an attached dial alone. */
   let attached: ReturnType<typeof setInterval>[] = []
   const dialAttached = (on: boolean): void => {
     dialOn = on
@@ -1666,6 +1830,18 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       return cmuxFound ? cmuxSource.start() : cmuxSource.stop()
     })
     part.call('opencode', () => on ? opencode.start() : opencode.stop())
+    if (claudeAppSource) part.call('claude-app', () => on ? claudeAppSource.start() : claudeAppSource.stop())
+    // Only with the ChatGPT app installed, looked for at each attach as cmux is: a Mac with Codex CLI alone gets no ChatGPT
+    // page of threads a tap cannot open. A look that lands after the dial went, or after a newer attach's look began,
+    // starts nothing.
+    if (codexAppSource) part.call('codex-app', () => {
+      const look = ++codexAppLooks
+      if (!on) return codexAppSource.stop()
+      return chatGptInstalled().then((found) => {
+        if (look !== codexAppLooks) return
+        return found ? codexAppSource.start() : codexAppSource.stop()
+      })
+    })
     if (!on) {
       // The next attach checks Orca's ring afresh, and a read under way lands on nothing.
       orcaRing = { again: false }
@@ -1725,6 +1901,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     front: frontHandler((app) => part.call('dial', () => cableHost.front(app))),
     attach: attachHandler((sessionId) => part.call('dial', () => claudeAttached(sessionId))),
     tab: tabHandler((tab) => part.call('dial', () => tabReported(tab))),
+    thread: threadHandler((title) => part.call('dial', () => threadReported(title))),
     tabs: tabs.handler,
     dial: dial.handler,
     orcaFront: orcaFrontHandler(() => dial.isOpen(), (terminals) => part.call('orca', () => orcaFronted(terminals))),
@@ -1747,7 +1924,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       if (listenerOpen && revision > 0) sayStatus(cableHost.currentDialStatus())
       return listener
     })
-    .catch((): null => { log('[devices] listener not opened · failed'); return null })
+    .catch((error: unknown): null => { log(`[devices] listener not opened · ${errorKind(error)}`); return null })
 
   let stopped = false
   if (deps.cableDisabled) log('[cable] disabled (CABLE_DISABLE=true) — the serial port is left alone')
@@ -1924,6 +2101,51 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     tabReport = undefined
     if (cable.isConnected) log('[device] tab · skipped · not in front')
   }
+  /**
+   * A thread opened in the ChatGPT app turns the dials to it as a selected tab does, once the app has settled in front
+   * (docs/plans/2026-11-20-dial-chatgpt-follow-ax-design.md, "The devices process"): Harness Device reports the title of
+   * the app's window, matched here to Codex's name of one of its threads. Each line is an outcome, never the title, a
+   * name or the thread.
+   */
+  /** A thread report: the title, when it came and how many moves the dial had made by then. Held in memory only. */
+  type ThreadReport = { title: string; at: number; moves: number }
+  let threadReport: ThreadReport | undefined
+  /** Uses up the report: with no dial linked nothing is followed or counted, as with a prompt. The match, which reads
+   *  Codex's names of up to 200 threads, runs only for a report neither the dial's move since nor the settle's echo
+   *  drops: the dial's own switches are told by the thread it names, so they are checked after it. */
+  const followThread = (report: ThreadReport, atSettle: boolean): Promise<void> | undefined => {
+    threadReport = undefined
+    if (!cable.isConnected) return
+    if (report.moves !== dialMoves) { log('[device] thread · skipped · echo'); return }
+    // A tap brings the app forward, and its window can still show the thread it had: the settle's echo, as the Claude
+    // app's settle has.
+    if (atSettle && dialMovedAt !== undefined && monotonic() - dialMovedAt < ATTACH_ECHO_MS) { log('[device] thread · skipped · echo'); return }
+    // Off macOS there is no source, and no thread to name.
+    const match = codexAppSource?.threadNamed(report.title) ?? 'none'
+    if (match === 'none') { log('[device] thread · skipped · no match'); return }
+    if (match === 'ambiguous') { log('[device] thread · skipped · ambiguous'); return }
+    // By when the report came, as a tab's: it excuses this report only. While the dial's own switch is not yet seen,
+    // another thread is the window's old title read late: followed, it would take the switch's title for its echo.
+    if (codexSwitches.echo(match.threadId, report.at) || codexSwitches.unseen(report.at)) {
+      log('[device] thread · skipped · echo')
+      return
+    }
+    return cable.followLocal(observedAgentId('codex', match.threadId), 'thread')
+  }
+  /** The empty title, no window or one out of rule, names no thread: it drops what waits. */
+  const threadReported = (title: string): Promise<void> | undefined => {
+    threadReport = undefined
+    if (title === '') return
+    const report = { title, at: monotonic(), moves: dialMoves }
+    if (cableHost.settledApp() === 'codex') return followThread(report, false)
+    threadReport = report
+  }
+  const threadSettled = (app: string): Promise<void> | undefined => {
+    if (!threadReport) return
+    if (app === 'codex') return followThread(threadReport, true)
+    threadReport = undefined
+    if (cable.isConnected) log('[device] thread · skipped · not in front')
+  }
   const port: DevicesPort = {
     // A paneless session's hook event, as the core checked it: taken, and dropped here while the observed source is
     // switched off.
@@ -2032,6 +2254,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       for (const timer of pending) clearTimeout(timer)
       tabReport = undefined
       selects.clear()
+      threadReport = undefined
+      codexSwitches.clear()
       endHookCalls()
       dialAttached(false)
       await cable.stop()

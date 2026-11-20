@@ -232,7 +232,7 @@ class DevicesController extends ChangeNotifier {
 
   void _sync() {
     if (_disposed || !loaded) return;
-    final before = jsonEncode(_devices.values.map((d) => d.toJson()).toList());
+    final before = _library();
     final seen = <String>{};
     final sources =
         hosts?.hosts ??
@@ -349,7 +349,7 @@ class DevicesController extends ChangeNotifier {
         _finish(key, 'Device disconnected. Reconnect to change its settings.');
       }
     }
-    final after = jsonEncode(_devices.values.map((d) => d.toJson()).toList());
+    final after = _library();
     if (before != after) _save(after);
     notifyListeners();
   }
@@ -361,9 +361,18 @@ class DevicesController extends ChangeNotifier {
       return;
     }
     _devices[key] = device.copyWith(name: clean, model: model);
-    _save(jsonEncode(_devices.values.map((d) => d.toJson()).toList()));
+    _save(_library());
     notifyListeners();
   }
+
+  /// What is saved: a device that has never greeted with a MAC is any USB
+  /// board the daemon could not open, not a dial, so it is shown only live.
+  String _library() => jsonEncode(
+    _devices.values
+        .where((d) => d.status.mac != null)
+        .map((d) => d.toJson())
+        .toList(),
+  );
 
   void _save(String encoded) {
     final store = storage;
@@ -389,7 +398,7 @@ class DevicesController extends ChangeNotifier {
       await load();
     }
     if (!_disposed) {
-      _save(jsonEncode(_devices.values.map((d) => d.toJson()).toList()));
+      _save(_library());
     }
   }
 

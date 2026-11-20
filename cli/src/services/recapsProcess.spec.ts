@@ -1,16 +1,23 @@
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { CoreApi, TurnLifecycle } from '../core/api.js'
 import { DONE_QUIET_MS } from '../lib/agentNotifications.js'
 import type { LiveEvent } from '../lib/normalize.js'
+import { directorySyncSupported } from '../lib/secureState.js'
 import type { CoreConnection, ServiceProcessOptions } from './process.js'
 import { createRecaps } from './recaps.js'
 import { recapsCoreApi, runRecapsService } from './recapsProcess.js'
 
 // The real default reaches a real socket and this process's own channel: never in a test.
 vi.mock('./process.js', () => ({ runServiceProcess: vi.fn(() => ({ stop: vi.fn() })) }))
+// What the recaps' files went through, in order: each flush, a file or a folder (lib/secureState.ts writes through node:fs).
+const disk = vi.hoisted(() => ({ said: [] as string[] }))
+vi.mock('node:fs', async (original) => {
+  const actual = await original<typeof import('node:fs')>()
+  return { ...actual, fsyncSync: (fd: number) => { disk.said.push(actual.fstatSync(fd).isDirectory() ? 'folder' : 'file'); return actual.fsyncSync(fd) } }
+})
 
 const dirs: string[] = []
 const temp = () => { const dir = mkdtempSync(join(tmpdir(), 'recaps-process-')); dirs.push(dir); return dir }
@@ -34,28 +41,42 @@ describe('the recaps in their own process', () => {
     vi.clearAllMocks()
     vi.restoreAllMocks()
     for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true })
+    disk.said = []
   })
 
   const setup = (over: Partial<Parameters<typeof runRecapsService>[0]> = {}) => {
     let options: ServiceProcessOptions | null = null
     let api: CoreApi | null = null
-    const service = { stop: vi.fn() }
+    const service = { stop: vi.fn(() => { disk.said.push('stop') }) }
+    const dataDir = temp()
     const handle = runRecapsService({
-      dataDir: temp(), socketPath: '/data/daemon-1.sock', machineId: 'm', token: 't',
+      dataDir, socketPath: '/data/daemon-1.sock', machineId: 'm', token: 't',
       run: (given) => { options = given; return service },
       // Never Jev: a test reaches no network, and a key on this computer must not change what it sees.
       create: (core, opts) => { api = core; return createRecaps(core, { recapForce: false, recapWithoutDevice: () => true,
         decideTier: async () => ({ tier: 'list', by: 'test', detail: '', ms: 0 }), ...opts }) },
       ...over,
     })
-    return { options: options!, api: api!, service, handle }
+    return { options: options!, api: api!, service, handle, dataDir }
   }
 
   it('reaches the core as `recaps`, through the socket and token it was given, and answers the apps nothing', () => {
-    const { options, handle, service } = setup()
+    const { options } = setup()
     expect(options).toMatchObject({ name: 'recaps', socketPath: '/data/daemon-1.sock', machineId: 'm', token: 't' })
     expect(Object.keys(options.requests)).toEqual(['liveCards'])
-    expect(handle).toBe(service)
+  })
+
+  // Its saves are renamed whole, never flushed (a cache write, lib/secureState.ts). The one as the process stops cleanly
+  // (a stop, an update, a handover: every one ends in `hostServices`' leave, services/process.ts) is, so a restart loses
+  // no recap.
+  it('saves what it holds, flushed, as its process stops, then lets go of the core', async () => {
+    const { options, handle, dataDir } = setup()
+    options.onEvent!(lifecycle({ kind: 'events', session: s1, events: [started], replay: false }))
+    expect(disk.said).toEqual([])
+    await handle.stop()
+    const files = ['summaries.json', 'summaries-history.json', 'summaries-fulltext.json', 'summaries-asks.json']
+    expect(disk.said).toEqual([...files.flatMap(() => directorySyncSupported() ? ['file', 'folder'] : ['file']), 'stop'])
+    expect(JSON.parse(readFileSync(join(dataDir, 'summaries-asks.json'), 'utf8'))).toEqual({ s1: ['what is the fix?'] })
   })
 
   it('cuts a turn\'s recap, sends its cards and recap as notices, and says what it now holds of the session', async () => {

@@ -4,6 +4,9 @@ pub mod account;
 pub mod app;
 pub mod cli;
 pub mod desktop;
+pub mod follow;
+#[cfg(target_os = "macos")]
+pub mod follow_macos;
 pub mod front;
 #[cfg(target_os = "macos")]
 pub mod front_macos;
@@ -17,7 +20,6 @@ pub mod log;
 pub mod loginitem;
 pub mod logs;
 pub mod model;
-pub mod orca_cli;
 pub mod runner;
 pub mod state;
 pub mod tabs;

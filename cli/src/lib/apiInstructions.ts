@@ -1,8 +1,9 @@
 /** Discoverable tool access, without copying credentials or model settings into projects. */
-import { existsSync, lstatSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
+import { accessSync, constants, existsSync, lstatSync, readFileSync, realpathSync } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
 import type { ApiConnectionMetadata } from './apiConnectionMetadata.js'
 import { projectsRoot } from './projectFolder.js'
+import { atomicWriteFile } from './secureState.js'
 import { instructionFileOf } from '../engines/launches.js'
 import { HARNESS_ADAPTERS } from '../dsh/adapters.js'
 
@@ -32,9 +33,17 @@ export function prepareApiInstructions(store: Pick<ApiConnectionMetadata, 'saved
   if (!folder || !store.saved()) return
   const name = instructionFileOf(engine) ?? (engine === 'gemini' ? 'GEMINI.md' : 'AGENTS.md')
   const file = join(folder, name)
-  if (existsSync(file) && (!lstatSync(file).isFile() || lstatSync(file).isSymbolicLink())) return
-  const previous = existsSync(file) ? readFileSync(file, 'utf8') : ''
-  if (!previous.includes(marker)) writeFileSync(file, `${previous.trimEnd()}${previous ? '\n\n' : ''}${API_INSTRUCTIONS}`)
+  const existing = existsSync(file) ? lstatSync(file) : null
+  if (existing && (!existing.isFile() || existing.isSymbolicLink())) return
+  const previous = existing ? readFileSync(file, 'utf8') : ''
+  // Whole or not at all: a torn write would lose the instructions written there before the note. The file keeps its
+  // own mode, and a new one is readable as a file written in place was.
+  if (!previous.includes(marker)) {
+    // A file the person made read-only stays as they left it: the rename would replace it (and on Windows retry for a
+    // second first), so it is refused (EACCES) as a write in place was, for the caller's log line.
+    if (existing) accessSync(file, constants.W_OK)
+    atomicWriteFile(file, `${previous.trimEnd()}${previous ? '\n\n' : ''}${API_INSTRUCTIONS}`, 'cache', { mode: existing ? existing.mode & 0o777 : 0o644 })
+  }
 }
 
 /**

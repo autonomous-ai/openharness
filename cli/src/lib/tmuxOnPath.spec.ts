@@ -3,7 +3,8 @@ import { tmpdir } from 'node:os'
 import { delimiter, join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { TmuxBackend } from './tmuxBackend.js'
-import { ensureTmuxOnPath, managedTmuxPath, resolveViaLoginShell, TMUX_CHECK_MS, tmuxAvailableNow, tmuxInstallDirectories } from './tmuxOnPath.js'
+import { tmuxFinder } from './binaryFinder.js'
+import { ensureTmuxOnPath, managedTmuxPath, resolveViaLoginShell, TMUX_CHECK_MS, tmuxAvailableNow, tmuxInstallDirectories, type TmuxPathOutcome } from './tmuxOnPath.js'
 import { writeExecutable } from '../testing/executableFixture.js'
 
 const dirs: string[] = []
@@ -271,4 +272,46 @@ esac
     expect(await ensureTmuxOnPath({ PATH: '/nonexistent' }, '/nonexistent/shell', noManagedTmux(), [hung]))
       .toMatchObject({ state: 'absent' })
   }, 2.5_000 + TMUX_CHECK_MS + 20_000) // A slow answer, then the whole limit for one that never answers.
+})
+
+describe('tmuxFinder', () => {
+  const ADOPTED = async (): Promise<TmuxPathOutcome> => ({ state: 'adopted', path: '/x/bin/tmux', from: '/x/bin' })
+
+  // As the core retries its own (terminalBackendRecovery.ts): a tmux installed after the process started, or a login
+  // shell that timed out on a loaded Mac, otherwise left the dial with no tmux until the process restarted.
+  it('no tmux found, or a lookup that threw, is asked again once a tmux is where the core looks without a shell', async () => {
+    const answers: Array<() => Promise<TmuxPathOutcome>> = [
+      async () => { throw new Error('lookup failed') },
+      async () => ({ state: 'absent', reason: 'tmux was not found' }),
+      ADOPTED,
+    ]
+    let finds = 0
+    let there = false
+    const tmux = tmuxFinder(() => answers[finds++](), () => there)
+    expect((await tmux()).state).toBe('absent')
+    // None there yet: nothing is asked again.
+    expect((await tmux()).state).toBe('absent')
+    expect(finds).toBe(1)
+    there = true
+    expect((await tmux()).state).toBe('absent')
+    expect(await tmux()).toEqual(await ADOPTED())
+    expect(finds).toBe(3)
+    // Found, it holds.
+    expect(await tmux()).toEqual(await ADOPTED())
+    expect(finds).toBe(3)
+  })
+
+  it('asks as the core does, on a copy of this process\'s environment: its own PATH stays the master\'s', async () => {
+    const binDir = fakeTmux()
+    const shell = process.env.SHELL
+    process.env.PATH = '/nonexistent-for-this-test'
+    process.env.SHELL = fakeShell(binDir)
+    try {
+      expect(await tmuxFinder()()).toEqual({ state: 'adopted', path: join(binDir, 'tmux'), from: binDir })
+      expect(process.env.PATH).toBe('/nonexistent-for-this-test')
+    } finally {
+      if (shell === undefined) delete process.env.SHELL
+      else process.env.SHELL = shell
+    }
+  })
 })

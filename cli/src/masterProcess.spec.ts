@@ -12,6 +12,17 @@ import { PTY_PROTOCOL } from './lib/ptyHost/protocol.js'
 import type { WindowsMasterDeps } from './masterProcess.js'
 import { writeExecutable } from './testing/executableFixture.js'
 
+const io = vi.hoisted(() => ({ failWrite: undefined as string | undefined }))
+vi.mock('node:fs', async (real) => {
+  const actual = await real<typeof import('node:fs')>()
+  return { ...actual,
+    // Only a write to a descriptor: the atomic writer's temporary file.
+    writeFileSync: (...args: Parameters<typeof actual.writeFileSync>) => {
+      if (io.failWrite && typeof args[0] === 'number') throw Object.assign(new Error(`${io.failWrite}: fixture`), { code: io.failWrite })
+      return actual.writeFileSync(...args)
+    },
+  }
+})
 const runMaster = vi.hoisted(() => vi.fn((_config: Record<string, unknown>) => 'supervisor'))
 vi.mock('./harnessd/master.js', async (real) => ({ ...await real<object>(), runMaster }))
 const leanBundle = vi.hoisted(() => ({ read: vi.fn((_bundle: Buffer): LeanBundle | null => null) }))
@@ -178,10 +189,10 @@ describe('a master started on cli.js', () => {
     const failing = deps({ execve: () => { throw new Error('E2BIG') } })
     startMasterFromBundle('/cli/cli.js', failing.given)
     expect(failing.calls.starts).toEqual([{ scriptPath: '/cli/cli.js', serviceScriptPath: '/data/lean/harnessd-aaaa.mjs', leanFingerprint: PRINT }])
-    expect(failing.calls.logs[0]).toContain('could not re-execute on /data/lean/harnessd-aaaa.mjs (E2BIG)')
+    expect(failing.calls.logs).toEqual(['[harnessd] the master could not re-execute on the lean bundle (Error): it runs from cli.js, the core and the services from the lean bundle'])
     const thrown = deps({ execve: () => { throw 'refused' } })
     startMasterFromBundle('/cli/cli.js', thrown.given)
-    expect(thrown.calls.logs[0]).toContain('(refused)')
+    expect(thrown.calls.logs[0]).toContain('(string)')
   })
 
   it('never execs onto a node binary or a lean bundle that is not there: that exec could not be caught', () => {
@@ -207,8 +218,9 @@ describe('a master started on cli.js', () => {
   it('runs everything from cli.js when the lean bundle is not there to use, and says why', () => {
     const cases: Array<[Partial<Deps>, string]> = [
       [{ probe: () => ({ ok: false, detail: 'SyntaxError' }) }, 'did not answer its probe (SyntaxError)'],
-      [{ write: () => { throw new Error('ENOSPC') } }, 'could not be written out (ENOSPC)'],
-      [{ read: () => { throw 'EACCES' } }, 'could not be written out (EACCES)'],
+      [{ write: () => { throw Object.assign(new Error('ENOSPC: no space left on device, write'), { code: 'ENOSPC' }) } },
+        '[harnessd] the lean bundle could not be written out (ENOSPC): the master, the core and the services run from cli.js'],
+      [{ read: () => { throw 'EACCES' } }, 'could not be written out (string)'],
     ]
     for (const [over, said] of cases) {
       const { given, calls } = deps(over)
@@ -343,7 +355,7 @@ describe('the master on Windows', () => {
       expect(config.stopByMessage).toBe(true)
       expect(lost.seen.redirected).toEqual([])
       expect(lost.seen.fatal).toEqual([])
-      expect(error).toHaveBeenCalledWith(expect.stringContaining('could not open the daemon log (EACCES: permission denied)'))
+      expect(error).toHaveBeenCalledWith(expect.stringContaining('could not open the daemon log (EACCES)'))
     } finally { error.mockRestore() }
   })
 
@@ -420,8 +432,10 @@ describe('the master on Windows', () => {
       listeners.get('unhandledRejection')!('a reason that is no Error')
       closeSync(fd)
       const text = readFileSync(file, 'utf8')
-      expect(text).toMatch(/^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d\.\d{3} \[harnessd\] the master stopped on an uncaught error: Error: boom\n    at /)
-      expect(text).toContain('[harnessd] the master stopped on an unhandled rejection: a reason that is no Error\n')
+      // Its kind, never its stack: Export logs sends the log off the machine.
+      expect(text).toMatch(/^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d\.\d{3} \[harnessd\] the master stopped on an uncaught error: Error\n/)
+      expect(text).toContain('[harnessd] the master stopped on an unhandled rejection: string\n')
+      expect(text).not.toContain('boom')
       expect(exits).toEqual([1, 1])
       // A log it can no longer write costs the line, never the exit.
       listeners.get('uncaughtException')!(new Error('again'))
@@ -458,7 +472,7 @@ describe('the master on Windows', () => {
       expect(readHandoverPid(file)).toBeNull()
       writeFileSync(file, '1234\n')
       expect(readHandoverPid(file)).toBe(1234)
-      for (const text of ['', 'pid', '0', '-5']) {
+      for (const text of ['', 'pid', '0', '-5', '12x']) {
         writeFileSync(file, text)
         expect(readHandoverPid(file)).toBeNull()
       }
@@ -531,6 +545,31 @@ describe('starting the master', () => {
     } finally { said.mockRestore() }
     expect(LEAN_DIR).toMatch(/[\\/]lean$/)
     expect(LEAN_OFF_FILE).toMatch(/[\\/]lean-off$/)
+  })
+
+  it('the pid file is written whole', () => {
+    runMaster.mockClear()
+    startMaster({ scriptPath: '/cli/cli.js' })
+    const config = runMaster.mock.calls[0][0] as { pidFile: string; writePidFile(pid: number): void; readPidFile(): number | null }
+    expect(config.pidFile).toBe(PID_FILE)
+    mkdirSync(env.ADAPTER_DATA_DIR, { recursive: true })
+    try {
+      expect(config.readPidFile()).toBeNull()
+      config.writePidFile(4242)
+      expect(readFileSync(PID_FILE, 'utf8')).toBe('4242\n')
+      expect(config.readPidFile()).toBe(4242)
+      // A write that fails leaves the earlier pid, never an empty or half-written file.
+      io.failWrite = 'ENOSPC'
+      expect(() => config.writePidFile(5151)).toThrow('ENOSPC')
+      expect(readFileSync(PID_FILE, 'utf8')).toBe('4242\n')
+      io.failWrite = undefined
+      // A file that cannot be read names no pid: the master neither rewrites nor removes it on that.
+      writeFileSync(PID_FILE, '42x')
+      expect(config.readPidFile()).toBeNull()
+    } finally {
+      io.failWrite = undefined
+      rmSync(PID_FILE, { force: true })
+    }
   })
 
   it('on Windows, a failed update names the Node before in current-node, which the handover\'s launcher starts the next master on', () => {

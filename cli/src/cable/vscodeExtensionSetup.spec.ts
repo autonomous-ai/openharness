@@ -246,6 +246,27 @@ describe('Harness\'s VS Code extension, set up once a computer', () => {
     expect(r.runs).toEqual([INSTALL, UNINSTALL, UNINSTALL])
   })
 
+  it('a disable during an install that times out: what the editor installs late is uninstalled an hour later', async () => {
+    const r = rig()
+    r.state.during = (flag) => { if (flag === INSTALL) r.state.removed = { vscode: true } }
+    r.state.answers.push({ code: null, timedOut: true })
+    await r.setup.pass()
+    expect(r.runs).toEqual([INSTALL])
+    expect(r.counted).toEqual([['failed', 'timeout']])
+    // The editor's CLI finishes the install after the deadline.
+    r.state.installed = '0.6.60'
+
+    r.timers[0].run()
+    await settled()
+    expect(r.runs).toEqual([INSTALL, UNINSTALL])
+    expect(r.state.installed).toBeUndefined()
+    expect(r.state.record).toEqual({ dial: true })
+
+    // Owed no more: the passes after leave it removed.
+    await r.setup.pass()
+    expect(r.runs).toEqual([INSTALL, UNINSTALL])
+  })
+
   it('a removal that cannot be read after the install undoes nothing and records nothing; the next pass records it', async () => {
     const r = rig()
     r.state.during = () => { r.state.removed = { unread: true } }

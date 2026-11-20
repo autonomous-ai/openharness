@@ -1,34 +1,45 @@
-import { afterEach, describe, expect, it } from 'vitest'
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
-  CLI_POINTER, LAUNCH_EXE, currentCli, harnessLaunchPath, isSingleSegment, readPointer, writePointer, type PointerFs,
+  CLI_POINTER, LAUNCH_EXE, currentCli, harnessLaunchPath, isSingleSegment, readPointer, writePointer,
 } from './installLayout.js'
 import { STABLE_NOTIFY } from './installNames.js'
+import { directorySyncSupported } from '../secureState.js'
+
+// Pass-through, noting each path written or opened by name and each rename's target; `order`: each flush (of a file or
+// a folder) and each rename, as they happened.
+const io = vi.hoisted(() => ({ written: [] as string[], renamedOnto: [] as string[], order: [] as string[] }))
+vi.mock('node:fs', async (original) => {
+  const actual = await original<typeof import('node:fs')>()
+  const writeFileSync = (...args: Parameters<typeof actual.writeFileSync>) => {
+    if (typeof args[0] !== 'number') io.written.push(String(args[0]))
+    return actual.writeFileSync(...args)
+  }
+  const openSync = (...args: Parameters<typeof actual.openSync>) => { io.written.push(String(args[0])); return actual.openSync(...args) }
+  const renameSync = (...args: Parameters<typeof actual.renameSync>) => {
+    io.renamedOnto.push(String(args[1]))
+    io.order.push(`rename ${String(args[1])}`)
+    return actual.renameSync(...args)
+  }
+  const fsyncSync = (fd: number) => { io.order.push(actual.fstatSync(fd).isDirectory() ? 'flush folder' : 'flush file'); return actual.fsyncSync(fd) }
+  const wrapped = { writeFileSync, openSync, renameSync, fsyncSync }
+  return { ...actual, ...wrapped, default: { ...actual, ...wrapped } }
+})
 
 const roots: string[] = []
-afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }) })
+afterEach(() => {
+  io.written.length = 0
+  io.renamedOnto.length = 0
+  io.order.length = 0
+  vi.restoreAllMocks()
+  for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true })
+})
 function scratch(): string {
   const root = mkdtempSync(join(tmpdir(), 'harness-layout-'))
   roots.push(root)
   return root
-}
-
-/** A rename that fails with each code in [failures] in turn, then renames for real; and the waits between. */
-function flaky(failures: string[]): PointerFs & { sleeps: number[]; calls: () => number } {
-  const sleeps: number[] = []
-  let calls = 0
-  return {
-    sleeps,
-    calls: () => calls,
-    sleep: (ms) => { sleeps.push(ms) },
-    rename: (from, to) => {
-      const code = failures[calls++]
-      if (code) throw Object.assign(new Error(code), { code })
-      renameSync(from, to)
-    },
-  }
 }
 
 describe('pointer files', () => {
@@ -65,30 +76,30 @@ describe('pointer files', () => {
     expect(readdirSync(root)).toEqual(['current'])
   })
 
-  it('retries a rename an antivirus scan or the indexer holds, waiting longer each time', () => {
+  it('the save goes through a temporary file renamed onto the target', () => {
     const root = scratch()
-    const fs = flaky(['EPERM', 'EBUSY', 'EACCES'])
-    writePointer(root, 'current', '1.2.3', fs)
+    const target = join(root, 'current')
+    writePointer(root, 'current', '1.2.2')
+    writePointer(root, 'current', '1.2.3')
+    expect(io.renamedOnto).toEqual([target, target])
+    expect(io.written).not.toContain(target)
+  })
+
+  // An emptied pointer (cli\current, current-pty) stops Harness from starting until a reinstall; it moves once an update.
+  it('flushes the pointer before it is renamed into place, and its folder after', () => {
+    const root = scratch()
+    writePointer(root, 'current', '1.2.3')
+    expect(io.order).toEqual(['flush file', `rename ${join(root, 'current')}`, ...(directorySyncSupported() ? ['flush folder'] : [])])
+  })
+
+  it('a file at the old temporary name is left alone', () => {
+    const root = scratch()
+    vi.spyOn(Date, 'now').mockReturnValue(1_000)
+    const planted = join(root, `.current.tmp-${process.pid}-1000`)
+    writeFileSync(planted, 'not ours')
+    writePointer(root, 'current', '1.2.3')
+    expect(readFileSync(planted, 'utf8')).toBe('not ours')
     expect(readPointer(root, 'current')).toBe('1.2.3')
-    expect(fs.sleeps).toEqual([25, 50, 100])
-  })
-
-  it('gives up after five attempts, throws, and leaves no temporary file', () => {
-    const root = scratch()
-    writeFileSync(join(root, 'current'), '1.2.2\r\n')
-    const fs = flaky(['EBUSY', 'EBUSY', 'EBUSY', 'EBUSY', 'EBUSY'])
-    expect(() => writePointer(root, 'current', '1.2.3', fs)).toThrow('EBUSY')
-    expect(fs.calls()).toBe(5)
-    expect(readdirSync(root)).toEqual(['current'])
-    expect(readPointer(root, 'current')).toBe('1.2.2')
-  })
-
-  it('does not retry a failure waiting cannot fix', () => {
-    const root = scratch()
-    const fs = flaky(['ENOENT'])
-    expect(() => writePointer(root, 'current', '1.2.3', fs)).toThrow('ENOENT')
-    expect(fs.calls()).toBe(1)
-    expect(fs.sleeps).toEqual([])
   })
 
   it('refuses to write a pointer its readers would refuse', () => {

@@ -11,15 +11,12 @@ const CONTRACT_PAIRS = [
   'sign_in.working',
   'sign_in.browser',
   'sign_in.failed',
-  'orca.asking',
-  'orca.approve',
-  'orca.done',
-  'orca.failed',
+  'follow.offer',
 ]
 
 describe('gallery', () => {
   it('the gallery draws every state in both themes', () => {
-    expect(STATES).toHaveLength(14)
+    expect(STATES).toHaveLength(9)
     expect(new Set(STATES.map(({ view }) => `${view.screen}.${view.phase}`))).toEqual(new Set(CONTRACT_PAIRS))
     expect(STATES.find((state) => state.name === 'Install · working')?.view.lines).toEqual(['Installing tmux…'])
 

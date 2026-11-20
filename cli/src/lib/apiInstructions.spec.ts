@@ -1,8 +1,25 @@
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { prepareApiInstructions } from './apiInstructions.js'
+import { API_INSTRUCTIONS, prepareApiInstructions } from './apiInstructions.js'
+
+// Pass-through, recording what reaches each file: opened, written, or renamed onto. Once a test fills the disk, a
+// write stops part way, as ENOSPC leaves it.
+const disk = vi.hoisted(() => ({ events: [] as string[], full: false }))
+vi.mock('node:fs', async original => {
+  const actual = await original<typeof import('node:fs')>()
+  return { ...actual,
+    openSync: (...args: Parameters<typeof actual.openSync>) => { disk.events.push(`open ${String(args[0])}`); return actual.openSync(...args) },
+    writeFileSync: (...args: Parameters<typeof actual.writeFileSync>) => {
+      disk.events.push(`write ${String(args[0])}`)
+      if (!disk.full) return actual.writeFileSync(...args)
+      actual.writeFileSync(args[0], String(args[1]).slice(0, 8))
+      throw Object.assign(new Error('ENOSPC: fixture'), { code: 'ENOSPC' })
+    },
+    renameSync: (...args: Parameters<typeof actual.renameSync>) => { disk.events.push(`rename ${String(args[1])}`); return actual.renameSync(...args) },
+  }
+})
 
 // An API saved, as the list a launch reads says it: the note needs only that one is, never a key.
 const saved = () => ({ saved: vi.fn(() => true) })
@@ -21,6 +38,7 @@ describe('the saved APIs\' note goes only into a project folder Harness made', (
     writeFileSync(join(mine, 'AGENTS.md'), '# My rules\n')
   })
   afterEach(() => {
+    disk.full = false
     vi.unstubAllEnvs()
     rmSync(dir, { recursive: true, force: true })
   })
@@ -94,6 +112,48 @@ describe('the saved APIs\' note goes only into a project folder Harness made', (
     prepareApiInstructions(saved(), project, 'codex')
     expect(readFileSync(join(mine, 'AGENTS.md'), 'utf8')).toBe('# My rules\n')
     expect(readFileSync(join(project, 'AGENTS.md'), 'utf8')).toContain(MARKER)
+  })
+
+  it('the save goes through a temporary file renamed onto the target', () => {
+    const file = join(made('scratch'), 'AGENTS.md')
+    writeFileSync(file, '# Project rules\n')
+    disk.events = []
+    prepareApiInstructions(saved(), join(root, 'scratch'), 'codex', root)
+    expect(disk.events.filter((event) => event.endsWith(` ${file}`))).toEqual([`rename ${file}`])
+    expect(readFileSync(file, 'utf8')).toBe(`# Project rules\n\n${API_INSTRUCTIONS}`)
+  })
+
+  // A torn write lost the instructions written there before the note.
+  it('a write that fails part way leaves the old file', () => {
+    const project = made('scratch')
+    writeFileSync(join(project, 'AGENTS.md'), '# Project rules\n')
+    disk.full = true
+    expect(() => prepareApiInstructions(saved(), project, 'codex', root)).toThrow('ENOSPC')
+    disk.full = false
+    expect(readFileSync(join(project, 'AGENTS.md'), 'utf8')).toBe('# Project rules\n')
+    expect(readdirSync(project)).toEqual(['AGENTS.md'])
+  })
+
+  // A file the person made read-only stays as they left it: the write refuses it, and the core logs why.
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('leaves a read-only instruction file as it is, and throws', () => {
+    const project = made('scratch')
+    const file = join(project, 'AGENTS.md')
+    writeFileSync(file, '# Project rules\n')
+    chmodSync(file, 0o444)
+    expect(() => prepareApiInstructions(saved(), project, 'codex', root)).toThrow(/EACCES/)
+    expect(readFileSync(file, 'utf8')).toBe('# Project rules\n')
+    expect(statSync(file).mode & 0o777).toBe(0o444)
+  })
+
+  // Windows keeps no mode bits.
+  it.skipIf(process.platform === 'win32')('keeps the file\'s own mode, and gives a new one 0644', () => {
+    const project = made('scratch')
+    prepareApiInstructions(saved(), project, 'claude', root)
+    expect(statSync(join(project, 'CLAUDE.md')).mode & 0o777).toBe(0o644)
+    writeFileSync(join(project, 'AGENTS.md'), '# Project rules\n')
+    chmodSync(join(project, 'AGENTS.md'), 0o640)
+    prepareApiInstructions(saved(), project, 'codex', root)
+    expect(statSync(join(project, 'AGENTS.md')).mode & 0o777).toBe(0o640)
   })
 })
 

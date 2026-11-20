@@ -250,21 +250,21 @@ describe('the updater in its own process', () => {
   })
 
   it('says when the sweep of the terminal host\'s leftovers cannot run, whatever was thrown', async () => {
-    for (const thrown of [new Error('locked'), 'plain']) {
+    for (const [thrown, kind] of [[new Error('locked'), 'Error'], ['plain', 'string']] as const) {
       lockFails.push(thrown)
       const m = make()
       runUpdaterService(undefined, { ...m.deps, ...m.windows }).stop()
-      await vi.waitFor(() => expect(m.calls).toContain(`[update] could not sweep the terminal host's leftovers (${thrown instanceof Error ? thrown.message : thrown}) — the next start tries again`))
+      await vi.waitFor(() => expect(m.calls).toContain(`[update] could not sweep the terminal host's leftovers (${kind}) — the next start tries again`))
     }
   })
 
   it('runs no terminal host poller when the manifest url or the platform has none, and says why for the url', () => judgingPty(() => {
-    for (const thrown of [new Error('not a CLI manifest url: x'), 'odd']) {
+    for (const [thrown, kind] of [[new Error('not a CLI manifest url: x'), 'Error'], ['odd', 'string']] as const) {
       payload.manifestUrl = () => { throw thrown }
       const m = make()
       runUpdaterService(undefined, { ...m.deps, ...m.windows }).stop()
       expect(m.pty()).toBeNull()
-      expect(m.calls).toContain(`[update] no terminal host updates: ${thrown instanceof Error ? thrown.message : thrown}`)
+      expect(m.calls).toContain(`[update] no terminal host updates: ${kind}`)
     }
     delete payload.manifestUrl
     payload.platformKey = () => null
@@ -376,11 +376,11 @@ describe('the updater in its own process', () => {
     const m = make()
     runUpdaterService(undefined, { ...m.deps, retire })
     expect(retire).toHaveBeenCalledOnce()
-    for (const thrown of [new Error('boom'), 'plain']) {
+    for (const [thrown, kind] of [[new Error('boom'), 'Error'], ['plain', 'string']] as const) {
       const failing = make()
       runUpdaterService(undefined, { ...failing.deps, retire: async () => { throw thrown } })
       await new Promise((done) => setImmediate(done))
-      expect(failing.calls).toContain(`[update] retiring older CLI builds failed: ${thrown instanceof Error ? thrown.message : thrown}`)
+      expect(failing.calls).toContain(`[update] retiring older CLI builds failed: ${kind}`)
     }
     expect(processUpdaterDeps('linux').retire).toBeUndefined()
     // In a CLI folder of the test's own, never this user's %USERPROFILE%\.harness\cli (on Windows the suite's

@@ -4,6 +4,7 @@ import { fakeHerdr, RECORDED, type FakeHerdr } from '../../testing/fakeHerdr.js'
 import { createHerdrAdapter } from './herdr.js'
 import { createHerdrClient, type HerdrPrompt } from './herdrClient.js'
 import { HerdrSource, type HerdrSourceDeps } from './herdrSource.js'
+import { MAX_TEXT } from './orca.js'
 import type { HostAgent } from './types.js'
 
 const KINDS = [{ type: 'pane.agent_detected' }, { type: 'pane.closed' }, { type: 'pane.exited' }]
@@ -23,7 +24,7 @@ const detected = (pane: string, more: Record<string, unknown> = {}) =>
   ({ agent: 'claude', pane_id: pane, type: 'pane_agent_detected', workspace_id: pane.split(':')[0], ...more })
 const refusal = (code: string) => ({ line: { error: { code, message: code } } })
 const method = (request: unknown) => (request as { method: string }).method
-const LOG_LINE = /^\[herdr\] (listed · \d+ agents|over · \d+ left out|list · [a-z_]+|closed · [a-z_]+|retry · \d+|socket · (none|stale|live))$/
+const LOG_LINE = /^\[herdr\] (listed · \d+ agents|over · \d+ left out|skipped · \d+ pane-id|list · [a-z_]+|closed · [a-z_]+|retry · \d+|socket · (none|stale|live))$/
 
 describe.skipIf(process.platform === 'win32')('the herdr source (docs/specs/2026-11-16-device-herdr.md)', () => {
   let server: FakeHerdr
@@ -42,6 +43,7 @@ describe.skipIf(process.platform === 'win32')('the herdr source (docs/specs/2026
     const client = herdrClient()
     const adapter = createHerdrAdapter({
       run: async () => ({ code: 0, stdout: '' }), onPath: () => null, exists: () => false, platform: process.platform, client,
+      front: () => undefined,
     })
     let mono = 0
     let wall = WALL
@@ -477,6 +479,41 @@ describe.skipIf(process.platform === 'win32')('the herdr source (docs/specs/2026
     s.advance(1000)
     const fifth = await server.got('events.subscribe', 5)
     expect(fifth.request).toMatchObject({ params: { subscriptions: [...KINDS, statusEntry('w1:p1'), statusEntry('w3:p1')] } })
+  })
+
+  it('a pane id with herdr\'s letters, w2:pE, is listed', async () => {
+    server.agents = [agent('w2:pE')]
+    const s = setup()
+    s.source.start()
+    await listRead(1)
+    expect(s.source.list().map(({ paneKeys }) => paneKeys)).toEqual([['herdr:w2:pE']])
+  })
+
+  it('rows dropped for a pane id out of form are said by count, when the count changes', async () => {
+    server.agents = [agent('w1:pI'), { ...agent('w3:p1'), pane_id: 7 }, agent('w2:pE')]
+    const s = setup()
+    s.source.start()
+    await listRead(1)
+    expect(s.log).toEqual(['[herdr] socket · live', '[herdr] listed · 1 agents', '[herdr] skipped · 2 pane-id'])
+    // The second subscription names w2:pE; its list drops as many, and says nothing.
+    s.advance(1000)
+    await listRead(2)
+    /** A list again: a pane not yet known asks for one. */
+    const listAgain = async (pane: string, n: number) => {
+      server.event('pane_agent_detected', detected(pane))
+      await s.until(() => s.timers.length === 1)
+      s.advance(1000)
+      await listRead(n)
+    }
+    server.agents = [agent('w2:pE')]
+    await listAgain('w4:p1', 3)
+    server.agents = [agent('w2:pE'), agent('w1:pe')]
+    await listAgain('w5:p1', 4)
+    await listAgain('w6:p1', 5)
+    expect(s.log).toEqual([
+      '[herdr] socket · live', '[herdr] listed · 1 agents', '[herdr] skipped · 2 pane-id',
+      '[herdr] skipped · 0 pane-id', '[herdr] skipped · 1 pane-id',
+    ])
   })
 
   it('an entry with a bad pane id, kind or status is left out, the rest listed', async () => {
@@ -984,10 +1021,10 @@ describe.skipIf(process.platform === 'win32')('the herdr source (docs/specs/2026
       server.event('pane.agent_status_changed', { agent: 'claude', agent_status: status, pane_id: 'w1:p1' })
       await s.until(() => api().state === state)
     }
-    const sent = async () => {
+    const sent = async (text = 'run the tests') => {
       const calls = s.prompt.mock.calls.length
-      expect(await s.source.send(api(), 'run the tests')).toEqual({ ok: true })
-      expect(s.prompt.mock.calls.slice(calls)).toEqual([['w1:p1', 'claude', 'run the tests']])
+      expect(await s.source.send(api(), text)).toEqual({ ok: true })
+      expect(s.prompt.mock.calls.slice(calls)).toEqual([['w1:p1', 'claude', text]])
     }
     const refused = async (reason: string, text = 'run the tests', of: HostAgent = api()) => {
       const calls = s.prompt.mock.calls.length
@@ -996,8 +1033,10 @@ describe.skipIf(process.platform === 'win32')('the herdr source (docs/specs/2026
     }
     const BUSY = 'api is busy. Say it when it is done.'
 
-    // Idle, done, and a turn that ended idle.
+    // Idle, done, and a turn that ended idle; ten minutes of fast speech and a passage reach it whole.
     await sent()
+    await sent('x'.repeat(10_000))
+    await sent('x'.repeat(20_000))
     await to('done', 'done')
     await sent()
     await to('working', 'working')
@@ -1005,13 +1044,13 @@ describe.skipIf(process.platform === 'win32')('the herdr source (docs/specs/2026
     await to('idle', 'done')
     expect(api().unseenDone).toBe(false)
     await sent()
-    expect(s.counts).toEqual(['herdr', 'herdr', 'busy', 'herdr'])
+    expect(s.counts).toEqual(['herdr', 'herdr', 'herdr', 'herdr', 'busy', 'herdr'])
 
     await to('blocked', 'needs-you')
     expect(await refused('api is waiting for your answer in herdr.')).toBe(0)
     await to('unknown', 'idle')
     expect(await refused(BUSY)).toBe(0)
-    expect(s.counts.slice(4)).toEqual(['waiting', 'busy'])
+    expect(s.counts.slice(6)).toEqual(['waiting', 'busy'])
 
     // A second send while one runs, and a prompt the adapter answers busy.
     await to('done', 'done')
@@ -1029,7 +1068,7 @@ describe.skipIf(process.platform === 'win32')('the herdr source (docs/specs/2026
     expect(s.counts).toEqual(['busy', 'herdr', 'busy'])
 
     s.counts.length = 0
-    expect(await refused('Too long. Say it shorter.', 'x'.repeat(2001))).toBe(0)
+    expect(await refused('Too long. Say it shorter.', 'x'.repeat(MAX_TEXT + 1))).toBe(0)
     server.answer('agent.prompt', refusal('agent_not_ready'))
     expect(await refused('api did not answer.')).toBe(1)
     const gone = api()

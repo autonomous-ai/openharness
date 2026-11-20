@@ -10,6 +10,7 @@ import { SessionCheckpointStore } from './sessionCheckpoint.js'
 import { IdentityReadUnavailable } from '../engines/kit/identityScan.js'
 import { findResumedTranscript } from './sessionRepair.js'
 import { piSessionFolder } from '../engines/repairIdentities.js'
+import { OPENCLAW_FIRST_TASK, OPENCLAW_STATES } from '../engines/openclaw/contract.js'
 
 let row: RegisteredSession
 let service: CloseAgentService
@@ -351,6 +352,31 @@ it('uses a known empty composer, not inactivity, to establish idle', () => {
   expect(inspectCloseActivity(row, '› A draft\n  100% context left', false, false)).toBe('draft')
   expect(inspectCloseActivity(row, `${screen}\n  ◎ /goal active (41m)`, false, false)).toBe('working')
   expect(inspectCloseActivity({ ...row, engine: 'claude' }, '❯\n  2 background tasks', false, false)).toBe('working')
+})
+
+// Found end to end (e2e/openclawShow.e2e.ts row 5): an OpenClaw whose launch failed, its first task never taken over a
+// history that never loaded, could be closed only with --now, though the person is told to close it and start again.
+it('reads an OpenClaw whose first task was never taken as idle, unless a run shows on its screen or a turn is open', () => {
+  const screen = (name: string) => readFileSync(join(import.meta.dirname, '..', 'engines', 'openclaw', '__fixtures__', `screen-${name}.txt`), 'utf8')
+  const failed = { engine: 'openclaw', sessionId: 'agent:main:plain', transcriptPath: null, boundAt: 1,
+    launch: { state: 'failed', ...OPENCLAW_FIRST_TASK } } as const
+  expect(inspectCloseActivity(failed, screen('history-failed'), false, false)).toBe('idle')
+  expect(inspectCloseActivity(failed, screen('history-failed'), undefined, false)).toBe('idle')
+  expect(inspectCloseActivity(failed, screen('running-quiet'), false, false)).toBe('working')
+  expect(inspectCloseActivity(failed, screen('history-failed'), true, false)).toBe('working')
+  expect(inspectCloseActivity(failed, null, false, false)).toBe('unknown')
+  // Any other launch that failed may have work of its own, an engine Harness lost track of: as before.
+  expect(inspectCloseActivity({ ...failed, launch: { state: 'failed', error: 'START_FAILED' } }, screen('history-failed'), false, false)).toBe('unknown')
+  expect(inspectCloseActivity({ ...failed, launch: undefined }, screen('history-failed'), false, false)).toBe('unknown')
+})
+
+it('reads an OpenClaw whose launch failed for a missing Gateway token as idle: its TUI exited before any work', () => {
+  const noToken = readFileSync(join(import.meta.dirname, '..', 'engines', 'openclaw', '__fixtures__', 'screen-no-token.txt'), 'utf8')
+  const failed = { engine: 'openclaw', sessionId: '', transcriptPath: null, boundAt: null,
+    launch: { state: 'failed', error: 'OPENCLAW_NO_TOKEN', detail: OPENCLAW_STATES.noToken } } as const
+  expect(inspectCloseActivity(failed, noToken, undefined, false)).toBe('idle')
+  expect(inspectCloseActivity(failed, noToken, true, false)).toBe('working')
+  expect(inspectCloseActivity(failed, null, undefined, false)).toBe('unknown')
 })
 
 it('reads Codex 0.160\'s goal indicator: pursuing one is working, every other state is not', () => {

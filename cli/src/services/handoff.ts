@@ -5,14 +5,17 @@ import { HANDOFF_REQUESTS, type CoreApi, type CorePorts, type ServiceRequests } 
 import { prepareAgentHandoff, type HandoffDeps } from '../lib/agentHandoff.js'
 import { HANDOFF_DEADLINE_MS } from '../lib/handoffAuthority.js'
 import { createHandoffRequest } from './handoffRequest.js'
+import { createSessionMigrate, productionMigrateDeps, type MigrateDeps } from './sessionMigrate.js'
 
 export { HANDOFF_REQUESTS }
 
 /** `limits`: longer ones for a test on a loaded machine (testing/handoffLimits.ts); as shipped, HANDOFF_DEADLINE_MS and
  *  lib/agentHandoff.ts's git and discovery limits. */
 export function startHandoff(core: CoreApi, _ports?: CorePorts, prepare = prepareAgentHandoff,
-  limits: Pick<HandoffDeps, 'deadlineMs' | 'gitTimeoutMs' | 'discoverMs'> = {}): ServiceRequests {
+  limits: Pick<HandoffDeps, 'deadlineMs' | 'gitTimeoutMs' | 'discoverMs'> = {},
+  migrateDeps: (reads: CoreApi['conversations']) => MigrateDeps = productionMigrateDeps): ServiceRequests {
   const reads = core.conversations
+  const migrate = createSessionMigrate(migrateDeps(reads))
   const deps: HandoffDeps = {
     resolve: (id) => reads.resolve(id),
     readHistory: (session) => core.transcripts.databaseHistory(session),
@@ -38,5 +41,5 @@ export function startHandoff(core: CoreApi, _ports?: CorePorts, prepare = prepar
     // on or after 2026-12-14, once no Desktop from before then is in use.
     if (!asker.owner) return { error: 'OWNER_REQUIRED' }
     return closed?.aborted ? { error: 'HANDOFF_UNAVAILABLE' } : { ok: true }
-  } }
+  }, agent_session_migrate: (payload, asker) => migrate(payload, asker) }
 }

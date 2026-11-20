@@ -117,4 +117,14 @@ describe('the real deps', () => {
     writeFileSync(join(dir, 'adapter.pid'), `${process.pid}\n`)
     await expect(ensureDaemonForProgram(dir, 18473)).resolves.toEqual({ started: false, ms: 0 })
   })
+
+  it('take a pid file that cannot be read for no daemon, and run harness start, which settles it', async () => {
+    writeFileSync(join(dir, 'adapter.pid'), `${process.pid}x`)
+    const { deps, starts } = world({ exit: { code: 1, output: '✗ fixture' } })
+    // Every dep but `running`, which reads the pid file for real.
+    const { unit, start, now, sleep } = deps
+    const error = await refusal(ensureDaemonForProgram(dir, 18473, { deps: { unit, start, now, sleep } }))
+    expect(error.reason).toBe('EXITED')
+    expect(starts).toHaveLength(1)
+  })
 })

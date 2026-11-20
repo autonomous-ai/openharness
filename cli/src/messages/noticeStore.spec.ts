@@ -1,13 +1,51 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { NOTICES_KEPT, NoticeStore } from './noticeStore.js'
+
+// Pass-through, noting each open, write and rename by path, until a test fills the disk: a write then stops part way,
+// as ENOSPC leaves it.
+const disk = vi.hoisted(() => ({ full: false, touched: [] as string[] }))
+vi.mock('node:fs', async (original) => {
+  const actual = await original<typeof import('node:fs')>()
+  return { ...actual,
+    openSync: (...args: Parameters<typeof actual.openSync>) => { disk.touched.push(`open ${String(args[0])}`); return actual.openSync(...args) },
+    writeFileSync: (...args: Parameters<typeof actual.writeFileSync>) => {
+      disk.touched.push(`write ${String(args[0])}`)
+      if (!disk.full) return actual.writeFileSync(...args)
+      actual.writeFileSync(args[0], String(args[1]).slice(0, 8))
+      throw Object.assign(new Error('ENOSPC: fixture'), { code: 'ENOSPC' })
+    },
+    renameSync: (...args: Parameters<typeof actual.renameSync>) => { disk.touched.push(`rename ${String(args[1])}`); return actual.renameSync(...args) },
+  }
+})
+afterEach(() => { disk.full = false; disk.touched = [] })
 
 const TAB = 'a'.repeat(24)
 const dir = () => mkdtempSync(join(tmpdir(), 'notices-'))
 
 describe('NoticeStore', () => {
+  it('the save goes through a temporary file renamed onto the target', () => {
+    const path = join(dir(), 'n.json')
+    const store = new NoticeStore(path)
+    store.add({ sharedTabId: TAB, kind: 'full' })
+    disk.touched = []
+    store.add({ sharedTabId: TAB, kind: 'unsent' })
+    expect(disk.touched.filter((t) => t.endsWith(` ${path}`))).toEqual([`rename ${path}`])
+  })
+
+  it('a save that fails part way leaves the old file, and no temporary file', () => {
+    const d = dir(), path = join(d, 'n.json')
+    const store = new NoticeStore(path)
+    const n = store.add({ sharedTabId: TAB, kind: 'full' })
+    disk.full = true
+    expect(() => store.add({ sharedTabId: TAB, kind: 'unsent' })).toThrow(/ENOSPC/)
+    disk.full = false
+    expect(new NoticeStore(path).unread()).toEqual([n])
+    expect(readdirSync(d)).toEqual(['n.json'])
+  })
+
   it('keeps the owner\'s email of a notice across a restart', () => {
     const path = join(dir(), 'n.json')
     const store = new NoticeStore(path)

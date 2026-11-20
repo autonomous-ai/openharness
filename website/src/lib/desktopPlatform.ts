@@ -1,6 +1,6 @@
 /**
  * Which desktop build suits the browser asking: the answer behind the download buttons on
- * `/desktop` and `/download`.
+ * `/download` and `/device`.
  *
  * It reads `navigator`, so it only ever runs in the browser. A page therefore renders its
  * no-detection state on the server and on first paint, then refines it once this answers. That state

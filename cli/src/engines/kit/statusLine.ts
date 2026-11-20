@@ -4,11 +4,12 @@
  * person's own status line command, read here from their settings as the engine reads them, so their line shows as
  * before. The router's quota comes from that record, never from a login (lib/quotaReports.ts).
  */
-import { randomBytes } from 'node:crypto'
-import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { StatusLineContract } from '../facets/launch.js'
 import { managedNodePath } from '../../lib/nodeRuntime.js'
+import { errorKind } from '../../lib/log.js'
+import { atomicWriteFile } from '../../lib/secureState.js'
 import { shellSingleQuote } from '../../lib/shellQuote.js'
 import { isRecord, jsonObject, merged, type AttributionFiles } from './attribution.js'
 import { quoteHookCommand } from './notifyHooks.js'
@@ -44,19 +45,12 @@ function scriptIn(dataDir: string): string | null {
     try { current = readFileSync(file, 'utf8') } catch { /* not written yet */ }
     if (current !== text) {
       mkdirSync(folder, { recursive: true, mode: 0o700 })
-      const temporary = join(folder, `.statusline.${process.pid}.${randomBytes(4).toString('hex')}.tmp`)
-      try {
-        writeFileSync(temporary, text, { mode: 0o600, flag: 'wx' })
-        renameSync(temporary, file)
-      } catch (error) {
-        rmSync(temporary, { force: true })
-        throw error
-      }
+      atomicWriteFile(file, text, 'cache')
     }
     return file
   } catch (error) {
     // The session starts with the person's status line untouched, and the router reads no report for it.
-    if (!missing) console.warn(`[statusline] not written in ${folder}, so Claude sessions start without the quota report: ${String(error)}`)
+    if (!missing) console.warn(`[statusline] not written, so Claude sessions start without the quota report: ${errorKind(error)}`)
     missing = true
     return null
   }

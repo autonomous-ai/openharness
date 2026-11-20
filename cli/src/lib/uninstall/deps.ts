@@ -1,5 +1,5 @@
 /** This computer's side of `harness uninstall` (command.ts): every module it needs, loaded only when it runs. */
-import { existsSync, rmSync, writeFileSync, writeSync } from 'node:fs'
+import { existsSync, readFileSync, rmSync, writeSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { env } from '../../config/env.js'
@@ -14,11 +14,14 @@ import { stopDaemonProcess } from '../daemonStop.js'
 import { gridCredentialsPath, gridCredentialsExist } from '../gridCredentials.js'
 import { ownedBinEntries } from '../launchers.js'
 import { runtimeShortRoot } from '../localSocket.js'
+import { settlePidFile } from '../pidFileSettle.js'
 import { platformDaemonDeps } from '../platformDaemon.js'
 import { removePath } from '../removePath.js'
+import { atomicWriteFile } from '../secureState.js'
 import { runPowershell } from '../windows/powershell.js'
 import { stopEveryAgent } from './agents.js'
 import { labelHookRemoval, lockHolder, UninstallLockBusy, type UninstallDeps } from './command.js'
+import { removeLoginEntry } from './loginEntry.js'
 import { UNINSTALL_MARKER } from './marker.js'
 import { endPtyHosts, ptyHostsDeps } from './ptyHosts.js'
 import { filesWithHarnessPathLines, removeHarnessPathLines } from './rcFiles.js'
@@ -32,6 +35,7 @@ const SERVICE_NAMES: Record<string, string> = { launchd: 'launchd', systemd: 'sy
  * console.log's last lines (the summary) could be dropped when a script captures them (gridCredentials.ts says the same).
  */
 function line(fd: 1 | 2, text: string): void {
+  // not a state file: stdout or stderr
   try { writeSync(fd, `${text}\n`) } catch { /* no stream to write to */ }
 }
 
@@ -53,9 +57,10 @@ export async function uninstallDeps(options: { tildify: (path: string) => string
     pane: process.env.HARNESS_PANE || process.env.TMUX_PANE || null,
     // Best effort: an uninstall that cannot write it still runs, as it did before the marker. A root that is gone has
     // no files left for a daemon to hold.
-    markUninstalling: () => { try { writeFileSync(marker, `${Math.floor(Date.now() / 1000)}\n`) } catch { /* see above */ } },
+    markUninstalling: () => { try { atomicWriteFile(marker, `${Math.floor(Date.now() / 1000)}\n`, 'cache') } catch { /* see above */ } },
     unmarkUninstalling: () => { rmSync(marker, { force: true }) },
     ask: options.ask,
+    settlePid: () => settlePidFile(),
     daemonPid: () => { const pid = readPid(); return pid !== null && isAlive(pid) ? pid : null },
     alive: isAlive,
     // The port the daemon saved when it started (lib/daemonRecord.ts): another user's daemon may have had the configured
@@ -113,6 +118,13 @@ export async function uninstallDeps(options: { tildify: (path: string) => string
       try { rmSync(path, { force: true }); return path } catch (error) {
         return { path, failed: error instanceof Error ? error.message : String(error) }
       }
+    }),
+    // The launcher install.sh wrote the entry for: the one removeLaunchers removes.
+    removeLoginEntry: () => removeLoginEntry({
+      platform: process.platform, home, configHome: process.env.XDG_CONFIG_HOME, launcher: join(env.HARNESS_BIN_DIR, 'harness'),
+      read: (path) => { try { return readFileSync(path, 'utf8') } catch { return null } },
+      // Unlinked, never followed, as a launcher.
+      remove: (path) => { rmSync(path, { force: true }) },
     }),
     removePathEntry: () => {
       if (process.platform === 'win32') return { kind: 'windows', result: removeUserPathEntry(binDir, runPowershell) }

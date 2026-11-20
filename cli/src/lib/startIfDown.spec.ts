@@ -11,7 +11,7 @@ import {
 
 const owner: SpawnLockOwner = { pid: 77, startMarker: '', token: 't', purpose: 'update', since: Date.now() - 4_000 }
 const deps = (over: Partial<IfDownDeps> = {}): IfDownDeps => ({
-  readPid: () => null, masterRuns: async () => false, lockOwner: () => null, ownerRuns: async () => true, stoppedThisBoot: () => false, forgetStop: () => {},
+  settlePid: async () => {}, readPid: () => null, masterRuns: async () => false, lockOwner: () => null, ownerRuns: async () => true, stoppedThisBoot: () => false, forgetStop: () => {},
   flashing: () => false, uninstalling: () => false, ...over,
 })
 
@@ -106,7 +106,7 @@ describe("--if-down's view of this computer", () => {
   })
   const master = (pid: number, startedMs = CLAIMED - 5_000) => row(pid, startedMs, ['C:\\node.exe', 'C:\\cli.js', '__harnessd'])
   const io = (over: Partial<IfDownIo> = {}): IfDownIo => ({
-    readPid: () => 500, isAlive: () => true, pidFileWrittenMs: () => CLAIMED, forgetPid: vi.fn(), rows: async () => [master(500)],
+    settlePid: async () => {}, readPid: () => 500, isAlive: () => true, pidFileWrittenMs: () => CLAIMED, forgetPid: vi.fn(), rows: async () => [master(500)],
     readLockOwner: () => null, lockOwnerAlive: () => true, releaseAbandoned: vi.fn(() => true), stoppedThisBoot: () => true, forgetStop: vi.fn(),
     flashing: () => false, uninstalling: () => false, ...over,
   })
@@ -149,6 +149,27 @@ describe("--if-down's view of this computer", () => {
     expect(released.releaseAbandoned).toHaveBeenCalledWith(lock, reissued)
     // The lock changed hands, or could not be removed: someone holds it, and this start waits for the next tick.
     await expect(processIfDownDeps('win32', io({ rows: async () => [reissued], releaseAbandoned: () => false })).ownerRuns(lock)).resolves.toBe(true)
+  })
+
+  it("a pid the daemon answered is not judged by the file's time", async () => {
+    // The pid file cannot be read, and the daemon answered with its master's pid: the file's time is not its claim.
+    const dataDir = mkdtempSync(join(tmpdir(), 'if-down-answered-'))
+    vi.stubEnv('ADAPTER_DATA_DIR', dataDir)
+    try {
+      vi.resetModules()
+      const { PID_FILE, setAnsweredPid } = await import('./daemonState.js')
+      const { processIfDownDeps: own } = await import('./startIfDown.js')
+      writeFileSync(PID_FILE, 'x')
+      setAnsweredPid(500)
+      // By the file's time this master started after its claim: a pid given to another process since.
+      const answered = own('win32', { isAlive: () => true, rows: async () => [master(500, Date.now() + 60_000)] })
+      expect(answered.readPid()).toBe(500)
+      await expect(answered.masterRuns(500)).resolves.toBe(true)
+    } finally {
+      vi.unstubAllEnvs()
+      vi.resetModules()
+      rmSync(dataDir, { recursive: true, force: true })
+    }
   })
 
   it('every supervisor asks, on every platform', () => {
@@ -198,6 +219,20 @@ describe("--if-down's view of this computer", () => {
     expect(there.lockOwner()).toBe(owner)
     expect(there.readPid()).toBe(500)
     expect(processIfDownDeps('win32', io()).stoppedThisBoot()).toBe(true)
+  })
+})
+
+describe('a pid file that cannot be read', () => {
+  it("is settled before it is read: by --if-down, by a plain start on Windows, through this computer's deps", async () => {
+    const seen: string[] = []
+    const settlePid = async () => { seen.push('settle') }
+    const readPid = () => { seen.push('read'); return null }
+    await startIfDown(deps({ settlePid, readPid }))
+    await runningDaemon(deps({ settlePid, readPid }))
+    expect(seen).toEqual(['settle', 'read', 'settle', 'read'])
+    const settled = vi.fn(async () => {})
+    await processIfDownDeps('win32', { settlePid: settled }).settlePid()
+    expect(settled).toHaveBeenCalledOnce()
   })
 })
 

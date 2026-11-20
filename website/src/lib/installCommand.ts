@@ -17,19 +17,6 @@ export const INSTALL_URL = "https://harness.autonomous.ai/install.sh";
 export const INSTALL_COMMAND = `curl -fsSL ${INSTALL_URL} | bash`;
 
 /**
- * Same drift risk, same fix, for the desktop app. Also served off the CDN-fronted public bucket now:
- * source of truth is `website/scripts/desktop-install.sh`, published with
- * `make upload-desktop-install-sh`. The old web-app URL,
- * `https://harness.autonomous.ai/desktop/install.sh`, still 308-redirects here (`next.config.js`).
- * Resolves the current release from the live desktop manifest itself, so nothing here ever hardcodes
- * a version.
- */
-export const DESKTOP_INSTALL_URL = "https://cdn.autonomous.ai/harness/desktop/install.sh";
-
-/** The desktop bootstrap one-liner, verbatim. */
-export const DESKTOP_INSTALL_COMMAND = `curl -fsSL ${DESKTOP_INSTALL_URL} | bash`;
-
-/**
  * The stable, versionless link behind the macOS "Download" button — `src/app/desktop/download-macos/`.
  *
  * A redirect rather than a direct GCS link on purpose: published artifacts live under a versioned
@@ -59,9 +46,3 @@ export const DESKTOP_DOWNLOAD_MACOS_ARM64_URL = "/desktop/download/macos-arm64";
  * PC's own CPU, so there is no per-architecture link.
  */
 export const DESKTOP_DOWNLOAD_WINDOWS_URL = "/desktop/download/windows";
-
-/**
- * The PowerShell alternative to the Windows installer, verbatim. The script is the CLI's install.ps1 in its
- * app mode, published as `harness/desktop/install.ps1` by `cli/scripts/upload-install-ps1.sh --app --production`.
- */
-export const DESKTOP_WINDOWS_INSTALL_COMMAND = "irm https://cdn.autonomous.ai/harness/desktop/install.ps1 | iex";

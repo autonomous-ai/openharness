@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Place } from './adapter.js'
-import { createClaudeAppAdapter } from './claudeApp.js'
+import { CLAUDE_SESSION, claudePaneKey, createClaudeAppAdapter } from './claudeApp.js'
 
 const SESSION = 'local_8d1f2c3a-4b5e-4f60-9a7b-1c2d3e4f5a6b'
 const OTHER = 'local_0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d'
@@ -20,6 +20,7 @@ function recorder(over: Partial<Deps> = {}, codes: Array<number | null> = []) {
       return { code: codes.length ? codes.shift()! : 0, stdout: '' }
     },
     platform: 'darwin',
+    onPath: () => null,
     inFront: () => true,
     ...over,
   }
@@ -83,9 +84,44 @@ describe('the Claude app adapter', () => {
     for (const hostSession of forged) expect(adapter.paneOf(scanned({ hostSession })), hostSession).toBeUndefined()
   })
 
+  // Linux has no bundle id: the scan's app says it is the Claude app's agent.
+  it('on Linux, with no bundle id, paneOf takes the hook\'s session under the Claude app alone', () => {
+    const { adapter } = recorder({ platform: 'linux' })
+    const hooked = (app: string): Place => ({ host: 'unknown', app, hints: { CLAUDE_CODE_HOST_SESSION_ID: SESSION } })
+    expect(adapter.paneOf(hooked('claude'))).toEqual(pane(SESSION))
+    expect(adapter.paneOf(hooked('vscode'))).toBeUndefined()
+    expect(adapter.paneOf({ ...hooked('claude'), hints: { CLAUDE_CODE_HOST_SESSION_ID: 'local_a&x=1' } })).toBeUndefined()
+    expect(adapter.paneOf({ ...hooked('claude'), hints: { __CFBundleIdentifier: 'com.mitchellh.ghostty', CLAUDE_CODE_HOST_SESSION_ID: SESSION } })).toBeUndefined()
+  })
+
+  it('on Linux a tap runs xdg-open with the continue link once the claude scheme has an app', async () => {
+    const calls: Call[] = []
+    const { adapter } = recorder({
+      platform: 'linux',
+      onPath: (name) => `/usr/bin/${name}`,
+      run: async (file, args, timeoutMs) => {
+        calls.push({ file, args, timeoutMs })
+        return { code: 0, stdout: file === '/usr/bin/xdg-mime' ? 'claude-desktop.desktop\n' : '' }
+      },
+    })
+    expect(await adapter.focus(pane(SESSION))).toBe(true)
+    expect(calls).toEqual([
+      { file: '/usr/bin/xdg-mime', args: ['query', 'default', 'x-scheme-handler/claude'], timeoutMs: 10_000 },
+      { file: '/usr/bin/xdg-open', args: [`claude://code/continue?session=${SESSION}`], timeoutMs: 10_000 },
+    ])
+  })
+
   it('the hook\'s hints win over the record\'s id', () => {
     const { adapter } = recorder()
     expect(adapter.paneOf(scanned({ hints: { __CFBundleIdentifier: CLAUDE, CLAUDE_CODE_HOST_SESSION_ID: OTHER } }))).toEqual(pane(OTHER))
+  })
+
+  it('its pane key is claude-app: and the session\'s id, the key the store\'s source lists it by', () => {
+    const { adapter } = recorder()
+    expect(adapter.paneKey(pane(SESSION))).toBe(`claude-app:${SESSION}`)
+    expect(claudePaneKey(SESSION)).toBe(`claude-app:${SESSION}`)
+    expect(CLAUDE_SESSION.test(SESSION)).toBe(true)
+    expect(CLAUDE_SESSION.global).toBe(false)
   })
 
   it('canFocus is macOS only; canShow also needs the app in front, asked each time', () => {

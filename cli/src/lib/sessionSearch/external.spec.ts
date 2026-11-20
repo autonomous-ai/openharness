@@ -24,11 +24,11 @@ describe('ExternalSessions', () => {
     expect(sessions.get('dup')?.engine).toBe('grok')
     expect(sessions.get('none')).toBeUndefined()
     expect(cwdSeen).toBe(true)
-    expect(log).toEqual(['[search] pi sessions not read: not an error object'])
+    expect(log).toEqual(['[search] pi sessions not read: string'])
 
     grokFails = true
     expect((await sessions.scan()).map((s) => s.sessionId)).toEqual(['g', 'a', 'dup'])
-    expect(log).toContain('[search] grok sessions not read: store locked')
+    expect(log).toContain('[search] grok sessions not read: Error')
   })
 
   it('finds a conversation by an older id it carried on from, never over another conversation', async () => {
@@ -76,7 +76,7 @@ describe('SessionRows', () => {
     expect(excludes).toBe(true)
     // A store that cannot be read finds none and says so; a session is only ever its own engine's; an engine with no reader finds none.
     expect(await rows.find(new Map<string, ExternalEngine>([['x', 'codex'], ['c', 'claude'], ['p', 'pi']]))).toEqual(new Map())
-    expect(log).toEqual(['[search] codex sessions not read: store locked'])
+    expect(log).toEqual(['[search] codex sessions not read: Error'])
   })
 })
 
@@ -177,7 +177,7 @@ describe('OpenSessions', () => {
     ], { log: (line) => log.push(line), ttys: async () => { asked++; return new Map() } })
     expect((await sessions.fresh()).size).toBe(0)
     expect(asked).toBe(0)
-    expect(log).toEqual(['[search] codex owners not read: lsof failed', '[search] devin owners not read: odd'])
+    expect(log).toEqual(['[search] codex owners not read: Error', '[search] devin owners not read: string'])
   })
 
   it("calls a terminal's session 'maybe' when Harness's own panes could not be listed", async () => {

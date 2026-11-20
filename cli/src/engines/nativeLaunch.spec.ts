@@ -4,6 +4,7 @@ import { inspectNativeLaunch } from './nativeLaunch.js'
 import { captureLaunchExecutable } from './kit/launchExecutable.js'
 import { LAUNCH_LOCATION_VARIABLES, nativeHookLocations } from './kit/nativeLocations.js'
 import { engineHooks } from './hooks.js'
+import { HookPreparationHeld, HookScriptMissing } from './kit/hookHeld.js'
 import * as hooks from './nativeHooks.js'
 import { buildEngineLaunchArgv } from '../lib/engineLaunch.js'
 import { shellSingleQuote } from '../lib/shellQuote.js'
@@ -202,6 +203,23 @@ it.each(['claude', 'codex'] as const)('confirms the final %s home before acknowl
   expect(await result.launch.prepareHooks(19473, () => true)).toBe(true)
   expect(result.launch.ready?.()).toBe(true)
   expect(result.launch.environment[variable]).toBe(selected)
+})
+
+it('a held hook preparation logs what holds it; a missing hook script, whose reason names a path, its kind', async () => {
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+  const result = await inspectNativeLaunch('codex')
+  if (!result.ok) throw Error('fixture held')
+  vi.mocked(engineHooks.codex.installIn).mockRejectedValueOnce(new HookPreparationHeld('a hook file changed while it was written'))
+  expect(await result.launch.prepareHooks(19473, () => true)).toBe(false)
+  vi.mocked(engineHooks.codex.installIn).mockRejectedValueOnce(new HookScriptMissing('/Users/dee/.harness/notify.mjs'))
+  expect(await result.launch.prepareHooks(19473, () => true)).toBe(false)
+  vi.mocked(engineHooks.codex.installIn).mockRejectedValueOnce(new TypeError('no such file /Users/dee/x'))
+  expect(await result.launch.prepareHooks(19473, () => true)).toBe(false)
+  expect(warn.mock.calls).toEqual([
+    ['[launch] native hook preparation held · a hook file changed while it was written'],
+    ['[launch] native hook preparation held · HookScriptMissing'],
+    ['[launch] native hook preparation held · TypeError'],
+  ])
 })
 
 it('does not adopt a home when hooks fail or the owner is revoked', async () => {

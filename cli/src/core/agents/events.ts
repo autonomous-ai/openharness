@@ -39,7 +39,7 @@ export function createAgentEvents({ sink, terminalAvailable, resolve, stopped, p
     project: (s) => project(s),
     send: (frame) => sink()?.send(frame),
     sendCommander: (frame) => sink()?.sendCommander(frame),
-    warn: (err) => console.error('[cli] announceSession failed:', err instanceof Error ? err.message : err),
+    warn: (kind) => console.error('[cli] announceSession failed:', kind),
   })
   const announceRename = (s: RegisteredSession, opts: { device?: boolean } = {}): void => {
     if (isTerminalEngine(s.engine)) opts = { ...opts, device: false }

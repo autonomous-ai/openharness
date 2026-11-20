@@ -13,7 +13,7 @@ import * as nativeHooks from '../../engines/nativeHooks.js'
 import { missingHookScript } from '../../engines/kit/notifyHooks.js'
 import type { NativeHookOptions } from '../../engines/kit/nativeLocations.js'
 import type { OpencodeLaunchSnapshot } from '../../engines/launchControl.js'
-import { sid } from '../../lib/log.js'
+import { errorKind, sid } from '../../lib/log.js'
 import type { registry, RegisteredSession } from '../../lib/registry.js'
 import { validTerminalRuntime } from '../../lib/registry.js'
 import { IdentityReadUnavailable } from '../../engines/kit/identityScan.js'
@@ -170,8 +170,7 @@ export function createEngineHooks(deps: EngineHookDeps) {
         // publish it. Match fresh evidence through the existing wait. Answered 500, the hook client wrote the
         // registry itself while this daemon ran, and the agent it replaced never bound (e2e/scale.e2e.ts).
         overdue = true
-        // Its message is one of a fixed set (IdentityReadUnavailable), never a path or a process's content.
-        console.log(`[hooks] reconciliation held · ${error.message} · checking current process evidence`)
+        console.log(`[hooks] reconciliation held · ${errorKind(error)} · checking current process evidence`)
       }
     }
 
@@ -311,12 +310,11 @@ export function installEngineHooks(port: number, options: InstallEngineHooksOpti
   const pending: Promise<void>[] = []
   const hookStep = (vendor: string, install: () => void | boolean | Promise<unknown>): void => {
     if (options.only && !options.only.has(vendor)) return
-    const failed = (error: unknown) => {
-      console.warn(`[hooks] ${vendor} install skipped · ${error instanceof Error ? error.message : error}`)
-    }
+    const skipped = (why: string) => { console.warn(`[hooks] ${vendor} install skipped · ${why}`) }
+    const failed = (error: unknown) => skipped(errorKind(error))
     // An installer stopped by a missing notify.mjs has said so in its own line (kit/notifyHooks.ts hooksNotInstalled); a
     // generic second line for the same failure only buried it (#3954 review).
-    const unavailable = () => { if (!missingHookScript(vendor)) failed('native hook preparation is unavailable') }
+    const unavailable = () => { if (!missingHookScript(vendor)) skipped('native hook preparation is unavailable') }
     try {
       const result = install()
       if (result === false) unavailable()
@@ -343,7 +341,7 @@ export function installEngineHooks(port: number, options: InstallEngineHooksOpti
     },
   })
   adoptions.submit(options.environment ?? process.env)
-  void options.loginShell?.then(adoptions.submit, error => console.warn(`[hooks] login-shell homes unavailable · ${error instanceof Error ? error.message : error}`))
+  void options.loginShell?.then(adoptions.submit, error => console.warn(`[hooks] login-shell homes unavailable · ${errorKind(error)}`))
   const nativeOptions = { current: adoptions.current }
   for (const [engine, hooks] of Object.entries(engineHooks)) hookStep(engine, () => hooks.install(port, nativeOptions))
   for (const [vendor, install] of OTHER_INSTALLERS) hookStep(vendor, () => install(port, nativeOptions))

@@ -4,6 +4,7 @@ import { hooks as codex } from './codex/hookContract.js'
 import { installHookSettings, type HookEngine } from './kit/hookSettings.js'
 import { isChildSession, knownTranscript } from './kit/hookRules.js'
 import { closeTurnOnStop } from './kit/stopHook.js'
+import { errorKind } from '../lib/log.js'
 
 /**
  * The engines' hooks as they declare them: data only. Installation, the hook server and turn closing load
@@ -40,7 +41,7 @@ export function hooksFor(name: string | null | undefined): EngineHooks | undefin
  */
 export function admitHook(engine: string, body: HookSession): HookAdmission {
   try { return hooksFor(engine)?.admit?.(body) ?? { accepted: true } } catch (error) {
-    console.warn(`[hooks] ${engine} admission failed:`, error instanceof Error ? error.message : error)
+    console.warn(`[hooks] ${engine} admission failed:`, errorKind(error))
     return { accepted: false, reason: 'engine_hook_failed' }
   }
 }

@@ -26,6 +26,7 @@
  * nothing, rather than guessing.
  */
 import type { JevChoice, JevChoiceAnswer, JevDecide } from './jev/jevClient.js'
+import { errorKind } from './log.js'
 
 export interface RouteSession {
   id: string
@@ -121,12 +122,6 @@ export function jevPick(answer: JevChoiceAnswer | undefined, options: string[], 
   if (!lead || options.length < JEV_LEAD_OPTIONS) return undefined
   // Six options or more: there is always one next.
   return top >= JEV_LEAD_P && top >= JEV_LEAD_RATIO * p[runnerUp(p, answer.choice, options)!] ? answer.choice : undefined
-}
-
-/** An error and what caused it: fetch's own message ("fetch failed") says nothing by itself. */
-const why = (error: unknown): string => {
-  const cause = (error as { cause?: { code?: string; message?: string } })?.cause
-  return `${(error as Error).message}${cause ? ` (${cause.code ?? cause.message})` : ''}`
 }
 
 const label = (text: string): string => {
@@ -283,7 +278,7 @@ export async function decideRoute(input: RouteInput, deps: RouteDeps, signal?: A
   try {
     answers = await deps.jev(state, questions, signal)
   } catch (error) {
-    deps.log?.(`jev could not answer: ${why(error)}`)
+    deps.log?.(`jev could not answer: ${errorKind(error)}`)
     return { kind: 'unavailable', why: (error as Error).message, weighed }
   }
   const said = answers.target

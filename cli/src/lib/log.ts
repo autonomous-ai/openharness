@@ -7,7 +7,7 @@
  */
 
 import { createHash } from 'node:crypto'
-import { closeSync, existsSync, openSync, readSync, renameSync, statSync, writeFileSync } from 'fs'
+import { closeSync, existsSync, openSync, readSync, renameSync, statSync, writeFileSync } from 'node:fs'
 
 function pad(n: number, width = 2): string {
   return String(n).padStart(width, '0')
@@ -106,6 +106,36 @@ export function prepareLogFile(file: string, legacy: string, maxBytes = LOG_MAX_
  */
 export function sid(id: string): string {
   return id.startsWith('agent:') ? `oc-${createHash('sha256').update(id).digest('hex').slice(0, 8)}` : id.slice(0, 8)
+}
+
+// A class name starts upper case: one lower-case word can be a file's or a person's name ("notes", "someone").
+const TYPE_NAME = /^[A-Z][A-Za-z0-9_$]{0,63}$/
+const CODE = /^[A-Z][A-Z0-9_]{1,39}$/
+
+/**
+ * A failure's kind for a log line: its type and its code (`EACCES`, `TypeError`, `RegistryOwnershipChanged
+ * IDENTITY_UNAVAILABLE`), never its words. A message or a stack can quote the person's files, prompts or a peer's
+ * text, and Export logs sends the log off the machine. A thrown non-Error is its `typeof`: what it holds is unknown.
+ *
+ * The class name stands in when `name` is the inherited `Error`, since our typed errors rarely set one. The code is
+ * looked for two causes deep, where a wrapper keeps the disk's. Never throws: a hostile getter reads `Error`.
+ */
+export function errorKind(error: unknown): string {
+  try {
+    if (!(error instanceof Error)) return typeof error
+    const type = [error.name, error.constructor?.name]
+      .find((name) => typeof name === 'string' && name !== 'Error' && TYPE_NAME.test(name))
+    let code: string | undefined
+    let at: unknown = error
+    for (let depth = 0; depth < 3 && at !== null && typeof at === 'object'; depth++) {
+      const candidate = (at as { code?: unknown }).code
+      if (typeof candidate === 'string' && CODE.test(candidate)) { code = candidate; break }
+      at = (at as { cause?: unknown }).cause
+    }
+    return [type, code].filter(Boolean).join(' ') || 'Error'
+  } catch {
+    return 'Error'
+  }
 }
 
 /** One-line, whitespace-flattened preview of user/assistant text, capped with an ellipsis. */

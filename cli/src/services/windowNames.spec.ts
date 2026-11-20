@@ -10,6 +10,24 @@ import { BUDGET_MS, cleanName, defaultNamers, KEEP, PROMPT, RETRY_MS, startWindo
 vi.mock('../lib/oneshot.js', () => ({ runRouterOneShot: vi.fn(async () => ({ text: 'Harness TUI\n', sessionId: null })) }))
 // The real `opencode models` path, run with a command that lists nothing.
 vi.mock('../lib/engineBin.js', () => ({ opencodeBinAsync: () => '/bin/echo' }))
+// Pass-through, recording each call that opens, writes or renames a file by its name.
+// `refuse`: the next rename fails, as a full disk would.
+const disk = vi.hoisted(() => ({ events: [] as string[][], refuse: false }))
+vi.mock('node:fs', async (original) => {
+  const actual = await original<typeof import('node:fs')>()
+  return { ...actual,
+    openSync: (...args: Parameters<typeof actual.openSync>) => { disk.events.push(['open', String(args[0])]); return actual.openSync(...args) },
+    writeFileSync: (...args: Parameters<typeof actual.writeFileSync>) => { disk.events.push(['write', String(args[0])]); return actual.writeFileSync(...args) },
+    renameSync: (...args: Parameters<typeof actual.renameSync>) => {
+      disk.events.push(['rename', String(args[0]), String(args[1])])
+      if (disk.refuse) { disk.refuse = false; throw Object.assign(new Error('no space left'), { code: 'ENOSPC' }) }
+      return actual.renameSync(...args)
+    },
+  }
+})
+/** The calls that named [file] itself; a fresh temporary name beside it (`<file>.<pid>.<uuid>.tmp`) shown as `<tmp>`. */
+const touching = (file: string) => disk.events.filter((event) => event.includes(file)).map((event) => event.map((path) =>
+  path.startsWith(`${file}.${process.pid}.`) && /^[0-9a-f-]{36}\.tmp$/.test(path.slice(`${file}.${process.pid}.`.length)) ? '<tmp>' : path))
 
 const ASKER = { local: true, owner: true }
 type Repo = { kind: string; name: string; root: string | null; remote: string | null; branch: string | null }
@@ -195,15 +213,63 @@ describe('window names', () => {
 
   it('a name it cannot write is still answered, and the error said', async () => {
     const dataDir = mkdtempSync(join(tmpdir(), 'window-names-'))
-    // The names file is a folder: the scratch folder can be made, the file cannot be written.
-    const { mkdirSync } = await import('node:fs')
-    mkdirSync(join(dataDir, 'window-names.json.tmp'))
     const error = vi.spyOn(console, 'error').mockImplementation(() => {})
     const { name } = setup({ dataDir })
+    disk.refuse = true
     expect(await name(['tui'])).toEqual({ name: null, pending: true })
     await vi.waitFor(async () => expect(await name(['tui'])).toEqual({ name: 'Harness TUI LMStudio' }))
     expect(error).toHaveBeenCalledWith('[window-names] could not keep the names:', expect.any(String))
     error.mockRestore()
+  })
+
+  it('a torn window-names.json is set aside, not written over', async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'window-names-'))
+    const file = join(dataDir, 'window-names.json')
+    writeFileSync(file, '[["k1","N1"')
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const { name } = setup({ dataDir })
+    expect(await name(['tui'])).toEqual({ name: null, pending: true })
+    await vi.waitFor(async () => expect(await name(['tui'])).toEqual({ name: 'Harness TUI LMStudio' }))
+    expect(readFileSync(`${file}.unreadable`, 'utf8')).toBe('[["k1","N1"')
+    expect(JSON.parse(readFileSync(file, 'utf8'))).toHaveLength(1)
+    expect(warn).toHaveBeenCalledWith('[state] window-names.json could not be read (not valid JSON); kept as window-names.json.unreadable, starting empty.')
+    warn.mockRestore()
+  })
+
+  // A read that failed read nothing: the names it may hold are not replaced by this run's alone.
+  it('a window-names.json that could not be read is not written over', async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'window-names-'))
+    const file = join(dataDir, 'window-names.json')
+    // A folder at its name: every read of it fails (EISDIR).
+    const { mkdirSync } = await import('node:fs')
+    mkdirSync(file)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const { name } = setup({ dataDir })
+    disk.events = []
+    expect(await name(['tui'])).toEqual({ name: null, pending: true })
+    await vi.waitFor(async () => expect(await name(['tui'])).toEqual({ name: 'Harness TUI LMStudio' }))
+    expect(touching(file)).toEqual([])
+    warn.mockRestore()
+  })
+
+  it('the save goes through a temporary file renamed onto the target', async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'window-names-'))
+    const file = join(dataDir, 'window-names.json')
+    const { name } = setup({ dataDir })
+    disk.events = []
+    expect(await name(['tui'])).toEqual({ name: null, pending: true })
+    await vi.waitFor(async () => expect(await name(['tui'])).toEqual({ name: 'Harness TUI LMStudio' }))
+    expect(touching(file)).toEqual([['rename', '<tmp>', file]])
+  })
+
+  it('a file at the old temporary name is left alone', async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'window-names-'))
+    const old = join(dataDir, 'window-names.json.tmp')
+    writeFileSync(old, 'not ours')
+    const { name } = setup({ dataDir })
+    expect(await name(['tui'])).toEqual({ name: null, pending: true })
+    await vi.waitFor(async () => expect(await name(['tui'])).toEqual({ name: 'Harness TUI LMStudio' }))
+    expect(readFileSync(old, 'utf8')).toBe('not ours')
   })
 
   it('by default ask the small models through one cold one-shot each', async () => {

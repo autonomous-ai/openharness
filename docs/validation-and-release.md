@@ -256,6 +256,12 @@ Run workflow with **`agent_browser_podman`** ticked runs only `cli/e2e/agentBrow
 browser on real rootless Podman: it builds the browser image, so nothing else runs beside it. Use it once for a
 change to the agent browser's container, image or stream; the nightly run leaves that file out.
 
+Run workflow with **`dial_hosts`** ticked runs only the `e2e (dial hosts)` job: `cli/e2e/dialHost*.e2e.ts` and
+`cli/e2e/deviceHerdr.e2e.ts` on Ubuntu 24.04 with herdr, WezTerm and Zellij installed from their pinned, checksum-checked
+releases, kitty from Ubuntu, an X11 desktop (Xvfb, openbox) and sway. There a host that is missing fails its file instead of skipping it,
+and a case that skips fails the job. The shards leave these files out; the nightly run, and every manual run without
+`agent_browser_podman`, includes the job. Use it alone for a change to a dial host's adapter.
+
 For changes to daemon lifetime or process boundaries, select an opt-in soak and chaos workload
 (`cli/e2e/endurance.e2e.ts`). On a Mac, run `SOAK=1 E2E_BUNDLE=1 SOAK_OUT=<folder> npx vitest run
 --config vitest.e2e.config.ts e2e/endurance.e2e.ts` in `cli/`. The defaults are 60 minutes of soak and

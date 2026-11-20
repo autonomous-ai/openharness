@@ -6,12 +6,13 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { APP_IDS } from '../cable/hosts/hostDetect.js'
 import { FRONT_NONE } from '../cable/hosts/frontApp.js'
 import { TAB_APPS, type Tab } from '../cable/hosts/tabs.js'
+import { THREAD_TITLE_MAX } from '../cable/hosts/threadTitle.js'
 import { listenLocalSocket } from '../lib/localSocket.js'
 import {
   ATTACH_MAX_BYTES, ATTACH_PER_SECOND, attachHandler, DIAL_MAX_BYTES, DIAL_NAME_MAX, DIAL_PER_SECOND, dialStream, FRONT_MAX_BYTES, FRONT_PER_SECOND,
   frontHandler, LISTENER_DROPPED_PER_SECOND, LISTENER_MAX_CONNECTIONS, NOTICE_MAX_BYTES, NOTICE_PER_SECOND, noticeHandler, NOTIFY_MAX_BYTES,
   NOTIFY_PER_SECOND, notifyHandler, openDevicesListener, ORCA_FRONT_MAX_BYTES, ORCA_FRONT_MAX_TERMINALS, ORCA_FRONT_PER_SECOND, orcaFrontHandler,
-  REFUSED, TAB_MAX_BYTES, TAB_PER_SECOND, tabHandler,
+  REFUSED, TAB_MAX_BYTES, TAB_PER_SECOND, tabHandler, THREAD_MAX_BYTES, THREAD_PER_SECOND, threadHandler,
   TABS_MAX_BYTES, TABS_PER_SECOND, tabsStream, type DevicesListener, type ListenerHandler, type ListenerStream, type ListenerStreamHandler, type StreamEnd,
 } from './devicesListener.js'
 import type { NoticeAsk, NoticeResult } from '../lib/dialNotice.js'
@@ -1434,6 +1435,68 @@ describe('tab', () => {
     const longest = Math.max(...TAB_APPS.map((app) => Buffer.byteLength(JSON.stringify({ type: 'tab', app, tty: '/dev/ttys9999' }))))
     expect(longest).toBe(57)
     expect(longest).toBeLessThanOrEqual(TAB_MAX_BYTES)
+  })
+})
+
+describe('thread', () => {
+  const gone = new AbortController().signal
+
+  it('thread hands on a title in rule, the empty one too', () => {
+    const titles: string[] = []
+    const handler = threadHandler((title) => titles.push(title))
+    for (const title of ['Fix login', '', 'x'.repeat(THREAD_TITLE_MAX)]) {
+      expect(handler.handle({ type: 'thread', title }, gone), title).toBeUndefined()
+    }
+    expect(titles).toEqual(['Fix login', '', 'x'.repeat(THREAD_TITLE_MAX)])
+  })
+
+  it('thread refuses a title out of rule, not a string, or missing, and reports none of them', () => {
+    const report = vi.fn()
+    const handler = threadHandler(report)
+    for (const title of ['x'.repeat(THREAD_TITLE_MAX + 1), 'Fix\nlogin', 'tab\there', '\u007f', 7, null, ['Fix login'], { title: 'x' }]) {
+      expect(handler.handle({ type: 'thread', title }, gone), JSON.stringify(title)).toBe(REFUSED)
+    }
+    expect(handler.handle({ type: 'thread' }, gone)).toBe(REFUSED)
+    expect(report).not.toHaveBeenCalled()
+  })
+
+  it('the thread handler holds nothing: it is its two limits and handle; the longest title fits', () => {
+    const handler = threadHandler(() => {})
+    expect(Object.keys(handler).sort()).toEqual(['handle', 'maxBytes', 'perSecond'])
+    expect(handler).toMatchObject({ maxBytes: THREAD_MAX_BYTES, perSecond: THREAD_PER_SECOND })
+    expect([THREAD_MAX_BYTES, THREAD_PER_SECOND]).toEqual([1024, 10])
+    const longest = Buffer.byteLength(JSON.stringify({ type: 'thread', title: '\u754c'.repeat(THREAD_TITLE_MAX) }))
+    expect(longest).toBe(796)
+    expect(longest).toBeLessThanOrEqual(THREAD_MAX_BYTES)
+  })
+
+  describe.skipIf(process.platform === 'win32')('on a real listener', () => {
+    const body = (title: string): string => JSON.stringify({ type: 'thread', title })
+
+    /** A thread padded to exactly `bytes`. */
+    function threadOf(bytes: number): string {
+      const unpadded = Buffer.byteLength(JSON.stringify({ type: 'thread', title: 'Fix login', pad: '' }))
+      const padded = JSON.stringify({ type: 'thread', title: 'Fix login', pad: 'x'.repeat(bytes - unpadded) })
+      expect(Buffer.byteLength(padded)).toBe(bytes)
+      return padded
+    }
+
+    it('a thread of 1024 bytes is 204 and one of 1025 is 413', async () => {
+      const titles: string[] = []
+      const { path } = await open({ thread: threadHandler((title) => titles.push(title)) })
+      expect((await connection(path).send(threadOf(THREAD_MAX_BYTES))).status).toBe(204)
+      expect((await connection(path).send(threadOf(THREAD_MAX_BYTES + 1))).status).toBe(413)
+      expect(titles).toEqual(['Fix login'])
+    })
+
+    it('the 11th thread within a second on one connection is 429', async () => {
+      const titles: string[] = []
+      const { path } = await open({ thread: threadHandler((title) => titles.push(title)) }, { now: () => 0 })
+      const sender = connection(path)
+      for (let i = 0; i < THREAD_PER_SECOND; i++) expect((await sender.send(body('Fix login'))).status).toBe(204)
+      expect((await sender.send(body('Fix login'))).status).toBe(429)
+      expect(titles).toEqual(Array(10).fill('Fix login'))
+    })
   })
 })
 

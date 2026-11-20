@@ -224,8 +224,9 @@ master too old to run it starts it beside itself, still in its own process (`src
   The core asks only while a dial watches, so a poll never starts their process; a client that goes
   first is told as a notice. What a local tool tells the devices (first the app in front, from `harness hardware
   watch`) goes to their own listener (src/services/devicesListener.ts), never through the core: a new message is a
-  handler registered there by its type, with its own body and rate limits, beside `front`, `tab`, the mod's
-  `attach`, the session the Claude app shows, `notice`, an agent's line from `harness device notify`, `notify`,
+  handler registered there by its type, with its own body and rate limits, beside `front`, `tab`, `thread`, the
+  title of the ChatGPT app's window, the mod's `attach`, the session the Claude app shows, `notice`, an agent's line
+  from `harness device notify`, `notify`,
   the Notifications setting, and `orcaFront`, the terminals of the worktree on Orca's screen from Orca's Harness
   Device plugin, taken only while its `dial` stream is open (src/services/devices.ts). Where the listener does not
   run (Windows, and devices inside the core, as on Harness OS) `harness device notify` answers `no dial` and the
@@ -353,8 +354,16 @@ from before (`src/harnessd/services.spec.ts`, `e2e/messagesSkew.e2e.ts`).
   renewing the sign-in: the core asks the gateway for the token it hands you (`lib/authRefresh.ts`).
 - Do not write to tmux, the registry or another service's files. A service never writes to Harness's tmux: no pane or
   session Harness made. One thing is allowed in the person's own tmux (PM, 2026-11-15,
-  [the spec](../../../docs/specs/2026-11-15-device-wave1-checks.md)): the devices process may run `switch-client` (or
-  a select) to the pane a hook named, once it has checked that the pane's process is the agent's or one of its parents
-  (`cable/hosts/tmux.ts`). It names the client it moves, and never one on a session Harness made. It never types,
-  creates or closes anything there. Harness's panes and the person's can share one tmux server, so the rule is held
-  per pane and session, by the owner tag the hook reads (`hook/notify.mjs` `paneFacts`).
+  [the spec](../../../docs/specs/2026-11-15-device-wave1-checks.md)): the devices process may move to the pane a hook
+  named, once it has checked that the pane's process is the agent's or one of its parents (`cable/hosts/tmux.ts`). It
+  runs `select-window` and `select-pane` on the pane's own session, which every client on that session then shows, and
+  `switch-client` only when it found no app holding a client of that session; that names the client it moves. It runs
+  nothing on a session Harness made. It never types, creates or closes anything there. Harness's panes and the
+  person's can share one tmux server, so the rule is held per pane and session, by the owner tag the hook reads
+  (`hook/notify.mjs` `paneFacts`).
+
+  In the person's herdr the devices process runs `herdr agent focus <pane>` alone, for the pane a hook named in the
+  default session, at a tap, and at a rest only while the app holding that pane's client is in front
+  (`cable/hosts/herdr.ts`), beside the dial's words over herdr's socket. To find that client it reads only process
+  names, parents and ttys, the unix-socket rows `lsof` gives for herdr's own processes and a tty's access time, never
+  another process's environment or argv (`cable/hosts/herdrOuter.ts`). It never creates or closes anything there.

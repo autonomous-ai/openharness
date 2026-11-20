@@ -23,6 +23,8 @@ export interface Frame {
   namedState?: string
   /** Its launch; `failed`, live or stopped, is one that started nothing, with its code and words. */
   launch?: AgentLaunch | null
+  /** It has not taken its first task yet (lib/agentFrame.ts). Absent from an older daemon. */
+  starting?: boolean
   tmuxPane?: string | null
   /** Where it runs: a PTY host's pane is named by its instance and pane (Windows). */
   terminal?: { runtimes?: Array<{ backend?: string; instance?: string; paneId?: string }> } | null
@@ -61,8 +63,9 @@ export interface Caller extends LedgerMember {
   hachi?: true
 }
 
-/** `installing`, `starting`, `failed`: a harness asked for that has not started (commands.ts `Asked`). `held`: one
- *  Harness cannot follow until the person acts (`namedStateOf`). */
+/** `installing`: a harness asked for that has not started (commands.ts `Asked`). `starting`: that, or one that has not
+ *  taken its first task yet; `failed`: one its machine refused, or whose launch started nothing (`listedStateOf`).
+ *  `held`: one Harness cannot follow until the person acts (`namedStateOf`). */
 export type State = 'working' | 'idle' | 'needs-input' | 'held' | 'stopped' | 'offline' | 'unknown' | 'installing' | 'starting' | 'failed'
 
 export interface Row {
@@ -148,6 +151,17 @@ export function namedStateOf(frame: Frame): { sentence: string; held: boolean } 
   return { sentence, held: HELD.has(sentence) || isOpenclawLocalStopped(sentence) }
 }
 
+/** The state `ps`, `show`, `wait` and `watch` list [frame] in: a failed launch over a hold, a hold over a start, and a
+ *  start over what its screen shows (an OpenClaw idle before its first task is typed). A stopped or cloud harness is in
+ *  its own state. */
+export function listedStateOf(frame: Frame): State {
+  const state = stateOf(frame)
+  if (state === 'stopped' || frame.location === 'cloud') return state
+  if (failureOf(frame)) return 'failed'
+  if (namedStateOf(frame)?.held) return 'held'
+  return frame.starting === true ? 'starting' : state
+}
+
 /**
  * The harness on [pane] in [frames], when it is an agent: who is calling. Null only for a person: a terminal's pane,
  * or one Harness does not know. Matching active harnesses only made an agent the person, with the person's right to
@@ -210,8 +224,7 @@ export function rowsOf(frames: Frame[], ctx: RowContext): Row[] {
   const rows: Row[] = []
   for (const frame of frames) {
     if (!isAgent(frame)) continue
-    // Held over what its screen shows: it waits on the person whatever it last drew.
-    const state = namedStateOf(frame)?.held ? 'held' : stateOf(frame)
+    const state = listedStateOf(frame)
     const last = frame.updatedAt ? Date.parse(frame.updatedAt) : NaN
     if (state === 'stopped' && (!ctx.all || !(ctx.now - last < STOPPED_WITHIN_MS))) continue
     const cloud = cloudMeta(frame)
@@ -236,17 +249,19 @@ export function rowsOf(frames: Frame[], ctx: RowContext): Row[] {
       ...(failure ? { failure } : {}),
     })
   }
-  // Working or waiting on the person first, then by last activity: what an agent choosing where work goes looks at first.
-  const rank = (r: Row): number => (r.state === 'working' || r.state === 'needs-input' || r.state === 'held' ? 0 : r.state === 'idle' || r.state === 'unknown' ? 1 : 2)
+  // Busy first, then by last activity: what an agent choosing where work goes looks at first.
+  const rank = (r: Row): number => (busy(r) ? 0 : r.state === 'idle' || r.state === 'unknown' ? 1 : 2)
   return rows.sort((a, b) => rank(a) - rank(b) || (b.lastActive ?? '').localeCompare(a.lastActive ?? ''))
 }
+
+/** Working, starting on its first task, or waiting on the person. */
+const busy = (r: Row): boolean => r.state === 'working' || r.state === 'starting' || r.state === 'needs-input' || r.state === 'held'
 
 /** How many rows an agent's `ps` shows unless asked for all: on the owner's Mac, 40 rows became about 8 to read. */
 export const AGENT_ROWS = 15
 
-/** An agent's `ps`: its own first, then those working or waiting on the person, then the rest; [max] at most. */
+/** An agent's `ps`: its own first, then the busy ones, then the rest; [max] at most. */
 export function forAgent(rows: readonly Row[], max = AGENT_ROWS): { shown: Row[]; more: number } {
-  const busy = (r: Row) => r.state === 'working' || r.state === 'needs-input' || r.state === 'held'
   const ordered = [...rows.filter((r) => r.yours), ...rows.filter((r) => !r.yours && busy(r)), ...rows.filter((r) => !r.yours && !busy(r))]
   return { shown: ordered.slice(0, max), more: Math.max(0, ordered.length - max) }
 }

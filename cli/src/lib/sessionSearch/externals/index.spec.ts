@@ -125,7 +125,7 @@ describe('the other engines\' readers, loaded on first use', () => {
     expect(await devin.owners!(none)).toEqual([])
     expect(await devin.busy!({ pid: 1, record: '' })).toBeNull()
     expect(devinProvider).toHaveBeenCalledOnce()
-    expect(error.mock.calls).toEqual([['[engine devin] adoption reader unavailable · bad store path']])
+    expect(error.mock.calls).toEqual([['[engine devin] adoption reader unavailable · Error']])
     error.mockRestore()
   })
 })

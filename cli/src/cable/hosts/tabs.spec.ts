@@ -95,6 +95,17 @@ describe('the tabs adapter', () => {
     expect(adapter.paneOf(place('ghostty', '/dev/ttys023', 'terminal'))).toStrictEqual(pane('ghostty:/dev/ttys023'))
   })
 
+  it('a place with an outer app and tty is that tab, whatever its host and app', () => {
+    const { adapter } = recorder()
+    const nested: Place = { host: 'tmux', app: 'tmux', hints: { TMUX_PANE: '%3' }, tty: '/dev/ttys099', pid: 100 }
+    expect(adapter.paneOf({ ...nested, outer: { app: 'terminal-app', tty: '/dev/ttys004' } })).toStrictEqual(pane('terminal-app:/dev/ttys004'))
+    // An outer app with no tty, a tty out of form, or an app with no tabs: no tab, and the multiplexer's own pty is never one.
+    for (const outer of [{ app: 'terminal-app' }, { app: 'terminal-app', tty: '/dev/pts/3' }, { app: 'orca', tty: '/dev/ttys004' }]) {
+      expect(adapter.paneOf({ ...nested, outer }), JSON.stringify(outer)).toBeUndefined()
+    }
+    expect(adapter.paneOf(nested)).toBeUndefined()
+  })
+
   it('canFocus and canShow are the stream being open, asked each time', () => {
     let open = false
     const deps = { isOpen: vi.fn(() => open), select: vi.fn(() => true) }

@@ -30,8 +30,9 @@ export const START_ENV_NAMES: readonly string[] = [
   // person's zsh startup folder; WSL detection.
   'PATH', 'HOME', 'USER', 'LOGNAME', 'SHELL', 'TMPDIR', 'TZ', 'LANG', 'LANGUAGE', 'SSH_AUTH_SOCK', 'SSH_CONNECTION',
   '__CF_USER_TEXT_ENCODING', 'TMUX_TMPDIR', 'ZDOTDIR', 'WSL_DISTRO_NAME',
-  // Linux desktop. The clipboard (osClipboard.ts), X11's beside DISPLAY, and the guest helpers.
-  'DBUS_SESSION_BUS_ADDRESS', 'DISPLAY', 'WAYLAND_DISPLAY', 'XAUTHORITY',
+  // Linux desktop. The clipboard (osClipboard.ts), X11's beside DISPLAY, and the guest helpers; sway's and Hyprland's
+  // sockets, by which the dial's raise reaches the compositor of the session the daemon was started from.
+  'DBUS_SESSION_BUS_ADDRESS', 'DISPLAY', 'WAYLAND_DISPLAY', 'XAUTHORITY', 'SWAYSOCK', 'HYPRLAND_INSTANCE_SIGNATURE',
   // Network. A machine behind a proxy or a private CA reaches the backend, and its engines reach theirs.
   'HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY', 'ALL_PROXY', 'http_proxy', 'https_proxy', 'no_proxy', 'all_proxy',
   'NODE_EXTRA_CA_CERTS', 'SSL_CERT_FILE', 'SSL_CERT_DIR',

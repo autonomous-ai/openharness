@@ -154,7 +154,7 @@ void main() {
     // Outside a browser no build can be detected: the page that lists them.
     expect(
       WebDownloadButton.uri,
-      Uri.parse('https://harness.autonomous.ai/desktop'),
+      Uri.parse('https://harness.autonomous.ai/download'),
     );
     await tester.pumpWidget(const SizedBox());
   });

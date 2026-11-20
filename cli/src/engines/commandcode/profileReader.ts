@@ -2,6 +2,7 @@ import type { InlineRuntimeContext, InlineRuntimeReader } from '../facets/inline
 import type { ProfileEvidence, RuntimeModelOption } from '../facets/runtime.js'
 import { effortLabel, encodeRuntimeProfile, readJson, record, runtimeModelLabel, text, RUNTIME_EFFORTS } from '../kit/runtime.js'
 import { env } from '../../config/env.js'
+import { errorKind } from '../../lib/log.js'
 import { join } from 'node:path'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
@@ -110,7 +111,7 @@ class ProfileReader {
       })
       entries = commandcode.parseCommandcodeModelsOutput(result.stdout)
     } catch (err) {
-      console.warn('[runtime-profile] Command Code model catalog failed:', err instanceof Error ? err.message : err)
+      console.warn('[runtime-profile] Command Code model catalog failed:', errorKind(err))
     }
     this.commandcodeCatalogCache = { key, entries, expiresAt: Date.now() + CATALOG_TTL_MS }
     return entries

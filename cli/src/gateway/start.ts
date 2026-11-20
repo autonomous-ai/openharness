@@ -41,6 +41,7 @@ import { MachinePeerStore } from '../lib/e2ee/machinePeers.js'
 import { applySharedTrust, isSharedKey } from './sharedTrust.js'
 import { E2eeStore } from '../lib/e2ee/store.js'
 import { TrustGroupStore, type GroupMember } from '../lib/e2ee/trustGroup.js'
+import { errorKind } from '../lib/log.js'
 import { RemoteRelayPool } from '../lib/remoteRelay.js'
 import { HarnessShareRelay, type SharedMachineReference } from '../sharing/relay.js'
 import { RelayGateway } from './gateway.js'
@@ -133,6 +134,23 @@ export function unknownHelloReader(
     const read = devlog.trustFromLog(identityPub).then((outcome) => { log(`[e2ee] ${who}: ${TRUST_OUTCOME[outcome]}`) })
     lastRead.set(identityPub, { at, read })
     return read
+  }
+}
+
+/**
+ * The gateway's `onUnpaired`: the trust group keeps the key out here, and the account's device key log takes it out
+ * too, whatever the group's side throws (a block list that cannot be written): left in the log, its next read would
+ * trust the key again. The throw goes on to the manager, which says it.
+ */
+export function unpairedHandler(
+  group: Pick<GroupSyncer, 'unpaired'>, devlog: () => Pick<DeviceLogSyncer, 'remove'> | null,
+): (identityPub: string) => void {
+  return (identityPub) => {
+    try {
+      group.unpaired(identityPub)
+    } finally {
+      void devlog()?.remove(identityPub)
+    }
   }
 }
 
@@ -260,11 +278,7 @@ export function startGateway(given: GatewayHost): StartedGateway {
   groupSyncer = syncer
   gateway.groupSync = syncer
   gateway.onPeerLinked = (peer) => syncer.linked(peer)
-  gateway.onUnpaired = (pub) => {
-    syncer.unpaired(pub)
-    // Unpairing a device here takes it out of the account's log too — or the log would trust it again.
-    void devLogSyncer?.remove(pub)
-  }
+  gateway.onUnpaired = unpairedHandler(syncer, () => devLogSyncer)
   // Started once this machine is signed in: at start, or on the first link-up after a sign-in that the
   // core told it of (`ops.account`).
   let groupStarted = false
@@ -296,7 +310,7 @@ export function startGateway(given: GatewayHost): StartedGateway {
       try {
         switchAccountTrust(from, to)
       } catch (err) {
-        console.log(`[devlog] could not swap the trust stores to the new account: ${err instanceof Error ? err.message : String(err)}`)
+        console.log(`[devlog] could not swap the trust stores to the new account: ${errorKind(err)}`)
       }
       gateway.e2ee.reloadPaired()
       // Sessions to the old account's machines, and who the group last synced with, are that account's.

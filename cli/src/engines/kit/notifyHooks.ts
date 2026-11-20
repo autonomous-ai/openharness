@@ -62,13 +62,17 @@ export function hooksNotOnWindows(engine: string): true {
 }
 
 /**
- * The log line for an install that did not happen, when [error] says why: on Windows one sentence, no stack. A refused
- * hook line (quoteHookCommand) or a held file is the person's to read, and a stack trace there buried the reason (B4.10
- * VM log), and on every platform a missing notify.mjs. Null for any other error or platform: the caller logs as before.
+ * An install that did not happen for a hold the person can name: on Windows a refused hook line (quoteHookCommand) or a
+ * held file, and on every platform a missing notify.mjs. It is said in one line, no stack: a stack trace there buried
+ * the hold (B4.10 VM log). Any other error or platform: the caller logs its own failure line.
  */
-export function hooksNotInstalled(engine: NotifyEngine, error: unknown, platform: NodeJS.Platform): string | null {
-  if (!(error instanceof HookPreparationHeld) || (platform !== 'win32' && !(error instanceof HookScriptMissing))) return null
-  return `[hooks] ${engineName(engine)} hooks are not installed: ${error.reason}`
+export function isNamedHold(error: unknown, platform: NodeJS.Platform): boolean {
+  return error instanceof HookPreparationHeld && (platform === 'win32' || error instanceof HookScriptMissing)
+}
+
+/** The words of that line; the caller adds the hold's reason, or HookScriptMissing's kind: that reason names a path. */
+export function hooksNotInstalled(engine: NotifyEngine): string {
+  return `[hooks] ${engineName(engine)} hooks are not installed`
 }
 
 /**

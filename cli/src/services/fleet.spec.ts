@@ -182,7 +182,7 @@ describe('the lane to the other machines', () => {
     expect(fleet.sendTurn('r1', 'ship it')).toEqual({ ok: true })
     expect(lane.sendSealed).toHaveBeenCalledWith(expect.objectContaining({ type: 'message', machineId: 'other' }))
     expect(await router.recentSummaries('r1')).toEqual([])
-    expect(log).toHaveBeenCalledWith('[device] device: agent_recent r1 failed (timed out)')
+    expect(log).toHaveBeenCalledWith('[device] device: agent_recent r1 failed (Error)')
   })
 })
 

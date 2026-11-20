@@ -25,6 +25,13 @@ void main() {
     );
   });
 
+  test('a Terminal harness never shows as chat', () {
+    expect(showsAsChat(Agent.fromJson({'id': 't', 'engine': 'terminal'})), isFalse);
+    expect(showsAsChat(Agent.fromJson({'id': 'n'})), isFalse);
+    expect(showsAsChat(null), isFalse);
+    expect(showsAsChat(Agent.fromJson({'id': 'c', 'engine': 'claude'})), isTrue);
+  });
+
   test('only OpenCode reads its footer', () {
     final agent = Agent.fromJson({
       'id': 'a',

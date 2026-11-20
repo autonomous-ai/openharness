@@ -7,9 +7,10 @@
  * Checked by Claude Code 2.1: it runs `$BROWSER <url>` and, should that fail, prints the address to open by hand,
  * so a daemon that cannot be asked costs nothing a pane without this did not already have.
  */
-import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { env } from '../config/env.js'
+import { atomicWriteFile } from './secureState.js'
 import { shellSingleQuote } from './shellQuote.js'
 
 /** Where the daemon writes the script: beside its data, which outlives a restart of either. */
@@ -41,7 +42,8 @@ export function writeBrowserShim(command: string, path: string = browserShimPath
     try { current = readFileSync(path, 'utf8') } catch { /* not written yet */ }
     if (current !== script) {
       mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
-      writeFileSync(path, script, { mode: 0o700 })
+      // Flushed: every pane's BROWSER runs it, and one a power cut emptied opens nothing.
+      atomicWriteFile(path, script, 'cache', { mode: 0o700, durable: true })
     }
     chmodSync(path, 0o700)
     return true

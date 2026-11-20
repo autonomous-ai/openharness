@@ -223,7 +223,7 @@ describe('ToolServers', () => {
   it('a child that cannot start is TOOL_FAILED', async () => {
     const { servers, children, spawn, log, start } = harness({ startFails: true })
     await expect(servers.call('a1', 'browser_snapshot', {}, 'normal')).resolves.toEqual({ error: 'TOOL_FAILED' })
-    expect(log.mock.calls).toEqual([['agent browser a1: its tool server did not start']])
+    expect(log.mock.calls).toEqual([['agent browser a1: its tool server did not start · Error']])
 
     // Podman ran but the exec failed (no such container): it exits, or errors, before it ever answered.
     start.fails = false

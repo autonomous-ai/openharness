@@ -4,7 +4,7 @@ import { existsSync, lutimesSync, mkdtempSync, readFileSync, realpathSync, rmSyn
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
-import { createOrcaAdapter, createOrcaReads, ORCA_HANDLE, type OrcaChild, orcaDeps, type OrcaDeps, type OrcaReadDeps } from './orca.js'
+import { createOrcaAdapter, createOrcaReads, MAX_TEXT, ORCA_HANDLE, type OrcaChild, orcaDeps, type OrcaDeps, type OrcaReadDeps } from './orca.js'
 import { writeExecutable } from '../../testing/executableFixture.js'
 
 // The real execFile and spawn, watched: a spec reads how the child of a run or a watch ended.
@@ -367,12 +367,19 @@ describe('Orca actions', () => {
     expect(calls).toHaveLength(2)
   })
 
-  it('a text over 2000 characters runs nothing', async () => {
+  // Ten minutes of fast speech is about 13,000 characters; a carried passage rides with it.
+  it('a text of 20,000 characters is typed whole, in one run', async () => {
+    expect(MAX_TEXT).toBe(20_000)
     const { calls, orca } = recorder()
-    expect(await orca.send(HANDLE, 'a'.repeat(2001))).toBe(false)
-    expect(calls).toEqual([])
-    expect(await orca.send(HANDLE, 'a'.repeat(2000))).toBe(true)
+    expect(await orca.send(HANDLE, 'a'.repeat(20_000))).toBe(true)
     expect(calls).toHaveLength(1)
+    expect(calls[0].args).toContain(`--text=${'a'.repeat(20_000)}`)
+  })
+
+  it('a text over MAX_TEXT characters runs nothing', async () => {
+    const { calls, orca } = recorder()
+    expect(await orca.send(HANDLE, 'a'.repeat(MAX_TEXT + 1))).toBe(false)
+    expect(calls).toEqual([])
   })
 
   it('an empty text runs nothing', async () => {

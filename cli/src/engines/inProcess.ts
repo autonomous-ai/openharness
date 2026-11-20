@@ -15,6 +15,7 @@
  */
 import type { ScreenReading } from './facets/screen.js'
 import { terminalScreen } from './kit/screen.js'
+import { errorKind } from '../lib/log.js'
 import { isOtherEngine, type OtherEngine } from './otherEngines.js'
 import { isTerminalEngine, type AgentEngine } from './types.js'
 
@@ -66,7 +67,7 @@ export function createInProcessLoader<Modules>(modules: { [Name in keyof Modules
       // Through `then`, so that a loader which throws before it returns its promise is caught the same way.
       fresh.done = Promise.resolve().then(() => modules[name]()).then((module) => { fresh.now = module; return module }, (error: unknown) => {
         fresh.now = null
-        log(`[engine ${String(name)}] unavailable · ${(error instanceof Error ? error.message : String(error)).replace(/\s+/g, ' ')}`)
+        log(`[engine ${String(name)}] unavailable · ${errorKind(error)}`)
         return null
       })
       started.set(name, fresh)

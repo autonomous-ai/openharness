@@ -26,7 +26,7 @@ vi.mock('node:fs/promises', async original => {
 })
 import * as engineBin from './engineBin.js'
 const roots: string[] = []
-afterEach(() => { vi.useRealTimers(); reads.gate = null; reads.failure = ''; reads.large = ''; reads.entries = 0; reads.forbidWindowsSync = false; reads.calls = reads.active = reads.most = 0; vi.unstubAllEnvs(); for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }) })
+afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); reads.gate = null; reads.failure = ''; reads.large = ''; reads.entries = 0; reads.forbidWindowsSync = false; reads.calls = reads.active = reads.most = 0; vi.unstubAllEnvs(); for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }) })
 function fixture() {
  const root = mkdtempSync(join(tmpdir(), 'ownership-async-')); roots.push(root)
  vi.stubEnv('PATH', root)
@@ -53,6 +53,7 @@ it('observes replacement, removal, and a changed PATH on the next discovery', as
 
 it('bounds filesystem fan-out, shares a pass, and cannot multiply reads after its deadline', async () => {
  fixture(); vi.useFakeTimers()
+ const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
  let release!: () => void
  reads.gate = new Promise(resolve => { release = resolve })
  const first = engineBin.agentCommandOwnershipSnapshotAsync()
@@ -70,10 +71,13 @@ it('bounds filesystem fan-out, shares a pass, and cannot multiply reads after it
  reads.gate = null
  vi.useRealTimers()
  expect((await engineBin.agentCommandOwnershipSnapshotAsync()).engineCandidates?.get('codex')).toHaveLength(1)
+ expect(errors).toHaveBeenCalledWith('[engine] ENGINE_LOOKUP_TIMEOUT: executable ownership unavailable')
 })
 it('rejects failed ownership evidence instead of publishing an empty snapshot', async () => {
  fixture(); reads.failure = 'EIO'
+ const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
  await expect(engineBin.agentCommandOwnershipSnapshotAsync()).rejects.toThrow('ENGINE_LOOKUP_FAILED')
+ expect(errors).toHaveBeenCalledWith('[engine] ENGINE_LOOKUP_FAILED: executable ownership unavailable')
  expect(reads.calls).toBeLessThanOrEqual(8)
 })
 it('refuses an in-flight answer when PATH changes', async () => {
