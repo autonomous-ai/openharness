@@ -1,9 +1,27 @@
-import { existsSync, readFileSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
 const workflows = join(process.cwd(), '..', '.github', 'workflows')
 const read = (name: string) => readFileSync(join(workflows, name), 'utf8')
+const job = (text: string, id: string) => text.match(new RegExp(`\n  ${id}:\n([\\s\\S]*?)(?=\n  [\\w-]+:\n|$)`))?.[1] ?? ''
+const stepNamed = (text: string, name: string) =>
+  text.match(new RegExp(`\n( +)- name: ${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\n([\\s\\S]*?)(?=\n\\1- |\n  [\\w-]+:\n|$)`))?.[2] ?? ''
+// The legs job's script as the runner runs it: bash, X64_ONLY from the call's input (empty on a by-hand run).
+const legsFor = (value: string): { arch: string; timeout: number }[] => {
+  const block = `${job(read('windows.yml'), 'legs')}\n`.match(/\n( +)run: \|\n((?:\1 [^\n]*\n|\n)*)/)
+  const script = (block?.[2] ?? '').replace(new RegExp(`^${block?.[1] ?? ''}  `, 'gm'), '')
+  const dir = mkdtempSync(join(tmpdir(), 'windows-legs-'))
+  try {
+    const output = join(dir, 'output')
+    execFileSync('bash', ['-c', script], { env: { PATH: process.env.PATH, X64_ONLY: value, GITHUB_OUTPUT: output } })
+    return JSON.parse(readFileSync(output, 'utf8').match(/^include=(.*)$/m)?.[1] ?? 'null')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+}
 
 describe('the Windows release workflows', () => {
   it('lets the release call the Windows PTY workflow for a payload stamped with the CLI version', () => {
@@ -35,12 +53,39 @@ describe('the Windows release workflows', () => {
   // cancelled arm64 in its last test step, and the install job was skipped (run 43565271777). The job's name lists the
   // matrix without the limit, so the jobs keep the names they had.
   it('gives each architecture of the Windows PTY job its own time limit', () => {
-    const job = read('windows.yml').match(/\n  windows-pty:\n([\s\S]*?)(?=\n  [\w-]+:\n|$)/)?.[1] ?? ''
-    const entries = (job.match(/\n {8}include:\n((?: {10}[^\n]*\n)+)/)?.[1] ?? '').split(/^ {10}- /m).slice(1)
-    const limits = entries.map((entry) => [entry.match(/^\s*arch: (\S+)$/m)?.[1], entry.match(/^\s*timeout: (\d+)$/m)?.[1]])
-    expect(limits).toStrictEqual([['x64', '40'], ['arm64', '60']])
-    expect(job.match(/^ {4}timeout-minutes: (.+)$/m)?.[1]).toBe('${{ matrix.timeout }}')
-    expect(job.match(/^ {4}name: (.+)$/m)?.[1]).toBe('windows-pty (${{ matrix.runner }}, ${{ matrix.target }}, ${{ matrix.arch }}, ${{ matrix.artifact }})')
+    const pty = job(read('windows.yml'), 'windows-pty')
+    expect(legsFor('false').map((row) => [row.arch, String(row.timeout)])).toStrictEqual([['x64', '40'], ['arm64', '60']])
+    expect(pty.match(/^ {4}timeout-minutes: (.+)$/m)?.[1]).toBe('${{ matrix.timeout }}')
+    expect(pty.match(/^ {4}name: (.+)$/m)?.[1]).toBe('windows-pty (${{ matrix.runner }}, ${{ matrix.target }}, ${{ matrix.arch }}, ${{ matrix.artifact }})')
+  })
+
+  // ci.yml's windows-e2e asks for x64 alone unless a Windows-only file changed (scripts/ci-plan.py).
+  it('runs arm64 unless its caller asks for x64 alone; by hand and for the release, both', () => {
+    const pty = read('windows.yml')
+    expect(pty).toMatch(/workflow_call:\n\s+inputs:[\s\S]*?\n\s+x64_only:\n[\s\S]*?type: boolean[\s\S]*?default: false/)
+    expect(pty.match(/workflow_dispatch:\n([\s\S]*?)\n  workflow_call:/)?.[1]).not.toContain('x64_only')
+    for (const id of ['windows-pty', 'install']) expect(job(pty, id)).toContain('include: ${{ fromJSON(needs.legs.outputs.include) }}')
+    // The rows carry every field now, so the install job names the ones it was named by before.
+    expect(job(pty, 'install').match(/^ {4}name: (.+)$/m)?.[1]).toBe('install (${{ matrix.runner }}, ${{ matrix.arch }}, ${{ matrix.artifact }})')
+  })
+
+  it("hands the matrices x64 alone when x64_only is 'true', else both rows", () => {
+    expect(legsFor('true').map((row) => row.arch)).toEqual(['x64'])
+    expect(legsFor('false').map((row) => row.arch)).toEqual(['x64', 'arm64'])
+    expect(legsFor('').map((row) => row.arch)).toEqual(['x64', 'arm64'])
+  })
+
+  it("checks out the head CI tested: the pull request's, else the run's commit", () => {
+    expect(read('windows.yml').match(/- uses: actions\/checkout@v7\n\s+with:\n\s+ref: \$\{\{ github\.event\.pull_request\.head\.sha \|\| github\.sha \}\}/g)).toHaveLength(2)
+  })
+
+  it("leaves the lock to its caller, so one pull request event never cancels another's run", () => {
+    expect(read('windows.yml')).not.toMatch(/^concurrency:/m)
+  })
+
+  it('tries the public firmware download three times and blames the download, not the change', () => {
+    const step = stepNamed(read('windows.yml'), "'Flasher: without a board'")
+    for (const text of ['cannot read the release manifest', 'download failed', '3', "the CDN or the release download failed, not this pull request's code"]) expect(step).toContain(text)
   })
 
   it('publishes the Windows bits to staging, and to production only when a dispatch asks', () => {
