@@ -3851,6 +3851,18 @@ describe('hook notify: the caller a hook names', () => {
     ])
   })
 
+  // A helper path Node refuses to start (ENOTDIR) throws rather than fails: no chain, as a failed read is. The caller's
+  // climb and the app's lookup read the one chain, so a Codex outside a pane is told all the same.
+  it('on Windows a Codex hook outside a pane whose helper Node refuses to start names its parent, and is told', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'adapter-hook-caller-'))
+    tmpDirs.push(dir)
+    const file = join(dir, 'file')
+    writeFileSync(file, '')
+    expect(await onWindows({ env: { HARNESS_PTY_BIN: join(file, 'harness-pty') } }, false)).toEqual([
+      { url: '/api/hook/observed', body: expect.objectContaining({ engine: 'codex', callerPid: pidAt(0) }) },
+    ])
+  })
+
   it('on Windows a Codex hook reads only its own chain: `ps --json --ancestors` of its parent, once', async () => {
     const runs = psRunLog()
     expect(await onWindows({ windowsAncestors: [powershell, codexExe], psRunLog: runs })).toEqual([
