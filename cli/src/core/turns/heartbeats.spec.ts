@@ -33,6 +33,10 @@ function setup(over: Partial<HeartbeatDeps> = {}) {
 }
 
 const sentTypes = (deps: HeartbeatDeps) => vi.mocked(deps.clients.send).mock.calls.map(([frame]) => (frame as { type: string }).type)
+const sentStates = (deps: HeartbeatDeps) => vi.mocked(deps.clients.send).mock.calls.map(([frame]) => {
+  const { type, payload } = frame as { type: string; payload: { activity?: ActivityFrame } }
+  return [type, payload.activity?.state]
+})
 
 describe('turn heartbeats', () => {
   beforeEach(() => vi.useFakeTimers())
@@ -180,7 +184,7 @@ describe('turn heartbeats', () => {
     expect(run.deps.runtimeActivity.forget).not.toHaveBeenCalled()
   })
 
-  it('a claim watched already, or a turn beating, starts no second watch and sends nothing', async () => {
+  it('a claim watched already starts no second watch and sends nothing', async () => {
     const { deps, beats, set } = setup()
     set({ turnOpen: false, activity: { state: 'working', epoch: 'e', revision: 1, validForMs: 30_000 } })
     beats.watchClaim('s1')
@@ -191,12 +195,41 @@ describe('turn heartbeats', () => {
     set({ activity: { state: 'idle', epoch: 'e', revision: 2, validForMs: 0 } })
     await vi.advanceTimersByTimeAsync(5_000)
     expect(sentTypes(deps)).toEqual(['agent_activity', 'agent_activity'])
-    set({ turnOpen: true, activity: { state: 'working', epoch: 'e', revision: 3, validForMs: 30_000 } })
-    beats.startHeartbeat('s1')
-    beats.watchClaim('s1')
-    expect(sentTypes(deps)).toHaveLength(2)
-    beats.stopHeartbeat('s1')
+    expect(beats.heartbeats.has('s1')).toBe(false)
   })
+
+  // A closed turn's heartbeat beats on to its next beat, and longer while the dial's card is busy. A `tell` pasted after
+  // `wait` returned claims work inside that time: it was told nothing, the beat sent it as a turn_heartbeat, then stopped
+  // and forgot the runtime's reading, and the claim's end went to no one (`wait` and `watch` slept to their backstop).
+  it.each([['its next beat', false], ['the dial\'s card', true]])(
+    'a claim while a closed turn\'s heartbeat beats on for %s is two agent_activity frames: at once, and its end within a beat',
+    async (_, deviceBusy) => {
+      const run = setup({ turnActivity: new TurnActivity({ now: () => Date.now(), probe: async () => 'unknown', drain: async () => {},
+        runtime: (sessionId) => ({ key: 'k', turnOpen: run.deps.sessionTurnOpen(sessionId) }),
+        claimed: (sessionId) => run.beats.watchClaim(sessionId) }) })
+      const activity = run.deps.turnActivity as TurnActivity
+      run.set({ deviceBusy })
+      activity.observe('s1', 'turn_started')
+      run.beats.startHeartbeat('s1')
+      vi.mocked(run.deps.runtimeActivity.forget).mockClear()
+      await vi.advanceTimersByTimeAsync(6_000)
+      run.set({ turnOpen: false })
+      activity.observe('s1', 'turn_ended')
+      await vi.advanceTimersByTimeAsync(1_000)
+      // The paste's mark (core/input.ts): working, with no turn open.
+      activity.observe('s1', 'turn_started')
+      await vi.advanceTimersByTimeAsync(0)
+      expect(sentStates(run.deps)).toEqual([['turn_heartbeat', 'working'], ['agent_activity', 'working']])
+      await vi.advanceTimersByTimeAsync(WORK_EVIDENCE_MS - 1)
+      expect(sentStates(run.deps)).toHaveLength(2)
+      await vi.advanceTimersByTimeAsync(5_000)
+      expect(sentStates(run.deps)).toEqual([['turn_heartbeat', 'working'], ['agent_activity', 'working'], ['agent_activity', 'idle']])
+      expect(run.deps.runtimeActivity.forget).not.toHaveBeenCalled()
+      run.set({ deviceBusy: false })
+      await vi.advanceTimersByTimeAsync(5_000)
+      expect(run.beats.heartbeats.has('s1')).toBe(false)
+      expect(sentStates(run.deps)).toHaveLength(3)
+    })
 
   it('a turn\'s heartbeat replaces a claim watch, with no second frame for one beat', async () => {
     const { deps, beats, set } = setup()
