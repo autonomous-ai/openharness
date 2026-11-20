@@ -460,6 +460,8 @@ export function agentCommandOwnershipSnapshotAsync(): Promise<AgentCommandOwners
       .concat(windowsCandidates.map(file => basename(file))).map(name => [name.toLowerCase(), name])).values()]
     const wanted = new Set(probeNames.map(name => name.toLowerCase()))
     const wantedKey = [...wanted].sort().join('\0'), folderReads = new Map<string, FolderRead>()
+    // Windows names a folder in any case: CODEX_PATH may say c:\users\ken\... of the PATH folder C:\Users\Ken\...
+    const folderKey = (folder: string) => process.platform === 'win32' ? folder.toLowerCase() : folder
     const folders = new Map<string, string>(), unlisted: string[] = [], skipped: string[] = []
     for (const entry of input.paths) {
       // A relative entry resolves against the working folder. When that is gone (the firmware flash's deleted worktree)
@@ -471,14 +473,14 @@ export function agentCommandOwnershipSnapshotAsync(): Promise<AgentCommandOwners
     await Promise.all(Array.from({ length: Math.min(8, directories.length) }, async () => {
       while (!expired && directoryIndex < directories.length) {
         const directory = directories[directoryIndex++], read = await boundedCandidateNames(directory, wanted, wantedKey, probeNames)
-        folderReads.set(directory, read)
+        folderReads.set(folderKey(directory), read)
         if (read.skipped) skipped.push(read.skipped)
         else if (read.unlisted) unlisted.push(read.unlisted)
       }
     }))
     if (expired) throw engineFailure('ENGINE_LOOKUP_TIMEOUT')
     const visible = (folder: string, command: string) => {
-      const read = folderReads.get(folder)
+      const read = folderReads.get(folderKey(folder))
       // A skipped folder gives no candidate file, not even one the listing cannot rule out: in a folder that hung, its
       // read would hold the pass in turn.
       return !read || (!read.skipped && (/[^\x00-\x7f]/.test(command) || read.names.has(command.toLowerCase())))
@@ -489,7 +491,7 @@ export function agentCommandOwnershipSnapshotAsync(): Promise<AgentCommandOwners
     const fileVisible = (file: string) => {
       try {
         const folder = resolve(dirname(file))
-        return windowsFiles.has(file) ? visible(folder, basename(file)) : !folderReads.get(folder)?.skipped
+        return windowsFiles.has(file) ? visible(folder, basename(file)) : !folderReads.get(folderKey(folder))?.skipped
       } catch { return false }
     }
     const byCommand = new Map([...commands].map(command => [command,
