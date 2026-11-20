@@ -1,5 +1,6 @@
 import { env } from '../config/env.js'
 import { logger } from '../utils/logger.js'
+import { deepgramListenUrl } from './deepgramListen.js'
 import { STT_TIMEOUT_MS } from './sttTimeout.js'
 
 // Deepgram pre-recorded (batch) STT. We buffer the device's streamed PCM and send it as one
@@ -25,8 +26,10 @@ const ALLOWED_LANGS = new Set<string>(VOICE_LANGS)
 export function normalizeLang(lang: unknown): VoiceLang {
   return typeof lang === 'string' && ALLOWED_LANGS.has(lang) ? (lang as VoiceLang) : 'en'
 }
-const dgUrl = (sampleRate: number, lang: string) =>
-  `https://api.deepgram.com/v1/listen?model=nova-3&language=${lang}&punctuate=true&smart_format=false&encoding=linear16&sample_rate=${sampleRate}&channels=1`
+const dgUrl = (sampleRate: number, lang: string) => deepgramListenUrl({
+  model: 'nova-3', language: lang, punctuate: true, smart_format: false,
+  encoding: 'linear16', sample_rate: sampleRate, channels: 1,
+})
 
 /** Transcribe raw linear16/mono PCM at `sampleRate` Hz in `lang` (see VOICE_LANGS). Returns '' if empty. */
 export async function transcribe(pcm: Buffer, sampleRate = 16000, lang = 'en'): Promise<string> {

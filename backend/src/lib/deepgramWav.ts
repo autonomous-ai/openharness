@@ -4,6 +4,7 @@
 // copy of a decision that was MEASURED rather than chosen. The model-per-language map below cost a real
 // afternoon to establish; two copies of it is how one of them silently stops matching.
 import { env } from '../config/env.js'
+import { deepgramListenUrl } from './deepgramListen.js'
 import { STT_TIMEOUT_MS } from './sttTimeout.js'
 
 /**
@@ -32,7 +33,7 @@ export async function transcribeWavWithDeepgram(audio: Buffer, contentType: stri
   // (verified on an English WAV), so it stays for English, where it is the better model.
   // `language=multi` on nova-3 was also tried and came back as garbled cross-script noise.
   const model = lang === 'vi' ? 'nova-2' : 'nova-3'
-  const url = `https://api.deepgram.com/v1/listen?model=${model}&language=${lang}&punctuate=true&smart_format=false`
+  const url = deepgramListenUrl({ model, language: lang, punctuate: true, smart_format: false })
   const res = await fetch(url, {
     method: 'POST',
     headers: { Authorization: `Token ${env.DEEPGRAM_API_KEY}`, 'Content-Type': contentType },
