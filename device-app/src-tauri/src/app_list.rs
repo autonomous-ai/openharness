@@ -94,41 +94,64 @@ pub fn change(existing: Option<&str>, appimage: &Path, wanted: &str, exists: imp
 }
 
 /// Brings `<data_home>/applications/harness-device.desktop` to what `change` says for the AppImage APPIMAGE names,
-/// with the icon from the image mounted at APPDIR (absolute, as appimage_env.rs takes it). Ok(true): it wrote.
-pub fn apply(data_home: &Path, appimage_var: Option<&OsStr>, appdir_var: Option<&OsStr>) -> Result<bool, String> {
-    let Some(appimage) = appimage(appimage_var) else { return Ok(false) };
-    let Some(exec) = exec_value(&appimage) else { return Ok(false) };
+/// with the icon from the image mounted at APPDIR (absolute, as appimage_env.rs takes it). None: the run is no
+/// AppImage. Else what it did, or the error's log line.
+pub fn apply(
+    data_home: Option<&Path>,
+    appimage_var: Option<&OsStr>,
+    appdir_var: Option<&OsStr>,
+) -> Option<Result<Change, String>> {
+    let appimage = appimage(appimage_var)?;
+    let Some(data_home) = data_home else { return Some(Err(not_written("no data folder"))) };
+    let Some(exec) = exec_value(&appimage) else { return Some(Err(not_written("path not one line"))) };
     // The icon's path goes in the entry as it is: one line, UTF-8.
     if data_home.to_str().is_none_or(|path| path.chars().any(char::is_control)) {
-        return Ok(false);
+        return Some(Err(not_written("path not one line")));
     }
+    Some(write_entry(data_home, &appimage, &exec, appdir_var))
+}
+
+fn write_entry(data_home: &Path, appimage: &Path, exec: &str, appdir_var: Option<&OsStr>) -> Result<Change, String> {
     let icon_bytes = appdir_var
         .map(Path::new)
         .filter(|appdir| appdir.is_absolute())
         .and_then(|appdir| fs::read(appdir.join(ICON_MEMBER)).ok());
     let icon = data_home.join("icons").join(ICON);
-    let wanted = entry(&exec, icon_bytes.as_ref().map(|_| icon.as_path()));
+    let wanted = entry(exec, icon_bytes.as_ref().map(|_| icon.as_path()));
     let file = data_home.join("applications").join(ENTRY);
     let existing = match fs::read(&file) {
         Ok(bytes) => Some(String::from_utf8_lossy(&bytes).into_owned()),
         Err(error) if error.kind() == io::ErrorKind::NotFound => None,
         Err(error) => return Err(failed(&error)),
     };
-    if change(existing.as_deref(), &appimage, &wanted, Path::exists) == Change::Leave {
-        return Ok(false);
+    if change(existing.as_deref(), appimage, &wanted, Path::exists) == Change::Leave {
+        return Ok(Change::Leave);
     }
     // The icon first: an entry is never there naming an icon that is not.
     if let Some(bytes) = &icon_bytes {
         write(&icon, bytes).map_err(|error| failed(&error))?;
     }
-    write(&file, wanted.as_bytes()).map(|()| true).map_err(|error| failed(&error))
+    write(&file, wanted.as_bytes()).map(|()| Change::Write).map_err(|error| failed(&error))
+}
+
+/// The log line for what `apply` did. A left entry has one too: a check that waits for this run's decision sees it.
+pub fn line(outcome: Result<Change, String>) -> String {
+    match outcome {
+        Ok(Change::Write) => "app list: entry written".into(),
+        Ok(Change::Leave) => "app list: entry kept".into(),
+        Err(line) => line,
+    }
+}
+
+fn not_written(why: &str) -> String {
+    format!("app list: entry not written ({why})")
 }
 
 /// The error's code only: an error's text names the path, which holds the person's name.
 fn failed(error: &io::Error) -> String {
     match error.raw_os_error() {
-        Some(code) => format!("app list: entry not written (error {code})"),
-        None => format!("app list: entry not written ({:?})", error.kind()),
+        Some(code) => not_written(&format!("error {code}")),
+        None => not_written(&format!("{:?}", error.kind())),
     }
 }
 
@@ -147,16 +170,13 @@ fn write(file: &Path, bytes: &[u8]) -> io::Result<()> {
     written
 }
 
-/// What the log says of this launch's entry: None when it was left, or the run is no AppImage.
+/// What the log says of this launch's entry: one line from an AppImage, None from any other run.
 #[cfg(target_os = "linux")]
 pub fn system() -> Option<String> {
     let home = std::env::var_os("HOME").map(PathBuf::from);
-    let data_home = data_home(std::env::var_os("XDG_DATA_HOME").as_deref(), home.as_deref())?;
-    match apply(&data_home, std::env::var_os("APPIMAGE").as_deref(), std::env::var_os("APPDIR").as_deref()) {
-        Ok(true) => Some("app list: entry written".into()),
-        Ok(false) => None,
-        Err(line) => Some(line),
-    }
+    let data_home = data_home(std::env::var_os("XDG_DATA_HOME").as_deref(), home.as_deref());
+    apply(data_home.as_deref(), std::env::var_os("APPIMAGE").as_deref(), std::env::var_os("APPDIR").as_deref())
+        .map(line)
 }
 
 #[cfg(test)]

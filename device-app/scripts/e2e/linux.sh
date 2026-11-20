@@ -487,8 +487,8 @@ ok "a Wayland session with neither sway nor Hyprland tells no app and logs no fr
 
 cmp -s "$work/entry.before" "$entry" || fail "a second run leaves the entry's bytes"
 ok "a second run leaves harnessd.desktop as it is"
+waits logged "app list: entry kept" || fail "a second run leaves the app-list entry: the log has app list: entry kept"
 stop_app
-# The run is over: whatever the app did to the entry, it has done.
 logged "app list: entry written" && fail "a second run leaves the app-list entry: the log has app list: entry written"
 stamp | cmp -s "$work/app-list.before" - || fail "a second run leaves the app-list entry, byte for byte and mtime"
 ok "a second run leaves the entry, byte for byte and mtime"
@@ -534,6 +534,7 @@ ok "sway: the watch is told foot, kitty, then foot again, each as it takes the f
 
 cmp -s "$work/entry.before" "$entry" || fail "an entry with Hidden=true and another Exec= is left as it is"
 ok "an entry turned off (Hidden=true), with another Exec=, is left as it is"
+waits logged "app list: entry kept" || fail "an entry naming another AppImage on disk is left: the log has entry kept"
 stop_app
 logged "app list: entry written" && fail "an entry naming another AppImage on disk is left: the log has entry written"
 stamp | cmp -s "$work/app-list.before" - || fail "an entry naming another AppImage on disk is left alone"

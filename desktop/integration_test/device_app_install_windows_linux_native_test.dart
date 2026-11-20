@@ -521,16 +521,22 @@ void main() {
             if (RegExp(r'^app-.*\.log$').hasMatch(p.basename(log.path)))
               ...log.readAsLinesSync(),
       ];
-      // The app logs a written entry or a failed one; a left one says
-      // nothing, so its first line is the sign that it ran this far.
-      final logged = await _until(() async => lines().isNotEmpty);
+      // An AppImage run ends its app-list step in one line: this one says
+      // the app decided, and left the entry.
+      final kept = await _until(
+        () async =>
+            lines().any((line) => line.endsWith('app list: entry kept')),
+      );
       final wrote = entryAsDesktopWrote;
 
-      expect(logged, isTrue);
+      expect(kept, isTrue);
+      expect(
+        lines().where((line) => line.endsWith('app list: entry written')),
+        isEmpty,
+      );
       expect(wrote, isNotNull);
       expect(entry().readAsBytesSync(), wrote!.bytes);
       expect(entry().statSync().modified, wrote.modified);
-      expect(lines().where((line) => line.contains('app list:')), isEmpty);
     },
   );
 
