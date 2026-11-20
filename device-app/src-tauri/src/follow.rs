@@ -43,8 +43,9 @@ pub fn chatgpt_installed(home: &Path, applications: &Path, bundle_id: &dyn Fn(&P
         .any(|app| bundle_id(app).as_deref() == Some(CHATGPT_BUNDLE))
 }
 
-/// Whether the app in front is ChatGPT: its bundle id on macOS, its program's name on Windows and Linux. Another
-/// program by that name is told apart by the door's observer, which checks the window's own process.
+/// Whether the app in front is ChatGPT: its bundle id on macOS, its program's name on Windows and Linux. One rule for
+/// every OS: on macOS the names match no real bundle id. Another program by that name is told apart by the door's
+/// observer, which checks the window's own process.
 pub fn is_chatgpt_front(value: &str) -> bool {
     value == CHATGPT_BUNDLE || value.eq_ignore_ascii_case(CHATGPT_EXE) || value == CHATGPT_LINUX
 }
@@ -701,7 +702,7 @@ mod tests {
     }
 
     #[test]
-    fn the_door_is_the_oss_or_the_one_of_the_desktop_the_front_source_reads() {
+    fn the_door_is_the_one_of_the_os_or_of_the_desktop_the_front_source_reads() {
         use crate::front::LinuxFront;
         assert_eq!(door_kind("macos", None), DoorKind::Mac);
         assert_eq!(door_kind("windows", None), DoorKind::Windows);
@@ -709,6 +710,7 @@ mod tests {
         assert_eq!(door_kind("linux", Some(LinuxFront::Sway)), DoorKind::Sway);
         assert_eq!(door_kind("linux", Some(LinuxFront::Hyprland)), DoorKind::Hyprland);
         assert_eq!(door_kind("linux", Some(LinuxFront::None)), DoorKind::None);
+        assert_eq!(door_kind("linux", None), DoorKind::None);
     }
 
     #[test]

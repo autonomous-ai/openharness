@@ -1,7 +1,8 @@
-//! The menu is the same on every OS: the model and the app take no OS. The one refresh that differs, Linux's tick
-//! telling what a click tells elsewhere, is tick.rs's test; main.rs hands `tick::menu_opened` to the tray's click and
-//! `tick::tick` to the timer (`ticked`). Follow ChatGPT comes from the door main.rs hands the runner
-//! (`follow::system`), never from an OS the rules read.
+//! The menu is the same on every OS: the model and the app read no OS. main.rs hands them the two answers that differ,
+//! whether installing an update ends the app (Windows) and whether Follow ChatGPT is Harness's own switch (off macOS).
+//! The one refresh that differs, Linux's tick telling what a click tells elsewhere, is tick.rs's test; main.rs hands
+//! `tick::menu_opened` to the tray's click and `tick::tick` to the timer (`ticked`). Whether Follow ChatGPT shows comes
+//! from the door main.rs hands the runner (`follow::system`): the rules read only its answers.
 
 use crate::app::App;
 use crate::follow::{AxTrust, ChatgptWindow, NoFollow};
@@ -154,10 +155,10 @@ fn shows_the_row(effects: &[Effect]) -> bool {
 }
 
 /// Whether the menu's last Follow ChatGPT item and its screen show, signed in with a dial attached, once the runner has
-/// told what the door answers and ChatGPT came to the front.
-fn follow_shown(trusted: bool, installed: bool) -> (bool, bool) {
+/// told what the door answers and ChatGPT came to the front. `switch`: the rules off macOS.
+fn follow_shown(switch: bool, trusted: bool, installed: bool) -> (bool, bool) {
     let seen = Saved { cli_seen: true, asked_sign_in: true, login_item: true, ..Saved::default() };
-    let (mut app, mut effects) = App::new(seen, true, false, B, false, false);
+    let (mut app, mut effects) = App::new(seen, true, false, B, false, switch);
     for event in
         [Event::StartDone { ok: true }, status(false), Event::Auth(Some(true)), Event::Follow { trusted, installed }]
     {
@@ -169,9 +170,12 @@ fn follow_shown(trusted: bool, installed: bool) -> (bool, bool) {
         _ => None,
     });
     let item = menu.is_some_and(|items| {
-        items
-            .iter()
-            .any(|item| matches!(item, MenuItem::Check(MenuAction::FollowChatgpt | MenuAction::FollowSettings, ..)))
+        items.iter().any(|item| {
+            matches!(
+                item,
+                MenuItem::Check(MenuAction::FollowChatgpt | MenuAction::FollowSettings | MenuAction::FollowSwitch, ..)
+            )
+        })
     });
     (item, app.view().is_some_and(|view| view.screen == Screen::Follow))
 }
@@ -179,13 +183,20 @@ fn follow_shown(trusted: bool, installed: bool) -> (bool, bool) {
 #[test]
 fn follow_chatgpt_shows_only_with_a_door_that_has_the_chatgpt_app() {
     // macOS's door, the ChatGPT app installed and no permission yet: the item, and the offer's screen.
-    assert_eq!(follow_shown(false, true), (true, true));
-    // A desktop with no door (GNOME or KDE on Wayland): no item and no screen, from the same rules.
-    assert_eq!(follow_shown(NoFollow.trusted(), NoFollow.installed()), (false, false));
+    assert_eq!(follow_shown(false, false, true), (true, true));
+    // A door off macOS with the ChatGPT app installed, its switch on: the item, and no screen, since nothing is asked.
+    assert_eq!(follow_shown(true, true, true), (true, false));
+    // A desktop with no door (GNOME or KDE on Wayland), off macOS's rules: no item and no screen.
+    assert_eq!(follow_shown(true, NoFollow.trusted(), NoFollow.installed()), (false, false));
 }
 
 #[cfg(not(target_os = "macos"))]
 #[test]
-fn off_macos_the_saved_switch_off_leaves_the_door_untrusted() {
-    assert!(!crate::follow::system(std::env::temp_dir(), false).trusted());
+fn off_macos_the_saved_switch_is_what_the_door_trusts() {
+    let door = |switch_on| crate::follow::system(std::env::temp_dir(), switch_on).trusted();
+    // Windows always has its door. On Linux the door is the session's (NoFollow on CI, with no window system), so
+    // only the switch off is held here: follow::door_kind's test and each Linux door's own switch test hold the rest.
+    #[cfg(windows)]
+    assert!(door(true));
+    assert!(!door(false));
 }
