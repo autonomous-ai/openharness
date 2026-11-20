@@ -19,13 +19,24 @@ vi.mock('node:net', async (importOriginal) => {
 })
 
 // Every artifact watcher the manager opens, and whether it was closed: what a viewer that failed must not keep.
-const watchers = vi.hoisted(() => [] as Array<{ closed: boolean; watcher: import('chokidar').FSWatcher; ready: Promise<void> }>)
+const watchers = vi.hoisted(() => [] as Array<{
+  closed: boolean; watcher: import('chokidar').FSWatcher; options: import('chokidar').ChokidarOptions | undefined; ready: Promise<void>
+}>)
+/**
+ * Set by a case that announces each file event itself: its watch then hears nothing from the machine. macOS hands a watch
+ * its events in batches, on a loaded Mac many seconds after the write (12 s seen at load 20), so a wait for one has no
+ * bound, and one that lands late would rescan between the case's own steps.
+ */
+const silent = vi.hoisted(() => ({ on: false }))
 vi.mock('chokidar', async (importOriginal) => {
   const actual = await importOriginal<typeof import('chokidar')>()
+  const { EventEmitter: Emitter } = await import('node:events')
   const watch = ((...args: Parameters<typeof actual.watch>) => {
-    const watcher = actual.watch(...args)
+    const watcher = silent.on
+      ? Object.assign(new Emitter(), { close: async () => undefined }) as unknown as import('chokidar').FSWatcher
+      : actual.watch(...args)
     // Taken at creation: chokidar says `ready` once, after its first read of the folder.
-    const seen = { closed: false, watcher, ready: new Promise<void>((resolve) => { watcher.once('ready', () => resolve()) }) }
+    const seen = { closed: false, watcher, options: args[1], ready: new Promise<void>((resolve) => { watcher.once('ready', () => resolve()) }) }
     watchers.push(seen)
     const close = watcher.close.bind(watcher)
     watcher.close = () => { seen.closed = true; return close() }
@@ -33,23 +44,6 @@ vi.mock('chokidar', async (importOriginal) => {
   }) as typeof actual.watch
   return { ...actual, watch, default: { ...actual.default, watch } }
 })
-
-/**
- * Resolves once chokidar announces a file touched in [dir]. macOS starts handing a new watch its events some time after
- * chokidar's `ready` (seconds, on a loaded machine) and may never tell of a write before then; so a case that writes and
- * then waits for the event first proves the watch is live, touching the probe again until it is announced.
- */
-async function live(watcher: EventEmitter, dir: string): Promise<void> {
-  const probe = join(dir, 'live.probe')
-  let touch: ReturnType<typeof setInterval> | undefined
-  await new Promise<void>((resolve) => {
-    const on = (_event: string, path: string): void => { if (path === probe) { watcher.off('all', on); resolve() } }
-    watcher.on('all', on)
-    writeFileSync(probe, '')
-    touch = setInterval(() => writeFileSync(probe, String(Date.now())), 100)
-  })
-  clearInterval(touch)
-}
 
 function fakeChild(): ChildProcess & { exitWith: (code: number) => void } {
   const child = new EventEmitter() as ChildProcess & { exitWith: (code: number) => void }
@@ -421,22 +415,15 @@ describe('DshViewerManager, the rest of a viewer\'s life', () => {
     const spawned: Array<ReturnType<typeof fakeChild>> = []
     const urls: Array<string | null> = []
     const logs: string[] = []
-    const published = new EventEmitter()
-    /** Resolves once the pane is handed [url]: on the publish itself, however late the machine delivers it. */
-    const urlBecomes = (url: string | null): Promise<void> => new Promise((resolve) => {
-      if (urls.at(-1) === url) { resolve(); return }
-      const on = (next: string | null): void => { if (next === url) { published.off('url', on); resolve() } }
-      published.on('url', on)
-    })
     manager = new DshViewerManager({
-      onUrl: (_agentId, url) => { urls.push(url); published.emit('url', url) },
+      onUrl: (_agentId, url) => urls.push(url),
       log: (line) => logs.push(line),
       freePort: async () => 4790 + spawned.length,
       waitForPort: async () => true,
       spawn: (() => { const child = fakeChild(); spawned.push(child); return child }) as unknown as typeof import('./shell.js').spawnDshCommand,
       ...deps,
     })
-    return { spawned, urls, logs, manager, urlBecomes }
+    return { spawned, urls, logs, manager }
   }
 
   it('runs a bare script name as the package\'s own file, the way `harness dsh check` reads it', async () => {
@@ -708,52 +695,67 @@ describe('DshViewerManager, the rest of a viewer\'s life', () => {
       utimesSync(join(workspace, rel), seconds, seconds)
     }
     at('models/old.step', 1_000)
-    const { urls, logs, manager, urlBecomes } = setup()
-    await manager.start('a1', dsh({ command: 'v', url: 'http://127.0.0.1:${port}/?file=${artifact}', artifactExtensions: ['.step'] }), workspace)
-    expect(urls).toEqual(['http://127.0.0.1:4790/?file=models/old.step'])
-    await watchers.at(-1)!.ready
-    await live(watchers.at(-1)!.watcher, workspace)
+    const { urls, logs, manager } = setup()
+    silent.on = true
+    try {
+      await manager.start('a1', dsh({ command: 'v', url: 'http://127.0.0.1:${port}/?file=${artifact}', artifactExtensions: ['.step'] }), workspace)
+      expect(urls).toEqual(['http://127.0.0.1:4790/?file=models/old.step'])
+      const { watcher: inner, options } = watchers.at(-1)!
+      // chokidar watches the workspace and what is in it, and skips what the artifact scan skips inside it
+      const ignored = options!.ignored as (path: string) => boolean
+      expect([workspace, join(workspace, 'models'), join(workspace, 'models', 'new.step')].map(ignored)).toEqual([false, false, false])
+      expect([join(workspace, 'node_modules'), join(workspace, '.cache')].map(ignored)).toEqual([true, true])
 
-    at('models/new.step', 2_000)
-    await urlBecomes('http://127.0.0.1:4790/?file=models/new.step')
-    // not artifacts, or not where artifacts are looked for: nothing changes
-    at('notes.txt', 3_000)
-    at('node_modules/lib/newest.step', 3_000)
-    at('.cache/newest.step', 3_000)
-    // the same newest file touched again, twice inside the debounce: one rescan, same answer
-    at('models/new.step', 2_001)
-    at('models/new.step', 2_002)
-    await settle(900)
-    expect(urls).toEqual(['http://127.0.0.1:4790/?file=models/old.step', 'http://127.0.0.1:4790/?file=models/new.step'])
+      // each write is announced as chokidar would, and the rescan's debounce runs on a held clock
+      const announce = (event: 'add' | 'change' | 'unlink', rel: string): boolean => inner.emit(event, join(workspace, rel))
+      const state = (manager as unknown as { states: Map<string, { rescanTimer: unknown; watcher: { close: () => Promise<void> } }> }).states.get('a1')!
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      at('models/new.step', 2_000)
+      announce('add', 'models/new.step')
+      await vi.advanceTimersByTimeAsync(300)
+      expect(urls.at(-1)).toBe('http://127.0.0.1:4790/?file=models/new.step')
+      // not artifacts, or not where artifacts are looked for: no rescan
+      for (const rel of ['notes.txt', 'node_modules/lib/newest.step', '.cache/newest.step']) {
+        at(rel, 3_000)
+        announce('add', rel)
+      }
+      expect(state.rescanTimer).toBeNull()
+      // the same newest file touched again, twice inside the debounce: one rescan, same answer
+      at('models/new.step', 2_001)
+      announce('change', 'models/new.step')
+      at('models/new.step', 2_002)
+      announce('change', 'models/new.step')
+      await vi.advanceTimersByTimeAsync(300)
+      expect(urls).toEqual(['http://127.0.0.1:4790/?file=models/old.step', 'http://127.0.0.1:4790/?file=models/new.step'])
 
-    rmSync(join(workspace, 'models', 'new.step'))
-    await urlBecomes('http://127.0.0.1:4790/?file=models/old.step')
-    rmSync(join(workspace, 'models', 'old.step'))
-    await urlBecomes('http://127.0.0.1:4790/?file=')
+      rmSync(join(workspace, 'models', 'new.step'))
+      announce('unlink', 'models/new.step')
+      await vi.advanceTimersByTimeAsync(300)
+      expect(urls.at(-1)).toBe('http://127.0.0.1:4790/?file=models/old.step')
+      rmSync(join(workspace, 'models', 'old.step'))
+      announce('unlink', 'models/old.step')
+      await vi.advanceTimersByTimeAsync(300)
+      expect(urls.at(-1)).toBe('http://127.0.0.1:4790/?file=')
 
-    const inner = (manager as unknown as { states: Map<string, { watcher: EventEmitter }> }).states.get('a1')!.watcher
-    inner.emit('error', new Error('EMFILE'))
-    inner.emit('error', 'lost')
-    expect(logs.filter((line) => line.includes('artifact watch error'))).toEqual(['[dsh] artifact watch error · Error', '[dsh] artifact watch error · string'])
+      inner.emit('error', new Error('EMFILE'))
+      inner.emit('error', 'lost')
+      expect(logs.filter((line) => line.includes('artifact watch error'))).toEqual(['[dsh] artifact watch error · Error', '[dsh] artifact watch error · string'])
 
-    // a stop with a rescan still pending cancels it, and a watcher that fails to close does not fail the stop
-    const state = (manager as unknown as { states: Map<string, { rescanTimer: unknown; watcher: { close: () => Promise<void> } }> }).states.get('a1')!
-    const close = state.watcher.close.bind(state.watcher)
-    state.watcher.close = async () => { await close(); throw new Error('close failed') }
-    const newest = join(workspace, 'models', 'newest.step')
-    // The watch's own listener runs first: once chokidar says the file is there, its rescan is pending.
-    const added = new Promise<void>((resolve) => {
-      const on = (path: string): void => { if (path === newest) { inner.off('add', on); resolve() } }
-      inner.on('add', on)
-    })
-    at('models/newest.step', 5_000)
-    await added
-    expect(state.rescanTimer).not.toBeNull()
-    await manager.stop('a1')
-    await settle(500)
-    expect(urls.at(-1)).toBeNull()
-    expect(urls.filter((url) => url?.endsWith('newest.step'))).toEqual([])
-    expect(logs).toContain('[viewers] VIEWER_WATCH_CLOSE_FAILED · Error')
+      // a stop with a rescan still pending cancels it, and a watcher that fails to close does not fail the stop
+      const close = state.watcher.close.bind(state.watcher)
+      state.watcher.close = async () => { await close(); throw new Error('close failed') }
+      at('models/newest.step', 5_000)
+      announce('add', 'models/newest.step')
+      expect(state.rescanTimer).not.toBeNull()
+      await manager.stop('a1')
+      await vi.advanceTimersByTimeAsync(300)
+      expect(urls.at(-1)).toBeNull()
+      expect(urls.filter((url) => url?.endsWith('newest.step'))).toEqual([])
+      expect(logs).toContain('[viewers] VIEWER_WATCH_CLOSE_FAILED · Error')
+    } finally {
+      vi.useRealTimers()
+      silent.on = false
+    }
   }, 20_000)
 
   it('follows an artifact written while the watch is still starting', async () => {

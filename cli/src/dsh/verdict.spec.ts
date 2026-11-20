@@ -5,43 +5,24 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DshVerdictWatcher, parseVerdict, type DshVerdict } from './verdict.js'
 
-/** The chokidar instance behind one agent's watch: to wait for its `ready`, or raise what chokidar would. */
+/**
+ * The chokidar instance behind one agent's watch: to wait for its `ready`, or announce what chokidar would. A spec writes
+ * a file and announces the write itself: macOS hands a watch its events in batches, on a loaded Mac many seconds after the
+ * write (12 s seen at load 20), so a wait for chokidar's own event has no bound.
+ */
 const innerWatcher = (w: DshVerdictWatcher, agentId: string): EventEmitter & { closed: boolean } =>
   (w as unknown as { watched: Map<string, { watcher: EventEmitter & { closed: boolean } }> }).watched.get(agentId)!.watcher
 
-/**
- * Resolves once chokidar announces a file touched in [dir]. macOS starts handing a new watch its events some time after
- * chokidar's `ready` (seconds, on a loaded machine) and may never tell of a write before then; so a case that writes and
- * then waits for the event first proves the watch is live, touching the probe again until it is announced.
- */
-async function live(watcher: EventEmitter, dir: string): Promise<void> {
-  const probe = join(dir, 'live.probe')
-  let touch: ReturnType<typeof setInterval> | undefined
-  await new Promise<void>((resolve) => {
-    const on = (_event: string, path: string): void => { if (path === probe) { watcher.off('all', on); resolve() } }
-    watcher.on('all', on)
-    writeFileSync(probe, '')
-    touch = setInterval(() => writeFileSync(probe, String(Date.now())), 100)
-  })
-  clearInterval(touch)
-}
-
-/** The debounce held: a publish waits until the test runs it, however late the machine delivers events. */
+/** The debounce held: a publish waits until the test runs it. */
 function heldDebounce() {
   const pending = new Set<() => void>()
-  let scheduled = (): void => undefined
   return {
     debounce: (run: () => void): (() => void) => {
       const once = (): void => { pending.delete(once); run() }
       pending.add(once)
-      scheduled()
       return () => { pending.delete(once) }
     },
     get pending(): number { return pending.size },
-    /** Resolves once a publish waits: the watcher has had an event for its file. */
-    next: (): Promise<void> => pending.size ? Promise.resolve() : new Promise((resolve) => {
-      scheduled = () => { scheduled = () => undefined; resolve() }
-    }),
     run: (): void => { for (const run of [...pending]) run() },
   }
 }
@@ -149,8 +130,8 @@ describe('DshVerdictWatcher', () => {
 
     const next = new Promise<void>((resolve) => { resolveNext = resolve })
     await ready
-    await live(innerWatcher(watcher, 'agent-1'), join(workspace, '.harness'))
     writeFileSync(file, JSON.stringify({ spec: 1, ready: true, summary: 'second' }))
+    innerWatcher(watcher, 'agent-1').emit('change', file)
     await next
     expect(seen.at(-1)?.summary).toBe('second')
     expect(seen.at(-1)?.ready).toBe(true)
@@ -204,12 +185,12 @@ describe('DshVerdictWatcher, event by event', () => {
     watcher.watch('a', file)
     const inner = innerWatcher(watcher, 'a')
     await once(inner, 'ready')
-    await live(inner, join(workspace, '.harness'))
     expect(seen).toEqual([])
     expect(watcher.current('a')).toBeNull()
 
     writeFileSync(file, verdict('first'))
-    await clock.next()
+    inner.emit('add', file)
+    expect(clock.pending).toBe(1)
     clock.run()
     expect(seen).toEqual(['first'])
     expect(watcher.current('a')?.summary).toBe('first')
@@ -233,7 +214,8 @@ describe('DshVerdictWatcher, event by event', () => {
     expect(seen).toEqual(['first', 'second'])
 
     rmSync(file)
-    await clock.next()
+    inner.emit('unlink', file)
+    expect(clock.pending).toBe(1)
     clock.run()
     expect(seen).toEqual(['first', 'second', null])
     expect(watcher.current('a')).toBeNull()
