@@ -4,19 +4,26 @@
  * checks' (scripts/windows-dial-e2e/README.md).
  */
 import { execFile } from 'node:child_process'
-import { readFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { afterAll, describe, expect, it } from 'vitest'
 import { CLI_ROOT } from './harness/daemon.js'
 import { besideEnvironment, endedWithin, ownHomes, sealedPath } from './harness/windowsDaemon.js'
 
 const DESK = join(CLI_ROOT, 'scripts', 'windows-dial-e2e', 'desk.mts')
 const CONSOLE = join(CLI_ROOT, 'scripts', 'windows-dial-e2e', 'console.ps1')
 
+// The CI shard sets E2E_ARTIFACTS_DIR and every desk inherits it: with it set, a harness that registered vitest's hooks
+// as it was imported ended the desk before it read its arguments (2026-11-21). Set here so every machine runs as CI does.
+const ARTIFACTS = mkdtempSync(join(tmpdir(), 'desk-artifacts-'))
+afterAll(() => rmSync(ARTIFACTS, { recursive: true, force: true }))
+
 /** The desk run with [args]: its exit code and what it said on stderr. */
 function desk(args: string[]): Promise<{ code: number | null; stderr: string }> {
   return new Promise((resolve) => {
-    execFile(process.execPath, ['--import', 'tsx', DESK, ...args], { cwd: CLI_ROOT, timeout: 60_000 }, (error, _stdout, stderr) =>
+    const env = { ...process.env, E2E_ARTIFACTS_DIR: ARTIFACTS }
+    execFile(process.execPath, ['--import', 'tsx', DESK, ...args], { cwd: CLI_ROOT, env, timeout: 60_000 }, (error, _stdout, stderr) =>
       resolve({ code: error ? (typeof error.code === 'number' ? error.code : null) : 0, stderr }))
   })
 }
