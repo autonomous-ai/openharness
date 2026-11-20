@@ -3,7 +3,7 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:net'
 import { homedir, tmpdir } from 'node:os'
-import { delimiter, dirname, join, parse, sep, win32 } from 'node:path'
+import { delimiter, dirname, join, parse, posix, sep, win32 } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import type { CableHostWiring, DaemonCableHost } from '../cable/cableHost.js'
 import { AppFilter, FRONT_SETTLE_MS } from '../cable/hosts/appFilter.js'
@@ -8855,9 +8855,9 @@ describe("opencode's sessions, over its local server (docs/plans/2026-11-17-dial
    *  read in `orcaRuns`. */
   const onMac = { ...orca, platform: 'darwin' as const, onPath: (name: string) => (name === 'herdr-app' ? null : `/opt/${name}/bin/${name}`) }
   /** The watch the Claude app's store source holds on macOS beside opencode's, on its root and the app's folder: in the
-   *  throwaway home neither is there. */
-  const claudeStore = join(homedir(), 'Library', 'Application Support', 'Claude')
-  const claudeStoreWatch = [[join(claudeStore, 'claude-code-sessions'), claudeStore], expect.any(Function)]
+   *  throwaway home neither is there. Joined as on macOS, whatever OS runs the suite (cable/hosts/appPlaces.ts). */
+  const claudeStore = posix.join(homedir(), 'Library', 'Application Support', 'Claude')
+  const claudeStoreWatch = [[posix.join(claudeStore, 'claude-code-sessions'), claudeStore], expect.any(Function)]
   const host = () => seen.dial as unknown as DaemonCableHost
   /** A dial on the cable, on this computer's agents: no window. */
   const attach = (port: DevicesPort) => { seen.host.watching!(true); port.swarms(null) }
@@ -9178,10 +9178,11 @@ describe("opencode's sessions, over its local server (docs/plans/2026-11-17-dial
 })
 
 describe("the Claude app's Code sessions, from its store (docs/plans/2026-11-19-dial-claude-app-sessions-design.md)", () => {
-  /** The store's root in the suite's throwaway home, never the person's own. */
-  const ROOT = join(homedir(), 'Library', 'Application Support', 'Claude', 'claude-code-sessions')
-  const ACCOUNT_DIR = join(ROOT, 'acc')
-  const ORG_DIR = join(ACCOUNT_DIR, 'org')
+  /** The store's root in the suite's throwaway home, never the person's own: macOS's, joined as on macOS whatever OS runs
+   *  the suite (cable/hosts/appPlaces.ts). */
+  const ROOT = posix.join(homedir(), 'Library', 'Application Support', 'Claude', 'claude-code-sessions')
+  const ACCOUNT_DIR = posix.join(ROOT, 'acc')
+  const ORG_DIR = posix.join(ACCOUNT_DIR, 'org')
   /** Claude Code's id of a session, and the Claude app's id of it; a second session of the store. */
   const SESSION = '0b7c2f4e-8a1d-4c3b-9e5f-6a7b8c9d0e1f'
   const LOCAL = 'local_8d1f2c3a-4b5e-4f60-9a7b-1c2d3e4f5a6b'
@@ -9274,7 +9275,7 @@ describe("the Claude app's Code sessions, from its store (docs/plans/2026-11-19-
     expect(host().appOf(ID)).toBe('claude')
     // Idle: no turn is told.
     expect(calls('turnStarted')).toEqual([])
-    expect(watchedFolders.calls).toEqual(expect.arrayContaining([[[ROOT, dirname(ROOT)], expect.any(Function)],
+    expect(watchedFolders.calls).toEqual(expect.arrayContaining([[[ROOT, posix.dirname(ROOT)], expect.any(Function)],
       [[ACCOUNT_DIR], expect.any(Function)], [[ORG_DIR], expect.any(Function)]]))
     expect(logs).toEqual(expect.arrayContaining(['[claude-app] watch · on', '[claude-app] listed · 1 sessions']))
     seen.host.watching!(false)
@@ -9507,9 +9508,10 @@ describe("the Claude app's Code sessions, from its store (docs/plans/2026-11-19-
 describe("the ChatGPT app's threads, from its metadata (docs/plans/2026-11-19-dial-chatgpt-ring-and-follow-design.md)", () => {
   /** The app's Codex home in the suite's throwaway home, never the person's own. */
   const CODEX_HOME = join(homedir(), '.codex')
-  /** Where the app is looked for: /Applications, then the home's own Applications. */
-  const APPS = join('/Applications', 'ChatGPT.app')
-  const HOME_APPS = join(homedir(), 'Applications', 'ChatGPT.app')
+  /** Where the app is looked for: /Applications, then the home's own Applications, joined as on macOS whatever OS runs
+   *  the suite (cable/hosts/appPlaces.ts). */
+  const APPS = posix.join('/Applications', 'ChatGPT.app')
+  const HOME_APPS = posix.join(homedir(), 'Applications', 'ChatGPT.app')
   const BUNDLE = 'com.openai.codex'
   /** A thread of the app (Codex's session id), and two more. */
   const THREAD = '7d3e9a10-2b4c-4d5e-8f60-1a2b3c4d5e6f'
@@ -9637,7 +9639,8 @@ describe("the ChatGPT app's threads, from its metadata (docs/plans/2026-11-19-di
     const apps = join(dataDir, 'apps')
     mkdirSync(join(apps, 'chatgpt', at === 'folder' ? 'ChatGPT' : ''), { recursive: true })
     if (at === 'file') writeFileSync(join(apps, 'chatgpt', 'ChatGPT'), '')
-    vi.stubEnv('HARNESS_APPLICATIONS_DIR', apps)
+    // Linux takes only a folder absolute as on Linux: on a Windows host, the same folder from the current drive's root.
+    vi.stubEnv('HARNESS_APPLICATIONS_DIR', process.platform === 'win32' ? apps.slice(parse(apps).root.length - 1).replaceAll(sep, '/') : apps)
     return apps
   }
   /** Windows' answer for the ChatGPT app's Store package: `answer`, and each package asked of. */
@@ -9783,7 +9786,7 @@ describe("the ChatGPT app's threads, from its metadata (docs/plans/2026-11-19-di
   })
 
   it.each([
-    ['/tmp/apps', [join('/tmp/apps', 'ChatGPT.app'), HOME_APPS]],
+    ['/tmp/apps', [posix.join('/tmp/apps', 'ChatGPT.app'), HOME_APPS]],
     ['apps', [APPS, HOME_APPS]],
   ] as const)('HARNESS_APPLICATIONS_DIR, when absolute, is looked in for the app in place of /Applications; a relative one is ignored: %s', async (dir, asked) => {
     vi.stubEnv('HARNESS_APPLICATIONS_DIR', dir)
