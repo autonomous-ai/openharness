@@ -18,11 +18,19 @@ fn rules(source: &str) -> String {
 
 #[test]
 fn the_menu_and_the_rules_read_no_os() {
-    for (name, source) in [("model.rs", include_str!("model.rs")), ("app.rs", include_str!("app.rs"))] {
+    // The app's keep-alive decisions are keepalive.rs's, and its events and effects types.rs's.
+    let modules = [
+        ("model.rs", include_str!("model.rs")),
+        ("app.rs", include_str!("app.rs")),
+        ("keepalive.rs", include_str!("keepalive.rs")),
+        ("types.rs", include_str!("types.rs")),
+    ];
+    for (name, source) in modules {
         let code = rules(source);
         assert!(code.len() < source.len(), "{name} has its tests cut off");
-        // `cfg(` holds `cfg(target_os`, `cfg(windows)`, `cfg(unix)` and their `not(…)`.
-        for word in ["cfg(", "cfg!(", "cfg_attr(", "target_os", "consts::OS"] {
+        // `cfg(` holds `cfg(target_os`, `cfg(windows)`, `cfg(unix)` and their `not(…)`; `consts::` holds
+        // `consts::OS` and `consts::{OS}`; an environment read may name the OS too.
+        for word in ["cfg(", "cfg!(", "cfg_attr(", "target_os", "consts::", "std::env", "env::"] {
             assert!(!code.contains(word), "{name} reads the OS: {word}");
         }
     }
