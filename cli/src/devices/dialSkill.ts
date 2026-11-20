@@ -73,25 +73,22 @@ function missingOr(error: unknown): 'missing' | 'unreadable' {
 }
 
 /**
- * This account's own on Windows, the rule its state files follow (lib/secureState.ts): a real file or folder, not a
- * link or junction (lstat reports both as links), whose real path is inside a root. The profile's ACL is what protects
- * it; a uid means nothing there. 'owner' for a link, which is the person's wherever it points, or a path outside.
+ * This account's own on Windows: its real path is inside a root (lib/secureState.ts `insideWindowsRoots`). The
+ * profile's ACL is what protects it; a uid means nothing there. A folder is judged through its links and junctions, as a
+ * Mac's stat follows them: its real folder decides. A file must be real, as a state file is: a link to one (lstat
+ * reports junctions as links too) is the person's wherever it points. 'owner' for such a link or a path outside.
  */
 export function ownWindowsPath(path: string, kind: 'file' | 'directory', roots: readonly string[] = profileRoots()): Owned {
+  let real
   let info
   try {
-    info = lstatSync(path)
-  } catch (error) {
-    return missingOr(error)
-  }
-  if (info.isSymbolicLink()) return 'owner'
-  if (kind === 'directory' ? !info.isDirectory() : !info.isFile()) return 'missing'
-  let real
-  try {
+    if (kind === 'file' && lstatSync(path).isSymbolicLink()) return 'owner'
     real = realpathSync.native(path)
+    info = statSync(real)
   } catch (error) {
     return missingOr(error)
   }
+  if (kind === 'directory' ? !info.isDirectory() : !info.isFile()) return 'missing'
   return insideWindowsRoots(real, roots) ? 'ok' : 'owner'
 }
 
