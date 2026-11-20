@@ -491,6 +491,8 @@ mod tests {
         assert_eq!(due(&sign_in), Some(Screen::SignIn));
         assert_eq!(due(&AppState { follow: FollowState { trusted: true, ..waiting }, ..state() }), None);
         assert_eq!(due(&AppState { follow: following(false), ..state() }), None);
+        // ChatGPT removed since the offer: nothing to follow.
+        assert_eq!(due(&AppState { follow: FollowState { installed: false, ..waiting }, ..state() }), None);
     }
 
     #[test]

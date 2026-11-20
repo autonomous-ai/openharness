@@ -1706,7 +1706,7 @@ mod tests {
 
     #[test]
     fn the_offer_opens_the_follow_screen_once_and_remembers_it() {
-        let mut app = signed_in();
+        let mut app = with_chatgpt(signed_in());
         let effects = app.handle(Event::FollowOffer);
         assert!(has(&effects, &Effect::Save(Saved { asked_follow: true, ..SEEN })));
         assert_eq!(shows(&effects), [follow_offer()]);
@@ -1718,19 +1718,19 @@ mod tests {
         assert!(!saves(&effects));
 
         // Remembered across a start.
-        let mut app = App::new(Saved { asked_follow: true, ..SEEN }, true, false, B).0;
+        let mut app = with_chatgpt(App::new(Saved { asked_follow: true, ..SEEN }, true, false, B).0);
         answer(&mut app, true);
         assert!(app.handle(Event::FollowOffer).is_empty());
     }
 
     #[test]
     fn the_offer_never_covers_install_or_sign_in() {
-        let mut app = on_sign_in();
+        let mut app = with_chatgpt(on_sign_in());
         assert!(shows(&app.handle(Event::FollowOffer)).is_empty());
         assert_eq!(app.view(), shown(Screen::SignIn, Phase::Offer, &[]));
         assert_eq!(shows(&app.handle(Event::Act(Action::Later))), [follow_offer()]);
 
-        let mut app = fresh();
+        let mut app = with_chatgpt(fresh());
         assert!(shows(&app.handle(Event::FollowOffer)).is_empty());
         assert_eq!(app.view(), shown(Screen::Install, Phase::Working, &[GETTING_READY]));
         app.handle(Event::InstallDone(Ok(())));
@@ -1770,7 +1770,7 @@ mod tests {
 
     #[test]
     fn allow_asks_macos_each_time_and_opens_the_settings_after_the_first() {
-        let mut app = signed_in();
+        let mut app = with_chatgpt(signed_in());
         app.handle(Event::FollowOffer);
         let effects = app.handle(Event::Act(Action::Allow));
         assert!(has(&effects, &Effect::AskAx));
@@ -1789,7 +1789,7 @@ mod tests {
 
     #[test]
     fn allow_closes_the_window() {
-        let mut app = signed_in();
+        let mut app = with_chatgpt(signed_in());
         app.handle(Event::FollowOffer);
         assert_eq!(shows(&app.handle(Event::Act(Action::Allow))), [None]);
         assert_eq!(app.view(), None);
@@ -1827,7 +1827,7 @@ mod tests {
 
     #[test]
     fn not_now_and_closing_close_the_follow_screen() {
-        let mut app = signed_in();
+        let mut app = with_chatgpt(signed_in());
         app.handle(Event::FollowOffer);
         let effects = app.handle(Event::Act(Action::Later));
         assert_eq!(shows(&effects), [None]);
@@ -1887,7 +1887,7 @@ mod tests {
 
     #[test]
     fn only_allow_and_not_now_act_on_the_follow_screen() {
-        let mut app = signed_in();
+        let mut app = with_chatgpt(signed_in());
         app.handle(Event::FollowOffer);
         for action in [Action::Retry, Action::SignIn, Action::Cancel] {
             assert!(app.handle(Event::Act(action)).is_empty(), "{action:?}");
