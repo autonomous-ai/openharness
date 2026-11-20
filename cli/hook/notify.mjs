@@ -562,7 +562,10 @@ function postObserved(port, body) {
  *
  * On Windows no app sets __CFBundleIdentifier, and Cursor and VS Code both set TERM_PROGRAM=vscode: the hook finds the
  * app itself (lookUpWindowsApp) and sends its bundle id in that hint, never one the environment claims. The first of
- * three that answers:
+ * these that answers:
+ * - CLAUDE_CODE_ENTRYPOINT=claude-desktop, which the Claude app gives the Claude Code it starts (cable/hosts/record.ts):
+ *   the Claude app. The hook's own environment, never another process's, and its word on how this session started, so
+ *   it is read before an editor's variables the app may have inherited. No process is started.
  * - VSCODE_GIT_ASKPASS_NODE, which an editor sets in its integrated terminals alone: the editor's own program
  *   (`Code.exe`, `Cursor.exe`). No process is started.
  * - VSCODE_PID, for a session started from Claude Code's extension panel, which runs with the extension host's
@@ -575,6 +578,10 @@ function postObserved(port, body) {
  *   time: the start time is in the table alone, so checking it would cost the start the kept answer saves, while the
  *   pipe's name is in this hook's own environment and differs between editors and versions, so a pid another editor
  *   reuses misses.
+ * - For Codex alone, the ChatGPT app's program among the rows of the hook's own chain, which Codex's climb reads
+ *   anyway: the app runs its threads on a codex.exe of its own, a child of its ChatGPT.exe (Task 37 §2 of
+ *   docs/plans/2026-11-19-dial-windows-vm-notes.md). An image path the pty host read, never another process's
+ *   environment.
  * - ALACRITTY_LOG, the one variable Alacritty sets on Windows (its log file, whose path is never read): Alacritty.
  * WezTerm and Warp need nothing here: WEZTERM_PANE and TERM_PROGRAM name them on Windows too (read from their source).
  */
@@ -630,9 +637,16 @@ function editorBundle(path) {
   return WINDOWS_EDITORS.get(win32.basename(path).toLowerCase())
 }
 
-/** On Windows, the bundle id of the app a session outside a pane runs in, from the three inputs HOST_HINTS names, or
- *  undefined. Only the id leaves this process: never a path, a pid or a pipe's name. */
-async function lookUpWindowsApp() {
+/** The ChatGPT app's program, `<WindowsApps>\OpenAI.Codex_<version>_<arch>__<publisher>\app\ChatGPT.exe`, in its Store
+ *  package's folder (docs/plans/2026-11-19-dial-windows-vm-notes.md, Task 37 §2). Its beta is another package
+ *  (`OpenAI.CodexBeta_`). */
+const CHATGPT_APP = /\\WindowsApps\\OpenAI\.Codex_[^\\]+\\(?:[^\\]+\\)*ChatGPT\.exe$/i
+
+/** On Windows, the bundle id of the app [engine]'s session outside a pane runs in, from the inputs HOST_HINTS names, or
+ *  undefined. Only the id leaves this process: never a path, a pid or a pipe's name. Each id is the devices' for that
+ *  app (cable/hosts/hostDetect.ts APP_BUNDLES). */
+async function lookUpWindowsApp(engine) {
+  if (process.env.CLAUDE_CODE_ENTRYPOINT === 'claude-desktop') return 'com.anthropic.claudefordesktop'
   const askpass = process.env.VSCODE_GIT_ASKPASS_NODE
   if (askpass !== undefined) return editorBundle(askpass)
   const pid = /^\d{1,10}$/.test(process.env.VSCODE_PID ?? '') ? Number(process.env.VSCODE_PID) : 0
@@ -646,6 +660,9 @@ async function lookUpWindowsApp() {
     // Only an answer the table gave is kept: no row, or no table, is asked again next time.
     if (app && ipc) keepEditor(file, { pid, ipc, app })
     return app
+  }
+  if (engine === 'codex' && (await windowsHookChain())?.some((row) => CHATGPT_APP.test(row.imagePath ?? ''))) {
+    return 'com.openai.codex'
   }
   return process.env.ALACRITTY_LOG ? 'org.alacritty' : undefined
 }
@@ -948,7 +965,7 @@ async function observedBody(engine, event, input) {
   const body = {
     engine, sessionId, event: kind, cwd: path(cwd), callerPid: await hookCaller(),
     transcriptPath: path(input.transcript_path || input.transcriptPath),
-    hostHints: hostHints(process.platform === 'win32' ? await lookUpWindowsApp() : undefined),
+    hostHints: hostHints(process.platform === 'win32' ? await lookUpWindowsApp(engine) : undefined),
   }
   if (relayedPrompt(engine, event, input)) body.relayed = true
   const title = kind === 'session-start' || kind === 'turn-start' ? observedTitle(input.session_title) : undefined
@@ -1547,12 +1564,13 @@ async function readWindowsTable(args = []) {
   const rows = []
   for (const row of table.rows) {
     if (!row || typeof row !== 'object') continue
-    const { pid, parentPid, executable, startMarker, args, nativeArgv } = row
+    const { pid, parentPid, executable, startMarker, args, nativeArgv, imagePath } = row
     if (!Number.isSafeInteger(pid) || pid <= 0 || !Number.isSafeInteger(parentPid) || parentPid < 0) continue
     if (typeof executable !== 'string' || typeof args !== 'string' || typeof startMarker !== 'string') continue
     rows.push({
       pid, parentPid, executable, startMarker, args,
       ...(Array.isArray(nativeArgv) && nativeArgv.every((item) => typeof item === 'string') ? { nativeArgv } : {}),
+      ...(typeof imagePath === 'string' ? { imagePath } : {}),
     })
   }
   return rows
