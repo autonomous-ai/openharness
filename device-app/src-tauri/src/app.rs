@@ -312,6 +312,11 @@ impl App {
                     return;
                 }
                 self.state.follow.waiting = true;
+                // The menu's item already shows the screen: the offer is made.
+                if self.showing(Screen::Follow) {
+                    self.remember(|saved| saved.asked_follow = true, effects);
+                    return;
+                }
                 // Shown only when it is the screen due and nothing shows: before the first screen is chosen, or with
                 // Install or Sign in due, it waits, and first_screen or next() shows it after them.
                 if self.window.is_none() && !self.awaiting_account && due(&self.state) == Some(Screen::Follow) {
