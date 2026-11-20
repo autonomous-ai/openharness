@@ -150,7 +150,7 @@ section.block { padding: 96px 0; border-top: 1px solid var(--rule); }
 
 /* step 2: the cable */
 .plug { position: relative; width: 86%; max-width: 300px; }
-.plug img.d { display: block; width: 100%; }
+.plug img.d { display: block; width: 100%; height: auto; }
 .plug .cable { position: absolute; left: -40%; right: 86%; top: 61%; height: 5px; border-radius: 3px; background: var(--cable); }
 .plug .usb { position: absolute; left: 4%; top: calc(61% - 22px); font: 500 10px/1 var(--font-geist-mono), ui-monospace, monospace; letter-spacing: .16em; color: var(--text-2); }
 .plug .led { position: absolute; right: calc(86% - 3px); top: calc(61% - 2px); width: 9px; height: 9px; border-radius: 50%; background: #35d14a; box-shadow: 0 0 10px rgba(53, 209, 74, .9); }
@@ -159,7 +159,7 @@ section.block { padding: 96px 0; border-top: 1px solid var(--rule); }
 
 /* step 3: the face, and the agents it shows */
 .vis .mini { position: relative; width: 76%; max-width: 270px; }
-.vis .mini > img { display: block; width: 100%; }
+.vis .mini > img { display: block; width: 100%; height: auto; }
 .agents { position: absolute; left: 14px; bottom: 14px; display: flex; gap: 6px; }
 .pill { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; line-height: 1; padding: 7px 11px; border-radius: 999px; background: var(--bg); border: 1px solid var(--border); white-space: nowrap; }
 .pill i { width: 7px; height: 7px; border-radius: 50%; display: block; }
