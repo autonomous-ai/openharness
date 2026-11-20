@@ -47,7 +47,7 @@ function fixture(fault: Fault, initialCwd?: string) {
     const displaced = ${JSON.stringify(join(root, 'displaced'))}, evidence = ${JSON.stringify(evidence)};
     const fault = ${JSON.stringify(fault)}, id = ${JSON.stringify(id)};
     const original = fs.existsSync(directory) ? fs.statSync(directory, { bigint: true }).ino : null;
-    const notes = { swapped: false, restored: false, reads: [], entries: [], closed: [], changes: 0, classificationChecks: [] };
+    const notes = { swapped: false, restored: false, reads: [], entries: [], closed: [], changes: 0, classificationChecks: [], primaryOpens: [] };
     const save = () => fs.writeFileSync(evidence, JSON.stringify(notes), { mode: 0o600 });
     const chdir = process.chdir.bind(process);
     let refused = false;
@@ -74,6 +74,10 @@ function fixture(fault: Fault, initialCwd?: string) {
       if (classificationChecks && args[1]?.bigint && (args[0] === '.' || args[0] === directory)) {
         classificationChecks.push(args[0] === '.' ? 'cwd' : 'absolute');
       }
+      // Metadata-only admission no longer closes a temporary directory descriptor.
+      // Replace the absolute name at the same post-admission boundary, before the primary opens.
+      if (fault === 'admission-close' && classified && !args[1]?.bigint && value?.isDirectory()
+        && lstat(args[0], { bigint: true }).ino === original && !notes.swapped) swap();
       return value;
     };
     const files = new Map();
@@ -87,6 +91,7 @@ function fixture(fault: Fault, initialCwd?: string) {
       }
       if (part === fault && !notes.swapped) swap();
       try {
+        if (part === 'primary') { notes.primaryOpens.push(notes.swapped && !notes.restored); save(); }
         const fd = open(...args);
         if (part) {
           const originalFile = (notes.swapped && !notes.restored ? displaced : directory)
@@ -104,9 +109,8 @@ function fixture(fault: Fault, initialCwd?: string) {
       }
     };
     fs.closeSync = fd => {
-      const stat = fs.fstatSync(fd, { bigint: true }), part = files.get(fd); files.delete(fd);
+      const part = files.get(fd); files.delete(fd);
       close(fd);
-      if (fault === 'admission-close' && classified && stat.isDirectory() && stat.ino === original && !notes.swapped) swap();
       if (notes.swapped && !notes.restored && (fault === 'admission-close' && part === 'primary' || part === fault)) restore();
     };
     asyncFs.opendir = async (...args) => {
@@ -138,7 +142,7 @@ function fixture(fault: Fault, initialCwd?: string) {
   useEntry(file)
   return () => JSON.parse(readFileSync(evidence, 'utf8')) as {
     swapped: boolean; restored: boolean; changes: number; reads: Array<{ part: string; from: string }>;
-    entries: Array<{ which: string; name: string }>; closed: string[]; classificationChecks: string[][]
+    entries: Array<{ which: string; name: string }>; closed: string[]; classificationChecks: string[][]; primaryOpens: boolean[]
   }
 }
 
@@ -153,11 +157,12 @@ it('uses one fresh directory proof per classified receipt in the actual child', 
   expect(observed.changes).toBe(1)
 })
 
-it.skipIf(process.platform === 'win32')('keeps a pending primary after its admission closes and the absolute directory changes', async () => {
+it.skipIf(process.platform === 'win32')('keeps a pending primary after directory admission and an absolute replacement', async () => {
   seed(); seed(join(root, 'alternate'), terminal)
   const evidence = fixture('admission-close')
   expect(await found()).toEqual([id])
   expect(evidence()).toMatchObject({ swapped: true, restored: true, changes: 1 })
+  expect(evidence().primaryOpens[0]).toBe(true)
   expect(evidence().reads).toContainEqual({ part: 'primary', from: 'original' })
   expect(evidence().reads).not.toContainEqual({ part: 'primary', from: 'alternate' })
   expect(evidence().closed).toContain('primary')

@@ -120,8 +120,9 @@ it('checks classified receipts and page boundaries without restatting both direc
   expect(status).toHaveBeenCalledTimes(33)
   expect(existsSync(join(markers, id))).toBe(true)
   expect(faults.closed).toEqual(expect.arrayContaining([directory, markers]))
-  // The explicit-path adapter now verifies admission too, adding two fixed open-time checks.
-  expect(stat.mock.calls.filter(([path]) => path === directory).length).toBeLessThanOrEqual(33 + 2 * pages + 4)
+  // Exact identity proofs keep the same bound. Private-mode reads replace temporary directory descriptors.
+  expect(stat.mock.calls.filter(([path, options]) => path === directory && options?.bigint).length).toBeLessThanOrEqual(33 + 2 * pages + 4)
+  expect(stat.mock.calls.filter(([path, options]) => path === directory && !options?.bigint).length).toBeLessThanOrEqual(status.mock.calls.length + 1)
   expect(stat.mock.calls.filter(([path]) => path === markers).length).toBeLessThanOrEqual(2 * pages + 2)
 })
 

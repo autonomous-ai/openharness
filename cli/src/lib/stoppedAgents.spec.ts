@@ -35,6 +35,44 @@ afterEach(async () => {
 })
 
 describe('saved catalog reads', () => {
+  it.skipIf(process.platform === 'win32').each(['EMFILE', 'EACCES'])(
+    'retains archive and reservation when supersede cannot open its source directory: %s', async code => {
+    const { saved, store } = await fixture()
+    await store.save(saved); store.beginResume(saved.agentId)
+    const folder = join(directory, 'stopped-agents'), file = join(folder, `${saved.agentId}.json`)
+    const marker = join(folder, `${saved.agentId}.resume`), before = readFileSync(file, 'utf8'), reserved = readFileSync(marker, 'utf8')
+    const real = await vi.importActual<typeof import('node:fs')>('node:fs')
+    vi.mocked(openSync).mockImplementation((path, flags, mode) => {
+      if (String(path) === folder) throw Object.assign(new Error('fixture source-directory denial'), { code })
+      return real.openSync(path, flags, mode)
+    })
+    try {
+      await expect(store.supersede(saved.agentId)).rejects.toThrow()
+      expect(readFileSync(file, 'utf8')).toBe(before)
+      expect(readFileSync(marker, 'utf8')).toBe(reserved)
+      expect(existsSync(join(folder, 'superseded', `${saved.agentId}.json`))).toBe(false)
+    } finally { vi.mocked(openSync).mockRestore() }
+    await store.supersede(saved.agentId)
+    expect(existsSync(file)).toBe(false); expect(existsSync(marker)).toBe(false)
+  })
+
+  it.skipIf(process.platform === 'win32')('owns both directory durability handles at the supersede authority fence', async () => {
+    const { saved, store } = await fixture()
+    await store.save(saved); store.beginResume(saved.agentId)
+    const folder = join(directory, 'stopped-agents'), aside = join(folder, 'superseded')
+    const real = await vi.importActual<typeof import('node:fs')>('node:fs'), handles = new Map<string, number>()
+    vi.mocked(openSync).mockImplementation((path, flags, mode) => {
+      const fd = real.openSync(path, flags, mode)
+      if ([folder, aside].includes(String(path))) handles.set(String(path), fd)
+      return fd
+    })
+    await store.supersede(saved.agentId, () => {
+      expect(handles.has(folder)).toBe(true); expect(handles.has(aside)).toBe(true)
+      for (const path of [folder, aside]) expect(real.fstatSync(handles.get(path)!).ino).toBe(real.statSync(path).ino)
+      return true
+    })
+  })
+
   it.skipIf(process.platform === 'win32')('checks selected archive authority without temporary directory descriptors', async () => {
     const { saved, store } = await fixture()
     await store.save(saved)

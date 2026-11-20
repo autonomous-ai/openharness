@@ -250,11 +250,11 @@ export class StoppedAgentStore {
     if (!SAFE_ID.test(agentId)) return
     const file = join(this.directory, `${agentId}.resume`)
     try {
-      this.removeFile(file, () => {
+      this.changeDirectory(() => {
         secureStateDirectory(this.directory, false)
         const marker = readPrivateStateFile(file, 1024)
         return token === undefined || JSON.parse(marker).token === token
-      })
+      }, [() => unlinkSync(file)])
     } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
   }
 
@@ -262,21 +262,34 @@ export class StoppedAgentStore {
     syncStateDirectory(this.directory, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW)
   }
 
-  private removeFile(file: string, current: () => boolean): void {
+  private changeDirectory(current: () => boolean, changes: readonly (() => void)[], destination?: string): void {
     stateFileCustodyHealthy()
-    // Metadata checks need no descriptor. Both archive and reservation deletion must own their flush handle first.
-    const fd = directorySyncSupported()
-      ? openSync(this.directory, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW) : undefined
+    const handles: { path: string; fd: number }[] = []
+    let mutated = false
     try {
+      // Confirm the new name before the removed one. Both handles must exist before any archive or marker mutation.
+      if (directorySyncSupported()) for (const path of destination ? [destination, this.directory] : [this.directory]) {
+        handles.push({ path, fd: openSync(path, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW) })
+      }
       if (!current()) return
-      if (fd !== undefined) {
-        const held = fstatSync(fd, { bigint: true }), named = lstatSync(this.directory, { bigint: true })
+      for (const { path, fd } of handles) {
+        secureStateDirectory(path, false)
+        const held = fstatSync(fd, { bigint: true }), named = lstatSync(path, { bigint: true })
         if (held.dev !== named.dev || held.ino !== named.ino) throw new RegistryPersistenceUnavailable('stopped directory changed')
       }
-      unlinkSync(file)
-      if (fd !== undefined) { stateFileCustodyHealthy(); fsyncSync(fd) }
+      for (const change of changes) { change(); mutated = true }
+      if (handles.length) for (const { fd } of handles) fsyncSync(fd)
       else this.syncDirectory()
-    } finally { if (fd !== undefined) closeStateFileDescriptor(fd) }
+    } catch (error) {
+      if (mutated) throw new AtomicWriteUnconfirmed(error, false)
+      throw error
+    } finally {
+      let failed: unknown
+      for (const { fd } of handles) {
+        try { closeStateFileDescriptor(fd) } catch (error) { failed ??= error }
+      }
+      if (failed) throw failed
+    }
   }
 
   /** Permanent deletion is separate from Stop, which always retains this record. */
@@ -286,11 +299,11 @@ export class StoppedAgentStore {
       const saved = await this.get(agentId)
       if (!saved) return
       deadline.check()
-      this.removeFile(join(this.directory, `${agentId}.json`), () => {
+      this.changeDirectory(() => {
         deadline.check()
         if (!current() || !this.current(saved)) throw new RegistryPersistenceUnavailable('stopped owner changed')
         return true
-      })
+      }, [() => unlinkSync(join(this.directory, `${agentId}.json`))])
     }))
   }
 
@@ -306,11 +319,22 @@ export class StoppedAgentStore {
     if (!saved) return null
     const aside = join(this.directory, 'superseded')
     secureStateDirectory(aside)
-    deadline.check()
-    if (!current() || !this.current(saved)) throw new RegistryPersistenceUnavailable('stopped owner changed')
-    renameSync(join(this.directory, `${agentId}.json`), join(aside, `${agentId}.json`))
-    this.finishResume(agentId)
-    this.syncDirectory()
+    const marker = join(this.directory, `${agentId}.resume`)
+    let reserved = false
+    this.changeDirectory(() => {
+      // A marker read failure must not be discovered after moving its archive out of the listed set.
+      try { readPrivateStateFile(marker, 1024); reserved = true }
+      catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
+      deadline.check()
+      if (!current() || !this.current(saved)) throw new RegistryPersistenceUnavailable('stopped owner changed')
+      return true
+    }, [
+      () => renameSync(join(this.directory, `${agentId}.json`), join(aside, `${agentId}.json`)),
+      () => {
+        if (reserved) try { unlinkSync(marker) }
+        catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
+      },
+    ], aside)
     return saved
     }))
   }

@@ -23,7 +23,7 @@ it('owns one page descriptor and closes every actual image and directory descrip
     return first!.bytes.toString()
   })
   expect(result).toBe('private fixture')
-  if (process.platform !== 'win32') expect(open.mock.calls.filter(([path]) => path === directory)).toHaveLength(2)
+  if (process.platform !== 'win32') expect(open.mock.calls.filter(([path]) => path === directory)).toHaveLength(1)
   for (const result of open.mock.results) if (result.type === 'return') {
     expect(() => fs.fstatSync(result.value)).toThrow(expect.objectContaining({ code: 'EBADF' }))
   }

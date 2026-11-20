@@ -139,7 +139,7 @@ it('refuses a foreign image owner and closes the opened file', async () => {
     return args[1]?.bigint ? change(result as BigIntStats, 'uid') : result
   }) as typeof stat)
   await expect(readPrivateImage(file, 1024)).rejects.toMatchObject({ code: 'unsafe' })
-  expect(close).toHaveBeenCalledTimes(2)
+  expect(close).toHaveBeenCalledTimes(1)
 })
 
 it('uses Windows root authority when POSIX ownership and open flags are unavailable', async () => {
@@ -183,5 +183,5 @@ it.each(['ENOSPC', 'EDQUOT', 'EROFS', 'EACCES', 'EPERM'])('preserves %s from an 
   const close = vi.spyOn(nativeFs, 'closeSync')
   vi.spyOn(nativeFs, 'readSync').mockImplementationOnce(() => { throw Object.assign(new Error('fixture private read'), { code }) })
   await expect(readPrivateImage(file, 1024)).rejects.toMatchObject({ code, message: `Session storage unavailable: ${code}` })
-  expect(close).toHaveBeenCalledTimes(2) // Directory authority and the selected image descriptor both settle.
+  expect(close).toHaveBeenCalledTimes(1) // The image descriptor settles; private-directory admission uses metadata.
 })

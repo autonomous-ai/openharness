@@ -96,7 +96,7 @@ describe('child-owned stopped list pages', () => {
       expect(image.proof.sha256).toMatch(/^[a-f0-9]{64}$/)
       expect(image.json).toBe(true)
     }
-    expect(open.mock.calls.filter(([file]) => file === directory)).toHaveLength(3)
+    expect(open.mock.calls.filter(([file]) => file === directory)).toHaveLength(1)
   })
 
   it('considers at most64 names and completes every row without retaining a whole projection', async () => {

@@ -46,3 +46,16 @@ retain it through the actual flush, and check that the name still identifies tha
 opened directory at the final authority fence. Windows retains its existing
 directory durability behavior. A failed open must leave the archive intact; a
 failed close must poison the existing custody latch rather than retry a descriptor.
+
+The wider caller review also finds this ordering in `supersede`. Its rename and
+reservation removal must share the same source-directory handle, with the marker
+read before any mutation. The destination directory must be opened before the
+rename too and flushed before the source directory, so the source name cannot be
+confirmed gone before the destination is confirmed. Both named directory identities
+are checked after the caller's final guard. All acquired handles close even when
+opening a later handle or closing an earlier one fails. Post-mutation failure is
+reported as an unconfirmed write; it cannot be returned as an ordinary success.
+Each successful mutation step advances this distinction: a refused first rename
+or unlink preserves its original error code, while a failure after a successful
+rename remains an unconfirmed write. A Resume marker already removed by another
+owner keeps the existing missing-marker no-op.

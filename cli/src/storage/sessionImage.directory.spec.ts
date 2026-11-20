@@ -94,8 +94,8 @@ it.skipIf(process.platform === 'win32')('groups all considered query names in 64
   write('selected', 'wanted')
   const open = vi.spyOn(fs, 'openSync')
   expect((await query()).matches).toEqual([true])
-  // Initial admission + final witness + three admission/retained-FD pairs; no initial full scan.
-  expect(open.mock.calls.filter(([path]) => path === directory)).toHaveLength(8)
+  // Three retained page descriptors; metadata admission and the final witness acquire none. No initial full scan.
+  expect(open.mock.calls.filter(([path]) => path === directory)).toHaveLength(3)
 })
 
 it('retains final detection when a nonmatching archive changes in place during the awaited scan', async () => {
