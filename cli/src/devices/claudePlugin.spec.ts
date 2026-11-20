@@ -431,6 +431,22 @@ describe('the Claude desktop app on Windows', () => {
     }
   })
 
+  // A kill, a failed start or an exit not 0 is no answer, which says nothing of what runs: a disable is a failure, so
+  // an undo the devices owe stays owed, and the status reads the list as on a Mac.
+  it('a --version with no answer is no answer, not the app', async () => {
+    const unanswered: Array<[Answer, string]> = [[{ code: null }, 'Claude Code did not answer.'], [{ code: 1, stderr: 'Error: busy\n' }, 'Error: busy']]
+    for (const [answer, error] of unanswered) {
+      for (const step of [claudeDisable, claudeHomeDisable]) {
+        const claude = fakeClaude({ '--version': answer, 'plugin list --json': list(USER_ON) })
+        expect(await step({ run: claude.run, platform: 'win32' })).toEqual({ ok: false, error, step: 'list' })
+        expect(claude.calls.map((call) => call.args)).toEqual(['--version'])
+      }
+      const status = fakeClaude({ '--version': answer, 'plugin list --json': list(USER_ON) })
+      expect(await claudeStatus({ run: status.run, platform: 'win32' }))
+        .toEqual({ supported: false, installed: true, enabled: true, claudeVersion: null })
+    }
+  })
+
   it('Claude Code itself is asked as on a Mac', async () => {
     const claude = fakeClaude({ 'plugin list --json': list(USER_ON) }, '2.1.300 (Claude Code)')
     expect(await claudeDisable({ run: claude.run, platform: 'win32' })).toEqual({ ok: true })
