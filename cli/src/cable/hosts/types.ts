@@ -38,12 +38,13 @@ export interface HostAgent {
   unseenDone: boolean
 }
 
-/** One app in the dial's list: its agents, and how many of them wait on the person. */
+/** One app in the dial's list: its agents, how many of them wait on the person, and how many are mid-turn. */
 export interface AppEntry {
   id: string
   name: string
   count: number
   waiting: number
+  working: number
 }
 
 /** The apps the dial can show; `shown` is '' with no agents. */

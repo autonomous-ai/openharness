@@ -787,6 +787,9 @@ export class CableSession {
    *  was told and no longer holds goes back on it that way, since a ring at every change of the window's list was a beep
    *  for nothing new (2026-11-18); a round dial that does not say it would beep, so it is sent nothing (giveQuestion). */
   private questionTier = false
+  /** `appCards: 'v1'` (the Harness Pro, docs/plans/2026-11-20-pro-app-data-daemon-design.md): `working` on each `apps`
+   *  row, and a change of it alone pushes `apps`. Any other device gets today's `apps` frame byte for byte. */
+  private appCards = false
   private playerOffset = 0
   private playerRequest = 0
   private playerLibraryKey = ''
@@ -803,14 +806,14 @@ export class CableSession {
 
   /** For the greeting's log line: which capabilities this hello named, or nothing. */
   private capabilitiesNamed(): string {
-    const named = [this.swarmMembers && 'swarms', this.longRecap && 'recap', this.stepsActivity && 'activity', this.statsTurn && 'stats', this.playerCapable && 'player', this.appFilter && 'appFilter', this.questionTier && 'questionTier']
+    const named = [this.swarmMembers && 'swarms', this.longRecap && 'recap', this.stepsActivity && 'activity', this.statsTurn && 'stats', this.playerCapable && 'player', this.appFilter && 'appFilter', this.questionTier && 'questionTier', this.appCards && 'appCards']
       .filter(Boolean)
     return named.length ? ` caps ${named.join(',')}` : ''
   }
 
   private resetCapabilities(): void {
     this.swarmMembers = this.longRecap = this.stepsActivity = this.statsTurn = this.playerCapable = this.appFilter = false
-    this.questionTier = false
+    this.questionTier = this.appCards = false
     this.seqOn = false
     this.seq = 0
     this.resyncAt = 0
@@ -1467,6 +1470,7 @@ export class CableSession {
         this.playerCapable = str('player') === 'library-v1'
         this.appFilter = str('appFilter') === 'v1'
         this.questionTier = str('questionTier') === 'v1'
+        this.appCards = str('appCards') === 'v1'
         this.seqOn = str('board') === 'pro'
         this.seq = 0
         const mac = str('mac') ?? ''
@@ -2873,8 +2877,12 @@ export class CableSession {
     // dial names the tab from the `swarms` frame — and keying on it made every tab switch push twice,
     // once when `app_swarms` named the new tab over the old panes and again when `app_panes` arrived.
     const key = `${tab ? 'window' : view ?? ''}|${CableSession.agentsKey(agents)}`
-    // The name is the id's, so the counts and the shown app are all that can change what the dial draws.
-    const appsKey = apps ? `${apps.shown}|${apps.apps.map((a) => `${a.id}:${a.count}:${a.waiting}`).join('|')}` : ''
+    // The name is the id's, so the counts and the shown app are all that can change what the dial draws. Only a dial
+    // that says appCards is sent `working` and pushed on its change: any other dial's frames and their cadence stay byte
+    // for byte as they were (PM 2026-11-20).
+    const cards = this.appCards
+    const rows = apps?.apps.map((a) => cards ? a : { id: a.id, name: a.name, count: a.count, waiting: a.waiting })
+    const appsKey = apps ? `${apps.shown}|${apps.apps.map((a) => `${a.id}:${a.count}:${a.waiting}${cards ? `:${a.working}` : ''}`).join('|')}` : ''
     const sendRing = ring && (force || key !== this.lastAgentsKey)
     const sendApps = apps !== undefined && (force || appsKey !== this.lastAppsKey)
     if (!sendRing && !sendApps) return
@@ -2888,7 +2896,7 @@ export class CableSession {
     this.lastAppsKey = appsKey
     this.agentsPushedAt = performance.now()
     // Before the ring, which the dial draws under the app it names.
-    if (sendApps) await this.send({ t: 'apps', shown: apps.shown, apps: apps.apps })
+    if (sendApps) await this.send({ t: 'apps', shown: apps.shown, apps: rows })
     if (!sendRing) return
     // A dial that says `appFilter` back on the window's tab from an app's ring (its last list a machine list, by the key):
     // the record still names the agent it left the tab on, and the window's agent is where it lands (viewChanged follows
