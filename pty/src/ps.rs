@@ -64,8 +64,8 @@ pub struct ProcessRowJson {
 pub use windows::{ancestors, snapshot};
 #[cfg(windows)]
 pub(crate) use windows::{
-    creation_time as process_started, exited as process_exited, open as open_process,
-    parent as process_parent,
+    creation_time as process_started, exited as process_exited, listed as listed_processes,
+    open as open_process, parent as process_parent,
 };
 
 #[cfg(windows)]
@@ -119,7 +119,7 @@ mod windows {
     }
 
     /// (pid, parent, exe file name) of every process in one Toolhelp snapshot.
-    fn listed() -> io::Result<Vec<(u32, u32, String)>> {
+    pub(crate) fn listed() -> io::Result<Vec<(u32, u32, String)>> {
         let snap = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) };
         if snap == INVALID_HANDLE_VALUE {
             return Err(io::Error::last_os_error());

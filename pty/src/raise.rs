@@ -62,17 +62,12 @@ pub use windows::{open_link, raise};
 
 #[cfg(windows)]
 mod windows {
-    use std::collections::HashMap;
+    use std::collections::HashSet;
     use std::ffi::OsStr;
-    use std::os::windows::io::AsRawHandle;
     use std::ptr::{null, null_mut};
     use std::time::{Duration, Instant};
 
-    use windows_sys::Win32::Foundation::{BOOL, HANDLE, HWND, LPARAM};
-    use windows_sys::Win32::System::Com::{
-        COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE, CoInitializeEx,
-    };
-    use windows_sys::Win32::System::Threading::{PROCESS_NAME_WIN32, QueryFullProcessImageNameW};
+    use windows_sys::Win32::Foundation::{BOOL, HWND, LPARAM};
     use windows_sys::Win32::UI::Accessibility::{HWINEVENTHOOK, SetWinEventHook, UnhookWinEvent};
     use windows_sys::Win32::UI::Shell::{
         ASSOCF_IS_PROTOCOL, ASSOCSTR_PROGID, AssocQueryStringW, SEE_MASK_FLAG_NO_UI,
@@ -88,7 +83,7 @@ mod windows {
 
     use super::{Candidate, SETTLE, pick, scheme, settles};
     use crate::cli::RaiseTarget;
-    use crate::desktop::win::wide;
+    use crate::desktop::win::{Apartment, wide};
 
     /// `raised` when the target's window is now in front; `refused` when Windows kept the
     /// foreground elsewhere (the taskbar flash); `none` when the target has no window to raise.
@@ -156,18 +151,25 @@ mod windows {
         let mut all: Vec<HWND> = Vec::new();
         // A failed enumeration leaves what it listed: at worst `none`.
         unsafe { EnumWindows(Some(collect), &mut all as *mut Vec<HWND> as LPARAM) };
-        // One process owns many windows: its program is read once.
-        let mut of_target: HashMap<u32, bool> = HashMap::new();
+        let pids: HashSet<u32> = match target {
+            RaiseTarget::Pid(pid) => HashSet::from([*pid]),
+            // Each program's name from the one process list `ps` reads; a failed list is `none`.
+            RaiseTarget::Exe(name) => {
+                // Without case, as Windows compares file names.
+                let name = name.to_lowercase();
+                crate::ps::listed_processes()
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter(|(_, _, program)| program.to_lowercase() == name)
+                    .map(|(pid, ..)| pid)
+                    .collect()
+            }
+        };
         all.into_iter()
             .filter(|&window| {
                 let mut pid = 0;
                 unsafe { GetWindowThreadProcessId(window, &mut pid) };
-                *of_target.entry(pid).or_insert_with(|| match target {
-                    RaiseTarget::Pid(wanted) => pid == *wanted,
-                    // Without case, as Windows compares file names.
-                    RaiseTarget::Exe(name) => program_name(pid)
-                        .is_some_and(|program| program.to_lowercase() == name.to_lowercase()),
-                })
+                pids.contains(&pid)
             })
             .collect()
     }
@@ -175,27 +177,6 @@ mod windows {
     unsafe extern "system" fn collect(window: HWND, all: LPARAM) -> BOOL {
         unsafe { (*(all as *mut Vec<HWND>)).push(window) };
         1
-    }
-
-    /// The file name of [pid]'s program, read from its image as desktop/win.rs reads one; None
-    /// when it cannot be opened (another user's, a protected one, or one that has exited).
-    fn program_name(pid: u32) -> Option<String> {
-        let (process, _) = crate::ps::open_process(pid)?;
-        let mut path = vec![0u16; 32_768];
-        let mut len = path.len() as u32;
-        let ok = unsafe {
-            QueryFullProcessImageNameW(
-                process.as_raw_handle() as HANDLE,
-                PROCESS_NAME_WIN32,
-                path.as_mut_ptr(),
-                &mut len,
-            )
-        };
-        if ok == 0 {
-            return None;
-        }
-        let path = String::from_utf16_lossy(&path[..len as usize]);
-        path.rsplit('\\').next().map(str::to_string)
     }
 
     fn candidate(window: HWND) -> Candidate {
@@ -236,13 +217,8 @@ mod windows {
     /// among them. The no-UI flag keeps Windows' error boxes away.
     pub fn open_link(url: &str) -> &'static str {
         // A handler may be a shell extension, which needs COM on the calling thread
-        // (ShellExecuteExW's documentation).
-        unsafe {
-            CoInitializeEx(
-                std::ptr::null(),
-                (COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE) as u32,
-            )
-        };
+        // (ShellExecuteExW's documentation). Without it, a handler that is a program still opens.
+        let _apartment = Apartment::enter().ok();
         if !handled(scheme(url)) {
             return "refused";
         }

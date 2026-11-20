@@ -126,18 +126,32 @@ mod windows {
             return;
         }
         let hwnd = minimized_window() as HWND;
-        assert_ne!(unsafe { IsIconic(hwnd) }, 0, "the window did not minimize");
-        let answer = word(&["raise", "--pid", &std::process::id().to_string()]);
-        let end = Instant::now() + Duration::from_secs(5);
-        while unsafe { IsIconic(hwnd) } != 0 && Instant::now() < end {
-            std::thread::sleep(Duration::from_millis(20));
+        let pid = std::process::id().to_string();
+        let exe = std::env::current_exe().unwrap();
+        let program = exe.file_name().unwrap().to_str().unwrap();
+        // By its process, then by its program's name, as windowsRaise.ts names an app.
+        let mut answers = Vec::new();
+        for target in [["--pid", pid.as_str()], ["--exe", program]] {
+            unsafe { ShowWindow(hwnd, SW_MINIMIZE) };
+            let minimized = unsafe { IsIconic(hwnd) } != 0;
+            let answer = word(&["raise", target[0], target[1]]);
+            let end = Instant::now() + Duration::from_secs(5);
+            while unsafe { IsIconic(hwnd) } != 0 && Instant::now() < end {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            answers.push((target, minimized, answer, unsafe { IsIconic(hwnd) } == 0));
         }
-        let restored = unsafe { IsIconic(hwnd) } == 0;
         unsafe { PostMessageW(hwnd, WM_CLOSE, 0, 0) };
-        // `refused` is Windows' own answer to a process without foreground rights: the taskbar
-        // flash. The window is restored either way.
-        assert!(answer == "raised" || answer == "refused", "{answer}");
-        assert!(restored, "the window is still minimized");
+        for (target, minimized, answer, restored) in answers {
+            assert!(minimized, "{target:?}: the window did not minimize");
+            // `refused` is Windows' own answer to a process without foreground rights: the
+            // taskbar flash. The window is restored either way.
+            assert!(
+                answer == "raised" || answer == "refused",
+                "{target:?}: {answer}"
+            );
+            assert!(restored, "{target:?}: the window is still minimized");
+        }
     }
 
     /// Whether Windows knows a program for links of [scheme]: with no buffer, a registered one
