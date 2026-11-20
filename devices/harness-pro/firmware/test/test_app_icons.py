@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """App icons and card colours (scripts/gen_app_icons.py -> main/pod/app_icons.{c,h}).
 
-GeneratorTests prove the generator's rules on synthetic art built here, so they run with no source art present."""
+GeneratorTests prove the generator's rules on synthetic art built here, so they run with no source art present.
+CommittedTests check the baked output against the real art and its README."""
 import contextlib
 import importlib.util
 import io
+import re
 import subprocess
 import tempfile
 import unittest
@@ -149,6 +151,87 @@ class GeneratorTests(unittest.TestCase):
                     f.write(" ")
                 self.assertEqual(gen.main(["--check"], src, out), 1)
                 self.assertEqual(gen.main(["--check"], src, empty), 1)
+
+
+class CommittedTests(unittest.TestCase):
+    """The committed main/pod/app_icons.{c,h} against the art in .github/assets/apps and its README."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.c = (gen.DEST / "app_icons.c").read_text()
+        cls.h = (gen.DEST / "app_icons.h").read_text()
+        readme = (gen.SRC / "README.md").read_text()
+        cls.art = sorted(p.stem for p in gen.SRC.glob("*.png"))
+        cls.readme_rows = re.findall(r"^\| `([^`]+)\.png` \|", readme, re.M)
+        cls.left_out = re.findall(r"^- `([^`]+)`:", readme.split("\n## Left out\n", 1)[1], re.M)
+        cls.measured = {app: int(rgb, 16) for app, rgb in re.findall(r"^// (\S+): measured #([0-9A-F]{6}),", cls.c, re.M)}
+        cls.rows = {app: (int(top, 16), int(bottom, 16)) for app, top, bottom in
+                    re.findall(r'^    \{"([^"]+)", \{&a_\w+_72, &a_\w+_44, 0x([0-9A-F]{4}), 0x([0-9A-F]{4})\}\},$',
+                               cls.c, re.M)}
+
+    @staticmethod
+    def rgb(v: int) -> tuple:
+        return (v >> 16, (v >> 8) & 0xFF, v & 0xFF)
+
+    def test_header_is_the_contract(self):
+        norm = lambda s: " ".join(s.split())
+        self.assertTrue(self.h.startswith(HEADER + "\n"))
+        for decl in ("typedef struct { const uint16_t *rgb565; const uint8_t *alpha; uint16_t size; } pod_app_icon_t;",
+                     "typedef struct { const pod_app_icon_t *icon72, *icon44; uint16_t card_top, card_bottom; } "
+                     "pod_app_style_t;",
+                     "const pod_app_style_t *pod_app_style(const char *app_id); "
+                     "// NULL for NULL, an unknown id or an app with no icon"):
+            self.assertIn(norm(decl), norm(self.h))
+
+    def test_rows_match_art_and_readme(self):
+        for app in gen.APPS:
+            cid = app.replace("-", "_")
+            baked = (app in self.rows and f"a_{cid}_72_px[5184]" in self.c and f"a_{cid}_44_px[1936]" in self.c)
+            self.assertEqual(app in self.art, baked, app)
+            if app not in self.art:
+                self.assertIn(app, self.left_out, app)
+        for app in self.art:
+            self.assertIn(app, self.readme_rows, app)
+        for app in ("harness", "terminal"):
+            self.assertNotIn(app, self.rows)
+
+    def test_alpha_not_empty(self):
+        arrays = re.findall(r"static const uint8_t (a_\w+_a)\[\d+\] = \{([^}]*)\};", self.c)
+        self.assertEqual(len(arrays), len(self.rows) * len(gen.SIZES))
+        for name, values in arrays:
+            self.assertTrue(any(int(v) >= 128 for v in values.split(",")), name)
+
+    def test_white_reads_on_both_ends(self):
+        for app, (top, bottom) in self.rows.items():
+            for end in (top, bottom):
+                self.assertGreaterEqual(gen.contrast_white(gen.decode565(end)), 4.5, app)
+
+    def test_darkened_no_further_than_needed(self):
+        for app, (top, _) in self.rows.items():
+            measured = self.rgb(self.measured[app])
+            base = gen.CHARCOAL if gen.luminance(measured) < gen.NEAR_BLACK else measured
+            self.assertTrue(top == gen.encode565(base) or gen.contrast_white(gen.decode565(top)) < 5.0, app)
+
+    def test_bottom_is_half(self):
+        for app, (top, bottom) in self.rows.items():
+            self.assertTrue(within_a_step_of_half(bottom, top), app)
+
+    def test_mockup_five(self):
+        for app, want in (("orca", 0x000000), ("vscode", 0x1F9CF0), ("codex", 0x262834), ("claude", 0xD97757),
+                          ("herdr", 0x303438)):
+            got = self.rgb(self.measured[app])
+            self.assertTrue(all(abs(g - w) <= 8 for g, w in zip(got, self.rgb(want))), (app, "#%02X%02X%02X" % got))
+        self.assertEqual(self.rows["orca"][0], gen.encode565(gen.CHARCOAL))
+
+    def test_budget(self):
+        total = sum(int(n) * 3 for n in re.findall(r"static const uint16_t a_\w+_px\[(\d+)\]", self.c))
+        print("app icon bytes (px + alpha):", total)
+        self.assertLessEqual(total, 400_000)
+
+    def test_lookup(self):
+        self.assertIn("vscode", self.rows)
+        lookup(gen.DEST / "app_icons.c", gen.DEST, present=list(self.rows),
+               absent=["nope", "", None, "harness", "terminal"] + self.left_out)
 
 
 if __name__ == "__main__":
