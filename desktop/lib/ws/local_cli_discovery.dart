@@ -274,6 +274,13 @@ class LocalCliDiscovery {
 
   Future<String?> computerId() => identity.computerId();
 
+  /// The daemon is DELIBERATELY down, and nothing here may start it. While a dial is being flashed
+  /// it was stopped so the port could be handed to esptool: a start takes the port back mid-write
+  /// and kills the flash, which is what made a firmware update fail at a few tens of kilobytes.
+  /// While `harness uninstall` holds its marker it is removing the daemon's files: a daemon started
+  /// now holds them (on Windows the removal then fails) and undoes the uninstall (UninstallMarker).
+  bool _spawnHeld() => _flashing() || _uninstalling();
+
   static Duration Function() _stopwatchClock() {
     final watch = Stopwatch()..start();
     return () => watch.elapsed;
@@ -298,11 +305,8 @@ class LocalCliDiscovery {
     var last = await probe();
     if (last.ready) return last;
     if (!last.alive) {
-      // Same reason as the supervisor: while the dial is being flashed the daemon is down on purpose
-      // and its port belongs to esptool. Down is the honest answer here — it really is not running.
-      if (_flashing()) {
-        return last;
-      }
+      // Down is the honest answer here: it really is not running.
+      if (_spawnHeld()) return last;
       try {
         await _spawnCommand();
       } catch (_) {
@@ -324,9 +328,7 @@ class LocalCliDiscovery {
       last = await probe();
       if (last.ready) return last;
       if (!last.alive) {
-        if (spawned || _flashing()) {
-          return last;
-        }
+        if (spawned || _spawnHeld()) return last;
         spawned = true;
         try {
           await _spawnCommand();
@@ -452,15 +454,7 @@ class LocalCliDiscovery {
       cycleInFlight = true;
       unawaited(() async {
         try {
-          // The daemon is DELIBERATELY down while the dial is being flashed — it was stopped so the
-          // port could be handed over. Starting it here takes the port back mid-write and kills the
-          // flash, which is what made a firmware update fail at a few tens of kilobytes.
-          if (_flashing()) {
-            return;
-          }
-          // Down on purpose as well: `harness uninstall` stopped it and is removing its files. A
-          // daemon started now holds them and undoes the uninstall (UninstallMarker).
-          if (_uninstalling()) return;
+          if (_spawnHeld()) return;
           final seen = await probe();
           observe(seen);
           // A new daemon — replaced from a terminal while the app is open, say. Awaited inside the
