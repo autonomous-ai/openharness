@@ -374,6 +374,15 @@ mod tests {
     }
 
     #[test]
+    fn an_appimage_this_program_does_not_run_from_writes_nothing() {
+        // APPIMAGE and APPDIR as a program started from another AppImage's terminal inherits them: this test runs from
+        // no such mount.
+        let image = an_image();
+        assert_eq!(image.apply(Some(image.appdir.as_os_str())), None);
+        assert!(!image.data_home().exists());
+    }
+
+    #[test]
     fn a_second_run_leaves_the_entry() {
         let image = an_image();
         let appdir = Some(image.appdir.as_os_str());

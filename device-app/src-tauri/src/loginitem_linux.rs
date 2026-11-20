@@ -422,6 +422,18 @@ mod tests {
     }
 
     #[test]
+    fn an_appimage_this_program_does_not_run_from_registers_nothing() {
+        // APPIMAGE as a program started from another AppImage's terminal inherits it: this test runs from no mount.
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("H.AppImage");
+        fs::write(&file, "").unwrap();
+        let entry = entry_path(Some(dir.path().join("config").as_os_str()), dir.path());
+        let not_one = Err("Login item not set (not an AppImage).".into());
+        assert_eq!(apply(&entry, Some(file.as_os_str()), Path::new(LAUNCHER), true), not_one);
+        assert!(!entry.exists());
+    }
+
+    #[test]
     fn only_an_appimage_run_registers() {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("H.AppImage");
