@@ -148,29 +148,37 @@ describe('a known process read', () => {
   })
 })
 
+function decodedCopies(onCopy?: (value: string) => void) {
+  const original = Buffer.prototype.toString, values: string[] = []
+  const spy = vi.spyOn(Buffer.prototype, 'toString').mockImplementation(function (this: Buffer, ...args) {
+    const value = Reflect.apply(original, this, args) as string
+    if (args[0] === 'utf16le') { values.push(value); onCopy?.(value) }
+    return value
+  })
+  return { values, mockRestore: () => spy.mockRestore() }
+}
+
 describe('selected and complete reads in flight', () => {
   it('does not copy the args or full command path of an unrequested process', async () => {
-    const copies = vi.spyOn(Buffer, 'from')
+    const copies = decodedCopies()
     try {
       const pending = processRows(PID)
       await finish(row(PID) + '\n' + row(OTHER, START, CUT, 'unrequested-process-args') + '\n' + row(process.pid),
         paths([PID, process.pid]) + `${OTHER} ${START} /unrequested/process/path\n`)
       expect(await pending).toEqual([expected()])
-      const encoded = copies.mock.calls as readonly (readonly unknown[])[]
-      expect(encoded.some(call => call[0] === 'unrequested-process-args' && call[1] === 'utf16le')).toBe(false)
-      expect(encoded.some(call => call[0] === '/unrequested/process/path' && call[1] === 'utf16le')).toBe(false)
+      expect(copies.values).not.toContain('unrequested-process-args')
+      expect(copies.values).not.toContain('/unrequested/process/path')
     } finally { copies.mockRestore() }
   })
 
   it.each([128, 129])('materializes unrelated rows only after %s distinct selections require a full census', async count => {
-    const copies = vi.spyOn(Buffer, 'from')
+    const copies = decodedCopies()
     try {
       const pids = Array.from({ length: count }, (_, i) => PID - i), pending = pids.map(pid => processRows(pid))
       const extra = row(PID - 1000, START, CUT, 'outside-requested-scope')
       await finish(table([...pids, process.pid]) + extra + '\n', paths([...pids, process.pid]))
       expect(await Promise.all(pending)).toEqual(pids.map(pid => [expected(pid)]))
-      const encoded = copies.mock.calls as readonly (readonly unknown[])[]
-      expect(encoded.filter(call => call[0] === 'outside-requested-scope' && call[1] === 'utf16le')).toHaveLength(count === 128 ? 0 : 1)
+      expect(copies.values.filter(value => value === 'outside-requested-scope')).toHaveLength(count === 128 ? 0 : 1)
     } finally { copies.mockRestore() }
   })
 
@@ -189,12 +197,10 @@ describe('selected and complete reads in flight', () => {
   })
 
   it('a full request during sealed selected parsing starts a fresh census instead of consuming partial rows', async () => {
-    const original = Buffer.from
     let full: Promise<ProcessRow[] | null> | undefined
-    const copies = vi.spyOn(Buffer, 'from').mockImplementation(((...args: unknown[]) => {
-      if (!full && args[0] === CUT && args[1] === 'utf16le') full = processRows()
-      return Reflect.apply(original, Buffer, args)
-    }) as typeof Buffer.from)
+    const copies = decodedCopies(value => {
+      if (!full && value === CUT) full = processRows()
+    })
     try {
       const selected = processRows(PID)
       await finish()

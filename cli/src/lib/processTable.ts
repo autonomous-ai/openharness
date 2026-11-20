@@ -274,6 +274,15 @@ function agentAliasCandidate(row: Pick<ProcessRow, 'executable' | 'commandPath' 
 }
 
 
+// Each decode owns its string before the next synchronous copy reuses these bytes.
+const processTextScratch = Buffer.allocUnsafe(8 * 1024)
+function ownedProcessText(value: string): string {
+  const bytes = value.length * 2
+  if (bytes > processTextScratch.length) return Buffer.from(value, 'utf16le').toString('utf16le')
+  processTextScratch.write(value, 0, 'utf16le')
+  return processTextScratch.toString('utf16le', 0, bytes)
+}
+
 /**
  * One `ps -axo pid=,ppid=,comm=,lstart=,args=` line → a row.
  *
@@ -303,9 +312,9 @@ export function parseProcessRow(line: string): ProcessRow | null {
   return {
     pid: Number(match[1]),
     parentPid: Number(match[2]),
-    executable: Buffer.from(match[3], 'utf16le').toString('utf16le'),
-    startMarker: Buffer.from(match[4], 'utf16le').toString('utf16le'),
-    args: Buffer.from(match[5], 'utf16le').toString('utf16le'),
+    executable: ownedProcessText(match[3]),
+    startMarker: ownedProcessText(match[4]),
+    args: ownedProcessText(match[5]),
   }
 }
 
@@ -526,7 +535,7 @@ function cutComm(comm: string): string | null {
 function withCommandPath(row: ProcessRow, read: { startMarker: string; comm: string } | undefined): ProcessRow {
   if (!read || read.startMarker !== row.startMarker || cutComm(read.comm) !== row.executable) return row
   // Owns its storage, as `parseProcessRow`'s fields do: a slice would keep the whole `ps` output alive.
-  return { ...row, commandPath: Buffer.from(read.comm, 'utf16le').toString('utf16le') }
+  return { ...row, commandPath: ownedProcessText(read.comm) }
 }
 
 /**
