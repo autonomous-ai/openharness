@@ -18,7 +18,8 @@ use objc2_foundation::{NSDictionary, NSString, NSURL, ns_string};
 use std::ffi::c_void;
 use std::path::{Path, PathBuf};
 use std::ptr::{self, NonNull};
-use std::sync::mpsc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, mpsc};
 use std::thread;
 
 /// Seconds each Accessibility call waits for ChatGPT: a hung app answers an error, and never holds the thread for good.
@@ -121,13 +122,18 @@ struct RunLoop(CFRetained<CFRunLoop>);
 // any thread; only its own thread runs it.
 unsafe impl Send for RunLoop {}
 
-/// An observation: dropped, it stops its thread's run loop and returns at once, without waiting for a thread that may
-/// be inside a call ChatGPT has yet to answer.
-struct Observation(Option<RunLoop>);
+/// An observation: dropped, it tells its thread to read nothing more, stops the thread's run loop and returns at once,
+/// without waiting for a thread that may be inside a call ChatGPT has yet to answer.
+struct Observation {
+    run_loop: Option<RunLoop>,
+    stopped: Arc<AtomicBool>,
+}
 
 impl Drop for Observation {
     fn drop(&mut self) {
-        let Some(RunLoop(run_loop)) = &self.0 else { return };
+        // The stop below waits for the loop to run, and a notification queued before it would still be read.
+        self.stopped.store(true, Ordering::Release);
+        let Some(RunLoop(run_loop)) = &self.run_loop else { return };
         // A block, not CFRunLoopStop: a stop that comes before the loop runs is lost, and the thread may still be
         // making its observer. A queued block waits for the loop and stops it from inside.
         let stop = RcBlock::new(|| {
@@ -145,28 +151,32 @@ impl Drop for Observation {
 
 /// Observes the app `pid` on a thread of its own until the handle is dropped.
 fn observe_pid(pid: libc::pid_t, heard: Box<dyn Fn(Heard) + Send + Sync>) -> Box<dyn Send> {
-    on_own_run_loop(move || observe_here(pid, &*heard))
+    on_own_run_loop(move |stopped| observe_here(pid, &*heard, stopped))
 }
 
-/// Runs `body` on a thread of its own, whose run loop the handle stops when dropped.
-fn on_own_run_loop(body: impl FnOnce() + Send + 'static) -> Box<dyn Send> {
+/// Runs `body` on a thread of its own. Dropped, the handle sets the flag `body` is given and stops the thread's run loop.
+fn on_own_run_loop(body: impl FnOnce(&AtomicBool) + Send + 'static) -> Box<dyn Send> {
+    let stopped = Arc::new(AtomicBool::new(false));
+    let told = Arc::clone(&stopped);
     let (give, run_loop) = mpsc::sync_channel(1);
     thread::spawn(move || {
         // Given before `body` runs, so the caller never waits on ChatGPT.
         let _ = give.send(CFRunLoop::current().map(RunLoop));
-        body();
+        body(&told);
     });
-    Box::new(Observation(run_loop.recv().ok().flatten()))
+    Box::new(Observation { run_loop: run_loop.recv().ok().flatten(), stopped })
 }
 
 /// What a notification needs, on the observer's thread.
 struct Watched<'a> {
     app: &'a AXUIElement,
     heard: &'a (dyn Fn(Heard) + Send + Sync),
+    stopped: &'a AtomicBool,
 }
 
-/// On the observer's thread: the title now, then at each change, until the run loop is stopped.
-fn observe_here(pid: libc::pid_t, heard: &(dyn Fn(Heard) + Send + Sync)) {
+/// On the observer's thread: the title now, then at each change, until the run loop is stopped. Once `stopped` is set,
+/// nothing more is read.
+fn observe_here(pid: libc::pid_t, heard: &(dyn Fn(Heard) + Send + Sync), stopped: &AtomicBool) {
     let Some((run_loop, observer)) = CFRunLoop::current().zip(observer(pid)) else {
         heard(Heard::NoObserver);
         return;
@@ -175,7 +185,7 @@ fn observe_here(pid: libc::pid_t, heard: &(dyn Fn(Heard) + Send + Sync)) {
     let app = unsafe { AXUIElement::new_application(pid) };
     // SAFETY: a positive timeout, for every call on the application element.
     unsafe { app.set_messaging_timeout(TIMEOUT) };
-    let watched = Watched { app: &app, heard };
+    let watched = Watched { app: &app, heard, stopped };
     let refcon = ptr::from_ref(&watched).cast_mut().cast();
     // On the application element, which hears both from each of its windows.
     let names = [CFString::from_static_str("AXFocusedWindowChanged"), CFString::from_static_str("AXTitleChanged")];
@@ -190,8 +200,14 @@ fn observe_here(pid: libc::pid_t, heard: &(dyn Fn(Heard) + Send + Sync)) {
         // SAFETY: CoreFoundation's constant.
         let mode = unsafe { kCFRunLoopDefaultMode };
         run_loop.add_source(Some(&source), mode);
-        heard(Heard::Title(read_title(&app)));
-        CFRunLoop::run();
+        // Dropped while the observer was made: the title is not read.
+        if !stopped.load(Ordering::Acquire) {
+            heard(Heard::Title(read_title(&app)));
+        }
+        // Read again, as that read may have waited out ChatGPT's timeout: a loop that would stop at once is not run.
+        if !stopped.load(Ordering::Acquire) {
+            CFRunLoop::run();
+        }
         run_loop.remove_source(Some(&source), mode);
     } else {
         heard(Heard::NoObserver);
@@ -222,6 +238,10 @@ unsafe extern "C-unwind" fn notified(
 ) {
     // SAFETY: `refcon` is the `Watched` of `observe_here`, alive while its run loop runs, which is when this is called.
     let watched = unsafe { &*refcon.cast::<Watched<'_>>() };
+    // Queued before the drop, and run before its stop.
+    if watched.stopped.load(Ordering::Acquire) {
+        return;
+    }
     (watched.heard)(Heard::Title(read_title(watched.app)));
 }
 
@@ -252,7 +272,6 @@ mod tests {
     use objc2_core_foundation::{CFRunLoopSource, CFRunLoopSourceContext};
     use std::fs;
     use std::path::{Path, PathBuf};
-    use std::sync::atomic::{AtomicBool, Ordering};
     use std::time::Duration;
 
     const CODEX: &str = "<key>CFBundleIdentifier</key><string>com.openai.codex</string>";
@@ -333,7 +352,7 @@ mod tests {
         // The gate holds the thread before its run loop runs, as a ChatGPT slow to answer holds the observer's.
         let (open, gate) = mpsc::channel::<()>();
         let (ended_to, ended) = mpsc::channel();
-        let observation = on_own_run_loop(move || {
+        let observation = on_own_run_loop(move |_| {
             let _ = gate.recv();
             run_until_stopped();
             let _ = ended_to.send(());
@@ -353,7 +372,7 @@ mod tests {
     fn a_drop_while_the_run_loop_runs_stops_it() {
         let (running_to, running) = mpsc::channel();
         let (ended_to, ended) = mpsc::channel();
-        let observation = on_own_run_loop(move || {
+        let observation = on_own_run_loop(move |_| {
             // A block runs only inside its loop's run: told, the loop surely runs.
             let told = RcBlock::new(move || {
                 let _ = running_to.send(());
@@ -376,7 +395,7 @@ mod tests {
         // read once the handle is dropped.
         let (open, gate) = mpsc::channel::<()>();
         let (told_to, told) = mpsc::channel();
-        let observation = on_own_run_loop(move |stopped: &AtomicBool| {
+        let observation = on_own_run_loop(move |stopped| {
             let _ = told_to.send(stopped.load(Ordering::Acquire));
             let _ = gate.recv();
             let _ = told_to.send(stopped.load(Ordering::Acquire));
