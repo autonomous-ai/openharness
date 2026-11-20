@@ -3030,6 +3030,65 @@ describe('binding an OpenClaw pane, read from its screen', () => {
       expect(logged()).toEqual([])
     })
 
+    // The pass is serial, every other agent behind it; OpenClaw's store read waits up to 5 s on a locked database.
+    describe('a store slow to answer', () => {
+      beforeEach(() => {
+        vi.useFakeTimers()
+        vi.mocked(run.deps.openclawUserRowSince).mockImplementation(() => new Promise((resolve) => setTimeout(resolve, 5_000, true)))
+      })
+
+      it('holds the pass a second at most: the pane is read, and the task adopted as by a store that cannot say', async () => {
+        const passing = pass(0, ready)
+        await vi.advanceTimersByTimeAsync(1_000)
+        expect(run.deps.capturePane).toHaveBeenCalledOnce()
+        expect(run.deps.input.adoptTypedFirstTask).toHaveBeenCalledWith('a1', TASK)
+        await vi.advanceTimersByTimeAsync(4_000)
+        await passing
+        // Its answer came too late for its pass.
+        expect(run.deps.registry.firstTaskTaken).not.toHaveBeenCalled()
+      })
+
+      it('is asked again only once its read ended', async () => {
+        void pass(0, ready)
+        await vi.advanceTimersByTimeAsync(1_000)
+        void pass(2, ready)
+        await vi.advanceTimersByTimeAsync(1_000)
+        expect(run.deps.openclawUserRowSince).toHaveBeenCalledOnce()
+        await vi.advanceTimersByTimeAsync(3_000)
+        void pass(10, ready)
+        await vi.advanceTimersByTimeAsync(1_000)
+        expect(run.deps.openclawUserRowSince).toHaveBeenCalledTimes(2)
+      })
+    })
+
+    // A `/new` between the task's typing and its user row: the row is under the key the pane was on as OpenClaw took it.
+    it('a user row under a key the pane moved off settles it too', async () => {
+      row.earlierSessionIds = ['agent:main:older']
+      vi.mocked(run.deps.openclawUserRowSince).mockImplementation(async (key) => key === 'agent:main:older')
+      await pass(0, ready)
+      await vi.waitFor(() => expect(run.deps.registry.firstTaskTaken).toHaveBeenCalledWith('a1', START - 5_000))
+      expect(run.deps.input.adoptTypedFirstTask).not.toHaveBeenCalled()
+    })
+
+    it('asks its own key and the three it moved off last, no more', async () => {
+      row.earlierSessionIds = ['agent:main:k1', 'agent:main:k2', 'agent:main:k3', 'agent:main:k4']
+      await pass(0, ready)
+      expect(vi.mocked(run.deps.openclawUserRowSince).mock.calls.map(([key]) => key))
+        .toEqual(['agent:main:plain', 'agent:main:k1', 'agent:main:k2', 'agent:main:k3'])
+    })
+
+    it('a key that cannot say whether a row came after the adoption leaves it unsettled', async () => {
+      row.earlierSessionIds = ['agent:main:older']
+      const answer = vi.mocked(run.deps.openclawUserRowSince).getMockImplementation()!
+      vi.mocked(run.deps.openclawUserRowSince).mockImplementation(async (key, pane, since) => key === 'agent:main:older' ? null : answer(key, pane, since))
+      await pass(0, ready)
+      userRow = START - 1_000
+      await pass(5, ready)
+      await new Promise((settle) => setImmediate(settle))
+      expect(run.deps.input.adoptTypedFirstTask).toHaveBeenCalledOnce()
+      expect(run.deps.registry.firstTaskTaken).not.toHaveBeenCalled()
+    })
+
     it('an agent deleted while its store is read is left alone', async () => {
       vi.mocked(run.deps.openclawUserRowSince).mockImplementation(async () => { vi.mocked(isRecentlyDeleted).mockReturnValue(true); return true })
       await pass(0, running)
