@@ -170,9 +170,10 @@ case "$FOLDER" in
 esac
 
 # The lists below are UTF-8 bytes read in the C locale, not the locale's classes: dash reads a byte at a time, and a
-# UTF-8 locale's [[:space:]] and [[:cntrl:]] are not the app's lists (macOS's hold U+200B, which the app leaves bare). What Exec= quotes, as the app's exec_value and Desktop's quoteLauncherExec:
-# Unicode's White_Space (U+0009-000D, space, U+0085, U+00A0, U+1680, U+2000-200A, U+2028, U+2029, U+202F, U+205F,
-# U+3000), which a launcher may split an argument on, and what the Desktop Entry spec reserves.
+# UTF-8 locale's [[:space:]] and [[:cntrl:]] are not the app's lists (macOS's hold U+200B, which the app leaves bare).
+# What Exec= quotes, as the app's exec_value and Desktop's quoteLauncherExec: Unicode's White_Space (U+0009-000D,
+# space, U+0085, U+00A0, U+1680, U+2000-200A, U+2028, U+2029, U+202F, U+205F, U+3000), which a launcher may split an
+# argument on, and what the Desktop Entry spec reserves.
 # shellcheck disable=SC2016 # the $ and ` are characters of the list, not expansions
 QUOTED="$(printf '[\t-\r "'\''\\$`<>~|&;*?#()]|\302[\205\240]|\341\232\200|\342\200[\200-\212\250\251\257]|\342\201\237|\343\200\200')"
 # C1, U+0080-009F: the control characters past C0 and DEL.
