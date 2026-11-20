@@ -418,6 +418,58 @@ sit above it. This matches `codex/hookContract.ts`'s `win32Runner: 'powershell'`
   `[claude-code:unrecognized_model]` on stderr and ran.
 - `findstr /L /M /G:<the key file> <these notes>` prints nothing. The search reads the key from its file.
 
+## Task 6
+
+**Passes.** The devices' real pipe works for `tellDevices`, `askDevices` and `streamDevices`. A `tellDevices` that reads
+the process table takes a median of about 40 ms. One that holds its proof takes about 10 ms.
+
+Run 2026-11-20 on the UTM Windows 11 ARM64 VM (build 26200), as the owned test user over SSH (session 0). Node v24.20.0
+(arm64), vitest 4.1.10. The tree came from this branch at 3ff02e58e0, through `vm-sync.sh --cli`, then `npm ci` in `cli`
+and `cargo build --release --bins` in `pty`.
+
+- `cd cli && npx vitest run src/devices/listenerPipe.windows.real.spec.ts --maxWorkers=1`: 1 passed, in 164 ms.
+- The same run with `HARNESS_PTY_BIN` set to the VM's build (`C:\work\oh\pty\target\release\harness-pty.exe`): 1
+  passed, in 220 ms. Without it, no pty host is found, so the table is never read and only the pid is checked. With
+  it, the proof reads the real table.
+
+**The two medians.** They came from a throwaway spec, not committed and removed afterwards, run three times with
+`HARNESS_PTY_BIN` set:
+- It opened `openDevicesListener` on `newPipePath()`, with a `front` handler raised to 1,000 a second. At the real 10
+  a second, 20 calls in a row would be refused.
+- Each call was `tellDevices(dataDir, { type: 'front', app: 'vscode' }, { proof })`. The proof was
+  `createDevicesProof({ liveness: { alive: pidAlive, rows } })`, and `rows` wrapped the real `windowsProcessRows(null)`
+  (`harness-pty ps --json`). The wrapper counted each read, and whether the table it returned named the test's own
+  process.
+- One untimed call came first. The calls were 50 ms apart, and each was timed with `performance.now()` from the call
+  to its answer.
+- Table read each time: `proof.forget(dataDir)` before each of 20 calls.
+- Proof held: 20 calls in a row, after one untimed call that proved.
+
+| Run | Table read: median (min-max) | Reads; tables naming the process | Proof held: median (min-max) | Reads |
+| --- | --- | --- | --- | --- |
+| 1 | 40.9 ms (37.2-48.8) | 20; 20 | 12.8 ms (2.7-27.0) | 0 |
+| 2 | 39.1 ms (33.2-44.7) | 20; 20 | 8.1 ms (2.5-13.5) | 0 |
+| 3 | 48.6 ms (40.1-63.1) | 20; 20 | 9.7 ms (3.2-17.4) | 0 |
+
+The table read really ran on each of the 20 calls: every read returned rows, and every table named the process. With
+the proof held, no read ran.
+
+## Task 13
+
+**Passes, and was red before the fix.**
+
+Run 2026-11-20 on the same VM, in the same way as Task 6: build 26200, ARM64, Node v24.20.0, the test user over SSH.
+
+- `cd cli && npx vitest run src/devices/claudePlugin.windows.real.spec.ts --maxWorkers=1` at 3ff02e58e0: 1 passed
+  (`finds claude.exe in the profile's .local\bin, off PATH`, 2.7 s).
+- The same spec with `cli/src/devices/claudePlugin.ts` as the task's red commit had it (30b301840d), put in place for
+  this run and put back afterwards: 1 failed. The output was `AssertionError: expected null not to be null` at
+  `claudePlugin.windows.real.spec.ts:41`, so a lookup answered no run. So it was not green before Step 3.
+  - The case stops at the first null, so this run does not say which of `claudeFound(home, false)`,
+    `claudeFound(home, true)` and `claudeRun()` it was.
+- The fix is all in `claudePlugin.ts` (with `dialHomeSetup.ts` and `dialPluginSetup.ts` for the setups).
+  `lib/engineBin.ts` and `lib/engineInstall.ts` are unchanged on the branch.
+
 ## Task 15
 
 **Follow.** `$.process.spawn` is there in Claude Code 2.1.328 and streams: each piece arrives 2-30 ms after the child
@@ -489,6 +541,120 @@ left the `for await` loop after three pieces.
 - The write that fails, fails in the write's callback (`code=EPIPE`). No `error` event came first, and the write did
   not throw.
 - Not tried: whether the two outlive `claude.exe` itself. Every child had exited before the session ended.
+
+### 3. The real-pipe run (Step 5)
+
+**Passes.** Run 2026-11-20 on the same VM: build 26200, ARM64, Node v24.20.0, vitest 4.1.10. It ran as the test user
+over SSH, on the tree at 3ff02e58e0.
+
+- `cd cli && npx vitest run src/deviceClaude/inbox.windows.real.spec.ts --maxWorkers=1`: 2 passed, in 113 ms:
+  - `prints what the person said, then {}`;
+  - `a server with another token gives no text line`.
+- With `HARNESS_PTY_BIN` set to the VM's build, so `createDaemonProof()` reads the real process table: 2 passed, in
+  2.2 s (0.99 s and 1.13 s).
+
+## Task 23
+
+**Fails, on the branch and on the base alike: the test harness never sees the daemon become ready.** All four cases
+are skipped. The suite fails in `startWindowsDaemon` (`e2e/dialWindows.e2e.ts:47`). This is the step's open point,
+"ready lines under `start -f`": on Windows they do not come.
+
+Run 2026-11-20 on the same VM, as the test user over SSH: build 26200, ARM64, Node v24.20.0, vitest 4.1.10. The tree
+was synced and `npm ci` run in `cli`, and the host was built.
+- The command: in `cli`, `set E2E_BUNDLE=1`, `set HARNESS_PTY_BIN=C:\work\oh\pty\target\release\harness-pty.exe`,
+  then `npx vitest run --config vitest.e2e.windows.config.ts`.
+- The second branch run also set `E2E_ARTIFACTS_DIR`, to keep the daemon's output.
+
+| Tree | Result | Time |
+| --- | --- | --- |
+| Branch, 3ff02e58e0 (twice) | suite failed, 4 skipped | 110.6 s (90.9 s in the suite) |
+| Base: 3c3501b67c, the commit before Task 5's red commit (e8c49cde68), with the four files of this task copied in from 3ff02e58e0 | suite failed, 4 skipped, at the same place | 112.2 s (91.2 s in the suite) |
+
+The base tree was made of `cli`, `store` and `plugins` from `git archive`, plus the four files
+(`e2e/dialWindows.e2e.ts`, `e2e/harness/windowsDaemon.ts`, `e2e/harness/fakeDial.ts`, `vitest.e2e.windows.config.ts`).
+Its `node_modules` was a link to the branch's, since `package-lock.json` is the same. On the base the first case
+never ran, so its `no dial` was not seen.
+
+The failing output (the same in all three runs):
+
+```
+ FAIL  e2e/dialWindows.e2e.ts > the dial on Windows
+Error: EPERM, Permission denied: \\?\<profile>\AppData\Local\Temp\harness-dial-win-<id> '\\?\<profile>\AppData\Local\Temp\harness-dial-win-<id>'
+ ❯ discard e2e/harness/windowsDaemon.ts:104:43
+ ❯ close e2e/harness/windowsDaemon.ts:225:5
+ ❯ startWindowsDaemon e2e/harness/windowsDaemon.ts:244:5
+ ❯ e2e/dialWindows.e2e.ts:47:31
+```
+
+What happened, from the processes and logs read while the second branch run was waiting:
+- **The daemon started, and was ready within 2 s.** Its `harness.log`, in the root's data folder, has
+  `[hooks] listening on 127.0.0.1:<port> (SessionStart/SessionEnd callbacks)`, `[cli] daemon pid … listening on
+  127.0.0.1:<port>`, `[cli] ready` and `[cable] cable: open on COM77 [usb E2E-DIAL]`. `GET /api/health` answered
+  `{"ok":true,"version":"0.0.1"}`. The stand-in ran as the core's children, `node.exe watch` and `node.exe open
+  COM77`, started from the work folder.
+- **`start -f`'s stdout and stderr held one line:** `[env] started with 50 variables; 0 left out
+  (docs/cli.md#the-daemons-environment)`. These are what `windowsDaemon.ts` reads. On Windows the core's lines go to
+  `harness.log` alone (`[harnessd] on Windows the services run in the core's process`). So `listeningPort(output)`
+  never finds the port, and `until('the daemon to answer on its port')` times out at 90 s.
+- **That error is hidden by the cleanup.** `close()` runs `harness stop`, and the daemon ends. But its pty host
+  (`harness-pty.exe serve --home <root>\<the profile>\.harness\pty --history-limit 2000 --no-reexec`) keeps running.
+  It holds `pty-host-p2-0.1.0.lock` in the root, so `discard()`'s `rmSync` throws `EPERM`, and that error replaces the
+  timeout's.
+- **The pty host was still running 5 minutes later.** It also holds the output of the SSH session that started the
+  run, so `ssh` did not return until the pty host was ended by hand. This happened in all three runs.
+- **Other setup.** The bundle (`build-bundle.mjs`) reads `store/` and `plugins/` beside `cli/`, and `vm-sync.sh --cli`
+  copies neither. The first try failed in the global setup with `ENOENT … store\agents\hachi\harness.json`. Both
+  folders were then copied to the VM with `tar`, as `vm-sync.sh` copies.
+
+The open points of this task, as far as this run reached:
+- **The stand-in started from the daemon's working folder:** seen.
+- **Ready lines under `start -f`:** not there (above).
+- **A temp folder inside the profile:** the daemon took it. Its data folder under `%TEMP%`, inside the profile, was
+  accepted, and `daemon-token` and the daemon's record were written.
+- **The vscode stream without VS Code, and `daemon:true` in `link`:** not reached.
+
+## Task 26
+
+**`cargo test --locked --lib -- raise::`: 6 passed. `cargo test --locked --test raise`: over SSH, 2 passed and 1
+failed. In the test user's console session, all 3 passed.**
+
+The plan's `cargo test --locked -- raise::` was run as `--lib -- raise::`, since the plan's form also starts
+`desktop_launch`'s test runner. Run 2026-11-20 on the same VM: build 26200, ARM64, rustc and cargo 1.99.0. The crate
+was synced from 3ff02e58e0 to `C:\work\oh\pty`.
+
+- `--lib -- raise::`, over SSH as `admin`, 6 passed:
+  - `pick_skips_hidden_owned_and_tool_windows_and_takes_the_first_left`
+  - `pick_finds_none_when_no_window_qualifies`
+  - `the_window_code_uses_only_the_documented_calls`
+  - `the_link_code_asks_for_no_ui`
+  - `the_link_code_asks_for_a_handler_before_opening`
+  - `a_links_scheme_is_its_name_before_the_colon`
+- `--test raise`, over SSH as `admin` (session 0, twice, the same both times). `admin` has no `codex` link handler, so
+  the link case ran:
+
+  | Case | Result |
+  | --- | --- |
+  | `a_program_with_no_window_is_none` (`--exe no-such-program.exe`, and `--pid` of a `ping` with no window) | ok |
+  | `a_link_with_no_handler_is_refused` | ok (ran, not skipped) |
+  | `a_minimized_window_is_raised_or_refused_and_no_longer_minimized` | **FAILED**: `raise --pid <the test>` printed `none` |
+
+  ```
+  thread 'windows::a_minimized_window_is_raised_or_refused_and_no_longer_minimized' panicked at tests\raise.rs:121:9:
+  none
+  test result: FAILED. 2 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.15s
+  ```
+
+  In session 0 the test's own window, shown and then minimized, is not picked: `raise` found no visible, unowned,
+  non-tool window for the pid. Why was not looked into. A CI runner with no desktop session might see the same.
+- `--test raise` in the test user's console session: the compiled test program (`target\debug\deps\raise-<hash>.exe
+  --nocapture --test-threads=1`), run as a one-shot task through `session-run.ps1`. All 3 passed in 0.29 s:
+  - `a_program_with_no_window_is_none`: ok.
+  - `a_minimized_window_is_raised_or_refused_and_no_longer_minimized`: ok. The test window was seen shown
+    (`Static`, "harness-pty raise test").
+  - `a_link_with_no_handler_is_refused`: ok, as a skip ("skipped: this machine has a codex link handler"). The ChatGPT
+    app is installed for this user.
+- The console check of `open-link` with no handler is in "Fixes after Task 37" below. There `codex` has a handler for
+  the test user, so `claude` was checked with its handler taken away for the calls.
 
 ## Task 37
 
@@ -710,3 +876,106 @@ The run removed what it made:
 - the processes it started.
 
 The key file, the test user and the two apps stay.
+
+## Fixes after Task 37
+
+Run 2026-11-20 on the UTM Windows 11 ARM64 VM (build 26200), Node v24.20.0, from this branch at 3ff02e58e0. The test
+user was still signed in at the console (session 1) from Task 37, so no autologon was set this time.
+
+### 1. `open-link` asks for a handler first (635cf4a9e0)
+
+**Fixed. With no handler, `open-link` answers `refused` at once and no "Pick an app" shows. A second call is just as
+quick. The build from before the fix shows the picker and answers `opened`.**
+
+How it was run:
+- In the test user's console session, as one-shot tasks through `session-run.ps1`, with `watch-windows.ps1` running
+  beside them, started hidden.
+- Two builds of `harness-pty.exe open-link`, both `cargo build --release`:
+  - the fixed one, from 3ff02e58e0;
+  - the one from before the fix, from ba9a677741, built in a throwaway folder and removed afterwards.
+- After each call, `OpenWith.exe` processes that had not been there before were counted and closed.
+
+The test user has a handler for every scheme `open-link` takes: the Claude and ChatGPT apps and both editors are
+installed for it. So for "no handler", the `claude` key (`HKCU\Software\Classes\claude`) was exported with `reg`,
+deleted for these calls, and imported again; it was read back afterwards, as it was. `codex` is a packaged handler and
+cannot be taken away without removing the app, so `codex` with no handler ran only over SSH, as `admin` (below).
+
+| Link | Build | Answer | Time | "Pick an app" |
+| --- | --- | --- | --- | --- |
+| `claude://harness-test`, no handler | fixed | `refused` | 61 ms; 97 ms | none |
+| the same, again right after | fixed | `refused` | 28 ms; 37 ms | none |
+| the same | before the fix | `opened` | 0.55 s; once 225 s | shown each time (`OpenWith.exe`, under `svchost.exe`) |
+| `codex://harness-test`, ChatGPT app installed | fixed | `opened` | 0.51 s | none; the app's window (`ChatGPT.exe`, `Chrome_WidgetWin_1`) showed, and was in front 12 s later |
+| `vscode://harness-test`, VS Code installed | fixed | `opened` | 1.19 s | none; VS Code's window (`Code.exe`) showed, and was in front 7 s later |
+
+- In the first run, the old build's call returned only once the picker was closed by hand, after 225 s. In the second
+  run it returned in 0.55 s, with the picker still open, and the picker was closed 10 s later. The fixed build waited
+  on nothing.
+- `watch-windows.ps1`, first run: it covered both of the fixed build's calls and the old build's call, and recorded
+  one window, the old build's `Pick an app` (`Open With Dummy Window Class For Interim Dialog`).
+- `watch-windows.ps1`, second run: its hook came up after the fixed build's two calls. It recorded the old build's
+  `Pick an app`, then `ChatGPT.exe`'s and `Code.exe`'s windows, then the raise test's.
+- In both runs, no console window showed.
+- Over SSH as `admin`, which has no `claude` or `codex` handler (session 0), `open-link codex://harness-test` printed
+  `refused` from both builds. With no desktop, Windows shows no picker and the old build's call fails, so session 0
+  does not tell the two builds apart. That is why `a_link_with_no_handler_is_refused` passes there either way (Task 26).
+  Only the console session shows the fix.
+- `cargo test --test raise` ran `a_link_with_no_handler_is_refused` over SSH (no `codex` handler for `admin`): ok. In
+  the console it skipped, since the test user has the ChatGPT app. The test itself was not run against the old build.
+  The old build's answer in the console (`opened`, with a picker) would fail both of its checks.
+- What these runs opened, the ChatGPT app and VS Code, was closed afterwards.
+
+### 2. The ChatGPT app's own `codex.exe` (bdda6d0e51)
+
+**Found and used as planned.** The test user, a standard user and not an administrator, asked Windows for the
+package's folder in about 1.3-1.8 s. The app's `codex.exe` runs from Node, and a send from an app session names `app`
+once the folder is known.
+
+The checks ran as a throwaway script (not committed, removed afterwards), run by `npx tsx` from `cli`. It called this
+branch's `storePackageFolder`, `codexQueueDeps()` and `createCodexQueue`. It ran as the test user twice: over SSH
+(session 0), and in the console session through `session-run.ps1`.
+
+- **`storePackageFolder('OpenAI.Codex')`** answered `%ProgramFiles%\WindowsApps\OpenAI.Codex_26.1117.3838.0_arm64__2p2nqsd0c76g0`,
+  the same on each of three asks in a row. Each ask is Windows PowerShell started, `Get-AppxPackage`, and its exit:
+
+  | Where | 1st ask | 2nd | 3rd | A package not installed (`No.Such.Package`) |
+  | --- | --- | --- | --- | --- |
+  | SSH | 1,785 ms | 1,405 ms | 1,457 ms | `null`, 1,272 ms |
+  | Console | 1,502 ms | 1,308 ms | 1,303 ms | `null`, 1,423 ms |
+
+  All are far under the 10 s bound. The first ask in each process was the slowest. A PowerShell start right after
+  the VM had sat idle was not measured; Task 2 saw 3-6 s inside Claude Code.
+- **`<folder>\app\resources\codex.exe --version`**, started by Node's `execFile` with no shell, exited 0 with
+  `codex-cli 0.171.0-alpha.13`, in both sessions.
+- **`createCodexQueue`** with `codexQueueDeps()`, a throwaway `CODEX_HOME`, an app session (`isApp` true) and a random
+  thread id:
+  - The first send, at once: `codex-failed (exit 1 · path)`. The `codex` on PATH ran
+    (`<profile>\AppData\Roaming\npm\codex.cmd`), since the package was still being asked.
+  - The ask the first send started found the app's `codex.exe` 2 ms (SSH) and 115 ms (console) after that send
+    returned.
+  - The second send: `codex-failed (exit 1 · app)`. The app's `codex.exe` ran.
+
+  `exit 1` is what both copies answer for a thread that does not exist, signed in to nothing. A signed-in
+  `codex queue` into a thread of the app is still not verified on Windows.
+- **Not checked here:**
+  - A PowerShell every 30 s while an app session is listed and the package has no `codex.exe`: that needs the app's
+    `codex.exe` gone.
+  - `CODEX_HOME`: the queue passes Harness's own, as on macOS; that is read from the code only.
+
+### 3. The key, and what was removed
+
+`findstr /L /M /G:<the key file> <these notes>` prints nothing (exit 1). It ran as the test user in its console
+session, beside a positive control: the key file searched against itself, which matched (exit 0). Over SSH the same
+user's `findstr` cannot open the key file ("Access is denied"), so a check run there proves nothing. None of these runs
+used the key: no engine was started with it.
+
+What these runs made on the VM was removed afterwards:
+- the old `harness-pty` build's folder and the base tree of Task 23;
+- the throwaway specs and scripts;
+- the session scripts in the test user's `e2e` folder;
+- Task 23's roots and bundle folders, and the e2e artifact folders;
+- VS Code's updater log from the `vscode://` run;
+- the processes the runs started, three pty hosts among them (Task 23).
+
+`store/` and `plugins/` stay under `C:\work\oh`, beside the synced `cli/`. The key file, the test user, the apps and
+`C:\work\oh` stay.
