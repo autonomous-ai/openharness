@@ -9,8 +9,10 @@
 # `FAILED: <check>`, exiting 1. Everything it runs is its own and goes with it: a scratch HOME and XDG folders, its own
 # D-Bus session, Xvfb display, window manager and compositor, a fake xdg-open and a fake desktop app; never an account,
 # a backend or a person's apps. On a GitHub-hosted runner only, a last part runs the app's own install lines: the CDN's
-# install script, sudo for its packages, and the CLI it installs, signed out, with a backend that does not resolve. A
-# CDN or release download that fails there is reported as one, not as the change's failure.
+# install script, sudo for its packages, and the CLI it installs, signed out, with a backend that does not resolve. It
+# reports as the CDN's, not the change's, an install script it cannot read first, and a run behind the screen
+# (`--desktop`) whose last lines the app logged show curl failing on the network. The `--host` run in a terminal logs
+# none of its lines, so its failure is reported as it is.
 # It needs xvfb openbox xdotool x11-utils xterm sway foot dbus-x11 python3-dbus python3-gi and FUSE for the AppImage
 # (libfuse2); where FUSE is missing, APPIMAGE_EXTRACT_AND_RUN=1 runs it unpacked.
 set -euo pipefail
