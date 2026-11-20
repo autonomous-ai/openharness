@@ -202,8 +202,11 @@ stdin (`front_line`, `FrontFeed`), never logged. The CLI already maps exe names 
 - **Icons:** every OS uses the current artwork from main (#4443, the Pixel H): `icon.png` on the Harness green tile,
   and `tray.png`, one 36×36 template image (black, alpha only). macOS keeps the template. Windows and Linux do not tint
   a template image, so they draw the same Pixel H in the colour that reads on the bar (named difference):
-  - `tray.png` itself (black) on a light bar;
-  - `tray-light.png`, the same alpha in white, on a dark bar. Windows picks by `HKCU\...\Themes\Personalize\SystemUsesLightTheme` and
+  - `tray-dark.png` (black) on a light bar;
+  - `tray-light.png` (white) on a dark bar.
+
+  Both are 32×32, with tray.png's 8×8 grid of cells at 4 px a cell (a 2×2 dot in each cell). The glyph then stays
+  crisp at 16 and 32 px; tray.png's 36 px would blur. Windows picks by `HKCU\...\Themes\Personalize\SystemUsesLightTheme` and
   follows changes pushed by `RegNotifyChangeKeyValue` (no poll); when the key cannot be followed, the log has
   `tray: theme not followed` and the icon stays the dark taskbar's. Linux uses the light glyph (named difference). The
   bundle gets `icon.ico` (Windows) and the PNG sizes Linux needs, each size `icon.icns`'s own drawing (as macOS
