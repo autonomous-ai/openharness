@@ -118,8 +118,7 @@ static void tap(const char *id, uint32_t at)
     CHECK(b != NULL);
     const int x = b->x + b->w / 2, y = b->y + b->h / 2;
     max_ui_touch(true, x, y, at);
-    CHECK(max_ui_touch(false, x, y, at).kind == MAX_ACT_OPEN_TALK);
-    max_ui_talk(MAX_TALK_RECORDING, at);
+    CHECK(max_ui_touch(false, x, y, at).kind == MAX_ACT_OPEN_TALK && max_m.talk_soon);   // the mic a moment later
     CHECK(max_m.view == MAX_VIEW_AGENT && !strcmp(max_m.selected, id));
 }
 
@@ -414,13 +413,15 @@ static void test_bakes_full(void)
     }
 }
 
-// After a motion, the page it came to is painted ahead again: listening, only its X (a tap anywhere else sends what
-// was said), which then starts warm too.
+// After a motion, the page it came to is painted ahead again: listening (the clock's mic, a second after the tap), only
+// its X (a tap anywhere else sends what was said), which then starts warm too.
 static void test_again(void)
 {
     rest(3, NULL);
     warm(T0);
     motion("b");
+    CHECK(max_ui_talk_due(T0 + MAX_TALK_DELAY_MS).kind == MAX_ACT_TALK);
+    max_ui_talk(MAX_TALK_RECORDING, T0 + MAX_TALK_DELAY_MS);   // the recorder max_app.c starts for it
     const uint32_t later = T0 + 2000;
     frame(later - 1000);
     frame(later - 500);

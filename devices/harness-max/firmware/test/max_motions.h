@@ -37,15 +37,15 @@ static void motion_asking(max_motion_draw_t draw)
     max_open("hero");
 }
 static void motion_none(void) {}
-// A tap on the agent's cell as last drawn, at T0, and the mic max_app.c opens for it: the open as the finger starts it
-// (max_ui_touch.c open_cell), what max_ui_warm paints ahead.
+// A tap on the agent's cell as last drawn, at T0: the open as the finger starts it (max_ui_touch.c open_cell), its mic
+// to open MAX_TALK_DELAY_MS on, past the move; what max_ui_warm paints ahead.
 static void tap_cell(const char *id)
 {
     for (int i = 0; i < max_m.cell_hits; i++) {
         if (strcmp(max_m.cell_id[i], id)) continue;
         const int x = max_m.cell_box[i].x + max_m.cell_box[i].w / 2, y = max_m.cell_box[i].y + max_m.cell_box[i].h / 2;
         max_ui_touch(true, x, y, T0);
-        if (max_ui_touch(false, x, y, T0).kind == MAX_ACT_OPEN_TALK) max_ui_talk(MAX_TALK_RECORDING, T0);
+        max_ui_touch(false, x, y, T0);
         return;
     }
 }

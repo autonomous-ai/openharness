@@ -99,8 +99,27 @@ static max_act_t settle_talk(uint32_t now_ms)
     return act_for(MAX_ACT_CANCEL, max_m.talk_id);
 }
 
+// A cell's tap opened its agent: at talk_soon_at its mic opens, while its page is still up. The page gone first, the
+// link down, or an agent the bar can no longer listen for: the wait ends with nothing.
+static max_act_t talk_soon_due(uint32_t now_ms)
+{
+    const max_agent_t *a = max_find(max_m.talk_id);
+    const bool page = max_m.view == MAX_VIEW_AGENT && a && !strcmp(max_m.selected, a->id);
+    if (page && max_m.link && !max_form_open() && max_can_talk(a) && max_takes_voice(a)) {
+        if (!reached(max_m.talk_soon_at, now_ms)) return nothing();
+        max_m.talk_soon = false;
+        max_m.dirty = true;
+        void_contact(now_ms);   // a finger on the glass as the mic opens acts on nothing: its lift would send
+        return act_for(MAX_ACT_TALK, a->id);
+    }
+    max_m.talk_soon = false;
+    max_m.dirty = true;
+    return nothing();
+}
+
 max_act_t max_ui_talk_due(uint32_t now_ms)
 {
+    if (max_m.talk_soon && max_m.talk != MAX_TALK_RECORDING) return talk_soon_due(now_ms);
     if (max_m.talk != MAX_TALK_RECORDING || !max_m.link) return nothing();
     if (max_m.talk_id[0] && !max_find(max_m.talk_id)) {   // its agent left the ring: its page went with it
         if (max_m.view == MAX_VIEW_AGENT) go(MAX_VIEW_OVERVIEW);
@@ -140,12 +159,14 @@ static max_act_t bring_up(const char *id, const char *name, const char *app, uin
 static max_act_t talk_to(const max_agent_t *a, max_act_kind_t kind, uint32_t now_ms)
 {
     max_copy(max_m.talk_id, sizeof max_m.talk_id, a->id);
+    max_m.talk_soon = false;   // a tap on the page while a cell's wait runs: the mic now
     guard(now_ms);
     return act_for(kind, a->id);
 }
 
-// A cell, or a sliver beside the open agent, as drawn: the agent opens across the row with the mic on (the computer
-// opens it too), even if the ring moved since; gone from the ring, it opens nothing. One that asks opens Attention.
+// A cell, or a sliver beside the open agent, as drawn: the agent opens across the row (the computer opens it too), even
+// if the ring moved since, and its mic MAX_TALK_DELAY_MS later (max_ui_talk_due): the person sees the page before it
+// listens. Gone from the ring, it opens nothing. One that asks opens Attention.
 static max_act_t open_cell(const char *id, uint32_t now_ms)
 {
     const max_agent_t *a = max_find(id);
@@ -156,7 +177,12 @@ static max_act_t open_cell(const char *id, uint32_t now_ms)
         return nothing();
     }
     show_agent(a->id);
-    if (max_can_talk(a) && max_takes_voice(a)) return talk_to(a, MAX_ACT_OPEN_TALK, now_ms);
+    if (max_can_talk(a) && max_takes_voice(a)) {
+        const max_act_t act = talk_to(a, MAX_ACT_OPEN_TALK, now_ms);
+        max_m.talk_soon = true;
+        max_m.talk_soon_at = now_ms + MAX_TALK_DELAY_MS;
+        return act;
+    }
     return act_for(MAX_ACT_OPEN, a->id);   // no voice now: "Talk to it in <App>"
 }
 

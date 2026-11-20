@@ -297,6 +297,13 @@ static void tap_cell(const char *id)
     const max_box_t *b = cell_of(id);
     contact(b->x + b->w / 2, b->y + b->h / 2, 2, 1);
 }
+// A cell's tap and the second its mic waits for (MAX_TALK_DELAY_MS): the render task's tick then opens it.
+static void tap_cell_and_wait(const char *id)
+{
+    tap_cell(id);
+    now += MAX_TALK_DELAY_MS;
+    render_pass();
+}
 static void tap_page(void) { contact(HT_WIDTH / 2, HT_HEIGHT - 20, 0, 0); }
 // The hit of this kind as planted.
 static const max_hit_t *find_hit(max_hit_kind_t kind, int arg)
@@ -323,16 +330,22 @@ static void test_touch_wakes_the_renderer(void)
     CHECK(max_m.view == MAX_VIEW_INBOX && NOTIFIES > 0);
 }
 
-// One tap on a cell: agent.open for it, and the mic opens for it, both after the lock is released (the recorders check
-// the lock). The agent page shows it, recording.
+// One tap on a cell: agent.open for it at once, and its mic MAX_TALK_DELAY_MS later from the render task's tick, both
+// after the lock is released (the recorders check the lock). The agent page shows it, then recording.
 static void test_cell_tap_opens_and_listens(void)
 {
     fresh();
     OPENS = V_BEGINS = 0;
     tap_cell("b");
-    CHECK(OPENS == 1 && !strcmp(OPENED, "b") && V_BEGINS == 1 && !strcmp(V_AGENT, "b") && V_OPEN);
-    CHECK(max_m.view == MAX_VIEW_AGENT && !strcmp(max_ui_selected(), "b") && max_m.talk == MAX_TALK_RECORDING);
-    CHECK(NOTIFIES > 0);
+    CHECK(OPENS == 1 && !strcmp(OPENED, "b") && V_BEGINS == 0 && !V_OPEN && max_m.talk == MAX_TALK_IDLE);
+    CHECK(max_m.view == MAX_VIEW_AGENT && !strcmp(max_ui_selected(), "b") && NOTIFIES > 0);
+    now += MAX_TALK_DELAY_MS - 1;
+    render_pass();
+    CHECK(V_BEGINS == 0 && max_m.talk == MAX_TALK_IDLE);
+    now += 1;
+    render_pass();
+    CHECK(OPENS == 1 && V_BEGINS == 1 && !strcmp(V_AGENT, "b") && V_OPEN && max_m.talk == MAX_TALK_RECORDING);
+    CHECK(max_m.view == MAX_VIEW_AGENT && !strcmp(max_ui_selected(), "b"));
     // A swipe opens nothing.
     fresh();
     OPENS = 0;
@@ -345,7 +358,7 @@ static void test_cell_tap_opens_and_listens(void)
 static void test_the_clock_sends_after_silence(void)
 {
     fresh();
-    tap_cell("a");
+    tap_cell_and_wait("a");
     LEVEL = 3;
     render_pass();
     CHECK(max_m.talk_heard && max_m.level_count == 1 && max_m.levels[0] == 3);
@@ -366,7 +379,7 @@ static void test_the_clock_sends_after_silence(void)
 static void test_the_mic_closes_when_nothing_is_heard(void)
 {
     fresh();
-    tap_cell("a");
+    tap_cell_and_wait("a");
     LEVEL = 1;   // a room's hum
     now += MAX_HEAR_MS - 1;
     render_pass();
@@ -387,14 +400,14 @@ static void test_the_mic_closes_when_nothing_is_heard(void)
 static void test_the_body_talks_and_x_cancels(void)
 {
     fresh();
-    tap_cell("a");
+    tap_cell_and_wait("a");
     agent_drawn();
     tap_on(find_hit(MAX_HIT_AGENT_X, 0));
     CHECK(!V_OPEN && max_m.talk == MAX_TALK_IDLE && max_m.view == MAX_VIEW_OVERVIEW);
     overview_drawn();
     V_BEGINS = 0;
     now += MAX_GUARD_MS;   // past the cancel's guard
-    tap_cell("a");
+    tap_cell_and_wait("a");
     CHECK(V_BEGINS == 1 && V_OPEN && !strcmp(V_AGENT, "a") && max_m.talk == MAX_TALK_RECORDING);
     agent_drawn();
     now += MAX_GUARD_MS;   // past the opening's
@@ -467,7 +480,7 @@ static void test_update_gate_holds_talk(void)
     fresh();
     CHECK(pro_app_begin_update_gate());
     OPENS = V_BEGINS = 0;
-    tap_cell("a");
+    tap_cell_and_wait("a");
     CHECK(OPENS == 1 && V_BEGINS == 0 && !V_OPEN && max_m.talk == MAX_TALK_IDLE);
     CHECK(!strcmp(max_m.notice, "Updating") && max_m.view == MAX_VIEW_AGENT);
     pro_app_end_update_gate();
@@ -718,7 +731,7 @@ static void test_new_harness(void)
     max_show(MAX_VIEW_OVERVIEW);
     overview_drawn();
     now += MAX_GUARD_MS;   // past the spoken name's send
-    tap_cell("a");
+    tap_cell_and_wait("a");
     CHECK(V_OPEN && !strcmp(V_AGENT, "a") && VOICE_FORM[0] == 0);
     agent_drawn();
     now += MAX_GUARD_MS;

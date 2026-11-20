@@ -3,9 +3,9 @@
 // and state chip, the line of its task, the mic's band across its foot, and X at its top right. The panel is one tap:
 // it opens the mic, or sends what is being said. The band, live: "Listening" and its clock, the waveform of the mic's
 // level ("Say it…" until speech is heard), "Tap to send" with the ring that fills in the quiet after speech; sending,
-// "Sending". At rest one quiet line: "Tap to talk", "Mic closed · tap to talk", or where to talk to an agent the bar
-// cannot record for. As V3's: its rail, glow and chip loop, the band's colours ease between talking and not, and the
-// live dot pulses in its glow.
+// "Sending". At rest one quiet line: "Tap to talk", "Mic opens in a moment…" (a cell's tap, for MAX_TALK_DELAY_MS),
+// "Mic closed · tap to talk", or where to talk to an agent the bar cannot record for. As V3's: its rail, glow and chip
+// loop, the band's colours ease between talking and not, and the live dot pulses in its glow.
 #include <stdio.h>
 #include <string.h>
 
@@ -102,6 +102,11 @@ static void quiet_band(ht_scene_t *s, const max_agent_t *a, int x, int r)
 {
     const int cy = BAND_Y + BAND_H / 2;
     const bool closed = max_m.talk_closed && !strcmp(max_m.talk_id, a->id);
+    if (max_m.talk_soon && !strcmp(max_m.talk_id, a->id)) {   // a cell's tap: the mic opens in a moment
+        max_icon_mic(s, x, cy - MIC / 2, MIC, VOICE);
+        max_text(s, x + MIC + DX(12), cy, r - x - MIC - DX(12), &ph_rg_28, REST, "Mic opens in a moment\xe2\x80\xa6");
+        return;
+    }
     if (!closed && !max_takes_voice(a)) {
         const char *app = max_app_of(a);
         char where[CABLE_NAME_MAX + 24];

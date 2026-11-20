@@ -426,6 +426,16 @@ static void test_agent_page(void)
     render_at(T0);
     CHECK(word("Tap to talk") && !word("Mic closed \xc2\xb7 tap to talk"));
     max_m.talk_closed = false;
+    // A cell's tap: its mic opens in a moment, and the band says so, for its own agent only.
+    max_copy(max_m.talk_id, sizeof max_m.talk_id, "c");
+    max_m.talk_soon = true;
+    render_at(T0);
+    CHECK(word("Mic opens in a moment\xe2\x80\xa6") && !word("Tap to talk") && find_hit(MAX_HIT_BODY, 0));
+    agent_words();
+    max_copy(max_m.talk_id, sizeof max_m.talk_id, "b");
+    render_at(T0);
+    CHECK(word("Tap to talk") && !word("Mic opens in a moment\xe2\x80\xa6"));
+    max_m.talk_soon = false;
     max_m.talk_id[0] = 0;
     // Its pet moves, on its own beat; a logo holds still (the slivers' pets hold one frame).
     const uint32_t beat = max_motion_ms(T0);

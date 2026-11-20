@@ -741,6 +741,7 @@ bool max_ui_notice(const char *text, uint32_t duration_ms, uint32_t now_ms)
 bool max_ui_talk(max_talk_t state, uint32_t now_ms)
 {
     const bool changed = max_m.talk != state;
+    if (state == MAX_TALK_RECORDING) max_m.talk_soon = false;   // the mic a cell's tap waited for is open, or another
     if (changed && state == MAX_TALK_RECORDING) {   // a new recording: its clock, and nothing heard yet
         max_m.talk_from = max_m.talk_quiet_from = now_ms;
         max_m.talk_heard = false;
@@ -867,6 +868,7 @@ uint32_t max_ui_next_wake_ms(uint32_t now_ms)
     uint32_t ms = MAX_WAKE_MS;
     for (int i = 0; max_m.view == MAX_VIEW_INBOX && i < max_m.inbox_count; i++)
         sooner(&ms, 60000u - (uint32_t)(now_ms - max_m.inbox[i].at) % 60000u);
+    if (max_m.talk_soon) until(&ms, max_m.talk_soon_at, now_ms);   // the mic a cell's tap opens (max_ui_talk_due)
     if (max_m.talk == MAX_TALK_RECORDING) {   // the band, and the send or the close the clock owes (max_ui_talk_due)
         sooner(&ms, MAX_TALK_FRAME_MS);
         if (max_m.talk_heard) {

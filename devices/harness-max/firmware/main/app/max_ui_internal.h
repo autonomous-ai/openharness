@@ -50,6 +50,8 @@ enum { MAX_CAP_VOICE = 1, MAX_CAP_FOCUS = 2, MAX_CAP_ANSWER = 4, MAX_CAPS_ALL = 
 #define MAX_SPEECH_LEVEL 2          // a level at least this is speech (pro_rec_level: 0..4)
 #define MAX_HEAR_MS 5000u           // nothing heard this long after the mic opened: it closes, nothing sent
 #define MAX_SILENCE_MS 2500u        // quiet this long after speech: the recording is sent (the owner, 20 Nov: 5 s was slow)
+#define MAX_TALK_DELAY_MS 1000u     // a cell's tap opens its agent, and the mic this long after (the owner, 20 Nov: at
+                                    // once was hurried)
 #define MAX_TALK_MAX_MS 600000u     // the longest recording (the Dial's 600 s): then it is sent
 // The Dial's touch, which the owner kept for the bar (18 Nov). While the mic is open only the Dial's tap sends: down
 // MAX_TAP_MIN_MS..MAX_TAP_MAX_MS, never farther than 1.2 mm from where it went down. A longer hold or a slide is the
@@ -312,6 +314,8 @@ typedef struct {
     bool talk_heard;                 // speech was heard in this recording
     uint32_t talk_quiet_from;        // when the speech last stopped (the send ring fills from here)
     bool talk_closed;                // the clock closed the mic on nothing heard: talk_id's page says so until it goes
+    bool talk_soon;                  // a cell's tap opened talk_id's page: the clock opens its mic at talk_soon_at
+    uint32_t talk_soon_at;           // (max_ui_talk_due), unless the page went first or a recording began
     uint8_t levels[MAX_LEVELS];      // the mic's levels, oldest first
     int level_count;
     uint32_t idle_from;              // since when nothing works or waits (Ambient)

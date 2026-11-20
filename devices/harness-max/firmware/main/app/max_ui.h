@@ -174,7 +174,7 @@ typedef enum {
     MAX_ACT_NEW,        // New Harness: name a form and open it (max_ui_form_open)
     MAX_ACT_SAY,        // the form's Say: record a spoken name for form_id at revision
     MAX_ACT_CANCEL,     // stop the recording and send nothing
-    MAX_ACT_OPEN_TALK,  // a cell's one tap: agent.open for agent_id, then record for it
+    MAX_ACT_OPEN_TALK,  // a cell's one tap: agent.open for agent_id; max_ui_talk_due records for it a moment later
     MAX_ACT_PICK,       // an app was picked on Apps: send app.pick for `app`
 } max_act_kind_t;
 typedef struct {
@@ -191,7 +191,8 @@ typedef struct {
 max_act_t max_ui_touch(bool down, int x, int y, uint32_t now_ms);
 void max_ui_touch_cancel(void);
 
-// What the clock owes the recording (render task, every tick while recording): MAX_ACT_SEND after speech and then
+// What the clock owes the recording (render task, every tick while recording, or while a cell's tap waits to open the
+// mic: MAX_ACT_TALK MAX_TALK_DELAY_MS after it, its page still up): MAX_ACT_SEND after speech and then
 // MAX_SILENCE_MS of quiet, or at MAX_TALK_MAX_MS (to Overview, as a tap on the page); MAX_ACT_CANCEL when nothing was
 // heard in MAX_HEAR_MS (the page stays and says the mic closed); MAX_ACT_SEND (words heard) or MAX_ACT_CANCEL when its
 // agent left the ring; else MAX_ACT_NONE. A finger on the glass then acts on nothing. The app acts on it as on the

@@ -718,6 +718,64 @@ static void test_done_note(void)
 
 // ---- the clock's side of a recording ----
 
+// A cell's tap opens its agent's page at once and its mic a second later (the owner, 20 Nov: at once was hurried), the
+// clock waking for it. A tap on the page meanwhile opens the mic then; X, or the link dropping, opens none; a finger on
+// the glass as the mic opens acts on nothing.
+static void test_cell_tap_opens_the_mic_a_second_later(void)
+{
+    linked(ABCDE, 5);
+    overview_drawn();
+    const max_box_t b = *cell_of("a");
+    const int cx = b.x + b.w / 2, cy = b.y + b.h / 2, px = HT_WIDTH / 2, py = HT_HEIGHT - 20;
+    uint32_t t = (T += 1000) + 90;   // each tap lets go 90 ms after it went down
+    CHECK(tap_at(cx, cy, t - 90).kind == MAX_ACT_OPEN_TALK && max_m.view == MAX_VIEW_AGENT);
+    CHECK(max_m.talk_soon && max_m.talk == MAX_TALK_IDLE && !strcmp(max_m.talk_id, "a"));
+    max_m.dirty = false;
+    CHECK(max_ui_next_wake_ms(t + 600) <= 400);
+    CHECK(max_ui_talk_due(t + 999).kind == MAX_ACT_NONE && max_m.talk_soon && max_m.view == MAX_VIEW_AGENT);
+    max_act_t act = max_ui_talk_due(t + 1000);
+    CHECK(act.kind == MAX_ACT_TALK && !strcmp(act.agent_id, "a") && !max_m.talk_soon && max_m.dirty);
+    max_ui_talk(MAX_TALK_RECORDING, t + 1000);   // the recorder max_app.c starts for it
+    CHECK(max_ui_talk_due(t + 1100).kind == MAX_ACT_NONE && max_m.talk == MAX_TALK_RECORDING);
+    max_ui_talk(MAX_TALK_IDLE, 0);
+    // A tap on the page while it waits (past the opening tap's guard): the mic then, and the clock opens none after.
+    max_show(MAX_VIEW_OVERVIEW);
+    overview_drawn();
+    t = (T += 3000) + 90;
+    CHECK(tap_at(cx, cy, t - 90).kind == MAX_ACT_OPEN_TALK);
+    agent_drawn();
+    CHECK(tap_at(px, py, t + MAX_GUARD_MS).kind == MAX_ACT_TALK && !max_m.talk_soon);
+    CHECK(max_ui_talk_due(t + 1000).kind == MAX_ACT_NONE);
+    // X while it waits: Overview, and no mic.
+    max_show(MAX_VIEW_OVERVIEW);
+    overview_drawn();
+    t = (T += 3000) + 90;
+    CHECK(tap_at(cx, cy, t - 90).kind == MAX_ACT_OPEN_TALK);
+    agent_drawn();
+    const max_hit_t *x = x_of_agent();
+    CHECK(tap_at(x->x + x->w / 2, x->y + x->h / 2, t + 300).kind == MAX_ACT_NONE && max_m.view == MAX_VIEW_OVERVIEW);
+    CHECK(max_ui_talk_due(t + 1000).kind == MAX_ACT_NONE && !max_m.talk_soon);
+    // The link drops while it waits: no mic.
+    overview_drawn();
+    t = (T += 3000) + 90;
+    CHECK(tap_at(cx, cy, t - 90).kind == MAX_ACT_OPEN_TALK && max_m.talk_soon);
+    max_ui_link(false, NULL, t + 200);
+    CHECK(max_ui_talk_due(t + 1000).kind == MAX_ACT_NONE && !max_m.talk_soon);
+    // A finger on the glass as the mic opens: its lift sends nothing.
+    linked(ABCDE, 5);
+    overview_drawn();
+    t = (T += 3000) + 90;
+    CHECK(tap_at(cx, cy, t - 90).kind == MAX_ACT_OPEN_TALK);
+    agent_drawn();
+    max_ui_touch(true, px, py, t + 950);
+    CHECK(max_ui_talk_due(t + 1000).kind == MAX_ACT_TALK);
+    max_ui_talk(MAX_TALK_RECORDING, t + 1000);
+    CHECK(max_ui_touch(false, px, py, t + 1040).kind == MAX_ACT_NONE && max_m.talk == MAX_TALK_RECORDING);
+    max_ui_talk(MAX_TALK_IDLE, 0);
+    max_show(MAX_VIEW_OVERVIEW);
+    T += 3000;
+}
+
 // The owner's numbers, in ms rather than the constants: speech then 2.5 s of quiet sends (20 Nov, 5 s before), a mic
 // that hears nothing closes after 5 s.
 static void test_talk_due_times(void)
@@ -1054,6 +1112,7 @@ int main(void)
     test_done_note();
     test_talk_due();
     test_talk_due_times();
+    test_cell_tap_opens_the_mic_a_second_later();
     test_only_the_dials_tap_sends();
     test_a_hold_opens_no_mic();
     test_the_guard();

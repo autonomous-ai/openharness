@@ -95,8 +95,8 @@ static void plan(uint32_t key, uint32_t now_ms)
     for (int i = 0; i < s_warm.count; i++) s_warm.motions[i].frame = -1;
 }
 
-// The motion started at `at` as the finger starts it (max_ui_touch.c, and the mic max_app.c opens for it): the agent
-// opens with the mic on when the bar can listen for it; the X closes it, the mic dropped.
+// The motion started at `at` as the finger starts it (max_ui_touch.c open_cell): the agent opens, its mic to open
+// MAX_TALK_DELAY_MS on (past the move) when the bar can listen for it; the X closes it, the mic dropped.
 static void start(const char *id, uint32_t at)
 {
     if (!id[0]) {
@@ -109,7 +109,8 @@ static void start(const char *id, uint32_t at)
     max_open(id);
     if (talks) {
         max_copy(max_m.talk_id, sizeof max_m.talk_id, id);
-        max_ui_talk(MAX_TALK_RECORDING, at);
+        max_m.talk_soon = true;
+        max_m.talk_soon_at = at + MAX_TALK_DELAY_MS;
     }
 }
 

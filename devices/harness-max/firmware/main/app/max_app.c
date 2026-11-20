@@ -507,10 +507,8 @@ static void act(const max_act_t *a)
         talk_sync();
         break;
     case MAX_ACT_NEW: new_form(); break;
-    case MAX_ACT_OPEN_TALK:   // a cell's one tap: the computer opens the agent, and the bar listens for it
+    case MAX_ACT_OPEN_TALK:   // a cell's one tap: the computer opens the agent; the clock's MAX_ACT_TALK, the mic
         pro_cable_send_open(a->agent_id);
-        pro_cable_voice_form(NULL, 0);
-        talk_begin(a->agent_id);
         break;
     case MAX_ACT_PICK:   // the person's pick: the `apps` that answers it is no "Following"
         lock();
