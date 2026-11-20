@@ -48,10 +48,11 @@ pub fn sockets(runtime_dir: &Path, signature: &str) -> Option<(PathBuf, PathBuf)
     Some((hypr.join(".socket2.sock"), hypr.join(".socket.sock")))
 }
 
-/// The event that says the active window changed. Its own text is never used: the v1 event's carries a title, and the
-/// answer to an ask names the app.
-pub fn is_active_window(line: &str) -> bool {
-    line.starts_with("activewindowv2>>")
+/// The window an `activewindowv2` event names: its address, "" for no window (an empty address, or one that is not
+/// hex). None for any other event: the v1 event's text carries a title, and is never read.
+pub fn active_window(line: &str) -> Option<&str> {
+    let address = line.strip_prefix("activewindowv2>>")?;
+    Some(if !address.is_empty() && address.bytes().all(|byte| byte.is_ascii_hexdigit()) { address } else { "" })
 }
 
 /// The active window's pid in `j/activewindow`'s answer. None for `{}` (no window), a pid that is not above 0, or an
@@ -64,8 +65,9 @@ pub fn active_pid(answer: &[u8]) -> Option<u32> {
     u32::try_from(answer.get("pid")?.as_i64()?).ok().filter(|&pid| pid > 0)
 }
 
-/// Tells the app in front now, then after each `activewindowv2` event, until the events end. `events` is connected
-/// before the first ask, so a change between the two is not missed.
+/// Tells the app in front now, then after each `activewindowv2` event for another window, until the events end. A
+/// window is asked about once: on a title change Hyprland names the same one again. `events` is connected before the
+/// first ask, so a change between the two is not missed.
 pub fn follow(
     events: impl Read,
     ask: &dyn Fn() -> io::Result<Vec<u8>>,
@@ -73,17 +75,27 @@ pub fn follow(
     changed: &dyn Fn(String),
 ) -> Stop {
     let name = |answer: &[u8]| active_pid(answer).and_then(|pid| exe_name(proc_root, pid)).unwrap_or_default();
+    let front = || ask().ok().map(|answer| name(&answer));
     // An answer that cannot be had is no app: the dial must not keep following the last one. At start too, where a
     // Hyprland still starting may not answer yet: the next event asks again.
-    let front = || ask().map(|answer| name(&answer)).unwrap_or_default();
-    changed(front());
+    changed(front().unwrap_or_default());
     let mut events = BufReader::new(events);
     let mut line = Vec::new();
+    // The window last told, unless its ask failed. Hyprland names the active window again on each change of its title.
+    let mut last: Option<String> = None;
     loop {
         match next_line(&mut events, &mut line) {
             Err(_) => return Stop::Ended,
-            Ok(true) if std::str::from_utf8(&line).is_ok_and(is_active_window) => changed(front()),
-            Ok(_) => {}
+            Ok(true) => {
+                let Some(window) = std::str::from_utf8(&line).ok().and_then(active_window) else { continue };
+                if last.as_deref() == Some(window) {
+                    continue;
+                }
+                let told = if window.is_empty() { Some(String::new()) } else { front() };
+                last = told.is_some().then(|| window.to_string());
+                changed(told.unwrap_or_default());
+            }
+            Ok(false) => {}
         }
     }
 }
@@ -193,9 +205,12 @@ mod tests {
         let events = b"activewindow>>kitty,~/secret\nworkspace>>2\nactivewindowv2>>55d1c0a0\nfocusedmon>>DP-1,2\n";
         let (stop, told, asked) = run(events, vec![Ok(answer(4242)), Ok(answer(4343))], proc_root.path());
         assert_eq!((stop, told, asked), (Stop::Ended, vec!["kitty".to_string(), "code".to_string()], 2));
-        assert!(is_active_window("activewindowv2>>55d1c0a0"));
-        assert!(!is_active_window("activewindow>>kitty,activewindowv2>>"));
-        assert!(!is_active_window(""));
+        assert_eq!(active_window("activewindowv2>>55d1c0a0"), Some("55d1c0a0"));
+        assert_eq!(active_window("activewindowv2>>"), Some(""));
+        assert_eq!(active_window("activewindowv2>>,"), Some(""));
+        assert_eq!(active_window("activewindowv2>>0x55d1c0a0"), Some(""));
+        assert_eq!(active_window("activewindow>>kitty,activewindowv2>>"), None);
+        assert_eq!(active_window(""), None);
     }
 
     #[test]
