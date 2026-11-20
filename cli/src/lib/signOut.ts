@@ -80,7 +80,7 @@ export function ancestors(depth = 3): Asker[] {
 
 /** Windows: [pid]'s parent and command line, one line of JSON. */
 export function windowsProcessQuery(pid: number): string {
-  return `${modulesByPath('Microsoft.PowerShell.Utility', 'CimCmdlets')}
+  return `${modulesByPath('CimCmdlets')}
 Get-CimInstance Win32_Process -Filter "ProcessId=${pid}" | Select-Object ParentProcessId,CommandLine | ConvertTo-Json -Compress`
 }
 

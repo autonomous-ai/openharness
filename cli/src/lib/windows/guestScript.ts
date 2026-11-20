@@ -95,8 +95,8 @@ export function buildWindowsGuestInstallScript(input: WindowsGuestInstallInput):
   return [
     '# Harness guest sharing install (cli/src/lib/windows/guestScript.ts), run once elevated behind User Account Control.',
     '# Running it again repairs the group, tree, sentinel and task; it never removes a guest.',
-    modulesByPath('Microsoft.PowerShell.Management', 'Microsoft.PowerShell.Utility', 'Microsoft.PowerShell.Security',
-      'Microsoft.PowerShell.LocalAccounts', 'ScheduledTasks'),
+    modulesByPath('Microsoft.PowerShell.Management', 'Microsoft.PowerShell.Security', 'Microsoft.PowerShell.LocalAccounts',
+      'ScheduledTasks'),
     ...PRELUDE,
     `$OWNER = ${ps(input.owner)}`,
     `$OWNER_HOME = ${ps(input.ownerHome)}`,
@@ -242,8 +242,8 @@ export function buildWindowsGuestProcessorScript(input: { owner: string; ownerHo
   return [
     '# Harness guest setup processor (cli/src/lib/windows/guestScript.ts), run by the SYSTEM task. No arguments: it',
     '# accepts exactly one request file, checks it, performs one operation, writes one answer and deletes the request.',
-    modulesByPath('Microsoft.PowerShell.Management', 'Microsoft.PowerShell.Utility', 'Microsoft.PowerShell.Security',
-      'Microsoft.PowerShell.LocalAccounts', 'CimCmdlets'),
+    modulesByPath('Microsoft.PowerShell.Management', 'Microsoft.PowerShell.Security', 'Microsoft.PowerShell.LocalAccounts',
+      'CimCmdlets'),
     ...PRELUDE,
     `$OWNER = ${ps(input.owner)}`,
     `$OWNER_HOME = ${ps(input.ownerHome)}`,

@@ -78,7 +78,7 @@ export const ANNOUNCE_ENVIRONMENT_CHANGE = String.raw`try {
  * values differing by a soft hyphen, a combining mark or a NUL for equal. No action, or another word, writes nothing and fails: an input that went
  * missing must never read as "delete". It announces the change only for the real Environment key.
  */
-export const WRITE_USER_PATH = String.raw`${modulesByPath('Microsoft.PowerShell.Utility')}
+export const WRITE_USER_PATH = String.raw`${modulesByPath()}
 ${KEY}
 $action = $env:HARNESS_PATH_ACTION
 if ($action -cne 'set' -and $action -cne 'delete') { throw "no PATH action was given ('$action')" }

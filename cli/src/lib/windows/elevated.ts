@@ -43,7 +43,7 @@ function stopped(stderr: string, code: number | null): AdminResult {
  */
 export const ELEVATED_PS1 = [
   '# Runs a Harness script elevated and keeps what it said (cli/src/lib/windows/elevated.ts).',
-  ...modulesByPath('Microsoft.PowerShell.Management', 'Microsoft.PowerShell.Utility').split('\n'),
+  ...modulesByPath('Microsoft.PowerShell.Management').split('\n'),
   "$out = Join-Path $PSScriptRoot 'stdout.txt'",
   "$err = Join-Path $PSScriptRoot 'stderr.txt'",
   "$run = Join-Path $PSScriptRoot 'run.ps1'",

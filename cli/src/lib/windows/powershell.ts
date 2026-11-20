@@ -57,11 +57,13 @@ export type PowershellModule = 'Appx' | 'CimCmdlets' | 'Microsoft.PowerShell.Loc
  * among them (powershellModules.spec.ts names one first). A module goes in by its folder, a string (Join-Path is a
  * module's command): PowerShell finds its manifest there or in a version folder, where LocalAccounts keeps it (1.0.0.0).
  * Each import stops the script when it fails: these lines come before a script's own `$ErrorActionPreference = 'Stop'`,
- * and under -File a failed import is only printed.
+ * and under -File a failed import is only printed. Utility comes first, always: importing CimCmdlets runs its Set-Alias,
+ * NetTCPIP its New-Alias and Appx its Set-Alias, and without Utility those imports stopped the peer, listener and
+ * uninstall scripts on both Windows runners (windows.yml run 44827687986: "The term 'New-Alias' is not recognized").
  */
-export function modulesByPath(...modules: PowershellModule[]): string {
+export function modulesByPath(...modules: Exclude<PowershellModule, 'Microsoft.PowerShell.Utility'>[]): string {
   return ["$PSModuleAutoLoadingPreference = 'None'",
-    ...modules.map((module) => `Import-Module -Name "$PSHOME\\Modules\\${module}" -ErrorAction Stop`)].join('\n')
+    ...['Microsoft.PowerShell.Utility', ...modules].map((module) => `Import-Module -Name "$PSHOME\\Modules\\${module}" -ErrorAction Stop`)].join('\n')
 }
 
 export interface PowershellResult { status: number | null; stdout: string; stderr: string; error?: Error }

@@ -135,7 +135,10 @@ everywhere), [Process Creation Flags](https://learn.microsoft.com/en-us/windows/
   `$PSModuleAutoLoadingPreference = 'None'`, then each module by its folder in `$PSHOME\Modules`, as a string, since
   `Join-Path` is itself a module's command and LocalAccounts keeps its manifest in a version folder (`1.0.0.0`). With
   autoload off, a command of a module not imported is "not recognized", Management's `Join-Path` and Utility's
-  `Select-Object` too. A script that runs a vendor's installer keeps autoload on: that script may call any module.
+  `Select-Object` too. Utility is always imported first: importing CimCmdlets runs Utility's `Set-Alias`, NetTCPIP
+  its `New-Alias` (from its `.psm1` files) and Appx its `Set-Alias`, and without Utility the peer, listener and
+  uninstall scripts stopped on both runners (run 44827687986). A script that runs a vendor's installer keeps autoload
+  on: that script may call any module.
   Test: `cli/src/lib/windows/powershellModules.spec.ts`.
 - **A console process that listens for SIGHUP holds its console's close until it is killed.** The host closes a
   pane's console (`ClosePseudoConsole`) to end its process, and Node hears that `CTRL_CLOSE_EVENT` as SIGHUP. With a

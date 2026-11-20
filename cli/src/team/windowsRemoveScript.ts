@@ -287,8 +287,8 @@ export function buildWindowsRemoveScript(input: RemoveScriptInput): string {
   return [
     '# Harness Team account removal (cli/src/team/windowsRemoveScript.ts), run once elevated behind User Account Control.',
     '# It leaves the owner\'s profile private, as setup made it.',
-    modulesByPath('Microsoft.PowerShell.Management', 'Microsoft.PowerShell.Utility', 'Microsoft.PowerShell.Security',
-      'Microsoft.PowerShell.LocalAccounts', 'CimCmdlets', 'ScheduledTasks'),
+    modulesByPath('Microsoft.PowerShell.Management', 'Microsoft.PowerShell.Security', 'Microsoft.PowerShell.LocalAccounts',
+      'CimCmdlets', 'ScheduledTasks'),
     ...PRELUDE,
     `$TEAM = ${ps(user)}`,
     `$TEAM_HOME = ${ps(home)}`,
