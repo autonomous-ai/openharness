@@ -52,8 +52,7 @@ const isPersistedRow = (value: unknown) => !!value && typeof value === 'object'
   && Object.hasOwn(value, 'schemaVersion') && Object.hasOwn(value, 'agentId')
 const isOwnershipRecord = (value: unknown) => !!value && typeof value === 'object'
   && Object.hasOwn(value, 'agentId') && Object.hasOwn(value, 'evidenceRevision') && !isPersistedRow(value)
-// Longer than the write deadline, whose timers are held: a guard of the same bound would never fire.
-function within<T>(pending: Promise<T>, name: string, ms = 10_000): Promise<T> {
+function within<T>(pending: Promise<T>, name: string, ms = 5_000): Promise<T> {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error(name + ' deadline')), ms)
     pending.then(value => { clearTimeout(timer); resolve(value) }, error => { clearTimeout(timer); reject(error) })

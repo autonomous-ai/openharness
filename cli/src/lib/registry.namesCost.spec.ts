@@ -55,8 +55,7 @@ const ID = 'names-cost-agent', CHOSEN = 'Chosen name'
 let root = '', registry: typeof Registry | undefined, release: (() => void) | undefined
 const accepted: Promise<unknown>[] = []
 const names = (): Record<string, string> => JSON.parse(readFileSync(io.file, 'utf8'))
-// Longer than the write deadline, whose timers are held: a guard of the same bound would never fire.
-function within<T>(pending: Promise<T>, name: string, ms = 10_000): Promise<T> {
+function within<T>(pending: Promise<T>, name: string, ms = 5_000): Promise<T> {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error(name + ' deadline')), ms)
     pending.then(value => { clearTimeout(timer); resolve(value) }, error => { clearTimeout(timer); reject(error) })
