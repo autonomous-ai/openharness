@@ -1,5 +1,5 @@
 import { render, screen, within } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { fetchDeviceRelease, parseDeviceRelease } from "@/lib/deviceRelease";
 import DevicePage, { metadata } from "./page";
 
@@ -101,6 +101,16 @@ describe("/device", () => {
 
     const notes = screen.getByRole("heading", { name: "Version 0.1.10" }).parentElement!;
     expect(within(notes).queryByRole("list")).not.toBeInTheDocument();
+  });
+
+  it("shows two notes that read the same once their pull request numbers are gone", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    onTestFinished(() => error.mockRestore());
+    await renderPage({ ...LIVE, notes: "- Fix the cable check (#1)\n- Fix the cable check (#2)" });
+
+    const notes = screen.getByRole("heading", { name: "Version 0.1.10" }).parentElement!;
+    expect(within(notes).getAllByRole("listitem").map((li) => li.textContent)).toEqual(["Fix the cable check", "Fix the cable check"]);
+    expect(error).not.toHaveBeenCalled();
   });
 
   it("names the page for a person", () => {
