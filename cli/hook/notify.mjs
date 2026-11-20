@@ -583,7 +583,9 @@ function postObserved(port, body) {
  *   docs/plans/2026-11-19-dial-windows-vm-notes.md). An image path the pty host read, never another process's
  *   environment.
  * - ALACRITTY_LOG, the one variable Alacritty sets on Windows (its log file, whose path is never read): Alacritty.
- * WezTerm and Warp need nothing here: WEZTERM_PANE and TERM_PROGRAM name them on Windows too (read from their source).
+ * - Last, WEZTERM_PANE and TERM_PROGRAM=WarpTerminal, which WezTerm and Warp set on Windows too (read from their
+ *   source): their apps. Those names are sent as they are, but a multiplexer inside them (herdr) is the nearer host, and
+ *   its own bundle names no window a tap can raise there (cable/hosts/windowsRaise.ts WINDOWS_APPS).
  */
 const HOST_HINTS = ['TERM_PROGRAM', '__CFBundleIdentifier', 'HERDR_PANE_ID', 'REX_BLOCK', 'ZELLIJ', 'ZELLIJ_PANE_ID',
   'ZELLIJ_SESSION_NAME', 'TMUX_PANE', 'HC_TERMINAL_ID', 'CMUX_SURFACE_ID', 'CMUX_WORKSPACE_ID', 'KITTY_WINDOW_ID',
@@ -664,7 +666,9 @@ async function lookUpWindowsApp(engine) {
   if (engine === 'codex' && (await windowsHookChain())?.some((row) => CHATGPT_APP.test(row.imagePath ?? ''))) {
     return 'com.openai.codex'
   }
-  return process.env.ALACRITTY_LOG ? 'org.alacritty' : undefined
+  if (process.env.ALACRITTY_LOG) return 'org.alacritty'
+  if (process.env.WEZTERM_PANE) return 'com.github.wez.wezterm'
+  return process.env.TERM_PROGRAM === 'WarpTerminal' ? 'dev.warp.Warp-Stable' : undefined
 }
 
 /** The endpoint variables that say an engine is routed through OpenRouter: these names exactly. Their values never leave this process. */
