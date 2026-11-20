@@ -69,3 +69,19 @@ footer and the box each wrap. The busy status line has the blank line pi-tui's `
 lines a cold Gateway drew on a slow Linux machine (arm64 Debian 12, 0.6 CPU, OpenClaw 2026.11.2) for 85–110 s:
 `<spinner> starting up • Ns | gateway starting` (the Gateway's answer while it starts, `resolveGatewayDisconnectState`
 in OpenClaw's tui) and `<spinner> starting up • Ns | disconnected` between its tries.
+
+`screen-pairing.txt`, `screen-pairing-bare.txt` and `screen-token-mismatch.txt` are composed from OpenClaw 2026.11.2's
+source, not recorded: `screen-disconnected.txt`'s banner, title, footer and rules (session `plain`, 120 columns) around
+the chat and status lines a refused connect draws, wrapped as pi-tui's `Text(…, 1, 0)` wraps them. The TUI sets
+`gateway disconnected: <reason>` for 5 s, then `disconnected`, and keeps the activity
+`resolveGatewayDisconnectState` gives (`tui-*.mjs` `handleBackendDisconnected`, `setConnectionStatus`); it prints the
+failure's remedy once, as a system line (`connect-error-details-*.mjs` `classifyGatewayConnectFailure`).
+
+- **pairing**: a device the Gateway has not approved. The reason is `device pairing required (requestId: <uuid>)`
+  (`formatConnectPairingRequiredMessage`; the id is made up), the activity `device approval needed: preview latest
+  request`, the remedy `PAIRING_APPROVAL_REMEDIATION`.
+- **pairing-bare**: the same screen once the 5 s line has gone: `disconnected | device approval needed: preview latest
+  request`.
+- **token-mismatch**: a Gateway token that does not match. The reason is the Gateway's `unauthorized: gateway token
+  mismatch (<hint>)` with the hint it gives the TUI (an operator UI client, `formatGatewayAuthFailureMessage`), the
+  activity `gateway authentication needs attention`, the remedy `SHARED_TOKEN_REMEDIATION`.
