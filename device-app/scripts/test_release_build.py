@@ -12,7 +12,8 @@ import tempfile
 import unittest
 
 SCRIPTS = Path(__file__).resolve().parent
-SECRETS = ("APPLE_SIGNING_IDENTITY", "APPLE_ID", "APPLE_PASSWORD", "APPLE_TEAM_ID", "TAURI_SIGNING_PRIVATE_KEY",
+SECRETS = ("APPLE_SIGNING_IDENTITY", "APPLE_ID", "APPLE_PASSWORD", "APPLE_TEAM_ID", "APPLE_API_KEY", "APPLE_API_ISSUER",
+           "APPLE_API_KEY_PATH", "APPLE_CERTIFICATE", "APPLE_CERTIFICATE_PASSWORD", "TAURI_SIGNING_PRIVATE_KEY",
            "TAURI_SIGNING_PRIVATE_KEY_PASSWORD")
 MACOS = ("Darwin", "arm64")
 LINUX_X64 = ("Linux", "x86_64")
@@ -124,7 +125,7 @@ class ReleaseBuildTests(Fakes):
 
     def test_compile_refuses_a_signing_secret_on_every_os(self):
         for os_, env in ((MACOS, {}), (LINUX_X64, {}), (WINDOWS, {"DEVICE_TARGET": "x86_64-pc-windows-msvc"})):
-            for secret in ("TAURI_SIGNING_PRIVATE_KEY", "APPLE_ID"):
+            for secret in SECRETS:
                 with self.subTest(os=os_[0], secret=secret):
                     result = self.build(os_, "compile", "0.1.3", **env, **{secret: "x"})
                     self.assertNotEqual(result.returncode, 0)
