@@ -49,6 +49,7 @@ for arg; do
   prev="$arg"
 done
 printf '%s\\n' "$url" >> "$STUB_LOG/requested"
+printf '%s\\0' "$@" >> "$STUB_LOG/curl" && printf '\\n' >> "$STUB_LOG/curl"
 if [ "$url" = "$STUB_MANIFEST_URL" ]; then cp "$STUB_SERVED/metadata.json" "$out"; else cp "$STUB_SERVED/release" "$out"; fi`,
 );
 stub("plutil", `case "$2" in CFBundleShortVersionString) cat "$4" ;; *) cat "$STUB_SERVED/plutil/$2" ;; esac`);
@@ -132,6 +133,8 @@ function install(os: "Darwin" | "Linux", options: Options = {}) {
     dir,
     place,
     requested: read("requested").split("\n").filter(Boolean),
+    /** Each curl call's arguments. */
+    curl: read("curl").split("\0\n").filter(Boolean).map((call) => call.split("\0")),
     /** At each mv, whether something was at the place. */
     mv: read("mv").split("\n").filter(Boolean),
     opened: read("open").split("\n").filter(Boolean),
@@ -271,6 +274,26 @@ describe("desktop-install.sh", () => {
     expect(run.result.stdout).toContain(`Harness ${VERSION} installed at ${run.place}\n`);
     if (os === "Darwin") expect(run.opened).toEqual([run.place]);
   });
+
+  // A stalled CDN would hang the line, and an endless one would fill the disk before the size check.
+  it.each(["Darwin", "Linux"] as const)(
+    "%s downloads over https only, never stalls, and takes no more than the file's size",
+    (os) => {
+      const run = install(os);
+      const flag = (call: string[], name: string) => call[call.indexOf(name) + 1];
+
+      expect(run.result.status).toBe(0);
+      expect(run.curl.length).toBe(2);
+      for (const call of run.curl) {
+        expect(flag(call, "--proto")).toBe("=https");
+        expect(flag(call, "--proto-redir")).toBe("=https");
+        expect(flag(call, "--speed-limit")).toBe("1024");
+        expect(flag(call, "--speed-time")).toBe("60");
+      }
+      expect(flag(run.curl[0], "--max-filesize")).toBe("1048576");
+      expect(flag(run.curl[1], "--max-filesize")).toBe(String(sums(os === "Darwin" ? ARCHIVE : APPIMAGE).size));
+    },
+  );
 
   // curl collapses dot segments, so a glob's `*` matching `../..` would download from another bucket.
   it.each([

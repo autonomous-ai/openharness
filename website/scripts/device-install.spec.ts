@@ -61,6 +61,7 @@ for arg; do
   prev="$arg"
 done
 printf '%s\\n' "$url" >> "$STUB_LOG/requested"
+printf '%s\\0' "$@" >> "$STUB_LOG/curl" && printf '\\n' >> "$STUB_LOG/curl"
 if [ "$url" = "$STUB_MANIFEST_URL" ]; then cp "$STUB_SERVED/metadata.json" "$out"; else cp "$STUB_SERVED/app" "$out"; fi`,
 );
 stub("pgrep", `printf '%s\\0' "$@" > "$STUB_LOG/pgrep"\n[ -n "$STUB_RUNNING" ]`);
@@ -159,6 +160,8 @@ function install(options: Options = {}) {
     home,
     place,
     requested: read("requested").split("\n").filter(Boolean),
+    /** Each curl call's arguments. */
+    curl: read("curl").split("\0\n").filter(Boolean).map((call) => call.split("\0")),
     pgrep: read("pgrep").split("\0").slice(0, -1),
     setsid: read("setsid").split("\0").slice(0, -1),
     ran: read("ran").split("\n").filter(Boolean),
@@ -217,6 +220,23 @@ describe("device-install.sh", () => {
 
     expect(run.result.status).toBe(0);
     expect(run.requested[0]).toBe("https://cdn.autonomous.ai/e2e/metadata.json");
+  });
+
+  // A stalled CDN would hang the line, and an endless one would fill the disk before the size check.
+  it("downloads over https only, never stalls, and takes no more than the file's size", () => {
+    const run = install();
+    const flag = (call: string[], name: string) => call[call.indexOf(name) + 1];
+
+    expect(run.result.status).toBe(0);
+    expect(run.curl.length).toBe(2);
+    for (const call of run.curl) {
+      expect(flag(call, "--proto")).toBe("=https");
+      expect(flag(call, "--proto-redir")).toBe("=https");
+      expect(flag(call, "--speed-limit")).toBe("1024");
+      expect(flag(call, "--speed-time")).toBe("60");
+    }
+    expect(flag(run.curl[0], "--max-filesize")).toBe("1048576");
+    expect(flag(run.curl[1], "--max-filesize")).toBe(String(APP_SUMS.size));
   });
 
   it.each(DEVICE_ASSET_PREFIXES)("takes the AppImage from %s", (prefix) => {
