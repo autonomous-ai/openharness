@@ -43,6 +43,11 @@ import 'package:path/path.dart' as p;
 
 const _pngMagic = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
 
+/// The rule every writer of the app-list entry follows, as data.
+final _vectors = jsonDecode(
+  File('../tests/fixtures/app-list-entry-vectors.json').readAsStringSync(),
+) as Map<String, dynamic>;
+
 Future<String> _sha256Of(String path) async {
   final sink = const DartSha256().newHashSink();
   await for (final chunk in File(path).openRead()) {
@@ -212,6 +217,14 @@ void main() {
   /// What the server serves, by path.
   final files = <String, String>{};
 
+  /// Linux: the app-list entry Desktop wrote, read just before it first
+  /// started the app, so a write by the app's first run cannot hide in it.
+  ({List<int> bytes, DateTime modified})? entryAsDesktopWrote;
+  File entry() => File(
+    '${launcherDataHome(Platform.environment)!}/applications/'
+    '$deviceAppLauncherName',
+  );
+
   setUpAll(() async {
     final before = await probe.lookup();
     if (before.installed ||
@@ -256,7 +269,7 @@ void main() {
   });
 
   /// Ends the app processes this test started and removes what the install
-  /// put there. The Linux app-list entry stays, for check 8 to see it go.
+  /// put there. The Linux app-list entry stays, for the last check to see it go.
   Future<void> removeApp() async {
     // Still the app: a pid that ended may be another process's now.
     Future<List<int>> stillRunning() async => [
@@ -318,7 +331,15 @@ void main() {
   /// included.
   DeviceAppInstaller installer() => deviceAppInstallerFor(
     platform,
-    open: open,
+    open: ({path}) async {
+      if (Platform.isLinux && entry().existsSync()) {
+        entryAsDesktopWrote ??= (
+          bytes: entry().readAsBytesSync(),
+          modified: entry().statSync().modified,
+        );
+      }
+      return open(path: path);
+    },
     manifestUrl: '$base/metadata.json',
     // The manifest's CDN address of the package, sent to loopback.
     dio: Dio()
@@ -467,20 +488,49 @@ void main() {
     (tester) async {
       final data = launcherDataHome(Platform.environment)!;
       final icon = '$data/icons/harness-device.png';
+      // The vectors' entry with an icon, at this run's place and data folder.
+      final vector = (_vectors['entries'] as List).cast<Map>().firstWhere(
+        (entry) => entry['icon'] == true,
+      );
 
       expect(
-        File('$data/applications/$deviceAppLauncherName').readAsStringSync(),
-        '[Desktop Entry]\n'
-        'Type=Application\n'
-        'Name=Harness Device\n'
-        'Comment=The app for your Harness device.\n'
-        'Exec=${quoteLauncherExec(place())}\n'
-        'Icon=$icon\n'
-        'Terminal=false\n'
-        'Categories=Utility;\n',
+        entry().readAsStringSync(),
+        (vector['entry'] as String)
+            .replaceFirst(
+              'Exec=${quoteLauncherExec(vector['appImage'] as String)}\n',
+              'Exec=${quoteLauncherExec(place())}\n',
+            )
+            .replaceFirst('Icon=${vector['dataHome']}/', 'Icon=$data/'),
       );
       final png = File(icon).readAsBytesSync();
       expect(png.take(_pngMagic.length), _pngMagic);
+    },
+  );
+
+  testWidgets(
+    "linux: the app's first run leaves Desktop's entry",
+    skip: !Platform.isLinux,
+    (tester) async {
+      final logs = Directory(
+        '${Platform.environment['XDG_DATA_HOME']}/'
+        'ai.autonomous.harness.device/logs',
+      );
+      List<String> lines() => [
+        if (logs.existsSync())
+          for (final log in logs.listSync().whereType<File>())
+            if (RegExp(r'^app-.*\.log$').hasMatch(p.basename(log.path)))
+              ...log.readAsLinesSync(),
+      ];
+      // The app logs a written entry or a failed one; a left one says
+      // nothing, so its first line is the sign that it ran this far.
+      final logged = await _until(() async => lines().isNotEmpty);
+      final wrote = entryAsDesktopWrote;
+
+      expect(logged, isTrue);
+      expect(wrote, isNotNull);
+      expect(entry().readAsBytesSync(), wrote!.bytes);
+      expect(entry().statSync().modified, wrote.modified);
+      expect(lines().where((line) => line.contains('app list:')), isEmpty);
     },
   );
 
