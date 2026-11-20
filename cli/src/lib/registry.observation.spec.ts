@@ -415,3 +415,20 @@ describe('unchanged discovery observations', () => {
     expect(readRows()[0].closePlan).toBeUndefined()
   })
 })
+
+// A Stop's removal is written while its row is still observed: an attach that finishes late learns the engine's version and
+// sets it on the live row (core/engines/runtimeSessions.ts `accept`), a hook touches it. Taken as a newer live change, that
+// row came back once the removal was written, and the Stop failed "could not be durably retired" (e2e/enginehomes.e2e.ts).
+describe('a removal written while its row is observed', () => {
+  it.each(['remove', 'successor'] as const)('%s: the removed row stays gone', async disposition => {
+    const result = await registry.confirmEngineExit(input.agentId, disposition, { refresh: async () => {
+      registry.byAgent(input.agentId)!.cliVersion = '0.160.0'
+    } })
+    expect(result.state).toBe('confirmed')
+    expect(registry.byAgent(input.agentId)).toBeUndefined()
+    const shell = disposition === 'successor' && result.state === 'confirmed' ? result.entry : null
+    if (disposition === 'successor') expect(shell && registry.byAgent(shell.agentId)?.engine).toBe('terminal')
+    await registry.flush()
+    expect(readRows().map((row: { agentId: string }) => row.agentId)).toEqual(shell ? [shell.agentId] : [])
+  })
+})
