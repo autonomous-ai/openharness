@@ -213,9 +213,32 @@ mod tests {
         }
     }
 
-    /// A scheme with no handler must open nothing and show no "pick an app" window.
+    /// A link the shell takes but cannot open shows no error box.
     #[test]
     fn the_link_code_asks_for_no_ui() {
         assert!(code().contains("SEE_MASK_FLAG_NO_UI"));
+    }
+
+    /// The no-UI flag does not stop Windows' "pick an app" window for a scheme with no handler
+    /// (the VM's notes, Task 37 section 3), so the handler is asked for first, by its ProgID: the
+    /// one answer a packaged handler (the ChatGPT app's `codex`) gives as a classic one does.
+    #[test]
+    fn the_link_code_asks_for_a_handler_before_opening() {
+        let code = code();
+        let asked = code.find("AssocQueryStringW(").expect("AssocQueryStringW");
+        let opened = code.find("ShellExecuteExW(").expect("ShellExecuteExW");
+        assert!(asked < opened);
+        assert!(code.contains("ASSOCSTR_PROGID"));
+        assert!(!code.contains("ASSOCSTR_COMMAND"));
+        assert!(!code.contains("ASSOCSTR_EXECUTABLE"));
+    }
+
+    #[test]
+    fn a_links_scheme_is_its_name_before_the_colon() {
+        assert_eq!(scheme("codex://harness-test"), "codex");
+        assert_eq!(
+            scheme("vscode://anthropic.claude-code/open?session=a:b"),
+            "vscode"
+        );
     }
 }

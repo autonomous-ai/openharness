@@ -33,7 +33,7 @@ mod windows {
 
     use windows_sys::Win32::Foundation::HWND;
     use windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
-    use windows_sys::Win32::UI::Shell::{ASSOCF_IS_PROTOCOL, ASSOCSTR_COMMAND, AssocQueryStringW};
+    use windows_sys::Win32::UI::Shell::{ASSOCF_IS_PROTOCOL, ASSOCSTR_PROGID, AssocQueryStringW};
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         CreateWindowExW, DispatchMessageW, GetMessageW, IsIconic, MSG, PostMessageW, SW_MINIMIZE,
         SW_SHOWNORMAL, ShowWindow, WM_CLOSE, WS_OVERLAPPEDWINDOW,
@@ -123,16 +123,17 @@ mod windows {
     }
 
     /// Whether Windows knows a program for links of [scheme]: with no buffer, a registered one
-    /// answers S_FALSE and its length, an unknown one an error.
+    /// answers S_FALSE and its length, an unknown one an error. Asked by ProgID: the command and
+    /// executable are missing for a packaged handler (the ChatGPT app's `codex`).
     fn handled(scheme: &str) -> bool {
-        let (scheme, verb) = (wide(scheme), wide("open"));
+        let scheme = wide(scheme);
         let mut len = 0u32;
         let result = unsafe {
             AssocQueryStringW(
                 ASSOCF_IS_PROTOCOL,
-                ASSOCSTR_COMMAND,
+                ASSOCSTR_PROGID,
                 scheme.as_ptr(),
-                verb.as_ptr(),
+                null(),
                 null_mut(),
                 &mut len,
             )
@@ -140,18 +141,43 @@ mod windows {
         result >= 0
     }
 
+    /// The pids of Windows' "pick an app" program now running.
+    fn pickers() -> Vec<u32> {
+        harness_pty::ps::snapshot()
+            .unwrap()
+            .into_iter()
+            .filter(|row| row.executable.eq_ignore_ascii_case("OpenWith.exe"))
+            .map(|row| row.pid)
+            .collect()
+    }
+
+    /// Seen only in a signed-in console session: there Windows answered such a link with "pick an
+    /// app" (OpenWith.exe) and a success (the VM's notes, Task 37 section 3). A session with no
+    /// desktop, as a CI runner's may be, shows no picker either way.
     #[test]
     fn a_link_with_no_handler_is_refused() {
         if handled("codex") {
             eprintln!("skipped: this machine has a codex link handler");
             return;
         }
+        let before = pickers();
         let start = Instant::now();
-        assert_eq!(word(&["open-link", "codex://harness-test"]), "refused");
-        assert!(
-            start.elapsed() < Duration::from_secs(5),
-            "{:?}",
-            start.elapsed()
-        );
+        let answer = word(&["open-link", "codex://harness-test"]);
+        let elapsed = start.elapsed();
+        // The helper waits for the shell's hand-off (NOASYNC), so a picker it started runs now.
+        let shown: Vec<u32> = pickers()
+            .into_iter()
+            .filter(|pid| !before.contains(pid))
+            .collect();
+        for pid in &shown {
+            // A picker left open holds the next link for minutes.
+            let _ = Command::new("taskkill")
+                .args(["/F", "/PID", &pid.to_string()])
+                .creation_flags(CREATE_NO_WINDOW)
+                .status();
+        }
+        assert_eq!(answer, "refused");
+        assert!(shown.is_empty(), "a pick-an-app window: {shown:?}");
+        assert!(elapsed < Duration::from_secs(5), "{elapsed:?}");
     }
 }
