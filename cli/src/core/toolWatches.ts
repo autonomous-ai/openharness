@@ -7,10 +7,10 @@
  */
 type Frame = { type?: unknown; agentId?: unknown; payload?: unknown; subagent?: unknown }
 
-/** The events a watch is told: a harness's activity changing, its turn ending, a question opening or closing, and the
- *  harness going. `turn_heartbeat` is how the daemon says a harness works (core/turns/heartbeats.ts), and is told as
- *  the `agent_activity` it would be for any other state. */
-const TOLD = new Set(['agent_activity', 'turn_heartbeat', 'turn_ended', 'commander_question', 'commander_question_close', 'agent_deleted'])
+/** The events a watch is told: a harness's activity changing, its turn ending, a question opening or closing, its
+ *  start, failed launch or hold changing (`agent_synced`), and the harness going. `turn_heartbeat` is how the daemon
+ *  says a harness works (core/turns/heartbeats.ts), and is told as the `agent_activity` it would be for any other state. */
+const TOLD = new Set(['agent_activity', 'turn_heartbeat', 'turn_ended', 'commander_question', 'commander_question_close', 'agent_synced', 'agent_deleted'])
 
 /** As many harnesses as one agent may have running (agentClient/commands.ts `SPAWN_LIMITS.livePerHarness`). */
 export const TOOL_WATCH_MAX_AGENTS = 8
@@ -20,7 +20,15 @@ export const TOOL_WATCHES_MAX = 64
 const AGENT_ID_MAX = 128
 
 /** What one watch last told of each harness it names, so a fact sent down several paths is told once. */
-interface Told { state?: string; question?: string; deleted?: boolean }
+interface Told { state?: string; question?: string; standing?: string; deleted?: boolean }
+
+/** The part of a synced agent's frame (lib/agentFrame.ts) a watch reads. */
+interface Synced { id?: unknown; starting?: unknown; launch?: { state?: unknown; error?: unknown }; identityHold?: unknown }
+
+/** One key of what a sync says `wait` and `watch` settle or sleep on (agentClient/model.ts): starting, its launch failed
+ *  and why, held and why (the hold carries `namedState`). Its name, title or usage changing is no news to them. */
+const standingOf = ({ starting, launch, identityHold }: Synced): string =>
+  JSON.stringify([starting === true, launch?.state === 'failed' && launch.error, identityHold])
 
 export interface ToolWatchesDeps {
   /** One frame to one connection here; false when it is gone. */
@@ -39,6 +47,14 @@ export function createToolWatches(deps: ToolWatchesDeps) {
       if (told.question === key) return null
       told.question = key
       return { type, agentId, payload: { agentId, requestId } }
+    }
+    if (type === 'agent_synced') {
+      // The first sync a watch sees is told whatever it says: it cannot know what its client last read, and a hold that
+      // ended before any sync must still wake it. The frame is the agent's whole, so only its id goes on.
+      const standing = standingOf(payload.agent as Synced)
+      if (told.standing === standing) return null
+      told.standing = standing
+      return { type, agentId, payload: { agentId } }
     }
     if (type === 'agent_deleted') {
       if (told.deleted) return null
@@ -81,7 +97,9 @@ export function createToolWatches(deps: ToolWatchesDeps) {
     tell(frame: Frame): void {
       if (!watches.size || typeof frame.type !== 'string' || !TOLD.has(frame.type)) return
       const payload = (frame.payload ?? {}) as Record<string, unknown>
-      const agentId = typeof frame.agentId === 'string' ? frame.agentId : typeof payload.agentId === 'string' ? payload.agentId : ''
+      // A sync names its harness in the agent's frame alone (lib/sessionSync.ts).
+      const id = frame.type === 'agent_synced' ? (payload.agent as Synced | undefined)?.id : typeof frame.agentId === 'string' ? frame.agentId : payload.agentId
+      const agentId = typeof id === 'string' ? id : ''
       if (!agentId) return
       for (const [connId, named] of watches) {
         const told = named.get(agentId)
