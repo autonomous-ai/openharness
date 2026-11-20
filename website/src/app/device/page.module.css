@@ -53,11 +53,17 @@
   }
 }
 
-/* The site's globals are dark: the page's own colors show when it is scrolled past its ends. */
+/* The site's globals are drawn for its dark pages. This page keeps its own colors past its ends, on its scrollbar
+   (the site's thumb is white at 10 %, unseen on white) and in its focus ring (the site's amber is 2:1 on white). */
 :global(body):has(> .page) { background: #ffffff; }
+:global(html):has(> body > .page)::-webkit-scrollbar-thumb,
+:global(body):has(> .page)::-webkit-scrollbar-thumb { background: rgba(17, 17, 17, .24); }
 @media (prefers-color-scheme: dark) {
   :global(body):has(> .page) { background: #111111; }
+  :global(html):has(> body > .page)::-webkit-scrollbar-thumb,
+  :global(body):has(> .page)::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, .24); }
 }
+.page :focus-visible { outline-color: var(--accent); }
 
 .page a { color: var(--link); text-decoration: none; }
 .page a:hover { text-decoration: underline; }
