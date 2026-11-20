@@ -92,6 +92,7 @@ export interface CheckpointStage {
 }
 
 export class CheckpointStages {
+  private readonly cleanups = new Map<number, Promise<void>>()
   constructor(private readonly directory: string) {}
   private path(slot: number): string { return join(this.directory, String(slot)) }
 
@@ -113,7 +114,8 @@ export class CheckpointStages {
     }
   }
 
-  private remove(directory: string, key: string, owner: Owner, expected = JSON.stringify(owner), recovering = false): void {
+  private remove(directory: string, key: string, owner: Owner, expected = JSON.stringify(owner), recovering = false,
+    finish?: () => Promise<void>): void | Promise<void> {
     directoryIdentity(directory, key)
     // A stale reaper may have read a slot that another core has since reclaimed and leased again.
     const cleanup = join(directory, 'cleanup'), record = join(directory, 'owner.json')
@@ -165,6 +167,7 @@ export class CheckpointStages {
       unlinkSync(record)
       rmdirSync(cleanup)
       rmdirSync(directory)
+      if (finish) return finish()
       syncStateDirectory(this.directory)
     } catch (error) {
       // A refused proof changed nothing: allow a later recovery to inspect it again.
@@ -175,6 +178,28 @@ export class CheckpointStages {
       }
       throw error
     }
+  }
+
+  private async removeWithFlush(slot: number, directory: string, key: string, owner: Owner, poolKey: string | undefined): Promise<void> {
+    if (poolKey === undefined) { this.remove(directory, key, owner); return }
+    stateFileCustodyHealthy()
+    const fd = openSync(this.directory, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW)
+    let started = false
+    try {
+      if (nativeFileKey(fstatSync(fd, { bigint: true })) !== poolKey) throw new Error('checkpoint slot changed')
+      directoryIdentity(this.directory, poolKey)
+      await this.remove(directory, key, owner, undefined, false, () => {
+        started = true
+        const work = flush(fd).finally(() => {
+          // The name is already free, but the slot and descriptor remain ours
+          // until the actual callback and a confirmed close, even after timeout.
+          closeStateFileDescriptor(fd)
+          this.cleanups.delete(slot)
+        })
+        this.cleanups.set(slot, work)
+        return work
+      })
+    } finally { if (!started) closeStateFileDescriptor(fd) }
   }
 
   async acquire(destination: string, writer: number, deadline = performance.now() + STORAGE_EXPORT_WAIT_MS): Promise<CheckpointStage> {
@@ -194,6 +219,8 @@ export class CheckpointStages {
     secureStateDirectory(this.directory)
     const poolKey = directorySyncSupported() ? nativeFileKey(lstatSync(this.directory, { bigint: true })) : undefined
     for (let slot = 0; slot < STORAGE_IN_FLIGHT; slot++) {
+      if (performance.now() >= deadline) throw expired()
+      if (this.cleanups.has(slot)) continue
       const directory = this.path(slot), path = join(directory, 'history.tmp'), record = join(directory, 'owner.json')
       try { mkdirSync(directory, { mode: 0o700 }) }
       catch (error) { if ((error as NodeJS.ErrnoException).code === 'EEXIST') continue; throw error }
@@ -397,11 +424,17 @@ export class CheckpointStages {
             try { await closeDescriptor() } finally { closeOwner() }
             if (exposed && owner.writer !== null && !owner.settled) { retained(); return }
             identity(record, recordKey!)
-            this.remove(directory, directoryKey, owner)
+            await this.removeWithFlush(slot, directory, directoryKey, owner, poolKey)
           })().catch(retained)
           await beforeDeadline(cleanup, deadline).catch(retained)
         },
       }
+    }
+    if (this.cleanups.size) {
+      // Several callers may wake for one free slot. Retry within the original
+      // deadline; a bounded reply never releases somebody else's raw flush.
+      await beforeDeadline(Promise.race(this.cleanups.values()).catch(() => {}), deadline)
+      return this.create(destination, writer, deadline)
     }
     throw Object.assign(new Error('checkpoint stages busy'), { code: 'CHECKPOINT_STAGES_BUSY' })
   }

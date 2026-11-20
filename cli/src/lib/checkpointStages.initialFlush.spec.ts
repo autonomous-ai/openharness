@@ -8,6 +8,7 @@ const disk = vi.hoisted(() => ({
   directory: '', holding: false, paths: new Map<number, string>(),
   held: new Map<string, { fd: number; release(error?: Error): Promise<void> }>(),
   sync: [] as string[], started: [] as string[], historyClosed: [] as Promise<void>[],
+  closed: [] as Promise<void>[], closing: new Map<number, () => void>(),
   truncated: false, ready: [] as boolean[], failOpen: '', failStart: '',
   ownerStarted: undefined as (() => void) | undefined,
 }))
@@ -16,11 +17,13 @@ vi.mock('node:fs', async original => {
   return { ...fs,
     openSync: (...args: Parameters<typeof fs.openSync>) => {
       if (disk.truncated && String(args[0]) === disk.failOpen) throw new Error('injected open failure')
-      const fd = fs.openSync(...args); disk.paths.set(fd, String(args[0])); return fd
+      const fd = fs.openSync(...args); disk.paths.set(fd, String(args[0]))
+      disk.closed.push(new Promise<void>(resolve => { disk.closing.set(fd, resolve) }))
+      return fd
     },
     closeSync: (fd: number) => {
       if ([...disk.held.values()].some(held => held.fd === fd)) throw new Error('closed a pending flush')
-      try { fs.closeSync(fd) } finally { disk.paths.delete(fd) }
+      try { fs.closeSync(fd) } finally { disk.paths.delete(fd); disk.closing.get(fd)?.(); disk.closing.delete(fd) }
     },
     fsyncSync: (fd: number) => { disk.sync.push(disk.paths.get(fd)!); fs.fsyncSync(fd) },
     ftruncateSync: (fd: number, length: number) => { fs.ftruncateSync(fd, length); disk.truncated = true },
@@ -64,7 +67,7 @@ beforeEach(async () => {
   root = await mkdtemp(join(tmpdir(), 'checkpoint-initial-flush-'))
   disk.directory = join(root, '.stages'); slot = join(disk.directory, '0'); owner = join(slot, 'owner.json')
   await mkdir(disk.directory, { mode: 0o700 })
-  disk.holding = true; disk.sync.length = 0; disk.started.length = 0; disk.historyClosed.length = 0
+  disk.holding = true; disk.sync.length = 0; disk.started.length = 0; disk.historyClosed.length = 0; disk.closed.length = 0
   disk.truncated = false; disk.ready.length = 0; disk.failOpen = ''; disk.failStart = ''
   vi.stubEnv('ADAPTER_DATA_DIR', root)
   vi.spyOn(console, 'error').mockImplementation(() => {})
@@ -76,7 +79,7 @@ async function releaseAll() {
 afterEach(async () => {
   await releaseAll(); await Promise.all(work.splice(0))
   for (const lease of leases.splice(0)) await lease.close()
-  await Promise.all(disk.historyClosed); await turn()
+  await Promise.all(disk.historyClosed); await turn(); await Promise.all(disk.closed)
   disk.ownerStarted = undefined
   vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllEnvs()
   await rm(root, { recursive: true, force: true })
@@ -147,6 +150,8 @@ describe.skipIf(process.platform === 'win32')('initial allocation barrier', () =
     expect(await refused).toMatchObject({ code: 'CHECKPOINT_STAGE_TIMEOUT' })
     for (const held of disk.held.values()) expect(fs.fstatSync(held.fd)).toBeTruthy()
     await releaseAll(); await Promise.all(disk.historyClosed); await turn()
+    // The late allocation now owns a separate asynchronous cleanup flush.
+    await Promise.all(disk.closed)
     expect(disk.paths.size).toBe(0)
     expect(fs.readdirSync(disk.directory)).toEqual([])
   })

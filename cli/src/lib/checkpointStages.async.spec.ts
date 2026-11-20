@@ -10,6 +10,7 @@ type ExposedStage = CheckpointStage & ExportOwnership
 const disk = vi.hoisted(() => ({
   paths: new Map<number, string>(), openings: new Map<number, number>(), nextOpen: 0, held: new Map<number, { release(error?: NodeJS.ErrnoException): Promise<void> }>(),
   history: [] as Promise<void>[],
+  descriptorCloses: [] as Promise<void>[], closing: new Map<number, () => void>(),
   beforeHistoryClose: undefined as ((path: string) => Promise<void>) | undefined,
   afterLstat: undefined as ((path: string) => Promise<void>) | undefined,
   closeFailure: undefined as string | undefined,
@@ -22,14 +23,16 @@ vi.mock('node:fs', async original => {
   const fs = await original<typeof import('node:fs')>()
   return { ...fs,
     openSync: (...args: Parameters<typeof fs.openSync>) => {
-      const fd = fs.openSync(...args); disk.paths.set(fd, String(args[0])); disk.openings.set(fd, ++disk.nextOpen); return fd
+      const fd = fs.openSync(...args); disk.paths.set(fd, String(args[0])); disk.openings.set(fd, ++disk.nextOpen)
+      disk.descriptorCloses.push(new Promise<void>(resolve => { disk.closing.set(fd, resolve) }))
+      return fd
     },
     closeSync: (fd: number) => {
       if (disk.held.has(fd)) throw new Error('closed before the actual flush callback')
       try {
         fs.closeSync(fd); disk.closed.push({ fd, opened: disk.openings.get(fd)! })
         if (disk.closeFailure === disk.paths.get(fd)) { disk.closeFailure = undefined; throw new Error('injected uncertain close') }
-      } finally { disk.paths.delete(fd); disk.openings.delete(fd) }
+      } finally { disk.paths.delete(fd); disk.openings.delete(fd); disk.closing.get(fd)?.(); disk.closing.delete(fd) }
     },
     fsyncSync: (fd: number) => {
       if (disk.trap && disk.target?.(disk.paths.get(fd)!)) throw new Error('journal flush blocked the main thread')
@@ -69,6 +72,7 @@ const leases: CheckpointStage[] = []
 beforeEach(async () => {
   root = await mkdtemp(join(tmpdir(), 'checkpoint-journal-'))
   vi.stubEnv('ADAPTER_DATA_DIR', root)
+  disk.descriptorCloses.length = 0
   disk.trap = false; disk.target = undefined; disk.entered = undefined; disk.closed.length = 0; disk.history.length = 0; disk.closeFailure = undefined; disk.beforeHistoryClose = undefined; disk.afterLstat = undefined
   vi.spyOn(console, 'error').mockImplementation(() => {})
 })
@@ -76,7 +80,7 @@ afterEach(async () => {
   disk.trap = false; disk.target = undefined; disk.entered = undefined; disk.afterLstat = undefined
   for (const held of [...disk.held.values()]) await held.release()
   for (const lease of leases.splice(0)) await lease.close()
-  await Promise.all(disk.history); await turn()
+  await Promise.all(disk.history); await turn(); await Promise.all(disk.descriptorCloses)
   vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllEnvs()
   await rm(root, { recursive: true, force: true })
 })
@@ -170,17 +174,18 @@ it('closes a late acquired owner exactly once after its initial flush outlives t
   await release(fd)
   await Promise.all(disk.history); await turn()
   expect(disk.closed.filter(value => value.opened === opened)).toHaveLength(1)
-  expect(() => fs.fstatSync(fd)).toThrow()
+  expect(disk.openings.get(fd)).not.toBe(opened)
   expect(fs.readdirSync(join(root, '.stages'))).toEqual([])
 })
 
 it('keeps all four unexposed slots and exact journal descriptors owned beyond their reply deadlines', async () => {
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] })
-  const fds: number[] = [], results: Promise<unknown>[] = []
+  const fds: number[] = [], openings: number[] = [], results: Promise<unknown>[] = []
   for (let index = 0; index < 4; index++) {
     const path = join(root, '.stages', String(index), 'owner.json'), waiting = hold(path)
     const work = manager().acquire(destination(), process.pid)
     results.push(work.catch(error => error)); fds.push(await entered(waiting, work))
+    openings.push(disk.openings.get(fds.at(-1)!)!)
   }
   await vi.advanceTimersByTimeAsync(30_000)
   expect(await Promise.all(results)).toEqual(Array.from({ length: 4 }, () => expect.objectContaining({ code: 'CHECKPOINT_STAGE_TIMEOUT' })))
@@ -188,7 +193,12 @@ it('keeps all four unexposed slots and exact journal descriptors owned beyond th
   await expect(manager().acquire(destination(), process.pid)).rejects.toThrow('busy')
   for (const fd of fds) await release(fd)
   await Promise.all(disk.history); await turn()
-  for (const fd of fds) expect(() => fs.fstatSync(fd)).toThrow()
+  // A new cleanup descriptor may reuse a journal's number. Prove the exact
+  // opening closed once, rather than assuming its number is still unused.
+  for (let i = 0; i < fds.length; i++) {
+    expect(disk.closed.filter(value => value.opened === openings[i])).toHaveLength(1)
+    expect(disk.openings.get(fds[i])).not.toBe(openings[i])
+  }
   const next = await manager().acquire(destination(), process.pid); leases.push(next)
   await next.close()
   expect(fs.readdirSync(join(root, '.stages'))).toEqual([])
