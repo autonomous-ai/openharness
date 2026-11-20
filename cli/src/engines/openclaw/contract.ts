@@ -109,6 +109,17 @@ const STATUS_LINES = 4
 const REASON_MAX = 200
 const CONTROL = /[\u0000-\u001f\u007f-\u009f]/g
 
+/**
+ * What OpenClaw's Gateway client prints straight to the terminal at each retry of a refused connect, `gateway connect
+ * failed: <error>` (`client-*.mjs` `logError`; a probe, a rate limit and a token mismatch, which stops the retries, print
+ * none). It starts where the TUI left the cursor, in its empty input box, and runs over the box and the start of its
+ * bottom rule, then on below the frame, wrapped at the pane's width; the TUI does not draw over it
+ * (`screen-pairing-retries*.txt`).
+ */
+const GATEWAY_CLIENT_LOG = 'gateway connect failed: '
+const RULE_LINE = /^─+$/
+const RULE_REST = /^─*$/
+
 /** What `openclaw tui` prints as it exits when the config has no Gateway token (`screen-no-token.txt`). */
 const NO_TOKEN = /^Missing gateway auth token\./
 
@@ -188,6 +199,38 @@ function lastIndex(lines: readonly string[], test: (line: string) => boolean): n
   return -1
 }
 
+/**
+ * [lines] with the Gateway client's lines blanked from [from] on, when from one of them to the last line there is
+ * nothing else: each starts a line, runs on over the next while it fills the width (one less when a space at the last
+ * column was trimmed off), and leaves at most the rest of the rule it was written over. Text the person typed in the box
+ * has the bottom rule whole under it, so is never taken for one.
+ */
+function withoutGatewayClientLines(lines: readonly string[], from: number): readonly string[] {
+  const width = Math.max(0, ...lines.filter((line) => RULE_LINE.test(line)).map((line) => line.length))
+  if (!width) return lines
+  const last = lastIndex(lines, (line) => !!line.trim())
+  for (let at = from; at <= last; at++) {
+    const blanked = lines[at].startsWith(GATEWAY_CLIENT_LOG) ? blankGatewayClientLines(lines, at, last, width) : null
+    if (blanked) return blanked
+  }
+  return lines
+}
+
+/** [lines] with the Gateway client's lines from [at] to [last] blanked, or null when anything else is among them. */
+function blankGatewayClientLines(lines: readonly string[], at: number, last: number, width: number): string[] | null {
+  const blanked = [...lines]
+  let continued = false
+  for (let i = at; i <= last; i++) {
+    const rule = lines[i].indexOf('─')
+    const text = rule < 0 ? lines[i] : lines[i].slice(0, rule)
+    const rest = lines[i].slice(text.length)
+    if (!text || !RULE_REST.test(rest) || (!continued && !text.startsWith(GATEWAY_CLIENT_LOG))) return null
+    blanked[i] = rest && ' '.repeat(text.length) + rest
+    continued = text.length >= width - 1 && !lines[i + 1]?.startsWith(GATEWAY_CLIENT_LOG)
+  }
+  return blanked
+}
+
 /** A footer the running TUI drew: under it the composer between two rules, and nothing below that. */
 function liveFooter(lines: readonly string[], start: number): string | null {
   let end = start + 1
@@ -263,8 +306,9 @@ function readStopped(above: readonly string[], said: string): string | null {
  * the TUI at all (every `openclaw` command renames its process `openclaw`, `onboard` and `logs` too).
  */
 export function readOpenclawScreen(capture: string): OpenclawScreen {
-  const lines = openclawScreenLines(capture)
-  const start = lastIndex(lines, (line) => FOOTER_START.test(line))
+  const drawn = openclawScreenLines(capture)
+  const start = lastIndex(drawn, (line) => FOOTER_START.test(line))
+  const lines = start >= 0 ? withoutGatewayClientLines(drawn, start + 1) : drawn
   const tokenless = lastIndex(lines, (line) => NO_TOKEN.test(line))
   if (tokenless > start) return { ...NOTHING, state: 'no-token' }
   const titled = lastIndex(lines, (line) => TITLE_START.test(line))
