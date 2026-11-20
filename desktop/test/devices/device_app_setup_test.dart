@@ -227,6 +227,26 @@ void main() {
     };
     const linuxPlace = '/home/p q/.local/opt/Harness-Device.AppImage';
 
+    // The installer the app and the end-to-end test both build checks with
+    // this: on Windows Desktop runs what it downloads.
+    test('each OS gets its own signature check', () async {
+      expect(
+        deviceAppSignatureCheckFor(TargetPlatform.windows),
+        same(deviceAppInstallerSignedLikeDesktop),
+      );
+      expect(
+        deviceAppSignatureCheckFor(TargetPlatform.macOS),
+        same(deviceAppSignedLikeDesktop),
+      );
+      // Never asked on Linux, where an AppImage carries no OS signature.
+      expect(
+        await deviceAppSignatureCheckFor(TargetPlatform.linux)(
+          '/home/p q/.local/opt/Harness-Device.AppImage',
+        ),
+        isFalse,
+      );
+    });
+
     test('each OS gets its own lookup', () async {
       expect(
         deviceAppProbeFor(TargetPlatform.macOS),
