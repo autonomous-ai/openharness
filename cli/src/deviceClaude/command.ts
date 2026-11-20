@@ -165,7 +165,7 @@ export async function runDeviceCommand(argv: string[], deps: DeviceDeps): Promis
 }
 
 async function codexCommand(verb: string, json: boolean, deps: DeviceDeps): Promise<number> {
-  const supported = deps.platform === 'darwin' || deps.platform === 'linux'
+  const supported = deps.platform === 'darwin' || deps.platform === 'linux' || deps.platform === 'win32'
   switch (verb) {
     case 'status': {
       const status = { supported, installed: deps.codex(), enabled: setUp('codex', deps.dataDir) }
@@ -173,7 +173,7 @@ async function codexCommand(verb: string, json: boolean, deps: DeviceDeps): Prom
       return 0
     }
     case 'enable': {
-      const refused = !supported ? 'The dial reaches Codex on macOS and Linux.' : !deps.codex() ? 'Codex is not on this computer.' : null
+      const refused = !supported ? 'The dial reaches Codex on macOS, Linux and Windows.' : !deps.codex() ? 'Codex is not on this computer.' : null
       if (!refused) return turnOn('codex', deps.codexHome, deps)
       deps.err(refused)
       return 1

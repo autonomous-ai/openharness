@@ -14,6 +14,12 @@
  *
  * A session in the ChatGPT app runs the app's own Codex CLI, on macOS, when it is there: a native program of the app's
  * own version, which queues into the app's threads with no PATH, no node and no shell (the design's part B).
+ *
+ * On Windows there is no login shell to read: the daemon's PATH is the person's. The `codex` npm installs there is a
+ * `.cmd` shim, which only cmd.exe runs and which would read the text again by its own rules, so the program it names is
+ * started directly (lib/windows/program.ts); a shim it cannot carry out is never started. Whether the ChatGPT app holds a
+ * Codex of its own there is not known (docs/plans/2026-11-19-dial-windows-vm-notes.md `## Task 1`, section 4), so an
+ * app session runs the `codex` on PATH.
  */
 import { execFile } from 'node:child_process'
 import { homedir } from 'node:os'
@@ -21,6 +27,7 @@ import { delimiter, isAbsolute, join } from 'node:path'
 import { binaryOnPath, resolveBinaryOnPath } from '../../lib/binaryOnPath.js'
 import { engineBin } from '../../lib/engineBin.js'
 import { loginShellEnvironment, oneShotParentEnv, warmLoginShellEnvironment } from '../../lib/loginShellEnv.js'
+import { windowsProgram } from '../../lib/windows/program.js'
 import { MAX_TEXT } from './orca.js'
 
 // `--thread` also takes a session's name: only a thread id may reach it.
@@ -99,7 +106,10 @@ export function codexQueueDeps(): Omit<CodexQueueDeps, 'home' | 'cwd'> {
       const deadline = setTimeout(() => resolve('unknown'), timeoutMs)
       const end = (how: CodexRunEnd) => { clearTimeout(deadline); resolve(how) }
       try {
-        const child = execFile(file, args, { cwd, env, timeout: timeoutMs, killSignal: 'SIGKILL' }, (error) => {
+        // Unchanged off Windows. A program it refuses throws here, as one that never started.
+        const program = windowsProgram(file, args, { environment: env })
+        const how = { cwd, env: program.env ?? env, timeout: timeoutMs, killSignal: 'SIGKILL' as const, windowsHide: true }
+        const child = execFile(program.file, program.args, how, (error) => {
           if (error === null) end(0)
           else if (typeof error.code === 'number') end(error.code)
           // No pid: it never started (ENOENT, EACCES). With one, a signal or too much output ended it, maybe after it
@@ -109,7 +119,7 @@ export function codexQueueDeps(): Omit<CodexQueueDeps, 'home' | 'cwd'> {
         // Nothing is piped to codex: one that read its stdin would wait out the deadline.
         child.stdin?.end()
       } catch {
-        // An argument execFile refuses (a NUL) throws before any child.
+        // An argument execFile refuses (a NUL) throws before any child, and so does a Windows program refused above.
         end('not-started')
       }
     }),
@@ -142,11 +152,9 @@ export function createCodexQueue(deps: CodexQueueDeps): CodexQueue {
   const queueing = new Set<string>()
   let loginShellAsked = false
   const choose = (isApp: boolean): { file: string; ran: CodexRan } | null => {
-    // Never on Windows: codex is a .cmd shim there, which runs only through a shell, and the text must never meet one.
-    if (deps.platform === 'win32') return null
     // On first use, never at start: the interactive shell can take its 5 s, and a computer whose dial never meets a
-    // Codex session never pays for it. Until it is read, the daemon's environment is used.
-    if (!loginShellAsked) {
+    // Codex session never pays for it. Until it is read, the daemon's environment is used. Windows has none to read.
+    if (!loginShellAsked && deps.platform !== 'win32') {
       loginShellAsked = true
       deps.readLoginShell()
     }
