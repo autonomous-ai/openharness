@@ -404,9 +404,14 @@ class SelectionTests(unittest.TestCase):
     def test_the_dial_host_files_are_the_ones_cli_e2e_leaves_out(self):
         root = REPOSITORY
         source = root / "cli/e2e/harness/dialHosts.ts"
-        full_checkout(self, "cli/e2e/harness/dialHosts.ts")
+        full_checkout(self, "cli/e2e/harness/dialHosts.ts", "cli/vitest.e2e.ci.config.ts")
         listed = re.search(r"export const DIAL_HOST_FILES = \[([^\]]*)\]", source.read_text()).group(1)
         self.assertEqual(set(planner.DIAL_HOST_FILES), {"cli/" + name for name in re.findall(r"'([^']+)'", listed)})
+        # Every other file the CI config leaves out never runs on linux-e2e: selected, it would collect nothing.
+        config = (root / "cli/vitest.e2e.ci.config.ts").read_text()
+        exclude = re.search(r"exclude: \[([^\]]*)\]", config).group(1)
+        self.assertIn("...DIAL_HOST_FILES", exclude)
+        self.assertLessEqual({"cli/" + name for name in re.findall(r"'([^']+)'", exclude)}, planner.LINUX_E2E_NEVER)
         for entry in planner.DIAL_HOST_PATHS:
             with self.subTest(entry=entry):
                 self.assertTrue((root / entry).is_dir() if entry.endswith("/") else (root / entry).is_file())
