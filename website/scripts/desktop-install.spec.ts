@@ -113,6 +113,8 @@ interface Options {
   curlWrites?: boolean;
   /** The download whose server sends without end, never naming its size. */
   endless?: "manifest" | "release";
+  /** Whether the shell ends the app folder with byte 0xE9, Latin-1's é: Node's environment holds only UTF-8. */
+  latin1?: boolean;
 }
 
 /** Runs the installer as `os` in a folder of its own: HOME is its home/, the app folder its app/. */
@@ -156,9 +158,13 @@ function install(os: "Darwin" | "Linux", options: Options = {}) {
     STUB_BREAK: options.breaks?.download ?? "",
     STUB_BREAKS: String(options.breaks?.times ?? 0),
     STUB_BREAK_STATUS: String(options.breaks?.status ?? 18),
+    STUB_LATIN1: options.latin1 ? "1" : "",
   };
   // exec keeps the pid: the script's own, for the stubs that signal it.
-  const result = spawnSync("sh", ["-c", 'export STUB_SCRIPT_PID=$$; exec sh "$0"', installer], {
+  const wrapper = `export STUB_SCRIPT_PID=$$
+[ -z "$STUB_LATIN1" ] || HARNESS_DESKTOP_APP_DIR="$HARNESS_DESKTOP_APP_DIR$(printf '\\351')"
+exec sh "$0"`;
+  const result = spawnSync("sh", ["-c", wrapper, installer], {
     cwd: dir,
     encoding: "utf8",
     env,
@@ -431,6 +437,16 @@ describe("desktop-install.sh", { timeout: 20_000 }, () => {
         ? ["-u", String(process.getuid!()), "-f", commandPattern(run.executable)]
         : ["-f", commandPattern(run.executable)],
     ]);
+  });
+
+  // A Linux folder name is any bytes, and Ubuntu 26.04's mktemp (uutils) refuses a template that is not UTF-8. macOS
+  // keeps only UTF-8 names, so there such a folder cannot exist.
+  it.runIf(process.platform === "linux")("Linux installs when the app folder is not UTF-8", () => {
+    const run = install("Linux", { latin1: true });
+
+    expect(run.result.stderr).toBe("");
+    expect(run.result.status).toBe(0);
+    expect(run.result.stdout).toContain("installed at");
   });
 
   it.each(["Darwin", "Linux"] as const)("%s installs while a process only names the app, as an editor does", (os) => {
