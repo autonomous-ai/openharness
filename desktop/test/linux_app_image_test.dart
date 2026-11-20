@@ -2,6 +2,21 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/linux_app_image.dart';
+import 'package:harness/logging/app_log.dart';
+
+/// Every message logged, as it would be written.
+class _RecordedLog implements AppLog {
+  final messages = <String>[];
+
+  @override
+  void record(
+    AppLogLevel level,
+    String category,
+    String message, {
+    Object? error,
+    StackTrace? stackTrace,
+  }) => messages.add(message);
+}
 
 void main() {
   late Directory root;
@@ -44,6 +59,23 @@ void main() {
       2,
       3,
     ]);
+  });
+
+  // The path holds the person's name, which no log line may carry.
+  test('the log names no path', () async {
+    final previous = appLog;
+    final log = _RecordedLog();
+    appLog = log;
+    addTearDown(() => appLog = previous);
+
+    await launch('$home/Nguyễn Văn A/Harness.AppImage');
+
+    expect(entry().existsSync(), isTrue);
+    expect(log.messages, isNotEmpty);
+    for (final message in log.messages) {
+      expect(message, isNot(contains('Nguyễn')));
+      expect(message, isNot(contains(root.path)));
+    }
   });
 
   test('a path with spaces is quoted for the launcher', () async {
