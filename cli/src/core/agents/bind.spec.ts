@@ -2758,27 +2758,40 @@ describe('binding an OpenClaw pane, read from its screen', () => {
     const LAUNCHED = START - 3_600_000
     const TASK = 'Fix the parser'
     const FAILED = { state: 'failed', error: 'FIRST_TASK_NOT_TAKEN', detail: 'OpenClaw did not take the first task. Close it and start it again.' }
-    const ADOPTED = '[agent] a1 first task typed before a restart · awaiting confirmation'
+    const ADOPTED = '[agent] a1 first task typed earlier · awaiting confirmation'
     const CONFIRMED = '[agent] a1 first task confirmed'
     const ready = screen('screen-plain')
     const running = screen('screen-abort-running').replace(/abort/g, 'plain')
     let run: ReturnType<typeof setup>
     let row: RegisteredSession
-    /** What OpenClaw's store answers: whether it holds a user row for the key written since the task was typed. */
-    let stored: boolean | null
+    /** What OpenClaw's store holds for the key: no user row, one written at that time, or a read that cannot say. */
+    let userRow: number | null | undefined
+    /** The agents whose first task the controller awaits. */
+    let awaited: Set<string>
     beforeEach(() => {
       vi.useFakeTimers({ toFake: ['Date'] })
-      stored = false
-      run = setup({ openclawPaneRead: vi.fn(() => true), openclawUserRowSince: vi.fn(async () => stored) })
+      userRow = undefined
+      awaited = new Set()
+      run = setup({
+        openclawPaneRead: vi.fn(() => true),
+        openclawUserRowSince: vi.fn(async (_key: string, _pane: unknown, since: number) => userRow === null ? null : userRow !== undefined && userRow > since),
+      })
       row = pane({ sessionId: 'agent:main:plain', registeredAt: LAUNCHED, openclawStateDir: '/h/.openclaw', firstTaskTyped: { text: TASK, at: START - 5_000 } })
       run.byAgent.set('a1', row)
       vi.mocked(run.deps.registry.byProcess).mockReturnValue(row)
-      vi.mocked(run.deps.input.adoptTypedFirstTask).mockReturnValue(true)
-      // As the registry does (registry.ts): the mark leaves the row once confirmed, or with the task once its launch failed.
-      vi.mocked(run.deps.registry.firstTaskTaken).mockImplementation(async () => {
-        const had = !!row.firstTaskTyped
+      // As the controller does (lib/sessionInput.ts): a first task it adopted or expects is awaited until a turn, a
+      // confirmation or a forget ends it, and none is adopted while one is.
+      vi.mocked(run.deps.input.firstTaskWaiting).mockImplementation((id) => awaited.has(id))
+      vi.mocked(run.deps.input.adoptTypedFirstTask).mockImplementation((id) => !awaited.has(id) && !!awaited.add(id))
+      vi.mocked(run.deps.input.expectFirstTask).mockImplementation((id) => { awaited.add(id) })
+      vi.mocked(run.deps.input.firstTaskConfirmed).mockImplementation((id) => { awaited.delete(id) })
+      vi.mocked(run.deps.input.forget).mockImplementation((id) => { awaited.delete(id) })
+      // As the registry does (registry.ts): the mark leaves the row once confirmed, only the one typed at [at] when given, or
+      // with the task once its launch failed.
+      vi.mocked(run.deps.registry.firstTaskTaken).mockImplementation(async (_id, at) => {
+        if (!row.firstTaskTyped || (at !== undefined && row.firstTaskTyped.at !== at)) return false
         delete row.firstTaskTyped
-        return had
+        return true
       })
       vi.mocked(run.deps.registry.takeFirstTask).mockImplementation(async () => {
         if (row.launch?.state === 'failed') delete row.firstTaskTyped
@@ -2808,12 +2821,14 @@ describe('binding an OpenClaw pane, read from its screen', () => {
       expect(starting()).toBe(true)
     })
 
-    it('the store showing it taken later: off the row, the controller\'s wait ended, announced, and starting no more', async () => {
+    it('a user row written before its adoption, read later: off the row, the controller\'s wait ended, announced, and starting no more', async () => {
+      userRow = null
       await pass(0, running)
-      stored = true
+      // Written as OpenClaw took it, before this daemon adopted it: the first read could not say.
+      userRow = START - 1_000
       await pass(5, running)
       await vi.waitFor(() => expect(run.deps.input.firstTaskConfirmed).toHaveBeenCalledWith('a1'))
-      expect(run.deps.registry.firstTaskTaken).toHaveBeenCalledWith('a1')
+      expect(run.deps.registry.firstTaskTaken).toHaveBeenCalledWith('a1', START - 5_000)
       // Once the pass's transaction commits, as the task's own move off the row is.
       expect(vi.mocked(run.deps.registry.afterTransaction).mock.invocationCallOrder[0])
         .toBeLessThan(vi.mocked(run.deps.registry.firstTaskTaken).mock.invocationCallOrder[0])
@@ -2823,9 +2838,21 @@ describe('binding an OpenClaw pane, read from its screen', () => {
       expect(logged()).toEqual([ADOPTED, CONFIRMED])
       expect(row).not.toHaveProperty('firstTaskTyped')
       expect(starting()).toBe(false)
-      // Settled: a later pass asks the store nothing.
+      // Asked since it was typed, and since its adoption once a row was there. Settled: a later pass asks nothing.
       await pass(10, ready)
-      expect(run.deps.openclawUserRowSince).toHaveBeenCalledTimes(2)
+      expect(vi.mocked(run.deps.openclawUserRowSince).mock.calls.map(([, , since]) => since)).toEqual([START - 5_000, START - 5_000, START])
+    })
+
+    // The turn the live reader opens for it confirms it there (core/turns/funnel.ts), as one typed here.
+    it('a user row written after its adoption is its turn\'s: the controller is not told', async () => {
+      await pass(0, running)
+      userRow = START + 2_000
+      await pass(5, running)
+      await pass(10, running)
+      await new Promise((settle) => setImmediate(settle))
+      expect(run.deps.registry.firstTaskTaken).not.toHaveBeenCalled()
+      expect(run.deps.input.firstTaskConfirmed).not.toHaveBeenCalled()
+      expect(row.firstTaskTyped).toEqual({ text: TASK, at: START - 5_000 })
     })
 
     // Review Focus 4: a rollback's older daemon drops the field as it loads; one that never loaded it again leaves it, days old.
@@ -2833,7 +2860,7 @@ describe('binding an OpenClaw pane, read from its screen', () => {
       beforeEach(() => { row.firstTaskTyped = { text: TASK, at: START - 7 * 86_400_000 } })
 
       it('on a task long taken is removed on the first pass, never adopted, and the agent never reads starting past it', async () => {
-        stored = true
+        userRow = START - 86_400_000
         await pass(0, ready)
         await vi.waitFor(() => expect(row).not.toHaveProperty('firstTaskTyped'))
         expect(starting()).toBe(false)
@@ -2861,7 +2888,7 @@ describe('binding an OpenClaw pane, read from its screen', () => {
     })
 
     it.each([
-      ['cannot say', () => { stored = null }],
+      ['cannot say', () => { userRow = null }],
       ['throws', () => { vi.mocked(run.deps.openclawUserRowSince).mockRejectedValue(new Error('database is locked')) }],
     ])('a store read that %s decides nothing: the task is adopted, and its bound still runs', async (_, store) => {
       store()
@@ -2872,25 +2899,56 @@ describe('binding an OpenClaw pane, read from its screen', () => {
       expect(run.deps.registry.firstTaskTaken).not.toHaveBeenCalled()
     })
 
-    it('a task this daemon handed over is never adopted', async () => {
-      delete row.firstTaskTyped
-      row.firstTask = TASK
-      // As the registry does: the task moves to the typed mark as it leaves the row.
-      vi.mocked(run.deps.registry.takeFirstTask).mockImplementation(async () => {
-        row.firstTaskTyped = { text: TASK, at: Date.now() }
-        delete row.firstTask
-        return TASK
+    describe('a task this daemon handed over', () => {
+      beforeEach(async () => {
+        delete row.firstTaskTyped
+        row.firstTask = TASK
+        // As the registry does: the task moves to the typed mark as it leaves the row.
+        vi.mocked(run.deps.registry.takeFirstTask).mockImplementation(async () => {
+          row.firstTaskTyped = { text: TASK, at: Date.now() }
+          delete row.firstTask
+          return TASK
+        })
+        await pass(0, ready)
+        await vi.waitFor(() => expect(run.deps.submitFirstTask).toHaveBeenCalledWith('a1', TASK))
+        // OpenClaw took it and wrote its user row.
+        userRow = START + 1_000
       })
-      await pass(0, ready)
-      await vi.waitFor(() => expect(run.deps.submitFirstTask).toHaveBeenCalledWith('a1', TASK))
+
+      // Read before the live reader opens its turn, the store would end the controller's wait with OpenClaw at work, and a
+      // message waiting behind the task would be typed into the run: the turn confirms it (core/turns/funnel.ts).
+      it('is neither adopted nor settled from the store while the controller awaits it', async () => {
+        await pass(5, running)
+        await new Promise((settle) => setImmediate(settle))
+        expect(run.deps.openclawUserRowSince).not.toHaveBeenCalled()
+        expect(run.deps.registry.firstTaskTaken).not.toHaveBeenCalled()
+        expect(run.deps.input.firstTaskConfirmed).not.toHaveBeenCalled()
+        expect(run.deps.input.adoptTypedFirstTask).not.toHaveBeenCalled()
+        expect(row.firstTaskTyped).toEqual({ text: TASK, at: START })
+      })
+
+      it('is settled from the store once the controller forgot it, at any user row since it was typed', async () => {
+        run.deps.input.forget('a1')
+        await pass(5, running)
+        await vi.waitFor(() => expect(run.deps.registry.firstTaskTaken).toHaveBeenCalledWith('a1', START))
+        expect(row).not.toHaveProperty('firstTaskTyped')
+        expect(run.deps.input.adoptTypedFirstTask).not.toHaveBeenCalled()
+      })
+    })
+
+    // Its state folder changed, say: the session let go, the controller forgot what it awaited, the mark is on the row.
+    it('a task the controller forgot is adopted again', async () => {
+      await pass(0, running)
+      run.deps.input.forget('a1')
       await pass(5, running)
-      expect(run.deps.openclawUserRowSince).toHaveBeenCalledWith('agent:main:plain', { pid: 7714, stateDir: '/h/.openclaw' }, START)
-      expect(run.deps.input.adoptTypedFirstTask).not.toHaveBeenCalled()
+      await pass(10, running)
+      expect(vi.mocked(run.deps.input.adoptTypedFirstTask).mock.calls).toEqual([['a1', TASK], ['a1', TASK]])
+      expect(logged()).toEqual([ADOPTED, ADOPTED])
     })
 
     // The controller refuses while a write is under way or a turn is open: asked only once, the adoption could be lost.
     it('an adoption the controller refuses is asked again on the next pass, and said once it takes it', async () => {
-      vi.mocked(run.deps.input.adoptTypedFirstTask).mockReturnValueOnce(false).mockReturnValue(true)
+      vi.mocked(run.deps.input.adoptTypedFirstTask).mockImplementationOnce(() => false)
       for (const second of [0, 5, 10]) await pass(second, running)
       expect(run.deps.input.adoptTypedFirstTask).toHaveBeenCalledTimes(2)
       expect(logged()).toEqual([ADOPTED])
@@ -2898,7 +2956,7 @@ describe('binding an OpenClaw pane, read from its screen', () => {
 
     it('a removal that cannot be saved is said and confirms nothing, nor does one that finds the mark gone', async () => {
       const error = vi.spyOn(console, 'error').mockImplementation(() => {})
-      stored = true
+      userRow = START - 1_000
       vi.mocked(run.deps.registry.firstTaskTaken).mockRejectedValueOnce(new Error('disk full')).mockResolvedValueOnce(false)
       await pass(0, running)
       await vi.waitFor(() => expect(error).toHaveBeenCalledWith('[agent] a1 first task typed kept · Error'))
@@ -2918,15 +2976,19 @@ describe('binding an OpenClaw pane, read from its screen', () => {
       expect(run.deps.input.adoptTypedFirstTask).not.toHaveBeenCalled()
     })
 
-    it('remembers 256 adoptions at most: one more starts them over, and the controller is asked again', async () => {
+    it('remembers 256 adoptions at most: one more starts them over, and a task adopted before is then its turn\'s, as one typed here', async () => {
       await pass(0, running)
       for (let i = 0; i < 256; i++) {
         vi.mocked(run.deps.registry.byProcess).mockReturnValue(pane({ agentId: `b${i}`, sessionId: 'agent:main:plain', firstTaskTyped: { text: TASK, at: START } }))
         await run.binding.bindObservedAgent(tui())
       }
       vi.mocked(run.deps.registry.byProcess).mockReturnValue(row)
+      userRow = START - 1_000
+      const asked = vi.mocked(run.deps.openclawUserRowSince).mock.calls.length
       await pass(5, running)
-      expect(vi.mocked(run.deps.input.adoptTypedFirstTask).mock.calls.filter(([id]) => id === 'a1')).toHaveLength(2)
+      expect(run.deps.openclawUserRowSince).toHaveBeenCalledTimes(asked)
+      expect(run.deps.input.adoptTypedFirstTask).toHaveBeenCalledTimes(257)
+      expect(run.deps.registry.firstTaskTaken).not.toHaveBeenCalled()
     })
   })
 
