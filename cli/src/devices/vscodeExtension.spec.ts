@@ -4,18 +4,27 @@
  * temporary folders in the test's scratch. The real dependencies are run only on that scratch and on fake `code` scripts
  * in it: never an installed VS Code or Cursor, /Applications, ~/.vscode or ~/.cursor.
  */
+import type { ChildProcess, SpawnOptions } from 'node:child_process'
+import { EventEmitter } from 'node:events'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { inflateRawSync } from 'node:zlib'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { crc32 } from '../lib/zipWriter.js'
 import {
-  buildVersion, cursorFolderCli, packVsix, recordVersion, vscodeDisable, vscodeEnable, vscodeExtensionDeps, vscodeStatus,
+  buildVersion, cursorFolderCli, editorCli, packVsix, recordVersion, vscodeDisable, vscodeEnable, vscodeExtensionDeps, vscodeStatus,
   VSCODE_EXTENSION_ID, VSCODE_RECORD_MAX_BYTES, type VscodeEditor, type VscodeExtensionDeps, type VscodeExtensionFiles,
 } from './vscodeExtension.js'
 import { writeExecutable } from '../testing/executableFixture.js'
 import { RECORDED_LINUX_APPS } from '../testing/recordedLinuxApps.js'
+
+/** The real `spawn`, unless a test hands its own: a Windows run is checked by what it would start, on any computer. */
+const spawned = vi.hoisted(() => ({ fake: undefined as ((file: string, args: readonly string[], options: SpawnOptions) => ChildProcess) | undefined }))
+vi.mock('node:child_process', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:child_process')>()
+  return { ...actual, spawn: (file: string, args: readonly string[], options: SpawnOptions) => spawned.fake ? spawned.fake(file, args, options) : actual.spawn(file, args, options) }
+})
 
 const HOME = '/Users/someone'
 const APP = '/Applications/Visual Studio Code.app'
@@ -73,6 +82,8 @@ interface ComputerOptions {
   bin?: string
   /** Links on its disk, from a path to where it ends: what `real` follows. */
   links?: Record<string, string>
+  home?: string
+  folders?: VscodeExtensionDeps['folders']
 }
 
 /** A computer as the module sees it. Its temporary folders are real, in the test's scratch, and written and removed by
@@ -91,7 +102,7 @@ function computer(options: ComputerOptions = {}) {
       editor: options.editor ?? 'vscode',
       real: (path) => options.links?.[path] ?? path,
       platform: options.platform ?? 'darwin',
-      home: HOME,
+      home: options.home ?? HOME,
       pathVar: options.pathVar ?? '/usr/bin:/bin',
       exists: (path) => disk.has(path),
       executable: (path) => disk.has(path),
@@ -113,15 +124,15 @@ function computer(options: ComputerOptions = {}) {
       write: options.write ?? real.write,
       remove: real.remove,
       bin: options.bin,
+      folders: options.folders,
     } satisfies VscodeExtensionDeps,
   }
   return machine
 }
 
 describe('vscodeStatus', () => {
-  it('absent on Windows whatever is on disk, on a Mac with no app, on Linux with no code on PATH', () => {
+  it('absent on a Mac with no app, on Linux with no code on PATH, and on any other platform', () => {
     const everything = { ...MAC, '/usr/bin/code': '', [RECORD]: record('1.2.3') }
-    expect(vscodeStatus(computer({ platform: 'win32', disk: everything }).deps)).toEqual({ state: 'absent' })
     expect(vscodeStatus(computer({ platform: 'darwin', disk: { [RECORD]: record('1.2.3') } }).deps)).toEqual({ state: 'absent' })
     expect(vscodeStatus(computer({ platform: 'linux', pathVar: '/usr/local/bin:/opt/bin', disk: everything }).deps)).toEqual({ state: 'absent' })
     expect(vscodeStatus(computer({ platform: 'freebsd', disk: everything }).deps)).toEqual({ state: 'absent' })
@@ -553,5 +564,170 @@ describe('the real dependencies, on the test\'s own files', () => {
     expect(read(file, 5)).toBeNull()
     expect(read(join(scratch, 'none'), 6)).toBeNull()
     expect(read(scratch, 6)).toBeNull()
+  })
+})
+
+describe('VS Code and Cursor on Windows', () => {
+  const HOME = 'C:\\Users\\someone'
+  const LOCAL = `${HOME}\\AppData\\Local`
+  const PROGRAM_FILES = 'C:\\Program Files'
+  const FOLDERS = { localAppData: LOCAL, programFiles: PROGRAM_FILES }
+  const ON_PATH = 'D:\\tools\\VS Code\\bin'
+  /** Where VS Code's and Cursor's own installers put their launchers (docs/plans/2026-11-19-dial-windows-vm-notes.md). */
+  const USER_CODE = `${LOCAL}\\Programs\\Microsoft VS Code\\bin\\code.cmd`
+  const MACHINE_CODE = `${PROGRAM_FILES}\\Microsoft VS Code\\bin\\code.cmd`
+  const USER_CURSOR = `${LOCAL}\\Programs\\cursor\\resources\\app\\bin\\cursor.cmd`
+  const windows = (options: ComputerOptions = {}) =>
+    computer({ platform: 'win32', home: HOME, folders: FOLDERS, pathVar: 'C:\\Windows\\system32;C:\\Windows', ...options })
+  const found = (options: ComputerOptions) => editorCli(windows(options).deps)
+
+  it('on PATH first, then the per-user folder, then VS Code\'s machine folder; none of them, absent', () => {
+    const pathVar = `C:\\Windows;${ON_PATH}`
+    expect(found({ pathVar, disk: { [`${ON_PATH}\\code.cmd`]: '', [USER_CODE]: '', [MACHINE_CODE]: '' } })).toBe(`${ON_PATH}\\code.cmd`)
+    expect(found({ pathVar, disk: { [USER_CODE]: '', [MACHINE_CODE]: '' } })).toBe(USER_CODE)
+    expect(found({ pathVar, disk: { [MACHINE_CODE]: '' } })).toBe(MACHINE_CODE)
+    expect(found({ pathVar, disk: {} })).toBeNull()
+    expect(vscodeStatus(windows({ pathVar }).deps)).toEqual({ state: 'absent' })
+  })
+
+  it('the launcher is the .cmd: the sh script and the .exe beside it are not', () => {
+    const disk = { [`${ON_PATH}\\code`]: '', [`${ON_PATH}\\code.exe`]: '', [`${ON_PATH}\\code-tunnel.exe`]: '' }
+    expect(found({ pathVar: ON_PATH, disk })).toBeNull()
+  })
+
+  it('Cursor: on PATH, then its per-user folder; it has no machine folder', () => {
+    const machine = `${PROGRAM_FILES}\\cursor\\resources\\app\\bin\\cursor.cmd`
+    const cursorOn = (disk: Record<string, string>, pathVar?: string) => found({ editor: 'cursor', disk, pathVar })
+    expect(cursorOn({ [`${ON_PATH}\\cursor.cmd`]: '', [USER_CURSOR]: '' }, ON_PATH)).toBe(`${ON_PATH}\\cursor.cmd`)
+    expect(cursorOn({ [USER_CURSOR]: '', [machine]: '' })).toBe(USER_CURSOR)
+    expect(cursorOn({ [machine]: '', [MACHINE_CODE]: '' })).toBeNull()
+    expect(vscodeStatus(windows({ editor: 'cursor', disk: { [machine]: '' } }).deps)).toEqual({ state: 'absent' })
+  })
+
+  it('a relative PATH folder is not looked in', () => {
+    const disk = { 'tools\\bin\\code.cmd': '', 'code.cmd': '', [`${ON_PATH}\\code.cmd`]: '' }
+    expect(found({ pathVar: `tools\\bin;.;${ON_PATH}`, disk })).toBe(`${ON_PATH}\\code.cmd`)
+    expect(found({ pathVar: 'tools\\bin;.', disk, folders: {} })).toBeNull()
+  })
+
+  it('an absolute HARNESS_VSCODE_BIN is the only one looked for', () => {
+    const bin = 'C:\\e2e\\vscode\\bin\\code.cmd'
+    expect(found({ bin, disk: { [bin]: '', [USER_CODE]: '' } })).toBe(bin)
+    expect(found({ bin, disk: { [USER_CODE]: '' } })).toBeNull()
+  })
+
+  it('the record is the home\'s .vscode, or .cursor for Cursor', () => {
+    const disk: Record<string, string> = { [USER_CODE]: '', [USER_CURSOR]: '', [`${HOME}\\.vscode\\extensions\\extensions.json`]: record('1.2.3') }
+    expect(vscodeStatus(windows({ disk }).deps)).toEqual({ state: 'on', version: '1.2.3' })
+    expect(vscodeStatus(windows({ editor: 'cursor', disk }).deps)).toEqual({ state: 'off' })
+    disk[`${HOME}\\.cursor\\extensions\\extensions.json`] = record('1.2.4')
+    expect(vscodeStatus(windows({ editor: 'cursor', disk }).deps)).toEqual({ state: 'on', version: '1.2.4' })
+  })
+
+  it('enable runs the launcher with the packed file, forced', async () => {
+    const c = windows({ disk: { [USER_CODE]: '' } })
+    c.whenRun = () => c.disk.set(`${HOME}\\.vscode\\extensions\\extensions.json`, record('1.2.3'))
+    expect(await vscodeEnable(c.deps)).toEqual({ state: 'on', version: '1.2.3' })
+    expect(c.runs).toEqual([[USER_CODE, ['--install-extension', join(c.folders[0], 'harness-device.vsix'), '--force'], 60_000]])
+  })
+
+  it('the real dependencies read where the account\'s programs are from its environment', () => {
+    expect(vscodeExtensionDeps('vscode').folders).toEqual({ localAppData: process.env.LOCALAPPDATA, programFiles: process.env.ProgramFiles })
+  })
+})
+
+describe('the real run on Windows', () => {
+  const FIXTURES = join(import.meta.dirname, '..', 'lib', 'windows', 'fixtures')
+  const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
+  /** A started program that ends with the test's exit code at once, or runs until it is killed. */
+  class FakeChild extends EventEmitter {
+    /** No process on any computer: a kill of its group, as on a Mac, reaches nothing. */
+    readonly pid = 2 ** 31 - 2
+    readonly signals: Array<NodeJS.Signals | number | undefined> = []
+    kill(signal?: NodeJS.Signals | number): boolean {
+      this.signals.push(signal)
+      setImmediate(() => this.emit('exit', null))
+      return true
+    }
+  }
+  /** What was started, and how. */
+  const starts: Array<{ file: string; args: readonly string[]; options: SpawnOptions; child: FakeChild }> = []
+  let exitCode: number | undefined
+
+  /** VS Code installed in the test's scratch as its user setup lays it out, its launcher the real one's text. */
+  function installVscode(): { launcher: string; exe: string; script: string } {
+    const root = join(scratch, 'Programs', 'Microsoft VS Code')
+    const launcher = join(root, 'bin', 'code.cmd')
+    const exe = join(root, 'Code.exe')
+    const script = join(root, '8a14f0cc1b', 'resources', 'app', 'out', 'cli.js')
+    mkdirSync(dirname(launcher), { recursive: true })
+    mkdirSync(dirname(script), { recursive: true })
+    writeFileSync(launcher, readFileSync(join(FIXTURES, 'code.cmd')), { mode: 0o755 })
+    writeFileSync(exe, '')
+    writeFileSync(script, '')
+    return { launcher, exe, script }
+  }
+
+  beforeEach(() => {
+    exitCode = 0
+    starts.length = 0
+    Object.defineProperty(process, 'platform', { ...platform, value: 'win32' })
+    spawned.fake = (file, args, options) => {
+      const child = new FakeChild()
+      starts.push({ file, args, options, child })
+      if (exitCode !== undefined) setImmediate((code) => child.emit('exit', code), exitCode)
+      return child as unknown as ChildProcess
+    }
+  })
+  afterEach(() => {
+    Object.defineProperty(process, 'platform', platform)
+    spawned.fake = undefined
+  })
+
+  it('starts the launcher\'s .exe on its script, as Node, hidden, with no shell and not detached', async () => {
+    const { launcher, exe, script } = installVscode()
+    const args = ['--install-extension', 'x.vsix', '--force']
+    expect(await vscodeExtensionDeps('vscode').run(launcher, args, 30_000)).toEqual({ code: 0, timedOut: false })
+    expect(starts).toHaveLength(1)
+    const [{ file, args: given, options }] = starts
+    expect(file).toBe(exe)
+    expect(given).toEqual([script, ...args])
+    expect(options.env?.ELECTRON_RUN_AS_NODE).toBe('1')
+    expect(options.windowsHide).toBe(true)
+    expect(options.shell).toBeUndefined()
+    expect(options.detached).toBeUndefined()
+  })
+
+  it('a launcher Harness does not start answers as a program that could not start, and starts nothing', async () => {
+    const other = join(scratch, 'other.cmd')
+    writeFileSync(other, '@echo off\r\nstart calc %*\r\n')
+    expect(await vscodeExtensionDeps('vscode').run(other, ['--install-extension', 'x.vsix'], 30_000)).toEqual({ code: null, timedOut: false })
+    const { launcher, exe } = installVscode()
+    rmSync(exe)
+    expect(await vscodeExtensionDeps('vscode').run(launcher, ['--install-extension', 'x.vsix'], 30_000)).toEqual({ code: null, timedOut: false })
+    expect(starts).toEqual([])
+  })
+
+  it('a run past its time is ended, and says so', async () => {
+    exitCode = undefined
+    const { launcher } = installVscode()
+    expect(await vscodeExtensionDeps('vscode').run(launcher, [], 20)).toEqual({ code: null, timedOut: true })
+    expect(starts.map(({ child }) => child.signals)).toEqual([['SIGKILL']])
+  })
+
+  it('an update between two runs is read anew', async () => {
+    const { launcher } = installVscode()
+    const deps = { ...vscodeExtensionDeps('vscode', launcher), home: scratch, files: () => FILES }
+    await vscodeEnable(deps)
+    // VS Code's update puts its app in a folder named by the new build's commit and rewrites its launcher.
+    const updated = join(scratch, 'Programs', 'Microsoft VS Code', '0123456789', 'resources', 'app', 'out', 'cli.js')
+    mkdirSync(dirname(updated), { recursive: true })
+    writeFileSync(updated, '')
+    writeFileSync(launcher, readFileSync(join(FIXTURES, 'code.cmd'), 'utf8').replace('8a14f0cc1b', '0123456789'))
+    await vscodeEnable(deps)
+    expect(starts.map(({ args }) => args[0])).toEqual([
+      join(scratch, 'Programs', 'Microsoft VS Code', '8a14f0cc1b', 'resources', 'app', 'out', 'cli.js'),
+      updated,
+    ])
   })
 })
