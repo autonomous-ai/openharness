@@ -34,6 +34,23 @@ vi.mock('chokidar', async (importOriginal) => {
   return { ...actual, watch, default: { ...actual.default, watch } }
 })
 
+/**
+ * Resolves once chokidar announces a file touched in [dir]. macOS starts handing a new watch its events some time after
+ * chokidar's `ready` (seconds, on a loaded machine) and may never tell of a write before then; so a case that writes and
+ * then waits for the event first proves the watch is live, touching the probe again until it is announced.
+ */
+async function live(watcher: EventEmitter, dir: string): Promise<void> {
+  const probe = join(dir, 'live.probe')
+  let touch: ReturnType<typeof setInterval> | undefined
+  await new Promise<void>((resolve) => {
+    const on = (_event: string, path: string): void => { if (path === probe) { watcher.off('all', on); resolve() } }
+    watcher.on('all', on)
+    writeFileSync(probe, '')
+    touch = setInterval(() => writeFileSync(probe, String(Date.now())), 100)
+  })
+  clearInterval(touch)
+}
+
 function fakeChild(): ChildProcess & { exitWith: (code: number) => void } {
   const child = new EventEmitter() as ChildProcess & { exitWith: (code: number) => void }
   Object.assign(child, {
@@ -206,22 +223,27 @@ describe('DshViewerManager', () => {
   })
 
   it('restarts a viewer that exits, then gives up after four exits in a minute', async () => {
-    let clock = 0
-    const { spawned, urls } = setup({ now: () => clock })
-    await manager!.start('a1', dsh({ command: 'v', url: 'http://127.0.0.1:${port}/' }), '/ws')
-    expect(urls).toEqual(['http://127.0.0.1:4790/'])
-    spawned[0].child.exitWith(1)
-    expect(urls.at(-1)).toBeNull()
-    // The restart is scheduled with a real timer (1s); the fourth exit inside the window gives up.
-    for (let i = 0; i < 3; i++) {
-      await new Promise((resolve) => setTimeout(resolve, 1_100 * 2 ** i))
-      expect(spawned).toHaveLength(i + 2)
-      clock += 1_000
-      spawned[i + 1].child.exitWith(1)
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      let clock = 0
+      const { spawned, urls } = setup({ now: () => clock })
+      await manager!.start('a1', dsh({ command: 'v', url: 'http://127.0.0.1:${port}/' }), '/ws')
+      expect(urls).toEqual(['http://127.0.0.1:4790/'])
+      spawned[0].child.exitWith(1)
+      expect(urls.at(-1)).toBeNull()
+      // The restart waits 1 s, then 2 s, then 4 s; the fourth exit inside the window gives up.
+      for (let i = 0; i < 3; i++) {
+        await vi.advanceTimersByTimeAsync(1_000 * 2 ** i)
+        expect(spawned).toHaveLength(i + 2)
+        clock += 1_000
+        spawned[i + 1].child.exitWith(1)
+      }
+      await vi.advanceTimersByTimeAsync(60_000)
+      expect(spawned).toHaveLength(4)
+    } finally {
+      vi.useRealTimers()
     }
-    await new Promise((resolve) => setTimeout(resolve, 200))
-    expect(spawned).toHaveLength(4)
-  }, 15_000)
+  })
 
   it('stops publish null and forgets the agent', async () => {
     const { urls } = setup()
@@ -399,15 +421,22 @@ describe('DshViewerManager, the rest of a viewer\'s life', () => {
     const spawned: Array<ReturnType<typeof fakeChild>> = []
     const urls: Array<string | null> = []
     const logs: string[] = []
+    const published = new EventEmitter()
+    /** Resolves once the pane is handed [url]: on the publish itself, however late the machine delivers it. */
+    const urlBecomes = (url: string | null): Promise<void> => new Promise((resolve) => {
+      if (urls.at(-1) === url) { resolve(); return }
+      const on = (next: string | null): void => { if (next === url) { published.off('url', on); resolve() } }
+      published.on('url', on)
+    })
     manager = new DshViewerManager({
-      onUrl: (_agentId, url) => urls.push(url),
+      onUrl: (_agentId, url) => { urls.push(url); published.emit('url', url) },
       log: (line) => logs.push(line),
       freePort: async () => 4790 + spawned.length,
       waitForPort: async () => true,
       spawn: (() => { const child = fakeChild(); spawned.push(child); return child }) as unknown as typeof import('./shell.js').spawnDshCommand,
       ...deps,
     })
-    return { spawned, urls, logs, manager }
+    return { spawned, urls, logs, manager, urlBecomes }
   }
 
   it('runs a bare script name as the package\'s own file, the way `harness dsh check` reads it', async () => {
@@ -570,11 +599,17 @@ describe('DshViewerManager, the rest of a viewer\'s life', () => {
   })
 
   it('a viewer killed by a signal is restarted, and the log says which signal', async () => {
-    const { spawned, logs, manager } = setup({ now: undefined })
-    await manager.start('a1', dsh({ command: 'v', url: 'http://127.0.0.1:${port}/' }), '/ws')
-    spawned[0].emit('exit', null, 'SIGSEGV')
-    expect(logs.at(-1)).toBe('[dsh] acme/thing viewer exited SIGSEGV · restarting in 1000ms')
-    await vi.waitFor(() => expect(spawned).toHaveLength(2), { timeout: 3_000 })
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      const { spawned, logs, manager } = setup({ now: undefined })
+      await manager.start('a1', dsh({ command: 'v', url: 'http://127.0.0.1:${port}/' }), '/ws')
+      spawned[0].emit('exit', null, 'SIGSEGV')
+      expect(logs.at(-1)).toBe('[dsh] acme/thing viewer exited SIGSEGV · restarting in 1000ms')
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(spawned).toHaveLength(2)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('gives up after four exits inside a minute, naming how the last one ended', async () => {
@@ -673,13 +708,14 @@ describe('DshViewerManager, the rest of a viewer\'s life', () => {
       utimesSync(join(workspace, rel), seconds, seconds)
     }
     at('models/old.step', 1_000)
-    const { urls, logs, manager } = setup()
+    const { urls, logs, manager, urlBecomes } = setup()
     await manager.start('a1', dsh({ command: 'v', url: 'http://127.0.0.1:${port}/?file=${artifact}', artifactExtensions: ['.step'] }), workspace)
     expect(urls).toEqual(['http://127.0.0.1:4790/?file=models/old.step'])
-    await settle(300)
+    await watchers.at(-1)!.ready
+    await live(watchers.at(-1)!.watcher, workspace)
 
     at('models/new.step', 2_000)
-    await vi.waitFor(() => expect(urls.at(-1)).toBe('http://127.0.0.1:4790/?file=models/new.step'), { timeout: 5_000 })
+    await urlBecomes('http://127.0.0.1:4790/?file=models/new.step')
     // not artifacts, or not where artifacts are looked for: nothing changes
     at('notes.txt', 3_000)
     at('node_modules/lib/newest.step', 3_000)
@@ -691,9 +727,9 @@ describe('DshViewerManager, the rest of a viewer\'s life', () => {
     expect(urls).toEqual(['http://127.0.0.1:4790/?file=models/old.step', 'http://127.0.0.1:4790/?file=models/new.step'])
 
     rmSync(join(workspace, 'models', 'new.step'))
-    await vi.waitFor(() => expect(urls.at(-1)).toBe('http://127.0.0.1:4790/?file=models/old.step'), { timeout: 5_000 })
+    await urlBecomes('http://127.0.0.1:4790/?file=models/old.step')
     rmSync(join(workspace, 'models', 'old.step'))
-    await vi.waitFor(() => expect(urls.at(-1)).toBe('http://127.0.0.1:4790/?file='), { timeout: 5_000 })
+    await urlBecomes('http://127.0.0.1:4790/?file=')
 
     const inner = (manager as unknown as { states: Map<string, { watcher: EventEmitter }> }).states.get('a1')!.watcher
     inner.emit('error', new Error('EMFILE'))
@@ -704,8 +740,15 @@ describe('DshViewerManager, the rest of a viewer\'s life', () => {
     const state = (manager as unknown as { states: Map<string, { rescanTimer: unknown; watcher: { close: () => Promise<void> } }> }).states.get('a1')!
     const close = state.watcher.close.bind(state.watcher)
     state.watcher.close = async () => { await close(); throw new Error('close failed') }
+    const newest = join(workspace, 'models', 'newest.step')
+    // The watch's own listener runs first: once chokidar says the file is there, its rescan is pending.
+    const added = new Promise<void>((resolve) => {
+      const on = (path: string): void => { if (path === newest) { inner.off('add', on); resolve() } }
+      inner.on('add', on)
+    })
     at('models/newest.step', 5_000)
-    await vi.waitFor(() => expect(state.rescanTimer).not.toBeNull(), { timeout: 5_000 })
+    await added
+    expect(state.rescanTimer).not.toBeNull()
     await manager.stop('a1')
     await settle(500)
     expect(urls.at(-1)).toBeNull()
