@@ -50,7 +50,7 @@ impl ChatgptWindow for MacFollow {
             let app = NSWorkspace::sharedWorkspace().frontmostApplication()?;
             (app.bundleIdentifier()?.to_string() == CHATGPT_BUNDLE).then(|| app.processIdentifier())
         })?;
-        Some(observe_pid(pid, heard, || {}))
+        Some(observe_pid(pid, heard))
     }
 }
 
@@ -143,18 +143,18 @@ impl Drop for Observation {
     }
 }
 
-/// Observes the app `pid` on a thread of its own until the handle is dropped; `ended` runs as the thread ends.
-fn observe_pid(
-    pid: libc::pid_t,
-    heard: Box<dyn Fn(Heard) + Send + Sync>,
-    ended: impl FnOnce() + Send + 'static,
-) -> Box<dyn Send> {
+/// Observes the app `pid` on a thread of its own until the handle is dropped.
+fn observe_pid(pid: libc::pid_t, heard: Box<dyn Fn(Heard) + Send + Sync>) -> Box<dyn Send> {
+    on_own_run_loop(move || observe_here(pid, &*heard))
+}
+
+/// Runs `body` on a thread of its own, whose run loop the handle stops when dropped.
+fn on_own_run_loop(body: impl FnOnce() + Send + 'static) -> Box<dyn Send> {
     let (give, run_loop) = mpsc::sync_channel(1);
     thread::spawn(move || {
-        // Given before any Accessibility call, so the caller never waits on ChatGPT.
+        // Given before `body` runs, so the caller never waits on ChatGPT.
         let _ = give.send(CFRunLoop::current().map(RunLoop));
-        observe_here(pid, &*heard);
-        ended();
+        body();
     });
     Box::new(Observation(run_loop.recv().ok().flatten()))
 }
@@ -249,10 +249,10 @@ fn copied(element: &AXUIElement, attribute: &'static str) -> Option<CFRetained<C
 #[cfg(test)]
 mod tests {
     use super::*;
+    use objc2_core_foundation::{CFRunLoopSource, CFRunLoopSourceContext};
     use std::fs;
     use std::path::{Path, PathBuf};
-    use std::sync::mpsc;
-    use std::time::{Duration, Instant};
+    use std::time::Duration;
 
     const CODEX: &str = "<key>CFBundleIdentifier</key><string>com.openai.codex</string>";
 
@@ -297,30 +297,76 @@ mod tests {
         assert!(follow.installed_in(applications.path()));
     }
 
+    /// A source that never fires: a run loop with none in its mode returns at once instead of running.
+    fn idle_source() -> CFRetained<CFRunLoopSource> {
+        unsafe extern "C-unwind" fn never(_info: *mut c_void) {}
+        let mut context = CFRunLoopSourceContext {
+            version: 0,
+            info: ptr::null_mut(),
+            retain: None,
+            release: None,
+            copyDescription: None,
+            equal: None,
+            hash: None,
+            schedule: None,
+            cancel: None,
+            perform: Some(never),
+        };
+        // SAFETY: a version 0 context with no info, which CFRunLoopSourceCreate copies.
+        unsafe { CFRunLoopSource::new(None, 0, &mut context) }.unwrap()
+    }
+
+    /// Runs this thread's run loop until it is stopped, as the observer's runs with its source.
+    fn run_until_stopped() {
+        let run_loop = CFRunLoop::current().unwrap();
+        let source = idle_source();
+        // SAFETY: CoreFoundation's constant.
+        let mode = unsafe { kCFRunLoopDefaultMode };
+        run_loop.add_source(Some(&source), mode);
+        CFRunLoop::run();
+        run_loop.remove_source(Some(&source), mode);
+    }
+
     #[test]
-    fn the_observer_thread_ends_when_its_handle_is_dropped() {
-        // This test's own process has no window and may or may not be trusted: either way its thread ends.
-        for after_first_heard in [false, true] {
-            let (heard_to, heard) = mpsc::channel();
-            let (ended_to, ended) = mpsc::channel();
-            let observation = observe_pid(
-                std::process::id() as libc::pid_t,
-                Box::new(move |told| {
-                    let _ = heard_to.send(told);
-                }),
-                move || {
-                    let _ = ended_to.send(());
-                },
-            );
-            if after_first_heard {
-                heard.recv_timeout(Duration::from_secs(5)).expect("a first title or no observer");
-            }
-            let dropping = Instant::now();
+    fn a_drop_before_the_run_loop_runs_stops_it_as_it_starts() {
+        // The gate holds the thread before its run loop runs, as a ChatGPT slow to answer holds the observer's.
+        let (open, gate) = mpsc::channel::<()>();
+        let (ended_to, ended) = mpsc::channel();
+        let observation = on_own_run_loop(move || {
+            let _ = gate.recv();
+            run_until_stopped();
+            let _ = ended_to.send(());
+        });
+        let (dropped_to, dropped) = mpsc::channel();
+        thread::spawn(move || {
             drop(observation);
-            // A drop that waited for the thread would wait out ChatGPT's 1 s timeout.
-            assert!(dropping.elapsed() < Duration::from_millis(250), "{:?}", dropping.elapsed());
-            ended.recv_timeout(Duration::from_secs(5)).expect("the observer thread ended");
-        }
+            let _ = dropped_to.send(());
+        });
+        // A drop that waited for the thread would wait out ChatGPT.
+        dropped.recv_timeout(Duration::from_millis(250)).expect("the drop returned at once");
+        open.send(()).unwrap();
+        ended.recv_timeout(Duration::from_secs(5)).expect("the thread ended");
+    }
+
+    #[test]
+    fn a_drop_while_the_run_loop_runs_stops_it() {
+        let (running_to, running) = mpsc::channel();
+        let (ended_to, ended) = mpsc::channel();
+        let observation = on_own_run_loop(move || {
+            // A block runs only inside its loop's run: told, the loop surely runs.
+            let told = RcBlock::new(move || {
+                let _ = running_to.send(());
+            });
+            // SAFETY: CoreFoundation's constant.
+            let mode = unsafe { kCFRunLoopDefaultMode };
+            // SAFETY: a block that takes and returns nothing, run on this thread.
+            unsafe { CFRunLoop::current().unwrap().perform_block(mode.map(|mode| mode.as_ref()), Some(&told)) };
+            run_until_stopped();
+            let _ = ended_to.send(());
+        });
+        running.recv_timeout(Duration::from_secs(5)).expect("the run loop runs");
+        drop(observation);
+        ended.recv_timeout(Duration::from_secs(5)).expect("the thread ended");
     }
 
     #[test]
