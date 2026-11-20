@@ -211,8 +211,8 @@ export function inspectHookFile(file: string, defaultMode = 0o666) {
   verify()
   // The walk stops at its first absent component. A null target therefore has
   // existing parents; keep that fact so a new file or alias invalidates the observation.
-  const fixedRoute = complete || (facts.some(fact => fact.path === target && fact.identity === null)
-    && facts.every(fact => fact.identity !== null || fact.path === target))
+  const fixedRoute = complete || (located === null && retained.length === facts.length - 1
+    && facts.at(-1)?.path === target && facts.at(-1)?.identity === null)
   if (fixedRoute) hookFileFacts.set(verify, { facts, target, stamp: before })
   return {
     content, directory, mode, stamp: before,
@@ -353,22 +353,34 @@ function observationVerifier(checks: readonly HookFileVerifier[]): (() => void) 
   const facts = [...union.values()], reverse = [...facts].reverse()
   const checkFile = (path: string, info: BigIntStats | null) => {
     const expected = versions.get(path)
-    if (expected === null && info?.isSymbolicLink()) {
-      throw new HookPreparationHeld('the settings route gained an unconfirmed alias')
-    }
     if (expected !== undefined && (info ? version(info) : null) !== expected) {
       throw new HookPreparationHeld('the settings file changed before publication')
     }
   }
-  const checkAbsentFile = observed.some(file => file!.stamp === null)
-    ? (path: string, info: BigIntStats | null) => { if (versions.get(path) === null) checkFile(path, info) } : undefined
-  // Close/Resume profiles show repeated reconstruction of complete sibling routes.
-  // The second pass checks file versions while walking back to their ancestors:
-  // a later file read must not leave an already-checked shared ancestor stale.
+  // Complete groups keep their original fence. Missing-leaf checks add no
+  // per-fact branch or callback to this already measured path.
+  if (observed.every(file => file!.stamp !== null)) return () => {
+    const budget = new NativeEvidenceBudget(), devices = new Map<string, bigint | null>()
+    verifyNativePathFacts(facts, budget, devices)
+    verifyNativePathFacts(reverse, budget, devices, checkFile)
+    budget.step()
+  }
+  const checkEveryFile = (path: string, info: BigIntStats | null) => {
+    const expected = versions.get(path)
+    if (expected === null && info?.isSymbolicLink()) throw new HookPreparationHeld('the settings route gained an unconfirmed alias')
+    if (expected !== undefined && (info ? version(info) : null) !== expected) {
+      throw new HookPreparationHeld('the settings file changed before publication')
+    }
+  }
+  const checkAbsentFile = (path: string, info: BigIntStats | null) => {
+    if (versions.get(path) === null) checkEveryFile(path, info)
+  }
+  // Reverse order checks each selected leaf before the ancestors that routed
+  // to it, including aliases shared by later siblings.
   return () => {
     const budget = new NativeEvidenceBudget(), devices = new Map<string, bigint | null>()
     verifyNativePathFacts(facts, budget, devices, checkAbsentFile)
-    verifyNativePathFacts(reverse, budget, devices, checkFile)
+    verifyNativePathFacts(reverse, budget, devices, checkEveryFile)
     budget.step()
   }
 }

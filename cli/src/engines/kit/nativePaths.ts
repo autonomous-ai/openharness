@@ -37,17 +37,20 @@ export function verifyNativePathFacts(facts: readonly NativePathFact[], budget =
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return nativeUnavailable('the retained route became unreadable')
       info = null
     }
-    // A newly created leaf needs its caller's file/alias refusal, before the
-    // generic route or within-fence device comparison hides that distinction.
-    if (fact.identity === null && info !== null) checkFile?.(fact.path, info)
     // Saved facts cross reboots; two passes of one live fence must also keep the device stable.
     if (devices) {
       const device = info?.dev ?? null
-      if (devices.has(fact.path) && devices.get(fact.path) !== device) return nativeUnavailable('the retained route changed during preparation')
+      if (devices.has(fact.path) && devices.get(fact.path) !== device) {
+        // Name a new leaf through its caller before the generic refusal. A
+        // returning callback cannot authorize the mismatched fact.
+        if (fact.identity === null && info !== null) checkFile?.(fact.path, info)
+        return nativeUnavailable('the retained route changed during preparation')
+      }
       devices.set(fact.path, device)
     }
     if (withoutDevice(identity(info)) !== withoutDevice(fact.identity)
       || (fact.alias && (!info || withoutDevice(version(info)) !== withoutDevice(fact.alias.version) || target !== fact.alias.target))) {
+      if (fact.identity === null && info !== null) checkFile?.(fact.path, info)
       return nativeUnavailable('the retained route changed during preparation')
     }
     checkFile?.(fact.path, info)

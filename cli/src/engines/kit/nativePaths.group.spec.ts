@@ -3,7 +3,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { NativeEvidenceBudget } from './nativeEvidence.js'
-import { NativePaths } from './nativePaths.js'
+import { NativePaths, verifyNativePathFacts } from './nativePaths.js'
+import { IdentityReadUnavailable } from './identityScan.js'
 const observations = vi.hoisted(() => ({ reads: 0, count: false, change: null as { path: string; field: string } | null }))
 vi.mock('node:fs', async original => {
   const fs = await original<typeof import('node:fs')>()
@@ -115,4 +116,15 @@ it('refuses a grouped present-to-absent leaf before accepting the newer observat
   const after = observe(file)
   expect(() => after.snapshot()).not.toThrow()
   expect(() => NativePaths.snapshots([before, after])).toThrow(/between grouped observations/)
+})
+
+it.each(['no device map', 'first pass', 'later pass'])('a returning file callback cannot approve a new leaf on %s', shape => {
+  const file = join(root, 'new-file'), facts = observe(file).snapshot()
+  const devices = shape === 'no device map' ? undefined : new Map<string, bigint | null>()
+  if (shape === 'later pass') verifyNativePathFacts(facts, new NativeEvidenceBudget(), devices)
+  writeFileSync(file, '{}', { mode: 0o600 })
+  let leafCalls = 0
+  const callback = (path: string) => { if (path === file) leafCalls++ }
+  expect(() => verifyNativePathFacts(facts, new NativeEvidenceBudget(), devices, callback)).toThrow(IdentityReadUnavailable)
+  expect(leafCalls).toBe(1)
 })
