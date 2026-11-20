@@ -12,7 +12,8 @@ with `MAX_Y`, the text keeps its size).
 1. **Overview.** The app column on the left (the shown app's icon and name, and a grid glyph when there are other
    apps: a tap opens Apps), up to five agent cells, and the bell column on the right (a round button, a yellow badge
    with the unread count: a tap opens Inbox). A cell: a status rail along its top (working lavender, waiting yellow,
-   done green, failed red, idle dark), a faint glow of that colour from the top, the pet, the name, and the status word
+   done green, failed red, idle dark), a glow of that colour from the top (.18 waiting, .14 any other, none at rest;
+   the mockup's .08 did not show on the black ground, owner 20 Nov), the pet, the name, and the status word
    in the status colour ("Needs you", "Done", "Failed", "Resting", or the spinner word). More than five agents: a
    sideways swipe pages them; dots under the cells show the page, a yellow dot marks a page with a waiting agent.
    Order: the ring's own order (the daemon's fixed order per app), so an agent keeps its place.

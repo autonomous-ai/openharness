@@ -119,7 +119,8 @@ int max_chip(ht_scene_t *s, int x, int cy, const max_agent_t *a, bool small, int
 int max_chip_w(const max_agent_t *a, bool small, int max_w);
 // An Inbox notice's or Attention's colour by why it came.
 unsigned max_kind_ink(max_attn_t kind);
-// Its glow from the top of its column: a waiting agent's .18, a failure's .14, any other's .08, none at rest, in %;
+// Its glow from the top of its column: a waiting agent's .18, any other's .14 (a failure's, a working and a done one's;
+// the mockup's .08 did not show on the black ground), none at rest, in %;
 // and the glow's top over `under` as drawn at now_ms, a waiting one's breathing .18 to .05 and back every 1 s unless
 // `still`.
 unsigned max_glow_pct(const max_agent_t *a);

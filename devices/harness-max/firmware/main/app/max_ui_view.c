@@ -373,7 +373,8 @@ unsigned max_chip_ink(const max_agent_t *a) { return a->state == MAX_IDLE ? CHIP
 
 unsigned max_glow_pct(const max_agent_t *a)
 {
-    return a->state == MAX_ASKING ? 18 : a->state == MAX_FAILED ? 14 : a->state == MAX_IDLE ? 0 : 8;
+    // A working or done agent's .14, not the mockup's .08 (owner, 20 Nov): over the black ground .08 did not show.
+    return a->state == MAX_ASKING ? 18 : a->state == MAX_IDLE ? 0 : 14;
 }
 unsigned max_glow_top(const max_agent_t *a, unsigned under, uint32_t now_ms, bool still)
 {

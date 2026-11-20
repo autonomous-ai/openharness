@@ -175,8 +175,8 @@ static void test_rail(void)
     render(T0 + 250);   // a quarter round: .115
     const double g = keyframes(.25, .18, .05, ease_in_out);
     CHECK(near565(run_at(K_GRAD, a->x, 0)->fg, mix(WAIT, GROUND, g)));
-    // The working and the resting glows hold still.
-    CHECK(run_at(K_GRAD, b->x, 0)->fg == ht_rgb(max_mix(ACCENT, GROUND, 8)) && !run_at(K_GRAD, cell_of("c")->x, 0));
+    // The working and the resting glows hold still: the working one's .14 (max_glow_pct), the resting one none.
+    CHECK(run_at(K_GRAD, b->x, 0)->fg == ht_rgb(max_mix(ACCENT, GROUND, 14)) && !run_at(K_GRAD, cell_of("c")->x, 0));
 }
 
 // The pet over the breathing glow keeps the ground it was baked on. The cells' pets play (max_ui_overview.c): a frame

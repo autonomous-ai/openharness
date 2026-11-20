@@ -1015,9 +1015,29 @@ static void test_triangle_reach(void)
     CHECK(px[2 * 32 + 15] == ink && px[15 * 32 + 1] == 0);   // inside its middle, and outside a lower corner
 }
 
+// Each state's glow from the top of its cell: a waiting agent's .18; a failure's, a working and a done one's .14 (the
+// owner's of 20 Nov: at the mockup's .08 neither showed on the black ground); none at rest.
+static void test_glow(void)
+{
+    max_agent_t a = {0};
+    a.state = MAX_ASKING;
+    CHECK(max_glow_pct(&a) == 18);
+    a.state = MAX_FAILED;
+    CHECK(max_glow_pct(&a) == 14);
+    a.state = MAX_WORKING;
+    CHECK(max_glow_pct(&a) == 14);
+    CHECK(max_glow_top(&a, GROUND, T0, true) == max_mix(ACCENT, GROUND, 14));
+    a.state = MAX_DONE;
+    CHECK(max_glow_pct(&a) == 14);
+    CHECK(max_glow_top(&a, GROUND, T0, false) == max_mix(DONE, GROUND, 14));
+    a.state = MAX_IDLE;
+    CHECK(max_glow_pct(&a) == 0);
+}
+
 int main(void)
 {
     test_triangle_reach();
+    test_glow();
     test_budget();
     test_overview();
     test_agent_page();
