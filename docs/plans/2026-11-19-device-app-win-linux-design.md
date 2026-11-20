@@ -312,6 +312,39 @@ macOS, or the release is a partial ship. The same pull request carries both:
   The plan names the AppImage's place and the probe's rule. A Flutter test clicks through the flow as a person does.
   The design doc and gallery change only if the UI does.
 
+### 11. Installing on Linux (Ken, 2026-11-20: approach A, for Harness Device and Harness Desktop)
+
+Same cause for both apps: an AppImage from a browser is not executable, needs FUSE, and is not in the app list. This
+pull request fixes it for both, completely.
+
+1. **Self-integration on first run.** When Harness Device runs from an AppImage (`APPIMAGE` set), it writes
+   `~/.local/share/applications/harness-device.desktop` and its icon. The icon is taken from inside the image, with
+   no FUSE needed, and `StartupWMClass` matches the app's window.
+   - It follows the same rules as Desktop's `registerAppImageLauncher` (`desktop/lib/core/linux_app_image.dart`):
+     - an entry that points at an AppImage still on disk is left alone;
+     - a missing or stale entry is rewritten;
+     - a failure never fails a launch.
+   - There is one entry only. Desktop's installer writes the same name, under one rule for which writer owns the
+     file, as for the login entry (§4).
+2. **FUSE.** Both AppImages (the Device app's, and Desktop's from `release-desktop.yml`) must start on a clean Ubuntu
+   24.04 and 22.04 that has no `libfuse2`.
+   - If either needs FUSE, its build switches to the static type2 runtime, which needs no `libfuse2`, or to the
+     equivalent in Tauri's or Desktop's bundler. A double-click then just works.
+   - Only if that is truly impossible do the installer and the app say exactly what to run.
+   - Evidence: before and after, on the clean image.
+3. **One-line installer for Harness Device on Linux,** like Desktop's `website/scripts/desktop-install.sh`.
+   - It downloads the AppImage and checks its size and sha256 against the manifest.
+   - It places the file in `~/.local/opt`, writes the launcher entry and icon, and starts the app.
+   - The website serves it the way it serves Desktop's.
+   - `/device` shows the line to Linux visitors next to the AppImage link. `/device` is another component's page, so
+     the line is added the way that page shows things.
+4. **GNOME without the AppIndicator extension** stays a named difference: the app logs `tray: no host` once (§7).
+
+Each part has its check:
+- Desktop's flow: a Flutter test.
+- The installer: an end-to-end run in Ubuntu 24.04 (Podman or a GitHub runner).
+- The first-run self-integration: an end-to-end check.
+
 ## Named differences (OS limits)
 
 | Difference | Windows | Linux | Why |
