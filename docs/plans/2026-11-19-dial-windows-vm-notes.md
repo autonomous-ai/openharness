@@ -555,63 +555,85 @@ over SSH, on the tree at 3ff02e58e0.
 
 ## Task 23
 
-**Fails, on the branch and on the base alike: the test harness never sees the daemon become ready.** All four cases
-are skipped. The suite fails in `startWindowsDaemon` (`e2e/dialWindows.e2e.ts:47`). This is the step's open point,
-"ready lines under `start -f`": on Windows they do not come.
+**Fails on the branch: all four cases fail, as on the base.** The daemon starts and is ready, and the stand-in dial
+greets it. But the devices never open their pipe, so `harness device notify` still prints `no dial` after the greeting.
+The base fails the first case the same way, at the same line, as expected. The branch is not yet different from it:
+only the third case differs, in `daemon` (below). Nothing was fixed here.
 
-Run 2026-11-20 on the same VM, as the test user over SSH: build 26200, ARM64, Node v24.20.0, vitest 4.1.10. The tree
-was synced and `npm ci` run in `cli`, and the host was built.
+History: the first run (3ff02e58e0) never saw the daemon ready and skipped all four cases. The harness was fixed in
+831f4294d2: it follows `harness.log` for the ready lines, and on close it ends the pty host the run started.
+
+Run 2026-11-20 on the same VM, as the test user over SSH (session 0): build 26200, ARM64, Node v24.20.0, vitest 4.1.10.
+The branch at 34f195052f was synced with `vm-sync.sh --cli` (now with `store/` and `plugins/`), and the host was built
+with `cargo build --release --bins`. `cli`'s `package-lock.json` matched the VM's install, so `npm ci` was not run.
 - The command: in `cli`, `set E2E_BUNDLE=1`, `set HARNESS_PTY_BIN=C:\work\oh\pty\target\release\harness-pty.exe`,
   then `npx vitest run --config vitest.e2e.windows.config.ts`.
-- The second branch run also set `E2E_ARTIFACTS_DIR`, to keep the daemon's output.
+- The base: 3c3501b67c, the commit before Task 5's red commit (e8c49cde68). Its tree was `cli`, `store` and
+  `plugins` from `git archive`, plus the four files of this task from 34f195052f: `e2e/dialWindows.e2e.ts`,
+  `e2e/harness/windowsDaemon.ts`, `e2e/harness/fakeDial.ts` and `vitest.e2e.windows.config.ts`. Everything they
+  import is already on the base, with the same exported names, so nothing else was copied. Its `node_modules` was a
+  link to the branch's, since `package-lock.json` is the same. It ran with the branch's `harness-pty.exe`.
 
-| Tree | Result | Time |
+| Case | Branch, 34f195052f | Base, 3c3501b67c |
 | --- | --- | --- |
-| Branch, 3ff02e58e0 (twice) | suite failed, 4 skipped | 110.6 s (90.9 s in the suite) |
-| Base: 3c3501b67c, the commit before Task 5's red commit (e8c49cde68), with the four files of this task copied in from 3ff02e58e0 | suite failed, 4 skipped, at the same place | 112.2 s (91.2 s in the suite) |
+| `notify` says `no dial`, then `shown` after the greeting | **fail** (60:60): `no dial` after the greeting | **fail** (60:60): `no dial` after the greeting |
+| The Notifications setting over the pipe | **fail** (66:74): `askDevices` is `null` | **fail** (66:74): `null` |
+| `vscode link` names the pipe, token and record | **fail** (75:18): `{ daemon: true, devicesReady: false, devicesRecord }` | **fail** (75:18): `{ daemon: false, devicesReady: false }` |
+| Another token refused; no proof dropped | **fail**: `undefined is not a Harness pipe` (no `devicesPipe` from case 3) | **fail**: the same |
+| Suite | 4 failed, 35.2 s | 4 failed, 34.0 s |
 
-The base tree was made of `cli`, `store` and `plugins` from `git archive`, plus the four files
-(`e2e/dialWindows.e2e.ts`, `e2e/harness/windowsDaemon.ts`, `e2e/harness/fakeDial.ts`, `vitest.e2e.windows.config.ts`).
-Its `node_modules` was a link to the branch's, since `package-lock.json` is the same. On the base the first case
-never ran, so its `no dial` was not seen.
-
-The failing output (the same in all three runs):
+In both runs the first `notify` printed `no dial` as expected (line 55). The stand-in greeted, and the first list
+ended (lines 57-58). The failure is the second `notify`:
 
 ```
- FAIL  e2e/dialWindows.e2e.ts > the dial on Windows
-Error: EPERM, Permission denied: \\?\<profile>\AppData\Local\Temp\harness-dial-win-<id> '\\?\<profile>\AppData\Local\Temp\harness-dial-win-<id>'
- ❯ discard e2e/harness/windowsDaemon.ts:104:43
- ❯ close e2e/harness/windowsDaemon.ts:225:5
- ❯ startWindowsDaemon e2e/harness/windowsDaemon.ts:244:5
- ❯ e2e/dialWindows.e2e.ts:47:31
+ FAIL  e2e/dialWindows.e2e.ts > the dial on Windows > harness device notify says no dial before the dial greets, and shown after; the dial gets the line
+AssertionError: expected { code: +0, out: 'no dial' } to deeply equal { code: +0, out: 'shown' }
+ ❯ e2e/dialWindows.e2e.ts:60:60
+ FAIL  e2e/dialWindows.e2e.ts > the dial on Windows > the Notifications setting is answered over the pipe and kept in the data folder
+AssertionError: expected null to deeply equal { mode: 'you' }
+ ❯ e2e/dialWindows.e2e.ts:66:74
+ FAIL  e2e/dialWindows.e2e.ts > the dial on Windows > vscode link names the pipe, its token and its record, and a signed window stream stays open with the proof
+-   "devicesPipe": StringMatching /^\\\\\.\\pipe\\harness-[0-9a-f]{32}$/,
+-   "devicesReady": true,
++   "devicesReady": false,
+-   "devicesToken": StringMatching /^[0-9a-f]{64}$/,
+ ❯ e2e/dialWindows.e2e.ts:75:18
+ FAIL  e2e/dialWindows.e2e.ts > the dial on Windows > a request with another token is refused, and an answer without the proof is dropped
+Error: undefined is not a Harness pipe
+ ❯ newPipeNonce src/lib/windows/pipeAuth.ts:132:18
+ ❯ post e2e/dialWindows.e2e.ts:30:17
 ```
 
-What happened, from the processes and logs read while the second branch run was waiting:
-- **The daemon started, and was ready within 2 s.** Its `harness.log`, in the root's data folder, has
-  `[hooks] listening on 127.0.0.1:<port> (SessionStart/SessionEnd callbacks)`, `[cli] daemon pid … listening on
-  127.0.0.1:<port>`, `[cli] ready` and `[cable] cable: open on COM77 [usb E2E-DIAL]`. `GET /api/health` answered
-  `{"ok":true,"version":"0.0.1"}`. The stand-in ran as the core's children, `node.exe watch` and `node.exe open
-  COM77`, started from the work folder.
-- **`start -f`'s stdout and stderr held one line:** `[env] started with 50 variables; 0 left out
-  (docs/cli.md#the-daemons-environment)`. These are what `windowsDaemon.ts` reads. On Windows the core's lines go to
-  `harness.log` alone (`[harnessd] on Windows the services run in the core's process`). So `listeningPort(output)`
-  never finds the port, and `until('the daemon to answer on its port')` times out at 90 s.
-- **That error is hidden by the cleanup.** `close()` runs `harness stop`, and the daemon ends. But its pty host
-  (`harness-pty.exe serve --home <root>\<the profile>\.harness\pty --history-limit 2000 --no-reexec`) keeps running.
-  It holds `pty-host-p2-0.1.0.lock` in the root, so `discard()`'s `rmSync` throws `EPERM`, and that error replaces the
-  timeout's.
-- **The pty host was still running 5 minutes later.** It also holds the output of the SSH session that started the
-  run, so `ssh` did not return until the pty host was ended by hand. This happened in all three runs.
-- **Other setup.** The bundle (`build-bundle.mjs`) reads `store/` and `plugins/` beside `cli/`, and `vm-sync.sh --cli`
-  copies neither. The first try failed in the global setup with `ENOENT … store\agents\hachi\harness.json`. Both
-  folders were then copied to the VM with `tar`, as `vm-sync.sh` copies.
+The branch's daemon log (the same lines on the base), shortened:
 
-The open points of this task, as far as this run reached:
-- **The stand-in started from the daemon's working folder:** seen.
-- **Ready lines under `start -f`:** not there (above).
-- **A temp folder inside the profile:** the daemon took it. Its data folder under `%TEMP%`, inside the profile, was
-  accepted, and `daemon-token` and the daemon's record were written.
-- **The vscode stream without VS Code, and `daemon:true` in `link`:** not reached.
+```
+[env] started with 51 variables; 0 left out (docs/cli.md#the-daemons-environment)
+[harnessd] on Windows the services run in the core's process
+[terminal] ptyhost: available (p2-0.1.0)
+[hooks] listening on 127.0.0.1:<port> (SessionStart/SessionEnd callbacks)
+[hooks] listening on \\.\pipe\harness-<hex>
+[cli] ready
+[cable] cable: USB belongs to the account at this computer's screen — releasing this connection
+[cable] cable: open on COM77 [usb E2E-DIAL]
+[cable] cable: dial e2:e0:00:00:00:01 on fw 0.0.0-e2e proto 3 hw e2e [usb E2E-DIAL]
+[cable] cable: dial on the wire — this computer only (not signed in)
+[cable] cable: agents → 0 of 0 (requested) [usb E2E-DIAL]
+```
+
+There is no `[devices]` line: no `listener open`, and no `listener not opened`. A reading of the code, not checked
+further: on Windows the services run in the core's process (`masterProcess.ts`). There the core starts the devices
+(`core/main.ts`, `inline!.startDevices`) with no `listen`. Only `services/devicesProcess.ts` gives one ("the devices
+started inside the core's process are given none"). So the devices' pipe, its token and its record are never made on
+Windows.
+
+What the fixed harness did:
+- It saw the daemon ready from `harness.log` within about 2 s, and every case ran.
+- On close it ended the daemon and its pty host. Afterwards no `harness-pty.exe` or `node.exe` was running, and no
+  `harness-dial-win-*` root or `harness-e2e-bundle-*` folder was left in the test user's temp folder.
+- **The SSH session stayed open no longer than the run.** `ssh` returned when vitest ended, in 38 s (branch) and 37 s
+  (base).
+
+The base tree was removed from the VM after its run (the `node_modules` link first, then the folder).
 
 ## Task 25
 
