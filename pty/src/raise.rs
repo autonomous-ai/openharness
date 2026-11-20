@@ -197,6 +197,8 @@ mod windows {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::*;
 
     const SHOWN: Candidate = Candidate {
@@ -272,6 +274,45 @@ mod tests {
         ] {
             assert!(!code().contains(call), "{call}");
         }
+    }
+
+    fn ms(millis: u64) -> Duration {
+        Duration::from_millis(millis)
+    }
+
+    /// Windows may move the foreground after SetForegroundWindow returns: the answer is read again
+    /// after each change, within the time left.
+    #[test]
+    fn a_raise_waits_for_the_foreground_to_settle() {
+        let mut asked = 0;
+        let mut waited = Vec::new();
+        let in_front = || {
+            asked += 1;
+            asked == 3
+        };
+        let wait = |left| {
+            waited.push(left);
+            ms(10)
+        };
+        assert!(settles(ms(250), in_front, wait));
+        assert_eq!(waited, [ms(250), ms(240)]);
+    }
+
+    #[test]
+    fn a_foreground_kept_elsewhere_is_known_when_the_time_is_up() {
+        let mut waited = Duration::ZERO;
+        let wait = |left: Duration| {
+            let step = left.min(ms(100));
+            waited += step;
+            step
+        };
+        assert!(!settles(ms(250), || false, wait));
+        assert_eq!(waited, ms(250));
+    }
+
+    #[test]
+    fn a_window_already_in_front_is_answered_at_once() {
+        assert!(settles(ms(250), || true, |_| panic!("waited")));
     }
 
     /// A hung window answers no message, and ShowWindow on another process's window waits for the
