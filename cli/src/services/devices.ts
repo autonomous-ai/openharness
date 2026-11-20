@@ -1811,9 +1811,10 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     if (!observed || !herdr || !opencode) return
     // Only with herdr installed, read at each attach, as a tap needs it (herdr.ts): with none, no folder is watched
     // (~/.config, or the home folder, recursive on macOS) for a socket that never comes. herdr's zip on Windows puts it on
-    // no PATH: there its folder, which holds its marker once it has run, says so, and a tap runs the herdr that wrote the
-    // marker (herdrClient.ts binary).
-    const herdrInstalled = () => apps.onPath('herdr') !== null || (apps.platform === 'win32' && apps.exists(dirname(herdrAt.socketPath)))
+    // no PATH, and its folder appears only when it first runs, which may be after the dial came (the VM notes, Final head
+    // §6): there the source always runs, its watch on %APPDATA% itself until herdr's folder is there (never recursive),
+    // and a tap runs the herdr that wrote the marker (herdrClient.ts binary).
+    const herdrInstalled = () => apps.platform === 'win32' || apps.onPath('herdr') !== null
     part.call('herdr', () => on && herdrInstalled() ? herdr.start() : herdr.stop())
     // Only with Herdr installed, read at each attach as herdr's is: with none, no folder is watched for hc's socket.
     if (hcSource) part.call('herdr-app', () => on && herdrApp.binary() ? hcSource.start() : hcSource.stop())
