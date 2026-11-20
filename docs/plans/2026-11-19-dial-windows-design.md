@@ -75,6 +75,19 @@ does Windows.
     - The panel hint (part C, "What tells the apps apart") stays, its answer kept per editor by the hook.
     - Cursor is found on PATH and in its per-user folder only.
     - The VM's console steps need no person: the agent signs the test user in by autologon and removes it after.
+    - The Dell's pets (orchestrator, 2026-11-20): the run never stops for a custom pet and loses none. A desk that
+      talks to the dial first copies the owner's devices pets folder, reading only, into its own sealed devices
+      folder, so its greeting drops no pack. A first read records the dial's pet ids, and one more read after the run
+      says the pets are unchanged; that goes in the evidence. No pets folder while the dial holds no pet ids is an
+      empty copy. If the dial holds pet ids and the copy is not possible, or holds one the copied mapping does not
+      name, no such desk opens, and the orchestrator is told.
+    - The Dell runs only signed programs (orchestrator, 2026-11-20): Smart App Control is on there and stays on. The
+      branch's JS runs under the installed release's signed `node.exe`, with its signed `harness-serial.exe` and
+      `harness-pty.exe` (whose `ps` serves every process proof there); nothing built from the branch as an `.exe`
+      runs there: the desk and the CLI go over as plain JS bundled on the Mac, and scripts start hidden through
+      Windows' own `conhost.exe --headless`, with no `Add-Type`. So the tap's raise on x64 is checked on windows.yml
+      (x64) and measured on the VM (arm64), not on the Dell, and Ken's part on the Dell is the voice lines alone, to
+      herdr's panes, or to two panes of the run's own daemon if Smart App Control blocks herdr or WezTerm.
 13. **Claude Code's mod on Windows goes through the CLI (orchestrator, 2026-11-20, after the VM probe).** The mod
     runtime cannot reach a pipe and has no HMAC. macOS is the reference, so the standalone Claude Code session keeps its
     voice on Windows. A loopback TCP port on the core is out.
@@ -459,7 +472,7 @@ Reviewed revision: this file. Each line: answered / N/A because …
 
    `link` reports `devicesReady: false`, and the extension shows `unplugged`.
 10. **Platforms.** Windows 11 x64 and arm64. The UTM VM is arm64, and windows.yml covers x64 and arm64. A real x64
-    PC with a real dial (the Dell) runs the real-dial and x64 hand checks. macOS and Linux keep their paths, guarded
+    PC with a real dial (the Dell) runs the real-dial and x64 hand checks that need only signed programs. macOS and Linux keep their paths, guarded
     by their existing tests.
 
 ## Verification (outline; the plan details it)
@@ -478,9 +491,10 @@ Reviewed revision: this file. Each line: answered / N/A because …
   on the Dell (x64, `COM3`) by an isolated desk with its own data folder, in the owner's console session, that touches
   only what it installs. The one exception: the owner's Harness daemon is stopped to free `COM3` and started again as
   before afterwards, and the run checks it runs and holds `COM3` again. The dial is left as it was found: the run
-  writes its settings only after reading them first, writes them back exactly, and checks them. It does not greet a
-  dial that holds a custom pet, which a new desk would remove. Ken presses and speaks into the dial from one short list,
-  and the run does every other step.
+  writes its settings only after reading them first, writes them back exactly, and checks them. A desk greets the
+  dial only with a copy of the owner's pets, so no pack is removed, and the pets are checked unchanged at the end. Ken
+  speaks into the dial from one short list, and the run does every other step. Only signed programs run on the Dell
+  (Smart App Control stays on), so the raise is measured on the VM and checked for x64 on windows.yml.
   *Corrected 2026-11-20: this said the real dial stays on the Mac; a real Windows x64 PC with a real dial became
   available for testing.*
 
