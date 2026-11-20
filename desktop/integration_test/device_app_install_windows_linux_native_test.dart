@@ -30,6 +30,7 @@ import 'package:harness/core/runtime_architecture.dart';
 import 'package:harness/core/runtime_platform.dart';
 import 'package:harness/core/test_run.dart';
 import 'package:harness/devices/device_app.dart';
+import 'package:harness/devices/device_app_install_location_native.dart';
 import 'package:harness/devices/device_app_installer.dart';
 import 'package:harness/devices/device_app_launcher.dart';
 import 'package:harness/devices/device_app_probe.dart';
@@ -113,7 +114,9 @@ void main() {
       : TargetPlatform.linux;
   final os = Platform.isWindows ? 'windows' : 'linux';
   final arch = runtimeArchitecture;
-  final place =
+  // Asked each time, as the app asks: on Windows the installer registers
+  // where it went.
+  String place() =>
       deviceAppPlace(platform: platform) ??
       (throw StateError('No place for the app: no LOCALAPPDATA or HOME'));
   // The release's file name for this runner's key (device-manifest.py).
@@ -151,7 +154,7 @@ void main() {
   final files = <String, String>{};
 
   setUpAll(() async {
-    if (FileSystemEntity.typeSync(place, followLinks: false) !=
+    if (FileSystemEntity.typeSync(place(), followLinks: false) !=
         FileSystemEntityType.notFound) {
       throw StateError(
         'Harness Device is installed for this account already: this test '
@@ -196,7 +199,7 @@ void main() {
     if (Platform.isWindows) {
       await Process.run('taskkill', ['/IM', deviceAppWindowsExe, '/F']);
       await _until(() async => !await windowsDeviceAppRunning());
-      final folder = p.dirname(place);
+      final folder = p.dirname(place());
       final uninstaller = p.join(folder, 'uninstall.exe');
       if (File(uninstaller).existsSync()) {
         // It copies itself away and returns at once: what it removes is
@@ -221,7 +224,7 @@ void main() {
           break;
         }
       }
-      if (File(place).existsSync()) File(place).deleteSync();
+      if (File(place()).existsSync()) File(place()).deleteSync();
     }
   }
 
@@ -271,7 +274,7 @@ void main() {
       expect(result.installedAt, isNull);
       expect(runs, isEmpty);
       expect(
-        FileSystemEntity.typeSync(place, followLinks: false),
+        FileSystemEntity.typeSync(place(), followLinks: false),
         FileSystemEntityType.notFound,
       );
     },
@@ -305,9 +308,24 @@ void main() {
     final result = await installer().install();
 
     expect(result.failed, isNull);
-    expect(result.installedAt, place);
-    expect(File(place).existsSync(), isTrue);
+    expect(result.installedAt, place());
+    expect(File(place()).existsSync(), isTrue);
     expect(runs, [Platform.isWindows ? 'Harness-Device-setup.exe' : 'chmod']);
+    if (Platform.isWindows) {
+      // Read from the registry, where the installer registered its folder:
+      // for a first install, the default one.
+      expect(windowsDeviceAppInstallLocation(), isNotNull);
+      expect(
+        p.windows.equals(
+          place(),
+          deviceAppPlace(
+            platform: platform,
+            environment: Platform.environment,
+          )!,
+        ),
+        isTrue,
+      );
+    }
   });
 
   testWidgets('the probe sees it installed and running', (tester) async {
@@ -336,7 +354,7 @@ void main() {
             .readAsStringSync(encoding: latin1)
             .split('\x00');
         expect(environment.where((line) => line.startsWith('APPIMAGE=')), [
-          'APPIMAGE=$place',
+          'APPIMAGE=${place()}',
         ]);
       }
     },
@@ -345,18 +363,20 @@ void main() {
   testWidgets(
     'a second install is done at the place and installs nothing again',
     (tester) async {
-      final before = Platform.isWindows ? File(place).lastModifiedSync() : null;
+      final before = Platform.isWindows
+          ? File(place()).lastModifiedSync()
+          : null;
       runs.clear();
 
       final result = await installer().install();
 
       expect(result.failed, isNull);
-      expect(result.installedAt, place);
+      expect(result.installedAt, place());
       expect(runs, isEmpty);
       if (Platform.isWindows) {
-        expect(File(place).lastModifiedSync(), before);
+        expect(File(place()).lastModifiedSync(), before);
       } else {
-        expect(await _sha256Of(place), sha256);
+        expect(await _sha256Of(place()), sha256);
       }
     },
   );
@@ -374,7 +394,7 @@ void main() {
         'Type=Application\n'
         'Name=Harness Device\n'
         'Comment=The app for your Harness device.\n'
-        'Exec=${quoteLauncherExec(place)}\n'
+        'Exec=${quoteLauncherExec(place())}\n'
         'Icon=$icon\n'
         'Terminal=false\n'
         'Categories=Utility;\n',
@@ -391,7 +411,8 @@ void main() {
       await removeApp();
 
       expect(await windowsDeviceAppRunning(), isFalse);
-      expect(Directory(p.dirname(place)).existsSync(), isFalse);
+      expect(windowsDeviceAppInstallLocation(), isNull);
+      expect(Directory(p.dirname(place())).existsSync(), isFalse);
     },
   );
 

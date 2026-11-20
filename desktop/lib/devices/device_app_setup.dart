@@ -77,21 +77,27 @@ Future<bool> deviceAppInstallerSignedLikeDesktop(
 }
 
 /// How [platform] finds the app: LaunchServices on macOS; on Windows and Linux its place under [environment] (by
-/// default this process's) and this user's process list. [running] and [exists] stand in for the OS under test.
+/// default this process's) and this user's process list. [installLocation], [running] and [exists] stand in for the
+/// OS under test.
 @visibleForTesting
 DeviceAppProbe deviceAppProbeFor(
   TargetPlatform platform, {
   Map<String, String>? environment,
+  String? Function()? installLocation,
   Future<bool> Function()? running,
   Future<bool> Function(String path)? exists,
 }) => switch (platform) {
   TargetPlatform.windows => PlaceDeviceAppProbe(
-    place: deviceAppPlace(platform: platform, environment: environment),
+    place: () => deviceAppPlace(
+      platform: platform,
+      environment: environment,
+      installLocation: installLocation,
+    ),
     running: running ?? () => windowsDeviceAppRunning(environment: environment),
     exists: exists,
   ),
   TargetPlatform.linux => PlaceDeviceAppProbe(
-    place: deviceAppPlace(platform: platform, environment: environment),
+    place: () => deviceAppPlace(platform: platform, environment: environment),
     running: running ?? linuxDeviceAppRunning,
     exists: exists,
   ),
@@ -99,19 +105,26 @@ DeviceAppProbe deviceAppProbeFor(
 };
 
 /// How [platform] opens the app: `open` on macOS; on Windows and Linux, which have none, it starts the named path,
-/// else its place under [environment] (by default this process's), and fails with neither.
+/// else its place under [environment] (by default this process's), and fails with neither. [installLocation] stands
+/// in for the registry under test.
 @visibleForTesting
 DeviceAppOpen deviceAppOpenFor(
   TargetPlatform platform, {
   DeviceAppStart start = startDeviceAppDetached,
   Map<String, String>? environment,
+  String? Function()? installLocation,
 }) {
   if (platform != TargetPlatform.windows && platform != TargetPlatform.linux) {
     return ({String? path}) => openDeviceApp(runDeviceAppTool, path: path);
   }
-  final place = deviceAppPlace(platform: platform, environment: environment);
   return ({String? path}) async {
-    final app = path ?? place;
+    final app =
+        path ??
+        deviceAppPlace(
+          platform: platform,
+          environment: environment,
+          installLocation: installLocation,
+        );
     return app != null &&
         await startDeviceApp(app, start: start, environment: environment);
   };
@@ -146,7 +159,7 @@ DeviceAppInstaller deviceAppInstallerFor(
   dio: dio,
   run: run,
   platform: platform,
-  place: deviceAppPlace(platform: platform),
+  place: () => deviceAppPlace(platform: platform),
 );
 
 /// The offer with this OS's lookup, installer and opener. [supported] defaults to

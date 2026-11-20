@@ -70,7 +70,8 @@ class PlaceDeviceAppProbe implements DeviceAppProbe {
     this._exists,
   });
 
-  final String? _place;
+  /// Asked at each lookup: on Windows an install registers where it went.
+  final String? Function() _place;
 
   /// [windowsDeviceAppRunning] or [linuxDeviceAppRunning]. What it throws, [lookup] throws.
   final Future<bool> Function() _running;
@@ -81,7 +82,7 @@ class PlaceDeviceAppProbe implements DeviceAppProbe {
   @override
   Future<DeviceAppPresence> lookup() async {
     final running = await _running();
-    final place = _place;
+    final place = _place();
     return DeviceAppPresence(
       installed:
           running ||

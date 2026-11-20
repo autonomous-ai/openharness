@@ -153,14 +153,14 @@ class DeviceAppInstaller {
     Dio? dio,
     this._run = runDeviceAppTool,
     TargetPlatform? platform,
-    String? place,
+    String? Function()? place,
     this._launcher = writeDeviceAppLauncher,
     this._architecture,
     this._tempRoot,
     this._manifestTimeout = const Duration(seconds: 15),
     this._downloadTimeout = const Duration(minutes: 5),
   }) : _platform = platform ?? defaultTargetPlatform,
-       _place = place ?? deviceAppPlace(),
+       _place = place ?? deviceAppPlace,
        _dio =
            dio ??
            Dio(
@@ -177,7 +177,10 @@ class DeviceAppInstaller {
   final Dio _dio;
   final DeviceAppRun _run;
   final TargetPlatform _platform;
-  final String? _place;
+
+  /// Asked when it is needed: on Windows the installer registers where it
+  /// went.
+  final String? Function() _place;
   final Future<void> Function(String appImage) _launcher;
   final String? _architecture;
   final Directory? _tempRoot;
@@ -359,11 +362,15 @@ class DeviceAppInstaller {
   /// Windows: the app at the place, put there by the installer run silently
   /// (`/S`, per user, no admin) unless a copy is already there.
   Future<String> _runSetup(String setup) async {
-    final place = _place ?? (throw const _Refused());
+    final before = _place() ?? (throw const _Refused());
     // Never installed over: a copy already there, whoever put it, is the app.
-    if (File(place).existsSync()) return place;
+    if (File(before).existsSync()) return before;
     final ran = await _run(setup, const ['/S'], timeout: deviceAppSetupTimeout);
-    _require(ran.exitCode == 0 && File(place).existsSync());
+    _require(ran.exitCode == 0);
+    // Asked again: it installs where an earlier install went, and registers
+    // that folder.
+    final place = _place() ?? (throw const _Refused());
+    _require(File(place).existsSync());
     return place;
   }
 
@@ -371,7 +378,7 @@ class DeviceAppInstaller {
   /// there (the app updates itself in place). "There" as the lookup has it,
   /// through a link: a link whose file is gone is replaced by the rename.
   Future<String> _placeAppImage(String appImage) async {
-    final place = _place ?? (throw const _Refused());
+    final place = _place() ?? (throw const _Refused());
     if (FileSystemEntity.typeSync(place) != FileSystemEntityType.notFound) {
       return place;
     }
