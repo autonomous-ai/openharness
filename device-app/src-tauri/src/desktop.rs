@@ -207,13 +207,20 @@ mod tests {
     }
 
     #[test]
-    fn the_windows_desktop_app_is_its_launcher() {
-        let local = OsStr::new("/u/AppData/Local");
-        let launcher = Path::new("/u/AppData/Local").join("Programs").join("Harness").join("Harness.exe");
-        let there = |path: &Path| path == launcher;
-        assert_eq!(windows_desktop_app(Some(local), &there), Some(launcher.clone()));
-        assert_eq!(windows_desktop_app(Some(local), &|_: &Path| false), None);
-        assert_eq!(windows_desktop_app(None, &|_: &Path| true), None);
-        assert_eq!(windows_desktop_app(Some(OsStr::new("")), &|_: &Path| true), None);
+    fn the_windows_desktop_app_is_its_launcher_in_the_shells_user_programs_folder() {
+        // Absolute on each OS the test runs on.
+        let (programs, local) = (std::env::temp_dir().join("Redirected"), std::env::temp_dir().join("Local"));
+        let launcher = |folder: &Path| folder.join("Harness").join("Harness.exe");
+        let there = |path: &Path| path == launcher(&programs) || path == launcher(&local.join("Programs"));
+        let found = |programs: Option<&Path>, local: Option<&OsStr>| windows_desktop_app(programs, local, &there);
+        // FOLDERID_UserProgramFiles, which a managed PC may redirect away from LOCALAPPDATA.
+        assert_eq!(found(Some(&programs), Some(local.as_os_str())), Some(launcher(&programs)));
+        // `%LOCALAPPDATA%\Programs` only when the shell names no folder.
+        assert_eq!(found(None, Some(local.as_os_str())), Some(launcher(&local.join("Programs"))));
+        assert_eq!(windows_desktop_app(Some(&programs), Some(local.as_os_str()), &|_: &Path| false), None);
+        // A relative folder would be under the app's working folder.
+        for relative in [None, Some(OsStr::new("")), Some(OsStr::new(r"AppData\Local"))] {
+            assert_eq!(windows_desktop_app(Some(Path::new("Programs")), relative, &|_: &Path| true), None);
+        }
     }
 }
