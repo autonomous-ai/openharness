@@ -209,10 +209,18 @@ mod tests {
 
     /// This file's code without its tests, which name the calls they look for.
     fn code() -> &'static str {
-        include_str!("raise.rs")
-            .split_once("#[cfg(test)]\nmod tests")
-            .unwrap()
-            .0
+        before_tests(include_str!("raise.rs"))
+    }
+
+    fn before_tests(source: &str) -> &str {
+        source.split_once("#[cfg(test)]\nmod tests").unwrap().0
+    }
+
+    /// A Windows checkout (Git's autocrlf, as on GitHub's Windows runners) ends lines with CRLF.
+    #[test]
+    fn the_code_is_found_in_a_crlf_checkout() {
+        let crlf = include_str!("raise.rs").replace('\n', "\r\n");
+        assert_eq!(before_tests(&crlf), code().replace('\n', "\r\n"));
     }
 
     #[test]
