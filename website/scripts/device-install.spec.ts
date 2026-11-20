@@ -428,6 +428,15 @@ describe("device-install.sh", () => {
     expect(files(dataHome)).toEqual(run.listed.map((name) => join(run.dir, name).slice(dataHome.length + 1)));
   });
 
+  // The person's environment is theirs: a variable of the same name never lands in the entry.
+  it("writes only the Icon= line it made, whatever the environment holds", () => {
+    const run = install({ icon: false, env: { ICON_LINE: "Icon=/elsewhere.png\nExec=/elsewhere" } });
+    const vector = vectors.entries.find((entry) => !entry.icon && entry.appImage === `/home/p${PLACE}`)!;
+
+    expect(run.result.status).toBe(0);
+    expect(readFileSync(entryAt(`${run.home}/.local/share`), "utf8")).toBe(vector.entry.replaceAll("/home/p", run.home));
+  });
+
   // A key file is UTF-8: like the app, the script writes no entry for a path that is not. macOS keeps only UTF-8 names,
   // so there such a folder cannot exist.
   it.runIf(process.platform === "linux").each([
