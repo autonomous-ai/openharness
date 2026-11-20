@@ -36,7 +36,7 @@ static int checks;
 
 // ---- the recorder --------------------------------------------------------------------------------------
 enum { EV_STATS, EV_LINK, EV_AGENTS, EV_SWARMS, EV_LIBRARY, EV_CONTEXT, EV_TURN, EV_SUMMARY, EV_QUESTION, EV_QCLOSE, EV_FOCUS,
-       EV_VOICE, EV_MACHINES, EV_NREPLACE, EV_NSEEN };
+       EV_VOICE, EV_MACHINES, EV_NREPLACE, EV_NSEEN, EV_APPS };
 typedef struct { int kind; char id[64]; char a[2400], b[2400], c[2400], d[128]; long n1, n2, n3, n4, n5; } ev_t;
 #define EV_MAX 64
 static ev_t evs[EV_MAX];
@@ -47,6 +47,7 @@ static cable_tile_t rec_tiles[SWARM_TILES_MAX];
 static char rec_agent_ids[POD_AGENTS_MAX][ID_MAX];
 static char rec_agent_hosts[POD_AGENTS_MAX][16];
 static uint8_t rec_agent_caps_off[POD_AGENTS_MAX];
+static cable_app_t rec_apps[CABLE_APPS_MAX];
 
 static ev_t *add(int kind, const char *id)
 {
@@ -125,6 +126,15 @@ void pro_app_machines(const cable_machine_t *rows, int count, const char *select
     ev_t *e = add(EV_MACHINES, NULL); e->n1 = count; put(e->a, selected);
     if (count > 0) put(e->b, rows[0].name);
 }
+void pro_app_apps(const cable_app_t *rows, int n, const char *shown)
+{
+    ev_t *e = add(EV_APPS, NULL); e->n1 = n; put(e->a, shown);
+    memcpy(rec_apps, rows, (size_t)n * sizeof *rows);
+}
+// Outside evs[]: every welcome calls it, and the checks that a welcome makes one EV_LINK stay as they are.
+static int apps_switch_calls, apps_switch_at;
+static bool apps_switch_on;
+void pro_app_apps_switch(bool on) { apps_switch_calls++; apps_switch_on = on; apps_switch_at = nev; }
 
 // ---- stubs for everything below pro_cable ---------------------------------------------------------------
 static char sent[16][8192];
@@ -250,6 +260,21 @@ static bool utf8_ok(const char *s)
         while (n--) { if ((*p & 0xC0) != 0x80) return false; p++; }
     }
     return true;
+}
+// An `apps` frame of n rows a0, a1, ... whose names are name_len bytes of 'n'. The caller frees it.
+static char *apps_frame(int n, int name_len)
+{
+    char *name = repeat("n", name_len), *s = NULL;
+    size_t len = 0;
+    FILE *f = open_memstream(&s, &len);
+    CHECK(f);
+    fputs("{\"t\":\"apps\",\"shown\":\"a0\",\"apps\":[", f);
+    for (int i = 0; i < n; i++)
+        fprintf(f, "%s{\"id\":\"a%d\",\"name\":\"%s\",\"count\":3,\"waiting\":1,\"working\":1}", i ? "," : "", i, name);
+    fputs("]}", f);
+    fclose(f);
+    free(name);
+    return s;
 }
 static void welcome(void)
 {
@@ -672,6 +697,9 @@ static void *parse_heavy(void *arg)
         feed("{\"t\":\"agent\",\"id\":\"a\",\"name\":\"Alpha\",\"engine\":\"claude\",\"machineId\":\"m1\",\"machine\":\"Mac\"}");
         feed("{\"t\":\"agents.end\"}");
         feed("{\"t\":\"voice.transcript\",\"agentId\":\"a\",\"needsConfirm\":true,\"routeId\":\"r\"}");
+        char *apps = apps_frame(CABLE_APPS_MAX, 23);
+        feed(apps);
+        free(apps);
     }
     free(big);
     CHECK(nev > 10);
@@ -1250,6 +1278,91 @@ static void agents_end_view_and_tab(void)
     }
 }
 
+static bool app_is(int i, const char *id, const char *name, int count, int waiting, int working)
+{
+    const cable_app_t *a = &rec_apps[i];
+    return !strcmp(a->id, id) && !strcmp(a->name, name) && a->count == count && a->waiting == waiting && a->working == working;
+}
+
+// The whole list each time; a list that is not an array keeps the last; `shown` is kept as sent when it fits.
+static void apps_rows(void)
+{
+    welcome();
+    reset();
+    feed("{\"t\":\"apps\",\"shown\":\"codex\",\"apps\":[{\"id\":\"codex\",\"name\":\"ChatGPT\",\"count\":3,\"waiting\":1,\"working\":2},"
+         "{\"id\":\"vscode\",\"name\":\"VS Code\",\"count\":1,\"waiting\":0}]}");
+    CHECK(nev == 1 && evs[0].kind == EV_APPS && evs[0].n1 == 2 && !strcmp(evs[0].a, "codex"));
+    CHECK(app_is(0, "codex", "ChatGPT", 3, 1, 2) && app_is(1, "vscode", "VS Code", 1, 0, 0));
+    reset();
+    feed("{\"t\":\"apps\",\"apps\":{}}");
+    feed("{\"t\":\"apps\"}");
+    CHECK(nev == 0);
+    feed("{\"t\":\"apps\",\"apps\":[]}");
+    CHECK(nev == 1 && evs[0].kind == EV_APPS && evs[0].n1 == 0 && !strcmp(evs[0].a, ""));
+    reset();
+    feed("{\"t\":\"apps\",\"shown\":\"warp\",\"apps\":[{\"id\":\"codex\",\"name\":\"ChatGPT\",\"count\":1}]}");
+    CHECK(nev == 1 && evs[0].n1 == 1 && !strcmp(evs[0].a, "warp"));   // names no row: the round keeps it too
+    static const char *shown[] = {",\"shown\":\"abcdefghijklmnop\"", "", ",\"shown\":7"};
+    for (int i = 0; i < 3; i++) {
+        reset();
+        feedf("{\"t\":\"apps\"%s,\"apps\":[]}", shown[i]);
+        CHECK(nev == 1 && evs[0].kind == EV_APPS && !strcmp(evs[0].a, ""));
+    }
+}
+
+// One row with the given count fields, and what it became.
+static void app_counts(const char *fields, int count, int waiting, int working)
+{
+    reset();
+    feedf("{\"t\":\"apps\",\"apps\":[{\"id\":\"x\",\"name\":\"X\"%s}]}", fields);
+    CHECK(nev == 1 && evs[0].kind == EV_APPS && evs[0].n1 == 1 && app_is(0, "x", "X", count, waiting, working));
+}
+
+// As the round's handle_apps: 16 rows at most, an id that does not fit or repeats is dropped, names cut on a letter,
+// counts whole and clamped to 0..255, then waiting and working to count.
+static void apps_bounds(void)
+{
+    welcome();
+    reset();
+    char *seventeen = apps_frame(17, 3);
+    feed(seventeen);
+    free(seventeen);
+    CHECK(nev == 1 && evs[0].n1 == 16 && !strcmp(rec_apps[15].id, "a15"));
+    reset();
+    feed("{\"t\":\"apps\",\"apps\":[{\"id\":\"\"},{\"id\":\"abcdefghijklmnop\"},{\"id\":3},{\"name\":\"none\"},"
+         "{\"id\":\"abcdefghijklmno\"},{\"id\":\"x\",\"name\":\"first\"},{\"id\":\"x\",\"name\":\"second\"}]}");
+    CHECK(nev == 1 && evs[0].n1 == 2 && app_is(0, "abcdefghijklmno", "", 0, 0, 0) && app_is(1, "x", "first", 0, 0, 0));
+    reset();
+    char *name = repeat("a", 22);
+    feedf("{\"t\":\"apps\",\"apps\":[{\"id\":\"x\",\"name\":\"%s\xC3\xA9\"}]}", name);
+    CHECK(nev == 1 && evs[0].n1 == 1 && !strcmp(rec_apps[0].name, name) && utf8_ok(rec_apps[0].name));
+    free(name);
+    app_counts(",\"count\":-1", 0, 0, 0);
+    app_counts(",\"count\":300,\"waiting\":300,\"working\":300", 255, 255, 255);
+    app_counts(",\"count\":\"3\"", 0, 0, 0);
+    app_counts(",\"count\":2.7", 2, 0, 0);
+    app_counts(",\"count\":1e999", 255, 0, 0);
+    app_counts(",\"count\":2,\"waiting\":5,\"working\":9", 2, 2, 2);
+    app_counts(",\"count\":0,\"waiting\":2", 0, 0, 0);
+    app_counts("", 0, 0, 0);
+}
+
+// Every welcome says apps.switch again, a keepalive one too: a daemon that restarted inside the silence window may have
+// dropped it. A first welcome says it before the link comes up.
+static void apps_switch_on_every_welcome(void)
+{
+    end_session();
+    reset();
+    apps_switch_calls = 0;
+    apps_switch_at = -1;
+    feed("{\"t\":\"welcome\",\"machine\":{\"id\":\"m1\",\"name\":\"Mac\"},\"features\":[\"apps.switch\"]}");
+    CHECK(apps_switch_calls == 1 && apps_switch_on && apps_switch_at == 0);
+    CHECK(nev == 1 && evs[0].kind == EV_LINK);
+    feed("{\"t\":\"welcome\",\"machine\":{\"id\":\"m1\",\"name\":\"Mac\"},\"features\":[]}");
+    CHECK(apps_switch_calls == 2 && !apps_switch_on);
+    CHECK(nev == 1);   // a keepalive: no new EV_LINK
+}
+
 int main(void)
 {
     pro_cable_start();   // the lock and the machine table; no tasks run on the host
@@ -1280,6 +1393,9 @@ int main(void)
     question_tier_list();
     agent_host_and_caps();
     agents_end_view_and_tab();
+    apps_rows();
+    apps_bounds();
+    apps_switch_on_every_welcome();
     printf("test_pro_cable: %d checks passed\n", checks);
     return 0;
 }

@@ -2054,6 +2054,24 @@ static void see_it_notice_lasts_two_seconds(void) {
     CHECK(LOCK_DEPTH == 0);
 }
 
+// The app list and apps.switch reach the model under the one lock; the same list again costs no redraw; a drop clears them.
+static void apps_reach_the_model(void) {
+    setup();
+    (void)pro_app_test_take_dirty();
+    static const cable_app_t rows[2] = {{"codex", "ChatGPT", 3, 1, 2}, {"vscode", "VS Code", 1, 0, 0}};
+    pro_app_apps(rows, 2, "codex");
+    CHECK(LOCK_DEPTH == 0);
+    CHECK(U.model.app_count == 2 && U.model.apps[0].working == 2 && !strcmp(U.model.apps[1].id, "vscode"));
+    CHECK(!strcmp(U.model.app_shown, "codex") && pro_app_test_take_dirty());
+    pro_app_apps(rows, 2, "codex");
+    CHECK(!pro_app_test_take_dirty());
+    pro_app_apps_switch(true);
+    CHECK(LOCK_DEPTH == 0 && U.model.apps_switch && pro_app_test_take_dirty());
+    pro_app_link(false, NULL);
+    CHECK(U.model.app_count == 0 && !U.model.apps_switch && !strcmp(U.model.app_shown, ""));
+    CHECK(LOCK_DEPTH == 0);
+}
+
 // A question's entry goes whenever the question ends: a new turn, a finished turn, a link drop.
 static void notify_question_entry_ends_with_question(void) {
     notif_room();
@@ -2478,7 +2496,7 @@ int main(int argc, char **argv) {
         {"pro_app_test_voice_paths", pro_app_test_voice_paths}, {"pro_app_test_touch_rules", pro_app_test_touch_rules},
         {"pro_app_test_roster_and_swarms", pro_app_test_roster_and_swarms}, {"side_button", side_button}, {"side_button_console", side_button_console}, {"question_needs_the_link", question_needs_the_link},
         {"notify_banner_beep_and_expiry", notify_banner_beep_and_expiry}, {"notify_tap_opens_and_swipe_dismisses", notify_tap_opens_and_swipe_dismisses},
-        {"notify_never_over_talk", notify_never_over_talk}, {"notify_tiers", notify_tiers}, {"notify_question_and_error", notify_question_and_error}, {"notify_entries_expire", notify_entries_expire}, {"notify_question_entry_ends_with_question", notify_question_entry_ends_with_question}, {"notify_question_resent_after_relink_is_quiet", notify_question_resent_after_relink_is_quiet}, {"notify_question_same_prompt_new_request_beeps", notify_question_same_prompt_new_request_beeps}, {"question_list_tier_is_quiet", question_list_tier_is_quiet}, {"agents_carry_app_and_view", agents_carry_app_and_view}, {"voice_needs_the_v_cap", voice_needs_the_v_cap}, {"see_it_notice_lasts_two_seconds", see_it_notice_lasts_two_seconds},{"notify_replace_seen_and_read", notify_replace_seen_and_read},
+        {"notify_never_over_talk", notify_never_over_talk}, {"notify_tiers", notify_tiers}, {"notify_question_and_error", notify_question_and_error}, {"notify_entries_expire", notify_entries_expire}, {"notify_question_entry_ends_with_question", notify_question_entry_ends_with_question}, {"notify_question_resent_after_relink_is_quiet", notify_question_resent_after_relink_is_quiet}, {"notify_question_same_prompt_new_request_beeps", notify_question_same_prompt_new_request_beeps}, {"question_list_tier_is_quiet", question_list_tier_is_quiet}, {"agents_carry_app_and_view", agents_carry_app_and_view}, {"voice_needs_the_v_cap", voice_needs_the_v_cap}, {"see_it_notice_lasts_two_seconds", see_it_notice_lasts_two_seconds}, {"apps_reach_the_model", apps_reach_the_model},{"notify_replace_seen_and_read", notify_replace_seen_and_read},
         {"ota_screen_and_touch", ota_screen_and_touch}, {"voice_refused_while_updating", voice_refused_while_updating},
         {"update_gate", update_gate}, {"ota_failed_returns", ota_failed_returns}, {"ota_keeps_awake", ota_keeps_awake},
         {"ota_notifications_quiet", ota_notifications_quiet}, {"updated_notice", updated_notice},
