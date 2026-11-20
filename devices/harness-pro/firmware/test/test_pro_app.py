@@ -46,6 +46,7 @@ code = r'''
 #include "sys/last_words.h"
 #include "pro_display.h"
 #include "pro_frame.h"
+#include "home/ph.h"
 
 #include "esp_heap_caps.h"
 #include "esp_task_wdt.h"
@@ -2099,6 +2100,124 @@ static void apps_forgotten_on_another_computer(void) {
     CHECK(LOCK_DEPTH == 0);
 }
 
+// ---- the Apps screen, fed through the wire entries as the daemon feeds them ----------------------------------------
+static const cable_app_t APP_ROWS[3] = {{"harness", "Harness", 3, 0, 1}, {"codex", "ChatGPT", 2, 0, 1}, {"vscode", "VS Code", 1, 0, 0}};
+// setup()'s three agents, and with `ring` ChatGPT's two threads a5 and a6 (voice and approval withheld: caps "sf").
+static void feed_agents(bool ring, bool machine_view, bool tab_open) {
+    static const pro_agent_row_t rows[5] = {
+        {.id = "a1", .name = "Alpha", .engine = "claude", .machine = "mac"}, {.id = "a2", .name = "Bravo", .engine = "codex", .machine = "mac"},
+        {.id = "a3", .name = "Charlie", .engine = "claude", .machine = "mac"},
+        {.id = "a5", .name = "Thread one", .engine = "codex", .machine = "mac", .host = "codex", .caps_off = POD_CAP_V | POD_CAP_A},
+        {.id = "a6", .name = "Thread two", .engine = "codex", .machine = "mac", .host = "codex", .caps_off = POD_CAP_V | POD_CAP_A}};
+    pro_app_agents(rows, ring ? 5 : 3, machine_view, tab_open);
+}
+static bool text_in(const char *t, uint32_t rgb) {
+    for (int i = 0; i < S.count; i++)
+        if (S.runs[i].pro_kind == K_TEXT && !strcmp(S.runs[i].text, t)) return S.runs[i].fg == ht_rgb(rgb);
+    return false;
+}
+static int frame_tab(void) { return U.nav.stack[U.nav.depth - 1].tab; }
+// setup() with apps.switch and the app list, Harness shown; Apps chosen on the pill, then ChatGPT's card picked.
+static void pick_codex(void) {
+    setup();
+    pro_app_apps_switch(true);
+    pro_app_apps(APP_ROWS, 3, "harness");
+    render();
+    tap(POD_A_HOME_APPS, 0);
+    tap(POD_A_PICK_APP, 1);
+    CHECK(R.picks == 1 && !strcmp(R.pick_app, "codex") && U.nav.depth == 1 && !strcmp(U.landing, "codex"));
+}
+
+static void apps_click_through(void) {
+    setup();
+    pro_app_apps_switch(true);
+    pro_app_apps(APP_ROWS, 3, "harness");
+    render();
+    CHECK(hit(POD_A_HOME_TABS, 0) && hit(POD_A_HOME_APPS, 0) && text_in("Tabs", PH_INK) && text_in("Apps", PH_MUTED));
+    tap(POD_A_HOME_APPS, 0);
+    CHECK(U.nav.home_apps && U.nav.stack[0].scroll == POD_HOME_APP0 && hit(POD_A_PICK_APP, 1) && text_in("Apps", PH_INK));
+    swipe_next();
+    CHECK(U.nav.depth == 1 && !strcmp(U.nav.home_app, "vscode") && hit(POD_A_PICK_APP, 2));
+    swipe_prev();
+    CHECK(U.nav.depth == 1 && !strcmp(U.nav.home_app, "codex") && hit(POD_A_PICK_APP, 1));
+    tap(POD_A_PICK_APP, 1);
+    CHECK(R.picks == 1 && !strcmp(R.pick_app, "codex") && R.opens == 0 && U.nav.depth == 1);
+    // The daemon's answer: the Mac shows ChatGPT, then its agents. The landing sends no agent.open: the pick turned the ring.
+    pro_app_apps(APP_ROWS, 3, "codex");
+    feed_agents(true, false, true);
+    render();
+    CHECK(U.nav.depth == 3 && !strcmp(cur(), "a5") && frame_tab() == POD_TAB_APP && R.opens == 0 && R.picks == 1);
+    swipe_next();
+    CHECK(!strcmp(cur(), "a6") && frame_tab() == POD_TAB_APP && R.opens == 1 && !strcmp(R.open_id, "a6") && R.picks == 0);
+    swipe_next();
+    CHECK(!strcmp(cur(), "a5") && R.picks == 0);
+    drag(360, 700, 360, 560, 8);   // up from the bottom edge: Home, on the app's card
+    CHECK(U.nav.depth == 1 && U.nav.home_apps && U.nav.stack[0].scroll == POD_HOME_APP0 && !strcmp(U.nav.home_app, "codex") && R.picks == 0);
+    U.model.selected = 1;   // the window's tab is Frontend (a swarms feed saying so would follow it into the tab)
+    tap(POD_A_HOME_TABS, 0);
+    CHECK(!U.nav.home_apps && U.nav.stack[0].scroll == 1 && R.picks == 0);   // the selected tab
+    // The agents first (Harness still shown), the apps frame second: the room opens on the apps frame.
+    pick_codex();
+    feed_agents(true, false, true);
+    CHECK(U.nav.depth == 1 && !strcmp(U.landing, "codex"));
+    pro_app_apps(APP_ROWS, 3, "codex");
+    CHECK(U.nav.depth == 3 && !strcmp(cur(), "a5") && frame_tab() == POD_TAB_APP && !U.landing[0]);
+    CHECK(LOCK_DEPTH == 0);
+}
+
+// No window (no tab, the machine view): Home is the app cards, Harness's among them, and no pill.
+static void apps_without_a_window(void) {
+    setup();
+    static cable_swarm_members_t none;
+    pro_app_swarms(NULL, 0, &none, "", NULL, 0);
+    feed_agents(false, true, false);
+    pro_app_apps_switch(true);
+    pro_app_apps(APP_ROWS, 3, "harness");
+    render();
+    CHECK(!U.model.has_window && U.nav.stack[0].scroll == POD_HOME_WORKING);   // a1 works: Home stays on that card
+    swipe_next();
+    CHECK(U.nav.depth == 1 && U.nav.stack[0].scroll == POD_HOME_APP0 && hit(POD_A_PICK_APP, 0));
+    CHECK(!hit(POD_A_HOME_TABS, 0) && !hit(POD_A_HOME_APPS, 0) && !text_in("Tabs", PH_INK) && !text_in("Tabs", PH_MUTED));
+    CHECK(LOCK_DEPTH == 0);
+}
+
+// Harness alone is no other app: the frame is the one an apps-less daemon draws.
+static void no_other_app_no_pill(void) {
+    setup();
+    pro_app_apps_switch(true);
+    render();
+    const int runs = S.count, hits = U.frame.hit_count;
+    static pod_hit_t before[32];
+    memcpy(before, U.frame.hits, sizeof before);
+    pro_app_apps(APP_ROWS, 1, "harness");
+    render();
+    CHECK(!hit(POD_A_HOME_TABS, 0) && !hit(POD_A_HOME_APPS, 0));
+    CHECK(S.count == runs && U.frame.hit_count == hits && !memcmp(before, U.frame.hits, (size_t)hits * sizeof before[0]));
+}
+
+// A ChatGPT thread's room: a tap there never reaches the recorder and says where to see it.
+static void no_voice_room_says_where(void) {
+    pick_codex();
+    pro_app_apps(APP_ROWS, 3, "codex");
+    feed_agents(true, false, true);
+    render();
+    CHECK(U.nav.depth == 3 && !strcmp(cur(), "a5"));
+    tap_talk();
+    CHECK(R.begins == 0 && !V.open && U.notice_on && !strcmp(U.notice, "See it in ChatGPT"));
+}
+
+// The link moving to another computer forgets the last one's apps through the glue: a pick waiting there ends, and the new
+// computer showing an app of the same id opens nothing.
+static void another_computer_ends_the_landing(void) {
+    pick_codex();
+    pro_app_link(true, "box");
+    CHECK(U.model.app_count == 0 && !U.landing[0]);
+    pro_app_apps(APP_ROWS, 3, "codex");
+    feed_agents(true, false, true);
+    CHECK(U.nav.depth == 1 && R.opens == 0);
+    CHECK(LOCK_DEPTH == 0);
+}
+
 // A question's entry goes whenever the question ends: a new turn, a finished turn, a link drop.
 static void notify_question_entry_ends_with_question(void) {
     notif_room();
@@ -2523,7 +2642,10 @@ int main(int argc, char **argv) {
         {"pro_app_test_voice_paths", pro_app_test_voice_paths}, {"pro_app_test_touch_rules", pro_app_test_touch_rules},
         {"pro_app_test_roster_and_swarms", pro_app_test_roster_and_swarms}, {"side_button", side_button}, {"side_button_console", side_button_console}, {"question_needs_the_link", question_needs_the_link},
         {"notify_banner_beep_and_expiry", notify_banner_beep_and_expiry}, {"notify_tap_opens_and_swipe_dismisses", notify_tap_opens_and_swipe_dismisses},
-        {"notify_never_over_talk", notify_never_over_talk}, {"notify_tiers", notify_tiers}, {"notify_question_and_error", notify_question_and_error}, {"notify_entries_expire", notify_entries_expire}, {"notify_question_entry_ends_with_question", notify_question_entry_ends_with_question}, {"notify_question_resent_after_relink_is_quiet", notify_question_resent_after_relink_is_quiet}, {"notify_question_same_prompt_new_request_beeps", notify_question_same_prompt_new_request_beeps}, {"question_list_tier_is_quiet", question_list_tier_is_quiet}, {"agents_carry_app_and_view", agents_carry_app_and_view}, {"voice_needs_the_v_cap", voice_needs_the_v_cap}, {"see_it_notice_lasts_two_seconds", see_it_notice_lasts_two_seconds}, {"apps_reach_the_model", apps_reach_the_model}, {"apps_forgotten_on_another_computer", apps_forgotten_on_another_computer}, {"app_pick_reaches_the_cable", app_pick_reaches_the_cable}, {"notify_replace_seen_and_read", notify_replace_seen_and_read},
+        {"notify_never_over_talk", notify_never_over_talk}, {"notify_tiers", notify_tiers}, {"notify_question_and_error", notify_question_and_error}, {"notify_entries_expire", notify_entries_expire}, {"notify_question_entry_ends_with_question", notify_question_entry_ends_with_question}, {"notify_question_resent_after_relink_is_quiet", notify_question_resent_after_relink_is_quiet}, {"notify_question_same_prompt_new_request_beeps", notify_question_same_prompt_new_request_beeps}, {"question_list_tier_is_quiet", question_list_tier_is_quiet}, {"agents_carry_app_and_view", agents_carry_app_and_view}, {"voice_needs_the_v_cap", voice_needs_the_v_cap}, {"see_it_notice_lasts_two_seconds", see_it_notice_lasts_two_seconds}, {"apps_reach_the_model", apps_reach_the_model}, {"apps_forgotten_on_another_computer", apps_forgotten_on_another_computer}, {"app_pick_reaches_the_cable", app_pick_reaches_the_cable},
+        {"apps_click_through", apps_click_through}, {"apps_without_a_window", apps_without_a_window}, {"no_other_app_no_pill", no_other_app_no_pill},
+        {"no_voice_room_says_where", no_voice_room_says_where}, {"another_computer_ends_the_landing", another_computer_ends_the_landing},
+        {"notify_replace_seen_and_read", notify_replace_seen_and_read},
         {"ota_screen_and_touch", ota_screen_and_touch}, {"voice_refused_while_updating", voice_refused_while_updating},
         {"update_gate", update_gate}, {"ota_failed_returns", ota_failed_returns}, {"ota_keeps_awake", ota_keeps_awake},
         {"ota_notifications_quiet", ota_notifications_quiet}, {"updated_notice", updated_notice},
