@@ -109,7 +109,9 @@ folders. `child_env` joins PATH with `;` on Windows (today it always uses `:`) a
   `:506-518`), which needs a terminal for the password. As Desktop does (`environment_provisioner.dart:479-493`, `:954`),
   the app runs the `--host` line in a visible terminal, chosen in Desktop's order, with fixed arguments; the Install
   screen shows one short step line while the terminal runs (copy in the design doc's style, e.g. `Finish in the
-  terminal…`), and the run's end is read the way Desktop reads it. Then `--desktop` runs in the background as on macOS.
+  terminal…`), and the run's end is read the way Desktop reads it. A terminal that never runs the script within 30 s
+  fails with `The terminal did not open.`; with no terminal at all the line runs behind the screen, as on macOS, and
+  where it needs a password install.sh's own lines say what to run. Then `--desktop` runs in the background as on macOS.
   Named difference (harness-pm, 2026-11-19). The terminal command joins the "Fixed arguments" list.
 - **Windows:** one line, the Desktop app's Windows command word for word (`windowsInstallCommand` in
   `desktop/lib/bootstrap/environment_provisioner.dart:95-119`: Windows PowerShell by its full path, `install.ps1
@@ -125,7 +127,7 @@ folders. `child_env` joins PATH with `;` on Windows (today it always uses `:`) a
 ### 4. Starting at login (`loginitem.rs`)
 
 - **Windows:** a `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` value `Harness Device` = the quoted path of the
-  installed exe. The same rule as `register_from`, at every launch and after each Install: written only when absent,
+  installed exe. The same rule as `register_from`, at every launch: written only when absent,
   so a value an uninstall, a manual upgrade or a hand removed comes back; when Windows' Startup Apps has it turned off
   (`...\Explorer\StartupApproved\Run` value whose first byte is odd: `03` and `07` off, `02` and `06` on), it reads
   as `RequiresApproval` and is never turned back on. Tauri's NSIS uninstaller removes the value (it is named after the
@@ -142,7 +144,7 @@ folders. `child_env` joins PATH with `;` on Windows (today it always uses `:`) a
     control character gets no entry). Absent later (the person deleted it, as KDE does to turn it off) →
     left absent;
   - present, without `Hidden=true`, with an `Exec=` that is not the app's own → the app sets its own `Exec=`, at every
-    launch and after each Install it runs (taking over an entry that is already on turns nothing on; the app then keeps
+    launch (taking over an entry that is already on turns nothing on; the app then keeps
     the daemon alive at login with `start --if-down`, as on macOS);
   - `Hidden=true` → left alone (the person turned it off), as `RequiresApproval` on macOS.
   `feat/dial-linux` adds the matching rule to `install.sh` (harness-pm, 2026-11-19): it writes the entry only when it is

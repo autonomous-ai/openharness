@@ -38,7 +38,7 @@ impl Group {
         unsafe { libc::kill(-self.0, libc::SIGKILL) };
     }
 
-    /// The child's exit code; `None`: it was ended by a signal.
+    /// The child's exit code; `None`: it was killed (ended by a signal).
     pub(crate) fn code(&self, status: ExitStatus) -> Option<i32> {
         status.code()
     }

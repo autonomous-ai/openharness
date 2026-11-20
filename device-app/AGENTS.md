@@ -51,8 +51,10 @@ sets them up. Rust and Tauri 2 in `src-tauri/`; the window's three screens are p
   - The CLI it found; `logs export --json` is among its commands.
   - The two install lines, `install.sh --host` and `--desktop`, through `/bin/sh -c` (`install.rs`). On Linux the
     `--host` line runs in a terminal the person sees, so `sudo` can ask for a password: the first of
-    `x-terminal-emulator -e`, `gnome-terminal --` and `xterm -e` that is there, given the path of `host.sh`, a fixed
-    script around that line that writes its exit code to `host.exit` (`terminal.rs`), in `<data>/setup` (0700).
+    `x-terminal-emulator -e`, `gnome-terminal --` and `xterm -e` that is there, given `/bin/sh` and the path of
+    `host-<n>.sh`, a fixed script around that line that writes its exit code to `host-<n>.exit` and that it started to
+    `host-<n>.started` (`terminal.rs`), in `<data>/setup` (0700, emptied at each run). A terminal that never runs it
+    fails within 30 s; with no terminal the line runs behind the screen, as on macOS.
   - On Windows, `powershell.exe` from `System32`, with `-NoProfile -NonInteractive -ExecutionPolicy Bypass -Command`
     and the fixed line that runs `install.ps1 -Desktop` (`install.rs`).
   - To open a page: `/usr/bin/open` on macOS, `xdg-open` on Linux, and Windows' shell `open` on an `https:` URL with

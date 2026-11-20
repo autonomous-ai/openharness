@@ -141,8 +141,7 @@ fn write(entry: &Path, text: &str) -> io::Result<()> {
     written
 }
 
-/// The first registration writes an entry that is missing; a refresh, at every launch and after each install, takes
-/// over one that is on.
+/// The first registration writes an entry that is missing; a refresh, at every launch, takes over one that is on.
 #[cfg(target_os = "linux")]
 impl LoginItem for SystemLoginItem {
     fn register(&self) -> Result<(), String> {

@@ -176,9 +176,10 @@ A red run names its step.
   While none is live (the first release), `--allow-no-manifest` refuses once a tag exists: delete the unreleased tag
   (`git push origin :refs/tags/v0.1.0_device`, then `git tag -d v0.1.0_device`) and cut it again. Never move or delete
   a tag a manifest has named.
-- **A failed `Verify`** comes after `Publish` wrote the manifest: it already names the new release, and a re-run is
-  refused as not above the live version. Download the dmg it names from the CDN and compare its sha256 with the
-  manifest's; a wrong one is fixed forward with a higher version.
+- **A failed `Verify`** comes after `Publish` wrote the manifest: it already names the new release. **Re-run failed
+  jobs**: `publish` finds this build live under its version, writes nothing and goes on to `Verify` again (other files
+  under that version are refused). Still failing: download the dmg it names from the CDN and compare its sha256 with
+  the manifest's; a wrong one is fixed forward with a higher version.
 - A second run for the same version finishes only if the files already in the bucket equal its own; otherwise it
   stops before the manifest.
 - If the dispatch fails after the tag was pushed, the script prints the `gh workflow run` line: start the run by hand
