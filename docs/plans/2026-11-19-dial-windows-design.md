@@ -75,6 +75,15 @@ does Windows.
     - The panel hint (part C, "What tells the apps apart") stays, its answer kept per editor by the hook.
     - Cursor is found on PATH and in its per-user folder only.
     - The VM's console steps need no person: the agent signs the test user in by autologon and removes it after.
+13. **Claude Code's mod on Windows goes through the CLI (orchestrator, 2026-11-20, after the VM probe).** The mod
+    runtime cannot reach a pipe and has no HMAC. macOS is the reference, so the standalone Claude Code session keeps its
+    voice on Windows. A loopback TCP port on the core is out.
+    - The mod runs `harness device claude inbox` (one long-lived process per session when `$.process.spawn` streams,
+      else one run per poll) and `harness device claude attach`. The CLI does the pipe auth and holds the inbox.
+    - No token enters the mod. Nothing new goes into the core: both words are clients of the existing pipes.
+    - The pull request carries the CPU and memory of an idle machine with 1 and 3 such sessions.
+    - A CLI process that dies is started again within a named bound.
+    - macOS and Linux keep the direct socket path, unchanged.
 
 ## How it works today (the parts this changes)
 
@@ -207,15 +216,28 @@ added once a real install shows one.*
 - `harness device claude asked` posts over `daemonFetch`, which already goes over the daemon's pipe on Windows,
   instead of skipping when there is no Unix socket (`asked.ts:129-130`).
 
-**The Claude Code mod's daemon half on Windows** (`device.js`, the long poll on `/api/hook/inbox`). On a Mac the mod
-gets the core's socket, which is trusted by the filesystem. On Windows, `harness device claude link` prints the
-daemon's pipe and token in place of `socketPath`, and the mod signs each poll with the pipe auth and checks the
-proof. That gives the mod what it has on a Mac (any process of this account can read the token in the profile), and
-nothing more.
+**The Claude Code mod's daemon half on Windows** (`device.js`, the long poll on `/api/hook/inbox`, and the
+`attach` it posts to the devices). On a Mac the mod gets the core's socket, which is trusted by the filesystem, and the
+devices' socket. On Windows the mod runtime cannot reach a pipe: `$.http.fetch` refuses every pipe path in
+`socketPath`, inside Claude Code, and `crypto.subtle` has no HMAC (plan Task 2). So on Windows the mod goes through the
+CLI, which already proves the daemon's token over its pipe:
+- `harness device claude inbox <session id>` holds the session's poll on `/api/hook/inbox` (through `daemonFetch`, as
+  `asked` posts) and prints each message as one JSON line. The mod starts it through `$.process.spawn`, one long-lived
+  process per session, and submits each line's text as the person's prompt. If `$.process.spawn` does not stream on
+  Windows (the plan's first step checks it on the VM), the mod runs it once per poll instead.
+- `harness device claude attach <session id>` sends the devices' existing `attach` message over their pipe, once per
+  attach.
+- The mod runs `%USERPROFILE%\.harness\bin\harness.exe` (the install's own program, no batch file), else `harness` on
+  PATH, and never holds a token, a pipe name or an HMAC: the CLI reads both tokens in its own process.
+- Both words are clients of what the daemon and the devices already serve. Nothing changes in the core.
+- The process does not outlive its session: it ends when its parent is gone or its output is closed. If it dies, the
+  mod starts it again within a bound (five quick restarts with backoff, then ten minutes).
+- macOS and Linux keep today's direct socket path, unchanged. `harness device claude link` stays as it is on Windows
+  (it prints nothing).
 
-This path depends on the mod runtime: `$.http.fetch` must take a pipe in `socketPath`, and HMAC must be available
-(`crypto.subtle` or `node:crypto`). The plan's first part B task checks this on the VM. If the runtime cannot do it,
-the run stops and asks harness-pm (a stop condition). It never falls back to a weaker credential.
+*Corrected 2026-11-20 after the VM probe (plan Task 2): this said `link` hands the mod the daemon's pipe and token, and
+the mod signs each poll. The mod runtime cannot do it, and the orchestrator chose the CLI route over a loopback TCP
+port on the core.*
 
 **Skill folder ownership on Windows** (`dialSkill.ts` `ownDirectory`, and its callers that pass a uid:
 `services/devices.ts:523`, `orcaHomes.ts:114`, `dialHomeSetup.ts`). On Windows, "this account's own folder" is the
@@ -364,6 +386,7 @@ dial-linux also edits `appLink.ts` and `cursorFolder.ts`, and whoever merges sec
 | A session in Windows Terminal is listed and rings, but a tap does not raise it and the dial does not follow its tabs. | Windows Terminal has no API to list or select tabs, and no host id. The firmware holds 16 apps, and no new id is added. |
 | Until the Windows Device app ships, the dial does not follow the app or tab in front, and the Notifications setting has no menu (it keeps its last value). | Those come from the Device app (`front`/`tab` lines, its menu). It is a separate item (`feat/device-app-win-linux`). This pull request makes the pipe and the watch they use work. |
 | Speaking to Codex in the ChatGPT desktop app uses the `codex` CLI on PATH, not the app's own copy. | The app's bundled CLI path (`codexQueue.ts:154`) is a macOS `.app` path. Its layout on Windows is not known yet. If the VM shows that the app's sessions need the app's own copy, the plan's probe says so and harness-pm decides. |
+| On Windows each Claude Code session holds one `harness` process for the dial's voice. | Claude Code's mod runtime cannot reach a named pipe and has no HMAC, so the CLI does the pipe auth for it (decided 13). |
 | No Herdr.app or Herdr Core (`hc`) session, no cmux, iTerm2, Terminal.app or Ghostty tab follow. | Those apps exist only on macOS. |
 
 ## Not in this pull request
@@ -401,14 +424,21 @@ Reviewed revision: this file. Each line: answered / N/A because …
    - the cheap check is `process.kill(pid, 0)`, on every call;
    - the process table (`recordedProcessDead`) is read when the record changes, after a connection error, or at most
      every 60 s, so the watch's `front`/`tab` tells (up to 10 a second) start no process each.
+   - On Windows each Claude Code session with the plugin holds one `harness` process (`inbox`), which polls the
+     daemon as the mod does on a Mac (one held poll at a time, 25 s each), and proves the daemon's pipe by the same rule.
+     Its CPU and memory, idle, with 1 and 3 sessions, are measured on the VM.
 
    The listener's own limits are unchanged.
 4. **Scale.** At most 16 connections with existing per-type rates; the pipe adds an HMAC per request (microseconds).
-   At 10x there is no change, because the existing limits bound it.
+   At 10x there is no change, because the existing limits bound it. The mod's `inbox` processes are one per Claude
+   Code session; the core already admits at most 64 open polls.
 5. **Compatibility.**
    - An older extension or plugin on Windows refuses Windows as today, and the new CLI's `link` adds fields it
      ignores.
    - A newer extension with an older CLI gets no `devicesPipe` and stays `unplugged`.
+   - A newer Claude Code mod on Windows with an older CLI: `inbox` is an unknown word, so the mod's process ends at once,
+     and the mod's restart bound (five quick restarts, then ten minutes) keeps it from spinning. An older mod on
+     Windows gets nothing from `link`, as today.
    - On macOS and Linux nothing changes.
    - A pty host without `raise` answers exit 2, which reads as `none`.
 6. **Migration and rollback.** N/A: no data migrates. A rollback leaves `devices-token`, `devices.json` and
@@ -417,8 +447,9 @@ Reviewed revision: this file. Each line: answered / N/A because …
    - The pipe accepts only requests that prove `devices-token`, a file in this account's profile.
    - The client sends nothing until the recorded process is alive, and takes no answer without the proof.
    - The HMAC proves the token without sending it on the pipe. The token leaves its file only on `link`'s stdout,
-     to a process of this account that ran `link`, and is never logged or written elsewhere. The Claude Code mod
-     gets the daemon's pipe and token the same way (part B), as it gets the core's socket on a Mac.
+     to a process of this account that ran `link`, and is never logged or written elsewhere. On Windows the Claude
+     Code mod gets no token: `harness device claude inbox` and `attach` read the tokens in the CLI's own process
+     (part B).
    - The listener logs counts only, as today.
 8. **Identity.** Everything runs as the signed-in account. Nothing runs under another login or elevated.
 9. **Failure.** Each failure is one log line naming its reason, and clients answer false or null as today:

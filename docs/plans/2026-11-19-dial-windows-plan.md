@@ -6,7 +6,7 @@
 
 **Architecture:**
 - **Part A.** The devices process serves its existing handlers on a pipe of its own (`listenLocalSocket(handler, pipe, { token })`), with its own token (`devices-token`) and record (`devices.json`). Clients find `{pipe, token}` through the record and send with `fetchOverPipe`. `link` hands the pipe, token and record path to the plugins, which sign with their own small copy of the auth.
-- **Part B.** One resolver (`lib/windows/program.ts`) turns every program this work starts on Windows into an `.exe` with arguments, never a shell. With it Claude Code's plugin, the dial skill, Codex's queue, herdr (over its pipe) and Orca stop refusing Windows. A dial end-to-end check runs on Windows with a stand-in dial.
+- **Part B.** One resolver (`lib/windows/program.ts`) turns every program this work starts on Windows into an `.exe` with arguments, never a shell. With it Claude Code's plugin, the dial skill, Codex's queue, herdr (over its pipe) and Orca stop refusing Windows. Claude Code's mod, whose runtime cannot reach a pipe (Task 2), hears the dial through `harness device claude inbox` and turns it through `attach`, so the CLI holds the tokens. A dial end-to-end check runs on Windows with a stand-in dial.
 - **Part C.** A Rust helper (`harness-pty raise`) raises a window by Windows' documented rules; `cable/hosts/windowsRaise.ts` calls it, starts Harness Desktop through its own launcher, and each tap path dispatches to it once.
 - **Part D.** On Windows `hookCallerPid()` climbs past the command shells that die with the hook, read from the pty host's process table. The core does not change.
 - The core's process loads `lib/windows/pipeAuth.ts`, `lib/localSocket.ts`, `lib/daemonRecord.ts`, `lib/secureState.ts`, `lib/windows/launch.ts`, `lib/peerAccount.ts`. Only `pipeAuth.ts` changes (a file-name parameter that defaults to today's). Everything else is used as it is, from new files the core does not load.
@@ -43,8 +43,9 @@ Paths are under `cli/src/` unless they start with another folder. "notes" is `do
 | 12 VS Code and Cursor found and run | `devices/vscodeExtension.ts`, `cable/vscodeExtensionSetup.ts` | 1, 10 | high | their two specs |
 | 13 Claude Code's plugin and the dial skill; `claude.exe` in `.local\bin` | `devices/claudePlugin.ts`, `cable/dialPluginSetup.ts`, `cable/dialHomeSetup.ts`, `devices/claudePlugin.windows.real.spec.ts` (new), notes | 1, 10, 11 | high | their three specs |
 | 14 `asked` over the daemon's pipe | `deviceClaude/asked.ts` | none | high | `asked.spec.ts` |
-| 15 `claude link` on Windows | `deviceClaude/command.ts` | 2, 4 | xhigh | `command.spec.ts` |
-| 16 The mod signs its requests | `plugins/harness-device/hooks/device.js`, `plugins/harness-device/test/device.test.ts`, `harnessDeviceMod.spec.ts` (new) | 2 | xhigh | the two tests |
+| 15 `harness device claude inbox`: the session's inbox through the CLI (first a VM check: does `$.process.spawn` stream on Windows) | `deviceClaude/inbox.ts` (new), `deviceClaude/inbox.windows.real.spec.ts` (new), `deviceClaude/command.ts`, `devices/listenerPipe.ts`, `cli.ts`, notes | 2, 4, 14 | xhigh | `inbox.spec.ts` (new), `listenerPipe.spec.ts`, `command.spec.ts` |
+| 16 The mod reaches Harness through `harness.exe` on Windows | `plugins/harness-device/hooks/device.js`, `plugins/harness-device/test/device.test.ts`, `plugins/harness-device/README.md` | 15 | xhigh | `device.test.ts` |
+| 39 `harness device claude attach` | `deviceClaude/command.ts` | 6 | high | `command.spec.ts` |
 | 17 The permission hook on Windows | `plugins/harness-device/hooks/{hooks.json,asked}`, at most `hooks/asked.ps1` (new), `plugins/harness-device/README.md`, `harnessDevicePlugin.spec.ts` | 2 | high | `harnessDevicePlugin.spec.ts` |
 | 18 Codex on Windows | `cable/hosts/codexQueue.ts`, `deviceClaude/command.ts` | 1, 10 | high | `codexQueue.spec.ts`, `command.spec.ts` |
 | 19 herdr over its pipe | `cable/hosts/{herdrClient,herdrSource,herdr,unixSocket}.ts` | 1, 11 | high | their four specs |
@@ -65,10 +66,10 @@ Paths are under `cli/src/` unless they start with another folder. "notes" is `do
 | 36 (only if Task 33 measures more than 50 ms) One pid's chain from `harness-pty` | `pty/src/{cli.rs,ps.rs}`, `cli/hook/notify.mjs`, `hookNotify.spec.ts`, notes | 30, 31, 33 | xhigh | `cli.rs` and `ps.rs` unit tests, `hookNotify.spec.ts` |
 | 37 VM console probe: the Store apps, window owners, the shells' environments (the agent signs the test user in; it restarts the VM, so it runs alone there) | notes | 1 | xhigh | none: findings, one commit |
 | 38 (only if Task 37 contradicts a name in Task 27 or Task 30) The names the console showed | `cable/hosts/windowsRaise.ts`, `windowsRaise.spec.ts`, `cli/hook/notify.mjs`, `hookNotify.spec.ts` (only those contradicted) | 27, 30, 37 | high | the contradicted spec's new case |
-| 34 windows.yml runs the new checks | `.github/workflows/windows.yml` | 6, 8, 13, 17, 23, 32 | medium | none: a workflow, one commit |
-| 35 The guides say Windows | `cli/AGENTS.md`, `docs/cli.md`, `docs/windows-rules.md` | 13, 17, 18, 19, 20, 24, 25, 29, 30, 33, 37, and 36 and 38 when they run | medium | none: docs, one commit |
+| 34 windows.yml runs the new checks | `.github/workflows/windows.yml` | 6, 8, 13, 15, 17, 23, 32 | medium | none: a workflow, one commit |
+| 35 The guides say Windows | `cli/AGENTS.md`, `docs/cli.md`, `docs/windows-rules.md` | 13, 16, 17, 18, 19, 20, 24, 25, 29, 30, 33, 37, 39, and 36 and 38 when they run | medium | none: docs, one commit |
 
-36 tasks, and Task 36 only if Task 33's number calls for it, Task 38 only if Task 37's notes contradict Task 27 or Task 30. Longest chain of the whole plan: 3 → 4 → 5 → 6 → 23 → 24 → 35 (seven tasks); of what is left after `94e4b5317a`: 6 → 23 → 24 → 35, 10 → 12 → 29 → 35 and 27 → 28 → 29 → 35 (four each). Ready now (their dependencies landed): 2, 6, 10, 19, 25, 26, 27, 30, 33, 37; the VM's tasks among them still go one at a time. Shared files keep these apart, one at a time: the notes (2, 6, 13, 23, 25, 26, 32, 33, 36, 37: the one VM, and the Dell's checks in Verification); `deviceClaude/command.ts` (15, 18); `notify.mjs` (30, 36, 38); `windowsRaise.ts` (27, 38); `e2e/harness/windowsDaemon.ts` (23, 24). Task 37 restarts the VM: nothing else runs on the VM while it runs, which the notes already enforce.
+37 tasks (Task 39 added 2026-11-20, when Task 2's stop moved the mod's voice onto the CLI), and Task 36 only if Task 33's number calls for it, Task 38 only if Task 37's notes contradict Task 27 or Task 30. Longest chain of the whole plan: 3 → 4 → 5 → 6 → 23 → 24 → 35 (seven tasks); of what is left after `94e4b5317a`: 6 → 23 → 24 → 35, 10 → 12 → 29 → 35 and 27 → 28 → 29 → 35 (four each). Ready now (their dependencies landed): 2, 6, 10, 15, 19, 25, 26, 27, 30, 33, 37; after Task 2's stop: 15 → 16 → 35 and 6 → 39 → 35; the VM's tasks among them still go one at a time. Shared files keep these apart, one at a time: the notes (2, 6, 13, 15, 23, 25, 26, 32, 33, 36, 37: the one VM, and the Dell's checks in Verification); `deviceClaude/command.ts` (15, 18, 39); `notify.mjs` (30, 36, 38); `windowsRaise.ts` (27, 38); `e2e/harness/windowsDaemon.ts` (23, 24). Task 37 restarts the VM: nothing else runs on the VM while it runs, which the notes already enforce.
 
 ## Global Constraints
 
@@ -79,9 +80,9 @@ Paths are under `cli/src/` unless they start with another folder. "notes" is `do
   - Each request is `POST /` with `x-harness-auth: <nonce>.<hex HMAC-SHA256(token, 0x01 ‖ nonce)>`; the nonce is the pipe's 32-hex id, then 128 random bits. Each answer carries `x-harness-proof: <hex HMAC-SHA256(token, 0x00 ‖ nonce)>`. No valid auth: `401` with `{"error":"PIPE_AUTH_REQUIRED"}`.
   - An answer without the right proof is dropped before its body is read.
 - **`link` on Windows** prints `{ daemon, devicesPipe, devicesToken, devicesReady, devicesRecord }`. On macOS and Linux every output is byte for byte what it is today.
-- **A token is never logged, written or put in an error**: not by the CLI, the extension, the plugin or the mod. It leaves its file only on `link`'s stdout.
+- **A token is never logged, written or put in an error**: not by the CLI, the extension, the plugin or the mod. It leaves its file only on `orca link`'s and `vscode link`'s stdout. Claude Code's mod never holds one: on Windows it reaches the daemon and the devices through `harness device claude inbox` and `attach` (Tasks 15, 39), which read the tokens in the CLI's own process; `harness device claude link` on Windows still prints nothing and exits 1.
 - **The test key** (The VM) is never printed, logged, written elsewhere, put on a command line, in the notes, a commit or the pull request, and is deleted from the VM after the checks.
-- **The plugins find `harness`** at `%USERPROFILE%\.harness\bin\harness.exe`, then on PATH.
+- **The plugins find `harness`** at `%USERPROFILE%\.harness\bin\harness.exe`, then on PATH. That `harness.exe` is the install's own program (`pty/src/command.rs`: it runs `node.exe <cli.js>` with its arguments, no batch file), never a `.cmd`. The mod checks the first with `$.fs.exists`: `$.process.run` of a missing absolute path resolves with exit 1 on Windows instead of rejecting (Task 2 §3).
 - **No shell, no window.** Every program started on Windows goes through Task 10's resolver with `windowsHide: true`. No `detached: true` (`lib/windows/noWindow.spec.ts`), no `cmd.exe`, no PowerShell. A batch file that is neither an npm shim nor VS Code's or Cursor's own launcher (the fixtures' Electron shape) is refused; Orca's `orca.cmd` is such a batch file, so Orca is found and run as its `orca.exe` (Tasks 20, 21).
 - **The core.** `src/architecture.coreFiles.txt` gains no line. Of the files it lists, only `lib/windows/pipeAuth.ts` changes. `lib/localSocket.ts`, `lib/daemonRecord.ts`, `lib/secureState.ts`, `lib/windows/launch.ts`, `lib/windows/daemonPipe.ts`, `lib/peerAccount.ts`, `lib/binaryOnPath.ts` and `core/` do not change.
 - **Coverage.** `services/devicesListener.ts`, `services/devicesProcess.ts` and `services/devices.ts` stay at 100% per file under `npm run test:core` on the Mac: every Windows branch there is reached by an injected platform or dependency, with the pipe stood in by a Unix socket named `harness-<32 hex>` (as `pipeAuth.spec.ts` does).
@@ -95,19 +96,19 @@ Paths are under `cli/src/` unless they start with another folder. "notes" is `do
 - **The hook's kept answers** (`<data folder>\hook-editors.json`, Task 30) are the hook's alone: on Windows only, owner-only, written whole (temp file, then rename), read through one bounded reader (4096 bytes), at most 16 entries, holding a pid, a 16-hex hash and a bundle id and nothing else. The core, the devices and every other process read nothing of it.
 - **Copy and states are macOS's.** No new sentence on the dial. The Orca panel's "Not on Windows yet." goes.
 - **Stop conditions** (the task ends, writes what it found in the notes, and the main session asks harness-pm):
-  - Task 2: the mod runtime cannot send to a pipe, cannot read the answer's proof, or has no HMAC-SHA256. Tasks 15 and 16 then do not start. No weaker credential is tried.
+  - Task 2: the mod runtime cannot send to a pipe, cannot read the answer's proof, or has no HMAC-SHA256. **Hit 2026-11-20** (`$.http.fetch` refuses every pipe path in `socketPath`, inside Claude Code; `crypto.subtle` has `digest` alone). The orchestrator's answer: on Windows the mod goes through the CLI (Tasks 15, 16, 39). No weaker credential, and no loopback TCP port on the core.
   - Task 37 (moved from Task 1, which could not install the app over SSH): sessions of the ChatGPT app answer only to the app's own `codex`. Task 18 still ships the PATH `codex`.
   - The VM does not answer SSH within 5 minutes of a restart (The VM, "Signing the test user in"): the task stops and reports; the VM is restarted for it, never by the task again.
   - The Dell: the dial holds a custom pet (a new desk would drop it, and the run cannot send it back); something holds `COM3` after the owner's daemon is stopped (its Desktop may have started it again); the owner's daemon is not running and holding `COM3` again after the restart; the dial's settings are not restored. Each: the run stops, restores what it can as The Dell says, and reports.
 - **Outside text is data**: launcher files, herdr's answers, Orca's answers, `link`'s output and the process table are parsed and bounded, never run.
-- **The pull request** names the platforms (Windows 11 x64 and arm64; macOS and Linux unchanged), and carries the raise's measured rate (the VM's and the Dell's), the hook's time before and after, the `tellDevices` time, the real dial's checks on the Dell (with the lines saying the owner's daemon was stopped and restored, and the dial's settings unchanged or restored), and the local gates' receipts. No full dial serial is in it, the notes or a commit.
+- **The pull request** names the platforms (Windows 11 x64 and arm64; macOS and Linux unchanged), and carries the raise's measured rate (the VM's and the Dell's), the hook's time before and after, the `tellDevices` time, the CPU and memory of an idle VM with 1 and 3 Claude Code sessions holding the mod's `harness` process (Verification 9), the real dial's checks on the Dell (with the lines saying the owner's daemon was stopped and restored, and the dial's settings unchanged or restored), and the local gates' receipts. No full dial serial is in it, the notes or a commit.
 
 ## Decided here, where the spec was silent
 
 - **The shared vectors exist already**: `cli/src/lib/windows/__fixtures__/pipe-auth-vectors.json` (made by `cli/scripts/gen-pipe-auth-vectors.ts`, read by `pipeAuth.spec.ts` and Desktop's test). The extension's, the plugin's and the mod's tests read the same file. No second fixture.
 - **`devicesListenerPath` keeps its name and meaning** (the Unix socket's path, null on Windows): the Unix server and four e2e files use it. Clients ask the new `devicesTarget`, which answers a socket or a pipe with its token.
 - **The record**: written after the pipe listens; a write that fails closes the pipe and the listener is not open. Close removes `devices.json` only while it still names this pipe, so a second devices process's record survives the first one's close.
-- **`link` when not ready** prints `{ daemon, devicesReady: false, devicesRecord }`: no pipe and no token until the recorded process runs. `harness device claude link` names the daemon's half `daemonPipe` and `daemonToken`.
+- **`link` when not ready** prints `{ daemon, devicesReady: false, devicesRecord }`: no pipe and no token until the recorded process runs. `harness device claude link` is not changed on Windows (it prints nothing and exits 1): the mod goes through `inbox` and `attach` instead (Tasks 15, 39).
 - **`daemon` in `link`** is true when the recorded daemon pipe answers `GET /api/status` with its proof within 1 s (`askDataFolderServer`).
 - **`windowsHide: true`, not `ownProcessGroup()`, on callers that are not detached today**: `ownProcessGroup()` adds `detached` on macOS and Linux, which would change those paths. On Windows both give the same hidden console.
 - **"This account's own" on Windows is the profile alone** (`os.homedir()`, resolved), not the configured data folder that `windowsStateRoots()` also allows: a skill home is the person's engine home, never Harness's data.
@@ -134,6 +135,15 @@ Paths are under `cli/src/` unless they start with another folder. "notes" is `do
 - **Harness Desktop's launcher** is `%LOCALAPPDATA%\Programs\Harness\Harness.exe` (`pty/src/desktop/mod.rs`: the install root is `FOLDERID_UserProgramFiles`\Harness, the launcher `LAUNCHER_EXE`). A tap on a Harness agent starts it with no argument, and nothing is raised first: a running Desktop, in the tray too, takes a second launch over and restores and raises its own window (`desktop/windows/runner/single_instance.cpp`, `Forward` and the `WM_COPYDATA` handler). No launcher there: the tap fails, as a failed `open -b` does on macOS. The start is not counted in the raise tally, which counts the helper's answers alone.
 - **WezTerm, Warp and Alacritty** are found as on macOS: WezTerm by `WEZTERM_PANE`, Warp by `TERM_PROGRAM=WarpTerminal` (both hints the hook already sends), Alacritty by its bundle id alone, which on Windows the hook fills from `ALACRITTY_LOG` being set (Task 30). Since Task 1: on Windows Alacritty sets no `ALACRITTY_WINDOW_ID` or `ALACRITTY_SOCKET` (Unix only); `ALACRITTY_LOG` (its log file's path, set in its own process and inherited by its shell, `alacritty/src/logging.rs`) is the one name only it sets. Chosen over its program in the caller chain, which would start the pty host on every hook in any terminal and walk past the person's own shell. The value is never read. Read from Alacritty 0.17.0's source; Task 37 confirms it in a real Alacritty shell, and Task 38 corrects it if not.
 - **The pid proof's state** lives in the client's process (`devices/listenerPipe.ts`, one `DevicesProof` per process): a one-shot `harness device notify` proves by the table each time, and the long-lived watch at most once a minute. A pid reused inside that minute passes the cheap check, and gets nothing from it: an answer without the HMAC proof is dropped unread, and the drop makes the next call prove by the table.
+- **Claude Code's mod on Windows goes through the CLI** (orchestrator, 2026-11-20, after Task 2's stop; macOS is the reference, so the standalone Claude Code session keeps voice on Windows; a loopback TCP port on the core is out). The mod starts `harness.exe`, which does the pipe auth in its own process; no token, pipe name or HMAC enters the mod. macOS and Linux keep today's direct socket path, unchanged.
+  - **The words** are the mod's, never typed, and left out of `DEVICE_USAGE` as `link` is: `harness device claude inbox <session id>` (Task 15) and `harness device claude attach <session id>` (Task 39). The session id is a positional word, not `--session <id>`: `runDeviceCommand` drops words that start with `-` and would take the id for a third word anyway, so the dispatch reads `words` of length 3. Both take a lower-case UUID only (the listener's `SESSION_ID`). They are clients of the daemon's existing `/api/hook/inbox` (over `daemonFetch`, as `asked` posts) and of the devices' existing `attach` message (over `tellDevices`): nothing new in the core.
+  - **One line protocol on stdout**, one JSON object per line, and nothing on stderr, ever: `{"text":"…"}` (what the person said), `{}` (a hold ended with nothing), `{"off":true}` (the plugin is off or removed, the id is refused, or the daemon is older than the inbox; the last line, then exit 0), and for `attach`, `{"sent":true}` or `{"sent":false}`. Meaning rides on lines, not on exit codes, because `harness.exe` already owns 3 and 4 (`EXIT_BROKEN`, `EXIT_SPAWN`) and Node's own crash is 1.
+  - **One long-lived process per session** when `$.process.spawn` streams on Windows (the engine's types, 2.1.329, have it: pieces as written, the loop's end kills the child; Task 15's Step 1 confirms it on the VM's 2.1.328). Else one `inbox` run per poll, which prints one line and exits. Streaming is preferred: a Node start costs about 1 s on the VM (Task 2 §4) against a 25 s hold, and the devices hold a transcript for the next poll 5 s only (`cable/hosts/inbox.ts` `WAIT_MS`).
+  - **The follower proves the daemon by the held-proof rule** of the devices' pipe (Task 4): the pid on each poll, the process table when the record changes, after a failed or unproven answer, and at most every 60 s. `daemonFetch`'s default `daemonPipe` reads the table on every call, which would start the pty host every 25 s per session. So Task 15 lifts `createDevicesProof`'s rule into `createRecordProof` in `devices/listenerPipe.ts` and builds the daemon's on it; `lib/windows/daemonPipe.ts` (the core's) does not change.
+  - **It does not outlive its session.** `harness.exe` starts `node.exe` with no job object, so when Claude Code ends the loop and kills `harness.exe`, `node.exe` may run on. The follower therefore ends itself (exit 0) before its next poll when its parent is gone (`process.kill(process.ppid, 0)`, no process started), and at once when a write to its stdout fails. A newer poll for the session ends the older one in the core (`deviceHookCalls.ts`: "an older one … gives up its place"), so an orphan's held poll returns at once and it exits; at most one held poll's transcript can go to an orphan, as an old copy's in-flight poll can on a reload on a Mac.
+  - **A bounded restart.** A follower that ends without `{"off":true}` (killed, crashed, could not start) starts again after 1, 2, 4, 8 and 16 s for five quick ends in a row (each ran under 60 s); the sixth waits 10 minutes (`OLD_HARNESS_MS`) and the count starts over. One that ran 60 s or more resets the count and starts again after 1 s. After `{"off":true}` the mod waits 10 minutes, as it waits after `link` exits non-zero on a Mac. Worst case: six starts in about 10.5 minutes per session.
+  - **The attach** is one `attach` run per `session.attach` of the desktop surface, bounded at 5 s (`RELINK_TIMEOUT_MS`). Not sent (`{"sent":false}`, a failed run): the session stays held unless a detach came, and the next attach tries again, at most once in 30 s (`RELINK_MS`), as the Mac's relink does.
+  - **Without `$.process.spawn`** (a Claude Code older than it, on Windows, if the follow form is built): the mod starts no follower and has no voice there, as with a Harness older than the inbox. No second path.
 
 ## Answered questions (Decided 11 in the spec)
 
@@ -155,6 +165,10 @@ Answered 2026-11-20, after Task 1:
 13. Cursor: PATH and the per-user folder only: Task 12.
 14. Task 37 needs no person: the agent signs the test user in by autologon, restarts the VM, installs the Store apps with winget in that session, reads the window owners itself, and removes the autologon values after: The VM; Task 37.
 
+Answered 2026-11-20, after Task 2's stop:
+
+15. On Windows Claude Code's mod goes through the CLI: `harness device claude inbox` (one long-lived process per session if `$.process.spawn` streams, else one run per poll) and `harness device claude attach`; the CLI does the pipe auth, no token enters the mod, nothing new in the core, macOS and Linux unchanged; the idle CPU and memory with 1 and 3 sessions go in the pull request; a bounded restart. Tasks 15, 16, 39; Verification 6, 8, 9.
+
 ## Open questions
 
 None.
@@ -162,10 +176,11 @@ None.
 ## Review Focus
 
 1. **A crashed devices process whose pid was given to another process.** The client dials nothing and `link` says `devicesReady: false`. Inside the minute a proof is held, the reused pid passes the cheap check: the one send fails (nothing listens, or the answer has no proof) and the next call proves by the table and dials nothing. Tests: Task 4 (`devicesPipe`, a row that started after the record; the pid proof), Task 6 (a failed connection proves again), Task 7.
-2. **Something else answers on the recorded pipe name** (a 200 with a body and no proof, or a wrong proof). `tellDevices` is false, `askDevices` null, the extension and the plugin drop the answer unread, and the token appears in no log line. Tests: Tasks 6, 8, 9, 16.
+2. **Something else answers on the recorded pipe name** (a 200 with a body and no proof, or a wrong proof). `tellDevices` is false, `askDevices` null, the extension and the plugin drop the answer unread, and the token appears in no log line. Tests: Tasks 6, 8, 9, 15.
 3. **A profile path with spaces, Vietnamese letters, `'`, `&` and `%`** (`C:\Users\Nguyễn Văn A' & 100%`). Every argument stays one argument, the launcher is found, the record path is absolute. Tests: Tasks 10, 8, 23.
 4. **`claude` on PATH is the Claude desktop app's `Claude.exe`** (it answers `--version` without "Claude Code", and `--help` opens its window). The plugin's runner refuses it after one `--version` and runs nothing more. Test: Task 13.
 5. **An app that changed under Harness** (a later VS Code or Cursor whose launcher changed shape, a VS Code update that renamed its commit folder, an Orca whose `orca.exe` moved). A launcher of another shape is refused by name and the setup counts a failure; a renamed commit folder is read anew at the next start; an Orca with no `orca.exe` is not found. Nothing falls back to `cmd.exe`, and `orca.cmd` is never run. Tests: Tasks 10, 12, 20, 21.
+6. **Claude Code reloads the mod, quits or crashes while its `harness` process holds a poll** (Windows). Claude Code kills `harness.exe`, and its `node.exe` may run on. The orphan ends before its next poll (its parent is gone) or at its next write, a newer follower's poll ends its hold at once, and no session is left with two followers or none. Tests: Task 15 (parent gone; a failed write; no poll after either), Task 16 (one follower per session; the restart's bound); seen on the VM in Verification 6.
 
 ## The VM
 
@@ -245,6 +260,8 @@ None.
   6. The cheap models used, by name, and that the notes do not hold the key: `findstr /L /M /G:<the key file> <the notes>` prints nothing (the search reads the key from its file, so it is on no command line).
 - [ ] **Step 3: Stop condition.** If 1 or 2 cannot be done, write that first in the section, report `stop: mod runtime`, and end. Tasks 15 and 16 do not start.
 - [ ] **Step 4: Commit** `Claude Code's mod runtime and hook runner on Windows: notes`.
+
+**Landed** (`118ff8f075`), with its stop hit: `$.http.fetch` refuses every pipe path in `socketPath` (inside Claude Code), and `crypto.subtle` has no HMAC. Tasks 15 and 16 were rewritten for the orchestrator's answer (the mod goes through the CLI), and Task 39 added. Its findings on the permission hook (§4) bear on Task 17.
 
 ### Task 3: A token file by name
 
@@ -576,39 +593,114 @@ None.
 - [ ] **Step 4:** the run passes; `npm run typecheck` passes.
 - [ ] **Step 5: Commit** `A waiting permission prompt reaches the daemon over its pipe on Windows`.
 
-### Task 15: `claude link` on Windows
+### Task 15: `harness device claude inbox`: the session's inbox through the CLI
+
+**Why** (Task 2 §1-§3, and the orchestrator's answer, "Decided here": "Claude Code's mod on Windows goes through the CLI"): Claude Code's mod runtime refuses every pipe path in `socketPath` and has no HMAC, so the mod cannot reach the daemon's pipe. The CLI can: `daemonFetch` already proves the daemon's token over its pipe (Task 14). This task gives the mod a word that holds the session's inbox poll and prints what arrives.
 
 **Files:**
-- Modify: `cli/src/deviceClaude/command.ts:140-152` (the `link` case), its header comment
-- Test: `cli/src/deviceClaude/command.spec.ts`
+- Create: `cli/src/deviceClaude/inbox.ts`, `cli/src/deviceClaude/inbox.spec.ts`, `cli/src/deviceClaude/inbox.windows.real.spec.ts`
+- Modify: `cli/src/deviceClaude/command.ts` (the dispatch of `claude inbox <id>`, `DeviceDeps.write`, the comment above `DEVICE_USAGE`, the header comment), `cli/src/deviceClaude/command.spec.ts`
+- Modify: `cli/src/devices/listenerPipe.ts` (`createRecordProof`; `createDevicesProof` built on it), `cli/src/devices/listenerPipe.spec.ts`
+- Modify: `cli/src/cli.ts` (the `device` case: `write`)
+- Modify: the notes, section `## Task 15` (Step 1)
 
-**Depends on:** 2 (it starts only if the runtime can do it: no token is handed to a mod that cannot prove it), 4. **Effort:** xhigh (it hands out the daemon's token).
+**Depends on:** 2, 4, 14 (all landed). **Effort:** xhigh (a long-lived client that proves the daemon's token, and a process that must not outlive its session).
 
-**Interfaces:** on Windows, with the plugin on and a daemon pipe found: one line `{ daemonPipe, daemonToken, devicesRecord }`, with `devicesPipe` and `devicesToken` added when the devices are ready; exit 0. These are the names Task 16's `Linked` reads (the two tasks agree on them here, and run apart). No daemon pipe, or the plugin off or removed: exit 1 and no output. Elsewhere unchanged.
+**Interfaces:**
+- `harness device claude inbox <session id>`, dispatched when `words` is `['claude', 'inbox', <id>]`. It runs on every platform (`daemonFetch` takes the socket or the pipe); only the Windows mod runs it (Task 16). Out of `DEVICE_USAGE`, as `link` is.
+- `followInbox(sessionId: string, deps: InboxDeps): Promise<number>` in `inbox.ts`, with `InboxDeps = { dataDir: string; port: number; platform: NodeJS.Platform; acts(): boolean; proof: DaemonProof; fetch?: typeof fetch; write(line: string): Promise<boolean>; wait(ms: number): Promise<void>; parentAlive(): boolean }`. `acts` is command.ts's `pluginActs(dataDir)`; `parentAlive` is `process.kill(process.ppid, 0)` not throwing. It resolves 0 in every case.
+- The loop, until it returns:
+  1. The id is not a lower-case UUID (the listener's `SESSION_ID`): write `{"off":true}`, return; nothing connects.
+  2. Before each poll: `parentAlive()` false, return (nothing written); `acts()` false, write `{"off":true}` and return.
+  3. `POST http://127.0.0.1:<port>/api/hook/inbox`, body `{"sessionId":<id>}`, through `daemonFetch(dataDir, port, fetch, platform, (d, p) => proof.pipe(d, p))`, aborted at 30 s (the core holds 27 s, `INBOX_CALL_MS`).
+  4. A 200 whose `text` is a string of 1 to 20,000 characters: `acts()` again (the Mac mod's "checked once the poll is back, before its text"); off, write `{"off":true}` and return; on, write `{"text":<text>}`. Any other 200: write `{}`. A 404 (a daemon older than the inbox): write `{"off":true}` and return.
+  5. No daemon target, a rejected fetch (no proof, a wrong one, a closed pipe, the 30 s abort), or any other status (503 `NO_DEVICE`): `proof.forget(dataDir, port)`, `wait(60_000)`, write `{}`, and poll again.
+  6. Each `write` that resolves false (stdout closed, `EPIPE`): return at once, with no further poll.
+  Nothing goes to stderr, ever; the text and the tokens are in no log line or error.
+- `DeviceDeps.write(line: string): Promise<boolean>`: `line` and a newline on stdout, false on a write error or an `error` event on stdout (cli.ts wires it with `process.stdout.write(…, callback)`).
+- `createRecordProof` (in `devices/listenerPipe.ts`): `createDevicesProof`'s held-proof rule over any `{ pipe, pid }` record, its token and its file's time, held per record file. `createDevicesProof` keeps its name, signature and behavior on it (its existing cases unchanged). `DaemonProof = { pipe(dataDir: string, port: number): Promise<PipeTarget | null>; forget(dataDir: string, port: number): void }` and `createDaemonProof(options?: { liveness?: HostLiveness; now?: () => number }): DaemonProof` in `inbox.ts`, over `daemonRecordPath(dataDir, configuredPortOf(dataDir, port))`, `readDaemonRecord` and `readDaemonToken`, the file's time taken by a stat before the read (a write between the two leaves a newer time, which the next call proves again). `lib/daemonRecord.ts`, `lib/windows/daemonPipe.ts` and `lib/windows/pipeAuth.ts` do not change.
+- **If Step 1 says `$.process.spawn` does not stream on Windows**: the same word does one round of steps 1-5 and returns: it writes one line (`{"text"}`, `{}`, `{"off":true}`, or `{"retry":true}` in place of step 5's wait) and exits. The held proof then lives one run, so each poll reads the process table: Verification 9's numbers say what that costs.
 
-- [ ] **Step 1: Write the failing tests**: the line with and without the devices' half; `daemonToken` is the 64 hex digits of `daemon-token`; exit 1 with no output when the plugin is off, when `disable` removed it, and with no daemon pipe; the macOS cases unchanged.
-- [ ] **Step 2:** `npx vitest run src/deviceClaude/command.spec.ts` — FAIL. Commit red.
-- [ ] **Step 3: Implement.**
+- [ ] **Step 1: The VM check: does `$.process.spawn` stream on Windows** (The VM; the test user over SSH, as Task 2 ran; Claude Code by `<profile>\.local\bin\claude.exe` with the test key as The VM says, a throwaway `CLAUDE_CONFIG_DIR`, `claude -p` with a throwaway mod by `--plugin-dir`, outside the repo and never committed). The mod, at `session.start`, writes to a file in a throwaway folder:
+  1. the Claude Code version, and whether `$.process.spawn` is a function;
+  2. `$.process.spawn({ argv: [<absolute node.exe>, '-e', <one line a second, five times>] })`, with `$.clock.now()` at each piece: streaming means pieces about 1 s apart, all before the child exits;
+  3. `$.process.spawn` of `node.exe parent.js`, whose child `node.exe child.js` inherits its stdio, as `harness.exe` starts `node.exe` (`pty/src/command.rs` `run_resolved`). The child writes its pid to that folder, then a line a second; before each line it logs whether `process.kill(process.ppid, 0)` throws, and it logs the first write that fails (its code) and exits. The mod leaves the loop after three pieces. 5 s and 30 s later, from `harness-pty ps --json`: whether the parent is gone, and whether the child still runs; and the child's log.
+  Write it in the notes, `## Task 15`, and first the choice: **follow** (spawn is there and streams) or **one-shot** (it is not, or it hands the pieces only at the exit). Whether a write fails once the parent is killed, and whether the parent check sees it gone, go there too. If the child neither sees its parent gone nor fails a write within 30 s, write that first and report it: the follower would then end only when a newer poll replaces its hold. The key stays out of the notes (Task 2 §6's `findstr` check). The notes go in the task's second commit.
+- [ ] **Step 2: Write the failing tests** (the form Step 1 chose; the cases below are the follow form's, and the one-shot form keeps each as its one round):
+  - `inbox.spec.ts`, `platform: 'win32'`, the pipe stood in by a Unix socket named `harness-<32 hex>` (as `pipeAuth.spec.ts` does) served by `listenLocalSocket(handler, path, { token })`, with `daemon-<port>.json` naming it and `daemon-token` in a temp data folder, `proof: createDaemonProof({ liveness: { alive: () => true, rows: <counted, a live row> } })`, `wait` and `write` recorded:
+    - `it('prints what the person said, one line each, and polls again at once')`: answers `{"text":"hi & 100% \"x\"\nnext"}` then `{}` give the lines `{"text":"hi & 100% \"x\"\nnext"}` (that text, whole, as one JSON line) and `{}`; each request is `POST /api/hook/inbox` with `{"sessionId":<id>}` and a valid auth;
+    - `it('twenty polls read the process table once')`;
+    - `it('an answer with no proof is dropped unread, and the next poll proves again')`: a plain server on that name answering 200 `{"text":"x"}` with no proof: no `text` line; `wait(60_000)`, then `{}`, then the table read again;
+    - no daemon record, and a pid not alive: nothing connects, `wait(60_000)`, `{}`;
+    - a 503 `NO_DEVICE`: `wait(60_000)`, `{}`, another poll;
+    - a 404: `{"off":true}`, resolves 0, no more polls;
+    - `acts()` false before a poll: `{"off":true}`, no poll; turned false while a poll is held that then answers a text: `{"off":true}` and no `text` line;
+    - an id in upper case, and one that is not a UUID: `{"off":true}`, nothing connects;
+    - a text of 20,001 characters, and an empty one: `{}`;
+    - `parentAlive()` false: resolves with nothing written and no poll; `write` false after the first line: resolves, with no further poll;
+    - `err` is never called, and no written line holds the token;
+    - `platform: 'darwin'`, the daemon's Unix socket: the same first case passes through `daemonFetch`'s socket path.
+  - `listenerPipe.spec.ts`: every existing `createDevicesProof` case unchanged; `it('a record proof is held per record file')`: two records, two table reads, then none for 59 s.
+  - `command.spec.ts`: `device claude inbox <uuid>` runs the follower (the injected `write` gets its lines); `device claude inbox` with no id writes `{"off":true}`; `DEVICE_USAGE` does not name `inbox`.
+  - `inbox.windows.real.spec.ts`, `describe.runIf(process.platform === 'win32')`: a real pipe `listenLocalSocket(handler, newPipePath(), { token })`, its record and token in a temp data folder; `followInbox` with `createDaemonProof()` prints a text line, then `{}`; a server with another token gives no text line. Task 34 lists it in windows.yml.
+- [ ] **Step 3:** `cd cli && npx vitest run src/deviceClaude/inbox.spec.ts src/devices/listenerPipe.spec.ts src/deviceClaude/command.spec.ts` — FAIL. Commit red.
+- [ ] **Step 4: Implement.** Header comments: command.ts names the word and why it exists (the mod's runtime on Windows, Task 2); `inbox.ts` says the follower ends itself and why (`harness.exe` has no job object).
+- [ ] **Step 5:** the run passes; `npm run typecheck` passes. On the VM (the tree synced): `npx vitest run src/deviceClaude/inbox.windows.real.spec.ts --maxWorkers=1` passes; its result goes in the notes.
+- [ ] **Step 6: Commit** `Claude Code's mod hears the dial through the harness command on Windows, which proves the daemon's token`.
+
+### Task 16: The mod reaches Harness through `harness.exe` on Windows
+
+**Files:**
+- Modify: `plugins/harness-device/hooks/device.js`, `plugins/harness-device/test/device.test.ts`, `plugins/harness-device/README.md` (Windows: the mod runs `harness.exe`; no token reaches it)
+
+**Depends on:** 15 (its Step 1 picks the follow or the one-shot form, and its line protocol). Task 39's `attach` line is pinned here and in "Decided here", so this task does not wait for it. **Effort:** xhigh (a child process per session, its restarts and its end).
+
+**Interfaces:**
+- Windows is `(await $.session.info()).platform === 'windows'` (Task 2 §3), asked once per `session.start`. On macOS and Linux every path is today's, and `$.process.spawn` is never called.
+- On Windows:
+  - The profile is `USERPROFILE` (`$.env.get`). `settingsPath` is `<CLAUDE_CONFIG_DIR>\settings.json`, else `<profile>\.claude\settings.json`.
+  - The launcher: `<profile>\.harness\bin\harness.exe` when `$.fs.exists` says it is there, else `harness` (PATH). A bare `harness` that cannot start (the stream's first pull rejects: not on PATH) means no Harness here: look again after `RETRY_MS`, as the Mac's `socketOf` does, outside the restart bound. Looked up at each start of a follower.
+  - **The follower** (the follow form): `$.process.spawn({ argv: [launcher, 'device', 'claude', 'inbox', <session id>], cwd: <profile> })` (the profile, so a process that outlives its session holds no project folder open), one per session, started from a timer after `session.start`, as `link` is today. Its pieces are joined and cut at `\n`. Each line is parsed: `{"text": <string>}` → `isOn` → `$.prompt.submit({ text, asUser: true })`, not awaited (as today); `{"off":true}` noted; `{}` and any other line ignored. A line over 131,072 characters leaves the loop (which kills the child) and counts as a quick end.
+  - **When the loop ends**: after `{"off":true}`, the next follower after `OLD_HARNESS_MS`. Else (it exited or was killed, a line was too long, or a `harness.exe` that is there could not start) it starts again after 1, 2, 4, 8 and 16 s for five quick ends in a row (each ran under 60 s by `$.clock.now()`); the sixth waits `OLD_HARNESS_MS` and the count starts over; a follower that ran 60 s or more resets the count and starts again after 1 s. Every wait is a `$.clock.after`, so a reload cancels it; a reload or unload ends the loop, which kills the child.
+  - Without `$.process.spawn`: no follower, nothing retried.
+  - **The attach**: at `session.attach` (desktop), `held` is set, and from a timer `$.process.run([launcher, 'device', 'claude', 'attach', <session id>], { timeoutMs: RELINK_TIMEOUT_MS, cwd: <profile> })`, `held` cleared before the run (as today). Sent when the first stdout line is `{"sent":true}`. Otherwise (`{"sent":false}`, another line, a non-zero exit, a reject), the session is held again unless a detach came during the run, and the next attach runs it again, at most once in `RELINK_MS`.
+  - `$.http.fetch` is never called, and no file but the settings is read: no token, pipe name or HMAC in the mod.
+  - **The one-shot form** (if Task 15's Step 1 chose it): in place of the follower, one `$.process.run([launcher, 'device', 'claude', 'inbox', <session id>], { timeoutMs: 35_000, cwd: <profile> })` per poll, from a timer: `{"text"}` → submit, and poll again at once; `{}` → at once; `{"retry":true}` → after `RETRY_MS`; `{"off":true}` → after `OLD_HARNESS_MS`; anything else (a non-zero exit, a reject, the timeout, no line) → the same restart bound as above.
+- The header comment says why Windows differs (Task 2: no pipe in `socketPath`, no HMAC) and that no credential reaches the mod.
+
+- [ ] **Step 1: Write the failing tests** in `device.test.ts` (`claude-code/testing`). A Windows world: `session.info` answers `platform: 'windows'`; `USERPROFILE` is `C:\Users\Nguyễn Văn A' & 100%`; `fs.exists` answers per path; a `process.spawn` hook stands for the CLI (a generator yielding the pieces a test gives, and recording `return()`); `process.run` for `attach`. The follow form's cases (the one-shot form keeps each as its run per poll):
+  - the launcher order: there → that path, with argv `[<profile>\.harness\bin\harness.exe, 'device', 'claude', 'inbox', SESSION]` and `cwd` the profile; missing → `harness`; `harness` rejected → no spawn for `RETRY_MS`, then looked for again;
+  - `{"text":"hi"}` cut across two pieces → one submit of `hi`; two lines in one piece → two submits, in order;
+  - the plugin off in the settings → a text line submits nothing;
+  - `{"off":true}`, then the end → the next spawn after exactly 10 minutes, none before;
+  - quick ends → spawns at +1, +2, +4, +8 and +16 s, the sixth after 10 minutes; a follower that ran 60 s → the next after 1 s;
+  - a line of 131,073 characters → `return()` on the stream, and a restart by the bound;
+  - one follower per session: two `session.attach` and a `session.detach` start none;
+  - the attach: `{"sent":true}` → one run, argv `[…, 'attach', SESSION]`; `{"sent":false}` → held: an attach within 30 s runs nothing, one after 30 s runs again; a detach during the run → no run after it;
+  - no `http.fetch` at all, and `fs.read` reads only the settings file;
+  - every existing case (a macOS world) unchanged, and `process.spawn` never called there.
+- [ ] **Step 2:** `CLAUDE_CONFIG_DIR="$(mktemp -d)" claude plugin test plugins/harness-device` — FAIL. Commit red.
+- [ ] **Step 3: Implement.** README: on Windows the mod runs `harness.exe` (or `harness` on PATH) and is handed no credential.
+- [ ] **Step 4:** the test passes; `CLAUDE_CONFIG_DIR="$(mktemp -d)" claude plugin validate plugins/harness-device` passes.
+- [ ] **Step 5: Commit** `Claude Code's mod reaches the dial through the harness command on Windows, with no token`.
+
+### Task 39: `harness device claude attach`
+
+**Files:**
+- Modify: `cli/src/deviceClaude/command.ts` (the dispatch of `claude attach <id>`, `DeviceDeps.tell`), `cli/src/deviceClaude/command.spec.ts`
+
+**Depends on:** 6 (`tellDevices` over the devices' pipe). **Effort:** high.
+
+**Interfaces:**
+- `harness device claude attach <session id>`, dispatched when `words` is `['claude', 'attach', <id>]`; out of `DEVICE_USAGE`. On every platform; only the Windows mod runs it (Task 16).
+- It writes one line and exits 0: `{"sent":true}` when the id is a lower-case UUID (the listener's `SESSION_ID`), `pluginActs(dataDir)` holds, and `deps.tell(dataDir, { type: 'attach', sessionId })` is true; else `{"sent":false}`, and nothing is sent when the id or the plugin refuses it. Nothing on stderr.
+- `DeviceDeps.tell?: (dataDir: string, message: { type: string } & Record<string, unknown>) => Promise<boolean>`, `tellDevices` by default.
+
+- [ ] **Step 1: Write the failing tests** in `command.spec.ts`, `platform: 'win32'` with `tell` injected: sent → `{"sent":true}` and `tell` saw `{ type: 'attach', sessionId }`; `tell` false → `{"sent":false}`; the plugin off, and removed → `{"sent":false}` and `tell` never called; an upper-case id and a non-UUID → the same; `platform: 'darwin'` → `{"sent":true}` the same way; `err` never called.
+- [ ] **Step 2:** `cd cli && npx vitest run src/deviceClaude/command.spec.ts` — FAIL. Commit red.
+- [ ] **Step 3: Implement.** The comment above `DEVICE_USAGE` names `attach` among the plugins' words.
 - [ ] **Step 4:** the run passes; `npm run typecheck` passes.
-- [ ] **Step 5: Commit** `link hands Claude Code's mod the daemon's pipe and token on Windows, as it hands the socket on a Mac`.
-
-### Task 16: The mod signs its requests
-
-**Files:**
-- Modify: `plugins/harness-device/hooks/device.js`, `plugins/harness-device/test/device.test.ts`
-- Create: `cli/src/harnessDeviceMod.spec.ts`
-
-**Depends on:** 2. **Effort:** xhigh.
-
-**Interfaces:** on Windows (told as Task 2's notes say) the launchers are `<USERPROFILE>\.harness\bin\harness.exe`, then `harness`. `Linked` holds `{ daemon: { pipe, token }, devices?: { pipe, token } }` there, read from Task 15's line (`daemonPipe`, `daemonToken`, `devicesPipe`, `devicesToken`; a pipe matching the global pattern, a token of 64 lowercase hex digits, else the line is refused). Each request over a pipe carries `x-harness-auth`; an answer without the right `x-harness-proof` counts as no answer (the poll waits `RETRY_MS`, the attach is dropped), and its text is never read. `device.js` exports `pipeAuth(token, nonce)` and `pipeProven(proof, token, nonce)`, with the HMAC-SHA256 Task 2's notes name. On macOS and Linux nothing changes.
-
-- [ ] **Step 1: Write the failing tests**
-  - `device.test.ts` (`claude-code/testing`), a Windows world: the launcher order; a poll's `socketPath` is the daemon pipe and its headers hold a well-formed auth for that pipe's id; an answer with the right proof submits its prompt; one with no proof or a wrong one submits nothing and polls again after `RETRY_MS`; the attach goes to the devices pipe with the devices' token; a link line with a malformed pipe or token waits `RETRY_MS`.
-  - `harnessDeviceMod.spec.ts` (CLI vitest): `pipeAuth` and `pipeProven` imported from `device.js` agree with every vector of `pipe-auth-vectors.json`.
-- [ ] **Step 2:** `CLAUDE_CONFIG_DIR="$(mktemp -d)" claude plugin test plugins/harness-device` and `cd cli && npx vitest run src/harnessDeviceMod.spec.ts` — FAIL. Commit red.
-- [ ] **Step 3: Implement.**
-- [ ] **Step 4:** both pass; `CLAUDE_CONFIG_DIR="$(mktemp -d)" claude plugin validate plugins/harness-device` passes.
-- [ ] **Step 5: Commit** `Claude Code's mod proves the daemon's token on each poll on Windows`.
+- [ ] **Step 5: Commit** `The dial turns to the session the Claude app shows on Windows, through the harness command`.
 
 ### Task 17: The permission hook on Windows
 
@@ -1030,9 +1122,9 @@ The macOS steps (the bundle id, LaunchServices, the preferences check) stay macO
 **Files:**
 - Modify: `.github/workflows/windows.yml:179-193` (the vitest list), and one new step after it
 
-**Depends on:** 6, 8, 13, 17, 23, 32. **Effort:** medium. **Red test:** none; one commit.
+**Depends on:** 6, 8, 13, 15, 17, 23, 32. **Effort:** medium. **Red test:** none; one commit.
 
-- [ ] **Step 1:** add to `$paths` of "Contract suite against the real host, and the Windows CLI specs": `'src/devices/listenerPipe.windows.real.spec.ts'`, `'src/devices/claudePlugin.windows.real.spec.ts'`, `'src/hookCaller.windows.real.spec.ts'`, `'src/harnessDevicePlugin.spec.ts'`, `'../plugins/harness-device-vscode/src'`.
+- [ ] **Step 1:** add to `$paths` of "Contract suite against the real host, and the Windows CLI specs": `'src/devices/listenerPipe.windows.real.spec.ts'`, `'src/devices/claudePlugin.windows.real.spec.ts'`, `'src/deviceClaude/inbox.windows.real.spec.ts'`, `'src/hookCaller.windows.real.spec.ts'`, `'src/harnessDevicePlugin.spec.ts'`, `'../plugins/harness-device-vscode/src'`.
 - [ ] **Step 2:** add the step, with `if: ${{ !inputs.release }}`, `working-directory: cli`, `shell: pwsh`, env `E2E_BUNDLE: "1"` and `HARNESS_PTY_BIN` as the step above sets it:
   ```yaml
       - name: 'The dial, end to end, on a stand-in dial'
@@ -1047,11 +1139,11 @@ The macOS steps (the bundle id, LaunchServices, the preferences check) stay macO
 **Files:**
 - Modify: `cli/AGENTS.md` (the devices row of "The processes"), `docs/cli.md:32` (`harness device notify`), `docs/windows-rules.md`
 
-**Depends on:** 13, 17, 18, 19, 20, 24, 25, 29, 30, 33, 37, and 36 and 38 when they run. **Effort:** medium. **Red test:** none; one commit.
+**Depends on:** 13, 16, 17, 18, 19, 20, 24, 25, 29, 30, 33, 37, 39, and 36 and 38 when they run. **Effort:** medium. **Red test:** none; one commit.
 
 - [ ] **Step 1: `cli/AGENTS.md`**, the devices row, in its own words: on Windows the listener is a named pipe with its own token and record (`devices/listenerPipe.ts`); herdr over its pipe; `codex queue` and every other program through `lib/windows/program.ts`; a tap raises the app through `harness-pty raise` (`cable/hosts/windowsRaise.ts`); the dial skill, the plugin and the extension are set up on Windows too.
 - [ ] **Step 2: `docs/cli.md`**: `harness device notify` prints `no dial` only where the devices run inside the core; Windows is gone from that sentence.
-- [ ] **Step 3: `docs/windows-rules.md`**: each new rule a task's report names (what happened, what was measured, the rule, its test), and Task 1's three that hold for any Windows work: an app's own `.cmd` may be a forwarder, not an Electron launcher (Orca's: run its `.exe`); a launcher's paths change with each update (read it at every start); a link handler may be missing until its app first starts (open with no UI).
+- [ ] **Step 3: `docs/windows-rules.md`**: each new rule a task's report names (what happened, what was measured, the rule, its test), and Task 1's three that hold for any Windows work: an app's own `.cmd` may be a forwarder, not an Electron launcher (Orca's: run its `.exe`); a launcher's paths change with each update (read it at every start); a link handler may be missing until its app first starts (open with no UI). And Task 2's two: Claude Code's mod runtime refuses a pipe path in `socketPath` and has no HMAC, so a mod reaches Harness through `harness.exe` (Tasks 15, 16, 39); `$.process.run` of a missing absolute path resolves with exit 1 instead of rejecting (check with `$.fs.exists`).
 - [ ] **Step 4:** every file and link the changed lines name exists.
 - [ ] **Step 5: Commit** `The guides describe the dial on Windows`.
 
@@ -1131,7 +1223,7 @@ The macOS steps (the bundle id, LaunchServices, the preferences check) stay macO
 - The dial e2e files that run only on a Mac: `cd cli && npx vitest run --config vitest.e2e.config.ts e2e/dialAppFilter.e2e.ts e2e/dialTerminalFollow.e2e.ts e2e/dialCodexApp.e2e.ts e2e/deviceCodex.e2e.ts`. Isolation is `IsolatedDaemon`'s own (a private root, port, tmux server, fake engines, a fake `open`, signed out). They guard that macOS did not change.
 
 **On GitHub, by hand, once each, after the final review, never both at once:**
-- **Windows** (`gh workflow run windows.yml --ref feat/dial-windows`; the heavy lane is granted by harness-pm). On x64 and arm64 a person sees every job green, and in the logs: the Rust tests with `raise` and `open-link`; the vitest list with `listenerPipe.windows.real.spec.ts`, `claudePlugin.windows.real.spec.ts`, `hookCaller.windows.real.spec.ts`, `harnessDevicePlugin.spec.ts`, `program.spec.ts` and the extension's tests; the step "The dial, end to end, on a stand-in dial" with its four cases. Everything runs in the runner's temp folders against daemons it starts itself.
+- **Windows** (`gh workflow run windows.yml --ref feat/dial-windows`; the heavy lane is granted by harness-pm). On x64 and arm64 a person sees every job green, and in the logs: the Rust tests with `raise` and `open-link`; the vitest list with `listenerPipe.windows.real.spec.ts`, `claudePlugin.windows.real.spec.ts`, `inbox.windows.real.spec.ts`, `hookCaller.windows.real.spec.ts`, `harnessDevicePlugin.spec.ts`, `program.spec.ts` and the extension's tests; the step "The dial, end to end, on a stand-in dial" with its four cases. Everything runs in the runner's temp folders against daemons it starts itself.
 - **CLI end to end** (`gh workflow run cli-e2e.yml --ref feat/dial-windows`): the Linux shards, with `dialStream`, `dialVscode`, `dialAppFilter` and `deviceHerdr`. They guard that Linux did not change. `dialWindows.e2e.ts` shows as skipped there.
 
 **On the VM** (The VM: the owned test user, its desktop session, a daemon of its own on port 18478, signed out, the stand-in dial; the builds are the branch's). Task 37 comes first: the agent alone on the VM, which it restarts, signs the test user in and leaves that session up for the checks below. Each result goes in the pull request:
@@ -1141,11 +1233,11 @@ The macOS steps (the bundle id, LaunchServices, the preferences check) stay macO
 3. **The extension's gate**: Task 25's command against a downloaded VS Code; it passes.
 4. **herdr.** herdr 0.9.5 with an agent in a pane (a shell stands in when no engine is signed in). The desk's `list` shows it; `say <row> hello` types `hello` into that pane; `tap <row>` focuses it.
 5. **Orca.** Orca installed for the test user (its `resources\bin` not on PATH, as installed), the plugin installed from the checkout (`orca.exe plugin install`, approved as Orca shows). With the desk up, the panel says "Dial attached."; `say <row>` with a text holding a line break and `&` reaches an agent in an Orca terminal whole (through `orca.exe`, never `orca.cmd`: `harness-pty ps --json` shows no `cmd.exe` under the devices); `rest <row>` switches Orca to it; stopping the desk leaves no `orca.exe` process (the focus watch ended). `orca.exe plugin test .` in the plugin's folder passes.
-6. **Claude Code and Codex, real**, on the VM with the test key (The VM: cheap models, throwaway `CLAUDE_CONFIG_DIR` and `CODEX_HOME`, the desk's isolated data folder; never a person's account). With the stand-in dial attached, Harness finds `claude.exe` in `<profile>\.local\bin` (not on PATH) and installs the plugin and the skill into the test user's homes. A Claude Code session started from VS Code's panel (Claude Code's extension, the test key) is listed on the desk with VS Code's id, and `tap <row>` on it opens its `vscode://` link and brings VS Code forward; the same from an integrated terminal. A permission prompt in Claude Code shows on the desk; `say` reaches the Claude Code session through the mod (its poll carries the auth and takes only a proven answer); a Codex thread takes `say` through `codex queue`; Claude Code's hook runs under Git Bash, and under PowerShell as Task 2's notes show it, with no window shown; a Codex `Stop` hook names the caller above its shell (Task 31) and the held core does not refuse it. No transcript or log copied off the VM holds the key.
+6. **Claude Code and Codex, real**, on the VM with the test key (The VM: cheap models, throwaway `CLAUDE_CONFIG_DIR` and `CODEX_HOME`, the desk's isolated data folder; never a person's account). With the stand-in dial attached, Harness finds `claude.exe` in `<profile>\.local\bin` (not on PATH) and installs the plugin and the skill into the test user's homes. A Claude Code session started from VS Code's panel (Claude Code's extension, the test key) is listed on the desk with VS Code's id, and `tap <row>` on it opens its `vscode://` link and brings VS Code forward; the same from an integrated terminal. A permission prompt in Claude Code shows on the desk. **The mod's voice, through the CLI** (Tasks 15, 16, 39), in a standalone Claude Code session (`claude.exe` in a PowerShell window of the test user's desktop, the plugin as Harness installed it above, on in the throwaway `CLAUDE_CONFIG_DIR`): `harness-pty ps --json` shows one `harness.exe device claude inbox <id>` with its `node.exe` under `claude.exe`, and no daemon or devices token in any argument; `say <row> hello` on the desk submits `hello` as the person's prompt in that session; opening that session in the Claude app (if Task 37 installed it; else skipped and said so) turns the desk to its row through `attach`. Then `claude plugin disable` in that home: the follower prints its last line and ends, and no `harness.exe … inbox` is left within 60 s. Killing that `harness.exe` by its pid: its `node.exe` ends within 30 s, and a new follower runs within 20 s (the restart's bound). Quitting Claude Code (`/exit`): no `harness.exe` or `node.exe` of the inbox is left within 30 s. A Codex thread takes `say` through `codex queue`; a Codex thread takes `say` through `codex queue`; Claude Code's hook runs under Git Bash, and under PowerShell as Task 2's notes show it, with no window shown; a Codex `Stop` hook names the caller above its shell (Task 31) and the held core does not refuse it. No transcript or log copied off the VM holds the key.
 7. **The raise, measured.** VS Code, Cursor, Orca, the Claude app, the ChatGPT app, WezTerm, Warp and Alacritty open with an agent each (those Task 37 could install; each editor started once before, so its link handler exists). A session in Alacritty is raised by `ALACRITTY_LOG` alone; Orca is raised while its focus watch's `orca.exe` runs. Through `desktop-e2e.sh run`, a script sends `tap` to the desk at least 30 times in each of three situations: Harness idle and another app in front; keys being typed into another app (`input.ps1`); the target minimized. Count `raised`, `refused` and `none` from the daemon's `[device] raise` day line. The three rates go in the pull request. Any rate ships (spec, decided 7). A `refused` tap shows no line on the dial; a `none` shows macOS's failure line. `pick <app>` on the desk (the dial's app-list pick) brings that app forward.
    - **Harness Desktop**, installed for the test user alone (the released per-user install, `%LOCALAPPDATA%\Programs\Harness`, signed out). With Desktop closed, `tap <row>` on a Harness agent of the desk's daemon starts it, and `desktop-e2e.sh shot` shows its window; with Desktop hidden in the tray, the same tap brings its window back. The tester looks at the two shots.
-8. **Nothing flashes.** `desktop-e2e.sh run watch-windows.ps1` (with its `-Probe` once, as the positive control) through each new flow: the daemon's start, `notify`, a `link` from VS Code and from Orca, the extension's install, `claude plugin` setup, a `codex queue`, an Orca send, a tap of each kind (app, link, Cursor folder), an `open-link` of a scheme with no handler, a Codex-style hook, and a Claude Code hook from VS Code's panel. No `CONSOLE` line from a Harness process, and no "pick an app" window.
-9. **The numbers**: Task 33's hook times, and Task 36's if it ran; `harness device notify` timed 20 times (median, p95), a fresh process, so each proves the pid by the table; and Task 6's two `tellDevices` times from one process, with and without the table read (the watch's path).
+8. **Nothing flashes.** `desktop-e2e.sh run watch-windows.ps1` (with its `-Probe` once, as the positive control) through each new flow: the daemon's start, `notify`, a `link` from VS Code and from Orca, the extension's install, `claude plugin` setup, a `codex queue`, an Orca send, a tap of each kind (app, link, Cursor folder), an `open-link` of a scheme with no handler, a Codex-style hook, a Claude Code hook from VS Code's panel, and the mod's follower starting and an `attach` run (Verification 6's session). No `CONSOLE` line from a Harness process, and no "pick an app" window.
+9. **The numbers**: the mod's follower on an idle VM (the desk up with the stand-in dial attached, nothing said): with 0, 1 and 3 standalone Claude Code sessions holding it, for 10 minutes each, the VM's CPU (`Get-Counter '\Processor(_Total)\% Processor Time'` every 5 s: mean and p95) and, per session, the CPU seconds and working set of its `harness.exe` and `node.exe` at the end (`Get-Process`); the pty host starts in that time (at most one table read a minute per follower). In the one-shot form, the same, and the starts per minute. Task 33's hook times, and Task 36's if it ran; `harness device notify` timed 20 times (median, p95), a fresh process, so each proves the pid by the table; and Task 6's two `tellDevices` times from one process, with and without the table read (the watch's path).
 10. **Clean up**: `desktop-e2e.sh cleanup` (the Store apps go with the test user); nothing listens on 18478; the `admin` user's files are untouched; the Winlogon values read back are those Task 37 read first (no `DefaultPassword` left that was not there).
 11. **The key goes**, last, after every check that uses it: delete `%USERPROFILE%\.harness-test\openrouter.key` (and its `.harness-test` folder when empty) in the profile it was put in; `Test-Path` on it then says `False`. The pull request says the test key was removed from the VM after the checks. The key itself is in no command, log, note, commit or pull request text.
 
