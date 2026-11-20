@@ -1315,7 +1315,7 @@ mod tests {
     }
 
     /// The ChatGPT window and the permission, as a test tells them. Each call is kept as it is made, and `observe`
-    /// waits while the gate is shut.
+    /// waits while the gate is shut, then gives no observation when it refuses.
     #[derive(Default)]
     struct ChatgptDoor(Arc<DoorCalls>);
 
@@ -1338,6 +1338,7 @@ mod tests {
         changed: Option<Arc<dyn Fn() + Send + Sync>>,
         observations: Vec<Observed>,
         shut: bool,
+        refuses: bool,
     }
 
     /// An observation's `heard`, and whether its handle has been dropped.
@@ -1437,7 +1438,11 @@ mod tests {
                 state.observations.push(Observed { heard: Arc::from(heard), dropped: false });
                 state.observations.len() - 1
             });
-            drop(self.0.moved.wait_while(self.0.state.lock().unwrap(), |state| state.shut).unwrap());
+            let state = self.0.moved.wait_while(self.0.state.lock().unwrap(), |state| state.shut).unwrap();
+            if state.refuses {
+                return None;
+            }
+            drop(state);
             Some(Box::new(Observation(self.0.clone(), index)))
         }
     }
@@ -2131,6 +2136,27 @@ mod tests {
         assert_eq!(said(&w), 2);
         assert_eq!(w.answer(Effect::StopWatch), Event::WatchExit(Some(0)));
         assert_eq!(w.fake.stdin(), [CHATGPT_LINE, VSCODE_LINE, CHATGPT_LINE]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_observation_that_does_not_start_is_one_log_line_each_time_observing_starts() {
+        let door = ChatgptDoor::answering(false, true);
+        door.with(|state| state.refuses = true);
+        let (w, fronts) = world_following(CHATGPT_BUNDLE, &door);
+        assert_eq!(w.next(), follow(true, false));
+        w.fake.script("hardware watch --json", &ATTACHED);
+        assert_eq!(w.answer(Effect::SpawnWatch), a_dial());
+        door.observed(1);
+        let said = |w: &World| w.fake.log().lines().iter().filter(|line| *line == "chatgpt: no observer").count();
+        // The next start waits at the gate: the follow thread is done with the first.
+        door.gate(true);
+        fronts.tell(VSCODE);
+        fronts.tell(CHATGPT_BUNDLE);
+        door.observed(2);
+        assert_eq!(said(&w), 1);
+        door.gate(false);
+        assert_eq!(w.answer(Effect::StopWatch), Event::WatchExit(Some(0)));
     }
 
     #[cfg(unix)]
