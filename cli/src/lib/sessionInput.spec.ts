@@ -1613,6 +1613,7 @@ describe('SessionInputController', () => {
           await vi.advanceTimersByTimeAsync(5 * 60_000)
           expect(fake.typed).toEqual(['Say hello'])
           expect(fake.onError).not.toHaveBeenCalled()
+          fake.controller.expectFirstTask('s1')
           fake.controller.submit('s1', 'Say hello')
           await vi.advanceTimersByTimeAsync(1_000)
           expect(fake.sent).toEqual(['Say hello'])
@@ -1650,6 +1651,7 @@ describe('SessionInputController', () => {
           await vi.advanceTimersByTimeAsync(10_000)
           expect(fake.keys).toEqual(['C-u'])
           await fake.session()
+          fake.controller.expectFirstTask('s1')
           fake.controller.submit('s1', 'Say hello')
           await vi.advanceTimersByTimeAsync(10 * 60_000)
           expect(fake.typed).toEqual(['Say hello', 'Say hello'])
@@ -1658,6 +1660,34 @@ describe('SessionInputController', () => {
           expect(fake.untypeFirstTask).toHaveBeenCalledTimes(1)
           expect(fake.onError).not.toHaveBeenCalled()
           expect(fake.controller.firstTaskWaiting('s1')).toBe(true)
+          fake.controller.forget('s1')
+        })
+
+        it('a message sent while it is back on its row waits behind it, and behind those queued before', async () => {
+          vi.useFakeTimers()
+          const fake = openclaw()
+
+          fake.controller.expectFirstTask('s1')
+          fake.controller.submit('s1', 'Say hello')
+          await vi.advanceTimersByTimeAsync(0)
+          fake.controller.submit('s1', 'And then this')
+          await vi.advanceTimersByTimeAsync(10_000)
+          expect(fake.box()).toBe('')
+          fake.controller.submit('s1', 'And this last')
+          await vi.advanceTimersByTimeAsync(2_000)
+          expect(await fake.session()).toBe(true)
+          await vi.advanceTimersByTimeAsync(5_000)
+          expect(fake.sent).toEqual([])
+          fake.controller.expectFirstTask('s1')
+          fake.controller.submit('s1', 'Say hello')
+          await vi.advanceTimersByTimeAsync(1_000)
+          for (const message of ['Say hello', 'And then this']) {
+            fake.controller.onTurnStarted('s1', message)
+            fake.controller.onTurnEnded('s1')
+            await vi.advanceTimersByTimeAsync(1_000)
+          }
+          expect(fake.sent).toEqual(['Say hello', 'And then this', 'And this last'])
+          expect(fake.onError).not.toHaveBeenCalled()
           fake.controller.forget('s1')
         })
       })
@@ -1852,6 +1882,45 @@ describe('SessionInputController', () => {
         expect(forgotten.onFirstTaskTaken).not.toHaveBeenCalled()
         stopped.controller.forget('s1')
         forgotten.controller.forget('s1')
+      })
+
+      // Found building the adoption (decision 7): a message queued behind a first task cleared back to its row refused the
+      // `/session` its pane needed, so the task failed at its bound; and let past it, the message would go first.
+      it.each([
+        ['typed here', (fake: ReturnType<typeof openclaw>) => {
+          fake.controller.expectFirstTask('s1')
+          fake.controller.submit('s1', 'Say hello')
+        }],
+        ['an earlier daemon typed', (fake: ReturnType<typeof openclaw>) => {
+          fake.show('Say hello')
+          fake.refuse()
+          fake.controller.adoptTypedFirstTask('s1', 'Say hello')
+        }],
+      ])('a message queued behind a first task %s and cleared to its row lets its /session be typed, and goes once a turn took the task', async (_, give) => {
+        vi.useFakeTimers()
+        const fake = openclaw()
+
+        give(fake)
+        await vi.advanceTimersByTimeAsync(0)
+        fake.controller.submit('s1', 'And then this')
+        await vi.advanceTimersByTimeAsync(10_000)
+        expect(fake.keys).toEqual(['C-u'])
+        expect(fake.box()).toBe('')
+        expect(await fake.session()).toBe(true)
+        await vi.advanceTimersByTimeAsync(5_000)
+        expect(fake.sent).toEqual([])
+        fake.controller.expectFirstTask('s1')
+        fake.controller.submit('s1', 'Say hello')
+        await vi.advanceTimersByTimeAsync(1_000)
+        expect(fake.sent).toEqual(['Say hello'])
+        fake.controller.onTurnStarted('s1', 'Say hello')
+        await vi.advanceTimersByTimeAsync(1_000)
+        expect(fake.sent).toEqual(['Say hello'])
+        fake.controller.onTurnEnded('s1')
+        await vi.advanceTimersByTimeAsync(1_000)
+        expect(fake.sent).toEqual(['Say hello', 'And then this'])
+        expect(fake.onError).not.toHaveBeenCalled()
+        fake.controller.forget('s1')
       })
     })
 
