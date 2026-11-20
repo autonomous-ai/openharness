@@ -13,7 +13,9 @@
 # files of each part, and the foreground changes Windows reported beside the front check's steps.
 #
 # The app reads its folders from Windows (the known folders), not from USERPROFILE or LOCALAPPDATA, so it runs in this
-# account's own: run it as a throwaway user or on a throwaway machine. One check changes the machine and runs only on a
+# account's own: run it only in a throwaway Windows account (the VM kit's user-add) or on a GitHub runner. It opens the
+# default browser, a cmd window, and presses Alt and moves the mouse to bring windows to the front; for the run conhost
+# hosts the account's console windows, which Clean-Up undoes. One check changes the machine and runs only on a
 # GitHub-hosted runner (RUNNER_ENVIRONMENT): the install line's, which an Image File Execution Options entry sends to a
 # stand-in for Windows PowerShell so the line is seen, never run.
 [CmdletBinding(DefaultParameterSetName = 'install')]
@@ -67,6 +69,7 @@ $powershell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powersh
 
 function Stop-Before([string]$why) {
   Write-Host "windows.ps1: $why"
+  Write-Host 'windows.ps1 runs only in a throwaway Windows account (the VM kit''s user-add) or on a GitHub runner'
   exit 2
 }
 
@@ -92,7 +95,10 @@ foreach ($key in @($runKey, $approvedKey)) {
     Stop-Before "$key has a $RUN_VALUE value: this account has a Harness Device login item already"
   }
 }
-if (Get-Process -Name 'harness-device' -ErrorAction SilentlyContinue) { Stop-Before 'a Harness Device runs' }
+$session = (Get-Process -Id $PID).SessionId
+if (@(Get-Process -Name 'harness-device' -ErrorAction SilentlyContinue | Where-Object { $_.SessionId -eq $session }).Count) {
+  Stop-Before 'a Harness Device runs in this session'
+}
 $userHome = [Environment]::GetFolderPath('UserProfile')
 if ((Test-Path -LiteralPath (Join-Path $userHome '.harness')) -or (Get-Command 'harness.exe' -ErrorAction SilentlyContinue)) {
   Stop-Before 'this account has a Harness CLI: the checks need an account without one'
@@ -316,11 +322,13 @@ static class FrontWatch {
 '@
 
 # Stands in for Windows PowerShell while the install line runs: writes whether it has a console window and each argument
-# it got (the first is the program the app ran) to powershell.record beside itself, then prints an install.ps1 step line
-# and its failure, and exits 1, as install.ps1 that could not download.
+# it got (the first is the program the app ran) to powershell.<parent pid>.record beside itself, then prints an
+# install.ps1 step line and its failure, and exits 1, as install.ps1 that could not download.
 $standInSource = @'
 using System;
+using System.Diagnostics;
 using System.IO;
+using System.Management;
 using System.Runtime.InteropServices;
 using System.Text;
 static class StandIn {
@@ -334,10 +342,16 @@ static class StandIn {
     record.Append("console: ").Append(console == IntPtr.Zero ? "none" : IsWindowVisible(console) ? "visible" : "hidden");
     record.Append('\n');
     foreach (string arg in args) record.Append("arg: ").Append(arg).Append('\n');
+    uint parent = 0;
+    using (ManagementObjectSearcher search = new ManagementObjectSearcher(
+        "SELECT ParentProcessId FROM Win32_Process WHERE ProcessId = " + Process.GetCurrentProcess().Id)) {
+      foreach (ManagementObject process in search.Get()) parent = (uint)process["ParentProcessId"];
+    }
     string folder = AppDomain.CurrentDomain.BaseDirectory;
-    string temp = Path.Combine(folder, "powershell.record.tmp");
+    string name = "powershell." + parent + ".record";
+    string temp = Path.Combine(folder, name + ".tmp");
     File.WriteAllText(temp, record.ToString(), new UTF8Encoding(false));
-    File.Move(temp, Path.Combine(folder, "powershell.record"));
+    File.Move(temp, Path.Combine(folder, name));
     StreamWriter stdout = new StreamWriter(Console.OpenStandardOutput(), new UTF8Encoding(false));
     stdout.AutoFlush = true;
     stdout.Write("  Downloading Harness 0.6.99 (e2e)...\n");
@@ -430,7 +444,7 @@ namespace E2E {
 
     public static void Press(byte key) {
       keybd_event(key, 0, 0, UIntPtr.Zero);
-      keybd_event(key, 0, 2, UIntPtr.Zero);
+      keybd_event(key, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
     }
 
     // "yes", "no", or "unknown" when the process cannot be asked.
@@ -516,6 +530,11 @@ function Launch([string]$phase) {
   $script:phase = $phase
   $script:mark = (Log-Text).Length
   $script:app = Start-Process -FilePath $exe -WorkingDirectory $work -PassThru
+}
+
+# The harness-device.exe processes of this install: another account's or another copy's are never touched.
+function Our-Apps {
+  @(Get-Process -Name 'harness-device' -ErrorAction SilentlyContinue | Where-Object { $_.Path -and $_.Path -ieq $exe })
 }
 
 function Gone([int]$processId) {
@@ -665,8 +684,7 @@ function Clean-Up {
   }
   Restore-ConsoleHost
   Use-Fake $false
-  Get-Process -Name 'harness-device' -ErrorAction SilentlyContinue |
-    Where-Object { $_.Path -and $_.Path -ieq $exe } | Stop-Process -Force -ErrorAction SilentlyContinue
+  Our-Apps | Stop-Process -Force -ErrorAction SilentlyContinue
   foreach ($line in (Fake-Lines 'pids.log')) {
     $process = Get-Process -Id ([int]$line) -ErrorAction SilentlyContinue
     if ($process -and $process.ProcessName -eq 'powershell') { Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue }
@@ -681,7 +699,7 @@ function Clean-Up {
     New-Item -ItemType Directory -Force -Path $Out | Out-Null
     Keep-Fake
     Copy-Item -Path (Join-Path $evidence '*') -Destination $Out -Recurse -Force -ErrorAction SilentlyContinue
-    Copy-Item -Path (Join-Path $logs 'app-*.log'), $consoles, (Join-Path $tools 'powershell.record'), $served, `
+    Copy-Item -Path (Join-Path $logs 'app-*.log'), $consoles, (Join-Path $tools 'powershell.*.record'), $served, `
       $frontEvents, $frontSteps -Destination $Out -Force -ErrorAction SilentlyContinue
   }
   # The uninstaller copies itself away and returns at once: what it removes is waited for.
@@ -754,7 +772,8 @@ static class Serve {
 }
 '@
 
-function Checked([int]$count) { @(Lines-Of $served | Where-Object { $_.StartsWith('GET /metadata.json ') }).Count -ge $count }
+function Manifest-Requests { @(Lines-Of $served | Where-Object { $_.StartsWith('GET /metadata.json ') }).Count }
+function Checked([int]$count) { (Manifest-Requests) -ge $count }
 
 function Installed-Version {
   try { (Get-Item -LiteralPath $exe).VersionInfo.ProductVersion } catch { $null }
@@ -774,10 +793,10 @@ function Update-Checks {
   $null = $setup.Handle
   if (-not $setup.WaitForExit(300000)) { Fail 'the installer ends within 5 minutes' }
   if ($setup.ExitCode -ne 0) { Fail "the installer exits 0, not $($setup.ExitCode)" }
-  $running = @(Get-Process -Name 'harness-device' -ErrorAction SilentlyContinue)
+  $running = Our-Apps
   if ($running.Count) {
     $running | Stop-Process -Force
-    if (-not (Wait-For { -not (Get-Process -Name 'harness-device' -ErrorAction SilentlyContinue) })) { Fail 'the app started by the installer ends' }
+    if (-not (Wait-For { (Our-Apps).Count -eq 0 })) { Fail 'the app started by the installer ends' }
   }
   if ((Installed-Version) -ne '0.0.1') { Fail "/S installs 0.0.1, not $(Installed-Version)" }
   Ok '/S installs 0.0.1'
@@ -798,25 +817,24 @@ function Update-Checks {
 
   # The plugin ends the app as it starts the installer, which starts the app again when it is done.
   if (-not (Wait-For { $script:app.HasExited })) { Fail '0.0.1 ends for the install' }
+  # 0.0.1 asks again a minute after a check or download that failed, and a 0.0.1 the installer started may have asked:
+  # only a request from here on is the relaunched app's.
+  $asked = Manifest-Requests
   if (-not (Wait-For { (Installed-Version) -eq '0.0.2' } (& $left))) {
     Fail "the installed harness-device.exe is 0.0.2, not $(Installed-Version)"
   }
   Ok 'the installed harness-device.exe is 0.0.2'
   $old = $script:app.Id
-  $relaunched = {
-    @(Get-Process -Name 'harness-device' -ErrorAction SilentlyContinue |
-      Where-Object { $_.Id -ne $old -and $_.Path -and $_.Path -ieq $exe }).Count -gt 0
-  }
+  $relaunched = { @(Our-Apps | Where-Object { $_.Id -ne $old }).Count -gt 0 }
   if (-not (Wait-For $relaunched (& $left))) { Fail 'the app runs again after the update' }
-  # 0.0.1 checked once: a second check is the relaunched app's.
-  if (-not (Wait-For { Checked 2 } (& $left))) { Fail 'the relaunched app checks the manifest' }
+  if (-not (Wait-For { Checked ($asked + 1) } (& $left))) { Fail 'the relaunched app checks the manifest' }
   Ok 'the app runs again, 0.0.2, and checks the manifest'
   if ((Run-Value) -ine $quoted) { Fail "the update keeps the Run value $RUN_VALUE, the quoted exe: it is $(Run-Value)" }
   Ok "the update keeps the Run value $RUN_VALUE"
 
-  # A check starts only once the one before it was answered, so the third request shows the relaunched app's first
-  # check, the second, was answered: any update it found is logged by then.
-  if (-not (Wait-For { Checked 3 } (& $left))) { Fail 'the relaunched app checks again, a minute later' }
+  # A check starts only once the one before it was answered, so the relaunched app's second request shows its first was
+  # answered: any update it found is logged by then.
+  if (-not (Wait-For { Checked ($asked + 2) } (& $left))) { Fail 'the relaunched app checks again, a minute later' }
   if ((Times-Logged 'update: found 0.0.2') -ne 1) { Fail '0.0.2 finds no update: one update: found in the log' }
   Ok '0.0.2 checks the manifest and finds no update'
 }
@@ -841,7 +859,7 @@ try {
   $window = Build-Tool 'window' 'winexe' $windowSource @('System.Windows.Forms.dll')
   $watcher = Build-Tool 'console-watch' 'winexe' $watcherSource @('System.Management.dll')
   $frontWatch = Build-Tool 'front-watch' 'winexe' $frontWatchSource @()
-  $standIn = Build-Tool 'powershell-stand-in' 'exe' $standInSource @()
+  $standIn = Build-Tool 'powershell-stand-in' 'exe' $standInSource @('System.Management.dll')
   Note "this script runs in a job: $([E2E.Native]::InJob($PID))"
 
   # --- 6, from here: every console window shown on this desktop
@@ -879,12 +897,17 @@ try {
     if ((Test-Path -LiteralPath $desktopApp[$name]) -ne $desktopBefore[$name]) { Fail "the desktop app's $name is as before the install" }
   }
   Ok "the desktop app's folder, Harness.lnk and Harness uninstall entry are as before"
-  if (Test-Path -LiteralPath $desktopShortcut) { Note 'the silent install adds a desktop shortcut, Harness Device.lnk' }
-  $running = @(Get-Process -Name 'harness-device' -ErrorAction SilentlyContinue)
+  # What the uninstall must remove, the desktop shortcut too when the install added one.
+  $installedItems = @($installDir, $shortcut, $uninstallKey)
+  if (Test-Path -LiteralPath $desktopShortcut) {
+    Note 'the silent install adds a desktop shortcut, Harness Device.lnk'
+    $installedItems += $desktopShortcut
+  }
+  $running = Our-Apps
   if ($running.Count) {
     Note 'the silent install started the app; it is ended before the checks'
     $running | Stop-Process -Force
-    if (-not (Wait-For { -not (Get-Process -Name 'harness-device' -ErrorAction SilentlyContinue) })) { Fail 'the app started by the installer ends' }
+    if (-not (Wait-For { (Our-Apps).Count -eq 0 })) { Fail 'the app started by the installer ends' }
   }
 
   # --- 2, and a login item turned off in Startup Apps: no CLI
@@ -926,7 +949,7 @@ try {
   if ($second.ExitCode -ne 0) { Fail "a second launch exits 0, not $($second.ExitCode)" }
   if ((Times-Logged 'instance: already running') -ne 1) { Fail 'a second launch logs instance: already running, once' }
   if ($script:app.HasExited) { Fail 'the first launch keeps running' }
-  $copies = @(Get-Process -Name 'harness-device' -ErrorAction SilentlyContinue | Where-Object { -not $_.HasExited }).Count
+  $copies = @(Our-Apps | Where-Object { -not $_.HasExited }).Count
   if ($copies -ne 1) { Fail "one harness-device.exe runs, not $copies" }
   if ((Run-Value) -cne $value) { Fail 'a second launch leaves the Run value as it is' }
   Ok 'a second launch exits with instance: already running; one harness-device.exe runs; the Run value is unchanged'
@@ -1066,8 +1089,14 @@ try {
     Save-State $false $true $true
     Use-Fake $false
     Launch 'install'
-    $record = Join-Path $tools 'powershell.record'
+    # The stand-in names its record by its parent's pid: any other powershell.exe started meanwhile has its own.
+    $record = Join-Path $tools "powershell.$($script:app.Id).record"
     $seen = Wait-For { Test-Path -LiteralPath $record }
+    # Ended while the entry still holds: a late install run would otherwise run the real install.ps1 from the CDN.
+    if (-not $seen) {
+      Stop-Process -Id $script:app.Id -Force -ErrorAction SilentlyContinue
+      Wait-For { $script:app.HasExited } | Out-Null
+    }
     Remove-ItemProperty -LiteralPath $ifeoKey -Name 'Debugger'
     if ($script:ifeo -eq 'key') { Remove-Item -LiteralPath $ifeoKey }
     $script:ifeo = $null
@@ -1101,10 +1130,10 @@ try {
 
   if ($null -eq (Run-Value)) { Fail 'the Run value is there before the uninstall' }
   Start-Process -FilePath (Join-Path $installDir 'uninstall.exe') -ArgumentList '/S' | Out-Null
-  $left = { @(@($installDir, $shortcut, $uninstallKey) | Where-Object { Test-Path -LiteralPath $_ }) + @(if ($null -ne (Run-Value)) { "the Run value $RUN_VALUE" }) }
+  $left = { @($installedItems | Where-Object { Test-Path -LiteralPath $_ }) + @(if ($null -ne (Run-Value)) { "the Run value $RUN_VALUE" }) }
   if (-not (Wait-For { (& $left).Count -eq 0 })) { Fail "uninstall.exe /S removes everything it installed: left $((& $left) -join ', ')" }
   $script:installed = $false
-  Ok 'uninstall.exe /S removes the folder, the Start Menu shortcut, the uninstall entry and the Run value'
+  Ok "uninstall.exe /S removes the folder, the Start Menu shortcut, the uninstall entry$(if ($installedItems -contains $desktopShortcut) { ', the desktop shortcut' }) and the Run value"
   Write-Host '0 FAILED'
 } catch {
   Report-Failure $_
