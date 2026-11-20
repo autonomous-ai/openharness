@@ -770,14 +770,24 @@ describe('Watcher, on Windows', () => {
     watcher.start()
     await watcher.addSession({ sessionId: 's1', engine: 'codex', transcriptPath: join(short, 'session.jsonl') })
 
-    await writeFile(join(long, 'session.jsonl'), '{"n":1}\n')
-    await until('the new file\'s line', () => lines.length === 1)
-    await appendFile(join(long, 'session.jsonl'), '{"n":2}\n')
-    await until('the changed file\'s line', () => lines.length === 2)
+    // Written until heard, not at once: chokidar watches the folder of a file not there yet a moment after the add, with
+    // no read of it first, so a file made before that is told only at the folder's next change. The tail starts at the
+    // file's first byte, so every line written is told once, whichever change is heard first.
+    const written: string[] = []
+    const write = async (): Promise<void> => {
+      written.push(`{"n":${written.length + 1}}`)
+      await appendFile(join(long, 'session.jsonl'), `${written.at(-1)}\n`)
+    }
+    await vi.waitFor(async () => {
+      await write()
+      expect(lines.length).toBeGreaterThan(0)
+    }, { timeout: 10_000, interval: 200 })
+    await write()
+    await until('the changed file\'s line', () => lines.at(-1)?.text === written.at(-1))
 
     expect(added.filter((path) => path.includes('HXDIAL~1'))).toEqual([])
     expect(added).toContain(join(realpathSync.native(long), 'session.jsonl'))
-    expect(lines.map((line) => [line.sessionId, line.text])).toEqual([['s1', '{"n":1}'], ['s1', '{"n":2}']])
+    expect(lines.map((line) => [line.sessionId, line.text])).toEqual(written.map((text) => ['s1', text]))
     await watcher.stop()
   })
 })
