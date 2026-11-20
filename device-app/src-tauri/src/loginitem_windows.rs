@@ -45,14 +45,18 @@ pub const SYSTEM: Keys = Keys {
     approved: r"Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run",
 };
 
-/// Writes the Run value for `exe` only when `register_from` says so.
+/// Writes the Run value for `exe` only when `register_from` says so. Ok(true): it wrote it.
 #[cfg(windows)]
-pub fn register_in(keys: &Keys, exe: &Path) -> Result<(), String> {
+pub fn register_in(keys: &Keys, exe: &Path) -> Result<bool, String> {
     let run = read(keys.run, RUN_VALUE).map_err(failed)?.map(|data| text(&data));
     let approved = read(keys.approved, RUN_VALUE).map_err(failed)?;
+    let mut wrote = false;
     register_from(status(run.as_deref(), approved.as_deref()), || {
-        write(keys.run, RUN_VALUE, REG_SZ, &sz(&run_data(exe))).map_err(failed)
-    })
+        write(keys.run, RUN_VALUE, REG_SZ, &sz(&run_data(exe))).map_err(failed)?;
+        wrote = true;
+        Ok(())
+    })?;
+    Ok(wrote)
 }
 
 /// The error code only, as on macOS.
@@ -61,10 +65,17 @@ fn failed(code: u32) -> String {
     format!("Login item not added (error {code}).")
 }
 
+/// Neither is called under `cargo test`: it would make the test binary a login item of the developer's account.
 #[cfg(windows)]
 impl LoginItem for SystemLoginItem {
-    /// Never called under `cargo test`: it would make the test binary a login item of the developer's account.
     fn register(&self) -> Result<(), String> {
+        self.refresh().map(|_| ())
+    }
+
+    /// The same rule at every launch: Tauri's uninstaller removes the value on an uninstall, and on a manual upgrade
+    /// that uninstalls first, while state.json keeps `loginItem`, so `register` never runs again. A value deleted by
+    /// hand comes back too; one Startup Apps turned off stays off.
+    fn refresh(&self) -> Result<bool, String> {
         let exe = std::env::current_exe().map_err(|error| failed(error.raw_os_error().unwrap_or_default() as u32))?;
         register_in(&SYSTEM, &exe)
     }
