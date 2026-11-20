@@ -13,6 +13,10 @@
  * size and mtime are held and only a new or changed file is parsed, and a read walks the files newest first and stops
  * once no file left can be among the 16 listed. Every list is bounded, and what a bound cuts is counted.
  *
+ * The store can have several roots (Windows: the Store app's private copy, then `%APPDATA%`'s). Each is read in the
+ * given order under one set of bounds, and a name an earlier root holds is that root's: the app reads its copies in
+ * that order.
+ *
  * Nothing here logs: the source (claudeAppSource.ts) says the counts, in log lines of fixed words. No call rejects.
  */
 import { constants, type Stats } from 'node:fs'
@@ -45,8 +49,9 @@ export interface ClaudeAppSession {
    *  mtime: a time in the future would pin the session first. */
   lastActivityAt: number
 }
-/** The folders read, each an absolute path of a real folder, in name order. */
-export interface StoreFolders { accounts: readonly string[]; orgs: readonly string[] }
+/** The folders read, each an absolute path of a real folder: the roots in the given order, the rest in name order
+ *  within each root. */
+export interface StoreFolders { roots: readonly string[]; accounts: readonly string[]; orgs: readonly string[] }
 export interface StoreRead { sessions: ClaudeAppSession[]; parsed: number; skipped: number; over: number; more: boolean }
 
 /** What a file gave when it was parsed. */
@@ -63,8 +68,9 @@ interface Held {
   parsed?: { size: number; mtime: number; gave: Gave }
 }
 
-/** An org folder read: the names held, and how many its bound left out. */
+/** An org folder read: the index of its root, the names held, and how many its bound left out. */
 interface Org {
+  root: number
   files: Map<string, Held>
   over: number
 }
@@ -134,7 +140,8 @@ const newest = (times: number[]): number[] => times.sort((a, b) => b - a).slice(
 async function textOf(path: string): Promise<string | undefined> {
   let handle: FileHandle
   try {
-    handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK)
+    // Windows defines neither flag: there the open is a plain read-only one, after the same lstat in files().
+    handle = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0))
   } catch (error) {
     // O_NOFOLLOW's refusal of a link.
     if ((error as NodeJS.ErrnoException).code === 'ELOOP') return undefined
@@ -186,29 +193,37 @@ export class ClaudeAppStore {
   private orgs = new Map<string, Org>()
   private overFolders = 0
 
-  constructor(private readonly root: string) {}
+  constructor(private readonly roots: readonly string[]) {}
 
-  /** Lists the account folders and each one's org folders again. None when the root is no real folder: every file is
-   *  forgotten. */
+  /** Lists each root's account folders and each one's org folders again, the 8 accounts counted across the roots. None
+   *  when no root is a real folder: every file is forgotten. */
   async folders(): Promise<StoreFolders | undefined> {
-    if (!(await lstatOf(this.root))?.isDirectory()) {
+    const roots: string[] = []
+    const accounts: string[] = []
+    const orgs: Array<{ folder: string; root: number }> = []
+    let over = 0
+    for (const [index, root] of this.roots.entries()) {
+      if (!(await lstatOf(root))?.isDirectory()) continue
+      roots.push(root)
+      const found = await foldersIn(root, MAX_ACCOUNTS - accounts.length)
+      over += found.over
+      for (const account of found.taken) {
+        accounts.push(account)
+        const inAccount = await foldersIn(account, MAX_ORGS)
+        orgs.push(...inAccount.taken.map((folder) => ({ folder, root: index })))
+        over += inAccount.over
+      }
+    }
+    if (roots.length === 0) {
       this.forget()
       return undefined
-    }
-    const accounts = await foldersIn(this.root, MAX_ACCOUNTS)
-    let over = accounts.over
-    const orgs: string[] = []
-    for (const account of accounts.taken) {
-      const found = await foldersIn(account, MAX_ORGS)
-      orgs.push(...found.taken)
-      over += found.over
     }
     // Built on the map as it is after the reads, so what a forget() dropped meanwhile is not brought back. A folder
     // that left takes its files with it.
     const held = this.orgs
-    this.orgs = new Map(orgs.map((org) => [org, held.get(org) ?? { files: new Map(), over: 0 }]))
+    this.orgs = new Map(orgs.map(({ folder, root }) => [folder, { files: new Map(), over: 0, ...held.get(folder), root }]))
     this.overFolders = over
-    return { accounts: accounts.taken, orgs }
+    return { roots, accounts, orgs: orgs.map(({ folder }) => folder) }
   }
 
   /** In each org folder read: the `local_….json` names, each `lstat`ed. No file is opened. */
@@ -250,8 +265,14 @@ export class ClaudeAppStore {
 
   /** The walk: the sessions to list, newest sort time first, at most 16. */
   async read(): Promise<StoreRead> {
+    // A name is the first root's that holds it: another root's copy is neither parsed nor counted.
+    const rootOf = new Map<string, number>()
+    for (const org of this.orgs.values()) {
+      for (const name of org.files.keys()) rootOf.set(name, Math.min(org.root, rootOf.get(name) ?? org.root))
+    }
     // The order is fixed at the start: newest place first, ties by name.
-    const order = [...this.orgs.values()].flatMap((org) => [...org.files.values()])
+    const order = [...this.orgs.values()]
+      .flatMap((org) => [...org.files.values()].filter((file) => rootOf.get(file.name) === org.root))
       .map((file) => ({ file, place: placeOf(file) }))
       .sort((a, b) => b.place - a.place || byName(a.file.name, b.file.name))
     // By Claude Code's id: the app can hold two files of one session.
