@@ -40,7 +40,8 @@ What V3 settled, which V4 carries into C:
 - Overview is App Detail: three cells to the glass, the row scrolls, ordered by need (asking, working, failed, done,
   idle), the order held while an agent is open; one tap opens an agent across the row with the mic on, the others
   dimmed slivers (.62).
-- Voice rules of 18 Nov: 5 s of quiet after speech sends; a mic that hears nothing for 5 s closes and sends nothing;
+- Voice rules of 18 Nov: 2.5 s of quiet after speech sends (5 s until 20 Nov); a mic that hears nothing for 5 s closes
+  and sends nothing;
   X cancels; a tap anywhere else sends; only a 25–350 ms tap that moves under 1.2 mm counts; 10 min cap.
 - A finished turn shows a small note bottom right for 6 s and never takes the glass; a question or a failure does
   (Attention, edge light).

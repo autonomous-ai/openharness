@@ -718,6 +718,28 @@ static void test_done_note(void)
 
 // ---- the clock's side of a recording ----
 
+// The owner's numbers, in ms rather than the constants: speech then 2.5 s of quiet sends (20 Nov, 5 s before), a mic
+// that hears nothing closes after 5 s.
+static void test_talk_due_times(void)
+{
+    linked(ABCDE, 5);
+    agent_page("a");
+    max_copy(max_m.talk_id, sizeof max_m.talk_id, "a");
+    max_ui_talk(MAX_TALK_RECORDING, 1000);
+    max_ui_level(3, 1100);
+    max_ui_level(0, 1200);
+    CHECK(max_ui_talk_due(1100 + 2499).kind == MAX_ACT_NONE && max_m.view == MAX_VIEW_AGENT);
+    CHECK(max_ui_talk_due(1100 + 2500).kind == MAX_ACT_SEND);
+    max_ui_talk(MAX_TALK_IDLE, 0);
+    agent_page("a");
+    max_ui_talk(MAX_TALK_RECORDING, 5000);
+    max_ui_level(1, 6000);   // below speech
+    CHECK(max_ui_talk_due(5000 + 4999).kind == MAX_ACT_NONE);
+    CHECK(max_ui_talk_due(5000 + 5000).kind == MAX_ACT_CANCEL);
+    max_ui_talk(MAX_TALK_IDLE, 0);
+    max_show(MAX_VIEW_OVERVIEW);
+}
+
 // Speech, then MAX_SILENCE_MS of quiet: sent, as a tap on the page; so is speech that runs MAX_TALK_MAX_MS. Nothing
 // heard in MAX_HEAR_MS: the mic closes, nothing is sent, no notice, and the page stays and says so. Its agent leaving
 // the ring: what was heard is sent, else dropped; Overview. No link: nothing.
@@ -1031,6 +1053,7 @@ int main(void)
     test_toast();
     test_done_note();
     test_talk_due();
+    test_talk_due_times();
     test_only_the_dials_tap_sends();
     test_a_hold_opens_no_mic();
     test_the_guard();
