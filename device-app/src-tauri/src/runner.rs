@@ -2401,7 +2401,9 @@ mod tests {
         // The app cannot tell one sign-in's events from another's: once replaced, a sign-in must say nothing more.
         let w = world();
         assert!(w.runner.find_cli());
-        w.fake.script("login --json", &[URL, "@wait go", FAILED, "@exit 1"]);
+        // `@driver`: as `harness login --json`, a sign-in cancelled or replaced ends once its stdin closes, well before
+        // its kill.
+        w.fake.script("login --json", &["@driver", URL, "@wait go", FAILED, "@exit 1"]);
         // Cancelled, and replaced at once.
         assert_eq!(w.answer(Effect::RunLogin), browser());
         assert_eq!(w.runner.run(Effect::CancelLogin), None);
@@ -2421,7 +2423,8 @@ mod tests {
         // account.rs hands each event over while it holds the lock `cancel` takes. So `send` only hands the event on to
         // the app's loop: a cancel then waits for the hand-over, never the hand-over for the cancel.
         let (fake, home, doubles) = (Fake::new(), tempfile::tempdir().unwrap(), Arc::new(Doubles::default()));
-        fake.script("login --json", &[URL, "@hang"]);
+        // `@driver`: as `harness login --json`, it ends once a cancel closes its stdin, well before its kill.
+        fake.script("login --json", &["@driver", URL, "@wait never"]);
         let (inside, entered) = mpsc::channel();
         let (release, gate) = mpsc::channel::<()>();
         let gate = Mutex::new(gate);
