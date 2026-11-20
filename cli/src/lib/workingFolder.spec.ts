@@ -1,11 +1,9 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { enterHome } from './workingFolder.js'
 
 const failing = (code: string, folder: string) => Object.assign(new Error(`${code}: chdir '${folder}'`), { code })
 
 describe('the folder the master and the core work in', () => {
-  afterEach(() => { vi.unstubAllEnvs() })
-
   it('enters the home', () => {
     const chdir = vi.fn()
     expect(enterHome({ home: () => '/Users/someone', chdir, platform: 'darwin' })).toBeNull()
@@ -29,15 +27,14 @@ describe('the folder the master and the core work in', () => {
     expect(line).not.toContain('sentinel-person')
   })
 
-  it('with no home to read, the root: / elsewhere, the system drive on Windows', () => {
+  it('with no home to read, the root: / elsewhere, the current drive\'s on Windows', () => {
     const home = () => { throw failing('ENOENT', 'uv_os_homedir') }
     const elsewhere = vi.fn()
     expect(enterHome({ home, chdir: elsewhere, platform: 'linux' })).toContain('ENOENT')
     expect(elsewhere.mock.calls).toEqual([['/']])
-    vi.stubEnv('SystemDrive', 'E:')
     const windows = vi.fn()
     expect(enterHome({ home, chdir: windows, platform: 'win32' })).toContain('ENOENT')
-    expect(windows.mock.calls).toEqual([['E:\\']])
+    expect(windows.mock.calls).toEqual([['\\']])
   })
 
   it('stays where it is and says so when the root cannot be entered either, and never throws', () => {

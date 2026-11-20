@@ -13,7 +13,8 @@ import { errorKind } from './log.js'
  *  error kinds only, never the home's path. Never throws. */
 export function enterHome(deps: { home?: () => string; chdir?: (folder: string) => void; platform?: NodeJS.Platform } = {}): string | null {
   const { home = homedir, chdir = (folder: string) => process.chdir(folder), platform = process.platform } = deps
-  let root = platform === 'win32' ? `${process.env.SystemDrive ?? 'C:'}\\` : '/'
+  // With no home to read, Windows takes `\`, the root of the drive the process is on: no variable to read.
+  let root = platform === 'win32' ? '\\' : '/'
   let failure: unknown
   try {
     const folder = home()
