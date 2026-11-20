@@ -95,6 +95,23 @@ describe('the Windows release workflows', () => {
   it('tries the public firmware download three times and blames the download, not the change', () => {
     const step = stepNamed(read('windows.yml'), "'Flasher: without a board'")
     for (const text of ['cannot read the release manifest', 'download failed', '3', "the CDN or the release download failed, not this pull request's code"]) expect(step).toContain(text)
+    // Each way flash-circle.ps1 says the download failed: the manifest, the image, or an image that is not the one the
+    // manifest names (a CDN mid-publish). PowerShell's -match ignores case. Any other failure is the flasher's, at once.
+    const retried = new RegExp(step.match(/\$said -notmatch '([^']+)'\) \{ throw "--no-flash exited/)?.[1] ?? '^$', 'i')
+    for (const said of [
+      'error: cannot read the release manifest (network? bucket?)',
+      'error: download failed',
+      'error: firmware sha256 mismatch (expected 1a, got 2b) - refusing to flash',
+      'error: firmware size mismatch (expected 1, got 2)',
+    ]) expect(retried.test(said), said).toBe(true)
+    expect(retried.test("error: --port NUL is not a serial port")).toBe(false)
+  })
+
+  // The payload and the install logs serve this run and its re-runs: the repository's default would keep them 90 days.
+  it('keeps its artifacts for a week', () => {
+    const uploads = [...read('windows.yml').matchAll(/- uses: actions\/upload-artifact@v4\n((?: {8}[^\n]*\n)*)/g)].map((found) => found[1])
+    expect(uploads).toHaveLength(2)
+    for (const upload of uploads) expect(upload).toMatch(/^ {10}retention-days: 7$/m)
   })
 
   it('publishes the Windows bits to staging, and to production only when a dispatch asks', () => {
