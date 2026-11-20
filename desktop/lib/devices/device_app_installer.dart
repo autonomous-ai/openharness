@@ -13,16 +13,67 @@ import 'package:path/path.dart' as p;
 import '../core/hidden_process.dart';
 import '../core/home_dir.dart';
 import '../core/runtime_architecture.dart';
+import '../core/runtime_platform.dart';
 import 'device_app.dart';
 import 'device_app_manifest.dart';
 
 typedef DeviceAppRun = Future<ProcessResult> Function(
   String executable,
-  List<String> arguments,
-);
+  List<String> arguments, {
+  Duration timeout,
+});
 typedef DeviceAppSignatureCheck = Future<bool> Function(String bundle);
+typedef DeviceAppStart = Future<void> Function(
+  String path,
+  Map<String, String> environment,
+);
 
-/// tar, ditto and open through [startHidden]; a tool still running after [timeout] is stopped and throws.
+/// The Windows installer's bound: it may fetch WebView2 first.
+const deviceAppSetupTimeout = Duration(minutes: 5);
+
+/// What Desktop's own AppImage runtime set for Desktop. The Device app would
+/// take Desktop's AppImage for its own (its login entry and its updater
+/// follow `APPIMAGE`).
+const _desktopAppImageVariables = {'APPIMAGE', 'APPDIR', 'ARGV0', 'OWD'};
+
+/// The app at [path], with no argument, detached: it outlives Desktop and is
+/// no child of it.
+Future<void> startDeviceAppDetached(
+  String path,
+  Map<String, String> environment,
+) async {
+  await Process.start(
+    path,
+    const [],
+    environment: environment,
+    includeParentEnvironment: false,
+    mode: ProcessStartMode.detached,
+  );
+}
+
+/// Starts the app at [path] (Windows and Linux, which have no `open`) with
+/// [environment], by default this process's, minus Desktop's AppImage
+/// variables. True when the start succeeded, as `open`'s exit 0 is on macOS;
+/// the app's own single instance makes a second start harmless.
+Future<bool> startDeviceApp(
+  String path, {
+  DeviceAppStart start = startDeviceAppDetached,
+  Map<String, String>? environment,
+}) async {
+  try {
+    await start(path, {
+      for (final MapEntry(:key, :value)
+          in (environment ?? RuntimePlatform.environment).entries)
+        if (!_desktopAppImageVariables.contains(key)) key: value,
+    });
+    return true;
+  } on Exception {
+    // A program that cannot start has not opened the app.
+    return false;
+  }
+}
+
+/// tar, ditto, chmod, open and the Windows installer through [startHidden]; a tool still running after [timeout] is stopped and throws.
 Future<ProcessResult> runDeviceAppTool(
   String executable,
   List<String> arguments, {
@@ -72,9 +123,12 @@ List<String> deviceAppTargetFolders() {
   return ['/Applications', if (home != null) p.join(home, 'Applications')];
 }
 
-/// Downloads, verifies, installs and opens the Harness menu-bar app
-/// (`Harness Device.app`) in seven named steps, the first that fails named in
-/// the result.
+/// Downloads, verifies, installs and opens the Harness menu-bar app in seven
+/// named steps, the first that fails named in the result. macOS unpacks
+/// `Harness Device.app` into the first target folder that takes it; Windows
+/// runs the per-user installer, which puts the app at its place
+/// ([deviceAppPlace]); Linux puts the AppImage there. Neither unpacks, and
+/// Linux checks no signature (an AppImage carries none).
 class DeviceAppInstaller {
   DeviceAppInstaller({
     required this._manifestUrl,
@@ -83,11 +137,15 @@ class DeviceAppInstaller {
     required this._open,
     Dio? dio,
     this._run = runDeviceAppTool,
+    TargetPlatform? platform,
+    String? place,
     this._architecture,
     this._tempRoot,
     this._manifestTimeout = const Duration(seconds: 15),
     this._downloadTimeout = const Duration(minutes: 5),
-  }) : _dio =
+  }) : _platform = platform ?? defaultTargetPlatform,
+       _place = place ?? deviceAppPlace(),
+       _dio =
            dio ??
            Dio(
              BaseOptions(
@@ -102,6 +160,8 @@ class DeviceAppInstaller {
   final DeviceAppOpen _open;
   final Dio _dio;
   final DeviceAppRun _run;
+  final TargetPlatform _platform;
+  final String? _place;
   final String? _architecture;
   final Directory? _tempRoot;
   final Duration _manifestTimeout;
@@ -119,19 +179,34 @@ class DeviceAppInstaller {
         'harness-device-app-',
       );
       // A fixed name: nothing the network sends names a file on disk.
-      final archive = p.join(temp.path, 'Harness-Device.app.tar.gz');
-      await _download(release, archive);
+      final download = p.join(temp.path, switch (_platform) {
+        TargetPlatform.windows => 'Harness-Device-setup.exe',
+        TargetPlatform.linux => deviceAppImageName,
+        _ => 'Harness-Device.app.tar.gz',
+      });
+      await _download(release, download);
       step = DeviceAppInstallStep.checksum;
       _require(
-        await File(archive).length() == release.size &&
-            await _sha256OfFile(archive) == release.sha256,
+        await File(download).length() == release.size &&
+            await _sha256OfFile(download) == release.sha256,
       );
-      step = DeviceAppInstallStep.unpack;
-      final bundle = await _unpack(archive, p.join(temp.path, 'app'));
-      step = DeviceAppInstallStep.signature;
-      _require(await _verifySignature(bundle));
-      step = DeviceAppInstallStep.install;
-      installed = await _install(bundle);
+      switch (_platform) {
+        case TargetPlatform.windows:
+          step = DeviceAppInstallStep.signature;
+          _require(await _verifySignature(download));
+          step = DeviceAppInstallStep.install;
+          installed = await _runSetup(download);
+        case TargetPlatform.linux:
+          step = DeviceAppInstallStep.install;
+          installed = await _placeAppImage(download);
+        default:
+          step = DeviceAppInstallStep.unpack;
+          final bundle = await _unpack(download, p.join(temp.path, 'app'));
+          step = DeviceAppInstallStep.signature;
+          _require(await _verifySignature(bundle));
+          step = DeviceAppInstallStep.install;
+          installed = await _install(bundle);
+      }
       step = DeviceAppInstallStep.open;
       _require(await _open(path: installed));
       return DeviceAppInstallResult.done(installed);
@@ -142,7 +217,7 @@ class DeviceAppInstaller {
         await temp?.delete(recursive: true);
       } on FileSystemException {
         // The result stands; what is left sits in the system's temporary
-        // folder, which macOS clears.
+        // folder.
       }
     }
   }
@@ -159,8 +234,7 @@ class DeviceAppInstaller {
         return parseDeviceAppManifest(
               jsonDecode(utf8.decode(body.takeBytes())),
               architecture: _architecture ?? runtimeArchitecture,
-              // The steps below unpack and check macOS's archive only.
-              platform: TargetPlatform.macOS,
+              platform: _platform,
             ) ??
             (throw const _Refused());
       });
@@ -257,6 +331,43 @@ class DeviceAppInstaller {
       }
     }
     throw const _Refused();
+  }
+
+  /// Windows: the app at the place, put there by the installer run silently
+  /// (`/S`, per user, no admin) unless a copy is already there.
+  Future<String> _runSetup(String setup) async {
+    final place = _place ?? (throw const _Refused());
+    // Never installed over: a copy already there, whoever put it, is the app.
+    if (File(place).existsSync()) return place;
+    final ran = await _run(setup, const ['/S'], timeout: deviceAppSetupTimeout);
+    _require(ran.exitCode == 0 && File(place).existsSync());
+    return place;
+  }
+
+  /// Linux: the AppImage at the place, executable, unless a copy is already
+  /// there (the app updates itself in place).
+  Future<String> _placeAppImage(String appImage) async {
+    final place = _place ?? (throw const _Refused());
+    if (_exists(place)) return place;
+    final folder = p.dirname(place);
+    await Directory(folder).create(recursive: true);
+    // Beside the place, so the rename is atomic and a half-made copy never
+    // sits under the app's name.
+    final partial = p.join(folder, '.$deviceAppImageName.${_hex16()}.partial');
+    try {
+      await File(appImage).copy(partial);
+      final chmod = await _run('/bin/chmod', ['0755', partial]);
+      _require(chmod.exitCode == 0);
+      await File(partial).rename(place);
+      return place;
+    } finally {
+      try {
+        if (_exists(partial)) await File(partial).delete();
+      } on FileSystemException {
+        // The outcome stands: what is left is hidden, never under the
+        // app's name.
+      }
+    }
   }
 }
 
