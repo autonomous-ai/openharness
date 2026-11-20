@@ -6,6 +6,7 @@ use {
     crate::types::Log,
     std::cell::OnceCell,
     std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle},
+    std::panic::{self, AssertUnwindSafe},
     std::ptr,
     std::sync::Arc,
     windows_sys::Win32::Foundation::HWND,
@@ -15,7 +16,7 @@ use {
     windows_sys::Win32::UI::Accessibility::{HWINEVENTHOOK, SetWinEventHook, UnhookWinEvent},
     windows_sys::Win32::UI::WindowsAndMessaging::{
         DispatchMessageW, EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_MINIMIZEEND, EVENT_SYSTEM_SWITCHEND,
-        GetForegroundWindow, GetMessageW, GetWindowThreadProcessId, MSG, WINEVENT_OUTOFCONTEXT,
+        GetForegroundWindow, GetMessageW, GetWindowThreadProcessId, MSG, PostQuitMessage, WINEVENT_OUTOFCONTEXT,
     },
 };
 
@@ -91,7 +92,13 @@ unsafe extern "system" fn foreground(_: HWINEVENTHOOK, _: u32, _: HWND, _: i32, 
     CHANGED.with(|cell| {
         if let Some(changed) = cell.get() {
             // SAFETY: takes no argument.
-            changed(app(unsafe { GetForegroundWindow() }));
+            let told = panic::catch_unwind(AssertUnwindSafe(|| changed(app(unsafe { GetForegroundWindow() }))));
+            // A panic cannot unwind into Windows, which would end the app: it ends following instead, and `follow`
+            // says so, as a panic on a Linux source's thread ends only that source.
+            if told.is_err() {
+                // SAFETY: takes no pointer; ends this thread's message loop.
+                unsafe { PostQuitMessage(0) };
+            }
         }
     });
 }
