@@ -2,7 +2,6 @@
 # tests/fake-harness's contract, for the lines the end to end (scripts/e2e/windows.ps1) needs. Its folder is FAKE_HARNESS,
 # or `fake` beside this script. Each run appends its arguments to calls.log and its pid to pids.log, then plays the file
 # named by its arguments joined with `_` (`hardware_watch_--json`): each line is printed, except
-#   @err TEXT        TEXT, on stderr
 #   @wait NAME       waits until the file NAME is in the folder
 #   @stdin           waits until stdin closes
 #   @record          the same, appending what it read to stdin.log
@@ -116,8 +115,7 @@ if (-not (Test-Path -LiteralPath $played -PathType Leaf)) {
   Finish 1
 }
 foreach ($line in [IO.File]::ReadAllLines($played)) {
-  if ($line.StartsWith('@err ')) { [Console]::Error.WriteLine($line.Substring(5)) }
-  elseif ($line.StartsWith('@wait ')) {
+  if ($line.StartsWith('@wait ')) {
     $wanted = Join-Path $dir $line.Substring(6)
     while (-not (Test-Path -LiteralPath $wanted)) { Start-Sleep -Milliseconds 20 }
   }
