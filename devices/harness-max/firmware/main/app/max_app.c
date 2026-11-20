@@ -17,6 +17,7 @@
 
 #include "app/max_chime.h"
 #include "app/max_ui.h"
+#include "app/max_voice_lang.h"
 #include "app/pro_touch.h"
 #include "app/pro_voice.h"
 #include "audio/audio_capture.h"
@@ -755,6 +756,7 @@ void pro_app_start(void)
     max_present_work(max_ui_work);
     s_dirty = true;
     pro_frame_init();
+    max_voice_lang_default();   // before the cable's hello, which reports the language, and before any recording
     pro_display_set_brightness(config_load_brightness());
     pro_app_bump_activity();
     BaseType_t ok = xTaskCreatePinnedToCore(render_task, "pro_render", STACK_RENDER, NULL, 5, &s_renderer, 1);

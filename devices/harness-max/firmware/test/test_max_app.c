@@ -217,6 +217,8 @@ void max_frame_show(void)
     SHOWS++;
 }
 uint8_t config_load_brightness(void) { return 255; }
+static int LANG_DEFAULTS;   // max_voice_lang_default calls (its NVS side is linux/test/test_voice_lang.c)
+bool max_voice_lang_default(void) { LANG_DEFAULTS++; return false; }
 bool fw_was_updated(char *version, size_t cap) { (void)version; (void)cap; return false; }
 void last_words_phase(lw_task_t task, const char *phase) { (void)task; (void)phase; }
 void ram_telemetry_periodic(const char *tag) { (void)tag; }
@@ -770,6 +772,7 @@ int main(void)
 {
     pro_app_start();
     CHECK(RENDER_FN != NULL);
+    CHECK(LANG_DEFAULTS == 1);   // the bar's default language is in place before the cable starts
     test_touch_wakes_the_renderer();
     test_cell_tap_opens_and_listens();
     test_the_clock_sends_after_silence();

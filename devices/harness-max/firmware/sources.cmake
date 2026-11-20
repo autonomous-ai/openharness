@@ -39,6 +39,7 @@ file(GLOB MAX_DEMO_SRCS ${MAX_GLOB_FLAGS} ${MAX_FW}/main/demo/*.c)
 
 set(MAX_PORTABLE_SRCS
     ${MAX_FW}/main/app/max_app.c
+    ${MAX_FW}/main/app/max_voice_lang.c
     ${MAX_FW}/main/audio/max_chime_pcm.c
     ${MAX_FW}/main/cable/max_cable_features.c
     ${MAX_FW}/main/display/max_present.c

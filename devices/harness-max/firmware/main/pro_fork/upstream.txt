@@ -17,3 +17,4 @@ relies  devices/harness-pro/firmware/main/display/terminal.h      df90cd7b4acf2c
 relies  devices/harness-pro/firmware/main/display/pro_display.h   a584d5d3515431bb42863524624a8b61ddd62b16  devices/harness-max/firmware/main/max_glass.h
 relies  devices/harness-pro/firmware/main/cable/cable_features.c  cf66638a6226b0da27d4874fa924d4e9463d8bc8  devices/harness-max/firmware/main/cable/max_cable_features.c
 relies  devices/harness-pro/firmware/main/cable/cable_features.h  56d2a47237b75d9f5a38578b6878242b2218e34d  devices/harness-max/firmware/main/cable/max_cable_features.c
+relies  devices/harness-pro/firmware/main/sys/config_store.c      e515b45bdad252fab787565cbc72c9c6d8325e71  devices/harness-max/firmware/main/app/max_voice_lang.c
