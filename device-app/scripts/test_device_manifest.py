@@ -116,20 +116,6 @@ def make_build(folder, parts=("macos",)):
     return folder
 
 
-def windows_and_linux(manifest):
-    """A manifest's Windows and Linux keys, in its order."""
-    return {"platforms": {key: value for key, value in manifest["platforms"].items()
-                          if key.startswith(("windows-", "linux-"))},
-            **{key: value for key, value in manifest.items() if key.startswith(("device-windows-", "device-linux-"))}}
-
-
-def keep_windows_and_linux(manifest, earlier):
-    """Put earlier's Windows and Linux keys into manifest, as a macOS release keeps them."""
-    kept = windows_and_linux(earlier)
-    manifest["platforms"].update(kept.pop("platforms"))
-    manifest.update(kept)
-
-
 def flip(path):
     """Change one byte, keeping the size."""
     data = bytearray(path.read_bytes())
@@ -558,18 +544,19 @@ class PublishTests(TempTest):
         self.assertEqual(self.steps(), [("describe", LIVE), *self.uploads("0.1.0"), ("upload", LIVE)])
         self.assertEqual(written, rules.build_manifest("0.1.0", macos, "Harness Device notes", PUB_DATE, CDN))
 
-    def test_macos_keeps_live_windows_and_linux_keys_untouched(self):
+    def test_macos_refuses_while_windows_and_linux_are_live(self):
+        # The manifest has one version: Windows' and Linux's apps would see 0.1.1, download 0.1.0's files, signed for
+        # 0.1.0, and fail the signature check on every try until a release of every platform.
         live = rules.build_manifest("0.1.0", make_build(self.root / "all", ALL), "Harness Device 0.1.0",
                                     "2026-11-15T09:00:00Z", CDN, platforms="all")
         self.put("metadata.json", json.dumps(live, indent=2), generation=7)
-        written = self.publish("0.1.1")
-        self.assertEqual(self.steps(), [("describe", LIVE), ("cat", f"{LIVE}#7"), *self.uploads("0.1.1"),
-                                        ("upload", LIVE)])
-        self.assertEqual(json.dumps(windows_and_linux(written)), json.dumps(windows_and_linux(live)))
-        expected = rules.build_manifest("0.1.1", self.build, "Harness Device notes", PUB_DATE, CDN)
-        keep_windows_and_linux(expected, live)
-        self.assertEqual(json.dumps(written), json.dumps(expected))
-        self.assertEqual(json.loads(self.stored("metadata.json")), written)
+        notes = self.root / "notes.txt"
+        notes.write_text("Harness Device 0.1.1\n")
+        result = run("publish", "--version", "0.1.1", "--dir", self.build, "--notes-file", notes, "--pub-date", PUB_DATE)
+        refused(self, result)
+        self.assertEqual(result.stderr, "ERROR Windows and Linux are live: release with --platforms all\n")
+        self.assertEqual(self.steps(), [("describe", LIVE), ("cat", f"{LIVE}#7")])
+        self.assertEqual(self.generations()[LIVE], 7)
 
     def test_all_replaces_them(self):
         self.build = make_build(self.root / "all", ALL)
@@ -583,25 +570,20 @@ class PublishTests(TempTest):
                                                        platforms="all"))
         self.assertEqual(json.loads(self.stored("metadata.json")), written)
 
-    def test_a_rerun_compares_only_its_own_platforms(self):
+    def test_a_rerun_compares_its_own_platforms(self):
         everything = make_build(self.root / "all", ALL)
-        earlier = rules.build_manifest("0.1.0", everything, "Harness Device 0.1.0", "2026-11-14T09:00:00Z", CDN,
-                                       platforms="all")
-        # A macOS rerun: beside its own keys are the Windows and Linux ones it kept from 0.1.0.
-        live = self.live_build(lambda live: keep_windows_and_linux(live, earlier))
-        self.assertEqual(self.publish("0.1.1"), live)
-        self.assertEqual(self.steps(), [("describe", LIVE), ("cat", f"{LIVE}#7")])
-        # Those keys are not this version's, so a release of every platform finds other files under it.
+        # macOS alone live at 0.1.1: a release of every platform finds no Windows or Linux files under it.
+        self.live_build()
         self.build = everything
         with self.assertRaisesRegex(ValueError, "^0.1.1 is already published with other files; release a new version$"):
             self.publish("0.1.1", platforms="all")
-        # Every platform live at 0.1.1: a rerun of either mode finds its own files.
+        # Every platform live at 0.1.1: a rerun of every platform finds its own files; macOS alone may not go over it.
         live = rules.build_manifest("0.1.1", everything, "Harness Device 0.1.1", "2026-11-15T09:00:00Z", CDN,
                                     platforms="all")
         self.put("metadata.json", json.dumps(live), generation=8)
-        for platforms in ("all", "macos"):
-            with self.subTest(platforms=platforms):
-                self.assertEqual(self.publish("0.1.1", platforms=platforms), live)
+        self.assertEqual(self.publish("0.1.1", platforms="all"), live)
+        with self.assertRaisesRegex(ValueError, "^Windows and Linux are live: release with --platforms all$"):
+            self.publish("0.1.1", platforms="macos")
         self.assertNotIn("cp", [call[1] for call in self.calls()])
         self.assertEqual(self.generations()[LIVE], 8)
 
@@ -742,9 +724,7 @@ class VerifyTests(TempTest):
         self.base = serve(self, functools.partial(RecordingHandler, directory=str(self.served)))
         self.build = make_build(self.root / "all", ALL)
         macos = ["/metadata.json", "/0.1.0/Harness-Device.app.tar.gz", "/0.1.0/Harness-Device.dmg"]
-        # A macOS release beside the Windows and Linux keys of an earlier one, which are not this run's to fetch.
-        earlier = rules.build_manifest("0.0.9", self.build, "Harness Device 0.0.9", PUB_DATE, self.base, platforms="all")
-        self.publish_copy(lambda manifest: keep_windows_and_linux(manifest, earlier))
+        self.publish_copy()
         self.verify(platforms="macos")
         self.assertEqual(requests, macos)
 
