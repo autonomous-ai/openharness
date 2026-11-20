@@ -890,19 +890,20 @@ try {
   $null = $setup.Handle
   if (-not $setup.WaitForExit(300000)) { Fail 'the installer ends within 5 minutes' }
   if ($setup.ExitCode -ne 0) { Fail "the installer exits 0, not $($setup.ExitCode)" }
-  $missing = @(@($exe, $shortcut, $uninstallKey) | Where-Object { -not (Test-Path -LiteralPath $_) })
-  if ($missing.Count) { Fail "/S installs harness-device.exe, the Start Menu shortcut and the uninstall entry: missing $($missing -join ', ')" }
-  Ok '/S installs Harness Device per user: %LOCALAPPDATA%\Harness Device\harness-device.exe, the Start Menu Harness Device.lnk and the Harness Device uninstall entry'
+  # What the install must add and the uninstall must remove.
+  $installedItems = @($installDir, $shortcut, $desktopShortcut, $uninstallKey)
+  $missing = @(@($exe) + $installedItems | Where-Object { -not (Test-Path -LiteralPath $_) })
+  if ($missing.Count) { Fail "/S installs harness-device.exe, the Start Menu and desktop shortcuts and the uninstall entry: missing $($missing -join ', ')" }
+  $shell = New-Object -ComObject WScript.Shell
+  foreach ($lnk in @($shortcut, $desktopShortcut)) {
+    $target = $shell.CreateShortcut($lnk).TargetPath
+    if ($target -ne $exe) { Fail "$lnk points at $exe, not $target" }
+  }
+  Ok '/S installs Harness Device per user: %LOCALAPPDATA%\Harness Device\harness-device.exe, Harness Device.lnk in the Start Menu and on the Desktop, both pointing at it, and the Harness Device uninstall entry'
   foreach ($name in $desktopApp.Keys) {
     if ((Test-Path -LiteralPath $desktopApp[$name]) -ne $desktopBefore[$name]) { Fail "the desktop app's $name is as before the install" }
   }
   Ok "the desktop app's folder, Harness.lnk and Harness uninstall entry are as before"
-  # What the uninstall must remove, the desktop shortcut too when the install added one.
-  $installedItems = @($installDir, $shortcut, $uninstallKey)
-  if (Test-Path -LiteralPath $desktopShortcut) {
-    Note 'the silent install adds a desktop shortcut, Harness Device.lnk'
-    $installedItems += $desktopShortcut
-  }
   $running = Our-Apps
   if ($running.Count) {
     Note 'the silent install started the app; it is ended before the checks'
@@ -1133,7 +1134,7 @@ try {
   $left = { @($installedItems | Where-Object { Test-Path -LiteralPath $_ }) + @(if ($null -ne (Run-Value)) { "the Run value $RUN_VALUE" }) }
   if (-not (Wait-For { (& $left).Count -eq 0 })) { Fail "uninstall.exe /S removes everything it installed: left $((& $left) -join ', ')" }
   $script:installed = $false
-  Ok "uninstall.exe /S removes the folder, the Start Menu shortcut, the uninstall entry$(if ($installedItems -contains $desktopShortcut) { ', the desktop shortcut' }) and the Run value"
+  Ok 'uninstall.exe /S removes the folder, the Start Menu and desktop shortcuts, the uninstall entry and the Run value'
   Write-Host '0 FAILED'
 } catch {
   Report-Failure $_
