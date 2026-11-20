@@ -1,0 +1,105 @@
+# Temporary: removed before feat/dial-app-sessions-win-linux merges. No secrets, nothing signed, published or deployed.
+name: tmp dial app sessions win-linux (temporary)
+
+on:
+  push:
+    branches: [feat/dial-app-sessions-win-linux]
+    paths:
+      - 'cli/**'
+      - 'device-app/src-tauri/**'
+      - '.github/workflows/tmp-dial-app-sessions-win-linux.yml'
+
+permissions:
+  contents: read
+
+# One run per branch: a newer push makes the older run's result moot.
+concurrency:
+  group: tmp-dial-app-sessions-${{ github.ref }}
+  cancel-in-progress: true
+
+# The managed runtime the CLI ships on, as cli-e2e.yml.
+env:
+  CLI_NODE_VERSION: 24.22.2
+
+jobs:
+  # The Claude app's sessions, the ChatGPT app's threads and the ChatGPT follow, on Linux.
+  cli-e2e-linux:
+    # ubuntu-latest moved to 26.04, which has no zsh or tcsh package; 24.04 until it does.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: cli
+    env:
+      # tmux and Linux procps mangle what they print without a UTF-8 locale (hook/notify.mjs).
+      LANG: C.UTF-8
+      # The login shell every daemon under test launches its engines through, as on a Mac.
+      SHELL: /bin/zsh
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.CLI_NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: cli/package-lock.json
+      - name: Install tmux, the shells the tests launch through, and lsof
+        run: |
+          sudo bash ../scripts/apt-install.sh tmux zsh tcsh dash lsof
+          # Every daemon watches its data folder and the engines' transcript folders; the runner's
+          # default instance limit is 128.
+          sudo sysctl -w fs.inotify.max_user_instances=1024 fs.inotify.max_user_watches=524288
+          # As in cli-e2e.yml: zsh's compinit stops every agent's pane at a question while a
+          # completion folder is writable by others.
+          insecure=$(zsh -fc 'autoload -U compaudit && compaudit' 2>/dev/null | grep '^/' | sort -u || true)
+          if [ -n "$insecure" ]; then
+            echo "$insecure" | xargs sudo chown root:root
+            echo "$insecure" | xargs sudo chmod g-w,o-w
+          fi
+          zsh -fc 'autoload -U compaudit && compaudit'
+      - run: npm ci --no-audit --no-fund
+      - name: The apps' sessions and the ChatGPT follow
+        env:
+          E2E_BUNDLE: '1'
+          E2E_ARTIFACTS_DIR: ${{ runner.temp }}/e2e-daemon-logs
+        run: >-
+          npx vitest run --config vitest.e2e.config.ts
+          e2e/deviceClaudeAppSessions.e2e.ts e2e/deviceCodexAppThreads.e2e.ts e2e/dialChatgptFollow.e2e.ts
+          --reporter=default --reporter=json --outputFile.json="$RUNNER_TEMP/result.json"
+      # A file that skips on this OS counts as a pass to vitest.
+      - name: Require every case to pass without skipping
+        env:
+          RESULT: ${{ runner.temp }}/result.json
+        run: >-
+          node -e 'const r = JSON.parse(require("node:fs").readFileSync(process.env.RESULT, "utf8"));
+          if (r.numTotalTests === 0 || r.numPassedTests !== r.numTotalTests) process.exit(1)'
+      - name: Preserve the failing cases' daemon logs
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: tmp-dial-app-sessions-daemon-logs
+          path: ${{ runner.temp }}/e2e-daemon-logs/
+          if-no-files-found: ignore
+          overwrite: true
+          retention-days: 7
+
+  # Harness Device's unit tests on Windows x64 and arm64.
+  device-app-windows:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [windows-latest, windows-11-arm]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: device-app/src-tauri
+          shared-key: dial-app-sessions-tmp
+      - name: Rust unit tests
+        run: cargo test --locked --lib --manifest-path device-app/src-tauri/Cargo.toml
