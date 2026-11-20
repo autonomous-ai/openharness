@@ -1107,7 +1107,7 @@ static void nav_test_home_app_kept_by_id(void) {
     apps_of("harness", "codex", "cursor");   // VS Code goes, Cursor takes its place
     pod_nav_sync(&N, &M);
     CHECK(top()->scroll == 33 && !strcmp(N.home_app, "cursor"));
-    act(POD_A_SCROLL, -2, 0);   // the Working card is not an app
+    act(POD_A_SCROLL, POD_HOME_WORKING - top()->scroll, 0);   // to the Working card, as the glue's swipe does: it is not an app
     CHECK(top()->scroll == -1 && !N.home_app[0]);
 }
 static void nav_test_home_pill_goes(void) {

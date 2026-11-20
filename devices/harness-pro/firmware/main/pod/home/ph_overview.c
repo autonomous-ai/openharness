@@ -61,9 +61,9 @@ void ph_card_art(ht_scene_t *s, int cx, int cy, int side, const pod_model_t *m, 
 enum { HOME_NONE = -3 };
 static int home_at(const pod_nav_t *nav, const pod_model_t *m)
 {
-    if (pod_home_pages(m, NULL, 0) < 1) return HOME_NONE;
+    if (pod_home_pages(nav, m, NULL, 0) < 1) return HOME_NONE;
     const pod_frame_t *f = nav->depth ? &nav->stack[nav->depth - 1] : NULL;
-    return pod_home_clamp(m, !f ? 0 : f->view == POD_V_TAB ? f->tab : f->scroll);
+    return pod_home_clamp(nav, m, !f ? 0 : f->view == POD_V_TAB ? f->tab : f->scroll);
 }
 
 // The agents of tab t (panes that name a rostered agent) and how many of them work.
@@ -98,7 +98,7 @@ bool ph_home_moves(const pod_nav_t *nav, const pod_model_t *m)
     int t = home_at(nav, m), working = 0;
     if (t == HOME_NONE) return true;   // the first screen's shimmer and bar
     if (t == POD_HOME_WORKING) return true;   // the pets
-    if (t < 0) return false;   // the Notices card is still
+    if (t < 0 || t >= m->tab_count) return false;   // the Notices card is still; an app page is not a tab
     tab_agents(m, t, &working);
     return working > 0 || tab_asking(m, t) > 0;
 }
@@ -465,7 +465,7 @@ static void peek(pod_out_frame_t *f, const pod_nav_t *nav, const pod_model_t *m,
 {
     if (p == POD_HOME_NOTICES) notices_card(f, m, x, y, w, h, r, PEEK_FADE, false);
     else if (p == POD_HOME_WORKING) working_card(f, nav, m, x, y, w, h, r, PEEK_FADE, false, now_ms);
-    else if (p >= 0) card(f, m, p, x, y, w, h, r, PEEK_FADE, false, now_ms);
+    else if (p >= 0 && p < m->tab_count) card(f, m, p, x, y, w, h, r, PEEK_FADE, false, now_ms);
 }
 
 void ph_view_home(pod_out_frame_t *f, const pod_nav_t *nav, pod_model_t *m, uint32_t now_ms)
@@ -478,7 +478,7 @@ void ph_view_home(pod_out_frame_t *f, const pod_nav_t *nav, pod_model_t *m, uint
     const int lx = CARD_X + CARD_W / 2 - PEEK_DX - pw / 2, rx = CARD_X + CARD_W / 2 + PEEK_DX - pw / 2, pr = CARD_R * PEEK_PCT / 100;
     // The page t's neighbours are the adjacent entries of the page list.
     int16_t pg[POD_HOME_PAGES_MAX];
-    const int n = pod_home_pages(m, pg, POD_HOME_PAGES_MAX);
+    const int n = pod_home_pages(nav, m, pg, POD_HOME_PAGES_MAX);
     int at = 0;
     while (at < n - 1 && pg[at] < t) at++;
     const int prev = at > 0 ? pg[at - 1] : HOME_NONE, next = at + 1 < n ? pg[at + 1] : HOME_NONE;
@@ -493,6 +493,7 @@ void ph_view_home(pod_out_frame_t *f, const pod_nav_t *nav, pod_model_t *m, uint
         pod_hit_add(f, CARD_X, CARD_Y, CARD_W, CARD_H, POD_A_INBOX, 0);
         return;
     }
+    if (t >= m->tab_count) return;   // an app page: m->tabs has no such entry
     card(f, m, t, CARD_X, CARD_Y, CARD_W, CARD_H, CARD_R, 0, true, now_ms);
     if (tab_agents(m, t, NULL) > 0) pod_hit_add_id(f, CARD_X, CARD_Y, CARD_W, CARD_H, POD_A_ENTER_TAB, t, m->tabs[t].id);
 }

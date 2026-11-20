@@ -468,7 +468,7 @@ pod_out_t pod_ui_touch(pod_ui_t *u, bool down, int x, int y, uint32_t now_ms, bo
                     return none;
                 }
                 int16_t pg[POD_HOME_PAGES_MAX];
-                const int n = pod_home_pages(&u->model, pg, POD_HOME_PAGES_MAX), cur = pod_home_clamp(&u->model, top(u)->scroll);
+                const int n = pod_home_pages(&u->nav, &u->model, pg, POD_HOME_PAGES_MAX), cur = pod_home_clamp(&u->nav, &u->model, top(u)->scroll);
                 int at = 0;
                 while (at < n - 1 && pg[at] < cur) at++;
                 const int want = at + (dx < 0 ? 1 : -1);

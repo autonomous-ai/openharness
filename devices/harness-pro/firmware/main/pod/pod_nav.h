@@ -30,6 +30,8 @@ typedef struct {
     bool sent_seen;        // the model has marked sent_agent's optimistic Working (pod_model_sent) since the stop tap
     char seen_agent[ID_MAX];   // the open agent as pod_nav_flip_recaps last saw it (empty: none), and whether it was
     bool seen_active;          // WORKING or ASKING then: the Recap -> Agent flip fires on that edge, not on the level
+    bool home_apps;            // the pill's Apps cell is chosen (pod_home_apps); cleared when the pill goes
+    char home_app[CABLE_APP_ID_MAX];   // the app card Home is on, by id ("" none): an apps frame that reorders the list never moves the person
 } pod_nav_t;
 
 typedef enum {
@@ -46,7 +48,10 @@ typedef enum {
     POD_A_OPEN_NOTIF,   // arg: index into model->unread, from the Inbox: open that agent (an Agent/Recap frame over the Inbox) and mark it read. An idle agent opens on its Recap (which reads it)
     POD_A_FOLLOW,       // arg: index into model->agents: open that agent from anywhere (Inbox rows with no unread entry); the glue resolves the id
     POD_A_SCROLL,       // arg: signed delta added to the top frame's scroll (clamped to >= 0): rows, whatever the screen draws as one.
-    POD_A_ENTER_TAB     // arg: tab index, only from the TABS frame: push the TAB frame and the tab's first agent (AGENT_OPEN). An empty or unknown tab: nothing.
+    POD_A_ENTER_TAB,    // arg: tab index, only from the TABS frame: push the TAB frame and the tab's first agent (AGENT_OPEN). An empty or unknown tab: nothing.
+    // The pill's two cells, on Home only (depth 1, while the pill shows). Device-local: no effect. Apps lands on the first app card,
+    // Tabs on the window's selected tab (else the first). A tap on the cell already chosen does nothing.
+    POD_A_HOME_TABS, POD_A_HOME_APPS
 } pod_action_t;
 
 typedef enum { POD_FX_NONE, POD_FX_VOICE_BEGIN, POD_FX_VOICE_END, POD_FX_VOICE_ABORT, POD_FX_AGENT_OPEN } pod_effect_t;

@@ -24,7 +24,7 @@ static int tab_list(const pod_model_t *m, int tab, const pod_agent_t *out[], int
     return n;
 }
 
-// Home pages: the TABS frame's scroll is a page of pod_home_pages: the tab index, or POD_HOME_NOTICES / POD_HOME_WORKING, which exist only while there
+// Home pages: the TABS frame's scroll is a page of pod_home_pages: the tab index (or POD_HOME_APP0 + k for an app card), or POD_HOME_NOTICES / POD_HOME_WORKING, which exist only while there
 // are notices / working agents, so they are positions that do not move when they come or go: the tab under the person stays the tab under the person.
 // Leaving a room for Home lands on that room's tab card, never on the Notices or Working card.
 static void land_on_tab(pod_nav_t *n, const pod_model_t *m, const pod_frame_t *from)
@@ -39,6 +39,21 @@ static void land_on_tab(pod_nav_t *n, const pod_model_t *m, const pod_frame_t *f
     }
     if (idx >= 0) n->stack[0].scroll = (int16_t)idx;
     else if (n->stack[0].scroll < 0) n->stack[0].scroll = 0;   // Recent has no card: the first tab
+}
+
+// The app card at Home's page, or -1 (a page that is not a card, or Home lists tabs): its index into m->apps.
+static int home_card(const pod_nav_t *n, const pod_model_t *m, int page)
+{
+    uint8_t c[POD_APPS_MAX];
+    const int k = page - POD_HOME_APP0;
+    if (k < 0 || !pod_home_apps(n, m) || k >= pod_home_app_cards(m, c, POD_APPS_MAX)) return -1;
+    return c[k];
+}
+// home_app follows the page Home is on, so the next apps frame re-finds that card by id.
+static void home_app_follows(pod_nav_t *n, const pod_model_t *m)
+{
+    const int a = home_card(n, m, n->stack[0].scroll);
+    pod_copy_str(n->home_app, sizeof n->home_app, a >= 0 ? m->apps[a].id : "");
 }
 
 static int index_in(const pod_model_t *m, int tab, const char *id);
@@ -242,10 +257,27 @@ static pod_out_t nav_act(pod_nav_t *n, pod_model_t *m, pod_action_t a, int arg, 
         break;
     case POD_A_SCROLL: {
         long s = (long)f->scroll + arg;
-        if (f->view == POD_V_TABS) { f->scroll = (int16_t)pod_home_clamp(m, s < -32768 ? -32768 : s > 32767 ? 32767 : (int)s); n->work_page = 0; break; }
+        if (f->view == POD_V_TABS) {
+            f->scroll = (int16_t)pod_home_clamp(n, m, s < -32768 ? -32768 : s > 32767 ? 32767 : (int)s);
+            n->work_page = 0;
+            home_app_follows(n, m);
+            break;
+        }
         f->scroll = (int16_t)(s < 0 ? 0 : s > 32767 ? 32767 : s);
         break;
     }
+    case POD_A_HOME_APPS:
+        if (n->depth != 1 || f->view != POD_V_TABS || !pod_home_switch(m) || n->home_apps) break;
+        n->home_apps = true;
+        f->scroll = POD_HOME_APP0;
+        home_app_follows(n, m);
+        break;
+    case POD_A_HOME_TABS:
+        if (n->depth != 1 || f->view != POD_V_TABS || !n->home_apps) break;
+        n->home_apps = false;
+        f->scroll = (int16_t)(m->selected < m->tab_count ? m->selected : pod_home_clamp(n, m, 0));
+        n->home_app[0] = 0;
+        break;
     case POD_A_NONE:
     case POD_A_BANNER:
         break;
@@ -311,7 +343,18 @@ void pod_nav_flip_recaps(pod_nav_t *n, pod_model_t *m) {
 pod_out_t pod_nav_sync(pod_nav_t *n, pod_model_t *m) {
     if (!n->depth) { pod_nav_init(n); return out_none(); }
     if (n->stack[0].view == POD_V_TABS) {   // tabs that went away take their pages with them
-        n->stack[0].scroll = (int16_t)pod_home_clamp(m, n->stack[0].scroll);   // Home: the scroll is a page of the list
+        pod_frame_t *h = &n->stack[0];
+        if (!pod_home_switch(m)) n->home_apps = false;   // the pill went: Apps is no longer a choice
+        if (pod_home_apps(n, m)) {   // the card under the person, found again by id (the list can reorder)
+            uint8_t c[POD_APPS_MAX];
+            const int cn = pod_home_app_cards(m, c, POD_APPS_MAX);
+            for (int k = 0; k < cn && n->home_app[0]; k++)
+                if (!strcmp(m->apps[c[k]].id, n->home_app)) { h->scroll = (int16_t)(POD_HOME_APP0 + k); break; }
+        } else if (h->scroll >= POD_HOME_APP0) {   // the list turned from apps to tabs: the selected tab (the PM's rule), else the first
+            h->scroll = (int16_t)(m->selected < m->tab_count ? m->selected : 0);
+        }
+        h->scroll = (int16_t)pod_home_clamp(n, m, h->scroll);   // Home: the scroll is a page of the list
+        home_app_follows(n, m);
         const int pages = (pod_home_working(m) + 2) / 3;   // the Working card's pet pages: the stored page follows the working set down
         if (n->depth != 1 || n->stack[0].scroll != POD_HOME_WORKING) n->work_page = 0;
         else if (n->work_page >= pages) n->work_page = (uint8_t)(pages > 0 ? pages - 1 : 0);
@@ -399,7 +442,7 @@ bool pod_nav_follow_tab(pod_nav_t *n, pod_model_t *m) {
     const int sel = m->selected;
     pod_frame_t *cur = &n->stack[n->depth - 1];
     if (cur->view == POD_V_TABS && n->depth == 1) {
-        if (cur->scroll == sel) return false;
+        if (cur->scroll == sel || pod_home_apps(n, m)) return false;   // Home listing apps has no tab card to move to
         cur->scroll = (int16_t)sel;
         n->work_page = 0;
         return true;

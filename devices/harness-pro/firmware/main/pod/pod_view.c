@@ -1,5 +1,7 @@
 // pod_render: the one entry point. It draws the Pets screens (home/ph_view.c) and answers how the top screen scrolls and animates.
 
+#include <string.h>
+
 #include "pod_view.h"
 #include "pro_canvas.h"
 #include "pod/home/ph.h"
@@ -29,30 +31,68 @@ int pod_home_working(const pod_model_t *m)
     for (int i = 0; i < m->agent_count; i++) n += pod_model_eff(m, &m->agents[i]) == POD_WORKING;
     return n;
 }
-bool pod_home_has(const pod_model_t *m, int page)
+static bool other_app(const pod_app_t *a) { return a->count > 0 && strcmp(a->id, POD_APP_HARNESS); }
+bool pod_home_switch(const pod_model_t *m)
 {
-    return page == POD_HOME_NOTICES ? pod_notice_count(m) > 0
-         : page == POD_HOME_WORKING ? pod_home_working(m) > 0
-         : page >= 0 && page < m->tab_count;
+    if (!m->has_window || !m->apps_switch) return false;
+    for (int i = 0; i < m->app_count; i++) if (other_app(&m->apps[i])) return true;
+    return false;
 }
-int pod_home_pages(const pod_model_t *m, int16_t *out, int cap)
+int pod_home_app_cards(const pod_model_t *m, uint8_t *out, int cap)
 {
+    const bool pill = pod_home_switch(m);
     int n = 0;
-    for (int p = POD_HOME_NOTICES; p < m->tab_count; p++)
-        if (pod_home_has(m, p)) { if (out && n < cap) out[n] = (int16_t)p; n++; }
+    for (int i = 0; i < m->app_count; i++)
+        if (pill ? other_app(&m->apps[i]) : m->apps[i].count > 0) { if (out && n < cap) out[n] = (uint8_t)i; n++; }
     return n;
 }
-int pod_home_clamp(const pod_model_t *m, int s)
+bool pod_home_apps(const pod_nav_t *nav, const pod_model_t *m)
 {
-    const int end = m->tab_count;
-    for (int p = s < POD_HOME_NOTICES ? POD_HOME_NOTICES : s; p < end; p++) if (pod_home_has(m, p)) return p;
-    for (int p = s < end ? s : end - 1; p >= POD_HOME_NOTICES; p--) if (pod_home_has(m, p)) return p;
-    return 0;
+    if (!m->has_window) return pod_home_app_cards(m, NULL, 0) > 0;
+    return pod_home_switch(m) && nav->home_apps;
+}
+int pod_app_agents(const pod_model_t *m, const char *app_id, const pod_agent_t *out[], int max)
+{
+    if (!app_id || !app_id[0] || strcmp(app_id, m->app_shown)) return 0;
+    int n = 0;
+    for (int i = 0; i < m->agent_count && n < max; i++) if (!strcmp(m->agents[i].host, app_id)) out[n++] = &m->agents[i];
+    return n;
+}
+// The list's first page and its end: the tabs, or the app cards.
+static int list_end(const pod_nav_t *nav, const pod_model_t *m, int *first)
+{
+    if (!pod_home_apps(nav, m)) { *first = 0; return m->tab_count; }
+    *first = POD_HOME_APP0;
+    return POD_HOME_APP0 + pod_home_app_cards(m, NULL, 0);
+}
+bool pod_home_has(const pod_nav_t *nav, const pod_model_t *m, int page)
+{
+    if (page == POD_HOME_NOTICES) return pod_notice_count(m) > 0;
+    if (page == POD_HOME_WORKING) return pod_home_working(m) > 0;
+    int first;
+    const int end = list_end(nav, m, &first);
+    return page >= first && page < end;
+}
+static void put(int16_t *out, int cap, int *n, int page) { if (out && *n < cap) out[*n] = (int16_t)page; (*n)++; }
+int pod_home_pages(const pod_nav_t *nav, const pod_model_t *m, int16_t *out, int cap)
+{
+    int n = 0, first;
+    const int end = list_end(nav, m, &first);
+    if (pod_notice_count(m) > 0) put(out, cap, &n, POD_HOME_NOTICES);
+    if (pod_home_working(m) > 0) put(out, cap, &n, POD_HOME_WORKING);
+    for (int p = first; p < end; p++) put(out, cap, &n, p);
+    return n;
+}
+int pod_home_clamp(const pod_nav_t *nav, const pod_model_t *m, int s)
+{
+    int16_t pg[POD_HOME_PAGES_MAX];
+    const int n = pod_home_pages(nav, m, pg, POD_HOME_PAGES_MAX);
+    for (int i = 0; i < n; i++) if (pg[i] >= s) return pg[i];
+    return n > 0 ? pg[n - 1] : 0;
 }
 int pod_tabs_pages_of(const pod_nav_t *nav, const pod_model_t *m)
 {
-    (void)nav;
-    return pod_home_pages(m, NULL, 0);
+    return pod_home_pages(nav, m, NULL, 0);
 }
 
 int pod_scroll_pitch(const pod_nav_t *nav)
