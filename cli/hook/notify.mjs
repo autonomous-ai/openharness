@@ -921,8 +921,18 @@ function syncStateDirectory(directory) {
   try { fsyncSync(fd) } finally { closeSync(fd) }
 }
 
+/**
+ * On Windows NTFS gives Node no owner, and its mode bits read as writable by everyone (src/lib/secureState.ts,
+ * windowsStateRoots), so the owner and mode checks below would refuse every folder and file there, and a hook with no
+ * daemon could never record its session. There, as the daemon does, a folder must be a folder, and a file is read as
+ * the hook reads its other Windows state (readWindowsStateFile): no link, within its size, inside the profile or folder.
+ */
 function secureStateDirectory(directory, create = true) {
   if (create) mkdirSync(directory, { recursive: true, mode: 0o700 })
+  if (process.platform === 'win32') {
+    if (!statSync(directory).isDirectory()) throw new Error('state directory has unsafe type')
+    return
+  }
   const fd = openSync(directory, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW)
   try {
     const stat = fstatSync(fd)
@@ -946,6 +956,7 @@ function inspectPrivateStateFile(fd, maxBytes = Number.MAX_SAFE_INTEGER) {
   const uid = typeof process.getuid === 'function' ? process.getuid() : null
   if (!stat.isFile() || (uid !== null && stat.uid !== uid)) throw new Error('state file has unsafe owner or type')
   if (stat.size > maxBytes) throw new Error('state file exceeds its size limit')
+  if (process.platform === 'win32') return
   const mode = stat.mode & 0o777
   if (mode & 0o022) throw new Error('state file is group/world writable')
   if (mode !== 0o600) {
@@ -957,6 +968,7 @@ function inspectPrivateStateFile(fd, maxBytes = Number.MAX_SAFE_INTEGER) {
 }
 
 function readPrivateStateFile(file, maxBytes = Number.MAX_SAFE_INTEGER) {
+  if (process.platform === 'win32') return readWindowsStateFile(dirname(file), file, maxBytes)
   const fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK)
   try {
     inspectPrivateStateFile(fd, maxBytes)
@@ -1864,9 +1876,11 @@ async function withRegistryLock(registryFile, fn) {
         const uid = typeof process.getuid === 'function' ? process.getuid() : null
         const st = lstatSync(lockDir)
         const ownerStat = lstatSync(join(lockDir, 'owner.json'))
-        if (!st.isDirectory() || st.isSymbolicLink() || (uid !== null && st.uid !== uid) || (st.mode & 0o777) !== 0o700
+        // No mode on Windows, as the daemon's lock (src/lib/registryPersistence.ts) has none there.
+        const unix = process.platform !== 'win32'
+        if (!st.isDirectory() || st.isSymbolicLink() || (uid !== null && st.uid !== uid) || (unix && (st.mode & 0o777) !== 0o700)
           || !ownerStat.isFile() || ownerStat.isSymbolicLink() || (uid !== null && ownerStat.uid !== uid)
-          || (ownerStat.mode & 0o777) !== 0o600) return
+          || (unix && (ownerStat.mode & 0o777) !== 0o600)) return
         const owner = JSON.parse(readFileSync(join(lockDir, 'owner.json'), 'utf8'))
         const ownerPid = Number(owner?.pid)
         const ownerStartMarker = lockStartMarker(owner)
@@ -1972,11 +1986,10 @@ function readEditors(file) {
  * Puts [entry] first among the kept answers, the EDITORS_MAX newest kept, written whole: a temporary file renamed over
  * the old one (a link there is replaced, never followed), so a reader sees the old list or the new. It is the hook's
  * copy of atomicWriteJson and readState (src/lib/secureState.ts), because this file imports nothing from src/. As
- * there on Windows, no owner or mode is checked (NTFS gives Node neither, which is why writeRegistry's checks would
- * refuse every file there): the file is read as the hook reads its other Windows state (readWindowsStateFile), and
- * like a cache it is not flushed, since one a power cut empties reads as none and is written again. Two hooks writing
- * at once each write it whole: the last rename wins, and the entry lost is read from the table next time. Never
- * throws: a failed write keeps nothing.
+ * there on Windows, no owner or mode is checked (NTFS gives Node neither; see secureStateDirectory): the file is read
+ * as the hook reads its other Windows state (readWindowsStateFile), and like a cache it is not flushed, since one a
+ * power cut empties reads as none and is written again. Two hooks writing at once each write it whole: the last rename
+ * wins, and the entry lost is read from the table next time. Never throws: a failed write keeps nothing.
  */
 function keepEditor(file, entry) {
   const editors = [entry, ...readEditors(file).filter(({ pid, ipc }) => pid !== entry.pid || ipc !== entry.ipc)]
