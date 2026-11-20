@@ -815,13 +815,17 @@ try {
 
   $started.Add((Start-Process -FilePath $watcher -ArgumentList "`"$consoles`"" -PassThru))
   if (-not (Wait-For { (Lines-Of $consoles) -contains 'ready' })) { Fail "the console watcher hooks the desktop: $(Lines-Of $consoles)" }
-  # It must see a console window when one opens, or the check means nothing.
+  # It must see a console window when one opens and trace it to the process that opened it, or the check means nothing.
   $seenBefore = @(Lines-Of $consoles).Count
   $shown = Start-Process -FilePath (Join-Path $env:SystemRoot 'System32\cmd.exe') -ArgumentList '/k' -PassThru
   $started.Add($shown)
-  if (-not (Wait-For { @(Lines-Of $consoles).Count -gt $seenBefore })) { Fail 'the console watcher sees a console window open' }
+  $opener = "cmd.exe:$($shown.Id)"
+  $traced = { @(Lines-Of $consoles | Select-Object -Skip $seenBefore | Where-Object { ($_ -split ' ') -contains $opener }) }
+  if (-not (Wait-For { (& $traced).Count -gt 0 })) {
+    Fail "the console watcher traces a console to its process, $opener; it saw: $(@(Lines-Of $consoles | Select-Object -Skip $seenBefore) -join ' / ')"
+  }
   Stop-Process -Id $shown.Id -Force
-  Ok "the console watcher sees a console window open: $(@(Lines-Of $consoles)[-1])"
+  Ok "the console watcher traces a console window to the process that opened it: $(@(& $traced)[0])"
 
   # --- 1: the silent install, per user
 
