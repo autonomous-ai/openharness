@@ -18,33 +18,59 @@ void main() {
     );
   });
 
-  test('only macOS 13 or later, and never a viewer build', () {
-    bool on(
-      String version, {
-      TargetPlatform platform = TargetPlatform.macOS,
-      bool viewer = false,
-    }) => deviceAppSupported(
-      platform: platform,
-      osVersion: version,
-      viewer: viewer,
-    );
-    expect(on('Version 13.0 (Build 22A380)'), isTrue);
-    expect(on('Version 26.6.2 (Build 25G83)'), isTrue);
-    expect(on('Version 12.7.6 (Build 21H1320)'), isFalse);
-    // Apple documents the string as localized.
-    expect(on('バージョン 14.5（ビルド 23F79）'), isTrue);
-    expect(on('Versión 12.7.6 (compilación 21H1320)'), isFalse);
-    expect(on(''), isFalse);
-    expect(on('6.8.0-45-generic'), isFalse);
-    expect(
-      on('Version 15.6 (Build 24G84)', platform: TargetPlatform.linux),
-      isFalse,
-    );
-    expect(
-      on('Version 15.6 (Build 24G84)', platform: TargetPlatform.windows),
-      isFalse,
-    );
-    expect(on('Version 15.6 (Build 24G84)', viewer: true), isFalse);
+  test(
+    'only macOS 13 or later, Windows and Linux, and never a viewer build',
+    () {
+      bool on(
+        String version, {
+        TargetPlatform platform = TargetPlatform.macOS,
+        bool viewer = false,
+      }) => deviceAppSupported(
+        platform: platform,
+        osVersion: version,
+        viewer: viewer,
+      );
+      expect(on('Version 13.0 (Build 22A380)'), isTrue);
+      expect(on('Version 26.6.2 (Build 25G83)'), isTrue);
+      expect(on('Version 12.7.6 (Build 21H1320)'), isFalse);
+      // Apple documents the string as localized.
+      expect(on('バージョン 14.5（ビルド 23F79）'), isTrue);
+      expect(on('Versión 12.7.6 (compilación 21H1320)'), isFalse);
+      expect(on(''), isFalse);
+      expect(on('6.8.0-45-generic'), isFalse);
+      expect(on('Version 15.6 (Build 24G84)', viewer: true), isFalse);
+      // Desktop's own floor, Windows 10, is the app's.
+      for (final windows in [
+        '"Windows 11 Pro" 10.0 (Build 22631)',
+        '"Windows 10 Pro" 10.0 (Build 19045)',
+      ]) {
+        expect(on(windows, platform: TargetPlatform.windows), isTrue);
+        expect(
+          on(windows, platform: TargetPlatform.windows, viewer: true),
+          isFalse,
+        );
+      }
+      expect(on('6.8.0-45-generic', platform: TargetPlatform.linux), isTrue);
+      expect(
+        on('6.8.0-45-generic', platform: TargetPlatform.linux, viewer: true),
+        isFalse,
+      );
+    },
+  );
+
+  test("each OS's words", () {
+    expect(deviceAppCopy(TargetPlatform.macOS), (
+      band: 'Your dial follows apps and terminal tabs with the Harness menu-bar app.',
+      title: 'Menu-bar app',
+      detail: 'Follows the app and terminal tab in front.',
+    ));
+    for (final platform in [TargetPlatform.windows, TargetPlatform.linux]) {
+      expect(deviceAppCopy(platform), (
+        band: 'Your dial follows apps with the Harness tray app.',
+        title: 'Tray app',
+        detail: 'Follows the app in front.',
+      ), reason: '$platform');
+    }
   });
 
   test('the Windows place is under LOCALAPPDATA', () {

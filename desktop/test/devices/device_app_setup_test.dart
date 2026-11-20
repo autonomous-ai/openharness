@@ -4,6 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/auth/auth_session.dart';
 import 'package:harness/core/config.dart';
 import 'package:harness/devices/device_app_offer.dart';
+import 'package:harness/devices/device_app_probe.dart';
 import 'package:harness/devices/device_app_setup.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/state/dial_status.dart';
@@ -213,6 +214,83 @@ void main() {
         ),
         isFalse,
       );
+    });
+  });
+
+  group('each OS', () {
+    const windowsEnv = {'LOCALAPPDATA': r'C:\Users\Nguyễn Văn A\AppData\Local'};
+    const windowsPlace =
+        r'C:\Users\Nguyễn Văn A\AppData\Local\Harness Device\harness-device.exe';
+    const linuxEnv = {
+      'HOME': '/home/p q',
+      'APPIMAGE': '/home/p q/Harness.AppImage',
+    };
+    const linuxPlace = '/home/p q/.local/opt/Harness-Device.AppImage';
+
+    test('each OS gets its own lookup', () async {
+      expect(
+        deviceAppProbeFor(TargetPlatform.macOS),
+        isA<ChannelDeviceAppProbe>(),
+      );
+      for (final (platform, environment, place) in [
+        (TargetPlatform.windows, windowsEnv, windowsPlace),
+        (TargetPlatform.linux, linuxEnv, linuxPlace),
+      ]) {
+        final asked = <String>[];
+        final probe = deviceAppProbeFor(
+          platform,
+          environment: environment,
+          running: () async => false,
+          exists: (path) async {
+            asked.add(path);
+            return true;
+          },
+        );
+        expect(probe, isA<PlaceDeviceAppProbe>(), reason: '$platform');
+        final presence = await probe.lookup();
+        expect(asked, [place], reason: '$platform');
+        expect(presence.installed, isTrue, reason: '$platform');
+      }
+    });
+
+    test(
+      'Open on Windows and Linux starts the place when no path is named',
+      () async {
+        for (final (platform, environment, place) in [
+          (TargetPlatform.windows, windowsEnv, windowsPlace),
+          (TargetPlatform.linux, linuxEnv, linuxPlace),
+        ]) {
+          final started = <(String, Map<String, String>)>[];
+          final open = deviceAppOpenFor(
+            platform,
+            environment: environment,
+            start: (path, environment) async =>
+                started.add((path, environment)),
+          );
+          expect(await open(), isTrue, reason: '$platform');
+          expect(await open(path: '/t/named'), isTrue, reason: '$platform');
+          expect(started.map((s) => s.$1), [place, '/t/named']);
+          // The app never takes Desktop's AppImage for its own.
+          expect(
+            started.first.$2.containsKey('APPIMAGE'),
+            isFalse,
+            reason: '$platform',
+          );
+        }
+      },
+    );
+
+    test('Open with no place fails', () async {
+      for (final platform in [TargetPlatform.windows, TargetPlatform.linux]) {
+        var starts = 0;
+        final open = deviceAppOpenFor(
+          platform,
+          environment: const {},
+          start: (_, _) async => starts++,
+        );
+        expect(await open(), isFalse, reason: '$platform');
+        expect(starts, 0, reason: '$platform');
+      }
     });
   });
 

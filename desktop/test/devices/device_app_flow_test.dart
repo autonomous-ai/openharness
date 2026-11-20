@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -35,6 +36,47 @@ const _sentence =
     'Your dial follows apps and terminal tabs with the Harness menu-bar app.';
 
 final _mac = TargetPlatformVariant.only(TargetPlatform.macOS);
+final _everyOS = TargetPlatformVariant({
+  TargetPlatform.macOS,
+  TargetPlatform.windows,
+  TargetPlatform.linux,
+});
+
+/// This OS's version as Dart reads it on each.
+String _osVersion() => switch (defaultTargetPlatform) {
+  TargetPlatform.windows => '"Windows 11 Pro" 10.0 (Build 22631)',
+  TargetPlatform.linux => '6.8.0-45-generic',
+  _ => 'Version 15.6 (Build 24G84)',
+};
+
+/// The offer as this OS supports it.
+DeviceAppFixture _supportedFixture() =>
+    DeviceAppFixture(supported: deviceAppSupported(osVersion: _osVersion()));
+
+/// The band's sentence and the row's title in this OS's words: off macOS a tray, not a menu bar, and no terminal tab
+/// followed.
+void _expectOwnWords(WidgetTester tester) {
+  final mac = defaultTargetPlatform == TargetPlatform.macOS;
+  expect(
+    _bandText(tester),
+    mac ? _sentence : 'Your dial follows apps with the Harness tray app.',
+  );
+  expect(
+    find.descendant(
+      of: find.byKey(_row),
+      matching: find.text(mac ? 'Menu-bar app' : 'Tray app'),
+    ),
+    findsOneWidget,
+  );
+  if (!mac) {
+    expect(
+      find.textContaining(
+        RegExp('menu-bar|terminal tab', caseSensitive: false),
+      ),
+      findsNothing,
+    );
+  }
+}
 
 class _SignedOutCli extends CliLogin {
   @override
@@ -186,7 +228,7 @@ void main() {
   testWidgets(
     'a dial and no menu-bar app: the band; Install installs and the band goes',
     (tester) async {
-      final fixture = DeviceAppFixture();
+      final fixture = _supportedFixture();
       final app = _app(fixture);
       addTearDown(app.dispose);
       final controller = await _controller(app);
@@ -194,7 +236,7 @@ void main() {
       report(app.dial, [deviceStatus('d1')]);
       await _pump(tester, app, controller);
 
-      expect(_bandText(tester), _sentence);
+      _expectOwnWords(tester);
       expect(_label(tester, _rowAction), 'Install');
 
       fixture.install.gate = Completer<void>();
@@ -209,7 +251,7 @@ void main() {
       expect(find.byKey(_band), findsNothing);
       expect(find.byKey(_row), findsNothing);
     },
-    variant: _mac,
+    variant: _everyOS,
   );
 
   testWidgets(
@@ -246,7 +288,7 @@ void main() {
   testWidgets('the Devices row: Install, then Open, then nothing', (
     tester,
   ) async {
-    final fixture = DeviceAppFixture();
+    final fixture = _supportedFixture();
     final app = _app(fixture);
     addTearDown(app.dispose);
     final controller = await _controller(app);
@@ -254,6 +296,7 @@ void main() {
     report(app.dial, [deviceStatus('d1')]);
     await _pump(tester, app, controller);
 
+    _expectOwnWords(tester);
     await _tap(tester, _rowAction);
     expect(fixture.install.calls, 1);
     expect(find.byKey(_row), findsNothing);
@@ -272,18 +315,19 @@ void main() {
     await tester.pump();
     expect(find.byKey(_row), findsNothing);
     expect(find.byKey(_band), findsNothing);
-  }, variant: _mac);
+  }, variant: _everyOS);
 
   testWidgets('a failed install shows its line and Retry on both', (
     tester,
   ) async {
-    final fixture = DeviceAppFixture();
+    final fixture = _supportedFixture();
     final app = _app(fixture);
     addTearDown(app.dispose);
     final controller = await _controller(app);
     addTearDown(controller.dispose);
     report(app.dial, [deviceStatus('d1')]);
     await _pump(tester, app, controller);
+    _expectOwnWords(tester);
 
     fixture.install.result = const DeviceAppInstallResult.failed(
       DeviceAppInstallStep.signature,
@@ -304,7 +348,7 @@ void main() {
     expect(fixture.install.calls, 2);
     expect(find.byKey(_band), findsNothing);
     expect(find.byKey(_row), findsNothing);
-  }, variant: _mac);
+  }, variant: _everyOS);
 
   testWidgets('a dial on another computer: no row', (tester) async {
     final fixture = DeviceAppFixture();
@@ -525,10 +569,10 @@ void main() {
     expect(find.byKey(_band), findsNothing);
   });
 
-  testWidgets('Linux shows nothing', (tester) async {
+  testWidgets('macOS 12 shows nothing', (tester) async {
     final fixture = DeviceAppFixture(
       supported: deviceAppSupported(
-        osVersion: 'Version 15.6 (Build 24G84)',
+        osVersion: 'Version 12.7.6 (Build 21H1320)',
         viewer: false,
       ),
     );
@@ -542,5 +586,5 @@ void main() {
     expect(find.byKey(_band), findsNothing);
     expect(find.byKey(_row), findsNothing);
     expect(fixture.probe.lookups, 0);
-  }, variant: TargetPlatformVariant.only(TargetPlatform.linux));
+  }, variant: _mac);
 }
