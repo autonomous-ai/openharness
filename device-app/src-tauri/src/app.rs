@@ -312,11 +312,10 @@ impl App {
                     return;
                 }
                 self.state.follow.waiting = true;
-                // A window that shows Install or Sign in keeps it: the screen waits until they end.
-                if self.window.is_none()
-                    && let Some(screen) = due(&self.state)
-                {
-                    self.show(Some(self.view_of(screen)), effects);
+                // Shown only when it is the screen due and nothing shows: before the first screen is chosen, or with
+                // Install or Sign in due, it waits, and first_screen or next() shows it after them.
+                if self.window.is_none() && !self.awaiting_account && due(&self.state) == Some(Screen::Follow) {
+                    self.show(Some(self.view_of(Screen::Follow)), effects);
                 }
             }
             // Nothing newer: a row that offered a version goes, as this app is at least as new.
