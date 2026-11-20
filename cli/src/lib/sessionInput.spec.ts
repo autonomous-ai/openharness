@@ -1295,6 +1295,58 @@ describe('SessionInputController', () => {
         expect(typed).toEqual([])
       })
 
+      // Found in the fix review: handed over while a message waited for its pane, the task was chained behind that write
+      // through the full-queue check, and the messages queued behind it filled the queue: it was refused, typed nowhere,
+      // and every message waited behind a task that was gone.
+      it('a first task handed over behind a message waiting for its pane is never refused for a full queue', async () => {
+        vi.useFakeTimers()
+        const { controller, typed, onError, canSend } = waitingPane()
+
+        controller.submit('s1', 'Early')
+        await vi.advanceTimersByTimeAsync(2_500)
+        controller.expectFirstTask('s1')
+        for (let i = 0; i < 8; i++) controller.submit('s1', `Later ${i}`)
+        controller.submitFirstTask('s1', 'Say hello')
+        canSend()
+        await vi.advanceTimersByTimeAsync(1_000)
+        expect(typed).toEqual(['Say hello'])
+        expect(onError).not.toHaveBeenCalled()
+        controller.forget('s1')
+      })
+
+      it('nor is one whose turn to be typed comes while a Stop presses Ctrl-C: stopped, its row lets it go', async () => {
+        vi.useFakeTimers()
+        let pressed: (() => void) | null = null
+        const typed: string[] = []
+        const onError = vi.fn()
+        const onFirstTaskTaken = vi.fn()
+        const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
+          getSession: () => session('openclaw'),
+          validateRuntime: async () => true,
+          inject: vi.fn(async (_id: string, text: string): Promise<boolean | TerminalActionResult> => {
+            typed.push(text)
+            return notReady
+          }),
+          sendKey: vi.fn(() => new Promise<boolean>((done) => { pressed = () => done(true) })),
+          capture: async () => readyPane(), onError, onFirstTaskTaken,
+        })
+
+        controller.submit('s1', 'Early')
+        await vi.advanceTimersByTimeAsync(2_500)
+        controller.expectFirstTask('s1')
+        for (let i = 0; i < 8; i++) controller.submit('s1', `Later ${i}`)
+        controller.submitFirstTask('s1', 'Say hello')
+        controller.cancel('s1')
+        // The message waiting for its pane gives way, and the task's turn to be typed comes while the key is pressed.
+        await vi.advanceTimersByTimeAsync(1_000)
+        pressed!()
+        await vi.advanceTimersByTimeAsync(1_000)
+        expect(onFirstTaskTaken).toHaveBeenCalledTimes(1)
+        expect(typed.filter((text) => text === 'Say hello')).toEqual([])
+        expect(onError).not.toHaveBeenCalled()
+        controller.forget('s1')
+      })
+
       it('lets the pane\'s own command be typed meanwhile, tries nothing while it is, and is typed after it', async () => {
         vi.useFakeTimers()
         const { controller, inject, typed, onError, canSend, finishCommand } = waitingPane()
