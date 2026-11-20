@@ -1,10 +1,10 @@
 import { createHash } from 'node:crypto'
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { harnessPaneOwner } from '../lib/harnessSessionLabel.js'
-import { checkMove, OVERRIDE_NAMES, type ConditionDeps } from './conditions.js'
+import { checkMove, OVERRIDE_NAMES, withEnvFile, type ConditionDeps } from './conditions.js'
 import { planMove } from './plan.js'
 
 const FS: ConditionDeps['fs'] = { lstatSync, readdirSync, readFileSync, existsSync, realpathSync }
@@ -232,6 +232,12 @@ describe('what the conditions read', () => {
     const fields = [...source.matchAll(underHome)].map((match) => match[1])
     expect(fields).toContain('ADAPTER_DATA_DIR')
     expect(OVERRIDE_NAMES).toEqual(expect.arrayContaining([...fields, 'HARNESS_AUTH_DIR', 'HARNESS_CONNECTIONS_DIR', 'HARNESS_FLASHER_CACHE']))
+  })
+
+  // The file config/loadEnv.ts reads, whatever folder the start runs in.
+  it('a relative env file is the one in the home', () => {
+    writeFileSync(join(homedir(), 'harness.env'), 'HARNESS_LOGS_DIR=/from/the/home\n')
+    expect(withEnvFile({ fs: FS, env: { HARNESS_ENV_FILE: 'harness.env' } })).toEqual({ HARNESS_ENV_FILE: 'harness.env', HARNESS_LOGS_DIR: '/from/the/home' })
   })
 
   it('the new tag is the data folder\'s after the move', async () => {
