@@ -55,7 +55,7 @@ function parseOwner(text: string): { owner: Owner; text: string } {
 function readOwner(path: string): { owner: Owner; text: string } {
   return parseOwner(readPrivateStateFile(path, 1024))
 }
-function readOpenedOwner(fd: number, before: BigIntStats): Owner {
+function readOpenedOwner(fd: number, before: BigIntStats): { owner: Owner; text: string } {
   if (before.size > 1024n) throw new Error('checkpoint owner unavailable')
   const bytes = Buffer.alloc(Number(before.size))
   for (let position = 0; position < bytes.length;) {
@@ -66,7 +66,7 @@ function readOpenedOwner(fd: number, before: BigIntStats): Owner {
   }
   const after = fstatSync(fd, { bigint: true }); privateFile(after)
   if (version(after) !== version(before)) throw new Error('checkpoint owner changed')
-  return parseOwner(bytes.toString('utf8')).owner
+  return parseOwner(bytes.toString('utf8'))
 }
 function retained(): void { console.error('[checkpoint] STAGE_CLEANUP_UNAVAILABLE') }
 function expired(): Error { return Object.assign(new Error('checkpoint disk wait expired'), { code: 'CHECKPOINT_STAGE_TIMEOUT' }) }
@@ -79,7 +79,7 @@ async function beforeDeadline<T>(work: Promise<T>, deadline: number): Promise<T>
 export interface CheckpointStage extends ExportOwnership {
   stage: ExportStage
   verify(receipt: ExportReceipt): Promise<void>
-  publish(destination: string, current: () => void): Promise<void>
+  publish(current: () => void): Promise<void>
   close(): Promise<void>
 }
 
@@ -169,8 +169,9 @@ export class CheckpointStages {
     }
   }
 
-  async acquire(deadline = performance.now() + STORAGE_EXPORT_WAIT_MS): Promise<CheckpointStage> {
-    const work = this.create(deadline)
+  async acquire(destination: string, deadline = performance.now() + STORAGE_EXPORT_WAIT_MS): Promise<CheckpointStage> {
+    if (dirname(destination) !== dirname(this.directory) || !historyName(basename(destination))) throw new Error('checkpoint destination refused')
+    const work = this.create(destination, deadline)
     try { return await beforeDeadline(work, deadline) }
     catch (error) {
       // The kernel may complete open/stat after the caller has left. Its returned descriptor remains ours to close.
@@ -179,7 +180,7 @@ export class CheckpointStages {
     }
   }
 
-  private async create(deadline: number): Promise<CheckpointStage> {
+  private async create(destination: string, deadline: number): Promise<CheckpointStage> {
     secureStateDirectory(this.directory)
     for (let slot = 0; slot < STORAGE_IN_FLIGHT; slot++) {
       const directory = this.path(slot), path = join(directory, 'history.tmp'), record = join(directory, 'owner.json')
@@ -191,7 +192,7 @@ export class CheckpointStages {
       try { const before = await file.stat({ bigint: true }); privateFile(before); key = nativeFileKey(before) }
       catch (error) { await file.close(); throw error }
       let owner: Owner = { version: 2, lease: randomBytes(16).toString('hex'), core: process.pid, writer: null, settled: false, key }
-      let recordKey: string | undefined, ownerWrite: Promise<void> | undefined
+      let recordKey: string | undefined, confirmedOwner: string | undefined, ownerWrite: Promise<void> | undefined
       const retainOwner = process.platform !== 'win32'
       let ownerFd: number | undefined
       const closeOwner = () => {
@@ -202,6 +203,8 @@ export class CheckpointStages {
       const writeOwner = (next: Owner): Promise<void> => {
         if (ownerWrite) throw new Error('checkpoint owner update busy')
         owner = next
+        confirmedOwner = undefined
+        const text = JSON.stringify(next)
         const work = (async () => {
           directoryIdentity(directory, directoryKey)
           if (recordKey) identity(record, recordKey)
@@ -216,11 +219,10 @@ export class CheckpointStages {
             identity(record, openedKey)
             if (recordKey) {
               // Windows' secure reader also proves native root containment; retain that path.
-              const saved = process.platform === 'win32' ? readOwner(record).owner : readOpenedOwner(fd, opened)
+              const saved = process.platform === 'win32' ? readOwner(record).owner : readOpenedOwner(fd, opened).owner
               if (saved.version !== 2 || owner.version !== 2 || saved.lease !== owner.lease) throw new Error('checkpoint owner changed')
             }
             // Keep the previous complete owner if a write is refused before any bytes reach disk.
-            const text = JSON.stringify(next)
             if (retainOwner) {
               // The same handle survives updates and explicit publication retries; never append to its offset.
               const bytes = Buffer.from(text)
@@ -249,6 +251,7 @@ export class CheckpointStages {
             verifyOwner()
             recordKey ??= openedKey
           } finally { if (!retainOwner) closeStateFileDescriptor(fd) }
+          confirmedOwner = text
         })()
         // Keep the actual callback/close alive after a bounded caller reply. This work never calls stage.close().
         ownerWrite = work
@@ -258,6 +261,16 @@ export class CheckpointStages {
       try { await writeOwner(owner) } catch (error) {
         try { await file.close() } finally { closeOwner() }
         throw error
+      }
+      const verifyConfirmedOwner = () => {
+        if (!confirmedOwner || (retainOwner && ownerFd === undefined)) throw new Error('checkpoint owner unconfirmed')
+        const before = retainOwner ? fstatSync(ownerFd!, { bigint: true }) : identity(record, recordKey!)
+        privateFile(before)
+        if (nativeFileKey(before) !== recordKey) throw new Error('checkpoint stage changed')
+        const saved = retainOwner ? readOpenedOwner(ownerFd!, before) : readOwner(record)
+        // Matching visible bytes are insufficient without the successful actual flush above.
+        if (saved.text !== confirmedOwner) throw new Error('checkpoint owner changed')
+        if (version(identity(record, recordKey!)) !== version(before)) throw new Error('checkpoint stage changed')
       }
       let closed = false, verified: string | undefined, verification: Promise<void> | undefined, cleanup: Promise<void> | undefined
       let descriptorClose: Promise<void> | undefined, publication: Promise<void> | undefined
@@ -276,7 +289,7 @@ export class CheckpointStages {
         settled: async () => {
           current()
           if (publication) throw new Error('checkpoint publication busy')
-          await beforeDeadline(writeOwner({ ...owner, settled: true }), deadline)
+          await beforeDeadline(writeOwner({ ...owner, settled: true, destination: basename(destination) }), deadline)
           current()
         },
         verify: async receipt => {
@@ -308,17 +321,16 @@ export class CheckpointStages {
           void work.then(() => { verification = undefined }, () => { verification = undefined })
           await beforeDeadline(work, deadline)
         },
-        publish: async (destination, allowed) => {
+        publish: async allowed => {
           current()
           if (publication) throw new Error('checkpoint publication busy')
           const work = (async () => {
-            if (ownerWrite || verification || !verified || (owner.writer !== null && !owner.settled)) throw new Error('checkpoint stage unconfirmed')
-            if (dirname(destination) !== dirname(this.directory) || !historyName(basename(destination))) throw new Error('checkpoint destination refused')
-            await writeOwner({ ...owner, destination: basename(destination) })
-            current()
+            if (ownerWrite || verification || !verified || !owner.settled || !confirmedOwner
+              || owner.destination !== basename(destination)) throw new Error('checkpoint stage unconfirmed')
             await closeDescriptor()
             current()
             directoryIdentity(directory, directoryKey)
+            verifyConfirmedOwner()
             if (version(identity(path, key)) !== verified) throw new Error('checkpoint stage changed')
             allowed()
             current()

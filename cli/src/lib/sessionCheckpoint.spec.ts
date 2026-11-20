@@ -69,7 +69,7 @@ beforeEach(async () => {
   row = (await registry.openPendingAgent({ engine: 'codex', cwd: '/tmp', codexHome: home, runtimes: [{ backend: 'tmux', paneId: '%777' }] }))!
   Object.assign(row, { sessionId: 'conversation', transcriptPath: history })
   directory = join(root, 'checkpoints')
-  store = new SessionCheckpointStore(directory, { exportDatabase: (s, stage, _ownership, source) => exportDatabase(s.engine as StorageEngine, s, stage, source) })
+  store = new SessionCheckpointStore(directory, { exportDatabase: async (s, stage, ownership, source) => { const receipt = await exportDatabase(s.engine as StorageEngine, s, stage, source); await ownership.settled(); return receipt } })
 })
 afterEach(async () => { Object.assign(env, originalStoreHomes); vi.restoreAllMocks(); for (const s of registry.list()) (await removeRegistryAgent(registry, s.agentId)); await rm(root, { recursive: true, force: true }) })
 const manifest = async () => JSON.parse(await readFile(join(directory, (await readdir(directory)).find(f => /^[a-f0-9]{64}\.json$/.test(f))!), 'utf8'))
@@ -392,9 +392,10 @@ it('does not publish a checkpoint after the close operation is cancelled while c
 it('delegates database export into a core-created stage and publishes only its verified bytes', async () => {
   Object.assign(row, { engine: 'hermes', transcriptPath: null })
   const contents = JSON.stringify({ version: 1, sessionId: row.sessionId, engine: 'hermes', database: '/profile/state.db', tables: { sessions: [{ id: row.sessionId }], messages: [] } })
-  const exportDatabase = vi.fn(async (_session, stage) => {
+  const exportDatabase = vi.fn(async (_session, stage, ownership) => {
     expect((await stat(stage.path)).size).toBe(0)
     await writeFile(stage.path, contents)
+    await ownership.settled()
     const { createHash } = await import('node:crypto')
     return { bytes: Buffer.byteLength(contents), sha256: createHash('sha256').update(contents).digest('hex') }
   })
@@ -410,8 +411,9 @@ it('refuses a stage substituted after verification instead of publishing unverif
   Object.assign(row, { engine: 'hermes', transcriptPath: null })
   const contents = '{"version":1,"tables":{}}'
   let checks = 0
-  const delegated = new SessionCheckpointStore(directory, { exportDatabase: async (_session, stage) => {
+  const delegated = new SessionCheckpointStore(directory, { exportDatabase: async (_session, stage, ownership) => {
     await writeFile(stage.path, contents)
+    await ownership.settled()
     faults.checked = async path => {
       if (path !== stage.path || ++checks !== 2) return
       await rm(stage.path)
@@ -428,8 +430,9 @@ it('keeps a substituted publication target when cancellation enters staged clean
   Object.assign(row, { engine: 'hermes', transcriptPath: null })
   const contents = '{"version":1,"tables":{}}'
   const { createHash } = await import('node:crypto')
-  const delegated = new SessionCheckpointStore(directory, { exportDatabase: async (_session, stage) => {
+  const delegated = new SessionCheckpointStore(directory, { exportDatabase: async (_session, stage, ownership) => {
     await writeFile(stage.path, contents)
+    await ownership.settled()
     return { bytes: Buffer.byteLength(contents), sha256: createHash('sha256').update(contents).digest('hex') }
   } })
   await delegated.save(row)
@@ -546,4 +549,22 @@ it.each(['acquisition', 'descriptor close'] as const)('bounds a held %s and clos
     vi.useRealTimers()
   }
   expect(await manifest()).toEqual(previous)
+})
+
+
+it('journals the planned checkpoint destination with confirmed export settlement', async () => {
+  const contents = 'retained database history', { createHash } = await import('node:crypto')
+  row = { ...row, engine: 'hermes', transcriptPath: null, hermesHome: root }
+  let settledOwner: { settled?: boolean; destination?: string } | undefined
+  const delegated = new SessionCheckpointStore(directory, { exportDatabase: async (_session, stage, ownership) => {
+    await ownership.writer(process.pid)
+    await writeFile(stage.path, contents)
+    await ownership.settled()
+    settledOwner = JSON.parse(await readFile(join(stage.path, '..', 'owner.json'), 'utf8'))
+    return { bytes: Buffer.byteLength(contents), sha256: createHash('sha256').update(contents).digest('hex') }
+  } })
+  await delegated.save(row)
+  const saved = await manifest()
+  expect(settledOwner).toMatchObject({ settled: true, destination: saved.file })
+  expect(await readFile(join(directory, saved.file), 'utf8')).toBe(contents)
 })

@@ -42,27 +42,29 @@ afterEach(async () => {
 })
 async function acquire() {
   reads.path = join(root, '.stages', '0', 'owner.json')
-  const lease = await new CheckpointStages(join(root, '.stages')).acquire()
+  const lease = await new CheckpointStages(join(root, '.stages')).acquire(target())
   leases.push(lease); reads.opens = 0
   return lease
 }
+const target = () => join(root, `${'a'.repeat(64)}-${'b'.repeat(36)}.history`)
 const owner = async () => JSON.parse(await readFile(reads.path, 'utf8'))
 
 it.skipIf(process.platform === 'win32').each(['writer', 'settled', 'destination'] as const)(
-  'reads and writes the %s owner without another open', async operation => {
+  'checks the %s owner without another open', async operation => {
     const lease = await acquire(), previous = await owner()
     if (operation === 'writer') {
       await lease.writer(process.pid)
       expect(await owner()).toEqual({ ...previous, writer: process.pid })
     } else if (operation === 'settled') {
       await lease.settled()
-      expect(await owner()).toEqual({ ...previous, settled: true })
+      expect(await owner()).toEqual({ ...previous, settled: true, destination: target().split('/').at(-1) })
     } else {
+      await lease.settled()
       await writeFile(lease.stage.path, 'history')
       await lease.verify({ bytes: 7, sha256: createHash('sha256').update('history').digest('hex') })
       const destination = `${'a'.repeat(64)}-${'b'.repeat(36)}.history`
-      await lease.publish(join(root, destination), () => {})
-      expect(await owner()).toEqual({ ...previous, destination })
+      await lease.publish(() => {})
+      expect(await owner()).toEqual({ ...previous, settled: true, destination })
       expect(await readFile(join(root, destination), 'utf8')).toBe('history')
     }
     expect(reads.opens).toBe(0)
@@ -71,11 +73,12 @@ it.skipIf(process.platform === 'win32').each(['writer', 'settled', 'destination'
 
 it.skipIf(process.platform === 'win32')('completes bounded short reads without moving the write offset and truncates the shorter owner', async () => {
   const lease = await acquire(), previous = await owner()
-  const padded = JSON.stringify(previous) + ' '.repeat(80)
+  const padded = JSON.stringify(previous) + ' '.repeat(256)
   await writeFile(reads.path, padded)
   reads.cap = 7
   await lease.settled()
-  expect(await readFile(reads.path, 'utf8')).toBe(JSON.stringify({ ...previous, settled: true }))
+  expect(await readFile(reads.path, 'utf8')).toBe(JSON.stringify({ ...previous, settled: true, destination: target().split('/').at(-1) }))
+  expect(Buffer.byteLength(await readFile(reads.path, 'utf8'))).toBeLessThan(Buffer.byteLength(padded))
   expect(reads.calls).toBe(Math.ceil(Buffer.byteLength(padded) / 7))
   expect(reads.opens).toBe(0)
 })

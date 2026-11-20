@@ -58,9 +58,9 @@ const stages = () => new CheckpointStages(join(root, '.stages'))
 const target = () => join(root, `${'a'.repeat(64)}-${'b'.repeat(36)}.history`)
 const ownerPath = (lease: CheckpointStage) => join(dirname(lease.stage.path), 'owner.json')
 const receipt = () => ({ bytes: 7, sha256: createHash('sha256').update('history').digest('hex') })
-async function acquire() { const lease = await stages().acquire(); leases.push(lease); return lease }
+async function acquire() { const lease = await stages().acquire(target()); leases.push(lease); return lease }
 async function publish(lease: CheckpointStage) {
-  await writeFile(lease.stage.path, 'history'); await lease.verify(receipt()); await lease.publish(target(), () => {})
+  await writeFile(lease.stage.path, 'history'); await lease.settled(); await lease.verify(receipt()); await lease.publish(() => {})
 }
 function deadCore() { vi.spyOn(process, 'kill').mockImplementation(() => { throw Object.assign(new Error(), { code: 'ESRCH' }) }) }
 
@@ -150,10 +150,10 @@ it.each(process.platform === 'win32' ? ['open', 'write'] as const : ['stat', 'wr
 
 it.each(['unsupported', 'existing destination'] as const)('names a refused hard link and leaves existing files intact: %s', async reason => {
   const lease = await acquire()
-  await writeFile(lease.stage.path, 'history'); await lease.verify(receipt())
+  await writeFile(lease.stage.path, 'history'); await lease.settled(); await lease.verify(receipt())
   if (reason === 'unsupported') fault.link = true
   else await writeFile(target(), 'foreign history', { mode: 0o600 })
-  await expect(lease.publish(target(), () => {})).rejects.toMatchObject({ code: 'CHECKPOINT_STAGE_PIN_UNAVAILABLE' })
+  await expect(lease.publish(() => {})).rejects.toMatchObject({ code: 'CHECKPOINT_STAGE_PIN_UNAVAILABLE' })
   expect(console.error).toHaveBeenCalledWith(expect.stringContaining('STAGE_PIN_UNAVAILABLE'))
   if (reason === 'existing destination') expect(await readFile(target(), 'utf8')).toBe('foreign history')
   else await expect(stat(target())).rejects.toMatchObject({ code: 'ENOENT' })

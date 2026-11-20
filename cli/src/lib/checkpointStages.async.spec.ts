@@ -82,7 +82,7 @@ const manager = () => new CheckpointStages(join(root, '.stages'))
 const record = (lease: CheckpointStage) => join(dirname(lease.stage.path), 'owner.json')
 const destination = () => join(root, `${'a'.repeat(64)}-${'b'.repeat(36)}.history`)
 const turn = () => new Promise<void>(resolve => setImmediate(resolve))
-async function acquire() { const lease = await manager().acquire(); leases.push(lease); return lease }
+async function acquire() { const lease = await manager().acquire(destination()); leases.push(lease); return lease }
 async function ready(lease: CheckpointStage) {
   await lease.writer(process.pid); await lease.settled()
   await writeFile(lease.stage.path, 'history')
@@ -102,7 +102,7 @@ it.each(['owner file', 'owner directory'] as const)('keeps the main loop availab
   const slot = join(root, '.stages', '0'), target = kind === 'owner file' ? join(slot, 'owner.json') : slot
   const waiting = hold(target)
   let answered = false
-  const acquiring = manager().acquire().then(lease => { answered = true; leases.push(lease); return lease })
+  const acquiring = manager().acquire(destination()).then(lease => { answered = true; leases.push(lease); return lease })
   const fd = await entered(waiting, acquiring), opened = disk.openings.get(fd)!
   try {
     await turn(); expect(answered).toBe(false)
@@ -115,18 +115,16 @@ it.each(['owner file', 'owner directory'] as const)('keeps the main loop availab
   expect(disk.closed.filter(value => value.opened === opened)).toHaveLength(1)
 })
 
-it.each(['writer', 'settled', 'destination'] as const)('keeps %s durability pending without blocking the main loop', async phase => {
+it.each(['writer', 'settled'] as const)('keeps %s durability pending without blocking the main loop', async phase => {
   const lease = await acquire()
   if (phase === 'settled') await lease.writer(process.pid)
-  if (phase === 'destination') await ready(lease)
   disk.closed.length = 0
-  const waiting = hold(record(lease)), allowed = vi.fn()
+  const waiting = hold(record(lease))
   let answered = false
-  const work = (phase === 'writer' ? lease.writer(process.pid) : phase === 'settled' ? Promise.resolve(lease.settled())
-    : lease.publish(destination(), allowed)).then(() => { answered = true })
+  const work = (phase === 'writer' ? lease.writer(process.pid) : lease.settled()).then(() => { answered = true })
   const fd = await entered(waiting, work), opened = disk.openings.get(fd)!
   try {
-    await turn(); expect(answered).toBe(false); expect(allowed).not.toHaveBeenCalled()
+    await turn(); expect(answered).toBe(false)
     expect(fs.fstatSync(fd).isFile()).toBe(true)
     expect(disk.closed.some(value => value.opened === opened)).toBe(false)
     await expect(lease.writer(process.pid)).rejects.toThrow()
@@ -136,21 +134,15 @@ it.each(['writer', 'settled', 'destination'] as const)('keeps %s durability pend
   } finally { await release(fd) }
   await work
   expect(disk.closed.filter(value => value.opened === opened)).toHaveLength(process.platform === 'win32' ? 1 : 0)
-  if (phase === 'destination') {
-    expect(allowed).toHaveBeenCalledOnce()
-    await writeFile(join(root, `${'a'.repeat(64)}.json`), JSON.stringify({ version: 1, file: basename(destination()) }), { mode: 0o600 })
-  }
   await lease.close()
   expect(disk.closed.filter(value => value.opened === opened)).toHaveLength(1)
 })
 
-it.each(['writer', 'settled', 'destination'] as const)('close drains the actual %s callback before cleanup and refuses its late continuation', async phase => {
+it.each(['writer', 'settled'] as const)('close drains the actual %s callback before cleanup and refuses its late continuation', async phase => {
   const lease = await acquire()
   if (phase === 'settled') await lease.writer(process.pid)
-  if (phase === 'destination') await ready(lease)
-  const waiting = hold(record(lease)), allowed = vi.fn()
-  const work = (phase === 'writer' ? lease.writer(process.pid) : phase === 'settled' ? Promise.resolve(lease.settled())
-    : lease.publish(destination(), allowed))
+  const waiting = hold(record(lease))
+  const work = (phase === 'writer' ? lease.writer(process.pid) : lease.settled())
   const refused = work.catch(error => error), fd = await entered(waiting, work)
   let closed = false
   const closing = lease.close().then(() => { closed = true })
@@ -162,7 +154,6 @@ it.each(['writer', 'settled', 'destination'] as const)('close drains the actual 
   } finally { await release(fd) }
   expect(await refused).toMatchObject({ code: 'CHECKPOINT_STAGE_TIMEOUT' })
   await closing
-  expect(allowed).not.toHaveBeenCalled()
   await expect(stat(destination())).rejects.toMatchObject({ code: 'ENOENT' })
   if (phase === 'writer') expect(await stat(record(lease))).toBeTruthy()
   else await expect(stat(record(lease))).rejects.toMatchObject({ code: 'ENOENT' })
@@ -170,7 +161,7 @@ it.each(['writer', 'settled', 'destination'] as const)('close drains the actual 
 
 it('closes a late acquired owner exactly once after its initial flush outlives the reply deadline', async () => {
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] })
-  const path = join(root, '.stages', '0', 'owner.json'), waiting = hold(path), work = manager().acquire()
+  const path = join(root, '.stages', '0', 'owner.json'), waiting = hold(path), work = manager().acquire(destination())
   const refused = work.catch(error => error), fd = await entered(waiting, work), opened = disk.openings.get(fd)!
   await vi.advanceTimersByTimeAsync(30_000)
   expect(await refused).toMatchObject({ code: 'CHECKPOINT_STAGE_TIMEOUT' })
@@ -194,11 +185,11 @@ it('keeps all four physical slots and exact journal descriptors owned beyond the
   expect(await Promise.all(results)).toEqual(Array.from({ length: 4 }, () => expect.objectContaining({ code: 'CHECKPOINT_STAGE_TIMEOUT' })))
   await Promise.all(active.map(lease => lease.close()))
   for (const fd of fds) expect(fs.fstatSync(fd).isFile()).toBe(true)
-  await expect(manager().acquire()).rejects.toThrow('busy')
+  await expect(manager().acquire(destination())).rejects.toThrow('busy')
   for (const fd of fds) await release(fd)
   await Promise.all(disk.history); await turn()
   for (const fd of fds) expect(() => fs.fstatSync(fd)).toThrow()
-  await expect(manager().acquire()).rejects.toThrow('busy')
+  await expect(manager().acquire(destination())).rejects.toThrow('busy')
 })
 
 it.each(['inode', 'bytes', 'mode', 'link', 'slot'] as const)('refuses changed owner %s while an actual journal callback is held', async change => {
@@ -217,20 +208,45 @@ it.each(['inode', 'bytes', 'mode', 'link', 'slot'] as const)('refuses changed ow
   expect(await readFile(path, 'utf8')).toBe(kept)
 })
 
-it('a failed actual destination flush cannot rename, and an explicit later retry flushes the whole owner again', async () => {
+it('a failed actual settlement flush revokes publication even when the exact bytes are visible', async () => {
   const lease = await acquire(); await ready(lease)
-  const waiting = hold(record(lease)), allowed = vi.fn(), publishing = lease.publish(destination(), allowed)
-  const result = publishing.catch(error => error), fd = await entered(waiting, publishing)
+  const waiting = hold(record(lease)), allowed = vi.fn(), settling = lease.settled()
+  const result = settling.catch(error => error), fd = await entered(waiting, settling)
   await release(fd, new Error('injected callback failure'))
   expect(await result).toMatchObject({ message: 'injected callback failure' })
+  expect(JSON.parse(await readFile(record(lease), 'utf8'))).toMatchObject({ settled: true, destination: basename(destination()) })
+  await expect(lease.publish(allowed)).rejects.toThrow('checkpoint stage unconfirmed')
   expect(allowed).not.toHaveBeenCalled()
   await expect(stat(destination())).rejects.toMatchObject({ code: 'ENOENT' })
-  const retryWaiting = hold(record(lease)), retry = lease.publish(destination(), allowed)
+  const retryWaiting = hold(record(lease)), retry = lease.settled()
   const retryFd = await entered(retryWaiting, retry)
   await release(retryFd); await retry
+  await lease.publish(allowed)
   expect(allowed).toHaveBeenCalledOnce()
   expect(await readFile(destination(), 'utf8')).toBe('history')
   await writeFile(join(root, `${'a'.repeat(64)}.json`), JSON.stringify({ version: 1, file: basename(destination()) }), { mode: 0o600 })
+})
+
+it('close drains publication history close and refuses its late continuation', async () => {
+  const lease = await acquire(); await ready(lease)
+  let opened!: () => void, releaseClose!: () => void
+  const waiting = new Promise<void>(resolve => { opened = resolve })
+  const held = new Promise<void>(resolve => { releaseClose = resolve })
+  disk.beforeHistoryClose = async () => { disk.beforeHistoryClose = undefined; opened(); await held }
+  const allowed = vi.fn(), publication = lease.publish(allowed).catch(error => error)
+  await waiting
+  let closed = false
+  const closing = lease.close().then(() => { closed = true })
+  try {
+    await turn(); expect(closed).toBe(false)
+    expect(await stat(record(lease))).toBeTruthy()
+    expect(await stat(lease.stage.path)).toBeTruthy()
+  } finally { releaseClose() }
+  expect(await publication).toMatchObject({ code: 'CHECKPOINT_STAGE_TIMEOUT' })
+  await closing
+  expect(allowed).not.toHaveBeenCalled()
+  await expect(stat(destination())).rejects.toMatchObject({ code: 'ENOENT' })
+  await expect(stat(dirname(lease.stage.path))).rejects.toMatchObject({ code: 'ENOENT' })
 })
 
 it('keeps the first destination intent exclusive while its actual history descriptor close is held', async () => {
@@ -239,11 +255,11 @@ it('keeps the first destination intent exclusive while its actual history descri
   const waiting = new Promise<void>(resolve => { opened = resolve })
   const held = new Promise<void>(resolve => { releaseClose = resolve })
   disk.beforeHistoryClose = async () => { disk.beforeHistoryClose = undefined; opened(); await held }
-  const firstTarget = destination(), secondTarget = join(root, `${'a'.repeat(64)}-${'c'.repeat(36)}.history`)
-  const first = lease.publish(firstTarget, () => {})
+  const firstTarget = destination()
+  const first = lease.publish(() => {})
   await waiting
   let secondResult: unknown
-  const second = lease.publish(secondTarget, () => {}).then(() => { secondResult = 'published' }, error => { secondResult = error })
+  const second = lease.publish(() => {}).then(() => { secondResult = 'published' }, error => { secondResult = error })
   try {
     await turn()
     expect(secondResult).toBeInstanceOf(Error)
@@ -252,25 +268,22 @@ it('keeps the first destination intent exclusive while its actual history descri
   } finally { releaseClose(); await Promise.allSettled([first, second]) }
   await first
   expect(await readFile(firstTarget, 'utf8')).toBe('history')
-  await expect(stat(secondTarget)).rejects.toMatchObject({ code: 'ENOENT' })
   await writeFile(join(root, `${'a'.repeat(64)}.json`), JSON.stringify({ version: 1, file: basename(firstTarget) }), { mode: 0o600 })
 })
 
-it.each(['same', 'different'] as const)('refuses a later %s destination without rewriting a successful publication intent', async kind => {
+it('refuses a later publication without rewriting a successful publication intent', async () => {
   const lease = await acquire(); await ready(lease)
   const firstTarget = destination()
-  await lease.publish(firstTarget, () => {})
+  await lease.publish(() => {})
   const ownerBefore = await readFile(record(lease), 'utf8'), openingsBefore = disk.nextOpen
-  const secondTarget = kind === 'same' ? firstTarget : join(root, `${'a'.repeat(64)}-${'c'.repeat(36)}.history`)
   const allowed = vi.fn()
-  const outcome = await lease.publish(secondTarget, allowed).then(() => null, error => error)
+  const outcome = await lease.publish(allowed).then(() => null, error => error)
   expect(outcome).toBeInstanceOf(Error)
   expect(await readFile(record(lease), 'utf8')).toBe(ownerBefore)
   expect(disk.nextOpen).toBe(openingsBefore)
   expect((outcome as Error).message).toBe('checkpoint stage unconfirmed')
   expect(allowed).not.toHaveBeenCalled()
   expect(await readFile(firstTarget, 'utf8')).toBe('history')
-  if (kind === 'different') await expect(stat(secondTarget)).rejects.toMatchObject({ code: 'ENOENT' })
   await lease.close()
   await expect(stat(firstTarget)).rejects.toMatchObject({ code: 'ENOENT' })
 })
@@ -290,7 +303,7 @@ it('refuses publication while a second actual verification still holds an earlie
   const ownerBefore = await readFile(record(lease), 'utf8'), openingsBefore = disk.nextOpen
   const allowed = vi.fn()
   try {
-    const outcome = await lease.publish(destination(), allowed).then(() => null, error => error)
+    const outcome = await lease.publish(allowed).then(() => null, error => error)
     expect(outcome).toBeInstanceOf(Error)
     expect((outcome as Error).message).toBe('checkpoint stage unconfirmed')
     expect(await readFile(record(lease), 'utf8')).toBe(ownerBefore)
@@ -299,7 +312,7 @@ it('refuses publication while a second actual verification still holds an earlie
     await expect(stat(destination())).rejects.toMatchObject({ code: 'ENOENT' })
   } finally { releaseCheck(); await settled }
   await checking
-  await lease.publish(destination(), allowed)
+  await lease.publish(allowed)
   expect(allowed).toHaveBeenCalledOnce()
   expect(await readFile(destination(), 'utf8')).toBe('history')
 })
@@ -316,5 +329,5 @@ it('never retries an uncertain owner descriptor close or reuses its reserved slo
   expect(disk.closed.filter(value => value.opened === opened)).toHaveLength(1)
   expect(await stat(path)).toBeTruthy()
   expect(await stat(lease.stage.path)).toBeTruthy()
-  await expect(manager().acquire()).rejects.toMatchObject({ code: 'STATE_FILE_CLEANUP_UNCONFIRMED' })
+  await expect(manager().acquire(destination())).rejects.toMatchObject({ code: 'STATE_FILE_CLEANUP_UNCONFIRMED' })
 })

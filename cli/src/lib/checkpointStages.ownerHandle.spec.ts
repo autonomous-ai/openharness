@@ -69,7 +69,7 @@ afterEach(async () => {
   await rm(root, { recursive: true, force: true })
 })
 async function acquire() {
-  const lease = await new CheckpointStages(join(root, '.stages')).acquire()
+  const lease = await new CheckpointStages(join(root, '.stages')).acquire(target())
   leases.push(lease); return lease
 }
 const record = () => join(root, '.stages', '0', 'owner.json')
@@ -85,7 +85,7 @@ it.skipIf(process.platform === 'win32')('keeps one owner handle through all upda
   const [fd, opening] = [...trace.handles][0]
   await lease.writer(process.pid); await lease.settled(); await verify(lease)
   expect(trace.opens).toBe(1); expect(trace.handles.get(fd)).toBe(opening)
-  await lease.publish(target(), () => {})
+  await lease.publish(() => {})
   expect(trace.opens).toBe(1); expect(trace.closed.filter(n => n === opening)).toHaveLength(0)
   expect(fs.fstatSync(fd).isFile()).toBe(true)
   expect(JSON.parse(await readFile(record(), 'utf8'))).toEqual({ ...initial, writer: process.pid,
@@ -97,10 +97,10 @@ it.skipIf(process.platform === 'win32')('keeps one owner handle through all upda
 
 it.skipIf(process.platform === 'win32')('writes short chunks from zero and truncates an existing longer journal', async () => {
   const lease = await acquire(), before = JSON.parse(await readFile(record(), 'utf8'))
-  await writeFile(record(), JSON.stringify(before) + ' '.repeat(80))
+  await writeFile(record(), JSON.stringify(before) + ' '.repeat(256))
   trace.cap = 7; trace.positions.length = 0
   await lease.settled()
-  expect(await readFile(record(), 'utf8')).toBe(JSON.stringify({ ...before, settled: true }))
+  expect(await readFile(record(), 'utf8')).toBe(JSON.stringify({ ...before, settled: true, destination: target().split('/').at(-1) }))
   expect(trace.positions.length).toBeGreaterThan(1); expect(trace.positions[0]).toBe(0)
   expect(trace.positions.every((position, i) => position === i * 7)).toBe(true)
   expect(trace.opens).toBe(1)
@@ -123,13 +123,13 @@ it.skipIf(process.platform === 'win32').each(['zero', 'throw'] as const)('closes
 })
 
 it.skipIf(process.platform === 'win32')('keeps the same handle for explicit link retry and a settled update after publication', async () => {
-  const lease = await acquire(); await verify(lease)
+  const lease = await acquire(); await lease.settled(); await verify(lease)
   expect(trace.handles.size).toBe(1)
   const [fd, opening] = [...trace.handles][0]
   trace.failLink = true
-  await expect(lease.publish(target(), () => {})).rejects.toMatchObject({ code: 'CHECKPOINT_STAGE_PIN_UNAVAILABLE' })
+  await expect(lease.publish(() => {})).rejects.toMatchObject({ code: 'CHECKPOINT_STAGE_PIN_UNAVAILABLE' })
   expect(trace.handles.get(fd)).toBe(opening); expect(trace.opens).toBe(1)
-  await lease.publish(target(), () => {})
+  await lease.publish(() => {})
   await lease.settled()
   expect(trace.handles.get(fd)).toBe(opening); expect(trace.opens).toBe(1)
   expect(JSON.parse(await readFile(record(), 'utf8')).settled).toBe(true)
@@ -159,7 +159,7 @@ it.skipIf(process.platform === 'win32')('attempts both closes once and latches c
   // Give this irreversible failure its own custody module; other cases retain the original module instance.
   vi.resetModules()
   const { CheckpointStages: IsolatedStages } = await import('./checkpointStages.js')
-  const manager = new IsolatedStages(join(root, '.stages')), lease = await manager.acquire()
+  const manager = new IsolatedStages(join(root, '.stages')), lease = await manager.acquire(target())
   leases.push(lease)
   const opening = [...trace.handles.values()][0]
   trace.failHistoryClose = true; trace.failClose = opening
@@ -168,19 +168,19 @@ it.skipIf(process.platform === 'win32')('attempts both closes once and latches c
   expect(trace.historyCloses).toBe(1)
   expect(trace.closed.filter(n => n === opening)).toHaveLength(1)
   expect(trace.handles.size).toBe(0); expect(fs.existsSync(record())).toBe(true)
-  await expect(manager.acquire()).rejects.toMatchObject({ code: 'STATE_FILE_CLEANUP_UNCONFIRMED' })
+  await expect(manager.acquire(target())).rejects.toMatchObject({ code: 'STATE_FILE_CLEANUP_UNCONFIRMED' })
 })
 
 // Last: the process-wide custody latch intentionally cannot be reset after an uncertain close.
 it.skipIf(process.platform === 'win32')('does not retry an uncertain retained owner close or remove its slot', async () => {
-  const lease = await acquire(); await verify(lease)
+  const lease = await acquire(); await lease.settled(); await verify(lease)
   expect(trace.handles.size).toBe(1)
   const opening = [...trace.handles.values()][0]
   trace.failClose = opening
-  await lease.publish(target(), () => {})
+  await lease.publish(() => {})
   expect(fs.existsSync(target())).toBe(true)
   await lease.close(); await lease.close()
-  await expect(new CheckpointStages(join(root, '.stages')).acquire()).rejects.toMatchObject({ code: 'STATE_FILE_CLEANUP_UNCONFIRMED' })
+  await expect(new CheckpointStages(join(root, '.stages')).acquire(target())).rejects.toMatchObject({ code: 'STATE_FILE_CLEANUP_UNCONFIRMED' })
   expect(trace.closed.filter(n => n === opening)).toHaveLength(1)
   expect(fs.existsSync(record())).toBe(true)
 })
