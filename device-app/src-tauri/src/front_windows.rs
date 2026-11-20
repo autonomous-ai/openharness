@@ -93,8 +93,8 @@ unsafe extern "system" fn foreground(_: HWINEVENTHOOK, _: u32, window: HWND, _: 
 #[cfg(windows)]
 const IMAGE_MAX: usize = 32_768;
 
-/// The exe name of the process that owns `window`. No window, or a process this user may not open (an elevated one),
-/// is the empty value.
+/// The exe name of the process that owns `window`. No window, or a process this user may not open (a protected one,
+/// or another account's), is the empty value.
 #[cfg(windows)]
 fn app(window: HWND) -> String {
     if window.is_null() {

@@ -245,8 +245,8 @@ fn run_loop(
     // `asked`: the effects answer a menu click.
     let run = |effects: Vec<Effect>, asked: bool| {
         for effect in effects {
-            // Menu, Show, ShowAbout, AboutCredits, Quit and Relaunch are AppKit's, on the main thread, which runs them
-            // in the order they are handed over.
+            // Menu, Show, ShowAbout, AboutCredits, Quit and Relaunch are the OS's UI (AppKit, Win32, GTK), on the main
+            // thread, which runs them in the order they are handed over.
             if let Some(effect) = runner.run(effect) {
                 let (drawing, log) = (handle.clone(), log.clone());
                 let _ = handle.run_on_main_thread(move || {
