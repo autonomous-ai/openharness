@@ -533,11 +533,13 @@ export function run(options) {
     }
     const recording = scenario(SCENARIOS[next.reply])
     const rows = runOf(recording.rows, recording.rows[1])
+    // Held from its acceptance: a release the test sends as soon as it reads the paste comes during `sending`.
+    const held = next.hold === 'send' ? new Promise((done) => { release = done }) : null
     setActivity('sending')
     await sleep(300)
     setActivity('waiting')
-    if (next.hold === 'send') {
-      await new Promise((done) => { release = done })
+    if (held) {
+      await held
       release = null
     }
     window ??= openWindow(recording)

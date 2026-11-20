@@ -646,59 +646,73 @@ describe.runIf(process.platform !== 'win32')('an OpenClaw agent, through every s
       expect.soft(waited.out.trim(), `${row}: wait`).toBe(`${NAME}: held · ${sentence} Only the person can fix this.`)
     }
     /**
-     * An outage of [kind] from the drop the step makes, looked at until [ms] into it, [onHeld] run on the first look that
-     * reads held. The TUI tries 1, 3, 7, 15 and 31 s in: a Gateway back 28 s in connects on the try 31 s in. Held from a
-     * pass that has read it 10 s, so a look 21 s in is held.
+     * An outage of [kind] from the drop the step makes, looked at until a look reads held, [onHeld] run then. An idle
+     * pane is read every 30 s (engines/openclaw/live.ts QUIET_PANE_MS) and held from a pass that has read it gone 10 s,
+     * so within 45 s of the drop: looked at for 75 s. [held] is when the first look that read held ended: in that look
+     * `show` and `ps` may have read before, so the looks it must hold through are those after it.
      */
-    const outage = async (kind: string, ms: number, onHeld: () => Promise<void>): Promise<number> => {
+    const outage = async (row: string, kind: string, onHeld: () => Promise<void>): Promise<{ down: number; held: number }> => {
       const mark = Date.now()
       r.step({ gateway: kind })
-      const down = await r.logged(`row 22, ${kind}: the drop`, (e) => e.drawn?.startsWith('gateway disconnected'), 30_000, mark)
-      let told = false
-      looks.push(...await r.sample(() => Date.now() >= down + ms, ms + 10_000, async (s) => {
-        if (!told && s.json.state === 'held') { told = true; await onHeld() }
-      }))
-      return down
+      const down = await r.logged(`${row}: the drop`, (e) => e.drawn?.startsWith('gateway disconnected'), 30_000, mark)
+      const first: { held?: Look } = {}
+      looks.push(...await r.sample(() => !!first.held, 75_000, (s) => { if (s.json.state === 'held') first.held = s }))
+      expect(first.held, `${row}: held within 75 s of the drop`).toBeDefined()
+      await onHeld()
+      return { down, held: first.held!.end }
     }
-    /** The Gateway up again: the TUI connects on its next try, and the hold clears. When it was told up. */
-    const back = async (row: string, down: number): Promise<{ up: number; connected: number }> => {
-      const up = Date.now()
-      r.step({ gateway: 'up' })
-      const connected = await r.logged(`${row}: connected again`, (e) => e.drawn === 'gateway reconnected | idle', 30_000, down)
+    /**
+     * The Gateway up again right after the TUI draws its next refused try, so the try after, a whole backoff on, connects;
+     * looked at all along, then until the hold clears. When the TUI drew its reconnect.
+     */
+    const back = async (row: string): Promise<number> => {
+      const mark = Date.now()
+      let done = false
+      const sampled = r.sample(() => done, 150_000)
+      let connected: number
+      try {
+        const tried = await r.logged(`${row}: a refused try`, (e) => e.drawn?.startsWith('gateway disconnected'), 45_000, mark)
+        r.step({ gateway: 'up' })
+        connected = await r.logged(`${row}: connected again`, (e) => e.drawn === 'gateway reconnected | idle', 45_000, tried)
+      } finally {
+        done = true
+        looks.push(...await sampled)
+      }
       expect.soft(await r.lookUntil((s) => s.json.state !== 'held' && s.ps?.state !== 'held', 15_000), `${row}: not held once it is back`).not.toBeNull()
-      return { up, connected }
+      return connected
     }
 
     // A device the Gateway has not approved: the TUI waits for its pairing on its backoff.
-    const pairing = await outage('pairing', 28_000, () => heldWait('row 22, pairing', APPROVAL))
-    const paired = await back('row 22, pairing', pairing)
-    expect.soft(lateLooks(pairing + 21_000, paired.connected), 'row 22, pairing: looks while refused').toBeGreaterThan(0)
-    expect.soft(notHeldWith(APPROVAL, pairing + 21_000, paired.connected), 'row 22, pairing: held with its sentence').toEqual([])
+    const pairing = await outage('row 22, pairing', 'pairing', () => heldWait('row 22, pairing', APPROVAL))
+    const paired = await back('row 22, pairing')
+    expect.soft(lateLooks(pairing.held, paired), 'row 22, pairing: looks while refused').toBeGreaterThan(0)
+    expect.soft(notHeldWith(APPROVAL, pairing.held, paired), 'row 22, pairing: held with its sentence').toEqual([])
 
     // An identity-aware proxy that refuses its sign-in, on the same backoff; a watch begun once it reads held.
     const watch: { run?: Streamed } = {}
-    const proxy = await outage('proxy', 28_000, async () => {
-      watch.run = r.streamed('watch', NAME, '--json', '--timeout', '90s')
+    const proxy = await outage('row 22, proxy', 'proxy', async () => {
+      watch.run = r.streamed('watch', NAME, '--json', '--timeout', '150s')
       await heldWait('row 22, proxy', SIGN_IN_REFUSED)
     })
-    const proxied = await back('row 22, proxy', proxy)
-    expect.soft(lateLooks(proxy + 21_000, proxied.connected), 'row 22, proxy: looks while refused').toBeGreaterThan(0)
-    expect.soft(notHeldWith(SIGN_IN_REFUSED, proxy + 21_000, proxied.connected), 'row 22, proxy: held with its sentence').toEqual([])
+    const proxied = await back('row 22, proxy')
+    expect.soft(lateLooks(proxy.held, proxied), 'row 22, proxy: looks while refused').toBeGreaterThan(0)
+    expect.soft(notHeldWith(SIGN_IN_REFUSED, proxy.held, proxied), 'row 22, proxy: held with its sentence').toEqual([])
     // Its line after `held` comes as the hold ends, not at the watch's next look a minute on.
     const heldLine = () => watch.run?.lines.findIndex((line) => lineJson(line.text)?.event === 'held') ?? -1
-    await soon(() => heldLine() >= 0 && watch.run!.lines.length > heldLine() + 1, proxied.up + 75_000 - Date.now(), 250)
+    await soon(() => heldLine() >= 0 && watch.run!.lines.length > heldLine() + 1, proxied + 75_000 - Date.now(), 250)
     watch.run?.stop()
     const next = heldLine() >= 0 ? watch.run!.lines[heldLine() + 1] : undefined
-    const said = watch.run?.lines.map((line) => `${line.at - proxied.up}ms ${lineJson(line.text)?.event}`).join(', ')
-    expect.soft(!!next && next.at - proxied.up <= 15_000, `row 22: watch tells the hold's end within 15 s of the Gateway's return · ${said}`).toBe(true)
+    const said = watch.run?.lines.map((line) => `${line.at - proxied}ms ${lineJson(line.text)?.event}`).join(', ')
+    expect.soft(!!next && next.at - proxied <= 15_000, `row 22: watch tells the hold's end within 15 s of the TUI's reconnect · ${said}`).toBe(true)
 
     // A token the Gateway refuses: the TUI tries no more (OpenClaw's `shouldPauseGatewayReconnect`), so it stays held.
-    const token = await outage('token', 26_000, () => heldWait('row 22, token', SIGN_IN_REFUSED))
-    expect.soft(lateLooks(token + 21_000, Infinity), 'row 22, token: looks while refused').toBeGreaterThan(0)
-    expect.soft(notHeldWith(SIGN_IN_REFUSED, token + 21_000, Infinity), 'row 22, token: held with its sentence').toEqual([])
+    const token = await outage('row 22, token', 'token', () => heldWait('row 22, token', SIGN_IN_REFUSED))
+    looks.push(...await r.sample(() => false, 10_000))
+    expect.soft(lateLooks(token.held, Infinity), 'row 22, token: looks while refused').toBeGreaterThan(0)
+    expect.soft(notHeldWith(SIGN_IN_REFUSED, token.held, Infinity), 'row 22, token: held with its sentence').toEqual([])
     expect.soft(looks.filter((s) => s.json.namedState === OPENCLAW_STATES.noGateway || s.text.includes(OPENCLAW_STATES.noGateway))
-      .map((s) => `${s.start - pairing}ms ${s.json.state}`).slice(0, 5), 'row 22: never "Gateway is not running"').toEqual([])
-  }, 420_000)
+      .map((s) => `${s.start - pairing.down}ms ${s.json.state}`).slice(0, 5), 'row 22: never "Gateway is not running"').toEqual([])
+  }, 600_000)
 
   it('rows 23, 24, 25: none kept when no task was taken; a claim, the starting minute and a paste are pushed', async () => {
     const r = await rig({ startup: 'manual' })
@@ -710,11 +724,12 @@ describe.runIf(process.platform !== 'win32')('an OpenClaw agent, through every s
     // Row 25a: a second agent launched with no task, its TUI not past its banner, so with no session, past its minute.
     const other = 'y'
     const since = client.frames.length
-    const launched = Date.now()
     await r.launch(other)
+    // Its minute counts from its TUI's start at the earliest, and a pass applies it, 5 s apart: 65 s, and the push.
+    const tuiStarted = r.events().filter((e) => e.started).at(-1)!.at
     const otherId = (await r.look(other)).json.id
     const startingOver = client.waitFor((f) => f.type === 'agent_synced' && f.payload?.agent?.id === otherId && f.payload?.agent?.starting === false,
-      Math.max(0, launched + 70_000 - Date.now()), 'row 25a: its starting minute over', since).then(() => Date.now(), () => null)
+      Math.max(0, tuiStarted + 68_000 - Date.now()), 'row 25a: its starting minute over', since).then(() => Date.now(), () => null)
 
     // Row 25b: a paste the TUI holds at `sending`, with no row yet, is pushed as working at once.
     r.step({ next: { reply: 'plain', hold: 'send' } })
@@ -731,7 +746,8 @@ describe.runIf(process.platform !== 'win32')('an OpenClaw agent, through every s
     expect(answeredSecond.code, answeredSecond.out + answeredSecond.err).toBe(0)
 
     // Row 24: a send its Gateway fails before the run starts: working on screen with no turn open, then no row at all.
-    r.step({ next: { reply: 'send-failed', sendMs: 3_000 } })
+    // A second at `sending`: each pass that reads it busy renews the claim, and the bound counts from the claim's start.
+    r.step({ next: { reply: 'send-failed', sendMs: 1_000 } })
     const third = 'Say it a third time'
     const mark24 = Date.now()
     client.send('message', { agentId, content: third })
@@ -748,7 +764,7 @@ describe.runIf(process.platform !== 'win32')('an OpenClaw agent, through every s
 
     // Row 25a's push, then row 23: the second agent's TUI goes on, binds its session, reads idle and is closed.
     const over = await startingOver
-    expect.soft(over !== null && over - launched <= 70_000, `row 25a: agent_synced with starting false within 70 s of the launch (${over === null ? 'none' : `${over - launched} ms`})`).toBe(true)
+    expect.soft(over !== null && over - tuiStarted <= 68_000, `row 25a: agent_synced with starting false within 68 s of its TUI's start (${over === null ? 'none' : `${over - tuiStarted} ms`})`).toBe(true)
     const bound = client.waitFor((f) => f.type === 'agent_synced' && f.payload?.agent?.id === otherId && !!f.payload?.agent?.sessionId, 60_000, 'row 23: its session bound', since)
     for (let i = 0; i < 3; i++) r.step({ advance: true })
     await bound
