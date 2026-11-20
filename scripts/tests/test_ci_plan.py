@@ -216,12 +216,15 @@ class SelectionTests(unittest.TestCase):
                           values["linux-e2e-full"]), ("true", "e2e/a.e2e.ts e2e/sub/b.e2e.ts", "[1,2]", "false"))
 
     def test_a_windows_only_file_runs_windows_end_to_end_on_both_architectures(self):
-        # Decision 5: arm64 tests something x64 does not only for code that runs on Windows alone.
-        for path in ("pty/src/stream.rs", "term/src/capture.rs", "serial/src/main.rs", "installer/src/model.rs",
+        # Decision 5: arm64 tests something x64 does not only for code that runs on Windows alone. The vendored terminal
+        # is built into the host as term/ is.
+        for path in ("pty/src/stream.rs", "term/src/capture.rs", "serial/src/main.rs",
+                     "tui/vendor/alacritty_terminal/src/term/mod.rs", "tui/vendor/vte/src/lib.rs",
                      "cli/scripts/install.ps1", "cli/src/lib/ptyHostBackend.ts", "cli/src/lib/ptyHost/stream.ts",
                      "cli/src/engines/kit/windowsHooks.ts", "cli/e2e/dialWindows.e2e.ts", "cli/e2e/harness/windowsDaemon.ts",
                      "cli/vitest.e2e.windows.config.ts", "cli/scripts/windows-ci/check-install.ps1",
-                     "cli/scripts/windows-ci/opencode.mjs", ".github/workflows/windows.yml"):
+                     "cli/scripts/windows-ci/opencode.mjs", "cli/scripts/windows-install-manifest.mjs",
+                     ".github/workflows/windows.yml"):
             with self.subTest(path=path):
                 self.assertIn("windows-e2e", planner.select([path])[0])
                 self.assertTrue(planner.windows_only(path))
@@ -234,6 +237,25 @@ class SelectionTests(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertFalse(planner.windows_only(path))
                 self.assertFalse(planner.e2e_plan([path], {"windows-e2e"})["windows_arm64"])
+
+    def test_what_windows_yml_never_runs_selects_no_windows_end_to_end(self):
+        # It builds no installer (windows-desktop.yml tests that), and runs none of the CLI's release scripts or Desktop's
+        # pipe test server, whatever their names say.
+        for path in ("installer/src/model.rs", "installer/Cargo.lock", "cli/scripts/publish-node-runtime-windows.sh",
+                     "cli/scripts/windows-pipe-test-server.ts"):
+            with self.subTest(path=path):
+                self.assertFalse(planner.windows_only(path))
+                self.assertNotIn("windows-e2e", planner.select([path])[0])
+
+    def test_docs_and_images_run_no_windows_end_to_end(self):
+        # Nothing windows.yml builds or runs reads them, but the notices the TUI compiles in (tui/src/main.rs).
+        for path in ("tui/README.md", "tui/docs/panes.png", "tui/docs/tmux-improved.md", "tui/vendor/README.md",
+                     "plugins/harness-device/README.md", "plugins/harness-device-vscode/README.md", "pty/README.md",
+                     "cli/src/devices/notes.md", "tui/docs/shot.jpg"):
+            with self.subTest(path=path):
+                self.assertFalse(planner.windows_only(path))
+                self.assertNotIn("windows-e2e", planner.select([path])[0])
+        self.assertIn("windows-e2e", planner.select(["tui/THIRD_PARTY_NOTICES.md"])[0])
 
     def test_the_widened_paths_run_windows_end_to_end_on_x64_alone(self):
         # Decision 4: cross-platform code with win32 branches that broke only on Windows (#4513), the TUI windows.yml
@@ -448,7 +470,7 @@ class SelectionTests(unittest.TestCase):
         # installer/'s model and steps are plain Rust that tests on Linux; pty-checks runs them (installer spec §4.1).
         for path in ("installer/src/model.rs", "installer/tests/entry-vectors.json", "installer/Cargo.lock"):
             with self.subTest(path=path):
-                self.assertEqual(planner.select([path])[0], {"pty", "windows-e2e"})
+                self.assertEqual(planner.select([path])[0], {"pty"})
 
     def test_the_pipe_auth_vectors_also_select_the_desktop_suite(self):
         # desktop/test/windows_pipe_auth_test.dart reads them from cli/: a new vector runs both halves.
