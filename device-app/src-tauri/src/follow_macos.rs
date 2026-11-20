@@ -407,6 +407,22 @@ mod tests {
     }
 
     #[test]
+    fn only_a_focus_change_or_the_focused_windows_own_title_is_read_again() {
+        // Application elements stand in for windows: making one calls nothing, and no process has these pids (macOS
+        // gives none above 99998). Two made for one pid are one element.
+        // SAFETY: any pid makes an element.
+        let element = |pid| unsafe { AXUIElement::new_application(pid) };
+        let window = element(100_001);
+        let (same, other) = (element(100_001), element(100_002));
+        assert!(reads_again(false, &same, Some(&window)));
+        // Another element's title: a tab, a button, a line of the page ChatGPT shows.
+        assert!(!reads_again(false, &other, Some(&window)));
+        assert!(!reads_again(false, &other, None));
+        assert!(reads_again(true, &other, Some(&window)));
+        assert!(reads_again(true, &other, None));
+    }
+
+    #[test]
     fn the_permission_is_read_and_its_notification_registered() {
         // Never prompt(): it shows macOS's dialog.
         let follow = MacFollow::new(PathBuf::from("/nonexistent"));
