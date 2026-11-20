@@ -3,6 +3,8 @@ from pathlib import Path
 import re
 import unittest
 
+from test_cli_e2e_workflow import jobs
+
 ROOT = Path(__file__).resolve().parents[2]
 CI = ROOT / ".github/workflows/ci.yml"
 DEVICE_SETUP = ROOT / ".github/actions/device-app-setup/action.yml"
@@ -11,11 +13,11 @@ LOCK = ("ci-${{ github.event_name }}-${{ github.event.action || 'run' }}-"
 
 
 def ci_jobs():
-    """ci.yml's text, its jobs by id (test_ci_plan.py's split), and the jobs ci/required needs."""
+    """ci.yml's text, its jobs by id, and the jobs ci/required needs."""
     text = CI.read_text()
-    jobs = dict(re.findall(r"(?m)^  ([\w-]+):\n((?:(?:    .*)?\n)+)", text))
-    needs = set(re.findall(r"[\w-]+", re.search(r"(?m)^    needs: \[((?:.|\n)+?)\]", jobs["required"]).group(1)))
-    return text, jobs, needs
+    by_id = jobs(text)
+    needs = set(re.findall(r"[\w-]+", re.search(r"(?m)^    needs: \[((?:.|\n)+?)\]", by_id["required"]).group(1)))
+    return text, by_id, needs
 
 
 class WindowsE2ETests(unittest.TestCase):
@@ -299,7 +301,6 @@ class CrossReadScanTests(unittest.TestCase):
                      f"group: {LOCK}cross-read-scan\n",
                      "cancel-in-progress: ${{ github.event_name == 'pull_request' }}",
                      "    runs-on: ubuntu-24.04\n",
-                     "    permissions:\n      contents: read\n",
                      "    timeout-minutes: 10\n",
                      "          ref: ${{ env.CI_SOURCE_SHA }}\n",
                      "python3 -m unittest discover -s scripts/tests -p test_ci_plan.py"):

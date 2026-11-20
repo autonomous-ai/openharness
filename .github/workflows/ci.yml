@@ -1332,8 +1332,6 @@ jobs:
     needs: plan
     if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.cross-read-scan == 'true'
     runs-on: ubuntu-24.04
-    permissions:
-      contents: read
     # The checkout, then the scan: about 20 seconds locally.
     timeout-minutes: 10
     steps:
