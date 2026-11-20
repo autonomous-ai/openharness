@@ -294,7 +294,8 @@ mod tests {
     #[test]
     fn a_display_with_no_server_is_no_observer_once() {
         let (tell, told) = std::sync::mpsc::channel();
-        // A socket no server listens on: no TCP is tried for a `unix:` display.
+        // x11rb reads a `unix:` display as a socket's path, and with no file `59000` refuses it as malformed before it
+        // dials anything: the connect fails at once, and no TCP is tried.
         let door = X11Follow::new("unix:59000".into());
         let _observation = door.observe_with(
             |_| true,
