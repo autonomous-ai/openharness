@@ -15,7 +15,7 @@ import { probeVersionLine, readInstanceDiscovery } from '../ptyHost/launch.js'
 import { PTY_PROTOCOL, SHUTDOWN_PROTOCOL, SUPPORTED_PTY_PROTOCOLS } from '../ptyHost/protocol.js'
 import { windowsProcessRows } from './processTable.js'
 import { readSignatureProblems, unsignedAllowed } from './ptySignatures.js'
-import { systemProgram } from './systemProgram.js'
+import { systemProgram } from './powershell.js'
 import { scrubTerminalContext } from '../terminalEnvironment.js'
 import {
   DigestMismatchError, MANIFEST_LIMITS, downloadVerified, fetchWithin, isLocalDevBuild, semverGt,

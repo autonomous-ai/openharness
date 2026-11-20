@@ -13,7 +13,7 @@ import { guestHostHome } from './guestTree.js'
 import { PtyHostBackend } from '../ptyHostBackend.js'
 import { discoveredHostDead, reachPtyHost, readInstanceDiscovery, type HostLiveness } from '../ptyHost/launch.js'
 import type { PtyHostDiscovery } from '../ptyHost/client.js'
-import { systemProgram } from './systemProgram.js'
+import { systemProgram } from './powershell.js'
 
 export { guestHostHome }
 export const guestHostTask = (user: string): string => `\\Harness\\Guests\\${user}`

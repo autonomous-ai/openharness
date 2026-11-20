@@ -4,9 +4,15 @@
  * nothing in it is quoted twice by cmd and PowerShell, and its inputs in environment variables, never in its text.
  */
 import { execFile, spawnSync } from 'node:child_process'
-import { systemProgram } from './systemProgram.js'
+import { win32 } from 'node:path'
 
 export const POWERSHELL_TIMEOUT_MS = 30_000
+
+/** One of Windows' own programs by its full path in System32: Node on Windows looks for a bare name in the folder it
+ *  runs in before PATH (systemProgram.spec.ts). */
+export function systemProgram(name: string, env: NodeJS.ProcessEnv = process.env): string {
+  return win32.join(env.SystemRoot ?? env.windir ?? 'C:\\Windows', 'System32', name)
+}
 
 export function powershellPath(env: NodeJS.ProcessEnv = process.env): string {
   return systemProgram('WindowsPowerShell\\v1.0\\powershell.exe', env)

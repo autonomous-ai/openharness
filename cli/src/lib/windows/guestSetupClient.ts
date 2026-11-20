@@ -12,7 +12,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileS
 import { canonicalGuestEmail, guestAnswerFile, guestRequestFile, newGuestRequestId, parseGuestSetupAnswer, parseGuestSetupRequest, type GuestSetupRequest } from './guestRequests.js'
 import { WINDOWS_GUEST_ANSWERS, WINDOWS_GUEST_REQUESTS } from './guestTree.js'
 import type { GuestSharedFolder } from './guestShare.js'
-import { systemProgram } from './systemProgram.js'
+import { systemProgram } from './powershell.js'
 
 export const WINDOWS_GUEST_TASK_PATH = '\\Harness\\'
 export const WINDOWS_GUEST_TASK_NAME = 'Harness Guests Setup'

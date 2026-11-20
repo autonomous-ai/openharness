@@ -16,7 +16,6 @@ import { spawnSync } from 'node:child_process'
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir, uptime, userInfo } from 'node:os'
 import { dirname, isAbsolute, join, win32 } from 'node:path'
-import { systemProgram } from '../lib/windows/systemProgram.js'
 
 export type PlatformName = 'launchd' | 'systemd' | 'taskscheduler'
 
@@ -403,6 +402,11 @@ export function currentUid(proc: { getuid?: () => number } = process): number {
   return typeof proc.getuid === 'function' ? proc.getuid() : 0
 }
 
+/** [command] in System32, as lib/windows/powershell.ts's `systemProgram` names it: the master imports no feature code. */
+function windowsProgram(command: string, env: NodeJS.ProcessEnv): string {
+  return win32.join(env.SystemRoot ?? env.windir ?? 'C:\\Windows', 'System32', `${command}.exe`)
+}
+
 /**
  * The real thing: commands looked up on `env.PATH` (Node searches the PATH of the environment it is
  * given), files on disk. The tests hand it a PATH holding only fake binaries and a temporary home. On Windows the
@@ -415,7 +419,7 @@ export function defaultPlatformDeps(options: { env?: NodeJS.ProcessEnv; uid?: nu
   return {
     run: (command, args, output) => {
       // `launchctl print` lists the whole job, and a domain's listing runs to hundreds of kilobytes.
-      const result = spawnSync(process.platform === 'win32' ? systemProgram(`${command}.exe`, env) : command, args, {
+      const result = spawnSync(process.platform === 'win32' ? windowsProgram(command, env) : command, args, {
         env, encoding: 'utf8', timeout: COMMAND_TIMEOUT_MS, maxBuffer: 32 * 1024 * 1024, stdio: ['pipe', output?.stdout ?? 'pipe', 'pipe'],
       })
       return { status: result.status, stdout: result.stdout ?? '', stderr: result.stderr ?? '', ...(result.error ? { error: result.error.message } : {}) }

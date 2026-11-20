@@ -8,9 +8,8 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { runGuestCommand, type GuestRunner } from '../guestRunner.js'
-import { modulesByPath, powershellPath } from './powershell.js'
+import { modulesByPath, powershellPath, systemProgram } from './powershell.js'
 import { ps } from './powershellQuote.js'
-import { systemProgram } from './systemProgram.js'
 
 export type AdminResult =
   | { ok: true; stdout: string }

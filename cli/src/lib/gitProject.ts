@@ -9,7 +9,7 @@ import { placeholderBranch, worktreeFolderName } from './branchNames.js'
 import { redactSecretsInText } from './redactSecrets.js'
 import { withinRoots } from './pathContainment.js'
 import { ownProcessGroup } from './windows/noWindow.js'
-import { systemProgram } from './windows/systemProgram.js'
+import { systemProgram } from './windows/powershell.js'
 import { errorKind } from './log.js'
 
 const exec = promisify(execFile)

@@ -17,7 +17,7 @@ import { PLATFORM_LABEL, type PlatformState, type ServiceDefinition } from '../h
 import { describeSpawnLockOwner, readSpawnLockOwner, withSpawnLock, type SpawnLockPurpose } from './daemonSpawnLock.js'
 import { stopDaemonProcess } from './daemonStop.js'
 import { settlePidFile } from './pidFileSettle.js'
-import { systemProgram } from './windows/systemProgram.js'
+import { systemProgram } from './windows/powershell.js'
 import {
   CARRIED_ENV, PLATFORM_START_WAIT_MS, PLATFORM_STOP_WAIT_MS, TASK_RUN_WAIT_MS, describeState, platformDaemonDeps, serviceDefinition, waitForMaster, waitGone,
   type PlatformDaemonDeps,

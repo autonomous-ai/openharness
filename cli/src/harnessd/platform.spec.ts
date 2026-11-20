@@ -198,6 +198,9 @@ describe('the default dependencies', { timeout: FAKE_COMMANDS_TIMEOUT_MS }, () =
       const deps = defaultPlatformDeps({ env: { PATH: fake.bin, SystemRoot: 'C:\\Windows' }, uid: 501, home: join(dir, 'home') })
       expect(deps.run('schtasks', ['/Query']).error).toContain('C:\\Windows\\System32\\schtasks.exe')
       expect(deps.run('whoami', ['/user']).error).toContain('C:\\Windows\\System32\\whoami.exe')
+      // Windows' folder by windir when SystemRoot is not set, else where Windows installs.
+      expect(defaultPlatformDeps({ env: { PATH: fake.bin, windir: 'D:\\Win' } }).run('schtasks', []).error).toContain('D:\\Win\\System32\\schtasks.exe')
+      expect(defaultPlatformDeps({ env: { PATH: fake.bin } }).run('schtasks', []).error).toContain('C:\\Windows\\System32\\schtasks.exe')
       expect(fake.calls()).toEqual([])
     } finally {
       Object.defineProperty(process, 'platform', platform)

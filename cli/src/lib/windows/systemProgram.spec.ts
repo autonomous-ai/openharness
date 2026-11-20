@@ -1,6 +1,7 @@
 /**
- * Windows' own programs are run by their full paths in System32 (`systemProgram`, `powershellPath`): Node on Windows
- * looks for a bare name in the folder it runs in before PATH. Read as text, as noWindow.spec.ts reads `detached`.
+ * Windows' own programs are run by their full paths in System32 (`systemProgram` and `powershellPath`, ./powershell.ts):
+ * Node on Windows looks for a bare name in the folder it runs in before PATH. Read as text, as noWindow.spec.ts reads
+ * `detached`.
  */
 import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -12,7 +13,7 @@ const PROGRAMS = ['cmd', 'icacls', 'powershell', 'reg', 'schtasks', 'taskkill', 
 const BARE = new RegExp(String.raw`(?:\b(?:spawn|spawnSync|execFile|execFileSync|run|runner|runGuestCommand)\)?\(|\bfile:)\s*(['"\x60])(?:${PROGRAMS.join('|')})(?:\.exe)?\1`, 'g')
 /** Files that name one bare, and why that runs System32's. */
 const RESOLVED_ELSEWHERE: Record<string, string> = {
-  'harnessd/platform.ts': 'defaultPlatformDeps runs each command of the Task Scheduler service from System32',
+  'harnessd/platform.ts': 'defaultPlatformDeps runs each command of the Task Scheduler service from System32 (windowsProgram)',
 }
 
 describe('Windows programs by their full paths', () => {

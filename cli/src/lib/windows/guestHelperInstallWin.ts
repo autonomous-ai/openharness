@@ -15,7 +15,7 @@ import { WINDOWS_GUEST_SETUP_VERSION, WINDOWS_GUEST_VERSION_FILE, buildWindowsGu
   buildWindowsGuestProcessorScript } from './guestScript.js'
 import { WINDOWS_GUEST_TASK } from './guestSetupClient.js'
 import type { RunAdmin } from './elevated.js'
-import { systemProgram } from './systemProgram.js'
+import { systemProgram } from './powershell.js'
 import type { GuestHelperInstallOptions, GuestHelperInstallResult, GuestHelperStatus, GuestHelperStatusDeps } from '../guestHelperInstall.js'
 
 /** The Windows one-time install: the proven UAC runner, the guest tree/task, one prompt. */
