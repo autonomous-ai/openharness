@@ -112,9 +112,18 @@ class UpdateHarnessLine extends StatefulWidget {
     this.confirm = _confirmReplace,
     this.pollEvery = const Duration(seconds: 2),
     this.pollLimit = 60,
+    this.tooOld,
+    this.onUpdated,
   });
 
   final AppNotifier app;
+
+  /// Why Harness here is too old, from its version (null when it did not say): shared tabs'
+  /// line ([harnessTooOldLine]) when not given.
+  final String Function(String? current)? tooOld;
+
+  /// Run once it is updated: shared tabs are read again when not given.
+  final VoidCallback? onUpdated;
   final HarnessVersionReader? readVersion;
   final HarnessUpdateRunner? runUpdate;
   final bool canUpdate;
@@ -186,13 +195,20 @@ class _UpdateHarnessLineState extends State<UpdateHarnessLine> {
       _updating = false;
       _failed = !done;
     });
-    if (done) unawaited(widget.app.sharedTabs.refresh());
+    if (!done) return;
+    if (widget.onUpdated case final updated?) {
+      updated();
+    } else {
+      unawaited(widget.app.sharedTabs.refresh());
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     final current = _version;
-    final line = harnessTooOldLine(current, viewer: kViewerMode);
+    final line =
+        widget.tooOld?.call(current) ??
+        harnessTooOldLine(current, viewer: kViewerMode);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
