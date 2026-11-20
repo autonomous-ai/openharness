@@ -37,6 +37,12 @@ describe('placeNode', () => {
     expect(start).toHaveBeenCalledExactlyOnceWith(node)
   })
 
+  it.each([['a link of the run\'s Node', join('run', 'node')], ['a copy of its own', '']])('places %s in a folder not made yet', (_, run) => {
+    const node = join(dir, 'bin', 'node')
+    placeNode(node, [], undefined, run && join(dir, run), () => {})
+    expect(statSync(node).size).toBe(statSync(process.execPath).size)
+  })
+
   // macOS may name a hard-linked file by any of its links. Homebrew's Node loads libnode from beside the
   // path it runs as, so while a test held a link of it, Node failed to start anywhere on the Mac (#4395).
   it('copies a file of its own, never a link of the running Node', () => {
