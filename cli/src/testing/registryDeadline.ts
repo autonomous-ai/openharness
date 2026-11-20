@@ -15,10 +15,24 @@ const SLOW_WAIT_MS = 250
 const realTimeout = globalThis.setTimeout, realClear = globalThis.clearTimeout
 /** The bound a write deadline is held under: the time it has left is no bound of its own. */
 const DEADLINE = Symbol('write deadline')
+type Timer<Bound> = { ms: Bound, run: () => void }
 /** Held timers, never scheduled on the host's clock, with the bound each was asked for. */
-const held = new Map<unknown, { ms: number | typeof DEADLINE, run: () => void }>()
+const held = new Map<unknown, Timer<number | typeof DEADLINE>>()
 /** Real waits a registry image sync fires early. */
-const due = new Map<unknown, () => void>()
+const due = new Map<unknown, Timer<number>>()
+
+/**
+ * Runs each timer of [timers] whose bound [chosen] picks, taken out as it runs, as the host's clock would: one a callback
+ * sets runs at a later pass, one a callback clears does not run, and one that throws is thrown on its own once the pass
+ * is over, which goes on without it.
+ */
+function runPass<Bound>(timers: Map<unknown, Timer<Bound>>, chosen: (ms: Bound) => boolean): void {
+  for (const [timer, entry] of [...timers]) {
+    if (timers.get(timer) !== entry || !chosen(entry.ms)) continue
+    timers.delete(timer)
+    try { entry.run() } catch (error) { queueMicrotask(() => { throw error }) }
+  }
+}
 
 /** An `fs/promises` whose registry image (`registry.json.*.tmp`) syncs fire every real wait still due. */
 export async function slowSyncFsPromises(
@@ -32,7 +46,7 @@ export async function slowSyncFsPromises(
       await sync()
       const path = String(args[0])
       if (!(path.includes('registry.json.') && path.endsWith('.tmp'))) return
-      for (const [timer, fire] of due) { due.delete(timer); fire() }
+      runPass(due, () => true)
       await options?.afterSync?.(path, actual)
     }
     return handle
@@ -62,9 +76,7 @@ export function holdRegistryDeadline(deadlineMs: number, options?: { hold?: read
   fire(ms: number): void
 } {
   held.clear(); due.clear()
-  const run = (ms: number | typeof DEADLINE) => {
-    for (const [timer, entry] of held) if (entry.ms === ms) { held.delete(timer); entry.run() }
-  }
+  const run = (ms: number | typeof DEADLINE) => runPass(held, (bound) => bound === ms)
   vi.spyOn(globalThis, 'setTimeout').mockImplementation(((callback: Callback, ms?: number, ...args: unknown[]) => {
     const bound = armsWriteDeadline() ? DEADLINE : ms !== undefined && options?.hold?.includes(ms) ? ms : undefined
     if (bound !== undefined) {
@@ -75,7 +87,7 @@ export function holdRegistryDeadline(deadlineMs: number, options?: { hold?: read
     }
     if (ms === undefined || ms < SLOW_WAIT_MS || ms >= deadlineMs) return realTimeout(callback, ms, ...args)
     const timer = realTimeout(() => { due.delete(timer); callback(...args) }, ms)
-    due.set(timer, () => { realClear(timer); callback(...args) })
+    due.set(timer, { ms, run: () => { realClear(timer); callback(...args) } })
     return timer
   }) as typeof setTimeout)
   vi.spyOn(globalThis, 'clearTimeout').mockImplementation(((timer?: Parameters<typeof clearTimeout>[0]) => {
