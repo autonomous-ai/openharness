@@ -359,9 +359,10 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn cancel_and_the_deadline_let_the_cli_end_by_itself() {
-        // On SIGTERM `harness login` takes its code back and exits, and its spawn lock's exit hook runs.
+        // On its stdin's end `harness login` takes its code back and exits 1, and its spawn lock's exit hook runs: on
+        // every OS, Windows having no SIGTERM.
         let fake = Fake::new();
-        fake.script("login --json", &["@term", URL, "@wait never"]);
+        fake.script("login --json", &["@driver", URL, "@wait never"]);
         let (send, events) = channel();
         let sign_in = login(&fake.cli(), fake.log(), send).unwrap();
         assert_eq!(events.recv_timeout(WAIT), Ok(AuthorizeUrl("https://id.example/a?state=S".into())));
@@ -369,23 +370,13 @@ mod tests {
         assert_eq!(all(&events), Vec::new());
         assert_eq!(fake.ends(), ["login --json"]);
         assert!(logged(&fake, "harness login --json: exit 1"), "{:?}", fake.log().lines());
-        // The deadline counts from the spawn, and a fake that took all of it to start has no trap yet: the deadline
-        // doubles until the URL, printed once the trap is set, came first.
-        let mut deadline = SHORT;
-        loop {
-            let fake = Fake::new();
-            fake.script("login --json", &["@term", URL, "@wait never"]);
-            let (send, events) = channel();
-            let _login = login_within(&fake.cli(), fake.log(), send, deadline, WAIT).unwrap();
-            let events = all(&events);
-            assert_eq!(events.last(), Some(&failed(NO_RESULT)));
-            if events.len() == 2 {
-                assert_eq!(fake.ends(), ["login --json"]);
-                return;
-            }
-            deadline *= 2;
-            assert!(deadline < Duration::from_secs(10), "the fake never started in time");
-        }
+        // A stdin that ended before the fake watched it is seen as soon as it does, however long it took to start.
+        let fake = Fake::new();
+        fake.script("login --json", &["@driver", URL, "@wait never"]);
+        let (send, events) = channel();
+        let _login = login_within(&fake.cli(), fake.log(), send, SHORT, WAIT).unwrap();
+        assert_eq!(all(&events).last(), Some(&failed(NO_RESULT)));
+        assert_eq!(fake.ends(), ["login --json"]);
     }
 
     #[cfg(unix)]
@@ -434,5 +425,49 @@ mod tests {
         // The run's own line too: the thread ends only after the child has.
         assert!(lines.iter().any(|line| line == "harness login --json: exit 0"), "{lines:?}");
         assert!(lines.iter().all(|line| !line.contains("state=S") && !line.contains('@')), "{lines:?}");
+    }
+}
+
+// A sign-in on Windows, against a CLI of Windows' own programs.
+#[cfg(all(test, windows))]
+mod windows_tests {
+    use super::*;
+    use crate::cli::{HarnessCli, find_cli};
+    use crate::types::MemoryLog;
+    use std::fs;
+    use std::sync::mpsc;
+
+    /// For the CLI's first line: PowerShell on a cold machine takes seconds.
+    const FIRST_LINE: Duration = Duration::from_secs(60);
+    const WAIT: Duration = Duration::from_secs(5);
+
+    /// As `harness login --json` while it waits: a `waiting` line, then, once its stdin has ended, exit 1.
+    const LOGIN: &str = r#"
+[Console]::Out.WriteLine('{"type":"waiting","message":"w"}')
+$null = [Console]::In.ReadToEnd()
+exit 1
+"#;
+
+    #[test]
+    fn cancel_lets_the_cli_end_by_itself() {
+        let folder = tempfile::tempdir().unwrap();
+        fs::write(folder.path().join("login.ps1"), LOGIN).unwrap();
+        // `harness login --json`, its arguments left out: the script is its one command.
+        let program = folder.path().join("harness.cmd");
+        let line = r#"@"%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive"#;
+        let file = r#"-ExecutionPolicy Bypass -File "%~dp0login.ps1""#;
+        fs::write(&program, format!("{line} {file}\r\n@exit /b %ERRORLEVEL%\r\n")).unwrap();
+        let log = Arc::new(MemoryLog::default());
+        let cli = HarnessCli::new(find_cli(folder.path(), None, Some(&program)).unwrap(), log.clone());
+        let (send, events) = mpsc::channel();
+        let sign_in = login(&cli, log.clone(), move |event| {
+            let _ = send.send(event);
+        })
+        .unwrap();
+        assert_eq!(events.recv_timeout(FIRST_LINE), Ok(Event::Login(LoginEvent::Waiting("w".into()))));
+        sign_in.cancel();
+        // The sign-in's thread lets go of `send` once the CLI has exited.
+        assert_eq!(events.recv_timeout(WAIT), Err(mpsc::RecvTimeoutError::Disconnected));
+        assert!(log.lines().iter().any(|line| line == "harness login --json: exit 1"), "{:?}", log.lines());
     }
 }
