@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { CheckpointStages, type CheckpointStage } from './checkpointStages.js'
 
-const fault = vi.hoisted(() => ({ kind: '', root: '', paths: new Map<number, string>(), replace: '' }))
+const fault = vi.hoisted(() => ({ kind: '', root: '', paths: new Map<number, string>(), replace: '', statFailed: new Set<number>() }))
 vi.mock('node:fs', async original => {
   const fs = await original<typeof import('node:fs')>()
   return { ...fs,
@@ -12,13 +12,27 @@ vi.mock('node:fs', async original => {
       if (fault.kind === 'owner-open' && String(args[0]).endsWith('owner.json')) throw new Error('injected owner-open')
       const fd = fs.openSync(...args); fault.paths.set(fd, String(args[0])); return fd
     },
-    closeSync: (fd: number) => { try { fs.closeSync(fd) } finally { fault.paths.delete(fd) } },
+    closeSync: (fd: number) => { try { fs.closeSync(fd) } finally { fault.paths.delete(fd); fault.statFailed.delete(fd) } },
+    fstatSync: (...args: Parameters<typeof fs.fstatSync>) => {
+      if (fault.paths.get(args[0])?.endsWith('owner.json') && (fault.kind === 'owner-stat-persistent'
+        || (fault.kind === 'owner-stat' && !fault.statFailed.has(args[0])))) {
+        fault.statFailed.add(args[0]); throw new Error(`injected ${fault.kind}`)
+      }
+      return fs.fstatSync(...args)
+    },
     writeSync: (...args: any[]) => {
       if (fault.kind === 'owner-write' && fault.paths.get(args[0])?.endsWith('owner.json')) {
         fs.writeSync(args[0], Buffer.from('{'), 0, 1, 0)
         throw new Error('injected owner-write')
       }
       return (fs.writeSync as (...args: any[]) => number)(...args)
+    },
+    writeFileSync: (...args: Parameters<typeof fs.writeFileSync>) => {
+      if (fault.kind === 'owner-write' && typeof args[0] === 'number' && fault.paths.get(args[0])?.endsWith('owner.json')) {
+        fs.writeSync(args[0], Buffer.from('{'), 0, 1, 0)
+        throw new Error('injected owner-write')
+      }
+      return fs.writeFileSync(...args)
     },
     fsync: (fd: number, done: (error: NodeJS.ErrnoException | null) => void) => {
       if (fault.kind === 'owner-flush' && fault.paths.get(fd)?.endsWith('owner.json')) {
@@ -64,7 +78,7 @@ afterEach(async () => {
 })
 
 describe('unexposed checkpoint allocation failure', () => {
-  it.each(['history-open', 'history-stat', 'owner-open', 'owner-write', 'owner-flush'])(
+  it.each(['history-open', 'history-stat', 'owner-open', 'owner-stat', 'owner-write', 'owner-flush'])(
     'preserves capacity after four %s failures', async kind => {
       fault.kind = kind
       for (let attempt = 0; attempt < 4; attempt++) {
@@ -75,6 +89,14 @@ describe('unexposed checkpoint allocation failure', () => {
       const lease = await stages.acquire(destination(), process.pid); leases.push(lease)
       expect(fs.existsSync(join(fault.root, '0', 'owner.json'))).toBe(true)
     })
+
+  it('retains the whole allocation when owner identity remains unavailable', async () => {
+    fault.kind = 'owner-stat-persistent'
+    await expect(stages.acquire(destination(), process.pid)).rejects.toThrow('injected owner-stat-persistent')
+    expect(fs.existsSync(join(fault.root, '0', 'history.tmp'))).toBe(true)
+    expect(fs.existsSync(join(fault.root, '0', 'owner.json'))).toBe(true)
+    expect(console.error).toHaveBeenCalledWith('[checkpoint] STAGE_CLEANUP_UNAVAILABLE')
+  })
 
   it.each(['history.tmp', 'owner.json'])('preserves replaced %s on allocation failure', async name => {
     fault.kind = 'owner-flush'; fault.replace = name

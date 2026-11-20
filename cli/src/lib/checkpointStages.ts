@@ -213,7 +213,7 @@ export class CheckpointStages {
       let owner: Owner = { version: 2, lease: randomBytes(16).toString('hex'), core: process.pid, writer, settled: false, key }
       let recordKey: string | undefined, confirmedOwner: string | undefined, ownerWrite: Promise<void> | undefined
       const retainOwner = process.platform !== 'win32'
-      let ownerFd: number | undefined, allocatedOwnerKey: string | undefined
+      let ownerFd: number | undefined
       const closeOwner = () => {
         if (ownerFd === undefined) return
         const fd = ownerFd; ownerFd = undefined
@@ -229,11 +229,12 @@ export class CheckpointStages {
           if (recordKey) identity(record, recordKey)
           const access = retainOwner ? constants.O_RDWR : constants.O_WRONLY
           const fd = ownerFd ?? openSync(record, access | constants.O_NOFOLLOW | (recordKey ? 0 : constants.O_CREAT | constants.O_EXCL), 0o600)
-          if (retainOwner) ownerFd = fd
+          // Even Windows keeps a failed initial open in our custody until the
+          // allocation can be proved and closed; no worker has seen it yet.
+          if (retainOwner || !recordKey) ownerFd = fd
           try {
             const opened = fstatSync(fd, { bigint: true }); privateFile(opened)
             const openedKey = nativeFileKey(opened)
-            if (!recordKey) allocatedOwnerKey = openedKey
             if (recordKey && recordKey !== openedKey) throw new Error('checkpoint stage changed')
             directoryIdentity(directory, directoryKey)
             identity(record, openedKey)
@@ -270,7 +271,12 @@ export class CheckpointStages {
             verifyOwner()
             if (!recordKey && poolKey !== undefined) identity(path, key)
             recordKey ??= openedKey
-          } finally { if (!retainOwner) closeStateFileDescriptor(fd) }
+          } finally {
+            if (!retainOwner && recordKey) {
+              if (ownerFd === fd) closeOwner()
+              else closeStateFileDescriptor(fd)
+            }
+          }
           confirmedOwner = text
         })()
         // Keep the actual callback/close alive after a bounded caller reply. This work never calls stage.close().
@@ -284,8 +290,8 @@ export class CheckpointStages {
         let files: Array<[string, BigIntStats]> | undefined
         try {
           files = [[path, fstatSync(file.fd, { bigint: true })]]
-          if (allocatedOwnerKey) files.push([record, ownerFd === undefined
-            ? identity(record, allocatedOwnerKey) : fstatSync(ownerFd, { bigint: true })])
+          if (ownerFd !== undefined) files.push([record, fstatSync(ownerFd, { bigint: true })])
+          else if (recordKey) files.push([record, identity(record, recordKey)])
         } catch { files = undefined; retained() }
         try {
           try { await file.close() } finally { closeOwner() }
