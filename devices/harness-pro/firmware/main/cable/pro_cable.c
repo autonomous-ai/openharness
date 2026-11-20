@@ -229,6 +229,9 @@ static void send_hello(void)
     msg_string(&root, "stats", "turn-v1");
     msg_string(&root, "player", "library-v1");
     msg_string(&root, "ota", "v1");
+    msg_string(&root, "appFilter", "v1");
+    msg_string(&root, "questionTier", "v1");
+    msg_string(&root, "appCards", "v1");
     char mac[24] = "";
     device_mac_str(mac, sizeof(mac));
     msg_string(&root, "mac", mac);
