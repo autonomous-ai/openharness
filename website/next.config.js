@@ -60,7 +60,8 @@ module.exports = {
         permanent: true,
       })),
       // The home page is the Harness Device guide (owner, 2026-11-20); temporary, so no browser keeps it.
-      { source: '/', destination: '/device', permanent: false },
+      // A viewer link (/?viewer=1) stays on the web app: see the '/' rewrite below.
+      { source: '/', missing: [{ type: 'query', key: 'viewer' }], destination: '/device', permanent: false },
       // Old /web links follow the home page, query and all; temporary, so no browser keeps it.
       { source: '/web', destination: '/', permanent: false },
       { source: '/install', destination: '/download', permanent: true },
@@ -106,6 +107,8 @@ module.exports = {
         // Older desktop builds consume snapshots without following redirects.
         { source: '/explore/:id/snapshot', destination: '/hub/:id/snapshot' },
         { source: '/explore/:id/download', destination: '/hub/:id/download' },
+        // `hn view` links open the web app's viewer at /?viewer=1 (tui/src/viewer.rs).
+        { source: '/', has: [{ type: 'query', key: 'viewer' }], destination: '/harness-web/index.html' },
         { source: '/s/:id', destination: '/harness-web/index.html' },
         { source: '/auth/callback', destination: '/harness-web/index.html' },
         // Local website previews use the SSO service's native loopback callback.
