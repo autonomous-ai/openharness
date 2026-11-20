@@ -40,8 +40,14 @@ export const REPAIR_RETRY_MS = 60_000
  *  then settle into the slow rhythm for processes that will never resolve. */
 const REPAIR_EAGER_ATTEMPTS = 24   // ≈2 min at the 5s sweep
 
+/**
+ * What an OpenClaw agent says while its Gateway is gone, by what the TUI's activity says of its sign-in: each names its
+ * own fix. Each is cleared only by a line the Gateway answered.
+ */
+const GATEWAY_HOLDS = { approval: OPENCLAW_STATES.approval, refused: OPENCLAW_STATES.signInRefused, gone: OPENCLAW_STATES.noGateway }
+const GATEWAY_HOLD_SAID = new Set<string>(Object.values(GATEWAY_HOLDS))
 /** What an OpenClaw agent says while its pane shows a screen its TUI cannot work for Harness on. */
-const OPENCLAW_HOLDS = new Set<string>(Object.values(OPENCLAW_SCREEN_HOLDS))
+const OPENCLAW_HOLDS = new Set<string>([...Object.values(OPENCLAW_SCREEN_HOLDS), ...GATEWAY_HOLD_SAID])
 /** What the other engines' reader says on a row while its worker is out or it rebuilds the live view. */
 const OTHER_ENGINE_HOLDS = new Set<string>(Object.values(OTHER_ENGINE_STATES))
 /** How long OpenClaw's Gateway is gone before its agent is held: a drop the TUI reconnects from by itself is not. */
@@ -83,7 +89,7 @@ function openclawScreenHold(screen: OpenclawScreen, agent: RegisteredSession, ga
     if (screen.stopped !== null) return openclawLocalStopped(screen.stopped)
     return isOpenclawLocalStopped(agent.identityHold) ? agent.identityHold : openclawLocalStopped(null)
   }
-  if (openclawGatewayGone(screen)) return gatewayGoneMs < GATEWAY_HOLD_MS || agent.openclawLocal ? undefined : OPENCLAW_STATES.noGateway
+  if (openclawGatewayGone(screen)) return gatewayGoneMs < GATEWAY_HOLD_MS || agent.openclawLocal ? undefined : GATEWAY_HOLDS[screen.signIn ?? 'gone']
   return screen.state && !agent.openclawLocal ? OPENCLAW_SCREEN_HOLDS[screen.state] : undefined
 }
 
@@ -643,10 +649,11 @@ export function createBinding({
       }
       if (agent.identityHold && ours) {
         // A remote TUI's title scrolls off a long conversation: only a title naming this machine's Gateway clears it.
-        // The Gateway's only a line it answered does: a bare `disconnected` between two tries is the same outage.
+        // The Gateway's and a sign-in's only a line it answered does: a bare `disconnected` between two tries is the same
+        // outage.
         // The others only a footer does: an overlay or autocomplete that hides it shows no state at all.
         const clears = agent.identityHold === OPENCLAW_STATES.remote ? !!screen.url
-          : agent.identityHold === OPENCLAW_STATES.noGateway ? openclawGatewayAnswered(screen) : !!screen.footer
+          : GATEWAY_HOLD_SAID.has(agent.identityHold) ? openclawGatewayAnswered(screen) : !!screen.footer
         if (!clears) return
         if (registry.setIdentityHold(agent.agentId, undefined)) {
           console.log(`[discovery] ${sid(agent.agentId)} openclaw · working again`)
