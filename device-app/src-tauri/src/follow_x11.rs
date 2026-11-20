@@ -321,6 +321,71 @@ mod tests {
         assert_eq!(told.recv_timeout(WAIT), Err(std::sync::mpsc::RecvTimeoutError::Disconnected));
     }
 
+    /// As an X server that quits, or a display that closes, while the observer waits for an event.
+    #[test]
+    fn a_connection_lost_after_the_start_is_no_observer_once() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        use x11rb::protocol::xproto::{CHANGE_WINDOW_ATTRIBUTES_REQUEST, GET_PROPERTY_REQUEST, Screen, Setup};
+        use x11rb::x11_utils::Serialize;
+
+        // Over TCP, display N at port 6000 + N: x11rb dials a socket path display at `/tmp/.X11-unix/X0` instead.
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let display = listener.local_addr().unwrap().port().checked_sub(6000).expect("a port past X's first");
+        // A server of one screen that answers each request with an empty reply (no atom, no property), and closes once
+        // the observer has read the active window.
+        let server = std::thread::spawn(move || {
+            let (mut client, _) = listener.accept().unwrap();
+            // The setup request, its auth's name and data each padded to 4 bytes, in the client's byte order: ours.
+            let mut request = [0u8; 12];
+            client.read_exact(&mut request).unwrap();
+            let padded =
+                |at: usize| usize::from(u16::from_ne_bytes([request[at], request[at + 1]])).next_multiple_of(4);
+            client.read_exact(&mut vec![0; padded(6) + padded(8)]).unwrap();
+            let setup = Setup {
+                status: 1,
+                protocol_major_version: 11,
+                // The fixed part and one screen with no depth, past the first 8 bytes, in 4-byte units.
+                length: 18,
+                resource_id_base: 0x0020_0000,
+                resource_id_mask: 0x001f_ffff,
+                maximum_request_length: u16::MAX,
+                roots: vec![Screen { root: 1, ..Default::default() }],
+                ..Default::default()
+            };
+            client.write_all(&setup.serialize()).unwrap();
+            for sequence in 1u16.. {
+                let mut header = [0u8; 4];
+                client.read_exact(&mut header).unwrap();
+                let length = usize::from(u16::from_ne_bytes([header[2], header[3]])) * 4;
+                client.read_exact(&mut vec![0; length - 4]).unwrap();
+                // ChangeWindowAttributes has no reply.
+                if header[0] != CHANGE_WINDOW_ATTRIBUTES_REQUEST {
+                    let mut reply = [0u8; 32];
+                    reply[0] = 1;
+                    reply[2..4].copy_from_slice(&sequence.to_ne_bytes());
+                    client.write_all(&reply).unwrap();
+                }
+                if header[0] == GET_PROPERTY_REQUEST {
+                    return;
+                }
+            }
+        });
+        let (tell, told) = std::sync::mpsc::channel();
+        let door = X11Follow::new(format!("127.0.0.1:{display}"), FollowSwitch::new(true));
+        let _observation = door.observe_with(
+            |_| true,
+            Box::new(move |heard| {
+                let _ = tell.send(heard);
+            }),
+        );
+        // No active window: the empty title, then the server closes.
+        assert_eq!(told.recv_timeout(WAIT), Ok(Heard::Title(None)));
+        server.join().unwrap();
+        assert_eq!(told.recv_timeout(WAIT), Ok(Heard::NoObserver));
+        assert_eq!(told.recv_timeout(WAIT), Err(std::sync::mpsc::RecvTimeoutError::Disconnected));
+    }
+
     #[test]
     fn the_permission_is_the_switch() {
         let door = X11Follow::new(":0".into(), FollowSwitch::new(false));
