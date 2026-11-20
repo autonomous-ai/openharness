@@ -145,14 +145,16 @@ say "board $HOST${OPTS:+ ($OPTS)}"
 if [ "$BUILD" = 1 ]; then
     say "copying the sources to $HOST:harness-max/src"
     $SSH "$HOST" mkdir -p harness-max/src/devices harness-max/src/cJSON
+    # By content, not by time (--checksum, no -t): a file copied takes the board's clock, so make rebuilds what
+    # changed even when the board built another tree after these edits were made (that build's objects are newer).
     (
         cd "$DEVICES"
-        rsync -aR --delete --exclude __pycache__ --exclude .DS_Store -e "$SSH" \
+        rsync -rlpR --checksum --delete --exclude __pycache__ --exclude .DS_Store -e "$SSH" \
             harness-max/firmware/sources.cmake harness-max/firmware/main harness-max/firmware/linux \
             harness-pro/firmware/main harness-pro/firmware/scripts/gen_fonts.py harness-pro/firmware/fonts \
             "$HOST:harness-max/src/devices/"
     )
-    rsync -a -e "$SSH" "$CJSON/cJSON.c" "$CJSON/cJSON.h" "$HOST:harness-max/src/cJSON/"
+    rsync -rlp --checksum -e "$SSH" "$CJSON/cJSON.c" "$CJSON/cJSON.h" "$HOST:harness-max/src/cJSON/"
 
     say "building on the board (about two minutes from clean) and running its host tests"
     board build
