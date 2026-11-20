@@ -1,9 +1,14 @@
 import { mkdirSync, mkdtempSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type { PtyHostDiscovery } from '../ptyHost/client.js'
+import { setProcessTableSource } from '../processTable.js'
 import { endPtyHosts, HOST_EXIT_WAIT_MS, PANE_GRACE_MS, ptyHostsDeps, type HostClient, type PtyHostsDeps } from './ptyHosts.js'
+
+// Never the machine's own harness-pty: a read that went around `processRows` is seen as a call here.
+const windowsRows = vi.hoisted(() => vi.fn(async () => null))
+vi.mock('../windows/processTable.js', async (importOriginal) => ({ ...await importOriginal<object>(), windowsProcessRows: windowsRows }))
 
 const discovery = (pid: number, protocol = 2, instance = `p${protocol}`): PtyHostDiscovery => ({ protocol, instance, endpoint: 'e', pid, version: '0.5.0', token: 't' })
 /** When the record was written, as it was read: after both rows' start markers below. */
@@ -253,6 +258,20 @@ describe('endPtyHosts, several instances', () => {
 })
 
 describe('ptyHostsDeps', () => {
+  it("on Windows, reads Windows' table through processRows, as every other caller does", async () => {
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
+    const installed = [winRow()]
+    Object.defineProperty(process, 'platform', { value: 'win32' })
+    setProcessTableSource(async () => installed)
+    try {
+      expect(await ptyHostsDeps(WIN_HOME).rows()).toBe(installed)
+      expect(windowsRows).not.toHaveBeenCalled()
+    } finally {
+      setProcessTableSource(null)
+      Object.defineProperty(process, 'platform', platform)
+    }
+  })
+
   it('lists every instance with its own record time, legacy and versioned', () => {
     const home = mkdtempSync(path.join(tmpdir(), 'pty-hosts-'))
     try {
