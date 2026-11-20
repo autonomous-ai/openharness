@@ -19,10 +19,10 @@ use {
 pub const PAYLOAD_MAX: usize = 16 * 1024 * 1024;
 
 const MAGIC: &[u8; 6] = b"i3-ipc";
-const SUBSCRIBE: u32 = 2;
-const GET_TREE: u32 = 4;
+pub(crate) const SUBSCRIBE: u32 = 2;
+pub(crate) const GET_TREE: u32 = 4;
 const WORKSPACE_EVENT: u32 = 0x8000_0000;
-const WINDOW_EVENT: u32 = 0x8000_0003;
+pub(crate) const WINDOW_EVENT: u32 = 0x8000_0003;
 
 /// The exe name of the process whose window is focused: once at start, then on each focus change.
 #[cfg(target_os = "linux")]
@@ -99,7 +99,7 @@ pub fn change(kind: u32, event: &[u8]) -> Option<Change> {
     }
 }
 
-fn pid(node: &Value) -> Option<u32> {
+pub(crate) fn pid(node: &Value) -> Option<u32> {
     node["pid"].as_u64().and_then(|pid| u32::try_from(pid).ok()).filter(|&pid| pid > 0)
 }
 
