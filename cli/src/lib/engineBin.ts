@@ -394,6 +394,27 @@ async function candidateNames(directory: string, wanted: Set<string>, wantedKey:
   return read
 }
 
+/** A folder's whole read, its probes by name included, has this long: a dead network share or a hung junction is then
+ *  skipped for the pass, never the end of it. A local folder reads in milliseconds, SMB in under half a second. */
+export const PATH_ENTRY_TIMEOUT_MS = 2_000
+/** Folders whose read has not settled. A pass skips one that is still being read, so a hung folder never holds more than
+ *  one of Node's filesystem threads. A pass reads at most the 1,024 folders a PATH may name. */
+const foldersReading = new Set<string>()
+
+function boundedCandidateNames(directory: string, wanted: Set<string>, wantedKey: string, probeNames: readonly string[]): Promise<FolderRead> {
+  const hung: FolderRead = { names: new Set(), skipped: 'TIMEOUT' }
+  if (foldersReading.has(directory)) return Promise.resolve(hung)
+  foldersReading.add(directory)
+  let timer!: ReturnType<typeof setTimeout>
+  const bound = new Promise<FolderRead>(done => { timer = setTimeout(() => done(hung), PATH_ENTRY_TIMEOUT_MS) })
+  // The read goes on past its bound; its answer is not used, and the next pass after it settles reads the folder again.
+  const read = candidateNames(directory, wanted, wantedKey, probeNames).finally(() => {
+    clearTimeout(timer)
+    foldersReading.delete(directory)
+  })
+  return Promise.race([read, bound])
+}
+
 let pathLine = '[engine] PATH: every folder read'
 /** Kinds only (a folder's name is personal), and only when the line changes: a pass runs every 5 s. */
 function reportPathFolders(unlisted: string[], skipped: string[]): void {
@@ -438,7 +459,7 @@ export function agentCommandOwnershipSnapshotAsync(): Promise<AgentCommandOwners
     const probeNames = [...new Map([...commands].filter(command => !looksLikePath(command))
       .concat(windowsCandidates.map(file => basename(file))).map(name => [name.toLowerCase(), name])).values()]
     const wanted = new Set(probeNames.map(name => name.toLowerCase()))
-    const wantedKey = [...wanted].sort().join('\0'), names = new Map<string, Set<string>>()
+    const wantedKey = [...wanted].sort().join('\0'), folderReads = new Map<string, FolderRead>()
     const folders = new Map<string, string>(), unlisted: string[] = [], skipped: string[] = []
     for (const entry of input.paths) {
       // A relative entry resolves against the working folder. When that is gone (the firmware flash's deleted worktree)
@@ -449,16 +470,18 @@ export function agentCommandOwnershipSnapshotAsync(): Promise<AgentCommandOwners
     let directoryIndex = 0
     await Promise.all(Array.from({ length: Math.min(8, directories.length) }, async () => {
       while (!expired && directoryIndex < directories.length) {
-        const directory = directories[directoryIndex++], read = await candidateNames(directory, wanted, wantedKey, probeNames)
-        names.set(directory, read.names)
+        const directory = directories[directoryIndex++], read = await boundedCandidateNames(directory, wanted, wantedKey, probeNames)
+        folderReads.set(directory, read)
         if (read.skipped) skipped.push(read.skipped)
         else if (read.unlisted) unlisted.push(read.unlisted)
       }
     }))
     if (expired) throw engineFailure('ENGINE_LOOKUP_TIMEOUT')
     const visible = (folder: string, command: string) => {
-      const known = names.get(folder)
-      return !known || /[^\x00-\x7f]/.test(command) || known.has(command.toLowerCase())
+      const read = folderReads.get(folder)
+      // A skipped folder gives no candidate file, not even one the listing cannot rule out: in a folder that hung, its
+      // read would hold the pass in turn.
+      return !read || (!read.skipped && (/[^\x00-\x7f]/.test(command) || read.names.has(command.toLowerCase())))
     }
     // A Windows launch candidate in a relative folder that no longer resolves has nothing to find.
     const windowsVisible = (file: string) => { try { return visible(resolve(dirname(file)), basename(file)) } catch { return false } }
