@@ -335,10 +335,11 @@ mod tests {
         assert_eq!(told.load(std::sync::atomic::Ordering::SeqCst), 1);
     }
 
-    /// Under Xvfb, with no window manager: the test sets the root's `_NET_ACTIVE_WINDOW` itself.
+    /// Under Xvfb, with no window manager: the test sets the root's `_NET_ACTIVE_WINDOW` itself. Its name holds no
+    /// `x11_live`: PR CI's `--ignored x11_live` filter is front_x11's test alone.
     #[test]
     #[ignore = "needs an X server on DISPLAY"]
-    fn follow_x11_live() {
+    fn follow_x11_xvfb() {
         use x11rb::protocol::xproto::{CreateWindowAux, PropMode, WindowClass};
         use x11rb::wrapper::ConnectionExt as _;
 
