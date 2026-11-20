@@ -1007,7 +1007,7 @@ jobs:
         with:
           name: device-app-${{ matrix.bundle }}-${{ matrix.arch }}
           path: device-app/src-tauri/target/debug/bundle/${{ matrix.bundle }}/${{ matrix.bundle == 'nsis' && '*-setup.exe' || '*.AppImage' }}
-          retention-days: 1
+          retention-days: 3
           if-no-files-found: error
 
   # linux.sh: the AppImage against the fake CLI, X11, sway and the app's own install lines, for any device-app/ change.

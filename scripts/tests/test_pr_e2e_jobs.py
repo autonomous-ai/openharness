@@ -95,7 +95,7 @@ class DeviceAppE2ETests(unittest.TestCase):
                      "uses: ./.github/actions/device-app-setup\n",
                      "cargo tauri build --ci --debug --bundles \"$BUNDLE\" -- --locked\n",
                      "name: device-app-${{ matrix.bundle }}-${{ matrix.arch }}\n",
-                     "retention-days: 1\n"):
+                     "retention-days: 3\n"):
             self.assertIn(text, build)
         downloads = {
             "device-app-linux": "device-app-appimage-${{ matrix.arch }}",
