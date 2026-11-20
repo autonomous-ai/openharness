@@ -212,19 +212,21 @@ The one change that stores data. Items 1-6 store, sync and expose nothing new (t
    never sent.
 4. **Scale.** One short string per starting OpenClaw agent; ten times the agents is ten more strings in the registry
    file for under 3 minutes each.
-5. **Compatibility.** Readers: `registry.ts` (row reader keeps unknown fields as `...rest`), `bind.ts`,
-   `agentFrame.ts`, `sessionInput.ts` (all changed here). An older daemon keeps the field, ignores it and writes it
-   back; it reads that agent as today's known limit. No frame or protocol change.
-6. **Migration and rollback.** None; no `schemaVersion` bump (a bump would refuse older writers). After a rollback and
-   a roll forward, a field the older daemon left is settled by the store on the first pass: removed when the task was
-   taken (a user row after `at`), failed visibly at the bound when it was not, so a long-done agent never reads
-   `starting` for long. No production data involved (a local file on each computer).
+5. **Compatibility.** Readers: `registry.ts` (both row readers, `strictPersistedRow` and `load()`, through one
+   helper), `bind.ts`, `agentFrame.ts`, `sessionInput.ts` (all changed here). An older daemon rebuilds each row field
+   by field as it loads, so it drops the field: it reads that agent as today's known limit, and never pastes the task
+   twice, since `firstTask` is already gone. No frame or protocol change.
+6. **Migration and rollback.** None; no `schemaVersion` bump (a bump would refuse older writers). A rollback drops the
+   field on load (line 5), so a roll forward finds none to settle; a field a newer daemon wrote and an older one did
+   not load again is settled by the store on the first pass: removed when the task was taken (a user row after `at`),
+   failed visibly at the bound when it was not, so a long-done agent never reads `starting` for long. No production
+   data involved (a local file on each computer).
 7. **Audience, and where it is kept.** The text is the prompt the launch carried, already kept on the same row
    (`firstTask`) until it is typed; this keeps it until it is confirmed, at most the bound plus the time held. It
    lives in the registry file alone, which the registry's own writer writes whole (a temporary file made `O_EXCL`,
    mode 0600, then renamed: the whole-file rule #4489 set for state files), in the owner-only (0700) data folder; no
    new file. Never on the frame, never sent, never logged (log lines say "first task typed", no text). Removed once
-   confirmed, failed, or the agent is closed or forgotten. An older daemon ignores the field. A hash and length are
+   confirmed, failed, or the agent is closed or forgotten. An older daemon drops the field (line 5). A hash and length are
    not enough: after a restart the text is needed to tell the task from the person's text in a box shown in part (a
    tall box scrolls, decision 1 and #4499), and to paste it once more after a clear (27c); confirmation itself uses
    none of it (a user row after `at`).
