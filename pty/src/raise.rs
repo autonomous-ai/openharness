@@ -53,7 +53,7 @@ mod windows {
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         EnumWindows, GW_OWNER, GWL_EXSTYLE, GetClassNameW, GetForegroundWindow, GetWindow,
         GetWindowLongW, GetWindowThreadProcessId, IsIconic, IsWindowVisible, SW_RESTORE,
-        SW_SHOWNORMAL, SetForegroundWindow, ShowWindow, WS_EX_TOOLWINDOW,
+        SW_SHOWNORMAL, SetForegroundWindow, ShowWindowAsync, WS_EX_TOOLWINDOW,
     };
 
     use super::{Candidate, pick, scheme};
@@ -71,7 +71,8 @@ mod windows {
         let window = windows[picked];
         unsafe {
             if IsIconic(window) != 0 {
-                ShowWindow(window, SW_RESTORE);
+                // Posted: a hung window would hold a sent restore for seconds.
+                ShowWindowAsync(window, SW_RESTORE);
             }
             SetForegroundWindow(window);
             if GetForegroundWindow() == window {
