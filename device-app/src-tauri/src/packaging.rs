@@ -67,70 +67,90 @@ fn every_windows_build_is_a_gui_program() {
     assert_eq!(file("src/main.rs").lines().next(), Some(r#"#![cfg_attr(windows, windows_subsystem = "windows")]"#));
 }
 
-// `icon.png` scaled to `size` by averaging each pixel's block, as `[r, g, b, a]` with the colour premultiplied by alpha,
-// so a transparent pixel's colour counts for nothing.
-fn scaled_icon(size: usize) -> Vec<[f64; 4]> {
-    let icon = tauri::image::Image::from_bytes(&bytes("icons/icon.png")).unwrap();
-    let (side, rgba) = (icon.width() as usize, icon.rgba());
-    let span = |i: usize| i * side / size..(i + 1) * side / size;
-    let mut out = Vec::with_capacity(size * size);
-    for y in 0..size {
-        for x in 0..size {
-            let (mut sum, mut n) = ([0.0; 4], 0.0);
-            for sy in span(y) {
-                for sx in span(x) {
-                    sum = add(sum, premultiplied(&rgba[(sy * side + sx) * 4..][..4]));
-                    n += 1.0;
-                }
-            }
-            out.push(sum.map(|s| s / n));
+// An icns is an 8-byte header, then chunks of a 4-byte type, a 4-byte big-endian length (header included) and the
+// image. This returns the drawing of `kind` as `(side, rgba)`.
+fn icns_drawing(kind: &str) -> (usize, Vec<u8>) {
+    let icns = bytes("icons/icon.icns");
+    let mut at = 8;
+    while at < icns.len() {
+        let len = u32::from_be_bytes(icns[at + 4..at + 8].try_into().unwrap()) as usize;
+        if &icns[at..at + 4] == kind.as_bytes() {
+            return decode(kind, &icns[at + 8..at + len]);
+        }
+        at += len;
+    }
+    panic!("icons/icon.icns has no {kind}");
+}
+
+// ic04 (16 px) and ic05 (32 px) are "ARGB" then each channel's plane run-length encoded: a byte below 0x80 copies the
+// next byte + 1 bytes, any other repeats the next byte (byte - 0x80 + 3) times. The colour is straight, not
+// premultiplied (`iconutil -c iconset` divides it by alpha anyway, so its 16 and 32 px edges come out pale). The
+// larger sizes are PNG.
+fn decode(kind: &str, body: &[u8]) -> (usize, Vec<u8>) {
+    let Some(planes) = body.strip_prefix(b"ARGB") else {
+        let image = tauri::image::Image::from_bytes(body).unwrap_or_else(|e| panic!("{kind}: {e}"));
+        return (image.width() as usize, image.rgba().to_vec());
+    };
+    let (mut argb, mut at) = (Vec::new(), 0);
+    while at < planes.len() {
+        let run = planes[at] as usize;
+        if run < 0x80 {
+            argb.extend_from_slice(&planes[at + 1..at + 2 + run]);
+            at += 2 + run;
+        } else {
+            argb.extend(std::iter::repeat_n(planes[at + 1], run - 0x80 + 3));
+            at += 2;
         }
     }
-    out
+    let n = argb.len() / 4;
+    let rgba = (0..n).flat_map(|i| [argb[n + i], argb[2 * n + i], argb[3 * n + i], argb[i]]).collect();
+    (n.isqrt(), rgba)
 }
 
-fn premultiplied(pixel: &[u8]) -> [f64; 4] {
-    let a = pixel[3] as f64;
-    [pixel[0] as f64 * a / 255.0, pixel[1] as f64 * a / 255.0, pixel[2] as f64 * a / 255.0, a]
+// `drawing` resized to `size` by nearest neighbour (each pixel takes the source pixel under its centre), which keeps
+// pixel art's hard edges; at the drawing's own size it is the drawing.
+fn nearest((side, rgba): &(usize, Vec<u8>), size: usize) -> Vec<u8> {
+    let source = |i: usize| (2 * i + 1) * side / (2 * size);
+    (0..size * size).flat_map(|i| rgba[(source(i / size) * side + source(i % size)) * 4..][..4].to_vec()).collect()
 }
 
-fn add(a: [f64; 4], b: [f64; 4]) -> [f64; 4] {
-    [a[0] + b[0], a[1] + b[1], a[2] + b[2], a[3] + b[3]]
-}
-
-// `cargo tauri icon` resamples with a sharper filter than a block average, so the two never match exactly; the mean
-// per-channel difference stays small (at most 2.9 of 255 for the Pixel H's sizes), and another picture's is far larger
-// (35 to 40 for the logo before it).
-fn assert_scaled_icon(what: &str, png: &[u8], size: usize) {
-    let image = tauri::image::Image::from_bytes(png).unwrap_or_else(|e| panic!("{what}: {e}"));
-    assert_eq!((image.width() as usize, image.height() as usize), (size, size), "{what}");
-    let total: f64 = (image.rgba().chunks(4).zip(scaled_icon(size)))
-        .map(|(pixel, want)| premultiplied(pixel).iter().zip(want).map(|(got, want)| (got - want).abs()).sum::<f64>())
-        .sum();
-    let mean = total / (size * size * 4) as f64;
-    assert!(mean < 8.0, "{what} is not icons/icon.png scaled (mean difference {mean:.2}): run `cargo tauri icon`");
-}
-
-/// The Windows and Linux icons are made from `icons/icon.png` by `cargo tauri icon icons/icon.png` (tauri-cli 2.12.4).
-/// Pixels are compared, not pinned hashes: a hash pins today's files, so a new `icon.png` with its sizes regenerated
-/// would fail it too, and one whose hash is updated by hand would pass with stale sizes. Pixels fail exactly when a
-/// size is not `icon.png`.
+/// The Windows and Linux icons are the drawings macOS shows, from `icons/icon.icns`, size for size: its small sizes are
+/// drawn per size, not `icon.png` scaled. A size the icns has no drawing for takes the nearest one that keeps the Pixel
+/// H legible, by nearest neighbour: 24 px is the 16 px solid H (the 32 px dots merge into stripes at 24), and 48 px the
+/// 64 px drawing (the larger ones' dots merge into stripes at 48).
+/// Regenerate: write each size as `nearest(icns_drawing(kind), size)` to its PNG, and the ICO's sizes as PNG entries.
 #[test]
-fn the_windows_and_linux_icons_are_icon_png_scaled() {
-    for (name, size) in [("icons/32x32.png", 32), ("icons/128x128.png", 128), ("icons/128x128@2x.png", 256)] {
-        assert_scaled_icon(name, &bytes(name), size);
+fn the_windows_and_linux_icons_are_the_macos_drawings() {
+    for (name, size, kind) in
+        [("icons/32x32.png", 32, "ic05"), ("icons/128x128.png", 128, "ic07"), ("icons/128x128@2x.png", 256, "ic08")]
+    {
+        assert_drawing(name, &bytes(name), size, kind);
     }
     // An ICO is a 6-byte header with the image count at 4, a 16-byte entry per image (width at 0, where 0 means 256;
-    // length at 8; offset at 12), then the images, each a PNG as `cargo tauri icon` writes them.
+    // length at 8; offset at 12), then the images, each a PNG.
     let ico = bytes("icons/icon.ico");
     let u32_at = |i: usize| u32::from_le_bytes(ico[i..i + 4].try_into().unwrap()) as usize;
     let count = u16::from_le_bytes([ico[4], ico[5]]) as usize;
     let mut sizes = Vec::new();
     for entry in (0..count).map(|i| 6 + 16 * i) {
         let size = if ico[entry] == 0 { 256 } else { ico[entry] as usize };
+        let kind = match size {
+            16 | 24 => "ic04",
+            32 => "ic05",
+            48 | 64 => "ic12",
+            _ => "ic08",
+        };
         let (len, at) = (u32_at(entry + 8), u32_at(entry + 12));
-        assert_scaled_icon(&format!("icons/icon.ico {size}x{size}"), &ico[at..at + len], size);
+        assert_drawing(&format!("icons/icon.ico {size}x{size}"), &ico[at..at + len], size, kind);
         sizes.push(size);
     }
     assert_eq!(sizes, [16, 24, 32, 48, 64, 256]);
+}
+
+fn assert_drawing(what: &str, png: &[u8], size: usize, kind: &str) {
+    let image = tauri::image::Image::from_bytes(png).unwrap_or_else(|e| panic!("{what}: {e}"));
+    assert_eq!((image.width() as usize, image.height() as usize), (size, size), "{what}");
+    let want = nearest(&icns_drawing(kind), size);
+    let differ = image.rgba().chunks(4).zip(want.chunks(4)).filter(|(got, want)| got != want).count();
+    assert_eq!(differ, 0, "{what}: pixels that are not icons/icon.icns's {kind} drawing at {size} px");
 }
