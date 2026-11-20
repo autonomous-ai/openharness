@@ -197,7 +197,7 @@ type HookInstallEngine = keyof typeof HOOK_INSTALL_MESSAGES
  * of them, `{…}` standing for anything. Any outcome counts, a failed write or a malformed file too: the install is
  * over, and what came of it is the test's to judge.
  */
-const installOutcome = (engine: HookInstallEngine): RegExp => new RegExp(Object.entries(HOOK_INSTALL_MESSAGES[engine])
+export const installOutcome = (engine: HookInstallEngine): RegExp => new RegExp(Object.entries(HOOK_INSTALL_MESSAGES[engine])
   .filter(([key]) => key !== 'after').flatMap(([, said]) => [said ?? []].flat())
   .map((template) => template.split(/\{\w+\}/).map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('.*'))
   .join('|'))
