@@ -144,7 +144,8 @@ same 100 ms gap as `front` and `tab`. An empty title is passed (it clears a wait
 - **Echo** (as `tab · skipped · echo`): the dial moved since the report came (`report.moves !== dialMoves`) → `echo`.
   And a `codexSwitches = dialMovesTo()` list, noted with the thread id in `codexNoted.show` and `focus` (a rest or a tap
   opens `codex://threads/<id>`, and the app then shows that thread's title): a match that is the dial's own switch of
-  the last 2 s is consumed as `echo`. And the settle rule of the Claude app and Orca (`ATTACH_ECHO_MS`): a report
+  the last 2 s is consumed as `echo`, and while that switch is unseen, a match naming another thread is `echo` too (the
+  window's old title read late, after the settle). And the settle rule of the Claude app and Orca (`ATTACH_ECHO_MS`): a report
   followed at the settle within 2 s of `dialMovedAt` is `echo` (a tap brings ChatGPT forward, and the observer's first
   read can still be the old thread's title).
 - **Move:** `cable.followLocal(observedAgentId('codex', threadId), 'thread')`, a new `FollowCause` with its row in
