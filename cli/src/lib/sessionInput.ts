@@ -226,6 +226,8 @@ interface InputState {
   paneWait: boolean
   /** That message is being written while its pane is read again: it is typed if the pane can send it. */
   pasting: boolean
+  /** The writer passed its read-only preflight and may now put bytes in the box. */
+  pasteStarted: boolean
   /** The message awaiting confirmation is a first task an earlier daemon typed ([adoptTypedFirstTask]): this one never
    *  pasted it, and the box may hold the person's draft, so it gets an Enter only on a box read to hold it. */
   adopted: boolean
@@ -273,9 +275,9 @@ export interface SessionInputDeps {
   getSession: (sessionId: string) => RegisteredSession | undefined
   validateRuntime: (session: RegisteredSession) => Promise<boolean>
   /** Boolean is retained for direct controller tests and legacy embedders. Production returns dispatch evidence. */
-  inject: (terminalTarget: string, content: string, current?: () => boolean) => Promise<boolean | TerminalActionResult>
+  inject: (terminalTarget: string, content: string, current?: () => boolean, onPaste?: () => void) => Promise<boolean | TerminalActionResult>
   /** Host serializes the preflight and paste with other terminal writers. */
-  injectTeam?: (terminalTarget: string, content: string, deliveryId: string, current?: () => boolean) => Promise<boolean | TerminalActionResult>
+  injectTeam?: (terminalTarget: string, content: string, deliveryId: string, current?: () => boolean, onPaste?: () => void) => Promise<boolean | TerminalActionResult>
   /** An engine command into an empty composer, under the same authority as a message. */
   injectCommand?: (terminalTarget: string, line: string, current?: () => boolean) => Promise<boolean | TerminalActionResult>
   sendKey: (terminalTarget: string, key: string, current?: () => boolean) => Promise<boolean | TerminalActionResult>
@@ -716,6 +718,7 @@ export class SessionInputController {
         firstTask: null,
         paneWait: false,
         pasting: false,
+        pasteStarted: false,
         adopted: false,
         cleared: false,
         clearing: false,
@@ -1519,15 +1522,17 @@ export class SessionInputController {
         if (requeued || waitsForFirstTask(state, first)) return Promise.resolve(terminalActionNotStarted(GAVE_WAY))
         if (state.clearing || state.controlLocked && !release) return Promise.resolve(terminalActionNotStarted(TERMINAL_LEASE_REFUSED))
         if (!current()) return Promise.resolve(terminalActionNotStarted('caller_gone'))
+        state.pasteStarted = false
         operation.writing = true
         operation.dispatched = true
         operation.session = { ...this.readingSession(typed) }
         operation.duringTurn = state.turnOpen
         if (deliveryId) state.writing = true
         this.progress(sessionId, operation, 'dispatching', content)
+        const onPaste = () => { state.pasteStarted = true }
         return deliveryId?.startsWith('team:') && this.deps.injectTeam
-          ? this.deps.injectTeam(session.agentId, content, deliveryId, current)
-          : this.deps.inject(session.agentId, content, current)
+          ? this.deps.injectTeam(session.agentId, content, deliveryId, current, onPaste)
+          : this.deps.inject(session.agentId, content, current, onPaste)
       }) as Promise<boolean | TerminalActionResult>, current, refreshPending, () => this.deps.moveGate?.refused(session.agentId) === true, firstPaste)
       operation.writing = false
       if (deliveryId) state.writing = false
@@ -1610,6 +1615,7 @@ export class SessionInputController {
       else this.deps.onError(sessionId, 'The message delivery could not be confirmed. Check the agent before trying again.')
     } finally {
       operation.writing = false
+      state.pasteStarted = false
       if (deliveryId && state.operation === operation) {
         state.writing = false
         state.dispatching = false
@@ -2031,7 +2037,7 @@ export class SessionInputController {
   ownsBox(id: string, box: string | null, hidden: OpenclawBoxHidden, pane?: OpenclawScreen['state']): boolean {
     const state = this.states.get(id)
     if (!state) return false
-    if (state.controlLocked || state.clearing || (state.writes !== undefined && !waitingUntyped(state))) return true
+    if (state.controlLocked || state.clearing || (state.writes !== undefined && (!state.paneWait || state.pasteStarted))) return true
     if (state.awaitingContent === null) return false
     return pane === 'ready' ? openclawBoxHolds(box, state.awaitingContent, hidden) : openclawBoxExactly(box, hidden, state.awaitingContent)
   }

@@ -91,7 +91,7 @@ export interface InputDeps {
  * it so.
  */
 export function messageWriter({ readScreen, resolve, terminal: { captureTerminal, validateTerminal, submitTerminalAction }, promptTyped }: Pick<InputDeps, 'resolve' | 'terminal' | 'promptTyped' | 'readScreen'>) {
-  return async (id: string, text: string, hold?: (session: RegisteredSession, screen: ScreenReading | null, capture: string | null) => string | null, current: () => boolean = () => true): Promise<TerminalActionResult> => {
+  return async (id: string, text: string, hold?: (session: RegisteredSession, screen: ScreenReading | null, capture: string | null) => string | null, current: () => boolean = () => true, onPaste?: () => void): Promise<TerminalActionResult> => {
     if (!current()) return terminalActionNotStarted('caller_gone')
     const session = resolve(id)
     if (!session) return terminalActionNotStarted('terminal agent is unavailable')
@@ -110,6 +110,7 @@ export function messageWriter({ readScreen, resolve, terminal: { captureTerminal
     const reason = hold?.(session, screen, capture) ?? screen.messageHold
     if (reason) return terminalActionNotStarted(reason)
     promptTyped?.(session, capture, screen)
+    onPaste?.()
     return submitTerminalAction(id, text, {
       allowed: current,
       beforeEnter: async () => {
@@ -217,13 +218,13 @@ export function sessionInputDeps(
     beforeTeamWrite: async (session) => (await readTeamHold(deps, session)).hold,
     validateRuntime: validateTerminal,
     // Both messages and engine commands use the shared writer and retain the caller's authority.
-    inject: (id, text, current) => writeMessage(id, text, openclawHold, current),
+    inject: (id, text, current, onPaste) => writeMessage(id, text, openclawHold, current, onPaste),
     injectCommand: (id, line, current) => writeMessage(id, line, commandHold, current),
     // An Agent Messages turn waits for a ready composer, and for its mailbox to still want it written.
-    injectTeam: async (id, text, deliveryId, current) => {
+    injectTeam: async (id, text, deliveryId, current, onPaste) => {
       if (!resolve(id)) return terminalActionNotStarted('team_waiting_unavailable')
       return writeMessage(id, text, (_session, screen) => paneHold(screen)
-        ?? (deliveries.canWrite(deliveryId) ? null : 'team_waiting_control'), current)
+        ?? (deliveries.canWrite(deliveryId) ? null : 'team_waiting_control'), current, onPaste)
     },
     sendKey: keyTerminalAction,
     capture: captureTerminal,

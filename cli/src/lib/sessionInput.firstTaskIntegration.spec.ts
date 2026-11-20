@@ -23,7 +23,7 @@ function screen(kind: 'ready' | 'refused', box = 'First') {
 }
 function setup(over: Partial<SessionInputDeps> = {}) {
   const keys: string[] = []
-  const inject = vi.fn(async (_id: string, _text: string, _current?: () => boolean): Promise<boolean | TerminalActionResult> => true)
+  const inject = vi.fn(async (_id: string, _text: string, _current?: () => boolean, _onPaste?: () => void): Promise<boolean | TerminalActionResult> => true)
   const sendKey = vi.fn(async (_id: string, key: string, current?: () => boolean) => {
     if (current?.() === false) return false
     keys.push(key); return true
@@ -479,7 +479,10 @@ it.each(['native validation', 'capture', 'screen reading'] as const)('the real m
   const wait = async (at: typeof boundary) => {
     if (pause && at === boundary) { pause = false; await new Promise<void>(resolve => { finish = resolve }) }
   }
-  const submitTerminalAction = vi.fn(async (): Promise<TerminalActionResult> => ({ state: 'succeeded', dispatch: 'executed' }))
+  const submitTerminalAction = vi.fn(async (): Promise<TerminalActionResult> => {
+    expect(t.controller.ownsBox('s', 'partially drawn paste', { above: 0, below: 0 }, 'ready')).toBe(true)
+    return { state: 'succeeded', dispatch: 'executed' }
+  })
   const writer = messageWriter({ resolve: () => session,
     readScreen: async (session, capture) => { await wait('screen reading'); return readInlineScreen(session, capture) },
     terminal: {
@@ -491,14 +494,16 @@ it.each(['native validation', 'capture', 'screen reading'] as const)('the real m
     },
   })
   const receipt = vi.fn(), t = setup({ getSession: () => session })
-  t.inject.mockImplementation((id, text, current) => writer(id, text,
-    (_session, reading) => reading?.pane.idle ? null : 'openclaw_not_ready', current))
+  t.inject.mockImplementation((id, text, current, onPaste) => writer(id, text,
+    (_session, reading) => reading?.pane.idle ? null : 'openclaw_not_ready', current, onPaste))
   t.controller.submit('s', 'Later', undefined, receipt)
   await vi.advanceTimersByTimeAsync(0)
   expect(t.controller.waitsForPane('s')).toBe(true)
   ready = true; pause = true
   await vi.advanceTimersByTimeAsync(1_000)
   expect(finish).toBeTypeOf('function')
+  // Validation owns no text: otherwise a discovery pass at each retry hides the person's draft forever.
+  expect(t.controller.ownsBox('s', 'a draft the person is still writing', { above: 0, below: 0 }, 'ready')).toBe(false)
   session = { ...session, evidenceRevision: 2 }
   finish()
   await vi.advanceTimersByTimeAsync(1_000)
@@ -527,4 +532,23 @@ it('keeps a renewed pane retry pending while recovery owns control', async () =>
   expect(t.inject).toHaveBeenCalledTimes(3)
   t.controller.onTurnStarted('s', 'Later')
   expect(receipt).toHaveBeenCalledExactlyOnceWith('started')
+})
+
+it('keeps paste ownership through settlement until confirmation owns the box', async () => {
+  let finish!: (result: boolean) => void
+  const t = setup()
+  t.inject.mockResolvedValueOnce(notReady).mockImplementationOnce(async (_id, _text, _current, onPaste) => {
+    onPaste?.()
+    return new Promise<boolean>(resolve => { finish = resolve })
+  })
+  t.controller.submit('s', 'Later')
+  await vi.advanceTimersByTimeAsync(1_000)
+  expect(t.controller.ownsBox('s', 'La', { above: 0, below: 0 }, 'ready')).toBe(true)
+  finish(true)
+  for (let turn = 0; turn < 24; turn++) {
+    await Promise.resolve()
+    if (t.controller.awaitingConfirmation('s')) break
+    expect(t.controller.ownsBox('s', 'La', { above: 0, below: 0 }, 'ready')).toBe(true)
+  }
+  expect(t.controller.awaitingConfirmation('s')).toBe(true)
 })

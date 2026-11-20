@@ -1131,7 +1131,7 @@ describe('SessionInputController', () => {
       expect(inject).not.toHaveBeenCalled()
       withdraw?.()
       await vi.advanceTimersByTimeAsync(0)
-      expect(inject).toHaveBeenCalledWith('h1', 'Later', expect.any(Function))
+      expect(inject).toHaveBeenCalledWith('h1', 'Later', expect.any(Function), expect.any(Function))
       controller.forget('s1')
     })
 
@@ -1304,7 +1304,7 @@ describe('SessionInputController', () => {
       expect(await controller.typeCommand('s1', command)).toBe(false)
       controller.onTurnEnded('s1')
       expect(await controller.typeCommand('s1', command)).toBe(true)
-      expect(inject.mock.calls).toEqual([['h1', 'Say hello', expect.any(Function)]])
+      expect(inject.mock.calls).toEqual([['h1', 'Say hello', expect.any(Function), expect.any(Function)]])
       expect(injectCommand.mock.calls).toEqual([['h1', command, expect.any(Function)]])
       controller.forget('s1')
     })
@@ -1550,7 +1550,7 @@ describe('SessionInputController', () => {
       // message waiting here, untyped, awaits no confirmation: nothing let its pane send it.
       // Found in review: read again each second, the wait read false while the pane was read, and the binding pass, which
       // reads it once a pass, let go of its hold on the person's text and set it again a pass later.
-      it('says it waits for its pane through each read of it, and owns the box only while one could type into it', async () => {
+      it('says it waits for its pane through each retry reading, without owning the text those readings observe', async () => {
         vi.useFakeTimers()
         const { controller, inject } = waitingPane()
         const write = inject.getMockImplementation()!
@@ -1562,7 +1562,7 @@ describe('SessionInputController', () => {
 
         controller.submit('s1', 'Say hello')
         await vi.advanceTimersByTimeAsync(3_500)
-        expect(during).toEqual([[false, true], [true, true], [true, true], [true, true]])
+        expect(during).toEqual([[false, true], [true, false], [true, false], [true, false]])
         expect(controller.ownsBox('s1', 'my own words', { above: 0, below: 0 })).toBe(false)
         controller.forget('s1')
       })
@@ -3469,7 +3469,7 @@ describe('optional lamp delivery preserves legacy behavior', () => {
       expect(inject).not.toHaveBeenCalled()
       controller.onTurnEnded('s1')
       await vi.advanceTimersByTimeAsync(1)
-      expect(inject).toHaveBeenCalledWith('h1', 'after the replacement turn', expect.any(Function))
+      expect(inject).toHaveBeenCalledWith('h1', 'after the replacement turn', expect.any(Function), expect.any(Function))
       controller.forget('s1')
     })
 
