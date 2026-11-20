@@ -102,7 +102,16 @@ function tableProof(alive = true) {
 /** Over the pipe, never the port: plain fetch is never the daemon's way on Windows. */
 const never = (async () => { throw new Error('plain fetch was called') }) as unknown as typeof fetch
 
-/** The follower with its lines and waits recorded; the write of line [stopAt] fails, as one to a closed stdout does. */
+/** A clock [stepMs] later at each read. */
+function stepping(stepMs: number): () => number {
+  let at = 0
+  return () => (at += stepMs)
+}
+
+/**
+ * The follower with its lines and waits recorded; the write of line [stopAt] fails, as one to a closed stdout does. Its
+ * clock moves a second at each read unless a test gives one: every poll was held, as a daemon with a dial holds it.
+ */
 async function follow(dir: string, options: Partial<InboxDeps> & { id?: string; stopAt?: number } = {}) {
   const lines: string[] = []
   const waits: number[] = []
@@ -115,6 +124,7 @@ async function follow(dir: string, options: Partial<InboxDeps> & { id?: string; 
     },
     wait: async (ms) => { waits.push(ms) },
     parentAlive: () => true,
+    now: stepping(1_000),
     ...deps,
   })
   return { code, lines, waits }
@@ -162,6 +172,18 @@ describe('the inbox follower on Windows', () => {
     expect(await follow(gone.dir, { proof, stopAt: 1 })).toEqual({ code: 0, lines: ['{}'], waits: [60_000] })
     expect(gone.count.connections).toBe(0)
     expect(counts.rows).toBe(0)
+  })
+
+  // As the Mac mod does: a 200 with no text that was not held would have it poll again at once, and spin.
+  it('a 200 with no text back under a second waits a minute before it prints {}', async () => {
+    const { dir, seen } = await windowsDaemon([{ status: 200, body: {} }, { status: 200, body: { text: 5 } }])
+    expect(await follow(dir, { now: stepping(999) })).toEqual({ code: 0, lines: ['{}', '{}', OFF], waits: [60_000, 60_000] })
+    expect(seen).toHaveLength(3)
+  })
+
+  it('a text back under a second is printed with no wait, and the next poll goes at once', async () => {
+    const { dir } = await windowsDaemon([{ status: 200, body: { text: 'hi' } }])
+    expect(await follow(dir, { now: () => 0 })).toEqual({ code: 0, lines: ['{"text":"hi"}', OFF], waits: [] })
   })
 
   it('a 503 NO_DEVICE waits a minute, prints {} and polls again', async () => {
