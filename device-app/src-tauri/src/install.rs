@@ -285,8 +285,8 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
-    /// A shell that answers each run from a list, in turn, and writes the line it was given, with its deadline, in
-    /// `journal`.
+    /// A shell that answers each run from a list, in turn, and writes the line it was given, with its deadline and, for
+    /// one in a terminal, its place, in `journal`.
     struct Answers {
         answers: Mutex<VecDeque<io::Result<Output>>>,
         journal: Arc<Mutex<Vec<String>>>,
@@ -295,7 +295,8 @@ mod tests {
     impl Shell for Answers {
         /// Hands the sink each line of the answer's stdout, then of its stderr, as a run hands them before it ends.
         fn run(&self, run: &Run, deadline: Duration, sink: &mut dyn FnMut(&str)) -> io::Result<Output> {
-            self.journal.lock().unwrap().push(format!("{} ({} s)", run.line, deadline.as_secs()));
+            let place = if run.place == Place::Terminal { ", in a terminal" } else { "" };
+            self.journal.lock().unwrap().push(format!("{} ({} s{place})", run.line, deadline.as_secs()));
             let answer = self.answers.lock().unwrap().pop_front().expect("an answer for each run");
             if let Ok(output) = &answer {
                 output.stdout.lines().chain(output.stderr.lines()).for_each(&mut *sink);
@@ -337,6 +338,10 @@ mod tests {
 
     fn within_ten_minutes(line: &str) -> String {
         format!("{line} (600 s)")
+    }
+
+    fn in_a_terminal(line: &str) -> String {
+        format!("{line} (600 s, in a terminal)")
     }
 
     fn texts(lines: &[&str]) -> Vec<String> {
@@ -637,7 +642,7 @@ mod tests {
             *journal.lock().unwrap(),
             [
                 FINISH_IN_TERMINAL.to_string(),
-                within_ten_minutes(HOST),
+                in_a_terminal(HOST),
                 GETTING_READY.to_string(),
                 within_ten_minutes(DESKTOP),
                 DOWNLOADING_HARNESS.to_string(),
@@ -650,17 +655,52 @@ mod tests {
         // 129: the terminal was closed before the line ended.
         let ran = install_on("linux", vec![ended(129, "", "")], true);
         assert_eq!(ran.result, Err(texts(&[NOT_INSTALLED])));
-        assert_eq!(ran.journal, [within_ten_minutes(HOST)]);
+        assert_eq!(ran.journal, [in_a_terminal(HOST)]);
         assert_eq!(ran.log, ["install: --host exit 129"]);
         assert_eq!(ran.steps, [FINISH_IN_TERMINAL]);
     }
 
     #[test]
-    fn no_terminal_is_what_the_screen_shows() {
-        let no_terminal = io::Error::new(io::ErrorKind::NotFound, "No terminal found.");
-        let ran = install_on("linux", vec![Err(no_terminal)], true);
-        assert_eq!(ran.result, Err(texts(&["No terminal found."])));
-        assert_eq!(ran.log, ["install: --host could not start: No terminal found."]);
+    fn with_no_terminal_the_host_half_runs_behind_the_screen() {
+        let no_terminal = || Err(io::Error::new(io::ErrorKind::NotFound, "No terminal found."));
+        let host = "▸ Installing required Linux packages (you may be asked for your password): tmux\n\
+                    ✓ tmux ready (tmux 3.4)\n";
+        let ran = install_on("linux", vec![no_terminal(), ended(0, host, ""), ended(0, "", "")], true);
+        assert_eq!(ran.result, Ok(()));
+        assert_eq!(
+            ran.journal,
+            [in_a_terminal(HOST), within_ten_minutes(HOST), within_ten_minutes(DESKTOP), "cli?".to_string()]
+        );
+        // Not in a terminal: the screen is back to its own step.
+        assert_eq!(ran.steps, [FINISH_IN_TERMINAL, GETTING_READY]);
+        assert_eq!(
+            ran.log,
+            [
+                "install: --host no terminal; run here",
+                "install: ▸ Installing required Linux packages (you may be asked for your password): tmux",
+                "install: ✓ tmux ready (tmux 3.4)",
+                "install: --host exit 0",
+                "install: --desktop exit 0",
+            ]
+        );
+
+        // A host half that needs a password: with no terminal sudo cannot ask, and install.sh's own lines say what
+        // to run (its lines on Debian 12, with sudo 1.9.13 and no tty).
+        let sudo = "sudo: a terminal is required to read the password; either use the -S option to read from standard \
+                    input or configure an askpass helper";
+        let stderr = format!(
+            "{sudo}\nsudo: a password is required\n✗ Could not install tmux procps via apt-get.\n  \
+             Retry with: sudo apt-get install -y tmux procps\n"
+        );
+        let ran = install_on("linux", vec![no_terminal(), ended(22, "", &stderr)], true);
+        let shown = [
+            sudo.chars().take(LINE_CHARS).collect(),
+            "sudo: a password is required".to_string(),
+            "✗ Could not install tmux procps via apt-get.".to_string(),
+            "Retry with: sudo apt-get install -y tmux procps".to_string(),
+        ];
+        assert_eq!(ran.result, Err(shown.to_vec()));
+        assert_eq!(ran.journal, [in_a_terminal(HOST), within_ten_minutes(HOST)]);
     }
 
     #[test]
