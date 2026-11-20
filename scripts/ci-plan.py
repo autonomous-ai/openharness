@@ -93,17 +93,18 @@ SUBCOMPONENTS = {"devices/harness-pro/": "pro"}
 # windows-e2e: windows.yml's specs (both of its `$paths` lists, cli/-relative there), each with the module it tests.
 WINDOWS_SPECS = (
     "cli/src/lib/ptyHostBackend.contract.spec.ts", "cli/src/lib/ptyHost/", "cli/src/lib/windows/",
-    "cli/src/scripts/windowsCiChecks.spec.ts", "cli/src/team/windowsTeamRemove.real.spec.ts", "cli/src/lib/uninstall/",
+    "cli/src/scripts/windowsCiChecks.spec.ts", "cli/src/lib/uninstall/",
     "cli/src/engines/kit/hookRemoval.spec.ts", "cli/src/engines/kit/windowsHooks.spec.ts",
     "cli/src/engines/kit/windowsFiles.spec.ts", "cli/src/engines/kit/nativePaths.windows.spec.ts",
     "cli/src/engines/kit/launchExecutable.windows.spec.ts", "cli/src/dsh/runtime.windows.spec.ts",
     "cli/src/engines/removeHooks.spec.ts", "cli/src/engines/windowsHomes.spec.ts", "cli/src/cable/windowsSerial.spec.ts",
-    "cli/src/cable/serialWindows.spec.ts", "cli/src/superTabs/start.spec.ts", "cli/src/engines/kit/folderTrust.spec.ts",
+    "cli/src/cable/serialWindows.spec.ts", "cli/src/engines/kit/folderTrust.spec.ts",
     "cli/src/lib/tied.spec.ts", "cli/src/lib/connectors/call.spec.ts", "cli/src/lib/secureState.spec.ts",
     "cli/src/lib/registryLock.publish.spec.ts", "cli/src/lib/pidFileSettle.spec.ts",
     "cli/src/devices/listenerPipe.windows.real.spec.ts", "cli/src/devices/claudePlugin.windows.real.spec.ts",
     "cli/src/deviceClaude/inbox.windows.real.spec.ts", "cli/src/hookCaller.windows.real.spec.ts",
     "cli/src/harnessDevicePlugin.spec.ts", "plugins/harness-device-vscode/src/",
+    "cli/src/lib/engineBin.pathEntries.spec.ts",
     # The two real builds.
     "cli/src/lib/hostMove/hostMove.real.spec.ts", "cli/src/lib/ptyHost/drain.spec.ts",
     "cli/src/lib/windows/ptyInstall.windows.real.spec.ts", "cli/src/scripts/installPs1.spec.ts",
