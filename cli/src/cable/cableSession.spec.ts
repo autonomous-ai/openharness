@@ -3410,6 +3410,8 @@ describe('spoken output search purpose', () => {
     const A = 'a'.repeat(16)
     const B = 'b'.repeat(16)
     const NEW = 'c'.repeat(16)
+    /** Packs another computer put on the dial: this one never maps them. */
+    const F = ['1', '2', '3', '4'].map((d) => d.repeat(16))
     /** A pack the size of two slices; the crc field is the u32 at offset 18, as in the real header. */
     const pack = (fill: number, size = 20_000) => { const b = Buffer.alloc(size, fill); b[4] = 1; b.writeUInt32LE(0xdeadbeef, 18); return b }
     const packs: Record<string, Buffer> = { [A]: pack(1), [B]: pack(2, 100), [NEW]: pack(3, 100) }
@@ -3557,27 +3559,147 @@ describe('spoken output search purpose', () => {
       await session.stop()
     })
 
-    it('a memory refusal after a pet.drop is offered once more after 1.5 s', async () => {
+    it('a memory refusal drops a spare pack once and offers again after 1.5 s', async () => {
       vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
       try {
         const store = fakeStore({ all: A, engines: {} })
         const { session, port } = await connect(makeHost({ pets: () => store as unknown as PetStore }))
-        port.say({ ...hello, pets: 1, petIds: [NEW] }) // the old pet goes, the new one comes
+        const drops = () => port.sent.filter((m) => m.t === 'pet.drop').map((m) => m.id)
+        const offers = () => port.sent.filter((m) => m.t === 'pet.offer').map((m) => m.id)
+        port.say({ ...hello, pets: 1, petIds: [F[0], F[1]] }) // another computer's packs, with slots to spare
         await vi.advanceTimersByTimeAsync(5)
-        expect(port.sent.filter((m) => m.t === 'pet.drop')).toEqual([{ t: 'pet.drop', id: NEW }])
+        expect(drops()).toEqual([])
+        expect(offers()).toEqual([A])
         port.say({ t: 'pet.error', id: A, reason: 'memory' })
         await vi.advanceTimersByTimeAsync(1_000)
-        expect(port.sent.filter((m) => m.t === 'pet.offer')).toHaveLength(1)
+        expect(drops()).toEqual([F[0]])
+        expect(offers()).toEqual([A])
         await vi.advanceTimersByTimeAsync(600)
-        expect(port.sent.filter((m) => m.t === 'pet.offer').map((m) => m.id)).toEqual([A, A])
+        expect(offers()).toEqual([A, A])
         // Only once.
         port.say({ t: 'pet.error', id: A, reason: 'memory' })
         await vi.advanceTimersByTimeAsync(5_000)
-        expect(port.sent.filter((m) => m.t === 'pet.offer')).toHaveLength(2)
+        expect(drops()).toEqual([F[0]])
+        expect(offers()).toEqual([A, A])
+        // A keepalive forgives the refusal and offers again; a refusal of it drops nothing more.
+        port.say({ ...hello, pets: 1, petIds: [F[1]] })
+        await vi.advanceTimersByTimeAsync(5)
+        expect(offers()).toEqual([A, A, A])
+        port.say({ t: 'pet.error', id: A, reason: 'memory' })
+        await vi.advanceTimersByTimeAsync(5_000)
+        expect(drops()).toEqual([F[0]])
+        expect(offers()).toEqual([A, A, A])
         await session.stop()
       } finally {
         vi.useRealTimers()
       }
+    })
+
+    it('two computers: a second computer with no pets keeps the first one\'s packs', async () => {
+      const first = fakeStore({ all: A, engines: {} })
+      const one = await connect(makeHost({ pets: () => first as unknown as PetStore }))
+      one.port.say({ ...hello, pets: 1, petIds: [] })
+      await settle()
+      one.port.say({ t: 'pet.accept', id: A })
+      await settle()
+      one.port.say({ t: 'pet.done', id: A })
+      await settle()
+      expect(one.session.petDial().held).toEqual([A])
+      await one.session.stop()
+      const second = fakeStore({ all: null, engines: {} })
+      const log = tmpLog()
+      const { session, port } = await connect(makeHost({ pets: () => second as unknown as PetStore }), log)
+      port.say({ ...hello, pets: 1, petIds: [A] })
+      await settle()
+      port.say({ ...hello, pets: 1, petIds: [A] }) // keepalive
+      await settle()
+      expect(port.sent.filter((m) => m.t === 'pet.map')).toEqual([{ t: 'pet.map', all: null, engines: {} }])
+      expect(petTypes(port)).toEqual(['pet.map'])
+      expect(session.petDial().held).toEqual([A])
+      await log.flush()
+      expect(readFileSync(log.currentPath, 'utf8')).not.toContain('dropped for room')
+      await session.stop()
+    })
+
+    it('a full dial of foreign packs: one spare dropped just before each offer, in the dial\'s order', async () => {
+      const store = fakeStore({ all: A, engines: { claude: B } })
+      const log = tmpLog()
+      const { session, port } = await connect(makeHost({ pets: () => store as unknown as PetStore }), log)
+      const drops = () => port.sent.filter((m) => m.t === 'pet.drop').map((m) => m.id)
+      port.say({ ...hello, pets: 1, petIds: F })
+      await settle()
+      expect(petTypes(port)).toEqual(['pet.map', 'pet.drop', 'pet.offer'])
+      expect(port.sent.filter((m) => m.t === 'pet.drop')).toEqual([{ t: 'pet.drop', id: F[0] }])
+      expect(port.sent.filter((m) => m.t === 'pet.offer').map((m) => m.id)).toEqual([A])
+      // The stored pack fills the freed slot: the next offer makes room again, with the next pack the dial listed.
+      port.say({ t: 'pet.done', id: A })
+      await settle()
+      expect(petTypes(port).slice(3)).toEqual(['pet.drop', 'pet.offer'])
+      expect(drops()).toEqual([F[0], F[1]])
+      expect(port.sent.filter((m) => m.t === 'pet.offer').map((m) => m.id)).toEqual([A, B])
+      port.say({ t: 'pet.error', id: B, reason: 'crc' })
+      await settle()
+      expect(drops()).toEqual([F[0], F[1]])
+      await log.flush()
+      // The dial's log names the line without its `cable: ` prefix.
+      expect(readFileSync(log.currentPath, 'utf8').split(`pet ${F[0]} dropped for room`)).toHaveLength(2)
+      await session.stop()
+    })
+
+    it('a pack newer than the dial reads is never made room for', async () => {
+      const store = fakeStore({ all: B, engines: {} })
+      packs[B][4] = 2
+      try {
+        const { session, port } = await connect(makeHost({ pets: () => store as unknown as PetStore }))
+        port.say({ ...hello, pets: 1, petIds: F })
+        await settle()
+        expect(petTypes(port)).toEqual(['pet.map'])
+        await session.stop()
+      } finally {
+        packs[B][4] = 1
+      }
+    })
+
+    it('a pack held at the hello and mapped, then unmapped, is dropped at once', async () => {
+      const store = fakeStore({ all: B, engines: {} })
+      const { session, port } = await connect(makeHost({ pets: () => store as unknown as PetStore }))
+      port.say({ ...hello, pets: 1, petIds: [B] })
+      await settle()
+      store.current = { all: NEW, engines: {} }
+      await session.petsChanged()
+      await settle()
+      expect(petTypes(port)).toEqual(['pet.map', 'pet.map', 'pet.drop', 'pet.offer'])
+      expect(port.sent.filter((m) => m.t === 'pet.drop')).toEqual([{ t: 'pet.drop', id: B }])
+      expect(port.sent.filter((m) => m.t === 'pet.offer').map((m) => m.id)).toEqual([NEW])
+      await session.stop()
+    })
+
+    it('after a reattach, a pack this computer sent on the last link is spare', async () => {
+      const store = fakeStore({ all: B, engines: {} })
+      const ports: LoopbackPort[] = []
+      const session = new CableSession(makeHost({ pets: () => store as unknown as PetStore }), tmpLog(), async (onData, onClosed) => {
+        const next = new LoopbackPort(onData, onClosed)
+        ports.push(next)
+        return next
+      })
+      session.start()
+      await vi.waitFor(() => expect(ports).toHaveLength(1))
+      ports[0].say({ ...hello, pets: 1, petIds: [] })
+      await settle()
+      ports[0].say({ t: 'pet.accept', id: B })
+      await settle()
+      ports[0].say({ t: 'pet.done', id: B })
+      await settle()
+      await ports[0].close('cable pulled')
+      await settle()
+      // The pet changed while the dial was on another computer.
+      store.current = { all: NEW, engines: {} }
+      await vi.waitFor(() => expect(ports).toHaveLength(2), NEXT_TICKS)
+      ports[1].say({ ...hello, pets: 1, petIds: [B] })
+      await settle()
+      expect(ports[1].sent.filter((m) => m.t === 'pet.drop')).toEqual([])
+      expect(ports[1].sent.filter((m) => m.t === 'pet.offer').map((m) => m.id)).toEqual([NEW])
+      await session.stop()
     })
 
     it('hello.pets is the newest pack version the dial reads', async () => {
@@ -3701,12 +3823,12 @@ describe('spoken output search purpose', () => {
       await session.stop()
     })
 
-    it('a held pack that is no longer mapped is dropped on hello; the next missing pack is offered after pet.done', async () => {
+    it('a foreign pack is kept at the hello; the next missing pack is offered after pet.done', async () => {
       const store = fakeStore({ all: A, engines: { claude: B } })
       const { session, port } = await connect(makeHost({ pets: () => store as unknown as PetStore }))
       port.say({ ...hello, pets: 1, petIds: [NEW] })
       await settle()
-      expect(port.sent.filter((m) => m.t === 'pet.drop')).toEqual([{ t: 'pet.drop', id: NEW }])
+      expect(port.sent.filter((m) => m.t === 'pet.drop')).toEqual([])
       port.say({ t: 'pet.done', id: A })
       await settle()
       expect(port.sent.filter((m) => m.t === 'pet.offer').map((m) => m.id)).toEqual([A, B])
