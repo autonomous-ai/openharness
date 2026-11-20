@@ -144,7 +144,7 @@ export function inspectHookFile(file: string, defaultMode = 0o666) {
   const paths = new NativePaths(new NativeEvidenceBudget())
   const located = paths.resolveSync(file, true)
   const facts = paths.snapshot()
-  // The selected route already visited its parent; the final verifier still reads it afresh.
+  // Reuse the captured parent components; the final verifier still reads the route afresh.
   const directory = directoryPath(dirname(file), paths)
   const target = located?.path ?? join(directory, basename(file))
   let before: string | null = null, content: string | null = null, mode = defaultMode

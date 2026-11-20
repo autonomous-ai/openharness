@@ -68,3 +68,28 @@ it.each(['replacement', 'alias'] as const)('refuses a parent %s after its initia
   expect(changed).toBe(true)
   expect(readFileSync(file, 'utf8')).toBe('content')
 })
+
+it.each(['absent', 'nested absent'] as const)('refuses new ancestry during %s capture', kind => {
+  const parent = join(root, 'profile'), displaced = join(root, 'previous')
+  mkdirSync(parent)
+  const file = join(parent, ...(kind === 'absent' ? [] : ['missing', 'child']), 'settings.json')
+  let seen = 0, changed = false
+  reads.after = path => {
+    if (path !== parent || ++seen !== 2) return
+    reads.after = undefined; changed = true; renameSync(parent, displaced); symlinkSync(displaced, parent, 'dir')
+  }
+  expect(() => inspectHookFile(file)).toThrow(/changed|unconfirmed alias/)
+  expect(changed).toBe(true)
+})
+
+it('refuses an absent ancestor becoming a regular file before capture returns', () => {
+  const missing = join(root, 'missing'), file = join(missing, 'child', 'settings.json')
+  let seen = 0, changed = false
+  reads.after = path => {
+    if (path !== missing || ++seen !== 2) return
+    reads.after = undefined; changed = true; writeFileSync(missing, 'other content')
+  }
+  expect(() => inspectHookFile(file)).toThrow(/not a directory/)
+  expect(changed).toBe(true)
+  expect(readFileSync(missing, 'utf8')).toBe('other content')
+})
