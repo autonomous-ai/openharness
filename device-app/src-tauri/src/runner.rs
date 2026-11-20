@@ -368,7 +368,7 @@ impl Runner {
                 let registered = shared.doors.login_item.register();
                 shared.doors.log.line(&match &registered {
                     Ok(()) => "login item: registered".to_string(),
-                    Err(error) => format!("login item: not registered: {error}"),
+                    Err(error) => format!("login item: {error}"),
                 });
                 shared.answer(Event::LoginItem(registered.is_ok()));
             }
@@ -426,7 +426,7 @@ impl Shared {
         match self.doors.login_item.refresh() {
             Ok(false) => {}
             Ok(true) => self.doors.log.line("login item: updated"),
-            Err(error) => self.doors.log.line(&format!("login item: not updated: {error}")),
+            Err(error) => self.doors.log.line(&format!("login item: {error}")),
         }
     }
 
@@ -791,13 +791,13 @@ mod tests {
 
     impl LoginItem for Doubles {
         fn register(&self) -> Result<(), String> {
-            if self.failing() { Err("Login item not added (error 1).".into()) } else { Ok(()) }
+            if self.failing() { Err("Login item not set (error 1).".into()) } else { Ok(()) }
         }
 
         fn refresh(&self) -> Result<bool, String> {
             self.refreshed.fetch_add(1, Ordering::SeqCst);
             if self.failing() {
-                return Err("Login item not added (error 1).".into());
+                return Err("Login item not set (error 1).".into());
             }
             Ok(self.refresh_changes.load(Ordering::SeqCst))
         }
@@ -1212,7 +1212,7 @@ mod tests {
         assert_eq!(
             w.fake.log().lines(),
             [
-                "login item: not registered: Login item not added (error 1).",
+                "login item: Login item not set (error 1).",
                 "state: could not save: disk full",
                 "browser: could not open: no browser",
                 "desktop app: could not open: no browser",
@@ -1293,7 +1293,7 @@ mod tests {
         let failing = Arc::new(Doubles::default());
         failing.failing.store(true, Ordering::SeqCst);
         let w = world_where(|doors| doors.login_item = failing.clone());
-        assert!(w.logged("login item: not updated: Login item not added (error 1)."));
+        assert!(w.logged("login item: Login item not set (error 1)."));
     }
 
     #[cfg(unix)]
