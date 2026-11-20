@@ -29,7 +29,7 @@ require_command() {
 # stops the rest, one byte past <bytes> to show the body was larger. head writes the file, so the cap binds that write
 # alone, where a file size limit on curl binds all it writes and counts blocks of a size each shell picks. A transport
 # failure starts again from an empty file, 3 tries in all, as curl's --retry cannot rewind a pipe; a body past its size
-# or an HTTP error is no such failure. curl's status comes out past the pipe on fd 3.
+# is no such failure. curl's status comes out past the pipe on fd 3.
 download() {
   DOWNLOAD_TRY=1
   while :; do
@@ -41,9 +41,9 @@ download() {
         [ "$(wc -c < "$3" | tr -d '[:space:]')" -le "$1" ]
         return
         ;;
-      # No host, no connection, a cut or stalled transfer, a failed TLS handshake, an empty reply, a failed send or
-      # receive.
-      6 | 7 | 18 | 28 | 35 | 52 | 55 | 56) [ "$DOWNLOAD_TRY" -lt 3 ] || return 1 ;;
+      # No host, no connection, a cut or stalled transfer, an HTTP error (curl -f names a 5xx or 429 so, and a 404
+      # alike, which costs a few seconds retried), a failed TLS handshake, an empty reply, a failed send or receive.
+      6 | 7 | 18 | 22 | 28 | 35 | 52 | 55 | 56) [ "$DOWNLOAD_TRY" -lt 3 ] || return 1 ;;
       *) return 1 ;;
     esac
     DOWNLOAD_TRY=$((DOWNLOAD_TRY + 1))
