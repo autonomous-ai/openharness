@@ -187,6 +187,9 @@ class ReleaseWorkflowTests(unittest.TestCase):
         for text in ("upload-artifact", "device-manifest.py"):
             with self.subTest(text=text):
                 self.assertNotIn(text, job)
+        # Only minisign: no Tauri CLI to build and no npm package to run.
+        self.assertIn("release-setup.sh minisign", job)
+        self.assertNotIn("setup-node", job)
 
     def test_linux_builds_on_ubuntu_22_04_for_both_archs(self):
         job = self.job("build-linux")

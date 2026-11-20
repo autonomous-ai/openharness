@@ -440,6 +440,19 @@ class ReleaseSetupTests(Fakes):
                 self.assertEqual(self.calls(cmd), [])
         self.assertFalse(self.github_path.exists())
 
+    def test_the_minisign_mode_installs_minisign_only(self):
+        # The job that checks the signed installers needs nothing else: no Rust, no Tauri CLI, no UI package.
+        for os_, (url, sha256) in ((LINUX_X64, LINUX_MINISIGN), (WINDOWS, WINDOWS_MINISIGN), (MACOS, (None, "0" * 64))):
+            with self.subTest(os=os_):
+                self.setup_log.unlink(missing_ok=True)
+                result = self.setup(os_, sha256, "minisign")
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual([args[-1] for args in self.calls("curl")], [url] if url else [])
+                self.assertEqual(self.calls("brew"), [] if url else [["install", "minisign"]])
+                for cmd in ("rustup", "npm", "apt-get"):
+                    self.assertEqual(self.calls(cmd), [], cmd)
+        self.assertEqual(self.cargo_calls(), [])
+
     def test_an_unknown_mode_is_a_usage_error(self):
         result = self.setup(LINUX_X64, LINUX_MINISIGN[1], "everything")
         self.assertEqual(result.returncode, 2)
