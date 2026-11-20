@@ -745,6 +745,63 @@ was the branch at 5611ad54c9 with `src/hookCaller.windows.real.spec.ts` added, a
   through it, as it does from Codex (Task 2 §5).
 - The run left no `hook-caller-*` folder in the test user's temp folder.
 
+## Task 33
+
+**On the VM the climb adds about 58 ms at the median (one `ps --json` read is 49-51 ms), so it is over 50 ms. The
+plan's PowerShell form cannot show a difference that small: from one run to the next, PowerShell's own start time
+varies far more than that. The panel hint adds 56-62 ms on a miss and nothing on a hit.**
+
+Run 2026-11-20 on the same VM (Windows 11 ARM64, build 26200, Node v24.20.0), as the test user over SSH (session 0).
+- Branch at 1680231184: `notify.mjs` as on 34f195052f, and `harness-pty.exe` built from it with `cargo build
+  --release --bins`.
+- Base: `cli/hook/notify.mjs` of c68b71455e, the commit before Task 31's red commit (091ab2a8f6). It sat beside the
+  branch's file, so both found the same `harness-pty.exe` (`HARNESS_PTY_BIN`).
+- Each run used Task 23's daemon (`startWindowsDaemon`, from the run's bundle, signed out, sealed in its throwaway
+  root), started by a throwaway timing spec run through vitest. The spec and its config were never committed and were
+  removed afterwards.
+- The hooks posted to that daemon over its pipe, with the daemon's `PORT` and data folder.
+- Each time is from the start of the process to its exit, and each figure is from 20 runs. Base and branch took
+  turns, after one unmeasured run of each.
+- Process count: 156-158 (`harness-pty ps --json` rows, read at the start and end of each run).
+- Three runs. Run 1 had no direct case. Run 3 came during a busy spell on the VM (one PowerShell hook took 9.5 s).
+
+| ms, median / p95 | Run 1 | Run 2 | Run 3 |
+| --- | --- | --- | --- |
+| Codex hook through PowerShell, base | 1614 / 2706 | 1436 / 1817 | 2042 / 4069 |
+| Codex hook through PowerShell, branch | 1492 / 2531 | 1481 / 1783 | 2240 / 6300 |
+| Codex hook, no shell (`node notify.mjs … --engine codex`), base | — | 193 / 220 | 206 / 341 |
+| Codex hook, no shell, branch | — | 251 / 307 | 308 / 456 |
+| `harness-pty ps --json` alone | 51 / 77 | 49 / 52 | 50 / 119 |
+| Panel hook (`--engine claude`), base | 179 / 194 | 187 / 236 | 197 / 291 |
+| Panel hook, branch, miss (`hook-editors.json` deleted) | 235 / 251 | 249 / 299 | 259 / 427 |
+| Panel hook, branch, hit (`hook-editors.json` in place) | 178 / 194 | 197 / 238 | 187 / 349 |
+
+- The Codex hook is the plan's form: `powershell.exe -NoProfile -Command "& '<node>' '<notify.mjs>' --port <n>
+  --data-dir '<dir>' --engine codex"`, with a `Stop` on stdin.
+- The no-shell case was added because the PowerShell form's spread hides the climb. With no shell, the hook's parent
+  is the timing process, and the branch still reads the table once for the climb, so the difference is the climb's.
+- The panel hook ran as argv (`node notify.mjs … --engine claude`) with a `Stop` on stdin and
+  `CLAUDE_CODE_ENTRYPOINT=claude-vscode`.
+  - `VSCODE_PID` was the running `Code.exe`'s main process. VS Code 1.147.0 was started for this in the test user's
+    console session (`desktop-e2e.sh run start-app.ps1`, `--disable-extensions --new-window`) and closed afterwards.
+  - `VSCODE_IPC_HOOK` was VS Code's `\\.\pipe\<hex>-1.147.0-main-sock`, the value its extension host carries (Task 1
+    §6). It was read from the machine's pipe list rather than from the extension host's environment. The hint uses
+    only its shape and its hash.
+  - After each miss, `hook-editors.json` was there again, so the hit runs used a kept answer.
+
+The climb's added time at the median, branch minus base:
+- the plan's PowerShell form: −122, +45 and +198 ms in the three runs. PowerShell's start time varies by more than
+  the climb costs, so these medians do not measure the climb;
+- with no shell: +58 ms (run 2) and +102 ms (run 3, the busy run). That is one table read (49-51 ms alone), plus
+  parsing its JSON.
+
+The panel hint's added time at the median, against the base with the same environment: +56, +62 and +62 ms on a miss
+(one table read); −1, +10 and −10 ms on a hit (no table read).
+
+Dell: pending.
+
+over 50 ms: yes
+
 ## Task 37
 
 **Nothing here contradicts Task 27 or Task 30, so Task 38 does not run.** Every window belongs to the program
