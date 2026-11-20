@@ -11,7 +11,7 @@ import type { MemoryInference } from './learner.js'
 import type { InferenceTarget } from './queue.js'
 import type { MemoryDraft, SourceEvent } from './types.js'
 
-let directory: string, runtime: CodingMemoryRuntime, now: number, context: MemoryHostContext
+let directory: string, runtime: CodingMemoryRuntime, now: number, clock: number, context: MemoryHostContext
 let sessions: MemoryHostSession[], inference: MemoryInference, target: InferenceTarget
 let locate: Mock<(workspace: string) => Promise<ProjectContext>>
 let create: Mock<(profileId: string) => MemoryPort & { close(): Promise<void> }>
@@ -53,6 +53,7 @@ async function learn(): Promise<void> {
 beforeEach(() => {
   directory = mkdtempSync(join(tmpdir(), 'memory-runtime-'))
   now = 1_000
+  clock = 0
   context = { experimental: true, watching: true, profileId: 'owner_a' }
   sessions = [{ agentId: 'agent', engine: 'claude', cliVersion: '2.1.286', sessionId: 'native', workspace: '/authorized/project',
     transcriptPath: join(directory, 'conversation.jsonl'), busy: false, coding: true }]
@@ -72,7 +73,8 @@ beforeEach(() => {
       return value
     }, async close() { store.close() } }
   })
-  runtime = new CodingMemoryRuntime({ directory, context: () => context, sessions: () => sessions, inference, locate, create, now: () => now })
+  runtime = new CodingMemoryRuntime({ directory, context: () => context, sessions: () => sessions, inference, locate, create, now: () => now,
+    deadlineClock: () => clock })
 })
 afterEach(async () => {
   intercept = undefined
@@ -327,6 +329,14 @@ it.each(['forgotten', 'corrected'] as const)('withholds a prepared packet when i
     expect(result.packet.status).toBe('denied')
     expect(result.receipt).toBeNull()
   } finally { clock.mockRestore() }
+})
+
+it('a recall whose clock passes 200 ms inside prepareRecall times out with no receipt', async () => {
+  await learn()
+  intercept = async operation => { if (operation === 'prepareRecall') clock += 201 }
+  const result = await runtime.preparePromptRecall('agent', { query: 'coding' })
+  expect(result.packet.status).toBe('timeout')
+  expect(result.receipt).toBeNull()
 })
 
 it('learns explicit personal coding preferences in the collection conversation and recalls them in other projects', async () => {
