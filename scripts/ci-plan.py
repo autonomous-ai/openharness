@@ -88,6 +88,8 @@ DEPENDS = {
                  "daemons/tools/illustrated/daemon_art.py", "daemons/tools/plate.mjs", "desktop/assets/model-icons/claude.png"),
     # Its tools also import the web release scripts; its tests see only the sparse inputs.
     "desktop": ci.SOURCE_INPUTS["desktop"] + ("website/scripts/harness-web-assets.mjs", "website/scripts/precompress.mjs"),
+    # Its release tests read both release workflows (test_release_workflow.py, a path built from parts).
+    "device-app": (".github/workflows/release-desktop.yml", ".github/workflows/release-device.yml"),
     "mobile": ("backend/src/types/productHealthContract.ts", "backend/src/types/productUsage.ts", "cli/src/",
                "daemons/banner.json", "daemons/frames.json", "daemons/plates.json", "daemons/roster.json", "desktop/",
                "docs/performance/"),
@@ -157,6 +159,9 @@ PR_READS = {
                 "mobile/lib/ws/terminal_transport_plugin.dart", "mobile/pubspec.lock", "store/",
                 "tests/fixtures/shared-pane-layouts.json",
                 "website/scripts/harness-web-assets.mjs", "website/scripts/precompress.mjs"),
+    # test_release_workflow.py reads its own release workflow and Desktop's runners and signing inputs, through a path
+    # built from parts, which the scan cannot see.
+    "device-app": (".github/workflows/release-desktop.yml", ".github/workflows/release-device.yml"),
     # The desktop files the phone's tests read: the words and helpers its tests compare; a desktop-only change to one once
     # failed only in a batch, two batches later (River, 2026-11-03). test_ci_plan's
     # test_every_desktop_file_the_phone_tests_read_selects_mobile scans mobile/test and fails on one missing here.
