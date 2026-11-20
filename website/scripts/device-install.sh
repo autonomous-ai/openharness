@@ -97,7 +97,11 @@ for command_name in curl sha256sum mktemp pgrep grep sed setsid; do
 done
 
 mkdir -p "$APP_DIR"
-STAGING_DIR="$(mktemp -d "$APP_DIR/.harness-device-install.XXXXXX")" || fail "could not create an install staging directory in $APP_DIR"
+# A name made inside APP_DIR, not a path: a Linux HOME is any bytes, and Ubuntu 26.04's mktemp (uutils) refuses a
+# template that is not UTF-8.
+STAGING_NAME="$(cd "$APP_DIR" >/dev/null && mktemp -d .harness-device-install.XXXXXX)" \
+  || fail "could not create an install staging directory in $APP_DIR"
+STAGING_DIR="$APP_DIR/$STAGING_NAME"
 trap cleanup EXIT
 # A trap that does not exit lets the script run on: Ctrl-C, a closed terminal or a kill stops it here.
 trap 'exit 129' HUP
