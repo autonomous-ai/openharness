@@ -2,7 +2,7 @@ import { execFileSync, spawn, spawnSync } from 'child_process'
 import { createHash, randomBytes } from 'crypto'
 import { createServer, type IncomingHttpHeaders } from 'http'
 import { connect as netConnect, createServer as createNetServer } from 'net'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { dirname, join, win32 } from 'path'
 import { fileURLToPath, pathToFileURL } from 'url'
@@ -2412,13 +2412,17 @@ describe('the hook finds Harness\'s folders by the rule', () => {
     it('has it in the state root\'s s when XDG_RUNTIME_DIR is a link, open to others, or not absolute', async () => {
       const linked = `${runtime}-link`
       symlinkSync(runtime, linked)
-      tmpDirs.push(linked)
       const looser = mkdtempSync('/tmp/hr-')
       tmpDirs.push(looser)
       chmodSync(looser, 0o755)
-      for (const value of [linked, looser, 'run/user']) {
-        const home = movedHome()
-        expect(await reachesShortSocket(join(xdgDefaults(home).state, 's'), home, asOn('linux', home, { XDG_RUNTIME_DIR: value })), value).toBe(true)
+      try {
+        for (const value of [linked, looser, 'run/user']) {
+          const home = movedHome()
+          expect(await reachesShortSocket(join(xdgDefaults(home).state, 's'), home, asOn('linux', home, { XDG_RUNTIME_DIR: value })), value).toBe(true)
+        }
+      } finally {
+        // Removed here, not with the folders: once its folder is gone the link dangles, which rmSync leaves on Node 23-24.3.
+        unlinkSync(linked)
       }
     })
 
