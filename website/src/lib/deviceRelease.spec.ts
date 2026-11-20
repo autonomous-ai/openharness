@@ -66,19 +66,15 @@ describe("parseDeviceRelease", () => {
     expect(r[2].detail.startsWith("AppImage")).toBe(true);
   });
 
-  // The keys `make release-device` writes for Windows and Linux (device-app/scripts/device-manifest.py): Desktop's
-  // bare key and the installer key, both naming one file.
+  // The keys `make release-device` writes for Windows and Linux (device-app/scripts/device-manifest.py): the
+  // installer key only.
   it("lists each Windows and Linux file of a release once, from its installer key", () => {
     const file = (name: string) => ({ version: "0.1.10", url: `${CDN}${name}`, sha256: "x", size: 1 });
     const r = builds({
       ...LIVE,
-      "device-windows-x64": file("Harness-Device-windows-x64-setup.exe"),
       "device-windows-x64-exe": file("Harness-Device-windows-x64-setup.exe"),
-      "device-windows-arm64": file("Harness-Device-windows-arm64-setup.exe"),
       "device-windows-arm64-exe": file("Harness-Device-windows-arm64-setup.exe"),
-      "device-linux-x64": file("Harness-Device-linux-x64.AppImage"),
       "device-linux-x64-appimage": file("Harness-Device-linux-x64.AppImage"),
-      "device-linux-arm64": file("Harness-Device-linux-arm64.AppImage"),
       "device-linux-arm64-appimage": file("Harness-Device-linux-arm64.AppImage"),
     });
     expect(r.map((b) => [b.label, b.pkg])).toEqual([

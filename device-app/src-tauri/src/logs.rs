@@ -39,7 +39,8 @@ pub fn parse(output: &Output) -> Result<PathBuf, ExportFailure> {
 }
 
 /// Absolute, so what shows it never reads it as an option; one short line; its file name
-/// `harness-logs-YYYYMMDD-HHMM.zip`, whole. On Windows, no `"`: Explorer reads the path between quotes.
+/// `harness-logs-YYYYMMDD-HHMM.zip`, whole. On Windows, no `"`: Windows forbids it in a path, so the CLI
+/// made no bundle there.
 fn bundle_path(path: &str, windows: bool) -> bool {
     // Every line break, not only the control characters: the menu shows the path on one line.
     let one_line = !path.chars().any(|c| c.is_control() || matches!(c, '\u{2028}' | '\u{2029}'));
@@ -202,8 +203,7 @@ mod tests {
 
     #[test]
     fn a_windows_path_with_a_quote_is_no_bundle() {
-        // Explorer reads the path between quotes, which one inside would end. Windows forbids it in a path; unix
-        // does not.
+        // Windows forbids a `"` in a path, so a path with one is no bundle the CLI made; unix allows it.
         #[cfg(unix)]
         let zip = r#"/Users/p/a"b\harness-logs-20261118-1030.zip"#;
         #[cfg(windows)]

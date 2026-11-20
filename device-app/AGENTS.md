@@ -61,8 +61,8 @@ sets them up. Rust and Tauri 2 in `src-tauri/`; the window's three screens are p
     no quote, space or control character (`open.rs`).
   - On macOS, System Settings' Accessibility list:
     `open x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility`.
-  - To show the logs' zip: `open -R` on macOS, `explorer.exe /select,"<zip>"` on Windows, `xdg-open` with the zip's
-    folder on Linux.
+  - To show the logs' zip: `open -R` on macOS, the shell's `SHOpenFolderAndSelectItems` on Windows (on a thread of its
+    own, COM set up first; no program run), `xdg-open` with the zip's folder on Linux.
   - To open the desktop app: `open -b ai.autonomous.harness` on macOS; elsewhere its own file, run with no argument
     (`Harness\Harness.exe` in the shell's user programs folder, `FOLDERID_UserProgramFiles`, else in
     `%LOCALAPPDATA%\Programs`; or the AppImage its `harness.desktop` entry names).

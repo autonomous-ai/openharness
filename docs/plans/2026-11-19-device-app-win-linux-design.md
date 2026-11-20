@@ -227,8 +227,8 @@ stdin (`front_line`, `FrontFeed`), never logged. The CLI already maps exe names 
   Linux reads the Desktop launcher entry `<data>/applications/harness.desktop` that Desktop and its installer write
   (`desktop/lib/core/linux_app_image.dart`) and counts it installed when its AppImage is on disk, opened by running that
   AppImage. Running detection (`sysinfo`, `process_names`) is unchanged.
-- **Export logs reveal** (`logs.rs`): Windows `explorer.exe /select,<zip>` (selected, as Finder's `-R`); Linux keeps
-  `xdg-open <folder>`. The CLI already bundles the app's log from `%LOCALAPPDATA%` and the XDG data folder
+- **Export logs reveal** (`logs.rs`): Windows the shell's `SHOpenFolderAndSelectItems` (selected, as Finder's
+  `-R`); Linux keeps `xdg-open <folder>`. The CLI already bundles the app's log from `%LOCALAPPDATA%` and the XDG data folder
   (`cli/src/lib/logBundleFacts.ts:118-126`).
 - **Opening a URL** (the `Update X.Y.Z…` page, sign-in browser is the CLI's): Windows through the shell
   (`ShellExecuteW` "open" on the fixed https URL), Linux `xdg-open`.
