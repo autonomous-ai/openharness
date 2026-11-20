@@ -350,13 +350,27 @@ mod tests {
     }
 
     #[test]
-    fn the_title_is_read_at_a_foreground_change_and_the_front_windows_own_name_change() {
+    fn each_foreground_change_checks_the_window_in_front_and_hears_that_chatgpt_process_alone() {
+        let chatgpt = |pid| pid == 7 || pid == 8;
+        // A ChatGPT window came to the front, after another app's window or none.
+        assert_eq!(foreground_moved(None, Some(7), &chatgpt), Moved::Rehook(7));
+        // Another window of the process heard.
+        assert_eq!(foreground_moved(Some(7), Some(7), &chatgpt), Moved::Keep);
+        // Another ChatGPT process: heard instead.
+        assert_eq!(foreground_moved(Some(7), Some(8), &chatgpt), Moved::Rehook(8));
+        // Another app's window, or none (between two windows): the empty title, and no process heard.
+        assert_eq!(foreground_moved(Some(8), Some(9), &chatgpt), Moved::Unhook);
+        assert_eq!(foreground_moved(Some(8), None, &chatgpt), Moved::Unhook);
+        assert_eq!(foreground_moved(None, None, &chatgpt), Moved::Unhook);
+        // The process heard is checked again too: its pid may now be another program's.
+        assert_eq!(foreground_moved(Some(7), Some(7), &|_| false), Moved::Unhook);
+    }
+
+    #[test]
+    fn the_title_is_read_at_the_front_windows_own_name_change() {
         const FOREGROUND: u32 = 0x0003;
         const NAME_CHANGE: u32 = 0x800C;
         let (front, other) = (0x70, 0x90);
-        // A ChatGPT window came to the front: the hook hears only ChatGPT's process.
-        assert!(reads_title(FOREGROUND, front, 0, 0, front));
-        assert!(reads_title(FOREGROUND, other, 0, 0, front));
         // The window in front's own name.
         assert!(reads_title(NAME_CHANGE, front, 0, 0, front));
         // A ChatGPT window behind.
@@ -367,8 +381,10 @@ mod tests {
         }
         // One of its children.
         assert!(!reads_title(NAME_CHANGE, front, 0, 3, front));
-        // Another event: EVENT_OBJECT_CREATE.
-        assert!(!reads_title(0x8000, front, 0, 0, front));
+        // A foreground change is foreground_moved's, and another event is none: EVENT_OBJECT_CREATE.
+        for event in [FOREGROUND, 0x8000] {
+            assert!(!reads_title(event, front, 0, 0, front), "{event}");
+        }
     }
 
     #[test]
