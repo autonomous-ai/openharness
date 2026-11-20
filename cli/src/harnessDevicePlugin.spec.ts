@@ -99,15 +99,20 @@ describe('the harness-device plugin', () => {
   })
 
   // Under PowerShell nothing the launcher prints may reach Claude Code, and the hook's exit is 0, whatever the launcher's.
-  it('the Windows form names the launcher in the profile, then PATH', () => {
+  // A name Windows PowerShell's command lookup does not find sends it through every module on PSModulePath: 30 s on the
+  // arm64 runner, past the hook's 5 s. So module loading is off before anything runs, and the launcher is found by file
+  // checks alone; with loading off, a cmdlet outside the core (Test-Path among them) would not be found at all.
+  it('the Windows form turns module loading off, then looks for the launcher in the profile, then each absolute PATH folder', () => {
     const windows = windowsForm(permissionHook().command)
+    expect(windows.trimStart().startsWith("> $null; $PSModuleAutoLoadingPreference = 'None';")).toBe(true)
+    expect(windows).not.toMatch(/\b[A-Z][a-z]+-[A-Z][A-Za-z]+\b/)
     const profile = windows.indexOf('$env:USERPROFILE\\.harness\\bin\\harness.exe')
-    const onPath = windows.indexOf('Get-Command harness.exe')
+    const onPath = windows.indexOf("foreach ($d in $env:PATH -split ';') { if ($d -match '^([a-z]:\\\\|\\\\\\\\)' -and [IO.File]::Exists(\"$d\\harness.exe\"))")
     expect(profile).toBeGreaterThan(-1)
     expect(onPath).toBeGreaterThan(profile)
     const calls = windows.match(/device claude asked[^;}]*/g)
-    expect(calls).toHaveLength(2)
-    for (const call of calls!) expect(call.trim()).toBe('device claude asked *> $null')
+    expect(calls).toHaveLength(1)
+    expect(calls![0].trim()).toBe('device claude asked *> $null')
     expect(windows.trimEnd().endsWith('; exit 0')).toBe(true)
   })
 
