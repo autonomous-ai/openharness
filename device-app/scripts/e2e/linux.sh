@@ -9,7 +9,8 @@
 # `FAILED: <check>`, exiting 1. Everything it runs is its own and goes with it: a scratch HOME and XDG folders, its own
 # D-Bus session, Xvfb display, window manager and compositor, a fake xdg-open and a fake desktop app; never an account,
 # a backend or a person's apps. On a GitHub-hosted runner only, a last part runs the app's own install lines: the CDN's
-# install script, sudo for its packages, and the CLI it installs, signed out, with a backend that does not resolve.
+# install script, sudo for its packages, and the CLI it installs, signed out, with a backend that does not resolve. A
+# CDN or release download that fails there is reported as one, not as the change's failure.
 # It needs xvfb openbox xdotool x11-utils xterm sway foot dbus-x11 python3-dbus python3-gi and FUSE for the AppImage
 # (libfuse2); where FUSE is missing, APPIMAGE_EXTRACT_AND_RUN=1 runs it unpacked.
 set -euo pipefail
@@ -647,6 +648,15 @@ install_result() {
   run_log | grep -m 1 -E "^install: $1 (exit -?[0-9]+|killed|timed out after .*|could not start: .*)$" || true
 }
 install_ended() { [[ -n "$(install_result "$1")" ]]; }
+# A failed install check names the CDN when the app's log shows a curl error or install.sh's own download lines: an
+# outage then reads as one, not as this change's failure.
+install_fail() {
+  local cdn
+  cdn=$(run_log | grep -m 1 -E '^install: last: (curl: \(|.*Could not (download|fetch))' || true)
+  [[ -n "$cdn" ]] \
+    && fail "$1: the CDN or a release download failed during the app's install lines ($cdn), not this change"
+  fail "$1"
+}
 
 if [[ "${GITHUB_ACTIONS:-}" == true && "${RUNNER_ENVIRONMENT:-}" == github-hosted ]]; then
   rm -rf "$data" "$config/autostart" "$data_home/applications"
@@ -656,21 +666,27 @@ if [[ "${GITHUB_ACTIONS:-}" == true && "${RUNNER_ENVIRONMENT:-}" == github-hoste
     PATH="$APP_PATH" command -v "$terminal" >/dev/null && break
   done
   note "the terminal: $terminal, $(readlink -f "$(PATH="$APP_PATH" command -v "$terminal")")"
+  # The URL install.rs's lines fetch, read first with curl's growing waits between 3 tries, so a CDN outage fails as
+  # one. The app's own run is not retried: it is what a person's install does, and install.sh retries its downloads.
+  curl -fsS --retry 2 --retry-all-errors --max-time 60 -o /dev/null https://cdn.autonomous.ai/harness/cli/install.sh \
+    || fail "the CDN's install.sh did not download in 3 tries: the CDN failed, not this change"
   # Only the CDN's install script and the public files it downloads are read. The CLI it installs and the daemon its
   # start runs stay signed out, and are given a backend that does not resolve.
   launch XDG_SESSION_TYPE=x11 BACKEND_WS_URL=wss://harness-e2e.invalid
-  WAIT=$((INSTALL_WAIT + WAIT)) waits install_ended --host || fail "install.sh --host ends in its terminal"
+  WAIT=$((INSTALL_WAIT + WAIT)) waits install_ended --host || install_fail "install.sh --host ends in its terminal"
   # Without one the app runs the line behind the screen, which would prove nothing of the terminal.
-  logged "install: --host no terminal; run here" && fail "the app finds $terminal and runs install.sh --host in it"
+  logged "install: --host no terminal; run here" \
+    && install_fail "the app finds $terminal and runs install.sh --host in it"
   [[ "$(install_result --host)" == "install: --host exit 0" ]] \
-    || fail "install.sh --host, in a terminal, exits 0: the log has $(install_result --host)"
+    || install_fail "install.sh --host, in a terminal, exits 0: the log has $(install_result --host)"
   ok "install.sh --host runs in a terminal on the display and its host-<n>.exit reads 0"
-  WAIT=$((INSTALL_WAIT + WAIT)) waits install_ended --desktop || fail "install.sh --desktop ends"
+  WAIT=$((INSTALL_WAIT + WAIT)) waits install_ended --desktop || install_fail "install.sh --desktop ends"
   [[ "$(install_result --desktop)" == "install: --desktop exit 0" ]] \
-    || fail "install.sh --desktop exits 0: the log has $(install_result --desktop)"
+    || install_fail "install.sh --desktop exits 0: the log has $(install_result --desktop)"
   ok "install.sh --desktop exits 0"
   WAIT=$((START_WAIT + WAIT)) waits logged "$MENU" \
-    || fail "with the CLI it installed, the menu reads Plug in your device | Sign in… | Export logs | About | Quit"
+    || install_fail \
+      "with the CLI it installed, the menu reads Plug in your device | Sign in… | Export logs | About | Quit"
   ok "with the CLI it installed, the menu reads Plug in your device | Sign in… | Export logs | About | Quit"
   stop_app
 else
