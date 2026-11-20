@@ -523,6 +523,9 @@ def undeclared_reads(root, suite, known_paths=(), inputs=None):
         try:
             text = (Path(root) / source).read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
+            if not os.path.lexists(Path(root) / source):
+                # A sparse checkout lists files it does not hold: skipping them would report no read.
+                raise ValueError(f"the cross-read scan needs a full checkout; {source} is not in it") from None
             continue
         top = source.split("/", 1)[0]
         if not reads(suite, source, inputs):
