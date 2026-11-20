@@ -921,6 +921,38 @@ class GitPlanTests(unittest.TestCase):
         self.commit()
         self.assertEqual(self.plan()["suites"], [])
 
+    def test_what_a_job_takes_from_the_rest_of_ci_yml_is_part_of_its_definition(self):
+        # The workflow's env reaches the jobs that name a variable, its permissions every job, and an anchor each job that
+        # names it. A job's line may end in a comment, and the jobs may sit at any indent.
+        def workflow(node="24", permissions="read", anchor="base", step="base", note="", indent="  "):
+            i = indent
+            return (f"name: CI\non:\n  pull_request:\npermissions:\n  contents: {permissions}\n"
+                    f"# The runtime.\nenv:\n  NODE: {node}\n  OTHER: x\njobs:\n"
+                    f"{i}cli-tests:{note}\n{i}  runs-on: ubuntu-24.04\n{i}  steps:\n{i}    - run: node-$NODE {step}\n"
+                    f"{i}pty-checks:\n{i}  runs-on: ubuntu-24.04\n{i}  steps:\n{i}    - &build\n{i}      run: echo {anchor}\n"
+                    f"{i}tui-test:\n{i}  runs-on: ubuntu-24.04\n{i}  steps:\n{i}    - *build\n"
+                    f"{i}desktop-tests:\n{i}  runs-on: ubuntu-24.04\n{i}  steps:\n{i}    - run: echo $OTHER\n")
+
+        start = self.base
+        for base, head, suites in (
+                ({}, dict(node="26"), {"cli"}),
+                ({}, dict(permissions="write"), {"cli", "pty", "tui", "desktop"}),
+                ({}, dict(anchor="edited"), {"pty", "tui"}),
+                (dict(note="  # the CLI's"), dict(note="  # the CLI's", step="edited"), {"cli"}),
+                (dict(indent="    "), dict(indent="    ", step="edited"), {"cli"})):
+            with self.subTest(head=head):
+                self.git("checkout", "-q", "--detach", start)
+                self.write(".github/workflows/ci.yml", workflow(**base))
+                self.base = self.commit()
+                self.write(".github/workflows/ci.yml", workflow(**head))
+                self.commit()
+                self.assertEqual(set(self.plan()["suites"]), suites)
+        # A comment outside the jobs is in no job's definition.
+        self.git("checkout", "-q", "--detach", self.base)
+        self.write(".github/workflows/ci.yml", workflow(indent="    ").replace("# The runtime.", "# The Node runtime."))
+        self.commit()
+        self.assertEqual(self.plan()["suites"], [])
+
     def test_a_pr_that_only_deletes_an_e2e_file_runs_no_linux_e2e(self):
         self.write("cli/e2e/c.e2e.ts")
         self.base = self.commit()
