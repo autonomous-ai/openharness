@@ -21,7 +21,8 @@ export interface DialInputs {
   /** '' when there is none. */
   home: string
   path: string
-  run(file: string, args: readonly string[], bounds: { path: string; timeoutMs: number; maxBytes: number; signal: AbortSignal }): Promise<Ran>
+  /** Run in `cwd`, which on Windows is also looked in for a bare `file` before `path`. */
+  run(file: string, args: readonly string[], bounds: { path: string; cwd: string; timeoutMs: number; maxBytes: number; signal: AbortSignal }): Promise<Ran>
   /** POST `body` to `/` on the target. Null when it cannot connect, is aborted before the answer's head, or a pipe's
    *  answer does not prove the token. */
   connect(target: Target, body: string, signal: AbortSignal): Promise<Answer | null>
@@ -41,14 +42,14 @@ export function nodeInputs(): DialInputs {
     platform: process.platform,
     home: homeOrNone(),
     path: process.env.PATH ?? '',
-    run(file, args, { path, timeoutMs, maxBytes, signal }) {
+    run(file, args, { path, cwd, timeoutMs, maxBytes, signal }) {
       return new Promise((settle) => {
         execFile(
           file,
           args,
           // A bare name is looked up in the child's PATH, so the given one decides which file runs. On Windows the
           // launcher is a console program: hidden, so no window flashes up at each look.
-          { env: { ...process.env, PATH: path }, timeout: timeoutMs, maxBuffer: maxBytes, killSignal: 'SIGKILL', signal, windowsHide: true },
+          { cwd, env: { ...process.env, PATH: path }, timeout: timeoutMs, maxBuffer: maxBytes, killSignal: 'SIGKILL', signal, windowsHide: true },
           (error, stdout) => {
             if (!error) settle(stdout)
             else settle((error as NodeJS.ErrnoException).code === 'ENOENT' ? MISSING : null)

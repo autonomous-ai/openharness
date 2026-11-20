@@ -173,12 +173,17 @@ export function startDial(inputs: DialInputs, tell: { changed(state: DialState):
   }
 
   // The launcher in the home first, where Harness installs it, then one on PATH, as
-  // plugins/harness-device/hooks/device.js looks.
+  // plugins/harness-device/hooks/device.js looks. Only absolute folders: a relative or empty one is Orca's working
+  // folder, which can be a worktree Orca opened. Each runs in the home, as Windows looks for a bare name in the working
+  // folder before PATH. With no absolute home nothing runs: there is no folder of the account's own to run in, and no
+  // Harness, which keeps its state there.
+  const path = inputs.path.split(paths.delimiter).filter((folder) => paths.isAbsolute(folder)).join(paths.delimiter)
+  const launcher = windows ? ['.harness', 'bin', 'harness.exe'] : ['.local', 'bin', 'harness']
   async function launch(signal: AbortSignal): Promise<Ran> {
-    const own = windows ? win32.join(inputs.home, '.harness', 'bin', 'harness.exe') : `${inputs.home}/.local/bin/harness`
-    const files = inputs.home ? [own, 'harness'] : ['harness']
-    for (const file of files) {
-      const ran = await inputs.run(file, LINK_ARGS, { path: inputs.path, timeoutMs: LINK_TIMEOUT_MS, maxBytes: LINK_MAX_BYTES, signal })
+    const home = inputs.home
+    if (!paths.isAbsolute(home)) return MISSING
+    for (const file of [paths.join(home, ...launcher), 'harness']) {
+      const ran = await inputs.run(file, LINK_ARGS, { path, cwd: home, timeoutMs: LINK_TIMEOUT_MS, maxBytes: LINK_MAX_BYTES, signal })
       if (ran !== MISSING) return ran
     }
     return MISSING
