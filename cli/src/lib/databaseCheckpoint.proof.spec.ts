@@ -5,15 +5,22 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import type { RegisteredSession } from './registry.js'
 import { databaseCheckpointEvidence } from './databaseCheckpoint.js'
-import { observeNativeFiles } from '../engines/kit/nativeFileObservation.js'
+import { observeNativeFile, observeNativeFiles } from '../engines/kit/nativeFileObservation.js'
+import { openclawSessionLocation } from './openclawStore.js'
 
-const { reads, opens } = vi.hoisted(() => ({ reads: [] as string[], opens: [] as string[] }))
+const { reads, opens, openedFiles, effects } = vi.hoisted(() => ({ reads: [] as string[], opens: [] as string[],
+  openedFiles: new Map<number, string>(), effects: {} as { closed?(file: string): void; inspected?(file: string): void } }))
+vi.mock('./openclawStore.js', () => ({ openclawSessionLocation: vi.fn() }))
 vi.mock('node:fs', async original => {
   const fs = await original<typeof import('node:fs')>()
   return { ...fs, openSync: (...args: Parameters<typeof fs.openSync>) => {
-    opens.push(String(args[0])); return fs.openSync(...args)
+    opens.push(String(args[0])); const fd = fs.openSync(...args); openedFiles.set(fd, String(args[0])); return fd
+  }, closeSync: (fd: number) => {
+    fs.closeSync(fd); const file = openedFiles.get(fd); openedFiles.delete(fd)
+    if (file) effects.closed?.(file)
   }, lstatSync: (...args: Parameters<typeof fs.lstatSync>) => {
-    reads.push(String(args[0])); return fs.lstatSync(...args)
+    const file = String(args[0]); reads.push(file)
+    try { return fs.lstatSync(...args) } finally { effects.inspected?.(file) }
   } }
 })
 let root: string, home: string, database: string
@@ -21,11 +28,67 @@ beforeEach(async () => {
   root = realpathSync(await mkdtemp(join(tmpdir(), 'database-proof-')))
   home = join(root, 'profiles', 'selected'); mkdirSync(home, { recursive: true })
   database = join(home, 'state.db'); writeFileSync(database, 'native history', { mode: 0o600 })
-  reads.length = 0
+  reads.length = 0; opens.length = 0; openedFiles.clear()
 })
-afterEach(async () => { vi.restoreAllMocks(); await rm(root, { recursive: true, force: true }) })
+afterEach(async () => {
+  delete effects.closed; delete effects.inspected
+  vi.restoreAllMocks(); await rm(root, { recursive: true, force: true })
+})
 const session = () => ({ engine: 'hermes', sessionId: '20261120_010000_abcdef', hermesHome: home }) as RegisteredSession
 const proof = async () => (await databaseCheckpointEvidence(session()))!
+
+it.each([false, true])('captures a native file group with one post-read route fence (sidecars: %s)', sidecars => {
+  if (sidecars) writeFileSync(database + '-wal', 'native WAL', { mode: 0o600 })
+  const held = observeNativeFiles([{ path: database }, { path: database + '-wal', missingOkay: true },
+    { path: database + '-journal', missingOkay: true }])
+  expect(reads.filter(path => path === home)).toHaveLength(2)
+  reads.length = 0; held.verify()
+  expect(reads.filter(path => path === home)).toHaveLength(1)
+})
+
+it('fresh checkpoint capture checks its old route before opens and its complete new group after them', async () => {
+  const held = await proof()
+  reads.length = 0; const fresh = held.fresh()
+  expect(reads.filter(path => path === home)).toHaveLength(2)
+  reads.length = 0; fresh.verify()
+  expect(reads.filter(path => path === home)).toHaveLength(1)
+})
+
+it.each(['ancestor replaced', 'leaf rewritten', 'leaf hard-linked'] as const)(
+  'single-file capture refuses %s after its descriptor closes', change => {
+  effects.closed = file => {
+    if (file !== database) return
+    delete effects.closed
+    if (change === 'ancestor replaced') {
+      renameSync(home, home + '.old'); mkdirSync(home)
+      renameSync(join(home + '.old', 'state.db'), database)
+    } else if (change === 'leaf rewritten') appendFileSync(database, 'changed after read')
+    else linkSync(database, database + '.link')
+  }
+  expect(() => observeNativeFile(database, { maxBytes: 1024 })).toThrow(/changed/)
+})
+
+it('capture refuses a sidecar that appears after its absent observation', () => {
+  effects.inspected = file => {
+    if (file !== database + '-journal') return
+    delete effects.inspected
+    writeFileSync(database + '-wal', 'late WAL', { mode: 0o600 })
+  }
+  expect(() => observeNativeFiles([{ path: database }, { path: database + '-wal', missingOkay: true },
+    { path: database + '-journal', missingOkay: true }])).toThrow(/changed/)
+})
+
+it.each(['refused location', 'changed database'] as const)(
+  'OpenClaw keeps its final file fence after a %s during location verification', change => {
+  let captured = false
+  effects.closed = file => { if (file === database) captured = true }
+  vi.mocked(openclawSessionLocation).mockResolvedValue({ path: database, verify: () => {
+    if (!captured) return
+    if (change === 'refused location') throw new Error('location changed')
+    appendFileSync(database, 'changed while location was rechecked')
+  } })
+  return expect(databaseCheckpointEvidence({ ...session(), engine: 'openclaw' })).rejects.toThrow(/changed/)
+})
 
 it('checks shared ancestors once per synchronous database proof, and reads them again on every call', async () => {
   writeFileSync(database + '-wal', 'native WAL', { mode: 0o600 })

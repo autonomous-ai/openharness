@@ -28,8 +28,10 @@ export function observeNativeFiles(entries: readonly { path: string; maxBytes?: 
   const paths = base?.fork(budget) ?? new NativePaths(budget)
   const observations = entries.map(entry => { budget.step(); return inspectNativeFile(entry.path, entry, paths, budget) })
   const verifyRoute = paths.retain()
-  const verify = () => { verifyRoute(); for (const file of observations) file.verify() }
-  verify()
+  const verifyFiles = () => { for (const file of observations) file.verify() }
+  const verify = () => { verifyRoute(); verifyFiles() }
+  // retain() just checked the complete route after the last close. Finish that fence with the leaf versions.
+  verifyFiles()
   return { files: observations.map(({ verify: _verify, ...file }) => file), verify }
 }
 

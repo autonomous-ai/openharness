@@ -1,6 +1,6 @@
 # Reuse provisional ancestry inside one hook proof
 
-Status: minimal implementation independently reviewed; final evidence and cost acceptance pending.
+Status: source and matched helper cost accepted; whole-daemon acceptance remains open.
 
 The retained V18 Resume workload still costs more core CPU than the main baseline.
 The subsequent diagnostic (`/tmp/core-resume-cpu-profile-v3-results`, receipt
@@ -69,3 +69,22 @@ and changed the refusal for an unbound literal root-level file. Both sets of
 cases pass on the original source. The final change confines reuse to the
 measured repeated route verification, keeping initial capture exactly as before.
 The regression cases remain, alongside all missing-parent and alias controls.
+
+## Local acceptance
+
+At `6e81658b06`, 805 caller tests plus typecheck pass (eight skips); the final
+focused file passes all 48 cases, including the bounded-depth cases required by
+independent review. Baseline read counts fail six intended assertions.
+
+The fixed eight-arm ABBA/BAAB helper comparison against `1149e34684` retains all
+four scenarios and 512 verifications per scenario per arm. Across the measured
+windows, pooled process CPU falls 37.65%, main-thread CPU 40.78%, and elapsed time
+40.93%; both run orders improve. The unchanged existing-file control is nearly
+flat (pooled CPU +0.24%, elapsed +0.38%; opposite CPU directions by run order).
+All arms exit normally and verify pipe, process-group and private-fixture cleanup.
+Receipt: `20261120T030001.074983Z-94571`.
+
+The production diagnostic at the same source completes eight Close/Resume cycles
+per side. Resume-request `lstat` calls fall from the prior candidate's 16,152 to
+12,696. This is diagnostic call-count evidence, not a cross-run CPU comparison.
+Whole Close/Resume cost and integrated Linux native acceptance remain open.

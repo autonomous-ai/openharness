@@ -50,7 +50,8 @@ export async function databaseCheckpointEvidence(s: RegisteredSession, current: 
     const files = observeNativeFiles([{ path: source.path },
       { path: source.path + '-wal', missingOkay: true }, { path: source.path + '-journal', missingOkay: true }], paths)
     const verify = () => { locationProof?.(); files.verify() }
-    verify()
+    // Capture already checked every route and leaf. A separate location callback still needs a file fence after it.
+    if (locationProof) verify()
     return { source, verify, fresh }
   }
   return fresh()
