@@ -45,7 +45,7 @@ beforeEach(async () => {
 afterEach(async () => {
   for (const instance of instances) await instance.flush({ exiting: true }).catch(() => {})
   instances.clear()
-  vi.unstubAllEnvs()
+  vi.restoreAllMocks(); vi.unstubAllEnvs()
   rmSync(directory, { recursive: true, force: true })
 })
 

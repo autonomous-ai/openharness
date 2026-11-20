@@ -118,6 +118,7 @@ afterEach(async () => {
   image.names = false
   for (const entry of registry.list()) (await removeRegistryAgent(registry, entry.agentId))
   await registry.flush()
+  vi.restoreAllMocks()
   rmSync(directory, { recursive: true, force: true })
 })
 

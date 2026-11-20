@@ -20,6 +20,7 @@ beforeEach(() => { deadline.holdRegistryDeadline(REGISTRY_WRITE_DEADLINE_MS) })
 afterEach(async () => {
   for (const entry of registry.list()) await removeRegistryAgent(registry, entry.agentId)
   await registry.flush()
+  vi.restoreAllMocks()
   rmSync(directory, { recursive: true, force: true })
 })
 
