@@ -153,9 +153,13 @@ may lack symbolicated stacks until the matching symbols are supplied.
 | `1.0.12 (82)` | 2026-11-05 | TestFlight. Push notifications (APNs) and fewer repeated question notices. Signed without its entitlements, so it has no push and no setup hotspot: use 83. Built from `feat/mobile-ios-android` at `0c47f4f8` |
 | `1.0.12 (83)` | 2026-11-05 | TestFlight. The same code as 82, the first build signed with its entitlements: `aps-environment` (production) and the setup hotspot. 80 to 82 went up without them because the archive is unsigned and the export signs only what the app carries; `release-ios.sh` now signs them onto the archived app and checks the exported app before it uploads. Built from `feat/mobile-ios-android` at `0c47f4f8` |
 | `1.0.12 (84)` | 2026-11-06 | TestFlight, uploaded from another Mac with `--build-number=84` (#3303). Whether it carries its entitlements was not checked. Built from `main` at `b8b8c8ea` |
+| `1.0.12 (85)`–`(88)` | — | Uploaded outside this record: ASC refused 88 as already used on 2026-11-20. Do not reuse 85–88 on either store |
+| `1.0.12 (89)` | 2026-11-20 | Submitted for App Review as 1.0.12, signed and uploaded with the Xcode account (no API key on that Mac). Change agent moves a conversation between Claude and Codex (#4496); OpenCode 2 delete and the moved-folder engine install on Linux (#4490). Built from `main` at `76871383` |
 
-`pubspec.yaml` is at `1.0.12+85` with #3303, the next build number. Build 84 (1.0.12) is the last TestFlight build and
-79 the last Play build (54 went up outside this record, 53 went to Play only); do not upload any of them again. 1.0.1 to 1.0.10 are approved and 1.0.11 is submitted or approved, so new builds go up as 1.0.12 until it is submitted or approved too. Check App Store Connect before uploading if another release has happened meanwhile.
+`pubspec.yaml` is at `1.0.13+90`, the next build number. Build 89 (1.0.12) is the last build on both stores; do not
+upload 89 or anything below it again. 1.0.12 is submitted for App Review, so the next iOS build goes up as 1.0.13 under a
+new version record (App Store Connect ▸ iOS App ▸ ⊕, which needs the App Manager or Admin role). Check App Store Connect
+before uploading if another release has happened meanwhile.
 
 ### Why the app is iPhone-only
 
@@ -392,3 +396,5 @@ account (Autonomous Inc.) is exempt — check which kind the account is before p
 | `75` (1.0.12) | 2026-10-30 | Built, same code as iOS 1.0.12 (75); to be uploaded by hand |
 | `78` (1.0.12) | 2026-11-02 | Built, same code as iOS 1.0.12 (78); to be uploaded by hand |
 | `79` (1.0.12) | 2026-11-03 | Built, same code as iOS 1.0.12 (79), from `e8620dbe`; to be uploaded by hand |
+| `86` (1.0.12) | 2026-11-11 | Production, uploaded outside this record (seen in Play Console on 2026-11-20) |
+| `89` (1.0.12) | 2026-11-20 | Production, sent for review. Same code as iOS 1.0.12 (89). Play warned that `ACCESS_WIFI_STATE` made `android.hardware.wifi` required; ignored for 89, declared optional from 90 on |
