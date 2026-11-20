@@ -10,6 +10,7 @@ import 'package:ffi/ffi.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/home_dir.dart';
+import 'package:harness/core/posix_file_mode.dart';
 import 'package:harness/devices/device_app.dart';
 import 'package:harness/devices/device_app_installer.dart';
 import 'package:harness/devices/device_app_manifest.dart';
@@ -1123,6 +1124,30 @@ void main() {
       'LOCALAPPDATA': r'C:\Users\Nguyễn Văn A\AppData\Local',
     });
   });
+
+  // A folder that is a running process's working folder cannot be removed on
+  // Windows: the app, which lives until sign-out, must not hold Desktop's.
+  test("the app starts in its own folder, not Desktop's", () async {
+    final folder = Directory(p.join(root.path, 'Harness Device'))..createSync();
+    final app = p.join(folder.path, 'harness-device');
+    final out = p.join(root.path, 'cwd');
+    File(app).writeAsStringSync(
+      '#!/bin/sh\npwd -P > "$out.partial"\n/bin/mv "$out.partial" "$out"\n',
+    );
+    PosixFileMode.chmod(app, 0x1ed); // 0755
+
+    await startDeviceAppDetached(app, const {});
+
+    final deadline = DateTime.now().add(const Duration(seconds: 30));
+    while (!File(out).existsSync()) {
+      expect(DateTime.now().isBefore(deadline), isTrue, reason: 'it started');
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+    }
+    expect(
+      File(out).readAsStringSync().trim(),
+      folder.resolveSymbolicLinksSync(),
+    );
+  }, skip: _needsChmod);
 
   test('a start that throws is a failed open', () async {
     expect(
