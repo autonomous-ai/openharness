@@ -100,10 +100,10 @@ Future<void> writeDeviceAppLauncher(
     final iconBytes = await extractIcon(appImage);
     if (iconBytes != null) {
       await icon.parent.create(recursive: true);
-      await _replace(icon, iconBytes);
+      await replaceLauncherFile(icon, iconBytes);
     }
     await entry.parent.create(recursive: true);
-    await _replace(
+    await replaceLauncherFile(
       entry,
       utf8.encode(iconBytes == null ? _entryText(appImage) : wanted),
     );
@@ -176,17 +176,6 @@ String _entryText(String appImage, {String? icon}) =>
 
 /// C0, DEL and C1 (Unicode's Cc), as the Device app's `char::is_control`.
 final _control = RegExp(r'[\x00-\x1f\x7f-\x9f]');
-
-/// Written beside [file] and renamed over it, so a dock never reads half of it.
-Future<void> _replace(File file, List<int> bytes) async {
-  final temp = File('${file.path}.tmp');
-  try {
-    await temp.writeAsBytes(bytes, flush: true);
-    await temp.rename(file.path);
-  } finally {
-    if (await temp.exists()) await temp.delete();
-  }
-}
 
 /// Removes the entry and its icon once the app's place, which the entry
 /// starts, is gone: a person deleted the AppImage, and Desktop has no other

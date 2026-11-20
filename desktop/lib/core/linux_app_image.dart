@@ -57,20 +57,23 @@ Future<void> registerAppImageLauncher({
     final icon = File('$dataHome/icons/harness.png');
     if (await bundleIcon.exists()) {
       await icon.parent.create(recursive: true);
-      await bundleIcon.copy(icon.path);
+      await replaceLauncherFile(icon, await bundleIcon.readAsBytes());
     }
     await entry.parent.create(recursive: true);
-    await entry.writeAsString(
-      '[Desktop Entry]\n'
-      'Type=Application\n'
-      'Name=Harness\n'
-      'Comment=Attach terminals to the agents running on your Harness machines\n'
-      'Exec=${quoteLauncherExec(appImage)} %u\n'
-      'MimeType=x-scheme-handler/harness;\n'
-      'Icon=${icon.path}\n'
-      'Terminal=false\n'
-      'Categories=Development;\n'
-      'StartupWMClass=$kLinuxAppId\n',
+    await replaceLauncherFile(
+      entry,
+      utf8.encode(
+        '[Desktop Entry]\n'
+        'Type=Application\n'
+        'Name=Harness\n'
+        'Comment=Attach terminals to the agents running on your Harness machines\n'
+        'Exec=${quoteLauncherExec(appImage)} %u\n'
+        'MimeType=x-scheme-handler/harness;\n'
+        'Icon=${icon.path}\n'
+        'Terminal=false\n'
+        'Categories=Development;\n'
+        'StartupWMClass=$kLinuxAppId\n',
+      ),
     );
     if (environment == null) {
       try {
@@ -131,6 +134,20 @@ String? launcherEntryValue(String entry, String key) {
 }
 
 final _padding = RegExp(r'^[ \t\r]+|[ \t\r]+$');
+
+/// Writes a launcher entry or its icon beside [file], flushed, and renames it
+/// over it, as the Device app writes its own: a dock never reads half of one.
+/// The temp file's name is one per file, so the next write takes over one a
+/// killed write left.
+Future<void> replaceLauncherFile(File file, List<int> bytes) async {
+  final temp = File('${file.path}.tmp');
+  try {
+    await temp.writeAsBytes(bytes, flush: true);
+    await temp.rename(file.path);
+  } finally {
+    if (await temp.exists()) await temp.delete();
+  }
+}
 
 /// A launcher entry's text, as the Device app reads one: a byte that is not
 /// UTF-8 reads as U+FFFD, and the rule still reads its lines.
