@@ -163,6 +163,28 @@ mod tests {
         }
     }
 
+    /// A panic where the hook tells (a poisoned lock in the app) would unwind into Windows, which ends the process.
+    #[cfg(windows)]
+    #[test]
+    fn a_panic_where_the_hook_tells_ends_following_not_the_app() {
+        use windows_sys::Win32::UI::WindowsAndMessaging::{PM_REMOVE, PeekMessageW, WM_QUIT};
+
+        CHANGED.with(|cell| {
+            let _ = cell.set(Box::new(|_| panic!("a poisoned lock")));
+        });
+        // SAFETY: called as Windows calls it, on the thread whose CHANGED it reads.
+        unsafe { foreground(ptr::null_mut(), EVENT_SYSTEM_FOREGROUND, ptr::null_mut(), 0, 0, 0, 0) };
+        // The message loop the hook runs in is told to quit: following ends, with its line.
+        // SAFETY: MSG is plain data; all zeros is a valid value for PeekMessageW to fill.
+        let mut message: MSG = unsafe { std::mem::zeroed() };
+        let mut quit = false;
+        // SAFETY: `message` is writable; the null window takes every message of this thread.
+        while !quit && unsafe { PeekMessageW(&mut message, ptr::null_mut(), 0, 0, PM_REMOVE) } != 0 {
+            quit = message.message == WM_QUIT;
+        }
+        assert!(quit, "the hook's message loop was not told to quit");
+    }
+
     /// So any event, even a late or a stray one, brings the value back to the window in front.
     #[cfg(windows)]
     #[test]
