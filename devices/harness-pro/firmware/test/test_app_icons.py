@@ -190,10 +190,9 @@ class CommittedTests(unittest.TestCase):
             cid = app.replace("-", "_")
             baked = (app in self.rows and f"a_{cid}_72_px[5184]" in self.c and f"a_{cid}_44_px[1936]" in self.c)
             self.assertEqual(app in self.art, baked, app)
-            if app not in self.art:
-                self.assertIn(app, self.left_out, app)
-        for app in self.art:
-            self.assertIn(app, self.readme_rows, app)
+        # Each PNG has one source row and every other app is left out: no row outlives its art, no app is in both.
+        self.assertEqual(sorted(self.readme_rows), self.art)
+        self.assertEqual(sorted(self.left_out), sorted(set(gen.APPS) - set(self.art)))
         for app in ("harness", "terminal"):
             self.assertNotIn(app, self.rows)
 
