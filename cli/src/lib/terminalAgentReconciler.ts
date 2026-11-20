@@ -348,11 +348,13 @@ export class TerminalAgentReconciler {
       target.result.state === 'available'
         ? target.result.roots.map((root) => terminalPlacementKey(root.runtime))
         : []))
-    const probeError = !probe.processTableAvailable
-      ? 'process table unavailable'
-      : probe.targets.length > 0 && availableTargets.length === 0
-        ? probe.targets.map((target) => `${target.instanceId}: ${target.result.state === 'available' ? 'available' : target.result.reason}`).join('; ')
-        : null
+    const probeError = probe.ownershipFailure
+      ? `engine executables could not be resolved (${probe.ownershipFailure})`
+      : !probe.processTableAvailable
+        ? 'process table unavailable'
+        : probe.targets.length > 0 && availableTargets.length === 0
+          ? probe.targets.map((target) => `${target.instanceId}: ${target.result.state === 'available' ? 'available' : target.result.reason}`).join('; ')
+          : null
     // Terminal placement liveness does not depend on finding an engine process. This is what keeps a
     // retained trust/setup/shell pane visible after restart, including when `ps` itself is unavailable.
     const markVerifiedPlacements = async (): Promise<void> => {
@@ -365,7 +367,7 @@ export class TerminalAgentReconciler {
     if (this.deps.transaction) await this.batch(this.deps.transaction(markVerifiedPlacements))
     else await markVerifiedPlacements()
     if (!probe.processTableAvailable) {
-      console.warn('[discovery] process table unavailable; keeping existing terminal agents')
+      console.warn(`[discovery] ${probeError}; keeping existing terminal agents`)
       this.deps.onProbeStatus?.({ ready: true, error: probeError })
       return
     }
