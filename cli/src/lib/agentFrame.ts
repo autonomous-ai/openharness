@@ -211,16 +211,25 @@ export interface AgentFrameContext {
 export const OPENCLAW_STARTING_MS = 60_000
 
 /**
+ * When an OpenClaw with no session bound stops reading as starting, in epoch ms; null for any other row. It learns its
+ * session only once its Gateway answers, so it is starting for a minute from its launch: the later of its row and its
+ * process's start, as an engine typed into a pane that was open first starts after its row. The binding pass announces
+ * the agent at this time (core/agents/bind.ts), since no frame is built when it passes.
+ */
+export function openclawStartingUntil(s: RegisteredSession): number | null {
+  if (s.engine !== 'openclaw' || s.sessionId) return null
+  return Math.max(s.registeredAt, startMarkerMs(s.processIdentity?.startMarker ?? '') ?? 0) + OPENCLAW_STARTING_MS
+}
+
+/**
  * Whether [s] has yet to take its first task: the row still holds it, or it is typed and its user row has not
- * confirmed it ([firstTaskTyped], core/input.ts). An OpenClaw learns its session only once its Gateway answers, so
- * one with none bound is starting for a minute from its launch: the later of its row and its process's start, as an
- * engine typed into a pane that was open first starts after its row.
+ * confirmed it ([firstTaskTyped], core/input.ts); or it is an OpenClaw within its starting minute
+ * ({@link openclawStartingUntil}).
  */
 export function agentStarting(s: RegisteredSession, firstTaskTyped: boolean, now: number): boolean {
   if (s.firstTask || firstTaskTyped) return true
-  if (s.engine !== 'openclaw' || s.sessionId) return false
-  const launched = Math.max(s.registeredAt, startMarkerMs(s.processIdentity?.startMarker ?? '') ?? 0)
-  return now - launched < OPENCLAW_STARTING_MS
+  const until = openclawStartingUntil(s)
+  return until !== null && now < until
 }
 
 /**

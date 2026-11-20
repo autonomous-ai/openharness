@@ -18,6 +18,7 @@ import { sessionStoreOf } from '../../engines/sessionStoreContracts.js'
 import type { TurnRecaps } from '../turns/recaps.js'
 import { paneReadIdentity } from '../transcripts/readIdentity.js'
 import type { AutonomousDeviceInput } from '../deviceInput.js'
+import { openclawStartingUntil } from '../../lib/agentFrame.js'
 import { isRecentlyDeleted } from '../../lib/deletedSessions.js'
 import { transcriptIsFirstTurn } from '../../lib/firstTurnReplay.js'
 import { errorKind, sid } from '../../lib/log.js'
@@ -246,6 +247,20 @@ export function createBinding({
     if (screen.state === 'busy' && input.awaitingConfirmation(agent.agentId)) return false
     const from = Math.max(agent.registeredAt, startMarkerMs(tui.startMarker) ?? 0, clock.seenAt)
     return now - from - clock.pausedMs >= FIRST_TASK_BOUND_MS
+  }
+  /**
+   * The end of each unbound OpenClaw's starting minute already announced, agentId → that end
+   * (lib/agentFrame.ts `openclawStartingUntil`). A frame reads `starting` off the clock, so nothing else tells a window
+   * or a watch that it ended. Keyed by the end, so a TUI started again has its own minute announced. Cleared at 256
+   * entries rather than aged: an agent is then announced once more, never missed.
+   */
+  const startingAnnounced = new Map<string, number>()
+  const announceStartingEnd = (agent: RegisteredSession): void => {
+    const until = openclawStartingUntil(agent)
+    if (until === null || Date.now() < until || startingAnnounced.get(agent.agentId) === until) return
+    if (startingAnnounced.size >= 256) startingAnnounced.clear()
+    startingAnnounced.set(agent.agentId, until)
+    announceSession(agent)
   }
   /**
    * The hold a failed native read set, agentId → that hold as the row stored it: its reason, and the row's
@@ -597,6 +612,8 @@ export function createBinding({
       // So is one whose first task, or a message waiting untyped for the pane to be able to send, waits: a history that
       // did not load reads idle, and its `/session` and the message wait.
       const taskWaits = firstTaskWaits(agent)
+      // A waiting first task keeps it starting (agentStarting): its end is announced by the turn that takes it.
+      if (!taskWaits) announceStartingEnd(agent)
       const waiting = taskWaits || input.awaitingConfirmation(agent.agentId) || input.waitsForPane(agent.agentId)
       if (agent.sessionId && !waiting && !openclawPaneDue(agent.sessionId)) return
       const revision = agent.sessionId ? activityRevision(agent.sessionId) : undefined
