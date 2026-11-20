@@ -2191,6 +2191,14 @@ void main() {
         'terminal_chunked_upload_cancel',
         'terminal_chunked_upload_begin',
       ]);
+      // uploadSent() hides every other frame, so the stream staying open is checked on its own.
+      expect(
+        sent.where(
+          (frame) =>
+              frame.type == 'terminal_open' || frame.type == 'terminal_close',
+        ),
+        isEmpty,
+      );
       expect(imagePastes(), isEmpty);
 
       await session.handleFrame('terminal_chunked_upload_begin_result', {
