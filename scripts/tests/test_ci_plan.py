@@ -243,6 +243,15 @@ class SelectionTests(unittest.TestCase):
         # Desktop's and the CLI's tests read the Store's agents and branding, which no component owns.
         self.assertEqual(planner.select(["store/agents/blender/store.json"])[0], {"cli", "desktop"})
 
+    def test_the_app_list_vectors_select_desktop_device_app_and_website(self):
+        # Every writer of Harness Device's Linux app-list entry holds its bytes and rule to one shared file: the app,
+        # Desktop and the website's one-line installer. The CLI owns tests/ and the backend reads tests/fixtures/.
+        path = "tests/fixtures/app-list-entry-vectors.json"
+        self.assertEqual(planner.select([path])[0], {"backend", "cli", "desktop", "device-app", "website"})
+        for suite in ("desktop", "device-app", "website"):
+            with self.subTest(suite=suite):
+                self.assertTrue(planner.reads(suite, path))
+
     def test_every_declared_input_selects_the_suite_that_reads_it(self):
         # A PR that changes a file a suite reads runs that suite; reuse after Update branch counts it as an input too.
         for suite, entries in planner.PR_READS.items():
