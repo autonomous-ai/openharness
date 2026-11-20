@@ -155,4 +155,51 @@ mod tests {
             assert_eq!(front_line(&value), serde_json::json!({ "front": value }).to_string());
         }
     }
+
+    /// So any event, even a late or a stray one, brings the value back to the window in front.
+    #[cfg(windows)]
+    #[test]
+    fn the_hook_tells_the_window_in_front_not_the_one_its_event_names() {
+        use std::sync::mpsc;
+        use windows_sys::Win32::UI::WindowsAndMessaging::{CreateWindowExW, DestroyWindow, HWND_MESSAGE};
+
+        let class: Vec<u16> = "STATIC\0".encode_utf16().collect();
+        // SAFETY: a system class, NUL-terminated; no title, menu, instance or parameter. A message-only window: this
+        // test's own, and never the window in front.
+        let ours = unsafe {
+            CreateWindowExW(
+                0,
+                class.as_ptr(),
+                ptr::null(),
+                0,
+                0,
+                0,
+                0,
+                0,
+                HWND_MESSAGE,
+                ptr::null_mut(),
+                ptr::null_mut(),
+                ptr::null(),
+            )
+        };
+        assert!(!ours.is_null());
+        let (send, told) = mpsc::channel();
+        CHANGED.with(|cell| {
+            let _ = cell.set(Box::new(move |value| {
+                let _ = send.send(value);
+            }));
+        });
+        // SAFETY: takes no argument.
+        let before = app(unsafe { GetForegroundWindow() });
+        // SAFETY: called as Windows calls it, on the thread whose CHANGED it reads.
+        unsafe { foreground(ptr::null_mut(), EVENT_SYSTEM_FOREGROUND, ours, 0, 0, 0, 0) };
+        // SAFETY: takes no argument.
+        let after = app(unsafe { GetForegroundWindow() });
+        let named = app(ours);
+        // SAFETY: the window was made by this thread and is destroyed once.
+        unsafe { DestroyWindow(ours) };
+        let value = told.try_recv().expect("one value, told during the call");
+        assert_ne!(value, named, "the event's window was told");
+        assert!(value == before || value == after, "{value:?} is neither {before:?} nor {after:?}");
+    }
 }
