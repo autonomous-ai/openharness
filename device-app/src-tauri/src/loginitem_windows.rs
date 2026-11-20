@@ -196,6 +196,16 @@ mod tests {
     }
 
     #[test]
+    fn startup_apps_switch_is_off_when_its_first_byte_is_odd() {
+        // Windows 11 keeps 06 for an item it has on (SecurityHealth), beside 02; 03 and 07 are off.
+        let first = |byte: u8| [byte, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+        assert_eq!(status(None, Some(&first(6))), Status::NotRegistered);
+        assert_eq!(status(Some(EXE), Some(&first(6))), Status::Enabled);
+        assert_eq!(status(None, Some(&first(7))), Status::RequiresApproval);
+        assert_eq!(status(Some(EXE), Some(&first(7))), Status::RequiresApproval);
+    }
+
+    #[test]
     fn the_value_is_the_quoted_exe() {
         let exe = Path::new(r"C:\Users\Nguyễn Văn A\AppData\Local\Harness Device\harness-device.exe");
         assert_eq!(run_data(exe), EXE);
