@@ -46,14 +46,16 @@ interface Options {
   before?: Record<string, string>;
   /** A signal `--appimage-extract` sends the script, as a Ctrl-C or a closed terminal does. */
   signal?: string;
+  /** Whether the app, started, ends at once, as with no FUSE or another arch's userland. */
+  startFails?: boolean;
 }
 
 /**
- * Stub uname, curl, pgrep, setsid and mv, first on PATH, steered by STUB_* variables; sha256sum, sed and the rest are
- * real. curl serves the manifest at its URL and the AppImage at any other, recording each URL. pgrep matches its
+ * Stub uname, curl, pgrep, setsid, mv and sleep, first on PATH, steered by STUB_* variables; sha256sum, sed and the rest
+ * are real. curl serves the manifest at its URL and the AppImage at any other, recording each URL. pgrep matches its
  * pattern as the extended regex it is against the command lines in the log's `processes`. mv records whether something
- * is at the place, then moves. Written once: macOS checks each new executable on its first run, which costs a quarter of
- * a second per file.
+ * is at the place, then moves. sleep records how long it was asked to wait, and returns. Written once: macOS checks each
+ * new executable on its first run, which costs a quarter of a second per file.
  */
 const bin = mkdtempSync(join(tmpdir(), "harness-device-install-bin-"));
 const stub = (name: string, body: string) => writeFileSync(join(bin, name), `#!/bin/sh\n${body}\n`, { mode: 0o755 });
@@ -77,8 +79,12 @@ for pattern; do :; done
 );
 stub("setsid", `printf '%s\\0' "$@" > "$STUB_LOG/setsid"\n[ "$1" = -f ] && shift\n"$@"`);
 stub("mv", `if [ -e "$STUB_PLACE" ]; then echo there; else echo none; fi >> "$STUB_LOG/mv"\nexec /bin/mv "$@"`);
+stub("sleep", `printf '%s\\n' "$*" >> "$STUB_LOG/sleep"`);
 
-/** The AppImage: it takes its icon out for `--appimage-extract <member>`, as the runtime does with no FUSE. */
+/**
+ * The AppImage: it takes its icon out for `--appimage-extract <member>`, as the runtime does with no FUSE. Started, it
+ * runs on as its command, the place, as the runtime does, unless its start fails.
+ */
 const APP = `#!/bin/sh
 if [ "$1" = --appimage-extract ]; then
   [ -z "$STUB_SIGNAL" ] || kill -"$STUB_SIGNAL" "$STUB_SCRIPT_PID"
@@ -87,6 +93,7 @@ if [ "$1" = --appimage-extract ]; then
   exit
 fi
 printf '%s\\n' "$#" >> "$STUB_LOG/ran"
+[ -n "$STUB_START_FAILS" ] || printf '%s\\n' "$0" >> "$STUB_LOG/processes"
 `;
 const APP_SUMS = { sha256: createHash("sha256").update(APP).digest("hex"), size: Buffer.byteLength(APP) };
 
@@ -146,6 +153,7 @@ function install(options: Options = {}) {
     STUB_SERVED: served,
     STUB_MANIFEST_URL: options.metadataUrl ?? DEVICE_MANIFEST_URL,
     STUB_ICON: options.icon === false ? "" : "1",
+    STUB_START_FAILS: options.startFails ? "1" : "",
   };
   delete env.XDG_DATA_HOME;
   delete env.HARNESS_DEVICE_METADATA_URL;
@@ -176,6 +184,7 @@ function install(options: Options = {}) {
     pgrep: read("pgrep").split("\0\n").filter(Boolean).map((call) => call.split("\0")),
     setsid: read("setsid").split("\0").slice(0, -1),
     ran: read("ran").split("\n").filter(Boolean),
+    sleep: read("sleep").split("\n").filter(Boolean),
     /** At each mv, whether something was at the place. */
     mv: read("mv").split("\n").filter(Boolean),
     opt: files(join(homeAbsolute, ".local", "opt")),
@@ -304,6 +313,27 @@ describe("device-install.sh", () => {
     expect(run.placed).toBe(APP);
     expect(run.mode).toBe(0o755);
     expect(run.setsid).toEqual(["-f", run.place]);
+    expect(run.ran).toEqual(["0"]);
+  });
+
+  // A start that fails ends at once; the app, once up, runs on. So it has started when it still runs a moment later.
+  it("checks the app still runs from the place a moment after its start", () => {
+    const run = install();
+
+    expect(run.result.status).toBe(0);
+    expect(run.sleep).toHaveLength(1);
+    expect(run.pgrep).toHaveLength(2);
+    expect(run.pgrep[1]).toEqual(run.pgrep[0]);
+  });
+
+  it("says so, and what to run, when the app does not start", () => {
+    const run = install({ startFails: true });
+
+    expect(run.result.status).toBe(1);
+    expect(run.result.stdout).toContain(`Harness Device ${VERSION} installed at ${run.place}\n`);
+    expect(run.result.stderr).toBe(
+      `Harness Device installer: Harness Device did not start: run "${run.place}" in a terminal to see why.\n`,
+    );
     expect(run.ran).toEqual(["0"]);
   });
 
