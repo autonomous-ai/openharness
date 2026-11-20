@@ -133,7 +133,7 @@ class DeviceAppE2ETests(unittest.TestCase):
         self.assertEqual(len(re.findall(r'"(?:appimage|nsis)-(?:x64|arm64)"', BUILD_RUNNERS)), 4)
 
     def test_no_new_job_runs_on_ubuntu_latest_or_macos(self):
-        for name in ("windows-e2e", "device-app-build", *DEVICE_JOBS):
+        for name in ("windows-e2e", "linux-e2e", "linux-e2e-summary", "dial-hosts", "device-app-build", *DEVICE_JOBS):
             with self.subTest(job=name):
                 self.assertNotIn("ubuntu-latest", self.jobs[name])
                 self.assertNotIn("macos", self.jobs[name].lower())
@@ -145,6 +145,140 @@ class DeviceAppE2ETests(unittest.TestCase):
 
     def test_ci_required_waits_for_every_device_app_job(self):
         for name in ("device-app-build", *DEVICE_JOBS):
+            self.assertIn(name, self.needs)
+
+
+def run_blocks(text):
+    """Every `run:` script in a workflow: the key's line and the lines indented under it."""
+    blocks, lines = [], text.splitlines()
+    for index, line in enumerate(lines):
+        found = re.match(r"( *)(?:- )?run:", line)
+        if not found:
+            continue
+        indent, block = len(found.group(1)), [line]
+        for more in lines[index + 1:]:
+            if more.strip() and len(more) - len(more.lstrip()) <= indent:
+                break
+            block.append(more)
+        blocks.append("\n".join(block))
+    return blocks
+
+
+def step(job, name):
+    """The block of a job's step with this name, or None."""
+    found = re.search(rf"(?m)^      - name: {re.escape(name)}\n((?:        .*\n|\n)+)", job)
+    return found.group(1) if found else None
+
+
+class LinuxE2ETests(unittest.TestCase):
+    def setUp(self):
+        self.text, self.jobs, self.needs = ci_jobs()
+        for job in ("linux-e2e", "linux-e2e-summary", "dial-hosts"):
+            self.assertTrue(job in self.jobs, f"ci.yml has no {job} job")
+
+    def test_linux_e2e_runs_the_plans_files_on_the_plans_shards(self):
+        job = self.jobs["linux-e2e"]
+        for text in ("    name: linux-e2e (${{ matrix.shard }})\n",
+                     "    needs: plan\n",
+                     "    if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.linux-e2e == 'true'\n",
+                     f"group: {LOCK}linux-e2e-${{{{ strategy.job-index }}}}\n",
+                     "cancel-in-progress: ${{ github.event_name == 'pull_request' }}",
+                     "      fail-fast: false\n",
+                     "        shard: ${{ fromJSON(needs.plan.outputs.linux-e2e-shards) }}\n",
+                     "    runs-on: ubuntu-24.04\n",
+                     "    timeout-minutes: 45\n",
+                     "        working-directory: cli\n",
+                     "      LANG: C.UTF-8\n",
+                     "      SHELL: /bin/zsh\n",
+                     "          ref: ${{ env.CI_SOURCE_SHA }}\n",
+                     "uses: ./.github/actions/cli-e2e-setup\n",
+                     "          packages: tcsh dash\n",
+                     "          real-backend: 'true'\n",
+                     'read -ra files <<<"$E2E_FILES"',
+                     'npx vitest list --config vitest.e2e.ci.config.ts --filesOnly '
+                     '--json="$RUNNER_TEMP/inventory-$SHARD.json" "${files[@]}"',
+                     'npx vitest run --config vitest.e2e.ci.config.ts --shard="$SHARD/$SHARDS"',
+                     '--reporter=default --reporter=json --outputFile.json="$RUNNER_TEMP/result-$SHARD.json" '
+                     '"${files[@]}"',
+                     "SHARDS: ${{ strategy.job-total }}\n",
+                     "E2E_BUNDLE: '1'\n",
+                     "E2E_ARTIFACTS_DIR: ${{ runner.temp }}/e2e-daemon-logs\n"):
+            self.assertIn(text, job)
+        results = step(job, "Preserve inventory and test results")
+        logs = step(job, "Preserve the failing tests' daemon logs")
+        self.assertIsNotNone(results, "linux-e2e uploads no results")
+        self.assertIsNotNone(logs, "linux-e2e uploads no daemon logs")
+        for block, condition, name in ((results, "${{ !cancelled() }}", "linux-e2e-shard-${{ matrix.shard }}"),
+                                       (logs, "${{ failure() }}", "linux-e2e-daemon-logs-${{ matrix.shard }}")):
+            for text in (f"        if: {condition}\n", "uses: actions/upload-artifact@v4\n", f"name: {name}\n",
+                         "retention-days: 7\n"):
+                self.assertIn(text, block)
+
+    def test_the_file_list_reaches_the_runs_only_through_the_environment(self):
+        self.assertIn("      E2E_FILES: ${{ needs.plan.outputs.linux-e2e-files }}\n", self.jobs["linux-e2e"])
+        blocks = run_blocks(self.text)
+        self.assertTrue(any("$E2E_FILES" in block for block in blocks))
+        for block in blocks:
+            self.assertNotIn("needs.plan.outputs.linux-e2e-files", block)
+
+    def test_the_summary_holds_each_selected_file_to_the_per_file_rule(self):
+        job = self.jobs["linux-e2e-summary"]
+        for text in ("    needs: [plan, linux-e2e]\n",
+                     "    if: ${{ !cancelled() && needs.plan.outputs.ready == 'true' && "
+                     "needs.plan.outputs.linux-e2e == 'true' }}\n",
+                     "    runs-on: ubuntu-24.04\n",
+                     "    timeout-minutes: 3\n",
+                     "          sparse-checkout: scripts/verify-cli-test-shards.py\n",
+                     "          pattern: linux-e2e-shard-*\n",
+                     "          merge-multiple: true\n",
+                     "SHARDS: ${{ needs.plan.outputs.linux-e2e-shards }}\n",
+                     "E2E_FILES: ${{ needs.plan.outputs.linux-e2e-files }}\n",
+                     "E2E_FULL: ${{ needs.plan.outputs.linux-e2e-full }}\n",
+                     "E2E_TEST_RESULT: ${{ needs.linux-e2e.result }}\n",
+                     "python3 scripts/verify-cli-test-shards.py",
+                     "--suite e2e",
+                     '--root "$GITHUB_WORKSPACE/cli"',
+                     '--shards "$(jq length <<<"$SHARDS")"',
+                     '--tests-result "$E2E_TEST_RESULT"',
+                     '--step-summary "$GITHUB_STEP_SUMMARY"',
+                     "name: linux-e2e-summary\n",
+                     "retention-days: 7\n"):
+            self.assertIn(text, job)
+        self.assertNotIn("concurrency:", job)
+        # --selected only for a PR's own files; in the full mode every discovered file once, as the nightly.
+        self.assertIn('if [[ "$E2E_FULL" != true ]]; then args+=(--selected "$E2E_FILES"); fi', job)
+        self.assertEqual(job.count("--selected"), 1)
+        self.assertNotRegex(job, r"if \[\[[^\n]*--step-summary")
+
+    def test_both_linux_e2e_modes_are_the_same_two_jobs(self):
+        self.assertEqual(sorted(name for name in self.jobs if name.startswith("linux-e2e")),
+                         ["linux-e2e", "linux-e2e-summary"])
+        for name in ("linux-e2e", "linux-e2e-summary"):
+            self.assertNotRegex(self.jobs[name], r"(?m)^    if: .*linux-e2e-full")
+        job = self.jobs["linux-e2e"]
+        guard = step(job, "The plan gave files or a full run")
+        self.assertIsNotNone(guard, "linux-e2e has no guard step")
+        self.assertIn("linux-e2e: the plan gave no file and no full run", guard)
+        # An empty list must never widen to the full suite by accident: the guard runs before any Vitest command.
+        self.assertLess(job.index("the plan gave no file and no full run"), job.index("npx vitest"))
+        self.assertIn("      E2E_FULL: ${{ needs.plan.outputs.linux-e2e-full }}\n", job)
+        for output in ("linux-e2e", "linux-e2e-files", "linux-e2e-shards", "linux-e2e-full", "dial-hosts"):
+            self.assertIn(f"      {output}: ${{{{ steps.select.outputs.{output} }}}}\n", self.jobs["plan"])
+
+    def test_dial_hosts_is_the_workflow_cli_e2e_runs(self):
+        job = self.jobs["dial-hosts"]
+        for text in ("    uses: ./.github/workflows/cli-e2e-dial-hosts.yml\n",
+                     "    needs: plan\n",
+                     "    if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.dial-hosts == 'true'\n",
+                     f"group: {LOCK}dial-hosts\n",
+                     "cancel-in-progress: ${{ github.event_name == 'pull_request' }}"):
+            self.assertIn(text, job)
+        self.assertNotIn("steps:", job)
+        lint = step(self.jobs["plan"], "Validate the integration workflows")
+        self.assertIn(".github/workflows/cli-e2e-dial-hosts.yml", lint)
+
+    def test_ci_required_waits_for_every_linux_e2e_job(self):
+        for name in ("linux-e2e", "linux-e2e-summary", "dial-hosts"):
             self.assertIn(name, self.needs)
 
 
