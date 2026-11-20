@@ -626,6 +626,32 @@ mod tests {
     }
 
     #[test]
+    fn a_windows_error_record_shows_the_line_that_says_why() {
+        // Windows PowerShell 5.1's record of an `irm` that could not reach the CDN, on stderr: below the line that says
+        // why, where in the command it failed and what kind of error it was.
+        let why = "irm : The remote name could not be resolved: 'cdn.autonomous.ai'";
+        let record = [
+            why,
+            "At line:1 char:76",
+            "+ ... ing]::new($false); iex \"& { $(irm 'https://cdn.autonomous.ai/harness/ ...",
+            "+                                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~",
+            "    + CategoryInfo          : InvalidOperation: (System.Net.HttpWebRequest:HttpWebRequest) \
+             [Invoke-RestMethod], WebException",
+            "    + FullyQualifiedErrorId : WebCmdletWebResponseException,\
+             Microsoft.PowerShell.Commands.InvokeRestMethodCommand",
+            " ",
+        ]
+        .join("\r\n");
+        let ran = install_on("windows", vec![ended(1, "", &record)], true);
+        assert_eq!(ran.result, Err(texts(&[why])));
+        assert_eq!(ran.log, ["install: -Desktop exit 1".to_string(), format!("install: last: {why}")]);
+
+        // Elsewhere a line that begins `+` is one of the script's own, and shown.
+        let ran = install_with(vec![ended(1, "", "+ x\n")], true);
+        assert_eq!(ran.result, Err(texts(&["+ x"])));
+    }
+
+    #[test]
     fn a_unix_step_line_is_no_windows_step_and_the_reverse() {
         for line in ["Downloading Harness 0.6.20...", "Downloading the terminal host 0.6.20..."] {
             assert_eq!(step_of("windows", line), Some(DOWNLOADING_HARNESS));
