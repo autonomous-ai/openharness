@@ -692,7 +692,7 @@ mod tests {
     use super::*;
     use crate::account::NO_RESULT;
     use crate::app::App;
-    use crate::follow::{AX_SETTINGS, AxTrust, CHATGPT_BUNDLE, ChatgptWindow, Heard, NoFollow};
+    use crate::follow::{AX_SETTINGS, AxTrust, CHATGPT_BUNDLE, ChatgptWindow, Heard, NoFollow, Switched};
     use crate::front::{FrontSource, NoFront};
     use crate::install::{FINISH_IN_TERMINAL, GETTING_READY, INSTALLING_TMUX, NOT_INSTALLED, Place, Run, Shell, runs};
     use crate::loginitem::LoginItem;
@@ -1554,45 +1554,9 @@ mod tests {
         }
     }
 
-    /// A door off macOS: the test's window, and the permission as every door there answers it.
-    struct OffMacos {
-        window: ChatgptDoor,
-        trust: crate::follow_windows::WindowsFollow,
-    }
-
-    impl OffMacos {
-        fn switched(window: &ChatgptDoor, on: bool) -> Arc<OffMacos> {
-            let trust = crate::follow_windows::WindowsFollow::new(crate::follow::FollowSwitch::new(on));
-            Arc::new(OffMacos { window: ChatgptDoor(window.0.clone()), trust })
-        }
-    }
-
-    impl ChatgptWindow for OffMacos {
-        fn installed(&self) -> bool {
-            self.window.installed()
-        }
-
-        fn observe(&self, heard: Box<dyn Fn(Heard) + Send + Sync>) -> Option<Box<dyn Send>> {
-            self.window.observe(heard)
-        }
-    }
-
-    impl AxTrust for OffMacos {
-        fn trusted(&self) -> bool {
-            self.trust.trusted()
-        }
-
-        fn prompt(&self) {
-            self.trust.prompt();
-        }
-
-        fn start(&self, changed: Box<dyn Fn() + Send + Sync>) {
-            self.trust.start(changed);
-        }
-
-        fn switch(&self, on: bool) {
-            self.trust.switch(on);
-        }
+    /// A door off macOS, as every door there is: the test's window, and the switch.
+    fn switched(window: &ChatgptDoor, on: bool) -> Arc<Switched<ChatgptDoor>> {
+        Arc::new(Switched::new(ChatgptDoor(window.0.clone()), on))
     }
 
     #[test]
@@ -2248,7 +2212,7 @@ mod tests {
     #[test]
     fn the_switch_turned_off_drops_the_observation_at_once_and_turned_on_writes_the_first_title_again() {
         let door = ChatgptDoor::answering(false, false);
-        let (w, _fronts) = world_following(CHATGPT_BUNDLE, &OffMacos::switched(&door, true));
+        let (w, _fronts) = world_following(CHATGPT_BUNDLE, &switched(&door, true));
         assert_eq!(w.next(), follow(true, false));
         w.fake.script("hardware watch --json", &ATTACHED);
         assert_eq!(w.answer(Effect::SpawnWatch), a_dial());

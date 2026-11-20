@@ -1,51 +1,24 @@
 //! The ChatGPT follow on Hyprland: the event socket says the active window or its title changed, and the request
 //! socket's `j/activewindow` gives its `title` and `pid`.
 
-use crate::follow::{AxTrust, CHATGPT_PROGRAM, ChatgptWindow, FollowSwitch, Heard, program_installed, runs_program};
+use crate::follow::{ChatgptWindow, Heard, linux_installed, observe_socket, runs_chatgpt};
 use crate::front_hyprland::{ANSWER_MAX, active_pid, active_window, ask, next_line, sockets};
 use std::io::{self, BufReader, Read};
-use std::net::Shutdown;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
 
-/// The Hyprland door: its own connection to the event socket for each observation, and Harness's switch.
-pub struct HyprlandFollow {
-    switch: Arc<FollowSwitch>,
-}
-
-impl HyprlandFollow {
-    pub fn new(switch: Arc<FollowSwitch>) -> HyprlandFollow {
-        HyprlandFollow { switch }
-    }
-}
+/// The Hyprland door's window: its own connection to the event socket for each observation.
+pub struct HyprlandFollow;
 
 impl ChatgptWindow for HyprlandFollow {
     fn installed(&self) -> bool {
-        program_installed(Path::new(CHATGPT_PROGRAM))
+        linux_installed()
     }
 
     fn observe(&self, heard: Box<dyn Fn(Heard) + Send + Sync>) -> Option<Box<dyn Send>> {
         let runtime_dir = std::env::var_os("XDG_RUNTIME_DIR").filter(|dir| !dir.is_empty()).map(PathBuf::from);
         let signature = std::env::var("HYPRLAND_INSTANCE_SIGNATURE").unwrap_or_default();
-        // The window's own process: another program named ChatGPT in front is not followed.
-        let chatgpt = |pid| runs_program(Path::new("/proc"), pid, Path::new(CHATGPT_PROGRAM));
-        Some(observe_instance(runtime_dir.as_deref(), &signature, chatgpt, heard))
-    }
-}
-
-impl AxTrust for HyprlandFollow {
-    fn trusted(&self) -> bool {
-        self.switch.on()
-    }
-
-    fn prompt(&self) {}
-
-    /// Nothing to hear: the runner reads the switch back at each click.
-    fn start(&self, _changed: Box<dyn Fn() + Send + Sync>) {}
-
-    fn switch(&self, on: bool) {
-        self.switch.set(on);
+        Some(observe_instance(runtime_dir.as_deref(), &signature, runs_chatgpt, heard))
     }
 }
 
@@ -123,36 +96,6 @@ pub fn follow(
     }
 }
 
-/// What an observation and its thread share: whether it was dropped, and once connected, the connection's other end.
-#[derive(Default)]
-struct Shared {
-    stopped: bool,
-    stream: Option<UnixStream>,
-}
-
-/// An observation: dropped, it shuts its connection down, which wakes its thread out of the read it waits in, or ends
-/// a thread still connecting once it connects. Returns at once either way.
-struct Observation(Arc<Mutex<Shared>>);
-
-impl Drop for Observation {
-    fn drop(&mut self) {
-        let mut shared = self.0.lock().unwrap();
-        shared.stopped = true;
-        if let Some(stream) = &shared.stream {
-            let _ = stream.shutdown(Shutdown::Both);
-        }
-    }
-}
-
-/// Keeps `ends` for the observation to shut down; false when it was already dropped.
-fn kept(shared: &Mutex<Shared>, ends: UnixStream) -> bool {
-    let mut shared = shared.lock().unwrap();
-    if !shared.stopped {
-        shared.stream = Some(ends);
-    }
-    !shared.stopped
-}
-
 /// Follows the Hyprland instance under `runtime_dir`. No socket there is NoObserver once.
 fn observe_instance(
     runtime_dir: Option<&Path>,
@@ -175,38 +118,21 @@ fn observe_events(
     chatgpt: impl Fn(u32) -> bool + Send + 'static,
     heard: Box<dyn Fn(Heard) + Send + Sync>,
 ) -> Box<dyn Send> {
-    let shared = Arc::new(Mutex::new(Shared::default()));
-    let held = shared.clone();
-    let heard: Arc<dyn Fn(Heard) + Send + Sync> = Arc::from(heard);
-    let told = heard.clone();
-    // Connecting can wait on a stalled Hyprland: never on the runner's follow thread.
-    let spawned = std::thread::Builder::new().name("chatgpt-observer".into()).spawn(move || {
-        // The events are connected before the first ask, so a change between the two is not missed.
-        let Ok((ends, events)) = connect().and_then(|events| Ok((events.try_clone()?, events))) else {
-            return told(Heard::NoObserver);
-        };
-        if kept(&held, ends) {
-            follow(events, &|| ask(&requests), &chatgpt, &*told);
-        }
-    });
-    if spawned.is_err() {
-        heard(Heard::NoObserver);
-    }
-    Box::new(Observation(shared))
+    // The events are connected before the first ask, so a change between the two is not missed.
+    observe_socket(connect, move |events, told| follow(events, &|| ask(&requests), &chatgpt, told), heard)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::follow::{ChatgptFollow, FollowSwitch, Heard, Observer};
+    use crate::follow::{ChatgptFollow, Heard, Observer};
     use crate::front_hyprland::{ANSWER_MAX, LINE_MAX, sockets};
     use std::cell::{Cell, RefCell};
     use std::collections::VecDeque;
     use std::fs;
     use std::io::{self, Read, Write};
     use std::os::unix::net::UnixListener;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::{Arc, mpsc};
+    use std::sync::mpsc;
     use std::time::Duration;
 
     const CHATGPT: u32 = 4242;
@@ -361,22 +287,6 @@ mod tests {
     #[test]
     fn the_events_end_ends_quietly_and_a_half_line_is_no_event() {
         assert_eq!(run(b"activewindowv2>>55d1c0a0", vec![Ok(answer(CHATGPT, "A"))]), (vec![title("A")], 1));
-    }
-
-    #[test]
-    fn the_switch_stands_for_the_permission() {
-        let door = HyprlandFollow::new(FollowSwitch::new(true));
-        let changes = Arc::new(AtomicUsize::new(0));
-        let counted = changes.clone();
-        door.start(Box::new(move || {
-            counted.fetch_add(1, Ordering::SeqCst);
-        }));
-        assert!(door.trusted());
-        door.prompt();
-        door.switch(false);
-        assert!(!door.trusted());
-        // The runner reads the click back: nothing is told.
-        assert_eq!(changes.load(Ordering::SeqCst), 0);
     }
 
     /// Hears into a channel: it disconnects once the observer's thread has let `heard` go.

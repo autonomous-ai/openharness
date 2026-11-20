@@ -1,11 +1,10 @@
 //! The ChatGPT follow on Linux X11: property changes on the root (`_NET_ACTIVE_WINDOW`) and on the active window
 //! say when the title changed, and the title is the window's `_NET_WM_NAME`, else its `WM_NAME`.
 
-use crate::follow::{AxTrust, CHATGPT_PROGRAM, ChatgptWindow, FollowSwitch, Heard, program_installed, runs_program};
+use crate::follow::{ChatgptWindow, Heard, linux_installed, runs_chatgpt};
 use crate::front_x11::property32;
 use std::error::Error;
 use std::os::fd::AsRawFd;
-use std::path::Path;
 use std::sync::{Arc, Mutex};
 use x11rb::connection::Connection;
 use x11rb::protocol::Event;
@@ -58,16 +57,15 @@ pub fn title(net_name: Option<&[u8]>, wm_name: Option<(WmNameType, &[u8])>) -> O
     }
 }
 
-/// The X11 door: the active window's title on a connection of its own, and Harness's switch for the permission.
+/// The X11 door's window: the active window's title on a connection of its own.
 pub struct X11Follow {
     /// The session's DISPLAY.
     display: String,
-    switch: Arc<FollowSwitch>,
 }
 
 impl X11Follow {
-    pub fn new(display: String, switch: Arc<FollowSwitch>) -> X11Follow {
-        X11Follow { display, switch }
+    pub fn new(display: String) -> X11Follow {
+        X11Follow { display }
     }
 
     /// Observes on a thread of its own, with `chatgpt` telling ChatGPT's pid apart.
@@ -108,27 +106,11 @@ impl X11Follow {
 
 impl ChatgptWindow for X11Follow {
     fn installed(&self) -> bool {
-        program_installed(Path::new(CHATGPT_PROGRAM))
+        linux_installed()
     }
 
     fn observe(&self, heard: Box<dyn Fn(Heard) + Send + Sync>) -> Option<Box<dyn Send>> {
-        let chatgpt = |pid| runs_program(Path::new("/proc"), pid, Path::new(CHATGPT_PROGRAM));
-        Some(self.observe_with(chatgpt, heard))
-    }
-}
-
-impl AxTrust for X11Follow {
-    fn trusted(&self) -> bool {
-        self.switch.on()
-    }
-
-    fn prompt(&self) {}
-
-    /// Nothing to hear: the runner reads the switch back at each click.
-    fn start(&self, _changed: Box<dyn Fn() + Send + Sync>) {}
-
-    fn switch(&self, on: bool) {
-        self.switch.set(on);
+        Some(self.observe_with(runs_chatgpt, heard))
     }
 }
 
@@ -313,7 +295,7 @@ mod tests {
     fn a_display_with_no_server_is_no_observer_once() {
         let (tell, told) = std::sync::mpsc::channel();
         // A socket no server listens on: no TCP is tried for a `unix:` display.
-        let door = X11Follow::new("unix:59000".into(), FollowSwitch::new(true));
+        let door = X11Follow::new("unix:59000".into());
         let _observation = door.observe_with(
             |_| true,
             Box::new(move |heard| {
@@ -375,7 +357,7 @@ mod tests {
             }
         });
         let (tell, told) = std::sync::mpsc::channel();
-        let door = X11Follow::new(format!("127.0.0.1:{display}"), FollowSwitch::new(true));
+        let door = X11Follow::new(format!("127.0.0.1:{display}"));
         let _observation = door.observe_with(
             |_| true,
             Box::new(move |heard| {
@@ -387,21 +369,6 @@ mod tests {
         server.join().unwrap();
         assert_eq!(told.recv_timeout(WAIT), Ok(Heard::NoObserver));
         assert_eq!(told.recv_timeout(WAIT), Err(std::sync::mpsc::RecvTimeoutError::Disconnected));
-    }
-
-    #[test]
-    fn the_permission_is_the_switch() {
-        let door = X11Follow::new(":0".into(), FollowSwitch::new(false));
-        let told = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let count = told.clone();
-        door.start(Box::new(move || {
-            count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        }));
-        assert!(!door.trusted());
-        door.switch(true);
-        assert!(door.trusted());
-        // The runner reads the click back: nothing is told.
-        assert_eq!(told.load(std::sync::atomic::Ordering::SeqCst), 0);
     }
 
     /// Under Xvfb, with no window manager: the test sets the root's `_NET_ACTIVE_WINDOW` itself. Its name holds no
@@ -448,7 +415,7 @@ mod tests {
 
         let (tell, told) = std::sync::mpsc::channel();
         let own = std::process::id();
-        let door = X11Follow::new(display, FollowSwitch::new(true));
+        let door = X11Follow::new(display);
         let observation = door.observe_with(
             move |pid| pid == own,
             Box::new(move |heard| {

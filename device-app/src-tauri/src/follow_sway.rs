@@ -3,49 +3,23 @@
 //!
 //! Its own connection to sway, apart from the front source's: dropping an observation shuts only its own down.
 
-use crate::follow::{AxTrust, CHATGPT_PROGRAM, ChatgptWindow, FollowSwitch, Heard, program_installed, runs_program};
+use crate::follow::{ChatgptWindow, Heard, linux_installed, observe_socket, runs_chatgpt};
 use crate::front_sway::{GET_TREE, SUBSCRIBE, WINDOW_EVENT, message, pid, read_message};
 use serde_json::Value;
 use std::io::{self, Read, Write};
-use std::net::Shutdown;
 use std::os::unix::net::UnixStream;
-use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::path::PathBuf;
 
-/// The sway door: the focused ChatGPT window's title, and Harness's own switch for the permission.
-pub struct SwayFollow {
-    switch: Arc<FollowSwitch>,
-}
-
-impl SwayFollow {
-    pub fn new(switch: Arc<FollowSwitch>) -> SwayFollow {
-        SwayFollow { switch }
-    }
-}
+/// The sway door's window: the focused ChatGPT window's title.
+pub struct SwayFollow;
 
 impl ChatgptWindow for SwayFollow {
     fn installed(&self) -> bool {
-        program_installed(Path::new(CHATGPT_PROGRAM))
+        linux_installed()
     }
 
     fn observe(&self, heard: Box<dyn Fn(Heard) + Send + Sync>) -> Option<Box<dyn Send>> {
-        let chatgpt = |pid| runs_program(Path::new("/proc"), pid, Path::new(CHATGPT_PROGRAM));
-        Some(observe_with(std::env::var_os("SWAYSOCK").map(PathBuf::from), chatgpt, heard))
-    }
-}
-
-impl AxTrust for SwayFollow {
-    fn trusted(&self) -> bool {
-        self.switch.on()
-    }
-
-    fn prompt(&self) {}
-
-    /// Nothing to hear: the runner reads the switch back at each click.
-    fn start(&self, _changed: Box<dyn Fn() + Send + Sync>) {}
-
-    fn switch(&self, on: bool) {
-        self.switch.set(on);
+        Some(observe_with(std::env::var_os("SWAYSOCK").map(PathBuf::from), runs_chatgpt, heard))
     }
 }
 
@@ -59,36 +33,6 @@ pub fn observe_with(
     observe_on(move || UnixStream::connect(socket.ok_or(io::ErrorKind::NotFound)?), chatgpt, heard)
 }
 
-/// What an observation and its thread share: whether it was dropped, and once connected, the connection's other end.
-#[derive(Default)]
-struct Shared {
-    stopped: bool,
-    stream: Option<UnixStream>,
-}
-
-/// An observation: dropped, it shuts its connection down, which wakes its thread out of the read it waits in, or ends
-/// a thread still connecting once it connects. Returns at once either way.
-struct Observation(Arc<Mutex<Shared>>);
-
-impl Drop for Observation {
-    fn drop(&mut self) {
-        let mut shared = self.0.lock().unwrap();
-        shared.stopped = true;
-        if let Some(stream) = &shared.stream {
-            let _ = stream.shutdown(Shutdown::Both);
-        }
-    }
-}
-
-/// Keeps `ends` for the observation to shut down; false when it was already dropped.
-fn kept(shared: &Mutex<Shared>, ends: UnixStream) -> bool {
-    let mut shared = shared.lock().unwrap();
-    if !shared.stopped {
-        shared.stream = Some(ends);
-    }
-    !shared.stopped
-}
-
 /// `listen` on the connection `connect` makes, on a thread of its own, until the handle is dropped. A failed connect
 /// is NoObserver.
 pub fn observe_on(
@@ -96,24 +40,7 @@ pub fn observe_on(
     chatgpt: impl Fn(u32) -> bool + Send + 'static,
     heard: Box<dyn Fn(Heard) + Send + Sync>,
 ) -> Box<dyn Send> {
-    let shared = Arc::new(Mutex::new(Shared::default()));
-    let held = Arc::clone(&shared);
-    let heard: Arc<dyn Fn(Heard) + Send + Sync> = Arc::from(heard);
-    let told = Arc::clone(&heard);
-    // Connecting can wait on a stalled sway: never on the runner's follow thread.
-    let spawned = std::thread::Builder::new().name("chatgpt-observer".into()).spawn(move || {
-        let Ok((ends, stream)) = connect().and_then(|stream| Ok((stream.try_clone()?, stream))) else {
-            return told(Heard::NoObserver);
-        };
-        if kept(&held, ends) {
-            listen(stream, &chatgpt, &*told);
-        }
-    });
-    // No thread to observe on: told as an observer not made, where a panic would end the runner's follow thread.
-    if spawned.is_err() {
-        heard(Heard::NoObserver);
-    }
-    Box::new(Observation(shared))
+    observe_socket(connect, move |stream, told| listen(stream, &chatgpt, told), heard)
 }
 
 /// The focused ChatGPT window's title now, then at each change, until the connection ends. A refused subscribe is

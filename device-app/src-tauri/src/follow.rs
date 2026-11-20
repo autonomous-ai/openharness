@@ -5,9 +5,11 @@
 use crate::front::{LinuxFront, linux_front};
 use crate::tabs::Out;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
+#[cfg(unix)]
+use {std::io, std::net::Shutdown, std::os::unix::net::UnixStream, std::sync::Mutex};
 
 /// The ChatGPT app's bundle id, the CLI's too: the app that runs Codex threads.
 pub const CHATGPT_BUNDLE: &str = "com.openai.codex";
@@ -55,6 +57,17 @@ pub fn program_installed(program: &Path) -> bool {
     program.is_file()
 }
 
+/// Whether the Linux app is installed: every Linux door's answer.
+pub fn linux_installed() -> bool {
+    program_installed(Path::new(CHATGPT_PROGRAM))
+}
+
+/// Whether process `pid` runs the Linux app: every Linux door checks the window's own process, so another program
+/// named ChatGPT in front is not followed.
+pub fn runs_chatgpt(pid: u32) -> bool {
+    runs_program(Path::new("/proc"), pid, Path::new(CHATGPT_PROGRAM))
+}
+
 /// Whether process `pid` runs `program`, by its `exe` link under `proc_root` (`/proc`). A package upgrade that
 /// replaces the program while it runs makes the kernel add ` (deleted)` to the link: still the same app, as the front
 /// source reads it (`front::exe_name`), or following hears only the empty title until ChatGPT restarts.
@@ -62,26 +75,6 @@ pub fn runs_program(proc_root: &Path, pid: u32, program: &Path) -> bool {
     let mut replaced = program.as_os_str().to_owned();
     replaced.push(" (deleted)");
     std::fs::read_link(proc_root.join(pid.to_string()).join("exe")).is_ok_and(|exe| exe == program || exe == replaced)
-}
-
-/// Harness's own switch for following, off macOS, where no permission gates reading a window's title: what every
-/// door there answers `trusted()` with.
-pub struct FollowSwitch {
-    on: AtomicBool,
-}
-
-impl FollowSwitch {
-    pub fn new(on: bool) -> Arc<FollowSwitch> {
-        Arc::new(FollowSwitch { on: AtomicBool::new(on) })
-    }
-
-    pub fn on(&self) -> bool {
-        self.on.load(Ordering::SeqCst)
-    }
-
-    pub fn set(&self, on: bool) {
-        self.on.store(on, Ordering::SeqCst);
-    }
 }
 
 /// What an observation hears.
@@ -117,6 +110,108 @@ pub trait AxTrust: Send + Sync {
 pub trait FollowDoor: ChatgptWindow + AxTrust {}
 
 impl<T: ChatgptWindow + AxTrust> FollowDoor for T {}
+
+/// Every door off macOS: its window, and Harness's own switch, which stands for the permission since nothing gates
+/// reading a window's title there.
+pub struct Switched<W> {
+    window: W,
+    on: AtomicBool,
+}
+
+impl<W> Switched<W> {
+    pub fn new(window: W, on: bool) -> Switched<W> {
+        Switched { window, on: AtomicBool::new(on) }
+    }
+}
+
+impl<W: ChatgptWindow> ChatgptWindow for Switched<W> {
+    fn installed(&self) -> bool {
+        self.window.installed()
+    }
+
+    fn observe(&self, heard: Box<dyn Fn(Heard) + Send + Sync>) -> Option<Box<dyn Send>> {
+        self.window.observe(heard)
+    }
+}
+
+impl<W: Send + Sync> AxTrust for Switched<W> {
+    fn trusted(&self) -> bool {
+        self.on.load(Ordering::SeqCst)
+    }
+
+    /// Nothing to ask.
+    fn prompt(&self) {}
+
+    /// Nothing to hear: the runner reads the switch back at each click.
+    fn start(&self, _changed: Box<dyn Fn() + Send + Sync>) {}
+
+    fn switch(&self, on: bool) {
+        self.on.store(on, Ordering::SeqCst);
+    }
+}
+
+/// What an observation on a socket and its thread share: whether it was dropped, and once connected, the
+/// connection's other end.
+#[cfg(unix)]
+#[derive(Default)]
+struct Socket {
+    stopped: bool,
+    stream: Option<UnixStream>,
+}
+
+/// An observation on a socket: dropped, it shuts its connection down, which wakes its thread out of the read it waits
+/// in, or ends a thread still connecting once it connects. Returns at once either way.
+#[cfg(unix)]
+struct SocketObservation(Arc<Mutex<Socket>>);
+
+#[cfg(unix)]
+impl Drop for SocketObservation {
+    fn drop(&mut self) {
+        let mut socket = self.0.lock().unwrap();
+        socket.stopped = true;
+        if let Some(stream) = &socket.stream {
+            let _ = stream.shutdown(Shutdown::Both);
+        }
+    }
+}
+
+/// Keeps `ends` for the observation to shut down; false when it was already dropped.
+#[cfg(unix)]
+fn kept(socket: &Mutex<Socket>, ends: UnixStream) -> bool {
+    let mut socket = socket.lock().unwrap();
+    if !socket.stopped {
+        socket.stream = Some(ends);
+    }
+    !socket.stopped
+}
+
+/// `listen` on the connection `connect` makes, on a thread of its own, until the handle is dropped: sway's and
+/// Hyprland's observation. A failed connect, or no thread, is NoObserver.
+#[cfg(unix)]
+pub fn observe_socket(
+    connect: impl FnOnce() -> io::Result<UnixStream> + Send + 'static,
+    listen: impl FnOnce(UnixStream, &dyn Fn(Heard)) + Send + 'static,
+    heard: Box<dyn Fn(Heard) + Send + Sync>,
+) -> Box<dyn Send> {
+    let socket = Arc::new(Mutex::new(Socket::default()));
+    let held = Arc::clone(&socket);
+    let heard: Arc<dyn Fn(Heard) + Send + Sync> = Arc::from(heard);
+    let told = Arc::clone(&heard);
+    // Connecting can wait on a stalled compositor: never on the runner's follow thread.
+    let spawned = std::thread::Builder::new().name("chatgpt-observer".into()).spawn(move || {
+        let Ok((ends, stream)) = connect().and_then(|stream| Ok((stream.try_clone()?, stream))) else {
+            return told(Heard::NoObserver);
+        };
+        if kept(&held, ends) {
+            listen(stream, &*told);
+        }
+    });
+    // No thread to observe on: told as an observer not made, where a panic would end the runner's follow thread.
+    if spawned.is_err() {
+        heard(Heard::NoObserver);
+    }
+    Box::new(SocketObservation(socket))
+}
 
 /// Reads nothing and asks nothing: a platform with no ChatGPT app to follow.
 pub struct NoFollow;
@@ -175,13 +270,13 @@ pub fn system(
         #[cfg(target_os = "macos")]
         DoorKind::Mac => Arc::new(crate::follow_macos::MacFollow::new(home)),
         #[cfg(windows)]
-        DoorKind::Windows => Arc::new(crate::follow_windows::WindowsFollow::new(FollowSwitch::new(switch_on))),
+        DoorKind::Windows => Arc::new(Switched::new(crate::follow_windows::WindowsFollow, switch_on)),
         #[cfg(target_os = "linux")]
-        DoorKind::X11(display) => Arc::new(crate::follow_x11::X11Follow::new(display, FollowSwitch::new(switch_on))),
+        DoorKind::X11(display) => Arc::new(Switched::new(crate::follow_x11::X11Follow::new(display), switch_on)),
         #[cfg(target_os = "linux")]
-        DoorKind::Sway => Arc::new(crate::follow_sway::SwayFollow::new(FollowSwitch::new(switch_on))),
+        DoorKind::Sway => Arc::new(Switched::new(crate::follow_sway::SwayFollow, switch_on)),
         #[cfg(target_os = "linux")]
-        DoorKind::Hyprland => Arc::new(crate::follow_hyprland::HyprlandFollow::new(FollowSwitch::new(switch_on))),
+        DoorKind::Hyprland => Arc::new(Switched::new(crate::follow_hyprland::HyprlandFollow, switch_on)),
         _ => Arc::new(NoFollow),
     }
 }
@@ -607,16 +702,23 @@ mod tests {
     }
 
     #[test]
-    fn the_switch_starts_as_given_and_holds_each_change() {
-        assert!(FollowSwitch::new(true).on());
-        assert!(!FollowSwitch::new(false).on());
-        let switch = FollowSwitch::new(true);
-        switch.set(false);
-        assert!(!switch.on());
-        switch.set(false);
-        assert!(!switch.on());
-        switch.set(true);
-        assert!(switch.on());
+    fn off_macos_the_switch_is_the_permission_and_nothing_is_asked_or_told() {
+        assert!(!Switched::new(NoFollow, false).trusted());
+        let door = Switched::new(NoFollow, true);
+        assert!(door.trusted());
+        let told = Arc::new(Mutex::new(0));
+        let count = told.clone();
+        door.start(Box::new(move || *count.lock().unwrap() += 1));
+        // The menu's click: the runner reads it back.
+        door.switch(false);
+        assert!(!door.trusted());
+        door.prompt();
+        assert!(!door.trusted());
+        door.switch(false);
+        assert!(!door.trusted());
+        door.switch(true);
+        assert!(door.trusted());
+        assert_eq!(*told.lock().unwrap(), 0);
     }
 
     #[test]

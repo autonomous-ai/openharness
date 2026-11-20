@@ -2,9 +2,8 @@
 //! in front only, its name changes. The window's title is its native text (`GetWindowTextW`). The app is installed
 //! when its package family is registered for the person (`GetPackagesByPackageFamily`).
 
-use crate::follow::{AxTrust, FollowSwitch};
 use regex::Regex;
-use std::sync::{Arc, LazyLock};
+use std::sync::LazyLock;
 #[cfg(windows)]
 use {
     crate::follow::{ChatgptWindow, Heard, TITLE_MAX},
@@ -12,6 +11,7 @@ use {
     std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle},
     std::panic::{self, AssertUnwindSafe},
     std::ptr,
+    std::sync::Arc,
     std::sync::mpsc,
     std::thread::{self, JoinHandle},
     windows_sys::Win32::Foundation::HWND,
@@ -82,32 +82,9 @@ pub fn reads_title(event: u32, hwnd: usize, id_object: i32, id_child: i32, foreg
     event == EVENT_OBJECT_NAMECHANGE && hwnd == foreground && id_object == OBJID_WINDOW && id_child == CHILDID_SELF
 }
 
-/// The Windows door. Windows gates no read of a window's title: the person's switch stands for the permission.
-pub struct WindowsFollow {
-    switch: Arc<FollowSwitch>,
-}
-
-impl WindowsFollow {
-    pub fn new(switch: Arc<FollowSwitch>) -> WindowsFollow {
-        WindowsFollow { switch }
-    }
-}
-
-impl AxTrust for WindowsFollow {
-    fn trusted(&self) -> bool {
-        self.switch.on()
-    }
-
-    /// Nothing to ask.
-    fn prompt(&self) {}
-
-    /// Nothing to hear: the runner reads the switch back at each click.
-    fn start(&self, _changed: Box<dyn Fn() + Send + Sync>) {}
-
-    fn switch(&self, on: bool) {
-        self.switch.set(on);
-    }
-}
+/// The Windows door's window. Windows gates no read of a window's title: the person's switch stands for the
+/// permission (`follow::Switched`).
+pub struct WindowsFollow;
 
 #[cfg(windows)]
 impl ChatgptWindow for WindowsFollow {
@@ -392,7 +369,6 @@ fn title(window: HWND) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
     #[cfg(windows)]
     use std::{sync::mpsc::RecvTimeoutError, time::Duration};
 
@@ -474,27 +450,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn the_door_answers_the_permission_with_the_persons_switch() {
-        assert!(!WindowsFollow::new(FollowSwitch::new(false)).trusted());
-        let switch = FollowSwitch::new(true);
-        let door = WindowsFollow::new(switch.clone());
-        assert!(door.trusted());
-        let told = Arc::new(Mutex::new(0));
-        let count = told.clone();
-        door.start(Box::new(move || *count.lock().unwrap() += 1));
-        // The menu's click: the runner reads it back, and nothing is told.
-        door.switch(false);
-        assert!(!switch.on());
-        assert!(!door.trusted());
-        // Nothing to ask on Windows.
-        door.prompt();
-        assert!(!switch.on());
-        door.switch(true);
-        assert!(door.trusted());
-        assert_eq!(*told.lock().unwrap(), 0);
-    }
-
     /// What an observation hears, sent to the receiver. The sender goes with the observation's thread: the receiver
     /// is told when the thread has ended.
     #[cfg(windows)]
@@ -513,7 +468,7 @@ mod tests {
     #[test]
     fn with_no_chatgpt_in_front_an_observation_hears_no_title_once_and_its_drop_ends_its_thread() {
         let (heard, told) = heard_into();
-        let observation = WindowsFollow::new(FollowSwitch::new(true)).observe(heard).expect("an observation");
+        let observation = WindowsFollow.observe(heard).expect("an observation");
         assert_eq!(told.recv_timeout(Duration::from_secs(5)), Ok(Heard::Title(None)));
         drop(observation);
         // Nothing more was heard before the thread ended.
@@ -559,7 +514,7 @@ mod tests {
     #[test]
     fn installed_answers_and_a_family_never_registered_is_not() {
         // A runner has no ChatGPT package, and the VM may: either answer, as long as it answers.
-        let _either = WindowsFollow::new(FollowSwitch::new(true)).installed();
+        let _either = WindowsFollow.installed();
         assert!(!registered("OpenAI.NoSuchApp_2p2nqsd0c76g0"));
     }
 
@@ -569,7 +524,7 @@ mod tests {
     #[test]
     #[ignore = "needs the ChatGPT app installed for this Windows user"]
     fn follow_windows_live_installed() {
-        assert!(WindowsFollow::new(FollowSwitch::new(true)).installed());
+        assert!(WindowsFollow.installed());
     }
 
     /// Under a desktop a person sees (the VM's console session): two windows of this test's own, retitled and brought
