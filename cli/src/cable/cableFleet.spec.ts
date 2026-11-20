@@ -720,12 +720,11 @@ describe('a board that is not a dial', () => {
     // Skipped without lsof; the fleet treats "cannot tell" as free, so there is nothing to prove there.
     const file = join(mkdtempSync(join(tmpdir(), 'held-')), 'tty')
     writeFileSync(file, '')
+    const lsofExists = await new Promise<boolean>(r => spawn('lsof', ['-v'], { stdio: 'ignore' }).on('error', () => r(false)).on('exit', () => r(true)))
     const holder = spawn('tail', ['-f', file], { stdio: 'ignore' })
     try {
-      await new Promise(r => setTimeout(r, 300))
-      const held = await portInUse(file)
-      const lsofExists = await new Promise<boolean>(r => spawn('lsof', ['-v'], { stdio: 'ignore' }).on('error', () => r(false)).on('exit', () => r(true)))
-      if (lsofExists) expect(held).toBe(true)
+      // Held once tail has opened the file, a moment after it starts.
+      if (lsofExists) await vi.waitFor(async () => expect(await portInUse(file)).toBe(true), { timeout: 10_000, interval: 50 })
     } finally {
       holder.kill()
       await new Promise(r => holder.on('exit', r))
