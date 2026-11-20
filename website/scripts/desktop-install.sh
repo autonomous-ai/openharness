@@ -32,6 +32,12 @@ download() {
 # A manifest is a few kilobytes: 1 MiB is far above any.
 MANIFEST_LIMIT=1048576
 
+# pgrep -f reads an extended regex over each command line: the path's own characters escaped, and
+# the path the command itself, not a word an editor or a tail names.
+command_pattern() {
+  printf '^%s( |$)\n' "$(printf '%s\n' "$1" | sed 's/[][\\.*^$+?(){}|]/\\&/g')"
+}
+
 PLATFORM="$(uname -s)"
 case "$PLATFORM" in
   Darwin) ;;
@@ -107,7 +113,7 @@ if [ "$PLATFORM" = "Darwin" ]; then
     *[!0-9]* | '') fail "desktop metadata has an invalid archive size" ;;
   esac
 
-  if pgrep -f "$DESTINATION/Contents/MacOS/Harness" >/dev/null 2>&1; then
+  if pgrep -f "$(command_pattern "$DESTINATION/Contents/MacOS/Harness")" >/dev/null 2>&1; then
     fail "Harness is running from $DESTINATION. Quit it, then run this installer again."
   fi
 
@@ -235,7 +241,8 @@ case "$EXPECTED_SIZE" in
   *[!0-9]* | '') fail "desktop metadata has an invalid archive size" ;;
 esac
 
-if pgrep -f "$DESTINATION" >/dev/null 2>&1; then
+# Only this user's processes: the place is under this HOME.
+if pgrep -u "$(id -u)" -f "$(command_pattern "$DESTINATION")" >/dev/null 2>&1; then
   fail "Harness is running from $DESTINATION. Quit it, then run this installer again."
 fi
 # One move puts the file over a file; over a folder it would put it inside.

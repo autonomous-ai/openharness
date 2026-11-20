@@ -106,7 +106,13 @@ case "$EXPECTED_SIZE" in
   *[!0-9]* | '') fail "device metadata has an invalid AppImage size" ;;
 esac
 
-if pgrep -f "$DESTINATION" >/dev/null 2>&1; then
+# pgrep -f reads an extended regex over each command line: the path's own characters escaped, and the path the command
+# itself, not a word an editor or a tail names. Only this user's processes: the place is under this HOME.
+running() {
+  pgrep -u "$(id -u)" -f "^$(printf '%s\n' "$DESTINATION" | sed 's/[][\\.*^$+?(){}|]/\\&/g')( |\$)" >/dev/null 2>&1
+}
+
+if running; then
   fail "Harness Device is running from $DESTINATION. Quit it, then run this installer again."
 fi
 # One move puts the file over a file; over a folder it would put it inside.
