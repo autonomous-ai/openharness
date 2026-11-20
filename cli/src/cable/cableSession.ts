@@ -2899,7 +2899,7 @@ export class CableSession {
     // and only when it goes: the wire is the session's whatever else a host's entry carries, and a tick that sends
     // nothing builds nothing.
     if (sendApps) {
-      const rows = apps.apps.map(({ id, name, count, waiting, working }) => ({ id, name, count, waiting, ...(cards ? { working } : {}) }))
+      const rows = apps.apps.map(({ id, name, count, waiting, working }) => cards ? { id, name, count, waiting, working } : { id, name, count, waiting })
       await this.send({ t: 'apps', shown: apps.shown, apps: rows })
     }
     if (!sendRing) return
