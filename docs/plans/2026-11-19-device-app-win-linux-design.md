@@ -291,6 +291,16 @@ macOS, or the release is a partial ship. The same pull request carries both:
   - It then starts the app.
   - Desktop's probe finds an installed and running copy on each OS.
 
+  - On Linux, Desktop writes `~/.local/share/applications/harness-device.desktop` when it installs the app, the
+    way it does for itself, and removes it on uninstall. This is the Linux counterpart of Launchpad on macOS and the
+    Start Menu entry the NSIS installer makes on Windows.
+- **Copy (named difference; harness-pm, 2026-11-20):** macOS copy is unchanged. On Windows and Linux:
+  - "menu-bar app" reads "tray app";
+  - the words about terminal tabs are dropped, because those OSes cannot follow a terminal tab
+    ("Follows the app in front.").
+
+  `/device` reads "The app for your Harness device." on every OS.
+
   The plan names the AppImage's place and the probe's rule. A Flutter test clicks through the flow as a person does.
   The design doc and gallery change only if the UI does.
 
