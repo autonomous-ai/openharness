@@ -1612,7 +1612,7 @@ Start-Sleep 600
         }
 
         #[test]
-        fn the_flags_hide_the_console() {
+        fn the_flags_ask_for_no_window_and_never_detach() {
             // CREATE_NO_WINDOW: a console no one sees, which the console programs the child starts share.
             assert_ne!(CREATION_FLAGS & 0x0800_0000, 0);
             // Never DETACHED_PROCESS: with no console at all, each console program the child starts shows one.
