@@ -32,8 +32,10 @@ const permissionHook = (root = pluginRoot): Hook =>
 const windowsForm = (command: string): string => command.slice(command.indexOf('#>') + 2)
 
 const tmpDirs: string[] = []
+// Every child has exited when spawnSync returns, but Windows still holds a just-run copy of node.exe for a moment (its
+// image mapping, a scanner), and removing the folder then fails with EPERM: rmSync retries that, bounded.
 afterEach(() => {
-  for (const dir of tmpDirs.splice(0)) rmSync(dir, { recursive: true, force: true })
+  for (const dir of tmpDirs.splice(0)) rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
 })
 
 function tempDir(): string {

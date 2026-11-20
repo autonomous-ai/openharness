@@ -10,11 +10,17 @@
 import { runCore } from './core/main.js'
 import { ensureUtf8Locale } from './lib/childLocale.js'
 import { ensureHnLauncher } from './lib/launchers.js'
+import { ts } from './lib/log.js'
+import { enterHome } from './lib/workingFolder.js'
 
 /** Run the core, [scriptPath] being the CLI's own script (cli.js, or src/cli.ts from the sources). */
 export function startCoreProcess(scriptPath: string): void {
+  // Before anything reads its folder: a core started in a folder deleted since (the firmware flash's worktree) failed
+  // every read of it, and a master from before this fix still starts its cores where it was started.
+  const homeLine = enterHome()
   // What cli.ts does first for every command: a `ps` or `git` the core runs must not get mangled output.
   ensureUtf8Locale()
+  if (homeLine) console.log(`${ts()} ${homeLine}`)
   // On entry to the installed bundle, a daemon handoff's included: machines installed before hn shipped
   // get it from whichever core runs first after the update (lib/launchers.ts).
   ensureHnLauncher(scriptPath)

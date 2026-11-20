@@ -4,6 +4,7 @@
  */
 import { agentCommandOwnershipSnapshotAsync, type AgentCommandOwnershipSnapshot } from './engineBin.js'
 import type { AgentEngine } from '../engines/types.js'
+import { errorKind } from './log.js'
 import { registry, type ProcessIdentity, type RegisteredSession } from './registry.js'
 import { comparableStartMarker, enrichProcessRows, processRows, processTreePids, selectEngineProcess, type ProcessRow } from './processTable.js'
 import type { TerminalBackend } from './terminalBackend.js'
@@ -46,7 +47,8 @@ export async function lookupPaneEngineProcess(
   const enrichedRows = await enrichProcessRows(rows, panePids)
   let ownership: AgentCommandOwnershipSnapshot
   try { ownership = await agentCommandOwnershipSnapshotAsync() }
-  catch { return { ok: false, unknown: true, reason: 'ENGINE_LOOKUP_UNAVAILABLE: executable ownership could not be read' } }
+  // The kind only: the snapshot's error can quote a PATH folder, and the reason reaches logs.
+  catch (error) { return { ok: false, unknown: true, reason: `ENGINE_LOOKUP_UNAVAILABLE: executable ownership could not be read (${errorKind(error)})` } }
   const process = selectEngineProcess(enrichedRows, rootPid, engine, ownership)
   if (!process) {
     const paneProcesses = enrichedRows.filter((row) => panePids.has(row.pid)).map(processIdentityOf)

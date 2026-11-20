@@ -16,6 +16,7 @@
 import { execFile, spawn, type ChildProcess } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
 import { mkdir, symlink, writeFile } from 'node:fs/promises'
+import { createRequire } from 'node:module'
 import { createServer } from 'node:net'
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -37,6 +38,10 @@ import { forgetGroup, forgetTmux, leaderGone, watchGroup, watchTmux } from './re
 const exec = promisify(execFile)
 const here = dirname(fileURLToPath(import.meta.url))
 export const CLI_ROOT = resolve(here, '../..')
+/** tsx by its path: a bare `--import tsx` resolves from the working folder, and a daemon's is not always this checkout. */
+export const TSX_LOADER = pathToFileURL(createRequire(join(CLI_ROOT, 'package.json')).resolve('tsx')).href
+/** The sources' CLI, runnable from any folder. */
+export const SOURCES_CLI: readonly string[] = ['--import', TSX_LOADER, join(CLI_ROOT, 'src', 'cli.ts')]
 
 /** What a fake engine's wrapper hands `fakeEngine.mjs` `run()`: where it writes, and which release it is. */
 export interface EngineConfig {
@@ -120,6 +125,9 @@ export interface DaemonOptions {
   beside?: IsolatedDaemon
   /** Ask for this port instead of a free one: a daemon started on another daemon's port. */
   port?: number
+  /** The folder the daemon's process is started in, as the folder of the shell that ran `harness start`. It must exist
+   *  at each start. `CLI_ROOT` when unset. */
+  startFolder?: string
   /** The fake engines ask whether to trust a folder their config has no answer for (fakeEngine.mjs). */
   trustPrompt?: boolean
   /** The fake engines send Claude Code's kitty graphics query on start, then set a title (fakeEngine.mjs). */
@@ -600,12 +608,12 @@ esac
     // From the sources on macOS, the helper a release embeds comes in by a preload (processImages.ts): without it the
     // daemon held every Codex read for good. The master passes its flags on to the core and the services.
     const preload = this.options.withoutProcessImages ? undefined : process.env.E2E_PROCESS_IMAGES_PRELOAD
-    const script = bundle ? [bundle] : [...(preload ? ['--import', preload] : []), '--import', 'tsx', 'src/cli.ts']
+    const script = bundle ? [bundle] : [...(preload ? ['--import', preload] : []), ...SOURCES_CLI]
     // A process group of its own, which the core and the services join: one signal reaches all of them, whether or
     // not the master is still there, and the worker's reaper (reaper.ts) ends it should the worker go without closing it.
     const env = this.options.foreground ? await this.shellEnv() : this.env
     const child = spawn(node, this.options.launch ?? [...heap, ...script, ...entry], {
-      cwd: CLI_ROOT, env, stdio: ['ignore', 'pipe', 'pipe'], ...ownProcessGroup(),
+      cwd: this.options.startFolder ?? CLI_ROOT, env, stdio: ['ignore', 'pipe', 'pipe'], ...ownProcessGroup(),
     })
     this.child = child
     if (child.pid) {

@@ -22,6 +22,9 @@ import { backendListeningPortIn } from '../src/testing/backendListeningPort.js'
 
 if (!process.env.HARNESS_SHARE_E2E_SERVICES) throw new Error('Set HARNESS_SHARE_E2E_SERVICES to disposable service URLs.')
 const exec = promisify(execFile), repo = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
+// tsx by its path: the daemon passes its flags on to the processes it starts from its own folder, where a bare
+// `--import tsx` would not resolve.
+const loader = fileURLToPath(import.meta.resolve('tsx'))
 const root = await mkdtemp(join(tmpdir(), 'harness-share-e2e-'))
 const services = JSON.parse(await readFile(process.env.HARNESS_SHARE_E2E_SERVICES, 'utf8'))
 const mongo = new URL(services.mongo), redis = new URL(services.redis)
@@ -199,7 +202,7 @@ try {
       RECAP_WITHOUT_DEVICE: 'false', CABLE_DISABLE: 'true', CABLE_FW_DISABLE: 'true', TERMINAL_BACKENDS: 'tmux',
       CLAUDE_PROJECTS_DIR: join(folder, 'claude-projects') }
     if (account.name === 'owner') await exec(process.execPath, ['--import', 'tsx', 'src/cli.ts', 'dsh', 'install', fixture, '--link'], { cwd: join(repo, 'cli'), env, timeout: 30_000 })
-    const child = run(account.name, join(repo, 'cli'), ['--import', 'tsx', 'src/cli.ts', '__run'], env)
+    const child = run(account.name, join(repo, 'cli'), ['--import', loader, 'src/cli.ts', '__run'], env)
     const port = await daemonPort(`${account.name} daemon`, env)
     machines.push({ machineId, port, env, child, socket, workspace })
   }
@@ -322,7 +325,7 @@ try {
   await owner.close(); await stop(host.child)
   await until('owner disconnect is recoverable', () => diego.closedCode === 1012)
   await until('offline grant stays discoverable', async () => (await api(accounts[2], '/api/harness-shares')).body.data.machines[0]?.status === 'offline')
-  host.child = run('owner-restarted', join(repo, 'cli'), ['--import', 'tsx', 'src/cli.ts', '__run'], host.env)
+  host.child = run('owner-restarted', join(repo, 'cli'), ['--import', loader, 'src/cli.ts', '__run'], host.env)
   host.port = await daemonPort('owner restarted', host.env)
   owner = await Peer.connect(host.port, host.machineId)
   assert.equal((await owner.rpc('harness_share_list', { agentId })).shares.length, 1)

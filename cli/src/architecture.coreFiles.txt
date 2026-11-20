@@ -532,6 +532,7 @@ lib/windows/processTable.ts
 lib/windows/shell.ts
 lib/windows/storeAppAlias.ts
 lib/windows/treeKill.ts
+lib/workingFolder.ts
 lib/workspaceCheck.ts
 lib/wsLiveness.ts
 localWsServer.ts

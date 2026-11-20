@@ -14,14 +14,12 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { createRequire } from 'node:module'
 import { join } from 'node:path'
-import { pathToFileURL } from 'node:url'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
 import { observedAgentId } from '../src/cable/hosts/observed.js'
 import { LocalClient } from './harness/client.js'
 import { CodexOutside } from './harness/codexOutside.js'
-import { CLI_ROOT, IsolatedDaemon, until } from './harness/daemon.js'
+import { IsolatedDaemon, SOURCES_CLI, until } from './harness/daemon.js'
 import { Desk, devicesPids } from './harness/desk.js'
 import type { DialMessage, FakeDial } from './harness/fakeDial.js'
 import { Outside } from './harness/outsideAgent.js'
@@ -32,7 +30,7 @@ const LINE = 'Connect the VPN so I can run the staging tests'
 // `--import tsx` would not resolve: tsx and the sources by their paths.
 const CLI_ENTRY = process.env.E2E_BUNDLE_PATH
   ? [process.env.E2E_BUNDLE_PATH]
-  : ['--import', pathToFileURL(createRequire(join(CLI_ROOT, 'package.json')).resolve('tsx')).href, join(CLI_ROOT, 'src', 'cli.ts')]
+  : SOURCES_CLI
 
 const row = async (client: LocalClient, agentId: string) =>
   ((await client.request<{ agents: Array<Record<string, any>> }>('agents_list', { includeStopped: true }, 30_000)).agents)

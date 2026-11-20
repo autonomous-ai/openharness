@@ -22,6 +22,9 @@ import { backendListeningPortIn } from '../src/testing/backendListeningPort.js'
 if (process.env.HARNESS_STACK_E2E !== '1') throw new Error('Opt in with HARNESS_STACK_E2E=1')
 const exec = promisify(execFile)
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
+// tsx by its path: the daemon passes its flags on to the processes it starts from its own folder, where a bare
+// `--import tsx` would not resolve.
+const loader = fileURLToPath(import.meta.resolve('tsx'))
 const root = await mkdtemp(join(tmpdir(), 'harness-stack-'))
 const socket = join(root, 'tmux.sock')
 const docker = process.env.HARNESS_E2E_DOCKER_CONTEXT
@@ -190,7 +193,7 @@ createServer((_, res) => res.end('Fixture viewer')).listen(Number(process.env.HA
   await exec(process.execPath, ['--import', 'tsx', 'src/cli.ts', 'dsh', 'install', dshSource, '--link'],
     { cwd: join(repo, 'cli'), env: daemonEnv, timeout: 30_000 })
   async function bootDaemon() {
-    daemon = run('daemon', join(repo, 'cli'), ['--import', 'tsx', 'src/cli.ts', '__run'], daemonEnv)
+    daemon = run('daemon', join(repo, 'cli'), ['--import', loader, 'src/cli.ts', '__run'], daemonEnv)
     let port: number | undefined
     // Read on every attempt: a first start has no record yet, and a daemon started again may bind another port.
     await until('daemon connection', async () => {
