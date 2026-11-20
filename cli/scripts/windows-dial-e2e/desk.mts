@@ -1,21 +1,21 @@
 /**
- * A desk for hand checks of the dial on Windows (README.md beside it), in three modes:
+ * A desk for hand checks of the dial on Windows (README.md beside it), in these modes:
  *
  * - a stand-in dial (`[--port <n>] [--own-account] [--quit-on <file>]`): Task 23's daemon and FakeDial, driven from
  *   stdin, sealed unless `--own-account` gives it the account it runs as (the VM's test user only);
  * - a look (`--dial-read <COMn> --out <file> --serial-bin <exe> [--against <file>]`): the real dial's own `hello`,
  *   read with not one byte written to the port;
- * - the real dial (`--dial <COMn> --speech <text> --first-read <file> --pets-from <dir> --serial-bin <exe> [--port <n>]
- *   [--quit-on <file>]`): a sealed daemon on it, that leaves its settings and its pets as the first look found them;
+ * - the real dial (`--dial <COMn> --speech <text> --first-read <file> --serial-bin <exe> [--port <n>] [--quit-on <file>]`):
+ *   a sealed daemon on it, that leaves its settings as the first look found them, and a last look that checks its pets;
  * - a program beside a sealed desk (`--beside <its root> --run <program> [arguments…]`): herdr, the terminal it runs in
  *   or a stand-in engine, in that desk's homes, never the account's.
  *
  * Exit codes: 1 not on Windows, or the desk failed (it says what); 2 bad arguments, before anything starts; 3 a port is
- * busy; 4 the dial must not be greeted (no hello, or pets the desk would drop); 5 the settings were not restored, or a
- * look found them changed; 6 the dial's pets changed.
+ * busy; 4 the dial must not be greeted (no hello); 5 the settings were not restored, or a look found them changed; 6 the
+ * dial's pets changed.
  */
 import { spawn } from 'node:child_process'
-import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:net'
 import { homedir } from 'node:os'
 import { join, win32 } from 'node:path'
@@ -27,15 +27,13 @@ import { FakeBackend, type FakeMachine } from '../../e2e/harness/fakeBackend.js'
 import type { DialMessage } from '../../e2e/harness/fakeDial.js'
 import { besideEnvironment, PROFILE_NAME, startWindowsDaemon } from '../../e2e/harness/windowsDaemon.js'
 import { CableDecoder, CableType } from '../../src/cable/cableFrame.js'
-import { PetStore } from '../../src/cable/pets/store.js'
-import { planPetSync } from '../../src/cable/pets/sync.js'
 import { openWindowsPort } from '../../src/cable/windowsSerial.js'
 import { openLocalWs } from '../../src/lib/localTransport.js'
 
 const USAGE = `usage:
   desk.mts [--port <n>] [--own-account] [--quit-on <file>]
   desk.mts --dial-read <COMn> --out <file> --serial-bin <harness-serial.exe> [--against <first read>]
-  desk.mts --dial <COMn> --speech <text> --first-read <file> --pets-from <dir> --serial-bin <harness-serial.exe> [--port <n>] [--quit-on <file>]
+  desk.mts --dial <COMn> --speech <text> --first-read <file> --serial-bin <harness-serial.exe> [--port <n>] [--quit-on <file>]
   desk.mts --beside <a sealed desk's root> --run <program> [arguments…]`
 
 /** A stop the desk names, with its exit code. */
@@ -43,7 +41,7 @@ class DeskStop extends Error {
   constructor(readonly code: number, message: string) { super(message) }
 }
 
-const VALUED = new Set(['--port', '--quit-on', '--dial-read', '--out', '--against', '--serial-bin', '--dial', '--speech', '--first-read', '--pets-from'])
+const VALUED = new Set(['--port', '--quit-on', '--dial-read', '--out', '--against', '--serial-bin', '--dial', '--speech', '--first-read'])
 const COM = /^COM[1-9][0-9]{0,2}$/
 /** The account's own daemon's port: a desk never takes it. */
 const ACCOUNT_PORT = 18473
@@ -52,7 +50,7 @@ const SPEECH_MAX = 200
 type Mode =
   | { kind: 'stand-in'; port?: number; own: boolean; quitOn?: string }
   | { kind: 'look'; com: string; out: string; against?: string; serialBin: string }
-  | { kind: 'real'; com: string; speech: string; firstRead: string; petsFrom: string; serialBin: string; port?: number; quitOn?: string }
+  | { kind: 'real'; com: string; speech: string; firstRead: string; serialBin: string; port?: number; quitOn?: string }
   | { kind: 'beside'; root: string; program: string; args: string[] }
 
 /** [argv] as a mode, every argument checked; nothing is read or started. */
@@ -108,11 +106,11 @@ function modeOf(argv: string[]): Mode {
     return { kind: 'look', com: com('--dial-read'), out: need('--out'), against: args.get('--against') as string | undefined, serialBin: serialBin() }
   }
   if (args.has('--dial')) {
-    only(['--dial', '--speech', '--first-read', '--pets-from', '--serial-bin', '--port', '--quit-on'])
+    only(['--dial', '--speech', '--first-read', '--serial-bin', '--port', '--quit-on'])
     const dial = com('--dial')
     const speech = need('--speech')
     if (speech.length > SPEECH_MAX) throw new DeskStop(2, `--speech takes at most ${SPEECH_MAX} characters`)
-    return { kind: 'real', com: dial, speech, firstRead: need('--first-read'), petsFrom: need('--pets-from'), serialBin: serialBin(), port, quitOn }
+    return { kind: 'real', com: dial, speech, firstRead: need('--first-read'), serialBin: serialBin(), port, quitOn }
   }
   only(['--port', '--own-account', '--quit-on'])
   return { kind: 'stand-in', port, own: args.has('--own-account'), quitOn }
@@ -311,43 +309,6 @@ async function standInMode(mode: Extract<Mode, { kind: 'stand-in' }>): Promise<v
 /** The machine a real-dial desk signs in as, to its FakeBackend alone: the dial's words come back as `--speech`. */
 const ME: FakeMachine = { machineId: 'd1'.repeat(16), computerId: 'harness-dial-desk', name: 'Desk', token: 'harness-dial-desk-token' }
 
-/** Only the pet files the daemon's store reads (cable/pets/store.ts), each bounded. */
-const PET_FILE = /^(?:[0-9a-f]{16}\.(?:hpet|png|json)|pets\.json)$/
-const PET_FILES_MAX = 64
-const PET_FILE_MAX_BYTES = 64 * 1024 * 1024
-
-/**
- * The owner's pets folder [from], read and never written, copied into [to], the desk's devices folder's `pets`: its
- * greeting then plans the pets as the owner's daemon does (cable/pets/sync.ts planPetSync), and drops none of [held].
- * A stop (4) before the daemon starts when the folder cannot be copied, or its mapping does not name a pet held.
- */
-function copyPets(from: string, to: string, held: string[]): void {
-  let names: string[]
-  try {
-    names = readdirSync(from)
-  } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code
-    // No folder and no pet held: nothing to keep.
-    if (code === 'ENOENT' && !held.length) return
-    throw new DeskStop(4, `--pets-from could not be read (${code ?? 'error'}), and the dial holds ${held.length} pets`)
-  }
-  const files = names.filter((name) => PET_FILE.test(name))
-  if (files.length > PET_FILES_MAX) throw new DeskStop(4, `--pets-from holds more than ${PET_FILES_MAX} pet files`)
-  mkdirSync(to, { recursive: true })
-  for (const name of files) {
-    const source = join(from, name)
-    try {
-      const stat = lstatSync(source)
-      if (!stat.isFile() || stat.size > PET_FILE_MAX_BYTES) throw new Error('not a file of its size')
-      writeFileSync(join(to, name), readFileSync(source), { mode: 0o600, flag: 'wx' })
-    } catch {
-      throw new DeskStop(4, `${name} in --pets-from could not be copied`)
-    }
-  }
-  const dropped = planPetSync(new PetStore(to).mapping(), held).drop
-  if (dropped.length) throw new DeskStop(4, `the dial holds ${dropped.length} pets that --pets-from's pets.json does not name: the desk's greeting would drop them`)
-}
-
 /** An ESP32's address (the dial's mac and USB serial) and any serial number, cut to their last 4 characters. */
 const MAC = /\b(?:[0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}\b/g
 const SERIAL = /\b(serial(?:Number)?["']?\s*[:=]\s*["']?)([^\s"',}]{5,})/gi
@@ -385,8 +346,7 @@ async function realMode(mode: Extract<Mode, { kind: 'real' }>): Promise<void> {
     dial: { port: mode.com, serialBin: mode.serialBin },
     env: { BACKEND_WS_URL: backend.wsUrl, WEB_URL: backend.httpUrl, ADAPTER_COMPUTER_ID: ME.computerId },
     onOutput: lines,
-    prepare: ({ auth, devices }) => {
-      copyPets(mode.petsFrom, join(devices, 'pets'), first.petIds)
+    prepare: ({ auth }) => {
       // Signed in as ME: the session `harness login` leaves, which the core reads at start.
       writeFileSync(join(auth, 'session.json'), JSON.stringify({ version: 1, accessToken: ME.token, autonomousEnv: 'prod',
         computerId: ME.computerId, machineId: ME.machineId, expiresAt: Date.now() + 30 * 24 * 3600_000, updatedAt: Date.now(), signInEpoch: 'desk',

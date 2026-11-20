@@ -54,8 +54,8 @@ name them. It names local paths: it stays on the machine.
   `{"settings":{…},"pets":<n>,"petIds":[…],"at":<ms>}`, with no serial and no mac, and prints `pets: <n>` and the
   settings' field names, never their values. With `--against`, it prints `settings: unchanged` or
   `settings: changed (<fields>)`, and `pets: unchanged` or `pets: changed`.
-- **The real dial**: `desk.mjs --dial <COMn> --speech <text> --first-read <file> --pets-from <dir> --serial-bin <exe>
-  [--port <n>] [--quit-on <file>]`. A daemon sealed as Task 23 seals it (nothing of the account is set up or read),
+- **The real dial**: `desk.mjs --dial <COMn> --speech <text> --first-read <file> --serial-bin <exe> [--port <n>]
+  [--quit-on <file>]`. A daemon sealed as Task 23 seals it (nothing of the account is set up or read),
   on the real dial through the signed helper, with `CABLE_FW_DISABLE=true`, which no flag turns off: the dial is never
   flashed. It is signed in to a FakeBackend on 127.0.0.1 alone, which hears every recording as `--speech` (at most 200
   characters). It prints the daemon's `[device]` and `cable:` lines, with a mac or a serial cut to its last 4
@@ -69,12 +69,6 @@ task has no stdin to type into. `quit` stops the daemon; a sealed desk then dele
 
 The real dial is left as the first look found it:
 
-- **Pets.** Before the daemon starts, `--pets-from`, the owner's devices pets folder (`%USERPROFILE%\.harness\devices\pets`
-  unless the owner set `HARNESS_DEVICES_DIR`), is copied into the desk's own devices folder, read and never written: its
-  `<id>.hpet`, `<id>.png`, `<id>.json` and `pets.json`. The daemon's greeting then drops none of the dial's pets. The
-  desk stops (exit 4) before the daemon starts, and nothing talks to the dial, when the dial holds pets and the folder
-  cannot be copied, or `pets.json` does not name each pet the first look found. A folder that is not there, on a dial
-  that holds no pet, is an empty copy.
 - **Settings.** On `quit`, before the daemon stops: when the dial holds other values than the first look for the fields
   `settings.set` takes (brightness, character, muted, quiet, straightTitle, focusFace, scrollReversed, voiceLang, and
   uiSkin and followCompanion when the first look has them), one `dial_settings` writes the first look's values back for
@@ -86,8 +80,8 @@ The real dial is left as the first look found it:
   against the first look.
 
 Exit codes: 1 not on Windows, or the desk failed (it says what); 2 bad arguments, before anything starts; 3 a port is
-busy (the daemon's `--port`, or the COM port still held after 10 s); 4 the dial must not be greeted (no `hello` in 20 s,
-or pets the desk would drop); 5 the settings were not restored, or a look found them changed (`--against`, or the last
+busy (the daemon's `--port`, or the COM port still held after 10 s); 4 the dial must not be greeted (no `hello` in
+20 s); 5 the settings were not restored, or a look found them changed (`--against`, or the last
 look of a dial that was not attached); 6 the dial's pets changed. A desk refuses port 18473, the account's own daemon's.
 
 ## console.ps1
@@ -120,7 +114,7 @@ Every step through `console.ps1`, in the owner's console session; SSH runs only 
 2. If it runs, `harness stop`. Then the first look, `--dial-read COM3 --out <run>\first-read.json`, must exit 0; exit 3
    means something took `COM3` again: stop the run.
 3. The desks: the sealed stand-in (`--port 18479`) and the real dial (`--dial COM3 --speech <text>
-   --first-read <run>\first-read.json --pets-from <the owner's pets folder> --port 18478 --quit-on <run>\quit`), each
+   --first-read <run>\first-read.json --port 18478 --quit-on <run>\quit`), each
    with `-NoWait`, then quit through its `--quit-on` file and `-Stop`. A real-dial desk that ends 4, 5 or 6 stops the
    run.
 4. The last look, `--dial-read COM3 --out <run>\last-read.json --against <run>\first-read.json`: `settings: unchanged`

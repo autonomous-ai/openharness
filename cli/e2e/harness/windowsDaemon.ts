@@ -55,9 +55,9 @@ export interface WindowsDaemonOptions {
   capabilities?: Record<string, string>
   /** Each piece of what the daemon prints, as it comes: its output, then its log (`log`). */
   onOutput?: (text: string) => void
-  /** Run once Harness's folders are made, before the daemon starts: a sign-in or a pets folder put in place. What it
-   *  throws is thrown back, and nothing is started. */
-  prepare?: (folders: { auth: string; devices: string }) => void | Promise<void>
+  /** Run once Harness's folders are made, before the daemon starts: a sign-in put in place. What it throws is thrown
+   *  back, and nothing is started. */
+  prepare?: (folders: { auth: string }) => void | Promise<void>
 }
 
 /** A real dial on [port], run through [serialBin], a signed harness-serial.exe, in place of the stand-in. Always sealed. */
@@ -232,7 +232,7 @@ export async function startWindowsDaemon(options: WindowsDaemonOptions | RealDia
   })
 
   try {
-    await options.prepare?.({ auth: dirs.auth, devices: dirs.devices })
+    await options.prepare?.({ auth: dirs.auth })
   } catch (error) {
     discard()
     throw error
