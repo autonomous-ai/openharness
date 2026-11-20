@@ -378,15 +378,17 @@ mod tests {
             json!({"screen":"sign_in","phase":"browser","lines":["Waiting"]})
         );
         assert_eq!(serde_json::to_value(Screen::Install).unwrap(), json!("install"));
+        assert_eq!(serde_json::to_value(Screen::Follow).unwrap(), json!("follow"));
     }
 
     #[test]
-    fn the_window_may_ask_four_things() {
+    fn the_window_may_ask_five_things() {
         let asks = [
             ("retry", Action::Retry),
             ("sign_in", Action::SignIn),
             ("later", Action::Later),
             ("cancel", Action::Cancel),
+            ("allow", Action::Allow),
         ];
         for (name, action) in asks {
             assert_eq!(serde_json::from_value::<Action>(json!(name)).unwrap(), action);
@@ -408,7 +410,14 @@ mod tests {
 
     #[test]
     fn state_json_keys() {
-        let keys = json!({ "version": 1, "cliSeen": false, "askedSignIn": false, "loginItem": false });
+        let keys = json!({
+            "version": 1,
+            "cliSeen": false,
+            "askedSignIn": false,
+            "loginItem": false,
+            "askedFollow": false,
+            "askedAx": false
+        });
         assert_eq!(serde_json::to_value(Saved::default()).unwrap(), keys);
         assert_eq!(serde_json::from_value::<Saved>(keys).unwrap(), Saved::default());
     }

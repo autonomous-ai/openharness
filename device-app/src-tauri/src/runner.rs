@@ -456,6 +456,7 @@ mod tests {
     use super::*;
     use crate::account::NO_RESULT;
     use crate::app::App;
+    use crate::follow::{AX_SETTINGS, AxTrust, ChatgptWindow, Heard, NoFollow};
     use crate::front::{FrontSource, NoFront};
     use crate::install::{DESKTOP, HOST, INSTALLING_TMUX, NOT_INSTALLED, NOT_SUPPORTED, Shell};
     use crate::loginitem::LoginItem;
@@ -806,6 +807,7 @@ mod tests {
             front: Arc::new(NoFront),
             tabs: Arc::new(NoTabs),
             updater: None,
+            follow: Arc::new(NoFollow),
         }
     }
 
@@ -1048,6 +1050,8 @@ mod tests {
             Effect::Log("menu: Quit".into()),
             Effect::ExportLogs,
             Effect::Reveal(PathBuf::from("/tmp/harness-logs-20261118-1030.zip")),
+            Effect::AskAx,
+            Effect::OpenAxSettings,
         ];
         for effect in others {
             assert_eq!(w.runner.run(effect.clone()), None, "{effect:?}");
@@ -1059,6 +1063,46 @@ mod tests {
     fn relaunch_is_the_binarys() {
         let w = world();
         assert_eq!(w.runner.run(Effect::Relaunch), Some(Effect::Relaunch));
+    }
+
+    /// A follow door that counts macOS's prompts and reads nothing.
+    #[derive(Default)]
+    struct Prompts(AtomicUsize);
+
+    impl ChatgptWindow for Prompts {
+        fn installed(&self) -> bool {
+            false
+        }
+
+        fn observe(&self, _heard: Box<dyn Fn(Heard) + Send + Sync>) -> Option<Box<dyn Send>> {
+            None
+        }
+    }
+
+    impl AxTrust for Prompts {
+        fn trusted(&self) -> bool {
+            false
+        }
+
+        fn prompt(&self) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+
+        fn start(&self, _changed: Box<dyn Fn() + Send + Sync>) {}
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn allow_asks_macos_and_the_settings_open_with_one_fixed_argument() {
+        let prompts = Arc::new(Prompts::default());
+        let door = prompts.clone();
+        let w = world_where(move |doors| doors.follow = door);
+        assert_eq!(w.runner.run(Effect::AskAx), None);
+        assert_eq!(prompts.0.load(Ordering::SeqCst), 1);
+        assert!(w.doubles.opened.lock().unwrap().is_empty());
+        assert_eq!(w.runner.run(Effect::OpenAxSettings), None);
+        assert_eq!(*w.doubles.opened.lock().unwrap(), [vec![AX_SETTINGS.to_string()]]);
+        assert_eq!(prompts.0.load(Ordering::SeqCst), 1);
     }
 
     #[cfg(unix)]
