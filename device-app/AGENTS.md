@@ -13,8 +13,8 @@ sets them up. Rust and Tauri 2 in `src-tauri/`; the window's three screens are p
 
 - Rust stable, 1.95 or newer (`rust-version` in `src-tauri/Cargo.toml`): `rustup update stable`. The repo pins no
   toolchain; CI uses `dtolnay/rust-toolchain@stable`.
-- The Tauri CLI 2.12.4, to build and run the app: `cargo install tauri-cli --version 2.12.4 --locked`. PR CI does not
-  use it; the release pins that version (`scripts/release-setup.sh`).
+- The Tauri CLI 2.12.4, to build and run the app: `cargo install tauri-cli --version 2.12.4 --locked`. The release
+  pins that version (`scripts/release-setup.sh`); PR CI's end-to-end builds restore it from a cache keyed on that file.
 - It runs on macOS 13 or later (`SMAppService`), Windows 10 or 11 (x64 and arm64, an NSIS installer per user) and Linux
   (x64 and arm64, an AppImage). Linux builds need webkit2gtk 4.1, appindicator, rsvg and libxdo.
 - Tauri's dependencies take minutes to compile: one `CARGO_TARGET_DIR` outside the repository compiles them once.
@@ -40,7 +40,8 @@ sets them up. Rust and Tauri 2 in `src-tauri/`; the window's three screens are p
   builds 0.0.1 and 0.0.2 for each driver's update check (`macos.sh --update`, and the same in the other two).
   `scripts/e2e/appimage-starts.sh <AppImage> <name>`: does an AppImage start from its FUSE mount with no `libfuse2`.
   `scripts/e2e/linux-install.sh <AppImage>`: the one-line install on Ubuntu 24.04 with no `libfuse2`, against a fake
-  CDN; GitHub-hosted runners only, as it changes `/etc/hosts` and the trust store.
+  CDN; GitHub-hosted runners only, as it changes `/etc/hosts` and the trust store. PR CI runs all but `macos.sh` and
+  `appimage-starts.sh`, which stay by hand ([PR CI](../docs/validation-and-release.md#pr-ci)).
 - `python3 -m unittest discover -s scripts -p 'test_*.py'`: the release rules. How a release is cut:
   [RELEASE.md](RELEASE.md).
 
@@ -111,5 +112,11 @@ sets them up. Rust and Tauri 2 in `src-tauri/`; the window's three screens are p
   read of that folder: join path segments one by one, and name other components only in comments.
 - **`HARNESS_DEVICE_CLI`** (the fake CLI for tests) is read by debug builds only.
 
-PR CI compiles and tests the app on Linux and Windows (`device-app-checks`); macOS is built and tested by hand. All
-three are released by `make release-device`.
+PR CI compiles and tests the app on Linux and Windows (`device-app-checks`), and runs it end to end there, each suite
+for the paths `DEVICE_APP_PATHS` in `scripts/ci-plan.py` gives it: `device-app-e2e` (`linux.sh` and `windows.ps1`, for
+any change but Markdown and the release scripts' Python tests), `device-app-update` (`update-pair.sh` and each driver's
+update path, for the updater, the drivers, the release build scripts, `tauri*.conf.json` and the Cargo files),
+`device-app-desktop` (Desktop installs the app, for `desktop/lib/devices/`, its test, `install.rs`, `packaging.rs`,
+`instance.rs` and `tauri*.conf.json`) and `device-app-install` (`linux-install.sh`, for the website's installer, its
+stand-in CDN, `appimage_env.rs`, `packaging.rs` and `tauri*.conf.json`). macOS is built and tested by hand
+(`macos.sh`). All three are released by `make release-device`.
