@@ -4,6 +4,7 @@ pub mod account;
 pub mod app;
 pub mod cli;
 pub mod desktop;
+pub mod follow;
 pub mod front;
 #[cfg(target_os = "macos")]
 pub mod front_macos;
