@@ -53,6 +53,7 @@ import { createKittyAdapter, kittyFinder } from '../cable/hosts/kitty.js'
 import { Inbox } from '../cable/hosts/inbox.js'
 import { LAST_ANSWER_DEADLINE_MS, LAST_ANSWER_MAX_BYTES, readLastAnswer } from '../cable/hosts/lastAnswer.js'
 import { systemLinuxRaise, type LinuxRaise } from '../cable/hosts/linuxRaise.js'
+import { createWindowsRaise, harnessDesktopLauncher, type WindowsRaise } from '../cable/hosts/windowsRaise.js'
 import { askedLine, countWord, hostDisplayName, observedAgentId, ObservedSource, type ObservedActions, type ObservedDeps, type PromptSource } from '../cable/hosts/observed.js'
 import { observedPlaces } from '../cable/hosts/observedPlaces.js'
 import { createOpenActions } from '../cable/hosts/open.js'
@@ -87,7 +88,7 @@ import { createOrcaHomesCache, orcaHomesDeps, readOrcaHomes, type OrcaHomesCache
 import { orcaPluginRun, type OrcaPluginRun } from '../devices/orcaPlugin.js'
 import { createOrcaPluginSetup, orcaPluginParts } from '../cable/orcaPluginSetup.js'
 import { harnessPath } from '../config/harnessHome.js'
-import { cursorFolderCli, vscodeExtensionDeps, type VscodeExtensionDeps } from '../devices/vscodeExtension.js'
+import { cursorFolderCli, editorCli, vscodeExtensionDeps, type VscodeExtensionDeps } from '../devices/vscodeExtension.js'
 import { WindowForm } from '../cable/windowForm.js'
 import { createWindowRouter } from '../cable/windowRoute.js'
 import { WindowSelection } from '../cable/windowSelection.js'
@@ -98,6 +99,7 @@ import { claudeProjectsRoots, codexHomeRoots, movedEngineHomes } from '../lib/en
 import { harnessDevicesRequest } from '../lib/harnessDevices.js'
 import { errorKind } from '../lib/log.js'
 import { pidAlive } from '../lib/processProof.js'
+import { ptyHostBinary } from '../lib/ptyHost/launch.js'
 import { OpenSessions, SessionRows } from '../lib/sessionSearch/external.js'
 import { externalProviders } from '../lib/sessionSearch/externals/index.js'
 import { fileStamp, listProcesses, processAlive } from '../lib/sessionSearch/externals/support.js'
@@ -201,6 +203,9 @@ export interface DevicesDeps {
   /** For this service's tests: how a tap brings an agent's window forward on Linux; this login's desktop when unset
    *  (cable/hosts/linuxRaise.ts systemLinuxRaise). */
   raise?: LinuxRaise
+  /** For this service's tests: how a tap brings an app forward on Windows; `harness-pty`'s raise when unset
+   *  (cable/hosts/windowsRaise.ts). */
+  windowsRaise?: WindowsRaise
 }
 
 /** ⌘K's answer while the fleet is not running: it never started, so there is no list to weigh. */
@@ -310,7 +315,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   // The Notifications setting (docs/plans/2026-11-16-dial-agent-notify-design.md) is this computer's, not the dial's: the
   // windows and the watch hear it with every dial status, and the owner's other machines and the Devices tab never do.
   // Only once the devices' own listener opened, the one door a change comes in by: with none (services inside the core,
-  // a listener that failed to open, Windows) the menu must not offer a setting no click can change.
+  // or a listener that failed to open) the menu must not offer a setting no click can change.
   const notifyMode = new NotifyModeStore(join(core.dataDir, NOTIFY_MODE_FILE))
   let listenerOpen = false
   const sayStatus = (status: DialStatus): void => core.clients.sendLocal({ type: 'dial_status',
@@ -439,7 +444,16 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   const cmuxApp = createCmuxAppAdapter({ ...apps, client: cmuxClient, bin: openBin, found: () => cmuxFound,
     inFront: () => cableHost.latestFront() === 'cmux', kindAt: (surface) => cmuxSource?.kindAt(surface) })
   const cmuxPane = (pane: string): Pane => ({ adapter: cmuxApp.id, id: pane })
-  const claude = createClaudeAppAdapter({ ...apps, bin: openBin, inFront: () => cableHost.latestFront() === 'claude' })
+  // Cursor as found here: its folder window's tap (below) and its extension's setup run the same `cursor`.
+  const cursorExtension = deps.cursorExtension ?? vscodeExtensionDeps('cursor', process.env.HARNESS_CURSOR_BIN)
+  // Linux's way to bring a window forward, where macOS runs `open -b` (docs/plans/2026-11-19-dial-linux-design.md § 2).
+  const raise = deps.raise ?? (apps.platform === 'linux' ? systemLinuxRaise(apps, log) : undefined)
+  // Windows', by the app's bundle as on macOS (docs/plans/2026-11-19-dial-windows-design.md, part C). A measure: what
+  // Windows answered each raise, never the app.
+  const raiseCount = createEngineTally('[device] raise', ['window'], ['raised', 'refused', 'none'], log)
+  const windows = deps.windowsRaise ?? (apps.platform === 'win32' ? createWindowsRaise({ binary: ptyHostBinary, run: apps.run,
+    cursorCli: () => editorCli(cursorExtension), desktopLauncher: harnessDesktopLauncher, count: (outcome) => raiseCount('window', outcome) }) : undefined)
+  const claude = createClaudeAppAdapter({ ...apps, bin: openBin, inFront: () => cableHost.latestFront() === 'claude', windows })
   const claudePane = (localId: string): Pane => ({ adapter: claude.id, id: localId })
   // Harness's own Codex home, whose config `codex queue` loads; run from the home folder, so no project's .codex/ is read.
   const codexQueue = createCodexQueue({ ...(deps.codex ?? codexQueueDeps()), home: env.CODEX_HOME, cwd: homedir() })
@@ -521,7 +535,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   /** The Claude app's adapter as the dial's verbs reach it, a hooked agent's and a store row's alike: a rest's continue
    *  link is the dial's own move, and the app's attach that follows is its echo. */
   const claudeNoted = noting({ ...claude, show: (pane, agentId) => { noteLink(agentId); return claude.show(pane, agentId) } })
-  const codexApp = createCodexAppAdapter({ ...apps, bin: openBin, inFront: () => cableHost.latestFront() === 'codex', log })
+  const codexApp = createCodexAppAdapter({ ...apps, bin: openBin, inFront: () => cableHost.latestFront() === 'codex', log, windows })
   /** The ChatGPT app threads the dial opened lately, by id. */
   const codexSwitches = dialMovesTo()
   /** The ChatGPT app's adapter as the dial's verbs reach it: a rest or a tap opens the thread's link, and the app's
@@ -544,10 +558,6 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   const zellijAt = zellijFinder()
   const tmux = noting(createTmuxAdapter({ run: apps.run, tmux: tmuxAt, processes: readProcessNames, log, front: () => cableHost.latestFront() }))
   const orca = createOrcaAdapter(apps, { worktreeOf: (handle) => orcaWorktrees.get(handle), log, switching: (handle) => orcaSwitches.note(handle) })
-  // Cursor as found here: its folder window's tap on Linux (below) and its extension's setup run the same `cursor`.
-  const cursorExtension = deps.cursorExtension ?? vscodeExtensionDeps('cursor', process.env.HARNESS_CURSOR_BIN)
-  // Linux's way to bring a window forward, where macOS runs `open -b` (docs/plans/2026-11-19-dial-linux-design.md § 2).
-  const raise = deps.raise ?? (apps.platform === 'linux' ? systemLinuxRaise(apps, log) : undefined)
   const adapters: readonly HostAdapter[] = [herdrNoted, noting(createZellijAdapter({ run: apps.run, zellij: zellijAt, platform: apps.platform })),
     tmux, herdrAppNoted, cmuxAppNoted, ...[
     createKittyAdapter({ run: apps.run, kitty: kittyFinder(), platform: apps.platform, log, uid: process.getuid?.() ?? -1, socketOwner }),
@@ -558,10 +568,10 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       focus: (pane: Pane) => { orcaSwitches.note(pane.id); return orca.focus(pane) } },
   ].map(noting), claudeNoted, codexNoted, ...[
     // No echo to guard: VS Code sends no attach for the follow to take as a person's.
-    createVscodeAdapter('vscode', { ...apps, bin: openBin, inFront: () => cableHost.latestFront() === 'vscode', terminals: vscode, raise: raise && ((window) => raise.raise(window)) }),
-    createVscodeAdapter('cursor', { ...apps, bin: openBin, inFront: () => cableHost.latestFront() === 'cursor', terminals: vscode, raise: raise && ((window) => raise.raise(window)) }),
+    createVscodeAdapter('vscode', { ...apps, bin: openBin, inFront: () => cableHost.latestFront() === 'vscode', terminals: vscode, raise: raise && ((window) => raise.raise(window)), windows }),
+    createVscodeAdapter('cursor', { ...apps, bin: openBin, inFront: () => cableHost.latestFront() === 'cursor', terminals: vscode, raise: raise && ((window) => raise.raise(window)), windows }),
     // After Cursor's terminals and tabs: whatever agent in Cursor they do not reach opens its folder's window.
-    createCursorFolderAdapter({ run: apps.run, platform: apps.platform, bin: openBin, isFolder, cli: () => cursorFolderCli(cursorExtension) }),
+    createCursorFolderAdapter({ run: apps.run, platform: apps.platform, bin: openBin, isFolder, cli: () => cursorFolderCli(cursorExtension), windows }),
     createTabsAdapter({
       isOpen: () => tabs.isOpen(),
       select: (tab, raise) => {
@@ -571,7 +581,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       },
     }),
   ].map(noting)]
-  const opener = createOpenActions({ run: apps.run, platform: apps.platform, adapters, log, bin: openBin, raise,
+  const opener = createOpenActions({ run: apps.run, platform: apps.platform, adapters, log, bin: openBin, raise, windows,
     windowOf: (agentId) => observed?.windowOf(agentId),
     // herdr's ring is Herdr.app's window's while it holds an agent there: one hc lists, or a live hooked agent with a pane
     // of Herdr's (herdrApp.ts paneOf); an ended one's terminal holds a shell now. herdr 0.8.0's agents have none. Only
@@ -1111,14 +1121,14 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       part.call('dial', () => threadSettled(app))
     },
     appPicked: () => log('[device] app filter: picker'),
-    // A pick on the dial brings its app to the front, on macOS and, through the raise, on Linux
+    // A pick on the dial brings its app to the front, on macOS and, through their raise, on Linux and Windows
     // (docs/plans/2026-11-16-dial-pick-brings-app-design.md).
     // A measure: the outcome, never the app; a pick with nothing to bring, or replaced by a later one, ran nothing.
     appBrought: bring && ((app) => {
       void bring(app).then((outcome) => { if (outcome) log(`[device] app filter: bring · ${outcome}`) })
     }),
-    // A tap on a Harness agent with no window starts Desktop, on macOS only (docs/specs/2026-11-15-device-wave1-checks.md,
-    // F2).
+    // A tap on a Harness agent with no window starts Desktop, on macOS and, through its launcher, on Windows
+    // (docs/specs/2026-11-15-device-wave1-checks.md, F2).
     launchDesktop: opener.desktop,
     // A measure: the app's name only.
     desktopTimedOut: () => log('[device] open · harness · no window'),
