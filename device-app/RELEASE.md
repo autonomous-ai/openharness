@@ -13,9 +13,10 @@ Each `.sig` is the updater's signature. The page is `https://harness.autonomous.
 and installs it on its own.
 
 Windows and Linux ship only when a release asks for them: `platforms` is `macos` by default, and `all` builds and
-publishes the three. A macOS-only release leaves the manifest's Windows and Linux keys as the last release of every
-platform wrote them. The input is temporary: the first Windows and Linux release makes `all` the only behavior and
-removes it.
+publishes the three. Once Windows and Linux are live, `publish` refuses a macOS-only release: the manifest has one
+version, so their apps would take the new one with the last release's files, signed for another version, and fail
+every update. The input is temporary: the first Windows and Linux release makes `all` the only behavior and removes
+it.
 
 ## Cutting a release
 

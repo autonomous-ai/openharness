@@ -238,8 +238,9 @@ stdin (`front_line`, `FrontFeed`), never logged. The CLI already maps exe names 
 - **Which platforms a release carries:** a temporary `platforms` input on `release-device.yml` and
   `make release-device` (`macos` by default, `all` on Ken's word), so a routine macOS release publishes nothing for
   Windows or Linux and a red Windows/Linux build never blocks it. The pull request of the first Windows/Linux release
-  makes `all` the only behavior and removes the input (harness-pm, 2026-11-19). With `macos`, the manifest keeps any
-  Windows/Linux keys already live untouched.
+  makes `all` the only behavior and removes the input (harness-pm, 2026-11-19). Once Windows/Linux keys are live,
+  `publish` refuses `macos`: Tauri's manifest has one version, so keeping them would point their apps at the last
+  release's files, signed for another version, and every update would fail its signature check.
 - **Manifest** (`device-manifest.py`): a release with `all` carries every platform at one version. `platforms` gains
   `windows-x86_64`, `windows-aarch64`, `linux-x86_64`, `linux-aarch64` (Tauri's keys, each its own file and
   signature). Desktop-style keys beside the macOS ones: `device-windows-x64`, `device-windows-arm64`,

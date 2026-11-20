@@ -174,8 +174,7 @@ def updates(manifest):
 
 
 def differing(manifest, entries):
-    """The keys of entries that manifest holds otherwise, each update on its own: a macOS release keeps the Windows and
-    Linux ones beside its own."""
+    """The keys of entries that manifest holds otherwise, each update on its own."""
     live = updates(manifest)
     return ([f"platforms.{key}" for key, value in entries["platforms"].items() if live.get(key) != value] +
             [key for key, value in entries.items() if key != "platforms" and manifest.get(key) != value])
@@ -219,18 +218,16 @@ def publish(version, folder, notes, pub_date, platforms="macos"):
         if live is None:
             raise ValueError(f"{live_uri}#{generation} has no plain X.Y.Z version")
         current = json.loads(text)
+        # Tauri's manifest has one version: Windows' and Linux's apps would take this one's with their last files,
+        # signed for another version, and fail every check until a release of every platform.
+        if platforms == "macos" and any(key.startswith(("windows-", "linux-")) for key in updates(current)):
+            raise ValueError("Windows and Linux are live: release with --platforms all")
         if version == live:
             # A rerun after the manifest was written (verify failed, or gcloud gave up on a write that landed): this
             # build is live, so the run goes on to verify it. Another build must never go out under its version.
             if differing(current, file_entries(version, folder, CDN_BASE, platforms)):
                 raise ValueError(f"{version} is already published with other files; release a new version")
             return current
-        if platforms == "macos":
-            # A routine macOS release leaves Windows and Linux where the last release of every platform put them.
-            manifest["platforms"].update(
-                {key: value for key, value in updates(current).items() if key.startswith(("windows-", "linux-"))})
-            manifest.update(
-                {key: value for key, value in current.items() if key.startswith(("device-windows-", "device-linux-"))})
     if parse(version) <= parse(live):
         raise ValueError(f"{version} is not greater than {live}, the live version")
     files = release_files(platforms)
