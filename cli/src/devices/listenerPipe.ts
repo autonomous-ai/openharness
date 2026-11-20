@@ -7,7 +7,7 @@
  */
 import { closeSync, fstatSync, openSync, readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
-import { recordedProcessDead, type HostLiveness } from '../lib/processProof.js'
+import { START_SLACK_MS, startMarkerMs, type HostLiveness } from '../lib/processProof.js'
 import { atomicWriteFile } from '../lib/secureState.js'
 import { isPipePath, readDaemonToken } from '../lib/windows/pipeAuth.js'
 import type { PipeTarget } from '../lib/windows/pipeClient.js'
@@ -141,11 +141,17 @@ export function createRecordProof(options: { liveness?: HostLiveness; now?: () =
       if (proof && proof.pipe === record.pipe && proof.pid === record.pid && proof.mtimeMs === mtimeMs
         && now() - proof.provenAt < PROOF_MAX_AGE_MS) return target
       held.delete(file)
-      // Read here rather than inside recordedProcessDead, so a proof is held only when the table answered: no table is
-      // no proof of death, nor of life, and the next call asks it again. The pid was checked just above.
+      // recordedProcessDead's rule, judged by [mtimeMs], when the record read above was written: it would stat the file
+      // again after the table, and a record rewritten meanwhile would lend its time to this pid. A proof is held only
+      // when the table answered: no table is no proof of death, nor of life, and the next call asks it again. The pid
+      // was checked just above.
       const rows = await liveness.rows?.().catch(() => null) ?? null
-      if (await recordedProcessDead(file, record.pid, { alive: () => true, rows: async () => rows })) return null
-      if (rows) held.set(file, { pipe: record.pipe, pid: record.pid, mtimeMs, provenAt: now() })
+      if (!rows) return target
+      const row = rows.find((candidate) => candidate.pid === record.pid)
+      const started = row ? startMarkerMs(row.startMarker) : null
+      // Not in the table, or started after the record was written: the pid has been given to another process since.
+      if (!row || (started !== null && started > mtimeMs + START_SLACK_MS)) return null
+      held.set(file, { pipe: record.pipe, pid: record.pid, mtimeMs, provenAt: now() })
       return target
     },
     forget(file) {
