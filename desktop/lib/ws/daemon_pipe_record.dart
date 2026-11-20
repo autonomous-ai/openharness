@@ -47,9 +47,11 @@ final _tokenText = RegExp(r'^[0-9a-f]{64}\n?$');
 const _maxRecordBytes = 4096;
 
 /// The daemon's data folder: `ADAPTER_DATA_DIR`, else `cli\data` in Harness's
-/// data root (`%USERPROFILE%\.harness` on Windows). A relative
-/// `ADAPTER_DATA_DIR` is in the home, as every Harness process reads it, never
-/// in the app's start folder. Null when it needs a home and there is none.
+/// data root (`%USERPROFILE%\.harness` on Windows). An absolute
+/// `ADAPTER_DATA_DIR` is kept exactly as written, any other resolved against
+/// the home as every Harness process reads it (`homePath` in
+/// cli/src/config/envFields.ts), never the app's start folder: the socket
+/// folder is a hash of this text. Null when it needs a home and there is none.
 /// [look] is for tests: the root is found by it, this computer's by default.
 String? defaultDaemonDataDir({
   Map<String, String>? environment,
@@ -61,10 +63,14 @@ String? defaultDaemonDataDir({
   final context = windows ? p.windows : p.posix;
   final override = env['ADAPTER_DATA_DIR'];
   final overridden = override != null && override.isNotEmpty;
-  if (overridden && context.isAbsolute(override)) return override;
+  if (overridden &&
+      context.isAbsolute(override) &&
+      !context.isRootRelative(override)) {
+    return override;
+  }
   final home = maybeHomeDir(environment: env, isWindows: windows);
   if (home == null) return null;
-  if (overridden) return context.join(home, override);
+  if (overridden) return _underHome(context, home, override);
   // The Linux rule never runs for a Windows path, whatever the host: no
   // Windows profile has the XDG roots.
   final harness = windows
@@ -75,6 +81,26 @@ String? defaultDaemonDataDir({
           look: look ?? platformHomeLook(environment: env),
         );
   return context.join(harness.path(HarnessEntry.cli), 'data');
+}
+
+/// A Windows drive-relative path (`C:data`): a drive with no root after it.
+final _driveRelative = RegExp(r'^([A-Za-z]):(?![\\/])');
+
+/// [value] resolved against [home], as Node's `path.resolve` does for the CLI:
+/// tidied, a root-relative one (`\data`) on the home's drive, and a
+/// drive-relative one in the home when it names the home's drive.
+String _underHome(p.Context context, String home, String value) {
+  final drive = context.style == p.Style.windows
+      ? _driveRelative.firstMatch(value)
+      : null;
+  if (drive == null) return context.normalize(context.join(home, value));
+  final rest = value.substring(2);
+  final homeDrive = home.length > 1 && home[1] == ':' ? home[0] : null;
+  return context.normalize(
+    homeDrive?.toLowerCase() == drive[1]!.toLowerCase()
+        ? context.join(home, rest)
+        : '${drive[1]}:\\$rest',
+  );
 }
 
 /// The pipe and token of the daemon on [port] in [dataDir], or null when there
