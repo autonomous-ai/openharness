@@ -1,8 +1,10 @@
-//! The menu is the same on every OS: the model and the app take no OS.
+//! The menu is the same on every OS: the model and the app take no OS. The one refresh that differs, Linux's tick
+//! telling what a click tells elsewhere, is tick.rs's test; main.rs hands `tick::menu_opened` to the tray's click and
+//! `tick::tick` to the timer (`ticked`).
 
 use crate::app::App;
 use crate::install::DOWNLOADING_HARNESS;
-use crate::tick::{menu_opened, tick};
+use crate::tick::menu_opened;
 use crate::types::{
     Action, DialStatus, Effect, Event, Exported, LoginEvent, MenuAction, MenuItem, NotifyMode, Saved, UpdateFailure,
 };
@@ -34,13 +36,6 @@ fn the_menu_and_the_rules_read_no_os() {
             assert!(!code.contains(word), "{name} reads the OS: {word}");
         }
     }
-}
-
-#[test]
-fn linuxs_tick_feeds_the_menu_opened_a_click_does() {
-    let ticked = tick("linux", 7, true, &|| true);
-    assert_eq!(ticked[1], menu_opened(7, true));
-    assert_eq!(menu_opened(7, true), Event::MenuOpened { now: 7, desktop_installed: true });
 }
 
 fn status(muted: bool) -> Event {
