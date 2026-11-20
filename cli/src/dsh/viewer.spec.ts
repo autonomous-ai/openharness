@@ -19,12 +19,13 @@ vi.mock('node:net', async (importOriginal) => {
 })
 
 // Every artifact watcher the manager opens, and whether it was closed: what a viewer that failed must not keep.
-const watchers = vi.hoisted(() => [] as Array<{ closed: boolean; watcher: import('chokidar').FSWatcher }>)
+const watchers = vi.hoisted(() => [] as Array<{ closed: boolean; watcher: import('chokidar').FSWatcher; ready: Promise<void> }>)
 vi.mock('chokidar', async (importOriginal) => {
   const actual = await importOriginal<typeof import('chokidar')>()
   const watch = ((...args: Parameters<typeof actual.watch>) => {
     const watcher = actual.watch(...args)
-    const seen = { closed: false, watcher }
+    // Taken at creation: chokidar says `ready` once, after its first read of the folder.
+    const seen = { closed: false, watcher, ready: new Promise<void>((resolve) => { watcher.once('ready', () => resolve()) }) }
     watchers.push(seen)
     const close = watcher.close.bind(watcher)
     watcher.close = () => { seen.closed = true; return close() }
@@ -711,6 +712,26 @@ describe('DshViewerManager, the rest of a viewer\'s life', () => {
     expect(urls.filter((url) => url?.endsWith('newest.step'))).toEqual([])
     expect(logs).toContain('[viewers] VIEWER_WATCH_CLOSE_FAILED · Error')
   }, 20_000)
+
+  it('follows an artifact written while the watch is still starting', async () => {
+    // chokidar reads the workspace after start() has scanned it and counts what it finds there as already present:
+    // a file written in between, as an agent that writes one at once does, waited for the next change to be shown.
+    const workspace = join(root, 'ws')
+    mkdirSync(join(workspace, 'models'), { recursive: true })
+    const at = (rel: string, seconds: number): void => {
+      writeFileSync(join(workspace, rel), rel)
+      utimesSync(join(workspace, rel), seconds, seconds)
+    }
+    at('models/old.step', 1_000)
+    const { urls, manager } = setup()
+    const starting = manager.start('a1', dsh({ command: 'v', url: 'http://127.0.0.1:${port}/?file=${artifact}', artifactExtensions: ['.step'] }), workspace)
+    const { ready } = watchers.at(-1)!
+    at('models/new.step', 2_000)
+    await starting
+    expect(urls).toEqual(['http://127.0.0.1:4790/?file=models/old.step'])
+    await ready
+    expect(urls).toEqual(['http://127.0.0.1:4790/?file=models/old.step', 'http://127.0.0.1:4790/?file=models/new.step'])
+  })
 
   it('runs a real viewer through the user\'s shell, on the port it was given, and stops it', async () => {
     const urls: Array<string | null> = []
