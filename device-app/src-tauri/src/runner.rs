@@ -2,7 +2,7 @@
 
 use crate::account::{self, Login, NO_RESULT};
 use crate::cli::{self, Cli, HarnessCli, START_DEADLINE};
-use crate::follow::{AX_SETTINGS, CHATGPT_BUNDLE, ChatgptFollow, FollowDoor, Heard, Observer, Shown, TRUST_AGAIN};
+use crate::follow::{AX_SETTINGS, ChatgptFollow, FollowDoor, Heard, Observer, Shown, TRUST_AGAIN, is_chatgpt_front};
 use crate::front::{FrontFeed, FrontSource};
 use crate::install::{self, Shell};
 use crate::loginitem::LoginItem;
@@ -537,7 +537,7 @@ impl Shared {
     fn front_changed(&self, value: &str) {
         self.tabs.tell(|follow| follow.front(value));
         // Read before the offer is judged: a permission given since macOS's last notice is no reason to offer.
-        let trusted = (value == CHATGPT_BUNDLE).then(|| self.doors.follow.trusted());
+        let trusted = is_chatgpt_front(value).then(|| self.doors.follow.trusted());
         self.chatgpt.tell(|follow| {
             if let Some(trusted) = trusted {
                 follow.trusted(trusted);

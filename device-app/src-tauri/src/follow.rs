@@ -4,11 +4,18 @@
 
 use crate::tabs::Out;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 /// The ChatGPT app's bundle id, the CLI's too: the app that runs Codex threads.
 pub const CHATGPT_BUNDLE: &str = "com.openai.codex";
+/// The front value of the ChatGPT app on Windows: its program's file name, which Windows matches without case.
+pub const CHATGPT_EXE: &str = "ChatGPT.exe";
+/// The front value of the ChatGPT app on Linux: its program's name.
+pub const CHATGPT_LINUX: &str = "ChatGPT";
+/// Where the Linux app's `.deb` and `.rpm` both install its program.
+pub const CHATGPT_PROGRAM: &str = "/usr/lib/chatgpt/ChatGPT";
 /// The CLI keeps a title of up to 256 UTF-16 units (a JavaScript string's length): past it, the empty title, so the
 /// two never disagree.
 pub const TITLE_MAX: usize = 256;
@@ -33,6 +40,55 @@ pub fn chatgpt_installed(home: &Path, applications: &Path, bundle_id: &dyn Fn(&P
     [applications.join("ChatGPT.app"), home.join("Applications").join("ChatGPT.app")]
         .iter()
         .any(|app| bundle_id(app).as_deref() == Some(CHATGPT_BUNDLE))
+}
+
+/// Whether the app in front is ChatGPT: its bundle id on macOS, its program's name on Windows and Linux. Another
+/// program by that name is told apart by the door's observer, which checks the window's own process.
+pub fn is_chatgpt_front(value: &str) -> bool {
+    value == CHATGPT_BUNDLE || value.eq_ignore_ascii_case(CHATGPT_EXE) || value == CHATGPT_LINUX
+}
+
+/// A program is installed when its path is a regular file.
+pub fn program_installed(program: &Path) -> bool {
+    program.is_file()
+}
+
+/// Whether process `pid` runs `program`, by its `exe` link under `proc_root` (`/proc`).
+pub fn runs_program(proc_root: &Path, pid: u32, program: &Path) -> bool {
+    std::fs::read_link(proc_root.join(pid.to_string()).join("exe")).is_ok_and(|exe| exe == program)
+}
+
+/// Harness's own switch for following, off macOS, where no permission gates reading a window's title: what every
+/// door there answers `trusted()` with.
+pub struct FollowSwitch {
+    on: AtomicBool,
+    changed: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
+}
+
+impl FollowSwitch {
+    pub fn new(on: bool) -> Arc<FollowSwitch> {
+        Arc::new(FollowSwitch { on: AtomicBool::new(on), changed: Mutex::default() })
+    }
+
+    pub fn on(&self) -> bool {
+        self.on.load(Ordering::SeqCst)
+    }
+
+    /// Tells the listener only of a change: the rules read `trusted()` again at each call.
+    pub fn set(&self, on: bool) {
+        if self.on.swap(on, Ordering::SeqCst) == on {
+            return;
+        }
+        // Called with no lock held: the listener reads the switch.
+        let changed = self.changed.lock().unwrap().clone();
+        if let Some(changed) = changed {
+            changed();
+        }
+    }
+
+    pub fn start(&self, changed: Box<dyn Fn() + Send + Sync>) {
+        *self.changed.lock().unwrap() = Some(Arc::from(changed));
+    }
 }
 
 /// What an observation hears.
@@ -60,6 +116,8 @@ pub trait AxTrust: Send + Sync {
     fn prompt(&self);
     /// `changed` is called each time the permission may have changed.
     fn start(&self, changed: Box<dyn Fn() + Send + Sync>);
+    /// Off macOS, Harness's own switch stands for the permission: the person turns following on or off.
+    fn switch(&self, _on: bool) {}
 }
 
 pub trait FollowDoor: ChatgptWindow + AxTrust {}
@@ -137,9 +195,9 @@ pub struct ChatgptFollow {
 }
 
 impl ChatgptFollow {
-    /// The bundle id of the app in front.
+    /// The value the front source tells: on macOS the bundle id of the app in front.
     pub fn front(&mut self, bundle: &str) {
-        let chatgpt = bundle == CHATGPT_BUNDLE;
+        let chatgpt = is_chatgpt_front(bundle);
         if self.fronted && chatgpt && !self.chatgpt {
             self.offer = self.watching && self.attached && self.installed && !self.trusted;
         }
