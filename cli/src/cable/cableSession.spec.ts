@@ -7085,7 +7085,7 @@ describe('the app filter', () => {
       // `working` first and a field the wire does not name: the Pro parses fixed fields into fixed buffers.
       host.listAgentSnapshot = async (opts) => {
         const s = await snapshot(opts)
-        return s.apps ? { ...s, apps: { ...s.apps, apps: s.apps.apps.map((a) => ({ working: a.working, rank: 7, ...a })) } } : s
+        return s.apps ? { ...s, apps: { ...s.apps, apps: s.apps.apps.map((a) => Object.assign({ working: a.working, rank: 7 }, a)) } } : s
       }
       const { session, port } = await greet(host, { appCards: 'v1' })
       try {
