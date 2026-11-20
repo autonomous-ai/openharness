@@ -1,5 +1,5 @@
 /** Four durable reservations. An unsettled writer keeps its slot across core replacement. */
-import { constants, lstatSync, mkdirSync, openSync, readSync, writeFileSync, ftruncateSync, fstatSync, fsync,
+import { constants, lstatSync, mkdirSync, openSync, readSync, writeSync, writeFileSync, ftruncateSync, fstatSync, fsync,
   unlinkSync, rmdirSync, linkSync, type BigIntStats } from 'node:fs'
 import { lstat, open, type FileHandle } from 'node:fs/promises'
 import { createHash, randomBytes } from 'node:crypto'
@@ -192,14 +192,22 @@ export class CheckpointStages {
       catch (error) { await file.close(); throw error }
       let owner: Owner = { version: 2, lease: randomBytes(16).toString('hex'), core: process.pid, writer: null, settled: false, key }
       let recordKey: string | undefined, ownerWrite: Promise<void> | undefined
+      const retainOwner = process.platform !== 'win32'
+      let ownerFd: number | undefined
+      const closeOwner = () => {
+        if (ownerFd === undefined) return
+        const fd = ownerFd; ownerFd = undefined
+        closeStateFileDescriptor(fd)
+      }
       const writeOwner = (next: Owner): Promise<void> => {
         if (ownerWrite) throw new Error('checkpoint owner update busy')
         owner = next
         const work = (async () => {
           directoryIdentity(directory, directoryKey)
           if (recordKey) identity(record, recordKey)
-          const access = process.platform === 'win32' ? constants.O_WRONLY : constants.O_RDWR
-          const fd = openSync(record, access | constants.O_NOFOLLOW | (recordKey ? 0 : constants.O_CREAT | constants.O_EXCL), 0o600)
+          const access = retainOwner ? constants.O_RDWR : constants.O_WRONLY
+          const fd = ownerFd ?? openSync(record, access | constants.O_NOFOLLOW | (recordKey ? 0 : constants.O_CREAT | constants.O_EXCL), 0o600)
+          if (retainOwner) ownerFd = fd
           try {
             const opened = fstatSync(fd, { bigint: true }); privateFile(opened)
             const openedKey = nativeFileKey(opened)
@@ -213,7 +221,16 @@ export class CheckpointStages {
             }
             // Keep the previous complete owner if a write is refused before any bytes reach disk.
             const text = JSON.stringify(next)
-            writeFileSync(fd, text); ftruncateSync(fd, Buffer.byteLength(text))
+            if (retainOwner) {
+              // The same handle survives updates and explicit publication retries; never append to its offset.
+              const bytes = Buffer.from(text)
+              for (let position = 0; position < bytes.length;) {
+                const count = writeSync(fd, bytes, position, bytes.length - position, position)
+                if (!count) throw new Error('checkpoint owner write incomplete')
+                position += count
+              }
+            } else writeFileSync(fd, text)
+            ftruncateSync(fd, Buffer.byteLength(text))
             const written = fstatSync(fd, { bigint: true }); privateFile(written)
             const verifyOwner = () => {
               directoryIdentity(directory, directoryKey)
@@ -231,14 +248,17 @@ export class CheckpointStages {
             // An existing name has no second await: prove the owner once after its file flush.
             verifyOwner()
             recordKey ??= openedKey
-          } finally { closeStateFileDescriptor(fd) }
+          } finally { if (!retainOwner) closeStateFileDescriptor(fd) }
         })()
         // Keep the actual callback/close alive after a bounded caller reply. This work never calls stage.close().
         ownerWrite = work
         void work.then(() => { ownerWrite = undefined }, () => { ownerWrite = undefined })
         return work
       }
-      try { await writeOwner(owner) } catch (error) { await file.close(); throw error }
+      try { await writeOwner(owner) } catch (error) {
+        try { await file.close() } finally { closeOwner() }
+        throw error
+      }
       let closed = false, verified: string | undefined, verification: Promise<void> | undefined, cleanup: Promise<void> | undefined
       let descriptorClose: Promise<void> | undefined, publication: Promise<void> | undefined
       const closeDescriptor = () => descriptorClose ??= file.close()
@@ -322,7 +342,7 @@ export class CheckpointStages {
             await ownerWrite?.catch(() => {})
             await publication?.catch(() => {})
             await verification?.catch(() => {})
-            await closeDescriptor()
+            try { await closeDescriptor() } finally { closeOwner() }
             if (owner.writer !== null && !owner.settled) { retained(); return }
             identity(record, recordKey!)
             this.remove(directory, directoryKey, owner)

@@ -109,7 +109,9 @@ it.each(['owner file', 'owner directory'] as const)('keeps the main loop availab
     expect(fs.fstatSync(fd)).toBeTruthy()
     expect(disk.closed.some(value => value.opened === opened)).toBe(false)
   } finally { await release(fd) }
-  await acquiring
+  const lease = await acquiring
+  expect(disk.closed.filter(value => value.opened === opened)).toHaveLength(kind === 'owner file' && process.platform !== 'win32' ? 0 : 1)
+  await lease.close()
   expect(disk.closed.filter(value => value.opened === opened)).toHaveLength(1)
 })
 
@@ -133,11 +135,13 @@ it.each(['writer', 'settled', 'destination'] as const)('keeps %s durability pend
     await expect(stat(destination())).rejects.toMatchObject({ code: 'ENOENT' })
   } finally { await release(fd) }
   await work
-  expect(disk.closed.filter(value => value.opened === opened)).toHaveLength(1)
+  expect(disk.closed.filter(value => value.opened === opened)).toHaveLength(process.platform === 'win32' ? 1 : 0)
   if (phase === 'destination') {
     expect(allowed).toHaveBeenCalledOnce()
     await writeFile(join(root, `${'a'.repeat(64)}.json`), JSON.stringify({ version: 1, file: basename(destination()) }), { mode: 0o600 })
   }
+  await lease.close()
+  expect(disk.closed.filter(value => value.opened === opened)).toHaveLength(1)
 })
 
 it.each(['writer', 'settled', 'destination'] as const)('close drains the actual %s callback before cleanup and refuses its late continuation', async phase => {
@@ -162,6 +166,20 @@ it.each(['writer', 'settled', 'destination'] as const)('close drains the actual 
   await expect(stat(destination())).rejects.toMatchObject({ code: 'ENOENT' })
   if (phase === 'writer') expect(await stat(record(lease))).toBeTruthy()
   else await expect(stat(record(lease))).rejects.toMatchObject({ code: 'ENOENT' })
+})
+
+it('closes a late acquired owner exactly once after its initial flush outlives the reply deadline', async () => {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] })
+  const path = join(root, '.stages', '0', 'owner.json'), waiting = hold(path), work = manager().acquire()
+  const refused = work.catch(error => error), fd = await entered(waiting, work), opened = disk.openings.get(fd)!
+  await vi.advanceTimersByTimeAsync(30_000)
+  expect(await refused).toMatchObject({ code: 'CHECKPOINT_STAGE_TIMEOUT' })
+  expect(disk.closed.some(value => value.opened === opened)).toBe(false)
+  expect(fs.fstatSync(fd).isFile()).toBe(true)
+  await release(fd)
+  await Promise.all(disk.history); await turn()
+  expect(disk.closed.filter(value => value.opened === opened)).toHaveLength(1)
+  expect(() => fs.fstatSync(fd)).toThrow()
 })
 
 it('keeps all four physical slots and exact journal descriptors owned beyond their reply deadlines', async () => {
@@ -292,7 +310,8 @@ it('never retries an uncertain owner descriptor close or reuses its reserved slo
   const result = work.catch(error => error), fd = await entered(waiting, work), opened = disk.openings.get(fd)!
   disk.closeFailure = path
   await release(fd)
-  expect(await result).toMatchObject({ code: 'STATE_FILE_CLEANUP_UNCONFIRMED' })
+  if (process.platform === 'win32') expect(await result).toMatchObject({ code: 'STATE_FILE_CLEANUP_UNCONFIRMED' })
+  else { expect(await result).toBeUndefined(); expect(disk.closed.some(value => value.opened === opened)).toBe(false) }
   await lease.close(); await lease.close()
   expect(disk.closed.filter(value => value.opened === opened)).toHaveLength(1)
   expect(await stat(path)).toBeTruthy()

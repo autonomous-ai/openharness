@@ -8,8 +8,11 @@ import { CheckpointStages, type CheckpointStage } from './checkpointStages.js'
 const io = vi.hoisted(() => ({
   beforeOpen: undefined as ((path: string) => void) | undefined,
   afterOpen: undefined as ((path: string) => void) | undefined,
+  beforeStat: undefined as ((path: string) => void) | undefined,
+  afterStat: undefined as ((path: string) => void) | undefined,
   beforeSync: undefined as ((path: string) => void) | undefined,
   afterSync: undefined as ((path: string) => void) | undefined,
+  owners: new Set<number>(),
   flushes: [] as { path: string; kind: 'file' | 'directory' }[],
 }))
 vi.mock('node:fs', async importOriginal => {
@@ -22,10 +25,18 @@ vi.mock('node:fs', async importOriginal => {
       io.beforeOpen?.(path)
       const fd = fs.openSync(...args)
       paths.set(fd, path)
+      if (path.endsWith('owner.json')) io.owners.add(fd)
       io.afterOpen?.(path)
       return fd
     },
-    closeSync: (fd: number) => { try { fs.closeSync(fd) } finally { paths.delete(fd) } },
+    fstatSync: (...args: Parameters<typeof fs.fstatSync>) => {
+      const path = paths.get(args[0])!
+      io.beforeStat?.(path)
+      const value = fs.fstatSync(...args)
+      io.afterStat?.(path)
+      return value
+    },
+    closeSync: (fd: number) => { try { fs.closeSync(fd) } finally { paths.delete(fd); io.owners.delete(fd) } },
     fsync: (fd: number, done: (error: NodeJS.ErrnoException | null) => void) => {
       const path = paths.get(fd)!
       io.beforeSync?.(path)
@@ -50,7 +61,7 @@ vi.mock('node:fs', async importOriginal => {
 const fs = await vi.importActual<typeof import('node:fs')>('node:fs')
 let directory: string
 const leases: CheckpointStage[] = []
-const clearFaults = () => { io.beforeOpen = io.afterOpen = io.beforeSync = io.afterSync = undefined }
+const clearFaults = () => { io.beforeOpen = io.afterOpen = io.beforeStat = io.afterStat = io.beforeSync = io.afterSync = undefined }
 beforeEach(async () => {
   directory = await mkdtemp(join(tmpdir(), 'checkpoint-owner-'))
   vi.stubEnv('ADAPTER_DATA_DIR', directory)
@@ -72,9 +83,14 @@ async function verify(lease: CheckpointStage) {
   await writeFile(lease.stage.path, 'history')
   await lease.verify({ bytes: 7, sha256: createHash('sha256').update('history').digest('hex') })
 }
-function once(point: 'beforeOpen' | 'afterOpen' | 'beforeSync' | 'afterSync', target: string, fault: () => void) {
-  io[point] = path => { if (path === target) { io[point] = undefined; fault() } }
+function once(point: 'beforeOpen' | 'afterOpen' | 'beforeStat' | 'afterStat' | 'beforeSync' | 'afterSync', target: string, fault: () => void) {
+  const injected = vi.fn(fault)
+  io[point] = path => { if (path === target) { io[point] = undefined; injected() } }
+  return injected
 }
+// POSIX updates reuse their owner handle, so inject at the fresh descriptor proof instead of a reopen.
+const beforeUpdate = process.platform === 'win32' ? 'beforeOpen' : 'beforeStat'
+const afterUpdate = process.platform === 'win32' ? 'afterOpen' : 'afterStat'
 
 it('flushes both exports completely while flushing each owner filename only on creation', async () => {
   const slot = join(directory, '.stages', '0'), record = join(slot, 'owner.json')
@@ -99,41 +115,47 @@ it('flushes both exports completely while flushing each owner filename only on c
   expect(io.flushes.filter(value => value.path === join(directory, '.stages') && value.kind === 'directory')).toHaveLength(process.platform === 'win32' ? 0 : 4)
 })
 
-it.each(['beforeOpen', 'afterOpen', 'afterSync'] as const)('refuses an owner replacement at %s without adopting or deleting it', async point => {
+it.each([beforeUpdate, afterUpdate, 'afterSync'] as const)('refuses an owner replacement at %s without adopting or deleting it', async point => {
   const lease = await acquire(), record = ownerPath(lease)
-  once(point, record, () => {
+  const injected = once(point, record, () => {
     fs.renameSync(record, `${record}.previous`)
     fs.writeFileSync(record, 'unrelated owner', { mode: 0o600 })
   })
   await expect(lease.writer(process.pid)).rejects.toThrow('checkpoint stage changed')
+  expect(injected).toHaveBeenCalledOnce()
   expect(await readFile(record, 'utf8')).toBe('unrelated owner')
   await expect(lease.settled()).rejects.toThrow('checkpoint stage changed')
   await lease.close()
+  expect(io.owners.size).toBe(0)
   expect(await readFile(record, 'utf8')).toBe('unrelated owner')
   expect(await stat(lease.stage.path)).toBeTruthy()
 })
 
-it.each(['beforeOpen', 'afterSync'] as const)('refuses an owner moved into a replacement slot at %s', async point => {
+it.each([beforeUpdate, 'afterSync'] as const)('refuses an owner moved into a replacement slot at %s', async point => {
   const lease = await acquire(), record = ownerPath(lease), slot = dirname(record)
-  once(point, record, () => {
+  const injected = once(point, record, () => {
     fs.renameSync(slot, `${slot}.previous`)
     fs.mkdirSync(slot, { mode: 0o700 })
     fs.renameSync(join(`${slot}.previous`, 'owner.json'), record)
   })
   await expect(lease.writer(process.pid)).rejects.toThrow('checkpoint slot changed')
+  expect(injected).toHaveBeenCalledOnce()
   const unchanged = await readFile(record, 'utf8')
   await expect(lease.settled()).rejects.toThrow('checkpoint slot changed')
   await lease.close()
+  expect(io.owners.size).toBe(0)
   expect(await readFile(record, 'utf8')).toBe(unchanged)
   expect(await stat(join(`${slot}.previous`, 'history.tmp'))).toBeTruthy()
 })
 
-it.each(['beforeOpen', 'afterSync'] as const)('refuses an owner acquiring a second link at %s', async point => {
+it.each([beforeUpdate, 'afterSync'] as const)('refuses an owner acquiring a second link at %s', async point => {
   const lease = await acquire(), record = ownerPath(lease)
-  once(point, record, () => fs.linkSync(record, join(directory, 'other-owner')))
+  const injected = once(point, record, () => fs.linkSync(record, join(directory, 'other-owner')))
   await expect(lease.writer(process.pid)).rejects.toThrow('unsafe checkpoint stage')
+  expect(injected).toHaveBeenCalledOnce()
   await expect(lease.settled()).rejects.toThrow('unsafe checkpoint stage')
   await lease.close()
+  expect(io.owners.size).toBe(0)
   expect(await stat(record)).toMatchObject({ nlink: 2 })
 })
 
@@ -142,6 +164,7 @@ for (const kind of ['file', 'directory'] as const) it.skipIf(kind === 'directory
   const slot = join(directory, '.stages', '0'), record = join(slot, 'owner.json')
   once('beforeSync', kind === 'file' ? record : slot, () => { throw new Error('injected owner flush failure') })
   await expect(stages().acquire()).rejects.toThrow('injected owner flush failure')
+  expect(io.owners.size).toBe(0)
   await stages().prepare()
   const next = await acquire()
   expect(dirname(next.stage.path)).toBe(join(directory, '.stages', '1'))
@@ -162,6 +185,7 @@ it.skipIf(process.platform === 'win32').each(['owner', 'slot'] as const)('refuse
     }
   })
   await expect(acquire()).rejects.toThrow(kind === 'owner' ? 'checkpoint stage changed' : 'checkpoint slot changed')
+  expect(io.owners.size).toBe(0)
   const next = await acquire()
   expect(dirname(next.stage.path)).toBe(join(directory, '.stages', '1'))
   expect(await stat(record)).toBeTruthy()
@@ -215,6 +239,7 @@ it.skipIf(process.platform === 'win32')('refuses an initial owner changed by its
     fs.writeFileSync(record, 'unrelated owner', { mode: 0o600 })
   })
   await expect(stages().acquire()).rejects.toThrow('checkpoint stage changed')
+  expect(io.owners.size).toBe(0)
   expect(io.flushes.filter(value => value.path === slot)).toEqual([])
   expect(await readFile(record, 'utf8')).toBe('unrelated owner')
 })

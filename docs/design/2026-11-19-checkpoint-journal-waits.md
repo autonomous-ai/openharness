@@ -354,3 +354,70 @@ stage/caller suites pass 181 cases in 25.4 s and TypeScript passes in 47.1 s
 (`20261119T234658.525833Z-73101`). Generation tests already cover a preexisting changed lease;
 durability cases retain opened-path replacement and post-flush refusal coverage. These are source
 and safety results only. The next fixed scoped cost comparison remains required.
+
+## Design: keep the verified owner handle during a reservation
+
+The retained V7 comparison still holds CPU acceptance. A separate fixed 64-publication
+Node API interval diagnostic (`20261120T003836.191274Z-55543`, 17.6 s) puts the required
+hard link at about 0.58–0.63 ms of main-thread CPU per publication, against about 0.21 ms
+for the rename it replaces. Nested and asynchronous intervals are not additive syscall
+costs, and this is attribution evidence, not a new acceptance run. The inode pin, random
+lease, no-overwrite publication and all durability checks remain mandatory.
+
+On POSIX, keep the owner journal's first verified read/write descriptor until the lease closes, including after publication. This eliminates the three later owner
+opens and closes. Keep every directory/path/key/mode/link-count/version and nonce/schema
+check before each update, the bounded read, every file/directory flush and every check
+after a flush. The retained handle pins only the journal's inode; the existing history
+hard link still provides durable crash-recovery authority.
+
+A retained descriptor must never append an owner update. Write the existing serialized
+owner from offset zero with positioned writes, handling short writes and refusing a zero
+write, then truncate to the exact byte length as before. Owner data is bounded by the
+existing schema: fixed fields, safe-integer pids, 32 hex lease characters and the bounded
+history basename. Windows retains the existing per-update write-only open, native
+contained path reader and writeFileSync path.
+
+- Growth: at most four additional open descriptors, one per existing reservation. No new
+  file, index, journal entry, timer, worker or persistent state.
+- Concurrency: the existing ownerWrite gate serializes writes. Closing first revokes new
+  operations and waits for the actual outstanding fsync callbacks, publication and
+  verification before closing. A caller timeout is never proof that the callback finished.
+- Cleanup: close the retained owner descriptor in a finally around the stage descriptor's
+  actual close during lease cleanup or failed acquisition, including a failed initial owner
+  write or failed stage close. Clear the
+  saved descriptor before closeStateFileDescriptor so an uncertain close is never retried;
+  its existing global custody latch prevents reuse. A close failure leaves the slot reserved
+  and latches uncertain custody; a completed publication remains valid, but cleanup does not
+  proceed. The existing cached stage close still serves publish and lease close. Owner close
+  has one lifetime end, guarded by the cached cleanup promise and closed lease.
+- Read cost and scale: the bounded owner read and all proofs remain per update. Only
+  repeated open/close calls are removed. Capacity remains four, including unsettled writers.
+- Compatibility, migration and rollback: version-two owner bytes and public/internal APIs
+  are unchanged; no migration. Rollback returns to per-update descriptor opens.
+- Audience and identity: no new authority, login, content, log or telemetry. A path, inode,
+  lease, mode, link count or version change must still refuse before publication.
+- Failure: existing named cleanup/custody failures remain; zero writes fail explicitly.
+  All descriptor closure paths must have deterministic tests, including held callbacks.
+- Platforms: this optimization applies on macOS/Linux only. Windows code keeps its native
+  containment and per-update lifetime. Native Windows remains deferred by the owner.
+
+Validation is selected before implementation: RED tests show repeated owner opens and
+prove the desired lifetime; short/zero writes, failed initial writes and uncertain/held
+closes exercise custody. Run all checkpoint stage, publication, Hermes Stop and grid
+callers, types and relevant per-file coverage. Review the exact source independently.
+Only a changed, accepted implementation may get a new fixed comparison using the frozen
+V7 observer method; no further observer change or discarded samples is allowed.
+
+Independent design review (`20261120T004315.893418Z-60202`) found that closing the owner
+at publication would make later explicit retries leak a reopened handle through the cached
+stage-close promise. Adopt its simpler amendment: retain only until lease close. A refused
+link/authority check can retry on the same owner handle, and settled() after publication uses
+that same handle. No released/unopened handle state machine or new fallback is introduced.
+The behavior change on an uncertain owner close is explicit: it surfaces at lease cleanup,
+which logs the named refusal and retains the slot, rather than failing an earlier update.
+Fresh fstat, path proofs and nonce rereads remain mandatory on every write.
+
+The first six new lifetime/write tests fail against unchanged runtime
+(`20261120T004445.905857Z-61818`, 1.2 s). Amend the tests to the reviewed lease-close lifetime,
+add explicit publish-refusal retry and post-publication settled cases, and update the existing
+fault injectors before runtime implementation so no protection silently stops being tested.

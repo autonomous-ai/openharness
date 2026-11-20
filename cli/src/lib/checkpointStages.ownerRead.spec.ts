@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { createHash } from 'node:crypto'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
-import { dirname, join } from 'node:path'
+import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { CheckpointStages, type CheckpointStage } from './checkpointStages.js'
 
@@ -41,14 +41,15 @@ afterEach(async () => {
   await rm(root, { recursive: true, force: true })
 })
 async function acquire() {
+  reads.path = join(root, '.stages', '0', 'owner.json')
   const lease = await new CheckpointStages(join(root, '.stages')).acquire()
-  leases.push(lease); reads.path = join(dirname(lease.stage.path), 'owner.json')
+  leases.push(lease); reads.opens = 0
   return lease
 }
 const owner = async () => JSON.parse(await readFile(reads.path, 'utf8'))
 
 it.skipIf(process.platform === 'win32').each(['writer', 'settled', 'destination'] as const)(
-  'reads and writes the %s owner with one open', async operation => {
+  'reads and writes the %s owner without another open', async operation => {
     const lease = await acquire(), previous = await owner()
     if (operation === 'writer') {
       await lease.writer(process.pid)
@@ -64,7 +65,7 @@ it.skipIf(process.platform === 'win32').each(['writer', 'settled', 'destination'
       expect(await owner()).toEqual({ ...previous, destination })
       expect(await readFile(join(root, destination), 'utf8')).toBe('history')
     }
-    expect(reads.opens).toBe(1)
+    expect(reads.opens).toBe(0)
     expect(reads.calls).toBeGreaterThan(0)
   })
 
@@ -76,7 +77,7 @@ it.skipIf(process.platform === 'win32')('completes bounded short reads without m
   await lease.settled()
   expect(await readFile(reads.path, 'utf8')).toBe(JSON.stringify({ ...previous, settled: true }))
   expect(reads.calls).toBe(Math.ceil(Buffer.byteLength(padded) / 7))
-  expect(reads.opens).toBe(1)
+  expect(reads.opens).toBe(0)
 })
 
 it.skipIf(process.platform === 'win32')('refuses a premature end of the owner read before changing any bytes', async () => {

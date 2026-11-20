@@ -6,17 +6,29 @@ import { tmpdir } from 'node:os'
 import { CheckpointStages, type CheckpointStage } from './checkpointStages.js'
 
 const fault = vi.hoisted(() => ({ reused: undefined as { path: string; ino: bigint; dev: bigint } | undefined,
-  open: false, write: false, link: false }))
+  stat: false, open: false, write: false, link: false }))
 vi.mock('node:fs', async original => {
   const fs = await original<typeof import('node:fs')>()
+  const owners = new Set<number>()
   return { ...fs,
     openSync: (...args: Parameters<typeof fs.openSync>) => {
       if (fault.open && String(args[0]).endsWith('owner.json')) { fault.open = false; throw Object.assign(new Error('injected open'), { code: 'EIO' }) }
-      return fs.openSync(...args)
+      const fd = fs.openSync(...args)
+      if (String(args[0]).endsWith('owner.json')) owners.add(fd)
+      return fd
+    },
+    closeSync: (fd: number) => { try { fs.closeSync(fd) } finally { owners.delete(fd) } },
+    fstatSync: (...args: Parameters<typeof fs.fstatSync>) => {
+      if (fault.stat && owners.has(args[0])) { fault.stat = false; throw Object.assign(new Error('injected stat'), { code: 'EIO' }) }
+      return fs.fstatSync(...args)
     },
     writeFileSync: (...args: Parameters<typeof fs.writeFileSync>) => {
       if (fault.write) { fault.write = false; throw Object.assign(new Error('injected write'), { code: 'ENOSPC' }) }
       return fs.writeFileSync(...args)
+    },
+    writeSync: (...args: Parameters<typeof fs.writeSync>) => {
+      if (fault.write) { fault.write = false; throw Object.assign(new Error('injected write'), { code: 'ENOSPC' }) }
+      return fs.writeSync(...args)
     },
     linkSync: (...args: Parameters<typeof fs.linkSync>) => {
       if (fault.link) { fault.link = false; throw Object.assign(new Error('injected link'), { code: 'ENOTSUP' }) }
@@ -37,7 +49,7 @@ beforeEach(async () => {
 })
 afterEach(async () => {
   fault.reused = undefined
-  fault.open = fault.write = fault.link = false
+  fault.stat = fault.open = fault.write = fault.link = false
   vi.restoreAllMocks()
   for (const lease of leases.splice(0)) await lease.close()
   await rm(root, { recursive: true, force: true })
@@ -126,10 +138,11 @@ it('reconsiders a retained generation once its unreadable manifest is repaired',
   await expect(stat(ownerPath(lease))).rejects.toMatchObject({ code: 'ENOENT' })
 })
 
-it.each(['open', 'write'] as const)('releases its settled writer after a failed owner %s without waiting for core restart', async failure => {
+it.each(process.platform === 'win32' ? ['open', 'write'] as const : ['stat', 'write'] as const)('releases its settled writer after a failed owner %s without waiting for core restart', async failure => {
   const lease = await acquire(); await lease.writer(process.pid)
   fault[failure] = true
   await expect(lease.settled()).rejects.toThrow(`injected ${failure}`)
+  expect(fault[failure]).toBe(false)
   await lease.close()
   await expect(stat(ownerPath(lease))).rejects.toMatchObject({ code: 'ENOENT' })
   expect((await acquire()).stage.path).toBe(lease.stage.path)
