@@ -168,6 +168,7 @@ describe('whether OpenClaw\'s store holds a user row for a key', () => {
         .toEqual({ version: 1, answer: null })
       expect(query).toHaveBeenCalledWith(database(), expect.any(String), [0, userRowAt, 'agent:main:plain'],
         { timeoutMs: 1_000, busyTimeoutMs: 250, maxBuffer: 1024 })
+      expect(await query.mock.results[0].value).toMatchObject({ ok: false, reason: 'transient' })
       expect(recycle).not.toHaveBeenCalled()
       expect(exportCurrent()).toBe(true)
     } finally {

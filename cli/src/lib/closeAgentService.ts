@@ -288,6 +288,7 @@ export class CloseAgentService {
 
   private async attempt(request: AgentCloseRequest, target: string, revision: number, withoutConversation = false): Promise<AgentCloseResult> {
     let unkept = false
+    let saved: RegisteredSession | undefined
     let idleRevoked = false
     const current = () => {
       const s = this.deps.registry.byAgent(request.agentId)
@@ -354,8 +355,8 @@ export class CloseAgentService {
           return !idleRevoked
         },
         checkpoint: async (s, phase, databaseProof) => {
-          // The record saved before the stop is the one a resume starts from.
-          if (phase === 'before' && (keptNone(s) || await this.conversationEmpty(s))) unkept = true
+          // Optional result wording must not spend a live native proof's budget or delay its checkpoint export.
+          if (phase === 'before') saved = { ...s, processIdentity: null }
           return this.deps.checkpoint(s, phase, () => !!current(), databaseProof)
         },
         confirmUnusedConversation: async captured => {
@@ -380,6 +381,8 @@ export class CloseAgentService {
         },
       })
       this.idleSince.delete(s.agentId)
+      // Both checkpoints and Stop are complete. The saved folder, never the stopped process's pid, supplies this fact.
+      if (saved && (keptNone(saved) || await this.conversationEmpty(saved))) unkept = true
       const closed: AgentCloseResult = unkept ? { closed: true, withoutConversation: true } : { closed: true }
       // Only a `count` close gets here with any running.
       return (background ?? 0) > 0 ? { ...closed, backgroundCommands: background } : closed

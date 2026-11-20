@@ -843,6 +843,23 @@ describe('what a close says of the conversation it kept', () => {
     ] as const
     beforeEach(() => { Object.assign(row, { engine: 'openclaw', sessionId: 'agent:main:plain' }) })
 
+    it('reads empty-conversation truth after checkpoint and stop, with no stopped process identity', async () => {
+      let checkpointed = false, stopped = false
+      const conversationEmpty = reading(async () => {
+        expect(checkpointed).toBe(true)
+        expect(stopped).toBe(true)
+        return true
+      })
+      vi.mocked(deps.checkpoint).mockImplementation(async () => { checkpointed = true })
+      vi.mocked(deps.stop).mockImplementation(async (id, options) => {
+        await options.checkpoint?.({ ...row }, 'before')
+        await removeRegistryAgent(registry, id)
+        stopped = true
+      })
+      expect(await service.request(request('now'))).toEqual({ closed: true, withoutConversation: true })
+      expect(conversationEmpty).toHaveBeenCalledWith(expect.objectContaining({ processIdentity: null }))
+    })
+
     it.each(stores)('closed while its store %s, says so', async (_, answer, said) => {
       const conversationEmpty = reading(answer)
       stopSaving()

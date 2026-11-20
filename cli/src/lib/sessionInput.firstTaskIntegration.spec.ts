@@ -160,3 +160,34 @@ it('pending write chains yield to the first task without reversing their origina
   }
   expect(typed).toEqual(['First', 'Early', 'Later'])
 })
+
+
+it('a matching turn before handover retires its claim so delayed submit cannot type it again', async () => {
+  const t = setup()
+  t.controller.expectFirstTask('s', 'First')
+  t.controller.onTurnStarted('s', 'First')
+  t.controller.onTurnEnded('s')
+  t.controller.submitFirstTask('s', 'First')
+  await vi.advanceTimersByTimeAsync(1_000)
+  expect(t.inject).not.toHaveBeenCalled()
+  expect(t.controller.firstTaskWaiting('s')).toBe(false)
+})
+
+it('a composer delivery can retry a refused lease during a Claude turn', async () => {
+  const t = setup({ getSession: () => ({ ...row, engine: 'claude' }), capture: async () => '──────────────\n❯ \n──────────────' })
+  t.controller.onTurnStarted('s', 'Active')
+  t.inject.mockResolvedValueOnce(lease).mockResolvedValue(true)
+  t.controller.submitInput('s', { content: 'Later', deliveryId: 'next', when: 'composer' })
+  await vi.advanceTimersByTimeAsync(1_000)
+  expect(t.inject).toHaveBeenCalledTimes(2)
+})
+
+it('a personal followup retries its lease while Claude still awaits the earlier prompt', async () => {
+  const t = setup({ getSession: () => ({ ...row, engine: 'claude' }), capture: async () => '──────────────\n❯ \n──────────────' })
+  t.controller.submit('s', 'Active')
+  await vi.advanceTimersByTimeAsync(0)
+  t.inject.mockResolvedValueOnce(lease).mockResolvedValue(true)
+  t.controller.submit('s', 'Later')
+  await vi.advanceTimersByTimeAsync(1_000)
+  expect(t.inject).toHaveBeenCalledTimes(3)
+})
