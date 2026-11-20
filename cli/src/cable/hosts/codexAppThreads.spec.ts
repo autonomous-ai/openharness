@@ -456,6 +456,21 @@ describe('names(ids)', () => {
     expect(reader.names([uuid(1), uuid(2)])).toEqual(new Map([[uuid(1), 'Alpha'], [uuid(2), 'Bravo']]))
     expect(asked).toHaveBeenCalledTimes(2)
   })
+
+  it('forget() keeps none: the next call reads Codex\'s index afresh', () => {
+    const fx = fixture()
+    fx.threads([thread(1, 10)])
+    fx.name(uuid(1), 'Alpha')
+    const when = 1_700_000_000
+    utimesSync(indexOf(fx), when, when)
+    const reader = new CodexAppThreads(fx.home)
+    expect(reader.names([uuid(1)]).get(uuid(1))).toBe('Alpha')
+    // Another name in the same file, of the same size and mtime: only a reader that kept no name reads it.
+    writeFileSync(indexOf(fx), readFileSync(indexOf(fx), 'utf8').replace('Alpha', 'Bravo'))
+    utimesSync(indexOf(fx), when, when)
+    reader.forget()
+    expect(reader.names([uuid(1)]).get(uuid(1))).toBe('Bravo')
+  })
 })
 
 describe('the fixture', () => {
