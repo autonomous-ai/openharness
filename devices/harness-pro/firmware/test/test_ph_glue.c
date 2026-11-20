@@ -267,6 +267,39 @@ static void offline_tap_aborts(void) {
     CHECK(o.fx == POD_FX_VOICE_ABORT && !strcmp(o.agent, "a1") && !pod_ui_talking(&U) && !U.hands_free && U.notice_on);
 }
 
+// An agent whose app withholds voice (no POD_CAP_V): a tap says where to see it, for POD_SEE_IT_MS, and starts nothing.
+static void no_voice_tap_says_where(void) {
+    fresh();
+    pod_model_agent_app(&U.model, "a2", "codex", POD_CAP_S | POD_CAP_F);
+    to_agent(0, 1);
+    render(1000);
+    CHECK(tap_(MID_X, MID_Y, 1000).fx == POD_FX_NONE && top()->view == POD_V_AGENT);
+    CHECK(!strcmp(U.notice, "See it in ChatGPT") && U.notice_on && U.notice_until == 1050 + POD_SEE_IT_MS);
+}
+
+// No voice is said before offline: the app's limit holds whatever the machine does.
+static void no_voice_before_offline(void) {
+    fresh();
+    pod_model_agent_app(&U.model, "a2", "codex", POD_CAP_S | POD_CAP_F);
+    ((pod_agent_t *)pod_model_find(&U.model, "a2"))->state = POD_OFFLINE;
+    to_agent(0, 1);
+    render(1000);
+    CHECK(tap_(MID_X, MID_Y, 1000).fx == POD_FX_NONE && !strcmp(U.notice, "See it in ChatGPT"));
+}
+
+// Every letter granted, or none ever sent (POD_CAPS_ALL): the tap still talks.
+static void all_caps_still_talk(void) {
+    fresh();
+    pod_model_agent_app(&U.model, "a2", "codex", POD_CAPS_ALL);
+    to_agent(0, 1);
+    render(1000);
+    CHECK(tap_(MID_X, MID_Y, 1000).fx == POD_FX_VOICE_BEGIN);
+    fresh();   // a1 was never given caps
+    to_agent(0, 0);
+    render(1000);
+    CHECK(tap_(MID_X, MID_Y, 1000).fx == POD_FX_VOICE_BEGIN);
+}
+
 // Pets Home with a working or asking agent in its tab wakes at 66 ms (the equaliser, the pulse); a still tab, a second.
 static void working_bars_wake(void) {
     fresh();   // Home on tab 0: a1 works
@@ -1613,6 +1646,9 @@ int main(void) {
     hands_free_taps_anywhere();
     send_before_talk_drawn();
     offline_tap_aborts();
+    no_voice_tap_says_where();
+    no_voice_before_offline();
+    all_caps_still_talk();
     working_bars_wake();
     animation_rates();
     overview_down_opens_inbox();
