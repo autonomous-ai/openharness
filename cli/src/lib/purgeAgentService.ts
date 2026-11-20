@@ -125,7 +125,13 @@ export async function inspectNativeHistory(s: RegisteredSession): Promise<Histor
       .filter(table => table === 'session_message' || present.has(table))
       .map(table => [table, `session_id = ${id}`])
   }
-  await query(`SELECT id FROM ${sessionTable} WHERE id = ${id}`)
+  // Nothing of it left in the store (its engine deleted it itself: `hermes sessions delete`, #4393): nothing to erase,
+  // so the triggers and references below, which only a deletion would meet, need no proof.
+  if (!(await query(`SELECT id FROM ${sessionTable} WHERE id = ${id}`)).length) {
+    let left = false
+    for (const [table, where] of children) left ||= (await query(`SELECT 1 FROM ${table} WHERE ${where} LIMIT 1`)).length > 0
+    if (!left) return { bytes: 0 }
+  }
   // The binding, only for a purge of a store-backed engine's history: the monitor's process imports this module.
   const { builtinSqlite } = await import('./sqliteBuiltin.js')
   if (!builtinSqlite()) await exec('sqlite3', ['--version'], { timeout: 2500, maxBuffer: 4096 })

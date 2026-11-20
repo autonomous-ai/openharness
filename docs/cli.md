@@ -323,6 +323,36 @@ conversation. One still running is left as it is and answered the same way. A na
   (`NOT_YOURS`). Any other refusal is the machine's code in `error` (exit 1), such as `AGENT_NOT_FOUND`,
   `AGENT_BUSY` or `DELETE_IN_PROGRESS`.
 
+A program can also keep a harness of its own, proven by a token file only it holds (`--program-token-file <path>`:
+0600, its own, 32 or more bytes), signed in or signed out: `harness ensure <engine> --name <name>` keeps one live,
+resumed or new, `harness reply` answers once the engine has taken the words, and `harness close` closes it
+([#4393](https://github.com/autonomous-ai/openharness/issues/4393)). Without the token, such a harness is refused
+`NOT_YOURS`, and every command behaves as before.
+
+- **`harness capabilities [--json]`** says what this Harness offers such a program: `{"programSessions": 1}`. It asks
+  nothing of the daemon, the account or a token, so it answers with Harness stopped, signed in or out. A Harness
+  without the command (an unknown command, exit 1) has none of it, and the program starts a new pane per task instead.
+- **`harness close <name> --program-token-file <path> --forget`** is for a sign-out, a reset or another engine. It
+  closes the harness as `close` does (refused while it works, unless `--now`). One whose engine has written no history
+  yet (an OpenClaw key before its first message) has none to save, and is closed all the same; every other close still
+  refuses when its history cannot be saved. Then it deletes the conversation, each engine's by the engine itself:
+  - OpenClaw's through the person's Gateway, by `openclaw gateway call sessions.delete` with `deleteTranscript`, for
+    every key the harness has used: the one it was launched with (`agent:main:harness-<id>`), which keeps its
+    conversation after a `/new`, and the one it is bound to now. OpenClaw keeps a deleted session's transcript in its
+    own archive of deleted sessions, and the answer says so. A `--local` run's session is in its own folder: it is
+    kept, and the answer says to delete that folder.
+  - Hermes's by `hermes sessions delete --yes <id>`, once its store (`HERMES_HOME`) is read to hold exactly that id:
+    Hermes's own delete keeps its search index and its triggers whole, which Harness's purge cannot prove.
+  - Any other engine's from its store by Harness's own purge, as `harness delete` erases it.
+  - Everything Harness kept of it (`agent_purge`), never its folder.
+  - The program's record, so the next `ensure` of that name answers `new`. A record whose harness Harness no longer
+    lists is forgotten too. A second `--forget` of a name already forgotten is `UNKNOWN_HARNESS` (exit 1).
+
+  `--json` answers `{"name", "id", "engine", "closed", "forgotten": true, "harness": {"state"}, "engineSession":
+  {"state", "sessions": [{"key", "state"}]}, "effect"}`. Each `state` is `deleted`, `none` (nothing to delete) or
+  `kept`, with `detail` saying why. Nothing is said deleted that was not: when anything is kept, it exits 1 with
+  `NOT_ALL_DELETED` and the same fields. `--forget` without `--program-token-file` is a usage error (exit 2), so a
+  harness the person started never loses its conversation this way.
 `harness watch <name>` follows one harness for a program that acts on it: a line each time it changes, one JSON
 object a line with `--json`, until it stops or is gone (exit 4) or `--timeout` passes (exit 124; `0`, the default,
 follows it as long as it lives). It decides as `wait` does: the maker's state for a cloud harness; the daemon's

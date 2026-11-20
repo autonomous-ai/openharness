@@ -71,6 +71,21 @@ it('checkpoint failure retains the session and reports the failure', async () =>
   expect(await service.request(request())).toMatchObject({ error: 'HISTORY_NOT_SAVED', detail: 'Disk full' })
   expect(registry.byAgent(row.agentId)).toBe(row)
 })
+it('a program forgetting its harness closes one whose engine wrote no history with none kept, and no other failure (#4393)', async () => {
+  const empty = Object.assign(new Error('Could not read the saved conversation.'), { code: 'HISTORY_NOT_SAVED', empty: true })
+  vi.mocked(deps.checkpoint).mockRejectedValue(empty)
+  // Any other close refuses as before.
+  expect(await service.request(request('now'))).toMatchObject({ error: 'HISTORY_NOT_SAVED' })
+  expect(registry.byAgent(row.agentId)).toBe(row)
+  // Another failure refuses a forget too.
+  vi.mocked(deps.checkpoint).mockRejectedValueOnce(Object.assign(new Error('Disk full'), { code: 'HISTORY_NOT_SAVED' }))
+  expect(await service.request({ ...request('now'), ifNoHistory: true })).toMatchObject({ error: 'HISTORY_NOT_SAVED', detail: 'Disk full' })
+  vi.mocked(deps.checkpoint).mockRejectedValueOnce(null)
+  expect(await service.request({ ...request('now'), ifNoHistory: true })).toMatchObject({ error: expect.any(String) })
+  expect(registry.byAgent(row.agentId)).toBe(row)
+  expect(await service.request({ ...request('now'), ifNoHistory: true })).toEqual({ closed: true, withoutConversation: true })
+  expect(registry.byAgent(row.agentId)).toBeUndefined()
+})
 it('a queued Close preserves its intent and reason while native identity is unavailable, then retries', async () => {
   vi.mocked(deps.stop).mockRejectedValueOnce(new IdentityReadUnavailable('the process record is incomplete'))
   await expect(service.request(request('after_task'))).resolves.toEqual({ deferred: true })
@@ -632,6 +647,31 @@ describe('a close of a harness still starting', () => {
     expect(await service.request(request('idle'))).toEqual({ error: 'SESSION_NOT_IDLE', activity: 'needs_input' })
     expect(await service.request(request('now'))).toEqual({ closed: true, withoutConversation: true })
     expect(registry.byAgent(row.agentId)).toBeUndefined()
+  })
+  // `harness close --forget` of a Hermes never given words: it bound nothing, so every close was refused
+  // IDENTITY_UNAVAILABLE and the program could not forget it (on a lamp, #4393).
+  describe('a program\'s forget', () => {
+    beforeEach(() => {
+      time = row.registeredAt + 18 * 60_000
+      Object.assign(row, { engine: 'hermes', launch: { state: 'ready' } })
+      vi.mocked(deps.stop).mockImplementation(async (id, options) => {
+        if (!options.withoutConversation) throw held()
+        options.withoutConversation()
+        ;(await removeRegistryAgent(registry, id))
+      })
+      service = new CloseAgentService(deps)
+    })
+    it('stops one that never bound a conversation, now or once idle', async () => {
+      vi.mocked(deps.activity).mockResolvedValue('idle')
+      expect(await service.request({ ...request('idle'), ifNoHistory: true })).toEqual({ closed: true, withoutConversation: true })
+      expect(registry.byAgent(row.agentId)).toBeUndefined()
+    })
+    it('is refused as before for any other close, and for one that has a conversation', async () => {
+      expect(await service.request(request('now'))).toMatchObject({ error: 'IDENTITY_UNAVAILABLE' })
+      Object.assign(row, { sessionId: 'first', boundAt: time - 1 })
+      expect(await service.request({ ...request('now'), sessionId: 'first', ifNoHistory: true })).toMatchObject({ error: 'IDENTITY_UNAVAILABLE' })
+      expect(registry.byAgent(row.agentId)).toBeDefined()
+    })
   })
   it('never lets a conversation go that way, whatever its screen shows', async () => {
     time = row.registeredAt + 18 * 60_000

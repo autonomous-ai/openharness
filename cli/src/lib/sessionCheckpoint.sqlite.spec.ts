@@ -180,6 +180,17 @@ withBuiltin('a conversation larger than the row cap', () => {
     expect(readdirSync(directory)).toEqual([])
   })
 
+  it('says an OpenClaw key with no node yet has no history, and saves nothing (#4393)', async () => {
+    const database = writer(join(root, 'agents', 'main', 'agent', 'openclaw-agent.sqlite'))
+    database.exec(readFileSync(join(import.meta.dirname, '..', 'engines', 'openclaw', '__fixtures__', 'schema.sql'), 'utf8'))
+    enableOffThreadSqlite()
+    const { SessionCheckpointStore } = await import('./sessionCheckpoint.js')
+    const store = new SessionCheckpointStore(directory)
+    await expect(store.save({ agentId: 'fixture', sessionId: 'agent:main:harness-new', engine: 'openclaw', openclawStateDir: root } as RegisteredSession))
+      .rejects.toMatchObject({ code: 'HISTORY_NOT_SAVED', empty: true })
+    expect(readdirSync(directory)).toEqual([])
+  })
+
   it('backs up an OpenClaw conversation larger than the row cap, a compressed row as hex and sized as hex', async () => {
     const database = writer(join(root, 'agents', 'main', 'agent', 'openclaw-agent.sqlite'))
     const fixture = (name: string): string => readFileSync(join(import.meta.dirname, '..', 'engines', 'openclaw', '__fixtures__', `${name}.sql`), 'utf8')

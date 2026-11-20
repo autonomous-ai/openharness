@@ -19,7 +19,10 @@ export type AgentClosePlan = {
 }
 /** `background`, the cleanup's alone and only with `idle`: `refuse` while any background command runs, `count` closes
  *  whatever runs (past its ceiling) and says how many. */
-export type AgentCloseRequest = { agentId: string; sessionId: string; createdAt: string; mode: CloseMode; onlyIfHidden?: boolean; background?: 'refuse' | 'count' }
+/** `ifNoHistory`, a program's `close --forget` alone (#4393): a harness whose engine has written no history yet (an
+ *  OpenClaw key with no node, before its first message) is closed without a checkpoint, with none kept. Any other
+ *  failure to save still refuses the close. */
+export type AgentCloseRequest = { agentId: string; sessionId: string; createdAt: string; mode: CloseMode; onlyIfHidden?: boolean; background?: 'refuse' | 'count'; ifNoHistory?: true }
 /** `withoutConversation`: the record the close saved, or the one a harness closed already was kept as, holds no
  *  conversation a resume could bring back, so none is kept: closed while still starting, before Harness could read its
  *  conversation, or its engine never bound one.
@@ -77,6 +80,11 @@ export function inspectCloseActivity(session: CloseSession, screen: ScreenReadin
   if (hold === 'team_waiting_user') return 'needs_input'
   if (hold || (turnOpen === undefined && !unusedChat(session))) return 'unknown'
   return 'idle'
+}
+
+/** No conversation was ever bound to [s]: no id, no transcript, no binding. */
+function neverBound(s: Pick<RegisteredSession, 'sessionId' | 'transcriptPath' | 'boundAt'>): boolean {
+  return !s.sessionId && !s.transcriptPath && s.boundAt == null
 }
 
 function identity(s: RegisteredSession): string {
@@ -236,6 +244,14 @@ export class CloseAgentService {
       const latest = this.deps.registry.byAgent(request.agentId)
       if (latest && identity(latest) === target && unusedChat(latest)) return this.attempt(request, target, revision, true)
     }
+    // A program's forget of a harness that never bound a conversation (a Hermes never given words, #4393): it has none
+    // to lose, so it is stopped without one rather than refused for good. A forget's close once idle is checked idle as
+    // any other. Read again before the stop: one that bound meanwhile keeps the guard.
+    if (!result.closed && request.ifNoHistory && (request.mode === 'now' || request.mode === 'idle')
+      && result.error === 'IDENTITY_UNAVAILABLE' && asked && identity(asked) === target && neverBound(asked)) {
+      const latest = this.deps.registry.byAgent(request.agentId)
+      if (latest && identity(latest) === target && neverBound(latest)) return this.attempt(request, target, revision, true)
+    }
     if (result.closed || (request.mode !== 'now' && request.mode !== 'idle') || !starting) return result
     return this.whileStarting(request, starting, target, revision, askedAt + CLOSE_BIND_WAIT_MS, result)
   }
@@ -344,10 +360,15 @@ export class CloseAgentService {
           if (this.deps.idleCurrent?.(latest) === false) idleRevoked = true
           return !idleRevoked
         },
-        checkpoint: (s, phase) => {
+        checkpoint: async (s, phase) => {
           // The record saved before the stop is the one a resume starts from.
           if (phase === 'before' && keptNone(s)) unkept = true
-          return this.deps.checkpoint(s, phase)
+          try { await this.deps.checkpoint(s, phase) } catch (error) {
+            // No history written yet, for a program forgetting its harness: nothing to save, and none kept.
+            const failed = error as { code?: unknown; empty?: unknown } | null
+            if (!request.ifNoHistory || failed?.code !== 'HISTORY_NOT_SAVED' || failed.empty !== true) throw error
+            unkept = true
+          }
         },
         confirmUnusedConversation: async captured => {
           // A missing ID alone could be failed discovery of active work. Only

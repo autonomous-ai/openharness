@@ -409,6 +409,24 @@ describe('shared native databases', () => {
       expect(existsSync(join(session.hermesHome!, 'state.db'))).toBe(true)
     } finally { db.close() }
   })
+  it('needs no proof of a store\'s triggers once its engine deleted the conversation itself (#4393)', async () => {
+    const db = dbFixture()
+    try {
+      // Hermes 0.21.5 keeps its search index by triggers on messages: Harness cannot prove them, so refuses to delete.
+      db.exec('CREATE TABLE messages_fts(content TEXT); CREATE TRIGGER messages_ad AFTER DELETE ON messages BEGIN DELETE FROM messages_fts WHERE content = old.content; END;')
+      await expect(inspectNativeHistory(session)).rejects.toThrow('triggers')
+      // A message left without its session is still there to delete: refused as before.
+      db.exec("PRAGMA foreign_keys = OFF; DELETE FROM sessions WHERE id = 'selected-session'")
+      await expect(inspectNativeHistory(session)).rejects.toThrow('triggers')
+      // Deleted by Hermes itself (`hermes sessions delete`): nothing of it is left to erase.
+      db.exec("DELETE FROM messages WHERE session_id = 'selected-session'")
+      const history = await inspectNativeHistory(session)
+      expect(history).toEqual({ bytes: 0 })
+      expect(await eraseNativeHistory(history)).toBe(0)
+      expect(db.prepare('SELECT id FROM sessions').all()).toEqual([{ id: 'keep' }])
+      expect(db.prepare('SELECT content FROM messages').all()).toEqual([{ content: 'retained' }])
+    } finally { db.close() }
+  })
   it('refuses dependent conversations, new dependencies and changed schemas without partial deletion', async () => {
     const db = dbFixture()
     try {

@@ -103,6 +103,9 @@ describe('the program harness records', () => {
     expect(records.all()).toEqual([])
     writeFileSync(records.path, JSON.stringify({ v: 1, harnesses: { x: { agentId: 'x' }, y: { ...row('y'), inputs: 'no', createdAt: 'no' } } }))
     expect(records.all()).toEqual([{ ...row('y'), createdAt: 0 }])
+    // OpenClaw's --local folder is kept when it names one.
+    writeFileSync(records.path, JSON.stringify({ v: 1, harnesses: { y: { ...row('y'), local: '/state/y' }, z: { ...row('z'), local: '' }, w: { ...row('w'), local: 7, startedAt: 'no' } } }))
+    expect(records.all()).toEqual([{ ...row('y'), local: '/state/y' }, row('z'), { ...row('w'), startedAt: 0 }])
   })
 
   it('the save goes through a temporary file renamed onto the target', () => {

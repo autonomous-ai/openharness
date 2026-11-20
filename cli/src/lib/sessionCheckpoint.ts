@@ -18,6 +18,9 @@ import { findResumedTranscript } from './sessionRepair.js'
 
 export class SessionCheckpointError extends Error {
   readonly code = 'HISTORY_NOT_SAVED'
+  /** [empty]: OpenClaw's store holds no node for the key at all. OpenClaw writes none before the first message, so a
+   *  harness never given one has no history to save (a program forgetting it closes it anyway, `ifNoHistory`). */
+  constructor(message: string, readonly empty = false) { super(message) }
 }
 
 /** A column of the paged table `t`, by its name. */
@@ -97,7 +100,8 @@ async function databaseHistory(s: RegisteredSession): Promise<Record<string, unk
       : await sqliteReadAll(database, `SELECT * FROM ${table} WHERE ${where};`, [s.sessionId]).then((read) => read.ok ? read.rows : null)
     if (s.engine === 'openclaw' && table === selections[0][0] && rows?.length === 0) return null
     if (!rows || (table === selections[0][0] && rows.length !== 1)) {
-      throw new SessionCheckpointError('Could not read the saved conversation. The session has not been closed.')
+      throw new SessionCheckpointError('Could not read the saved conversation. The session has not been closed.',
+        s.engine === 'openclaw' && table === selections[0][0] && rows?.length === 0)
     }
     tables[table] = rows
   }

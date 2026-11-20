@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import { machineChoices, newAgentPayload, newCommand, NewUsageError, parseNewArgs, resolveNewMachine, trustAsked, type NewCommandDeps, type NewSocket } from './newCommand.js'
 import { SANDBOXED } from './unreachable.js'
 import { AgentClientError } from '../agentClient/daemon.js'
+import { ProgramRecords } from '../agentClient/program.js'
 
 // POSIX paths, read by POSIX rules wherever the spec runs: on Windows the shell's paths are read as Windows ones.
 const env = { cwd: '/work/repo', home: '/home/me', platform: 'linux' as const }
@@ -311,6 +312,21 @@ describe('harness new: the daemon', () => {
   it('sends --local to a daemon that knows it', async () => {
     const run = await newWith(['openclaw', '--local', FOLDER], { connected: { machineId: ME, features: ['openclaw-local'] } })
     expect(run.sent.find((frame) => frame.type === 'agent_create')!.payload).toMatchObject({ engine: 'openclaw', openclawLocal: FOLDER })
+  })
+
+  it('records a program\'s harness as its own, with the --local folder its session is in (#4393)', async () => {
+    const data = mkdtempSync(join(tmpdir(), 'harness-program-'))
+    const token = join(data, 'token')
+    writeFileSync(token, `${'t'.repeat(40)}\n`, { mode: 0o600 })
+    const started = async (argv: string[]) => {
+      const socket = new FakeSocket((frame) => frame.type === 'agent_create' ? { state: 'created', agent: { id: argv[0] === 'openclaw' ? 'a1' : 'a2', name: 'kept', engine: argv[0] } } : null,
+        { machineId: ME, features: ['openclaw-local'] })
+      expect(await newCommand(deps([...argv, '--name', 'kept', '--program-token-file', token, '--json'], socket, { dataDir: data }))).toBe(0)
+    }
+    await started(['openclaw', '--local', FOLDER])
+    await started(['hermes'])
+    expect(new ProgramRecords(data).get('a1')).toMatchObject({ name: 'kept', engine: 'openclaw', local: FOLDER })
+    expect(new ProgramRecords(data).get('a2')).not.toHaveProperty('local')
   })
 
   it('says a sandbox is in the way when the daemon runs but its port is refused, and passes on anything else', async () => {

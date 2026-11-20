@@ -1,7 +1,7 @@
 import { chmodSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { EXIT } from './commands.js'
 import { AgentClientError, type Daemon, type Where } from './daemon.js'
@@ -377,9 +377,17 @@ describe('harness ensure (#4393)', () => {
     expect(await ensureCommand(args(), h.deps)).toBe(EXIT.ok)
     expect(h.json()).toMatchObject({ result: 'new', id: 'new1' })
     expect(new ProgramRecords(dir).get('new1')).toMatchObject({ tokenHash: HASH, name: 'lamp' })
+    expect(new ProgramRecords(dir).get('new1')).not.toHaveProperty('local')
     const again = harness(d)
     await ensureCommand(args(), again.deps)
     expect(again.json()).toMatchObject({ result: 'live', id: 'new1' })
+    // With its --local folder, absolute, for close --forget.
+    const local = harness(d, { create: async () => {
+      d.frames.push(frame('new2'))
+      return { code: 0, lines: [JSON.stringify({ ok: true, machineId: 'computer-1', agent: { id: 'new2', name: 'other', engine: 'openclaw' } })] }
+    } })
+    expect(await ensureCommand(['openclaw', '--name', 'other', '--program-token-file', token, '--local', '/state/lamp', '--json'], local.deps)).toBe(EXIT.ok)
+    expect(new ProgramRecords(dir).get('new2')).toMatchObject({ name: 'other', local: resolve('/state/lamp') })
   })
 
   it('says why harness new did not start it', async () => {
