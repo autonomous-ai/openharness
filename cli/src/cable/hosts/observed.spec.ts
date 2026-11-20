@@ -1999,6 +1999,25 @@ describe('ObservedSource actions', () => {
     expect(actions.open.mock.calls).toEqual([[src.list()[0].id, { bundle: 'com.microsoft.VSCode', pane: { adapter: 'vscode', id: sessionId } }]])
   })
 
+  // The extension's tab has no terminal to type into: the mod's inbox poll is the only way the dial's words reach it.
+  it('a session in the VS Code extension\'s tab takes the dial\'s words through its mod, and none without it', async () => {
+    const { actions, ready } = fakeActions()
+    const { src, ev } = setup({ actions })
+    const sessionId = '8d1f2c3a-4b5e-4f60-9a7b-1c2d3e4f5a6b'
+    src.ingest(ev('session-start', { sessionId, hostHints: { __CFBundleIdentifier: 'com.microsoft.VSCode', CLAUDE_CODE_ENTRYPOINT: 'claude-vscode' } }))
+    const [agent] = src.list()
+    expect(src.capabilities(agent).voice).toBe(false)
+    expect(await src.send(agent, 'run the tests')).toMatchObject({ ok: false })
+    expect(actions.toMod).not.toHaveBeenCalled()
+    ready.add(sessionId)
+    expect(src.capabilities(agent).voice).toBe(true)
+    expect(await src.send(agent, 'run the tests')).toEqual({ ok: true })
+    expect(actions.toMod.mock.calls).toEqual([[sessionId, 'run the tests']])
+    expect(actions.orcaSend).not.toHaveBeenCalled()
+    expect(actions.herdrPrompt).not.toHaveBeenCalled()
+    expect(actions.hcPrompt).not.toHaveBeenCalled()
+  })
+
   it('a Codex session started from the extension\'s tab is not opened by Claude Code\'s link', async () => {
     const { actions } = fakeActions()
     const { src, ev } = setup({ actions })

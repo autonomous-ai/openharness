@@ -54,8 +54,8 @@ pub enum CliState {
     Removed,
 }
 
-/// state.json: `{ "version": 1, "cliSeen", "askedSignIn", "loginItem" }`. Default: version 1, all false. The keys of
-/// the Claude Code and Codex offers an older app wrote are ignored.
+/// state.json: `{ "version": 1, "cliSeen", "askedSignIn", "loginItem", "askedFollow", "askedAx" }`. Default: version
+/// 1, all false. The keys of the Claude Code and Codex offers an older app wrote are ignored.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Saved {
@@ -63,11 +63,24 @@ pub struct Saved {
     pub cli_seen: bool,
     pub asked_sign_in: bool,
     pub login_item: bool,
+    /// The Follow ChatGPT screen opened by itself. Default: a file from an app before it loads as it was.
+    #[serde(default)]
+    pub asked_follow: bool,
+    /// macOS's Accessibility prompt was called: it shows its dialog only the first time.
+    #[serde(default)]
+    pub asked_ax: bool,
 }
 
 impl Default for Saved {
     fn default() -> Self {
-        Saved { version: 1, cli_seen: false, asked_sign_in: false, login_item: false }
+        Saved {
+            version: 1,
+            cli_seen: false,
+            asked_sign_in: false,
+            login_item: false,
+            asked_follow: false,
+            asked_ax: false,
+        }
     }
 }
 
@@ -76,6 +89,7 @@ impl Default for Saved {
 pub enum Screen {
     Install,
     SignIn,
+    Follow,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -95,7 +109,7 @@ pub struct View {
     pub lines: Vec<String>,
 }
 
-/// What the window may ask: `"retry" | "sign_in" | "later" | "cancel"`. Anything else is refused.
+/// What the window may ask: `"retry" | "sign_in" | "later" | "cancel" | "allow"`. Anything else is refused.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Action {
@@ -103,6 +117,7 @@ pub enum Action {
     SignIn,
     Later,
     Cancel,
+    Allow,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -118,6 +133,10 @@ pub enum MenuAction {
     About,
     Quit,
     ExportLogs,
+    /// The unchecked Follow ChatGPT item: its screen.
+    FollowChatgpt,
+    /// The checked one: System Settings' Accessibility list.
+    FollowSettings,
 }
 
 /// Text is a disabled line. Check: the action a click does, the label, whether it is checked. Submenu: its label and
@@ -163,6 +182,16 @@ pub struct AppState {
     /// What `harness --version` printed, for the About panel.
     pub cli_version: Option<String>,
     pub logs: LogsExport,
+    pub follow: FollowState,
+}
+
+/// Following the ChatGPT window, as the menu and the window show it. Waiting: the screen opened by itself waits behind
+/// Install or Sign in.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct FollowState {
+    pub trusted: bool,
+    pub installed: bool,
+    pub waiting: bool,
 }
 
 /// AuthorizeUrl holds an `https:` URL only (account.rs lets no other through).
@@ -177,12 +206,20 @@ pub enum LoginEvent {
 /// `'static`, so only the step table's fixed copy can be one, never a line of the script's.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Event {
-    Tick { now: u64, desktop_running: bool },
-    MenuOpened { now: u64, desktop_installed: bool },
+    Tick {
+        now: u64,
+        desktop_running: bool,
+    },
+    MenuOpened {
+        now: u64,
+        desktop_installed: bool,
+    },
     Cli(bool),
     WatchLine(DialStatus),
     WatchExit(Option<i32>),
-    StartDone { ok: bool },
+    StartDone {
+        ok: bool,
+    },
     InstallStep(&'static str),
     InstallDone(Result<(), Vec<String>>),
     Auth(Option<bool>),
@@ -196,6 +233,14 @@ pub enum Event {
     UpdateInstalled,
     UpdateFailed(UpdateFailure),
     LogsExported(Result<Exported, ExportFailure>),
+    /// Whether Harness may use Accessibility and the ChatGPT app is installed, at each change.
+    Follow {
+        trusted: bool,
+        installed: bool,
+    },
+    /// ChatGPT came to the front, untrusted, with the dial attached: the cue to offer the screen. It carries nothing of
+    /// the app in front.
+    FollowOffer,
 }
 
 /// What to do about it. Show(None) hides the window. ShowAbout: the About panel, with its credits line. Menu, Show,
@@ -229,6 +274,10 @@ pub enum Effect {
     ExportLogs,
     /// Shows the zip an export wrote.
     Reveal(std::path::PathBuf),
+    /// macOS's Accessibility prompt.
+    AskAx,
+    /// System Settings' Accessibility list.
+    OpenAxSettings,
 }
 
 /// A finished run.
@@ -378,15 +427,17 @@ mod tests {
             json!({"screen":"sign_in","phase":"browser","lines":["Waiting"]})
         );
         assert_eq!(serde_json::to_value(Screen::Install).unwrap(), json!("install"));
+        assert_eq!(serde_json::to_value(Screen::Follow).unwrap(), json!("follow"));
     }
 
     #[test]
-    fn the_window_may_ask_four_things() {
+    fn the_window_may_ask_five_things() {
         let asks = [
             ("retry", Action::Retry),
             ("sign_in", Action::SignIn),
             ("later", Action::Later),
             ("cancel", Action::Cancel),
+            ("allow", Action::Allow),
         ];
         for (name, action) in asks {
             assert_eq!(serde_json::from_value::<Action>(json!(name)).unwrap(), action);
@@ -408,7 +459,14 @@ mod tests {
 
     #[test]
     fn state_json_keys() {
-        let keys = json!({ "version": 1, "cliSeen": false, "askedSignIn": false, "loginItem": false });
+        let keys = json!({
+            "version": 1,
+            "cliSeen": false,
+            "askedSignIn": false,
+            "loginItem": false,
+            "askedFollow": false,
+            "askedAx": false
+        });
         assert_eq!(serde_json::to_value(Saved::default()).unwrap(), keys);
         assert_eq!(serde_json::from_value::<Saved>(keys).unwrap(), Saved::default());
     }

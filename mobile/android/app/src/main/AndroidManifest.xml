@@ -13,6 +13,9 @@
          request, which Android confirms with its own sheet. Neither is a runtime permission. -->
     <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <!-- ACCESS_WIFI_STATE implies Wi-Fi hardware; only the hotspot join needs it, so a device
+         without Wi-Fi must still install the app (Play flagged build 89 for this). -->
+    <uses-feature android:name="android.hardware.wifi" android:required="false" />
     <!-- Taking a picture to send to an agent. Picking an EXISTING picture needs
          no permission at all: image_picker goes through ACTION_GET_CONTENT / the
          photo picker, which hands back one item the user chose rather than

@@ -3,6 +3,7 @@
 use harness_device::app::App;
 use harness_device::cli::cli_override;
 use harness_device::desktop::{DesktopApp, SystemDesktopApp, run_open};
+use harness_device::follow;
 use harness_device::front;
 use harness_device::install::{Shell, system_shell};
 use harness_device::log::FileLog;
@@ -90,6 +91,7 @@ fn start(handle: &AppHandle, events: Sender<Event>, queue: Receiver<Event>) -> t
         front: front::system(log.clone()),
         tabs: tabs::system(),
         updater: harness_device::update::system(handle),
+        follow: follow::system(paths.home_dir()?),
     };
 
     // A watch or a sign-in hands its events over holding a lock that stopping or cancelling it takes: `send` only
@@ -295,14 +297,30 @@ fn menu_id(action: MenuAction) -> &'static str {
         MenuAction::About => "about",
         MenuAction::Quit => "quit",
         MenuAction::ExportLogs => "export_logs",
+        MenuAction::FollowChatgpt => "follow_chatgpt",
+        MenuAction::FollowSettings => "follow_settings",
     }
 }
 
 fn menu_action(id: &str) -> Option<MenuAction> {
     use MenuAction::*;
-    [Install, SignIn, SoundOn, SoundOff, NotifyFull, NotifyYou, Update, OpenHarness, About, Quit, ExportLogs]
-        .into_iter()
-        .find(|action| menu_id(*action) == id)
+    [
+        Install,
+        SignIn,
+        SoundOn,
+        SoundOff,
+        NotifyFull,
+        NotifyYou,
+        Update,
+        OpenHarness,
+        About,
+        Quit,
+        ExportLogs,
+        FollowChatgpt,
+        FollowSettings,
+    ]
+    .into_iter()
+    .find(|action| menu_id(*action) == id)
 }
 
 #[cfg(test)]
@@ -317,17 +335,32 @@ mod tests {
     #[test]
     fn every_menu_action_has_its_own_id() {
         use MenuAction::*;
-        let actions =
-            [Install, SignIn, SoundOn, SoundOff, NotifyFull, NotifyYou, Update, OpenHarness, About, Quit, ExportLogs];
+        let actions = [
+            Install,
+            SignIn,
+            SoundOn,
+            SoundOff,
+            NotifyFull,
+            NotifyYou,
+            Update,
+            OpenHarness,
+            About,
+            Quit,
+            ExportLogs,
+            FollowChatgpt,
+            FollowSettings,
+        ];
         for action in actions {
             assert_eq!(menu_action(menu_id(action)), Some(action));
         }
         let ids: std::collections::HashSet<_> = actions.into_iter().map(menu_id).collect();
-        assert_eq!(ids.len(), 11);
+        assert_eq!(ids.len(), 13);
         assert_eq!(menu_id(About), "about");
         assert_eq!(menu_id(ExportLogs), "export_logs");
         assert_eq!(menu_id(NotifyFull), "notify_full");
         assert_eq!(menu_id(NotifyYou), "notify_you");
+        assert_eq!(menu_id(FollowChatgpt), "follow_chatgpt");
+        assert_eq!(menu_id(FollowSettings), "follow_settings");
         assert_eq!(menu_action("sound"), None);
         assert_eq!(menu_action("notify"), None);
     }

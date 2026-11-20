@@ -1,7 +1,7 @@
 /**
  * Where a download came from, kept where the sign-in can find it.
  *
- * A person who lands on harness.autonomous.ai/desktop from a tagged link downloads a static
+ * A person who lands on harness.autonomous.ai/download from a tagged link downloads a static
  * installer, so nothing in the app knows the link. The sign-in does: auth.autonomous.ai reads the
  * `utm_*` and `rid` cookies on `.autonomous.ai` and appends them to the redirect_uri, the desktop app's
  * `harness login` sends them with /api/auth/exchange, and the backend records them on the account

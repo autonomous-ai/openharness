@@ -170,9 +170,32 @@ mod tests {
         .unwrap();
         let log = Arc::new(MemoryLog::default());
         let file = JsonStateFile::new(dir.path().to_path_buf(), log.clone());
-        let before = Saved { version: 1, cli_seen: true, asked_sign_in: true, login_item: true };
+        let before = Saved { version: 1, cli_seen: true, asked_sign_in: true, login_item: true, ..Saved::default() };
         assert_eq!(file.load(), before);
         assert!(log.lines().is_empty());
+    }
+
+    #[test]
+    fn an_old_file_without_the_follow_keys_keeps_asked_sign_in() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("state.json"), r#"{"version":1,"cliSeen":true,"askedSignIn":true,"loginItem":true}"#)
+            .unwrap();
+        let log = Arc::new(MemoryLog::default());
+        let file = JsonStateFile::new(dir.path().to_path_buf(), log.clone());
+        assert_eq!(file.load(), Saved { cli_seen: true, asked_sign_in: true, login_item: true, ..Saved::default() });
+        assert!(!file.load().asked_follow && !file.load().asked_ax);
+        assert!(log.lines().is_empty());
+    }
+
+    #[test]
+    fn the_follow_keys_read_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = JsonStateFile::new(dir.path().to_path_buf(), Arc::new(MemoryLog::default()));
+        for (asked_follow, asked_ax) in [(true, false), (false, true), (true, true)] {
+            let saved = Saved { cli_seen: true, asked_follow, asked_ax, ..Saved::default() };
+            file.save(&saved).unwrap();
+            assert_eq!(file.load(), saved);
+        }
     }
 
     #[test]

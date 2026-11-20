@@ -1389,8 +1389,11 @@ export class DaemonCableHost implements CableHost {
    * The 401 retry is not defensive padding. A token can expire between the moment the user pressed the
    * dial's button and the moment the upload finishes — a long dictation is minutes — and losing a spoken
    * sentence to a clock is the one failure the person cannot work around.
+   *
+   * `signal` reaches both posts, so a recording the person cancelled stops uploading instead of spending
+   * their voice quota on words nobody will read.
    */
-  async transcribe(pcm: Buffer, sampleRate: number, lang: string): Promise<string> {
+  async transcribe(pcm: Buffer, sampleRate: number, lang: string, signal?: AbortSignal): Promise<string> {
     // The text reaches the dial's glass as a toast, so it is addressed to the person holding it, not to
     // a terminal: signing in happens on the computer, and that is the one thing they need to know.
     const accessToken = this.wiring.accessToken
@@ -1412,6 +1415,7 @@ export class DaemonCableHost implements CableHost {
           'content-type': `multipart/form-data; boundary=${boundary}`,
         },
         body,
+        signal,
       })
 
     let token = await accessToken()

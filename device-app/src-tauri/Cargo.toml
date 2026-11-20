@@ -32,8 +32,11 @@ libc = "0.2"
 objc2 = "0.6"
 block2 = "0.6"
 objc2-foundation = { version = "0.3", default-features = false, features = ["std", "block2", "NSAppleEventDescriptor", "NSAppleScript", "NSArray", "NSAttributedString", "NSDictionary", "NSError", "NSNotification", "NSOperation", "NSString", "NSURL", "NSValue"] }
-objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSResponder", "NSRunningApplication", "NSWorkspace"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "libc", "NSApplication", "NSResponder", "NSRunningApplication", "NSWorkspace"] }
 objc2-service-management = { version = "0.3", default-features = false, features = ["std", "SMAppService", "objc2", "objc2-foundation"] }
+# Accessibility, for the ChatGPT window's title (follow_macos.rs).
+objc2-application-services = { version = "0.3", default-features = false, features = ["std", "libc", "HIServices", "AXUIElement", "AXError"] }
+objc2-core-foundation = { version = "0.3", default-features = false, features = ["std", "block2", "CFRunLoop", "CFString", "CFDictionary", "CFNumber", "CFNotificationCenter"] }
 
 [target.'cfg(not(target_os = "macos"))'.dependencies]
 sysinfo = "0.40"

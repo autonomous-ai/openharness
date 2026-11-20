@@ -109,7 +109,7 @@ import { createTally, createTierDecider, type Tier, type TierDecision, type Tier
 import { tmuxFinder } from '../lib/binaryFinder.js'
 import { VERSION } from '../version.js'
 import { createPartGuard } from './devicesGuard.js'
-import { attachHandler, dialStream, frontHandler, noticeHandler, notifyHandler, orcaFrontHandler, tabHandler, tabsStream, type DevicesListener, type ListenerHandler, type ListenerStreamHandler } from './devicesListener.js'
+import { attachHandler, dialStream, frontHandler, noticeHandler, notifyHandler, orcaFrontHandler, tabHandler, tabsStream, threadHandler, type DevicesListener, type ListenerHandler, type ListenerStreamHandler } from './devicesListener.js'
 import type { FleetSession } from './fleetRouter.js'
 import { FLEET_FALLBACKS, startFleet, type Fleet } from './fleet.js'
 
@@ -236,6 +236,7 @@ const FOLLOWED: Record<FollowCause | 'settle', Record<'moved' | 'no-tile', strin
   settle: { moved: '[device] settle · moved', 'no-tile': '[device] settle · skipped · no tile' },
   tab: { moved: '[device] tab · moved', 'no-tile': '[device] tab · skipped · no tile' },
   focus: { moved: '[device] focus · moved', 'no-tile': '[device] focus · skipped · no tile' },
+  thread: { moved: '[device] thread · moved', 'no-tile': '[device] thread · skipped · no tile' },
 }
 /** A tab app reports back each tab the dial selects, and Orca each pane it switches to: a report within this long of the
  *  dial's move there is that move's echo. Every move of that long is kept, as a fast swipe's late report for a place it
@@ -500,6 +501,8 @@ export function startDevices(core: DevicesCore, ports: CorePorts, deps: DevicesD
         if (found >= 0) kept = kept.slice(found + 1)
         return found >= 0
       },
+      /** Whether a move made within TAB_ECHO_MS before `at` is not yet seen: the app can still report what it had. */
+      unseen(at: number): boolean { return kept.some((sent) => at - sent.at < TAB_ECHO_MS) },
       clear(): void { kept = [] },
     }
   }
@@ -535,9 +538,13 @@ export function startDevices(core: DevicesCore, ports: CorePorts, deps: DevicesD
    *  link is the dial's own move, and the app's attach that follows is its echo. */
   const claudeNoted = noting({ ...claude, show: (pane, agentId) => { noteLink(agentId); return claude.show(pane, agentId) } })
   const codexApp = createCodexAppAdapter({ ...apps, bin: openBin, inFront: () => cableHost.latestFront() === 'codex', log })
-  /** The ChatGPT app's adapter as the dial's verbs reach it. No echo to guard: the Codex app sends no attach for the
-   *  follow to take as a person's. */
-  const codexNoted = noting(codexApp)
+  /** The ChatGPT app threads the dial opened lately, by id. */
+  const codexSwitches = dialMovesTo()
+  /** The ChatGPT app's adapter as the dial's verbs reach it: a rest or a tap opens the thread's link, and the app's
+   *  window then shows that thread's title, whose report is the dial's own echo. */
+  const codexNoted = noting({ ...codexApp,
+    show: (pane, agentId) => { codexSwitches.note(pane.id); return codexApp.show(pane, agentId) },
+    focus: (pane) => { codexSwitches.note(pane.id); return codexApp.focus(pane) } })
   const codexPane = (threadId: string): Pane => ({ adapter: codexApp.id, id: threadId })
   /** Each Orca terminal's worktree, by handle, from the latest layout read that landed (below): a rest's or a tap's
    *  switch activates it first. */
@@ -1118,6 +1125,7 @@ export function startDevices(core: DevicesCore, ports: CorePorts, deps: DevicesD
       // Orca is often not running at the start or the attach: its coming to the front is the pass's next chance.
       if (app === 'orca' && orcaSetup) part.call('orcaPlugin', () => orcaSetup.pass())
       part.call('dial', () => tabSettled(app))
+      part.call('dial', () => threadSettled(app))
     },
     appPicked: () => log('[device] app filter: picker'),
     // A pick on the dial brings its app to the front, on macOS and, through the raise, on Linux
@@ -1888,6 +1896,7 @@ export function startDevices(core: DevicesCore, ports: CorePorts, deps: DevicesD
     front: frontHandler((app) => part.call('dial', () => cableHost.front(app))),
     attach: attachHandler((sessionId) => part.call('dial', () => claudeAttached(sessionId))),
     tab: tabHandler((tab) => part.call('dial', () => tabReported(tab))),
+    thread: threadHandler((title) => part.call('dial', () => threadReported(title))),
     tabs: tabs.handler,
     dial: dial.handler,
     orcaFront: orcaFrontHandler(() => dial.isOpen(), (terminals) => part.call('orca', () => orcaFronted(terminals))),
@@ -2108,6 +2117,51 @@ export function startDevices(core: DevicesCore, ports: CorePorts, deps: DevicesD
     return sent
   }
 
+  /**
+   * A thread opened in the ChatGPT app turns the dials to it as a selected tab does, once the app has settled in front
+   * (docs/plans/2026-11-20-dial-chatgpt-follow-ax-design.md, "The devices process"): Harness Device reports the title of
+   * the app's window, matched here to Codex's name of one of its threads. Each line is an outcome, never the title, a
+   * name or the thread.
+   */
+  /** A thread report: the title, when it came and how many moves the dial had made by then. Held in memory only. */
+  type ThreadReport = { title: string; at: number; moves: number }
+  let threadReport: ThreadReport | undefined
+  /** Uses up the report: with no dial linked nothing is followed or counted, as with a prompt. The match, which reads
+   *  Codex's names of up to 200 threads, runs only for a report neither the dial's move since nor the settle's echo
+   *  drops: the dial's own switches are told by the thread it names, so they are checked after it. */
+  const followThread = (report: ThreadReport, atSettle: boolean): Promise<void> | undefined => {
+    threadReport = undefined
+    if (!cable.isConnected) return
+    if (report.moves !== dialMoves) { log('[device] thread · skipped · echo'); return }
+    // A tap brings the app forward, and its window can still show the thread it had: the settle's echo, as the Claude
+    // app's settle has.
+    if (atSettle && dialMovedAt !== undefined && monotonic() - dialMovedAt < ATTACH_ECHO_MS) { log('[device] thread · skipped · echo'); return }
+    // Off macOS there is no source, and no thread to name.
+    const match = codexAppSource?.threadNamed(report.title) ?? 'none'
+    if (match === 'none') { log('[device] thread · skipped · no match'); return }
+    if (match === 'ambiguous') { log('[device] thread · skipped · ambiguous'); return }
+    // By when the report came, as a tab's: it excuses this report only. While the dial's own switch is not yet seen,
+    // another thread is the window's old title read late: followed, it would take the switch's title for its echo.
+    if (codexSwitches.echo(match.threadId, report.at) || codexSwitches.unseen(report.at)) {
+      log('[device] thread · skipped · echo')
+      return
+    }
+    return cable.followLocal(observedAgentId('codex', match.threadId), 'thread')
+  }
+  /** The empty title, no window or one out of rule, names no thread: it drops what waits. */
+  const threadReported = (title: string): Promise<void> | undefined => {
+    threadReport = undefined
+    if (title === '') return
+    const report = { title, at: monotonic(), moves: dialMoves }
+    if (cableHost.settledApp() === 'codex') return followThread(report, false)
+    threadReport = report
+  }
+  const threadSettled = (app: string): Promise<void> | undefined => {
+    if (!threadReport) return
+    if (app === 'codex') return followThread(threadReport, true)
+    threadReport = undefined
+    if (cable.isConnected) log('[device] thread · skipped · not in front')
+  }
   const port: DevicesPort = {
     // A paneless session's hook event, as the core checked it: taken, and dropped here while the observed source is
     // switched off.
@@ -2204,6 +2258,8 @@ export function startDevices(core: DevicesCore, ports: CorePorts, deps: DevicesD
       for (const timer of pending) clearTimeout(timer)
       tabReport = undefined
       selects.clear()
+      threadReport = undefined
+      codexSwitches.clear()
       endHookCalls()
       dialAttached(false)
       await cable.stop()

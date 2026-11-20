@@ -5,8 +5,8 @@ use crate::keepalive::{Keep, KeepAlive};
 use crate::logs::reason;
 use crate::model::{about_credits, due, menu, menu_log};
 use crate::types::{
-    Action, AppState, AppUpdate, CliState, Daemon, Effect, Event, LoginEvent, LogsExport, MenuAction, MenuItem,
-    NotifyMode, Phase, Saved, Screen, UpdateFailure, View,
+    Action, AppState, AppUpdate, CliState, Daemon, Effect, Event, FollowState, LoginEvent, LogsExport, MenuAction,
+    MenuItem, NotifyMode, Phase, Saved, Screen, UpdateFailure, View,
 };
 
 /// The menu reads the account and the CLI's version again at most this often.
@@ -73,6 +73,7 @@ impl App {
             app_update: AppUpdate::None,
             cli_version: None,
             logs: LogsExport::Idle,
+            follow: FollowState::default(),
         };
         let mut app = App {
             state,
@@ -268,14 +269,59 @@ impl App {
                         effects.push(Effect::ExportLogs);
                     }
                 }
+                // As Sound's: the check item flipped itself, and the menu drawn again shows the permission.
+                MenuAction::FollowChatgpt => {
+                    self.show(Some(self.view_of(Screen::Follow)), effects);
+                    effects.push(Effect::Menu(self.menu.clone()));
+                }
+                MenuAction::FollowSettings => effects.extend([Effect::OpenAxSettings, Effect::Menu(self.menu.clone())]),
             },
             Event::Act(action) => self.act(action, effects),
             // Decision 2: closing answers an offer, and never stops what runs.
             Event::WindowClosed => {
+                // Closing Sign in is its Later: the Follow screen waiting behind it shows.
                 if self.showing(Screen::SignIn) {
                     self.remember(|saved| saved.asked_sign_in = true, effects);
+                    self.next(effects);
+                    return;
+                }
+                // Closing the Follow screen is Not now.
+                if self.showing(Screen::Follow) {
+                    self.state.follow.waiting = false;
                 }
                 self.show(None, effects);
+            }
+            Event::Follow { trusted, installed } => {
+                if trusted != self.state.follow.trusted {
+                    let word = if trusted { "on" } else { "off" };
+                    effects.push(Effect::Log(format!("chatgpt: follow {word}")));
+                }
+                self.state.follow.trusted = trusted;
+                self.state.follow.installed = installed;
+                // The permission is what the screen asked for: it closes, and only it.
+                if trusted {
+                    self.state.follow.waiting = false;
+                    if self.showing(Screen::Follow) {
+                        self.show(None, effects);
+                    }
+                }
+            }
+            // Offered once by itself, remembered once it shows (`show`); the menu's item opens the screen again.
+            Event::FollowOffer => {
+                if self.state.saved.asked_follow {
+                    return;
+                }
+                self.state.follow.waiting = true;
+                // The menu's item already shows the screen: the offer is made.
+                if self.showing(Screen::Follow) {
+                    self.remember(|saved| saved.asked_follow = true, effects);
+                    return;
+                }
+                // Shown only when it is the screen due and nothing shows: before the first screen is chosen, or with
+                // Install or Sign in due, it waits, and first_screen or next() shows it after them.
+                if self.window.is_none() && !self.awaiting_account && due(&self.state) == Some(Screen::Follow) {
+                    self.show(Some(self.view_of(Screen::Follow)), effects);
+                }
             }
             // Nothing newer: a row that offered a version goes, as this app is at least as new.
             Event::UpdateChecked(None) => {
@@ -391,6 +437,22 @@ impl App {
                 effects.push(Effect::CancelLogin);
                 self.show(Some(screen_at(Screen::SignIn, Phase::Offer, Vec::new())), effects);
             }
+            // macOS shows its dialog only the first time it is asked: after that, the Accessibility list opens too. The
+            // window closes at once, out of the way of either.
+            (Screen::Follow, Phase::Offer, Action::Allow) => {
+                effects.push(Effect::AskAx);
+                if self.state.saved.asked_ax {
+                    effects.push(Effect::OpenAxSettings);
+                }
+                self.remember(|saved| saved.asked_ax = true, effects);
+                effects.push(Effect::Log("chatgpt: asked".into()));
+                self.state.follow.waiting = false;
+                self.show(None, effects);
+            }
+            (Screen::Follow, Phase::Offer, Action::Later) => {
+                self.state.follow.waiting = false;
+                self.show(None, effects);
+            }
             _ => {}
         }
     }
@@ -496,6 +558,7 @@ impl App {
         match screen {
             Screen::Install => screen_at(screen, Phase::Working, vec![self.step.to_string()]),
             Screen::SignIn => self.login.clone().unwrap_or_else(|| screen_at(screen, Phase::Offer, Vec::new())),
+            Screen::Follow => screen_at(screen, Phase::Offer, Vec::new()),
         }
     }
 
@@ -511,6 +574,10 @@ impl App {
     }
 
     fn show(&mut self, view: Option<View>, effects: &mut Vec<Effect>) {
+        // The offer counts as made once its screen shows: one the person closed or quit before is offered again.
+        if self.state.follow.waiting && view.as_ref().is_some_and(|shown| shown.screen == Screen::Follow) {
+            self.remember(|saved| saved.asked_follow = true, effects);
+        }
         self.window = view.clone();
         effects.push(Effect::Show(view));
     }
@@ -564,7 +631,14 @@ mod tests {
     const M1: u64 = 60;
 
     /// A CLI seen before and a login item registered: only what each test does is saved.
-    const SEEN: Saved = Saved { version: 1, cli_seen: true, asked_sign_in: false, login_item: true };
+    const SEEN: Saved = Saved {
+        version: 1,
+        cli_seen: true,
+        asked_sign_in: false,
+        login_item: true,
+        asked_follow: false,
+        asked_ax: false,
+    };
 
     fn found() -> App {
         App::new(SEEN, true, false, B).0
@@ -1600,5 +1674,240 @@ mod tests {
             ["Harness removed", "Install", "Export failed: Harness did not answer", "About", "Quit"]
         );
         assert_eq!(logs(&effects), ["logs: export failed: Harness did not answer"]);
+    }
+
+    fn follow_offer() -> Option<View> {
+        shown(Screen::Follow, Phase::Offer, &[])
+    }
+
+    fn follow(trusted: bool, installed: bool) -> Event {
+        Event::Follow { trusted, installed }
+    }
+
+    fn attached() -> Event {
+        Event::WatchLine(DialStatus {
+            attached: true,
+            fw: Some("0.0.95".into()),
+            hw: None,
+            board: None,
+            updating: None,
+            problem: None,
+            muted: None,
+            notify: None,
+        })
+    }
+
+    /// Found and signed in: nothing shows.
+    fn signed_in() -> App {
+        let mut app = found();
+        answer(&mut app, true);
+        assert_eq!(app.view(), None);
+        app
+    }
+
+    fn saves(effects: &[Effect]) -> bool {
+        effects.iter().any(|effect| matches!(effect, Effect::Save(_)))
+    }
+
+    #[test]
+    fn the_offer_opens_the_follow_screen_once_and_remembers_it() {
+        let mut app = with_chatgpt(signed_in());
+        let effects = app.handle(Event::FollowOffer);
+        assert!(has(&effects, &Effect::Save(Saved { asked_follow: true, ..SEEN })));
+        assert_eq!(shows(&effects), [follow_offer()]);
+        assert_eq!(app.view(), follow_offer());
+
+        app.handle(Event::Act(Action::Later));
+        let effects = app.handle(Event::FollowOffer);
+        assert!(shows(&effects).is_empty());
+        assert!(!saves(&effects));
+
+        // Remembered across a start.
+        let mut app = with_chatgpt(App::new(Saved { asked_follow: true, ..SEEN }, true, false, B).0);
+        answer(&mut app, true);
+        assert!(app.handle(Event::FollowOffer).is_empty());
+    }
+
+    #[test]
+    fn the_offer_never_covers_install_or_sign_in() {
+        let mut app = with_chatgpt(on_sign_in());
+        assert!(shows(&app.handle(Event::FollowOffer)).is_empty());
+        assert_eq!(app.view(), shown(Screen::SignIn, Phase::Offer, &[]));
+        assert_eq!(shows(&app.handle(Event::Act(Action::Later))), [follow_offer()]);
+
+        let mut app = with_chatgpt(fresh());
+        assert!(shows(&app.handle(Event::FollowOffer)).is_empty());
+        assert_eq!(app.view(), shown(Screen::Install, Phase::Working, &[GETTING_READY]));
+        app.handle(Event::InstallDone(Ok(())));
+        assert_eq!(shows(&answer(&mut app, true)), [follow_offer()]);
+    }
+
+    /// The ChatGPT app is on this Mac, without the permission.
+    fn with_chatgpt(mut app: App) -> App {
+        app.handle(follow(false, true));
+        app
+    }
+
+    #[test]
+    fn closing_sign_in_shows_the_follow_screen_waiting_behind_it() {
+        let mut app = with_chatgpt(on_sign_in());
+        assert!(!saves(&app.handle(Event::FollowOffer)));
+        let effects = app.handle(Event::WindowClosed);
+        assert!(has(&effects, &Effect::Save(Saved { asked_sign_in: true, asked_follow: true, ..SEEN })));
+        assert_eq!(shows(&effects), [follow_offer()]);
+    }
+
+    #[test]
+    fn an_offer_before_the_first_screen_waits_for_it() {
+        let mut app = with_chatgpt(found());
+        assert!(shows(&app.handle(Event::FollowOffer)).is_empty());
+        assert_eq!(shows(&answer(&mut app, false)), [shown(Screen::SignIn, Phase::Offer, &[])]);
+        assert_eq!(shows(&app.handle(Event::Act(Action::Later))), [follow_offer()]);
+    }
+
+    #[test]
+    fn an_offer_never_shown_is_offered_again() {
+        let mut app = with_chatgpt(on_sign_in());
+        app.handle(Event::FollowOffer);
+        assert!(!saves(&app.handle(Event::Menu(MenuAction::Quit))));
+        assert!(!app.state.saved.asked_follow);
+    }
+
+    #[test]
+    fn an_offer_while_the_menu_shows_the_follow_screen_is_made() {
+        let mut app = with_chatgpt(signed_in());
+        app.handle(Event::Menu(MenuAction::FollowChatgpt));
+        let effects = app.handle(Event::FollowOffer);
+        assert!(has(&effects, &Effect::Save(Saved { asked_follow: true, ..SEEN })));
+        assert!(shows(&effects).is_empty());
+        app.handle(Event::Act(Action::Later));
+        assert!(app.handle(Event::FollowOffer).is_empty());
+    }
+
+    #[test]
+    fn allow_asks_macos_each_time_and_opens_the_settings_after_the_first() {
+        let mut app = with_chatgpt(signed_in());
+        app.handle(Event::FollowOffer);
+        let effects = app.handle(Event::Act(Action::Allow));
+        assert!(has(&effects, &Effect::AskAx));
+        assert!(!has(&effects, &Effect::OpenAxSettings));
+        assert!(has(&effects, &Effect::Save(Saved { asked_follow: true, asked_ax: true, ..SEEN })));
+        assert_eq!(logs(&effects), ["chatgpt: asked"]);
+
+        // macOS shows its dialog only the first time: then the settings open too.
+        app.handle(Event::Menu(MenuAction::FollowChatgpt));
+        let effects = app.handle(Event::Act(Action::Allow));
+        assert!(has(&effects, &Effect::AskAx));
+        assert!(has(&effects, &Effect::OpenAxSettings));
+        assert!(!saves(&effects));
+        assert_eq!(logs(&effects), ["chatgpt: asked"]);
+    }
+
+    #[test]
+    fn allow_closes_the_window() {
+        let mut app = with_chatgpt(signed_in());
+        app.handle(Event::FollowOffer);
+        assert_eq!(shows(&app.handle(Event::Act(Action::Allow))), [None]);
+        assert_eq!(app.view(), None);
+        app.handle(Event::Menu(MenuAction::FollowChatgpt));
+        assert_eq!(shows(&app.handle(Event::Act(Action::Allow))), [None]);
+        assert_eq!(app.view(), None);
+    }
+
+    #[test]
+    fn the_permission_given_closes_the_follow_screen() {
+        let mut app = signed_in();
+        app.handle(follow(false, true));
+        app.handle(Event::FollowOffer);
+        assert!(app.state.follow.waiting);
+        assert_eq!(shows(&app.handle(follow(true, true))), [None]);
+        assert!(!app.state.follow.waiting);
+
+        // Opened from the menu.
+        app.handle(follow(false, true));
+        app.handle(Event::Menu(MenuAction::FollowChatgpt));
+        assert_eq!(shows(&app.handle(follow(true, true))), [None]);
+        assert_eq!(app.view(), None);
+
+        // Another screen stays.
+        let mut app = on_sign_in();
+        app.handle(follow(false, true));
+        assert!(shows(&app.handle(follow(true, true))).is_empty());
+        assert_eq!(app.view(), shown(Screen::SignIn, Phase::Offer, &[]));
+
+        // No window stays closed.
+        let mut app = signed_in();
+        app.handle(follow(false, true));
+        assert!(shows(&app.handle(follow(true, true))).is_empty());
+    }
+
+    #[test]
+    fn not_now_and_closing_close_the_follow_screen() {
+        let mut app = with_chatgpt(signed_in());
+        app.handle(Event::FollowOffer);
+        let effects = app.handle(Event::Act(Action::Later));
+        assert_eq!(shows(&effects), [None]);
+        assert!(!saves(&effects));
+        assert!(!app.state.follow.waiting);
+
+        app.handle(Event::Menu(MenuAction::FollowChatgpt));
+        let effects = app.handle(Event::WindowClosed);
+        assert_eq!(shows(&effects), [None]);
+        assert!(!saves(&effects));
+        assert_eq!(app.view(), None);
+    }
+
+    #[test]
+    fn the_follow_item_opens_the_screen_unchecked_and_the_settings_checked_and_draws_the_menu_again() {
+        let mut app = signed_in();
+        app.handle(attached());
+        let menu = menu_of(&app.handle(follow(false, true)));
+        assert!(menu.contains(&MenuItem::Check(MenuAction::FollowChatgpt, "Follow ChatGPT".into(), false)));
+        // A native check item flips its own check when clicked: the menu drawn again puts it back.
+        assert_eq!(
+            app.handle(Event::Menu(MenuAction::FollowChatgpt)),
+            [Effect::Show(follow_offer()), Effect::Menu(menu)]
+        );
+        app.handle(Event::WindowClosed);
+
+        let menu = menu_of(&app.handle(follow(true, true)));
+        assert!(menu.contains(&MenuItem::Check(MenuAction::FollowSettings, "Follow ChatGPT".into(), true)));
+        assert_eq!(app.handle(Event::Menu(MenuAction::FollowSettings)), [Effect::OpenAxSettings, Effect::Menu(menu)]);
+    }
+
+    #[test]
+    fn a_permission_change_redraws_the_menu_and_says_follow_on_or_off() {
+        let mut app = signed_in();
+        app.handle(attached());
+        let effects = app.handle(follow(true, true));
+        assert!(menu_of(&effects).contains(&MenuItem::Check(
+            MenuAction::FollowSettings,
+            "Follow ChatGPT".into(),
+            true
+        )));
+        assert_eq!(logs(&effects), ["chatgpt: follow on"]);
+        assert!(app.handle(follow(true, true)).is_empty());
+
+        let effects = app.handle(follow(false, true));
+        assert!(menu_of(&effects).contains(&MenuItem::Check(
+            MenuAction::FollowChatgpt,
+            "Follow ChatGPT".into(),
+            false
+        )));
+        assert_eq!(logs(&effects), ["chatgpt: follow off"]);
+
+        let effects = app.handle(follow(false, false));
+        assert!(!rows(&effects).contains(&"Follow ChatGPT".to_string()));
+        assert!(logs(&effects).is_empty());
+    }
+
+    #[test]
+    fn only_allow_and_not_now_act_on_the_follow_screen() {
+        let mut app = with_chatgpt(signed_in());
+        app.handle(Event::FollowOffer);
+        for action in [Action::Retry, Action::SignIn, Action::Cancel] {
+            assert!(app.handle(Event::Act(action)).is_empty(), "{action:?}");
+        }
+        assert_eq!(app.view(), follow_offer());
     }
 }
