@@ -46,7 +46,7 @@ const stub = (name: string, body: string) => writeFileSync(join(bin, name), `#!/
 stub("uname", `case "$1" in -s) echo "$STUB_OS" ;; -m) echo x86_64 ;; *) exit 1 ;; esac`);
 stub(
   "curl",
-  `out= url= prev=
+  `out=/dev/stdout url= prev=
 for arg; do
   if [ "$prev" = -o ]; then out="$arg"; else case "$arg" in -*) ;; *) url="$arg" ;; esac; fi
   prev="$arg"
@@ -56,7 +56,9 @@ printf '%s\\0' "$@" >> "$STUB_LOG/curl" && printf '\\n' >> "$STUB_LOG/curl"
 served=release && [ "$url" != "$STUB_MANIFEST_URL" ] || served=manifest
 # A server that never stops, its size unnamed: curl before 8.4 (Ubuntu 22.04's 7.81) applies no --max-filesize to it.
 [ "$STUB_ENDLESS" != "$served" ] || exec head -c 4194304 /dev/zero > "$out" 2>/dev/null
-if [ "$served" = manifest ]; then cp "$STUB_SERVED/metadata.json" "$out"; else cp "$STUB_SERVED/release" "$out"; fi`,
+# A file of curl's own, larger than the download, as its errors written to a log file.
+[ -z "$STUB_CURL_WRITES" ] || head -c 65536 /dev/zero > "$STUB_LOG/curl-own"
+if [ "$served" = manifest ]; then cat "$STUB_SERVED/metadata.json" > "$out"; else cat "$STUB_SERVED/release" > "$out"; fi`,
 );
 stub("plutil", `case "$2" in CFBundleShortVersionString) cat "$4" ;; *) cat "$STUB_SERVED/plutil/$2" ;; esac`);
 stub(
@@ -99,6 +101,8 @@ interface Options {
   signal?: string;
   /** A signal the first move sends the script once it has moved. */
   mvSignal?: string;
+  /** Whether curl writes a file of its own, larger than the download. */
+  curlWrites?: boolean;
   /** The download whose server sends without end, never naming its size. */
   endless?: "manifest" | "release";
 }
@@ -140,6 +144,7 @@ function install(os: "Darwin" | "Linux", options: Options = {}) {
     STUB_SIGNAL: options.signal ?? "",
     STUB_MV_SIGNAL: options.mvSignal ?? "",
     STUB_ENDLESS: options.endless ?? "",
+    STUB_CURL_WRITES: options.curlWrites ? "1" : "",
   };
   // exec keeps the pid: the script's own, for the stubs that signal it.
   const result = spawnSync("sh", ["-c", 'export STUB_SCRIPT_PID=$$; exec sh "$0"', installer], {
@@ -319,7 +324,7 @@ describe("desktop-install.sh", { timeout: 20_000 }, () => {
     },
   );
 
-  // curl before 8.4 applies --max-filesize only to a size the server names: the shell's file size limit stops the rest.
+  // curl before 8.4 applies --max-filesize only to a size the server names: the download stops the rest itself.
   it.each([
     ["Darwin", "manifest", "could not download desktop metadata"],
     ["Darwin", "release", `could not download Harness ${VERSION}`],
@@ -329,10 +334,19 @@ describe("desktop-install.sh", { timeout: 20_000 }, () => {
     const run = install(os, { endless });
 
     expect(run.result.status).toBe(1);
-    // The shell names the limit before it, as curl names its own failure.
+    // curl names its own failure before it.
     expect(run.result.stderr.trimEnd().split("\n").at(-1)).toBe(`Harness desktop installer: ${reason}`);
     expect(run.placed).toBeNull();
     expect(run.ran).toEqual([]);
+  });
+
+  // The cap binds the download's write alone: a limit on curl would stop its other writes, and on Linux even an append.
+  it.each(["Darwin", "Linux"] as const)("%s caps only the download, never curl's other writes", (os) => {
+    const run = install(os, { curlWrites: true });
+
+    expect(run.result.stderr).toBe("");
+    expect(run.result.status).toBe(0);
+    expect(statSync(join(run.dir, "log", "curl-own")).size).toBe(65536);
   });
 
   // curl collapses dot segments, so a glob's `*` matching `../..` would download from another bucket.

@@ -51,6 +51,8 @@ interface Options {
   latin1?: "HOME" | "XDG_DATA_HOME";
   /** Whether the app, started, ends at once, as with no FUSE or another arch's userland. */
   startFails?: boolean;
+  /** Whether curl writes a file of its own, larger than the download. */
+  curlWrites?: boolean;
   /** The download whose server sends without end, never naming its size. */
   endless?: "manifest" | "app";
 }
@@ -68,7 +70,7 @@ const stub = (name: string, body: string) => writeFileSync(join(bin, name), `#!/
 stub("uname", `case "$1" in -s) echo "$STUB_OS" ;; -m) echo "$STUB_MACHINE" ;; *) exit 1 ;; esac`);
 stub(
   "curl",
-  `out= url= prev=
+  `out=/dev/stdout url= prev=
 for arg; do
   if [ "$prev" = -o ]; then out="$arg"; else case "$arg" in -*) ;; *) url="$arg" ;; esac; fi
   prev="$arg"
@@ -78,7 +80,9 @@ printf '%s\\0' "$@" >> "$STUB_LOG/curl" && printf '\\n' >> "$STUB_LOG/curl"
 served=app && [ "$url" != "$STUB_MANIFEST_URL" ] || served=manifest
 # A server that never stops, its size unnamed: curl before 8.4 (Ubuntu 22.04's 7.81) applies no --max-filesize to it.
 [ "$STUB_ENDLESS" != "$served" ] || exec head -c 4194304 /dev/zero > "$out" 2>/dev/null
-if [ "$served" = manifest ]; then cp "$STUB_SERVED/metadata.json" "$out"; else cp "$STUB_SERVED/app" "$out"; fi`,
+# A file of curl's own, larger than the download, as its errors written to a log file.
+[ -z "$STUB_CURL_WRITES" ] || head -c 65536 /dev/zero > "$STUB_LOG/curl-own"
+if [ "$served" = manifest ]; then cat "$STUB_SERVED/metadata.json" > "$out"; else cat "$STUB_SERVED/app" > "$out"; fi`,
 );
 stub(
   "pgrep",
@@ -170,6 +174,7 @@ function install(options: Options = {}) {
     STUB_ICON: options.icon === false ? "" : "1",
     STUB_START_FAILS: options.startFails ? "1" : "",
     STUB_ENDLESS: options.endless ?? "",
+    STUB_CURL_WRITES: options.curlWrites ? "1" : "",
   };
   delete env.XDG_DATA_HOME;
   if (options.home === null) delete env.HOME;
@@ -284,7 +289,7 @@ describe("device-install.sh", { timeout: 20_000 }, () => {
     expect(flag(run.curl[1], "--max-filesize")).toBe(String(APP_SUMS.size));
   });
 
-  // curl before 8.4 applies --max-filesize only to a size the server names: the shell's file size limit stops the rest.
+  // curl before 8.4 applies --max-filesize only to a size the server names: the download stops the rest itself.
   it.each([
     ["manifest", "could not download device metadata"],
     ["app", `could not download Harness Device ${VERSION}`],
@@ -292,10 +297,19 @@ describe("device-install.sh", { timeout: 20_000 }, () => {
     const run = install({ endless });
 
     expect(run.result.status).toBe(1);
-    // The shell names the limit before it, as curl names its own failure.
+    // curl names its own failure before it.
     expect(run.result.stderr.trimEnd().split("\n").at(-1)).toBe(`Harness Device installer: ${reason}`);
     expect(run.opt).toEqual([]);
     expect(run.setsid).toEqual([]);
+  });
+
+  // The cap binds the download's write alone: a limit on curl would stop its other writes, and on Linux even an append.
+  it("caps only the download, never curl's other writes", () => {
+    const run = install({ curlWrites: true });
+
+    expect(run.result.stderr).toBe("");
+    expect(run.result.status).toBe(0);
+    expect(statSync(join(run.dir, "log", "curl-own")).size).toBe(65536);
   });
 
   it.each(DEVICE_ASSET_PREFIXES)("takes the AppImage from %s", (prefix) => {
