@@ -9,13 +9,14 @@ export interface PetDialState {
   errors?: Record<string, string>
 }
 
-// What the dial must be told and sent so it holds exactly the packs the mapping names. Pure: the session decides when.
+// What the dial must be told and sent so it holds the packs the mapping names. Pure: the session decides when.
 //   map  - always sent first, so the dial knows which pack stands for what even before the bytes arrive
 //   send - mapped ids the dial does not hold, de-duplicated, "all" first then engines by name (a stable order, so a
 //          retry or a second dial sees the same sequence)
-//   drop  - ids this computer sent (own) that the dial holds and nothing maps any more (its 4-pack budget is for packs
-//           in use)
-//   spare - ids the dial holds that another computer sent and nothing here maps: kept until the dial needs the slot
+//   drop  - own ids (this link sent them, or the mapping named them while held) that the dial holds and nothing maps
+//           any more (its 4-pack budget is for packs in use)
+//   spare - the other held ids nothing here maps, in the dial's order: another computer's, or this one's from an earlier
+//           link. Kept until the dial needs the slot
 export function planPetSync(
   mapping: PetMapping,
   held: string[],
