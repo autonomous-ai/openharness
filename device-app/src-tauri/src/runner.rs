@@ -297,8 +297,8 @@ impl Runner {
         self.0.find_cli()
     }
 
-    /// Menu, Show, ShowAbout, AboutCredits, Quit and Relaunch come back for the binary. Everything else is done here, anything slow on
-    /// a thread, and answers through `send`.
+    /// Menu, Show, ShowAbout, AboutCredits, Quit and Relaunch come back for the binary. Everything else is done here,
+    /// anything slow on a thread, and answers through `send`.
     pub fn run(&self, effect: Effect) -> Option<Effect> {
         let shared = &self.0;
         match effect {

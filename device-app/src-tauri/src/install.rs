@@ -180,10 +180,10 @@ pub fn system_shell(data: PathBuf) -> SystemShell {
 }
 
 /// `runs(os)`, in order, each within INSTALL_DEADLINE. A unix line's exit code is `/bin/sh`'s, not curl's: a curl
-/// that fails hands sh nothing, and sh exits 0. So an install counts only when `cli_there()` finds a CLI after its runs.
-/// Err holds the last lines of the run that failed, or of the last run. `on_step` is told each step as it changes: a
-/// run in a terminal is FINISH_IN_TERMINAL, then GETTING_READY once it has ended well, or at once where there is no
-/// terminal and it runs behind the screen.
+/// that fails hands sh nothing, and sh exits 0. So an install counts only when `cli_there()` finds a CLI after its
+/// runs. Err holds the last lines of the run that failed, or of the last run. `on_step` is told each step as it
+/// changes: a run in a terminal is FINISH_IN_TERMINAL, then GETTING_READY once it has ended well, or at once where
+/// there is no terminal and it runs behind the screen.
 pub fn install(
     os: &str,
     shell: &dyn Shell,
