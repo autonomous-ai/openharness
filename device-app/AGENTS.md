@@ -15,7 +15,7 @@ sets them up. Rust and Tauri 2 in `src-tauri/`; the window's three screens are p
   toolchain; CI uses `dtolnay/rust-toolchain@stable`.
 - The Tauri CLI 2.12.4, to build and run the app: `cargo install tauri-cli --version 2.12.4 --locked`. PR CI does not
   use it; the release pins that version (`scripts/release-setup.sh`).
-- It runs on macOS 13 or later (`SMAppService`), Windows 11 (x64 and arm64, an NSIS installer per user) and Linux
+- It runs on macOS 13 or later (`SMAppService`), Windows 10 or 11 (x64 and arm64, an NSIS installer per user) and Linux
   (x64 and arm64, an AppImage). Linux builds need webkit2gtk 4.1, appindicator, rsvg and libxdo.
 - Tauri's dependencies take minutes to compile: one `CARGO_TARGET_DIR` outside the repository compiles them once.
 
