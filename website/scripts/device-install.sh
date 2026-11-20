@@ -44,6 +44,12 @@ case "$MACHINE_ARCH" in
     ;;
 esac
 
+# The app goes under HOME: under a relative one, the AppImage and its Exec= line would be paths no launcher can run.
+case "${HOME:-}" in
+  /*) ;;
+  *) fail "HOME must be an absolute path" ;;
+esac
+
 OTA_KEY="device-linux-$RELEASE_ARCH-appimage"
 APP_DIR="$HOME/.local/opt"
 # Desktop's place for the app: one name with no version or arch, so the app's updater replaces it in place.
@@ -144,12 +150,7 @@ mv -f "$CANDIDATE" "$DESTINATION" || fail "could not install Harness Device $VER
 # Exec= line. None of this fails the install.
 case "${XDG_DATA_HOME:-}" in
   /*) DATA_HOME="$XDG_DATA_HOME" ;;
-  *)
-    case "$HOME" in
-      /*) DATA_HOME="$HOME/.local/share" ;;
-      *) DATA_HOME= ;;
-    esac
-    ;;
+  *) DATA_HOME="$HOME/.local/share" ;;
 esac
 
 # Desktop's quoteLauncherExec: every % doubled, and the path quoted, with " ` $ \ escaped, when it holds a character a
@@ -183,7 +184,7 @@ fits_entry() {
   printf '%s' "$1" | iconv -f UTF-8 -t UTF-8 >/dev/null 2>&1
 }
 
-if [ -n "$DATA_HOME" ] && [ ! -e "$ENTRY" ] && fits_entry "$DESTINATION$DATA_HOME"; then
+if [ ! -e "$ENTRY" ] && fits_entry "$DESTINATION$DATA_HOME"; then
   (
     # Set here, never taken from the environment: it lands in the entry verbatim.
     ICON_LINE=
