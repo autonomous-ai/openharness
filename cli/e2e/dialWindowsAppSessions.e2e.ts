@@ -91,23 +91,43 @@ const said = (d: WindowsDaemon, line: string) =>
 const linesOf = (d: WindowsDaemon, tag: string): string[] =>
   lines(d).filter((line) => line.includes(tag)).map((line) => line.slice(line.indexOf(tag)))
 
+/** Runs [script] in System32's PowerShell and answers what it printed. The script goes encoded, so no quoting rule
+ *  between Node and PowerShell touches it. */
+async function powershell(script: string[]): Promise<string> {
+  const program = win32.join(process.env.SystemRoot!, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
+  const encoded = Buffer.from(script.join('\n'), 'utf16le').toString('base64')
+  const { stdout } = await exec(program, ['-NoProfile', '-NonInteractive', '-EncodedCommand', encoded], { windowsHide: true, timeout: 30_000 })
+  return stdout
+}
+
 interface Running { pid: number; commandLine: string; window: boolean }
 
-/** The processes of [program] in this console session, each with its command line and whether it has a window yet. The
- *  script goes encoded, so no quoting rule between Node and PowerShell touches it. */
+/** The processes of [program] in this console session, each with its command line and whether it has a window yet. */
 async function running(program: string): Promise<Running[]> {
-  const script = [
+  return JSON.parse(await powershell([
     '$session = (Get-Process -Id $PID).SessionId',
     `$found = @(Get-CimInstance Win32_Process -Filter "Name='${program}' AND SessionId=$session" | ForEach-Object {`,
     '  $process = Get-Process -Id $_.ProcessId -ErrorAction SilentlyContinue',
     '  [pscustomobject]@{ pid = [int]$_.ProcessId; commandLine = [string]$_.CommandLine; window = [bool]($process -and $process.MainWindowHandle -ne [IntPtr]::Zero) }',
     '})',
     'ConvertTo-Json -InputObject $found -Compress',
-  ].join('\n')
-  const powershell = win32.join(process.env.SystemRoot!, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
-  const { stdout } = await exec(powershell, ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')],
-    { windowsHide: true, timeout: 30_000 })
-  return JSON.parse(stdout) as Running[]
+  ])) as Running[]
+}
+
+/**
+ * Whether Windows has a program for links of [scheme], asked as `harness-pty open-link` asks before it opens one
+ * (pty/src/raise.rs `handled`): `AssocQueryStringW` with `ASSOCF_IS_PROTOCOL` (0x1000) for `ASSOCSTR_PROGID` (20), which
+ * a packaged handler answers too, where its command and executable give `ERROR_NO_ASSOCIATION`
+ * (docs/plans/2026-11-19-dial-windows-vm-notes.md, Task 37 §3). With no buffer, a registered one answers S_FALSE.
+ */
+async function handled(scheme: string): Promise<boolean> {
+  // [NullString]: PowerShell hands a .NET string parameter "" for $null, and the call takes no extra.
+  const answer = await powershell([
+    "Add-Type -Namespace Harness -Name Links -MemberDefinition '[DllImport(\"shlwapi.dll\", CharSet = CharSet.Unicode)] public static extern int AssocQueryStringW(uint flags, int str, string assoc, string extra, System.Text.StringBuilder result, ref uint length);'",
+    '$length = [uint32]0',
+    `[Harness.Links]::AssocQueryStringW(0x1000, 20, '${scheme}', [NullString]::Value, $null, [ref]$length) -ge 0`,
+  ])
+  return answer.trim() === 'True'
 }
 
 describe.runIf(process.platform === 'win32')("the Claude and ChatGPT apps' sessions on the dial on Windows", () => {
@@ -200,6 +220,9 @@ describe.runIf(process.platform === 'win32')("the Claude and ChatGPT apps' sessi
         return (await look()).some((p) => p.commandLine.includes(link)) ? 'opened' : null
       }, STARTED_MS, 250)
       if (outcome === 'fallback') {
+        // The fallback is right only when no app takes the scheme: with one registered, the link should have opened it.
+        const scheme = link.slice(0, link.indexOf(':'))
+        expect(await handled(scheme), `the fallback, while a program is registered for ${scheme}:// links`).toBe(false)
         console.log('tap: fallback · no handler')
         return
       }
