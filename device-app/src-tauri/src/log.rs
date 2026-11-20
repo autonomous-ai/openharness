@@ -262,11 +262,15 @@ mod tests {
             (r"Installing into C:\Users\Kim\.harness", r"Installing into ~\.harness"),
             ("c:/users/kim/x", "~/x"),
             (r#"set "C:\Users\Kim" C:\Users\Kim"#, r#"set "~" ~"#),
+            // PowerShell's errors quote it, and a sentence or brackets go on after it.
+            (r"Access to the path 'C:\Users\Kim' is denied.", r"Access to the path '~' is denied."),
+            (r"(C:\Users\Kim) `C:\Users\Kim` C:\Users\Kim and", r"(~) `~` ~ and"),
+            // In a JSON string every `\` is doubled.
+            (r#"{"path":"C:\\Users\\Kim\\.harness"}"#, r#"{"path":"~\\.harness"}"#),
             // Another person's folder: a Windows user name also holds a space.
-            (
-                r"C:\Users\Kimberly\x C:\Users\Kim.b C:\Users\Kim Lee\x",
-                r"C:\Users\Kimberly\x C:\Users\Kim.b C:\Users\Kim Lee\x",
-            ),
+            (r"C:\Users\Kimberly\x C:\Users\Kim.b", r"C:\Users\Kimberly\x C:\Users\Kim.b"),
+            // Unless the name goes on after a space: then it is cut there, which hides more, never less.
+            (r"C:\Users\Kim Lee\x", r"~ Lee\x"),
         ];
         for (text, expected) in cases {
             assert_eq!(redact_with(text, home.as_ref()), expected, "{text}");
