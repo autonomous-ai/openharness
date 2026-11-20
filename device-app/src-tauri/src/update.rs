@@ -1,6 +1,8 @@
 //! The app's own update. The runner reaches the updater through this door only, so no test reaches the network.
 
 use crate::types::UpdateFailure;
+#[cfg(any(target_os = "linux", all(test, unix)))]
+use std::ffi::OsStr;
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -103,10 +105,21 @@ fn a_file_can_be_made_in(folder: &Path) -> bool {
     File::create_new(&probe).is_ok() && fs::remove_file(&probe).is_ok()
 }
 
+/// The AppImage file the updater replaces: APPIMAGE only while `exe` runs from the APPDIR mount, the rule the login
+/// item and the app list follow, so an APPIMAGE a program inherited from another AppImage's terminal replaces nothing.
+#[cfg(any(target_os = "linux", all(test, unix)))]
+fn appimage_file(file: Option<&OsStr>, mount: Option<&OsStr>, exe: &Path) -> Option<PathBuf> {
+    crate::loginitem_linux::appimage(file, mount, exe).map(|run| run.file)
+}
+
 /// The door, where this build updates itself (`enabled`); None elsewhere.
 pub fn system(handle: &tauri::AppHandle) -> Option<Arc<dyn AppUpdater>> {
-    // An AppImage's runtime sets APPIMAGE to its own file: the one the plugin replaces.
-    let appimage = std::env::var_os("APPIMAGE").map(PathBuf::from).filter(|path| path.is_absolute());
+    #[cfg(target_os = "linux")]
+    let appimage = std::env::current_exe().ok().and_then(|exe| {
+        appimage_file(std::env::var_os("APPIMAGE").as_deref(), std::env::var_os("APPDIR").as_deref(), &exe)
+    });
+    #[cfg(not(target_os = "linux"))]
+    let appimage = None;
     let version = handle.package_info().version.to_string();
     if !enabled(cfg!(debug_assertions), std::env::consts::OS, &version, appimage.is_some()) {
         return None;
@@ -226,7 +239,6 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn an_appimage_this_program_does_not_run_from_is_not_updated() {
-        use std::ffi::OsStr;
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("H.AppImage");
         std::fs::write(&file, "").unwrap();
