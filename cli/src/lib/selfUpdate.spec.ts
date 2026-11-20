@@ -12,7 +12,6 @@ import {
 import { env } from '../config/env.js'
 import { managedNodePath } from './nodeRuntime.js'
 import { placeNode } from '../testing/placeNode.js'
-import { firstStart } from '../testing/testNode.js'
 import { SpawnLockBusyError } from './daemonSpawnLock.js'
 import { PTY_PROTOCOL } from './ptyHost/protocol.js'
 import { versionsOnDisk } from './windows/cliVersions.js'
@@ -1622,14 +1621,14 @@ describe('an update that moves the daemon to Node 24', { timeout: 20_000 }, () =
   const v24 = join(runtime, 'node-v24.22.2-test', 'bin', 'node')
   const newer = join(runtime, 'node-v24.23.0-test', 'bin', 'node')
   const note = (dir: string): Record<string, unknown> => JSON.parse(readFileSync(join(dir, 'update-pending.json'), 'utf8'))
-  // The managed Nodes the suite's own runtime folder holds (vitest.setup.ts): copies of this test's Node, made once for
-  // the describe and started once here. A fresh copy's first start is the slow one: 2 to 4 s on a loaded Mac against
+  // The managed Nodes the suite's own runtime folder holds (vitest.setup.ts): links of the run's Node, which the run
+  // started once (testing/placeNode.ts). A fresh copy's first start is the slow one: 2 to 4 s on a loaded Mac against
   // 0.04 s after (2026-11-19). Copied before each test, it ran inside the tests' 10 s waits for a canary on it, and 1 to
   // 7 of them failed a run under load. The copies also timed out the hook at the default 10 s on a loaded CI runner
   // (2026-11-14, run 43603619102).
   beforeAll(() => {
-    for (const node of [v22, v24, newer]) { mkdirSync(dirname(node), { recursive: true }); placeNode(node); firstStart(node) }
-  }, 60_000)
+    for (const node of [v22, v24, newer]) { mkdirSync(dirname(node), { recursive: true }); placeNode(node) }
+  })
   afterAll(() => {
     for (const node of [v22, v24, newer]) rmSync(dirname(dirname(node)), { recursive: true, force: true })
   })

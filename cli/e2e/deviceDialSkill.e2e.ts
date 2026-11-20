@@ -20,7 +20,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, readlinkSync, rmSync,
 import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
 import { DIAL_PLUGIN_ID, DIAL_SKILL } from '../src/devices/dialSkill.js'
-import { placeNode } from '../src/testing/placeNode.js'
+import { copyNode } from '../src/testing/placeNode.js'
 import { VERSION } from '../src/version.js'
 import { IsolatedDaemon, SOURCES_CLI, until } from './harness/daemon.js'
 import { Desk } from './harness/desk.js'
@@ -137,7 +137,7 @@ describe('the dial set up from its first attach', () => {
     const codex = join(d.root, 'holder', 'codex')
     if (!existsSync(codex)) {
       mkdirSync(dirname(codex), { recursive: true })
-      placeNode(codex)
+      copyNode(codex)
     }
     // A session of its own: no terminal, as the app-server's.
     const child = spawn(codex, ['-e', HOLDER, file], { env: d.env, stdio: ['pipe', 'pipe', 'ignore'], detached: true })

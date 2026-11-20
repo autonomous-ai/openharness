@@ -17,7 +17,7 @@ import { execFileSync } from 'node:child_process'
 import { mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
-import { placeNode } from './placeNode.js'
+import { copyNode, type Machine } from './placeNode.js'
 
 /** The refusal lists this many programs at most: a developer's Node folder can hold dozens. */
 const NAMED = 5
@@ -32,14 +32,14 @@ export const firstStart = (node: string): void => {
 
 /** Makes the run's Node, starts it once and names it in E2E_NODE_PATH. Returns the teardown, which removes its folder.
  *  [machine] and [start] are for the spec: this Node's own machine, and one run of the copy. */
-export function setUpTestNode(machine?: Parameters<typeof placeNode>[2], start: (node: string) => void = firstStart): () => void {
+export function setUpTestNode(machine?: Machine, start: (node: string) => void = firstStart): () => void {
   // By its real path, as Node names itself: macOS's temporary folder is behind a link.
   const folder = realpathSync(mkdtempSync(join(tmpdir(), 'harness-e2e-node-')))
   const node = join(folder, 'bin', 'node')
   // A refused Node, a failed copy and a copy that cannot start all leave no folder behind.
   try {
     mkdirSync(dirname(node))
-    placeNode(node, [], machine)
+    copyNode(node, [], machine)
     try {
       start(node)
     } catch (error) {
@@ -57,7 +57,7 @@ export function setUpTestNode(machine?: Parameters<typeof placeNode>[2], start: 
 export function assertNodeAlone(node: string): void {
   // The folder Node names itself by: a link in a clean folder to a Node beside other programs would pass the link's.
   const folder = dirname(realpathSync(node))
-  // libnode is the library Homebrew's Node loads from beside the path it runs as (placeNode links it there).
+  // libnode is the library Homebrew's Node loads from beside the path it runs as (copyNode links it there).
   const names = readdirSync(folder).filter((name) => name !== 'node' && !name.startsWith('libnode.')).sort()
   if (names.length === 0) return
   const named = names.length > NAMED ? `${names.slice(0, NAMED).join(', ')} and ${names.length - NAMED} more` : names.join(', ')
