@@ -227,7 +227,7 @@ class SelectionTests(unittest.TestCase):
                       reused={"cli": {}}, e2e=planner.e2e_plan(["cli/src/devices/listenerPipe.ts"], running))
         values = planner.outputs(record)
         self.assertEqual(set(values), {"plan", "ready", "windows-e2e-arm64", "device-app-builds", "linux-e2e-files",
-                                       "linux-e2e-shards", "linux-e2e-full"} | planner.SUITES)
+                                       "linux-e2e-shards", "linux-e2e-full", "linux-e2e-must-pass"} | planner.SUITES)
         self.assertEqual(json.loads(values["plan"]), record)
         self.assertEqual(values["ready"], "true")
         self.assertEqual((values["windows-e2e"], values["windows-e2e-arm64"]), ("true", "false"))
@@ -235,7 +235,7 @@ class SelectionTests(unittest.TestCase):
         self.assertEqual((values["device-app-install"], values["device-app-e2e"]), ("true", "false"))
         # linux-e2e does not run: no file and no row.
         self.assertEqual((values["linux-e2e"], values["linux-e2e-files"], values["linux-e2e-shards"],
-                          values["linux-e2e-full"]), ("false", "", "[]", "false"))
+                          values["linux-e2e-full"], values["linux-e2e-must-pass"]), ("false", "", "[]", "false", ""))
         # A reused suite's jobs skip.
         self.assertEqual(values["cli"], "false")
         self.assertEqual(planner.outputs(dict(record, draft=True))["ready"], "false")
@@ -245,6 +245,13 @@ class SelectionTests(unittest.TestCase):
         values = planner.outputs(linux)
         self.assertEqual((values["linux-e2e"], values["linux-e2e-files"], values["linux-e2e-shards"],
                           values["linux-e2e-full"]), ("true", "e2e/a.e2e.ts e2e/sub/b.e2e.ts", "[1,2]", "false"))
+        # Without the canary in the run, no file must pass; with it, the canary, named as the planner adds it.
+        self.assertEqual(values["linux-e2e-must-pass"], "")
+        canary = planner.LINUX_E2E_CANARY.removeprefix("cli/")
+        for e2e in (dict(linux["e2e"], linux_files=["e2e/a.e2e.ts", canary]),
+                    dict(linux["e2e"], linux_files=[], linux_shards=8, linux_full=True)):
+            with self.subTest(full=e2e["linux_full"]):
+                self.assertEqual(planner.outputs(dict(linux, e2e=e2e))["linux-e2e-must-pass"], canary)
 
     def test_a_windows_only_file_runs_windows_end_to_end_on_both_architectures(self):
         # Decision 5: arm64 tests something x64 does not only for code that runs on Windows alone. The vendored terminal

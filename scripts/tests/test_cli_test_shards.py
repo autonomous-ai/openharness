@@ -205,10 +205,10 @@ class SelectedFilesTests(unittest.TestCase):
                                                       for state, title in self.files[name]]} for name in mine],
             }))
 
-    def verify(self, selected=("e2e/a.e2e.ts", "e2e/b.e2e.ts"), shards=2):
+    def verify(self, selected=("e2e/a.e2e.ts", "e2e/b.e2e.ts"), shards=2, must_pass=None):
         self.write(shards)
         return verifier.verify(self.directory, self.root, shards, "success", None, suite="e2e",
-                               selected=None if selected is None else list(selected))
+                               selected=None if selected is None else list(selected), must_pass=must_pass)
 
     def command(self, *extra, suite="e2e"):
         self.write()
@@ -228,6 +228,39 @@ class SelectedFilesTests(unittest.TestCase):
         summary = self.verify()
         self.assertEqual(summary["status"], "passed")
         self.assertEqual(summary["all_skipped"], ["e2e/b.e2e.ts"])
+
+    def test_the_canary_whose_every_case_skipped_fails_naming_it(self):
+        # The canary skips itself without the real backend: skipped there means the setup it checks broke.
+        self.files["e2e/b.e2e.ts"] = [("skipped", "b without the real backend")]
+        for selected in (("e2e/a.e2e.ts", "e2e/b.e2e.ts"), None):
+            with self.subTest(selected=selected), self.assertRaisesRegex(
+                    ValueError, r"e2e/b\.e2e\.ts must pass a case and skip none: 0 passed, 1 skipped"):
+                self.verify(selected=selected, must_pass="e2e/b.e2e.ts")
+
+    def test_the_canary_with_a_skipped_case_beside_a_passed_one_fails(self):
+        with self.assertRaisesRegex(ValueError, r"e2e/b\.e2e\.ts must pass a case and skip none: 1 passed, 1 skipped"):
+            self.verify(must_pass="e2e/b.e2e.ts")
+
+    def test_the_canary_with_a_passed_case_and_no_skipped_one_passes(self):
+        for selected in (("e2e/a.e2e.ts", "e2e/b.e2e.ts"), None):
+            with self.subTest(selected=selected):
+                self.assertEqual(self.verify(selected=selected, must_pass="e2e/a.e2e.ts")["status"], "passed")
+
+    def test_a_canary_missing_from_the_run_fails_naming_it(self):
+        for selected in (("e2e/a.e2e.ts", "e2e/b.e2e.ts"), None):
+            with self.subTest(selected=selected), self.assertRaisesRegex(
+                    ValueError, r"e2e/c\.e2e\.ts must pass a case, but the run has no such file"):
+                self.verify(selected=selected, must_pass="e2e/c.e2e.ts")
+
+    def test_the_command_fails_on_a_skipped_canary_and_takes_must_pass_for_the_end_to_end_suite_only(self):
+        self.files["e2e/b.e2e.ts"] = [("skipped", "b without the real backend")]
+        result = self.command("--selected", "e2e/a.e2e.ts e2e/b.e2e.ts", "--must-pass", "e2e/b.e2e.ts")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("e2e/b.e2e.ts must pass a case and skip none", result.stderr)
+        self.assertEqual(self.command("--must-pass", "e2e/a.e2e.ts").returncode, 0)
+        result = self.command("--must-pass", "e2e/a.e2e.ts", suite="unit")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("end-to-end suite", result.stderr)
 
     def test_a_selected_file_that_collected_no_test_fails_naming_it(self):
         self.files["e2e/b.e2e.ts"] = []

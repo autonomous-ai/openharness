@@ -250,6 +250,10 @@ class LinuxE2ETests(unittest.TestCase):
         # --selected only for a PR's own files; in the full mode every discovered file once, as the nightly.
         self.assertIn('if [[ "$E2E_FULL" != true ]]; then args+=(--selected "$E2E_FILES"); fi', job)
         self.assertEqual(job.count("--selected"), 1)
+        # The canary the plan names must pass a case, never skip: a skip there means the real backend's setup broke.
+        self.assertIn("E2E_MUST_PASS: ${{ needs.plan.outputs.linux-e2e-must-pass }}\n", job)
+        self.assertIn('if [[ -n "$E2E_MUST_PASS" ]]; then args+=(--must-pass "$E2E_MUST_PASS"); fi', job)
+        self.assertEqual(job.count("--must-pass"), 1)
         self.assertNotRegex(job, r"if \[\[[^\n]*--step-summary")
 
     def test_both_linux_e2e_modes_are_the_same_two_jobs(self):
@@ -264,7 +268,8 @@ class LinuxE2ETests(unittest.TestCase):
         # An empty list must never widen to the full suite by accident: the guard runs before any Vitest command.
         self.assertLess(job.index("the plan gave no file and no full run"), job.index("npx vitest"))
         self.assertIn("      E2E_FULL: ${{ needs.plan.outputs.linux-e2e-full }}\n", job)
-        for output in ("linux-e2e", "linux-e2e-files", "linux-e2e-shards", "linux-e2e-full", "dial-hosts"):
+        for output in ("linux-e2e", "linux-e2e-files", "linux-e2e-shards", "linux-e2e-full", "linux-e2e-must-pass",
+                       "dial-hosts"):
             self.assertIn(f"      {output}: ${{{{ steps.select.outputs.{output} }}}}\n", self.jobs["plan"])
 
     def test_dial_hosts_is_the_workflow_cli_e2e_runs(self):
