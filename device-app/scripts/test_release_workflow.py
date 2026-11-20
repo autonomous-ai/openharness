@@ -200,15 +200,19 @@ class ReleaseWorkflowTests(unittest.TestCase):
         for entry in entries:
             self.assertIn(f"          - {entry}\n", jobs(self.desktop)["build-linux"])
 
-    def test_linux_compiles_before_the_updater_key_exists(self):
+    def test_only_sign_update_holds_the_updater_key_on_linux(self):
+        # Compile runs the build's code, and the AppImage bundler runs linuxdeploy downloaded unpinned: neither holds it.
         job = self.job("build-linux")
         for text in ("secrets.", "id-token", "environment:"):
             self.assertNotIn(text, header(job))
         holders = [index for index, step in enumerate(steps(job)) if "secrets." in step]
-        bundle = self.step(job, "release-build.sh bundle")
-        self.assertEqual(holders, [bundle])
-        self.assertLess(self.step(job, "release-build.sh compile"), bundle)
-        self.assertEqual(set(re.findall(r"secrets\.(\w+)", steps(job)[bundle])),
+        update = self.step(job, "release-build.sh sign-update")
+        self.assertEqual(holders, [update])
+        self.assertIn('sign-update "$VERSION" "$RUNNER_TEMP/out"', steps(job)[update])
+        self.assertLess(self.step(job, "release-build.sh compile"), self.step(job, "release-build.sh bundle"))
+        self.assertLess(self.step(job, "release-build.sh bundle"), update)
+        self.assertLess(update, self.step(job, "release-check.sh"))
+        self.assertEqual(set(re.findall(r"secrets\.(\w+)", steps(job)[update])),
                          {"TAURI_SIGNING_PRIVATE_KEY", "TAURI_SIGNING_PRIVATE_KEY_PASSWORD"})
 
     def test_publish_checks_each_part_then_passes_the_platforms(self):

@@ -153,19 +153,20 @@ class ReleaseBuildTests(Fakes):
             ["tauri", "bundle", "--ci", "--target", "universal-apple-darwin", "--bundles", "app,dmg", "--config",
              '{"version":"0.1.3","bundle":{"createUpdaterArtifacts":true}}']])
 
-    def test_linux_bundles_an_appimage_under_its_fixed_name(self):
+    def test_linux_bundles_an_appimage_and_no_signature(self):
+        # Tauri's AppImage bundler downloads and runs linuxdeploy and its plugins unpinned, so the updater key is not
+        # in its environment: sign-update writes the signature next.
         for os_, arch, target in ((LINUX_X64, "x64", "x86_64-unknown-linux-gnu"),
                                   (LINUX_ARM64, "arm64", "aarch64-unknown-linux-gnu")):
             with self.subTest(arch=arch):
                 self.log.unlink(missing_ok=True)
                 out = self.out / arch
-                result = self.build(os_, "bundle", "0.1.3", str(out), TAURI_SIGNING_PRIVATE_KEY="key")
+                result = self.build(os_, "bundle", "0.1.3", str(out))
                 self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertEqual(sorted(path.name for path in out.iterdir()),
-                                 [f"Harness-Device-linux-{arch}.AppImage", f"Harness-Device-linux-{arch}.AppImage.sig"])
+                self.assertEqual(sorted(path.name for path in out.iterdir()), [f"Harness-Device-linux-{arch}.AppImage"])
                 self.assertEqual(self.tauri_calls("bundle"), [
                     ["tauri", "bundle", "--ci", "--target", target, "--bundles", "appimage", "--config",
-                     '{"version":"0.1.3","bundle":{"createUpdaterArtifacts":true}}']])
+                     '{"version":"0.1.3","bundle":{"createUpdaterArtifacts":false}}']])
 
     def test_windows_bundles_an_installer_and_no_signature(self):
         for arch, target in (("x64", "x86_64-pc-windows-msvc"), ("arm64", "aarch64-pc-windows-msvc")):
@@ -198,29 +199,34 @@ class ReleaseBuildTests(Fakes):
                 self.assertEqual(self.tauri_calls(step), [])
 
     def test_sign_update_binds_the_version(self):
-        self.out.mkdir()
-        installers = [self.out / f"Harness-Device-windows-{arch}-setup.exe" for arch in ("arm64", "x64")]
-        for installer in installers:
-            installer.write_text("signed by Authenticode")
-        result = self.build(WINDOWS, "sign-update", "0.1.3", str(self.out), TAURI_SIGNING_PRIVATE_KEY="key")
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(sorted(self.tauri_calls("signer")),
-                         [["tauri", "signer", "sign", "--app-version", "0.1.3", str(path)] for path in installers])
-        self.assertEqual(self.out_files(),
-                         sorted(name for path in installers for name in (path.name, path.name + ".sig")))
+        for os_, names in ((WINDOWS, [f"Harness-Device-windows-{arch}-setup.exe" for arch in ("arm64", "x64")]),
+                           (LINUX_X64, ["Harness-Device-linux-x64.AppImage"])):
+            with self.subTest(os=os_[0]):
+                self.log.unlink(missing_ok=True)
+                shutil.rmtree(self.out, ignore_errors=True)
+                self.out.mkdir()
+                files = [self.out / name for name in names]
+                for path in files:
+                    path.write_text("the bytes that ship")
+                result = self.build(os_, "sign-update", "0.1.3", str(self.out), TAURI_SIGNING_PRIVATE_KEY="key")
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(sorted(self.tauri_calls("signer")),
+                                 [["tauri", "signer", "sign", "--app-version", "0.1.3", str(path)] for path in files])
+                self.assertEqual(self.out_files(),
+                                 sorted(name for path in files for name in (path.name, path.name + ".sig")))
 
-    def test_sign_update_stops_with_no_installer_and_off_windows(self):
+    def test_sign_update_stops_with_nothing_to_sign_and_on_macos(self):
         self.out.mkdir()
-        result = self.build(WINDOWS, "sign-update", "0.1.3", str(self.out), TAURI_SIGNING_PRIVATE_KEY="key")
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("release-build: OUT_DIR holds no installer", result.stderr)
-        # macOS and Linux sign their update files in bundle.
-        (self.out / "Harness-Device-windows-x64-setup.exe").write_text("MZ")
-        for os_ in (MACOS, LINUX_X64):
+        for os_, kind in ((WINDOWS, "installer"), (LINUX_X64, "AppImage")):
             with self.subTest(os=os_[0]):
                 result = self.build(os_, "sign-update", "0.1.3", str(self.out), TAURI_SIGNING_PRIVATE_KEY="key")
                 self.assertNotEqual(result.returncode, 0)
-                self.assertIn("release-build: ", result.stderr)
+                self.assertIn(f"release-build: OUT_DIR holds no {kind}", result.stderr)
+        # macOS signs its update archive in bundle.
+        (self.out / "Harness-Device.app.tar.gz").write_text("archive")
+        result = self.build(MACOS, "sign-update", "0.1.3", str(self.out), TAURI_SIGNING_PRIVATE_KEY="key")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("release-build: ", result.stderr)
         self.assertEqual(self.tauri_calls("signer"), [])
 
     def test_an_unknown_os_or_target_stops(self):
