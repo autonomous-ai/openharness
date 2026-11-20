@@ -32,8 +32,8 @@ const commandPattern = (path: string) => `^${path.replace(/[\][\\.*^$+?(){}|]/g,
 interface Options {
   os?: string;
   machine?: string;
-  /** HOME under the run's folder (absolute) or as given (relative, read from the run's folder). */
-  home?: string;
+  /** HOME under the run's folder (absolute) or as given (relative, read from the run's folder); null leaves it unset. */
+  home?: string | null;
   xdgDataHome?: string;
   /** What the manifest says of this arch's AppImage, over what the served file is. */
   entry?: { url?: string; sha256?: string; size?: number };
@@ -127,7 +127,8 @@ function install(options: Options = {}) {
   const log = join(dir, "log");
   const served = join(dir, "served");
   for (const folder of [log, served]) mkdirSync(folder);
-  const home = (options.home ?? "/home/p").startsWith("/") ? dir + (options.home ?? "/home/p") : options.home!;
+  const given = options.home === null ? "" : (options.home ?? "/home/p");
+  const home = given.startsWith("/") ? dir + given : given;
   const homeAbsolute = home.startsWith("/") ? home : join(dir, home);
   const place = home + PLACE;
 
@@ -163,6 +164,7 @@ function install(options: Options = {}) {
     STUB_START_FAILS: options.startFails ? "1" : "",
   };
   delete env.XDG_DATA_HOME;
+  if (options.home === null) delete env.HOME;
   if (options.xdgDataHome !== undefined) {
     env.XDG_DATA_HOME = options.xdgDataHome.startsWith("/") ? dir + options.xdgDataHome : options.xdgDataHome;
   }
@@ -467,18 +469,31 @@ describe("device-install.sh", () => {
     }
   });
 
-  // HOME is where the script installs, so the vectors whose HOME is unset or empty have no run.
-  it.each(vectors.dataHome.filter((vector) => vector.env.HOME))(
+  // HOME is where the script installs: an AppImage and an Exec= line under a relative one are paths no launcher can run.
+  it.each([
+    ["relative", "home/p"],
+    ["empty", ""],
+    ["unset", null],
+  ])("refuses a HOME that is %s, before any download", (_, home) => {
+    const run = install({ home, xdgDataHome: "/data/p" });
+
+    expect(run.result.status).toBe(1);
+    expect(run.result.stderr).toBe("Harness Device installer: HOME must be an absolute path\n");
+    expect(run.requested).toEqual([]);
+    expect(files(run.dir).filter((name) => !/^(log|served)\//.test(name))).toEqual([]);
+  });
+
+  // The vectors whose HOME is unset, empty or relative are refused above.
+  it.each(vectors.dataHome.filter((vector) => vector.env.HOME?.startsWith("/")))(
     "puts the entry in the data home the app uses: $env",
     (vector) => {
       const run = install({ home: vector.env.HOME, xdgDataHome: vector.env.XDG_DATA_HOME });
 
       expect(run.result.status).toBe(0);
-      expect(run.listed).toEqual(
-        vector.dataHome === null
-          ? []
-          : [`${vector.dataHome.slice(1)}/applications/harness-device.desktop`, `${vector.dataHome.slice(1)}/icons/harness-device.png`],
-      );
+      expect(run.listed).toEqual([
+        `${vector.dataHome!.slice(1)}/applications/harness-device.desktop`,
+        `${vector.dataHome!.slice(1)}/icons/harness-device.png`,
+      ]);
     },
   );
 
