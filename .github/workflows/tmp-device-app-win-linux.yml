@@ -11,6 +11,8 @@ on:
       # What desktop-device-app-e2e runs.
       - 'desktop/lib/devices/**'
       - 'desktop/integration_test/device_app_install_windows_linux_native_test.dart'
+      # What install-sh-e2e runs.
+      - 'website/scripts/device-install.sh'
 
 permissions:
   contents: read
@@ -98,10 +100,11 @@ jobs:
         with:
           persist-credentials: false
       # Tauri's packages and `file` for its AppImage bundler; then what linux.sh runs: a display, a window manager, X
-      # clients, headless sway and foot, a session bus, the D-Bus Python of the fake tray host, FUSE for the AppImage.
+      # clients (xprop from x11-utils), headless sway and foot, a session bus, the D-Bus Python of the fake tray host,
+      # FUSE for the AppImage.
       - run: >-
           sudo bash scripts/apt-install.sh libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev
-          file xvfb openbox xdotool xterm sway foot dbus-x11 python3-dbus python3-gi libfuse2
+          file xvfb openbox xdotool x11-utils xterm sway foot dbus-x11 python3-dbus python3-gi libfuse2
       - uses: actions/setup-node@v7
         with:
           node-version: ${{ env.CLI_NODE_VERSION }}
@@ -651,3 +654,44 @@ jobs:
             echo "$wm"
           } >>"$GITHUB_STEP_SUMMARY"
           echo "::notice title=fuse-probe $RUNNER_LABEL::libfuse2 gone: $gone; $device; $desktop; $wm"
+
+  # The one line end to end: website/scripts/device-install.sh piped from curl as a person runs it, on a clean Ubuntu
+  # with no libfuse2, installing fuse-device-build's AppImage (built as linux-e2e builds it, on 22.04 as releases are).
+  # linux-install.sh points cdn.autonomous.ai at a local HTTPS server under a throwaway CA, serving that AppImage and a
+  # stand-in manifest; never the real CDN or bucket. A person reads its eight `ok:` lines and `0 FAILED`.
+  install-sh-e2e:
+    needs: fuse-device-build
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: x64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+          - runner: ubuntu-22.04
+            arch: x64
+          - runner: ubuntu-22.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      # A display (xauth for xvfb-run) and a session bus; then what every Ubuntu desktop has and a bare runner lacks,
+      # as fuse-probe installs it.
+      - run: >-
+          sudo bash scripts/apt-install.sh xvfb xauth dbus-x11 libegl1 libgles2 libgbm1 libharfbuzz0b libfribidi0
+          libwayland-client0
+      - uses: actions/download-artifact@v4
+        with:
+          name: fuse-device-${{ matrix.arch }}
+          path: ${{ runner.temp }}/install-sh-device
+      - name: End to end
+        shell: bash
+        run: |
+          shopt -s nullglob
+          found=("$RUNNER_TEMP"/install-sh-device/*.AppImage)
+          if [[ ${#found[@]} -ne 1 ]]; then echo "one AppImage, not ${#found[@]}"; exit 1; fi
+          bash device-app/scripts/e2e/linux-install.sh "${found[0]}"
