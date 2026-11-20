@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { runInNewContext } from 'node:vm'
 import { psEnv } from './childLocale.js'
 
@@ -76,5 +76,24 @@ describe.each([
     expect(api.lockOwnerAlive(process.pid, 'ps-c:Sun Sep 27 20:00:00 2026')).toBe(true)
     expect(api.lockOwnerAlive(999_999_999, 'ps:legacy')).toBe(false)
     expect(api.processStartMarker(-1)).toBeNull()
+  })
+})
+
+describe('on Windows', () => {
+  const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
+  beforeEach(() => {
+    Object.defineProperty(process, 'platform', { value: 'win32' })
+    mocks.read.mockReset().mockImplementation(() => { throw new Error('No /proc') })
+    // Git's `ps` is on the Windows runners' PATH and answers (run 44758521149).
+    mocks.exec.mockReset().mockReturnValue('Sun Sep 27 20:00:00 2026\n')
+  })
+  afterEach(() => { Object.defineProperty(process, 'platform', platform) })
+
+  it('runs no ps and reads no /proc: a lock names its owner by pid alone there', () => {
+    expect(processStartMarker(process.pid)).toBeNull()
+    expect(processLockIdentity(process.pid)).toEqual({ startMarker: '', generationMarker: '' })
+    expect(lockOwnerAlive(process.pid, '')).toBe(true)
+    expect(mocks.exec).not.toHaveBeenCalled()
+    expect(mocks.read).not.toHaveBeenCalled()
   })
 })
