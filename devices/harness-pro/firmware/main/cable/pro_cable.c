@@ -556,6 +556,49 @@ static void handle_swarms(const cJSON *p)
     pro_app_swarms(s_swarm_rows, n, has_ids ? &s_swarm_members : NULL, selected, s_tiles, tn);
 }
 
+// ── apps ────────────────────────────────────────────────────────────────────────────────────────────
+
+static cable_app_t s_apps[CABLE_APPS_MAX];
+
+// As the round dial's count_of: a whole number 0..255; absent, negative, NaN or not a number is 0.
+static uint8_t count_of(const cJSON *row, const char *key)
+{
+    const cJSON *v = cJSON_GetObjectItemCaseSensitive(row, key);
+    const double d = cJSON_IsNumber(v) ? v->valuedouble : 0;
+    return !(d > 0) ? 0 : d >= 255 ? 255 : (uint8_t)d;
+}
+
+// `apps`: the whole list, as the round dial's handle_apps. A list that is not an array keeps the last one; an empty
+// one is a real list. An id goes back in app.pick, so one that does not fit is dropped, never cut.
+static void handle_apps(const cJSON *p)
+{
+    const cJSON *apps = cJSON_GetObjectItemCaseSensitive(p, "apps");
+    if (!cJSON_IsArray(apps)) return;
+    int n = 0;
+    const cJSON *it = NULL;
+    cJSON_ArrayForEach(it, apps) {
+        if (n >= CABLE_APPS_MAX) break;
+        const char *id = str_of(it, "id");
+        if (!id || !id[0] || strlen(id) >= CABLE_APP_ID_MAX) continue;
+        bool duplicate = false;
+        for (int i = 0; i < n; i++) if (!strcmp(s_apps[i].id, id)) duplicate = true;
+        if (duplicate) continue;
+        cable_app_t *row = &s_apps[n++];
+        memset(row, 0, sizeof *row);
+        memcpy(row->id, id, strlen(id) + 1);
+        const char *name = str_of(it, "name");
+        copy_cut(row->name, sizeof row->name, name ? name : "");
+        row->count = count_of(it, "count");
+        const uint8_t waiting = count_of(it, "waiting"), working = count_of(it, "working");
+        row->waiting = waiting < row->count ? waiting : row->count;
+        row->working = working < row->count ? working : row->count;
+    }
+    const char *shown = str_of(p, "shown");
+    if (!shown || strlen(shown) >= CABLE_APP_ID_MAX) shown = "";
+    ESP_LOGI(TAG, "apps: %d", n);
+    pro_app_apps(s_apps, n, shown);
+}
+
 // ── the machine list ────────────────────────────────────────────────────────────────────────────────
 // Streamed like the agents. cable_machines_end() answers "did anything change" before pro_app is touched, so the
 // daemon re-sending an identical list (its own diff key resets on every port reopen) costs one comparison.
@@ -827,6 +870,8 @@ static void handle_voice_error(const cJSON *p)
 static void session_up(const cJSON *p)
 {
     atomic_store(&s_features, cable_features_parse(p));
+    // On every welcome, the keepalive one too: a daemon that restarted inside the silence window may say otherwise now.
+    pro_app_apps_switch((atomic_load(&s_features) & CABLE_FEATURE_APPS_SWITCH) != 0);
     const cJSON *machine = p ? cJSON_GetObjectItemCaseSensitive(p, "machine") : NULL;
     const char *name = str_of(machine, "name");
     copy_cut(s_machine_name, sizeof s_machine_name, name ? name : "Machine");
@@ -906,6 +951,7 @@ static void handle_message(const cJSON *root)
     if (!strcmp(t, "machines.end")) { handle_machines_end(p); return; }
     if (!strcmp(t, "machine.updated")) { handle_machine_updated(p); return; }
     if (!strcmp(t, "swarms")) { handle_swarms(p); return; }
+    if (!strcmp(t, "apps")) { handle_apps(p); return; }
     if (!strcmp(t, "player.library")) { handle_library(p); return; }
     if (!strcmp(t, "player.context")) { handle_context(p); return; }
     if (!strcmp(t, "settings.set")) { handle_settings_set(p); return; }

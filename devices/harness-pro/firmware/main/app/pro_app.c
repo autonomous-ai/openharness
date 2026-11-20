@@ -359,6 +359,23 @@ void pro_app_swarms(const cable_swarm_t *items, int n, const cable_swarm_members
     leave();
 }
 
+// The model bumps its revision only on a change, so settle redraws only then: the same list again costs nothing.
+void pro_app_apps(const cable_app_t *rows, int n, const char *shown)
+{
+    pro_app_lock();
+    pod_model_apps(&s_pod.model, rows, n, shown);
+    settle((pod_out_t){0});
+    leave();
+}
+
+void pro_app_apps_switch(bool on)
+{
+    pro_app_lock();
+    pod_model_apps_switch(&s_pod.model, on);
+    settle((pod_out_t){0});
+    leave();
+}
+
 _Static_assert(sizeof(pro_library_row_t) == sizeof(pod_library_row_t) &&
                offsetof(pro_library_row_t, id) == offsetof(pod_library_row_t, id) &&
                offsetof(pro_library_row_t, name) == offsetof(pod_library_row_t, name) &&

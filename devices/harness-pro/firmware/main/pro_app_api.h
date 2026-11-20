@@ -10,7 +10,7 @@
 #include <stdint.h>
 
 #include "cable/cable_machines.h"   // cable_machine_t
-#include "cable/cable_types.h"      // cable_swarm_t, cable_swarm_members_t, cable_tile_t
+#include "cable/cable_types.h"      // cable_app_t, cable_swarm_t, cable_swarm_members_t, cable_tile_t
 
 // ---- caps (bytes, NUL included) ----
 #define PRO_VERB_BYTES     128   // turn.started / turn.activity `text`
@@ -41,6 +41,15 @@ void pro_app_agents(const pro_agent_row_t *rows, int n, bool machine_view, bool 
 // `selected` is NULL when absent. Called for every swarms frame, changed or not.
 void pro_app_swarms(const cable_swarm_t *items, int n, const cable_swarm_members_t *members,
                     const char *selected, const cable_tile_t *tiles, int tile_n);
+
+// ---- apps ----
+// The whole app list of an `apps` frame, replacing the last one. n is 0..CABLE_APPS_MAX (0: the daemon lists no app); ids
+// are unique, non-empty and shorter than CABLE_APP_ID_MAX; waiting and working never exceed count. `shown` is the app
+// whose ring the daemon sends, never NULL ("" none), and may name no row. A frame whose list is not an array is not delivered.
+void pro_app_apps(const cable_app_t *rows, int n, const char *shown);
+// Whether the welcome listed `apps.switch`. Called on every welcome, a keepalive one too, and before the link callback of
+// a first one.
+void pro_app_apps_switch(bool on);
 
 // ---- library ----
 // Same layout as pod_library_row_t (pod_glue.h). `machine` is the machine NAME ("" when the machine list does not
