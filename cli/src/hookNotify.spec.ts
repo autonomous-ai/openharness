@@ -3858,6 +3858,25 @@ describe('hook notify: the caller a hook names', () => {
     expect(existsSync(runs)).toBe(false)
   })
 
+  // As every other process reads it (config/envFields.ts homePath): the hook runs in the agent's project.
+  it('on Windows a relative ADAPTER_RUNTIME_DIR finds the installed pty host under the home, not the project', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'adapter-hook-home-')), project = mkdtempSync(join(tmpdir(), 'adapter-hook-project-'))
+    tmpDirs.push(home, project)
+    const pty = join(home, 'rt', 'pty')
+    mkdirSync(join(pty, '1.2.3'), { recursive: true })
+    writeFileSync(join(pty, 'current-pty'), '1.2.3\n')
+    // The hook's PowerShell under codex.exe (9001), each started after its parent.
+    const shell = ['powershell.exe', '-NoProfile', '-Command', '& x']
+    const rows = [
+      { pid: process.pid, parentPid: 9001, executable: shell[0], startMarker: 'w:2', args: shell.join(' '), nativeArgv: shell },
+      { pid: 9001, parentPid: 9002, executable: 'codex.exe', startMarker: 'w:1', args: 'codex.exe', nativeArgv: ['codex.exe'] },
+    ]
+    writeExecutable(join(pty, '1.2.3', 'harness-pty.exe'), `#!/bin/sh\nprintf '%s\\n' '${JSON.stringify({ rows })}'\n`)
+    expect(await onWindows({ cwd: project, env: { HOME: home, HARNESS_PTY_BIN: '', ADAPTER_RUNTIME_DIR: 'rt' } })).toEqual([
+      { url: '/api/hook/turn-stop', body: expect.objectContaining({ callerPid: 9001 }) },
+    ])
+  })
+
   it('on Windows a helper that fails names the hook\'s parent', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'adapter-hook-caller-'))
     tmpDirs.push(dir)
