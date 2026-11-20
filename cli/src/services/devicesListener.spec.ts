@@ -1369,7 +1369,7 @@ describe.skipIf(process.platform === 'win32')('the devices listener', () => {
       symlinkSync(elsewhere, join(dataDir, DEVICES_TOKEN_FILE))
       const { path, lines, listener } = await openPipe({ front: frontHandler(() => {}) }, { dataDir })
       expect(listener).toBeNull()
-      expect(lines).toEqual(['[devices] listener not opened · token'])
+      expect(lines).toEqual(['[devices] listener not opened · token · Error'])
       expect(existsSync(path)).toBe(false)
       expect(existsSync(devicesRecordPath(dataDir))).toBe(false)
     })
@@ -1379,7 +1379,7 @@ describe.skipIf(process.platform === 'win32')('the devices listener', () => {
       mkdirSync(devicesRecordPath(dataDir))
       const first = await openPipe({ front: frontHandler(() => {}) }, { dataDir })
       expect(first.listener).toBeNull()
-      expect(first.lines).toEqual(['[devices] listener not opened · record'])
+      expect(first.lines).toEqual(['[devices] listener not opened · record · EISDIR'])
 
       rmSync(devicesRecordPath(dataDir), { recursive: true })
       const fronts: string[] = []

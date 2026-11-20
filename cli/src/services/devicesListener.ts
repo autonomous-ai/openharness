@@ -29,6 +29,7 @@ import { lstatSync, type Stats } from 'node:fs'
 import { dirname } from 'node:path'
 import { DEVICES_TOKEN_FILE, removeDevicesRecord, writeDevicesRecord } from '../devices/listenerPipe.js'
 import { listenLocalSocket, type LocalSocketServer } from '../lib/localSocket.js'
+import { errorKind } from '../lib/log.js'
 import { ensureDaemonToken } from '../lib/windows/pipeAuth.js'
 import type { DialAgent } from '../cable/cableSession.js'
 import { APP_IDS } from '../cable/hosts/hostDetect.js'
@@ -150,8 +151,8 @@ export async function openDevicesListener(
     // The folder check on Windows is the daemon token's own: inside the profile, and no link (lib/secureState.ts).
     try {
       token = ensureDaemonToken(pipe.dataDir, DEVICES_TOKEN_FILE)
-    } catch {
-      log('[devices] listener not opened · token')
+    } catch (error) {
+      log(`[devices] listener not opened · token · ${errorKind(error)}`)
       return null
     }
   } else {
@@ -381,9 +382,9 @@ export async function openDevicesListener(
     // Clients find the pipe only by its record: a pipe nobody can find is not open.
     try {
       writeDevicesRecord(pipe.dataDir, { pipe: pipe.path, pid: process.pid })
-    } catch {
+    } catch (error) {
       await listening.close()
-      log('[devices] listener not opened · record')
+      log(`[devices] listener not opened · record · ${errorKind(error)}`)
       return null
     }
   }
