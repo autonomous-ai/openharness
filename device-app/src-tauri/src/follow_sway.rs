@@ -6,10 +6,10 @@
 use crate::follow::{AxTrust, CHATGPT_PROGRAM, ChatgptWindow, FollowSwitch, Heard, program_installed, runs_program};
 use crate::front_sway::{GET_TREE, SUBSCRIBE, WINDOW_EVENT, message, pid, read_message};
 use serde_json::Value;
-use std::io::{Read, Write};
+use std::io::{self, Read, Write};
 use std::net::Shutdown;
 use std::os::unix::net::UnixStream;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 /// The sway door: the focused ChatGPT window's title, and Harness's own switch for the permission.
@@ -29,7 +29,8 @@ impl ChatgptWindow for SwayFollow {
     }
 
     fn observe(&self, heard: Box<dyn Fn(Heard) + Send + Sync>) -> Option<Box<dyn Send>> {
-        observe_with(|pid| runs_program(Path::new("/proc"), pid, Path::new(CHATGPT_PROGRAM)), heard)
+        let chatgpt = |pid| runs_program(Path::new("/proc"), pid, Path::new(CHATGPT_PROGRAM));
+        Some(observe_with(std::env::var_os("SWAYSOCK").map(PathBuf::from), chatgpt, heard))
     }
 }
 
@@ -49,17 +50,14 @@ impl AxTrust for SwayFollow {
     }
 }
 
-/// Observes on a new connection to `$SWAYSOCK`, `chatgpt` telling ChatGPT's process by its pid. No socket is
-/// NoObserver, as an observer not made.
+/// Observes on a new connection to `socket`, sway's `$SWAYSOCK`, `chatgpt` telling ChatGPT's process by its pid. No
+/// socket, or one that cannot be connected to, is NoObserver, as an observer not made.
 pub fn observe_with(
+    socket: Option<PathBuf>,
     chatgpt: impl Fn(u32) -> bool + Send + 'static,
     heard: Box<dyn Fn(Heard) + Send + Sync>,
-) -> Option<Box<dyn Send>> {
-    let Some(stream) = std::env::var_os("SWAYSOCK").and_then(|socket| UnixStream::connect(socket).ok()) else {
-        heard(Heard::NoObserver);
-        return Some(Box::new(()));
-    };
-    Some(observe_stream(stream, chatgpt, heard))
+) -> Box<dyn Send> {
+    observe_on(move || UnixStream::connect(socket.ok_or(io::ErrorKind::NotFound)?), chatgpt, heard)
 }
 
 /// An observation: dropped, it shuts its connection down, which wakes its thread out of the read it waits in.
@@ -71,12 +69,17 @@ impl Drop for Observation {
     }
 }
 
-/// `listen` on a thread of its own until the handle is dropped.
-pub fn observe_stream(
-    stream: UnixStream,
+/// `listen` on the connection `connect` makes, on a thread of its own, until the handle is dropped. A failed connect
+/// is NoObserver.
+pub fn observe_on(
+    connect: impl FnOnce() -> io::Result<UnixStream> + Send + 'static,
     chatgpt: impl Fn(u32) -> bool + Send + 'static,
     heard: Box<dyn Fn(Heard) + Send + Sync>,
 ) -> Box<dyn Send> {
+    let Ok(stream) = connect() else {
+        heard(Heard::NoObserver);
+        return Box::new(());
+    };
     let heard: Arc<dyn Fn(Heard) + Send + Sync> = Arc::from(heard);
     let told = Arc::clone(&heard);
     let observed = stream.try_clone().and_then(|ends| {
@@ -364,7 +367,7 @@ mod tests {
         let (ours, mut sway) = UnixStream::pair().unwrap();
         sway.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
         let (tell, told) = mpsc::channel();
-        let observation = observe_stream(ours, chatgpt, Box::new(move |said| tell.send(said).unwrap()));
+        let observation = observe_on(move || Ok(ours), chatgpt, Box::new(move |said| tell.send(said).unwrap()));
         subscribed(&mut sway);
         send(&mut sway, GET_TREE, &tree(&window(CHATGPT_PID, "Fix login", true)));
         assert_eq!(told.recv_timeout(Duration::from_secs(5)), Ok(title("Fix login")));
@@ -373,8 +376,20 @@ mod tests {
         assert_eq!(told.recv_timeout(Duration::from_secs(5)), Err(mpsc::RecvTimeoutError::Disconnected));
     }
 
+    #[test]
+    fn no_sway_is_no_observer_once() {
+        let empty = tempfile::tempdir().unwrap();
+        for socket in [None, Some(empty.path().join("sway-ipc.sock"))] {
+            let (tell, told) = mpsc::channel();
+            let _observation = observe_with(socket, chatgpt, Box::new(move |said| tell.send(said).unwrap()));
+            assert_eq!(told.recv_timeout(Duration::from_secs(5)), Ok(Heard::NoObserver));
+            // The callback is let go after it: told once.
+            assert_eq!(told.recv_timeout(Duration::from_secs(5)), Err(mpsc::RecvTimeoutError::Disconnected));
+        }
+    }
+
     /// Under a running sway (`SWAYSOCK` set) with foot installed: foot's window, retitled by OSC 2, is heard each time,
-    /// in order. Not gated to Linux, so every platform's build compiles it.
+    /// in order. Not gated to Linux, so a Mac's test build compiles it too.
     #[test]
     #[ignore = "needs a running sway and foot"]
     fn follow_sway_live() {
@@ -390,8 +405,9 @@ mod tests {
             .unwrap();
         let foot_pid = foot.id();
         let (tell, told) = mpsc::channel();
+        let socket = std::env::var_os("SWAYSOCK").map(PathBuf::from);
         let observation =
-            observe_with(move |pid| pid == foot_pid, Box::new(move |said| tell.send(said).unwrap())).unwrap();
+            observe_with(socket, move |pid| pid == foot_pid, Box::new(move |said| tell.send(said).unwrap()));
         // The next title other than `last`; repeats and the empty title before foot is focused are skipped.
         let next = |last: &str| loop {
             match told.recv_timeout(Duration::from_secs(10)).expect("a title from sway") {

@@ -133,27 +133,37 @@ impl Drop for Observation {
     }
 }
 
-/// Follows the Hyprland instance under `runtime_dir` on a thread of its own. No socket there, or no thread, is
-/// NoObserver once.
+/// Follows the Hyprland instance under `runtime_dir`. No socket there is NoObserver once.
 fn observe_instance(
     runtime_dir: Option<&Path>,
     signature: &str,
     chatgpt: impl Fn(u32) -> bool + Send + 'static,
     heard: Box<dyn Fn(Heard) + Send + Sync>,
 ) -> Box<dyn Send> {
+    let Some((events, requests)) = runtime_dir.and_then(|dir| sockets(dir, signature)) else {
+        heard(Heard::NoObserver);
+        return Box::new(());
+    };
+    observe_events(move || UnixStream::connect(events), requests, chatgpt, heard)
+}
+
+/// Follows the events `connect` makes, asking `requests` for the title, on a thread of its own. A failed connect, or no
+/// thread, is NoObserver once.
+fn observe_events(
+    connect: impl FnOnce() -> io::Result<UnixStream> + Send + 'static,
+    requests: PathBuf,
+    chatgpt: impl Fn(u32) -> bool + Send + 'static,
+    heard: Box<dyn Fn(Heard) + Send + Sync>,
+) -> Box<dyn Send> {
     let heard: Arc<dyn Fn(Heard) + Send + Sync> = Arc::from(heard);
     // The events are connected before the first ask, so a change between the two is not missed.
-    let connected = runtime_dir.and_then(|dir| sockets(dir, signature)).and_then(|(events, requests)| {
-        let events = UnixStream::connect(events).ok()?;
-        Some((events.try_clone().ok()?, events, requests))
-    });
-    let Some((stop, events, requests)) = connected else {
+    let Ok((stop, events)) = connect().and_then(|events| Ok((events.try_clone()?, events))) else {
         heard(Heard::NoObserver);
         return Box::new(());
     };
     let told = heard.clone();
     let spawned = std::thread::Builder::new()
-        .name("follow-hyprland".into())
+        .name("chatgpt-observer".into())
         .spawn(move || follow(events, &|| ask(&requests), &chatgpt, &*told));
     if spawned.is_err() {
         heard(Heard::NoObserver);
