@@ -131,7 +131,7 @@ async function device(argv: string[], deps: Partial<DeviceDeps> = {}) {
     codexHome: folder(), codex: () => true, env: {}, cwd: '/',
     vscode: () => { throw new Error('only the vscode words ask for VS Code') },
     orca: () => { throw new Error('only orca status, enable and disable ask for Orca') },
-    write: async () => { throw new Error('only claude inbox writes its lines') },
+    write: async () => { throw new Error('only claude inbox and attach write their lines') },
     out: (line) => { out.push(line) }, err: (line) => { err.push(line) },
     ...deps,
   })
@@ -402,6 +402,59 @@ describe('harness device claude inbox', () => {
 
   it('is not in DEVICE_USAGE', () => {
     expect(DEVICE_USAGE).not.toMatch(/inbox/)
+  })
+})
+
+describe('harness device claude attach', () => {
+  const SESSION = '0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d'
+  /** The command run as the mod runs it: its one line, and each message `tell` was handed, with its data folder. */
+  async function attach(id: string, options: { platform?: NodeJS.Platform; took?: boolean; dataDir?: string } = {}) {
+    const written: string[] = []
+    const told: Array<{ dataDir: string; message: unknown }> = []
+    const ran = await device(['claude', 'attach', id], {
+      platform: options.platform ?? 'win32', ...(options.dataDir ? { dataDir: options.dataDir } : {}),
+      write: async (line) => { written.push(line); return true },
+      tell: async (dataDir, message) => { told.push({ dataDir, message }); return options.took ?? true },
+    })
+    return { ...ran, written, told }
+  }
+
+  it('tells the devices the Claude app shows the session', async () => {
+    const dataDir = folder()
+    expect(await attach(SESSION, { dataDir })).toEqual({
+      code: 0, out: [], err: [], written: ['{"sent":true}'], told: [{ dataDir, message: { type: 'attach', sessionId: SESSION } }],
+    })
+  })
+
+  it('says not sent when the devices did not take it', async () => {
+    const ran = await attach(SESSION, { took: false })
+    expect(ran).toMatchObject({ code: 0, out: [], err: [], written: ['{"sent":false}'] })
+    expect(ran.told).toHaveLength(1)
+  })
+
+  it('sends nothing while the plugin is off', async () => {
+    pluginOn(false)
+    expect(await attach(SESSION)).toEqual({ code: 0, out: [], err: [], written: ['{"sent":false}'], told: [] })
+  })
+
+  it('sends nothing once disable removed Claude Code', async () => {
+    const dataDir = folder()
+    writeRemoved(dataDir, 'claude', true)
+    expect(await attach(SESSION, { dataDir })).toEqual({ code: 0, out: [], err: [], written: ['{"sent":false}'], told: [] })
+  })
+
+  it.each([SESSION.toUpperCase(), 'not-a-session', ''])('sends nothing for the id %j', async (id) => {
+    expect(await attach(id)).toEqual({ code: 0, out: [], err: [], written: ['{"sent":false}'], told: [] })
+  })
+
+  it('tells them the same way on macOS', async () => {
+    const ran = await attach(SESSION, { platform: 'darwin' })
+    expect(ran).toMatchObject({ code: 0, out: [], err: [], written: ['{"sent":true}'] })
+    expect(ran.told.map((told) => told.message)).toEqual([{ type: 'attach', sessionId: SESSION }])
+  })
+
+  it('is not in DEVICE_USAGE', () => {
+    expect(DEVICE_USAGE).not.toMatch(/attach/)
   })
 })
 
