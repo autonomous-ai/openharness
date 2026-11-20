@@ -8,7 +8,7 @@
  */
 import { closeSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync, constants, existsSync, chmodSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { join, type PlatformPath } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { homePath } from '../../config/envFields.js'
 import { harnessPath } from '../../config/harnessHome.js'
@@ -64,9 +64,10 @@ export interface Client {
   registered_at: number
 }
 
-export function connectorsDir(env: NodeJS.ProcessEnv = process.env): string {
+/** By [p] and [platform], the host's unless given: forbiddenDirs builds another platform's paths with them. */
+export function connectorsDir(env: NodeJS.ProcessEnv = process.env, p?: PlatformPath, platform?: NodeJS.Platform): string {
   const home = env.HOME || homedir()
-  return homePath(env.HARNESS_CONNECTIONS_DIR ?? '', home) || harnessPath('connections', home)
+  return homePath(env.HARNESS_CONNECTIONS_DIR ?? '', home, p) || harnessPath('connections', home, platform)
 }
 
 /** Harness OS 0.1.2 kept them here, before the CLI did; read once, then the CLI's copy is the one. */

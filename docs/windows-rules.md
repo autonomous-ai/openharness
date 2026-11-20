@@ -230,6 +230,10 @@ Claude Code's plugins on Windows (Claude Code 2.1.328 and 2.1.329, VM, 2026-11-2
   the Unix Node 22 readiness fixture then checked for a Windows terminal host and failed on both Windows architectures.
   `desktop/test/environment_provisioner_test.dart` sets all three; the Windows fixture does the same in
   `environment_provisioner_windows_test.dart`.
+- A function given another platform's path module passes it to every path helper it calls. `homePath` read with the
+  host's own, so on both Windows architectures `forbiddenDirs`' posix cases fenced `/tmp/c` as `C:\tmp\c` (run
+  44827687986). Test: the posix case of `cli/src/config/envFields.win32.spec.ts`, under Windows' `node:path` on any
+  host.
 - Test in the person's session (session 1) and in the signed build. Windows behaves differently in session 0 and for an
   unsigned file.
 - Smart App Control blocks a local `flutter build windows` (Bad Image on `flutter_windows.dll`). To show a Dart-only

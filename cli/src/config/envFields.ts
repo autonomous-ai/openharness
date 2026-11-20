@@ -9,7 +9,8 @@
  * every other before the process exits.
  */
 import { homedir } from 'node:os'
-import { isAbsolute, resolve, sep } from 'node:path'
+import * as platformPath from 'node:path'
+import type { PlatformPath } from 'node:path'
 
 /** Why a variable's value cannot be used; collected per variable, as zod's `fieldErrors` were. */
 export class EnvIssue extends Error {}
@@ -57,10 +58,12 @@ export const url = (accept: (url: URL) => boolean): EnvField<string | undefined>
 /** An absolute value exactly as written: the daemon's socket folder is a hash of the data folder's text
  *  (lib/localSocket.ts), and Desktop and the Store's clients keep it as given. Any other is resolved against the home
  *  (the folder enterHome enters), never the current folder or drive: a relative one is under the home, and on Windows a
- *  root-relative one (`\data`) or a drive-relative one (`C:data`) is on the home's drive. '' stays ''. */
-export function homePath(value: string, home: string = homedir()): string {
+ *  root-relative one (`\data`) or a drive-relative one (`C:data`) is on the home's drive. '' stays ''. Read by [p], the
+ *  path module of a caller that builds another platform's paths: by the host's own, forbiddenDirs' posix '/tmp/c' was
+ *  'C:\tmp\c' on both Windows runners (windows.yml run 44827687986). */
+export function homePath(value: string, home: string = homedir(), p: PlatformPath = platformPath): string {
   if (!value) return value
-  return isAbsolute(value) && !(sep === '\\' && /^[\\/](?![\\/])/.test(value)) ? value : resolve(home, value)
+  return p.isAbsolute(value) && !(p.sep === '\\' && /^[\\/](?![\\/])/.test(value)) ? value : p.resolve(home, value)
 }
 
 /** A Harness folder or file override: unset or '' → [fallback], so no override can make the home itself the folder;
