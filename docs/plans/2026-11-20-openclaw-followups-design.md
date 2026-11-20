@@ -51,11 +51,12 @@ each red on `main`.
    the slow-device box of #4499 every logged launch, on `main` and on its branch, printed it 0.5-0.7 s after
    `create pane open`; the launch was then confirmed by discovery's pass 17-28 s later (`[launch] … ready → none ·
    register openclaw`) instead of by the new-pane watcher. The line is the watcher's catch-all (`core/agents/newPane.ts`
-   `watchNewPane`): something in its loop threw and ended the watch. The likely cause, to confirm first: OpenClaw's
-   launcher (`openclaw.mjs`) starts the TUI as a child process (`runRespawnedChild`, its compile-cache and Node-host
-   respawns), so the process the watcher found has changed when `confirmLaunch`'s `refresh` reads the pane again, which
-   throws `IdentityReadUnavailable` ("the new pane changed before readiness publication"). The log line now names the
-   error kind (`errorKind`), which the reproduction did not have.
+   `watchNewPane`): something in its loop threw and ended the watch. The cause, confirmed on a real OpenClaw 2026.11.2
+   on this Mac (Task 14; 4 of 9 launches, 4 of 4 with the Mac slowed): the TUI starts as `node …/openclaw tui` and
+   about 0.1 s later names itself (`process.title = "openclaw"`, `dist/entry.js`), same pid and start time. The watcher
+   found it as `node`; `confirmLaunch`'s `refresh` then read `openclaw` and threw `IdentityReadUnavailable` ("the new
+   pane changed before readiness publication"). The guess written first (the launcher starting the TUI as a child)
+   does not fail: there the launcher, which keeps its name, is confirmed, by the watcher and by discovery alike.
 7. **A daemon restart between typing the first task and its confirmation loses it.** `takeFirstTask`
    (`lib/registry.ts`) removes `firstTask` from the row durably before the paste; from then on "typed, not yet
    confirmed" lives only in memory (`lib/sessionInput.ts` controller, `bind.ts` `firstTaskClock`). After a restart in
