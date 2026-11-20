@@ -210,6 +210,7 @@ NOT_READS = {
        for source in ("cli/e2e/harness/realBackend.ts", "cli/scripts/box-claim-e2e.ts", "cli/scripts/local-stack-peer.ts",
                       "cli/scripts/remote-viewers-stack.ts", "cli/scripts/share-harness-e2e.ts")},
     "cli/src/engines/__fixtures__/other-runtime.golden.json": ("test data: a model name", {"provider/"}),
+    "cli/src/lib/connectors/call.spec.ts": ("test data: files in a temporary home", {"docs/"}),
     "cli/src/lib/sessionSearch/turns.spec.ts": ("test data: a tool call's file path", {"desktop/"}),
     "cli/src/lib/handoffChangedFiles.spec.ts": ("test data: changed file names", {"docs/"}),
     "cli/src/lib/opencodeOneShot.spec.ts": ("test data: a model name", {"provider/"}),
@@ -226,6 +227,7 @@ NOT_READS = {
     "desktop/test/community_publish_test.dart": ("test data: a file in a temporary folder", {"docs/"}),
     "desktop/test/runtime_model_name_test.dart": ("test data: a model name", {"provider/"}),
     "mobile/lib/demo/sample_scripts.dart": ("demo transcript text", {"tests/"}),
+    "mobile/test/runtime_model_name_test.dart": ("test data: a model name", {"provider/"}),
     "os/tests/build-update-fixture.py": ("the CLI bundle a hand-run build copies from its work folder", {"cli/"}),
     "tui/src/runtime_model.rs": ("test data: a model name", {"provider/"}),
     # tui-test runs cargo test only (tui/tests/ holds no Rust tests); these read build output and installed packages.
