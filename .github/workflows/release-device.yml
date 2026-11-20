@@ -8,10 +8,12 @@ run-name: Harness Device ${{ inputs.publish && 'release' || 'candidate' }} ${{ i
 # updater secrets, and `build-linux` the updater key, only in the steps after `Compile`, on the same runner (code that
 # means harm could leave something for a later step). Windows compiles in `build-windows`, with no secret and no
 # identity, and is signed in `sign-windows`, which compiles and installs nothing: the Tauri CLI it runs comes from
-# `tauri-cli-windows`, where no app code runs, and the Windows sums publish checks are taken there too. Only
-# `sign-windows` and `publish` may mint an OIDC token, and neither runs the build's code. Which credential each token
-# gets is the identity providers' to decide: Azure's federated credential trusts the `release` environment, which only
-# `sign-windows` is in; GCP's workload identity provider must refuse that environment's subject.
+# `tauri-cli-windows`, where no app code runs, and the Windows sums publish checks are taken there too. A job that runs
+# the build's code can still replace another job's artifact, so the CLI's sha256 and the sums' reach the jobs that take
+# them as job outputs, which only the job that made them can set. Only `sign-windows` and `publish` may mint an OIDC
+# token, and neither runs the build's code. Which credential each token gets is the identity providers' to decide:
+# Azure's federated credential trusts the `release` environment, which only `sign-windows` is in; GCP's workload
+# identity provider must refuse that environment's subject.
 
 on:
   workflow_dispatch:
@@ -209,6 +211,8 @@ jobs:
     runs-on: windows-latest
     # The Tauri CLI's install takes about 10 minutes on Windows.
     timeout-minutes: 30
+    outputs:
+      sha256: ${{ steps.take.outputs.sha256 }}
     defaults:
       run:
         shell: bash
@@ -223,12 +227,16 @@ jobs:
       - name: Install the Tauri CLI
         run: bash device-app/scripts/release-setup.sh tauri-cli
 
-      - name: Take the Tauri CLI
+      # Its sha256 goes on as this job's output: sign-windows runs the CLI only if the artifact still holds this one.
+      - id: take
+        name: Take the Tauri CLI
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           New-Item -ItemType Directory -Path tauri | Out-Null
           Copy-Item -LiteralPath (Get-Command cargo-tauri).Source -Destination tauri
+          $sum = (Get-FileHash -Algorithm SHA256 -LiteralPath tauri/cargo-tauri.exe).Hash.ToLowerInvariant()
+          Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "sha256=$sum"
 
       - uses: actions/upload-artifact@v4
         with:
@@ -308,6 +316,8 @@ jobs:
     permissions:
       contents: read
       id-token: write
+    outputs:
+      sums: ${{ steps.sums.outputs.sha256 }}
     env:
       VERSION: ${{ needs.version.outputs.version }}
     defaults:
@@ -333,11 +343,21 @@ jobs:
           name: tauri-cli-windows
           path: tauri
 
-      # Each exe goes in a folder of its own: they share a name, and the signing action signs every unsigned program
-      # under the folder it is given.
+      # The CLI's folder goes on PATH only when it holds tauri-cli-windows's CLI alone: any other program there would
+      # run in place of one the steps below name. Each exe goes in a folder of its own: they share a name, and the
+      # signing action signs every unsigned program under the folder it is given.
       - name: Take the Tauri CLI and the exes
+        env:
+          TAURI_CLI_SHA256: ${{ needs.tauri-cli-windows.outputs.sha256 }}
         run: |
           set -euo pipefail
+          # Only the hash: Git Bash's sha256sum marks its input binary, "<hash> *-".
+          sum="$(sha256sum <tauri/cargo-tauri.exe)"
+          if [[ "$(ls -A tauri)" != cargo-tauri.exe || -z "$TAURI_CLI_SHA256" ||
+            "${sum%% *}" != "$TAURI_CLI_SHA256" ]]; then
+            echo "::error::The tauri-cli-windows artifact is not the Tauri CLI that job made"
+            exit 1
+          fi
           mkdir sign
           cygpath -w "$PWD/tauri" >>"$GITHUB_PATH"
           for arch in x64 arm64; do
@@ -391,10 +411,15 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: bash device-app/scripts/release-build.sh sign-update "$VERSION" out
 
-      # Here, as the files are made: `publish` refuses files that differ from these. Windows runners have python, not
-      # python3.
-      - name: Record the checksums
-        run: python device-app/scripts/device-manifest.py sums --dir out --part windows --out out/sums.json
+      # Here, as the files are made: `publish` refuses files that differ from these, and sums whose sha256 is not this
+      # job's output. Windows runners have python, not python3.
+      - id: sums
+        name: Record the checksums
+        run: |
+          set -euo pipefail
+          python device-app/scripts/device-manifest.py sums --dir out --part windows --out out/sums.json
+          sum="$(sha256sum <out/sums.json)"
+          echo "sha256=${sum%% *}" >>"$GITHUB_OUTPUT"
 
       - uses: actions/upload-artifact@v4
         with:
@@ -513,7 +538,7 @@ jobs:
           if-no-files-found: error
 
   publish:
-    needs: [version, build, check-windows, build-linux]
+    needs: [version, build, sign-windows, check-windows, build-linux]
     # With macos only the macOS build is waited for; with all every build must pass, so the manifest never names a
     # platform whose build failed. !cancelled(), because the Windows and Linux jobs are skipped for macos.
     if: >-
@@ -527,6 +552,7 @@ jobs:
     env:
       VERSION: ${{ needs.version.outputs.version }}
       PLATFORMS: ${{ inputs.platforms }}
+      WINDOWS_SUMS: ${{ needs.sign-windows.outputs.sums }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -554,6 +580,12 @@ jobs:
             folder="parts/harness-device-$VERSION"
             if [[ "$part" != macos ]]; then
               folder+="-$part"
+            fi
+            # A job that ran the build's code could have replaced sign-windows's artifact: its sums must be the ones
+            # that job's output names.
+            if [[ "$part" == windows && "$(sha256sum <"$folder/sums.json")" != "$WINDOWS_SUMS  -" ]]; then
+              echo "::error::The Windows artifact's sums are not the ones sign-windows recorded"
+              exit 1
             fi
             python3 device-app/scripts/device-manifest.py sums --dir "$folder" --part "$part" --check "$folder/sums.json"
             rm "$folder/sums.json"

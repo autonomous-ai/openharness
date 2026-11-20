@@ -87,10 +87,12 @@ The first Windows and Linux release:
   its signature; then the installer is signed; then the update signature, last, over the bytes that ship. This job
   runs no build code: the Tauri CLI comes from `tauri-cli-windows`, which checks out no app code, so a crate's build
   script or an npm package cannot replace the program that runs beside the signing identity and the updater key. The
-  sums `publish` checks are recorded here too, as the files are made. NSIS's uninstaller and plugin DLLs, which the
-  installer writes to disk, stay unsigned: Tauri signs them only through a sign command it runs in the middle of the
-  bundle, and the signing action signs files between steps. Whether Smart App Control lets them run is checked on a
-  real PC before the first Windows release.
+  sums `publish` checks are recorded here too, as the files are made. A job that runs build code could still replace
+  another job's artifact, so the CLI's sha256 and the sums' travel as job outputs, which only the job that made them
+  can set: `sign-windows` runs the CLI, and `publish` takes the Windows sums, only when they match. NSIS's uninstaller
+  and plugin DLLs, which the installer writes to disk, stay unsigned: Tauri signs them only through a sign command it
+  runs in the middle of the bundle, and the signing action signs files between steps. Whether Smart App Control lets
+  them run is checked on a real PC before the first Windows release.
 - **Each AppImage builds on its own arch**, on the oldest Ubuntu the desktop app supports: an AppImage carries the
   libraries of the machine that bundled it.
 - **Two notarizations.** Tauri notarizes and staples the app; it signs the dmg but does not notarize it, so the

@@ -136,6 +136,39 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("actions/download-artifact@", steps(job)[self.step(job, "name: tauri-cli-windows")])
         self.assertIn("cygpath -w \"$PWD/tauri\" >>\"$GITHUB_PATH\"", steps(job)[self.step(job, "GITHUB_PATH")])
 
+    def test_the_signing_job_runs_the_tauri_cli_only_as_its_job_made_it(self):
+        # A job that runs the build's code can replace another job's artifact; it cannot set another job's outputs.
+        made = self.job("tauri-cli-windows")
+        self.assertIn("    outputs:\n      sha256: ${{ steps.take.outputs.sha256 }}\n", header(made))
+        take = steps(made)[self.step(made, "Copy-Item")]
+        self.assertIn("id: take\n", take)
+        self.assertLess(take.index("Copy-Item"), take.index("Get-FileHash -Algorithm SHA256 -LiteralPath tauri/"))
+        self.assertIn('Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "sha256=$sum"', take)
+        job = self.job("sign-windows")
+        path = steps(job)[self.step(job, "GITHUB_PATH")]
+        self.assertIn("TAURI_CLI_SHA256: ${{ needs.tauri-cli-windows.outputs.sha256 }}\n", path)
+        # The folder holds that CLI alone, checked before it goes on PATH: any other program there would run in place
+        # of one a later step names.
+        for text in ('"$(ls -A tauri)" != cargo-tauri.exe', '-z "$TAURI_CLI_SHA256"',
+                     '"${sum%% *}" != "$TAURI_CLI_SHA256"'):
+            with self.subTest(text=text):
+                self.assertLess(path.index(text), path.index("exit 1"))
+        self.assertLess(path.index("exit 1"), path.index("GITHUB_PATH"))
+
+    def test_publish_takes_the_windows_sums_sign_windows_recorded(self):
+        job = self.job("sign-windows")
+        self.assertIn("    outputs:\n      sums: ${{ steps.sums.outputs.sha256 }}\n", header(job))
+        sums = steps(job)[self.step(job, "device-manifest.py sums")]
+        self.assertIn("id: sums\n", sums)
+        self.assertLess(sums.index("device-manifest.py sums"), sums.index('sha256sum <out/sums.json'))
+        self.assertIn('echo "sha256=${sum%% *}" >>"$GITHUB_OUTPUT"', sums)
+        publish = self.job("publish")
+        self.assertIn("      WINDOWS_SUMS: ${{ needs.sign-windows.outputs.sums }}", header(publish))
+        check = steps(publish)[self.step(publish, '--part "$part" --check')]
+        compare = check.index('"$(sha256sum <"$folder/sums.json")" != "$WINDOWS_SUMS  -"')
+        self.assertLess(compare, check.index("exit 1"))
+        self.assertLess(check.index("exit 1"), check.index("--check"))
+
     def test_only_sign_update_holds_the_updater_key_on_windows(self):
         holders = []
         for name in WINDOWS_JOBS:
@@ -220,7 +253,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
 
     def test_publish_checks_each_part_then_passes_the_platforms(self):
         job = self.job("publish")
-        self.assertRegex(job, r"(?m)^    needs: \[version, build, check-windows, build-linux\]$")
+        self.assertRegex(job, r"(?m)^    needs: \[version, build, sign-windows, check-windows, build-linux\]$")
         condition = re.search(r"(?ms)^    if: (.+?)\n    \S", job).group(1)
         for text in ("!cancelled()", "inputs.publish", "needs.build.result == 'success'", "inputs.platforms == 'macos'",
                      "needs.check-windows.result == 'success'", "needs.build-linux.result == 'success'"):
