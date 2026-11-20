@@ -7,7 +7,7 @@
  */
 import { closeSync, fstatSync, openSync, readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
-import { pidAlive, recordedProcessDead, type HostLiveness } from '../lib/processProof.js'
+import { recordedProcessDead, type HostLiveness } from '../lib/processProof.js'
 import { atomicWriteFile } from '../lib/secureState.js'
 import { isPipePath, readDaemonToken } from '../lib/windows/pipeAuth.js'
 import type { PipeTarget } from '../lib/windows/pipeClient.js'
@@ -82,11 +82,26 @@ export function removeDevicesRecord(dataDir: string, pipe: string): void {
 export const PROOF_MAX_AGE_MS = 60_000
 
 /**
- * The daemon pipe's liveness (lib/windows/daemonPipe.ts), copied because that file is the core's and keeps its own.
- * The table is loaded only when asked, because it brings the pty host's launcher.
+ * Whether this account's process [pid] runs. The devices and the daemon are this account's, so EPERM is another
+ * account's process, one that took the pid since they exited and could have made a pipe of its name (processProof.ts
+ * `pidAlive` counts it alive): not theirs. The rule lib/localTransport.ts `daemonPipeNow` follows.
+ */
+function ownProcessRuns(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * The daemon pipe's liveness (lib/windows/daemonPipe.ts), copied because that file is the core's and keeps its own,
+ * with this account's own processes alone alive. The table is loaded only when asked, because it brings the pty host's
+ * launcher.
  */
 const WINDOWS_LIVENESS: HostLiveness = {
-  alive: pidAlive,
+  alive: ownProcessRuns,
   rows: async () => (await import('../lib/windows/processTable.js')).windowsProcessRows(null),
 }
 
