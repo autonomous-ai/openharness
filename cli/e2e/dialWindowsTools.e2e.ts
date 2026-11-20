@@ -7,7 +7,7 @@ import { execFile } from 'node:child_process'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { CLI_ROOT } from './harness/daemon.js'
-import { besideEnvironment, endedWithin, sealedPath } from './harness/windowsDaemon.js'
+import { besideEnvironment, endedWithin, ownHomes, sealedPath } from './harness/windowsDaemon.js'
 
 const DESK = join(CLI_ROOT, 'scripts', 'windows-dial-e2e', 'desk.mts')
 
@@ -43,6 +43,17 @@ describe('the Windows dial tools', () => {
     expect(Object.entries(env).filter(([, value]) => value?.includes(owner))).toEqual([])
     // What a program needs to start, and to find herdr and the stand-in engines.
     expect(env).toMatchObject({ PATH: account.PATH, SystemRoot: 'C:\\Windows' })
+  })
+
+  // On the VM a desk on the account dropped the caller's CLAUDE_CONFIG_DIR, and its daemon put the dial's plugin and
+  // hooks into the test user's real ~/.claude (2026-11-20).
+  it('a desk on the account passes on the engine homes its caller named, and names none it did not', () => {
+    const owner = join('C:', 'Users', 'Tester')
+    const account = { USERPROFILE: owner, CLAUDE_CONFIG_DIR: join('C:', 'run', 'claude'), CODEX_HOME: join('C:', 'run', 'codex') }
+    expect(ownHomes(owner, account)).toMatchObject({ CLAUDE_CONFIG_DIR: account.CLAUDE_CONFIG_DIR, CODEX_HOME: account.CODEX_HOME })
+    const unnamed = ownHomes(owner, { USERPROFILE: owner })
+    expect(Object.keys(unnamed)).not.toContain('CLAUDE_CONFIG_DIR')
+    expect(Object.keys(unnamed)).not.toContain('CODEX_HOME')
   })
 
   it('a close waits a bounded time for a daemon a forced end did not end, and names its pid', async () => {
