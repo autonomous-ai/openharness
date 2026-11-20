@@ -30,12 +30,9 @@ Future<void> registerAppImageLauncher({
   if (!RuntimePlatform.isLinux && environment == null) return;
   final env = environment ?? RuntimePlatform.environment;
   final appImage = env['APPIMAGE'];
-  final home = env['HOME'];
-  if (appImage == null || appImage.isEmpty || home == null || home.isEmpty) {
-    return;
-  }
+  final dataHome = launcherDataHome(env);
+  if (appImage == null || appImage.isEmpty || dataHome == null) return;
   try {
-    final dataHome = launcherDataHome(env)!;
     final entry = File('$dataHome/applications/harness.desktop');
     if (await entry.exists()) {
       final target = launcherExecTarget(await entry.readAsString());
@@ -89,12 +86,14 @@ Future<void> registerAppImageLauncher({
 }
 
 /// Where launcher entries and their icons live: `XDG_DATA_HOME`, else
-/// `$HOME/.local/share`; null when neither names a folder.
+/// `$HOME/.local/share`; null when neither names a folder. The XDG spec has a
+/// relative path ignored, and an entry under one would land wherever Desktop
+/// was started.
 String? launcherDataHome(Map<String, String> environment) {
   final xdg = environment['XDG_DATA_HOME'];
-  if (xdg != null && xdg.isNotEmpty) return xdg;
+  if (xdg != null && xdg.startsWith('/')) return xdg;
   final home = environment['HOME'];
-  return home == null || home.isEmpty ? null : '$home/.local/share';
+  return home != null && home.startsWith('/') ? '$home/.local/share' : null;
 }
 
 /// The program an entry's `Exec=` line starts, unquoted; null when it has none.

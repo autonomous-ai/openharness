@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
@@ -13,6 +14,12 @@ import 'device_app.dart';
 /// registers nothing itself, so Desktop writes the entry when it installs the
 /// app, as it writes its own (`registerAppImageLauncher`).
 const deviceAppLauncherName = 'harness-device.desktop';
+
+/// The app's window class, as the entry's `StartupWMClass`: a dock then draws
+/// the app's window with the entry's icon. GTK takes it from the binary's
+/// name, which the AppImage starts as `harness-device`
+/// (`tests/fixtures/app-list-entry-vectors.json`).
+const deviceAppWindowClass = 'harness-device';
 
 /// The AppImage's own 128-pixel icon; Tauri names it after the binary.
 const deviceAppIconMember =
@@ -61,9 +68,10 @@ Future<List<int>?> extractDeviceAppIcon(String appImage) async {
   }
 }
 
-/// Writes the entry that starts [appImage], and its icon, unless an entry is
-/// there that is not this one's and starts no file that is gone (a person's
-/// own, which may start a program by name). Never throws: an entry is not
+/// Writes the entry that starts [appImage], and its icon, when
+/// [deviceAppLauncherChange] says to: the one rule the Device app and the
+/// one-line installer follow too. A path holding a control character writes
+/// nothing, as no `Exec=` line can hold it. Never throws: an entry is not
 /// worth failing an install over. The log names no path.
 Future<void> writeDeviceAppLauncher(
   String appImage, {
@@ -75,31 +83,29 @@ Future<void> writeDeviceAppLauncher(
       environment ?? RuntimePlatform.environment,
     );
     if (dataHome == null) return;
-    final entry = _entry(dataHome);
-    if (await entry.exists()) {
-      final target = launcherExecTarget(await entry.readAsString());
-      final gone =
-          target != null &&
-          p.posix.isAbsolute(target) &&
-          !await File(target).exists();
-      if (target != appImage && !gone) return;
+    if (_control.hasMatch(appImage) || _control.hasMatch(dataHome)) {
+      appLog.warn('devices', 'device app: launcher entry not written (path)');
+      return;
     }
-    final iconBytes = await extractIcon(appImage);
+    final entry = _entry(dataHome);
     final icon = _icon(dataHome);
+    final wanted = _entryText(appImage, icon: icon.path);
+    final change = deviceAppLauncherChange(
+      existing: await entry.exists() ? await entry.readAsString() : null,
+      appImage: appImage,
+      wanted: wanted,
+      exists: (path) => File(path).existsSync(),
+    );
+    if (!change) return;
+    final iconBytes = await extractIcon(appImage);
     if (iconBytes != null) {
       await icon.parent.create(recursive: true);
-      await icon.writeAsBytes(iconBytes);
+      await _replace(icon, iconBytes);
     }
     await entry.parent.create(recursive: true);
-    await entry.writeAsString(
-      '[Desktop Entry]\n'
-      'Type=Application\n'
-      'Name=Harness Device\n'
-      'Comment=The app for your Harness device.\n'
-      'Exec=${quoteLauncherExec(appImage)}\n'
-      '${iconBytes == null ? '' : 'Icon=${icon.path}\n'}'
-      'Terminal=false\n'
-      'Categories=Utility;\n',
+    await _replace(
+      entry,
+      utf8.encode(iconBytes == null ? _entryText(appImage) : wanted),
     );
     if (environment == null) {
       try {
@@ -114,6 +120,55 @@ Future<void> writeDeviceAppLauncher(
       'devices',
       'device app: launcher entry failed: ${_message(error)}',
     );
+  }
+}
+
+/// Whether the entry is (re)written, given the one there ([existing], null when
+/// none) and the one this writer would write ([wanted]). An entry whose `Exec=`
+/// starts [appImage] is written again unless it is [wanted] and its icon is
+/// there; one that starts an absolute path no longer on disk is taken over.
+/// Any other (another copy still on disk, a program by name, no `Exec=`) is a
+/// person's or another copy's, and stays.
+@visibleForTesting
+bool deviceAppLauncherChange({
+  String? existing,
+  required String appImage,
+  required String wanted,
+  required bool Function(String path) exists,
+}) {
+  if (existing == null) return true;
+  final target = launcherExecTarget(existing);
+  if (target == null || !p.posix.isAbsolute(target)) return false;
+  if (target != appImage) return !exists(target);
+  if (existing != wanted) return true;
+  final icon = existing
+      .split('\n')
+      .where((line) => line.startsWith('Icon='))
+      .firstOrNull;
+  return icon != null && !exists(icon.substring(5));
+}
+
+String _entryText(String appImage, {String? icon}) =>
+    '[Desktop Entry]\n'
+    'Type=Application\n'
+    'Name=Harness Device\n'
+    'Comment=The app for your Harness device.\n'
+    'Exec=${quoteLauncherExec(appImage)}\n'
+    '${icon == null ? '' : 'Icon=$icon\n'}'
+    'Terminal=false\n'
+    'Categories=Utility;\n'
+    'StartupWMClass=$deviceAppWindowClass\n';
+
+final _control = RegExp(r'[\x00-\x1f\x7f]');
+
+/// Written beside [file] and renamed over it, so a dock never reads half of it.
+Future<void> _replace(File file, List<int> bytes) async {
+  final temp = File('${file.path}.tmp');
+  try {
+    await temp.writeAsBytes(bytes, flush: true);
+    await temp.rename(file.path);
+  } finally {
+    if (await temp.exists()) await temp.delete();
   }
 }
 
