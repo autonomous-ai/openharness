@@ -54,10 +54,10 @@ done
 printf '%s\\n' "$url" >> "$STUB_LOG/requested"
 printf '%s\\0' "$@" >> "$STUB_LOG/curl" && printf '\\n' >> "$STUB_LOG/curl"
 served=release && [ "$url" != "$STUB_MANIFEST_URL" ] || served=manifest
-# A transfer that breaks midway, its first STUB_BREAKS times: some bytes, then curl's status for a partial file.
+# A transfer that breaks, its first STUB_BREAKS times: some bytes, then curl's STUB_BREAK_STATUS.
 broken="$(cat "$STUB_LOG/broken" 2>/dev/null || echo 0)"
 if [ "$STUB_BREAK" = "$served" ] && [ "$broken" -lt "$STUB_BREAKS" ]; then
-  echo "$((broken + 1))" > "$STUB_LOG/broken" && printf 'part of it' > "$out" && exit 18
+  echo "$((broken + 1))" > "$STUB_LOG/broken" && printf 'part of it' > "$out" && exit "$STUB_BREAK_STATUS"
 fi
 # A server that never stops, its size unnamed: curl before 8.4 (Ubuntu 22.04's 7.81) applies no --max-filesize to it.
 [ "$STUB_ENDLESS" != "$served" ] || exec head -c 4194304 /dev/zero > "$out" 2>/dev/null
@@ -107,8 +107,8 @@ interface Options {
   signal?: string;
   /** A signal the first move sends the script once it has moved. */
   mvSignal?: string;
-  /** The download whose transfer breaks midway, and how many times. */
-  breaks?: { download: "manifest" | "release"; times: number };
+  /** The download whose transfer breaks, how many times, and curl's status for it: 18, a partial file, unless named. */
+  breaks?: { download: "manifest" | "release"; times: number; status?: number };
   /** Whether curl writes a file of its own, larger than the download. */
   curlWrites?: boolean;
   /** The download whose server sends without end, never naming its size. */
@@ -155,6 +155,7 @@ function install(os: "Darwin" | "Linux", options: Options = {}) {
     STUB_CURL_WRITES: options.curlWrites ? "1" : "",
     STUB_BREAK: options.breaks?.download ?? "",
     STUB_BREAKS: String(options.breaks?.times ?? 0),
+    STUB_BREAK_STATUS: String(options.breaks?.status ?? 18),
   };
   // exec keeps the pid: the script's own, for the stubs that signal it.
   const result = spawnSync("sh", ["-c", 'export STUB_SCRIPT_PID=$$; exec sh "$0"', installer], {
@@ -364,6 +365,16 @@ describe("desktop-install.sh", { timeout: 20_000 }, () => {
     expect(run.result.stderr).toBe("");
     expect(run.result.status).toBe(0);
     expect(run.requested).toHaveLength(4);
+    expect(run.placed).toBe(os === "Darwin" ? ARCHIVE : APPIMAGE);
+  });
+
+  // curl -f names every HTTP error 22: a CDN's 5xx or 429 is likelier than a 404, which costs a few seconds retried.
+  it.each(["Darwin", "Linux"] as const)("%s downloads the release again when the server answers an HTTP error", (os) => {
+    const run = install(os, { breaks: { download: "release", times: 1, status: 22 } });
+
+    expect(run.result.stderr).toBe("");
+    expect(run.result.status).toBe(0);
+    expect(run.requested).toHaveLength(3);
     expect(run.placed).toBe(os === "Darwin" ? ARCHIVE : APPIMAGE);
   });
 
