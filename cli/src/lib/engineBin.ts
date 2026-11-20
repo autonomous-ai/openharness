@@ -483,11 +483,18 @@ export function agentCommandOwnershipSnapshotAsync(): Promise<AgentCommandOwners
       // read would hold the pass in turn.
       return !read || (!read.skipped && (/[^\x00-\x7f]/.test(command) || read.names.has(command.toLowerCase())))
     }
-    // A Windows launch candidate in a relative folder that no longer resolves has nothing to find.
-    const windowsVisible = (file: string) => { try { return visible(resolve(dirname(file)), basename(file)) } catch { return false } }
+    // A file named by its path (an engine's own path, an install location such as ~/.local/bin/codex) in a folder this
+    // pass skipped is not read either, for the same reason. A Windows launch candidate must also be in its folder's
+    // listing. A file in a relative folder that no longer resolves has nothing to find.
+    const fileVisible = (file: string) => {
+      try {
+        const folder = resolve(dirname(file))
+        return windowsFiles.has(file) ? visible(folder, basename(file)) : !folderReads.get(folder)?.skipped
+      } catch { return false }
+    }
     const byCommand = new Map([...commands].map(command => [command,
       looksLikePath(command)
-        ? (!windowsFiles.has(command) || windowsVisible(command) ? [command] : [])
+        ? (fileVisible(command) ? [command] : [])
         : [...folders].filter(([, folder]) => visible(folder, command)).map(([entry]) => join(entry, command))]))
     const paths = [...new Set([...byCommand.values()].flat())]
     if (paths.length > 32_768) throw engineFailure('ENGINE_LOOKUP_PATH_LIMIT')
