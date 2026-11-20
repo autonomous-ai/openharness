@@ -7,6 +7,7 @@ import { tmpdir } from 'os'
 import { dirname, join } from 'path'
 import { fileURLToPath, pathToFileURL } from 'url'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { APP_BUNDLES } from './cable/hosts/hostDetect.js'
 import { observedTitle } from './cable/hosts/observedTitle.js'
 import { MAX_HINTS, MAX_TITLE, parseObservedHook } from './core/observedHook.js'
 import { ENGINES } from './engines/types.js'
@@ -140,9 +141,9 @@ interface RunHookOpts {
   /** The hook's ancestors on Windows, nearest first, as `procAncestors` is for Linux, listed by a fake `harness-pty`; the
    *  case sets the platform (the pipe's preload, `windowsData`). The first is the hook's real parent; the row at index
    *  n > 0 has pid 9000 + n; each one's parent is the next, and the last one's parent is no row at all, a process gone.
-   *  Each started before its child, unless it names its own start marker. null is a process the host lists but could
-   *  not open: its name alone, with no start marker (pty/src/ps.rs). */
-  windowsAncestors?: Array<{ executable: string; argv: string[]; startMarker?: string } | null>
+   *  Each started before its child, unless it names its own start marker, and has the image path it names, or none.
+   *  null is a process the host lists but could not open: its name alone, with no start marker (pty/src/ps.rs). */
+  windowsAncestors?: Array<{ executable: string; argv: string[]; startMarker?: string; imagePath?: string } | null>
   /** Each run of the fake `harness-pty` (windowsProcessTable's or windowsAncestors') appends a line here. The file is not
    *  made when it never runs. */
   psRunLog?: string
@@ -300,7 +301,8 @@ fs.readFileSync = (path, ...args) => {
       const pidAt = (index: number) => index === 0 ? process.pid : 9000 + index
       fakePtyHost(binDir, { rows: opts.windowsAncestors.map((row, index) => row
         ? { pid: pidAt(index), parentPid: pidAt(index + 1), executable: row.executable,
-            startMarker: row.startMarker ?? `w:${133000000000000100n - BigInt(index)}`, args: row.argv.join(' '), nativeArgv: row.argv }
+            startMarker: row.startMarker ?? `w:${133000000000000100n - BigInt(index)}`, args: row.argv.join(' '), nativeArgv: row.argv,
+            ...(row.imagePath ? { imagePath: row.imagePath } : {}) }
         : { pid: pidAt(index), parentPid: pidAt(index + 1), executable: 'elevated.exe', startMarker: '', args: 'elevated.exe',
             nativeArgv: ['elevated.exe'] }) })
     }
@@ -3447,6 +3449,44 @@ describe('hook notify: a session outside a pane', () => {
       const requests = await onWindows({ env: { ...noHints, VSCODE_PID: '9002', HARNESS_PTY_BIN: helper } }, false)
       expect(requests).toEqual([{ url: '/api/hook/observed', body: expect.objectContaining({
         engine: 'codex', callerPid: 9001, hostHints: { __CFBundleIdentifier: VSCODE } }) }])
+    })
+
+    // The Claude app starts Claude Code with CLAUDE_CODE_ENTRYPOINT=claude-desktop (cable/hosts/record.ts): the hook's
+    // own environment, read before an editor's variables the app may have inherited.
+    it.each<[string, Record<string, string>]>([
+      ['alone', {}],
+      ['beside an editor\'s variables', { VSCODE_GIT_ASKPASS_NODE: CODE_EXE, VSCODE_PID: '9001', ALACRITTY_LOG: LOG }],
+    ])('in the Claude app, its own CLAUDE_CODE_ENTRYPOINT names the app %s, and no table is read', async (_case, env) => {
+      const log = runLog()
+      const app = { CLAUDE_CODE_ENTRYPOINT: 'claude-desktop' }
+      expect(await hints({ windowsAncestors: underCode, psRunLog: log, env: { ...app, ...env } }))
+        .toEqual({ __CFBundleIdentifier: APP_BUNDLES.claude, ...app })
+      expect(existsSync(log)).toBe(false)
+    })
+
+    /** The ChatGPT app's Store package (docs/plans/2026-11-19-dial-windows-vm-notes.md, Task 37 §2). */
+    const PACKAGE = 'C:\\Program Files\\WindowsApps\\OpenAI.Codex_26.1117.3838.0_arm64__2p2nqsd0c76g0'
+    /** Codex in the ChatGPT app: its hook under PowerShell, under the app's own codex.exe (9001), under ChatGPT.exe (9002)
+     *  at [imagePath]. */
+    const inChatGPT = (imagePath?: string) => [powershell, { ...win('codex.exe'), imagePath: `${PACKAGE}\\app\\resources\\codex.exe` },
+      { ...win('ChatGPT.exe'), imagePath }]
+
+    it.each<[string, Record<string, string>, string | undefined]>([
+      ['the app\'s', { __CFBundleIdentifier: APP_BUNDLES.codex }, `${PACKAGE}\\app\\ChatGPT.exe`],
+      ['the beta app\'s', {}, 'C:\\Program Files\\WindowsApps\\OpenAI.CodexBeta_26.1117.3838.0_arm64__2p2nqsd0c76g0\\app\\ChatGPT.exe'],
+      ['one outside a Store package', {}, 'C:\\Users\\u\\Downloads\\OpenAI.Codex_1\\ChatGPT.exe'],
+      ['one the host could not read the path of', {}, undefined],
+    ])('a Codex hook under %s ChatGPT.exe names %j, from the one read of its own chain', async (_case, named, imagePath) => {
+      const log = runLog()
+      const requests = await onWindows({ psRunLog: log, windowsAncestors: inChatGPT(imagePath), env: noHints }, false)
+      expect(requests.map((request) => [request.body.callerPid, request.body.hostHints])).toEqual([[9001, named]])
+      expect(readFileSync(log, 'utf8')).toBe(ownChain)
+    })
+
+    it('a Claude Code hook under the ChatGPT app\'s program reads no table for it', async () => {
+      const log = runLog()
+      expect(await hints({ windowsAncestors: inChatGPT(`${PACKAGE}\\app\\ChatGPT.exe`), psRunLog: log })).toEqual({})
+      expect(existsSync(log)).toBe(false)
     })
 
     it('a Claude Code hook with none of the three names no app and reads no table', async () => {
