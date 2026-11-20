@@ -770,7 +770,8 @@ export class CableSession {
   private agentsPushedAt = -Infinity
   // What the hello NAMED. Each switches on only its own fields; a hello that names none gets the frames it
   // always got. A positive string match, per session (see hello).
-  /** `swarms: 'members-v1'`: `agentIds` and `members` on the swarms items. */
+  /** `swarms: 'members-v1'`: `agentIds` and `members` on the swarms items, and the window's swarms while the view is an
+   *  app's ring (syncSwarmsNow). */
   private swarmMembers = false
   /** `recap: 'long-v1'`: `full` on a summary. */
   private longRecap = false
