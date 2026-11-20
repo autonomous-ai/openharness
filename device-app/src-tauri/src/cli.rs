@@ -1118,7 +1118,10 @@ mod tests {
         let written = folder.path().join("written");
         let (all_written, child_done) = mpsc::channel();
         let mut seen = Vec::new();
-        let output = run_lines(command, WAIT, &mut |line| {
+        // On a clock that stays at the start: the sink's wait would spend a real deadline, and a loaded machine would
+        // then drop lines for the deadline, not for the sink. Each wait for a line is still bounded by WAIT.
+        let start = Instant::now();
+        let output = run_until(command, start + WAIT, &|| start, &mut |line| {
             if seen.is_empty() {
                 // The first line waits for the child to have written them all. On a thread, so a run that never gets
                 // there fails the test instead of hanging it.
