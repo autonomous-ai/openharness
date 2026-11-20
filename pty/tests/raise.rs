@@ -32,6 +32,7 @@ mod windows {
     use std::time::{Duration, Instant};
 
     use windows_sys::Win32::Foundation::HWND;
+    use windows_sys::Win32::System::RemoteDesktop::ProcessIdToSessionId;
     use windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
     use windows_sys::Win32::UI::Shell::{ASSOCF_IS_PROTOCOL, ASSOCSTR_PROGID, AssocQueryStringW};
     use windows_sys::Win32::UI::WindowsAndMessaging::{
@@ -105,8 +106,25 @@ mod windows {
         rx.recv().unwrap()
     }
 
+    /// Whether this process runs in session 0, which since Windows Vista holds services only and
+    /// never a desktop a person sees (session 0 isolation). Over SSH, or under a runner started as
+    /// a service, a test lands there; a signed-in user, at the console, over Remote Desktop or on
+    /// a runner with an interactive logon, has a session of their own, with a desktop.
+    fn in_session_0() -> bool {
+        let mut session = u32::MAX;
+        let found = unsafe { ProcessIdToSessionId(std::process::id(), &mut session) };
+        assert_ne!(found, 0, "{}", std::io::Error::last_os_error());
+        session == 0
+    }
+
+    /// In session 0 `raise` answers `none` for the test's own window, which is right there: no
+    /// person can see it (the VM's notes, Task 26).
     #[test]
     fn a_minimized_window_is_raised_or_refused_and_no_longer_minimized() {
+        if in_session_0() {
+            eprintln!("skipped: session 0 has no desktop a person sees");
+            return;
+        }
         let hwnd = minimized_window() as HWND;
         assert_ne!(unsafe { IsIconic(hwnd) }, 0, "the window did not minimize");
         let answer = word(&["raise", "--pid", &std::process::id().to_string()]);
