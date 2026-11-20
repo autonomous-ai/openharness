@@ -179,9 +179,11 @@ mod tests {
         set(0);
 
         let (told, tells) = mpsc::channel();
-        follow_under(root, "Personalize", move |light| {
+        let now = follow_under(root, "Personalize", move |light| {
             let _ = told.send(light);
         });
+        // Followed, and dark now: the one read of the value before a change.
+        assert_eq!(now, Some(false));
         let wait = Duration::from_secs(10);
         set(1);
         assert_eq!(tells.recv_timeout(wait), Ok(true));
@@ -189,6 +191,8 @@ mod tests {
         set(1);
         set(0);
         assert_eq!(tells.recv_timeout(wait), Ok(false));
+        // A key Windows has not made is not followed, and says so.
+        assert_eq!(follow_under(root, "Missing", |_| {}), None);
         // SAFETY: `root` is open and closed once.
         unsafe { RegCloseKey(root) };
     }
