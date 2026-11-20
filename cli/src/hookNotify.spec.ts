@@ -140,8 +140,9 @@ interface RunHookOpts {
   /** The hook's ancestors on Windows, nearest first, as `procAncestors` is for Linux, listed by a fake `harness-pty`; the
    *  case sets the platform (the pipe's preload, `windowsData`). The first is the hook's real parent; the row at index
    *  n > 0 has pid 9000 + n; each one's parent is the next, and the last one's parent is no row at all, a process gone.
-   *  null is a process the host lists but could not open: its name alone, with no start marker (pty/src/ps.rs). */
-  windowsAncestors?: Array<{ executable: string; argv: string[] } | null>
+   *  Each started before its child, unless it names its own start marker. null is a process the host lists but could
+   *  not open: its name alone, with no start marker (pty/src/ps.rs). */
+  windowsAncestors?: Array<{ executable: string; argv: string[]; startMarker?: string } | null>
   /** Each run of the fake `harness-pty` (windowsProcessTable's or windowsAncestors') appends a line here. The file is not
    *  made when it never runs. */
   psRunLog?: string
@@ -298,8 +299,8 @@ fs.readFileSync = (path, ...args) => {
       // The hook is this process's child; past the last row, the next pid is in no row.
       const pidAt = (index: number) => index === 0 ? process.pid : 9000 + index
       fakePtyHost(binDir, { rows: opts.windowsAncestors.map((row, index) => row
-        ? { pid: pidAt(index), parentPid: pidAt(index + 1), executable: row.executable, startMarker: `w:13300000000000000${index}`,
-            args: row.argv.join(' '), nativeArgv: row.argv }
+        ? { pid: pidAt(index), parentPid: pidAt(index + 1), executable: row.executable,
+            startMarker: row.startMarker ?? `w:${133000000000000100n - BigInt(index)}`, args: row.argv.join(' '), nativeArgv: row.argv }
         : { pid: pidAt(index), parentPid: pidAt(index + 1), executable: 'elevated.exe', startMarker: '', args: 'elevated.exe',
             nativeArgv: ['elevated.exe'] }) })
     }
@@ -3727,6 +3728,9 @@ describe('hook notify: the caller a hook names', () => {
     ['a program that is no shell, whatever its options (node -c): itself', [win('node.exe', '-c', 'x.js'), codexExe], 0],
     ['a process the host could not open: the last one reached', [cmd, null], 1],
     ['a command shell whose parent is gone: the shell itself', [cmd], 0],
+    // Windows reuses pids: the engine is gone, and a process started since holds its pid.
+    ['a command shell whose parent\'s pid a later process took: the shell itself',
+      [cmd, { ...codexExe, startMarker: 'w:133000000000000200' }], 0],
   ])('on Windows a Codex pane hook names, past %s', async (_case, windowsAncestors, named) => {
     expect(await onWindows({ windowsAncestors })).toEqual([
       { url: '/api/hook/turn-stop', body: expect.objectContaining({ callerPid: pidAt(named) }) },
