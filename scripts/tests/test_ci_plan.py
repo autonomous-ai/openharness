@@ -313,11 +313,12 @@ class SelectionTests(unittest.TestCase):
                 self.assertFalse(planner.linux_e2e_file(path))
                 self.assertIn("dial-hosts", planner.select([path])[0])
                 self.assertNotIn("linux-e2e", planner.select([path])[0])
+        # Their adapters run there alone; the harness, the configs and the setup action also run linux-e2e's canary.
         for entry in planner.DIAL_HOST_PATHS:
             path = entry + "x" if entry.endswith("/") else entry
             with self.subTest(path=path):
                 self.assertIn("dial-hosts", planner.select([path])[0])
-                self.assertNotIn("linux-e2e", planner.select([path])[0])
+                self.assertEqual("linux-e2e" in planner.select([path])[0], planner.linux_e2e_canary_path(path))
         # A name that only starts like one, or one in a folder below, is not a dial host's: Vitest's glob stays in e2e/.
         for path in ("cli/e2e/deviceHerdrApp.e2e.ts", "cli/e2e/sub/dialHostKitty.e2e.ts"):
             with self.subTest(path=path):
@@ -339,7 +340,24 @@ class SelectionTests(unittest.TestCase):
         for path in ("cli/e2e/harness/daemon.ts", "cli/src/lib/a.spec.ts", "cli/vitest.e2e.ci.config.ts", "tests/a.e2e.ts"):
             with self.subTest(path=path):
                 self.assertFalse(planner.linux_e2e_file(path))
+        for path in ("cli/src/lib/a.spec.ts", "tests/a.e2e.ts"):
+            with self.subTest(path=path):
                 self.assertNotIn("linux-e2e", planner.select([path])[0])
+
+    def test_what_every_e2e_file_runs_on_runs_linux_e2e(self):
+        # Answer P6: the setup action and its real backend, the harness, Vitest's e2e configs and the timing hints run no
+        # e2e file of their own; linux-e2e runs its canary for them.
+        for path in (".github/actions/cli-e2e-setup/action.yml", "cli/e2e/harness/daemon.ts", "cli/e2e/harness/realBackend.ts",
+                     "cli/vitest.e2e.config.ts", "cli/vitest.e2e.ci.config.ts", "cli/ci-e2e-durations.json",
+                     planner.LINUX_E2E_CANARY):
+            with self.subTest(path=path):
+                self.assertTrue(planner.linux_e2e_canary_path(path))
+                self.assertIn("linux-e2e", planner.select([path])[0])
+        # A real-backend file, which the setup action's backend step serves, and one linux-e2e runs.
+        self.assertTrue(planner.linux_e2e_file(planner.LINUX_E2E_CANARY))
+        for path in ("cli/vitest.config.ts", "cli/e2e/sharedTabs.e2e.ts", "cli/src/lib/a.ts", "cli/package.json"):
+            with self.subTest(path=path):
+                self.assertFalse(planner.linux_e2e_canary_path(path))
 
     def test_the_dial_host_files_are_the_ones_cli_e2e_leaves_out(self):
         root = REPOSITORY
@@ -740,6 +758,28 @@ class GitPlanTests(unittest.TestCase):
         self.assertEqual((plan["e2e"]["linux_shards"], plan["e2e"]["linux_full"]), (1, False))
         self.assertNotIn("linux-e2e", plan["reasons"]["cli/e2e/c.e2e.ts"])
         self.assertLessEqual({"linux-e2e", "linux-e2e-summary"}, set(plan["required_jobs"]))
+
+    def test_a_change_to_what_every_e2e_file_runs_on_runs_the_canary(self):
+        canary = planner.LINUX_E2E_CANARY.removeprefix("cli/")
+        self.write(planner.LINUX_E2E_CANARY)
+        self.write("cli/e2e/harness/old.ts")
+        self.hints({})
+        self.base = self.commit()
+        self.write("cli/e2e/harness/daemon.ts")
+        (self.root / "cli/e2e/harness/old.ts").unlink()  # a deletion counts too: the harness changed
+        self.commit()
+        plan = self.plan()
+        self.assertIn("linux-e2e", plan["reasons"]["cli/e2e/harness/old.ts"])
+        self.assertEqual((plan["e2e"]["linux_files"], plan["e2e"]["linux_shards"]), ([canary], 1))
+        # Beside the PR's own e2e files.
+        self.write("cli/e2e/a.e2e.ts")
+        self.commit()
+        self.assertEqual(self.plan()["e2e"]["linux_files"], ["e2e/a.e2e.ts", canary])
+        # A head without the canary fails the plan, naming it: a PR that deletes it runs it, so it fails there.
+        (self.root / planner.LINUX_E2E_CANARY).unlink()
+        self.commit()
+        with self.assertRaisesRegex(ValueError, re.escape(planner.LINUX_E2E_CANARY)):
+            self.plan()
 
     def test_a_pr_that_only_deletes_an_e2e_file_runs_no_linux_e2e(self):
         self.write("cli/e2e/c.e2e.ts")
