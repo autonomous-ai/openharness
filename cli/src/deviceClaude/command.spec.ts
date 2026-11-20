@@ -488,7 +488,7 @@ describe('the dial skill', () => {
     const cases: Array<[string, string[], Partial<DeviceDeps>]> = [
       ['a failed install', ['claude', 'enable'], { claude: () => failedInstall }],
       ['Claude Code on Windows', ['claude', 'enable'], { platform: 'win32' }],
-      ['Codex on Windows', ['codex', 'enable'], { platform: 'win32' }],
+      ['Codex on FreeBSD', ['codex', 'enable'], { platform: 'freebsd' }],
       ['Codex not installed', ['codex', 'enable'], { codex: () => false }],
     ]
     for (const [what, argv, deps] of cases) {
@@ -952,6 +952,16 @@ describe('harness device codex', () => {
 
   it('enable prints its error on stderr and exits 1', async () => {
     expect(await device(['codex', 'enable'], { codex: () => false })).toEqual({ code: 1, out: [], err: ['Codex is not on this computer.'] })
+  })
+
+  it('on Windows, status says supported and enable writes the skill', async () => {
+    const dataDir = folder()
+    const codexHome = folder()
+    const windows = { platform: 'win32' as const, dataDir, codexHome }
+    expect(await device(['codex', 'status', '--json'], windows))
+      .toEqual({ code: 0, err: [], out: [JSON.stringify({ supported: true, installed: true, enabled: false })] })
+    expect(await device(['codex', 'enable'], windows)).toEqual({ code: 0, out: [], err: [] })
+    expect(readFileSync(skillAt(codexHome), 'utf8')).toBe(DIAL_SKILL)
   })
 
   it('codex with no verb, another verb or an extra word prints the usage and exits 1', async () => {

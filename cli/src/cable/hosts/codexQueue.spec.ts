@@ -2,7 +2,7 @@ import { type ChildProcess, execFile } from 'node:child_process'
 import { once } from 'node:events'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { delimiter, join } from 'node:path'
+import { delimiter, dirname, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import { appCodexCandidates, CODEX_THREAD, codexQueueDeps, createCodexQueue, type CodexQueueDeps, type CodexRunEnd } from './codexQueue.js'
 import { MAX_TEXT } from './orca.js'
@@ -252,7 +252,7 @@ describe('codex queue', () => {
     expect(calls).toHaveLength(5)
   })
 
-  it('can() is whether the binary is there, asked each time, and false on Windows', async () => {
+  it('can() is whether the binary is there, asked each time', () => {
     let found: string | null = null
     const { queue } = recorder({ binary: () => found })
     expect(queue.can(false)).toBe(false)
@@ -260,11 +260,6 @@ describe('codex queue', () => {
     expect(queue.can(false)).toBe(true)
     found = null
     expect(queue.can(false)).toBe(false)
-
-    const windows = recorder({ platform: 'win32' })
-    expect(windows.queue.can(false)).toBe(false)
-    expect(await windows.queue.send(THREAD, 'hi', false)).toEqual({ outcome: 'failed', reason: 'no binary', ran: 'path' })
-    expect(windows.calls).toEqual([])
   })
 
   it('the binary is the Codex Harness launches, looked for again after 30 s', () => {
@@ -412,7 +407,7 @@ describe('codex queue', () => {
   })
 
   // The interactive shell can take its 5 s: a computer whose dial never meets a Codex session never starts it.
-  it('the login shell is read on first use: never at creation, once however often it is asked, never on Windows', async () => {
+  it('the login shell is read on first use: never at creation, once however often it is asked', async () => {
     const readLoginShell = vi.fn()
     const { queue } = recorder({ readLoginShell })
     expect(readLoginShell).not.toHaveBeenCalled()
@@ -428,16 +423,6 @@ describe('codex queue', () => {
     const refused = vi.fn()
     expect(await recorder({ readLoginShell: refused }).queue.send('my session', 'hi', false)).toEqual(REFUSED)
     expect(refused).not.toHaveBeenCalled()
-
-    const windowsRead = vi.fn()
-    const windowsBinary = vi.fn(() => FAKE_CODEX)
-    const windowsApp = vi.fn(() => APP_CODEX)
-    const windows = recorder({ platform: 'win32', readLoginShell: windowsRead, binary: windowsBinary, appBinary: windowsApp })
-    expect(windows.queue.can(true)).toBe(false)
-    expect(await windows.queue.send(THREAD, 'hi', true)).toEqual({ outcome: 'failed', reason: 'no binary', ran: 'path' })
-    expect(windowsRead).not.toHaveBeenCalled()
-    expect(windowsBinary).not.toHaveBeenCalled()
-    expect(windowsApp).not.toHaveBeenCalled()
   })
 
   it('an app session on macOS runs the app\'s own codex; with none there it runs the other', async () => {
@@ -510,5 +495,79 @@ describe('codex queue', () => {
     expect(appBinary()).toBeNull()
     vi.advanceTimersByTime(1)
     expect(appBinary()).toBe(bin)
+  })
+})
+
+describe('codex queue on Windows', () => {
+  // PATH there is the daemon's own, with no login shell, and the ChatGPT app's own Codex is not known there
+  // (docs/plans/2026-11-19-dial-windows-vm-notes.md `## Task 1`, section 4).
+  it('can() is true with a codex there, for an app session too, and neither the login shell nor the app\'s codex is asked', async () => {
+    const readLoginShell = vi.fn()
+    const appBinary = vi.fn(() => APP_CODEX)
+    const { calls, queue } = recorder({ platform: 'win32', readLoginShell, appBinary })
+    expect(queue.can(false)).toBe(true)
+    expect(queue.can(true)).toBe(true)
+    expect(await queue.send(THREAD, 'hi', true)).toEqual({ outcome: 'queued' })
+    expect(calls.map(([file]) => file)).toEqual([FAKE_CODEX])
+    expect(readLoginShell).not.toHaveBeenCalled()
+    expect(appBinary).not.toHaveBeenCalled()
+  })
+
+  it('send runs codex queue with a text cmd.exe would split or expand as one argument', async () => {
+    const { calls, queue } = recorder({ platform: 'win32' })
+    const text = 'fix&calc | more 100%PATH% say "hi\r\nsecond line'
+    expect(await queue.send(THREAD, text, false)).toEqual({ outcome: 'queued' })
+    expect(calls.map(([, args]) => args)).toEqual([['queue', '--thread', THREAD, `--message=${text}`]])
+  })
+
+  it('a run that could not start is failed, no binary', async () => {
+    const { queue } = recorder({ platform: 'win32' }, ['not-started'])
+    expect(await queue.send(THREAD, 'hi', false)).toEqual({ outcome: 'failed', reason: 'no binary', ran: 'path' })
+  })
+
+  describe('the real run', () => {
+    beforeEach(() => {
+      const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
+      Object.defineProperty(process, 'platform', { value: 'win32' })
+      onTestFinished(() => { Object.defineProperty(process, 'platform', platform) })
+    })
+
+    /** Codex as npm installs it (fixtures/npm-codex.cmd, the VM's codex.cmd byte for byte), with a node.exe beside it. */
+    function npmCodex() {
+      const npm = join(dir, 'npm')
+      const script = join(npm, 'node_modules', '@openai', 'codex', 'bin', 'codex.js')
+      mkdirSync(dirname(script), { recursive: true })
+      writeFileSync(script, '')
+      const shim = join(npm, 'codex.cmd')
+      writeFileSync(shim, readFileSync(join(import.meta.dirname, '..', '..', 'lib', 'windows', 'fixtures', 'npm-codex.cmd')))
+      const node = join(npm, 'node.exe')
+      writeFileSync(node, '')
+      return { shim, script, node }
+    }
+
+    it('starts the npm shim\'s node on its script, hidden, with no shell', async () => {
+      const { shim, script, node } = npmCodex()
+      vi.mocked(execFile).mockImplementationOnce(((_file: string, _args: string[], _options: object, done: (error: null) => void) => {
+        done(null)
+        return { pid: 1, stdin: null }
+      }) as unknown as typeof execFile)
+      const env = { PATH: dir, CODEX_HOME: join(dir, 'codex-home') }
+      const args = ['queue', '--thread', THREAD, '--message=fix&calc 100%PATH%']
+      expect(await codexQueueDeps().run(shim, args, { cwd: dir, env, timeoutMs: 10_000 })).toBe(0)
+      const [file, given, how] = vi.mocked(execFile).mock.calls.at(-1)! as unknown as
+        [string, string[], { shell?: unknown; windowsHide?: boolean; env?: NodeJS.ProcessEnv; cwd?: string }]
+      expect(file).toBe(node)
+      expect(given).toEqual([script, ...args])
+      expect(how).toMatchObject({ cwd: dir, env, windowsHide: true })
+      expect(how.shell).toBeUndefined()
+    })
+
+    it('a batch file only cmd.exe could run is not started', async () => {
+      const other = join(dir, 'codex.cmd')
+      writeFileSync(other, '@echo off\r\nstart calc %*\r\n')
+      const before = vi.mocked(execFile).mock.calls.length
+      expect(await codexQueueDeps().run(other, ['queue'], options())).toBe('not-started')
+      expect(vi.mocked(execFile).mock.calls.length).toBe(before)
+    })
   })
 })
