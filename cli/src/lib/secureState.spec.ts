@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest'
 import { chmodSync, existsSync, fstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync, writeSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { dirname, join, win32 } from 'node:path'
 import { AtomicWriteUnconfirmed, READ_TRIES, READ_WAIT_MS, RENAME_TRIES, RENAME_WAIT_MS, StateFileUnreadable, atomicWriteFile, atomicWriteFileAsync, atomicWriteJson, atomicWriteJsonAsync, directorySyncSupported, hardenPrivateStateFileIfPresent, insideWindowsRoots, jsonArray, jsonObject, probeState, readPrivateStateFile, readState, requireState, requireWindowsStateFile, secureStateDirectory, syncStateDirectory, windowsStateRoots } from './secureState.js'
 
 const WINDOWS = process.platform === 'win32'
@@ -185,14 +185,15 @@ describe.skipIf(WINDOWS)('readPrivateStateFile', () => {
 describe('state on Windows', () => {
   it('lives in the user profile, or in the data folder the person configured', () => {
     expect(windowsStateRoots({}, 'C:\\Users\\me')).toEqual(['C:\\Users\\me'])
-    // Absolute where the spec runs: a relative folder is the home's (config/envFields.ts homePath).
-    const elsewhere = join(tmpdir(), 'harness')
-    expect(windowsStateRoots({ ADAPTER_DATA_DIR: ` ${elsewhere} ` }, 'C:\\Users\\me')).toEqual(['C:\\Users\\me', elsewhere])
+    expect(windowsStateRoots({ ADAPTER_DATA_DIR: ' D:\\harness ' }, 'C:\\Users\\me', win32)).toEqual(['C:\\Users\\me', 'D:\\harness'])
     expect(windowsStateRoots({ ADAPTER_DATA_DIR: '' }, '')).toEqual([])
   })
 
+  // By the path module given: the posix home `/h` this case had was the current drive's by Windows' paths on both
+  // Windows runners (windows.yml run 44827687986).
   it('a relative data folder is the home\'s, as config/env.ts reads it', () => {
-    expect(windowsStateRoots({ ADAPTER_DATA_DIR: 'data' }, '/h')).toEqual(['/h', join('/h', 'data')])
+    expect(windowsStateRoots({ ADAPTER_DATA_DIR: 'data' }, 'C:\\Users\\me', win32)).toEqual(['C:\\Users\\me', 'C:\\Users\\me\\data'])
+    expect(windowsStateRoots({ ADAPTER_DATA_DIR: '\\data' }, 'C:\\Users\\me', win32)).toEqual(['C:\\Users\\me', 'C:\\data'])
   })
 
   it('is inside a root by path, as Windows compares paths', () => {
