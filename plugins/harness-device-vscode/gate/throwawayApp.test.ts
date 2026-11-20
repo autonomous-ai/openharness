@@ -18,6 +18,7 @@ import { basename, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, onTestFinished } from 'vitest'
 import {
   appBundles,
+  assertCmdSafe,
   assertRebranded,
   assertUnchanged,
   forgetPreferences,
@@ -222,6 +223,26 @@ describe('the throwaway\'s processes on Windows, from the process table', () => 
     const table = [row(70, 4, 1, shell), row(71, 70, 2, 'C:\\Windows\\System32\\conhost.exe conhost.exe'), row(72, 4, 3, shell)]
     // 70 as reported; 72 reported, but it is a later process given that pid.
     expect(selected(table, new Map([[70, at(1)], [72, at(0)]]))).toEqual([70, 71])
+  })
+})
+
+describe('the paths cmd.exe gets on Windows', () => {
+  it('passes paths of letters, digits, \\, :, ., _ and - alone', () => {
+    expect(() => assertCmdSafe({ 'the temp folder': 'C:\\Users\\nguyen_a\\AppData\\Local\\Temp', 'the driver': 'D:\\src\\harness-device.vscode\\gate\\driver' })).not.toThrow()
+  })
+
+  it('refuses a space, &, %, a quote or a letter outside ASCII, naming what holds it and never its path', () => {
+    for (const name of ['Nguyen A', 'A&B', '100%', 'O\'Neil', 'A"B', 'Nguyễn']) {
+      const path = `C:\\Users\\${name}\\AppData\\Local\\Temp`
+      let message = ''
+      try {
+        assertCmdSafe({ 'the driver': 'C:\\src\\driver', 'the temp folder': path })
+      } catch (error) {
+        message = (error as Error).message
+      }
+      expect(message).toMatch(/^refusing to launch the throwaway VS Code: the temp folder's path holds a character cmd\.exe /)
+      expect(message).not.toContain(name)
+    }
   })
 })
 
