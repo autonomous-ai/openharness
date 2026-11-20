@@ -77,10 +77,11 @@ stalled watch never blocks the thread that tells the app in front (`:298-305`). 
   and `BREAKAWAY_OK` lets it leave. So Quit, an update, a crash or a deadline kill of the app never takes the daemon, its
   terminal host or an agent (`main.rs:208`, "the daemon is left running", holds on Windows). An end-to-end check proves
   it on the VM.
-- **Cancelling a sign-in** (`account.rs:18-20`, `:67-69`) sends SIGTERM on unix so `harness login` hands its code back.
-  Windows has no SIGTERM, and a console control event cannot reach a child with no console of the app's; there it
-  terminates the job. The plan checks the CLI's spawn lock recovers from a holder that died (pid check); if it does not,
-  that is a stop question, not a CLI change made here.
+- **Cancelling a sign-in** (`account.rs`) closes `harness login --json`'s stdin, on every OS: the CLI reads that as the
+  app having gone, hands its code back and exits. Its group (its job on Windows) is killed only if it has not ended
+  within the grace; no SIGTERM and no job kill come first. Windows has no SIGTERM, and a console control event cannot
+  reach a child with no console of the app's, so one way serves every OS. The plan checks the CLI's spawn lock recovers
+  from a holder that died (pid check); if it does not, that is a stop question, not a CLI change made here.
 - The non-blocking stdin becomes a bounded writer: a writer thread per child with a small bounded queue; a full queue
   answers `Unwritten::Full` exactly as `O_NONBLOCK`'s `EAGAIN` does now, so `watch: not reading` and the drop rule are
   unchanged.
@@ -124,10 +125,11 @@ folders. `child_env` joins PATH with `;` on Windows (today it always uses `:`) a
 ### 4. Starting at login (`loginitem.rs`)
 
 - **Windows:** a `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` value `Harness Device` = the quoted path of the
-  installed exe. The same rule as `register_from`: written only when absent; when Windows' Startup Apps has it turned
-  off (`...\Explorer\StartupApproved\Run` value whose first byte is not `02`), it reads as `RequiresApproval` and is
-  never turned back on. Tauri's NSIS uninstaller removes the value (it is named after the product), on a real
-  uninstall only, not on an update.
+  installed exe. The same rule as `register_from`, at every launch and after each Install: written only when absent,
+  so a value an uninstall, a manual upgrade or a hand removed comes back; when Windows' Startup Apps has it turned off
+  (`...\Explorer\StartupApproved\Run` value whose first byte is odd: `03` and `07` off, `02` and `06` on), it reads
+  as `RequiresApproval` and is never turned back on. Tauri's NSIS uninstaller removes the value (it is named after the
+  product), on a real uninstall only, not on an update. A failure reads `Login item not set (…).`, as on every OS.
 - **Linux:** one entry only, shared with the CLI. `feat/dial-linux` makes `install.sh` write
   `<config>/autostart/harnessd.desktop` (`Exec=<launcher> start`, `NoDisplay=true`, `X-GNOME-Autostart-enabled=true`,
   name `Harness`; `<config>` is `$XDG_CONFIG_HOME` when absolute, else `~/.config`; atomic write; a file with
@@ -135,7 +137,9 @@ folders. `child_env` joins PATH with `;` on Windows (today it always uses `:`) a
   - absent, on the app's first registration (`saved.login_item` false, the macOS once-only rule, `app.rs:130-131`,
     `:278-281`) → the app writes it, in the same format, with `Exec=` starting the app's AppImage and, when that file
     is gone, falling back to `<launcher> start` (one fixed `sh -c` line whose only variable parts are the two absolute
-    paths, each quoted per the Desktop Entry spec). Absent later (the person deleted it, as KDE does to turn it off) →
+    paths, each in single quotes inside the `sh -c` text: systemd's autostart generator (252 and later) escapes `$`,
+    so the line holds no `\`, `$`, backtick or inner `"`; a path holding `'`, `"`, `$`, a backtick, a backslash or a
+    control character gets no entry). Absent later (the person deleted it, as KDE does to turn it off) →
     left absent;
   - present, without `Hidden=true`, with an `Exec=` that is not the app's own → the app sets its own `Exec=`, at every
     launch and after each Install it runs (taking over an entry that is already on turns nothing on; the app then keeps
@@ -172,28 +176,33 @@ Each source pushes; none polls. The value is the executable's file name, the sam
 stdin (`front_line`, `FrontFeed`), never logged. The CLI already maps exe names (`cli/src/cable/hosts/frontApp.ts`:
 `code`, `cursor`, `windowsterminal`, `wezterm-gui`, `kitty`, `ghostty`, `harness`, case-folded, `.exe` dropped).
 
-- **Windows** (`front_windows.rs`): `SetWinEventHook(EVENT_SYSTEM_FOREGROUND, WINEVENT_OUTOFCONTEXT)` on a thread
-  with its own message loop; window → pid (`GetWindowThreadProcessId`) → `QueryFullProcessImageNameW` → file name. The
-  current front window once at start. Works over the devices pipe through `harness hardware watch`, which
-  `feat/dial-windows` makes work on Windows; the app does not depend on the pipe's internals (dial-windows' spec,
-  "The devices pipe's API").
+- **Windows** (`front_windows.rs`): `SetWinEventHook(EVENT_SYSTEM_FOREGROUND, WINEVENT_OUTOFCONTEXT)`, and a second hook
+  for `EVENT_SYSTEM_SWITCHEND` to `EVENT_SYSTEM_MINIMIZEEND` (Alt+Tab's end, a restore), on a thread with its own
+  message loop. Every event reads `GetForegroundWindow()`, not the window the event names; window → pid
+  (`GetWindowThreadProcessId`) → `QueryFullProcessImageNameW` → file name. The current front window once at start. Works
+  over the devices pipe through `harness hardware watch`, which `feat/dial-windows` makes work on Windows; the app does
+  not depend on the pipe's internals (dial-windows' spec, "The devices pipe's API").
 - **Linux X11:** unchanged (`front_x11.rs`).
-- **Linux sway** (new): the i3/sway IPC socket (`$SWAYSOCK`), subscribe to `["window"]`, take `focus` events'
-  container `pid` → `/proc/<pid>/exe` file name (the `exe_name` rule `front_x11.rs` already has). The initial value
-  from `get_tree`'s focused node. Spoken directly on the Unix socket (no `swaymsg` child: one fixed protocol, no new
-  program on the command-line list).
+- **Linux sway** (new): the i3/sway IPC socket (`$SWAYSOCK`), subscribe to `["window","workspace"]`, take `focus`
+  events' container `pid` → `/proc/<pid>/exe` file name (the `exe_name` rule `front_x11.rs` already has). The initial
+  value from `get_tree`'s focused node, and `get_tree` again on a window's `close` or `move` and a workspace's `focus`,
+  which sway tells in no focus event: an empty workspace in front tells "". Spoken directly on the Unix socket (no
+  `swaymsg` child: one fixed protocol, no new program on the command-line list).
 - **Linux Hyprland** (new): `$XDG_RUNTIME_DIR/hypr/$HYPRLAND_INSTANCE_SIGNATURE/.socket2.sock` events,
-  `activewindowv2>>` → ask `.socket.sock` `j/activewindow` for its `pid` → `/proc/<pid>/exe` file name. Initial value
-  from `j/activewindow`.
+  `activewindowv2>>` with a window address it did not ask about last → ask `.socket.sock` `j/activewindow` for its `pid`
+  → `/proc/<pid>/exe` file name. Initial value from `j/activewindow`; a first ask that fails tells "" and following goes
+  on.
 - Choice of source at start: X11 session (the existing `session_is_x11`), else `SWAYSOCK` set, else
   `HYPRLAND_INSTANCE_SIGNATURE` set, else none. Each stops with one fixed log line (`front: <source> not followed` /
-  `ended`), never the socket path or the error's text, like `Stop` in `front_x11.rs`.
+  `ended`), never the socket path or the error's text, like `Stop` in `front_x11.rs`; for Hyprland `not followed` means
+  its event socket could not be reached.
 
 ### 7. Tray, icons, window, About, single instance (`main.rs`, `tauri.conf.json`, `icons/`)
 
 - **Icons:** macOS keeps its template icon. Windows and Linux get two PNG variants of the same glyph: a dark one for
   light panels and a light one for dark panels. Windows picks by `HKCU\...\Themes\Personalize\SystemUsesLightTheme` and
-  follows changes pushed by `RegNotifyChangeKeyValue` (no poll). Linux uses the light glyph (named difference). The
+  follows changes pushed by `RegNotifyChangeKeyValue` (no poll); when the key cannot be followed, the log has
+  `tray: theme not followed` and the icon stays the dark taskbar's. Linux uses the light glyph (named difference). The
   bundle gets `icon.ico` (Windows) and the PNG sizes Linux needs, generated from the existing `icon.png`.
 - **Linux tray clicks:** Tauri emits no tray click on Linux; the AppIndicator menu opens on click by itself. The
   refresh a click triggers on macOS (`Event::MenuOpened`: re-read sign-in at most every 60 s,
@@ -206,7 +215,8 @@ stdin (`front_line`, `FrontFeed`), never logged. The CLI already maps exe names 
   the first through a lock in the app's data folder (`LockFileEx` / `flock`) and exits with one log line; no second
   tray, no second watch.
 - **Desktop app installed** (`desktop.rs`, the `Open Harness` row): Windows looks for the Desktop app's per-user
-  install (the path `harness-install.exe` installs to; the builder reads Desktop's installer) and opens it by that exe;
+  install, `Harness\Harness.exe` in the shell's user programs folder (`FOLDERID_UserProgramFiles`, as Desktop's
+  installer resolves it), else in `%LOCALAPPDATA%\Programs`, and opens it by that exe;
   Linux reads the Desktop launcher entry `<data>/applications/harness.desktop` that Desktop and its installer write
   (`desktop/lib/core/linux_app_image.dart`) and counts it installed when its AppImage is on disk, opened by running that
   AppImage. Running detection (`sysinfo`, `process_names`) is unchanged.
@@ -262,7 +272,7 @@ new workflow. The end-to-end checks below that need a long build run in a tempor
 | Terminal-tab follow (Terminal/iTerm2/Ghostty) | none | none | AppleScript only; Windows Terminal has no list/select API; Ghostty on Linux offers no list/focus |
 | App in front | WinEvent hook | X11, sway, Hyprland; **none on GNOME/KDE Wayland** | GNOME and KDE Wayland give no other program the focused window |
 | Tray click refresh | as macOS | from the 5 s tick, same throttles | Tauri emits no tray click on Linux (menu only) |
-| Tray shown at all | always | needs a StatusNotifier host; **stock GNOME needs the AppIndicator extension** (Ubuntu ships it) | GNOME has no tray of its own; the app logs `tray: no host` once when no watcher is on the session bus |
+| Tray shown at all | always | needs a StatusNotifier host; **stock GNOME needs the AppIndicator extension** (Ubuntu ships it) | GNOME has no tray of its own; the app logs `tray: no host` once when no watcher has come on the session bus within 30 s of start |
 | Tray icon colour | follows light/dark | light glyph | no common way to read a panel's colour on Linux |
 | Self-update | NSIS passive install | AppImage only; a dev run does not update | the updater replaces an AppImage, not a distro package |
 | Login item | Run key + Startup Apps toggle | the shared `harnessd.desktop` | one entry with the CLI (dial-linux) |
@@ -270,7 +280,6 @@ new workflow. The end-to-end checks below that need a long build run in a tempor
 | About | Tauri's About dialog | Tauri's About dialog | macOS's standard panel is AppKit |
 | Update install timing | download at once, install waits for the relaunch conditions | as macOS | the updater exits the app when it starts NSIS |
 | Installed name | `Harness Device` (folder, Start Menu, Apps list, Run value) | `Harness Device` AppImage | Desktop already owns `Harness` on Windows |
-| Sign-in cancel | job terminated | as macOS (SIGTERM) | no SIGTERM on Windows |
 
 ## Testing
 

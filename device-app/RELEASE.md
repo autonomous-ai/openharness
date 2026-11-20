@@ -49,6 +49,13 @@ The first release, with Diego's go. The bucket holds no manifest yet, so both na
    publishes nothing.
 2. `make release-device ARGS="0.1.0 --allow-no-manifest"`: the release.
 
+The first Windows and Linux release:
+
+1. `make release-device ARGS="--prepare --platforms all"`: the first run of `sign-windows`, whose bundle takes the exe
+   and the Tauri CLI from other jobs, and of Azure's signing in this workflow; no test runs either. Then the real-PC
+   checks of [Windows code signing](../docs/windows-code-signing.md#first-run-and-rollout) on its installers.
+2. `make release-device ARGS="--platforms all"`: the release. From then on `publish` refuses a macOS-only one.
+
 ## What CI does
 
 `.github/workflows/release-device.yml` runs only when started (`workflow_dispatch`), with the inputs `version`,
@@ -80,7 +87,10 @@ The first release, with Diego's go. The bucket holds no manifest yet, so both na
   its signature; then the installer is signed; then the update signature, last, over the bytes that ship. This job
   runs no build code: the Tauri CLI comes from `tauri-cli-windows`, which checks out no app code, so a crate's build
   script or an npm package cannot replace the program that runs beside the signing identity and the updater key. The
-  sums `publish` checks are recorded here too, as the files are made.
+  sums `publish` checks are recorded here too, as the files are made. NSIS's uninstaller and plugin DLLs, which the
+  installer writes to disk, stay unsigned: Tauri signs them only through a sign command it runs in the middle of the
+  bundle, and the signing action signs files between steps. Whether Smart App Control lets them run is checked on a
+  real PC before the first Windows release.
 - **Each AppImage builds on its own arch**, on the oldest Ubuntu the desktop app supports: an AppImage carries the
   libraries of the machine that bundled it.
 - **Two notarizations.** Tauri notarizes and staples the app; it signs the dmg but does not notarize it, so the
@@ -158,10 +168,10 @@ means installed apps can never update again.
 
 A red run names its step.
 
-- **Before `Publish`, nothing changes**, and `Publish` uploads the three files to the version's own folder before it
-  writes the manifest. A transient failure (Apple's notary service or stapler, the network, the runner) gets
-  **Re-run failed jobs** on the same run: the same commit, and `publish` takes the same artifact. The dmg's staple
-  already tries six times over about 8 minutes first.
+- **Before `Publish`, nothing changes**, and `Publish` uploads the release's files (three for `macos`, eleven for `all`)
+  to the version's own folder before it writes the manifest. A transient failure (Apple's notary service or stapler, the
+  network, the runner) gets **Re-run failed jobs** on the same run: the same commit, and `publish` takes the same
+  artifact. The dmg's staple already tries six times over about 8 minutes first.
 - **A fix that needs a new commit:** once a manifest is live, cut a higher version (the bump passes the failed tag).
   While none is live (the first release), `--allow-no-manifest` refuses once a tag exists: delete the unreleased tag
   (`git push origin :refs/tags/v0.1.0_device`, then `git tag -d v0.1.0_device`) and cut it again. Never move or delete
@@ -190,7 +200,8 @@ a newer version is tried at once.
 On Windows the installer ends the app the moment it starts, so the app downloads and checks the update at once, then
 holds the install until nothing a relaunch waits for runs. The installer (NSIS, passive) replaces the app in its
 folder and starts it again; the login item's Run value stays, since an update runs the old uninstaller with
-`/UPDATE`, which keeps it.
+`/UPDATE`, which keeps it. The app also sets it again at every launch when it is missing, after an uninstall and a
+reinstall or a hand deletion; one Startup Apps turned off stays off.
 
 Its log has one line per step, never a URL. The folder: `~/Library/Logs/ai.autonomous.harness.device/` on macOS,
 `%LOCALAPPDATA%\ai.autonomous.harness.device\logs\` on Windows, `~/.local/share/ai.autonomous.harness.device/logs/`

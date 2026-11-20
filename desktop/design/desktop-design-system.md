@@ -832,9 +832,10 @@ differences, each an OS limit:
 
 - The icon sits in the tray. Windows shows the dark glyph on a light taskbar
   and the light one (`tray-light.png`) on a dark taskbar, and follows a change
-  at once; Linux always shows the light glyph, as no common way reads a
-  panel's colour. A GNOME desktop without the AppIndicator extension has no
-  tray, so the icon shows nowhere (Ubuntu ships the extension).
+  at once (where Windows does not let it follow, it keeps the dark taskbar's);
+  Linux always shows the light glyph, as no common way reads a panel's colour.
+  A GNOME desktop without the AppIndicator extension has no tray, so the icon
+  shows nowhere (Ubuntu ships the extension).
 - **About** opens Tauri's About dialog, in front, with `Harness`, the version
   and the same credits line: macOS's standard panel is AppKit's.
 - **Export logs** selects the zip in Explorer on Windows; on Linux it opens the

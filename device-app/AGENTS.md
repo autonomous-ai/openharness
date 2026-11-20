@@ -62,17 +62,21 @@ sets them up. Rust and Tauri 2 in `src-tauri/`; the window's three screens are p
   - To show the logs' zip: `open -R` on macOS, `explorer.exe /select,"<zip>"` on Windows, `xdg-open` with the zip's
     folder on Linux.
   - To open the desktop app: `open -b ai.autonomous.harness` on macOS; elsewhere its own file, run with no argument
-    (`%LOCALAPPDATA%\Programs\Harness\Harness.exe`, or the AppImage its `harness.desktop` entry names).
+    (`Harness\Harness.exe` in the shell's user programs folder, `FOLDERID_UserProgramFiles`, else in
+    `%LOCALAPPDATA%\Programs`; or the AppImage its `harness.desktop` entry names).
   - Tauri's restart to relaunch itself (`open -n` on its own bundle on macOS), and the updater plugin's `touch` on the
     bundle after the swap (the `touch` found on the person's PATH) and its installer on Windows.
 
   One argument is not fixed text: the zip the CLI's answer names, kept only when it is an absolute path whose file
   name is `harness-logs-YYYYMMDD-HHMM.zip` (`logs.rs`). Nothing from the webview or the manifest reaches any of them.
   On Linux the app also writes an `Exec=` line into the login entry `harnessd.desktop`, fixed text around the
-  AppImage's and the launcher's paths, each quoted (`loginitem_linux.rs`); the desktop session runs it, never the app.
-- **Children start clean.** On Windows every child runs with no console, in a job that ends them with the app and
-  that the daemon leaves, its stdin behind a queue that never blocks the app (`child_windows.rs`, `stdin_queue.rs`).
-  On Linux every child gets the person's environment back, without what the AppImage added (`appimage_env.rs`).
+  AppImage's and the launcher's paths, each in single quotes inside its `sh -c` text, so systemd's autostart
+  generator, which escapes `$`, reads it as GLib does; a path holding `'`, `"`, `$`, a backtick, a backslash or a
+  control character gets no entry (`loginitem_linux.rs`). The desktop session runs it, never the app.
+- **Children start clean.** On Windows every child runs with no console, in a job of its own that the daemon leaves:
+  the job ends what a child left behind when the child ends, and every child with the app. Its stdin sits behind a
+  queue that never blocks the app (`child_windows.rs`, `stdin_queue.rs`). On Linux every child gets the person's
+  environment back, without what the AppImage added (`appimage_env.rs`).
 - **The app in front is private.** It is written to the watch's stdin and nowhere else (`front.rs`), and never logged.
   Its sources: AppKit on macOS, a WinEvent hook on Windows, and on Linux X11, sway or Hyprland, whichever the session
   is; GNOME and KDE on Wayland give it to no other program, so there it is not followed.
