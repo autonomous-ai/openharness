@@ -10,8 +10,9 @@ import { describe, expect, it } from 'vitest'
 import { powershellPath, systemProgram } from './powershell.js'
 
 const PROGRAMS = ['cmd', 'icacls', 'powershell', 'reg', 'schtasks', 'taskkill', 'tasklist', 'whoami']
-/** One of them by its bare name, as what a call runs: a spawn's or a runner's first argument, or a command's `file`. */
-const BARE = new RegExp(String.raw`(?:\b(?:spawn|spawnSync|execFile|execFileSync|run|runner|runGuestCommand)\)?\(|\bfile:)\s*(['"\x60])(?:${PROGRAMS.join('|')})(?:\.exe)?\1`, 'g')
+/** One of them by its bare name, as what a call runs: a spawn's, an exec's or a runner's first argument, a command's
+ *  `file`, or the fallback for a variable that names one (`ComSpec ?? 'cmd.exe'`). */
+const BARE = new RegExp(String.raw`(?:\b(?:spawn|spawnSync|execFile|execFileSync|exec|patientExec|run|runner|runGuestCommand)\)?\(|\bfile:|\?\?|\|\|)\s*(['"\x60])(?:${PROGRAMS.join('|')})(?:\.exe)?\1`, 'g')
 /** Files that name one bare, and why that runs System32's. */
 const RESOLVED_ELSEWHERE: Record<string, string> = {
   'harnessd/platform.ts': 'defaultPlatformDeps runs each command of the Task Scheduler service from System32 (windowsProgram)',
@@ -33,6 +34,8 @@ describe('Windows programs by their full paths', () => {
     expect(found("spawn('taskkill', ['/pid'])")).toBe(1)
     expect(found("(deps.runner ?? runGuestCommand)('schtasks.exe', [])")).toBe(1)
     expect(found("({ file: 'powershell.exe', args })")).toBe(1)
+    expect(found("await exec('tasklist', ['/fo', 'csv'])")).toBe(1)
+    expect(found("process.env.ComSpec ?? 'cmd.exe'")).toBe(1)
     expect(found("spawn(systemProgram('taskkill.exe'), [])")).toBe(0)
     expect(found("quoted('powershell')")).toBe(0)
   })
