@@ -98,6 +98,14 @@ describe('Harness Device\'s plugin for Orca, set up from the devices\' process',
     expect(r.timers).toEqual([])
   })
 
+  it('on Windows, as elsewhere: set up, recorded at this version and counted set up', async () => {
+    const r = rig({ platform: 'win32' })
+    await r.setup.pass()
+    expect(r.setUp).toHaveBeenCalledTimes(1)
+    expect(r.state.record).toEqual({ dial: true, version: VERSION })
+    expect(r.counted).toEqual([['set up']])
+  })
+
   it('no dial yet: nothing runs, nothing is recorded; set up before by orcaConnected, it is brought current', async () => {
     const r = rig({ dial: false })
     await r.setup.pass()
@@ -425,12 +433,9 @@ describe('Harness Device\'s plugin for Orca, set up from the devices\' process',
     expect(r.timers).toEqual([])
   })
 
-  it.each([
-    ['Windows', 'win32' as const, VERSION],
-    ['a run from the sources', 'darwin' as const, null],
-  ])('%s: nothing', async (_, platform, build) => {
-    const r = rig({ version: '9.9.8', platform })
-    r.state.build = build
+  it('a run from the sources: nothing', async () => {
+    const r = rig({ version: '9.9.8' })
+    r.state.build = null
     await r.setup.pass()
     expect(r.setUp).not.toHaveBeenCalled()
     expect(r.state.record).toEqual({ dial: true, version: '9.9.8' })
