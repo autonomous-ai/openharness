@@ -1754,6 +1754,14 @@ mod tests {
     }
 
     #[test]
+    fn an_offer_before_the_first_screen_waits_for_it() {
+        let mut app = with_chatgpt(found());
+        assert!(shows(&app.handle(Event::FollowOffer)).is_empty());
+        assert_eq!(shows(&answer(&mut app, false)), [shown(Screen::SignIn, Phase::Offer, &[])]);
+        assert_eq!(shows(&app.handle(Event::Act(Action::Later))), [follow_offer()]);
+    }
+
+    #[test]
     fn an_offer_never_shown_is_offered_again() {
         let mut app = with_chatgpt(on_sign_in());
         app.handle(Event::FollowOffer);
