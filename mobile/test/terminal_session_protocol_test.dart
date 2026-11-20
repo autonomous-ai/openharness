@@ -89,6 +89,21 @@ void main() {
     return (s, streamId);
   }
 
+  /// [live] on [async]'s clock, so the 4 ms input coalesce timer fires when the
+  /// test elapses it, never on the host's time.
+  (TerminalSession, String) liveIn(
+    FakeAsync async, {
+    String screen = 'prompt> ',
+  }) {
+    late (TerminalSession, String) opened;
+    live(screen: screen).then((value) => opened = value);
+    async.flushMicrotasks();
+    return opened;
+  }
+
+  /// Past the input coalesce window: whatever was typed has gone out.
+  void typed(FakeAsync async) => async.elapse(const Duration(milliseconds: 4));
+
   group('the open', () {
     test(
       'asks for the agent at a size the daemon will accept, and says who asks',
@@ -1099,30 +1114,30 @@ void main() {
       expect(s.status, TerminalSessionStatus.controlling);
     });
 
-    test(
-      'a refused keystroke realigns the count once, not per refusal',
-      () async {
-        final (s, streamId) = await live();
+    test('a refused keystroke realigns the count once, not per refusal', () {
+      fakeAsync((async) {
+        final (s, streamId) = liveIn(async);
         for (final key in ['a', 'b', 'c']) {
           s.terminal.textInput(key);
-          await Future<void>.delayed(const Duration(milliseconds: 10));
+          typed(async);
         }
         expect(_inputSeqs(wire), [0, 1, 2]);
 
         for (var i = 0; i < 2; i++) {
-          await s.handleFrame('terminal_error', {
+          s.handleFrame('terminal_error', {
             'streamId': streamId,
             'code': 'TERMINAL_INPUT_INVALID',
             'expectedSeq': 1,
           });
+          async.flushMicrotasks();
         }
         s.terminal.textInput('d');
-        await Future<void>.delayed(const Duration(milliseconds: 10));
+        typed(async);
 
         expect(_inputSeqs(wire).last, 1);
         expect(s.status, TerminalSessionStatus.controlling);
-      },
-    );
+      });
+    });
 
     test(
       'a refused keystroke from a daemon that does not say reopens',
@@ -1354,98 +1369,111 @@ void main() {
   });
 
   group('what is typed', () {
-    test('goes out numbered, and nothing before the stream is live', () async {
-      final s = session();
-      await s.open();
-      s.terminal.textInput('early');
-      await Future<void>.delayed(const Duration(milliseconds: 10));
-      expect(wire.binaries, isEmpty);
+    test('goes out numbered, and nothing before the stream is live', () {
+      fakeAsync((async) {
+        final s = session();
+        s.open();
+        async.flushMicrotasks();
+        s.terminal.textInput('early');
+        typed(async);
+        expect(wire.binaries, isEmpty);
 
-      final streamId = await ready(s);
-      await s.handleBinary(_keyframe(streamId));
-      s.terminal.textInput('l');
-      await Future<void>.delayed(const Duration(milliseconds: 10));
-      s.terminal.textInput('s\r');
-      await Future<void>.delayed(const Duration(milliseconds: 10));
+        ready(s).then((streamId) => s.handleBinary(_keyframe(streamId)));
+        async.flushMicrotasks();
+        s.terminal.textInput('l');
+        typed(async);
+        s.terminal.textInput('s\r');
+        typed(async);
 
-      expect(_typed(wire), 'ls\r');
-      expect(_inputSeqs(wire), [0, 1]);
+        expect(_typed(wire), 'ls\r');
+        expect(_inputSeqs(wire), [0, 1]);
+      });
     });
 
-    test('an armed ctrl turns the next key into its chord, once', () async {
-      final (s, _) = await live();
+    test('an armed ctrl turns the next key into its chord, once', () {
+      fakeAsync((async) {
+        final (s, _) = liveIn(async);
 
-      s.armControl(true);
-      expect(s.controlArmed, isTrue);
-      s.terminal.textInput('c');
-      await Future<void>.delayed(const Duration(milliseconds: 10));
-      s.terminal.textInput('c');
-      await Future<void>.delayed(const Duration(milliseconds: 10));
+        s.armControl(true);
+        expect(s.controlArmed, isTrue);
+        s.terminal.textInput('c');
+        typed(async);
+        s.terminal.textInput('c');
+        typed(async);
 
-      expect(_typed(wire), '\x03c');
-      expect(s.controlArmed, isFalse);
+        expect(_typed(wire), '\x03c');
+        expect(s.controlArmed, isFalse);
+      });
     });
 
     test(
       'clearing the prompt is ctrl-K then ctrl-U, and the keyboard\'s buffer',
-      () async {
-        // A prompt two rows from the foot of the screen, its footer under it
-        // and the cursor back in it, as Claude Code draws one.
-        final (s, _) = await live(
-          screen: '${'\r\n' * 22}❯ fix it\r\n  ? for shortcuts\x1b[23;9H',
-        );
-        final viewport = _Viewport();
-        s.attachViewport(viewport);
+      () {
+        fakeAsync((async) {
+          // A prompt two rows from the foot of the screen, its footer under it
+          // and the cursor back in it, as Claude Code draws one.
+          final (s, _) = liveIn(
+            async,
+            screen: '${'\r\n' * 22}❯ fix it\r\n  ? for shortcuts\x1b[23;9H',
+          );
+          final viewport = _Viewport();
+          s.attachViewport(viewport);
 
-        s.clearPrompt();
-        await until(() => _typed(wire).length == 8);
+          s.clearPrompt();
+          typed(async);
 
-        // One kill is one row as wrapped, and a kill past the prompt's ends
-        // does nothing — so two each way for each of its two rows.
-        expect(_typed(wire), '${'\x0b' * 4}${'\x15' * 4}');
-        expect(viewport.cleared, 1);
-        s.detachViewport(_Viewport());
-        s.resetInputBuffer();
-        expect(
-          viewport.cleared,
-          2,
-          reason: 'another view detaching changes nothing',
-        );
-        s.detachViewport(viewport);
-        s.resetInputBuffer();
-        expect(viewport.cleared, 2);
+          // One kill is one row as wrapped, and a kill past the prompt's ends
+          // does nothing — so two each way for each of its two rows.
+          expect(_typed(wire), '${'\x0b' * 4}${'\x15' * 4}');
+          expect(viewport.cleared, 1);
+          s.detachViewport(_Viewport());
+          s.resetInputBuffer();
+          expect(
+            viewport.cleared,
+            2,
+            reason: 'another view detaching changes nothing',
+          );
+          s.detachViewport(viewport);
+          s.resetInputBuffer();
+          expect(viewport.cleared, 2);
+        });
       },
     );
 
-    test('a key that cannot be sent is a lost stream', () async {
-      final (s, _) = await live();
-      wire.binarySends = false;
+    test('a key that cannot be sent is a lost stream', () {
+      fakeAsync((async) {
+        final (s, _) = liveIn(async);
+        wire.binarySends = false;
 
-      s.terminal.textInput('x');
-      await Future<void>.delayed(const Duration(milliseconds: 10));
+        s.terminal.textInput('x');
+        typed(async);
 
-      expect(s.status, TerminalSessionStatus.error);
-      expect(s.errorMessage, 'Terminal input was not sent');
+        expect(s.status, TerminalSessionStatus.error);
+        expect(s.errorMessage, 'Terminal input was not sent');
+      });
     });
 
-    test('a paste too big for one frame is split, still in order', () async {
-      final (s, _) = await live();
-      final big = 'x' * (TerminalSession.kInputFrameMaxBytes + 10);
+    test('input larger than one frame goes out as several, in order, every byte once', () {
+      fakeAsync((async) {
+        final (s, _) = liveIn(async);
+        final big = 'x' * (TerminalSession.kInputFrameMaxBytes * 2 + 10);
 
-      s.terminal.textInput('$big\r');
-      await Future<void>.delayed(const Duration(milliseconds: 20));
+        s.terminal.textInput('$big\r');
+        typed(async);
 
-      final frames = wire.binaries
-          .where((f) => f.kind == TerminalBinaryKind.input)
-          .toList();
-      expect(frames.length, greaterThan(1));
-      expect(
-        frames.every(
-          (f) => f.bytes.length <= TerminalSession.kInputFrameMaxBytes,
-        ),
-        isTrue,
-      );
-      expect(_typed(wire), '$big\r');
+        final frames = wire.binaries
+            .where((f) => f.kind == TerminalBinaryKind.input)
+            .toList();
+        expect(frames.length, greaterThan(1));
+        expect(
+          frames.every(
+            (f) => f.bytes.length <= TerminalSession.kInputFrameMaxBytes,
+          ),
+          isTrue,
+        );
+        expect(_inputSeqs(wire), List.generate(frames.length, (i) => i));
+        expect(_typed(wire), '$big\r');
+      });
     });
 
     test('a composed message is one turn, not keystrokes', () async {
@@ -1476,12 +1504,11 @@ void main() {
       var sent = 0;
       s.onLineSent = () => sent++;
 
+      // Said as the keys are typed, not when the input timer sends them.
       s.terminal.textInput('l');
       s.terminal.textInput('s');
-      await Future<void>.delayed(const Duration(milliseconds: 10));
       expect(sent, 0, reason: 'keys typed are not a line sent');
       s.terminal.textInput('\r');
-      await Future<void>.delayed(const Duration(milliseconds: 10));
       expect(sent, 1);
 
       expect(await s.sendComposerText('  '), isFalse);
@@ -1498,7 +1525,6 @@ void main() {
       s.onLineSent = () => sent++;
 
       s.terminal.textInput('ls\r');
-      await Future<void>.delayed(const Duration(milliseconds: 10));
       expect(await s.sendComposerText('hi'), isFalse);
       expect(sent, 0);
     });
