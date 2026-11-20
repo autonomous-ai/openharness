@@ -87,7 +87,8 @@ class SelectionTests(unittest.TestCase):
         self.assertIn("path: /tmp/harness-super-tab-mongodb-binaries", saver)
 
     def test_docs_workflows_scripts_and_unknown_paths_need_only_process_checks(self):
-        for path in ["docs/guide.md", "README.md", "scripts/ci-plan.py", ".github/workflows/ci.yml", "Makefile", "surprise.py"]:
+        for path in ["docs/guide.md", "README.md", "scripts/local-checks.py", ".github/workflows/ci.yml", "Makefile",
+                     "surprise.py"]:
             with self.subTest(path=path):
                 self.assertEqual(planner.select([path])[0], set())
 
@@ -283,6 +284,25 @@ class SelectionTests(unittest.TestCase):
         for entry in planner.DIAL_HOST_PATHS:
             with self.subTest(entry=entry):
                 self.assertTrue((root / entry).is_dir() if entry.endswith("/") else (root / entry).is_file())
+
+    def test_the_planner_and_the_tables_it_scans_with_alone_run_the_cross_read_scan(self):
+        # process-checks' checkout is sparse, where the repository-wide scan skips: two undeclared reads slipped in so.
+        for path in ("scripts/ci-plan.py", "scripts/tests/test_ci_plan.py", "scripts/record-ci-validation.py"):
+            with self.subTest(path=path):
+                self.assertEqual(planner.select([path])[0], {"cross-read-scan"})
+        for path in ("scripts/local-checks.py", "scripts/tests/test_pr_e2e_jobs.py", ".github/workflows/ci.yml",
+                     "cli/src/lib/relayFrames.ts", "desktop/lib/devices/x.dart"):
+            with self.subTest(path=path):
+                self.assertNotIn("cross-read-scan", planner.select([path])[0])
+        self.assertEqual(planner.JOBS["cross-read-scan"], {"cross-read-scan"})
+        self.assertEqual(planner.MANUAL["cross-read-scan"], {"cross-read-scan"})
+
+    def test_the_cross_read_scan_reads_every_file_it_scans(self):
+        # Its result depends on every component's files, so any of them changed on main reruns it.
+        for path in ("cli/src/a.ts", "tests/a.ts", "desktop/lib/a.dart", "devices/harness-pro/a.c", "term/src/a.rs",
+                     "plugins/harness-device-vscode/src/a.ts", "device-app/src-tauri/src/a.rs", "docs/guide.md"):
+            with self.subTest(path=path):
+                self.assertTrue(planner.reads("cross-read-scan", path))
 
     def test_either_release_workflow_runs_the_device_app_suite(self):
         # Its test_release_workflow.py reads both through a path built from parts, which the scan cannot see: a change
@@ -1514,9 +1534,9 @@ class CrossReadTests(unittest.TestCase):
         for suite in sorted(planner.SUITES):
             with self.subTest(suite=suite):
                 self.assertEqual(planner.undeclared_reads(repository, suite), [])
-                # The end-to-end suites' path lists select them on purpose, never what their files read: those reads
-                # count for reuse (DEPENDS) alone.
-                if suite not in planner.E2E:
+                # The end-to-end suites' path lists and the scan's own files select them on purpose, never what their
+                # files read: those reads count for reuse (DEPENDS) alone.
+                if suite not in planner.E2E | {"cross-read-scan"}:
                     self.assertEqual(planner.undeclared_reads(repository, suite, inputs=planner.PR_READS), [])
 
 

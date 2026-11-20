@@ -282,5 +282,28 @@ class LinuxE2ETests(unittest.TestCase):
             self.assertIn(name, self.needs)
 
 
+class CrossReadScanTests(unittest.TestCase):
+    def test_the_scan_runs_on_a_full_checkout_and_gates_the_merge(self):
+        _, jobs, needs = ci_jobs()
+        job = jobs.get("cross-read-scan")
+        self.assertIsNotNone(job, "ci.yml has no cross-read-scan job")
+        for text in ("    needs: plan\n",
+                     "    if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.cross-read-scan == 'true'\n",
+                     f"group: {LOCK}cross-read-scan\n",
+                     "cancel-in-progress: ${{ github.event_name == 'pull_request' }}",
+                     "    runs-on: ubuntu-24.04\n",
+                     "    permissions:\n      contents: read\n",
+                     "    timeout-minutes: 10\n",
+                     "          ref: ${{ env.CI_SOURCE_SHA }}\n",
+                     "python3 -m unittest discover -s scripts/tests -p test_ci_plan.py "
+                     "-k test_every_cross_read_in_this_repository_is_declared"):
+            self.assertIn(text, job)
+        # On a sparse or blob-less checkout the scan skips, and a skip passes.
+        for text in ("sparse-checkout", "filter:"):
+            self.assertNotIn(text, job)
+        self.assertIn("      cross-read-scan: ${{ steps.select.outputs.cross-read-scan }}\n", jobs["plan"])
+        self.assertIn("cross-read-scan", needs)
+
+
 if __name__ == "__main__":
     unittest.main()
