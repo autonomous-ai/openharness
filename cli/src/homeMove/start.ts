@@ -61,7 +61,7 @@ export async function moveHomeAtStart(argv: readonly string[], env: NodeJS.Proce
   if ((command !== 'start' && command !== '__harnessd') || flags.includes('--help') || flags.includes('-h') || deps.platform !== 'linux') return
   let environment: NodeJS.ProcessEnv
   try {
-    environment = withEnvFile({ fs: deps.io, env })
+    environment = withEnvFile({ fs: deps.io, env, home: deps.home })
   } catch {
     // config/loadEnv.ts refuses this start right after, naming the file.
     return

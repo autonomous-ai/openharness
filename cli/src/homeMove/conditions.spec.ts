@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs'
-import { homedir, tmpdir } from 'node:os'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { harnessPaneOwner } from '../lib/harnessSessionLabel.js'
@@ -236,8 +236,9 @@ describe('what the conditions read', () => {
 
   // The file config/loadEnv.ts reads, whatever folder the start runs in.
   it('a relative env file is the one in the home', () => {
-    writeFileSync(join(homedir(), 'harness.env'), 'HARNESS_LOGS_DIR=/from/the/home\n')
-    expect(withEnvFile({ fs: FS, env: { HARNESS_ENV_FILE: 'harness.env' } })).toEqual({ HARNESS_ENV_FILE: 'harness.env', HARNESS_LOGS_DIR: '/from/the/home' })
+    const home = folder()
+    writeFileSync(join(home, 'harness.env'), 'HARNESS_LOGS_DIR=/from/the/home\n')
+    expect(withEnvFile({ fs: FS, env: { HARNESS_ENV_FILE: 'harness.env' }, home })).toEqual({ HARNESS_ENV_FILE: 'harness.env', HARNESS_LOGS_DIR: '/from/the/home' })
   })
 
   // config/env.ts reads a relative override against the home in every process: the daemon the move waits for or leaves
