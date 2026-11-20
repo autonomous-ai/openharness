@@ -51,6 +51,8 @@ interface Options {
   latin1?: "HOME" | "XDG_DATA_HOME";
   /** Whether the app, started, ends at once, as with no FUSE or another arch's userland. */
   startFails?: boolean;
+  /** The download whose server sends without end, never naming its size. */
+  endless?: "manifest" | "app";
 }
 
 /**
@@ -73,7 +75,10 @@ for arg; do
 done
 printf '%s\\n' "$url" >> "$STUB_LOG/requested"
 printf '%s\\0' "$@" >> "$STUB_LOG/curl" && printf '\\n' >> "$STUB_LOG/curl"
-if [ "$url" = "$STUB_MANIFEST_URL" ]; then cp "$STUB_SERVED/metadata.json" "$out"; else cp "$STUB_SERVED/app" "$out"; fi`,
+served=app && [ "$url" != "$STUB_MANIFEST_URL" ] || served=manifest
+# A server that never stops, its size unnamed: curl before 8.4 (Ubuntu 22.04's 7.81) applies no --max-filesize to it.
+[ "$STUB_ENDLESS" != "$served" ] || exec head -c 4194304 /dev/zero > "$out" 2>/dev/null
+if [ "$served" = manifest ]; then cp "$STUB_SERVED/metadata.json" "$out"; else cp "$STUB_SERVED/app" "$out"; fi`,
 );
 stub(
   "pgrep",
@@ -164,6 +169,7 @@ function install(options: Options = {}) {
     STUB_MANIFEST_URL: DEVICE_MANIFEST_URL,
     STUB_ICON: options.icon === false ? "" : "1",
     STUB_START_FAILS: options.startFails ? "1" : "",
+    STUB_ENDLESS: options.endless ?? "",
   };
   delete env.XDG_DATA_HOME;
   if (options.home === null) delete env.HOME;
@@ -276,6 +282,20 @@ describe("device-install.sh", { timeout: 20_000 }, () => {
     }
     expect(flag(run.curl[0], "--max-filesize")).toBe("1048576");
     expect(flag(run.curl[1], "--max-filesize")).toBe(String(APP_SUMS.size));
+  });
+
+  // curl before 8.4 applies --max-filesize only to a size the server names: the shell's file size limit stops the rest.
+  it.each([
+    ["manifest", "could not download device metadata"],
+    ["app", `could not download Harness Device ${VERSION}`],
+  ] as const)("stops a %s download whose server never stops sending", (endless, reason) => {
+    const run = install({ endless });
+
+    expect(run.result.status).toBe(1);
+    // The shell names the limit before it, as curl names its own failure.
+    expect(run.result.stderr.trimEnd().split("\n").at(-1)).toBe(`Harness Device installer: ${reason}`);
+    expect(run.opt).toEqual([]);
+    expect(run.setsid).toEqual([]);
   });
 
   it.each(DEVICE_ASSET_PREFIXES)("takes the AppImage from %s", (prefix) => {

@@ -53,7 +53,10 @@ for arg; do
 done
 printf '%s\\n' "$url" >> "$STUB_LOG/requested"
 printf '%s\\0' "$@" >> "$STUB_LOG/curl" && printf '\\n' >> "$STUB_LOG/curl"
-if [ "$url" = "$STUB_MANIFEST_URL" ]; then cp "$STUB_SERVED/metadata.json" "$out"; else cp "$STUB_SERVED/release" "$out"; fi`,
+served=release && [ "$url" != "$STUB_MANIFEST_URL" ] || served=manifest
+# A server that never stops, its size unnamed: curl before 8.4 (Ubuntu 22.04's 7.81) applies no --max-filesize to it.
+[ "$STUB_ENDLESS" != "$served" ] || exec head -c 4194304 /dev/zero > "$out" 2>/dev/null
+if [ "$served" = manifest ]; then cp "$STUB_SERVED/metadata.json" "$out"; else cp "$STUB_SERVED/release" "$out"; fi`,
 );
 stub("plutil", `case "$2" in CFBundleShortVersionString) cat "$4" ;; *) cat "$STUB_SERVED/plutil/$2" ;; esac`);
 stub(
@@ -96,6 +99,8 @@ interface Options {
   signal?: string;
   /** A signal the first move sends the script once it has moved. */
   mvSignal?: string;
+  /** The download whose server sends without end, never naming its size. */
+  endless?: "manifest" | "release";
 }
 
 /** Runs the installer as `os` in a folder of its own: HOME is its home/, the app folder its app/. */
@@ -134,6 +139,7 @@ function install(os: "Darwin" | "Linux", options: Options = {}) {
     STUB_PLACE: place,
     STUB_SIGNAL: options.signal ?? "",
     STUB_MV_SIGNAL: options.mvSignal ?? "",
+    STUB_ENDLESS: options.endless ?? "",
   };
   // exec keeps the pid: the script's own, for the stubs that signal it.
   const result = spawnSync("sh", ["-c", 'export STUB_SCRIPT_PID=$$; exec sh "$0"', installer], {
@@ -312,6 +318,22 @@ describe("desktop-install.sh", { timeout: 20_000 }, () => {
       expect(flag(run.curl[1], "--max-filesize")).toBe(String(sums(os === "Darwin" ? ARCHIVE : APPIMAGE).size));
     },
   );
+
+  // curl before 8.4 applies --max-filesize only to a size the server names: the shell's file size limit stops the rest.
+  it.each([
+    ["Darwin", "manifest", "could not download desktop metadata"],
+    ["Darwin", "release", `could not download Harness ${VERSION}`],
+    ["Linux", "manifest", "could not download desktop metadata"],
+    ["Linux", "release", `could not download Harness ${VERSION}`],
+  ] as const)("%s stops a %s download whose server never stops sending", (os, endless, reason) => {
+    const run = install(os, { endless });
+
+    expect(run.result.status).toBe(1);
+    // The shell names the limit before it, as curl names its own failure.
+    expect(run.result.stderr.trimEnd().split("\n").at(-1)).toBe(`Harness desktop installer: ${reason}`);
+    expect(run.placed).toBeNull();
+    expect(run.ran).toEqual([]);
+  });
 
   // curl collapses dot segments, so a glob's `*` matching `../..` would download from another bucket.
   it.each([
