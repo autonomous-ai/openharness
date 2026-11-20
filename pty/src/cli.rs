@@ -392,6 +392,27 @@ mod tests {
         assert_eq!(parse(&args(&["version"])), Ok(Command::Version));
         assert_eq!(parse(&args(&["ps", "--json"])), Ok(Command::Ps));
         assert_eq!(
+            parse(&args(&["raise", "--pid", "4242"])),
+            Ok(Command::Raise {
+                target: RaiseTarget::Pid(4242)
+            })
+        );
+        assert_eq!(
+            parse(&args(&["raise", "--exe", "Code.EXE"])),
+            Ok(Command::Raise {
+                target: RaiseTarget::Exe("Code.EXE".into())
+            })
+        );
+        assert_eq!(
+            parse(&args(&[
+                "open-link",
+                "vscode://anthropic.claude-code/open?session=1"
+            ])),
+            Ok(Command::OpenLink {
+                url: "vscode://anthropic.claude-code/open?session=1".into()
+            })
+        );
+        assert_eq!(
             parse(&args(&[
                 "peer-account",
                 "--peer-port",
@@ -473,6 +494,43 @@ mod tests {
         assert!(parse(&args(&["serve", "--home", "/h", "--x"])).is_err());
         assert!(parse(&args(&["ps"])).is_err());
         assert!(parse(&args(&[])).is_err());
+    }
+
+    #[test]
+    fn refuses_bad_raise_and_link_arguments() {
+        let long_exe = format!("{}.exe", "a".repeat(252));
+        let long_url = format!("claude://{}", "a".repeat(2_049 - "claude://".len()));
+        for bad in [
+            &["raise", "--pid", "1", "--exe", "Code.exe"][..],
+            &["raise", "--exe", "Code.exe", "--pid", "1"],
+            &["raise"],
+            &["raise", "--pid"],
+            &["raise", "--pid", "0"],
+            &["raise", "--pid", "x"],
+            &["raise", "--exe", "C:\\x\\Code.exe"],
+            &["raise", "--exe", "x/Code.exe"],
+            &["raise", "--exe", "C:Code.exe"],
+            &["raise", "--exe", "code"],
+            &["raise", "--exe", &long_exe],
+            &["raise", "--title", "Code"],
+            &["open-link"],
+            &["open-link", "http://x"],
+            &["open-link", "file:///c:/x"],
+            &["open-link", "vscode:x"],
+            &["open-link", "vscode://a b"],
+            &["open-link", "vscode://a\tb"],
+            &["open-link", "vscode://a\nb"],
+            &["open-link", &long_url],
+            &["open-link", "vscode://a", "codex://b"],
+        ] {
+            assert!(parse(&args(bad)).is_err(), "{bad:?}");
+        }
+        // The limits themselves are taken.
+        assert!(parse(&args(&["raise", "--exe", &format!("{}.exe", "a".repeat(251))])).is_ok());
+        assert!(parse(&args(&["open-link", &long_url[..2_048]])).is_ok());
+        for scheme in ["claude", "codex", "vscode", "cursor"] {
+            assert!(parse(&args(&["open-link", &format!("{scheme}://x")])).is_ok(), "{scheme}");
+        }
     }
 
     #[test]
