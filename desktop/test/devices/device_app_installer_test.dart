@@ -7,6 +7,7 @@ import 'package:archive/archive.dart';
 import 'package:cryptography/dart.dart' show DartSha256;
 import 'package:dio/dio.dart';
 import 'package:ffi/ffi.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/home_dir.dart';
 import 'package:harness/devices/device_app.dart';
@@ -23,10 +24,22 @@ const _plist =
     '<plist version="1.0"><dict><key>CFBundleIdentifier</key>'
     '<string>ai.autonomous.harness.device</string></dict></plist>\n';
 
+/// Where the Windows installer and the Linux AppImage are served, under the
+/// CDN, and stand-ins for their bytes: nothing here is ever run.
+const _setupPath = '/harness/device/0.0.0/Harness-Device-windows-x64-setup.exe';
+const _appImagePath = '/harness/device/0.0.0/Harness-Device-linux-x64.AppImage';
+final _setup = utf8.encode('MZ stand-in installer');
+final _appImage = utf8.encode('\x7fELF stand-in AppImage');
+
 /// `ditto` is macOS's; the cases that reach it run only there.
 final String? _needsDitto = Platform.isMacOS
     ? null
     : 'needs /usr/bin/ditto (macOS)';
+
+/// The Linux step runs `/bin/chmod` and the case reads the mode it set.
+final String? _needsChmod = Platform.isWindows
+    ? 'needs /bin/chmod and POSIX modes'
+    : null;
 
 typedef _Handler = void Function(HttpRequest request);
 
@@ -160,13 +173,16 @@ void main() {
   late List<Socket> held;
   late List<int> archive;
   late List<List<String>> calls;
+  late List<Duration?> timeouts;
   late Future<ProcessResult> Function(List<String> call, ProcessResult result)
   afterTool;
+  late Future<ProcessResult> Function(String setup) setupAnswer;
   late Future<bool> Function() signatureAnswer;
   late List<String> signed;
   late bool opens;
   late List<String?> opened;
   late List<String> readOnly;
+  late String windowsPlace, linuxPlace;
 
   void makeReadOnly(String folder) {
     _setMode(folder, 0x16d); // 0555
@@ -194,15 +210,41 @@ void main() {
     serveManifest({'device-macos': _entry(bytes)});
   }
 
+  /// Serves [bytes] as [platform]'s package under its x64 key.
+  void publishFor(TargetPlatform platform, List<int> bytes) {
+    final (key, path) = platform == TargetPlatform.windows
+        ? ('device-windows-x64', _setupPath)
+        : ('device-linux-x64', _appImagePath);
+    routes[path] = _respond(200, bytes);
+    serveManifest({key: _entry(bytes, path: path)});
+  }
+
+  /// What the fake Windows installer does by default: puts the app at its place.
+  ProcessResult installAt(String place) {
+    File(place)
+      ..createSync(recursive: true)
+      ..writeAsStringSync('installed');
+    return ProcessResult(0, 0, '', '');
+  }
+
   setUp(() async {
     root = Directory.systemTemp.createTempSync('device-app-installer-test-');
     first = Directory(p.join(root.path, 'Applications'))..createSync();
     home = Directory(p.join(root.path, 'home'))..createSync();
     tempRoot = Directory(p.join(root.path, 'temp'))..createSync();
+    windowsPlace = p.join(
+      root.path,
+      'Local AppData',
+      'Harness Device',
+      deviceAppWindowsExe,
+    );
+    linuxPlace = p.join(home.path, '.local', 'opt', deviceAppImageName);
     seen = [];
     held = [];
     calls = [];
+    timeouts = [];
     afterTool = (call, result) async => result;
+    setupAnswer = (setup) async => installAt(windowsPlace);
     signatureAnswer = () async => true;
     signed = [];
     opens = true;
@@ -229,10 +271,22 @@ void main() {
     root.deleteSync(recursive: true);
   });
 
-  Future<ProcessResult> run(String executable, List<String> arguments) async {
+  Future<ProcessResult> run(
+    String executable,
+    List<String> arguments, {
+    Duration? timeout,
+  }) async {
     final call = [executable, ...arguments];
     calls.add(call);
-    return afterTool(call, await runDeviceAppTool(executable, arguments));
+    timeouts.add(timeout);
+    // What was downloaded is never run here: the fake installer stands in.
+    if (p.isWithin(tempRoot.path, executable)) return setupAnswer(executable);
+    return afterTool(
+      call,
+      timeout == null
+          ? await runDeviceAppTool(executable, arguments)
+          : await runDeviceAppTool(executable, arguments, timeout: timeout),
+    );
   }
 
   /// Sends the CDN's requests to the loopback server.
@@ -255,7 +309,11 @@ void main() {
       ),
     );
 
+  /// macOS's unless [platform] is given; [place] null leaves the installer's
+  /// own default.
   DeviceAppInstaller installer({
+    TargetPlatform platform = TargetPlatform.macOS,
+    String? place,
     String architecture = 'arm64',
     Duration downloadTimeout = const Duration(minutes: 5),
   }) => DeviceAppInstaller(
@@ -271,9 +329,23 @@ void main() {
     },
     dio: loopbackDio(),
     run: run,
+    platform: platform,
+    place: place,
     architecture: architecture,
     tempRoot: tempRoot,
     downloadTimeout: downloadTimeout,
+  );
+
+  DeviceAppInstaller onWindows() => installer(
+    platform: TargetPlatform.windows,
+    place: windowsPlace,
+    architecture: 'x64',
+  );
+
+  DeviceAppInstaller onLinux() => installer(
+    platform: TargetPlatform.linux,
+    place: linuxPlace,
+    architecture: 'x64',
   );
 
   void expectNothingInstalled() {
@@ -430,8 +502,9 @@ void main() {
     var exitCode = 0;
     Future<ProcessResult> recorder(
       String executable,
-      List<String> arguments,
-    ) async {
+      List<String> arguments, {
+      Duration? timeout,
+    }) async {
       ran.add([executable, ...arguments]);
       return ProcessResult(0, exitCode, '', '');
     }
@@ -449,7 +522,8 @@ void main() {
     expect(await openDeviceApp(recorder), isFalse);
     expect(
       await openDeviceApp(
-        (executable, arguments) async => throw TimeoutException('open'),
+        (executable, arguments, {Duration? timeout}) async =>
+            throw TimeoutException('open'),
       ),
       isFalse,
     );
@@ -759,4 +833,213 @@ void main() {
     expect(opened, [bundleIn(first.path)]);
     expect(tempRoot.listSync(), isEmpty);
   }, skip: _needsDitto);
+
+  test(
+    'windows: the installer runs silently, then the app opens from its place',
+    () async {
+      publishFor(TargetPlatform.windows, _setup);
+      List<int>? ran;
+      setupAnswer = (setup) async {
+        ran = File(setup).readAsBytesSync();
+        return installAt(windowsPlace);
+      };
+
+      final result = await onWindows().install();
+
+      expect(result.failed, isNull);
+      expect(result.installedAt, windowsPlace);
+      expect(opened, [windowsPlace]);
+      final [setupRun] = calls;
+      final setup = setupRun.first;
+      expect(p.dirname(p.dirname(setup)), tempRoot.path);
+      expect(p.basename(setup), 'Harness-Device-setup.exe');
+      expect(setupRun, [setup, '/S']);
+      expect(timeouts, [const Duration(minutes: 5)]);
+      expect(ran, _setup);
+      expect(signed, [setup]);
+      expect(tempRoot.listSync(), isEmpty);
+    },
+  );
+
+  test('windows: the signature is checked before the installer runs', () async {
+    publishFor(TargetPlatform.windows, _setup);
+    for (final answer in <Future<bool> Function()>[
+      () async => false,
+      () async => throw Exception('signer'),
+    ]) {
+      signatureAnswer = answer;
+      final result = await onWindows().install();
+      expect(result.failed, DeviceAppInstallStep.signature);
+      expect(result.installedAt, isNull);
+    }
+    expect(signed, hasLength(2));
+    expect(calls, isEmpty);
+    expect(File(windowsPlace).existsSync(), isFalse);
+    expect(opened, isEmpty);
+    expect(tempRoot.listSync(), isEmpty);
+  });
+
+  test(
+    'windows: an installer that fails, or leaves no app, fails at install',
+    () async {
+      publishFor(TargetPlatform.windows, _setup);
+      final answers = <String, Future<ProcessResult> Function(String)>{
+        // The app is there: only the exit code tells.
+        'exit 2': (setup) async {
+          installAt(windowsPlace);
+          return ProcessResult(0, 2, '', '');
+        },
+        'exit 0 and no app': (setup) async => ProcessResult(0, 0, '', ''),
+        'past its time': (setup) async => throw TimeoutException('setup'),
+      };
+      for (final MapEntry(key: name, value: answer) in answers.entries) {
+        setupAnswer = answer;
+        final result = await onWindows().install();
+        expect(result.failed, DeviceAppInstallStep.install, reason: name);
+        expect(result.installedAt, isNull, reason: name);
+        expect(opened, isEmpty, reason: name);
+        expect(tempRoot.listSync(), isEmpty, reason: name);
+        if (File(windowsPlace).existsSync()) File(windowsPlace).deleteSync();
+      }
+      expect(calls, hasLength(3));
+    },
+  );
+
+  test(
+    'windows: an app already in place is opened, not installed again',
+    () async {
+      publishFor(TargetPlatform.windows, _setup);
+      File(windowsPlace)
+        ..createSync(recursive: true)
+        ..writeAsStringSync('mine');
+
+      final result = await onWindows().install();
+
+      expect(result.failed, isNull);
+      expect(result.installedAt, windowsPlace);
+      expect(File(windowsPlace).readAsStringSync(), 'mine');
+      expect(calls, isEmpty);
+      expect(opened, [windowsPlace]);
+      expect(tempRoot.listSync(), isEmpty);
+    },
+  );
+
+  test('linux: the AppImage lands executable at its place and opens', () async {
+    publishFor(TargetPlatform.linux, _appImage);
+
+    final result = await onLinux().install();
+
+    expect(result.failed, isNull);
+    expect(result.installedAt, linuxPlace);
+    expect(File(linuxPlace).readAsBytesSync(), _appImage);
+    expect(File(linuxPlace).statSync().mode & 0x1ff, 0x1ed); // 0755
+    expect(namesIn(p.dirname(linuxPlace)), [deviceAppImageName]);
+    final [chmod] = calls;
+    expect(chmod.take(2), ['/bin/chmod', '0755']);
+    expect(p.dirname(chmod[2]), p.dirname(linuxPlace));
+    expect(
+      p.basename(chmod[2]),
+      matches(RegExp(r'^\.Harness-Device\.AppImage\.[0-9a-f]{16}\.partial$')),
+    );
+    expect(opened, [linuxPlace]);
+    expect(tempRoot.listSync(), isEmpty);
+  }, skip: _needsChmod);
+
+  test('linux: no signature step runs', () async {
+    publishFor(TargetPlatform.linux, _appImage);
+    signatureAnswer = () async => false;
+
+    final result = await onLinux().install();
+
+    expect(result.failed, isNull);
+    expect(signed, isEmpty);
+  }, skip: _needsChmod);
+
+  test('linux: a copy already at the place is kept', () async {
+    publishFor(TargetPlatform.linux, _appImage);
+    File(linuxPlace)
+      ..createSync(recursive: true)
+      ..writeAsBytesSync(const [1, 2, 3]);
+
+    final result = await onLinux().install();
+
+    expect(result.failed, isNull);
+    expect(result.installedAt, linuxPlace);
+    expect(File(linuxPlace).readAsBytesSync(), const [1, 2, 3]);
+    expect(namesIn(p.dirname(linuxPlace)), [deviceAppImageName]);
+    expect(calls, isEmpty);
+    expect(opened, [linuxPlace]);
+    expect(tempRoot.listSync(), isEmpty);
+  });
+
+  test('linux: a copy that cannot be made executable is removed and fails at install', () async {
+    publishFor(TargetPlatform.linux, _appImage);
+    afterTool = (call, result) async => call.first == '/bin/chmod'
+        ? ProcessResult(result.pid, 1, '', '')
+        : result;
+
+    final result = await onLinux().install();
+
+    expect(result.failed, DeviceAppInstallStep.install);
+    expect(result.installedAt, isNull);
+    expect(calls.single.first, '/bin/chmod');
+    expect(namesIn(p.dirname(linuxPlace)), isEmpty);
+    expect(opened, isEmpty);
+    expect(tempRoot.listSync(), isEmpty);
+  }, skip: _needsChmod);
+
+  test('no place, no install', () async {
+    // flutter test reads as Android, which has no place: the installer's
+    // default never names this computer's own.
+    expect(deviceAppPlace(), isNull);
+    for (final (platform, bytes) in [
+      (TargetPlatform.windows, _setup),
+      (TargetPlatform.linux, _appImage),
+    ]) {
+      publishFor(platform, bytes);
+      final result = await installer(
+        platform: platform,
+        architecture: 'x64',
+      ).install();
+      expect(result.failed, DeviceAppInstallStep.install, reason: '$platform');
+      expect(result.installedAt, isNull, reason: '$platform');
+      expect(calls, isEmpty, reason: '$platform');
+      expect(opened, isEmpty, reason: '$platform');
+      expect(tempRoot.listSync(), isEmpty, reason: '$platform');
+    }
+  });
+
+  test("the device app starts without Desktop's AppImage variables", () async {
+    final started = <(String, Map<String, String>)>[];
+
+    final ok = await startDeviceApp(
+      '/home/p q/.local/opt/Harness-Device.AppImage',
+      start: (path, environment) async => started.add((path, environment)),
+      environment: const {
+        'APPIMAGE': '/home/p q/.local/opt/Harness.AppImage',
+        'APPDIR': '/tmp/.mount_HarnessX',
+        'ARGV0': 'Harness.AppImage',
+        'OWD': '/home/p q',
+        'HOME': '/home/p q',
+        'PATH': '/usr/bin:/bin',
+      },
+    );
+
+    expect(ok, isTrue);
+    final [(path, environment)] = started;
+    expect(path, '/home/p q/.local/opt/Harness-Device.AppImage');
+    expect(environment, {'HOME': '/home/p q', 'PATH': '/usr/bin:/bin'});
+  });
+
+  test('a start that throws is a failed open', () async {
+    expect(
+      await startDeviceApp(
+        r'C:\Users\Nguyễn Văn A\AppData\Local\Harness Device\harness-device.exe',
+        start: (path, environment) async =>
+            throw const ProcessException('harness-device.exe', [], 'gone', 2),
+        environment: const {},
+      ),
+      isFalse,
+    );
+  });
 }
