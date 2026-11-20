@@ -209,7 +209,8 @@ exec sh "$0"`;
 const entryAt = (dataHome: string) => join(dataHome, "applications", "harness-device.desktop");
 const iconAt = (dataHome: string) => join(dataHome, "icons", "harness-device.png");
 
-describe("device-install.sh", () => {
+// The first test runs each stub for the first time, which macOS checks: seconds, more on a loaded machine.
+describe("device-install.sh", { timeout: 20_000 }, () => {
   it("parses as sh", () => {
     const result = spawnSync("sh", ["-n", installer], { encoding: "utf8" });
 

@@ -160,7 +160,8 @@ function install(os: "Darwin" | "Linux", options: Options = {}) {
   };
 }
 
-describe("desktop-install.sh", () => {
+// The first test runs each stub for the first time, which macOS checks: seconds, more on a loaded machine.
+describe("desktop-install.sh", { timeout: 20_000 }, () => {
   it("parses as sh", () => {
     const result = spawnSync("sh", ["-n", installer], { encoding: "utf8" });
 
