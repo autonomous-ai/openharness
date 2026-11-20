@@ -6,8 +6,8 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { ensureDaemonToken, newPipePath, readDaemonToken } from '../lib/windows/pipeAuth.js'
 import {
-  createDevicesProof, DEVICES_RECORD_FILE, DEVICES_TOKEN_FILE, devicesPipe, devicesRecordPath, PROOF_MAX_AGE_MS,
-  readDevicesRecord, removeDevicesRecord, writeDevicesRecord,
+  createDevicesProof, createRecordProof, DEVICES_RECORD_FILE, DEVICES_TOKEN_FILE, devicesPipe, devicesRecordPath,
+  PROOF_MAX_AGE_MS, readDevicesRecord, removeDevicesRecord, writeDevicesRecord,
 } from './listenerPipe.js'
 
 const dirs: string[] = []
@@ -243,5 +243,29 @@ describe('the pid proof', () => {
     expect(await proof.pipe(dir)).toEqual({ pipe, token })
     expect(await proof.pipe(dir)).toEqual({ pipe, token })
     expect(reads).toBe(2)
+  })
+
+  // The daemon's record is another file in the same folder (deviceClaude/inbox.ts): neither proof stands for the other.
+  it('a record proof is held per record file', async () => {
+    const dir = dataDir()
+    const token = ensureDaemonToken(dir, DEVICES_TOKEN_FILE)
+    const started = filetime(Date.now() - 3_600_000)
+    let rows = 0
+    let clock = 1_000_000
+    const proof = createRecordProof({
+      liveness: { alive: () => true, rows: async () => { rows++; return [{ pid: 4242, executable: 'node.exe', startMarker: started }] } },
+      now: () => clock,
+    })
+    const records = ['first.json', 'second.json'].map((name) => {
+      const file = join(dir, name)
+      const pipe = pipeIn(dir)
+      writeFileSync(file, JSON.stringify({ pipe, pid: 4242 }))
+      return { file, pipe, read: () => ({ record: { pipe, pid: 4242 }, mtimeMs: statSync(file).mtimeMs, token }) }
+    })
+    for (const { file, pipe, read } of records) expect(await proof.pipe(file, read)).toEqual({ pipe, token })
+    expect(rows).toBe(2)
+    clock += PROOF_MAX_AGE_MS - 1_000
+    for (const { file, pipe, read } of records) expect(await proof.pipe(file, read)).toEqual({ pipe, token })
+    expect(rows).toBe(2)
   })
 })

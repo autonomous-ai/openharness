@@ -131,6 +131,7 @@ async function device(argv: string[], deps: Partial<DeviceDeps> = {}) {
     codexHome: folder(), codex: () => true, env: {}, cwd: '/',
     vscode: () => { throw new Error('only the vscode words ask for VS Code') },
     orca: () => { throw new Error('only orca status, enable and disable ask for Orca') },
+    write: async () => { throw new Error('only claude inbox writes its lines') },
     out: (line) => { out.push(line) }, err: (line) => { err.push(line) },
     ...deps,
   })
@@ -365,6 +366,42 @@ describe('harness device claude', () => {
         .map((name) => join(dir, name))
         .filter((file) => importsDevice.test(readFileSync(join(SRC, file), 'utf8'))))
     expect(importers).toEqual([])
+  })
+})
+
+describe('harness device claude inbox', () => {
+  const SESSION = '0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d'
+  /** What the command writes through `write`, each line whole. */
+  function lines(): { written: string[]; write: DeviceDeps['write'] } {
+    const written: string[] = []
+    return { written, write: async (line) => { written.push(line); return true } }
+  }
+
+  it('runs the follower: each answer of the daemon\'s is a line through write', async () => {
+    const dataDir = folder()
+    const said = ['hi']
+    const served = await listenLocalSocket((req, res) => {
+      req.resume()
+      req.on('end', () => {
+        const text = said.shift()
+        if (text) res.end(JSON.stringify({ text }))
+        else res.writeHead(404).end('{"error":"NOT_FOUND"}')
+      })
+    }, unixSocketPath(dataDir, PORT)!)
+    cleanup.push(served.close)
+    const { written, write } = lines()
+    expect(await device(['claude', 'inbox', SESSION], { dataDir, write })).toEqual({ code: 0, out: [], err: [] })
+    expect(written).toEqual(['{"text":"hi"}', '{"off":true}'])
+  })
+
+  it('with no id writes off', async () => {
+    const { written, write } = lines()
+    expect(await device(['claude', 'inbox'], { write })).toEqual({ code: 0, out: [], err: [] })
+    expect(written).toEqual(['{"off":true}'])
+  })
+
+  it('is not in DEVICE_USAGE', () => {
+    expect(DEVICE_USAGE).not.toMatch(/inbox/)
   })
 })
 
