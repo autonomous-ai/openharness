@@ -48,9 +48,12 @@ export type PowershellModule = 'Appx' | 'CimCmdlets' | 'Microsoft.PowerShell.Loc
  * took 1.8 s on the same runner. Off, a command of a module not imported is "not recognized", Join-Path and Select-Object
  * among them (powershellModules.spec.ts names one first). A module goes in by its folder, a string (Join-Path is a
  * module's command): PowerShell finds its manifest there or in a version folder, where LocalAccounts keeps it (1.0.0.0).
+ * Each import stops the script when it fails: these lines come before a script's own `$ErrorActionPreference = 'Stop'`,
+ * and under -File a failed import is only printed.
  */
 export function modulesByPath(...modules: PowershellModule[]): string {
-  return ["$PSModuleAutoLoadingPreference = 'None'", ...modules.map((module) => `Import-Module -Name "$PSHOME\\Modules\\${module}"`)].join('\n')
+  return ["$PSModuleAutoLoadingPreference = 'None'",
+    ...modules.map((module) => `Import-Module -Name "$PSHOME\\Modules\\${module}" -ErrorAction Stop`)].join('\n')
 }
 
 export interface PowershellResult { status: number | null; stdout: string; stderr: string; error?: Error }
