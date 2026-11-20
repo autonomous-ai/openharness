@@ -49,20 +49,23 @@ describe("/device", () => {
       expect(screen.getByRole("heading", { name })).toBeInTheDocument();
     }
     expect(screen.getByText("Drag up or down to read back.")).toBeInTheDocument();
-    expect(document.body).toHaveTextContent("up to 10 minutes a message");
-    expect(document.body).toHaveTextContent("30 minutes a day");
+    // Voice allowances are answered when asked, never on the guide; copy never names plans.
+    expect(document.body).not.toHaveTextContent("10 minutes");
+    expect(document.body).not.toHaveTextContent("30 minutes");
+    expect(document.body).not.toHaveTextContent("minutes a day");
+    expect(document.body).not.toHaveTextContent(/\bFree\b/);
     for (const app of ["Claude", "ChatGPT", "VS Code", "Cursor", "Orca", "herdr", "Terminal", "More joining"]) {
       expect(screen.getByText(app)).toBeInTheDocument();
     }
     for (const summary of [
       "The menu says “Plug in your device”.",
       "An agent is missing on the device.",
-      "Voice stops or doesn't send.",
       "More than one computer?",
       "Something else is wrong.",
     ]) {
       expect(screen.getByText(summary)).toBeInTheDocument();
     }
+    expect(screen.queryByText("Voice stops or doesn't send.")).toBeNull();
     expect(screen.getAllByText("Export logs").length).toBeGreaterThan(0);
     expect(screen.getAllByRole("link", { name: "human@autonomous.ai" })[0]).toHaveAttribute("href", "mailto:human@autonomous.ai");
     expect(screen.getByRole("link", { name: "Product page ↗" })).toHaveAttribute("href", "https://www.autonomous.ai/harness-device");
