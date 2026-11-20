@@ -80,10 +80,17 @@ if [[ "$mode" == minisign ]]; then
   exit 0
 fi
 # The version that wrote Cargo.lock.
-tauri_cli=(cargo install tauri-cli --version 2.12.4 --locked)
+tauri_cli_version=2.12.4
+# CI restores the CLI from a cache keyed on this file: one already at the pin is kept, not compiled again.
+install_tauri_cli() {
+  if [[ "$(cargo tauri --version 2>/dev/null)" != "tauri-cli $tauri_cli_version" ]]; then
+    cargo install tauri-cli --version "$tauri_cli_version" --locked
+  fi
+}
 rustup toolchain install stable --profile minimal
 if [[ "$mode" == tauri-cli ]]; then
-  exec "${tauri_cli[@]}"
+  install_tauri_cli
+  exit 0
 fi
 case "$os" in
   macos) rustup target add aarch64-apple-darwin x86_64-apple-darwin ;;
@@ -96,6 +103,6 @@ case "$os" in
   # Both arches build on one x64 runner.
   windows) rustup target add x86_64-pc-windows-msvc aarch64-pc-windows-msvc ;;
 esac
-"${tauri_cli[@]}"
+install_tauri_cli
 (cd "$app/ui" && npm ci --no-audit --no-fund)
 install_minisign
