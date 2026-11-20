@@ -4,6 +4,7 @@
  * every write below it on macOS.
  */
 import { existsSync, watch, type FSWatcher } from 'node:fs'
+import { pathToWatch } from '../../lib/pathToWatch.js'
 
 /** Calls `changed` on each change in the nearest existing folder of `folders` (nearest first), moving to a nearer
  *  one as it appears and out of one that is removed. `file` is the name the OS gave for what changed in the folder
@@ -18,9 +19,13 @@ export function watchNearest(folders: readonly string[], changed: (file?: string
       held = undefined
     }
     for (let at = 0; at < (held?.at ?? folders.length); at++) {
+      // On Windows by its long name: by a short one, the first change would abort the process (lib/pathToWatch.ts).
+      // The names told are of the entries in it, which its name does not change.
+      const folder = pathToWatch(folders[at])
+      if (folder === undefined) continue
       let watcher: FSWatcher
       try {
-        watcher = watch(folders[at], { persistent: false }, (_event, file) => {
+        watcher = watch(folder, { persistent: false }, (_event, file) => {
           hold()
           changed(file ?? undefined)
         })
