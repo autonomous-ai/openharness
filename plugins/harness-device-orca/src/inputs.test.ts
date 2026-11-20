@@ -1,12 +1,14 @@
 // Node's real inputs, against scripts, sockets and folders this file makes under /tmp: never the developer's own.
 import { afterEach, assert, beforeEach, test } from 'orca/testing'
 import { spawnSync } from 'node:child_process'
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { createHmac, randomBytes } from 'node:crypto'
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import { MISSING, nodeInputs } from './inputs'
 
 const BODY = '{"type":"dial","standby":true}'
 const FRONT = '{"type":"orcaFront","terminals":null}'
+const TOKEN = 'ab'.repeat(32)
 let dir = ''
 let servers: Server[] = []
 
@@ -35,12 +37,11 @@ function script(name: string, body: string): string {
   return file
 }
 
-function bounds(extra: { path?: string; timeoutMs?: number; maxBytes?: number; signal?: AbortSignal } = {}) {
-  return { path: '/usr/bin:/bin', timeoutMs: 5_000, maxBytes: 4_096, signal: new AbortController().signal, ...extra }
+function bounds(extra: { path?: string; cwd?: string; timeoutMs?: number; maxBytes?: number; signal?: AbortSignal } = {}) {
+  return { path: '/usr/bin:/bin', cwd: dir, timeoutMs: 5_000, maxBytes: 4_096, signal: new AbortController().signal, ...extra }
 }
 
-async function serve(handle: (req: IncomingMessage, res: ServerResponse, body: string) => void): Promise<string> {
-  const socketPath = `${dir}/devices.sock`
+async function serve(handle: (req: IncomingMessage, res: ServerResponse, body: string) => void, socketPath = `${dir}/devices.sock`): Promise<string> {
   const server = createServer((req, res) => {
     let body = ''
     req.on('data', (chunk) => (body += chunk))
@@ -49,6 +50,23 @@ async function serve(handle: (req: IncomingMessage, res: ServerResponse, body: s
   servers.push(server)
   await new Promise<void>((done) => server.listen(socketPath, done))
   return socketPath
+}
+
+// HMAC-SHA256(token, separator ‖ nonce), as the devices compute it (cli/src/lib/windows/pipeAuth.ts).
+function mac(token: string, separator: number, nonce: string): string {
+  return createHmac('sha256', Buffer.from(token, 'hex')).update(Buffer.of(separator)).update(nonce).digest('hex')
+}
+
+/** The devices' pipe, stood in by a Unix socket named as a pipe is, harness-<32 hex>. A request whose auth proves TOKEN
+ *  for a nonce that starts with that id is handed on with the proof its answer owes; any other is answered 401, as the
+ *  devices answer it. */
+async function servePipe(handle: (res: ServerResponse, proof: string, body: string) => void): Promise<string> {
+  const id = randomBytes(16).toString('hex')
+  return serve((req, res, body) => {
+    const [nonce = '', auth] = String(req.headers['x-harness-auth']).split('.')
+    if (nonce.length === 64 && nonce.startsWith(id) && auth === mac(TOKEN, 0x01, nonce)) handle(res, mac(TOKEN, 0x00, nonce), body)
+    else res.writeHead(401).end('{"error":"PIPE_AUTH_REQUIRED"}')
+  }, `${dir}/harness-${id}`)
 }
 
 // macOS starts a folder's watch a moment after fs.watch returns and misses what came before it, so the entry is
@@ -87,6 +105,11 @@ test("a bare name is found through the PATH it is given, not the process's own",
   assert.equal(await nodeInputs().run('hdo-tool', [], bounds({ path: `${dir}/bin` })), `found ${dir}/bin\n`)
 })
 
+test('run starts its file in the folder it is given', async () => {
+  mkdirSync(`${dir}/home`)
+  assert.equal(await nodeInputs().run('/bin/pwd', [], bounds({ cwd: `${dir}/home` })), `${realpathSync(`${dir}/home`)}\n`)
+})
+
 test('a non-zero exit, output over maxBytes and a run past its timeout are null, and the run past its timeout is killed', async () => {
   assert.equal(await nodeInputs().run(script('fails', 'exit 3'), [], bounds()), null)
   assert.equal(await nodeInputs().run(script('loud', "printf '%0100d' 0"), [], bounds({ maxBytes: 10 })), null)
@@ -114,7 +137,7 @@ test('connect posts the body to / and hands on the status and the chunks', async
     res.write('{"attached":false}\n')
     res.end('{"attached":true,"agent":null}\n')
   })
-  const answer = await nodeInputs().connect(socketPath, BODY, new AbortController().signal)
+  const answer = await nodeInputs().connect({ socket: socketPath }, BODY, new AbortController().signal)
   assert.ok(answer)
   assert.equal(answer.status, 200)
   assert.equal(await text(answer.chunks), '{"attached":false}\n{"attached":true,"agent":null}\n')
@@ -123,19 +146,19 @@ test('connect posts the body to / and hands on the status and the chunks', async
 
 test('a socket that is not there, and one nothing listens on, are null', async () => {
   const signal = new AbortController().signal
-  assert.equal(await nodeInputs().connect(`${dir}/none.sock`, BODY, signal), null)
+  assert.equal(await nodeInputs().connect({ socket: `${dir}/none.sock` }, BODY, signal), null)
   // A socket file whose listener is gone, as a crashed process leaves it: closing the server would remove its own name.
   const socketPath = await serve(() => {})
   renameSync(socketPath, `${dir}/stale.sock`)
   const server = servers.pop()!
   await new Promise((done) => server.close(done))
-  assert.equal(await nodeInputs().connect(`${dir}/stale.sock`, BODY, signal), null)
+  assert.equal(await nodeInputs().connect({ socket: `${dir}/stale.sock` }, BODY, signal), null)
 })
 
 test('an abort before the answer is null', async () => {
   const abort = new AbortController()
   const socketPath = await serve(() => abort.abort())
-  assert.equal(await nodeInputs().connect(socketPath, BODY, abort.signal), null)
+  assert.equal(await nodeInputs().connect({ socket: socketPath }, BODY, abort.signal), null)
 })
 
 test('an abort after it ends the chunks', async () => {
@@ -144,7 +167,7 @@ test('an abort after it ends the chunks', async () => {
     res.writeHead(200)
     res.write('{"attached":false}\n')
   })
-  const answer = await nodeInputs().connect(socketPath, BODY, abort.signal)
+  const answer = await nodeInputs().connect({ socket: socketPath }, BODY, abort.signal)
   assert.ok(answer)
   let all = ''
   for await (const chunk of answer.chunks) {
@@ -162,26 +185,75 @@ test('post posts the body to / on a connection of its own and answers the status
     else res.writeHead(400).end('{"error":"bad"}\n')
   })
   const signal = new AbortController().signal
-  assert.equal(await nodeInputs().post(socketPath, FRONT, signal), 204)
-  assert.equal(await nodeInputs().post(socketPath, FRONT, signal), 400)
+  assert.equal(await nodeInputs().post({ socket: socketPath }, FRONT, signal), 204)
+  assert.equal(await nodeInputs().post({ socket: socketPath }, FRONT, signal), 400)
   const seen = { method: 'POST', url: '/', body: FRONT, connection: 'close' }
   assert.deepEqual(got, [seen, seen])
 })
 
 test('post to a socket that is not there, and to one nothing listens on, is null', async () => {
   const signal = new AbortController().signal
-  assert.equal(await nodeInputs().post(`${dir}/none.sock`, FRONT, signal), null)
+  assert.equal(await nodeInputs().post({ socket: `${dir}/none.sock` }, FRONT, signal), null)
   const socketPath = await serve(() => {})
   renameSync(socketPath, `${dir}/stale.sock`)
   const server = servers.pop()!
   await new Promise((done) => server.close(done))
-  assert.equal(await nodeInputs().post(`${dir}/stale.sock`, FRONT, signal), null)
+  assert.equal(await nodeInputs().post({ socket: `${dir}/stale.sock` }, FRONT, signal), null)
 })
 
 test('an abort before the answer makes post null', async () => {
   const abort = new AbortController()
   const socketPath = await serve(() => abort.abort())
-  assert.equal(await nodeInputs().post(socketPath, FRONT, abort.signal), null)
+  assert.equal(await nodeInputs().post({ socket: socketPath }, FRONT, abort.signal), null)
+})
+
+test('over a pipe, connect proves the token, and hands on the status and the chunks of an answer that proves it back', async () => {
+  let got = ''
+  const pipe = await servePipe((res, proof, body) => {
+    got = body
+    res.writeHead(200, { 'x-harness-proof': proof })
+    res.end('{"attached":false}\n')
+  })
+  const answer = await nodeInputs().connect({ pipe, token: TOKEN }, BODY, new AbortController().signal)
+  assert.ok(answer)
+  assert.equal(answer.status, 200)
+  assert.equal(await text(answer.chunks), '{"attached":false}\n')
+  assert.equal(got, BODY)
+})
+
+test('over a pipe, post proves the token, and answers the status of an answer that proves it back', async () => {
+  let got = ''
+  const pipe = await servePipe((res, proof, body) => {
+    got = body
+    res.writeHead(204, { 'x-harness-proof': proof }).end()
+  })
+  assert.equal(await nodeInputs().post({ pipe, token: TOKEN }, FRONT, new AbortController().signal), 204)
+  assert.equal(got, FRONT)
+})
+
+test('an answer over a pipe with no proof, or a wrong one, is null and closed unread; so is the answer to another token', async () => {
+  const wrongs = [() => undefined, (proof: string) => `${proof[0] === '0' ? '1' : '0'}${proof.slice(1)}`]
+  for (const wrong of wrongs) {
+    const closed: Promise<void>[] = []
+    const pipe = await servePipe((res, proof) => {
+      closed.push(new Promise((done) => res.on('close', done)))
+      const given = wrong(proof)
+      res.writeHead(200, given === undefined ? {} : { 'x-harness-proof': given })
+      // Left open, as a stream is: only the plugin can close it.
+      res.write('{"attached":false}\n')
+    })
+    const signal = new AbortController().signal
+    assert.equal(await nodeInputs().connect({ pipe, token: TOKEN }, BODY, signal), null)
+    assert.equal(await nodeInputs().post({ pipe, token: TOKEN }, FRONT, signal), null)
+    await Promise.all(closed)
+    assert.equal(closed.length, 2)
+  }
+  let handled = 0
+  const pipe = await servePipe(() => (handled += 1))
+  const signal = new AbortController().signal
+  assert.equal(await nodeInputs().connect({ pipe, token: 'cd'.repeat(32) }, BODY, signal), null)
+  assert.equal(await nodeInputs().post({ pipe, token: 'cd'.repeat(32) }, FRONT, signal), null)
+  assert.equal(handled, 0)
 })
 
 test('watch tells the name of an entry made in its folder; after its close it tells nothing', async () => {

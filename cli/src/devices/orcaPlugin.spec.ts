@@ -26,6 +26,8 @@ const FILES: OrcaPluginFiles = {
   'src/worker.ts': 'export const worker = true\n',
 }
 const REAL = orcaPluginRun()
+/** A file system that matches names without case, as macOS's and Windows' do by default. */
+const CASE_BLIND = existsSync(tmpdir().toUpperCase())
 
 // One fake for the file: macOS scans a new executable at its first run, about half a second each, so a fake a case
 // would make the table of rules ten times as long. Each case sets every answer it reads, and its calls are those made
@@ -56,7 +58,6 @@ function setup(over: Partial<OrcaPluginDeps> = {}) {
   const before = orca.calls().length
   const said: string[] = []
   const deps: OrcaPluginDeps = {
-    platform: 'darwin',
     orca: () => orca.bin,
     run: REAL.run,
     files: () => FILES,
@@ -95,14 +96,12 @@ function up(plugins: unknown[]): void {
 }
 
 describe('orcaStatus', () => {
-  it('on Windows, and from the sources, nothing is run and no folder is written', async () => {
-    for (const over of [{ platform: 'win32' as const }, { files: () => null }]) {
-      const { deps, folder, calls } = setup(over)
-      up([])
-      expect(await orcaStatus(deps)).toEqual({ orca: 'absent' })
-      expect(calls()).toEqual([])
-      expect(existsSync(folder)).toBe(false)
-    }
+  it('from the sources, nothing is run and no folder is written', async () => {
+    const { deps, folder, calls } = setup({ files: () => null })
+    up([])
+    expect(await orcaStatus(deps)).toEqual({ orca: 'absent' })
+    expect(calls()).toEqual([])
+    expect(existsSync(folder)).toBe(false)
   })
 
   it('no orca is absent', async () => {
@@ -290,6 +289,14 @@ describe('orcaStatus', () => {
     symlinkSync(deps.dataDir, link)
     up([entry(folder)])
     expect(await orcaStatus({ ...deps, folder: join(link, 'orca-plugin') })).toEqual({ orca: 'on' })
+  })
+
+  // Orca records the folder by fs/promises.realpath, the system's own: where names match without case it gives the
+  // folder's spelling on disk, and JS's realpathSync the one it was handed.
+  it.runIf(CASE_BLIND)('the folder handed in another case is on: Orca records its spelling on disk', async () => {
+    const { root, deps, folder } = setup()
+    up([entry(folder)])
+    expect(await orcaStatus({ ...deps, folder: join(root, 'DATA', 'orca-plugin') })).toEqual({ orca: 'on' })
   })
 
   it('an entry that names the folder through a link is not set up: Orca updates from the path it recorded', async () => {
@@ -748,7 +755,7 @@ describe('orcaSetUp', () => {
   })
 
   it('no Orca to ask', async () => {
-    for (const over of [{ platform: 'win32' as const }, { files: () => null }, { orca: () => null }]) {
+    for (const over of [{ files: () => null }, { orca: () => null }]) {
       const { deps, folder, calls } = setup(over)
       holds()
       expect(await orcaSetUp(deps, { force: true })).toStrictEqual({ orca: 'absent', error: 'not-running' })
@@ -873,7 +880,7 @@ describe('orcaRemove', () => {
   })
 
   it('no Orca to ask: off, nothing but status', async () => {
-    for (const over of [{ platform: 'win32' as const }, { files: () => null }, { orca: () => null }]) {
+    for (const over of [{ files: () => null }, { orca: () => null }]) {
       const { deps, calls } = setup(over)
       holds()
       expect(await orcaRemove(deps)).toStrictEqual({ orca: 'off' })

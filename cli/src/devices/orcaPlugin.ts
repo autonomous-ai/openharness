@@ -4,9 +4,10 @@
  * (`orca plugin install|update|enable|uninstall`). Orca installs the plugin from a folder in Harness's data root that
  * holds the files cli.js carries (orcaPluginFolder.ts), written before Orca is asked about it; a folder that cannot be
  * written is said through `err` by its error's code. It runs in the `harness` command's process (`harness device orca`)
- * and in the devices' process (cable/orcaPluginSetup.ts), never in the core's. Orca's answers are outside text: each is
- * read up to ORCA_ANSWER_MAX_BYTES, only the fields named here are read, and nothing of them is logged
- * (docs/plans/2026-11-19-device-orca-default-on-design.md).
+ * and in the devices' process (cable/orcaPluginSetup.ts): on Windows the core's, where the devices run through the
+ * inline door (services/inline.ts `startDevices`) until Windows services run in their own process; elsewhere never the
+ * core's. Orca's answers are outside text: each is read up to ORCA_ANSWER_MAX_BYTES, only the fields named here are
+ * read, and nothing of them is logged (docs/plans/2026-11-19-device-orca-default-on-design.md).
  */
 import { realpathSync } from 'node:fs'
 import { readOrcaConnected, readRemoved, readSetup } from './dialSkillFiles.js'
@@ -22,7 +23,6 @@ export const ORCA_ANSWER_MAX_BYTES = 256 * 1024
 export type OrcaPluginFiles = Readonly<Record<string, string>>
 /** The real things: Orca's CLI and what cli.js carries. */
 export interface OrcaPluginRun {
-  platform: NodeJS.Platform
   /** Orca's CLI (`orcaBinary`), null when it is not here. */
   orca(): string | null
   /** `orcaHomesDeps().run`: no shell; `code` null for a kill, a binary that could not start or output past maxBytes. */
@@ -36,7 +36,7 @@ export type OrcaPluginState = 'on' | 'off' | 'held' | 'setup' | 'absent'
 /** What a change asks Orca with: the `orca` to run, the plugin's key to name to Orca, and the version cli.js carries,
  *  to know a plugin Orca lists as the one asked for. */
 interface Asking { orca: string; key: string; version: string }
-/** Why Orca is not asked about the plugin: `no-plugin`, no Orca here (Windows, no `orca`) or a CLI from the sources;
+/** Why Orca is not asked about the plugin: `no-plugin`, no Orca here (no `orca`) or a CLI from the sources;
  *  `old`, an Orca below the plugin's engines; `folder`, the plugin's folder not written; `not-running`, an Orca not
  *  reachable, or a status that cannot be read; `unread`, an answer after a status that said Orca is reachable, or a
  *  record, that cannot be read: a failure, not Orca's absence. */
@@ -76,10 +76,11 @@ function meets(version: string, range: string): boolean {
   return app[4] === undefined
 }
 
-/** A path by its real path, or as written when it does not resolve. */
+/** A path by its real path as the system gives it, as Orca's fs/promises.realpath does: where names match without case
+ *  (macOS, Windows), the spelling on disk. As written when it does not resolve. */
 function real(path: string): string {
   try {
-    return realpathSync(path)
+    return realpathSync.native(path)
   } catch {
     return path
   }
@@ -122,7 +123,6 @@ const manifestOf = (files: OrcaPluginFiles) => JSON.parse(files['orca-plugin.jso
 /** Orca asked up to the plugin's key, the folder written before Orca is asked about it. Orca is asked `status` first:
  *  every other plugin command waits about 30 seconds for an Orca that is not reachable. */
 async function reach(deps: OrcaPluginDeps): Promise<Asking | Unasked> {
-  if (deps.platform === 'win32') return { why: 'no-plugin' }
   const files = deps.files()
   if (files === null) return { why: 'no-plugin' }
   const orca = deps.orca()
@@ -188,7 +188,6 @@ function stateOf(entry: Record<string, unknown>, asking: Asking, folder: string)
 export function orcaPluginRun(): OrcaPluginRun {
   const deps = orcaHomesDeps()
   return {
-    platform: deps.platform,
     orca: () => orcaBinary(deps),
     run: deps.run,
     files: () => typeof __ORCA_PLUGIN__ === 'string' ? JSON.parse(__ORCA_PLUGIN__) as OrcaPluginFiles : null,

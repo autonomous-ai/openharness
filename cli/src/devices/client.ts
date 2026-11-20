@@ -87,6 +87,8 @@ export interface DialWatchDeps extends Pick<DevicesClientDeps, 'port' | 'dataDir
   /** Hands the Notifications setting to the devices' listener, which keeps it: its answer, the status of one that is
    *  not a 200, null for none. `askDevices` by default, bounded at NOTIFY_ANSWER_MS. */
   notifyMode?: (mode: NotifyMode) => Promise<Record<string, unknown> | number | null>
+  /** For this command's tests: the platform the devices' stream is opened for. */
+  platform?: NodeJS.Platform
 }
 
 const NOT_RUNNING = 'Harness is not running on this computer. Run: harness start'
@@ -225,14 +227,16 @@ export function runDialWatch(argv: string[], deps: DialWatchDeps): Promise<numbe
         }, TELL_GAP_MS)
       })
     }
-    // The devices' stream of selects, open or opening, and when it is opened again. Without a listener path there is
-    // nothing to open, and nothing is retried.
+    // The devices' stream of selects, open or opening, and when it is opened again. Without a socket path (a data folder
+    // and a home both too long) there is nothing to open, and nothing is retried. On Windows there is no socket, and the
+    // pipe's record may appear at any time: the stream is tried and retried as on Unix.
     let stream: AbortController | undefined, reopen: ReturnType<typeof setTimeout> | undefined
     let streamWait = STREAM_RETRY_MS
     // Whether a newer watch took the stream, such as a second Harness Device's: this one then only stands by, taken while
     // no stream is open, so the two do not take it from each other once a second.
     let replaced = false
-    const listening = devicesListenerPath(dataDir) !== null
+    const platform = deps.platform ?? process.platform
+    const listening = platform === 'win32' || devicesListenerPath(dataDir, platform) !== null
     const selects = deps.selects ?? ((message, chunk, signal) => streamDevices(dataDir, message, chunk, { signal }))
     // A select as Harness Device reads it: the tab, and `"raise":true` for a tap's. Nothing else of the line goes on.
     const printSelect = (line: string): void => {

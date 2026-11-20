@@ -1,6 +1,6 @@
 // The daemon's token, on Unix and as Windows reads it (its platform and its open without O_NOFOLLOW). The real
 // Windows file is checked in daemonPipe.real.spec.ts.
-import { chmodSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { asWindows } from '../../testing/windowsOpen.js'
@@ -136,6 +136,46 @@ describe.skipIf(process.platform === 'win32')('the daemon token', () => {
     age(file, 11)
     const token = ensureDaemonToken(dir)
     expect(readDaemonToken(dir)!.equals(token)).toBe(true)
+  })
+
+  it('makes a token under another name, beside the daemon\'s', () => {
+    const dir = scratch()
+    const token = ensureDaemonToken(dir, 'devices-token')
+    expect(token).toHaveLength(32)
+    const file = join(dir, 'devices-token')
+    expect(readFileSync(file, 'utf8')).toBe(`${token.toString('hex')}\n`)
+    expect(statSync(file).mode & 0o777).toBe(0o600)
+    expect(existsSync(join(dir, 'daemon-token'))).toBe(false)
+    expect(readDaemonToken(dir)).toBeNull()
+    expect(readDaemonToken(dir, 'devices-token')!.equals(token)).toBe(true)
+  })
+
+  it('keeps the two tokens apart', () => {
+    const dir = scratch()
+    const daemon = ensureDaemonToken(dir)
+    const devices = ensureDaemonToken(dir, 'devices-token')
+    expect(devices.equals(daemon)).toBe(false)
+    expect(ensureDaemonToken(dir, 'devices-token').equals(devices)).toBe(true)
+    expect(ensureDaemonToken(dir).equals(daemon)).toBe(true)
+  })
+
+  it('refuses a named token that is a link', () => {
+    const dir = scratch(), elsewhere = scratch()
+    const planted = join(elsewhere, 'devices-token')
+    writeFileSync(planted, `${'2'.repeat(64)}\n`, { mode: 0o600 })
+    symlinkSync(planted, join(dir, 'devices-token'))
+    expect(readDaemonToken(dir, 'devices-token')).toBeNull()
+    expect(() => ensureDaemonToken(dir, 'devices-token')).toThrow(/devices-token/)
+  })
+
+  it('leaves no temp file of a named token', () => {
+    const dir = scratch()
+    let during: string[] = []
+    hooks.beforeLink = () => { during = readdirSync(dir) }
+    ensureDaemonToken(dir, 'devices-token')
+    expect(during).toHaveLength(1)
+    expect(during[0]).toMatch(new RegExp(`^\\.devices-token\\.${process.pid}\\.[0-9a-f]+$`))
+    expect(readdirSync(dir)).toEqual(['devices-token'])
   })
 
   it('on Windows, is read where the profile protects it, never through a link', () => {

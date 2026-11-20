@@ -107,11 +107,14 @@ export interface ScannedAppDeps {
 /** A listed app, never the unknown one: the scan does not answer "Other", it leaves the session to its first hook. */
 const listed = (app: string): boolean => app !== UNKNOWN_APP && APP_IDS.includes(app)
 
+/** Whether the scan learns a session's app from its parents here. Windows waits for the first hook: a dead parent's pid
+ *  can be another process's there. */
+export const scanLearnsApps = (platform: NodeJS.Platform): boolean => platform === 'darwin' || platform === 'linux'
+
 /** Each pid's app, from the nearest of it and its parents that names one; a pid nothing named is left out. */
 export async function scannedApps(pids: readonly number[], deps: ScannedAppDeps): Promise<Map<number, string>> {
   const apps = new Map<number, string>()
-  // Windows waits for the first hook: a dead parent's pid can be another process's there.
-  if ((deps.platform !== 'darwin' && deps.platform !== 'linux') || !pids.length) return apps
+  if (!scanLearnsApps(deps.platform) || !pids.length) return apps
   // One picture of the machine: a parent's id is never matched against a process that took it a moment later.
   const table = new Map((await deps.processes()).map((p) => [p.pid, p]))
   const walks = pids.map((pid) => [pid, parentChain(pid, table).map((p) => p.executable)] as const)

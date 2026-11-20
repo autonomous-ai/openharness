@@ -89,6 +89,7 @@ export const DROPPED_ON_PURPOSE: Readonly<Record<string, string>> = {
   VITEST: 'the test runner\'s mark, so a unit test never runs the real gh; no daemon is given it',
   ComSpec: WINDOWS_ONLY,
   LOCALAPPDATA: WINDOWS_ONLY,
+  ProgramFiles: WINDOWS_ONLY,
   SystemRoot: WINDOWS_ONLY,
   USERPROFILE: WINDOWS_ONLY,
   windir: WINDOWS_ONLY,

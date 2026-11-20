@@ -1,11 +1,11 @@
 /**
  * The Codex app (docs/specs/2026-11-15-device-host-adapter.md): its chat opens by `codex://threads/<thread-id>`, the link
  * OpenAI documents for the app (developers.openai.com/codex/app/commands, "Deep links"), which brings the app forward
- * itself (appLink.ts): on macOS sent to the app by its bundle id, on Linux to the scheme's app; either way for a session
- * the scan's app says is the Codex app's. The thread id came from a hook or a rollout's file name, so it is checked
- * against its form before it reaches the link. On macOS, a tap whose link failed brings the app forward from here: a
- * session only the open scan found has no bundle until its first hook (observed.ts), so the opener alone could not
- * bring the app (open.ts).
+ * itself (appLink.ts): on macOS sent to the app by its bundle id, on Windows by Windows' raise (windowsRaise.ts), on
+ * Linux to the scheme's app; either way for a session the scan's app says is the Codex app's. The thread id came from a
+ * hook or a rollout's file name, so it is checked against its form before it reaches the link. On macOS and Windows, a
+ * tap whose link failed brings the app forward from here: a session only the open scan found has no bundle until its
+ * first hook (observed.ts), so the opener alone could not bring the app (open.ts).
  */
 import type { HostAdapter, Pane, Place } from './adapter.js'
 import { createAppLink, type AppLinkDeps } from './appLink.js'
@@ -34,6 +34,7 @@ export function createCodexAppAdapter(
       async forward() {
         // The line the opener writes for every pane's fallback: which app only, never the thread.
         deps.log('[device] open · codex · fallback')
+        if (deps.windows) return deps.windows.app(APP_BUNDLES.codex)
         return (await deps.run(openBin, ['-b', APP_BUNDLES.codex], RUN_TIMEOUT_MS)).code === 0
       },
     }),

@@ -1,16 +1,30 @@
 import { ChildProcess, execFile, spawn } from 'node:child_process'
 import { once } from 'node:events'
-import { existsSync, lutimesSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
+import { existsSync, lutimesSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { PassThrough } from 'node:stream'
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import { createOrcaAdapter, createOrcaReads, MAX_TEXT, ORCA_HANDLE, type OrcaChild, orcaDeps, type OrcaDeps, type OrcaReadDeps } from './orca.js'
+import type { ProcessRow } from '../../lib/processTable.js'
+import { windowsProcessRows } from '../../lib/windows/processTable.js'
+import { endProcessTree } from '../../lib/windows/treeKill.js'
 import { writeExecutable } from '../../testing/executableFixture.js'
 
 // The real execFile and spawn, watched: a spec reads how the child of a run or a watch ended.
 vi.mock('node:child_process', async (original) => {
   const real = await original<typeof import('node:child_process')>()
   return { ...real, execFile: vi.fn(real.execFile), spawn: vi.fn(real.spawn) }
+})
+// The Windows tree kill, watched and never run: a spec reads which pid a stopped watch ended.
+vi.mock('../../lib/windows/treeKill.js', async (original) => {
+  const real = await original<typeof import('../../lib/windows/treeKill.js')>()
+  return { ...real, endProcessTree: vi.fn(async () => 'sent' as const) }
+})
+// Windows' process table, as a spec gives it: never read from a host.
+vi.mock('../../lib/windows/processTable.js', async (original) => {
+  const real = await original<typeof import('../../lib/windows/processTable.js')>()
+  return { ...real, windowsProcessRows: vi.fn(async () => null) }
 })
 
 const HANDLE = 'term_0f8e2c1a-3b4d-4e5f-8a9b-0c1d2e3f4a5b'
@@ -1156,5 +1170,145 @@ describe("Orca's focus watch", () => {
     real.watch.stop()
     await real.watch.ended
     expect(real.child.signalCode).toBe('SIGKILL')
+  })
+})
+
+describe("Orca's commands on Windows", () => {
+  // Orca's CLI as its installer lays it out, which the resolver runs as it is.
+  const ORCA_EXE = 'C:\\Users\\u\\AppData\\Local\\Programs\\orca\\resources\\bin\\orca.exe'
+  // cmd.exe would end the line at the line break, run `b` as a command after `&` and expand %PATH%.
+  const TEXT = '--text=a & b\r\nc %PATH%'
+  const FIXTURES = join(import.meta.dirname, '..', '..', 'lib', 'windows', 'fixtures')
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  /** execFile, once, answering exit 0 with [stdout] and starting nothing. */
+  function answeredOnce(stdout = '') {
+    vi.mocked(execFile).mockImplementationOnce(((_file: string, _args: string[], _options: object, callback: (error: null, stdout: string) => void) => {
+      callback(null, stdout)
+      return new ChildProcess()
+    }) as never)
+  }
+
+  /** The next spawn's child, which never started: stdout and stderr to read, [pid], and its kill watched. */
+  function fakeChild(pid: number): ChildProcess {
+    const child = new ChildProcess()
+    Object.assign(child, { pid, stdout: new PassThrough(), stderr: new PassThrough() })
+    vi.spyOn(child, 'kill').mockReturnValue(true)
+    vi.mocked(spawn).mockImplementationOnce(() => child)
+    return child
+  }
+
+  it('run starts orca.exe with the text as one argument, unchanged, hidden, with no shell and no environment of its own', async () => {
+    answeredOnce('ok')
+    const args = ['terminal', 'send', '--terminal', HANDLE, TEXT, '--enter', '--json']
+    expect(await orcaDeps('win32').run(ORCA_EXE, args, 10_000)).toEqual({ code: 0, stdout: 'ok' })
+    expect(vi.mocked(execFile).mock.calls.at(-1)).toEqual([ORCA_EXE, args, { timeout: 10_000, killSignal: 'SIGKILL', windowsHide: true }, expect.any(Function)])
+  })
+
+  it("run starts VS Code's own launcher as its .exe on its CLI script, under the launcher's environment", async () => {
+    const place = (file: string, text = ''): string => {
+      mkdirSync(join(file, '..'), { recursive: true })
+      writeFileSync(file, text)
+      return file
+    }
+    const root = join(dir, 'Microsoft VS Code')
+    const launcher = place(join(root, 'bin', 'code.cmd'), readFileSync(join(FIXTURES, 'code.cmd'), 'utf8'))
+    const exe = place(join(root, 'Code.exe'))
+    const script = place(join(root, '8a14f0cc1b', 'resources', 'app', 'out', 'cli.js'))
+    answeredOnce()
+    expect(await orcaDeps('win32').run(launcher, ['--list-extensions'], 10_000)).toEqual({ code: 0, stdout: '' })
+    const [file, args, options] = vi.mocked(execFile).mock.calls.at(-1)! as unknown as [string, string[], { env?: NodeJS.ProcessEnv; windowsHide?: boolean }]
+    expect([file, args]).toEqual([exe, [script, '--list-extensions']])
+    expect(options.windowsHide).toBe(true)
+    expect(options.env?.ELECTRON_RUN_AS_NODE).toBe('1')
+  })
+
+  it('orca.cmd is refused: run has no exit code and leaves no deadline, a watch on it has gone, and nothing starts', async () => {
+    const cmd = join(dir, 'orca.cmd')
+    writeFileSync(cmd, readFileSync(join(FIXTURES, 'orca.cmd')))
+    const runs = vi.mocked(execFile).mock.calls.length
+    const spawns = vi.mocked(spawn).mock.calls.length
+    const deps = orcaDeps('win32')
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    expect(await deps.run(cmd, ['terminal', 'send', '--terminal', HANDLE, TEXT], 10_000)).toEqual({ code: null, stdout: '' })
+    expect(vi.getTimerCount()).toBe(0)
+    vi.useRealTimers()
+    let ended = false
+    void deps.spawn(cmd, ['terminal', 'watch-focus', '--json']).exited.then(() => { ended = true })
+    await new Promise((resolve) => setImmediate(resolve))
+    expect(ended).toBe(true)
+    expect(vi.mocked(execFile).mock.calls.length).toBe(runs)
+    expect(vi.mocked(spawn).mock.calls.length).toBe(spawns)
+  })
+
+  it('the watch starts hidden, and stopping it ends its process tree, again a second on, and sends no signal', () => {
+    vi.mocked(endProcessTree).mockClear()
+    const child = fakeChild(4321)
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    const watch = createOrcaReads({ ...orcaDeps('win32'), onPath: () => ORCA_EXE, exists: () => false }).watchOrcaFocus(() => {})
+    expect(vi.mocked(spawn).mock.calls.at(-1)).toEqual([ORCA_EXE, ['terminal', 'watch-focus', '--json'], { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true }])
+    watch.stop()
+    expect(vi.mocked(endProcessTree).mock.calls).toEqual([[4321, expect.objectContaining({ self: process.pid })]])
+    vi.advanceTimersByTime(1000)
+    expect(vi.mocked(endProcessTree).mock.calls.map(([pid]) => pid)).toEqual([4321, 4321])
+    expect(child.kill).not.toHaveBeenCalled()
+  })
+
+  it("a watch whose child has exited ends no tree a second on: its pid may be another process's by then", () => {
+    vi.mocked(endProcessTree).mockClear()
+    const child = fakeChild(4321)
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    const watch = createOrcaReads({ ...orcaDeps('win32'), onPath: () => ORCA_EXE, exists: () => false }).watchOrcaFocus(() => {})
+    watch.stop()
+    // Exited, with what it started still holding its pipes: no close yet.
+    Object.assign(child, { exitCode: 1 })
+    vi.advanceTimersByTime(1000)
+    expect(vi.mocked(endProcessTree).mock.calls.map(([pid]) => pid)).toEqual([4321])
+  })
+
+  /** A stopped watch's tree end, run for real on [child]'s table, and what it ended in order: by pid, or by the child. */
+  async function endedOnStop(child: ChildProcess, table: () => Promise<ProcessRow[] | null>): Promise<string[]> {
+    vi.mocked(endProcessTree).mockClear()
+    const ended: string[] = []
+    const byPid = vi.spyOn(process, 'kill').mockImplementation((pid) => { ended.push(`pid ${pid}`); return true })
+    onTestFinished(() => { byPid.mockRestore() })
+    vi.mocked(child.kill).mockImplementation((signal) => { ended.push(`child ${signal}`); return true })
+    createOrcaReads({ ...orcaDeps('win32'), onPath: () => ORCA_EXE, exists: () => false }).watchOrcaFocus(() => {}).stop()
+    const [[pid, deps]] = vi.mocked(endProcessTree).mock.calls
+    vi.mocked(windowsProcessRows).mockImplementationOnce(table)
+    const real = await vi.importActual<typeof import('../../lib/windows/treeKill.js')>('../../lib/windows/treeKill.js')
+    await real.endProcessTree(pid, deps)
+    return ended
+  }
+  const processRow = (pid: number, parentPid: number, started: number): ProcessRow =>
+    ({ pid, parentPid, executable: 'orca.exe', startMarker: `w:${started}`, args: '' })
+
+  it('stopping a watch ends what its child started, then the child through its own handle, never by its pid', async () => {
+    const child = fakeChild(4321)
+    const table = [processRow(4321, 100, 1000), processRow(4400, 4321, 2000)]
+    expect(await endedOnStop(child, async () => table)).toEqual(['pid 4400', 'child SIGKILL'])
+  })
+
+  it("a watch whose child exits while the table is read ends nothing by pid: its pid, and its children's parent pid, may be another process's by then", async () => {
+    const child = fakeChild(4321)
+    const table = [processRow(4321, 100, 1000), processRow(4400, 4321, 2000)]
+    expect(await endedOnStop(child, async () => {
+      Object.assign(child, { exitCode: 1 })
+      return table
+    })).toEqual(['child SIGKILL'])
+  })
+
+  it('on macOS a batch file runs as named, and stopping a watch sends its signal', async () => {
+    vi.mocked(endProcessTree).mockClear()
+    answeredOnce()
+    expect(await orcaDeps('darwin').run('/made/up/orca.cmd', [TEXT], 10_000)).toEqual({ code: 0, stdout: '' })
+    expect(vi.mocked(execFile).mock.calls.at(-1)!.slice(0, 2)).toEqual(['/made/up/orca.cmd', [TEXT]])
+    const child = fakeChild(4321)
+    createOrcaReads({ ...orcaDeps('darwin'), onPath: () => FAKE_PATH_ORCA, exists: () => false }).watchOrcaFocus(() => {}).stop()
+    expect(child.kill).toHaveBeenCalledWith('SIGTERM')
+    expect(endProcessTree).not.toHaveBeenCalled()
   })
 })

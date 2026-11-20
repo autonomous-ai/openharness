@@ -27,11 +27,17 @@ const EXES: [string, string][] = [
   ['Cursor.exe', 'cursor'],
   ['cursor', 'cursor'],
   ['WindowsTerminal.exe', 'terminal'],
+  // The Store's ChatGPT on Windows is the Codex app (package OpenAI.Codex), its window ChatGPT.exe's.
+  ['ChatGPT.exe', 'codex'],
+  ['chatgpt.exe', 'codex'],
   ['wezterm-gui', 'wezterm'],
   ['kitty', 'kitty'],
   ['ghostty', 'ghostty'],
   ['harness', 'harness'],
   ['Harness', 'harness'],
+  // The Claude app's window on Windows is its claude.exe's (dial-windows VM notes, Task 37 §1).
+  ['Claude.exe', 'claude'],
+  ['claude.exe', 'claude'],
 ]
 
 // The Claude and ChatGPT apps' Linux processes, by the comm their recording shows (ChatGPT's as recorded, capitalised).
@@ -46,7 +52,7 @@ describe('frontAppId', () => {
     expect(detectApp({ __CFBundleIdentifier: bundle })).toBe(id)
   })
 
-  it.each(EXES)('Code.exe, Cursor.exe, WindowsTerminal.exe, wezterm-gui, kitty, ghostty and harness map: %s', (exe, id) => {
+  it.each(EXES)('Code.exe, Cursor.exe, WindowsTerminal.exe, ChatGPT.exe, Claude.exe, wezterm-gui, kitty, ghostty and harness map: %s', (exe, id) => {
     expect(frontAppId(exe)).toBe(id)
   })
 
@@ -57,8 +63,8 @@ describe('frontAppId', () => {
   it.each(['com.apple.Safari', 'org.alacritty', 'net.kovidgoyal.kitty-quick-access', 'alacritty', '', 'x'.repeat(128),
     'constructor', '__proto__', 'toString', 'COM.MITCHELLH.GHOSTTY', 'com.openai.chat', 'codex', 'Codex.exe',
     'com.cmuxterm.app.nightly', 'cmux',
-    // OpenAI's chat app on Windows is not the Codex app, and the Linux processes' names are Linux's alone.
-    'ChatGPT.exe', 'chatgpt.exe', 'claude-desktop.exe'])(
+    // The Linux processes' names are Linux's alone, and the Claude app's claude.exe is Windows' alone.
+    'claude-desktop.exe', 'claude'])(
     'an unknown app, the empty string and a 128-character string are none: %j', (value) => {
       expect(frontAppId(value)).toBe(FRONT_NONE)
     })

@@ -7,7 +7,6 @@ import type { DialState } from './protocol'
 const GET_HARNESS = 'https://harness.autonomous.ai/desktop'
 
 const LINES: [DialState, string][] = [
-  [{ state: 'windows' }, 'Not on Windows yet.'],
   [{ state: 'noHarness' }, "Harness isn't installed."],
   [{ state: 'notRunning' }, "Harness isn't running."],
   [{ state: 'elsewhere' }, 'Open in another Orca.'],

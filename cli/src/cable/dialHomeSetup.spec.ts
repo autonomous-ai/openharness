@@ -94,7 +94,6 @@ function rig(over: Partial<DialHomeSetupDeps> = {}, dial = true) {
   const clock = { at: 0 }
   const read = { removed: 0 }
   const deps: DialHomeSetupDeps = {
-    platform: 'darwin',
     uid,
     claudeHome: folder(),
     codexHome: folder(),
@@ -852,25 +851,36 @@ describe('the devices set the dial skill up', () => {
     expect([...r.lines, ...off.lines, ...unsaved.lines].join('\n')).not.toContain('/')
   })
 
-  it('on Windows nothing is written', () => {
-    // A dial attached here once: a start and a scan write nothing.
-    const other = folder()
-    const r = rig({ platform: 'win32' })
-    pluginOn(r.claudeHome)
+  it('on Windows a start, an attach and a scan write the skill into a home in the profile, and none outside it', () => {
+    // Windows gives no uid: there a home is this account's when it is a real folder in the profile (dialSkill.ts).
+    const profile = folder()
+    const inProfile = (name: string): string => {
+      mkdirSync(join(profile, name))
+      return join(profile, name)
+    }
+    const [claudeHome, codexHome, other, outside] = [inProfile('.claude'), inProfile('.codex'), inProfile('codex-b'), folder()]
+    // os.homedir() reads HOME first.
+    vi.stubEnv('HOME', profile)
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
+    Object.defineProperty(process, 'platform', { ...platform, value: 'win32' })
+    try {
+      // A dial attached here once: a start writes the default homes, and a scan the home a Codex session is in.
+      const r = rig({ uid: -1, claudeHome, codexHome })
+      pluginOn(claudeHome)
+      r.writer.started()
+      r.writer.scanned([ownerIn(other), ownerIn(outside)])
+      for (const home of [claudeHome, codexHome, other]) expect(hasSkill(home)).toBe(true)
+      expect(existsSync(join(outside, 'skills', 'dial'))).toBe(false)
 
-    r.writer.started()
-    r.writer.scanned([ownerIn(other)])
-
-    for (const home of [r.claudeHome, r.codexHome, other]) expect(existsSync(join(home, 'skills'))).toBe(false)
-    expect(readSetup(r.dataDir).homes).toEqual({ claude: [], codex: [] })
-    expect(r.lines).toEqual([])
-    expect(r.read.removed).toBe(0)
-
-    // Never one: an attach records nothing.
-    const first = rig({ platform: 'win32' }, false)
-    first.writer.attached()
-    expect(existsSync(join(first.dataDir, DIAL_SETUP_FILE))).toBe(false)
-    expect(existsSync(join(first.codexHome, 'skills'))).toBe(false)
+      // Never one: the first attach records the dial and writes.
+      const first = rig({ uid: -1, claudeHome: inProfile('.claude-b'), codexHome: inProfile('.codex-b') }, false)
+      first.writer.attached()
+      expect(readSetup(first.dataDir).dial).toBe(true)
+      expect(hasSkill(first.codexHome)).toBe(true)
+    } finally {
+      Object.defineProperty(process, 'platform', platform)
+      vi.unstubAllEnvs()
+    }
   })
 })
 

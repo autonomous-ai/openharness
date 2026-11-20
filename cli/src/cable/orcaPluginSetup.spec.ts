@@ -25,8 +25,8 @@ type Recorded = { dial: boolean; version?: string; held?: string }
  * A computer that had a dial attached here ([dial]), the plugin recorded at [version] or held at [held], and a CLI that
  * carries the plugin at 9.9.9. Orca answers each set-up and removal from a queue: set up, and off, when it is empty.
  */
-function rig({ platform = 'darwin', dial = true, version, held }: {
-  platform?: NodeJS.Platform; dial?: boolean; version?: string; held?: string
+function rig({ dial = true, version, held }: {
+  dial?: boolean; version?: string; held?: string
 } = {}) {
   const state = {
     build: VERSION as string | null,
@@ -58,7 +58,6 @@ function rig({ platform = 'darwin', dial = true, version, held }: {
     return state.saves
   }
   const setup = createOrcaPluginSetup({
-    platform,
     version: () => state.build,
     setUp,
     remove,
@@ -425,12 +424,9 @@ describe('Harness Device\'s plugin for Orca, set up from the devices\' process',
     expect(r.timers).toEqual([])
   })
 
-  it.each([
-    ['Windows', 'win32' as const, VERSION],
-    ['a run from the sources', 'darwin' as const, null],
-  ])('%s: nothing', async (_, platform, build) => {
-    const r = rig({ version: '9.9.8', platform })
-    r.state.build = build
+  it('a run from the sources: nothing', async () => {
+    const r = rig({ version: '9.9.8' })
+    r.state.build = null
     await r.setup.pass()
     expect(r.setUp).not.toHaveBeenCalled()
     expect(r.state.record).toEqual({ dial: true, version: '9.9.8' })
@@ -489,7 +485,6 @@ describe('orcaPluginParts', () => {
       'plugin uninstall': {},
     }
     const deps: OrcaPluginDeps = {
-      platform: 'darwin',
       orca: () => '/nowhere/orca',
       run: async (_file, args) => {
         calls.push(args.join(' '))
@@ -512,7 +507,6 @@ describe('orcaPluginParts', () => {
     expect(parts.version()).toBe('1.2.3')
     expect(parts.version()).toBe('1.2.3')
     expect(files).toHaveBeenCalledTimes(1)
-    expect(orcaPluginParts(deps).platform).toBe('darwin')
     expect(orcaPluginParts({ ...deps, files: () => null }).version()).toBeNull()
   })
 

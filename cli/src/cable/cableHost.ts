@@ -179,6 +179,9 @@ export interface CableHostWiring {
   appTimer?: (ms: number, run: () => void) => () => void
   /** In [0, 1): the draw between apps tied for the most agents. Absent, Math.random. */
   appRandom?: () => number
+  /** Whether the open scan learns the app of an agent it found (scannedApp.ts `scanLearnsApps`); where it does not, such an
+   *  agent counts in the default app (select.ts `AppRings.counts`). Absent, true. */
+  scanLearnsApps?: boolean
 }
 
 /** The settle of the app in front when no timer is wired (a test's host): never what keeps the process up. */
@@ -263,6 +266,7 @@ export class DaemonCableHost implements CableHost {
    */
   constructor(private readonly wiring: CableHostWiring, fleet?: MachineFleet) {
     this.harness = new HarnessSource(Date.now, wiring.launchDesktop !== undefined)
+    this.rings = new AppRings(wiring.scanLearnsApps)
     this.local = new FleetRouter({
       ...wiring,
       // The same set `agents_list` answers the apps with — see the router's localAgents.
@@ -679,7 +683,7 @@ export class DaemonCableHost implements CableHost {
   private readonly ring = new DialRing()
   /** For a dial that says `appFilter`: one ring per app, and which app is shown. One of each for this host, so every such
    *  dial here shows the same app and a pick on one turns them all. In memory only, as the ring. */
-  private readonly rings = new AppRings()
+  private readonly rings: AppRings
   /** Each app's own order, by app id, for its ring alone; the single ring takes none. In memory only, as the rings. */
   private readonly ranks = new Map<string, RingRank>()
   /** Each app's scope and the ring of its own it lists in, apart from the app's ring so dropping the scope gives that

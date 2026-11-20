@@ -2,9 +2,11 @@
  * `harness device claude …`, `codex …`, `vscode …` and `orca …` as a person, the plugin's hook and its mod run them:
  * a fake `claude` (a ClaudeRun that answers from a table), Claude Code's settings in a throwaway CLAUDE_CONFIG_DIR,
  * Codex's home a throwaway folder, VS Code a fake one under a throwaway home, a fake `orca` (testing/fakeOrcaCli.ts)
- * holding the plugin's approvals, and a daemon and the devices' listener on sockets in a throwaway folder.
+ * holding the plugin's approvals, and a daemon and the devices' listener on sockets in a throwaway folder (on Windows
+ * their pipes, stood in by sockets named as pipes are).
  * The real `claude`, `code`, `orca`, ~/.claude, ~/.codex, ~/.vscode and the daemon are never touched.
  */
+import { randomBytes } from 'node:crypto'
 import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { Socket } from 'node:net'
@@ -15,8 +17,13 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { DIAL_SKILL } from '../devices/dialSkill.js'
 import { readOrcaConnected, readPluginHomes, readRemoved, writeRemoved, writeSetup } from '../devices/dialSkillFiles.js'
 import { devicesListenerPath } from '../devices/listenerPath.js'
+import { createDevicesProof, DEVICES_TOKEN_FILE, devicesPipe, devicesRecordPath, writeDevicesRecord } from '../devices/listenerPipe.js'
+import { writeDaemonRecord } from '../lib/daemonRecord.js'
 import { listenLocalSocket, unixSocketPath } from '../lib/localSocket.js'
 import { socketIsPrivate } from '../lib/localTransport.js'
+import type { HostLiveness } from '../lib/processProof.js'
+import { daemonPipe } from '../lib/windows/daemonPipe.js'
+import { ensureDaemonToken } from '../lib/windows/pipeAuth.js'
 import { harnessPath } from '../config/harnessHome.js'
 import { DEVICE_USAGE, runDeviceCommand, takesConnect, type DeviceDeps } from './command.js'
 import type { ClaudeRun } from '../devices/claudePlugin.js'
@@ -124,6 +131,7 @@ async function device(argv: string[], deps: Partial<DeviceDeps> = {}) {
     codexHome: folder(), codex: () => true, env: {}, cwd: '/',
     vscode: () => { throw new Error('only the vscode words ask for VS Code') },
     orca: () => { throw new Error('only orca status, enable and disable ask for Orca') },
+    write: async () => { throw new Error('only claude inbox and attach write their lines') },
     out: (line) => { out.push(line) }, err: (line) => { err.push(line) },
     ...deps,
   })
@@ -361,6 +369,95 @@ describe('harness device claude', () => {
   })
 })
 
+describe('harness device claude inbox', () => {
+  const SESSION = '0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d'
+  /** What the command writes through `write`, each line whole. */
+  function lines(): { written: string[]; write: DeviceDeps['write'] } {
+    const written: string[] = []
+    return { written, write: async (line) => { written.push(line); return true } }
+  }
+
+  it('runs the follower: each answer of the daemon\'s is a line through write', async () => {
+    const dataDir = folder()
+    const said = ['hi']
+    const served = await listenLocalSocket((req, res) => {
+      req.resume()
+      req.on('end', () => {
+        const text = said.shift()
+        if (text) res.end(JSON.stringify({ text }))
+        else res.writeHead(404).end('{"error":"NOT_FOUND"}')
+      })
+    }, unixSocketPath(dataDir, PORT)!)
+    cleanup.push(served.close)
+    const { written, write } = lines()
+    expect(await device(['claude', 'inbox', SESSION], { dataDir, write })).toEqual({ code: 0, out: [], err: [] })
+    expect(written).toEqual(['{"text":"hi"}', '{"off":true}'])
+  })
+
+  it('with no id writes off', async () => {
+    const { written, write } = lines()
+    expect(await device(['claude', 'inbox'], { write })).toEqual({ code: 0, out: [], err: [] })
+    expect(written).toEqual(['{"off":true}'])
+  })
+
+  it('is not in DEVICE_USAGE', () => {
+    expect(DEVICE_USAGE).not.toMatch(/inbox/)
+  })
+})
+
+describe('harness device claude attach', () => {
+  const SESSION = '0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d'
+  /** The command run as the mod runs it: its one line, and each message `tell` was handed, with its data folder. */
+  async function attach(id: string, options: { platform?: NodeJS.Platform; took?: boolean; dataDir?: string } = {}) {
+    const written: string[] = []
+    const told: Array<{ dataDir: string; message: unknown }> = []
+    const ran = await device(['claude', 'attach', id], {
+      platform: options.platform ?? 'win32', ...(options.dataDir ? { dataDir: options.dataDir } : {}),
+      write: async (line) => { written.push(line); return true },
+      tell: async (dataDir, message) => { told.push({ dataDir, message }); return options.took ?? true },
+    })
+    return { ...ran, written, told }
+  }
+
+  it('tells the devices the Claude app shows the session', async () => {
+    const dataDir = folder()
+    expect(await attach(SESSION, { dataDir })).toEqual({
+      code: 0, out: [], err: [], written: ['{"sent":true}'], told: [{ dataDir, message: { type: 'attach', sessionId: SESSION } }],
+    })
+  })
+
+  it('says not sent when the devices did not take it', async () => {
+    const ran = await attach(SESSION, { took: false })
+    expect(ran).toMatchObject({ code: 0, out: [], err: [], written: ['{"sent":false}'] })
+    expect(ran.told).toHaveLength(1)
+  })
+
+  it('sends nothing while the plugin is off', async () => {
+    pluginOn(false)
+    expect(await attach(SESSION)).toEqual({ code: 0, out: [], err: [], written: ['{"sent":false}'], told: [] })
+  })
+
+  it('sends nothing once disable removed Claude Code', async () => {
+    const dataDir = folder()
+    writeRemoved(dataDir, 'claude', true)
+    expect(await attach(SESSION, { dataDir })).toEqual({ code: 0, out: [], err: [], written: ['{"sent":false}'], told: [] })
+  })
+
+  it.each([SESSION.toUpperCase(), 'not-a-session', ''])('sends nothing for the id %j', async (id) => {
+    expect(await attach(id)).toEqual({ code: 0, out: [], err: [], written: ['{"sent":false}'], told: [] })
+  })
+
+  it('tells them the same way on macOS', async () => {
+    const ran = await attach(SESSION, { platform: 'darwin' })
+    expect(ran).toMatchObject({ code: 0, out: [], err: [], written: ['{"sent":true}'] })
+    expect(ran.told.map((told) => told.message)).toEqual([{ type: 'attach', sessionId: SESSION }])
+  })
+
+  it('is not in DEVICE_USAGE', () => {
+    expect(DEVICE_USAGE).not.toMatch(/attach/)
+  })
+})
+
 describe('the dial skill', () => {
   it('claude enable writes the skill into the default home and records the folder it wrote', async () => {
     const dataDir = folder()
@@ -480,8 +577,9 @@ describe('the dial skill', () => {
     const failedInstall = fakeClaude({ 'plugin install harness-device@openharness --scope user': { code: 1, stderr: 'Plugin not found' } })
     const cases: Array<[string, string[], Partial<DeviceDeps>]> = [
       ['a failed install', ['claude', 'enable'], { claude: () => failedInstall }],
-      ['Claude Code on Windows', ['claude', 'enable'], { platform: 'win32' }],
-      ['Codex on Windows', ['codex', 'enable'], { platform: 'win32' }],
+      // On Windows `claude` on PATH can be the Claude desktop app, which is not Claude Code.
+      ['the Claude app on Windows', ['claude', 'enable'], { platform: 'win32', claude: () => fakeClaude({ '--version': { code: 0, stdout: 'Claude 1.4.0\n' } }) }],
+      ['Codex on FreeBSD', ['codex', 'enable'], { platform: 'freebsd' }],
       ['Codex not installed', ['codex', 'enable'], { codex: () => false }],
     ]
     for (const [what, argv, deps] of cases) {
@@ -947,6 +1045,16 @@ describe('harness device codex', () => {
     expect(await device(['codex', 'enable'], { codex: () => false })).toEqual({ code: 1, out: [], err: ['Codex is not on this computer.'] })
   })
 
+  it('on Windows, status says supported and enable writes the skill', async () => {
+    const dataDir = folder()
+    const codexHome = folder()
+    const windows = { platform: 'win32' as const, dataDir, codexHome }
+    expect(await device(['codex', 'status', '--json'], windows))
+      .toEqual({ code: 0, err: [], out: [JSON.stringify({ supported: true, installed: true, enabled: false })] })
+    expect(await device(['codex', 'enable'], windows)).toEqual({ code: 0, out: [], err: [] })
+    expect(readFileSync(skillAt(codexHome), 'utf8')).toBe(DIAL_SKILL)
+  })
+
   it('codex with no verb, another verb or an extra word prints the usage and exits 1', async () => {
     for (const argv of [['codex'], ['codex', 'install'], ['codex', 'status', 'extra']]) {
       expect(await device(argv), argv.join(' ')).toEqual({ code: 1, out: [], err: [DEVICE_USAGE] })
@@ -1054,10 +1162,6 @@ describe('harness device orca link and vscode link', () => {
     expect(await device([host, 'link'], { dataDir: plain })).toEqual(link(plain, false))
   })
 
-  it.each(['orca', 'vscode'])('%s link: on Windows it prints {"daemon":false,"devicesReady":false} and exits 0', async (host) => {
-    expect(await device([host, 'link'], { platform: 'win32' })).toEqual({ code: 0, err: [], out: ['{"daemon":false,"devicesReady":false}'] })
-  })
-
   it.each(['orca', 'vscode'])('%s link: with the harness-device plugin off in Claude Code it prints the same', async (host) => {
     const dataDir = folder()
     pluginOn(false)
@@ -1083,6 +1187,100 @@ describe('harness device orca link and vscode link', () => {
       expect(await device(argv), argv.join(' ')).toEqual({ code: 1, out: [], err: [DEVICE_USAGE] })
     }
     expect(DEVICE_USAGE).not.toMatch(new RegExp(`${host} link`))
+  })
+
+  describe('on Windows', () => {
+    /** A data folder the token checks take, short enough for the sockets that stand in for its pipes. */
+    function pipeFolder(): string {
+      const dir = mkdtempSync('/tmp/dc-pipe-')
+      cleanup.push(() => rmSync(dir, { recursive: true, force: true }))
+      return dir
+    }
+    const pipeIn = (dir: string) => join(dir, `harness-${randomBytes(16).toString('hex')}`)
+    const filetime = (ms: number) => `w:${(BigInt(Math.floor(ms)) + 11_644_473_600_000n) * 10_000n}`
+    /** The pipes found as `link` finds them, with the recorded processes taken as running unless [devices] says
+     *  otherwise: off Windows there is no process table to read. */
+    const found = (devices: HostLiveness = { alive: () => true }): DeviceDeps['pipes'] => ({
+      daemon: (dataDir, port) => daemonPipe(dataDir, port, { alive: () => true }),
+      devices: (dataDir) => devicesPipe(dataDir, createDevicesProof({ liveness: devices })),
+    })
+    /** The daemon's pipe recorded in [dataDir] with its token, and [serve] listening there (by default the daemon,
+     *  answering its status with the token's proof). */
+    async function daemonPipeAt(dataDir: string, serve: 'daemon' | 'none' | 'squatter' | 'silent' = 'daemon'): Promise<void> {
+      const pipe = pipeIn(dataDir)
+      const token = ensureDaemonToken(dataDir)
+      writeDaemonRecord(dataDir, PORT, PORT, { pipe, pid: process.pid })
+      const status = JSON.stringify({ pid: 4242, corePid: 4243 })
+      if (serve === 'daemon') {
+        const served = await listenLocalSocket((_req, res) => res.end(status), pipe, { token })
+        cleanup.push(served.close)
+      } else if (serve !== 'none') {
+        // Whatever took the name: an answer with no proof, or none at all.
+        const server = createServer((_req, res) => { if (serve === 'squatter') res.end(status) })
+        cleanup.push(() => new Promise<void>((resolve) => { server.closeAllConnections(); server.close(() => resolve()) }))
+        await new Promise<void>((resolve) => { server.listen(pipe, resolve) })
+      }
+    }
+    /** The devices' record and token in [dataDir]; nothing listens, as link connects to nothing there. */
+    function devicesPipeAt(dataDir: string): { pipe: string; token: string } {
+      const pipe = pipeIn(dataDir)
+      const token = ensureDaemonToken(dataDir, DEVICES_TOKEN_FILE).toString('hex')
+      writeDevicesRecord(dataDir, { pipe, pid: process.pid })
+      return { pipe, token }
+    }
+    const ready = (dataDir: string, daemon: boolean, devices: { pipe: string; token: string }) => ({
+      code: 0, err: [],
+      out: [JSON.stringify({ daemon, devicesPipe: devices.pipe, devicesToken: devices.token, devicesReady: true, devicesRecord: join(dataDir, 'devices.json') })],
+    })
+    const notReady = (dataDir: string, daemon: boolean) =>
+      ({ code: 0, err: [], out: [JSON.stringify({ daemon, devicesReady: false, devicesRecord: join(dataDir, 'devices.json') })] })
+
+    it.each(['orca', 'vscode'])('%s link: the daemon answering on its pipe and the devices\' pipe recorded, it prints both pipes\' state, the devices\' pipe, token and record', async (host) => {
+      const dataDir = pipeFolder()
+      await daemonPipeAt(dataDir)
+      const devices = devicesPipeAt(dataDir)
+      expect(devices.token).toMatch(/^[0-9a-f]{64}$/)
+      expect(devices.token).toBe(readFileSync(join(dataDir, 'devices-token'), 'utf8').trim())
+      expect(await device([host, 'link'], { dataDir, platform: 'win32', pipes: found() })).toEqual(ready(dataDir, true, devices))
+    })
+
+    it.each(['orca', 'vscode'])('%s link: no devices\' pipe to dial is devicesReady false with the record\'s path, and no pipe or token', async (host) => {
+      const dataDir = pipeFolder()
+      await daemonPipeAt(dataDir)
+      expect(devicesRecordPath(dataDir)).toBe(join(dataDir, 'devices.json'))
+      // No record yet.
+      expect(await device([host, 'link'], { dataDir, platform: 'win32', pipes: found() })).toEqual(notReady(dataDir, true))
+      // A record and the daemon's token, but no token of the devices' own.
+      writeDevicesRecord(dataDir, { pipe: pipeIn(dataDir), pid: process.pid })
+      expect(await device([host, 'link'], { dataDir, platform: 'win32', pipes: found() })).toEqual(notReady(dataDir, true))
+      ensureDaemonToken(dataDir, DEVICES_TOKEN_FILE)
+      // The recorded process is gone.
+      expect(await device([host, 'link'], { dataDir, platform: 'win32', pipes: found({ alive: () => false }) })).toEqual(notReady(dataDir, true))
+      // Review Focus 1: it crashed and its pid now runs a process that started after the record was written.
+      const written = statSync(devicesRecordPath(dataDir)).mtimeMs
+      const reused: HostLiveness = { alive: () => true, rows: async () => [{ pid: process.pid, executable: 'other.exe', startMarker: filetime(written + 60_000) }] }
+      expect(await device([host, 'link'], { dataDir, platform: 'win32', pipes: found(reused) })).toEqual(notReady(dataDir, true))
+    })
+
+    it.each(['orca', 'vscode'])('%s link: daemon is false with no daemon\'s pipe, one nothing listens on, and one whose answer has no proof', async (host) => {
+      for (const serve of [undefined, 'none', 'squatter'] as const) {
+        const dataDir = pipeFolder()
+        if (serve) await daemonPipeAt(dataDir, serve)
+        const devices = devicesPipeAt(dataDir)
+        expect(await device([host, 'link'], { dataDir, platform: 'win32', pipes: found() }), serve).toEqual(ready(dataDir, false, devices))
+      }
+    })
+
+    it('a daemon\'s pipe that does not answer within a second is daemon false', async () => {
+      const dataDir = pipeFolder()
+      await daemonPipeAt(dataDir, 'silent')
+      expect(await device(['orca', 'link'], { dataDir, platform: 'win32', pipes: found() })).toEqual(notReady(dataDir, false))
+    })
+
+    it.each(['orca', 'vscode'])('%s link: with nothing recorded it finds neither pipe by itself', async (host) => {
+      const dataDir = pipeFolder()
+      expect(await device([host, 'link'], { dataDir, platform: 'win32' })).toEqual(notReady(dataDir, false))
+    })
   })
 })
 
@@ -1116,7 +1314,7 @@ describe('harness device orca status, enable and disable', () => {
 
   /** Orca's CLI as `harness device` is handed it: the fake `orca`, run through the real `run`. */
   const orcaRun = (files: OrcaPluginFiles | null = FILES): OrcaPluginRun =>
-    ({ platform: 'darwin', orca: () => fake.bin, run: orcaPluginRun().run, files: () => files })
+    ({ orca: () => fake.bin, run: orcaPluginRun().run, files: () => files })
 
   /** An Orca that runs and holds the plugin's approvals at 1.2.3 for [grants], listing no plugin; the fake's calls from
    *  now on. */
@@ -1253,7 +1451,6 @@ describe('harness device orca status, enable and disable', () => {
   it('disable with no Orca on this computer: off, exit 0', async () => {
     const none: [string, () => OrcaPluginRun][] = [
       ['no orca', () => ({ ...orcaRun(), orca: () => null })],
-      ['Windows', () => ({ ...orcaRun(), platform: 'win32' })],
       ['a run from the sources', () => orcaRun(null)],
     ]
     for (const [name, orca] of none) {

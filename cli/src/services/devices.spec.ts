@@ -15,6 +15,7 @@ import { hcClientDeps, type HcClient, type HcPrompt, type HcSubscriber, type HcT
 import { herdrClientDeps, type HerdrAnswer, type HerdrClient, type HerdrEntry, type HerdrPrompt, type HerdrSubscriber } from '../cable/hosts/herdrClient.js'
 import { HerdrSource } from '../cable/hosts/herdrSource.js'
 import type { LinuxRaise } from '../cable/hosts/linuxRaise.js'
+import type { WindowsRaise } from '../cable/hosts/windowsRaise.js'
 import { observedAgentId, ObservedSource } from '../cable/hosts/observed.js'
 import { OPENCODE_MESSAGE, opencodeClientDeps, type OpencodeAnswer, type OpencodeClient, type OpencodeEvent, type OpencodeFault, type OpencodePrompt } from '../cable/hosts/opencodeClient.js'
 import { OpencodeSource } from '../cable/hosts/opencodeSource.js'
@@ -311,6 +312,7 @@ const herdr: HerdrClient = {
   },
   prompt: async (paneId, kind, text) => { herdrCalls.push(['prompt', paneId, kind, text]); return { outcome: 'sent' } },
   socketStamp: () => undefined,
+  binary: () => undefined,
 }
 /** What the devices asked of Herdr Core's socket: recorded, so no spec reaches the developer's own Herdr. It takes every
  *  prompt, and has no socket for anything else. */
@@ -368,6 +370,24 @@ function fakeRaise() {
     raise: {
       ready: () => fake.found,
       raise: async (window) => { fake.raised.push(window); return fake.answer },
+    },
+  }
+  return fake
+}
+/** Windows' raise as every spec but its own has it: it brings nothing forward. */
+const noWindowsRaise: WindowsRaise = { app: async () => false, link: async () => false, cursorFolder: async () => false, desktop: async () => false }
+/** Windows' raise a spec drives: what it answers, each bundle it was asked to bring forward and each Desktop start. */
+function fakeWindowsRaise() {
+  const fake: { answer: boolean; apps: string[]; links: Array<[string, string | undefined]>; desktops: number; raise: WindowsRaise } = {
+    answer: true,
+    apps: [],
+    links: [],
+    desktops: 0,
+    raise: {
+      app: async (bundle) => { fake.apps.push(bundle); return fake.answer },
+      link: async (url, bundle) => { fake.links.push([url, bundle]); return fake.answer },
+      cursorFolder: async () => fake.answer,
+      desktop: async () => { fake.desktops++; return fake.answer },
     },
   }
   return fake
@@ -473,7 +493,6 @@ function fakeOrcaPlugin({ running = true, installed = null, folder = join(dataDi
   const state = { running, version: installed }
   const answer = (code: number, json: unknown) => ({ code, stdout: JSON.stringify(json), timedOut: false })
   const deps: orcaPluginModule.OrcaPluginRun & { folder: string } = {
-    platform: 'darwin',
     orca: () => '/nowhere/orca',
     run: async (_file, args) => {
       runs.push(args.join(' '))
@@ -546,7 +565,7 @@ afterEach(() => {
   vi.unstubAllEnvs()
 })
 
-function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolean; testDialPort?: string; readUsage?: DevicesDeps['readUsage']; now?: () => number; decideTier?: DevicesDeps['decideTier'] | null; refresh?: DevicesDeps['refresh']; orca?: DevicesDeps['orca']; orcaReads?: DevicesDeps['orcaReads']; codex?: DevicesDeps['codex']; herdr?: DevicesDeps['herdr']; hc?: DevicesDeps['hc']; cmux?: DevicesDeps['cmux'] | null; opencode?: DevicesDeps['opencode']; claudeAppStore?: DevicesDeps['claudeAppStore']; codexAppThreads?: DevicesDeps['codexAppThreads'] | null; bundleId?: DevicesDeps['bundleId'] | null; listen?: DevicesDeps['listen']; tty?: DevicesDeps['tty']; claude?: DevicesDeps['claude'] | null; orcaHomes?: ReturnType<typeof fakeOrcaHomes> | null; vscodeExtension?: DevicesDeps['vscodeExtension'] | null; cursorExtension?: DevicesDeps['cursorExtension'] | null; orcaPlugin?: DevicesDeps['orcaPlugin'] | null; claudeFullscreen?: null; claudeManagedSettings?: string; raise?: DevicesDeps['raise'] | null } = {}) {
+function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolean; testDialPort?: string; readUsage?: DevicesDeps['readUsage']; now?: () => number; decideTier?: DevicesDeps['decideTier'] | null; refresh?: DevicesDeps['refresh']; orca?: DevicesDeps['orca']; orcaReads?: DevicesDeps['orcaReads']; codex?: DevicesDeps['codex']; herdr?: DevicesDeps['herdr']; hc?: DevicesDeps['hc']; cmux?: DevicesDeps['cmux'] | null; opencode?: DevicesDeps['opencode']; claudeAppStore?: DevicesDeps['claudeAppStore']; codexAppThreads?: DevicesDeps['codexAppThreads'] | null; bundleId?: DevicesDeps['bundleId'] | null; listen?: DevicesDeps['listen']; tty?: DevicesDeps['tty']; claude?: DevicesDeps['claude'] | null; orcaHomes?: ReturnType<typeof fakeOrcaHomes> | null; vscodeExtension?: DevicesDeps['vscodeExtension'] | null; cursorExtension?: DevicesDeps['cursorExtension'] | null; orcaPlugin?: DevicesDeps['orcaPlugin'] | null; claudeFullscreen?: null; claudeManagedSettings?: string; raise?: DevicesDeps['raise'] | null; windowsRaise?: DevicesDeps['windowsRaise'] | null } = {}) {
   const core = over.core ?? fakeCore({ dataDir })
   const apps = over.orca ?? orca
   // None, and no read under way, unless the spec gives its own; null leaves the devices to read this computer's.
@@ -607,6 +626,9 @@ function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolea
     // On Linux a raise that finds no desktop unless the spec gives its own: no spec reads this login's sockets or raises
     // the developer's windows. null leaves it out: the devices build the system's.
     raise: over.raise === null ? undefined : over.raise ?? (apps.platform === 'linux' ? noDesktop : undefined),
+    // On Windows a raise that brings nothing unless the spec gives its own: no spec runs a helper of the developer's. null
+    // leaves it out: the devices build Windows' own.
+    windowsRaise: over.windowsRaise === null ? undefined : over.windowsRaise ?? (apps.platform === 'win32' ? noWindowsRaise : undefined),
     processGroups: async (agent, shell) => {
       processGroups.reads.push([agent, shell])
       if (processGroups.held) await new Promise<void>((resolve) => { processGroups.land.push(resolve) })
@@ -1867,6 +1889,22 @@ describe('agents outside a pane, from their hooks and the open sessions (cable/h
     expect(readers.apps.mock.calls).toEqual([[[77]]])
   })
 
+  // Windows' scan learns no app (scannedApp.ts), so there the agents it found count in the dial's default app (cableHost.ts).
+  it.each([['win32', 'terminal'], ['linux', 'orca']] as const)('on %s two agents the scan found and one hooked in Orca open the dial on %s', async (platform, app) => {
+    vi.useFakeTimers()
+    const { port } = start({ faults: ['fleet'], orca: { ...orca, platform } })
+    for (const [sessionId, pid] of [['sess-8', 78], ['sess-9', 79]] as const) {
+      readers.known.set(sessionId, 'terminal')
+      readers.owners.set(sessionId, { engine: 'codex', pid })
+      readers.rows.set(sessionId, { cwd: '/work/web', transcriptPath: null })
+      readers.working.set(sessionId, false)
+    }
+    port.observed(hook('session-start'))
+    seen.host.watching!(true)
+    await vi.waitFor(async () => expect((await machineList(port)).agents).toHaveLength(3))
+    expect((await host().listAgentSnapshot({ apps: true })).apps?.shown).toBe(app)
+  })
+
   it('a session\'s name is read with the records folders: Claude Code\'s own and each Orca account home\'s', async () => {
     vi.useFakeTimers()
     const orca = mkdtempSync(join(tmpdir(), 'orca-home-'))
@@ -2682,13 +2720,14 @@ describe('agents outside a pane, from their hooks and the open sessions (cable/h
         expect(orcaRuns).toEqual([])
       })
 
-      it('on Windows a pick runs nothing', async () => {
-        const { port } = start({ faults: ['fleet'], orca: { ...orca, platform: 'win32' } })
+      it('on Windows a pick brings the picked app through the raise, and logs bring · ok', async () => {
+        const windows = fakeWindowsRaise()
+        const { port } = start({ faults: ['fleet'], orca: { ...orca, platform: 'win32' }, windowsRaise: windows.raise })
         await twoApps(port)
         expect(host().pickApp('vscode')).toBe('switched')
-        await settled()
+        await vi.waitFor(() => expect(brings()).toEqual(['[device] app filter: bring · ok']))
+        expect(windows.apps).toEqual(['com.microsoft.VSCode'])
         expect(orcaRuns).toEqual([])
-        expect(brings()).toEqual([])
       })
     })
 
@@ -3095,6 +3134,100 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
       const { port } = startHere({ orca: mac, raise: null })
       attach(port)
       await new Promise((done) => setImmediate(done))
+      expect(raiseLines()).toEqual([])
+    })
+  })
+
+  // On Windows a tap brings the agent's app forward by its bundle, through Windows' raise
+  // (docs/plans/2026-11-19-dial-windows-design.md, part C).
+  describe('on Windows, the raise', () => {
+    const win = { ...orca, platform: 'win32' as const }
+    const VSCODE_BUNDLE = 'com.microsoft.VSCode'
+    const CURSOR_BUNDLE = 'com.todesktop.230313mzl4w4u92'
+    const CLAUDE_BUNDLE = 'com.anthropic.claudefordesktop'
+    const CODEX_BUNDLE = 'com.openai.codex'
+    const raiseLines = () => said().filter((line) => line.startsWith('[device] raise · '))
+
+    it('a tap on an agent in VS Code brings VS Code forward', async () => {
+      const windows = fakeWindowsRaise()
+      const { port } = startHere({ orca: win, windowsRaise: windows.raise })
+      port.observed(hook('session-start', { hostHints: { TERM_PROGRAM: 'vscode', __CFBundleIdentifier: VSCODE_BUNDLE } }))
+      attach(port)
+      expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'sf' }])
+      expect(await host().openAgent(ID)).toBeUndefined()
+      expect(windows.apps).toEqual([VSCODE_BUNDLE])
+      expect(orcaRuns).toEqual([])
+    })
+
+    it('a Harness agent with no window lists f, and its tap starts Harness Desktop', async () => {
+      const windows = fakeWindowsRaise()
+      const { port } = startHere({ core: harnessAgent(), orca: win, windowsRaise: windows.raise })
+      attach(port)
+      expect(await caps()).toEqual([{ id: 'h1', caps: 'svfa' }])
+      expect(await host().openAgent('h1')).toBeUndefined()
+      expect(windows.desktops).toBe(1)
+      expect(windows.apps).toEqual([])
+    })
+
+    it('with none given the devices build Windows\' own, and count what it answered with no app named', async () => {
+      const pty = 'C:\\e2e\\harness-pty.exe'
+      const cli = 'C:\\e2e\\cursor\\cursor.cmd'
+      vi.stubEnv('HARNESS_PTY_BIN', pty)
+      const run = async (file: string, args: string[], timeoutMs: number) => {
+        orcaRuns.push([file, args, timeoutMs])
+        return { code: 0, stdout: file === pty ? 'refused\n' : '' }
+      }
+      const cursor = { ...fakeVscode({ editor: 'cursor' }).deps, platform: 'win32' as const, bin: cli, executable: (path: string) => path === cli }
+      // Cursor's folder window, a folder there now, outside Harness's data folder.
+      const parent = mkdtempSync(join(tmpdir(), 'cursor-folder-'))
+      onTestFinished(() => { rmSync(parent, { recursive: true, force: true }) })
+      const folder = join(parent, 'api')
+      mkdirSync(folder)
+      const { port } = startHere({ orca: { ...win, run }, windowsRaise: null, cursorExtension: cursor })
+      port.observed(hook('session-start', { cwd: folder, hostHints: { __CFBundleIdentifier: CURSOR_BUNDLE } }))
+      attach(port)
+      expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'sf' }])
+      expect(await host().openAgent(ID)).toBeUndefined()
+      expect(orcaRuns).toEqual([[cli, [folder], 10_000], [pty, ['raise', '--exe', 'Cursor.exe'], 10_000]])
+      expect(raiseLines()).toEqual(['[device] raise · window · refused',
+        expect.stringMatching(/^\[device\] raise · day \d{4}-\d{2}-\d{2} · window raised 0 refused 1 none 0$/)])
+      expect(logs.filter((line) => ['Cursor', 'cursor', CURSOR_BUNDLE, 'e2e'].some((secret) => line.includes(secret)))).toEqual([])
+    })
+
+    // Which app a session is in is the bundle its hook names, on Windows as on macOS: there the hook names the Claude
+    // app's and the ChatGPT app's from what it reads itself (docs/plans/2026-11-19-dial-windows-design.md).
+    it('a Claude Code whose hook names the Claude app is the Claude app\'s: a tap opens its session there', async () => {
+      const SESSION = 'local_8d1f2c3a-4b5e-4f60-9a7b-1c2d3e4f5a6b'
+      const windows = fakeWindowsRaise()
+      const { port } = startHere({ orca: win, windowsRaise: windows.raise })
+      port.observed(hook('session-start', { hostHints: { __CFBundleIdentifier: CLAUDE_BUNDLE, CLAUDE_CODE_HOST_SESSION_ID: SESSION } }))
+      attach(port)
+      expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'sf' }])
+      expect((await host().listAgentSnapshot({ apps: true })).apps?.shown).toBe('claude')
+      expect(await host().openAgent(ID)).toBeUndefined()
+      expect(windows.links).toEqual([[`claude://code/continue?session=${SESSION}`, CLAUDE_BUNDLE]])
+      expect(orcaRuns).toEqual([])
+    })
+
+    it('a Codex session whose hook names the ChatGPT app is the app\'s: a tap opens its thread there', async () => {
+      const THREAD = '01a1de76-a3b7-7270-b39e-1245893274c1'
+      const windows = fakeWindowsRaise()
+      const { port } = startHere({ orca: win, windowsRaise: windows.raise })
+      port.observed(hook('session-start', { engine: 'codex', sessionId: THREAD, transcriptPath: `/t/${THREAD}.jsonl`,
+        hostHints: { __CFBundleIdentifier: CODEX_BUNDLE } }))
+      attach(port)
+      expect((await host().listAgentSnapshot({ apps: true })).apps?.shown).toBe('codex')
+      expect(await host().openAgent(observedAgentId('codex', THREAD))).toBeUndefined()
+      expect(windows.links).toEqual([[`codex://threads/${THREAD}`, CODEX_BUNDLE]])
+      expect(orcaRuns).toEqual([])
+    })
+
+    it('macOS builds none, and counts no raise', async () => {
+      const { port } = startHere({ orca: mac, windowsRaise: null })
+      port.observed(hook('session-start', { hostHints: { TERM_PROGRAM: 'vscode', __CFBundleIdentifier: VSCODE_BUNDLE } }))
+      attach(port)
+      expect(await host().openAgent(ID)).toBeUndefined()
+      expect(orcaRuns).toEqual([['/usr/bin/open', ['-b', VSCODE_BUNDLE], 10_000]])
       expect(raiseLines()).toEqual([])
     })
   })
@@ -4934,6 +5067,17 @@ describe('codex queue, for Codex outside a pane (docs/specs/2026-11-15-device-co
     expect(logs.filter((line) => line.includes(APP))).toEqual([])
   })
 
+  // On Windows the app's codex.exe is in its Store package (codexQueue.ts), and the hook names the app from the Codex's
+  // own parent chain (docs/plans/2026-11-19-dial-windows-design.md).
+  it('a ChatGPT app session on Windows runs the app\'s own codex', async () => {
+    const PACKAGED = 'C:\\Program Files\\WindowsApps\\OpenAI.Codex_1.0.0.0_x64__abc\\app\\resources\\codex.exe'
+    started({ codex: { ...codex, platform: 'win32', appBinary: () => PACKAGED }, orca: { ...orca, platform: 'win32' } },
+      { hostHints: { __CFBundleIdentifier: 'com.openai.codex' } })
+    expect(await host().sendTurn(ID, 'run the tests')).toEqual({ ok: true })
+    expect(codexRuns.map(([file]) => file)).toEqual([PACKAGED])
+    expect(said()).toEqual(['[device] voice · codex'])
+  })
+
   // On macOS a tap opens the app's session by its thread's link (codexApp.ts): f.
   it('with no codex but the app\'s, an app session lists sv', async () => {
     started({ codex: { ...codex, platform: 'darwin', appBinary: () => APP, binary: () => null }, orca: { ...orca, platform: 'darwin' } },
@@ -6112,13 +6256,15 @@ describe('herdr\'s agents, over its socket (docs/specs/2026-11-16-device-herdr.m
   /**
    * The devices with a herdr the test drives, the dial not attached yet. Its socket is there (`stamp`). Each subscription
    * keeps its entries, its callbacks and whether it was closed; `agent.list` answers `agents`; a prompt is recorded and
-   * answers the next of `prompts`, else sent. `live` attaches the dial, starts the first subscription and awaits the list
-   * that follows it; `status` is herdr telling the pane's status on it.
+   * answers the next of `prompts`, else sent; `binary` is the herdr the client saw write the marker (Windows). `live`
+   * attaches the dial, starts the first subscription and awaits the list that follows it; `status` is herdr telling the
+   * pane's status on it.
    */
   const withHerdr = (over: Parameters<typeof start>[0] = {}) => {
     const subs: Array<{ entries: readonly HerdrEntry[]; to: HerdrSubscriber; closed: boolean }> = []
     const lists: Array<Promise<HerdrAnswer>> = []
-    const herdr = { agents: [listing()] as unknown[], stamp: '1:1' as string | undefined, subs, asked: [] as unknown[][], prompts: [] as HerdrPrompt[] }
+    const herdr = { agents: [listing()] as unknown[], stamp: '1:1' as string | undefined, subs, asked: [] as unknown[][], prompts: [] as HerdrPrompt[],
+      binary: 'C:\\herdr\\herdr.exe' }
     const client: HerdrClient = {
       request: (method, params) => {
         herdr.asked.push(['request', method, params])
@@ -6136,6 +6282,7 @@ describe('herdr\'s agents, over its socket (docs/specs/2026-11-16-device-herdr.m
         return herdr.prompts.shift() ?? { outcome: 'sent' }
       },
       socketStamp: () => herdr.stamp,
+      binary: () => herdr.binary,
     }
     const started = start({ orca: onMac, tty: async () => undefined, herdr: client, ...over, faults: ['fleet', ...over.faults ?? []] })
     const live = async (agents: unknown[] = [listing()]): Promise<void> => {
@@ -6338,8 +6485,16 @@ describe('herdr\'s agents, over its socket (docs/specs/2026-11-16-device-herdr.m
     nothingAsked(withHerdr())
   })
 
-  it('on Windows nothing is subscribed or watched', () => {
-    nothingAsked(withHerdr({ orca: { ...onMac, platform: 'win32' } }))
+  // The client there speaks herdr's pipe, and stamps its marker (herdrClient.ts).
+  it('on Windows herdr is subscribed, and with no marker its folder watched, as on a Mac', () => {
+    const { port, herdr } = withHerdr({ orca: { ...onMac, platform: 'win32' } })
+    attach(port)
+    expect(herdr.subs.map(({ entries }) => entries)).toEqual([[{ type: 'pane.agent_detected' }, { type: 'pane.closed' }, { type: 'pane.exited' }]])
+    seen.host.watching!(false)
+    herdr.stamp = undefined
+    attach(port)
+    expect(herdr.subs).toHaveLength(1)
+    expect(watched.calls).toEqual([[herdrClientDeps(), expect.any(Function)]])
   })
 
   // With no herdr installed, no folder is watched (~/.config, or the home folder, recursive on macOS) for a socket that
@@ -6352,6 +6507,25 @@ describe('herdr\'s agents, over its socket (docs/specs/2026-11-16-device-herdr.m
     installed = true
     attach(started.port)
     expect(watched.calls).toEqual([[herdrClientDeps(), expect.any(Function)]])
+  })
+
+  // herdr's zip puts it on no PATH (docs/plans/2026-11-19-dial-windows-vm-notes.md, Task 2 §2), and its folder appears
+  // only when it first runs: a herdr first run after the dial came is found with the dial left plugged in, as one on a
+  // Mac's PATH is (the VM notes, Final head §6). A tap runs the herdr the client saw write the marker.
+  it('on Windows a herdr on no PATH, first run after the dial came, is listed, and a tap runs the herdr that wrote the marker', async () => {
+    const { port, herdr } = withHerdr({ orca: { ...onMac, platform: 'win32',
+      onPath: (name: string) => (name === 'herdr' ? null : onMac.onPath(name)), exists: () => false } })
+    herdr.stamp = undefined
+    attach(port)
+    expect(watched.calls).toEqual([[herdrClientDeps(), expect.any(Function)]])
+    // herdr runs: its folder and marker appear, and the watch tells it.
+    herdr.stamp = '1:1'
+    ;(watched.calls[0][1] as () => void)()
+    herdr.subs[0].to.started()
+    await vi.advanceTimersByTimeAsync(0)
+    const [{ id }] = await listed()
+    expect(await host().openAgent(id)).toBeUndefined()
+    expect(orcaRuns).toEqual([['C:\\herdr\\herdr.exe', ['agent', 'focus', PANE], 10_000]])
   })
 
   it('with no socket, the folder herdr\'s socket goes in is watched, where the daemon\'s own environment puts it, while a dial is attached', () => {
@@ -6625,6 +6799,7 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
       subscribe: (_entries, to) => { subs.push(to); return { close: () => {} } },
       prompt: async () => ({ outcome: 'sent' }),
       socketStamp: () => '1:1',
+      binary: () => undefined,
     }
     const onMac = { ...orca, platform: 'darwin' as const, onPath: (name: string) => `/opt/${name}/bin/${name}` }
     const { port, listener } = devices({ herdr: client, orca: onMac, tty: async () => undefined })
@@ -7031,6 +7206,7 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
         subscribe: (_entries, to) => { subs.push(to); return { close: () => {} } },
         prompt: async () => ({ outcome: 'sent' }),
         socketStamp: () => '1:1',
+        binary: () => undefined,
       }
       const onMac = { ...orca, platform: 'darwin' as const, onPath: (name: string) => `/opt/${name}/bin/${name}` }
       const { port, listener } = devices({ core: bound(), herdr: client, orca: onMac, tty: async () => undefined })
@@ -7203,6 +7379,21 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
       expect(ringing()).toEqual([])
     })
 
+    // Inside the core's process (Windows, services/inline.ts) the core's agents are read directly, with no refresh: the
+    // list built for the dial still finds the agent a restored card waits for.
+    it('a Harness agent\'s restored row comes back inside the core\'s process too, where no refresh is given', async () => {
+      const first = devices({ core: bound() })
+      expect(first.listener.notice({ text: LINE, engine: 'claude', sessionId: 's-h1' })).toEqual({ result: 'shown' })
+      const [restored] = ids()
+      const second = await again(first, { core: bound() })
+      seen.host.watching!(true)
+      second.port.swarms(null)
+      await host().listAgentSnapshot()
+      expect(calls('replaceNotifications').at(-1)).toEqual([[{ agentId: 'h1', machineId: 'machine-1', question: true, text: LINE }]])
+      expect(calls('hold')).toEqual([['h1', restored, card('Harness')]])
+      expect(ringing()).toEqual([])
+    })
+
     // The dial's question close drops its agent's row: a drawer replace that put the restored row back ahead of a close
     // still queued behind the agent's earlier cards would lose it.
     describe('its row put back reaches the dial after what its agent\'s order already holds', () => {
@@ -7265,6 +7456,7 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
         subscribe: (_entries, to) => { subs.push(to); return { close: () => {} } },
         prompt: async () => ({ outcome: 'sent' }),
         socketStamp: () => '1:1',
+        binary: () => undefined,
       }
       const onMac = { ...orca, platform: 'darwin' as const, onPath: (name: string) => `/opt/${name}/bin/${name}` }
       const withHerdr = { herdr: client, orca: onMac, tty: async () => undefined }
@@ -7644,6 +7836,7 @@ describe('Herdr\'s agents, through Herdr Core (docs/plans/2026-11-16-herdr-app-d
       subscribe: (_entries, to) => { herdrSubs.push(to); return { close: () => {} } },
       prompt: async () => ({ outcome: 'sent' }),
       socketStamp: () => '1:1',
+      binary: () => undefined,
     }
     const { live } = withHc({ herdr: herdrListing })
     live()
@@ -7701,6 +7894,7 @@ describe('Herdr\'s agents, through Herdr Core (docs/plans/2026-11-16-herdr-app-d
         subscribe: (_entries, to) => { herdrSubs.push(to); return { close: () => {} } },
         prompt: async () => ({ outcome: 'sent' }),
         socketStamp: () => '1:1',
+        binary: () => undefined,
       }
       const { port, live } = withHc({ herdr: herdrListing })
       live([])

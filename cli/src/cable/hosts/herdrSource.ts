@@ -65,7 +65,6 @@ export interface HerdrSourceDeps {
   now(): number
   monotonic(): number
   uuid(): string
-  platform: NodeJS.Platform
   log(line: string): void
   count(what: 'herdr' | 'busy' | 'waiting' | 'too-long' | 'no-answer'): void
 }
@@ -125,8 +124,7 @@ export class HerdrSource implements HostSource {
   constructor(private readonly deps: HerdrSourceDeps) {}
 
   start(): void {
-    // herdr's socket there is a named pipe, which the client does not speak.
-    if (this.deps.platform === 'win32' || this.running) return
+    if (this.running) return
     this.running = true
     this.attempts.start()
   }

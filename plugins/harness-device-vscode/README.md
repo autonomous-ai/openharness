@@ -16,8 +16,9 @@ In Cursor it does the same. There the dial also lists Cursor's own agent: a tap 
 folder (for a multi-root workspace its first folder, which may open as a second window).
 
 Each window tells the devices process on this computer which shells its terminals run, and shows or scrolls the
-terminal the devices process names, or presses its page keys, raising itself when the show is a tap's. It asks `harness device vscode link` (`~/.local/bin/harness`, then `harness` in an absolute `PATH` folder) where
-that process listens.
+terminal the devices process names, or presses its page keys, raising itself when the show is a tap's. It asks
+`harness device vscode link` (`~/.local/bin/harness`, on Windows `%USERPROFILE%\.harness\bin\harness.exe`, then
+`harness` in an absolute `PATH` folder) where that process listens.
 
 ## What it never does
 
@@ -27,7 +28,7 @@ that process listens.
 - It shows no panel, status bar item, notification or command of its own.
 - Nothing leaves the computer: it talks only to the Harness daemon's devices process on it, and sends only its
   terminals' shell pids, which one is active and whether the window is focused.
-- In a remote window (SSH, WSL, a container) or on Windows, it does nothing.
+- In a remote window (SSH, WSL, a container) it does nothing.
 
 ## On and off
 

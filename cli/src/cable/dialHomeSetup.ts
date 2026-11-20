@@ -13,7 +13,6 @@ import { rolloutHome, takesOwner, type RolloutOwner } from './codexRolloutHome.j
 
 export interface DialHomeSetupDeps {
   dataDir: string
-  platform: NodeJS.Platform
   uid: number
   /** The daemon's own homes: dirname(env.CLAUDE_PROJECTS_DIR), env.CODEX_HOME. */
   claudeHome: string
@@ -411,14 +410,12 @@ export function createDialHomeSetup(deps: DialHomeSetupDeps): DialHomeSetup {
 
   return {
     started() {
-      // The devices listener, which `harness device notify` rings, does not exist on Windows: a skill there would name
-      // a command that cannot ring.
-      if (deps.platform === 'win32' || !readRecord()) return
+      if (!readRecord()) return
       if (record.dial) run(startPass)
     },
 
     attached() {
-      if (deps.platform === 'win32' || !readRecord()) return
+      if (!readRecord()) return
       if (!record.dial) {
         // Saved before any home is touched: a home is written only on a computer that has had a dial.
         const next = { ...record, dial: true }
@@ -432,7 +429,7 @@ export function createDialHomeSetup(deps: DialHomeSetupDeps): DialHomeSetup {
     },
 
     scanned(owners) {
-      if (deps.platform === 'win32' || !record.dial) return
+      if (!record.dial) return
       run((counts) => {
         // A removal or enable since, or the plugin turned on or off: every home is written again, or taken out, without
         // a restart.

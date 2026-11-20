@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { parse } from 'yaml'
-import { DIAL_SKILL, DIAL_SKILL_DESCRIPTION, claudePluginState, ownDirectory, refreshSkill, removeSkill, skillWanted, skillsFolderOf, writeSkill } from './dialSkill.js'
+import { DIAL_SKILL, DIAL_SKILL_DESCRIPTION, claudePluginState, ownDirectory, ownWindowsPath, refreshSkill, removeSkill, skillWanted, skillsFolderOf, writeSkill } from './dialSkill.js'
 
 const MARKER = '# Written by Harness. Remove it with harness device claude disable or harness device codex disable.'
 /** The line 0.6.58 wrote: files in people's homes still hold it. */
@@ -310,6 +310,85 @@ describe('the dial skill', () => {
     // No search permission on the home: stat of its skills folder fails with EACCES.
     chmodSync(home, 0o600)
     expect(ownDirectory(skills)).toBe('unreadable')
+    expect(ownDirectory(skills, -1, [realpathSync(folder())])).toBe('unreadable')
+  })
+
+  it('on Windows a folder through its links, or a real file, is this account\'s own when its real path is in the profile, whatever its uid', () => {
+    const root = realpathSync(folder())
+    const roots = [root]
+    const inside = join(root, 'skills')
+    mkdirSync(inside)
+    const outside = realpathSync(folder())
+    // Its name only starts with the profile's.
+    const beside = `${root}x`
+    mkdirSync(beside)
+    cleanup.push(beside)
+    const linked = join(root, 'linked')
+    symlinkSync(inside, linked)
+    const away = join(root, 'away')
+    symlinkSync(outside, away)
+    mkdirSync(join(outside, 'real'))
+    const file = join(root, 'SKILL.md')
+    writeFileSync(file, 'mine')
+    const fileLink = join(root, 'linked.md')
+    symlinkSync(file, fileLink)
+
+    // -1 is the uid Windows gives: none is read.
+    expect(ownDirectory(inside, -1, roots)).toBe('ok')
+    expect(ownWindowsPath(inside, 'directory', roots)).toBe('ok')
+    expect(ownDirectory(root, -1, roots)).toBe('ok')
+    expect(ownDirectory(outside, -1, roots)).toBe('owner')
+    expect(ownDirectory(beside, -1, roots)).toBe('owner')
+    // A folder's link or junction is followed, as a Mac's stat follows it: its real folder decides.
+    expect(ownDirectory(linked, -1, roots)).toBe('ok')
+    expect(ownWindowsPath(linked, 'directory', roots)).toBe('ok')
+    expect(ownDirectory(away, -1, roots)).toBe('owner')
+    const dangling = join(root, 'dangling')
+    symlinkSync(join(root, 'gone'), dangling)
+    expect(ownDirectory(dangling, -1, roots)).toBe('missing')
+    // A real folder reached through a link to outside.
+    expect(ownDirectory(join(away, 'real'), -1, roots)).toBe('owner')
+    expect(ownDirectory(join(root, 'nothing'), -1, roots)).toBe('missing')
+    expect(ownDirectory(file, -1, roots)).toBe('missing')
+    expect(ownWindowsPath(file, 'file', roots)).toBe('ok')
+    // A file's link is the person's, wherever it points.
+    expect(ownWindowsPath(fileLink, 'file', roots)).toBe('owner')
+    expect(ownWindowsPath(inside, 'file', roots)).toBe('missing')
+
+    const home = join(root, 'home')
+    expect(skillsFolderOf(home, true, -1, roots)).toBe(join(home, 'skills'))
+    expect(skillsFolderOf(join(root, 'linkedHome'), false, -1, roots)).toBeNull()
+    symlinkSync(home, join(root, 'linkedHome'))
+    // Through a linked home its skills folder is the real one inside.
+    expect(skillsFolderOf(join(root, 'linkedHome'), false, -1, roots)).toBe(join(home, 'skills'))
+    const elsewhere = folder()
+    skillsAt(elsewhere)
+    expect(skillsFolderOf(elsewhere, false, -1, roots)).toBeNull()
+  })
+
+  it('on Windows the profile, resolved, is the one root; elsewhere the uid decides', () => {
+    // A run's folders are under /tmp on macOS, a link to /private/tmp: the profile is compared by its real path.
+    const profile = folder()
+    const skills = skillsAt(profile)
+    const elsewhere = skillsAt()
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
+    // os.homedir() reads HOME first.
+    vi.stubEnv('HOME', profile)
+    try {
+      expect(ownWindowsPath(join(profile, 'skills'), 'directory')).toBe('ok')
+      expect(ownWindowsPath(elsewhere, 'directory')).toBe('owner')
+      // Not Windows: a folder of this uid is this account's, wherever it is.
+      expect(ownDirectory(elsewhere)).toBe('ok')
+      expect(skillsFolderOf(join(elsewhere, '..'), false)).toBe(elsewhere)
+      Object.defineProperty(process, 'platform', { ...platform, value: 'win32' })
+      expect(ownDirectory(skills)).toBe('ok')
+      expect(ownDirectory(elsewhere)).toBe('owner')
+      expect(skillsFolderOf(profile, false)).toBe(skills)
+      expect(skillsFolderOf(join(elsewhere, '..'), false)).toBeNull()
+    } finally {
+      Object.defineProperty(process, 'platform', platform)
+      vi.unstubAllEnvs()
+    }
   })
 
   it('a missing home', () => {
@@ -398,10 +477,23 @@ describe('the dial skill', () => {
     for (const [what, path] of unknown) expect(claudePluginState(path), what).toBe('unknown')
   })
 
-  it('it imports only node modules', () => {
-    const source = readFileSync(new URL('./dialSkill.ts', import.meta.url), 'utf8')
-    const imports = [...source.matchAll(/(?:\bfrom\s+|\bimport\s*\(?\s*)['"]([^'"]+)['"]/g)].map((match) => match[1])
-    expect(imports.length).toBeGreaterThan(0)
-    for (const specifier of imports) expect(specifier.startsWith('node:'), specifier).toBe(true)
+  it('it loads only node modules', () => {
+    // Followed through the files it imports: lib/secureState.ts, whose profile check it shares, loads only Node's own too.
+    const seen = new Set<string>()
+    const nodeModules: string[] = []
+    const visit = (file: URL): void => {
+      if (seen.has(file.href)) return
+      seen.add(file.href)
+      const source = readFileSync(file, 'utf8')
+      for (const [, specifier] of source.matchAll(/(?:\bfrom\s+|\bimport\s*\(?\s*)['"]([^'"]+)['"]/g)) {
+        if (specifier.startsWith('.')) visit(new URL(specifier.replace(/\.js$/, '.ts'), file))
+        else {
+          expect(specifier.startsWith('node:'), `${specifier} in ${file.pathname}`).toBe(true)
+          nodeModules.push(specifier)
+        }
+      }
+    }
+    visit(new URL('./dialSkill.ts', import.meta.url))
+    expect(nodeModules.length).toBeGreaterThan(0)
   })
 })

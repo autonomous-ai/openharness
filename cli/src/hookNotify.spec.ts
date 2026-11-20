@@ -7,6 +7,7 @@ import { tmpdir } from 'os'
 import { dirname, join } from 'path'
 import { fileURLToPath, pathToFileURL } from 'url'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { APP_BUNDLES } from './cable/hosts/hostDetect.js'
 import { observedTitle } from './cable/hosts/observedTitle.js'
 import { MAX_HINTS, MAX_TITLE, parseObservedHook } from './core/observedHook.js'
 import { ENGINES } from './engines/types.js'
@@ -126,6 +127,8 @@ interface RunHookOpts {
   grokHome?: string
   devinHome?: string
   input?: Record<string, unknown>
+  /** The hook's stdin as it is, in place of [input]'s JSON. */
+  stdin?: string
   /** The command lines the hook is run through, outermost first: each hands the rest of the line on as `"$0" "$@"`. */
   via?: string[][]
   /** Linux's /proc as the hook's climb reads it, faked on any platform (`process.platform` reads 'linux'): the hook's
@@ -135,6 +138,15 @@ interface RunHookOpts {
   procAncestors?: Array<{ comm: string; argv: string[] } | null>
   /** Every path under /proc the hook reads is appended here, one a line. The file is not made when it reads none. */
   procReadLog?: string
+  /** The hook's ancestors on Windows, nearest first, as `procAncestors` is for Linux, listed by a fake `harness-pty`; the
+   *  case sets the platform (the pipe's preload, `windowsData`). The first is the hook's real parent; the row at index
+   *  n > 0 has pid 9000 + n; each one's parent is the next, and the last one's parent is no row at all, a process gone.
+   *  Each started before its child, unless it names its own start marker, and has the image path it names, or none.
+   *  null is a process the host lists but could not open: its name alone, with no start marker (pty/src/ps.rs). */
+  windowsAncestors?: Array<{ executable: string; argv: string[]; startMarker?: string; imagePath?: string } | null>
+  /** Each run of the fake `harness-pty` (windowsProcessTable's or windowsAncestors') appends a line here. The file is not
+   *  made when it never runs. */
+  psRunLog?: string
 }
 
 function runHook(opts: RunHookOpts): Promise<string> {
@@ -151,6 +163,11 @@ function runHook(opts: RunHookOpts): Promise<string> {
     // spec sets.
     delete env.HERDR_SESSION
     delete env.HC_SESSION
+    // Run inside VS Code, Cursor or Alacritty, a hook run as on Windows would name that app from these.
+    delete env.VSCODE_GIT_ASKPASS_NODE
+    delete env.VSCODE_PID
+    delete env.VSCODE_IPC_HOOK
+    delete env.ALACRITTY_LOG
     if (opts.env) Object.assign(env, opts.env)
     delete env.TMUX_PANE
     if (opts.tmuxPane) env.TMUX_PANE = opts.tmuxPane
@@ -162,6 +179,22 @@ function runHook(opts: RunHookOpts): Promise<string> {
     tmpDirs.push(env.TMUX_TMPDIR)
     delete env.MACHINE_ID
     if (opts.launcherId !== null) env.MACHINE_ID = opts.launcherId ?? '11111111-2222-4333-8444-555555555555'
+    /** A `harness-pty` in [binDir] whose `ps --json` lists [table], as the hook's helper on Windows, and whose
+     *  `ps --json --ancestors <pid>` lists that pid's row and its parents', nearest first, at most 9 (pty/src/ps.rs). */
+    const fakePtyHost = (binDir: string, table: { rows: Array<{ pid: number; parentPid: number }> }) => {
+      const quote = (value: string) => "'" + value.replace(/'/g, "'\\''") + "'"
+      const runLog = opts.psRunLog ? `echo "$*" >> ${quote(opts.psRunLog)}\n` : ''
+      const byPid = new Map(table.rows.map((row) => [row.pid, row]))
+      const chain = (pid: number) => {
+        const rows: typeof table.rows = []
+        for (let row = byPid.get(pid); row && rows.length < 9 && !rows.includes(row); row = byPid.get(row.parentPid)) rows.push(row)
+        return rows
+      }
+      const chains = table.rows.map((row) => `${row.pid}) printf '%s\\n' ${quote(JSON.stringify({ rows: chain(row.pid) }))} ;;\n`).join('')
+      writeExecutable(join(binDir, 'harness-pty'), `#!/bin/sh\n${runLog}if [ "$*" = "ps --json" ]; then printf '%s\\n' ${quote(JSON.stringify(table))}; exit 0; fi
+[ "$1 $2 $3" = "ps --json --ancestors" ] && [ $# = 4 ] || exit 2\ncase "$4" in\n${chains}*) echo '{"rows":[]}' ;;\nesac\n`)
+      env.HARNESS_PTY_BIN = join(binDir, 'harness-pty')
+    }
     if (opts.processEngine || opts.paneOwner !== undefined || opts.paneSession !== undefined) {
       const binDir = mkdtempSync(join(tmpdir(), 'adapter-hook-bin-'))
       tmpDirs.push(binDir)
@@ -187,8 +220,7 @@ function runHook(opts: RunHookOpts): Promise<string> {
           { pid: 7001, parentPid: 7000, executable, startMarker: 'w:133000000000000001', args: processArgs, nativeArgv: processArgs.split(' ') },
           { pid: process.pid, parentPid: 7001, executable: 'node.exe', startMarker: 'w:133000000000000002', args: 'hook-parent', nativeArgv: ['hook-parent'] },
         ] }
-        writeExecutable(join(binDir, 'harness-pty'), `#!/bin/sh\n[ "$1 $2" = "ps --json" ] || exit 2\nprintf '%s\\n' ${shellQuote(JSON.stringify(table))}\n`)
-        env.HARNESS_PTY_BIN = join(binDir, 'harness-pty')
+        fakePtyHost(binDir, table)
         writeFileSync(join(binDir, 'ps'), '#!/bin/sh\nexit 1\n', { mode: 0o755 })
       } else {
         // Hermes 0.22+: the hook comes from the shared gateway the pane's Hermes started, not from that Hermes.
@@ -262,6 +294,18 @@ fs.readFileSync = (path, ...args) => {
 }; syncBuiltinESMExports();\n`)
       env.NODE_OPTIONS = `${env.NODE_OPTIONS ?? ''} --import ${fixture}`.trim()
     }
+    if (opts.windowsAncestors) {
+      const binDir = mkdtempSync(join(tmpdir(), 'adapter-hook-bin-'))
+      tmpDirs.push(binDir)
+      // The hook is this process's child; past the last row, the next pid is in no row.
+      const pidAt = (index: number) => index === 0 ? process.pid : 9000 + index
+      fakePtyHost(binDir, { rows: opts.windowsAncestors.map((row, index) => row
+        ? { pid: pidAt(index), parentPid: pidAt(index + 1), executable: row.executable,
+            startMarker: row.startMarker ?? `w:${133000000000000100n - BigInt(index)}`, args: row.argv.join(' '), nativeArgv: row.argv,
+            ...(row.imagePath ? { imagePath: row.imagePath } : {}) }
+        : { pid: pidAt(index), parentPid: pidAt(index + 1), executable: 'elevated.exe', startMarker: '', args: 'elevated.exe',
+            nativeArgv: ['elevated.exe'] }) })
+    }
     if (opts.procReadLog) {
       const fixtureDir = mkdtempSync(join(tmpdir(), 'adapter-hook-proc-'))
       tmpDirs.push(fixtureDir)
@@ -301,7 +345,7 @@ fs.readFileSync = (path, ...args) => {
     child.stdout.on('data', (chunk) => { stdout += chunk })
     child.on('error', reject)
     child.on('close', (code) => code === 0 ? resolve(stdout) : reject(new Error(`notify.mjs exited ${code}`)))
-    child.stdin.end(JSON.stringify(opts.input ?? {
+    child.stdin.end(opts.stdin ?? JSON.stringify(opts.input ?? {
       hook_event_name: 'SessionEnd',
       session_id: 'session-test',
       reason: 'logout',
@@ -892,6 +936,65 @@ describe('hook notify terminal scope', () => {
       engine: 'claude',
       processIdentity: { pid: 7001, executable: 'claude.exe', startMarker: 'w:133000000000000001' },
     }])
+  })
+
+  describe('on Windows, where every file looks writable by everyone', () => {
+    /** A data folder, a transcript, and the NODE_OPTIONS of a preload that reports modes as NTFS does to Node: a
+     *  folder 0o777 and a file 0o666, whatever was asked (fchmod changes nothing there). */
+    function ntfs() {
+      const dir = mkdtempSync(join(tmpdir(), 'adapter-hook-offline-ntfs-'))
+      tmpDirs.push(dir)
+      const claudeProjectsDir = join(dir, 'claude-projects'), dataDir = join(dir, 'data')
+      mkdirSync(join(claudeProjectsDir, 'demo'), { recursive: true })
+      const transcript = (session: string) => {
+        const path = join(claudeProjectsDir, 'demo', `${session}.jsonl`)
+        writeFileSync(path, '{}\n')
+        return path
+      }
+      const preload = join(dir, 'ntfs-modes.mjs')
+      writeFileSync(preload, `import fs from 'node:fs'; import { syncBuiltinESMExports } from 'node:module';
+const ntfs = (stat) => {
+  if (!stat || !(stat.isFile() || stat.isDirectory())) return stat;
+  const bits = stat.isDirectory() ? 0o777 : 0o666;
+  stat.mode = typeof stat.mode === 'bigint' ? stat.mode | BigInt(bits) : stat.mode | bits;
+  return stat;
+};
+for (const name of ['statSync', 'lstatSync', 'fstatSync']) { const original = fs[name]; fs[name] = (...args) => ntfs(original(...args)); }
+syncBuiltinESMExports();\n`)
+      return { dataDir, claudeProjectsDir, transcript, env: { NODE_OPTIONS: `--import ${pathToFileURL(preload).href}` } }
+    }
+
+    it('a hook with no daemon records its session, and a later hook reads it', async () => {
+      const { dataDir, claudeProjectsDir, transcript, env } = ntfs()
+      const start = (session: string) => runHook({
+        port: 9, tmuxPane: '%7', processEngine: 'claude', windowsProcessTable: true, dataDir, claudeProjectsDir, env,
+        input: { hook_event_name: 'SessionStart', session_id: session, transcript_path: transcript(session), cwd: '/tmp/demo' },
+      })
+      const rows = () => JSON.parse(readFileSync(join(dataDir, 'registry.json'), 'utf8')) as Array<Record<string, unknown>>
+
+      await start('session-a')
+      expect(rows()).toMatchObject([{ sessionId: 'session-a', engine: 'claude', processIdentity: { pid: 7001 } }])
+      const first = rows()[0]
+
+      // The same agent resumed into another session: only a hook that read the row keeps its id.
+      await start('session-b')
+      expect(rows()).toMatchObject([{ sessionId: 'session-b', agentId: first.agentId, registeredAt: first.registeredAt }])
+    })
+
+    it('takes over the lock a dead hook left', async () => {
+      const { dataDir, claudeProjectsDir, transcript, env } = ntfs()
+      const lock = join(dataDir, 'registry.json.lock')
+      mkdirSync(lock, { recursive: true, mode: 0o700 })
+      writeFileSync(join(lock, 'owner.json'), JSON.stringify({ pid: 2_147_483_646, startMarker: '', token: 'gone' }), { mode: 0o600 })
+
+      await runHook({
+        port: 9, tmuxPane: '%7', processEngine: 'claude', windowsProcessTable: true, dataDir, claudeProjectsDir, env,
+        input: { hook_event_name: 'SessionStart', session_id: 'session-a', transcript_path: transcript('session-a'), cwd: '/tmp/demo' },
+      })
+
+      expect(JSON.parse(readFileSync(join(dataDir, 'registry.json'), 'utf8'))).toMatchObject([{ sessionId: 'session-a' }])
+      expect(existsSync(lock)).toBe(false)
+    })
   })
 
   it('leaves a corrupt offline registry byte-identical instead of replacing it', async () => {
@@ -2369,6 +2472,54 @@ describe('hook notify in a Harness pty host pane (Windows)', () => {
   })
 })
 
+/** [dataDir], by default a new one short enough for a socket, with the daemon's token, and a preload that runs the hook
+ *  as on Windows. */
+function windowsData(dataDir = mkdtempSync('/tmp/hkp-')): { dataDir: string; token: Buffer; id: string; socket: string; preload: string } {
+  tmpDirs.push(dataDir)
+  const token = randomBytes(32), id = randomBytes(16).toString('hex')
+  writeFileSync(join(dataDir, 'daemon-token'), `${token.toString('hex')}\n`, { mode: 0o644 })
+  const preload = join(dataDir, 'win32-pipe.mjs')
+  writeFileSync(preload, [
+    "import http from 'node:http'",
+    "Object.defineProperty(process, 'platform', { value: 'win32' })",
+    'const dial = http.Agent.prototype.createConnection',
+    'http.Agent.prototype.createConnection = function (options, ...rest) {',
+    // Any name ending in harness-<id>, local pipe or not: the hook's own check is what refuses one.
+    '  const id = /harness-([0-9a-f]{32})$/.exec(options.socketPath ?? "")?.[1]',
+    `  const socket = id && ${JSON.stringify(dataDir)} + '/harness-' + id`,
+    '  return dial.call(this, socket ? { ...options, socketPath: socket, path: socket } : options, ...rest)',
+    '}',
+  ].join('\n') + '\n')
+  return { dataDir, token, id, socket: join(dataDir, `harness-${id}`), preload }
+}
+
+function record(dataDir: string, port: number, fields: Record<string, unknown>): void {
+  writeFileSync(join(dataDir, `daemon-${port}.json`), JSON.stringify({ port, ...fields }) + '\n', { mode: 0o644 })
+}
+
+/** What a hook run as on Windows posts over the daemon's pipe (a Unix socket named for it, as the W1 cases reach one): a
+ *  Codex Stop from a pty host's pane, in a new data folder, unless [opts] or [pane] say otherwise. It waits for [posts]
+ *  of them. */
+async function onWindows(opts: Partial<RunHookOpts>, pane = true, posts = 1): Promise<Array<{ url: string; body: Record<string, unknown> }>> {
+  const { dataDir, token, id, socket, preload } = windowsData(opts.dataDir)
+  record(dataDir, 9, { pipe: `\\\\.\\pipe\\harness-${id}`, pid: process.pid })
+  const requests: Array<{ url: string; body: Record<string, unknown> }> = []
+  const server = await listenLocalSocket((req, res) => {
+    let raw = ''
+    req.on('data', (chunk) => { raw += chunk })
+    req.on('end', () => { requests.push({ url: req.url ?? '', body: JSON.parse(raw) as Record<string, unknown> }); res.end('{}') })
+  }, socket, { token })
+  pipeServers.push(server.close)
+  const env = { NODE_OPTIONS: `--import ${pathToFileURL(preload).href}`, ...(pane ? { HARNESS_PANE: 'p1:%1' } : {}) }
+  await runHook({
+    port: 9, engine: 'codex', input: { hook_event_name: 'Stop', session_id: 'sess-1', cwd: '/work/app' }, ...opts, dataDir,
+    env: { ...env, ...opts.env },
+  })
+  // A paneless post is not waited for (postObserved).
+  await received(requests, posts)
+  return requests
+}
+
 /**
  * Audit W1 (docs/security/2026-11-02-team-account-windows.md): on Windows the hook posted the full local credential to
  * the daemon's TCP port, which the Team account's daemon can hold from boot. It now posts over the daemon's pipe, proving
@@ -2379,31 +2530,6 @@ describe('hook notify posts over the daemon\'s pipe on Windows (W1)', () => {
   const sessionStart = () => {
     const recordings = JSON.parse(readFileSync(new URL('./lib/__fixtures__/prompt-hooks.json', import.meta.url), 'utf8'))
     return { ...recordings.claude.input, hook_event_name: 'SessionStart' }
-  }
-
-  /** [dataDir], by default a new one short enough for a socket, with the daemon's token, and a preload that runs the hook
-   *  as on Windows. */
-  function windowsData(dataDir = mkdtempSync('/tmp/hkp-')): { dataDir: string; token: Buffer; id: string; socket: string; preload: string } {
-    tmpDirs.push(dataDir)
-    const token = randomBytes(32), id = randomBytes(16).toString('hex')
-    writeFileSync(join(dataDir, 'daemon-token'), `${token.toString('hex')}\n`, { mode: 0o644 })
-    const preload = join(dataDir, 'win32-pipe.mjs')
-    writeFileSync(preload, [
-      "import http from 'node:http'",
-      "Object.defineProperty(process, 'platform', { value: 'win32' })",
-      'const dial = http.Agent.prototype.createConnection',
-      'http.Agent.prototype.createConnection = function (options, ...rest) {',
-      // Any name ending in harness-<id>, local pipe or not: the hook's own check is what refuses one.
-      '  const id = /harness-([0-9a-f]{32})$/.exec(options.socketPath ?? "")?.[1]',
-      `  const socket = id && ${JSON.stringify(dataDir)} + '/harness-' + id`,
-      '  return dial.call(this, socket ? { ...options, socketPath: socket, path: socket } : options, ...rest)',
-      '}',
-    ].join('\n') + '\n')
-    return { dataDir, token, id, socket: join(dataDir, `harness-${id}`), preload }
-  }
-
-  function record(dataDir: string, port: number, fields: Record<string, unknown>): void {
-    writeFileSync(join(dataDir, `daemon-${port}.json`), JSON.stringify({ port, ...fields }) + '\n', { mode: 0o644 })
   }
 
   /** The daemon's pipe server, as the daemon serves it (lib/localSocket.ts): every request proves the token. */
@@ -2467,6 +2593,25 @@ describe('hook notify posts over the daemon\'s pipe on Windows (W1)', () => {
     expect(requests.map((request) => request.codexHome === undefined ? undefined : decodeURIComponent(String(request.codexHome))))
       .toEqual([homes[0], undefined, undefined, undefined, undefined, undefined])
   })
+
+  // NTFS gives the hook no owner to check (secureStateDirectory): a route record is read from inside the profile or the
+  // hook's data folder alone, never from a folder the environment names elsewhere (HARNESS_HOOK_ROUTES_DIR).
+  it.each([['inside its data folder', true], ['outside the profile and its data folder', false]] as const)(
+    'follows a pane\'s route record %s: %s', async (_case, follows) => {
+      const own = windowsData(), release = windowsData()
+      record(own.dataDir, 9, { pipe: `\\\\.\\pipe\\harness-${own.id}`, pid: process.pid })
+      record(release.dataDir, 10, { pipe: `\\\\.\\pipe\\harness-${release.id}`, pid: process.pid })
+      const atOwn = await pipeDaemon(own.socket, own.token)
+      // Where the preload of the hook's own folder dials the release daemon's pipe.
+      const atRelease = await pipeDaemon(join(own.dataDir, `harness-${release.id}`), release.token)
+      const elsewhere = mkdtempSync('/tmp/hkp-')
+      tmpDirs.push(elsewhere)
+      const routes = join(follows ? own.dataDir : elsewhere, 'hook-routes')
+      publishHookRoute(release.dataDir, 10, routes)
+      await run(9, own.dataDir, own.preload, { tmuxPane: '%7', paneOwner: harnessPaneOwner(release.dataDir),
+        env: { NODE_OPTIONS: `--import ${pathToFileURL(own.preload).href}`, HOME: shortHome(), HARNESS_HOOK_ROUTES_DIR: routes } })
+      expect([atRelease.length, atOwn.length]).toEqual(follows ? [1, 0] : [0, 1])
+    })
 
   it('finds the daemon by its record when the hook was given the port it bound, not the one it was configured with', async () => {
     const { dataDir, token, id, socket, preload } = windowsData()
@@ -3228,6 +3373,312 @@ describe('hook notify: a session outside a pane', () => {
     expect(existsSync(join(dir, 'down', 'registry.json'))).toBe(false)
     expect(existsSync(mark)).toBe(false)
   })
+
+  // Cursor and VS Code both set TERM_PROGRAM=vscode, and no app sets __CFBundleIdentifier on Windows: the hook names the
+  // editor from its own environment, or from the image name of VSCODE_PID's row in the pty host's table, and Alacritty
+  // by ALACRITTY_LOG (spec part C, "What tells the apps apart").
+  describe('which editor or terminal, on Windows', () => {
+    const VSCODE = 'com.microsoft.VSCode'
+    const CURSOR = 'com.todesktop.230313mzl4w4u92'
+    const CODE_EXE = 'C:\\Users\\u\\AppData\\Local\\Programs\\Microsoft VS Code\\Code.exe'
+    const CURSOR_EXE = 'C:\\Users\\u\\AppData\\Local\\Programs\\cursor\\Cursor.exe'
+    const LOG = 'C:\\Users\\u\\AppData\\Local\\Temp\\Alacritty-4242.log'
+    const win = (executable: string) => ({ executable, argv: [executable] })
+    const powershell = { executable: 'powershell.exe', argv: ['powershell.exe', '-NoProfile', '-Command', '& x'] }
+    /** Claude Code under its editor, which is pid 9001 (windowsAncestors). */
+    const underCode = [win('claude.exe'), win('Code.exe')]
+    /** Claude Code started from the VS Code extension's panel. */
+    const panel = { CLAUDE_CODE_ENTRYPOINT: 'claude-vscode' }
+    const runLog = () => join(folder('adapter-hook-editor-'), 'ps-runs')
+    /** How many times the fake `harness-pty` ran. */
+    const runs = (log: string) => existsSync(log) ? readFileSync(log, 'utf8').split('\n').filter(Boolean).length : 0
+    /** A `harness-pty` that fails. */
+    const failingHelper = () => {
+      const file = join(folder('adapter-hook-editor-'), 'harness-pty')
+      writeExecutable(file, '#!/bin/sh\nexit 1\n')
+      return file
+    }
+    /** The body a paneless Claude Code Stop posts on Windows. */
+    const body = async (opts: Partial<RunHookOpts>) => {
+      const requests = await onWindows({ engine: 'claude', ...opts, env: { ...noHints, ...opts.env } }, false)
+      expect(requests.map((request) => request.url)).toEqual(['/api/hook/observed'])
+      return requests[0].body
+    }
+    const hints = async (opts: Partial<RunHookOpts>) => (await body(opts)).hostHints as Record<string, string>
+
+    it.each<[string, Record<string, string>]>([
+      [CODE_EXE, { __CFBundleIdentifier: VSCODE }],
+      [CURSOR_EXE, { __CFBundleIdentifier: CURSOR }],
+      ['C:\\Users\\u\\AppData\\Local\\Programs\\cursor\\CURSOR.EXE', { __CFBundleIdentifier: CURSOR }],
+      ['C:\\Users\\u\\AppData\\Local\\Programs\\Windsurf\\Windsurf.exe', {}],
+      ['', {}],
+    ])('in an editor\'s terminal, VSCODE_GIT_ASKPASS_NODE %j names it, and no table is read', async (askpass, named) => {
+      const log = runLog()
+      expect(await hints({ windowsAncestors: underCode, psRunLog: log,
+        env: { TERM_PROGRAM: 'vscode', VSCODE_GIT_ASKPASS_NODE: askpass, VSCODE_PID: '9001' } }))
+        .toEqual({ TERM_PROGRAM: 'vscode', ...named })
+      expect(existsSync(log)).toBe(false)
+    })
+
+    /** The one read of the hook's own chain: its parent's row and that one's parents'. */
+    const ownChain = `ps --json --ancestors ${process.pid}\n`
+
+    it.each<[string, string, Record<string, string>, boolean]>([
+      ['9001', 'Code.exe', { __CFBundleIdentifier: VSCODE }, true],
+      ['9001', 'Cursor.exe', { __CFBundleIdentifier: CURSOR }, true],
+      ['9007', 'Code.exe', {}, true],
+      ['abc', 'Code.exe', {}, false],
+      ['0', 'Code.exe', {}, false],
+    ])('from the extension\'s panel, VSCODE_PID %s with %s at 9001 names %j, reading the hook\'s own chain: %s', async (pid, editor, named, reads) => {
+      const log = runLog()
+      expect(await hints({ windowsAncestors: [win('claude.exe'), win(editor)], psRunLog: log, env: { ...panel, VSCODE_PID: pid } }))
+        .toEqual({ ...named, ...panel })
+      expect(existsSync(log) ? readFileSync(log, 'utf8') : '').toBe(reads ? ownChain : '')
+    })
+
+    it('from the panel, a VSCODE_PID past the 9 rows of the hook\'s chain names no editor', async () => {
+      const log = runLog()
+      // Code.exe is pid 9009, the tenth row: the host lists the hook's parent and 8 of its parents.
+      const far = [win('claude.exe'), ...Array.from({ length: 8 }, () => win('bash.exe')), win('Code.exe')]
+      expect(await hints({ windowsAncestors: far, psRunLog: log, env: { ...panel, VSCODE_PID: '9009' } })).toEqual(panel)
+      expect(readFileSync(log, 'utf8')).toBe(ownChain)
+    })
+
+    it('from the panel, a helper that fails names no editor', async () => {
+      expect(await hints({ env: { ...panel, VSCODE_PID: '9001', HARNESS_PTY_BIN: failingHelper() } })).toEqual(panel)
+    })
+
+    it('Codex in the panel: one read of its own chain names the caller and the editor', async () => {
+      const log = runLog()
+      const requests = await onWindows({ psRunLog: log, windowsAncestors: [powershell, win('codex.exe'), win('Code.exe')],
+        env: { ...noHints, VSCODE_PID: '9002' } }, false)
+      expect(requests).toEqual([{ url: '/api/hook/observed', body: expect.objectContaining({
+        engine: 'codex', callerPid: 9001, hostHints: { __CFBundleIdentifier: VSCODE } }) }])
+      expect(readFileSync(log, 'utf8')).toBe(ownChain)
+    })
+
+    it('Codex in the panel, with a host that takes no --ancestors and lists the whole table (0.6.22): the same caller and editor', async () => {
+      const helper = join(folder('adapter-hook-editor-'), 'harness-pty')
+      // The hook's PowerShell under codex.exe (9001), under VS Code (9002), each started after its parent.
+      const row = (pid: number, parentPid: number, nativeArgv: string[], started: number) =>
+        ({ pid, parentPid, executable: nativeArgv[0], startMarker: `w:${started}`, args: nativeArgv.join(' '), nativeArgv })
+      const table = { rows: [{ pid: 4, parentPid: 0, executable: 'System', startMarker: '', args: 'System', nativeArgv: ['System'] },
+        row(process.pid, 9001, powershell.argv, 3), row(9001, 9002, ['codex.exe'], 2), row(9002, 9003, ['Code.exe'], 1)] }
+      writeExecutable(helper, `#!/bin/sh\n[ "$1 $2" = "ps --json" ] || exit 2\nprintf '%s\\n' '${JSON.stringify(table)}'\n`)
+      const requests = await onWindows({ env: { ...noHints, VSCODE_PID: '9002', HARNESS_PTY_BIN: helper } }, false)
+      expect(requests).toEqual([{ url: '/api/hook/observed', body: expect.objectContaining({
+        engine: 'codex', callerPid: 9001, hostHints: { __CFBundleIdentifier: VSCODE } }) }])
+    })
+
+    // The Claude app starts Claude Code with CLAUDE_CODE_ENTRYPOINT=claude-desktop (cable/hosts/record.ts): the hook's
+    // own environment, read before an editor's variables the app may have inherited.
+    it.each<[string, Record<string, string>]>([
+      ['alone', {}],
+      ['beside an editor\'s variables', { VSCODE_GIT_ASKPASS_NODE: CODE_EXE, VSCODE_PID: '9001', ALACRITTY_LOG: LOG }],
+    ])('in the Claude app, its own CLAUDE_CODE_ENTRYPOINT names the app %s, and no table is read', async (_case, env) => {
+      const log = runLog()
+      const app = { CLAUDE_CODE_ENTRYPOINT: 'claude-desktop' }
+      expect(await hints({ windowsAncestors: underCode, psRunLog: log, env: { ...app, ...env } }))
+        .toEqual({ __CFBundleIdentifier: APP_BUNDLES.claude, ...app })
+      expect(existsSync(log)).toBe(false)
+    })
+
+    /** The ChatGPT app's Store package (docs/plans/2026-11-19-dial-windows-vm-notes.md, Task 37 §2). */
+    const PACKAGE = 'C:\\Program Files\\WindowsApps\\OpenAI.Codex_26.1117.3838.0_arm64__2p2nqsd0c76g0'
+    /** Codex in the ChatGPT app: its hook under PowerShell, under the app's own codex.exe (9001), under ChatGPT.exe (9002)
+     *  at [imagePath]. */
+    const inChatGPT = (imagePath?: string) => [powershell, { ...win('codex.exe'), imagePath: `${PACKAGE}\\app\\resources\\codex.exe` },
+      { ...win('ChatGPT.exe'), imagePath }]
+
+    it.each<[string, Record<string, string>, string | undefined]>([
+      ['the app\'s', { __CFBundleIdentifier: APP_BUNDLES.codex }, `${PACKAGE}\\app\\ChatGPT.exe`],
+      ['the beta app\'s', {}, 'C:\\Program Files\\WindowsApps\\OpenAI.CodexBeta_26.1117.3838.0_arm64__2p2nqsd0c76g0\\app\\ChatGPT.exe'],
+      ['one outside a Store package', {}, 'C:\\Users\\u\\Downloads\\OpenAI.Codex_1\\ChatGPT.exe'],
+      ['one the host could not read the path of', {}, undefined],
+    ])('a Codex hook under %s ChatGPT.exe names %j, from the one read of its own chain', async (_case, named, imagePath) => {
+      const log = runLog()
+      const requests = await onWindows({ psRunLog: log, windowsAncestors: inChatGPT(imagePath), env: noHints }, false)
+      expect(requests.map((request) => [request.body.callerPid, request.body.hostHints])).toEqual([[9001, named]])
+      expect(readFileSync(log, 'utf8')).toBe(ownChain)
+    })
+
+    it('a Claude Code hook under the ChatGPT app\'s program reads no table for it', async () => {
+      const log = runLog()
+      expect(await hints({ windowsAncestors: inChatGPT(`${PACKAGE}\\app\\ChatGPT.exe`), psRunLog: log })).toEqual({})
+      expect(existsSync(log)).toBe(false)
+    })
+
+    // A herdr pane inside WezTerm or Warp: herdr's own bundle names no window a tap can raise on Windows, the terminal's
+    // does (cable/hosts/windowsRaise.ts WINDOWS_APPS).
+    it.each<[string, Record<string, string>, string]>([
+      ['WezTerm', { TERM_PROGRAM: 'WezTerm', WEZTERM_PANE: '3' }, APP_BUNDLES.wezterm],
+      ['Warp', { TERM_PROGRAM: 'WarpTerminal' }, APP_BUNDLES.warp],
+      ['herdr inside WezTerm', { HERDR_PANE_ID: 'w1:p2', WEZTERM_PANE: '3' }, APP_BUNDLES.wezterm],
+      ['herdr inside Warp', { HERDR_PANE_ID: 'w1:p2', TERM_PROGRAM: 'WarpTerminal' }, APP_BUNDLES.warp],
+    ])('in %s, the terminal\'s own variable names it, and no table is read', async (_case, env, bundle) => {
+      const log = runLog()
+      expect(await hints({ windowsAncestors: underCode, psRunLog: log, env })).toEqual({ ...env, __CFBundleIdentifier: bundle })
+      expect(existsSync(log)).toBe(false)
+    })
+
+    it('a Claude Code hook with none of the three names no app and reads no table', async () => {
+      const log = runLog()
+      expect(await hints({ windowsAncestors: underCode, psRunLog: log })).toEqual({})
+      expect(existsSync(log)).toBe(false)
+    })
+
+    it('ALACRITTY_LOG names Alacritty, its value is never sent, and no table is read', async () => {
+      const log = runLog()
+      const sent = await body({ windowsAncestors: underCode, psRunLog: log, env: { ALACRITTY_LOG: LOG } })
+      expect(sent.hostHints).toEqual({ __CFBundleIdentifier: 'org.alacritty' })
+      expect(JSON.stringify(sent)).not.toMatch(/Alacritty-4242|Temp/)
+      expect(existsSync(log)).toBe(false)
+    })
+
+    it.each<[string, Record<string, string>, Record<string, string>]>([
+      ['an editor\'s terminal', { VSCODE_GIT_ASKPASS_NODE: CODE_EXE }, { __CFBundleIdentifier: VSCODE }],
+      ['the panel', { VSCODE_PID: '9001' }, { __CFBundleIdentifier: VSCODE }],
+      ['a VSCODE_PID no row has', { VSCODE_PID: '9007' }, {}],
+    ])('ALACRITTY_LOG beside %s: the editor\'s names are read first', async (_case, editor, named) => {
+      expect(await hints({ windowsAncestors: underCode, env: { ALACRITTY_LOG: LOG, ...editor } })).toEqual(named)
+    })
+
+    it('never sends the environment\'s own __CFBundleIdentifier', async () => {
+      expect(await hints({ env: { __CFBundleIdentifier: VSCODE } })).toEqual({})
+      expect(await hints({ env: { __CFBundleIdentifier: 'com.apple.Terminal', VSCODE_GIT_ASKPASS_NODE: CURSOR_EXE } }))
+        .toEqual({ __CFBundleIdentifier: CURSOR })
+    })
+
+    it('sends the id alone: no askpass path, pid or log path', async () => {
+      const envs: Array<Record<string, string>> = [
+        { VSCODE_GIT_ASKPASS_NODE: CODE_EXE, ALACRITTY_LOG: LOG }, { ...panel, VSCODE_PID: '9001', ALACRITTY_LOG: LOG },
+      ]
+      for (const env of envs) {
+        const sent = await body({ windowsAncestors: underCode, env })
+        expect((sent.hostHints as Record<string, string>).__CFBundleIdentifier).toBe(VSCODE)
+        expect(Object.values(sent.hostHints as object)).not.toContain('9001')
+        expect(JSON.stringify(sent)).not.toMatch(/Microsoft VS Code|Code\.exe|Alacritty-4242/)
+      }
+    })
+
+    it('sends at most MAX_HINTS, the editor\'s id in its place among them', async () => {
+      const set = Object.fromEntries(HINTS.filter((name) => name !== 'TMUX_PANE').map((name, index) => [name, `hint-${index}`]))
+      expect(await hints({ env: { ...set, VSCODE_GIT_ASKPASS_NODE: CURSOR_EXE } }))
+        .toEqual(Object.fromEntries(panelessHints.map((name) => [name, name === '__CFBundleIdentifier' ? CURSOR : set[name]])))
+    })
+
+    describe('the panel hint kept per editor', () => {
+      const IPC = '\\\\.\\pipe\\0a1b2c3d-1.106.0-main-sock'
+      /** How the hook keys an editor's pipe: the first 16 hex digits of its SHA-256. */
+      const key = (pipe: string) => createHash('sha256').update(pipe).digest('hex').slice(0, 16)
+      /** A data folder kept across hooks, as an installed hook's is. */
+      const data = () => {
+        const dir = mkdtempSync('/tmp/hkp-')
+        tmpDirs.push(dir)
+        return dir
+      }
+      const kept = (dataDir: string) => join(dataDir, 'hook-editors.json')
+      /** A kept answer naming Cursor for pid 9001 and the editor's pipe. */
+      const keptCursor = JSON.stringify({ editors: [{ pid: 9001, ipc: key(IPC), app: CURSOR }] })
+      /** The editor a panel hook names: Claude Code under VS Code at pid 9001, with the editor's pipe, unless [opts] say
+       *  otherwise. */
+      const named = async (opts: Partial<RunHookOpts>) => (await hints({
+        windowsAncestors: underCode, ...opts, env: { ...panel, VSCODE_PID: '9001', VSCODE_IPC_HOOK: IPC, ...opts.env },
+      })).__CFBundleIdentifier
+
+      it('a second hook reads no table', async () => {
+        const dataDir = data(), log = runLog()
+        expect(await named({ dataDir, psRunLog: log })).toBe(VSCODE)
+        expect(await named({ dataDir, psRunLog: log })).toBe(VSCODE)
+        expect(runs(log)).toBe(1)
+        expect(statSync(kept(dataDir)).mode & 0o777).toBe(0o600)
+        const text = readFileSync(kept(dataDir), 'utf8')
+        expect(text).not.toContain(IPC)
+        expect(text).not.toMatch(/[\\/]|pipe|sock/)
+      })
+
+      it('reads the answer it keeps', async () => {
+        const dataDir = data(), log = runLog()
+        writeFileSync(kept(dataDir), keptCursor, { mode: 0o600 })
+        expect(await named({ dataDir, psRunLog: log })).toBe(CURSOR)
+        expect(existsSync(log)).toBe(false)
+      })
+
+      it('another editor on the same pid misses', async () => {
+        const dataDir = data(), log = runLog()
+        expect(await named({ dataDir, psRunLog: log })).toBe(VSCODE)
+        expect(await named({ dataDir, psRunLog: log, windowsAncestors: [win('claude.exe'), win('Cursor.exe')],
+          env: { VSCODE_IPC_HOOK: '\\\\.\\pipe\\9f8e7d6c-3.30.14-main-sock' } })).toBe(CURSOR)
+        expect(runs(log)).toBe(2)
+      })
+
+      it('keeps nothing without the editor\'s pipe', async () => {
+        const dataDir = data(), log = runLog()
+        expect(await named({ dataDir, psRunLog: log, env: { VSCODE_IPC_HOOK: '' } })).toBe(VSCODE)
+        expect(await named({ dataDir, psRunLog: log, env: { VSCODE_IPC_HOOK: '' } })).toBe(VSCODE)
+        expect(runs(log)).toBe(2)
+        expect(existsSync(kept(dataDir))).toBe(false)
+      })
+
+      it('keeps no failure', async () => {
+        const dataDir = data(), log = runLog()
+        expect(await named({ dataDir, psRunLog: log, env: { VSCODE_PID: '9007' } })).toBeUndefined()
+        expect(await named({ dataDir, windowsAncestors: undefined, env: { HARNESS_PTY_BIN: failingHelper() } })).toBeUndefined()
+        expect(existsSync(kept(dataDir))).toBe(false)
+        expect(await named({ dataDir, psRunLog: log })).toBe(VSCODE)
+        expect(runs(log)).toBe(2)
+      })
+
+      it('holds sixteen', async () => {
+        const dataDir = data()
+        // Twenty editors' pipes, each a new key for the pid.
+        const pipes = Array.from({ length: 20 }, (_, index) => `\\\\.\\pipe\\${index}a1b2c3d-1.106.0-main-sock`)
+        for (const pipe of pipes) expect(await named({ dataDir, env: { VSCODE_IPC_HOOK: pipe } })).toBe(VSCODE)
+        expect(JSON.parse(readFileSync(kept(dataDir), 'utf8')).editors.map((editor: { ipc: string }) => editor.ipc))
+          .toEqual(pipes.slice(4).reverse().map(key))
+      })
+
+      // Each file would name Cursor if it were read.
+      it('replaces a file it cannot read', async () => {
+        for (const text of [keptCursor.padEnd(5000), 'not json']) {
+          const dataDir = data(), log = runLog()
+          writeFileSync(kept(dataDir), text, { mode: 0o600 })
+          expect(await named({ dataDir, psRunLog: log })).toBe(VSCODE)
+          expect(runs(log)).toBe(1)
+          expect(JSON.parse(readFileSync(kept(dataDir), 'utf8'))).toEqual({ editors: [{ pid: 9001, ipc: key(IPC), app: VSCODE }] })
+        }
+        const dataDir = data(), target = join(data(), 'elsewhere.json')
+        writeFileSync(target, keptCursor, { mode: 0o600 })
+        symlinkSync(target, kept(dataDir))
+        expect(await named({ dataDir })).toBe(VSCODE)
+        expect(readFileSync(target, 'utf8')).toBe(keptCursor)
+      })
+
+      it('serves only the hint: a Codex hook whose answer is kept still reads its own chain for its caller', async () => {
+        const dataDir = data(), log = runLog()
+        writeFileSync(kept(dataDir), JSON.stringify({ editors: [{ pid: 9002, ipc: key(IPC), app: CURSOR }] }), { mode: 0o600 })
+        const requests = await onWindows({ dataDir, psRunLog: log, env: { ...noHints, VSCODE_PID: '9002', VSCODE_IPC_HOOK: IPC },
+          windowsAncestors: [powershell, win('codex.exe'), win('Code.exe')] }, false)
+        expect(requests[0].body).toMatchObject({ callerPid: 9001, hostHints: { __CFBundleIdentifier: CURSOR } })
+        expect(readFileSync(log, 'utf8')).toBe(`ps --json --ancestors ${process.pid}\n`)
+      })
+
+      it.runIf(process.platform !== 'win32')('off Windows none of the three is read, no table either, and no file is read or written', async () => {
+        const { port, requests } = await collect()
+        const dataDir = data(), log = runLog()
+        writeFileSync(kept(dataDir), keptCursor, { mode: 0o600 })
+        await runHook({
+          port, dataDir, windowsAncestors: underCode, psRunLog: log, input: { hook_event_name: 'Stop', session_id: 'sess-1' },
+          env: { ...noHints, ...panel, __CFBundleIdentifier: VSCODE, VSCODE_PID: '9001', VSCODE_IPC_HOOK: IPC,
+            VSCODE_GIT_ASKPASS_NODE: CURSOR_EXE, ALACRITTY_LOG: LOG },
+        })
+        await received(requests)
+        expect(requests[0].body.hostHints).toEqual({ __CFBundleIdentifier: VSCODE, ...panel })
+        expect(existsSync(log)).toBe(false)
+        expect(readFileSync(kept(dataDir), 'utf8')).toBe(keptCursor)
+      })
+    })
+  })
 })
 
 describe('hook notify: the caller a hook names', () => {
@@ -3311,6 +3762,147 @@ describe('hook notify: the caller a hook names', () => {
     tmpDirs.push(dir)
     expect(await paneCaller({ via: [['/bin/sh', '-c', '"$0" "$@"']], procReadLog: join(dir, 'proc-reads') })).toBe(process.pid)
     expect(existsSync(join(dir, 'proc-reads'))).toBe(false)
+  })
+
+  // Codex and Copilot run a hook through PowerShell, Command Code through cmd, and that shell exits with the hook, as dash's
+  // `sh -c` does on Linux. Windows has no /proc: the climb reads the hook's chain from the pty host
+  // (`harness-pty ps --json --ancestors`).
+  type WindowsAncestor = NonNullable<RunHookOpts['windowsAncestors']>[number]
+  const win = (...argv: string[]): WindowsAncestor => ({ executable: argv[0], argv })
+  const codexExe = win('codex.exe')
+  const powershell = win('powershell.exe', '-NoProfile', '-Command', '& x')
+  const cmd = win('cmd.exe', '/d', '/s', '/c', 'x')
+  /** A file the fake `harness-pty` notes each run in. */
+  const psRunLog = () => {
+    const dir = mkdtempSync(join(tmpdir(), 'adapter-hook-caller-'))
+    tmpDirs.push(dir)
+    return join(dir, 'ps-runs')
+  }
+
+  it.each<[string, WindowsAncestor[], number]>([
+    ['powershell -Command: its parent', [powershell, codexExe], 1],
+    ['an option\'s own value before -Command (-ExecutionPolicy Bypass): its parent',
+      [win('powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', '& x'), codexExe], 1],
+    ['pwsh -c: its parent', [win('pwsh.exe', '-NoLogo', '-NoProfile', '-c', '& x'), codexExe], 1],
+    ['PowerShell and -Command in capitals: its parent', [win('PowerShell.EXE', '-COMMAND', '& x'), codexExe], 1],
+    ['cmd /d /s /c: its parent', [cmd, codexExe], 1],
+    ['CMD /C in capitals: its parent', [win('CMD.EXE', '/C', 'x'), codexExe], 1],
+    ['cmd /c, then powershell -Command: the process above both', [cmd, powershell, codexExe], 2],
+    ['ten cmd /c in a row: the one 8 steps up', Array<WindowsAncestor>(10).fill(cmd), 8],
+    ['an interactive PowerShell: itself', [win('powershell.exe'), codexExe], 0],
+    ['PowerShell running a script (-File run.ps1): itself', [win('powershell.exe', '-File', 'run.ps1'), codexExe], 0],
+    ['-c after the script (-File run.ps1 -c): itself',
+      [win('powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', 'run.ps1', '-c'), codexExe], 0],
+    ['-Command after a script (pwsh run.ps1 -Command): itself', [win('pwsh.exe', 'run.ps1', '-Command', 'x'), codexExe], 0],
+    ['an encoded command (-EncodedCommand): itself', [win('powershell.exe', '-EncodedCommand', 'AAAA'), codexExe], 0],
+    ['cmd /k: itself', [win('cmd.exe', '/k', 'x'), codexExe], 0],
+    ['an interactive cmd: itself', [win('cmd.exe'), codexExe], 0],
+    ['a program that is no shell, whatever its options (node -c): itself', [win('node.exe', '-c', 'x.js'), codexExe], 0],
+    ['a process the host could not open: the last one reached', [cmd, null], 1],
+    ['a command shell whose parent is gone: the shell itself', [cmd], 0],
+    // Windows reuses pids: the engine is gone, and a process started since holds its pid.
+    ['a command shell whose parent\'s pid a later process took: the shell itself',
+      [cmd, { executable: 'codex.exe', argv: ['codex.exe'], startMarker: 'w:133000000000000200' }], 0],
+  ])('on Windows a Codex pane hook names, past %s', async (_case, windowsAncestors, named) => {
+    expect(await onWindows({ windowsAncestors })).toEqual([
+      { url: '/api/hook/turn-stop', body: expect.objectContaining({ callerPid: pidAt(named) }) },
+    ])
+  })
+
+  it.each<['commandcode' | 'copilot', WindowsAncestor, string[], string[]]>([
+    ['commandcode', cmd, [], ['/api/hook/session-start', '/api/hook/turn-stop']],
+    ['copilot', powershell, ['--copilot-event', 'agentStop'], ['/api/hook/turn-stop']],
+  ])('on Windows a %s pane hook climbs the same way', async (engine, shell, args, urls) => {
+    const requests = await onWindows({ engine, args, windowsAncestors: [shell, win(`${engine}.exe`)] })
+    expect(requests.map(({ url, body }) => [url, body.callerPid])).toEqual(urls.map((url) => [url, pidAt(1)]))
+  })
+
+  it('on Windows a paneless hook names by the same rule: past cmd and PowerShell, the process above both', async () => {
+    expect(await onWindows({ windowsAncestors: [cmd, powershell, codexExe] }, false)).toEqual([
+      { url: '/api/hook/observed', body: expect.objectContaining({ callerPid: pidAt(2) }) },
+    ])
+  })
+
+  it('on Windows Claude Code\'s hook, run with no shell, names its parent and starts no helper', async () => {
+    const runs = psRunLog()
+    expect(await onWindows({ engine: 'claude', windowsAncestors: [powershell, win('claude.exe')], psRunLog: runs })).toEqual([
+      { url: '/api/hook/turn-stop', body: expect.objectContaining({ callerPid: pidAt(0) }) },
+    ])
+    expect(existsSync(runs)).toBe(false)
+  })
+
+  // An event the hook drops is told to no one: it starts no pty host for a caller it would never name.
+  it.each<[string, Partial<RunHookOpts>]>([
+    ['a PermissionRequest outside a pane', { input: { hook_event_name: 'PermissionRequest', session_id: 'sess-1', tool_name: 'shell' } }],
+    ['a subagent\'s Stop', { input: { hook_event_name: 'Stop', session_id: 'sess-1', source: { subagent: 'review' } } }],
+    ['input that is not JSON', { stdin: '{"hook_event_name":' }],
+  ])('on Windows a Codex hook that drops %s starts no pty host', async (_case, opts) => {
+    const runs = psRunLog()
+    expect(await onWindows({ windowsAncestors: [powershell, codexExe], psRunLog: runs, ...opts }, false, 0)).toEqual([])
+    expect(existsSync(runs)).toBe(false)
+  })
+
+  it('on Windows a helper that fails names the hook\'s parent', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'adapter-hook-caller-'))
+    tmpDirs.push(dir)
+    writeExecutable(join(dir, 'harness-pty'), '#!/bin/sh\nexit 1\n')
+    expect(await onWindows({ env: { HARNESS_PTY_BIN: join(dir, 'harness-pty') } })).toEqual([
+      { url: '/api/hook/turn-stop', body: expect.objectContaining({ callerPid: pidAt(0) }) },
+    ])
+  })
+
+  // A helper path Node refuses to start (ENOTDIR) throws rather than fails: no chain, as a failed read is. The caller's
+  // climb and the app's lookup read the one chain, so a Codex outside a pane is told all the same.
+  it('on Windows a Codex hook outside a pane whose helper Node refuses to start names its parent, and is told', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'adapter-hook-caller-'))
+    tmpDirs.push(dir)
+    const file = join(dir, 'file')
+    writeFileSync(file, '')
+    expect(await onWindows({ env: { HARNESS_PTY_BIN: join(file, 'harness-pty') } }, false)).toEqual([
+      { url: '/api/hook/observed', body: expect.objectContaining({ engine: 'codex', callerPid: pidAt(0) }) },
+    ])
+  })
+
+  it('on Windows a Codex hook reads only its own chain: `ps --json --ancestors` of its parent, once', async () => {
+    const runs = psRunLog()
+    expect(await onWindows({ windowsAncestors: [powershell, codexExe], psRunLog: runs })).toEqual([
+      { url: '/api/hook/turn-stop', body: expect.objectContaining({ callerPid: pidAt(1) }) },
+    ])
+    expect(readFileSync(runs, 'utf8')).toBe(`ps --json --ancestors ${process.pid}\n`)
+  })
+
+  it('on Windows a helper that refuses --ancestors (exit 2) names the hook\'s parent', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'adapter-hook-caller-'))
+    tmpDirs.push(dir)
+    // Its whole table would take the climb past the shell: the hook reads its chain alone.
+    const shell = ['powershell.exe', '-NoProfile', '-Command', '& x']
+    const table = { rows: [
+      { pid: process.pid, parentPid: 9001, executable: shell[0], startMarker: 'w:1', args: shell.join(' '), nativeArgv: shell },
+      { pid: 9001, parentPid: 9002, executable: 'codex.exe', startMarker: 'w:2', args: 'codex.exe', nativeArgv: ['codex.exe'] },
+    ] }
+    writeExecutable(join(dir, 'harness-pty'), `#!/bin/sh\n[ "$*" = "ps --json" ] || exit 2\nprintf '%s\\n' '${JSON.stringify(table)}'\n`)
+    expect(await onWindows({ env: { HARNESS_PTY_BIN: join(dir, 'harness-pty') } })).toEqual([
+      { url: '/api/hook/turn-stop', body: expect.objectContaining({ callerPid: pidAt(0) }) },
+    ])
+  })
+
+  it('on Windows a Codex pane hook registered offline reads its chain for the climb, and the whole table for the engine', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'adapter-hook-caller-'))
+    tmpDirs.push(dir)
+    const codexHome = join(dir, 'codex'), dataDir = join(dir, 'data'), runs = psRunLog()
+    const transcriptPath = join(codexHome, 'sessions', '2026', 'rollout.jsonl')
+    mkdirSync(join(codexHome, 'sessions', '2026'), { recursive: true })
+    mkdirSync(dataDir, { recursive: true, mode: 0o700 })
+    writeFileSync(join(dataDir, 'registry.json'), '[]', { mode: 0o600 })
+    writeFileSync(transcriptPath, '{}\n')
+    // No daemon: the offline registration reads the table for the engine's process, below the pane's shell and off the
+    // hook's chain, and for the caller's descent.
+    await runHook({
+      port: 9, tmuxPane: '%8', engine: 'codex', processEngine: 'codex', windowsProcessTable: true, dataDir, codexHome, psRunLog: runs,
+      input: { hook_event_name: 'SessionStart', session_id: 'codex-session', transcript_path: transcriptPath, cwd: '/tmp/codex' },
+    })
+    expect(JSON.parse(readFileSync(join(dataDir, 'registry.json'), 'utf-8'))).toMatchObject([{ sessionId: 'codex-session', engine: 'codex' }])
+    expect(readFileSync(runs, 'utf8')).toBe(`ps --json --ancestors ${process.pid}\nps --json\n`)
   })
 })
 

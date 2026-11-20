@@ -8,6 +8,7 @@
 import { lstatSync } from 'node:fs'
 import { createConnection, type Socket } from 'node:net'
 import { dirname } from 'node:path'
+import { ownWindowsPath } from '../../devices/dialSkill.js'
 import { watchNearest } from './folderWatch.js'
 
 /** Why a connection ended: it never opened, it closed, or a line was past its bound. */
@@ -70,6 +71,20 @@ export function socketStampOf(path: string, uid: number): string | undefined {
   try {
     const file = lstatSync(path, { bigint: true })
     return file.isSocket() && file.uid === BigInt(uid) ? `${file.ino}:${file.ctimeNs}` : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/** A marker file's inode and write time, `<inode>:<mtime in ns>`, while it is a file of this account's on Windows
+ *  (ownWindowsPath); else none. herdr there writes it where its socket would be, once its pipe listens, and writes it
+ *  again when it starts again. The write time, not the change time: on Windows a file's change time moves when its
+ *  last handle closes (docs/windows-rules.md §3), so one herdr's marker could read as two. */
+export function markerStampOf(path: string, roots?: readonly string[]): string | undefined {
+  if (ownWindowsPath(path, 'file', roots) !== 'ok') return undefined
+  try {
+    const file = lstatSync(path, { bigint: true })
+    return `${file.ino}:${file.mtimeNs}`
   } catch {
     return undefined
   }

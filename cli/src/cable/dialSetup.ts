@@ -10,6 +10,8 @@ import { createDialHomeSetup, type DialHomeSetup, type DialHomeSetupDeps } from 
 import { createDialPluginSetup } from './dialPluginSetup.js'
 
 export interface DialSetupDeps extends DialHomeSetupDeps {
+  /** Claude Code's plugin asks it which Claude Code it may set up (devices/claudePlugin.ts). */
+  platform: NodeJS.Platform
   /** Claude Code as the daemon finds it, for this Claude Code home; [shell] as the plugin's setup asks it. */
   claude(home: string, shell: boolean): Promise<ClaudeRun | null>
   /** Orca's Claude Code homes from its last read (devices/orcaHomes.ts); answered: that read gave Orca's answer. */
