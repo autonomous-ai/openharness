@@ -16,8 +16,16 @@ mod child_windows;
 pub mod cli;
 pub mod desktop;
 pub mod follow;
+#[cfg(any(target_os = "linux", all(test, unix)))]
+pub mod follow_hyprland;
 #[cfg(target_os = "macos")]
 pub mod follow_macos;
+#[cfg(any(target_os = "linux", all(test, unix)))]
+pub mod follow_sway;
+#[cfg(any(windows, test))]
+pub mod follow_windows;
+#[cfg(target_os = "linux")]
+pub mod follow_x11;
 pub mod front;
 #[cfg(any(target_os = "linux", all(test, unix)))]
 pub mod front_hyprland;
