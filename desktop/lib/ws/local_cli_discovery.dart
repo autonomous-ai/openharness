@@ -279,7 +279,7 @@ class LocalCliDiscovery {
   /// and kills the flash, which is what made a firmware update fail at a few tens of kilobytes.
   /// While `harness uninstall` holds its marker it is removing the daemon's files: a daemon started
   /// now holds them (on Windows the removal then fails) and undoes the uninstall (UninstallMarker).
-  bool _spawnHeld() => _flashing() || _uninstalling();
+  bool spawnHeld() => _flashing() || _uninstalling();
 
   static Duration Function() _stopwatchClock() {
     final watch = Stopwatch()..start();
@@ -306,7 +306,7 @@ class LocalCliDiscovery {
     if (last.ready) return last;
     if (!last.alive) {
       // Down is the honest answer here: it really is not running.
-      if (_spawnHeld()) return last;
+      if (spawnHeld()) return last;
       try {
         await _spawnCommand();
       } catch (_) {
@@ -328,7 +328,7 @@ class LocalCliDiscovery {
       last = await probe();
       if (last.ready) return last;
       if (!last.alive) {
-        if (spawned || _spawnHeld()) return last;
+        if (spawned || spawnHeld()) return last;
         spawned = true;
         try {
           await _spawnCommand();
@@ -454,7 +454,7 @@ class LocalCliDiscovery {
       cycleInFlight = true;
       unawaited(() async {
         try {
-          if (_spawnHeld()) return;
+          if (spawnHeld()) return;
           final seen = await probe();
           observe(seen);
           // A new daemon — replaced from a terminal while the app is open, say. Awaited inside the
@@ -475,7 +475,7 @@ class LocalCliDiscovery {
           if (_clock() < nextSpawnAllowedAt) return;
           if (!(spawnAllowedAt?.call(DateTime.now()) ?? true)) return;
           // Asked again: an uninstall or a flash can begin while the probe above is answered.
-          if (_spawnHeld()) return;
+          if (spawnHeld()) return;
           // A daemon that signed itself OUT — its machine was deleted from another machine, or its
           // session expired — deletes its session file. It used to exit and refuse to start again
           // without one, which made respawning it the one failure this loop could not fix; a daemon
