@@ -66,7 +66,7 @@ esac`,
 }
 
 describe("desktop-install.sh", () => {
-  it("is valid POSIX shell", () => {
+  it("parses as sh", () => {
     const result = spawnSync("sh", ["-n", installer], { encoding: "utf8" });
 
     expect(result.status).toBe(0);

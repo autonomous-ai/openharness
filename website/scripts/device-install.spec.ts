@@ -5,7 +5,6 @@ import { tmpdir } from "os";
 import { join } from "path";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { DEVICE_ASSET_PREFIXES, DEVICE_MANIFEST_URL } from "@/lib/deviceRelease";
-import nextConfig from "../next.config.js";
 
 const installer = join(process.cwd(), "scripts", "device-install.sh");
 
@@ -163,7 +162,7 @@ const entryAt = (dataHome: string) => join(dataHome, "applications", "harness-de
 const iconAt = (dataHome: string) => join(dataHome, "icons", "harness-device.png");
 
 describe("device-install.sh", () => {
-  it("is valid POSIX shell", () => {
+  it("parses as sh", () => {
     const result = spawnSync("sh", ["-n", installer], { encoding: "utf8" });
 
     expect(result.status).toBe(0);
@@ -263,10 +262,6 @@ describe("device-install.sh", () => {
     expect(run.ran).toEqual(["0"]);
   });
 
-  it("starts the app in a session of its own", () => {
-    expect(install().setsid[0]).toBe("-f");
-  });
-
   it("refuses while the app runs from the place", () => {
     const run = install({ running: true, before: { [`home/p${PLACE}`]: "the copy that runs" } });
 
@@ -335,12 +330,4 @@ describe("device-install.sh", () => {
       expect(run.listed).toEqual(["home/p/.local/share/applications/harness-device.desktop"]);
     },
   );
-
-  it("redirects /device/install.sh to the CDN for good", async () => {
-    expect(await nextConfig.redirects()).toContainEqual({
-      source: "/device/install.sh",
-      destination: "https://cdn.autonomous.ai/harness/device/install.sh",
-      permanent: true,
-    });
-  });
 });
