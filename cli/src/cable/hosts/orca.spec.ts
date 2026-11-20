@@ -6,6 +6,8 @@ import { join } from 'node:path'
 import { PassThrough } from 'node:stream'
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import { createOrcaAdapter, createOrcaReads, MAX_TEXT, ORCA_HANDLE, type OrcaChild, orcaDeps, type OrcaDeps, type OrcaReadDeps } from './orca.js'
+import type { ProcessRow } from '../../lib/processTable.js'
+import { windowsProcessRows } from '../../lib/windows/processTable.js'
 import { endProcessTree } from '../../lib/windows/treeKill.js'
 import { writeExecutable } from '../../testing/executableFixture.js'
 
@@ -18,6 +20,11 @@ vi.mock('node:child_process', async (original) => {
 vi.mock('../../lib/windows/treeKill.js', async (original) => {
   const real = await original<typeof import('../../lib/windows/treeKill.js')>()
   return { ...real, endProcessTree: vi.fn(async () => 'sent' as const) }
+})
+// Windows' process table, as a spec gives it: never read from a host.
+vi.mock('../../lib/windows/processTable.js', async (original) => {
+  const real = await original<typeof import('../../lib/windows/processTable.js')>()
+  return { ...real, windowsProcessRows: vi.fn(async () => null) }
 })
 
 const HANDLE = 'term_0f8e2c1a-3b4d-4e5f-8a9b-0c1d2e3f4a5b'
@@ -1260,6 +1267,38 @@ describe("Orca's commands on Windows", () => {
     Object.assign(child, { exitCode: 1 })
     vi.advanceTimersByTime(1000)
     expect(vi.mocked(endProcessTree).mock.calls.map(([pid]) => pid)).toEqual([4321])
+  })
+
+  /** A stopped watch's tree end, run for real on [child]'s table, and what it ended in order: by pid, or by the child. */
+  async function endedOnStop(child: ChildProcess, table: () => Promise<ProcessRow[] | null>): Promise<string[]> {
+    vi.mocked(endProcessTree).mockClear()
+    const ended: string[] = []
+    const byPid = vi.spyOn(process, 'kill').mockImplementation((pid) => { ended.push(`pid ${pid}`); return true })
+    onTestFinished(() => { byPid.mockRestore() })
+    vi.mocked(child.kill).mockImplementation((signal) => { ended.push(`child ${signal}`); return true })
+    createOrcaReads({ ...orcaDeps('win32'), onPath: () => ORCA_EXE, exists: () => false }).watchOrcaFocus(() => {}).stop()
+    const [[pid, deps]] = vi.mocked(endProcessTree).mock.calls
+    vi.mocked(windowsProcessRows).mockImplementationOnce(table)
+    const real = await vi.importActual<typeof import('../../lib/windows/treeKill.js')>('../../lib/windows/treeKill.js')
+    await real.endProcessTree(pid, deps)
+    return ended
+  }
+  const processRow = (pid: number, parentPid: number, started: number): ProcessRow =>
+    ({ pid, parentPid, executable: 'orca.exe', startMarker: `w:${started}`, args: '' })
+
+  it('stopping a watch ends what its child started, then the child through its own handle, never by its pid', async () => {
+    const child = fakeChild(4321)
+    const table = [processRow(4321, 100, 1000), processRow(4400, 4321, 2000)]
+    expect(await endedOnStop(child, async () => table)).toEqual(['pid 4400', 'child SIGKILL'])
+  })
+
+  it("a watch whose child exits while the table is read ends nothing by pid: its pid, and its children's parent pid, may be another process's by then", async () => {
+    const child = fakeChild(4321)
+    const table = [processRow(4321, 100, 1000), processRow(4400, 4321, 2000)]
+    expect(await endedOnStop(child, async () => {
+      Object.assign(child, { exitCode: 1 })
+      return table
+    })).toEqual(['child SIGKILL'])
   })
 
   it('on macOS a batch file runs as named, and stopping a watch sends its signal', async () => {
