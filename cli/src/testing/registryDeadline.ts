@@ -58,11 +58,13 @@ export async function slowSyncFsPromises(
 /**
  * Whether this `setTimeout` is the registry's write queue arming a write's deadline (registryPersistence.ts
  * `RegistryWriteQueue.enqueue`, from its promise's executor): told by its caller, since its bound is the time the write
- * has left.
+ * has left. The stack keeps the three frames it reads, whatever limit a spec set, and no more.
  */
 function armsWriteDeadline(): boolean {
   const call: { stack?: string } = {}
-  Error.captureStackTrace(call, globalThis.setTimeout)
+  const limit = Error.stackTraceLimit
+  Error.stackTraceLimit = 3
+  try { Error.captureStackTrace(call, globalThis.setTimeout) } finally { Error.stackTraceLimit = limit }
   const [, caller = '', , queue = ''] = call.stack?.split('\n') ?? []
   return caller.includes('registryPersistence.') && queue.trimStart().startsWith('at RegistryWriteQueue.enqueue ')
 }
