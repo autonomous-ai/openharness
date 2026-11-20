@@ -46,4 +46,64 @@ void main() {
     );
     expect(on('Version 15.6 (Build 24G84)', viewer: true), isFalse);
   });
+
+  test('the Windows place is under LOCALAPPDATA', () {
+    expect(
+      deviceAppPlace(
+        platform: TargetPlatform.windows,
+        environment: {'LocalAppData': r'C:\Users\Nguyễn Văn A\AppData\Local'},
+      ),
+      r'C:\Users\Nguyễn Văn A\AppData\Local\Harness Device\harness-device.exe',
+    );
+  });
+
+  test('no absolute LOCALAPPDATA, no place', () {
+    for (final environment in [
+      <String, String>{},
+      {'LOCALAPPDATA': ''},
+      {'LOCALAPPDATA': r'AppData\Local'},
+    ]) {
+      expect(
+        deviceAppPlace(
+          platform: TargetPlatform.windows,
+          environment: environment,
+        ),
+        isNull,
+        reason: '$environment',
+      );
+    }
+  });
+
+  test('the Linux place is beside Desktop\'s own AppImage', () {
+    expect(
+      deviceAppPlace(
+        platform: TargetPlatform.linux,
+        environment: {'HOME': '/home/p q'},
+      ),
+      '/home/p q/.local/opt/Harness-Device.AppImage',
+    );
+  });
+
+  test('no home, no place', () {
+    expect(
+      deviceAppPlace(
+        platform: TargetPlatform.linux,
+        environment: {'HOME': '', 'USERPROFILE': ''},
+      ),
+      isNull,
+    );
+  });
+
+  test('macOS has no place', () {
+    expect(
+      deviceAppPlace(
+        platform: TargetPlatform.macOS,
+        environment: {
+          'HOME': '/Users/p',
+          'LOCALAPPDATA': r'C:\Users\p\AppData\Local',
+        },
+      ),
+      isNull,
+    );
+  });
 }

@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/devices/device_app_manifest.dart';
 
@@ -14,8 +15,24 @@ Map<String, Object?> entry({
   Object? size = _size,
 }) => {'version': '0.1.4', 'url': url, 'sha256': sha256, 'size': size};
 
-DeviceAppRelease? parse(Object? manifest, {String architecture = 'arm64'}) =>
-    parseDeviceAppManifest(manifest, architecture: architecture);
+DeviceAppRelease? parse(
+  Object? manifest, {
+  String architecture = 'arm64',
+  TargetPlatform platform = TargetPlatform.macOS,
+}) => parseDeviceAppManifest(
+  manifest,
+  architecture: architecture,
+  platform: platform,
+);
+
+const _windowsX64Url =
+    'https://cdn.autonomous.ai/harness/device/0.2.0/Harness-Device-windows-x64-setup.exe';
+const _windowsArm64Url =
+    'https://cdn.autonomous.ai/harness/device/0.2.0/Harness-Device-windows-arm64-setup.exe';
+const _linuxX64Url =
+    'https://cdn.autonomous.ai/harness/device/0.2.0/Harness-Device-linux-x64.AppImage';
+const _linuxArm64Url =
+    'https://cdn.autonomous.ai/harness/device/0.2.0/Harness-Device-linux-arm64.AppImage';
 
 void main() {
   test('Apple Silicon takes the arm64 entry, then the other', () {
@@ -49,6 +66,117 @@ void main() {
       }, architecture: 'x64')?.url,
       _url,
     );
+  });
+
+  test('Windows arm64 takes its own entry, then x64\'s', () {
+    DeviceAppRelease? windows(Map<String, Object?> manifest) =>
+        parse(manifest, platform: TargetPlatform.windows);
+    expect(
+      windows({
+        'device-windows-arm64': entry(url: _windowsArm64Url),
+        'device-windows-x64': entry(url: _windowsX64Url),
+      })?.url,
+      _windowsArm64Url,
+    );
+    expect(
+      windows({'device-windows-x64': entry(url: _windowsX64Url)})?.url,
+      _windowsX64Url,
+    );
+    expect(
+      windows({
+        'device-windows-arm64': entry(url: _windowsArm64Url, size: '12'),
+        'device-windows-x64': entry(url: _windowsX64Url),
+      })?.url,
+      _windowsX64Url,
+    );
+  });
+
+  test('Windows x64 never takes arm64\'s', () {
+    expect(
+      parse(
+        {'device-windows-arm64': entry(url: _windowsArm64Url)},
+        architecture: 'x64',
+        platform: TargetPlatform.windows,
+      ),
+      isNull,
+    );
+    expect(
+      parse(
+        {
+          'device-windows-arm64': entry(url: _windowsArm64Url),
+          'device-windows-x64': entry(url: _windowsX64Url),
+        },
+        architecture: 'x64',
+        platform: TargetPlatform.windows,
+      )?.url,
+      _windowsX64Url,
+    );
+  });
+
+  test('Linux takes only its own arch', () {
+    final both = {
+      'device-linux-arm64': entry(url: _linuxArm64Url),
+      'device-linux-x64': entry(url: _linuxX64Url),
+    };
+    expect(parse(both, platform: TargetPlatform.linux)?.url, _linuxArm64Url);
+    expect(
+      parse(both, architecture: 'x64', platform: TargetPlatform.linux)?.url,
+      _linuxX64Url,
+    );
+    expect(
+      parse({
+        'device-linux-x64': entry(url: _linuxX64Url),
+      }, platform: TargetPlatform.linux),
+      isNull,
+    );
+    expect(
+      parse(
+        {'device-linux-arm64': entry(url: _linuxArm64Url)},
+        architecture: 'x64',
+        platform: TargetPlatform.linux,
+      ),
+      isNull,
+    );
+  });
+
+  test('a Mac never takes a Windows or Linux entry', () {
+    final others = {
+      'device-windows-arm64': entry(url: _windowsArm64Url),
+      'device-windows-x64': entry(url: _windowsX64Url),
+      'device-linux-arm64': entry(url: _linuxArm64Url),
+      'device-linux-x64': entry(url: _linuxX64Url),
+    };
+    for (final architecture in ['arm64', 'x64']) {
+      expect(parse(others, architecture: architecture), isNull);
+    }
+  });
+
+  test('Windows and Linux never take a macOS entry', () {
+    final mac = {'device-macos-arm64': entry(), 'device-macos': entry()};
+    for (final platform in [TargetPlatform.windows, TargetPlatform.linux]) {
+      for (final architecture in ['arm64', 'x64']) {
+        expect(
+          parse(mac, architecture: architecture, platform: platform),
+          isNull,
+          reason: '$platform $architecture',
+        );
+      }
+    }
+  });
+
+  test('another platform takes no entry', () {
+    final all = {
+      'device-macos': entry(),
+      'device-windows-x64': entry(url: _windowsX64Url),
+      'device-linux-x64': entry(url: _linuxX64Url),
+    };
+    for (final platform in [
+      TargetPlatform.android,
+      TargetPlatform.iOS,
+      TargetPlatform.fuchsia,
+    ]) {
+      expect(parse(all, architecture: 'x64', platform: platform), isNull);
+    }
   });
 
   test('the live manifest\'s shape: the archive, never the dmg', () {
@@ -104,6 +232,22 @@ void main() {
       7,
     ]) {
       expect(parse({'device-macos': entry(url: url)}), isNull, reason: '$url');
+      expect(
+        parse(
+          {'device-windows-x64': entry(url: url)},
+          architecture: 'x64',
+          platform: TargetPlatform.windows,
+        ),
+        isNull,
+        reason: 'windows $url',
+      );
+      expect(
+        parse({
+          'device-linux-arm64': entry(url: url),
+        }, platform: TargetPlatform.linux),
+        isNull,
+        reason: 'linux $url',
+      );
     }
   });
 
