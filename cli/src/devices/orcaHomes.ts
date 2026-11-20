@@ -184,7 +184,7 @@ export interface OrcaHomesCache {
 
 const sameList = (a: string[], b: string[]): boolean => a.length === b.length && a.every((home, i) => home === b[i])
 
-export function createOrcaHomesCache(deps: { read(): Promise<OrcaHomesRead>; now(): number; platform: NodeJS.Platform; log(line: string): void }): OrcaHomesCache {
+export function createOrcaHomesCache(deps: { read(): Promise<OrcaHomesRead>; now(): number; log(line: string): void }): OrcaHomesCache {
   let homes = none()
   let answered = false
   let readAt: number | undefined

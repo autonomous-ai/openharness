@@ -255,7 +255,7 @@ function socketOwner(path: string): number | null {
 /** Orca's account homes on this computer, read with its own `orca` (devices/orcaHomes.ts). */
 function orcaHomesCache(now: () => number, log: (line: string) => void): OrcaHomesCache {
   const system = orcaHomesDeps()
-  return createOrcaHomesCache({ read: () => readOrcaHomes(system), now, platform: system.platform, log })
+  return createOrcaHomesCache({ read: () => readOrcaHomes(system), now, log })
 }
 
 /** This computer's agents outside a pane, read with ⌘P's readers (services/externalSessions.ts) in the daemon's own homes

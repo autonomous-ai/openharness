@@ -445,7 +445,7 @@ describe('createOrcaHomesCache', () => {
   const failed = (failure: OrcaHomesFailure) => () => Promise.resolve<OrcaHomesRead>({ homes: NONE, failure })
 
   /** A cache whose reads answer [reads] in turn, on a clock the test moves. */
-  function cacheOf(reads: Array<() => Promise<OrcaHomesRead>>, platform: NodeJS.Platform = 'darwin') {
+  function cacheOf(reads: Array<() => Promise<OrcaHomesRead>>) {
     let clock = 1_000_000
     let count = 0
     const lines: string[] = []
@@ -455,7 +455,6 @@ describe('createOrcaHomesCache', () => {
         return reads.shift()!()
       },
       now: () => clock,
-      platform,
       log: (line) => { lines.push(line) },
     })
     return { cache, lines, reads: () => count, advance: (ms: number) => { clock += ms } }
@@ -549,13 +548,5 @@ describe('createOrcaHomesCache', () => {
     expect(await t.cache.refresh()).toBe(false)
     // The error's text is never said: it can name paths and emails.
     expect(t.lines.slice(1)).toEqual(['[observed] orca homes · not read · failed', '[observed] orca homes · not read · failed'])
-  })
-
-  it('on Windows it reads as elsewhere', async () => {
-    const t = cacheOf([ok(A)], 'win32')
-    expect(await t.cache.refresh()).toBe(true)
-    expect(t.reads()).toBe(1)
-    expect(t.lines).toEqual(['[observed] orca homes · 2 claude · 1 codex'])
-    expect(t.cache.get()).toEqual(A)
   })
 })

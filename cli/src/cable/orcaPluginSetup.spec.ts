@@ -25,8 +25,8 @@ type Recorded = { dial: boolean; version?: string; held?: string }
  * A computer that had a dial attached here ([dial]), the plugin recorded at [version] or held at [held], and a CLI that
  * carries the plugin at 9.9.9. Orca answers each set-up and removal from a queue: set up, and off, when it is empty.
  */
-function rig({ platform = 'darwin', dial = true, version, held }: {
-  platform?: NodeJS.Platform; dial?: boolean; version?: string; held?: string
+function rig({ dial = true, version, held }: {
+  dial?: boolean; version?: string; held?: string
 } = {}) {
   const state = {
     build: VERSION as string | null,
@@ -58,7 +58,6 @@ function rig({ platform = 'darwin', dial = true, version, held }: {
     return state.saves
   }
   const setup = createOrcaPluginSetup({
-    platform,
     version: () => state.build,
     setUp,
     remove,
@@ -96,14 +95,6 @@ describe('Harness Device\'s plugin for Orca, set up from the devices\' process',
     expect(r.setUp).toHaveBeenCalledTimes(1)
     expect(r.counted).toEqual([['set up']])
     expect(r.timers).toEqual([])
-  })
-
-  it('on Windows, as elsewhere: set up, recorded at this version and counted set up', async () => {
-    const r = rig({ platform: 'win32' })
-    await r.setup.pass()
-    expect(r.setUp).toHaveBeenCalledTimes(1)
-    expect(r.state.record).toEqual({ dial: true, version: VERSION })
-    expect(r.counted).toEqual([['set up']])
   })
 
   it('no dial yet: nothing runs, nothing is recorded; set up before by orcaConnected, it is brought current', async () => {
@@ -517,7 +508,6 @@ describe('orcaPluginParts', () => {
     expect(parts.version()).toBe('1.2.3')
     expect(parts.version()).toBe('1.2.3')
     expect(files).toHaveBeenCalledTimes(1)
-    expect(orcaPluginParts(deps).platform).toBe('darwin')
     expect(orcaPluginParts({ ...deps, files: () => null }).version()).toBeNull()
   })
 
