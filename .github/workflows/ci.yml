@@ -1,7 +1,9 @@
 name: CI
 
-# Fast PR checks: each changed component, and each that reads a changed file, runs its own Linux unit tests. Native,
-# macOS, coverage-gate, browser and end-to-end checks are outside PR CI; see
+# Fast PR checks: each changed component, and each that reads a changed file, runs its own Linux unit tests. End to end
+# runs where a PR's paths touch what it tests: windows.yml's Windows checks, the CLI e2e files a PR adds or changes on
+# Linux (above 40, the whole suite), the dial's hosts, and Harness Device on Windows and Linux. The full CLI end-to-end
+# suite (nightly and by hand), macOS, native, coverage-gate and browser checks stay outside PR CI; see
 # docs/validation-and-release.md#what-pr-ci-does-not-run. Merge candidates rerun
 # only the plan and process checks; the PR run covered the code. After Update branch,
 # a suite whose inputs main's new commits left untouched reuses the earlier head's result.
@@ -17,8 +19,12 @@ on:
       scope:
         description: 'Affected component; full for core suites, all for every component'
         type: choice
-        options: [full, cli, tui, backend, desktop, process, all, companions, website, os, provider, firmware, pro, mobile, daemons, pty, device-app, windows-e2e, device-app-e2e, device-app-update, device-app-desktop, device-app-install]
+        options: [full, cli, tui, backend, desktop, process, all, companions, website, os, provider, firmware, pro, mobile, daemons, pty, device-app, windows-e2e, linux-e2e, dial-hosts, device-app-e2e, device-app-update, device-app-desktop, device-app-install]
         default: full
+      e2e_files:
+        description: 'With scope linux-e2e: the cli/e2e files to run, separated by spaces'
+        type: string
+        default: ''
   workflow_call:
     inputs:
       scope:
@@ -116,8 +122,10 @@ jobs:
       - id: select
         env:
           CI_SCOPE: ${{ inputs.scope || 'full' }}
+          # Free text: through env and as one argument (never read as an option); the planner takes plain cli/e2e names.
+          CI_E2E_FILES: ${{ inputs.e2e_files }}
           GH_TOKEN: ${{ github.token }}
-        run: python3 scripts/ci-plan.py --scope "$CI_SCOPE" --output "$RUNNER_TEMP/ci-plan.json"
+        run: python3 scripts/ci-plan.py --scope "$CI_SCOPE" --e2e-files="$CI_E2E_FILES" --output "$RUNNER_TEMP/ci-plan.json"
       - uses: actions/upload-artifact@v4
         with:
           name: ci-plan
