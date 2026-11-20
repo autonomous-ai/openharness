@@ -198,14 +198,22 @@ export class CheckpointStages {
       try { mkdirSync(directory, { mode: 0o700 }) }
       catch (error) { if ((error as NodeJS.ErrnoException).code === 'EEXIST') continue; throw error }
       const directoryKey = nativeFileKey(lstatSync(directory, { bigint: true }))
-      const file: FileHandle = await open(path, constants.O_RDWR | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600)
+      let file: FileHandle
+      try { file = await open(path, constants.O_RDWR | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600) }
+      catch (error) { this.discardAllocation(directory, directoryKey, []); throw error }
       let key: string
       try { const before = await file.stat({ bigint: true }); privateFile(before); key = nativeFileKey(before) }
-      catch (error) { await file.close(); throw error }
+      catch (error) {
+        let before: BigIntStats | undefined
+        try { before = fstatSync(file.fd, { bigint: true }) } catch { retained() }
+        try { await file.close(); if (before) this.discardAllocation(directory, directoryKey, [[path, before]]) }
+        catch { retained() }
+        throw error
+      }
       let owner: Owner = { version: 2, lease: randomBytes(16).toString('hex'), core: process.pid, writer, settled: false, key }
       let recordKey: string | undefined, confirmedOwner: string | undefined, ownerWrite: Promise<void> | undefined
       const retainOwner = process.platform !== 'win32'
-      let ownerFd: number | undefined
+      let ownerFd: number | undefined, allocatedOwnerKey: string | undefined
       const closeOwner = () => {
         if (ownerFd === undefined) return
         const fd = ownerFd; ownerFd = undefined
@@ -225,6 +233,7 @@ export class CheckpointStages {
           try {
             const opened = fstatSync(fd, { bigint: true }); privateFile(opened)
             const openedKey = nativeFileKey(opened)
+            if (!recordKey) allocatedOwnerKey = openedKey
             if (recordKey && recordKey !== openedKey) throw new Error('checkpoint stage changed')
             directoryIdentity(directory, directoryKey)
             identity(record, openedKey)
@@ -270,7 +279,18 @@ export class CheckpointStages {
         return work
       }
       try { await writeOwner(owner) } catch (error) {
-        try { await file.close() } finally { closeOwner() }
+        // No handoff has occurred. Keep versions through the actual closes so a
+        // replaced name (including inode reuse) cannot inherit this allocation.
+        let files: Array<[string, BigIntStats]> | undefined
+        try {
+          files = [[path, fstatSync(file.fd, { bigint: true })]]
+          if (allocatedOwnerKey) files.push([record, ownerFd === undefined
+            ? identity(record, allocatedOwnerKey) : fstatSync(ownerFd, { bigint: true })])
+        } catch { files = undefined; retained() }
+        try {
+          try { await file.close() } finally { closeOwner() }
+          if (files) this.discardAllocation(directory, directoryKey, files)
+        } catch { retained() }
         throw error
       }
       const verifyConfirmedOwner = () => {
@@ -378,5 +398,22 @@ export class CheckpointStages {
       }
     }
     throw Object.assign(new Error('checkpoint stages busy'), { code: 'CHECKPOINT_STAGES_BUSY' })
+  }
+
+  private discardAllocation(directory: string, key: string, files: Array<[string, BigIntStats]>): void {
+    try {
+      directoryIdentity(directory, key)
+      const verify = ([path, before]: [string, BigIntStats]) => {
+        privateFile(before)
+        if (version(identity(path, nativeFileKey(before))) !== version(before)) throw new Error('checkpoint stage changed')
+      }
+      // Refuse the entire set before the first unlink; never delete an unknown
+      // name or recursively remove a slot that another call may have replaced.
+      for (const file of files) verify(file)
+      for (const file of files) { directoryIdentity(directory, key); verify(file); unlinkSync(file[0]) }
+      directoryIdentity(directory, key)
+      rmdirSync(directory)
+      syncStateDirectory(this.directory)
+    } catch { retained() }
   }
 }

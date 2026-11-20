@@ -141,10 +141,12 @@ it.skipIf(process.platform === 'win32')('keeps the same handle for explicit link
 
 it.skipIf(process.platform === 'win32')('closes the owner even when initial failure cleanup cannot confirm the history close', async () => {
   trace.failWrite = true; trace.failHistoryClose = true
-  await expect(acquire()).rejects.toThrow('injected history close')
+  await expect(acquire()).rejects.toThrow('injected write')
   expect(trace.failWrite).toBe(false); expect(trace.failHistoryClose).toBe(false)
   expect(trace.opens).toBe(1); expect(trace.handles.size).toBe(0)
   expect(trace.closed).toHaveLength(1)
+  expect(fs.existsSync(record())).toBe(true)
+  expect(console.error).toHaveBeenCalledWith('[checkpoint] STAGE_CLEANUP_UNAVAILABLE')
 })
 
 it.skipIf(process.platform === 'win32')('closes the owner once when lease cleanup cannot confirm the history close', async () => {

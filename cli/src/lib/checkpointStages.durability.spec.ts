@@ -179,21 +179,14 @@ it.each([beforeUpdate, 'afterSync'] as const)('refuses an owner acquiring a seco
 })
 
 for (const kind of ['file', 'directory'] as const) it.skipIf(kind === 'directory' && process.platform === 'win32')(
-  `keeps an uncertain first owner ${kind} flush reserved without returning a reusable lease`, async () => {
+  `reclaims an unexposed allocation after a failed first owner ${kind} flush`, async () => {
   const slot = join(directory, '.stages', '0'), record = join(slot, 'owner.json')
   once('beforeSync', kind === 'file' ? record : slot, () => { throw new Error('injected owner flush failure') })
   await expect(stages().acquire(destination(), 424242)).rejects.toThrow('injected owner flush failure')
   expect(io.owners.size).toBe(0)
-  expect(JSON.parse(await readFile(record, 'utf8')).writer).toBe(424242)
-  vi.spyOn(process, 'kill').mockImplementation(pid => {
-    if (pid === process.pid) throw Object.assign(new Error(), { code: 'ESRCH' })
-    return true
-  })
-  await stages().prepare()
+  await expect(stat(slot)).rejects.toMatchObject({ code: 'ENOENT' })
   const next = await acquire()
-  expect(dirname(next.stage.path)).toBe(join(directory, '.stages', '1'))
-  expect(await stat(record)).toBeTruthy()
-  expect(await stat(join(slot, 'history.tmp'))).toBeTruthy()
+  expect(dirname(next.stage.path)).toBe(slot)
 })
 
 it.skipIf(process.platform === 'win32').each(['owner', 'slot'] as const)('refuses a replaced %s during the initial directory flush', async kind => {

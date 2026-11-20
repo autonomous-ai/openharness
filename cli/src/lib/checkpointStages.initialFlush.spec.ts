@@ -114,6 +114,7 @@ describe.skipIf(process.platform === 'win32')('initial allocation barrier', () =
     await releaseAll()
     expect(await refused).toMatchObject({ message: 'injected flush failure' })
     expect(disk.paths.size).toBe(0)
+    expect(fs.readdirSync(disk.directory)).toEqual([])
   })
 
   it.each(['owner', 'slot', 'pool'] as const)('refuses a replaced %s after every flush has started', async kind => {
@@ -157,6 +158,7 @@ describe.skipIf(process.platform === 'win32')('initial allocation barrier', () =
     await expect(acquiring).rejects.toThrow('injected open failure')
     expect(disk.started).toEqual([])
     expect(disk.paths.size).toBe(0)
+    expect(fs.readdirSync(disk.directory)).toEqual([])
   })
 
   it.each(['owner', 'slot', 'pool'] as const)('retains other callbacks when starting the %s flush throws synchronously', async kind => {
@@ -170,5 +172,6 @@ describe.skipIf(process.platform === 'win32')('initial allocation barrier', () =
     await releaseAll()
     expect(await refused).toMatchObject({ message: 'injected synchronous flush failure' })
     expect(disk.paths.size).toBe(0)
+    expect(fs.readdirSync(disk.directory)).toEqual([])
   })
 })
