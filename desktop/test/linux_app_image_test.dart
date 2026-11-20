@@ -191,6 +191,35 @@ void main() {
     },
   );
 
+  // Each a new file renamed over the old one, as the Device app's entry is:
+  // a dock reading the old one keeps it whole. Windows skips: it renames over
+  // no open file.
+  test('the entry and its icon are written whole', () async {
+    final path = '$home/Applications/Harness.AppImage';
+    await launch(path);
+    final icon = File('$home/.local/share/icons/harness.png');
+    // An earlier Desktop's entry, so this launch writes both again.
+    final older = '[Desktop Entry]\nType=Application\nExec=$path\n';
+    entry().writeAsStringSync(older);
+    final entryReader = entry().openSync();
+    final iconReader = icon.openSync();
+    addTearDown(entryReader.closeSync);
+    addTearDown(iconReader.closeSync);
+    File('$bundle/harness.png').writeAsBytesSync([4, 5]);
+
+    await launch(path);
+
+    expect(utf8.decode(entryReader.readSync(4096)), older);
+    expect(iconReader.readSync(16), [1, 2, 3]);
+    expect(icon.readAsBytesSync(), [4, 5]);
+    expect(
+      Directory('$home/.local/share/applications')
+          .listSync()
+          .map((file) => file.uri.pathSegments.last),
+      ['harness.desktop'],
+    );
+  }, skip: Platform.isWindows);
+
   test('an entry whose AppImage is gone follows the one running', () async {
     await launch('$home/My Apps/Harness.AppImage');
     File('$home/My Apps/Harness.AppImage').deleteSync();
