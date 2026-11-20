@@ -41,7 +41,8 @@ sets them up. Rust and Tauri 2 in `src-tauri/`; the window's three screens are p
   `scripts/e2e/appimage-starts.sh <AppImage> <name>`: does an AppImage start from its FUSE mount with no `libfuse2`.
   `scripts/e2e/linux-install.sh <AppImage>`: the one-line install on Ubuntu 24.04 with no `libfuse2`, against a fake
   CDN; GitHub-hosted runners only, as it changes `/etc/hosts` and the trust store. PR CI runs all but `macos.sh` and
-  `appimage-starts.sh`, which stay by hand ([PR CI](../docs/validation-and-release.md#pr-ci)).
+  `appimage-starts.sh`, which stay by hand
+  ([What PR CI does not run](../docs/validation-and-release.md#what-pr-ci-does-not-run)).
 - `python3 -m unittest discover -s scripts -p 'test_*.py'`: the release rules. How a release is cut:
   [RELEASE.md](RELEASE.md).
 
@@ -113,10 +114,11 @@ sets them up. Rust and Tauri 2 in `src-tauri/`; the window's three screens are p
 - **`HARNESS_DEVICE_CLI`** (the fake CLI for tests) is read by debug builds only.
 
 PR CI compiles and tests the app on Linux and Windows (`device-app-checks`), and runs it end to end there, each suite
-for the paths `DEVICE_APP_PATHS` in `scripts/ci-plan.py` gives it: `device-app-e2e` (`linux.sh` and `windows.ps1`, for
-any change but Markdown and the release scripts' Python tests), `device-app-update` (`update-pair.sh` and each driver's
-update path, for the updater, the drivers, the release build scripts, `tauri*.conf.json` and the Cargo files),
-`device-app-desktop` (Desktop installs the app, for `desktop/lib/devices/`, its test, `install.rs`, `packaging.rs`,
-`instance.rs` and `tauri*.conf.json`) and `device-app-install` (`linux-install.sh`, for the website's installer, its
-stand-in CDN, `appimage_env.rs`, `packaging.rs` and `tauri*.conf.json`). macOS is built and tested by hand
-(`macos.sh`). All three are released by `make release-device`.
+for the paths `DEVICE_APP_PATHS` in `scripts/ci-plan.py` gives it, and each for the jobs' setup action
+(`.github/actions/device-app-setup/`): `device-app-e2e` (`linux.sh` and `windows.ps1`, for any change but Markdown and
+the release scripts' Python tests), `device-app-update` (`update-pair.sh` and each driver's update path, for the
+updater, the Linux and Windows drivers, the release build scripts, `tauri*.conf.json` and the Cargo files),
+`device-app-desktop` (Desktop installs the app, for `desktop/lib/devices/`, its test, the Flutter actions,
+`install.rs`, `packaging.rs`, `instance.rs` and `tauri*.conf.json`) and `device-app-install` (`linux-install.sh`, for
+the website's installer, its stand-in CDN, `appimage_env.rs`, `packaging.rs` and `tauri*.conf.json`). macOS is built
+and tested by hand (`macos.sh`). All three are released by `make release-device`.

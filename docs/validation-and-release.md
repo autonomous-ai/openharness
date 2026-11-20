@@ -82,30 +82,42 @@ beside the CLI's own suite); the CLI reads `pty/`, `tui/` and `store/`, Desktop 
 | `companions/`, `website/`, `os/`, `provider/`, `mobile/`, `daemons/` | that component's one check | 1–4 min |
 | `devices/`, `.github/assets/apps/` (the Pro's host tests check its baked app icons against this art) | `firmware-checks` | 1–2 min |
 | `devices/harness-pro/` | also `pro-firmware-build` (ESP-IDF v5.5.4 build of `harness_pro.bin`, which must fit `ota_0`) and `pro-golden` (`test/golden.sh --check` with Liberation Sans, on macOS arm64 where the baseline is recorded: float maths in the code-drawn shapes differs on Linux x86-64) | build ~4 min, golden ~1 min |
-| anything else (docs, workflows, scripts) | `process-checks` only | about 1.5 min |
+| anything else (docs, workflows, scripts) | `process-checks` only, but for the workflows, actions and scripts an end-to-end suite or `cross-read-scan` runs on (below), and an edit to a job's block in `ci.yml`, which selects that job's suite (`device-app-build`'s: the Device suites that install its packages) | about 1.5 min |
 
 The end-to-end suites below are selected only by their own path lists in `scripts/ci-plan.py` (`WINDOWS_SPECS`,
-`DIAL_HOST_PATHS`, `DEVICE_APP_PATHS` and the functions beside them), across components, never by what their files read:
-each costs many times a unit suite, so a typical CLI pull request runs none. A file their tests only read runs its
+`DIAL_HOST_PATHS`, `DEVICE_APP_PATHS` and the functions beside them) and by an edit to their jobs in `ci.yml`, across
+components, never by what their files read: each costs many times a unit suite, so a typical CLI pull request runs none. A file their tests only read runs its
 component's unit suite. When selected, each suite's jobs gate `ci/required` like any other. The commit counts are of the
 211 commits merged to `main` from 2026-11-14 to 11-21.
 
 | Changed paths | PR check | Typical time |
 | --- | --- | --- |
-| Windows-only code: `pty/`, `term/`, `serial/`, `installer/`, any `install.ps1`, `cli/src/lib/ptyHost*`, `cli/scripts/windows-ci/`, a file under `cli/` whose own name contains `windows` or `Windows`, `.github/workflows/windows.yml`. x64 alone also for `cli/src/lib/windows/`, `cli/src/devices/`, `cli/src/cable/`, `cli/hook/`, `tui/`, `plugins/harness-device*/`, `website/src/app/flash-circle.ps1/`, and `windows.yml`'s specs (`WINDOWS_SPECS`) with the module beside each (`secureState.spec.ts` → `secureState.ts`) | `windows-e2e`: calls `windows.yml` (the PTY host's Rust tests and builds, the Windows CLI specs, the dial end to end on a stand-in dial, the install check) on `windows-latest`, and on `windows-11-arm` only for Windows-only code (`x64_only` otherwise) | x64 about 16 min, arm64 about 27 more; x64 in 100 commits, arm64 in 23 |
-| A `cli/e2e/**/*.e2e.ts` file the PR adds or modifies, but `dialWindows.e2e.ts` (`windows-e2e` runs it), `diskfull.e2e.ts` (macOS only), `agentBrowserPodman.e2e.ts` (by hand) and the dial hosts' files | `linux-e2e`: those files on `ubuntu-24.04`, set up as the nightly shards (`.github/actions/cli-e2e-setup`, the in-memory backend), one runner per 10 hinted minutes (`cli/ci-e2e-durations.json`), at most 4; above 40 changed files, the full suite on the nightly's 8 shards. `linux-e2e-summary` requires each selected file to run and pass: a file that collects no test fails, and a file whose every case skips on Linux passes and is listed in the job summary. macOS-only files are not verified by PR CI. A file name with anything but letters, digits, `_`, `-`, `.` and `/` fails the plan | one file 1–5 min; in 105 commits (none above 40 files) |
-| `cli/e2e/dialHost*.e2e.ts`, `cli/e2e/deviceHerdr.e2e.ts`, `cli/e2e/harness/dialHosts.ts` and the hosts' helpers beside it, `cli/vitest.e2e.dialHosts.config.ts`, the herdr, kitty, WezTerm, Zellij and Linux desktop adapters in `cli/src/cable/hosts/`, `cli/src/cable/portAccess.ts`, `.github/workflows/cli-e2e-dial-hosts.yml`, `.github/actions/cli-e2e-setup/` | `dial-hosts`: calls `cli-e2e-dial-hosts.yml`, the nightly's `e2e (dial hosts)` job (herdr, WezTerm, Zellij, kitty, an X11 desktop and sway; a missing host or a skipped case fails) | about 4 min |
+| Windows-only code: `pty/`, `term/`, `tui/vendor/`, `serial/`, any `install.ps1`, `cli/src/lib/ptyHost*`, `cli/scripts/windows-ci/`, a file under `cli/src/` or `cli/e2e/` whose own name contains `windows` or `Windows`, `.github/workflows/windows.yml`, `cli/vitest.e2e.windows.config.ts`, `cli/scripts/windows-install-manifest.mjs`. x64 alone also for `cli/src/lib/windows/`, `cli/src/devices/`, `cli/src/cable/`, `cli/hook/`, `tui/`, `plugins/harness-device*/`, `website/src/app/flash-circle.ps1/`, and `windows.yml`'s specs (`WINDOWS_SPECS`) with the module beside each (`secureState.spec.ts` → `secureState.ts`). Markdown files and images there do not select it, but `tui/THIRD_PARTY_NOTICES.md`, which the TUI compiles in | `windows-e2e`: calls `windows.yml` (the PTY host's Rust tests and builds, the Windows CLI specs, the dial end to end on a stand-in dial, the install check) on `windows-latest`, and on `windows-11-arm` only for Windows-only code (`x64_only` otherwise) | x64 about 16 min, arm64 about 27 more; x64 in 100 commits, arm64 in 23 |
+| A `cli/e2e/**/*.e2e.ts` file the PR adds or modifies, but `dialWindows.e2e.ts` (`windows-e2e` runs it), `diskfull.e2e.ts` (macOS only), `agentBrowserPodman.e2e.ts` (by hand) and the dial hosts' files. What every e2e file runs on: `.github/actions/cli-e2e-setup/`, `cli/e2e/harness/`, `cli/vitest.e2e*.config.ts`, `cli/ci-e2e-durations.json` | `linux-e2e`: those files on `ubuntu-24.04`, set up as the nightly shards (`.github/actions/cli-e2e-setup`, the in-memory backend), one runner per 10 hinted minutes (`cli/ci-e2e-durations.json`), at most 4; above 40 such files (after the exclusions), the full suite on the nightly's 8 shards. A change to what every file runs on, or to the job alone, runs the canary `cli/e2e/twoAccounts.spike.e2e.ts` (two daemons on the real backend, one case) beside the PR's own files. `linux-e2e-summary` requires each selected file to run and pass: a file that collects no test fails, and a file whose every case skips on Linux passes and is listed in the job summary. macOS-only files are not verified by PR CI. A file name that is not plain fails the plan: folders of letters, digits, `_` and `-`, a file name of those and `.` that does not start with `.` | one file 1–5 min; in 105 commits (none above 40 files) |
+| `cli/e2e/dialHost*.e2e.ts`, `cli/e2e/deviceHerdr.e2e.ts`, `cli/vitest.e2e.dialHosts.config.ts`, all of `cli/src/cable/hosts/` (the daemon runs every adapter from its bundle, and they share the folder's code), `cableFrame.ts`, `portAccess.ts` and `roundGlyphs.ts` in `cli/src/cable/`, the harness files the dial hosts' files drive (`dialHosts.ts`, `desk.ts`, `fakeBackend.ts`, `fakeDial.ts`, `herdrServer.ts`, `kittyWindow.ts`, `outsideAgent.ts`, `swayDesk.ts`, `weztermMux.ts`, `x11Desk.ts`, `zellijSession.ts` in `cli/e2e/harness/`), `.github/workflows/cli-e2e-dial-hosts.yml`, `.github/actions/cli-e2e-setup/` | `dial-hosts`: calls `cli-e2e-dial-hosts.yml`, the nightly's `e2e (dial hosts)` job (herdr, WezTerm, Zellij, kitty, an X11 desktop and sway; a missing host or a skipped case fails) | about 4 min |
 | Any `device-app/` change but Markdown and the release scripts' Python tests (`device-app/scripts/test_*.py`) | `device-app-e2e`: `device-app-linux` (`linux.sh`, with the app's real install lines, on `ubuntu-22.04` and `ubuntu-22.04-arm`) and `device-app-windows` (`windows.ps1` on `windows-latest` and `windows-11-arm`) | Linux about 10 min and Windows about 15 min each arch, after the builds; in 24 commits |
 | `device-app/src-tauri/src/update.rs`, `device-app/scripts/e2e/update-pair.sh`, `linux.sh` and `windows.ps1` there, `release-build.sh`, `release-check.sh`, `release-setup.sh`, `tauri*.conf.json`, `Cargo.toml`, `Cargo.lock` | `device-app-update`: `update-pair.sh` builds 0.0.1 and 0.0.2, then `linux.sh --update` or `windows.ps1 -Update`, on `ubuntu-22.04`, `ubuntu-22.04-arm` and `windows-latest` | 13–29 min each |
-| `desktop/lib/devices/`, `desktop/integration_test/device_app_install_windows_linux_native_test.dart`, the app's `install.rs`, `packaging.rs`, `instance.rs`, `tauri*.conf.json` | `device-app-desktop`: that Desktop test installs the app on `windows-latest`, `windows-11-arm`, `ubuntu-22.04` and `ubuntu-22.04-arm` | 9–19 min each, after the builds |
+| `desktop/lib/devices/`, `desktop/integration_test/device_app_install_windows_linux_native_test.dart`, the Flutter its jobs set up (`.github/actions/desktop-flutter/`, `desktop-flutter-arm64/`), the app's `install.rs`, `packaging.rs`, `instance.rs`, `tauri*.conf.json` | `device-app-desktop`: that Desktop test installs the app on `windows-latest`, `windows-11-arm`, `ubuntu-22.04` and `ubuntu-22.04-arm` | 9–19 min each, after the builds |
 | `website/scripts/device-install.sh`, `device-app/scripts/e2e/linux-install.sh`, `https-fake-cdn.py` there, the app's `appimage_env.rs`, `packaging.rs`, `tauri*.conf.json` | `device-app-install`: `linux-install.sh`, the one-line install with no `libfuse2` against a stand-in CDN, on `ubuntu-22.04`, `ubuntu-24.04` and `ubuntu-26.04` (x64), one at a time | about 1 min each, after the x64 AppImage build |
-| `scripts/ci-plan.py`, `scripts/tests/test_ci_plan.py`, the planner's data | `cross-read-scan`: `test_ci_plan.py`'s repository-wide cross-read scan on a full checkout; `process-checks`' sparse checkout skips that scan | not yet measured |
+
+The Device jobs' setup action, `.github/actions/device-app-setup/`, selects all four Device suites.
 
 `device-app-build` builds each debug package the running Device suites need once (an AppImage and an NSIS installer,
-x64 and arm64; `device-app-install` needs only the x64 AppImage) and hands it to their jobs as an artifact, kept 7 days;
+x64 and arm64; `device-app-install` needs only the x64 AppImage) and hands it to their jobs as an artifact, kept 3 days;
 about 7–8 min each. It is in no suite, so a suite reused after **Update branch** builds nothing, but `ci/required` needs
 it: a failed build fails the gate. The Device jobs hold at most 9 runners at once. The Tauri CLI comes from a cache keyed
-on `device-app/scripts/release-setup.sh`, so a pull request's first run compiles it once per OS and architecture.
+on `device-app/scripts/release-setup.sh`, so a pull request's first run can compile it twice per OS and architecture:
+`device-app-build` and `device-app-update` start together and both miss the cache, and `ci.yml` never runs on `main`,
+so no `main` run fills it.
+
+`cross-read-scan` is no end-to-end suite: a change to `scripts/ci-plan.py`, `scripts/tests/test_ci_plan.py`,
+`scripts/record-ci-validation.py` (the desktop's inputs the planner's tables take) or the CLI lists those tables copy
+(`cli/e2e/harness/dialHosts.ts`, `cli/vitest.e2e.ci.config.ts`) selects it. It runs the four `test_ci_plan.py` tests
+that need every file, the repository-wide cross-read scan among them, on a full checkout with
+`CROSS_READ_SCAN_REQUIRED=1`: a skipped test fails, and so does a run of other than those 4 tests. `process-checks`'
+sparse checkout skips them. The scan takes about 20 s locally; its CI time is not yet measured. It guards the
+planner's own tables: an undeclared read that an ordinary component PR adds is found only by the next PR that selects
+the scan, or by `make merge-pr`'s reuse check.
 
 `plan` (actionlint and suite selection), `process-checks` and `ci/required` always
 run (after **Update branch**, untouched components reuse their earlier result: see
@@ -226,9 +238,9 @@ and every extra run delays every other PR.
 ### Suite details
 
 Manual **CI → Run workflow** accepts `scope`: `cli`, `tui`, `backend`, `desktop`,
-`full` (the default, all five core components), `all` (every component's suite), one extra component, or one
-end-to-end suite: `windows-e2e` (x64 and arm64), `linux-e2e`, `dial-hosts`, `device-app-e2e`, `device-app-update`,
-`device-app-desktop` or `device-app-install`. `scope=linux-e2e` needs `e2e_files`, the `cli/e2e` files to run separated
+`full` (the default, all five core components), `all` (every component's suite and `cross-read-scan`), `process` (the
+always-on jobs only), `cross-read-scan`, one extra component, or one end-to-end suite: `windows-e2e` (x64 and arm64),
+`linux-e2e`, `dial-hosts`, `device-app-e2e`, `device-app-update`, `device-app-desktop` or `device-app-install`. `scope=linux-e2e` needs `e2e_files`, the `cli/e2e` files to run separated
 by spaces; the plan fails on a file `linux-e2e` does not run. It runs the same jobs as PR CI.
 
 `desktop-tests` uses the release's pinned Flutter SDK and shared dependency caches.
@@ -273,8 +285,9 @@ macOS runner with `DISKFULL=1`. `e2e-summary` applies the default suite's rule: 
 discovered file exactly once, every shard passing. Its summary records each file's duration
 for refreshing the hints. A failing test's complete daemon logs and engine hook logs are
 uploaded as `cli-e2e-daemon-logs-N`, by file and test (`E2E_ARTIFACTS_DIR`, which works
-locally too). The full suite is advisory, and so it does not run on pull requests: a failed check makes
-GitHub report a PR unstable, which `make merge-pr` refuses to merge. Once it has stayed
+locally too). The nightly run is advisory: a failed check makes GitHub report a PR unstable, which `make merge-pr`
+refuses to merge. A pull request runs the full suite only when it adds or modifies more than 40 of the files
+`linux-e2e` runs; then the 8 shards are `linux-e2e`'s and gate `ci/required`. Once it has stayed
 green, run it on pull requests, make `e2e-summary` required and add it to the evidence
 collector. PR CI runs a PR's own e2e files instead (`linux-e2e`, set up through the shards' action,
 `.github/actions/cli-e2e-setup`) and the dial hosts (`dial-hosts`, the same workflow as the nightly's,
@@ -687,13 +700,14 @@ depends on the collector's pre-#991 job lists.
 `scripts/ci-plan.py` reads the complete immutable Git diff, including both sides
 of renames, rather than GitHub's limited file list. PR runs check out the exact
 head; queue runs check out the combined candidate. Each changed path selects only
-its own component's suite and each end-to-end suite whose path list names it, across
-components ([PR CI](#pr-ci)); other paths outside a component select no suite. CI uses read-only repository permissions and executes no contributor code
+its own component's suite, each suite that declares reading it (`PR_READS`) and each end-to-end suite whose path
+list names it, across components ([PR CI](#pr-ci)); other paths outside a component select no suite. CI uses read-only repository permissions and executes no contributor code
 with release credentials.
 
-Cross-component effects are not tested on PRs. A CLI change does not run the
-Desktop, TUI, companion or mobile suites even where they read CLI protocol files.
-When a change alters a protocol, wire format or shared fixture another component
+Cross-component effects are tested on PRs only where they are declared: another component's suite runs when its
+`PR_READS` names the changed file, and an end-to-end suite when its path list does (`desktop/lib/devices/` runs
+`device-app-desktop`, `website/scripts/device-install.sh` runs `device-app-install`). A read neither names runs nothing
+more. When a change alters a protocol, wire format or shared fixture another component
 reads, say so in the PR and run that component's tests locally or with
 **CI → Run workflow** (`scope=desktop`, `tui`, `companions` or `mobile`).
 
@@ -721,8 +735,8 @@ gate waiting for a runner cannot block the next revision. Checks no longer selec
 by the new plan may finish, including when a ready PR returns to draft; they cannot
 validate a newer head. Explicit runs and distinct candidates have independent
 concurrency identities. The full CLI end-to-end suite runs nightly and on demand; it no longer
-runs after each merge. A passing older run does not validate newer source. The full
-suite remains advisory, and missing required acceptance still prevents an authorized
+runs after each merge. A passing older run does not validate newer source. The nightly
+run remains advisory, and missing required acceptance still prevents an authorized
 release.
 
 OS workflows run only when started by hand. Pushing to an `os/**`, `os-polish/*` or
