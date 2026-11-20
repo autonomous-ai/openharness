@@ -232,4 +232,35 @@ mod tests {
         register_in(&keys, exe).unwrap();
         assert_eq!(run(), Some(sz(&run_data(exe))));
     }
+
+    /// Tauri's uninstaller removes the Run value on an uninstall, and on a manual upgrade that uninstalls first, and
+    /// leaves state.json and Startup Apps' switch: each launch writes it again, unless that switch is off.
+    #[cfg(windows)]
+    #[test]
+    fn a_removed_value_comes_back_unless_startup_apps_turned_it_off() {
+        use windows_sys::Win32::System::Registry::{HKEY_CURRENT_USER, REG_BINARY, RegDeleteKeyValueW};
+        let root = format!(r"Software\HarnessDeviceTest-{}-removed", std::process::id());
+        let _scratch = Scratch(wide(&root));
+        let keys = Keys { run: format!(r"{root}\Run").leak(), approved: format!(r"{root}\StartupApproved\Run").leak() };
+        let exe = Path::new(r"C:\Users\Nguyễn Văn A\AppData\Local\Harness Device\harness-device.exe");
+        let run = || read(keys.run, RUN_VALUE).unwrap();
+        // SAFETY: both strings are NUL-terminated and outlive the call.
+        let uninstall =
+            || unsafe { RegDeleteKeyValueW(HKEY_CURRENT_USER, wide(keys.run).as_ptr(), wide(RUN_VALUE).as_ptr()) };
+
+        assert_eq!(register_in(&keys, exe), Ok(true));
+        assert_eq!(register_in(&keys, exe), Ok(false));
+        for approved in [None, Some(ON)] {
+            if let Some(approved) = approved {
+                write(keys.approved, RUN_VALUE, REG_BINARY, &approved).unwrap();
+            }
+            uninstall();
+            assert_eq!(register_in(&keys, exe), Ok(true), "{approved:?}");
+            assert_eq!(run(), Some(sz(&run_data(exe))));
+        }
+        write(keys.approved, RUN_VALUE, REG_BINARY, &OFF).unwrap();
+        uninstall();
+        assert_eq!(register_in(&keys, exe), Ok(false));
+        assert_eq!(run(), None);
+    }
 }
