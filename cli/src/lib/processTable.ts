@@ -283,6 +283,10 @@ function ownedProcessText(value: string): string {
   return processTextScratch.toString('utf16le', 0, bytes)
 }
 
+// These patterns carry no global/sticky cursor; one expression serves every row.
+const processRowPattern = /^\s*(\d+)\s+(\d+)\s+(.+?)\s+(\S+\s+\S+\s+\d{1,2}\s+\d{1,2}:\d{2}:\d{2}\s+\d{4})\s*(.*)$/
+const commandPathPattern = /^\s*(\d+)\s+(\S+\s+\S+\s+\d{1,2}\s+\d{1,2}:\d{2}:\d{2}\s+\d{4})\s+(.+?)\s*$/
+
 /**
  * One `ps -axo pid=,ppid=,comm=,lstart=,args=` line → a row.
  *
@@ -304,7 +308,7 @@ function ownedProcessText(value: string): string {
  * (de_DE), `火  9/15` (ja_JP), `вторник, 15 сентября 2026 г.` (ru_RU). That is what `psEnv` prevents.
  */
 export function parseProcessRow(line: string): ProcessRow | null {
-  const match = /^\s*(\d+)\s+(\d+)\s+(.+?)\s+(\S+\s+\S+\s+\d{1,2}\s+\d{1,2}:\d{2}:\d{2}\s+\d{4})\s*(.*)$/.exec(line)
+  const match = processRowPattern.exec(line)
   if (!match) return null
   // Found by QA on a quiet machine: saved identities held 13.8 MiB of old ps tables through
   // V8's capture substrings. The deleted-image memo keeps args too. Own each field's storage;
@@ -510,7 +514,7 @@ function parseCommandPaths(stdout: string, wanted: ReadonlySet<number> | null): 
   const paths = new Map<number, { startMarker: string; comm: string }>()
   for (const line of stdout.split('\n')) {
     if (wanted && !wanted.has(Number.parseInt(line, 10))) continue
-    const match = /^\s*(\d+)\s+(\S+\s+\S+\s+\d{1,2}\s+\d{1,2}:\d{2}:\d{2}\s+\d{4})\s+(.+?)\s*$/.exec(line)
+    const match = commandPathPattern.exec(line)
     if (match) paths.set(Number(match[1]), { startMarker: match[2], comm: match[3] })
   }
   return paths
