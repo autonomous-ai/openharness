@@ -417,3 +417,224 @@ sit above it. This matches `codex/hookContract.ts`'s `win32Runner: 'powershell'`
   (`anthropic/claude-haiku-4.5` answered `400 … Model blocked by guardrail`). Claude Code warned
   `[claude-code:unrecognized_model]` on stderr and ran.
 - `findstr /L /M /G:<the key file> <these notes>` prints nothing. The search reads the key from its file.
+
+## Task 37
+
+**Nothing here contradicts Task 27 or Task 30, so Task 38 does not run.** Every window belongs to the program
+`WINDOWS_APPS` names (section 1). Every variable Task 30 reads is set where it expects and unset where it does not
+(sections 4 and 5).
+
+**Contradicts the plan elsewhere:**
+- Task 26: a link whose scheme has no handler is not refused. `ShellExecuteExW` with `SEE_MASK_FLAG_NO_UI` returns TRUE,
+  and Windows opens "Pick an app" (`OpenWith.exe`). `open-link` would print `opened`, and a window shows (section 3).
+  `AssocQueryStringW`'s `COMMAND` and `EXECUTABLE` also find nothing for a packaged handler that is registered (`codex`
+  once the ChatGPT app is installed). Its `PROGID` finds both kinds.
+- `cli/src/cable/hosts/frontApp.ts` says `ChatGPT.exe` on Windows is OpenAI's chat app, not the Codex app. That is
+  wrong. The Store's ChatGPT app is package `OpenAI.Codex`, there is no separate Codex app, and the old chat app's Store
+  id is gone. Task 27's `com.openai.codex` → `ChatGPT.exe` is right (section 2).
+- `cli/src/cable/hosts/codexQueue.ts` (Task 18) says it is not known whether the ChatGPT app holds a Codex of its own on
+  Windows. It does: `<package>\app\resources\codex.exe`, which runs the app's threads, and which the user can start by
+  its path (section 2). Which `codex` an app thread's queue takes is still open.
+
+Read 2026-11-20 on the UTM Windows 11 ARM64 VM (build 26200), in the owned test user's console session (session 1).
+Autologon had been set for the sign-in and removed afterwards (section 7). Every step ran there as a one-shot
+interactive task under that user, through `session-run.ps1`, not over SSH. The run used a copy of it that waits 90 s,
+not 20 s, for the task to start: the busy VM often missed 20 s. Nothing was signed in to, in any app. Window owners
+were read with `EnumWindows`, `GetWindowThreadProcessId` and `QueryFullProcessImageNameW`. Screenshots were taken only
+to see first-run screens; none left the Mac's ignored `.work` folder.
+
+**The installs**, for the test user alone:
+- ChatGPT: `winget install --source msstore --accept-package-agreements --accept-source-agreements --id 9PLM9XGG6VKS`,
+  exit 0 ("Successfully installed", about 9 minutes on this VM).
+- Claude: the msstore source has no Claude app. `winget search --source msstore` finds nothing for `Claude` or
+  `Anthropic` (exit `0x8A150014`, "No package found matching input criteria"). It was installed from the winget source
+  instead: `Anthropic.Claude` 4.29.0, Anthropic's own arm64 installer, with `--scope user`, exit 0. That is a Squirrel
+  install for this user, not an MSIX:
+  - `<profile>\AppData\Local\AnthropicClaude\claude.exe`: Squirrel's x86 stub, the target of the Start menu shortcut.
+  - `app-<version>\claude.exe`: the arm64 app.
+  - An HKCU uninstall entry, `AnthropicClaude`.
+
+  During the run the app updated itself from `app-4.29.0` to `app-6.6395.0` and started again.
+- Each app was started once and stays installed.
+
+### 1. Window owners
+
+Each app's visible, unowned, non-tool top-level window, and the image of the process that owns it:
+
+| App | Started as | Owner (image) | Window class | Task 27 |
+| --- | --- | --- | --- | --- |
+| VS Code | `Code.exe --new-window <folder>` | `Code.exe` (the main process, `<profile>\AppData\Local\Programs\Microsoft VS Code\`) | `Chrome_WidgetWin_1` | same |
+| Cursor | `Cursor.exe --new-window <folder>` | `Cursor.exe` (the main process) | `Chrome_WidgetWin_1` | same |
+| Orca | `Orca.exe` | `Orca.exe` (install root) | `Chrome_WidgetWin_1` | same |
+| Claude app | its Start menu shortcut's target (the stub) | `claude.exe` (`…\AnthropicClaude\app-<version>\claude.exe`, arm64) | `Chrome_WidgetWin_1` | same: `Claude.exe`, matched without case |
+| ChatGPT app | the link `codex://harness-test` | `ChatGPT.exe` (`<package>\app\ChatGPT.exe`, arm64) | `Chrome_WidgetWin_1` | same |
+| WezTerm | `wezterm-gui.exe start`, with `--config prefer_egl=true` (below) | `wezterm-gui.exe` | `org.wezfurlong.wezterm` | same |
+| Warp | `warp.exe` | `warp.exe` (the main process) | `Window Class` | same |
+| Alacritty | `alacritty.exe` | `alacritty.exe` | `Window Class` | same |
+
+- Each app had one such window, apart from Cursor's dialogs below.
+- Other processes with the same image names owned no visible window:
+  - each Chromium-based app's helpers (`--type=renderer` and the rest);
+  - Warp's second `warp.exe` (`--parent-handle=…`);
+  - the Claude Code CLI's `claude.exe`, which ran beside the Claude app. It was the editor extension's
+    `resources\native-binary\claude.exe`, a child of the extension host.
+
+  `pick` passes them over.
+- Cursor: each `cursor://` link started `Cursor.exe --open-url -- "<link>"`, which forwards the link to the running
+  Cursor. Twice, that process left a visible, unowned task dialog "Cursor": "Another instance of Cursor is running but
+  not responding. Please close all other instances and try again." It stayed until it was closed. The running Cursor
+  had taken the link: it was asking "Allow … to open this URI?" (section 3). The cause is not known: the slow VM, or
+  that question holding Cursor's answer. Here the dialogs came after Cursor's main window in `EnumWindows` order. Above
+  it, `raise --exe Cursor.exe` would pick a dialog.
+- The VM has no OpenGL 3. Its display-only GPU driver (Red Hat VirtIO GPU DOD) is not enough for either terminal.
+  - WezTerm exits with `Failed to create window: The OpenGL implementation is too old to work with glium`. It ran with
+    `--config prefer_egl=true`, which uses the ANGLE it ships.
+  - Alacritty exits 1 with `Render(Other("OpenGL error requesting shader version: invalid enum"))`. For this check it
+    ran with WezTerm's bundled Mesa `opengl32.dll` placed beside it, removed afterwards.
+
+  Neither changes a window's owner or a shell's environment. Task 1's "exits 1 in session 0" for both was this.
+
+### 2. The ChatGPT app
+
+- **Its program is `ChatGPT.exe`.** The Store's "ChatGPT" (`9PLM9XGG6VKS`, publisher OpenAI, publisher URL
+  `https://openai.com/codex/`) is package `OpenAI.Codex` 26.1117.3838.0 Arm64, family `OpenAI.Codex_2p2nqsd0c76g0`,
+  display name ChatGPT.
+  - Its manifest's application `App` is `app/ChatGPT.exe`. That file's version resource says product "Codex", original
+    file name `chrome.exe`: a Chromium-based app.
+  - It registers the protocol `codex` (`--single-argument %1`).
+  - Its aliases are `chatgpt-desktop.exe`, `codex-chrome-native-host.exe` and `codex-core-command-runner.exe`, all in
+    `%LOCALAPPDATA%\Microsoft\WindowsApps`. None is `codex`.
+  - It has a startup task, disabled.
+- **The Codex desktop app is not a separate install.** `winget search --source msstore Codex` finds nothing by name.
+  `OpenAI` finds two apps, by family name: this one and "ChatGPT (Beta)" (`9N8CJ4W95TBZ`, `OpenAI.CodexBeta_…`). The
+  old chat app's id `9NT1R1C2HH7J`: "No package found".
+- **It holds a Codex of its own:** `<package>\app\resources\codex.exe`, arm64, `codex-cli 0.171.0-alpha.13`. Here
+  `<package>` is `%ProgramFiles%\WindowsApps\OpenAI.Codex_<version>_arm64__2p2nqsd0c76g0`, a folder named for each
+  version.
+  - The app runs it as `codex.exe -c features.code_mode_host=true app-server`, a child of `ChatGPT.exe`. Its environment
+    has no `CODEX_HOME`, so it uses the default `<profile>\.codex`, as the npm `codex` does.
+  - The test user can start it by that path: `--version` and `queue --help` exit 0, and `codex queue [OPTIONS] --thread
+    <THREAD> --message <TEXT>` is there.
+  - The PATH `codex` is still the npm shim, `codex-cli 0.170.0`, with the same `queue`. No alias puts the app's copy on
+    PATH.
+  - `app\Codex.exe` (20 KB) is the app's update trampoline (its pdb is `windows_update_trampoline.pdb`), not a CLI.
+- **Whether a thread started in the app takes `codex queue` from the PATH `codex`: Open.** A thread needs a sign-in,
+  which this run never does. So the stop condition is not decided either way. What is known: the app's threads run on
+  the app's own Codex, a newer build than the PATH one, and both use the same default home.
+
+### 3. Link handlers
+
+Read in the session with `AssocQueryStringW` and `ASSOCF_IS_PROTOCOL`, read only.
+
+| Scheme | Before the two apps | After |
+| --- | --- | --- |
+| `claude` | none: `0x80070483` (`ERROR_NO_ASSOCIATION`) for every kind asked | `HKCU\Software\Classes\claude`. `COMMAND` was `"<profile>\AppData\Local\AnthropicClaude\app-4.29.0\claude.exe" "%1"`; after the app's own update it is `"…\app-6.6395.0\claude.exe" -- "%1"`. `FRIENDLYAPPNAME` is `Claude`, `PROGID` is `claude` |
+| `codex` | none: `0x80070483` | packaged. `COMMAND` and `EXECUTABLE` still give `0x80070483`. `FRIENDLYAPPNAME` is `ChatGPT`, `PROGID` is an `AppX…` id, and `APPID` is `OpenAI.Codex_2p2nqsd0c76g0!App` |
+| `vscode`, `cursor` | as Task 1 §8 | unchanged |
+
+**Contradicts Task 26.** Task 26 is not on this branch, so the call it specifies was made directly in the session:
+`ShellExecuteExW` with verb `open`, `SEE_MASK_FLAG_NO_UI` and `codex://harness-test`, while a hook on
+`EVENT_OBJECT_SHOW` recorded each window shown.
+- With no handler, it returned TRUE (`hInstApp` 42) in 0.7 s. `OpenWith.exe` showed a window, "Pick an app" (class
+  `Open With Dummy Window Class For Interim Dialog`, minimized, a new taskbar button).
+- `claude://harness-test` did the same in 0.95 s.
+- A second call made while the first picker was still open did not return within 120 s.
+
+`open-link` would print `opened`, and a window shows. A check before the call can tell: `AssocQueryStringW`'s `PROGID`
+gives `0x80070483` when no handler is registered, and answers for a classic handler and a packaged one alike.
+`COMMAND` and `EXECUTABLE` give `0x80070483` for the registered packaged `codex` too.
+
+Other links, the same call:
+- `codex://harness-test`, with the ChatGPT app installed: TRUE, and the app's window came (`ChatGPT.exe`,
+  `Chrome_WidgetWin_1`). The app's process was `ChatGPT.exe --single-argument codex://harness-test/`, with a slash
+  added.
+- `cursor://anthropic.claude-code/open`, with Cursor running: TRUE. Cursor then asked "Allow 'Claude Code for VS Code'
+  extension to open this URI?", with Open and Cancel and a box "Do not ask me again for this extension". After Open,
+  Claude Code's panel started a session.
+
+### 4. Cursor's shells, and VS Code's panel
+
+How it was read:
+- Claude Code's extension, 2.1.329 `win32-arm64`, was installed in VS Code and in Cursor by each editor's own CLI:
+  `--install-extension anthropic.claude-code`, exit 0 for both (Cursor's gallery has it). It was uninstalled afterwards.
+- Each editor was started on a throwaway folder from a shell that read the test key into its own environment, as The
+  VM says: `ANTHROPIC_BASE_URL` OpenRouter, `ANTHROPIC_AUTH_TOKEN` from the file, no `ANTHROPIC_API_KEY`,
+  `ANTHROPIC_MODEL=deepseek/deepseek-v4.1-flash`, and `CLAUDE_CONFIG_DIR` a throwaway folder.
+- The folder's settings turned on `claudeCode.disableLoginPrompt` and `claudeCode.hideOnboarding`. No login screen
+  showed.
+- The throwaway config's one `SessionStart` hook ran a probe that writes names and shapes only. The hook fires when the
+  panel opens; no prompt was sent.
+- Where no hook could run, another process's environment was read from its environment block, read only, for the same
+  names.
+
+**Cursor's first-run screen was not passed.** It offers "Log In" and "Sign Up" ("Cursor's AI features require you to be
+logged in") and has no skip. Closing it quits Cursor, Escape does nothing, and UI Automation sees no control in it. Both
+halves were still read behind it:
+- the panel, opened by Claude Code's own link (`cursor://anthropic.claude-code/open`, section 3);
+- an integrated terminal that Cursor opened behind the screen, once the folder's `claudeCode.useTerminal` was on and the
+  link was opened again. It is `powershell.exe -noexit -command "try { . <shell integration> …"`, a child of Cursor's
+  pty host. Its environment block was read.
+
+| Where | `VSCODE_PID` (its row) | `VSCODE_IPC_HOOK` | `VSCODE_GIT_ASKPASS_NODE` | `TERM_PROGRAM` | Task 30 |
+| --- | --- | --- | --- | --- | --- |
+| VS Code, Claude Code's panel (the hook) | set, `Code.exe` | `\\.\pipe\<hex>-<n>.<n>.<n>-main-sock` | unset | unset | same |
+| Cursor, Claude Code's panel (the hook) | set, `Cursor.exe` | the same shape; not VS Code's value | unset | unset | same |
+| Cursor, extension host (its environment block) | set, `Cursor.exe` | the same value as Cursor's panel | unset | unset | same |
+| Cursor, integrated terminal (its environment block) | unset | unset | `<profile>\AppData\Local\Programs\cursor\Cursor.exe` | `vscode` | same |
+
+- Both editors' `VSCODE_IPC_HOOK` match `^\\\\\.\\pipe\\[^\\]{1,200}$`, and their values differ. The first 16 hex digits
+  of each value's SHA-256 were compared; neither is written here. So a reused pid's kept answer cannot cross editors.
+- Both panels set `CLAUDE_CODE_ENTRYPOINT=claude-vscode` (Cursor too, so it does not tell them apart),
+  `ELECTRON_RUN_AS_NODE=1` and `TERM=xterm-256color`.
+- The hook's chain, in both editors: the hook's program < `bash.exe` < `bash.exe` < `claude.exe` (the extension's
+  `resources\native-binary\claude.exe`) < `Code.exe` or `Cursor.exe` (the extension host) < `Code.exe` or `Cursor.exe`
+  (the main process). The hook ran under Git Bash.
+- Cursor's extension host also has `VSCODE_CRASH_REPORTER_PROCESS_TYPE=extensionHost`,
+  `CURSOR_EXTENSION_HOST_ROLE=user`, `CURSOR_LAYOUT`, `CURSOR_WORKSPACE_LABEL` and `VSCODE_PROCESS_TITLE`.
+- Cursor's terminal also has `VSCODE_GIT_ASKPASS_MAIN`, `VSCODE_GIT_IPC_HANDLE`, `VSCODE_INJECTION` and
+  `VSCODE_STABLE`. Its `TERM_PROGRAM=vscode` is the same as in VS Code's terminal (Task 1 §6). Only
+  `VSCODE_GIT_ASKPASS_NODE` tells the two terminals apart.
+- VS Code was passed with "Continue without Signing In". The folder was trusted twice: once in VS Code's Restricted Mode
+  page, then in Claude Code's own "Trust this folder in Claude Code?".
+
+### 5. The terminals' shells
+
+Read from the environment block of the shell each terminal starts by default:
+
+| Terminal (shell) | `WEZTERM_PANE` | `TERM_PROGRAM` | `ALACRITTY_LOG` | Task 30 |
+| --- | --- | --- | --- | --- |
+| WezTerm (`cmd.exe`) | set, digits | `WezTerm` | unset | same |
+| Warp (`powershell.exe`) | unset | `WarpTerminal` | unset | same |
+| Alacritty (`powershell.exe`) | unset | unset | set: `%TEMP%\Alacritty-<pid>.log`, the profile written in its 8.3 short form | same |
+
+- WezTerm's shell also has `WEZTERM_EXECUTABLE`, `WEZTERM_EXECUTABLE_DIR`, `WEZTERM_UNIX_SOCKET` and
+  `COLORTERM=truecolor`.
+- Warp's has `WARP_IS_LOCAL_SHELL_SESSION`, `WARP_TERMINAL_SESSION_UUID`, `WARP_CLIENT_VERSION`, `WARP_FOCUS_URL` and
+  other `WARP_*` names, and no `COLORTERM`.
+- Warp's first run was passed with no account: "Get started", then two pages of Next, then "Create an account": Skip,
+  then "Continue without signing in?": Skip for now.
+- Alacritty's shell has `ALACRITTY_LOG` and no other name of its own, and `COLORTERM=truecolor`. It is set whether
+  Alacritty starts with `-v` or without.
+
+### 6. The key
+
+`findstr /L /M /G:<the key file> <these notes>` prints nothing. It ran as the test user, which reads the key from its
+own file. Nothing the run wrote held the key: the editors' probes print names, and values only as shapes.
+
+### 7. Autologon
+
+Autologon was set for this task's sign-in and removed afterwards. The main session read the four Winlogon values, set
+them for the test user (the password on stdin), restarted the VM, and removed them once the session was up. It read
+them back to check: `AutoAdminLogon`, `DefaultUserName`, `DefaultDomainName` and `DefaultPassword` absent,
+`AutoLogonSID` as it was. This run read them again before its first step and found the same. The console session stayed
+signed in throughout.
+
+The run removed what it made:
+- Claude Code's extension in both editors, and their `extensions` folders, which did not exist before;
+- the throwaway folders and config;
+- Alacritty's borrowed `opengl32.dll`;
+- winget's downloaded Claude installer;
+- its probes and screenshots in `e2e`;
+- the processes it started.
+
+The key file, the test user and the two apps stay.
