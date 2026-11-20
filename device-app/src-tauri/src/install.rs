@@ -730,7 +730,7 @@ mod tests {
 
     #[test]
     fn with_no_terminal_the_host_half_runs_behind_the_screen() {
-        let no_terminal = || Err(io::Error::new(io::ErrorKind::NotFound, "No terminal found."));
+        let no_terminal = || Err(io::ErrorKind::NotFound.into());
         let host = "▸ Installing required Linux packages (you may be asked for your password): tmux\n\
                     ✓ tmux ready (tmux 3.4)\n";
         let ran = install_on("linux", vec![no_terminal(), ended(0, host, ""), ended(0, "", "")], true);

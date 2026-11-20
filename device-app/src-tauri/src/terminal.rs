@@ -14,8 +14,6 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 /// Desktop's order (`_defaultOpenTerminal`): the terminal Debian and Ubuntu name as the default, then the two most
 /// common. Each takes `/bin/sh` and the script's path after its flag (`command`).
 pub const CANDIDATES: [(&str, &str); 3] = [("x-terminal-emulator", "-e"), ("gnome-terminal", "--"), ("xterm", "-e")];
-/// None of CANDIDATES is on this computer.
-pub const NO_TERMINAL: &str = "No terminal found.";
 /// A terminal that started and never ran the script: no display it can use, or a default that is broken.
 pub const DID_NOT_OPEN: &str = "The terminal did not open.";
 /// How long a terminal that started has to run the script: the first start of gnome-terminal's server takes seconds.
@@ -110,7 +108,8 @@ pub fn run(
         .iter()
         .map(|(program, flag)| start(program, flag, &script_path))
         .find(|started| !matches!(started, Err(error) if error.kind() == io::ErrorKind::NotFound))
-        .unwrap_or_else(|| Err(io::Error::new(io::ErrorKind::NotFound, NO_TERMINAL)))?;
+        // None of CANDIDATES is on this computer: the install runs the line behind the screen instead.
+        .unwrap_or_else(|| Err(io::ErrorKind::NotFound.into()))?;
     // How a terminal ends says nothing (`start`): one that never runs the script is seen by the file it never makes.
     let started = script_path.with_extension("started");
     if wait_for(OPENS_WITHIN, now, pause, || started.exists().then_some(())).is_none() {
@@ -149,7 +148,7 @@ pub fn command(program: &str, flag: &str, script: &Path) -> Command {
 
 #[cfg(test)]
 mod tests {
-    use super::{CANDIDATES, DID_NOT_OPEN, NO_TERMINAL, command, run, script, start, wait_result};
+    use super::{CANDIDATES, DID_NOT_OPEN, command, run, script, start, wait_result};
     use crate::cli::spawn_lock;
     use crate::install::HOST;
     use crate::types::Output;
@@ -276,8 +275,7 @@ mod tests {
     }
 
     #[test]
-    fn no_terminal_is_one_fixed_error() {
-        assert_eq!(NO_TERMINAL, "No terminal found.");
+    fn no_terminal_is_not_found() {
         let folder = tempfile::tempdir().unwrap();
         let tried = Cell::new(0);
         let error = run_at_once(folder.path(), HOST, WAIT, &|_, _, _| {
@@ -286,7 +284,7 @@ mod tests {
         })
         .unwrap_err();
         assert_eq!(tried.get(), CANDIDATES.len());
-        assert_eq!((error.kind(), error.to_string()), (io::ErrorKind::NotFound, NO_TERMINAL.to_string()));
+        assert_eq!(error.kind(), io::ErrorKind::NotFound);
         // A program that is not there is NotFound when started, so the next one is tried.
         let missing = start("harness-no-such-terminal", "-e", &folder.path().join("host.sh")).unwrap_err();
         assert_eq!(missing.kind(), io::ErrorKind::NotFound);
