@@ -9,8 +9,8 @@
 # Prints `ok: <check>` for each check, `note:` for what it saw but does not judge, and stops at the first
 # `FAILED: <check>`, exiting 1. It stops before it starts, exiting 2, when this account has a Harness Device, its data or
 # its login item already, or a Harness CLI: it makes and removes only what it installed. Everything the app runs is the
-# fake CLI or the test's own programs; never an account, a backend or the CDN. -Out keeps the app's log and the fake
-# CLI's files of each part.
+# fake CLI or the test's own programs; never an account, a backend or the CDN. -Out keeps the app's log, the fake CLI's
+# files of each part, and the foreground changes Windows reported beside the front check's steps.
 #
 # The app reads its folders from Windows (the known folders), not from USERPROFILE or LOCALAPPDATA, so it runs in this
 # account's own: run it as a throwaway user or on a throwaway machine. One check changes the machine and runs only on a
@@ -115,6 +115,8 @@ $evidence = Join-Path $work 'evidence'
 foreach ($folder in @($fake, $tools, $apps, $evidence)) { New-Item -ItemType Directory -Force -Path $folder | Out-Null }
 $consoles = Join-Path $work 'consoles.log'
 $served = Join-Path $work 'served.log'
+$frontEvents = Join-Path $work 'foreground.log'
+$frontSteps = Join-Path $work 'front-steps.log'
 
 $script:failure = $null
 $script:app = $null
@@ -263,6 +265,50 @@ static class ConsoleWatch {
 }
 '@
 
+# Writes `ready`, then a line for each foreground change Windows reports (EVENT_SYSTEM_FOREGROUND, hooked as the app
+# hooks it): the time (UTC), the window, its process's id and name. A witness apart from the app, so a failure says
+# whether Windows reported the change or the app missed it.
+$frontWatchSource = @'
+using System;
+using System.Diagnostics;
+using System.IO;
+using System.Runtime.InteropServices;
+static class FrontWatch {
+  delegate void Proc(IntPtr hook, uint happened, IntPtr window, int what, int child, uint thread, uint time);
+  [StructLayout(LayoutKind.Sequential)]
+  struct Msg { public IntPtr window; public uint message; public IntPtr w, l; public uint time; public int x, y; }
+  [DllImport("user32.dll")]
+  static extern IntPtr SetWinEventHook(uint min, uint max, IntPtr module, Proc proc, uint pid, uint thread, uint flags);
+  [DllImport("user32.dll")]
+  static extern int GetMessage(out Msg msg, IntPtr window, uint min, uint max);
+  [DllImport("user32.dll")]
+  static extern IntPtr DispatchMessage(ref Msg msg);
+  [DllImport("user32.dll")]
+  static extern uint GetWindowThreadProcessId(IntPtr window, out uint pid);
+  const uint EVENT_SYSTEM_FOREGROUND = 0x0003;
+  static string output;
+  static Proc kept = Changed;
+  static void Main(string[] args) {
+    output = args[0];
+    if (SetWinEventHook(EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND, IntPtr.Zero, kept, 0, 0, 0) == IntPtr.Zero) {
+      Write("no hook");
+      return;
+    }
+    Write("ready");
+    Msg msg;
+    while (GetMessage(out msg, IntPtr.Zero, 0, 0) > 0) DispatchMessage(ref msg);
+  }
+  static void Changed(IntPtr hook, uint happened, IntPtr window, int what, int child, uint thread, uint time) {
+    uint pid;
+    GetWindowThreadProcessId(window, out pid);
+    string name = "gone";
+    try { name = Process.GetProcessById((int)pid).ProcessName; } catch (Exception) { }
+    Write(DateTime.UtcNow.ToString("HH:mm:ss.fff") + " " + window.ToInt64() + " " + pid + " " + name);
+  }
+  static void Write(string line) { File.AppendAllText(output, line + "\n"); }
+}
+'@
+
 # Stands in for Windows PowerShell while the install line runs: writes whether it has a console window and each argument
 # it got (the first is the program the app ran) to powershell.record beside itself, then prints an install.ps1 step line
 # and its failure, and exits 1, as install.ps1 that could not download.
@@ -339,22 +385,37 @@ namespace E2E {
       return found;
     }
 
+    // The way the last Raise tried last: the one that put the window in front when it answered true.
+    public static string Way = "";
+
+    // The window in front and its process: `handle pid`.
+    public static string Front() {
+      IntPtr window = GetForegroundWindow();
+      uint pid;
+      GetWindowThreadProcessId(window, out pid);
+      return window.ToInt64() + " " + pid;
+    }
+
     // Brings `window` to the front; true when it is there. Windows lets a process that is not in front set the front
     // only when it gave the last input, so each way first gives some: a mouse move of nothing, then the Alt key, which
     // only `alt` allows, as a released Alt puts the window in its menu mode, where Return opens the system menu.
     public static bool Raise(IntPtr window, bool alt) {
+      Way = "in front already";
       if (GetForegroundWindow() == window) return true;
       ShowWindow(window, 9);
       mouse_event(MOUSEEVENTF_MOVE, 0, 0, 0, UIntPtr.Zero);
+      Way = "SetForegroundWindow";
       if (SetForegroundWindow(window) && GetForegroundWindow() == window) return true;
       uint pid;
       uint front = GetWindowThreadProcessId(GetForegroundWindow(), out pid);
       uint me = GetCurrentThreadId();
       bool attached = front != 0 && front != me && AttachThreadInput(me, front, true);
+      Way = attached ? "AttachThreadInput" : "BringWindowToTop";
       BringWindowToTop(window);
       SetForegroundWindow(window);
       if (attached) AttachThreadInput(me, front, false);
       if (GetForegroundWindow() == window || !alt) return GetForegroundWindow() == window;
+      Way = "Alt";
       keybd_event(VK_MENU, 0, 0, UIntPtr.Zero);
       SetForegroundWindow(window);
       keybd_event(VK_MENU, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
@@ -417,6 +478,22 @@ function Called([string]$call) { @(Fake-Lines 'calls.log' | Where-Object { $_ -c
 function Told([string]$exeName) {
   $line = '{"front":"' + $exeName + '"}'
   @(Fake-Lines 'stdin.log' | Where-Object { $_ -ieq $line }).Count
+}
+
+# The foreground changes Windows reported, as the witness wrote them: `time handle pid name`.
+function Front-Events { @(Lines-Of $frontEvents | Where-Object { $_ -ne 'ready' }) }
+# True when Windows reported a window of process `id` in front, from its `since`-th change on.
+function Reported([int]$since, [int]$id) {
+  @(Front-Events | Select-Object -Skip $since | Where-Object { ($_ -split ' ')[2] -eq "$id" }).Count -gt 0
+}
+# The window in front now, as GetForegroundWindow names it: `handle pid name`.
+function In-Front {
+  $handle, $owner = ([E2E.Native]::Front()) -split ' '
+  "$handle $owner $((Get-Process -Id $owner -ErrorAction SilentlyContinue).ProcessName)"
+}
+# One line of the front check's steps, timed as the witness's lines are.
+function Step([string]$text) {
+  [IO.File]::AppendAllText($frontSteps, "$([DateTime]::UtcNow.ToString('HH:mm:ss.fff')) $text`n")
 }
 
 # The app's environment: the fake CLI, or no CLI at all.
@@ -538,6 +615,10 @@ function Show-Diagnosis {
   Lines-Of $consoles | ForEach-Object { Write-Host $_ }
   Write-Host '--- the requests served'
   Lines-Of $served | ForEach-Object { Write-Host $_ }
+  Write-Host '--- the foreground changes Windows reported'
+  Lines-Of $frontEvents | ForEach-Object { Write-Host $_ }
+  Write-Host "--- the front check's steps"
+  Lines-Of $frontSteps | ForEach-Object { Write-Host $_ }
   Write-Host '--- the processes'
   Get-Process -Name 'harness-device', 'powershell', 'cmd', 'PING' -ErrorAction SilentlyContinue |
     Format-Table Id, ProcessName, SessionId, StartTime -AutoSize | Out-String -Width 200 | Write-Host
@@ -567,8 +648,8 @@ function Clean-Up {
     New-Item -ItemType Directory -Force -Path $Out | Out-Null
     Keep-Fake
     Copy-Item -Path (Join-Path $evidence '*') -Destination $Out -Recurse -Force -ErrorAction SilentlyContinue
-    Copy-Item -Path (Join-Path $logs 'app-*.log'), $consoles, (Join-Path $tools 'powershell.record'), $served `
-      -Destination $Out -Force -ErrorAction SilentlyContinue
+    Copy-Item -Path (Join-Path $logs 'app-*.log'), $consoles, (Join-Path $tools 'powershell.record'), $served, `
+      $frontEvents, $frontSteps -Destination $Out -Force -ErrorAction SilentlyContinue
   }
   # The uninstaller copies itself away and returns at once: what it removes is waited for.
   if ($script:installed -and (Test-Path -LiteralPath (Join-Path $installDir 'uninstall.exe'))) {
@@ -726,6 +807,7 @@ try {
   if (-not $csc) { Fail 'the .NET Framework compiler (csc.exe) is on this Windows' }
   $window = Build-Tool 'window' 'winexe' $windowSource @('System.Windows.Forms.dll')
   $watcher = Build-Tool 'console-watch' 'winexe' $watcherSource @('System.Management.dll')
+  $frontWatch = Build-Tool 'front-watch' 'winexe' $frontWatchSource @()
   $standIn = Build-Tool 'powershell-stand-in' 'exe' $standInSource @()
   Note "this script runs in a job: $([E2E.Native]::InJob($PID))"
 
@@ -811,23 +893,47 @@ try {
   if ((Run-Value) -cne $value) { Fail 'a second launch leaves the Run value as it is' }
   Ok 'a second launch exits with instance: already running; one harness-device.exe runs; the Run value is unchanged'
 
+  # From here, each foreground change Windows reports, seen apart from the app.
+  $started.Add((Start-Process -FilePath $frontWatch -ArgumentList "`"$frontEvents`"" -PassThru))
+  if (-not (Wait-For { (Lines-Of $frontEvents) -contains 'ready' })) { Fail "the foreground witness hooks the desktop: $(Lines-Of $frontEvents)" }
   $fronts = @{}
-  # Brings `name`'s window to the front, seen there, then waits until the watch has been told its exe `count` times. A
-  # window may take the front as it opens: a count, not a change after the raise, is what is waited for. False when the
-  # test cannot bring it there on a runner that refuses it (Front-Refused).
-  function Bring([string]$name, [int]$count) {
+  # Raises `name`'s window until GetForegroundWindow names it, and writes the step. False when the runner refuses it
+  # (Front-Refused).
+  function Raise-Front([string]$name) {
     $handle = $fronts[$name].MainWindowHandle
-    if (-not (Wait-For { [E2E.Native]::Raise($handle, $true) })) {
-      Front-Refused "$name.exe"
-      return $false
+    $before = In-Front
+    $script:calls = 0
+    $raised = Wait-For { $script:calls++; [E2E.Native]::Raise($handle, $true) }
+    Step "raise $name.exe: in front $before before, $(In-Front) after; Raise $raised by $([E2E.Native]::Way), $script:calls call(s)"
+    if (-not $raised) { Front-Refused "$name.exe" }
+    $raised
+  }
+  # Brings `name`'s window to the front from `other`'s until Windows reports the change (EVENT_SYSTEM_FOREGROUND, the
+  # event the app follows, as the witness saw it), then waits until the watch has been told its exe once more.
+  # GetForegroundWindow naming the window proves no change: the watch has gone untold for a minute while it named it.
+  # A change Windows did not report is made again, twice at most. False when the runner refuses the front.
+  function Bring([string]$name, [string]$other) {
+    $handle = "$($fronts[$name].MainWindowHandle)"
+    for ($try = 1; ; $try++) {
+      # A change: from `other`, which first takes the front when this window has it.
+      if ((([E2E.Native]::Front()) -split ' ')[0] -eq $handle -and -not (Raise-Front $other)) { return $false }
+      $count = (Told "$name.exe") + 1
+      $since = @(Front-Events).Count
+      if (-not (Raise-Front $name)) { return $false }
+      $reported = Wait-For { Reported $since ($fronts[$name].Id) } 5
+      Step "Windows reported $name.exe in front: $reported"
+      if ($reported) { break }
+      if ($try -eq 3) { Fail "Windows reports $name.exe's window coming to the front (EVENT_SYSTEM_FOREGROUND), in $try tries" }
+      Note "$name.exe's window came to the front with no change reported by Windows: it is brought there again"
     }
-    if (-not (Wait-For { (Told "$name.exe") -ge $count })) {
-      Fail "in front, $name.exe reaches the watch's stdin as {`"front`":`"$name.exe`"}, $count time(s)"
+    $told = Wait-For { (Told "$name.exe") -ge $count }
+    Step "the watch was told $name.exe $(Told "$name.exe") time(s)"
+    if (-not $told) {
+      Fail "Windows reported $name.exe in front: it reaches the watch's stdin as {`"front`":`"$name.exe`"}, $count time(s)"
     }
     return $true
   }
-  # Each opens and comes to the front in turn, then the first again, while the second is in front.
-  $followed = $true
+  # Both open, then each comes to the front in turn, then the first again, while the second is in front.
   foreach ($name in @('e2e-front', 'code')) {
     if (Told "$name.exe") { Fail "no $name.exe is told before it opens" }
     $copy = Join-Path $apps "$name.exe"
@@ -836,10 +942,10 @@ try {
     $started.Add($process)
     if (-not (Wait-For { $process.Refresh(); $process.MainWindowHandle -ne [IntPtr]::Zero })) { Fail "the test window $name.exe opens" }
     $fronts[$name] = $process
-    $followed = $followed -and (Bring $name 1)
+    Step "opened $name.exe: window $($process.MainWindowHandle), pid $($process.Id)"
   }
-  if ($followed -and (Bring 'e2e-front' ((Told 'e2e-front.exe') + 1))) {
-    Ok 'two apps brought to the front in turn reach the watch: {"front":"e2e-front.exe"}, {"front":"code.exe"}, then e2e-front.exe again'
+  if ((Bring 'e2e-front' 'code') -and (Bring 'code' 'e2e-front') -and (Bring 'e2e-front' 'code')) {
+    Ok 'two apps brought to the front in turn, each change reported by Windows, reach the watch: {"front":"e2e-front.exe"}, {"front":"code.exe"}, then e2e-front.exe again'
   }
   Stop-App
   foreach ($process in $fronts.Values) { Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue }
