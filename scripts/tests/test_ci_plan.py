@@ -4,12 +4,15 @@ import importlib.util
 import io
 import itertools
 import json
+import os
 from pathlib import Path
 import posixpath
 import re
 import subprocess
+import sys
 import tempfile
 import unittest
+from unittest import mock
 import zipfile
 
 spec = importlib.util.spec_from_file_location("ci_plan", Path(__file__).resolve().parents[1] / "ci-plan.py")
@@ -1550,6 +1553,40 @@ class CrossReadTests(unittest.TestCase):
                 # files read: those reads count for reuse (DEPENDS) alone.
                 if suite not in planner.E2E | {"cross-read-scan"}:
                     self.assertEqual(planner.undeclared_reads(repository, suite, inputs=planner.PR_READS), [])
+
+
+class FullCheckoutTests(unittest.TestCase):
+    """The tests ci.yml's cross-read-scan job runs on a full checkout, with CROSS_READ_SCAN_REQUIRED=1."""
+    NAMES = ("SelectionTests.test_every_desktop_file_the_phone_tests_read_selects_mobile",
+             "SelectionTests.test_the_dial_host_files_are_the_ones_cli_e2e_leaves_out",
+             "SelectionTests.test_every_declared_input_exists",
+             "CrossReadTests.test_every_cross_read_in_this_repository_is_declared")
+
+    def results_without_a_checkout(self, required):
+        """Each test's result in a checkout that holds none of what it reads."""
+        results = {}
+        module = sys.modules[__name__]
+        with tempfile.TemporaryDirectory() as empty, \
+                mock.patch.object(module, "REPOSITORY", Path(empty), create=True), \
+                mock.patch.dict(os.environ, {"CROSS_READ_SCAN_REQUIRED": required}):
+            for name in self.NAMES:
+                result = unittest.TestResult()
+                unittest.defaultTestLoader.loadTestsFromName(name, module).run(result)
+                results[name] = result
+        return results
+
+    def test_the_scan_jobs_tests_fail_without_a_full_checkout_and_skip_elsewhere(self):
+        # A skip exits 0: in the job that exists to run them, a checkout without their files would pass as green.
+        for name, result in self.results_without_a_checkout("1").items():
+            with self.subTest(name=name, required=True):
+                self.assertEqual((result.testsRun, len(result.failures), len(result.errors), len(result.skipped)),
+                                 (1, 1, 0, 0))
+                self.assertIn("needs a full checkout", result.failures[0][1])
+        # process-checks' checkout is sparse: there they skip.
+        for name, result in self.results_without_a_checkout("").items():
+            with self.subTest(name=name, required=False):
+                self.assertEqual((result.testsRun, len(result.failures), len(result.errors), len(result.skipped)),
+                                 (1, 0, 0, 1))
 
 
 class ReusedGateTests(unittest.TestCase):
