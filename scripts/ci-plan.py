@@ -506,23 +506,58 @@ def select(paths, present=None):
 CI_WORKFLOW = ".github/workflows/ci.yml"
 
 
+def yaml_entries(text):
+    """A YAML mapping's keys at its first key's indent, each with the rest of its line and the lines indented below it;
+    comment lines left out."""
+    text = re.sub(r"(?m)^[ \t]*#.*\n", "", text)
+    first = re.search(r"(?m)^([ \t]*)[\w-]", text)
+    if first is None:
+        return {}
+    indent = first.group(1)
+    return dict(re.findall(rf"(?m)^{indent}([\w-]+):(.*\n(?:(?:{indent}[ \t]+.*)?\n)*)", text))
+
+
 def ci_jobs(text):
-    """ci.yml's jobs: each id under `jobs:` and its block of lines indented below it."""
-    body = text.split("\njobs:\n", 1)[1] if "\njobs:\n" in text else ""
-    return dict(re.findall(r"(?m)^  ([\w-]+):\n((?:(?:    .*)?\n)*)", body))
+    """ci.yml's jobs: each id under `jobs:` and its definition."""
+    return yaml_entries(yaml_entries(text).get("jobs", ""))
+
+
+# A YAML anchor (`key: &name`, `- &name`) and an alias of one (`key: *name`, `<<: *name`, `- *name`).
+YAML_ANCHOR = re.compile(r"(?m)(?:^[ \t]*-|:)[ \t]+&([\w-]+)")
+YAML_ALIAS = re.compile(r"(?m)(?:^[ \t]*-|:)[ \t]+\*([\w-]+)")
 
 
 def edited_job_suites(root, base, head):
-    """The suites whose ci.yml jobs head edits, adds or removes: a job's definition is part of what its suite tests.
-    device-app-build's are the Device suites that install its packages; the plan, process and gate jobs run none."""
-    def jobs(commit):
+    """The suites whose ci.yml jobs head edits, adds or removes: a job's definition is part of what its suite tests, with
+    what it takes from the rest of the file (the env variables it names, the permissions and defaults, the anchors it
+    names). device-app-build's are the Device suites that install its packages; the plan, process and gate jobs run
+    none."""
+    def top(commit):
         try:
-            return ci_jobs(git(root, "show", f"{commit}:{CI_WORKFLOW}") + "\n")
+            return yaml_entries(git(root, "show", f"{commit}:{CI_WORKFLOW}") + "\n")
         except subprocess.CalledProcessError:
             return {}  # No ci.yml there: every job of the other side changed.
 
-    old, new = jobs(base), jobs(head)
-    edited = {job for job in old.keys() | new.keys() if old.get(job) != new.get(job)}
+    old_top, new_top = top(base), top(head)
+    old, new = yaml_entries(old_top.get("jobs", "")), yaml_entries(new_top.get("jobs", ""))
+    jobs = old.keys() | new.keys()
+    edited = {job for job in jobs if old.get(job) != new.get(job)}
+    if any(old_top.get(key) != new_top.get(key) for key in ("permissions", "defaults")):
+        edited |= jobs
+    old_env, new_env = yaml_entries(old_top.get("env", "")), yaml_entries(new_top.get("env", ""))
+    variables = [re.escape(name) for name in old_env.keys() | new_env.keys() if old_env.get(name) != new_env.get(name)]
+    named = re.compile(rf"\b(?:{'|'.join(variables)})\b") if variables else None
+    edited |= {job for job in jobs if named and named.search(old.get(job, "") + new.get(job, ""))}
+    # An edited anchor reaches each job that names it, and through it what that job anchors.
+    sections = {key for key in old_top.keys() | new_top.keys() if key != "jobs" and old_top.get(key) != new_top.get(key)}
+    while True:
+        changed = "".join(old_top.get(key, "") + new_top.get(key, "") for key in sections)
+        changed += "".join(old.get(job, "") + new.get(job, "") for job in edited)
+        anchors = set(YAML_ANCHOR.findall(changed))
+        reached = {job for job in jobs - edited if anchors & set(YAML_ALIAS.findall(old.get(job, "") + new.get(job, "")))}
+        if not reached:
+            break
+        edited |= reached
     return ({suite for suite, names in JOBS.items() if names & edited}
             | (set(DEVICE_APP_BUILDS) if "device-app-build" in edited else set()))
 
