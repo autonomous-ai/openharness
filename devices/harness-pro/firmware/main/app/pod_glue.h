@@ -19,7 +19,9 @@ enum { POD_TAP_SLOP = 24 };   // px: farther than this from the DOWN and the con
 // swipe; the travel of a swipe up (Home).
 enum { POD_BAR_H = 72, POD_BAR_SWIPE = 80, POD_EDGE_SWIPE = 80, POD_BOTTOM_Y = 620 };   // POD_BOTTOM_Y: a swipe up that starts at or below it goes Home from a room or a recap
 
-typedef struct { const char *id, *name, *engine, *machine; } pod_roster_row_t;
+// host and caps_off are the agent row's: the app it lives in (NULL: "") and the POD_CAP_* letters that app withholds (0: none),
+// so a zero-filled row is an agent of no app that can do all four, as the cable's row reads.
+typedef struct { const char *id, *name, *engine, *machine, *host; uint8_t caps_off; } pod_roster_row_t;
 
 typedef struct {
     pod_model_t model;
@@ -88,6 +90,11 @@ typedef struct {
     uint32_t last_touch_ms;
     char pending_focus[ID_MAX];
     uint32_t pending_focus_ms;
+    // A pick (POD_A_PICK_APP) whose ring is not here yet: the app picked ("" none) and when. Its room opens on the feed that
+    // brings the ring (synced), within POD_LANDING_MS; a new contact, a link drop, an apps frame showing another app and a
+    // host focus that lands end the wait.
+    char landing[CABLE_APP_ID_MAX];
+    uint32_t landing_ms;
     // The software update (see pod_ui_ota): while on, the stack stays as it was and ph_view_ota is what is drawn.
     bool ota, ota_restarting;
     int ota_pct;
@@ -114,6 +121,11 @@ pod_out_t pod_ui_question(pod_ui_t *, const char *id, const char *text);
 pod_out_t pod_ui_sent(pod_ui_t *, const char *id, uint32_t now_ms);
 pod_out_t pod_ui_question_close(pod_ui_t *, const char *id);
 pod_out_t pod_ui_recap(pod_ui_t *, const char *id, const char *recap, bool restore);
+// The `apps` frame and the welcome's apps.switch. A pick waits POD_LANDING_MS for its app's ring; one the daemon ignores
+// leaves Home on the card, and an apps frame that shows another app (or none) ends the wait.
+#define POD_LANDING_MS 5000
+pod_out_t pod_ui_apps(pod_ui_t *, const pod_app_t *rows, int n, const char *shown, uint32_t now_ms);
+pod_out_t pod_ui_apps_switch(pod_ui_t *, bool on);
 
 // The host's focus moved to an agent (cable `focus`): show it (pod_nav_follow). Not while TALK is on top, nor within
 // POD_FOLLOW_QUIET_MS of the user's own touch (they are driving; that focus is dropped). An agent the model does not

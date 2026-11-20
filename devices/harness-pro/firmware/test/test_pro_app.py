@@ -261,7 +261,7 @@ static void setup(void) {
     memset(&R, 0, sizeof R);
     memset(&SC, 0, sizeof SC);
     LIB.n = 0; LIB.ok = true; LIB.supported = true;
-    pod_roster_row_t rows[] = {{"a1", "Alpha", "claude", "mac"}, {"a2", "Bravo", "codex", "mac"}, {"a3", "Charlie", "claude", "mac"}};
+    pod_roster_row_t rows[] = {{"a1", "Alpha", "claude", "mac", NULL, 0}, {"a2", "Bravo", "codex", "mac", NULL, 0}, {"a3", "Charlie", "claude", "mac", NULL, 0}};
     pod_ui_roster(&U, rows, 3);
     cable_swarm_t sw[2] = {{.agents = 2, .panes = 2}, {.agents = 1, .panes = 1}};
     snprintf(sw[0].id, sizeof sw[0].id, "s0"); snprintf(sw[0].name, sizeof sw[0].name, "Backend");
@@ -419,7 +419,7 @@ static void prev_and_back_from_talking_abort(void) {
     CHECK(top() == POD_V_TABS && U.nav.depth == 1);
     to_talk();
     // The agent leaves the roster while talking: sync pops Talking and asks for the abort, once.
-    pod_roster_row_t rows[] = {{"a2", "Bravo", "codex", "mac"}, {"a3", "Charlie", "claude", "mac"}};
+    pod_roster_row_t rows[] = {{"a2", "Bravo", "codex", "mac", NULL, 0}, {"a3", "Charlie", "claude", "mac", NULL, 0}};
     expect(pod_ui_roster(&U, rows, 2), POD_FX_VOICE_ABORT, "a1");
     CHECK(!pod_ui_talking(&U));
     CHECK(pod_ui_link(&U, true).fx == POD_FX_NONE);
@@ -638,7 +638,7 @@ static void pet_clock(void) {
 // Wake at the pet's next step, but never later than another animation on the screen needs.
 static void pet_wakes_at_next_step(void) {
     pro_app_test_reset();
-    pod_roster_row_t rows[] = {{"m1", "Muse", "muse", "mac"}, {"c1", "Codex", "codex", "mac"}, {"x1", "Cursor", "cursor", "mac"}};
+    pod_roster_row_t rows[] = {{"m1", "Muse", "muse", "mac", NULL, 0}, {"c1", "Codex", "codex", "mac", NULL, 0}, {"x1", "Cursor", "cursor", "mac", NULL, 0}};
     pod_ui_roster(&U, rows, 3);
     pro_app_link(true, "mac");
     now = 5000;
@@ -685,7 +685,7 @@ static void roster_after_swarms_rebuilds_tabs(void) {
     members.count[0] = 1; snprintf(members.id[0][0], ID_MAX, "a1");
     pod_ui_swarms(&U, sw, 1, &members, "s0", NULL, 0);
     CHECK(U.model.tabs[0].agent[0] == -1);
-    pod_roster_row_t rows[] = {{"a1", "Alpha", "claude", "mac"}};
+    pod_roster_row_t rows[] = {{"a1", "Alpha", "claude", "mac", NULL, 0}};
     pod_ui_roster(&U, rows, 1);
     CHECK(U.model.tabs[0].agent[0] == 0);
     // An older daemon: no members at all. The tab still counts its agents.
@@ -717,7 +717,7 @@ static void recap_flips_to_agent_when_work_starts(void) {
 // Each frame must reach the model as a change, and the same frame twice must not.
 static void moved_agent_reaches_the_model(void) {
     pro_app_test_reset();
-    pod_roster_row_t rows[] = {{"a1", "Alpha", "claude", "mac"}, {"a2", "Bravo", "codex", "mac"}, {"a3", "Charlie", "claude", "mac"}};
+    pod_roster_row_t rows[] = {{"a1", "Alpha", "claude", "mac", NULL, 0}, {"a2", "Bravo", "codex", "mac", NULL, 0}, {"a3", "Charlie", "claude", "mac", NULL, 0}};
     pod_ui_roster(&U, rows, 3);
     cable_swarm_t sw[2] = {{.agents = 2, .panes = 2}, {.agents = 1, .panes = 1}};
     snprintf(sw[0].id, sizeof sw[0].id, "s0"); snprintf(sw[0].name, sizeof sw[0].name, "Backend");
@@ -757,7 +757,7 @@ static void moved_agent_reaches_the_model(void) {
 // Tab B's agents are only in the library: the roster (agents.*) holds tab A's.
 static void library_fills_other_tabs(void) {
     pro_app_test_reset();
-    pod_roster_row_t rows[] = {{"a1", "Alpha", "claude", "mac"}, {"a2", "Bravo", "codex", "mac"}};
+    pod_roster_row_t rows[] = {{"a1", "Alpha", "claude", "mac", NULL, 0}, {"a2", "Bravo", "codex", "mac", NULL, 0}};
     pod_ui_roster(&U, rows, 2);
     cable_swarm_t sw[2] = {{.agents = 2, .panes = 2}, {.agents = 2, .panes = 2}};
     snprintf(sw[0].id, sizeof sw[0].id, "s0"); snprintf(sw[0].name, sizeof sw[0].name, "Backend");
@@ -1086,8 +1086,8 @@ static void follow_waits_out_the_users_touch(void) {
 static void follow_pends_until_the_agent_arrives(void) {
     setup();
     now += 5000;
-    pod_roster_row_t rows[] = {{"a1", "Alpha", "claude", "mac"}, {"a2", "Bravo", "codex", "mac"}, {"a3", "Charlie", "claude", "mac"},
-                               {"a9", "Zeta", "codex", "mac"}};
+    pod_roster_row_t rows[] = {{"a1", "Alpha", "claude", "mac", NULL, 0}, {"a2", "Bravo", "codex", "mac", NULL, 0}, {"a3", "Charlie", "claude", "mac", NULL, 0},
+                               {"a9", "Zeta", "codex", "mac", NULL, 0}};
     pod_ui_focus(&U, "a9", now);
     CHECK(U.nav.depth == 1 && !pod_ui_take_changed(&U));
     pod_ui_turn(&U, "a1", "activity", "x", 1, now + 2000);    // other feeds do not apply it
@@ -1120,8 +1120,8 @@ static void feed_swarms(const char *selected, const cable_tile_t *tiles, int nti
     pod_ui_swarms(&U, sw, 2, &FM, selected, tiles, ntiles);
 }
 static void feed_roster_of_tab(int tab) {   // agents.* is the window's tab
-    pod_roster_row_t r0[] = {{"a1", "Alpha", "claude", "mac"}, {"a2", "Bravo", "codex", "mac"}};
-    pod_roster_row_t r1[] = {{"a3", "Charlie", "claude", "mac"}};
+    pod_roster_row_t r0[] = {{"a1", "Alpha", "claude", "mac", NULL, 0}, {"a2", "Bravo", "codex", "mac", NULL, 0}};
+    pod_roster_row_t r1[] = {{"a3", "Charlie", "claude", "mac", NULL, 0}};
     if (tab == 0) pod_ui_roster(&U, r0, 2); else pod_ui_roster(&U, r1, 1);
 }
 static void library_all(void) {
@@ -1336,7 +1336,7 @@ static void offline_member_through_the_glue(void) {
     const pod_agent_t *far = pod_model_find(&U.model, "far");
     CHECK(far && far->state == POD_OFFLINE);
     // A roster refresh and a library sweep that do not list it do not drop it (the glue rebuilds the tabs from the retained frame).
-    pod_roster_row_t rows[] = {{"a1", "Alpha", "claude", "mac"}, {"a2", "Bravo", "codex", "mac"}};
+    pod_roster_row_t rows[] = {{"a1", "Alpha", "claude", "mac", NULL, 0}, {"a2", "Bravo", "codex", "mac", NULL, 0}};
     pod_ui_roster(&U, rows, 2);
     library_all();
     CHECK(pod_model_find(&U.model, "far") != NULL);

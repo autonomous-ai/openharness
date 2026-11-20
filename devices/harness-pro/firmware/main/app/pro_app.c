@@ -338,7 +338,7 @@ void pro_app_agents(const pro_agent_row_t *rows, int n, bool machine_view, bool 
             if (!strcmp(s_rows[k].id, r->id)) dup = true;
         if (dup) continue;
         s_rows[m] = (pod_roster_row_t){r->id, r->name && r->name[0] ? r->name : r->id, r->engine ? r->engine : "",
-                                       r->machine ? r->machine : ""};
+                                       r->machine ? r->machine : "", r->host, r->caps_off};
         copy_cut(s_info[m].id, ID_MAX, r->id);
         // An oversize machine id is no id (UH 5579-5740): the agent then has no machine to gate on.
         if (r->machine_id && strnlen(r->machine_id, ID_MAX) < ID_MAX) copy_cut(s_info[m].machine_id, ID_MAX, r->machine_id);

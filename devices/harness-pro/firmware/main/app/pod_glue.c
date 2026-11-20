@@ -58,17 +58,19 @@ void pod_ui_render(pod_ui_t *u, ht_scene_t *scene, uint32_t now_ms)
 }
 
 static void apply_pending_focus(pod_ui_t *u);
+static void land(pod_ui_t *u);
 static pod_out_t synced(pod_ui_t *u)
 {
     pod_out_t o = pod_nav_sync(&u->nav, &u->model);
     apply_pending_focus(u);
+    land(u);   // after the pending focus: a focus on one of the ring's agents opens that agent, not the ring's first
     return o;
 }
 
 pod_out_t pod_ui_link(pod_ui_t *u, bool up)
 {
     if (up && !u->model.linked) u->sweep.restart = true;
-    if (!up) pod_ui_sweep_abort(u);
+    if (!up) { pod_ui_sweep_abort(u); u->landing[0] = 0; }   // the next link's ring is not this pick's
     if (up && !u->model.linked) {   // a real down -> up transition: the start runs again on this link on swarms this link brings
         u->started = false;
         u->fresh_swarms = false;
@@ -93,9 +95,26 @@ static void rebuild_tabs(pod_ui_t *u)
 pod_out_t pod_ui_roster(pod_ui_t *u, const pod_roster_row_t *rows, int n)
 {
     pod_model_agents_begin(&u->model);
-    for (int i = 0; i < n; i++) pod_model_agent(&u->model, rows[i].id, rows[i].name, rows[i].engine, rows[i].machine);
+    for (int i = 0; i < n; i++) {   // the app and caps before the sync: an app's ring is the agents whose host it is
+        pod_model_agent(&u->model, rows[i].id, rows[i].name, rows[i].engine, rows[i].machine);
+        pod_model_agent_app(&u->model, rows[i].id, rows[i].host, POD_CAPS_ALL & ~rows[i].caps_off);
+    }
     pod_model_agents_end(&u->model);
     rebuild_tabs(u);
+    return synced(u);
+}
+
+pod_out_t pod_ui_apps(pod_ui_t *u, const pod_app_t *rows, int n, const char *shown, uint32_t now_ms)
+{
+    pod_model_clock(&u->model, now_ms);
+    pod_model_apps(&u->model, rows, n, shown);
+    if (strcmp(u->model.app_shown, u->landing)) u->landing[0] = 0;   // the Mac shows another app: the pick's ring is not coming
+    return synced(u);
+}
+
+pod_out_t pod_ui_apps_switch(pod_ui_t *u, bool on)
+{
+    pod_model_apps_switch(&u->model, on);
     return synced(u);
 }
 
@@ -336,6 +355,7 @@ pod_out_t pod_ui_touch(pod_ui_t *u, bool down, int x, int y, uint32_t now_ms, bo
         u->down_ms = now_ms;
         u->touched = true;
         u->last_touch_ms = now_ms;
+        u->landing[0] = 0;   // the person is driving: a ring that lands now opens nothing over them
         u->cancelled = u->dragging = u->hit_valid = u->ban_touch = false;
         memset(&u->hit, 0, sizeof u->hit);   // a DOWN on nothing carries nothing over from the last contact
         if (u->hands_free && !pod_ui_talking(u)) u->hands_free = false;   // Talk ended some other way
@@ -506,6 +526,10 @@ pod_out_t pod_ui_touch(pod_ui_t *u, bool down, int x, int y, uint32_t now_ms, bo
     } else if (u->hit.id[0] && (u->hit.action == POD_A_OPEN_TAB || u->hit.action == POD_A_ENTER_TAB)) {
         arg = -1;
         for (int i = 0; i < u->model.tab_count; i++) if (!strcmp(u->model.tabs[i].id, u->hit.id)) { arg = i; break; }
+    } else if (u->hit.id[0] && u->hit.action == POD_A_PICK_APP) {
+        arg = -1;
+        for (int i = 0; i < u->model.app_count; i++)
+            if (!strcmp(u->model.apps[i].id, u->hit.id) && u->model.apps[i].count) { arg = i; break; }
     }
     if (arg == -1 && u->hit.id[0]) { *changed = true; return none; }   // what it named is gone: redraw, open nothing
     if (u->hit.action == POD_A_TALK && u->nav.depth) {   // an agent of an offline machine cannot be talked to: say why
@@ -525,6 +549,10 @@ pod_out_t pod_ui_touch(pod_ui_t *u, bool down, int x, int y, uint32_t now_ms, bo
     pod_out_t out = pod_nav_act(&u->nav, &u->model, u->hit.action, arg, now_ms);
     *changed = true;
     if (u->hands_free && out.fx == POD_FX_VOICE_END) u->hands_free = false;   // sent
+    if (out.fx == POD_FX_APP_PICK && u->nav.depth == 1 && strcmp(out.agent, POD_APP_HARNESS)) {   // the ring is not here yet: wait for it
+        pod_copy_str(u->landing, sizeof u->landing, out.agent);
+        u->landing_ms = now_ms;
+    }
     return out;
 }
 
@@ -729,6 +757,7 @@ static bool follow_now(pod_ui_t *u, const char *id, uint32_t now_ms)
         u->started = true;   // a focus that landed: the start never overrides it
         u->followed = true;
         u->followed_ms = now_ms;
+        u->landing[0] = 0;   // the host chose the agent: a ring landing later does not move off it
     }
     return true;
 }
@@ -743,6 +772,18 @@ static void apply_pending_focus(pod_ui_t *u)
     memcpy(id, u->pending_focus, ID_MAX);
     u->pending_focus[0] = 0;
     follow_now(u, id, now_ms);
+}
+
+// The picked app's ring is here (the app shown, with agents): its first agent's room, with no agent.open, since the pick
+// already brought the app forward. Run by every feed, so whichever brings the ring last (apps or the roster) opens it.
+static void land(pod_ui_t *u)
+{
+    if (!u->landing[0]) return;
+    // Signed: the touch does not move the model's clock, so it can still be behind the tap's lift.
+    if ((int32_t)(u->model.clock_ms - u->landing_ms) >= POD_LANDING_MS) { u->landing[0] = 0; return; }   // the daemon ignored it
+    if (!pod_nav_open_app(&u->nav, &u->model, u->landing)) return;
+    u->landing[0] = 0;
+    u->dirty = true;
 }
 
 pod_out_t pod_ui_focus(pod_ui_t *u, const char *agent_id, uint32_t now_ms)

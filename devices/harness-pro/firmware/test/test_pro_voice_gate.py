@@ -239,7 +239,7 @@ static void situation(void) {
     pro_voice_close(); pro_voice_link_lost();   // the real state machine starts clean, like a fresh boot
     memset(&REC, 0, sizeof REC); REC.init_ok = true;
     LOCK_DEPTH = 0;
-    pod_roster_row_t rows[] = {{"a1", "Alpha", "claude", "Mac"}, {"a2", "Bravo", "codex", "Mac"}, {"a3", "Charlie", "claude", "Box"}};
+    pod_roster_row_t rows[] = {{"a1", "Alpha", "claude", "Mac", NULL, 0}, {"a2", "Bravo", "codex", "Mac", NULL, 0}, {"a3", "Charlie", "claude", "Box", NULL, 0}};
     pod_ui_roster(&U, rows, 3);
     cable_swarm_t sw[1] = {{.agents = 2, .panes = 2}};
     snprintf(sw[0].id, sizeof sw[0].id, "s0"); snprintf(sw[0].name, sizeof sw[0].name, "Backend");
