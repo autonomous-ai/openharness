@@ -32,7 +32,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex, MutexGuard};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use alacritty_terminal::term::TermMode;
 use base64::Engine;
@@ -65,6 +65,20 @@ fn held_by(start_command: &str, token: &str) -> bool {
         && !start_command.contains(NATIVE_LAUNCH_MARKER)
         && start_command.contains("harness-held")
         && start_command.contains(token)
+}
+
+/// How long an op took, by its name alone: no pane, command, path or error, so the log
+/// shows a slow start without anyone's content.
+fn took_line(op: &str, took: Duration) -> String {
+    format!("{op} took {} ms", took.as_millis())
+}
+
+/// Runs `f` and logs how long it took, whether it succeeded or failed.
+fn timed<T>(op: &str, f: impl FnOnce() -> T) -> T {
+    let started = Instant::now();
+    let result = f();
+    log::info!("{}", took_line(op, started.elapsed()));
+    result
 }
 
 /// A `kill`'s `graceMs`, held to `MAX_GRACE`.
@@ -525,7 +539,7 @@ impl Panes {
                 after_exit,
                 clear_inherited,
                 seed,
-            } => {
+            } => timed("create", || {
                 let cleared = clearable(clear_inherited);
                 // A child given no directory starts in the user's home (`Pane::spawn`).
                 let number = lock(&self.ids)
@@ -568,7 +582,7 @@ impl Panes {
                     },
                 );
                 reply(json!({ "pane": id }))
-            }
+            }),
             Op::Kill { pane, grace_ms } => {
                 let entry = {
                     let mut table = lock(&self.table);
@@ -746,16 +760,18 @@ impl Panes {
                 clear_env,
                 clear_inherited,
                 after_exit,
-            } => self.respawn(
-                pane,
-                command,
-                cwd,
-                env,
-                expected_held_token,
-                clear_env,
-                clear_inherited,
-                after_exit,
-            ),
+            } => timed("respawn", || {
+                self.respawn(
+                    pane,
+                    command,
+                    cwd,
+                    env,
+                    expected_held_token,
+                    clear_env,
+                    clear_inherited,
+                    after_exit,
+                )
+            }),
             Op::SetEngineExit { pane, status } => {
                 let mut table = lock(&self.table);
                 let entry = table
