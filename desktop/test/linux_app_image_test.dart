@@ -87,14 +87,15 @@ void main() {
   });
 
   // The Desktop Entry spec reserves % for field codes: GLib would read %o in
-  // 50%off as one and start another path.
+  // 50%off as one and start another path. Windows skips: its temporary
+  // folder's backslashes are quoted.
   test('a % in the path is written %% for the launcher', () async {
     await launch('$home/50%off/Harness.AppImage');
     expect(
       entry().readAsStringSync(),
       contains('Exec=$home/50%%off/Harness.AppImage %u\n'),
     );
-  });
+  }, skip: Platform.isWindows);
 
   test("an entry today's Desktop wrote with a single % is its own, and is "
       'written again with %%', () async {
@@ -109,7 +110,7 @@ void main() {
       entry().readAsStringSync(),
       contains('Exec=$home/50%%off/Harness.AppImage %u\n'),
     );
-  });
+  }, skip: Platform.isWindows);
 
   test('Exec= reads back every path it was written with', () {
     for (final path in [
