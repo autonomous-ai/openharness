@@ -236,7 +236,10 @@ def flutter_test_folder(check, root):
     # shared impellerc outputs, a silent Vulkan-only fallback and an mtime-only rebuild check left ink_sparkle.frag
     # Vulkan-only and 84 desktop test files failing. Such checks hold their folder; every other check still overlaps.
     argv = check["argv"]
-    if Path(argv[0]).name in ("flutter", "flutter.bat") and argv[1:2] == ["test"]:
+    # The repo's desktop test commands (docs/validation-and-release.md) run `flutter test` in desktop/ themselves.
+    if any(Path(arg).name == "test-desktop.py" for arg in argv) or (Path(argv[0]).name == "make" and "desktop-test" in argv[1:]):
+        return (root / "desktop").resolve()
+    if Path(argv[0]).name == "flutter" and next((arg for arg in argv[1:] if not arg.startswith("-")), None) == "test":
         return (root / check.get("cwd", ".")).resolve()
     return None
 
