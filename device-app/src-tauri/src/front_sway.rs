@@ -22,6 +22,7 @@ pub const PAYLOAD_MAX: usize = 16 * 1024 * 1024;
 const MAGIC: &[u8; 6] = b"i3-ipc";
 const SUBSCRIBE: u32 = 2;
 const GET_TREE: u32 = 4;
+const WORKSPACE_EVENT: u32 = 0x8000_0000;
 const WINDOW_EVENT: u32 = 0x8000_0003;
 
 /// The exe name of the process whose window is focused: once at start, then on each focus change.
@@ -79,10 +80,24 @@ pub fn focused_pid(tree: &[u8]) -> Option<u32> {
     None
 }
 
-/// For a window event: None unless focus moved; then the pid of the container it moved to, None when it has none.
-pub fn focus_pid(event: &[u8]) -> Option<Option<u32>> {
+/// What an event says of the app in front.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Change {
+    /// Focus moved to a window: its pid, None when it has none.
+    Focus(Option<u32>),
+    /// Focus may have left every window, which sway tells in no focus event: the last window on a workspace closed or
+    /// moved away, or a switch to an empty workspace. The tree says where it is.
+    Tree,
+}
+
+/// What an event of `kind` says; None for one that moves no focus (a title, a new workspace).
+pub fn change(kind: u32, event: &[u8]) -> Option<Change> {
     let event: Value = serde_json::from_slice(event).ok()?;
-    (event["change"] == "focus").then(|| pid(&event["container"]))
+    match (kind, event["change"].as_str()?) {
+        (WINDOW_EVENT, "focus") => Some(Change::Focus(pid(&event["container"]))),
+        (WINDOW_EVENT, "close" | "move") | (WORKSPACE_EVENT, "focus") => Some(Change::Tree),
+        _ => None,
+    }
 }
 
 fn pid(node: &Value) -> Option<u32> {
@@ -93,7 +108,8 @@ fn pid(node: &Value) -> Option<u32> {
 pub fn follow(mut stream: impl Read + Write, proc_root: &Path, changed: &dyn Fn(String)) -> Stop {
     let tell = |pid: Option<u32>| changed(pid.and_then(|pid| exe_name(proc_root, pid)).unwrap_or_default());
     // Subscribed before the tree is asked for, so a change between the two is not missed.
-    let subscribed = stream.write_all(&message(SUBSCRIBE, br#"["window"]"#)).and_then(|()| read_message(&mut stream));
+    let subscribed =
+        stream.write_all(&message(SUBSCRIBE, br#"["window","workspace"]"#)).and_then(|()| read_message(&mut stream));
     let Ok((SUBSCRIBE, answer)) = subscribed else { return Stop::NotFollowed };
     if !serde_json::from_slice::<Value>(&answer).is_ok_and(|answer| answer["success"] == true) {
         return Stop::NotFollowed;
@@ -106,12 +122,15 @@ pub fn follow(mut stream: impl Read + Write, proc_root: &Path, changed: &dyn Fn(
         match read_message(&mut stream) {
             Err(_) => return Stop::Ended,
             Ok((GET_TREE, tree)) => tell(focused_pid(&tree)),
-            Ok((WINDOW_EVENT, event)) => {
-                if let Some(pid) = focus_pid(&event) {
-                    tell(pid);
+            Ok((kind, event)) => match change(kind, &event) {
+                Some(Change::Focus(pid)) => tell(pid),
+                Some(Change::Tree) => {
+                    if stream.write_all(&message(GET_TREE, b"")).is_err() {
+                        return Stop::Ended;
+                    }
                 }
-            }
-            Ok(_) => {}
+                None => {}
+            },
         }
     }
 }
@@ -170,8 +189,6 @@ mod tests {
     /// A window whose process is gone (or is another person's).
     const GONE: &str =
         r#"{"id":8,"type":"con","app_id":"foot","pid":999,"focused":true,"nodes":[],"floating_nodes":[]}"#;
-
-    const WORKSPACE_EVENT: u32 = 0x8000_0000;
 
     /// A workspace event of sway's: `change` and the workspace it is about.
     fn workspace(change: &str) -> String {
@@ -326,6 +343,26 @@ mod tests {
             let _ = sway.write_all(&other);
         });
         assert_eq!((told, stop), (vec![], Stop::Ended));
+    }
+
+    #[test]
+    fn only_a_focus_close_or_move_of_a_window_or_a_workspaces_focus_is_a_change() {
+        assert_eq!(change(WINDOW_EVENT, event("focus", CODE).as_bytes()), Some(Change::Focus(Some(202))));
+        for tree in [event("close", FOOT), event("move", FOOT)] {
+            assert_eq!(change(WINDOW_EVENT, tree.as_bytes()), Some(Change::Tree), "{tree}");
+        }
+        assert_eq!(change(WORKSPACE_EVENT, workspace("focus").as_bytes()), Some(Change::Tree));
+        for (kind, other) in [
+            (WINDOW_EVENT, event("title", CODE)),
+            (WINDOW_EVENT, event("new", CODE)),
+            (WORKSPACE_EVENT, workspace("init")),
+            (WORKSPACE_EVENT, workspace("empty")),
+            // A focus told on another subscription's kind.
+            (0x8000_0001, event("focus", CODE)),
+            (WINDOW_EVENT, "no json".into()),
+        ] {
+            assert_eq!(change(kind, other.as_bytes()), None, "{other}");
+        }
     }
 
     #[test]
