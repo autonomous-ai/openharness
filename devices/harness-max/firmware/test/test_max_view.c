@@ -6,7 +6,7 @@
 #include "max_ui_motion.h"
 #include "pod/pod_draw.h"
 
-enum { K_TEXT = 1, K_IMAGE = 3 };   // pro_canvas.c's PRO_TEXT, PRO_IMAGE
+enum { K_TEXT = 1, K_IMAGE = 3, K_POD_CELL = 16 };   // pro_canvas.c's PRO_TEXT, PRO_IMAGE; pod_draw.h's POD_CELL
 #define T0 1000000u
 #define ELLIPSIS "\xe2\x80\xa6"
 
@@ -329,7 +329,7 @@ static void test_overview(void)
     // The shown app, how many agents, the badge (2 unread), the chips, the tasks.
     CHECK(word("Harness") && word("5 agents") && word("2") && word("Needs you") && word("Infusing"));
     CHECK(text_run("Which database") && text_run("Editing the touch driver") && !word("Done"));
-    CHECK(max_motion_ms(T0) == MAX_LOOP_FRAME_MS);   // the cells' pets hold one frame; their rails and chips loop
+    CHECK(max_motion_ms(T0) <= MAX_LOOP_FRAME_MS);   // the rails and chips loop, the cells' pets play
     // Long and Vietnamese names cut with an ellipsis, inside their cells.
     const ht_run_t *cut = NULL;
     for (int i = 0; i < S.count; i++)
@@ -669,6 +669,54 @@ static void test_ambient(void)
     CHECK(word("Not connected") && HITS_ARE(MAX_HIT_WAKE) && max_motion_ms(T0) == step);
 }
 
+// A cell's pet plays its state's scene at rest, as V3's PetView (the owner, 20 Nov: the bar looked still): an Overview of
+// resting agents, where nothing loops, wakes for its pets' next step and draws them anew there. Logos hold still and
+// let it sleep.
+static const ht_run_t *pet_in(int cell)
+{
+    for (int k = 0; k < S.count; k++) {
+        const ht_rect_t b = ht_run_bounds(&S.runs[k]);
+        if (S.runs[k].pro_kind == K_POD_CELL && b.x >= max_m.cell_box[cell].x &&
+            b.x + b.w <= max_m.cell_box[cell].x + max_m.cell_box[cell].w)
+            return &S.runs[k];
+    }
+    return NULL;
+}
+static void test_cell_pets_play(void)
+{
+    max_ui_reset();
+    max_ui_link(true, "MacBook Pro", T0);
+    const pro_agent_row_t rows[] = {{"a", "alpha", "claude", "m1", "MacBook Pro", NULL, NULL},
+                                    {"b", "bravo", "claude", "m1", "MacBook Pro", NULL, NULL},
+                                    {"c", "charlie", "claude", "m1", "MacBook Pro", NULL, NULL}};
+    max_ui_agents(rows, 3, T0);
+    show(MAX_VIEW_OVERVIEW, NULL);
+    render_at(T0);
+    CHECK(word("Resting") && max_m.cell_hits == 3);
+    const uint32_t beat = max_pet_next_ms("claude", max_pet_scene(max_find("a"), false), T0);
+    CHECK(beat < MAX_WAKE_MS && max_motion_ms(T0) == beat);
+    const ht_run_t *pet = pet_in(0);
+    CHECK(pet != NULL);
+    const ht_run_t first = *pet;   // the frame and its zoom live in the run (pod_draw.h)
+    // On its next steps the pet is drawn anew, another frame of its scene at least once.
+    bool moved = false;
+    uint32_t t = T0;
+    for (int i = 0; i < 40 && !moved; i++) {
+        t += max_motion_ms(t);
+        render_at(t);
+        const ht_run_t *now = pet_in(0);
+        CHECK(now != NULL);
+        moved = memcmp(&first, now, sizeof first) != 0;
+    }
+    CHECK(moved);
+    // Logos hold still: nothing on the glass moves, the render task sleeps.
+    set_engine("a", "gemini");
+    set_engine("b", "gemini");
+    set_engine("c", "gemini");
+    render_at(T0);
+    CHECK(max_motion_ms(T0) == MAX_WAKE_MS);
+}
+
 // ---- the apps' icons ----
 
 // Whether app's own icon is drawn at size px, with no letter over it.
@@ -776,7 +824,8 @@ static void test_done_note(void)
     check_glass();
     check_hits();
     check_budget();
-    CHECK(max_motion_ms(T0) == MAX_LOOP_FRAME_MS);   // its pet holds one frame; the cells' rails and chips loop
+    // Its pet plays as the cells' do, the cells' rails and chips loop: the render task wakes for the soonest.
+    CHECK(max_motion_ms(T0) <= MAX_LOOP_FRAME_MS && max_motion_ms(T0) <= max_pet_next_ms("muse", POD_SCENE_REST, T0));
     // A short one: its card fits its words.
     max_find("c")->name[0] = 'x';
     max_find("c")->name[1] = 0;
@@ -960,6 +1009,7 @@ int main(void)
     test_inbox();
     test_apps();
     test_ambient();
+    test_cell_pets_play();
     test_app_icons();
     test_toast();
     test_done_note();

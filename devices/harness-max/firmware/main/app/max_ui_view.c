@@ -650,15 +650,16 @@ static done_t done_layout(const max_agent_t *a)
     return d;
 }
 
-// The pet, still, then "name is done · what it said" on one row, the name in the done green, on a card in the toast's
-// colours, `slide` px right of its place; the pet fades by its alpha as the rest by its colours.
-static void done_note(ht_scene_t *s, const max_agent_t *a, const done_t *d, int slide)
+// The pet resting (it plays, as V3's PetView), then "name is done · what it said" on one row, the name in the done green,
+// on a card in the toast's colours, `slide` px right of its place; the pet fades by its alpha as the rest by its colours.
+static void done_note(ht_scene_t *s, const max_agent_t *a, const done_t *d, int slide, uint32_t now_ms)
 {
     const max_box_t c = {(int16_t)(d->card.x + slide), d->card.y, d->card.w, d->card.h};
     max_box(s, c.x, c.y, c.w, c.h, DONE_H / 3, 1, RIM, CARD);
     const int cy = c.y + c.h / 2, from = s->count;
     max_pet(s, a->engine, POD_SCENE_REST, c.x + DONE_PAD_L + DONE_PET_W / 2, cy + DONE_PET_H / 2, DONE_PET_W / 2,
-            DONE_PET_H, CARD, 0, true);
+            DONE_PET_H, CARD, now_ms, false);
+    max_motion(now_ms, max_pet_next_ms(a->engine, POD_SCENE_REST, now_ms));
     max_layer_pet(s, from, CARD, 0, s_keep);
     int x = c.x + DONE_PAD_L + DONE_PET_W + DONE_GAP;
     x += max_text(s, x, cy, d->name_w, &ph_sb_22, DONE, a->name);
@@ -753,7 +754,7 @@ void max_ui_render(ht_scene_t *s, uint32_t now_ms)
         }
         if (done_v && !form) {
             fade_by(done_v);
-            done_note(s, &done_a, &d, SLIDE * (MAX_ONE - done_v) / MAX_ONE);
+            done_note(s, &done_a, &d, SLIDE * (MAX_ONE - done_v) / MAX_ONE, now_ms);
         }
         if (notice_v) {
             fade_by(notice_v);

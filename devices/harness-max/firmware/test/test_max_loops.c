@@ -179,23 +179,40 @@ static void test_rail(void)
     CHECK(run_at(K_GRAD, b->x, 0)->fg == ht_rgb(max_mix(ACCENT, GROUND, 8)) && !run_at(K_GRAD, cell_of("c")->x, 0));
 }
 
-// The pet over the breathing glow keeps the ground it was baked on: no new bakes as the glow moves.
+// The pet over the breathing glow keeps the ground it was baked on. The cells' pets play (max_ui_overview.c): a frame
+// that draws them as the last did bakes nothing anew as the glow moves, and a new frame of theirs bakes at most once
+// each.
+static int cell_pets(ht_run_t *pets, int cap)
+{
+    int n = 0;
+    for (int i = 0; i < S.count && n < cap; i++)
+        if (S.runs[i].pro_kind == 16) pets[n++] = S.runs[i];   // pod_draw.h POD_CELL
+    return n;
+}
 static void test_pet_still(void)
 {
     three();
     render(T0 + 33);
-    const unsigned bakes = pod_cell_bakes();
-    ht_run_t pets[8];
-    int n = 0;
-    for (int i = 0; i < S.count && n < 8; i++)
-        if (S.runs[i].pro_kind == 16) pets[n++] = S.runs[i];
+    ht_run_t pets[8], now[8];
+    int n = cell_pets(pets, 8);
     CHECK(n >= 3);
+    unsigned bakes = pod_cell_bakes();
+    int held = 0, moved = 0;
     for (uint32_t t = 66; t <= 1200; t += 33) {
         render(T0 + t);
-        for (int i = 0, k = 0; i < S.count; i++)
-            if (S.runs[i].pro_kind == 16) CHECK(k < n && !memcmp(&S.runs[i], &pets[k++], sizeof pets[0]));
+        const int m = cell_pets(now, 8);
+        if (m == n && !memcmp(now, pets, (size_t)n * sizeof pets[0])) {
+            CHECK(pod_cell_bakes() == bakes);
+            held++;
+        } else {
+            CHECK(pod_cell_bakes() <= bakes + (unsigned)m);
+            moved++;
+        }
+        memcpy(pets, now, sizeof now);
+        n = m;
+        bakes = pod_cell_bakes();
     }
-    CHECK(pod_cell_bakes() == bakes);
+    CHECK(held > 0 && moved > 0);
 }
 
 // ---- the frame clock ----
@@ -211,18 +228,31 @@ static uint32_t demo_pets_step(uint32_t t)
     return ms;
 }
 
+// When the cells' pets next move (they play at rest, max_ui_overview.c): the first of their next steps.
+static uint32_t cells_step(uint32_t t)
+{
+    uint32_t ms = MAX_WAKE_MS;
+    for (int i = 0; i < max_m.cell_hits; i++) {
+        const max_agent_t *a = max_find(max_m.cell_id[i]);
+        const uint32_t step = a ? max_pet_next_ms(a->engine, max_pet_scene(a, false), t) : MAX_WAKE_MS;
+        if (step < ms) ms = step;
+    }
+    return ms;
+}
+
 static void test_clock(void)
 {
-    // Something loops: a frame every MAX_LOOP_FRAME_MS.
+    // Something loops: a frame every MAX_LOOP_FRAME_MS, or sooner at a cell's pet's next step.
     three();
-    CHECK(max_motion_ms(T0) == MAX_LOOP_FRAME_MS && max_ui_next_wake_ms(T0) <= MAX_LOOP_FRAME_MS);
-    CHECK(!max_ui_tick(T0 + 5) && max_ui_tick(T0 + MAX_LOOP_FRAME_MS));
-    // Nothing that loops: the render task sleeps.
+    const uint32_t first = cells_step(T0) < MAX_LOOP_FRAME_MS ? cells_step(T0) : MAX_LOOP_FRAME_MS;
+    CHECK(max_motion_ms(T0) == first && max_ui_next_wake_ms(T0) <= first);
+    CHECK((first <= 5 || !max_ui_tick(T0 + 5)) && max_ui_tick(T0 + first));
+    // Nothing that loops: the render task wakes only for the cells' pets' next step.
     linked(ABCDE, 3);
     max_show(MAX_VIEW_OVERVIEW);
     max_m.idle_from = T0;
     render(T0);
-    CHECK(max_motion_ms(T0) == MAX_WAKE_MS);
+    CHECK(cells_step(T0) > MAX_LOOP_FRAME_MS && cells_step(T0) < MAX_WAKE_MS && max_motion_ms(T0) == cells_step(T0));
     // Ambient loops nothing, whatever the agents do: the render task wakes only for its pets' next step.
     three();
     max_show(MAX_VIEW_AMBIENT);
@@ -302,7 +332,7 @@ static void test_ambient_pets(void)
 }
 
 // Between two loop frames the glass changes only where something loops: a working agent's rail and dot, an asking
-// agent's glow, rail and chip.
+// agent's glow, rail and chip, and the cells' pets that took a step (they play, max_ui_overview.c).
 static void test_damage(void)
 {
     static ht_scene_t before;
@@ -316,7 +346,10 @@ static void test_damage(void)
     before = S;
     render(T0 + 1023);
     ht_damage(&before, &S, &d);
-    CHECK(d.count >= 1 && d.pixels > 0 && d.pixels <= (uint32_t)(CELL_W * RAIL_H + 64 * DY(34)));
+    uint32_t pets_px = 0;
+    for (int i = 0; i < S.count; i++)
+        if (S.runs[i].pro_kind == 16) pets_px += (uint32_t)S.runs[i].w * (uint32_t)S.runs[i].pro_height;
+    CHECK(d.count >= 1 && d.pixels > 0 && d.pixels <= (uint32_t)(CELL_W * RAIL_H + 64 * DY(34)) + pets_px);
     // Every frame round the loops, the light coming onto its rail and going off it too: the runs keep their places.
     three();
     for (uint32_t t = 16; t <= 3200; t += 16) {
@@ -467,7 +500,7 @@ static void test_fades(void)
     CHECK(r->bitmap.alpha[FADE_W - 1] == (int)lround(.9 * 255 * (1 - .5 / FADE_W)) && r->bitmap.alpha[0] <= 2);
     CHECK(r->bitmap.alpha[FADE_W / 2] == r->bitmap.alpha[FADE_W / 2 + FADE_W * 200]);   // the same all the way down
     CHECK(pixel(ROW_X + ROW_W - 10, 2) == ht_rgb(IDLE_RAIL));   // under the rails
-    CHECK(max_motion_ms(T0) == MAX_WAKE_MS);
+    CHECK(max_motion_ms(T0) == cells_step(T0));   // the fades hold still: only the cells' pets play
     // The finger drags the row 100 px on: the left end comes in over 250 ms.
     max_ui_touch(true, 1200, 240, T0 + 1000);
     max_ui_touch(true, 1100, 240, T0 + 1010);
@@ -517,7 +550,7 @@ static void test_notice(void)
     r = text_run("Saved again");
     CHECK(r && near565(r->fg, mix(FG, GROUND, 1 - ease(.5))) && r->y > rest.y);
     render(T0 + 3800);
-    CHECK(!text_run("Saved again") && max_motion_ms(T0 + 3800) == MAX_WAKE_MS);
+    CHECK(!text_run("Saved again") && max_motion_ms(T0 + 3800) == cells_step(T0 + 3800));   // gone: the pets play on
 }
 
 static bool hit(max_hit_kind_t kind)

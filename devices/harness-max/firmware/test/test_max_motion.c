@@ -55,6 +55,19 @@ static void row_of(int n)
     render(T0 - 4000);
 }
 
+// The soonest next step of the pets of the cells as drawn, which play at rest (max_ui_overview.c, as V3's PetView):
+// what a settled row wakes the render task for. MAX_WAKE_MS with none.
+static uint32_t pets_beat(uint32_t now)
+{
+    uint32_t soonest = MAX_WAKE_MS;
+    for (int i = 0; i < max_m.cell_hits; i++) {
+        const max_agent_t *a = max_find(max_m.cell_id[i]);
+        const uint32_t b = a ? max_pet_next_ms(a->engine, max_pet_scene(a, false), now) : MAX_WAKE_MS;
+        if (b < soonest) soonest = b;
+    }
+    return soonest;
+}
+
 // Flutter's Cubic.transform (its halving to within .001) and Interval, as doubles give them, in Q16.
 static void test_curves(void)
 {
@@ -148,7 +161,7 @@ static void test_closing(void)
     CHECK(width("c", T0 + 1420) == CELL_W && scroll(T0 + 1420) == SLIVER_W && max_row_moving(T0 + 1420));
     CHECK(near(scroll(T0 + 1630), 489, 1) && scroll(T0 + 1840) == CELL_W);
     frames(T0 + 1420, T0 + 2100);
-    CHECK(!max_row_moving(T0 + 2100) && max_motion_ms(T0 + 2100) == MAX_WAKE_MS);
+    CHECK(!max_row_moving(T0 + 2100) && max_motion_ms(T0 + 2100) == pets_beat(T0 + 2100));
     // Rendered late, the way back still runs from when the move ended.
     row_of(5);
     max_open("c");
@@ -184,12 +197,13 @@ static void test_fresh_page(void)
     CHECK(max_tween_at(&look("e")->panel, T0 + 10) == MAX_ONE && max_tween_at(&look("d")->dim, T0 + 10) == MAX_ONE);
 }
 
-// While anything in the row moves the render task gets a frame every MAX_ROW_FRAME_MS, by the clock; settled, it
-// sleeps (the cells' pets hold one frame).
+// While anything in the row moves the render task gets a frame every MAX_ROW_FRAME_MS, by the clock; settled, only at
+// its cells' pets' next step.
 static void test_frame_clock(void)
 {
     row_of(5);
-    CHECK(max_motion_ms(T0 - 4000) == MAX_WAKE_MS && !max_ui_tick(T0 - 3999));
+    const uint32_t beat = pets_beat(T0 - 4000);
+    CHECK(beat > MAX_ROW_FRAME_MS && max_motion_ms(T0 - 4000) == beat && !max_ui_tick(T0 - 3999));
     max_open("d");
     max_m.dirty = false;
     render(T0);
@@ -201,7 +215,7 @@ static void test_frame_clock(void)
         if (!max_row_moving(t)) {
             // The way back ends 840 ms after the close; a dot lit near its end eases 250 ms more.
             CHECK(t >= T0 + 16 + 2 * MAX_ROW_MS && t <= T0 + 16 + 2 * MAX_ROW_MS + 250 + 16);
-            CHECK(max_motion_ms(t) == MAX_WAKE_MS && max_ui_next_wake_ms(t) > 1000);
+            CHECK(max_motion_ms(t) == pets_beat(t) && max_ui_next_wake_ms(t) == pets_beat(t));
             return;
         }
         CHECK(max_motion_ms(t) == MAX_ROW_FRAME_MS);

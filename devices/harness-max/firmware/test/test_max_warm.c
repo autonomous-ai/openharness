@@ -124,7 +124,9 @@ static void tap(const char *id, uint32_t at)
 
 // The motion a tap on `id` at `at` starts, until it rests: its frames' pixels into hash (as many as `frames`), what it
 // painted and baked, and the agents' edges it worked out on the glass.
-typedef struct { int frames; unsigned painted, baked, edges; uint32_t hash[128]; uint8_t paints[128]; } motion_t;
+// baked_moving: what the frames while the row still moved baked (its last, at rest, draws the cells' pets playing by the
+// clock, max_ui_overview.c: a frame of theirs the glass may not have met yet).
+typedef struct { int frames; unsigned painted, baked, baked_moving, edges; uint32_t hash[128]; uint8_t paints[128]; } motion_t;
 static motion_t motion_at(const char *id, uint32_t at)
 {
     motion_t m = {0};
@@ -132,10 +134,11 @@ static motion_t motion_at(const char *id, uint32_t at)
     tap(id, at);
     for (uint32_t now = at;; now += MAX_ROW_FRAME_MS) {
         CHECK(m.frames < 128);
-        const unsigned p0 = max_layer_painted() + pod_cell_bakes() + max_layer_edges();
+        const unsigned p0 = max_layer_painted() + pod_cell_bakes() + max_layer_edges(), b0 = pod_cell_bakes();
         m.hash[m.frames] = frame(now);
         m.paints[m.frames++] = (uint8_t)(max_layer_painted() + pod_cell_bakes() + max_layer_edges() - p0);
         if (!max_row_moving(now)) break;
+        m.baked_moving += pod_cell_bakes() - b0;
     }
     m.painted = max_layer_painted() - painted;
     m.baked = pod_cell_bakes() - baked;
@@ -227,9 +230,10 @@ static void test_first_frames(void)
 }
 
 // The P4 bench's order (bench_main.c (g)): each tap painted ahead and then tapped a frame off the warming's clock, then
-// tapped again from the same page with all that kept. With room for all its motions, ahead the glass bakes no pet frame:
-// the warming baked each it met, a band at a time, or made an image of it (a pose it did not land on is painted, its
-// frames' bakes found). Again, it bakes nothing. Every frame is the same pixels as cold.
+// tapped again from the same page with all that kept. With room for all its motions, ahead the glass bakes no pet frame
+// while the row moves: the warming baked each it met, a band at a time, or made an image of it (a pose it did not land
+// on is painted, its frames' bakes found); at rest the cells' pets play on by the clock. Again, it bakes nothing. Every
+// frame is the same pixels as cold.
 static void test_after_ahead(void)
 {
     const struct { int n; const char *page, *engine; bool room; } cases[] = {
@@ -247,8 +251,8 @@ static void test_after_ahead(void)
             rest_of(cases[c].n, cases[c].page, cases[c].engine);
             const int steps = warm(T0 - MAX_ROW_FRAME_MS);
             const motion_t ahead = motion(tap);
-            if (cases[c].room && ahead.baked) painted_where(cases[c].page, tap, &ahead, steps);
-            CHECK(!cases[c].room || ahead.baked == 0);
+            if (cases[c].room && ahead.baked_moving) painted_where(cases[c].page, tap, &ahead, steps);
+            CHECK(!cases[c].room || ahead.baked_moving == 0);
             page_of(cases[c].n, cases[c].page, cases[c].engine, true);
             const motion_t again = motion(tap);
             CHECK(again.baked == 0);
@@ -381,8 +385,8 @@ static void test_bake_bands(void)
 
 // The bakes with no room for one more start over (pod_draw.c), and other pages' fill them. A warming never starts them
 // over (each of the row's pets below 1x it has no room to bake is an image): with the bakes as full as they get, and
-// again just started over, the warming bakes nothing whole, nor does the glass's next frame, and a motion painted ahead
-// paints and bakes nothing.
+// again just started over, the warming bakes nothing whole, the glass's next frame no more than a new frame of each
+// cell's playing pet, and a motion painted ahead paints and bakes nothing.
 static void test_bakes_full(void)
 {
     rest(3, NULL);
@@ -404,8 +408,9 @@ static void test_bakes_full(void)
         }
         const unsigned baked = pod_cell_bakes();
         warm(T0);
-        frame(T0 - MAX_ROW_FRAME_MS);
         CHECK(pod_cell_bakes() == baked);
+        frame(T0 - MAX_ROW_FRAME_MS);   // the cells' pets play: at most a frame of each is new
+        CHECK(pod_cell_bakes() - baked <= (unsigned)max_m.cell_hits);
         taps_of(taps);
         const motion_t m = motion(taps[0]);
         if (m.painted || m.baked) painted_where(NULL, taps[0], &m, 0);
