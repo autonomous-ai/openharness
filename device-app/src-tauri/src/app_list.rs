@@ -428,6 +428,18 @@ mod tests {
     }
 
     #[test]
+    fn a_temp_file_a_killed_run_left_goes_at_the_next_write() {
+        let image = an_image();
+        let applications = image.data_home().join("applications");
+        fs::create_dir_all(&applications).unwrap();
+        // Killed between its write and its rename, as Desktop's temp file is named.
+        fs::write(applications.join(format!("{ENTRY}.tmp")), "half").unwrap();
+        assert_eq!(image.apply(), Some(Ok(Change::Write)));
+        let names: Vec<_> = fs::read_dir(&applications).unwrap().map(|file| file.unwrap().file_name()).collect();
+        assert_eq!(names, [ENTRY]);
+    }
+
+    #[test]
     fn the_entry_is_written_whole() {
         let image = an_image();
         assert_eq!(image.apply(), Some(Ok(Change::Write)));
