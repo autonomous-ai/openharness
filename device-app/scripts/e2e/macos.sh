@@ -37,6 +37,11 @@ elif [[ $# -ne 0 ]]; then
 fi
 [[ "$(uname -s)" == Darwin ]] || stop_before "runs on macOS"
 [[ -z "$(PATH="$APP_PATH" command -v harness)" ]] || stop_before "a harness is on $APP_PATH: the app would find it"
+# Signing and notarizing are a release's: tauri-bundler signs with APPLE_SIGNING_IDENTITY or APPLE_CERTIFICATE and sends
+# the bundle to Apple's notary with APPLE_ID or APPLE_API_KEY. The test build is signed ad hoc and goes nowhere.
+for name in $(compgen -e); do
+  case "$name" in APPLE_* | TAURI_SIGNING_*) unset "$name" ;; esac
+done
 # What macOS files under a bundle id in a HOME's Library, for a menu-bar app with a webview.
 filed_under() {
   local folder
@@ -68,8 +73,15 @@ forget_defaults() {
 
 cleanup() {
   set +e
-  for pid in "${pids[@]}"; do kill "$pid" 2>/dev/null; done
-  for pid in "${pids[@]}"; do waits gone "$pid"; done
+  # The relaunch comes through LaunchServices, no child of this script, and joins `pids` only once it is found: every
+  # process run from this run's folder ends too.
+  local strays=() pid command
+  while read -r pid command; do
+    [[ "$command" != "$work/"* ]] || strays+=("$pid")
+  done < <(ps -axo pid=,command=)
+  # `${a[@]+...}`: macOS's bash 3.2 reads an empty array as unbound.
+  for pid in ${pids[@]+"${pids[@]}"} ${strays[@]+"${strays[@]}"}; do kill "$pid" 2>/dev/null; done
+  for pid in ${pids[@]+"${pids[@]}"} ${strays[@]+"${strays[@]}"}; do waits gone "$pid"; done
   forget_defaults
   # The fake CLI's runs, while they are still the fake's.
   if [[ -f "$fake/pids.log" ]]; then
@@ -149,15 +161,17 @@ kept_to_itself() {
 if [[ -z "$update" ]]; then
   # --- The smoke: a debug build, which reads HARNESS_DEVICE_CLI, against the fake CLI
 
-  (cd "$app/src-tauri" && cargo tauri build --ci --debug --bundles app --config "{\"identifier\":\"$ID\"}" -- --locked) \
-    >"$work/build.out" 2>&1 || {
+  target_dir="$(cd "$app/src-tauri" && cargo metadata --format-version 1 --no-deps |
+    sed -n 's/.*"target_directory": *"\([^"]*\)".*/\1/p')"
+  # A target folder of its own: a build with the test's bundle id never replaces the developer's debug app.
+  e2e_target="$target_dir/e2e-macos"
+  (cd "$app/src-tauri" && CARGO_TARGET_DIR="$e2e_target" cargo tauri build --ci --debug --bundles app \
+    --config "{\"identifier\":\"$ID\"}" -- --locked) >"$work/build.out" 2>&1 || {
     tail -n 40 "$work/build.out"
     fail "the debug build"
   }
-  target_dir="$(cd "$app/src-tauri" && cargo metadata --format-version 1 --no-deps |
-    sed -n 's/.*"target_directory": *"\([^"]*\)".*/\1/p')"
   # Copied out, so the run never writes into the build's own folder.
-  cp -R "$target_dir/debug/bundle/macos/Harness Device.app" "$work/apps/"
+  cp -R "$e2e_target/debug/bundle/macos/Harness Device.app" "$work/apps/"
   bundle="$work/apps/Harness Device.app"
   [[ "$(bundle_id "$bundle")" == "$ID" ]] || stop_before "the debug build's bundle id is not $ID"
   ok "the debug build is $ID"
@@ -173,7 +187,8 @@ if [[ -z "$update" ]]; then
   launch HARNESS_DEVICE_CLI="$fake_cli" FAKE_HARNESS="$fake"
   waits logged "$menu" || fail "the menu reads ${menu#menu: }"
   grep -Fxqs 'hardware watch --json' "$fake/calls.log" || fail "the app runs the fake CLI's watch"
-  [[ -d "$data" && -d "$logs" ]] || fail "the app's state and log are in the scratch HOME"
+  # The script made the state's folder: only the app takes instance.lock there.
+  [[ -f "$data/instance.lock" && -d "$logs" ]] || fail "the app's state and log are in the scratch HOME"
   ok "the app's state and log are in the scratch HOME, and it runs the fake CLI's watch"
   ok "the menu reads ${menu#menu: }"
   kill -TERM "$app_pid"
@@ -204,8 +219,10 @@ tar -xzf "$update/0.0.2/$archive" -C "$work/expected"
 /usr/bin/python3 -m http.server "$PORT" --bind 127.0.0.1 --directory "$update" >"$work/server.log" 2>&1 &
 pids+=("$!")
 disown "$!"
-waits curl -fs -o /dev/null "http://127.0.0.1:$PORT/0.0.1/" || fail "the manifest is served on 127.0.0.1:$PORT"
-checked() { [[ "$(grep -c '"GET /metadata.json ' "$work/server.log")" -ge "$1" ]]; }
+waits curl -fs --max-time 5 -o /dev/null "http://127.0.0.1:$PORT/0.0.1/" \
+  || fail "the manifest is served on 127.0.0.1:$PORT"
+served() { grep -c '"GET /metadata.json ' "$work/server.log" || true; }
+checked() { [[ "$(served)" -ge "$1" ]]; }
 
 started=$SECONDS
 launch
@@ -220,6 +237,8 @@ ok "the bundle is 0.0.2's, file for file"
 # The relaunch: through LaunchServices, so not a child of this script; found by its executable's path, which only this
 # run's bundle has.
 waits gone "$app_pid" || fail "0.0.1 ends for the relaunch"
+# 0.0.1 asks again a minute after a check or download that failed: only a request from here on is the relaunched app's.
+asked="$(served)"
 relaunched() {
   local pid command
   while read -r pid command; do
@@ -232,13 +251,12 @@ relaunched() {
 }
 waits relaunched || fail "the app runs again after the update"
 pids+=("$app_pid")
-# 0.0.1 checked once: a second check is the relaunched app's.
-WAIT=$((UPDATE_WAIT - SECONDS + started)) waits checked 2 || fail "the relaunched app checks the manifest"
+WAIT=$((UPDATE_WAIT - SECONDS + started)) waits checked $((asked + 1)) || fail "the relaunched app checks the manifest"
 ok "the app runs again, 0.0.2, and checks the manifest"
 
-# A check starts only once the one before it was answered, so the third request shows the relaunched app's first check,
-# the second, was answered: any update it found is logged by then.
-WAIT=$((UPDATE_WAIT - SECONDS + started)) waits checked 3 \
+# A check starts only once the one before it was answered, so the relaunched app's second request shows its first was
+# answered: any update it found is logged by then.
+WAIT=$((UPDATE_WAIT - SECONDS + started)) waits checked $((asked + 2)) \
   || fail "the relaunched app checks again, a minute after its first check"
 [[ "$(times_logged "update: found 0.0.2")" -eq 1 ]] || fail "0.0.2 finds no update: one update: found in the log"
 ok "0.0.2 checks the manifest and finds no update"
