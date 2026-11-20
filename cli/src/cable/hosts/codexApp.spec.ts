@@ -75,7 +75,7 @@ describe('the Codex app adapter', () => {
     for (const sessionId of forged) expect(adapter.paneOf(scanned({ sessionId })), sessionId).toBeUndefined()
   })
 
-  it('canFocus is macOS only; canShow also needs the app in front, asked each time', () => {
+  it('canFocus is yes on macOS and on Linux while xdg-mime is read, no on Windows with no raise; canShow needs the app in front', () => {
     for (const platform of ['linux', 'win32'] as const) {
       const { adapter } = recorder({ platform })
       // On Linux the first look answers yes while xdg-mime is read: a tap's focus waits for that read (appLink.ts).

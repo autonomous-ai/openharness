@@ -66,7 +66,10 @@ function tree(folder: string): Array<[string, number, number]> {
   })
 }
 
-describe.skipIf(process.platform === 'win32')('the Claude app\'s store', () => {
+/** FIFOs, links any user can make and a mode that refuses the owner's read are POSIX's: the cases of them skip on Windows. */
+const POSIX = process.platform !== 'win32'
+
+describe('the Claude app\'s store', () => {
   describe('fields', () => {
     it('a session gives its five fields and nothing else', async () => {
       const s = store()
@@ -131,8 +134,10 @@ describe.skipIf(process.platform === 'win32')('the Claude app\'s store', () => {
     it.each<[string, (s: Store) => void]>([
       ['half a JSON text (the app mid-write)', (s) => s.text(2, `{"sessionId":"${local(2)}","cliSessionId":"${cli(2)}","cwd":"/wo`)],
       ['a file of 1 MiB + 1 byte', (s) => s.put(2, {}, { bytes: MAX_FILE_BYTES + 1 })],
-      ['a link named local_….json to a good file elsewhere', (s) => symlinkSync(s.elsewhere(2), join(s.fixture.org(), `${local(2)}.json`))],
-      ['a FIFO named local_….json', (s) => execFileSync('mkfifo', [join(s.fixture.org(), `${local(2)}.json`)])],
+      ...(POSIX ? [
+        ['a link named local_….json to a good file elsewhere', (s) => symlinkSync(s.elsewhere(2), join(s.fixture.org(), `${local(2)}.json`))],
+        ['a FIFO named local_….json', (s) => execFileSync('mkfifo', [join(s.fixture.org(), `${local(2)}.json`)])],
+      ] as Array<[string, (s: Store) => void]> : []),
       ['a folder named local_….json', (s) => mkdirSync(join(s.fixture.org(), `${local(2)}.json`))],
       ['a sessionId of another local id', (s) => s.put(2, { more: { sessionId: local(9) } })],
       ['a cliSessionId of x', (s) => s.put(2, { cliSessionId: 'x' })],
@@ -174,7 +179,7 @@ describe.skipIf(process.platform === 'win32')('the Claude app\'s store', () => {
     })
 
     // Root reads a file of mode 000.
-    it.skipIf(process.getuid?.() === 0)('a file that could not be read is read again at the next read', async () => {
+    it.skipIf(!POSIX || process.getuid?.() === 0)('a file that could not be read is read again at the next read', async () => {
       const s = store()
       s.put(1)
       const path = s.put(2)
@@ -190,7 +195,7 @@ describe.skipIf(process.platform === 'win32')('the Claude app\'s store', () => {
 
     // A failed read is not held, so were it counted in the 256 parses, 256 of them first in the walk would cut every read
     // before the same files, each asking for one more read: the source's again, every 250 ms, for good.
-    it.skipIf(process.getuid?.() === 0)('files that could not be read do not use up the 256 parses', async () => {
+    it.skipIf(!POSIX || process.getuid?.() === 0)('files that could not be read do not use up the 256 parses', async () => {
       const s = store()
       for (const n of range(1, MAX_PARSES)) chmodSync(s.put(n), 0o000)
       s.put(MAX_PARSES + 1)
@@ -209,7 +214,7 @@ describe.skipIf(process.platform === 'win32')('the Claude app\'s store', () => {
       expect(read.skipped).toBe(4)
     })
 
-    it('a file swapped for a link between its stat and its read is not followed', async () => {
+    it.skipIf(!POSIX)('a file swapped for a link between its stat and its read is not followed', async () => {
       const s = store()
       const path = s.put(1)
       await s.reader.folders()
@@ -221,7 +226,7 @@ describe.skipIf(process.platform === 'win32')('the Claude app\'s store', () => {
       expect(read.skipped).toBe(1)
     })
 
-    it('a file swapped for a FIFO between its stat and its read is not waited on', async () => {
+    it.skipIf(!POSIX)('a file swapped for a FIFO between its stat and its read is not waited on', async () => {
       const s = store()
       const path = s.put(1)
       await s.reader.folders()
@@ -406,7 +411,7 @@ describe.skipIf(process.platform === 'win32')('the Claude app\'s store', () => {
       expect(read.over).toBe(6)
     })
 
-    it('an account or an org folder that is a link is not read', async () => {
+    it.skipIf(!POSIX)('an account or an org folder that is a link is not read', async () => {
       const s = store()
       s.put(1)
       const away = claudeAppFixture(join(s.dir, 'away'))
@@ -420,7 +425,7 @@ describe.skipIf(process.platform === 'win32')('the Claude app\'s store', () => {
       expect(localIds(await s.reader.read())).toEqual([local(1)])
     })
 
-    it('a root that is a link, a file or not there gives no folders, and a read of nothing', async () => {
+    it.skipIf(!POSIX)('a root that is a link, a file or not there gives no folders, and a read of nothing', async () => {
       const s = store()
       s.put(1)
       const linked = join(s.dir, 'linked')
