@@ -63,6 +63,12 @@ const SESSION_LOAD_MS = 35_000
 /** How long an OpenClaw's first task waits, not counting the time its agent is held or its TUI starts, before its launch
  *  fails. */
 const FIRST_TASK_BOUND_MS = 180_000
+/** How long the serial discovery pass waits for OpenClaw's store about a typed first task, every other agent behind it: a
+ *  read waits up to 5 s on a locked database. A store slower than this says nothing this pass. */
+const STORE_READ_MS = 1_000
+/** The keys an agent moved off last (`/new`) asked about its typed first task besides its own: its user row is under the
+ *  key the pane was on as OpenClaw took it. More moves than this within the task's bound are not a case. */
+const EARLIER_KEYS_ASKED = 3
 
 /**
  * The status line says the Gateway answered: the TUI connected, its history loaded or not, or the Gateway said it is
@@ -470,14 +476,30 @@ export function createBinding({
    * confirms, or the bound fails.
    */
   const firstTasksAdopted = new Map<string, number>()
+  /** The agents whose store read about a typed first task is out: one at a time each, as a read outlasts its pass's wait. */
+  const storeReads = new Set<string>()
   /**
-   * Whether OpenClaw's store holds a user row for the agent's key written after [at], and none after [adoptedAt] when
-   * given: a later one is the adopted task's turn's to confirm (core/turns/funnel.ts), as a task typed here is. A store
-   * that cannot say does not.
+   * Whether OpenClaw's store holds a user row written after [at], under the agent's key or one it moved off last, and none
+   * after [adoptedAt] when given: a later one is the adopted task's turn's to confirm (core/turns/funnel.ts), as a task
+   * typed here is. A store that cannot say, has not answered within STORE_READ_MS, or is still read from an earlier pass,
+   * does not.
    */
   const storeShowsTaken = async (agent: RegisteredSession, pid: number, at: number, adoptedAt: number | undefined): Promise<boolean> => {
-    const since = (time: number) => openclawUserRowSince(agent.sessionId, { pid, stateDir: agent.openclawStateDir }, time).catch(() => null)
-    return await since(at) === true && (adoptedAt === undefined || await since(adoptedAt) === false)
+    if (storeReads.has(agent.agentId)) return false
+    storeReads.add(agent.agentId)
+    const keys = [agent.sessionId, ...(agent.earlierSessionIds ?? []).slice(0, EARLIER_KEYS_ASKED)]
+    const pane = { pid, stateDir: agent.openclawStateDir }
+    // A row under any key says yes; no says no only when every key does.
+    const since = async (time: number): Promise<boolean | null> => {
+      const said = await Promise.all(keys.map((key) => openclawUserRowSince(key, pane, time).catch(() => null)))
+      return said.includes(true) ? true : said.includes(null) ? null : false
+    }
+    const read = (async () => await since(at) === true && (adoptedAt === undefined || await since(adoptedAt) === false))()
+      .finally(() => storeReads.delete(agent.agentId))
+    let timer: NodeJS.Timeout | undefined
+    const late = new Promise<false>((resolve) => { timer = setTimeout(resolve, STORE_READ_MS, false) })
+    try { return await Promise.race([read, late]) }
+    finally { clearTimeout(timer) }
   }
   /**
    * The typed first tasks whose removal failed, agentId → the mark's `at`: said once a mark, as every pass tries again.
