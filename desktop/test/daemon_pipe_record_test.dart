@@ -109,6 +109,35 @@ void main() {
         isNull,
       );
     });
+
+    // The daemon reads a relative ADAPTER_DATA_DIR as a folder in the home, in
+    // every process; the app's own start folder is no part of it.
+    test('a relative ADAPTER_DATA_DIR is in the home folder', () {
+      expect(
+        defaultDaemonDataDir(
+          environment: {
+            'USERPROFILE': r'C:\Users\me',
+            'ADAPTER_DATA_DIR': r'scratch\data',
+          },
+          isWindows: true,
+        ),
+        r'C:\Users\me\scratch\data',
+      );
+      expect(
+        defaultDaemonDataDir(
+          environment: {'HOME': '/Users/me', 'ADAPTER_DATA_DIR': 'data'},
+          isWindows: false,
+        ),
+        '/Users/me/data',
+      );
+      expect(
+        defaultDaemonDataDir(
+          environment: {'ADAPTER_DATA_DIR': 'data'},
+          isWindows: false,
+        ),
+        isNull,
+      );
+    });
   });
 
   group('readDaemonPipeRecord', () {
