@@ -32,8 +32,8 @@ export function verifyNativePathFacts(facts: readonly NativePathFact[], budget =
     }
     let info: BigIntStats | null, target: string | undefined
     try {
-      info = lstatSync(fact.path, { bigint: true })
-      if (info.isSymbolicLink()) target = readlinkSync(fact.path)
+      info = lstatSync(fact.path, { bigint: true, throwIfNoEntry: false }) ?? null
+      if (info?.isSymbolicLink()) target = readlinkSync(fact.path)
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return nativeUnavailable('the retained route became unreadable')
       info = null
@@ -92,9 +92,9 @@ export class NativePaths {
       let proof: Part
       try {
         // A source pass shares only provisional directory reads; snapshot()/verify() still read every fact afresh.
-        const info = directories?.get(next.value) ?? lstatSync(next.value, { bigint: true })
-        if (directories && directories.size < 256 && info.isDirectory()) directories.set(next.value, info)
-        proof = { info, ...(info.isSymbolicLink() ? { target: readlinkSync(next.value) } : {}) }
+        const info = directories?.get(next.value) ?? lstatSync(next.value, { bigint: true, throwIfNoEntry: false }) ?? null
+        if (directories && directories.size < 256 && info?.isDirectory()) directories.set(next.value, info)
+        proof = { info, ...(info?.isSymbolicLink() ? { target: readlinkSync(next.value) } : {}) }
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code === 'ENOENT') proof = { info: null }
         else return nativeUnavailable('a native location could not be inspected')
@@ -273,7 +273,9 @@ function verifyParts(parts: Iterable<[string, Part]>, budget: NativeEvidenceBudg
   for (const [path, before] of parts) {
     budget.step()
     let now: BigIntStats | null
-    try { now = lstatSync(path, { bigint: true }) }
+    // Missing sidecars/configs are ordinary evidence. Keep the fresh syscall,
+    // without allocating an ENOENT stack on every Close/Resume fence.
+    try { now = lstatSync(path, { bigint: true, throwIfNoEntry: false }) ?? null }
     catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') now = null
       else return nativeUnavailable('a native location became unreadable')

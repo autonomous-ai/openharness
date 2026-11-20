@@ -190,7 +190,7 @@ export function inspectHookFile(file: string, defaultMode = 0o666) {
       }
     }
     let now: BigIntStats | null
-    try { now = lstatSync(target, { bigint: true }) } catch (error) { if (!missing(error)) throw error; now = null }
+    try { now = lstatSync(target, { bigint: true, throwIfNoEntry: false }) ?? null } catch (error) { if (!missing(error)) throw error; now = null }
     if ((now ? version(now) : null) !== before) throw new HookPreparationHeld('the settings file changed before publication')
   }
   const prepare = (next: string | null) => {
@@ -535,11 +535,12 @@ export function hookPreparationRoutes(files: readonly string[]): { verify(): voi
       const budget = new NativeEvidenceBudget(), devices = new Map<string, bigint | null>()
       const leaves = () => keys.map(key => {
         budget.step()
-        let info: BigIntStats
-        try { info = lstatSync(key, { bigint: true }) } catch (error) {
+        let info: BigIntStats | undefined
+        try { info = lstatSync(key, { bigint: true, throwIfNoEntry: false }) } catch (error) {
           if (missing(error)) return null
           return nativeUnavailable('a native location became unreadable')
         }
+        if (!info) return null
         if (info.isSymbolicLink()) throw new HookPreparationHeld('the reserved destination route changed')
         return fileIdentity(info)
       })
