@@ -372,6 +372,27 @@ mod tests {
     }
 
     #[test]
+    fn observe_returns_before_the_connect_and_a_drop_before_it_ends_the_thread() {
+        let (release, connecting) = mpsc::channel::<()>();
+        let (events, _hyprland) = UnixStream::pair().unwrap();
+        // A Hyprland that has not taken the connection yet: the connect waits until the test lets it through.
+        let connect = move || {
+            let _ = connecting.recv();
+            Ok(events)
+        };
+        let (heard, told) = heard_into();
+        let (returned, observed) = mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = returned.send(observe_events(connect, PathBuf::from("/nonexistent"), |_| true, heard));
+        });
+        let observation = observed.recv_timeout(WAIT).expect("observe waited on the connect");
+        drop(observation);
+        release.send(()).unwrap();
+        // Nothing heard, not even the first ask: the thread ends once connected, and drops its callback.
+        assert_eq!(told.recv_timeout(WAIT), Err(mpsc::RecvTimeoutError::Disconnected));
+    }
+
+    #[test]
     fn an_observation_hears_its_own_sockets_until_it_is_dropped() {
         let runtime = tempfile::tempdir().unwrap();
         let (events, requests) = sockets(runtime.path(), "s").unwrap();

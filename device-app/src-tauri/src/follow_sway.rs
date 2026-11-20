@@ -377,6 +377,27 @@ mod tests {
     }
 
     #[test]
+    fn observe_returns_before_the_connect_and_a_drop_before_it_ends_the_thread() {
+        let (release, connecting) = mpsc::channel::<()>();
+        let (ours, _sway) = UnixStream::pair().unwrap();
+        // A sway that has not taken the connection yet: the connect waits until the test lets it through.
+        let connect = move || {
+            let _ = connecting.recv();
+            Ok(ours)
+        };
+        let (tell, told) = mpsc::channel();
+        let (returned, observed) = mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = returned.send(observe_on(connect, chatgpt, Box::new(move |said| tell.send(said).unwrap())));
+        });
+        let observation = observed.recv_timeout(Duration::from_secs(5)).expect("observe waited on the connect");
+        drop(observation);
+        release.send(()).unwrap();
+        // Nothing heard: the thread ends once connected, and drops its callback.
+        assert_eq!(told.recv_timeout(Duration::from_secs(5)), Err(mpsc::RecvTimeoutError::Disconnected));
+    }
+
+    #[test]
     fn no_sway_is_no_observer_once() {
         let empty = tempfile::tempdir().unwrap();
         for socket in [None, Some(empty.path().join("sway-ipc.sock"))] {
