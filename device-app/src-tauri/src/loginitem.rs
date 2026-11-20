@@ -3,8 +3,8 @@
 pub trait LoginItem: Send + Sync {
     fn register(&self) -> Result<(), String>;
 
-    /// Called at every launch and after each install: Linux takes over the entry the CLI's installer wrote, and Windows
-    /// writes again a Run value an uninstall removed. Ok(true): it changed the item.
+    /// Called at every launch: Linux takes over the entry the CLI's installer wrote, and Windows writes again a Run
+    /// value an uninstall removed. Ok(true): it changed the item.
     fn refresh(&self) -> Result<bool, String> {
         Ok(false)
     }

@@ -336,10 +336,6 @@ impl Runner {
                         &|| shared.find_cli(),
                         &mut |step| shared.answer(Event::InstallStep(step)),
                     );
-                    // An install can write the CLI's own login entry again.
-                    if result.is_ok() {
-                        shared.refresh_login_item();
-                    }
                     shared.answer(Event::InstallDone(result));
                 });
             }
