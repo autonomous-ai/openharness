@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, watch, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, watch, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -103,6 +103,23 @@ describe('the move lock', () => {
     started.delete(1002)
     await vi.advanceTimersByTimeAsync(LOCK_LOOK_MS)
     expect(await waiting).toEqual({ held: true, value: 'moved' })
+  })
+
+  it('a watch that cannot start (ENOSPC) still waits, and takes the lock at the next look', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    const legacy = legacyHome()
+    heldBy(legacy, 1002, 8)
+    const log = vi.fn()
+    // Linux's fs.watch throws as it starts once inotify's watches are used up.
+    const unwatched: LockDeps = { ...as(1001), watch: () => { throw Object.assign(new Error('watch failed'), { code: 'ENOSPC' }) } }
+    const told = { committed: () => false, long: () => {}, log }
+    const waiting = withMoveLock(legacy, async () => 'moved', told, unwatched)
+    await vi.advanceTimersByTimeAsync(0)
+    // The owner lets go, which no watch tells: the next look sees it.
+    rmSync(moveLockPath(legacy), { recursive: true })
+    await vi.advanceTimersByTimeAsync(LOCK_LOOK_MS)
+    expect(await waiting).toEqual({ held: true, value: 'moved' })
+    expect(log.mock.calls).toEqual([['home move: lock watch ENOSPC · looking every 30 s']])
   })
 
   it('a move the lock is held for that is committed ends the wait, the lock left to its owner', async () => {
