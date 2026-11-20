@@ -244,6 +244,38 @@ mod tests {
     }
 
     #[test]
+    fn the_shell_selects_the_long_path_or_the_path_as_given() {
+        let short = Path::new(r"C:\Users\RUNNER~1\AppData\Local\Temp\harness-logs-20261118-1030.zip");
+        let long = PathBuf::from(r"C:\Users\runneradmin\AppData\Local\Temp\harness-logs-20261118-1030.zip");
+        assert_eq!(selectable(short, |_| Ok(long.clone())), long);
+        assert_eq!(selectable(short, |_| Err(io::ErrorKind::NotFound.into())), short);
+    }
+
+    /// Explorer selects nothing in a folder opened on an 8.3 path, as GitHub's runner's %TEMP% is.
+    #[cfg(windows)]
+    #[test]
+    fn an_8_3_path_expands_to_its_long_name() {
+        use std::ffi::{OsStr, OsString};
+        use std::os::windows::ffi::{OsStrExt, OsStringExt};
+        use windows_sys::Win32::Storage::FileSystem::GetShortPathNameW;
+        const NAME: &str = "harness logs with a long name";
+        let folder = tempfile::tempdir().unwrap();
+        let long = folder.path().join(NAME);
+        std::fs::create_dir(&long).unwrap();
+        let wide = long.as_os_str().encode_wide().chain([0]).collect::<Vec<u16>>();
+        let mut short = vec![0u16; 1024];
+        // SAFETY: the path ends in a NUL; the buffer is as long as the size passed.
+        let size = unsafe { GetShortPathNameW(wide.as_ptr(), short.as_mut_ptr(), short.len() as u32) } as usize;
+        assert!(size > 0 && size < short.len(), "{}", io::Error::last_os_error());
+        let short = PathBuf::from(OsString::from_wide(&short[..size]));
+        if short.file_name() == Some(OsStr::new(NAME)) {
+            println!("skipped: short names are off on this volume");
+            return;
+        }
+        assert_eq!(long_path(&short).unwrap().file_name(), Some(OsStr::new(NAME)));
+    }
+
+    #[test]
     fn open_harness_is_one_fixed_command_on_a_mac_and_the_apps_own_file_elsewhere() {
         assert_eq!(desktop_args("macos"), Some(("/usr/bin/open", strings(&["-b", "ai.autonomous.harness"]))));
         // desktop::desktop_app(), run with no argument.
