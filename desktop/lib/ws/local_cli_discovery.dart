@@ -474,6 +474,8 @@ class LocalCliDiscovery {
           if (quietTicks < spawnAfter) return;
           if (_clock() < nextSpawnAllowedAt) return;
           if (!(spawnAllowedAt?.call(DateTime.now()) ?? true)) return;
+          // Asked again: an uninstall or a flash can begin while the probe above is answered.
+          if (_spawnHeld()) return;
           // A daemon that signed itself OUT — its machine was deleted from another machine, or its
           // session expired — deletes its session file. It used to exit and refuse to start again
           // without one, which made respawning it the one failure this loop could not fix; a daemon
