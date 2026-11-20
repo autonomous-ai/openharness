@@ -25,38 +25,34 @@ pub fn light_panel(value: Option<u32>) -> bool {
     value == Some(1)
 }
 
-/// Whether the taskbar under HKCU's `key` is light now.
+/// Whether the taskbar under HKCU's `key` is light now; then `changed` is told each time it turns light or dark.
+/// Windows pushes every write to the key; a write that leaves the colour as it was tells nothing. None when the key
+/// cannot be followed: Windows has not made it, or refused the notice.
 #[cfg(windows)]
-pub fn read(key: &str) -> bool {
-    light_panel(value(HKEY_CURRENT_USER, &wide(key)))
-}
-
-/// Tells `changed` each time HKCU's `key` turns light or dark. Windows pushes every write to the key; a write that
-/// leaves the colour as it was tells nothing.
-#[cfg(windows)]
-pub fn follow(key: &str, changed: impl Fn(bool) + Send + 'static) {
+pub fn follow(key: &str, changed: impl Fn(bool) + Send + 'static) -> Option<bool> {
     follow_under(HKEY_CURRENT_USER, key, changed)
 }
 
 /// `follow` under any open key, which a test makes in a hive of its own. The first notice is asked for before this
 /// returns, so a change made after it is never missed.
 #[cfg(windows)]
-fn follow_under(root: HKEY, key: &str, changed: impl Fn(bool) + Send + 'static) {
+fn follow_under(root: HKEY, key: &str, changed: impl Fn(bool) + Send + 'static) -> Option<bool> {
     let key = wide(key);
     let mut opened: HKEY = ptr::null_mut();
     // SAFETY: the subkey is NUL-terminated and outlives the call; `opened` receives the key.
     if unsafe { RegOpenKeyExW(root, key.as_ptr(), 0, KEY_NOTIFY | KEY_QUERY_VALUE, &mut opened) } != ERROR_SUCCESS {
-        return;
+        return None;
     }
     // Auto-reset: each wait takes one notice.
     // SAFETY: no attributes and no name; a null handle is checked below.
     let event = unsafe { CreateEventW(ptr::null(), 0, 0, ptr::null()) };
     let followed = Followed { key: opened, event };
     if event.is_null() || !followed.ask() {
-        return;
+        return None;
     }
     // Asked before read: a change in between is a notice still to come.
-    let mut last = followed.light();
+    let now = followed.light();
+    let mut last = now;
     thread::spawn(move || {
         let followed = followed;
         // SAFETY: the event is open until `followed` drops, after the loop.
@@ -68,6 +64,7 @@ fn follow_under(root: HKEY, key: &str, changed: impl Fn(bool) + Send + 'static) 
             }
         }
     });
+    Some(now)
 }
 
 /// The followed key and the event its notices set, closed together.
@@ -159,9 +156,6 @@ mod tests {
         use windows_sys::Win32::System::Registry::{
             HKEY, KEY_ALL_ACCESS, REG_DWORD, RegCloseKey, RegLoadAppKeyW, RegSetKeyValueW,
         };
-
-        // The real value reads, whichever it is.
-        let _ = read(PERSONALIZE);
 
         let folder = tempfile::tempdir().unwrap();
         let hive = wide(&folder.path().join("theme.dat").display().to_string());

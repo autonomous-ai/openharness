@@ -135,14 +135,15 @@ fn start(handle: &AppHandle, events: Sender<Event>, queue: Receiver<Event>) -> t
         }),
     );
 
-    // Watched before it is read, so a change in between is told, not lost. Its first notice reaches the main thread
-    // after this setup, once the tray is built.
+    // Followed before it is read, so a change in between is told, not lost. Its first notice reaches the main thread
+    // after this setup, once the tray is built. A taskbar that cannot be followed is taken as dark, as one with no
+    // value is.
     #[cfg(windows)]
     let light_panel = {
-        use harness_device::theme_windows::{PERSONALIZE, follow, read};
-        let (setting, log) = (handle.clone(), log.clone());
-        follow(PERSONALIZE, move |light| {
-            let (handle, log) = (setting.clone(), log.clone());
+        use harness_device::theme_windows::{PERSONALIZE, follow};
+        let (setting, told) = (handle.clone(), log.clone());
+        let light = follow(PERSONALIZE, move |light| {
+            let (handle, log) = (setting.clone(), told.clone());
             let _ = setting.run_on_main_thread(move || {
                 if let Some(tray) = handle.tray_by_id(TRAY)
                     && let Err(error) = tray.set_icon(Some(tray_image(tray_icon("windows", light))))
@@ -151,7 +152,10 @@ fn start(handle: &AppHandle, events: Sender<Event>, queue: Receiver<Event>) -> t
                 }
             });
         });
-        read(PERSONALIZE)
+        light.unwrap_or_else(|| {
+            log.line("tray: theme not followed");
+            false
+        })
     };
     #[cfg(not(windows))]
     let light_panel = false;
