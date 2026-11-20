@@ -1,6 +1,6 @@
 // This run's debug build of Harness Device, downloaded, verified, installed,
 // found and started by Desktop's own installer, probe and opener, on Windows
-// or Linux. The temporary workflow's desktop-device-app-e2e runs it, from
+// or Linux. Run by hand on a throwaway GitHub-hosted runner (see below), from
 // `desktop/`:
 //
 //   FLUTTER_TEST=1 HARNESS_DEVICE_TEST_PACKAGE=<the setup.exe or .AppImage> \
