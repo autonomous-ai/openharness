@@ -115,7 +115,7 @@ export async function runDeviceCommand(argv: string[], deps: DeviceDeps): Promis
   if (words.length <= 3 && words[0] === 'claude' && words[1] === 'inbox') {
     return followInbox(words[2] ?? '', {
       dataDir: deps.dataDir, port: deps.port, platform: deps.platform, acts: () => pluginActs(deps.dataDir),
-      proof: createDaemonProof(), write: deps.write, wait: (ms) => sleep(ms), parentAlive,
+      proof: createDaemonProof(), write: deps.write, wait: (ms) => sleep(ms), parentAlive, now: Date.now,
     })
   }
   if (words.length <= 3 && words[0] === 'claude' && words[1] === 'attach') return attachSession(words[2] ?? '', deps)

@@ -47,6 +47,7 @@ async function follow(data: string, stopAt?: number): Promise<string[]> {
     },
     wait: async () => {},
     parentAlive: () => true,
+    now: Date.now,
   })
   return lines
 }

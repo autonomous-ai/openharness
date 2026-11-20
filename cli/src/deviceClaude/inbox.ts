@@ -31,6 +31,8 @@ const MAX_TEXT = 20_000
 const POLL_MS = 30_000
 /** No daemon, no proof, no dial: the daemon would answer at once, so the next poll waits this long, as the Mac mod does. */
 const RETRY_MS = 60_000
+/** A 200 with no text sooner than this was not held, and polling again at once would spin, as the Mac mod's HELD_MS. */
+const HELD_MS = 1_000
 const OFF = '{"off":true}'
 const EMPTY = '{}'
 
@@ -87,6 +89,8 @@ export interface InboxDeps {
   wait(ms: number): Promise<void>
   /** Whether the process that started this one still runs. */
   parentAlive(): boolean
+  /** The time in ms. */
+  now(): number
 }
 
 /** Whether the process that started this one still runs: on Windows `harness.exe`, which Claude Code kills with the loop. */
@@ -112,13 +116,14 @@ export async function followInbox(sessionId: string, deps: InboxDeps): Promise<n
       await deps.write(OFF)
       return 0
     }
+    const sentAt = deps.now()
     let line = await pollOnce(sessionId, send, deps)
     if (line === null) {
       // The next poll proves the daemon by the table: a pid another process took passes the cheap check, not that one.
       deps.proof.forget(deps.dataDir, deps.port)
       await deps.wait(RETRY_MS)
       line = EMPTY
-    }
+    } else if (line === EMPTY && deps.now() - sentAt < HELD_MS) await deps.wait(RETRY_MS)
     if (!(await deps.write(line)) || line === OFF) return 0
   }
 }
