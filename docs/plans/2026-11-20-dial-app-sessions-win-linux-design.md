@@ -279,6 +279,8 @@ Each door implements `ChatgptWindow` and `AxTrust`:
 | Follow on GNOME / KDE Wayland | — | — | none | Wayland gives a client no other app's focus or title without a compositor extension, and Harness Device has no front app there. AT-SPI is not used (Approach 2). |
 | A rest shows a session | the app in front | as macOS | as macOS where a front source runs; never on GNOME/KDE Wayland | It needs the front app (device-app-win-linux's difference). |
 | Title is the thread's name | measured (#4508) | not verified | not verified | Needs a signed-in app (decision 4). If the title is fixed, every report is `no match`. |
+| A Claude app session's row `host` | `claude`, whether or not its process runs | as macOS | `claude` while idle, `terminal` while its process runs (it is on the Claude page either way) | Linux's hook has no bundle id. It learns the app from the parent chain, which places the row on the Claude page but keeps the hooked copy's host. The cause predates this branch; the store rows make it visible (final review, the main session's call). |
+| The first tap on a row opened by link | opens it | opens it | opens it once `xdg-mime` answers. Until then the tap is taken to open, and a failed link falls back as on macOS. | `xdg-mime` is read once per scheme, in the background. The first tap waits for it (Task 20; this was a bug: the tap was dropped). |
 
 ## Design (docs/feature-design-rules.md)
 
@@ -371,8 +373,16 @@ Each door implements `ChatgptWindow` and `AxTrust`:
       pin the link (the PM, 2026-11-20).
   - (3)'s CLI side: a `{"thread":…}` line through `harness hardware watch` moves the fake dial.
   - Harness Device's `WindowsFollow` against a window the test itself creates and retitles, with the ChatGPT check
-    pointed at that test process.
+    pointed at that test process. Its `installed()` answers true for the VM user's real `OpenAI.Codex` registration
+    (read only).
   - The store-read benchmarks.
+  - The Windows-only unit cases of `claudeAppStore.spec.ts` and `devices.spec.ts`.
+  - A writer that saves a store file the way an Electron app does (write a temp file, then rename it over the old
+    one), in a loop, against the reader. The question is whether the reader's open handle ever makes the rename fail
+    (EPERM or EACCES). libuv opens with `FILE_SHARE_DELETE`, so it should not. If it does, that is named here and
+    fixed (final review).
+  - The watch's idle cost with the store folder missing: events a minute and the devices process's CPU, with a dial
+    attached (final review).
 - **Linux, the Podman machine `devcrew-appsessions`:**
   - `X11Follow` under Xvfb against a test window the test retitles.
   - `SwayFollow` under headless sway, if the image allows; otherwise the fixtures alone, with the reason.
