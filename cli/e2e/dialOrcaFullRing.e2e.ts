@@ -97,7 +97,13 @@ describe("Orca's ring over a full dial", () => {
     const front = frontWatch(d)
     front(WEZTERM)
     const wezterm = Array.from({ length: FULL }, (_, i) => new InOrca(d, `w${i}`, children, { WEZTERM_PANE: String(i + 1) }))
-    for (const claude of wezterm) await claude.hook('SessionStart', { source: 'startup' })
+    // Each listed before the next starts, as dialOrcaFocus.e2e.ts does: sixteen hooks back to back on a loaded machine
+    // lost one, the post a paneless hook does not wait for (hook/notify.mjs postObserved), and the dial never filled.
+    for (const [i, claude] of wezterm.entries()) {
+      const at = dial.messages.length
+      await claude.hook('SessionStart', { source: 'startup' })
+      await dial.next((m) => m.t === 'agent' && m.id === claude.id, 45_000, `WezTerm's session ${i} listed`, at)
+    }
 
     // 3. The dial shows WezTerm's ring, its sixteen tiles full.
     const full = wezterm.map((claude) => claude.id).sort()
