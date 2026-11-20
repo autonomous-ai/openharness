@@ -327,7 +327,8 @@ void main() {
         '${ours.path}/status',
       ).writeAsString('Name:\tharness-device\nUid:\t1000\t1000\t1000\t1000\n');
       expect(await linuxDeviceAppRunning(proc: proc.path), isTrue);
-    });
+      // Windows lists the fake tree with backslashes, which the Linux-only reader never meets.
+    }, skip: Platform.isWindows);
 
     test('an unreadable self/status throws', () async {
       final dir = await Directory.systemTemp.createTemp('device_app_proc');
