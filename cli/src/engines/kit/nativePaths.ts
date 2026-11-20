@@ -22,7 +22,8 @@ type Location = { path: string; info: BigIntStats } | null
 /** Immutable route facts can cross a service boundary; timestamps matter for aliases, not sibling churn. */
 export type NativePathFact = { path: string; identity: string | null; alias?: { target: string; version: string } }
 export function verifyNativePathFacts(facts: readonly NativePathFact[], budget = new NativeEvidenceBudget(),
-  devices?: Map<string, bigint | null>, checkFile?: (path: string, info: BigIntStats | null) => void): void {
+  devices?: Map<string, bigint | null>, checkFile?: (path: string, info: BigIntStats | null) => void,
+  absentBecamePresent?: (path: string, info: BigIntStats) => void): void {
   if (!facts.length || facts.length > 256) return nativeUnavailable('the retained route exceeds its limit')
   for (const fact of facts) {
     budget.step()
@@ -43,14 +44,14 @@ export function verifyNativePathFacts(facts: readonly NativePathFact[], budget =
       if (devices.has(fact.path) && devices.get(fact.path) !== device) {
         // Name a new leaf through its caller before the generic refusal. A
         // returning callback cannot authorize the mismatched fact.
-        if (fact.identity === null && info !== null) checkFile?.(fact.path, info)
+        if (fact.identity === null && info !== null) absentBecamePresent?.(fact.path, info)
         return nativeUnavailable('the retained route changed during preparation')
       }
       devices.set(fact.path, device)
     }
     if (withoutDevice(identity(info)) !== withoutDevice(fact.identity)
       || (fact.alias && (!info || withoutDevice(version(info)) !== withoutDevice(fact.alias.version) || target !== fact.alias.target))) {
-      if (fact.identity === null && info !== null) checkFile?.(fact.path, info)
+      if (fact.identity === null && info !== null) absentBecamePresent?.(fact.path, info)
       return nativeUnavailable('the retained route changed during preparation')
     }
     checkFile?.(fact.path, info)

@@ -118,13 +118,15 @@ it('refuses a grouped present-to-absent leaf before accepting the newer observat
   expect(() => NativePaths.snapshots([before, after])).toThrow(/between grouped observations/)
 })
 
-it.each(['no device map', 'first pass', 'later pass'])('a returning file callback cannot approve a new leaf on %s', shape => {
+it.each(['no device map', 'first pass', 'later pass'])('a returning mismatch callback cannot approve a new leaf on %s', shape => {
   const file = join(root, 'new-file'), facts = observe(file).snapshot()
   const devices = shape === 'no device map' ? undefined : new Map<string, bigint | null>()
   if (shape === 'later pass') verifyNativePathFacts(facts, new NativeEvidenceBudget(), devices)
   writeFileSync(file, '{}', { mode: 0o600 })
-  let leafCalls = 0
+  let leafCalls = 0, validLeafCalls = 0
   const callback = (path: string) => { if (path === file) leafCalls++ }
-  expect(() => verifyNativePathFacts(facts, new NativeEvidenceBudget(), devices, callback)).toThrow(IdentityReadUnavailable)
+  const valid = (path: string) => { if (path === file) validLeafCalls++ }
+  expect(() => verifyNativePathFacts(facts, new NativeEvidenceBudget(), devices, valid, callback)).toThrow(IdentityReadUnavailable)
   expect(leafCalls).toBe(1)
+  expect(validLeafCalls).toBe(0)
 })

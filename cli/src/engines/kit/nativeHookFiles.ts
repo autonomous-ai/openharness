@@ -365,22 +365,17 @@ function observationVerifier(checks: readonly HookFileVerifier[]): (() => void) 
     verifyNativePathFacts(reverse, budget, devices, checkFile)
     budget.step()
   }
-  const checkEveryFile = (path: string, info: BigIntStats | null) => {
-    const expected = versions.get(path)
-    if (expected === null && info?.isSymbolicLink()) throw new HookPreparationHeld('the settings route gained an unconfirmed alias')
-    if (expected !== undefined && (info ? version(info) : null) !== expected) {
-      throw new HookPreparationHeld('the settings file changed before publication')
-    }
-  }
-  const checkAbsentFile = (path: string, info: BigIntStats | null) => {
-    if (versions.get(path) === null) checkEveryFile(path, info)
+  const absentBecamePresent = (path: string, info: BigIntStats) => {
+    if (versions.get(path) !== null) return
+    if (info.isSymbolicLink()) throw new HookPreparationHeld('the settings route gained an unconfirmed alias')
+    throw new HookPreparationHeld('the settings file changed before publication')
   }
   // Reverse order checks each selected leaf before the ancestors that routed
   // to it, including aliases shared by later siblings.
   return () => {
     const budget = new NativeEvidenceBudget(), devices = new Map<string, bigint | null>()
-    verifyNativePathFacts(facts, budget, devices, checkAbsentFile)
-    verifyNativePathFacts(reverse, budget, devices, checkEveryFile)
+    verifyNativePathFacts(facts, budget, devices, undefined, absentBecamePresent)
+    verifyNativePathFacts(reverse, budget, devices, checkFile, absentBecamePresent)
     budget.step()
   }
 }
