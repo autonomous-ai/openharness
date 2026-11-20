@@ -720,6 +720,31 @@ was synced from 3ff02e58e0 to `C:\work\oh\pty`.
 - The console check of `open-link` with no handler is in "Fixes after Task 37" below. There `codex` has a handler for
   the test user, so `claude` was checked with its handler taken away for the calls.
 
+## Task 32
+
+**Passes on the branch: 3 of 3. With the base's `notify.mjs` in its place, the two shell cases fail: the hook names
+another pid, not the test's process above the shell. The case with no shell passes on both.**
+
+Run 2026-11-20 on the same VM, as the test user over SSH: build 26200, ARM64, Node v24.20.0, vitest 4.1.10. The tree
+was the branch at 5611ad54c9 with `src/hookCaller.windows.real.spec.ts` added, and the host was built in `pty`.
+- The command: in `cli`, `set HARNESS_PTY_BIN=C:\work\oh\pty\target\release\harness-pty.exe`, then
+  `npx vitest run src/hookCaller.windows.real.spec.ts --maxWorkers=1`.
+- The base: `cli/hook/notify.mjs` of c68b71455e, the commit before Task 31's red commit (091ab2a8f6). It was copied
+  over the branch's file for one run, then the branch's was put back and checked by its SHA-256.
+
+| Case | Branch | Base's `notify.mjs` |
+| --- | --- | --- |
+| `powershell.exe -NoProfile -Command "& '<node>' '<notify.mjs>' … --engine codex"` | pass | **fail**: `expected 13044 to be 1260` |
+| `cmd.exe /d /s /c ""<node>" "<notify.mjs>" … --engine commandcode"` | pass | **fail**: `expected 11416 to be 1260` |
+| `<node> <notify.mjs> …`, no shell, no `--engine` | pass | pass |
+| Suite | 3 passed, 2.46 s (twice more after the base run: 2.43 s, 2.21 s) | 2 failed, 1 passed, 1.99 s |
+
+`1260` is the test's own process. The base names the hook's parent, `process.ppid`, which here is the shell.
+
+- PowerShell passes the hook's stdin to the native program that `-Command` starts: the `Stop` reached the hook
+  through it, as it does from Codex (Task 2 §5).
+- The run left no `hook-caller-*` folder in the test user's temp folder.
+
 ## Task 37
 
 **Nothing here contradicts Task 27 or Task 30, so Task 38 does not run.** Every window belongs to the program
