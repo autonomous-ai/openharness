@@ -194,6 +194,14 @@ describe('whether the move runs: the first condition that holds decides', () => 
     expect(await checkMove(deps(home, { ...laterHolds(harnessPaneOwner(dataDir)), env: { [name]: file } }))).toEqual(skipped(name))
   })
 
+  // config/loadEnv.ts reads the file trimmed (envFilePath): the padded name is the same file.
+  it.each(['HARNESS_ENV_FILE', 'DOTENV_CONFIG_PATH'])('an env file inside ~/.harness, named by %s with spaces around it, → skipped-override', async (name) => {
+    const { home, legacy, dataDir } = legacyHome()
+    const file = join(legacy, 'harness.env')
+    writeFileSync(file, 'HARNESS_LOG_LEVEL=debug\n')
+    expect(await checkMove(deps(home, { ...laterHolds(harnessPaneOwner(dataDir)), env: { [name]: ` ${file} ` } }))).toEqual(skipped(name))
+  })
+
   it('tmux before 3.0 with a pane that carries the tag → waiting old-tmux', async () => {
     const { home, dataDir } = legacyHome()
     const asked: boolean[] = []
