@@ -62,7 +62,7 @@ function escapeRegExp(text: string): string {
  * still starts with a prefix and ends with the extension. Only `<prefix><X.Y.Z>/<file name>` passes, the
  * file name one segment of [A-Za-z0-9._-] that does not start with a dot.
  */
-function isReleaseAsset(url: string, allowedPrefixes: readonly string[], extension: string): boolean {
+export function isReleaseAsset(url: string, allowedPrefixes: readonly string[], extension: string): boolean {
   const prefixes = allowedPrefixes.map(escapeRegExp).join("|");
   return new RegExp(`^(?:${prefixes})[0-9]+\\.[0-9]+\\.[0-9]+/[A-Za-z0-9_-][A-Za-z0-9._-]*${escapeRegExp(extension)}$`).test(url);
 }

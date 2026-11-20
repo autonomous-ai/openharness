@@ -4,22 +4,15 @@
  */
 
 import { resolveManifestDownload } from "@/lib/desktopManifest";
+import { DEVICE_ASSET_PREFIXES, DEVICE_MANIFEST_URL } from "@/lib/deviceRelease";
 
 export const dynamic = "force-dynamic";
 
-// Fixed, with no environment override: nothing but this bucket may decide where the link points.
-const MANIFEST_URL = "https://storage.googleapis.com/s3-autonomous-upgrade-3/harness/device/metadata.json";
-
-const ALLOWED_PREFIXES = [
-  "https://cdn.autonomous.ai/harness/device/",
-  "https://storage.googleapis.com/s3-autonomous-upgrade-3/harness/device/",
-];
-
 export async function GET(): Promise<Response> {
   return resolveManifestDownload({
-    manifestUrl: MANIFEST_URL,
+    manifestUrl: DEVICE_MANIFEST_URL,
     field: "device-macos-dmg",
-    allowedPrefixes: ALLOWED_PREFIXES,
+    allowedPrefixes: DEVICE_ASSET_PREFIXES,
     extension: ".dmg",
     product: "Harness",
   });

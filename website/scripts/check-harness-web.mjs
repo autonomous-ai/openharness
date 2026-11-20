@@ -80,11 +80,15 @@ for (const route of [`${assetBase}main.dart.js`, `${assetBase}canvaskit/chromium
 const published = await (await fetch(new URL('/harness-web/release.json', base))).json();
 assert.equal(published.version, release.version);
 assert.equal(published.sourceCommit, release.sourceCommit);
-for (const route of ['/download', '/desktop', '/pair']) {
+for (const route of ['/download', '/device', '/pair']) {
   const response = await fetch(new URL(route, base), { redirect: 'manual' });
   assert.equal(response.status, 200, route);
   assert.match(await response.text(), /Harness/);
 }
+// The Harness Device guide replaced the desktop download page.
+const desktop = await fetch(new URL('/desktop', base), { redirect: 'manual' });
+assert.equal(desktop.status, 308, '/desktop must redirect to /device');
+assert.equal(new URL(desktop.headers.get('location'), base).href, new URL('/device', base).href);
 for (const [route, destination] of [
   ['/install.sh', 'https://cdn.autonomous.ai/harness/cli/install.sh'],
   ['/cli/install.sh', 'https://cdn.autonomous.ai/harness/cli/install.sh'],
@@ -94,4 +98,4 @@ for (const [route, destination] of [
   assert.equal(response.status, 308);
   assert.equal(response.headers.get('location'), destination);
 }
-console.log(`Harness Web ${release.version}: entry, shared-agent links, callback, assets, download and phone setup pages, and installer redirects passed.`);
+console.log(`Harness Web ${release.version}: entry, shared-agent links, callback, assets, download, device guide and phone setup pages, the /desktop redirect and installer redirects passed.`);
