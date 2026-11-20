@@ -32,7 +32,9 @@ esac
 
 # Appends {"args", "secrets"} to FAKE_CARGO_LOG. `metadata` answers compact JSON, as cargo does. `tauri bundle` writes
 # the files Tauri 2.12's bundler names, and, as Tauri does, refuses to make updater artifacts with no private key.
-# `tauri signer sign` writes the file's .sig.
+# `tauri signer sign` writes the file's .sig. `tauri --version` answers FAKE_TAURI_CLI, and fails without it, as cargo
+# does with no Tauri CLI installed. A CLI FAKE_TAURI_CLI names is one CI's cache restored, without cargo's record of
+# it, so `install` refuses to overwrite it unless forced, as cargo does.
 CARGO = r'''#!/usr/bin/env python3
 import json, os, sys
 from pathlib import Path
@@ -46,7 +48,13 @@ target = Path(os.environ["FAKE_TARGET"])
 def value(flag):
     return args[args.index(flag) + 1]
 
-if args[:1] == ["metadata"]:
+if args == ["tauri", "--version"]:
+    if "FAKE_TAURI_CLI" not in os.environ:
+        sys.exit("error: no such command: `tauri`")
+    print(os.environ["FAKE_TAURI_CLI"])
+elif args[:1] == ["install"] and "FAKE_TAURI_CLI" in os.environ and "--force" not in args:
+    sys.exit("error: binary `cargo-tauri` already exists in destination\nAdd --force to overwrite")
+elif args[:1] == ["metadata"]:
     print(json.dumps({"packages": [], "target_directory": str(target), "version": 1}, separators=(",", ":")))
 elif args[:2] == ["tauri", "bundle"]:
     config = {}
@@ -101,7 +109,8 @@ class Fakes(unittest.TestCase):
         shutil.copytree(SCRIPTS, self.root / "device-app" / "scripts", ignore=shutil.ignore_patterns("__pycache__"))
         (self.root / "device-app" / "src-tauri").mkdir()
         # No signing secret or target of the machine running the tests.
-        self.env = {key: value for key, value in os.environ.items() if key not in SECRETS and key != "DEVICE_TARGET"}
+        self.env = {key: value for key, value in os.environ.items()
+                    if key not in SECRETS and key not in ("DEVICE_TARGET", "FAKE_TAURI_CLI")}
         self.env.update(PATH=f"{bin_dir}{os.pathsep}{os.environ['PATH']}", FAKE_CARGO_LOG=str(self.log),
                         FAKE_TARGET=str(self.target), PYTHONDONTWRITEBYTECODE="1")
 
@@ -462,6 +471,8 @@ LINUX_MINISIGN = (MINISIGN_RELEASE + "minisign-0.12-linux.tar.gz",
                   "9a599b48ba6eb7b1e80f12f36b94ceca7c00b7a5173c95c3efc88d9822957e73")
 WINDOWS_MINISIGN = (MINISIGN_RELEASE + "minisign-0.12-win64.zip",
                     "37b600344e20c19314b2e82813db2bfdcc408b77b876f7727889dbd46d539479")
+# Forced: a CLI CI's cache restored at another version has no cargo record, and cargo refuses to overwrite it.
+INSTALL_TAURI_CLI = ["install", "tauri-cli", "--version", "2.12.4", "--locked", "--force"]
 
 
 class ReleaseSetupTests(Fakes):
@@ -483,10 +494,13 @@ class ReleaseSetupTests(Fakes):
         self.runner_temp = self.root / "runner-temp"
         self.runner_temp.mkdir()
 
-    def setup(self, os_, sha256, *mode):
+    def setup(self, os_, sha256, *mode, **env):
         return self.run_script("release-setup.sh", os_, *mode, GITHUB_ACTIONS="true",
                                FAKE_SETUP_LOG=str(self.setup_log), GITHUB_PATH=str(self.github_path),
-                               RUNNER_TEMP=str(self.runner_temp), FAKE_ASSET_SHA256=sha256)
+                               RUNNER_TEMP=str(self.runner_temp), FAKE_ASSET_SHA256=sha256, **env)
+
+    def cargo_installs(self):
+        return [call["args"] for call in self.cargo_calls() if call["args"][:1] == ["install"]]
 
     def calls(self, cmd):
         lines = self.setup_log.read_text().splitlines() if self.setup_log.exists() else []
@@ -539,8 +553,7 @@ class ReleaseSetupTests(Fakes):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.calls("rustup"), [["toolchain", "install", "stable", "--profile", "minimal"],
                                                 ["target", "add", "aarch64-apple-darwin", "x86_64-apple-darwin"]])
-        self.assertEqual([call["args"] for call in self.cargo_calls()],
-                         [["install", "tauri-cli", "--version", "2.12.4", "--locked"]])
+        self.assertEqual(self.cargo_installs(), [INSTALL_TAURI_CLI])
         self.assertEqual(self.calls("npm"), [["ci", "--no-audit", "--no-fund"]])
 
     def test_the_tauri_cli_mode_installs_rust_and_the_cli_only(self):
@@ -548,12 +561,34 @@ class ReleaseSetupTests(Fakes):
         result = self.setup(WINDOWS, "0" * 64, "tauri-cli")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.calls("rustup"), [["toolchain", "install", "stable", "--profile", "minimal"]])
-        self.assertEqual([call["args"] for call in self.cargo_calls()],
-                         [["install", "tauri-cli", "--version", "2.12.4", "--locked"]])
+        self.assertEqual(self.cargo_installs(), [INSTALL_TAURI_CLI])
         for cmd in ("npm", "curl", "pwsh"):
             with self.subTest(cmd=cmd):
                 self.assertEqual(self.calls(cmd), [])
         self.assertFalse(self.github_path.exists())
+
+    def test_setup_keeps_the_pinned_tauri_cli_already_there(self):
+        # CI restores the CLI from a cache: compiling it again would cost minutes a run.
+        for os_, mode, rustup in ((MACOS, (), [["toolchain", "install", "stable", "--profile", "minimal"],
+                                              ["target", "add", "aarch64-apple-darwin", "x86_64-apple-darwin"]]),
+                                  (WINDOWS, ("tauri-cli",), [["toolchain", "install", "stable", "--profile", "minimal"]])):
+            with self.subTest(os=os_, mode=mode):
+                self.setup_log.unlink(missing_ok=True)
+                self.log.unlink(missing_ok=True)
+                result = self.setup(os_, "0" * 64, *mode, FAKE_TAURI_CLI="tauri-cli 2.12.4")
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(self.cargo_installs(), [])
+                self.assertEqual(self.calls("rustup"), rustup)
+                self.assertEqual(self.calls("npm"), [] if mode else [["ci", "--no-audit", "--no-fund"]])
+
+    def test_setup_installs_the_pin_over_another_version(self):
+        # The cache's CLI, which cargo has no record of.
+        for mode in ((), ("tauri-cli",)):
+            with self.subTest(mode=mode):
+                self.log.unlink(missing_ok=True)
+                result = self.setup(MACOS, "0" * 64, *mode, FAKE_TAURI_CLI="tauri-cli 2.12.3")
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(self.cargo_installs(), [INSTALL_TAURI_CLI])
 
     def test_the_minisign_mode_installs_minisign_only(self):
         # The job that checks the signed installers needs nothing else: no Rust, no Tauri CLI, no UI package.

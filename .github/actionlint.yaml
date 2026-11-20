@@ -1,0 +1,5 @@
+self-hosted-runner:
+  labels:
+    # A GitHub-hosted label actionlint 1.7.12 does not know yet (actions/runner-images ships Ubuntu2604-Readme.md).
+    # This file is needed only until the actionlint version CI runs lists ubuntu-26.04 among its hosted labels.
+    - ubuntu-26.04
