@@ -22,6 +22,11 @@ pub fn pick(in_z_order: &[Candidate]) -> Option<usize> {
         .position(|window| window.visible && !window.owned && !window.tool)
 }
 
+/// The scheme of a link, as Windows names its handler: `codex` for `codex://…`.
+pub fn scheme(url: &str) -> &str {
+    url.split_once(':').map_or(url, |(scheme, _)| scheme)
+}
+
 #[cfg(windows)]
 pub use windows::{open_link, raise};
 
@@ -37,7 +42,8 @@ mod windows {
     };
     use windows_sys::Win32::System::Threading::{PROCESS_NAME_WIN32, QueryFullProcessImageNameW};
     use windows_sys::Win32::UI::Shell::{
-        SEE_MASK_FLAG_NO_UI, SEE_MASK_NOASYNC, SHELLEXECUTEINFOW, ShellExecuteExW,
+        ASSOCF_IS_PROTOCOL, ASSOCSTR_PROGID, AssocQueryStringW, SEE_MASK_FLAG_NO_UI,
+        SEE_MASK_NOASYNC, SHELLEXECUTEINFOW, ShellExecuteExW,
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         EnumWindows, GW_OWNER, GWL_EXSTYLE, GetForegroundWindow, GetWindow, GetWindowLongW,
@@ -45,7 +51,7 @@ mod windows {
         SetForegroundWindow, ShowWindow, WS_EX_TOOLWINDOW,
     };
 
-    use super::{Candidate, pick};
+    use super::{Candidate, pick, scheme};
     use crate::cli::RaiseTarget;
     use crate::desktop::win::wide;
 
@@ -128,8 +134,28 @@ mod windows {
         }
     }
 
+    /// Whether a program is registered for links of [scheme]. ShellExecuteExW, even with the
+    /// no-UI flag, answers a scheme with none by opening "pick an app" and reporting success. The
+    /// ProgID is asked because a packaged handler (a Store app's) has one but no command or
+    /// executable to read. With no buffer, a registered one answers S_FALSE and its length.
+    fn handled(scheme: &str) -> bool {
+        let scheme = wide(OsStr::new(scheme));
+        let mut len = 0u32;
+        let result = unsafe {
+            AssocQueryStringW(
+                ASSOCF_IS_PROTOCOL,
+                ASSOCSTR_PROGID,
+                scheme.as_ptr(),
+                std::ptr::null(),
+                std::ptr::null_mut(),
+                &mut len,
+            )
+        };
+        result >= 0
+    }
+
     /// `opened` when the link's handler took it; `refused` otherwise, a scheme with no handler
-    /// among them. The no-UI flag keeps Windows from asking the person to pick an app.
+    /// among them. The no-UI flag keeps Windows' error boxes away.
     pub fn open_link(url: &str) -> &'static str {
         // A handler may be a shell extension, which needs COM on the calling thread
         // (ShellExecuteExW's documentation).
@@ -139,6 +165,9 @@ mod windows {
                 (COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE) as u32,
             )
         };
+        if !handled(scheme(url)) {
+            return "refused";
+        }
         let (verb, file) = (wide(OsStr::new("open")), wide(OsStr::new(url)));
         let mut info: SHELLEXECUTEINFOW = unsafe { std::mem::zeroed() };
         info.cbSize = size_of::<SHELLEXECUTEINFOW>() as u32;
