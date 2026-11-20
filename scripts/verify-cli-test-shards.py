@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """Verify that passing Vitest CI shards cover the discovered file set exactly once.
 
-Two suites use it: the default suite (`--suite unit`, ci.yml, four shards beside the contract job) and
-the end-to-end suite (`--suite e2e`, cli-e2e.yml, which has no contract job). The summary also records
-each file's duration, rounded up to 100ms: the timing hints the next run's shards are planned with
-(cli/ci-test-durations.json, cli/ci-e2e-durations.json) are refreshed from it.
+Three uses: the default suite (`--suite unit`, ci.yml, four shards beside the contract job), the
+end-to-end suite (`--suite e2e`, cli-e2e.yml, which has no contract job), and a pull request's own e2e
+files (ci.yml's linux-e2e-summary, `--suite e2e --selected`): exactly the selected files ran, each
+collecting at least one case. The summary also records each file's duration, rounded up to 100ms: the
+timing hints the next run's shards are planned with (cli/ci-test-durations.json, cli/ci-e2e-durations.json)
+are refreshed from it. It lists each file's skipped cases too, which `--step-summary` writes for the job.
 """
 import argparse
 from collections import Counter
@@ -18,8 +20,9 @@ import sys
 SUITES = {"unit": ("src/", (".spec.ts", ".test.ts")), "e2e": ("e2e/", (".e2e.ts",))}
 
 
-def verify(directory, root, shards, tests_result, contracts_result, suite="unit"):
+def verify(directory, root, shards, tests_result, contracts_result, suite="unit", selected=None):
     folder, suffixes = SUITES[suite]
+    selected = None if selected is None else set(selected)
     # Vitest JSON can say success even when an unhandled error makes its process
     # fail. Require the actual matrix/contract job verdicts, not JSON alone. Only the
     # end-to-end suite runs without a contract job; the default suite always has one.
@@ -29,6 +32,7 @@ def verify(directory, root, shards, tests_result, contracts_result, suite="unit"
     totals = Counter(passed=0, skipped=0, todo=0)
     receipts = []
     durations = {}
+    cases_by_file, skipped_by_file = {}, {}
 
     def relative(value):
         if not isinstance(value, str):
@@ -53,10 +57,11 @@ def verify(directory, root, shards, tests_result, contracts_result, suite="unit"
         if expected is not None and expected != set(paths):
             raise ValueError(f"shard {shard}: discovery inventories disagree")
         expected = set(paths)
+        # Vitest's file filters match substrings: a selected e2e/a.e2e.ts also discovers e2e/sub/a.e2e.ts.
+        if selected is not None and expected != selected:
+            raise ValueError(f"shard {shard}: the run is not the selected files: missing={sorted(selected - expected)}, "
+                             f"unexpected={sorted(expected - selected)}")
         report = json.loads(result_path.read_text())
-        if (report.get("success") is not True or report.get("numFailedTests") != 0
-                or report.get("numFailedTestSuites") != 0 or report.get("numPendingTestSuites") != 0):
-            raise ValueError(f"shard {shard}: failed or unfinished tests/suites")
         files = report["testResults"]
         if not isinstance(files, list) or not files:
             raise ValueError(f"shard {shard}: empty result set")
@@ -71,11 +76,20 @@ def verify(directory, root, shards, tests_result, contracts_result, suite="unit"
                 type(file.get(key)) in (int, float) for key in ("startTime", "endTime")) else 0
             if elapsed > 0:
                 durations[name] = int(-(-elapsed // 100) * 100)
+            mine = Counter(passed=0, skipped=0, todo=0)
             for case in file["assertionResults"]:
                 status = case.get("status")
                 if status not in {"passed", "skipped", "todo"} or case.get("failureMessages"):
                     raise ValueError(f"shard {shard}: failed or unfinished case in {name}")
-                counts[status] += 1
+                mine[status] += 1
+                if status == "skipped":
+                    skipped_by_file.setdefault(name, []).append(case.get("fullName", ""))
+            cases_by_file[name] = mine
+            counts.update(mine)
+        # After the files, so a file that failed to load fails by its name, not only as the shard's flag.
+        if (report.get("success") is not True or report.get("numFailedTests") != 0
+                or report.get("numFailedTestSuites") != 0 or report.get("numPendingTestSuites") != 0):
+            raise ValueError(f"shard {shard}: failed or unfinished tests/suites")
         expected_counts = {"numPassedTests": counts["passed"], "numPendingTests": counts["skipped"],
                            "numTodoTests": counts["todo"], "numTotalTests": sum(counts.values())}
         if any(type(report.get(key)) is not int or report[key] != value for key, value in expected_counts.items()):
@@ -87,8 +101,30 @@ def verify(directory, root, shards, tests_result, contracts_result, suite="unit"
     if set(seen) != expected or any(count != 1 for count in seen.values()):
         raise ValueError(f"file partition mismatch: missing={sorted(expected - set(seen))}, "
                          f"unexpected={sorted(set(seen) - expected)}, duplicates={sorted(p for p, n in seen.items() if n != 1)}")
+    empty = sorted(name for name, counts in cases_by_file.items() if not sum(counts.values()))
+    if selected is not None and empty:
+        raise ValueError(f"collected no test: {', '.join(empty)}")
     return {"schema": 1, "suite": suite, "status": "passed", "files": len(seen), **dict(totals),
-            "shards": receipts, "verified_files": sorted(seen), "durations_ms": dict(sorted(durations.items()))}
+            "shards": receipts, "verified_files": sorted(seen), "durations_ms": dict(sorted(durations.items())),
+            "cases_by_file": {name: dict(counts) for name, counts in sorted(cases_by_file.items())},
+            "skipped_by_file": dict(sorted(skipped_by_file.items())),
+            "all_skipped": sorted(name for name, counts in cases_by_file.items()
+                                  if sum(counts.values()) and not counts["passed"])}
+
+
+def step_summary(summary):
+    """The job summary's Markdown: each file with a skipped case, and the files that ran none."""
+    lines = []
+    if summary["skipped_by_file"]:
+        lines += ["| File | Passed | Skipped |", "| --- | ---: | ---: |"]
+        lines += [f"| {name} | {summary['cases_by_file'][name]['passed']} | {len(cases)} |"
+                  for name, cases in summary["skipped_by_file"].items()]
+        for name, cases in summary["skipped_by_file"].items():
+            lines += ["", f"{name}:", *(f"- {case}" for case in cases)]
+    if summary["all_skipped"]:
+        lines += ["", "### Every case skipped", "", *(f"- {name}" for name in summary["all_skipped"]), "",
+                  "These files ran no case on Linux. macOS-only files are not verified by PR CI."]
+    return "\n".join(lines) + "\n" if lines else ""
 
 
 def main():
@@ -100,13 +136,24 @@ def main():
     parser.add_argument("--contracts-result", help="the contract job's verdict; required for the unit suite")
     parser.add_argument("--suite", choices=sorted(SUITES), default="unit")
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--selected", help="a pull request's own e2e files, cli/-relative, separated by spaces")
+    parser.add_argument("--step-summary", type=Path, help="the job summary file to append the skipped cases to")
     args = parser.parse_args()
     if args.shards < 1:
         parser.error("shards must be positive")
     if args.suite == "unit" and args.contracts_result is None:
         parser.error("the unit suite requires --contracts-result")
-    summary = verify(args.directory, args.root, args.shards, args.tests_result, args.contracts_result, args.suite)
+    if args.suite == "unit" and (args.selected is not None or args.step_summary):
+        parser.error("--selected and --step-summary are for the end-to-end suite (--suite e2e)")
+    selected = None if args.selected is None else args.selected.split()
+    if selected == []:
+        parser.error("--selected names no file")
+    summary = verify(args.directory, args.root, args.shards, args.tests_result, args.contracts_result, args.suite,
+                     selected)
     args.output.write_text(json.dumps(summary, indent=2) + "\n")
+    if args.step_summary:
+        with args.step_summary.open("a") as handle:
+            handle.write(step_summary(summary))
     print(f"Verified {summary['files']} {args.suite} files exactly once: {summary['passed']} passed, "
           f"{summary['skipped']} skipped, {summary['todo']} todo across {args.shards} shards")
     return 0
