@@ -25,11 +25,7 @@ pub const AX_SETTINGS: &str = "x-apple.systempreferences:com.apple.preference.se
 pub fn thread_line(title: Option<&str>) -> String {
     let kept = title.filter(|title| title.encode_utf16().count() <= TITLE_MAX && !title.chars().any(char::is_control));
     let line = serde_json::json!({ "thread": kept.unwrap_or_default() }).to_string();
-    if line.len() < THREAD_LINE_MAX {
-        line
-    } else {
-        serde_json::json!({ "thread": "" }).to_string()
-    }
+    if line.len() < THREAD_LINE_MAX { line } else { serde_json::json!({ "thread": "" }).to_string() }
 }
 
 /// The CLI's rule: `ChatGPT.app` in `applications`, then in `home`'s Applications, whose bundle id is CHATGPT_BUNDLE.
@@ -93,9 +89,13 @@ impl AxTrust for NoFollow {
     fn start(&self, _changed: Box<dyn Fn() + Send + Sync>) {}
 }
 
-/// The door this platform has: none yet, until macOS gets its own.
-pub fn system(#[expect(unused_variables)] home: PathBuf) -> Arc<dyn FollowDoor> {
-    Arc::new(NoFollow)
+/// The door this platform has: only macOS has the ChatGPT app to follow.
+pub fn system(#[cfg_attr(not(target_os = "macos"), expect(unused_variables))] home: PathBuf) -> Arc<dyn FollowDoor> {
+    #[cfg(target_os = "macos")]
+    let door = crate::follow_macos::MacFollow::new(home);
+    #[cfg(not(target_os = "macos"))]
+    let door = NoFollow;
+    Arc::new(door)
 }
 
 /// What to do with the observation.
