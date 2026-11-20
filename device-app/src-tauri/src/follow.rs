@@ -311,9 +311,9 @@ mod tests {
             |follow| follow.attached(true),
             |follow| follow.trusted(true),
         ];
-        for alone in 0..4 {
+        for (alone, set) in conditions.iter().enumerate() {
             let mut follow = ChatgptFollow::default();
-            conditions[alone](&mut follow);
+            set(&mut follow);
             assert!(!follow.observes(), "{alone} alone");
             assert!(matches!(follow.observer(), Observer::Same), "{alone} alone");
         }
