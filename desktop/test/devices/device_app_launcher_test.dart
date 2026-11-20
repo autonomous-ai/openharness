@@ -88,6 +88,37 @@ void main() {
     );
   }, skip: Platform.isWindows);
 
+  test('a % in the place is written %% in Exec=', () async {
+    final odd = '${root.path}/50%off';
+    final appImage = '$odd/.local/opt/Harness-Device.AppImage';
+
+    await write(appImage, environment: {'HOME': odd});
+
+    expect(
+      entryIn('$odd/.local/share').readAsStringSync(),
+      contains(
+        'Exec=${root.path}/50%%off/.local/opt/Harness-Device.AppImage\n',
+      ),
+    );
+  }, skip: Platform.isWindows);
+
+  test(
+    'an entry for a place with a " in it is read whole, and stays',
+    () async {
+      final odd = '${root.path}/a"b';
+      final appImage = '$odd/.local/opt/Harness-Device.AppImage';
+      File(appImage)
+        ..createSync(recursive: true)
+        ..writeAsStringSync('');
+      await write(appImage, environment: {'HOME': odd});
+
+      await forgetGoneDeviceAppLauncher(environment: {'HOME': odd});
+
+      expect(entryIn('$odd/.local/share').existsSync(), isTrue);
+    },
+    skip: Platform.isWindows,
+  );
+
   test('an icon that cannot be taken leaves the entry without one', () async {
     await write(place, icon: null);
 

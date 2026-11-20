@@ -54,6 +54,51 @@ void main() {
     );
   });
 
+  // The Desktop Entry spec reserves % for field codes: GLib would read %o in
+  // 50%off as one and start another path.
+  test('a % in the path is written %% for the launcher', () async {
+    await launch('$home/50%off/Harness.AppImage');
+    expect(
+      entry().readAsStringSync(),
+      contains('Exec=$home/50%%off/Harness.AppImage %u\n'),
+    );
+  });
+
+  test("an entry today's Desktop wrote with a single % is its own, and is "
+      'written again with %%', () async {
+    final path = '$home/50%off/Harness.AppImage';
+    await launch(path);
+    entry().writeAsStringSync(
+      '[Desktop Entry]\nType=Application\nExec=$path %u\n'
+      'MimeType=x-scheme-handler/harness;\n',
+    );
+    await launch(path);
+    expect(
+      entry().readAsStringSync(),
+      contains('Exec=$home/50%%off/Harness.AppImage %u\n'),
+    );
+  });
+
+  test('Exec= reads back every path it was written with', () {
+    for (final path in [
+      '/home/p/Harness.AppImage',
+      '/home/p q/Harness.AppImage',
+      '/home/50%off/Harness.AppImage',
+      '/home/50%%off now/Harness.AppImage',
+      '/home/a"b/Harness.AppImage',
+      r'/home/a\b/Harness.AppImage',
+      r'/home/a$b`c/Harness.AppImage',
+    ]) {
+      expect(
+        launcherExecTarget(
+          '[Desktop Entry]\nExec=${quoteLauncherExec(path)} %u\n',
+        ),
+        path,
+        reason: path,
+      );
+    }
+  });
+
   test('an entry for a copy still on disk is not taken over', () async {
     await launch('$home/.local/opt/Harness.AppImage');
     await launch('$home/Downloads/Harness-linux-x64.AppImage');
