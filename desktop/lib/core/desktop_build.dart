@@ -1,11 +1,11 @@
 /// Which desktop build suits the browser asking — the Dart side of the website's
 /// `website/src/lib/desktopPlatform.ts`, kept to the same rules so the app's Download app and the
-/// website's `/desktop` offer the same build.
+/// website's `/download` offer the same build.
 ///
 /// macOS ships one universal app in two builds: every Mac runs the Intel one, and a Mac whose browser
 /// says its CPU is ARM gets the Apple silicon one. Only Chromium can say; Safari and Firefox report
 /// "Intel" on every Mac. On Linux the CPU decides whether the app runs at all, so an unknown CPU gets
-/// no build: the `/desktop` page offers both instead of guessing.
+/// no build: the `/download` page offers both instead of guessing.
 library;
 
 enum DesktopBuild {
