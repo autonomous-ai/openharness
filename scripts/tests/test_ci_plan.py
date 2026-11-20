@@ -1107,6 +1107,14 @@ class CrossReadTests(unittest.TestCase):
         self.assertEqual(planner.undeclared_reads(self.root, "mobile", ["backend/gone/app.ts"]), [
             ("mobile/test/relative_test.dart", "backend/gone/app.ts"), ("mobile/test/root_test.dart", "backend/gone/app.ts")])
 
+    def test_a_checkout_without_a_scanned_file_refuses_rather_than_finding_nothing(self):
+        # CI's process-checks checkout is sparse: its files are listed but absent, and the scan found no read there.
+        self.write("mobile/test/a_test.dart", "File('../backend/src/app.ts');")
+        self.git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "fixture")
+        self.git("sparse-checkout", "set", "--no-cone", "/backend/", "/cli/")
+        with self.assertRaisesRegex(ValueError, "mobile/test/a_test.dart"):
+            planner.undeclared_reads(self.root, "mobile")
+
     def test_strings_that_are_only_data_are_listed_with_a_reason(self):
         for source, (reason, targets) in planner.NOT_READS.items():
             with self.subTest(source=source):
