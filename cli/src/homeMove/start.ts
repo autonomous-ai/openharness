@@ -122,7 +122,7 @@ export function reexecTarget(plan: Roots, execPath: string, argv: readonly strin
  * holds the lock for and has committed (this start then goes on from the new roots while that one finishes).
  */
 async function moveOrHold(explicit: boolean, env: NodeJS.ProcessEnv, environment: NodeJS.ProcessEnv, roots: Roots, deps: StartDeps, moveDeps: MoveDeps, lines: string[]): Promise<MoveOutcome | null> {
-  const wait = { committed: () => marked(roots), long: () => say([UNDER_WAY], environment, deps) }
+  const wait = { committed: () => marked(roots), long: () => say([UNDER_WAY], environment, deps), log: (line: string) => say([line], environment, deps) }
   const locked = await withMoveLock(roots.legacy, async () => {
     const recovered = await recoverMove(deps.home, environment, moveDeps)
     if (recovered) return recovered
