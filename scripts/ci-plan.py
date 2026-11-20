@@ -4,7 +4,8 @@
 A PR runs the unit suite of each component it changes and of each suite that reads a changed file (PR_READS), and each
 end-to-end suite (E2E: windows-e2e, linux-e2e, dial-hosts, device-app-e2e, device-app-update, device-app-desktop,
 device-app-install) whose own path list names a changed file; linux-e2e runs the CLI e2e files the PR adds or modifies.
-A change to this planner, its test or the tables it reads runs the repository-wide cross-read scan on a full checkout.
+A change to this planner, its test, the tables it reads or the CLI lists they copy runs the repository-wide cross-read
+scan and the planner's other full-checkout tests on a full checkout.
 Merge groups run only the plan and process checks: the PR run already covered the code.
 After GitHub merges main into a PR head whose ci/required passed, a component whose
 inputs main's new commits left untouched reuses that run's result instead of running
@@ -244,8 +245,9 @@ DEPENDS.update({
     "device-app-update": DEPENDS["device-app"] + ("device-app/",),
     "device-app-desktop": DEPENDS["device-app"] + DEPENDS["desktop"] + ("device-app/", "desktop/"),
     "device-app-install": DEPENDS["device-app"] + ("device-app/", "website/scripts/device-install.sh"),
-    # Every component's files and the docs their strings may name: the scan reads them all.
-    "cross-read-scan": tuple(sorted({path.split("/", 1)[0] + "/" for path in (*COMPONENTS, *ALSO, *SUBCOMPONENTS)}
+    # The scan reads every component's files and the docs their strings may name; the planner's tables name them all.
+    # Only a PR that changes the CLI's lists alone may reuse it (its other files are under scripts/, a shared input).
+    "cross-read-scan":tuple(sorted({path.split("/", 1)[0] + "/" for path in (*COMPONENTS, *ALSO, *SUBCOMPONENTS)}
                                     | {"docs/"})),
 })
 
@@ -342,10 +344,12 @@ PR_READS = {
 NOT_READ = {"cli": ("cli/e2e/",)}
 # Strings in a suite's files that name another directory's path but are not read by its PR jobs:
 # test data, or a script run only by hand. {source: (why, {path the scan reports, or a folder "dir/" covering it})}.
-# A folder covers only paths named from the repository root: a relative read ("../../cli/x.ts") is always a read.
+# A folder covers the paths under it named from the repository root. A relative read ("../../cli/x.ts") is always a
+# read, but one that also names a path inside its file's own directory, which the scan then fails closed on: there an
+# entry naming exactly the outside path covers it (the setup action's `../backend`, also beside it in .github/actions/).
 NOT_READS = {
-    ".github/actions/cli-e2e-setup/action.yml": ("the real backend, set up only for a job that asks (linux-e2e); "
-                                                 "dial-hosts does not", {"backend/"}),
+    ".github/actions/cli-e2e-setup/action.yml": ("the real backend, set up only for a job that asks (linux-e2e, which "
+                                                 "declares backend/); dial-hosts does not", {"backend/"}),
     # cli-tests runs vitest on src/ only; these start the real backend with its installed prisma.
     **{source: ("end-to-end and local stack scripts, run by hand", {"backend/"})
        for source in ("cli/e2e/harness/realBackend.ts", "cli/scripts/box-claim-e2e.ts", "cli/scripts/local-stack-peer.ts",

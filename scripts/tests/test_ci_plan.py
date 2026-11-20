@@ -445,7 +445,9 @@ class SelectionTests(unittest.TestCase):
         self.assertEqual(planner.MANUAL["cross-read-scan"], {"cross-read-scan"})
 
     def test_the_cross_read_scan_reads_every_file_it_scans(self):
-        # Its result depends on every component's files, so any of them changed on main reruns it.
+        # Its result depends on every component's files. A PR that changes only the CLI's lists the planner mirrors
+        # (dialHosts.ts, the CI config) may reuse it after Update branch, so any of them changed on main reruns it; the
+        # planner's own files are under scripts/, a shared input, and never reuse.
         for path in ("cli/src/a.ts", "tests/a.ts", "desktop/lib/a.dart", "devices/harness-pro/a.c", "term/src/a.rs",
                      "plugins/harness-device-vscode/src/a.ts", "device-app/src-tauri/src/a.rs", "docs/guide.md"):
             with self.subTest(path=path):
