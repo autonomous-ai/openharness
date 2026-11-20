@@ -35,6 +35,9 @@ mod tests {
         assert_eq!(log_line(None), None);
     }
 
+    #[cfg(target_os = "linux")]
+    const WAIT: std::time::Duration = std::time::Duration::from_secs(5);
+
     /// A session bus of the test's own, so no test reads or changes the environment's.
     #[cfg(target_os = "linux")]
     struct Bus {
@@ -75,17 +78,44 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
-    fn a_watcher_on_the_bus_is_a_host_and_none_is_no_host() {
+    fn a_watcher_on_the_bus_is_a_host_and_none_by_the_end_of_the_wait_is_no_host() {
         let bus = Bus::start();
-        let app = bus.connect();
-        assert_eq!(asks(&app), Some(false));
+        // Each ask on a connection of its own, as the app's is: none hears what an earlier one followed.
+        let short = std::time::Duration::from_millis(100);
+        assert_eq!(asks(&bus.connect(), short), Some(false));
 
         let watcher = bus.connect();
         watcher.request_name(WATCHER, false, false, true).unwrap();
-        assert_eq!(asks(&app), Some(true));
+        assert_eq!(asks(&bus.connect(), short), Some(true));
 
         watcher.release_name(WATCHER).unwrap();
-        assert_eq!(asks(&app), Some(false));
+        assert_eq!(asks(&bus.connect(), short), Some(false));
+    }
+
+    /// At login the panel may start after the app, and take the watcher's name a moment later.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_watcher_that_takes_its_name_after_the_first_ask_is_a_host() {
+        let bus = Bus::start();
+        // A monitor sees the app's NameHasOwner: the watcher takes its name only once the answer is no.
+        let monitor = bus.connect();
+        let rule = format!("type='method_call',member='NameHasOwner',arg0='{WATCHER}'");
+        let daemon = monitor.with_proxy("org.freedesktop.DBus", "/org/freedesktop/DBus", WAIT);
+        let () = daemon.method_call("org.freedesktop.DBus.Monitoring", "BecomeMonitor", (vec![rule], 0u32)).unwrap();
+        let app = bus.connect();
+        let asking = std::thread::spawn(move || asks(&app, WAIT));
+        let deadline = std::time::Instant::now() + WAIT;
+        loop {
+            let left = deadline.saturating_duration_since(std::time::Instant::now());
+            assert!(!left.is_zero(), "the app asked NameHasOwner within {WAIT:?}");
+            let message = monitor.channel().blocking_pop_message(left).unwrap();
+            if message.is_some_and(|message| message.member().is_some_and(|member| &*member == "NameHasOwner")) {
+                break;
+            }
+        }
+        let watcher = bus.connect();
+        watcher.request_name(WATCHER, false, false, true).unwrap();
+        assert_eq!(asking.join().unwrap(), Some(true));
     }
 
     #[cfg(target_os = "linux")]
@@ -94,6 +124,6 @@ mod tests {
         let bus = Bus::start();
         let app = bus.connect();
         drop(bus);
-        assert_eq!(asks(&app), None);
+        assert_eq!(asks(&app, WAIT), None);
     }
 }
