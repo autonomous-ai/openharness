@@ -4,16 +4,9 @@
  * Numbers only, so a log can say whether a turn the transcriber answered with nothing was silence, noise or
  * speech without keeping a sample of the audio (OPENHARNES-18: every turn spoken while the dial followed Hachi
  * came back empty, and nothing in the log said what the dial had actually recorded).
- */
-export function voiceLevel(pcm: Buffer): { peak: number; rms: number } {
-  const level = new VoiceLevel()
-  level.add(pcm)
-  return level.read()
-}
-
-/**
- * The same level, summed piece by piece: a long recording is uploaded in segments while the person talks, so no
- * single buffer holds all of it.
+ *
+ * Summed piece by piece: a long recording is uploaded in segments while the person talks, so no single buffer holds
+ * all of it.
  */
 export class VoiceLevel {
   private peak = 0

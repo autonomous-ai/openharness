@@ -24,7 +24,7 @@ import { readCompanionIdentity, type CompanionIdentity } from './companionProtoc
 
 import { CABLE_MAX_PAYLOAD, CableDecoder, CableType, encodeCableFrame } from './cableFrame.js'
 import { DialLog } from './dialLog.js'
-import { voiceLevel } from './voiceLevel.js'
+import { VoiceSegments, realTimer } from './voiceSegments.js'
 import { FirmwareTransfer, otaKeyFor } from './fwPush.js'
 import { PACK_VERSION } from './pets/pack.js'
 import { planPetSync } from './pets/sync.js'
@@ -502,8 +502,9 @@ export interface CableHost {
   /** A finger moving on the dial's glass, on its way to whatever window is open on this computer. */
   scrolled(phase: 'down' | 'move' | 'up', dy: number, velocity: number): void
   updateAgent(agentId: string, model?: string, effort?: string): void
-  /** PCM is 16-bit mono at `sampleRate`; the daemon owns the credential this needs. */
-  transcribe(pcm: Buffer, sampleRate: number, lang: string): Promise<string>
+  /** PCM is 16-bit mono at `sampleRate`; the daemon owns the credential this needs. `signal` aborts the upload of a
+   *  recording that ended without its words being wanted; a host may ignore it. */
+  transcribe(pcm: Buffer, sampleRate: number, lang: string, signal?: AbortSignal): Promise<string>
   /** Which agent the words belong to. Scored locally first; only a genuine tie should cost a network call. */
   route(transcript: string, agents: CableAgent[]): Promise<RouteDecision>
   /**
@@ -936,8 +937,9 @@ export class CableSession {
   /** Devices already logged as having no image channel this session (the hello repeats every ~15 s). */
   private noChannelLogged = new Set<string>()
 
-  /** Voice capture in flight: PCM chunks as they arrive, plus what `voice.begin` said about them. */
-  private voice: { agentId?: string; cmd?: string; lang: string; rate: number; chunks: Buffer[]; bytes: number;
+  /** Voice capture in flight: how many PCM bytes arrived, plus what `voice.begin` said about them. The audio itself goes
+   *  to `voiceSegments`. */
+  private voice: { agentId?: string; cmd?: string; lang: string; rate: number; bytes: number;
     selectionId?: string; selection?: Promise<SelectionResult>;
     carry?: CarryRead;
     question?: { pin?: QuestionSpeech };
@@ -957,6 +959,9 @@ export class CableSession {
   private voiceDraftCreation?: { uploadId: string; id: string }
   private readonly questionInbox = new QuestionInbox()
   private voiceGeneration = 0
+  /** The current recording's uploads, from `voice.begin` until its `voice.end` is answered. Kept apart from `voice`,
+   *  which `voice.end` clears at once, so an abort, a new recording or the port closing still stops what is in flight. */
+  private voiceSegments?: VoiceSegments
   private voiceUploadId = ''
   /** A recording refused at `voice.begin` (its agent has no `v`), said on `voice.end`: today's firmware drops a voice
    *  error that arrives before the person lets go. Any later turn, abort or close moves the generation on and drops it. */
@@ -1262,6 +1267,7 @@ export class CableSession {
     this.resetCapabilities()
     this.voice = null
     this.voiceGeneration++
+    this.abortVoiceSegments()
     // The dial keeps its running image; the half-written slot is erased again by the next accepted offer.
     this.endFirmware('interrupted by the port closing')
     // The dial discards a half-received pack when the link drops (it keeps showing the old pet), so there
@@ -1741,6 +1747,7 @@ export class CableSession {
         this.passageCarry.clear(id)
         if (this.voiceCarryId === id) {
           this.voiceGeneration++
+          this.abortVoiceSegments()
           this.voice = null
           this.voiceCarryId = undefined
         }
@@ -1847,6 +1854,7 @@ export class CableSession {
         if (str('agentId')) this.host.updateAgent(str('agentId')!, str('model'), str('effort'))
         return
       case 'voice.begin': {
+        this.abortVoiceSegments()
         this.cancelFormVoice()
         this.cancelSearchVoice()
         this.voiceDraftCreation = undefined
@@ -1929,7 +1937,6 @@ export class CableSession {
           // speech sound fast — the transcriber is handed a container that lies about itself and answers
           // with nothing at all.
           rate: typeof msg.sr === 'number' && msg.sr > 0 ? msg.sr : DEFAULT_VOICE_RATE,
-          chunks: [],
           bytes: 0,
           form,
           carry,
@@ -1945,6 +1952,16 @@ export class CableSession {
                 .catch(() => ({ ok: false as const, error: 'Could not attach that text. Choose it again.' })),
           } : {}),
         }
+        // Missing its pin or its command already, the turn is refused at Done whatever is said: its audio would be
+        // uploaded, and the person's voice seconds spent, for an answer the dial never gets.
+        const refusedAtDone = (carry && !carry.ok) || (draft && !draft.pin) || (question && !question.pin) ||
+          (search && !search.command) || (form && !form.command) ||
+          (this.voice.selectionId && (!this.voice.agentId || !this.host.selectPassage))
+        if (!refusedAtDone) {
+          const { rate, lang } = this.voice
+          this.voiceSegments = new VoiceSegments({ rate, lang, timer: realTimer,
+            transcribe: (pcm, signal) => this.host.transcribe(pcm, rate, lang, signal) })
+        }
         return
       }
       case 'voice.abort':
@@ -1959,6 +1976,7 @@ export class CableSession {
         if (this.voice?.selectionId && this.voice.agentId) void this.host.selectPassage?.({
           op: 'cancel', agentId: this.voice.agentId, selectionId: this.voice.selectionId })
         this.voiceGeneration++
+        this.abortVoiceSegments()
         this.voice = null
         this.voiceCarryId = undefined
         return
@@ -2338,13 +2356,33 @@ export class CableSession {
       this.log('cable: voice over the length cap, dropped')
       this.cancelFormVoice()
       this.cancelSearchVoice()
+      this.abortVoiceSegments()
       this.voice = null
       return
     }
-    this.voice.chunks.push(chunk)
+    this.voiceSegments?.push(chunk)
+  }
+
+  /** Stops the current recording's uploads: wherever the voice generation moves on, its words are no longer wanted. */
+  private abortVoiceSegments(): void {
+    this.voiceSegments?.abort()
+    this.voiceSegments = undefined
   }
 
   private async finishVoice(review = false): Promise<void> {
+    // Only a turn's own: with no turn, the field holds a recording an earlier voice.end is still transcribing.
+    const segments = this.voice ? this.voiceSegments : undefined
+    try {
+      await this.answerVoice(segments, review)
+    } finally {
+      // Every way out that did not use the transcript stops the uploads; once finish() has settled this does nothing.
+      segments?.abort()
+      if (this.voiceSegments === segments) this.voiceSegments = undefined
+    }
+  }
+
+  private async answerVoice(segments: VoiceSegments | undefined, review: boolean): Promise<void> {
+    const arrived = performance.now()
     const turn = this.voice
     const generation = this.voiceGeneration
     const uploadId = this.voiceUploadId
@@ -2391,7 +2429,7 @@ export class CableSession {
       await reply({ t: 'voice.error', message: selection.ok ? 'Choose the text again.' : selection.error })
       return
     }
-    if (!turn || turn.bytes === 0) {
+    if (!turn || turn.bytes === 0 || !segments) {
       this.cancelFormVoice()
       this.cancelSearchVoice()
       await reply({ t: 'voice.error', message: "Didn't catch that" })
@@ -2401,15 +2439,20 @@ export class CableSession {
     const seconds = turn.bytes / (turn.rate * 2)
     this.log(`cable: voice ${seconds.toFixed(1)}s (${Math.round(turn.bytes / 1024)} KB) → stt`)
 
-    const pcm = Buffer.concat(turn.chunks)
+    // Numbers only: how many segments went up while the person talked, and how long Done waited for the rest.
+    const finished = segments.finish().finally(() => {
+      const { segments: uploaded, early, retries } = segments.counts()
+      this.log(`cable: voice segments=${uploaded} early=${early} retries=${retries} ` +
+        `tail=${Math.round(performance.now() - arrived)}ms`)
+    })
     // One line per turn, numbers only: whether an empty transcript was silence on the dial or words the
     // transcriber missed, and for which agent (OPENHARNES-18). No audio and no text.
-    const { peak, rms } = voiceLevel(pcm)
+    const { peak, rms } = segments.level()
     const heard = (transcript: string) => this.log(`cable: voice turn agent=${turn.agentId ?? 'none'} ` +
       `cmd=${turn.cmd || 'none'} lang=${turn.lang} sr=${turn.rate} peak=${peak} rms=${rms} transcript=${transcript}`)
     let transcript: string
     try {
-      transcript = (await this.host.transcribe(pcm, turn.rate, turn.lang)).trim()
+      transcript = await finished
     } catch (err) {
       heard('failed')
       if (current()) { this.cancelFormVoice(); this.cancelSearchVoice() }
