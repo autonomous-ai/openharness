@@ -177,8 +177,8 @@ fn start(handle: &AppHandle, events: Sender<Event>, queue: Receiver<Event>) -> t
             }
         })
         .build(handle)?;
-    // A desktop with no tray host shows no icon and gives no error: the log says so, once. Off the main thread, where
-    // a bus that is slow to answer would hold the tray.
+    // A desktop with no tray host shows no icon and gives no error: the log says so, once, when none has come within
+    // the wait. Off the main thread, where a bus that is slow to answer would hold the tray.
     #[cfg(target_os = "linux")]
     {
         let log = log.clone();
