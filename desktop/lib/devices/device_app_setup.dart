@@ -1,4 +1,5 @@
 import '../core/local_key_value_store.dart';
+import '../core/runtime_platform.dart';
 import '../core/test_run.dart';
 import '../logging/app_log.dart';
 import '../update/desktop_updater.dart' show currentBundlePath;
@@ -40,6 +41,36 @@ Future<bool> deviceAppSignedLikeDesktop(
     team: signer.team,
     identifier: deviceAppBundleId,
   );
+}
+
+/// Desktop runs the installer it downloads, so a manifest someone else wrote must not be able to name any program
+/// with a matching sha256: the installer's Authenticode signature must be Valid and by the running Desktop's signer
+/// (its subject and Azure identity), as Desktop's own updater asks of an update. A running Desktop that is not signed
+/// (a local or staging build) keeps the sha256 check alone; one whose signature is broken, or whose signers cannot be
+/// read, refuses.
+Future<bool> deviceAppInstallerSignedLikeDesktop(
+  String installer, {
+  String Function()? runningExe,
+  Future<({WindowsSigner running, WindowsSigner file})> Function({
+        required String file,
+        required String runningExe,
+      })
+      read =
+      readWindowsSignerPair,
+}) async {
+  final ({WindowsSigner running, WindowsSigner file}) signers;
+  try {
+    signers = await read(
+      file: installer,
+      runningExe: (runningExe ?? () => RuntimePlatform.resolvedExecutable)(),
+    );
+  } on UpdateRefused {
+    return false;
+  }
+  final (:running, :file) = signers;
+  if (running.status == 'NotSigned') return true;
+  if (!running.valid) return false;
+  return file.valid && file.sameAs(running);
 }
 
 /// The offer with the real lookup, installer and opener. [supported] defaults to
