@@ -1,8 +1,9 @@
 /**
  * A daemon under test on Windows, with a stand-in dial (dialWindows.e2e.ts). `IsolatedDaemon` (daemon.ts) needs tmux,
  * zsh and Unix sockets, none of which Windows has, so this is a harness of its own, sealed the same way: a throwaway
- * root holds the profile, the data folder and every engine home; it is signed out, sets no hook up, and names engines
- * and editors that are not there, so nothing of the account it runs as is read or changed.
+ * root holds the profile, the data folder and every engine home; it is signed out, sets no hook up, names engines
+ * and editors that are not there, and finds programs only in Windows' own folders, so nothing of the account it runs as
+ * is read or changed.
  *
  * The dial: `HARNESS_SERIAL_BIN` names a program, so the serial stand-in (src/cable/__fixtures__/fakeHarnessSerial.mjs)
  * runs as one, the run's own `node.exe`. The daemon starts it as `node.exe watch`, `node.exe open COM77` and
@@ -23,7 +24,7 @@ import { randomBytes } from 'node:crypto'
 import { closeSync, fstatSync, mkdirSync, mkdtempSync, openSync, readSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:net'
 import { homedir, tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, win32 } from 'node:path'
 import { StringDecoder } from 'node:string_decoder'
 import { pathToFileURL } from 'node:url'
 import { promisify } from 'node:util'
@@ -83,6 +84,12 @@ export interface WindowsDaemon<Dial extends FakeDial | null = FakeDial> {
   close(): Promise<void>
 }
 
+/** A sealed daemon's PATH: Windows' own folders (cmd, taskkill, WMI's tools, PowerShell), never the account's, whose
+ *  folders hold its own engines: an owner's `claude` found there would run `claude plugin` for a dial setup. */
+export function sealedPath(systemRoot: string): string {
+  return [win32.join(systemRoot, 'System32'), systemRoot, win32.join(systemRoot, 'System32', 'Wbem'), win32.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0')].join(';')
+}
+
 async function freePort(): Promise<number> {
   const server = createServer()
   await new Promise<void>((done) => server.listen(0, '127.0.0.1', done))
@@ -125,6 +132,8 @@ export async function startWindowsDaemon(options: WindowsDaemonOptions | RealDia
     }
   }
   const missing = join(root, 'missing')
+  const systemRoot = process.env.SystemRoot
+  if (!own && !systemRoot) throw new Error('SystemRoot is not set: a sealed daemon finds programs only in its folders')
   // The profile, every engine home and every editor: the root's, which name engines and editors that are not there, or
   // the account's own.
   const homes: Record<string, string> = own
@@ -143,6 +152,7 @@ export async function startWindowsDaemon(options: WindowsDaemonOptions | RealDia
         CODEX_PATH: join(missing, 'codex.exe'),
         HARNESS_VSCODE_BIN: join(missing, 'code.cmd'),
         HARNESS_CURSOR_BIN: join(missing, 'cursor.cmd'),
+        PATH: sealedPath(systemRoot!),
       }
   // The stand-in dial, found on its own port and served through the stand-in for harness-serial.exe; or a real one, on
   // the port named and through the harness-serial.exe named.
@@ -155,7 +165,9 @@ export async function startWindowsDaemon(options: WindowsDaemonOptions | RealDia
         FAKE_SERIAL_OPEN: `bridge:${endpoint}`,
       }
   const port = options.port ?? await freePort()
-  const env = daemonEnvironment(process.env, {
+  // Sealed, the account's PATH goes whatever its capitals (cmd hands a child `Path`): the root's alone is left.
+  const inherited = own ? process.env : Object.fromEntries(Object.entries(process.env).filter(([name]) => name.toUpperCase() !== 'PATH'))
+  const env = daemonEnvironment(inherited, {
     NODE_ENV: 'test',
     ...homes,
     PORT: String(port),
