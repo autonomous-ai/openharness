@@ -776,6 +776,54 @@ mod tests {
         assert_eq!(lines, ["a", "b"]);
     }
 
+    /// Linux, the app started from a terminal, as an AppImage often is: a line behind the screen that could open that
+    /// terminal would have sudo ask there, from a group not in front, and stop until the deadline. This test binary
+    /// runs `from_a_terminal` as the session leader of a terminal of its own, which says what can open it.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_line_behind_the_screen_never_reaches_the_terminal_the_app_was_started_from() {
+        use std::os::unix::process::CommandExt;
+        // SAFETY: each call only touches the descriptor and the buffer it is handed.
+        let (pty, name) = unsafe {
+            let pty = libc::posix_openpt(libc::O_RDWR | libc::O_NOCTTY);
+            assert!(pty >= 0 && libc::grantpt(pty) == 0 && libc::unlockpt(pty) == 0);
+            let mut name = [0; 64];
+            assert_eq!(libc::ptsname_r(pty, name.as_mut_ptr(), name.len()), 0);
+            (pty, name)
+        };
+        let mut again = std::process::Command::new(std::env::current_exe().unwrap());
+        again.args(["--exact", "install::tests::from_a_terminal", "--ignored", "--nocapture"]);
+        // SAFETY: between fork and exec only setsid, open and ioctl run, which are async-signal-safe; `name` is the
+        // closure's own NUL-terminated copy.
+        unsafe {
+            again.pre_exec(move || {
+                let tty =
+                    if libc::setsid() < 0 { -1 } else { libc::open(name.as_ptr(), libc::O_RDWR | libc::O_NOCTTY) };
+                if tty < 0 || libc::ioctl(tty, libc::TIOCSCTTY, 0) < 0 {
+                    return Err(io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        let output = again.output().unwrap();
+        // SAFETY: the descriptor is this test's own, closed once.
+        unsafe { libc::close(pty) };
+        let said = String::from_utf8_lossy(&output.stdout);
+        assert!(said.contains("app: a terminal\n") && said.contains("line: none\n"), "{said}");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[ignore = "run by a_line_behind_the_screen_never_reaches_the_terminal_the_app_was_started_from"]
+    fn from_a_terminal() {
+        let app = std::fs::File::open("/dev/tty").is_ok();
+        let opens = "(: </dev/tty) 2>/dev/null && echo 'a terminal' || echo none";
+        let line =
+            system_shell(std::env::temp_dir()).run(&behind_the_screen(opens), Duration::from_secs(5), &mut |_| {});
+        println!("app: {}", if app { "a terminal" } else { "none" });
+        println!("line: {}", line.unwrap().stdout.trim());
+    }
+
     #[cfg(windows)]
     #[test]
     fn powershell_takes_a_command_with_quotes_inside_whole() {
