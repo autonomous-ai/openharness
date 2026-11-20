@@ -289,6 +289,23 @@ class SelectionTests(unittest.TestCase):
         self.assertIn("plugins/harness-device-vscode/src/", named)
         self.assertEqual(set(planner.WINDOWS_SPECS), named)
 
+    def test_every_spec_windows_yml_runs_selects_windows_end_to_end(self):
+        # Vitest takes each name as a filter (filterFiles): a case-insensitive substring of a test file's path from cli/,
+        # so 'src/lib/windows' also ran src/lib/windowSurfaces.spec.ts, which windows-e2e does not run on. A folder ends
+        # in '/', and a change to any file a filter takes runs windows-e2e.
+        workflow = (REPOSITORY / ".github/workflows/windows.yml").read_text()
+        filters = [entry for listed in re.findall(r"(?m)^ +\$paths = @\((.+)\)$", workflow)
+                   for entry in re.findall(r"'([^']+)'", listed)]
+        tracked = subprocess.check_output(["git", "ls-files", "-z", "--", "cli", "plugins"], cwd=REPOSITORY, text=True)
+        tests = [path for path in tracked.split("\0") if re.search(r"\.(spec|test)\.tsx?$", path)]
+        for entry in filters:
+            with self.subTest(entry=entry):
+                taken = [path for path in tests if entry.lower() in posixpath.relpath(path, "cli").lower()]
+                self.assertTrue(taken)
+                self.assertEqual([path for path in taken if not planner.windows_e2e(path)], [])
+                if not entry.endswith(".ts"):
+                    self.assertTrue(entry.endswith("/"), entry)
+
     def test_dial_host_files_and_adapters_run_the_dial_hosts_job_not_linux_e2e(self):
         # They need the hosts installed: the CI config leaves them out, and dial-hosts runs them all.
         for path in ("cli/e2e/dialHostKitty.e2e.ts", "cli/e2e/deviceHerdr.e2e.ts"):
