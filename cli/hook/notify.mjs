@@ -866,10 +866,10 @@ function startedAfter(row, child) {
 
 /** The hook's own chain from the pty host (`ps --json --ancestors <its parent>`), read at most once a run by the first to
  *  ask: the caller's climb (windowsHookCallerPid) and the app's lookup (lookUpWindowsApp) share it. Null for a failed
- *  read. */
+ *  read, and for a helper Node refuses to start (it throws), so neither reader loses the event to it. */
 let windowsChain
 function windowsHookChain() {
-  windowsChain ??= readWindowsTable(['--ancestors', String(process.ppid)]).then((rows) => rows && hookChain(rows))
+  windowsChain ??= readWindowsTable(['--ancestors', String(process.ppid)]).then((rows) => rows && hookChain(rows), () => null)
   return windowsChain
 }
 
