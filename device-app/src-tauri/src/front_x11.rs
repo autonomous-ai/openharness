@@ -1,10 +1,10 @@
 //! The app in front on Linux X11: the window manager sets the root window's `_NET_ACTIVE_WINDOW`, and the X server
-//! tells each change. No timer, no permission. Wayland has no common way to tell: there this source tells nothing.
+//! tells each change. No timer, no permission. Started for an X11 session only (`front::linux_front`).
 
 use std::path::Path;
 #[cfg(target_os = "linux")]
 use {
-    crate::front::{FrontSource, Source, Stop, on_thread, session_is_x11},
+    crate::front::{FrontSource, Source, Stop, on_thread},
     crate::types::Log,
     std::error::Error,
     std::sync::Arc,
@@ -18,18 +18,14 @@ use {
 #[cfg(target_os = "linux")]
 pub struct X11Front {
     pub log: Arc<dyn Log>,
+    /// The session's DISPLAY.
+    pub display: String,
 }
 
 #[cfg(target_os = "linux")]
 impl FrontSource for X11Front {
     fn start(&self, changed: Box<dyn Fn(String) + Send + Sync>) {
-        let var = |name| std::env::var(name).ok();
-        let (session_type, wayland_display, display) =
-            (var("XDG_SESSION_TYPE"), var("WAYLAND_DISPLAY"), var("DISPLAY"));
-        if !session_is_x11(session_type.as_deref(), wayland_display.as_deref(), display.as_deref()) {
-            return;
-        }
-        let Some(display) = display else { return };
+        let display = self.display.clone();
         // Connecting can wait on a remote display: never on the thread that starts the app.
         on_thread(self.log.clone(), Source::X11, move || follow(&display, &*changed));
     }

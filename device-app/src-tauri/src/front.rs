@@ -29,7 +29,7 @@ pub fn system(#[cfg_attr(target_os = "macos", expect(unused_variables))] log: Ar
     return Arc::new(crate::front_windows::WinFront { log });
     #[cfg(target_os = "linux")]
     return match linux_front(&|name| std::env::var(name).ok()) {
-        LinuxFront::X11 => Arc::new(crate::front_x11::X11Front { log }),
+        LinuxFront::X11(display) => Arc::new(crate::front_x11::X11Front { log, display }),
         LinuxFront::Sway => Arc::new(crate::front_sway::SwayFront { log }),
         LinuxFront::Hyprland => Arc::new(crate::front_hyprland::HyprlandFront { log }),
         LinuxFront::None => Arc::new(NoFront),
@@ -39,7 +39,8 @@ pub fn system(#[cfg_attr(target_os = "macos", expect(unused_variables))] log: Ar
 /// Which window system a Linux session tells the app in front through.
 #[derive(Debug, PartialEq, Eq)]
 pub enum LinuxFront {
-    X11,
+    /// The session's DISPLAY.
+    X11(String),
     Sway,
     Hyprland,
     None,
@@ -49,15 +50,14 @@ pub enum LinuxFront {
 /// An empty value is unset.
 pub fn linux_front(var: &dyn Fn(&str) -> Option<String>) -> LinuxFront {
     let set = |name| var(name).is_some_and(|value| !value.is_empty());
-    let (session_type, wayland_display, display) = (var("XDG_SESSION_TYPE"), var("WAYLAND_DISPLAY"), var("DISPLAY"));
-    if session_is_x11(session_type.as_deref(), wayland_display.as_deref(), display.as_deref()) {
-        LinuxFront::X11
-    } else if set("SWAYSOCK") {
-        LinuxFront::Sway
-    } else if set("HYPRLAND_INSTANCE_SIGNATURE") {
-        LinuxFront::Hyprland
-    } else {
-        LinuxFront::None
+    let (session_type, wayland_display) = (var("XDG_SESSION_TYPE"), var("WAYLAND_DISPLAY"));
+    match var("DISPLAY") {
+        Some(display) if session_is_x11(session_type.as_deref(), wayland_display.as_deref(), Some(&display)) => {
+            LinuxFront::X11(display)
+        }
+        _ if set("SWAYSOCK") => LinuxFront::Sway,
+        _ if set("HYPRLAND_INSTANCE_SIGNATURE") => LinuxFront::Hyprland,
+        _ => LinuxFront::None,
     }
 }
 
@@ -258,7 +258,7 @@ mod tests {
         let both = [("SWAYSOCK", "/run/user/1000/sway-ipc.sock"), ("HYPRLAND_INSTANCE_SIGNATURE", "abc_1_2")];
         assert_eq!(
             front(&[[("XDG_SESSION_TYPE", "x11"), ("DISPLAY", ":0")].as_slice(), &both[..1]].concat()),
-            LinuxFront::X11
+            LinuxFront::X11(":0".into())
         );
         let wayland = [("XDG_SESSION_TYPE", "wayland"), ("WAYLAND_DISPLAY", "wayland-1"), ("DISPLAY", ":0")];
         assert_eq!(front(&[wayland.as_slice(), &both].concat()), LinuxFront::Sway);
