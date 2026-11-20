@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import struct
 import subprocess
 import tempfile
 import unittest
@@ -283,9 +284,14 @@ if app is not None and name == "harness-device.exe":
 '''
 
 
-def elf(machine):
-    """An ELF file's first 64 bytes: the magic, 64-bit little-endian, an executable, then e_machine."""
-    return b"\x7fELF\x02\x01\x01" + bytes(9) + b"\x02\x00" + machine.to_bytes(2, "little") + bytes(44)
+def elf(machine, interp=False):
+    """An ELF file's header and program headers, as the AppImage's runtime begins: the magic, 64-bit little-endian, a
+    position-independent executable, e_machine, then a PT_LOAD; with interp a PT_INTERP before it, as a runtime linked
+    dynamically (the one that needs libfuse2) has."""
+    types = ([3] if interp else []) + [1]
+    header = b"\x7fELF\x02\x01\x01" + bytes(9) + struct.pack("<HHIQQQIHHHHHH", 3, machine, 1, 0, 64, 0, 0, 64, 56,
+                                                             len(types), 0, 0, 0)
+    return header + b"".join(struct.pack("<II", kind, 0) + bytes(48) for kind in types)
 
 
 class ReleaseCheckTests(Fakes):
@@ -302,10 +308,10 @@ class ReleaseCheckTests(Fakes):
     def check(self, os_, *flag):
         return self.run_script("release-check.sh", os_, str(self.out), "0.1.3", PUBKEY, *flag)
 
-    def appimage(self, arch, machine, version="0.1.3"):
+    def appimage(self, arch, machine, version="0.1.3", interp=False):
         self.out.mkdir(exist_ok=True)
         name = f"Harness-Device-linux-{arch}.AppImage"
-        (self.out / name).write_bytes(elf(machine))
+        (self.out / name).write_bytes(elf(machine, interp))
         (self.out / f"{name}.sig").write_text(signature(name, version))
 
     def installer(self, arch, version="0.1.3"):
@@ -324,8 +330,17 @@ class ReleaseCheckTests(Fakes):
                 self.assertEqual(result.stdout.splitlines(), [
                     "ok: the AppImage and its update signature",
                     f"ok: the AppImage is {os_[1]}",
+                    "ok: the AppImage's runtime is static: it needs no libfuse2",
                     "ok: the AppImage's update signature",
                     "ok: the update signature is for 0.1.3"])
+
+    def test_linux_fails_a_runtime_that_needs_libfuse2(self):
+        # Tauri's bundler takes the runtime from upstream unpinned: one linked dynamically would not start on an
+        # Ubuntu without libfuse2.
+        self.appimage("x64", 62, interp=True)
+        result = self.check(LINUX_X64)
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(result.stdout.splitlines()[-1], "FAILED: the AppImage's runtime is static: it needs no libfuse2")
 
     def test_linux_fails_another_archs_appimage(self):
         self.appimage("arm64", 62)
