@@ -33,7 +33,10 @@
 //     proxy's upgrade rejection, `dist/client-BFZnuo31.mjs` 1171-1197). A TUI waiting for its pairing, or behind a
 //     proxy, tries again on its backoff; one whose token or sign-in rate the Gateway refused tries no more
 //     (`shouldPauseGatewayReconnect`, client 900-925, `tokenMismatchIsTerminal` 1539-1553), and nothing in the TUI
-//     connects it again;
+//     connects it again. Each retry of a pairing refusal, its Gateway client prints `gateway connect failed: <error>`
+//     straight to the terminal (`dist/client-BFZnuo31.mjs` 1508-1510, `logError`; a probe, a rate limit and a stopped
+//     client print none), where the TUI left the cursor, in its input box: over the box and its bottom rule, then on below
+//     the frame, which scrolls up (`screen-pairing-retries*.txt`). The TUI draws over them only once it connects;
 //   - when its Gateway acknowledges a message as failed before its run started (tui 3313, 3375-3389), draws `sending`
 //     until then, drops the message from the chat, loads the history again and adds ` send failed: Chat failed before
 //     the run started; try again.` with the activity `error`. The Gateway writes no row;
@@ -116,6 +119,7 @@ const REFUSALS = {
     activity: 'device approval needed: preview latest request',
     remedy: 'Run `openclaw devices approve --latest` to preview the pending request, then rerun the printed `openclaw devices approve <requestId>` command and reconnect (pass the same --url and --token/--password flags if you connected with explicit credentials).',
     retries: true,
+    printed: 'GatewayClientRequestError',
   },
   token: {
     reason: () => 'unauthorized: gateway token mismatch (open the dashboard URL and paste the token in Control UI settings)',
@@ -338,7 +342,8 @@ export function run(options) {
 
   // ── the screen ─────────────────────────────────────────────────────────────────────────────────────────────────
 
-  const ui = { tui: false, chat: [], connection: '', activity: 'idle', since: Date.now(), model: 'unknown', tokens: '?' }
+  /** [printed]: what the Gateway client wrote over the TUI's screen since it last connected. */
+  const ui = { tui: false, chat: [], connection: '', activity: 'idle', since: Date.now(), model: 'unknown', tokens: '?', printed: [] }
   /** The input box as pi-tui's editor keeps it: its lines, and the cursor's line and column in them. */
   const box = { lines: [''], line: 0, col: 0 }
   const boxText = () => box.lines.join('\n')
@@ -415,7 +420,12 @@ export function run(options) {
       const drawn = BUSY.has(ui.activity) ? `${ui.activity} | ${ui.connection}` : status
       if (drawn !== lastDrawn) { lastDrawn = drawn; log({ drawn: status }) }
       lines.push(...wrapped(status, width), ...wrapped(`agent ${agentId} | session ${short()} | ${ui.model} | deliver:off | tokens ${ui.tokens}`, width))
+      const boxAt = lines.length + 1
       lines.push('─'.repeat(width), ...cut(boxText(), width), '─'.repeat(width))
+      // From the box's first line, where the cursor of the recorded screens' empty box was, each over what is drawn there.
+      ui.printed.flatMap((text) => cut(text, width)).forEach((part, i) => {
+        lines[boxAt + i] = part + (lines[boxAt + i] ?? '').slice(part.length)
+      })
     }
     // As pi-tui's full render: screen, home, then scrollback cleared. Without the last, tmux keeps each cleared screen in
     // the scrollback the daemon reads, and a line the TUI no longer draws (` history failed:`) was read there for good.
@@ -482,6 +492,7 @@ export function run(options) {
     retry = null
     if (gateway) {
       manual = false
+      if (gateway.printed && gateway.tried++) ui.printed.push(`gateway connect failed: ${gateway.printed}: ${gateway.reason}`)
       setConnection(`gateway disconnected: ${gateway.reason}`, 5_000, true)
       setActivity(gateway.activity)
       if (gateway.remedy && !remedyShown) { remedyShown = true; addSystem(gateway.remedy) }
@@ -497,6 +508,7 @@ export function run(options) {
       tries = 0
       loadHistory()
       connected = true
+      ui.printed = []
       if (ui.activity === 'starting up') setActivity('idle')
       if (everConnected && !local) addSystem('gateway reconnected after transport loss')
       setConnection(local ? 'local ready' : everConnected ? 'gateway reconnected' : 'gateway connected', 4_000)
@@ -673,7 +685,7 @@ export function run(options) {
     }
     const refusing = REFUSALS[line.gateway]
     if (refusing) {
-      gateway = { ...refusing, reason: refusing.reason() }
+      gateway = { ...refusing, reason: refusing.reason(), tried: 0 }
       tries = 0
       if (connected) drop(BACKOFF_MS[tries++])
     }

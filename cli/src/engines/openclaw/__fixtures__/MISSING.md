@@ -5,8 +5,8 @@ Recorded from OpenClaw 2026.11.2 on Linux (`node:24-bookworm`) and macOS 26.6 ar
 ## Not recorded
 
 - **Windows** (`*-win32.txt`, `ps-win32.txt`): not run here; it is measured separately on the Windows VM.
-- **macOS beyond `plain`**: only `screen-plain-start-darwin.txt`, `screen-plain-darwin.txt` and `ps-darwin.txt`.
-  The database rows of the other scenarios are the Linux ones.
+- **macOS beyond `plain`**: only `screen-plain-start-darwin.txt`, `screen-plain-darwin.txt`, `ps-darwin.txt` and the
+  pairing retries below. The database rows of the other scenarios are the Linux ones.
 - **An exec approval prompt on screen**: the TUI never shows one. OpenClaw's docs say "The TUI does not render
   exec approval cards", and with no approval client connected the Gateway denies the command at once
   (`exec denied: Headless runs cannot wait for interactive exec approval.`). `approval.sql` and
@@ -31,6 +31,18 @@ Recorded from OpenClaw 2026.11.2 on Linux (`node:24-bookworm`) and macOS 26.6 ar
   (macOS, 2026.11.2), run with `OPENCLAW_NODE_UPDATE_RESPAWNED=1` and a PATH without another Node. Without it,
   OpenClaw finds a supported Node by itself (Homebrew's node@26 on this Mac) and runs on that one. `--version` is a
   diagnostic: it never installs a Node, and on Node 22 it answers with a warning rather than refusing.
+
+## Pairing retries
+
+`screen-pairing-retries.txt` (120 columns, `openclaw tui`, session `main`) and `screen-pairing-retries-narrow.txt`
+(80x24, a Harness launch whose title scrolled off) are recorded from OpenClaw 2026.11.2 on macOS 26.6 arm64, on a
+Gateway that had not approved the device. Each retry, its Gateway client prints `gateway connect failed:
+GatewayClientRequestError: device pairing required (requestId: <uuid>)` straight to the terminal (`client-*.mjs`
+`logError`; a probe, a rate limit and a token mismatch, which pauses the retries, print none). It starts where the TUI
+left the cursor, in its empty input box, runs over the box and the start of its bottom rule, then on below the frame,
+which the terminal scrolls up; the TUI does not draw over it, its status line still `gateway disconnected: …` 15 s on.
+The narrow one came through Harness's capture, which drops its first line's leading space and the blank lines after
+the last. The composed `screen-pairing.txt` and `screen-pairing-bare.txt` below are the screens before a retry.
 
 ## Composed, not captured whole
 

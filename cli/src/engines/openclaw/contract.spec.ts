@@ -43,6 +43,8 @@ const SHOWN: Record<string, { key: string | null; url: string | null }> = {
   'screen-no-gateway.txt': { key: 'agent:main:no-gateway', url: 'ws://127.0.0.1:18789' },
   'screen-no-token.txt': { key: null, url: null },
   'screen-pairing-bare.txt': { key: 'agent:main:plain', url: 'ws://127.0.0.1:18789' },
+  'screen-pairing-retries-narrow.txt': { key: 'agent:main:harness-3047d4ea-31b1-4617-b04e-1c38b38bbc5b', url: null },
+  'screen-pairing-retries.txt': { key: 'agent:main:main', url: 'ws://127.0.0.1:47311' },
   'screen-pairing.txt': { key: 'agent:main:plain', url: 'ws://127.0.0.1:18789' },
   'screen-plain-darwin.txt': { key: 'agent:main:plain', url: 'ws://127.0.0.1:18789' },
   'screen-plain-start-darwin.txt': { key: 'agent:main:plain', url: 'ws://127.0.0.1:18789' },
@@ -369,6 +371,34 @@ describe('the OpenClaw contract', () => {
     ['plain', { state: 'ready', gatewayLost: false, signIn: null }],
   ])('screen-%s says which sign-in its Gateway refused', (name, reading) => {
     expect(readOpenclawScreen(fixture(`screen-${name}.txt`))).toMatchObject(reading)
+  })
+
+  // Each retry of a pairing refusal, OpenClaw's Gateway client prints `gateway connect failed: <error>` straight to the
+  // terminal, from where the TUI left the cursor, in its box: over the box and the start of its bottom rule, then below
+  // the frame, which scrolls up (recorded at 120 and 80 columns).
+  it.each([
+    ['screen-pairing-retries.txt', 'agent main | session main | unknown | deliver:off | tokens ?', 'c8e997d6-d567-4cde-887e-b3ce4970be38'],
+    ['screen-pairing-retries-narrow.txt', 'agent main | session harness-3047d4ea-31b1-4617-b04e-1c38b38bbc5b | unknown | deliver:off | tokens ?',
+      '3980b428-c7f6-4dba-bb05-11cf07d2c56a'],
+  ])('%s is read through the Gateway client\'s own lines under its frame', (name, footer, requestId) => {
+    expect(readOpenclawScreen(fixture(name))).toMatchObject({
+      state: 'no-gateway', gatewayLost: true, signIn: 'approval', footer, box: '', boxHidden: { above: 0, below: 0 },
+      status: `gateway disconnected: device pairing required (requestId: ${requestId}) | device approval needed: preview latest request`,
+    })
+  })
+
+  it('only the Gateway client\'s own lines, run on from the frame to the end, are passed over under it', () => {
+    const retries = fixture('screen-pairing-retries-narrow.txt')
+    const log = 'gateway connect failed: GatewayClientRequestError: device pairing required (requ\nestId: 3980b428-c7f6-4dba-bb05-11cf07d2c56a)'
+    expect(retries.trimEnd().endsWith(log)).toBe(true)
+    // A shell's prompt after them: the TUI exited.
+    expect(readOpenclawScreen(`${retries.trimEnd()}\n$ `).footer).toBeNull()
+    // A line after one of theirs that did not fill the width, or their words anywhere but a line's start.
+    expect(readOpenclawScreen(`${retries.trimEnd()}\nsomething else`).footer).toBeNull()
+    expect(readOpenclawScreen(`${retries.trimEnd()}\n ${log}`).footer).toBeNull()
+    // The same words the person typed in the box, the frame whole under them, are the box's.
+    const typed = fixture('screen-pairing.txt').replace(/(─{8,}\n)\n(─{8,})/, '$1gateway connect failed: x\n$2')
+    expect(readOpenclawScreen(typed)).toMatchObject({ state: 'no-gateway', box: 'gateway connect failed: x' })
   })
 
   it('a rate limit and an identity-aware proxy are refused sign-ins, on the 5 s line and the bare one', () => {
