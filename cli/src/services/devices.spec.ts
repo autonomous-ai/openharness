@@ -7297,6 +7297,21 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
       expect(ringing()).toEqual([])
     })
 
+    // Inside the core's process (Windows, services/inline.ts) the core's agents are read directly, with no refresh: the
+    // list built for the dial still finds the agent a restored card waits for.
+    it('a Harness agent\'s restored row comes back inside the core\'s process too, where no refresh is given', async () => {
+      const first = devices({ core: bound() })
+      expect(first.listener.notice({ text: LINE, engine: 'claude', sessionId: 's-h1' })).toEqual({ result: 'shown' })
+      const [restored] = ids()
+      const second = await again(first, { core: bound() })
+      seen.host.watching!(true)
+      second.port.swarms(null)
+      await host().listAgentSnapshot()
+      expect(calls('replaceNotifications').at(-1)).toEqual([[{ agentId: 'h1', machineId: 'machine-1', question: true, text: LINE }]])
+      expect(calls('hold')).toEqual([['h1', restored, card('Harness')]])
+      expect(ringing()).toEqual([])
+    })
+
     // The dial's question close drops its agent's row: a drawer replace that put the restored row back ahead of a close
     // still queued behind the agent's earlier cards would lose it.
     describe('its row put back reaches the dial after what its agent\'s order already holds', () => {
