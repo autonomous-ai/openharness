@@ -683,7 +683,10 @@ static void handle_question(const char *id, const cJSON *p)
     const cJSON *questions = cJSON_GetObjectItemCaseSensitive(p, "questions");
     const char *prompt = str_of(cJSON_GetArrayItem(questions, 0), "q");
     copy_cut(s_text, PRO_QUESTION_BYTES, prompt ? prompt : "Needs your answer");
-    pro_app_question(id, request, s_text);
+    // Only a daemon that said question.tier means "told again" by it; anything else stays an alert.
+    const char *tier = str_of(p, "tier");
+    const bool list = (atomic_load(&s_features) & CABLE_FEATURE_QUESTION_TIER) && tier && !strcmp(tier, "list");
+    pro_app_question(id, request, s_text, list);
 }
 
 static void handle_question_close(const char *id, const cJSON *p)

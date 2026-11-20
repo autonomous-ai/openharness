@@ -76,8 +76,9 @@ void pro_app_notif_replace(const pro_notif_row_t *rows, int n);
 // notif.seen: read elsewhere. token is NULL without one.
 void pro_app_notif_seen(const char *id, const char *token);
 
-// request is the question's request id: with the prompt it tells a re-sent question from a new one.
-void pro_app_question(const char *id, const char *request, const char *text);
+// request is the question's request id: with the prompt it tells a re-sent question from a new one. list: the daemon tells
+// it again (`tier: "list"`), so it is filed as an open question with no beep, no wake and no toast.
+void pro_app_question(const char *id, const char *request, const char *text, bool list);
 void pro_app_question_close(const char *id);
 
 // The daemon's surface moved to this agent.

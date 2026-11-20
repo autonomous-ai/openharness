@@ -535,7 +535,7 @@ void pro_app_notif_seen(const char *id, const char *token)
     leave();
 }
 
-void pro_app_question(const char *id, const char *request, const char *text)
+void pro_app_question(const char *id, const char *request, const char *text, bool list)
 {
     if (!id_ok(id)) return;
     pro_app_lock();
@@ -549,8 +549,10 @@ void pro_app_question(const char *id, const char *request, const char *text)
         int a = set_find(s_alerted, id);
         const bool again = a >= 0 && s_alerted_h[a] == h;   // filed already, re-sent after a relink: no second beep
         if (!again && set_add(s_alerted, id)) { a = set_find(s_alerted, id); s_alerted_h[a] = h; }
-        // A question is an alert; filed again after a relink it is the same one, and only the row returns.
-        if (pod_ui_notify_text(&s_pod, id, POD_TIER_ALERT, q, true, !pro_app_asleep(), ms()) && !again) alert_locked();
+        // A question is an alert unless the daemon tells it again; filed again after a relink it is the same one, and only
+        // the row returns.
+        const pod_tier_t tier = list ? POD_TIER_LIST : POD_TIER_ALERT;
+        if (pod_ui_notify_text(&s_pod, id, tier, q, true, !pro_app_asleep(), ms()) && !again) alert_locked();
         change();
     }
     leave();
