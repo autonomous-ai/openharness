@@ -1,6 +1,6 @@
 import { afterEach, expect, it, vi } from 'vitest'
 import { createEngineStorage } from './storage.js'
-import { STORAGE_COMPARE, STORAGE_COMPARE_WAIT_MS, STORAGE_BACKGROUND, STORAGE_BACKGROUND_WAIT_MS, STORAGE_CAPABILITIES, STORAGE_LIFETIME, STORAGE_EXPORT, STORAGE_EXPORT_WAIT_MS } from '../../engines/worker/storageProtocol.js'
+import { STORAGE_BACKGROUND, STORAGE_BACKGROUND_WAIT_MS, STORAGE_CAPABILITIES, STORAGE_LIFETIME, STORAGE_EXPORT, STORAGE_EXPORT_WAIT_MS } from '../../engines/worker/storageProtocol.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import { EngineReadError } from '../../engines/worker/protocol.js'
 
@@ -20,128 +20,6 @@ function setup(answer: unknown = 3) {
   return { storage, call, inline }
 }
 afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks() })
-
-const checkpoint = { path: '/saved', key: '4:5', bytes: 17 }
-const copied = { bytes: 17, sha256: 'c'.repeat(64) }
-function comparing(answer: unknown, capable = true) {
-  const call = vi.fn(async (_service: string, method: string): Promise<Record<string, unknown>> => {
-    if (method === STORAGE_CAPABILITIES) return { version: 1, engine: 'hermes', storage: 1, ...(capable && { storageCompare: 1 }) }
-    return { version: 1, answer: method === STORAGE_COMPARE ? await answer : method === STORAGE_LIFETIME ? lifetime : copied }
-  })
-  const serviceProcess = vi.fn(async () => true), storage = createEngineStorage({ isolated: true, call, serviceProcess })
-  storage.connected('engine-others')
-  return { call, serviceProcess, storage }
-}
-
-it('reuses an equal completed checkpoint without allocating or attesting a writer', async () => {
-  const t = comparing(true), owner = ownership(), current = vi.fn(() => true)
-  expect(await t.storage.exportDatabase(session as RegisteredSession, source, owner, { checkpoint, current })).toEqual({ unchanged: true })
-  expect(current).toHaveBeenCalledOnce()
-  expect(owner.acquire).not.toHaveBeenCalled()
-  expect(t.serviceProcess).not.toHaveBeenCalled()
-  expect(t.call.mock.calls.map(([, method]) => method)).toEqual([STORAGE_CAPABILITIES, STORAGE_COMPARE])
-})
-
-it.each([false, null, {}, 'true'])('exports normally after an unequal or unavailable comparison: %s', async answer => {
-  const t = comparing(answer), owner = ownership(), current = vi.fn(() => true)
-  expect(await t.storage.exportDatabase(session as RegisteredSession, source, owner, { checkpoint, current })).toEqual(copied)
-  expect(current).not.toHaveBeenCalled()
-  expect(owner.acquire).toHaveBeenCalledOnce()
-  expect(owner.settled).toHaveBeenCalledOnce()
-})
-
-it('does not send an unknown comparison method to an older worker', async () => {
-  const t = comparing(true, false), owner = ownership()
-  expect(await t.storage.exportDatabase(session as RegisteredSession, source, owner, { checkpoint, current: () => true })).toEqual(copied)
-  expect(t.call.mock.calls.some(([, method]) => method === STORAGE_COMPARE)).toBe(false)
-  expect(owner.acquire).toHaveBeenCalledOnce()
-})
-
-it('rebuilds a changed saved copy but propagates lost native authority', async () => {
-  const t = comparing(true), owner = ownership()
-  expect(await t.storage.exportDatabase(session as RegisteredSession, source, owner, { checkpoint, current: () => false })).toEqual(copied)
-  const refused = ownership(), error = Object.assign(new Error('changed'), { code: 'IDENTITY_UNAVAILABLE' })
-  await expect(t.storage.exportDatabase(session as RegisteredSession, source, refused, { checkpoint, current: () => { throw error } })).rejects.toBe(error)
-  expect(refused.acquire).not.toHaveBeenCalled()
-})
-
-it('discards a comparison from a replaced connection before falling back to export', async () => {
-  let reply!: (value: boolean) => void
-  const t = comparing(new Promise<boolean>(resolve => { reply = resolve })), owner = ownership(), current = vi.fn(() => true)
-  const work = t.storage.exportDatabase(session as RegisteredSession, source, owner, { checkpoint, current })
-  await vi.waitFor(() => expect(t.call.mock.calls.some(([, method]) => method === STORAGE_COMPARE)).toBe(true))
-  t.storage.disconnected('engine-others'); t.storage.connected('engine-others'); reply(true)
-  expect(await work).toEqual(copied)
-  expect(current).not.toHaveBeenCalled()
-})
-
-it('keeps comparison and fallback in one shared admission slot', async () => {
-  let reply!: (value: boolean) => void
-  const t = comparing(new Promise<boolean>(resolve => { reply = resolve }))
-  const owners = Array.from({ length: 4 }, ownership)
-  const work = owners.map(owner => t.storage.exportDatabase(session as RegisteredSession, source, owner, { checkpoint, current: () => true }))
-  await vi.waitFor(() => expect(t.call.mock.calls.filter(([, method]) => method === STORAGE_COMPARE)).toHaveLength(4))
-  await expect(t.storage.exportDatabase(session as RegisteredSession, source, ownership())).rejects.toThrow('busy')
-  reply(false)
-  expect(await Promise.all(work)).toEqual(Array.from({ length: 4 }, () => copied))
-  expect(owners.every(owner => owner.acquire.mock.calls.length === 1)).toBe(true)
-})
-
-it('bounds an unanswered comparison and ignores its late equal reply', async () => {
-  vi.useFakeTimers()
-  let reply!: (value: boolean) => void
-  const t = comparing(new Promise<boolean>(resolve => { reply = resolve })), owner = ownership(), current = vi.fn(() => true)
-  const work = t.storage.exportDatabase(session as RegisteredSession, source, owner, { checkpoint, current })
-  await vi.advanceTimersByTimeAsync(STORAGE_COMPARE_WAIT_MS)
-  expect(await work).toEqual(copied)
-  reply(true); await vi.advanceTimersByTimeAsync(0)
-  expect(current).not.toHaveBeenCalled()
-  expect(owner.acquire).toHaveBeenCalledOnce()
-})
-
-it('does not restart the original export deadline after a comparison', async () => {
-  vi.useFakeTimers()
-  const now = vi.spyOn(performance, 'now').mockReturnValue(0), owner = ownership()
-  const t = comparing(true), current = vi.fn(() => { now.mockReturnValue(STORAGE_EXPORT_WAIT_MS); return false })
-  await expect(t.storage.exportDatabase(session as RegisteredSession, source, owner, { checkpoint, current })).rejects.toThrow('unavailable')
-  expect(owner.acquire).not.toHaveBeenCalled()
-})
-
-it('uses the same comparison in the explicit inline compatibility path', async () => {
-  const inlineExport = vi.fn(async () => copied), inlineCompare = vi.fn(async () => true)
-  const storage = createEngineStorage({ isolated: false, call: vi.fn(), inlineExport, inlineCompare }), owner = ownership()
-  expect(await storage.exportDatabase(session as RegisteredSession, source, owner, { checkpoint, current: () => true })).toEqual({ unchanged: true })
-  expect(inlineExport).not.toHaveBeenCalled()
-  expect(owner.acquire).not.toHaveBeenCalled()
-})
-
-it('exports through an older inline composition without a comparison reader', async () => {
-  const inlineExport = vi.fn(async () => copied), owner = ownership()
-  const storage = createEngineStorage({ isolated: false, call: vi.fn(), inlineExport })
-  expect(await storage.exportDatabase(session as RegisteredSession, source, owner, { checkpoint, current: () => true })).toEqual(copied)
-  expect(owner.acquire).toHaveBeenCalledOnce()
-})
-
-it('bounds a frozen inline comparison without accepting its late answer', async () => {
-  vi.useFakeTimers()
-  let reply!: (answer: boolean) => void
-  const inlineCompare = vi.fn(() => new Promise<boolean>(resolve => { reply = resolve })), current = vi.fn(() => true)
-  const storage = createEngineStorage({ isolated: false, call: vi.fn(), inlineCompare, inlineExport: async () => copied })
-  const work = storage.exportDatabase(session as RegisteredSession, source, ownership(), { checkpoint, current })
-  await vi.advanceTimersByTimeAsync(STORAGE_COMPARE_WAIT_MS)
-  expect(await work).toEqual(copied)
-  reply(true); await vi.advanceTimersByTimeAsync(0)
-  expect(current).not.toHaveBeenCalled()
-})
-
-it('refuses comparison delivery after the original deadline even before its timer runs', async () => {
-  const now = vi.spyOn(performance, 'now').mockReturnValue(0), owner = ownership()
-  const inlineExport = vi.fn(async () => copied)
-  const storage = createEngineStorage({ isolated: false, call: vi.fn(), inlineExport,
-    inlineCompare: async () => { now.mockReturnValue(STORAGE_EXPORT_WAIT_MS); return true } })
-  await expect(storage.exportDatabase(session as RegisteredSession, source, owner, { checkpoint, current: () => true })).rejects.toThrow('unavailable')
-  expect(owner.acquire).not.toHaveBeenCalled(); expect(inlineExport).not.toHaveBeenCalled()
-})
 
 it.each(['ENGINE_UNAVAILABLE', 'ENGINE_STALE_REPLY'] as const)('waits once for a replacement before assigning a checkpoint writer after %s', async code => {
   const receipt = { bytes: 17, sha256: 'b'.repeat(64) }, owner = ownership()

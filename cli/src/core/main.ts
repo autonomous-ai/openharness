@@ -731,7 +731,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const inlineHistory = inline?.createInlineHistory()
   const lineCounts = inlineHistory ?? new TranscriptIndexes()
   let serviceLinksRef: ServiceLinks | null = null
-  const engineStorage = createEngineStorage({ isolated: othersStorage, inline: inline?.hermesBackground, inlineExport: inline?.exportDatabase, inlineCompare: inline?.compareDatabase, inlineUserRowSince: inline?.openclawUserRows,
+  const engineStorage = createEngineStorage({ isolated: othersStorage, inline: inline?.hermesBackground, inlineExport: inline?.exportDatabase, inlineUserRowSince: inline?.openclawUserRows,
     serviceProcess: coreLink.serviceProcess,
     ready: (engine, ms) => engineLinks.ready(engine, ms),
     call: (service, type, payload, waitMs) => serviceLinksRef?.call(service, type, payload, waitMs) ?? Promise.resolve({ error: 'SERVICE_UNAVAILABLE' }),

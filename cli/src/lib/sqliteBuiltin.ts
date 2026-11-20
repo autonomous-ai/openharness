@@ -71,7 +71,7 @@ export function runSqliteScript(Database: DatabaseConstructor, path: string, sta
 /**
  * The read itself, as CommonJS source, with one copy of the handle rules for both places it runs: this thread
  * ([readBuiltin]) and, in the core, the read threads (sqliteThread.ts), which load no module of ours: the bundle
- * carries them no file. Evaluated with `fs`, `url` and `Database` in scope, it returns `{ read, closeAll, idleWalStore }`.
+ * carries them no file. Evaluated with `fs`, `url` and `Database` in scope, it returns `{ read, closeAll, idleWalStore, drop }`.
  */
 export const NATIVE_READER = String.raw`
 const handles = new Map()
@@ -170,7 +170,7 @@ export function closeSqliteHandles(): void {
   for (const reader of readers.values()) reader.closeAll()
 }
 
-/** A post-exit content comparison must not reuse an immutable snapshot on coarse-timestamp filesystems. */
+/** A checkpoint export must not reuse an immutable snapshot on coarse-timestamp filesystems. */
 export function closeSqliteHandle(dbPath: string): void {
   for (const reader of readers.values()) reader.drop(dbPath)
 }

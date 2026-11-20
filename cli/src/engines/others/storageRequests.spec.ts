@@ -1,13 +1,13 @@
 import { afterEach, expect, it, vi } from 'vitest'
 import { otherStorageRequests } from './storageRequests.js'
-import { STORAGE_COMPARE, STORAGE_COMPARE_BYTES, STORAGE_BACKGROUND, STORAGE_BACKGROUND_WAIT_MS, STORAGE_CAPABILITIES, STORAGE_LIFETIME, STORAGE_EXPORT, STORAGE_EXPORT_WAIT_MS, storageSession } from '../worker/storageProtocol.js'
+import { STORAGE_BACKGROUND, STORAGE_BACKGROUND_WAIT_MS, STORAGE_CAPABILITIES, STORAGE_LIFETIME, STORAGE_EXPORT, STORAGE_EXPORT_WAIT_MS, storageSession } from '../worker/storageProtocol.js'
 
 const core = { owner: true, local: true }
 const payload = { version: 1, engine: 'hermes', session: { sessionId: '20261112_100000_bbbbbb', hermesHome: '/profile' } }
 afterEach(() => { vi.useRealTimers() })
 it('serves the authenticated core only, with bounded plain input and output', async () => {
   const background = vi.fn(async () => 3), requests = otherStorageRequests({ background })
-  expect(await requests[STORAGE_CAPABILITIES]({ version: 1, engine: 'hermes' }, core)).toEqual({ version: 1, engine: 'hermes', storage: 1, storageCompare: 1 })
+  expect(await requests[STORAGE_CAPABILITIES]({ version: 1, engine: 'hermes' }, core)).toEqual({ version: 1, engine: 'hermes', storage: 1 })
   expect(await requests[STORAGE_BACKGROUND](payload, core)).toEqual({ version: 1, answer: 3 })
   expect(background).toHaveBeenCalledWith(payload.session)
   for (const asker of [{ owner: false, local: true }, { owner: true, local: false }, { ...core, connection: 'client' }]) {
@@ -50,43 +50,4 @@ it('shares admission and retains timed-out export slots until their actual work 
   for (const done of release) done({ bytes: 1, sha256: 'a'.repeat(64) })
   await vi.advanceTimersByTimeAsync(0)
   expect(await requests[STORAGE_BACKGROUND](payload, core)).toEqual({ version: 1, answer: 0 })
-})
-
-const comparison = { ...payload, source: { path: '/db', key: '2:3', database: '/db' }, checkpoint: { path: '/saved', key: '4:5', bytes: 17 } }
-it('compares only bounded core-selected files for the local owner', async () => {
-  const compare = vi.fn(async () => true), requests = otherStorageRequests({ compare })
-  expect(await requests[STORAGE_COMPARE](comparison, core)).toEqual({ version: 1, answer: true })
-  for (const asker of [{ ...core, owner: false }, { ...core, local: false }, { ...core, connection: 'client' }]) {
-    expect(await requests[STORAGE_COMPARE](comparison, asker)).toMatchObject({ error: 'ENGINE_INVALID_REQUEST' })
-  }
-  for (const extra of [{ sql: 'SELECT *' }, { stage: { path: '/output', key: '1:2' } }, { engine: 'claude' },
-    { checkpoint: { ...comparison.checkpoint, bytes: STORAGE_COMPARE_BYTES + 1 } },
-    { checkpoint: { ...comparison.checkpoint, extra: true } }, { source: { ...comparison.source, sql: 'x' } }]) {
-    expect(await requests[STORAGE_COMPARE]({ ...comparison, ...extra }, core)).toMatchObject({ error: 'ENGINE_INVALID_REQUEST' })
-  }
-  expect(compare).toHaveBeenCalledOnce()
-})
-
-it('returns a bounded unavailable comparison without recycling a healthy worker', async () => {
-  const recycle = vi.fn(), requests = otherStorageRequests({ compare: async () => null, recycle })
-  expect(await requests[STORAGE_COMPARE](comparison, core)).toEqual({ version: 1, answer: null })
-  expect(recycle).not.toHaveBeenCalled()
-  expect(await otherStorageRequests({ compare: async () => ({ rows: 'private' }) as never })[STORAGE_COMPARE](comparison, core))
-    .toMatchObject({ error: 'ENGINE_INVALID_REPLY' })
-})
-
-it('retains aborted comparisons in shared worker admission until the reads actually settle', async () => {
-  vi.useFakeTimers()
-  const release: Array<(answer: boolean) => void> = [], recycle = vi.fn()
-  const requests = otherStorageRequests({ compare: () => new Promise(resolve => { release.push(resolve) }), background: async () => 0, recycle })
-  const closed = new AbortController()
-  const work = Array.from({ length: 4 }, () => requests[STORAGE_COMPARE](comparison, core, closed.signal))
-  await vi.advanceTimersByTimeAsync(0)
-  expect(await requests[STORAGE_BACKGROUND](payload, core)).toMatchObject({ error: 'ENGINE_BUSY' })
-  closed.abort()
-  expect(await Promise.all(work)).toEqual(Array.from({ length: 4 }, () => ({ version: 1, error: 'ENGINE_UNAVAILABLE' })))
-  expect(await requests[STORAGE_BACKGROUND](payload, core)).toMatchObject({ error: 'ENGINE_BUSY' })
-  release.forEach(done => done(true)); await vi.advanceTimersByTimeAsync(0)
-  expect(await requests[STORAGE_BACKGROUND](payload, core)).toEqual({ version: 1, answer: 0 })
-  expect(recycle).not.toHaveBeenCalled()
 })

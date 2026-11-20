@@ -9,7 +9,7 @@ import { sqliteReadAll, type SqliteParam, type SqliteRow } from '../../lib/sqlit
 import { closeSqliteHandle } from '../../lib/sqliteBuiltin.js'
 import { offThreadSqliteActive } from '../../lib/sqliteThread.js'
 import { OPENCLAW_COLUMNS } from '../openclaw/contract.js'
-import { STORAGE_CHUNK_BYTES, STORAGE_STAGE_BYTES, STORAGE_COMPARE_WORK_MS, savedCheckpoint, type SavedCheckpoint, type ExportSource, type ExportStage, type ExportReceipt, type StorageEngine, type StorageSession } from '../worker/storageProtocol.js'
+import { STORAGE_CHUNK_BYTES, STORAGE_STAGE_BYTES, type ExportSource, type ExportStage, type ExportReceipt, type StorageEngine, type StorageSession } from '../worker/storageProtocol.js'
 
 /** A column of the paged table `t`, by its name. */
 const column = (name: string): PageColumn => ({ as: name, sql: `t."${name.replace(/"/g, '""')}"` })
@@ -45,7 +45,7 @@ async function* pagedRows(database: string, table: string, where: string, sessio
 
 /** Native SQLite files can have live WAL writers. Export this conversation's rows through a
  * read-only connection; never copy an incomplete .db or replace an engine's shared store. */
-async function* databaseHistory(s: StorageSession & { engine: StorageEngine }, source: ExportSource, fresh = false): AsyncGenerator<string> {
+async function* databaseHistory(s: StorageSession & { engine: StorageEngine }, source: ExportSource, fresh: boolean): AsyncGenerator<string> {
   const database = source.path
   const read = (sql: string, params?: SqliteParam[]) => sqliteReadAll(database, sql, params, { fresh })
   /** Table and filter; a conversation table is paged, the others hold one row. */
@@ -189,66 +189,4 @@ export async function exportDatabase(engine: StorageEngine, session: StorageSess
     input.verify()
     return { empty: true, bytes: 0, sha256: createHash('sha256').digest('hex') }
   } finally { await output.close() }
-}
-
-/** Equality is a complete byte comparison after exit, never a timestamp inference. */
-export async function compareDatabase(engine: StorageEngine, session: StorageSession, checkpoint: SavedCheckpoint, source: ExportSource, current: () => boolean = () => true): Promise<boolean | null> {
-  // The old inline core may have coalesced reads on other threads. Its ordinary export remains available.
-  if (!savedCheckpoint(checkpoint) || offThreadSqliteActive()) return null
-  const deadline = performance.now() + STORAGE_COMPARE_WORK_MS
-  const available = () => {
-    if (!current()) throw new Error('checkpoint comparison cancelled')
-    return performance.now() < deadline
-  }
-  if (!available()) return null
-  const input = observeNativeFile(source.path), saved = observeNativeFile(checkpoint.path)
-  if (input.path !== source.path || input.key !== source.key || saved.key !== checkpoint.key) throw new Error('checkpoint comparison source refused')
-  const file = await open(checkpoint.path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK)
-  try {
-    const before = await file.stat({ bigint: true })
-    if (!available()) return null
-    if (!before.isFile() || before.nlink !== 1n || (process.platform !== 'win32' && (before.mode & 0o777n) !== 0o600n)
-      || nativeFileKey(before) !== checkpoint.key || (process.getuid && before.uid !== BigInt(process.getuid()))) throw new Error('checkpoint comparison file refused')
-    if (before.size !== BigInt(checkpoint.bytes)) return false
-    closeSqliteHandle(source.path)
-    const expected = Buffer.alloc(STORAGE_CHUNK_BYTES), actual = Buffer.alloc(STORAGE_CHUNK_BYTES)
-    let bytes = 0, used = 0
-    const matches = async (): Promise<boolean | null> => {
-      for (let offset = 0; offset < used;) {
-        if (!available()) return null
-        const { bytesRead } = await file.read(actual, offset, used - offset, bytes + offset)
-        if (!available()) return null
-        if (!bytesRead) return false
-        offset += bytesRead
-      }
-      if (!expected.subarray(0, used).equals(actual.subarray(0, used))) return false
-      bytes += used; used = 0
-      return true
-    }
-    for await (const text of databaseHistory({ ...session, engine }, source)) {
-      if (!available()) return null
-      const data = Buffer.from(text)
-      if (bytes + used + data.length > checkpoint.bytes) return false
-      for (let offset = 0; offset < data.length;) {
-        const copied = data.copy(expected, used, offset, Math.min(data.length, offset + expected.length - used))
-        offset += copied; used += copied
-        if (used === expected.length) {
-          const equal = await matches()
-          if (equal !== true) return equal
-        }
-      }
-    }
-    if (used) {
-      const equal = await matches()
-      if (equal !== true) return equal
-    }
-    if (!available()) return null
-    if (bytes !== checkpoint.bytes || (await file.read(actual, 0, 1, bytes)).bytesRead !== 0) return false
-    const after = await file.stat({ bigint: true })
-    if (!available()) return null
-    input.verify(); saved.verify()
-    if (nativeFileKey(after) !== checkpoint.key || after.size !== before.size || after.mtimeNs !== before.mtimeNs
-      || after.ctimeNs !== before.ctimeNs || after.nlink !== before.nlink || after.mode !== before.mode || after.uid !== before.uid) throw new Error('checkpoint comparison changed')
-    return true
-  } finally { await file.close() }
 }
