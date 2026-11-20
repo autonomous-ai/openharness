@@ -24,6 +24,20 @@ FOUR_BUILDS = [{"bundle": "appimage", "arch": "x64"}, {"bundle": "appimage", "ar
                {"bundle": "nsis", "arch": "x64"}, {"bundle": "nsis", "arch": "arm64"}]
 # A plan whose linux-e2e does not run.
 NO_LINUX_E2E = {"linux_files": [], "linux_shards": 0, "linux_full": False}
+# The checkout the full-checkout tests read.
+REPOSITORY = Path(__file__).resolve().parents[2]
+
+
+def full_checkout(test, *paths):
+    """Skip a test whose files are not in this checkout (process-checks' is sparse); in ci.yml's cross-read-scan job
+    (CROSS_READ_SCAN_REQUIRED=1), which exists to run it on a full one, fail naming them: a skip there reads as a pass."""
+    missing = [path for path in paths if not (REPOSITORY / path).exists()]
+    if not missing:
+        return
+    message = f"needs a full checkout: {', '.join(missing)} not in {REPOSITORY}"
+    if os.environ.get("CROSS_READ_SCAN_REQUIRED") == "1":
+        test.fail(message)
+    test.skipTest(message)
 
 
 class SelectionTests(unittest.TestCase):
@@ -58,10 +72,9 @@ class SelectionTests(unittest.TestCase):
 
     def test_every_desktop_file_the_phone_tests_read_selects_mobile(self):
         # The phone's tests name what they read as '../desktop/<path>', or an import of '../../desktop/<path>'.
-        root = Path(__file__).resolve().parents[2]
+        root = REPOSITORY
+        full_checkout(self, "mobile/test")
         tests = sorted((root / "mobile/test").rglob("*.dart"))
-        if not tests:
-            self.skipTest("mobile/test is not in this checkout (CI's process checks are sparse)")
         named = set()
         for test in tests:
             text = test.read_text()
@@ -290,11 +303,10 @@ class SelectionTests(unittest.TestCase):
                 self.assertNotIn("linux-e2e", planner.select([path])[0])
 
     def test_the_dial_host_files_are_the_ones_cli_e2e_leaves_out(self):
-        root = Path(__file__).resolve().parents[2]
+        root = REPOSITORY
         source = root / "cli/e2e/harness/dialHosts.ts"
-        if not source.is_file():
-            self.skipTest("needs a full checkout (CI's process checks are sparse)")
-        listed = re.search(r"export const DIAL_HOST_FILES = \[([^\]]*)\]", source.read_text()).group(1)
+        full_checkout(self, "cli/e2e/harness/dialHosts.ts")
+        listed =re.search(r"export const DIAL_HOST_FILES = \[([^\]]*)\]", source.read_text()).group(1)
         self.assertEqual(set(planner.DIAL_HOST_FILES), {"cli/" + name for name in re.findall(r"'([^']+)'", listed)})
         for entry in planner.DIAL_HOST_PATHS:
             with self.subTest(entry=entry):
@@ -528,9 +540,8 @@ class SelectionTests(unittest.TestCase):
 
     def test_every_declared_input_exists(self):
         # A declaration of a removed file selects a suite for a look-alike someone adds later, and hides nothing it reads.
-        root = Path(__file__).resolve().parents[2]
-        if not (root / "cli/src").is_dir():
-            self.skipTest("needs a full checkout (CI's process checks are sparse)")
+        root = REPOSITORY
+        full_checkout(self, "cli/src")
         for suite, entries in [*planner.DEPENDS.items(), *planner.PR_READS.items()]:
             # A shared input (the sparse checkout's optional .gitmodules) reruns everything whether it exists or not.
             for entry in (entry for entry in entries if not planner.shared_input(entry)):
@@ -1543,9 +1554,9 @@ class CrossReadTests(unittest.TestCase):
         self.assertEqual(planner.undeclared_reads(self.root, "backend"), [("backend/src/fixture.test.ts", "cli/src/lib/a.ts")])
 
     def test_every_cross_read_in_this_repository_is_declared(self):
-        repository = Path(__file__).resolve().parents[2]
-        if not all((repository / top).is_dir() for top in ["cli/src", "desktop/lib", "mobile/lib", "backend/src"]):
-            self.skipTest("needs a full checkout; the merge helper runs this scan before accepting reuse")
+        # The merge helper runs this scan too, on its own full checkout, before accepting reuse.
+        repository = REPOSITORY
+        full_checkout(self, "cli/src", "desktop/lib", "mobile/lib", "backend/src")
         for suite in sorted(planner.SUITES):
             with self.subTest(suite=suite):
                 self.assertEqual(planner.undeclared_reads(repository, suite), [])
