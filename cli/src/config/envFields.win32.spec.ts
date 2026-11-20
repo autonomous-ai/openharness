@@ -16,8 +16,9 @@ describe('a Harness folder or file override, with Windows paths', () => {
     expect(homePath('C:data', HOME)).toBe('C:\\Users\\me\\data')
   })
 
-  it('is an absolute value as given, and an empty one stays empty', () => {
+  it('is an absolute value exactly as written, and an empty one stays empty', () => {
     expect(homePath('D:\\data', HOME)).toBe('D:\\data')
+    expect(homePath('D:\\data\\', HOME)).toBe('D:\\data\\')
     expect(homePath('\\\\server\\share\\data', HOME)).toBe('\\\\server\\share\\data')
     expect(homePath('', HOME)).toBe('')
   })

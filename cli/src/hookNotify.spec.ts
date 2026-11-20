@@ -2459,8 +2459,8 @@ describe('the hook\'s Harness folder override, with Windows paths', () => {
   }
 
   it('is under the home: relative, root-relative on its drive and drive-relative; absolute as given; empty as it is', () => {
-    expect(['data', '\\data', 'C:data', 'D:\\data', ''].map(hookHomePath()))
-      .toEqual(['C:\\Users\\me\\data', 'C:\\data', 'C:\\Users\\me\\data', 'D:\\data', ''])
+    expect(['data', '\\data', 'C:data', 'D:\\data', 'D:\\data\\', ''].map(hookHomePath()))
+      .toEqual(['C:\\Users\\me\\data', 'C:\\data', 'C:\\Users\\me\\data', 'D:\\data', 'D:\\data\\', ''])
   })
 })
 

@@ -60,6 +60,12 @@ describe('a Harness folder or file override', () => {
     expect(homePath('', '/h')).toBe('')
   })
 
+  // The daemon's socket folder is named by a hash of the data folder as written (lib/localSocket.ts), and Desktop and
+  // the Store's clients keep an absolute one as given: a tidied one would name another socket.
+  it('is an absolute value exactly as written, untidy or not', () => {
+    for (const value of ['/abs/', '/abs//data', '/abs/./data/../data']) expect(homePath(value, '/h')).toBe(value)
+  })
+
   // `ADAPTER_DATA_DIR=` in an env file must never make the home itself the data folder.
   it('is its default when unset or empty', () => {
     const field = homeRelative('/fallback')
