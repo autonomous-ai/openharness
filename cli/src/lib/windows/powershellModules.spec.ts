@@ -39,11 +39,12 @@ const MODULES: Record<PowershellModule, readonly string[]> = {
 }
 const moduleOf = new Map(Object.entries(MODULES).flatMap(([module, cmdlets]) => cmdlets.map((cmdlet) => [cmdlet, module] as const)))
 const CMDLET = /(?<![\w$.-])[A-Z][A-Za-z]+-[A-Z][A-Za-z0-9]+(?![\w-])/g
-const BY_PATH = /^Import-Module -Name "\$PSHOME\\Modules\\([\w.]+)"$/
+const BY_PATH = /^Import-Module -Name "\$PSHOME\\Modules\\([\w.]+)"( -ErrorAction Stop)?$/
 
 /**
  * What is wrong with [script]: a command that runs before autoload is off, one whose module is not imported before it,
- * one no module here is known to hold, an import by any other path, and a module imported for none of its commands.
+ * one no module here is known to hold, an import by any other path or one that goes on when it fails, and a module
+ * imported for none of its commands.
  */
 function problems(script: string): string[] {
   // A comment line names commands too, and runs none.
@@ -53,9 +54,11 @@ function problems(script: string): string[] {
   const found = new Set<string>()
   const imported = new Map<string, number>()
   for (const match of code.matchAll(/Import-Module\b[^\n;]*/g)) {
-    const module = BY_PATH.exec(match[0].trim())?.[1]
-    if (module) imported.set(module, match.index)
-    else found.add(`${match[0].trim()} is not by its folder in $PSHOME`)
+    const [, module, stops] = BY_PATH.exec(match[0].trim()) ?? []
+    if (!module) { found.add(`${match[0].trim()} is not by its folder in $PSHOME`); continue }
+    // Before a script's own `$ErrorActionPreference = 'Stop'`, and under -File, a failed import is only printed.
+    if (!stops) found.add(`${match[0].trim()} goes on when it fails`)
+    imported.set(module, match.index)
   }
   const used = new Set<string>()
   for (const match of code.matchAll(CMDLET)) {
@@ -110,7 +113,7 @@ describe('the check', () => {
   })
 
   it('names a Management or Utility command whose module is not imported before it', () => {
-    expect(problems(`${AUTOLOAD_OFF}\nJoin-Path $a 'b' | Select-Object -First 1\nImport-Module -Name "$PSHOME\\Modules\\Microsoft.PowerShell.Utility"`)).toEqual([
+    expect(problems(`${AUTOLOAD_OFF}\nJoin-Path $a 'b' | Select-Object -First 1\nImport-Module -Name "$PSHOME\\Modules\\Microsoft.PowerShell.Utility" -ErrorAction Stop`)).toEqual([
       'Join-Path needs Microsoft.PowerShell.Management imported before it',
       'Select-Object needs Microsoft.PowerShell.Utility imported before it',
     ])
@@ -122,10 +125,16 @@ describe('the check', () => {
 
   it('names an import by any other path, and a module imported for none of its commands', () => {
     expect(problems([AUTOLOAD_OFF, "Import-Module -Name (Join-Path $PSHOME 'Modules\\Appx\\Appx.psd1')",
-      'Import-Module -Name "$PSHOME\\Modules\\NetTCPIP"'].join('\n'))).toEqual([
+      'Import-Module -Name "$PSHOME\\Modules\\NetTCPIP" -ErrorAction Stop'].join('\n'))).toEqual([
       "Import-Module -Name (Join-Path $PSHOME 'Modules\\Appx\\Appx.psd1') is not by its folder in $PSHOME",
       'Join-Path needs Microsoft.PowerShell.Management imported before it',
       'NetTCPIP is imported for none of its commands',
+    ])
+  })
+
+  it('names an import that goes on when it fails', () => {
+    expect(problems([AUTOLOAD_OFF, 'Import-Module -Name "$PSHOME\\Modules\\Microsoft.PowerShell.Management"', 'Join-Path $a b'].join('\n'))).toEqual([
+      'Import-Module -Name "$PSHOME\\Modules\\Microsoft.PowerShell.Management" goes on when it fails',
     ])
   })
 
@@ -135,11 +144,11 @@ describe('the check', () => {
 })
 
 describe('PowerShell scripts import their modules by path, with autoload off', () => {
-  it('modulesByPath turns autoload off, then imports each module by its folder in $PSHOME', () => {
+  it('modulesByPath turns autoload off, then imports each module by its folder in $PSHOME, stopping if one fails', () => {
     expect(modulesByPath('Microsoft.PowerShell.Utility', 'NetTCPIP')).toBe([
       AUTOLOAD_OFF,
-      'Import-Module -Name "$PSHOME\\Modules\\Microsoft.PowerShell.Utility"',
-      'Import-Module -Name "$PSHOME\\Modules\\NetTCPIP"',
+      'Import-Module -Name "$PSHOME\\Modules\\Microsoft.PowerShell.Utility" -ErrorAction Stop',
+      'Import-Module -Name "$PSHOME\\Modules\\NetTCPIP" -ErrorAction Stop',
     ].join('\n'))
   })
 
