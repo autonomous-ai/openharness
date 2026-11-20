@@ -1980,6 +1980,13 @@ void main() {
         if (frame.kind == TerminalBinaryKind.pasteFile) frame,
     ];
 
+    /// The upload's own frames. The stream's ACK (16 ms after the keyframe in [live]) and its
+    /// heartbeat run on real timers, so under load they land in [sent] at any `pump()`.
+    List<({String type, Map<String, dynamic> payload})> uploadSent() => [
+      for (final frame in sent)
+        if (frame.type.startsWith('terminal_chunked_upload_')) frame,
+    ];
+
     Future<void> live() async {
       await ready();
       await session.handleBinary(
@@ -2179,7 +2186,7 @@ void main() {
         'reason': 'an upload is already in progress on this pane',
       });
       await pump();
-      expect(sent.map((frame) => frame.type), [
+      expect(uploadSent().map((frame) => frame.type), [
         'terminal_chunked_upload_begin',
         'terminal_chunked_upload_cancel',
         'terminal_chunked_upload_begin',
@@ -2336,14 +2343,14 @@ void main() {
           session.lastStalledUpload!.bytesWritten,
           terminalUploadChunkBytes,
         );
-        expect(sent.last.type, 'terminal_chunked_upload_cancel');
-        expect(sent.last.payload['streamId'], streamId);
+        expect(uploadSent().last.type, 'terminal_chunked_upload_cancel');
+        expect(uploadSent().last.payload['streamId'], streamId);
         // The stream itself is fine: nothing reopens, and the next upload starts at once.
         expect(session.status, TerminalSessionStatus.controlling);
         expect(sent.where((frame) => frame.type == 'terminal_open'), isEmpty);
         unawaited(session.pasteImage(Uint8List.fromList(const [1])));
         await pump();
-        expect(sent.last.type, 'terminal_chunked_upload_begin');
+        expect(uploadSent().last.type, 'terminal_chunked_upload_begin');
         expect(session.lastStalledUpload, isNull);
         await session.cancelUpload();
       });
@@ -2467,9 +2474,9 @@ void main() {
       await session.cancelUpload();
       expect(await future, isFalse);
       expect(session.uploadProgress, isNull);
-      expect(sent.last, isA<Object>());
-      expect(sent.last.type, 'terminal_chunked_upload_cancel');
-      expect(sent.last.payload['streamId'], streamId);
+      expect(uploadSent().last, isA<Object>());
+      expect(uploadSent().last.type, 'terminal_chunked_upload_cancel');
+      expect(uploadSent().last.payload['streamId'], streamId);
     });
 
     test(
