@@ -17,7 +17,7 @@ on:
       scope:
         description: 'Affected component; full for core suites, all for every component'
         type: choice
-        options: [full, cli, tui, backend, desktop, process, all, companions, website, os, provider, firmware, pro, mobile, daemons, pty, device-app]
+        options: [full, cli, tui, backend, desktop, process, all, companions, website, os, provider, firmware, pro, mobile, daemons, pty, device-app, windows-e2e, device-app-e2e, device-app-update, device-app-desktop, device-app-install]
         default: full
   workflow_call:
     inputs:

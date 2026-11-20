@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
 """Select fast CI suites from a complete Git diff and verify their final results.
 
-A PR runs the unit suite of each component it changes and of each suite that reads a changed file (PR_READS). Merge
-groups run only the plan and process checks: the PR run already covered the code.
+A PR runs the unit suite of each component it changes and of each suite that reads a changed file (PR_READS), and each
+end-to-end suite (E2E: windows-e2e, device-app-e2e, device-app-update, device-app-desktop, device-app-install) whose own
+path list names a changed file. Merge groups run only the plan and process checks: the PR run already covered the code.
 After GitHub merges main into a PR head whose ci/required passed, a component whose
 inputs main's new commits left untouched reuses that run's result instead of running
 again (docs/validation-and-release.md#reuse-after-update-branch).
 Checks outside PR CI are listed in docs/validation-and-release.md#what-pr-ci-does-not-run.
 """
 import argparse
+import fnmatch
 import importlib.util
 import json
 import os
@@ -29,7 +31,9 @@ _local_spec.loader.exec_module(local_checks)
 
 CORE = {"cli", "desktop", "tui", "backend", "companions"}
 EXTRA = {"website", "os", "provider", "firmware", "mobile", "daemons", "pty", "device-app"}
-SUITES = CORE | EXTRA | {"pro"}
+# End to end on Windows and Linux, each selected by its own path list (below).
+E2E = {"windows-e2e", "device-app-e2e", "device-app-update", "device-app-desktop", "device-app-install"}
+SUITES = CORE | EXTRA | {"pro"} | E2E
 JOBS = {
     "cli": {"cli-typecheck", "cli-tests"},
     "pro": {"pro-firmware-build", "pro-golden"},
@@ -37,8 +41,12 @@ JOBS = {
     # backend-integration: the Super Tab integration suite (backend/integration) in four shards (task #2459).
     "tui": {"tui-test"}, "backend": {"backend-desk", "backend-integration"}, "companions": {"companion-subsystems"},
     **{name: {name + "-checks"} for name in EXTRA},
+    # windows-e2e calls windows.yml; device-app-e2e is the app on Linux and on Windows.
+    "windows-e2e": {"windows-e2e"}, "device-app-e2e": {"device-app-linux", "device-app-windows"},
+    **{name: {name} for name in ("device-app-update", "device-app-desktop", "device-app-install")},
 }
-MANUAL = {"full": CORE, "all": SUITES, "process": set(), **{name: {name} for name in SUITES}}
+# all: every component's suite. The end-to-end suites cost far more runner time; each runs by its own scope.
+MANUAL = {"full": CORE, "all": SUITES - E2E, "process": set(), **{name: {name} for name in SUITES}}
 # Each component's own directory selects its suite. Everything else (docs, workflows,
 # scripts, store, fixtures) is covered by the plan's actionlint and process checks.
 COMPONENTS = {"cli": "cli", "tests": "cli", "desktop": "desktop", "tui": "tui", "backend": "backend",
@@ -64,6 +72,61 @@ ALSO.update({"plugins/harness-device-vscode/": "cli"})
 ALSO.update({"plugins/harness-device-orca/": "cli"})
 # Narrower directories that add a suite on top of their component's (the ESP32-P4 build and golden screens).
 SUBCOMPONENTS = {"devices/harness-pro/": "pro"}
+
+# The end-to-end suites' own paths: what each one's jobs build, run or install. Narrow on purpose, and no PR_READS: each
+# costs many times a unit suite (windows-e2e about 43 runner-minutes, the Device suites about 200 together), so only a
+# change to code its jobs exercise runs one, and a typical CLI pull request runs none. A file their tests merely read
+# runs its component's unit suite; reuse after Update branch still counts it (DEPENDS).
+# windows-e2e: windows.yml's specs (both of its `$paths` lists, cli/-relative there), each with the module it tests.
+WINDOWS_SPECS = (
+    "cli/src/lib/ptyHostBackend.contract.spec.ts", "cli/src/lib/ptyHost/", "cli/src/lib/windows/",
+    "cli/src/scripts/windowsCiChecks.spec.ts", "cli/src/team/windowsTeamRemove.real.spec.ts", "cli/src/lib/uninstall/",
+    "cli/src/engines/kit/hookRemoval.spec.ts", "cli/src/engines/kit/windowsHooks.spec.ts",
+    "cli/src/engines/kit/windowsFiles.spec.ts", "cli/src/engines/kit/nativePaths.windows.spec.ts",
+    "cli/src/engines/kit/launchExecutable.windows.spec.ts", "cli/src/dsh/runtime.windows.spec.ts",
+    "cli/src/engines/removeHooks.spec.ts", "cli/src/engines/windowsHomes.spec.ts", "cli/src/cable/windowsSerial.spec.ts",
+    "cli/src/cable/serialWindows.spec.ts", "cli/src/superTabs/start.spec.ts", "cli/src/engines/kit/folderTrust.spec.ts",
+    "cli/src/lib/tied.spec.ts", "cli/src/lib/connectors/call.spec.ts", "cli/src/lib/secureState.spec.ts",
+    "cli/src/lib/registryLock.publish.spec.ts", "cli/src/lib/pidFileSettle.spec.ts",
+    "cli/src/devices/listenerPipe.windows.real.spec.ts", "cli/src/devices/claudePlugin.windows.real.spec.ts",
+    "cli/src/deviceClaude/inbox.windows.real.spec.ts", "cli/src/hookCaller.windows.real.spec.ts",
+    "cli/src/harnessDevicePlugin.spec.ts", "plugins/harness-device-vscode/src/",
+    # The two real builds.
+    "cli/src/lib/hostMove/hostMove.real.spec.ts", "cli/src/lib/ptyHost/drain.spec.ts",
+    "cli/src/lib/windows/ptyInstall.windows.real.spec.ts", "cli/src/scripts/installPs1.spec.ts",
+    "cli/src/testing/windowsPowerShell.spec.ts",
+)
+# A spec tests the module beside it named up to its first dot: secureState.spec.ts tests secureState.ts.
+WINDOWS_SPEC_MODULES = {str(PurePosixPath(spec).with_name(PurePosixPath(spec).name.split(".")[0] + ".ts"))
+                        for spec in WINDOWS_SPECS if not spec.endswith("/")}
+# Harness Device's suites: what each of ci.yml's Device jobs tests. "dir/" is a folder; a "*" matches within the last
+# name.
+DEVICE_APP_PATHS = {
+    # The app end to end on Linux and on Windows: any change to it.
+    "device-app-e2e": ("device-app/",),
+    # One build updating to the next: the updater, the pair of builds, each driver's update path, how a release builds,
+    # and the app's configuration and dependencies.
+    "device-app-update": ("device-app/src-tauri/src/update.rs", "device-app/scripts/e2e/update-pair.sh",
+                          "device-app/scripts/e2e/linux.sh", "device-app/scripts/e2e/windows.ps1",
+                          "device-app/scripts/release-build.sh", "device-app/scripts/release-check.sh",
+                          "device-app/scripts/release-setup.sh", "device-app/src-tauri/tauri*.conf.json",
+                          "device-app/src-tauri/Cargo.toml", "device-app/src-tauri/Cargo.lock"),
+    # Desktop installs the app: Desktop's half and its test, and the app's install, packaging and instance code.
+    "device-app-desktop": ("desktop/lib/devices/",
+                           "desktop/integration_test/device_app_install_windows_linux_native_test.dart",
+                           "device-app/src-tauri/src/install.rs", "device-app/src-tauri/src/packaging.rs",
+                           "device-app/src-tauri/src/instance.rs", "device-app/src-tauri/tauri*.conf.json"),
+    # The one-line install on each Ubuntu: the website's script, its stand-in CDN, and how the AppImage starts.
+    "device-app-install": ("website/scripts/device-install.sh", "device-app/scripts/e2e/linux-install.sh",
+                           "device-app/scripts/e2e/https-fake-cdn.py", "device-app/src-tauri/src/appimage_env.rs",
+                           "device-app/src-tauri/src/packaging.rs", "device-app/src-tauri/tauri*.conf.json"),
+}
+# The debug packages (bundle, arch) the Device suites' jobs install, in device-app-build's order. That job is in no
+# suite's JOBS: its rows are the running suites' packages, so a suite reused after Update branch builds nothing and its
+# jobs skip, while ci/required still needs the job (a failed build fails the gate).
+DEVICE_APP_PACKAGES = (("appimage", "x64"), ("appimage", "arm64"), ("nsis", "x64"), ("nsis", "arm64"))
+DEVICE_APP_BUILDS = {"device-app-e2e": DEVICE_APP_PACKAGES, "device-app-desktop": DEVICE_APP_PACKAGES,
+                     "device-app-install": (("appimage", "x64"),)}
 
 # Reuse after Update branch. Reusing an earlier result needs every file a suite may read outside its own directory,
 # because main's commits were never tested together with this PR: these sets are broad on purpose, as the scan misses a
@@ -109,6 +172,17 @@ DEPENDS = {
                 "desktop/macos/Runner/Assets.xcassets/AppIcon.appiconset/app_icon_512.png",
                 "tests/fixtures/app-list-entry-vectors.json"),
 }
+# An end-to-end suite reads what the unit suites of the code it runs read, and all of that code: windows.yml builds the
+# PTY host, the serial bridge, the TUI and the installer, and runs the CLI's specs, the dial plugins' and the website's
+# flasher; the Device jobs run the app, Desktop's install of it and the website's one-line installer.
+DEPENDS.update({
+    "windows-e2e": DEPENDS["cli"] + DEPENDS["pty"] + DEPENDS["tui"] + (
+        "cli/", "tests/", "plugins/", "pty/", "serial/", "term/", "tui/", "installer/", "website/"),
+    "device-app-e2e": DEPENDS["device-app"] + ("device-app/",),
+    "device-app-update": DEPENDS["device-app"] + ("device-app/",),
+    "device-app-desktop": DEPENDS["device-app"] + DEPENDS["desktop"] + ("device-app/", "desktop/"),
+    "device-app-install": DEPENDS["device-app"] + ("device-app/", "website/scripts/device-install.sh"),
+})
 
 # Selection. The files each suite reads outside its own directory, as narrow as the scan shows: a PR that changes one
 # runs that suite (#4033 changed a CLI file Desktop's tests read and ran the CLI's suite only). Each is inside the
@@ -268,13 +342,57 @@ def owners(path):
     return scopes
 
 
+def windows_only(path):
+    """Code that runs on Windows alone, where windows-e2e's arm64 leg tests what its x64 leg does not."""
+    return (path.startswith(("pty/", "term/", "serial/", "installer/", "cli/src/lib/ptyHost", "cli/scripts/windows-ci/"))
+            or PurePosixPath(path).name == "install.ps1" or path == ".github/workflows/windows.yml"
+            # A file's own name under cli/, not a folder's (cli/src/lib/windows/ runs x64 alone): arm64 adds about 27
+            # runner-minutes a run.
+            or (path.startswith("cli/") and re.search(r"[wW]indows", PurePosixPath(path).name) is not None))
+
+
+def windows_e2e(path):
+    """What windows-e2e tests: Windows-only code, cross-platform code with win32 branches that broke only on Windows
+    (#4513: the devices, the cable, the engines' hook scripts, the dial plugins), the TUI and the flasher windows.yml
+    runs, and its specs with the modules they test."""
+    return (windows_only(path)
+            or path.startswith(("cli/src/lib/windows/", "cli/src/devices/", "cli/src/cable/", "cli/hook/", "tui/",
+                                "website/src/app/flash-circle.ps1/"))
+            or re.match(r"plugins/harness-device[^/]*/", path) is not None
+            or path in WINDOWS_SPEC_MODULES or any(covers(spec, path) for spec in WINDOWS_SPECS))
+
+
+def listed(entry, path):
+    """covers(), and a "*" in the entry's last name matching within that name."""
+    folder, _, name = entry.rpartition("/")
+    return covers(entry, path) or ("*" in name and str(PurePosixPath(path).parent) == folder
+                                   and fnmatch.fnmatchcase(PurePosixPath(path).name, name))
+
+
+def e2e_owners(path):
+    """The end-to-end suites whose own paths include this path."""
+    suites = {"windows-e2e"} if windows_e2e(path) else set()
+    # No Device job reads the docs or runs the release scripts' Python tests (device-app-checks runs those).
+    if not path.endswith(".md") and not listed("device-app/scripts/test_*.py", path):
+        suites |= {suite for suite, entries in DEVICE_APP_PATHS.items() if any(listed(entry, path) for entry in entries)}
+    return suites
+
+
+def owns(suite, path):
+    """Whether the path is one of the suite's own files. Only an end-to-end suite reads the path lists: the cross-read
+    scan asks for every file, and they made a unit suite's scan half again as slow."""
+    return suite in owners(path) or (suite in E2E and suite in e2e_owners(path))
+
+
 def select(paths):
-    """Each changed path runs its owners' suites and every suite that declares reading it (PR_READS)."""
+    """Each changed path runs its owners' suites, the end-to-end suites whose own paths include it, and every suite
+    that declares reading it (PR_READS)."""
     selected, reasons = set(), {}
     for path in paths:
         if not isinstance(path, str) or not path or path.startswith("/") or ".." in path.split("/"):
             raise ValueError("invalid changed path")
-        scopes = owners(path) | {suite for suite, entries in PR_READS.items() if any(covers(entry, path) for entry in entries)}
+        scopes = owners(path) | e2e_owners(path) | {
+            suite for suite, entries in PR_READS.items() if any(covers(entry, path) for entry in entries)}
         selected |= scopes
         reasons[path] = sorted(scopes)
     return selected, reasons
@@ -303,7 +421,7 @@ def shared_input(path):
 
 def reads(suite, path, inputs=None):
     """Whether the suite reads this path: its own files, or its inputs (DEPENDS for reuse; PR_READS for selection)."""
-    own = suite in owners(path) and not any(covers(skip, path) for skip in NOT_READ.get(suite, ()))
+    own = owns(suite, path) and not any(covers(skip, path) for skip in NOT_READ.get(suite, ()))
     return own or any(covers(entry, path) for entry in (DEPENDS if inputs is None else inputs).get(suite, ()))
 
 
@@ -520,7 +638,7 @@ def undeclared_reads(root, suite, known_paths=(), inputs=None):
     tops = {path.split("/", 1)[0] for path in tracked if "/" in path}
     found = []
     for source in sorted(sources):
-        if not SOURCE_FILE.search(source) or "/evidence/" in source or suite not in owners(source):
+        if not SOURCE_FILE.search(source) or "/evidence/" in source or not owns(suite, source):
             continue
         try:
             text = (Path(root) / source).read_text(encoding="utf-8")
@@ -790,12 +908,34 @@ def make_plan(root, event_name, event, scope="full", source=None, evidence=None)
     reused, reuse = {}, dict(status="none", reason="only a ready PR's update merge can reuse", rerun={})
     if event_name == "pull_request" and not draft and suites:
         reused, reuse = plan_reuse(root, head, base_sha(event), suites, evidence)
-    required = {"process-checks"} | set().union(*(JOBS[name] for name in suites - set(reused)))
+    running = suites - set(reused)
+    required = {"process-checks"} | set().union(*(JOBS[name] for name in running))
     return dict(schema=1, kind="ci-plan", event=event_name, head=head, base=base, draft=draft,
                 tree=git(root, "rev-parse", "HEAD^{tree}"), paths=paths, reasons=reasons,
                 suites=sorted(suites), required_jobs=sorted(required), reused=reused, reuse=reuse,
+                e2e=e2e_plan(paths, running),
                 local_checks=local_checks.required_checks(paths) if event_name == "pull_request" else [],
                 manual_acceptance="Review still selects relevant native, real-engine, hardware and visual acceptance.")
+
+
+def e2e_plan(paths, running):
+    """What the running end-to-end suites' jobs read besides their flags: whether windows-e2e adds arm64 (for a
+    Windows-only path, or a run by hand, which names none), and the Device packages to build."""
+    arm64 = "windows-e2e" in running and (not paths or any(windows_only(path) for path in paths))
+    builds = [dict(bundle=bundle, arch=arch) for bundle, arch in DEVICE_APP_PACKAGES
+              if any((bundle, arch) in DEVICE_APP_BUILDS.get(suite, ()) for suite in running)]
+    return dict(windows_arm64=arm64, device_app_builds=builds)
+
+
+def outputs(record):
+    """The plan job's outputs (ci.yml): the plan, whether it is ready, each suite's flag, and the end-to-end inputs."""
+    values = dict(plan=json.dumps(record, separators=(",", ":")), ready="false" if record["draft"] else "true")
+    # A reused suite's jobs skip; ci/required accepts that skip only for it.
+    for suite in sorted(SUITES):
+        values[suite] = "true" if suite in record["suites"] and suite not in record["reused"] else "false"
+    values["windows-e2e-arm64"] = "true" if record["e2e"]["windows_arm64"] else "false"
+    values["device-app-builds"] = json.dumps(record["e2e"]["device_app_builds"], separators=(",", ":"))
+    return values
 
 
 def base_sha(event):
@@ -888,12 +1028,7 @@ def main():
         record = make_plan(Path.cwd(), event_name, json.loads(Path(os.environ["GITHUB_EVENT_PATH"]).read_text()),
                            args.scope, os.environ["CI_SOURCE_SHA"], evidence)
         with open(os.environ["GITHUB_OUTPUT"], "a") as output:
-            output.write("plan=" + json.dumps(record, separators=(",", ":")) + "\n")
-            output.write(f"ready={'false' if record['draft'] else 'true'}\n")
-            # A reused suite's jobs skip; ci/required accepts that skip only for it.
-            for suite in sorted(SUITES):
-                runs = suite in record["suites"] and suite not in record["reused"]
-                output.write(f"{suite}={'true' if runs else 'false'}\n")
+            output.writelines(f"{name}={value}\n" for name, value in outputs(record).items())
     args.output.write_text(json.dumps(record, indent=2) + "\n")
     with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
         summary.write(f"Source: `{record.get('head', record.get('source_sha'))}`\n\n")
@@ -907,6 +1042,15 @@ def main():
             summary.write(f"\nReuse: {record['reuse']['reason']}.\n")
         for suite, reason in sorted(((record.get("reuse") or {}).get("rerun") or {}).items()):
             summary.write(f"- `{suite}` runs again: {reason}.\n")
+        e2e = record.get("e2e")  # A plan's; the gate's receipt has none.
+        if e2e and "windows-e2e" in set(record["suites"]) - set(record["reused"]):
+            first = next((path for path in record["paths"] if windows_only(path)), None)
+            summary.write("\nWindows end to end: " + (
+                "x64 alone.\n" if not e2e["windows_arm64"] else
+                f"x64 and arm64, for the Windows-only `{first}`.\n" if first else "x64 and arm64, run by hand.\n"))
+        if e2e and e2e["device_app_builds"]:
+            summary.write("\nHarness Device builds: "
+                          + ", ".join(f"{build['bundle']} {build['arch']}" for build in e2e["device_app_builds"]) + ".\n")
         if record.get("draft"):
             summary.write("Draft PR: only workflow/process checks run; mark ready for review to run the complete affected suites. The integration gate remains blocked.\n")
         summary.write("Native, real-engine, hardware and visual acceptance remain explicit review requirements.\n")
