@@ -235,3 +235,185 @@ extension host never ran the probe (most likely its first-run screen waits for a
 `orca plugin test [dir] [--json]` ("Run a plugin's own tests on this machine, unsandboxed") and
 `orca plugin check [dir] [--json]` ("Validate, then render each panel on this machine, unsandboxed") both exist in
 Orca 1.4.263 for Windows (`orca.exe --help`).
+
+## Task 2
+
+**Stop: mod runtime.** `$.http.fetch` refuses every named pipe as a `socketPath`, before it connects (section 1), so the
+mod cannot reach the daemon's pipe or the devices' pipe at all. Tasks 15 and 16 do not start. HMAC-SHA256 is there only
+built by hand over `crypto.subtle.digest` (section 2); that alone would not have stopped them.
+
+**Contradicts the plan, beyond the stop:**
+- Task 17: with no Git Bash, today's `PermissionRequest` hook makes Claude Code **deny the tool call**. Its command is a
+  quoted path, which PowerShell prints and runs nothing. Claude Code reads exit 127 and logs `PermissionRequest command
+  hook failed; blocking (no Git Bash)`. Every Write in that run was denied, and the model was told to install Git
+  (section 4).
+- Task 17: Windows PowerShell, the runner without Git Bash, takes 3-6 s to start on this VM. Inside Claude Code the
+  hook timed out once at its 5 s timeout, and that was blocking too (section 4).
+- Task 16: on Windows, `$.process.run` of a missing absolute path does not reject. It resolves with exit 1 and
+  `The system cannot find the path specified.` on stderr, so the mod's `catch { continue }` never reaches `harness` on
+  PATH (section 3).
+
+Read 2026-11-20 on the UTM Windows 11 ARM64 VM (build 26200), as the owned test user over SSH (session 0). Nobody was
+signed in at the console. The engines: Claude Code 2.1.328 (native, arm64) and Codex 0.170.0 (npm, arm64). Each ran
+with the test key as "The VM" says: read from its file into the engine's own process, never on a command line. Each
+had a throwaway `CLAUDE_CONFIG_DIR` or `CODEX_HOME` in the profile. Claude Code ran as `claude -p` with two throwaway
+mods (`--plugin-dir`, outside the repo, never committed). The stand-in daemon was
+`cli/scripts/windows-pipe-test-server.ts`: the daemon's own authenticated pipe and a squatter, on a throwaway data
+folder. It ran from this branch's `cli/`, copied to a throwaway folder (`npm ci --ignore-scripts`). Process chains come
+from `harness-pty ps --json` (a build already on the VM). Every file was checked for the key before it was copied off;
+none held it. The throwaway folders are removed; the key file and the test user stay.
+
+### 1. `$.http.fetch` over the pipe
+
+Every spelling of the stand-in's pipe was refused at once (2-6 ms), the same way:
+
+```
+t2probe: $.http.fetch: socketPath \\.\pipe\harness-<32 hex> refused: a network location is not reached from here
+```
+
+| `socketPath` | Answer |
+| --- | --- |
+| `\\.\pipe\harness-<id>` (the daemon's pipe), signed and unsigned, GET and POST with a JSON body | refused as above |
+| the squatter's `\\.\pipe\harness-<id>` | refused as above |
+| `\\.\pipe\harness-000…0` (nothing there) | refused as above |
+| `//./pipe/harness-<id>` and `\\?\pipe\harness-<id>` | refused as above |
+| `<profile>\…\none.sock` (a file-system path, nothing listening) | not refused: it tries an AF_UNIX connect, `FailedToOpenSocket` |
+| no `socketPath`, `http://127.0.0.1:<the stand-in's loopback port>/api/status`, no auth header | reached: `404`, text `{"error":"NOT_FOUND"}` |
+
+- The cause is Claude Code's own check on `socketPath`. It sits in the 2.1.329 binary's `socketPath` validator, and
+  2.1.328 answers with the same words: an absolute path, no NUL, not "a network location", then "no Unix socket
+  transport in this build". A `\\.\` or `\\?\` path counts as a network location. No setting or spelling gets past it.
+- The runtime has an AF_UNIX transport on Windows: the file-system path was dialled. Node on Windows cannot serve one,
+  though: `net.createServer().listen('<profile>\…\x.sock')` fails with `EACCES` (libuv takes a path as a pipe name).
+- What an answer gives, seen on the loopback answer: `{ status, ok, headers, text }`, header names in lower case, the
+  text whole. A pipe answer's `x-harness-proof` would be readable as `headers['x-harness-proof']`, if a pipe could be
+  reached. No credential was sent over TCP.
+
+### 2. HMAC-SHA256 and random bytes
+
+- `crypto` holds `subtle`, `randomUUID` and `getRandomValues`. `crypto.subtle` holds `digest` alone: no `importKey`,
+  no `sign`. No `process`, `require` or `Bun`.
+- `node:crypto` cannot be imported. The module did not load at all: `cannot import "node:crypto" (from hooks\probe.js):
+  a hooks module imports its own files by relative path and "claude-code", nothing else` (`claude plugin validate`
+  says the same).
+- HMAC-SHA256 built by RFC 2104 over `crypto.subtle.digest('SHA-256', …)` (64-byte block, `0x36`/`0x5c` pads) gives the
+  `auth` and the `proof` of the first vector of `pipe-auth-vectors.json`, and of every other vector there.
+- 16 random bytes: `crypto.getRandomValues(new Uint8Array(16))` gives 32 hex digits, a new value on each call.
+
+### 3. Windows, the environment, processes and files, from the mod
+
+- Telling it runs on Windows: `(await $.session.info()).platform === 'windows'`. `$.session.machine()` gives `sysname`
+  `Windows_NT`, `machine` `arm64`.
+- `$.env.get`: `USERPROFILE` and `HOME` are both `<profile>`. `APPDATA` is `<profile>\AppData\Roaming`.
+  `CLAUDE_CONFIG_DIR` is the throwaway folder. Today's mod builds `${HOME}/.local/bin/harness`, which on Windows is
+  `<profile>/.local/bin/harness`.
+- `$.process.run`, no shell:
+  - `[<absolute node.exe under Program Files>, '-e', …, 'one arg with spaces', "it's & 100%"]`: exit 0, and each
+    argument arrives whole. The child's parent is `claude.exe` itself.
+  - Bare `node` and `node.exe` are found on PATH. Bare `codex` (the npm `codex.cmd`) runs too.
+  - An absolute `.cmd` runs, through `C:\WINDOWS\system32\cmd.exe /q /d /s /c "<file> ^"<arg>^""`.
+  - A missing absolute path (`<profile>\.harness\bin\harness.exe`): resolves, exit 1, stderr
+    `The system cannot find the path specified.` It does not reject.
+  - A bare name not on PATH (`harness`): rejects, `ENOENT: Command 'harness' not found or is in an unsafe location
+    (current directory)`.
+- `$.fs.exists`: false for the missing launcher, true for `node.exe`.
+- `$.fs.read`: `<CLAUDE_CONFIG_DIR>\settings.json`, the same path with forward slashes, and `<profile>\.claude\settings.json`
+  all read.
+- Whether `$.process.run` flashes a window: **Open (console)**.
+
+### 4. How Claude Code runs a plugin's `command` hook
+
+Both runs used the same throwaway plugin. It had `UserPromptSubmit` and `PermissionRequest` (`*`) hooks in each form,
+and the prompt made the model call Write, which asked. `PermissionRequest` fires under `claude -p`; its stdin is about
+600 bytes of JSON. The hook's process wrote its own chain from the process table.
+
+**Git Bash installed** (`C:\Program Files\Git`, found by Claude Code's fixed path). The shell form, as today's hook
+is written, runs under bash:
+
+```
+"C:\Program Files\Git\bin\bash.exe" -c "\"${CLAUDE_PLUGIN_ROOT}/hooks/asked\" perm-script"
+  "C:\Program Files\Git\bin\..\usr\bin\bash.exe" -c "<the same>"
+    "C:\Program Files\Git\usr\bin\sh.exe" C:/<…>/hooks/asked perm-script     (twice: MSYS's fork)
+      "C:\Program Files\nodejs\node.exe" C:/<…>/hooks/chain.mjs perm-script
+```
+
+- Claude Code puts `CLAUDE_PLUGIN_ROOT` and `CLAUDE_PROJECT_DIR` in the hook's environment with forward slashes
+  (`C:/…`), and bash expands `${CLAUDE_PLUGIN_ROOT}` from it. Today's `asked`, a `#!/bin/sh` script with no extension,
+  runs and exits 0. It looks in `$HOME/.local/bin`; under Git Bash `$HOME` is the profile.
+- A failing hook does not block here.
+
+**No Git Bash** (hidden from the test user alone by a deny entry on Git's `bin` folder and `bin\bash.exe`, removed
+afterwards). Claude Code logged `Git Bash not found; BashTool will be unavailable`. The shell form runs under Windows
+PowerShell (no PowerShell 7 is installed; Claude Code tries `pwsh` 7, then 7-preview, then this one, by fixed paths):
+
+```
+C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "node \"${env:CLAUDE_PLUGIN_ROOT}/hooks/chain.mjs\" ups-shell
+; if (-not $?) { if ($LASTEXITCODE -eq 2) { exit 2 } }"
+```
+
+- Claude Code rewrites `${CLAUDE_PLUGIN_ROOT}` to `${env:CLAUDE_PLUGIN_ROOT}`, which holds backslashes here, and adds
+  the second line. `"shell": "powershell"` on a hook gives this same line with Git Bash installed.
+- `& "${CLAUDE_PLUGIN_ROOT}/hooks/chain.ps1" <arg>` runs the script.
+- Today's hook, `"${CLAUDE_PLUGIN_ROOT}/hooks/asked"` (this branch's `plugins/harness-device`, loaded by itself),
+  starts nothing: PowerShell prints the string, and Claude Code reads exit 127 (`status code 127`, stdout the path).
+  Then `PermissionRequest command hook failed; blocking (no Git Bash)` and `Write tool permission denied`. The next
+  call timed out at the hook's 5 s and was blocked the same way (`timed out; blocking (no Git Bash)`). The model was
+  told: "blocking because Git Bash wasn't found, so only exit code 0 or 2 counts as this hook's verdict".
+- The quoted path with an argument after it is a parse error (`Unexpected token`). That is exit 1, blocking as well.
+- What blocks, as Claude Code 2.1.329's code reads: a `command` hook, not async, with no `args` and no
+  `"onFailure": "continue"`, under PowerShell. The exec form is outside that rule. On this VM, exec-form
+  `UserPromptSubmit` hooks that failed (below) did not stop the prompt; an exec-form `PermissionRequest` hook that
+  fails was not tried.
+
+**The exec form** (`"command"` and `"args"`) is taken in a plugin's `hooks.json` (validate lists it; it ran), with or
+without Git Bash. No shell: Claude Code starts the program itself.
+
+- `{"command": "node", "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/chain.mjs", "ups-exec"]}` runs as
+  `node <profile>\…\mod/hooks/chain.mjs ups-exec`, a child of `claude.exe`. The placeholder is filled per argument
+  with the backslash root. A bare `command` is found on PATH.
+- Only `${CLAUDE_PLUGIN_ROOT}` and `${CLAUDE_PROJECT_DIR}` are filled. `${HOME}`, `~`, `%USERPROFILE%` and `$HOME` arrive
+  as written.
+- `{"command": "powershell.exe", "args": ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File",
+  "${CLAUDE_PLUGIN_ROOT}/hooks/chain.ps1", "exec-ps1"]}` runs, a child of `claude.exe`.
+- A `.cmd` as `command` is not run (`spawn <root>/hooks/chain.cmd EINVAL`). Nor is the extensionless `sh` script
+  (`failed to start`).
+
+**Start times** of each runner doing nothing, five runs each, idle VM, timed around `Start-Process -Wait` (which adds
+its own share):
+
+| Runner | ms |
+| --- | --- |
+| `powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "exit 0"` | 6053, 3047, 3029, 4107, 3051 |
+| Git Bash `bash.exe -c true` | 2352, 1020, 1035, 1109, 1026 |
+| `node.exe -e 0` | 1145, 1016, 1096, 1092, 1097 |
+
+Under Claude Code, the `PermissionRequest` hooks took 0.6-1.3 s in the exec form (`node`), 1.8 s through Git Bash, and
+3.8-14.6 s through PowerShell. The PowerShell runs had a second hook beside them.
+
+Whether a hook flashes a window, in either case: **Open (console)**.
+
+### 5. How Codex runs a hook
+
+Codex 0.170.0 `exec` ran from a throwaway `CODEX_HOME`. Its `config.toml` names an OpenRouter `model_provider`
+(`env_key = "OPENROUTER_API_KEY"`, the variable's name only; `wire_api = "responses"`). Its `hooks.json` holds a
+`SessionStart` (`startup`) hook and a `UserPromptSubmit` hook, each the line Harness writes for PowerShell
+(`& '<node.exe>' '<script>' <tag>`). Both are recorded as reviewed in `[hooks.state."<hooks.json>:<event>:0:0"]
+trusted_hash`, by `engines/kit/hookReview.ts`'s formula. Both ran:
+
+```
+"C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -Command "& 'C:\Program Files\nodejs\node.exe' '<profile>\…\chain.mjs' codex-start"
+  parent: <profile>\AppData\Roaming\npm\node_modules\@openai\codex\node_modules\@openai\codex-win32-arm64\vendor\aarch64-pc-windows-msvc\bin\codex.exe exec …
+    parent: "node" "<profile>\AppData\Roaming\npm\\node_modules\@openai\codex\bin\codex.js" exec …
+      parent: C:\WINDOWS\system32\cmd.exe /c ""<profile>\AppData\Roaming\npm\codex.cmd" exec …"
+```
+
+For Task 31, the hook's caller chain is: the hook's program, `powershell.exe -NoProfile -Command`, then `codex.exe`.
+`codex.exe` is the long-lived engine, two steps up from the hook's program. The npm shim's `node.exe` and `cmd.exe`
+sit above it. This matches `codex/hookContract.ts`'s `win32Runner: 'powershell'`.
+
+### 6. Models, and the key
+
+- The cheap model, for both engines: `deepseek/deepseek-v4.1-flash`. This key's guardrails refuse Anthropic's models
+  (`anthropic/claude-haiku-4.5` answered `400 … Model blocked by guardrail`). Claude Code warned
+  `[claude-code:unrecognized_model]` on stderr and ran.
+- `findstr /L /M /G:<the key file> <these notes>` prints nothing. The search reads the key from its file.
