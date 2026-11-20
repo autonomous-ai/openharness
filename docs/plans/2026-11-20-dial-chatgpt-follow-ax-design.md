@@ -63,7 +63,8 @@ changing binary).
 
 **How (push, no poll).** An `AXObserver` on ChatGPT's process for `kAXFocusedWindowChangedNotification` and
 `kAXTitleChangedNotification`, both registered on the application element (which hears them from every element of the
-app); at each, the focused window's title is read again. The pid is that of `NSWorkspace`'s front application, taken
+app); at a focus change, and at a title change of the focused window last read (CFEqual; any element's while no window
+is known), the focused window's title is read again: another element's title (a tab, a line of the page) is not. The pid is that of `NSWorkspace`'s front application, taken
 when the rules start observing and only when its bundle id is `com.openai.codex` (a lookup by bundle id can return
 several). The observer runs on a thread of its own with its own run loop, with a 1 s messaging timeout on every call,
 so a hung ChatGPT never holds the runner. It stops (observer removed, run loop stopped) when ChatGPT leaves the front,
@@ -101,8 +102,10 @@ Harness almost never is active (the PM, 2026-11-20).
   2026-11-20).
 - **The offer.** The rules give a valueless cue when ChatGPT *comes* to the front (a change the front source reports
   after its first value, so never for the app in front at start) while a watch runs, the dial is attached, ChatGPT is
-  installed and Harness is not trusted. The app then opens the screen unless `askedFollow` is set, and sets it. In
-  `due()` the screen ranks after Install and Sign in: it never covers them. The cue says nothing more than that, and is
+  installed and Harness is not trusted. The app then opens the screen unless `askedFollow` is set, and sets it once the
+  screen shows (or finds it shown from the menu): an offer closed or quit before it showed is made again. In `due()` the
+  screen ranks after Install and Sign in, and only while ChatGPT is installed: it never covers them, and shows when they
+  end (closing Sign in is its Later). The cue says nothing more than that, and is
   never logged; `device-app/AGENTS.md`'s "the app in front is private" rule names it as the one exception.
 - **Events.** `Event::Follow { trusted, installed }` on a change (the menu's item), and `Event::FollowOffer` (the cue).
   The title is never in an Event.
@@ -168,7 +171,8 @@ Nothing goes into `cli/src/core/`.
 
 - Menu: `Follow ChatGPT` (check item).
 - Screen heading: `Follow ChatGPT`. Body: `Your dial moves to the thread you open in ChatGPT. Harness reads only the
-  ChatGPT window's title, while ChatGPT is in front.` Buttons: `Not now`, `Allow` (primary).
+  ChatGPT window's title, while ChatGPT is in front.` Buttons: `Not now` (focused: the screen opens by itself as the
+  person switches to ChatGPT, where a Return they type must not allow), `Allow` (primary).
 
 The window's actions gain one name, `allow` (`later` is Not now); `device-app/AGENTS.md` lists five.
 
@@ -180,7 +184,7 @@ The window's actions gain one name, `allow` (`later` is Not now); `device-app/AG
   revocation); the offer opens once, never for the app in front at start, and after Install and Sign in; Allow
   prompts every time and opens the pane after the first; the menu item's presence, position and check, pushed again on
   a click; an old saved file without the new keys keeps `askedSignIn`; the log never holds the title. The macOS AX door has a test that the real source starts and stops with no ChatGPT running.
-- **Window** (`npm test`, typecheck): the screen renders its copy, Return takes Allow, Not now sends `later`; the gallery
+- **Window** (`npm test`, typecheck): the screen renders its copy, Return takes Not now, Not now sends `later`; the gallery
   shows it in both themes.
 - **CLI unit:** `client.spec.ts` (the `thread` line rules), `devicesListener.spec.ts`, `devices.spec.ts` (settle, the
   echo cases, no match, ambiguous, empty title, not in front, no tile), `codexAppSource.spec.ts` (`threadNamed`).
