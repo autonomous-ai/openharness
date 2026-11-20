@@ -462,3 +462,185 @@ jobs:
           path: ${{ runner.temp }}/device-app-log
           retention-days: 3
           if-no-files-found: ignore
+
+  # Section 11's probe: does each AppImage start, as a double-click starts it, on a clean Ubuntu with no libfuse2? This
+  # job builds the Device app's AppImage as linux-e2e builds it, for fuse-probe to run on 22.04 and 24.04.
+  fuse-device-build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-22.04
+            arch: x64
+          - runner: ubuntu-22.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    # A mirror outage, then a cold Tauri CLI and app compile and the AppImage bundle.
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      # linux-e2e's packages, so the bundle is the one it runs.
+      - run: >-
+          sudo bash scripts/apt-install.sh libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev
+          file xvfb openbox xdotool xterm sway foot dbus-x11 python3-dbus python3-gi libfuse2
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.CLI_NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: device-app/ui/package-lock.json
+      # The bundle's beforeBuildCommand builds the window with these.
+      - name: UI packages
+        working-directory: device-app/ui
+        run: npm ci --no-audit --no-fund
+      - uses: dtolnay/rust-toolchain@stable
+      # Restored, never saved, as linux-e2e's.
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: device-app/src-tauri
+          shared-key: device-app-tmp-e2e-${{ matrix.runner }}
+          save-if: false
+      - name: Tauri CLI
+        run: cargo install tauri-cli --version 2.12.4 --locked
+      # The runtime in front is the bundler's whatever the profile: release-build.sh bundles the same way.
+      - name: AppImage
+        working-directory: device-app/src-tauri
+        run: cargo tauri build --ci --debug --bundles appimage -- --locked
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fuse-device-${{ matrix.arch }}
+          path: device-app/src-tauri/target/debug/bundle/appimage/*.AppImage
+          retention-days: 1
+          if-no-files-found: error
+
+  # Each AppImage on a clean Ubuntu: this run's Device app, and Desktop's current release as people download it through
+  # the public manifest. appimage-starts.sh prints `ok: <app> starts from its FUSE mount` or `FAILED: <app>: <why>`.
+  # Until an app's step sets EXPECT=start (Tasks 48, 49), its FAILED is the finding and the step stays green. Report
+  # puts each runner's row in the run's summary and in an annotation, so `gh run view` reads before and after.
+  fuse-probe:
+    needs: fuse-device-build
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: x64
+          - runner: ubuntu-22.04
+            arch: x64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+          - runner: ubuntu-22.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    # pipefail: the probe's exit, not tee's, is the step's.
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      # A display (xauth for xvfb-run), a session bus, X clients to find the window and read its class, `file`, jq.
+      - run: sudo bash scripts/apt-install.sh xvfb xauth dbus-x11 xdotool x11-utils file jq
+      - uses: actions/download-artifact@v4
+        with:
+          name: fuse-device-${{ matrix.arch }}
+          path: ${{ runner.temp }}/fuse-device
+      - name: The Device AppImage
+        id: device
+        run: |
+          shopt -s nullglob
+          found=("$RUNNER_TEMP"/fuse-device/*.AppImage)
+          if [[ ${#found[@]} -ne 1 ]]; then echo "one AppImage, not ${#found[@]}"; exit 1; fi
+          mkdir -p "$RUNNER_TEMP/probe"
+          mv "${found[0]}" "$RUNNER_TEMP/probe/Harness-Device.AppImage"
+          chmod +x "$RUNNER_TEMP/probe/Harness-Device.AppImage"
+      # Unpacked, so FUSE plays no part: the class the app-list entry's StartupWMClass names (Task 50).
+      - name: The Device window's WM_CLASS
+        run: >-
+          xvfb-run -a -s '-screen 0 1280x800x24' dbus-run-session --
+          bash device-app/scripts/e2e/appimage-starts.sh --wm-class "$RUNNER_TEMP/probe/Harness-Device.AppImage"
+          | tee "$RUNNER_TEMP/probe/wm-class.log"
+      # Only a file at the release's own CDN path, whose size and sha256 are the manifest's.
+      - name: Desktop's public AppImage
+        id: desktop
+        if: ${{ !cancelled() }}
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          probe="$RUNNER_TEMP/probe"
+          mkdir -p "$probe"
+          curl -fsSL --retry 3 --max-time 60 -o "$probe/metadata.json" \
+            https://storage.googleapis.com/s3-autonomous-upgrade-3/harness/desktop/metadata.json
+          read -r url size sha < <(jq -r --arg key "desktop-linux-$ARCH" '.[$key] | "\(.url) \(.size) \(.sha256)"' \
+            "$probe/metadata.json")
+          pattern="^https://cdn\.autonomous\.ai/harness/desktop/[0-9]+\.[0-9]+\.[0-9]+/Harness-linux-$ARCH\.AppImage$"
+          if [[ ! "$url" =~ $pattern ]]; then echo "desktop-linux-$ARCH is not a release AppImage: $url"; exit 1; fi
+          curl -fsSL --retry 3 --max-time 600 -o "$probe/Harness.AppImage" "$url"
+          if [[ "$(stat -c %s "$probe/Harness.AppImage")" != "$size" ]]; then echo "not the manifest's size"; exit 1; fi
+          if [[ "$(sha256sum "$probe/Harness.AppImage" | cut -d' ' -f1)" != "$sha" ]]; then
+            echo "not the manifest's sha256"
+            exit 1
+          fi
+          chmod +x "$probe/Harness.AppImage"
+          echo "note: Harness is $url"
+      - name: No libfuse2
+        id: nofuse
+        if: ${{ !cancelled() }}
+        run: |
+          probe="$RUNNER_TEMP/probe"
+          mkdir -p "$probe"
+          mapfile -t installed < <(dpkg-query -W -f='${db:Status-Status} ${Package}\n' libfuse2 libfuse2t64 2>/dev/null \
+            | awk '$1 == "installed" { print $2 }')
+          if [[ ${#installed[@]} -gt 0 ]]; then sudo apt-get -q remove -y "${installed[@]}"; fi
+          count="$(ldconfig -p | grep -c 'libfuse\.so\.2' || true)"
+          if [[ "$count" != 0 ]]; then
+            echo "FAILED: libfuse2 gone: ldconfig -p still names libfuse.so.2"
+            exit 1
+          fi
+          echo "ok: libfuse2 gone (removed: ${installed[*]:-none, it was not installed})"
+          echo yes >"$probe/libfuse2-gone"
+          # A stock Ubuntu desktop has fusermount3 since 22.04; a runner may not.
+          if command -v fusermount3 >/dev/null; then
+            echo yes >"$probe/fusermount3-before"
+          else
+            echo no >"$probe/fusermount3-before"
+            echo "note: fusermount3 was missing: fuse3 installed"
+            sudo bash scripts/apt-install.sh fuse3
+          fi
+      - name: Harness Device starts
+        if: ${{ !cancelled() && steps.nofuse.outcome == 'success' && steps.device.outcome == 'success' }}
+        run: >-
+          xvfb-run -a -s '-screen 0 1280x800x24' dbus-run-session --
+          bash device-app/scripts/e2e/appimage-starts.sh "$RUNNER_TEMP/probe/Harness-Device.AppImage" "Harness Device"
+          | tee "$RUNNER_TEMP/probe/device.log"
+      - name: Harness starts
+        if: ${{ !cancelled() && steps.nofuse.outcome == 'success' && steps.desktop.outcome == 'success' }}
+        run: >-
+          xvfb-run -a -s '-screen 0 1280x800x24' dbus-run-session --
+          bash device-app/scripts/e2e/appimage-starts.sh "$RUNNER_TEMP/probe/Harness.AppImage" Harness
+          | tee "$RUNNER_TEMP/probe/desktop.log"
+      - name: Report
+        if: ${{ always() }}
+        env:
+          RUNNER_LABEL: ${{ matrix.runner }}
+        run: |
+          probe="$RUNNER_TEMP/probe"
+          # The first line matching, with no `|` to break the table; `none` when the step never wrote one.
+          line() { grep -m 1 -E "$1" "$probe/$2" 2>/dev/null | tr '|' '/' || echo none; }
+          gone="$(cat "$probe/libfuse2-gone" 2>/dev/null || echo no)"
+          before="$(cat "$probe/fusermount3-before" 2>/dev/null || echo unknown)"
+          device="$(line '^(ok|FAILED):' device.log)"
+          desktop="$(line '^(ok|FAILED):' desktop.log)"
+          wm="$(line '^note: Harness Device (window|opened)' wm-class.log)"
+          {
+            echo "| runner | libfuse2 gone | fusermount3 before | Device runtime | Desktop runtime | Harness Device | Harness |"
+            echo "|---|---|---|---|---|---|---|"
+            echo "| $RUNNER_LABEL | $gone | $before | $(line '^note: Harness Device:' device.log) |" \
+              "$(line '^note: Harness:' desktop.log) | $device | $desktop |"
+            echo
+            echo "$wm"
+          } >>"$GITHUB_STEP_SUMMARY"
+          echo "::notice title=fuse-probe $RUNNER_LABEL::libfuse2 gone: $gone; $device; $desktop; $wm"
