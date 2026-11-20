@@ -125,6 +125,17 @@ export function unregister(app: string): void {
 
 const WINDOWS = process.platform === 'win32'
 
+/** On Windows @vscode/test-electron starts Code.exe through cmd.exe with its arguments unquoted (CVE-2024-27980): a
+ *  space, &, % or quote in a path it passes splits it or runs as a command. Throws, naming each of `paths` that holds
+ *  any character but these by what it is, never by its path, which holds the account's name. */
+export function assertCmdSafe(paths: Readonly<Record<string, string>>): void {
+  const unsafe = Object.entries(paths).filter(([, path]) => !/^[A-Za-z0-9\\:._-]+$/.test(path)).map(([what]) => what)
+  if (unsafe.length) {
+    throw new Error(`refusing to launch the throwaway VS Code: ${unsafe.join(' and ')}'s path holds a character cmd.exe would `
+      + 'split or run; move it to a folder whose path holds only A-Z, a-z, 0-9, \\, :, ., _ and -')
+  }
+}
+
 /** Where a gate run's root goes. On a Mac /tmp, short: the devices' socket goes in it, and a Unix socket's path has 96
  *  bytes. On Windows the account's temp folder, inside its profile, where the devices' pipe token may be kept; by its
  *  long name, which the throwaway's command lines carry, not an 8.3 short one TEMP may hold. */

@@ -33,6 +33,7 @@ import { newPipePath, readDaemonToken } from '../../../cli/src/lib/windows/pipeA
 import { openDevicesListener, REFUSED, type DevicesListener, type ListenerStream } from '../../../cli/src/services/devicesListener.js'
 import { cleanUp, within } from './cleanup.js'
 import {
+  assertCmdSafe,
   assertRebranded,
   assertUnchanged,
   forgetPreferences,
@@ -61,6 +62,7 @@ const UNTIL_MS = 120_000
 /** Each clean-up step's bound: the steps all fit in the hook's 300 s. */
 const CLEAN_UP_MS = 30_000
 const WINDOWS = process.platform === 'win32'
+const DRIVER = fileURLToPath(new URL('driver', import.meta.url))
 
 // Run from a VS Code terminal, these name that VS Code's own handles, and a launch or CLI that inherits them could
 // reach it. `__CFBundleIdentifier` names the app the gate was started from, and `TERM_PROGRAM*` the terminal: the
@@ -212,6 +214,8 @@ describe('the extension in a real, throwaway VS Code', () => {
     if (WINDOWS && !process.env.HARNESS_EXE_BIN) {
       throw new Error('HARNESS_EXE_BIN names no harness.exe: build it with `cd pty && cargo build --release --bins`, and set it to pty\\target\\release\\harness.exe')
     }
+    // The root's own name, under GATE_TMP, is of letters, digits and -.
+    if (WINDOWS) assertCmdSafe({ 'the temp folder (TEMP)': GATE_TMP, 'the gate\'s driver': DRIVER })
     if (process.platform === 'darwin') preferences = stamp(VSCODE_PREFERENCES)
     root = mkdtempSync(join(GATE_TMP, rootName(process.pid)))
     const cleared = await sweepLeftovers()
@@ -282,7 +286,7 @@ describe('the extension in a real, throwaway VS Code', () => {
     // The gate's PATH: the CLI is a script that finds its shell's tools there.
     const env = { ...process.env, ...throwawayEnv(), PATH: process.env.PATH }
     // On Windows the CLI is code.cmd, which only a shell runs (CVE-2024-27980), as @vscode/test-electron runs it; the
-    // root's paths hold no space or quote.
+    // root's paths hold nothing cmd.exe splits or runs (assertCmdSafe, before the root is made).
     if (WINDOWS) await promisify(exec)(`"${cli}" ${args.map((arg) => `"${arg}"`).join(' ')}`, { env, windowsHide: true })
     else await promisify(execFile)(cli, args, { env })
     expect(recordVersion(readFileSync(join(extensions, 'extensions.json'), 'utf8'))).toBe(buildVersion({ files: () => files }))
@@ -375,8 +379,8 @@ describe('the extension in a real, throwaway VS Code', () => {
     if (app !== undefined) assertRebranded(app)
     launched = runTests({
       vscodeExecutablePath: executable,
-      extensionDevelopmentPath: fileURLToPath(new URL('driver', import.meta.url)),
-      extensionTestsPath: fileURLToPath(new URL('driver/run.cjs', import.meta.url)),
+      extensionDevelopmentPath: DRIVER,
+      extensionTestsPath: join(DRIVER, 'run.cjs'),
       // The secrets in memory: the keychain's VS Code item is the developer's VS Code's too.
       launchArgs: ['--user-data-dir', userData, '--extensions-dir', extensions, '--use-inmemory-secretstorage', '--disable-telemetry'],
       extensionTestsEnv: { ...throwawayEnv(), HARNESS_GATE_CONTROL: controlPath },
