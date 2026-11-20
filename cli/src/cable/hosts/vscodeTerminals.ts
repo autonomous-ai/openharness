@@ -56,14 +56,15 @@ const MINUTE_MS = 60_000
 /** A tty's foreground group is -1 on Linux for a process with no terminal. */
 const GROUPS_ROW = /^ *(\d+) +(\d+) +(-?\d+) *$/
 
-type ProcessParent = Pick<ProcessName, 'pid' | 'ppid'>
+/** `startMarker`: when it started, by which a parent on a reused pid ends its chain (parentChain). */
+type ProcessParent = Pick<ProcessName, 'pid' | 'ppid'> & { startMarker?: string }
 
-/** Each process's pid and parent, from one read of the process table; rejects when it could not be read. */
+/** Each process's pid, parent and start, from one read of the process table; rejects when it could not be read. */
 export async function readProcessParents(rows: () => Promise<ProcessRow[] | null> = processRows): Promise<ProcessParent[]> {
   const table = await rows()
   // A table lists its reader at the least: no row is a read that failed. The error names nothing it held.
   if (!table?.length) throw new Error('process table not read')
-  return table.map(row => ({ pid: row.pid, ppid: row.parentPid }))
+  return table.map(row => ({ pid: row.pid, ppid: row.parentPid, startMarker: row.startMarker }))
 }
 
 export interface ProcessGroups { pgid: number; tpgid: number }

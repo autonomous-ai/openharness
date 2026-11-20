@@ -9,6 +9,7 @@ import { homedir } from 'node:os'
 import { basename } from 'node:path'
 import { patientExec } from '../../lib/patientExec.js'
 import type { RunningProcess } from '../../lib/sessionSearch/externals/types.js'
+import { windowsStartTime } from '../../lib/windows/treeKill.js'
 import { frontAppId } from './frontApp.js'
 import { APP_IDS, UNKNOWN_APP } from './hostDetect.js'
 
@@ -150,9 +151,10 @@ function nearestApp(bundles: readonly string[], ids: ReadonlyMap<string, string 
 }
 
 /** A process and up to WALK_PARENTS of its parents, nearest first, from one read of the table: a pid the table does not
- *  hold starts none. The open scan reads their names, a tap on a tmux pane their ids (tmux.ts), and ptyOwner their
- *  terminals. */
-export function parentChain<P extends Pick<ProcessName, 'pid' | 'ppid'>>(pid: number, table: ReadonlyMap<number, P>): P[] {
+ *  hold starts none. A parent that started after its child ends it: Windows hands a freed pid to the next process and
+ *  never reparents, so that is another process on the old pid (lib/callerPane.ts). The open scan reads their names, a
+ *  tap on a tmux pane their ids (tmux.ts), ptyOwner their terminals, and the VS Code match their pids. */
+export function parentChain<P extends Pick<ProcessName, 'pid' | 'ppid'> & { startMarker?: string }>(pid: number, table: ReadonlyMap<number, P>): P[] {
   const chain: P[] = []
   const passed = new Set<number>()
   let p = table.get(pid)
@@ -160,9 +162,17 @@ export function parentChain<P extends Pick<ProcessName, 'pid' | 'ppid'>>(pid: nu
     passed.add(p.pid)
     chain.push(p)
     // launchd and init hold every orphan: they are no session's own.
-    p = p.ppid > 1 ? table.get(p.ppid) : undefined
+    const parent = p.ppid > 1 ? table.get(p.ppid) : undefined
+    p = parent && !startedAfter(parent, p) ? parent : undefined
   }
   return chain
+}
+
+/** Whether [parent] started after [child], by their Windows start markers (`w:<FILETIME>`); false when either has none. */
+function startedAfter(parent: { startMarker?: string }, child: { startMarker?: string }): boolean {
+  const theirs = windowsStartTime(parent.startMarker ?? '')
+  const mine = windowsStartTime(child.startMarker ?? '')
+  return theirs !== null && mine !== null && theirs > mine
 }
 
 /** The hosts whose panes the dial reaches, by the name of the process that makes a pane's pseudo-terminal: a terminal's
