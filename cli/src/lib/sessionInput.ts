@@ -381,8 +381,8 @@ export class SessionInputController {
    * [id]'s first task is about to be taken off its row and submitted (core/agents/bind.ts): from now its frame reads it
    * from here ([firstTaskWaiting]), as the row no longer does once the task leaves it. Said from the paste, the agent
    * read idle with no ask between the two, about 350 ms (e2e/openclawShow.e2e.ts). A message sent from now waits behind
-   * it until it is typing ([submitFirstTask]): pasted ahead of it, its turn was read as the task's. One the person stopped
-   * is expected no more.
+   * it until it is typing ([submitFirstTask]): pasted ahead of it, its turn was read as the task's. One done with before it
+   * was typed ([InputState.firstTaskDropped]) is expected no more.
    */
   expectFirstTask(id: string): void {
     const state = this.state(id)
@@ -397,8 +397,8 @@ export class SessionInputController {
    * Types [task], [id]'s first task as its row holds it, as its engine takes it (a `/loop` or `/goal` it has not,
    * lib/goalCommand.ts): the binding pass's hand-over (core/agents/bind.ts). It goes before every message queued for [id],
    * once nothing else holds the pane (a caller, a cancel, a turn, a message awaiting its turn, a move), waits as long as
-   * the first task does ([firstTaskEnded]), and is neither refused for a full queue nor expired here. One the person
-   * stopped before it was typed is not typed: its row lets it go.
+   * the first task does ([firstTaskEnded]), and is neither refused for a full queue nor expired here. One done with before
+   * it was typed ([InputState.firstTaskDropped]) is not typed: its row lets it go.
    */
   submitFirstTask(id: string, task: string): void {
     const session = this.controlSession(id)
@@ -726,7 +726,7 @@ export class SessionInputController {
       }
       if (first) {
         state.firstTaskAhead = false
-        // Stopped before its write started: never typed, and its row lets it go.
+        // Done with before its write started (stopped, say): never typed, and its row lets it go.
         if (state.firstTaskDropped) {
           state.firstTaskDropped = false
           this.deps.onFirstTaskTaken?.(sessionId)
