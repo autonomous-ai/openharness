@@ -63,6 +63,8 @@ module.exports = {
       // app lived at /web). Old /web links land on it, query and all; temporary, so no browser keeps it.
       { source: '/web', destination: '/', permanent: false },
       { source: '/install', destination: '/download', permanent: true },
+      // The Harness Device guide replaced the desktop download page (owner, 2026-11-20); /desktop/download/* stays.
+      { source: '/desktop', destination: '/device', permanent: true },
       { source: '/explore', destination: '/hub', permanent: true },
       { source: '/explore/:id', destination: '/hub/:id', permanent: true },
       { source: '/explore/:id/fork', destination: '/hub/:id/fork', permanent: true },

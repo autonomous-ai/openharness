@@ -4,7 +4,7 @@ import { expect, it } from "vitest";
 import nextConfig from "../next.config.js";
 
 it("sends /desktop, and only that path, to the device guide for good", async () => {
-  const site = (await nextConfig.redirects()).filter((r) => !r.has);
+  const site = (await nextConfig.redirects()).filter((r) => !("has" in r));
   expect(site).toContainEqual({ source: "/desktop", destination: "/device", permanent: true });
   // Next matches a source exactly, so only a /desktop/... source could catch the download routes.
   expect(site.filter((r) => r.source.startsWith("/desktop/")).map((r) => r.source)).toEqual(["/desktop/install.sh"]);
