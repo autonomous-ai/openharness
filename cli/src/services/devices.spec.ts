@@ -15,6 +15,7 @@ import { hcClientDeps, type HcClient, type HcPrompt, type HcSubscriber, type HcT
 import { herdrClientDeps, type HerdrAnswer, type HerdrClient, type HerdrEntry, type HerdrPrompt, type HerdrSubscriber } from '../cable/hosts/herdrClient.js'
 import { HerdrSource } from '../cable/hosts/herdrSource.js'
 import type { LinuxRaise } from '../cable/hosts/linuxRaise.js'
+import type { WindowsRaise } from '../cable/hosts/windowsRaise.js'
 import { observedAgentId, ObservedSource } from '../cable/hosts/observed.js'
 import { OPENCODE_MESSAGE, opencodeClientDeps, type OpencodeAnswer, type OpencodeClient, type OpencodeEvent, type OpencodeFault, type OpencodePrompt } from '../cable/hosts/opencodeClient.js'
 import { OpencodeSource } from '../cable/hosts/opencodeSource.js'
@@ -372,6 +373,23 @@ function fakeRaise() {
   }
   return fake
 }
+/** Windows' raise as every spec but its own has it: it brings nothing forward. */
+const noWindowsRaise: WindowsRaise = { app: async () => false, link: async () => false, cursorFolder: async () => false, desktop: async () => false }
+/** Windows' raise a spec drives: what it answers, each bundle it was asked to bring forward and each Desktop start. */
+function fakeWindowsRaise() {
+  const fake: { answer: boolean; apps: string[]; desktops: number; raise: WindowsRaise } = {
+    answer: true,
+    apps: [],
+    desktops: 0,
+    raise: {
+      app: async (bundle) => { fake.apps.push(bundle); return fake.answer },
+      link: async () => fake.answer,
+      cursorFolder: async () => fake.answer,
+      desktop: async () => { fake.desktops++; return fake.answer },
+    },
+  }
+  return fake
+}
 /** Orca's reads for every spec but Orca's own: nothing lands, so no other spec hears of an order or a watch. */
 const inertOrcaReads: OrcaReads = {
   orcaWatchesFocus: () => new Promise(() => {}),
@@ -546,7 +564,7 @@ afterEach(() => {
   vi.unstubAllEnvs()
 })
 
-function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolean; testDialPort?: string; readUsage?: DevicesDeps['readUsage']; now?: () => number; decideTier?: DevicesDeps['decideTier'] | null; refresh?: DevicesDeps['refresh']; orca?: DevicesDeps['orca']; orcaReads?: DevicesDeps['orcaReads']; codex?: DevicesDeps['codex']; herdr?: DevicesDeps['herdr']; hc?: DevicesDeps['hc']; cmux?: DevicesDeps['cmux'] | null; opencode?: DevicesDeps['opencode']; claudeAppStore?: DevicesDeps['claudeAppStore']; codexAppThreads?: DevicesDeps['codexAppThreads'] | null; bundleId?: DevicesDeps['bundleId'] | null; listen?: DevicesDeps['listen']; tty?: DevicesDeps['tty']; claude?: DevicesDeps['claude'] | null; orcaHomes?: ReturnType<typeof fakeOrcaHomes> | null; vscodeExtension?: DevicesDeps['vscodeExtension'] | null; cursorExtension?: DevicesDeps['cursorExtension'] | null; orcaPlugin?: DevicesDeps['orcaPlugin'] | null; claudeFullscreen?: null; claudeManagedSettings?: string; raise?: DevicesDeps['raise'] | null } = {}) {
+function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolean; testDialPort?: string; readUsage?: DevicesDeps['readUsage']; now?: () => number; decideTier?: DevicesDeps['decideTier'] | null; refresh?: DevicesDeps['refresh']; orca?: DevicesDeps['orca']; orcaReads?: DevicesDeps['orcaReads']; codex?: DevicesDeps['codex']; herdr?: DevicesDeps['herdr']; hc?: DevicesDeps['hc']; cmux?: DevicesDeps['cmux'] | null; opencode?: DevicesDeps['opencode']; claudeAppStore?: DevicesDeps['claudeAppStore']; codexAppThreads?: DevicesDeps['codexAppThreads'] | null; bundleId?: DevicesDeps['bundleId'] | null; listen?: DevicesDeps['listen']; tty?: DevicesDeps['tty']; claude?: DevicesDeps['claude'] | null; orcaHomes?: ReturnType<typeof fakeOrcaHomes> | null; vscodeExtension?: DevicesDeps['vscodeExtension'] | null; cursorExtension?: DevicesDeps['cursorExtension'] | null; orcaPlugin?: DevicesDeps['orcaPlugin'] | null; claudeFullscreen?: null; claudeManagedSettings?: string; raise?: DevicesDeps['raise'] | null; windowsRaise?: DevicesDeps['windowsRaise'] | null } = {}) {
   const core = over.core ?? fakeCore({ dataDir })
   const apps = over.orca ?? orca
   // None, and no read under way, unless the spec gives its own; null leaves the devices to read this computer's.
@@ -607,6 +625,9 @@ function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolea
     // On Linux a raise that finds no desktop unless the spec gives its own: no spec reads this login's sockets or raises
     // the developer's windows. null leaves it out: the devices build the system's.
     raise: over.raise === null ? undefined : over.raise ?? (apps.platform === 'linux' ? noDesktop : undefined),
+    // On Windows a raise that brings nothing unless the spec gives its own: no spec runs a helper of the developer's. null
+    // leaves it out: the devices build Windows' own.
+    windowsRaise: over.windowsRaise === null ? undefined : over.windowsRaise ?? (apps.platform === 'win32' ? noWindowsRaise : undefined),
     processGroups: async (agent, shell) => {
       processGroups.reads.push([agent, shell])
       if (processGroups.held) await new Promise<void>((resolve) => { processGroups.land.push(resolve) })
@@ -2682,13 +2703,14 @@ describe('agents outside a pane, from their hooks and the open sessions (cable/h
         expect(orcaRuns).toEqual([])
       })
 
-      it('on Windows a pick runs nothing', async () => {
-        const { port } = start({ faults: ['fleet'], orca: { ...orca, platform: 'win32' } })
+      it('on Windows a pick brings the picked app through the raise, and logs bring · ok', async () => {
+        const windows = fakeWindowsRaise()
+        const { port } = start({ faults: ['fleet'], orca: { ...orca, platform: 'win32' }, windowsRaise: windows.raise })
         await twoApps(port)
         expect(host().pickApp('vscode')).toBe('switched')
-        await settled()
+        await vi.waitFor(() => expect(brings()).toEqual(['[device] app filter: bring · ok']))
+        expect(windows.apps).toEqual(['com.microsoft.VSCode'])
         expect(orcaRuns).toEqual([])
-        expect(brings()).toEqual([])
       })
     })
 
@@ -3095,6 +3117,70 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
       const { port } = startHere({ orca: mac, raise: null })
       attach(port)
       await new Promise((done) => setImmediate(done))
+      expect(raiseLines()).toEqual([])
+    })
+  })
+
+  // On Windows a tap brings the agent's app forward by its bundle, through Windows' raise
+  // (docs/plans/2026-11-19-dial-windows-design.md, part C).
+  describe('on Windows, the raise', () => {
+    const win = { ...orca, platform: 'win32' as const }
+    const VSCODE_BUNDLE = 'com.microsoft.VSCode'
+    const CURSOR_BUNDLE = 'com.todesktop.230313mzl4w4u92'
+    const raiseLines = () => said().filter((line) => line.startsWith('[device] raise · '))
+
+    it('a tap on an agent in VS Code brings VS Code forward', async () => {
+      const windows = fakeWindowsRaise()
+      const { port } = startHere({ orca: win, windowsRaise: windows.raise })
+      port.observed(hook('session-start', { hostHints: { TERM_PROGRAM: 'vscode', __CFBundleIdentifier: VSCODE_BUNDLE } }))
+      attach(port)
+      expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'sf' }])
+      expect(await host().openAgent(ID)).toBeUndefined()
+      expect(windows.apps).toEqual([VSCODE_BUNDLE])
+      expect(orcaRuns).toEqual([])
+    })
+
+    it('a Harness agent with no window lists f, and its tap starts Harness Desktop', async () => {
+      const windows = fakeWindowsRaise()
+      const { port } = startHere({ core: harnessAgent(), orca: win, windowsRaise: windows.raise })
+      attach(port)
+      expect(await caps()).toEqual([{ id: 'h1', caps: 'svfa' }])
+      expect(await host().openAgent('h1')).toBeUndefined()
+      expect(windows.desktops).toBe(1)
+      expect(windows.apps).toEqual([])
+    })
+
+    it('with none given the devices build Windows\' own, and count what it answered with no app named', async () => {
+      const pty = 'C:\\e2e\\harness-pty.exe'
+      const cli = 'C:\\e2e\\cursor\\cursor.cmd'
+      vi.stubEnv('HARNESS_PTY_BIN', pty)
+      const run = async (file: string, args: string[], timeoutMs: number) => {
+        orcaRuns.push([file, args, timeoutMs])
+        return { code: 0, stdout: file === pty ? 'refused\n' : '' }
+      }
+      const cursor = { ...fakeVscode({ editor: 'cursor' }).deps, platform: 'win32' as const, bin: cli, executable: (path: string) => path === cli }
+      // Cursor's folder window, a folder there now, outside Harness's data folder.
+      const parent = mkdtempSync(join(tmpdir(), 'cursor-folder-'))
+      onTestFinished(() => { rmSync(parent, { recursive: true, force: true }) })
+      const folder = join(parent, 'api')
+      mkdirSync(folder)
+      const { port } = startHere({ orca: { ...win, run }, windowsRaise: null, cursorExtension: cursor })
+      port.observed(hook('session-start', { cwd: folder, hostHints: { __CFBundleIdentifier: CURSOR_BUNDLE } }))
+      attach(port)
+      expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'sf' }])
+      expect(await host().openAgent(ID)).toBeUndefined()
+      expect(orcaRuns).toEqual([[cli, [folder], 10_000], [pty, ['raise', '--exe', 'Cursor.exe'], 10_000]])
+      expect(raiseLines()).toEqual(['[device] raise · window · refused',
+        expect.stringMatching(/^\[device\] raise · day \d{4}-\d{2}-\d{2} · window raised 0 refused 1 none 0$/)])
+      expect(logs.filter((line) => ['Cursor', 'cursor', CURSOR_BUNDLE, 'e2e'].some((secret) => line.includes(secret)))).toEqual([])
+    })
+
+    it('macOS builds none, and counts no raise', async () => {
+      const { port } = startHere({ orca: mac, windowsRaise: null })
+      port.observed(hook('session-start', { hostHints: { TERM_PROGRAM: 'vscode', __CFBundleIdentifier: VSCODE_BUNDLE } }))
+      attach(port)
+      expect(await host().openAgent(ID)).toBeUndefined()
+      expect(orcaRuns).toEqual([['/usr/bin/open', ['-b', VSCODE_BUNDLE], 10_000]])
       expect(raiseLines()).toEqual([])
     })
   })
