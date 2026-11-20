@@ -185,6 +185,63 @@ jobs:
           retention-days: 3
           if-no-files-found: ignore
 
+  # What a person sees on Windows, as PNGs for a person to judge: windows.ps1's screens mode drives the debug installer's
+  # app, built as windows-e2e builds it, against the fake CLI. The Arm runner refuses foreground changes: it takes what
+  # it can and notes the rest.
+  windows-screens:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-latest
+            arch: x64
+          - runner: windows-11-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    # A cold Tauri CLI and app compile, the NSIS bundle, then the run.
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.CLI_NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: device-app/ui/package-lock.json
+      # The bundle's beforeBuildCommand builds the window with these.
+      - name: UI packages
+        working-directory: device-app/ui
+        run: npm ci --no-audit --no-fund
+      - uses: dtolnay/rust-toolchain@stable
+      # Restored, never saved, as linux-e2e's.
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: device-app/src-tauri
+          shared-key: device-app-tmp-e2e-${{ matrix.runner }}
+          save-if: false
+      - name: Tauri CLI
+        run: cargo install tauri-cli --version 2.12.4 --locked
+      # A debug build reads HARNESS_DEVICE_CLI, the fake CLI windows.ps1 points it at.
+      - name: Installer
+        working-directory: device-app/src-tauri
+        run: cargo tauri build --ci --debug --bundles nsis -- --locked
+      - name: Screenshots
+        shell: pwsh
+        run: |
+          $setup = @(Get-ChildItem device-app/src-tauri/target/debug/bundle/nsis/*-setup.exe)
+          if ($setup.Count -ne 1) { throw "one installer, not $($setup.Count)" }
+          pwsh -NoProfile -File device-app/scripts/e2e/windows.ps1 -Installer $setup[0].FullName `
+            -Screens "$env:RUNNER_TEMP\device-app-screens" -Out "$env:RUNNER_TEMP\device-app-screens\evidence"
+      # The PNGs, and the app's log and the fake CLI's files beside them, whatever the run's result.
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: device-app-windows-screens-${{ matrix.arch }}
+          path: ${{ runner.temp }}/device-app-screens
+          retention-days: 3
+          if-no-files-found: warn
+
   # The app updates itself from a local manifest: update-pair.sh builds 0.0.1 and 0.0.2 as a release does, signed with
   # a key pair made in the run, and the driver's update mode serves them on 127.0.0.1:8765. The Windows arm64 pair is
   # built beside the x64 one and kept for the Windows ARM VM, for 3 days.

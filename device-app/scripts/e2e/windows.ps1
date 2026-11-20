@@ -3,8 +3,12 @@
 #
 #   pwsh device-app/scripts/e2e/windows.ps1 -Installer <setup.exe> [-Out <folder>]
 #   pwsh device-app/scripts/e2e/windows.ps1 -Update <OUT> [-Out <folder>]
+#   pwsh device-app/scripts/e2e/windows.ps1 -Installer <setup.exe> -Screens <folder> [-Out <folder>]
 #
 # -Update installs update-pair.sh's 0.0.1 from OUT, serves OUT on 127.0.0.1:8765 and checks that 0.0.1 becomes 0.0.2.
+# -Screens saves what a person sees as PNGs in the folder, for a person to judge: the shortcuts, the tray icon on a dark
+# then a light taskbar, its menu, About, and Explorer showing the logs' zip. For the run it sets this account's taskbar
+# theme and shows the app's tray icon in the taskbar, which Clean-Up undoes.
 #
 # Prints `ok: <check>` for each check, `note:` for what it saw but does not judge, and stops at the first
 # `FAILED: <check>`, exiting 1. It stops before it starts, exiting 2, when this account has a Harness Device, its data or
@@ -20,8 +24,10 @@
 # stand-in for Windows PowerShell so the line is seen, never run.
 [CmdletBinding(DefaultParameterSetName = 'install')]
 param(
-  [Parameter(Mandatory, ParameterSetName = 'install')][string]$Installer,
+  [Parameter(Mandatory, ParameterSetName = 'install')]
+  [Parameter(Mandatory, ParameterSetName = 'screens')][string]$Installer,
   [Parameter(Mandatory, ParameterSetName = 'update')][string]$Update,
+  [Parameter(Mandatory, ParameterSetName = 'screens')][string]$Screens,
   [string]$Out)
 $ErrorActionPreference = 'Stop'
 
@@ -532,6 +538,18 @@ function Launch([string]$phase) {
   $script:app = Start-Process -FilePath $exe -WorkingDirectory $work -PassThru
 }
 
+# The installer's /S, per user. The state is seeded before, so no launch ever reaches the install line on its own.
+function Install-Silently {
+  Save-State $true $true $true
+  $script:installed = $true
+  $script:ranInstaller = $true
+  $setup = Start-Process -FilePath $Installer -ArgumentList '/S' -PassThru
+  # Held from the start: Windows PowerShell has no exit code for a process whose handle it opened after the exit.
+  $null = $setup.Handle
+  if (-not $setup.WaitForExit(300000)) { Fail 'the installer ends within 5 minutes' }
+  if ($setup.ExitCode -ne 0) { Fail "the installer exits 0, not $($setup.ExitCode)" }
+}
+
 # The harness-device.exe processes of this install: another account's or another copy's are never touched.
 function Our-Apps {
   @(Get-Process -Name 'harness-device' -ErrorAction SilentlyContinue | Where-Object { $_.Path -and $_.Path -ieq $exe })
@@ -722,6 +740,7 @@ function Clean-Up {
   if (-not $hadVendorKey -and (Test-Path -LiteralPath $vendorKey) -and -not (Get-ChildItem -LiteralPath $vendorKey)) {
     Remove-Item -LiteralPath $vendorKey -ErrorAction SilentlyContinue
   }
+  if ($Screens) { Screens-Clean }
   Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
 }
 
@@ -785,14 +804,7 @@ function Update-Checks {
   $started.Add((Start-Process -FilePath $server -ArgumentList "`"$Update`" `"$served`" $PORT" -PassThru))
   if (-not (Wait-For { (Lines-Of $served) -contains 'ready' })) { Fail "the pair is served on 127.0.0.1:$PORT" }
 
-  # Seeded before the install, so no launch ever reaches the install line on its own.
-  Save-State $true $true $true
-  $script:installed = $true
-  $script:ranInstaller = $true
-  $setup = Start-Process -FilePath $Installer -ArgumentList '/S' -PassThru
-  $null = $setup.Handle
-  if (-not $setup.WaitForExit(300000)) { Fail 'the installer ends within 5 minutes' }
-  if ($setup.ExitCode -ne 0) { Fail "the installer exits 0, not $($setup.ExitCode)" }
+  Install-Silently
   $running = Our-Apps
   if ($running.Count) {
     $running | Stop-Process -Force
@@ -853,6 +865,518 @@ if ($Update) {
   exit $code
 }
 
+# --- Screenshots (-Screens): the shortcuts, the tray icon on a dark then a light taskbar, its menu, About, Export logs
+
+if ($Screens) {
+  $Screens = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Screens)
+  $personalize = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize'
+  $notifyKey = 'HKCU:\Control Panel\NotifyIconSettings'
+  # Explorer names a file in a known folder by the folder's id: FOLDERID_LocalAppData's here.
+  $notifyPaths = @($exe, '{F1B32785-6FBA-4FCF-9D55-7B8E7F157091}\Harness Device\harness-device.exe')
+  $TASKBAR = @('Shell_TrayWnd')
+  # The hidden icons' flyout: Windows 10's, then Windows 11's.
+  $OVERFLOW = @('NotifyIconOverflowWindow', 'TopLevelWindowForOverflowXamlIsland')
+  $ABOUT = 'About Harness'
+  $exportDir = Join-Path $work 'export'
+  $exportTail = '\' + (Split-Path -Leaf $work) + '\export'
+  $zipName = 'harness-logs-' + (Get-Date -Format 'yyyyMMdd-HHmm') + '.zip'
+  $zip = Join-Path $exportDir $zipName
+  $script:theme = $null
+  $script:notifyBefore = @()
+  $script:misses = New-Object System.Collections.Generic.List[string]
+
+  $screensSource = @'
+using System;
+using System.Runtime.InteropServices;
+using System.Text;
+namespace E2E {
+  public static class Screens {
+    [StructLayout(LayoutKind.Sequential)] struct Point { public int X, Y; }
+    [StructLayout(LayoutKind.Sequential)] struct Box { public int Left, Top, Right, Bottom; }
+    delegate bool EnumProc(IntPtr window, IntPtr data);
+    [DllImport("user32.dll")] static extern bool SetProcessDPIAware();
+    [DllImport("user32.dll")] static extern int GetSystemMetrics(int index);
+    [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr window, out Box box);
+    [DllImport("user32.dll")] static extern IntPtr WindowFromPoint(Point point);
+    [DllImport("user32.dll")] static extern IntPtr GetAncestor(IntPtr window, uint flags);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    static extern int GetClassName(IntPtr window, StringBuilder name, int size);
+    [DllImport("user32.dll")] static extern bool EnumWindows(EnumProc proc, IntPtr data);
+    [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr window);
+    [DllImport("user32.dll")] static extern bool SetCursorPos(int x, int y);
+    [DllImport("user32.dll")] static extern void mouse_event(uint flags, int x, int y, uint data, UIntPtr extra);
+    [DllImport("user32.dll")] static extern bool PostMessage(IntPtr window, uint message, IntPtr w, IntPtr l);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    static extern IntPtr SendMessageTimeout(IntPtr window, uint message, IntPtr w, string l, uint flags, uint timeout,
+      out IntPtr result);
+
+    // Pixels, not the points Windows scales an unaware process's coordinates to.
+    public static void DpiAware() { SetProcessDPIAware(); }
+
+    // The virtual screen: x, y, width, height.
+    public static int[] Screen() {
+      return new int[] { GetSystemMetrics(76), GetSystemMetrics(77), GetSystemMetrics(78), GetSystemMetrics(79) };
+    }
+
+    public static int[] Bounds(IntPtr window) {
+      Box box;
+      if (!GetWindowRect(window, out box)) return null;
+      return new int[] { box.Left, box.Top, box.Right - box.Left, box.Bottom - box.Top };
+    }
+
+    // The top-level window at a point of the screen: what a person sees there.
+    public static IntPtr TopAt(int x, int y) {
+      Point point;
+      point.X = x;
+      point.Y = y;
+      return GetAncestor(WindowFromPoint(point), 2);
+    }
+
+    public static string ClassOf(IntPtr window) {
+      StringBuilder name = new StringBuilder(256);
+      GetClassName(window, name, name.Capacity);
+      return name.ToString();
+    }
+
+    // The first visible top-level window of class `kind`, or zero.
+    public static IntPtr Visible(string kind) {
+      IntPtr found = IntPtr.Zero;
+      EnumWindows(delegate (IntPtr window, IntPtr data) {
+        if (!IsWindowVisible(window) || ClassOf(window) != kind) return true;
+        found = window;
+        return false;
+      }, IntPtr.Zero);
+      return found;
+    }
+
+    public static void MoveTo(int x, int y) { SetCursorPos(x, y); }
+
+    public static void Click(int x, int y, bool right) {
+      SetCursorPos(x, y);
+      mouse_event(right ? 0x0008u : 0x0002u, 0, 0, 0, UIntPtr.Zero);
+      mouse_event(right ? 0x0010u : 0x0004u, 0, 0, 0, UIntPtr.Zero);
+    }
+
+    public static void Close(IntPtr window) { PostMessage(window, 0x0010, IntPtr.Zero, IntPtr.Zero); }
+
+    // WM_SETTINGCHANGE "ImmersiveColorSet", which the Settings app sends once it changed the theme: Explorer redraws
+    // the taskbar on it.
+    public static void ThemeChanged() {
+      IntPtr result;
+      SendMessageTimeout(new IntPtr(0xffff), 0x001A, IntPtr.Zero, "ImmersiveColorSet", 0x0002, 5000, out result);
+    }
+  }
+}
+'@
+
+  function Miss([string]$what) {
+    $script:misses.Add($what)
+    Note "no screenshot: $what"
+  }
+
+  # The taskbar dark (0) or light (1), as the Settings app sets it. The value before is kept for Clean-Up.
+  function Set-Taskbar([int]$light) {
+    if (-not $script:theme) {
+      $script:theme = @{
+        key = (Test-Path -LiteralPath $personalize)
+        value = (Get-ItemProperty -LiteralPath $personalize -Name 'SystemUsesLightTheme' -ErrorAction SilentlyContinue).SystemUsesLightTheme
+      }
+      if (-not $script:theme.key) { New-Item -Path $personalize -Force | Out-Null }
+    }
+    New-ItemProperty -LiteralPath $personalize -Name 'SystemUsesLightTheme' -PropertyType DWord -Value $light -Force | Out-Null
+    [E2E.Screens]::ThemeChanged()
+  }
+
+  function Restore-Taskbar {
+    $before = $script:theme
+    if (-not $before) { return }
+    if ($null -eq $before.value) {
+      Remove-ItemProperty -LiteralPath $personalize -Name 'SystemUsesLightTheme' -ErrorAction SilentlyContinue
+    } else {
+      New-ItemProperty -LiteralPath $personalize -Name 'SystemUsesLightTheme' -PropertyType DWord -Value $before.value -Force | Out-Null
+    }
+    if (-not $before.key) { Remove-Item -LiteralPath $personalize -ErrorAction SilentlyContinue }
+    [E2E.Screens]::ThemeChanged()
+    $script:theme = $null
+  }
+
+  # Explorer's entries for this install's tray icon (NotifyIconSettings), which it makes as the icon first shows.
+  function Notify-Entries {
+    @(Get-ChildItem -LiteralPath $notifyKey -ErrorAction SilentlyContinue |
+        Where-Object { $notifyPaths -contains $_.GetValue('ExecutablePath') })
+  }
+
+  # The Explorer window showing the export's folder, as the shell lists its windows, or null.
+  function Export-Window {
+    try {
+      $windows = (New-Object -ComObject Shell.Application).Windows()
+      for ($i = 0; $i -lt $windows.Count; $i++) {
+        $window = $windows.Item($i)
+        try { $path = $window.Document.Folder.Self.Path } catch { continue }
+        if ($path -and $path.EndsWith($exportTail, [StringComparison]::OrdinalIgnoreCase)) { return $window }
+      }
+    } catch { }
+    $null
+  }
+
+  function Selected-Names($window) {
+    try {
+      $items = $window.Document.SelectedItems()
+      @(for ($i = 0; $i -lt $items.Count; $i++) { Split-Path -Leaf $items.Item($i).Path })
+    } catch { @() }
+  }
+
+  function Screens-Clean {
+    $window = Export-Window
+    if ($window) { $window.Quit() }
+    Restore-Taskbar
+    foreach ($entry in Notify-Entries) {
+      if ($script:notifyBefore -notcontains $entry.PSChildName) {
+        Remove-Item -LiteralPath $entry.PSPath -Recurse -ErrorAction SilentlyContinue
+      }
+    }
+  }
+
+  # --- UI Automation: what the shell shows, found by name as a person finds it
+
+  # The top-level windows of these classes.
+  function Ui-Windows([string[]]$classes) {
+    $all = [Windows.Automation.AutomationElement]::RootElement.FindAll([Windows.Automation.TreeScope]::Children,
+      [Windows.Automation.Condition]::TrueCondition)
+    @($all | Where-Object { $classes -contains $_.Current.ClassName })
+  }
+
+  function Ui-All($root, $type) {
+    $condition = [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::ControlTypeProperty, $type)
+    @($root.FindAll([Windows.Automation.TreeScope]::Descendants, $condition))
+  }
+
+  # x, y, width, height on the screen, or null when it is not shown.
+  function Ui-Box($element) {
+    try {
+      if ($element.Current.IsOffscreen) { return $null }
+      $r = $element.Current.BoundingRectangle
+    } catch { return $null }
+    if ($null -eq $r -or $r.IsEmpty -or $r.Width -lt 1 -or $r.Height -lt 1) { return $null }
+    @([int]$r.X, [int]$r.Y, [int]$r.Width, [int]$r.Height)
+  }
+
+  function Middle([int[]]$box) { @(($box[0] + [int]($box[2] / 2)), ($box[1] + [int]($box[3] / 2))) }
+
+  function Click-Box([int[]]$box, [bool]$right) {
+    $x, $y = Middle $box
+    [E2E.Screens]::Click($x, $y, $right)
+  }
+
+  # The Desktop shortcut's icon on the desktop, or null.
+  function Desktop-Icon {
+    try {
+      foreach ($desk in Ui-Windows @('Progman', 'WorkerW')) {
+        foreach ($item in Ui-All $desk ([Windows.Automation.ControlType]::ListItem)) {
+          if ($item.Current.Name -ceq 'Harness Device') { return $item }
+        }
+      }
+    } catch { }
+    $null
+  }
+
+  # Whether the desktop itself is what shows at `box`'s middle: no window covers it.
+  function Desktop-At([int[]]$box) {
+    $x, $y = Middle $box
+    @('Progman', 'WorkerW') -contains [E2E.Screens]::ClassOf([E2E.Screens]::TopAt($x, $y))
+  }
+
+  # The app's tray icon (its tooltip is Harness) shown in windows of these classes, or null.
+  function Harness-Icon([string[]]$classes) {
+    try {
+      foreach ($bar in Ui-Windows $classes) {
+        foreach ($button in Ui-All $bar ([Windows.Automation.ControlType]::Button)) {
+          if ($button.Current.Name -like 'Harness*' -and (Ui-Box $button)) { return $button }
+        }
+      }
+    } catch { }
+    $null
+  }
+
+  # The tray icon on the screen: in the taskbar, where its entry's IsPromoted puts it within `seconds`, or else in the
+  # hidden icons' flyout, opened for it by its button. Null when it is in neither.
+  function Show-Icon([int]$seconds) {
+    $script:icon = $null
+    if (Wait-For { $script:icon = Harness-Icon ($TASKBAR + $OVERFLOW); $null -ne $script:icon } $seconds) { return $script:icon }
+    $opener = $null
+    try {
+      foreach ($bar in Ui-Windows $TASKBAR) {
+        foreach ($button in Ui-All $bar ([Windows.Automation.ControlType]::Button)) {
+          $name = $button.Current.Name
+          if ($name -like '*hidden icons*' -or $name -eq 'Notification Chevron') { $opener = Ui-Box $button }
+        }
+      }
+    } catch { }
+    if (-not $opener) { return $null }
+    Note 'the tray icon is not in the taskbar: the hidden icons are opened for it'
+    Click-Box $opener $false
+    if (Wait-For { $script:icon = Harness-Icon $OVERFLOW; $null -ne $script:icon } 10) { return $script:icon }
+    $null
+  }
+
+  # --- The screen
+
+  # The screen in `box` (x, y, width, height), grown by `margin` and kept on the screen.
+  function Grab([int[]]$box, [int]$margin = 0) {
+    $screen = [E2E.Screens]::Screen()
+    $left = [Math]::Max($box[0] - $margin, $screen[0])
+    $top = [Math]::Max($box[1] - $margin, $screen[1])
+    $right = [Math]::Min($box[0] + $box[2] + $margin, $screen[0] + $screen[2])
+    $bottom = [Math]::Min($box[1] + $box[3] + $margin, $screen[1] + $screen[3])
+    $bitmap = [Drawing.Bitmap]::new($right - $left, $bottom - $top)
+    $graphics = [Drawing.Graphics]::FromImage($bitmap)
+    try { $graphics.CopyFromScreen($left, $top, 0, 0, $bitmap.Size) } finally { $graphics.Dispose() }
+    $bitmap
+  }
+
+  # `bitmap` as NAME.png in the screens folder, each pixel drawn `zoom` times over.
+  function Save-Png($bitmap, [string]$name, [int]$zoom = 1) {
+    $saved = $bitmap
+    if ($zoom -gt 1) {
+      $saved = [Drawing.Bitmap]::new($bitmap.Width * $zoom, $bitmap.Height * $zoom)
+      $graphics = [Drawing.Graphics]::FromImage($saved)
+      $graphics.InterpolationMode = [Drawing.Drawing2D.InterpolationMode]::NearestNeighbor
+      $graphics.PixelOffsetMode = [Drawing.Drawing2D.PixelOffsetMode]::Half
+      $graphics.DrawImage($bitmap, 0, 0, $saved.Width, $saved.Height)
+      $graphics.Dispose()
+    }
+    $saved.Save((Join-Path $Screens "$name.png"), [Drawing.Imaging.ImageFormat]::Png)
+    if ($zoom -gt 1) { $saved.Dispose() }
+    $bitmap.Dispose()
+    Ok "$name.png"
+  }
+
+  function Shot([string]$name, [int[]]$box, [int]$margin = 0, [int]$zoom = 1) { Save-Png (Grab $box $margin) $name $zoom }
+  function Whole-Screen([string]$name) { Shot $name ([E2E.Screens]::Screen()) }
+
+  function Union([int[]]$a, [int[]]$b) {
+    if (-not $b) { return $a }
+    $left = [Math]::Min($a[0], $b[0])
+    $top = [Math]::Min($a[1], $b[1])
+    @($left, $top, ([Math]::Max($a[0] + $a[2], $b[0] + $b[2]) - $left), ([Math]::Max($a[1] + $a[3], $b[1] + $b[3]) - $top))
+  }
+
+  function Brightness($color) { 0.299 * $color.R + 0.587 * $color.G + 0.114 * $color.B }
+
+  # Whether `box` shows the Pixel H in white on a dark taskbar ($white), or in black on a light one. The taskbar's
+  # colour is the box's corner; the glyph, any pixel far from it the other way.
+  function Glyph-Reads([int[]]$box, [bool]$white) {
+    if (-not $box) { return $false }
+    $bitmap = Grab $box
+    try {
+      if ($white -ne ((Brightness ($bitmap.GetPixel(0, 0))) -lt 128)) { return $false }
+      for ($y = 0; $y -lt $bitmap.Height; $y++) {
+        for ($x = 0; $x -lt $bitmap.Width; $x++) {
+          $at = Brightness ($bitmap.GetPixel($x, $y))
+          if (($white -and $at -gt 200) -or (-not $white -and $at -lt 60)) { return $true }
+        }
+      }
+      $false
+    } finally { $bitmap.Dispose() }
+  }
+
+  # Waits until nothing covers `window`'s middle; a miss when something still does.
+  function In-Sight([IntPtr]$window, [string]$what) {
+    $x, $y = Middle ([E2E.Screens]::Bounds($window))
+    if (Wait-For { [E2E.Screens]::TopAt($x, $y) -eq $window } 5) { return }
+    Miss "${what}: its window is covered (in front: $(In-Front))"
+  }
+
+  # --- The shots
+
+  function Shortcut-Shots {
+    (New-Object -ComObject Shell.Application).MinimizeAll()
+    $script:shortcut = $null
+    $shown = Wait-For {
+      $script:shortcut = Desktop-Icon
+      $box = Ui-Box $script:shortcut
+      $box -and (Desktop-At $box)
+    }
+    Whole-Screen '1-desktop'
+    if ($shown) { Shot '1-desktop-shortcut' (Ui-Box $script:shortcut) 12 2 } else { Miss 'the Desktop shortcut Harness Device, uncovered' }
+    # The Start Menu's search is not reliable on a runner: its entry is the shortcut it lists, whose icon the shell
+    # draws for it.
+    $icons = [ordered]@{ '1-start-menu-shortcut-icon' = $shortcut; '1-desktop-shortcut-icon' = $desktopShortcut }
+    foreach ($name in $icons.Keys) {
+      $icon = [Drawing.Icon]::ExtractAssociatedIcon($icons[$name])
+      try { Save-Png ($icon.ToBitmap()) $name 8 } finally { $icon.Dispose() }
+    }
+  }
+
+  # The tray icon once the taskbar is dark ($white glyph) or light: the screen, and the icon zoomed.
+  function Tray-Shot([string]$name, [bool]$white) {
+    $screen = [E2E.Screens]::Screen()
+    # Off the taskbar: a pointer over the icon would light its box.
+    [E2E.Screens]::MoveTo($screen[0] + [int]($screen[2] / 2), $screen[1] + [int]($screen[3] / 2))
+    $script:box = $null
+    $read = Wait-For {
+      $icon = Show-Icon 0
+      $script:box = if ($icon) { Ui-Box $icon }
+      Glyph-Reads $script:box $white
+    }
+    if (-not $script:box) { Miss "${name}: the tray icon"; return }
+    if (-not $read) {
+      Miss "${name}: the icon in $(if ($white) { 'white on a dark' } else { 'black on a light' }) taskbar within $WAIT s; saved as it shows"
+    }
+    Whole-Screen $name
+    Shot "$name-zoom" $script:box 6 4
+  }
+
+  # Opens the tray menu as a person does, a right click on its icon: the menu's window, or zero.
+  function Open-Menu {
+    $icon = Show-Icon 0
+    $box = if ($icon) { Ui-Box $icon }
+    if (-not $box) { return [IntPtr]::Zero }
+    Click-Box $box $true
+    $script:menu = [IntPtr]::Zero
+    Wait-For { $script:menu = [E2E.Screens]::Visible('#32768'); $script:menu -ne [IntPtr]::Zero } 10 | Out-Null
+    $script:menu
+  }
+
+  function Menu-Items([IntPtr]$menu) {
+    try {
+      Ui-All ([Windows.Automation.AutomationElement]::FromHandle($menu)) ([Windows.Automation.ControlType]::MenuItem)
+    } catch { @() }
+  }
+
+  function Menu-Names([IntPtr]$menu) {
+    try { (@(Menu-Items $menu | ForEach-Object { $_.Current.Name }) -join ' | ') } catch { '' }
+  }
+
+  # Clicks the menu's item `name`; false when it shows none.
+  function Choose([IntPtr]$menu, [string]$name) {
+    $found = Wait-For {
+      $script:choice = $null
+      foreach ($item in Menu-Items $menu) {
+        try { if ($item.Current.Name -ceq $name) { $script:choice = Ui-Box $item } } catch { }
+      }
+      $null -ne $script:choice
+    } 10
+    if (-not $found) {
+      [E2E.Native]::Press(0x1B)
+      return $false
+    }
+    Click-Box $script:choice $false
+    $true
+  }
+
+  function About-Shot {
+    $script:about = [IntPtr]::Zero
+    if (-not (Wait-For { $script:about = [E2E.Native]::Find($script:app.Id, $ABOUT); $script:about -ne [IntPtr]::Zero })) {
+      Miss "About: the window $ABOUT"
+      return
+    }
+    In-Sight $script:about 'About'
+    Whole-Screen '5-about'
+    Shot '5-about-window' ([E2E.Screens]::Bounds($script:about)) 8
+    [E2E.Screens]::Close($script:about)
+    if (-not (Wait-For { [E2E.Native]::Find($script:app.Id, $ABOUT) -eq [IntPtr]::Zero })) { Miss 'About: its window closes' }
+  }
+
+  function Export-Shot {
+    if (-not (Wait-For { Called 'logs export --json' })) { Miss 'Export logs: the app runs harness logs export --json'; return }
+    if (-not (Wait-For { Logged 'logs: exported' })) { Miss 'Export logs: the log has logs: exported'; return }
+    $script:explorer = $null
+    if (-not (Wait-For { $script:explorer = Export-Window; $null -ne $script:explorer })) {
+      Miss "Export logs: Explorer opens the zip's folder"
+      return
+    }
+    if (Wait-For { (Selected-Names $script:explorer) -contains $zipName } 10) { Ok "Explorer shows $zipName selected" }
+    else { Miss "Export logs: Explorer selects $zipName; selected: $((Selected-Names $script:explorer) -join ', ')" }
+    $window = [IntPtr][long]$script:explorer.HWND
+    In-Sight $window 'Explorer'
+    Whole-Screen '6-export'
+    Shot '6-export-explorer' ([E2E.Screens]::Bounds($window)) 8
+  }
+
+  function Menu-Shots {
+    $menu = Open-Menu
+    if ($menu -eq [IntPtr]::Zero) { Miss 'the tray menu, About and Export logs: the menu opens'; return }
+    $script:names = ''
+    Wait-For { $script:names = Menu-Names $menu; $script:names } 10 | Out-Null
+    Note "the tray menu shows: $script:names"
+    Whole-Screen '4-menu'
+    Shot '4-menu-crop' (Union ([E2E.Screens]::Bounds($menu)) (Ui-Box $script:icon)) 8
+    if (Choose $menu 'About') { About-Shot } else { Miss 'About: the menu item' }
+    $menu = Open-Menu
+    if ($menu -eq [IntPtr]::Zero) { Miss 'Export logs: the menu opens again'; return }
+    if (Choose $menu 'Export logs') { Export-Shot } else { Miss 'Export logs: the menu item' }
+  }
+
+  function Screens-Checks {
+    Add-Type -AssemblyName System.Drawing, UIAutomationClient, UIAutomationTypes
+    if (-not ('E2E.Screens' -as [type])) { Add-Type -TypeDefinition $screensSource }
+    [E2E.Screens]::DpiAware()
+    New-Item -ItemType Directory -Force -Path $Screens | Out-Null
+    $script:notifyBefore = @(Notify-Entries | ForEach-Object { $_.PSChildName })
+    # Dark before the app starts, which draws its first icon for the taskbar it finds.
+    Set-Taskbar 0
+
+    # --- 1: the shortcuts the installer made
+    Install-Silently
+    $running = Our-Apps
+    if ($running.Count) {
+      $running | Stop-Process -Force
+      if (-not (Wait-For { (Our-Apps).Count -eq 0 })) { Fail 'the app started by the installer ends' }
+    }
+    Shortcut-Shots
+
+    # --- 2 to 6: the app with the fake CLI, whose logs export names a real zip
+    Fake-Script 'hardware_watch_--json' @('{"attached":false}', '@record')
+    Fake-Script 'auth_status_--json' @('{"loggedIn":false}')
+    Fake-Script '--version' @('0.6.99')
+    New-Item -ItemType Directory -Force -Path $exportDir | Out-Null
+    $bundled = Join-Path $work 'harness-device.log'
+    [IO.File]::WriteAllText($bundled, "e2e`n")
+    Compress-Archive -LiteralPath $bundled -DestinationPath $zip
+    $answer = @{ path = $zip; included = @('device'); bytes = (Get-Item -LiteralPath $zip).Length } | ConvertTo-Json -Compress
+    Fake-Script 'logs_export_--json' @($answer)
+    Use-Fake $true
+    Launch 'screens'
+    if (-not (Wait-For { Logged $MENU })) { Fail "with the fake CLI, the log has $MENU" }
+    # Windows 11 puts a new tray icon among the hidden ones; IsPromoted shows it in the taskbar, as Settings does.
+    if (Wait-For { (Notify-Entries).Count -gt 0 } 10) {
+      foreach ($entry in Notify-Entries) {
+        New-ItemProperty -LiteralPath $entry.PSPath -Name 'IsPromoted' -PropertyType DWord -Value 1 -Force | Out-Null
+      }
+    } else {
+      Note 'Explorer has no NotifyIconSettings entry for the app: its icon is looked for among the hidden ones'
+    }
+    if (Show-Icon 10) {
+      Tray-Shot '2-tray-dark' $true
+      Set-Taskbar 1
+      Tray-Shot '3-tray-light' $false
+      Menu-Shots
+    } else {
+      Whole-Screen '2-tray-missing'
+      Miss 'the tray icon, its menu, About and Export logs: the icon is in neither the taskbar nor the hidden icons'
+    }
+    Stop-App
+
+    if ($script:misses.Count -and -not $frontLimited) { Fail "every screenshot is taken: $($script:misses -join '; ')" }
+    if ($script:misses.Count) {
+      Note "GitHub's hosted Windows Arm runner refuses foreground changes: $($script:misses.Count) shot(s) above not taken"
+    }
+  }
+
+  $code = 0
+  try {
+    Screens-Checks
+    Write-Host '0 FAILED'
+  } catch {
+    Report-Failure $_
+    $code = 1
+  } finally {
+    Clean-Up
+  }
+  exit $code
+}
+
 $code = 0
 try {
   if (-not $csc) { Fail 'the .NET Framework compiler (csc.exe) is on this Windows' }
@@ -881,15 +1405,7 @@ try {
 
   # --- 1: the silent install, per user
 
-  # Seeded before the install, so no launch ever reaches the install line on its own.
-  Save-State $true $true $true
-  $script:installed = $true
-  $script:ranInstaller = $true
-  $setup = Start-Process -FilePath $Installer -ArgumentList '/S' -PassThru
-  # Held from the start: Windows PowerShell has no exit code for a process whose handle it opened after the exit.
-  $null = $setup.Handle
-  if (-not $setup.WaitForExit(300000)) { Fail 'the installer ends within 5 minutes' }
-  if ($setup.ExitCode -ne 0) { Fail "the installer exits 0, not $($setup.ExitCode)" }
+  Install-Silently
   # What the install must add and the uninstall must remove.
   $installedItems = @($installDir, $shortcut, $desktopShortcut, $uninstallKey)
   $missing = @(@($exe) + $installedItems | Where-Object { -not (Test-Path -LiteralPath $_) })
