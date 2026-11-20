@@ -8,10 +8,12 @@
  * the inbox), its last line. The lines carry the meaning, not the exit code: `harness.exe` owns 3 and 4, and Node's own
  * crash is 1. Nothing goes to stderr, and no token, pipe name or text is in an error or a log line.
  *
- * It ends itself. Claude Code ends the mod's loop by killing `harness.exe`, which starts `node.exe` with no job object, so
- * this process may run on: it stops before its next poll once its parent is gone, and at once when a write to its stdout
- * fails. A newer poll for the session ends an orphan's hold in the core (core/deviceHookCalls.ts), so it is not held for
- * long. Only the `harness` command's own process runs this; a client of the daemon's existing route, nothing in the core.
+ * It ends itself. When the mod leaves its loop, Claude Code on Windows kills nothing: 2-3 s later it closes its end of the
+ * stdout pipe, and this process's next write fails with EPIPE (the VM notes, Task 15). So it ends at its next write: when
+ * the held poll answers (at most 30 s), or after the 60 s wait. It also stops before its next poll once its parent is
+ * gone, as `harness.exe` starts `node.exe` with no job object. A newer poll for the session ends an orphan's hold in the
+ * core (core/deviceHookCalls.ts), so it is not held for long. Only the `harness` command's own process runs this; a client
+ * of the daemon's existing route, nothing in the core.
  */
 import { statSync } from 'node:fs'
 import { configuredPortOf, daemonRecordPath, readDaemonRecord } from '../lib/daemonRecord.js'

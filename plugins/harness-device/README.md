@@ -16,6 +16,11 @@ over. Nothing is kept for later.
 
 The mod also tells the daemon which session the Claude app shows, and the dial turns to it while the app is in front.
 
+On Windows, where a mod reaches no named pipe, the mod runs the Harness CLI instead
+(`%USERPROFILE%\.harness\bin\harness.exe`, else `harness` on `PATH`): one `harness device claude inbox` per session
+holds that request, and `harness device claude attach` tells which session the app shows. The CLI proves Harness's
+tokens in its own process, and the mod is handed no token or other credential.
+
 With no dial attached, no Harness daemon running, or no Harness CLI (`~/.local/bin/harness`, on Windows
 `%USERPROFILE%\.harness\bin\harness.exe`, then `harness` on `PATH`), the hook tells nothing, and Claude Code carries
 on as it would without the plugin. On Windows the hook runs in Git Bash, or in PowerShell when there is none.
