@@ -90,6 +90,23 @@ export function sealedPath(systemRoot: string): string {
   return [win32.join(systemRoot, 'System32'), systemRoot, win32.join(systemRoot, 'System32', 'Wbem'), win32.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0')].join(';')
 }
 
+/** How long a close waits for a daemon taskkill was sent to. */
+const KILLED_WAIT_MS = 15_000
+
+/** [exited] within [ms]: a daemon taskkill did not end (a process Windows cannot end, a pid it refused) is named,
+ *  never waited for forever. */
+export async function endedWithin(exited: Promise<void>, ms: number, pid: number | undefined): Promise<void> {
+  let timer: NodeJS.Timeout | undefined
+  const late = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`the daemon (pid ${pid}) did not end in ${ms / 1000} s after taskkill`)), ms)
+  })
+  try {
+    await Promise.race([exited, late])
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
 async function freePort(): Promise<number> {
   const server = createServer()
   await new Promise<void>((done) => server.listen(0, '127.0.0.1', done))
@@ -254,15 +271,20 @@ export async function startWindowsDaemon(options: WindowsDaemonOptions | RealDia
   })
 
   const close = async (): Promise<void> => {
-    if (child.exitCode === null && child.signalCode === null) {
-      await harness(['stop']).catch(() => null)
-      const stopped = await Promise.race([exited.then(() => true), new Promise<boolean>((done) => setTimeout(() => done(false), 15_000))])
-      // What a stop did not end: the master and its whole tree, the core and the services under it.
-      if (!stopped) await exec('taskkill', ['/pid', String(child.pid), '/t', '/f'], { windowsHide: true }).catch(() => null)
-      await exited
+    try {
+      if (child.exitCode === null && child.signalCode === null) {
+        await harness(['stop']).catch(() => null)
+        const stopped = await Promise.race([exited.then(() => true), new Promise<boolean>((done) => setTimeout(() => done(false), 15_000))])
+        if (!stopped) {
+          // What a stop did not end: the master and its whole tree, the core and the services under it.
+          await exec('taskkill', ['/pid', String(child.pid), '/t', '/f'], { windowsHide: true }).catch(() => null)
+          await endedWithin(exited, KILLED_WAIT_MS, child.pid)
+        }
+      }
+    } finally {
+      clearInterval(following)
+      follow()
     }
-    clearInterval(following)
-    follow()
     // The terminal host outlives the daemon by design, as tmux does (ptyHost/launch.ts), and holds its lock in the pty
     // home, so the root cannot be removed while it runs. It is ended as `harness uninstall` ends it: its panes, then a
     // shutdown, and only a process proven to serve this home is ended by its pid. Loaded here, as daemon.ts loads
