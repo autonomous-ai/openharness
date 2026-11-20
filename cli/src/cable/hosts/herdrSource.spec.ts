@@ -37,6 +37,7 @@ describe.skipIf(process.platform === 'win32')('the herdr source (docs/specs/2026
 
   const herdrClient = () => createHerdrClient({
     socketPath: server.path, endpoint: server.path, home: dirname(server.path), uid: process.getuid!(), platform: process.platform,
+    rows: async () => null,
   })
 
   /** A source on the real client and the fake server, its words through the real adapter as the devices wire it, with a

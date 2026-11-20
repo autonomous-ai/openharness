@@ -89,7 +89,8 @@ describe('herdr on Windows: its marker and its pipe (docs/plans/2026-11-19-dial-
 describe.skipIf(process.platform === 'win32')('the herdr client (docs/specs/2026-11-16-device-herdr.md)', () => {
   let server: FakeHerdr
   const client = (over: Partial<HerdrClientDeps> = {}) => createHerdrClient({
-    socketPath: server.path, endpoint: server.path, home: dirname(server.path), uid: process.getuid!(), platform: process.platform, ...over,
+    socketPath: server.path, endpoint: server.path, home: dirname(server.path), uid: process.getuid!(), platform: process.platform,
+    rows: async () => null, ...over,
   })
 
   beforeEach(async () => { server = await fakeHerdr() })
