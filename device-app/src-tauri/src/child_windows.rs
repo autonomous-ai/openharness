@@ -96,8 +96,10 @@ fn job() -> io::Result<OwnedHandle> {
     Ok(job)
 }
 
-/// Resumes the suspended process `pid`: its one thread, as nothing has run in it to start another. std keeps no
-/// handle to the thread, so it is found in a snapshot of the system's threads.
+/// Resumes the suspended process `pid`: each of its threads once, as a thread something else put in it may be listed
+/// before the one suspended at its start; a thread that runs is left as it is. std's handle to that thread is not
+/// public (`ChildExt::main_thread_handle` is unstable), so the threads are found in a snapshot of the system's threads.
+/// One that cannot be resumed (it has ended since) is passed over; none resumed is an error.
 fn resume(pid: u32) -> io::Result<()> {
     // SAFETY: a snapshot of every thread, closed by its OwnedHandle below.
     let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0) };
@@ -107,27 +109,37 @@ fn resume(pid: u32) -> io::Result<()> {
     // SAFETY: a new handle, which nothing else owns.
     let snapshot = unsafe { OwnedHandle::from_raw_handle(snapshot) };
     let mut entry = THREADENTRY32 { dwSize: size_of::<THREADENTRY32>() as u32, ..Default::default() };
+    let (mut resumed, mut failed) = (false, None);
     // SAFETY: entry is a THREADENTRY32 with its size set, which each call fills.
     let mut more = unsafe { Thread32First(snapshot.as_raw_handle(), &mut entry) } != 0;
     while more {
         if entry.th32OwnerProcessID == pid {
-            // SAFETY: OpenThread only opens a handle, which OwnedHandle closes.
-            let thread = unsafe { OpenThread(THREAD_SUSPEND_RESUME, 0, entry.th32ThreadID) };
-            if thread.is_null() {
-                return Err(io::Error::last_os_error());
+            match resume_thread(entry.th32ThreadID) {
+                Ok(was_suspended) => resumed |= was_suspended,
+                Err(error) => failed = Some(error),
             }
-            // SAFETY: a new handle, which nothing else owns.
-            let thread = unsafe { OwnedHandle::from_raw_handle(thread) };
-            // SAFETY: the handle is open, with the right to resume.
-            if unsafe { ResumeThread(thread.as_raw_handle()) } == u32::MAX {
-                return Err(io::Error::last_os_error());
-            }
-            return Ok(());
         }
         // SAFETY: as Thread32First.
         more = unsafe { Thread32Next(snapshot.as_raw_handle(), &mut entry) } != 0;
     }
-    Err(io::ErrorKind::NotFound.into())
+    if resumed { Ok(()) } else { Err(failed.unwrap_or_else(|| io::ErrorKind::NotFound.into())) }
+}
+
+/// Resumes the thread `id` once; true when it was suspended.
+fn resume_thread(id: u32) -> io::Result<bool> {
+    // SAFETY: OpenThread only opens a handle, which OwnedHandle closes.
+    let thread = unsafe { OpenThread(THREAD_SUSPEND_RESUME, 0, id) };
+    if thread.is_null() {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: a new handle, which nothing else owns.
+    let thread = unsafe { OwnedHandle::from_raw_handle(thread) };
+    // SAFETY: the handle is open, with the right to resume.
+    match unsafe { ResumeThread(thread.as_raw_handle()) } {
+        u32::MAX => Err(io::Error::last_os_error()),
+        // The count it had: 0 for a thread that runs, which stays as it is.
+        count => Ok(count > 0),
+    }
 }
 
 impl Group {
