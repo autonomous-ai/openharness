@@ -881,6 +881,8 @@ if ($Screens) {
   $exportTail = '\' + (Split-Path -Leaf $work) + '\export'
   $zipName = 'harness-logs-' + (Get-Date -Format 'yyyyMMdd-HHmm') + '.zip'
   $zip = Join-Path $exportDir $zipName
+  # The shots' $script: names (deskIcon, trayMenu, aboutWindow) differ from the script's own ($shortcut, $MENU, $ABOUT):
+  # PowerShell ignores case, and a $script: write replaces the script's variable of that name.
   $script:theme = $null
   $script:notifyBefore = @()
   $script:misses = New-Object System.Collections.Generic.List[string]
@@ -1191,14 +1193,14 @@ namespace E2E {
 
   function Shortcut-Shots {
     (New-Object -ComObject Shell.Application).MinimizeAll()
-    $script:shortcut = $null
+    $script:deskIcon = $null
     $shown = Wait-For {
-      $script:shortcut = Desktop-Icon
-      $box = Ui-Box $script:shortcut
+      $script:deskIcon = Desktop-Icon
+      $box = Ui-Box $script:deskIcon
       $box -and (Desktop-At $box)
     }
     Whole-Screen '1-desktop'
-    if ($shown) { Shot '1-desktop-shortcut' (Ui-Box $script:shortcut) 12 2 } else { Miss 'the Desktop shortcut Harness Device, uncovered' }
+    if ($shown) { Shot '1-desktop-shortcut' (Ui-Box $script:deskIcon) 12 2 } else { Miss 'the Desktop shortcut Harness Device, uncovered' }
     # The Start Menu's search is not reliable on a runner: its entry is the shortcut it lists, whose icon the shell
     # draws for it.
     $icons = [ordered]@{ '1-start-menu-shortcut-icon' = $shortcut; '1-desktop-shortcut-icon' = $desktopShortcut }
@@ -1233,9 +1235,9 @@ namespace E2E {
     $box = if ($icon) { Ui-Box $icon }
     if (-not $box) { return [IntPtr]::Zero }
     Click-Box $box $true
-    $script:menu = [IntPtr]::Zero
-    Wait-For { $script:menu = [E2E.Screens]::Visible('#32768'); $script:menu -ne [IntPtr]::Zero } 10 | Out-Null
-    $script:menu
+    $script:trayMenu = [IntPtr]::Zero
+    Wait-For { $script:trayMenu = [E2E.Screens]::Visible('#32768'); $script:trayMenu -ne [IntPtr]::Zero } 10 | Out-Null
+    $script:trayMenu
   }
 
   function Menu-Items([IntPtr]$menu) {
@@ -1266,15 +1268,15 @@ namespace E2E {
   }
 
   function About-Shot {
-    $script:about = [IntPtr]::Zero
-    if (-not (Wait-For { $script:about = [E2E.Native]::Find($script:app.Id, $ABOUT); $script:about -ne [IntPtr]::Zero })) {
+    $script:aboutWindow = [IntPtr]::Zero
+    if (-not (Wait-For { $script:aboutWindow = [E2E.Native]::Find($script:app.Id, $ABOUT); $script:aboutWindow -ne [IntPtr]::Zero })) {
       Miss "About: the window $ABOUT"
       return
     }
-    In-Sight $script:about 'About'
+    In-Sight $script:aboutWindow 'About'
     Whole-Screen '5-about'
-    Shot '5-about-window' ([E2E.Screens]::Bounds($script:about)) 8
-    [E2E.Screens]::Close($script:about)
+    Shot '5-about-window' ([E2E.Screens]::Bounds($script:aboutWindow)) 8
+    [E2E.Screens]::Close($script:aboutWindow)
     if (-not (Wait-For { [E2E.Native]::Find($script:app.Id, $ABOUT) -eq [IntPtr]::Zero })) { Miss 'About: its window closes' }
   }
 
