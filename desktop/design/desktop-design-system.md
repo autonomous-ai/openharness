@@ -479,8 +479,8 @@ Close and Retry. Cancelled or failed, the next launch asks again.
 
 **Menu-bar app offer** (`widgets/device_app_band.dart`,
 `devices/device_app_row.dart`; gallery `device-app`) — shown on macOS 13 or
-later, Windows and Linux while a dial is plugged in to this computer and the
-Harness menu-bar app is not installed; the web and macOS 12 show nothing. The
+later, Windows and Linux while a dial is plugged in to this computer and
+Harness Device is not installed; the web and macOS 12 show nothing. The
 band is a window band, last of the device bands, drawn as the others: a 10%
 amber (`AppPalette.warn`) tint over the window, a 28% bottom rule, a 16-point
 `AppIcons.arrowDownToLine` (`triangleAlert` on a failure), body text of at most

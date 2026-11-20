@@ -153,7 +153,11 @@ DeviceAppInstaller deviceAppInstallerFor(
   DeviceAppRun run = runDeviceAppTool,
 }) => DeviceAppInstaller(
   manifestUrl: manifestUrl,
-  targetFolders: deviceAppTargetFolders(),
+  // Windows and Linux install at the place, never in a folder of these.
+  targetFolders: switch (platform) {
+    TargetPlatform.windows || TargetPlatform.linux => const [],
+    _ => deviceAppTargetFolders(),
+  },
   verifySignature: deviceAppSignatureCheckFor(platform),
   open: open,
   dio: dio,

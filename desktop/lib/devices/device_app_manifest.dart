@@ -1,5 +1,5 @@
-/// Which build of the Harness menu-bar app this computer installs, from the
-/// release's own manifest.
+/// Which build of Harness Device this computer installs, from the release's
+/// own manifest.
 ///
 /// The manifest is read from the bucket, never through the CDN, which could
 /// still serve the copy from before a release. Its entry's URL is checked all

@@ -65,7 +65,9 @@ String? _unquoted(String? value) {
   return bare.isEmpty ? null : bare;
 }
 
-/// What LaunchServices and AppKit say about the menu-bar app on this computer.
+/// Whether Harness Device is installed and runs on this computer: what
+/// LaunchServices and AppKit say on macOS, its place and this user's process
+/// list on Windows and Linux.
 class DeviceAppPresence {
   const DeviceAppPresence({required this.installed, required this.running});
   final bool installed, running;
@@ -76,7 +78,8 @@ abstract interface class DeviceAppProbe {
   Future<DeviceAppPresence> lookup();
 }
 
-/// Opens the menu-bar app: the bundle at [path], or by bundle id when [path] is null. True when `open` exited 0.
+/// Opens Harness Device: the copy at [path], or when [path] is null the one macOS finds by bundle id, or the one at
+/// the place on Windows and Linux. True when `open` exited 0, or the start succeeded.
 typedef DeviceAppOpen = Future<bool> Function({String? path});
 
 enum DeviceAppInstallStep {

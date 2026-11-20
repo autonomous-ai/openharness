@@ -137,13 +137,13 @@ List<String> deviceAppTargetFolders() {
   return ['/Applications', if (home != null) p.join(home, 'Applications')];
 }
 
-/// Downloads, verifies, installs and opens the Harness menu-bar app in seven
-/// named steps, the first that fails named in the result. macOS unpacks
-/// `Harness Device.app` into the first target folder that takes it; Windows
-/// runs the per-user installer, which puts the app at its place
-/// ([deviceAppPlace]); Linux puts the AppImage there. Neither unpacks, and
-/// Linux checks no signature (an AppImage carries none), and puts the app in
-/// the desktop's app list before it opens it.
+/// Downloads, verifies, installs and opens Harness Device in named steps
+/// ([DeviceAppInstallStep]), the first that fails named in the result. macOS
+/// takes all seven: it unpacks `Harness Device.app` into the first target
+/// folder that takes it. Windows runs the per-user installer, which puts the
+/// app at its place ([deviceAppPlace]); Linux puts the AppImage there. Neither
+/// unpacks, and Linux checks no signature (an AppImage carries none), and puts
+/// the app in the desktop's app list before it opens it.
 class DeviceAppInstaller {
   DeviceAppInstaller({
     required this._manifestUrl,
