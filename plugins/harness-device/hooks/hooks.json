@@ -7,7 +7,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/asked\"",
+            "command": "echo `# <#` >/dev/null; exec \"${CLAUDE_PLUGIN_ROOT}/hooks/asked\"\n#> > $null; $h = \"$env:USERPROFILE\\.harness\\bin\\harness.exe\"; if (Test-Path -LiteralPath $h -PathType Leaf) { & $h device claude asked *> $null } elseif (Get-Command harness.exe -CommandType Application -ErrorAction Ignore) { harness.exe device claude asked *> $null }; exit 0",
+            "onFailure": "continue",
             "timeout": 5
           }
         ]
