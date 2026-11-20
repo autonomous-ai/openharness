@@ -360,7 +360,7 @@ mod tests {
         assert_eq!(all(&events), Vec::new());
         assert!(fake.ends().is_empty());
         assert!(logged(&fake, "sign-in: cancelled"));
-        assert!(logged(&fake, "harness login --json: killed by a signal"));
+        assert!(logged(&fake, "harness login --json: killed"));
 
         let fake = Fake::new();
         fake.script("login --json", &[SUCCESS, "@wait later"]);
@@ -410,7 +410,7 @@ mod tests {
         // The URL comes first unless the fake took the whole 300 ms to start, as it can beside other tests.
         assert_eq!(all(&events).last(), Some(&failed(NO_RESULT)));
         // The thread ends after the child, so its line is there, even when the kill came before the fake wrote its pid.
-        assert!(logged(&fake, "harness login --json: killed by a signal"), "{:?}", fake.log().lines());
+        assert!(logged(&fake, "harness login --json: killed"), "{:?}", fake.log().lines());
         assert!(fake.pids().into_iter().all(wait_gone));
         assert!(fake.ends().is_empty());
         assert!(logged(&fake, "sign-in: no result"));

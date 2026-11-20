@@ -220,13 +220,15 @@ fn child_env_for(
 }
 
 /// Held around every spawn. macOS has no pipe2: a child's pipes are made, then marked close-on-exec, and a child
-/// another thread starts between the two keeps them, holding the first child's output open after it has ended.
+/// another thread starts between the two keeps them, holding the first child's output open after it has ended. Linux
+/// (pipe2) and Windows (std's own lock around a child's inheritable pipes and CreateProcess) do not need it, and take
+/// it so every OS spawns one way.
 pub(crate) fn spawn_lock() -> MutexGuard<'static, ()> {
     static SPAWNING: Mutex<()> = Mutex::new(());
     SPAWNING.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-/// Runs `command` in its own process group to its end, stdin empty. Past `deadline` the whole group is killed and
+/// Runs `command` in its own process group (a job on Windows) to its end, stdin empty. Past `deadline` the whole group is killed and
 /// `timed_out` is true. Each stream keeps its last 256 KiB.
 pub fn run(command: Command, deadline: Duration) -> io::Result<Output> {
     run_lines(command, deadline, &mut |_| {})
@@ -346,8 +348,8 @@ pub fn version(cli: &dyn Cli) -> Option<String> {
     (!line.is_empty() && line.len() <= VERSION_MAX && line.chars().all(valid)).then(|| line.to_string())
 }
 
-/// A running CLI in its own process group: its stdin is held open until closed or dropped, its stdout comes a line
-/// at a time.
+/// A running CLI in its own process group (a job on Windows): its stdin is held open until closed or dropped, its
+/// stdout comes a line at a time.
 pub struct Child {
     stdin: Arc<Mutex<Option<child::Stdin>>>,
     lines: mpsc::Receiver<String>,
@@ -414,7 +416,7 @@ impl Child {
         StdinWriter(Arc::downgrade(&self.stdin))
     }
 
-    /// The exit code once it has exited; `Ok(None)`: it was ended by a signal.
+    /// The exit code once it has exited; `Ok(None)`: it was killed.
     pub fn exit(&mut self, wait: Duration) -> Result<Option<i32>, Timeout> {
         if self.code.is_none() {
             self.code = Some(self.exit.recv_timeout(wait).map_err(|_| Timeout)?);
@@ -427,7 +429,7 @@ impl Child {
     }
 }
 
-/// Kills a child's process group from any thread. Its group while the child is unreaped: once reaped, the pid may be
+/// Kills a child's process group (a job on Windows) from any thread. Its group while the child is unreaped: once reaped, the pid may be
 /// another process's, so a kill then does nothing.
 #[derive(Clone)]
 pub struct Killer(Arc<Unreaped>);
@@ -479,7 +481,8 @@ pub struct StdinWriter(Weak<Mutex<Option<child::Stdin>>>);
 pub enum Unwritten {
     /// Stdin is closed, or the child has gone.
     Closed,
-    /// The pipe is full: the writer never waits (Child::start), and only a child that has stopped reading fills it.
+    /// The pipe, or on Windows its queue, is full: the writer never waits (Child::start), and only a child that has
+    /// stopped reading fills it.
     Full,
 }
 
@@ -631,7 +634,7 @@ fn name(args: &[&str]) -> String {
 fn ended(name: &str, code: Option<i32>, stderr: &str) -> String {
     let last = stderr.lines().rev().map(str::trim).find(|line| !line.is_empty());
     match (code, last) {
-        (None, _) => format!("{name}: killed by a signal"),
+        (None, _) => format!("{name}: killed"),
         (Some(code), Some(last)) if code != 0 => format!("{name}: exit {code}: {last}"),
         (Some(code), _) => format!("{name}: exit {code}"),
     }
@@ -1234,7 +1237,7 @@ mod tests {
         assert_eq!(child.exit(WAIT), Ok(None));
         assert!(wait_gone(fake.pids()[0]));
         killer.kill();
-        assert_eq!(fake.log().lines(), ["harness hardware watch --json: killed by a signal"]);
+        assert_eq!(fake.log().lines(), ["harness hardware watch --json: killed"]);
     }
 
     #[cfg(unix)]
@@ -1281,10 +1284,7 @@ mod tests {
         assert_eq!(child.exit(WAIT), Ok(None));
         assert_eq!(
             fake.log().lines(),
-            [
-                "harness hardware watch --json: tabs stream replaced",
-                "harness hardware watch --json: killed by a signal"
-            ]
+            ["harness hardware watch --json: tabs stream replaced", "harness hardware watch --json: killed"]
         );
     }
 
@@ -1352,10 +1352,7 @@ mod tests {
         assert_eq!(child.exit(WAIT), Ok(None));
         assert_eq!(
             fake.log().lines(),
-            [
-                "harness hardware watch --json: sound: DEVICE_OFFLINE",
-                "harness hardware watch --json: killed by a signal"
-            ]
+            ["harness hardware watch --json: sound: DEVICE_OFFLINE", "harness hardware watch --json: killed"]
         );
     }
 
@@ -1380,10 +1377,7 @@ mod tests {
         assert_eq!(child.exit(WAIT), Ok(None));
         assert_eq!(
             fake.log().lines(),
-            [
-                "harness hardware watch --json: notify: WRITE_FAILED",
-                "harness hardware watch --json: killed by a signal"
-            ]
+            ["harness hardware watch --json: notify: WRITE_FAILED", "harness hardware watch --json: killed"]
         );
     }
 
