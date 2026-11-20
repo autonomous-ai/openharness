@@ -7,8 +7,10 @@ import { errorKind } from './log.js'
 import type { registry as Registry } from './registry.js'
 
 const refuse = vi.hoisted(() => ({ code: undefined as string | undefined, directorySync: undefined as string | undefined }))
+vi.mock('node:perf_hooks', async original => ({ ...await original<object>(), performance: { now: () => 0 } }))
+const deadline = await vi.hoisted(() => import('../testing/registryDeadline.js'))
 vi.mock('node:fs/promises', async original => {
-  const actual = await original<typeof import('node:fs/promises')>()
+  const actual = await deadline.slowSyncFsPromises(original)
   return { ...actual, open: async (...args: Parameters<typeof actual.open>) => {
     if (refuse.code && /\/(registry|agent-names)\.json\..*\.tmp$/.test(String(args[0]))) {
       throw Object.assign(new Error(`${refuse.code}: fixture, open '${String(args[0])}'`), { code: refuse.code })
@@ -32,6 +34,7 @@ let AtomicWriteUnconfirmed: typeof import('./secureState.js').AtomicWriteUnconfi
 const input = { agentId: 'persisted-agent', engine: 'claude' as const, tmuxPane: '%1',
   processIdentity: { pid: 101, executable: '/fixture/claude', startMarker: 'fixture-101' } }
 beforeEach(async () => {
+  deadline.holdRegistryDeadline(Number.POSITIVE_INFINITY)
   vi.resetModules()
   directory = mkdtempSync(join(tmpdir(), 'registry-disk-'))
   for (const key of ['ADAPTER_DATA_DIR', 'CLAUDE_PROJECTS_DIR', 'CODEX_HOME', 'CURSOR_HOME']) vi.stubEnv(key, directory)

@@ -7,11 +7,15 @@ import type { ExternalResumeIntent } from './externalResume.js'
 import type { RegisteredSession } from './registry.js'
 import { createExternalResumes } from '../core/agents/externalResume.js'
 import { stopExternalOwner } from '../core/agents/externalOwner.js'
+vi.mock('node:perf_hooks', async original => ({ ...await original<object>(), performance: { now: () => 0 } }))
+const deadline = await vi.hoisted(() => import('../testing/registryDeadline.js'))
+vi.mock('node:fs/promises', original => deadline.slowSyncFsPromises(original))
 vi.mock('./bootId.js', async original => ({ ...await original<object>(), currentBootId: () => 'linux:12345678-1234-1234-1234-123456789012' }))
 
 const instances = new Set<typeof import('./registry.js')['registry']>()
 let root: string
 beforeEach(() => {
+  deadline.holdRegistryDeadline(Number.POSITIVE_INFINITY)
   root = mkdtempSync(join(tmpdir(), 'registry-adoption-'))
   vi.stubEnv('ADAPTER_DATA_DIR', root)
   vi.stubEnv('CLAUDE_PROJECTS_DIR', root)

@@ -4,6 +4,10 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import type { registry as Registry } from './registry.js'
 
+vi.mock('node:perf_hooks', async original => ({ ...await original<object>(), performance: { now: () => 0 } }))
+const deadline = await vi.hoisted(() => import('../testing/registryDeadline.js'))
+vi.mock('node:fs/promises', original => deadline.slowSyncFsPromises(original))
+
 const HOME = '/data/agents/a1/.hermes'
 const id = 'hermes-agent'
 const processIdentity = { pid: 1041, executable: '/fixture/hermes', startMarker: 'fixture-1041' }
@@ -24,6 +28,7 @@ async function reload(): Promise<typeof Registry> {
 }
 
 beforeEach(async () => {
+  deadline.holdRegistryDeadline(Number.POSITIVE_INFINITY)
   directory = mkdtempSync(join(tmpdir(), 'registry-hermes-home-'))
   file = join(directory, 'registry.json')
   for (const key of ['ADAPTER_DATA_DIR', 'CLAUDE_PROJECTS_DIR', 'CODEX_HOME', 'CURSOR_HOME', 'HERMES_HOME']) vi.stubEnv(key, directory)

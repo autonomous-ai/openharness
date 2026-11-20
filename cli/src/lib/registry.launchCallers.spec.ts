@@ -46,8 +46,10 @@ vi.mock('node:fs', async original => {
     return actual.fsyncSync(fd)
   } }
 })
+vi.mock('node:perf_hooks', async original => ({ ...await original<object>(), performance: { now: () => 0 } }))
+const deadline = await vi.hoisted(() => import('../testing/registryDeadline.js'))
 vi.mock('node:fs/promises', async original => {
-  const actual = await original<typeof import('node:fs/promises')>()
+  const actual = await deadline.slowSyncFsPromises(original)
   return { ...actual, open: async (...args: Parameters<typeof actual.open>) => {
     const handle = await actual.open(...args), write = handle.writeFile.bind(handle), sync = handle.sync.bind(handle)
     let selected = false
@@ -96,6 +98,7 @@ function holdImage(match: (rows: RegisteredSession[]) => boolean) {
 const persisted = (): RegisteredSession[] => JSON.parse(readFileSync(join(env.ADAPTER_DATA_DIR, 'registry.json'), 'utf8'))
 
 beforeEach(async () => {
+  deadline.holdRegistryDeadline(Number.POSITIVE_INFINITY)
   vi.clearAllMocks()
   vi.mocked(resolvePaneEngineProcess).mockResolvedValue(newProcess)
   paneState.mockResolvedValue({ dead: false, engineExit: null })

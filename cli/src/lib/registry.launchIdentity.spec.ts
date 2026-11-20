@@ -1,15 +1,20 @@
-import { afterEach, expect, it } from 'vitest'
+import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { registry, matchesLaunchReceipt } from './registry.js'
 import { removeRegistryAgent } from '../testing/registryFixtures.js'
 
+vi.mock('node:perf_hooks', async original => ({ ...await original<object>(), performance: { now: () => 0 } }))
+const deadline = await vi.hoisted(() => import('../testing/registryDeadline.js'))
+vi.mock('node:fs/promises', original => deadline.slowSyncFsPromises(original))
+
 const runtime = { backend: 'tmux' as const, paneId: '%70' }
 const first = { pid: 7001, startMarker: 'one', executable: '/fixture/codex' }
 const second = { pid: 7002, startMarker: 'two', executable: '/fixture/codex' }
 const id = '33333333-3333-4333-8333-333333333333'
 let directory = ''
+beforeEach(() => { deadline.holdRegistryDeadline(Number.POSITIVE_INFINITY) })
 afterEach(async () => {
   for (const entry of registry.list()) await removeRegistryAgent(registry, entry.agentId)
   await registry.flush()

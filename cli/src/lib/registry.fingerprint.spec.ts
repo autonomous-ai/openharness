@@ -10,6 +10,9 @@ vi.mock('fs', async (importOriginal) => {
   const fs = await importOriginal<typeof import('fs')>()
   return { ...fs, fsyncSync: vi.fn(fs.fsyncSync), renameSync: vi.fn(fs.renameSync), mkdirSync: vi.fn(fs.mkdirSync) }
 })
+vi.mock('node:perf_hooks', async original => ({ ...await original<object>(), performance: { now: () => 0 } }))
+const deadline = await vi.hoisted(() => import('../testing/registryDeadline.js'))
+vi.mock('node:fs/promises', original => deadline.slowSyncFsPromises(original))
 
 type Row = Record<string, unknown>
 let directory: string
@@ -54,6 +57,7 @@ async function freshRegistry(): Promise<typeof Registry> {
 }
 
 beforeEach(async () => {
+  deadline.holdRegistryDeadline(Number.POSITIVE_INFINITY)
   vi.resetModules()
   loaded.length = 0
   // Only row timestamps are fixed; real lock retries and write deadlines must still advance.
