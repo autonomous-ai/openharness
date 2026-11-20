@@ -13,11 +13,8 @@ import { mkdirSync, symlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { randomBytes } from 'node:crypto'
 import { setUpTestNode } from '../src/testing/testNode.js'
-// e2e/harness/artifacts.ts reads vitest's worker state on every daemon log line; outside vitest there
-// is none, so give it an empty one (no test path: artifacts stay off).
-;(globalThis as any).__vitest_worker__ = { filepath: undefined, current: undefined, config: {}, ctx: {} }
-const { account, signIn, startRealBackend } = await import('../e2e/harness/realBackend.js')
-const { until, CLI_ROOT } = await import('../e2e/harness/daemon.js')
+import { account, signIn, startRealBackend } from '../e2e/harness/realBackend.js'
+import { until, CLI_ROOT } from '../e2e/harness/daemon.js'
 
 const out = process.env.SPIKE_OUT
 if (!out) throw new Error('Set SPIKE_OUT')

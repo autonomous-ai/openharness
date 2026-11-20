@@ -14,7 +14,7 @@ import { defineConfig } from 'vitest/config'
  * less CPU per start, the code frozen as the run began, and the build that ships under test.
  *
  * `E2E_ARTIFACTS_DIR=<folder>` keeps the whole log of every daemon a failing test ran there, as files
- * (e2e/harness/artifacts.ts); CI uploads them.
+ * (e2e/harness/artifacts.ts, kept by the setup file artifactsSetup.ts); CI uploads them.
  *
  * A TMPDIR too long for a daemon's Unix socket stops the run before any test, and before the bundle is built
  * (e2e/harness/socketRoom.ts): run with a shorter one, for example `TMPDIR=/tmp`.
@@ -31,7 +31,7 @@ const workers = Math.max(1, Number(process.env.E2E_WORKERS ?? 1) || 1)
 export default defineConfig({
   test: {
     environment: 'node',
-    setupFiles: ['./vitest.setup.ts', './e2e/harness/artifacts.ts'],
+    setupFiles: ['./vitest.setup.ts', './e2e/harness/artifactsSetup.ts'],
     globalSetup: ['./e2e/harness/socketRoom.ts', './e2e/harness/testNode.ts', './e2e/harness/processImages.ts', './e2e/harness/bundle.ts'],
     include: ['e2e/**/*.e2e.ts'],
     testTimeout: 180_000,

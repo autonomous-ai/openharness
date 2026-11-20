@@ -12,7 +12,7 @@ import { defineConfig } from 'vitest/config'
 export default defineConfig({
   test: {
     environment: 'node',
-    setupFiles: ['./vitest.setup.ts', './e2e/harness/artifacts.ts'],
+    setupFiles: ['./vitest.setup.ts', './e2e/harness/artifactsSetup.ts'],
     globalSetup: ['./e2e/harness/bundle.ts'],
     include: ['e2e/dialWindows.e2e.ts', 'e2e/dialWindowsTools.e2e.ts'],
     testTimeout: 180_000,
