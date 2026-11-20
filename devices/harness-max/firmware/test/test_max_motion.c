@@ -486,6 +486,41 @@ static void test_layer_filter(void)
     }
 }
 
+// A settled sliver's kept layer to the pixel as V4 made it before the blur's shortcuts (what a column four px on came
+// out as in the row, kept): its hash at each height, FNV-1a over its RGB565. Painted from the marks and bars two px
+// wide repeating every four px (columns four apart the same, their neighbours not), three px wide every six (four
+// apart, now the same and now not) and rows one px high every three: the filter's every case of a window, flat and not.
+static void bars(ht_scene_t *s, int x, const void *arg)
+{
+    const int w = *(const int *)arg;
+    marks(s, x, arg);
+    for (int i = 0; i < 12; i++) ht_pro_rect(s, x + 20 + 2 * i, DY(240), 2, 60, 0, C(i & 1 ? 0xD9774B : 0x3A5F8C));
+    for (int i = 0; i < 12; i++) ht_pro_rect(s, x + 70 + 3 * i, DY(260), 3, 50, 0, C(i & 1 ? 0xEAEAF0 : 0x2A3D2A));
+    for (int j = 0; j < 9; j++) ht_pro_rect(s, x, DY(330) + j, w, 1, 0, C(j % 3 ? 0x101014 : 0xE6E62E));
+}
+static uint32_t kept_hash(max_paint_t paint)
+{
+    static const int SLIVER = SLIVER_W;
+    static uint16_t px[SLIVER_W * HT_HEIGHT];
+    const int x = ROW_X + 300;
+    max_layer_forget();
+    ht_scene_clear(&S, 0);
+    max_layer_frame();
+    max_layer_kept(&S, x, x, x + SLIVER_W, paint, &SLIVER);
+    CHECK(S.count == 1 && S.runs[0].pro_kind == 3);   // the layer, an image: kept, not drawn on the glass
+    ht_raster(&S, (ht_rect_t){(int16_t)x, 0, SLIVER_W, HT_HEIGHT}, px);
+    uint32_t h = 2166136261u;
+    for (size_t i = 0; i < sizeof px / sizeof px[0]; i++) h = (h ^ (px[i] & 0xFF)) * 16777619u, h = (h ^ px[i] >> 8) * 16777619u;
+    return h;
+}
+static void test_layer_pixels(void)
+{
+    const uint32_t m = kept_hash(marks), b = kept_hash(bars);
+    if (getenv("MAX_KEPT_REPORT")) fprintf(stderr, "  kept layer hashes at %d: marks 0x%08X, bars 0x%08X\n", HT_HEIGHT, m, b);
+    CHECK(m == (HT_HEIGHT == 480 ? 0x20BFD55Du : 0xDF9DA7A1u));
+    CHECK(b == (HT_HEIGHT == 480 ? 0x66A2E3BBu : 0x06BD02B8u));
+}
+
 int main(void)
 {
     test_curves();
@@ -500,6 +535,7 @@ int main(void)
     test_pets_kept();
     test_cross_fade();
     test_layer_filter();
+    test_layer_pixels();
     printf("test_max_motion: %d checks passed\n", checks);
     return 0;
 }

@@ -123,7 +123,8 @@ static uint16_t soften_mix(uint16_t c, unsigned k, uint16_t dest)
 static uint16_t soften(uint16_t c, uint16_t dest) { return soften_mix(c, soften_k(c), dest); }
 
 static uint16_t mix565(uint16_t fg, uint16_t bg, unsigned a, unsigned levels);
-static void cell_raster_core(const ht_run_t *r, ht_rect_t clip, uint16_t *out)
+// The Max's: `ground`, when every pixel under the frame is that colour (a bake, out filled with it first), or NULL.
+static void cell_raster_core(const ht_run_t *r, ht_rect_t clip, uint16_t *out, const uint16_t *ground)
 {
     const ht_cell_frame_t *f = r->bitmap.asset;
     int left = imax(clip.x, r->x), right = imin(clip.x + clip.w, r->x + r->w);
@@ -236,12 +237,51 @@ static void cell_raster_core(const ht_run_t *r, ht_rect_t clip, uint16_t *out)
         const uint8_t *R[7];
         int nr = sy1 - sy0 + 1; if (nr > 5) nr = 5;
         for (int k = -1; k <= nr; k++) { int sy = sy0 + k; R[k + 1] = (sy < 0 || sy >= sh) ? none : cache_row(f, &rc, sy); }
+        uint16_t *dst = out + (y - clip.y) * clip.w + left - clip.x;
+        if (ground) {   // the Max's: a frame pixel's colour is the same under every glass pixel it overlaps, so each of
+                        // the frame's columns is weighed down first (its edge pixels found as it is), then the glass's
+                        // pixels across them: each sum the same
+            static EXT_RAM_BSS_ATTR uint32_t col[HT_CELL_COLS_MAX][4];   // red, green, blue, cover
+            const int s0 = (left - r->x) * G / z, s1 = imin(sw, ((right - r->x) * G + z - 1) / z);
+            unsigned wy[5];
+            bool er[5];
+            for (int k = 0; k < nr; k++) {
+                const int sy = sy0 + k;
+                wy[k] = (unsigned)(imin(v1, (sy + 1) * z) - imax(v0, sy * z)), er[k] = sy == 0 || sy + 1 >= sh;
+            }
+            for (int sx = s0; sx < s1; sx++) {
+                const bool es = sx == 0 || sx + 1 >= sw;
+                unsigned cr = 0, cg = 0, cb = 0, cc = 0;
+                for (int k = 0; k < nr; k++) {
+                    const uint8_t *cu = R[k + 1];
+                    const unsigned i = cu[sx];
+                    if (!i) continue;
+                    uint16_t c = swapped(f->palette[i]);
+                    if (er[k] || es || !cu[sx - 1] || !cu[sx + 1] || !R[k][sx] || !R[k + 2][sx]) c = soften(c, *ground);
+                    cr += (unsigned)(c >> 11) * wy[k], cg += (unsigned)((c >> 5) & 63) * wy[k];
+                    cb += (unsigned)(c & 31) * wy[k], cc += wy[k];
+                }
+                col[sx][0] = cr, col[sx][1] = cg, col[sx][2] = cb, col[sx][3] = cc;
+            }
+            for (int x = left; x < right; x++, dst++) {
+                const int u0 = (x - r->x) * G, u1 = u0 + G;
+                unsigned rr = 0, gg = 0, bb = 0, cover = 0;
+                for (int sx = u0 / z; sx * z < u1 && sx < sw; sx++) {
+                    const unsigned wx = (unsigned)(imin(u1, (sx + 1) * z) - imax(u0, sx * z));
+                    rr += col[sx][0] * wx, gg += col[sx][1] * wx, bb += col[sx][2] * wx, cover += col[sx][3] * wx;
+                }
+                if (!cover) continue;
+                unsigned rest = (unsigned)GG - cover, d = *dst;
+                rr += (d >> 11) * rest; gg += ((d >> 5) & 63) * rest; bb += (d & 31) * rest;
+                *dst = (uint16_t)(((rr + GG / 2) / GG) << 11 | ((gg + GG / 2) / GG) << 5 | ((bb + GG / 2) / GG));
+            }
+            continue;
+        }
         for (int k = 0; k < nr; k++) {   /* resolve after all fetched (8 slots hold 7 rows) */
             int sy = sy0 + k; const uint8_t *up = R[k], *cu = R[k + 1], *dn = R[k + 2];
             bool er = sy == 0 || sy + 1 >= sh;
             for (int sx = 0; sx < sw; sx++) E[k][sx] = cu[sx] && (er || sx == 0 || sx + 1 >= sw || !cu[sx-1] || !cu[sx+1] || !up[sx] || !dn[sx]);
         }
-        uint16_t *dst = out + (y - clip.y) * clip.w + left - clip.x;
         for (int x = left; x < right; x++, dst++) {
             int u0 = (x - r->x) * G, u1 = u0 + G;
             unsigned rr = 0, gg = 0, bb = 0, cover = 0;
@@ -363,7 +403,7 @@ static void bake_rows(bake_t *b, const ht_run_t *r, int y1)
     plain.x = 0; plain.y = 0; plain.text[0] = 0;
     uint16_t *dst = s_arena + b->off + (size_t)b->done * b->w;
     for (size_t i = 0; i < (size_t)(y1 - b->done) * b->w; i++) dst[i] = r->fg;
-    cell_raster_core(&plain, (ht_rect_t){0, (int16_t)b->done, r->w, (int16_t)(y1 - b->done)}, dst);
+    cell_raster_core(&plain, (ht_rect_t){0, (int16_t)b->done, r->w, (int16_t)(y1 - b->done)}, dst, &r->fg);
     b->done = (uint16_t)y1;
 }
 
@@ -396,7 +436,7 @@ int pod_cell_bake_some(const ht_run_t *r, int px)
 static void cell_raster(const ht_run_t *r, ht_rect_t clip, uint16_t *out)
 {
     const bake_t *b = r->text[0] == 1 ? bake_of(r) : NULL;
-    if (!b) { cell_raster_core(r, clip, out); return; }
+    if (!b) { cell_raster_core(r, clip, out, NULL); return; }
     int left = imax(clip.x, r->x), right = imin(clip.x + clip.w, r->x + r->w);
     int top = imax(clip.y, r->y), bottom = imin(clip.y + clip.h, r->y + r->pro_height);
     // Only the frame's own pixels: what the resampler left as the ground is skipped, so a frame baked over one colour also sits on a ground that

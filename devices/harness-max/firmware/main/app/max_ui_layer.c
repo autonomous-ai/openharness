@@ -115,7 +115,6 @@ static EXT_RAM_BSS_ATTR ht_run_t s_cut[HT_RUNS];
 static EXT_RAM_BSS_ATTR uint16_t s_ring[BLUR_R][LAYER_W];   // the rows above the one the vertical pass writes
 static EXT_RAM_BSS_ATTR uint16_t s_line[LINE_W + 2 * BLUR_R];
 static EXT_RAM_BSS_ATTR uint32_t s_rb[LINE_W + 2 * BLUR_R], s_g[LINE_W + 2 * BLUR_R];
-static EXT_RAM_BSS_ATTR uint32_t s_ar[LINE_W], s_ag[LINE_W];   // a row's sums so far
 static int s_patch_used, s_edges_used;   // px of s_patch and s_edges this frame took
 static int s_pool_next;    // where the pool's next image goes
 static uint32_t s_frame = 1, s_painted, s_revision;
@@ -322,10 +321,13 @@ static int spans_of(const uint32_t *m, int w, span_t *out)
 
 // Rows [y0, y1) of the w-wide layer blurred down where bz is busy (rows past the glass are transparent), in place:
 // before a row is written, what the rows below it read of it is kept in the ring. Rows above y0 done before, with the
-// same ring.
+// same ring. A pixel's taps summed at once, out to the line, then the row.
 static void down(uint16_t *px, int w, const uint16_t *k, const busy_t *bz, uint16_t (*ring)[LAYER_W], int y0, int y1)
 {
+    static const uint16_t clear[LAYER_W];   // a row past the glass
     span_t sp[SPANS], keep[SPANS];
+    int taps = 1;
+    while (taps <= BLUR_R && k[taps]) taps++;
     for (int y = y0; y < y1; y++) {
         uint32_t read[WORDS] = {0};
         for (int t = 1; t <= BLUR_R && y + t < HT_HEIGHT; t++)
@@ -333,32 +335,33 @@ static void down(uint16_t *px, int w, const uint16_t *k, const busy_t *bz, uint1
         const int n = spans_of(bz->down[y], w, sp), kn = spans_of(read, w, keep);
         if (!n && !kn) continue;
         uint16_t *row = px + (size_t)y * w;
-        for (int i = 0; i < n; i++) {
-            memset(&s_rb[sp[i].x0], 0, (size_t)(sp[i].x1 - sp[i].x0) * sizeof s_rb[0]);
-            memset(&s_g[sp[i].x0], 0, (size_t)(sp[i].x1 - sp[i].x0) * sizeof s_g[0]);
+        const uint16_t *up[BLUR_R + 1], *dn[BLUR_R + 1];
+        for (int t = 1; t < taps; t++) {
+            up[t] = y - t < 0 ? clear : ring[(y - t) % BLUR_R];
+            dn[t] = y + t >= HT_HEIGHT ? clear : px + (size_t)(y + t) * w;
         }
-        for (int t = -BLUR_R; t <= BLUR_R && n; t++) {
-            const uint32_t wt = k[t < 0 ? -t : t];
-            const int yy = y + t;
-            if (!wt || yy < 0 || yy >= HT_HEIGHT) continue;
-            const uint16_t *src = yy < y ? ring[yy % BLUR_R] : px + (size_t)yy * w;
-            for (int i = 0; i < n; i++)
-                for (int x = sp[i].x0; x < sp[i].x1; x++) {
-                    s_rb[x] += wt * rb_of(src[x]);
-                    s_g[x] += wt * g_of(src[x]);
+        for (int i = 0; i < n; i++)
+            for (int x = sp[i].x0; x < sp[i].x1; x++) {
+                uint32_t rb = k[0] * rb_of(row[x]), g = k[0] * g_of(row[x]);
+                for (int t = 1; t < taps; t++) {
+                    const uint16_t u = up[t][x], v = dn[t][x];
+                    rb += k[t] * (rb_of(u) + rb_of(v)), g += k[t] * (g_of(u) + g_of(v));
                 }
-        }
+                s_line[x] = pack(rb, g);
+            }
         for (int i = 0; i < kn; i++) {
             const int x0 = keep[i].x0;
             memcpy(&ring[y % BLUR_R][x0], &row[x0], (size_t)(keep[i].x1 - x0) * sizeof row[0]);
         }
         for (int i = 0; i < n; i++)
-            for (int x = sp[i].x0; x < sp[i].x1; x++) row[x] = pack(s_rb[x], s_g[x]);
+            memcpy(&row[sp[i].x0], &s_line[sp[i].x0], (size_t)(sp[i].x1 - sp[i].x0) * sizeof row[0]);
     }
 }
 
 // Rows [y0, y1) of a w-wide layer blurred across where bz is busy (taps past its sides are transparent) and dimmed.
-// Rows from `bottom` on are only their busy columns.
+// Rows from `bottom` on are only their busy columns. A pixel comes out of its colour (or its sums) and its column of
+// the dither's four: so each of the four keeps what it came out as last in the row, taken again for the same colour
+// (sums) four, eight... px on, as a flat ground's and a dithered glow's are.
 static void across(uint16_t *px, int w, int bottom, const uint16_t *k, const max_dim_t *d, const busy_t *bz, int y0,
                    int y1)
 {
@@ -372,10 +375,17 @@ static void across(uint16_t *px, int w, int bottom, const uint16_t *k, const max
         memset(s_line, 0, BLUR_R * sizeof s_line[0]);
         memcpy(s_line + BLUR_R, row, (size_t)w * sizeof row[0]);
         memset(s_line + BLUR_R + w, 0, BLUR_R * sizeof s_line[0]);
+        uint16_t was[4] = {0}, came[4] = {0};   // black comes out black
         for (int i = 0, x = 0; i <= n && y < bottom; i++) {   // between the spans the blur keeps it: dimmed alone
-            for (const int x1 = i < n ? sp[i].x0 : w; x < x1; x++) row[x] = dim_px(d, s_line[BLUR_R + x], x, y);
+            for (const int x1 = i < n ? sp[i].x0 : w; x < x1; x++) {
+                const uint16_t c = s_line[BLUR_R + x];
+                if (c != was[x & 3]) was[x & 3] = c, came[x & 3] = dim_px(d, c, x, y);
+                row[x] = came[x & 3];
+            }
             if (i < n) x = sp[i].x1;
         }
+        uint32_t sr[4] = {0}, sg[4] = {0};   // no sums come out black
+        memset(came, 0, sizeof came);
         for (int i = 0; i < n; i++) {
             const int x0 = sp[i].x0, x1 = sp[i].x1;
             for (int x = x0 - BLUR_R; x < x1 + BLUR_R; x++) {   // the line's own sums, from -BLUR_R
@@ -383,16 +393,13 @@ static void across(uint16_t *px, int w, int bottom, const uint16_t *k, const max
                 s_g[x + BLUR_R] = g_of(s_line[BLUR_R + x]);
             }
             for (int x = x0; x < x1; x++) {
-                s_ar[x] = k[0] * s_rb[x + BLUR_R];
-                s_ag[x] = k[0] * s_g[x + BLUR_R];
+                const uint32_t *rb = &s_rb[x + BLUR_R], *g = &s_g[x + BLUR_R];
+                uint32_t ar = k[0] * rb[0], ag = k[0] * g[0];
+                for (int t = 1; t < taps; t++) ar += k[t] * (rb[-t] + rb[t]), ag += k[t] * (g[-t] + g[t]);
+                if (ar != sr[x & 3] || ag != sg[x & 3])
+                    sr[x & 3] = ar, sg[x & 3] = ag, came[x & 3] = ar || ag ? dither(dimmed(d, ar, ag), x, y) : 0;
+                row[x] = came[x & 3];
             }
-            for (int t = 1; t < taps; t++)
-                for (int x = x0; x < x1; x++) {
-                    s_ar[x] += k[t] * (s_rb[x + BLUR_R - t] + s_rb[x + BLUR_R + t]);
-                    s_ag[x] += k[t] * (s_g[x + BLUR_R - t] + s_g[x + BLUR_R + t]);
-                }
-            for (int x = x0; x < x1; x++)
-                row[x] = s_ar[x] || s_ag[x] ? dither(dimmed(d, s_ar[x], s_ag[x]), x, y) : 0;
         }
     }
 }
