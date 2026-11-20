@@ -49,6 +49,12 @@ describe('whether OpenClaw\'s store holds a user row for a key', () => {
     expect(await openclawUserRowSince('agent:main:plain', pane(), userRowAt)).toBe(false)
   })
 
+  it('holds it up to a time at or after it was written, and none up to a time before', async () => {
+    plainStore()
+    expect(await openclawUserRowSince('agent:main:plain', pane(), 0, undefined, userRowAt)).toBe(true)
+    expect(await openclawUserRowSince('agent:main:plain', pane(), 0, undefined, userRowAt - 1)).toBe(false)
+  })
+
   it('holds none for another key', async () => {
     plainStore()
     expect(await openclawUserRowSince('agent:main:other', pane(), 0)).toBe(false)

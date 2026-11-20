@@ -2766,15 +2766,20 @@ describe('binding an OpenClaw pane, read from its screen', () => {
     let row: RegisteredSession
     /** What OpenClaw's store holds for the key: no user row, one written at that time, or a read that cannot say. */
     let userRow: number | null | undefined
+    /** A second user row, written at that time. */
+    let laterRow: number | undefined
     /** The agents whose first task the controller awaits. */
     let awaited: Set<string>
     beforeEach(() => {
       vi.useFakeTimers({ toFake: ['Date'] })
       userRow = undefined
+      laterRow = undefined
       awaited = new Set()
+      const within = (at: number | null | undefined, since: number, until = Infinity) => at != null && at > since && at <= until
       run = setup({
         openclawPaneRead: vi.fn(() => true),
-        openclawUserRowSince: vi.fn(async (_key: string, _pane: unknown, since: number) => userRow === null ? null : userRow !== undefined && userRow > since),
+        openclawUserRowSince: vi.fn(async (_key: string, _pane: unknown, since: number, _openFiles?: unknown, until?: number) =>
+          userRow === null ? null : within(userRow, since, until) || within(laterRow, since, until)),
       })
       row = pane({ sessionId: 'agent:main:plain', registeredAt: LAUNCHED, openclawStateDir: '/h/.openclaw', firstTaskTyped: { text: TASK, at: START - 5_000 } })
       run.byAgent.set('a1', row)
@@ -2840,6 +2845,18 @@ describe('binding an OpenClaw pane, read from its screen', () => {
       // Asked since it was typed, and since its adoption once a row was there. Settled: a later pass asks nothing.
       await pass(10, ready)
       expect(vi.mocked(run.deps.openclawUserRowSince).mock.calls.map(([, , since]) => since)).toEqual([START - 5_000, START - 5_000, START])
+    })
+
+    // Found in the fix review: asked whether a row came after its adoption too, a task OpenClaw took before it, and the
+    // person's message after, was never confirmed, and its bound failed the launch of an agent that had taken it.
+    it('a user row written before its adoption, and another after it: off the row, the controller\'s wait ended', async () => {
+      userRow = null
+      await pass(0, running)
+      userRow = START - 1_000
+      laterRow = START + 2_000
+      await pass(5, running)
+      await vi.waitFor(() => expect(run.deps.input.firstTaskConfirmed).toHaveBeenCalledWith('a1'))
+      expect(row).not.toHaveProperty('firstTaskTyped')
     })
 
     // The turn the live reader opens for it confirms it there (core/turns/funnel.ts), as one typed here.
