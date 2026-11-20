@@ -1,5 +1,6 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { once, type EventEmitter } from 'node:events'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import type { FSWatcher } from 'chokidar'
+import { once } from 'node:events'
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -10,8 +11,8 @@ import { DshVerdictWatcher, parseVerdict, type DshVerdict } from './verdict.js'
  * a file and announces the write itself: macOS hands a watch its events in batches, on a loaded Mac many seconds after the
  * write (12 s seen at load 20), so a wait for chokidar's own event has no bound.
  */
-const innerWatcher = (w: DshVerdictWatcher, agentId: string): EventEmitter & { closed: boolean } =>
-  (w as unknown as { watched: Map<string, { watcher: EventEmitter & { closed: boolean } }> }).watched.get(agentId)!.watcher
+const innerWatcher = (w: DshVerdictWatcher, agentId: string): FSWatcher =>
+  (w as unknown as { watched: Map<string, { watcher: FSWatcher }> }).watched.get(agentId)!.watcher
 
 /** The debounce held: a publish waits until the test runs it. */
 function heldDebounce() {
@@ -185,6 +186,8 @@ describe('DshVerdictWatcher, event by event', () => {
     watcher.watch('a', file)
     const inner = innerWatcher(watcher, 'a')
     await once(inner, 'ready')
+    // the events below are announced by hand: chokidar itself watches the verdict's folder
+    expect(Object.keys(inner.getWatched())).toContain(join(workspace, '.harness'))
     expect(seen).toEqual([])
     expect(watcher.current('a')).toBeNull()
 
@@ -206,7 +209,7 @@ describe('DshVerdictWatcher, event by event', () => {
 
     // a neighbour in .harness/ added, changed and removed schedules nothing, and the same bytes again publish nothing
     const neighbour = join(workspace, '.harness', 'other.json')
-    for (const event of ['add', 'change', 'unlink']) inner.emit(event, neighbour)
+    for (const event of ['add', 'change', 'unlink'] as const) inner.emit(event, neighbour)
     expect(clock.pending).toBe(0)
     writeFileSync(file, verdict('second'))
     inner.emit('change', file)
@@ -299,20 +302,19 @@ describe('DshVerdictWatcher, event by event', () => {
     expect(seen).toEqual([])
   })
 
-  it('an old watch cannot publish into the same agent after it is watched again', async () => {
+  it('an old watch cannot publish into the same agent after it is watched again', () => {
     const seen: string[] = []
     const first = join(workspace, 'first', 'verdict.json'), next = join(workspace, 'next', 'verdict.json')
-    watcher = new DshVerdictWatcher({ onChange: (_id, value) => seen.push(value?.summary ?? '') })
+    const clock = heldDebounce()
+    watcher = new DshVerdictWatcher({ onChange: (_id, value) => seen.push(value?.summary ?? ''), debounce: clock.debounce })
     watcher.watch('a', first)
     const oldChange = innerWatcher(watcher, 'a').listeners('change')[0] as (path: string) => void
     watcher.unwatch('a')
     watcher.watch('a', next)
-    vi.useFakeTimers()
-    try {
-      writeFileSync(first, verdict('old run'))
-      oldChange(first)
-      await vi.advanceTimersByTimeAsync(200)
-      expect(seen).toEqual([])
-    } finally { vi.useRealTimers() }
+    writeFileSync(first, verdict('old run'))
+    oldChange(first)
+    expect(clock.pending).toBe(1)
+    clock.run()
+    expect(seen).toEqual([])
   })
 })
