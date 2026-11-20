@@ -20,10 +20,11 @@
  */
 import { execFile, spawn, type ChildProcess } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { closeSync, fstatSync, mkdirSync, mkdtempSync, openSync, readSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:net'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { StringDecoder } from 'node:string_decoder'
 import { pathToFileURL } from 'node:url'
 import { promisify } from 'node:util'
 import { daemonEnvironment } from '../../src/testing/daemonEnvironment.js'
@@ -51,7 +52,7 @@ export interface WindowsDaemonOptions {
   own?: string
   /** What the stand-in dial's greeting names (`appFilter: 'v1'`, …), as a firmware that speaks them does. */
   capabilities?: Record<string, string>
-  /** Each piece of what the daemon prints, as it comes. */
+  /** Each piece of what the daemon prints, as it comes: its output, then its log (`log`). */
   onOutput?: (text: string) => void
   /** Run once Harness's folders are made, before the daemon starts: a sign-in or a pets folder put in place. What it
    *  throws is thrown back, and nothing is started. */
@@ -76,7 +77,8 @@ export interface WindowsDaemon<Dial extends FakeDial | null = FakeDial> {
   dial: Dial
   /** `harness <args>` from the run's bundle, as a shell of this daemon's runs it. */
   harness(args: string[]): Promise<{ code: number | null; stdout: string }>
-  /** Everything the daemon has printed so far. */
+  /** Everything the daemon has printed so far: its output, and what this start wrote to its data folder's harness.log,
+   *  where a Windows master not run in a terminal sends its lines and its children's (masterProcess.ts `windowsMaster`). */
   log(): string
   close(): Promise<void>
 }
@@ -112,6 +114,7 @@ export async function startWindowsDaemon(options: WindowsDaemonOptions | RealDia
   const dirs = {
     data: join(harnessDir, 'data'), runtime: join(harnessDir, 'runtime'), auth: join(harnessDir, 'auth'),
     dsh: join(harnessDir, 'dsh'), routes: join(harnessDir, 'hook-routes'), devices: join(harnessDir, 'devices'), work: join(root, 'work'),
+    pty: join(harnessDir, 'pty'),
   }
   for (const dir of [...Object.values(dirs), ...(own ? [] : Object.values(sealed))]) mkdirSync(dir, { recursive: true })
   const endpoint = `\\\\.\\pipe\\harness-e2e-${randomBytes(8).toString('hex')}`
@@ -166,6 +169,9 @@ export async function startWindowsDaemon(options: WindowsDaemonOptions | RealDia
     DSH_DIR: dirs.dsh,
     HARNESS_HOOK_ROUTES_DIR: dirs.routes,
     HARNESS_PTY_BIN: ptyHost,
+    // Named, not left to the profile: with `own` the profile is the account's, whose pty home the real Harness's host
+    // serves, and `close` ends this home's host.
+    HARNESS_PTY_DIR: dirs.pty,
     // Signed out, and alone: nothing reaches beyond the machine.
     BACKEND_WS_URL: 'ws://127.0.0.1:9',
     WEB_URL: 'http://127.0.0.1:9',
@@ -189,18 +195,40 @@ export async function startWindowsDaemon(options: WindowsDaemonOptions | RealDia
   const dial = real ? null : await FakeDial.listen(endpoint, { settings: SETTINGS, capabilities: 'capabilities' in options ? options.capabilities : undefined })
   let output = ''
   const logName = `daemon-${port}.log`
+  const logFile = join(dirs.data, 'harness.log')
+  // From where the log ends now: an `own` folder's log holds earlier runs, whose ready lines are not this start's.
+  let logAt = (() => { try { return statSync(logFile).size } catch { return 0 } })()
   // On Windows a start keeps the whole environment it is given (lib/startEnvironment.ts): no env file is needed.
   const child: ChildProcess = spawn(process.execPath, [bundle, 'start', '-f'], {
     cwd: dirs.work, env, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true,
   })
-  const take = (chunk: Buffer): void => {
-    const text = chunk.toString('utf8')
+  const take = (text: string): void => {
     output += text
     artifactLog(logName, text)
     options.onOutput?.(text)
   }
-  child.stdout!.on('data', take)
-  child.stderr!.on('data', take)
+  child.stdout!.on('data', (chunk: Buffer) => take(chunk.toString('utf8')))
+  child.stderr!.on('data', (chunk: Buffer) => take(chunk.toString('utf8')))
+  // The master's output is not a terminal here, so on Windows it says only its first line there and writes the rest,
+  // its children's lines among them, to harness.log (masterProcess.ts `windowsMaster`): the log is followed. A decoder,
+  // since a read can end inside a character of the profile's name.
+  const decoder = new StringDecoder('utf8')
+  const follow = (): void => {
+    let fd: number
+    try { fd = openSync(logFile, 'r') } catch { return } // not written yet
+    try {
+      // Trimmed by the master (master.ts `trimLogEvery`): followed from its new end.
+      logAt = Math.min(logAt, fstatSync(fd).size)
+      const chunk = Buffer.alloc(64 * 1024)
+      for (let read; (read = readSync(fd, chunk, 0, chunk.length, logAt)) > 0; logAt += read) {
+        const text = decoder.write(chunk.subarray(0, read))
+        if (text) take(text)
+      }
+    } finally {
+      closeSync(fd)
+    }
+  }
+  const following = setInterval(follow, 100)
   const exited = new Promise<void>((done) => child.once('exit', () => done()))
 
   const harness = (args: string[]): Promise<{ code: number | null; stdout: string }> => new Promise((resolve, reject) => {
@@ -221,11 +249,23 @@ export async function startWindowsDaemon(options: WindowsDaemonOptions | RealDia
       if (!stopped) await exec('taskkill', ['/pid', String(child.pid), '/t', '/f'], { windowsHide: true }).catch(() => null)
       await exited
     }
+    clearInterval(following)
+    follow()
+    // The terminal host outlives the daemon by design, as tmux does (ptyHost/launch.ts), and holds its lock in the pty
+    // home, so the root cannot be removed while it runs. It is ended as `harness uninstall` ends it: its panes, then a
+    // shutdown, and only a process proven to serve this home is ended by its pid. Loaded here, as daemon.ts loads
+    // what reads config/env.ts.
+    const { endPtyHosts, ptyHostsDeps } = await import('../../src/lib/uninstall/ptyHosts.js')
+    const left = (await endPtyHosts(ptyHostsDeps(dirs.pty))).filter((host) => host.how === 'left')
     await dial?.close()
+    if (left.length) throw new Error(`the terminal host of ${dirs.pty} was left running: ${left.map((host) => `pid ${host.pid}, ${host.detail}`).join('; ')}`)
     discard()
   }
 
-  const died = exited.then((): never => { throw new Error(`the daemon exited while starting:\n${output.slice(-4000)}`) })
+  const died = exited.then((): never => {
+    follow()
+    throw new Error(`the daemon exited while starting:\n${output.slice(-4000)}`)
+  })
   died.catch(() => {}) // observed below while starting; afterwards an exit is the test's business
   try {
     await Promise.race([
@@ -241,7 +281,9 @@ export async function startWindowsDaemon(options: WindowsDaemonOptions | RealDia
       })(),
     ])
   } catch (error) {
-    await close()
+    // Both, when closing fails too: what it left (a folder held open) must not hide why the start failed.
+    const closing = await close().then(() => null, (failure: unknown) => failure)
+    if (closing) throw new AggregateError([error, closing], `${String(error)}\nand closing failed: ${String(closing)}`)
     throw error
   }
   return { dataDir: dirs.data, root, port, env, dial, harness, log: () => output, close }
