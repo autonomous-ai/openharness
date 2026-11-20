@@ -6,7 +6,7 @@ import { dirname, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { fakeHerdr, RECORDED, type FakeHerdr } from '../../testing/fakeHerdr.js'
 import {
-  createHerdrClient, herdrClientDeps, herdrSocketPath, MAX_LINE_BYTES,
+  createHerdrClient, HERDR_PANE, herdrClientDeps, herdrSocketPath, MAX_LINE_BYTES,
   type HerdrClientDeps, type HerdrEntry, type HerdrSubscriber,
 } from './herdrClient.js'
 import { MAX_TEXT } from './orca.js'
@@ -38,6 +38,18 @@ function subscriber() {
   })
   return { calls, to, told }
 }
+
+describe('herdr\'s pane id', () => {
+  it('takes herdr\'s own base-32 digits, 1-9 a side: a workspace\'s tenth pane is pA', () => {
+    for (const id of ['w1:p1', 'w2:pE', 'wA:p10', 'w0:pZ', 'w123456789:pZZZZZZZZZ']) expect(HERDR_PANE.test(id), id).toBe(true)
+  })
+
+  it('refuses letters herdr never writes (I, L, O, U), lower case, an empty side, a tail, and over 9 a side', () => {
+    for (const id of ['w1:pI', 'w1:pL', 'w1:pO', 'w1:pU', 'w1:pe', 'w1:p', 'w:p1', 'w1:p1:x', 'w1234567891:p1', 'w1:p1234567891']) {
+      expect(HERDR_PANE.test(id), id).toBe(false)
+    }
+  })
+})
 
 describe.skipIf(process.platform === 'win32')('the herdr client (docs/specs/2026-11-16-device-herdr.md)', () => {
   let server: FakeHerdr

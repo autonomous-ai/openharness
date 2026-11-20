@@ -20,6 +20,8 @@ import { OUTER_EVERY_MS, PID } from './tmux.js'
 
 /** The herdr processes besides the server a lookup asks of at most: the highest pids, the newest. */
 export const HERDR_CLIENTS_A_LOOKUP = 16
+/** The out-of-form pane ids said skipped, each said once: past this many the oldest goes. */
+export const SKIPPED_IDS_KEPT = 64
 /** The socket herdr's clients connect to; `herdr.sock` is its API's, which a `herdr agent …` command uses. */
 const CLIENT_SOCKET = '/herdr-client.sock'
 /** A unix socket's kernel address, as lsof prints a descriptor's own (`d`) and its peer's (`n->`). */
@@ -99,6 +101,16 @@ export function createHerdrOuter(deps: HerdrOuterDeps): OuterLookup {
   // By pane and caller, as tmux's: a lookup in flight is shared past its 5 s, so an lsof that hangs to its timeout runs
   // no second one.
   const asked = new Map<string, { at: number; answer: Promise<ClientPlace>; settled: boolean }>()
+  const skipped = new Set<string>()
+
+  /** A herdr pane id the lookup cannot take is said, once an id: a lookup that answers nothing otherwise leaves the
+   *  agent off its app's page with no line to say why. The line names no id: it is outside text. */
+  function skip(id: string): void {
+    if (skipped.has(id)) return
+    if (skipped.size === SKIPPED_IDS_KEPT) skipped.delete(skipped.values().next().value!)
+    skipped.add(id)
+    deps.log('[device] herdr client · skipped · pane-id')
+  }
 
   /** Of the candidates (ascending pids), the one whose tty was typed into last: a tty's access time moves when the person
    *  types into it, as `w`'s idle time does (macOS, 2026-11-19). One whose time cannot be read (a tty out of form, a stat
@@ -168,7 +180,12 @@ export function createHerdrOuter(deps: HerdrOuterDeps): OuterLookup {
 
   return (hints, pid) => {
     const id = hints.HERDR_PANE_ID
-    if (deps.platform !== 'darwin' || !id || !HERDR_PANE.test(id) || !PID.test(String(pid))) return undefined
+    if (deps.platform !== 'darwin' || !id) return undefined
+    if (!HERDR_PANE.test(id)) {
+      skip(id)
+      return undefined
+    }
+    if (!PID.test(String(pid))) return undefined
     const now = deps.now()
     // Only panes asked in the last 5 s, or still in flight, are kept.
     for (const [key, ask] of asked) if (ask.settled && now - ask.at >= OUTER_EVERY_MS) asked.delete(key)

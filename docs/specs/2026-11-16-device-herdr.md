@@ -182,7 +182,8 @@ A new `HostSource` with the id `herdr`.
   - No app is brought forward. A listed agent has no hint of the terminal that holds herdr's client.
   - The herdr app (`dev.herdr.app`) is opened only for a hooked agent that says it runs there, as today.
 - **Checked input:** every field from the socket is checked in this file before use:
-  - `pane_id` against `HERDR_PANE` (`w<n>:p<n>`);
+  - `pane_id` against `HERDR_PANE` (`w<n>:p<n>`, each `<n>` in herdr's base 32 over `123456789ABCDEFGHJKMNPQRSTVWXYZ0`,
+    so `w2:pE`: [2026-11-20-dial-herdr-pane-ids-design.md](../plans/2026-11-20-dial-herdr-pane-ids-design.md));
   - the kind against herdr's own name rule, `[a-z][a-z0-9_-]{0,31}`;
   - the status against its enum;
   - names cut to 64 characters, with control characters removed;
@@ -279,6 +280,7 @@ The herdr source joins the registry after observed, behind the same kill switch 
   - `[herdr] closed · <reason code>`
   - `[herdr] retry · <seconds>`
   - `[herdr] over · <n> left out`
+  - `[herdr] skipped · <n> pane-id`, when the number of entries left out for their `pane_id` changes
 - The voice outcomes above, through the existing counter.
 
 ## Platforms

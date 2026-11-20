@@ -16,7 +16,7 @@
  * id and the id with its app share one turn.
  */
 import type { HostAdapter, Pane, Place } from './adapter.js'
-import { HERDR_PANE, herdrPaneKey, type HerdrClient, type HerdrPrompt } from './herdrClient.js'
+import { HERDR_PANE, HERDR_PANE_FORM, herdrPaneKey, type HerdrClient, type HerdrPrompt } from './herdrClient.js'
 import { APP_IDS } from './hostDetect.js'
 import { RUN_TIMEOUT_MS, type OrcaDeps } from './orca.js'
 
@@ -27,7 +27,7 @@ export interface HerdrAdapterDeps extends OrcaDeps {
 }
 
 /** The bare herdr pane id (`HERDR_PANE`), then the app holding its client when the id carries one. */
-const PANE_WITH_APP = /^(w[0-9]{1,9}:p[0-9]{1,9})(?::([a-z-]{1,32}))?$/
+const PANE_WITH_APP = new RegExp(`^(${HERDR_PANE_FORM})(?::([a-z-]{1,32}))?$`)
 
 function paneParts(pane: Pane): { id: string; app?: string } | undefined {
   const match = PANE_WITH_APP.exec(pane.id)
