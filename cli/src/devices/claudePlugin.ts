@@ -16,7 +16,9 @@ import { DIAL_PLUGIN_ID } from './dialSkill.js'
 export const MARKETPLACE = 'openharness'
 export const MIN_CLAUDE = '2.1.287'
 
-export type ClaudeRun = (args: string[], timeoutMs: number) => Promise<{ code: number | null; stdout: string; stderr: string }>
+/** A call's exit code (null: it did not exit, as at a kill) and what it wrote. */
+export interface ClaudeAnswer { code: number | null; stdout: string; stderr: string }
+export type ClaudeRun = (args: string[], timeoutMs: number) => Promise<ClaudeAnswer>
 
 export interface ClaudeDeps {
   run: ClaudeRun | null
@@ -141,13 +143,18 @@ function atLeast(version: string, min: string): boolean {
   return true
 }
 
+const askVersion = (run: ClaudeRun): Promise<ClaudeAnswer> => run(['--version'], LOCAL_MS)
+
 /** On Windows `claude` on PATH can be the Claude desktop app's `Claude.exe`, whose `--version` names no Claude Code and
- *  whose every other call opens its window: there a version counts only beside "Claude Code", and a run without one is
- *  asked nothing more. */
-async function versionOf(run: ClaudeRun, platform: NodeJS.Platform): Promise<string | null> {
-  const { code, stdout } = await run(['--version'], LOCAL_MS)
-  if (code !== 0 || (platform === 'win32' && !stdout.includes('Claude Code'))) return null
-  return VERSION.exec(stdout)?.[0] ?? null
+ *  whose every other call opens its window: an answer there without "Claude Code" is the app's, and it is asked nothing
+ *  more. No answer (a kill, a failed start, an exit not 0) is not the app's: it says nothing of what runs. */
+function desktopApp({ code, stdout }: ClaudeAnswer, platform: NodeJS.Platform): boolean {
+  return platform === 'win32' && code === 0 && !stdout.includes('Claude Code')
+}
+
+/** Claude Code's version in its `--version` [answer]; null for no answer, none in it, or the desktop app's. */
+function versionIn(answer: ClaudeAnswer, platform: NodeJS.Platform): string | null {
+  return answer.code !== 0 || desktopApp(answer, platform) ? null : VERSION.exec(answer.stdout)?.[0] ?? null
 }
 
 function supports(platform: NodeJS.Platform, claudeVersion: string | null): boolean {
@@ -156,13 +163,16 @@ function supports(platform: NodeJS.Platform, claudeVersion: string | null): bool
 
 /** [run] when its Claude Code can take the plugin, asked with one `--version`: an old one is asked nothing more. */
 async function supportedRun({ run, platform }: ClaudeDeps): Promise<ClaudeRun | null> {
-  return run && supports(platform, await versionOf(run, platform)) ? run : null
+  return run && supports(platform, versionIn(await askVersion(run), platform)) ? run : null
 }
 
-/** [run], and on Windows only once its `--version` says it is Claude Code (versionOf): a disable there has nothing of
- *  the desktop app's to take out. */
-async function claudeCodeRun({ run, platform }: ClaudeDeps): Promise<ClaudeRun | null> {
-  return run && (platform !== 'win32' || await versionOf(run, platform)) ? run : null
+/** [run], and on Windows only once its `--version` answered: the desktop app's answer has nothing of Claude Code's to
+ *  take out (null), and no answer is a failure, as a list that cannot be read is, so an undo owed stays owed. */
+async function claudeCodeRun({ run, platform }: ClaudeDeps): Promise<ClaudeRun | ClaudeFailure | null> {
+  if (!run || platform !== 'win32') return run
+  const answer = await askVersion(run)
+  if (answer.code !== 0) return failure(answer.stderr, 'list')
+  return desktopApp(answer, platform) ? null : run
 }
 
 /** A call's failure: the first line Claude Code wrote about it, or [none] when it wrote nothing. */
@@ -193,8 +203,9 @@ async function userEntry(run: ClaudeRun): Promise<{ ok: true; entry?: Record<str
 export async function claudeStatus({ run, platform }: ClaudeDeps): Promise<ClaudeStatus> {
   const none: ClaudeStatus = { supported: false, installed: false, enabled: false, claudeVersion: null }
   if (!run) return none
-  const claudeVersion = await versionOf(run, platform)
-  if (!claudeVersion && platform === 'win32') return none
+  const answer = await askVersion(run)
+  if (desktopApp(answer, platform)) return none
+  const claudeVersion = versionIn(answer, platform)
   const listed = await userEntry(run)
   const entry = listed.ok ? listed.entry : undefined
   return { supported: supports(platform, claudeVersion), installed: !!entry, enabled: entry?.enabled === true, claudeVersion }
@@ -248,6 +259,7 @@ export async function claudeSetUp(deps: ClaudeDeps): Promise<ClaudeSetup> {
 export async function claudeDisable(deps: ClaudeDeps): Promise<ClaudeResult> {
   const run = await claudeCodeRun(deps)
   if (!run) return { ok: true }
+  if (typeof run !== 'function') return run
   const listed = await userEntry(run)
   if (!listed.ok) return listed
   if (!listed.entry) return { ok: true }
@@ -275,6 +287,7 @@ export async function claudeHomeEnable(deps: ClaudeDeps): Promise<ClaudeResult> 
 export async function claudeHomeDisable(deps: ClaudeDeps): Promise<ClaudeResult> {
   const run = await claudeCodeRun(deps)
   if (!run) return { ok: true }
+  if (typeof run !== 'function') return run
   const listed = await userEntry(run)
   if (!listed.ok) return listed
   if (listed.entry?.enabled !== true) return { ok: true }
