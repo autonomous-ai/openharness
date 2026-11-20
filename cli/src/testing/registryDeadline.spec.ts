@@ -66,15 +66,22 @@ it('never runs a cleared held timer', () => {
   const held = deadline.holdRegistryDeadline(DEADLINE_MS, { hold: [2_000] })
   const ran = vi.fn()
   clearTimeout(setTimeout(ran, 2_000))
-  held.fire(2_000)
+  expect(() => held.fire(2_000)).toThrow('no held 2000 ms timer')
   expect(ran).not.toHaveBeenCalled()
+})
+
+// A test that fires a timer before its code has set it fails there, by name, not at its own time limit.
+it('says by name that it holds no timer to fire, nor any deadline to expire', () => {
+  const held = deadline.holdRegistryDeadline(DEADLINE_MS, { hold: [2_000] })
+  expect(() => held.fire(2_000)).toThrow('no held 2000 ms timer')
+  expect(() => held.expire()).toThrow('no held write deadline')
 })
 
 it('runs a held timer of another bound on fire(ms) only', () => {
   const held = deadline.holdRegistryDeadline(DEADLINE_MS, { hold: [2_000] })
   const ran = vi.fn()
   setTimeout(ran, 2_000)
-  held.expire()
+  expect(() => held.expire()).toThrow('no held write deadline')
   expect(ran).not.toHaveBeenCalled()
   expect(host.waits).not.toContain(2_000)
   held.fire(2_000)
