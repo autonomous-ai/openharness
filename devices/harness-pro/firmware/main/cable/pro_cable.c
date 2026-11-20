@@ -386,12 +386,23 @@ static void track_seq(const cJSON *root, bool welcome)
 // holds it in static scratch and hands pro_app the whole roster once, at `agents.end`.
 
 typedef struct {
-    char id[ID_MAX], name[CABLE_NAME_MAX], engine[12], machine_id[ID_MAX], machine[CABLE_NAME_MAX];
+    char id[ID_MAX], name[CABLE_NAME_MAX], engine[12], machine_id[ID_MAX], machine[CABLE_NAME_MAX], host[16];
+    uint8_t caps_off;
 } agent_store_t;
 static EXT_RAM_BSS_ATTR agent_store_t s_agent_store[POD_AGENTS_MAX];
 static pro_agent_row_t s_agent_rows[POD_AGENTS_MAX];
 static int  s_agent_count;
 static bool s_agents_building;
+
+// As the round dial's caps_of: no `caps` grants all four; a string grants exactly its letters (s v f a, others nothing).
+static uint8_t caps_of(const char *letters)
+{
+    if (!letters) return POD_CAPS_ALL;
+    uint8_t caps = 0;
+    for (const char *c = letters; *c; c++)
+        caps |= *c == 's' ? POD_CAP_S : *c == 'v' ? POD_CAP_V : *c == 'f' ? POD_CAP_F : *c == 'a' ? POD_CAP_A : 0;
+    return caps;
+}
 
 static void handle_agent(const cJSON *p)
 {
@@ -411,19 +422,26 @@ static void handle_agent(const cJSON *p)
     if (machine_id && strlen(machine_id) < sizeof a->machine_id) snprintf(a->machine_id, sizeof a->machine_id, "%s", machine_id);
     const char *machine = str_of(p, "machine");
     if (machine) copy_cut(a->machine, sizeof a->machine, machine);
+    // A host names an app to look up, so a cut one would name another: kept only whole.
+    const char *host = str_of(p, "host");
+    if (host && strlen(host) < sizeof a->host) snprintf(a->host, sizeof a->host, "%s", host);
+    a->caps_off = POD_CAPS_ALL & ~caps_of(str_of(p, "caps"));
     s_agent_count++;
 }
 
-static void handle_agents_end(void)
+static void handle_agents_end(const cJSON *p)
 {
     if (!s_agents_building) return;
     s_agents_building = false;
     for (int i = 0; i < s_agent_count; i++) {
         const agent_store_t *a = &s_agent_store[i];
-        s_agent_rows[i] = (pro_agent_row_t){ a->id, a->name, a->engine, a->machine_id, a->machine };
+        s_agent_rows[i] = (pro_agent_row_t){ a->id, a->name, a->engine, a->machine_id, a->machine, a->host, a->caps_off };
     }
-    ESP_LOGI(TAG, "agents: %d", s_agent_count);
-    pro_app_agents(s_agent_rows, s_agent_count);
+    // An older daemon sends neither field: no machine view, no window.
+    const char *view = str_of(p, "view"), *tab = str_of(p, "tab");
+    const bool machine_view = view && !strcmp(view, "machine"), tab_open = tab && tab[0];
+    ESP_LOGI(TAG, "agents: %d%s", s_agent_count, machine_view ? " (machine)" : !tab_open ? " (no window)" : "");
+    pro_app_agents(s_agent_rows, s_agent_count, machine_view, tab_open);
 }
 
 // ── tabs ────────────────────────────────────────────────────────────────────────────────────────────
@@ -873,7 +891,7 @@ static void handle_message(const cJSON *root)
     if (!atomic_load(&s_session)) { s_unknown++; return; }
     if (!strcmp(t, "agents.begin")) { s_agent_count = 0; s_agents_building = true; return; }
     if (!strcmp(t, "agent")) { handle_agent(p); return; }
-    if (!strcmp(t, "agents.end")) { handle_agents_end(); return; }
+    if (!strcmp(t, "agents.end")) { handle_agents_end(p); return; }
     if (!strcmp(t, "agent.updated")) { send_json(msg("agents.list")); return; }   // cheapest correct answer: re-ask
     if (!strcmp(t, "machines.begin")) { cable_machines_begin(&s_machines); return; }
     if (!strcmp(t, "machine")) { stage_machine(p); return; }

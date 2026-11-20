@@ -26,10 +26,14 @@
 void pro_app_link(bool up, const char *machine);
 
 // ---- roster ----
-typedef struct { const char *id, *name, *engine, *machine_id, *machine; } pro_agent_row_t;
+// `host`: the app the agent lives in ("codex", "vscode", ...), NULL or "" when not said, always shorter than 16 B.
+// `caps_off`: the POD_CAP_* bits the daemon withheld, so a zero-filled row allows everything and no caller can block
+// voice by leaving the field out.
+typedef struct { const char *id, *name, *engine, *machine_id, *machine, *host; uint8_t caps_off; } pro_agent_row_t;
 // The complete agent list of the window's tab, once per `agents.end`. Ids are unique and shorter than ID_MAX; at most
 // POD_AGENTS_MAX (32) rows; `name` falls back to the id. A list that ends without a begin is dropped.
-void pro_app_agents(const pro_agent_row_t *rows, int n);
+// `machine_view`: agents.end said view "machine"; `tab_open`: its `tab` was a non-empty string (a Harness window is open).
+void pro_app_agents(const pro_agent_row_t *rows, int n, bool machine_view, bool tab_open);
 
 // The tab list. `members` is NULL when no tab carried `agentIds` (an older daemon); otherwise members->count[i] and
 // ->id[i][k] belong to items[i], and ->meta[i][k].has says whether `members` described that id. At most SWARMS_MAX

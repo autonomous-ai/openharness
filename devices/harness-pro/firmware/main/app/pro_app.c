@@ -320,9 +320,10 @@ void pro_app_link(bool up, const char *machine)
 
 // ---- roster, tabs, library ------------------------------------------------------------------------------
 
-void pro_app_agents(const pro_agent_row_t *rows, int n)
+void pro_app_agents(const pro_agent_row_t *rows, int n, bool machine_view, bool tab_open)
 {
     pro_app_lock();
+    int src[POD_AGENTS_MAX];   // the row each roster entry came from: its host and caps go on after the roster
     int m = 0;
     memset(s_info, 0, sizeof s_info);
     for (int i = 0; i < n && m < POD_AGENTS_MAX; i++) {
@@ -337,9 +338,15 @@ void pro_app_agents(const pro_agent_row_t *rows, int n)
         copy_cut(s_info[m].id, ID_MAX, r->id);
         // An oversize machine id is no id (UH 5579-5740): the agent then has no machine to gate on.
         if (r->machine_id && strnlen(r->machine_id, ID_MAX) < ID_MAX) copy_cut(s_info[m].machine_id, ID_MAX, r->machine_id);
-        m++;
+        src[m++] = i;
     }
-    settle(pod_ui_roster(&s_pod, s_rows, m));
+    // The glue's roster row has no host or caps, so they are set right after it, inside the same lock: no frame sees an
+    // agent without its caps.
+    const pod_out_t fx = pod_ui_roster(&s_pod, s_rows, m);
+    for (int k = 0; k < m; k++)
+        pod_model_agent_app(&s_pod.model, s_rows[k].id, rows[src[k]].host, POD_CAPS_ALL & ~rows[src[k]].caps_off);
+    pod_model_view(&s_pod.model, machine_view, tab_open);
+    settle(fx);
     leave();
 }
 
