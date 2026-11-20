@@ -159,6 +159,12 @@ module.exports = {
         ],
       },
       {
+        // Chromium sends the CPU hints only to a site that asked: once /device has, a later request to
+        // /device/download-windows or -linux carries them, and those pick the arch from them.
+        source: '/device',
+        headers: [{ key: 'Accept-CH', value: 'Sec-CH-UA-Arch, Sec-CH-UA-Bitness' }],
+      },
+      {
         source: '/os/latest',
         // Cache the GitHub lookup on the server, never the release redirect in a browser or CDN.
         headers: [{ key: 'Cache-Control', value: 'no-store, max-age=0' }],
