@@ -1,7 +1,14 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/devices/device_app_launcher.dart';
+
+/// The rule every writer of the entry follows (the Device app, Desktop, the
+/// one-line installer), as data.
+final _vectors = jsonDecode(
+  File('../tests/fixtures/app-list-entry-vectors.json').readAsStringSync(),
+) as Map<String, dynamic>;
 
 /// The Linux app-list entry against a temporary home: nothing here writes
 /// under this computer's own. The entry's paths are POSIX, so Windows skips.
@@ -11,7 +18,7 @@ void main() {
 
   setUp(() {
     root = Directory.systemTemp.createTempSync('device-app-launcher-test-');
-    home = '${root.path}/home';
+    home = '${root.path}/home/p';
     place = '$home/.local/opt/Harness-Device.AppImage';
     File(place)
       ..createSync(recursive: true)
@@ -23,6 +30,10 @@ void main() {
       File('$data/applications/harness-device.desktop');
   File iconIn(String data) => File('$data/icons/harness-device.png');
   String data() => '$home/.local/share';
+
+  /// A vectors' text with its home, `/home/p`, under the temporary root.
+  String rooted(String text) =>
+      text.replaceAll('/home/p', '${root.path}/home/p');
 
   Future<void> write(
     String appImage, {
@@ -44,21 +55,89 @@ void main() {
     () async {
       await write(place);
 
+      final withIcon = (_vectors['entries'] as List).first as Map;
+      expect(withIcon['icon'], isTrue);
       expect(
         entryIn(data()).readAsStringSync(),
-        '[Desktop Entry]\n'
-        'Type=Application\n'
-        'Name=Harness Device\n'
-        'Comment=The app for your Harness device.\n'
-        'Exec=$place\n'
-        'Icon=${data()}/icons/harness-device.png\n'
-        'Terminal=false\n'
-        'Categories=Utility;\n',
+        rooted(withIcon['entry'] as String),
       );
       expect(iconIn(data()).readAsBytesSync(), [1, 2, 3]);
     },
     skip: Platform.isWindows,
   );
+
+  test("the entry is the vectors' byte for byte", () async {
+    for (final vector in (_vectors['entries'] as List).cast<Map>()) {
+      final dataHome = rooted(vector['dataHome'] as String);
+      await writeDeviceAppLauncher(
+        rooted(vector['appImage'] as String),
+        environment: {'HOME': home, 'XDG_DATA_HOME': dataHome},
+        extractIcon: (_) async => vector['icon'] as bool ? const [1] : null,
+      );
+
+      expect(
+        entryIn(dataHome).readAsStringSync(),
+        rooted(vector['entry'] as String),
+        reason: vector['appImage'] as String,
+      );
+      entryIn(dataHome).deleteSync();
+    }
+  }, skip: Platform.isWindows);
+
+  test("the decisions are the vectors'", () {
+    for (final vector in (_vectors['decisions'] as List).cast<Map>()) {
+      final onDisk = (vector['onDisk'] as List).cast<String>().toSet();
+      expect(
+        deviceAppLauncherChange(
+          existing: vector['existing'] as String?,
+          appImage: vector['appImage'] as String,
+          wanted: vector['wanted'] as String,
+          exists: onDisk.contains,
+        ),
+        vector['write'],
+        reason: vector['name'] as String,
+      );
+    }
+  });
+
+  test('a path with a control character writes nothing', () async {
+    for (final appImage in [
+      '$home/a\nb/Harness-Device.AppImage',
+      '$home/a\tb/Harness-Device.AppImage',
+      '$home/a\x7fb/Harness-Device.AppImage',
+    ]) {
+      await write(appImage);
+    }
+    await write(place, environment: {'HOME': '$home/a\rb'});
+
+    expect(
+      Directory(root.path)
+          .listSync(recursive: true)
+          .whereType<File>()
+          .map((file) => file.path),
+      [place],
+    );
+  }, skip: Platform.isWindows);
+
+  test('the entry is written whole', () async {
+    await write(place);
+    iconIn(data()).deleteSync();
+    await write(place, icon: const [4, 5]);
+
+    expect(
+      Directory('${data()}/applications')
+          .listSync()
+          .map((file) => file.uri.pathSegments.last),
+      ['harness-device.desktop'],
+    );
+    expect(
+      Directory('${data()}/icons')
+          .listSync()
+          .map((file) => file.uri.pathSegments.last),
+      ['harness-device.png'],
+    );
+    expect(iconIn(data()).readAsBytesSync(), [4, 5]);
+  }, skip: Platform.isWindows);
 
   test('XDG_DATA_HOME is followed', () async {
     final xdg = '${root.path}/xdg';

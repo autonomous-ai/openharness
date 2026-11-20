@@ -1,4 +1,6 @@
 import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -10,6 +12,7 @@ import 'package:harness/auth/cli_login.dart';
 import 'package:harness/core/config.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/devices/device_app.dart';
+import 'package:harness/devices/device_app_launcher.dart';
 import 'package:harness/devices/device_app_offer.dart';
 import 'package:harness/devices/device_hosts.dart';
 import 'package:harness/devices/devices_controller.dart';
@@ -252,6 +255,63 @@ void main() {
       expect(find.byKey(_row), findsNothing);
     },
     variant: _everyOS,
+  );
+
+  testWidgets(
+    'linux: Install from the band lists Harness Device in the app list with the entry the app writes',
+    (tester) async {
+      final vectors = jsonDecode(
+        File('../tests/fixtures/app-list-entry-vectors.json')
+            .readAsStringSync(),
+      ) as Map<String, dynamic>;
+      final vector = (vectors['entries'] as List).cast<Map>().firstWhere(
+        (entry) => entry['icon'] == true,
+      );
+      final root = Directory.systemTemp.createTempSync('device-app-flow-');
+      addTearDown(() => root.deleteSync(recursive: true));
+      // The vectors' home, /home/p, under a temporary folder.
+      String rooted(String text) =>
+          text.replaceAll('/home/p', '${root.path}/home/p');
+      final place = rooted(vector['appImage'] as String);
+      final dataHome = rooted(vector['dataHome'] as String);
+
+      final installed = Completer<void>();
+      final fixture = DeviceAppFixture(
+        supported: deviceAppSupported(osVersion: _osVersion()),
+        install: () async {
+          await tester.runAsync(
+            () => writeDeviceAppLauncher(
+              place,
+              environment: {'HOME': '${root.path}/home/p'},
+              extractIcon: (_) async => const [1, 2, 3],
+            ),
+          );
+          installed.complete();
+          return DeviceAppInstallResult.done(place);
+        },
+      );
+      final app = _app(fixture);
+      addTearDown(app.dispose);
+      final controller = await _controller(app);
+      addTearDown(controller.dispose);
+      report(app.dial, [deviceStatus('d1')]);
+      await _pump(tester, app, controller);
+
+      await _tap(tester, _bandInstall);
+      await installed.future;
+      await tester.pump();
+      await tester.pump();
+
+      expect(find.byKey(_band), findsNothing);
+      expect(
+        File('$dataHome/applications/harness-device.desktop')
+            .readAsStringSync(),
+        rooted(vector['entry'] as String),
+      );
+    },
+    variant: TargetPlatformVariant.only(TargetPlatform.linux),
+    // The entry's paths are POSIX.
+    skip: Platform.isWindows,
   );
 
   testWidgets(

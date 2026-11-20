@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -61,7 +62,22 @@ void main() {
     ]);
   });
 
-  // The path holds the person's name, which no log line may carry.
+  test("launcherDataHome is the vectors'", () {
+    final vectors = jsonDecode(
+      File('../tests/fixtures/app-list-entry-vectors.json').readAsStringSync(),
+    ) as Map<String, dynamic>;
+    for (final vector in (vectors['dataHome'] as List).cast<Map>()) {
+      final environment = (vector['env'] as Map).cast<String, String>();
+      expect(
+        launcherDataHome(environment),
+        vector['dataHome'],
+        reason: '$environment',
+      );
+    }
+  });
+
+  // The path holds the person's name, which no log line may carry. Windows
+  // skips: its temporary folder is no POSIX home.
   test('the log names no path', () async {
     final previous = appLog;
     final log = _RecordedLog();
@@ -76,7 +92,7 @@ void main() {
       expect(message, isNot(contains('Nguyễn')));
       expect(message, isNot(contains(root.path)));
     }
-  });
+  }, skip: Platform.isWindows);
 
   test('a path with spaces is quoted for the launcher', () async {
     await launch('$home/My Apps/Harness.AppImage');
