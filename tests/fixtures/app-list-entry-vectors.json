@@ -57,6 +57,25 @@
         "XDG_DATA_HOME": "data/p"
       },
       "dataHome": null
+    },
+    {
+      "env": {
+        "XDG_DATA_HOME": "/data/p/"
+      },
+      "dataHome": "/data/p"
+    },
+    {
+      "env": {
+        "HOME": "/home/p/"
+      },
+      "dataHome": "/home/p/.local/share"
+    },
+    {
+      "env": {
+        "HOME": "/home/p",
+        "XDG_DATA_HOME": "/data/p//"
+      },
+      "dataHome": "/data/p"
     }
   ],
   "exec": [
@@ -109,6 +128,12 @@
       "dataHome": "/home/p q/.local/share",
       "icon": false,
       "entry": "[Desktop Entry]\nType=Application\nName=Harness Device\nComment=The app for your Harness device.\nExec=\"/home/p q/.local/opt/Harness-Device.AppImage\"\nTerminal=false\nCategories=Utility;\nStartupWMClass=harness-device\n"
+    },
+    {
+      "appImage": "/home/p/.local/opt/Harness-Device.AppImage",
+      "dataHome": "/home/p/.local/share/",
+      "icon": true,
+      "entry": "[Desktop Entry]\nType=Application\nName=Harness Device\nComment=The app for your Harness device.\nExec=/home/p/.local/opt/Harness-Device.AppImage\nIcon=/home/p/.local/share/icons/harness-device.png\nTerminal=false\nCategories=Utility;\nStartupWMClass=harness-device\n"
     }
   ],
   "decisions": [

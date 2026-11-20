@@ -203,7 +203,7 @@ pub fn system() -> Option<String> {
 mod tests {
     use super::*;
     use serde_json::Value;
-    use std::ffi::OsStr;
+    use std::ffi::{OsStr, OsString};
     use std::fs;
     use std::path::{Path, PathBuf};
 
@@ -267,7 +267,9 @@ mod tests {
             let env = &case["env"];
             let xdg = env["XDG_DATA_HOME"].as_str().map(OsStr::new);
             let home = env["HOME"].as_str().map(Path::new);
-            assert_eq!(data_home(xdg, home), case["dataHome"].as_str().map(PathBuf::from), "{case}");
+            // As text: a Path equals one with a trailing `/`, the bytes of the entry's Icon= line do not.
+            let wanted = case["dataHome"].as_str().map(OsString::from);
+            assert_eq!(data_home(xdg, home).map(PathBuf::into_os_string), wanted, "{case}");
         }
     }
 
@@ -293,7 +295,9 @@ mod tests {
     fn the_entry_is_desktops_byte_for_byte() {
         for case in vectors("entries") {
             let exec = exec_value(Path::new(case["appImage"].as_str().unwrap())).unwrap();
-            let icon = Path::new(case["dataHome"].as_str().unwrap()).join("icons").join("harness-device.png");
+            // The data home as XDG_DATA_HOME names it.
+            let data = data_home(Some(OsStr::new(case["dataHome"].as_str().unwrap())), None).unwrap();
+            let icon = data.join("icons").join("harness-device.png");
             let icon = case["icon"].as_bool().unwrap().then_some(icon.as_path());
             assert_eq!(entry(&exec, icon), case["entry"].as_str().unwrap(), "{case}");
         }
