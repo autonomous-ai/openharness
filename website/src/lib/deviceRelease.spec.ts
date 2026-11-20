@@ -66,6 +66,28 @@ describe("parseDeviceRelease", () => {
     expect(r[2].detail.startsWith("AppImage")).toBe(true);
   });
 
+  // The keys `make release-device` writes for Windows and Linux (device-app/scripts/device-manifest.py): the
+  // installer key only.
+  it("lists each Windows and Linux file of a release once, from its installer key", () => {
+    const file = (name: string) => ({ version: "0.1.10", url: `${CDN}${name}`, sha256: "x", size: 1 });
+    const r = builds({
+      ...LIVE,
+      "device-windows-x64-exe": file("Harness-Device-windows-x64-setup.exe"),
+      "device-windows-arm64-exe": file("Harness-Device-windows-arm64-setup.exe"),
+      "device-linux-x64-appimage": file("Harness-Device-linux-x64.AppImage"),
+      "device-linux-arm64-appimage": file("Harness-Device-linux-arm64.AppImage"),
+    });
+    expect(r.map((b) => [b.label, b.pkg])).toEqual([
+      ["Mac · Apple silicon and Intel", "dmg"],
+      ["Windows · ARM64", "exe"],
+      ["Windows · x64", "exe"],
+      ["Linux · ARM64", "appimage"],
+      ["Linux · x64", "appimage"],
+    ]);
+    expect(pickBuild(r, "windows")?.url).toBe(`${CDN}Harness-Device-windows-x64-setup.exe`);
+    expect(pickBuild(r, "linux-arm64")?.url).toBe(`${CDN}Harness-Device-linux-arm64.AppImage`);
+  });
+
   it.each([
     "https://evil.example/a.dmg",
     "https://cdn.autonomous.ai/harness/desktop/1.2.3/Harness-macos.dmg",

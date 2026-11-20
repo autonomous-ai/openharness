@@ -202,7 +202,8 @@ pub enum LoginEvent {
     Done(Result<(), String>),
 }
 
-/// What happened. WatchExit(None): ended by a signal. UpdateChecked(Some): a strictly newer release. InstallStep:
+/// What happened. WatchExit(None): it was killed. UpdateChecked(Some): a strictly newer release.
+/// UpdateDownloaded: that release is downloaded and its signature checked; nothing is replaced yet. InstallStep:
 /// `'static`, so only the step table's fixed copy can be one, never a line of the script's.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Event {
@@ -230,6 +231,7 @@ pub enum Event {
     Act(Action),
     WindowClosed,
     UpdateChecked(Option<String>),
+    UpdateDownloaded,
     UpdateInstalled,
     UpdateFailed(UpdateFailure),
     LogsExported(Result<Exported, ExportFailure>),
@@ -243,8 +245,9 @@ pub enum Event {
     FollowOffer,
 }
 
-/// What to do about it. Show(None) hides the window. ShowAbout: the About panel, with its credits line. Menu, Show,
-/// ShowAbout, Quit and Relaunch are the binary's.
+/// What to do about it. Show(None) hides the window. ShowAbout: the About panel, with its credits line. AboutCredits:
+/// the credits line now, for an About drawn into the menu. Menu, Show, ShowAbout, AboutCredits, Quit and Relaunch are
+/// the binary's.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Effect {
     FindCli,
@@ -265,10 +268,12 @@ pub enum Effect {
     Save(Saved),
     Log(String),
     CheckUpdate,
+    DownloadUpdate,
     InstallUpdate,
     Menu(Vec<MenuItem>),
     Show(Option<View>),
     ShowAbout(Option<String>),
+    AboutCredits(Option<String>),
     Quit,
     Relaunch,
     ExportLogs,
@@ -510,6 +515,8 @@ mod tests {
         assert!(!plist.contains("CFBundleDisplayName"), "{plist}");
         let source = macos["files"]["Resources/en.lproj/InfoPlist.strings"].as_str().expect("InfoPlist.strings mapped");
         let strings = std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(source)).unwrap();
+        // A Windows checkout ends its lines with \r\n; the file ships from a macOS build only.
+        let strings = strings.replace("\r\n", "\n");
         assert_eq!(strings, "CFBundleName = \"Harness\";\nCFBundleDisplayName = \"Harness\";\n");
     }
 

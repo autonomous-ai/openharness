@@ -108,7 +108,14 @@ class SelectionTests(unittest.TestCase):
                 self.assertEqual(planner.select([path])[0], {"device-app"})
         self.assertEqual(planner.JOBS["device-app"], {"device-app-checks"})
         self.assertEqual(planner.MANUAL["device-app"], {"device-app"})
-        self.assertNotIn("device-app", planner.PR_READS)
+
+    def test_either_release_workflow_runs_the_device_app_suite(self):
+        # Its test_release_workflow.py reads both through a path built from parts, which the scan cannot see: a change
+        # to either alone, Desktop's runners or signing inputs too, must run it.
+        for path in (".github/workflows/release-device.yml", ".github/workflows/release-desktop.yml"):
+            with self.subTest(path=path):
+                self.assertEqual(planner.select([path])[0], {"device-app"})
+                self.assertTrue(planner.reads("device-app", path))
 
     def test_the_workflow_carries_every_suite(self):
         workflow = (Path(__file__).resolve().parents[2] / ".github/workflows/ci.yml").read_text()
@@ -126,13 +133,39 @@ class SelectionTests(unittest.TestCase):
         for text in ("libwebkit2gtk-4.1-dev", "libayatana-appindicator3-dev", "librsvg2-dev",
                      "working-directory: device-app/ui", "npx vitest run", "npm run build",
                      "cargo test --locked --manifest-path device-app/src-tauri/Cargo.toml",
-                     "xvfb", "openbox", "xdotool", "xterm", "--ignored x11_live", "x11_live ... ok"):
+                     "xvfb", "openbox", "xdotool", "xterm", "--ignored x11_live", "x11_live ... ok",
+                     # A Windows leg runs the lib's rules; the Linux steps stay on the Linux leg.
+                     "windows-latest", "cargo test --locked --lib --manifest-path device-app/src-tauri/Cargo.toml",
+                     "strategy.job-index", "runner.os == 'Linux'"):
             self.assertIn(text, job)
         self.assertLess(job.index("npm run build"), job.index("cargo test"))  # the binary embeds ui/dist
         # The live X11 step reuses the unit tests' build.
         self.assertLess(job.index("cargo test --locked --manifest-path device-app/src-tauri/Cargo.toml"),
                         job.index("X11 front source, live"))
         self.assertNotIn("macos", job)
+        # Every step but the checkout names its leg: a Linux step that lost its condition would run, and fail, on
+        # Windows.
+        steps = re.split(r"(?m)^      - ", job.split("\n    steps:\n", 1)[1])[1:]
+        legs = [re.search(r"(?m)^(?:        )?if: runner\.os == '(\w+)'$", step) for step in steps]
+        for step, leg in zip(steps, legs):
+            with self.subTest(step=step.splitlines()[0]):
+                if "actions/checkout@" in step:
+                    self.assertIsNone(leg)
+                else:
+                    self.assertIsNotNone(leg)
+
+        def leg_of(text):
+            [leg] = [leg.group(1) for step, leg in zip(steps, legs) if leg and text in step]
+            return leg
+
+        for text, expected in (("-s device-app/scripts", "Linux"), ("libwebkit2gtk-4.1-dev", "Linux"),
+                               ("actions/setup-node@", "Linux"), ("npx vitest run", "Linux"),
+                               ("shared-key: device-app-pr\n", "Linux"),
+                               ("run: cargo test --locked --manifest-path", "Linux"), ("--ignored x11_live", "Linux"),
+                               ("shared-key: device-app-pr-windows", "Windows"),
+                               ("run: cargo test --locked --lib --manifest-path", "Windows")):
+            with self.subTest(text=text):
+                self.assertEqual(leg_of(text), expected)
 
     def test_the_cli_ptyhost_backend_and_the_vendored_terminal_also_belong_to_the_pty_suite(self):
         for path, expected in {
@@ -209,6 +242,15 @@ class SelectionTests(unittest.TestCase):
         self.assertEqual(planner.select(["desktop/lib/widgets/engine_identity.dart"])[0], {"desktop", "mobile"})
         # Desktop's and the CLI's tests read the Store's agents and branding, which no component owns.
         self.assertEqual(planner.select(["store/agents/blender/store.json"])[0], {"cli", "desktop"})
+
+    def test_the_app_list_vectors_select_desktop_device_app_and_website(self):
+        # Every writer of Harness Device's Linux app-list entry holds its bytes and rule to one shared file: the app,
+        # Desktop and the website's one-line installer. The CLI owns tests/ and the backend reads tests/fixtures/.
+        path = "tests/fixtures/app-list-entry-vectors.json"
+        self.assertEqual(planner.select([path])[0], {"backend", "cli", "desktop", "device-app", "website"})
+        for suite in ("desktop", "device-app", "website"):
+            with self.subTest(suite=suite):
+                self.assertTrue(planner.reads(suite, path))
 
     def test_every_declared_input_selects_the_suite_that_reads_it(self):
         # A PR that changes a file a suite reads runs that suite; reuse after Update branch counts it as an input too.

@@ -1,6 +1,7 @@
 import { render, screen, within } from "@testing-library/react";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { fetchDeviceRelease, parseDeviceRelease } from "@/lib/deviceRelease";
+import nextConfig from "../../../next.config.js";
 import DevicePage, { metadata } from "./page";
 
 vi.mock("next/font/google", () => ({
@@ -118,5 +119,11 @@ describe("/device", () => {
 
   it("names the page for a person", () => {
     expect(metadata).toEqual({ title: "Harness Device", description: "Set up and use your Harness Device." });
+  });
+
+  it("asks Chromium for the CPU on /device", async () => {
+    const headers = await nextConfig.headers();
+    const rule = headers.find((entry) => entry.source === "/device");
+    expect(rule?.headers).toContainEqual({ key: "Accept-CH", value: "Sec-CH-UA-Arch, Sec-CH-UA-Bitness" });
   });
 });

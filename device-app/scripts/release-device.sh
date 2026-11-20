@@ -13,6 +13,7 @@
 #   bash device-app/scripts/release-device.sh --wait               # follow the run it started to its end
 #   bash device-app/scripts/release-device.sh --allow-older        # a rollback: older code under a higher version
 #   bash device-app/scripts/release-device.sh --allow-no-manifest  # the first release only: nothing is live yet
+#   bash device-app/scripts/release-device.sh --platforms all      # Windows and Linux too; macOS only by default
 #
 # The next version is the patch bump of max(highest v*_device tag, the live manifest's version), .99 rolling to the
 # next minor at .1. device-manifest.py holds that rule and its refusals; this script does the Git work, the one HTTPS
@@ -30,6 +31,9 @@ workflow="release-device.yml"
 die() { echo "ERROR $*" >&2; exit 1; }
 
 dry_run=0 prepare=0 follow=0 allow_older=0 notes_file=""
+# Temporary: keeps Windows and Linux out of a routine release until they are cleared to ship. The first Windows and
+# Linux release makes all the only behavior and removes this input, here and in release-device.yml.
+platforms=macos
 # device-manifest.py checks the version and refuses a second one.
 next_args=(next)
 while [ "$#" -gt 0 ]; do
@@ -40,6 +44,11 @@ while [ "$#" -gt 0 ]; do
     --allow-older) allow_older=1 ;;
     --minor|--allow-no-manifest) next_args+=("$1") ;;
     --notes-file) [ "$#" -ge 2 ] || die "--notes-file needs a path"; notes_file="$2"; shift ;;
+    --platforms)
+      case "${2:-}" in
+        macos|all) platforms="$2"; shift ;;
+        *) die "--platforms takes macos or all, not '${2:-}'" ;;
+      esac ;;
     -*) die "unknown flag: $1" ;;
     *) next_args+=("$1") ;;
   esac
@@ -129,14 +138,15 @@ fi
 grep -q '[^[:space:]]' "$work/notes" || die "the release notes are empty"
 
 if [ "$prepare" -eq 1 ]; then
-  dispatch=(gh workflow run "$workflow" --ref main -f "version=$version" -f publish=false)
+  dispatch=(gh workflow run "$workflow" --ref main -f "version=$version" -f publish=false -f "platforms=$platforms")
 else
-  dispatch=(gh workflow run "$workflow" --ref "$tag" -f "version=$version" -f publish=true)
+  dispatch=(gh workflow run "$workflow" --ref "$tag" -f "version=$version" -f publish=true -f "platforms=$platforms")
 fi
 
 echo "  last tag   ${last_tag:-none}"
 echo "  live       $live"
 echo "  version    $version"
+echo "  platforms  $platforms"
 echo "  commit     $head"
 echo "  notes"
 sed 's/^/    /' "$work/notes"

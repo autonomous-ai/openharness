@@ -4,6 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/auth/auth_session.dart';
 import 'package:harness/core/config.dart';
 import 'package:harness/devices/device_app_offer.dart';
+import 'package:harness/devices/device_app_probe.dart';
 import 'package:harness/devices/device_app_setup.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/state/dial_status.dart';
@@ -17,6 +18,33 @@ const _signer = MacSigner(
   team: '54DJVWMJCC',
   identifier: 'ai.autonomous.harness',
   name: 'Autonomous Inc.',
+);
+
+const _setupExe =
+    r'C:\Users\Nguyễn Văn A\AppData\Local\Temp\h\Harness-Device-setup.exe';
+const _desktopExe =
+    r'C:\Users\Nguyễn Văn A\AppData\Local\Programs\Harness\app\1.3.91\harness-desktop.exe';
+const _ours = WindowsSigner(
+  status: 'Valid',
+  subject:
+      'CN=AUTONOMOUS INC., O=AUTONOMOUS INC., L=Redlands, S=California, C=US',
+  identity: '1.3.6.1.4.1.311.97.585055327.208923272.208213867.148721407',
+);
+const _unsigned = WindowsSigner(status: 'NotSigned', subject: '', identity: '');
+
+/// The Windows check of [_setupExe] when Desktop is signed by [desktop] and
+/// the installer by [installer]; each read is added to [reads].
+Future<bool> _windowsCheck({
+  required WindowsSigner desktop,
+  required WindowsSigner installer,
+  List<String>? reads,
+}) => deviceAppInstallerSignedLikeDesktop(
+  _setupExe,
+  runningExe: () => _desktopExe,
+  read: ({required file, required runningExe}) async {
+    reads?.add('file: $file, runningExe: $runningExe');
+    return (running: desktop, file: installer);
+  },
 );
 
 AppNotifier _app({DeviceAppOffer? offer}) => AppNotifier(
@@ -112,6 +140,211 @@ void main() {
         isFalse,
       );
       expect(verified, 0);
+    });
+
+    test(
+      'windows: a Desktop with no signature keeps the sha256 check alone',
+      () async {
+        expect(
+          await _windowsCheck(desktop: _unsigned, installer: _unsigned),
+          isTrue,
+        );
+      },
+    );
+
+    test('windows: an installer signed by Desktop\'s signer passes', () async {
+      final reads = <String>[];
+      expect(
+        await _windowsCheck(desktop: _ours, installer: _ours, reads: reads),
+        isTrue,
+      );
+      expect(reads, ['file: $_setupExe, runningExe: $_desktopExe']);
+    });
+
+    // A manifest someone else wrote can name any installer with a matching
+    // sha256; on Windows Desktop runs it, so only our signer may have made it.
+    test(
+      'windows: an installer signed by someone else, or not at all, is refused',
+      () async {
+        const lookalike = WindowsSigner(
+          status: 'Valid',
+          subject: 'CN=AUTONOMOUS INC., O=AUTONOMOUS INC., L=Redlands, S=California, C=US',
+          identity: '1.3.6.1.4.1.311.97.1.2.3.4',
+        );
+        const changed = WindowsSigner(
+          status: 'HashMismatch',
+          subject: 'CN=AUTONOMOUS INC., O=AUTONOMOUS INC., L=Redlands, S=California, C=US',
+          identity:
+              '1.3.6.1.4.1.311.97.585055327.208923272.208213867.148721407',
+        );
+        for (final installer in [lookalike, _unsigned, changed]) {
+          expect(
+            await _windowsCheck(desktop: _ours, installer: installer),
+            isFalse,
+            reason: installer.status,
+          );
+        }
+      },
+    );
+
+    test('windows: a Desktop whose signature is broken refuses', () async {
+      for (final status in ['HashMismatch', 'Unreadable']) {
+        expect(
+          await _windowsCheck(
+            desktop: WindowsSigner(
+              status: status,
+              subject: _ours.subject,
+              identity: _ours.identity,
+            ),
+            installer: _ours,
+          ),
+          isFalse,
+          reason: status,
+        );
+      }
+    });
+
+    test('windows: a signature that cannot be read refuses', () async {
+      expect(
+        await deviceAppInstallerSignedLikeDesktop(
+          _setupExe,
+          runningExe: () => _desktopExe,
+          read: ({required file, required runningExe}) async =>
+              throw cannotCheckSignature,
+        ),
+        isFalse,
+      );
+    });
+  });
+
+  group('each OS', () {
+    const windowsEnv = {'LOCALAPPDATA': r'C:\Users\Nguyễn Văn A\AppData\Local'};
+    const windowsPlace =
+        r'C:\Users\Nguyễn Văn A\AppData\Local\Harness Device\harness-device.exe';
+    const linuxEnv = {
+      'HOME': '/home/p q',
+      'APPIMAGE': '/home/p q/Harness.AppImage',
+    };
+    const linuxPlace = '/home/p q/.local/opt/Harness-Device.AppImage';
+
+    // The installer the app and the end-to-end test both build checks with
+    // this: on Windows Desktop runs what it downloads.
+    test('each OS gets its own signature check', () async {
+      expect(
+        deviceAppSignatureCheckFor(TargetPlatform.windows),
+        same(deviceAppInstallerSignedLikeDesktop),
+      );
+      expect(
+        deviceAppSignatureCheckFor(TargetPlatform.macOS),
+        same(deviceAppSignedLikeDesktop),
+      );
+      // Never asked on Linux, where an AppImage carries no OS signature.
+      expect(
+        await deviceAppSignatureCheckFor(TargetPlatform.linux)(
+          '/home/p q/.local/opt/Harness-Device.AppImage',
+        ),
+        isFalse,
+      );
+    });
+
+    test('each OS gets its own lookup', () async {
+      expect(
+        deviceAppProbeFor(TargetPlatform.macOS),
+        isA<ChannelDeviceAppProbe>(),
+      );
+      for (final (platform, environment, place) in [
+        (TargetPlatform.windows, windowsEnv, windowsPlace),
+        (TargetPlatform.linux, linuxEnv, linuxPlace),
+      ]) {
+        final asked = <String>[];
+        final probe = deviceAppProbeFor(
+          platform,
+          environment: environment,
+          running: () async => false,
+          exists: (path) async {
+            asked.add(path);
+            return true;
+          },
+        );
+        expect(probe, isA<PlaceDeviceAppProbe>(), reason: '$platform');
+        final presence = await probe.lookup();
+        expect(asked, [place], reason: '$platform');
+        expect(presence.installed, isTrue, reason: '$platform');
+      }
+    });
+
+    test(
+      'Open on Windows and Linux starts the place when no path is named',
+      () async {
+        for (final (platform, environment, place) in [
+          (TargetPlatform.windows, windowsEnv, windowsPlace),
+          (TargetPlatform.linux, linuxEnv, linuxPlace),
+        ]) {
+          final started = <(String, Map<String, String>)>[];
+          final open = deviceAppOpenFor(
+            platform,
+            environment: environment,
+            start: (path, environment) async =>
+                started.add((path, environment)),
+          );
+          expect(await open(), isTrue, reason: '$platform');
+          expect(await open(path: '/t/named'), isTrue, reason: '$platform');
+          expect(started.map((s) => s.$1), [place, '/t/named']);
+          // The app never takes Desktop's AppImage for its own.
+          expect(
+            started.first.$2.containsKey('APPIMAGE'),
+            isFalse,
+            reason: '$platform',
+          );
+        }
+      },
+    );
+
+    // A copy the person installed elsewhere is the app: never offered again
+    // and installed over, and the one Open starts.
+    test('on Windows the lookup and Open follow the folder the installer registers', () async {
+      const registeredExe = r'D:\Ứng dụng\Harness Device\harness-device.exe';
+      String? registered;
+      final asked = <String>[];
+      final started = <String>[];
+      final probe = deviceAppProbeFor(
+        TargetPlatform.windows,
+        environment: windowsEnv,
+        installLocation: () => registered,
+        running: () async => false,
+        exists: (path) async {
+          asked.add(path);
+          return true;
+        },
+      );
+      final open = deviceAppOpenFor(
+        TargetPlatform.windows,
+        environment: windowsEnv,
+        installLocation: () => registered,
+        start: (path, _) async => started.add(path),
+      );
+
+      await probe.lookup();
+      expect(await open(), isTrue);
+      registered = r'"D:\Ứng dụng\Harness Device"';
+      await probe.lookup();
+      expect(await open(), isTrue);
+
+      expect(asked, [windowsPlace, registeredExe]);
+      expect(started, [windowsPlace, registeredExe]);
+    });
+
+    test('Open with no place fails', () async {
+      for (final platform in [TargetPlatform.windows, TargetPlatform.linux]) {
+        var starts = 0;
+        final open = deviceAppOpenFor(
+          platform,
+          environment: const {},
+          start: (_, _) async => starts++,
+        );
+        expect(await open(), isFalse, reason: '$platform');
+        expect(starts, 0, reason: '$platform');
+      }
     });
   });
 

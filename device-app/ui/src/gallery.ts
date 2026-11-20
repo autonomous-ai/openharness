@@ -7,6 +7,10 @@ import { render } from './screens'
 export const STATES: { name: string; view: View; focused?: true }[] = [
   { name: 'Install · working', view: { screen: 'install', phase: 'working', lines: ['Installing tmux…'] } },
   {
+    name: 'Install · working, terminal',
+    view: { screen: 'install', phase: 'working', lines: ['Finish in the terminal…'] },
+  },
+  {
     name: 'Install · failed',
     view: {
       screen: 'install',

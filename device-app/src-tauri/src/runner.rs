@@ -2,12 +2,12 @@
 
 use crate::account::{self, Login, NO_RESULT};
 use crate::cli::{self, Cli, HarnessCli, START_DEADLINE};
-use crate::desktop;
 use crate::follow::{AX_SETTINGS, CHATGPT_BUNDLE, ChatgptFollow, FollowDoor, Heard, Observer, Shown, TRUST_AGAIN};
 use crate::front::{FrontFeed, FrontSource};
-use crate::install::{self, NOT_SUPPORTED, Shell};
+use crate::install::{self, Shell};
 use crate::loginitem::LoginItem;
 use crate::logs;
+use crate::open::Opener;
 use crate::state::StateFile;
 use crate::tabs::{Out, POLL_EVERY, Select, TabApp, TabFollow, TabScripts};
 use crate::types::{Effect, Event, ExportFailure, Log, LoginEvent};
@@ -26,13 +26,13 @@ pub struct Doors {
     pub path_var: Option<OsString>,
     /// The fake CLI, in a debug build (`cli::cli_override`).
     pub cli_override: Option<PathBuf>,
-    /// None where the install is not offered (`install::system_shell`).
-    pub shell: Option<Arc<dyn Shell>>,
+    /// What runs the install's lines (`install::system_shell`).
+    pub shell: Arc<dyn Shell>,
     pub login_item: Arc<dyn LoginItem>,
     pub state: Arc<dyn StateFile>,
     pub log: Arc<dyn Log>,
-    /// `open` with these arguments (`desktop::run_open`).
-    pub open: Arc<dyn Fn(&[&str]) -> io::Result<()> + Send + Sync>,
+    /// What opens a page, the logs' zip and the desktop app (`open::system`).
+    pub open: Arc<dyn Opener>,
     /// Which app is in front (`front::system`), started once with the runner.
     pub front: Arc<dyn FrontSource>,
     /// The terminal apps' tab scripts (`tabs::system`), which only the runner's tab thread calls.
@@ -267,6 +267,7 @@ impl Runner {
             tabs: Arc::default(),
             chatgpt: Arc::new(chatgpt),
         });
+        shared.refresh_login_item();
         // Weakly: the source keeps its callback for as long as it runs, and the runner must still go.
         let weak = Arc::downgrade(&shared);
         shared.doors.front.start(Box::new(move |value| {
@@ -296,12 +297,17 @@ impl Runner {
         self.0.find_cli()
     }
 
-    /// Menu, Show, ShowAbout, Quit and Relaunch come back for the binary. Everything else is done here, anything slow on
-    /// a thread, and answers through `send`.
+    /// Menu, Show, ShowAbout, AboutCredits, Quit and Relaunch come back for the binary. Everything else is done here,
+    /// anything slow on a thread, and answers through `send`.
     pub fn run(&self, effect: Effect) -> Option<Effect> {
         let shared = &self.0;
         match effect {
-            Effect::Menu(_) | Effect::Show(_) | Effect::ShowAbout(_) | Effect::Quit | Effect::Relaunch => {
+            Effect::Menu(_)
+            | Effect::Show(_)
+            | Effect::ShowAbout(_)
+            | Effect::AboutCredits(_)
+            | Effect::Quit
+            | Effect::Relaunch => {
                 return Some(effect);
             }
             Effect::FindCli => shared.answer(Event::Cli(shared.find_cli())),
@@ -322,14 +328,14 @@ impl Runner {
             Effect::RunInstall => {
                 let shared = shared.clone();
                 thread::spawn(move || {
-                    let result = match &shared.doors.shell {
-                        Some(shell) => {
-                            install::install(&**shell, &*shared.doors.log, &|| shared.find_cli(), &mut |step| {
-                                shared.answer(Event::InstallStep(step))
-                            })
-                        }
-                        None => Err(vec![NOT_SUPPORTED.into()]),
-                    };
+                    let doors = &shared.doors;
+                    let result = install::install(
+                        std::env::consts::OS,
+                        &*doors.shell,
+                        &*doors.log,
+                        &|| shared.find_cli(),
+                        &mut |step| shared.answer(Event::InstallStep(step)),
+                    );
                     shared.answer(Event::InstallDone(result));
                 });
             }
@@ -355,14 +361,14 @@ impl Runner {
                     watch.notify(mode);
                 }
             }
-            Effect::OpenUrl(url) => shared.open(&[&url], "browser"),
-            Effect::OpenDesktop => shared.open(&desktop::open_desktop_args(), "desktop app"),
+            Effect::OpenUrl(url) => shared.open(|open| open.url(&url), "browser"),
+            Effect::OpenDesktop => shared.open(|open| open.desktop(), "desktop app"),
             // On the caller's thread: one ServiceManagement call, once at start.
             Effect::RegisterLoginItem => {
                 let registered = shared.doors.login_item.register();
                 shared.doors.log.line(&match &registered {
                     Ok(()) => "login item: registered".to_string(),
-                    Err(error) => format!("login item: not registered: {error}"),
+                    Err(error) => format!("login item: {error}"),
                 });
                 shared.answer(Event::LoginItem(registered.is_ok()));
             }
@@ -377,6 +383,10 @@ impl Runner {
                 Ok(found) => Event::UpdateChecked(found),
                 Err(failure) => Event::UpdateFailed(failure),
             }),
+            Effect::DownloadUpdate => shared.with_updater(|updater| match updater.download() {
+                Ok(()) => Event::UpdateDownloaded,
+                Err(failure) => Event::UpdateFailed(failure),
+            }),
             Effect::InstallUpdate => shared.with_updater(|updater| match updater.install() {
                 Ok(()) => Event::UpdateInstalled,
                 Err(failure) => Event::UpdateFailed(failure),
@@ -389,13 +399,10 @@ impl Runner {
                 }
                 None => shared.answer(Event::LogsExported(Err(ExportFailure::NoAnswer))),
             },
-            Effect::Reveal(zip) => {
-                let args = logs::reveal_args(std::env::consts::OS, &zip);
-                shared.open(&args.iter().map(String::as_str).collect::<Vec<_>>(), "logs");
-            }
+            Effect::Reveal(zip) => shared.open(|open| open.reveal(&zip), "logs"),
             // On the caller's thread: macOS shows its own dialog and does not wait for it.
             Effect::AskAx => shared.doors.follow.prompt(),
-            Effect::OpenAxSettings => shared.open(&[AX_SETTINGS], "accessibility settings"),
+            Effect::OpenAxSettings => shared.open(|open| open.url(AX_SETTINGS), "accessibility settings"),
         }
         None
     }
@@ -412,6 +419,15 @@ impl Drop for Runner {
 impl Shared {
     fn answer(&self, event: Event) {
         (self.send)(event);
+    }
+
+    /// The login item's refresh (`LoginItem::refresh`): a change or a failure is one log line.
+    fn refresh_login_item(&self) {
+        match self.doors.login_item.refresh() {
+            Ok(false) => {}
+            Ok(true) => self.doors.log.line("login item: updated"),
+            Err(error) => self.doors.log.line(&format!("login item: {error}")),
+        }
     }
 
     fn find_cli(&self) -> bool {
@@ -654,23 +670,25 @@ impl Shared {
         }
     }
 
-    /// A failure is logged without the arguments: a sign-in URL carries its state in its query.
-    fn open(&self, args: &[&str], what: &str) {
-        if let Err(error) = (self.doors.open)(args) {
+    /// A failure is logged without what was opened: a sign-in URL carries its state in its query.
+    fn open(&self, open: impl FnOnce(&dyn Opener) -> io::Result<()>, what: &str) {
+        if let Err(error) = open(&*self.doors.open) {
             self.doors.log.line(&format!("{what}: could not open: {error}"));
         }
     }
 }
 
-#[cfg(test)]
+// Every test runs the fake CLI, a shell script.
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use crate::account::NO_RESULT;
     use crate::app::App;
     use crate::follow::{AX_SETTINGS, AxTrust, CHATGPT_BUNDLE, ChatgptWindow, Heard, NoFollow};
     use crate::front::{FrontSource, NoFront};
-    use crate::install::{DESKTOP, HOST, INSTALLING_TMUX, NOT_INSTALLED, NOT_SUPPORTED, Shell};
+    use crate::install::{FINISH_IN_TERMINAL, GETTING_READY, INSTALLING_TMUX, NOT_INSTALLED, Place, Run, Shell, runs};
     use crate::loginitem::LoginItem;
+    use crate::open::Opener;
     use crate::state::StateFile;
     use crate::tabs::{NoTabs, Selected, TabApp, TabError, TabScripts};
     use crate::testing::{Fake, alive, fake_harness, wait_gone};
@@ -719,13 +737,17 @@ mod tests {
     #[derive(Default)]
     struct Doubles {
         failing: AtomicBool,
-        /// The home the host script puts a `harness` launcher in; None: the shell installs nothing.
+        /// The home the next shell run puts a `harness` launcher in; None: the shell installs nothing.
         installs_into: Mutex<Option<PathBuf>>,
-        /// The lines each shell run hands its sink.
+        /// The lines each shell run behind the Install screen hands its sink.
         prints: Mutex<Vec<String>>,
         ran: Mutex<Vec<String>>,
-        opened: Mutex<Vec<Vec<String>>>,
+        /// `url <u>`, `reveal <zip>` or `desktop`.
+        opened: Mutex<Vec<String>>,
         saved: Mutex<Vec<Saved>>,
+        /// How many times the login item was refreshed, and whether a refresh changes it.
+        refreshed: AtomicUsize,
+        refresh_changes: AtomicBool,
     }
 
     impl Doubles {
@@ -733,26 +755,51 @@ mod tests {
             self.failing.load(Ordering::SeqCst)
         }
 
-        fn open(&self, args: &[&str]) -> io::Result<()> {
-            self.opened.lock().unwrap().push(args.iter().map(|arg| arg.to_string()).collect());
+        fn open(&self, what: String) -> io::Result<()> {
+            self.opened.lock().unwrap().push(what);
             if self.failing() { Err(io::Error::other("no browser")) } else { Ok(()) }
         }
     }
 
+    impl Opener for Doubles {
+        fn url(&self, url: &str) -> io::Result<()> {
+            self.open(format!("url {url}"))
+        }
+
+        fn reveal(&self, zip: &Path) -> io::Result<()> {
+            self.open(format!("reveal {}", zip.display()))
+        }
+
+        fn desktop(&self) -> io::Result<()> {
+            self.open("desktop".into())
+        }
+    }
+
     impl Shell for Doubles {
-        fn run(&self, line: &str, _deadline: Duration, sink: &mut dyn FnMut(&str)) -> io::Result<Output> {
-            self.ran.lock().unwrap().push(line.to_string());
-            if let Some(home) = self.installs_into.lock().unwrap().as_deref().filter(|_| line == HOST) {
-                put_launcher(home);
+        fn run(&self, run: &Run, _deadline: Duration, sink: &mut dyn FnMut(&str)) -> io::Result<Output> {
+            self.ran.lock().unwrap().push(run.line.to_string());
+            if let Some(home) = self.installs_into.lock().unwrap().take() {
+                put_launcher(&home);
             }
-            self.prints.lock().unwrap().iter().for_each(|printed| sink(printed));
+            // A terminal's lines are the person's: a run there hands the app none.
+            if run.place == Place::Background {
+                self.prints.lock().unwrap().iter().for_each(|printed| sink(printed));
+            }
             Ok(Output { code: Some(0), ..Output::default() })
         }
     }
 
     impl LoginItem for Doubles {
         fn register(&self) -> Result<(), String> {
-            if self.failing() { Err("Login item not added (error 1).".into()) } else { Ok(()) }
+            if self.failing() { Err("Login item not set (error 1).".into()) } else { Ok(()) }
+        }
+
+        fn refresh(&self) -> Result<bool, String> {
+            self.refreshed.fetch_add(1, Ordering::SeqCst);
+            if self.failing() {
+                return Err("Login item not set (error 1).".into());
+            }
+            Ok(self.refresh_changes.load(Ordering::SeqCst))
         }
     }
 
@@ -883,6 +930,7 @@ mod tests {
     /// shut.
     struct Updates {
         check: Result<Option<String>, UpdateFailure>,
+        download: Mutex<Result<(), UpdateFailure>>,
         install: Mutex<Result<(), UpdateFailure>>,
         calls: Mutex<Vec<&'static str>>,
         shut: Mutex<bool>,
@@ -893,6 +941,7 @@ mod tests {
         fn answering(check: Result<Option<String>, UpdateFailure>, install: Result<(), UpdateFailure>) -> Arc<Updates> {
             Arc::new(Updates {
                 check,
+                download: Mutex::new(Ok(())),
                 install: Mutex::new(install),
                 calls: Mutex::default(),
                 shut: Mutex::default(),
@@ -911,6 +960,11 @@ mod tests {
             self.calls.lock().unwrap().push("check");
             drop(self.opened.wait_while(self.shut.lock().unwrap(), |shut| *shut).unwrap());
             self.check.clone()
+        }
+
+        fn download(&self) -> Result<(), UpdateFailure> {
+            self.calls.lock().unwrap().push("download");
+            *self.download.lock().unwrap()
         }
 
         fn install(&self) -> Result<(), UpdateFailure> {
@@ -946,6 +1000,19 @@ mod tests {
         fn answer(&self, effect: Effect) -> Event {
             assert_eq!(self.runner.run(effect), None);
             self.next()
+        }
+
+        /// Runs an install, and gives each step it told, then how it ended.
+        fn install(&self) -> (Vec<&'static str>, Result<(), Vec<String>>) {
+            assert_eq!(self.runner.run(Effect::RunInstall), None);
+            let mut steps = Vec::new();
+            loop {
+                match self.next() {
+                    Event::InstallStep(step) => steps.push(step),
+                    Event::InstallDone(result) => return (steps, result),
+                    other => panic!("not the install's: {other:?}"),
+                }
+            }
         }
 
         fn logged(&self, line: &str) -> bool {
@@ -1037,18 +1104,17 @@ mod tests {
     }
 
     fn doors(fake: &Fake, home: &Path, doubles: &Arc<Doubles>) -> Doors {
-        let opener = doubles.clone();
         Doors {
             home: home.to_path_buf(),
             // The system's folders, which the fake's tools are in; never the developer's PATH, where a `harness` would
             // be found.
             path_var: Some("/usr/bin:/bin".into()),
             cli_override: Some(fake.program()),
-            shell: Some(doubles.clone()),
+            shell: doubles.clone(),
             login_item: doubles.clone(),
             state: doubles.clone(),
             log: fake.log(),
-            open: Arc::new(move |args: &[&str]| opener.open(args)),
+            open: doubles.clone(),
             front: Arc::new(NoFront),
             tabs: Arc::new(NoTabs),
             updater: None,
@@ -1102,7 +1168,6 @@ mod tests {
         Heard::Title(Some(value.into()))
     }
 
-    #[cfg(unix)]
     #[test]
     fn each_effect_gives_its_answer() {
         let w = world();
@@ -1132,28 +1197,28 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
     #[test]
     fn a_door_that_fails_is_one_log_line() {
         let w = world();
         w.doubles.failing.store(true, Ordering::SeqCst);
         assert_eq!(w.answer(Effect::RegisterLoginItem), Event::LoginItem(false));
         let url = Effect::OpenUrl("https://id.example/a".into());
-        for effect in [Effect::Save(Saved::default()), url, Effect::OpenDesktop] {
+        let reveal = Effect::Reveal(PathBuf::from("/tmp/harness-logs-20261118-1030.zip"));
+        for effect in [Effect::Save(Saved::default()), url, Effect::OpenDesktop, reveal] {
             assert_eq!(w.runner.run(effect), None);
         }
         assert_eq!(
             w.fake.log().lines(),
             [
-                "login item: not registered: Login item not added (error 1).",
+                "login item: Login item not set (error 1).",
                 "state: could not save: disk full",
                 "browser: could not open: no browser",
                 "desktop app: could not open: no browser",
+                "logs: could not open: no browser",
             ]
         );
     }
 
-    #[cfg(unix)]
     #[test]
     fn a_cli_that_vanished_says_so() {
         let w = world();
@@ -1164,7 +1229,6 @@ mod tests {
         assert_eq!(w.answer(Effect::RunLogin), sign_in(LoginEvent::Done(Err(NO_RESULT.into()))));
     }
 
-    #[cfg(unix)]
     #[test]
     fn without_a_cli_what_needs_one_says_so() {
         let w = world_where(|doors| doors.cli_override = None);
@@ -1176,7 +1240,6 @@ mod tests {
         assert!(w.fake.calls().is_empty());
     }
 
-    #[cfg(unix)]
     #[test]
     fn a_watch_that_cannot_start_has_ended() {
         // A CLI that is there and cannot run is not one that went away (the menu would call it removed and the next
@@ -1193,48 +1256,61 @@ mod tests {
         assert!(lines.iter().any(said), "{lines:?}");
     }
 
-    #[cfg(unix)]
     #[test]
     fn an_install_counts_only_when_a_cli_is_there() {
         let w = world_where(|doors| doors.cli_override = None);
-        assert_eq!(w.answer(Effect::RunInstall), Event::InstallDone(Err(vec![NOT_INSTALLED.into()])));
+        assert_eq!(w.install().1, Err(vec![NOT_INSTALLED.into()]));
         *w.doubles.installs_into.lock().unwrap() = Some(w.home.path().to_path_buf());
-        assert_eq!(w.answer(Effect::RunInstall), Event::InstallDone(Ok(())));
-        assert_eq!(*w.doubles.ran.lock().unwrap(), [HOST, DESKTOP, HOST, DESKTOP]);
+        assert_eq!(w.install().1, Ok(()));
+        // This OS's runs, in order, each time.
+        let lines: Vec<&str> = runs(std::env::consts::OS).iter().map(|run| run.line).collect();
+        assert_eq!(*w.doubles.ran.lock().unwrap(), [lines.as_slice(), lines.as_slice()].concat());
         // The CLI the install found is the one the runs after it use.
         assert_eq!(w.answer(Effect::ReadAuth), Event::Auth(Some(true)));
     }
 
-    #[cfg(unix)]
+    #[test]
+    fn the_login_item_is_refreshed_at_start_and_not_by_an_install() {
+        let w = world();
+        assert_eq!(w.doubles.refreshed.load(Ordering::SeqCst), 1);
+        // A refresh that changed nothing says nothing.
+        assert!(!w.fake.log().lines().iter().any(|line| line.starts_with("login item: ")));
+        assert_eq!(w.install().1, Ok(()));
+        assert_eq!(w.doubles.refreshed.load(Ordering::SeqCst), 1);
+
+        // A start's refresh that changed the item, or could not, is one line.
+        let changes = Arc::new(Doubles::default());
+        changes.refresh_changes.store(true, Ordering::SeqCst);
+        let w = world_where(|doors| doors.login_item = changes.clone());
+        assert!(w.logged("login item: updated"));
+        let failing = Arc::new(Doubles::default());
+        failing.failing.store(true, Ordering::SeqCst);
+        let w = world_where(|doors| doors.login_item = failing.clone());
+        assert!(w.logged("login item: Login item not set (error 1)."));
+    }
+
     #[test]
     fn an_install_tells_its_steps() {
         let w = world();
         *w.doubles.prints.lock().unwrap() = vec!["▸ Installing the managed tmux into /x".into()];
-        assert_eq!(w.answer(Effect::RunInstall), Event::InstallStep(INSTALLING_TMUX));
-        assert_eq!(w.next(), Event::InstallDone(Ok(())));
+        // Linux's host half runs first, in a terminal.
+        let steps: &[&str] = if cfg!(target_os = "linux") {
+            &[FINISH_IN_TERMINAL, GETTING_READY, INSTALLING_TMUX]
+        } else {
+            &[INSTALLING_TMUX]
+        };
+        assert_eq!(w.install(), (steps.to_vec(), Ok(())));
     }
 
-    #[cfg(unix)]
-    #[test]
-    fn install_off_a_mac_is_not_supported() {
-        let w = world_where(|doors| doors.shell = None);
-        assert_eq!(w.answer(Effect::RunInstall), Event::InstallDone(Err(vec![NOT_SUPPORTED.into()])));
-    }
-
-    #[cfg(unix)]
     #[test]
     fn what_opens_is_fixed() {
         let w = world();
         for effect in [Effect::OpenDesktop, Effect::OpenUrl("https://id.example/a?state=S".into())] {
             assert_eq!(w.runner.run(effect), None);
         }
-        assert_eq!(
-            *w.doubles.opened.lock().unwrap(),
-            [vec!["-b", "ai.autonomous.harness"], vec!["https://id.example/a?state=S"]]
-        );
+        assert_eq!(*w.doubles.opened.lock().unwrap(), ["desktop", "url https://id.example/a?state=S"]);
     }
 
-    #[cfg(unix)]
     #[test]
     fn an_export_gives_the_zip() {
         let w = world();
@@ -1247,7 +1323,6 @@ mod tests {
         assert_eq!(w.fake.calls(), ["logs export --json"]);
     }
 
-    #[cfg(unix)]
     #[test]
     fn an_export_with_no_cli_still_answers() {
         let no_answer = Event::LogsExported(Err(ExportFailure::NoAnswer));
@@ -1262,20 +1337,14 @@ mod tests {
         assert_eq!(w.answer(Effect::ExportLogs), no_answer);
     }
 
-    #[cfg(unix)]
     #[test]
     fn the_reveal_is_one_fixed_open() {
         let w = world();
         let zip = "/Users/p/Desktop/harness-logs-20261118-1030.zip";
         assert_eq!(w.runner.run(Effect::Reveal(PathBuf::from(zip))), None);
-        #[cfg(target_os = "macos")]
-        let expected = vec!["-R", zip];
-        #[cfg(not(target_os = "macos"))]
-        let expected = vec!["/Users/p/Desktop"];
-        assert_eq!(*w.doubles.opened.lock().unwrap(), [expected]);
+        assert_eq!(*w.doubles.opened.lock().unwrap(), [format!("reveal {zip}")]);
     }
 
-    #[cfg(unix)]
     #[test]
     fn the_binary_gets_its_four_effects_back() {
         let w = world();
@@ -1311,7 +1380,14 @@ mod tests {
         }
     }
 
-    #[cfg(unix)]
+    #[test]
+    fn the_about_credits_are_the_binarys() {
+        let w = world();
+        for effect in [Effect::AboutCredits(None), Effect::AboutCredits(Some("Harness 0.6.58".into()))] {
+            assert_eq!(w.runner.run(effect.clone()), Some(effect));
+        }
+    }
+
     #[test]
     fn relaunch_is_the_binarys() {
         let w = world();
@@ -1469,7 +1545,6 @@ mod tests {
         }
     }
 
-    #[cfg(unix)]
     #[test]
     fn allow_asks_macos_and_the_settings_open_with_one_fixed_argument() {
         let door = ChatgptDoor::answering(false, false);
@@ -1479,11 +1554,10 @@ mod tests {
         assert_eq!(door.with(|state| state.prompts), 1);
         assert!(w.doubles.opened.lock().unwrap().is_empty());
         assert_eq!(w.runner.run(Effect::OpenAxSettings), None);
-        assert_eq!(*w.doubles.opened.lock().unwrap(), [vec![AX_SETTINGS.to_string()]]);
+        assert_eq!(*w.doubles.opened.lock().unwrap(), [format!("url {AX_SETTINGS}")]);
         assert_eq!(door.with(|state| state.prompts), 1);
     }
 
-    #[cfg(unix)]
     #[test]
     fn an_update_check_runs_on_its_own_thread() {
         let updates = Updates::answering(Ok(Some("0.1.3".into())), Ok(()));
@@ -1498,28 +1572,37 @@ mod tests {
         assert_eq!(*updates.calls.lock().unwrap(), ["check"]);
     }
 
-    #[cfg(unix)]
     #[test]
-    fn a_check_or_an_install_answers_its_failure() {
+    fn a_check_a_download_or_an_install_answers_its_failure() {
         let updates = Updates::answering(Err(UpdateFailure::Check), Ok(()));
         let door = updates.clone();
         let w = world_where(move |doors| doors.updater = Some(door));
         assert_eq!(w.answer(Effect::CheckUpdate), Event::UpdateFailed(UpdateFailure::Check));
-        assert_eq!(w.answer(Effect::InstallUpdate), Event::UpdateInstalled);
-        *updates.install.lock().unwrap() = Err(UpdateFailure::NotWritable);
-        assert_eq!(w.answer(Effect::InstallUpdate), Event::UpdateFailed(UpdateFailure::NotWritable));
-        assert_eq!(*updates.calls.lock().unwrap(), ["check", "install", "install"]);
+        *updates.download.lock().unwrap() = Err(UpdateFailure::NotWritable);
+        assert_eq!(w.answer(Effect::DownloadUpdate), Event::UpdateFailed(UpdateFailure::NotWritable));
+        *updates.install.lock().unwrap() = Err(UpdateFailure::Install);
+        assert_eq!(w.answer(Effect::InstallUpdate), Event::UpdateFailed(UpdateFailure::Install));
+        assert_eq!(*updates.calls.lock().unwrap(), ["check", "download", "install"]);
     }
 
-    #[cfg(unix)]
+    #[test]
+    fn a_download_then_an_install_reach_the_door_in_order() {
+        let updates = Updates::answering(Ok(Some("0.1.3".into())), Ok(()));
+        let door = updates.clone();
+        let w = world_where(move |doors| doors.updater = Some(door));
+        assert_eq!(w.answer(Effect::DownloadUpdate), Event::UpdateDownloaded);
+        assert_eq!(w.answer(Effect::InstallUpdate), Event::UpdateInstalled);
+        assert_eq!(*updates.calls.lock().unwrap(), ["download", "install"]);
+    }
+
     #[test]
     fn with_no_updater_a_check_finds_nothing() {
         let w = world();
         assert_eq!(w.answer(Effect::CheckUpdate), Event::UpdateChecked(None));
+        assert_eq!(w.answer(Effect::DownloadUpdate), Event::UpdateChecked(None));
         assert_eq!(w.answer(Effect::InstallUpdate), Event::UpdateChecked(None));
     }
 
-    #[cfg(unix)]
     #[test]
     fn a_second_watch_replaces_the_first() {
         let w = world();
@@ -1539,7 +1622,6 @@ mod tests {
         assert_eq!(w.rest(), []);
     }
 
-    #[cfg(unix)]
     #[test]
     fn the_app_in_front_is_written_to_the_watch() {
         let (w, fronts) = world_in_front_of(GHOSTTY);
@@ -1552,7 +1634,6 @@ mod tests {
         assert_eq!(w.fake.stdin(), [GHOSTTY_LINE, VSCODE_LINE, r#"{"front":""}"#]);
     }
 
-    #[cfg(unix)]
     #[test]
     fn a_sound_change_is_written_to_the_watch() {
         let (off, on) = (r#"{"muted":true}"#, r#"{"muted":false}"#);
@@ -1572,7 +1653,6 @@ mod tests {
         assert_eq!(w.rest(), []);
     }
 
-    #[cfg(unix)]
     #[test]
     fn a_notifications_change_is_written_to_the_watch() {
         let (you, full) = (r#"{"notify":"you"}"#, r#"{"notify":"full"}"#);
@@ -1592,7 +1672,6 @@ mod tests {
         assert_eq!(w.rest(), []);
     }
 
-    #[cfg(unix)]
     #[test]
     fn a_new_watch_is_told_the_app_in_front_once() {
         let (w, fronts) = world_in_front_of(GHOSTTY);
@@ -1614,7 +1693,6 @@ mod tests {
         assert_eq!(w.fake.stdin(), [GHOSTTY_LINE, VSCODE_LINE, VSCODE_LINE, VSCODE_LINE]);
     }
 
-    #[cfg(unix)]
     #[test]
     fn a_repeat_writes_nothing() {
         let (w, fronts) = world_in_front_of(GHOSTTY);
@@ -1627,7 +1705,6 @@ mod tests {
         assert_eq!(w.fake.stdin(), [GHOSTTY_LINE, VSCODE_LINE, GHOSTTY_LINE]);
     }
 
-    #[cfg(unix)]
     #[test]
     fn nothing_of_the_front_is_logged() {
         let (w, fronts) = world_in_front_of(GHOSTTY);
@@ -1647,7 +1724,6 @@ mod tests {
         assert!(doubles.saved.lock().unwrap().is_empty());
     }
 
-    #[cfg(unix)]
     #[test]
     fn the_selected_tab_is_written_to_the_watch_with_terminal_in_front_and_the_dial_attached() {
         let scripts = Scripts::answering(&[TTY]);
@@ -1663,7 +1739,6 @@ mod tests {
         assert_eq!(w.fake.stdin(), [TERMINAL_LINE.to_string(), tab(TTY)]);
     }
 
-    #[cfg(unix)]
     #[test]
     fn nothing_is_asked_with_another_app_in_front_no_watch_or_no_dial() {
         let scripts = Scripts::answering(&[TTY]);
@@ -1685,7 +1760,6 @@ mod tests {
         assert_eq!(scripts.polls(1)[..2], ["running Terminal", "selected_tty Terminal"]);
     }
 
-    #[cfg(unix)]
     #[test]
     fn a_change_of_tab_is_one_line_and_a_repeat_none() {
         let scripts = Scripts::answering(&[TTY, TTY, OTHER, OTHER]);
@@ -1698,7 +1772,6 @@ mod tests {
         assert_eq!(w.fake.stdin(), [TERMINAL_LINE.to_string(), tab(TTY), tab(OTHER)]);
     }
 
-    #[cfg(unix)]
     #[test]
     fn asking_stops_when_another_app_comes_to_the_front() {
         let scripts = Scripts::answering(&[TTY]);
@@ -1715,7 +1788,6 @@ mod tests {
         assert_eq!(w.fake.stdin(), [TERMINAL_LINE, VSCODE_LINE]);
     }
 
-    #[cfg(unix)]
     #[test]
     fn asking_stops_when_the_watch_ends_or_the_dial_detaches() {
         let scripts = Scripts::answering(&[TTY]);
@@ -1740,7 +1812,6 @@ mod tests {
         scripts.still(4);
     }
 
-    #[cfg(unix)]
     #[test]
     fn a_select_from_the_watch_runs_once_and_says_whether_its_app_is_in_front() {
         let scripts = Arc::new(Scripts::default());
@@ -1761,7 +1832,6 @@ mod tests {
         assert_eq!(said, ["tabs: Terminal select ok", "tabs: Terminal select ok"]);
     }
 
-    #[cfg(unix)]
     #[test]
     fn a_select_that_raises_runs_focus_tty_and_one_that_does_not_runs_select_tty() {
         let scripts = Arc::new(Scripts::default());
@@ -1775,7 +1845,6 @@ mod tests {
         scripts.still(4);
     }
 
-    #[cfg(unix)]
     #[test]
     fn a_swipe_for_a_ghostty_in_the_back_makes_no_call_and_no_log_line() {
         let scripts = Arc::new(Scripts::default());
@@ -1794,7 +1863,6 @@ mod tests {
         assert_eq!(said, ["tabs: Ghostty select ok"]);
     }
 
-    #[cfg(unix)]
     #[test]
     fn an_app_that_is_not_running_is_never_sent_an_event() {
         // A swipe's select_tty and a tap's focus_tty alike.
@@ -1813,7 +1881,6 @@ mod tests {
         assert!(log.lines().iter().all(|line| !line.starts_with("tabs:")), "{:?}", log.lines());
     }
 
-    #[cfg(unix)]
     #[test]
     fn an_app_that_is_not_running_is_never_polled() {
         // It quit just now, still in front: asking it for its tab would launch it again.
@@ -1829,7 +1896,6 @@ mod tests {
         assert_eq!(w.fake.stdin(), [TERMINAL_LINE]);
     }
 
-    #[cfg(unix)]
     #[test]
     fn no_two_calls_overlap() {
         let scripts = Scripts::answering(&[TTY]);
@@ -1848,7 +1914,6 @@ mod tests {
         assert_eq!(scripts.most.load(Ordering::SeqCst), 1);
     }
 
-    #[cfg(unix)]
     #[test]
     fn the_failed_polls_are_counted_in_the_log_when_another_app_comes_to_the_front() {
         let scripts = Arc::new(Scripts::default());
@@ -1868,7 +1933,6 @@ mod tests {
         assert_eq!(counted.map(|counts| counts.iter().sum()), Some(polls), "{said:?}");
     }
 
-    #[cfg(unix)]
     #[test]
     fn nothing_of_a_tab_is_logged_but_its_outcome() {
         let scripts = Scripts::answering(&[TTY, OTHER]);
@@ -1892,7 +1956,6 @@ mod tests {
         assert!(doubles.saved.lock().unwrap().is_empty());
     }
 
-    #[cfg(unix)]
     #[test]
     fn the_tab_thread_ends_with_the_runner() {
         let scripts = Scripts::answering(&[TTY]);
@@ -1907,7 +1970,6 @@ mod tests {
         assert_eq!(Arc::strong_count(&scripts), 1);
     }
 
-    #[cfg(unix)]
     #[test]
     fn the_chatgpt_title_is_written_to_the_watch_with_chatgpt_in_front_the_dial_attached_and_the_permission() {
         let door = ChatgptDoor::answering(false, true);
@@ -1923,7 +1985,6 @@ mod tests {
         assert_eq!(door.with(|state| state.observations.len()), 1);
     }
 
-    #[cfg(unix)]
     #[test]
     fn nothing_is_observed_without_the_permission_the_dial_or_chatgpt_in_front() {
         let door = ChatgptDoor::answering(false, true);
@@ -1955,7 +2016,6 @@ mod tests {
         door.observed(1);
     }
 
-    #[cfg(unix)]
     #[test]
     fn the_observer_is_dropped_when_chatgpt_leaves_the_dial_detaches_the_watch_ends_or_the_permission_goes() {
         let door = ChatgptDoor::answering(false, true);
@@ -2011,7 +2071,6 @@ mod tests {
         assert_eq!(w.fake.stdin(), [&first[..], &[CHATGPT_LINE, FIX_LOGIN]].concat());
     }
 
-    #[cfg(unix)]
     #[test]
     fn a_title_heard_after_its_observer_was_dropped_is_written_nowhere() {
         let door = ChatgptDoor::answering(false, true);
@@ -2033,7 +2092,6 @@ mod tests {
         assert_eq!(w.fake.stdin(), [CHATGPT_LINE, FIX_LOGIN, VSCODE_LINE, CHATGPT_LINE, FIX_LOGIN]);
     }
 
-    #[cfg(unix)]
     #[test]
     fn the_permission_is_read_at_the_notification_and_once_more_a_moment_later() {
         let door = ChatgptDoor::answering(false, true);
@@ -2059,7 +2117,6 @@ mod tests {
         assert_eq!(door.with(|state| state.reads.len()), before + 2);
     }
 
-    #[cfg(unix)]
     #[test]
     fn a_change_of_the_permission_or_of_the_app_installed_is_one_follow_event() {
         let door = ChatgptDoor::answering(true, false);
@@ -2097,7 +2154,6 @@ mod tests {
         assert_eq!(w.rest(), [Event::WatchExit(Some(0))]);
     }
 
-    #[cfg(unix)]
     #[test]
     fn the_offer_is_one_event_when_chatgpt_comes_to_the_front_and_none_for_the_app_in_front_at_start() {
         let door = ChatgptDoor::answering(true, false);
@@ -2118,7 +2174,6 @@ mod tests {
         assert_eq!(w.rest(), [Event::WatchExit(Some(0))]);
     }
 
-    #[cfg(unix)]
     #[test]
     fn no_observer_is_one_log_line_each_time_observing_starts() {
         let door = ChatgptDoor::answering(false, true);
@@ -2142,7 +2197,6 @@ mod tests {
         assert_eq!(w.fake.stdin(), [CHATGPT_LINE, VSCODE_LINE, CHATGPT_LINE]);
     }
 
-    #[cfg(unix)]
     #[test]
     fn an_observation_that_does_not_start_is_one_log_line_each_time_observing_starts() {
         let door = ChatgptDoor::answering(false, true);
@@ -2163,7 +2217,6 @@ mod tests {
         assert_eq!(w.answer(Effect::StopWatch), Event::WatchExit(Some(0)));
     }
 
-    #[cfg(unix)]
     #[test]
     fn a_chatgpt_that_hangs_holds_back_no_front_line() {
         let door = ChatgptDoor::answering(false, true);
@@ -2188,7 +2241,6 @@ mod tests {
         door.dropped(0);
     }
 
-    #[cfg(unix)]
     #[test]
     fn nothing_of_a_title_reaches_the_log_an_event_or_the_state_file() {
         let door = ChatgptDoor::answering(true, true);
@@ -2221,7 +2273,6 @@ mod tests {
         assert!(doubles.saved.lock().unwrap().is_empty());
     }
 
-    #[cfg(unix)]
     #[test]
     fn the_follow_thread_ends_with_the_runner() {
         let door = ChatgptDoor::answering(false, true);
@@ -2237,14 +2288,13 @@ mod tests {
         assert_eq!(Arc::strong_count(&door), 1);
     }
 
-    #[cfg(unix)]
     #[test]
     fn from_start_to_dial_connected() {
         let w = world();
         w.fake.script("hardware watch --json", &[r#"{"attached":true,"fw":"0.0.95"}"#, "@stdin"]);
         w.fake.script("auth status --json", &[r#"{"loggedIn":true}"#]);
         w.fake.script("--version", &["0.6.58"]);
-        let (mut app, mut effects) = App::new(Saved::default(), w.runner.find_cli(), false, B);
+        let (mut app, mut effects) = App::new(Saved::default(), w.runner.find_cli(), false, B, false);
         let connected = MenuItem::Text("Device ready".into());
         let (mut dial, mut auth, mut version) = (false, false, false);
         loop {
@@ -2266,7 +2316,6 @@ mod tests {
         assert_eq!(calls, ["--version", "auth status --json", "hardware watch --json"]);
     }
 
-    #[cfg(unix)]
     #[test]
     fn nothing_personal_reaches_the_log() {
         let w = world();
@@ -2287,13 +2336,14 @@ mod tests {
         assert!(lines.iter().all(|line| !line.contains("state=S") && !line.contains('@')), "{lines:?}");
     }
 
-    #[cfg(unix)]
     #[test]
     fn a_sign_in_it_replaced_says_nothing_more() {
         // The app cannot tell one sign-in's events from another's: once replaced, a sign-in must say nothing more.
         let w = world();
         assert!(w.runner.find_cli());
-        w.fake.script("login --json", &[URL, "@wait go", FAILED, "@exit 1"]);
+        // `@driver`: as `harness login --json`, a sign-in cancelled or replaced ends once its stdin closes, well before
+        // its kill.
+        w.fake.script("login --json", &["@driver", URL, "@wait go", FAILED, "@exit 1"]);
         // Cancelled, and replaced at once.
         assert_eq!(w.answer(Effect::RunLogin), browser());
         assert_eq!(w.runner.run(Effect::CancelLogin), None);
@@ -2307,13 +2357,13 @@ mod tests {
         assert_eq!(w.rest(), [sign_in(LoginEvent::Done(Err("fetch failed".into())))]);
     }
 
-    #[cfg(unix)]
     #[test]
     fn a_sign_in_is_cancelled_while_it_hands_an_event_over() {
         // account.rs hands each event over while it holds the lock `cancel` takes. So `send` only hands the event on to
         // the app's loop: a cancel then waits for the hand-over, never the hand-over for the cancel.
         let (fake, home, doubles) = (Fake::new(), tempfile::tempdir().unwrap(), Arc::new(Doubles::default()));
-        fake.script("login --json", &[URL, "@hang"]);
+        // `@driver`: as `harness login --json`, it ends once a cancel closes its stdin, well before its kill.
+        fake.script("login --json", &["@driver", URL, "@wait never"]);
         let (inside, entered) = mpsc::channel();
         let (release, gate) = mpsc::channel::<()>();
         let gate = Mutex::new(gate);

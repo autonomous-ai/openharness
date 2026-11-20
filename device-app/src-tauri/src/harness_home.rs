@@ -18,11 +18,13 @@ pub enum Root {
     State,
 }
 
-/// What the app builds through the helper: the installed CLI (data) and its node runtime (state).
+/// What the app builds through the helper: the installed CLI (data), its node runtime (state) and, on Windows, the
+/// `harness` command's folder (data).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Entry {
     Cli,
     Runtime,
+    Bin,
 }
 
 impl Entry {
@@ -30,12 +32,13 @@ impl Entry {
         match self {
             Entry::Cli => "cli",
             Entry::Runtime => "runtime",
+            Entry::Bin => "bin",
         }
     }
 
     pub fn root(self) -> Root {
         match self {
-            Entry::Cli => Root::Data,
+            Entry::Cli | Entry::Bin => Root::Data,
             Entry::Runtime => Root::State,
         }
     }
@@ -198,6 +201,7 @@ mod tests {
         assert_eq!(roots.root(Root::State), legacy);
         assert_eq!(roots.path(Entry::Cli), legacy.join("cli"));
         assert_eq!(roots.path(Entry::Runtime), legacy.join("runtime"));
+        assert_eq!(roots.path(Entry::Bin), legacy.join("bin"));
     }
 
     #[test]
@@ -208,6 +212,7 @@ mod tests {
         let roots = harness_roots_with(Path::new(HOME), &look);
         let (data, state) = xdg();
         assert_eq!(roots.path(Entry::Cli), data.join("cli"));
+        assert_eq!(roots.path(Entry::Bin), data.join("bin"));
         assert_eq!(roots.path(Entry::Runtime), state.join("runtime"));
     }
 

@@ -134,7 +134,7 @@ Future<void> _show(WidgetTester tester, Brightness brightness) async {
   addTearDown(browserApp.dispose);
   WebPanePanel.webviewAvailableForTest = true;
   addTearDown(() => WebPanePanel.webviewAvailableForTest = null);
-  // The menu-bar app's offer, in each state its band and its Devices row draw.
+  // The device app's offer, in each state its band and its Devices row draw.
   Future<DeviceAppOffer> offer(
     DeviceAppOfferState state, [
     DeviceAppInstallStep? step,
@@ -269,7 +269,7 @@ class _Gallery extends StatelessWidget {
   /// Where Browser settings reads Faye's.
   final AppNotifier browserApp;
 
-  /// The menu-bar app's offers its bands draw: offered, installing, failed.
+  /// The device app's offers its bands draw: offered, installing, failed.
   final List<DeviceAppOffer> deviceAppBands;
 
   /// The offers its Devices rows draw: offered, installing, failed, not opened, not running.
@@ -403,7 +403,7 @@ class _Gallery extends StatelessWidget {
           ]),
           section(
             'device-app',
-            'The menu-bar app: its band offered, installing and failed; its Devices row offered, installing, failed, not opened and not running',
+            'The device app: its band offered, installing and failed; its Devices row offered, installing, failed, not opened and not running; on Windows and Linux, its band and row offered',
             [
               Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -413,10 +413,36 @@ class _Gallery extends StatelessWidget {
                     SizedBox(
                       width: 720,
                       // No room for traffic lights, so the image is the same on every host.
-                      child: DeviceAppBand(offer: offer, leadingClearance: 0),
+                      child: DeviceAppBand(
+                        offer: offer,
+                        leadingClearance: 0,
+                        platform: TargetPlatform.macOS,
+                      ),
                     ),
                   for (final offer in deviceAppRows)
-                    SizedBox(width: 420, child: DeviceAppRow(offer: offer)),
+                    SizedBox(
+                      width: 420,
+                      child: DeviceAppRow(
+                        offer: offer,
+                        platform: TargetPlatform.macOS,
+                      ),
+                    ),
+                  // Offered, in the tray app's words Windows and Linux share.
+                  SizedBox(
+                    width: 720,
+                    child: DeviceAppBand(
+                      offer: deviceAppBands.first,
+                      leadingClearance: 0,
+                      platform: TargetPlatform.linux,
+                    ),
+                  ),
+                  SizedBox(
+                    width: 420,
+                    child: DeviceAppRow(
+                      offer: deviceAppRows.first,
+                      platform: TargetPlatform.linux,
+                    ),
+                  ),
                 ],
               ),
             ],
