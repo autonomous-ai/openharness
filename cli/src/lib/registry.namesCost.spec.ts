@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { registry as Registry } from './registry.js'
+import { REGISTRY_WRITE_DEADLINE_MS } from './registryPersistence.js'
 
 const io = vi.hoisted(() => ({ file: '', namesPublished: false, failDirectorySync: false,
   publications: [] as string[], read: undefined as undefined | (() => Promise<void>),
@@ -51,7 +52,8 @@ const ID = 'names-cost-agent', CHOSEN = 'Chosen name'
 let root = '', registry: typeof Registry | undefined, release: (() => void) | undefined
 const accepted: Promise<unknown>[] = []
 const names = (): Record<string, string> => JSON.parse(readFileSync(io.file, 'utf8'))
-function within<T>(pending: Promise<T>, name: string, ms = 5_000): Promise<T> {
+// Longer than the write deadline, whose timers are held: a guard of the same bound would never fire.
+function within<T>(pending: Promise<T>, name: string, ms = 10_000): Promise<T> {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error(name + ' deadline')), ms)
     pending.then(value => { clearTimeout(timer); resolve(value) }, error => { clearTimeout(timer); reject(error) })
@@ -76,7 +78,8 @@ function hold(boundary: 'read' | 'prepare') {
 }
 
 beforeEach(async () => {
-  deadline.holdRegistryDeadline(Infinity)
+  // No test here means the write deadline to pass: how fast this machine writes the registry never fails them.
+  deadline.holdRegistryDeadline(REGISTRY_WRITE_DEADLINE_MS)
   vi.resetModules()
   registry = undefined; release = undefined; accepted.length = 0
   io.namesPublished = false; io.failDirectorySync = false; io.publications = []

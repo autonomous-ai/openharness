@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { RegisteredSession, registry as Registry } from './registry.js'
+import { REGISTRY_WRITE_DEADLINE_MS } from './registryPersistence.js'
 
 type Row = Record<string, unknown>
 const io = vi.hoisted(() => ({ file: '', published: false, failDirectorySync: false,
@@ -48,7 +49,8 @@ const isPersistedRow = (value: unknown) => !!value && typeof value === 'object'
   && Object.hasOwn(value, 'schemaVersion') && Object.hasOwn(value, 'agentId')
 const isOwnershipRecord = (value: unknown) => !!value && typeof value === 'object'
   && Object.hasOwn(value, 'agentId') && Object.hasOwn(value, 'evidenceRevision') && !isPersistedRow(value)
-function within<T>(pending: Promise<T>, name: string, ms = 5_000): Promise<T> {
+// Longer than the write deadline, whose timers are held: a guard of the same bound would never fire.
+function within<T>(pending: Promise<T>, name: string, ms = 10_000): Promise<T> {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error(name + ' deadline')), ms)
     pending.then(value => { clearTimeout(timer); resolve(value) }, error => { clearTimeout(timer); reject(error) })
@@ -73,7 +75,8 @@ function holdPreparation() {
 }
 
 beforeEach(async () => {
-  deadline.holdRegistryDeadline(Infinity)
+  // No test here means the write deadline to pass: how fast this machine writes the registry never fails them.
+  deadline.holdRegistryDeadline(REGISTRY_WRITE_DEADLINE_MS)
   vi.resetModules()
   registry = undefined; release = undefined; accepted.length = 0
   io.published = false; io.failDirectorySync = false; io.durable = []; io.prepare = undefined

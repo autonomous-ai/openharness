@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import type { RegisteredSession } from './registry.js'
+import { REGISTRY_WRITE_DEADLINE_MS } from './registryPersistence.js'
 
 vi.mock('node:perf_hooks', async original => ({ ...await original<object>(), performance: { now: () => 0 } }))
 const deadline = await vi.hoisted(() => import('../testing/registryDeadline.js'))
@@ -17,7 +18,8 @@ const SESSION = 'agent:main:harness-1'
 const runtimes = [{ backend: 'tmux' as const, paneId: '%1' }]
 let root: string
 beforeEach(() => {
-  deadline.holdRegistryDeadline(Infinity)
+  // No test here means the write deadline to pass: how fast this machine writes the registry never fails them.
+  deadline.holdRegistryDeadline(REGISTRY_WRITE_DEADLINE_MS)
   root = mkdtempSync(join(tmpdir(), 'registry-local-'))
   vi.stubEnv('ADAPTER_DATA_DIR', root)
   for (const level of ['log', 'warn', 'error'] as const) vi.spyOn(console, level).mockImplementation(() => {})

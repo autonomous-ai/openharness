@@ -3,20 +3,12 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { Server } from 'node:http'
+import { REGISTRY_WRITE_DEADLINE_MS } from './registryPersistence.js'
 
-const preparation = vi.hoisted(() => ({ wait: undefined as undefined | (() => Promise<void>), due: new Map<unknown, () => void>() }))
+const preparation = vi.hoisted(() => ({ wait: undefined as undefined | (() => Promise<void>) }))
 const deadline = await vi.hoisted(() => import('../testing/registryDeadline.js'))
 vi.mock('node:fs/promises', original => deadline.slowSyncFsPromises(original, { afterSync: async () => { await preparation.wait?.() } }))
-// Under load a registry image sync outlives every real wait of 250 ms or more: each one still running fires
-// as that sync returns, if not before.
-const realTimeout = globalThis.setTimeout, realClear = globalThis.clearTimeout
-function slowTimeout(callback: (...args: unknown[]) => void, ms: number | undefined, args: unknown[]) {
-  if (ms === undefined || ms < 250) return realTimeout(callback, ms, ...args)
-  const timer = realTimeout(() => { preparation.due.delete(timer); callback(...args) }, ms)
-  preparation.due.set(timer, () => { realClear(timer); callback(...args) })
-  return timer
-}
-// The write deadline is a test's to expire (limit), never the host's clock.
+// The write deadline is a test's to expire, never the host's clock.
 vi.mock('node:perf_hooks', async original => ({ ...await original<object>(), performance: { now: () => 0 } }))
 vi.mock('./bootId.js', async original => ({ ...await original<object>(), currentBootId: () => 'fixture-boot', bootChanged: () => false }))
 // Loads the module graph once, before any hook's time limit: cold, it takes seconds on a loaded machine. Each test
@@ -32,11 +24,13 @@ let registry: typeof import('./registry.js')['registry'], source: string
 let started: Awaited<ReturnType<typeof import('../hookServer.js')['startHookServer']>>
 let prompts: string[], registered: ReturnType<typeof vi.fn<() => void>>
 const stopJobs = new Map<string, Promise<void>>()
-let limit: (() => void) | undefined, grace: (() => void) | undefined
+let timers: ReturnType<typeof deadline.holdRegistryDeadline>
 const file = () => join(root, 'registry.json')
 const disk = () => JSON.parse(readFileSync(file(), 'utf8'))
 beforeEach(async () => {
-  deadline.holdRegistryDeadline(Infinity)
+  // The 250 ms reply grace and the 5 s write deadline fire only when a test fires them, so how fast
+  // this machine writes the registry never changes the replies these tests pin.
+  timers = deadline.holdRegistryDeadline(REGISTRY_WRITE_DEADLINE_MS, { hold: [250] })
   vi.resetModules()
   root = mkdtempSync(join(tmpdir(), 'registry-hook-persistence-'))
   vi.stubEnv('ADAPTER_DATA_DIR', root)
@@ -46,18 +40,7 @@ beforeEach(async () => {
     processIdentity: { pid: 5101, startMarker: 'fixture-start', executable: '<claude>' } }))!.entry.agentId
   writeFileSync(join(root, 'conversation.jsonl'), '{}\n')
   await registry.flush()
-  prompts = []; registered = vi.fn(); stopJobs.clear(); limit = grace = undefined
-  // The 250 ms reply grace and the 5 s write deadline fire only when a test fires them, so how fast
-  // this machine writes the registry never changes the replies these tests pin.
-  vi.spyOn(globalThis, 'setTimeout').mockImplementation(((callback: (...args: unknown[]) => void, ms?: number, ...args: unknown[]) => {
-    if (ms === 5_000) limit = () => callback(...args)
-    else if (ms === 250) grace = () => callback(...args)
-    else return slowTimeout(callback, ms, args)
-    return realTimeout(() => {}, 0)
-  }) as typeof setTimeout)
-  vi.spyOn(globalThis, 'clearTimeout').mockImplementation(((timer?: Parameters<typeof clearTimeout>[0]) => {
-    preparation.due.delete(timer); realClear(timer)
-  }) as typeof clearTimeout)
+  prompts = []; registered = vi.fn(); stopJobs.clear()
   const { startHookServer } = await import('../hookServer.js')
   started = await startHookServer(0, { onRegistered: registered, onSessionEnd: () => {},
     hookAdmissionBlocked: id => stopJobs.has(id), onPromptSubmitted: (_id, prompt) => { prompts.push(prompt) },
@@ -65,7 +48,7 @@ beforeEach(async () => {
   server = started.server
 })
 afterEach(async () => {
-  preparation.wait = undefined; preparation.due.clear()
+  preparation.wait = undefined
   release?.(); release = undefined
   if (server) await new Promise<void>(done => server!.close(() => done()))
   server = undefined
@@ -116,8 +99,7 @@ it('answers a queued hook pending while its predecessor retains the write', asyn
 it('answers a slow commit pending at the reply grace without granting durability', async () => {
   const held = hold(), response = post()
   await held.entered
-  expect(grace).toBeTypeOf('function')
-  grace!()
+  timers.fire(250)
   expect(await response).toEqual({ pending: true })
   expect(disk()[0].sessionId).toBe(''); expect(prompts).toEqual([])
   held.release()
@@ -127,8 +109,7 @@ it('answers a slow commit pending at the reply grace without granting durability
 it('answers an expired commit pending and revokes publication even when I/O later settles', async () => {
   const held = hold(), response = post()
   await held.entered
-  expect(limit).toBeTypeOf('function')
-  limit!()
+  timers.expire()
   expect(await response).toEqual({ pending: true })
   expect(disk()[0].sessionId).toBe(''); expect(prompts).toEqual([])
   held.release()

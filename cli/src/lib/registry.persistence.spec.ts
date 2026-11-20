@@ -8,6 +8,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { ownProcessGroup } from './windows/noWindow.js'
 import type { registry as Registry } from './registry.js'
+import { REGISTRY_WRITE_DEADLINE_MS } from './registryPersistence.js'
 
 const cleanup = vi.hoisted(() => ({ file: '', published: false, wait: undefined as undefined | (() => Promise<void>) }))
 vi.mock('node:fs', async original => {
@@ -36,6 +37,7 @@ let directory: string
 let registry: typeof Registry
 let holder: ChildProcess | undefined
 let exitFlush: Promise<void> | undefined
+let timers: ReturnType<typeof deadline.holdRegistryDeadline>
 const input = { agentId: 'persisted-agent', engine: 'claude' as const, tmuxPane: '%1',
   processIdentity: { pid: 101, executable: '/fixture/claude', startMarker: 'fixture-101' } }
 const plan = { id: '12345678-1234-1234-1234-123456789012', identity: 'fixture-conversation',
@@ -43,7 +45,8 @@ const plan = { id: '12345678-1234-1234-1234-123456789012', identity: 'fixture-co
 const rows = () => JSON.parse(readFileSync(join(directory, 'registry.json'), 'utf8'))
 
 beforeEach(async () => {
-  deadline.holdRegistryDeadline(Infinity)
+  // The write deadline passes only where a test expires it: how fast this machine writes the registry never fails them.
+  timers = deadline.holdRegistryDeadline(REGISTRY_WRITE_DEADLINE_MS)
   vi.resetModules()
   exitFlush = undefined
   directory = mkdtempSync(join(tmpdir(), 'registry-persistence-'))
@@ -316,7 +319,6 @@ it('does not transfer a queued registration to a replacement route owner', async
 })
 
 it('retains a durably published result past reply expiry while cleanup keeps the writer occupied', async () => {
-  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
   let entered!: () => void, release!: () => void
   const arrived = new Promise<void>(resolve => { entered = resolve })
   const held = new Promise<void>(resolve => { release = resolve })
@@ -329,7 +331,8 @@ it('retains a durably published result past reply expiry while cleanup keeps the
   let nextRan = false
   let second: Promise<unknown> | undefined
   try {
-    await vi.advanceTimersByTimeAsync(5_000)
+    timers.expire()
+    await new Promise(resolve => setImmediate(resolve))
     second = registry.setClosePlan(input.agentId, null).then(row => { nextRan = true; return row })
     expect(nextRan).toBe(false)
     expect(failure).toBeUndefined()
@@ -390,7 +393,6 @@ it('waits for final exit publication cleanup before releasing its caller', async
 })
 
 it('retains exit ownership after its write deadline until an active cleanup settles', async () => {
-  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
   let entered!: () => void, release!: () => void
   const arrived = new Promise<void>(resolve => { entered = resolve })
   const held = new Promise<void>(resolve => { release = resolve })
@@ -401,7 +403,8 @@ it('retains exit ownership after its write deadline until an active cleanup sett
   let settled = false
   exitFlush = registry.flush({ exiting: true }).catch(() => {}).then(() => { settled = true })
   try {
-    await vi.advanceTimersByTimeAsync(5_000)
+    timers.expire()
+    await new Promise(resolve => setImmediate(resolve))
     expect(settled).toBe(false)
   } finally { release(); await accepted; await exitFlush }
 })
