@@ -23,10 +23,10 @@ enum DesktopBuild {
 /// The website the download routes live on.
 final kHarnessSite = Uri.parse('https://harness.autonomous.ai');
 
-/// Where Download app goes: the build's own download, or `/desktop` — which lists every build and
-/// says why none runs here — when nothing suits this browser or it could not be told.
+/// Where Download app goes: the build's own download, or `/download` — which lists every build —
+/// when nothing suits this browser or it could not be told.
 Uri desktopDownloadUri(DesktopBuild? build) =>
-    kHarnessSite.replace(path: build?.path ?? '/desktop');
+    kHarnessSite.replace(path: build?.path ?? '/download');
 
 /// User-Agent Client Hints' high-entropy CPU answer.
 typedef CpuHints = ({String architecture, String bitness});
