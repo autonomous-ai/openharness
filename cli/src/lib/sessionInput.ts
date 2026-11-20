@@ -667,8 +667,15 @@ export class SessionInputController {
     let delivery = await write()
     try {
       for (;;) {
-        const notReady = paneNotReady(delivery)
+        // A hold can change during a retry's native or screen read, before any byte is written.
+        // Only that proven refusal returns to the pane wait; a possibly executed paste never does.
+        const notReady = paneNotReady(delivery) || waitingUntyped(state) && typeof delivery !== 'boolean'
+          && delivery.state === 'failed' && delivery.dispatch === 'not_started'
+          && (delivery.reason === 'caller_gone' || delivery.reason === 'terminal control revoked') && !current()
         if (notReady) {
+          // Recovery may hold control after renewal. Keep the refusal pending until an actual write
+          // replaces it; the old revocation must not become a paste failure once current() is true.
+          delivery = terminalActionNotStarted(OPENCLAW_NOT_READY)
           if (!firstTask() && paneWaitMs >= OPENCLAW_NOT_READY_MAX_MS) break
           // Said from its first not-ready answer until it is typed or given up, each read of the pane included.
           state.paneWait = true
@@ -679,7 +686,7 @@ export class SessionInputController {
         await sleep(notReady ? OPENCLAW_PANE_RETRY_MS : LEASE_RETRY_MS)
         if (held()) return refused()
         if (!current()) {
-          if (!await refreshPending()) break
+          if (!notReady || !await refreshPending()) break
           if (held()) return refused()
         }
         // The first task never gives way to itself: put back, it would lose `first` and wait behind itself.
@@ -1362,6 +1369,7 @@ export class SessionInputController {
     let requeued = false
     let typed = { ...session }
     let sameBinding = captureSessionBinding(typed)
+    let sameLifecycle = (): boolean => true
     const operation: InputOperation = { request, ...(first ? { first } : {}), session: typed, duringTurn: state.turnOpen,
       writing: false, dispatched: false, ...(release ? { release } : {}) }
     operation.requeue = () => {
@@ -1376,23 +1384,25 @@ export class SessionInputController {
     }
     const current = (): boolean => {
       const now = this.controlSession(sessionId)
-      return this.states.get(sessionId) === state && !(deliveryId && state.cancelled) && request.current?.() !== false && !!now
+      return sameLifecycle() && this.states.get(sessionId) === state && !(deliveryId && state.cancelled) && request.current?.() !== false && !!now
         && (launchBound(typed, now) === now || sameBinding(now))
     }
     const refreshPending = async (): Promise<boolean> => {
       // A not-started pane refusal owns no effect. A draft hold changes the registry revision,
       // so acquire fresh native authority for this same intent instead of losing it on release.
-      if (!waitingUntyped(state) || typed.engine !== 'openclaw' || requeued || this.states.get(sessionId) !== state
+      if (!waitingUntyped(state) || typed.engine !== 'openclaw' || !sameLifecycle() || requeued || this.states.get(sessionId) !== state
         || deliveryId && state.cancelled || request.current?.() === false) return false
       const now = this.controlSession(sessionId)
       if (!now || !recoverablePaneHold(typed.identityHold) || !recoverablePaneHold(now.identityHold)
+        || typed.interpretationHold !== undefined || now.interpretationHold !== undefined
         || typed.openclawStateDir !== now.openclawStateDir || typed.openclawLocal !== now.openclawLocal
         || !sameBinding({ ...now, identityHold: typed.identityHold, evidenceRevision: typed.evidenceRevision })) return false
       const selected = { ...now }, binding = captureSessionBinding(selected)
       const same = (current: RegisteredSession | undefined): boolean => binding(current)
         && current?.openclawStateDir === selected.openclawStateDir && current?.openclawLocal === selected.openclawLocal
+        && current?.interpretationHold === undefined
       if (!await this.deps.validateRuntime(selected).catch(() => false)) return false
-      if (requeued || this.states.get(sessionId) !== state || deliveryId && state.cancelled
+      if (!sameLifecycle() || requeued || this.states.get(sessionId) !== state || deliveryId && state.cancelled
         || request.current?.() === false || !same(this.controlSession(sessionId))) return false
       typed = selected
       sameBinding = same
@@ -1430,6 +1440,7 @@ export class SessionInputController {
       if (typed.sessionId && typed.boundAt != null && typed.launch?.state === 'starting'
         && this.deps.launchRevision) {
         const restoredRevision = this.deps.launchRevision(session.agentId)
+        sameLifecycle = () => this.deps.launchRevision!(session.agentId) === restoredRevision
         const token = typed.launch.nativeToken
         const sameRestore = captureSessionBinding({ ...typed, processIdentity: null, evidenceRevision: undefined })
         const now = this.deps.now ?? Date.now
@@ -1448,8 +1459,7 @@ export class SessionInputController {
             if (this.refuseHeldMessage(sessionId, deliveryId, receipt)) return
             if (row.processIdentity && (!row.launch || row.launch.state === 'ready')) {
               typed = { ...row }
-              const committedBinding = captureSessionBinding(typed)
-              sameBinding = row => this.deps.launchRevision!(session.agentId) === restoredRevision && committedBinding(row)
+              sameBinding = captureSessionBinding(typed)
               operation.session = typed
               break
             }
