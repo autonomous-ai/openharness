@@ -10,7 +10,7 @@ import { commitRelaunchedEngine } from '../core/agents/restart.js'
 import { createAgentRetargeter, type RetargetDeps } from '../core/agents/retarget.js'
 import { createPaneWatcher } from '../core/agents/newPane.js'
 import { hostMoveDeps, type HostMoveWiring } from '../core/agents/hostMove.js'
-import { resolvePaneEngineProcess } from './paneEngineProcess.js'
+import { lookupPaneEngineProcess, resolvePaneEngineProcess } from './paneEngineProcess.js'
 import { AgentRestartCoordinator } from './restartAgent.js'
 import { restoreAgents, type RestoreAgentsDeps } from './restoreAgents.js'
 import { createRetainExitedSession } from './retainExitedSession.js'
@@ -61,7 +61,7 @@ vi.mock('node:fs', async original => {
     })
   } }
 })
-vi.mock('./paneEngineProcess.js', async original => ({ ...await original<object>(), resolvePaneEngineProcess: vi.fn() }))
+vi.mock('./paneEngineProcess.js', async original => ({ ...await original<object>(), lookupPaneEngineProcess: vi.fn(), resolvePaneEngineProcess: vi.fn() }))
 vi.mock('./deleteAgentFallback.js', async original => ({ ...await original<object>(), checkPidRuntime: async () => ({ state: 'gone', reason: 'fixture terminated' }) }))
 vi.mock('./workspaceCheck.js', () => ({ workspaceMissing: () => null }))
 vi.mock('./captureResumeIdentity.js', () => ({ captureResumeIdentity: async (row: RegisteredSession) => row }))
@@ -124,6 +124,7 @@ beforeEach(async () => {
     return prepared
   })
   vi.mocked(resolvePaneEngineProcess).mockResolvedValue(newProcess)
+  vi.mocked(lookupPaneEngineProcess).mockResolvedValue({ ok: true, identity: newProcess })
   paneState.mockResolvedValue({ dead: false, engineExit: null })
   directory = mkdtempSync(join(tmpdir(), 'launch-publication-'))
   const admitted = (await registry.openPendingAgent({ engine: 'claude', runtimes: [runtime], cwd: directory }))!
@@ -347,9 +348,12 @@ async function cancelledReadiness(caller: 'restart' | 'new pane' | 'restore' | '
       holdRoute: () => () => {}, announce, invalidateControl: vi.fn(), waitingArgv: () => [], log: vi.fn() }).swap(row.agentId, destination, newProcess)
   }
   const settled = pending.catch(error => error)
-  await held.entered
+  // A refused publication must fail here, not wait for a durability point it never reaches.
+  expect(await Promise.race([held.entered.then(() => 'held'), settled.then(() => 'settled')])).toBe('held')
   cancelled = true
-  held.release(); await settled
+  held.release()
+  const outcome = await settled
+  if (caller === 'restart' && phase === 'prepare') expect(outcome).toBeInstanceOf(RegistryOwnershipChanged)
   expect(releaseHold).not.toHaveBeenCalled(); expect(announce).not.toHaveBeenCalled()
   expect(registry.byAgent(row.agentId)?.processIdentity?.pid).not.toBe(newProcess.pid)
   if (phase === 'prepare') expect(persisted().find(entry => entry.agentId === row.agentId)?.processIdentity?.pid).not.toBe(newProcess.pid)
