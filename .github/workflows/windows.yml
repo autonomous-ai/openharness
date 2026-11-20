@@ -254,6 +254,7 @@ jobs:
           name: ${{ matrix.artifact }}
           path: payload/
           if-no-files-found: error
+          retention-days: 7
       # Keep the tested serial/PTY payload available for independent hardware checks if the flasher gate fails.
       # The Windows flasher (sub-project E), as Windows PowerShell 5.1 runs it, with no board: its version, a refused
       # port name, and a download and check of the newest published firmware into a cache folder whose name a shell
@@ -278,15 +279,16 @@ jobs:
           # Built from [char] codes: this step's own source must not depend on how the runner encodes it.
           $odd = "Nguy$([char]0x1EC5)n V$([char]0x0103)n A' & 100%"
           $env:HARNESS_FLASHER_CACHE = Join-Path (Join-Path $env:RUNNER_TEMP $odd) 'flasher'
-          # The newest firmware comes from the public release: a failed read of it is retried, and after 3 tries named
-          # as the download's failure. Any other failure is the flasher's, and fails at once.
+          # The newest firmware comes from the public release: a failed read of it, or an image that is not the one the
+          # manifest names (a CDN mid-publish), is retried, and after 3 tries named as the download's failure. Any other
+          # failure is the flasher's, and fails at once.
           $stderr = Join-Path $env:RUNNER_TEMP 'flasher.stderr'
           for ($try = 1; ; $try++) {
             $run = Start-Process powershell.exe -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $ps1, '--no-flash' -Wait -PassThru -NoNewWindow -RedirectStandardError $stderr
             $said = Get-Content -Raw -LiteralPath $stderr
             if ($said) { Write-Host $said }
             if ($run.ExitCode -eq 0) { break }
-            if ($said -notmatch 'cannot read the release manifest|download failed') { throw "--no-flash exited $($run.ExitCode)" }
+            if ($said -notmatch 'cannot read the release manifest|download failed|firmware sha256 mismatch|firmware size mismatch') { throw "--no-flash exited $($run.ExitCode)" }
             $last = @(($said -split "`r?`n") | Where-Object { $_ })[-1]
             if ($try -eq 3) { throw "The firmware download from the public release failed 3 times: the CDN or the release download failed, not this pull request's code ($last)" }
             $wait = @(15, 45)[$try - 1]
@@ -456,3 +458,4 @@ jobs:
           name: install-logs-${{ matrix.arch }}
           path: ${{ runner.temp }}/logs
           include-hidden-files: true
+          retention-days: 7
