@@ -165,6 +165,9 @@ interface InputState {
   cleared: boolean
   /** Ctrl+U is being pressed into the box ([clearRefused]): what it shows is what is left of Harness's message. */
   clearing: boolean
+  /** The first task went back to its row ([clearRefused]), and the binding pass has not handed it over again
+   *  ([expectFirstTask]): a message sent meanwhile is queued behind it ([heldBehindFirstTask]). */
+  firstTaskOnRow: boolean
   /** The receipt of the person's message typed last, until it is settled ([settle]). */
   awaitingReceipt?: MessageReceipt
   controlLocked: boolean
@@ -252,6 +255,15 @@ function paneNotReady(delivery: boolean | TerminalActionResult): boolean {
     && delivery.reason === OPENCLAW_NOT_READY
 }
 
+/**
+ * Whether the messages queued for a pane wait for a first task cleared from its box ([clearRefused]): back on its row, it
+ * is typed again from there first, and they once a turn has taken it. Typed nowhere yet, they do not hold the `/session`
+ * its pane needs to send it ([acquireControl]).
+ */
+function heldBehindFirstTask(state: InputState): boolean {
+  return state.firstTask && state.cleared
+}
+
 function fingerprint(content: string): string {
   return createHash('sha256').update(content.replace(/\r\n/g, '\n').trim()).digest('hex')
 }
@@ -332,6 +344,8 @@ export class SessionInputController {
    */
   expectFirstTask(id: string): void {
     const state = this.state(id)
+    // One back on its row is handed over again: a message sent from now is no longer queued for it.
+    state.firstTaskOnRow = false
     if (state.firstTask) return
     state.firstTask = true
     this.deps.onWaitChanged?.(id)
@@ -447,6 +461,7 @@ export class SessionInputController {
         paneWait: false,
         cleared: false,
         clearing: false,
+        firstTaskOnRow: false,
         controlLocked: false,
         cancelling: 0,
         afterCancel: { writes: [], sent: [] },
@@ -495,6 +510,7 @@ export class SessionInputController {
     if (!state.firstTask) return
     state.firstTask = false
     state.cleared = false
+    state.firstTaskOnRow = false
     this.deps.onWaitChanged?.(sessionId)
   }
 
@@ -574,7 +590,7 @@ export class SessionInputController {
       return Promise.resolve()
     }
     this.dropExpired(sessionId, state)
-    if (state.controlLocked
+    if (state.controlLocked || state.firstTaskOnRow
       || (deliveryId && (state.deliveryId || state.dispatching || state.awaitingFingerprint || state.turnOpen || state.settling))
       || (!this.typesWhileBusy(session.engine) && (state.turnOpen || state.awaitingFingerprint || state.settling))) {
       console.log(`[inject] ${sid(sessionId)} queued · engine=${session.engine} · depth=${state.queue.length + 1}`)
@@ -646,7 +662,8 @@ export class SessionInputController {
    *
    * Every other guard still applies: another writer holding the lock, a submit awaiting confirmation, a
    * settling turn, or queued messages all still refuse; queued ones not while the message ahead of them waits for
-   * its pane to be able to send (`paneWait`), typed nowhere yet.
+   * its pane to be able to send (`paneWait`), nor while a first task cleared back to its row does
+   * ([heldBehindFirstTask]), typed nowhere yet.
    */
   acquireControl(sessionId: string, opts?: { forAnswer?: boolean }): (() => void) | null {
     const session = this.controlSession(sessionId)
@@ -661,7 +678,7 @@ export class SessionInputController {
     const state = this.state(sessionId)
     this.dropExpired(sessionId, state)
     const turnBlocks = state.turnOpen && !opts?.forAnswer
-    const queued = state.queue.length > 0 && !state.paneWait
+    const queued = state.queue.length > 0 && !state.paneWait && !heldBehindFirstTask(state)
     if (state.controlLocked || state.cancelling || turnBlocks || state.awaitingFingerprint || state.settling || queued) return null
     state.controlLocked = true
     let released = false
@@ -679,7 +696,8 @@ export class SessionInputController {
    * Types [line] and its Enter, a command of the engine's own (OpenClaw's `/session <key>`), into [id]'s pane through
    * `injectCommand`, under the pane's write lock, only while nothing typed is pending for the pane: no message awaiting
    * confirmation or being written, none queued, no caller holding it, no turn open. A message waiting for the pane to
-   * be able to send, and those queued behind it, are typed nowhere yet: the command is what lets the pane send them.
+   * be able to send, and those queued behind it or behind a first task cleared back to its row, are typed nowhere yet: the
+   * command is what lets the pane send them.
    * Held as a control is, so a message sent meanwhile waits for it. Whether it was typed.
    */
   async typeCommand(id: string, line: string): Promise<boolean> {
@@ -1368,7 +1386,8 @@ export class SessionInputController {
    * stops it. Emptied, a message waits untyped as any message does while the pane cannot send, its bound still from its
    * first paste, and is typed again from the empty box: its one send. A first task goes back to its row before the first
    * key, so a daemon that stops meanwhile types it again only into an empty box; its wait here then ends, and the binding
-   * pass types it from the row. Whether the paste is awaited no more; false only while it still is.
+   * pass types it from the row, ahead of the messages sent after it ([heldBehindFirstTask]). Whether the paste is awaited
+   * no more; false only while it still is.
    */
   private async clearRefused(sessionId: string, session: RegisteredSession, state: InputState): Promise<boolean> {
     const content = state.awaitingContent ?? ''
@@ -1409,7 +1428,10 @@ export class SessionInputController {
     state.awaitingFingerprint = null
     state.awaitingContent = null
     state.ambiguousDispatch = false
-    if (state.firstTask) return true
+    if (state.firstTask) {
+      state.firstTaskOnRow = true
+      return true
+    }
     state.awaitingReceipt = undefined
     void this.scheduleWrite(sessionId, content, deliveryId, awaitingReceipt, pastedAt)
     return true
@@ -1559,7 +1581,7 @@ export class SessionInputController {
     const agentId = this.controlSession(sessionId)?.agentId
     if (agentId && this.deps.moveGate?.refused(agentId)) { this.rejectHeldQueue(sessionId, state); return }
     this.dropExpired(sessionId, state)
-    if (state.controlLocked || state.cancelling || state.turnOpen || state.settling || state.awaitingFingerprint) return
+    if (state.controlLocked || state.cancelling || state.turnOpen || state.settling || state.awaitingFingerprint || heldBehindFirstTask(state)) return
     if (state.queue[0]?.deliveryId && (state.dispatching || state.deliveryId)) return
     const next = state.queue.shift()
     if (!next) return
