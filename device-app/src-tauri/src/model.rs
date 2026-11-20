@@ -67,6 +67,12 @@ pub fn menu(state: &AppState) -> Vec<MenuItem> {
             ],
         ));
     }
+    // Checked when Harness may use Accessibility. Each check carries what its click does: the screen while unchecked,
+    // the Accessibility list once checked, where the permission is taken back.
+    if state.follow.installed && state.dial.as_ref().is_some_and(|dial| dial.attached) {
+        let action = if state.follow.trusted { MenuAction::FollowSettings } else { MenuAction::FollowChatgpt };
+        items.push(MenuItem::Check(action, "Follow ChatGPT".into(), state.follow.trusted));
+    }
     match &state.app_update {
         // The app's own update; the dial line's "Updating device…" is the firmware's.
         AppUpdate::Installing => items.push(MenuItem::Text("Updating Harness…".into())),
@@ -95,12 +101,17 @@ pub fn menu(state: &AppState) -> Vec<MenuItem> {
     items
 }
 
-/// The screen the window should show next, in the order they chain: install, then sign-in.
+/// The screen the window should show next, in the order they chain: install, sign-in, then Follow ChatGPT, which
+/// never covers the two before it.
 pub fn due(state: &AppState) -> Option<Screen> {
     if matches!(state.cli, CliState::Installing | CliState::InstallFailed) {
         return Some(Screen::Install);
     }
-    (state.signed_in == Some(false) && !state.saved.asked_sign_in).then_some(Screen::SignIn)
+    if state.signed_in == Some(false) && !state.saved.asked_sign_in {
+        return Some(Screen::SignIn);
+    }
+    let follow = state.follow;
+    (follow.waiting && follow.installed && !follow.trusted).then_some(Screen::Follow)
 }
 
 /// The menu as one log line: its labels joined by ` | `, without separators. A submenu is its label and its checked
@@ -137,8 +148,8 @@ fn settable(state: &AppState) -> Option<&DialStatus> {
 mod tests {
     use super::*;
     use crate::types::{
-        AppState, AppUpdate, CliState, Daemon, DialStatus, ExportFailure, LogsExport, MenuAction, MenuItem, NotifyMode,
-        Saved, Screen,
+        AppState, AppUpdate, CliState, Daemon, DialStatus, ExportFailure, FollowState, LogsExport, MenuAction,
+        MenuItem, NotifyMode, Saved, Screen,
     };
     use MenuItem::{Action, Check, Separator, Submenu, Text};
 
@@ -180,11 +191,17 @@ mod tests {
             dial: Some(dial(true, Some("0.0.95"))),
             signed_in: Some(true),
             desktop_installed: true,
-            saved: Saved { version: 1, cli_seen: true, asked_sign_in: true, login_item: true },
+            saved: Saved { version: 1, cli_seen: true, asked_sign_in: true, login_item: true, ..Saved::default() },
             app_update: AppUpdate::None,
             cli_version: None,
             logs: LogsExport::Idle,
+            follow: FollowState::default(),
         }
+    }
+
+    /// ChatGPT installed, Harness trusted or not.
+    fn following(trusted: bool) -> FollowState {
+        FollowState { trusted, installed: true, waiting: false }
     }
 
     fn text(label: &str) -> MenuItem {
@@ -211,15 +228,19 @@ mod tests {
         );
     }
 
-    /// Every CliState × Daemon × dial (none, attached, with Sound and Notifications) × signed_in.
+    /// Every CliState × Daemon × dial (none, attached, with Sound and Notifications) × signed_in × ChatGPT (not
+    /// installed, installed, followed).
     fn states() -> Vec<AppState> {
         let dials = [None, Some(dial(true, Some("0.0.95"))), Some(notifying(NotifyMode::Full))];
+        let follows = [FollowState::default(), following(false), following(true)];
         let mut states = Vec::new();
         for cli in [CliState::Found, CliState::Installing, CliState::InstallFailed, CliState::Removed] {
             for daemon in [Daemon::Starting, Daemon::Up, Daemon::Stopped, Daemon::Updating] {
                 for dial in &dials {
                     for signed_in in [Some(true), Some(false), None] {
-                        states.push(AppState { cli, daemon, dial: dial.clone(), signed_in, ..state() });
+                        for follow in follows {
+                            states.push(AppState { cli, daemon, dial: dial.clone(), signed_in, follow, ..state() });
+                        }
                     }
                 }
             }
@@ -419,6 +440,63 @@ mod tests {
     }
 
     #[test]
+    fn the_follow_item() {
+        let unchecked = Check(MenuAction::FollowChatgpt, "Follow ChatGPT".into(), false);
+        let checked = Check(MenuAction::FollowSettings, "Follow ChatGPT".into(), true);
+        let with = |follow: FollowState, dial: DialStatus| AppState { follow, dial: Some(dial), ..state() };
+        assert_eq!(
+            menu(&with(following(false), notifying(NotifyMode::Full))),
+            vec![
+                text("Device ready"),
+                text("Signed in"),
+                Check(MenuAction::SoundOff, "Sound".into(), true),
+                notifications(true, false),
+                unchecked.clone(),
+                Separator,
+                act(MenuAction::OpenHarness, "Open Harness"),
+                act(MenuAction::ExportLogs, "Export logs"),
+                act(MenuAction::About, "About"),
+                act(MenuAction::Quit, "Quit"),
+            ]
+        );
+        assert_eq!(menu(&with(following(true), notifying(NotifyMode::Full)))[4], checked);
+        // The app's update row comes after it.
+        let updating =
+            AppState { app_update: AppUpdate::Installing, ..with(following(false), notifying(NotifyMode::Full)) };
+        assert_eq!(menu(&updating)[4..7], [unchecked.clone(), text("Updating Harness…"), Separator]);
+        // A dial without settings: right after the account row.
+        assert_eq!(
+            menu(&with(following(false), dial(true, Some("0.0.95"))))[1..4],
+            [text("Signed in"), unchecked.clone(), Separator]
+        );
+        let absent = [
+            with(FollowState { installed: false, ..following(true) }, notifying(NotifyMode::Full)),
+            AppState { follow: following(true), dial: None, ..state() },
+            with(following(true), DialStatus { attached: false, ..notifying(NotifyMode::Full) }),
+        ];
+        for state in absent {
+            let items = menu(&state);
+            assert!(!items.contains(&unchecked) && !items.contains(&checked), "{state:?}");
+        }
+    }
+
+    #[test]
+    fn the_follow_screen_is_due_after_install_and_sign_in() {
+        let waiting = FollowState { waiting: true, ..following(false) };
+        assert_eq!(due(&AppState { follow: waiting, ..state() }), Some(Screen::Follow));
+        for cli in [CliState::Installing, CliState::InstallFailed] {
+            assert_eq!(due(&AppState { cli, follow: waiting, ..state() }), Some(Screen::Install), "{cli:?}");
+        }
+        let not_asked = Saved { asked_sign_in: false, ..state().saved };
+        let sign_in = AppState { signed_in: Some(false), saved: not_asked, follow: waiting, ..state() };
+        assert_eq!(due(&sign_in), Some(Screen::SignIn));
+        assert_eq!(due(&AppState { follow: FollowState { trusted: true, ..waiting }, ..state() }), None);
+        assert_eq!(due(&AppState { follow: following(false), ..state() }), None);
+        // ChatGPT removed since the offer: nothing to follow.
+        assert_eq!(due(&AppState { follow: FollowState { installed: false, ..waiting }, ..state() }), None);
+    }
+
+    #[test]
     fn open_harness_needs_the_desktop_app() {
         let items = menu(&AppState { desktop_installed: false, ..state() });
         assert_eq!(
@@ -497,6 +575,12 @@ mod tests {
         assert_eq!(
             menu_log(&menu(&AppState { dial: Some(notifying(NotifyMode::You)), ..state() })),
             "Device ready | Signed in | Sound ✓ | Notifications: Needs you | Open Harness | Export logs | About | Quit"
+        );
+        let followed = AppState { dial: Some(notifying(NotifyMode::Full)), follow: following(true), ..state() };
+        assert_eq!(
+            menu_log(&menu(&followed)),
+            "Device ready | Signed in | Sound ✓ | Notifications: All | Follow ChatGPT ✓ | Open Harness | Export logs \
+             | About | Quit"
         );
     }
 

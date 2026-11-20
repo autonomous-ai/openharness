@@ -63,6 +63,9 @@ describe("the ChatGPT app's source (docs/plans/2026-11-19-dial-chatgpt-ring-and-
     const show = vi.fn(async (_threadId: string, _agentId: string): Promise<PaneSwitch> => 'ok')
     /** What a read answers when the test does not say. */
     const answers = { read: ok([thread(1)]) }
+    /** Codex's names the reader answers, by thread id, and the ids each names() call was asked for. */
+    const named = new Map<string, string>()
+    const namesAsked: string[][] = []
     const deps: CodexAppSourceDeps = {
       threads: {
         there: () => {
@@ -75,6 +78,10 @@ describe("the ChatGPT app's source (docs/plans/2026-11-19-dial-chatgpt-ring-and-
           return new Promise<CodexAppRead>((resolve) => pending.push(resolve))
         },
         forget: () => { calls.push('forget') },
+        names: (asked) => {
+          namesAsked.push([...asked])
+          return new Map(asked.flatMap((id) => (named.has(id) ? [[id, named.get(id)!] as const] : [])))
+        },
       },
       watch: (changed) => {
         const one = { changed, stopped: false }
@@ -102,7 +109,7 @@ describe("the ChatGPT app's source (docs/plans/2026-11-19-dial-chatgpt-ring-and-
     const source = new CodexAppSource(deps)
     source.onChange(() => { changes++ })
     return {
-      source, home, answers, watches, log, ranks, ranking, focus, canShow, show,
+      source, home, answers, named, namesAsked, watches, log, ranks, ranking, focus, canShow, show,
       get changes() { return changes },
       /** The reader's calls, in order. */
       calls: () => [...calls],
@@ -391,6 +398,66 @@ describe("the ChatGPT app's source (docs/plans/2026-11-19-dial-chatgpt-ring-and-
       expect(ids(s)).toEqual([agentOf(thread(1))])
       expect(s.changes).toBe(1)
       expect(s.ranks).toEqual([rankOf([thread(1)])])
+    })
+  })
+
+  describe('threadNamed', () => {
+    it('the one thread of that name is its match', async () => {
+      const s = await started(ok([thread(1), thread(2)]))
+      s.named.set(thread(1).id, 'Fix login').set(thread(2).id, 'Other')
+      expect(s.source.threadNamed('Fix login')).toEqual({ threadId: thread(1).id })
+    })
+
+    // A thread low in the sidebar is opened as any other: every kept id is asked, not only the 16 listed.
+    it('a thread kept but not among the 16 listed matches', async () => {
+      const all = Array.from({ length: 20 }, (_, i) => thread(i + 1))
+      const s = await started(ok(all.slice(0, 16), { order: all }))
+      s.named.set(thread(20).id, 'Deep')
+      expect(s.source.threadNamed('Deep')).toEqual({ threadId: thread(20).id })
+      expect(s.namesAsked).toEqual([all.map(({ id }) => id)])
+    })
+
+    it('two threads of one name are ambiguous; no thread of it is none', async () => {
+      const s = await started(ok([thread(1), thread(2)]))
+      s.named.set(thread(1).id, 'Same').set(thread(2).id, 'Same')
+      expect(s.source.threadNamed('Same')).toBe('ambiguous')
+      expect(s.source.threadNamed('Missing')).toBe('none')
+    })
+
+    // Review Focus 5.
+    it('trims both sides and keeps case', async () => {
+      const s = await started(ok([thread(1)]))
+      s.named.set(thread(1).id, 'Fix login')
+      expect(s.source.threadNamed(' Fix login ')).toEqual({ threadId: thread(1).id })
+      expect(s.source.threadNamed('fix login')).toBe('none')
+      const asked = s.namesAsked.length
+      expect(s.source.threadNamed('   ')).toBe('none')
+      expect(s.namesAsked).toHaveLength(asked)
+    })
+
+    it('after a failed read the last good ids still match', async () => {
+      const s = await started(ok([thread(1)]))
+      await after(s, FAILED)
+      s.named.set(thread(1).id, 'Fix login')
+      expect(s.source.threadNamed('Fix login')).toEqual({ threadId: thread(1).id })
+    })
+
+    it('stopped, nothing matches and names are not asked', async () => {
+      const s = await started(ok([thread(1)]))
+      s.named.set(thread(1).id, 'Fix login')
+      s.source.stop()
+      expect(s.source.threadNamed('Fix login')).toBe('none')
+      expect(s.namesAsked).toEqual([])
+    })
+
+    // Review Focus 4: the names are asked at each report, not kept from the last read.
+    it('a name Codex gives after the last read is matched', async () => {
+      const s = await started(ok([thread(1)]))
+      s.named.set(thread(1).id, 'Old')
+      expect(s.source.threadNamed('Old')).toEqual({ threadId: thread(1).id })
+      s.named.set(thread(1).id, 'New')
+      expect(s.source.threadNamed('New')).toEqual({ threadId: thread(1).id })
+      expect(s.reads()).toBe(1)
     })
   })
 

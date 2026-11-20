@@ -50,7 +50,7 @@ import { herdrAppStatus } from '../testing/herdrAppStatus.js'
 import type { Fleet, FleetDeps } from './fleet.js'
 import type { DevicesDeps } from './devices.js'
 import {
-  ATTACH_MAX_BYTES, ATTACH_PER_SECOND, FRONT_MAX_BYTES, FRONT_PER_SECOND, NOTICE_MAX_BYTES, NOTICE_PER_SECOND, NOTIFY_MAX_BYTES, NOTIFY_PER_SECOND, REFUSED, TAB_MAX_BYTES, TAB_PER_SECOND, TABS_MAX_BYTES, TABS_PER_SECOND,
+  ATTACH_MAX_BYTES, ATTACH_PER_SECOND, FRONT_MAX_BYTES, FRONT_PER_SECOND, NOTICE_MAX_BYTES, NOTICE_PER_SECOND, NOTIFY_MAX_BYTES, NOTIFY_PER_SECOND, REFUSED, TAB_MAX_BYTES, TAB_PER_SECOND, TABS_MAX_BYTES, TABS_PER_SECOND, THREAD_MAX_BYTES, THREAD_PER_SECOND,
   type DevicesListener, type ListenerHandler, type ListenerStreamHandler,
 } from './devicesListener.js'
 
@@ -340,6 +340,7 @@ const noCodexApp: NonNullable<DevicesDeps['codexAppThreads']> = {
   there: () => false,
   read: async () => ({ ok: false, kind: 'ENOENT' }),
   forget: () => {},
+  names: () => new Map(),
 }
 /** What the devices asked of opencode's service: recorded, so no spec reaches the developer's own opencode. It has no
  *  service.json, and its prompt fails. */
@@ -767,12 +768,12 @@ describe('the devices, as the core starts them', () => {
 })
 
 describe('the devices\' own listener (services/devicesListener.ts)', () => {
-  it('the devices open their listener once, with front, attach, the tab handler, the tabs stream, the dial stream, the worktree on Orca\'s screen, the Notifications setting, the notice and VS Code\'s windows', () => {
+  it('the devices open their listener once, with front, attach, the tab handler, the ChatGPT thread, the tabs stream, the dial stream, the worktree on Orca\'s screen, the Notifications setting, the notice and VS Code\'s windows', () => {
     const listener = fakeListener()
     start({ listen: listener.listen })
     expect(listener.listen).toHaveBeenCalledTimes(1)
     const [{ handlers, log }] = listener.given
-    expect(Object.keys(handlers)).toEqual(['front', 'attach', 'tab', 'tabs', 'dial', 'orcaFront', 'notify', 'notice', 'vscode', 'vscode-state'])
+    expect(Object.keys(handlers)).toEqual(['front', 'attach', 'tab', 'thread', 'tabs', 'dial', 'orcaFront', 'notify', 'notice', 'vscode', 'vscode-state'])
     expect(handlers.orcaFront).toMatchObject({ maxBytes: 4096, perSecond: 10 })
     expect(handlers.notice).toMatchObject({ maxBytes: NOTICE_MAX_BYTES, perSecond: NOTICE_PER_SECOND })
     expect(handlers.front).toMatchObject({ maxBytes: FRONT_MAX_BYTES, perSecond: FRONT_PER_SECOND })
@@ -780,6 +781,7 @@ describe('the devices\' own listener (services/devicesListener.ts)', () => {
     expect(handlers.attach).toMatchObject({ maxBytes: ATTACH_MAX_BYTES, perSecond: ATTACH_PER_SECOND })
     expect([ATTACH_MAX_BYTES, ATTACH_PER_SECOND]).toEqual([96, 10])
     expect(handlers.tab).toMatchObject({ maxBytes: TAB_MAX_BYTES, perSecond: TAB_PER_SECOND })
+    expect(handlers.thread).toMatchObject({ maxBytes: THREAD_MAX_BYTES, perSecond: THREAD_PER_SECOND })
     expect(handlers.tabs).toMatchObject({ maxBytes: TABS_MAX_BYTES, perSecond: TABS_PER_SECOND })
     expect(handlers.dial).toMatchObject({ maxBytes: 64, perSecond: 1 })
     expect(handlers.notify).toMatchObject({ maxBytes: NOTIFY_MAX_BYTES, perSecond: NOTIFY_PER_SECOND })
@@ -9305,7 +9307,8 @@ describe("the ChatGPT app's threads, from its metadata (docs/plans/2026-11-19-di
 
   /**
    * The devices on macOS with a reader of the app's threads the test answers, the dial not attached yet. The reader's
-   * calls are recorded: its home is there, and `read` answers `fake.read`. Each bundle the look asks of is recorded and
+   * calls are recorded: its home is there, `read` answers `fake.read`, and `names` Codex's name of each id asked from
+   * `fake.names`. Each bundle the look asks of is recorded and
    * answered from `fake.ids`, the app in /Applications unless the test says otherwise, or, while `hold` is set, held until
    * the test lands it with an id. Every `open` is a recorded run, nothing executed, the next `failing` of them answering
    * code 1. `live` attaches the dial and lets the look and the first read land.
@@ -9319,11 +9322,13 @@ describe("the ChatGPT app's threads, from its metadata (docs/plans/2026-11-19-di
       hold: false,
       held: [] as Array<(id: string | undefined) => void>,
       failing: 0,
+      names: new Map<string, string>(),
     }
     const threads: NonNullable<DevicesDeps['codexAppThreads']> = {
       there: () => { fake.calls.push('there'); return true },
       read: async () => { fake.calls.push('read'); return fake.read },
       forget: () => { fake.calls.push('forget') },
+      names: (asked) => { fake.calls.push('names'); return new Map([...fake.names].filter(([id]) => asked.includes(id))) },
     }
     const bundleId: NonNullable<DevicesDeps['bundleId']> = async (app) => {
       fake.asked.push(app)
@@ -9555,6 +9560,251 @@ describe("the ChatGPT app's threads, from its metadata (docs/plans/2026-11-19-di
     attach(port)
     await vi.waitFor(() => expect(logs).toContain('[codex-app] listed · 1 threads · 0 in projects'), { timeout: 5_000 })
     expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'sf' }])
+  })
+
+  describe('the thread opened in the ChatGPT app moves the dial (docs/plans/2026-11-20-dial-chatgpt-follow-ax-design.md)', () => {
+    /** THREAD's name, as Codex gave it and the ChatGPT window's title shows it. */
+    const TITLE = 'Fix the build'
+    /** The devices on macOS, THREAD named TITLE by Codex, the dial not attached yet (`live`). `report` is a thread line
+     *  through the listener's handler, as `harness hardware watch` tells one. */
+    const following = (over: Parameters<typeof start>[0] = {}) => {
+      const started = withThreads(over)
+      started.fake.names = new Map([[THREAD, TITLE]])
+      const report = (title: string): unknown =>
+        (started.listener.given[0].handlers.thread as ListenerHandler).handle({ type: 'thread', title }, new AbortController().signal)
+      return { ...started, report }
+    }
+    const asked = () => calls('followLocal')
+    const threadLines = () => logs.filter((line) => line.startsWith('[device] thread'))
+    const unlinked = (off: boolean) => { (seen.cable as unknown as { connected: boolean }).connected = !off }
+    const named = (calls: readonly string[]) => calls.filter((call) => call === 'names').length
+    /** An agent no app shows: the dial turning to it is a hand's move and nothing else. */
+    const ELSEWHERE = observedAgentId('claude', 'sess-elsewhere')
+
+    it('with the ChatGPT app settled in front a report follows its thread at once', async () => {
+      const { front, report, live } = following()
+      await live()
+      await front('codex')
+      expect(report(TITLE)).toBeUndefined()
+      expect(asked()).toEqual([[ID, 'thread']])
+      // What the dials make of it is theirs to count.
+      expect(threadLines()).toEqual([])
+    })
+
+    it('a report before the settle waits for it, then follows', async () => {
+      const { listener, report, live } = following()
+      await live()
+      expect(listener.front('codex')).toBeUndefined()
+      await wait(FRONT_SETTLE_MS - 1)
+      report(TITLE)
+      expect(asked()).toEqual([])
+      await wait(1)
+      expect(asked()).toEqual([[ID, 'thread']])
+    })
+
+    it('another app settling drops it, said not in front once', async () => {
+      const { front, report, live } = following()
+      await live()
+      report(TITLE)
+      await front('orca')
+      expect(threadLines()).toEqual(['[device] thread · skipped · not in front'])
+      await front('codex')
+      expect(asked()).toEqual([])
+      expect(threadLines()).toEqual(['[device] thread · skipped · not in front'])
+    })
+
+    it('an empty title drops the waiting report and says nothing', async () => {
+      const { front, report, live } = following()
+      await live()
+      report(TITLE)
+      expect(report('')).toBeUndefined()
+      await front('codex')
+      // In front, the empty title is no thread to follow.
+      report('')
+      expect(asked()).toEqual([])
+      expect(threadLines()).toEqual([])
+    })
+
+    it('no match and ambiguous are one line each, and nothing is followed', async () => {
+      const { fake, front, report, live } = following()
+      fake.read = read([thread(), thread({ id: SECOND, name: 'Twice' }), thread({ id: THIRD, name: 'Twice' })])
+      fake.names = new Map([[THREAD, TITLE], [SECOND, 'Twice'], [THIRD, 'Twice']])
+      await live()
+      await front('codex')
+      report('Nothing of that name')
+      report('Twice')
+      expect(threadLines()).toEqual(['[device] thread · skipped · no match', '[device] thread · skipped · ambiguous'])
+      expect(asked()).toEqual([])
+    })
+
+    it('the dial moving after the report is an echo', async () => {
+      const { listener, report, live } = following()
+      await live()
+      expect(listener.front('codex')).toBeUndefined()
+      report(TITLE)
+      turnTo(ELSEWHERE)
+      await wait(FRONT_SETTLE_MS)
+      expect(threadLines()).toEqual(['[device] thread · skipped · echo'])
+      expect(asked()).toEqual([])
+    })
+
+    for (const way of ['rest', 'tap'] as const) {
+      it(`the dial's own ${way} on that thread within 2 s is an echo, once`, async () => {
+        const { front, report, live } = following()
+        await live()
+        await front('codex')
+        if (way === 'rest') host().swipeEnded(ID, 'rest')
+        else expect(await host().openAgent(ID)).toBeUndefined()
+        await flush()
+        expect(orcaRuns).toEqual([opened(THREAD)])
+        await wait(1_999)
+        report(TITLE)
+        expect(threadLines()).toEqual(['[device] thread · skipped · echo'])
+        expect(asked()).toEqual([])
+        // The person opening that thread again: the switch was used up by its own echo.
+        report(TITLE)
+        expect(asked()).toEqual([[ID, 'thread']])
+      })
+    }
+
+    it('the dial\'s own switch 2 s before the report is no echo', async () => {
+      const { front, report, live } = following()
+      await live()
+      await front('codex')
+      host().swipeEnded(ID, 'rest')
+      await wait(2_000)
+      report(TITLE)
+      expect(asked()).toEqual([[ID, 'thread']])
+      expect(threadLines()).toEqual([])
+    })
+
+    it('another thread named while the dial\'s own switch of the last 2 s is unseen is an echo: the old title read late', async () => {
+      const { fake, listener, front, report, live } = following()
+      fake.read = read([thread(), thread({ id: SECOND, name: 'Ship it' })])
+      fake.names = new Map([[THREAD, TITLE], [SECOND, 'Ship it']])
+      await live()
+      await front('orca')
+      // The dial's tap on THREAD brings the app, whose window still shows SECOND.
+      expect(await host().openAgent(ID)).toBeUndefined()
+      await wait(200)
+      expect(listener.front('codex')).toBeUndefined()
+      await wait(FRONT_SETTLE_MS + 300)
+      report('Ship it')
+      await wait(300)
+      report(TITLE)
+      expect(asked()).toEqual([])
+      expect(threadLines()).toEqual(['[device] thread · skipped · echo', '[device] thread · skipped · echo'])
+      // The switch seen, the person opening SECOND moves the dial.
+      report('Ship it')
+      expect(asked()).toEqual([[observedAgentId('codex', SECOND), 'thread']])
+    })
+
+    it('a report followed at the settle within 2 s of a dial move is an echo, and one 2 s after it follows', async () => {
+      const { listener, front, report, live } = following()
+      await live()
+      turnTo(ELSEWHERE)
+      report(TITLE)
+      expect(listener.front('codex')).toBeUndefined()
+      await wait(FRONT_SETTLE_MS)
+      expect(threadLines()).toEqual(['[device] thread · skipped · echo'])
+      expect(asked()).toEqual([])
+      await front('orca')
+      turnTo(ELSEWHERE)
+      await wait(2_000 - FRONT_SETTLE_MS)
+      report(TITLE)
+      expect(listener.front('codex')).toBeUndefined()
+      await wait(FRONT_SETTLE_MS)
+      expect(asked()).toEqual([[ID, 'thread']])
+      expect(threadLines()).toEqual(['[device] thread · skipped · echo'])
+    })
+
+    it('the dial\'s answer is counted: thread · moved, and thread · skipped · no tile', () => {
+      start({ faults: ['fleet'] })
+      seen.host.localFollowed!('thread', 'moved')
+      seen.host.localFollowed!('thread', 'no-tile')
+      expect(threadLines()).toEqual(['[device] thread · moved', '[device] thread · skipped · no tile'])
+    })
+
+    it('with no dial linked nothing is followed or said', async () => {
+      const { front, report, live } = following()
+      await live()
+      await front('codex')
+      unlinked(true)
+      report(TITLE)
+      report('Nothing of that name')
+      await front('orca')
+      report(TITLE)
+      await front('vscode')
+      report(TITLE)
+      await front('codex')
+      unlinked(false)
+      expect(asked()).toEqual([])
+      expect(threadLines()).toEqual([])
+      report(TITLE)
+      expect(asked()).toEqual([[ID, 'thread']])
+    })
+
+    it('the match runs only for a report no settle, empty title, dial move or unlinked dial dropped first', async () => {
+      const { fake, listener, front, report, live } = following()
+      await live()
+      // Dropped by another app's settle, by the empty title, and by the dial moving.
+      report(TITLE)
+      await front('orca')
+      report(TITLE)
+      report('')
+      report(TITLE)
+      turnTo(ELSEWHERE)
+      expect(listener.front('codex')).toBeUndefined()
+      await wait(FRONT_SETTLE_MS)
+      // With no dial linked.
+      unlinked(true)
+      report(TITLE)
+      unlinked(false)
+      expect(named(fake.calls)).toBe(0)
+      report(TITLE)
+      expect(named(fake.calls)).toBe(1)
+      expect(asked()).toEqual([[ID, 'thread']])
+    })
+
+    it('off macOS there are no threads: a report matches none', async () => {
+      const { front, report, live } = following({ orca: { ...orca, platform: 'linux' } })
+      await live()
+      await front('codex')
+      report(TITLE)
+      expect(threadLines()).toEqual(['[device] thread · skipped · no match'])
+      expect(asked()).toEqual([])
+    })
+
+    it('the log holds no title, name or thread id', async () => {
+      const { fake, front, report, live } = following()
+      fake.read = read([thread(), thread({ id: SECOND, name: 'Twice' }), thread({ id: THIRD, name: 'Twice' })])
+      fake.names = new Map([[THREAD, TITLE], [SECOND, 'Twice'], [THIRD, 'Twice']])
+      await live()
+      report(TITLE)
+      await front('orca')
+      await front('codex')
+      report('Nothing of that name')
+      report('Twice')
+      host().swipeEnded(ID, 'rest')
+      report(TITLE)
+      report(TITLE)
+      seen.host.localFollowed!('thread', 'moved')
+      seen.host.localFollowed!('thread', 'no-tile')
+      expect(asked()).toEqual([[ID, 'thread']])
+      expect(threadLines()).toHaveLength(6)
+      for (const line of threadLines()) expect(line).toMatch(/^\[device\] thread · (moved|skipped · (echo|not in front|no match|ambiguous|no tile))$/)
+      expect(logs.filter((line) => [TITLE, 'Twice', 'Nothing of that name', THREAD, SECOND, THIRD, ID].some((secret) => line.includes(secret)))).toEqual([])
+    })
+
+    it('stopping drops the waiting report', async () => {
+      const { port, report, live } = following()
+      await live()
+      report(TITLE)
+      await port.stop()
+      seen.host.appSettled!('codex')
+      expect(asked()).toEqual([])
+      expect(threadLines()).toEqual([])
+    })
   })
 })
 

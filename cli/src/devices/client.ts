@@ -7,6 +7,7 @@ import type { ClientSocket } from '../lib/clientSocket.js'
 import { deviceSettingsPatchSchema } from '../lib/harnessDevices.js'
 import { frontAppId } from '../cable/hosts/frontApp.js'
 import { REPLACED_LINE, tabOf, type Tab } from '../cable/hosts/tabs.js'
+import { threadTitleOf } from '../cable/hosts/threadTitle.js'
 import { isNotifyMode, type NotifyMode } from '../cable/notifyMode.js'
 import { askDevices, streamDevices, tellDevices } from './listenerClient.js'
 import { devicesListenerPath } from './listenerPath.js'
@@ -64,8 +65,9 @@ Offline computers never receive queued changes. A write is complete only when co
 
 export interface DialWatchDeps extends Pick<DevicesClientDeps, 'port' | 'dataDir' | 'machineId' | 'connect'> {
   /** The Harness Device app writes on it a `{"front":"<bundle id or exe name>"}` line each time the app in front changes,
-   *  a `{"tab":{"app","tty"}}` line each time the selected tab of a tab app in front does, a `{"muted":<bool>}` line
-   *  each time its Sound item is clicked, and a `{"notify":"full"|"you"}` line each time a Notifications item is. */
+   *  a `{"tab":{"app","tty"}}` line each time the selected tab of a tab app in front does, a `{"thread":"<title>"}`
+   *  line each time the title of ChatGPT's window in front does, a `{"muted":<bool>}` line each time its Sound item is
+   *  clicked, and a `{"notify":"full"|"you"}` line each time a Notifications item is. */
   stdin: {
     on(event: 'end' | 'close', listener: () => void): unknown
     on(event: 'data', listener: (chunk: Buffer | string) => void): unknown
@@ -75,9 +77,9 @@ export interface DialWatchDeps extends Pick<DevicesClientDeps, 'port' | 'dataDir
   print(line: string): void
   /** stderr: stdout carries only the app's NDJSON. */
   printError(line: string): void
-  /** Tells the devices' own listener which app is in front, or which tab is selected in it: true when it took it.
-   *  `tellDevices` by default. */
-  tell?: (message: { type: 'front'; app: string } | { type: 'tab'; app: string; tty: string }) => Promise<boolean>
+  /** Tells the devices' own listener which app is in front, which tab is selected in it, or which ChatGPT thread is
+   *  open: true when it took it. `tellDevices` by default. */
+  tell?: (message: { type: 'front'; app: string } | { type: 'tab'; app: string; tty: string } | { type: 'thread'; title: string }) => Promise<boolean>
   /** Opens the devices' stream of the tabs a swipe or a tap selects, handing on each chunk until it ends or [signal]
    *  aborts: true when it had opened. One asked with `standby` opens only while no other watch holds it.
    *  `streamDevices` by default. */
@@ -91,11 +93,12 @@ const NOT_RUNNING = 'Harness is not running on this computer. Run: harness start
 const CLOSED = 'The connection to Harness on this computer closed.'
 const DIAL_FIELDS = ['fw', 'hw', 'board', 'updating', 'problem'] as const
 // The app cuts the value to 128 characters, under 1 KiB as a JSON line even escaped: a longer line is no front line. A
-// tab line is under 140 bytes.
+// tab line is under 140 bytes. Harness Device writes a thread line of at most 512 bytes (PIPE_BUF, the most its
+// non-blocking pipe writes whole), and the longest the watch's own 256-unit rule takes (256 three-byte letters) is 781.
 const FRONT_LINE_MAX = 1024
-// The devices' listener takes ten fronts and ten tabs in any second on a connection, and the tells share one kept alive.
-// Counted from each answer, the listener has heard the tell before by then: a burst of changes (focus following the
-// mouse) stays within its ten, and the newest is not the one refused.
+// The devices' listener takes ten fronts, ten tabs and ten threads in any second on a connection, and the tells share
+// one kept alive. Counted from each answer, the listener has heard the tell before by then: a burst of changes (focus
+// following the mouse) stays within its ten, and the newest is not the one refused.
 const TELL_GAP_MS = 100
 // tellDevices' own bound, held by the watch too, so an app that quits waits no longer on a listener that does not answer.
 const QUIT_TELL_MS = 2_000
@@ -204,6 +207,24 @@ export function runDialWatch(argv: string[], deps: DialWatchDeps): Promise<numbe
         }, TELL_GAP_MS)
       })
     }
+    // The ChatGPT thread's title not yet told, in a slot of its own as the tab's: one at a time with a gap after each,
+    // the newest last, and one not taken is not tried again.
+    let thread: string | undefined, threadTelling = false
+    let threadGap: ReturnType<typeof setTimeout> | undefined
+    const tellThread = (): void => {
+      if (settled || threadTelling || threadGap || thread === undefined) return
+      const title = thread
+      thread = undefined
+      threadTelling = true
+      void tell({ type: 'thread', title }).then(() => {
+        threadTelling = false
+        if (settled) return
+        threadGap = setTimeout(() => {
+          threadGap = undefined
+          tellThread()
+        }, TELL_GAP_MS)
+      })
+    }
     // The devices' stream of selects, open or opening, and when it is opened again. Without a listener path there is
     // nothing to open, and nothing is retried.
     let stream: AbortController | undefined, reopen: ReturnType<typeof setTimeout> | undefined
@@ -306,6 +327,7 @@ export function runDialWatch(argv: string[], deps: DialWatchDeps): Promise<numbe
       clearTimeout(deadline)
       clearTimeout(gap)
       clearTimeout(tabGap)
+      clearTimeout(threadGap)
       clearTimeout(reopen)
       clearTimeout(sounding?.timer)
       stream?.abort()
@@ -333,12 +355,18 @@ export function runDialWatch(argv: string[], deps: DialWatchDeps): Promise<numbe
     deps.stdin.on('close', quit)
     deps.stdin.on('data', lines(FRONT_LINE_MAX, line => {
       if (settled) return
-      let value: { front?: unknown; tab?: unknown; muted?: unknown; notify?: unknown } | null
+      let value: { front?: unknown; tab?: unknown; thread?: unknown; muted?: unknown; notify?: unknown } | null
       try { value = JSON.parse(line) } catch { return }
       // The Sound item's click: exactly one boolean `muted`, so no other line, nor a key beside it, changes the dial.
       if (typeof value?.muted === 'boolean' && Object.keys(value).length === 1) return sound(value.muted)
       // A Notifications item's click, held to the same: exactly one known mode, alone.
       if (isNotifyMode(value?.notify) && Object.keys(value).length === 1) return notify(value.notify)
+      // The title of ChatGPT's window, held to the same: `thread` alone, and the rule Harness Device keeps.
+      const title = threadTitleOf(value?.thread)
+      if (title !== null && Object.keys(value!).length === 1) {
+        thread = title
+        return tellThread()
+      }
       if (typeof value?.front === 'string') {
         front = frontAppId(value.front)
         return tellFront()

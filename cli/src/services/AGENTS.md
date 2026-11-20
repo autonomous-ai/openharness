@@ -224,8 +224,9 @@ master too old to run it starts it beside itself, still in its own process (`src
   The core asks only while a dial watches, so a poll never starts their process; a client that goes
   first is told as a notice. What a local tool tells the devices (first the app in front, from `harness hardware
   watch`) goes to their own listener (src/services/devicesListener.ts), never through the core: a new message is a
-  handler registered there by its type, with its own body and rate limits, beside `front`, `tab`, the mod's
-  `attach`, the session the Claude app shows, `notice`, an agent's line from `harness device notify`, `notify`,
+  handler registered there by its type, with its own body and rate limits, beside `front`, `tab`, `thread`, the
+  title of the ChatGPT app's window, the mod's `attach`, the session the Claude app shows, `notice`, an agent's line
+  from `harness device notify`, `notify`,
   the Notifications setting, and `orcaFront`, the terminals of the worktree on Orca's screen from Orca's Harness
   Device plugin, taken only while its `dial` stream is open (src/services/devices.ts). Where the listener does not
   run (Windows, and devices inside the core, as on Harness OS) `harness device notify` answers `no dial` and the

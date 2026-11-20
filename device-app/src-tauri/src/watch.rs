@@ -37,6 +37,11 @@ impl Watch {
         self.write(line);
     }
 
+    /// A line of the ChatGPT window's title (follow.rs) on the child's stdin: a title is as private as a tty.
+    pub fn thread(&self, line: &str) {
+        self.write(line);
+    }
+
     /// A change of the dial's sound on the child's stdin: one of two fixed lines, so nothing else can shape it.
     pub fn sound(&self, on: bool) {
         self.write(if on { r#"{"muted":false}"# } else { r#"{"muted":true}"# });

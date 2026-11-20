@@ -3,6 +3,7 @@
 use crate::account::{self, Login, NO_RESULT};
 use crate::cli::{self, Cli, HarnessCli, START_DEADLINE};
 use crate::desktop;
+use crate::follow::{AX_SETTINGS, CHATGPT_BUNDLE, ChatgptFollow, FollowDoor, Heard, Observer, Shown, TRUST_AGAIN};
 use crate::front::{FrontFeed, FrontSource};
 use crate::install::{self, NOT_SUPPORTED, Shell};
 use crate::loginitem::LoginItem;
@@ -38,6 +39,8 @@ pub struct Doors {
     pub tabs: Arc<dyn TabScripts>,
     /// None where the app does not update itself.
     pub updater: Option<Arc<dyn AppUpdater>>,
+    /// The ChatGPT window and the Accessibility permission (`follow::system`).
+    pub follow: Arc<dyn FollowDoor>,
 }
 
 pub struct Runner(Arc<Shared>);
@@ -57,6 +60,8 @@ struct Shared {
     front: Mutex<FrontFeed>,
     /// The tab rules, apart: a watch's thread tells them too, and must not keep the runner.
     tabs: Arc<Tabs>,
+    /// The ChatGPT follow rules, apart for the same reason.
+    chatgpt: Arc<Chatgpt>,
 }
 
 /// The tab rules, and the word that they changed. Their lock is taken last, and never held across a script call, a
@@ -127,14 +132,130 @@ impl Tabs {
     }
 }
 
+/// The ChatGPT follow rules, and the word that they changed. Their lock is taken last, and never held across a door
+/// call, a write or `send`.
+struct Chatgpt {
+    state: Mutex<ChatgptState>,
+    changed: Condvar,
+    /// How long after macOS's notice the permission is read once more.
+    again: Duration,
+}
+
+#[derive(Default)]
+struct ChatgptState {
+    follow: ChatgptFollow,
+    /// The observation running is to be dropped.
+    stop: bool,
+    /// The number of the observation to start.
+    start: Option<u64>,
+    /// When the permission is to be read once more.
+    trust_at: Option<Instant>,
+    /// The runner has gone: the follow thread ends.
+    ended: bool,
+}
+
+/// The follow thread's next step.
+enum Step {
+    Stop,
+    Start(u64),
+    /// Whether ChatGPT is installed: the dial has just attached.
+    Look,
+    /// The permission once more, after macOS's notice.
+    Trust,
+    /// The app is told what the menu's item shows.
+    Shown(Shown),
+    Offer,
+}
+
+impl Chatgpt {
+    /// A change to the rules, and a word to the follow thread. Whether to observe is judged at each change, so a stop
+    /// and the start after it are both kept even when the thread wakes once for them: a new watch, or ChatGPT back in
+    /// front, always gets a new observation, which writes its first title.
+    fn tell(&self, change: impl FnOnce(&mut ChatgptFollow)) {
+        let mut state = self.state.lock().unwrap();
+        change(&mut state.follow);
+        match state.follow.observer() {
+            Observer::Start(start) => state.start = Some(start),
+            Observer::Stop => {
+                state.stop = true;
+                state.start = None;
+            }
+            Observer::Same => {}
+        }
+        drop(state);
+        self.changed.notify_one();
+    }
+
+    /// macOS's notice that the Accessibility list changed, and the permission read at it. The list can change just
+    /// after the notice: the follow thread reads it once more a moment later.
+    fn noticed(&self, trusted: bool) {
+        self.state.lock().unwrap().trust_at = Some(Instant::now() + self.again);
+        self.tell(|follow| follow.trusted(trusted));
+    }
+
+    fn end(&self) {
+        self.state.lock().unwrap().ended = true;
+        self.changed.notify_one();
+    }
+
+    /// Waits for the next step: a stop first, then what the app is to hear, even as the runner goes; then a start, a
+    /// look and a read that is due. With none to do it waits, with a timer only for a read to come. None once the
+    /// runner has gone.
+    fn next(&self, sent: Shown) -> Option<Step> {
+        let mut state = self.state.lock().unwrap();
+        loop {
+            if std::mem::take(&mut state.stop) {
+                return Some(Step::Stop);
+            }
+            let shown = state.follow.shown();
+            if shown != sent {
+                return Some(Step::Shown(shown));
+            }
+            if state.follow.take_offer() {
+                return Some(Step::Offer);
+            }
+            if state.ended {
+                return None;
+            }
+            if let Some(start) = state.start.take() {
+                return Some(Step::Start(start));
+            }
+            if state.follow.take_look() {
+                return Some(Step::Look);
+            }
+            let Some(at) = state.trust_at else {
+                state = self.changed.wait(state).unwrap();
+                continue;
+            };
+            let wait = at.saturating_duration_since(Instant::now());
+            if wait.is_zero() {
+                state.trust_at = None;
+                return Some(Step::Trust);
+            }
+            state = self.changed.wait_timeout(state, wait).unwrap().0;
+        }
+    }
+
+    /// What an observation heard.
+    fn answer(&self, answer: impl FnOnce(&mut ChatgptFollow) -> Out) -> Out {
+        answer(&mut self.state.lock().unwrap().follow)
+    }
+}
+
 impl Runner {
     /// `send` hands the event to the app's loop and returns. It never runs an effect itself: a watch or a sign-in
     /// calls it holding a lock that stopping or cancelling it takes.
     pub fn new(doors: Doors, send: Arc<dyn Fn(Event) + Send + Sync>) -> Runner {
-        Runner::polling_every(doors, send, POLL_EVERY)
+        Runner::polling_every(doors, send, POLL_EVERY, TRUST_AGAIN)
     }
 
-    fn polling_every(doors: Doors, send: Arc<dyn Fn(Event) + Send + Sync>, every: Duration) -> Runner {
+    fn polling_every(
+        doors: Doors,
+        send: Arc<dyn Fn(Event) + Send + Sync>,
+        every: Duration,
+        trust_again: Duration,
+    ) -> Runner {
+        let chatgpt = Chatgpt { state: Mutex::default(), changed: Condvar::new(), again: trust_again };
         let shared = Arc::new(Shared {
             doors,
             send,
@@ -144,6 +265,7 @@ impl Runner {
             login: Mutex::new(None),
             front: Mutex::default(),
             tabs: Arc::default(),
+            chatgpt: Arc::new(chatgpt),
         });
         // Weakly: the source keeps its callback for as long as it runs, and the runner must still go.
         let weak = Arc::downgrade(&shared);
@@ -152,8 +274,20 @@ impl Runner {
                 shared.front_changed(&value);
             }
         }));
+        // Weakly too.
+        let weak = Arc::downgrade(&shared);
+        shared.doors.follow.start(Box::new(move || {
+            if let Some(shared) = weak.upgrade() {
+                shared.chatgpt.noticed(shared.doors.follow.trusted());
+            }
+        }));
+        // Once the notice is heard: a change while this reads is read again a moment later.
+        let trusted = shared.doors.follow.trusted();
+        shared.chatgpt.tell(|follow| follow.trusted(trusted));
         let following = shared.clone();
         thread::spawn(move || following.follow_tabs(every));
+        let following = shared.clone();
+        thread::spawn(move || following.follow_chatgpt());
         Runner(shared)
     }
 
@@ -177,6 +311,7 @@ impl Runner {
                 let watch = shared.watch.lock().unwrap().take();
                 if let Some(watch) = watch {
                     shared.tabs.tell(|follow| follow.watching(false));
+                    shared.chatgpt.tell(|follow| follow.watching(false));
                     watch.stop();
                 }
             }
@@ -258,15 +393,19 @@ impl Runner {
                 let args = logs::reveal_args(std::env::consts::OS, &zip);
                 shared.open(&args.iter().map(String::as_str).collect::<Vec<_>>(), "logs");
             }
+            // On the caller's thread: macOS shows its own dialog and does not wait for it.
+            Effect::AskAx => shared.doors.follow.prompt(),
+            Effect::OpenAxSettings => shared.open(&[AX_SETTINGS], "accessibility settings"),
         }
         None
     }
 }
 
-/// The tab thread ends with the runner, once a call under way has answered.
+/// The tab thread and the follow thread end with the runner, once a call under way has answered.
 impl Drop for Runner {
     fn drop(&mut self) {
         self.0.tabs.end();
+        self.0.chatgpt.end();
     }
 }
 
@@ -312,12 +451,14 @@ impl Shared {
             *current += 1;
             // Before it can print: its first `attached` must not be undone by this.
             self.tabs.tell(|follow| follow.watching(true));
+            self.chatgpt.tell(|follow| follow.watching(true));
             *current
         };
         if let Some(old) = watch.take() {
             old.stop();
         }
-        let (watching, send, tabs) = (self.watching.clone(), self.send.clone(), self.tabs.clone());
+        let (watching, send, tabs, chatgpt) =
+            (self.watching.clone(), self.send.clone(), self.tabs.clone(), self.chatgpt.clone());
         let (selecting, selects) = (self.watching.clone(), self.tabs.clone());
         let spawned = watch::spawn_watch(
             &*cli,
@@ -328,8 +469,14 @@ impl Shared {
                 let current = watching.lock().unwrap();
                 if *current == number {
                     match &event {
-                        Event::WatchLine(status) => tabs.tell(|follow| follow.attached(status.attached)),
-                        Event::WatchExit(_) => tabs.tell(|follow| follow.watching(false)),
+                        Event::WatchLine(status) => {
+                            tabs.tell(|follow| follow.attached(status.attached));
+                            chatgpt.tell(|follow| follow.attached(status.attached));
+                        }
+                        Event::WatchExit(_) => {
+                            tabs.tell(|follow| follow.watching(false));
+                            chatgpt.tell(|follow| follow.watching(false));
+                        }
                         _ => {}
                     }
                     send(event);
@@ -357,6 +504,7 @@ impl Shared {
                 // No lock is held across `send`.
                 drop(watch);
                 self.tabs.tell(|follow| follow.watching(false));
+                self.chatgpt.tell(|follow| follow.watching(false));
                 // A CLI that went away is removed. One that is there and cannot run is a watch that ended: the
                 // keep-alive tries it again in its own time, where a removed CLI is found again at every tick.
                 self.answer(if error.kind() == io::ErrorKind::NotFound {
@@ -372,6 +520,14 @@ impl Shared {
     /// nowhere else.
     fn front_changed(&self, value: &str) {
         self.tabs.tell(|follow| follow.front(value));
+        // Read before the offer is judged: a permission given since macOS's last notice is no reason to offer.
+        let trusted = (value == CHATGPT_BUNDLE).then(|| self.doors.follow.trusted());
+        self.chatgpt.tell(|follow| {
+            if let Some(trusted) = trusted {
+                follow.trusted(trusted);
+            }
+            follow.front(value);
+        });
         // `watch` first, as spawn_watch takes them.
         let watch = self.watch.lock().unwrap();
         let Some(line) = self.front.lock().unwrap().changed(value) else { return };
@@ -424,6 +580,61 @@ impl Shared {
         }
     }
 
+    /// The follow thread: each door call that can wait on ChatGPT, one at a time and with no lock held, until the
+    /// runner goes. The app hears only the permission, whether ChatGPT is installed, and the offer.
+    fn follow_chatgpt(self: Arc<Self>) {
+        let door = &self.doors.follow;
+        let mut observation: Option<Box<dyn Send>> = None;
+        let mut sent = Shown::default();
+        while let Some(step) = self.chatgpt.next(sent) {
+            match step {
+                // Returns at once: an observer that waits on a hung ChatGPT ends on its own thread.
+                Step::Stop => drop(observation.take()),
+                Step::Start(start) => {
+                    // Weakly: the observation keeps its callback for as long as it runs, and the runner must still go.
+                    let weak = Arc::downgrade(&self);
+                    observation = door.observe(Box::new(move |heard| {
+                        if let Some(shared) = weak.upgrade() {
+                            shared.heard(start, heard);
+                        }
+                    }));
+                    // None while the rules observe is seen in the log; the rules say it once per start.
+                    if observation.is_none() {
+                        self.heard(start, Heard::NoObserver);
+                    }
+                }
+                Step::Look => {
+                    let installed = door.installed();
+                    self.chatgpt.tell(|follow| follow.installed(installed));
+                }
+                Step::Trust => {
+                    let trusted = door.trusted();
+                    self.chatgpt.tell(|follow| follow.trusted(trusted));
+                }
+                Step::Shown(shown) => {
+                    sent = shown;
+                    self.answer(Event::Follow { trusted: shown.trusted, installed: shown.installed });
+                }
+                Step::Offer => self.answer(Event::FollowOffer),
+            }
+        }
+    }
+
+    /// What the observation numbered `start` heard, on its thread: the line, when it is new, to the watch running now.
+    /// The title goes nowhere else, and only the rules' fixed words to the log.
+    fn heard(&self, start: u64, heard: Heard) {
+        // `watch` first, as spawn_watch takes them: a title heard for an earlier watch is never written to a new one.
+        let watch = self.watch.lock().unwrap();
+        let out = self.chatgpt.answer(|follow| follow.heard(start, heard));
+        if let (Some(line), Some(watch)) = (&out.line, watch.as_ref()) {
+            watch.thread(line);
+        }
+        drop(watch);
+        for line in out.log {
+            self.doors.log.line(&line);
+        }
+    }
+
     fn run_login(&self) {
         let Some(cli) = self.cli() else { return self.answer(Event::Cli(false)) };
         let mut login = self.login.lock().unwrap();
@@ -456,6 +667,7 @@ mod tests {
     use super::*;
     use crate::account::NO_RESULT;
     use crate::app::App;
+    use crate::follow::{AX_SETTINGS, AxTrust, CHATGPT_BUNDLE, ChatgptWindow, Heard, NoFollow};
     use crate::front::{FrontSource, NoFront};
     use crate::install::{DESKTOP, HOST, INSTALLING_TMUX, NOT_INSTALLED, NOT_SUPPORTED, Shell};
     use crate::loginitem::LoginItem;
@@ -474,7 +686,7 @@ mod tests {
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::{Arc, Condvar, Mutex, mpsc};
     use std::thread;
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     const WAIT: Duration = Duration::from_secs(5);
     /// Second 0 of a minute.
@@ -498,6 +710,10 @@ mod tests {
     const RAISE: &str = r#"{"select":{"app":"terminal-app","tty":"/dev/ttys023","raise":true}}"#;
     /// Every test runner's poll interval: short, so a test waits on calls, never on the clock.
     const EVERY: Duration = Duration::from_millis(20);
+    /// Every test runner's second read of the permission after macOS's notice: short, as EVERY.
+    const AGAIN: Duration = Duration::from_millis(50);
+    const CHATGPT_LINE: &str = r#"{"front":"com.openai.codex"}"#;
+    const FIX_LOGIN: &str = r#"{"thread":"Fix login"}"#;
 
     /// The doors besides the CLI. Each keeps what it was asked, and fails while `failing` is set.
     #[derive(Default)]
@@ -736,6 +952,24 @@ mod tests {
             self.fake.log().lines().iter().any(|logged| logged == line)
         }
 
+        /// The next events are these, in any order: a watch's thread and the follow thread send apart.
+        fn next_in_any_order(&self, expected: &[Event]) {
+            let mut seen: Vec<Event> = expected.iter().map(|_| self.next()).collect();
+            for event in expected {
+                let at = seen.iter().position(|one| one == event).unwrap_or_else(|| panic!("{event:?}: {seen:?}"));
+                seen.remove(at);
+            }
+        }
+
+        /// Every event up to `last`, `last` included.
+        fn until(&self, last: Event) -> Vec<Event> {
+            let mut seen = vec![self.next()];
+            while seen.last() != Some(&last) {
+                seen.push(self.next());
+            }
+            seen
+        }
+
         /// Drops the runner, then gives every event still to come: all of them once each thread that could send has
         /// ended and let go of `send`.
         fn rest(self) -> Vec<Event> {
@@ -777,6 +1011,18 @@ mod tests {
         (w, fronts)
     }
 
+    /// The same, with the ChatGPT door a test tells.
+    fn world_following(now: &str, door: &Arc<ChatgptDoor>) -> (World, Arc<Fronts>) {
+        let fronts = Arc::new(Fronts { now: now.into(), changed: Mutex::default() });
+        let (source, follow) = (fronts.clone(), door.clone());
+        let w = world_where(move |doors| {
+            doors.front = source;
+            doors.follow = follow;
+        });
+        assert!(w.runner.find_cli());
+        (w, fronts)
+    }
+
     /// A fake CLI as the override, an empty home, the doubles, and a channel for what `send` is handed.
     fn world_where(change: impl FnOnce(&mut Doors)) -> World {
         let (fake, home, doubles) = (Fake::new(), tempfile::tempdir().unwrap(), Arc::new(Doubles::default()));
@@ -786,7 +1032,7 @@ mod tests {
         let send = Arc::new(move |event| {
             let _ = sender.send(event);
         });
-        let runner = Runner::polling_every(doors, send, EVERY);
+        let runner = Runner::polling_every(doors, send, EVERY, AGAIN);
         World { fake, home, doubles, events, runner }
     }
 
@@ -806,6 +1052,7 @@ mod tests {
             front: Arc::new(NoFront),
             tabs: Arc::new(NoTabs),
             updater: None,
+            follow: Arc::new(NoFollow),
         }
     }
 
@@ -845,6 +1092,14 @@ mod tests {
 
     fn tab(tty: &str) -> String {
         format!(r#"{{"tab":{{"app":"terminal-app","tty":"{tty}"}}}}"#)
+    }
+
+    fn follow(trusted: bool, installed: bool) -> Event {
+        Event::Follow { trusted, installed }
+    }
+
+    fn title(value: &str) -> Heard {
+        Heard::Title(Some(value.into()))
     }
 
     #[cfg(unix)]
@@ -1048,6 +1303,8 @@ mod tests {
             Effect::Log("menu: Quit".into()),
             Effect::ExportLogs,
             Effect::Reveal(PathBuf::from("/tmp/harness-logs-20261118-1030.zip")),
+            Effect::AskAx,
+            Effect::OpenAxSettings,
         ];
         for effect in others {
             assert_eq!(w.runner.run(effect.clone()), None, "{effect:?}");
@@ -1059,6 +1316,171 @@ mod tests {
     fn relaunch_is_the_binarys() {
         let w = world();
         assert_eq!(w.runner.run(Effect::Relaunch), Some(Effect::Relaunch));
+    }
+
+    /// The ChatGPT window and the permission, as a test tells them. Each call is kept as it is made, and `observe`
+    /// waits while the gate is shut, then gives no observation when it refuses.
+    #[derive(Default)]
+    struct ChatgptDoor(Arc<DoorCalls>);
+
+    /// Apart from the door: an observation's handle marks itself dropped here.
+    #[derive(Default)]
+    struct DoorCalls {
+        state: Mutex<DoorState>,
+        moved: Condvar,
+    }
+
+    #[derive(Default)]
+    struct DoorState {
+        installed: bool,
+        /// What `trusted()` answers, in turn; the last one again once the others are used.
+        trusts: VecDeque<bool>,
+        /// When each `trusted()` read was made.
+        reads: Vec<Instant>,
+        looks: usize,
+        prompts: usize,
+        changed: Option<Arc<dyn Fn() + Send + Sync>>,
+        observations: Vec<Observed>,
+        shut: bool,
+        refuses: bool,
+    }
+
+    /// An observation's `heard`, and whether its handle has been dropped.
+    struct Observed {
+        heard: Arc<dyn Fn(Heard) + Send + Sync>,
+        dropped: bool,
+    }
+
+    impl DoorCalls {
+        fn with<T>(&self, change: impl FnOnce(&mut DoorState) -> T) -> T {
+            let out = change(&mut self.state.lock().unwrap());
+            self.moved.notify_all();
+            out
+        }
+    }
+
+    /// An observation's handle.
+    struct Observation(Arc<DoorCalls>, usize);
+
+    impl Drop for Observation {
+        fn drop(&mut self) {
+            self.0.with(|state| state.observations[self.1].dropped = true);
+        }
+    }
+
+    impl ChatgptDoor {
+        fn answering(installed: bool, trusted: bool) -> Arc<ChatgptDoor> {
+            let door = ChatgptDoor::default();
+            door.with(|state| {
+                state.installed = installed;
+                state.trusts = VecDeque::from([trusted]);
+            });
+            Arc::new(door)
+        }
+
+        fn with<T>(&self, change: impl FnOnce(&mut DoorState) -> T) -> T {
+            self.0.with(change)
+        }
+
+        /// Waits until the calls so far pass `done`.
+        fn until(&self, done: impl Fn(&DoorState) -> bool) {
+            let state = self.0.state.lock().unwrap();
+            let (state, _) = self.0.moved.wait_timeout_while(state, WAIT, |state| !done(state)).unwrap();
+            assert!(done(&state), "{} observations, {} reads", state.observations.len(), state.reads.len());
+        }
+
+        /// Waits until `n` observations have started.
+        fn observed(&self, n: usize) {
+            self.until(|state| state.observations.len() >= n);
+        }
+
+        /// No observation starts for ten ticks: there are still `n`.
+        fn still(&self, n: usize) {
+            let state = self.0.state.lock().unwrap();
+            let (state, _) =
+                self.0.moved.wait_timeout_while(state, EVERY * 10, |state| state.observations.len() == n).unwrap();
+            assert_eq!(state.observations.len(), n);
+        }
+
+        /// Waits until the handle of observation `index` has been dropped.
+        fn dropped(&self, index: usize) {
+            self.until(|state| state.observations.get(index).is_some_and(|observed| observed.dropped));
+        }
+
+        /// What observation `index` hears, told with no lock held, as an observer's thread tells it.
+        fn hear(&self, index: usize, heard: Heard) {
+            let tell = self.with(|state| state.observations[index].heard.clone());
+            tell(heard);
+        }
+
+        /// What `trusted()` answers from now on, in turn.
+        fn trust(&self, answers: &[bool]) {
+            self.with(|state| state.trusts = answers.iter().copied().collect());
+        }
+
+        /// macOS's notice that the Accessibility list changed.
+        fn notice(&self) {
+            let changed = self.with(|state| state.changed.clone().expect("started"));
+            changed();
+        }
+
+        fn gate(&self, shut: bool) {
+            self.with(|state| state.shut = shut);
+        }
+    }
+
+    impl ChatgptWindow for ChatgptDoor {
+        fn installed(&self) -> bool {
+            self.with(|state| {
+                state.looks += 1;
+                state.installed
+            })
+        }
+
+        fn observe(&self, heard: Box<dyn Fn(Heard) + Send + Sync>) -> Option<Box<dyn Send>> {
+            let index = self.with(|state| {
+                state.observations.push(Observed { heard: Arc::from(heard), dropped: false });
+                state.observations.len() - 1
+            });
+            let state = self.0.moved.wait_while(self.0.state.lock().unwrap(), |state| state.shut).unwrap();
+            if state.refuses {
+                return None;
+            }
+            drop(state);
+            Some(Box::new(Observation(self.0.clone(), index)))
+        }
+    }
+
+    impl AxTrust for ChatgptDoor {
+        fn trusted(&self) -> bool {
+            self.with(|state| {
+                state.reads.push(Instant::now());
+                if state.trusts.len() > 1 { state.trusts.pop_front() } else { state.trusts.front().copied() }
+                    .unwrap_or(false)
+            })
+        }
+
+        fn prompt(&self) {
+            self.with(|state| state.prompts += 1);
+        }
+
+        fn start(&self, changed: Box<dyn Fn() + Send + Sync>) {
+            self.with(|state| state.changed = Some(Arc::from(changed)));
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn allow_asks_macos_and_the_settings_open_with_one_fixed_argument() {
+        let door = ChatgptDoor::answering(false, false);
+        let follow = door.clone();
+        let w = world_where(move |doors| doors.follow = follow);
+        assert_eq!(w.runner.run(Effect::AskAx), None);
+        assert_eq!(door.with(|state| state.prompts), 1);
+        assert!(w.doubles.opened.lock().unwrap().is_empty());
+        assert_eq!(w.runner.run(Effect::OpenAxSettings), None);
+        assert_eq!(*w.doubles.opened.lock().unwrap(), [vec![AX_SETTINGS.to_string()]]);
+        assert_eq!(door.with(|state| state.prompts), 1);
     }
 
     #[cfg(unix)]
@@ -1483,6 +1905,336 @@ mod tests {
         scripts.still(scripts.calls(0).len());
         // Nothing holds the doors any more.
         assert_eq!(Arc::strong_count(&scripts), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_chatgpt_title_is_written_to_the_watch_with_chatgpt_in_front_the_dial_attached_and_the_permission() {
+        let door = ChatgptDoor::answering(false, true);
+        let (w, _fronts) = world_following(CHATGPT_BUNDLE, &door);
+        // Trusted from the start: the menu's item is checked.
+        assert_eq!(w.next(), follow(true, false));
+        w.fake.script("hardware watch --json", &ATTACHED);
+        assert_eq!(w.answer(Effect::SpawnWatch), a_dial());
+        door.observed(1);
+        door.hear(0, title("Fix login"));
+        assert_eq!(w.answer(Effect::StopWatch), Event::WatchExit(Some(0)));
+        assert_eq!(w.fake.stdin(), [CHATGPT_LINE, FIX_LOGIN]);
+        assert_eq!(door.with(|state| state.observations.len()), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn nothing_is_observed_without_the_permission_the_dial_or_chatgpt_in_front() {
+        let door = ChatgptDoor::answering(false, true);
+        let (w, fronts) = world_following(VSCODE, &door);
+        assert_eq!(w.next(), follow(true, false));
+        // Another app in front.
+        w.fake.script("hardware watch --json", &ATTACHED);
+        assert_eq!(w.answer(Effect::SpawnWatch), a_dial());
+        door.still(0);
+        assert_eq!(w.answer(Effect::StopWatch), Event::WatchExit(Some(0)));
+        // ChatGPT in front, and no watch.
+        fronts.tell(CHATGPT_BUNDLE);
+        door.still(0);
+        // A watch, and no dial.
+        w.fake.script("hardware watch --json", &RECORDING);
+        assert_eq!(w.answer(Effect::SpawnWatch), no_dial());
+        door.still(0);
+        // The dial, and no permission.
+        door.trust(&[false]);
+        door.notice();
+        assert_eq!(w.next(), follow(false, false));
+        w.fake.script("hardware watch --json", &ATTACHED);
+        assert_eq!(w.answer(Effect::SpawnWatch), a_dial());
+        door.still(0);
+        // All four: it observes.
+        door.trust(&[true]);
+        door.notice();
+        assert_eq!(w.next(), follow(true, false));
+        door.observed(1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_observer_is_dropped_when_chatgpt_leaves_the_dial_detaches_the_watch_ends_or_the_permission_goes() {
+        let door = ChatgptDoor::answering(false, true);
+        let (w, fronts) = world_following(CHATGPT_BUNDLE, &door);
+        assert_eq!(w.next(), follow(true, false));
+        let detaching = [
+            r#"{"attached":true}"#,
+            "@wait detach",
+            r#"{"attached":false}"#,
+            "@wait attach",
+            r#"{"attached":true}"#,
+            "@record",
+        ];
+        w.fake.script("hardware watch --json", &detaching);
+        assert_eq!(w.answer(Effect::SpawnWatch), a_dial());
+        door.observed(1);
+        door.hear(0, title("Fix login"));
+        // ChatGPT leaves the front and comes back on the same thread: the dial may have moved since, so its title is
+        // written again.
+        fronts.tell(VSCODE);
+        door.dropped(0);
+        fronts.tell(CHATGPT_BUNDLE);
+        door.observed(2);
+        door.hear(1, title("Fix login"));
+        // The dial detaches, and attaches again.
+        w.fake.touch("detach");
+        assert_eq!(w.next(), no_dial());
+        door.dropped(1);
+        w.fake.touch("attach");
+        assert_eq!(w.next(), a_dial());
+        door.observed(3);
+        door.hear(2, title("Fix login"));
+        // The permission goes, and comes back.
+        door.trust(&[false]);
+        door.notice();
+        assert_eq!(w.next(), follow(false, false));
+        door.dropped(2);
+        door.trust(&[true]);
+        door.notice();
+        assert_eq!(w.next(), follow(true, false));
+        door.observed(4);
+        door.hear(3, title("Fix login"));
+        // The watch ends, and the next one is told the title too.
+        assert_eq!(w.answer(Effect::StopWatch), Event::WatchExit(Some(0)));
+        door.dropped(3);
+        w.fake.script("hardware watch --json", &ATTACHED);
+        assert_eq!(w.answer(Effect::SpawnWatch), a_dial());
+        door.observed(5);
+        door.hear(4, title("Fix login"));
+        assert_eq!(w.answer(Effect::StopWatch), Event::WatchExit(Some(0)));
+        door.dropped(4);
+        let first = [CHATGPT_LINE, FIX_LOGIN, VSCODE_LINE, CHATGPT_LINE, FIX_LOGIN, FIX_LOGIN, FIX_LOGIN];
+        assert_eq!(w.fake.stdin(), [&first[..], &[CHATGPT_LINE, FIX_LOGIN]].concat());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_title_heard_after_its_observer_was_dropped_is_written_nowhere() {
+        let door = ChatgptDoor::answering(false, true);
+        let (w, fronts) = world_following(CHATGPT_BUNDLE, &door);
+        assert_eq!(w.next(), follow(true, false));
+        w.fake.script("hardware watch --json", &ATTACHED);
+        assert_eq!(w.answer(Effect::SpawnWatch), a_dial());
+        door.observed(1);
+        door.hear(0, title("Fix login"));
+        fronts.tell(VSCODE);
+        door.dropped(0);
+        door.hear(0, title("Plan the trip"));
+        // Back to ChatGPT fast: the first observer is still heard after the second started.
+        fronts.tell(CHATGPT_BUNDLE);
+        door.observed(2);
+        door.hear(0, title("Plan the trip"));
+        door.hear(1, title("Fix login"));
+        assert_eq!(w.answer(Effect::StopWatch), Event::WatchExit(Some(0)));
+        assert_eq!(w.fake.stdin(), [CHATGPT_LINE, FIX_LOGIN, VSCODE_LINE, CHATGPT_LINE, FIX_LOGIN]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_permission_is_read_at_the_notification_and_once_more_a_moment_later() {
+        let door = ChatgptDoor::answering(false, true);
+        let (w, _fronts) = world_following(CHATGPT_BUNDLE, &door);
+        assert_eq!(w.next(), follow(true, false));
+        w.fake.script("hardware watch --json", &ATTACHED);
+        assert_eq!(w.answer(Effect::SpawnWatch), a_dial());
+        door.observed(1);
+        let before = door.with(|state| state.reads.len());
+        // The list changes just after macOS's notice: the read at it still finds Harness there, the one after does not.
+        door.trust(&[true, false]);
+        let noticed = Instant::now();
+        door.notice();
+        let returned = Instant::now();
+        door.dropped(0);
+        assert_eq!(w.next(), follow(false, false));
+        let reads = door.with(|state| state.reads[before..].to_vec());
+        assert_eq!(reads.len(), 2);
+        // One read on the notice's own thread, and one no sooner than a moment later.
+        assert!(noticed <= reads[0] && reads[0] <= returned);
+        assert!(reads[1] >= noticed + AGAIN);
+        assert_eq!(w.rest(), [Event::WatchExit(Some(0))]);
+        assert_eq!(door.with(|state| state.reads.len()), before + 2);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_change_of_the_permission_or_of_the_app_installed_is_one_follow_event() {
+        let door = ChatgptDoor::answering(true, false);
+        let (w, _fronts) = world_following(VSCODE, &door);
+        let attaching = [
+            r#"{"attached":true}"#,
+            "@wait again",
+            r#"{"attached":true}"#,
+            "@wait detach",
+            r#"{"attached":false}"#,
+            "@wait attach",
+            r#"{"attached":true}"#,
+            "@stdin",
+        ];
+        w.fake.script("hardware watch --json", &attaching);
+        // Nothing is said before the dial attaches: untrusted, and nothing is known installed.
+        assert_eq!(w.runner.run(Effect::SpawnWatch), None);
+        w.next_in_any_order(&[a_dial(), follow(false, true)]);
+        assert_eq!(door.with(|state| state.looks), 1);
+        door.trust(&[true]);
+        door.notice();
+        assert_eq!(w.next(), follow(true, true));
+        // The read a moment later finds the same: nothing more. The reads: at start, at the notice, and that one.
+        door.until(|state| state.reads.len() == 3);
+        // Another status that says attached is no new attach: nothing is read.
+        w.fake.touch("again");
+        assert_eq!(w.next(), a_dial());
+        // The app removed, and the dial attached again: it is read once more.
+        door.with(|state| state.installed = false);
+        w.fake.touch("detach");
+        assert_eq!(w.next(), no_dial());
+        w.fake.touch("attach");
+        w.next_in_any_order(&[a_dial(), follow(true, false)]);
+        assert_eq!(door.with(|state| state.looks), 2);
+        assert_eq!(w.rest(), [Event::WatchExit(Some(0))]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_offer_is_one_event_when_chatgpt_comes_to_the_front_and_none_for_the_app_in_front_at_start() {
+        let door = ChatgptDoor::answering(true, false);
+        let (w, fronts) = world_following(CHATGPT_BUNDLE, &door);
+        w.fake.script("hardware watch --json", &ATTACHED);
+        assert_eq!(w.runner.run(Effect::SpawnWatch), None);
+        w.next_in_any_order(&[a_dial(), follow(false, true)]);
+        // In front from the start, then told again: ChatGPT has not come to the front.
+        fronts.tell(CHATGPT_BUNDLE);
+        fronts.tell(VSCODE);
+        fronts.tell(CHATGPT_BUNDLE);
+        assert_eq!(w.next(), Event::FollowOffer);
+        // Allowed since macOS's last notice: the read as ChatGPT comes to the front finds it, and nothing is offered.
+        fronts.tell(VSCODE);
+        door.trust(&[true]);
+        fronts.tell(CHATGPT_BUNDLE);
+        assert_eq!(w.next(), follow(true, true));
+        assert_eq!(w.rest(), [Event::WatchExit(Some(0))]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn no_observer_is_one_log_line_each_time_observing_starts() {
+        let door = ChatgptDoor::answering(false, true);
+        let (w, fronts) = world_following(CHATGPT_BUNDLE, &door);
+        assert_eq!(w.next(), follow(true, false));
+        w.fake.script("hardware watch --json", &ATTACHED);
+        assert_eq!(w.answer(Effect::SpawnWatch), a_dial());
+        door.observed(1);
+        door.hear(0, Heard::NoObserver);
+        door.hear(0, Heard::NoObserver);
+        let said = |w: &World| w.fake.log().lines().iter().filter(|line| *line == "chatgpt: no observer").count();
+        assert_eq!(said(&w), 1);
+        // ChatGPT comes to the front again: it is tried again.
+        fronts.tell(VSCODE);
+        door.dropped(0);
+        fronts.tell(CHATGPT_BUNDLE);
+        door.observed(2);
+        door.hear(1, Heard::NoObserver);
+        assert_eq!(said(&w), 2);
+        assert_eq!(w.answer(Effect::StopWatch), Event::WatchExit(Some(0)));
+        assert_eq!(w.fake.stdin(), [CHATGPT_LINE, VSCODE_LINE, CHATGPT_LINE]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_observation_that_does_not_start_is_one_log_line_each_time_observing_starts() {
+        let door = ChatgptDoor::answering(false, true);
+        door.with(|state| state.refuses = true);
+        let (w, fronts) = world_following(CHATGPT_BUNDLE, &door);
+        assert_eq!(w.next(), follow(true, false));
+        w.fake.script("hardware watch --json", &ATTACHED);
+        assert_eq!(w.answer(Effect::SpawnWatch), a_dial());
+        door.observed(1);
+        let said = |w: &World| w.fake.log().lines().iter().filter(|line| *line == "chatgpt: no observer").count();
+        // The next start waits at the gate: the follow thread is done with the first.
+        door.gate(true);
+        fronts.tell(VSCODE);
+        fronts.tell(CHATGPT_BUNDLE);
+        door.observed(2);
+        assert_eq!(said(&w), 1);
+        door.gate(false);
+        assert_eq!(w.answer(Effect::StopWatch), Event::WatchExit(Some(0)));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_chatgpt_that_hangs_holds_back_no_front_line() {
+        let door = ChatgptDoor::answering(false, true);
+        door.gate(true);
+        let (w, fronts) = world_following(CHATGPT_BUNDLE, &door);
+        assert_eq!(w.next(), follow(true, false));
+        w.fake.script("hardware watch --json", &ATTACHED);
+        assert_eq!(w.answer(Effect::SpawnWatch), a_dial());
+        // ChatGPT does not answer: the observation is under way, and has not started.
+        door.observed(1);
+        let (told, done) = mpsc::channel();
+        let telling = fronts.clone();
+        thread::spawn(move || {
+            telling.tell(VSCODE);
+            let _ = told.send(());
+        });
+        done.recv_timeout(WAIT).expect("the app in front is told at once");
+        assert_eq!(w.answer(Effect::StopWatch), Event::WatchExit(Some(0)));
+        assert_eq!(w.fake.stdin(), [CHATGPT_LINE, VSCODE_LINE]);
+        // Once ChatGPT answers, the observation it gives is dropped: ChatGPT left the front meanwhile.
+        door.gate(false);
+        door.dropped(0);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn nothing_of_a_title_reaches_the_log_an_event_or_the_state_file() {
+        let door = ChatgptDoor::answering(true, true);
+        let (w, fronts) = world_following(CHATGPT_BUNDLE, &door);
+        w.fake.script("hardware watch --json", &ATTACHED);
+        assert_eq!(w.runner.run(Effect::SpawnWatch), None);
+        let mut events = w.until(a_dial());
+        door.observed(1);
+        for heard in [title("Secret thread"), title("Another secret"), Heard::Title(None), Heard::NoObserver] {
+            door.hear(0, heard);
+        }
+        fronts.tell(VSCODE);
+        fronts.tell(CHATGPT_BUNDLE);
+        door.observed(2);
+        door.hear(1, title("Secret thread"));
+        door.hear(0, title("Late secret"));
+        assert_eq!(w.runner.run(Effect::StopWatch), None);
+        events.extend(w.until(Event::WatchExit(Some(0))));
+        let (log, doubles, stdin) = (w.fake.log(), w.doubles.clone(), w.fake.stdin());
+        events.extend(w.rest());
+        // The titles went to the watch, and nowhere else.
+        let (secret, another) = (r#"{"thread":"Secret thread"}"#, r#"{"thread":"Another secret"}"#);
+        let empty = r#"{"thread":""}"#;
+        assert_eq!(stdin, [CHATGPT_LINE, secret, another, empty, VSCODE_LINE, CHATGPT_LINE, secret]);
+        assert!(events.contains(&follow(true, true)), "{events:?}");
+        assert!(events.iter().all(|event| !format!("{event:?}").contains("ecret")), "{events:?}");
+        let lines = log.lines();
+        assert!(lines.iter().any(|line| line == "chatgpt: no observer"), "{lines:?}");
+        assert!(lines.iter().all(|line| !line.contains("ecret")), "{lines:?}");
+        assert!(doubles.saved.lock().unwrap().is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_follow_thread_ends_with_the_runner() {
+        let door = ChatgptDoor::answering(false, true);
+        let (w, _fronts) = world_following(CHATGPT_BUNDLE, &door);
+        assert_eq!(w.next(), follow(true, false));
+        w.fake.script("hardware watch --json", &ATTACHED);
+        assert_eq!(w.answer(Effect::SpawnWatch), a_dial());
+        door.observed(1);
+        // Every thread that could send has let it go: the follow thread too, which was observing.
+        assert_eq!(w.rest(), [Event::WatchExit(Some(0))]);
+        door.dropped(0);
+        // Nothing holds the doors any more.
+        assert_eq!(Arc::strong_count(&door), 1);
     }
 
     #[cfg(unix)]

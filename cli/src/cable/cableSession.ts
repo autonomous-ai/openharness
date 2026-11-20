@@ -369,8 +369,9 @@ export type CableMachineSource = 'backend' | 'local' | 'signed-out'
 export type OpenReason = 'question'
 
 /** What turned the dial to an agent from this computer: a person's prompt, a terminal tab they selected, a Claude app
- *  they attached to, or an Orca pane they focused. The outcome's log line is the cause's own. */
-export type FollowCause = 'prompt' | 'tab' | 'attach' | 'focus'
+ *  they attached to, an Orca pane they focused, or a thread they opened in the ChatGPT app. The outcome's log line is
+ *  the cause's own. */
+export type FollowCause = 'prompt' | 'tab' | 'attach' | 'focus' | 'thread'
 /** What a send answers. `message` is a sentence for the dial, shown in place of the generic one. */
 export type SendOutcome = { ok: true } | { ok: false; machine?: string; reason?: string; message?: string }
 

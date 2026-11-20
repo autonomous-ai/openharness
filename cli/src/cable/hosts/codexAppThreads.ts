@@ -77,7 +77,7 @@ interface Projects {
   ids: ReadonlySet<string> | null
 }
 
-/** Codex's names of the listed threads (null: none), kept under the stamp of its index they were read at. */
+/** Codex's names of threads (null: none), kept under the stamp of its index they were read at. */
 interface Names {
   stamp: string
   byId: ReadonlyMap<string, string | null>
@@ -134,7 +134,9 @@ export class CodexAppThreads {
   private readonly sqlite: () => DatabaseConstructor | null
   private readonly readState: (fd: number, max: number) => Buffer
   private projects: Projects | undefined
-  private names: Names | undefined
+  private listedNames: Names | undefined
+  /** The names the last followed report was matched against: up to 200, as names() was asked. */
+  private followedNames: Names | undefined
 
   constructor(private readonly home: string, seams: CodexAppSeams = {}) {
     this.sqlite = seams.sqlite ?? builtinSqlite
@@ -189,28 +191,50 @@ export class CodexAppThreads {
    *  HARNESSD_SERVICES=none the core's terminal sweep (engineSessionTitle) shares it, and reads the index cold once after. */
   forget(): void {
     this.projects = undefined
-    this.names = undefined
+    this.listedNames = undefined
+    this.followedNames = undefined
     resetCodexThreadNames()
   }
 
   /**
-   * Codex's own names for `ids`. codexThreadName opens the index to read it, and a FIFO, or a link to one, opened so
-   * waits for a writer for good, and the devices event loop with it: only a regular file is read. Each of its answers
-   * costs a copy of the environment (launchCodexHome), most of a read: while the index holds still, only a thread not
-   * listed last time is asked.
+   * Codex's own name of each of `ids` that has one, for the title of the ChatGPT window the dial follows: whole, as the
+   * window shows it (trimmed, as codexThreadName keeps it), not cut as a row's name is, and never the folder's. Kept
+   * under the index's stamp, as a read's are: a name Codex gave since the last report changes the stamp, and is
+   * matched. No lookup of many in sessionTitle.ts: the core's process loads that file (cli/AGENTS.md, rule 7).
    */
-  private namesOf(ids: ReadonlySet<string>): ReadonlyMap<string, string | null> {
-    let found: Stats | undefined
-    try { found = lstatSync(join(this.home, INDEX)) } catch { /* no index: every thread has its folder's name */ }
-    if (!found?.isFile()) {
-      this.names = undefined
-      return new Map()
-    }
-    const stamp = stampOf(found)
-    const last = this.names?.stamp === stamp ? this.names.byId : new Map<string, string | null>()
-    const byId = new Map([...ids].map((id) => [id, last.has(id) ? last.get(id)! : codexThreadName(id, this.home)]))
-    this.names = { stamp, byId }
+  names(ids: readonly string[]): ReadonlyMap<string, string> {
+    this.followedNames = this.named(ids, this.followedNames)
+    const byId = new Map<string, string>()
+    for (const [id, name] of this.followedNames?.byId ?? []) if (name) byId.set(id, name)
     return byId
+  }
+
+  /** Codex's index of names when it is a regular file. codexThreadName opens it to read it, and a FIFO, or a link to
+   *  one, opened so waits for a writer for good, and the devices event loop with it. */
+  private index(): Stats | undefined {
+    let found: Stats | undefined
+    try { found = lstatSync(join(this.home, INDEX)) } catch { /* no index: no thread has Codex's name */ }
+    return found?.isFile() ? found : undefined
+  }
+
+  /** Codex's own names for the listed `ids`. */
+  private namesOf(ids: ReadonlySet<string>): ReadonlyMap<string, string | null> {
+    this.listedNames = this.named(ids, this.listedNames)
+    return this.listedNames?.byId ?? new Map()
+  }
+
+  /**
+   * Codex's own names for `ids`, only from a regular file (index()), kept for them alone. Each of codexThreadName's
+   * answers costs a copy of the environment (launchCodexHome), most of a read: while the index holds still, only an id
+   * not in `last` is asked.
+   */
+  private named(ids: Iterable<string>, last: Names | undefined): Names | undefined {
+    const found = this.index()
+    if (!found) return undefined
+    const stamp = stampOf(found)
+    const kept = last?.stamp === stamp ? last.byId : new Map<string, string | null>()
+    const byId = new Map([...ids].map((id) => [id, kept.has(id) ? kept.get(id)! : codexThreadName(id, this.home)]))
+    return { stamp, byId }
   }
 
   /** The store's rows. A missing file, table or column, or a store held locked, throws: read() gives its kind. */

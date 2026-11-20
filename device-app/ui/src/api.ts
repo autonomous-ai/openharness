@@ -2,14 +2,14 @@
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 
-export type Screen = 'install' | 'sign_in'
+export type Screen = 'install' | 'sign_in' | 'follow'
 export type Phase = 'offer' | 'working' | 'browser' | 'failed'
 export interface View {
   screen: Screen
   phase: Phase
   lines: string[]
 }
-export type Action = 'retry' | 'sign_in' | 'later' | 'cancel'
+export type Action = 'retry' | 'sign_in' | 'later' | 'cancel' | 'allow'
 
 export function view(): Promise<View | null> {
   return invoke<View | null>('view')

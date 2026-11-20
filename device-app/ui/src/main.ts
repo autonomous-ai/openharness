@@ -5,7 +5,7 @@ import { render } from './screens'
 
 export async function start(root: HTMLElement): Promise<void> {
   const draw = (next: View | null) => render(root, next, (action) => void act(action))
-  // A close is a close request, which Rust answers as Sign in's Later.
+  // A close is a close request, which Rust answers as Sign in's Later or Follow ChatGPT's Not now.
   document.addEventListener('keydown', (event) => {
     if (event.key === 'Escape') void getCurrentWindow().close()
   })

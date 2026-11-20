@@ -4,10 +4,16 @@ import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFile
 import { tmpdir, userInfo } from 'node:os'
 import { join } from 'node:path'
 import { performance } from 'node:perf_hooks'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { resetCodexThreadNames } from '../../lib/sessionTitle.js'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { codexThreadName, resetCodexThreadNames } from '../../lib/sessionTitle.js'
 import { codexAppFixture, NEVER_READ, type CodexAppFixture, type FixtureThread } from '../../testing/codexAppFixture.js'
 import { CodexAppThreads, MAX_STATE_BYTES, type CodexAppRead, type CodexAppSeams } from './codexAppThreads.js'
+
+// Each of codexThreadName's answers copies the environment: the tests count them, the answers stay its own.
+vi.mock('../../lib/sessionTitle.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../lib/sessionTitle.js')>()
+  return { ...actual, codexThreadName: vi.fn(actual.codexThreadName) }
+})
 
 let root: string
 beforeEach(() => {
@@ -384,6 +390,86 @@ describe('names', () => {
       { encoding: 'utf8', timeout: 10_000 })
     expect(child.signal).toBeNull()
     expect((JSON.parse(child.stdout) as Extract<CodexAppRead, { ok: true }>).listed.map((t) => t.name)).toEqual(['t1'])
+  })
+})
+
+describe('names(ids)', () => {
+  it('Codex\'s own name of each id, trimmed and whole; an id with no name is absent, its folder never a name', async () => {
+    const fx = fixture()
+    fx.threads([thread(1, 30), thread(2, 20), thread(3, 10)])
+    fx.name(uuid(1), 'n'.repeat(100))
+    fx.name(uuid(2), '  Spaced  ')
+    const reader = new CodexAppThreads(fx.home)
+    await ok(reader)
+    expect(reader.names([uuid(1), uuid(2), uuid(3)])).toEqual(new Map([[uuid(1), 'n'.repeat(100)], [uuid(2), 'Spaced']]))
+  })
+
+  it('no index is an empty map', () => {
+    const fx = fixture()
+    fx.threads([thread(1, 10)])
+    expect(new CodexAppThreads(fx.home).names([uuid(1)])).toEqual(new Map())
+  })
+
+  // As namesOf's FIFO test: a FIFO opened would hold the event loop for good, so the call runs in a child the test can kill.
+  it.each<[string, (fx: CodexAppFixture) => void]>([
+    ['a FIFO', (fx) => execFileSync('mkfifo', [indexOf(fx)])],
+    ['a link to a FIFO', (fx) => {
+      execFileSync('mkfifo', [join(root, 'fifo')])
+      symlinkSync(join(root, 'fifo'), indexOf(fx))
+    }],
+  ])('an index that is %s is an empty map at once', (_, make) => {
+    const fx = fixture()
+    fx.threads([thread(1, 10)])
+    make(fx)
+    const reader = new URL('./codexAppThreads.ts', import.meta.url).href
+    const script = `const { CodexAppThreads } = await import(${JSON.stringify(reader)})
+      console.log(new CodexAppThreads(process.argv[1]).names([${JSON.stringify(uuid(1))}]).size)`
+    const child = spawnSync(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', script, fx.home],
+      { encoding: 'utf8', timeout: 10_000 })
+    expect(child.signal).toBeNull()
+    expect(child.stdout.trim()).toBe('0')
+  })
+
+  // Review Focus 4, the reader's half: Codex appends a name, and the read that would follow it may come later.
+  it('a name Codex gives after the last read is matched', async () => {
+    const fx = fixture()
+    fx.threads([thread(1, 10)])
+    fx.name(uuid(1), 'Old')
+    const reader = new CodexAppThreads(fx.home)
+    await ok(reader)
+    expect(reader.names([uuid(1)]).get(uuid(1))).toBe('Old')
+    fx.name(uuid(1), 'New')
+    expect(reader.names([uuid(1)]).get(uuid(1))).toBe('New')
+  })
+
+  it('an index that held still is not asked again; one appended to is', () => {
+    const fx = fixture()
+    fx.threads([thread(1, 20), thread(2, 10)])
+    fx.name(uuid(1), 'Alpha')
+    const reader = new CodexAppThreads(fx.home)
+    const asked = vi.mocked(codexThreadName)
+    expect(reader.names([uuid(1), uuid(2)])).toEqual(new Map([[uuid(1), 'Alpha']]))
+    asked.mockClear()
+    expect(reader.names([uuid(1), uuid(2)])).toEqual(new Map([[uuid(1), 'Alpha']]))
+    expect(asked).not.toHaveBeenCalled()
+    fx.name(uuid(2), 'Bravo')
+    expect(reader.names([uuid(1), uuid(2)])).toEqual(new Map([[uuid(1), 'Alpha'], [uuid(2), 'Bravo']]))
+    expect(asked).toHaveBeenCalledTimes(2)
+  })
+
+  it('forget() keeps none: the next call reads Codex\'s index afresh', () => {
+    const fx = fixture()
+    fx.threads([thread(1, 10)])
+    fx.name(uuid(1), 'Alpha')
+    const when = 1_700_000_000
+    utimesSync(indexOf(fx), when, when)
+    const reader = new CodexAppThreads(fx.home)
+    expect(reader.names([uuid(1)]).get(uuid(1))).toBe('Alpha')
+    // Another name in the same file, of the same size and mtime: only a reader that kept no name reads it.
+    writeFileSync(indexOf(fx), readFileSync(indexOf(fx), 'utf8').replace('Alpha', 'Bravo'))
+    utimesSync(indexOf(fx), when, when)
+    reader.forget()
+    expect(reader.names([uuid(1)]).get(uuid(1))).toBe('Bravo')
   })
 })
 

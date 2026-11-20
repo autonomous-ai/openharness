@@ -29,7 +29,7 @@ const WATCHED: ReadonlySet<string> = new Set([
 
 export interface CodexAppSourceDeps {
   /** The reader (codexAppThreads.ts) on the Codex home, computed once by devices.ts. */
-  threads: Pick<CodexAppThreads, 'there' | 'read' | 'forget'>
+  threads: Pick<CodexAppThreads, 'there' | 'read' | 'forget' | 'names'>
   /** One watch on the Codex home (folderWatch.ts watchNearest), telling the changed entry's name when the OS gave one.
    *  Its stop. */
   watch(changed: (file?: string) => void): () => void
@@ -44,6 +44,9 @@ export interface CodexAppSourceDeps {
   monotonic(): number
   log(line: string): void
 }
+
+/** The thread a ChatGPT window title names: the one thread of that name, none, or more than one. */
+export type ThreadMatch = { threadId: string } | 'none' | 'ambiguous'
 
 /** A listed thread: its id, which its tap and rest open, and its row. */
 interface Row {
@@ -89,6 +92,9 @@ export class CodexAppSource implements HostSource {
   private names: ReadonlyMap<string, PaneName> = new Map()
   /** The sidebar's order the rank was last given for, its ids joined; none while no rank is set. */
   private order: string | undefined
+  /** Every thread id of the last good read, up to the reader's 200, not only the 16 listed: a thread low in the sidebar
+   *  is opened in the app as any other. Empty while stopped. */
+  private ids: readonly string[] = []
   private running = false
   /** The count of stops: a read started before the last stop takes nothing. */
   private stops = 0
@@ -140,6 +146,7 @@ export class CodexAppSource implements HostSource {
     this.deps.threads.forget()
     this.said = undefined
     this.names = new Map()
+    this.ids = []
     if (this.order !== undefined) {
       this.order = undefined
       this.deps.rank(undefined)
@@ -181,6 +188,20 @@ export class CodexAppSource implements HostSource {
   /** The listed threads' names by thread id, the ChatGPT adapter's pane id, so a hooked copy keeps the row's name. */
   paneNames(): ReadonlyMap<string, PaneName> {
     return this.names
+  }
+
+  /** The thread the ChatGPT window's title names: Codex's name of it, trimmed, equal to the title trimmed, case kept. The
+   *  names are asked now, not kept from the last read, so a name Codex gave since matches. */
+  threadNamed(title: string): ThreadMatch {
+    const wanted = title.trim()
+    if (wanted === '' || this.ids.length === 0) return 'none'
+    let found: string | undefined
+    for (const [id, name] of this.deps.threads.names(this.ids)) {
+      if (name !== wanted) continue
+      if (found !== undefined) return 'ambiguous'
+      found = id
+    }
+    return found === undefined ? 'none' : { threadId: found }
   }
 
   private find(agentId: string): Row | undefined {
@@ -247,6 +268,7 @@ export class CodexAppSource implements HostSource {
     const before = shape(this.rows)
     this.rows = read.listed.map(rowOf)
     this.names = new Map(read.listed.map(({ id, name }) => [id, { title: name, renamed: false }]))
+    this.ids = read.order
     this.timed(ms, read)
     this.counted(read.listed)
     // A new rank only for a new order: the dial's ring sorts again on each new rank, and a working turn writes its
