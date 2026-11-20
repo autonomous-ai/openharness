@@ -56,9 +56,11 @@ export interface WindowsDaemonOptions {
   capabilities?: Record<string, string>
   /** Each piece of what the daemon prints, as it comes: its output, then its log (`log`). */
   onOutput?: (text: string) => void
-  /** Run once Harness's folders are made, before the daemon starts: a sign-in put in place. What it throws is thrown
-   *  back, and nothing is started. */
-  prepare?: (folders: { auth: string }) => void | Promise<void>
+  /** Run once Harness's folders are made, before the daemon starts: a sign-in put in place, or the stores an app keeps in
+   *  the profile. `applications` is where a sealed daemon looks for the apps (`HARNESS_APPLICATIONS_DIR`), missing until
+   *  this writes one; none with `own`, whose daemon looks for the account's own. What it throws is thrown back, and
+   *  nothing is started. */
+  prepare?: (folders: { auth: string; profile: string; applications?: string }) => void | Promise<void>
 }
 
 /** A real dial on [port], run through [serialBin], a signed harness-serial.exe, in place of the stand-in. Always sealed. */
@@ -179,6 +181,9 @@ export async function startWindowsDaemon(options: WindowsDaemonOptions | RealDia
   for (const dir of [...Object.values(dirs), ...(own ? [] : Object.values(sealed))]) mkdirSync(dir, { recursive: true })
   const endpoint = `\\\\.\\pipe\\harness-e2e-${randomBytes(8).toString('hex')}`
   const missing = join(root, 'missing')
+  // The account's own ChatGPT is a Store package, which a sealed daemon would ask Windows for: a folder of the root stands
+  // in for it (chatGptPlaces, cable/hosts/appPlaces.ts).
+  const applications = join(root, 'Applications')
   const systemRoot = process.env.SystemRoot
   if (!own && !systemRoot) throw new Error('SystemRoot is not set: a sealed daemon finds programs only in its folders')
   // The profile, every engine home and every editor: the root's, which name engines and editors that are not there, or
@@ -192,6 +197,7 @@ export async function startWindowsDaemon(options: WindowsDaemonOptions | RealDia
         CODEX_PATH: join(missing, 'codex.exe'),
         HARNESS_VSCODE_BIN: join(missing, 'code.cmd'),
         HARNESS_CURSOR_BIN: join(missing, 'cursor.cmd'),
+        HARNESS_APPLICATIONS_DIR: applications,
         PATH: sealedPath(systemRoot!),
       }
   // The stand-in dial, found on its own port and served through the stand-in for harness-serial.exe; or a real one, on
@@ -249,7 +255,7 @@ export async function startWindowsDaemon(options: WindowsDaemonOptions | RealDia
         standIns.push(file)
       }
     }
-    await options.prepare?.({ auth: dirs.auth })
+    await options.prepare?.({ auth: dirs.auth, profile, applications: own ? undefined : applications })
   } catch (error) {
     discard()
     throw error
