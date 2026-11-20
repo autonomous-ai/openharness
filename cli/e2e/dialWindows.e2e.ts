@@ -20,6 +20,7 @@ import { NOTIFY_MODE_FILE } from '../src/cable/notifyMode.js'
 import { askDevices } from '../src/devices/listenerClient.js'
 import { DEVICES_TOKEN_FILE, writeDevicesRecord } from '../src/devices/listenerPipe.js'
 import { ensureDaemonToken, newPipeNonce, newPipePath, PIPE_AUTH_HEADER, pipeAuthValue, pipeProven } from '../src/lib/windows/pipeAuth.js'
+import { until } from './harness/daemon.js'
 import { PROFILE_NAME, startWindowsDaemon, type WindowsDaemon } from './harness/windowsDaemon.js'
 
 const LINE = 'Need you'
@@ -92,8 +93,8 @@ describe.runIf(process.platform === 'win32')('the dial on Windows', () => {
       answer.once('end', () => { ended = true })
       answer.once('close', () => { ended = true })
       answer.resume()
-      // What is checked is that nothing ends it for this long: a stream, not an answer.
-      await new Promise((done) => setTimeout(done, 2_000))
+      // A stream, not an answer: the devices hold it open once they count the window, and it has not ended by then.
+      await until('the devices to count the window', () => d.log().includes('[devices] vscode stream · open · windows 1'), 30_000)
       expect(ended).toBe(false)
     } finally {
       cancel()
