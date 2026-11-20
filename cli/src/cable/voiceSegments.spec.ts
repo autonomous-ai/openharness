@@ -331,6 +331,26 @@ describe('VoiceSegments', () => {
     }
   })
 
+  it('an answer that is not text fails the recording, and leaves no rejection unhandled', async () => {
+    const unhandled = vi.fn()
+    process.on('unhandledRejection', unhandled)
+    try {
+      const { segments, calls } = setup()
+      segments.push(tone(59, 16_000, 1000))
+      const done = segments.finish()
+      let outcome: unknown = 'pending'
+      done.then(text => { outcome = text }, (error: unknown) => { outcome = error })
+      // The transcript comes from the backend's JSON, which this side does not check is a string.
+      calls[0]!.resolve(5 as unknown as string)
+      await flush()
+      await flush()
+      expect(outcome).toBeInstanceOf(TypeError)
+      expect(unhandled).not.toHaveBeenCalled()
+    } finally {
+      process.off('unhandledRejection', unhandled)
+    }
+  })
+
   it('the level matches the whole recording', async () => {
     const pcm = varied(130 * SECOND + 1)
     const { segments } = setup({ transcribe: answering() })
