@@ -1169,6 +1169,22 @@ static void nav_test_home_sixteen_apps(void) {
     act(POD_A_SCROLL, 1, 0);
     CHECK(top()->scroll == 47);
 }
+// A tap on an app card asks the Mac for that app's ring (app.pick) and stays on Home: the room opens when the ring lands.
+static void nav_test_pick_app(void) {
+    fresh_apps();
+    act(POD_A_HOME_APPS, 0, 0);
+    pod_out_t o = act(POD_A_PICK_APP, 1, 0);
+    CHECK(o.fx == POD_FX_APP_PICK && !strcmp(o.agent, "codex") && N.depth == 1 && top()->scroll == 32);
+    CHECK(act(POD_A_PICK_APP, 7, 0).fx == POD_FX_NONE && act(POD_A_PICK_APP, -1, 0).fx == POD_FX_NONE);   // no such row
+    pod_app_t r[3];
+    memcpy(r, k_apps, sizeof r);
+    r[1].count = 0;   // ChatGPT has no agents left: nothing to show
+    pod_model_apps(&M, r, 3, "harness");
+    CHECK(act(POD_A_PICK_APP, 1, 0).fx == POD_FX_NONE);
+    pod_model_apps(&M, k_apps, 3, "harness");
+    to_agent(0, 0);
+    CHECK(act(POD_A_PICK_APP, 1, 0).fx == POD_FX_NONE && N.depth == 3);   // only Home has app cards
+}
 
 int main(void) {
     nav_test_home_notices_scroll();
@@ -1184,6 +1200,7 @@ int main(void) {
     nav_test_follow_tab_leaves_apps();
     nav_test_app_agents();
     nav_test_home_sixteen_apps();
+    nav_test_pick_app();
     nav_test_working_card_room();
     nav_test_home_lands_on_room_tab();
     nav_test_enter_tab_pushes();
