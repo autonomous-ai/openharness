@@ -540,8 +540,10 @@ it.each((['name', 'model'] as const).flatMap(choice => ['owner', 'uncertain', 'q
     await held.entered
     const pending = update.agentUpdate(request, reply)
     try {
-      // The update queues its write a few turns after the call, so its deadline passes once it is held.
-      await vi.waitFor(() => { writeDeadline.expire(); expect(reply).toHaveBeenCalled() })
+      // The update queues its write a few turns after the call, behind the blocking flush's: its deadline passes once
+      // both are held.
+      await vi.waitFor(() => expect(writeDeadline.deadlines()).toBe(2))
+      writeDeadline.expire()
       await pending
       expect(reply).toHaveBeenCalledExactlyOnceWith({ error: 'PERSISTENCE_UNCONFIRMED' })
     } finally { held.release(); await blocking }

@@ -74,6 +74,8 @@ function armsWriteDeadline(): boolean {
 export function holdRegistryDeadline(deadlineMs: number, options?: { hold?: readonly number[] }): {
   expire(): void
   fire(ms: number): void
+  /** How many write deadlines it holds. */
+  deadlines(): number
 } {
   held.clear(); due.clear()
   const run = (ms: number | typeof DEADLINE) => runPass(held, (bound) => bound === ms)
@@ -93,5 +95,5 @@ export function holdRegistryDeadline(deadlineMs: number, options?: { hold?: read
   vi.spyOn(globalThis, 'clearTimeout').mockImplementation(((timer?: Parameters<typeof clearTimeout>[0]) => {
     held.delete(timer); due.delete(timer); realClear(timer)
   }) as typeof clearTimeout)
-  return { expire: () => run(DEADLINE), fire: run }
+  return { expire: () => run(DEADLINE), fire: run, deadlines: () => [...held.values()].filter((entry) => entry.ms === DEADLINE).length }
 }
