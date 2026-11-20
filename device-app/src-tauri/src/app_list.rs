@@ -44,16 +44,25 @@ fn folder(path: &OsStr) -> &Path {
 
 /// The path as the Desktop Entry spec wants it in `Exec=`, as Desktop's quoteLauncherExec writes it: in quotes, with
 /// `"`, a backtick, `$` and `\` backslashed, when it holds a character a launcher would split or expand on; every `%`
-/// doubled, a single one being a field code. None for a control character, which one line cannot hold, or not UTF-8.
+/// doubled, a single one being a field code. None for a control character (C0, DEL and C1, Unicode's Cc, as Desktop
+/// lists them), which one line cannot hold, or not UTF-8.
 pub fn exec_value(appimage: &Path) -> Option<String> {
     let path = appimage.to_str().filter(|path| !path.chars().any(char::is_control))?;
     let doubled = path.replace('%', "%%");
-    if !path.chars().any(|c| c.is_whitespace() || "\"'\\$`<>~|&;*?#()".contains(c)) {
+    if !path.chars().any(quoted) {
         return Some(doubled);
     }
     let escaped: String =
         doubled.chars().flat_map(|c| ["\"`$\\".contains(c).then_some('\\'), Some(c)]).flatten().collect();
     Some(format!("\"{escaped}\""))
+}
+
+/// A character `Exec=` quotes, the list Desktop's quoteLauncherExec holds: Unicode's White_Space, which a launcher may
+/// split an argument on (KDE's does), and what the Desktop Entry spec reserves.
+fn quoted(c: char) -> bool {
+    matches!(c, '\t'..='\r' | ' ' | '\u{85}' | '\u{a0}' | '\u{1680}' | '\u{2000}'..='\u{200a}')
+        || matches!(c, '\u{2028}' | '\u{2029}' | '\u{202f}' | '\u{205f}' | '\u{3000}')
+        || "\"'\\$`<>~|&;*?#()".contains(c)
 }
 
 /// The program the entry's first `Exec=` line starts, unquoted, as Desktop's launcherExecTarget reads it: `%%` as `%`
@@ -95,11 +104,12 @@ pub enum Change {
 /// program by name, no `Exec=`) is someone else's: leave.
 pub fn change(existing: Option<&str>, appimage: &Path, wanted: &str, exists: impl Fn(&Path) -> bool) -> Change {
     let Some(existing) = existing else { return Change::Write };
-    let Some(target) = exec_target(existing).map(PathBuf::from) else { return Change::Leave };
-    let write = if target == appimage {
+    let Some(target) = exec_target(existing) else { return Change::Leave };
+    // As text, as Desktop compares: a Path would take `/a//b` for `/a/b`.
+    let write = if OsStr::new(&target) == appimage.as_os_str() {
         !hidden(existing) && !owned_lines_right(existing, wanted, exists)
     } else {
-        target.is_absolute() && !exists(&target)
+        Path::new(&target).is_absolute() && !exists(Path::new(&target))
     };
     if write { Change::Write } else { Change::Leave }
 }
@@ -119,9 +129,13 @@ fn owned_lines_right(existing: &str, wanted: &str, exists: impl Fn(&Path) -> boo
     icon_right && ["Exec", "StartupWMClass"].iter().all(|key| value(existing, key) == value(wanted, key))
 }
 
-/// The value of the entry's first `<key>=` line, without the spaces around it.
+/// The value of the entry's first `<key>=` line, without the spaces, tabs and carriage return around it: the ones GLib
+/// drops, which Desktop's launcherEntryValue drops too.
 fn value<'a>(entry: &'a str, key: &str) -> Option<&'a str> {
-    entry.lines().find_map(|line| line.strip_prefix(key)?.strip_prefix('=')).map(str::trim)
+    entry
+        .lines()
+        .find_map(|line| line.strip_prefix(key)?.strip_prefix('='))
+        .map(|value| value.trim_matches([' ', '\t', '\r']))
 }
 
 /// Brings `<data_home>/applications/harness-device.desktop` to what `change` says for the AppImage APPIMAGE names,
@@ -155,7 +169,7 @@ fn write_entry(data_home: &Path, appimage: &Path, exec: &str, appdir_var: Option
         Err(error) if error.kind() == io::ErrorKind::NotFound => None,
         Err(error) => return Err(failed(&error)),
     };
-    if change(existing.as_deref(), appimage, &wanted, Path::exists) == Change::Leave {
+    if change(existing.as_deref(), appimage, &wanted, Path::is_file) == Change::Leave {
         return Ok(Change::Leave);
     }
     // The icon first: an entry is never there naming an icon that is not.

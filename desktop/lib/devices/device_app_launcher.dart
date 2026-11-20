@@ -91,7 +91,7 @@ Future<void> writeDeviceAppLauncher(
     final icon = _icon(dataHome);
     final wanted = _entryText(appImage, icon: icon.path);
     final change = deviceAppLauncherChange(
-      existing: await entry.exists() ? await entry.readAsString() : null,
+      existing: await entry.exists() ? await readLauncherEntry(entry) : null,
       appImage: appImage,
       wanted: wanted,
       exists: (path) => File(path).existsSync(),
@@ -174,7 +174,8 @@ String _entryText(String appImage, {String? icon}) =>
     'Categories=Utility;\n'
     'StartupWMClass=$deviceAppWindowClass\n';
 
-final _control = RegExp(r'[\x00-\x1f\x7f]');
+/// C0, DEL and C1 (Unicode's Cc), as the Device app's `char::is_control`.
+final _control = RegExp(r'[\x00-\x1f\x7f-\x9f]');
 
 /// Written beside [file] and renamed over it, so a dock never reads half of it.
 Future<void> _replace(File file, List<int> bytes) async {
@@ -201,7 +202,7 @@ Future<void> forgetGoneDeviceAppLauncher({
     if (dataHome == null) return;
     final entry = _entry(dataHome);
     if (!await entry.exists()) return;
-    final target = launcherExecTarget(await entry.readAsString());
+    final target = launcherExecTarget(await readLauncherEntry(entry));
     final place = deviceAppPlace(
       platform: TargetPlatform.linux,
       environment: env,

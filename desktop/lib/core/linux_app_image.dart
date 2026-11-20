@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import '../logging/app_log.dart';
@@ -35,11 +36,11 @@ Future<void> registerAppImageLauncher({
   try {
     final entry = File('$dataHome/applications/harness.desktop');
     if (await entry.exists()) {
-      final target = launcherExecTarget(await entry.readAsString());
+      final existing = await readLauncherEntry(entry);
+      final target = launcherExecTarget(existing);
       if (target != null && await File(target).exists()) {
         // Upgrade this executable's own entry, without taking over another copy.
         if (target != appImage) return;
-        final existing = await entry.readAsString();
         // The line written now: one an earlier Desktop wrote with a single %
         // is written again.
         if (existing.contains('MimeType=x-scheme-handler/harness;') &&
@@ -117,24 +118,39 @@ String? launcherExecTarget(String entry) {
   return space < 0 ? value : value.substring(0, space);
 }
 
-/// The value of [entry]'s first `<key>=` line, without the spaces around it;
-/// null when it has none.
+/// The value of [entry]'s first `<key>=` line, without the spaces, tabs and
+/// carriage return around it: the ones GLib drops, which the Device app drops
+/// too. Null when it has none.
 String? launcherEntryValue(String entry, String key) {
   for (final line in entry.split('\n')) {
-    if (line.startsWith('$key=')) return line.substring(key.length + 1).trim();
+    if (line.startsWith('$key=')) {
+      return line.substring(key.length + 1).replaceAll(_padding, '');
+    }
   }
   return null;
 }
+
+final _padding = RegExp(r'^[ \t\r]+|[ \t\r]+$');
+
+/// A launcher entry's text, as the Device app reads one: a byte that is not
+/// UTF-8 reads as U+FFFD, and the rule still reads its lines.
+Future<String> readLauncherEntry(File entry) async =>
+    utf8.decode(await entry.readAsBytes(), allowMalformed: true);
 
 /// A path as the Desktop Entry spec wants it in `Exec=`: quoted when it holds
 /// a character the launcher would otherwise split or expand on, and every `%`
 /// doubled, as the spec keeps a single one for field codes.
 String quoteLauncherExec(String path) {
   final doubled = path.replaceAll('%', '%%');
-  if (!RegExp(r'''[\s"'\\$`<>~|&;*?#()]''').hasMatch(path)) return doubled;
+  if (!_quoted.hasMatch(path)) return doubled;
   final escaped = doubled.replaceAllMapped(
     RegExp(r'["`$\\]'),
     (match) => '\\${match[0]}',
   );
   return '"$escaped"';
 }
+
+/// What `Exec=` quotes, the list the Device app's exec_value holds: Unicode's
+/// White_Space, which a launcher may split an argument on (KDE's does), and
+/// what the Desktop Entry spec reserves.
+final _quoted = RegExp(r'''[\x09-\x0d \x85\xa0  -     　"'\\$`<>~|&;*?#()]''');
