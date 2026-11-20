@@ -252,6 +252,7 @@ mod tests {
     use objc2_core_foundation::{CFRunLoopSource, CFRunLoopSourceContext};
     use std::fs;
     use std::path::{Path, PathBuf};
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::time::Duration;
 
     const CODEX: &str = "<key>CFBundleIdentifier</key><string>com.openai.codex</string>";
@@ -367,6 +368,23 @@ mod tests {
         running.recv_timeout(Duration::from_secs(5)).expect("the run loop runs");
         drop(observation);
         ended.recv_timeout(Duration::from_secs(5)).expect("the thread ended");
+    }
+
+    #[test]
+    fn a_thread_held_past_its_drop_finds_it_dropped_before_it_reads() {
+        // The gate holds the thread as ChatGPT holds one still making its observer: what it would read next is not
+        // read once the handle is dropped.
+        let (open, gate) = mpsc::channel::<()>();
+        let (told_to, told) = mpsc::channel();
+        let observation = on_own_run_loop(move |stopped: &AtomicBool| {
+            let _ = told_to.send(stopped.load(Ordering::Acquire));
+            let _ = gate.recv();
+            let _ = told_to.send(stopped.load(Ordering::Acquire));
+        });
+        assert_eq!(told.recv_timeout(Duration::from_secs(5)), Ok(false));
+        drop(observation);
+        open.send(()).unwrap();
+        assert_eq!(told.recv_timeout(Duration::from_secs(5)), Ok(true));
     }
 
     #[test]
