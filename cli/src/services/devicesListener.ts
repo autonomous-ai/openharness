@@ -28,7 +28,7 @@ import type { Socket } from 'node:net'
 import { lstatSync, type Stats } from 'node:fs'
 import { dirname } from 'node:path'
 import { devicesListenerPath } from '../devices/listenerPath.js'
-import { DEVICES_TOKEN_FILE, removeDevicesRecord, writeDevicesRecord } from '../devices/listenerPipe.js'
+import { CLAUDE_SESSION_ID, DEVICES_TOKEN_FILE, removeDevicesRecord, writeDevicesRecord } from '../devices/listenerPipe.js'
 import { listenLocalSocket, type LocalSocketServer } from '../lib/localSocket.js'
 import { errorKind } from '../lib/log.js'
 import { ensureDaemonToken, newPipePath } from '../lib/windows/pipeAuth.js'
@@ -456,10 +456,6 @@ export const ATTACH_PER_SECOND = 10
 /** The message, `{"type":"attach","sessionId":"<uuid>"}`, is 68 bytes. */
 export const ATTACH_MAX_BYTES = 96
 
-/** Claude Code's session id: a UUID in lower case, as it makes them; the agent's id is hashed from the string as given,
- *  so an upper-case one would name no session. */
-const SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
-
 /** The session the Claude app shows, from the harness-device mod: its own session id, handed on. It keeps nothing and
  *  logs nothing, as the id names a person's session. */
 export function attachHandler(attach: (sessionId: string) => void): ListenerHandler {
@@ -467,7 +463,7 @@ export function attachHandler(attach: (sessionId: string) => void): ListenerHand
     maxBytes: ATTACH_MAX_BYTES,
     perSecond: ATTACH_PER_SECOND,
     handle: ({ sessionId }) => {
-      if (typeof sessionId !== 'string' || !SESSION_ID.test(sessionId)) return REFUSED
+      if (typeof sessionId !== 'string' || !CLAUDE_SESSION_ID.test(sessionId)) return REFUSED
       attach(sessionId)
     },
   }

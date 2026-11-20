@@ -21,10 +21,8 @@ import { daemonFetch } from '../lib/localTransport.js'
 import type { HostLiveness } from '../lib/processProof.js'
 import { readDaemonToken } from '../lib/windows/pipeAuth.js'
 import type { PipeTarget } from '../lib/windows/pipeClient.js'
-import { createRecordProof } from '../devices/listenerPipe.js'
+import { CLAUDE_SESSION_ID, createRecordProof } from '../devices/listenerPipe.js'
 
-/** The devices listener's SESSION_ID (services/devicesListener.ts): Claude Code's session ids, in lower case. */
-const SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 /** The core's MAX_TEXT (core/deviceHookCalls.ts): a longer text is none. */
 const MAX_TEXT = 20_000
 /** The core holds a poll 27 s (core/devicesLink.ts INBOX_CALL_MS); one with no answer by now is not coming. */
@@ -105,7 +103,7 @@ export function parentAlive(): boolean {
 
 /** Follows the session's inbox until off, its parent gone or its stdout closed; 0 in every case. */
 export async function followInbox(sessionId: string, deps: InboxDeps): Promise<number> {
-  if (!SESSION_ID.test(sessionId)) {
+  if (!CLAUDE_SESSION_ID.test(sessionId)) {
     await deps.write(OFF)
     return 0
   }

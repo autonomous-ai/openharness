@@ -38,7 +38,7 @@ import { claudePluginState, ownDirectory, removeSkill, skillsFolderOf, skillWant
 import { listable, MAX_HOMES, readRemoved, readSetup, readWritten, writeOrcaConnected, writePluginHomes, writeRemoved, type DialEngine } from '../devices/dialSkillFiles.js'
 import { tellDevices } from '../devices/listenerClient.js'
 import { devicesListenerPath } from '../devices/listenerPath.js'
-import { devicesPipe, devicesRecordPath } from '../devices/listenerPipe.js'
+import { CLAUDE_SESSION_ID, devicesPipe, devicesRecordPath } from '../devices/listenerPipe.js'
 import { NOTICE_USAGE, runNotice } from '../devices/notice.js'
 import { type OrcaPluginDeps, type OrcaPluginRun, orcaRemove, orcaSetUp, orcaStatus } from '../devices/orcaPlugin.js'
 import { vscodeDisable, vscodeEnable, vscodeStatus, type VscodeChange, type VscodeEditor, type VscodeExtensionDeps } from '../devices/vscodeExtension.js'
@@ -308,14 +308,11 @@ function pluginActs(dataDir: string): boolean {
   return claudePluginOn(claudeSettingsPath()) && readRemoved(dataDir).claude !== true
 }
 
-/** The devices listener's SESSION_ID (services/devicesListener.ts): an id it would refuse is not sent. */
-const SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
-
 /** The mod's `session.attach` (plugins/harness-device/hooks/device.js): the dial turns to the session the Claude app
  *  shows. One line, never an exit code or stderr: the mod reads only whether it was sent. */
 async function attachSession(sessionId: string, deps: DeviceDeps): Promise<number> {
   const tell = deps.tell ?? tellDevices
-  const sent = SESSION_ID.test(sessionId) && pluginActs(deps.dataDir) && await tell(deps.dataDir, { type: 'attach', sessionId })
+  const sent = CLAUDE_SESSION_ID.test(sessionId) && pluginActs(deps.dataDir) && await tell(deps.dataDir, { type: 'attach', sessionId })
   await deps.write(JSON.stringify({ sent }))
   return 0
 }

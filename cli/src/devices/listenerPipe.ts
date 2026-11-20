@@ -17,6 +17,10 @@ import type { PipeTarget } from '../lib/windows/pipeClient.js'
 
 export const DEVICES_TOKEN_FILE = 'devices-token'
 export const DEVICES_RECORD_FILE = 'devices.json'
+/** Claude Code's session id, as the devices listener takes it (services/devicesListener.ts `attachHandler`): a UUID in
+ *  lower case, as Claude Code makes them; the agent's id is hashed from the string as given, so an upper-case one would
+ *  name no session. Its clients send only an id it would take. */
+export const CLAUDE_SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 /** A record is `{"pipe":…,"pid":…}`, well under this. */
 const RECORD_MAX_BYTES = 4_096
 
