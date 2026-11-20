@@ -43,6 +43,7 @@ idf_component_register(
         "pod/home/ph_toast.c"
         "pod/home/ph_view.c"
         "pod/engine_logos.c"
+        "pod/app_icons.c"
         "pod/pets.c"
         "pod/pets_ask.c"
         "pod/pets_codex.c"

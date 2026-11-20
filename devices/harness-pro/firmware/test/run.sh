@@ -18,6 +18,7 @@ if [[ -n "${PRO_FONT:-}" ]]; then
 fi
 python3 "$fw/scripts/gen_fonts.py" ${font_args[@]+"${font_args[@]}"} --out "$out/pro_fonts.c"
 python3 "$fw/scripts/gen_ph_spark.py" --check   # the voice sparkle baked from the round's glyph
+python3 "$fw/scripts/gen_app_icons.py" --check   # app icons baked from .github/assets/apps
 python3 "$fw/scripts/gen_pro_codex.py" --check
 python3 "$here/test_pro_codex.py"
 python3 "$fw/scripts/gen_pro_ask.py" --check   # the asking look: the "?" bubble and Claude's raised hand
