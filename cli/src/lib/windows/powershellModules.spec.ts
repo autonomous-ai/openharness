@@ -14,6 +14,7 @@ import { windowsListenerQuery, windowsPeerQuery } from '../peerAccount.js'
 import { windowsProcessQuery } from '../signOut.js'
 import { START_OUTSIDE_JOB } from '../uninstall/removal.js'
 import { READ_USER_PATH, WRITE_USER_PATH } from '../uninstall/windowsPath.js'
+import { ELEVATED_PS1, uacPromptScript } from './elevated.js'
 import { buildWindowsGuestInstallScript, buildWindowsGuestProcessorScript } from './guestScript.js'
 import { modulesByPath, type PowershellModule } from './powershell.js'
 import { SIGNATURES_SCRIPT } from './ptySignatures.js'
@@ -25,8 +26,8 @@ const CORE = new Set(['ForEach-Object', 'Import-Module', 'Out-Null', 'Where-Obje
 /** Where Windows PowerShell 5.1 keeps each command these scripts call. */
 const MODULES: Record<PowershellModule, readonly string[]> = {
   'Microsoft.PowerShell.Management': ['Copy-Item', 'Get-ChildItem', 'Get-Content', 'Get-Item', 'Get-ItemProperty', 'Join-Path', 'Move-Item',
-    'New-Item', 'New-ItemProperty', 'Remove-Item', 'Remove-ItemProperty', 'Set-Content', 'Split-Path', 'Stop-Process', 'Test-Path'],
-  'Microsoft.PowerShell.Utility': ['Add-Type', 'ConvertFrom-Json', 'ConvertTo-Json', 'Get-Date', 'New-Object', 'Select-Object', 'Sort-Object', 'Start-Sleep'],
+    'New-Item', 'New-ItemProperty', 'Remove-Item', 'Remove-ItemProperty', 'Set-Content', 'Split-Path', 'Start-Process', 'Stop-Process', 'Test-Path'],
+  'Microsoft.PowerShell.Utility': ['Add-Type', 'ConvertFrom-Json', 'ConvertTo-Json', 'Get-Date', 'New-Object', 'Out-File', 'Select-Object', 'Sort-Object', 'Start-Sleep'],
   'Microsoft.PowerShell.Security': ['Get-Acl', 'Get-AuthenticodeSignature'],
   'Microsoft.PowerShell.LocalAccounts': ['Add-LocalGroupMember', 'Get-LocalGroup', 'Get-LocalGroupMember', 'Get-LocalUser', 'New-LocalGroup',
     'New-LocalUser', 'Remove-LocalGroupMember', 'Remove-LocalUser'],
@@ -78,6 +79,7 @@ const SCRIPTS: Record<string, Record<string, () => string>> = {
   'lib/signOut.ts': { windowsProcessQuery: () => windowsProcessQuery(1) },
   'lib/uninstall/removal.ts': { START_OUTSIDE_JOB: () => START_OUTSIDE_JOB },
   'lib/uninstall/windowsPath.ts': { READ_USER_PATH: () => READ_USER_PATH, WRITE_USER_PATH: () => WRITE_USER_PATH },
+  'lib/windows/elevated.ts': { uacPromptScript: () => uacPromptScript('C:\\Users\\owner\\AppData\\Local\\Temp\\harness-admin-1\\elevated.ps1'), ELEVATED_PS1: () => ELEVATED_PS1 },
   'lib/windows/guestScript.ts': {
     install: () => buildWindowsGuestInstallScript({ ...OWNER, processor: '', version: '1.2.3' }),
     processor: () => buildWindowsGuestProcessorScript(OWNER),
@@ -87,6 +89,18 @@ const SCRIPTS: Record<string, Record<string, () => string>> = {
   'team/windowsRemoveScript.ts': {
     buildWindowsRemoveScript: () => buildWindowsRemoveScript({ user: 'harnessteam', home: 'C:\\Users\\harnessteam', owner: 'owner', ownerHome: OWNER.ownerHome }),
   },
+}
+/** Files that start a powershell.exe whose script is not one this table holds, and why. A vendor's installer keeps
+ *  autoload on: it may call any module (docs/windows-rules.md). */
+const NOT_IN_THE_TABLE: Record<string, string> = {
+  'engines/kit/windowsInstall.ts': "an engine vendor's installer",
+  'lib/gridInstall.ts': "grid's installer",
+  'lib/flash.ts': 'the flasher, a script the website serves',
+  'lib/windows/powershell.ts': 'the runner: each script is its caller\'s',
+  'lib/uninstall/deps.ts': "it runs windowsPath.ts's scripts",
+  'lib/windows/shell.ts': "a pane's shell, where a person types any command",
+  'lib/terminalBackend.contract.ts': "a test pane's shell",
+  'testing/windowsPowerShell.ts': "the specs' own scripts",
 }
 const rows = Object.entries(SCRIPTS).flatMap(([file, scripts]) => Object.entries(scripts).map(([name, script]) => [file, name, script] as const))
 
@@ -133,17 +147,29 @@ describe('PowerShell scripts import their modules by path, with autoload off', (
     expect(problems(script())).toEqual([])
   })
 
+  const src = fileURLToPath(new URL('../..', import.meta.url))
+  const sources = readdirSync(src, { recursive: true, encoding: 'utf8' })
+    .map((file) => file.split('\\').join('/'))
+    .filter((file) => /\.(ts|mts|js|mjs)$/.test(file) && !/\.(spec|test)\.ts$/.test(file))
+    .map((file) => [file, readFileSync(join(src, file), 'utf8')] as const)
+
   // Management and Utility are left out: many files call those, and this table holds the scripts that call the rest.
   it('every file under cli/src that names a command of another module is in the table', () => {
-    const src = fileURLToPath(new URL('../..', import.meta.url))
     const others = Object.entries(MODULES)
       .filter(([module]) => module !== 'Microsoft.PowerShell.Management' && module !== 'Microsoft.PowerShell.Utility')
       .flatMap(([, cmdlets]) => cmdlets)
-    const naming = readdirSync(src, { recursive: true, encoding: 'utf8' })
-      .map((file) => file.split('\\').join('/'))
-      .filter((file) => /\.(ts|mts|js|mjs)$/.test(file) && !/\.(spec|test)\.ts$/.test(file))
-      .filter((file) => { const text = readFileSync(join(src, file), 'utf8'); return others.some((cmdlet) => text.includes(cmdlet)) })
+    const naming = sources.filter(([, text]) => others.some((cmdlet) => text.includes(cmdlet))).map(([file]) => file)
     expect(naming.length).toBeGreaterThan(0)
     expect(naming.filter((file) => !(file in SCRIPTS))).toEqual([])
+  })
+
+  // A script of Management and Utility alone pays autoload as much as any: the elevation wrapper's two did, before the
+  // person's prompt.
+  it('every file under cli/src that starts a powershell.exe is in the table, or says why its script is not', () => {
+    const starting = sources.filter(([, text]) => /powershell\.exe['"`]|powershellPath\(|runPowershell/.test(text)).map(([file]) => file)
+    expect(starting.length).toBeGreaterThan(0)
+    expect(starting.filter((file) => !(file in SCRIPTS) && !(file in NOT_IN_THE_TABLE))).toEqual([])
+    // A file listed here that no longer starts one goes from the list.
+    expect(Object.keys(NOT_IN_THE_TABLE).filter((file) => !starting.includes(file))).toEqual([])
   })
 })
