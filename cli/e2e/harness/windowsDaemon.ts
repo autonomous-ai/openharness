@@ -7,8 +7,9 @@
  *
  * The dial: `HARNESS_SERIAL_BIN` names a program, so the serial stand-in (src/cable/__fixtures__/fakeHarnessSerial.mjs)
  * runs as one, the run's own `node.exe`. The daemon starts it as `node.exe watch`, `node.exe open COM77` and
- * `node.exe probe COM77`, and Node reads `watch`, `open` and `probe` as scripts in its working folder: three one-line
- * files there put their name back in `argv` and run the stand-in. Its `open` carries the port to the `FakeDial` this
+ * `node.exe probe COM77`, and Node reads `watch`, `open` and `probe` as scripts in its working folder, which is the
+ * daemon's: the home, whatever folder it was started in (lib/workingFolder.ts). Three one-line files there put their
+ * name back in `argv` and run the stand-in. Its `open` carries the port to the `FakeDial` this
  * serves on a pipe of the run's (`FAKE_SERIAL_OPEN=bridge:`), and its `watch` says the person is at the screen, which
  * the dial's discovery waits for. No product code knows about any of it.
  *
@@ -160,7 +161,12 @@ export async function startWindowsDaemon(options: WindowsDaemonOptions | RealDia
   const real = 'dial' in options ? options.dial : null
   const own = 'own' in options ? options.own : undefined
   const root = own ?? mkdtempSync(join(tmpdir(), 'harness-dial-win-'))
-  const discard = (): void => { if (!own) rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }) }
+  // The stand-in's files this start wrote: with `own` they are in the account's home, and taken out of it.
+  const standIns: string[] = []
+  const discard = (): void => {
+    for (const file of standIns) rmSync(file, { force: true })
+    if (!own) rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 })
+  }
   const sealed = sealedHomes(root)
   const profile = own ? process.env.USERPROFILE ?? homedir() : sealed.USERPROFILE
   // Harness's folders are where they are on a person's computer, the profile's `.harness`, unless they are kept in `own`.
@@ -172,12 +178,6 @@ export async function startWindowsDaemon(options: WindowsDaemonOptions | RealDia
   }
   for (const dir of [...Object.values(dirs), ...(own ? [] : Object.values(sealed))]) mkdirSync(dir, { recursive: true })
   const endpoint = `\\\\.\\pipe\\harness-e2e-${randomBytes(8).toString('hex')}`
-  if (!real) {
-    const standIn = JSON.stringify(pathToFileURL(STAND_IN).href)
-    for (const mode of ['watch', 'open', 'probe']) {
-      writeFileSync(join(dirs.work, `${mode}.js`), `process.argv.splice(2, 0, ${JSON.stringify(mode)}); import(${standIn})\n`)
-    }
-  }
   const missing = join(root, 'missing')
   const systemRoot = process.env.SystemRoot
   if (!own && !systemRoot) throw new Error('SystemRoot is not set: a sealed daemon finds programs only in its folders')
@@ -239,6 +239,16 @@ export async function startWindowsDaemon(options: WindowsDaemonOptions | RealDia
   })
 
   try {
+    if (!real) {
+      const standIn = JSON.stringify(pathToFileURL(STAND_IN).href)
+      for (const mode of ['watch', 'open', 'probe']) {
+        // In the daemon's home, the profile; a file of the name already there (the account's, with `own`) is never
+        // written over.
+        const file = join(profile, `${mode}.js`)
+        writeFileSync(file, `process.argv.splice(2, 0, ${JSON.stringify(mode)}); import(${standIn})\n`, { flag: 'wx' })
+        standIns.push(file)
+      }
+    }
     await options.prepare?.({ auth: dirs.auth })
   } catch (error) {
     discard()
