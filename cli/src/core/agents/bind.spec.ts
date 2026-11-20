@@ -2829,9 +2829,8 @@ describe('binding an OpenClaw pane, read from its screen', () => {
       await pass(5, running)
       await vi.waitFor(() => expect(run.deps.input.firstTaskConfirmed).toHaveBeenCalledWith('a1'))
       expect(run.deps.registry.firstTaskTaken).toHaveBeenCalledWith('a1', START - 5_000)
-      // Once the pass's transaction commits, as the task's own move off the row is.
-      expect(vi.mocked(run.deps.registry.afterTransaction).mock.invocationCallOrder[0])
-        .toBeLessThan(vi.mocked(run.deps.registry.firstTaskTaken).mock.invocationCallOrder[0])
+      // The registry waits for the pass's transaction to commit itself (registry.ts `firstTaskTaken`).
+      expect(run.deps.registry.afterTransaction).not.toHaveBeenCalled()
       expect(vi.mocked(run.deps.input.firstTaskConfirmed).mock.invocationCallOrder[0])
         .toBeLessThan(vi.mocked(run.deps.announceSession).mock.invocationCallOrder[0])
       expect(vi.mocked(run.deps.announceSession).mock.calls).toEqual([[row]])
@@ -2952,6 +2951,69 @@ describe('binding an OpenClaw pane, read from its screen', () => {
       for (const second of [0, 5, 10]) await pass(second, running)
       expect(run.deps.input.adoptTypedFirstTask).toHaveBeenCalledTimes(2)
       expect(logged()).toEqual([ADOPTED])
+    })
+
+    // The registry writes the row anew (registry.ts): the pass's own still carries the mark, and a window would read it
+    // starting.
+    it('the row announced once it is confirmed is the registry\'s as it is now, no longer starting', async () => {
+      userRow = START - 1_000
+      vi.mocked(run.deps.registry.firstTaskTaken).mockImplementation(async () => {
+        const { firstTaskTyped: _typed, ...fresh } = row
+        run.byAgent.set('a1', fresh)
+        return true
+      })
+      await pass(0, running)
+      await vi.waitFor(() => expect(run.deps.announceSession).toHaveBeenCalled())
+      expect(vi.mocked(run.deps.announceSession).mock.calls).toEqual([[run.byAgent.get('a1')]])
+      expect(agentStarting(vi.mocked(run.deps.announceSession).mock.calls[0][0], false, Date.now())).toBe(false)
+    })
+
+    it('an agent gone once its task is confirmed is announced no more', async () => {
+      userRow = START - 1_000
+      vi.mocked(run.deps.registry.firstTaskTaken).mockImplementation(async () => run.byAgent.delete('a1'))
+      await pass(0, running)
+      await vi.waitFor(() => expect(run.deps.input.firstTaskConfirmed).toHaveBeenCalledWith('a1'))
+      expect(run.deps.announceSession).not.toHaveBeenCalled()
+    })
+
+    // A full disk, say: the pass reads the pane all the same, so holds still come and go, and the store is asked again.
+    it('a removal that keeps failing is said once, the pane read on every pass, and the task never failed at its bound', async () => {
+      const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+      userRow = START - 1_000
+      vi.mocked(run.deps.registry.firstTaskTaken).mockRejectedValue(new Error('disk full'))
+      for (const second of [0, 5, 180, 185]) await pass(second, ready)
+      await new Promise((settle) => setImmediate(settle))
+      expect(run.deps.registry.firstTaskTaken).toHaveBeenCalledTimes(4)
+      expect(error.mock.calls).toEqual([['[agent] a1 first task typed kept · Error']])
+      expect(run.deps.capturePane).toHaveBeenCalledTimes(4)
+      expect(row.launch).toBeUndefined()
+      expect(run.deps.input.firstTaskConfirmed).not.toHaveBeenCalled()
+    })
+
+    it('a removal failing for another mark is said again', async () => {
+      const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+      userRow = START - 1_000
+      vi.mocked(run.deps.registry.firstTaskTaken).mockRejectedValue(new Error('disk full'))
+      await pass(0, ready)
+      row.firstTaskTyped = { text: TASK, at: START - 3_000 }
+      await pass(5, ready)
+      await new Promise((settle) => setImmediate(settle))
+      expect(error).toHaveBeenCalledTimes(2)
+    })
+
+    it('remembers 256 failed removals at most: one more starts them over, and a failure is said once more', async () => {
+      const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+      userRow = START - 1_000
+      vi.mocked(run.deps.registry.firstTaskTaken).mockRejectedValue(new Error('disk full'))
+      await pass(0, ready)
+      for (let i = 0; i < 256; i++) {
+        vi.mocked(run.deps.registry.byProcess).mockReturnValue(pane({ agentId: `b${i}`, sessionId: 'agent:main:plain', firstTaskTyped: { text: TASK, at: START - 5_000 } }))
+        await run.binding.bindObservedAgent(tui())
+      }
+      vi.mocked(run.deps.registry.byProcess).mockReturnValue(row)
+      await pass(5, ready)
+      await new Promise((settle) => setImmediate(settle))
+      expect(error.mock.calls.filter(([line]) => line === '[agent] a1 first task typed kept · Error')).toHaveLength(2)
     })
 
     it('a removal that cannot be saved is said and confirms nothing, nor does one that finds the mark gone', async () => {
