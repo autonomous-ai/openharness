@@ -17,14 +17,12 @@
 import { execFileSync, spawn, spawnSync, type ChildProcess } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, readdirSync, readFileSync, readlinkSync, rmSync, writeFileSync } from 'node:fs'
-import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
-import { pathToFileURL } from 'node:url'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
 import { DIAL_PLUGIN_ID, DIAL_SKILL } from '../src/devices/dialSkill.js'
 import { placeNode } from '../src/testing/placeNode.js'
 import { VERSION } from '../src/version.js'
-import { CLI_ROOT, IsolatedDaemon, until } from './harness/daemon.js'
+import { IsolatedDaemon, SOURCES_CLI, until } from './harness/daemon.js'
 import { Desk } from './harness/desk.js'
 import type { FakeDial } from './harness/fakeDial.js'
 
@@ -32,7 +30,7 @@ import type { FakeDial } from './harness/fakeDial.js'
 // `--import tsx` would not resolve: tsx and the sources by their paths.
 const CLI_ENTRY = process.env.E2E_BUNDLE_PATH
   ? [process.env.E2E_BUNDLE_PATH]
-  : ['--import', pathToFileURL(createRequire(join(CLI_ROOT, 'package.json')).resolve('tsx')).href, join(CLI_ROOT, 'src', 'cli.ts')]
+  : SOURCES_CLI
 
 /**
  * Codex 0.167.1's app-server as the scan sees it: a process named `codex`, with no terminal, holding one rollout open.
