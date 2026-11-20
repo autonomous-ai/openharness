@@ -2,18 +2,19 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use devcrew phase 3 to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking. A test-first task is two commits: `test(device-app): <the task's message> (red)` once its failing tests have been run and seen to fail, then the task's own message. A task with no red test is one commit. No task merges. Commits reach only `origin/feat/device-app-win-linux`, and only so the temporary workflow can run them (see "How a Windows task proves itself").
 
-**Goal:** The Harness Device menu-bar app runs on Windows (x64, arm64) and Linux (x64, arm64) with macOS's menu, copy, states, consents, sign-in and updater, every difference a named one; nothing is released.
+**Goal:** The Harness Device menu-bar app runs on Windows (x64, arm64) and Linux (x64, arm64) with macOS's menu, copy, states, consents, sign-in and updater, every difference a named one, and a Windows or Linux person gets it from `/device` and from Desktop as a Mac person does; nothing is released.
 
 **Architecture:**
 - **One codebase, OS code behind the doors that exist** (`FrontSource`, `LoginItem`, `AppUpdater`, `DesktopApp`, `Shell`) and three new seams: a child-process seam under `cli.rs` (`child_unix.rs` / `child_windows.rs`), an `Opener` door (`open.rs`) and a per-OS install plan (`install::runs`). Each OS's code is a file of its own, declared once in `lib.rs` by Task 2, so tasks do not meet in `lib.rs` or `Cargo.toml`.
 - **The menu model takes no OS.** `model.rs` and `app.rs` stay free of `cfg` and `consts::OS`; the one timing difference (Windows' held install) enters `App::new` as `install_exits_app`, and a parity test (Task 25) holds that line.
+- **Getting the app (spec section 10, Tasks 37 to 45).** The website gains one route per OS beside `/device/download-macos`, the arch read from the request; Desktop's offer keeps its one model (`DeviceAppOffer`) and screens, and only its manifest keys, installer, probe and opener learn Windows and Linux, each in its own file so they are built side by side.
 - **Pure rule, thin OS call.** Every rule is a function over plain values that `cargo test --lib` runs on this Mac; the Win32, socket and file calls around it are a few lines, proven on a `windows-latest` runner or a Linux runner.
 
-**Tech Stack:** Rust 1.95+ and Tauri 2.12 (`device-app/src-tauri`), `windows-sys` 0.61 (already in Tauri's tree) on Windows, std and `libc` on Linux; plain TypeScript for the window (`device-app/ui`); Python `unittest` and Bash for the release rules (`device-app/scripts`); GitHub Actions.
+**Tech Stack:** Next.js 16 and vitest (`website/`), Flutter and Dart (`desktop/`) for Tasks 37 to 45; Rust 1.95+ and Tauri 2.12 (`device-app/src-tauri`), `windows-sys` 0.61 (already in Tauri's tree) on Windows, std and `libc` on Linux; plain TypeScript for the window (`device-app/ui`); Python `unittest` and Bash for the release rules (`device-app/scripts`); GitHub Actions.
 
 **Spec:** `docs/plans/2026-11-19-device-app-win-linux-design.md`. Read it with this plan, the root `AGENTS.md`, `device-app/AGENTS.md`, `device-app/RELEASE.md`, `docs/validation-and-release.md` and `docs/windows-code-signing.md`.
 
-Path shorthand below: `ST/` is `device-app/src-tauri/`, `DA/` is `device-app/`.
+Path shorthand below: `ST/` is `device-app/src-tauri/`, `DA/` is `device-app/`, `WS/` is `website/`, `DT/` is `desktop/`.
 
 ## Base
 
@@ -70,8 +71,17 @@ Checked on this Mac, 2026-11-19: `cargo check --locked --lib --target x86_64-pc-
 | 34 | The updater end to end | `DA/scripts/e2e/update-pair.sh`, `DA/scripts/e2e/macos.sh`, `DA/scripts/e2e/windows.ps1`, `DA/scripts/e2e/linux.sh`, the temporary workflow | 15, 29, 32, 33 | high | none: test tooling, one commit |
 | 35 | The gallery and the design doc show the terminal step | `DA/ui/src/gallery.ts`, `DA/ui/src/gallery.test.ts`, `desktop/design/desktop-design-system.md` | 17 | medium | `gallery.test.ts` |
 | 36 | The docs describe Windows and Linux | `DA/AGENTS.md`, `DA/RELEASE.md`, `desktop/design/desktop-design-system.md`, `docs/validation-and-release.md`, `docs/windows-code-signing.md`, `docs/naming-system.md` | every task above | medium | none: docs, one commit |
+| 37 | Website: the Windows and Linux download routes | `WS/src/lib/deviceManifest.ts` (new), `WS/src/lib/deviceArch.ts` (new), `WS/src/lib/deviceArch.spec.ts` (new), `WS/src/app/device/download-windows/route.ts` and `route.spec.ts` (new), `WS/src/app/device/download-linux/route.ts` and `route.spec.ts` (new), `WS/src/app/device/download-macos/route.ts` | none | high | `deviceArch.spec.ts`, both new `route.spec.ts` |
+| 38 | Website: `/device` offers macOS, Windows and Linux | `WS/src/app/device/page.tsx`, `WS/src/app/device/page.spec.tsx`, `WS/next.config.js`, `WS/README.md` | none | high | `page.spec.tsx` new cases |
+| 39 | Desktop: what Windows and Linux install, and where | `DT/lib/devices/device_app.dart`, `DT/lib/devices/device_app_manifest.dart`, `DT/lib/devices/device_app_installer.dart` (one call), `DT/test/devices/device_app_manifest_test.dart`, `DT/test/devices/device_app_test.dart` | none | high | `device_app_manifest_test.dart`, `device_app_test.dart` new cases |
+| 40 | Desktop installs and starts the app on Windows and Linux | `DT/lib/devices/device_app_installer.dart`, `DT/test/devices/device_app_installer_test.dart`, `DT/integration_test/device_app_install_native_test.dart` (its `_run` takes the timeout) | 39 | xhigh | `device_app_installer_test.dart` new cases |
+| 41 | Windows: the installer is signed like Desktop | `DT/lib/update/update_signature.dart`, `DT/test/update_signature_test.dart`, `DT/lib/devices/device_app_setup.dart`, `DT/test/devices/device_app_setup_test.dart` | none | xhigh | `device_app_setup_test.dart`, `update_signature_test.dart` new cases |
+| 42 | Desktop finds the app on Windows and Linux | `DT/lib/devices/device_app_probe.dart`, `DT/test/devices/device_app_probe_test.dart` | 39 | high | `device_app_probe_test.dart` new cases |
+| 43 | Desktop offers the app on Windows 11 and Linux | `DT/lib/devices/device_app.dart`, `DT/lib/devices/device_app_setup.dart`, `DT/test/devices/device_app_test.dart`, `DT/test/devices/device_app_setup_test.dart`, `DT/test/devices/device_app_flow_test.dart`, `DT/design/desktop-design-system.md` | 39, 40, 41, 42 | high | `device_app_flow_test.dart`, `device_app_test.dart`, `device_app_setup_test.dart` new cases |
+| 44 | End to end: Desktop installs the real app on Windows and Linux | `DT/integration_test/device_app_install_windows_linux_native_test.dart` (new), `.github/workflows/tmp-device-app-win-linux.yml` | 43 | high | none: test tooling, one commit; its job is the evidence |
+| 45 | Docs: who reads which download key | `DA/RELEASE.md` | 37, 38, 43 | medium | none: docs, one commit |
 
-**Longest chain:** 2 → 3 → 4 → 12 → 26 → 32 → 34 → 36 (eight tasks). Tasks 1, 2, 6, 7, 14, 18, 27 and 28 start at once. `ST/src/main.rs` is in nine tasks (14, 17, 20 to 26) and `ST/src/runner.rs` in five; those run one after another because they share the file, in any order their own dependencies allow.
+**Longest chain:** 2 → 3 → 4 → 12 → 26 → 32 → 34 → 36 (eight tasks). Tasks 1, 2, 6, 7, 14, 18, 27 and 28 start at once. Tasks 1 to 36 have landed. Of the section 10 tasks, 37, 38, 39 and 41 start at once; 40 and 42 run side by side after 39; the longest chain is 39 → 40 → 43 → 44 (four tasks). The website tasks (37, 38) share no file with the Desktop tasks, and 40, 41 and 42 share no file with each other. `ST/src/main.rs` is in nine tasks (14, 17, 20 to 26) and `ST/src/runner.rs` in five; those run one after another because they share the file, in any order their own dependencies allow.
 
 ## Global Constraints
 
@@ -81,7 +91,7 @@ Checked on this Mac, 2026-11-19: `cargo check --locked --lib --target x86_64-pc-
 - **`device-app/AGENTS.md` rules hold on every OS:** thin over the CLI; every command the app runs is fixed text in Rust and is added to "Fixed arguments" (Task 36); the app in front goes to the watch's stdin and nowhere else, never the log; one log, every line through `log::redact`; `HARNESS_DEVICE_CLI` is read by debug builds only; no other component's path in a string literal (join segments one by one; name other components only in comments).
 - **Nothing from the webview, the manifest or an OS window title reaches a command line or the log.** A socket path, an X or sway error's text, an exe path and a zip path are never logged.
 - **Push, not poll**, for the app in front and the Windows theme. No fixed sleep in a test: a wait is bounded and ends on the event.
-- **Not touched:** the CLI's behavior, the devices service, the watch protocol, the devices pipe, `cli/scripts/install.sh`, `cli/scripts/install.ps1`, the website, Desktop's offer of the Device app.
+- **Not touched:** the CLI's behavior, the devices service, the watch protocol, the devices pipe, `cli/scripts/install.sh`, `cli/scripts/install.ps1`, Desktop's offer model (`device_app_offer.dart`), band and row (no new state, copy or screen). The website and Desktop change only as section 10 asks (Tasks 37 to 45).
 - **Exact names and copy** (byte for byte):
   - Windows installed name, everywhere: `Harness Device` (folder `%LOCALAPPDATA%\Harness Device`, Start Menu shortcut, Apps-list entry, Run value). Tray tooltip and window title stay `Harness`.
   - Release files: `Harness-Device-windows-x64-setup.exe`, `Harness-Device-windows-arm64-setup.exe`, `Harness-Device-linux-x64.AppImage`, `Harness-Device-linux-arm64.AppImage`, each with a `.sig`.
@@ -91,6 +101,12 @@ Checked on this Mac, 2026-11-19: `cargo check --locked --lib --target x86_64-pc-
   - Log lines: `front: sway not followed`, `front: sway ended`, `front: Hyprland not followed`, `front: Hyprland ended`, `front: Windows not followed`, `front: Windows ended`, `tray: no host`, `instance: already running`.
   - Install step on Linux while the terminal runs: `Finish in the terminal…` (answer 1).
 - **Windows release signing is always on** for the Device app: no `WINDOWS_SIGNING` switch, no unsigned fallback.
+- **Getting the app (section 10), exact names:**
+  - Routes: `/device/download-windows` (a `.exe` under the device folder, key `device-windows-x64` or `device-windows-arm64`), `/device/download-linux` (an `.AppImage`, key `device-linux-x64` or `device-linux-arm64`); the manifest URL and the two allowed prefixes are `/device/download-macos`'s, unchanged. Before a release carries the key the answer is the macOS route's 503: `Harness download is temporarily unavailable (no usable device-windows-x64 entry).` (each key its own).
+  - `/device` buttons: `macOS`, `Windows`, `Linux`. Its line: `The menu-bar app for your Harness device. macOS 13 or later, Windows 11, Linux.` `/device` answers with `Accept-CH: Sec-CH-UA-Arch, Sec-CH-UA-Bitness`.
+  - Desktop's places: Windows `%LOCALAPPDATA%\Harness Device\harness-device.exe` (the NSIS per-user install), Linux `~/.local/opt/Harness-Device.AppImage`.
+  - Desktop's band, row, failure lines and gallery are unchanged, byte for byte.
+- **The manifest stays input on every surface.** The website redirects only into `<prefix><X.Y.Z>/<file>` with the route's extension; Desktop downloads only a URL `_fetchable` passes, saves it under a fixed name, and runs a Windows installer only after its Authenticode signer matches the running Desktop's.
 
 ## Decided here, where the spec was silent
 
@@ -117,6 +133,40 @@ Checked on this Mac, 2026-11-19: `cargo check --locked --lib --target x86_64-pc-
 - **`platforms=macos` keeps live Windows and Linux keys byte for byte**, as the spec says. Hazard for the first-release pull request, not handled here: a macOS-only release after those keys are live would send Windows and Linux apps to an installer whose signed version does not match.
 - **Long end-to-end checks run on the temporary workflow**, on GitHub's Linux and Windows runners (disposable machines, the same isolation as the spec's containers). Proposals, not built here: a `sway` live step in `device-app-checks`, and an on-demand `device-app-e2e.yml`.
 
+## Decided here for section 10 (getting the app)
+
+- **How the website picks the arch.** The route reads the request (`deviceArch`, Task 37): the Client Hints `Sec-CH-UA-Arch` and `Sec-CH-UA-Bitness` first (`"arm"`+`"64"` is arm64, `"x86"`+`"64"` is x64); on Linux only, then the user agent naming `aarch64` or `arm64` (Firefox writes the real CPU there; Chromium freezes `Linux x86_64`); otherwise x64. Windows' user agent says `Win64; x64` on ARM too, so it is never read. Chromium sends those hints only to a site that asked, so `/device` answers with `Accept-CH` (Task 38): a click on its button carries them. A Windows ARM PC that cannot tell gets x64, which Windows 11 runs emulated; a Linux ARM computer that cannot tell gets x64, as the spec says. Why the route and not the page (as `/desktop` does): the spec names one route per OS, and a link pasted anywhere still lands on the right file when the browser can tell.
+- **One device-manifest module.** `/device/download-macos`'s fixed manifest URL and prefixes move to `WS/src/lib/deviceManifest.ts` with `resolveDeviceDownload(field, extension)`, so the three routes share one copy (a second copy is a second way).
+- **`/device` is three plain links**, server-rendered, no detection: the spec asks for matching buttons; a visitor picks the OS, the route picks the arch.
+- **Where Desktop puts the AppImage: `~/.local/opt/Harness-Device.AppImage`** (`deviceAppPlace`, Task 39). Beside Desktop's own `~/.local/opt/Harness.AppImage` (`website/scripts/desktop-install.sh`), one fixed name with no version or arch, so the Device app's updater replaces it in place and its login entry (which follows `APPIMAGE`) keeps naming the same file. No space in the name: the login entry's `Exec=` stays plain.
+- **Windows: Desktop runs the installer, NSIS decides the place.** `Harness-Device-setup.exe /S`, per user, no admin (`installMode: currentUser`): the app lands at `%LOCALAPPDATA%\Harness Device\harness-device.exe` with its Start Menu entry, Apps-list entry and uninstaller, exactly as a person's own run of the installer. The installer runs through `startHidden` with a 5-minute bound (`deviceAppSetupTimeout`; NSIS may fetch WebView2 first).
+- **Never installed over.** As on macOS, a copy already at the place, whoever put it, is the app: the installer is not run again and the AppImage is not replaced (the Device app updates itself).
+- **The signature step.** macOS: as today (Desktop's team, notarized). Windows: the downloaded installer's Authenticode signer must be `Valid` and match the running `harness-desktop.exe`'s subject and Azure identity, the rule Desktop's own Windows updater uses (`WindowsSigner.sameAs`); a running Desktop that is not signed (a local or staging build) keeps the sha256 check alone, as macOS's local build does. Both apps are signed by the same Azure profile (Task 30 reuses `release-desktop.yml`'s inputs). Linux: none, as Desktop's own AppImage update (sha256 and size); an AppImage carries no OS signature, and Desktop has no minisign check to reuse.
+- **The probe rule, Windows and Linux** (`PlaceDeviceAppProbe`, Task 42): **installed** when the file at the place exists or the app runs; **running** when a process of this user is the app: on Windows a `tasklist.exe` row (from `System32`, `/FI "IMAGENAME eq harness-device.exe" /FI "USERNAME eq <USERNAME>" /FO CSV /NH`, bounded at 10 s), on Linux a `/proc/<pid>` whose `comm` is `harness-device` and whose real uid is this process's. This mirrors macOS's `NSRunningApplication` by bundle id (any copy of the app, this user's session). Why no native channel as on macOS: Windows and Linux have no LaunchServices to ask, the rule is a file and a process list Dart reads itself, and so PR CI tests it.
+- **How Desktop starts the app** (`startDeviceApp`, Task 40): the place's file itself, with no argument, detached (`ProcessStartMode.detached`), so it outlives Desktop and is no child of it; with Desktop's environment minus `APPIMAGE`, `APPDIR`, `ARGV0` and `OWD` (what Desktop's own AppImage runtime set: the Device app must never take Desktop's AppImage for its own). It counts as opened when the start succeeds, as `open`'s exit 0 does on macOS. `Open` on the row with no path starts the place. The Device app's own single instance (Task 21) makes a second start harmless.
+- **The arch Desktop installs** (`parseDeviceAppManifest`, Task 39), from `runtimeArchitecture` as on macOS: Windows arm64 takes `device-windows-arm64`, then `device-windows-x64` (Windows 11 runs x64 emulated, as an Apple silicon Mac falls back to the universal build); Windows x64 takes only `device-windows-x64`; Linux takes only its own arch (an x64 AppImage does not run on arm64).
+- **Where Desktop offers it** (`deviceAppSupported`, Task 43): macOS 13 or later (today), Windows 11 (`Platform.operatingSystemVersion`'s `(Build N)` with N ≥ 22000), every Linux; never the web or a viewer. Windows 11 because it is the floor the Device app names (`device-app/AGENTS.md`, `RELEASE.md`), as macOS 13 is SMAppService's.
+
+Named differences of section 10 (Windows / Linux against macOS):
+
+| Step | macOS | Windows | Linux | Why |
+|---|---|---|---|---|
+| Package | `Harness-Device.app.tar.gz`, unpacked | `Harness-Device-setup.exe`, run `/S` | `Harness-Device.AppImage`, copied | what each release ships |
+| Place | `/Applications`, then `~/Applications` | `%LOCALAPPDATA%\Harness Device\` (NSIS) | `~/.local/opt/` | beside Desktop's own install on each OS |
+| `unpack` step | `tar` | none | none | nothing to unpack |
+| `signature` step | Developer ID team, notarized | Authenticode, Desktop's signer | none | Linux has no OS signature; Desktop's own Linux update checks none |
+| Installed | LaunchServices lists a copy outside Trash and `/Volumes` | the place's file, or it runs | the place's file, or it runs | no app registry on Windows or Linux |
+| Running | `NSRunningApplication` by bundle id | `tasklist`, this user, `harness-device.exe` | `/proc`, this user, `harness-device` | the same question, the OS's own list |
+| Open | `/usr/bin/open` (path or bundle id) | start the place's exe | start the place's AppImage without Desktop's AppImage variables | no `open` |
+| Offered on | macOS 13+ | Windows 11 | every Linux | the Device app's own floor |
+| Arch fallback | arm64 → universal | arm64 → x64 | none | x64 runs emulated on Windows 11 ARM, not on Linux arm64 |
+| App list entry | `/Applications` shows in Launchpad | Start Menu entry (NSIS) | none (open question 2 below) | an AppImage registers nothing |
+
+Open questions for section 10 (the plan follows the spec's words until they are answered):
+
+1. **Copy on Windows and Linux.** The spec keeps Desktop's copy, so Task 43 keeps it byte for byte: the band's `Your dial follows apps and terminal tabs with the Harness menu-bar app.`, the row's `Menu-bar app` and `Follows the app and terminal tab in front.`, and `/device`'s `The menu-bar app for your Harness device.` Off macOS no terminal tab is followed (a named difference), Windows has a tray rather than a menu bar, and GNOME and KDE on Wayland follow no app. Keep the copy, or word it per OS?
+2. **Linux app list.** On Linux the Device app's AppImage appears in no app list (macOS shows `/Applications` in Launchpad; Windows gets a Start Menu entry from NSIS); it starts at login and from Desktop's `Open`. Leave it so, or have the Device app (or Desktop) write a `harness-device.desktop` launcher entry as Desktop does for itself (`registerAppImageLauncher`)? Either would be a new task.
+
 ## Answers (harness-pm, 2026-11-19)
 
 1. **Copy for Linux's terminal step** (Tasks 16, 17, 35): kept as written: `Finish in the terminal…`, `Setup failed. Press Enter to close.`; `No terminal found.` went (with no terminal the line runs behind the screen) and `The terminal did not open.` came, for a terminal that never runs the script.
@@ -133,6 +183,14 @@ Checked on this Mac, 2026-11-19: `cargo check --locked --lib --target x86_64-pc-
 4. **A Linux relaunch after an update must not lose to its own lock.** Tests: Task 21 `a_second_acquire_is_refused_until_the_first_is_dropped`; Task 34 finds the app running after the update.
 5. **The terminal window closed before `install.sh --host` ends** fails the Install screen at once, not after ten minutes. Tests: Task 16 `a_hangup_writes_129`; Task 17 `a_terminal_run_that_failed_stops_there`.
 
+
+Section 10 (Tasks 37 to 45):
+
+1. **A tampered manifest must not make Desktop run someone else's program.** On Windows Desktop executes what it downloads. Tests: Task 40 `windows: the signature is checked before the installer runs`; Task 41 `windows: an installer signed by someone else, or not at all, is refused`; Task 39's existing URL refusals hold for the new keys (`a URL outside the prefixes is refused` gains a Windows and a Linux key).
+2. **Desktop's AppImage variables must not reach the Device app** (its login entry and updater would take Desktop's AppImage for their own). Tests: Task 40 `the device app starts without Desktop's AppImage variables`; Task 44 reads the started app's `APPIMAGE` from `/proc`.
+3. **A profile path with a space and an accent** (`C:\Users\Nguyễn Văn A`, `/home/p q`): the place, the installer's argument and `tasklist`'s user filter. Tests: Task 39 `the Windows place is under LOCALAPPDATA` and `the Linux place is beside Desktop's own AppImage` (both with such paths); Task 42 `tasklist asks for harness-device.exe of this user, as CSV with no header`.
+4. **Another user's Device app on the same computer must not hide the offer.** Tests: Task 42 `/proc: a harness-device of this user counts; another user's, another name or a vanished entry does not`; the `USERNAME` filter in the `tasklist` case.
+5. **A Linux ARM or Windows ARM visitor whose browser says nothing** gets x64, and one that says gets arm64. Tests: Task 37 `a Chromium on Linux that sends the hints gets arm64 although its user agent says x86_64`, `Windows on ARM without hints gets x64`; Task 38 `asks Chromium for the CPU on /device`.
 ---
 
 ### Task 1: Temporary workflow
@@ -672,6 +730,143 @@ One commit, no test. Describe what the code does; no person's name, no direction
 - [ ] **Step 4: the other three.** `docs/validation-and-release.md`: Harness Device's end-to-end drivers under what PR CI does not run. `docs/windows-code-signing.md`: a Device row in "What is signed" (`sign-windows` of `release-device.yml`: `harness-device.exe`, then each installer; always on). `docs/naming-system.md`: on Windows the installed name is `Harness Device`.
 - [ ] **Step 5: Commit** `Docs: Harness Device on Windows and Linux`.
 
+### Task 37: Website: the Windows and Linux download routes
+
+**Files:** Create `WS/src/lib/deviceManifest.ts`, `WS/src/lib/deviceArch.ts`, `WS/src/lib/deviceArch.spec.ts`, `WS/src/app/device/download-windows/route.ts`, `WS/src/app/device/download-windows/route.spec.ts`, `WS/src/app/device/download-linux/route.ts`, `WS/src/app/device/download-linux/route.spec.ts`; modify `WS/src/app/device/download-macos/route.ts`.
+
+**Interfaces — Produces:**
+- `deviceManifest.ts`: `DEVICE_MANIFEST_URL` and `DEVICE_ASSET_PREFIXES` (moved from `download-macos/route.ts`, values and comments unchanged), and `resolveDeviceDownload(field: string, extension: string): Promise<Response>`, which is `resolveManifestDownload` with them and `product: "Harness"`. `download-macos/route.ts` becomes `resolveDeviceDownload("device-macos-dmg", ".dmg")`; its spec stays as it is and green.
+- `deviceArch.ts`: `export type DeviceArch = "x64" | "arm64"`; `deviceArch(headers: Headers, os: "windows" | "linux"): DeviceArch`, the rule in "Decided here for section 10". A hint's structured-field quotes are removed before it is compared; any other value of either hint falls through.
+- `download-windows/route.ts`: `GET(request: Request)` → `resolveDeviceDownload("device-windows-" + deviceArch(request.headers, "windows"), ".exe")`. `download-linux/route.ts`: the same with `"linux"`, `device-linux-…` and `".AppImage"`. Both `dynamic = "force-dynamic"`, with a head comment as the macOS route's.
+
+- [ ] **Step 1: Failing tests.**
+  - `deviceArch.spec.ts`: `the hints name arm64 or x64` (`"arm"`/`"64"` → arm64, `"x86"`/`"64"` → x64, for both OSes); `a 32-bit or unknown hint is x64` (`"arm"`/`"32"`, `"riscv"`/`"64"`, one hint alone); `a Chromium on Linux that sends the hints gets arm64 although its user agent says x86_64`; `Firefox on Linux names its CPU` (`Mozilla/5.0 (X11; Linux aarch64; rv:140.0) Gecko/20100101 Firefox/140.0` → arm64); `Windows on ARM without hints gets x64` (an Edge user agent with `Win64; x64`; and a user agent naming `ARM64` on Windows is still x64: Windows' user agent is never read); `nothing said is x64`.
+  - Each `route.spec.ts`, over a mocked `fetch` as `download-macos/route.spec.ts` does: `redirects to x64's file when the request cannot tell` (302, `Location` the CDN URL of `device-windows-x64` / `device-linux-x64`, `Cache-Control: no-store, max-age=0`, the fixed manifest URL fetched); `redirects to arm64's file when the hints say arm64`; the Linux spec also `redirects Firefox on aarch64 to arm64's file`; `answers as the macOS route did before its first release` (a manifest with only the macOS keys: 503 and the text `Harness download is temporarily unavailable (no usable device-windows-x64 entry).\n`, resp. `device-linux-x64`; a 403: `(manifest HTTP 403).`); `refuses anything outside its own folder or of another kind` (Desktop's `https://cdn.autonomous.ai/harness/desktop/1.2.3/harness-install.exe`, a `..` and `%2e%2e` path, a query, a fragment, the Linux AppImage named under a Windows key and the reverse: each 503, no `Location`); `reads one fixed manifest` (with `HARNESS_DESKTOP_METADATA_URL` set).
+- [ ] **Step 2:** `cd website && npx vitest run src/lib/deviceArch.spec.ts src/app/device` FAILS (no such modules). Commit red.
+- [ ] **Step 3: Implement.**
+- [ ] **Step 4:** `npm test` and `npm run lint` pass. **Step 5: Commit** `Website: /device/download-windows and /device/download-linux follow the device manifest, the arch read from the request`.
+
+### Task 38: Website: `/device` offers macOS, Windows and Linux
+
+**Files:** Modify `WS/src/app/device/page.tsx`, `WS/src/app/device/page.spec.tsx`, `WS/next.config.js` (`headers()`), `WS/README.md` (the route table).
+
+**Interfaces — Produces:** the card's line `The menu-bar app for your Harness device. macOS 13 or later, Windows 11, Linux.`; a `styles.downloads` group of three `styles.download` links, each with the `Download` icon (`aria-hidden`): `macOS` → `/device/download-macos`, `Windows` → `/device/download-windows`, `Linux` → `/device/download-linux`. `headers()` gains `{ source: '/device', headers: [{ key: 'Accept-CH', value: 'Sec-CH-UA-Arch, Sec-CH-UA-Bitness' }] }`, its comment saying why (Chromium sends the CPU hints only to a site that asked; the routes read them).
+
+- [ ] **Step 1: Failing tests** in `page.spec.tsx`: `offers one link per OS, each to its route` (three links, accessible names exactly `macOS`, `Windows`, `Linux`, hrefs as above); `names each OS's floor` (the line above, exact); `asks Chromium for the CPU on /device` (imports `../../../next.config.js` as `scripts/agents-site.spec.ts` does, awaits `headers()`, the `/device` entry carries that `Accept-CH` value exactly). The old single-`Download` case goes.
+- [ ] **Step 2:** `cd website && npx vitest run src/app/device/page.spec.tsx` FAILS. Commit red.
+- [ ] **Step 3: Implement.** README: the `/device` row reads `Download page for the dial's menu-bar app, Harness: a button each for macOS, Windows and Linux`; two rows after `/device/download-macos`: `/device/download-windows` and `/device/download-linux`, `302 to the installer (device-windows-x64 or -arm64) / the AppImage (device-linux-x64 or -arm64) in the device manifest, the arch from the request's Client Hints (and on Linux its user agent), x64 otherwise; 503 until a release carries it`.
+- [ ] **Step 4:** `npm test` and `npm run lint` pass. **Step 5: Commit** `Website: /device offers Harness for macOS, Windows and Linux`.
+
+### Task 39: Desktop: what Windows and Linux install, and where
+
+**Files:** Modify `DT/lib/devices/device_app.dart`, `DT/lib/devices/device_app_manifest.dart`, `DT/lib/devices/device_app_installer.dart` (the one `parseDeviceAppManifest` call only), `DT/test/devices/device_app_manifest_test.dart`, `DT/test/devices/device_app_test.dart`.
+
+**Interfaces — Produces:**
+- `parseDeviceAppManifest(Object? manifest, {required String architecture, required TargetPlatform platform})`, keys tried in order: macOS as today; Windows arm64 `device-windows-arm64`, `device-windows-x64`; Windows x64 `device-windows-x64`; Linux arm64 `device-linux-arm64`; Linux x64 `device-linux-x64`; any other platform none. The entry checks (`_release`, `_fetchable`) are unchanged. The installer's call passes `platform: defaultTargetPlatform` until Task 40 makes it a field.
+- In `device_app.dart`: `const deviceAppWindowsExe = 'harness-device.exe'`, `const deviceAppImageName = 'Harness-Device.AppImage'`, and `String? deviceAppPlace({TargetPlatform? platform, Map<String, String>? environment})`: Windows `LOCALAPPDATA` (key in any case, absolute by `p.windows`) joined with `Harness Device` and the exe; Linux `maybeHomeDir(environment:, isWindows: false)` joined with `.local`, `opt` and the AppImage's name; null otherwise (macOS has LaunchServices; nothing names a folder).
+
+- [ ] **Step 1: Failing tests.**
+  - `device_app_manifest_test.dart`: `Windows arm64 takes its own entry, then x64's`; `Windows x64 never takes arm64's`; `Linux takes only its own arch` (arm64 with only `device-linux-x64` present → null, and the reverse); `a Mac never takes a Windows or Linux entry`; `Windows and Linux never take a macOS entry`; `a URL outside the prefixes is refused` gains one Windows and one Linux key. Every existing case passes `platform: TargetPlatform.macOS`.
+  - `device_app_test.dart`: `the Windows place is under LOCALAPPDATA` (`{'LocalAppData': r'C:\Users\Nguyễn Văn A\AppData\Local'}` → `C:\Users\Nguyễn Văn A\AppData\Local\Harness Device\harness-device.exe`); `no absolute LOCALAPPDATA, no place` (absent, empty, `AppData\Local`); `the Linux place is beside Desktop's own AppImage` (`HOME=/home/p q` → `/home/p q/.local/opt/Harness-Device.AppImage`); `no home, no place`; `macOS has no place`.
+- [ ] **Step 2:** `cd desktop && flutter test test/devices/device_app_manifest_test.dart test/devices/device_app_test.dart` FAILS. Commit red.
+- [ ] **Step 3: Implement.** **Step 4:** both files and `test/devices/device_app_installer_test.dart` pass. **Step 5: Commit** `Desktop: the Windows and Linux entries of the device manifest, and where each OS keeps the app`.
+
+### Task 40: Desktop installs and starts the app on Windows and Linux
+
+**Files:** Modify `DT/lib/devices/device_app_installer.dart`, `DT/test/devices/device_app_installer_test.dart`, `DT/integration_test/device_app_install_native_test.dart` (only its `_run` gains the `{Duration timeout}` the typedef now names).
+
+**Interfaces — Consumes:** Task 39's `parseDeviceAppManifest(…, platform:)`, `deviceAppPlace`, `deviceAppImageName`. **Produces:**
+- `typedef DeviceAppRun = Future<ProcessResult> Function(String executable, List<String> arguments, {Duration timeout});` (`runDeviceAppTool` already has that shape; macOS calls pass no timeout and keep 60 s).
+- `const deviceAppSetupTimeout = Duration(minutes: 5);`
+- `DeviceAppInstaller({…, TargetPlatform? platform, String? place})`: `platform` defaults to `defaultTargetPlatform`, `place` to `deviceAppPlace()`. macOS ignores `place`; Windows and Linux ignore `targetFolders`.
+- `typedef DeviceAppStart = Future<void> Function(String path, Map<String, String> environment);`, `Future<void> startDeviceAppDetached(String path, Map<String, String> environment)` (`Process.start(path, const [], environment: environment, includeParentEnvironment: false, mode: ProcessStartMode.detached)`), and `Future<bool> startDeviceApp(String path, {DeviceAppStart start = startDeviceAppDetached, Map<String, String>? environment})`: `environment` (default `RuntimePlatform.environment`) without `APPIMAGE`, `APPDIR`, `ARGV0`, `OWD`; true when `start` completes, false when it throws.
+
+The steps per OS (the step names and failure lines are today's):
+
+| Step | macOS | Windows | Linux |
+|---|---|---|---|
+| download, fixed name in the temp folder | `Harness-Device.app.tar.gz` | `Harness-Device-setup.exe` | `Harness-Device.AppImage` |
+| checksum | size and sha256 | the same | the same |
+| unpack | `tar` | skipped | skipped |
+| signature | `_verifySignature(bundle)` | `_verifySignature(setup.exe)` | skipped |
+| install | as today | the place a file already: it. Else `_run(setup.exe, const ['/S'], timeout: deviceAppSetupTimeout)`; exit 0 and the place now a file, else fail | the place there already: it. Else make its folder, copy the download to `.Harness-Device.AppImage.<hex16>.partial` beside the place, `_run('/bin/chmod', ['0755', partial])` exit 0, rename onto the place; the partial removed whatever happened |
+| open | `_open(path: installed)` | the same | the same |
+
+A null place on Windows or Linux fails at install.
+
+- [ ] **Step 1: Failing tests** (the file's loopback server, a recording `_run` whose fake installer writes the place, temp folders): `windows: the installer runs silently, then the app opens from its place` (run got the temp `Harness-Device-setup.exe`, `['/S']`, 5 minutes; open got the place; the result is done at the place); `windows: the signature is checked before the installer runs` (a refusing check: failed at `signature`, no `/S` run); `windows: an installer that fails, or leaves no app, fails at install` (exit 2; exit 0 and no file); `windows: an app already in place is opened, not installed again`; `linux: the AppImage lands executable at its place and opens` (POSIX hosts: mode `0755`, the bytes the server sent, no partial left); `linux: no signature step runs` (the check is never called); `linux: a copy already at the place is kept` (its bytes unchanged); `linux: a copy that cannot be made executable is removed and fails at install` (the fake `chmod` exits 1: no partial left, no place); `no place, no install` (Windows and Linux); `the device app starts without Desktop's AppImage variables` (`startDeviceApp` with `APPIMAGE`, `APPDIR`, `ARGV0`, `OWD`, `HOME`, `PATH`: the start got `HOME` and `PATH` only); `a start that throws is a failed open`. The macOS cases are unchanged and stay green.
+- [ ] **Step 2:** `cd desktop && flutter test test/devices/device_app_installer_test.dart` FAILS. Commit red.
+- [ ] **Step 3: Implement.** **Step 4:** it passes, and `flutter analyze` is clean (the macOS native test compiles). **Step 5: Commit** `Desktop installs Harness Device on Windows by its installer and on Linux as an AppImage, and starts it`.
+
+### Task 41: Windows: the installer is signed like Desktop
+
+**Files:** Modify `DT/lib/update/update_signature.dart`, `DT/test/update_signature_test.dart`, `DT/lib/devices/device_app_setup.dart`, `DT/test/devices/device_app_setup_test.dart`.
+
+**Interfaces — Produces:**
+- In `update_signature.dart`: the `Import-Module`, `Signer` and `Read-Signer` lines of `windowsReportScript` become one const prelude both scripts start with; `windowsSignerPairScript` prints `{running, file}`, each a signer, the paths read from `HARNESS_SIGNER_RUNNING` and `HARNESS_SIGNER_FILE`; `Future<({WindowsSigner running, WindowsSigner file})> readWindowsSignerPair({required String file, required String runningExe, Duration timeout = signatureCheckTimeout})` runs it as `readWindowsSignatureReport` runs its script (hidden Windows PowerShell, `-EncodedCommand`, `_run`) and throws `cannotCheckSignature` on any failure.
+- In `device_app_setup.dart`: `Future<bool> deviceAppInstallerSignedLikeDesktop(String installer, {String Function()? runningExe, Future<({WindowsSigner running, WindowsSigner file})> Function({required String file, required String runningExe}) read = readWindowsSignerPair})`. `runningExe` defaults to `RuntimePlatform.resolvedExecutable`. Rule: read throws `UpdateRefused` → false; running `NotSigned` → true (sha256 alone, as macOS's local build); running not `Valid` → false; else the file `Valid` and `sameAs(running)`.
+
+- [ ] **Step 1: Failing tests.** `device_app_setup_test.dart`: `windows: a Desktop with no signature keeps the sha256 check alone`; `windows: an installer signed by Desktop's signer passes`; `windows: an installer signed by someone else, or not at all, is refused` (another identity with the same subject; `NotSigned`; `HashMismatch`); `windows: a Desktop whose signature is broken refuses`; `windows: a signature that cannot be read refuses`. `update_signature_test.dart`: `the signer pair script takes its paths from the environment only`; `the report and the pair read signers with one prelude`; Windows only (`skip: !Platform.isWindows`): `readWindowsSignerPair reads powershell.exe as Valid and an empty exe as NotSigned`.
+- [ ] **Step 2:** `cd desktop && flutter test test/update_signature_test.dart test/devices/device_app_setup_test.dart` FAILS. Commit red.
+- [ ] **Step 3: Implement.** **Step 4:** both pass here; the Windows-only case passes in Verification 9's `windows-desktop.yml` run. **Step 5: Commit** `Desktop installs Harness Device on Windows only when its installer is signed as Desktop is`.
+
+### Task 42: Desktop finds the app on Windows and Linux
+
+**Files:** Modify `DT/lib/devices/device_app_probe.dart`, `DT/test/devices/device_app_probe_test.dart`.
+
+**Interfaces — Consumes:** `deviceAppWindowsExe` (Task 39); `runDeviceAppTool` as it is (this task does not use the `DeviceAppRun` typedef Task 40 changes). **Produces:**
+- `class PlaceDeviceAppProbe implements DeviceAppProbe` with `const PlaceDeviceAppProbe({required String? place, required Future<bool> Function() running, Future<bool> Function(String path)? exists})`: `lookup()` asks `running` first, then `installed = running || (place != null && await deviceAppInstalledAt([place], exists: exists))`. What `running` throws, `lookup` throws (the offer logs `device app: lookup failed`).
+- `Future<bool> windowsDeviceAppRunning({Future<ProcessResult> Function(String executable, List<String> arguments)? run, Map<String, String>? environment})`: runs `<SystemRoot>\System32\tasklist.exe` (SystemRoot found as `windowsPowerShellPath` finds it) with `['/FI', 'IMAGENAME eq harness-device.exe', '/FI', 'USERNAME eq <USERNAME>', '/FO', 'CSV', '/NH']`, by default through `runDeviceAppTool` with a 10 s timeout; a missing `USERNAME` or an exit other than 0 throws; otherwise `tasklistNamesDeviceApp(stdout)`.
+- `bool tasklistNamesDeviceApp(String csv)`: a line whose first CSV field, unquoted, is `harness-device.exe` in any case.
+- `Future<bool> linuxDeviceAppRunning({String proc = '/proc'})`: this process's real uid from `<proc>/self/status`'s `Uid:` line (unreadable: throws); true when a numeric entry's `comm` (trimmed) is `harness-device` and its `status` gives the same real uid; an entry that vanishes or cannot be read is skipped.
+
+- [ ] **Step 1: Failing tests:** `installed: the place is there, or the app runs` (the four cases); `no place: installed only while it runs`; `a lookup whose process list fails throws`; `tasklist asks for harness-device.exe of this user, as CSV with no header` (`SystemRoot=C:\Windows`, `USERNAME=Nguyễn Văn A`: the executable and the seven arguments exactly); `tasklist's rows: harness-device.exe in any case counts; a localized no-tasks line does not` (`"HARNESS-DEVICE.EXE","4242","Console","1","52,120 K"` true; `INFO: No tasks are running which match the specified criteria.` false; `Information: Es werden keine Aufgaben mit den angegebenen Kriterien ausgeführt.` false; `"harness-device.exe.old","1","Console","1","1 K"` false); `tasklist that fails, or no USERNAME, throws`; `/proc: a harness-device of this user counts; another user's, another name or a vanished entry does not` (a fake tree in a temp folder: `self/status` uid 1000; `10` named `harness-device`, uid 1000; `11` uid 1001; `12` named `harness-device2`; `13` an empty folder); Linux only (`skip: !Platform.isLinux`): `a copy of sleep named harness-device is found in /proc, and not once it ends` (copies `/bin/sleep`, starts it for 30 s, true; kills it and awaits its exit code, false); Windows only (`skip: !Platform.isWindows`): `a hidden copy of ping named harness-device.exe is found by tasklist` (`ping -n 30 127.0.0.1` through `startHidden`, true; killed and awaited, false).
+- [ ] **Step 2:** `cd desktop && flutter test test/devices/device_app_probe_test.dart` FAILS. Commit red.
+- [ ] **Step 3: Implement.** **Step 4:** it passes here; the Linux case passes in PR CI's `desktop-tests`, the Windows one in Verification 9's run. **Step 5: Commit** `Desktop finds Harness Device on Windows and Linux: its file, or it running for this user`.
+
+### Task 43: Desktop offers the app on Windows 11 and Linux
+
+**Files:** Modify `DT/lib/devices/device_app.dart`, `DT/lib/devices/device_app_setup.dart`, `DT/test/devices/device_app_test.dart`, `DT/test/devices/device_app_setup_test.dart`, `DT/test/devices/device_app_flow_test.dart`, `DT/design/desktop-design-system.md` (the Menu-bar app offer paragraph).
+
+**Interfaces — Consumes:** Tasks 39 to 42. **Produces:**
+- `deviceAppSupported`: viewer or web never; macOS as today; Windows when the last `(Build N)` in `osVersion` has N ≥ 22000; Linux always.
+- In `device_app_setup.dart`, used by `deviceAppOfferForThisComputer`: `@visibleForTesting DeviceAppProbe deviceAppProbeFor(TargetPlatform platform, {Map<String, String>? environment})` (macOS `ChannelDeviceAppProbe`; Windows `PlaceDeviceAppProbe(place: deviceAppPlace(…), running: windowsDeviceAppRunning)`; Linux the same with `linuxDeviceAppRunning`) and `@visibleForTesting DeviceAppOpen deviceAppOpenFor(TargetPlatform platform, {DeviceAppStart start = startDeviceAppDetached, Map<String, String>? environment})` (macOS `openDeviceApp(runDeviceAppTool, path:)`; Windows and Linux `startDeviceApp(path ?? place)`, false with neither). The installer gets `platform`, `place` and the signature check of its OS: macOS `deviceAppSignedLikeDesktop`, Windows `deviceAppInstallerSignedLikeDesktop`, Linux none called.
+
+- [ ] **Step 1: Failing tests.**
+  - `device_app_test.dart`: `only macOS 13 or later, Windows 11 and Linux, and never a viewer build` replaces today's case: macOS's lines kept; Windows `"Windows 11 Pro" 10.0 (Build 22631)` and `"Windows 11 Home" 10.0 (Build 26100)` true, `"Windows 10 Pro" 10.0 (Build 19045)` and `''` false; Linux `6.8.0-45-generic` true; Linux and Windows viewer false.
+  - `device_app_setup_test.dart`: `each OS gets its own lookup` (the types; Windows' place under the given `LOCALAPPDATA`, Linux's under `HOME`); `Open on Windows and Linux starts the place when no path is named`; `Open with no place fails`.
+  - `device_app_flow_test.dart`, the person's walk on every OS: the fixture's `supported` comes from `deviceAppSupported(osVersion: _osVersion())` (`_osVersion()` by `defaultTargetPlatform`: `Version 15.6 (Build 24G84)`, `"Windows 11 Pro" 10.0 (Build 22631)`, `6.8.0-45-generic`); `a dial and no menu-bar app: the band; Install installs and the band goes`, `the Devices row: Install, then Open, then nothing` and `a failed install shows its line and Retry on both` run under `TargetPlatformVariant({TargetPlatform.macOS, TargetPlatform.windows, TargetPlatform.linux})` with today's exact copy; `Linux shows nothing` becomes `Windows 10 shows nothing` (`"Windows 10 Pro" 10.0 (Build 19045)`, no band, no row, no lookup).
+- [ ] **Step 2:** `cd desktop && flutter test test/devices` FAILS. Commit red.
+- [ ] **Step 3: Implement.** The design doc's offer paragraph reads `shown on macOS 13 or later, Windows 11 and Linux while a dial is plugged in to this computer and the Harness menu-bar app is not installed; the web, macOS 12 and Windows 10 show nothing.` Nothing else in the doc or the gallery changes (no new state, copy or screen; `trafficLightClearance` is already 0 off macOS).
+- [ ] **Step 4:** `flutter test test/devices test/update_signature_test.dart test/elements_gallery_test.dart` and `flutter analyze` pass. **Step 5: Commit** `Desktop offers Harness Device on Windows 11 and Linux, as on macOS`.
+
+### Task 44: End to end: Desktop installs the real app on Windows and Linux
+
+**Files:** Create `DT/integration_test/device_app_install_windows_linux_native_test.dart`; modify `.github/workflows/tmp-device-app-win-linux.yml`.
+
+Test tooling: one commit, no red test; its job is the evidence. Never production: the manifest is a stand-in on loopback and the package is this run's debug build.
+
+- The test refuses to run without `FLUTTER_TEST=1` and `HARNESS_DEVICE_TEST_PACKAGE` (the debug installer or AppImage), and off Windows and Linux. It serves the package and a manifest naming it, under this runner's key, at `https://cdn.autonomous.ai/harness/device/0.0.0/<the release's file name>`, sent to loopback by the interceptor `device_app_install_native_test.dart` uses. It builds the installer, probe and opener as `deviceAppOfferForThisComputer` does (the real place, `deviceAppProbeFor`, `deviceAppOpenFor`, the real signature check: the debug installer and the test runner are both unsigned, so sha256 alone). Checks, in order:
+  1. A manifest whose file has one byte changed fails at `checksum`; the place is still absent.
+  2. Before: `installed: false, running: false`.
+  3. Install: done, at the place.
+  4. The probe, asked until it says so or 60 s pass: `installed: true, running: true`.
+  5. Linux: the running app's `/proc/<pid>/environ` holds `APPIMAGE=<the place>` and no other `APPIMAGE`.
+  6. A second install is done at the place without running the installer again (Windows: the exe's last-write time unchanged; Linux: the AppImage's bytes unchanged).
+  It cleans up what it made: ends the app (`taskkill /IM harness-device.exe /F` or a kill of the pid it found), runs `uninstall.exe /S` on Windows and removes the AppImage on Linux.
+- Temporary workflow, job `desktop-device-app-e2e`, matrix `windows-latest`, `windows-11-arm`, `ubuntu-22.04`, `ubuntu-22.04-arm`, `timeout-minutes: 90`: Flutter at `windows-desktop.yml`'s `FLUTTER_VERSION`; Desktop's Linux build packages as `release-desktop.yml` installs them, plus `xvfb dbus-x11 libfuse2` and Tauri's packages; the Device app's debug package built as `windows-e2e` and `linux-e2e` build it; its state seeded with `cliSeen`, `askedSignIn` and `loginItem` true (`%APPDATA%\ai.autonomous.harness.device\state.json`, `$XDG_DATA_HOME/ai.autonomous.harness.device/state.json`, as `windows.ps1` and `linux.sh` seed it), so it installs nothing and opens no window; on Linux a scratch `HOME` and XDG folders, `xvfb-run` and `dbus-run-session`; then `FLUTTER_TEST=1 HARNESS_DEVICE_TEST_PACKAGE=<package> flutter test -d <windows|linux> --no-pub integration_test/device_app_install_windows_linux_native_test.dart`. On failure it uploads the Device app's log (3 days).
+
+- [ ] **Step 1: Write the test and the job.** **Step 2:** `desktop-device-app-e2e` is green on its four runners. **Step 3: Commit** `End to end: Desktop installs, finds and starts Harness Device on Windows and Linux`.
+
+### Task 45: Docs: who reads which download key
+
+**Files:** Modify `DA/RELEASE.md`.
+
+One commit, no test. Describe what the code does.
+
+- [ ] **Step 1:** The page paragraph: `https://harness.autonomous.ai/device` has a button per OS; its links `/device/download-macos`, `/device/download-windows` and `/device/download-linux` follow the manifest, the last two picking x64 or arm64 from the browser's Client Hints (Linux also its user agent), x64 when it cannot tell, and answering 503 until a release carries their keys. Under the key table, replace the line on who reads what: the app reads `platforms`; the website reads `device-macos-dmg`, `device-windows-*` and `device-linux-*`; Desktop reads `device-macos-arm64`/`device-macos`, `device-windows-*` and `device-linux-*`, and on Windows runs the installer with `/S`, on Linux puts the AppImage at `~/.local/opt/Harness-Device.AppImage`.
+- [ ] **Step 2: Commit** `Docs: the website and Desktop read the Windows and Linux keys of the device manifest`.
+
 ## Verification
 
 Every check uses a fake CLI or a test profile. None signs in, none uses a real person's account, none reaches a production backend. The two checks that read production's public CDN (Verification 7) run by answer 4.
@@ -680,7 +875,7 @@ Every check uses a fake CLI or a test profile. None signs in, none uses a real p
 
 **2. Local gate PR CI does not run** (`docs/validation-and-release.md`, "Harness Device on macOS"): `cd device-app/src-tauri && cargo test --locked` on this Mac at the final commit, recorded in the pull request. Then the reference's own two checks, both from a scratch `HOME`, neither touching the installed app: `bash device-app/scripts/e2e/macos.sh` (a person sees `ok:` lines, the last naming the menu row line) and `bash device-app/scripts/e2e/update-pair.sh <scratchpad>/pair && bash device-app/scripts/e2e/macos.sh --update <scratchpad>/pair` (0.0.1 becomes 0.0.2 from `127.0.0.1:8765`).
 
-**3. On GitHub, the temporary workflow** `tmp-device-app-win-linux.yml`, started by a push to `feat/device-app-win-linux` (by hand: push the branch; there is no dispatch). Runners are disposable; no secret exists in it.
+**3. On GitHub, the temporary workflow** `tmp-device-app-win-linux.yml`, started by a push to `feat/device-app-win-linux` (by hand: push the branch; there is no dispatch). Runners are disposable; no secret exists in it. Section 10 adds `desktop-device-app-e2e` (Verification 10).
 - `windows-unit` (x64): the lib's tests and the binary's build.
 - `linux-unit`: `cargo test --locked`.
 - `windows-e2e` (x64): Task 32's seven checks. A person reads `ok:` for each and `0 FAILED`.
@@ -705,4 +900,12 @@ The workflow is removed before the merge. From then on PR CI runs the rules: `de
 
 **7. Run (answer 4)** (they read production's public CDN, sign in nowhere): the app's own install lines on a fresh profile. Linux, in `linux-e2e`: with no CLI and no state, the app opens xterm under Xvfb, `install.sh --host` and `--desktop` run, and the log reaches `menu: Plug in your device | Sign in… | Export logs | About | Quit`. Windows, on the VM's test user: the same with `install.ps1`, and no console window is seen.
 
-**In PR CI, by itself,** once the pull request is ready: `device-app-checks` (both legs), `cli-tests` (Task 18), `desktop-tests` (the design doc is under `desktop/`), `process-checks` (actionlint, the planner's test). Nothing is started by hand. Platforms the pull request names: macOS (reference, re-tested), Windows x64 and arm64, Linux x64 and arm64.
+**8. The website routes and page (section 10)**, on this Mac and in PR CI's `website-checks`: `cd website && npm ci && npm test && npm run lint`. A person reads the route specs' cases pass: 302 to each OS's file for each arch, x64 when the request cannot tell, 503 with the macOS route's words before a release carries the key, and every refusal. No end-to-end run: the routes read one fixed manifest with no override, on purpose (`deviceManifest.ts`), so a local server would read production's; the specs, over a mocked `fetch`, are the proof.
+
+**9. Desktop's rules (section 10).** On this Mac: `cd desktop && flutter test test/devices test/update_signature_test.dart test/elements_gallery_test.dart && flutter analyze`. Linux: PR CI's `desktop-tests` runs them, the real `/proc` case included. Windows: `windows-desktop.yml`, by hand on the branch (`gh workflow run windows-desktop.yml --ref feat/device-app-win-linux`, its default test mode, no release), on x64 and arm64: the real `tasklist` and Authenticode cases pass and no `test/devices/` file or `update_signature_test.dart` is in `test/windows_known_failures.txt`. A person reads both legs green.
+
+**10. Desktop installs the real app** (Task 44): the temporary workflow's `desktop-device-app-e2e`, started by the same push, on `windows-latest`, `windows-11-arm`, `ubuntu-22.04` and `ubuntu-22.04-arm`. Disposable runners, a loopback stand-in manifest, this run's unsigned debug package, a scratch `HOME` on Linux; no account, no backend, no production file. A person reads each of the six checks pass on the four runners.
+
+**11. By eye: none in this pull request.** The band, row, copy and gallery are unchanged (Task 43 keeps the gallery's test green), the flow tests click through on Windows and Linux, and Verification 10 runs the real install, probe and start. Desktop's manifest URL is fixed with no override, so a by-eye walk before a release could only read production's manifest. For harness-pm after the first `platforms=all` release (not this pull request), on the Windows ARM VM's test user and a Linux desktop, with a Desktop of that release and a dial plugged in (after `feat/dial-windows` and `feat/dial-linux`): the band offers the app; Install puts it in place and it runs in the tray; Quit it, and the Devices row's `Open` starts it; `/device`'s Windows and Linux buttons download that release.
+
+**In PR CI, by itself,** once the pull request is ready: `device-app-checks` (both legs), `cli-tests` (Task 18), `desktop-tests` (Tasks 39 to 43, and the design doc is under `desktop/`), `website-checks` (Tasks 37, 38), `process-checks` (actionlint, the planner's test). Nothing else is started by hand but Verification 9's `windows-desktop.yml`. Platforms the pull request names: macOS (reference, re-tested), Windows x64 and arm64, Linux x64 and arm64, and the website (every browser).

@@ -33,8 +33,6 @@ is no silent difference.
 - Changing the CLI's behavior, the devices service, the watch protocol or the devices pipe. The app talks to the CLI
   only. (A CLI test may pin install-script lines the app reads.)
 - A Linux `.deb`/`.rpm`, a Windows MSI, a Microsoft Store or Flathub package.
-- The download path: website routes for the Windows/Linux files and Desktop's offer of the Device app on Windows/Linux
-  come with the first Windows/Linux release (harness-pm, 2026-11-19).
 - Terminal-tab follow outside macOS (see named differences).
 - A permanent new workflow (the existing PR CI job gains a Windows leg; see CI).
 
@@ -379,7 +377,7 @@ macOS, or the release is a partial ship. The same pull request carries both:
 - The Linux login item is the CLI's single `harnessd.desktop` entry; dial-linux's install.sh keeps a foreign `Exec=`.
 - A temporary `platforms` input keeps Windows/Linux out of releases until Ken's word.
 - Linux `--host` runs in a visible terminal, as Desktop.
-- The download path (website, Desktop offer) waits for the first Windows/Linux release.
+- The download path (website, Desktop offer) is in this pull request (Ken, 2026-11-20; §10).
 - Windows: job with breakaway; the update install held until relaunch is allowed; the name `Harness Device`; always
   signed. The Azure credential question goes to Ken before the first release.
 - Plan answers: the Linux terminal-step copy as proposed; the `dbus` crate (already in Tauri's tree) for `tray: no host`;
