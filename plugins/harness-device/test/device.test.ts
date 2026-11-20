@@ -1025,6 +1025,21 @@ test('a detach while the attach runs: nothing runs after it', async ($, on) => {
   expect(w.runs).toHaveLength(1)
 })
 
+// The app on this session, on another and back within the run: the devices last heard of the other, so it runs again.
+test('left and shown again while an attach that tells runs: it runs once more when it ends', async ($, on) => {
+  const w = windows(on, { children: EXITS })
+  await start($, w)
+  w.attach = slow(1_000, { exitCode: 0, stdout: '{"sent":true}\n' })
+  await attach($)
+  await w.clock.settle()
+  await detach($)
+  await attach($)
+  await w.clock.advance(1_000)
+  expect(w.runs).toHaveLength(2)
+  await w.clock.advance(10 * MINUTE)
+  expect(w.runs).toHaveLength(2)
+})
+
 test('no fetch at all, only the settings file is read, and only USERPROFILE and CLAUDE_CONFIG_DIR', async ($, on) => {
   const w = windows(on, { children: [[line({ text: 'hi' }), '{}\n', MINUTE], ['{"off":true}\n']] })
   await start($, w)
