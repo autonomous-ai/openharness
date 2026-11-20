@@ -142,7 +142,7 @@ eight rectangles; a 3 h soak of `--story` held
 first frame (56 ms on the chip, from 83), which needs the work split over both cores or made in the paint-ahead.
 
 Deviations from V3 that remain: the pages switch without V3's cross-fade (a cross-faded frame costs 6–10 whole
-glasses); the cell pets hold their pose; the words and chips fade without V3's blur; the overlay, the asking chip and
+glasses); the words and chips fade without V3's blur; the overlay, the asking chip and
 the halo fade as tints toward the ground, not by alpha (only off on a ground that is not black); the rail and glow
 stand still while an agent opens or closes; a moving pet's size steps on the motion's 16 ms frames (15 ms at most
 behind the clock); with four or more different Claude or Codex agents the paint-ahead pool is full, so the later
@@ -151,7 +151,7 @@ frames of the last motion are cold; a swipe is not painted ahead.
 ### M2: On Pro hardware
 
 The owner's Harness Pro is a P4 v3.2 with a 720 x 720 ST7703I panel, GT911 touch, ES7210 mics and an ES8311 speaker.
-First V4 is only built for it (19 Nov). Next, decide one of:
+First V4 is only built for it (19 Nov). The choice was between these; the owner chose 2 (20 Nov):
 
 1. Flash V4 onto the Pro with a board entry for the Pro's pins and panel, the 1920 x 480 picture drawn as a 720 x 180
    band: the chip, cable, touch, mic and speaker run for real before the 8.8" panel arrives. The Pro's own firmware
@@ -213,13 +213,17 @@ No wake word is planned: one tap talks.
   follows the finger); the bench may run on the desk Pro from its spare `ota_1` slot, put back after; the Pro's
   compositor gets faster where its pixels stay byte for byte the same (the Pro gains it at its next build).
 - The machines rail of the first plan is gone: the app column (the Dial's app filter) replaced it.
+- 20 Nov: M2 waits for a P4 board with the 8.8" panel; the desk Pro is not flashed with V4. New Harness (M6) stays
+  as it is until the owner brings it up. The daemon changes stay local until the owner allows them to `main` (M4);
+  at that merge the demo goes.
+- 20 Nov: Ambient as V3's: the demo's three pets (Claude and the Muse relaxing, Codex idling) whatever the ring
+  holds, and the specks drifting; the cells' pets play their states' scenes.
 
 ## Open
 
-1. M2: flash V4 onto the desk Pro, or wait for the 8.8" panel.
-2. The scope of New Harness (M6).
-3. When the daemon changes go to `main` (M4): the branches stay local until the owner says.
-4. At that merge, remove the demo (`--demo`, `main/demo/`, the `max-demo` launcher).
+1. The scope of New Harness (M6): parked by the owner (20 Nov), to bring up again later.
+2. When the daemon changes go to `main` (M4): the branches stay local until the owner says.
+3. At that merge, remove the demo (`--demo`, `main/demo/`, the `max-demo` launcher), and the TEMP Relax on Apps.
 
 ## Risks
 
