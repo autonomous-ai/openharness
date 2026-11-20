@@ -77,6 +77,8 @@ jobs:
       daemons: ${{ steps.select.outputs.daemons }}
       pty: ${{ steps.select.outputs.pty }}
       device-app: ${{ steps.select.outputs.device-app }}
+      windows-e2e: ${{ steps.select.outputs.windows-e2e }}
+      windows-e2e-arm64: ${{ steps.select.outputs.windows-e2e-arm64 }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -807,11 +809,25 @@ jobs:
         if: runner.os == 'Windows'
         run: cargo test --locked --lib --manifest-path device-app/src-tauri/Cargo.toml
 
+  # windows.yml's tests (the PTY host's Rust tests and builds, the Windows CLI specs, the dial end to end, the install
+  # check) for a change to Windows code or to cross-platform code with win32 branches that break only on Windows.
+  # x64 covers that code; arm64 tests something x64 does not only for the Windows-only files, so the plan adds it for
+  # those alone.
+  windows-e2e:
+    concurrency:
+      group: ci-${{ github.event_name }}-${{ github.event.action || 'run' }}-${{ github.event.pull_request.number || github.run_id }}-windows-e2e
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+    needs: plan
+    if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.windows-e2e == 'true'
+    uses: ./.github/workflows/windows.yml
+    with:
+      x64_only: ${{ needs.plan.outputs.windows-e2e-arm64 != 'true' }}
+
   required:
     name: ci/required
     needs: [plan, process-checks, desktop-tests, companion-subsystems, cli-typecheck, cli-tests, tui-test,
             backend-desk, backend-integration, website-checks, os-checks, provider-checks, firmware-checks, pro-firmware-build, pro-golden,
-            mobile-checks, daemons-checks, pty-checks, device-app-checks]
+            mobile-checks, daemons-checks, pty-checks, device-app-checks, windows-e2e]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 3
