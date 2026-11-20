@@ -342,6 +342,32 @@ mod tests {
         assert_eq!(told.recv_timeout(Duration::from_secs(5)), Err(mpsc::RecvTimeoutError::Disconnected));
     }
 
+    /// As a sway that quits, or a connection that breaks, while the observer waits for an event; and a sway that
+    /// refuses the subscription, which is told once too.
+    #[test]
+    fn a_connection_sway_ends_is_no_observer_once() {
+        let (ours, mut sway) = UnixStream::pair().unwrap();
+        sway.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        let (tell, told) = mpsc::channel();
+        let _observation = observe_on(move || Ok(ours), chatgpt, Box::new(move |said| tell.send(said).unwrap()));
+        subscribed(&mut sway);
+        send(&mut sway, GET_TREE, &tree(&window(CHATGPT_PID, "Fix login", true)));
+        assert_eq!(told.recv_timeout(Duration::from_secs(5)), Ok(title("Fix login")));
+        drop(sway);
+        assert_eq!(told.recv_timeout(Duration::from_secs(5)), Ok(Heard::NoObserver));
+        // The callback is let go after it, the observation still held: told once.
+        assert_eq!(told.recv_timeout(Duration::from_secs(5)), Err(mpsc::RecvTimeoutError::Disconnected));
+
+        let (ours, mut sway) = UnixStream::pair().unwrap();
+        sway.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        let (tell, told) = mpsc::channel();
+        let _observation = observe_on(move || Ok(ours), chatgpt, Box::new(move |said| tell.send(said).unwrap()));
+        expect(&mut sway, SUBSCRIBE, r#"["window"]"#);
+        send(&mut sway, SUBSCRIBE, r#"{"success":false}"#);
+        assert_eq!(told.recv_timeout(Duration::from_secs(5)), Ok(Heard::NoObserver));
+        assert_eq!(told.recv_timeout(Duration::from_secs(5)), Err(mpsc::RecvTimeoutError::Disconnected));
+    }
+
     #[test]
     fn no_sway_is_no_observer_once() {
         let empty = tempfile::tempdir().unwrap();

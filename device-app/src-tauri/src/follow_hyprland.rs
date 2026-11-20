@@ -327,6 +327,20 @@ mod tests {
         assert_eq!(told.recv_timeout(WAIT), Err(mpsc::RecvTimeoutError::Disconnected));
     }
 
+    /// As a Hyprland that quits, or an event socket that breaks, while the observer waits for an event.
+    #[test]
+    fn events_hyprland_ends_are_no_observer_once() {
+        let (events, hyprland) = UnixStream::pair().unwrap();
+        let (heard, told) = heard_into();
+        // No request socket: the first ask fails, which is the empty title.
+        let _observation = observe_events(move || Ok(events), PathBuf::from("/nonexistent"), |_| true, heard);
+        assert_eq!(told.recv_timeout(WAIT), Ok(Heard::Title(None)));
+        drop(hyprland);
+        assert_eq!(told.recv_timeout(WAIT), Ok(Heard::NoObserver));
+        // The callback is let go after it, the observation still held: told once.
+        assert_eq!(told.recv_timeout(WAIT), Err(mpsc::RecvTimeoutError::Disconnected));
+    }
+
     #[test]
     fn an_observation_hears_its_own_sockets_until_it_is_dropped() {
         let runtime = tempfile::tempdir().unwrap();
