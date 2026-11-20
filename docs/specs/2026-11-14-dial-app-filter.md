@@ -106,6 +106,10 @@ working in. The app he is working in is the one in front, and the computer alrea
   - it counts for nothing in the default: the default and the tie draw count known apps only, and an app whose
     agents are all not known yet is shown by default only when no other app has an agent; a pick or the front can
     still show it.
+  - *On Windows (2026-11-20, [the dial on Windows](../plans/2026-11-19-dial-windows-design.md)): the scan learns no
+    session's app there and nothing yet reports the app in front, so an agent the scan found would wait for its first
+    hook, which can be hours away. There it counts in the default as a known app's agent does (`cable/hosts/select.ts`
+    `AppRings.counts`, `scannedApp.ts` `scanLearnsApps`); macOS and Linux are unchanged.*
 - **The scan learns the app where that is cheap** (the PM, 2026-11-15): with no new permission, by walking the
   session's parent processes (`ppid`) and reading only each one's executable name or path. The scan runs its own
   `ps -axo pid=,ppid=,comm=` (`comm` last, so macOS prints the whole path, not 16 characters; no tty, which made each read

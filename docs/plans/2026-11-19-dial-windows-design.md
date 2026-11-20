@@ -81,6 +81,10 @@ does Windows.
       says the pets are unchanged; that goes in the evidence. No pets folder while the dial holds no pet ids is an
       empty copy. If the dial holds pet ids and the copy is not possible, or holds one the copied mapping does not
       name, no such desk opens, and the orchestrator is told.
+      *Corrected 2026-11-20: after #4511 the daemon drops only the packs this computer owns and keeps the custom pets
+      another computer put on the dial, so the desk copies no pets folder (`--pets-from` and its stop are gone). The
+      first and last reads still compare the dial's pet ids. The desk is also sealed by default, `--own-account` giving
+      a stand-in desk the account it runs as (the VM's test user only), and it has no `pane` command.*
     - The Dell runs only signed programs (orchestrator, 2026-11-20): Smart App Control is on there and stays on. The
       branch's JS runs under the installed release's signed `node.exe`, with its signed `harness-serial.exe` and
       `harness-pty.exe` (whose `ps` serves every process proof there); nothing built from the branch as an `.exe`
@@ -139,6 +143,17 @@ naming its own pipe, and clients follow the record. On macOS and Linux nothing c
 
 Corrected 2026-11-20: on Windows every service runs inside the core's process, so the devices started there open this
 same pipe through the services' inline door (`services/inline.ts`), until Windows services run in their own process.
+
+*Corrected 2026-11-20 (decision A, its scope accepted by harness-pm): with the devices, the core's process on Windows
+also runs the dial setups, under the same condition, until Windows services run in their own process. Each is bounded
+in time and is a part of its own, so its failure is never the dial's nor the core's (`services/devices.ts`):*
+- *the dial skill in each engine home (`devices/dialSkill.ts`): files only, no process;*
+- *Claude Code's plugin (`devices/claudePlugin.ts`): `claude plugin` runs, 15 s each, 60 s for one that fetches;*
+- *Orca's plugin and homes (`devices/orcaPlugin.ts`, `devices/orcaHomes.ts`): `orca.exe` runs, 5 s for a status,
+  10 s for a read, 60 s for a change; the homes' read 5 s;*
+- *the VS Code and Cursor extension (`devices/vscodeExtension.ts`): `Code.exe`'s or `Cursor.exe`'s CLI, 60 s a run;*
+- *the ChatGPT app's package folder (`lib/windows/storePackage.ts`): one PowerShell, 10 s, asked again only when the
+  folder is gone, no package or a failed ask held 10 minutes (part B, Codex).*
 
 **`devicesListenerPath` becomes a target.** On Windows the answer is `{pipe, token}` read from `devices.json` and
 `devices-token`, or null when the record is missing, the token is missing or bad, or the recorded pid is proven gone
@@ -267,6 +282,14 @@ is read and no PowerShell runs. On Unix the uid check stays.
 - The ChatGPT app's bundled Codex (`:154`) is macOS-only and stays so.
 - On Windows, PATH is the process's own (there is no login shell).
 
+*Corrected 2026-11-20 after the VM probe (plan Task 37 §2): the ChatGPT app's sessions answer only to the app's own
+`codex.exe`, inside its Store package (`OpenAI.Codex`, `app\resources\codex.exe`). On Windows a session the hook names
+the ChatGPT app's (part C) is sent through that one; every other session keeps the PATH `codex`. The package's folder
+is under `%ProgramFiles%\WindowsApps`, named for its version, and cannot be listed without an administrator, so it is
+asked of `Get-AppxPackage` through Windows PowerShell (`lib/windows/storePackage.ts`): the one PowerShell the product
+runs, hidden, no command shell, 10 s at most, asked again only once the folder is gone, and no package or a failed
+ask held 10 minutes (`cable/hosts/codexQueue.ts`).*
+
 **herdr on Windows** (0.9.5, generally available). It speaks the same NDJSON protocol over a named pipe:
 - On Windows herdr writes a marker file at its socket path. Its pipe's name is that path mapped by the
   `interprocess` crate's `GenericNamespaced` (herdr `src/ipc.rs`: `connect_local_stream`, `bind_local_listener`).
@@ -277,6 +300,12 @@ is read and no PowerShell runs. On Unix the uid check stays.
 - `agent.list`, `agent.prompt` and `events.subscribe` then work as on Unix, and focus stays `herdr agent focus`.
 - The exact name mapping, and where herdr's default socket path is on Windows, are read from herdr's source and
   confirmed against a real herdr on the VM before the code is written.
+
+*Corrected 2026-11-20: herdr's zip puts `herdr.exe` on no PATH, so on Windows herdr's source starts when herdr's own
+folder (the marker's) exists, as well as when `herdr` is on PATH. Its pipe is dialled only while the marker's own
+herdr runs: the server's pid in the marker is a `herdr.exe` of this account, started before the marker was written
+(the process table), checked for each new marker and again after a failed connection. A tap's `herdr agent focus`
+runs the `herdr` on PATH, else that server's own image (`cable/hosts/herdrClient.ts` `binary`).*
 
 **Orca on Windows.**
 - `orcaHomes.ts` `orcaBinary` finds Orca's CLI `orca.exe` in `<Orca>\resources\bin\` (on PATH, or the default
@@ -332,6 +361,12 @@ What tells the apps apart on Windows:
   hash of the editor's own pipe name from `VSCODE_IPC_HOOK`, so a pid that another editor reuses misses. Only the
   hook reads or writes that file, never the core.
   Alacritty sets no Windows variable of its own but `ALACRITTY_LOG`, which the hook takes as Alacritty's sign.*
+  *Corrected 2026-11-20 (final review; harness-pm chose recognizing the apps): the Claude and ChatGPT apps are named
+  too, from what the hook already has and with no new process. `CLAUDE_CODE_ENTRYPOINT=claude-desktop` in the hook's
+  own environment is the Claude app, read first. For Codex, a `ChatGPT.exe` under `\WindowsApps\OpenAI.Codex_` among
+  the rows of the hook's own parent chain (part D) is the ChatGPT app. `VSCODE_PID`'s row is taken from that same
+  chain, not a read of its own. Last, `WEZTERM_PANE` and `TERM_PROGRAM=WarpTerminal` name WezTerm and Warp, so a herdr
+  agent inside them raises its terminal.*
 - No new host id is added. The firmware holds 16 apps.
 - Windows Terminal has no host id. A session there is not raised (none), as a session in an unknown terminal is not
   on a Mac.
@@ -357,6 +392,12 @@ row, at most 8 steps, as on Linux:
 - The hook reads only the parent chain (pid, parent pid, image name, command line), never an environment.
 - It reads them from the pty host's process table, the same source the core's check uses (`harness-pty ps --json`,
   `lib/windows/processTable.ts`). The core's check is unchanged.
+
+*Corrected 2026-11-20 (plan Task 36): the hook reads only its own chain, `harness-pty ps --json --ancestors
+<process.ppid>` (at most 9 rows), once a run, lazily, and only for an event it tells: a dropped event (a paneless
+Codex `PermissionRequest`, a subagent's hook, bad JSON) starts no pty host. The climb, the panel hint and the ChatGPT
+app's lookup share that one read. The climb stops at a parent started after the shell, whose pid a process started
+since has taken.*
 
 **Cost.** Starting the pty host costs a process start on a hook's path. The climb runs only for hooks whose runner is
 a shell (Codex, Copilot, Command Code; the hook knows its engine from its arguments). The pull request gives the
@@ -401,8 +442,10 @@ dial-linux also edits `appLink.ts` and `cursorFolder.ts`, and whoever merges sec
 | A tap may flash the app's taskbar button instead of bringing it forward. | Windows lets only a process with foreground rights take the foreground, and a tap reaches a background process over serial, which Windows does not count as input. The documented answer is the flash. No unofficial workaround (decided 2026-11-19). |
 | A session in Windows Terminal is listed and rings, but a tap does not raise it and the dial does not follow its tabs. | Windows Terminal has no API to list or select tabs, and no host id. The firmware holds 16 apps, and no new id is added. |
 | Until the Windows Device app ships, the dial does not follow the app or tab in front, and the Notifications setting has no menu (it keeps its last value). | Those come from the Device app (`front`/`tab` lines, its menu). It is a separate item (`feat/device-app-win-linux`). This pull request makes the pipe and the watch they use work. |
-| Speaking to Codex in the ChatGPT desktop app uses the `codex` CLI on PATH, not the app's own copy. | The app's bundled CLI path (`codexQueue.ts:154`) is a macOS `.app` path. Its layout on Windows is not known yet. If the VM shows that the app's sessions need the app's own copy, the plan's probe says so and harness-pm decides. |
-| On Windows each Claude Code session holds one `harness` process for the dial's voice. | Claude Code's mod runtime cannot reach a named pipe and has no HMAC, so the CLI does the pipe auth for it (decided 13). |
+| Speaking to Codex in the ChatGPT desktop app uses the app's own `codex.exe`, found by asking Windows PowerShell for the app's Store package. *(Corrected 2026-11-20: this row said the PATH `codex`.)* | The app's sessions answer only to its own copy (VM, plan Task 37 §2), and its package folder cannot be listed without an administrator, so it is asked (part B, Codex). |
+| On Windows each Claude Code session holds one `harness` process for the dial's voice (`harness device claude inbox`). | Claude Code's mod runtime cannot reach a named pipe and has no HMAC, so the CLI does the pipe auth for it (decided 13). |
+| A Claude Code permission prompt shows about 2-3 s later under Git Bash and 3-5 s later under PowerShell, and without Git Bash it may not ring the dial. | Claude Code runs the plugin's `PermissionRequest` hook in Git Bash, else Windows PowerShell, and shows the prompt once the hook ends. PowerShell can take longer to start than the hook's 5 s; `onFailure: "continue"` lets the prompt go on then, and Claude Code from 2.1.287 up to some version no later than 2.1.300 ignores that key. |
+| The dial's app page follows no app in front, and on Windows an agent the scan found counts in the default app before its first hook. | Nothing reports the app in front until the Windows Device app (above). The scan learns no session's app on Windows, so without counting those agents the few that hooked would pick the default page over the many in WezTerm or herdr ([app filter](../specs/2026-11-14-dial-app-filter.md)). |
 | No Herdr.app or Herdr Core (`hc`) session, no cmux, iTerm2, Terminal.app or Ghostty tab follow. | Those apps exist only on macOS. |
 
 ## Not in this pull request
