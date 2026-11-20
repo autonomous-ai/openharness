@@ -7335,12 +7335,17 @@ describe('a long recording and its long transcript', () => {
     return { ...c, lines, handed }
   }
 
+  const sum = (lengths: number[]) => lengths.reduce((total, length) => total + length, 0)
+
+  // Each recording is uploaded in segments of about 60 s: ten cut while it streams, and the tail at Done.
   it("a recording of 600 s, and one a second past it to the dial's own stop, are transcribed", async () => {
     const { session, port, handed } = await listening(() => 'fix the login screen')
     try {
       expect(await record(port, 'ten', 600 * SECOND)).toMatchObject({ t: 'voice.transcript' })
       expect(await record(port, 'stop', 601 * SECOND)).toMatchObject({ t: 'voice.transcript' })
-      expect(handed).toEqual([600 * SECOND, 601 * SECOND])
+      expect(handed).toHaveLength(22)
+      expect(sum(handed.slice(0, 11))).toBe(600 * SECOND)
+      expect(sum(handed.slice(11))).toBe(601 * SECOND)
     } finally { await session.stop() }
   }, 60_000)
 
@@ -7348,8 +7353,13 @@ describe('a long recording and its long transcript', () => {
     const { session, port, handed, lines } = await listening(() => 'fix the login screen')
     try {
       expect(await record(port, 'last', 615 * SECOND)).toMatchObject({ t: 'voice.transcript' })
+      expect(handed).toHaveLength(11)
+      expect(sum(handed)).toBe(615 * SECOND)
       expect(await record(port, 'stuck', 615 * SECOND + 2)).toMatchObject({ t: 'voice.error', message: "Didn't catch that" })
-      expect(handed).toEqual([615 * SECOND])
+      await settle()
+      // `record` sends without yielding, so only the first segment was in flight when the chunk past the cap came: the
+      // segments cut after it were still queued, and are dropped with it.
+      expect(handed.slice(11)).toEqual([1_919_360])
       expect(lines.filter(l => l === 'cable: voice over the length cap, dropped')).toHaveLength(1)
     } finally { await session.stop() }
   }, 60_000)
@@ -7402,5 +7412,191 @@ describe('a long recording and its long transcript', () => {
         expect(over).not.toHaveProperty('text')
       } finally { await session.stop() }
     })
+  })
+})
+
+describe('a long recording is transcribed while the person talks', () => {
+  const HELLO = { t: 'hello', product: 'harness', mac: 'aa:bb' }
+  /** 16 kHz mono 16-bit, as both dials record. */
+  const SECOND = 32_000
+  /** A segment of silence: 60 s cut at the start of its last 20 ms frame, the latest of equally quiet ones. */
+  const SEGMENT = 1_919_360
+
+  /** PCM in frames of 8,000 bytes of zeros, as the dial streams it; a pause after each lets uploads run meanwhile. */
+  async function stream(port: LoopbackPort, bytes: number, { settleEvery = false }: { settleEvery?: boolean } = {}) {
+    const frame = Buffer.alloc(8_000)
+    for (let at = 0; at < bytes; at += frame.length) {
+      port.pcm(frame.subarray(0, Math.min(frame.length, bytes - at)))
+      if (settleEvery) await settle()
+    }
+  }
+
+  const answerTo = (port: LoopbackPort, uploadId: string) => vi.waitFor(() => {
+    const answer = port.sent.find(m => (m.t === 'voice.transcript' || m.t === 'voice.error') && m.uploadId === uploadId)
+    expect(answer).toBeDefined()
+    return answer!
+  })
+
+  /** A transcriber that notes each PCM's length and its abort signal, and answers the nth call with `answer(n)`. */
+  function transcriber(answer: (call: number) => Promise<string>) {
+    const calls: Array<{ bytes: number; signal?: AbortSignal }> = []
+    const transcribe = (pcm: Buffer, _rate: number, _lang: string, signal?: AbortSignal) => {
+      calls.push({ bytes: pcm.length, signal })
+      return answer(calls.length - 1)
+    }
+    return { calls, transcribe }
+  }
+
+  it('a 130 s recording makes two requests before voice.end and one after, and the dial gets the joined words', async () => {
+    const lines: string[] = []
+    const words = ['one', 'two', 'three']
+    const { calls, transcribe } = transcriber(async n => words[n]!)
+    const { session, port, host } = await connect(makeHost({ transcribe, log: line => lines.push(line) }))
+    try {
+      port.say(HELLO); await settle()
+      port.say({ t: 'voice.begin', uploadId: 'long', agentId: 'a1', sr: 16000, lang: 'en' })
+      await stream(port, 130 * SECOND, { settleEvery: true })
+      expect(calls.map(c => c.bytes)).toEqual([SEGMENT, SEGMENT])
+      port.say({ t: 'voice.end', uploadId: 'long' })
+      expect(await answerTo(port, 'long')).toMatchObject({ t: 'voice.transcript', text: 'one two three', agentId: 'a1' })
+      expect(calls.map(c => c.bytes)).toEqual([SEGMENT, SEGMENT, 321_280])
+      for (const call of calls) expect(call.signal).toBeInstanceOf(AbortSignal)
+      expect(host.sendTurn).toHaveBeenCalledOnce()
+      expect(host.sendTurn).toHaveBeenCalledWith('a1', 'one two three')
+      expect(lines.filter(l => l.startsWith('cable: voice segments='))).toEqual([
+        expect.stringMatching(/^cable: voice segments=3 early=2 retries=0 tail=\d+ms$/)])
+    } finally { await session.stop() }
+  })
+
+  it('a long recording whose upload fails twice before Done says why at Done, and sends nothing more', async () => {
+    const lines: string[] = []
+    const { calls, transcribe } = transcriber(async n => {
+      if (n < 2) throw new Error('Voice service unavailable')
+      return 'fix the login screen'
+    })
+    const { session, port, host } = await connect(makeHost({ transcribe, log: line => lines.push(line) }))
+    try {
+      port.say(HELLO); await settle()
+      port.say({ t: 'voice.begin', uploadId: 'failing', agentId: 'a1', sr: 16000, lang: 'en' })
+      await stream(port, 130 * SECOND, { settleEvery: true })
+      expect(calls).toHaveLength(2)
+      expect(port.sent.some(m => m.uploadId === 'failing')).toBe(false)
+      port.say({ t: 'voice.end', uploadId: 'failing' })
+      expect(await answerTo(port, 'failing')).toMatchObject({ t: 'voice.error', message: 'Voice service unavailable' })
+      expect(calls).toHaveLength(2)
+      expect(host.sendTurn).not.toHaveBeenCalled()
+      expect(lines.filter(l => l.startsWith('cable: voice segments='))).toEqual([
+        expect.stringMatching(/^cable: voice segments=1 early=1 retries=1 tail=\d+ms$/)])
+    } finally { await session.stop() }
+  })
+
+  describe.each(['during the recording', 'after voice.end'])('%s', phase => {
+    const afterEnd = phase === 'after voice.end'
+    const HELD = 'the held words'
+
+    it.each(['voice.abort', 'a new voice.begin', 'carry.cancel', 'the port closing'])('%s aborts the upload in flight', async trigger => {
+      let release!: (words: string) => void
+      const { calls, transcribe } = transcriber(n => n === 0
+        ? new Promise<string>(resolve => { release = resolve })
+        : Promise.resolve('fix the login screen'))
+      const host = makeHost({
+        transcribe,
+        selectPassage: async command => command.op === 'pin'
+          ? { ok: true, selectionId: 'p', revision: 2, rows: 1, extending: false, excerpt: 'source', text: 'source' }
+          : { ok: false, error: 'Closed' },
+      })
+      const { session, port } = await connect(host)
+      try {
+        port.say(HELLO); await settle()
+        const carried = trigger === 'carry.cancel'
+        if (carried) {
+          port.say({ t: 'carry.prepare', carryId: 'carry-held', requestId: 'r', agentId: 'a1', selectionId: 'p', revision: 1 })
+          await vi.waitFor(() => expect(port.types()).toContain('carry.state'))
+        }
+        port.say({ t: 'voice.begin', uploadId: 'held', ...(carried ? { agentId: 'a2', carryId: 'carry-held' } : { agentId: 'a1' }) })
+        if (afterEnd) {
+          await stream(port, 3_200)
+          port.say({ t: 'voice.end', uploadId: 'held' })
+        } else {
+          await stream(port, 61 * SECOND, { settleEvery: true })
+        }
+        await vi.waitFor(() => expect(calls).toHaveLength(1))
+        expect(calls[0]!.signal?.aborted).toBe(false)
+
+        if (trigger === 'voice.abort') port.say({ t: 'voice.abort', uploadId: 'held' })
+        if (carried) port.say({ t: 'carry.cancel', carryId: 'carry-held' })
+        if (trigger === 'the port closing') await port.close()
+        if (trigger === 'a new voice.begin') {
+          port.say({ t: 'voice.begin', uploadId: 'next', agentId: 'a1' })
+          await stream(port, 3_200)
+          port.say({ t: 'voice.end', uploadId: 'next' })
+          expect(await answerTo(port, 'next')).toMatchObject({ t: 'voice.transcript', text: 'fix the login screen' })
+          expect(calls).toHaveLength(2)
+          expect(calls[1]!.bytes).toBe(3_200)
+        }
+        await vi.waitFor(() => expect(calls[0]!.signal?.aborted).toBe(true))
+
+        if (!afterEnd && (trigger === 'voice.abort' || carried)) {
+          await stream(port, 70 * SECOND, { settleEvery: true })
+          port.say({ t: 'voice.end', uploadId: 'held' })
+          await answerTo(port, 'held')
+          expect(calls).toHaveLength(1)
+        }
+
+        release(HELD); await settle(); await settle()
+        expect(port.sent.some(m => m.t === 'voice.transcript' && m.uploadId === 'held')).toBe(false)
+        expect(host.sendTurn).not.toHaveBeenCalledWith(expect.anything(), expect.stringContaining(HELD))
+      } finally { await session.stop() }
+    })
+  })
+
+  it.each([
+    { turn: 'a draft turn whose draft is gone', fields: { draftId: 'gone', draftRevision: 1, draftOp: 'replace' },
+      message: 'That draft changed. Review it again.' },
+    { turn: 'a question turn with no pinned question', fields: { agentId: 'a1', questionToken: 'gone', questionIndex: 0 },
+      message: 'This question changed. Open it again.' },
+    { turn: 'a carry turn with no prepared carry', fields: { agentId: 'a2', carryId: 'gone' },
+      message: 'The carried text expired. Choose it again.' },
+    { turn: 'a search turn with no command', fields: { searchId: 's1', agentId: 'a1' },
+      message: 'Choose a passage before searching.' },
+    { turn: 'a form turn with no command', fields: { formId: 'f1' }, message: 'Open a field and say its name again.' },
+    { turn: 'a selection turn with no agent', fields: { selectionId: 'p1' }, message: 'Choose the text again.' },
+    { turn: 'a selection turn on a host that cannot pin text', fields: { selectionId: 'p1', agentId: 'a1' },
+      message: 'Choose the text again.' },
+  ])('a turn already refused at voice.begin uploads nothing: $turn', async ({ fields, message }) => {
+    const lines: string[] = []
+    const { calls, transcribe } = transcriber(async () => 'fix the login screen')
+    const { session, port } = await connect(makeHost({ transcribe, log: line => lines.push(line) }))
+    try {
+      port.say(HELLO); await settle()
+      port.say({ t: 'voice.begin', uploadId: 'refused', ...fields })
+      await stream(port, 61 * SECOND, { settleEvery: true })
+      port.say({ t: 'voice.end', uploadId: 'refused' })
+      expect(await answerTo(port, 'refused')).toMatchObject({ t: 'voice.error', message })
+      expect(calls).toHaveLength(0)
+      expect(lines.some(l => l.startsWith('cable: voice segments='))).toBe(false)
+    } finally { await session.stop() }
+  })
+
+  // A voice.end that arrives twice is answered "Didn't catch that" the second time, as before: it has no recording of
+  // its own, so it must not stop the one the first is still transcribing.
+  it("a second voice.end does not stop the first one's upload", async () => {
+    let release!: (words: string) => void
+    const { calls, transcribe } = transcriber(() => new Promise<string>(resolve => { release = resolve }))
+    const { session, port, host } = await connect(makeHost({ transcribe }))
+    try {
+      port.say(HELLO); await settle()
+      port.say({ t: 'voice.begin', uploadId: 'twice', agentId: 'a1' })
+      await stream(port, 3_200)
+      port.say({ t: 'voice.end', uploadId: 'twice' })
+      await vi.waitFor(() => expect(calls).toHaveLength(1))
+      port.say({ t: 'voice.end', uploadId: 'twice' })
+      await vi.waitFor(() => expect(port.sent).toContainEqual(
+        expect.objectContaining({ t: 'voice.error', message: "Didn't catch that", uploadId: 'twice' })))
+      release('fix the login screen')
+      await vi.waitFor(() => expect(port.sent).toContainEqual(
+        expect.objectContaining({ t: 'voice.transcript', text: 'fix the login screen', uploadId: 'twice' })))
+      expect(host.sendTurn).toHaveBeenCalledWith('a1', 'fix the login screen')
+    } finally { await session.stop() }
   })
 })

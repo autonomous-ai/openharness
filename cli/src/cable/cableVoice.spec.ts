@@ -61,6 +61,30 @@ describe('cabled voice transcription', () => {
     expect(fetchMock.mock.calls[1]![1]?.body).toBe(fetchMock.mock.calls[0]![1]?.body)
   })
 
+  it('hands the abort signal to the post and to the 401 retry', async () => {
+    const { host, fetchMock } = setup()
+    const c = new AbortController()
+    fetchMock.mockResolvedValueOnce(rejected(401, 'UNAUTHORIZED')).mockResolvedValueOnce(ok())
+    await expect(host.transcribe(pcm, 16000, 'en', c.signal)).resolves.toBe('a test sentence')
+    expect(fetchMock.mock.calls[0]![1]?.signal).toBe(c.signal)
+    expect(fetchMock.mock.calls[1]![1]?.signal).toBe(c.signal)
+  })
+
+  it('an aborted signal rejects the upload', async () => {
+    const { host, fetchMock } = setup()
+    const c = new AbortController()
+    // As the real fetch: rejects with the signal's reason, whether it aborted before the call or during it.
+    fetchMock.mockImplementation((_url, options) => new Promise((_resolve, reject) => {
+      const signal = options?.signal
+      if (signal?.aborted) reject(signal.reason)
+      signal?.addEventListener('abort', () => reject(signal.reason))
+    }))
+    const upload = host.transcribe(pcm, 16000, 'en', c.signal)
+    c.abort()
+    await expect(upload).rejects.toMatchObject({ name: 'AbortError' })
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
   it('stops after the retry and gives a sign-in instruction for another 401', async () => {
     const { host, fetchMock, log } = setup()
     fetchMock.mockImplementation(async () => rejected(401, 'UNAUTHORIZED'))
