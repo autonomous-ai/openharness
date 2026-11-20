@@ -25,14 +25,13 @@
  * `codex queue` into a thread of the app, end to end, is not verified on Windows.
  */
 import { execFile } from 'node:child_process'
-import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { delimiter, isAbsolute, join } from 'node:path'
 import { binaryOnPath, resolveBinaryOnPath } from '../../lib/binaryOnPath.js'
 import { engineBin } from '../../lib/engineBin.js'
 import { loginShellEnvironment, oneShotParentEnv, warmLoginShellEnvironment } from '../../lib/loginShellEnv.js'
 import { windowsProgram } from '../../lib/windows/program.js'
-import { storePackageFolder } from '../../lib/windows/storePackage.js'
+import { storePackageLook, type StorePackageLook } from '../../lib/windows/storePackage.js'
 import { MAX_TEXT } from './orca.js'
 
 // `--thread` also takes a session's name: only a thread id may reach it.
@@ -49,12 +48,8 @@ const BINARY_LOOK_MS = 30_000
 /** Where the ChatGPT app keeps its own Codex CLI, inside the app. */
 const APP_CODEX = join('ChatGPT.app', 'Contents', 'Resources', 'codex-cli', 'CodexCLI.app', 'Contents', 'MacOS', 'codex')
 /** The ChatGPT app's Store package on Windows, and its own Codex CLI inside the package's folder. */
-const APP_PACKAGE = 'OpenAI.Codex'
+export const APP_PACKAGE = 'OpenAI.Codex'
 const PACKAGE_CODEX = join('app', 'resources', 'codex.exe')
-/** How long no package, or a failed ask for it, holds. Each ask is a PowerShell of 1.3 to 1.8 s on the VM
- *  (docs/plans/2026-11-19-dial-windows-vm-notes.md, "Fixes after Task 37" §2), taken while an app session is listed: an
- *  app installed later is found within it. */
-const PACKAGE_ASK_MS = 600_000
 
 /** Why a send failed, as the log line names it: codex's exit code; 'no binary' when it is not there or could not
  *  start; 'refused' for a thread id or a text the queue will not run. */
@@ -102,8 +97,8 @@ export function appCodexCandidates(named: string | undefined, home: string): str
   return [join('/Applications', APP_CODEX), join(home, 'Applications', APP_CODEX)]
 }
 
-/** [packageFolder]: where a Store package is installed for this user, on Windows. */
-export function codexQueueDeps(packageFolder: (name: string) => Promise<string | null> = storePackageFolder): Omit<CodexQueueDeps, 'home' | 'cwd'> {
+/** [look]: where the ChatGPT app's Store package is installed for this user, on Windows. */
+export function codexQueueDeps(look: StorePackageLook = storePackageLook(APP_PACKAGE)): Omit<CodexQueueDeps, 'home' | 'cwd'> {
   // The last look of each, on the monotonic clock: a wall clock set back would keep an old answer for as long.
   const looks = new Map<CodexRan, { at: number; path: string | null }>()
   const held = (which: CodexRan, look: () => string | null): string | null => {
@@ -112,28 +107,16 @@ export function codexQueueDeps(packageFolder: (name: string) => Promise<string |
     if (!last || now - last.at >= BINARY_LOOK_MS) looks.set(which, last = { at: now, path: look() })
     return last.path
   }
-  // The app's codex in its package on Windows, in the folder last asked. Asking starts a PowerShell, so a folder that is
-  // there is never asked for again, codex.exe in it or not; one that went (an update moves the package to a folder named
-  // for the new version) is asked for at once. No package, or a failed ask, is asked again after PACKAGE_ASK_MS. One ask
-  // at a time.
-  let folder: string | null = null
-  let noFolderAt: number | null = null
-  let asking = false
+  // The app's codex in its package on Windows, in the folder the look keeps: a folder that is there is never asked for
+  // again, codex.exe in it or not. Until the look has one, it is asked in the background.
   const packageCodex = (): string | null => {
-    if (folder !== null && existsSync(folder)) {
+    const folder = look.known()
+    if (folder !== null) {
       const codex = join(folder, PACKAGE_CODEX)
       return binaryOnPath(codex) ? codex : null
     }
-    if (!asking && (noFolderAt === null || performance.now() - noFolderAt >= PACKAGE_ASK_MS)) {
-      asking = true
-      void packageFolder(APP_PACKAGE).catch(() => null).then((answer) => {
-        asking = false
-        folder = answer
-        noFolderAt = answer === null ? performance.now() : null
-        // The look taken while it was asked found nothing: the next one is fresh.
-        if (answer !== null) looks.delete('app')
-      })
-    }
+    // The look taken while it was asked found nothing: the next one is fresh.
+    void look.ask().then((found) => { if (found !== null) looks.delete('app') })
     return null
   }
   const appLook = process.platform === 'win32'
