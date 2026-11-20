@@ -33,28 +33,38 @@ pub fn remove(command: &mut Command) {
 
 /// `vars` without what the AppImage mounted at their APPDIR added, None when they name no APPDIR (Tauri, too, takes
 /// APPDIR for the AppImage's; its runtime sets it over any the person had). Every variable loses its entries under
-/// APPDIR (`outside`), and SET_BY_APPIMAGE go. The rest is the person's: the GTK hook's `/usr/share` after its own in
-/// XDG_DATA_DIRS stays too, a folder the system lists anyway.
+/// APPDIR (`outside`), and SET_BY_APPIMAGE go. The rest is the person's.
 fn without_appimage(vars: Vars) -> Option<Vars> {
     let appdir = PathBuf::from(vars.get(OsStr::new("APPDIR"))?);
     if !appdir.is_absolute() {
         return None;
     }
+    // The GTK hook's XDG_DATA_DIRS is `$APPDIR/usr/share:/usr/share:` before the person's: that `/usr/share` is the
+    // app's too, and left there it would come before the session's own folders.
+    let hooks = [appdir.as_os_str().as_bytes(), b"/usr/share"].concat();
     let not_set_by_appimage = |(name, _): &(OsString, OsString)| !SET_BY_APPIMAGE.iter().any(|set| name == set);
     let kept = vars.into_iter().filter(not_set_by_appimage);
-    Some(kept.filter_map(|(name, value)| Some((name, outside(value, &appdir)?))).collect())
+    Some(
+        kept.filter_map(|(name, value)| {
+            let after = (name == "XDG_DATA_DIRS").then_some(hooks.as_slice());
+            Some((name, outside(value, &appdir, after)?))
+        })
+        .collect(),
+    )
 }
 
-/// `value`, a `:` list or a single path, without its entries under `appdir` (APPDIR itself among them); kept byte for
-/// byte when it has none. None when only empty entries are left: the `:` the AppImage put before a value the person
-/// did not have.
-fn outside(value: OsString, appdir: &Path) -> Option<OsString> {
-    let inside = |entry: &&[u8]| Path::new(OsStr::from_bytes(entry)).starts_with(appdir);
+/// `value`, a `:` list or a single path, without its entries under `appdir` (APPDIR itself among them) and a
+/// `/usr/share` right after the entry `after`; kept byte for byte when it has none under `appdir`. None when only
+/// empty entries are left: the `:` the AppImage put before a value the person did not have.
+fn outside(value: OsString, appdir: &Path, after: Option<&[u8]>) -> Option<OsString> {
+    let inside = |entry: &[u8]| Path::new(OsStr::from_bytes(entry)).starts_with(appdir);
     let entries: Vec<&[u8]> = value.as_bytes().split(|&byte| byte == b':').collect();
-    if !entries.iter().any(inside) {
+    if !entries.iter().any(|entry| inside(entry)) {
         return Some(value);
     }
-    let left: Vec<&[u8]> = entries.into_iter().filter(|entry| !inside(entry)).collect();
+    let added =
+        |at: usize| inside(entries[at]) || (at > 0 && entries[at] == b"/usr/share" && Some(entries[at - 1]) == after);
+    let left: Vec<&[u8]> = (0..entries.len()).filter(|&at| !added(at)).map(|at| entries[at]).collect();
     (!left.iter().all(|entry| entry.is_empty())).then(|| OsString::from_vec(left.join(&b':')))
 }
 
