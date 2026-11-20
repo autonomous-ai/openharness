@@ -1,5 +1,5 @@
 name: Release Harness Device
-run-name: Harness Device ${{ inputs.publish && 'release' || 'candidate' }} ${{ inputs.version }}
+run-name: Harness Device ${{ inputs.publish && 'release' || 'candidate' }} ${{ inputs.version }} (${{ inputs.platforms }})
 
 # Started by `make release-device` only (device-app/RELEASE.md): on the tag v<version>_device it just pushed, with
 # publish, or on main without it (--prepare). Neither a commit nor a tag starts it.
@@ -257,7 +257,8 @@ jobs:
       run:
         shell: bash
     steps:
-      # GitHub's Windows images set core.autocrlf, and bash cannot run a script checked out with CRLF line ends.
+      # GitHub's Windows images set core.autocrlf: the exe embeds the UI built from these files, so it builds from the
+      # committed bytes, as on macOS and Linux.
       - run: git config --global core.autocrlf false
 
       - uses: actions/checkout@v7
@@ -313,9 +314,6 @@ jobs:
       run:
         shell: bash
     steps:
-      # GitHub's Windows images set core.autocrlf, and bash cannot run a script checked out with CRLF line ends.
-      - run: git config --global core.autocrlf false
-
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
@@ -417,7 +415,8 @@ jobs:
       run:
         shell: bash
     steps:
-      # GitHub's Windows images set core.autocrlf, and bash cannot run a script checked out with CRLF line ends.
+      # GitHub's Windows images set core.autocrlf, and the sed below reads tauri.conf.json's pubkey line up to its end:
+      # a CR there would match nothing.
       - run: git config --global core.autocrlf false
 
       - uses: actions/checkout@v7
