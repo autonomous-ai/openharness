@@ -21,8 +21,8 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
-# UTF-8 with no BOM, here and in the wrapper: Windows PowerShell reads a program's output, and writes its own, in the OEM
-# code page, which turns a profile's Vietnamese letters into `?`.
+# UTF-8 with no BOM, here and in the wrapper (which sets it its own way): Windows PowerShell reads a program's output,
+# and writes its own, in the OEM code page, which turns a profile's Vietnamese letters into `?`.
 $utf8 = New-Object Text.UTF8Encoding $false
 [Console]::OutputEncoding = $utf8
 $dir = $PSScriptRoot
@@ -81,7 +81,6 @@ $files = Files $name
 [IO.File]::WriteAllText($files.call, (ConvertTo-Json -Compress -InputObject @{ script = $path; args = $words }), $utf8)
 # The same for every task: it finds its files beside itself, by its own name.
 @'
-[Console]::OutputEncoding = New-Object Text.UTF8Encoding $false
 $ErrorActionPreference = 'Continue'
 $global:LASTEXITCODE = 0
 $code = 0
@@ -89,6 +88,14 @@ $base = $PSCommandPath -replace '\.ps1$', ''
 $log = "$base.log"
 [IO.File]::WriteAllText($log, '')
 try {
+  # A program's output is read in [Console]::OutputEncoding. In the task's headless conhost this PowerShell has no
+  # console whose code page it can set: the setter throws, unseen, and the getter falls back to the ANSI page (the VM read
+  # UTF-8 as Windows-1252 letters). So the encoding .NET Framework keeps for it, which its getter returns first, is set
+  # itself, here, where a failure reaches the log. $OutputEncoding is what PowerShell writes to a program's input in
+  # (ASCII by default).
+  $utf8 = New-Object Text.UTF8Encoding $false
+  [Console].GetField('_outputEncoding', [Reflection.BindingFlags]'NonPublic,Static').SetValue($null, $utf8)
+  $OutputEncoding = $utf8
   $call = [IO.File]::ReadAllText("$base.json") | ConvertFrom-Json
   $program = $call.script
   $words = @($call.args)

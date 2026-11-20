@@ -4,12 +4,14 @@
  * checks' (scripts/windows-dial-e2e/README.md).
  */
 import { execFile } from 'node:child_process'
+import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { CLI_ROOT } from './harness/daemon.js'
 import { besideEnvironment, endedWithin, ownHomes, sealedPath } from './harness/windowsDaemon.js'
 
 const DESK = join(CLI_ROOT, 'scripts', 'windows-dial-e2e', 'desk.mts')
+const CONSOLE = join(CLI_ROOT, 'scripts', 'windows-dial-e2e', 'console.ps1')
 
 /** The desk run with [args]: its exit code and what it said on stderr. */
 function desk(args: string[]): Promise<{ code: number | null; stderr: string }> {
@@ -83,5 +85,19 @@ describe('the Windows dial tools', () => {
   it.runIf(process.platform !== 'win32')('the desk takes a program beside it, its arguments as they are, and then stops where it is not Windows', async () => {
     expect(await desk(['--beside', 'C:\\run\\root', '--run', 'C:\\h\\wezterm.exe', 'start', '--', 'C:\\h\\herdr.exe']))
       .toEqual({ code: 1, stderr: 'the desk runs on Windows\n' })
+  })
+
+  // On the VM a program's UTF-8 output came back as `Nguyá»…n` (2026-11-20, the VM notes' Final head §7): in the task's
+  // headless conhost the wrapper's PowerShell has no console whose code page it can set, so .NET's encoding for a
+  // program's output fell back to the ANSI page. Read as text: no PowerShell runs here.
+  it('console.ps1\'s wrapper sets the encoding a program\'s output is read in, with no console, before it runs the script', () => {
+    const wrapper = /@'\r?\n([\s\S]*?)\r?\n'@/.exec(readFileSync(CONSOLE, 'utf8'))![1]
+    const runs = wrapper.indexOf('& $program')
+    const cached = wrapper.indexOf("[Console].GetField('_outputEncoding', [Reflection.BindingFlags]'NonPublic,Static').SetValue($null, $utf8)")
+    const input = wrapper.indexOf('$OutputEncoding = $utf8')
+    expect(wrapper).toMatch(/^\s*\$utf8 = New-Object Text\.UTF8Encoding \$false$/m)
+    expect([cached, input].every((at) => at >= 0 && at < runs)).toBe(true)
+    // The setter alone throws with no console, unseen: one way, the one that holds.
+    expect(wrapper).not.toContain('[Console]::OutputEncoding =')
   })
 })
