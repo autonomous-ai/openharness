@@ -1,9 +1,32 @@
-import { watch } from 'node:fs'
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { realpathSync, watch } from 'node:fs'
+import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import type { PathToWatchDeps } from '../../lib/pathToWatch.js'
 import { watchNearest } from './folderWatch.js'
+
+/** Each folder fs.watch is given, in order. */
+const given = vi.hoisted(() => [] as string[])
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>()
+  const watch = ((path: string, ...rest: unknown[]) => {
+    given.push(path)
+    return (actual.watch as (...args: unknown[]) => unknown)(path, ...rest)
+  }) as typeof actual.watch
+  return { ...actual, watch, default: { ...actual, watch } }
+})
+/** This computer, unless a case says Windows. */
+const toWatch = vi.hoisted(() => ({ deps: undefined as PathToWatchDeps | undefined }))
+vi.mock('../../lib/pathToWatch.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../lib/pathToWatch.js')>()
+  return { pathToWatch: (path: string) => actual.pathToWatch(path, toWatch.deps) }
+})
+
+afterEach(() => {
+  toWatch.deps = undefined
+  given.length = 0
+})
 
 /** Makes a change once every watch started so far is live, then waits until `count` grows. On macOS fs.watch starts its
  *  stream on another thread, one stream for every folder the process watches (libuv's FSEvents), so a change made at
@@ -107,5 +130,29 @@ describe('one watch on the nearest existing folder', () => {
       other.stop()
     }
     expect(stopped.count()).toBe(before)
+  })
+
+  // libuv aborts the process at the first change in a folder watched by an 8.3 short name (lib/pathToWatch.ts). A
+  // short name is another name of the same folder, as a link is here.
+  it('on Windows it watches a folder by its long name, and tells the names in it as they are', async () => {
+    const t = await mkdtemp(join(tmpdir(), 'fw-'))
+    const long = join(t, 'hxdialtest')
+    const short = join(t, 'HXDIAL~1')
+    await mkdir(long)
+    await symlink(long, short)
+    toWatch.deps = { platform: 'win32', realpath: (path) => realpathSync.native(path), log: () => {} }
+    const names: Array<string | undefined> = []
+    let told = 0
+    const stop = watchNearest([join(short, 'b'), short], (file) => { told++; names.push(file) })
+    try {
+      await toldOf(() => told, () => mkdir(join(long, 'b')))
+      await toldOf(() => told, () => writeFile(join(long, 'b', 'one'), ''))
+    } finally {
+      stop()
+    }
+    expect(given.filter((folder) => folder.includes('HXDIAL~1'))).toEqual([])
+    expect(given).toContain(realpathSync.native(long))
+    expect(names).toContain('b')
+    expect(names).toContain('one')
   })
 })
