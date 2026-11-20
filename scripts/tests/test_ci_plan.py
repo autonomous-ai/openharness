@@ -143,6 +143,29 @@ class SelectionTests(unittest.TestCase):
         self.assertLess(job.index("cargo test --locked --manifest-path device-app/src-tauri/Cargo.toml"),
                         job.index("X11 front source, live"))
         self.assertNotIn("macos", job)
+        # Every step but the checkout names its leg: a Linux step that lost its condition would run, and fail, on
+        # Windows.
+        steps = re.split(r"(?m)^      - ", job.split("\n    steps:\n", 1)[1])[1:]
+        legs = [re.search(r"(?m)^(?:        )?if: runner\.os == '(\w+)'$", step) for step in steps]
+        for step, leg in zip(steps, legs):
+            with self.subTest(step=step.splitlines()[0]):
+                if "actions/checkout@" in step:
+                    self.assertIsNone(leg)
+                else:
+                    self.assertIsNotNone(leg)
+
+        def leg_of(text):
+            [leg] = [leg.group(1) for step, leg in zip(steps, legs) if leg and text in step]
+            return leg
+
+        for text, expected in (("-s device-app/scripts", "Linux"), ("libwebkit2gtk-4.1-dev", "Linux"),
+                               ("actions/setup-node@", "Linux"), ("npx vitest run", "Linux"),
+                               ("shared-key: device-app-pr\n", "Linux"),
+                               ("run: cargo test --locked --manifest-path", "Linux"), ("--ignored x11_live", "Linux"),
+                               ("shared-key: device-app-pr-windows", "Windows"),
+                               ("run: cargo test --locked --lib --manifest-path", "Windows")):
+            with self.subTest(text=text):
+                self.assertEqual(leg_of(text), expected)
 
     def test_the_cli_ptyhost_backend_and_the_vendored_terminal_also_belong_to_the_pty_suite(self):
         for path, expected in {
