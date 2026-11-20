@@ -19,10 +19,6 @@ pub const ENTRY: &str = "harnessd.desktop";
 const NOT_AN_APPIMAGE: &str = "Login item not added (not an AppImage).";
 const PATH_NOT_SUPPORTED: &str = "Login item not added (path not supported).";
 
-/// The command, quoted for an `Exec=` value: the AppImage while it is there; once it is gone, the launcher's `start`,
-/// as the installer's own entry runs it. The two paths follow as `$0` and `$1`, so neither is ever read as shell.
-const RUN: &str = r#"/bin/sh -c "[ -x \\"\\$0\\" ] && exec \\"\\$0\\"; exec \\"\\$1\\" start""#;
-
 /// `<config>/autostart/harnessd.desktop`: `$XDG_CONFIG_HOME` only when it is absolute, as the XDG spec and the
 /// installer say, else `<home>/.config`.
 pub fn entry_path(config_home: Option<&OsStr>, home: &Path) -> PathBuf {
@@ -38,30 +34,22 @@ pub fn appimage(var: Option<&OsStr>) -> Option<PathBuf> {
     var.map(PathBuf::from).filter(|path| path.is_absolute() && path.is_file())
 }
 
-/// The entry's `Exec=` value. None for a path one UTF-8 line cannot hold.
+/// The entry's `Exec=` value: the AppImage while it is there; once it is gone, the launcher's `start`, as the
+/// installer's own entry runs it. The value holds no `\`, `$`, backtick or `"` but the two around the `sh -c` text, so
+/// it reads the same whichever way the session reads it: GLib's, or systemd's autostart generator (GNOME and KDE
+/// under systemd), which writes `$` as `\$` in the unit and keeps that backslash. None for a path it cannot hold.
 pub fn exec_line(appimage: &Path, launcher: &Path) -> Option<String> {
-    Some(format!("{RUN} {} {}", quoted(appimage)?, quoted(launcher)?))
+    let (appimage, launcher) = (quoted(appimage)?, quoted(launcher)?);
+    Some(format!(r#"/bin/sh -c "[ -x {appimage} ] && exec {appimage}; exec {launcher} start""#))
 }
 
-/// A path as one `Exec=` argument, in the Desktop Entry spec's two layers (the quoting inside a string value, as the
-/// installer's login_entry_exec writes it): a backslash is doubled twice, `"`, a backtick and `$` take an escaped
-/// backslash, and `%`, a field code there, is doubled. GLib refuses a value with any other escape.
+/// A path in single quotes, which keep every other character from the shell; `%`, a field code in `Exec=`, doubled.
+/// None for a path holding a character a quote cannot hold in both readings (`'`, `"`, `$`, a backtick, a backslash, a
+/// control character), or not UTF-8.
 fn quoted(path: &Path) -> Option<String> {
-    let text = path.to_str().filter(|text| !text.chars().any(char::is_control))?;
-    let mut out = String::from("\"");
-    for c in text.chars() {
-        match c {
-            '\\' => out.push_str(r"\\\\"),
-            '"' | '`' | '$' => {
-                out.push_str(r"\\");
-                out.push(c);
-            }
-            '%' => out.push_str("%%"),
-            c => out.push(c),
-        }
-    }
-    out.push('"');
-    Some(out)
+    let text = path.to_str()?;
+    let refused = |c: char| c.is_control() || matches!(c, '\'' | '"' | '$' | '`' | '\\');
+    (!text.chars().any(refused)).then(|| format!("'{}'", text.replace('%', "%%")))
 }
 
 /// A new entry, in the installer's format but for the line.

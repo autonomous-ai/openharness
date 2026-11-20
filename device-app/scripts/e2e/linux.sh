@@ -272,10 +272,8 @@ save_state() {
   printf '{"version":1,"cliSeen":true,"askedSignIn":%s,"loginItem":%s}\n' "$1" "$2" >"$data/state.json"
 }
 
-# The entry's Exec= for this AppImage and the launcher in the scratch HOME: loginitem_linux.rs RUN, then both paths.
-# shellcheck disable=SC2016 # the entry's text, which no shell here expands
-run_line='/bin/sh -c "[ -x \\"\\$0\\" ] && exec \\"\\$0\\"; exec \\"\\$1\\" start"'
-own_exec="Exec=$run_line \"$appimage\" \"$home/.local/bin/harness\""
+# The entry's Exec= for this AppImage and the launcher in the scratch HOME: loginitem_linux.rs exec_line.
+own_exec="Exec=/bin/sh -c \"[ -x '$appimage' ] && exec '$appimage'; exec '$home/.local/bin/harness' start\""
 
 # --- The update: 0.0.1 from update-pair.sh, with no CLI and nothing in its way, finds 0.0.2 at 127.0.0.1:8765 and
 # becomes it
