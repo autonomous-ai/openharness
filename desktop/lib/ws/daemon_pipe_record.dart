@@ -47,7 +47,9 @@ final _tokenText = RegExp(r'^[0-9a-f]{64}\n?$');
 const _maxRecordBytes = 4096;
 
 /// The daemon's data folder: `ADAPTER_DATA_DIR`, else `cli\data` in Harness's
-/// data root (`%USERPROFILE%\.harness` on Windows). Null with no home at all.
+/// data root (`%USERPROFILE%\.harness` on Windows). A relative
+/// `ADAPTER_DATA_DIR` is in the home, as every Harness process reads it, never
+/// in the app's start folder. Null when it needs a home and there is none.
 /// [look] is for tests: the root is found by it, this computer's by default.
 String? defaultDaemonDataDir({
   Map<String, String>? environment,
@@ -56,11 +58,13 @@ String? defaultDaemonDataDir({
 }) {
   final env = environment ?? Platform.environment;
   final windows = isWindows ?? Platform.isWindows;
+  final context = windows ? p.windows : p.posix;
   final override = env['ADAPTER_DATA_DIR'];
-  if (override != null && override.isNotEmpty) return override;
+  final overridden = override != null && override.isNotEmpty;
+  if (overridden && context.isAbsolute(override)) return override;
   final home = maybeHomeDir(environment: env, isWindows: windows);
   if (home == null) return null;
-  final context = windows ? p.windows : p.posix;
+  if (overridden) return context.join(home, override);
   // The Linux rule never runs for a Windows path, whatever the host: no
   // Windows profile has the XDG roots.
   final harness = windows
