@@ -48,7 +48,9 @@ const _desktopOwnVariables = {
 };
 
 /// The app at [path], with no argument, detached: it outlives Desktop and is
-/// no child of it.
+/// no child of it. It works in its own folder, as its Start Menu entry starts
+/// it: Windows cannot remove a folder that is a process's working folder, and
+/// Desktop's is its version folder, which an update or an uninstall removes.
 Future<void> startDeviceAppDetached(
   String path,
   Map<String, String> environment,
@@ -56,6 +58,7 @@ Future<void> startDeviceAppDetached(
   await Process.start(
     path,
     const [],
+    workingDirectory: p.dirname(path),
     environment: environment,
     includeParentEnvironment: false,
     mode: ProcessStartMode.detached,
