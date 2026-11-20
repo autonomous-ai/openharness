@@ -215,12 +215,12 @@ DEPENDS = {
                 "tests/fixtures/app-list-entry-vectors.json"),
 }
 # An end-to-end suite reads what the unit suites of the code it runs read, and all of that code: windows.yml builds the
-# PTY host, the serial bridge, the TUI and the installer, and runs the CLI's specs, the dial plugins' and the website's
-# flasher; the Device jobs run the app, Desktop's install of it and the website's one-line installer. linux-e2e and
-# dial-hosts run the CLI's e2e files on its build, which inlines the dial plugins; linux-e2e also starts the real backend.
+# PTY host, the serial bridge and the TUI, and runs the CLI's specs, the dial plugins' and the website's flasher; the
+# Device jobs run the app, Desktop's install of it and the website's one-line installer. linux-e2e and dial-hosts run the
+# CLI's e2e files on its build, which inlines the dial plugins; linux-e2e also starts the real backend.
 DEPENDS.update({
     "windows-e2e": DEPENDS["cli"] + DEPENDS["pty"] + DEPENDS["tui"] + (
-        "cli/", "tests/", "plugins/", "pty/", "serial/", "term/", "tui/", "installer/", "website/"),
+        "cli/", "tests/", "plugins/", "pty/", "serial/", "term/", "tui/", "website/"),
     # device-app/src-tauri/: dialAppFilterOnDial.e2e.ts starts the Device app's debug build (with a dial, by hand).
     "linux-e2e": DEPENDS["cli"] + ("cli/", "tests/", "plugins/harness-device-orca/", "plugins/harness-device-vscode/",
                                    "backend/", "device-app/src-tauri/"),
@@ -396,24 +396,35 @@ def owners(path):
     return scopes
 
 
+def windows_docs(path):
+    """Docs and images in windows-e2e's folders: nothing windows.yml builds or runs reads them, but the notices the TUI
+    compiles in (tui/src/main.rs)."""
+    return (path.endswith((".md", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp"))
+            and path != "tui/THIRD_PARTY_NOTICES.md")
+
+
 def windows_only(path):
     """Code that runs on Windows alone, where windows-e2e's arm64 leg tests what its x64 leg does not."""
-    return (path.startswith(("pty/", "term/", "serial/", "installer/", "cli/src/lib/ptyHost", "cli/scripts/windows-ci/"))
-            or PurePosixPath(path).name == "install.ps1" or path == ".github/workflows/windows.yml"
-            # A file's own name under cli/, not a folder's (cli/src/lib/windows/ runs x64 alone): arm64 adds about 27
-            # runner-minutes a run.
-            or (path.startswith("cli/") and re.search(r"[wW]indows", PurePosixPath(path).name) is not None))
+    return not windows_docs(path) and (
+        # The host's crate, the terminal it builds on (term/, and the vendored one in tui/vendor/), the serial bridge.
+        path.startswith(("pty/", "term/", "tui/vendor/", "serial/", "cli/src/lib/ptyHost", "cli/scripts/windows-ci/"))
+        or PurePosixPath(path).name == "install.ps1"
+        or path in {".github/workflows/windows.yml", "cli/vitest.e2e.windows.config.ts",
+                    "cli/scripts/windows-install-manifest.mjs"}
+        # A file's own name, not a folder's (cli/src/lib/windows/ runs x64 alone), in the code its specs and the dial's
+        # end to end run: arm64 adds about 27 runner-minutes a run.
+        or (path.startswith(("cli/src/", "cli/e2e/")) and re.search(r"[wW]indows", PurePosixPath(path).name) is not None))
 
 
 def windows_e2e(path):
     """What windows-e2e tests: Windows-only code, cross-platform code with win32 branches that broke only on Windows
     (#4513: the devices, the cable, the engines' hook scripts, the dial plugins), the TUI and the flasher windows.yml
     runs, and its specs with the modules they test."""
-    return (windows_only(path)
-            or path.startswith(("cli/src/lib/windows/", "cli/src/devices/", "cli/src/cable/", "cli/hook/", "tui/",
-                                "website/src/app/flash-circle.ps1/"))
-            or re.match(r"plugins/harness-device[^/]*/", path) is not None
-            or path in WINDOWS_SPEC_MODULES or any(covers(spec, path) for spec in WINDOWS_SPECS))
+    return windows_only(path) or not windows_docs(path) and (
+        path.startswith(("cli/src/lib/windows/", "cli/src/devices/", "cli/src/cable/", "cli/hook/", "tui/",
+                         "website/src/app/flash-circle.ps1/"))
+        or re.match(r"plugins/harness-device[^/]*/", path) is not None
+        or path in WINDOWS_SPEC_MODULES or any(covers(spec, path) for spec in WINDOWS_SPECS))
 
 
 def listed(entry, path):
