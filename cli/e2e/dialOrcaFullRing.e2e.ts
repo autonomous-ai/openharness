@@ -1,10 +1,10 @@
 /**
  * A ring that replaces a full one reaches the dial whole (docs/plans/2026-11-20-dial-orca-pick-choose-pane-design.md), on
  * the real daemon. Diego, 2026-11-20 17:32:40: the dial held another app's 16 agents, Orca came in front with one, and
- * the firmware, which adds a list's agents before it removes the old tiles and holds 16 (app_main.c `refresh_projects`),
- * refused Orca's agent, removed the 16 and showed "Choose a pane". The daemon now sends such a ring in two steps: the
- * agents the dial already holds (here none), then, a second later, the ring. WezTerm stands in for the other app: a
- * hook that names `WEZTERM_PANE` is all its sessions need, and no WezTerm runs.
+ * the firmware, which adds a list's agents before it removes the old tiles and holds 16 (app_main.c
+ * `refresh_projects`), refused Orca's agent, removed the 16 and showed "Choose a pane". The daemon now sends such a
+ * ring in two steps: the agents the dial already holds (here none), then, a second later, the ring. WezTerm stands in
+ * for the other app: a hook that names `WEZTERM_PANE` is all its sessions need, and no WezTerm runs.
  *
  * The route (the plan's "Decisions made in this plan"): the fault lives between the daemon's pushes and the firmware's
  * carousel, so only a dial that keeps its carousel as the firmware does shows it (harness/fakeDial.ts `carousel()`).

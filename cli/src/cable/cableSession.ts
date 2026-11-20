@@ -2845,9 +2845,9 @@ export class CableSession {
    * while the dial's voice is open and as long after it closes. The firmware applies a list on its refresh task, woken by
    * the list's agents.end, and none while its voice upload runs (app_main.c refresh_task, audio_client_active()), and an
    * agents.begin before then empties the buffer step 1 waits in (cable_client.c handle_agents_begin): the ring would
-   * meet the old tiles there and lose its new agents again. A voice holds at most VOICE_MAX_MS from its begin, as long as
-   * a dial records: a turn whose voice.end was lost on the cable stays open here, and would hold the ring, on step 1's
-   * tiles or none, until the next voice.
+   * meet the old tiles there and lose its new agents again. A voice holds at most VOICE_MAX_MS from its begin, as long
+   * as a dial records: a turn whose voice.end was lost on the cable stays open here, and would hold the ring, on step
+   * 1's tiles or none, until the next voice.
    */
   private holdsStep2(now: number): boolean {
     return this.splitAt !== null && (now - this.splitAt < AGENTS_PUSH_GAP_MS ||
