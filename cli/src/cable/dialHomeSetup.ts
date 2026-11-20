@@ -13,7 +13,6 @@ import { rolloutHome, takesOwner, type RolloutOwner } from './codexRolloutHome.j
 
 export interface DialHomeSetupDeps {
   dataDir: string
-  platform: NodeJS.Platform
   uid: number
   /** The daemon's own homes: dirname(env.CLAUDE_PROJECTS_DIR), env.CODEX_HOME. */
   claudeHome: string

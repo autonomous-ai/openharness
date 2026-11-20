@@ -487,7 +487,8 @@ describe('the dial skill', () => {
     const failedInstall = fakeClaude({ 'plugin install harness-device@openharness --scope user': { code: 1, stderr: 'Plugin not found' } })
     const cases: Array<[string, string[], Partial<DeviceDeps>]> = [
       ['a failed install', ['claude', 'enable'], { claude: () => failedInstall }],
-      ['Claude Code on Windows', ['claude', 'enable'], { platform: 'win32' }],
+      // On Windows `claude` on PATH can be the Claude desktop app, which is not Claude Code.
+      ['the Claude app on Windows', ['claude', 'enable'], { platform: 'win32', claude: () => fakeClaude({ '--version': { code: 0, stdout: 'Claude 1.4.0\n' } }) }],
       ['Codex on FreeBSD', ['codex', 'enable'], { platform: 'freebsd' }],
       ['Codex not installed', ['codex', 'enable'], { codex: () => false }],
     ]
@@ -1360,7 +1361,6 @@ describe('harness device orca status, enable and disable', () => {
   it('disable with no Orca on this computer: off, exit 0', async () => {
     const none: [string, () => OrcaPluginRun][] = [
       ['no orca', () => ({ ...orcaRun(), orca: () => null })],
-      ['Windows', () => ({ ...orcaRun(), platform: 'win32' })],
       ['a run from the sources', () => orcaRun(null)],
     ]
     for (const [name, orca] of none) {
