@@ -313,7 +313,7 @@ describe('the dial skill', () => {
     expect(ownDirectory(skills, -1, [realpathSync(folder())])).toBe('unreadable')
   })
 
-  it('on Windows a folder or file is this account\'s own when it is real and its real path is in the profile, whatever its uid', () => {
+  it('on Windows a folder through its links, or a real file, is this account\'s own when its real path is in the profile, whatever its uid', () => {
     const root = realpathSync(folder())
     const roots = [root]
     const inside = join(root, 'skills')
@@ -339,13 +339,19 @@ describe('the dial skill', () => {
     expect(ownDirectory(root, -1, roots)).toBe('ok')
     expect(ownDirectory(outside, -1, roots)).toBe('owner')
     expect(ownDirectory(beside, -1, roots)).toBe('owner')
-    // A link or junction inside the profile is the person's, wherever it points.
-    expect(ownDirectory(linked, -1, roots)).toBe('owner')
+    // A folder's link or junction is followed, as a Mac's stat follows it: its real folder decides.
+    expect(ownDirectory(linked, -1, roots)).toBe('ok')
+    expect(ownWindowsPath(linked, 'directory', roots)).toBe('ok')
+    expect(ownDirectory(away, -1, roots)).toBe('owner')
+    const dangling = join(root, 'dangling')
+    symlinkSync(join(root, 'gone'), dangling)
+    expect(ownDirectory(dangling, -1, roots)).toBe('missing')
     // A real folder reached through a link to outside.
     expect(ownDirectory(join(away, 'real'), -1, roots)).toBe('owner')
     expect(ownDirectory(join(root, 'nothing'), -1, roots)).toBe('missing')
     expect(ownDirectory(file, -1, roots)).toBe('missing')
     expect(ownWindowsPath(file, 'file', roots)).toBe('ok')
+    // A file's link is the person's, wherever it points.
     expect(ownWindowsPath(fileLink, 'file', roots)).toBe('owner')
     expect(ownWindowsPath(inside, 'file', roots)).toBe('missing')
 
