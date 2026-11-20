@@ -50,7 +50,7 @@ const flush = () => new Promise<void>((done) => setImmediate(done))
 function world(answers: (Ran | Promise<Ran>)[], win = fakeWindow(), over: Partial<LoopInputs> = {}) {
   let time = 0
   const timers = new Set<Timer>()
-  const runs: { file: string; args: readonly string[]; path: string; timeoutMs: number; maxBytes: number; signal: AbortSignal; at: number }[] = []
+  const runs: { file: string; args: readonly string[]; path: string; cwd: string; timeoutMs: number; maxBytes: number; signal: AbortSignal; at: number }[] = []
   const watches: Watch[] = []
   const streams: Stream[] = []
   const posts: Post[] = []
@@ -246,31 +246,34 @@ describe('startLoop', () => {
     }
   })
 
-  it("the home's launcher is tried before PATH's, with device vscode link, 5 s and 4 KiB", async () => {
+  it("the home's launcher is tried before PATH's, in the home, with device vscode link, 5 s and 4 KiB", async () => {
     const w = world([MISSING, MISSING])
     await w.until(() => w.states.length > 0)
-    expect(w.runs.map(({ file, args, path, timeoutMs, maxBytes }) => ({ file, args, path, timeoutMs, maxBytes }))).toEqual([
-      { file: '/h/.local/bin/harness', ...LINK },
-      { file: 'harness', ...LINK },
+    expect(w.runs.map(({ file, args, path, cwd, timeoutMs, maxBytes }) => ({ file, args, path, cwd, timeoutMs, maxBytes }))).toEqual([
+      { file: '/h/.local/bin/harness', ...LINK, cwd: '/h' },
+      { file: 'harness', ...LINK, cwd: '/h' },
     ])
     // The first answer that is not missing is the launcher's.
     const second = world([MISSING, UNPLUGGED])
     await second.until(() => second.states.length > 0)
     expect(second.states).toEqual(['unplugged'])
-    // With no home, PATH's alone.
-    const homeless = world([MISSING], fakeWindow(), { home: '' })
-    await homeless.until(() => homeless.states.length > 0)
-    expect(homeless.runs.map((run) => run.file)).toEqual(['harness'])
   })
 
   // A relative folder, or an empty one, is the extension host's working folder, which can be the folder VS Code opened:
-  // in Restricted Mode an untrusted one, whose own `harness` must never run.
-  it("only PATH's absolute folders, and only a home that is absolute, are looked in", async () => {
-    const w = world([MISSING, MISSING], fakeWindow(), { path: 'node_modules/.bin::/usr/bin:.:/bin:', home: 'h' })
+  // in Restricted Mode an untrusted one, whose own `harness` must never run. With no absolute home there is no folder of
+  // the account's own to run in, and no Harness either: it keeps its state there.
+  it("only PATH's absolute folders are looked in, and with no absolute home nothing runs", async () => {
+    const w = world([MISSING, MISSING], fakeWindow(), { path: 'node_modules/.bin::/usr/bin:.:/bin:' })
     await w.until(() => w.states.length > 0)
-    expect(w.runs.map(({ file, args, path, timeoutMs, maxBytes }) => ({ file, args, path, timeoutMs, maxBytes }))).toEqual([
-      { file: 'harness', ...LINK },
+    expect(w.runs.map(({ file, path }) => ({ file, path }))).toEqual([
+      { file: '/h/.local/bin/harness', path: LINK.path },
+      { file: 'harness', path: LINK.path },
     ])
+    for (const home of ['', 'h']) {
+      const homeless = world([], fakeWindow(), { home })
+      await homeless.until(() => homeless.states.length > 0)
+      expect([homeless.runs, homeless.states]).toEqual([[], ['noHarness']])
+    }
   })
 
   it.each([
@@ -992,12 +995,15 @@ describe('startLoop', () => {
 })
 
 describe('startLoop on Windows', () => {
-  it("runs the profile's harness.exe first, then harness in PATH's absolute folders, each name one argument", async () => {
+  // In the profile: Windows looks for a bare name in the working folder before PATH, and the extension host's can be the
+  // folder VS Code opened.
+  it("runs the profile's harness.exe first, then harness in PATH's absolute folders, in the profile, each name one argument", async () => {
     const w = world([MISSING, MISSING], fakeWindow(), { ...WINDOWS, path: 'C:\\Windows\\System32;.;node_modules\\.bin;;C:\\Program Files\\nodejs' })
     await w.until(() => w.states.length > 0)
-    expect(w.runs.map(({ file, args, path }) => ({ file, args, path }))).toEqual([
-      { file: "C:\\Users\\Nguyễn Văn A' & 100%\\.harness\\bin\\harness.exe", args: LINK.args, path: 'C:\\Windows\\System32;C:\\Program Files\\nodejs' },
-      { file: 'harness', args: LINK.args, path: 'C:\\Windows\\System32;C:\\Program Files\\nodejs' },
+    const path = 'C:\\Windows\\System32;C:\\Program Files\\nodejs'
+    expect(w.runs.map(({ file, args, path, cwd }) => ({ file, args, path, cwd }))).toEqual([
+      { file: "C:\\Users\\Nguyễn Văn A' & 100%\\.harness\\bin\\harness.exe", args: LINK.args, path, cwd: WINDOWS.home },
+      { file: 'harness', args: LINK.args, path, cwd: WINDOWS.home },
     ])
     expect(w.states).toEqual(['noHarness'])
   })

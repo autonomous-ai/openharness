@@ -3,7 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { execFile } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
-import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -47,8 +47,8 @@ function script(name: string, body: string): string {
   return file
 }
 
-function bounds(extra: { path?: string; timeoutMs?: number; maxBytes?: number; signal?: AbortSignal } = {}) {
-  return { path: '/usr/bin:/bin', timeoutMs: 5_000, maxBytes: 4_096, signal: new AbortController().signal, ...extra }
+function bounds(extra: { path?: string; cwd?: string; timeoutMs?: number; maxBytes?: number; signal?: AbortSignal } = {}) {
+  return { path: '/usr/bin:/bin', cwd: dir, timeoutMs: 5_000, maxBytes: 4_096, signal: new AbortController().signal, ...extra }
 }
 
 async function serve(
@@ -123,6 +123,26 @@ describe('nodeInputs', () => {
     mkdirSync(`${dir}/bin`)
     script('bin/hdv-tool', 'echo "found $PATH"')
     expect(await nodeInputs().run('hdv-tool', [], bounds({ path: `${dir}/bin` }))).toBe(`found ${dir}/bin\n`)
+  })
+
+  unix('run starts its file in the folder it is given', async () => {
+    mkdirSync(`${dir}/home`)
+    expect(await nodeInputs().run('/bin/pwd', [], bounds({ cwd: `${dir}/home` }))).toBe(`${realpathSync(`${dir}/home`)}\n`)
+  })
+
+  // Windows looks for a bare name in the working folder before PATH: the extension host's can be the folder VS Code
+  // opened, whose own harness.exe must never run.
+  it.runIf(process.platform === 'win32')("a bare name is never looked for in the process's own working folder", async () => {
+    mkdirSync(join(dir, 'opened'))
+    mkdirSync(join(dir, 'home'))
+    copyFileSync(process.execPath, join(dir, 'opened', 'harness.exe'))
+    const was = process.cwd()
+    process.chdir(join(dir, 'opened'))
+    try {
+      expect(await nodeInputs().run('harness', ['-e', 'console.log(1)'], bounds({ path: join(dir, 'home'), cwd: join(dir, 'home') }))).toBe(MISSING)
+    } finally {
+      process.chdir(was)
+    }
   })
 
   unix('a non-zero exit, output over maxBytes and a run past its timeout are null, and the run past its timeout is killed', async () => {
