@@ -5,6 +5,47 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DshVerdictWatcher, parseVerdict, type DshVerdict } from './verdict.js'
 
+/** The chokidar instance behind one agent's watch: to wait for its `ready`, or raise what chokidar would. */
+const innerWatcher = (w: DshVerdictWatcher, agentId: string): EventEmitter & { closed: boolean } =>
+  (w as unknown as { watched: Map<string, { watcher: EventEmitter & { closed: boolean } }> }).watched.get(agentId)!.watcher
+
+/**
+ * Resolves once chokidar announces a file touched in [dir]. macOS starts handing a new watch its events some time after
+ * chokidar's `ready` (seconds, on a loaded machine) and may never tell of a write before then; so a case that writes and
+ * then waits for the event first proves the watch is live, touching the probe again until it is announced.
+ */
+async function live(watcher: EventEmitter, dir: string): Promise<void> {
+  const probe = join(dir, 'live.probe')
+  let touch: ReturnType<typeof setInterval> | undefined
+  await new Promise<void>((resolve) => {
+    const on = (_event: string, path: string): void => { if (path === probe) { watcher.off('all', on); resolve() } }
+    watcher.on('all', on)
+    writeFileSync(probe, '')
+    touch = setInterval(() => writeFileSync(probe, String(Date.now())), 100)
+  })
+  clearInterval(touch)
+}
+
+/** The debounce held: a publish waits until the test runs it, however late the machine delivers events. */
+function heldDebounce() {
+  const pending = new Set<() => void>()
+  let scheduled = (): void => undefined
+  return {
+    debounce: (run: () => void): (() => void) => {
+      const once = (): void => { pending.delete(once); run() }
+      pending.add(once)
+      scheduled()
+      return () => { pending.delete(once) }
+    },
+    get pending(): number { return pending.size },
+    /** Resolves once a publish waits: the watcher has had an event for its file. */
+    next: (): Promise<void> => pending.size ? Promise.resolve() : new Promise((resolve) => {
+      scheduled = () => { scheduled = () => undefined; resolve() }
+    }),
+    run: (): void => { for (const run of [...pending]) run() },
+  }
+}
+
 describe('parseVerdict', () => {
   it('reduces a spec-1 verdict to the wire shape', () => {
     const verdict = parseVerdict(JSON.stringify({
@@ -101,15 +142,16 @@ describe('DshVerdictWatcher', () => {
     let resolveNext: (() => void) | null = null
     watcher = new DshVerdictWatcher({ onChange: (_agentId, verdict) => { seen.push(verdict); resolveNext?.() } })
     watcher.watch('agent-1', file)
+    const ready = once(innerWatcher(watcher, 'agent-1'), 'ready')
     expect(seen).toHaveLength(1)
     expect(seen[0]?.summary).toBe('first')
     expect(watcher.current('agent-1')?.summary).toBe('first')
 
     const next = new Promise<void>((resolve) => { resolveNext = resolve })
-    // Give chokidar a moment to be ready before the write it must notice.
-    await new Promise((resolve) => setTimeout(resolve, 300))
+    await ready
+    await live(innerWatcher(watcher, 'agent-1'), join(workspace, '.harness'))
     writeFileSync(file, JSON.stringify({ spec: 1, ready: true, summary: 'second' }))
-    await Promise.race([next, new Promise((resolve) => setTimeout(resolve, 4_000))])
+    await next
     expect(seen.at(-1)?.summary).toBe('second')
     expect(seen.at(-1)?.ready).toBe(true)
   }, 10_000)
@@ -152,59 +194,48 @@ describe('DshVerdictWatcher, event by event', () => {
     rmSync(workspace, { recursive: true, force: true })
   })
 
-  const settle = (ms = 400): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
   const verdict = (summary: string): string => JSON.stringify({ spec: 1, ready: false, summary })
-  /** The chokidar instance behind one agent's watch, to raise the error chokidar would. */
-  const innerWatcher = (w: DshVerdictWatcher, agentId: string): EventEmitter =>
-    (w as unknown as { watched: Map<string, { watcher: EventEmitter }> }).watched.get(agentId)!.watcher
 
   it('publishes a verdict that appears, debounces a burst, ignores other files and unchanged rewrites, and says when it goes', async () => {
     const file = join(workspace, '.harness', 'verdict.json')
     const seen: Array<string | null> = []
-    watcher = new DshVerdictWatcher({ onChange: (_id, v) => seen.push(v ? v.summary : null) })
+    const clock = heldDebounce()
+    watcher = new DshVerdictWatcher({ onChange: (_id, v) => seen.push(v ? v.summary : null), debounce: clock.debounce })
     watcher.watch('a', file)
+    const inner = innerWatcher(watcher, 'a')
+    await once(inner, 'ready')
+    await live(inner, join(workspace, '.harness'))
     expect(seen).toEqual([])
     expect(watcher.current('a')).toBeNull()
-    await settle()
 
     writeFileSync(file, verdict('first'))
-    await vi.waitFor(() => expect(seen).toEqual(['first']), { timeout: 4_000 })
+    await clock.next()
+    clock.run()
+    expect(seen).toEqual(['first'])
     expect(watcher.current('a')?.summary).toBe('first')
 
     // two changes inside the debounce are one publish, of the last write
-    const inner = innerWatcher(watcher, 'a')
-    /** Do something to the directory and wait until chokidar has told the watcher exactly that. */
-    const observed = async (event: 'add' | 'change' | 'unlink', path: string, act: () => void): Promise<void> => {
-      let listener: (name: string, at: string) => void = () => undefined
-      const landed = new Promise<boolean>((resolve) => {
-        listener = (name, at) => { if (name === event && at === path) resolve(true) }
-        inner.on('all', listener)
-      })
-      // a change within the same millisecond as the last one can read as no change at all, and chokidar
-      // drops a second `change` to one file within 50 ms of the first (Linux delivers them that fast)
-      await settle(80)
-      act()
-      const seenIt = await Promise.race([landed, settle(3_000).then(() => false)])
-      inner.off('all', listener)
-      expect(seenIt, `${event} ${path}`).toBe(true)
-    }
-    await observed('change', file, () => writeFileSync(file, verdict('draft')))
-    await observed('change', file, () => writeFileSync(file, verdict('second')))
-    await vi.waitFor(() => expect(seen.at(-1)).toBe('second'), { timeout: 4_000 })
-    await settle()
+    writeFileSync(file, verdict('draft'))
+    inner.emit('change', file)
+    writeFileSync(file, verdict('second'))
+    inner.emit('change', file)
+    expect(clock.pending).toBe(1)
+    clock.run()
     expect(seen).toEqual(['first', 'second'])
 
-    // the same bytes again, and a neighbour in .harness/ added, changed and removed, publish nothing
-    await observed('change', file, () => writeFileSync(file, verdict('second')))
+    // a neighbour in .harness/ added, changed and removed schedules nothing, and the same bytes again publish nothing
     const neighbour = join(workspace, '.harness', 'other.json')
-    await observed('add', neighbour, () => writeFileSync(neighbour, '{}'))
-    await observed('change', neighbour, () => writeFileSync(neighbour, '{"a":1}'))
-    await observed('unlink', neighbour, () => rmSync(neighbour))
-    await settle(400)
+    for (const event of ['add', 'change', 'unlink']) inner.emit(event, neighbour)
+    expect(clock.pending).toBe(0)
+    writeFileSync(file, verdict('second'))
+    inner.emit('change', file)
+    clock.run()
     expect(seen).toEqual(['first', 'second'])
 
     rmSync(file)
-    await vi.waitFor(() => expect(seen.at(-1)).toBeNull(), { timeout: 4_000 })
+    await clock.next()
+    clock.run()
+    expect(seen).toEqual(['first', 'second', null])
     expect(watcher.current('a')).toBeNull()
   }, 15_000)
 
@@ -221,7 +252,7 @@ describe('DshVerdictWatcher, event by event', () => {
     expect(seen).toEqual(['early'])
   })
 
-  it('watching the same file again is a no-op; a different file replaces the watch', async () => {
+  it('watching the same file again is a no-op; a different file replaces the watch', () => {
     const first = join(workspace, 'one', 'verdict.json')
     const second = join(workspace, 'two', 'verdict.json')
     mkdirSync(join(workspace, 'one'))
@@ -233,13 +264,12 @@ describe('DshVerdictWatcher, event by event', () => {
     watcher.watch('a', first)
     watcher.watch('a', first)
     expect(seen).toEqual(['one'])
+    const old = innerWatcher(watcher, 'a')
     watcher.watch('a', second)
     expect(seen).toEqual(['one', 'two'])
-    await settle()
-    writeFileSync(first, verdict('one again'))
-    await settle(600)
-    expect(seen).toEqual(['one', 'two'])
-  }, 10_000)
+    // the first file's watch is closed: a change there reaches nothing
+    expect(old.closed).toBe(true)
+  })
 
   it('logs, and watches nothing, when the verdict directory cannot be made', () => {
     writeFileSync(join(workspace, 'plain-file'), '')
@@ -267,23 +297,25 @@ describe('DshVerdictWatcher, event by event', () => {
   })
 
   it('unwatch and stop cancel a publish still in its debounce', async () => {
-    const file = join(workspace, '.harness', 'verdict.json')
+    const files = { a: join(workspace, '.harness', 'verdict.json'), b: join(workspace, 'b', '.harness', 'verdict.json') }
     const seen: Array<string | null> = []
-    watcher = new DshVerdictWatcher({ onChange: (id, v) => seen.push(`${id}:${v?.summary ?? null}`) })
+    const clock = heldDebounce()
+    watcher = new DshVerdictWatcher({ onChange: (id, v) => seen.push(`${id}:${v?.summary ?? null}`), debounce: clock.debounce })
     watcher.unwatch('never-watched')
-    watcher.watch('a', file)
-    watcher.watch('b', join(workspace, 'b', '.harness', 'verdict.json'))
-    await settle()
-    // the add events land, then the watches go before their 150ms debounce fires
-    const landed = ['a', 'b'].map((id) => new Promise<void>((resolve) => innerWatcher(watcher!, id).once('add', () => resolve())))
-    writeFileSync(file, verdict('late'))
-    writeFileSync(join(workspace, 'b', '.harness', 'verdict.json'), verdict('late'))
-    await Promise.all(landed)
+    // the add events land, then the watches go before their debounce runs
+    for (const [id, file] of Object.entries(files)) {
+      watcher.watch(id, file)
+      writeFileSync(file, verdict('late'))
+      innerWatcher(watcher, id).emit('add', file)
+    }
+    expect(clock.pending).toBe(2)
     watcher.unwatch('a')
+    expect(clock.pending).toBe(1)
     await watcher.stop()
-    await settle(400)
+    expect(clock.pending).toBe(0)
+    clock.run()
     expect(seen).toEqual([])
-  }, 10_000)
+  })
 
   it('an old watch cannot publish into the same agent after it is watched again', async () => {
     const seen: string[] = []
