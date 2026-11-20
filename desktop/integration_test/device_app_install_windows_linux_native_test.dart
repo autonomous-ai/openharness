@@ -233,13 +233,12 @@ void main() {
     root.deleteSync(recursive: true);
   });
 
-  DeviceAppInstaller installer() => DeviceAppInstaller(
-    manifestUrl: '$base/metadata.json',
-    targetFolders: deviceAppTargetFolders(),
-    verifySignature: Platform.isWindows
-        ? deviceAppInstallerSignedLikeDesktop
-        : (_) async => false,
+  /// The app's own installer for this OS, its signature check and place
+  /// included.
+  DeviceAppInstaller installer() => deviceAppInstallerFor(
+    platform,
     open: open,
+    manifestUrl: '$base/metadata.json',
     // The manifest's CDN address of the package, sent to loopback.
     dio: Dio()
       ..interceptors.add(
@@ -253,8 +252,6 @@ void main() {
         ),
       ),
     run: run,
-    platform: platform,
-    place: place,
   );
 
   testWidgets(

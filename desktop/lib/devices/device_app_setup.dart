@@ -1,3 +1,4 @@
+import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 
 import '../core/local_key_value_store.dart';
@@ -116,6 +117,38 @@ DeviceAppOpen deviceAppOpenFor(
   };
 }
 
+/// What [platform]'s installer checks the download with: the installer's signer on Windows, the bundle's on macOS.
+/// Linux is never asked, as an AppImage carries no OS signature, and refuses were it ever asked.
+@visibleForTesting
+DeviceAppSignatureCheck deviceAppSignatureCheckFor(TargetPlatform platform) =>
+    switch (platform) {
+      TargetPlatform.windows => deviceAppInstallerSignedLikeDesktop,
+      TargetPlatform.linux => _neverSigned,
+      _ => deviceAppSignedLikeDesktop,
+    };
+
+Future<bool> _neverSigned(String _) async => false;
+
+/// [platform]'s installer as the app builds it, with [platform]'s signature check ([deviceAppSignatureCheckFor])
+/// and place, opening with [open]: the end-to-end test builds this one too. [manifestUrl], [dio] and [run] stand in
+/// for the release and its tools under test.
+DeviceAppInstaller deviceAppInstallerFor(
+  TargetPlatform platform, {
+  required DeviceAppOpen open,
+  String manifestUrl = deviceAppManifestUrl,
+  Dio? dio,
+  DeviceAppRun run = runDeviceAppTool,
+}) => DeviceAppInstaller(
+  manifestUrl: manifestUrl,
+  targetFolders: deviceAppTargetFolders(),
+  verifySignature: deviceAppSignatureCheckFor(platform),
+  open: open,
+  dio: dio,
+  run: run,
+  platform: platform,
+  place: deviceAppPlace(platform: platform),
+);
+
 /// The offer with this OS's lookup, installer and opener. [supported] defaults to
 /// `!kUnderTest && deviceAppSupported()`: under test it shows nothing and never looks.
 DeviceAppOffer deviceAppOfferForThisComputer({
@@ -124,19 +157,7 @@ DeviceAppOffer deviceAppOfferForThisComputer({
 }) {
   final platform = defaultTargetPlatform;
   final open = deviceAppOpenFor(platform);
-  final installer = DeviceAppInstaller(
-    manifestUrl: deviceAppManifestUrl,
-    targetFolders: deviceAppTargetFolders(),
-    verifySignature: switch (platform) {
-      TargetPlatform.windows => deviceAppInstallerSignedLikeDesktop,
-      // Never asked: an AppImage carries no OS signature. Refused, were it ever asked.
-      TargetPlatform.linux => (_) async => false,
-      _ => deviceAppSignedLikeDesktop,
-    },
-    open: open,
-    platform: platform,
-    place: deviceAppPlace(platform: platform),
-  );
+  final installer = deviceAppInstallerFor(platform, open: open);
   return DeviceAppOffer(
     supported: supported ?? (!kUnderTest && deviceAppSupported()),
     probe: deviceAppProbeFor(platform),
