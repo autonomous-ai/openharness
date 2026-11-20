@@ -252,22 +252,21 @@ mod tests {
     }
 
     #[test]
-    fn the_events_end_is_ended_and_a_first_ask_that_fails_is_not_followed() {
+    fn the_events_end_is_ended() {
         let proc_root = apps();
         // Ended mid-line: the half line is not an event.
         let (stop, told, asked) = run(b"activewindowv2>>1", vec![Ok(answer(4242))], proc_root.path());
         assert_eq!((stop, told, asked), (Stop::Ended, vec!["kitty".to_string()], 1));
-        let refused = || Err(io::Error::from(io::ErrorKind::ConnectionRefused));
-        let (stop, told, asked) = run(b"activewindowv2>>1\n", vec![refused()], proc_root.path());
-        assert_eq!((stop, told, asked), (Stop::NotFollowed, vec![], 1));
     }
 
     #[test]
-    fn a_later_ask_that_fails_is_the_empty_value() {
+    fn an_ask_that_fails_is_the_empty_value_at_start_too_and_following_goes_on() {
         let proc_root = apps();
-        let refused = Err(io::Error::from(io::ErrorKind::ConnectionRefused));
-        let (stop, told, _) = run(b"activewindowv2>>1\n", vec![Ok(answer(4242)), refused], proc_root.path());
-        assert_eq!((stop, told), (Stop::Ended, vec!["kitty".to_string(), String::new()]));
+        let refused = || Err(io::Error::from(io::ErrorKind::ConnectionRefused));
+        // The first ask fails while Hyprland is still starting: its request socket not yet bound, or slow to answer.
+        let answers = vec![refused(), Ok(answer(4242)), refused()];
+        let (stop, told, asked) = run(b"activewindowv2>>1\nactivewindowv2>>2\n", answers, proc_root.path());
+        assert_eq!((stop, told, asked), (Stop::Ended, vec![String::new(), "kitty".to_string(), String::new()], 3));
     }
 
     /// Answers each request connection in turn from `answers`, and hands back what each asked.
