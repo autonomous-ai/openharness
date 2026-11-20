@@ -40,8 +40,8 @@ process.on('warning', (warning) => {
   for (const listener of previous) listener.call(process, warning)
 })
 const reader = (function (fs, url, Database) {${NATIVE_READER}})(require('node:fs'), require('node:url'), process.getBuiltinModule('node:sqlite').DatabaseSync)
-parentPort.on('message', ({ id, dbPath, sql, params, busyTimeoutMs, maxBuffer }) => {
-  const read = reader.read(dbPath, sql, params, busyTimeoutMs)
+parentPort.on('message', ({ id, dbPath, sql, params, busyTimeoutMs, maxBuffer, fresh }) => {
+  const read = reader.read(dbPath, sql, params, busyTimeoutMs, fresh)
   if (!read.ok) {
     parentPort.postMessage({ id, ok: false, message: String((read.error && read.error.message) || read.error) })
     return
@@ -64,6 +64,7 @@ type Answer = { ok: true; rows: SqliteRow[] } | { ok: false; message: string }
 interface Read {
   id: number
   dbPath: string; sql: string; params: SqliteParam[]; busyTimeoutMs: number; maxBuffer: number
+  fresh: boolean
   answer(answer: Answer): void
 }
 interface Thread { worker: Worker; read: Read | null }
@@ -115,17 +116,19 @@ export async function resetOffThreadSqlite(): Promise<void> {
 const transient = (message: string): SqliteReadResult => ({ ok: false, reason: 'transient', error: new Error(message) })
 
 export function readOffThread(dbPath: string, sql: string, params: SqliteParam[], busyTimeoutMs: number,
-  timeoutMs: number, maxBuffer: number): Promise<SqliteReadResult> {
+  timeoutMs: number, maxBuffer: number, fresh = false): Promise<SqliteReadResult> {
   const key = JSON.stringify([dbPath, sql, params, busyTimeoutMs, maxBuffer])
-  let answer = running.get(key)
+  let answer = fresh ? undefined : running.get(key)
   if (!answer) {
     if (waiting.length >= MAX_WAITING) return Promise.resolve(transient(`${MAX_WAITING} SQLite reads are already waiting`))
     const asked = new Promise<Answer>((resolve) => {
-      waiting.push({ id: nextId++, dbPath, sql, params, busyTimeoutMs, maxBuffer, answer: resolve })
+      waiting.push({ id: nextId++, dbPath, sql, params, busyTimeoutMs, maxBuffer, fresh, answer: resolve })
     })
     answer = asked
-    running.set(key, asked)
-    void asked.then(() => { if (running.get(key) === asked) running.delete(key) })
+    if (!fresh) {
+      running.set(key, asked)
+      void asked.then(() => { if (running.get(key) === asked) running.delete(key) })
+    }
     dispatch()
   }
   const settled = answer
@@ -148,8 +151,8 @@ function dispatch(): void {
     thread.read = read
     // A read in flight holds the process open, as a child process would; an idle thread never does.
     thread.worker.ref()
-    const { id, dbPath, sql, params, busyTimeoutMs, maxBuffer } = read
-    thread.worker.postMessage({ id, dbPath, sql, params, busyTimeoutMs, maxBuffer })
+    const { id, dbPath, sql, params, busyTimeoutMs, maxBuffer, fresh } = read
+    thread.worker.postMessage({ id, dbPath, sql, params, busyTimeoutMs, maxBuffer, fresh })
   }
 }
 

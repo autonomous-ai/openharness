@@ -68,7 +68,7 @@ export class SessionCheckpointStore {
     return [...files, ...(existsSync(history) ? [history] : []), manifest]
   }
 
-  async save(s: RegisteredSession, options: { screen?: string | null; current?: () => boolean; databaseProof?: DatabaseCheckpointProof; afterExit?: boolean } = {}): Promise<void> {
+  async save(s: RegisteredSession, options: { screen?: string | null; current?: () => boolean; databaseProof?: DatabaseCheckpointProof; finalPass?: boolean } = {}): Promise<void> {
     secureStateDirectory(dirname(this.directory))
     secureStateDirectory(this.directory)
     const key = this.key(s)
@@ -176,7 +176,7 @@ export class SessionCheckpointStore {
         if (!this.deps.exportDatabase) throw new SessionCheckpointError('Could not read the saved conversation. The session has not been closed.')
         const deadline = databaseDeadline = performance.now() + STORAGE_EXPORT_WAIT_MS
         let reuse: CheckpointReuse | undefined
-        if (options.afterExit && previous?.version === 1 && previous.agentId === s.agentId && previous.sessionId === s.sessionId
+        if (options.finalPass && previous?.version === 1 && previous.agentId === s.agentId && previous.sessionId === s.sessionId
           && previous.engine === s.engine && previous.codexHome === (s.codexHome ?? null) && previousFileSafe(previous.file)
           && previous.file.startsWith(key + '-') && Number.isSafeInteger(previous.bytes) && previous.bytes > 0 && previous.bytes <= STORAGE_COMPARE_BYTES) {
           try {
@@ -226,9 +226,9 @@ export class SessionCheckpointStore {
             }
           },
         }
-        const exportCheckpoint = (comparison?: CheckpointReuse) => this.deps.exportDatabase!(s, databaseProof!.source!, reservation, comparison).catch(() => {
-          current()
+        const exportCheckpoint = (comparison?: CheckpointReuse) => this.deps.exportDatabase!(s, databaseProof!.source!, reservation, comparison).catch(error => {
           if (allocationFailure) throw allocationFailure.error
+          if (error instanceof SessionCheckpointError || ['IDENTITY_UNAVAILABLE', 'CHECKPOINT_STAGE_TIMEOUT'].includes(error?.code)) throw error
           // The outer timer can win just before a fractional clock deadline.
           // A pending first allocation still needs the stage timeout refusal.
           if (allocationStarted && !allocationFinished) throw stageExpired()

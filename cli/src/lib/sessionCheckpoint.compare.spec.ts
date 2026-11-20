@@ -49,7 +49,7 @@ afterEach(() => { closeSqliteHandles(); vi.restoreAllMocks(); rmSync(root, { rec
 
 it('keeps the completed copy and manifest through the actual worker comparison path', async () => {
   const before = saved()
-  await store.save(session, { afterExit: true })
+  await store.save(session, { finalPass: true })
   expect(saved().raw).toBe(before.raw)
   expect(readFileSync(before.history, 'utf8')).toContain('original rows')
   expect(exported).toBe(1); expect(compared).toBe(1)
@@ -59,7 +59,7 @@ it('keeps the completed copy and manifest through the actual worker comparison p
 it('exports the final flushed conversation after a late row mismatch', async () => {
   mutateRows('modified rows')
   const before = saved()
-  await store.save(session, { afterExit: true })
+  await store.save(session, { finalPass: true })
   expect(saved().manifest.file).not.toBe(before.manifest.file)
   expect(readFileSync(saved().history, 'utf8')).toContain('modified rows')
   expect(exported).toBe(2); expect(compared).toBe(1)
@@ -79,7 +79,7 @@ it.each(['missing history', 'wrong byte count', 'oversize', 'other session'] as 
     if (fault === 'other session') before.manifest.sessionId = 'other'
     writeFileSync(before.path, JSON.stringify(before.manifest))
   }
-  await store.save(session, { afterExit: true })
+  await store.save(session, { finalPass: true })
   expect(readFileSync(saved().history, 'utf8')).toContain('original rows')
   expect(exported).toBe(2)
   expect(compared).toBe(fault === 'wrong byte count' ? 1 : 0)
@@ -91,7 +91,7 @@ it.each(['manifest', 'history'] as const)('rebuilds a changed saved %s after an 
     if (target === 'manifest') writeFileSync(before.path, JSON.stringify({ ...before.manifest, savedAt: 1 }))
     else appendFileSync(before.history, '\n')
   }
-  await store.save(session, { afterExit: true })
+  await store.save(session, { finalPass: true })
   expect(saved().manifest.file).not.toBe(before.manifest.file)
   expect(exported).toBe(2)
 })
@@ -99,7 +99,7 @@ it.each(['manifest', 'history'] as const)('rebuilds a changed saved %s after an 
 it('holds lost native authority after an equal reply and keeps the prior copy', async () => {
   const before = saved()
   afterComparison = () => mutateRows('modified rows')
-  await expect(store.save(session, { afterExit: true })).rejects.toMatchObject({ code: 'IDENTITY_UNAVAILABLE' })
+  await expect(store.save(session, { finalPass: true })).rejects.toMatchObject({ code: 'IDENTITY_UNAVAILABLE' })
   expect(saved().raw).toBe(before.raw)
   expect(exported).toBe(1)
 })
@@ -108,13 +108,13 @@ it('holds cancelled caller authority after an equal reply', async () => {
   let current = true
   afterComparison = () => { current = false }
   const before = saved()
-  await expect(store.save(session, { afterExit: true, current: () => current })).rejects.toMatchObject({ code: 'HISTORY_NOT_SAVED' })
+  await expect(store.save(session, { finalPass: true, current: () => current })).rejects.toMatchObject({ code: 'HISTORY_NOT_SAVED' })
   expect(saved().raw).toBe(before.raw)
   expect(exported).toBe(1)
 })
 
 it('saves a supplied terminal draft even when the history is reused', async () => {
-  await store.save(session, { afterExit: true, screen: 'unsent draft' })
+  await store.save(session, { finalPass: true, screen: 'unsent draft' })
   const screen = readdirSync(directory).find(name => name.endsWith('.screen.json'))!
   expect(JSON.parse(readFileSync(join(directory, screen), 'utf8')).screen).toBe('unsent draft')
   expect(exported).toBe(1)
@@ -122,6 +122,6 @@ it('saves a supplied terminal draft even when the history is reused', async () =
 
 it('falls back through the real capability handler for a worker without comparison support', async () => {
   oldWorker = true
-  await store.save(session, { afterExit: true })
+  await store.save(session, { finalPass: true })
   expect(exported).toBe(2); expect(compared).toBe(0)
 })

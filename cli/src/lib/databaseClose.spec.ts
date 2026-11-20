@@ -106,7 +106,7 @@ afterEach(async () => {
 })
 
 const stop = () => createStopAgentService(deps)(row.agentId, {
-  checkpoint: async (s, phase, databaseProof) => store.save(s, { databaseProof, afterExit: phase === 'after' }),
+  checkpoint: async (s, phase, databaseProof) => store.save(s, { databaseProof, finalPass: phase === 'after' }),
 })
 const manifests = () => readdirSync(directory).filter(name => /^[a-f0-9]{64}\.json$/.test(name))
 
@@ -311,7 +311,7 @@ it.each(['cancel', 'rebind'] as const)('holds Close before saving when %s arrive
     return { tty: '/dev/ttys044', command: 'hermes', path: root, pid: 77 }
   })
   await expect(createStopAgentService(deps)(row.agentId, { current: () => current,
-    checkpoint: async (s, phase, databaseProof) => store.save(s, { databaseProof, afterExit: phase === 'after' }),
+    checkpoint: async (s, phase, databaseProof) => store.save(s, { databaseProof, finalPass: phase === 'after' }),
   })).rejects.toMatchObject({ code: 'STOP_UNCONFIRMED' })
   expect(signalled).not.toHaveBeenCalled()
   expect(await stoppedAgents.get(row.agentId)).toBeNull()
@@ -425,7 +425,7 @@ it.each(['cancel', 'rebind'] as const)('rejects an OpenClaw location arriving af
     return { paths: [join(root, 'state', 'openclaw.sqlite')], verify: vi.fn() }
   })
   await expect(createStopAgentService(deps)(row.agentId, { current: () => current,
-    checkpoint: async (s, phase, databaseProof) => store.save(s, { databaseProof, afterExit: phase === 'after' }),
+    checkpoint: async (s, phase, databaseProof) => store.save(s, { databaseProof, finalPass: phase === 'after' }),
   })).rejects.toMatchObject({ code: 'IDENTITY_UNAVAILABLE' })
   expect(exportedSource).toBeUndefined()
   expect(signalled).not.toHaveBeenCalled()

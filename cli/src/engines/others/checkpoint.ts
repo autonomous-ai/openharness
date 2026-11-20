@@ -25,8 +25,8 @@ class UnwrittenOpenclawHistory extends Error {}
  * exactly the selected columns, in their order. Throws when a page is not answered or a row is over the row cap: a
  * checkpoint holds every row or none.
  */
-async function* pagedRows(database: string, table: string, where: string, sessionId: string, paged: Paged): AsyncGenerator<SqliteRow> {
-  const declared = await sqliteReadAll(database, 'SELECT name, pk FROM pragma_table_xinfo(?) WHERE hidden <> 1 ORDER BY cid', [table])
+async function* pagedRows(database: string, table: string, where: string, sessionId: string, paged: Paged, fresh: boolean): AsyncGenerator<SqliteRow> {
+  const declared = await sqliteReadAll(database, 'SELECT name, pk FROM pragma_table_xinfo(?) WHERE hidden <> 1 ORDER BY cid', [table], { fresh })
   if (!declared.ok || !declared.rows.length) throw new Error('checkpoint schema unavailable')
   const pk = declared.rows.filter((row) => Number(row.pk) > 0).sort((a, b) => Number(a.pk) - Number(b.pk)).map((row) => String(row.name))
   const selected = paged === true ? declared.rows.map((row) => column(String(row.name))) : paged.columns
@@ -34,7 +34,7 @@ async function* pagedRows(database: string, table: string, where: string, sessio
     key: pk.length ? pk.map(column) : [{ as: 'rowid', sql: 't.rowid' }],
     columns: selected.filter((c) => !pk.includes(c.as)), ...(paged !== true && { size: paged.size }) }
   for (let cursor: SqliteParam[] | null = null;;) {
-    const read = await readStorePage(database, page, cursor)
+    const read = await readStorePage(database, page, cursor, { fresh })
     if (!read.ok || read.rows.some(row => Number(row.page_big))) throw new Error('checkpoint rows unavailable')
     for (const row of read.rows) yield Object.fromEntries(selected.map(c => [c.as, row[c.as]]))
     if (!read.full) return
@@ -45,8 +45,9 @@ async function* pagedRows(database: string, table: string, where: string, sessio
 
 /** Native SQLite files can have live WAL writers. Export this conversation's rows through a
  * read-only connection; never copy an incomplete .db or replace an engine's shared store. */
-async function* databaseHistory(s: StorageSession & { engine: StorageEngine }, source: ExportSource): AsyncGenerator<string> {
+async function* databaseHistory(s: StorageSession & { engine: StorageEngine }, source: ExportSource, fresh = false): AsyncGenerator<string> {
   const database = source.path
+  const read = (sql: string, params?: SqliteParam[]) => sqliteReadAll(database, sql, params, { fresh })
   /** Table and filter; a conversation table is paged, the others hold one row. */
   let selections: [string, string, Paged?][]
   switch (s.engine) {
@@ -76,8 +77,8 @@ async function* databaseHistory(s: StorageSession & { engine: StorageEngine }, s
   // only older conversations, so a v2 one read there was "not found" and could never be closed (2026-10-14). Read the
   // v2 tables when they hold this session, as purgeAgentService does.
   if (s.engine === 'opencode') {
-    const v2 = await sqliteReadAll(database, "SELECT name FROM sqlite_master WHERE type='table' AND name='session_v2';")
-    const held = v2.ok && v2.rows.length ? await sqliteReadAll(database, 'SELECT id FROM session_v2 WHERE id = ?;', [s.sessionId]) : null
+    const v2 = await read("SELECT name FROM sqlite_master WHERE type='table' AND name='session_v2';")
+    const held = v2.ok && v2.rows.length ? await read('SELECT id FROM session_v2 WHERE id = ?;', [s.sessionId]) : null
     if (!v2.ok || (held && !held.ok)) throw new Error('Could not read the saved conversation. The session has not been closed.')
     if (held?.rows.length) selections = [['session_v2', 'id = ?'], ['session_message', 'session_id = ?', true]]
   }
@@ -87,10 +88,10 @@ async function* databaseHistory(s: StorageSession & { engine: StorageEngine }, s
     yield (firstTable ? '' : ',') + JSON.stringify(table) + ':['
     firstTable = false
     let firstRow = true
-    const read = paged ? pagedRows(database, table, where, s.sessionId, paged)
-      : await sqliteReadAll(database, `SELECT * FROM ${table} WHERE ${where};`, [s.sessionId]).then(async result => {
+    const rows = paged ? pagedRows(database, table, where, s.sessionId, paged, fresh)
+      : await read(`SELECT * FROM ${table} WHERE ${where};`, [s.sessionId]).then(async result => {
         if (s.engine === 'openclaw' && table === selections[0][0] && result.ok && result.rows.length === 0) {
-          const windows = await sqliteReadAll(database, 'SELECT 1 FROM session_windows WHERE session_key = ? LIMIT 1', [s.sessionId])
+          const windows = await read('SELECT 1 FROM session_windows WHERE session_key = ? LIMIT 1', [s.sessionId])
           // Selected events are joined through these windows; without any window none can belong to this key.
           if (!windows.ok || windows.rows.length) throw new Error('checkpoint history is inconsistent')
           throw new UnwrittenOpenclawHistory()
@@ -98,7 +99,7 @@ async function* databaseHistory(s: StorageSession & { engine: StorageEngine }, s
         if (!result.ok || (table === selections[0][0] && result.rows.length !== 1)) throw new Error('checkpoint row unavailable')
         return result.rows
       })
-    for await (const row of read) {
+    for await (const row of rows) {
       if (!firstRow) yield ','
       yield* rowJson(row)
       firstRow = false
@@ -166,7 +167,9 @@ export async function exportDatabase(engine: StorageEngine, session: StorageSess
     const before = await output.stat({ bigint: true })
     if (!current() || !before.isFile() || before.nlink !== 1n || before.size !== 0n || (process.platform !== 'win32' && (before.mode & 0o777n) !== 0o600n)
       || nativeFileKey(before) !== stage.key || (process.getuid && before.uid !== BigInt(process.getuid()))) throw new Error('checkpoint stage refused')
-    for await (const text of databaseHistory({ ...session, engine }, source)) {
+    const fresh = offThreadSqliteActive()
+    if (!fresh) closeSqliteHandle(source.path)
+    for await (const text of databaseHistory({ ...session, engine }, source, fresh)) {
       if (!current()) throw new Error('checkpoint cancelled')
       const data = Buffer.from(text)
       if (bytes + used + data.length > STORAGE_STAGE_BYTES) throw new Error('checkpoint too large')

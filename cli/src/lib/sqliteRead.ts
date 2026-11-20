@@ -34,6 +34,8 @@ export type SqliteRow = Record<string, unknown>
 export type SqliteParam = string | number | null
 
 export interface SqliteReadOptions {
+  /** A checkpoint must open the current store and cannot join a query started before its operation. */
+  fresh?: boolean
   /** How long the built-in binding may wait on a lock. Short on purpose: on the caller's thread it blocks the event loop. */
   busyTimeoutMs?: number
   /** Hard bound on a read off the caller's thread: the CLI fallback's process, or the core's read thread's answer. */
@@ -141,9 +143,9 @@ export async function sqliteReadAll(
   // master's heartbeats, and the master killed it again and again.
   if (Database && offThreadSqliteActive()) {
     return readOffThread(dbPath, sql, params, busyTimeoutMs,
-      options.timeoutMs ?? DEFAULT_TIMEOUT_MS, options.maxBuffer ?? DEFAULT_MAX_BUFFER)
+      options.timeoutMs ?? DEFAULT_TIMEOUT_MS, options.maxBuffer ?? DEFAULT_MAX_BUFFER, options.fresh)
   }
-  if (Database) return readBuiltin(Database, dbPath, sql, params, busyTimeoutMs)
+  if (Database) return readBuiltin(Database, dbPath, sql, params, busyTimeoutMs, options.fresh)
   return readCli(
     dbPath,
     sql,

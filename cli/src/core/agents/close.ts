@@ -97,7 +97,7 @@ export function createAgentClosing({
     atStartupQuestion: async s => (await readScreen(s, await captureTerminal(s.agentId, 80)))?.messageHold === 'trust_open',
     checkpoint: async (s, phase, current, databaseProof) => {
       const captured = phase === 'before' ? await terminals.captureRetained(s, { historyLines: 2000 }) : null
-      await sessionCheckpoints.save(s, { screen: captured?.state === 'succeeded' ? captured.value : null, afterExit: phase === 'after', ...(current && { current }),
+      await sessionCheckpoints.save(s, { screen: captured?.state === 'succeeded' ? captured.value : null, finalPass: phase === 'after', ...(current && { current }),
         ...(databaseProof && { databaseProof }) })
     },
     stop: stopAgent,
