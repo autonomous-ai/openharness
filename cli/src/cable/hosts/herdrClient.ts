@@ -1,7 +1,8 @@
 /**
  * herdr's socket (docs/specs/2026-11-16-device-herdr.md): its agents, their status, and the dial's words, for the herdr
  * adapter and the herdr source. Newline-delimited JSON, one request a connection, and a subscription on a connection of
- * its own that is never written to again: herdr 0.8.0 ends a subscription sent a second request.
+ * its own that is never written to again: herdr 0.8.0 ends a subscription sent a second request. On Windows the same
+ * lines go over herdr's named pipe, which a marker file at the socket's path names.
  *
  * Everything is checked here. The socket is another program's: it must be this user's before anything connects, a line
  * has a bound, and a request's answer counts only under its own id. The pane id came from a hook or from herdr and the text from
@@ -17,9 +18,9 @@
 import { randomUUID } from 'node:crypto'
 import type { Socket } from 'node:net'
 import { homedir } from 'node:os'
-import { isAbsolute, join } from 'node:path'
+import { posix, win32 } from 'node:path'
 import { CONTROL, MAX_TEXT, RUN_TIMEOUT_MS } from './orca.js'
-import { connectLines, socketStampOf, type SocketFault } from './unixSocket.js'
+import { connectLines, markerStampOf, socketStampOf, type SocketFault } from './unixSocket.js'
 
 /** herdr's pane id, `w2:pE`: its workspace and pane numbers in herdr's own base 32 over
  *  `123456789ABCDEFGHJKMNPQRSTVWXYZ0` (src/workspace.rs `encode_public_number`, 0.8.0 to 0.9.5), so a workspace's tenth
@@ -36,18 +37,33 @@ const HERDR_CODE = /^[a-z][a-z0-9_]{0,63}$/
 /** The key a hooked copy and a listed copy of one agent share (registry.ts). */
 export const herdrPaneKey = (paneId: string): string => `herdr:${paneId}`
 
-export interface HerdrClientDeps { socketPath: string; home: string; uid: number; platform: NodeJS.Platform }
+/** `socketPath` is herdr's socket, or on Windows its marker file; `endpoint` is what is dialled: the socket, or the
+ *  marker's pipe. */
+export interface HerdrClientDeps { socketPath: string; endpoint: string; home: string; uid: number; platform: NodeJS.Platform }
 
-/** Where herdr's server listens, as herdr works it out from the same environment. A relative XDG_CONFIG_HOME counts as
- *  unset, as the XDG rule says: it would be the daemon's folder, not herdr's. */
-export function herdrSocketPath(vars: NodeJS.ProcessEnv, home: string): string {
-  const config = vars.XDG_CONFIG_HOME && isAbsolute(vars.XDG_CONFIG_HOME) ? vars.XDG_CONFIG_HOME : join(home, '.config')
-  return join(config, 'herdr', 'herdr.sock')
+/** Where herdr's server listens, as herdr works it out from the same environment: on Windows its marker, in
+ *  %APPDATA% (herdr src/config/io.rs `config_dir`, docs/plans/2026-11-19-dial-windows-vm-notes.md Task 1 §7). A relative
+ *  XDG_CONFIG_HOME or APPDATA counts as unset, as the XDG rule says: it would be the daemon's folder, not herdr's. */
+export function herdrSocketPath(vars: NodeJS.ProcessEnv, home: string, platform: NodeJS.Platform = process.platform): string {
+  const path = platform === 'win32' ? win32 : posix
+  const set = (value: string | undefined): value is string => !!value && path.isAbsolute(value)
+  const fallback = platform === 'win32'
+    ? set(vars.APPDATA) ? vars.APPDATA : path.join(home, 'AppData', 'Roaming')
+    : path.join(home, '.config')
+  return path.join(set(vars.XDG_CONFIG_HOME) ? vars.XDG_CONFIG_HOME : fallback, 'herdr', 'herdr.sock')
 }
+
+/** The pipe herdr listens on for that marker: `\\.\pipe\` and the marker's whole path, unchanged (the `interprocess`
+ *  crate's `GenericNamespaced`, as herdr src/ipc.rs names it). */
+export const herdrPipeOf = (marker: string): string => `\\\\.\\pipe\\${marker}`
 
 export function herdrClientDeps(): HerdrClientDeps {
   const home = homedir()
-  return { socketPath: herdrSocketPath(process.env, home), home, uid: process.getuid?.() ?? -1, platform: process.platform }
+  const socketPath = herdrSocketPath(process.env, home)
+  return {
+    socketPath, endpoint: process.platform === 'win32' ? herdrPipeOf(socketPath) : socketPath,
+    home, uid: process.getuid?.() ?? -1, platform: process.platform,
+  }
 }
 
 /** Why a request has no result: the client's own word, or herdr's refusal (`rejected`) with herdr's code beside it.
@@ -68,7 +84,8 @@ export interface HerdrClient {
   request(method: string, params: Record<string, unknown>): Promise<HerdrAnswer>
   subscribe(entries: readonly HerdrEntry[], to: HerdrSubscriber): { close(): void }
   prompt(paneId: string, kind: string, text: string): Promise<HerdrPrompt>
-  /** The socket's inode and change time while it is a socket of this user's; else none. */
+  /** The socket's inode and change time while it is a socket of this user's, on Windows the marker's (unixSocket.ts
+   *  markerStampOf); else none. */
   socketStamp(): string | undefined
 }
 
@@ -103,11 +120,9 @@ const failed = (answer: HerdrFailure): HerdrPrompt => answer.fault === 'rejected
   : { outcome: 'failed', fault: answer.fault }
 
 export function createHerdrClient(deps: HerdrClientDeps): HerdrClient {
-  const socketStamp = (): string | undefined => {
-    // herdr's socket on Windows is a named pipe, which this client does not speak.
-    if (deps.platform === 'win32') return undefined
-    return socketStampOf(deps.socketPath, deps.uid)
-  }
+  // A named pipe has no file to stat on Windows: herdr's marker beside it says it listens, and whose it is.
+  const socketStamp = (): string | undefined =>
+    deps.platform === 'win32' ? markerStampOf(deps.socketPath) : socketStampOf(deps.socketPath, deps.uid)
 
   const request = (method: string, params: Record<string, unknown>) => new Promise<HerdrAnswer>((resolve) => {
     if (!socketStamp()) return resolve({ ok: false, fault: 'no_socket' })
@@ -122,7 +137,7 @@ export function createHerdrClient(deps: HerdrClientDeps): HerdrClient {
     }
     const deadline = setTimeout(() => finish({ ok: false, fault: 'timeout' }), RUN_TIMEOUT_MS)
     deadline.unref()
-    const socket = connectLines(deps.socketPath, `${JSON.stringify({ id, method, params })}\n`, MAX_LINE_BYTES, (text) => {
+    const socket = connectLines(deps.endpoint, `${JSON.stringify({ id, method, params })}\n`, MAX_LINE_BYTES, (text) => {
       const body = parse(text)
       finish(body ? answerOf(body, id) : { ok: false, fault: 'bad_json' })
     }, (fault) => finish({ ok: false, fault }))
@@ -151,7 +166,7 @@ export function createHerdrClient(deps: HerdrClientDeps): HerdrClient {
     deadline.unref()
     const id = randomUUID()
     const out = `${JSON.stringify({ id, method: 'events.subscribe', params: { subscriptions: entries } })}\n`
-    socket = connectLines(deps.socketPath, out, MAX_LINE_BYTES, (text) => {
+    socket = connectLines(deps.endpoint, out, MAX_LINE_BYTES, (text) => {
       const body = parse(text)
       if (!body) return end('bad_json')
       if (started) {
