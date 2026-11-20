@@ -26,8 +26,10 @@ vi.mock('node:fs', async original => {
     },
   }
 })
+vi.mock('node:perf_hooks', async original => ({ ...await original<object>(), performance: { now: () => 0 } }))
+const deadline = await vi.hoisted(() => import('../testing/registryDeadline.js'))
 vi.mock('node:fs/promises', async original => {
-  const actual = await original<typeof import('node:fs/promises')>()
+  const actual = await deadline.slowSyncFsPromises(original)
   return { ...actual, open: async (...args: Parameters<typeof actual.open>) => {
     const handle = await actual.open(...args), close = handle.close.bind(handle), sync = handle.sync.bind(handle)
     handle.close = async () => {
@@ -74,6 +76,7 @@ function hold(boundary: 'read' | 'prepare') {
 }
 
 beforeEach(async () => {
+  deadline.holdRegistryDeadline(Infinity)
   vi.resetModules()
   registry = undefined; release = undefined; accepted.length = 0
   io.namesPublished = false; io.failDirectorySync = false; io.publications = []

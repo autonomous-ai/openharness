@@ -5,19 +5,8 @@ import { join } from 'node:path'
 import type { Server } from 'node:http'
 
 const preparation = vi.hoisted(() => ({ wait: undefined as undefined | (() => Promise<void>), due: new Map<unknown, () => void>() }))
-vi.mock('node:fs/promises', async original => {
-  const actual = await original<typeof import('node:fs/promises')>()
-  return { ...actual, open: async (...args: Parameters<typeof actual.open>) => {
-    const handle = await actual.open(...args), sync = handle.sync.bind(handle)
-    handle.sync = async () => {
-      await sync()
-      if (!(String(args[0]).includes('registry.json.') && String(args[0]).endsWith('.tmp'))) return
-      for (const [timer, fire] of preparation.due) { preparation.due.delete(timer); fire() }
-      await preparation.wait?.()
-    }
-    return handle
-  } }
-})
+const deadline = await vi.hoisted(() => import('../testing/registryDeadline.js'))
+vi.mock('node:fs/promises', original => deadline.slowSyncFsPromises(original, { afterSync: async () => { await preparation.wait?.() } }))
 // Under load a registry image sync outlives every real wait of 250 ms or more: each one still running fires
 // as that sync returns, if not before.
 const realTimeout = globalThis.setTimeout, realClear = globalThis.clearTimeout
@@ -47,6 +36,7 @@ let limit: (() => void) | undefined, grace: (() => void) | undefined
 const file = () => join(root, 'registry.json')
 const disk = () => JSON.parse(readFileSync(file(), 'utf8'))
 beforeEach(async () => {
+  deadline.holdRegistryDeadline(Infinity)
   vi.resetModules()
   root = mkdtempSync(join(tmpdir(), 'registry-hook-persistence-'))
   vi.stubEnv('ADAPTER_DATA_DIR', root)

@@ -29,17 +29,9 @@ vi.mock('node:fs', async original => {
     },
   }
 })
-vi.mock('node:fs/promises', async original => {
-  const actual = await original<typeof import('node:fs/promises')>()
-  return { ...actual, open: async (...args: Parameters<typeof actual.open>) => {
-    const handle = await actual.open(...args), sync = handle.sync.bind(handle)
-    handle.sync = async () => {
-      await sync()
-      if (String(args[0]).startsWith(io.file + '.') && String(args[0]).endsWith('.tmp')) await io.prepare?.()
-    }
-    return handle
-  } }
-})
+vi.mock('node:perf_hooks', async original => ({ ...await original<object>(), performance: { now: () => 0 } }))
+const deadline = await vi.hoisted(() => import('../testing/registryDeadline.js'))
+vi.mock('node:fs/promises', original => deadline.slowSyncFsPromises(original, { afterSync: async () => { await io.prepare?.() } }))
 vi.mock('./bootId.js', async original => ({ ...await original<object>(),
   currentBootId: () => 'fixture-boot', bootChanged: () => false,
 }))
@@ -81,6 +73,7 @@ function holdPreparation() {
 }
 
 beforeEach(async () => {
+  deadline.holdRegistryDeadline(Infinity)
   vi.resetModules()
   registry = undefined; release = undefined; accepted.length = 0
   io.published = false; io.failDirectorySync = false; io.durable = []; io.prepare = undefined

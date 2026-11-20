@@ -28,19 +28,8 @@ vi.mock('fs', async original => {
 // A registry image flush a test holds open, as a slow disk does.
 const preparation = vi.hoisted(() => ({ wait: undefined as undefined | (() => Promise<void>), release: undefined as undefined | (() => void),
   due: new Map<unknown, () => void>() }))
-vi.mock('node:fs/promises', async original => {
-  const actual = await original<typeof import('node:fs/promises')>()
-  return { ...actual, open: async (...args: Parameters<typeof actual.open>) => {
-    const handle = await actual.open(...args), sync = handle.sync.bind(handle)
-    handle.sync = async () => {
-      await sync()
-      if (!(String(args[0]).includes('registry.json.') && String(args[0]).endsWith('.tmp'))) return
-      for (const [timer, fire] of preparation.due) { preparation.due.delete(timer); fire() }
-      await preparation.wait?.()
-    }
-    return handle
-  } }
-})
+const deadline = await vi.hoisted(() => import('../testing/registryDeadline.js'))
+vi.mock('node:fs/promises', original => deadline.slowSyncFsPromises(original, { afterSync: async () => { await preparation.wait?.() } }))
 // Under load a registry image sync outlives every real wait of 250 ms or more: each one still running fires
 // as that sync returns, if not before.
 const realTimeout = globalThis.setTimeout, realClear = globalThis.clearTimeout
@@ -88,6 +77,7 @@ const unchanged = (before: ReturnType<typeof snapshot>) => {
   expect(readFileSync(file, 'utf8')).toBe(before.disk)
 }
 beforeEach(async () => {
+  deadline.holdRegistryDeadline(Infinity)
   fault.rename = false; fault.directorySync = false; fault.renamed = false; fault.afterProof = undefined; fault.beforeVerify = undefined
   root = realpathSync(mkdtempSync(join(tmpdir(), 'registry-admission-')))
   home = join(root, 'codex'); file = join(root, 'data', 'registry.json'); fault.file = file

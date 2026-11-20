@@ -17,8 +17,10 @@ vi.mock('node:fs', async original => {
     if (String(args[1]) === cleanup.file) cleanup.published = true
   } }
 })
+vi.mock('node:perf_hooks', async original => ({ ...await original<object>(), performance: { now: () => 0 } }))
+const deadline = await vi.hoisted(() => import('../testing/registryDeadline.js'))
 vi.mock('node:fs/promises', async original => {
-  const actual = await original<typeof import('node:fs/promises')>()
+  const actual = await deadline.slowSyncFsPromises(original)
   return { ...actual, open: async (...args: Parameters<typeof actual.open>) => {
     const handle = await actual.open(...args), read = handle.read.bind(handle)
     handle.read = (async (...options: Parameters<typeof handle.read>) => {
@@ -41,6 +43,7 @@ const plan = { id: '12345678-1234-1234-1234-123456789012', identity: 'fixture-co
 const rows = () => JSON.parse(readFileSync(join(directory, 'registry.json'), 'utf8'))
 
 beforeEach(async () => {
+  deadline.holdRegistryDeadline(Infinity)
   vi.resetModules()
   exitFlush = undefined
   directory = mkdtempSync(join(tmpdir(), 'registry-persistence-'))
