@@ -123,20 +123,22 @@ open: 5 steps of an open's 1111 still run past 4 ms (36 ms at worst), the bakes 
 which the glass's own frame needs in the arena; the paint-ahead takes 2.7 s (open) and 2.9 s (close) after App
 Detail lands. Reports: `bench/results/2026-11-20-*`.
 
-Night of 20 Nov (in V4 at `e97f7dd664`). The Max no longer changes a file of the Pro's or the Dial's: the six Pro
+Night of 20 Nov (in V4 at `7f5e062f06`). The Max no longer changes a file of the Pro's or the Dial's: the six Pro
 files it needs changed are its own copies in `devices/harness-max/firmware/main/pro_fork/` (each with its upstream
 path and blob, `scripts/check_pro_forks.py` says when `main` moves them), so `git diff 91f60b6a7b --
 devices/harness-pro` and `-- cli/src/core` are empty; the CLI's and Desktop's Max paths are gated on `board:"max"`,
 and the TCP dev cable lives in the devices' process. Every pixel is as V4's before the copies (`test/raster_same.sh`,
 440 scenes x 5 clips, both glasses). On the chip, without the panel (`bench/results/2026-11-20-...-final.txt`): an open
 52.7 fps, a close 52.4 fps (first frame 16 ms and 22 ms), the paint-ahead's longest step 3.3 ms (none over 4 ms), the
-swipe 63 fps, the slivers' drag 66 fps (54 before), the loops 455 fps, a whole glass 16.3 ms; the listening band is
+swipe 63 fps, the slivers' drag 72 fps (54 before), the loops 455 fps, a whole glass 16.3 ms; the listening band is
 64,556 px a frame again (a padding byte the chip's GCC copied from the stack had made every glow repaint, 337,600 px).
 The Orange Pi's unit runs the A76 pair at its top clock while the bar runs (a tap after a rest painted at 416 MHz,
 56 ms), the scaled paint blends one axis at a time (9.0 ms a whole picture, from 12.2), a frame waits for its own
-flip (finger to glass 25 ms, from 42), and a frame's damage is up to eight rectangles; a 3 h soak of `--story` held
+flip (a release to glass 25 ms, from 42), the touch reader waits for the touchscreen's next event while no finger is
+down instead of the Pro touch task's 20 ms poll (a press to glass 27 ms, from 42), and a frame's damage is up to
+eight rectangles; a 3 h soak of `--story` held
 17.8 MB, 2.5% of a core, 27–31 ms worst frames and no warning. Still open: a sliver's kept layer is built cold in its
-first frame (67 ms on the chip), which needs the work split over both cores or a cheaper blur.
+first frame (56 ms on the chip, from 83), which needs the work split over both cores or made in the paint-ahead.
 
 Deviations from V3 that remain: the pages switch without V3's cross-fade (a cross-faded frame costs 6–10 whole
 glasses); the cell pets hold their pose; the words and chips fade without V3's blur; the overlay, the asking chip and
@@ -223,7 +225,7 @@ No wake word is planned: one tap talks.
 | Risk | Effect | What we do |
 |---|---|---|
 | The cable protocol changes daily on `main` | The bar breaks against a released daemon | M1 now, then merge `main` weekly until M4 |
-| App Detail's motion on the P4's strip renderer | Frames too long, a stutter | Measured on the chip without the panel (20 Nov): open 52.7 fps, close 52.4 fps, swipe 63 fps, slivers 66 fps, first frames warm, paint-ahead steps under 4 ms; a sliver's first cold frame 67 ms; measure again with the panel in M3 |
+| App Detail's motion on the P4's strip renderer | Frames too long, a stutter | Measured on the chip without the panel (20 Nov): open 52.7 fps, close 52.4 fps, swipe 63 fps, slivers 72 fps, first frames warm, paint-ahead steps under 4 ms; a sliver's first cold frame 56 ms; measure again with the panel in M3 |
 | One framebuffer on the P4 | Motion tears on the 8.8" panel | A second framebuffer flipped on refresh, verified at M3 |
 | The Orange Pi shows the picture at 2/3 | Smaller than the 8.8" panel's pixels, larger than its millimetres | Judge type sizes in mm: 1280 px on the 11.9" bar is about 255 mm wide, the 8.8" panel about 217 mm |
 | The demo hides gaps of the real path | The inbox and empty apps behave differently with the real daemon | Test each milestone on `--usb`, not only `--demo` |
