@@ -1147,6 +1147,22 @@ class ReuseFixture(unittest.TestCase):
 class ReuseTests(ReuseFixture):
     """Reuse what main's new commits left untouched; rerun everything on any doubt."""
 
+    def test_a_reason_names_a_path_only_in_plain_characters(self):
+        # The job summary writes each reason into its Markdown, and git allows backticks and newlines in a path: one a PR
+        # adds, or a batch's other member, could write lines of its own there.
+        odd = "a`\n\n## Approved by the maintainers\n`.ts"
+        for pr_paths, main_paths, reason in (
+                (["mobile/lib/app.dart"], [f"backend/src/{odd}"], lambda plan: plan["reused"]["mobile"]["reason"]),
+                (["mobile/lib/app.dart", "backend/src/app.ts"], [f"backend/src/{odd}"],
+                 lambda plan: plan["reuse"]["rerun"]["backend"]),
+                (["mobile/lib/app.dart"], [f".github/{odd}"], lambda plan: plan["reuse"]["reason"]),
+                (["mobile/lib/app.dart", f".github/{odd}"], ["backend/src/app.ts"], lambda plan: plan["reuse"]["reason"])):
+            with self.subTest(pr=pr_paths, main=main_paths):
+                _, main, head = self.scenario(pr_paths, main_paths)
+                text = reason(self.plan(head, main))
+                self.assertIn("a path of other characters", text)
+                self.assertNotIn("Approved", text)
+
     def test_an_unrelated_main_change_reuses_the_passed_heads_result(self):
         passed, main, head = self.scenario(["mobile/lib/app.dart"], ["backend/src/app.ts"])
         plan = self.plan(head, main)
