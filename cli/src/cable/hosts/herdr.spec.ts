@@ -15,7 +15,8 @@ function recorder(over: Partial<HerdrAdapterDeps> = {}, codes: Array<number | nu
   const calls: Call[] = []
   const prompt = vi.fn(async (_paneId: string, _kind: string, _text: string): Promise<HerdrPrompt> => ({ outcome: 'sent' }))
   const socketStamp = vi.fn((): string | undefined => '1:1')
-  const client = { prompt, socketStamp }
+  // No herdr found running: herdr is on PATH or nowhere.
+  const client = { prompt, socketStamp, binary: (): string | undefined => undefined }
   const deps: HerdrAdapterDeps = {
     run: async (file, args, timeoutMs) => {
       calls.push({ file, args, timeoutMs })
@@ -91,6 +92,17 @@ describe('the herdr adapter', () => {
     const { calls, adapter } = recorder({ onPath: () => null })
     expect(await adapter.focus(pane('w1:p2'))).toBe(false)
     expect(calls).toEqual([])
+  })
+
+  // herdr's zip on Windows puts it on no PATH: the herdr that wrote the marker is the one the client saw running.
+  it('with no herdr on PATH a tap runs the herdr the client found running, and herdr on PATH first', async () => {
+    const found = 'C:\\herdr\\herdr.exe'
+    const { calls, adapter } = recorder({ onPath: () => null, platform: 'win32', client: { prompt: vi.fn(), socketStamp: () => '1:1', binary: () => found } })
+    expect(await adapter.focus(pane('w1:p2'))).toBe(true)
+    expect(calls).toEqual([{ file: found, args: ['agent', 'focus', 'w1:p2'], timeoutMs: 10_000 }])
+    const onPath = recorder({ platform: 'win32', client: { prompt: vi.fn(), socketStamp: () => '1:1', binary: () => found } })
+    expect(await onPath.adapter.focus(pane('w1:p2'))).toBe(true)
+    expect(onPath.calls).toEqual([focusCall('w1:p2')])
   })
 
   it('a pane id not in its form runs nothing', async () => {

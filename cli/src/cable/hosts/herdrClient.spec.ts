@@ -112,8 +112,11 @@ describe.skipIf(process.platform === 'win32')('the herdr client (docs/specs/2026
   })
 
   it('request writes one line and answers the result', async () => {
-    expect(await client().request('agent.list', {})).toEqual({ ok: true, result: { type: 'agent_list', agents: [] } })
+    const herdr = client()
+    expect(await herdr.request('agent.list', {})).toEqual({ ok: true, result: { type: 'agent_list', agents: [] } })
     expect(server.requests).toEqual([{ connection: 1, request: { id: expect.any(String), method: 'agent.list', params: {} } }])
+    // Off Windows a tap finds herdr on PATH alone: no process table is read for it.
+    expect(herdr.binary()).toBeUndefined()
   })
 
   it('each request is a connection of its own', async () => {
@@ -555,6 +558,19 @@ describe.skipIf(process.platform === 'win32')('the herdr client (docs/specs/2026
       await writeFile(marker, 'not a marker')
       expect(await windows().request('agent.list', {})).toEqual({ ok: false, fault: 'no_socket' })
       expect(server.connections).toBe(0)
+    })
+
+    // herdr's zip puts it on no PATH: a tap runs the herdr that wrote the marker (herdr.ts).
+    it('binary is the herdr that wrote the marker once it is seen running, and none for one not seen or gone', async () => {
+      const image = 'C:\\Users\\me\\.herdr\\packages\\standalone\\releases\\0.9.5-x86_64-pc-windows-msvc\\herdr.exe'
+      const herdr = windows({ rows: async () => [herdrRow({ imagePath: image })] })
+      expect(herdr.binary()).toBeUndefined()
+      expect(await herdr.request('agent.list', {})).toMatchObject({ ok: true })
+      expect(herdr.binary()).toBe(image)
+      // Another program under herdr's pid: Windows gave it away.
+      const gone = windows({ rows: async () => [herdrRow({ imagePath: image, executable: 'node.exe' })] })
+      expect(await gone.request('agent.list', {})).toEqual({ ok: false, fault: 'no_socket' })
+      expect(gone.binary()).toBeUndefined()
     })
 
     it('herdr is looked for once a marker, and again after a connection that failed: herdr may be gone, and its pipe another account\'s', async () => {

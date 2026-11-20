@@ -312,6 +312,7 @@ const herdr: HerdrClient = {
   },
   prompt: async (paneId, kind, text) => { herdrCalls.push(['prompt', paneId, kind, text]); return { outcome: 'sent' } },
   socketStamp: () => undefined,
+  binary: () => undefined,
 }
 /** What the devices asked of Herdr Core's socket: recorded, so no spec reaches the developer's own Herdr. It takes every
  *  prompt, and has no socket for anything else. */
@@ -6240,13 +6241,15 @@ describe('herdr\'s agents, over its socket (docs/specs/2026-11-16-device-herdr.m
   /**
    * The devices with a herdr the test drives, the dial not attached yet. Its socket is there (`stamp`). Each subscription
    * keeps its entries, its callbacks and whether it was closed; `agent.list` answers `agents`; a prompt is recorded and
-   * answers the next of `prompts`, else sent. `live` attaches the dial, starts the first subscription and awaits the list
-   * that follows it; `status` is herdr telling the pane's status on it.
+   * answers the next of `prompts`, else sent; `binary` is the herdr the client saw write the marker (Windows). `live`
+   * attaches the dial, starts the first subscription and awaits the list that follows it; `status` is herdr telling the
+   * pane's status on it.
    */
   const withHerdr = (over: Parameters<typeof start>[0] = {}) => {
     const subs: Array<{ entries: readonly HerdrEntry[]; to: HerdrSubscriber; closed: boolean }> = []
     const lists: Array<Promise<HerdrAnswer>> = []
-    const herdr = { agents: [listing()] as unknown[], stamp: '1:1' as string | undefined, subs, asked: [] as unknown[][], prompts: [] as HerdrPrompt[] }
+    const herdr = { agents: [listing()] as unknown[], stamp: '1:1' as string | undefined, subs, asked: [] as unknown[][], prompts: [] as HerdrPrompt[],
+      binary: 'C:\\herdr\\herdr.exe' }
     const client: HerdrClient = {
       request: (method, params) => {
         herdr.asked.push(['request', method, params])
@@ -6264,6 +6267,7 @@ describe('herdr\'s agents, over its socket (docs/specs/2026-11-16-device-herdr.m
         return herdr.prompts.shift() ?? { outcome: 'sent' }
       },
       socketStamp: () => herdr.stamp,
+      binary: () => herdr.binary,
     }
     const started = start({ orca: onMac, tty: async () => undefined, herdr: client, ...over, faults: ['fleet', ...over.faults ?? []] })
     const live = async (agents: unknown[] = [listing()]): Promise<void> => {
@@ -6488,6 +6492,23 @@ describe('herdr\'s agents, over its socket (docs/specs/2026-11-16-device-herdr.m
     installed = true
     attach(started.port)
     expect(watched.calls).toEqual([[herdrClientDeps(), expect.any(Function)]])
+  })
+
+  // herdr's zip puts it on no PATH (docs/plans/2026-11-19-dial-windows-vm-notes.md, Task 2 §2): there its folder, which
+  // holds its marker once it has run, says it is installed, and a tap runs the herdr the client saw write the marker.
+  it('on Windows with no herdr on PATH, its folder says it is installed, and a tap runs the herdr that wrote the marker', async () => {
+    const folder = dirname(herdrClientDeps().socketPath)
+    let ran = false
+    const started = withHerdr({ orca: { ...onMac, platform: 'win32',
+      onPath: (name: string) => (name === 'herdr' ? null : onMac.onPath(name)), exists: (path: string) => ran && path === folder } })
+    nothingAsked(started)
+    seen.host.watching!(false)
+    ran = true
+    started.herdr.stamp = '1:1'
+    await started.live()
+    const [{ id }] = await listed()
+    expect(await host().openAgent(id)).toBeUndefined()
+    expect(orcaRuns).toEqual([['C:\\herdr\\herdr.exe', ['agent', 'focus', PANE], 10_000]])
   })
 
   it('with no socket, the folder herdr\'s socket goes in is watched, where the daemon\'s own environment puts it, while a dial is attached', () => {
