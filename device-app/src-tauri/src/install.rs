@@ -115,7 +115,14 @@ impl Shell for SystemShell {
         // Only Linux's runs have one in a terminal.
         #[cfg(any(target_os = "linux", all(test, unix)))]
         if run.place == Place::Terminal {
-            return crate::terminal::run(&self.folder, run.line, deadline, &crate::terminal::start);
+            return crate::terminal::run(
+                &self.folder,
+                run.line,
+                deadline,
+                &crate::terminal::start,
+                &std::time::Instant::now,
+                &std::thread::sleep,
+            );
         }
         cli::run_lines(background(run.line), deadline, sink)
     }

@@ -9,25 +9,29 @@ use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::path::Path;
 use std::process::Command;
 use std::sync::Mutex;
-use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 /// Desktop's order (`_defaultOpenTerminal`): the terminal Debian and Ubuntu name as the default, then the two most
-/// common. Each takes the script's path after its flag.
+/// common. Each takes `/bin/sh` and the script's path after its flag (`command`).
 pub const CANDIDATES: [(&str, &str); 3] = [("x-terminal-emulator", "-e"), ("gnome-terminal", "--"), ("xterm", "-e")];
 /// None of CANDIDATES is on this computer.
 pub const NO_TERMINAL: &str = "No terminal found.";
+/// A terminal that started and never ran the script: no display it can use, or a default that is broken.
+pub const DID_NOT_OPEN: &str = "The terminal did not open.";
+/// How long a terminal that started has to run the script: the first start of gnome-terminal's server takes seconds.
+const OPENS_WITHIN: Duration = Duration::from_secs(30);
 /// How often the result is read. Desktop reads it every 5 s; here the Install screen waits on it.
 const READ_EVERY: Duration = Duration::from_secs(1);
 
 /// Before the line: the result is written whole (a temp file, then a rename), so a read never sees half of it. A
 /// closed terminal (HUP), a Ctrl-C (INT) or a kill (TERM) writes 129 at once, so the app does not wait out its
-/// deadline.
+/// deadline. Then, the trap set, a file beside the script says it runs.
 const SCRIPT_HEAD: &str = r#"#!/bin/sh
 # Harness: setup's host half, in a terminal so sudo can ask for a password.
 result="${0%.sh}.exit"
 finish() { printf '%s\n' "$1" > "$result.tmp" && mv "$result.tmp" "$result"; }
 trap 'finish 129; exit 129' HUP INT TERM
+: > "${0%.sh}.started"
 "#;
 /// After the line: a failure keeps the terminal open until Enter, so the person can read why.
 const SCRIPT_TAIL: &str = r#"status=$?
@@ -52,10 +56,20 @@ pub fn wait_result(
     now: &dyn Fn() -> Instant,
     pause: &dyn Fn(Duration),
 ) -> Option<i32> {
-    let end = now() + deadline;
+    wait_for(deadline, now, pause, || fs::read_to_string(result).ok().and_then(|text| text.trim().parse().ok()))
+}
+
+/// `read`'s answer, asked at once, then every READ_EVERY until `within` has passed on `now`'s clock; None then.
+fn wait_for<T>(
+    within: Duration,
+    now: &dyn Fn() -> Instant,
+    pause: &dyn Fn(Duration),
+    read: impl Fn() -> Option<T>,
+) -> Option<T> {
+    let end = now() + within;
     loop {
-        if let Some(code) = fs::read_to_string(result).ok().and_then(|text| text.trim().parse().ok()) {
-            return Some(code);
+        if let Some(answer) = read() {
+            return Some(answer);
         }
         let left = end.saturating_duration_since(now());
         if left.is_zero() {
@@ -67,13 +81,16 @@ pub fn wait_result(
 
 /// Writes `script(line)` to `host-<n>.sh` in `folder`, a fresh folder, both the person's alone (0700), and has `start`
 /// open it in the first of CANDIDATES that is there: one that is not (NotFound) moves on, any other error is the
-/// answer. Then waits up to `deadline` for its code. Output holds no stdout or stderr: what the line prints is the
-/// person's, in the terminal.
+/// answer. Then waits up to OPENS_WITHIN for the script to run, DID_NOT_OPEN past it, and from then up to `deadline`
+/// for its code, on `now`'s clock. Output holds no stdout or stderr: what the line prints is the person's, in the
+/// terminal.
 pub fn run(
     folder: &Path,
     line: &str,
     deadline: Duration,
     start: &dyn Fn(&str, &str, &Path) -> io::Result<()>,
+    now: &dyn Fn() -> Instant,
+    pause: &dyn Fn(Duration),
 ) -> io::Result<Output> {
     // An older run's terminal may still be open. Its files go, and this run's names are its own: what that terminal
     // writes later is never read as this run's, and its shell, still reading its script, never reads this one's.
@@ -92,7 +109,12 @@ pub fn run(
         .map(|(program, flag)| start(program, flag, &script_path))
         .find(|started| !matches!(started, Err(error) if error.kind() == io::ErrorKind::NotFound))
         .unwrap_or_else(|| Err(io::Error::new(io::ErrorKind::NotFound, NO_TERMINAL)))?;
-    let code = wait_result(&result, deadline, &Instant::now, &thread::sleep);
+    // How a terminal ends says nothing (`start`): one that never runs the script is seen by the file it never makes.
+    let started = script_path.with_extension("started");
+    if wait_for(OPENS_WITHIN, now, pause, || started.exists().then_some(())).is_none() {
+        return Err(io::Error::new(io::ErrorKind::TimedOut, DID_NOT_OPEN));
+    }
+    let code = wait_result(&result, deadline, now, pause);
     Ok(Output { code, timed_out: code.is_none(), ..Output::default() })
 }
 
@@ -106,12 +128,21 @@ fn run_number() -> u128 {
     *last
 }
 
-/// Starts `program flag script` as the app opens a page (`open::start`): in its own process group, so a signal to the
-/// app's group (a Ctrl-C where the app was started from a shell) does not close the person's terminal, and in the
-/// person's environment, not the AppImage's. How it ends says nothing: gnome-terminal's ends at once and leaves the
-/// window to its server, so the run's end is read from the script's result alone.
+/// Starts `command` as the app opens a page (`open::start`): in its own process group, so a signal to the app's group
+/// (a Ctrl-C where the app was started from a shell) does not close the person's terminal, and in the person's
+/// environment, not the AppImage's. How it ends says nothing: gnome-terminal's ends at once and leaves the window to
+/// its server, so the run's end is read from the script's files alone.
 pub fn start(program: &str, flag: &str, script: &Path) -> io::Result<()> {
-    open::start(Command::new(program).arg(flag).arg(script), None)
+    open::start(&mut command(program, flag, script), None)
+}
+
+/// `program flag /bin/sh script`. Two arguments after the flag: Debian's `x-terminal-emulator -e` passes them on as
+/// they are, where it runs one alone through `sh -c`, split at a space; and sh reads a script that a home mounted
+/// `noexec` would not run.
+pub fn command(program: &str, flag: &str, script: &Path) -> Command {
+    let mut command = Command::new(program);
+    command.arg(flag).arg("/bin/sh").arg(script);
+    command
 }
 
 #[cfg(test)]
