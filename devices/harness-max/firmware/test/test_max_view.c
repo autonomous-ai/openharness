@@ -640,10 +640,17 @@ static void test_apps(void)
     CHECK(max_m.hits[1].kind == MAX_HIT_CLOSE && hits_of(MAX_HIT_APP) == max_m.hit_count - 2);
     for (int i = 2; i < max_m.hit_count; i++) CHECK(max_m.hits[i].arg == i - 2);
     CHECK(word("Shown") && word("3 agents") && word("1 agent") && word("No agents") && word("Harness"));
+    // Cards 196 wide, a little wider than the mockup's 176 (the owner's call of 20 Nov): of the eight apps, six whole
+    // on the glass from the header column on, the next past its edge.
+    CHECK(hits_of(MAX_HIT_APP) == 6);
+    for (int i = 0; i < 6; i++) {
+        const max_hit_t *h = find_hit(MAX_HIT_APP, i);
+        CHECK(h && h->w == DX(196) && h->x == DX(211) + i * (DX(196) + DX(16)) && h->x + h->w <= HT_WIDTH);
+    }
     max_box_t boxes[PRO_APPS_MAX + 3] = {box_of(&max_m.hits[0])};
     for (int i = 1; i < max_m.hit_count; i++) {
         boxes[i] = box_of(&max_m.hits[i]);
-        if (boxes[i].x + boxes[i].w == HT_WIDTH) boxes[i].w = DX(176);
+        if (boxes[i].x + boxes[i].w == HT_WIDTH) boxes[i].w = DX(196);
     }
     check_words(boxes, max_m.hit_count);
     check_glass();
@@ -1015,25 +1022,25 @@ static void test_triangle_reach(void)
     CHECK(px[2 * 32 + 15] == ink && px[15 * 32 + 1] == 0);   // inside its middle, and outside a lower corner
 }
 
-// Each state's glow from the top of its cell: .25 for a waiting, a failed, a working and a done agent (the owner's of
-// 20 Nov: at the mockup's .08, then .14, it did not show on the black ground), a waiting one's breathing from there;
-// none at rest.
+// Each state's glow from the top of its cell: .20 for a waiting, a failed, a working and a done agent (the owner's of
+// 20 Nov: at the mockup's .08, then .14, it did not show on the black ground; .25 was a touch too bright), a waiting
+// one's breathing from there; none at rest.
 static void test_glow(void)
 {
     max_agent_t a = {0};
     a.state = MAX_ASKING;
-    CHECK(max_glow_pct(&a) == 25);
-    CHECK(max_glow_top(&a, GROUND, T0, true) == max_mix(WAIT, GROUND, 25));    // held still: at its loop's start
-    CHECK(max_glow_top(&a, GROUND, T0, false) == max_mix(WAIT, GROUND, 25));   // its loop's start: its brightest
-    CHECK(max_glow_top(&a, GROUND, T0 + 500, false) != max_mix(WAIT, GROUND, 25));
+    CHECK(max_glow_pct(&a) == 20);
+    CHECK(max_glow_top(&a, GROUND, T0, true) == max_mix(WAIT, GROUND, 20));    // held still: at its loop's start
+    CHECK(max_glow_top(&a, GROUND, T0, false) == max_mix(WAIT, GROUND, 20));   // its loop's start: its brightest
+    CHECK(max_glow_top(&a, GROUND, T0 + 500, false) != max_mix(WAIT, GROUND, 20));
     a.state = MAX_FAILED;
-    CHECK(max_glow_pct(&a) == 25);
+    CHECK(max_glow_pct(&a) == 20);
     a.state = MAX_WORKING;
-    CHECK(max_glow_pct(&a) == 25);
-    CHECK(max_glow_top(&a, GROUND, T0, true) == max_mix(ACCENT, GROUND, 25));
+    CHECK(max_glow_pct(&a) == 20);
+    CHECK(max_glow_top(&a, GROUND, T0, true) == max_mix(ACCENT, GROUND, 20));
     a.state = MAX_DONE;
-    CHECK(max_glow_pct(&a) == 25);
-    CHECK(max_glow_top(&a, GROUND, T0 + 500, false) == max_mix(DONE, GROUND, 25));   // no breath: it holds still
+    CHECK(max_glow_pct(&a) == 20);
+    CHECK(max_glow_top(&a, GROUND, T0 + 500, false) == max_mix(DONE, GROUND, 20));   // no breath: it holds still
     a.state = MAX_IDLE;
     CHECK(max_glow_pct(&a) == 0);
 }

@@ -371,9 +371,9 @@ unsigned max_rail_ink(const max_agent_t *a)
 }
 unsigned max_chip_ink(const max_agent_t *a) { return a->state == MAX_IDLE ? CHIP_IDLE : max_rail_ink(a); }
 
-// The glow's top, in %, of any agent not at rest: .25 (owner, 20 Nov: over the black ground the mockup's .08, then
-// .14, did not show); a waiting one's breathes down to .05 and back.
-enum { GLOW_PCT = 25, GLOW_LOW_PCT = 5 };
+// The glow's top, in %, of any agent not at rest: .20 (owner, 20 Nov: over the black ground the mockup's .08, then
+// .14, did not show, and .25 was a touch too bright); a waiting one's breathes down to .05 and back.
+enum { GLOW_PCT = 20, GLOW_LOW_PCT = 5 };
 
 unsigned max_glow_pct(const max_agent_t *a) { return a->state == MAX_IDLE ? 0 : GLOW_PCT; }
 unsigned max_glow_top(const max_agent_t *a, unsigned under, uint32_t now_ms, bool still)

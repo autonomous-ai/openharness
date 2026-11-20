@@ -96,8 +96,9 @@ void max_draw_inbox(ht_scene_t *s, uint32_t now_ms)
 
 // ---- Apps ----
 
+// A card 196 wide, not the mockup's 176 (owner, 20 Nov: a little wider): six still fit whole from CARDS_X.
 enum {
-    AP_HEAD_W = DX(210), AP_HEAD_X = DX(34), CARDS_X = DX(211), APP_CARD_W = DX(176), APP_GAP = DX(16),
+    AP_HEAD_W = DX(210), AP_HEAD_X = DX(34), CARDS_X = DX(211), APP_CARD_W = DX(196), APP_GAP = DX(16),
     APP_Y = DY(33), APP_H = DY(244), APP_RAISE = DY(6), APP_R = 28, APP_PAD_X = DX(20), APP_PAD_Y = DY(22),
     APP_ICON_D = DY(72), APP_DOT = DY(10), APP_DOTS = 8,
 };

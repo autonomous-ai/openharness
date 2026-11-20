@@ -12,9 +12,9 @@ with `MAX_Y`, the text keeps its size).
 1. **Overview.** The app column on the left (the shown app's icon and name, and a grid glyph when there are other
    apps: a tap opens Apps), up to five agent cells, and the bell column on the right (a round button, a yellow badge
    with the unread count: a tap opens Inbox). A cell: a status rail along its top (working lavender, waiting yellow,
-   done green, failed red, idle dark), a glow of that colour from the top, fading to none down it (.25 at its top,
-   a waiting one's breathing .25 to .05, none at rest; the mockup's .08, then .14, did not show on the black ground,
-   owner 20 Nov), the pet, the name, and the status word
+   done green, failed red, idle dark), a glow of that colour from the top, fading to none down it (.20 at its top,
+   a waiting one's breathing .20 to .05, none at rest; the mockup's .08, then .14, did not show on the black ground and
+   .25 was a touch too bright, owner 20 Nov), the pet, the name, and the status word
    in the status colour ("Needs you", "Done", "Failed", "Resting", or the spinner word). More than five agents: a
    sideways swipe pages them; dots under the cells show the page, a yellow dot marks a page with a waiting agent.
    Order: the ring's own order (the daemon's fixed order per app), so an agent keeps its place.
@@ -41,8 +41,8 @@ with `MAX_Y`, the text keeps its size).
    in two rows. Unread cards are lit with a dot. A tap: an agent of the ring that still waits and takes answers opens
    Attention; any other opens it on the computer (`agent.open`; the daemon turns to its app when it is another app's).
    Leaving Inbox marks every card read.
-5. **Apps.** "APPS" header column, then one card per app the daemon lists: icon, name, "N agents", a dot per agent's
-   state, "Shown" on the shown app's card. A tap picks the app (`app.pick`) and goes back to Overview. When the
+5. **Apps.** "APPS" header column, then one card per app the daemon lists (196 wide, a little wider than the mockup's
+   176, owner 20 Nov; six fit whole): icon, name, "N agents", a dot per agent's state, "Shown" on the shown app's card. A tap picks the app (`app.pick`) and goes back to Overview. When the
    computer offers New Harness, a last "+ New" card opens it.
 6. **Ambient.** The clock large, the date, "All quiet". Shown when no agent works or waits and nobody touched the bar
    for 60 s; with no computer on the cable it says "Not connected" instead; with no agents, "No agents yet". A tap goes
