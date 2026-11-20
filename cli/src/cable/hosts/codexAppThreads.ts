@@ -134,7 +134,7 @@ export class CodexAppThreads {
   private readonly sqlite: () => DatabaseConstructor | null
   private readonly readState: (fd: number, max: number) => Buffer
   private projects: Projects | undefined
-  private names: Names | undefined
+  private listedNames: Names | undefined
 
   constructor(private readonly home: string, seams: CodexAppSeams = {}) {
     this.sqlite = seams.sqlite ?? builtinSqlite
@@ -189,27 +189,50 @@ export class CodexAppThreads {
    *  HARNESSD_SERVICES=none the core's terminal sweep (engineSessionTitle) shares it, and reads the index cold once after. */
   forget(): void {
     this.projects = undefined
-    this.names = undefined
+    this.listedNames = undefined
     resetCodexThreadNames()
   }
 
   /**
-   * Codex's own names for `ids`. codexThreadName opens the index to read it, and a FIFO, or a link to one, opened so
-   * waits for a writer for good, and the devices event loop with it: only a regular file is read. Each of its answers
-   * costs a copy of the environment (launchCodexHome), most of a read: while the index holds still, only a thread not
-   * listed last time is asked.
+   * Codex's own name of each of `ids` that has one, for the title of the ChatGPT window the dial follows: whole, as the
+   * window shows it (trimmed, as codexThreadName keeps it), not cut as a row's name is, and never the folder's. Asked afresh at each report, so a name Codex
+   * gave since the last read matches. One codexThreadName per id and no lookup of many in sessionTitle.ts: the core's
+   * process loads that file (cli/AGENTS.md, rule 7). Up to 200 calls a followed report, accepted by the PM (2026-11-20);
+   * its cache reads the index at most once for them all.
+   */
+  names(ids: readonly string[]): ReadonlyMap<string, string> {
+    const byId = new Map<string, string>()
+    if (!this.index()) return byId
+    for (const id of ids) {
+      const name = codexThreadName(id, this.home)
+      if (name) byId.set(id, name)
+    }
+    return byId
+  }
+
+  /** Codex's index of names when it is a regular file. codexThreadName opens it to read it, and a FIFO, or a link to
+   *  one, opened so waits for a writer for good, and the devices event loop with it. */
+  private index(): Stats | undefined {
+    let found: Stats | undefined
+    try { found = lstatSync(join(this.home, INDEX)) } catch { /* no index: no thread has Codex's name */ }
+    return found?.isFile() ? found : undefined
+  }
+
+  /**
+   * Codex's own names for `ids`, only from a regular file (index()). Each of codexThreadName's answers costs a copy of
+   * the environment (launchCodexHome), most of a read: while the index holds still, only a thread not listed last time
+   * is asked.
    */
   private namesOf(ids: ReadonlySet<string>): ReadonlyMap<string, string | null> {
-    let found: Stats | undefined
-    try { found = lstatSync(join(this.home, INDEX)) } catch { /* no index: every thread has its folder's name */ }
-    if (!found?.isFile()) {
-      this.names = undefined
+    const found = this.index()
+    if (!found) {
+      this.listedNames = undefined
       return new Map()
     }
     const stamp = stampOf(found)
-    const last = this.names?.stamp === stamp ? this.names.byId : new Map<string, string | null>()
+    const last = this.listedNames?.stamp === stamp ? this.listedNames.byId : new Map<string, string | null>()
     const byId = new Map([...ids].map((id) => [id, last.has(id) ? last.get(id)! : codexThreadName(id, this.home)]))
-    this.names = { stamp, byId }
+    this.listedNames = { stamp, byId }
     return byId
   }
 

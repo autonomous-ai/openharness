@@ -340,6 +340,7 @@ const noCodexApp: NonNullable<DevicesDeps['codexAppThreads']> = {
   there: () => false,
   read: async () => ({ ok: false, kind: 'ENOENT' }),
   forget: () => {},
+  names: () => new Map(),
 }
 /** What the devices asked of opencode's service: recorded, so no spec reaches the developer's own opencode. It has no
  *  service.json, and its prompt fails. */
@@ -9324,6 +9325,7 @@ describe("the ChatGPT app's threads, from its metadata (docs/plans/2026-11-19-di
       there: () => { fake.calls.push('there'); return true },
       read: async () => { fake.calls.push('read'); return fake.read },
       forget: () => { fake.calls.push('forget') },
+      names: () => new Map(),
     }
     const bundleId: NonNullable<DevicesDeps['bundleId']> = async (app) => {
       fake.asked.push(app)
