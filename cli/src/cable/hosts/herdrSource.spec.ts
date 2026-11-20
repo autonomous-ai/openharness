@@ -24,7 +24,7 @@ const detected = (pane: string, more: Record<string, unknown> = {}) =>
   ({ agent: 'claude', pane_id: pane, type: 'pane_agent_detected', workspace_id: pane.split(':')[0], ...more })
 const refusal = (code: string) => ({ line: { error: { code, message: code } } })
 const method = (request: unknown) => (request as { method: string }).method
-const LOG_LINE = /^\[herdr\] (listed · \d+ agents|over · \d+ left out|list · [a-z_]+|closed · [a-z_]+|retry · \d+|socket · (none|stale|live))$/
+const LOG_LINE = /^\[herdr\] (listed · \d+ agents|over · \d+ left out|skipped · \d+ pane-id|list · [a-z_]+|closed · [a-z_]+|retry · \d+|socket · (none|stale|live))$/
 
 describe.skipIf(process.platform === 'win32')('the herdr source (docs/specs/2026-11-16-device-herdr.md)', () => {
   let server: FakeHerdr
@@ -479,6 +479,41 @@ describe.skipIf(process.platform === 'win32')('the herdr source (docs/specs/2026
     s.advance(1000)
     const fifth = await server.got('events.subscribe', 5)
     expect(fifth.request).toMatchObject({ params: { subscriptions: [...KINDS, statusEntry('w1:p1'), statusEntry('w3:p1')] } })
+  })
+
+  it('a pane id with herdr\'s letters, w2:pE, is listed', async () => {
+    server.agents = [agent('w2:pE')]
+    const s = setup()
+    s.source.start()
+    await listRead(1)
+    expect(s.source.list().map(({ paneKeys }) => paneKeys)).toEqual([['herdr:w2:pE']])
+  })
+
+  it('rows dropped for a pane id out of form are said by count, when the count changes', async () => {
+    server.agents = [agent('w1:pI'), { ...agent('w3:p1'), pane_id: 7 }, agent('w2:pE')]
+    const s = setup()
+    s.source.start()
+    await listRead(1)
+    expect(s.log).toEqual(['[herdr] socket · live', '[herdr] listed · 1 agents', '[herdr] skipped · 2 pane-id'])
+    // The second subscription names w2:pE; its list drops as many, and says nothing.
+    s.advance(1000)
+    await listRead(2)
+    /** A list again: a pane not yet known asks for one. */
+    const listAgain = async (pane: string, n: number) => {
+      server.event('pane_agent_detected', detected(pane))
+      await s.until(() => s.timers.length === 1)
+      s.advance(1000)
+      await listRead(n)
+    }
+    server.agents = [agent('w2:pE')]
+    await listAgain('w4:p1', 3)
+    server.agents = [agent('w2:pE'), agent('w1:pe')]
+    await listAgain('w5:p1', 4)
+    await listAgain('w6:p1', 5)
+    expect(s.log).toEqual([
+      '[herdr] socket · live', '[herdr] listed · 1 agents', '[herdr] skipped · 2 pane-id',
+      '[herdr] skipped · 0 pane-id', '[herdr] skipped · 1 pane-id',
+    ])
   })
 
   it('an entry with a bad pane id, kind or status is left out, the rest listed', async () => {

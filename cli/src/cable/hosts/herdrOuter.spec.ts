@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
-import { createHerdrOuter, HERDR_CLIENTS_A_LOOKUP, ttyAtime, type HerdrOuterDeps } from './herdrOuter.js'
+import { createHerdrOuter, HERDR_CLIENTS_A_LOOKUP, SKIPPED_IDS_KEPT, ttyAtime, type HerdrOuterDeps } from './herdrOuter.js'
 
 interface Call { file: string; args: string[]; timeoutMs: number }
 /** What the fake lsof and ps print, and each tty's access time. */
@@ -90,6 +90,36 @@ describe('the outer place of an agent in the person\'s herdr', () => {
     // One client left: no tty's access time is asked.
     expect(stats).toEqual([])
     expect(logs).toEqual(found)
+  })
+
+  it('a pane id with herdr\'s letters, w2:pE, is looked up', async () => {
+    const { calls, logs, outer } = lookup({}, [], ONE)
+    expect(await outer({ HERDR_PANE_ID: 'w2:pE' }, 100)).toEqual(IN_TERMINAL)
+    expect(calls).toEqual([lsofAsked('80,4300'), psAsked('4300')])
+    expect(logs).toEqual(found)
+  })
+
+  it('a pane id out of form is said skipped once per id, with no id in the line; no pane id says nothing', () => {
+    const skipped = '[device] herdr client · skipped · pane-id'
+    const { logs, outer } = lookup({}, [], ONE)
+    expect(outer({}, 100)).toBeUndefined()
+    expect(outer({ TMUX_PANE: '%3' }, 100)).toBeUndefined()
+    expect(logs).toEqual([])
+    expect(outer({ HERDR_PANE_ID: 'w1:pI' }, 100)).toBeUndefined()
+    expect(outer({ HERDR_PANE_ID: 'w1:pI' }, 90)).toBeUndefined()
+    expect(logs).toEqual([skipped])
+    expect(outer({ HERDR_PANE_ID: 'w1:p2; x' }, 100)).toBeUndefined()
+    expect(logs).toEqual([skipped, skipped])
+    // The ids kept are bounded: the oldest goes, and is said again.
+    for (let at = 0; at < SKIPPED_IDS_KEPT; at++) outer({ HERDR_PANE_ID: `bad-${at}` }, 100)
+    expect(logs.length).toBe(2 + SKIPPED_IDS_KEPT)
+    outer({ HERDR_PANE_ID: 'w1:pI' }, 100)
+    expect(logs.length).toBe(3 + SKIPPED_IDS_KEPT)
+    expect(new Set(logs)).toEqual(new Set([skipped]))
+    // Off macOS nothing is said.
+    const off = lookup({ platform: 'linux' }, [], ONE)
+    off.outer({ HERDR_PANE_ID: 'w1:pI' }, 100)
+    expect(off.logs).toEqual([])
   })
 
   it('no herdr in the caller\'s parents: {} and nothing runs', async () => {
