@@ -2,7 +2,7 @@ import { spawnSync } from 'node:child_process'
 import { linkSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, beforeEach, describe, expect, inject, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, inject, it, vi } from 'vitest'
 import { copyNode, placeNode, refuseRosettaNode, RosettaNodeError } from './placeNode.js'
 
 describe('placeNode', () => {
@@ -27,6 +27,14 @@ describe('placeNode', () => {
     placeNode(node, [], undefined, '')
     expect(statSync(node).nlink).toBe(1)
     expect(statSync(node).size).toBe(statSync(process.execPath).size)
+  })
+
+  // A fresh copy's first start is the slow one, 2 to 4 s on a loaded Mac: run inside a test's own waits, it failed them
+  // (selfUpdate.spec.ts, 2026-11-19). So the copy is started as it is placed, as the run's Node is.
+  it('starts its own copy once where the run started no Node', () => {
+    const node = join(dir, 'node'), start = vi.fn<(node: string) => void>()
+    placeNode(node, [], undefined, '', start)
+    expect(start).toHaveBeenCalledExactlyOnceWith(node)
   })
 
   // macOS may name a hard-linked file by any of its links. Homebrew's Node loads libnode from beside the
