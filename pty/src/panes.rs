@@ -1681,6 +1681,18 @@ mod tests {
     }
 
     #[test]
+    fn took_line_names_the_op_and_its_milliseconds() {
+        assert_eq!(
+            took_line("respawn", Duration::from_millis(1234)),
+            "respawn took 1234 ms"
+        );
+        assert_eq!(
+            took_line("create", Duration::from_millis(1234)),
+            "create took 1234 ms"
+        );
+    }
+
+    #[test]
     fn job_pids_and_processes_are_unsupported_here() {
         let (panes, _n) = table();
         assert_eq!(panes.handle(Op::Processes).unwrap_err().code, "unsupported");
