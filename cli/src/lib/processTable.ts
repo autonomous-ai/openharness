@@ -25,6 +25,7 @@ import { nativeProcessImages } from './nativeProcessImages.js'
 import { patientExec } from './patientExec.js'
 import { probeExecFile } from './offThreadExec.js'
 import { processIdentityOf, sameProcessIdentity } from './terminalRuntime.js'
+import { windowsProcessRows } from './windows/processTable.js'
 
 // Every `ps` call here: a held event loop must not turn a timeout into an empty answer
 // (patientExec.ts).
@@ -377,7 +378,7 @@ let processRowsInFlight: Promise<ProcessRow[] | null> | null = null
 type ProcessTableSource = () => Promise<ProcessRow[] | null>
 let source: ProcessTableSource | null = null
 
-/** Windows reads its table from harness-pty (lib/windows/processTable.ts); tests inject rows. */
+/** The daemon's own read (on Windows, its connected harness-pty's `processes` op); tests inject rows. */
 export function setProcessTableSource(next: ProcessTableSource | null): void {
   source = next
   processRowsInFlight = null
@@ -417,10 +418,14 @@ export async function processLaunchArgs(identity: ProcessIdentity): Promise<stri
   return rows && row ? launchArgs(rows, row) : ''
 }
 
-/** The process table, or null when `ps` itself failed — "we could not look" is not "nothing is there". */
+/**
+ * The process table, or null when the read itself failed — "we could not look" is not "nothing is there". With no
+ * source installed, Windows, which has no `ps`, reads it from `harness-pty ps --json` (lib/windows/processTable.ts).
+ */
 export function processRows(): Promise<ProcessRow[] | null> {
   if (processRowsInFlight) return processRowsInFlight
-  processRowsInFlight = (source ?? readProcessRows)().finally(() => { processRowsInFlight = null })
+  const read = source ?? (process.platform === 'win32' ? () => windowsProcessRows(null) : readProcessRows)
+  processRowsInFlight = read().finally(() => { processRowsInFlight = null })
   return processRowsInFlight
 }
 
