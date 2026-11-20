@@ -116,7 +116,7 @@ pub fn start(program: &str, flag: &str, script: &Path) -> io::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{CANDIDATES, NO_TERMINAL, run, script, start, wait_result};
+    use super::{CANDIDATES, DID_NOT_OPEN, NO_TERMINAL, command, run, script, start, wait_result};
     use crate::cli::spawn_lock;
     use crate::install::HOST;
     use crate::types::Output;
@@ -135,6 +135,22 @@ mod tests {
 
     fn mode(path: &Path) -> u32 {
         fs::metadata(path).unwrap().permissions().mode() & 0o777
+    }
+
+    /// `run` on a clock that each pause moves on: a test never waits on the real one.
+    fn run_at_once(
+        folder: &Path,
+        line: &str,
+        deadline: Duration,
+        start: &dyn Fn(&str, &str, &Path) -> io::Result<()>,
+    ) -> io::Result<Output> {
+        let clock = Cell::new(Instant::now());
+        run(folder, line, deadline, start, &|| clock.get(), &|pause| clock.set(clock.get() + pause))
+    }
+
+    /// What the script's first lines leave beside it, as a terminal that runs it would.
+    fn opened(script: &Path) -> io::Result<()> {
+        fs::write(script.with_extension("started"), "")
     }
 
     /// `host.sh` holding `script(line)`, in a folder of its own.
@@ -157,6 +173,7 @@ mod tests {
             assert_eq!(child.wait().unwrap().code(), Some(code));
             assert_eq!(fs::read_to_string(folder.path().join("host.exit")).unwrap(), format!("{code}\n"));
             assert!(!folder.path().join("host.exit.tmp").exists());
+            assert!(folder.path().join("host.started").exists());
         }
         assert!(script(HOST).lines().any(|line| line == HOST));
     }
@@ -194,11 +211,12 @@ mod tests {
         let data = tempfile::tempdir().unwrap();
         let folder = data.path().join("setup");
         let tried = RefCell::new(Vec::new());
-        let output = run(&folder, HOST, WAIT, &|program, flag, script| {
+        let output = run_at_once(&folder, HOST, WAIT, &|program, flag, script| {
             tried.borrow_mut().push((program.to_string(), flag.to_string(), script.to_path_buf()));
             if program == "x-terminal-emulator" {
                 return Err(io::ErrorKind::NotFound.into());
             }
+            opened(script)?;
             fs::write(script.with_extension("exit"), "0\n")
         })
         .unwrap();
@@ -216,7 +234,7 @@ mod tests {
 
         // A terminal that is there but will not start is the one used: its error, not the next terminal.
         let tried = Cell::new(0);
-        let error = run(&folder, HOST, WAIT, &|_, _, _| {
+        let error = run_at_once(&folder, HOST, WAIT, &|_, _, _| {
             tried.set(tried.get() + 1);
             Err(io::ErrorKind::PermissionDenied.into())
         })
@@ -229,7 +247,7 @@ mod tests {
         assert_eq!(NO_TERMINAL, "No terminal found.");
         let folder = tempfile::tempdir().unwrap();
         let tried = Cell::new(0);
-        let error = run(folder.path(), HOST, WAIT, &|_, _, _| {
+        let error = run_at_once(folder.path(), HOST, WAIT, &|_, _, _| {
             tried.set(tried.get() + 1);
             Err(io::ErrorKind::NotFound.into())
         })
@@ -242,6 +260,55 @@ mod tests {
     }
 
     #[test]
+    fn the_terminal_is_handed_sh_and_the_script_as_two_arguments() {
+        let script = Path::new("/home/a b/.local/share/x/setup/host-1.sh");
+        let command = command("xterm", "-e", script);
+        assert_eq!(command.get_program(), "xterm");
+        assert_eq!(
+            command.get_args().collect::<Vec<_>>(),
+            ["-e", "/bin/sh", "/home/a b/.local/share/x/setup/host-1.sh"]
+        );
+    }
+
+    #[test]
+    fn a_terminal_that_never_runs_the_script_fails_within_30_seconds() {
+        assert_eq!(DID_NOT_OPEN, "The terminal did not open.");
+        let folder = tempfile::tempdir().unwrap();
+        let begun = Instant::now();
+        let clock = Cell::new(begun);
+        let error = run(folder.path(), HOST, Duration::from_secs(600), &|_, _, _| Ok(()), &|| clock.get(), &|pause| {
+            clock.set(clock.get() + pause)
+        })
+        .unwrap_err();
+        assert_eq!((error.kind(), error.to_string()), (io::ErrorKind::TimedOut, DID_NOT_OPEN.to_string()));
+        assert_eq!(clock.get() - begun, Duration::from_secs(30));
+    }
+
+    #[test]
+    fn a_script_that_starts_within_30_seconds_is_waited_for() {
+        let folder = tempfile::tempdir().unwrap();
+        let begun = Instant::now();
+        let clock = Cell::new(begun);
+        let script_path = RefCell::new(PathBuf::new());
+        let start = |_: &str, _: &str, script: &Path| {
+            script_path.replace(script.to_path_buf());
+            Ok(())
+        };
+        // The terminal runs the script at 29 s, and its line ends two minutes later.
+        let output = run(folder.path(), HOST, Duration::from_secs(600), &start, &|| clock.get(), &|pause| {
+            clock.set(clock.get() + pause);
+            let (script, at) = (script_path.borrow(), clock.get() - begun);
+            if at == Duration::from_secs(29) {
+                opened(&script).unwrap();
+            } else if at == Duration::from_secs(29 + 120) {
+                fs::write(script.with_extension("exit"), "0\n").unwrap();
+            }
+        })
+        .unwrap();
+        assert_eq!(output, Output { code: Some(0), ..Output::default() });
+    }
+
+    #[test]
     fn an_older_runs_files_are_removed_first() {
         let folder = tempfile::tempdir().unwrap();
         let older = ["host.sh", "host.exit", "host-1.sh", "host-1.exit"];
@@ -249,9 +316,9 @@ mod tests {
             fs::write(folder.path().join(name), "0\n").unwrap();
         }
         let left = RefCell::new(Vec::new());
-        let output = run(folder.path(), HOST, Duration::ZERO, &|_, _, script| {
+        let output = run_at_once(folder.path(), HOST, Duration::ZERO, &|_, _, script| {
             left.replace(older.iter().filter(|name| script.with_file_name(name).exists()).copied().collect());
-            Ok(())
+            opened(script)
         })
         .unwrap();
         assert_eq!(left.into_inner(), Vec::<&str>::new());
@@ -264,7 +331,7 @@ mod tests {
         let folder = data.path().join("setup");
         // The first run's terminal is left at its line, which says `ready`, then waits for a line on its stdin.
         let older = RefCell::new(None);
-        let first = run(&folder, "echo ready; read -r _", Duration::ZERO, &|_, _, script| {
+        let first = run_at_once(&folder, "echo ready; read -r _", Duration::ZERO, &|_, _, script| {
             let mut child = {
                 let _spawning = spawn_lock();
                 Command::new("/bin/sh").arg(script).stdin(Stdio::piped()).stdout(Stdio::piped()).spawn()?
@@ -281,11 +348,11 @@ mod tests {
         // A second run begins; only then does the first terminal's line end well, and its script write its result. Its
         // line is harmless: a shared script, rewritten under the first terminal's shell, has that shell run part of it.
         let older = RefCell::new(older.into_inner().unwrap());
-        let second = run(&folder, "true", Duration::ZERO, &|_, _, _| {
+        let second = run_at_once(&folder, "true", Duration::ZERO, &|_, _, script| {
             let mut older = older.borrow_mut();
             older.stdin.take().unwrap().write_all(b"\n")?;
             assert_eq!(older.wait()?.code(), Some(0));
-            Ok(())
+            opened(script)
         })
         .unwrap();
         assert_eq!(second, Output { timed_out: true, ..Output::default() });
@@ -321,7 +388,7 @@ mod tests {
         assert_eq!(code, None);
         assert_eq!(pauses.into_inner(), [Duration::from_secs(1), Duration::from_secs(1), Duration::from_millis(500)]);
 
-        let output = run(folder.path(), HOST, Duration::ZERO, &|_, _, _| Ok(())).unwrap();
+        let output = run_at_once(folder.path(), HOST, Duration::ZERO, &|_, _, script| opened(script)).unwrap();
         assert_eq!(output, Output { timed_out: true, ..Output::default() });
     }
 
@@ -333,14 +400,14 @@ mod tests {
         let scripts = RefCell::new(Vec::new());
         let start = |_: &str, _: &str, script: &Path| -> io::Result<()> {
             scripts.borrow_mut().push((mode(script), fs::read_to_string(script)?));
-            Ok(())
+            opened(script)
         };
-        run(&folder, HOST, Duration::ZERO, &start).unwrap();
+        run_at_once(&folder, HOST, Duration::ZERO, &start).unwrap();
         assert_eq!(mode(&folder), 0o700);
 
         // Left open to others since: the person's alone again.
         fs::set_permissions(&folder, fs::Permissions::from_mode(0o755)).unwrap();
-        run(&folder, HOST, Duration::ZERO, &start).unwrap();
+        run_at_once(&folder, HOST, Duration::ZERO, &start).unwrap();
         assert_eq!(mode(&folder), 0o700);
         assert_eq!(scripts.into_inner(), [(0o700, script(HOST)), (0o700, script(HOST))]);
     }
