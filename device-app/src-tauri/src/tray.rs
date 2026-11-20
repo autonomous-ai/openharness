@@ -1,6 +1,6 @@
 //! The tray icon for the panel's colour.
 
-/// `Template` and `Dark` are `tray.png`, `Light` is `tray-light.png`.
+/// `Template` is `tray.png`, `Dark` is `tray-dark.png`, `Light` is `tray-light.png`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TrayIcon {
     /// macOS colours it for the menu bar by itself.

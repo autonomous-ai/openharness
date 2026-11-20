@@ -226,7 +226,8 @@ fn start(handle: &AppHandle, events: Sender<Event>, queue: Receiver<Event>) -> t
 
 fn tray_image(icon: TrayIcon) -> Image<'static> {
     match icon {
-        TrayIcon::Template | TrayIcon::Dark => tauri::include_image!("icons/tray.png"),
+        TrayIcon::Template => tauri::include_image!("icons/tray.png"),
+        TrayIcon::Dark => tauri::include_image!("icons/tray-dark.png"),
         TrayIcon::Light => tauri::include_image!("icons/tray-light.png"),
     }
 }
