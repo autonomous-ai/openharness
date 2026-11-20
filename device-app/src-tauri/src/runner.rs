@@ -1086,7 +1086,7 @@ mod tests {
     }
 
     /// The same, with the ChatGPT door a test tells.
-    fn world_following(now: &str, door: &Arc<ChatgptDoor>) -> (World, Arc<Fronts>) {
+    fn world_following(now: &str, door: &Arc<impl FollowDoor + 'static>) -> (World, Arc<Fronts>) {
         let fronts = Arc::new(Fronts { now: now.into(), changed: Mutex::default() });
         let (source, follow) = (fronts.clone(), door.clone());
         let w = world_where(move |doors| {
@@ -1551,10 +1551,46 @@ mod tests {
         fn start(&self, changed: Box<dyn Fn() + Send + Sync>) {
             self.with(|state| state.changed = Some(Arc::from(changed)));
         }
+    }
 
-        /// As a door off macOS: the switch is what `trusted()` answers from now on.
+    /// A door off macOS: the test's window, and the permission as every door there answers it.
+    struct OffMacos {
+        window: ChatgptDoor,
+        trust: crate::follow_windows::WindowsFollow,
+    }
+
+    impl OffMacos {
+        fn switched(window: &ChatgptDoor, on: bool) -> Arc<OffMacos> {
+            let trust = crate::follow_windows::WindowsFollow::new(crate::follow::FollowSwitch::new(on));
+            Arc::new(OffMacos { window: ChatgptDoor(window.0.clone()), trust })
+        }
+    }
+
+    impl ChatgptWindow for OffMacos {
+        fn installed(&self) -> bool {
+            self.window.installed()
+        }
+
+        fn observe(&self, heard: Box<dyn Fn(Heard) + Send + Sync>) -> Option<Box<dyn Send>> {
+            self.window.observe(heard)
+        }
+    }
+
+    impl AxTrust for OffMacos {
+        fn trusted(&self) -> bool {
+            self.trust.trusted()
+        }
+
+        fn prompt(&self) {
+            self.trust.prompt();
+        }
+
+        fn start(&self, changed: Box<dyn Fn() + Send + Sync>) {
+            self.trust.start(changed);
+        }
+
         fn switch(&self, on: bool) {
-            self.with(|state| state.trusts = VecDeque::from([on]));
+            self.trust.switch(on);
         }
     }
 
@@ -2210,14 +2246,16 @@ mod tests {
 
     #[test]
     fn the_switch_turned_off_drops_the_observation_at_once_and_turned_on_writes_the_first_title_again() {
-        let door = ChatgptDoor::answering(false, true);
-        let (w, _fronts) = world_following(CHATGPT_BUNDLE, &door);
+        let door = ChatgptDoor::answering(false, false);
+        let (w, _fronts) = world_following(CHATGPT_BUNDLE, &OffMacos::switched(&door, true));
         assert_eq!(w.next(), follow(true, false));
         w.fake.script("hardware watch --json", &ATTACHED);
         assert_eq!(w.answer(Effect::SpawnWatch), a_dial());
         door.observed(1);
         door.hear(0, title("Fix login"));
         assert_eq!(w.runner.run(Effect::FollowSwitch(false)), None);
+        // Read back once at the click: off macOS no notice comes, and so no read a moment later either.
+        assert!(w.runner.0.chatgpt.state.lock().unwrap().trust_at.is_none());
         // Heard after the click, before the follow thread has dropped its box: no line.
         door.hear(0, title("Plan the trip"));
         door.dropped(0);
