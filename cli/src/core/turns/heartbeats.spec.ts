@@ -227,6 +227,8 @@ describe('turn heartbeats', () => {
       await vi.advanceTimersByTimeAsync(5_000)
       expect(sentStates(run.deps)).toEqual([['turn_heartbeat', 'working'], ['agent_activity', 'working'], ['agent_activity', 'idle']])
       expect(run.deps.runtimeActivity.forget).not.toHaveBeenCalled()
+      // The turn's heartbeat beat at 5 s and 10 s, then handed the claim on; for a busy card it beats on, through 40 s.
+      expect(run.deps.mirror.heartbeat).toHaveBeenCalledTimes(deviceBusy ? 8 : 2)
       run.set({ deviceBusy: false })
       await vi.advanceTimersByTimeAsync(5_000)
       expect(run.beats.heartbeats.has('s1')).toBe(false)

@@ -103,10 +103,17 @@ export function createHeartbeats({ bySession, sessionTurnOpen, agentIdFor, runti
    * to tell its end, so `wait` and `watch` would sleep to their backstop. It is told now, and its end on the beat that
    * reads it; its renewals tell nothing, so a claim is two frames. In the beats' map, a turn's heartbeat replaces it
    * and shutdown clears it. A closed turn's heartbeat that still beats keeps its place, and hands the claim on to end.
+   *
+   * Watched once the read that made it is applied: a read sets the turn's state to where it ends before its events, so
+   * a turn that starts and ends in it reads as a claim, and its heartbeat, started meanwhile, tells it instead.
    */
   const watchClaim = (sessionId: string): void => {
-    tellChanged(sessionId)
-    if (!heartbeats.has(sessionId)) watch(sessionId)
+    const was = heartbeats.get(sessionId)
+    queueMicrotask(() => {
+      if (heartbeats.get(sessionId) !== was) return
+      tellChanged(sessionId)
+      if (!was) watch(sessionId)
+    })
   }
   return { heartbeats, turnStartedAt, stopHeartbeat, startHeartbeat, watchClaim, tell }
 }
