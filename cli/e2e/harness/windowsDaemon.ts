@@ -13,12 +13,16 @@
  *
  * The daemon runs from the run's bundle (`E2E_BUNDLE=1`, bundle.ts) and the pty host `HARNESS_PTY_BIN` names, both
  * required.
+ *
+ * The hand-check desk (scripts/windows-dial-e2e/desk.mts) starts it two more ways: on a real dial, through the signed
+ * harness-serial.exe it names, sealed as here; and, for the VM's test user only, with that account's own profile,
+ * engines, editors and apps, and Harness's folders kept in one folder of its own.
  */
 import { execFile, spawn, type ChildProcess } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:net'
-import { tmpdir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { promisify } from 'node:util'
@@ -36,12 +40,40 @@ export const PROFILE_NAME = "Nguyễn Văn A' & 100%"
 
 const STAND_IN = join(CLI_ROOT, 'src', 'cable', '__fixtures__', 'fakeHarnessSerial.mjs')
 
-export interface WindowsDaemon {
+export interface WindowsDaemonOptions {
+  env?: Record<string, string>
+  /** What `PORT` is set to; a free port when unset. */
+  port?: number
+  /**
+   * Where Harness's folders are kept, in place of a throwaway root, and kept after `close`. The account's own profile,
+   * engines, editors and apps are then used, and its hooks set up: the VM's test user only.
+   */
+  own?: string
+  /** What the stand-in dial's greeting names (`appFilter: 'v1'`, …), as a firmware that speaks them does. */
+  capabilities?: Record<string, string>
+  /** Each piece of what the daemon prints, as it comes. */
+  onOutput?: (text: string) => void
+  /** Run once Harness's folders are made, before the daemon starts: a sign-in or a pets folder put in place. What it
+   *  throws is thrown back, and nothing is started. */
+  prepare?: (folders: { auth: string; devices: string }) => void | Promise<void>
+}
+
+/** A real dial on [port], run through [serialBin], a signed harness-serial.exe, in place of the stand-in. Always sealed. */
+export interface RealDialOptions extends Omit<WindowsDaemonOptions, 'own' | 'capabilities'> {
+  dial: { port: string; serialBin: string }
+}
+
+/** What a daemon of the account reads of its profile and apps, passed on as they are when it is not sealed (`own`). */
+const ACCOUNT_NAMES = ['USERPROFILE', 'LOCALAPPDATA', 'APPDATA', 'TEMP', 'TMP', 'ProgramFiles', 'ProgramFiles(x86)', 'ProgramW6432', 'ProgramData', 'USERNAME']
+
+export interface WindowsDaemon<Dial extends FakeDial | null = FakeDial> {
   dataDir: string
+  /** The throwaway root, or the `own` folder. */
+  root: string
   /** What `PORT` is set to: it names the daemon's pipe record. */
   port: number
   env: NodeJS.ProcessEnv
-  dial: FakeDial
+  dial: Dial
   /** `harness <args>` from the run's bundle, as a shell of this daemon's runs it. */
   harness(args: string[]): Promise<{ code: number | null; stdout: string }>
   /** Everything the daemon has printed so far. */
@@ -58,36 +90,71 @@ async function freePort(): Promise<number> {
   return address.port
 }
 
-export async function startWindowsDaemon(options: { env?: Record<string, string> } = {}): Promise<WindowsDaemon> {
+export function startWindowsDaemon(options?: WindowsDaemonOptions): Promise<WindowsDaemon>
+export function startWindowsDaemon(options: RealDialOptions): Promise<WindowsDaemon<null>>
+export async function startWindowsDaemon(options: WindowsDaemonOptions | RealDialOptions = {}): Promise<WindowsDaemon<FakeDial | null>> {
   const bundle = process.env.E2E_BUNDLE_PATH
   if (!bundle) throw new Error('E2E_BUNDLE_PATH is not set: run with E2E_BUNDLE=1 through vitest.e2e.windows.config.ts')
   const ptyHost = process.env.HARNESS_PTY_BIN
   if (!ptyHost) throw new Error('HARNESS_PTY_BIN is not set: name the harness-pty.exe built from pty/')
 
-  const root = mkdtempSync(join(tmpdir(), 'harness-dial-win-'))
-  const profile = join(root, PROFILE_NAME)
-  const dirs = {
-    profile, local: join(profile, 'AppData', 'Local'), roaming: join(profile, 'AppData', 'Roaming'), tmp: join(profile, 't'),
-    data: join(profile, '.harness', 'data'), runtime: join(profile, '.harness', 'runtime'), auth: join(profile, '.harness', 'auth'),
-    dsh: join(profile, '.harness', 'dsh'), routes: join(profile, '.harness', 'hook-routes'),
-    claudeProjects: join(profile, '.claude', 'projects'), codexHome: join(profile, '.codex'), work: join(root, 'work'),
+  const real = 'dial' in options ? options.dial : null
+  const own = 'own' in options ? options.own : undefined
+  const root = own ?? mkdtempSync(join(tmpdir(), 'harness-dial-win-'))
+  const discard = (): void => { if (!own) rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }) }
+  const profile = own ? process.env.USERPROFILE ?? homedir() : join(root, PROFILE_NAME)
+  // Harness's folders are where they are on a person's computer, the profile's `.harness`, unless they are kept in `own`.
+  const harnessDir = own ?? join(profile, '.harness')
+  const sealed = {
+    local: join(profile, 'AppData', 'Local'), roaming: join(profile, 'AppData', 'Roaming'), tmp: join(profile, 't'),
+    claudeProjects: join(profile, '.claude', 'projects'), codexHome: join(profile, '.codex'),
   }
-  for (const dir of Object.values(dirs)) mkdirSync(dir, { recursive: true })
-  const standIn = JSON.stringify(pathToFileURL(STAND_IN).href)
-  for (const mode of ['watch', 'open', 'probe']) {
-    writeFileSync(join(dirs.work, `${mode}.js`), `process.argv.splice(2, 0, ${JSON.stringify(mode)}); import(${standIn})\n`)
+  const dirs = {
+    data: join(harnessDir, 'data'), runtime: join(harnessDir, 'runtime'), auth: join(harnessDir, 'auth'),
+    dsh: join(harnessDir, 'dsh'), routes: join(harnessDir, 'hook-routes'), devices: join(harnessDir, 'devices'), work: join(root, 'work'),
+  }
+  for (const dir of [...Object.values(dirs), ...(own ? [] : Object.values(sealed))]) mkdirSync(dir, { recursive: true })
+  const endpoint = `\\\\.\\pipe\\harness-e2e-${randomBytes(8).toString('hex')}`
+  if (!real) {
+    const standIn = JSON.stringify(pathToFileURL(STAND_IN).href)
+    for (const mode of ['watch', 'open', 'probe']) {
+      writeFileSync(join(dirs.work, `${mode}.js`), `process.argv.splice(2, 0, ${JSON.stringify(mode)}); import(${standIn})\n`)
+    }
   }
   const missing = join(root, 'missing')
-  const endpoint = `\\\\.\\pipe\\harness-e2e-${randomBytes(8).toString('hex')}`
-  const port = await freePort()
+  // The profile, every engine home and every editor: the root's, which name engines and editors that are not there, or
+  // the account's own.
+  const homes: Record<string, string> = own
+    ? { HOME: profile, ...Object.fromEntries(ACCOUNT_NAMES.flatMap((name) => process.env[name] ? [[name, process.env[name]!]] : [])), DISABLE_HOOK_INSTALL: 'false' }
+    : {
+        HOME: profile,
+        USERPROFILE: profile,
+        LOCALAPPDATA: sealed.local,
+        APPDATA: sealed.roaming,
+        TEMP: sealed.tmp,
+        TMP: sealed.tmp,
+        CLAUDE_PROJECTS_DIR: sealed.claudeProjects,
+        CODEX_HOME: sealed.codexHome,
+        DISABLE_HOOK_INSTALL: 'true',
+        CLAUDE_PATH: join(missing, 'claude.exe'),
+        CODEX_PATH: join(missing, 'codex.exe'),
+        HARNESS_VSCODE_BIN: join(missing, 'code.cmd'),
+        HARNESS_CURSOR_BIN: join(missing, 'cursor.cmd'),
+      }
+  // The stand-in dial, found on its own port and served through the stand-in for harness-serial.exe; or a real one, on
+  // the port named and through the harness-serial.exe named.
+  const dialEnv: Record<string, string> = real
+    ? { HARNESSD_TEST_DIAL_PORT: real.port, HARNESS_SERIAL_BIN: real.serialBin }
+    : {
+        HARNESSD_TEST_DIAL_PORT: 'COM77',
+        HARNESS_SERIAL_BIN: process.execPath,
+        FAKE_SERIAL_LINES: JSON.stringify([JSON.stringify({ console: true, ports: [] })]),
+        FAKE_SERIAL_OPEN: `bridge:${endpoint}`,
+      }
+  const port = options.port ?? await freePort()
   const env = daemonEnvironment(process.env, {
     NODE_ENV: 'test',
-    HOME: dirs.profile,
-    USERPROFILE: dirs.profile,
-    LOCALAPPDATA: dirs.local,
-    APPDATA: dirs.roaming,
-    TEMP: dirs.tmp,
-    TMP: dirs.tmp,
+    ...homes,
     PORT: String(port),
     // A bridge port of its own, never the account's daemon's (daemon.ts says why).
     HARNESS_CONNECTIONS_PORT: '0',
@@ -95,34 +162,31 @@ export async function startWindowsDaemon(options: { env?: Record<string, string>
     ADAPTER_RUNTIME_DIR: dirs.runtime,
     ADAPTER_COMPUTER_ID_FILE: join(root, 'computer-id'),
     HARNESS_AUTH_DIR: dirs.auth,
+    HARNESS_DEVICES_DIR: dirs.devices,
     DSH_DIR: dirs.dsh,
-    CLAUDE_PROJECTS_DIR: dirs.claudeProjects,
-    CODEX_HOME: dirs.codexHome,
     HARNESS_HOOK_ROUTES_DIR: dirs.routes,
     HARNESS_PTY_BIN: ptyHost,
-    // Signed out, and alone: nothing reaches beyond the machine, and no engine, editor or hook of the account is used.
+    // Signed out, and alone: nothing reaches beyond the machine.
     BACKEND_WS_URL: 'ws://127.0.0.1:9',
     WEB_URL: 'http://127.0.0.1:9',
     HARNESS_STORE_CATALOG_URL: 'http://127.0.0.1:9/catalog.json',
     ADAPTER_UPDATE_DISABLE: 'true',
     ANALYTICS_ENABLED: 'false',
     DISABLE_GRID_INSTALL: 'true',
-    DISABLE_HOOK_INSTALL: 'true',
-    CLAUDE_PATH: join(missing, 'claude.exe'),
-    CODEX_PATH: join(missing, 'codex.exe'),
-    HARNESS_VSCODE_BIN: join(missing, 'code.cmd'),
-    HARNESS_CURSOR_BIN: join(missing, 'cursor.cmd'),
-    // The stand-in dial: never flashed, found on its own port, and served through the stand-in for harness-serial.exe.
     CABLE_DISABLE: 'false',
-    CABLE_FW_DISABLE: 'true',
-    HARNESSD_TEST_DIAL_PORT: 'COM77',
-    HARNESS_SERIAL_BIN: process.execPath,
-    FAKE_SERIAL_LINES: JSON.stringify([JSON.stringify({ console: true, ports: [] })]),
-    FAKE_SERIAL_OPEN: `bridge:${endpoint}`,
+    ...dialEnv,
     ...options.env,
+    // The dial is never flashed: after the caller's own, so nothing turns it off.
+    CABLE_FW_DISABLE: 'true',
   })
 
-  const dial = await FakeDial.listen(endpoint, { settings: SETTINGS })
+  try {
+    await options.prepare?.({ auth: dirs.auth, devices: dirs.devices })
+  } catch (error) {
+    discard()
+    throw error
+  }
+  const dial = real ? null : await FakeDial.listen(endpoint, { settings: SETTINGS, capabilities: 'capabilities' in options ? options.capabilities : undefined })
   let output = ''
   const logName = `daemon-${port}.log`
   // On Windows a start keeps the whole environment it is given (lib/startEnvironment.ts): no env file is needed.
@@ -133,6 +197,7 @@ export async function startWindowsDaemon(options: { env?: Record<string, string>
     const text = chunk.toString('utf8')
     output += text
     artifactLog(logName, text)
+    options.onOutput?.(text)
   }
   child.stdout!.on('data', take)
   child.stderr!.on('data', take)
@@ -156,8 +221,8 @@ export async function startWindowsDaemon(options: { env?: Record<string, string>
       if (!stopped) await exec('taskkill', ['/pid', String(child.pid), '/t', '/f'], { windowsHide: true }).catch(() => null)
       await exited
     }
-    await dial.close()
-    rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 })
+    await dial?.close()
+    discard()
   }
 
   const died = exited.then((): never => { throw new Error(`the daemon exited while starting:\n${output.slice(-4000)}`) })
@@ -179,5 +244,5 @@ export async function startWindowsDaemon(options: { env?: Record<string, string>
     await close()
     throw error
   }
-  return { dataDir: dirs.data, port, env, dial, harness, log: () => output, close }
+  return { dataDir: dirs.data, root, port, env, dial, harness, log: () => output, close }
 }
