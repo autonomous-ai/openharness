@@ -243,8 +243,10 @@ stdin (`front_line`, `FrontFeed`), never logged. The CLI already maps exe names 
 - **Linux:** AppImage per arch (`Harness-Device-linux-x64.AppImage`, `…-arm64.AppImage`) and its `.sig`, built by
   Tauri's AppImage bundler on `ubuntu-22.04` and `ubuntu-22.04-arm` (oldest glibc Desktop's Linux build uses; the
   builder matches `release-desktop.yml`'s runners). No signing beyond minisign.
-- **The same secret discipline as macOS:** compile (build scripts, npm) runs before any secret exists; only the bundle
-  step holds `TAURI_SIGNING_PRIVATE_KEY`.
+- **The same secret discipline as macOS:** compile (build scripts, npm) runs before any secret exists. On macOS the
+  bundle step holds `TAURI_SIGNING_PRIVATE_KEY`; on Windows and Linux only a separate `sign-update` step holds it,
+  after the bundle, so no bundler or tool it downloads ever sees the key. On Windows the Tauri CLI the signing job runs
+  is built in a job of its own, before any app code is checked out.
 - **Which platforms a release carries:** a temporary `platforms` input on `release-device.yml` and
   `make release-device` (`macos` by default, `all` on Ken's word), so a routine macOS release publishes nothing for
   Windows or Linux and a red Windows/Linux build never blocks it. The pull request of the first Windows/Linux release
