@@ -1,10 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { EventEmitter } from 'node:events'
 import type { ChildProcess } from 'node:child_process'
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { createServer, type Server } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import type { PathToWatchDeps } from '../lib/pathToWatch.js'
 import type { InstalledDsh } from './installed.js'
 import { spawnDshCommand } from './shell.js'
 import { DshViewerManager, buildViewerUrl, freeLoopbackPort, resolveViewer, waitForLoopbackPort } from './viewer.js'
@@ -44,6 +45,12 @@ vi.mock('chokidar', async (importOriginal) => {
     return watcher
   }) as typeof actual.watch
   return { ...actual, watch, default: { ...actual.default, watch } }
+})
+/** This computer, unless a case says Windows. */
+const toWatch = vi.hoisted(() => ({ deps: undefined as PathToWatchDeps | undefined }))
+vi.mock('../lib/pathToWatch.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../lib/pathToWatch.js')>()
+  return { pathToWatch: (path: string) => actual.pathToWatch(path, toWatch.deps) }
 })
 
 function fakeChild(): ChildProcess & { exitWith: (code: number) => void } {
@@ -791,6 +798,33 @@ describe('DshViewerManager, the rest of a viewer\'s life', () => {
     await ready
     expect(urls).toEqual(['http://127.0.0.1:4790/?file=models/old.step', 'http://127.0.0.1:4790/?file=models/new.step'])
   })
+
+  // libuv aborts the process at the first change in a folder watched by an 8.3 short name (lib/pathToWatch.ts), as an
+  // agent's folder can be. A short name is another name of the same folder, as a link is here.
+  it('on Windows watches the workspace by its long name, and follows the newest artifact in it', async () => {
+    const long = join(root, 'hxdialtest')
+    const short = join(root, 'HXDIAL~1')
+    mkdirSync(join(long, 'models'), { recursive: true })
+    symlinkSync(long, short)
+    const at = (rel: string, seconds: number): void => {
+      writeFileSync(join(long, rel), rel)
+      utimesSync(join(long, rel), seconds, seconds)
+    }
+    at('models/old.step', 1_000)
+    toWatch.deps = { platform: 'win32', realpath: (path) => realpathSync.native(path), log: () => {} }
+    try {
+      const { urls, manager } = setup()
+      await manager.start('a1', dsh({ command: 'v', url: 'http://127.0.0.1:${port}/?file=${artifact}', artifactExtensions: ['.step'] }), short)
+      const { paths, ready } = watchers.at(-1)!
+      expect(paths).toBe(long)
+      expect(urls).toEqual(['http://127.0.0.1:4790/?file=models/old.step'])
+      await ready
+      at('models/new.step', 2_000)
+      await vi.waitFor(() => expect(urls.at(-1)).toBe('http://127.0.0.1:4790/?file=models/new.step'), { timeout: 10_000 })
+    } finally {
+      toWatch.deps = undefined
+    }
+  }, 15_000)
 
   it('runs a real viewer through the user\'s shell, on the port it was given, and stops it', async () => {
     const urls: Array<string | null> = []
