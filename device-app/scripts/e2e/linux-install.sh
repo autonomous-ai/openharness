@@ -70,7 +70,6 @@ chmod 700 "$work/run"
 cp "$1" "$served"
 chmod 755 "$served"
 
-server_pid=""
 hosts_changed=""
 app_pid=""
 
@@ -117,8 +116,7 @@ cleanup() {
   awk -v under="$work/tmp/.mount_" 'index($2, under) == 1 { print $2 }' /proc/mounts | while read -r mount; do
     fusermount3 -uz "$mount" 2>/dev/null || fusermount -uz "$mount" 2>/dev/null
   done
-  # sudo hands the server the signal.
-  [[ -z "$server_pid" ]] || sudo kill "$server_pid" 2>/dev/null
+  [[ ! -s "$work/server.pid" ]] || sudo kill "$(cat "$work/server.pid")" 2>/dev/null
   wait 2>/dev/null
   [[ -z "$hosts_changed" ]] || sudo cp "$work/hosts.before" /etc/hosts
   if [[ -e "$CA_FILE" ]]; then
@@ -176,7 +174,10 @@ sudo update-ca-certificates >/dev/null
 cp /etc/hosts "$work/hosts.before"
 hosts_changed=1
 printf '127.0.0.1 %s\n' "$CDN" | sudo tee -a /etc/hosts >/dev/null
-[[ "$(getent hosts "$CDN" | awk '{ print $1 }')" == 127.0.0.1 ]] || fail "$CDN resolves to 127.0.0.1"
+# Resolved as curl resolves it, through getaddrinfo for any family. Not `getent hosts`: it asks for IPv6 first, which
+# /etc/hosts does not name, so where the runner's DNS answers AAAA it prints the real CDN's IPv6 addresses.
+resolved="$(getent ahosts "$CDN" | awk '{ print $1 }' | sort -u | paste -sd ' ')"
+[[ "$resolved" == 127.0.0.1 ]] || fail "$CDN resolves to 127.0.0.1 only, not ${resolved:-nothing}"
 
 cp "$repo/website/scripts/device-install.sh" "$cdn/harness/device/install.sh"
 # The manifest as device-manifest.py writes it (json.dumps, indent=2), naming only this arch's AppImage; and the same
@@ -194,10 +195,12 @@ for file_name, digest in (("metadata.json", sha), ("tampered.json", ("1" if sha[
         file.write(json.dumps({"version": version, f"device-linux-{arch}-appimage": entry}, indent=2) + "\n")
 PY
 
-# Root only for port 443; its output is this run's file, written as this user.
-# shellcheck disable=SC2024
-sudo "$python" -I "$here/https-fake-cdn.py" "$cdn" "$tls/cdn.crt" "$tls/cdn.key" </dev/null >"$work/server.out" 2>&1 &
-server_pid=$!
+# Root only for port 443; its output is this run's file, written as this user. The shell leaves its pid, the server's
+# once it execs, for cleanup to signal: sudo 1.9.9 (22.04) relays no signal sent from this script's process group, so
+# `sudo kill` of sudo's own pid would leave the server serving and cleanup waiting on it.
+# shellcheck disable=SC2016,SC2024
+sudo bash -c 'echo "$$" >"$1" && exec "${@:2}"' _ "$work/server.pid" \
+  "$python" -I "$here/https-fake-cdn.py" "$cdn" "$tls/cdn.crt" "$tls/cdn.key" </dev/null >"$work/server.out" 2>&1 &
 serving() { curl -fsS --max-time 5 -o /dev/null "https://$CDN/harness/device/install.sh" 2>/dev/null; }
 waits serving || fail "the stand-in CDN serves https://$CDN under the throwaway CA: $(cat "$work/server.out")"
 
@@ -223,6 +226,8 @@ run_line() {
   wait "$line_pid" || status=$?
 }
 said() { grep -Fxq -- "$1" "$work/line.out"; }
+# The app's log has the line `$1`, after its time.
+logged() { cat "$data"/logs/app-*.log 2>/dev/null | cut -d' ' -f2- | grep -Fxq -- "$1"; }
 # A file's bytes and time, to tell a run that left it.
 stamp() { sha256sum <"$1" && stat -c %y "$1"; }
 
@@ -303,12 +308,13 @@ stamp "$place" | cmp -s "$work/place.stamp" - || fail "a second run while the ap
 ok "a second run while the app runs exits 1, says it is running from the place, and leaves the AppImage"
 
 gone "$app_pid" && fail "the app runs until it is ended"
-end_app
-# The app has ended: whatever its first run did to the entry, it has done.
+# The app's app-list step ends with one line: once it says kept, it has decided.
+waits logged "app list: entry kept" \
+  || fail "the app's first run leaves the installer's entry: its log has app list: entry kept within $WAIT s"
+logged "app list: entry written" && fail "the app's first run leaves the installer's entry: its log has entry written"
 stamp "$entry" | cmp -s "$work/entry.stamp" - || fail "the app's first run leaves the installer's entry, bytes and mtime"
 stamp "$icon" | cmp -s "$work/icon.stamp" - || fail "the app's first run leaves the installer's icon, bytes and mtime"
-grep -qs 'app list:' "$data"/logs/app-*.log \
-  && fail "the app's first run leaves the installer's entry: its log has an app list: line"
-ok "the app's first run leaves the installer's entry and icon, and its log has no app list: line"
+ok "the app's first run leaves the installer's entry and icon, bytes and mtime, and logs app list: entry kept"
+end_app
 
 echo "0 FAILED"
