@@ -2087,7 +2087,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   type ThreadReport = { title: string; at: number; moves: number }
   let threadReport: ThreadReport | undefined
   /** Uses up the report: with no dial linked nothing is followed or counted, as with a prompt. The match, which reads
-   *  Codex's names of up to 200 threads, runs only for a report the echoes leave. */
+   *  Codex's names of up to 200 threads, runs only for a report neither the dial's move since nor the settle's echo
+   *  drops: the dial's own switches are told by the thread it names, so they are checked after it. */
   const followThread = (report: ThreadReport, atSettle: boolean): Promise<void> | undefined => {
     threadReport = undefined
     if (!cable.isConnected) return

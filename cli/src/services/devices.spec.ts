@@ -9744,7 +9744,7 @@ describe("the ChatGPT app's threads, from its metadata (docs/plans/2026-11-19-di
       expect(asked()).toEqual([[ID, 'thread']])
     })
 
-    it('the match runs only for a report followed', async () => {
+    it('the match runs only for a report no settle, empty title, dial move or unlinked dial dropped first', async () => {
       const { fake, listener, front, report, live } = following()
       await live()
       // Dropped by another app's settle, by the empty title, and by the dial moving.
