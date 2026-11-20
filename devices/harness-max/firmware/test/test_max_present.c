@@ -169,10 +169,11 @@ static __attribute__((noinline)) void scribble_stack(uint8_t v)
 }
 
 // A run added or dropped mid-scene (a line of words wrapping onto two): the damage is what it draws, not every run after
-// it, and the glass is the scene's. The listening band's partial frame does that: the new level ends the quiet, and the
-// send prompt's two rows become one, before the X, the slivers and the row's faded ends. Built over another stack than
-// the frame before's, it repaints the band alone: ht_damage compares runs byte for byte, and a glow whose parameters
-// carried a padding byte off the stack (the P4's compiler copies it in) repainted the page's every glow, 337,600 px.
+// it, and the glass is the scene's. Then the listening band's partial frame: the next level moves the waveform, the
+// X, the slivers and the row's faded ends after it as they were (the Pro's rules since 20 Nov have no quiet prompt
+// whose two rows became one: the runs stay as many). Built over another stack than the frame before's, it repaints
+// the band alone: ht_damage compares runs byte for byte, and a glow whose parameters carried a padding byte off the
+// stack (the P4's compiler copies it in) repainted the page's every glow, 337,600 px.
 static void runs_added(void)
 {
     draw(&SCREENS[0]);
@@ -204,14 +205,14 @@ static void runs_added(void)
     scribble_stack(0x5A);
     frame(T0 + MAX_TALK_FRAME_MS);
     b = S;
-    CHECK(b.count == a.count - 1);   // the case
+    CHECK(b.count == a.count && memcmp(a.runs, b.runs, (size_t)a.count * sizeof a.runs[0]));   // the waves moved
     ht_damage(&a, &b, &d);
     int tail = 0;   // what follows the band, the same in both: the X, the slivers, the row's faded ends
     while (tail < b.count && !memcmp(&a.runs[a.count - 1 - tail], &b.runs[b.count - 1 - tail], sizeof b.runs[0])) tail++;
     CHECK(tail >= 10);
     for (int k = 0; k < tail; k++)
         for (int n = 0; n < d.count; n++) CHECK(!overlap(ht_run_bounds(&b.runs[b.count - 1 - k]), d.rect[n]));
-    CHECK(d.pixels <= 70000);   // the band and the prompt: 64,556 px at 480 rows
+    CHECK(d.pixels > 0 && d.pixels <= 70000);   // the band: 43,948 px at 480 rows, 38,000 at 415
     present(&a, &b, "listening, the next level");
 }
 
