@@ -33,9 +33,10 @@ const SELF = 4_343
 // Root writes through any folder's mode.
 const asRoot = process.getuid?.() === 0
 
-const roots: string[] = []
+const roots: string[] = [], startFolder = process.cwd()
 afterEach(() => {
   vi.useRealTimers()
+  process.chdir(startFolder)
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true })
 })
 
@@ -220,6 +221,13 @@ describe('the move at a start', () => {
     expect(logOf(t, env)).toEqual([line, line])
     expect(existsSync(t.data)).toBe(false)
     expect(t.execs).toEqual([])
+  })
+
+  it('a relative ADAPTER_DATA_DIR is the home\'s: the line goes to its harness.log, whatever folder the start runs in', async () => {
+    const t = legacyHome()
+    process.chdir(fresh('move-start-folder-'))
+    await moveHomeAtStart(argvOf(t, '__harnessd'), { ADAPTER_DATA_DIR: 'data' }, t.deps({ ptyHostRuns: () => true }))
+    expect(logOf(t, { ADAPTER_DATA_DIR: join(t.home, 'data') })).toEqual(['home move: waiting pty-host · close the agents, then harness start'])
   })
 
   it('a moved home logs "home move: moved · data <root> · state <root>" in the data folder\'s harness.log where it is now, and on a terminal', async () => {

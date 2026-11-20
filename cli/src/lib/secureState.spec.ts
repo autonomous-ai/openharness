@@ -185,8 +185,14 @@ describe.skipIf(WINDOWS)('readPrivateStateFile', () => {
 describe('state on Windows', () => {
   it('lives in the user profile, or in the data folder the person configured', () => {
     expect(windowsStateRoots({}, 'C:\\Users\\me')).toEqual(['C:\\Users\\me'])
-    expect(windowsStateRoots({ ADAPTER_DATA_DIR: ' D:\\harness ' }, 'C:\\Users\\me')).toEqual(['C:\\Users\\me', 'D:\\harness'])
+    // Absolute where the spec runs: a relative folder is the home's (config/envFields.ts homePath).
+    const elsewhere = join(tmpdir(), 'harness')
+    expect(windowsStateRoots({ ADAPTER_DATA_DIR: ` ${elsewhere} ` }, 'C:\\Users\\me')).toEqual(['C:\\Users\\me', elsewhere])
     expect(windowsStateRoots({ ADAPTER_DATA_DIR: '' }, '')).toEqual([])
+  })
+
+  it('a relative data folder is the home\'s, as config/env.ts reads it', () => {
+    expect(windowsStateRoots({ ADAPTER_DATA_DIR: 'data' }, '/h')).toEqual(['/h', join('/h', 'data')])
   })
 
   it('is inside a root by path, as Windows compares paths', () => {
