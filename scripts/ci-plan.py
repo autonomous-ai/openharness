@@ -619,6 +619,16 @@ def own_shared_change(root, head, base):
     return next((path for path in own if path.startswith(SHARED_PREFIXES) or path in SHARED_FILES), None)
 
 
+# A changed path the job summary's Markdown may name.
+PLAIN_PATH = re.compile(r"[A-Za-z0-9_./-]+")
+
+
+def shown(path):
+    """A changed path as a reason names it: the job summary writes reasons into its Markdown, and git allows backticks
+    and newlines in a path."""
+    return path if PLAIN_PATH.fullmatch(path) else "a path of other characters"
+
+
 def reuse_blocker(root, suite, origin, head):
     """(scope, reason) when the result tested at origin cannot stand for head; scope "all" or "suite"."""
     if not is_ancestor(root, origin, head):
@@ -627,12 +637,12 @@ def reuse_blocker(root, suite, origin, head):
     for path in paths:
         reason = shared_input(path)
         if reason:
-            return "all", f"main changed {path} ({reason})"
+            return "all", f"main changed {shown(path)} ({reason})"
     touched = [path for path in paths if reads(suite, path)]
     if touched:
         more = f" and {len(touched) - 1} more" if len(touched) > 1 else ""
-        return "suite", f"main changed its input {touched[0]}{more}"
-    return None, "; ".join(paths[:3]) + (f" and {len(paths) - 3} more" if len(paths) > 3 else "")
+        return "suite", f"main changed its input {shown(touched[0])}{more}"
+    return None, "; ".join(map(shown, paths[:3])) + (f" and {len(paths) - 3} more" if len(paths) > 3 else "")
 
 
 REUSE_LOOKUP_SECONDS = 60
@@ -718,7 +728,7 @@ def plan_reuse(root, head, base, suites, evidence):
         reuse.update(source)
         changed = own_shared_change(root, head, base)
         if changed:
-            raise Rerun(f"this PR changes {changed}, which its own CI run reads")
+            raise Rerun(f"this PR changes {shown(changed)}, which its own CI run reads")
         probed = {}
         if source["kind"] == "update":
             try:
@@ -1210,8 +1220,6 @@ def verify(plan, needs, source):
                 run_id=int(os.environ.get("GITHUB_RUN_ID", "0")), run_attempt=int(os.environ.get("GITHUB_RUN_ATTEMPT", "0")))
 
 
-# A changed path the job summary's Markdown may name.
-PLAIN_PATH = re.compile(r"[A-Za-z0-9_./-]+")
 RUN_URL = re.compile(r"https://github\.com/[A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9][A-Za-z0-9_.-]*/actions/runs/[1-9][0-9]*")
 
 
