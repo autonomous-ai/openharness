@@ -46,8 +46,13 @@ function slowTimeout(callback: (...args: unknown[]) => void, ms?: number, ...arg
   slowSync.due.set(timer, () => { realClear(timer); callback(...args) })
   return timer
 }
+// The hook server answers a commit still in flight after 250 ms, and the registry expires a write after 5 s. No case
+// here means either to fire, so neither is scheduled: how fast this machine writes the registry never changes the golden.
+function ownedTimeout(callback: (...args: unknown[]) => void, ms?: number, ...args: unknown[]) {
+  return ms === 250 || ms === 5_000 ? realTimeout(() => {}, 0) : slowTimeout(callback, ms, ...args)
+}
 beforeEach(() => {
-  vi.spyOn(globalThis, 'setTimeout').mockImplementation(slowTimeout as typeof setTimeout)
+  vi.spyOn(globalThis, 'setTimeout').mockImplementation(ownedTimeout as typeof setTimeout)
   vi.spyOn(globalThis, 'clearTimeout').mockImplementation(((timer?: Parameters<typeof clearTimeout>[0]) => {
     slowSync.due.delete(timer); realClear(timer)
   }) as typeof clearTimeout)
