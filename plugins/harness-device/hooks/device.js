@@ -46,6 +46,8 @@ export const register = (on) => {
     state.windows = (await $.session.info().catch(() => null))?.platform === 'windows'
     // From a timer, not awaited here: the hook's budget would count the waits between polls.
     $.clock.after(0, () => void (state.windows ? follow($, state) : link($, state)))
+    // An attach before this answer took the socket's way, which Windows has not: it is told now.
+    if (state.windows && state.held) $.clock.after(0, () => void tell($, state))
     return started
   })
   on('session.attach', { surface: 'desktop' }, async ($, e, next) => {
