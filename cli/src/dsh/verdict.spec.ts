@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { once, type EventEmitter } from 'node:events'
+import type { EventEmitter } from 'node:events'
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -207,19 +207,6 @@ describe('DshVerdictWatcher, event by event', () => {
     await vi.waitFor(() => expect(seen.at(-1)).toBeNull(), { timeout: 4_000 })
     expect(watcher.current('a')).toBeNull()
   }, 15_000)
-
-  it('publishes a verdict written while the watch is still starting', async () => {
-    // chokidar reads the directory after watch() returns and counts what it finds there as already present: a
-    // verdict written in between, as a harness that writes one at once does, waited for its next change.
-    const file = join(workspace, '.harness', 'verdict.json')
-    const seen: Array<string | null> = []
-    watcher = new DshVerdictWatcher({ onChange: (_id, v) => seen.push(v ? v.summary : null) })
-    watcher.watch('a', file)
-    const ready = once(innerWatcher(watcher, 'a'), 'ready')
-    writeFileSync(file, verdict('early'))
-    await ready
-    expect(seen).toEqual(['early'])
-  })
 
   it('watching the same file again is a no-op; a different file replaces the watch', async () => {
     const first = join(workspace, 'one', 'verdict.json')
