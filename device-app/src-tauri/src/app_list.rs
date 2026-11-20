@@ -210,8 +210,8 @@ mod tests {
             self.data_home().join("icons").join("harness-device.png")
         }
 
-        fn apply(&self, appdir: Option<&OsStr>) -> Result<bool, String> {
-            apply(&self.data_home(), Some(self.appimage.as_os_str()), appdir)
+        fn apply(&self, appdir: Option<&OsStr>) -> Option<Result<Change, String>> {
+            apply(Some(&self.data_home()), Some(self.appimage.as_os_str()), appdir)
         }
     }
 
@@ -275,7 +275,7 @@ mod tests {
     #[test]
     fn the_icon_comes_from_inside_the_image() {
         let image = an_image();
-        assert_eq!(image.apply(Some(image.appdir.as_os_str())), Ok(true));
+        assert_eq!(image.apply(Some(image.appdir.as_os_str())), Some(Ok(Change::Write)));
         assert_eq!(fs::read(image.icon_file()).unwrap(), ICON_BYTES);
         let exec = exec_value(&image.appimage).unwrap();
         assert_eq!(fs::read_to_string(image.entry_file()).unwrap(), entry(&exec, Some(&image.icon_file())));
@@ -285,7 +285,7 @@ mod tests {
         fs::create_dir(&empty).unwrap();
         for appdir in [None, Some(OsStr::new("mount")), Some(empty.as_os_str())] {
             let image = an_image();
-            assert_eq!(image.apply(appdir), Ok(true), "{appdir:?}");
+            assert_eq!(image.apply(appdir), Some(Ok(Change::Write)), "{appdir:?}");
             assert!(!image.icon_file().exists(), "{appdir:?}");
             assert_eq!(
                 fs::read_to_string(image.entry_file()).unwrap(),
@@ -299,7 +299,7 @@ mod tests {
         let image = an_image();
         let folder = image.dir.path().join("My Apps");
         for appimage in [None, Some(OsStr::new("Harness-Device.AppImage")), Some(folder.as_os_str())] {
-            assert_eq!(apply(&image.data_home(), appimage, Some(image.appdir.as_os_str())), Ok(false), "{appimage:?}");
+            assert_eq!(apply(Some(&image.data_home()), appimage, Some(image.appdir.as_os_str())), None, "{appimage:?}");
             assert!(!image.data_home().exists(), "{appimage:?}");
         }
     }
@@ -308,10 +308,11 @@ mod tests {
     fn a_second_run_leaves_the_entry() {
         let image = an_image();
         let appdir = Some(image.appdir.as_os_str());
-        assert_eq!(image.apply(appdir), Ok(true));
+        assert_eq!(image.apply(appdir).map(line).as_deref(), Some("app list: entry written"));
         let written = fs::metadata(image.entry_file()).unwrap().modified().unwrap();
         let bytes = fs::read(image.entry_file()).unwrap();
-        assert_eq!(image.apply(appdir), Ok(false));
+        // The log says so: a left entry is a line too, the sign that the run decided.
+        assert_eq!(image.apply(appdir).map(line).as_deref(), Some("app list: entry kept"));
         assert_eq!(fs::read(image.entry_file()).unwrap(), bytes);
         assert_eq!(fs::metadata(image.entry_file()).unwrap().modified().unwrap(), written);
     }
@@ -320,13 +321,18 @@ mod tests {
     fn a_failure_is_a_log_line_not_a_panic() {
         let image = an_image();
         fs::write(image.data_home(), "").unwrap();
-        assert_eq!(image.apply(Some(image.appdir.as_os_str())), Err("app list: entry not written (error 20)".into()));
+        let not_written = |why: &str| Some(format!("app list: entry not written ({why})"));
+        assert_eq!(image.apply(Some(image.appdir.as_os_str())).map(line), not_written("error 20"));
+        // An AppImage run always ends in one line, with no data folder or a path one line cannot hold too.
+        let appimage = Some(image.appimage.as_os_str());
+        assert_eq!(apply(None, appimage, None).map(line), not_written("no data folder"));
+        assert_eq!(apply(Some(Path::new("/a\nb")), appimage, None).map(line), not_written("path not one line"));
     }
 
     #[test]
     fn the_entry_is_written_whole() {
         let image = an_image();
-        assert_eq!(image.apply(Some(image.appdir.as_os_str())), Ok(true));
+        assert_eq!(image.apply(Some(image.appdir.as_os_str())), Some(Ok(Change::Write)));
         let names = |folder: &Path| -> Vec<String> {
             fs::read_dir(folder).unwrap().map(|file| file.unwrap().file_name().into_string().unwrap()).collect()
         };
