@@ -376,8 +376,10 @@ class SelectionTests(unittest.TestCase):
                 self.assertIn("dial-hosts", planner.select([path])[0])
 
     def test_some_files_never_run_on_linux(self):
-        # windows-e2e runs the dial on Windows, diskfull is macOS only, and the agent browser's Podman file runs by hand.
-        for path in ("cli/e2e/dialWindows.e2e.ts", "cli/e2e/diskfull.e2e.ts", "cli/e2e/agentBrowserPodman.e2e.ts"):
+        # windows-e2e runs the dial and the apps' sessions on it on Windows, diskfull is macOS only, and the agent
+        # browser's Podman file runs by hand.
+        for path in ("cli/e2e/dialWindows.e2e.ts", "cli/e2e/dialWindowsAppSessions.e2e.ts", "cli/e2e/diskfull.e2e.ts",
+                     "cli/e2e/agentBrowserPodman.e2e.ts"):
             with self.subTest(path=path):
                 self.assertIn(path, planner.LINUX_E2E_NEVER)
                 self.assertFalse(planner.linux_e2e_file(path))
