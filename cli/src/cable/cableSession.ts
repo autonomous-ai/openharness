@@ -156,10 +156,12 @@ const APP_SWITCH_REPAINT_MS = 1_000
 /** What a `voice.begin` without an `sr` is assumed to be — firmware old enough not to say. */
 const DEFAULT_VOICE_RATE = 16_000
 
-/** A voice turn longer than this is a stuck dial, not a person talking. 16 kHz mono 16-bit ≈ 32 KB/s. Both dials
- *  stop at 600 s on a tick after the 600 s have passed, so a recording run to that stop passes 600 s by up to a
- *  tick; 15 s leaves room for it and still bounds a stuck dial. */
-const VOICE_MAX_BYTES = (10 * 60 + 15) * 32_000
+/** A voice turn longer than this is a stuck dial, not a person talking. Both dials stop at 600 s on a tick after the
+ *  600 s have passed, so a recording run to that stop passes 600 s by up to a tick; 15 s leaves room for it and still
+ *  bounds a stuck dial. */
+const VOICE_MAX_MS = (10 * 60 + 15) * 1_000
+/** The same turn in audio: 16 kHz mono 16-bit ≈ 32 KB/s. */
+const VOICE_MAX_BYTES = VOICE_MAX_MS * 32
 
 /** What a `swarms` item's `members` says about one member id (see CableSession.memberMeta). */
 export interface SwarmMemberMeta { id: string; name: string; engine: string; machine: string; online: boolean }
@@ -968,10 +970,12 @@ export class CableSession {
     if (!turn && this.voiceTurn) this.voiceClosedAt = now
     // A hold already over is not brought back by a voice that opens after it.
     else if (turn && !this.holdsStep2(now)) this.splitAt = null
+    if (turn) this.voiceOpenedAt = now
     this.voiceTurn = turn
   }
   private voiceTurn: VoiceTurn | null = null
-  /** When the dial's voice last closed, by performance.now(). Never, at first. */
+  /** When the dial's voice last opened and last closed, by performance.now(). Never, at first. */
+  private voiceOpenedAt = -Infinity
   private voiceClosedAt = -Infinity
   private voiceSearch?: SelectionCommand
   private voiceForm?: FormCommand
@@ -2841,11 +2845,13 @@ export class CableSession {
    * while the dial's voice is open and as long after it closes. The firmware applies a list on its refresh task, woken by
    * the list's agents.end, and none while its voice upload runs (app_main.c refresh_task, audio_client_active()), and an
    * agents.begin before then empties the buffer step 1 waits in (cable_client.c handle_agents_begin): the ring would
-   * meet the old tiles there and lose its new agents again.
+   * meet the old tiles there and lose its new agents again. A voice holds at most VOICE_MAX_MS from its begin, as long as
+   * a dial records: a turn whose voice.end was lost on the cable stays open here, and would hold the ring, on step 1's
+   * tiles or none, until the next voice.
    */
   private holdsStep2(now: number): boolean {
-    return this.splitAt !== null && (now - this.splitAt < AGENTS_PUSH_GAP_MS || this.voice !== null ||
-      now - this.voiceClosedAt < AGENTS_PUSH_GAP_MS)
+    return this.splitAt !== null && (now - this.splitAt < AGENTS_PUSH_GAP_MS ||
+      (this.voice !== null && now - this.voiceOpenedAt < VOICE_MAX_MS) || now - this.voiceClosedAt < AGENTS_PUSH_GAP_MS)
   }
 
   /** `ring` false: only the app list, which a pick the host ignored is answered with. */

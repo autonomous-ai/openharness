@@ -68,7 +68,8 @@ In `syncAgentsNow`, before the ring goes down the cable:
   the carousel would see the full ring over the old one and lose it again.
 - **Voice.** The firmware applies no list while its voice upload runs (`app_main.c`, `audio_client_active()`), so the
   hold also lasts while the dial's voice is open (`this.voice` set, `voice.begin` to its end or abort) and for 1 s after
-  it closes.
+  it closes, never longer than a dial records from its `voice.begin` (`VOICE_MAX_MS`, 615 s): a turn whose end was
+  lost on the cable stays open in the session and would otherwise hold the ring until the next voice.
 - **The hold ends early** when the dial is known to hold none: a port open or close (which empties `lastRing`, as
   today) and the dial's own `agents.list` clear `splitAt`.
 - Step 2 never overflows: the dial then holds only agents of the new ring, and the ring is at most `RING_PLACES`.
