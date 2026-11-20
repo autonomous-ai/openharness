@@ -180,6 +180,11 @@ Prisma over the **same MongoDB** as the agent-manager (no migration files — `p
 startup). The backend owns the `users` + `agent_bindings` collections; it never manages the
 manager-owned `agent_nodes`/`managers` (read those via raw queries when status enrichment is needed).
 
+### Voice
+
+Voice is transcribed by Deepgram (the default `VOICE_PROVIDER`). Every Deepgram request sends `mip_opt_out=true`,
+so Deepgram keeps the audio only as long as it needs to process the request and does not use it to improve its models.
+
 ### Product usage with an account-wide privacy control
 
 **Settings → Privacy → Share product usage data** on desktop and phone, or
