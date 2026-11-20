@@ -21,7 +21,7 @@ import { APP_IDS } from './hostDetect.js'
 import { RUN_TIMEOUT_MS, type OrcaDeps } from './orca.js'
 
 export interface HerdrAdapterDeps extends OrcaDeps {
-  client: Pick<HerdrClient, 'prompt' | 'socketStamp'>
+  client: Pick<HerdrClient, 'prompt' | 'socketStamp' | 'binary'>
   /** The app in front, which a rest asks for. */
   front(): string | undefined
 }
@@ -53,7 +53,8 @@ export function createHerdrAdapter(deps: HerdrAdapterDeps): HerdrAdapter {
   const turn = (id: string): Promise<boolean> => {
     const under = focusing.get(id)
     if (under) return under
-    const herdr = deps.onPath('herdr')
+    // herdr's zip on Windows puts it on no PATH: there the herdr that wrote the marker runs the command.
+    const herdr = deps.onPath('herdr') ?? deps.client.binary()
     if (!herdr) return Promise.resolve(false)
     const command = async () => (await deps.run(herdr, ['agent', 'focus', id], RUN_TIMEOUT_MS)).code === 0
     const typing = prompting.get(id)

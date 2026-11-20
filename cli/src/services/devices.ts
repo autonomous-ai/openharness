@@ -1809,8 +1809,11 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     part.call('notices', () => on ? notices.attached() : notices.detached())
     if (!observed || !herdr || !opencode) return
     // Only with herdr installed, read at each attach, as a tap needs it (herdr.ts): with none, no folder is watched
-    // (~/.config, or the home folder, recursive on macOS) for a socket that never comes.
-    part.call('herdr', () => on && apps.onPath('herdr') ? herdr.start() : herdr.stop())
+    // (~/.config, or the home folder, recursive on macOS) for a socket that never comes. herdr's zip on Windows puts it on
+    // no PATH: there its folder, which holds its marker once it has run, says so, and a tap runs the herdr that wrote the
+    // marker (herdrClient.ts binary).
+    const herdrInstalled = () => apps.onPath('herdr') !== null || (apps.platform === 'win32' && apps.exists(dirname(herdrAt.socketPath)))
+    part.call('herdr', () => on && herdrInstalled() ? herdr.start() : herdr.stop())
     // Only with Herdr installed, read at each attach as herdr's is: with none, no folder is watched for hc's socket.
     if (hcSource) part.call('herdr-app', () => on && herdrApp.binary() ? hcSource.start() : hcSource.stop())
     // Only with cmux installed, read at each attach as Herdr's is: with none, no folder is watched for its stores, and a

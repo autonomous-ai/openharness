@@ -25,7 +25,7 @@ interface Call { file: string; args: string[]; timeoutMs: number }
 interface Window { pid?: number; app?: string }
 
 /** herdr's socket, which no tap asks: a tap is `herdr agent focus`. */
-const herdrClient = { prompt: vi.fn(), socketStamp: vi.fn() }
+const herdrClient = { prompt: vi.fn(), socketStamp: vi.fn(), binary: vi.fn() }
 
 /** What a test may set: the runner and the binaries it finds, Orca's switch, the log, the opener's `open`, whether
  *  Herdr.app's window is herdr's ring's, Linux's raise with each agent's window, and Windows' raise. */

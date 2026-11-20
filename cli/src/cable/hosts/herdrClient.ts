@@ -84,11 +84,11 @@ const MARKER_MAX_BYTES = 64
 const UNIX_EPOCH_FILETIME = 116_444_736_000_000_000n
 
 /**
- * Whether the herdr that wrote the marker at [path] runs: the process it names is a herdr.exe this account may open (the
+ * The herdr that wrote the marker at [path], while it runs: the process it names is a herdr.exe this account may open (the
  * table leaves out another account's), started before the marker's time (a later one took the pid of a herdr that
  * exited). Never rejects.
  */
-async function markerHerdrRuns(path: string, rows: () => Promise<ProcessRow[] | null>): Promise<boolean> {
+async function markerHerdr(path: string, rows: () => Promise<ProcessRow[] | null>): Promise<ProcessRow | undefined> {
   let text: string
   try {
     const file = await open(path, 'r')
@@ -99,15 +99,15 @@ async function markerHerdrRuns(path: string, rows: () => Promise<ProcessRow[] | 
       await file.close()
     }
   } catch {
-    return false
+    return undefined
   }
   const marker = MARKER.exec(text)
-  if (!marker) return false
+  if (!marker) return undefined
   const pid = Number(marker[1])
   const written = BigInt(marker[2]!) / 100n + UNIX_EPOCH_FILETIME
   const row = (await rows().catch(() => null))?.find((row) => row.pid === pid)
   const started = row ? windowsStartTime(row.startMarker) : null
-  return row?.executable.toLowerCase() === 'herdr.exe' && started !== null && started < written
+  return row?.executable.toLowerCase() === 'herdr.exe' && started !== null && started < written ? row : undefined
 }
 
 /** Why a request has no result: the client's own word, or herdr's refusal (`rejected`) with herdr's code beside it.
@@ -131,6 +131,9 @@ export interface HerdrClient {
   /** The socket's inode and change time while it is a socket of this user's, on Windows the marker's (unixSocket.ts
    *  markerStampOf); else none. */
   socketStamp(): string | undefined
+  /** On Windows, the herdr.exe that wrote the marker, as the process table last showed it running: herdr's zip puts it on
+   *  no PATH, and a tap runs it (herdr.ts). None until it was seen, and none elsewhere. */
+  binary(): string | undefined
 }
 
 const isObject = (value: unknown): value is Record<string, unknown> =>
@@ -164,14 +167,18 @@ const failed = (answer: HerdrFailure): HerdrPrompt => answer.fault === 'rejected
   : { outcome: 'failed', fault: answer.fault }
 
 export function createHerdrClient(deps: HerdrClientDeps): HerdrClient {
-  // On Windows, the marker last looked at and whether its herdr runs. The pipe is a name any account can take once
-  // herdr is gone, and the marker stays after herdr ends without `herdr server stop`: so nothing is dialled until the
+  // On Windows, the marker last looked at, whether its herdr runs, and its image. The pipe is a name any account can take
+  // once herdr is gone, and the marker stays after herdr ends without `herdr server stop`: so nothing is dialled until the
   // marker's own herdr is seen running, once a marker, and again after a connection that failed.
-  let look: { stamp: string; runs: Promise<boolean>; ran?: boolean } | undefined
+  let look: { stamp: string; runs: Promise<boolean>; ran?: boolean; image?: string } | undefined
   const herdrRuns = (stamp: string): Promise<boolean> => {
     if (look?.stamp !== stamp) {
-      const started: NonNullable<typeof look> = { stamp, runs: markerHerdrRuns(deps.socketPath, deps.rows) }
-      void started.runs.then((ran) => { started.ran = ran })
+      const found = markerHerdr(deps.socketPath, deps.rows)
+      const started: NonNullable<typeof look> = { stamp, runs: found.then((row) => row !== undefined) }
+      void found.then((row) => {
+        started.ran = row !== undefined
+        started.image = row?.imagePath
+      })
       look = started
     }
     return look.runs
@@ -290,5 +297,5 @@ export function createHerdrClient(deps: HerdrClientDeps): HerdrClient {
     return sent.ok ? { outcome: 'sent' } : failed(sent)
   }
 
-  return { request, subscribe, prompt, socketStamp }
+  return { request, subscribe, prompt, socketStamp, binary: () => look?.image }
 }

@@ -6782,6 +6782,7 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
       subscribe: (_entries, to) => { subs.push(to); return { close: () => {} } },
       prompt: async () => ({ outcome: 'sent' }),
       socketStamp: () => '1:1',
+      binary: () => undefined,
     }
     const onMac = { ...orca, platform: 'darwin' as const, onPath: (name: string) => `/opt/${name}/bin/${name}` }
     const { port, listener } = devices({ herdr: client, orca: onMac, tty: async () => undefined })
@@ -7188,6 +7189,7 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
         subscribe: (_entries, to) => { subs.push(to); return { close: () => {} } },
         prompt: async () => ({ outcome: 'sent' }),
         socketStamp: () => '1:1',
+        binary: () => undefined,
       }
       const onMac = { ...orca, platform: 'darwin' as const, onPath: (name: string) => `/opt/${name}/bin/${name}` }
       const { port, listener } = devices({ core: bound(), herdr: client, orca: onMac, tty: async () => undefined })
@@ -7437,6 +7439,7 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
         subscribe: (_entries, to) => { subs.push(to); return { close: () => {} } },
         prompt: async () => ({ outcome: 'sent' }),
         socketStamp: () => '1:1',
+        binary: () => undefined,
       }
       const onMac = { ...orca, platform: 'darwin' as const, onPath: (name: string) => `/opt/${name}/bin/${name}` }
       const withHerdr = { herdr: client, orca: onMac, tty: async () => undefined }
@@ -7816,6 +7819,7 @@ describe('Herdr\'s agents, through Herdr Core (docs/plans/2026-11-16-herdr-app-d
       subscribe: (_entries, to) => { herdrSubs.push(to); return { close: () => {} } },
       prompt: async () => ({ outcome: 'sent' }),
       socketStamp: () => '1:1',
+      binary: () => undefined,
     }
     const { live } = withHc({ herdr: herdrListing })
     live()
@@ -7873,6 +7877,7 @@ describe('Herdr\'s agents, through Herdr Core (docs/plans/2026-11-16-herdr-app-d
         subscribe: (_entries, to) => { herdrSubs.push(to); return { close: () => {} } },
         prompt: async () => ({ outcome: 'sent' }),
         socketStamp: () => '1:1',
+        binary: () => undefined,
       }
       const { port, live } = withHc({ herdr: herdrListing })
       live([])
