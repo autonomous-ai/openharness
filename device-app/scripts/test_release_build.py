@@ -379,8 +379,8 @@ class ReleaseSetupTests(Fakes):
         self.runner_temp = self.root / "runner-temp"
         self.runner_temp.mkdir()
 
-    def setup(self, os_, sha256):
-        return self.run_script("release-setup.sh", os_, GITHUB_ACTIONS="true", FAKE_SETUP_LOG=str(self.setup_log),
+    def setup(self, os_, sha256, *mode):
+        return self.run_script("release-setup.sh", os_, *mode, GITHUB_ACTIONS="true", FAKE_SETUP_LOG=str(self.setup_log),
                                GITHUB_PATH=str(self.github_path), RUNNER_TEMP=str(self.runner_temp),
                                FAKE_ASSET_SHA256=sha256)
 
@@ -418,6 +418,34 @@ class ReleaseSetupTests(Fakes):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.calls("brew"), [["install", "minisign"]])
         self.assertEqual(self.calls("curl"), [])
+
+    def test_with_no_mode_it_installs_every_build_tool(self):
+        result = self.setup(MACOS, "0" * 64)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.calls("rustup"), [["toolchain", "install", "stable", "--profile", "minimal"],
+                                                ["target", "add", "aarch64-apple-darwin", "x86_64-apple-darwin"]])
+        self.assertEqual([call["args"] for call in self.cargo_calls()],
+                         [["install", "tauri-cli", "--version", "2.12.4", "--locked"]])
+        self.assertEqual(self.calls("npm"), [["ci", "--no-audit", "--no-fund"]])
+
+    def test_the_tauri_cli_mode_installs_rust_and_the_cli_only(self):
+        # The Windows signing job runs this CLI, so it is made where no app code runs: no UI package, no target.
+        result = self.setup(WINDOWS, "0" * 64, "tauri-cli")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.calls("rustup"), [["toolchain", "install", "stable", "--profile", "minimal"]])
+        self.assertEqual([call["args"] for call in self.cargo_calls()],
+                         [["install", "tauri-cli", "--version", "2.12.4", "--locked"]])
+        for cmd in ("npm", "curl", "pwsh"):
+            with self.subTest(cmd=cmd):
+                self.assertEqual(self.calls(cmd), [])
+        self.assertFalse(self.github_path.exists())
+
+    def test_an_unknown_mode_is_a_usage_error(self):
+        result = self.setup(LINUX_X64, LINUX_MINISIGN[1], "everything")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("usage: release-setup.sh", result.stderr)
+        self.assertFalse(self.setup_log.exists())
+        self.assertEqual(self.cargo_calls(), [])
 
 
 if __name__ == "__main__":

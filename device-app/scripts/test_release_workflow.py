@@ -6,7 +6,7 @@ import re
 import unittest
 
 WORKFLOWS = Path(__file__).resolve().parents[2] / ".github" / "workflows"
-WINDOWS_JOBS = ("build-windows", "sign-windows", "check-windows")
+WINDOWS_JOBS = ("tauri-cli-windows", "build-windows", "sign-windows", "check-windows")
 SIGNING = "uses: ./.github/actions/windows-signing"
 
 
@@ -63,11 +63,11 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertNotIn("platforms", self.job("build"))
 
     def test_windows_and_linux_build_only_for_all(self):
-        for name in ("build-windows", "build-linux"):
+        for name in ("tauri-cli-windows", "build-windows", "build-linux"):
             with self.subTest(job=name):
                 self.assertRegex(self.job(name), r"(?m)^    if: inputs\.platforms == 'all'$")
         # Skipped with build-windows: no condition of their own could run them without it.
-        self.assertRegex(self.job("sign-windows"), r"(?m)^    needs: \[version, build-windows\]$")
+        self.assertRegex(self.job("sign-windows"), r"(?m)^    needs: \[version, tauri-cli-windows, build-windows\]$")
         self.assertRegex(self.job("check-windows"), r"(?m)^    needs: \[version, sign-windows\]$")
         for name in ("sign-windows", "check-windows"):
             with self.subTest(job=name):
@@ -90,12 +90,29 @@ class ReleaseWorkflowTests(unittest.TestCase):
         # Nor from the workflow's own permissions, which every job without its own takes.
         top = re.search(r"(?m)^permissions:\n((?:  .*\n)+)", self.text).group(1)
         self.assertEqual(top, "  contents: read\n")
-        # What it hands on: the unsigned exe and the Tauri CLI that bundles it, for a day.
+        # What it hands on: the unsigned exe alone, for a day. Its Tauri CLI ran beside the build's code.
         upload = steps(job)[self.step(job, "actions/upload-artifact@")]
         self.assertIn("name: device-windows-${{ matrix.arch }}-unsigned", upload)
         self.assertIn("retention-days: 1", upload)
-        taken = steps(job)[self.step(job, "cargo-tauri")]
-        self.assertIn("harness-device.exe", taken)
+        self.assertIn("harness-device.exe", steps(job)[self.step(job, "Copy-Item")])
+        self.assertNotIn("cargo-tauri", job)
+
+    def test_the_tauri_cli_is_made_where_no_app_code_runs(self):
+        job = self.job("tauri-cli-windows")
+        self.assertRegex(job, r"(?m)^    needs: version$")
+        self.assertIn("runs-on: windows-latest", job)
+        self.assertIn("release-setup.sh tauri-cli", job)
+        # The app's code is not even checked out: only the release scripts.
+        self.assertIn("sparse-checkout: |\n            /device-app/scripts/\n          sparse-checkout-cone-mode: false",
+                      job)
+        for text in ("secrets.", "id-token", "environment:", "npm", "setup-node", "compile", "release-build.sh",
+                     "download-artifact"):
+            with self.subTest(text=text):
+                self.assertNotIn(text, job)
+        upload = steps(job)[self.step(job, "actions/upload-artifact@")]
+        self.assertIn("name: tauri-cli-windows", upload)
+        self.assertIn("retention-days: 1", upload)
+        self.assertIn("cargo-tauri", steps(job)[self.step(job, "Copy-Item")])
 
     def test_only_the_signing_job_is_in_the_release_environment_with_an_id_token(self):
         self.job("sign-windows")
@@ -114,10 +131,10 @@ class ReleaseWorkflowTests(unittest.TestCase):
                      "rust-toolchain"):
             with self.subTest(text=text):
                 self.assertNotIn(text, job)
-        # It runs the Tauri CLI build-windows built, from the artifact.
+        # It runs the Tauri CLI tauri-cli-windows made, from its artifact, and build-windows's exes.
         self.assertIn("pattern: device-windows-*-unsigned", job)
-        taken = steps(job)[self.step(job, "cargo-tauri.exe")]
-        self.assertIn("GITHUB_PATH", taken)
+        self.assertIn("actions/download-artifact@", steps(job)[self.step(job, "name: tauri-cli-windows")])
+        self.assertIn("cygpath -w \"$PWD/tauri\" >>\"$GITHUB_PATH\"", steps(job)[self.step(job, "GITHUB_PATH")])
 
     def test_only_sign_update_holds_the_updater_key_on_windows(self):
         holders = []
@@ -142,7 +159,10 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertLess(signing[0], bundle)
         self.assertLess(bundle, signing[1])
         self.assertLess(signing[1], update)
-        self.assertLess(update, self.step(job, "actions/upload-artifact@"))
+        # The sums publish trusts are taken here, by the job that made the files, before anything else touches them.
+        sums = self.step(job, "device-manifest.py sums")
+        self.assertLess(update, sums)
+        self.assertLess(sums, self.step(job, "actions/upload-artifact@"))
         # The update signature is made over the folder the second signing signed.
         out = re.search(r"(?m)^          path: (\S+)$", named[signing[1]]).group(1)
         self.assertIn(f'sign-update "$VERSION" {out}', named[update])
@@ -159,6 +179,14 @@ class ReleaseWorkflowTests(unittest.TestCase):
     def test_windows_signing_has_no_switch(self):
         self.assertNotRegex(self.text, r"\bWINDOWS_SIGNING\b")
         self.assertRegex(self.job("check-windows"), r'release-check\.sh out "\$VERSION" "\$PUBKEY" --signed\n')
+
+    def test_check_windows_only_gates(self):
+        # It checks sign-windows's artifact, the one publish takes, and hands nothing on: publish trusts no file of its.
+        job = self.job("check-windows")
+        self.assertIn("name: harness-device-${{ needs.version.outputs.version }}-windows", job)
+        for text in ("upload-artifact", "device-manifest.py"):
+            with self.subTest(text=text):
+                self.assertNotIn(text, job)
 
     def test_linux_builds_on_ubuntu_22_04_for_both_archs(self):
         job = self.job("build-linux")
@@ -192,7 +220,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
         # Each build hashes its own part, under the artifact name publish looks for.
         version = "${{ needs.version.outputs.version }}"
         for name, artifact, sums in (("build", f"harness-device-{version}\n", '--out "$RUNNER_TEMP/out/sums.json"'),
-                                     ("check-windows", f"harness-device-{version}-windows\n",
+                                     ("sign-windows", f"harness-device-{version}-windows\n",
                                       "--part windows --out out/sums.json"),
                                      ("build-linux", f"harness-device-{version}-linux-${{{{ matrix.arch }}}}\n",
                                       '--part "linux-$ARCH" --out')):
