@@ -970,6 +970,20 @@ describe('a tap on Windows brings the app forward through the raise', () => {
     expect(r.logs).toEqual([])
   })
 
+  // herdr's own bundle names no window on Windows: the hook sends the terminal herdr runs in (notify.mjs
+  // lookUpWindowsApp, WEZTERM_PANE and TERM_PROGRAM=WarpTerminal), and that terminal comes forward.
+  it.each([
+    ['WezTerm', { WEZTERM_PANE: '0', __CFBundleIdentifier: 'com.github.wez.wezterm' }, 'com.github.wez.wezterm'],
+    ['Warp', { TERM_PROGRAM: 'WarpTerminal', __CFBundleIdentifier: 'dev.warp.Warp-Stable' }, 'dev.warp.Warp-Stable'],
+  ])('herdr in %s: its pane is focused, then the terminal comes forward', async (_, hints, bundle) => {
+    const r = onWindows()
+    const herdr = target({ HERDR_PANE_ID: 'w1:p2', ...hints })
+    expect(r.opener.can(herdr)).toBe(true)
+    expect(await r.opener.open('a1', herdr)).toBe(true)
+    expect(r.calls).toEqual([run('/fake/bin/herdr', 'agent', 'focus', 'w1:p2')])
+    expect(r.asked).toEqual([['app', bundle]])
+  })
+
   it('a pick brings its app through the raise: ok for raised or refused, failed for none', async () => {
     const r = onWindows([true, false])
     expect(await r.opener.bring!('wezterm')).toBe('ok')
