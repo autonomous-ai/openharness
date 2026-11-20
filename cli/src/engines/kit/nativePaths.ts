@@ -21,7 +21,8 @@ type Part = { info: BigIntStats | null; target?: string }
 type Location = { path: string; info: BigIntStats } | null
 /** Immutable route facts can cross a service boundary; timestamps matter for aliases, not sibling churn. */
 export type NativePathFact = { path: string; identity: string | null; alias?: { target: string; version: string } }
-export function verifyNativePathFacts(facts: readonly NativePathFact[], budget = new NativeEvidenceBudget()): void {
+export function verifyNativePathFacts(facts: readonly NativePathFact[], budget = new NativeEvidenceBudget(),
+  devices?: Map<string, bigint | null>): void {
   if (!facts.length || facts.length > 256) return nativeUnavailable('the retained route exceeds its limit')
   for (const fact of facts) {
     budget.step()
@@ -35,6 +36,12 @@ export function verifyNativePathFacts(facts: readonly NativePathFact[], budget =
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return nativeUnavailable('the retained route became unreadable')
       info = null
+    }
+    // Saved facts cross reboots; two passes of one live fence must also keep the device stable.
+    if (devices) {
+      const device = info?.dev ?? null
+      if (devices.has(fact.path) && devices.get(fact.path) !== device) return nativeUnavailable('the retained route changed during preparation')
+      devices.set(fact.path, device)
     }
     if (withoutDevice(identity(info)) !== withoutDevice(fact.identity)
       || (fact.alias && (!info || withoutDevice(version(info)) !== withoutDevice(fact.alias.version) || target !== fact.alias.target))) {

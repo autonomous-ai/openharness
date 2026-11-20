@@ -451,10 +451,50 @@ export function hookPreparationRoutes(files: readonly string[]): { verify(): voi
     const paths = new NativePaths(new NativeEvidenceBudget())
     const located = paths.resolveSync(file, true), facts = paths.snapshot()
     const key = located?.path ?? join(directoryPath(dirname(file)), basename(file))
-    return { file, key, facts: facts.filter(fact => fact.identity !== null && fact.path !== located?.path),
+    return { file, key, complete: facts.length > 0 && facts.length <= 256 && facts.every(fact => fact.identity !== null || fact.path === key)
+      && (!located || key === join(directoryPath(dirname(file), paths), basename(file))),
+      facts: facts.filter(fact => fact.identity !== null && fact.path !== located?.path),
       aliases: new Set(facts.filter(fact => fact.alias).map(fact => fact.path)) }
   })
+  const keys = [...new Set(reservations.map(reservation => reservation.key))].sort()
+  // Complete routes need fresh observations, not another path reconstruction.
+  // Conflicting captures or a larger union keep the original per-route proof.
+  const union = new Map<string, NativePathFact>()
+  let complete = reservations.every(reservation => reservation.complete)
+  for (const reservation of reservations) for (const fact of reservation.facts) {
+    const previous = union.get(fact.path)
+    if (previous && (withoutDevice(previous.identity) !== withoutDevice(fact.identity)
+      || previous.alias?.target !== fact.alias?.target
+      || withoutDevice(previous.alias?.version) !== withoutDevice(fact.alias?.version))) complete = false
+    if (union.size < 256 || union.has(fact.path)) union.set(fact.path, fact)
+    else complete = false
+  }
+  const retained = complete && union.size ? [...union.values()] : undefined
   const verifyRoutes = () => {
+    if (retained) {
+      const budget = new NativeEvidenceBudget(), devices = new Map<string, bigint | null>()
+      const leaves = () => keys.map(key => {
+        budget.step()
+        let info: BigIntStats
+        try { info = lstatSync(key, { bigint: true }) } catch (error) {
+          if (missing(error)) return null
+          return nativeUnavailable('a native location became unreadable')
+        }
+        if (info.isSymbolicLink()) throw new HookPreparationHeld('the reserved destination route changed')
+        return fileIdentity(info)
+      })
+      // A later leaf can replace an ancestor already checked. Keep both passes,
+      // and keep each writable leaf stable within this invocation as snapshot did.
+      verifyNativePathFacts(retained, budget, devices)
+      const before = leaves()
+      verifyNativePathFacts(retained, budget, devices)
+      const after = leaves()
+      if (before.some((identity, index) => identity !== after[index])) {
+        return nativeUnavailable('a native path or alias changed during inspection')
+      }
+      budget.step()
+      return
+    }
     const directories = new Map<string, BigIntStats>()
     const current = reservations.map(reservation => {
       const fresh = new NativePaths(new NativeEvidenceBudget()), located = fresh.resolveSync(reservation.file, true, directories)
@@ -470,8 +510,7 @@ export function hookPreparationRoutes(files: readonly string[]): { verify(): voi
       }
     }
   }
-  const keys = [...new Set(reservations.map(reservation => reservation.key))].sort()
-  return { verify: verifyRoutes, keys, facts: [...new Map(reservations.flatMap(item => item.facts).map(fact => [fact.path, fact])).values()] }
+  return { verify: verifyRoutes, keys: [...keys], facts: [...new Map(reservations.flatMap(item => item.facts).map(fact => [fact.path, fact])).values()] }
 }
 
 /** Disk waits remain in eager core code. Reservations survive a timeout until

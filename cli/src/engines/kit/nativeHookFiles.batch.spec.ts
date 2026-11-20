@@ -14,9 +14,9 @@ beforeEach(() => { root = realpathSync(mkdtempSync(join(tmpdir(), 'native-route-
 afterEach(() => { effects.onStat = undefined; rmSync(root, { recursive: true, force: true }) })
 
 const callers = [
-  { name: 'destination routes', reads: 2, aliasReads: 4, fallbackReads: 3 },
-  { name: 'preparation observations', reads: 6, aliasReads: 10, fallbackReads: 7 },
-  { name: 'completed proof', reads: 6, aliasReads: 10, fallbackReads: 7 },
+  { name: 'destination routes', reads: 2, aliasReads: 2, fallbackReads: 3 },
+  { name: 'preparation observations', reads: 6, aliasReads: 8, fallbackReads: 7 },
+  { name: 'completed proof', reads: 6, aliasReads: 8, fallbackReads: 7 },
 ] as const
 type Caller = typeof callers[number]['name']
 async function withVerifier(caller: Caller, files: string[], exercise: (verify: () => void) => void): Promise<void> {
@@ -209,7 +209,7 @@ it.each(callers.flatMap(caller => (caller.name === 'destination routes' ? ['repl
   },
 )
 
-it.each(callers)('$name checks an existing common alias in every walk and grouped final snapshot', async ({ name, aliasReads }) => {
+it.each(callers)('$name checks an existing common alias at every fresh route fence', async ({ name, aliasReads }) => {
   const fixture = siblings(); fixture.aliasAncestor()
   await withVerifier(name, fixture.files, verify => {
     let observed = 0
@@ -272,4 +272,51 @@ it('checks an earlier private directory after the final sibling walk', () => {
   }
   expect(() => routes.verify()).toThrow(/changed/)
   expect(changed).toBe(true)
+})
+
+
+it('checks a shared existing alias exactly twice for a complete destination set', () => {
+  const fixture = siblings(); fixture.aliasAncestor()
+  const routes = hookPreparationRoutes(fixture.files)
+  for (let pass = 0; pass < 2; pass++) {
+    let reads = 0
+    effects.onStat = path => { if (path === fixture.shared) reads++ }
+    try { routes.verify(); expect(reads).toBe(2) }
+    finally { effects.onStat = undefined }
+  }
+})
+
+it.each(['present', 'absent'] as const)('refuses a new destination alias after capturing a %s leaf', state => {
+  const fixture = siblings(), file = fixture.files[0], target = join(root, 'peer.json')
+  writeFileSync(target, '{}')
+  if (state === 'absent') rmSync(file)
+  const routes = hookPreparationRoutes(fixture.files)
+  rmSync(file, { force: true }); symlinkSync(target, file)
+  expect(() => routes.verify()).toThrow(/alias|route changed/)
+})
+
+it.each(['replacement', 'appearance', 'disappearance', 'mode'] as const)('refuses leaf %s between the two destination checks', change => {
+  const fixture = siblings(), file = fixture.files[0]
+  if (change === 'appearance') rmSync(file)
+  const routes = hookPreparationRoutes(fixture.files)
+  let changed = false
+  effects.onStat = path => {
+    if (path !== fixture.files[1] || changed) return
+    changed = true
+    if (change === 'disappearance') rmSync(file)
+    else if (change === 'mode') chmodSync(file, 0o640)
+    else {
+      const next = join(root, 'next.json'); writeFileSync(next, '{}')
+      renameSync(next, file)
+    }
+  }
+  try { expect(() => routes.verify()).toThrow(/changed/); expect(changed).toBe(true) }
+  finally { effects.onStat = undefined }
+})
+
+it('allows an ordinary missing leaf to be created between destination checks', () => {
+  const fixture = siblings(), file = fixture.files[0]
+  rmSync(file); const routes = hookPreparationRoutes(fixture.files)
+  routes.verify(); writeFileSync(file, '{}')
+  expect(() => routes.verify()).not.toThrow()
 })
