@@ -301,8 +301,9 @@ ask held 10 minutes (`cable/hosts/codexQueue.ts`).*
 - The exact name mapping, and where herdr's default socket path is on Windows, are read from herdr's source and
   confirmed against a real herdr on the VM before the code is written.
 
-*Corrected 2026-11-20: herdr's zip puts `herdr.exe` on no PATH, so on Windows herdr's source starts when herdr's own
-folder (the marker's) exists, as well as when `herdr` is on PATH. Its pipe is dialled only while the marker's own
+*Corrected 2026-11-20: herdr's zip puts `herdr.exe` on no PATH, so on Windows herdr's source always starts with the
+dial: until herdr's own folder (the marker's) exists it watches `%APPDATA%` itself, so a herdr first run after the dial
+attaches is found without a replug, as on a Mac. Its pipe is dialled only while the marker's own
 herdr runs: the server's pid in the marker is a `herdr.exe` of this account, started before the marker was written
 (the process table), checked for each new marker and again after a failed connection. A tap's `herdr agent focus`
 runs the `herdr` on PATH, else that server's own image (`cable/hosts/herdrClient.ts` `binary`).*
