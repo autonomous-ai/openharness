@@ -43,6 +43,8 @@ unsigned ph_mix(unsigned a, unsigned b, unsigned pct);
 // engine logos (asking, working, done; the done ones faded; a state dot under each; more than five: four and "+N"). The previous and next tabs
 // peek at the sides at 86 %, faded 45 % toward the ground (their gradient and name). Ground PH_HOME_BG. No dots, bell, title or pets.
 // One POD_A_ENTER_TAB hit (arg = the tab index, id = the tab's id) over the card; none for a tab with 0 agents. No tabs: the "Harness" wordmark (ph_bd_84, as the round dial's), centred, no hits.
+// While pod_home_switch (a window and another app with agents), every page, the wordmark too, has the Tabs | Apps pill at its foot: 252 x 46 at (234, 640),
+// the cell of the list Home shows (pod_home_apps) filled, and two hits, POD_A_HOME_TABS over x 180..360 and POD_A_HOME_APPS over x 360..540, y 624..720 (arg 0).
 void ph_view_home(pod_out_frame_t *, const pod_nav_t *, pod_model_t *, uint32_t now_ms);
 // Whether Home has something that moves (a working agent's equaliser, an asking agent's pulse) and the ms to its next step (the 66 ms beat, else 1000).
 bool ph_home_moves(const pod_nav_t *, const pod_model_t *);

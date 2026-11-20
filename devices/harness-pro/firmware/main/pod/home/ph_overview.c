@@ -13,6 +13,7 @@
 // Paging: the TABS frame's scroll is the tab index, POD_HOME_NOTICES the Notices card (only while notices exist) and POD_HOME_WORKING the Working card (only
 // while an agent works): the page list is pod_home_pages, so a card coming or going never moves the person to another tab: it only adds or drops a page before
 // tab 0 (and when the card shown goes, Home settles on the next page to its right).
+// The Tabs | Apps pill (home_pill) sits under every page while another app has agents (pod_home_switch).
 // Also here: the small helpers the other Pets screens share (the pet / logo art).
 #include <stdio.h>
 #include <string.h>
@@ -468,10 +469,27 @@ static void peek(pod_out_frame_t *f, const pod_nav_t *nav, const pod_model_t *m,
     else if (p >= 0 && p < m->tab_count) card(f, m, p, x, y, w, h, r, PEEK_FADE, false, now_ms);
 }
 
-void ph_view_home(pod_out_frame_t *f, const pod_nav_t *nav, pod_model_t *m, uint32_t now_ms)
+// The Tabs | Apps pill at Home's foot: a 252 x 46 band, the cell of the list Home shows filled. The edge is two fills, as the canvas's stroke is
+// 1 px. Its two hits are the halves of the band x 180..540, y 624..720, wider than the pill so a thumb at the glass's edge still lands.
+enum { HP_X = 234, HP_Y = 640, HP_W = 252, HP_H = 46, HP_CELL = (HP_W - 8) / 2, HP_HIT_X = 180, HP_HIT_Y = 624, HP_HIT_W = 180, HP_HIT_H = 96 };
+static void home_pill(pod_out_frame_t *f, bool apps)
 {
     ht_scene_t *s = f->scene;
-    s->background = C(PH_HOME_BG);
+    ht_pro_rect_aa(s, HP_X, HP_Y, HP_W, HP_H, HP_H / 2, C(PH_BORDER));
+    ht_pro_rect_aa(s, HP_X + 2, HP_Y + 2, HP_W - 4, HP_H - 4, HP_H / 2 - 2, C(PH_GROUND));
+    ht_pro_rect_aa(s, HP_X + 4 + (apps ? HP_CELL : 0), HP_Y + 4, HP_CELL, HP_H - 8, HP_H / 2 - 4, C(PH_TRACK));
+    static const char *const label[2] = {"Tabs", "Apps"};
+    for (int k = 0; k < 2; k++) {
+        const int tw = ht_pro_width(&ph_sb_22, label[k]), cx = HP_X + 4 + k * HP_CELL + HP_CELL / 2;
+        ph_text(s, cx - tw / 2, HP_Y + HP_H / 2, tw + 2, &ph_sb_22, k == (int)apps ? PH_INK : PH_MUTED, label[k]);
+        pod_hit_add(f, HP_HIT_X + k * HP_HIT_W, HP_HIT_Y, HP_HIT_W, HP_HIT_H, k ? POD_A_HOME_APPS : POD_A_HOME_TABS, 0);
+    }
+}
+
+// One page of Home: the wordmark, the Working or Notices card, or a tab's card, each with its neighbours.
+static void home_page(pod_out_frame_t *f, const pod_nav_t *nav, pod_model_t *m, uint32_t now_ms)
+{
+    ht_scene_t *s = f->scene;
     const int t = home_at(nav, m);
     if (t == HOME_NONE) { wordmark(s, now_ms); return; }
     const int pw = CARD_W * PEEK_PCT / 100, ph = CARD_H * PEEK_PCT / 100, py = CARD_Y + CARD_H / 2 - ph / 2;
@@ -496,4 +514,11 @@ void ph_view_home(pod_out_frame_t *f, const pod_nav_t *nav, pod_model_t *m, uint
     if (t >= m->tab_count) return;   // an app page: m->tabs has no such entry
     card(f, m, t, CARD_X, CARD_Y, CARD_W, CARD_H, CARD_R, 0, true, now_ms);
     if (tab_agents(m, t, NULL) > 0) pod_hit_add_id(f, CARD_X, CARD_Y, CARD_W, CARD_H, POD_A_ENTER_TAB, t, m->tabs[t].id);
+}
+
+void ph_view_home(pod_out_frame_t *f, const pod_nav_t *nav, pod_model_t *m, uint32_t now_ms)
+{
+    f->scene->background = C(PH_HOME_BG);
+    home_page(f, nav, m, now_ms);
+    if (pod_home_switch(m)) home_pill(f, pod_home_apps(nav, m));   // under every page, the wordmark too: the person can always turn to Apps
 }
