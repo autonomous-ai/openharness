@@ -7,8 +7,8 @@
 // slivers: its pet smaller and lower, its words gone. The row moves as V3's (max_ui_row.c): an agent opening widens
 // over its neighbours as they narrow, its face fading and its panel coming in, and the row follows the finger. An
 // agent between looks is drawn on the glass as a cell is, dimmed by its colours and cut to its window (max_ui_layer.c).
-// Ambient: the clock large, the date, a few still stars, the agents' pets relaxing as V3's (they play), and what the
-// bar has to say ("All quiet").
+// Ambient: the clock large, the date, a few still stars, the demo's three pets playing as V3's, and what the bar has
+// to say ("All quiet").
 #include <stdio.h>
 #include <string.h>
 
@@ -374,9 +374,23 @@ void max_draw_overview(ht_scene_t *s, uint32_t now_ms)
 
 enum {
     CLOCK_X = DX(64), CLOCK_CY = DY(142), DATE_CY = DY(239), WORDS_R = HT_WIDTH - DX(56), WORDS_CY = DY(143),
-    PETS_L = DX(560), PETS_R = DX(1110), PETS_FOOT = DY(298), AMBIENT_PET_H = PETS_FOOT - DY(24), AMBIENT_HALF = DX(133),
-    AMBIENT_PETS = 3, STARS = 120,
+    PETS_FOOT = HT_HEIGHT - MAX_Y(10), PETS_MID = DX(887), PETS_GAP = DY(56),
+    PETS_L = DX(574), PETS_R = DX(1200),   // where the pets stand at 480: no star there
+    STARS = 120,
 };
+
+// The demo's three pets, whatever the ring holds (V3 ambient_page.dart _Pets, the owner's call 20 Nov, from a photo of
+// the demo): Claude and the Muse relaxing and Codex idling, left to right, on one line, 56 px apart. The Pro's art has
+// no zoom between 1x and 2x: Claude at 2x is V3's size, the Muse at 2x a little taller than V3's (at 1x it would be
+// shorter than Claude), Codex (HD) V3's size. `w` is how wide each stands at 480 (V3 px, its art's room), `side` the
+// square it is drawn in (V3 px). Each is kept whole on the glass, a lower zoom where it would not fit: the Muse's
+// ball reaches the top at 2x, so their line is near the foot.
+static const struct { const char *engine; pod_scene_t scene; int w, side; } DEMO_PETS[] = {
+    {"claude", POD_SCENE_RELAX, 156, 150},
+    {"muse", POD_SCENE_RELAX, 156, 170},
+    {"codex", POD_SCENE_REST, 118, 147},
+};
+enum { DEMO_PET_COUNT = sizeof DEMO_PETS / sizeof DEMO_PETS[0] };
 
 static int isqrt(int v)
 {
@@ -423,15 +437,15 @@ void max_draw_ambient(ht_scene_t *s, uint32_t now_ms)
     }
     const char *words = !max_m.link ? "Not connected" : !max_m.count ? "No agents yet" : "All quiet";
     max_text_right(s, WORDS_R, WORDS_CY, DX(320), &ph_sb_34, INK, words);
-    // The first agents of the ring relaxing as V3's (ambient_page.dart): they play, the render task waking for their
-    // next step. An engine with no pet shows its logo, which holds still.
-    const int n = max_m.link && max_m.count < AMBIENT_PETS ? max_m.count : max_m.link ? AMBIENT_PETS : 0;
-    const int slot = n ? (PETS_R - PETS_L) / n : 0;
-    for (int i = 0; i < n; i++) {
-        const char *engine = max_m.agents[i].engine;
-        max_pet(s, engine, POD_SCENE_RELAX, PETS_L + slot * i + slot / 2, PETS_FOOT, AMBIENT_HALF, AMBIENT_PET_H, GROUND,
-                now_ms, false);
-        if (pod_pet_for(engine)) max_motion(now_ms, max_pet_next_ms(engine, POD_SCENE_RELAX, now_ms));
+    // The demo's pets, playing: the render task wakes for their next step.
+    int x = PETS_MID - (DEMO_PET_COUNT - 1) * PETS_GAP / 2;
+    for (int i = 0; i < DEMO_PET_COUNT; i++) x -= DY(DEMO_PETS[i].w) / 2;
+    for (int i = 0; i < DEMO_PET_COUNT; i++) {
+        const int w = DY(DEMO_PETS[i].w);
+        max_pet(s, DEMO_PETS[i].engine, DEMO_PETS[i].scene, x + w / 2, PETS_FOOT, DY(DEMO_PETS[i].side), PETS_FOOT,
+                GROUND, now_ms, false);
+        max_motion(now_ms, max_pet_next_ms(DEMO_PETS[i].engine, DEMO_PETS[i].scene, now_ms));
+        x += w + PETS_GAP;
     }
     max_hit(0, 0, HT_WIDTH, HT_HEIGHT, MAX_HIT_WAKE, 0);
 }
