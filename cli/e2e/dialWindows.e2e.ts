@@ -51,6 +51,12 @@ describe.runIf(process.platform === 'win32')('the dial on Windows', () => {
   it('harness device notify says no dial before the dial greets, and shown after; the dial gets the line', async () => {
     showLog()
     expect(d.dataDir).toContain(PROFILE_NAME)
+    // Sealed: the daemon's one PATH names Windows' own folders or the root's, never the account's, whose engines it
+    // would run.
+    const paths = Object.entries(d.env).filter(([name]) => name.toUpperCase() === 'PATH').map(([, value]) => value ?? '')
+    expect(paths).toHaveLength(1)
+    const systemRoot = process.env.SystemRoot!.toLowerCase()
+    expect(paths[0]!.split(';').filter((entry) => !entry.toLowerCase().startsWith(systemRoot) && !entry.startsWith(d.root))).toEqual([])
     const before = await d.harness(['device', 'notify', LINE])
     expect({ code: before.code, out: before.stdout.trim() }).toEqual({ code: 0, out: 'no dial' })
 
