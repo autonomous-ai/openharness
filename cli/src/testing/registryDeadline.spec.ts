@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+import { RegistryWriteQueue } from '../lib/registryPersistence.js'
 
 // Stands in for the host's clock before the helper binds it, so a test sees every wait that reaches the host.
 const host = vi.hoisted(() => {
@@ -26,21 +27,34 @@ async function syncRegistryImage(): Promise<void> {
   finally { await handle.close() }
 }
 
-it('runs a held deadline timer on expire() and never on the host clock', () => {
+// By who arms it, not by its bound: the time a write has left (confirmLaunch's second attempt, a new pane's budget).
+it('holds a write deadline the queue arms with 4 s left off the host clock, and a sync, until expire()', async () => {
   const held = deadline.holdRegistryDeadline(DEADLINE_MS)
-  const ran = vi.fn()
-  setTimeout(ran, DEADLINE_MS)
-  expect(ran).not.toHaveBeenCalled()
-  expect(host.waits).not.toContain(DEADLINE_MS)
+  const write = new RegistryWriteQueue().run(() => new Promise(() => {}), performance.now() + 4_000)
+  let failed: unknown
+  write.catch((error: unknown) => { failed = error })
+  await syncRegistryImage()
+  expect(failed).toBeUndefined()
+  expect(host.waits).not.toContainEqual(expect.closeTo(4_000, 0))
   held.expire()
-  expect(ran).toHaveBeenCalledOnce()
+  await expect(write).rejects.toThrow('write deadline exceeded')
 })
 
-it('never runs a cleared deadline timer', () => {
-  const held = deadline.holdRegistryDeadline(DEADLINE_MS)
+it('leaves a 5 s timer from outside the registry on the host clock, which a sync does not run', async () => {
+  deadline.holdRegistryDeadline(DEADLINE_MS)
   const ran = vi.fn()
-  clearTimeout(setTimeout(ran, DEADLINE_MS))
-  held.expire()
+  const timer = setTimeout(ran, DEADLINE_MS)
+  await syncRegistryImage()
+  clearTimeout(timer)
+  expect(host.waits).toContain(DEADLINE_MS)
+  expect(ran).not.toHaveBeenCalled()
+})
+
+it('never runs a cleared held timer', () => {
+  const held = deadline.holdRegistryDeadline(DEADLINE_MS, { hold: [2_000] })
+  const ran = vi.fn()
+  clearTimeout(setTimeout(ran, 2_000))
+  held.fire(2_000)
   expect(ran).not.toHaveBeenCalled()
 })
 
