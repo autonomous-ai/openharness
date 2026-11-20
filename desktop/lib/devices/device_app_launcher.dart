@@ -10,9 +10,11 @@ import '../core/runtime_platform.dart';
 import '../logging/app_log.dart';
 import 'device_app.dart';
 
-/// Linux: Harness Device's entry in the desktop's app list. An AppImage
-/// registers nothing itself, so Desktop writes the entry when it installs the
-/// app, as it writes its own (`registerAppImageLauncher`).
+/// Linux: Harness Device's entry in the desktop's app list. Three writers keep
+/// it by one rule: the Device app at every launch (`app_list.rs`), Desktop when
+/// it installs the app, and the one-line installer
+/// (`website/scripts/device-install.sh`). The rule is
+/// `tests/fixtures/app-list-entry-vectors.json`, which each one's tests read.
 const deviceAppLauncherName = 'harness-device.desktop';
 
 /// The app's window class, as the entry's `StartupWMClass`: a dock then draws
