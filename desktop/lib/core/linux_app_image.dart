@@ -104,22 +104,46 @@ String? launcherDataHome(Map<String, String> environment) {
 /// [path] without the `/`s that end it, so `/` alone is no folder.
 String? _folder(String? path) => path?.replaceFirst(RegExp(r'/+$'), '');
 
-/// The program an entry's `Exec=` line starts, unquoted; null when it has none.
-/// `%%` reads as `%`, before the quotes, as GLib reads it; a single `%` is
-/// kept, so an entry an earlier Desktop wrote without doubling one still names
-/// its path.
+/// The program an entry's `Exec=` line starts, as GLib reads it and the Device
+/// app too: the string's escapes, then `%%` as `%`, then the quotes, in which a
+/// backslash keeps a `"`, a backtick, `$` or `\` and is kept before any other.
+/// Null when it has no `Exec=`, or an unclosed quote. A single `%` is kept, so
+/// an entry an earlier Desktop wrote without doubling one still names its path.
 String? launcherExecTarget(String entry) {
-  final value = launcherEntryValue(entry, 'Exec')?.replaceAll('%%', '%');
-  if (value == null) return null;
+  final exec = launcherEntryValue(entry, 'Exec');
+  if (exec == null) return null;
+  final value = _unescaped(exec).replaceAll('%%', '%');
   if (value.startsWith('"')) {
     // The closing quote is the first one no backslash escapes.
-    final quoted = RegExp(r'^"((?:[^"\\]|\\.)*)"').firstMatch(value);
+    final quoted = RegExp(
+      r'^"((?:[^"\\]|\\.)*)"',
+      dotAll: true,
+    ).firstMatch(value);
     if (quoted == null) return null;
-    return quoted[1]!.replaceAllMapped(RegExp(r'\\(.)'), (match) => match[1]!);
+    return quoted[1]!.replaceAllMapped(
+      RegExp(r'\\(.)', dotAll: true),
+      (match) => '"`\$\\'.contains(match[1]!) ? match[1]! : match[0]!,
+    );
   }
   final space = value.indexOf(' ');
   return space < 0 ? value : value.substring(0, space);
 }
+
+/// [value] with the Desktop Entry spec's string escapes (`\s`, `\n`, `\t`,
+/// `\r`, `\\`) read. Any other keeps its backslash, as GLib read it before it
+/// refused such a value, so an entry an earlier writer wrote with `\"` still
+/// names its path, and is written again.
+String _unescaped(String value) => value.replaceAllMapped(
+  RegExp(r'\\(.?)', dotAll: true),
+  (match) => switch (match[1]) {
+    's' => ' ',
+    'n' => '\n',
+    't' => '\t',
+    'r' => '\r',
+    r'\' => r'\',
+    _ => match[0]!,
+  },
+);
 
 /// The value of [entry]'s first `<key>=` line, without the spaces, tabs and
 /// carriage return around it: the ones GLib drops, which the Device app drops
@@ -155,8 +179,11 @@ Future<String> readLauncherEntry(File entry) async =>
     utf8.decode(await entry.readAsBytes(), allowMalformed: true);
 
 /// A path as the Desktop Entry spec wants it in `Exec=`: quoted when it holds
-/// a character the launcher would otherwise split or expand on, and every `%`
-/// doubled, as the spec keeps a single one for field codes.
+/// a character the launcher would otherwise split or expand on, with `"`, a
+/// backtick, `$` and `\` backslashed, and every `%` doubled, as the spec keeps
+/// a single one for field codes; then the string's escape over it, every
+/// backslash doubled again, as the spec reads a value before its quotes (GLib
+/// finds no `Exec=` in `\"`).
 String quoteLauncherExec(String path) {
   final doubled = path.replaceAll('%', '%%');
   if (!_quoted.hasMatch(path)) return doubled;
@@ -164,7 +191,7 @@ String quoteLauncherExec(String path) {
     RegExp(r'["`$\\]'),
     (match) => '\\${match[0]}',
   );
-  return '"$escaped"';
+  return '"${escaped.replaceAll(r'\', r'\\')}"';
 }
 
 /// What `Exec=` quotes, the list the Device app's exec_value holds: Unicode's

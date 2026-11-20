@@ -44,8 +44,9 @@ fn folder(path: &OsStr) -> &Path {
 
 /// The path as the Desktop Entry spec wants it in `Exec=`, as Desktop's quoteLauncherExec writes it: in quotes, with
 /// `"`, a backtick, `$` and `\` backslashed, when it holds a character a launcher would split or expand on; every `%`
-/// doubled, a single one being a field code. None for a control character (C0, DEL and C1, Unicode's Cc, as Desktop
-/// lists them), which one line cannot hold, or not UTF-8.
+/// doubled, a single one being a field code; then the string's escape over it, every backslash doubled again, as the
+/// spec reads a value before its quotes (GLib finds no `Exec=` in `\"`). None for a control character (C0, DEL and C1,
+/// Unicode's Cc, as Desktop lists them), which one line cannot hold, or not UTF-8.
 pub fn exec_value(appimage: &Path) -> Option<String> {
     let path = appimage.to_str().filter(|path| !path.chars().any(char::is_control))?;
     let doubled = path.replace('%', "%%");
@@ -54,7 +55,7 @@ pub fn exec_value(appimage: &Path) -> Option<String> {
     }
     let escaped: String =
         doubled.chars().flat_map(|c| ["\"`$\\".contains(c).then_some('\\'), Some(c)]).flatten().collect();
-    Some(format!("\"{escaped}\""))
+    Some(format!("\"{}\"", escaped.replace('\\', "\\\\")))
 }
 
 /// A character `Exec=` quotes, the list Desktop's quoteLauncherExec holds: Unicode's White_Space, which a launcher may
@@ -65,10 +66,11 @@ fn quoted(c: char) -> bool {
         || "\"'\\$`<>~|&;*?#()".contains(c)
 }
 
-/// The program the entry's first `Exec=` line starts, unquoted, as Desktop's launcherExecTarget reads it: `%%` as `%`
-/// before the quotes, as GLib reads it; None when it has no such line or an unclosed quote.
+/// The program the entry's first `Exec=` line starts, as GLib reads it and Desktop's launcherExecTarget too: the
+/// string's escapes, then `%%` as `%`, then the quotes, in which a backslash keeps a `"`, a backtick, `$` or `\` and is
+/// kept before any other. None when it has no such line or an unclosed quote.
 pub fn exec_target(entry: &str) -> Option<String> {
-    let value = value(entry, "Exec")?.replace("%%", "%");
+    let value = unescaped(value(entry, "Exec")?).replace("%%", "%");
     let Some(quoted) = value.strip_prefix('"') else {
         return Some(value.split(' ').next().unwrap_or_default().to_string());
     };
@@ -76,11 +78,36 @@ pub fn exec_target(entry: &str) -> Option<String> {
     while let Some(c) = chars.next() {
         match c {
             '"' => return Some(target),
-            '\\' => target.push(chars.next()?),
+            '\\' => match chars.next()? {
+                c @ ('"' | '`' | '$' | '\\') => target.push(c),
+                c => target.extend(['\\', c]),
+            },
             c => target.push(c),
         }
     }
     None
+}
+
+/// `value` with the Desktop Entry spec's string escapes (`\s`, `\n`, `\t`, `\r`, `\\`) read. Any other keeps its
+/// backslash, as GLib read it before it refused such a value, so an entry an earlier writer wrote with `\"` still names
+/// its path, and is written again.
+fn unescaped(value: &str) -> String {
+    let (mut text, mut chars) = (String::new(), value.chars());
+    while let Some(c) = chars.next() {
+        if c != '\\' {
+            text.push(c);
+            continue;
+        }
+        match chars.next() {
+            Some('s') => text.push(' '),
+            Some('n') => text.push('\n'),
+            Some('t') => text.push('\t'),
+            Some('r') => text.push('\r'),
+            Some('\\') => text.push('\\'),
+            other => text.extend(Some('\\').into_iter().chain(other)),
+        }
+    }
+    text
 }
 
 /// The entry's bytes, every writer's: Desktop's, with the window's class last so a dock groups the window under it.
