@@ -248,7 +248,7 @@ describe('the extension in a real, throwaway VS Code', () => {
       }],
       ['the throwaway\'s end', async () => {
         await ended()
-        const left = throwawayProcesses(root).length
+        const left = (await throwawayProcesses(root)).length
         if (left) throw new Error(`${left} of the throwaway's processes still running`)
       }],
       ['the devices\' listener', () => listener?.close()],
@@ -263,12 +263,12 @@ describe('the extension in a real, throwaway VS Code', () => {
       ['the throwaway\'s caches', () => {
         if (app !== undefined) removeOwnFolders()
       }],
-      ['the developer\'s VS Code\'s preferences', () => {
+      ['the developer\'s VS Code\'s preferences', async () => {
         if (preferences === undefined) return
         try {
           assertUnchanged(VSCODE_PREFERENCES, preferences)
         } catch (error) {
-          throw new Error(`${(error as Error).message}; ${vscodeOutside(root)}`)
+          throw new Error(`${(error as Error).message}; ${await vscodeOutside(root)}`)
         }
       }],
     ], CLEAN_UP_MS)

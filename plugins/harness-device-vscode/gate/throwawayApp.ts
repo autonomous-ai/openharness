@@ -176,11 +176,14 @@ function powershellArgs(script: string): string[] {
   return ['-NoProfile', '-NonInteractive', '-EncodedCommand', encoded]
 }
 const POWERSHELL_OPTIONS = { encoding: 'utf8', windowsHide: true, maxBuffer: 64 * 1024 * 1024 } as const
-const powershell = (script: string): string => execFileSync(POWERSHELL, powershellArgs(script), POWERSHELL_OPTIONS)
+/** Never synchronous: the gate's devices listener runs in its process, and a PowerShell takes over a second to start on
+ *  the VM, past the extension's 2 s for a stream's head (4 streams for 1, 2026-11-20). */
+const powershell = async (script: string): Promise<string> =>
+  (await promisify(execFile)(POWERSHELL, powershellArgs(script), POWERSHELL_OPTIONS)).stdout
 
 /** Win32_Process, read in one go: another account's processes come with no path or command line. */
-function windowsProcesses(): WindowsProcess[] {
-  return JSON.parse(powershell(`ConvertTo-Json -Compress -InputObject @(Get-CimInstance Win32_Process | ForEach-Object {
+async function windowsProcesses(): Promise<WindowsProcess[]> {
+  return JSON.parse(await powershell(`ConvertTo-Json -Compress -InputObject @(Get-CimInstance Win32_Process | ForEach-Object {
     @{ pid = $_.ProcessId; ppid = $_.ParentProcessId; name = $_.Name; command = "$($_.ExecutablePath) $($_.CommandLine)";
        started = if ($_.CreationDate) { $_.CreationDate.ToFileTimeUtc().ToString() } else { '0' } } })`)) as WindowsProcess[]
 }
@@ -200,14 +203,14 @@ export function windowsThrowaway(table: readonly WindowsProcess[], root: string,
 }
 
 /** The throwaway's processes still running. */
-export function throwawayProcesses(root: string): number[] {
-  return WINDOWS ? windowsThrowaway(windowsProcesses(), root).map(({ pid }) => pid) : carrying(processes(), root)
+export async function throwawayProcesses(root: string): Promise<number[]> {
+  return WINDOWS ? windowsThrowaway(await windowsProcesses(), root).map(({ pid }) => pid) : carrying(processes(), root)
 }
 
 /** Whether a VS Code other than the throwaway runs, by its process's name alone: the developer's own writes its
  *  preferences too, so a change seen while it runs may be its own. */
-export function vscodeOutside(root: string): string {
-  const own = new Set(throwawayProcesses(root))
+export async function vscodeOutside(root: string): Promise<string> {
+  const own = new Set(await throwawayProcesses(root))
   const found = spawnSync('/usr/bin/pgrep', ['-x', 'Code'], { encoding: 'utf8' }).stdout.split('\n').filter(Boolean)
   return found.some((pid) => !own.has(Number(pid)))
     ? 'a VS Code (Code) outside the gate\'s root is running'
@@ -215,12 +218,11 @@ export function vscodeOutside(root: string): string {
 }
 
 /** When the process started, as `ps` says, or on Windows its FILETIME: with its pid, it tells it from a later process
- *  given the same pid. Never synchronous: the gate's devices listener runs in its process, and a PowerShell takes over a
- *  second to start on the VM, past the extension's 2 s for a stream's head (4 streams for 1, 2026-11-20). */
+ *  given the same pid. */
 export async function startedAt(pid: number): Promise<string | undefined> {
   if (WINDOWS) {
     const script = `$p = Get-CimInstance Win32_Process -Filter 'ProcessId=${pid}'; if ($p) { $p.CreationDate.ToFileTimeUtc() }`
-    return (await promisify(execFile)(POWERSHELL, powershellArgs(script), POWERSHELL_OPTIONS)).stdout.trim() || undefined
+    return (await powershell(script)).trim() || undefined
   }
   try {
     return (await promisify(execFile)('/bin/ps', ['-o', 'lstart=', '-p', String(pid)], { encoding: 'utf8' })).stdout.trim()
@@ -236,7 +238,7 @@ export async function startedAt(pid: number): Promise<string | undefined> {
  *  hold paths. */
 export async function killThrowaway(root: string, shells: ReadonlyMap<number, string> = new Map()): Promise<string[]> {
   if (WINDOWS) {
-    const doomed = windowsThrowaway(windowsProcesses(), root, shells)
+    const doomed = windowsThrowaway(await windowsProcesses(), root, shells)
     kill(doomed.map(({ pid }) => pid))
     return [...new Set(doomed.map(({ name }) => name))].sort()
   }
