@@ -196,12 +196,21 @@ class SelectionTests(unittest.TestCase):
         # device-app-build packages its jobs install.
         workflow = (Path(__file__).resolve().parents[2] / ".github/workflows/ci.yml").read_text()
         jobs = dict(re.findall(r"(?m)^  ([\w-]+):\n((?:(?:    .*)?\n)+)", workflow))
-        uses = {name for name, job in jobs.items() if "uses: ./.github/actions/device-app-setup\n" in job}
-        users = {suite for suite, names in planner.JOBS.items() if names & uses}
-        if "device-app-build" in uses:
-            users |= set(planner.DEVICE_APP_BUILDS)
-        self.assertEqual(users, {"device-app-e2e", "device-app-update", "device-app-desktop", "device-app-install"})
-        self.assertEqual(planner.select([".github/actions/device-app-setup/action.yml"])[0], users)
+        def users(action):
+            uses = {name for name, job in jobs.items() if f"uses: ./.github/actions/{action}\n" in job}
+            suites = {suite for suite, names in planner.JOBS.items() if names & uses}
+            return suites | (set(planner.DEVICE_APP_BUILDS) if "device-app-build" in uses else set())
+
+        self.assertEqual(users("device-app-setup"), {"device-app-e2e", "device-app-update", "device-app-desktop",
+                                                     "device-app-install"})
+        self.assertEqual(planner.select([".github/actions/device-app-setup/action.yml"])[0], users("device-app-setup"))
+        # Every end-to-end suite runs on a change to an action its jobs use (desktop-tests' Flutter action is shared).
+        actions = sorted(set(re.findall(r"uses: \./\.github/actions/([\w-]+)\n", workflow)))
+        self.assertLessEqual({"desktop-flutter", "desktop-flutter-arm64", "cli-e2e-setup"}, set(actions))
+        for action in actions:
+            with self.subTest(action=action):
+                self.assertLessEqual(users(action) & planner.E2E,
+                                     planner.select([f".github/actions/{action}/action.yml"])[0])
 
     def test_builds_follow_only_the_suites_that_run(self):
         # Review Focus 4: a reused Device suite must not make device-app-build build its packages.
