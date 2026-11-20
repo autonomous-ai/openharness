@@ -6116,6 +6116,32 @@ describe('a ring that would overflow the dial goes in two steps (docs/plans/2026
       expect(lists(port).at(-1)).toEqual(['o1', 'o2', 'o3'])
     } finally { await session.stop(); vi.useRealTimers() }
   })
+
+  it('a voice whose end never came holds the second step no longer than a dial records', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'performance'] })
+    let rows = SIXTEEN
+    const { session, port } = await landed(() => machine(rows))
+    try {
+      // Its voice.end lost on the cable: the turn stays open here, while both dials stop recording at 600 s.
+      port.say({ t: 'voice.begin', uploadId: 'u3' })
+      await settle()
+      const mark = port.sent.length
+      // Each pong is the dial still there, so its silence rule, which ends a hold too, is not what ends this one.
+      vi.advanceTimersByTime(600_000)
+      port.say({ t: 'pong' })
+      rows = ORCA
+      await session.syncAgents()
+      expect(lists(port, mark)).toEqual([[]])
+      vi.advanceTimersByTime(10_000)
+      port.say({ t: 'pong' })
+      await session.syncAgents()
+      expect(lists(port, mark)).toEqual([[]])
+      vi.advanceTimersByTime(6_000)
+      port.say({ t: 'pong' })
+      await session.syncAgents()
+      expect(lists(port, mark)).toEqual([[], ['o1', 'o2']])
+    } finally { await session.stop(); vi.useRealTimers() }
+  })
 })
 
 describe('the app filter', () => {
