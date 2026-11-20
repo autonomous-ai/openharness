@@ -26,7 +26,7 @@ there too, through `harness device claude asked`: it hears the prompt before the
 With no dial attached, no Harness daemon running, or no Harness CLI (`~/.local/bin/harness`, on Windows
 `%USERPROFILE%\.harness\bin\harness.exe`, then `harness` on `PATH`), the hook tells nothing, and Claude Code carries
 on as it would without the plugin. On Windows Claude Code still starts the hook, in Git Bash, or in PowerShell when
-there is none, and the prompt shows once it ends: about 1-2 s later in Git Bash, 3-5 s in PowerShell. The dial shows
+there is none, and the prompt shows once it ends: about 0.5-1 s later in Git Bash, 2-3.5 s in PowerShell (measured on a Windows 11 ARM64 VM). The dial shows
 the prompt as soon as the mod has told it. Where an organization manages Claude Code, its hooks pass over the mod: the
 hook tells, and a PowerShell slower than the hook's 5 s rings nothing at the dial for that prompt, which still waits in
 the session.
