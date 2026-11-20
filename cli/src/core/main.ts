@@ -84,7 +84,7 @@ import { HERMES_SYSTEM_MANAGED_DIR, type GridLaunchMachine } from '../lib/gridLa
 import { writeGridConfigDir } from '../lib/gridConfigDir.js'
 import { clearDeleted, isRecentlyDeleted, markDeleted } from '../lib/deletedSessions.js'
 import { findLiveSession, findResumedTranscript } from '../lib/sessionRepair.js'
-import { openclawStateDir } from '../lib/openclawStore.js'
+import { openclawStateDir, openclawUserRowSince } from '../lib/openclawStore.js'
 import { processSessionOf } from '../engines/sessionStores.js'
 import { createHandoffDependencies } from './handoffDependencies.js'
 import { TmuxBackend } from '../lib/tmuxBackend.js'
@@ -2071,6 +2071,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     },
     openclawPaneDue: (sessionId) => otherStreams.paneDue(sessionId),
     openclawStateDir: (pid) => openclawStateDir(pid),
+    // A first task typed before a restart is settled by OpenClaw's own store: a user row since it was typed.
+    openclawUserRowSince,
     followsLive: (sessionId) => otherStreams.follows(sessionId),
     hermesTerminal: createHermesTerminal({
       platform: process.platform,

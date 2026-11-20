@@ -222,12 +222,13 @@ export function openclawStartingUntil(s: RegisteredSession): number | null {
 }
 
 /**
- * Whether [s] has yet to take its first task: the row still holds it, or it is typed and its user row has not
- * confirmed it ([firstTaskTyped], core/input.ts); or it is an OpenClaw within its starting minute
+ * Whether [s] has yet to take its first task: the row still holds it, untyped or typed and not yet confirmed (its
+ * `firstTaskTyped`, which a daemon restarted since reads until the binding pass settles it), or the input awaits its
+ * user row ([firstTaskWaiting], core/input.ts); or it is an OpenClaw within its starting minute
  * ({@link openclawStartingUntil}).
  */
-export function agentStarting(s: RegisteredSession, firstTaskTyped: boolean, now: number): boolean {
-  if (s.firstTask || firstTaskTyped) return true
+export function agentStarting(s: RegisteredSession, firstTaskWaiting: boolean, now: number): boolean {
+  if (s.firstTask || s.firstTaskTyped || firstTaskWaiting) return true
   const until = openclawStartingUntil(s)
   return until !== null && now < until
 }

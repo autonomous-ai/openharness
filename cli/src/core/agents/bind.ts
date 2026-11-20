@@ -22,6 +22,7 @@ import { openclawStartingUntil } from '../../lib/agentFrame.js'
 import { isRecentlyDeleted } from '../../lib/deletedSessions.js'
 import { transcriptIsFirstTurn } from '../../lib/firstTurnReplay.js'
 import { errorKind, sid } from '../../lib/log.js'
+import type { openclawUserRowSince } from '../../lib/openclawStore.js'
 import { startMarkerMs } from '../../lib/processProof.js'
 import { matchesLaunchReceipt, projectDisplayName, type registry, type RegisteredSession } from '../../lib/registry.js'
 import type { SessionInputController } from '../../lib/sessionInput.js'
@@ -114,7 +115,7 @@ export type RegisteredMeta = {
 }
 
 export interface BindDeps {
-  registry: Pick<typeof registry, 'inheritName' | 'confirmSessionUnbound' | 'byAgent' | 'byProcess' | 'register' | 'has' | 'bySession' | 'setIdentityHold' | 'revalidateBinding' | 'setOpenclawStateDir' | 'takeFirstTask' | 'afterTransaction' | 'setLaunch'>
+  registry: Pick<typeof registry, 'inheritName' | 'confirmSessionUnbound' | 'byAgent' | 'byProcess' | 'register' | 'has' | 'bySession' | 'setIdentityHold' | 'revalidateBinding' | 'setOpenclawStateDir' | 'takeFirstTask' | 'firstTaskTaken' | 'afterTransaction' | 'setLaunch'>
   mirror: Pick<TurnRecaps, 'inheritSummary'>
   forgetSession: (id: string, opts?: { force?: boolean; keepAgent?: boolean; agentId?: string }) => Promise<void>
   /** The app. */
@@ -123,7 +124,7 @@ export interface BindDeps {
   announceSession: (session: RegisteredSession) => void
   stoppedAgents: Pick<StoppedAgentStore, 'save' | 'finishResume' | 'get'>
   syncRecapPool: () => void
-  input: Pick<SessionInputController, 'forget' | 'awaitingConfirmation' | 'waitsForPane' | 'firstTaskWaiting' | 'typeCommand' | 'expectFirstTask' | 'ownsBox'>
+  input: Pick<SessionInputController, 'forget' | 'awaitingConfirmation' | 'waitsForPane' | 'firstTaskWaiting' | 'typeCommand' | 'expectFirstTask' | 'ownsBox' | 'adoptTypedFirstTask' | 'firstTaskConfirmed'>
   /** Types an agent's first task into its pane as the person's own message (core/input.ts `submitAgent`), which the input
    *  keeps from its hand-over until a turn takes it (`expectFirstTask`). */
   submitFirstTask: (agentId: string, task: string) => void
@@ -145,6 +146,8 @@ export interface BindDeps {
   openclawPaneDue: (sessionId: string) => boolean
   /** The state folder an OpenClaw TUI holds open, or null when its open files cannot be read (lib/openclawStore.ts). */
   openclawStateDir: (pid: number) => Promise<string | null>
+  /** Whether OpenClaw's store holds a user row for a session key written after a time; null when it cannot say. */
+  openclawUserRowSince: typeof openclawUserRowSince
   /** What a Hermes's record of its own terminal says (hermesTerminal.ts). Absent, a Hermes is bound by its hooks and the repair. */
   hermesTerminal?: ReturnType<typeof createHermesTerminal>
   /** Whether the session's live stream is still held, to be resumed where it stopped, by its reader itself. */
@@ -164,7 +167,7 @@ interface BindPass {
 export function createBinding({
   registry, mirror, forgetSession, clients, attachSession, announceSession, stoppedAgents, syncRecapPool,
   input, submitFirstTask, deviceInput, homes, owners, capturePane, activityRevision, openclawPaneRead, openclawPaneDue, openclawStateDir, hermesTerminal,
-  followsLive,
+  followsLive, openclawUserRowSince,
 }: BindDeps) {
   /**
    * Forks whose engine session has not reported in yet, agentId → the SOURCE's sessionId. A fork's tile
@@ -221,9 +224,12 @@ export function createBinding({
    * early; cleared at 256 entries too.
    */
   const firstTaskClock = new Map<string, { seenAt: number; pausedMs: number; pausedSince?: number }>()
-  /** Whether the agent's first task waits, on its row or handed over and not yet confirmed. Its clock goes once it does not. */
+  /**
+   * Whether the agent's first task waits: on its row untyped, or typed and not yet confirmed (a mark a restart keeps), or
+   * handed over and not yet confirmed. Its clock goes once it does not.
+   */
   const firstTaskWaits = (agent: RegisteredSession): boolean => {
-    const waits = !!agent.firstTask || input.firstTaskWaiting(agent.agentId)
+    const waits = !!agent.firstTask || !!agent.firstTaskTyped || input.firstTaskWaiting(agent.agentId)
     if (!waits) firstTaskClock.delete(agent.agentId)
     return waits
   }
@@ -459,6 +465,28 @@ export function createBinding({
       return null
     })
   /**
+   * The agents whose typed first task this daemon awaits, handed over or adopted here: only one an earlier daemon typed is
+   * adopted. Cleared at 256 entries rather than aged: the controller refuses to adopt a task it already awaits.
+   */
+  const firstTasksAwaited = new Set<string>()
+  const awaitFirstTask = (agentId: string): void => {
+    if (firstTasksAwaited.size >= 256) firstTasksAwaited.clear()
+    firstTasksAwaited.add(agentId)
+  }
+  /**
+   * A typed first task OpenClaw's store shows taken leaves its row once the pass's transaction commits, as `takeFirstTask`
+   * does; then the controller's wait for it ends and the frame is pushed, no longer starting. A removal not made (not
+   * saved, or the mark gone already) confirms nothing: the next pass reads the store again.
+   */
+  const confirmTypedFirstTask = (agent: RegisteredSession): void => {
+    void registry.afterTransaction(() => registry.firstTaskTaken(agent.agentId)).then((taken) => {
+      if (!taken) return
+      input.firstTaskConfirmed(agent.agentId)
+      announceSession(agent)
+      console.log(`[agent] ${sid(agent.agentId)} first task confirmed`)
+    }, (error: unknown) => console.error(`[agent] ${sid(agent.agentId)} first task typed kept · ${errorKind(error)}`))
+  }
+  /**
    * Types the agent's first task as the person's own message, under the agent: its turn is confirmed there
    * (core/turns/funnel.ts), and under the session key it was failed as not accepted. A submit that throws has the task
    * off the row already: it is said, not put back.
@@ -466,6 +494,7 @@ export function createBinding({
   const handOverFirstTask = (agentId: string): void => {
     // Expected before its row lets it go: the frame reads starting from the one or the other all the way to its turn.
     input.expectFirstTask(agentId)
+    awaitFirstTask(agentId)
     void takeFirstTask(agentId).then((task) => {
       if (!task) return
       console.log(`[agent] ${sid(agentId)} first task handed over`)
@@ -624,6 +653,24 @@ export function createBinding({
       if (!taskWaits) announceStartingEnd(agent)
       const waiting = taskWaits || input.awaitingConfirmation(agent.agentId) || input.waitsForPane(agent.agentId)
       if (agent.sessionId && !waiting && agent.identityHold !== OPENCLAW_STATES.boxHeld && !openclawPaneDue(agent.sessionId)) return
+      // A first task typed before a restart: OpenClaw's store says whether it was taken, though the daemon was down when its
+      // user row landed, so a mark an older daemon left is settled the same, at any age. Until it says so, the controller
+      // awaits it as one typed here (an Enter or a clear, never a paste), asked on every pass until it takes it: a write
+      // under way or an open turn refuses it. The bound below runs from this daemon's first pass.
+      if (agent.firstTaskTyped) {
+        const { text, at } = agent.firstTaskTyped
+        const taken = await openclawUserRowSince(agent.sessionId, { pid: observed.processIdentity.pid, stateDir: agent.openclawStateDir }, at)
+          .catch(() => null)
+        if (!current()) return
+        if (taken) {
+          confirmTypedFirstTask(agent)
+          return
+        }
+        if (!firstTasksAwaited.has(agent.agentId) && input.adoptTypedFirstTask(agent.agentId, text)) {
+          awaitFirstTask(agent.agentId)
+          console.log(`[agent] ${sid(agent.agentId)} first task typed before a restart · awaiting confirmation`)
+        }
+      }
       const revision = agent.sessionId ? activityRevision(agent.sessionId) : undefined
       const captured = await read(() => capturePane(agent.agentId), (screen) => !screen)
       if (!captured?.value || !current()) return
