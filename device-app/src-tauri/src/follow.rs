@@ -540,6 +540,37 @@ mod tests {
     }
 
     #[test]
+    fn the_mac_door_reads_only_the_focused_windows_title_and_sets_nothing() {
+        // Held on every platform, so Linux CI checks the macOS door too. Comments are cut: they may name what the
+        // code must not do.
+        let code = include_str!("follow_macos.rs")
+            .lines()
+            .map(|line| line.split("//").next().unwrap_or_default())
+            .collect::<Vec<_>>()
+            .join("\n");
+        let names: std::collections::BTreeSet<&str> = regex::Regex::new(r#""(AX[A-Za-z]*)""#)
+            .unwrap()
+            .captures_iter(&code)
+            .map(|found| found.get(1).unwrap().as_str())
+            .collect();
+        assert_eq!(names, ["AXFocusedWindow", "AXFocusedWindowChanged", "AXTitle", "AXTitleChanged"].into());
+        // A set attribute (AXManualAccessibility makes ChatGPT build its whole tree) or an action changes the app.
+        for never in [
+            "SetAttributeValue",
+            "set_attribute_value",
+            "PerformAction",
+            "perform_action",
+            "AXManualAccessibility",
+            "AXEnhancedUserInterface",
+        ] {
+            assert!(!code.contains(never), "{never}");
+        }
+        for always in ["com.apple.accessibility.api", "set_messaging_timeout("] {
+            assert!(code.contains(always), "{always}");
+        }
+    }
+
+    #[test]
     fn no_line_or_log_holds_a_title() {
         let (mut follow, first) = observing();
         let mut outs = vec![

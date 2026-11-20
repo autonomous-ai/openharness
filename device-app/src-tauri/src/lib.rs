@@ -5,6 +5,8 @@ pub mod app;
 pub mod cli;
 pub mod desktop;
 pub mod follow;
+#[cfg(target_os = "macos")]
+pub mod follow_macos;
 pub mod front;
 #[cfg(target_os = "macos")]
 pub mod front_macos;
