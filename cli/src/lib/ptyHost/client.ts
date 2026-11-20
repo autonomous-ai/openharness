@@ -53,8 +53,8 @@ const HOST_PANE_WAITS_MS = 4_000
 /** A cold console and engine start beside them: #4517's VM run reopened six panes after a reboot and confirmed every
  *  agent within 23 s, while two respawns missed 5 s. Defender's first-run scan and boot load are outside causes. */
 const COLD_START_MS = 11_000
-/** `create` and `respawn`, from the request's send. */
-const PANE_START_TIMEOUT_MS = HOST_PANE_WAITS_MS + COLD_START_MS
+/** `create` and `respawn`, from the request's send. A move's own bounds on both are this (hostMove/moveAgent.ts). */
+export const PANE_START_TIMEOUT_MS = HOST_PANE_WAITS_MS + COLD_START_MS
 /** The host gives a hello 10 s (server.rs HELLO_TIMEOUT); its reply is one short line. */
 const MAX_HELLO_REPLY = 64 * 1024
 
