@@ -36,7 +36,7 @@ export type OrcaPluginState = 'on' | 'off' | 'held' | 'setup' | 'absent'
 /** What a change asks Orca with: the `orca` to run, the plugin's key to name to Orca, and the version cli.js carries,
  *  to know a plugin Orca lists as the one asked for. */
 interface Asking { orca: string; key: string; version: string }
-/** Why Orca is not asked about the plugin: `no-plugin`, no Orca here (Windows, no `orca`) or a CLI from the sources;
+/** Why Orca is not asked about the plugin: `no-plugin`, no Orca here (no `orca`) or a CLI from the sources;
  *  `old`, an Orca below the plugin's engines; `folder`, the plugin's folder not written; `not-running`, an Orca not
  *  reachable, or a status that cannot be read; `unread`, an answer after a status that said Orca is reachable, or a
  *  record, that cannot be read: a failure, not Orca's absence. */
@@ -122,7 +122,6 @@ const manifestOf = (files: OrcaPluginFiles) => JSON.parse(files['orca-plugin.jso
 /** Orca asked up to the plugin's key, the folder written before Orca is asked about it. Orca is asked `status` first:
  *  every other plugin command waits about 30 seconds for an Orca that is not reachable. */
 async function reach(deps: OrcaPluginDeps): Promise<Asking | Unasked> {
-  if (deps.platform === 'win32') return { why: 'no-plugin' }
   const files = deps.files()
   if (files === null) return { why: 'no-plugin' }
   const orca = deps.orca()
