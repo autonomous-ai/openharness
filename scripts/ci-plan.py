@@ -151,10 +151,12 @@ DEVICE_APP_PATHS = {
 DEVICE_APP_PACKAGES = (("appimage", "x64"), ("appimage", "arm64"), ("nsis", "x64"), ("nsis", "arm64"))
 DEVICE_APP_BUILDS = {"device-app-e2e": DEVICE_APP_PACKAGES, "device-app-desktop": DEVICE_APP_PACKAGES,
                      "device-app-install": (("appimage", "x64"),)}
-# linux-e2e: a CLI e2e file the PR adds or modifies, but those another job runs: windows-e2e the dial on Windows,
-# diskfull.e2e.ts needs macOS, the agent browser's Podman file runs by hand (about 50 minutes), and dial-hosts the files
-# that need the hosts installed (cli/e2e/harness/dialHosts.ts's DIAL_HOST_FILES, which the CI config leaves out).
-LINUX_E2E_NEVER = {"cli/e2e/dialWindows.e2e.ts", "cli/e2e/diskfull.e2e.ts", "cli/e2e/agentBrowserPodman.e2e.ts"}
+# linux-e2e: a CLI e2e file the PR adds or modifies, but those another job runs: windows-e2e the dial and the apps'
+# sessions on it on Windows, diskfull.e2e.ts needs macOS, the agent browser's Podman file runs by hand (about 50
+# minutes), and dial-hosts the files that need the hosts installed (cli/e2e/harness/dialHosts.ts's DIAL_HOST_FILES, which
+# the CI config leaves out).
+LINUX_E2E_NEVER = {"cli/e2e/dialWindows.e2e.ts", "cli/e2e/dialWindowsAppSessions.e2e.ts", "cli/e2e/diskfull.e2e.ts",
+                   "cli/e2e/agentBrowserPodman.e2e.ts"}
 # What every e2e file runs on but none tests itself: the jobs' setup action (its real backend, which dial-hosts does not
 # ask for), the harness, Vitest's e2e configs and the timing hints. A change to one runs linux-e2e's canary, a short file
 # (two daemons on the real backend, one case) beside the PR's own; the canary's own deletion runs it, so that PR fails.
