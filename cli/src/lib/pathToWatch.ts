@@ -32,9 +32,12 @@ const thisComputer: PathToWatchDeps = {
 
 /** `path` as a watch is to be given it: off Windows, as it is; on Windows, its long name, and for a path not there,
  *  its nearest parent's that is, with the rest as given (a name made later is its own long name). None when a long
- *  name cannot be read: the path is not watched, and a line says why, never the path. */
+ *  name cannot be read: the path is not watched, and a line says why, never the path.
+ *  Every short name Windows makes has a `~` (HXDIAL~1), so a path without one is watched as given, as before: no open
+ *  of it on the event loop at each watch's start, a slow network path's included, and none refused on a drive whose
+ *  long names cannot be read (realpath.native fails with EISDIR on a RAM disk). */
 export function pathToWatch(path: string, deps: PathToWatchDeps = thisComputer): string | undefined {
-  if (deps.platform !== 'win32') return path
+  if (deps.platform !== 'win32' || !path.includes('~')) return path
   for (let at = path; ; at = dirname(at)) {
     try {
       return join(deps.realpath(at), relative(at, path))
