@@ -88,3 +88,33 @@ it('leaves a wait under 250 ms on the host clock alone', async () => {
   // A slow sync may outlast the wait; then only the host's clock ran it, never the sync.
   expect(ranAfter === undefined || ranAfter >= 99).toBe(true)
 })
+
+// As the host's clock: a wait one sets as it runs is due later, never in the same pass, or one that sets itself again
+// would run without end.
+it('runs a wait once a sync, and the wait it sets again at a later sync', async () => {
+  deadline.holdRegistryDeadline(DEADLINE_MS)
+  let runs = 0, timer: ReturnType<typeof setTimeout> | undefined
+  // Sets itself again twice at most, so a pass that ran every wait set while it runs still ends.
+  const again = () => { runs++; if (runs < 3) timer = setTimeout(again, 4_900) }
+  timer = setTimeout(again, 4_900)
+  await syncRegistryImage()
+  expect(runs).toBe(1)
+  await syncRegistryImage()
+  expect(runs).toBe(2)
+  clearTimeout(timer)
+})
+
+// As the host's clock: one timer that throws neither keeps the others from running nor fails the caller that ran them
+// (a sync, a test's fire or expire); it is thrown on its own.
+it('runs every timer it fires, and throws a failing one on its own afterwards', () => {
+  const held = deadline.holdRegistryDeadline(DEADLINE_MS, { hold: [2_000] })
+  const after = vi.fn()
+  setTimeout(() => { throw new Error('fixture timer failed') }, 2_000)
+  setTimeout(after, 2_000)
+  const thrown: Array<() => void> = []
+  const later = vi.spyOn(globalThis, 'queueMicrotask').mockImplementation((task) => { thrown.push(task) })
+  try { held.fire(2_000) } finally { later.mockRestore() }
+  expect(after).toHaveBeenCalledOnce()
+  expect(thrown).toHaveLength(1)
+  expect(thrown[0]).toThrow('fixture timer failed')
+})
