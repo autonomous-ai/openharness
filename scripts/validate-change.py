@@ -231,6 +231,16 @@ def stop_group(process):
     return "; ".join(errors) or None
 
 
+def flutter_test_folder(check, root):
+    # Two `flutter test` runs in one folder race in flutter_tools (Flutter 3.47.5): a fixed build/unit_test_assets,
+    # shared impellerc outputs, a silent Vulkan-only fallback and an mtime-only rebuild check left ink_sparkle.frag
+    # Vulkan-only and 84 desktop test files failing. Such checks hold their folder; every other check still overlaps.
+    argv = check["argv"]
+    if Path(argv[0]).name in ("flutter", "flutter.bat") and argv[1:2] == ["test"]:
+        return (root / check.get("cwd", ".")).resolve()
+    return None
+
+
 def run_checks(plan, root, output, jobs, keys=None, reused=None):
     keys, reused = keys or {}, reused or {}
     pending = list(plan["checks"])
@@ -239,7 +249,11 @@ def run_checks(plan, root, output, jobs, keys=None, reused=None):
     try:
         while pending or active:
             while pending and len(active) < jobs:
-                check = pending.pop(0)
+                held = {flutter_test_folder(result, root) for _, _, result, _ in active} - {None}
+                index = next((i for i, c in enumerate(pending) if flutter_test_folder(c, root) not in held), None)
+                if index is None:
+                    break
+                check = pending.pop(index)
                 if check["name"] in reused:
                     results.append(reused[check["name"]])
                     print(f"{check['name']}: reused ({reused[check['name']]['log']})", flush=True)
