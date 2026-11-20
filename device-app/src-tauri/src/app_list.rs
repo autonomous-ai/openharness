@@ -9,7 +9,7 @@
 use crate::loginitem_linux::AppImage;
 use std::ffi::OsStr;
 use std::fs;
-use std::io;
+use std::io::{self, Write};
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 
@@ -192,15 +192,18 @@ fn failed(error: &io::Error) -> String {
     }
 }
 
-/// Through a temp file in the same folder and a rename, as loginitem_linux.rs writes: the app list never reads half of
-/// one.
-fn write(file: &Path, bytes: &[u8]) -> io::Result<()> {
+/// The app's one way to write a desktop's file (this entry, its icon, the login item): a temp file in the same folder,
+/// flushed to disk, then renamed over it, as Desktop's `_replace` writes. A reader never sees half of one, nor a crash
+/// an empty one.
+pub(crate) fn write(file: &Path, bytes: &[u8]) -> io::Result<()> {
     if let Some(folder) = file.parent() {
         fs::create_dir_all(folder)?;
     }
     let name = file.file_name().unwrap_or_default().to_string_lossy();
     let staged = file.with_file_name(format!("{name}.{}.tmp", std::process::id()));
-    let written = fs::write(&staged, bytes).and_then(|()| fs::rename(&staged, file));
+    let written = fs::File::create(&staged)
+        .and_then(|mut temp| temp.write_all(bytes).and_then(|()| temp.sync_all()))
+        .and_then(|()| fs::rename(&staged, file));
     if written.is_err() {
         let _ = fs::remove_file(&staged);
     }

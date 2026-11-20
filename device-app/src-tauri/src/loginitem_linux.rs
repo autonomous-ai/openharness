@@ -6,6 +6,7 @@
 //! the daemon. An entry the person turned off stays off, and one they deleted stays deleted: neither side writes a
 //! second file.
 
+use crate::app_list::write;
 #[cfg(target_os = "linux")]
 use crate::loginitem::{LoginItem, SystemLoginItem};
 use std::ffi::OsStr;
@@ -130,7 +131,7 @@ pub fn apply(entry: &Path, appimage: Option<&Path>, launcher: &Path, first: bool
     };
     match change(existing.as_deref(), &exec, first) {
         Change::Leave => Ok(false),
-        Change::Write(text) => write(entry, &text).map(|()| true).map_err(|error| failed(&error)),
+        Change::Write(text) => write(entry, text.as_bytes()).map(|()| true).map_err(|error| failed(&error)),
     }
 }
 
@@ -145,20 +146,6 @@ fn failed(error: &io::Error) -> String {
         Some(code) => format!("Login item not set (error {code})."),
         None => format!("Login item not set ({:?}).", error.kind()),
     }
-}
-
-/// Through a temp file in the same folder and a rename, as the installer writes it: the session never reads half of
-/// one.
-fn write(entry: &Path, text: &str) -> io::Result<()> {
-    if let Some(folder) = entry.parent() {
-        fs::create_dir_all(folder)?;
-    }
-    let staged = entry.with_file_name(format!("{ENTRY}.{}.tmp", std::process::id()));
-    let written = fs::write(&staged, text).and_then(|()| fs::rename(&staged, entry));
-    if written.is_err() {
-        let _ = fs::remove_file(&staged);
-    }
-    written
 }
 
 /// The first registration writes an entry that is missing; a refresh, at every launch, takes over one that is on.
