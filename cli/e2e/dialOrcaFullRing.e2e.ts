@@ -20,7 +20,7 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
 import { CLI_ROOT, IsolatedDaemon, until } from './harness/daemon.js'
 import { Desk } from './harness/desk.js'
-import type { FakeDial } from './harness/fakeDial.js'
+import type { DialMessage, FakeDial } from './harness/fakeDial.js'
 import { FakeOrca } from './harness/fakeOrca.js'
 import { InOrca } from './harness/inOrca.js'
 
@@ -97,12 +97,23 @@ describe("Orca's ring over a full dial", () => {
     const front = frontWatch(d)
     front(WEZTERM)
     const wezterm = Array.from({ length: FULL }, (_, i) => new InOrca(d, `w${i}`, children, { WEZTERM_PANE: String(i + 1) }))
-    // Each listed before the next starts, as dialOrcaFocus.e2e.ts does: sixteen hooks back to back on a loaded machine
-    // lost one, the post a paneless hook does not wait for (hook/notify.mjs postObserved), and the dial never filled.
+    // Each listed before the next starts, as dialOrcaFocus.e2e.ts does, and its hook run again while it is not: on a
+    // loaded machine a paneless hook's post is lost now and then, as the hook waits at most 150 ms for it and exits, so
+    // as never to hold Claude Code's start (hook/notify.mjs postObserved), and the dial never filled. A SessionStart
+    // again changes nothing for a session already heard. Three runs of 15 s keep the wait at 45 s; a session still not
+    // listed after three posts is the daemon's fault, not a lost post.
     for (const [i, claude] of wezterm.entries()) {
       const at = dial.messages.length
-      await claude.hook('SessionStart', { source: 'startup' })
-      await dial.next((m) => m.t === 'agent' && m.id === claude.id, 45_000, `WezTerm's session ${i} listed`, at)
+      const listed = (m: DialMessage) => m.t === 'agent' && m.id === claude.id
+      for (let post = 1; ; post++) {
+        await claude.hook('SessionStart', { source: 'startup' })
+        try {
+          await dial.next(listed, 15_000, `WezTerm's session ${i} listed after ${post} posts`, at)
+          break
+        } catch (error) {
+          if (post === 3) throw error
+        }
+      }
     }
 
     // 3. The dial shows WezTerm's ring, its sixteen tiles full.
