@@ -917,6 +917,34 @@ void main() {
     });
   });
 
+  // A probe takes time: `harness uninstall` can stop the daemon and take its marker while the probe
+  // that finds it down is still being answered.
+  test('startSupervising starts no daemon when harness uninstall begins during the probe', () {
+    fakeAsync((async) {
+      var uninstalling = false;
+      var spawnCount = 0;
+      final discovery = _SupervisionProbe(
+        readProbe: () async {
+          uninstalling = true;
+          return const LocalCliProbe.down('fixture daemon is down');
+        },
+        spawnCommand: () async => spawnCount++,
+        uninstalling: () => uninstalling,
+        monotonicClock: () => async.elapsed,
+      );
+      final timer = discovery.startSupervising(
+        checkInterval: const Duration(milliseconds: 20),
+        spawnAfter: 1,
+      );
+      try {
+        async.elapse(const Duration(milliseconds: 100));
+        expect(spawnCount, 0);
+      } finally {
+        timer.cancel();
+      }
+    });
+  });
+
   // `harness flash` stops the daemon and hands the dial's serial port to esptool: a daemon started
   // meanwhile takes the port back mid-write.
   test('startSupervising starts no daemon while a dial is being flashed', () {
