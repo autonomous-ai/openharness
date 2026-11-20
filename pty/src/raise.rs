@@ -12,14 +12,19 @@ pub struct Candidate {
     pub owned: bool,
     /// A tool window, which has no taskbar button.
     pub tool: bool,
+    /// Of the dialog class (`#32770`), as a message or task dialog is, even an unowned one.
+    pub dialog: bool,
 }
 
 /// The window a raise brings forward, from the target's top-level windows in Z order: the first
-/// that is the app's own window as a person sees it. The first in Z order is the one used last.
+/// that is the app's own window as a person sees it, a dialog only when the app shows nothing
+/// else. The first in Z order is the one used last.
 pub fn pick(in_z_order: &[Candidate]) -> Option<usize> {
+    let shown = |window: &Candidate| window.visible && !window.owned && !window.tool;
     in_z_order
         .iter()
-        .position(|window| window.visible && !window.owned && !window.tool)
+        .position(|window| shown(window) && !window.dialog)
+        .or_else(|| in_z_order.iter().position(shown))
 }
 
 /// The scheme of a link, as Windows names its handler: `codex` for `codex://…`.
@@ -46,9 +51,9 @@ mod windows {
         SEE_MASK_NOASYNC, SHELLEXECUTEINFOW, ShellExecuteExW,
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        EnumWindows, GW_OWNER, GWL_EXSTYLE, GetForegroundWindow, GetWindow, GetWindowLongW,
-        GetWindowThreadProcessId, IsIconic, IsWindowVisible, SW_RESTORE, SW_SHOWNORMAL,
-        SetForegroundWindow, ShowWindow, WS_EX_TOOLWINDOW,
+        EnumWindows, GW_OWNER, GWL_EXSTYLE, GetClassNameW, GetForegroundWindow, GetWindow,
+        GetWindowLongW, GetWindowThreadProcessId, IsIconic, IsWindowVisible, SW_RESTORE,
+        SW_SHOWNORMAL, SetForegroundWindow, ShowWindow, WS_EX_TOOLWINDOW,
     };
 
     use super::{Candidate, pick, scheme};
@@ -125,11 +130,15 @@ mod windows {
     }
 
     fn candidate(window: HWND) -> Candidate {
+        // Room for a character more than `#32770`, so a longer name, cut to fit, never reads as it.
+        let mut class = [0u16; 8];
         unsafe {
+            let length = GetClassNameW(window, class.as_mut_ptr(), class.len() as i32).max(0);
             Candidate {
                 visible: IsWindowVisible(window) != 0,
                 owned: !GetWindow(window, GW_OWNER).is_null(),
                 tool: GetWindowLongW(window, GWL_EXSTYLE) as u32 & WS_EX_TOOLWINDOW != 0,
+                dialog: String::from_utf16_lossy(&class[..length as usize]) == "#32770",
             }
         }
     }
