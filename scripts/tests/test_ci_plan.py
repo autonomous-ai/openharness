@@ -1972,6 +1972,19 @@ class GitHubEvidenceTests(unittest.TestCase):
         with self.assertRaises((ValueError, zipfile.BadZipFile)):
             self.evidence.passed_gate(self.head)
 
+    def test_each_run_is_read_once_however_many_suites_it_stands_for(self):
+        # The plan (60 s) and the merge helper (90 s) look up a run for each suite it stands for: one read of each.
+        self.github.add_run(12, self.head, self.tree, ["mobile", "backend"])
+        self.assertEqual(self.evidence.passed_gate(self.head)["run_id"], 12)
+        for suite in ("mobile", "backend"):
+            with self.subTest(suite=suite):
+                self.assertEqual(self.evidence.ran(self.head, 12, 1, suite)["url"], "https://github.com/o/r/actions/runs/12")
+        with self.assertRaisesRegex(ValueError, "did not run"):
+            self.evidence.ran(self.head, 12, 1, "cli")
+        for read in ("actions/runs/12/jobs?filter=latest", "actions/runs/12/artifacts", f"git/commits/{self.head}"):
+            with self.subTest(read=read):
+                self.assertEqual(self.github.reads.count(read), 1)
+
     def test_ran_requires_that_exact_run_to_have_run_the_suite(self):
         self.assertEqual(self.evidence.ran(self.head, 11, 1, "mobile"),
                          dict(tree=self.tree, url="https://github.com/o/r/actions/runs/11"))
