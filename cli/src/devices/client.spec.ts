@@ -1039,6 +1039,93 @@ describe('harness hardware watch: the selected tab', () => {
   })
 })
 
+// What the Harness Device app writes on the watch's stdin each time the title of ChatGPT's window in front changes.
+const threadLine = (value: unknown) => `${JSON.stringify({ thread: value })}\n`
+
+describe('harness hardware watch: the ChatGPT thread', () => {
+  beforeEach(() => { vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] }) })
+  it('a thread line is told to the devices listener as a thread message', async () => {
+    const run = watch()
+    run.stdin.emit('data', threadLine('Fix login'))
+    await turn()
+    expect(told(run)).toEqual([{ type: 'thread', title: 'Fix login' }])
+    // The empty title too: it clears a report the devices hold.
+    run.stdin.emit('data', threadLine(''))
+    await turn()
+    expect(told(run)).toEqual([{ type: 'thread', title: 'Fix login' }, { type: 'thread', title: '' }])
+    await stillRunning(run)
+  })
+  it('a title out of rule, one that is not a string and a line with another key are dropped, and the next line is told', async () => {
+    const run = watch()
+    for (const value of ['a'.repeat(257), 'a\nb', 5, null]) run.stdin.emit('data', threadLine(value))
+    run.stdin.emit('data', '{"thread":"x","pad":1}\n')
+    await turn()
+    expect(told(run)).toEqual([])
+    run.stdin.emit('data', threadLine('Next'))
+    await turn()
+    expect(told(run)).toEqual([{ type: 'thread', title: 'Next' }])
+    await stillRunning(run)
+  })
+  it('two thread lines while a tell is under way: the newest is told when it ends, the one between is skipped', async () => {
+    const held = heldListener()
+    const run = watch({ tell: held.tell })
+    for (const title of ['One', 'Two', 'Three']) run.stdin.emit('data', threadLine(title))
+    expect(told(run)).toEqual([{ type: 'thread', title: 'One' }])
+    await held.answer(true)
+    expect(told(run)).toEqual([{ type: 'thread', title: 'One' }, { type: 'thread', title: 'Three' }])
+    // Not taken, and not tried again by itself.
+    await held.answer(false)
+    await turn()
+    expect(told(run)).toHaveLength(2)
+    await stillRunning(run)
+  })
+  it('a thread tell does not wait for a front or a tab tell under way', async () => {
+    // A listener that never answers the app in front or the tab.
+    const tell = vi.fn((message: Told) => message.type === 'thread' ? Promise.resolve(true) : new Promise<boolean>(() => {}))
+    const run = watch({ tell })
+    front(run, 'com.openai.codex')
+    run.stdin.emit('data', tabLine({ app: 'ghostty', tty: '/dev/ttys5' }))
+    run.stdin.emit('data', threadLine('Fix login'))
+    const before = [{ type: 'front', app: 'codex' }, { type: 'tab', app: 'ghostty', tty: '/dev/ttys5' }, { type: 'thread', title: 'Fix login' }]
+    expect(told(run)).toEqual(before)
+    await turn()
+    run.stdin.emit('data', threadLine('Next'))
+    expect(told(run)).toEqual([...before, { type: 'thread', title: 'Next' }])
+    // The exit waits on the front tell under way 2 s at most, as before.
+    run.stdin.emit('end')
+    await vi.advanceTimersByTimeAsync(2_000)
+    expect(await run.done).toBe(0)
+  })
+  it("nothing of a thread goes on the core's socket, stdout or stderr", async () => {
+    const run = watch()
+    run.stdin.emit('data', threadLine('Secret plan'))
+    await opened(run.socket)
+    connected(run.socket, ['dial-watch'])
+    dial(run.socket, { attached: true })
+    // Taken or dropped, a title reaches the devices listener alone.
+    run.stdin.emit('data', threadLine('Secret plan two'))
+    run.stdin.emit('data', threadLine(`Secret ${'a'.repeat(300)}`))
+    await turn()
+    expect(told(run)).toEqual([{ type: 'thread', title: 'Secret plan' }, { type: 'thread', title: 'Secret plan two' }])
+    expect(coreFrames(run)).toEqual(['machine_select'])
+    const out = [...run.socket.send.mock.calls.map(([data]) => String(data)), ...run.printed, ...run.errors]
+    expect(out.filter(line => line.includes('Secret'))).toEqual([])
+    await stillRunning(run)
+  })
+  it('stdin closing with a thread tell waiting leaves no timer', async () => {
+    const run = watch()
+    run.stdin.emit('data', threadLine('One'))
+    // Told, and its gap under way, with the next title waiting on it.
+    await new Promise(resolve => setImmediate(resolve))
+    run.stdin.emit('data', threadLine('Two'))
+    run.stdin.emit('end')
+    expect(await run.done).toBe(0)
+    expect(vi.getTimerCount()).toBe(0)
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(told(run)).toEqual([{ type: 'thread', title: 'One' }])
+  })
+})
+
 // The dial as the watch hears it, its sound on, and the line the watch prints for it.
 const USB = { attached: true, id: 'usb-1', fw: '0.0.95', settings: { muted: false } }
 const USB_LINE = '{"attached":true,"fw":"0.0.95","muted":false}'
