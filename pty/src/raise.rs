@@ -4,6 +4,8 @@
 //! Only Windows' documented calls: a process without foreground rights is refused, and Windows
 //! flashes the window's taskbar button instead (spec, Decided 4). Nothing works around that.
 
+use std::time::Duration;
+
 /// What `pick` reads of a top-level window.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Candidate {
@@ -27,6 +29,29 @@ pub fn pick(in_z_order: &[Candidate]) -> Option<usize> {
         .or_else(|| in_z_order.iter().position(shown))
 }
 
+/// How long a raise waits for its window to come to the front: Windows may move the foreground
+/// after SetForegroundWindow returns, and an answer read at once would call a raise refused.
+pub const SETTLE: Duration = Duration::from_millis(250);
+
+/// Whether [in_front] holds within [limit]. It is asked at once, then again after each [wait],
+/// which waits for a change at most the time left and says how long it waited.
+pub fn settles(
+    limit: Duration,
+    mut in_front: impl FnMut() -> bool,
+    mut wait: impl FnMut(Duration) -> Duration,
+) -> bool {
+    let mut left = limit;
+    loop {
+        if in_front() {
+            return true;
+        }
+        if left.is_zero() {
+            return false;
+        }
+        left = left.saturating_sub(wait(left));
+    }
+}
+
 /// The scheme of a link, as Windows names its handler: `codex` for `codex://…`.
 pub fn scheme(url: &str) -> &str {
     url.split_once(':').map_or(url, |(scheme, _)| scheme)
@@ -40,23 +65,28 @@ mod windows {
     use std::collections::HashMap;
     use std::ffi::OsStr;
     use std::os::windows::io::AsRawHandle;
+    use std::ptr::{null, null_mut};
+    use std::time::{Duration, Instant};
 
     use windows_sys::Win32::Foundation::{BOOL, HANDLE, HWND, LPARAM};
     use windows_sys::Win32::System::Com::{
         COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE, CoInitializeEx,
     };
     use windows_sys::Win32::System::Threading::{PROCESS_NAME_WIN32, QueryFullProcessImageNameW};
+    use windows_sys::Win32::UI::Accessibility::{HWINEVENTHOOK, SetWinEventHook, UnhookWinEvent};
     use windows_sys::Win32::UI::Shell::{
         ASSOCF_IS_PROTOCOL, ASSOCSTR_PROGID, AssocQueryStringW, SEE_MASK_FLAG_NO_UI,
         SEE_MASK_NOASYNC, SHELLEXECUTEINFOW, ShellExecuteExW,
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        EnumWindows, GW_OWNER, GWL_EXSTYLE, GetClassNameW, GetForegroundWindow, GetWindow,
-        GetWindowLongW, GetWindowThreadProcessId, IsIconic, IsWindowVisible, SW_RESTORE,
-        SW_SHOWNORMAL, SetForegroundWindow, ShowWindowAsync, WS_EX_TOOLWINDOW,
+        DispatchMessageW, EVENT_SYSTEM_FOREGROUND, EnumWindows, GW_OWNER, GWL_EXSTYLE,
+        GetClassNameW, GetForegroundWindow, GetWindow, GetWindowLongW, GetWindowThreadProcessId,
+        IsIconic, IsWindowVisible, MSG, MsgWaitForMultipleObjects, PM_REMOVE, PeekMessageW,
+        QS_ALLINPUT, SW_RESTORE, SW_SHOWNORMAL, SetForegroundWindow, ShowWindowAsync,
+        WINEVENT_OUTOFCONTEXT, WS_EX_TOOLWINDOW,
     };
 
-    use super::{Candidate, pick, scheme};
+    use super::{Candidate, SETTLE, pick, scheme, settles};
     use crate::cli::RaiseTarget;
     use crate::desktop::win::wide;
 
@@ -74,13 +104,51 @@ mod windows {
                 // Posted: a hung window would hold a sent restore for seconds.
                 ShowWindowAsync(window, SW_RESTORE);
             }
+            // Out of context, the hook's events come through this thread's queue and wake the wait.
+            let hook = SetWinEventHook(
+                EVENT_SYSTEM_FOREGROUND,
+                EVENT_SYSTEM_FOREGROUND,
+                null_mut(),
+                Some(foreground_moved),
+                0,
+                0,
+                WINEVENT_OUTOFCONTEXT,
+            );
             SetForegroundWindow(window);
-            if GetForegroundWindow() == window {
-                "raised"
-            } else {
-                "refused"
+            // Without the hook the wait runs its whole time, and the foreground is read after it.
+            let raised = settles(SETTLE, || GetForegroundWindow() == window, wait_for_events);
+            if !hook.is_null() {
+                UnhookWinEvent(hook);
+            }
+            if raised { "raised" } else { "refused" }
+        }
+    }
+
+    /// The wait reads the foreground itself after each event.
+    unsafe extern "system" fn foreground_moved(
+        _hook: HWINEVENTHOOK,
+        _event: u32,
+        _window: HWND,
+        _object: i32,
+        _child: i32,
+        _thread: u32,
+        _time: u32,
+    ) {
+    }
+
+    /// Waits up to [left] for anything in this thread's queue, delivers it, and says how long it
+    /// waited.
+    fn wait_for_events(left: Duration) -> Duration {
+        let start = Instant::now();
+        let millis = u32::try_from(left.as_millis()).unwrap_or(u32::MAX);
+        unsafe {
+            MsgWaitForMultipleObjects(0, null(), 0, millis, QS_ALLINPUT);
+            let mut message: MSG = std::mem::zeroed();
+            while PeekMessageW(&mut message, null_mut(), 0, 0, PM_REMOVE) != 0 {
+                DispatchMessageW(&message);
             }
         }
+        start.elapsed()
     }
 
     /// The target's top-level windows in EnumWindows' order, which is the Z order, topmost first.
