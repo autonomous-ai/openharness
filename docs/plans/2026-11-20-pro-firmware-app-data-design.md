@@ -86,7 +86,9 @@ const char *pod_host_see_it(const char *host);   // "See it in ChatGPT": a liter
   `pro_app_agents` calls it for every row right after `pod_ui_roster`, inside the same lock, so no frame sees a row
   without its caps. A new agent starts with `caps = POD_CAPS_ALL` (`init_agent`).
 - `pod_model_link(m, false)` clears the apps, `app_shown`, `apps_switch`, `machine_view` and `tab_open` (the next
-  session says them again). `swarm_n` stays with the tabs, as the tabs do today.
+  session says them again). `swarm_n` stays with the tabs, as the tabs do today. A welcome that names another
+  computer on a live link (`pro_app_link(true)` while linked) clears the apps and `app_shown` too, since an older
+  daemon there sends no `apps`; `apps_switch` is that welcome's, and its `agents.end` says the view.
 
 ### 2. Cable in (`main/cable/pro_cable.c`, `cable_features.c/h`)
 

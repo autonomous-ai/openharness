@@ -21,7 +21,8 @@
 
 // ---- link ----
 // The session came up (`welcome`) or went down (cable gone, 15 s of silence). `machine` is the cabled computer's name
-// (never NULL when up; NULL when down). Called on the transition, and again if a welcome names another computer.
+// (never NULL when up; NULL when down). Called on the transition, and again if a welcome names another computer: that
+// one forgets the last computer's apps.
 // A drop clears everything the daemon told us: pro_app must forget busy agents, abort a sweep and a recording.
 void pro_app_link(bool up, const char *machine);
 
@@ -31,8 +32,8 @@ void pro_app_link(bool up, const char *machine);
 // voice by leaving the field out.
 typedef struct { const char *id, *name, *engine, *machine_id, *machine, *host; uint8_t caps_off; } pro_agent_row_t;
 // The complete agent list the daemon shows (the window's tab, an app's ring, or with `machine_view` the computer's), once
-// per `agents.end`. Ids are unique and shorter than ID_MAX; at most
-// POD_AGENTS_MAX (32) rows; `name` falls back to the id. A list that ends without a begin is dropped.
+// per `agents.end`. Ids are unique and shorter than ID_MAX; at most POD_AGENTS_MAX (32) rows; `name` falls back to the
+// id. A list that ends without a begin is dropped.
 // `machine_view`: agents.end said view "machine"; `tab_open`: its `tab` was a non-empty string (a Harness window is open).
 void pro_app_agents(const pro_agent_row_t *rows, int n, bool machine_view, bool tab_open);
 
