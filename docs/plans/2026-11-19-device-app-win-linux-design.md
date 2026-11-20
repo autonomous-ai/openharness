@@ -206,7 +206,8 @@ stdin (`front_line`, `FrontFeed`), never logged. The CLI already maps exe names 
   - `tray-light.png`, the same alpha in white, on a dark bar. Windows picks by `HKCU\...\Themes\Personalize\SystemUsesLightTheme` and
   follows changes pushed by `RegNotifyChangeKeyValue` (no poll); when the key cannot be followed, the log has
   `tray: theme not followed` and the icon stays the dark taskbar's. Linux uses the light glyph (named difference). The
-  bundle gets `icon.ico` (Windows) and the PNG sizes Linux needs, generated from the existing `icon.png`.
+  bundle gets `icon.ico` (Windows) and the PNG sizes Linux needs, each size `icon.icns`'s own drawing (as macOS
+  shows it), with 24 px and 48 px from the 16 px solid H by nearest neighbour.
 - **Linux tray clicks:** Tauri emits no tray click on Linux; the AppIndicator menu opens on click by itself. The
   refresh a click triggers on macOS (`Event::MenuOpened`: re-read sign-in at most every 60 s,
   Desktop installed) runs from the 5 s tick on Linux instead, behind the same throttles (named difference).
@@ -279,7 +280,8 @@ macOS, or the release is a partial ship. The same pull request carries both:
 
 - **Website.** `/device/download-windows` and `/device/download-linux`, made like `/device/download-macos`: the same
   fixed manifest URL, the same allowed prefixes, and a 302 to the manifest's URL for that platform. The arch comes
-  from the request when it can be told, and is x64 otherwise. `/device` gets the matching buttons, with 1-2 word copy.
+  from the request when it can be told, and is x64 otherwise (which Windows 10 on ARM cannot run; Windows 11 on
+  ARM runs it emulated). `/device` gets the matching buttons, with 1-2 word copy.
   Until a release carries Windows or Linux, the routes answer as `/device/download-macos` does before its first
   release.
 - **Desktop.** On Windows and Linux, Desktop offers and installs Harness Device the way it does on macOS: the same
