@@ -552,7 +552,8 @@ class PublishTests(TempTest):
         self.put("metadata.json", json.dumps(live, indent=2), generation=7)
         notes = self.root / "notes.txt"
         notes.write_text("Harness Device 0.1.1\n")
-        result = run("publish", "--version", "0.1.1", "--dir", self.build, "--notes-file", notes, "--pub-date", PUB_DATE)
+        result = run("publish", "--version", "0.1.1", "--dir", self.build, "--notes-file", notes,
+                     "--pub-date", PUB_DATE)
         refused(self, result)
         self.assertEqual(result.stderr, "ERROR Windows and Linux are live: release with --platforms all\n")
         self.assertEqual(self.steps(), [("describe", LIVE), ("cat", f"{LIVE}#7")])

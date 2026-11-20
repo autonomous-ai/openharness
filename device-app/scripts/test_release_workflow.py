@@ -103,8 +103,8 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("runs-on: windows-latest", job)
         self.assertIn("release-setup.sh tauri-cli", job)
         # The app's code is not even checked out: only the release scripts.
-        self.assertIn("sparse-checkout: |\n            /device-app/scripts/\n          sparse-checkout-cone-mode: false",
-                      job)
+        self.assertIn(
+            "sparse-checkout: |\n            /device-app/scripts/\n          sparse-checkout-cone-mode: false", job)
         for text in ("secrets.", "id-token", "environment:", "npm", "setup-node", "compile", "release-build.sh",
                      "download-artifact"):
             with self.subTest(text=text):
@@ -203,7 +203,8 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("            /scripts/apt-install.sh\n", job)
 
     def test_only_sign_update_holds_the_updater_key_on_linux(self):
-        # Compile runs the build's code, and the AppImage bundler runs linuxdeploy downloaded unpinned: neither holds it.
+        # Compile runs the build's code, and the AppImage bundler runs linuxdeploy downloaded unpinned: neither holds
+        # it.
         job = self.job("build-linux")
         for text in ("secrets.", "id-token", "environment:"):
             self.assertNotIn(text, header(job))

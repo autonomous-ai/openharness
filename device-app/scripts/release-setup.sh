@@ -54,7 +54,8 @@ install_minisign() {
     # Static binaries, one folder per arch, named as `uname -m` names it.
     linux)
       local tools="$RUNNER_TEMP/minisign"
-      fetch_minisign "$tools" minisign-0.12-linux.tar.gz 9a599b48ba6eb7b1e80f12f36b94ceca7c00b7a5173c95c3efc88d9822957e73
+      fetch_minisign "$tools" minisign-0.12-linux.tar.gz \
+        9a599b48ba6eb7b1e80f12f36b94ceca7c00b7a5173c95c3efc88d9822957e73
       tar -xzf "$tools/minisign-0.12-linux.tar.gz" -C "$tools"
       echo "$tools/minisign-linux/$(uname -m)" >>"$GITHUB_PATH"
       ;;
@@ -62,7 +63,8 @@ install_minisign() {
     windows)
       local tools
       tools="$(cygpath -u "$RUNNER_TEMP")/minisign"
-      fetch_minisign "$tools" minisign-0.12-win64.zip 37b600344e20c19314b2e82813db2bfdcc408b77b876f7727889dbd46d539479
+      fetch_minisign "$tools" minisign-0.12-win64.zip \
+        37b600344e20c19314b2e82813db2bfdcc408b77b876f7727889dbd46d539479
       # The $ in single quotes is PowerShell's.
       # shellcheck disable=SC2016
       MINISIGN_ZIP="$(cygpath -w "$tools/minisign-0.12-win64.zip")" MINISIGN_DIR="$(cygpath -w "$tools")" \

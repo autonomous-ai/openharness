@@ -253,10 +253,10 @@ def signature(name, version):
     return base64.b64encode(text.encode()).decode()
 
 
-# Windows' own tools, for --signed: a file the tests write is JSON, {"signed": bool, "version": "X.Y.Z"}, and an installer
-# also holds the "app" NSIS packed. pwsh answers Get-AuthenticodeSignature (SIGNED_FILE) and the version resource's
-# ProductVersion (APP_FILE against APP_VERSION) from it. 7z appends its arguments to FAKE_7Z_LOG and, as `7z e`, writes
-# the installer's app into its -o folder.
+# Windows' own tools, for --signed: a file the tests write is JSON, {"signed": bool, "version": "X.Y.Z"}, and an
+# installer also holds the "app" NSIS packed. pwsh answers Get-AuthenticodeSignature (SIGNED_FILE) and the version
+# resource's ProductVersion (APP_FILE against APP_VERSION) from it. 7z appends its arguments to FAKE_7Z_LOG and, as
+# `7z e`, writes the installer's app into its -o folder.
 PWSH = r'''#!/usr/bin/env python3
 import json, os, sys
 command = sys.argv[-1]
@@ -468,9 +468,9 @@ class ReleaseSetupTests(Fakes):
         self.runner_temp.mkdir()
 
     def setup(self, os_, sha256, *mode):
-        return self.run_script("release-setup.sh", os_, *mode, GITHUB_ACTIONS="true", FAKE_SETUP_LOG=str(self.setup_log),
-                               GITHUB_PATH=str(self.github_path), RUNNER_TEMP=str(self.runner_temp),
-                               FAKE_ASSET_SHA256=sha256)
+        return self.run_script("release-setup.sh", os_, *mode, GITHUB_ACTIONS="true",
+                               FAKE_SETUP_LOG=str(self.setup_log), GITHUB_PATH=str(self.github_path),
+                               RUNNER_TEMP=str(self.runner_temp), FAKE_ASSET_SHA256=sha256)
 
     def calls(self, cmd):
         lines = self.setup_log.read_text().splitlines() if self.setup_log.exists() else []
