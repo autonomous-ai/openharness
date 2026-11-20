@@ -1,3 +1,5 @@
+import { spawn } from 'node:child_process'
+import { once } from 'node:events'
 import { describe, expect, it, vi } from 'vitest'
 
 import type { RegisteredSession } from '../../lib/registry.js'
@@ -317,6 +319,26 @@ describe('the move, wired to the core', () => {
       expect(argv.join(' '), platform).not.toMatch(/printf|stdout|echo/)
     }
     expect(moveWaitingArgv('win32')[1]).toBe('-e')
+  })
+
+  // Node on Windows hears the console's close as SIGHUP (libuv src/win/signal.c), the close the respawn that starts
+  // the engine sends. A signal here; on Windows, Node's kill is TerminateProcess.
+  it.skipIf(process.platform === 'win32')('on Windows, the new pane ends on a hangup, as it does elsewhere', async () => {
+    const [, flag, script, ...rest] = moveWaitingArgv('win32')
+    // It prints nothing, so this copy prints a line once its listeners are on: a hangup sent before them would end
+    // Node before the script ran.
+    const child = spawn(process.execPath, [flag!, `${script};process.stdout.write("\\n")`, ...rest], { stdio: ['ignore', 'pipe', 'ignore'] })
+    const ended = new Promise<NodeJS.Signals | null>((resolve) => child.once('exit', (_code, signal) => resolve(signal)))
+    let bound: NodeJS.Timeout | undefined
+    try {
+      expect(await Promise.race([once(child.stdout, 'data').then(() => 'listening'), ended])).toBe('listening')
+      child.kill('SIGHUP')
+      const stillRunning = new Promise<string>((resolve) => { bound = setTimeout(resolve, 5_000, 'still running after 5 s') })
+      expect(await Promise.race([ended, stillRunning])).toBe('SIGHUP')
+    } finally {
+      clearTimeout(bound)
+      child.kill('SIGKILL')
+    }
   })
 })
 
