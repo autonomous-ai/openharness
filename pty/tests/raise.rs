@@ -148,6 +148,10 @@ mod windows {
         }
         let start = Instant::now();
         assert_eq!(word(&["open-link", "codex://harness-test"]), "refused");
-        assert!(start.elapsed() < Duration::from_secs(5), "{:?}", start.elapsed());
+        assert!(
+            start.elapsed() < Duration::from_secs(5),
+            "{:?}",
+            start.elapsed()
+        );
     }
 }

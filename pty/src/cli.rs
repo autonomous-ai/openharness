@@ -1,4 +1,5 @@
-//! Command line: `serve`, `version`, `ps --json`.
+//! Command line: `serve`, `version`, `ps --json`, and the Windows helpers `peer-account`, `raise`
+//! and `open-link`.
 //!
 //! The protocol is fixed at build time (`protocol::PROTOCOL`); `version` prints it.
 
@@ -48,6 +49,39 @@ pub enum Command {
         daemon_pid: u32,
     },
     Ps,
+    Raise {
+        target: RaiseTarget,
+    },
+    OpenLink {
+        url: String,
+    },
+}
+
+/// Whose window `raise` brings forward: a process, or every process of one program.
+#[derive(Debug, PartialEq, Eq)]
+pub enum RaiseTarget {
+    Pid(u32),
+    /// A program's file name, compared without case.
+    Exe(String),
+}
+
+/// The apps whose links `open-link` opens (windowsRaise.ts holds the same four): no web, file or
+/// other link reaches the shell.
+const LINK_SCHEMES: [&str; 4] = ["claude://", "codex://", "vscode://", "cursor://"];
+
+/// A program's file name alone, so a raise never names a path: no folder or drive, `.exe` in any
+/// case, and no longer than Windows allows a file name.
+fn program_file_name(exe: &str) -> bool {
+    !exe.contains(['\\', '/', ':'])
+        && exe.to_ascii_lowercase().ends_with(".exe")
+        && exe.chars().count() <= 255
+}
+
+/// One of the four apps' links, within a URL's usual limit, with nothing that could split it.
+fn app_link(url: &str) -> bool {
+    LINK_SCHEMES.iter().any(|scheme| url.starts_with(scheme))
+        && url.chars().count() <= 2_048
+        && !url.chars().any(|c| c.is_control() || c.is_whitespace())
 }
 
 pub fn parse(args: &[String]) -> Result<Command, String> {
@@ -57,6 +91,23 @@ pub fn parse(args: &[String]) -> Result<Command, String> {
         Some("ps") => match args.next() {
             Some("--json") => Ok(Command::Ps),
             _ => Err("ps needs --json".into()),
+        },
+        Some("raise") => {
+            let target = match (args.next(), args.next(), args.next()) {
+                (Some("--pid"), Some(pid), None) => match pid.parse() {
+                    Ok(pid @ 1..) => RaiseTarget::Pid(pid),
+                    _ => return Err("raise: --pid takes a process id".into()),
+                },
+                (Some("--exe"), Some(exe), None) if program_file_name(exe) => {
+                    RaiseTarget::Exe(exe.into())
+                }
+                _ => return Err("raise needs --pid <n> or --exe <name.exe>".into()),
+            };
+            Ok(Command::Raise { target })
+        }
+        Some("open-link") => match (args.next(), args.next()) {
+            (Some(url), None) if app_link(url) => Ok(Command::OpenLink { url: url.into() }),
+            _ => Err("open-link takes one claude://, codex://, vscode:// or cursor:// link".into()),
         },
         Some("peer-account") => {
             let (mut peer_port, mut own_port, mut daemon_pid) = (None, None, None);
@@ -117,6 +168,8 @@ pub fn main() {
     match parse(&args) {
         Ok(Command::Version) => println!("{}", version_line()),
         Ok(Command::Ps) => ps(),
+        Ok(Command::Raise { target }) => raise(target),
+        Ok(Command::OpenLink { url }) => open_link(&url),
         Ok(Command::PeerAccount {
             peer_port,
             own_port,
@@ -160,6 +213,31 @@ fn peer_account(peer_port: u16, own_port: u16, daemon_pid: u32) {
     #[cfg(not(windows))]
     {
         let _ = (peer_port, own_port, daemon_pid);
+        println!("{{\"unsupported\":true}}");
+        std::process::exit(3);
+    }
+}
+
+/// `raise`: `raised`, `refused` or `none` on Windows (raise.rs); elsewhere exit 3, where the
+/// devices raise an app by other means.
+fn raise(target: RaiseTarget) {
+    #[cfg(windows)]
+    println!("{}", crate::raise::raise(&target));
+    #[cfg(not(windows))]
+    {
+        let _ = target;
+        println!("{{\"unsupported\":true}}");
+        std::process::exit(3);
+    }
+}
+
+/// `open-link`: `opened` or `refused` on Windows (raise.rs); elsewhere exit 3.
+fn open_link(url: &str) {
+    #[cfg(windows)]
+    println!("{}", crate::raise::open_link(url));
+    #[cfg(not(windows))]
+    {
+        let _ = url;
         println!("{{\"unsupported\":true}}");
         std::process::exit(3);
     }
@@ -526,10 +604,20 @@ mod tests {
             assert!(parse(&args(bad)).is_err(), "{bad:?}");
         }
         // The limits themselves are taken.
-        assert!(parse(&args(&["raise", "--exe", &format!("{}.exe", "a".repeat(251))])).is_ok());
+        assert!(
+            parse(&args(&[
+                "raise",
+                "--exe",
+                &format!("{}.exe", "a".repeat(251))
+            ]))
+            .is_ok()
+        );
         assert!(parse(&args(&["open-link", &long_url[..2_048]])).is_ok());
         for scheme in ["claude", "codex", "vscode", "cursor"] {
-            assert!(parse(&args(&["open-link", &format!("{scheme}://x")])).is_ok(), "{scheme}");
+            assert!(
+                parse(&args(&["open-link", &format!("{scheme}://x")])).is_ok(),
+                "{scheme}"
+            );
         }
     }
 
