@@ -18,7 +18,7 @@ import { HARNESS_INSTRUCTIONS, joinedInstructions } from '../lib/agentAttributio
 import { env } from '../config/env.js'
 import { harnessPath } from '../config/harnessHome.js'
 import { setAgentSettingsForTest, signedOutForTest } from '../testing/agentSettings.js'
-import { atomicWriteFile } from '../lib/secureState.js'
+import { AtomicWriteUnconfirmed, atomicWriteFile } from '../lib/secureState.js'
 
 // Harness's status line rides every Claude launch beside what these pin (engines/claude/statusLine.spec.ts).
 vi.mock('../engines/kit/statusLine.js', async (original) => ({ ...await original<object>(), statusLineSetting: () => null }))
@@ -331,6 +331,24 @@ describe('runtime validation and file ownership', () => {
     expect(atomicWriteFile).toHaveBeenCalledWith(launch.env.HARNESS_CONTEXT_FILE, expect.anything(), 'cache', expect.objectContaining({ durable: false }))
     expect(atomicWriteFile).toHaveBeenCalledWith(join(harnessRuntimeDir(ws, 'key'), 'runtime.json'), expect.anything(), 'cache', expect.objectContaining({ durable: true }))
     expect(atomicWriteFile).toHaveBeenCalledWith(join(ws, 'AGENTS.md'), expect.anything(), 'cache', expect.objectContaining({ durable: true }))
+  })
+
+  // A file system that refuses a folder's flush: the rename put each file whole in place, only its durability is unconfirmed.
+  it('launches when the folder does not confirm a durable file already in place', async () => {
+    const real = await vi.importActual<typeof import('../lib/secureState.js')>('../lib/secureState.js')
+    vi.mocked(atomicWriteFile).mockImplementation((file, data, kind, options) => {
+      real.atomicWriteFile(file, data, kind, { ...options, durable: false })
+      if (options?.durable) throw new AtomicWriteUnconfirmed(Object.assign(new Error('folder flush refused'), { code: 'EINVAL' }))
+      return true
+    })
+    try {
+      const launch = prepareHarnessLaunch(pkg, ws, 'codex', 'key')
+      expect(JSON.parse(readFileSync(join(harnessRuntimeDir(ws, 'key'), 'runtime.json'), 'utf8'))).toMatchObject({ version: 1, engine: 'codex' })
+      expect(readFileSync(join(ws, 'AGENTS.md'), 'utf8')).toContain(HARNESS_BOOTSTRAP)
+      expect(readFileSync(launch.env.HARNESS_CONTEXT_FILE!, 'utf8')).toContain('# Make a drawing')
+    } finally {
+      vi.mocked(atomicWriteFile).mockImplementation(real.atomicWriteFile)
+    }
   })
 
   it('keeps the mode of the person\'s instruction file', () => {
