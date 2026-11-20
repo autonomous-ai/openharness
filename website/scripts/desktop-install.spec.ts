@@ -1,68 +1,143 @@
 import { spawnSync } from "child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "fs";
+import { createHash } from "crypto";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, unlinkSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
 
 const installer = join(process.cwd(), "scripts", "desktop-install.sh");
 
 const MANIFEST_URL = "https://example.test/harness/desktop/metadata.json";
+const VERSION = "1.2.4";
+const KEYS = { Darwin: "desktop-macos", Linux: "desktop-linux-x64" } as const;
+const RELEASE_URLS = {
+  Darwin: `https://cdn.autonomous.ai/harness/desktop/${VERSION}/Harness-macos.zip`,
+  Linux: `https://storage.googleapis.com/s3-autonomous-upgrade-3/harness/desktop/${VERSION}/Harness-linux-x64.AppImage`,
+};
+/** Where each OS's app goes, under the run's app folder. */
+const APP_NAMES = { Darwin: "Harness.app", Linux: "Harness.AppImage" };
+
+/** The macOS archive, which the ditto stub unpacks as the app's executable. */
+const ARCHIVE = "the Harness archive";
+/** The AppImage: it takes its icon out for `--appimage-extract`, and records each start. */
+const APPIMAGE = `#!/bin/sh
+if [ "$1" = --appimage-extract ]; then
+  [ -z "$STUB_SIGNAL" ] || kill -"$STUB_SIGNAL" "$STUB_SCRIPT_PID"
+  mkdir -p squashfs-root && printf icon > "squashfs-root/$2"
+  exit
+fi
+printf '%s\\n' "$#" >> "$STUB_LOG/ran"
+`;
+const sums = (text: string) => ({ sha256: createHash("sha256").update(text).digest("hex"), size: Buffer.byteLength(text) });
 
 /**
- * Runs the installer as `os` against a manifest whose `key` entry has `version` and `url`, with stub tools
- * on PATH: curl serves the manifest and records, then fails, every other download, so the run stops right
- * after the URL check. Returns the result and the URLs it tried to download.
+ * Stub uname, curl, plutil, ditto, lipo, open, pgrep and mv, first on PATH, steered by STUB_* variables; shasum,
+ * sha256sum, sed and the rest are real. curl serves the manifest at its URL and the release file at any other,
+ * recording each URL. plutil answers the manifest's desktop-macos fields from files and an app's version from its
+ * Info.plist, which ditto writes beside the executable it unpacks. mv records whether something is at the place, moves,
+ * then, the first time, sends STUB_MV_SIGNAL to the script. Written once: macOS checks each new executable on its first
+ * run.
  */
-function runInstaller(os: "Darwin" | "Linux", key: string, version: string, url: string) {
-  const dir = mkdtempSync(join(tmpdir(), "harness-install-"));
-  try {
-    const bin = join(dir, "bin");
-    const manifest = join(dir, "metadata.json");
-    const downloads = join(dir, "downloads");
-    const sha256 = "a".repeat(64);
-    mkdirSync(bin);
-    writeFileSync(manifest, JSON.stringify({ [key]: { version, url, sha256, size: 1 } }, null, 2));
-    const stub = (name: string, body: string) => writeFileSync(join(bin, name), `#!/bin/sh\n${body}\n`, { mode: 0o755 });
-    stub("uname", `[ "$1" = -s ] && echo ${os} || echo x86_64`);
-    stub(
-      "curl",
-      `out= url= prev=
+const bin = mkdtempSync(join(tmpdir(), "harness-install-bin-"));
+const stub = (name: string, body: string) => writeFileSync(join(bin, name), `#!/bin/sh\n${body}\n`, { mode: 0o755 });
+stub("uname", `case "$1" in -s) echo "$STUB_OS" ;; -m) echo x86_64 ;; *) exit 1 ;; esac`);
+stub(
+  "curl",
+  `out= url= prev=
 for arg; do
   if [ "$prev" = -o ]; then out="$arg"; else case "$arg" in -*) ;; *) url="$arg" ;; esac; fi
   prev="$arg"
 done
-if [ "$url" = '${MANIFEST_URL}' ]; then cp '${manifest}' "$out"; exit 0; fi
-printf '%s\\n' "$url" >> '${downloads}'
-exit 22`,
-    );
-    stub(
-      "plutil",
-      `case "$2" in
-  ${key}.version) printf '%s' '${version}' ;;
-  ${key}.url) printf '%s' '${url}' ;;
-  ${key}.sha256) printf '%s' '${sha256}' ;;
-  ${key}.size) printf '%s' 1 ;;
-  *) exit 1 ;;
-esac`,
-    );
-    // Never reached before the download fails; present only so the installer's tool checks pass on any OS.
-    for (const name of ["shasum", "sha256sum", "ditto", "lipo", "open", "pgrep"]) stub(name, "exit 1");
+printf '%s\\n' "$url" >> "$STUB_LOG/requested"
+if [ "$url" = "$STUB_MANIFEST_URL" ]; then cp "$STUB_SERVED/metadata.json" "$out"; else cp "$STUB_SERVED/release" "$out"; fi`,
+);
+stub("plutil", `case "$2" in CFBundleShortVersionString) cat "$4" ;; *) cat "$STUB_SERVED/plutil/$2" ;; esac`);
+stub(
+  "ditto",
+  `app="$4/Harness.app/Contents"
+mkdir -p "$app/MacOS" && cp "$3" "$app/MacOS/Harness" && chmod 755 "$app/MacOS/Harness" \\
+  && cp "$STUB_SERVED/plutil/desktop-macos.version" "$app/Info.plist"`,
+);
+stub("lipo", "echo x86_64 arm64");
+stub("open", `printf '%s\\n' "$@" >> "$STUB_LOG/open"`);
+stub("pgrep", "exit 1");
+stub(
+  "mv",
+  `if [ -e "$STUB_PLACE" ]; then echo there; else echo none; fi >> "$STUB_LOG/mv"
+/bin/mv "$@" || exit
+[ -z "$STUB_MV_SIGNAL" ] || [ -e "$STUB_LOG/signalled" ] || { : > "$STUB_LOG/signalled" && kill -"$STUB_MV_SIGNAL" "$STUB_SCRIPT_PID"; }`,
+);
 
-    const result = spawnSync("sh", [installer], {
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        PATH: `${bin}:${process.env.PATH}`,
-        HOME: dir,
-        HARNESS_DESKTOP_APP_DIR: join(dir, "app"),
-        HARNESS_DESKTOP_METADATA_URL: MANIFEST_URL,
-      },
-    });
-    const requested = existsSync(downloads) ? readFileSync(downloads, "utf8").split("\n").filter(Boolean) : [];
-    return { result, requested };
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
+const runs: string[] = [];
+afterEach(() => {
+  for (const dir of runs.splice(0)) rmSync(dir, { recursive: true, force: true });
+});
+afterAll(() => rmSync(bin, { recursive: true, force: true }));
+
+interface Options {
+  /** The URL the manifest names, over the release's own. */
+  url?: string;
+  /** Files written before the run, by path under the run's folder. */
+  before?: Record<string, string>;
+  /** A signal `--appimage-extract` sends the script, as a Ctrl-C or a closed terminal does. */
+  signal?: string;
+  /** A signal the first move sends the script once it has moved. */
+  mvSignal?: string;
+}
+
+/** Runs the installer as `os` in a folder of its own: HOME is its home/, the app folder its app/. */
+function install(os: "Darwin" | "Linux", options: Options = {}) {
+  const dir = mkdtempSync(join(tmpdir(), "harness-install-"));
+  runs.push(dir);
+  const log = join(dir, "log");
+  const served = join(dir, "served");
+  for (const folder of [log, join(served, "plutil")]) mkdirSync(folder, { recursive: true });
+  const release = os === "Darwin" ? ARCHIVE : APPIMAGE;
+  writeFileSync(join(served, "release"), release);
+  const entry = { version: VERSION, url: options.url ?? RELEASE_URLS[os], ...sums(release) };
+  writeFileSync(join(served, "metadata.json"), JSON.stringify({ [KEYS[os]]: entry }, null, 2));
+  for (const [field, value] of Object.entries(entry)) {
+    writeFileSync(join(served, "plutil", `${KEYS[os]}.${field}`), String(value));
   }
+  for (const [path, text] of Object.entries(options.before ?? {})) {
+    mkdirSync(join(dir, path, ".."), { recursive: true });
+    writeFileSync(join(dir, path), text);
+  }
+
+  const place = join(dir, "app", APP_NAMES[os]);
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    PATH: `${bin}:${process.env.PATH}`,
+    HOME: join(dir, "home"),
+    HARNESS_DESKTOP_APP_DIR: join(dir, "app"),
+    HARNESS_DESKTOP_METADATA_URL: MANIFEST_URL,
+    STUB_OS: os,
+    STUB_LOG: log,
+    STUB_SERVED: served,
+    STUB_MANIFEST_URL: MANIFEST_URL,
+    STUB_PLACE: place,
+    STUB_SIGNAL: options.signal ?? "",
+    STUB_MV_SIGNAL: options.mvSignal ?? "",
+  };
+  // exec keeps the pid: the script's own, for the stubs that signal it.
+  const result = spawnSync("sh", ["-c", 'export STUB_SCRIPT_PID=$$; exec sh "$0"', installer], {
+    cwd: dir,
+    encoding: "utf8",
+    env,
+  });
+  const read = (name: string) => (existsSync(join(log, name)) ? readFileSync(join(log, name), "utf8") : "");
+  const executable = os === "Darwin" ? join(place, "Contents", "MacOS", "Harness") : place;
+  return {
+    result,
+    dir,
+    place,
+    requested: read("requested").split("\n").filter(Boolean),
+    /** At each mv, whether something was at the place. */
+    mv: read("mv").split("\n").filter(Boolean),
+    opened: read("open").split("\n").filter(Boolean),
+    ran: read("ran").split("\n").filter(Boolean),
+    placed: existsSync(executable) && statSync(executable).isFile() ? readFileSync(executable, "utf8") : null,
+  };
 }
 
 describe("desktop-install.sh", () => {
@@ -186,31 +261,78 @@ describe("desktop-install.sh", () => {
     },
   );
 
-  it.each([
-    ["Darwin", "desktop-macos", "https://cdn.autonomous.ai/harness/desktop/1.2.4/Harness-macos.zip"],
-    [
-      "Linux",
-      "desktop-linux-x64",
-      "https://storage.googleapis.com/s3-autonomous-upgrade-3/harness/desktop/1.2.4/Harness-linux-x64.AppImage",
-    ],
-  ] as const)("%s downloads the release's own file (%s): %s", (os, key, url) => {
-    const { result, requested } = runInstaller(os, key, "1.2.4", url);
+  it.each(["Darwin", "Linux"] as const)("%s installs the release's own file and starts it", (os) => {
+    const run = install(os);
 
-    expect(requested).toEqual([url]);
-    expect(result.stderr).toContain("could not download Harness 1.2.4");
+    expect(run.result.stderr).toBe("");
+    expect(run.result.status).toBe(0);
+    expect(run.requested).toEqual([MANIFEST_URL, RELEASE_URLS[os]]);
+    expect(run.placed).toBe(os === "Darwin" ? ARCHIVE : APPIMAGE);
+    expect(run.result.stdout).toContain(`Harness ${VERSION} installed at ${run.place}\n`);
+    if (os === "Darwin") expect(run.opened).toEqual([run.place]);
   });
 
   // curl collapses dot segments, so a glob's `*` matching `../..` would download from another bucket.
   it.each([
-    ["Darwin", "desktop-macos", "https://storage.googleapis.com/s3-autonomous-upgrade-3/harness/desktop/../../../attacker-bucket/Harness-macos.zip"],
-    ["Darwin", "desktop-macos", "https://cdn.autonomous.ai/harness/desktop/1.2.4/../../device/1.2.4/Harness-macos.zip"],
-    ["Darwin", "desktop-macos", "https://cdn.autonomous.ai/harness/desktop/1.2.3/Harness-macos.zip"],
-    ["Linux", "desktop-linux-x64", "https://cdn.autonomous.ai/harness/desktop/../../../attacker-bucket/Harness-linux-x64.AppImage"],
-  ] as const)("%s refuses a URL outside the release's own folder (%s): %s", (os, key, url) => {
-    const { result, requested } = runInstaller(os, key, "1.2.4", url);
+    ["Darwin", "https://storage.googleapis.com/s3-autonomous-upgrade-3/harness/desktop/../../../attacker-bucket/Harness-macos.zip"],
+    ["Darwin", "https://cdn.autonomous.ai/harness/desktop/1.2.4/../../device/1.2.4/Harness-macos.zip"],
+    ["Darwin", "https://cdn.autonomous.ai/harness/desktop/1.2.3/Harness-macos.zip"],
+    ["Linux", "https://cdn.autonomous.ai/harness/desktop/../../../attacker-bucket/Harness-linux-x64.AppImage"],
+  ] as const)("%s refuses a URL outside the release's own folder: %s", (os, url) => {
+    const run = install(os, { url });
 
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain("desktop metadata points outside the Harness desktop release bucket");
-    expect(requested).toEqual([]);
+    expect(run.result.status).toBe(1);
+    expect(run.result.stderr).toContain("desktop metadata points outside the Harness desktop release bucket");
+    expect(run.requested).toEqual([MANIFEST_URL]);
+  });
+
+  it("Linux replaces the AppImage in one move: something is always at the place", () => {
+    const run = install("Linux", { before: { "app/Harness.AppImage": "the copy before" } });
+
+    expect(run.result.status).toBe(0);
+    expect(run.placed).toBe(APPIMAGE);
+    expect(run.mv.length).toBeGreaterThan(0);
+    expect(run.mv.filter((state) => state !== "there")).toEqual([]);
+  });
+
+  it("Linux refuses a folder at the place and leaves it", () => {
+    const run = install("Linux", { before: { "app/Harness.AppImage/a file": "kept" } });
+
+    expect(run.result.status).toBe(1);
+    expect(run.result.stderr).toBe(
+      `Harness desktop installer: ${run.place} is a folder. Move it away, then run this installer again.\n`,
+    );
+    expect(run.requested).toEqual([MANIFEST_URL]);
+    expect(readFileSync(join(run.place, "a file"), "utf8")).toBe("kept");
+  });
+
+  // Ctrl-C, a closed terminal or a kill: the script stops there and starts nothing.
+  it.each([
+    ["INT", 130],
+    ["HUP", 129],
+    ["TERM", 143],
+  ])("Linux stops at %s and starts nothing", (signal, status) => {
+    const run = install("Linux", { signal });
+
+    expect(run.result.status).toBe(status);
+    expect(run.result.stdout).not.toContain("installed at");
+    expect(run.ran).toEqual([]);
+  });
+
+  // A folder cannot replace another in one move: stopped between the two, the script puts the previous app back.
+  it.each([
+    ["INT", 130],
+    ["HUP", 129],
+    ["TERM", 143],
+  ])("Darwin stopped at %s between its moves keeps the previous app and opens nothing", (mvSignal, status) => {
+    const run = install("Darwin", {
+      mvSignal,
+      before: { "app/Harness.app/Contents/MacOS/Harness": "the app before" },
+    });
+
+    expect(run.result.status).toBe(status);
+    expect(run.placed).toBe("the app before");
+    expect(run.opened).toEqual([]);
+    expect(readdirSync(join(run.dir, "app"))).toEqual(["Harness.app"]);
   });
 });

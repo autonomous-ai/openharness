@@ -40,12 +40,15 @@ interface Options {
   icon?: boolean;
   /** Files written before the run, by path under the run's folder. */
   before?: Record<string, string>;
+  /** A signal `--appimage-extract` sends the script, as a Ctrl-C or a closed terminal does. */
+  signal?: string;
 }
 
 /**
- * Stub uname, curl, pgrep and setsid, first on PATH, steered by STUB_* variables; sha256sum, sed and the rest are real.
- * curl serves the manifest at its URL and the AppImage at any other, recording each URL. Written once: macOS checks
- * each new executable on its first run, which costs a quarter of a second per file.
+ * Stub uname, curl, pgrep, setsid and mv, first on PATH, steered by STUB_* variables; sha256sum, sed and the rest are
+ * real. curl serves the manifest at its URL and the AppImage at any other, recording each URL. mv records whether
+ * something is at the place, then moves. Written once: macOS checks each new executable on its first run, which costs a
+ * quarter of a second per file.
  */
 const bin = mkdtempSync(join(tmpdir(), "harness-device-install-bin-"));
 const stub = (name: string, body: string) => writeFileSync(join(bin, name), `#!/bin/sh\n${body}\n`, { mode: 0o755 });
@@ -62,10 +65,12 @@ if [ "$url" = "$STUB_MANIFEST_URL" ]; then cp "$STUB_SERVED/metadata.json" "$out
 );
 stub("pgrep", `printf '%s\\0' "$@" > "$STUB_LOG/pgrep"\n[ -n "$STUB_RUNNING" ]`);
 stub("setsid", `printf '%s\\0' "$@" > "$STUB_LOG/setsid"\n[ "$1" = -f ] && shift\n"$@"`);
+stub("mv", `if [ -e "$STUB_PLACE" ]; then echo there; else echo none; fi >> "$STUB_LOG/mv"\nexec /bin/mv "$@"`);
 
 /** The AppImage: it takes its icon out for `--appimage-extract <member>`, as the runtime does with no FUSE. */
 const APP = `#!/bin/sh
 if [ "$1" = --appimage-extract ]; then
+  [ -z "$STUB_SIGNAL" ] || kill -"$STUB_SIGNAL" "$STUB_SCRIPT_PID"
   [ "$2" = '${MEMBER}' ] && [ -n "$STUB_ICON" ] || exit 1
   mkdir -p "squashfs-root/\${2%/*}" && printf '%s' '${ICON_BYTES}' > "squashfs-root/$2"
   exit
@@ -138,9 +143,16 @@ function install(options: Options = {}) {
     env.XDG_DATA_HOME = options.xdgDataHome.startsWith("/") ? dir + options.xdgDataHome : options.xdgDataHome;
   }
   if (options.metadataUrl) env.HARNESS_DEVICE_METADATA_URL = options.metadataUrl;
-  const result = spawnSync("sh", [installer], { cwd: dir, encoding: "utf8", env });
-  const read = (name: string) => (existsSync(join(log, name)) ? readFileSync(join(log, name), "utf8") : "");
   const placed = join(homeAbsolute, PLACE);
+  env.STUB_PLACE = placed;
+  env.STUB_SIGNAL = options.signal ?? "";
+  // exec keeps the pid: the script's own, for the stub that signals it.
+  const result = spawnSync("sh", ["-c", 'export STUB_SCRIPT_PID=$$; exec sh "$0"', installer], {
+    cwd: dir,
+    encoding: "utf8",
+    env,
+  });
+  const read = (name: string) => (existsSync(join(log, name)) ? readFileSync(join(log, name), "utf8") : "");
   return {
     result,
     dir,
@@ -150,8 +162,10 @@ function install(options: Options = {}) {
     pgrep: read("pgrep").split("\0").slice(0, -1),
     setsid: read("setsid").split("\0").slice(0, -1),
     ran: read("ran").split("\n").filter(Boolean),
+    /** At each mv, whether something was at the place. */
+    mv: read("mv").split("\n").filter(Boolean),
     opt: files(join(homeAbsolute, ".local", "opt")),
-    placed: existsSync(placed) ? readFileSync(placed, "utf8") : null,
+    placed: existsSync(placed) && statSync(placed).isFile() ? readFileSync(placed, "utf8") : null,
     mode: existsSync(placed) ? statSync(placed).mode & 0o777 : null,
     /** The entries and icons written anywhere in the run's folder. */
     listed: files(dir).filter((name) => /(^|\/)(applications\/harness-device\.desktop|icons\/harness-device\.png)$/.test(name)),
@@ -260,6 +274,40 @@ describe("device-install.sh", () => {
     expect(run.mode).toBe(0o755);
     expect(run.setsid).toEqual(["-f", run.place]);
     expect(run.ran).toEqual(["0"]);
+  });
+
+  it("replaces the AppImage in one move: something is always at the place", () => {
+    const run = install({ before: { [`home/p${PLACE}`]: "the copy before" } });
+
+    expect(run.result.status).toBe(0);
+    expect(run.placed).toBe(APP);
+    expect(run.mv.length).toBeGreaterThan(0);
+    expect(run.mv.filter((state) => state !== "there")).toEqual([]);
+  });
+
+  it("refuses a folder at the place and leaves it", () => {
+    const run = install({ before: { [`home/p${PLACE}/a file`]: "kept" } });
+
+    expect(run.result.status).toBe(1);
+    expect(run.result.stderr).toBe(
+      `Harness Device installer: ${run.place} is a folder. Move it away, then run this installer again.\n`,
+    );
+    expect(run.requested).toEqual([DEVICE_MANIFEST_URL]);
+    expect(readFileSync(join(run.dir, `home/p${PLACE}/a file`), "utf8")).toBe("kept");
+  });
+
+  // Ctrl-C, a closed terminal or a kill: the script stops there and starts nothing.
+  it.each([
+    ["INT", 130],
+    ["HUP", 129],
+    ["TERM", 143],
+  ])("stops at %s and starts nothing", (signal, status) => {
+    const run = install({ signal });
+
+    expect(run.result.status).toBe(status);
+    expect(run.result.stdout).not.toContain("installed at");
+    expect(run.setsid).toEqual([]);
+    expect(run.ran).toEqual([]);
   });
 
   it("refuses while the app runs from the place", () => {
