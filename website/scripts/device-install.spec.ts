@@ -47,6 +47,8 @@ interface Options {
   before?: Record<string, string>;
   /** A signal `--appimage-extract` sends the script, as a Ctrl-C or a closed terminal does. */
   signal?: string;
+  /** The variable the shell ends with byte 0xE9, Latin-1's é: Node's environment holds only UTF-8. */
+  latin1?: "HOME" | "XDG_DATA_HOME";
   /** Whether the app, started, ends at once, as with no FUSE or another arch's userland. */
   startFails?: boolean;
 }
@@ -106,10 +108,14 @@ afterAll(() => rmSync(bin, { recursive: true, force: true }));
 
 /** Every file under folder, relative to it. */
 function files(folder: string): string[] {
-  if (!existsSync(folder)) return [];
-  return readdirSync(folder, { recursive: true, encoding: "utf8" })
-    .filter((name) => statSync(join(folder, name)).isFile())
-    .sort();
+  // Read as bytes, so a name that is not UTF-8 is listed too.
+  const walk = (dir: Buffer, prefix: string): string[] =>
+    readdirSync(dir, { encoding: "buffer", withFileTypes: true }).flatMap((entry) => {
+      const name = prefix + entry.name.toString();
+      if (entry.isDirectory()) return walk(Buffer.concat([dir, Buffer.from("/"), entry.name]), `${name}/`);
+      return entry.isFile() ? [name] : [];
+    });
+  return existsSync(folder) ? walk(Buffer.from(folder), "").sort() : [];
 }
 
 /** Runs the installer in a folder of its own, its HOME in there too unless relative. */
@@ -165,12 +171,15 @@ function install(options: Options = {}) {
   if (options.running) writeFileSync(join(log, "processes"), `${options.running(placed)}\n`);
   env.STUB_PLACE = placed;
   env.STUB_SIGNAL = options.signal ?? "";
+  env.STUB_LATIN1 = options.latin1 ?? "";
   // exec keeps the pid: the script's own, for the stub that signals it.
-  const result = spawnSync("sh", ["-c", 'export STUB_SCRIPT_PID=$$; exec sh "$0"', installer], {
-    cwd: dir,
-    encoding: "utf8",
-    env,
-  });
+  const wrapper = `export STUB_SCRIPT_PID=$$
+case "$STUB_LATIN1" in
+  HOME) HOME="$HOME$(printf '\\351')" ;;
+  XDG_DATA_HOME) XDG_DATA_HOME="$XDG_DATA_HOME$(printf '\\351')" ;;
+esac
+exec sh "$0"`;
+  const result = spawnSync("sh", ["-c", wrapper, installer], { cwd: dir, encoding: "utf8", env });
   const read = (name: string) => (existsSync(join(log, name)) ? readFileSync(join(log, name), "utf8") : "");
   return {
     result,
@@ -417,6 +426,19 @@ describe("device-install.sh", () => {
     expect(run.listed.length).toBe(vector.icon ? 2 : 1);
     // Nothing of the work is left beside them.
     expect(files(dataHome)).toEqual(run.listed.map((name) => join(run.dir, name).slice(dataHome.length + 1)));
+  });
+
+  // A key file is UTF-8: like the app, the script writes no entry for a path that is not. macOS keeps only UTF-8 names,
+  // so there such a folder cannot exist.
+  it.runIf(process.platform === "linux").each([
+    ["HOME", { home: "/home/caf" }],
+    ["XDG_DATA_HOME", { xdgDataHome: "/data/caf" }],
+  ] as const)("writes no entry when %s is not UTF-8, and installs", (latin1, where) => {
+    const run = install({ ...where, latin1 });
+
+    expect(run.result.status).toBe(0);
+    expect(run.result.stdout).toContain("installed at");
+    expect(run.listed).toEqual([]);
   });
 
   // Each vectors' path stands for a home: its folder, under which the script installs to the place.
