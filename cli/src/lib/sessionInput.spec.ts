@@ -972,7 +972,7 @@ describe('SessionInputController', () => {
 
       expect(controller.firstTaskWaiting('s1')).toBe(false)
       controller.expectFirstTask('s1')
-      controller.submit('s1', 'Say hello')
+      controller.submitFirstTask('s1', 'Say hello')
       await vi.advanceTimersByTimeAsync(4 * 60_000)
       pane = readyPane()
       await vi.advanceTimersByTimeAsync(60_000)
@@ -992,7 +992,7 @@ describe('SessionInputController', () => {
       const { controller, sendKey, onError, onWaitChanged } = paneController(() => null)
 
       controller.expectFirstTask('s1')
-      controller.submit('s1', 'Say hello')
+      controller.submitFirstTask('s1', 'Say hello')
       await vi.advanceTimersByTimeAsync(5 * 60_000)
       expect(sendKey).toHaveBeenCalledTimes(2)
       expect(onError).not.toHaveBeenCalled()
@@ -1011,7 +1011,7 @@ describe('SessionInputController', () => {
 
       controller.expectFirstTask('s1')
       expect(controller.firstTaskWaiting('s1')).toBe(true)
-      controller.submit('s1', 'Say hello')
+      controller.submitFirstTask('s1', 'Say hello')
       await vi.waitFor(() => expect(inject).toHaveBeenCalled())
       expect(controller.firstTaskWaiting('s1')).toBe(true)
       paste(true)
@@ -1031,7 +1031,7 @@ describe('SessionInputController', () => {
       inject.mockResolvedValueOnce(false)
 
       controller.expectFirstTask('s1')
-      controller.submit('s1', 'Say hello')
+      controller.submitFirstTask('s1', 'Say hello')
       await vi.advanceTimersByTimeAsync(5 * 60_000)
       expect(onError).toHaveBeenCalled()
       expect(controller.firstTaskWaiting('s1')).toBe(true)
@@ -1052,7 +1052,7 @@ describe('SessionInputController', () => {
         inject.mockResolvedValueOnce(maybe as never)
 
         controller.expectFirstTask('s1')
-        controller.submit('s1', 'Say hello')
+        controller.submitFirstTask('s1', 'Say hello')
         await vi.advanceTimersByTimeAsync(10_000)
         expect(sendKey.mock.calls).toEqual([['h1', 'Enter']])
         pane = readyPane()
@@ -1074,7 +1074,7 @@ describe('SessionInputController', () => {
         inject.mockResolvedValueOnce(maybe as never)
 
         controller.expectFirstTask('s1')
-        controller.submit('s1', 'Say hello')
+        controller.submitFirstTask('s1', 'Say hello')
         await vi.advanceTimersByTimeAsync(5 * 60_000)
         expect(sendKey).not.toHaveBeenCalled()
         expect(onError).not.toHaveBeenCalled()
@@ -1088,7 +1088,7 @@ describe('SessionInputController', () => {
       const { controller } = paneController(() => readyPane())
 
       controller.expectFirstTask('s1')
-      controller.submit('s1', 'Say hello')
+      controller.submitFirstTask('s1', 'Say hello')
       await vi.waitFor(() => expect(controller.awaitingConfirmation('s1')).toBe(true))
       expect(await controller.cancelConfirmed('s1')).toBe(true)
       expect(controller.firstTaskWaiting('s1')).toBe(false)
@@ -1263,7 +1263,7 @@ describe('SessionInputController', () => {
         const { controller, inject, typed, onError } = waitingPane()
 
         controller.expectFirstTask('s1')
-        controller.submit('s1', 'Say hello')
+        controller.submitFirstTask('s1', 'Say hello')
         await vi.advanceTimersByTimeAsync(10 * 60_000)
         expect(onError).not.toHaveBeenCalled()
         expect(controller.firstTaskWaiting('s1')).toBe(true)
@@ -1602,7 +1602,7 @@ describe('SessionInputController', () => {
           fake.beforeKey = () => { order.push('C-u') }
 
           fake.controller.expectFirstTask('s1')
-          fake.controller.submit('s1', 'Say hello')
+          fake.controller.submitFirstTask('s1', 'Say hello')
           await vi.advanceTimersByTimeAsync(10_000)
           expect(fake.untypeFirstTask.mock.calls).toEqual([['h1', 'Say hello']])
           expect(order).toEqual(['untyped', 'C-u'])
@@ -1614,7 +1614,7 @@ describe('SessionInputController', () => {
           expect(fake.typed).toEqual(['Say hello'])
           expect(fake.onError).not.toHaveBeenCalled()
           fake.controller.expectFirstTask('s1')
-          fake.controller.submit('s1', 'Say hello')
+          fake.controller.submitFirstTask('s1', 'Say hello')
           await vi.advanceTimersByTimeAsync(1_000)
           expect(fake.sent).toEqual(['Say hello'])
           fake.controller.onTurnStarted('s1', 'Say hello')
@@ -1632,7 +1632,7 @@ describe('SessionInputController', () => {
           fake.untypeFirstTask.mockResolvedValue(false)
 
           fake.controller.expectFirstTask('s1')
-          fake.controller.submit('s1', 'Say hello')
+          fake.controller.submitFirstTask('s1', 'Say hello')
           await vi.advanceTimersByTimeAsync(5 * 60_000)
           expect(fake.keys).toEqual([])
           expect(fake.untypeFirstTask).toHaveBeenCalledTimes(untypes ? 1 : 0)
@@ -1647,12 +1647,12 @@ describe('SessionInputController', () => {
           const fake = openclaw({ loads: false })
 
           fake.controller.expectFirstTask('s1')
-          fake.controller.submit('s1', 'Say hello')
+          fake.controller.submitFirstTask('s1', 'Say hello')
           await vi.advanceTimersByTimeAsync(10_000)
           expect(fake.keys).toEqual(['C-u'])
           await fake.session()
           fake.controller.expectFirstTask('s1')
-          fake.controller.submit('s1', 'Say hello')
+          fake.controller.submitFirstTask('s1', 'Say hello')
           await vi.advanceTimersByTimeAsync(10 * 60_000)
           expect(fake.typed).toEqual(['Say hello', 'Say hello'])
           expect(fake.box()).toBe('Say hello')
@@ -1668,7 +1668,7 @@ describe('SessionInputController', () => {
           const fake = openclaw()
 
           fake.controller.expectFirstTask('s1')
-          fake.controller.submit('s1', 'Say hello')
+          fake.controller.submitFirstTask('s1', 'Say hello')
           await vi.advanceTimersByTimeAsync(0)
           fake.controller.submit('s1', 'And then this')
           await vi.advanceTimersByTimeAsync(10_000)
@@ -1679,7 +1679,7 @@ describe('SessionInputController', () => {
           await vi.advanceTimersByTimeAsync(5_000)
           expect(fake.sent).toEqual([])
           fake.controller.expectFirstTask('s1')
-          fake.controller.submit('s1', 'Say hello')
+          fake.controller.submitFirstTask('s1', 'Say hello')
           await vi.advanceTimersByTimeAsync(1_000)
           for (const message of ['Say hello', 'And then this']) {
             fake.controller.onTurnStarted('s1', message)
@@ -1688,6 +1688,133 @@ describe('SessionInputController', () => {
           }
           expect(fake.sent).toEqual(['Say hello', 'And then this', 'And this last'])
           expect(fake.onError).not.toHaveBeenCalled()
+          fake.controller.forget('s1')
+        })
+
+        // Found in review: a message sent between the hand-over (`expectFirstTask`) and the task's submit was pasted first,
+        // and its turn let the row's typed task go while the task still waited behind it.
+        it('a message sent between its hand-over and its submit waits behind it, and only its own turn lets its row go', async () => {
+          vi.useFakeTimers()
+          const fake = openclaw()
+          await fake.session()
+
+          fake.controller.expectFirstTask('s1')
+          fake.controller.submit('s1', 'And then this')
+          await vi.advanceTimersByTimeAsync(1_000)
+          expect(fake.typed).toEqual([])
+          fake.controller.submitFirstTask('s1', 'Say hello')
+          await vi.advanceTimersByTimeAsync(1_000)
+          expect(fake.sent).toEqual(['Say hello'])
+          for (const message of ['Say hello', 'And then this']) {
+            fake.controller.onTurnStarted('s1', message)
+            fake.controller.onTurnEnded('s1')
+            await vi.advanceTimersByTimeAsync(1_000)
+          }
+          expect(fake.sent).toEqual(['Say hello', 'And then this'])
+          expect(fake.onFirstTaskTaken.mock.calls).toEqual([['s1']])
+          expect(fake.onError).not.toHaveBeenCalled()
+          fake.controller.forget('s1')
+        })
+
+        it('a turn of other text while it awaits its own neither ends its wait nor lets its row go', async () => {
+          vi.useFakeTimers()
+          const fake = openclaw()
+          await fake.session()
+
+          fake.controller.submitFirstTask('s1', 'Say hello')
+          await vi.advanceTimersByTimeAsync(1_000)
+          expect(fake.controller.firstTaskWaiting('s1')).toBe(true)
+          fake.controller.onTurnStarted('s1', 'my own words')
+          expect(fake.controller.firstTaskWaiting('s1')).toBe(true)
+          expect(fake.onFirstTaskTaken).not.toHaveBeenCalled()
+          fake.controller.forget('s1')
+        })
+
+        // Found in review: handed over while a caller held the pane, a first task cleared once before was queued behind
+        // itself, and typed never.
+        it.each([
+          ['the first time', async (fake: ReturnType<typeof openclaw>) => { await fake.session() }],
+          ['again after its clear', async (fake: ReturnType<typeof openclaw>) => {
+            fake.controller.expectFirstTask('s1')
+            fake.controller.submitFirstTask('s1', 'Say hello')
+            await vi.advanceTimersByTimeAsync(10_000)
+            expect(fake.keys).toEqual(['C-u'])
+            await fake.session()
+          }],
+        ])('handed over %s while a caller holds the pane, it is typed once the caller lets go', async (_, before) => {
+          vi.useFakeTimers()
+          const fake = openclaw()
+          await before(fake)
+
+          const release = fake.controller.acquireControl('s1')!
+          fake.controller.expectFirstTask('s1')
+          fake.controller.submitFirstTask('s1', 'Say hello')
+          await vi.advanceTimersByTimeAsync(5_000)
+          expect(fake.sent).toEqual([])
+          release()
+          await vi.advanceTimersByTimeAsync(1_000)
+          expect(fake.sent).toEqual(['Say hello'])
+          expect(fake.onError).not.toHaveBeenCalled()
+          fake.controller.forget('s1')
+        })
+
+        // Found in review: a launch task the backend began with `/loop` was typed as OpenClaw takes it, and compared with
+        // its row's text, which never matched: its row was never asked to take it back, and an adopted one got no Enter.
+        it('one its engine has no /loop for is typed as the engine takes it, and its row is asked for it as it was given', async () => {
+          vi.useFakeTimers()
+          const fake = openclaw()
+
+          fake.controller.expectFirstTask('s1')
+          fake.controller.submitFirstTask('s1', '/loop Say hello')
+          await vi.advanceTimersByTimeAsync(10_000)
+          expect(fake.typed).toEqual(['Say hello'])
+          expect(fake.untypeFirstTask.mock.calls).toEqual([['h1', '/loop Say hello']])
+          expect(fake.keys).toEqual(['C-u'])
+          fake.controller.forget('s1')
+
+          const adopted = openclaw()
+          adopted.show('Say hello')
+          expect(adopted.controller.adoptTypedFirstTask('s1', '/loop Say hello')).toBe(true)
+          expect(adopted.controller.ownsBox('s1', 'Say hello', whole)).toBe(true)
+          await vi.advanceTimersByTimeAsync(10_000)
+          expect(adopted.keys).toEqual(['Enter'])
+          adopted.controller.onTurnStarted('s1', 'Say hello')
+          expect(adopted.onFirstTaskTaken.mock.calls).toEqual([['s1']])
+          adopted.controller.forget('s1')
+        })
+
+        // Found in review: stopped while back on its row, a first task was typed by the hand-over after the Stop.
+        it.each([
+          ['while back on its row', ['Say hello'], async (fake: ReturnType<typeof openclaw>) => {
+            fake.controller.expectFirstTask('s1')
+            fake.controller.submitFirstTask('s1', 'Say hello')
+            await vi.advanceTimersByTimeAsync(10_000)
+            expect(fake.box()).toBe('')
+            expect(await fake.controller.cancelConfirmed('s1')).toBe(true)
+            expect(fake.controller.firstTaskWaiting('s1')).toBe(false)
+            await fake.session()
+            fake.controller.expectFirstTask('s1')
+            expect(fake.controller.firstTaskWaiting('s1')).toBe(false)
+            fake.controller.submitFirstTask('s1', 'Say hello')
+          }],
+          ['while it waits for a caller to let go of the pane', [], async (fake: ReturnType<typeof openclaw>) => {
+            await fake.session()
+            const release = fake.controller.acquireControl('s1')!
+            fake.controller.expectFirstTask('s1')
+            fake.controller.submitFirstTask('s1', 'Say hello')
+            expect(await fake.controller.cancelConfirmed('s1')).toBe(true)
+            release()
+          }],
+        ])('stopped %s, it is typed no more, and its row lets it go', async (_, typed, stop) => {
+          vi.useFakeTimers()
+          const fake = openclaw()
+
+          await stop(fake)
+          await vi.advanceTimersByTimeAsync(60_000)
+          expect(fake.typed).toEqual(typed)
+          expect(fake.sent).toEqual([])
+          expect(fake.onFirstTaskTaken.mock.calls).toEqual([['s1']])
+          expect(fake.controller.firstTaskWaiting('s1')).toBe(false)
           fake.controller.forget('s1')
         })
       })
@@ -1855,7 +1982,7 @@ describe('SessionInputController', () => {
         ['an earlier daemon typed', (controller: SessionInputController) => { controller.adoptTypedFirstTask('s1', 'Say hello') }],
         ['typed here', (controller: SessionInputController) => {
           controller.expectFirstTask('s1')
-          controller.submit('s1', 'Say hello')
+          controller.submitFirstTask('s1', 'Say hello')
         }],
       ])('a turn that takes a first task %s lets its row go once; a stop or a forget does not', async (_, give) => {
         vi.useFakeTimers()
@@ -1889,7 +2016,7 @@ describe('SessionInputController', () => {
       it.each([
         ['typed here', (fake: ReturnType<typeof openclaw>) => {
           fake.controller.expectFirstTask('s1')
-          fake.controller.submit('s1', 'Say hello')
+          fake.controller.submitFirstTask('s1', 'Say hello')
         }],
         ['an earlier daemon typed', (fake: ReturnType<typeof openclaw>) => {
           fake.show('Say hello')
@@ -1910,7 +2037,7 @@ describe('SessionInputController', () => {
         await vi.advanceTimersByTimeAsync(5_000)
         expect(fake.sent).toEqual([])
         fake.controller.expectFirstTask('s1')
-        fake.controller.submit('s1', 'Say hello')
+        fake.controller.submitFirstTask('s1', 'Say hello')
         await vi.advanceTimersByTimeAsync(1_000)
         expect(fake.sent).toEqual(['Say hello'])
         fake.controller.onTurnStarted('s1', 'Say hello')
