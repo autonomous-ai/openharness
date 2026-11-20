@@ -118,6 +118,10 @@ after ready, cutting the install. Fix the harness, not the product:
   `[hooks] installed …` / `… already installed` line of every engine in `HOOK_INSTALL_ENGINES`, then runs
   `assertHooksStayedInside()`. Correct the false comment at `daemon.ts:647`. This covers every e2e test that relies on
   hooks right after start.
+- Changed while building (child's call, 2026-11-21): the default `'wired'` readiness stays as it is, because waiting
+  there for every engine's install broke `e2e/eagerHooks.e2e.ts` (it holds an install on purpose) and risks Hermes,
+  which may log no install line. Instead the harness has one explicit wait, `hooksInstalled(engines)`, which every
+  e2e file that runs an engine by hand right after start calls (hookclient and 17 device/dial files).
 - Same file: the fixed 6 s sleep at `hookclient.e2e.ts:386` waits instead for the daemon's log line that it handled that
   session's `UserPromptSubmit`, then asserts no agent was made.
 
