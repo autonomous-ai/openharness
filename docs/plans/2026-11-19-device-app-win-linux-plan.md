@@ -2,15 +2,16 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use devcrew phase 3 to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking. A test-first task is two commits: `test(device-app): <the task's message> (red)` once its failing tests have been run and seen to fail, then the task's own message. A task with no red test is one commit. No task merges. Commits reach only `origin/feat/device-app-win-linux`, and only so the temporary workflow can run them (see "How a Windows task proves itself").
 
-**Goal:** The Harness Device menu-bar app runs on Windows (x64, arm64) and Linux (x64, arm64) with macOS's menu, copy, states, consents, sign-in and updater, every difference a named one, and a Windows or Linux person gets it from `/device` and from Desktop as a Mac person does; nothing is released.
+**Goal:** The Harness Device menu-bar app runs on Windows (x64, arm64) and Linux (x64, arm64) with macOS's menu, copy, states, consents, sign-in and updater, every difference a named one, and a Windows or Linux person gets it from `/device` and from Desktop as a Mac person does; on Linux both apps' AppImages start with no `libfuse2`, the Device app lists itself in the app list, and one line installs it; nothing is released.
 
 **Architecture:**
 - **One codebase, OS code behind the doors that exist** (`FrontSource`, `LoginItem`, `AppUpdater`, `DesktopApp`, `Shell`) and three new seams: a child-process seam under `cli.rs` (`child_unix.rs` / `child_windows.rs`), an `Opener` door (`open.rs`) and a per-OS install plan (`install::runs`). Each OS's code is a file of its own, declared once in `lib.rs` by Task 2, so tasks do not meet in `lib.rs` or `Cargo.toml`.
 - **The menu model takes no OS.** `model.rs` and `app.rs` stay free of `cfg` and `consts::OS`; the one timing difference (Windows' held install) enters `App::new` as `install_exits_app`, and a parity test (Task 25) holds that line.
 - **Getting the app (spec section 10, Tasks 37 to 46).** The website gains one route per OS beside `/device/download-macos`, the arch read from the request; Desktop's offer keeps its one model (`DeviceAppOffer`) and screens, and only its manifest keys, installer, probe, opener, words (tray app off macOS) and, on Linux, an app-list entry learn Windows and Linux, each in its own file so they are built side by side.
+- **Installing on Linux (spec section 11, Tasks 47 to 57).** A probe on clean Ubuntu 24.04 and 22.04 runners with `libfuse2` removed decides whether each AppImage needs the static type2 runtime; where it does, the build swaps the runtime for a pinned, sha256-checked one after bundling. The app-list entry `harness-device.desktop` has three writers (the Device app at every launch from an AppImage, Desktop's installer, the one-line installer) and one rule, held in one vectors file (`tests/fixtures/app-list-entry-vectors.json`) that the Rust, Dart and website tests all read. The one-line installer is a website script published like Desktop's; `/device` shows its line only when the live manifest has a Linux AppImage, inside Diego's existing `DeviceDownload` with its existing classes.
 - **Pure rule, thin OS call.** Every rule is a function over plain values that `cargo test --lib` runs on this Mac; the Win32, socket and file calls around it are a few lines, proven on a `windows-latest` runner or a Linux runner.
 
-**Tech Stack:** Next.js 16 and vitest (`website/`), Flutter and Dart (`desktop/`) for Tasks 37 to 46; Rust 1.95+ and Tauri 2.12 (`device-app/src-tauri`), `windows-sys` 0.61 (already in Tauri's tree) on Windows, std and `libc` on Linux; plain TypeScript for the window (`device-app/ui`); Python `unittest` and Bash for the release rules (`device-app/scripts`); GitHub Actions.
+**Tech Stack:** Next.js 16 and vitest (`website/`), Flutter and Dart (`desktop/`) for Tasks 37 to 46; Rust 1.95+ and Tauri 2.12 (`device-app/src-tauri`; its AppImage bundler is tauri-bundler 2.10.4's linuxdeploy `07333c6` with the `continuous` linuxdeploy-plugin-appimage), `windows-sys` 0.61 (already in Tauri's tree) on Windows, std and `libc` on Linux; plain TypeScript for the window (`device-app/ui`); Python `unittest` and Bash for the release rules (`device-app/scripts`); GitHub Actions.
 
 **Spec:** `docs/plans/2026-11-19-device-app-win-linux-design.md`. Read it with this plan, the root `AGENTS.md`, `device-app/AGENTS.md`, `device-app/RELEASE.md`, `docs/validation-and-release.md` and `docs/windows-code-signing.md`.
 
@@ -81,8 +82,21 @@ Checked on this Mac, 2026-11-19: `cargo check --locked --lib --target x86_64-pc-
 | 44 | End to end: Desktop installs the real app on Windows and Linux | `DT/integration_test/device_app_install_windows_linux_native_test.dart` (new), `.github/workflows/tmp-device-app-win-linux.yml` | 43, 46 | high | none: test tooling, one commit; its job is the evidence |
 | 45 | Docs: who reads which download key | `DA/RELEASE.md` | 37, 38, 43, 46 | medium | none: docs, one commit |
 | 46 | Linux: Desktop puts the app in the app list | `DT/lib/devices/device_app_launcher.dart` (new), `DT/test/devices/device_app_launcher_test.dart` (new), `DT/lib/core/linux_app_image.dart`, `DT/lib/devices/device_app_installer.dart`, `DT/test/devices/device_app_installer_test.dart`, `DT/lib/app_shell.dart` | 40 | high | `device_app_launcher_test.dart`, `device_app_installer_test.dart` new cases |
+| 47 | Linux: does each AppImage start without `libfuse2`? (the probe) | `.github/workflows/tmp-device-app-win-linux.yml`, `DA/scripts/e2e/appimage-starts.sh` (new) | none | high | none: a probe on the temporary workflow, one commit; its run is the evidence |
+| 48 | The Device app's AppImage on the static runtime | `DA/scripts/appimage-runtime.sh` (new), `DA/scripts/test_appimage_runtime.py` (new), `DA/scripts/release-build.sh`, `DA/scripts/release-check.sh`, `DA/scripts/test_release_build.py`, `.github/workflows/tmp-device-app-win-linux.yml` | 47 | xhigh | `test_appimage_runtime.py`, `test_release_build.py` new cases (none if Task 47 finds it starts already) |
+| 49 | Desktop's AppImage on the static runtime | if needed: `DT/scripts/package-desktop-linux.sh` (new), `DT/scripts/upload-desktop-linux.sh`, `.github/workflows/release-desktop.yml`, `DA/scripts/test_appimage_runtime.py`, `DT/RELEASE.md`; always `.github/workflows/tmp-device-app-win-linux.yml` | 47, 48 | high | `test_appimage_runtime.py` new case (none if Task 47 finds it starts already) |
+| 50 | One rule for `harness-device.desktop`: the vectors | `tests/fixtures/app-list-entry-vectors.json` (new), `scripts/ci-plan.py`, `scripts/tests/test_ci_plan.py` | 47 | high | `test_ci_plan.py` new case |
+| 51 | Linux: the Device app lists itself in the app list | `ST/src/app_list.rs` (new), `ST/src/lib.rs`, `ST/src/main.rs`, `DA/scripts/e2e/linux.sh` | 50 | high | `app_list.rs` |
+| 52 | Desktop writes the app's entry by the same rule; the flow test | `DT/lib/devices/device_app_launcher.dart`, `DT/test/devices/device_app_launcher_test.dart`, `DT/lib/core/linux_app_image.dart`, `DT/test/linux_app_image_test.dart`, `DT/test/devices/device_app_flow_test.dart`, `DT/test/support/device_app.dart` | 50 | high | `device_app_launcher_test.dart`, `linux_app_image_test.dart`, `device_app_flow_test.dart` new cases |
+| 53 | The one-line installer and its route | `WS/scripts/device-install.sh` (new), `WS/scripts/device-install.spec.ts` (new), `WS/scripts/upload-device-install-sh.sh` (new), `WS/next.config.js`, `WS/README.md` | 50 | xhigh | `device-install.spec.ts` |
+| 54 | End to end: the one line on Ubuntu 24.04 with no `libfuse2` | `DA/scripts/e2e/linux-install.sh` (new), `DA/scripts/e2e/https-fake-cdn.py` (new), `.github/workflows/tmp-device-app-win-linux.yml` | 48, 51, 53 | high | none: test tooling, one commit; its job is the evidence |
+| 55 | `/device` shows the line to Linux visitors | `WS/src/lib/installCommand.ts`, `WS/src/lib/installCommand.spec.ts`, `WS/src/app/device/DeviceDownload.tsx`, `WS/src/app/device/DeviceDownload.spec.tsx` | 53 | high | `installCommand.spec.ts`, `DeviceDownload.spec.tsx` new cases |
+| 56 | End to end: Desktop's entry and the app's are one | `DT/integration_test/device_app_install_windows_linux_native_test.dart` | 51, 52 | medium | none: test tooling, one commit; its job is the evidence |
+| 57 | Docs: installing on Linux | `DA/RELEASE.md`, `DA/AGENTS.md`, `docs/validation-and-release.md` | 47 to 56 | medium | none: docs, one commit |
 
 **Longest chain:** 2 → 3 → 4 → 12 → 26 → 32 → 34 → 36 (eight tasks). Tasks 1, 2, 6, 7, 14, 18, 27 and 28 start at once. Tasks 1 to 36 have landed. Of the section 10 tasks, 37, 38, 39 and 41 start at once; 40 and 42 run side by side after 39; 43 and 46 run side by side after 40 (43 also waits for 41 and 42); the longest chain is 39 → 40 → 43 → 44 (four tasks; 39 → 40 → 46 → 44 is as long). The website tasks (37, 38) share no file with the Desktop tasks; 40, 41 and 42 share no file with each other, nor do 43 and 46. `ST/src/main.rs` is in nine tasks (14, 17, 20 to 26) and `ST/src/runner.rs` in five; those run one after another because they share the file, in any order their own dependencies allow.
+
+Section 11 (Tasks 47 to 57): 47 starts at once; its report (the before table and the window's `WM_CLASS`) is what 48, 49 and 50 start from. After 50, Tasks 51 (Rust), 52 (Desktop) and 53 (website) run side by side, sharing no file. The longest chain is 47 → 50 → 51 → 54 → 57 (five tasks; 47 → 50 → 53 → 54 → 57 and 47 → 50 → 53 → 55 → 57 are as long). The temporary workflow is in 47, 48, 49 and 54, so those four run one after another.
 
 ## Global Constraints
 
@@ -109,6 +123,14 @@ Checked on this Mac, 2026-11-19: `cargo check --locked --lib --target x86_64-pc-
   - Desktop's words (spec §10, harness-pm 2026-11-20). macOS, unchanged: the band's `Your dial follows apps and terminal tabs with the Harness menu-bar app.`; the row's `Menu-bar app` and `Follows the app and terminal tab in front.` Windows and Linux: the band's `Your dial follows apps with the Harness tray app.`; the row's `Tray app` and `Follows the app in front.` The failure lines and the buttons are the same on every OS.
   - Linux app-list entry (Task 46): `<data>/applications/harness-device.desktop` and its icon `<data>/icons/harness-device.png`, `<data>` being `XDG_DATA_HOME`, else `~/.local/share` (as Desktop's own `harness.desktop`). The entry, byte for byte: `[Desktop Entry]\nType=Application\nName=Harness Device\nComment=The app for your Harness device.\nExec=<the place, quoted as Desktop quotes its own>\nIcon=<data>/icons/harness-device.png\nTerminal=false\nCategories=Utility;\n` (no `Icon=` line when the icon could not be taken from the AppImage).
 - **The manifest stays input on every surface.** The website redirects only into `<prefix><X.Y.Z>/<file>` with the route's extension; Desktop downloads only a URL `_fetchable` passes, saves it under a fixed name, and runs a Windows installer only after its Authenticode signer matches the running Desktop's.
+- **Installing on Linux (section 11), exact names:**
+  - The app-list entry, every writer: `<data>/applications/harness-device.desktop`, its icon `<data>/icons/harness-device.png`; `<data>` is `XDG_DATA_HOME` when it is absolute, else `$HOME/.local/share` when `HOME` is absolute, else nothing is written. The entry's bytes are the vectors file's (Task 50): Task 46's bytes with one line added last, `StartupWMClass=<the Device app window's WM_CLASS class, as Task 47 reads it>`. This supersedes Task 46's bytes in the line above.
+  - The icon is the image's own `usr/share/icons/hicolor/128x128/apps/harness-device.png`: the Device app reads it under its `APPDIR`; Desktop and the one-line installer take it with `--appimage-extract`.
+  - Log lines of the Device app: `app list: entry written`, `app list: entry not written (error N)` (the OS error's code) or `app list: entry not written (<io::ErrorKind>)`. No path.
+  - The static runtime (only where Task 47 says it is needed): `https://github.com/AppImage/type2-runtime/releases/download/20251108/runtime-x86_64` and `…/runtime-aarch64`, each pinned by its sha256 in `DA/scripts/appimage-runtime.sh`.
+  - The one-line installer: source `website/scripts/device-install.sh`, published to `gs://s3-autonomous-upgrade-3/harness/device/install.sh` (`https://cdn.autonomous.ai/harness/device/install.sh`) by `website/scripts/upload-device-install-sh.sh`; `https://harness.autonomous.ai/device/install.sh` redirects there for good. The line: `curl -fsSL https://harness.autonomous.ai/device/install.sh | bash`. It installs to `~/.local/opt/Harness-Device.AppImage` (Desktop's place, Task 39) from the manifest key `device-linux-x64-appimage` or `device-linux-arm64-appimage`.
+  - Its words: `Fetching the latest Harness Device release…`, `Downloading Harness Device ${VERSION}…`, `Harness Device $VERSION installed at $DESTINATION`; each failure `Harness Device installer: <reason>` on stderr, exit 1, the reasons as `desktop-install.sh`'s Linux branch with `Harness Device` for `Harness desktop`/`Harness` and `AppImage` for `archive`; off Linux `Harness Device installer: this installer is for Linux (found: <uname -s>).`
+  - `/device`'s line (spec: it names no plan and no package): `Or in a terminal:` then the command in a `code` element.
 
 ## Decided here, where the spec was silent
 
@@ -170,6 +192,20 @@ Named differences of section 10 (Windows / Linux against macOS):
 
 Section 10 answers (harness-pm, 2026-11-20, spec §10): the copy per OS (Global Constraints; Tasks 38, 43), and the Linux app-list entry Desktop writes (Task 46).
 
+## Decided here for section 11 (installing on Linux)
+
+- **The probe runs on GitHub's runners, not Podman.** The static runtime mounts with FUSE through `fusermount3`, which a container gets only with `/dev/fuse` and `SYS_ADMIN`, and a bare `ubuntu` image lacks the desktop libraries an AppImage leans on: neither is the clean Ubuntu a person has. `ubuntu-24.04`, `ubuntu-22.04`, `ubuntu-24.04-arm` and `ubuntu-22.04-arm` are disposable VMs; the job removes `libfuse2` (and `libfuse2t64` on 24.04), proves `ldconfig -p` names no `libfuse.so.2`, and installs `fuse3` when missing (a stock Ubuntu desktop has it since 22.04). Podman stays a local way to read a log, never the evidence.
+- **What "starts" means** (`appimage-starts.sh`, Task 47): within 60 s a process of the run has its `/proc/<pid>/exe` under the runtime's FUSE mount (`${TMPDIR:-/tmp}/.mount_*`), with `APPIMAGE_EXTRACT_AND_RUN` unset; the runtime exiting first is a failure, named by the first line it printed (the dynamic runtime's `dlopen(): error loading libfuse.so.2`). It is the step a double-click takes: the runtime mounts the image and runs what is in it. The Device app's debug build is probed: the runtime is the bundler's whichever profile (`release-build.sh` runs the same `cargo tauri bundle --bundles appimage`). Desktop's is the current release's AppImage from the public manifest (Open question 1).
+- **How the runtime is replaced** (Task 48, only if needed): after Tauri's bundle, `appimage-runtime.sh` asks the bundled AppImage for `--appimage-offset` (the old runtime answers without FUSE), checks the bytes there are squashfs (`hsqs`), and writes the pinned runtime followed by those bytes, mode 0755, over the same file; it then asks the new file for its offset (the pinned runtime's size) and checks `hsqs` again. Tauri has no setting for the runtime (tauri-bundler 2.10.4 takes linuxdeploy-plugin-appimage's), so this is the one way; it runs inside `release-build.sh bundle`, before the update signature, so `sign-update` signs the shipped bytes. The pinned file is downloaded once into `${XDG_CACHE_HOME:-$HOME/.cache}/harness-device-build/` and its sha256 checked at every use.
+- **The app-list entry's one rule**, for every writer (Device app, Desktop, the one-line installer): no entry → write. An entry whose `Exec=` names this AppImage → leave it when its bytes are the ones this writer would write and the icon it names is there, else write. An entry whose `Exec=` names an absolute path that is not on disk → write. Anything else (another AppImage on disk, a relative `Exec=`, no `Exec=`) → leave. Written through a temp file and a rename, the icon first. A path holding a control character, or not UTF-8, writes nothing. The vectors file holds every case; the Rust, Dart and website tests read it, so the writers cannot drift.
+- **The one-line installer writes the entry only when none exists**, and leaves every other case to the app it starts, whose first run applies the whole rule (Task 51) a moment later: the end state is the rule's in every case, and the script holds no `Exec=` parser.
+- **The Device app writes the entry at every launch from an AppImage**, on a thread of its own beside the tray-host check, so a slow or failing disk never holds or fails the launch. It writes nothing outside an AppImage (`APPIMAGE` unset, relative or not a file) and runs no `update-desktop-database` (the entry has no `MimeType=`, which is all that cache is for). The icon is read from `$APPDIR` (absolute, as `appimage_env.rs` takes it): the image's own file, no FUSE beyond the mount the app already runs from, and byte for byte the file Desktop and the script extract.
+- **The installer starts the app with `setsid -f`**, its output to `/dev/null`: piped from `curl`, the script has no job control, so a plain `&` leaves the app in the terminal's process group and closing the terminal would end it.
+- **`/device`'s line** shows when the visitor's OS is Linux (`linux`, `linux-x64` or `linux-arm64`, whatever the CPU: the script picks the arch itself) and the release's builds include a Linux AppImage; under the offer when there is one, else above the links. It is a `styles.meta` line with the command in a `styles.kbd` `code` element, the page's own classes; no button, no new style. The command is in `installCommand.ts`, beside the CLI's, the one place install URLs are written.
+- **Where Desktop's and the app's entries meet** (Task 56): Desktop writes the entry before it starts the app it installed; the app's first run then finds its own `Exec=` with the same bytes and leaves the file (its bytes and mtime unchanged).
+
+Named differences of section 11: none new. GNOME without the AppIndicator extension stays the spec's §7 row (`tray: no host`).
+
 ## Answers (harness-pm, 2026-11-19)
 
 1. **Copy for Linux's terminal step** (Tasks 16, 17, 35): kept as written: `Finish in the terminal…`, `Setup failed. Press Enter to close.`; `No terminal found.` went (with no terminal the line runs behind the screen) and `The terminal did not open.` came, for a terminal that never runs the script.
@@ -194,6 +230,14 @@ Section 10 (Tasks 37 to 46):
 3. **A profile path with a space and an accent** (`C:\Users\Nguyễn Văn A`, `/home/p q`): the place, the installer's argument, `tasklist`'s user filter and the Linux entry's `Exec=`. Tests: Task 39 `the Windows place is under LOCALAPPDATA` and `the Linux place is beside Desktop's own AppImage` (both with such paths); Task 42 `tasklist asks for harness-device.exe of this user, as CSV with no header`; Task 46 `a place with a space is quoted in Exec=`.
 4. **Another user's Device app on the same computer must not hide the offer.** Tests: Task 42 `/proc: a harness-device of this user counts; another user's, another name or a vanished entry does not`; the `USERNAME` filter in the `tasklist` case.
 5. **A Linux ARM or Windows ARM visitor whose browser says nothing** gets x64, and one that says gets arm64. Tests: Task 37 `a Chromium on Linux that sends the hints gets arm64 although its user agent says x86_64`, `Windows on ARM without hints gets x64`; Task 38 `asks Chromium for the CPU on /device`.
+
+Section 11 (Tasks 47 to 57):
+
+1. **A copy of the AppImage in Downloads must not take the app list from the installed one, nor the reverse.** Two copies on disk: whichever entry is there stays. Tests: the vectors' `another AppImage on disk` decision, read by Task 51 `who_writes_the_entry_is_one_rule`, Task 52 `the decisions are the vectors'`; Task 51's linux.sh check `an entry naming another AppImage on disk is left alone`.
+2. **A home folder with a space, a `%` or a `$`** (`/home/p q`, `~/100%`): every writer's `Exec=` starts the right file. Tests: the vectors' `exec` cases in Tasks 51 and 52; Task 53 `a home with a space, a percent and a dollar is quoted as the app quotes it`; Task 51's linux.sh runs from `My Apps`.
+3. **An unwritable or full data folder must not stop the app.** Tests: Task 51 `a_failure_is_a_log_line_not_a_panic`; linux.sh `with a read-only applications folder the tray still registers and the log says app list: entry not written (error 13)`.
+4. **A tampered or half-downloaded AppImage must never be placed or run by the one line.** Tests: Task 53 `refuses a URL outside the device release folders`, `refuses a size or a sha256 that does not match, and leaves nothing at the place`; Task 54's first check.
+5. **Closing the terminal the line ran in must not end the app.** Tests: Task 53 `starts the app in a session of its own`; Task 54 `the app outlives the shell that ran the line`.
 ---
 
 ### Task 1: Temporary workflow
@@ -901,6 +945,174 @@ Depends on 40 (it changes the installer's Linux step that Task 40 writes, in the
 - [ ] **Step 3: Implement.**
 - [ ] **Step 4:** both files and `test/linux_app_image_test.dart` pass, and `flutter analyze` is clean. **Step 5: Commit** `Desktop lists Harness Device in Linux's app list when it installs it, and takes the entry out once the AppImage is gone`.
 
+### Task 47: Linux: does each AppImage start without `libfuse2`? (the probe)
+
+**Files:** Create `DA/scripts/e2e/appimage-starts.sh`; modify `.github/workflows/tmp-device-app-win-linux.yml`.
+
+A probe: one commit, no red test; its run is the evidence, and its report decides Tasks 48, 49 and 50. Never production but one read: Desktop's current AppImage from the public manifest (Open question 1). Rules: "Decided here for section 11".
+
+**Interfaces — Produces:**
+- `appimage-starts.sh <AppImage> <name>`: scratch `HOME`, XDG folders and `TMPDIR` under one `mktemp -d`; `APPIMAGE_EXTRACT_AND_RUN` unset; the AppImage started in a process group of its own. Prints `note: <name>: <file -L's description of the AppImage>` (it says `static-pie linked` or `dynamically linked`), then `ok: <name> starts from its FUSE mount`, or `FAILED: <name>: <the runtime's first output line>` (also `FAILED: <name>: nothing ran from a FUSE mount within 60 s`); ends the group and removes the scratch folder whatever happened; exit 0 or 1. Run under `xvfb-run -a dbus-run-session --`. `EXPECT=start` (Tasks 48, 49) makes a `FAILED` fail the step; without it the step stays green and the line is the result.
+- The report's table: for each runner, `libfuse2` gone (yes/no), `fusermount3` there before the run (yes/no), the two `file -L` notes, and `ok`/`FAILED` for `Harness Device` and `Harness`; and the line `note: Harness Device window WM_CLASS = "<instance>", "<class>"`.
+
+- [ ] **Step 1: The script**, as above. `bash -n` and `shellcheck` print nothing.
+- [ ] **Step 2: Two jobs in the temporary workflow.**
+  - `fuse-device-build` (`ubuntu-22.04`, `ubuntu-22.04-arm`, 60 min): `linux-e2e`'s apt line, Node, UI packages, Rust, Tauri CLI and `cargo tauri build --ci --debug --bundles appimage -- --locked`, unchanged; uploads the AppImage as `fuse-device-<arch>` (`retention-days: 1`).
+  - `fuse-probe` (needs `fuse-device-build`; `ubuntu-24.04`, `ubuntu-22.04`, `ubuntu-24.04-arm`, `ubuntu-22.04-arm`; 20 min): downloads its arch's artifact; reads `desktop-linux-<x64|arm64>` from `https://storage.googleapis.com/s3-autonomous-upgrade-3/harness/desktop/metadata.json` and downloads its AppImage only when the URL is `https://cdn.autonomous.ai/harness/desktop/<X.Y.Z>/Harness-linux-<arch>.AppImage` and its size and sha256 match; installs `xvfb xauth dbus-x11 xdotool x11-utils`. First, with `libfuse2` still there or `APPIMAGE_EXTRACT_AND_RUN=1`, starts the Device app with an empty state (its first window opens), waits up to 60 s for it with `xdotool search --sync --onlyvisible --pid`, prints the `WM_CLASS` note from `xprop`, and ends it. Then removes `libfuse2`/`libfuse2t64` (only what `dpkg-query` lists), fails unless `ldconfig -p | grep -c libfuse.so.2` is 0, installs `fuse3` if `fusermount3` is missing (and says so), and runs `appimage-starts.sh` on both, writing the table to `$GITHUB_STEP_SUMMARY`.
+  - `go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 .github/workflows/tmp-device-app-win-linux.yml` prints nothing.
+- [ ] **Step 3: Commit** `Temporary workflow: does each AppImage start on Ubuntu 22.04 and 24.04 with no libfuse2`. Once its run is done, the report carries the run's link, the table and the `WM_CLASS` line. If no window opened, say so: Task 50 then reads `WM_CLASS` from linux-e2e's sign-in window.
+
+### Task 48: The Device app's AppImage on the static runtime
+
+**Files:** Create `DA/scripts/appimage-runtime.sh`, `DA/scripts/test_appimage_runtime.py`; modify `DA/scripts/release-build.sh`, `DA/scripts/release-check.sh`, `DA/scripts/test_release_build.py`, `.github/workflows/tmp-device-app-win-linux.yml`.
+
+**If Task 47 found `ok: Harness Device starts` on all four runners:** no code changes. Set `EXPECT=start` for the Device app in `fuse-probe`; once green, the report has both runs' links (before and after are the same). One commit: `Temporary workflow: the Device app's AppImage must start with no libfuse2`. Stop here.
+
+**Otherwise — Interfaces — Produces:**
+- `appimage-runtime.sh <AppImage>`: picks `runtime-x86_64` or `runtime-aarch64` from the AppImage's ELF machine (62 or 183, as `release-check.sh` reads it), downloads it into the cache folder unless there, refuses (`appimage-runtime: <file> is not the runtime pinned here`, exit 1) when its sha256 is not the pin, and replaces the runtime as "Decided here for section 11" says. Fails, leaving the AppImage untouched, when the offset cannot be read or holds no `hsqs`. Prints `appimage-runtime: <name> now starts with type2-runtime 20251108`.
+- `release-build.sh bundle` on Linux calls it on the bundled AppImage before the move. `release-check.sh` on Linux gains `check "the AppImage starts with the pinned runtime"`: its first `<pinned size>` bytes hash to the pin.
+
+- [ ] **Step 1: Failing tests.**
+  - `test_appimage_runtime.py` (a fake "AppImage": a `#!/bin/sh` script, padded, that answers `--appimage-offset` with where its `hsqs` payload starts; a fake runtime file in a pre-filled cache folder; a fake `curl` that records and serves): `the runtime is replaced and the payload kept` (the new file is the runtime's bytes then the old payload's, mode 0755); `a runtime whose sha256 is not the pin is refused and the AppImage is untouched`; `an AppImage with no squashfs at its offset is refused and untouched`; `the pinned file is downloaded once from the 20251108 release` (the URL exactly; a second run makes no request); `each arch takes its own runtime` (ELF machine 62 → `runtime-x86_64`, 183 → `runtime-aarch64`, other → refused); `the pins are 64 hex characters, one per arch`.
+  - `test_release_build.py`: `linux: bundle puts the pinned runtime in front of the AppImage before it is moved` (the fake cargo's AppImage, as the fakes above); `linux: release-check refuses an AppImage that does not start with the pinned runtime`.
+- [ ] **Step 2:** `python3 -m unittest device-app/scripts/test_appimage_runtime.py device-app/scripts/test_release_build.py` FAILS. Commit red.
+- [ ] **Step 3: Implement.** Record each pin as the sha256 of the asset downloaded from the 20251108 release (and checked against the release's signature file if it publishes one; say which in the report). In the temporary workflow, every Device AppImage build (`linux-e2e`, `desktop-device-app-e2e`, `fuse-device-build`) runs `bash device-app/scripts/appimage-runtime.sh <AppImage>` right after `cargo tauri build`; `fuse-probe` sets `EXPECT=start` for the Device app.
+- [ ] **Step 4:** both test files pass on this Mac; on GitHub `fuse-probe` prints `ok: Harness Device starts from its FUSE mount` on the four runners (the after evidence; Task 47's run is the before) and `linux-e2e` stays green. **Step 5: Commit** `Harness Device's AppImage starts with no libfuse2: the static type2 runtime, pinned`.
+- If the runtime cannot be replaced (the app does not start on it either), stop and report both runs: the fallback words are Open question 3.
+
+### Task 49: Desktop's AppImage on the static runtime
+
+**Files (only when needed):** Create `DT/scripts/package-desktop-linux.sh`; modify `DT/scripts/upload-desktop-linux.sh`, `.github/workflows/release-desktop.yml`, `DA/scripts/test_appimage_runtime.py`, `DT/RELEASE.md`. Always: `.github/workflows/tmp-device-app-win-linux.yml`.
+
+Depends on 48: it reuses Task 48's pins (and shares its test file).
+
+**If Task 47 found `ok: Harness starts` on all four runners** (`appimagetool` 1.9.1 already embeds the static runtime): no code. `fuse-probe` sets `EXPECT=start` for Desktop. One commit: `Temporary workflow: Desktop's AppImage must start with no libfuse2`. Stop here.
+
+**Otherwise:**
+- `package-desktop-linux.sh VERSION OUTPUT`: steps 2 and 3 of `upload-desktop-linux.sh` moved out unchanged (build, `version.txt`, AppDir, `appimagetool`), plus `--runtime-file "$APPIMAGE_RUNTIME"`; `upload-desktop-linux.sh` calls it and keeps only the version and upload steps. `release-desktop.yml`'s `build-linux` downloads Task 48's pinned runtime for its arch beside `appimagetool`, checks its sha256 and exports `APPIMAGE_RUNTIME`.
+- [ ] **Step 1: Failing test** in `test_appimage_runtime.py`: `release-desktop.yml pins the same runtime as appimage-runtime.sh` (reads the workflow, as `test_release_workflow.py` does: the 20251108 URL and the two sha256s are the script's). **Step 2:** it FAILS. Commit red.
+- [ ] **Step 3: Implement.** In the temporary workflow, a job `fuse-desktop-build` (`ubuntu-22.04`, `ubuntu-22.04-arm`) runs `package-desktop-linux.sh 0.0.0` with `release-desktop.yml`'s toolchain steps and hands the AppImage to `fuse-probe` in place of the release's; `EXPECT=start` for Desktop.
+- [ ] **Step 4:** the test passes; `fuse-probe` prints `ok: Harness starts from its FUSE mount` on the four runners. **Step 5: Commit** `Harness Desktop's AppImage starts with no libfuse2: the static type2 runtime, pinned`.
+
+### Task 50: One rule for `harness-device.desktop`: the vectors
+
+**Files:** Create `tests/fixtures/app-list-entry-vectors.json`; modify `scripts/ci-plan.py`, `scripts/tests/test_ci_plan.py`.
+
+**Interfaces — Produces** `tests/fixtures/app-list-entry-vectors.json` (read by Tasks 51, 52, 53), UTF-8, two-space JSON:
+- `"startupWMClass"`: the class from Task 47's `WM_CLASS` note (its second string).
+- `"dataHome"`: cases `{ "env": {"HOME"?, "XDG_DATA_HOME"?}, "dataHome": string | null }`: absolute XDG wins; a relative or empty XDG falls back to `HOME/.local/share`; no absolute HOME and no absolute XDG → null.
+- `"exec"`: cases `{ "path", "exec": string | null }`, each `exec` what Desktop's `quoteLauncherExec` answers today: `/home/p/.local/opt/Harness-Device.AppImage` (plain); `/home/p q/.local/opt/Harness-Device.AppImage` (`"…"`); `/home/p/100%/H.AppImage` (`%%`, no quotes); `/home/p/a"b$c` + "`" + `d\e/H.AppImage` (each of the four backslashed, quoted); `/home/p/naïve/H.AppImage` (plain); a path with a newline (null: nothing is written).
+- `"entries"`: `{ "appImage", "dataHome", "icon": bool, "entry" }` for the plain and the spaced path, with and without icon: the bytes of Global Constraints, `StartupWMClass=` last.
+- `"decisions"`: `{ "name", "appImage", "existing": string | null, "onDisk": [paths], "write": bool }`: no entry; own `Exec=` and the same bytes with its icon on disk (leave); own `Exec=`, same bytes, icon gone (write); own `Exec=`, Task 46's old bytes without `StartupWMClass` (write); another AppImage on disk (leave); an absolute path not on disk (write); `Exec=harness-device` (leave); no `Exec=` line (leave); a quoted `Exec=` with `%%` naming this AppImage (own).
+
+- [ ] **Step 1: Failing test** in `test_ci_plan.py`: `test_the_app_list_vectors_select_desktop_device_app_and_website` (a change to the fixture alone selects `desktop`, `device-app` and `website`, as `test_a_file_another_suite_reads_selects_that_suite` builds its plan). **Step 2:** `python3 -m unittest scripts/tests/test_ci_plan.py` FAILS. Commit red.
+- [ ] **Step 3:** Write the fixture. In `ci-plan.py` add `tests/fixtures/app-list-entry-vectors.json` to both tables (source inputs and selection) for `device-app` and `website`, and to `desktop`'s selection (its checkout already holds `tests/`), each with a one-line comment naming the reader.
+- [ ] **Step 4:** `test_ci_plan.py` passes (the existing `test_every_declared_input_selects_the_suite_that_reads_it` too). **Step 5: Commit** `One rule for Harness Device's Linux app-list entry: the vectors every writer's tests read`.
+
+### Task 51: Linux: the Device app lists itself in the app list
+
+**Files:** Create `ST/src/app_list.rs`; modify `ST/src/lib.rs` (one module line: `#[cfg(any(target_os = "linux", all(test, unix)))] pub mod app_list;`), `ST/src/main.rs` (the Linux block beside the tray-host thread), `DA/scripts/e2e/linux.sh`.
+
+**Interfaces — Consumes:** the vectors (Task 50). **Produces** (`app_list.rs`):
+- `pub const ENTRY: &str = "harness-device.desktop"`, `pub const ICON_MEMBER: &str = "usr/share/icons/hicolor/128x128/apps/harness-device.png"`, `pub const WM_CLASS: &str` (the vectors' value).
+- `pub fn data_home(xdg_data_home: Option<&OsStr>, home: Option<&Path>) -> Option<PathBuf>`.
+- `pub fn exec_value(appimage: &Path) -> Option<String>` (Desktop's `quoteLauncherExec`, ported; None for a control character or not UTF-8) and `pub fn exec_target(entry: &str) -> Option<String>` (Desktop's `launcherExecTarget`, ported).
+- `pub fn entry(exec: &str, icon: Option<&Path>) -> String`.
+- `pub enum Change { Write, Leave }` and `pub fn change(existing: Option<&str>, appimage: &Path, wanted: &str, exists: impl Fn(&Path) -> bool) -> Change` (the rule; "exists" also answers for the icon named in `wanted`).
+- `pub fn apply(data_home: &Path, appimage_var: Option<&OsStr>, appdir_var: Option<&OsStr>) -> Result<bool, String>`: Ok(true) when it wrote. Icon bytes from `<APPDIR>/<ICON_MEMBER>` (APPDIR absolute) or none; written as `loginitem_linux::write` writes (temp file, rename), icon first. The error is `failed`'s shape: `app list: entry not written (error N)` / `(<kind>)`.
+- `#[cfg(target_os = "linux")] pub fn system() -> Option<String>`: the log line to write (`app list: entry written`, or the error), None when it left the entry or the run is no AppImage.
+- `main.rs`, the `#[cfg(target_os = "linux")]` block: a second `thread::spawn` that logs `app_list::system()`'s line when there is one.
+
+- [ ] **Step 1: Failing tests** (`app_list.rs`, `cfg(all(test, unix))`, the vectors by `include_str!` from `CARGO_MANIFEST_DIR/../../tests/fixtures/app-list-entry-vectors.json`, parsed with `serde_json`): `the_data_home_is_desktops` (vectors `dataHome`); `the_exec_line_quotes_as_desktop_does` (vectors `exec`); `the_entry_is_desktops_byte_for_byte` (vectors `entries`); `who_writes_the_entry_is_one_rule` (vectors `decisions`); `the_icon_comes_from_inside_the_image` (a temp APPDIR holding the member: the icon file has its bytes and the entry its `Icon=`; APPDIR unset, relative or without the file: no icon file, no `Icon=`); `not_an_appimage_writes_nothing` (APPIMAGE unset, relative, a folder); `a_second_run_leaves_the_entry` (Ok(true), then Ok(false), the entry's mtime unchanged); `a_failure_is_a_log_line_not_a_panic` (the data home is a file: `Err("app list: entry not written (error 20)")`, nothing panics); `the_entry_is_written_whole` (no temp file left; the folders are made).
+- [ ] **Step 2:** `cd device-app/src-tauri && cargo test --locked --lib app_list` FAILS (no module). Commit red.
+- [ ] **Step 3: Implement**, then linux.sh's checks (they run in `linux-e2e`, whose AppImage runs from `My Apps`): `the first run lists the app: harness-device.desktop is the vectors' entry for this AppImage, its icon a PNG` (the icon's bytes equal `--appimage-extract`'s of the member); `StartupWMClass is the window's WM_CLASS` (`xprop` on the app's window when the sign-in step shows it); `a second run leaves the entry, byte for byte and mtime`; `an entry naming another AppImage on disk is left alone`; `an entry naming a file that is gone is written again`; `with a read-only applications folder the tray still registers and the log says app list: entry not written (error 13)`.
+- [ ] **Step 4:** `cargo test --locked --lib` passes on this Mac; `linux-e2e` is green on both arches with the six new `ok:` lines. **Step 5: Commit** `Harness Device lists itself in Linux's app list when it runs from an AppImage, by the rule Desktop follows`.
+
+### Task 52: Desktop writes the app's entry by the same rule; the flow test
+
+**Files:** Modify `DT/lib/devices/device_app_launcher.dart`, `DT/test/devices/device_app_launcher_test.dart`, `DT/lib/core/linux_app_image.dart`, `DT/test/linux_app_image_test.dart`, `DT/test/devices/device_app_flow_test.dart`, `DT/test/support/device_app.dart`.
+
+**Interfaces — Consumes:** the vectors (Task 50). **Produces:**
+- `linux_app_image.dart`: `launcherDataHome` follows the vectors (an XDG that is not absolute is skipped; a `HOME` that is not absolute gives null). Desktop's own `harness.desktop` follows it too: the XDG spec's rule, a fix.
+- `device_app_launcher.dart`: `const deviceAppWindowClass` (the vectors' value), written last as `StartupWMClass=`; `writeDeviceAppLauncher` decides by the rule (`@visibleForTesting bool deviceAppLauncherChange({String? existing, required String appImage, required String wanted, required bool Function(String path) exists})` → true is write), writes nothing for a path with a control character, and writes through a temp file and a rename, icon first. `forgetGoneDeviceAppLauncher` is unchanged.
+- `support/device_app.dart`: `DeviceAppFixture({…, Future<DeviceAppInstallResult> Function()? install})`, the fake's `call` when null.
+
+- [ ] **Step 1: Failing tests.**
+  - `device_app_launcher_test.dart` (temp folders; `skip: Platform.isWindows` as today), reading the vectors from `../tests/fixtures/app-list-entry-vectors.json`: `the entry is the vectors' byte for byte` (each `entries` case, through `writeDeviceAppLauncher` with a fake extract); `the decisions are the vectors'` (each `decisions` case through `deviceAppLauncherChange`); `a path with a control character writes nothing`; `the entry is written whole` (no temp file left). Today's `the entry starts the place, named Harness Device, with its icon` now expects the vectors' bytes.
+  - `linux_app_image_test.dart`: `launcherDataHome is the vectors'` (each `dataHome` case).
+  - `device_app_flow_test.dart`, as a person on Linux: `linux: Install from the band lists Harness Device in the app list with the entry the app writes` (`TargetPlatformVariant.only(TargetPlatform.linux)`, `skip: Platform.isWindows` as its paths are POSIX; the fixture's `install` writes through the real `writeDeviceAppLauncher` into a temp data home with a fake extract, inside `tester.runAsync`, then answers done at the place; tap `device-app-band-install`; the band goes; the entry file equals the vectors' entry for that place).
+- [ ] **Step 2:** `cd desktop && flutter test test/devices/device_app_launcher_test.dart test/linux_app_image_test.dart test/devices/device_app_flow_test.dart` FAILS. Commit red.
+- [ ] **Step 3: Implement.** **Step 4:** those three files, `test/devices` and `flutter analyze` pass. **Step 5: Commit** `Desktop writes Harness Device's app-list entry by the rule the app follows, with its window class`.
+
+### Task 53: The one-line installer and its route
+
+**Files:** Create `WS/scripts/device-install.sh`, `WS/scripts/device-install.spec.ts`, `WS/scripts/upload-device-install-sh.sh`; modify `WS/next.config.js` (`redirects()`), `WS/README.md`.
+
+**Interfaces — Consumes:** the vectors (Task 50); the device manifest's Linux keys (Task 27). **Produces:**
+- `device-install.sh`, POSIX `sh`, Linux only, as `desktop-install.sh`'s Linux branch with these values: `METADATA_URL="${HARNESS_DEVICE_METADATA_URL:-https://storage.googleapis.com/s3-autonomous-upgrade-3/harness/device/metadata.json}"`; `OTA_KEY="device-linux-$RELEASE_ARCH-appimage"`; the URL only `https://cdn.autonomous.ai/harness/device/$VERSION/Harness-Device-linux-$RELEASE_ARCH.AppImage` or the same under `https://storage.googleapis.com/s3-autonomous-upgrade-3/harness/device/`; `DESTINATION="$HOME/.local/opt/Harness-Device.AppImage"` (no override); staging in a `mktemp -d` beside it, removed on exit; size, then sha256, then `chmod 755`, then the move with the backup; refuses while `pgrep -f "$DESTINATION"` finds it running. Then the icon (`--appimage-extract usr/share/icons/hicolor/128x128/apps/harness-device.png` in the staging folder) and the entry, only when no `harness-device.desktop` exists (the data home and `Exec=` quoting by the vectors' rules; a path with a control character writes no entry); none of this fails the install. Then `setsid -f "$DESTINATION" >/dev/null 2>&1 </dev/null`.
+- `upload-device-install-sh.sh`: `upload-desktop-install-sh.sh` with `harness/device/install.sh` and this script, the same headers.
+- `next.config.js`: `{ source: '/device/install.sh', destination: 'https://cdn.autonomous.ai/harness/device/install.sh', permanent: true }` beside `/desktop/install.sh`'s.
+
+- [ ] **Step 1: Failing tests** in `device-install.spec.ts`, run as `desktop-install.spec.ts` runs its script (stub `uname`, `curl`, `pgrep`, `setsid` first on PATH; real `sha256sum`/`sed`; a temp HOME; the "AppImage" a `#!/bin/sh` file that writes `squashfs-root/<member>` for `--appimage-extract <member>` and otherwise records that it ran): `is valid POSIX shell`; `refuses a computer that is not Linux` (Darwin: exit 1, the exact line, nothing downloaded); `takes the AppImage of this arch from the device manifest` (x86_64 and aarch64: the key read and the URL fetched); `refuses a URL outside the device release folders` (Desktop's folder, another version than the manifest's, `..`, `%2e%2e`, a query, a fragment, the other arch's file, `http:`: each exit 1, nothing at the place; the GCS URL is accepted); `refuses a size or a sha256 that does not match, and leaves nothing at the place`; `places the AppImage executable and starts it` (mode 0755, the bytes served, the start through `setsid -f` with no argument); `writes the entry the app writes` (its lines are the vectors' `entries` case with icon, with this HOME's `Exec=` and `Icon=`); `a home with a space, a percent and a dollar is quoted as the app quotes it` (`Exec=` as the vectors' rule gives it for that path); `an entry already there is left for the app` (byte for byte); `starts the app in a session of its own` (the stub `setsid` saw `-f`); `refuses while the app runs from the place`; `redirects /device/install.sh to the CDN for good` (the entry above in `redirects()`); `uploads to harness/device/install.sh` (the upload script's `GCS_PATH` and `sh -n` line).
+- [ ] **Step 2:** `cd website && npx vitest run scripts/device-install.spec.ts` FAILS. Commit red.
+- [ ] **Step 3: Implement.** README: the installers row gains `/device/install.sh`; under it: `The Harness Device installer's source is scripts/device-install.sh, published with scripts/upload-device-install-sh.sh.`
+- [ ] **Step 4:** `npm test` and `npm run lint` pass; `sh -n` and `shellcheck -s sh` print nothing. **Step 5: Commit** `Website: a one-line installer for Harness Device on Linux, served as Desktop's is`.
+
+### Task 54: End to end: the one line on Ubuntu 24.04 with no `libfuse2`
+
+**Files:** Create `DA/scripts/e2e/linux-install.sh`, `DA/scripts/e2e/https-fake-cdn.py`; modify `.github/workflows/tmp-device-app-win-linux.yml`.
+
+Test tooling: one commit, no red test; its job is the evidence. Never production, no account: it runs only on a GitHub-hosted runner (it refuses without `GITHUB_ACTIONS=true` and `RUNNER_TEMP`), because it changes the runner's `/etc/hosts` and trust store.
+
+- `https-fake-cdn.py <folder> <cert> <key>`: serves the folder over HTTPS on 127.0.0.1:443 and logs each request line to `<folder>/../requests.log`.
+- `linux-install.sh <AppImage>` (this run's debug build, the runtime already swapped by Task 48 when it swaps it): removes `libfuse2`/`libfuse2t64` and proves it gone, `fuse3` as Task 47; makes a throwaway CA and a `cdn.autonomous.ai` certificate in a scratch folder, trusts the CA (`/usr/local/share/ca-certificates`, `update-ca-certificates`), maps `cdn.autonomous.ai` to 127.0.0.1 in `/etc/hosts`; serves `harness/device/<0.0.0>/Harness-Device-linux-<arch>.AppImage`, a manifest naming it under `e2e/metadata.json`, and the repository's `website/scripts/device-install.sh` as `harness/device/install.sh`; scratch `HOME` and XDG folders, the Device app's state seeded as `linux.sh` seeds it (it installs nothing and opens no window), `xvfb-run -a` and `dbus-run-session`; then runs exactly `curl -fsSL https://cdn.autonomous.ai/harness/device/install.sh | HARNESS_DEVICE_METADATA_URL=https://cdn.autonomous.ai/e2e/metadata.json bash` in a shell that ends when the line does. Checks, each `ok:` or `FAILED:`:
+  1. A manifest whose sha256 is one hex digit off: exit 1, `Harness Device installer: downloaded AppImage checksum does not match the release metadata`, no file at the place.
+  2. `libfuse2 is not on this computer`.
+  3. The line exits 0 and prints `Harness Device 0.0.0 installed at <HOME>/.local/opt/Harness-Device.AppImage`; the file is mode 0755 and the served bytes.
+  4. `the app runs from its FUSE mount` (Task 47's rule) within 60 s, its `/proc/<pid>/environ` naming `APPIMAGE=<the place>`.
+  5. `the app outlives the shell that ran the line` (the line's shell has ended; the app still runs).
+  6. `harness-device.desktop` is the vectors' entry for the place, with its icon (a PNG, the member's bytes).
+  7. `the app's first run leaves the installer's entry`: once the app's log has its first line, the entry's bytes and mtime are as after check 6, and the log has no `app list:` line.
+  8. A second run of the line while the app runs: exit 1, `Harness Device installer: Harness Device is running from <place>. Quit it, then run this installer again.`
+  It ends the app, stops the server, and restores `/etc/hosts` (the runner is thrown away after).
+- Temporary workflow job `install-sh-e2e` (`ubuntu-24.04`, `ubuntu-24.04-arm`, 90 min): builds the Device AppImage as `linux-e2e` does (with Task 48's runtime step, when Task 48 added one), then `bash device-app/scripts/e2e/linux-install.sh <AppImage>`. The workflow's `paths` gain `website/scripts/device-install.sh`.
+
+- [ ] **Step 1: Write them.** **Step 2:** `install-sh-e2e` is green on both runners with the eight `ok:` lines. **Step 3: Commit** `End to end: the one-line install of Harness Device on Ubuntu 24.04 with no libfuse2`.
+
+### Task 55: `/device` shows the line to Linux visitors
+
+**Files:** Modify `WS/src/lib/installCommand.ts`, `WS/src/lib/installCommand.spec.ts`, `WS/src/app/device/DeviceDownload.tsx`, `WS/src/app/device/DeviceDownload.spec.tsx`.
+
+`/device` is Diego's component: nothing in `page.tsx`, `page.module.css` or `DeviceFiles.tsx` changes; the line uses the page's own `styles.meta` and `styles.kbd`.
+
+**Interfaces — Produces:** in `installCommand.ts`, `DEVICE_INSTALL_URL = "https://harness.autonomous.ai/device/install.sh"` and `DEVICE_INSTALL_COMMAND = \`curl -fsSL ${DEVICE_INSTALL_URL} | bash\``, with a comment naming the script and its redirect. In `DeviceDownload.tsx`, `function InstallLine()` → `<span className={styles.meta}>Or in a terminal: <code className={styles.kbd}>{DEVICE_INSTALL_COMMAND}</code></span>`, rendered when `visitorOs(platform) === "linux"` and `builds.some((b) => b.os === "linux" && b.pkg === "appimage")`: after the `Offer` when there is one, else before `Others`.
+
+- [ ] **Step 1: Failing tests.**
+  - `installCommand.spec.ts`: `the Harness Device line is the documented one, verbatim` (the command exactly); `its URL is the one next.config sends to the CDN` (imports `../../next.config.js`, as `scripts/desktop-redirect.spec.ts` does: a permanent redirect from `/device/install.sh` to `https://cdn.autonomous.ai/harness/device/install.sh`).
+  - `DeviceDownload.spec.tsx` (the manifest builders the file has; `LINUX_APPIMAGE = { "device-linux-x64-appimage": { url: \`${CDN}Harness-Device-linux-x64.AppImage\`, size: 1 } }`): `gives a Linux visitor the one line beside its AppImage` (`linux-x64`: the Download button's href is the AppImage, and the text `Or in a terminal: curl -fsSL https://harness.autonomous.ai/device/install.sh | bash`, the command in a `code` element); `gives a Linux visitor of unknown CPU the line too` (`linux`: no button, the line, the links); `shows no line while the release has no Linux AppImage` (`LIVE`; `LIVE` with only `LINUX`'s deb); `shows no line to a Mac, a Windows PC or a phone` (with the AppImage key); `the line names no plan and no package` (its text has none of `AppImage`, `libfuse`, `.deb`, `plan`, `Pro`). Every existing case stays as it is and green.
+- [ ] **Step 2:** `cd website && npx vitest run src/lib/installCommand.spec.ts src/app/device/DeviceDownload.spec.tsx` FAILS. Commit red.
+- [ ] **Step 3: Implement.** **Step 4:** `npm test` and `npm run lint` pass. **Step 5: Commit** `Website: /device gives Linux visitors the one-line install once a release has their app`.
+
+### Task 56: End to end: Desktop's entry and the app's are one
+
+**Files:** Modify `DT/integration_test/device_app_install_windows_linux_native_test.dart`.
+
+Test tooling: one commit, no red test; `desktop-device-app-e2e` (Task 44's job, unchanged) is the evidence.
+
+- Check 7 now expects the vectors' entry (with `StartupWMClass=`), read from `../tests/fixtures/app-list-entry-vectors.json`. A new check after check 7, Linux: `the app's first run leaves Desktop's entry`: with the app running (check 4), once its log (`$XDG_DATA_HOME/ai.autonomous.harness.device/logs/app-*.log`) has a line, the entry's bytes and mtime are as Desktop wrote them, and the log has no `app list:` line.
+- [ ] **Step 1: Write it.** **Step 2:** `desktop-device-app-e2e` is green on its four runners (the new check on the two Linux ones). **Step 3: Commit** `End to end: the Device app leaves the app-list entry Desktop wrote for it`.
+
+### Task 57: Docs: installing on Linux
+
+**Files:** Modify `DA/RELEASE.md`, `DA/AGENTS.md`, `docs/validation-and-release.md`.
+
+One commit, no test. Describe what the code does.
+
+- [ ] **Step 1: `DA/RELEASE.md`.** The Linux AppImage: the runtime it starts with (the bundler's, or the pinned type2 runtime and how to move the pin: a new release tag, both sha256s, Task 48's test), and that it needs no `libfuse2`. The one-line installer: its source, its upload script, its URL and redirect; that it is uploaded by hand like Desktop's, and that it must be on the CDN before the first `platforms=all` release, since `/device` shows the line as soon as the manifest has a Linux AppImage (Open question 2 may change this line). The app-list entry: three writers, one rule, the vectors file.
+- [ ] **Step 2: `DA/AGENTS.md`.** "Fixed arguments" gains `harness-device.desktop` and its icon, written by the app at every launch from an AppImage (written, never run). "Commands" gains `linux-install.sh` and `appimage-starts.sh`.
+- [ ] **Step 3: `docs/validation-and-release.md`.** Under what PR CI does not run: the FUSE probe and the one-line install end to end (temporary workflow jobs here).
+- [ ] **Step 4: Commit** `Docs: Harness Device installs on Linux with no libfuse2, by one line, and lists itself`.
+
 ## Verification
 
 Every check uses a fake CLI or a test profile. None signs in, none uses a real person's account, none reaches a production backend. The two checks that read production's public CDN (Verification 7) run by answer 4.
@@ -909,7 +1121,7 @@ Every check uses a fake CLI or a test profile. None signs in, none uses a real p
 
 **2. Local gate PR CI does not run** (`docs/validation-and-release.md`, "Harness Device on macOS"): `cd device-app/src-tauri && cargo test --locked` on this Mac at the final commit, recorded in the pull request. Then the reference's own two checks, both from a scratch `HOME`, neither touching the installed app: `bash device-app/scripts/e2e/macos.sh` (a person sees `ok:` lines, the last naming the menu row line) and `bash device-app/scripts/e2e/update-pair.sh <scratchpad>/pair && bash device-app/scripts/e2e/macos.sh --update <scratchpad>/pair` (0.0.1 becomes 0.0.2 from `127.0.0.1:8765`).
 
-**3. On GitHub, the temporary workflow** `tmp-device-app-win-linux.yml`, started by a push to `feat/device-app-win-linux` (by hand: push the branch; there is no dispatch). Runners are disposable; no secret exists in it. Section 10 adds `desktop-device-app-e2e` (Verification 10).
+**3. On GitHub, the temporary workflow** `tmp-device-app-win-linux.yml`, started by a push to `feat/device-app-win-linux` (by hand: push the branch; there is no dispatch). Runners are disposable; no secret exists in it. Section 10 adds `desktop-device-app-e2e` (Verification 10); section 11 adds `fuse-device-build`, `fuse-probe` (and `fuse-desktop-build` if Task 49 changes Desktop) and `install-sh-e2e` (Verification 12, 14).
 - `windows-unit` (x64): the lib's tests and the binary's build.
 - `linux-unit`: `cargo test --locked`.
 - `windows-e2e` (x64): Task 32's seven checks. A person reads `ok:` for each and `0 FAILED`.
@@ -942,4 +1154,25 @@ The workflow is removed before the merge. From then on PR CI runs the rules: `de
 
 **11. By eye.** In this pull request: a person looks at the `device-app` gallery images Task 43 regenerated (`desktop/test/goldens/elements/device-app-light.png` and `-dark.png`, in the pull request's diff): macOS's band and rows unchanged, then the band and row in the tray app's words, nothing cut off. No live walk: the flow tests click through on all three OSes with their words, and Verification 10 runs the real install, probe, start and app-list entry. Desktop's manifest URL is fixed with no override, so a by-eye walk before a release could only read production's manifest. For harness-pm after the first `platforms=all` release (not this pull request), on the Windows ARM VM's test user and a Linux desktop, with a Desktop of that release and a dial plugged in (after `feat/dial-windows` and `feat/dial-linux`): the band reads `Your dial follows apps with the Harness tray app.`; Install puts it in place and it runs in the tray; on Linux `Harness Device` shows in the app list with its icon and starts from there; Quit it, and the Devices row's `Open` starts it; delete the AppImage and relaunch Desktop, and the app-list entry is gone; `/device` reads `The app for your Harness device.` and its Windows and Linux buttons download that release.
 
-**In PR CI, by itself,** once the pull request is ready: `device-app-checks` (both legs), `cli-tests` (Task 18), `desktop-tests` (Tasks 39 to 43 and 46, and the design doc and gallery are under `desktop/`), `website-checks` (Tasks 37, 38), `process-checks` (actionlint, the planner's test). Nothing else is started by hand but Verification 9's `windows-desktop.yml`. Platforms the pull request names: macOS (reference, re-tested), Windows x64 and arm64, Linux x64 and arm64, and the website (every browser).
+**12. Each AppImage starts with no `libfuse2` (section 11; Tasks 47 to 49):** the temporary workflow's `fuse-probe`, started by a push to the branch, on `ubuntu-24.04`, `ubuntu-22.04`, `ubuntu-24.04-arm` and `ubuntu-22.04-arm` (disposable VMs; `libfuse2` removed and proven gone; scratch `HOME`; no account, no backend; Desktop's AppImage is the current release's public file, by Open question 1). Before: Task 47's run. After: Task 48's and 49's runs, `EXPECT=start`. A person reads, per runner, `libfuse2 gone`, then `ok: Harness Device starts from its FUSE mount` and `ok: Harness starts from its FUSE mount`, and the two `file -L` notes (`static-pie linked` where the static runtime is in front).
+
+**13. The Device app lists itself (Task 51):** `linux-e2e` (Verification 3), its six new `ok:` lines: the entry and icon on the first run, `StartupWMClass` equal to the window's `WM_CLASS`, left alone on the second run and when it names another AppImage, written again when its file is gone, and a read-only folder costing only a log line.
+
+**14. The one line (Tasks 53, 54):** on this Mac and in `website-checks`, `cd website && npx vitest run scripts/device-install.spec.ts`. End to end, the temporary workflow's `install-sh-e2e` on `ubuntu-24.04` and `ubuntu-24.04-arm`: a disposable runner with `libfuse2` removed, `cdn.autonomous.ai` pointed at a local HTTPS server under a throwaway CA, this run's AppImage and a stand-in manifest, a scratch `HOME`, the app's state seeded so it installs nothing; never the real CDN or bucket. A person reads the eight `ok:` lines: a tampered download refused, the place, the app running from its FUSE mount and outliving the shell, the entry and icon, the entry left by the app, the second run refused.
+
+**15. Desktop's entry and the app's are one (Task 56):** `desktop-device-app-e2e` (Verification 10), its new Linux check: the started app leaves Desktop's entry byte for byte.
+
+**16. `/device` (Task 55):** `website-checks` and `cd website && npm test` on this Mac: the line shows only to Linux visitors and only with a Linux AppImage in the release, in the page's own style, naming no plan or package. No live run before a release: the page reads the one fixed manifest, which has no Linux key yet. For harness-pm after the first `platforms=all` release, with `device-install.sh` uploaded (not this pull request): a person on a stock Ubuntu 24.04 desktop with no `libfuse2` (their own Ubuntu, signed in to nothing; a test account if the app is then signed in) opens `/device`, sees the line under the Linux button, pastes it in a terminal, closes the terminal, and finds Harness Device in the tray and in the app list with its icon; the downloaded AppImage, made executable, starts with a double-click.
+
+**In PR CI, by itself,** once the pull request is ready: `device-app-checks` (both legs; Tasks 48 and 51 too), `cli-tests` (Task 18), `desktop-tests` (Tasks 39 to 43, 46 and 52, and the design doc and gallery are under `desktop/`), `website-checks` (Tasks 37, 38, 53 and 55), `process-checks` (actionlint, the planner's test, Task 50's `test_ci_plan.py`). Nothing else is started by hand but Verification 9's `windows-desktop.yml`. Platforms the pull request names: macOS (reference, re-tested), Windows x64 and arm64, Linux x64 and arm64, and the website (every browser).
+
+## Answers (section 11, main session, 2026-11-20)
+
+1. **Desktop's "before" reads its public release:** yes. It is a public file read through the public manifest, with
+   no account and nothing written. Task 47 probes it as people download it.
+2. **Who uploads the one-line script:** `release-device.yml` uploads it with every release that carries Linux. It goes
+   up in `publish`, before the manifest names a Linux AppImage, so `/device` never shows a line whose script is
+   missing. There is no hand upload: a step a person can forget is a bug (code over prompts). Task 53 adds this to
+   `release-device.yml` and its test (`test_release_workflow.py`), and drops `upload-device-install-sh.sh`.
+3. **Only if Task 48 or 49 stops:** that task reports what it found, and the words are decided then.
+4. **`Or in a terminal:` on `/device`:** keep it. It is short, names no plan or package, and matches the page's voice.
