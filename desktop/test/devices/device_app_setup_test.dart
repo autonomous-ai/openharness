@@ -300,6 +300,40 @@ void main() {
       },
     );
 
+    // A copy the person installed elsewhere is the app: never offered again
+    // and installed over, and the one Open starts.
+    test('on Windows the lookup and Open follow the folder the installer registers', () async {
+      const registeredExe = r'D:\Ứng dụng\Harness Device\harness-device.exe';
+      String? registered;
+      final asked = <String>[];
+      final started = <String>[];
+      final probe = deviceAppProbeFor(
+        TargetPlatform.windows,
+        environment: windowsEnv,
+        installLocation: () => registered,
+        running: () async => false,
+        exists: (path) async {
+          asked.add(path);
+          return true;
+        },
+      );
+      final open = deviceAppOpenFor(
+        TargetPlatform.windows,
+        environment: windowsEnv,
+        installLocation: () => registered,
+        start: (path, _) async => started.add(path),
+      );
+
+      await probe.lookup();
+      expect(await open(), isTrue);
+      registered = r'"D:\Ứng dụng\Harness Device"';
+      await probe.lookup();
+      expect(await open(), isTrue);
+
+      expect(asked, [windowsPlace, registeredExe]);
+      expect(started, [windowsPlace, registeredExe]);
+    });
+
     test('Open with no place fails', () async {
       for (final platform in [TargetPlatform.windows, TargetPlatform.linux]) {
         var starts = 0;

@@ -318,7 +318,7 @@ void main() {
   /// own default.
   DeviceAppInstaller installer({
     TargetPlatform platform = TargetPlatform.macOS,
-    String? place,
+    String? Function()? place,
     String architecture = 'arm64',
     Duration downloadTimeout = const Duration(minutes: 5),
   }) => DeviceAppInstaller(
@@ -348,13 +348,13 @@ void main() {
 
   DeviceAppInstaller onWindows() => installer(
     platform: TargetPlatform.windows,
-    place: windowsPlace,
+    place: () => windowsPlace,
     architecture: 'x64',
   );
 
   DeviceAppInstaller onLinux() => installer(
     platform: TargetPlatform.linux,
-    place: linuxPlace,
+    place: () => linuxPlace,
     architecture: 'x64',
   );
 
@@ -931,6 +931,35 @@ void main() {
       expect(calls, isEmpty);
       expect(opened, [windowsPlace]);
       expect(tempRoot.listSync(), isEmpty);
+    },
+  );
+
+  // The installer, run silently, installs where an earlier install went (one
+  // since uninstalled, or put elsewhere by hand), and registers that folder.
+  test(
+    'windows: the app is where the installer put it and registered it',
+    () async {
+      publishFor(TargetPlatform.windows, _setup);
+      final earlier = p.join(root.path, 'D', 'Harness Device');
+      final earlierExe = p.join(earlier, deviceAppWindowsExe);
+      String? registered;
+      setupAnswer = (setup) async {
+        registered = earlier;
+        return installAt(earlierExe);
+      };
+
+      final result = await installer(
+        platform: TargetPlatform.windows,
+        place: () => registered == null
+            ? windowsPlace
+            : p.join(registered!, deviceAppWindowsExe),
+        architecture: 'x64',
+      ).install();
+
+      expect(result.failed, isNull);
+      expect(result.installedAt, earlierExe);
+      expect(opened, [earlierExe]);
+      expect(File(windowsPlace).existsSync(), isFalse);
     },
   );
 

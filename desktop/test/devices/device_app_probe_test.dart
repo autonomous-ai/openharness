@@ -144,7 +144,7 @@ void main() {
       bool runs = false,
     }) async {
       final presence = await PlaceDeviceAppProbe(
-        place: at,
+        place: () => at,
         running: () async => runs,
         exists: existing(there ? {place} : {}),
       ).lookup();
@@ -169,9 +169,24 @@ void main() {
       ));
     });
 
+    // On Windows an install registers where it went, so each lookup asks.
+    test('each lookup asks for the place again', () async {
+      const elsewhere = '/media/p/Harness-Device.AppImage';
+      var at = place;
+      final probe = PlaceDeviceAppProbe(
+        place: () => at,
+        running: () async => false,
+        exists: existing({elsewhere}),
+      );
+
+      expect((await probe.lookup()).installed, isFalse);
+      at = elsewhere;
+      expect((await probe.lookup()).installed, isTrue);
+    });
+
     test('a lookup whose process list fails throws', () async {
       final probe = PlaceDeviceAppProbe(
-        place: place,
+        place: () => place,
         running: () async => throw const ProcessException('tasklist', []),
         exists: existing({place}),
       );

@@ -83,6 +83,33 @@ void main() {
     );
   });
 
+  // The installer, run silently, installs where an earlier install went, and
+  // registers that folder, quoted, as its uninstall entry's InstallLocation.
+  test('the Windows place is where its installer registered it', () {
+    expect(
+      deviceAppPlace(
+        platform: TargetPlatform.windows,
+        environment: {'LOCALAPPDATA': r'C:\Users\Nguyễn Văn A\AppData\Local'},
+        installLocation: () => r'"D:\Ứng dụng\Harness Device"',
+      ),
+      r'D:\Ứng dụng\Harness Device\harness-device.exe',
+    );
+  });
+
+  test('a registered folder that is not absolute is not the place', () {
+    for (final registered in [null, '', '""', r'Apps\Harness Device']) {
+      expect(
+        deviceAppPlace(
+          platform: TargetPlatform.windows,
+          environment: {'LOCALAPPDATA': r'C:\Users\p\AppData\Local'},
+          installLocation: () => registered,
+        ),
+        r'C:\Users\p\AppData\Local\Harness Device\harness-device.exe',
+        reason: '$registered',
+      );
+    }
+  });
+
   test('no absolute LOCALAPPDATA, no place', () {
     for (final environment in [
       <String, String>{},
