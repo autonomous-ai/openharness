@@ -9312,9 +9312,7 @@ describe("the Claude app's Code sessions, from its store (docs/plans/2026-11-19-
     }
     const { live } = withStore({ orca: { ...orca, platform: 'linux', onPath: (name: string) => `/usr/bin/${name}`, run } })
     await live()
-    // The first look starts xdg-mime's read of the scheme's app, which a tap needs: a look never waits on a command.
-    expect(host().swipeSwitches(ID)).toBe(false)
-    await flush()
+    // The tap is the first look at the scheme's app: it waits for xdg-mime's answer rather than being dropped.
     expect(await host().openAgent(ID)).toBeUndefined()
     expect(orcaRuns).toEqual([['/usr/bin/xdg-mime', ['query', 'default', 'x-scheme-handler/claude'], 10_000],
       ['/usr/bin/xdg-open', [`claude://code/continue?session=${LOCAL}`], 10_000]])
