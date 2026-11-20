@@ -22,6 +22,16 @@ require_command() {
   command -v "$1" >/dev/null 2>&1 || fail "required command is unavailable: $1"
 }
 
+# https only, through any redirect too; a transfer under 1 KiB/s for a minute ends instead of
+# hanging the line. Each call names its own --max-filesize, so a server that never stops sending
+# cannot fill the disk.
+download() {
+  curl -fL --retry 3 --connect-timeout 15 --proto '=https' --proto-redir '=https' --speed-limit 1024 --speed-time 60 "$@"
+}
+
+# A manifest is a few kilobytes: 1 MiB is far above any.
+MANIFEST_LIMIT=1048576
+
 PLATFORM="$(uname -s)"
 case "$PLATFORM" in
   Darwin) ;;
@@ -66,7 +76,7 @@ if [ "$PLATFORM" = "Darwin" ]; then
   UNPACKED_DIR="$STAGING_DIR/unpacked"
 
   printf '%s\n' "Fetching the latest Harness desktop release…"
-  curl -fL --retry 3 --connect-timeout 15 "$METADATA_URL" -o "$METADATA_FILE" \
+  download --max-filesize "$MANIFEST_LIMIT" "$METADATA_URL" -o "$METADATA_FILE" \
     || fail "could not download desktop metadata"
 
   metadata_value() {
@@ -102,7 +112,7 @@ if [ "$PLATFORM" = "Darwin" ]; then
   fi
 
   printf '%s\n' "Downloading Harness ${VERSION}…"
-  curl -fL --retry 3 --connect-timeout 15 "$ASSET_URL" -o "$ARCHIVE_FILE" \
+  download --max-filesize "$EXPECTED_SIZE" "$ASSET_URL" -o "$ARCHIVE_FILE" \
     || fail "could not download Harness $VERSION"
 
   ACTUAL_SIZE="$(wc -c < "$ARCHIVE_FILE" | tr -d '[:space:]')"
@@ -186,7 +196,7 @@ METADATA_FILE="$STAGING_DIR/metadata.json"
 CANDIDATE="$STAGING_DIR/Harness-linux-$RELEASE_ARCH.AppImage"
 
 printf '%s\n' "Fetching the latest Harness desktop release…"
-curl -fL --retry 3 --connect-timeout 15 "$METADATA_URL" -o "$METADATA_FILE" \
+download --max-filesize "$MANIFEST_LIMIT" "$METADATA_URL" -o "$METADATA_FILE" \
   || fail "could not download desktop metadata"
 
 # No `jq`/`plutil` dependency: the manifest is written by our own release script
@@ -232,7 +242,7 @@ fi
 [ ! -d "$DESTINATION" ] || fail "$DESTINATION is a folder. Move it away, then run this installer again."
 
 printf '%s\n' "Downloading Harness ${VERSION}…"
-curl -fL --retry 3 --connect-timeout 15 "$ASSET_URL" -o "$CANDIDATE" \
+download --max-filesize "$EXPECTED_SIZE" "$ASSET_URL" -o "$CANDIDATE" \
   || fail "could not download Harness $VERSION"
 
 ACTUAL_SIZE="$(wc -c < "$CANDIDATE" | tr -d '[:space:]')"

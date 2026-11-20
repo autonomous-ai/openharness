@@ -20,6 +20,12 @@ require_command() {
   command -v "$1" >/dev/null 2>&1 || fail "required command is unavailable: $1"
 }
 
+# https only, through any redirect too; a transfer under 1 KiB/s for a minute ends instead of hanging the line. Each
+# call names its own --max-filesize, so a server that never stops sending cannot fill the disk.
+download() {
+  curl -fL --retry 3 --connect-timeout 15 --proto '=https' --proto-redir '=https' --speed-limit 1024 --speed-time 60 "$@"
+}
+
 PLATFORM="$(uname -s)"
 [ "$PLATFORM" = Linux ] || fail "this installer is for Linux (found: $PLATFORM)."
 
@@ -63,7 +69,8 @@ METADATA_FILE="$STAGING_DIR/metadata.json"
 CANDIDATE="$STAGING_DIR/Harness-Device-linux-$RELEASE_ARCH.AppImage"
 
 printf '%s\n' "Fetching the latest Harness Device release…"
-curl -fL --retry 3 --connect-timeout 15 "$METADATA_URL" -o "$METADATA_FILE" \
+# device-manifest.py's MANIFEST_LIMIT.
+download --max-filesize 1048576 "$METADATA_URL" -o "$METADATA_FILE" \
   || fail "could not download device metadata"
 
 # No jq or python3, which a stock Ubuntu may lack: the manifest is device-manifest.py's json.dump with indent=2, one
@@ -106,7 +113,7 @@ fi
 [ ! -d "$DESTINATION" ] || fail "$DESTINATION is a folder. Move it away, then run this installer again."
 
 printf '%s\n' "Downloading Harness Device ${VERSION}…"
-curl -fL --retry 3 --connect-timeout 15 "$ASSET_URL" -o "$CANDIDATE" \
+download --max-filesize "$EXPECTED_SIZE" "$ASSET_URL" -o "$CANDIDATE" \
   || fail "could not download Harness Device $VERSION"
 
 ACTUAL_SIZE="$(wc -c < "$CANDIDATE" | tr -d '[:space:]')"
