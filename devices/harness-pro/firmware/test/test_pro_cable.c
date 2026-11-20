@@ -12,6 +12,7 @@
 #include <string.h>
 
 #include "cable/pro_cable.h"
+#include "cJSON.h"
 #include "cable_features.h"
 #include "cable_frame.h"
 #include "cable_link.h"
@@ -1156,6 +1157,27 @@ static void replug_spares_a_frame_in_flight(void)
 }
 
 
+static uint32_t features_of(const char *json)
+{
+    cJSON *w = cJSON_Parse(json);
+    CHECK(w);
+    uint32_t f = cable_features_parse(w);
+    cJSON_Delete(w);
+    return f;
+}
+
+// The 16-entry and strings-only rules hold for the new names too.
+static void features_apps_switch_and_question_tier(void)
+{
+    CHECK(features_of("{\"features\":[\"apps.switch\",\"question.tier\",\"resync\"]}") ==
+          (CABLE_FEATURE_APPS_SWITCH | CABLE_FEATURE_QUESTION_TIER | CABLE_FEATURE_RESYNC));
+    CHECK(features_of("{\"features\":[\"apps.switch\"]}") == CABLE_FEATURE_APPS_SWITCH);
+    CHECK(features_of("{\"features\":[\"question.tier\"]}") == CABLE_FEATURE_QUESTION_TIER);
+    CHECK(features_of("{\"features\":[\"apps.switch\",\"question.tier\",\"a\",\"b\",\"c\",\"d\",\"e\",\"f\","
+                      "\"g\",\"h\",\"i\",\"j\",\"k\",\"l\",\"m\",\"n\",\"o\"]}") == 0);
+    CHECK(features_of("{\"features\":[\"apps.switch\",3]}") == 0);
+}
+
 int main(void)
 {
     pro_cable_start();   // the lock and the machine table; no tasks run on the host
@@ -1181,6 +1203,7 @@ int main(void)
     seq_gaps();
     self_replug();
     replug_spares_a_frame_in_flight();
+    features_apps_switch_and_question_tier();
     printf("test_pro_cable: %d checks passed\n", checks);
     return 0;
 }
