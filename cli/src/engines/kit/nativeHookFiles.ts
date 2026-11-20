@@ -499,10 +499,11 @@ export function hookPreparationRoutes(files: readonly string[]): { verify(): voi
     const current = reservations.map(reservation => {
       const fresh = new NativePaths(new NativeEvidenceBudget()), located = fresh.resolveSync(reservation.file, true, directories)
       const target = located?.path ?? join(directoryPath(dirname(reservation.file), fresh), basename(reservation.file))
-      return { ...reservation, fresh, target }
+      return { fresh, target }
     })
     const snapshots = NativePaths.snapshots(current.map(route => route.fresh))
-    for (const [index, { target, key, facts, aliases }] of current.entries()) {
+    for (const [index, { target }] of current.entries()) {
+      const { key, facts, aliases } = reservations[index]
       const snapshot = snapshots[index]
       if (facts.length) verifyRetainedPathSnapshot(facts, snapshot)
       if (target !== key || snapshot.some(fact => fact.alias && !aliases.has(fact.path))) {
