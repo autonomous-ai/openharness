@@ -527,6 +527,204 @@ mod tests {
         assert!(WindowsFollow.installed());
     }
 
+    /// What the live test calls that `windows-sys` builds only with features the app is not built with.
+    #[cfg(windows)]
+    mod user {
+        use std::ffi::c_void;
+        use windows_sys::Win32::UI::WindowsAndMessaging::WNDPROC;
+
+        /// `WNDCLASSW`.
+        #[repr(C)]
+        pub struct WindowClass {
+            pub style: u32,
+            pub procedure: WNDPROC,
+            pub class_extra: i32,
+            pub window_extra: i32,
+            pub instance: *mut c_void,
+            pub icon: *mut c_void,
+            pub cursor: *mut c_void,
+            pub background: *mut c_void,
+            pub menu: *const u16,
+            pub name: *const u16,
+        }
+
+        pub const MOUSEEVENTF_MOVE: u32 = 0x0001;
+        pub const KEYEVENTF_KEYUP: u32 = 0x0002;
+        pub const VK_MENU: u8 = 0x12;
+
+        // As windows-sys links: no import library needed.
+        #[link(name = "user32.dll", kind = "raw-dylib", modifiers = "+verbatim")]
+        unsafe extern "system" {
+            pub fn RegisterClassW(class: *const WindowClass) -> u16;
+            pub fn mouse_event(flags: u32, dx: i32, dy: i32, data: u32, extra: usize);
+            pub fn keybd_event(key: u8, scan: u8, flags: u32, extra: usize);
+        }
+
+        #[link(name = "kernel32.dll", kind = "raw-dylib", modifiers = "+verbatim")]
+        unsafe extern "system" {
+            pub fn GetModuleHandleW(name: *const u16) -> *mut c_void;
+        }
+    }
+
+    /// The last WinEvents a hook of the live test's own heard beside the door's, oldest first: printed when the test
+    /// fails, to tell an event Windows never raised from one the door's rule or thread missed. No title is read.
+    #[cfg(windows)]
+    static SEEN: std::sync::Mutex<std::collections::VecDeque<String>> =
+        std::sync::Mutex::new(std::collections::VecDeque::new());
+
+    /// The last lines kept: those before a failure tell it.
+    #[cfg(windows)]
+    const SEEN_MAX: usize = 200;
+
+    #[cfg(windows)]
+    fn note(line: String) {
+        let mut seen = SEEN.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        if seen.len() == SEEN_MAX {
+            seen.pop_front();
+        }
+        seen.push_back(line);
+    }
+
+    /// Prints what the witness heard as the live test fails, at any assertion.
+    #[cfg(windows)]
+    struct Dump;
+
+    #[cfg(windows)]
+    impl Drop for Dump {
+        fn drop(&mut self) {
+            if thread::panicking() {
+                let mut seen = SEEN.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+                eprintln!("what the witness heard, oldest first:\n{}", seen.make_contiguous().join("\n"));
+            }
+        }
+    }
+
+    /// The witness's hook: each event as the door's `changed` gets it, and whether the door's rule reads a title at it.
+    #[cfg(windows)]
+    unsafe extern "system" fn witnessed(
+        _: HWINEVENTHOOK,
+        event: u32,
+        window: HWND,
+        id_object: i32,
+        id_child: i32,
+        thread: u32,
+        _: u32,
+    ) {
+        // SAFETY: takes no argument.
+        let front = unsafe { GetForegroundWindow() };
+        let (window, front) = (window as usize, front as usize);
+        let reads = reads_title(event, window, id_object, id_child, front);
+        note(format!(
+            "event {event:#06x} window {window:#x} object {id_object} child {id_child} thread {thread} front {front:#x} \
+             reads the title: {reads}"
+        ));
+    }
+
+    /// Hears, out of context on a thread of its own as the door's observer does, every event of this process and each
+    /// other process's foreground change, until its thread is told to quit.
+    #[cfg(windows)]
+    fn witness() -> (u32, thread::JoinHandle<()>) {
+        use windows_sys::Win32::UI::WindowsAndMessaging::{EVENT_MAX, EVENT_MIN, WINEVENT_SKIPOWNPROCESS};
+
+        let (give, given) = mpsc::channel();
+        let witness = thread::spawn(move || {
+            // SAFETY: MSG is plain data; all zeros is a valid value for PeekMessageW to fill.
+            let mut message: MSG = unsafe { std::mem::zeroed() };
+            // SAFETY: `message` is writable; nothing is removed. Made before the id is given, as observe_with does.
+            unsafe { PeekMessageW(&mut message, ptr::null_mut(), WM_USER, WM_USER, PM_NOREMOVE) };
+            let set = |first, last, pid, flags| {
+                // SAFETY: no module (the procedure is in this process), and `witnessed` lives as long as the process.
+                unsafe {
+                    SetWinEventHook(
+                        first,
+                        last,
+                        ptr::null_mut(),
+                        Some(witnessed),
+                        pid,
+                        0,
+                        WINEVENT_OUTOFCONTEXT | flags,
+                    )
+                }
+            };
+            let hooks = [
+                set(EVENT_MIN, EVENT_MAX, std::process::id(), 0),
+                set(EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND, 0, WINEVENT_SKIPOWNPROCESS),
+            ];
+            note(format!("witness: hooks set {:?}", hooks.map(|hook| !hook.is_null())));
+            // SAFETY: takes no argument.
+            let _ = give.send(unsafe { GetCurrentThreadId() });
+            run_messages();
+            for hook in hooks.into_iter().filter(|hook| !hook.is_null()) {
+                // SAFETY: set by this thread, and unhooked once.
+                unsafe { UnhookWinEvent(hook) };
+            }
+        });
+        (given.recv().expect("the witness's thread"), witness)
+    }
+
+    /// The window in front, as a failure tells it: its process and program, no title.
+    #[cfg(windows)]
+    fn front_described() -> String {
+        // SAFETY: takes no argument.
+        let front = unsafe { GetForegroundWindow() };
+        match owner(front) {
+            None => format!("window {:#x}, of no process", front as usize),
+            Some(pid) => {
+                let program = image(pid).and_then(|path| path.rsplit('\\').next().map(str::to_owned));
+                format!("window {:#x} of process {pid} ({})", front as usize, program.as_deref().unwrap_or("unknown"))
+            }
+        }
+    }
+
+    /// Brings `window`, this thread's own, to the front by each way a test may take it on a desktop no person uses,
+    /// until one does: Windows lets a process set the front only on its conditions, such as being in front or having
+    /// had the last input. The ways and their order are `Raise`'s in device-app/scripts/e2e/windows.ps1. The way that
+    /// did, or what each way left in front.
+    #[cfg(windows)]
+    fn take_front(window: HWND) -> Result<&'static str, String> {
+        use windows_sys::Win32::System::Threading::AttachThreadInput;
+        use windows_sys::Win32::UI::WindowsAndMessaging::{BringWindowToTop, SetForegroundWindow};
+
+        // SAFETY (each way): this thread's own window, and input of nothing or Alt alone.
+        let ways: [(&'static str, &dyn Fn()); 4] = [
+            ("SetForegroundWindow", &|| unsafe {
+                SetForegroundWindow(window);
+            }),
+            // An input of this process's own first: a mouse move of nothing.
+            ("a mouse move, then SetForegroundWindow", &|| unsafe {
+                user::mouse_event(user::MOUSEEVENTF_MOVE, 0, 0, 0, 0);
+                SetForegroundWindow(window);
+            }),
+            // Joined to the input of the thread in front, this thread shares its right to set the front.
+            ("AttachThreadInput", &|| unsafe {
+                let me = GetCurrentThreadId();
+                let front = GetWindowThreadProcessId(GetForegroundWindow(), ptr::null_mut());
+                let joined = front != 0 && front != me && AttachThreadInput(me, front, 1) != 0;
+                BringWindowToTop(window);
+                SetForegroundWindow(window);
+                if joined {
+                    AttachThreadInput(me, front, 0);
+                }
+            }),
+            // Last: a released Alt may put the window in its menu mode, which the witness would show.
+            ("Alt held", &|| unsafe {
+                user::keybd_event(user::VK_MENU, 0, 0, 0);
+                SetForegroundWindow(window);
+                user::keybd_event(user::VK_MENU, 0, user::KEYEVENTF_KEYUP, 0);
+            }),
+        ];
+        let mut refused = Vec::new();
+        for (way, take) in ways {
+            take();
+            // SAFETY: takes no argument.
+            if unsafe { GetForegroundWindow() } == window {
+                return Ok(way);
+            }
+            refused.push(format!("{way}: the front is {}", front_described()));
+        }
+        Err(refused.join("; "))
+    }
+
     /// Under a desktop a person sees (the VM's console session): two windows of this test's own, retitled and brought
     /// to the front in turn, with the ChatGPT check pointed at this process.
     #[cfg(windows)]
@@ -534,19 +732,42 @@ mod tests {
     #[ignore = "needs a desktop where this process may take the foreground"]
     fn follow_windows_live() {
         use windows_sys::Win32::UI::WindowsAndMessaging::{
-            CW_USEDEFAULT, CreateWindowExW, DestroyWindow, SW_SHOWNORMAL, SetForegroundWindow, SetWindowTextW,
-            ShowWindow, WS_OVERLAPPEDWINDOW,
+            CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DestroyWindow, SW_SHOWNORMAL, SetForegroundWindow,
+            SetWindowTextW, ShowWindow, WS_OVERLAPPEDWINDOW,
         };
 
+        let _dump = Dump;
+        // Before the windows: their creation and the foreground's taking are heard too.
+        let (witness_thread, witness) = witness();
         let wide = |text: &str| text.encode_utf16().chain([0]).collect::<Vec<u16>>();
         let (give, given) = mpsc::channel();
         // On a thread that pumps its messages, as an app's UI thread does: the observer's reads of their text and the
         // test's retitles arrive there as messages.
         let pump = thread::spawn(move || {
-            let class = wide("STATIC");
+            // A class of the test's own over DefWindowProcW, as an app's top-level window is (Chromium's, which the
+            // ChatGPT app's is). The docs list the window object among the elements whose name change Windows tells,
+            // and not the static control: a STATIC window's retitle was never heard on a runner.
+            // SAFETY: null names this program's own module.
+            let module = unsafe { user::GetModuleHandleW(ptr::null()) };
+            let class = wide("HarnessFollowLive");
+            let registered = user::WindowClass {
+                style: 0,
+                procedure: Some(DefWindowProcW),
+                class_extra: 0,
+                window_extra: 0,
+                instance: module,
+                icon: ptr::null_mut(),
+                cursor: ptr::null_mut(),
+                background: ptr::null_mut(),
+                menu: ptr::null(),
+                name: class.as_ptr(),
+            };
+            // SAFETY: a class whose name lives until this thread ends, and whose procedure is Windows' own.
+            let atom = unsafe { user::RegisterClassW(&registered) };
+            assert_ne!(atom, 0, "{}", std::io::Error::last_os_error());
             let windows = ["Fix login", "Second thread"].map(|title| {
                 let name = wide(title);
-                // SAFETY: a system class and a title, NUL-terminated; no parent, menu, instance or parameter.
+                // SAFETY: the class registered above and a title, NUL-terminated; no parent, menu or parameter.
                 let window = unsafe {
                     CreateWindowExW(
                         0,
@@ -559,7 +780,7 @@ mod tests {
                         200,
                         ptr::null_mut(),
                         ptr::null_mut(),
-                        ptr::null_mut(),
+                        module,
                         ptr::null(),
                     )
                 };
@@ -572,9 +793,7 @@ mod tests {
                 }
                 window
             });
-            let first = windows[0];
-            // SAFETY: this thread's own window.
-            let front = unsafe { SetForegroundWindow(first) != 0 && GetForegroundWindow() == first };
+            let front = take_front(windows[0]);
             // SAFETY: takes no argument; this thread has a queue, made with its windows.
             let _ = give.send((windows.map(|window| window as usize), unsafe { GetCurrentThreadId() }, front));
             run_messages();
@@ -584,9 +803,11 @@ mod tests {
             }
         });
         let ([first, second], pump_thread, front) = given.recv().expect("the test's windows");
-        // Run on purpose, on a desktop that allows it: a refusal is this test's failure, not a skip.
-        assert!(front, "Windows did not give this test the foreground");
         let own = std::process::id();
+        note(format!("test: windows {first:#x} and {second:#x} on thread {pump_thread} of process {own}"));
+        // Run on purpose, on a desktop that allows it: a refusal is this test's failure, not a skip.
+        let way = front.unwrap_or_else(|refused| panic!("Windows did not give this test the foreground. {refused}"));
+        println!("follow_windows_live: the foreground taken by {way}");
         let (heard, told) = heard_into();
         let observation = observe_with(move |pid| pid == own, heard);
         let next = || told.recv_timeout(Duration::from_secs(5));
@@ -594,7 +815,8 @@ mod tests {
         let retitle = |window: usize, text: &str| {
             let name = wide(text);
             // SAFETY: the test's window, alive until its thread quits below; a NUL-terminated title.
-            unsafe { SetWindowTextW(window as HWND, name.as_ptr()) };
+            let set = unsafe { SetWindowTextW(window as HWND, name.as_ptr()) } != 0;
+            note(format!("test: window {window:#x} retitled: {set}"));
         };
         assert_eq!(next(), titled("Fix login"));
         for text in ["Plan the trip", "Ship the dial"] {
@@ -604,7 +826,7 @@ mod tests {
         // The other window, brought to the front: the foreground hook tells its title.
         // SAFETY: the test's window; this process has the foreground.
         let raised = unsafe { SetForegroundWindow(second as HWND) } != 0;
-        assert!(raised, "Windows did not give the second window the foreground");
+        assert!(raised, "Windows did not give the second window the foreground: the front is {}", front_described());
         assert_eq!(next(), titled("Second thread"));
         // The window now behind, retitled, is not heard: the next title is the one in front's.
         retitle(first, "Behind");
@@ -613,8 +835,10 @@ mod tests {
         drop(observation);
         // Each title once: nothing more was heard before the thread ended.
         assert_eq!(told.recv_timeout(Duration::from_secs(1)), Err(RecvTimeoutError::Disconnected));
-        // SAFETY: takes no pointer.
-        unsafe { PostThreadMessageW(pump_thread, WM_QUIT, 0, 0) };
-        pump.join().unwrap();
+        for (id, handle) in [(pump_thread, pump), (witness_thread, witness)] {
+            // SAFETY: takes no pointer.
+            unsafe { PostThreadMessageW(id, WM_QUIT, 0, 0) };
+            handle.join().unwrap();
+        }
     }
 }
