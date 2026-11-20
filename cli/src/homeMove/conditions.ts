@@ -60,7 +60,8 @@ export async function checkMove(deps: ConditionDeps): Promise<MoveCheck> {
   if (fs.existsSync(join(homePath(env.ADAPTER_CLI_DIR ?? '', home) || join(legacy, 'cli'), 'update-pending.json'))) return waiting('update-pending')
   const realLegacy = fs.realpathSync(legacy)
   const override = OVERRIDE_NAMES.find((name) => {
-    const value = homePath(env[name] ?? '', home)
+    // Trimmed, as config/loadEnv.ts reads the env file's names (envFilePath): a padded one in ~/.harness would slip past.
+    const value = homePath(env[name]?.trim() ?? '', home)
     return !!value && (inside(legacy, value) || inside(realLegacy, realPath(deps, value)))
   })
   if (override) return skipped(override)
