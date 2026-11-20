@@ -8,7 +8,7 @@ import { terminalRouteKey } from '../../lib/terminalRuntime.js'
 import { processLaunchArgs } from '../../lib/processTable.js'
 import { workspaceMissing } from '../../lib/workspaceCheck.js'
 import { commitRelaunchedEngine, createAgentRestarter, type RestartDeps } from './restart.js'
-import { resolvePaneEngineProcess } from '../../lib/paneEngineProcess.js'
+import { lookupPaneEngineProcess } from '../../lib/paneEngineProcess.js'
 import type { RestartTarget } from '../../lib/terminalBackend.js'
 import { GUEST_HARNESS_REFUSAL } from '../guestPolicy.js'
 import { TerminalAgentReconciler } from '../../lib/terminalAgentReconciler.js'
@@ -27,7 +27,7 @@ vi.mock('../../lib/processTable.js', async (real) => ({
   processLaunchArgs: vi.fn(async () => '/bin/claude --model opus -c model_provider=grid'),
 }))
 vi.mock('../../lib/workspaceCheck.js', () => ({ workspaceMissing: vi.fn(() => null) }))
-vi.mock('../../lib/paneEngineProcess.js', () => ({ resolvePaneEngineProcess: vi.fn() }))
+vi.mock('../../lib/paneEngineProcess.js', () => ({ lookupPaneEngineProcess: vi.fn() }))
 
 const runtime = { backend: 'tmux' as const, paneId: '%4' }
 /** The pane's backend handing the pane back to its default disposal (`TerminalBackend.releaseHold`). */
@@ -115,19 +115,27 @@ describe('durable restart publication', () => {
     expect(run.deps.refreshGridAssignment).not.toHaveBeenCalled()
   })
 
-  it.each(['same', 'gone', 'replaced', 'executable'] as const)('rechecks native readiness before publication: %s', async proof => {
+  it.each(['same', 'gone', 'unknown', 'replaced', 'executable'] as const)('rechecks native readiness before publication: %s', async proof => {
     const run = setup()
+    const warned = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const publish = vi.mocked(run.deps.registry.confirmLaunch).getMockImplementation()!
     vi.mocked(run.deps.registry.confirmLaunch).mockImplementation(async (id, input, authority) => {
       await authority?.refresh?.()
       return publish(id, input, authority)
     })
-    vi.mocked(resolvePaneEngineProcess).mockResolvedValue(proof === 'gone' ? null : proof === 'replaced' ? { ...newProcess, startMarker: 'replacement' }
-      : proof === 'executable' ? { ...newProcess, executable: 'other' } : newProcess)
+    const observed = proof === 'gone' || proof === 'unknown' ? null : proof === 'replaced' ? { ...newProcess, startMarker: 'replacement-private' }
+      : proof === 'executable' ? { ...newProcess, executable: '/private/executable-secret' } : newProcess
+    vi.mocked(lookupPaneEngineProcess).mockResolvedValue(observed ? { ok: true, identity: observed }
+      : { ok: false, unknown: proof === 'unknown', reason: 'private backend reason' })
     const result = commitRelaunchedEngine(run.deps, 'a1', newProcess, null, { runtime, backend: run.tmuxBackend } as unknown as RestartTarget, () => true)
-    if (proof === 'same') expect(await result).toMatchObject({ processIdentity: newProcess })
+    if (proof === 'same') {
+      expect(await result).toMatchObject({ processIdentity: newProcess })
+      expect(warned).not.toHaveBeenCalled()
+    }
     else {
       await expect(result).rejects.toMatchObject({ code: 'IDENTITY_UNAVAILABLE' })
+      const reasons = { gone: 'PROCESS_NOT_FOUND', unknown: 'PROCESS_PROBE_UNAVAILABLE', replaced: 'PROCESS_IDENTITY_CHANGED', executable: 'PROCESS_EXECUTABLE_CHANGED' }
+      expect(warned.mock.calls).toEqual([[`[restart] ${reasons[proof]}`]])
       expect(releaseHold).not.toHaveBeenCalled()
       expect(run.deps.announceSession).not.toHaveBeenCalled()
     }

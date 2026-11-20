@@ -10,7 +10,7 @@ import { launchedGrid, type GridAssignment } from '../../lib/gridAssignmentWire.
 import { windowsPaneLaunch } from '../../lib/windows/engineStart.js'
 import { sid } from '../../lib/log.js'
 import { matchesLaunchReceipt, type LaunchPublicationInput, type ProcessIdentity, type registry, type RegisteredSession } from '../../lib/registry.js'
-import { resolvePaneEngineProcess } from '../../lib/paneEngineProcess.js'
+import { lookupPaneEngineProcess } from '../../lib/paneEngineProcess.js'
 import { sameProcessIdentity } from '../../lib/terminalRuntime.js'
 import { IdentityReadUnavailable } from '../../engines/kit/identityScan.js'
 import { bypassPermissionFor, restartAgent } from '../../lib/restartAgent.js'
@@ -59,8 +59,13 @@ export async function commitRelaunchedEngine(
     current,
     refresh: async () => {
       if (identity) {
-        const observed = await resolvePaneEngineProcess(place.backend, place.runtime, engine)
-        if (!sameProcessIdentity(identity, observed) || observed?.executable !== identity.executable) {
+        const observed = await lookupPaneEngineProcess(place.backend, place.runtime, engine)
+        const refusal = !observed.ok ? (observed.unknown ? 'PROCESS_PROBE_UNAVAILABLE' : 'PROCESS_NOT_FOUND')
+          : !sameProcessIdentity(identity, observed.identity) ? 'PROCESS_IDENTITY_CHANGED'
+          : observed.identity.executable !== identity.executable ? 'PROCESS_EXECUTABLE_CHANGED' : null
+        if (refusal) {
+          // A failed probe and a changed process need different repairs; no process fields reach the log.
+          console.warn(`[restart] ${refusal}`)
           throw new IdentityReadUnavailable('the replacement process changed before publication')
         }
       } else {
