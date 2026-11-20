@@ -7,7 +7,7 @@ import { execFile } from 'node:child_process'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { CLI_ROOT } from './harness/daemon.js'
-import { endedWithin, sealedPath } from './harness/windowsDaemon.js'
+import { besideEnvironment, endedWithin, sealedPath } from './harness/windowsDaemon.js'
 
 const DESK = join(CLI_ROOT, 'scripts', 'windows-dial-e2e', 'desk.mts')
 
@@ -26,6 +26,25 @@ describe('the Windows dial tools', () => {
     ])
   })
 
+  // On the Dell a herdr started with the owner's profile put its Codex hook into the owner's ~/.codex (2026-11-20).
+  it('what a desk starts beside its sealed daemon has every home in the desk\'s root, and nothing of the account\'s', () => {
+    const owner = join('C:', 'Users', 'Owner')
+    const account = {
+      USERPROFILE: owner, HOME: owner, APPDATA: join(owner, 'AppData', 'Roaming'), LOCALAPPDATA: join(owner, 'AppData', 'Local'),
+      TEMP: join(owner, 'AppData', 'Local', 'Temp'), CODEX_HOME: join(owner, '.codex'), CLAUDE_CONFIG_DIR: join(owner, '.claude'),
+      HARNESS_DEVICES_DIR: join(owner, '.harness', 'devices'), XDG_CONFIG_HOME: join(owner, '.config'),
+      PATH: 'C:\\Windows\\System32;C:\\run\\herdr', SystemRoot: 'C:\\Windows',
+    }
+    const root = join('C:', 'run', 'harness-dial-win-x')
+    const env = besideEnvironment(root, account)
+    for (const name of ['USERPROFILE', 'HOME', 'APPDATA', 'LOCALAPPDATA', 'TEMP', 'TMP', 'CODEX_HOME', 'CLAUDE_CONFIG_DIR']) {
+      expect(env[name], name).toMatch(new RegExp(`^${root.replace(/[\\.]/g, '\\$&')}[\\\\/]`))
+    }
+    expect(Object.entries(env).filter(([, value]) => value?.includes(owner))).toEqual([])
+    // What a program needs to start, and to find herdr and the stand-in engines.
+    expect(env).toMatchObject({ PATH: account.PATH, SystemRoot: 'C:\\Windows' })
+  })
+
   it('a close waits a bounded time for a daemon a forced end did not end, and names its pid', async () => {
     await expect(endedWithin(new Promise<void>(() => {}), 50, 4242)).rejects.toThrow('the daemon (pid 4242) did not end in 0.05 s after taskkill')
     await expect(endedWithin(Promise.resolve(), 50, 4242)).resolves.toBeUndefined()
@@ -39,5 +58,19 @@ describe('the Windows dial tools', () => {
 
   it.runIf(process.platform !== 'win32')('the desk takes --own-account, and then stops where it is not Windows', async () => {
     expect(await desk(['--own-account'])).toEqual({ code: 1, stderr: 'the desk runs on Windows\n' })
+  })
+
+  it('a program beside a desk names the desk\'s root by its whole path, and the program to run', async () => {
+    expect(await desk(['--beside', 'root', '--run', 'C:\\h\\herdr.exe']))
+      .toEqual({ code: 2, stderr: expect.stringContaining('--beside takes the whole path of a sealed desk\'s root') })
+    expect(await desk(['--beside', 'C:\\run\\root', 'C:\\h\\herdr.exe']))
+      .toEqual({ code: 2, stderr: expect.stringContaining('--beside needs --run <program>') })
+    expect(await desk(['--beside', 'C:\\run\\root', '--run']))
+      .toEqual({ code: 2, stderr: expect.stringContaining('--beside needs --run <program>') })
+  })
+
+  it.runIf(process.platform !== 'win32')('the desk takes a program beside it, its arguments as they are, and then stops where it is not Windows', async () => {
+    expect(await desk(['--beside', 'C:\\run\\root', '--run', 'C:\\h\\wezterm.exe', 'start', '--', 'C:\\h\\herdr.exe']))
+      .toEqual({ code: 1, stderr: 'the desk runs on Windows\n' })
   })
 })
