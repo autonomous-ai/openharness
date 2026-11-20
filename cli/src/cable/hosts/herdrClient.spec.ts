@@ -541,8 +541,10 @@ describe.skipIf(process.platform === 'win32')('the herdr client (docs/specs/2026
     it("a marker whose herdr is gone, another program, another account's or one started after it is no stamp, and nothing connects", async () => {
       for (const table of [
         null,
-        // Gone, or another account's: the table leaves out a process this account may not open.
+        // Gone.
         [],
+        // Another account's: the host lists a process this account may not open with no start marker (pty/src/ps.rs).
+        [herdrRow({ startMarker: '' })],
         [herdrRow({ executable: 'node.exe' })],
         // Started after herdr wrote the marker: Windows gave herdr's pid to it.
         [herdrRow({ startMarker: 'w:134080736600000000' })],

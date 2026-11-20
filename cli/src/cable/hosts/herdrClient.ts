@@ -84,9 +84,9 @@ const MARKER_MAX_BYTES = 64
 const UNIX_EPOCH_FILETIME = 116_444_736_000_000_000n
 
 /**
- * The herdr that wrote the marker at [path], while it runs: the process it names is a herdr.exe this account may open (the
- * table leaves out another account's), started before the marker's time (a later one took the pid of a herdr that
- * exited). Never rejects.
+ * The herdr that wrote the marker at [path], while it runs: the process it names is a herdr.exe this account may open
+ * (the table lists another account's with no start marker, pty/src/ps.rs), started before the marker's time (a later
+ * one took the pid of a herdr that exited). Never rejects.
  */
 async function markerHerdr(path: string, rows: () => Promise<ProcessRow[] | null>): Promise<ProcessRow | undefined> {
   let text: string
