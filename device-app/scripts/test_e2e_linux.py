@@ -1,11 +1,12 @@
-"""e2e/linux.sh's rules that run without a display: its CDN classifier, fed sample log lines through bash. Nothing is
-downloaded and no app runs."""
+"""e2e/linux.sh's rules that run without a display: its CDN classifier, fed sample log lines through bash, and the URL
+it reads before the app's install lines. Nothing is downloaded and no app runs."""
 from pathlib import Path
 import re
 import subprocess
 import unittest
 
 LINUX_SH = Path(__file__).resolve().parent / "e2e" / "linux.sh"
+INSTALL_RS = Path(__file__).resolve().parents[1] / "src-tauri" / "src" / "install.rs"
 
 
 def function(name):
@@ -52,6 +53,17 @@ class CdnFailureTests(unittest.TestCase):
         self.assertEqual(cdn_failure("--host", "install: --host exit 0", "install: --desktop exit 1", curl), "")
         # No result yet: the run has not failed.
         self.assertEqual(cdn_failure("--host", curl), "")
+
+
+class PreDownloadTests(unittest.TestCase):
+    def test_linux_sh_reads_first_the_url_install_rss_lines_fetch(self):
+        # A CDN outage fails there as one only while it is the URL the app's own lines fetch.
+        lines = dict(re.findall(r'(?m)^pub const (HOST|DESKTOP): &str = "curl -fsSL (\S+) \| /bin/sh -s -- --\w+";$',
+                                INSTALL_RS.read_text()))
+        self.assertEqual(set(lines), {"HOST", "DESKTOP"})
+        read = re.findall(r"(?m)^\s+curl \S.* -o /dev/null (\S+) \\$", LINUX_SH.read_text())
+        self.assertEqual(read, [lines["HOST"]])
+        self.assertEqual(lines["DESKTOP"], lines["HOST"])
 
 
 if __name__ == "__main__":
