@@ -176,26 +176,27 @@ put() {
 ENTRY="$DATA_HOME/applications/harness-device.desktop"
 ICON="$DATA_HOME/icons/harness-device.png"
 ICON_MEMBER="usr/share/icons/hicolor/128x128/apps/harness-device.png"
-if [ -n "$DATA_HOME" ] && [ ! -e "$ENTRY" ]; then
-  case "$DESTINATION$DATA_HOME" in
-    # A control character would break the entry's lines: the app's own rule writes nothing either.
-    *[[:cntrl:]]*) ;;
-    *)
-      (
-        # The image's own icon, the file the app reads under its APPDIR; stdin is the script itself under `| bash`.
-        if (cd "$STAGING_DIR" && "$DESTINATION" --appimage-extract "$ICON_MEMBER" >/dev/null 2>&1 </dev/null) \
-          && mkdir -p "$DATA_HOME/icons" && put "$ICON" < "$STAGING_DIR/squashfs-root/$ICON_MEMBER"; then
-          ICON_LINE="Icon=$ICON"
-        fi
-        mkdir -p "$DATA_HOME/applications" && {
-          printf '%s\n' '[Desktop Entry]' 'Type=Application' 'Name=Harness Device' \
-            'Comment=The app for your Harness device.' "Exec=$(exec_value "$DESTINATION")"
-          if [ -n "${ICON_LINE:-}" ]; then printf '%s\n' "$ICON_LINE"; fi
-          printf '%s\n' 'Terminal=false' 'Categories=Utility;' 'StartupWMClass=harness-device'
-        } | put "$ENTRY"
-      ) || true
-      ;;
-  esac
+# The app's own rule writes nothing for a path with a control character, which would break the entry's lines, or one
+# that is not UTF-8, which a key file cannot hold.
+fits_entry() {
+  case "$1" in *[[:cntrl:]]*) return 1 ;; esac
+  printf '%s' "$1" | iconv -f UTF-8 -t UTF-8 >/dev/null 2>&1
+}
+
+if [ -n "$DATA_HOME" ] && [ ! -e "$ENTRY" ] && fits_entry "$DESTINATION$DATA_HOME"; then
+  (
+    # The image's own icon, the file the app reads under its APPDIR; stdin is the script itself under `| bash`.
+    if (cd "$STAGING_DIR" && "$DESTINATION" --appimage-extract "$ICON_MEMBER" >/dev/null 2>&1 </dev/null) \
+      && mkdir -p "$DATA_HOME/icons" && put "$ICON" < "$STAGING_DIR/squashfs-root/$ICON_MEMBER"; then
+      ICON_LINE="Icon=$ICON"
+    fi
+    mkdir -p "$DATA_HOME/applications" && {
+      printf '%s\n' '[Desktop Entry]' 'Type=Application' 'Name=Harness Device' \
+        'Comment=The app for your Harness device.' "Exec=$(exec_value "$DESTINATION")"
+      if [ -n "${ICON_LINE:-}" ]; then printf '%s\n' "$ICON_LINE"; fi
+      printf '%s\n' 'Terminal=false' 'Categories=Utility;' 'StartupWMClass=harness-device'
+    } | put "$ENTRY"
+  ) || true
 fi
 
 printf '%s\n' "Harness Device $VERSION installed at $DESTINATION"
