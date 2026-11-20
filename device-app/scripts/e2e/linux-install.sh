@@ -165,8 +165,9 @@ if ! command -v fusermount3 >/dev/null; then
   sudo bash "$repo/scripts/apt-install.sh" fuse3 >/dev/null
 fi
 [[ -z "$(fuse2_installed)" ]] || fail "libfuse2 is not on this computer: dpkg still has $(fuse2_installed)"
-[[ "$(ldconfig -p | grep -c 'libfuse\.so\.2' || true)" == 0 ]] \
-  || fail "libfuse2 is not on this computer: ldconfig -p names libfuse.so.2"
+# No list is a failure, never a pass.
+libs="$(PATH="$PATH:/usr/sbin:/sbin" ldconfig -p)" || fail "libfuse2 is not on this computer: ldconfig -p gave no list"
+! grep -q 'libfuse\.so\.2' <<<"$libs" || fail "libfuse2 is not on this computer: ldconfig -p names libfuse.so.2"
 ok "libfuse2 is not on this computer (removed: ${installed[*]:-none, it was not installed})"
 
 # --- The stand-in CDN

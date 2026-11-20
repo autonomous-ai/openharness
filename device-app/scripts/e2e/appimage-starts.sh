@@ -26,7 +26,12 @@ name="$2"
 : "${DISPLAY:?appimage-starts.sh: run it under xvfb-run -a dbus-run-session --}"
 : "${DBUS_SESSION_BUS_ADDRESS:?appimage-starts.sh: run it under xvfb-run -a dbus-run-session --}"
 : "${XAUTHORITY:?appimage-starts.sh: run it under xvfb-run -a dbus-run-session --}"
-if [[ "$(ldconfig -p | grep -c 'libfuse\.so\.2' || true)" != 0 ]]; then
+# From /sbin too, which a person's PATH may leave out (Debian's): no list is a refusal, never a pass.
+libs="$(PATH="$PATH:/usr/sbin:/sbin" ldconfig -p)" || {
+  echo "appimage-starts.sh: ldconfig -p gave no list: it cannot tell whether libfuse2 is here" >&2
+  exit 2
+}
+if grep -q 'libfuse\.so\.2' <<<"$libs"; then
   echo "appimage-starts.sh: ldconfig -p names libfuse.so.2: an ok here would not say the AppImage needs no libfuse2" >&2
   exit 2
 fi
