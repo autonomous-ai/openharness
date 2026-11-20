@@ -611,54 +611,63 @@ describe('codex queue on Windows', () => {
       expect(asked).toHaveLength(1)
     })
 
-    it('a package with no codex.exe, or none, is asked again after 30 s, and one whose codex.exe went (an update) at once', async () => {
+    it('a package folder is not asked for again while it is there, codex.exe in it or not, and one that went (an update) at once', async () => {
       vi.useFakeTimers({ toFake: ['performance'] })
       onTestFinished(() => { vi.useRealTimers() })
       const { asked, answers, query } = packageQuery()
       const { appBinary } = codexQueueDeps(query)
+      const empty = appPackage('26.1100.0.0')
+      rmSync(empty.codex)
       expect(appBinary()).toBeNull()
-      answers[0]!(join(dir, 'empty-package'))
+      answers[0]!(empty.folder)
       await settled()
-      expect(appBinary()).toBeNull()
-      vi.advanceTimersByTime(29_999)
-      expect(appBinary()).toBeNull()
+      // Asking starts a PowerShell: twenty minutes of looks ask nothing more.
+      for (let look = 0; look < 40; look++) {
+        vi.advanceTimersByTime(30_000)
+        expect(appBinary()).toBeNull()
+      }
       expect(asked).toHaveLength(1)
-      vi.advanceTimersByTime(1)
-      expect(appBinary()).toBeNull()
-      expect(asked).toHaveLength(2)
-      answers[1]!(null)
-      await settled()
+
+      // An update removes the old version's folder; the new one is in a folder named for its version.
+      rmSync(empty.folder, { recursive: true })
+      const old = appPackage('26.1117.3838.0')
       vi.advanceTimersByTime(30_000)
       expect(appBinary()).toBeNull()
-      expect(asked).toHaveLength(3)
-
-      const old = appPackage('26.1117.3838.0')
-      answers[2]!(old.folder)
+      expect(asked).toHaveLength(2)
+      answers[1]!(old.folder)
       await settled()
       expect(appBinary()).toBe(old.codex)
-      // The update removes the old version's folder; the new one is in a folder named for its version.
       rmSync(old.folder, { recursive: true })
       const updated = appPackage('26.1201.1000.0')
       vi.advanceTimersByTime(30_000)
       expect(appBinary()).toBeNull()
-      expect(asked).toHaveLength(4)
-      answers[3]!(updated.folder)
+      expect(asked).toHaveLength(3)
+      answers[2]!(updated.folder)
       await settled()
       expect(appBinary()).toBe(updated.codex)
     })
 
-    it('a package query that fails is no app codex, and is asked again after 30 s', async () => {
+    it('a package not installed, or a query that fails, is no app codex, and is asked again after 10 minutes', async () => {
       vi.useFakeTimers({ toFake: ['performance'] })
       onTestFinished(() => { vi.useRealTimers() })
       const asked: string[] = []
-      const { appBinary } = codexQueueDeps(async (name) => { asked.push(name); throw new Error('no PowerShell') })
+      // Not installed, then a query that fails.
+      const { appBinary } = codexQueueDeps(async (name) => {
+        asked.push(name)
+        if (asked.length === 1) return null
+        throw new Error('no PowerShell')
+      })
       expect(appBinary()).toBeNull()
       await settled()
-      expect(appBinary()).toBeNull()
-      expect(asked).toHaveLength(1)
-      vi.advanceTimersByTime(30_000)
-      expect(appBinary()).toBeNull()
-      expect(asked).toHaveLength(2)
+      for (const ask of [1, 2]) {
+        vi.advanceTimersByTime(570_000)
+        expect(appBinary()).toBeNull()
+        expect(asked).toHaveLength(ask)
+        vi.advanceTimersByTime(30_000)
+        expect(appBinary()).toBeNull()
+        await settled()
+        expect(asked).toHaveLength(ask + 1)
+      }
     })
 
     it('a batch file only cmd.exe could run is not started', async () => {
