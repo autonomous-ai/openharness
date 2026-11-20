@@ -104,6 +104,7 @@ export function placeNode(path: string, runFrom: string[] = [], machine?: Machin
   start: (node: string) => void = firstStart): void {
   refuseRosettaNode(machine)
   if (started === undefined) throw new Error('placeNode needs src/__fixtures__/vitestRun.ts as the run\'s globalSetup, which names the run\'s Node')
+  mkdirSync(dirname(path), { recursive: true })
   if (started === '') { copyNode(path, runFrom, machine); start(path) }
   else {
     if (!existsSync(started)) makeRunNode(started, start)

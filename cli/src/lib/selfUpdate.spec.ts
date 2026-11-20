@@ -1628,7 +1628,7 @@ describe('an update that moves the daemon to Node 24', { timeout: 20_000 }, () =
   // 7 of them failed a run under load. The copies also timed out the hook at the default 10 s on a loaded CI runner
   // (2026-11-14, run 43603619102).
   beforeAll(() => {
-    for (const node of [v22, v24, newer]) { mkdirSync(dirname(node), { recursive: true }); placeNode(node) }
+    for (const node of [v22, v24, newer]) placeNode(node)
   }, 60_000)
   afterAll(() => {
     for (const node of [v22, v24, newer]) rmSync(dirname(dirname(node)), { recursive: true, force: true })

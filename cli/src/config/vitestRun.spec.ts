@@ -53,7 +53,7 @@ it('makes its Node at the first place, starts it once, and links it into every t
   const folder = scratch()
   const node = runNode(folder, undefined, []), start = vi.fn<(node: string) => void>()
   const placed = [join(folder, 'a', 'node'), join(folder, 'b', 'node')]
-  for (const path of placed) { mkdirSync(dirname(path)); placeNode(path, [], undefined, node, start) }
+  for (const path of placed) placeNode(path, [], undefined, node, start)
   expect(start).toHaveBeenCalledOnce()
   // Started before it is moved in, so a test never links a Node that has not run.
   expect(start.mock.calls[0]![0]).not.toBe(node)
@@ -64,7 +64,6 @@ it('makes its Node at the first place, starts it once, and links it into every t
 it('says which Node it could not make, and leaves none in its place', () => {
   const folder = scratch()
   const node = runNode(folder, undefined, []), path = join(folder, 'test', 'node')
-  mkdirSync(dirname(path))
   const start = () => { throw new Error('fixture: killed at its first start') }
   expect(() => placeNode(path, [], undefined, node, start))
     .toThrow(`The run's Node, a copy of ${process.execPath}, could not be made at ${node}: fixture: killed at its first start`)
