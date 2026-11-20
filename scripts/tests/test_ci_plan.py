@@ -1,6 +1,7 @@
 import copy
 import hashlib
 import importlib.util
+import inspect
 import io
 import itertools
 import json
@@ -1852,6 +1853,15 @@ class FullCheckoutTests(unittest.TestCase):
                 unittest.defaultTestLoader.loadTestsFromName(name, module).run(result)
                 results[name] = result
         return results
+
+    def test_they_are_every_test_that_needs_a_full_checkout(self):
+        # A new one left out would skip in process-checks and run nowhere.
+        module = sys.modules[__name__]
+        needing = {f"{name}.{test}" for name, case in vars(module).items()
+                   if isinstance(case, type) and issubclass(case, unittest.TestCase)
+                   for test, method in vars(case).items()
+                   if test.startswith("test_") and re.search(r"(?m)^\s+full_checkout\(", inspect.getsource(method))}
+        self.assertEqual(needing, set(self.NAMES))
 
     def test_the_scan_jobs_tests_fail_without_a_full_checkout_and_skip_elsewhere(self):
         # A skip exits 0: in the job that exists to run them, a checkout without their files would pass as green.
