@@ -818,16 +818,27 @@ mod tests {
         (node, vec![cli_js.into_os_string()])
     }
 
-    /// A link at `at` to `target`, a file or a folder.
-    fn link(target: &Path, at: PathBuf) -> PathBuf {
+    /// A link at `at` to `target`, a file or a folder; on Windows a folder's is a junction, which needs no privilege.
+    /// None where a file link needs a privilege this account lacks (Windows without Developer Mode or an
+    /// administrator).
+    fn link(target: &Path, at: PathBuf) -> Option<PathBuf> {
+        #[cfg(windows)]
+        use std::os::windows::process::CommandExt;
         #[cfg(unix)]
         std::os::unix::fs::symlink(target, &at).unwrap();
         #[cfg(windows)]
-        match target.is_dir() {
-            true => std::os::windows::fs::symlink_dir(target, &at).unwrap(),
-            false => std::os::windows::fs::symlink_file(target, &at).unwrap(),
+        if target.is_dir() {
+            let mut mklink = Command::new(env::var_os("ComSpec").expect("ComSpec"));
+            mklink.arg("/C").raw_arg(format!(r#"mklink /J "{}" "{}""#, at.display(), target.display()));
+            let made = mklink.output().unwrap();
+            assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
+        } else if let Err(error) = std::os::windows::fs::symlink_file(target, &at) {
+            // ERROR_PRIVILEGE_NOT_HELD
+            assert_eq!(error.raw_os_error(), Some(1314), "{error}");
+            eprintln!("skipped a file link: this account may not make one (Developer Mode or an administrator can)");
+            return None;
         }
-        at
+        Some(at)
     }
 
     #[test]
@@ -858,13 +869,13 @@ mod tests {
         let (node, _) = lay_out(home.path(), "0.6.12");
         let outside = tempfile::tempdir().unwrap();
         let elsewhere = put(outside.path().join("node.exe"));
-        let nodes = [
+        let mut nodes = vec![
             elsewhere.clone(),
             // Under the runtime folder as text, outside it as a path, to a file that is there.
             runtime.join("..").join("cli").join("0.6.12").join("cli.js"),
             PathBuf::from("node.exe"),
-            link(&elsewhere, runtime.join("linked.exe")),
         ];
+        nodes.extend(link(&elsewhere, runtime.join("linked.exe")));
         for pointer in nodes {
             fs::write(runtime.join("current-node"), pointer.display().to_string()).unwrap();
             assert_eq!(found_windows(home.path(), None), None, "{}", pointer.display());
