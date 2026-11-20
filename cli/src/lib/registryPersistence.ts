@@ -12,7 +12,7 @@ import { psEnv } from './childLocale.js'
 import { ownProcessGroup } from './windows/noWindow.js'
 import { errorKind } from './log.js'
 
-// Exported so specs hold this exact bound off the clock (testing/registryDeadline.ts).
+// Every registry write's bound: the queue's and confirmLaunch's (registry.ts). Specs read it too (testing/registryDeadline.ts).
 export const REGISTRY_WRITE_DEADLINE_MS = 5_000
 const LOCK_MS = 2_000
 const WAIT_MS = 20

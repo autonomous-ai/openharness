@@ -48,7 +48,7 @@ import { copilotTranscriptPath } from '../engines/copilot/contract.js'
 import { OPENCLAW_KEY } from '../engines/openclaw/contract.js'
 import { bootChanged, currentBootId } from './bootId.js'
 import { AtomicWriteUnconfirmed, atomicWriteJson, readPrivateStateFile, secureStateDirectory } from './secureState.js'
-import { RegistryPersistenceUnavailable, RegistryWriteQueue, prepareRegistryImage, privateRegistryDirectory, readPrivateRegistryFile, registryFileLock, type RegistryWriteDeadline } from './registryPersistence.js'
+import { REGISTRY_WRITE_DEADLINE_MS, RegistryPersistenceUnavailable, RegistryWriteQueue, prepareRegistryImage, privateRegistryDirectory, readPrivateRegistryFile, registryFileLock, type RegistryWriteDeadline } from './registryPersistence.js'
 import { mergeTerminalRuntimes, primaryRuntime, processIdentityKey, sameProcessIdentity, terminalPlacementKey, terminalRouteKey } from './terminalRuntime.js'
 import type { HookTerminalHint, ProcessIdentity, TerminalRuntimeRef } from './terminalTypes.js'
 import { externalReservations, externalResumePending, externalResumeIds, parseExternalResume, type ExternalResumeIntent } from './externalResume.js'
@@ -1991,7 +1991,7 @@ class Registry {
     const grids = input.grid === undefined ? [selected] : [selected, { ...selected, grid: input.grid }]
     const launches = grids.flatMap(row => [row, { ...row, active: true, launch: { state: 'ready' as const } }]).map(launchIdentity)
     const requested = structuredClone(input)
-    const expires = Math.min(authority.expires ?? Infinity, performance.now() + 5_000)
+    const expires = Math.min(authority.expires ?? Infinity, performance.now() + REGISTRY_WRITE_DEADLINE_MS)
     const verify = () => {
       if (authority.current?.() === false || !owners.includes(ownershipIdentity(this.byAgent(agentId)))) {
         throw new RegistryOwnershipChanged('the registry owner changed while its write was being prepared')
