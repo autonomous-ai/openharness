@@ -1281,23 +1281,23 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn the_login_item_is_refreshed_at_start_and_after_an_install() {
+    fn the_login_item_is_refreshed_at_start_and_not_by_an_install() {
         let w = world();
         assert_eq!(w.doubles.refreshed.load(Ordering::SeqCst), 1);
         // A refresh that changed nothing says nothing.
         assert!(!w.fake.log().lines().iter().any(|line| line.starts_with("login item: ")));
-        w.doubles.refresh_changes.store(true, Ordering::SeqCst);
         assert_eq!(w.install().1, Ok(()));
-        assert_eq!(w.doubles.refreshed.load(Ordering::SeqCst), 2);
-        assert!(w.logged("login item: updated"));
-        w.doubles.failing.store(true, Ordering::SeqCst);
-        assert_eq!(w.install().1, Ok(()));
-        assert!(w.logged("login item: not updated: Login item not added (error 1)."));
-
-        // An install that failed put nothing new in place.
-        let w = world_where(|doors| doors.cli_override = None);
-        assert_eq!(w.install().1, Err(vec![NOT_INSTALLED.into()]));
         assert_eq!(w.doubles.refreshed.load(Ordering::SeqCst), 1);
+
+        // A start's refresh that changed the item, or could not, is one line.
+        let changes = Arc::new(Doubles::default());
+        changes.refresh_changes.store(true, Ordering::SeqCst);
+        let w = world_where(|doors| doors.login_item = changes.clone());
+        assert!(w.logged("login item: updated"));
+        let failing = Arc::new(Doubles::default());
+        failing.failing.store(true, Ordering::SeqCst);
+        let w = world_where(|doors| doors.login_item = failing.clone());
+        assert!(w.logged("login item: not updated: Login item not added (error 1)."));
     }
 
     #[cfg(unix)]
