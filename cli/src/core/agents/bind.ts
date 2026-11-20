@@ -517,7 +517,9 @@ export function createBinding({
       if (row) announceSession(row)
       console.log(`[agent] ${sid(agentId)} first task confirmed`)
     }, (error: unknown) => {
-      if (removalsFailed.get(agentId) === at) return
+      // The registry's try again (RegistryOwnershipChanged among them, as a restarted daemon takes the registry over): the
+      // next pass settles it, so it is no failure.
+      if (error instanceof IdentityReadUnavailable || removalsFailed.get(agentId) === at) return
       if (removalsFailed.size >= 256) removalsFailed.clear()
       removalsFailed.set(agentId, at)
       console.error(`[agent] ${sid(agentId)} first task typed kept · ${errorKind(error)}`)
