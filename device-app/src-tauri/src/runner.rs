@@ -1168,7 +1168,6 @@ mod tests {
         Heard::Title(Some(value.into()))
     }
 
-    #[cfg(unix)]
     #[test]
     fn each_effect_gives_its_answer() {
         let w = world();
@@ -1198,7 +1197,6 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
     #[test]
     fn a_door_that_fails_is_one_log_line() {
         let w = world();
@@ -1221,7 +1219,6 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
     #[test]
     fn a_cli_that_vanished_says_so() {
         let w = world();
@@ -1232,7 +1229,6 @@ mod tests {
         assert_eq!(w.answer(Effect::RunLogin), sign_in(LoginEvent::Done(Err(NO_RESULT.into()))));
     }
 
-    #[cfg(unix)]
     #[test]
     fn without_a_cli_what_needs_one_says_so() {
         let w = world_where(|doors| doors.cli_override = None);
@@ -1244,7 +1240,6 @@ mod tests {
         assert!(w.fake.calls().is_empty());
     }
 
-    #[cfg(unix)]
     #[test]
     fn a_watch_that_cannot_start_has_ended() {
         // A CLI that is there and cannot run is not one that went away (the menu would call it removed and the next
@@ -1261,7 +1256,6 @@ mod tests {
         assert!(lines.iter().any(said), "{lines:?}");
     }
 
-    #[cfg(unix)]
     #[test]
     fn an_install_counts_only_when_a_cli_is_there() {
         let w = world_where(|doors| doors.cli_override = None);
@@ -1275,7 +1269,6 @@ mod tests {
         assert_eq!(w.answer(Effect::ReadAuth), Event::Auth(Some(true)));
     }
 
-    #[cfg(unix)]
     #[test]
     fn the_login_item_is_refreshed_at_start_and_not_by_an_install() {
         let w = world();
@@ -1296,7 +1289,6 @@ mod tests {
         assert!(w.logged("login item: Login item not set (error 1)."));
     }
 
-    #[cfg(unix)]
     #[test]
     fn an_install_tells_its_steps() {
         let w = world();
@@ -1310,7 +1302,6 @@ mod tests {
         assert_eq!(w.install(), (steps.to_vec(), Ok(())));
     }
 
-    #[cfg(unix)]
     #[test]
     fn what_opens_is_fixed() {
         let w = world();
@@ -1320,7 +1311,6 @@ mod tests {
         assert_eq!(*w.doubles.opened.lock().unwrap(), ["desktop", "url https://id.example/a?state=S"]);
     }
 
-    #[cfg(unix)]
     #[test]
     fn an_export_gives_the_zip() {
         let w = world();
@@ -1333,7 +1323,6 @@ mod tests {
         assert_eq!(w.fake.calls(), ["logs export --json"]);
     }
 
-    #[cfg(unix)]
     #[test]
     fn an_export_with_no_cli_still_answers() {
         let no_answer = Event::LogsExported(Err(ExportFailure::NoAnswer));
@@ -1348,7 +1337,6 @@ mod tests {
         assert_eq!(w.answer(Effect::ExportLogs), no_answer);
     }
 
-    #[cfg(unix)]
     #[test]
     fn the_reveal_is_one_fixed_open() {
         let w = world();
@@ -1357,7 +1345,6 @@ mod tests {
         assert_eq!(*w.doubles.opened.lock().unwrap(), [format!("reveal {zip}")]);
     }
 
-    #[cfg(unix)]
     #[test]
     fn the_binary_gets_its_four_effects_back() {
         let w = world();
@@ -1393,7 +1380,6 @@ mod tests {
         }
     }
 
-    #[cfg(unix)]
     #[test]
     fn the_about_credits_are_the_binarys() {
         let w = world();
@@ -1402,7 +1388,6 @@ mod tests {
         }
     }
 
-    #[cfg(unix)]
     #[test]
     fn relaunch_is_the_binarys() {
         let w = world();
@@ -1560,7 +1545,6 @@ mod tests {
         }
     }
 
-    #[cfg(unix)]
     #[test]
     fn allow_asks_macos_and_the_settings_open_with_one_fixed_argument() {
         let door = ChatgptDoor::answering(false, false);
@@ -1574,7 +1558,6 @@ mod tests {
         assert_eq!(door.with(|state| state.prompts), 1);
     }
 
-    #[cfg(unix)]
     #[test]
     fn an_update_check_runs_on_its_own_thread() {
         let updates = Updates::answering(Ok(Some("0.1.3".into())), Ok(()));
@@ -1589,7 +1572,6 @@ mod tests {
         assert_eq!(*updates.calls.lock().unwrap(), ["check"]);
     }
 
-    #[cfg(unix)]
     #[test]
     fn a_check_a_download_or_an_install_answers_its_failure() {
         let updates = Updates::answering(Err(UpdateFailure::Check), Ok(()));
@@ -1603,7 +1585,6 @@ mod tests {
         assert_eq!(*updates.calls.lock().unwrap(), ["check", "download", "install"]);
     }
 
-    #[cfg(unix)]
     #[test]
     fn a_download_then_an_install_reach_the_door_in_order() {
         let updates = Updates::answering(Ok(Some("0.1.3".into())), Ok(()));
@@ -1614,7 +1595,6 @@ mod tests {
         assert_eq!(*updates.calls.lock().unwrap(), ["download", "install"]);
     }
 
-    #[cfg(unix)]
     #[test]
     fn with_no_updater_a_check_finds_nothing() {
         let w = world();
@@ -1623,7 +1603,6 @@ mod tests {
         assert_eq!(w.answer(Effect::InstallUpdate), Event::UpdateChecked(None));
     }
 
-    #[cfg(unix)]
     #[test]
     fn a_second_watch_replaces_the_first() {
         let w = world();
@@ -1643,7 +1622,6 @@ mod tests {
         assert_eq!(w.rest(), []);
     }
 
-    #[cfg(unix)]
     #[test]
     fn the_app_in_front_is_written_to_the_watch() {
         let (w, fronts) = world_in_front_of(GHOSTTY);
@@ -1656,7 +1634,6 @@ mod tests {
         assert_eq!(w.fake.stdin(), [GHOSTTY_LINE, VSCODE_LINE, r#"{"front":""}"#]);
     }
 
-    #[cfg(unix)]
     #[test]
     fn a_sound_change_is_written_to_the_watch() {
         let (off, on) = (r#"{"muted":true}"#, r#"{"muted":false}"#);
@@ -1676,7 +1653,6 @@ mod tests {
         assert_eq!(w.rest(), []);
     }
 
-    #[cfg(unix)]
     #[test]
     fn a_notifications_change_is_written_to_the_watch() {
         let (you, full) = (r#"{"notify":"you"}"#, r#"{"notify":"full"}"#);
@@ -1696,7 +1672,6 @@ mod tests {
         assert_eq!(w.rest(), []);
     }
 
-    #[cfg(unix)]
     #[test]
     fn a_new_watch_is_told_the_app_in_front_once() {
         let (w, fronts) = world_in_front_of(GHOSTTY);
@@ -1718,7 +1693,6 @@ mod tests {
         assert_eq!(w.fake.stdin(), [GHOSTTY_LINE, VSCODE_LINE, VSCODE_LINE, VSCODE_LINE]);
     }
 
-    #[cfg(unix)]
     #[test]
     fn a_repeat_writes_nothing() {
         let (w, fronts) = world_in_front_of(GHOSTTY);
@@ -1731,7 +1705,6 @@ mod tests {
         assert_eq!(w.fake.stdin(), [GHOSTTY_LINE, VSCODE_LINE, GHOSTTY_LINE]);
     }
 
-    #[cfg(unix)]
     #[test]
     fn nothing_of_the_front_is_logged() {
         let (w, fronts) = world_in_front_of(GHOSTTY);
@@ -1751,7 +1724,6 @@ mod tests {
         assert!(doubles.saved.lock().unwrap().is_empty());
     }
 
-    #[cfg(unix)]
     #[test]
     fn the_selected_tab_is_written_to_the_watch_with_terminal_in_front_and_the_dial_attached() {
         let scripts = Scripts::answering(&[TTY]);
@@ -1767,7 +1739,6 @@ mod tests {
         assert_eq!(w.fake.stdin(), [TERMINAL_LINE.to_string(), tab(TTY)]);
     }
 
-    #[cfg(unix)]
     #[test]
     fn nothing_is_asked_with_another_app_in_front_no_watch_or_no_dial() {
         let scripts = Scripts::answering(&[TTY]);
@@ -1789,7 +1760,6 @@ mod tests {
         assert_eq!(scripts.polls(1)[..2], ["running Terminal", "selected_tty Terminal"]);
     }
 
-    #[cfg(unix)]
     #[test]
     fn a_change_of_tab_is_one_line_and_a_repeat_none() {
         let scripts = Scripts::answering(&[TTY, TTY, OTHER, OTHER]);
@@ -1802,7 +1772,6 @@ mod tests {
         assert_eq!(w.fake.stdin(), [TERMINAL_LINE.to_string(), tab(TTY), tab(OTHER)]);
     }
 
-    #[cfg(unix)]
     #[test]
     fn asking_stops_when_another_app_comes_to_the_front() {
         let scripts = Scripts::answering(&[TTY]);
@@ -1819,7 +1788,6 @@ mod tests {
         assert_eq!(w.fake.stdin(), [TERMINAL_LINE, VSCODE_LINE]);
     }
 
-    #[cfg(unix)]
     #[test]
     fn asking_stops_when_the_watch_ends_or_the_dial_detaches() {
         let scripts = Scripts::answering(&[TTY]);
@@ -1844,7 +1812,6 @@ mod tests {
         scripts.still(4);
     }
 
-    #[cfg(unix)]
     #[test]
     fn a_select_from_the_watch_runs_once_and_says_whether_its_app_is_in_front() {
         let scripts = Arc::new(Scripts::default());
@@ -1865,7 +1832,6 @@ mod tests {
         assert_eq!(said, ["tabs: Terminal select ok", "tabs: Terminal select ok"]);
     }
 
-    #[cfg(unix)]
     #[test]
     fn a_select_that_raises_runs_focus_tty_and_one_that_does_not_runs_select_tty() {
         let scripts = Arc::new(Scripts::default());
@@ -1879,7 +1845,6 @@ mod tests {
         scripts.still(4);
     }
 
-    #[cfg(unix)]
     #[test]
     fn a_swipe_for_a_ghostty_in_the_back_makes_no_call_and_no_log_line() {
         let scripts = Arc::new(Scripts::default());
@@ -1898,7 +1863,6 @@ mod tests {
         assert_eq!(said, ["tabs: Ghostty select ok"]);
     }
 
-    #[cfg(unix)]
     #[test]
     fn an_app_that_is_not_running_is_never_sent_an_event() {
         // A swipe's select_tty and a tap's focus_tty alike.
@@ -1917,7 +1881,6 @@ mod tests {
         assert!(log.lines().iter().all(|line| !line.starts_with("tabs:")), "{:?}", log.lines());
     }
 
-    #[cfg(unix)]
     #[test]
     fn an_app_that_is_not_running_is_never_polled() {
         // It quit just now, still in front: asking it for its tab would launch it again.
@@ -1933,7 +1896,6 @@ mod tests {
         assert_eq!(w.fake.stdin(), [TERMINAL_LINE]);
     }
 
-    #[cfg(unix)]
     #[test]
     fn no_two_calls_overlap() {
         let scripts = Scripts::answering(&[TTY]);
@@ -1952,7 +1914,6 @@ mod tests {
         assert_eq!(scripts.most.load(Ordering::SeqCst), 1);
     }
 
-    #[cfg(unix)]
     #[test]
     fn the_failed_polls_are_counted_in_the_log_when_another_app_comes_to_the_front() {
         let scripts = Arc::new(Scripts::default());
@@ -1972,7 +1933,6 @@ mod tests {
         assert_eq!(counted.map(|counts| counts.iter().sum()), Some(polls), "{said:?}");
     }
 
-    #[cfg(unix)]
     #[test]
     fn nothing_of_a_tab_is_logged_but_its_outcome() {
         let scripts = Scripts::answering(&[TTY, OTHER]);
@@ -1996,7 +1956,6 @@ mod tests {
         assert!(doubles.saved.lock().unwrap().is_empty());
     }
 
-    #[cfg(unix)]
     #[test]
     fn the_tab_thread_ends_with_the_runner() {
         let scripts = Scripts::answering(&[TTY]);
@@ -2011,7 +1970,6 @@ mod tests {
         assert_eq!(Arc::strong_count(&scripts), 1);
     }
 
-    #[cfg(unix)]
     #[test]
     fn the_chatgpt_title_is_written_to_the_watch_with_chatgpt_in_front_the_dial_attached_and_the_permission() {
         let door = ChatgptDoor::answering(false, true);
@@ -2027,7 +1985,6 @@ mod tests {
         assert_eq!(door.with(|state| state.observations.len()), 1);
     }
 
-    #[cfg(unix)]
     #[test]
     fn nothing_is_observed_without_the_permission_the_dial_or_chatgpt_in_front() {
         let door = ChatgptDoor::answering(false, true);
@@ -2059,7 +2016,6 @@ mod tests {
         door.observed(1);
     }
 
-    #[cfg(unix)]
     #[test]
     fn the_observer_is_dropped_when_chatgpt_leaves_the_dial_detaches_the_watch_ends_or_the_permission_goes() {
         let door = ChatgptDoor::answering(false, true);
@@ -2115,7 +2071,6 @@ mod tests {
         assert_eq!(w.fake.stdin(), [&first[..], &[CHATGPT_LINE, FIX_LOGIN]].concat());
     }
 
-    #[cfg(unix)]
     #[test]
     fn a_title_heard_after_its_observer_was_dropped_is_written_nowhere() {
         let door = ChatgptDoor::answering(false, true);
@@ -2137,7 +2092,6 @@ mod tests {
         assert_eq!(w.fake.stdin(), [CHATGPT_LINE, FIX_LOGIN, VSCODE_LINE, CHATGPT_LINE, FIX_LOGIN]);
     }
 
-    #[cfg(unix)]
     #[test]
     fn the_permission_is_read_at_the_notification_and_once_more_a_moment_later() {
         let door = ChatgptDoor::answering(false, true);
@@ -2163,7 +2117,6 @@ mod tests {
         assert_eq!(door.with(|state| state.reads.len()), before + 2);
     }
 
-    #[cfg(unix)]
     #[test]
     fn a_change_of_the_permission_or_of_the_app_installed_is_one_follow_event() {
         let door = ChatgptDoor::answering(true, false);
@@ -2201,7 +2154,6 @@ mod tests {
         assert_eq!(w.rest(), [Event::WatchExit(Some(0))]);
     }
 
-    #[cfg(unix)]
     #[test]
     fn the_offer_is_one_event_when_chatgpt_comes_to_the_front_and_none_for_the_app_in_front_at_start() {
         let door = ChatgptDoor::answering(true, false);
@@ -2222,7 +2174,6 @@ mod tests {
         assert_eq!(w.rest(), [Event::WatchExit(Some(0))]);
     }
 
-    #[cfg(unix)]
     #[test]
     fn no_observer_is_one_log_line_each_time_observing_starts() {
         let door = ChatgptDoor::answering(false, true);
@@ -2246,7 +2197,6 @@ mod tests {
         assert_eq!(w.fake.stdin(), [CHATGPT_LINE, VSCODE_LINE, CHATGPT_LINE]);
     }
 
-    #[cfg(unix)]
     #[test]
     fn an_observation_that_does_not_start_is_one_log_line_each_time_observing_starts() {
         let door = ChatgptDoor::answering(false, true);
@@ -2267,7 +2217,6 @@ mod tests {
         assert_eq!(w.answer(Effect::StopWatch), Event::WatchExit(Some(0)));
     }
 
-    #[cfg(unix)]
     #[test]
     fn a_chatgpt_that_hangs_holds_back_no_front_line() {
         let door = ChatgptDoor::answering(false, true);
@@ -2292,7 +2241,6 @@ mod tests {
         door.dropped(0);
     }
 
-    #[cfg(unix)]
     #[test]
     fn nothing_of_a_title_reaches_the_log_an_event_or_the_state_file() {
         let door = ChatgptDoor::answering(true, true);
@@ -2325,7 +2273,6 @@ mod tests {
         assert!(doubles.saved.lock().unwrap().is_empty());
     }
 
-    #[cfg(unix)]
     #[test]
     fn the_follow_thread_ends_with_the_runner() {
         let door = ChatgptDoor::answering(false, true);
@@ -2341,7 +2288,6 @@ mod tests {
         assert_eq!(Arc::strong_count(&door), 1);
     }
 
-    #[cfg(unix)]
     #[test]
     fn from_start_to_dial_connected() {
         let w = world();
@@ -2370,7 +2316,6 @@ mod tests {
         assert_eq!(calls, ["--version", "auth status --json", "hardware watch --json"]);
     }
 
-    #[cfg(unix)]
     #[test]
     fn nothing_personal_reaches_the_log() {
         let w = world();
@@ -2391,7 +2336,6 @@ mod tests {
         assert!(lines.iter().all(|line| !line.contains("state=S") && !line.contains('@')), "{lines:?}");
     }
 
-    #[cfg(unix)]
     #[test]
     fn a_sign_in_it_replaced_says_nothing_more() {
         // The app cannot tell one sign-in's events from another's: once replaced, a sign-in must say nothing more.
@@ -2413,7 +2357,6 @@ mod tests {
         assert_eq!(w.rest(), [sign_in(LoginEvent::Done(Err("fetch failed".into())))]);
     }
 
-    #[cfg(unix)]
     #[test]
     fn a_sign_in_is_cancelled_while_it_hands_an_event_over() {
         // account.rs hands each event over while it holds the lock `cancel` takes. So `send` only hands the event on to
