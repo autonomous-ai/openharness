@@ -655,6 +655,17 @@ mod tests {
     }
 
     #[test]
+    fn the_door_is_the_oss_or_the_one_of_the_desktop_the_front_source_reads() {
+        use crate::front::LinuxFront;
+        assert_eq!(door_kind("macos", None), DoorKind::Mac);
+        assert_eq!(door_kind("windows", None), DoorKind::Windows);
+        assert_eq!(door_kind("linux", Some(LinuxFront::X11(":1".into()))), DoorKind::X11(":1".into()));
+        assert_eq!(door_kind("linux", Some(LinuxFront::Sway)), DoorKind::Sway);
+        assert_eq!(door_kind("linux", Some(LinuxFront::Hyprland)), DoorKind::Hyprland);
+        assert_eq!(door_kind("linux", Some(LinuxFront::None)), DoorKind::None);
+    }
+
+    #[test]
     fn no_follow_reads_nothing_and_asks_nothing() {
         let heard = Arc::new(Mutex::new(0));
         let count = heard.clone();
