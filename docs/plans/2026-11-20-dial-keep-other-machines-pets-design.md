@@ -41,9 +41,10 @@ A computer removes from the dial only:
 3. **On a refusal for memory or busy** while a spare pack is held: in the `pet.error` handler, when the refused pack
    has not been retried on this link yet, drop the first spare pack (which sets `petDropSent`) before the existing
    once-per-pack-and-link retry is scheduled (`PET_RETRY_MS`). The drop is part of that once: a keepalive hello that
-   forgives the refusal and offers again drops nothing more. The 4 slots fit 4 packs of the 1 MB limit in the dial's
-   PSRAM, so this is the safety net for a dial whose memory is tighter than its slot count; the slot is freed at
-   once, the memory at the dial's next frame, which is why the retry waits.
+   forgives the refusal and offers again drops nothing more. A pack that rule 2 just dropped a spare pack for on this
+   link gets no second drop, only the retry: that drop's memory is still settling. The 4 slots fit 4 packs of the
+   1 MB limit in the dial's PSRAM, so this is the safety net for a dial whose memory is tighter than its slot count;
+   the slot is freed at once, the memory at the dial's next frame, which is why the retry waits.
 
 A pack this computer replaced while the dial was elsewhere is spare on the next attach (it is never shown: the mapping
 does not name it) and goes when its slot is needed. No state file: the store deletes a replaced pet's files
