@@ -63,6 +63,25 @@ describe('a held pane on Windows', () => {
       expect(child.signalCode).toBeNull()
     } finally { child.kill('SIGKILL') }
   })
+
+  // Node on Windows hears the console's close as SIGHUP (libuv src/win/signal.c), the close a respawn over the pane sends.
+  it.skipIf(process.platform === 'win32')('ends on a hangup, as the held pane elsewhere does', async () => {
+    const [node, ...args] = windowsHeldPaneArgv('Waiting for the Store.', undefined, process.execPath)
+    const child = spawn(node!, args, { stdio: ['ignore', 'pipe', 'ignore'] })
+    let bound: NodeJS.Timeout | undefined
+    try {
+      // Its line follows its listeners: a hangup sent before it would end Node before the script ran.
+      let output = ''
+      await new Promise<void>((resolve) => child.stdout.on('data', (chunk: Buffer) => { output += chunk; if (output.includes('\n')) resolve() }))
+      const exited = new Promise<NodeJS.Signals | null>((resolve) => child.once('exit', (_code, signal) => resolve(signal)))
+      child.kill('SIGHUP')
+      const stillRunning = new Promise<string>((resolve) => { bound = setTimeout(resolve, 5_000, 'still running after 5 s') })
+      expect(await Promise.race([exited, stillRunning])).toBe('SIGHUP')
+    } finally {
+      clearTimeout(bound)
+      child.kill('SIGKILL')
+    }
+  })
 })
 
 describe('the shell a Windows engine\'s pane becomes', () => {
