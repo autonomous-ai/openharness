@@ -6,7 +6,7 @@
 //! AppImage's own while the person hid it or while the lines the writers own are right; a missing, stale or broken one
 //! is written again.
 
-use crate::loginitem_linux::appimage;
+use crate::loginitem_linux::AppImage;
 use std::ffi::OsStr;
 use std::fs;
 use std::io;
@@ -138,29 +138,21 @@ fn value<'a>(entry: &'a str, key: &str) -> Option<&'a str> {
         .map(|value| value.trim_matches([' ', '\t', '\r']))
 }
 
-/// Brings `<data_home>/applications/harness-device.desktop` to what `change` says for the AppImage APPIMAGE names,
-/// with the icon from the image mounted at APPDIR (absolute, as appimage_env.rs takes it). None: the run is no
-/// AppImage. Else what it did, or the error's log line.
-pub fn apply(
-    data_home: Option<&Path>,
-    appimage_var: Option<&OsStr>,
-    appdir_var: Option<&OsStr>,
-) -> Option<Result<Change, String>> {
-    let appimage = appimage(appimage_var)?;
+/// Brings `<data_home>/applications/harness-device.desktop` to what `change` says for this run's AppImage, with the
+/// icon from inside its mount. None: the run is no AppImage. Else what it did, or the error's log line.
+pub fn apply(data_home: Option<&Path>, appimage: Option<&AppImage>) -> Option<Result<Change, String>> {
+    let appimage = appimage?;
     let Some(data_home) = data_home else { return Some(Err(not_written("no data folder"))) };
-    let Some(exec) = exec_value(&appimage) else { return Some(Err(not_written("path not one line"))) };
+    let Some(exec) = exec_value(&appimage.file) else { return Some(Err(not_written("path not one line"))) };
     // The icon's path goes in the entry as it is: one line, UTF-8.
     if data_home.to_str().is_none_or(|path| path.chars().any(char::is_control)) {
         return Some(Err(not_written("path not one line")));
     }
-    Some(write_entry(data_home, &appimage, &exec, appdir_var))
+    Some(write_entry(data_home, appimage, &exec))
 }
 
-fn write_entry(data_home: &Path, appimage: &Path, exec: &str, appdir_var: Option<&OsStr>) -> Result<Change, String> {
-    let icon_bytes = appdir_var
-        .map(Path::new)
-        .filter(|appdir| appdir.is_absolute())
-        .and_then(|appdir| fs::read(appdir.join(ICON_MEMBER)).ok());
+fn write_entry(data_home: &Path, appimage: &AppImage, exec: &str) -> Result<Change, String> {
+    let icon_bytes = fs::read(appimage.mount.join(ICON_MEMBER)).ok();
     let icon = data_home.join("icons").join(ICON);
     let wanted = entry(exec, icon_bytes.as_ref().map(|_| icon.as_path()));
     let file = data_home.join("applications").join(ENTRY);
@@ -169,7 +161,7 @@ fn write_entry(data_home: &Path, appimage: &Path, exec: &str, appdir_var: Option
         Err(error) if error.kind() == io::ErrorKind::NotFound => None,
         Err(error) => return Err(failed(&error)),
     };
-    if change(existing.as_deref(), appimage, &wanted, Path::is_file) == Change::Leave {
+    if change(existing.as_deref(), &appimage.file, &wanted, Path::is_file) == Change::Leave {
         return Ok(Change::Leave);
     }
     // The icon first: an entry is never there naming an icon that is not.
@@ -219,13 +211,13 @@ fn write(file: &Path, bytes: &[u8]) -> io::Result<()> {
 #[cfg(target_os = "linux")]
 pub fn system() -> Option<String> {
     let data_home = data_home(std::env::var_os("XDG_DATA_HOME").as_deref(), std::env::var_os("HOME").as_deref());
-    apply(data_home.as_deref(), std::env::var_os("APPIMAGE").as_deref(), std::env::var_os("APPDIR").as_deref())
-        .map(line)
+    apply(data_home.as_deref(), crate::loginitem_linux::this_appimage().as_ref()).map(line)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::loginitem_linux::appimage;
     use serde_json::Value;
     use std::ffi::{OsStr, OsString};
     use std::fs;
@@ -274,8 +266,13 @@ mod tests {
             self.data_home().join("icons").join("harness-device.png")
         }
 
-        fn apply(&self, appdir: Option<&OsStr>) -> Option<Result<Change, String>> {
-            apply(Some(&self.data_home()), Some(self.appimage.as_os_str()), appdir)
+        /// The run from this image: its program in the mount.
+        fn run(&self) -> AppImage {
+            AppImage { file: self.appimage.clone(), mount: self.appdir.clone() }
+        }
+
+        fn apply(&self) -> Option<Result<Change, String>> {
+            apply(Some(&self.data_home()), Some(&self.run()))
         }
     }
 
@@ -344,33 +341,25 @@ mod tests {
     #[test]
     fn the_icon_comes_from_inside_the_image() {
         let image = an_image();
-        assert_eq!(image.apply(Some(image.appdir.as_os_str())), Some(Ok(Change::Write)));
+        assert_eq!(image.apply(), Some(Ok(Change::Write)));
         assert_eq!(fs::read(image.icon_file()).unwrap(), ICON_BYTES);
         let exec = exec_value(&image.appimage).unwrap();
         assert_eq!(fs::read_to_string(image.entry_file()).unwrap(), entry(&exec, Some(&image.icon_file())));
 
-        // No APPDIR, one that is not absolute, or one without the icon: the entry names no icon, and none is written.
-        let empty = image.dir.path().join("empty");
-        fs::create_dir(&empty).unwrap();
-        for appdir in [None, Some(OsStr::new("mount")), Some(empty.as_os_str())] {
-            let image = an_image();
-            assert_eq!(image.apply(appdir), Some(Ok(Change::Write)), "{appdir:?}");
-            assert!(!image.icon_file().exists(), "{appdir:?}");
-            assert_eq!(
-                fs::read_to_string(image.entry_file()).unwrap(),
-                entry(&exec_value(&image.appimage).unwrap(), None)
-            );
-        }
+        // A mount without the icon: the entry names no icon, and none is written.
+        let image = an_image();
+        let empty = AppImage { file: image.appimage.clone(), mount: image.dir.path().join("empty") };
+        fs::create_dir(&empty.mount).unwrap();
+        assert_eq!(apply(Some(&image.data_home()), Some(&empty)), Some(Ok(Change::Write)));
+        assert!(!image.icon_file().exists());
+        assert_eq!(fs::read_to_string(image.entry_file()).unwrap(), entry(&exec_value(&image.appimage).unwrap(), None));
     }
 
     #[test]
     fn not_an_appimage_writes_nothing() {
         let image = an_image();
-        let folder = image.dir.path().join("My Apps");
-        for appimage in [None, Some(OsStr::new("Harness-Device.AppImage")), Some(folder.as_os_str())] {
-            assert_eq!(apply(Some(&image.data_home()), appimage, Some(image.appdir.as_os_str())), None, "{appimage:?}");
-            assert!(!image.data_home().exists(), "{appimage:?}");
-        }
+        assert_eq!(apply(Some(&image.data_home()), None), None);
+        assert!(!image.data_home().exists());
     }
 
     #[test]
@@ -378,19 +367,20 @@ mod tests {
         // APPIMAGE and APPDIR as a program started from another AppImage's terminal inherits them: this test runs from
         // no such mount.
         let image = an_image();
-        assert_eq!(image.apply(Some(image.appdir.as_os_str())), None);
+        let exe = std::env::current_exe().unwrap();
+        let run = appimage(Some(image.appimage.as_os_str()), Some(image.appdir.as_os_str()), &exe);
+        assert_eq!(apply(Some(&image.data_home()), run.as_ref()), None);
         assert!(!image.data_home().exists());
     }
 
     #[test]
     fn a_second_run_leaves_the_entry() {
         let image = an_image();
-        let appdir = Some(image.appdir.as_os_str());
-        assert_eq!(image.apply(appdir).map(line).as_deref(), Some("app list: entry written"));
+        assert_eq!(image.apply().map(line).as_deref(), Some("app list: entry written"));
         let written = fs::metadata(image.entry_file()).unwrap().modified().unwrap();
         let bytes = fs::read(image.entry_file()).unwrap();
         // The log says so: a left entry is a line too, the sign that the run decided.
-        assert_eq!(image.apply(appdir).map(line).as_deref(), Some("app list: entry kept"));
+        assert_eq!(image.apply().map(line).as_deref(), Some("app list: entry kept"));
         assert_eq!(fs::read(image.entry_file()).unwrap(), bytes);
         assert_eq!(fs::metadata(image.entry_file()).unwrap().modified().unwrap(), written);
     }
@@ -407,7 +397,7 @@ mod tests {
         let image = an_image();
         let folder = image.dir.path().join("My Apps");
         existing(&image, format!("[Desktop Entry]\nExec={}\n", exec_value(&folder).unwrap()).as_bytes());
-        assert_eq!(image.apply(Some(image.appdir.as_os_str())), Some(Ok(Change::Write)));
+        assert_eq!(image.apply(), Some(Ok(Change::Write)));
     }
 
     #[test]
@@ -418,7 +408,7 @@ mod tests {
         let wanted = entry(&exec, Some(&image.icon_file()));
         let older = wanted.replace(&format!("StartupWMClass={WM_CLASS}\n"), "");
         existing(&image, &[older.as_bytes(), b"X-Odd=\xff\n"].concat());
-        assert_eq!(image.apply(Some(image.appdir.as_os_str())), Some(Ok(Change::Write)));
+        assert_eq!(image.apply(), Some(Ok(Change::Write)));
         assert_eq!(fs::read_to_string(image.entry_file()).unwrap(), wanted);
     }
 
@@ -427,17 +417,17 @@ mod tests {
         let image = an_image();
         fs::write(image.data_home(), "").unwrap();
         let not_written = |why: &str| Some(format!("app list: entry not written ({why})"));
-        assert_eq!(image.apply(Some(image.appdir.as_os_str())).map(line), not_written("error 20"));
+        assert_eq!(image.apply().map(line), not_written("error 20"));
         // An AppImage run always ends in one line, with no data folder or a path one line cannot hold too.
-        let appimage = Some(image.appimage.as_os_str());
-        assert_eq!(apply(None, appimage, None).map(line), not_written("no data folder"));
-        assert_eq!(apply(Some(Path::new("/a\nb")), appimage, None).map(line), not_written("path not one line"));
+        let run = image.run();
+        assert_eq!(apply(None, Some(&run)).map(line), not_written("no data folder"));
+        assert_eq!(apply(Some(Path::new("/a\nb")), Some(&run)).map(line), not_written("path not one line"));
     }
 
     #[test]
     fn the_entry_is_written_whole() {
         let image = an_image();
-        assert_eq!(image.apply(Some(image.appdir.as_os_str())), Some(Ok(Change::Write)));
+        assert_eq!(image.apply(), Some(Ok(Change::Write)));
         let names = |folder: &Path| -> Vec<String> {
             fs::read_dir(folder).unwrap().map(|file| file.unwrap().file_name().into_string().unwrap()).collect()
         };

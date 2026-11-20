@@ -29,9 +29,28 @@ pub fn entry_path(config_home: Option<&OsStr>, home: &Path) -> PathBuf {
     config.join("autostart").join(ENTRY)
 }
 
-/// The AppImage this run came from: its runtime sets APPIMAGE to its own file. A developer's `cargo run` has none.
-pub fn appimage(var: Option<&OsStr>) -> Option<PathBuf> {
-    var.map(PathBuf::from).filter(|path| path.is_absolute() && path.is_file())
+/// This run's AppImage: its file, and the folder its runtime mounted it at.
+#[derive(Debug, PartialEq, Eq)]
+pub struct AppImage {
+    pub file: PathBuf,
+    pub mount: PathBuf,
+}
+
+/// The AppImage this run came from: its runtime sets APPIMAGE to its own file and APPDIR to the folder it mounted it
+/// at, which holds `exe`, this program. A developer's `cargo run` has neither. A program started from a terminal that
+/// an AppImage's program opened has both, inherited, but runs from elsewhere: it is no AppImage either.
+pub fn appimage(file: Option<&OsStr>, mount: Option<&OsStr>, exe: &Path) -> Option<AppImage> {
+    let file = file.map(PathBuf::from).filter(|path| path.is_absolute() && path.is_file())?;
+    // As the kernel names it in /proc/self/exe, which `exe` is: the runtime mounts under TMPDIR, which may be a link.
+    let mount = mount.map(Path::new).filter(|mount| mount.is_absolute())?.canonicalize().ok()?;
+    exe.starts_with(&mount).then_some(AppImage { file, mount })
+}
+
+/// This run's AppImage, None outside one.
+#[cfg(target_os = "linux")]
+pub fn this_appimage() -> Option<AppImage> {
+    let exe = std::env::current_exe().ok()?;
+    appimage(std::env::var_os("APPIMAGE").as_deref(), std::env::var_os("APPDIR").as_deref(), &exe)
 }
 
 /// The entry's `Exec=` value: the AppImage while it is there; once it is gone, the launcher's `start`, as the
@@ -99,10 +118,11 @@ fn is_off(line: &str) -> bool {
     )
 }
 
-/// Brings the entry at `entry` to what `change` says for the AppImage APPIMAGE names. Ok(true): it wrote the entry.
-pub fn apply(entry: &Path, appimage_var: Option<&OsStr>, launcher: &Path, first: bool) -> Result<bool, String> {
-    let Some(appimage) = appimage(appimage_var) else { return skipped(first, NOT_AN_APPIMAGE) };
-    let Some(exec) = exec_line(&appimage, launcher) else { return skipped(first, PATH_NOT_SUPPORTED) };
+/// Brings the entry at `entry` to what `change` says for this run's AppImage file, None outside one. Ok(true): it
+/// wrote the entry.
+pub fn apply(entry: &Path, appimage: Option<&Path>, launcher: &Path, first: bool) -> Result<bool, String> {
+    let Some(appimage) = appimage else { return skipped(first, NOT_AN_APPIMAGE) };
+    let Some(exec) = exec_line(appimage, launcher) else { return skipped(first, PATH_NOT_SUPPORTED) };
     let existing = match fs::read_to_string(entry) {
         Ok(text) => Some(text),
         Err(error) if error.kind() == io::ErrorKind::NotFound => None,
@@ -162,7 +182,7 @@ fn system(first: bool) -> Result<bool, String> {
     let entry = entry_path(std::env::var_os("XDG_CONFIG_HOME").as_deref(), &home);
     // The launcher the installer puts in ~/.local/bin.
     let launcher = home.join(".local").join("bin").join("harness");
-    apply(&entry, std::env::var_os("APPIMAGE").as_deref(), &launcher, first)
+    apply(&entry, this_appimage().as_ref().map(|run| run.file.as_path()), &launcher, first)
 }
 
 #[cfg(test)]
@@ -421,25 +441,44 @@ mod tests {
         }
     }
 
+    /// An AppImage file, and the folder its runtime mounted it at, holding the program at `usr/bin/harness-device`.
+    fn an_appimage(dir: &Path) -> (PathBuf, PathBuf, PathBuf) {
+        let file = dir.join("H.AppImage");
+        fs::write(&file, "").unwrap();
+        let mount = dir.join(".mount_HarnesAbC123");
+        fs::create_dir(&mount).unwrap();
+        // The program's path as /proc/self/exe gives it: with every link resolved.
+        let exe = mount.canonicalize().unwrap().join("usr/bin/harness-device");
+        (file, mount, exe)
+    }
+
     #[test]
     fn an_appimage_this_program_does_not_run_from_registers_nothing() {
-        // APPIMAGE as a program started from another AppImage's terminal inherits it: this test runs from no mount.
+        // APPIMAGE and APPDIR as a program started from another AppImage's terminal inherits them: this test runs from
+        // no such mount.
         let dir = tempfile::tempdir().unwrap();
-        let file = dir.path().join("H.AppImage");
-        fs::write(&file, "").unwrap();
+        let (file, mount, _) = an_appimage(dir.path());
+        let run = appimage(Some(file.as_os_str()), Some(mount.as_os_str()), &std::env::current_exe().unwrap());
+        assert_eq!(run, None);
         let entry = entry_path(Some(dir.path().join("config").as_os_str()), dir.path());
         let not_one = Err("Login item not set (not an AppImage).".into());
-        assert_eq!(apply(&entry, Some(file.as_os_str()), Path::new(LAUNCHER), true), not_one);
+        assert_eq!(apply(&entry, run.as_ref().map(|run| run.file.as_path()), Path::new(LAUNCHER), true), not_one);
         assert!(!entry.exists());
     }
 
     #[test]
-    fn only_an_appimage_run_registers() {
+    fn a_run_is_an_appimage_when_its_program_is_in_the_mount() {
         let dir = tempfile::tempdir().unwrap();
-        let file = dir.path().join("H.AppImage");
-        fs::write(&file, "").unwrap();
+        let (file, mount, exe) = an_appimage(dir.path());
+        let (path, folder) = (Some(file.as_os_str()), Some(mount.as_os_str()));
+        let mounted = mount.canonicalize().unwrap();
+        assert_eq!(appimage(path, folder, &exe), Some(AppImage { file: file.clone(), mount: mounted.clone() }));
+        // The mount named through a link, as a TMPDIR that is one names it.
+        let link = dir.path().join("link");
+        std::os::unix::fs::symlink(&mount, &link).unwrap();
+        assert_eq!(appimage(path, Some(link.as_os_str()), &exe), Some(AppImage { file: file.clone(), mount: mounted }));
+
         let gone = dir.path().join("gone.AppImage");
-        assert_eq!(appimage(Some(file.as_os_str())), Some(file.clone()));
         for not_one in [
             None,
             Some(OsStr::new("")),
@@ -447,22 +486,35 @@ mod tests {
             Some(dir.path().as_os_str()),
             Some(gone.as_os_str()),
         ] {
-            assert_eq!(appimage(not_one), None, "{not_one:?}");
+            assert_eq!(appimage(not_one, folder, &exe), None, "{not_one:?}");
         }
+        // No APPDIR, a relative one, one that is not there, or one that holds another program.
+        let elsewhere = dir.path().join(".mount_HarnesAbC12");
+        fs::create_dir(&elsewhere).unwrap();
+        for mount in
+            [None, Some(OsStr::new(".mount_HarnesAbC123")), Some(gone.as_os_str()), Some(elsewhere.as_os_str())]
+        {
+            assert_eq!(appimage(path, mount, &exe), None, "{mount:?}");
+        }
+    }
 
+    #[test]
+    fn only_an_appimage_run_registers() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("H.AppImage");
         let entry = entry_path(Some(dir.path().join("config").as_os_str()), dir.path());
         let launcher = Path::new(LAUNCHER);
         assert_eq!(apply(&entry, None, launcher, true), Err("Login item not set (not an AppImage).".into()));
         assert_eq!(apply(&entry, None, launcher, false), Ok(false));
         assert!(!entry.exists());
-        assert_eq!(apply(&entry, Some(file.as_os_str()), launcher, true), Ok(true));
+        assert_eq!(apply(&entry, Some(&file), launcher, true), Ok(true));
         assert_eq!(fs::read_to_string(&entry).unwrap(), fresh(&exec_line(&file, launcher).unwrap()));
-        assert_eq!(apply(&entry, Some(file.as_os_str()), launcher, false), Ok(false));
+        assert_eq!(apply(&entry, Some(&file), launcher, false), Ok(false));
         // Written through a temp file and a rename: nothing else is left beside it.
         assert_eq!(fs::read_dir(entry.parent().unwrap()).unwrap().count(), 1);
         // Deleted, it stays deleted.
         fs::remove_file(&entry).unwrap();
-        assert_eq!(apply(&entry, Some(file.as_os_str()), launcher, false), Ok(false));
+        assert_eq!(apply(&entry, Some(&file), launcher, false), Ok(false));
         assert!(!entry.exists());
     }
 }
