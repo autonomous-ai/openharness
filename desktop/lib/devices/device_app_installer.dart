@@ -33,10 +33,19 @@ typedef DeviceAppStart = Future<void> Function(
 /// The Windows installer's bound: it may fetch WebView2 first.
 const deviceAppSetupTimeout = Duration(minutes: 5);
 
-/// What Desktop's own AppImage runtime set for Desktop. The Device app would
-/// take Desktop's AppImage for its own (its login entry and its updater
-/// follow `APPIMAGE`).
-const _desktopAppImageVariables = {'APPIMAGE', 'APPDIR', 'ARGV0', 'OWD'};
+/// What Desktop's AppImage runtime and Desktop's own runners set for Desktop.
+/// The Device app would take Desktop's AppImage for its own (its login entry
+/// and its updater follow `APPIMAGE`), and its WebView2 would run in
+/// Desktop's folder, whose browser process Desktop's web panes started with
+/// other options.
+const _desktopOwnVariables = {
+  'APPIMAGE',
+  'APPDIR',
+  'ARGV0',
+  'OWD',
+  'WEBVIEW2_USER_DATA_FOLDER',
+  'HARNESS_LINUX_TITLE_BAR',
+};
 
 /// The app at [path], with no argument, detached: it outlives Desktop and is
 /// no child of it.
@@ -54,8 +63,8 @@ Future<void> startDeviceAppDetached(
 }
 
 /// Starts the app at [path] (Windows and Linux, which have no `open`) with
-/// [environment], by default this process's, minus Desktop's AppImage
-/// variables. True when the start succeeded, as `open`'s exit 0 is on macOS;
+/// [environment], by default this process's, minus what Desktop set for
+/// itself. True when the start succeeded, as `open`'s exit 0 is on macOS;
 /// the app's own single instance makes a second start harmless.
 Future<bool> startDeviceApp(
   String path, {
@@ -66,7 +75,7 @@ Future<bool> startDeviceApp(
     await start(path, {
       for (final MapEntry(:key, :value)
           in (environment ?? RuntimePlatform.environment).entries)
-        if (!_desktopAppImageVariables.contains(key)) key: value,
+        if (!_desktopOwnVariables.contains(key)) key: value,
     });
     return true;
   } on Exception {
