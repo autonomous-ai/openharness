@@ -60,8 +60,8 @@ fn ticked(now: u64, desktop_running: bool) -> Event {
 
 /// The app where installing its update ends it (`true`, Windows) and where it does not.
 fn both(saved: Saved, cli_found: bool) -> (App, App) {
-    let (apart, first_apart) = App::new(saved, cli_found, false, B, true);
-    let (app, first) = App::new(saved, cli_found, false, B, false);
+    let (apart, first_apart) = App::new(saved, cli_found, false, B, true, false);
+    let (app, first) = App::new(saved, cli_found, false, B, false, false);
     assert_eq!(first_apart, first);
     (apart, app)
 }
@@ -157,7 +157,7 @@ fn shows_the_row(effects: &[Effect]) -> bool {
 /// told what the door answers and ChatGPT came to the front.
 fn follow_shown(trusted: bool, installed: bool) -> (bool, bool) {
     let seen = Saved { cli_seen: true, asked_sign_in: true, login_item: true, ..Saved::default() };
-    let (mut app, mut effects) = App::new(seen, true, false, B, false);
+    let (mut app, mut effects) = App::new(seen, true, false, B, false, false);
     for event in
         [Event::StartDone { ok: true }, status(false), Event::Auth(Some(true)), Event::Follow { trusted, installed }]
     {

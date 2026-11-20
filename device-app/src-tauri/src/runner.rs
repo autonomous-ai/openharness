@@ -1374,6 +1374,7 @@ mod tests {
             Effect::Reveal(PathBuf::from("/tmp/harness-logs-20261118-1030.zip")),
             Effect::AskAx,
             Effect::OpenAxSettings,
+            Effect::FollowSwitch(true),
         ];
         for effect in others {
             assert_eq!(w.runner.run(effect.clone()), None, "{effect:?}");
@@ -1542,6 +1543,11 @@ mod tests {
 
         fn start(&self, changed: Box<dyn Fn() + Send + Sync>) {
             self.with(|state| state.changed = Some(Arc::from(changed)));
+        }
+
+        /// As a door off macOS: the switch is what `trusted()` answers from now on.
+        fn switch(&self, on: bool) {
+            self.with(|state| state.trusts = VecDeque::from([on]));
         }
     }
 
@@ -2196,6 +2202,29 @@ mod tests {
     }
 
     #[test]
+    fn the_switch_turned_off_drops_the_observation_at_once_and_turned_on_writes_the_first_title_again() {
+        let door = ChatgptDoor::answering(false, true);
+        let (w, _fronts) = world_following(CHATGPT_BUNDLE, &door);
+        assert_eq!(w.next(), follow(true, false));
+        w.fake.script("hardware watch --json", &ATTACHED);
+        assert_eq!(w.answer(Effect::SpawnWatch), a_dial());
+        door.observed(1);
+        door.hear(0, title("Fix login"));
+        assert_eq!(w.runner.run(Effect::FollowSwitch(false)), None);
+        // Heard after the click, before the follow thread has dropped its box: no line.
+        door.hear(0, title("Plan the trip"));
+        door.dropped(0);
+        assert_eq!(w.next(), follow(false, false));
+        assert_eq!(w.runner.run(Effect::FollowSwitch(true)), None);
+        assert_eq!(w.next(), follow(true, false));
+        door.observed(2);
+        // The same title as the last one written: a new observation writes its first.
+        door.hear(1, title("Fix login"));
+        assert_eq!(w.answer(Effect::StopWatch), Event::WatchExit(Some(0)));
+        assert_eq!(w.fake.stdin(), [CHATGPT_LINE, FIX_LOGIN, FIX_LOGIN]);
+    }
+
+    #[test]
     fn no_observer_is_one_log_line_each_time_observing_starts() {
         let door = ChatgptDoor::answering(false, true);
         let (w, fronts) = world_following(CHATGPT_BUNDLE, &door);
@@ -2317,7 +2346,7 @@ mod tests {
         w.fake.script("hardware watch --json", &[r#"{"attached":true,"fw":"0.0.95"}"#, "@stdin"]);
         w.fake.script("auth status --json", &[r#"{"loggedIn":true}"#]);
         w.fake.script("--version", &["0.6.58"]);
-        let (mut app, mut effects) = App::new(Saved::default(), w.runner.find_cli(), false, B, false);
+        let (mut app, mut effects) = App::new(Saved::default(), w.runner.find_cli(), false, B, false, false);
         let connected = MenuItem::Text("Device ready".into());
         let (mut dial, mut auth, mut version) = (false, false, false);
         loop {

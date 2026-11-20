@@ -491,18 +491,20 @@ mod tests {
             ExportLogs,
             FollowChatgpt,
             FollowSettings,
+            FollowSwitch,
         ];
         for action in actions {
             assert_eq!(menu_action(menu_id(action)), Some(action));
         }
         let ids: std::collections::HashSet<_> = actions.into_iter().map(menu_id).collect();
-        assert_eq!(ids.len(), 13);
+        assert_eq!(ids.len(), 14);
         assert_eq!(menu_id(About), "about");
         assert_eq!(menu_id(ExportLogs), "export_logs");
         assert_eq!(menu_id(NotifyFull), "notify_full");
         assert_eq!(menu_id(NotifyYou), "notify_you");
         assert_eq!(menu_id(FollowChatgpt), "follow_chatgpt");
         assert_eq!(menu_id(FollowSettings), "follow_settings");
+        assert_eq!(menu_id(FollowSwitch), "follow_switch");
         assert_eq!(menu_action("sound"), None);
         assert_eq!(menu_action("notify"), None);
     }

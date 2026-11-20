@@ -201,7 +201,12 @@ mod tests {
 
     /// ChatGPT installed, Harness trusted or not.
     fn following(trusted: bool) -> FollowState {
-        FollowState { trusted, installed: true, waiting: false }
+        FollowState { trusted, installed: true, ..FollowState::default() }
+    }
+
+    /// Off macOS, where the item is Harness's own switch: on or off.
+    fn switched(on: bool) -> FollowState {
+        FollowState { switch: true, ..following(on) }
     }
 
     fn text(label: &str) -> MenuItem {
@@ -478,6 +483,53 @@ mod tests {
             let items = menu(&state);
             assert!(!items.contains(&unchecked) && !items.contains(&checked), "{state:?}");
         }
+    }
+
+    #[test]
+    fn off_macos_the_follow_item_is_the_switch_at_the_same_place() {
+        let with = |follow: FollowState, dial: DialStatus| AppState { follow, dial: Some(dial), ..state() };
+        let follow_items = |items: Vec<MenuItem>| -> Vec<MenuItem> {
+            items.into_iter().filter(|item| matches!(item, Check(_, label, _) if label == "Follow ChatGPT")).collect()
+        };
+        for on in [false, true] {
+            let item = Check(MenuAction::FollowSwitch, "Follow ChatGPT".into(), on);
+            let macos = menu(&with(following(on), notifying(NotifyMode::Full)));
+            let switch_menu = menu(&with(switched(on), notifying(NotifyMode::Full)));
+            assert_eq!(switch_menu[4], item, "{on}");
+            assert_eq!(switch_menu.len(), macos.len(), "{on}");
+            assert_eq!(follow_items(switch_menu), [item.clone()], "{on}");
+            assert_eq!(
+                menu(&with(switched(on), dial(true, Some("0.0.95"))))[1..4],
+                [text("Signed in"), item.clone(), Separator],
+                "{on}"
+            );
+            let absent = [
+                with(FollowState { installed: false, ..switched(on) }, notifying(NotifyMode::Full)),
+                AppState { follow: switched(on), dial: None, ..state() },
+                with(switched(on), DialStatus { attached: false, ..notifying(NotifyMode::Full) }),
+            ];
+            for state in absent {
+                assert!(follow_items(menu(&state)).is_empty(), "{state:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn off_macos_the_follow_screen_is_never_due() {
+        for waiting in [false, true] {
+            for installed in [false, true] {
+                for trusted in [false, true] {
+                    let follow = FollowState { switch: true, waiting, installed, trusted };
+                    assert_eq!(due(&AppState { follow, ..state() }), None, "{follow:?}");
+                }
+            }
+        }
+        // Install and Sign in are due as before.
+        let waiting = FollowState { waiting: true, ..switched(false) };
+        assert_eq!(due(&AppState { cli: CliState::Installing, follow: waiting, ..state() }), Some(Screen::Install));
+        let not_asked = Saved { asked_sign_in: false, ..state().saved };
+        let sign_in = AppState { signed_in: Some(false), saved: not_asked, follow: waiting, ..state() };
+        assert_eq!(due(&sign_in), Some(Screen::SignIn));
     }
 
     #[test]
