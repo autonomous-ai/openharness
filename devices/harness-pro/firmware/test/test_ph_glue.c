@@ -684,7 +684,7 @@ static void room_agent_gone_lands_home(void) {
     fresh();
     to_agent(0, 0);
     CHECK(U.nav.depth == 3 && !strcmp(top()->agent, "a1"));
-    static const pod_roster_row_t rows[] = {{"a2", "Beta", "codex", "mac"}, {"a3", "Gamma", "gemini", "box"}, {"a4", "Delta", "claude", "box"}};
+    static const pod_roster_row_t rows[] = {{"a2", "Beta", "codex", "mac", NULL, 0}, {"a3", "Gamma", "gemini", "box", NULL, 0}, {"a4", "Delta", "claude", "box", NULL, 0}};
     pod_ui_roster(&U, rows, 3);
     CHECK(U.nav.depth == 1 && top()->view == POD_V_TABS);
 }
@@ -834,7 +834,7 @@ static pod_out_t feed_swarms(int n0) {
     return pod_ui_swarms(&U, it, 2, &mem, "s1", NULL, 0);
 }
 static void feed_roster(void) {
-    static const pod_roster_row_t rows[] = {{"a", "Alpha", "claude", "mac"}, {"b", "Beta", "codex", "mac"}, {"c", "Gamma", "claude", "box"}};
+    static const pod_roster_row_t rows[] = {{"a", "Alpha", "claude", "mac", NULL, 0}, {"b", "Beta", "codex", "mac", NULL, 0}, {"c", "Gamma", "claude", "box", NULL, 0}};
     pod_ui_roster(&U, rows, 3);
 }
 static int starts;
@@ -1604,6 +1604,195 @@ static void working_card_tap_and_back(void) {
     CHECK(o.fx == POD_FX_NONE && changed && U.nav.depth == 1);
 }
 
+// ---- Apps: the pill, a pick, and the room that opens when the app's ring lands ----
+// The daemon's app list (count / waiting / working), Task 2's rows.
+static const pod_app_t APPS3[3] = {{"harness", "Harness", 4, 1, 1}, {"codex", "ChatGPT", 2, 0, 1}, {"vscode", "VS Code", 3, 1, 0}};
+// fresh() with apps.switch and the app list, Harness's ring shown: the pill shows.
+static void fresh_apps(void) {
+    fresh();
+    pod_ui_apps_switch(&U, true);
+    pod_ui_apps(&U, APPS3, 3, "harness", 0);
+}
+static pod_out_t tap_hit(const pod_hit_t *h, uint32_t t) { return tap_(h->x + h->w / 2, h->y + h->h / 2, t); }
+static pod_out_t tap_on(pod_action_t a, uint32_t t) { const pod_hit_t *h = find(a); CHECK(h); return tap_hit(h, t); }
+// Apps chosen on the pill, Home on the ChatGPT card: its pick hit as drawn.
+static pod_hit_t codex_card(void) {
+    render(1000);
+    tap_on(POD_A_HOME_APPS, 1000);
+    render(1100);
+    const pod_hit_t *h = find(POD_A_PICK_APP);
+    CHECK(h && !strcmp(h->id, "codex"));
+    return *h;
+}
+// A pick of ChatGPT from its card: the tap lifts at 2050.
+static pod_out_t pick_codex(void) {
+    fresh_apps();
+    const pod_hit_t h = codex_card();
+    return tap_hit(&h, 2000);
+}
+// The roster with ChatGPT's agents in it: fresh()'s a1..a4 and two codex threads, a5 and a6.
+static pod_out_t ring_roster(void) {
+    static const pod_roster_row_t rows[] = {{"a1", "Alpha", "claude", "mac", NULL, 0}, {"a2", "Beta", "codex", "mac", NULL, 0},
+                                            {"a3", "Gamma", "gemini", "box", NULL, 0}, {"a4", "Delta", "claude", "box", NULL, 0},
+                                            {"a5", "Thread one", "codex", "mac", "codex", 0}, {"a6", "Thread two", "codex", "mac", "codex", 0}};
+    return pod_ui_roster(&U, rows, 6);
+}
+// The ring lands: the Mac shows ChatGPT, then its agents arrive.
+static void ring_lands(uint32_t t) {
+    pod_ui_apps(&U, APPS3, 3, "codex", t);
+    ring_roster();
+}
+
+static void pill_taps_flip_lists(void) {
+    fresh_apps();
+    U.model.selected = 1;   // the window's tab is Docs
+    render(1000);
+    CHECK(tap_on(POD_A_HOME_APPS, 1000).fx == POD_FX_NONE && U.nav.home_apps && top()->scroll == POD_HOME_APP0);
+    render(1100);
+    CHECK(tap_on(POD_A_HOME_APPS, 1100).fx == POD_FX_NONE && U.nav.home_apps && top()->scroll == POD_HOME_APP0);   // the filled cell
+    render(1200);
+    swipe(500, 660, 300, 665, 1200);   // begun on the pill: Home pages, Apps stays chosen
+    CHECK(U.nav.home_apps && top()->scroll == POD_HOME_APP0 + 1 && !strcmp(U.nav.home_app, "vscode"));
+    render(1400);
+    CHECK(tap_on(POD_A_HOME_TABS, 1400).fx == POD_FX_NONE && !U.nav.home_apps && top()->scroll == 1);   // the selected tab
+    render(1500);
+    swipe(300, 665, 500, 660, 1500);
+    CHECK(!U.nav.home_apps && top()->scroll == 0);
+}
+
+static void pick_waits_for_the_ring(void) {
+    pod_out_t o = pick_codex();
+    CHECK(o.fx == POD_FX_APP_PICK && !strcmp(o.agent, "codex") && U.nav.depth == 1 && !strcmp(U.landing, "codex"));
+    o = pod_ui_apps(&U, APPS3, 3, "codex", 2100);   // the Mac shows ChatGPT; its agents are not on the roster yet
+    CHECK(o.fx == POD_FX_NONE && U.nav.depth == 1 && !strcmp(U.landing, "codex"));
+    o = ring_roster();   // the landing sends no agent.open: the pick already turned the ring
+    CHECK(o.fx == POD_FX_NONE && U.nav.depth == 3 && !strcmp(top()->agent, "a5") && top()->tab == POD_TAB_APP && !U.landing[0]);
+    // The agents first (Harness still shown), the apps frame second: the room opens on the apps frame.
+    pick_codex();
+    o = ring_roster();
+    CHECK(o.fx == POD_FX_NONE && U.nav.depth == 1 && !strcmp(U.landing, "codex"));
+    o = pod_ui_apps(&U, APPS3, 3, "codex", 2100);
+    CHECK(o.fx == POD_FX_NONE && U.nav.depth == 3 && !strcmp(top()->agent, "a5") && top()->tab == POD_TAB_APP && !U.landing[0]);
+}
+
+static void ring_and_its_focus(void) {
+    pick_codex();
+    ring_lands(2100);
+    pod_ui_focus(&U, "a5", 2200);   // the Mac focuses the agent the ring opened on
+    CHECK(U.nav.depth == 3 && !strcmp(top()->agent, "a5") && top()->tab == POD_TAB_APP);
+    // A focus that comes before its agent waits for it, and wins over the ring's first agent.
+    pick_codex();
+    CHECK(pod_ui_focus(&U, "a6", 2100).fx == POD_FX_NONE && !strcmp(U.pending_focus, "a6"));
+    pod_out_t o = pod_ui_apps(&U, APPS3, 3, "codex", 2050 + 900);
+    CHECK(o.fx == POD_FX_NONE && U.nav.depth == 1);
+    o = ring_roster();
+    CHECK(o.fx == POD_FX_NONE && U.nav.depth == 3 && !strcmp(top()->agent, "a6") && top()->tab == POD_TAB_APP && !U.landing[0]);
+}
+
+static void pick_of_shown_app_opens_at_once(void) {
+    fresh_apps();
+    ring_lands(0);   // ChatGPT's ring is already here
+    const pod_hit_t h = codex_card();
+    pod_out_t o = tap_hit(&h, 2000);
+    CHECK(o.fx == POD_FX_APP_PICK && !strcmp(o.agent, "codex") && U.nav.depth == 3 && !strcmp(top()->agent, "a5") && !U.landing[0]);
+}
+
+// From a pick whose tap lifts at 2050, each of these alone ends the wait: the ring arriving next opens nothing.
+static void landing_ends(void) {
+    pick_codex();
+    t_(true, 40, 400, 2150);   // a new contact, beside the card
+    CHECK(!U.landing[0]);
+    t_(false, 40, 400, 2200);
+    ring_lands(2300);
+    CHECK(U.nav.depth == 1);
+    pick_codex();
+    pod_ui_link(&U, false);
+    CHECK(!U.landing[0]);
+    ring_lands(2300);
+    CHECK(U.nav.depth == 1);
+    pick_codex();
+    pod_ui_apps(&U, APPS3, 3, "vscode", 2100);   // the Mac shows another app
+    CHECK(!U.landing[0]);
+    ring_lands(2300);
+    CHECK(U.nav.depth == 1);
+    pick_codex();
+    pod_ui_focus(&U, "a1", 2050 + 900);   // a host focus lands, in Build
+    CHECK(U.nav.depth == 3 && !strcmp(top()->agent, "a1") && !U.landing[0]);
+    ring_lands(3000);
+    CHECK(U.nav.depth == 3 && !strcmp(top()->agent, "a1") && top()->tab == 0);
+    // 5000 ms after the lift the wait is over: Home stays on the card. A ring at 4999 ms still lands.
+    pick_codex();
+    ring_roster();
+    pod_ui_apps(&U, APPS3, 3, "codex", 2050 + POD_LANDING_MS);
+    CHECK(U.nav.depth == 1 && top()->scroll == POD_HOME_APP0 && !strcmp(U.nav.home_app, "codex") && !U.landing[0]);
+    pick_codex();
+    ring_roster();
+    pod_ui_apps(&U, APPS3, 3, "codex", 2050 + POD_LANDING_MS - 1);
+    CHECK(U.nav.depth == 3 && !strcmp(top()->agent, "a5"));
+}
+
+// Harness's agents are the tabs: its pick (no window) waits for nothing, and the window coming back lists them.
+static void pick_of_harness_waits_for_nothing(void) {
+    fresh_apps();
+    pod_ui_swarms(&U, NULL, 0, NULL, "", NULL, 0);   // no window: Home lists the app cards, Harness's first
+    act(POD_A_SCROLL, POD_HOME_APP0 - top()->scroll);
+    render(1000);
+    const pod_hit_t *h = find(POD_A_PICK_APP);
+    CHECK(h && !strcmp(h->id, "harness"));
+    pod_out_t o = tap_hit(h, 2000);
+    CHECK(o.fx == POD_FX_APP_PICK && !strcmp(o.agent, "harness") && U.nav.depth == 1 && !U.landing[0]);
+    sw_select("s1");
+    CHECK(U.nav.depth == 1 && !pod_home_apps(&U.nav, &U.model) && top()->scroll == 0);
+}
+
+// Review Focus 1: the app under the card goes between the draw and the tap. Nothing is sent, no wait starts, Home redraws.
+static void picked_app_gone_before_the_tap(void) {
+    fresh_apps();
+    const pod_hit_t h = codex_card();
+    static const pod_app_t no_codex[2] = {{"harness", "Harness", 4, 1, 1}, {"vscode", "VS Code", 3, 1, 0}};
+    pod_ui_apps(&U, no_codex, 2, "harness", 1500);
+    bool changed = false;
+    t_(true, h.x + h.w / 2, h.y + h.h / 2, 2000);
+    pod_out_t o = pod_ui_touch(&U, false, h.x + h.w / 2, h.y + h.h / 2, 2050, &changed);
+    CHECK(o.fx == POD_FX_NONE && changed && U.nav.depth == 1 && !U.landing[0]);
+}
+
+// Review Focus 2: the link drops while waiting or inside the app's room.
+static void link_drop_ends_the_wait_and_the_ring(void) {
+    pick_codex();
+    pod_ui_link(&U, false);
+    pod_ui_link(&U, true);
+    pod_ui_apps_switch(&U, true);
+    ring_lands(2300);   // the next link's ring opens nothing
+    CHECK(U.nav.depth == 1 && !U.landing[0]);
+    pick_codex();
+    ring_lands(2100);
+    CHECK(U.nav.depth == 3 && top()->tab == POD_TAB_APP);
+    pod_ui_link(&U, false);   // the room closes to Home
+    CHECK(U.nav.depth == 1 && top()->view == POD_V_TABS);
+}
+
+static void roster_rows_carry_host_and_caps(void) {
+    fresh();
+    static const pod_roster_row_t rows[] = {{"a1", "Alpha", "claude", "mac", NULL, 0}, {"a2", "Beta", "codex", "mac", "codex", POD_CAP_V}};
+    pod_ui_roster(&U, rows, 2);
+    const pod_agent_t *a = pod_model_find(&U.model, "a2");
+    CHECK(a && !strcmp(a->host, "codex") && a->caps == (POD_CAPS_ALL & ~POD_CAP_V));
+    static const pod_roster_row_t plain[] = {{"a1", "Alpha", "claude", "mac", NULL, 0}, {"a2", "Beta", "codex", "mac", NULL, 0}};
+    pod_ui_roster(&U, plain, 2);   // a zero-filled row: no app said, every letter
+    a = pod_model_find(&U.model, "a2");
+    CHECK(a && !a->host[0] && a->caps == POD_CAPS_ALL);
+}
+
+static void apps_switch_off_turns_home_to_tabs(void) {
+    fresh_apps();
+    U.model.selected = 1;
+    act(POD_A_HOME_APPS, 0);
+    CHECK(U.nav.home_apps && top()->scroll == POD_HOME_APP0);
+    pod_out_t o = pod_ui_apps_switch(&U, false);   // in this call: Home lists the tabs, on the selected one
+    CHECK(o.fx == POD_FX_NONE && !U.nav.home_apps && top()->scroll == 1);
+}
+
 
 int main(void) {
     notify_while_looking();
@@ -1667,6 +1856,16 @@ int main(void) {
     working_card_swipes();
     working_card_shrinks();
     working_card_tap_and_back();
+    pill_taps_flip_lists();
+    pick_waits_for_the_ring();
+    ring_and_its_focus();
+    pick_of_shown_app_opens_at_once();
+    landing_ends();
+    pick_of_harness_waits_for_nothing();
+    picked_app_gone_before_the_tap();
+    link_drop_ends_the_wait_and_the_ring();
+    roster_rows_carry_host_and_caps();
+    apps_switch_off_turns_home_to_tabs();
     printf("test_ph_glue: %d checks ok\n", checks);
     return 0;
 }
