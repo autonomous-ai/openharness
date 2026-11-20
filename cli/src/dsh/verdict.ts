@@ -158,8 +158,6 @@ export class DshVerdictWatcher {
       .on('add', (path: string) => { if (relevant(path)) schedule() })
       .on('change', (path: string) => { if (relevant(path)) schedule() })
       .on('unlink', (path: string) => { if (relevant(path)) schedule() })
-      // chokidar's first read of the directory counts a verdict written since watch() as already there, unannounced.
-      .on('ready', () => this.publish(agentId, entry))
       .on('error', (error: unknown) => this.deps.log?.(`[dsh] verdict watch error · ${errorKind(error)}`))
     this.watched.set(agentId, entry)
     // What is already there counts: a restored agent's last verdict is still its verdict.
