@@ -56,6 +56,10 @@ enum { MAX_CAP_VOICE = 1, MAX_CAP_FOCUS = 2, MAX_CAP_ANSWER = 4, MAX_CAPS_ALL = 
 #define MAX_TALK_DELAY_MS 1000u     // a cell's tap opens its agent, and the mic this long after (the owner, 20 Nov: at
                                     // once was hurried)
 #define MAX_TALK_MAX_MS 600000u     // the longest recording (the Pro's 600 s cap): then it is sent
+// After a send the agent's page stays up and its pet plays the SEND scene until its turn begins (the Pro's voice
+// screen, pod_nav.c release_send); the words taken, the agent shows Working on the bar's word alone until its turn
+// speaks (pod_model_sent). With no turn in this long, both go back (the Pro's POD_SENT_WAIT_MS).
+#define MAX_SENT_WAIT_MS 30000u
 #define MAX_AMBIENT_MS 60000u       // nobody touched and nothing works or waits this long: Ambient
 #define MAX_ATTN_END_MS 8000u       // a done or failed turn's Attention goes back to Overview after this
 #define MAX_TALK_FRAME_MS 100u      // the band redraws this often while recording
@@ -200,6 +204,9 @@ typedef struct {
     char host[PRO_APP_ID_BYTES];     // its app ("" when the daemon sent none)
     uint8_t caps;                    // MAX_CAP_* bits
     uint32_t since_ms;               // its state's last change: the agent page's "· 2m ago"
+    bool sent;                       // Working on the bar's word alone (max_ui_voice_result) until a turn event says
+    max_state_t sent_was;            // so, or MAX_SENT_WAIT_MS from sent_ms passes: then the state it had comes back
+    uint32_t sent_ms;
 } max_agent_t;
 
 typedef struct {
@@ -311,6 +318,14 @@ typedef struct {
     bool talk_closed;                // the clock closed the mic on nothing heard: talk_id's page says so until it goes
     bool talk_soon;                  // a cell's tap opened talk_id's page: the clock opens its mic at talk_soon_at
     uint32_t talk_soon_at;           // (max_ui_talk_due), unless the page went first or a recording began
+    // A send to sent_id's agent (the Pro's nav->sending): its page plays the SEND scene from send_from, and takes no
+    // second recording, until its turn begins or MAX_SENT_WAIT_MS passes (the model's settle); leaving the page ends
+    // it.
+    bool sending;
+    bool sent_seen;                  // its words were taken (max_ui_voice_result)
+    bool sent_asked;                 // it was asking when they went: they are its answer
+    char sent_id[ID_MAX];
+    uint32_t send_from;
     uint8_t levels[MAX_LEVELS];      // the mic's levels, oldest first
     int level_count;
     uint32_t idle_from;              // since when nothing works or waits (Ambient)
@@ -383,6 +398,10 @@ bool max_done_shown(uint32_t now_ms);
 // neither on a permission prompt (Yes or No only) nor waiting on an answer that is on its way or in. Whether the agent
 // takes voice at all is max_takes_voice.
 bool max_can_talk(const max_agent_t *);
+// Words just went to the agent of talk_id: its page, when up, holds the SEND scene from now (max_m.sending).
+void max_send_begin(uint32_t now_ms);
+// The page holds the SEND scene for this agent: the words went and its turn has not begun.
+bool max_send_holds(const char *id);
 
 // ---- Demo V2: which page is up (max_ui_model.c) ----
 // Put this page up; leaving Inbox marks every notice read. Opening an agent holds the row's order until it closes;
@@ -440,8 +459,8 @@ bool max_takes_answers(const max_agent_t *);
 bool max_takes_voice(const max_agent_t *);
 // The status word on a cell's chip: "Needs you", the spinner word, "Done", "Failed", "Resting".
 const char *max_status_word(const max_agent_t *);
-// What a cell says of the agent's task: at work its activity (else its last step); otherwise its question, failure or
-// summary. "" when there is none.
+// What a cell says of the agent's task: at work its activity (else its last step, else "Starting…" while it works on
+// the bar's word alone); otherwise its question, failure or summary. "" when there is none.
 const char *max_summary(const max_agent_t *);
 // The letters pro_agent_row_t.caps carries as MAX_CAP_* bits (NULL: all).
 uint8_t max_caps_of(const char *letters);

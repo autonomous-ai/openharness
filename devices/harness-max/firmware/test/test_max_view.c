@@ -477,7 +477,7 @@ static void test_agent_page(void)
 }
 
 // Recording: the band (Listening, its clock, the waveform, Tap to send and its ring), X over the panel's top right; a
-// frame every MAX_TALK_FRAME_MS. Sending: X only.
+// frame every MAX_TALK_FRAME_MS. Sending, and sent until the agent's turn begins: X only.
 static void test_talking(void)
 {
     ring(NULL);
@@ -506,6 +506,18 @@ static void test_talking(void)
     show(MAX_VIEW_AGENT, "c");
     render_at(T0);
     CHECK(!word("Sending") && !find_hit(MAX_HIT_BODY, 0) && word("Tap to talk"));   // the mic is busy for "a"
+    // Sent and its reply in, its turn not yet begun (the Pro's voice screen): still "Sending", its clock stopped at the
+    // recording's length, its pet on SEND, and no body (no second recording). Let go: "Tap to talk" again.
+    show(MAX_VIEW_AGENT, "a");
+    talk("a", MAX_TALK_SENDING, true);
+    max_send_begin(T0 - 1000);
+    max_ui_talk(MAX_TALK_IDLE, T0 - 500);
+    render_at(T0);
+    CHECK(word("Sending") && word("0:02") && HITS_ARE(MAX_HIT_APPS, MAX_HIT_AGENT_X, MAX_HIT_BELL));
+    CHECK(max_pet_scene(max_find("a"), true) == POD_SCENE_SEND);
+    max_m.sending = false;
+    render_at(T0);
+    CHECK(!word("Sending") && word("Tap to talk") && find_hit(MAX_HIT_BODY, 0));
     talk("", MAX_TALK_IDLE, false);
 }
 

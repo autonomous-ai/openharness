@@ -410,12 +410,15 @@ static void talk_sync(void)
     unlock();
 }
 
+// As the Pro's: an error leaves the SEND scene, a sent clip stays on it until its agent's turn begins, the agent
+// Working until its turn speaks.
 void pro_app_voice_result(int kind, const char *text)
 {
     if (!pro_voice_open()) return;   // a reply nobody waits for
     pro_voice_close();               // MUST end the state, or the next start is refused
     lock();
     talk_locked(false, false);
+    changed_if(max_ui_voice_result(kind == PRO_VOICE_OK, kind == PRO_VOICE_OK ? text : NULL, ms()));
     if (kind == PRO_VOICE_ERROR) notice_locked(text && text[0] ? text : "Voice failed");   // the daemon's message
     unlock();
 }
@@ -469,6 +472,9 @@ static void talk_send(void)
 {
     if (pro_voice_open() && pro_voice_start_pending()) {
         pro_voice_end(false);
+        lock();
+        changed_if(max_ui_voice_result(false, NULL, ms()));   // nothing went: no SEND scene
+        unlock();
         pro_app_notice("Not sent");
     } else {
         pro_voice_end(true);

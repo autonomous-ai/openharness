@@ -489,9 +489,29 @@ static void test_agent_page_talks(void)
     no_notice();
     act = tap_page();
     CHECK(act.kind == MAX_ACT_SEND && !strcmp(act.agent_id, "a") && noticed("Sent to a"));
-    CHECK(max_m.view == MAX_VIEW_OVERVIEW && max_m.dirty);
-    // While it is sent the panel takes no voice: a tap there brings the agent up instead.
+    // The page stays, its pet on SEND until the agent's turn begins (the Pro's voice screen).
+    CHECK(max_m.view == MAX_VIEW_AGENT && !strcmp(max_ui_selected(), "a") && max_send_holds("a") && max_m.dirty);
+    // Sent, the panel takes no second recording and brings nothing up, the reply awaited or in.
     max_ui_talk(MAX_TALK_SENDING, 0);
+    agent_drawn();
+    CHECK(tap_page().kind == MAX_ACT_NONE && max_send_holds("a"));
+    max_ui_talk(MAX_TALK_IDLE, 0);
+    CHECK(max_ui_voice_result(true, "a", 0) && max_send_holds("a"));
+    agent_drawn();
+    CHECK(tap_page().kind == MAX_ACT_NONE && max_m.talk == MAX_TALK_IDLE);
+    // Its turn begins: the page lets the send go, and the panel opens the mic again.
+    max_ui_turn("a", "started", "Reading", 0, 50);
+    CHECK(!max_send_holds("a") && max_m.view == MAX_VIEW_AGENT);
+    agent_drawn();
+    CHECK(tap_page().kind == MAX_ACT_TALK);
+    // Sent again, then the page left: the send is let go. Opened while its reply is awaited, the panel takes no voice:
+    // a tap there brings the agent up instead.
+    max_ui_talk(MAX_TALK_RECORDING, 100);
+    agent_drawn();
+    CHECK(tap_page().kind == MAX_ACT_SEND && max_send_holds("a"));
+    max_ui_talk(MAX_TALK_SENDING, 0);
+    max_show(MAX_VIEW_OVERVIEW);
+    CHECK(!max_send_holds("a"));
     agent_page("a");
     act = tap_page();
     CHECK(act.kind == MAX_ACT_OPEN && !strcmp(act.agent_id, "a"));
@@ -525,20 +545,21 @@ static void test_slivers(void)
     max_act_t act = tap_box(cell_of("d"));
     CHECK(act.kind == MAX_ACT_OPEN_TALK && !strcmp(act.agent_id, "d") && !strcmp(max_m.talk_id, "d"));
     CHECK(max_m.view == MAX_VIEW_AGENT && !strcmp(max_ui_selected(), "d") && max_m.held_count == 5);
-    // Recording for d: a sliver sends d's words, and the row comes back.
+    // Recording for d: a sliver sends d's words and opens nothing; d's page stays on SEND.
     max_ui_talk(MAX_TALK_RECORDING, 0);
     agent_drawn();
     no_notice();
     act = tap_box(cell_of("c"));
     CHECK(act.kind == MAX_ACT_SEND && !strcmp(act.agent_id, "d") && noticed("Sent to d"));
-    CHECK(max_m.view == MAX_VIEW_OVERVIEW);
+    CHECK(max_m.view == MAX_VIEW_AGENT && !strcmp(max_ui_selected(), "d") && max_send_holds("d"));
     max_ui_talk(MAX_TALK_IDLE, 0);
     // A long press on a sliver while recording sends too (the Pro's tap has no length), and opens nothing.
     agent_page("c");
     recording(true);
     const max_box_t b = *cell_of("b");
     act = press_for(b.x + 4, b.y + 4, 0, 0, T += 1000, 2000);
-    CHECK(act.kind == MAX_ACT_SEND && !strcmp(act.agent_id, "c") && max_m.view == MAX_VIEW_OVERVIEW);
+    CHECK(act.kind == MAX_ACT_SEND && !strcmp(act.agent_id, "c") && !strcmp(max_ui_selected(), "c"));
+    CHECK(max_m.view == MAX_VIEW_AGENT && max_send_holds("c"));
     max_ui_talk(MAX_TALK_IDLE, 0);
     T += 1000;
     // A sliver whose agent asks: its question on Attention, nothing recorded.
@@ -569,8 +590,8 @@ static void test_any_other_tap_sends(void)
     max_act_t act = tap_on(toast);   // the words first, then what the toast announced
     CHECK(act.kind == MAX_ACT_SEND && !strcmp(act.agent_id, "a") && max_m.view == MAX_VIEW_ATTENTION);
     CHECK(!strcmp(max_m.attn_id, "c") && max_m.attn == MAX_ATTN_ASK && max_m.toast_id[0] == 0);
-    overview_drawn();
-    CHECK(tap_box(cell_of("b")).kind == MAX_ACT_SEND && max_m.view == MAX_VIEW_OVERVIEW);
+    overview_drawn();   // sent from elsewhere than its page: Overview stays, no SEND scene
+    CHECK(tap_box(cell_of("b")).kind == MAX_ACT_SEND && max_m.view == MAX_VIEW_OVERVIEW && !max_m.sending);
     drawn_page(MAX_VIEW_OVERVIEW);
     CHECK(tap(5, 5).kind == MAX_ACT_SEND);
     // Swipes rest everywhere but the agent page.
@@ -595,7 +616,8 @@ static void test_attention(void)
     max_act_t act = tap_on(&max_m.hits[1]);
     CHECK(act.kind == MAX_ACT_NONE && take(20) == 1 && !strcmp(ANSWER.values[0], "Staging"));
     CHECK(max_m.view == MAX_VIEW_ATTENTION && !strcmp(max_m.attn_id, "c"));
-    // Say it: c's page with the mic on. The words are its answer: sent, and with none waiting, Overview.
+    // Say it: c's page with the mic on. The words are its answer: sent, its page stays on SEND, and once its turn
+    // begins, with no other question waiting, it stays there.
     attention_drawn(2, true);
     act = tap_on(&max_m.hits[2]);
     CHECK(act.kind == MAX_ACT_TALK && !strcmp(act.agent_id, "c") && !strcmp(max_m.talk_id, "c"));
@@ -603,8 +625,14 @@ static void test_attention(void)
     max_ui_talk(MAX_TALK_RECORDING, 0);
     agent_drawn();
     act = tap_page();
-    CHECK(act.kind == MAX_ACT_SEND && !strcmp(act.agent_id, "c") && max_m.view == MAX_VIEW_OVERVIEW);
+    CHECK(act.kind == MAX_ACT_SEND && !strcmp(act.agent_id, "c"));
+    CHECK(max_m.view == MAX_VIEW_AGENT && max_send_holds("c"));
     max_ui_talk(MAX_TALK_IDLE, 0);
+    max_ui_voice_result(true, "c", 22);   // the words taken: a question is answered by its close, not Working
+    CHECK(max_find("c")->state == MAX_ASKING && !max_find("c")->sent && max_send_holds("c"));
+    max_ui_question_close("c");
+    max_ui_turn("c", "started", "", 0, 25);
+    CHECK(!max_send_holds("c") && max_m.view == MAX_VIEW_AGENT && !strcmp(max_ui_selected(), "c"));
     // A permission prompt: Say it does nothing. The rest of the page brings the agent up in its app.
     max_ui_question("e", "r3", DEPLOY.q, &DEPLOY, 1, true, false, 30);
     attention_drawn(2, true);
@@ -831,7 +859,7 @@ static void test_talk_due(void)
     CHECK(max_ui_talk_due(1000 + MAX_TALK_MAX_MS - 1).kind == MAX_ACT_NONE);
     max_act_t act = max_ui_talk_due(1000 + MAX_TALK_MAX_MS);
     CHECK(act.kind == MAX_ACT_SEND && !strcmp(act.agent_id, "a") && noticed("Sent to a"));
-    CHECK(max_m.view == MAX_VIEW_OVERVIEW && max_m.dirty);
+    CHECK(max_m.view == MAX_VIEW_AGENT && max_send_holds("a") && max_m.dirty);
     // Nothing heard: the mic closes with no notice, and the page says so until it goes.
     max_ui_talk(MAX_TALK_IDLE, 0);
     agent_page("a");
@@ -859,15 +887,21 @@ static void test_talk_due(void)
     // Not recording: nothing owed.
     max_ui_talk(MAX_TALK_SENDING, 0);
     CHECK(max_ui_talk_due(99999).kind == MAX_ACT_NONE);
-    // Words to an agent that asked are its answer: sent at the cap, the question waiting longest takes the page.
+    // Words to an agent that asked are its answer: sent at the cap, its page on SEND; once its turn begins the question
+    // waiting longest takes the glass.
     max_ui_talk(MAX_TALK_IDLE, 0);
     max_ui_question("b", "r1", DB.q, &DB, 1, false, false, 10000);
     max_ui_question("c", "r2", DB.q, &DB, 1, false, false, 10100);
     agent_page("b");
     recording(true);
     act = max_ui_talk_due(MAX_TALK_MAX_MS);
-    CHECK(act.kind == MAX_ACT_SEND && max_m.view == MAX_VIEW_ATTENTION && !strcmp(max_m.attn_id, "c"));
+    CHECK(act.kind == MAX_ACT_SEND && max_m.view == MAX_VIEW_AGENT && max_send_holds("b"));
     max_ui_talk(MAX_TALK_IDLE, 0);
+    max_ui_voice_result(true, "b", MAX_TALK_MAX_MS + 500);
+    CHECK(max_m.view == MAX_VIEW_AGENT && max_send_holds("b"));   // still asking: the close answers it
+    max_ui_question_close("b");
+    max_ui_turn("b", "started", "", 0, MAX_TALK_MAX_MS + 900);
+    CHECK(!max_send_holds("b") && max_m.view == MAX_VIEW_ATTENTION && !strcmp(max_m.attn_id, "c"));
     // The recording's agent leaves the ring: its page goes at once, and the clock drops what was heard, no notice.
     agent_page("d");
     recording(true);
@@ -958,9 +992,10 @@ static void test_no_guard(void)
     CHECK(tap_at(page_x, page_y, t + 100).kind == MAX_ACT_TALK);   // the page: the mic now
     max_ui_talk(MAX_TALK_RECORDING, t + 190);
     // A tap 10 ms after the mic opened sends (the app says "Not sent" for one before the recorder started).
-    CHECK(tap_at(page_x, page_y, t + 200).kind == MAX_ACT_SEND && max_m.view == MAX_VIEW_OVERVIEW);
+    CHECK(tap_at(page_x, page_y, t + 200).kind == MAX_ACT_SEND && max_m.view == MAX_VIEW_AGENT);
     max_ui_talk(MAX_TALK_IDLE, 0);
     // Right after the send, a cell opens.
+    max_show(MAX_VIEW_OVERVIEW);
     overview_drawn();
     const max_box_t c = *cell_of("b");
     CHECK(tap_at(c.x + c.w / 2, c.y + c.h / 2, t + 300).kind == MAX_ACT_OPEN_TALK);

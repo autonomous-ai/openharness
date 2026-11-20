@@ -42,9 +42,11 @@ static void void_contact(void)
 
 // ---- a recording ----
 
-// What was recorded goes, and the notice names who to (the form's spoken name needs none: the form shows it).
+// What was recorded goes, and the notice names who to (the form's spoken name needs none: the form shows it). The
+// agent's page stays up and its pet plays SEND until its turn begins (the Pro's voice screen, max_send_begin).
 static max_act_t send_talk(uint32_t now_ms)
 {
+    max_send_begin(now_ms);
     if (max_m.talk_id[0]) {
         static char text[MAX_NOTICE_BYTES];   // the touch task's 1 KB frame
         const max_agent_t *a = max_find(max_m.talk_id);
@@ -54,16 +56,6 @@ static max_act_t send_talk(uint32_t now_ms)
     }
     max_m.dirty = true;
     return act_for(MAX_ACT_SEND, max_m.talk_id);
-}
-
-// Sent by a tap on the page or by the clock: words to an agent that asked are its answer, so the question waiting
-// longest takes the glass, as after a tapped answer; else Overview. The form's spoken name leaves the page as it is.
-static max_act_t send_onward(uint32_t now_ms)
-{
-    const max_agent_t *a = max_m.talk_id[0] ? max_find(max_m.talk_id) : NULL;
-    if (a && a->state == MAX_ASKING) max_next_question(a->id, now_ms);
-    else if (max_m.talk_id[0]) max_show(MAX_VIEW_OVERVIEW);
-    return send_talk(now_ms);
 }
 
 // The recording's agent left the ring: nothing goes, heard or not (the Pro drops it).
@@ -103,7 +95,7 @@ max_act_t max_ui_talk_due(uint32_t now_ms)
     if (max_m.talk_heard) {   // the quiet after speech sends nothing: a tap does, or the cap
         if (!reached(max_m.talk_from + MAX_TALK_MAX_MS, now_ms)) return nothing();
         void_contact();
-        return send_onward(now_ms);
+        return send_talk(now_ms);
     }
     if (!reached(max_m.talk_from + MAX_HEAR_MS, now_ms)) return nothing();
     // The page stays and says so ("Mic closed · tap to talk"); the form's spoken name has no band: the notice says it.
@@ -246,7 +238,7 @@ static max_act_t press(const max_hit_t *h, uint32_t now_ms)
     case MAX_HIT_DONE_NOTE: open_done(); break;
     case MAX_HIT_BODY: {   // the mic, or the computer when the bar cannot listen for it now
         const max_agent_t *a = view == MAX_VIEW_AGENT ? max_find(max_m.selected) : NULL;
-        if (!a || max_m.held) break;
+        if (!a || max_m.held || max_send_holds(a->id)) break;   // sent: no second recording until its turn begins
         if (max_can_talk(a) && max_takes_voice(a)) return talk_to(a, MAX_ACT_TALK);
         return act_for(MAX_ACT_OPEN, a->id);
     }
@@ -307,8 +299,8 @@ static max_act_t press(const max_hit_t *h, uint32_t now_ms)
 
 // A tap while a recording is up, however long it was down. X drops it: the open agent's closes too, and says so when
 // words were heard; the form's Cancel leaves the form as it is. Else it sends: the toast's, then opens its Attention;
-// the done note's, then opens its agent; anything else, even bare glass or a sliver, sends it now. A contact the clock
-// opened the mic under acts on nothing (the mic stays open).
+// the done note's, then opens its agent; anything else, even bare glass or a sliver, sends it now, and the page stays
+// on the SEND scene. A contact the clock opened the mic under acts on nothing (the mic stays open).
 static max_act_t recording_tap(const max_hit_t *h, uint32_t now_ms)
 {
     if (h && (h->kind == MAX_HIT_TALK_CANCEL || h->kind == MAX_HIT_AGENT_X)) {
@@ -324,7 +316,7 @@ static max_act_t recording_tap(const max_hit_t *h, uint32_t now_ms)
         char id[ID_MAX];
         const max_attn_t why = max_m.toast_attn;
         memcpy(id, max_m.toast_id, sizeof id);
-        const max_act_t act = send_onward(now_ms);
+        const max_act_t act = send_talk(now_ms);
         if (id[0] && max_attn_holds(id, why)) {
             max_form_dismiss();
             max_attention(id, why, now_ms);
@@ -336,7 +328,7 @@ static max_act_t recording_tap(const max_hit_t *h, uint32_t now_ms)
         open_done();
         return act;
     }
-    return send_onward(now_ms);
+    return send_talk(now_ms);
 }
 
 static max_act_t tap(int x, int y, uint32_t now_ms)

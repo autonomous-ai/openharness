@@ -28,6 +28,8 @@ int max_open_first(int i, int n)
 
 const char *max_summary(const max_agent_t *a)
 {
+    if (a->state == MAX_WORKING && !a->activity[0] && !a->step_count && a->sent)   // Working on the bar's word alone
+        return "Starting\xe2\x80\xa6";
     if (a->state == MAX_WORKING) return a->activity[0] ? a->activity : a->step_count ? a->steps[0] : "";
     return a->state == MAX_ASKING ? a->question : a->note;
 }

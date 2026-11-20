@@ -248,6 +248,7 @@ static bool question(const char *id, const char *name, const char *request, cons
     }
     if (a->state == MAX_ASKING && a->ask_key == key) return false;   // the same question, re-sent: it keeps its place
     max_set_state(a, MAX_ASKING, now_ms);
+    a->sent = false;   // the daemon speaks for the turn now
     max_copy(a->question, sizeof a->question, text);
     a->ask_key = key;
     a->ask_since = now_ms;

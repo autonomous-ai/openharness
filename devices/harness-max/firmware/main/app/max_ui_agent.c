@@ -3,9 +3,10 @@
 // and state chip, the line of its task, the mic's band across its foot, and X at its top right. The panel is one tap:
 // it opens the mic, or sends what is being said. The band, live: "Listening" and its clock, the waveform of the mic's
 // level ("Say it…" until speech is heard), "Tap to send" by its ring (the quiet after speech sends nothing: the Pro's);
-// sending, "Sending". At rest one quiet line: "Tap to talk", "Mic opens in a moment…" (a cell's tap, for
-// MAX_TALK_DELAY_MS), "Mic closed · tap to talk", or where to talk to an agent the bar cannot record for. As V3's: its
-// rail, glow and chip loop, the band's colours ease between talking and not, and the live dot pulses in its glow.
+// sent, "Sending" until the agent's turn begins, its pet on the SEND scene (the Pro's voice screen). At rest one quiet
+// line: "Tap to talk", "Mic opens in a moment…" (a cell's tap, for MAX_TALK_DELAY_MS), "Mic closed · tap to talk", or
+// where to talk to an agent the bar cannot record for. As V3's: its rail, glow and chip loop, the band's colours ease
+// between talking and not, and the live dot pulses in its glow.
 #include <stdio.h>
 #include <string.h>
 
@@ -73,8 +74,9 @@ static void live_band(ht_scene_t *s, int x, int r, unsigned fill, uint32_t now_m
     }
     max_text(s, x + LIVE_DOT + DX(10), LISTEN_CY, LIVE_W - LIVE_DOT - DX(10), &ph_sb_26, ink,
              listening ? "Listening" : "Sending");
-    char clock[24];
-    max_fmt_elapsed(clock, sizeof clock, (now_ms - max_m.talk_from) / 1000u);
+    char clock[24];   // sent, it stops at the recording's length
+    const uint32_t end = !listening && max_m.sending ? max_m.send_from : now_ms;
+    max_fmt_elapsed(clock, sizeof clock, (end - max_m.talk_from) / 1000u);
     max_text(s, x, CLOCK_CY, LIVE_W, &ph_rg_36, FG, clock);
     const int wave_x = x + LIVE_W + DX(22), wave_r = r - SEND_W - DX(22);
     waveform(s, wave_x, wave_r);
@@ -163,7 +165,8 @@ void max_draw_agent(ht_scene_t *s, const max_agent_t *a, int x, int w, uint32_t 
 void max_agent_body(ht_scene_t *s, const max_agent_t *a, int x, int w, unsigned keep, unsigned under, int glow_h,
                     uint32_t now_ms)
 {
-    const bool talking = max_m.talk != MAX_TALK_IDLE && !strcmp(max_m.talk_id, a->id);
+    // Its recording, or its words sent and its turn not yet begun (the Pro's voice screen stays on SEND till then).
+    const bool talking = (max_m.talk != MAX_TALK_IDLE && !strcmp(max_m.talk_id, a->id)) || max_send_holds(a->id);
     const unsigned pct = max_glow_pct(a), ink = max_chip_ink(a);
     // The pet, centred down the space over the band, on the glow's colour at its middle; coming in or going, by its
     // alpha over what lies under it.
@@ -189,7 +192,9 @@ void max_agent_body(ht_scene_t *s, const max_agent_t *a, int x, int w, unsigned 
     max_icon_x(s, x_cx - X_ICON / 2, X_CY - X_ICON / 2, X_ICON, FG);
     max_hit(x + w - X_HIT_W, 0, X_HIT_W, X_HIT_H, MAX_HIT_AGENT_X, 0);
     // The rest of the panel: a tap sends what is being said, or opens the mic.
-    if (max_m.talk == MAX_TALK_RECORDING ? talking : max_m.talk == MAX_TALK_IDLE && max_takes_voice(a))
+    // Sent, nothing until its turn begins: no second recording (the Pro's).
+    if (max_m.talk == MAX_TALK_RECORDING ? talking
+                                         : max_m.talk == MAX_TALK_IDLE && max_takes_voice(a) && !max_send_holds(a->id))
         max_hit(x, 0, w, HT_HEIGHT, MAX_HIT_BODY, 0);
     max_tint(0, 256);
 }

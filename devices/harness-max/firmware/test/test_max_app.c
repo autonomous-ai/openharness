@@ -376,9 +376,58 @@ static void test_only_the_cap_sends_on_its_own(void)
     now += 1;
     render_pass();
     CHECK(V_WAITING && max_m.talk == MAX_TALK_SENDING && !strcmp(max_m.notice, "Sent to a"));
-    CHECK(max_m.view == MAX_VIEW_OVERVIEW);
+    CHECK(max_m.view == MAX_VIEW_AGENT && max_send_holds("a"));   // its page stays, on SEND
     pro_app_voice_result(PRO_VOICE_OK, "a");
     CHECK(!V_OPEN && max_m.talk == MAX_TALK_IDLE);
+}
+
+// As the Pro's voice screen: a send keeps the agent's page up, its pet on SEND, through the reply; the words taken,
+// the agent shows Working at once (the bar's word alone, the pet on Overview working too); its turn beginning lets the
+// page go to its Working pet. An error lets the page go at once, with the daemon's words.
+static void test_a_send_plays_send_then_working(void)
+{
+    fresh();
+    tap_cell_and_wait("a");
+    agent_drawn();
+    LEVEL = 3;
+    render_pass();
+    tap_page();
+    const max_agent_t *a = max_find("a");
+    CHECK(V_WAITING && max_m.talk == MAX_TALK_SENDING && max_m.view == MAX_VIEW_AGENT && max_send_holds("a"));
+    CHECK(max_pet_scene(a, true) == POD_SCENE_SEND && a->state == MAX_IDLE);
+    now += 800;
+    render_pass();
+    pro_app_voice_result(PRO_VOICE_OK, "a");
+    CHECK(!V_OPEN && max_m.talk == MAX_TALK_IDLE && max_send_holds("a") && max_pet_scene(a, true) == POD_SCENE_SEND);
+    CHECK(a->state == MAX_WORKING && a->sent && max_pet_scene(a, false) == POD_SCENE_WORK);
+    // A tap on the page meanwhile records nothing.
+    agent_drawn();
+    V_BEGINS = 0;
+    tap_page();
+    CHECK(V_BEGINS == 0 && !V_OPEN && max_send_holds("a"));
+    now += 2000;
+    render_pass();
+    CHECK(max_send_holds("a"));
+    pro_app_turn("a", "started", "Reading the logs", 0);
+    CHECK(!max_send_holds("a") && !a->sent && a->state == MAX_WORKING && max_m.view == MAX_VIEW_AGENT);
+    CHECK(max_pet_scene(a, true) == POD_SCENE_WORK && LOCK_DEPTH == 0);
+    // An error: the page lets the send go, and says why.
+    fresh();
+    tap_cell_and_wait("b");
+    agent_drawn();
+    tap_page();
+    CHECK(max_send_holds("b"));
+    pro_app_voice_result(PRO_VOICE_ERROR, "Didn't catch that");
+    CHECK(!max_send_holds("b") && max_find("b")->state == MAX_IDLE && !strcmp(max_m.notice, "Didn't catch that"));
+    CHECK(max_m.view == MAX_VIEW_AGENT && max_pet_scene(max_find("b"), true) != POD_SCENE_SEND);
+    // A tap before the recorder started: nothing went, so no SEND scene, and the bar says so.
+    fresh();
+    tap_cell_and_wait("c");
+    agent_drawn();
+    V_PENDING = true;
+    tap_page();
+    CHECK(!V_OPEN && max_m.talk == MAX_TALK_IDLE && !strcmp(max_m.notice, "Not sent") && !max_send_holds("c"));
+    CHECK(max_find("c")->state == MAX_IDLE && LOCK_DEPTH == 0);
 }
 
 // Nothing heard in MAX_HEAR_MS: the mic closes, nothing is sent, and the agent page stays (and says so) to be tapped
@@ -416,9 +465,10 @@ static void test_the_body_talks_and_x_cancels(void)
     CHECK(V_BEGINS == 1 && V_OPEN && !strcmp(V_AGENT, "a") && max_m.talk == MAX_TALK_RECORDING);
     agent_drawn();
     tap_page();
-    CHECK(V_WAITING && max_m.talk == MAX_TALK_SENDING && max_m.view == MAX_VIEW_OVERVIEW);
+    CHECK(V_WAITING && max_m.talk == MAX_TALK_SENDING && max_m.view == MAX_VIEW_AGENT && max_send_holds("a"));
     pro_app_voice_result(PRO_VOICE_ERROR, "Nobody heard that");
     CHECK(!V_OPEN && max_m.talk == MAX_TALK_IDLE && !strcmp(max_m.notice, "Nobody heard that"));
+    CHECK(!max_send_holds("a"));
 }
 
 // The wall clock: read each tick, known once it is past 2024 (a board that never synced reads 1970).
@@ -773,6 +823,7 @@ int main(void)
     test_touch_wakes_the_renderer();
     test_cell_tap_opens_and_listens();
     test_only_the_cap_sends_on_its_own();
+    test_a_send_plays_send_then_working();
     test_the_mic_closes_when_nothing_is_heard();
     test_the_body_talks_and_x_cancels();
     test_the_wall_clock();

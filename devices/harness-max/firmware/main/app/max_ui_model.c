@@ -140,6 +140,7 @@ bool max_show(max_view_t view)
     if (was == MAX_VIEW_INBOX)   // seen: the bell's count goes
         for (int i = 0; i < max_m.inbox_count; i++) max_m.inbox[i].unread = false;
     max_m.talk_closed = false;   // "Mic closed" belongs to the page it closed on
+    max_m.sending = false;       // and the SEND scene to the page it played on
     max_m.view = view;
     // Opening an agent holds the row's order until it closes, so the open agent and the slivers beside it stay put as
     // states change.
@@ -162,7 +163,10 @@ bool max_show(max_view_t view)
 
 void max_open(const char *id)
 {
-    if (strcmp(max_m.selected, id)) max_m.talk_closed = false;   // "Mic closed" was the other agent's
+    if (strcmp(max_m.selected, id)) {   // "Mic closed" and the SEND scene were the other agent's
+        max_m.talk_closed = false;
+        max_m.sending = false;
+    }
     max_copy(max_m.selected, sizeof max_m.selected, id);
     max_show(MAX_VIEW_AGENT);
 }
@@ -333,11 +337,47 @@ static bool front_if_passed(void)
     return front;
 }
 
+// The bar's word alone ran out (MAX_SENT_WAIT_MS with no turn event): the agent has the state it had back.
+static bool sent_settle(uint32_t now_ms)
+{
+    bool changed = false;
+    for (int i = 0; i < max_m.count; i++) {
+        max_agent_t *a = &max_m.agents[i];
+        if (!a->sent || !reached(a->sent_ms + MAX_SENT_WAIT_MS, now_ms)) continue;
+        a->sent = false;
+        if (a->state == MAX_WORKING) max_set_state(a, a->sent_was, now_ms);
+        changed = true;
+    }
+    return changed;
+}
+
+// The send's page lets it go (the Pro's release_send) once the agent's turn has really begun: Working, and not on the
+// bar's word alone (a turn event clears that), the turn begun after the tap or the words taken since. With none in
+// MAX_SENT_WAIT_MS, or the agent gone, it lets go anyway. Words that answered a question: the next question waiting
+// takes the glass then, as after a tapped answer. True when it let go.
+static bool send_settle(uint32_t now_ms)
+{
+    if (!max_m.sending) return false;
+    const max_agent_t *a = max_find(max_m.sent_id);
+    if (a && a->sent) max_m.sent_seen = true;
+    const bool turn = a && a->state == MAX_WORKING && !a->sent &&
+                      (max_m.sent_seen || (int32_t)(a->since_ms - max_m.send_from) >= 0);
+    if (a && !turn && !reached(max_m.send_from + MAX_SENT_WAIT_MS, now_ms)) return false;
+    max_m.sending = false;
+    max_m.dirty = true;
+    const max_agent_t *next = max_m.sent_asked && a ? oldest(a->id) : NULL;
+    if (next && max_m.view == MAX_VIEW_AGENT && max_m.talk == MAX_TALK_IDLE)
+        max_attention(next->id, MAX_ATTN_ASK, now_ms);
+    return true;
+}
+
 // The page follows what it shows: Attention whose agent moved on gives way to the next question (else Overview), a
 // turn's end goes after MAX_ATTN_END_MS, the agent page goes with its agent, an idle Overview turns Ambient, and the
-// row comes to its front when an agent moved up past it. True when the page changed.
+// row comes to its front when an agent moved up past it; first the bar's word alone and the send's page. True when
+// the page changed.
 static bool settle(uint32_t now_ms)
 {
+    const bool sent = sent_settle(now_ms), let_go = send_settle(now_ms);
     const max_view_t view = max_m.view;
     const max_attn_t attn = max_m.attn;
     char attn_id[ID_MAX];
@@ -351,7 +391,7 @@ static bool settle(uint32_t now_ms)
     }
     if (ambient_waits() && reached(max_m.idle_from + MAX_AMBIENT_MS, now_ms)) max_show(MAX_VIEW_AMBIENT);
     const bool front = front_if_passed();
-    return front || max_m.view != view || max_m.attn != attn || strcmp(max_m.attn_id, attn_id);
+    return sent || let_go || front || max_m.view != view || max_m.attn != attn || strcmp(max_m.attn_id, attn_id);
 }
 
 uint32_t max_fnv(uint32_t h, const void *data, size_t n)
@@ -673,7 +713,9 @@ bool max_ui_turn(const char *id, const char *kind, const char *text, int elapsed
         return false;
     }
     s_before = *a;
-    if (!turn(a, kind, text, elapsed_s, now_ms) || !memcmp(&s_before, a, sizeof *a)) return settle(now_ms);
+    const bool took = turn(a, kind, text, elapsed_s, now_ms);
+    if (took) a->sent = false;   // the daemon speaks for the turn now (the Pro's pod_model)
+    if (!took || !memcmp(&s_before, a, sizeof *a)) return settle(now_ms);
     max_m.idle_from = now_ms;
     if (!strcmp(kind, "error")) max_attend(a, MAX_ATTN_FAIL, now_ms);
     else if (running(a->state) && !running(s_before.state) && max_m.view == MAX_VIEW_AMBIENT)
@@ -691,6 +733,7 @@ bool max_ui_summary(const char *id, const char *text, const char *recap, bool re
     // "done" is the daemon's placeholder when the turn had nothing to say: the recap speaks instead.
     const char *say = text && text[0] && strcmp(text, "done") ? text : recap && recap[0] ? recap : NULL;
     const bool failed = a->state == MAX_FAILED;
+    a->sent = false;   // the daemon speaks for the turn now
     if (failed) {
         if (!a->note[0]) max_copy(a->note, sizeof a->note, say);   // the error first; with none, what happened
     } else {
@@ -750,6 +793,45 @@ bool max_ui_talk(max_talk_t state, uint32_t now_ms)
     }
     max_m.talk = state;
     return changed;
+}
+
+void max_send_begin(uint32_t now_ms)
+{
+    const max_agent_t *a = max_m.talk_id[0] ? max_find(max_m.talk_id) : NULL;
+    // Only its own page plays it: the form's spoken name has none, and a send from elsewhere leaves where it is.
+    if (!a || max_m.view != MAX_VIEW_AGENT || strcmp(max_m.selected, a->id)) return;
+    max_m.sending = true;
+    max_m.sent_seen = false;
+    max_m.sent_asked = a->state == MAX_ASKING;
+    memcpy(max_m.sent_id, a->id, sizeof max_m.sent_id);
+    max_m.send_from = now_ms;
+}
+
+bool max_send_holds(const char *id) { return max_m.sending && id && !strcmp(max_m.sent_id, id); }
+
+bool max_ui_voice_result(bool ok, const char *agent_id, uint32_t now_ms)
+{
+    if (!ok) {   // the voice screen goes (the Pro's talk_over): the page is its agent's again
+        const bool held = max_m.sending;
+        max_m.sending = false;
+        return held;
+    }
+    max_agent_t *a = agent_id && agent_id[0] ? max_find(agent_id) : NULL;
+    if (!a) return settle(now_ms);
+    if (max_send_holds(a->id)) max_m.sent_seen = true;
+    // Working until its turn speaks (the Pro's pod_model_sent); a question is answered by its close instead.
+    if (a->state != MAX_ASKING) {
+        if (!a->sent) a->sent_was = a->state;
+        if (a->state != MAX_WORKING) {   // a new turn: the last one's words are not its
+            max_set_state(a, MAX_WORKING, now_ms);
+            a->activity[0] = a->verb[0] = 0;
+            a->step_count = 0;
+        }
+        a->sent = true;
+        a->sent_ms = now_ms;
+    }
+    settle(now_ms);
+    return true;
 }
 
 bool max_ui_wall(bool known, int hour, int min, int wday, int mday, int mon)
@@ -871,6 +953,9 @@ uint32_t max_ui_next_wake_ms(uint32_t now_ms)
         sooner(&ms, MAX_TALK_FRAME_MS);
         until(&ms, max_m.talk_from + (max_m.talk_heard ? MAX_TALK_MAX_MS : MAX_HEAR_MS), now_ms);
     }
+    if (max_m.sending) until(&ms, max_m.send_from + MAX_SENT_WAIT_MS, now_ms);   // its page lets the send go
+    for (int i = 0; i < max_m.count; i++)   // the bar's word alone runs out
+        if (max_m.agents[i].sent) until(&ms, max_m.agents[i].sent_ms + MAX_SENT_WAIT_MS, now_ms);
     if (max_m.view == MAX_VIEW_ATTENTION && max_m.attn != MAX_ATTN_ASK)
         until(&ms, max_m.attn_from + MAX_ATTN_END_MS, now_ms);
     if (ambient_waits()) until(&ms, max_m.idle_from + MAX_AMBIENT_MS, now_ms);

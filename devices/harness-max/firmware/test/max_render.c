@@ -203,6 +203,17 @@ static void s_agent_sending(void)
     talk("e2e", 3, true);
     max_ui_talk(MAX_TALK_SENDING, T0);
 }
+// Sent and the words taken, its turn not yet begun (the Pro's voice screen): the page holds SEND, 700 ms in.
+static void s_agent_sent(void)
+{
+    orca();
+    show(MAX_VIEW_AGENT, "e2e");
+    talk("e2e", 3, true);
+    max_send_begin(T0 - 700);
+    max_ui_talk(MAX_TALK_SENDING, T0 - 700);
+    max_ui_talk(MAX_TALK_IDLE, T0 - 300);
+    max_ui_voice_result(true, "e2e", T0 - 300);
+}
 // An agent the bar cannot record for: where to talk to it instead.
 static void s_agent_no_voice(void)
 {
@@ -478,6 +489,7 @@ static const screen_t SCREENS[] = {
     {"agent-reading", s_agent_reading}, {"agent-working", s_agent_working}, {"agent-mic-closed", s_agent_mic_closed},
     {"agent-listening", s_agent_listening}, {"agent-listening-start", s_agent_listening_start},
     {"agent-working-talking", s_agent_working_talking}, {"agent-sending", s_agent_sending},
+    {"agent-sent", s_agent_sent},
     {"agent-no-voice", s_agent_no_voice}, {"toast", s_toast}, {"done-note", s_done_note},
     {"attention-question", s_attention_question}, {"attention-permission", s_attention_permission},
     {"attention-outside", s_attention_outside}, {"attention-done", s_attention_done},

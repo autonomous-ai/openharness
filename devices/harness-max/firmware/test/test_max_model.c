@@ -811,6 +811,70 @@ static void test_recording_clock(void)
     CHECK(max_show(MAX_VIEW_OVERVIEW) && !max_m.talk_closed);
 }
 
+// A send's page (the Pro's voice screen): max_send_begin holds the SEND scene on the agent's own page only, until its
+// turn begins: a turn started after the tap, or any turn event once the words were taken (the bar's Working on its word
+// alone then ends). With none in MAX_SENT_WAIT_MS the page lets go, and the bar's Working goes back to what was. The
+// page left, another agent opened or the agent gone: let go at once.
+static void test_send_hold(void)
+{
+    linked(ABC, 3);
+    roster_of(ABC, 3, "claude");
+    max_copy(max_m.talk_id, sizeof max_m.talk_id, "a");
+    max_show(MAX_VIEW_OVERVIEW);
+    max_send_begin(100);   // not its page: nothing held
+    CHECK(!max_m.sending);
+    max_open("a");
+    max_send_begin(1000);
+    CHECK(max_send_holds("a") && !max_send_holds("b") && max_m.send_from == 1000);
+    CHECK(max_pet_scene(max_find("a"), true) == POD_SCENE_SEND);
+    CHECK(max_pet_scene(max_find("a"), false) != POD_SCENE_SEND);   // a cell plays its state
+    as_drawn(1000);
+    CHECK(max_ui_next_wake_ms(1000 + MAX_SENT_WAIT_MS - 20) <= 20);
+    // No reply, no turn: let go at MAX_SENT_WAIT_MS.
+    CHECK(!max_ui_tick(1000 + MAX_SENT_WAIT_MS - 1) || max_send_holds("a"));
+    CHECK(max_send_holds("a"));
+    CHECK(max_ui_tick(1000 + MAX_SENT_WAIT_MS) && !max_send_holds("a") && max_m.view == MAX_VIEW_AGENT);
+    // A turn begun after the tap lets go, though no reply came.
+    max_send_begin(40000);
+    CHECK(max_ui_turn("a", "started", "", 0, 40500) && !max_send_holds("a"));
+    max_ui_turn("a", "done", "", 0, 41000);
+    // The words taken: Working on the bar's word alone, the page still on SEND; a turn event ends both.
+    max_send_begin(50000);
+    CHECK(max_ui_voice_result(true, "a", 50400));
+    max_agent_t *a = max_find("a");
+    CHECK(a->state == MAX_WORKING && a->sent && a->sent_was == MAX_DONE && max_send_holds("a"));
+    CHECK(!strcmp(max_summary(a), "Starting\xe2\x80\xa6"));   // no word of its own yet
+    CHECK(max_ui_turn("a", "activity", "Reading", -1, 50900) && !a->sent && !max_send_holds("a"));
+    CHECK(max_pet_scene(a, true) == POD_SCENE_WORK);
+    max_ui_turn("a", "done", "", 0, 51000);
+    // Taken, then no turn event: Working ends at MAX_SENT_WAIT_MS from the reply, and the page lets go with it.
+    max_send_begin(60000);
+    max_ui_voice_result(true, "a", 60500);
+    as_drawn(60500);
+    CHECK(max_ui_next_wake_ms(60500 + MAX_SENT_WAIT_MS - 30) <= 30);
+    max_ui_tick(60500 + MAX_SENT_WAIT_MS - 1);
+    CHECK(a->sent && a->state == MAX_WORKING);
+    CHECK(max_ui_tick(60500 + MAX_SENT_WAIT_MS) && !a->sent && a->state == MAX_DONE && !max_send_holds("a"));
+    // Words routed to another agent: that one works; this page waits for its own turn.
+    max_send_begin(100000);
+    max_ui_voice_result(true, "c", 100300);
+    CHECK(max_find("c")->state == MAX_WORKING && max_find("c")->sent && max_send_holds("a") && !max_m.sent_seen);
+    // An error, the page left, another agent opened, the agent gone: let go.
+    CHECK(max_ui_voice_result(false, NULL, 100400) && !max_send_holds("a"));
+    max_send_begin(100500);
+    max_show(MAX_VIEW_OVERVIEW);
+    CHECK(!max_m.sending);
+    max_open("a");
+    max_send_begin(100600);
+    max_open("b");
+    CHECK(!max_m.sending);
+    max_open("a");
+    max_send_begin(100700);
+    roster_of((const char *const[]){"b", "c"}, 2, "claude");
+    max_ui_tick(100800);
+    CHECK(!max_m.sending);
+}
+
 static void test_elapsed_format(void)
 {
     char t[16];
@@ -927,6 +991,7 @@ int main(void)
     test_no_talk_while_an_answer_waits();
     test_agent_page_clock();
     test_recording_clock();
+    test_send_hold();
     test_elapsed_format();
     test_apps();
     test_app_state();

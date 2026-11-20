@@ -57,7 +57,12 @@ with `MAX_Y`, the text keeps its size).
 - A tap on the page sends; the quiet after speech sends nothing (since 20 Nov; 5 s of quiet sent it before). X cancels.
   Nothing heard in 10 s: the mic closes, the band says "Mic closed · tap to talk", and the page stays to be read. A tap
   on the page then opens the mic again. The full voice rules (owner, 20 Nov) are in "Voice rules" below.
-- After a send: the notice "Sent to <name>", and the bar goes back to Overview.
+- After a send (since 20 Nov, the Pro's voice screen): the notice "Sent to <name>", and the agent's page stays up. Its
+  pet plays the SEND scene (the letter into the mailbox) and the band says "Sending", its clock stopped, until the
+  agent's turn begins; then the page shows its Working pet. Once the daemon takes the words the agent shows Working at
+  once ("Starting…" until its turn says more), on its cell too. With no turn in 30 s both go back. An error lets the
+  page go at once, with the daemon's words. Words that answered a question: the next question waiting takes the glass
+  when the turn begins.
 - On the strip, a tap on another agent sends what was said (when something was heard; else it cancels) and shows that
   agent with the mic closed. Back does the same and goes to Overview. A sideways swipe browses the ring the same way.
 - The words are not shown as they are spoken: the daemon transcribes the recording after it is sent.
@@ -91,6 +96,10 @@ Everything else is the Pro's:
 - 600 s is the longest recording: then it is sent.
 - The recording's agent leaving the ring drops it, heard or not.
 - When the clock opens or ends the talk under a finger, that touch acts on nothing when it lets go.
+- After a send the page stays on the SEND scene and takes no second recording until the agent's turn begins (a turn
+  started after the tap, or any turn event once the daemon took the words), or 30 s (`MAX_SENT_WAIT_MS`, the Pro's
+  `POD_SENT_WAIT_MS`). The words taken, the agent is Working on the bar's word alone (the Pro's `pod_model_sent`)
+  until a turn event, or 30 s, when its state before comes back. Leaving the page lets the send go.
 
 ### Voice rules (owner, 18 Nov 2026, replaced on the firmware 20 Nov): the Dial's, with two changes
 

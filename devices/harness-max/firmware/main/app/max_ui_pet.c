@@ -9,7 +9,8 @@ enum {
     SIDE_STEP = 5,    // the square shrinks by this until the pet is short enough
 };
 
-// When the SEND scene began: it plays once from there and holds its last step.
+// When the SEND scene began (the send's tap, once the model holds it: max_m.send_from): it plays once from there and
+// holds its last step.
 static uint32_t s_send_from;
 static bool s_sending;
 
@@ -17,6 +18,7 @@ pod_scene_t max_pet_scene(const max_agent_t *a, bool page)
 {
     if (page && max_m.talk != MAX_TALK_IDLE && !strcmp(max_m.talk_id, a->id))
         return max_m.talk == MAX_TALK_RECORDING ? POD_SCENE_LISTEN : POD_SCENE_SEND;
+    if (page && max_send_holds(a->id)) return POD_SCENE_SEND;   // sent: until its turn begins (the Pro's voice screen)
     if (a->state == MAX_ASKING) return POD_SCENE_ASK;
     if (a->state == MAX_WORKING) return POD_SCENE_WORK;
     // On its page an agent with nothing to say relaxes, as the dial's Focus (mockup sceneFor).
@@ -59,7 +61,7 @@ int max_pet(ht_scene_t *s, const char *engine, pod_scene_t scene, int cx, int fo
         return foot - size;
     }
     if (!still) {
-        if (scene == POD_SCENE_SEND && !s_sending) s_send_from = now_ms;
+        if (scene == POD_SCENE_SEND && !s_sending) s_send_from = max_m.sending ? max_m.send_from : now_ms;
         s_sending = scene == POD_SCENE_SEND;
     }
     const fit_t f = fit(engine, scene, half, max_h, still);
