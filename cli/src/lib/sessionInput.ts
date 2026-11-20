@@ -184,9 +184,10 @@ interface InputState {
    *  as the engine takes it, lib/goalCommand.ts), which tells its turn from any other. */
   firstTaskRow: string | null
   firstTaskFingerprint: string | null
-  /** The person stopped the first task before it was typed ([interrupted]): the hand-over to come lets its row go instead
-   *  of typing it. */
-  firstTaskStopped: boolean
+  /** The first task is done with while its row says it waits untyped: the person stopped it before it was typed
+   *  ([interrupted]), or its turn took it while its row was asked for it back ([keepFirstTaskTyped]). The hand-over to come
+   *  lets its row go instead of typing it. */
+  firstTaskDropped: boolean
   /** The receipt of the person's message typed last, until it is settled ([settle]). */
   awaitingReceipt?: MessageReceipt
   controlLocked: boolean
@@ -242,6 +243,9 @@ export interface SessionInputDeps {
   /** An OpenClaw first task's move on its row from typed back to waiting untyped (lib/registry.ts), made before its box is
    *  cleared, asked by the row's own text: true once it is saved. False, or absent, and nothing is pressed. */
   untypeFirstTask?: (id: string, text: string) => Promise<boolean>
+  /** Its move back, from waiting untyped to typed, when the clear did not end in an empty box ([keepFirstTaskTyped]), asked
+   *  by the row's own text: true once it is saved. */
+  retypeFirstTask?: (id: string, text: string) => Promise<boolean>
   /** The agent's first task is done with: its turn took it ([onTurnStarted]), or the person stopped it before it was typed
    *  ([interrupted]). Its row lets the typed task go (lib/registry.ts `firstTaskTaken`). Not said for a stop once it is
    *  typed, nor for a forget: OpenClaw's store or the binding pass's bound settles those (core/agents/bind.ts). */
@@ -371,7 +375,7 @@ export class SessionInputController {
    */
   expectFirstTask(id: string): void {
     const state = this.state(id)
-    if (state.firstTaskStopped) return
+    if (state.firstTaskDropped) return
     state.firstTaskAhead = true
     if (state.firstTask) return
     state.firstTask = true
@@ -389,8 +393,8 @@ export class SessionInputController {
     const session = this.controlSession(id)
     if (!session) return
     const state = this.state(id)
-    if (state.firstTaskStopped) {
-      state.firstTaskStopped = false
+    if (state.firstTaskDropped) {
+      state.firstTaskDropped = false
       this.deps.onFirstTaskTaken?.(id)
       return
     }
@@ -525,7 +529,7 @@ export class SessionInputController {
         firstTaskAhead: false,
         firstTaskRow: null,
         firstTaskFingerprint: null,
-        firstTaskStopped: false,
+        firstTaskDropped: false,
         controlLocked: false,
         cancelling: 0,
         afterCancel: { writes: [], sent: [] },
@@ -703,8 +707,8 @@ export class SessionInputController {
       if (first) {
         state.firstTaskAhead = false
         // Stopped before its write started: never typed, and its row lets it go.
-        if (state.firstTaskStopped) {
-          state.firstTaskStopped = false
+        if (state.firstTaskDropped) {
+          state.firstTaskDropped = false
           this.deps.onFirstTaskTaken?.(sessionId)
           return Promise.resolve()
         }
@@ -998,7 +1002,7 @@ export class SessionInputController {
   private interrupted(sessionId: string, state: InputState): void {
     this.finishDelivery(sessionId, state, 'unknown', 'cancelled_after_paste')
     this.settle(state, 'cancelled')
-    if (state.firstTaskAhead) state.firstTaskStopped = true
+    if (state.firstTaskAhead) state.firstTaskDropped = true
     this.firstTaskEnded(sessionId, state)
     state.turnOpen = false
     state.awaitingFingerprint = null
@@ -1472,54 +1476,22 @@ export class SessionInputController {
    * shows exactly the message, whole, is cleared, once a message: Ctrl+U `openclawClearKeys` times (never Ctrl+C, on which
    * OpenClaw exits while disconnected), then the box is read again, and anything left there (the person typed meanwhile)
    * stops it. Emptied, a message waits untyped as any message does while the pane cannot send, its bound still from its
-   * first paste, and is typed again from the empty box: its one send. A first task goes back to its row before the first
-   * key, so a daemon that stops meanwhile types it again only into an empty box; its wait here then ends, and the binding
-   * pass types it from the row, ahead of the messages sent after it ([heldBehindFirstTask]). Whether the paste is awaited
-   * no more; false only while it still is.
+   * first paste, and is typed again from the empty box: its one send. A first task is cleared its own way
+   * ([clearFirstTask]). Whether the paste is awaited no more; false only while it still is.
    */
   private async clearRefused(sessionId: string, session: RegisteredSession, state: InputState): Promise<boolean> {
     const content = state.awaitingContent ?? ''
     const keys = openclawClearKeys(content)
     if (keys === null) return false
+    if (state.firstTask) return this.clearFirstTask(sessionId, session, state, content, keys)
     state.cleared = true
-    const awaited = (): boolean => this.states.get(sessionId) === state && !!state.awaitingFingerprint && !state.turnOpen
-    if (state.firstTask) {
-      const untyped = await this.deps.untypeFirstTask?.(session.agentId, state.firstTaskRow ?? content).catch(() => false)
-      if (!awaited()) return true
-      if (!untyped) {
-        console.warn(`[inject] ${sid(sessionId)} openclaw · refused first task not cleared · its row could not take it back`)
-        return false
-      }
-    }
-    let pressed = 0
-    let left: string | null = null
-    state.clearing = true
-    try {
-      for (; pressed < keys; pressed++) {
-        const key = await this.deps.sendKey(session.agentId, 'C-u').catch(() => false)
-        if (!awaited()) return true
-        if (typeof key === 'boolean' ? !key : key.state !== 'succeeded') break
-      }
-      const capture = await this.deps.capture?.(session.agentId).catch(() => null)
-      if (!awaited()) return true
-      left = capture ? readOpenclawScreen(capture).box : null
-    } finally {
-      state.clearing = false
-    }
-    const emptied = left === ''
-    if (emptied) console.log(`[inject] ${sid(sessionId)} openclaw · refused message cleared · ${pressed} keys`)
-    else console.warn(`[inject] ${sid(sessionId)} openclaw · refused message not cleared · ${pressed} keys, its box not empty`)
-    // Back on its row, a first task is typed from there, only into an empty box, whatever is left: an Enter on this paste
-    // could send it twice.
-    if (!emptied && !state.firstTask) return false
+    const left = await this.pressClear(sessionId, session, state, keys)
+    if (!this.awaited(sessionId, state)) return true
+    if (left !== '') return false
     const { awaitingReceipt, deliveryId, pastedAt } = state
     state.awaitingFingerprint = null
     state.awaitingContent = null
     state.ambiguousDispatch = false
-    if (state.firstTask) {
-      state.firstTaskAhead = true
-      return true
-    }
     state.awaitingReceipt = undefined
     state.deliveryId = undefined
     state.deliveryFingerprint = undefined
@@ -1527,6 +1499,102 @@ export class SessionInputController {
     this.putBack(state, { content, deliveryId, receipt: awaitingReceipt, firstPaste: pastedAt })
     this.drainOne(sessionId, state)
     return true
+  }
+
+  /**
+   * [clearRefused] for the first task (decision 7). Its row says waiting untyped before the first key, so a daemon that
+   * stops meanwhile types it again only into an empty box; a row that did not take it back is asked again at the next
+   * window. Then the box is read again, and pressed only while it still shows exactly the task: the person may have typed
+   * while the row was written. Emptied, its wait here ends, and the binding pass types it from its row, ahead of the
+   * messages sent after it ([heldBehindFirstTask]). Anything else (the box changed, a key refused, a box not read, a turn
+   * meanwhile) and the row says typed again, as the box does ([keepFirstTaskTyped]).
+   */
+  private async clearFirstTask(sessionId: string, session: RegisteredSession, state: InputState, content: string, keys: number): Promise<boolean> {
+    const row = state.firstTaskRow ?? content
+    if (!await this.untypeFirstTask(sessionId, session.agentId, row)) return !this.awaited(sessionId, state)
+    const capture = this.awaited(sessionId, state) ? await this.deps.capture?.(session.agentId).catch(() => null) : null
+    const screen = capture ? readOpenclawScreen(capture) : null
+    if (this.awaited(sessionId, state) && screen?.state === 'no-history' && openclawBoxExactly(screen.box, screen.boxHidden, content)) {
+      state.cleared = true
+      if (await this.pressClear(sessionId, session, state, keys) === '' && this.awaited(sessionId, state)) {
+        state.awaitingFingerprint = null
+        state.awaitingContent = null
+        state.ambiguousDispatch = false
+        state.firstTaskAhead = true
+        return true
+      }
+    }
+    return this.keepFirstTaskTyped(sessionId, session.agentId, state, row, content)
+  }
+
+  /** The first task's row moved back from typed to waiting untyped (`untypeFirstTask`): whether that is saved. */
+  private async untypeFirstTask(sessionId: string, agentId: string, row: string): Promise<boolean> {
+    const untype = this.deps.untypeFirstTask
+    if (!untype) return false
+    const untyped = await untype(agentId, row).catch((error: unknown) => {
+      console.warn(`[inject] ${sid(sessionId)} openclaw · first task not taken back · ${errorKind(error)}`)
+      return null
+    })
+    if (untyped === false) console.warn(`[inject] ${sid(sessionId)} openclaw · first task not taken back · its row does not hold it typed`)
+    return untyped === true
+  }
+
+  /**
+   * A first task's clear that did not end in an empty box: its row, which says waiting untyped, says typed again, as the
+   * box does, so nothing types it a second time from there. Still the first task, it is awaited as before (an Enter only
+   * on a box that holds it); taken by its turn or stopped meanwhile, its row lets it go. A row that cannot say typed again
+   * is left as it says: the task is typed from there only into an empty box, and gets no key from here; one taken or
+   * stopped is then let go at its hand-over. Whether the paste is awaited no more.
+   */
+  private async keepFirstTaskTyped(sessionId: string, agentId: string, state: InputState, row: string, content: string): Promise<boolean> {
+    if (this.states.get(sessionId) !== state) return true
+    const retyped = await this.deps.retypeFirstTask?.(agentId, row).catch((error: unknown) => {
+      console.warn(`[inject] ${sid(sessionId)} openclaw · first task not typed again on its row · ${errorKind(error)}`)
+      return false
+    }) === true
+    if (this.states.get(sessionId) !== state) return true
+    if (!state.firstTask) {
+      if (retyped) this.deps.onFirstTaskTaken?.(sessionId)
+      else state.firstTaskDropped = true
+      return true
+    }
+    if (!retyped) {
+      state.awaitingFingerprint = null
+      state.awaitingContent = null
+      state.ambiguousDispatch = false
+      state.firstTaskAhead = true
+      return true
+    }
+    state.awaitingFingerprint = fingerprint(content)
+    state.awaitingContent = content
+    return false
+  }
+
+  /** Presses Ctrl+U [keys] times into the box, then reads what is left there: null when it is not read, or the message is
+   *  no longer awaited. A key refused presses no more. */
+  private async pressClear(sessionId: string, session: RegisteredSession, state: InputState, keys: number): Promise<string | null> {
+    let pressed = 0
+    state.clearing = true
+    try {
+      for (; pressed < keys; pressed++) {
+        const key = await this.deps.sendKey(session.agentId, 'C-u').catch(() => false)
+        if (!this.awaited(sessionId, state)) return null
+        if (typeof key === 'boolean' ? !key : key.state !== 'succeeded') break
+      }
+      const capture = await this.deps.capture?.(session.agentId).catch(() => null)
+      if (!this.awaited(sessionId, state)) return null
+      const left = capture ? readOpenclawScreen(capture).box : null
+      if (left === '') console.log(`[inject] ${sid(sessionId)} openclaw · refused message cleared · ${pressed} keys`)
+      else console.warn(`[inject] ${sid(sessionId)} openclaw · refused message not cleared · ${pressed} keys, its box ${left === null ? 'not read' : 'not empty'}`)
+      return left
+    } finally {
+      state.clearing = false
+    }
+  }
+
+  /** Whether the message pasted into [sessionId]'s pane is still awaited: no turn has settled it, and the agent is there. */
+  private awaited(sessionId: string, state: InputState): boolean {
+    return this.states.get(sessionId) === state && !!state.awaitingFingerprint && !state.turnOpen
   }
 
   /**
