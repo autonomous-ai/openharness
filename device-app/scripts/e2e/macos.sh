@@ -187,9 +187,9 @@ if [[ -z "$update" ]]; then
   launch HARNESS_DEVICE_CLI="$fake_cli" FAKE_HARNESS="$fake"
   waits logged "$menu" || fail "the menu reads ${menu#menu: }"
   grep -Fxqs 'hardware watch --json' "$fake/calls.log" || fail "the app runs the fake CLI's watch"
-  # The script made the state's folder: only the app takes instance.lock there.
-  [[ -f "$data/instance.lock" && -d "$logs" ]] || fail "the app's state and log are in the scratch HOME"
-  ok "the app's state and log are in the scratch HOME, and it runs the fake CLI's watch"
+  # The menu line was read from the scratch HOME's log. The state there is the script's, which the app only reads, and
+  # macOS takes no instance lock (main.rs): kept_to_itself shows that nothing of the app's went to the real HOME.
+  ok "the app logs to the scratch HOME and runs the fake CLI's watch"
   ok "the menu reads ${menu#menu: }"
   kill -TERM "$app_pid"
   waits gone "$app_pid" || fail "the app ends on SIGTERM"
