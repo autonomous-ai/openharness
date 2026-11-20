@@ -6,6 +6,7 @@ import { fakeAppEngine, type FakeAppEngine, type FakeEngineStart } from './__fix
 import { APP_CONTEXT, appContext, appEngineOps, AppStartError, cacheName, llamaServerArgs, lmsKey, readAppRecords, scanAppModels,
   writeAppRecords, type AppEngineOps, type AppEngineRecord, type AppModel } from './appModels.js'
 import { processExists } from './processLiveness.js'
+import { setProcessTableSource, type ProcessRow } from './processTable.js'
 
 // Pass-through, recording what replaced a file and what was opened by name through fs/promises; `sync`: each rename's
 // target and each path opened through node:fs's synchronous calls, which a save that must not block its event loop never
@@ -178,6 +179,32 @@ describe('models other apps downloaded', () => {
     await appEngineOps({}, open, run).stop(record)
     await appEngineOps({}, fails(new DOMException('timed out', 'TimeoutError')), run).stop(record)
     expect(seen).toEqual([['unload', 'm'], ['server', 'stop'], ['unload', 'm'], ['server', 'stop']])
+  })
+
+  it("tells its own engine by the pid's command line in the process table, on Windows too", async () => {
+    // This process stands in for the engine: its pid is running, and the table says what it runs.
+    const record: AppEngineRecord = { spec: 1, modelId: 'app:llama.cpp:m.gguf', grid: 'g', engine: 'llama.cpp', name: 'm',
+      served: 'm', alias: 'm', port: 41001, binary: '/opt/homebrew/bin/llama-server', pid: process.pid }
+    const running = (args: string): ProcessRow => ({ pid: process.pid, parentPid: 1, executable: 'llama-server', startMarker: 'w:1', args })
+    const run = vi.fn(async () => ({ ok: true, stdout: '/opt/homebrew/bin/llama-server', stderr: '' }))
+    const ops = appEngineOps({}, fetch, run)
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
+    Object.defineProperty(process, 'platform', { ...platform, value: 'win32' })
+    try {
+      setProcessTableSource(async () => [running('/opt/homebrew/bin/llama-server -m /m/m.gguf --port 0')])
+      expect(await ops.alive(record)).toBe(true)
+      // The pid was reused by another program, or the table holds no row for it, or could not be read.
+      setProcessTableSource(async () => [running('/usr/local/bin/ollama serve')])
+      expect(await ops.alive(record)).toBe(false)
+      setProcessTableSource(async () => [])
+      expect(await ops.alive(record)).toBe(false)
+      setProcessTableSource(async () => null)
+      expect(await ops.alive(record)).toBe(false)
+      expect(run).not.toHaveBeenCalled()
+    } finally {
+      setProcessTableSource(null)
+      Object.defineProperty(process, 'platform', platform)
+    }
   })
 
   it('is no models, never an error, without the Model Manager or with a scan that fails', async () => {

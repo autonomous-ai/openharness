@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from 'vitest'
 import { REFUSED, type ListenerStream, type StreamEnd } from '../../services/devicesListener.js'
 import type { PageAgent } from './adapter.js'
-import { PS_MAX_BYTES, PS_TIMEOUT_MS, type Exec } from './scannedApp.js'
+import { PS_TIMEOUT_MS, type Exec } from './scannedApp.js'
+import { setProcessTableSource, type ProcessRow } from '../../lib/processTable.js'
 import {
   CHAIN_RETRY_MS, GROUPS_MAX_BYTES, readForeground, readProcessParents, VSCODE_GUARD_MS, VSCODE_OPEN_MAX_BYTES, VSCODE_OPEN_PER_SECOND,
   VSCODE_SCROLL_MAX, VSCODE_STATE_MAX_BYTES, VSCODE_STATE_PER_SECOND, VSCODE_TERMINALS, VSCODE_WINDOWS, vscodeStreams,
@@ -812,15 +813,24 @@ describe('VS Code\'s windows', () => {
 })
 
 describe('the process table the match reads', () => {
-  it('is each process\'s pid and parent alone, from one ps read within its bounds', async () => {
-    const exec = vi.fn<Exec>(async () => '  600     1\n  700   600\nnot a row\n')
-    expect(await readProcessParents(exec)).toEqual([{ pid: 600, ppid: 1 }, { pid: 700, ppid: 600 }])
-    expect(exec.mock.calls).toEqual([['ps', ['-axo', 'pid=,ppid='], { timeout: PS_TIMEOUT_MS, maxBuffer: PS_MAX_BYTES }]])
+  const row = (pid: number, parentPid: number): ProcessRow =>
+    ({ pid, parentPid, executable: 'node', startMarker: 'w:1', args: 'node SECRET-TOKEN rotate the key' })
+
+  it('reads each process\'s parent from the process table, Windows included', async () => {
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
+    Object.defineProperty(process, 'platform', { ...platform, value: 'win32' })
+    setProcessTableSource(async () => [row(600, 1), row(700, 600)])
+    try {
+      expect(await readProcessParents()).toEqual([{ pid: 600, ppid: 1 }, { pid: 700, ppid: 600 }])
+    } finally {
+      setProcessTableSource(null)
+      Object.defineProperty(process, 'platform', platform)
+    }
   })
 
-  it('a ps that failed or listed nobody is an error that says nothing of what it printed', async () => {
-    for (const out of [null, '', 'SECRET-TOKEN rotate the key\n']) {
-      expect(await readProcessParents(async () => out).catch((e: unknown) => e)).toEqual(new Error('process table not read'))
+  it('a table that was not read or listed nobody is an error that says nothing of what it held', async () => {
+    for (const rows of [null, []]) {
+      expect(await readProcessParents(async () => rows).catch((e: unknown) => e)).toEqual(new Error('process table not read'))
     }
   })
 
@@ -860,6 +870,12 @@ describe('the foreground group the page guard reads', () => {
     '  700   700   900\n  700   700   900\n', '  700   700   900\n  900   900   900\n  900   900   900\n',
   ])('a ps that failed, or printed anything but one row of three numbers for each, is none: %j', async (out) => {
     expect(await readForeground(900, 700, async () => out)).toBeUndefined()
+  })
+
+  it('has no foreground group to read on Windows, and runs no ps', async () => {
+    const exec = vi.fn<Exec>(async () => '  700   700   900\n  900   900   900\n')
+    expect(await readForeground(900, 700, exec, 'win32')).toBeUndefined()
+    expect(exec).not.toHaveBeenCalled()
   })
 
   it.skipIf(process.platform === 'win32')('this machine\'s: this process has a group, and its parent a foreground group', async () => {
