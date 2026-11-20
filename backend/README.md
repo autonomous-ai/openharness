@@ -182,8 +182,13 @@ manager-owned `agent_nodes`/`managers` (read those via raw queries when status e
 
 ### Voice
 
-Voice is transcribed by Deepgram (the default `VOICE_PROVIDER`). Every Deepgram request sends `mip_opt_out=true`,
-so Deepgram keeps the audio only as long as it needs to process the request and does not use it to improve its models.
+Deepgram transcribes voice: every WAV upload, and the device's Wi-Fi voice unless `VOICE_PROVIDER` is set to
+`gemini` (Deepgram is the default). Every Deepgram request sends `mip_opt_out=true`, so Deepgram keeps the audio only
+as long as it needs to process the request and does not use it to improve its models.
+
+The backend stores neither the audio nor the transcript. Only two short holds exist: a device recording cut off
+mid-upload is kept in Redis for up to 60 seconds so the device can resume it, and a transcript waiting for the device
+to confirm its agent is kept in memory for up to two minutes.
 
 ### Product usage with an account-wide privacy control
 
