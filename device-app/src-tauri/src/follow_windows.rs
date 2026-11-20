@@ -1,6 +1,6 @@
-//! The ChatGPT follow on Windows: a win-event hook, for ChatGPT's process only, hears the foreground and name
-//! changes, and the window's title is its native text (`GetWindowTextW`). The app is installed when its package
-//! family is registered for the person (`GetPackagesByPackageFamily`).
+//! The ChatGPT follow on Windows: a win-event hook hears each foreground change, and another, for the ChatGPT process
+//! in front only, its name changes. The window's title is its native text (`GetWindowTextW`). The app is installed
+//! when its package family is registered for the person (`GetPackagesByPackageFamily`).
 
 use crate::follow::{AxTrust, FollowSwitch};
 use regex::Regex;
@@ -8,7 +8,7 @@ use std::sync::{Arc, LazyLock};
 #[cfg(windows)]
 use {
     crate::follow::{ChatgptWindow, Heard, TITLE_MAX},
-    std::cell::OnceCell,
+    std::cell::{Cell, OnceCell},
     std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle},
     std::panic::{self, AssertUnwindSafe},
     std::ptr,
@@ -22,14 +22,14 @@ use {
     },
     windows_sys::Win32::UI::Accessibility::{HWINEVENTHOOK, SetWinEventHook, UnhookWinEvent},
     windows_sys::Win32::UI::WindowsAndMessaging::{
-        DispatchMessageW, GetForegroundWindow, GetMessageW, GetWindowTextW, GetWindowThreadProcessId, MSG, PM_NOREMOVE,
-        PeekMessageW, PostQuitMessage, PostThreadMessageW, WINEVENT_OUTOFCONTEXT, WM_QUIT, WM_USER,
+        DispatchMessageW, EVENT_SYSTEM_FOREGROUND, GetForegroundWindow, GetMessageW, GetWindowTextW,
+        GetWindowThreadProcessId, MSG, PM_NOREMOVE, PeekMessageW, PostQuitMessage, PostThreadMessageW,
+        WINEVENT_OUTOFCONTEXT, WM_QUIT, WM_USER,
     },
 };
 
 // Windows' own numbers, here so the rules below run on every OS.
 const ERROR_INSUFFICIENT_BUFFER: u32 = 122;
-const EVENT_SYSTEM_FOREGROUND: u32 = 0x0003;
 const EVENT_OBJECT_NAMECHANGE: u32 = 0x800C;
 const OBJID_WINDOW: i32 = 0;
 const CHILDID_SELF: i32 = 0;
@@ -52,15 +52,34 @@ pub fn family_found(status: u32, count: u32) -> bool {
     status == ERROR_INSUFFICIENT_BUFFER && count > 0
 }
 
-/// Whether an event may change the thread's title: a ChatGPT window came to the front (the hook hears only ChatGPT's
-/// process), or the window in front's own name changed. A window behind, and another object's name (a caret, a menu,
-/// a control of the page), are not the thread's.
+/// What the observer does when the window in front changed.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Moved {
+    /// Hear the name changes of process `pid` alone, and tell the window's title: a ChatGPT process not heard came to
+    /// the front.
+    Rehook(u32),
+    /// Tell the window's title: a window of the process heard.
+    Keep,
+    /// Hear no name change, and tell the empty title: another app's window, or none.
+    Unhook,
+}
+
+/// `hooked` is the process whose name changes the observer hears, `front` the process of the window in front (None
+/// with no window). The window in front is checked at each change, as X11's active window is: as the observation
+/// starts it may be none or another app's for a moment, and another ChatGPT process may come to the front.
+pub fn foreground_moved(hooked: Option<u32>, front: Option<u32>, chatgpt: &dyn Fn(u32) -> bool) -> Moved {
+    match front.filter(|&pid| chatgpt(pid)) {
+        None => Moved::Unhook,
+        Some(pid) if hooked == Some(pid) => Moved::Keep,
+        Some(pid) => Moved::Rehook(pid),
+    }
+}
+
+/// Whether an event changes the thread's title: the window in front's own name changed. A window behind, and another
+/// object's name (a caret, a menu, a control of the page), are not the thread's; a foreground change is
+/// `foreground_moved`'s.
 pub fn reads_title(event: u32, hwnd: usize, id_object: i32, id_child: i32, foreground: usize) -> bool {
-    event == EVENT_SYSTEM_FOREGROUND
-        || (event == EVENT_OBJECT_NAMECHANGE
-            && hwnd == foreground
-            && id_object == OBJID_WINDOW
-            && id_child == CHILDID_SELF)
+    event == EVENT_OBJECT_NAMECHANGE && hwnd == foreground && id_object == OBJID_WINDOW && id_child == CHILDID_SELF
 }
 
 /// The Windows door. Windows gates no read of a window's title: the person's switch stands for the permission.
@@ -97,7 +116,8 @@ impl ChatgptWindow for WindowsFollow {
         registered(CHATGPT_FAMILY)
     }
 
-    /// Always an observation: its thread checks the window in front, and one not the ChatGPT app's is no title.
+    /// Always an observation: its thread checks the window in front at each change, and one not the ChatGPT app's is
+    /// no title.
     fn observe(&self, heard: Box<dyn Fn(Heard) + Send + Sync>) -> Option<Box<dyn Send>> {
         Some(observe_with(|pid| image(pid).is_some_and(|path| is_chatgpt_image(&path)), heard))
     }
@@ -135,7 +155,7 @@ impl Drop for Observation {
     }
 }
 
-/// Observes on a thread of its own, when the process of the window in front passes `check`, until the handle is
+/// Observes on a thread of its own the window in front while its process passes `check`, until the handle is
 /// dropped.
 #[cfg(windows)]
 fn observe_with(
@@ -154,7 +174,7 @@ fn observe_with(
         unsafe { PeekMessageW(&mut message, ptr::null_mut(), WM_USER, WM_USER, PM_NOREMOVE) };
         // SAFETY: takes no argument.
         let _ = give.send(unsafe { GetCurrentThreadId() });
-        observe_here(&check, told);
+        observe_here(Box::new(check), told);
     });
     match spawned.map(|handle| (handle, given.recv())) {
         Ok((handle, Ok(thread))) => Box::new(Observation { thread, _handle: handle }),
@@ -169,43 +189,103 @@ fn observe_with(
 
 #[cfg(windows)]
 thread_local! {
-    /// Where the hook tells: it takes no context, and an out-of-context hook is called on the thread that set it.
-    static HEARD: OnceCell<Arc<dyn Fn(Heard) + Send + Sync>> = const { OnceCell::new() };
+    /// The observation on this thread: a hook takes no context, and an out-of-context hook is called on the thread
+    /// that set it.
+    static HERE: OnceCell<Here> = const { OnceCell::new() };
 }
 
-/// The hook's events, a range each.
+/// An observation, on its thread.
 #[cfg(windows)]
-const EVENTS: [u32; 2] = [EVENT_SYSTEM_FOREGROUND, EVENT_OBJECT_NAMECHANGE];
+struct Here {
+    /// Whether a process is the ChatGPT app's.
+    check: Box<dyn Fn(u32) -> bool>,
+    heard: Arc<dyn Fn(Heard) + Send + Sync>,
+    /// The process whose name changes are heard, and that hook.
+    names: Cell<Option<(u32, HWINEVENTHOOK)>>,
+}
+
+#[cfg(windows)]
+impl Here {
+    fn new(check: Box<dyn Fn(u32) -> bool>, heard: Arc<dyn Fn(Heard) + Send + Sync>) -> Here {
+        Here { check, heard, names: Cell::new(None) }
+    }
+
+    /// The observation began, or the window in front changed: the ChatGPT process in front is heard, and its
+    /// window's title told; another app's window, or none, is the empty title.
+    fn front_moved(&self) {
+        // SAFETY: takes no argument.
+        let front = unsafe { GetForegroundWindow() };
+        match foreground_moved(self.names.get().map(|(pid, _)| pid), owner(front), &*self.check) {
+            Moved::Keep => (self.heard)(Heard::Title(title(front))),
+            Moved::Unhook => {
+                self.unhook();
+                (self.heard)(Heard::Title(None));
+            }
+            Moved::Rehook(pid) => {
+                self.unhook();
+                let names = hook(EVENT_OBJECT_NAMECHANGE, pid);
+                if names.is_null() {
+                    (self.heard)(Heard::NoObserver);
+                    // SAFETY: takes no pointer; ends this thread's message loop.
+                    unsafe { PostQuitMessage(0) };
+                    return;
+                }
+                self.names.set(Some((pid, names)));
+                // Read after the hook is set: a change before it waits in the queue and is not missed.
+                (self.heard)(Heard::Title(title(front)));
+            }
+        }
+    }
+
+    /// Hears no process's name changes.
+    fn unhook(&self) {
+        if let Some((_, hook)) = self.names.take() {
+            // SAFETY: set by this thread; taken out of `names`, so unhooked once.
+            unsafe { UnhookWinEvent(hook) };
+        }
+    }
+
+    /// Does a hook's work. A panic cannot unwind into Windows, which would end the app: it ends this observation
+    /// instead.
+    fn guarded(&self, work: impl FnOnce()) {
+        if panic::catch_unwind(AssertUnwindSafe(work)).is_err() {
+            // SAFETY: takes no pointer; ends this thread's message loop.
+            unsafe { PostQuitMessage(0) };
+        }
+    }
+}
+
+/// Hooks `event` for process `pid` (0: every process), out of context: `changed` is called on this thread, inside its
+/// message loop. Null when Windows refuses.
+#[cfg(windows)]
+fn hook(event: u32, pid: u32) -> HWINEVENTHOOK {
+    // SAFETY: no module (the procedure is in this process), and `changed` lives as long as the process.
+    unsafe { SetWinEventHook(event, event, ptr::null_mut(), Some(changed), pid, 0, WINEVENT_OUTOFCONTEXT) }
+}
 
 /// On the observer's thread: the title of the window in front now, then at each change, until the thread is told to
-/// quit. A window in front that is not the app's is no title, and the thread waits for its stop.
+/// quit.
 #[cfg(windows)]
-fn observe_here(check: &dyn Fn(u32) -> bool, heard: Arc<dyn Fn(Heard) + Send + Sync>) {
-    // SAFETY: takes no argument.
-    let foreground = unsafe { GetForegroundWindow() };
-    let Some(pid) = owner(foreground).filter(|&pid| check(pid)) else {
-        heard(Heard::Title(None));
-        run_messages();
-        return;
-    };
-    HEARD.with(|cell| {
-        let _ = cell.set(Arc::clone(&heard));
-    });
-    let hooks: [HWINEVENTHOOK; 2] = EVENTS.map(|event| {
-        // SAFETY: no module (the procedure is in this process), and `changed` lives as long as the process.
-        unsafe { SetWinEventHook(event, event, ptr::null_mut(), Some(changed), pid, 0, WINEVENT_OUTOFCONTEXT) }
-    });
-    if hooks.iter().all(|hook| !hook.is_null()) {
-        // Read after the hooks are set: a change before it waits in the queue and is not missed.
-        heard(Heard::Title(title(foreground)));
-        run_messages();
-    } else {
+fn observe_here(check: Box<dyn Fn(u32) -> bool>, heard: Arc<dyn Fn(Heard) + Send + Sync>) {
+    // Every process's: the window in front is checked again at each change.
+    let foreground = hook(EVENT_SYSTEM_FOREGROUND, 0);
+    if foreground.is_null() {
         heard(Heard::NoObserver);
+        return;
     }
-    for hook in hooks.into_iter().filter(|hook| !hook.is_null()) {
-        // SAFETY: set by this thread, and unhooked once.
-        unsafe { UnhookWinEvent(hook) };
-    }
+    HERE.with(|cell| {
+        let here = cell.get_or_init(|| Here::new(check, heard));
+        // Read after the hook is set: a change before it waits in the queue and is not missed.
+        here.guarded(|| here.front_moved());
+    });
+    run_messages();
+    HERE.with(|cell| {
+        if let Some(here) = cell.get() {
+            here.unhook();
+        }
+    });
+    // SAFETY: set by this thread, and unhooked once.
+    unsafe { UnhookWinEvent(foreground) };
 }
 
 /// This thread's message loop, inside which the hooks are called, until it is told to quit.
@@ -231,20 +311,18 @@ unsafe extern "system" fn changed(
     _: u32,
     _: u32,
 ) {
-    HEARD.with(|cell| {
-        let Some(heard) = cell.get() else { return };
-        // SAFETY: takes no argument.
-        let foreground = unsafe { GetForegroundWindow() };
-        if !reads_title(event, window as usize, id_object, id_child, foreground as usize) {
-            return;
-        }
-        // The event's own window, which is ChatGPT's: by a late event, the window in front may be another app's.
-        let told = panic::catch_unwind(AssertUnwindSafe(|| heard(Heard::Title(title(window)))));
-        // A panic cannot unwind into Windows, which would end the app: it ends this observation instead.
-        if told.is_err() {
-            // SAFETY: takes no pointer; ends this thread's message loop.
-            unsafe { PostQuitMessage(0) };
-        }
+    HERE.with(|cell| {
+        let Some(here) = cell.get() else { return };
+        here.guarded(|| match event {
+            EVENT_SYSTEM_FOREGROUND => here.front_moved(),
+            _ => {
+                // SAFETY: takes no argument.
+                let foreground = unsafe { GetForegroundWindow() };
+                if reads_title(event, window as usize, id_object, id_child, foreground as usize) {
+                    (here.heard)(Heard::Title(title(window)));
+                }
+            }
+        });
     });
 }
 
