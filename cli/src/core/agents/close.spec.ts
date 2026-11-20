@@ -1,10 +1,14 @@
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { readInlineScreen } from '../../testing/inlineScreen.js'
 import { screenFor } from '../../engines/screens.js'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { inspectCloseActivity, type CloseAgentServiceDeps } from '../../lib/closeAgentService.js'
 import { projectDisplayName, type RegisteredSession } from '../../lib/registry.js'
 import { CLOSE_READ_RECONNECT_MS, createAgentClosing, createCloseRequests, type ClosingDeps } from './close.js'
 import * as TAKEOVER from '../../lib/__fixtures__/takeoverScreens.js'
+import { builtinSqlite, closeSqliteHandles } from '../../lib/sqliteBuiltin.js'
 
 // The real close service, recording what it was built with so its callbacks can be driven directly.
 vi.mock('../../lib/closeAgentService.js', async (real) => {
@@ -157,6 +161,38 @@ describe('closing agents no window shows', () => {
         expect(other).toHaveBeenCalledOnce()
         expect(once.deps.engineReady).not.toHaveBeenCalled()
       }
+    })
+  })
+
+  describe('whether the engine\'s own store holds nothing a resume would bring back', () => {
+    // The fixtures' store: one user row, under the key `agent:main:plain`.
+    const fixtures = join(import.meta.dirname, '..', '..', 'engines', 'openclaw', '__fixtures__')
+    let stateDir = ''
+    beforeEach(() => {
+      stateDir = mkdtempSync(join(tmpdir(), 'close-openclaw-'))
+      const database = join(stateDir, 'agents', 'main', 'agent')
+      mkdirSync(database, { recursive: true })
+      const db = new (builtinSqlite()!)(join(database, 'openclaw-agent.sqlite'), { readOnly: false })
+      db.exec(readFileSync(join(fixtures, 'schema.sql'), 'utf8'))
+      db.exec(readFileSync(join(fixtures, 'plain.sql'), 'utf8'))
+      db.close()
+    })
+    afterEach(() => { closeSqliteHandles(); rmSync(stateDir, { recursive: true, force: true }) })
+    const empty = (over: Partial<RegisteredSession>) =>
+      setup().close.conversationEmpty!(row({ engine: 'openclaw', openclawStateDir: stateDir, ...over }))
+
+    it('an OpenClaw whose key has no user row holds nothing', async () => {
+      expect(await empty({ sessionId: 'agent:main:other' })).toBe(true)
+      expect(await empty({ sessionId: 'agent:main:other', processIdentity: { pid: 4321 } as RegisteredSession['processIdentity'] })).toBe(true)
+    })
+
+    it('an OpenClaw whose key has one holds a conversation', async () => {
+      expect(await empty({ sessionId: 'agent:main:plain' })).toBe(false)
+    })
+
+    it('says nothing of an OpenClaw with no key, nor of another engine, even beside an empty store', async () => {
+      expect(await empty({ sessionId: '' })).toBe(false)
+      expect(await empty({ engine: 'claude', sessionId: 'agent:main:other' })).toBe(false)
     })
   })
 
