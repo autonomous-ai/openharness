@@ -67,12 +67,27 @@ export function claudeRunner(bin: string, env?: NodeJS.ProcessEnv, platform: Nod
       resolve({ code: null, stdout: '', stderr: '', refused: true })
       return
     }
+    let answered = false
+    const answer = (result: ClaudeAnswer): void => {
+      if (answered) return
+      answered = true
+      clearTimeout(deadline)
+      resolve(result)
+    }
+    // Killed, and answered by itself, as orcaHomes' run: a child stuck where even SIGKILL waits never closes, and
+    // execFile answers only at its close.
+    const deadline = setTimeout(() => {
+      child.kill('SIGKILL')
+      child.stdout?.destroy()
+      child.stderr?.destroy()
+      answer({ code: null, stdout: '', stderr: '' })
+    }, timeoutMs)
     const child = execFile(program.file, program.args,
-      { encoding: 'utf8', timeout: timeoutMs, killSignal: 'SIGKILL', maxBuffer: MAX_OUTPUT_BYTES, env: program.env ?? env, windowsHide: true },
+      { encoding: 'utf8', killSignal: 'SIGKILL', maxBuffer: MAX_OUTPUT_BYTES, env: program.env ?? env, windowsHide: true },
       (error, stdout, stderr) => {
-        // A kill (the timeout), a missing file or output past the bound has no exit code: it is no answer.
+        // A missing file or output past the bound has no exit code: it is no answer.
         const code = !error ? 0 : typeof error.code === 'number' ? error.code : null
-        resolve({ code, stdout, stderr })
+        answer({ code, stdout, stderr })
       })
     // Nothing is asked on stdin: a `claude` that waits for it would only run out its time.
     child.stdin?.end()
