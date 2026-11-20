@@ -255,7 +255,7 @@ it.skipIf(process.platform === 'win32')('bounds directory proofs after the settl
 })
 
 
-it.skipIf(process.platform === 'win32')('refuses an initial owner changed by its flush before flushing the slot', async () => {
+it.skipIf(process.platform === 'win32')('refuses an initial owner changed by its flush after the complete allocation barrier', async () => {
   const slot = join(directory, '.stages', '0'), record = join(slot, 'owner.json')
   once('afterSync', record, () => {
     fs.renameSync(record, `${record}.previous`)
@@ -263,7 +263,8 @@ it.skipIf(process.platform === 'win32')('refuses an initial owner changed by its
   })
   await expect(stages().acquire(destination(), process.pid)).rejects.toThrow('checkpoint stage changed')
   expect(io.owners.size).toBe(0)
-  expect(io.flushes.filter(value => value.path === slot)).toEqual([])
+  expect(io.flushes.filter(value => value.path === slot)).toHaveLength(1)
+  expect(io.flushes.filter(value => value.path === join(directory, '.stages'))).toHaveLength(1)
   expect(await readFile(record, 'utf8')).toBe('unrelated owner')
 })
 

@@ -8,7 +8,7 @@ import { errorKind } from './log.js'
 import { nativeFileKey } from '../engines/kit/nativePaths.js'
 import { exportReceipt, STORAGE_CHUNK_BYTES, STORAGE_IN_FLIGHT, STORAGE_STAGE_BYTES, STORAGE_EXPORT_WAIT_MS, type ExportReceipt,
   type ExportOwnership } from '../engines/worker/storageProtocol.js'
-import { closeStateFileDescriptor, directorySyncSupported, readPrivateStateFile, secureStateDirectory, syncStateDirectory } from './secureState.js'
+import { closeStateFileDescriptor, directorySyncSupported, readPrivateStateFile, secureStateDirectory, stateFileCustodyHealthy, syncStateDirectory } from './secureState.js'
 
 function privateFile(stat: BigIntStats, links = 1n): void {
   if (!stat.isFile() || stat.nlink !== links || (process.platform !== 'win32' && (stat.mode & 0o777n) !== 0o600n)
@@ -27,15 +27,22 @@ function directoryIdentity(path: string, key: string): void {
 function flush(fd: number): Promise<void> {
   return new Promise((resolve, reject) => fsync(fd, error => { if (error) reject(error); else resolve() }))
 }
-async function flushSlot(directory: string, key: string): Promise<void> {
-  if (!directorySyncSupported()) return
-  const fd = openSync(directory, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW)
+async function flushAllocation(owner: number, directory: string, key: string, pool: string, poolKey: string): Promise<void> {
+  stateFileCustodyHealthy()
+  const flags = constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW
+  const slot = openSync(directory, flags)
   try {
-    if (nativeFileKey(fstatSync(fd, { bigint: true })) !== key) throw new Error('checkpoint slot changed')
-    directoryIdentity(directory, key)
-    await flush(fd)
-    directoryIdentity(directory, key)
-  } finally { closeStateFileDescriptor(fd) }
+    const parent = openSync(pool, flags)
+    try {
+      if (nativeFileKey(fstatSync(slot, { bigint: true })) !== key
+        || nativeFileKey(fstatSync(parent, { bigint: true })) !== poolKey) throw new Error('checkpoint slot changed')
+      directoryIdentity(directory, key); directoryIdentity(pool, poolKey)
+      // All names and bytes exist before this barrier. A failed or late flush
+      // still owns its descriptor until every actual callback has completed.
+      const results = await Promise.allSettled([flush(owner), flush(slot), flush(parent)])
+      for (const result of results) if (result.status === 'rejected') throw result.reason
+    } finally { closeStateFileDescriptor(parent) }
+  } finally { closeStateFileDescriptor(slot) }
 }
 function absent(pid: number): boolean {
   try { process.kill(pid, 0); return false } catch (error) { return (error as NodeJS.ErrnoException).code === 'ESRCH' }
@@ -185,9 +192,10 @@ export class CheckpointStages {
 
   private async create(destination: string, writer: number, deadline: number): Promise<CheckpointStage> {
     secureStateDirectory(this.directory)
+    const poolKey = directorySyncSupported() ? nativeFileKey(lstatSync(this.directory, { bigint: true })) : undefined
     for (let slot = 0; slot < STORAGE_IN_FLIGHT; slot++) {
       const directory = this.path(slot), path = join(directory, 'history.tmp'), record = join(directory, 'owner.json')
-      try { mkdirSync(directory, { mode: 0o700 }); syncStateDirectory(this.directory) }
+      try { mkdirSync(directory, { mode: 0o700 }) }
       catch (error) { if ((error as NodeJS.ErrnoException).code === 'EEXIST') continue; throw error }
       const directoryKey = nativeFileKey(lstatSync(directory, { bigint: true }))
       const file: FileHandle = await open(path, constants.O_RDWR | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600)
@@ -244,14 +252,14 @@ export class CheckpointStages {
                 throw new Error('checkpoint stage changed')
               }
             }
-            await flush(fd)
-            // Initial owner creation still requires both durable names before a lease may escape.
-            if (!recordKey) {
-              verifyOwner()
-              await flushSlot(directory, directoryKey)
-            }
-            // An existing name has no second await: prove the owner once after its file flush.
+            if (!recordKey && poolKey !== undefined) {
+              await flushAllocation(fd, directory, directoryKey, this.directory, poolKey)
+              directoryIdentity(this.directory, poolKey)
+            } else await flush(fd)
+            // Admission follows all three initial flushes and fresh proofs. An
+            // update, or Windows without directory flushes, needs its file only.
             verifyOwner()
+            if (!recordKey && poolKey !== undefined) identity(path, key)
             recordKey ??= openedKey
           } finally { if (!retainOwner) closeStateFileDescriptor(fd) }
           confirmedOwner = text
