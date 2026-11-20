@@ -26,7 +26,7 @@ export async function checkPidRuntime(
 ): Promise<RuntimeCheck> {
   const expected = session.processIdentity
   if (!expected) return { state: 'gone', reason: 'agent has no saved process identity' }
-  const rows = await processRows()
+  const rows = await processRows(expected.pid)
   if (!rows) return { state: 'unknown', reason: 'process table is unavailable' }
   const live = rows.find((row) => row.pid === expected.pid)
   return live && sameProcessIdentity(live, expected) && live.executable === expected.executable

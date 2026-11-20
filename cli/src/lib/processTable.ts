@@ -369,10 +369,12 @@ function readProcStat(pid: number): string | null {
  * after a boot attaches a few agents at once and every attach validates its pane against the table,
  * as does each hook that arrives in the same burst — one table serves them all. There is no cache,
  * only the read in flight: the oldest table anyone is handed began a `ps` ago (tens of ms), never
- * one that finished before they asked. Callers get the SAME array; none of them mutates it (every
- * consumer maps or filters into its own), and any new one must not either.
+ * one that finished before they asked. Full-table callers get the SAME array; selected callers receive
+ * their one-row view. None mutates a shared row (consumers map or filter into their own).
  */
-let processRowsInFlight: Promise<ProcessRow[] | null> | null = null
+type ProcessReadScope = { pids: Set<number> | null; sealed: boolean }
+const MAX_SELECTED_PIDS = 128
+let processRowsInFlight: { scope: ProcessReadScope; read: Promise<ProcessRow[] | null> } | null = null
 
 type ProcessTableSource = () => Promise<ProcessRow[] | null>
 let source: ProcessTableSource | null = null
@@ -417,34 +419,74 @@ export async function processLaunchArgs(identity: ProcessIdentity): Promise<stri
   return rows && row ? launchArgs(rows, row) : ''
 }
 
-/** The process table, or null when `ps` itself failed — "we could not look" is not "nothing is there". */
-export function processRows(): Promise<ProcessRow[] | null> {
-  if (processRowsInFlight) return processRowsInFlight
-  processRowsInFlight = (source ?? readProcessRows)().finally(() => { processRowsInFlight = null })
-  return processRowsInFlight
+/** The table, or one requested PID; null means "we could not look", never "nothing is there". */
+export function processRows(pid?: number): Promise<ProcessRow[] | null> {
+  if (pid !== undefined && !source && !validProcessPid(pid)) return Promise.resolve(null)
+  const select = (rows: ProcessRow[] | null) => {
+    if (rows === null || pid === undefined) return rows
+    const row = rows.find(row => row.pid === pid)
+    return row ? [row] : []
+  }
+  const pending = processRowsInFlight
+  if (pending && (!pending.scope.sealed || pending.scope.pids === null
+    || (pid !== undefined && pending.scope.pids.has(pid)))) {
+    if (!pending.scope.sealed && pending.scope.pids !== null) {
+      if (pid === undefined || (!pending.scope.pids.has(pid) && pending.scope.pids.size === MAX_SELECTED_PIDS)) pending.scope.pids = null
+      else pending.scope.pids.add(pid)
+    }
+    return pid === undefined ? pending.read : pending.read.then(select)
+  }
+  const scope: ProcessReadScope = { pids: source || pid === undefined ? null : new Set([pid]), sealed: false }
+  const read = (source ? source() : readProcessRowsFor(process.platform, scope)).finally(() => {
+    if (processRowsInFlight?.read === read) processRowsInFlight = null
+  })
+  processRowsInFlight = { scope, read }
+  return pid === undefined ? read : read.then(select)
 }
+
+// Match Registry's persisted domain; selection is only an in-memory filter, never a ps argument.
+const validProcessPid = (pid: number) => Number.isSafeInteger(pid) && pid > 0
 
 /**
  * One read of the table. Callers go through `processRows`, which shares the read in flight; [os] is a parameter so
  * the spec runs the macOS read on the Linux runner PR CI has.
  */
-export async function readProcessRows(os: NodeJS.Platform = process.platform): Promise<ProcessRow[] | null> {
-  const [rows, commandPaths] = await Promise.all([new Promise<ProcessRow[] | null>((resolve) => {
-    run('ps', ['-axo', 'pid=,ppid=,comm=,lstart=,args='], { timeout: 3000, env: psEnv() }, (err, stdout) => {
-      if (err) { resolve(null); return }
-      const rows: ProcessRow[] = []
-      for (const line of stdout.split('\n')) {
-        const row = parseProcessRow(line)
-        if (row) rows.push(row)
-      }
-      // `ps` lists itself at the least: a table with nobody in it is a read that failed, and taken for
-      // an answer it says every engine on the machine has exited.
-      resolve(rows.length ? rows : null)
-    })
-  }), os === 'darwin' ? readCommandPaths() : null])
-  if (!rows) return null
+export async function readProcessRows(os: NodeJS.Platform = process.platform, pid?: number): Promise<ProcessRow[] | null> {
+  if (pid !== undefined && !validProcessPid(pid)) return null
+  return readProcessRowsFor(os, { pids: pid === undefined ? null : new Set([pid]), sealed: false })
+}
+
+async function readProcessRowsFor(os: NodeJS.Platform, scope: ProcessReadScope): Promise<ProcessRow[] | null> {
+  // Keep one full native census for every caller arriving during I/O, including separate timer callbacks.
+  const [stdout, commands] = await Promise.all([readProcessText('pid=,ppid=,comm=,lstart=,args='),
+    os === 'darwin' ? readProcessText('pid=,lstart=,comm=') : null])
+  // A caller arriving during synchronous parsing cannot widen an already partial result.
+  scope.sealed = true
+  const wanted = scope.pids
+  if (stdout === null) return null
+  const rows: ProcessRow[] = []
+  let witnessed = wanted === null
+  for (const line of stdout.split('\n')) {
+    if (wanted) {
+      const pid = Number.parseInt(line, 10)
+      if (pid !== process.pid && !wanted.has(pid)) continue
+    }
+    const row = parseProcessRow(line)
+    if (!row) { if (wanted) return null; continue }
+    if (row.pid === process.pid) witnessed = true
+    if (!wanted || wanted.has(row.pid)) rows.push(row)
+  }
+  // A selected absence needs the reader's live row; a complete census must contain somebody (at least ps).
+  if (!witnessed || (!wanted && !rows.length)) return null
+  const commandPaths = os === 'darwin' ? parseCommandPaths(commands ?? '', wanted) : null
   const live = withStartTicks(liveProcessRows(repairMangledRows(rows)), processStartTicks, os)
   return commandPaths ? live.map((row) => withCommandPath(row, commandPaths.get(row.pid))) : live
+}
+
+function readProcessText(format: string): Promise<string | null> {
+  return new Promise(resolve => {
+    run('ps', ['-axo', format], { timeout: 3000, env: psEnv() }, (error, stdout) => resolve(error ? null : stdout))
+  })
 }
 
 /**
@@ -455,18 +497,14 @@ export async function readProcessRows(os: NodeJS.Platform = process.platform): P
  * nothing. So a second read, `comm` last, runs beside the first (44 ms beside its 63 ms). Empty when it fails:
  * the rows then stay as the table gave them.
  */
-function readCommandPaths(): Promise<ReadonlyMap<number, { startMarker: string; comm: string }>> {
-  return new Promise((resolve) => {
-    run('ps', ['-axo', 'pid=,lstart=,comm='], { timeout: 3000, env: psEnv() }, (err, stdout) => {
-      const paths = new Map<number, { startMarker: string; comm: string }>()
-      if (err) { resolve(paths); return }
-      for (const line of stdout.split('\n')) {
-        const match = /^\s*(\d+)\s+(\S+\s+\S+\s+\d{1,2}\s+\d{1,2}:\d{2}:\d{2}\s+\d{4})\s+(.+?)\s*$/.exec(line)
-        if (match) paths.set(Number(match[1]), { startMarker: match[2], comm: match[3] })
-      }
-      resolve(paths)
-    })
-  })
+function parseCommandPaths(stdout: string, wanted: ReadonlySet<number> | null): ReadonlyMap<number, { startMarker: string; comm: string }> {
+  const paths = new Map<number, { startMarker: string; comm: string }>()
+  for (const line of stdout.split('\n')) {
+    if (wanted && !wanted.has(Number.parseInt(line, 10))) continue
+    const match = /^\s*(\d+)\s+(\S+\s+\S+\s+\d{1,2}\s+\d{1,2}:\d{2}:\d{2}\s+\d{4})\s+(.+?)\s*$/.exec(line)
+    if (match) paths.set(Number(match[1]), { startMarker: match[2], comm: match[3] })
+  }
+  return paths
 }
 
 /**
