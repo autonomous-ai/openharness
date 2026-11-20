@@ -253,12 +253,51 @@ def signature(name, version):
     return base64.b64encode(text.encode()).decode()
 
 
+# Windows' own tools, for --signed: a file the tests write is JSON, {"signed": bool, "version": "X.Y.Z"}, and an installer
+# also holds the "app" NSIS packed. pwsh answers Get-AuthenticodeSignature (SIGNED_FILE) and the version resource's
+# ProductVersion (APP_FILE against APP_VERSION) from it. 7z appends its arguments to FAKE_7Z_LOG and, as `7z e`, writes
+# the installer's app into its -o folder.
+PWSH = r'''#!/usr/bin/env python3
+import json, os, sys
+command = sys.argv[-1]
+if "Get-AuthenticodeSignature" in command:
+    sys.exit(0 if json.load(open(os.environ["SIGNED_FILE"])).get("signed") else 1)
+if "ProductVersion" in command:
+    sys.exit(0 if json.load(open(os.environ["APP_FILE"])).get("version") == os.environ["APP_VERSION"] else 1)
+sys.exit(64)
+'''
+
+SEVEN_ZIP = r'''#!/usr/bin/env python3
+import json, os, sys
+from pathlib import Path
+args = sys.argv[1:]
+with open(os.environ["FAKE_7Z_LOG"], "a") as log:
+    log.write(json.dumps(args) + "\n")
+out = Path(next(arg[2:] for arg in args if arg.startswith("-o")))
+archive, name = [arg for arg in args[1:] if not arg.startswith("-")]
+app = json.loads(Path(archive).read_text()).get("app")
+out.mkdir(parents=True, exist_ok=True)
+if app is not None and name == "harness-device.exe":
+    (out / name).write_text(json.dumps(app))
+'''
+
+
 def elf(machine):
     """An ELF file's first 64 bytes: the magic, 64-bit little-endian, an executable, then e_machine."""
     return b"\x7fELF\x02\x01\x01" + bytes(9) + b"\x02\x00" + machine.to_bytes(2, "little") + bytes(44)
 
 
 class ReleaseCheckTests(Fakes):
+    def setUp(self):
+        super().setUp()
+        bin_dir = self.root / "bin"
+        for name, body in (("pwsh", PWSH), ("7z", SEVEN_ZIP),
+                           ("cygpath", '#!/bin/sh\nfor last; do :; done\necho "$last"\n')):
+            (bin_dir / name).write_text(body)
+            (bin_dir / name).chmod(0o755)
+        self.seven_zip_log = self.root / "7z.jsonl"
+        self.env["FAKE_7Z_LOG"] = str(self.seven_zip_log)
+
     def check(self, os_, *flag):
         return self.run_script("release-check.sh", os_, str(self.out), "0.1.3", PUBKEY, *flag)
 
@@ -316,6 +355,45 @@ class ReleaseCheckTests(Fakes):
         self.assertEqual(result.returncode, 1)
         self.assertEqual(result.stdout.splitlines()[-1],
                          "FAILED: Harness-Device-windows-x64-setup.exe's update signature is for 0.1.3")
+
+    def signed_installer(self, arch, app=None):
+        """An installer Authenticode signed, packing app: by default this release's exe, signed."""
+        self.installer(arch)
+        name = f"Harness-Device-windows-{arch}-setup.exe"
+        packed = {"signed": True, "version": "0.1.3"} if app is None else app
+        (self.out / name).write_text(json.dumps({"signed": True, **({"app": packed} if packed else {})}))
+        return self.out / name
+
+    def test_windows_signed_checks_the_app_each_installer_packs(self):
+        # --no-binary-patching exists so the exe keeps the signature it had before NSIS packed it; Smart App Control
+        # blocks it otherwise.
+        installers = [self.signed_installer(arch) for arch in ("arm64", "x64")]
+        result = self.check(WINDOWS, "--signed")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        expected = ["ok: an installer"]
+        for installer in installers:
+            name = installer.name
+            expected += [f"ok: {name}'s update signature", f"ok: {name}'s update signature is for 0.1.3",
+                         f"ok: {name}'s Authenticode signature", f"ok: {name} packs harness-device.exe",
+                         f"ok: the harness-device.exe in {name} keeps its Authenticode signature",
+                         f"ok: the harness-device.exe in {name} is 0.1.3"]
+        self.assertEqual(result.stdout.splitlines(), expected)
+        calls = [json.loads(line) for line in self.seven_zip_log.read_text().splitlines()]
+        self.assertEqual([(call[0], call[-2], call[-1]) for call in calls],
+                         [("e", str(installer), "harness-device.exe") for installer in installers])
+
+    def test_windows_signed_fails_an_app_unsigned_at_another_version_or_missing(self):
+        name = "Harness-Device-windows-x64-setup.exe"
+        for app, failed in (({"signed": False, "version": "0.1.3"},
+                             f"the harness-device.exe in {name} keeps its Authenticode signature"),
+                            ({"signed": True, "version": "0.1.2"}, f"the harness-device.exe in {name} is 0.1.3"),
+                            ({}, f"{name} packs harness-device.exe")):
+            with self.subTest(app=app):
+                shutil.rmtree(self.out, ignore_errors=True)
+                self.signed_installer("x64", app)
+                result = self.check(WINDOWS, "--signed")
+                self.assertEqual(result.returncode, 1)
+                self.assertEqual(result.stdout.splitlines()[-1], f"FAILED: {failed}")
 
     def test_windows_fails_with_no_installer(self):
         self.out.mkdir()
