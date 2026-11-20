@@ -231,7 +231,7 @@ stdin (`front_line`, `FrontFeed`), never logged. The CLI already maps exe names 
 
 ### 8. Packaging and release (`tauri.conf.json`, `scripts/`, `release-device.yml`, `RELEASE.md`)
 
-- **Windows:** NSIS, `installMode: currentUser`, WebView2 via the download bootstrapper (Windows 11 has it), one
+- **Windows:** NSIS, `installMode: currentUser`, WebView2 via the download bootstrapper (Windows 11 has it; on Windows 10 the installer fetches it), one
   installer per arch (`Harness-Device-windows-x64-setup.exe`, `…-arm64-setup.exe`) and its `.sig`. Built on
   `windows-latest`; arm64 cross-compiled there (`aarch64-pc-windows-msvc`). **Names:** Desktop already owns
   `%LOCALAPPDATA%\Programs\Harness`, the Start Menu `Harness.lnk` and the `Harness` uninstall entry
@@ -294,6 +294,7 @@ macOS, or the release is a partial ship. The same pull request carries both:
   - On Linux, Desktop writes `~/.local/share/applications/harness-device.desktop` when it installs the app, the
     way it does for itself, and removes it on uninstall. This is the Linux counterpart of Launchpad on macOS and the
     Start Menu entry the NSIS installer makes on Windows.
+- **Windows floor:** Windows 10 or 11, Desktop's own floor: nothing the app uses needs Windows 11 (harness-pm, 2026-11-20).
 - **Copy (named difference; harness-pm, 2026-11-20):** macOS copy is unchanged. On Windows and Linux:
   - "menu-bar app" reads "tray app";
   - the words about terminal tabs are dropped, because those OSes cannot follow a terminal tab
