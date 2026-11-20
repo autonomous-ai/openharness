@@ -2957,15 +2957,14 @@ export class CableSession {
       this.expectedAppFocusEchoUntil = Date.now() + APP_FOCUS_SETTLE_MS
       await this.focusAgent(this.desiredFocus)
     } else if (view === 'machine' && heldNone && agents.length > 0 && !this.appFocusUnsent) {
-      // A machine list that follows none (an attach, an emptied list, the dial's own agents.list, a split's empty step
-      // 1) leaves the dial on no agent. Any other keeps one on its face: the firmware adds a list's agents before it
-      // removes the old ones, and the split sees that the two fit. The firmware lands a face only on a pick of another
-      // app, a focus or a swipe. Seen as
-      // "Choose a pane" on a ChatGPT dial after a reattach, with its app picked and nothing to land it
-      // (docs/plans/2026-11-18-dial-chatgpt-pick-and-voice-design.md). Its first agent goes on the face, as a picked
-      // app's does. Not while a follow is in flight: it wrote its record before this push and sends its own focus
-      // after it, and a landing first would step the dial through the first agent. A window's tab never lands: the
-      // window says where the dial goes.
+      // A machine list that follows none (an attach, an emptied list, the dial's own agents.list, a split's empty
+      // step 1) leaves the dial on no agent. Any other keeps one on its face: the firmware adds a list's agents before
+      // it removes the old ones, and the split sees that the two fit. The firmware lands a face only on a pick of
+      // another app, a focus or a swipe. Seen as "Choose a pane" on a ChatGPT dial after a reattach, with its app
+      // picked and nothing to land it (docs/plans/2026-11-18-dial-chatgpt-pick-and-voice-design.md). Its first agent
+      // goes on the face, as a picked app's does. Not while a follow is in flight: it wrote its record before this push
+      // and sends its own focus after it, and a landing first would step the dial through the first agent. A window's
+      // tab never lands: the window says where the dial goes.
       this.expectedAppFocusEcho = agents[0].id
       this.expectedAppFocusEchoUntil = Date.now() + APP_FOCUS_SETTLE_MS
       await this.focusAgent(agents[0].id)
