@@ -19,7 +19,7 @@
 import { randomUUID } from 'node:crypto'
 import { existsSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { dirname, isAbsolute, join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { env } from '../config/env.js'
 import { DEVICES_FALLBACKS, DEVICES_REQUESTS, type CoreApi, type CorePorts, type DeviceHookPort, type DevicesPort, type RouteAnswer, type SendResult, type ServiceRequests, type WindowFocus } from '../core/api.js'
 import { CableFleet, testDialDiscovery, type CableFleetOptions } from '../cable/cableFleet.js'
@@ -28,6 +28,7 @@ import { TurnStats, type TurnStatsFields } from '../cable/turnStats.js'
 import { cableEventFor, cableStepFor, cableQuestionCloseFor, cableQuestionFor, DaemonCableHost } from '../cable/cableHost.js'
 import { CableSession, SHOWN_ONLY_PREFIX, type DialStatus, type FollowCause } from '../cable/cableSession.js'
 import type { HostAdapter, Pane } from '../cable/hosts/adapter.js'
+import { chatGptPlaces, claudeStoreRoots } from '../cable/hosts/appPlaces.js'
 import { createClaudeAppAdapter } from '../cable/hosts/claudeApp.js'
 import { ClaudeAppSource, type ClaudeAppSourceDeps } from '../cable/hosts/claudeAppSource.js'
 import { ClaudeAppStore } from '../cable/hosts/claudeAppStore.js'
@@ -41,7 +42,7 @@ import { createCodexAppAdapter } from '../cable/hosts/codexApp.js'
 import { CodexAppSource, type CodexAppSourceDeps } from '../cable/hosts/codexAppSource.js'
 import { CodexAppThreads } from '../cable/hosts/codexAppThreads.js'
 import { APP_BUNDLES } from '../cable/hosts/hostDetect.js'
-import { codexQueueDeps, createCodexQueue, type CodexQueueDeps } from '../cable/hosts/codexQueue.js'
+import { APP_PACKAGE, codexQueueDeps, createCodexQueue, type CodexQueueDeps } from '../cable/hosts/codexQueue.js'
 import { createHcClient, hcClientDeps, hcPaneKey, hcSocketPath, type HcClient } from '../cable/hosts/hcClient.js'
 import { HcSource } from '../cable/hosts/hcSource.js'
 import { createHerdrAdapter } from '../cable/hosts/herdr.js'
@@ -104,6 +105,7 @@ import { OpenSessions, SessionRows } from '../lib/sessionSearch/external.js'
 import { externalProviders } from '../lib/sessionSearch/externals/index.js'
 import { fileStamp, listProcesses, processAlive } from '../lib/sessionSearch/externals/support.js'
 import { setVoiceRouterDeviceConnected, setVoiceRouterSessions, shutdownVoiceRouter } from '../lib/voiceRouter.js'
+import { storePackageFolder, storePackageLook } from '../lib/windows/storePackage.js'
 import { createTally, createTierDecider, type Tier, type TierDecision, type TierInput } from '../lib/notifyTier.js'
 import { tmuxFinder } from '../lib/binaryFinder.js'
 import { VERSION } from '../version.js'
@@ -168,6 +170,9 @@ export interface DevicesDeps {
   /** For this service's tests: an app bundle's id from its Info.plist; `readBundleId` (cable/hosts/scannedApp.ts) by
    *  default. */
   bundleId?: (app: string) => Promise<string | undefined>
+  /** For this service's tests: the folder of a Store package on Windows; `storePackageFolder`
+   *  (lib/windows/storePackage.ts) by default. */
+  storePackageFolder?: (name: string) => Promise<string | null>
   /** Opens the devices' own listener with these handlers (services/devicesListener.ts). Given by the devices process,
    *  and on Windows inside the core's too, where every service runs, until Windows services run in their own process
    *  (services/inline.ts). Elsewhere inside the core's process (`HARNESSD_SERVICES=none`, Harness OS) there is none, so
@@ -247,6 +252,15 @@ const LISTENER_WAIT_MS = 1_000
 /** How long after the dial's own continue link to a Claude app session an attach is that link's echo: the app attaches
  *  the session it shows within about a second. Also how long any move of the dial sets the Claude app's settle aside. */
 const ATTACH_ECHO_MS = 2_000
+
+/** Whether [path] is a file: false when nothing is there, it is a folder, or on any error. */
+function isFile(path: string): boolean {
+  try {
+    return statSync(path).isFile()
+  } catch {
+    return false
+  }
+}
 
 /** The uid owning the socket at [path], for kitty's: null when none is there, it is no socket, or on any error. */
 function socketOwner(path: string): number | null {
@@ -417,11 +431,13 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   const herdrAdapter = createHerdrAdapter({ ...apps, client: herdrClient, front: () => cableHost.latestFront() })
   /** `HARNESS_OPEN_BIN`: the end-to-end tests' fake `open`, run for each `open -b` (cable/hosts/open.ts). */
   const openBin = process.env.HARNESS_OPEN_BIN
-  /** `HARNESS_APPLICATIONS_DIR`, an absolute path alone: where the ChatGPT app is looked for in place of /Applications.
-   *  /Applications is the computer's whatever the home, so the end-to-end harness points it inside the daemon's root, as
-   *  it does `HARNESS_CODEX_APP_BIN` (cable/hosts/codexQueue.ts). */
-  const appsDir = process.env.HARNESS_APPLICATIONS_DIR
-  const chatGptApps = [join(appsDir && isAbsolute(appsDir) ? appsDir : '/Applications', 'ChatGPT.app'), join(homedir(), 'Applications', 'ChatGPT.app')]
+  /** Where the ChatGPT app is looked for. `HARNESS_APPLICATIONS_DIR`, an absolute path alone, stands in for
+   *  /Applications or /usr/lib: those are the computer's whatever the home, so the end-to-end harness points it inside
+   *  the daemon's root, as it does `HARNESS_CODEX_APP_BIN` (cable/hosts/codexQueue.ts). On Windows it is the one place,
+   *  and with none the app's Store package is asked for. */
+  const chatGptApps = chatGptPlaces(apps.platform, process.env.HARNESS_APPLICATIONS_DIR, homedir())
+  /** The ChatGPT app's Store package on Windows: one answer, which the install check and the queue's codex share. */
+  const chatGptPackage = storePackageLook(APP_PACKAGE, deps.storePackageFolder ?? storePackageFolder, monotonic)
   /** Where Herdr Core's socket is, from the daemon's own environment: the client reads it, and the hc source watches for
    *  it. */
   const hcAt = hcClientDeps()
@@ -458,7 +474,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   const claude = createClaudeAppAdapter({ ...apps, bin: openBin, inFront: () => cableHost.latestFront() === 'claude', windows })
   const claudePane = (localId: string): Pane => ({ adapter: claude.id, id: localId })
   // Harness's own Codex home, whose config `codex queue` loads; run from the home folder, so no project's .codex/ is read.
-  const codexQueue = createCodexQueue({ ...(deps.codex ?? codexQueueDeps()), home: env.CODEX_HOME, cwd: homedir() })
+  const codexQueue = createCodexQueue({ ...(deps.codex ?? codexQueueDeps(chatGptPackage)), home: env.CODEX_HOME, cwd: homedir() })
   // The stream a watch holds open on the devices' listener: a rest or a tap on an agent in Terminal, iTerm2 or Ghostty
   // asks it to select that agent's tab (docs/specs/2026-11-15-dial-terminal-follow.md). Only macOS's apps select a tab
   // by its tty: elsewhere no agent's is read, and none has a tab.
@@ -809,15 +825,16 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     log,
     count: voiced,
   }) : null
-  /** The Claude app's store, in the person's home: the app's own folder, not a Harness path. */
-  const claudeAppRoot = join(homedir(), 'Library', 'Application Support', 'Claude', 'claude-code-sessions')
-  /** The Claude app's Code sessions, with or without a process, listed from its store when a file of it changes
+  /** The Claude app's stores, in the person's home: the app's own folders, not a Harness path. */
+  const claudeAppRoots = claudeStoreRoots(apps.platform, process.env, homedir())
+  /** The Claude app's Code sessions, with or without a process, listed from its stores when a file of them changes
    *  (docs/plans/2026-11-19-dial-claude-app-sessions-design.md). It runs only while a dial is attached, behind the
-   *  observed agents' switch, on macOS alone, where the app runs. A session with a process is the observed source's
+   *  observed agents' switch, on macOS, Windows and Linux, where the app runs
+   *  (docs/plans/2026-11-20-dial-app-sessions-win-linux-design.md). A session with a process is the observed source's
    *  copy, which holds its row while it runs (registry.ts). */
-  const claudeAppSource = observed && apps.platform === 'darwin' ? new ClaudeAppSource({
-    store: deps.claudeAppStore ?? new ClaudeAppStore(claudeAppRoot),
-    root: claudeAppRoot,
+  const claudeAppSource = observed ? new ClaudeAppSource({
+    store: deps.claudeAppStore ?? new ClaudeAppStore(claudeAppRoots.map(({ root }) => root)),
+    roots: claudeAppRoots,
     watch: (folders, changed) => watchNearest(folders, changed),
     after: timerIn('claude-app'),
     // Through the opener, as a hooked agent's tap: noted before it, and its attach the link's echo.
@@ -836,10 +853,10 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   const codexAppHome = join(homedir(), '.codex')
   /** The ChatGPT app's Codex threads, with or without a process, listed from its metadata when a file of it changes, in
    *  its sidebar's order (docs/plans/2026-11-19-dial-chatgpt-ring-and-follow-design.md). It runs only while a dial is
-   *  attached, behind the observed agents' switch, on macOS alone, and only with the ChatGPT app installed
+   *  attached, behind the observed agents' switch, on macOS, Windows and Linux, and only with the ChatGPT app installed
    *  (dialAttached). A thread with a process is the observed source's copy, which holds its row while it runs
    *  (registry.ts). */
-  const codexAppSource = observed && apps.platform === 'darwin' ? new CodexAppSource({
+  const codexAppSource = observed ? new CodexAppSource({
     threads: deps.codexAppThreads ?? new CodexAppThreads(codexAppHome),
     watch: (changed) => watchNearest([codexAppHome], changed),
     after: timerIn('codex-app'),
@@ -853,10 +870,15 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     log,
   }) : null
   const bundleId = deps.bundleId ?? readBundleId
-  /** Whether the ChatGPT app is installed: the first of its places whose bundle has the app's id. */
+  /** Whether the ChatGPT app is installed: on macOS the first of its places whose bundle has the app's id; on Windows
+   *  with no place its Store package; elsewhere the first of its places that is a file. */
   const chatGptInstalled = async (): Promise<boolean> => {
-    for (const app of chatGptApps) if (await bundleId(app) === APP_BUNDLES.codex) return true
-    return false
+    if (apps.platform === 'darwin') {
+      for (const app of chatGptApps) if (await bundleId(app) === APP_BUNDLES.codex) return true
+      return false
+    }
+    if (apps.platform === 'win32' && chatGptApps.length === 0) return (await chatGptPackage.ask()) !== null
+    return chatGptApps.some(isFile)
   }
   /** The ones the dial lists, each with its source: the merged list's, not each source's own, as a copy a stronger source
    *  also holds (a Harness agent's session, a hooked agent's pane) is that one's row and must get no second card. */
@@ -1810,7 +1832,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     // whatever source is on.
     // With the last gone, a Harness agent's next turn goes unheard, so its card ends now.
     part.call('notices', () => on ? notices.attached() : notices.detached())
-    if (!observed || !herdr || !opencode) return
+    if (!observed || !herdr || !opencode || !claudeAppSource || !codexAppSource) return
     // Only with herdr installed, read at each attach, as a tap needs it (herdr.ts): with none, no folder is watched
     // (~/.config, or the home folder, recursive on macOS) for a socket that never comes. herdr's zip on Windows puts it on
     // no PATH, and its folder appears only when it first runs, which may be after the dial came (the VM notes, Final head
@@ -1827,11 +1849,11 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       return cmuxFound ? cmuxSource.start() : cmuxSource.stop()
     })
     part.call('opencode', () => on ? opencode.start() : opencode.stop())
-    if (claudeAppSource) part.call('claude-app', () => on ? claudeAppSource.start() : claudeAppSource.stop())
-    // Only with the ChatGPT app installed, looked for at each attach as cmux is: a Mac with Codex CLI alone gets no ChatGPT
-    // page of threads a tap cannot open. A look that lands after the dial went, or after a newer attach's look began,
-    // starts nothing.
-    if (codexAppSource) part.call('codex-app', () => {
+    part.call('claude-app', () => on ? claudeAppSource.start() : claudeAppSource.stop())
+    // Only with the ChatGPT app installed, looked for at each attach as cmux is: a computer with Codex CLI alone gets
+    // no ChatGPT page of threads a tap cannot open. A look that lands after the dial went, or after a newer attach's
+    // look began, starts nothing.
+    part.call('codex-app', () => {
       const look = ++codexAppLooks
       if (!on) return codexAppSource.stop()
       return chatGptInstalled().then((found) => {
@@ -2117,7 +2139,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     // A tap brings the app forward, and its window can still show the thread it had: the settle's echo, as the Claude
     // app's settle has.
     if (atSettle && dialMovedAt !== undefined && monotonic() - dialMovedAt < ATTACH_ECHO_MS) { log('[device] thread · skipped · echo'); return }
-    // Off macOS there is no source, and no thread to name.
+    // With the observed agents off there is no source, and no thread to name.
     const match = codexAppSource?.threadNamed(report.title) ?? 'none'
     if (match === 'none') { log('[device] thread · skipped · no match'); return }
     if (match === 'ambiguous') { log('[device] thread · skipped · ambiguous'); return }
