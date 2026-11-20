@@ -142,6 +142,11 @@ mod tests {
                 {"id":6,"type":"con","name":"main.rs - Visual Studio Code","app_id":"code","pid":202,"focused":false,
                  "nodes":[],"floating_nodes":[]}]}]}]}"#;
 
+    /// The workspace focused, with no window on it: its last one closed or moved away, or a switch to an empty one.
+    const TREE_EMPTY: &str = r#"{"id":1,"type":"root","name":"root","focused":false,"floating_nodes":[],"nodes":[
+        {"id":3,"type":"output","name":"HEADLESS-1","focused":false,"floating_nodes":[],"nodes":[
+            {"id":4,"type":"workspace","name":"1","focused":true,"floating_nodes":[],"nodes":[]}]}]}"#;
+
     /// foot tiled, Code floating above it and focused.
     const TREE_FLOATING: &str = r#"{"id":1,"type":"root","name":"root","focused":false,"floating_nodes":[],"nodes":[
         {"id":3,"type":"output","name":"HEADLESS-1","focused":false,"floating_nodes":[],"nodes":[
@@ -157,12 +162,22 @@ mod tests {
 
     const CODE: &str = r#"{"id":6,"type":"con","name":"lib.rs - Visual Studio Code","app_id":"code","pid":202,
         "focused":true,"nodes":[],"floating_nodes":[]}"#;
+    const FOOT: &str =
+        r#"{"id":5,"type":"con","name":"~","app_id":"foot","pid":101,"focused":true,"nodes":[],"floating_nodes":[]}"#;
     /// A split container: it has no process of its own.
     const SPLIT: &str = r#"{"id":7,"type":"con","name":null,"layout":"splith","focused":true,"nodes":[],
         "floating_nodes":[]}"#;
     /// A window whose process is gone (or is another person's).
     const GONE: &str =
         r#"{"id":8,"type":"con","app_id":"foot","pid":999,"focused":true,"nodes":[],"floating_nodes":[]}"#;
+
+    const WORKSPACE_EVENT: u32 = 0x8000_0000;
+
+    /// A workspace event of sway's: `change` and the workspace it is about.
+    fn workspace(change: &str) -> String {
+        let current = r#"{"id":9,"type":"workspace","name":"2","focused":true,"nodes":[],"floating_nodes":[]}"#;
+        format!(r#"{{"change":"{change}","current":{current},"old":null}}"#)
+    }
 
     /// A `/proc` with foot as pid 101 and Code as pid 202.
     fn proc_root() -> tempfile::TempDir {
@@ -177,6 +192,8 @@ mod tests {
     /// `follow` against a sway the script plays; what it told, and why it stopped. The script's end closes sway's side.
     fn run(proc_root: &Path, script: impl FnOnce(&mut UnixStream) + Send + 'static) -> (Vec<String>, Stop) {
         let (ours, mut sway) = UnixStream::pair().unwrap();
+        // A script that waits for a message never sent fails, not hangs.
+        sway.set_read_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
         let peer = std::thread::spawn(move || script(&mut sway));
         let told = RefCell::new(Vec::new());
         let stop = follow(ours, proc_root, &|value| told.borrow_mut().push(value));
@@ -195,7 +212,7 @@ mod tests {
 
     /// sway takes the subscription, then is asked for the tree.
     fn subscribed(sway: &mut UnixStream) {
-        expect(sway, SUBSCRIBE, r#"["window"]"#);
+        expect(sway, SUBSCRIBE, r#"["window","workspace"]"#);
         send(sway, SUBSCRIBE, r#"{"success":true}"#);
         expect(sway, GET_TREE, "");
     }
@@ -221,6 +238,32 @@ mod tests {
             send(sway, WINDOW_EVENT, &event("focus", CODE));
         });
         assert_eq!(told, ["foot", "code"]);
+        assert_eq!(stop, Stop::Ended);
+    }
+
+    #[test]
+    fn focus_that_leaves_every_window_asks_for_the_tree_again() {
+        let root = proc_root();
+        let (told, stop) = run(root.path(), |sway| {
+            subscribed(sway);
+            send(sway, GET_TREE, TREE_FOOT);
+            // foot, the last window on its workspace, closes: sway tells the close and no focus.
+            send(sway, WINDOW_EVENT, &event("close", FOOT));
+            expect(sway, GET_TREE, "");
+            send(sway, GET_TREE, TREE_EMPTY);
+            send(sway, WINDOW_EVENT, &event("focus", CODE));
+            // The last window moved to another workspace, or to the scratchpad.
+            send(sway, WINDOW_EVENT, &event("move", CODE));
+            expect(sway, GET_TREE, "");
+            send(sway, GET_TREE, TREE_EMPTY);
+            send(sway, WINDOW_EVENT, &event("focus", CODE));
+            // A switch to an empty workspace: a workspace event and no window one.
+            send(sway, WORKSPACE_EVENT, &workspace("init"));
+            send(sway, WORKSPACE_EVENT, &workspace("focus"));
+            expect(sway, GET_TREE, "");
+            send(sway, GET_TREE, TREE_EMPTY);
+        });
+        assert_eq!(told, ["foot", "", "code", "", "code", ""]);
         assert_eq!(stop, Stop::Ended);
     }
 
@@ -254,7 +297,7 @@ mod tests {
     fn a_refused_subscribe_is_not_followed() {
         let root = proc_root();
         let (told, stop) = run(root.path(), |sway| {
-            expect(sway, SUBSCRIBE, r#"["window"]"#);
+            expect(sway, SUBSCRIBE, r#"["window","workspace"]"#);
             send(sway, SUBSCRIBE, r#"{"success":false}"#);
         });
         assert_eq!((told, stop), (vec![], Stop::NotFollowed));
