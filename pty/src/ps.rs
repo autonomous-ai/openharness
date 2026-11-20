@@ -13,8 +13,33 @@
 //! user's, a protected one, or one gone during the scan) keeps its pid, parent and exe name with
 //! an empty marker; the daemon drops such rows, since they can never be an identity. One process
 //! never fails the scan.
+//!
+//! `ps --json --ancestors <pid>` lists one process and its parents alone, from the same snapshot,
+//! and opens only those: a hook's climb past the shells that run it (cli/hook/notify.mjs
+//! `hookCallerPid`) pays for its own chain, not for every process on the machine.
+
+use std::collections::HashMap;
 
 use serde::Serialize;
+
+/// The most rows `ps --json --ancestors` lists: a process and 8 parents, as many as the hook's climb
+/// steps past.
+pub const MAX_ANCESTORS: usize = 9;
+
+/// [pid] and its parents by [parents] (pid to parent pid), nearest first, at most [max]. It stops at
+/// a pid no entry has, and at the first pid seen twice: Windows reuses pids, so a parent's pid may
+/// now be its descendant's (and the idle process is its own parent).
+pub fn chain(parents: &HashMap<u32, u32>, mut pid: u32, max: usize) -> Vec<u32> {
+    let mut out = Vec::new();
+    while out.len() < max && !out.contains(&pid) {
+        let Some(&parent) = parents.get(&pid) else {
+            break;
+        };
+        out.push(pid);
+        pid = parent;
+    }
+    out
+}
 
 /// One process, in the daemon's `ProcessRow` shape.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -36,7 +61,7 @@ pub struct ProcessRowJson {
 }
 
 #[cfg(windows)]
-pub use windows::snapshot;
+pub use windows::{ancestors, snapshot};
 #[cfg(windows)]
 pub(crate) use windows::{
     creation_time as process_started, exited as process_exited, open as open_process,
@@ -45,6 +70,7 @@ pub(crate) use windows::{
 
 #[cfg(windows)]
 mod windows {
+    use std::collections::HashMap;
     use std::io;
     use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 
@@ -67,7 +93,7 @@ mod windows {
     };
     use windows_sys::Win32::UI::Shell::CommandLineToArgvW;
 
-    use super::ProcessRowJson;
+    use super::{MAX_ANCESTORS, ProcessRowJson, chain};
 
     /// Every process on the machine now.
     pub fn snapshot() -> io::Result<Vec<ProcessRowJson>> {
@@ -75,6 +101,20 @@ mod windows {
         Ok(listed()?
             .into_iter()
             .filter_map(|(pid, parent_pid, executable)| reader.row(pid, parent_pid, executable))
+            .collect())
+    }
+
+    /// [pid]'s row and its parents', nearest first (`chain`), as `snapshot` lists them. A process
+    /// that has exited ends the chain there, as its missing row ends a climb through the whole table.
+    pub fn ancestors(pid: u32) -> io::Result<Vec<ProcessRowJson>> {
+        let (parents, mut names): (HashMap<u32, u32>, HashMap<u32, String>) = listed()?
+            .into_iter()
+            .map(|(pid, parent_pid, executable)| ((pid, parent_pid), (pid, executable)))
+            .unzip();
+        let mut reader = Reader::default();
+        Ok(chain(&parents, pid, MAX_ANCESTORS)
+            .into_iter()
+            .map_while(|pid| reader.row(pid, parents[&pid], names.remove(&pid)?))
             .collect())
     }
 

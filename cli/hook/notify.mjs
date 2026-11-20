@@ -566,10 +566,11 @@ function postObserved(port, body) {
  * - VSCODE_GIT_ASKPASS_NODE, which an editor sets in its integrated terminals alone: the editor's own program
  *   (`Code.exe`, `Cursor.exe`). No process is started.
  * - VSCODE_PID, for a session started from Claude Code's extension panel, which runs with the extension host's
- *   environment and has no askpass variable (read on the VM, 2026-11-20): the image name of that pid's row in the pty
- *   host's table, the one the caller's climb reads (hookCallerPid). An image name, never another process's
- *   environment. A hook with no table read yet pays a pty host start for it, so the answer is kept per editor
- *   (keepEditor), and a hook whose kept answer matches starts none. The key is the pid and the editor's pipe
+ *   environment and has no askpass variable (read on the VM, 2026-11-20): the image name of that pid's own row, the
+ *   first of its chain from the pty host (`ps --json --ancestors <pid>`), as the caller's climb reads its own
+ *   (hookCallerPid). An image name, never another process's environment. A read pays a pty host start, so the answer
+ *   is kept per editor (keepEditor), and a hook whose kept answer matches starts none. The row is found by its pid: a
+ *   host that takes no `--ancestors` (0.6.22) lists every row. The key is the pid and the editor's pipe
  *   (VSCODE_IPC_HOOK), not the process's start time: the start time is in the table alone, so checking it would cost
  *   the start the kept answer saves, while the pipe's name is in this hook's own environment and differs between
  *   editors and versions, so a pid another editor reuses misses.
@@ -628,9 +629,17 @@ function editorBundle(path) {
   return WINDOWS_EDITORS.get(win32.basename(path).toLowerCase())
 }
 
+/** The app's lookup (lookUpWindowsApp), started once a run by the first to ask: beside the climb (CALLER_PID), or the
+ *  body. */
+let windowsApp
+function windowsAppBundle() {
+  windowsApp ??= lookUpWindowsApp()
+  return windowsApp
+}
+
 /** On Windows, the bundle id of the app a session outside a pane runs in, from the three inputs HOST_HINTS names, or
  *  undefined. Only the id leaves this process: never a path, a pid or a pipe's name. */
-async function windowsAppBundle() {
+async function lookUpWindowsApp() {
   const askpass = process.env.VSCODE_GIT_ASKPASS_NODE
   if (askpass !== undefined) return editorBundle(askpass)
   const pid = /^\d{1,10}$/.test(process.env.VSCODE_PID ?? '') ? Number(process.env.VSCODE_PID) : 0
@@ -639,7 +648,7 @@ async function windowsAppBundle() {
     const file = join(paths().dataDir, EDITORS_FILE)
     const kept = ipc && readEditors(file).find((entry) => entry.pid === pid && entry.ipc === ipc)
     if (kept) return kept.app
-    const row = (await windowsListedRows())?.find((candidate) => candidate.pid === pid)
+    const row = (await readWindowsTable(['--ancestors', String(pid)]))?.find((candidate) => candidate.pid === pid)
     const app = row && editorBundle(row.executable)
     // Only an answer the table gave is kept: no row, or no table, is asked again next time.
     if (app && ipc) keepEditor(file, { pid, ipc, app })
@@ -815,9 +824,9 @@ function windowsCommandShell(row) {
   return (image === 'powershell.exe' || image === 'pwsh.exe') && powershellRunsCommand(row.nativeArgv)
 }
 
-/** hookCallerPid on Windows, from the pty host's table; the hook's parent when there is no table. */
+/** hookCallerPid on Windows, from the hook's chain in the pty host's table; the hook's parent when there is none. */
 async function windowsHookCallerPid() {
-  const rows = await windowsListedRows()
+  const rows = await readWindowsTable(['--ancestors', String(process.ppid)])
   if (!rows) return process.ppid
   const byPid = new Map(rows.map((row) => [row.pid, row]))
   let pid = process.ppid
@@ -844,8 +853,12 @@ async function windowsHookCallerPid() {
  * Windows has the same gap: PowerShell (`-Command`) and cmd (`/c`) stay the hook's parent and exit with it. Windows has
  * no /proc, so the climb reads the pty host's table, the one the core's check reads too (lib/windows/processTable.ts):
  * each row's pid, parent, image name and command line, never an environment. Starting the host costs a process start
- * on the hook's path, so only the engines whose runner is a shell pay it. A process the host lists but cannot open is
- * named, as its command line cannot be read; a shell whose parent is in no row, gone, is named itself.
+ * on the hook's path, so only the engines whose runner is a shell pay it, and it lists the hook's parent and that
+ * one's parents alone (`ps --json --ancestors`, at most 9 rows, the 8 steps' worth): reading the whole table added
+ * about 58 ms to a hook on a Windows VM. A host that takes no `--ancestors` (0.6.22) lists every row, which the climb
+ * reads the same way; one that refuses it names the hook's parent, as no table does.
+ * A process the host lists but cannot open is named, as its command line cannot be read; a shell whose parent is in no
+ * row, gone, is named itself.
  */
 async function hookCallerPid(engine) {
   if (process.platform === 'win32') return WINDOWS_SHELL_ENGINES.has(engine) ? windowsHookCallerPid() : process.ppid
@@ -888,7 +901,8 @@ function observedTitle(value) {
  * core reads (hookServer.ts): the transcript's first, as the devices can do without it, then the folder. The title is
  * never dropped: at most 64 characters, it fits beside the hints and ids once both paths are gone, so a body without
  * one always means the session said none. On Windows the app it runs in is looked up (windowsAppBundle) only for an
- * event it tells, so an event it drops starts no pty host.
+ * event it tells, so an event it drops starts no pty host for it, unless its hook climbs (hookCallerPid): that lookup
+ * starts beside the climb's read, before the event is known.
  */
 async function observedBody(engine, event, input) {
   const kind = observedEvent(engine, event, input)
@@ -1469,7 +1483,8 @@ function ptyHostBinary() {
   try { accessSync(beside, constants.F_OK); return beside } catch { return null }
 }
 
-/** The PTY host's table, read once a run: the caller's climb (hookCallerPid) and the engine's lookup share one start. */
+/** The PTY host's whole table, read once a run: the engine's lookup and the caller's descent (rootEngineProcess,
+ *  callerOwns) share one start. They need rows off the hook's chain (the pane's processes, and more than 9 parents). */
 let windowsTable
 function windowsListedRows() {
   windowsTable ??= readWindowsTable()
@@ -1486,12 +1501,13 @@ async function windowsProcessRows() {
   return rows?.length ? rows : null
 }
 
-/** Every row the PTY host lists, those it could not open (an empty start marker) included; null for a failed read. */
-async function readWindowsTable() {
+/** Every row the PTY host lists for `ps --json` and [args], those it could not open (an empty start marker) included;
+ *  null for a failed read. */
+async function readWindowsTable(args = []) {
   const binary = ptyHostBinary()
   if (!binary) return null
   // A busy machine's table is a few hundred KB of JSON: the daemon's own limit (src/lib/windows/processTable.ts).
-  const stdout = await execFileText(binary, ['ps', '--json'], 3000, undefined, { maxBuffer: 64 * 1024 * 1024, windowsHide: true })
+  const stdout = await execFileText(binary, ['ps', '--json', ...args], 3000, undefined, { maxBuffer: 64 * 1024 * 1024, windowsHide: true })
   if (stdout === null) return null
   let table
   try { table = JSON.parse(stdout) } catch { return null }
@@ -2706,7 +2722,12 @@ async function main() {
 }
 
 // Found once, before main(): every post of a run names the same caller. Outside main()'s catch, a climb that throws (a
-// helper path Node refuses to start) names the parent, as a run with no table does.
+// helper path Node refuses to start) names the parent, as a run with no table does. A session outside a pane whose hook
+// climbs looks its app up first (windowsAppBundle), so when both read the pty host, the two reads start together; a
+// lookup that throws is the body's to meet, in main().
+if (process.platform === 'win32' && WINDOWS_SHELL_ENGINES.has(argEngine()) && !process.env.TMUX_PANE && !PTY_PANE) {
+  windowsAppBundle().catch(() => {})
+}
 const CALLER_PID = await hookCallerPid(argEngine()).catch(() => process.ppid)
 
 main()

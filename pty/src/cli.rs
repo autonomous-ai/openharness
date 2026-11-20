@@ -14,8 +14,7 @@ const PIPE_NAME_TRIES: usize = 3;
 /// tmux's default `history-limit`.
 const DEFAULT_HISTORY_LIMIT: usize = 2000;
 
-const USAGE: &str =
-    "usage: harness-pty serve --home <dir> [--history-limit N] | version | ps --json";
+const USAGE: &str = "usage: harness-pty serve --home <dir> [--history-limit N] | version | ps --json [--ancestors <pid>]";
 
 /// The version this host reports. A release stamps it with the CLI's version (`HARNESS_PTY_VERSION`, set by
 /// windows.yml's release mode) instead of editing Cargo.toml, which would put the lockfile out of date for
@@ -48,7 +47,10 @@ pub enum Command {
         own_port: u16,
         daemon_pid: u32,
     },
-    Ps,
+    Ps {
+        /// `--ancestors <pid>`: that process's row and its parents' alone (`ps::ancestors`), not every process.
+        ancestors: Option<u32>,
+    },
     Raise {
         target: RaiseTarget,
     },
@@ -88,9 +90,15 @@ pub fn parse(args: &[String]) -> Result<Command, String> {
     let mut args = args.iter().map(String::as_str);
     match args.next() {
         Some("version") => Ok(Command::Version),
-        Some("ps") => match args.next() {
-            Some("--json") => Ok(Command::Ps),
-            _ => Err("ps needs --json".into()),
+        Some("ps") => match (args.next(), args.next(), args.next(), args.next()) {
+            (Some("--json"), None, ..) => Ok(Command::Ps { ancestors: None }),
+            (Some("--json"), Some("--ancestors"), pid, None) => match pid.map(str::parse) {
+                Some(Ok(pid @ 1..)) => Ok(Command::Ps {
+                    ancestors: Some(pid),
+                }),
+                _ => Err("ps: --ancestors takes a process id".into()),
+            },
+            _ => Err("ps takes --json [--ancestors <pid>]".into()),
         },
         Some("raise") => {
             let target = match (args.next(), args.next(), args.next()) {
@@ -167,7 +175,7 @@ pub fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match parse(&args) {
         Ok(Command::Version) => println!("{}", version_line()),
-        Ok(Command::Ps) => ps(),
+        Ok(Command::Ps { ancestors }) => ps(ancestors),
         Ok(Command::Raise { target }) => raise(target),
         Ok(Command::OpenLink { url }) => open_link(&url),
         Ok(Command::PeerAccount {
@@ -243,11 +251,11 @@ fn open_link(url: &str) {
     }
 }
 
-/// `ps --json`: `{"rows":[…]}` on Windows; elsewhere `{"unsupported":true}`, exit 3 (the daemon
-/// reads `ps` there).
-fn ps() {
+/// `ps --json`: `{"rows":[…]}` on Windows, every process, or with `--ancestors` one process and its
+/// parents; elsewhere `{"unsupported":true}`, exit 3 (the daemon reads `ps` there).
+fn ps(ancestors: Option<u32>) {
     #[cfg(windows)]
-    match crate::ps::snapshot() {
+    match ancestors.map_or_else(crate::ps::snapshot, crate::ps::ancestors) {
         Ok(rows) => println!("{}", serde_json::json!({ "rows": rows })),
         Err(err) => {
             eprintln!("harness-pty: process table: {err}");
@@ -256,6 +264,7 @@ fn ps() {
     }
     #[cfg(not(windows))]
     {
+        let _ = ancestors;
         println!("{{\"unsupported\":true}}");
         std::process::exit(3);
     }
