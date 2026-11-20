@@ -281,6 +281,27 @@ class ReleaseWorkflowTests(unittest.TestCase):
                 self.assertLess(check, index)
                 self.assertIn('--platforms "$PLATFORMS"', named[index])
 
+    def test_a_release_with_linux_uploads_the_one_line_installer_before_the_manifest(self):
+        # /device shows the line once the manifest names a Linux AppImage, so the script is on the CDN by then, and no
+        # person has to remember to put it there.
+        job = self.job("publish")
+        self.assertIn("            /website/scripts/device-install.sh\n", job)
+        upload = self.step(job, "gs://s3-autonomous-upgrade-3/harness/device/install.sh")
+        step = steps(job)[upload]
+        self.assertRegex(step, r"(?m)^        if: inputs\.platforms == 'all'$")
+        cp = "gcloud storage cp website/scripts/device-install.sh gs://s3-autonomous-upgrade-3/harness/device/install.sh"
+        self.assertLess(step.index("sh -n website/scripts/device-install.sh"), step.index(cp))
+        # Read fresh at every run: the CDN keeps a positive max-age for a month (upload-desktop-install-sh.sh).
+        for flag in ('--content-type="text/x-shellscript; charset=utf-8"',
+                     '--cache-control="no-cache, no-store, must-revalidate"'):
+            with self.subTest(flag=flag):
+                self.assertIn(flag, step[step.index(cp):])
+        self.assertLess(self.step(job, "uses: ./.github/actions/setup-gcloud"), upload)
+        self.assertLess(upload, self.step(job, "device-manifest.py publish"))
+        # The credentials publish had already: no new secret.
+        self.assertEqual(set(re.findall(r"secrets\.(\w+)", job)),
+                         {"GCP_WORKLOAD_IDENTITY_PROVIDER", "GCP_SERVICE_ACCOUNT"})
+
 
 if __name__ == "__main__":
     unittest.main()

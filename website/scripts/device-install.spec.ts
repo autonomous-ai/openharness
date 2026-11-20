@@ -1,0 +1,346 @@
+import { spawnSync } from "child_process";
+import { createHash } from "crypto";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "fs";
+import { tmpdir } from "os";
+import { join } from "path";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { DEVICE_ASSET_PREFIXES, DEVICE_MANIFEST_URL } from "@/lib/deviceRelease";
+import nextConfig from "../next.config.js";
+
+const installer = join(process.cwd(), "scripts", "device-install.sh");
+
+/** The app-list entry's one rule, which the app, Desktop and this script all follow (Task 50). */
+const vectors = JSON.parse(
+  readFileSync(join(process.cwd(), "..", "tests", "fixtures", "app-list-entry-vectors.json"), "utf8"),
+) as {
+  dataHome: { env: { HOME?: string; XDG_DATA_HOME?: string }; dataHome: string | null }[];
+  exec: { path: string; exec: string | null }[];
+  entries: { appImage: string; dataHome: string; icon: boolean; entry: string }[];
+  decisions: { name: string; existing: string | null }[];
+};
+
+const VERSION = "1.4.2";
+const PLACE = "/.local/opt/Harness-Device.AppImage";
+const MEMBER = "usr/share/icons/hicolor/128x128/apps/harness-device.png";
+const ICON_BYTES = "the image icon";
+
+const releaseUrl = (arch: string, prefix = DEVICE_ASSET_PREFIXES[0], version = VERSION) =>
+  `${prefix}${version}/Harness-Device-linux-${arch}.AppImage`;
+
+interface Options {
+  os?: string;
+  machine?: string;
+  /** HOME under the run's folder (absolute) or as given (relative, read from the run's folder). */
+  home?: string;
+  xdgDataHome?: string;
+  /** What the manifest says of this arch's AppImage, over what the served file is. */
+  entry?: { url?: string; sha256?: string; size?: number };
+  metadataUrl?: string;
+  running?: boolean;
+  /** Whether `--appimage-extract` gives the icon. */
+  icon?: boolean;
+  /** Files written before the run, by path under the run's folder. */
+  before?: Record<string, string>;
+}
+
+/**
+ * Stub uname, curl, pgrep and setsid, first on PATH, steered by STUB_* variables; sha256sum, sed and the rest are real.
+ * curl serves the manifest at its URL and the AppImage at any other, recording each URL. Written once: macOS checks
+ * each new executable on its first run, which costs a quarter of a second per file.
+ */
+const bin = mkdtempSync(join(tmpdir(), "harness-device-install-bin-"));
+const stub = (name: string, body: string) => writeFileSync(join(bin, name), `#!/bin/sh\n${body}\n`, { mode: 0o755 });
+stub("uname", `case "$1" in -s) echo "$STUB_OS" ;; -m) echo "$STUB_MACHINE" ;; *) exit 1 ;; esac`);
+stub(
+  "curl",
+  `out= url= prev=
+for arg; do
+  if [ "$prev" = -o ]; then out="$arg"; else case "$arg" in -*) ;; *) url="$arg" ;; esac; fi
+  prev="$arg"
+done
+printf '%s\\n' "$url" >> "$STUB_LOG/requested"
+if [ "$url" = "$STUB_MANIFEST_URL" ]; then cp "$STUB_SERVED/metadata.json" "$out"; else cp "$STUB_SERVED/app" "$out"; fi`,
+);
+stub("pgrep", `printf '%s\\0' "$@" > "$STUB_LOG/pgrep"\n[ -n "$STUB_RUNNING" ]`);
+stub("setsid", `printf '%s\\0' "$@" > "$STUB_LOG/setsid"\n[ "$1" = -f ] && shift\n"$@"`);
+
+/** The AppImage: it takes its icon out for `--appimage-extract <member>`, as the runtime does with no FUSE. */
+const APP = `#!/bin/sh
+if [ "$1" = --appimage-extract ]; then
+  [ "$2" = '${MEMBER}' ] && [ -n "$STUB_ICON" ] || exit 1
+  mkdir -p "squashfs-root/\${2%/*}" && printf '%s' '${ICON_BYTES}' > "squashfs-root/$2"
+  exit
+fi
+printf '%s\\n' "$#" >> "$STUB_LOG/ran"
+`;
+const APP_SUMS = { sha256: createHash("sha256").update(APP).digest("hex"), size: Buffer.byteLength(APP) };
+
+const runs: string[] = [];
+afterEach(() => {
+  for (const dir of runs.splice(0)) rmSync(dir, { recursive: true, force: true });
+});
+afterAll(() => rmSync(bin, { recursive: true, force: true }));
+
+/** Every file under folder, relative to it. */
+function files(folder: string): string[] {
+  if (!existsSync(folder)) return [];
+  return readdirSync(folder, { recursive: true, encoding: "utf8" })
+    .filter((name) => statSync(join(folder, name)).isFile())
+    .sort();
+}
+
+/** Runs the installer in a folder of its own, its HOME in there too unless relative. */
+function install(options: Options = {}) {
+  const dir = mkdtempSync(join(tmpdir(), "harness-device-install-"));
+  runs.push(dir);
+  // The run's folder holds no character the Exec= rule quotes, so a vectors' path keeps its quoting under it.
+  expect(dir).toMatch(/^[\w./-]+$/);
+  const log = join(dir, "log");
+  const served = join(dir, "served");
+  for (const folder of [log, served]) mkdirSync(folder);
+  const home = (options.home ?? "/home/p").startsWith("/") ? dir + (options.home ?? "/home/p") : options.home!;
+  const homeAbsolute = home.startsWith("/") ? home : join(dir, home);
+  const place = home + PLACE;
+
+  writeFileSync(join(served, "app"), APP);
+  const machine = options.machine ?? "x86_64";
+  const arch = machine === "aarch64" ? "arm64" : "x64";
+  const other = arch === "x64" ? "arm64" : "x64";
+  const manifest = {
+    version: VERSION,
+    notes: "Harness Device 1.4.2",
+    platforms: { "linux-x86_64": { url: releaseUrl("x64"), signature: "s" } },
+    "device-macos": { version: VERSION, url: `${DEVICE_ASSET_PREFIXES[0]}${VERSION}/Harness-Device.app.tar.gz`, sha256: "a".repeat(64), size: 1 },
+    [`device-linux-${other}-appimage`]: { version: "1.4.1", url: releaseUrl(other, undefined, "1.4.1"), sha256: "b".repeat(64), size: 2 },
+    [`device-linux-${arch}-appimage`]: { version: VERSION, url: releaseUrl(arch), ...APP_SUMS, ...options.entry },
+  };
+  writeFileSync(join(served, "metadata.json"), JSON.stringify(manifest, null, 2));
+
+  for (const [path, text] of Object.entries(options.before ?? {})) {
+    mkdirSync(join(dir, path, ".."), { recursive: true });
+    writeFileSync(join(dir, path), text);
+  }
+
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    PATH: `${bin}:${process.env.PATH}`,
+    HOME: home,
+    STUB_OS: options.os ?? "Linux",
+    STUB_MACHINE: machine,
+    STUB_LOG: log,
+    STUB_SERVED: served,
+    STUB_MANIFEST_URL: options.metadataUrl ?? DEVICE_MANIFEST_URL,
+    STUB_RUNNING: options.running ? "1" : "",
+    STUB_ICON: options.icon === false ? "" : "1",
+  };
+  delete env.XDG_DATA_HOME;
+  delete env.HARNESS_DEVICE_METADATA_URL;
+  if (options.xdgDataHome !== undefined) {
+    env.XDG_DATA_HOME = options.xdgDataHome.startsWith("/") ? dir + options.xdgDataHome : options.xdgDataHome;
+  }
+  if (options.metadataUrl) env.HARNESS_DEVICE_METADATA_URL = options.metadataUrl;
+  const result = spawnSync("sh", [installer], { cwd: dir, encoding: "utf8", env });
+  const read = (name: string) => (existsSync(join(log, name)) ? readFileSync(join(log, name), "utf8") : "");
+  const placed = join(homeAbsolute, PLACE);
+  return {
+    result,
+    dir,
+    home,
+    place,
+    requested: read("requested").split("\n").filter(Boolean),
+    pgrep: read("pgrep").split("\0").slice(0, -1),
+    setsid: read("setsid").split("\0").slice(0, -1),
+    ran: read("ran").split("\n").filter(Boolean),
+    opt: files(join(homeAbsolute, ".local", "opt")),
+    placed: existsSync(placed) ? readFileSync(placed, "utf8") : null,
+    mode: existsSync(placed) ? statSync(placed).mode & 0o777 : null,
+    /** The entries and icons written anywhere in the run's folder. */
+    listed: files(dir).filter((name) => /(^|\/)(applications\/harness-device\.desktop|icons\/harness-device\.png)$/.test(name)),
+  };
+}
+
+const entryAt = (dataHome: string) => join(dataHome, "applications", "harness-device.desktop");
+const iconAt = (dataHome: string) => join(dataHome, "icons", "harness-device.png");
+
+describe("device-install.sh", () => {
+  it("is valid POSIX shell", () => {
+    const result = spawnSync("sh", ["-n", installer], { encoding: "utf8" });
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+  });
+
+  it("refuses a computer that is not Linux", () => {
+    const run = install({ os: "Darwin" });
+
+    expect(run.result.status).toBe(1);
+    expect(run.result.stderr).toBe("Harness Device installer: this installer is for Linux (found: Darwin).\n");
+    expect(run.requested).toEqual([]);
+  });
+
+  it("refuses a Linux architecture it has no build for", () => {
+    const run = install({ machine: "riscv64" });
+
+    expect(run.result.status).toBe(1);
+    expect(run.result.stderr).toBe(
+      "Harness Device installer: Harness Device does not support this Linux architecture (riscv64).\n",
+    );
+    expect(run.requested).toEqual([]);
+  });
+
+  it.each([
+    ["x86_64", "x64"],
+    ["aarch64", "arm64"],
+  ])("takes the AppImage of this arch from the device manifest (%s)", (machine, arch) => {
+    const run = install({ machine });
+
+    expect(run.result.stderr).toBe("");
+    expect(run.result.status).toBe(0);
+    expect(run.requested).toEqual([DEVICE_MANIFEST_URL, releaseUrl(arch)]);
+  });
+
+  it("reads a stand-in manifest when one is named", () => {
+    const run = install({ metadataUrl: "https://cdn.autonomous.ai/e2e/metadata.json" });
+
+    expect(run.result.status).toBe(0);
+    expect(run.requested[0]).toBe("https://cdn.autonomous.ai/e2e/metadata.json");
+  });
+
+  it.each(DEVICE_ASSET_PREFIXES)("takes the AppImage from %s", (prefix) => {
+    const run = install({ entry: { url: releaseUrl("x64", prefix) } });
+
+    expect(run.result.status).toBe(0);
+    expect(run.requested).toEqual([DEVICE_MANIFEST_URL, releaseUrl("x64", prefix)]);
+  });
+
+  // curl collapses dot segments, so a glob's `*` matching `../..` would download from another folder.
+  it.each([
+    ["Desktop's folder", `https://cdn.autonomous.ai/harness/desktop/${VERSION}/Harness-Device-linux-x64.AppImage`],
+    ["another version than the manifest's", releaseUrl("x64", undefined, "1.4.1")],
+    ["..", `https://cdn.autonomous.ai/harness/device/${VERSION}/../../desktop/${VERSION}/Harness-Device-linux-x64.AppImage`],
+    ["%2e%2e", `https://cdn.autonomous.ai/harness/device/${VERSION}/%2e%2e/Harness-Device-linux-x64.AppImage`],
+    ["a query", `${releaseUrl("x64")}?x=1`],
+    ["a fragment", `${releaseUrl("x64")}#x`],
+    ["the other arch's file", releaseUrl("arm64")],
+    ["http:", releaseUrl("x64").replace("https:", "http:")],
+  ])("refuses a URL outside the device release folders: %s", (_, url) => {
+    const run = install({ entry: { url } });
+
+    expect(run.result.status).toBe(1);
+    expect(run.result.stderr).toBe(
+      "Harness Device installer: device metadata points outside the Harness Device release bucket\n",
+    );
+    expect(run.requested).toEqual([DEVICE_MANIFEST_URL]);
+    expect(run.opt).toEqual([]);
+  });
+
+  it.each([
+    ["size", { size: 1 }, "downloaded AppImage size does not match the release metadata"],
+    ["sha256", { sha256: "0".repeat(64) }, "downloaded AppImage checksum does not match the release metadata"],
+  ])("refuses a %s that does not match, and leaves nothing at the place", (_, entry, reason) => {
+    const run = install({ entry });
+
+    expect(run.result.status).toBe(1);
+    expect(run.result.stderr).toBe(`Harness Device installer: ${reason}\n`);
+    expect(run.opt).toEqual([]);
+    expect(run.listed).toEqual([]);
+    expect(run.ran).toEqual([]);
+  });
+
+  it("places the AppImage executable and starts it", () => {
+    const run = install();
+
+    expect(run.result.status).toBe(0);
+    expect(run.result.stdout).toBe(
+      "Fetching the latest Harness Device release…\n" +
+        `Downloading Harness Device ${VERSION}…\n` +
+        `Harness Device ${VERSION} installed at ${run.place}\n`,
+    );
+    expect(run.opt).toEqual(["Harness-Device.AppImage"]);
+    expect(run.placed).toBe(APP);
+    expect(run.mode).toBe(0o755);
+    expect(run.setsid).toEqual(["-f", run.place]);
+    expect(run.ran).toEqual(["0"]);
+  });
+
+  it("starts the app in a session of its own", () => {
+    expect(install().setsid[0]).toBe("-f");
+  });
+
+  it("refuses while the app runs from the place", () => {
+    const run = install({ running: true, before: { [`home/p${PLACE}`]: "the copy that runs" } });
+
+    expect(run.result.status).toBe(1);
+    expect(run.result.stderr).toBe(
+      `Harness Device installer: Harness Device is running from ${run.place}. Quit it, then run this installer again.\n`,
+    );
+    expect(run.pgrep).toEqual(["-f", run.place]);
+    expect(run.requested).toEqual([DEVICE_MANIFEST_URL]);
+    expect(run.placed).toBe("the copy that runs");
+    expect(run.setsid).toEqual([]);
+  });
+
+  it.each(vectors.entries)("writes the entry the app writes: $appImage, icon $icon", (vector) => {
+    const home = vector.appImage.slice(0, -PLACE.length);
+    const run = install({ home, icon: vector.icon });
+    const dataHome = run.dir + vector.dataHome;
+
+    expect(run.result.status).toBe(0);
+    expect(readFileSync(entryAt(dataHome), "utf8")).toBe(vector.entry.replaceAll(home, run.home));
+    expect(existsSync(iconAt(dataHome)) && readFileSync(iconAt(dataHome), "utf8")).toBe(vector.icon && ICON_BYTES);
+    expect(run.listed.length).toBe(vector.icon ? 2 : 1);
+    // Nothing of the work is left beside them.
+    expect(files(dataHome)).toEqual(run.listed.map((name) => join(run.dir, name).slice(dataHome.length + 1)));
+  });
+
+  // Each vectors' path stands for a home: its folder, under which the script installs to the place.
+  it.each(vectors.exec)("a home with a space, a percent and a dollar is quoted as the app quotes it: $path", (vector) => {
+    const tail = vector.path.endsWith(PLACE) ? PLACE : vector.path.slice(vector.path.lastIndexOf("/"));
+    const home = vector.path.slice(0, -tail.length);
+    const run = install({ home });
+    const entry = entryAt(`${run.home}/.local/share`);
+
+    expect(run.result.status).toBe(0);
+    if (vector.exec === null) {
+      // A control character would break the entry's lines: like the app, the script writes nothing.
+      expect(run.listed).toEqual([]);
+    } else {
+      const exec = vector.exec.replace("/home", `${run.dir}/home`).replace(tail, PLACE);
+      expect(readFileSync(entry, "utf8").split("\n")).toContain(`Exec=${exec}`);
+    }
+  });
+
+  // HOME is where the script installs, so the vectors whose HOME is unset or empty have no run.
+  it.each(vectors.dataHome.filter((vector) => vector.env.HOME))(
+    "puts the entry in the data home the app uses: $env",
+    (vector) => {
+      const run = install({ home: vector.env.HOME, xdgDataHome: vector.env.XDG_DATA_HOME });
+
+      expect(run.result.status).toBe(0);
+      expect(run.listed).toEqual(
+        vector.dataHome === null
+          ? []
+          : [`${vector.dataHome.slice(1)}/applications/harness-device.desktop`, `${vector.dataHome.slice(1)}/icons/harness-device.png`],
+      );
+    },
+  );
+
+  it.each(vectors.decisions.filter((vector) => vector.existing !== null))(
+    "an entry already there is left for the app: $name",
+    (vector) => {
+      const run = install({ before: { "home/p/.local/share/applications/harness-device.desktop": vector.existing! } });
+
+      expect(run.result.status).toBe(0);
+      expect(readFileSync(entryAt(`${run.home}/.local/share`), "utf8")).toBe(vector.existing);
+      expect(run.listed).toEqual(["home/p/.local/share/applications/harness-device.desktop"]);
+    },
+  );
+
+  it("redirects /device/install.sh to the CDN for good", async () => {
+    expect(await nextConfig.redirects()).toContainEqual({
+      source: "/device/install.sh",
+      destination: "https://cdn.autonomous.ai/harness/device/install.sh",
+      permanent: true,
+    });
+  });
+});
