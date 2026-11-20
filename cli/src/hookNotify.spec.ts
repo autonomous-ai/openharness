@@ -3802,7 +3802,7 @@ describe('hook notify: the caller a hook names', () => {
     ['a command shell whose parent is gone: the shell itself', [cmd], 0],
     // Windows reuses pids: the engine is gone, and a process started since holds its pid.
     ['a command shell whose parent\'s pid a later process took: the shell itself',
-      [cmd, { ...codexExe, startMarker: 'w:133000000000000200' }], 0],
+      [cmd, { executable: 'codex.exe', argv: ['codex.exe'], startMarker: 'w:133000000000000200' }], 0],
   ])('on Windows a Codex pane hook names, past %s', async (_case, windowsAncestors, named) => {
     expect(await onWindows({ windowsAncestors })).toEqual([
       { url: '/api/hook/turn-stop', body: expect.objectContaining({ callerPid: pidAt(named) }) },
