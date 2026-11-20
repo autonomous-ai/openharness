@@ -6162,9 +6162,9 @@ describe('the app filter', () => {
   const listFrames = (port: LoopbackPort) => port.sent.filter((m) => LIST.has(m.t as string))
   const listTypes = (port: LoopbackPort) => listFrames(port).map((m) => m.t)
 
-  async function greeted(host: CableHost, appFilter = true) {
+  async function greeted(host: CableHost, appFilter = true, fields: Record<string, unknown> = {}) {
     const c = await connect(host)
-    c.port.say({ t: 'hello', product: 'harness', mac: 'aa:bb', ...(appFilter ? { appFilter: 'v1' } : {}) })
+    c.port.say({ t: 'hello', product: 'harness', mac: 'aa:bb', ...(appFilter ? { appFilter: 'v1' } : {}), ...fields })
     await vi.waitFor(() => expect(c.port.types()).toContain('notif.replace'))
     return c
   }
@@ -6550,8 +6550,8 @@ describe('the app filter', () => {
   const voiceAnswered = (port: LoopbackPort) => port.types().some((t) => t === 'voice.transcript' || t === 'voice.error')
 
   /** The host's answers that differ by dial, watched from before the greeting. The dial then turns to g1 (no f), taps it
-   *  and stops it, which asks each of them. */
-  async function asking(appFilter: boolean, window: boolean) {
+   *  and stops it, which asks each of them. `fields`: the rest of the hello. */
+  async function asking(appFilter: boolean, window: boolean, fields: Record<string, unknown> = {}) {
     const { host, state } = appHost({ openAgent: vi.fn() })
     state.window = state.appView = window
     const spies = {
@@ -6560,7 +6560,7 @@ describe('the app filter', () => {
     }
     vi.useFakeTimers({ toFake: ['Date', 'performance'] })
     try {
-      const c = await greeted(host, appFilter)
+      const c = await greeted(host, appFilter, fields)
       // Past the 750 ms after a landing on g1, so the turn to g1 is a hand's and not taken as the landing's echo.
       vi.advanceTimersByTime(751)
       c.port.say({ t: 'focus', agentId: 'g1' })
@@ -6949,6 +6949,16 @@ describe('the app filter', () => {
       } finally { await session.stop(); vi.useRealTimers() }
     })
 
+    it("a Pro asks every other read as itself on an app's ring: only its swarms are the window's", async () => {
+      const { session, spies } = await asking(true, true, PRO)
+      try {
+        const { listSwarms, ...asks } = spies
+        askedAs(asks, true)
+        expect(listSwarms.mock.calls.length).toBeGreaterThan(0)
+        for (const call of listSwarms.mock.calls) expect(call.at(-1)).toEqual({})
+      } finally { await session.stop() }
+    })
+
     it('the welcome names apps.switch, question.tier and resync, eleven names in all', async () => {
       const { host } = appHost({
         form: async () => ({ ok: false, active: false, error: 'test' }),
@@ -6961,7 +6971,7 @@ describe('the app filter', () => {
       try {
         const features = port.sent.find((m) => m.t === 'welcome')?.features as string[]
         expect(features).toEqual(['voice.draft', 'agents.refresh', 'player.library', 'resync', 'form', 'selection', 'visit', 'question.review', 'apps.switch', 'question.tier', 'settings'])
-        // The firmware reads no feature past the sixteenth.
+        // Past sixteen the firmware reads none of them (cable_features.c returns 0).
         expect(features.length).toBeLessThanOrEqual(16)
       } finally { await session.stop() }
     })
