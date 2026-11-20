@@ -736,13 +736,13 @@ Off (Settings ▸ Experimental ▸ Hachi), none of them is drawn and ⇧⌘H is 
 Harness Device is the menu-bar app for the dial (`device-app/`), named
 **Harness** wherever a person sees it; only its file stays
 `Harness Device.app`. It sets up
-Harness, keeps it running and shows the dial's state; sign-in is the one
-thing it offers. Claude Code, Codex and Orca need no setting: Harness sets
-them up once a dial is plugged in. The desktop app offers and installs it
-([Surface families](#surface-families), Menu-bar app offer).
+Harness, keeps it running and shows the dial's state; it offers sign-in and,
+on a Mac with the ChatGPT app, Follow ChatGPT. Claude Code, Codex and Orca
+need no setting: Harness sets them up once a dial is plugged in. The desktop
+app offers and installs it ([Surface families](#surface-families), Menu-bar app offer).
 
 Its menu is the native menu; a row with nothing to say is absent. Its window
-has two screens, Install and Sign in,
+has three screens, Install, Sign in and Follow ChatGPT,
 at 420 × 320, in plain HTML and CSS (`device-app/ui/src/styles.css`)
 with this document's tokens and type. Hover and press fills are precomputed per
 theme: the app runs from macOS 13, older than WebKit's `color-mix()`.
@@ -778,6 +778,10 @@ theme: the app runs from macOS 13, older than WebKit's `color-mix()`.
   the one in force checked. Notifications is the first.
 - A menu action that asks for more before it is done ends in `…`; one that acts at
   once has none.
+- A permission another app keeps (macOS's Accessibility) is one check item,
+  checked when given. Its click always asks for more (unchecked: the Follow
+  ChatGPT screen; checked: System Settings' Accessibility list), so it has no
+  `…`; its label never changes, as every check item's.
 - The dial line names no firmware version: it reads `Updating device…`
   while the firmware updates. **About** opens macOS's standard About panel,
   brought to the front, with the app's name and version and one credits line,
@@ -795,6 +799,7 @@ The menu, top to bottom:
   Signed in
 ✓ Sound
   Notifications ▸
+✓ Follow ChatGPT
 ──────────
   Open Harness
   Export logs
