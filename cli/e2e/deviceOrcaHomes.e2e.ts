@@ -100,6 +100,8 @@ describe('Orca\'s account homes on the dial', () => {
     onTestFailed(() => { console.log(`---- daemon log\n${d.log().split('\n').slice(-200).join('\n')}`) })
     before(d)
     await d.start()
+    // Claude Code started by hand reads its hooks once, as it starts: they must be in by then.
+    await d.hooksInstalled(['claude'])
     return { d, desk: theDesk }
   }
   const plugged = async (theDesk: Desk): Promise<FakeDial> => {

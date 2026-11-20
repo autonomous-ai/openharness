@@ -123,6 +123,9 @@ describe('the hook client', () => {
       console.log(`---- hooks the engines ran\n${d.hookLog()}`)
     })
     await d.start()
+    // Its tests run engines by hand, or stop the daemon, right after start: an engine started before its
+    // hooks are in runs none.
+    await d.hooksInstalled(engines)
     return d
   }
 

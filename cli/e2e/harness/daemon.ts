@@ -26,6 +26,8 @@ import { artifactLog, artifactsEnabled } from './artifacts.js'
 import { daemonEnvironment } from '../../src/testing/daemonEnvironment.js'
 import { writeExecutable } from '../../src/testing/executableFixture.js'
 import { GH_FORBIDDEN_STUB } from '../../src/testing/ghStub.js'
+import { hooks as claudeHooks } from '../../src/engines/claude/hookContract.js'
+import { hooks as codexHooks } from '../../src/engines/codex/hookContract.js'
 import { readAdoptedHomes } from '../../src/engines/kit/homeAdoption.js'
 import { ownProcessGroup } from '../../src/lib/windows/noWindow.js'
 import { endRootProcesses } from '../../src/testing/rootProcesses.js'
@@ -186,6 +188,19 @@ const NATIVE_HOOK_PATHS: Record<string, readonly string[]> = {
   grok: ['GROK_HOME'], agy: ['AGY_CONFIG_DIR'], copilot: ['COPILOT_HOME'],
 }
 const HOOK_ENGINES = new Set(['claude', 'codex', ...Object.keys(NATIVE_HOOK_PATHS)])
+
+/** The lines each engine's install may end on, from its own contract. */
+const HOOK_INSTALL_MESSAGES = { claude: claudeHooks.settings.messages, codex: codexHooks.settings.messages }
+type HookInstallEngine = keyof typeof HOOK_INSTALL_MESSAGES
+/**
+ * A line saying how [engine]'s hook install went: any line its contract declares but `after`, which only follows one
+ * of them, `{…}` standing for anything. Any outcome counts, a failed write or a malformed file too: the install is
+ * over, and what came of it is the test's to judge.
+ */
+const installOutcome = (engine: HookInstallEngine): RegExp => new RegExp(Object.entries(HOOK_INSTALL_MESSAGES[engine])
+  .filter(([key]) => key !== 'after').flatMap(([, said]) => [said ?? []].flat())
+  .map((template) => template.split(/\{\w+\}/).map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('.*'))
+  .join('|'))
 /** The shell profiles a login shell in a pane reads, where a person moves an engine's home. */
 const PROFILES = { ZDOTDIR: ['.zshenv', '.zprofile', '.zshrc', '.zlogin'], HOME: ['.bash_profile', '.bash_login', '.profile', '.bashrc'] }
 
@@ -302,6 +317,8 @@ export const fakeEngineShim = (name: 'claude' | 'codex', config: EngineConfig & 
 export class IsolatedDaemon {
   child: ChildProcess | null = null
   private output = ''
+  /** Where the last start's lines begin in `output`. */
+  private startedAt = 0
   /** Every start not yet closed: each master leads a process group, numbered by its pid (`start`). */
   private readonly groups = new Set<ChildProcess>()
 
@@ -602,7 +619,7 @@ esac
     const heap = this.options.heapMiB ? [`--max-old-space-size=${this.options.heapMiB}`] : []
     const entry = this.options.noMaster ? ['__run'] : this.options.foreground ? ['start', '-f'] : ['__harnessd']
     // Readiness is judged from what this start prints, never from an earlier boot's lines.
-    const from = this.output.length
+    const from = this.startedAt = this.output.length
     // A test's own bundle (an old release), the run's bundle (`E2E_BUNDLE`, see bundle.ts), or the sources.
     const bundle = this.options.withoutProcessImages ? undefined : this.options.scriptPath ?? process.env.E2E_BUNDLE_PATH
     // From the sources on macOS, the helper a release embeds comes in by a preload (processImages.ts): without it the
@@ -652,10 +669,25 @@ esac
       // test); this line is printed once they are.
       if (options.ready !== 'port') {
         await until('the daemon to finish starting', () => /\[cli\] ready/.test(this.output.slice(from)), 60_000, 100)
-        // Its hooks are installed before it says it is ready.
+        // The hooks it has installed so far: the rest come after it says it is ready (`hooksInstalled`).
         this.assertHooksStayedInside()
       }
     })()])
+  }
+
+  /**
+   * Resolves once the last start's log says how the install of each of [engines]' hooks went, then checks they stayed
+   * inside the root. A daemon installs them after it says it is ready, by design (src/startupOrder.spec.ts), and a
+   * launch of its own waits for its engine's; an engine a test runs by hand, or a daemon it stops, right after start
+   * does not.
+   */
+  async hooksInstalled(engines: readonly HookInstallEngine[]): Promise<void> {
+    const outcomes = engines.map(installOutcome)
+    await until(`the daemon to install the hooks of ${engines.join(', ')}`, () => {
+      const lines = this.output.slice(this.startedAt).split('\n')
+      return outcomes.every((outcome) => lines.some((line) => outcome.test(line)))
+    }, 60_000, 100)
+    this.assertHooksStayedInside()
   }
 
   /**
