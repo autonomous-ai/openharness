@@ -35,12 +35,10 @@ Future<void> registerAppImageLauncher({
     return;
   }
   try {
-    final dataHome = (env['XDG_DATA_HOME']?.isNotEmpty ?? false)
-        ? env['XDG_DATA_HOME']!
-        : '$home/.local/share';
+    final dataHome = launcherDataHome(env)!;
     final entry = File('$dataHome/applications/harness.desktop');
     if (await entry.exists()) {
-      final target = _execTarget(await entry.readAsString());
+      final target = launcherExecTarget(await entry.readAsString());
       if (target != null && await File(target).exists()) {
         // Upgrade this executable's own entry, without taking over another copy.
         if (target != appImage) return;
@@ -67,7 +65,7 @@ Future<void> registerAppImageLauncher({
       'Type=Application\n'
       'Name=Harness\n'
       'Comment=Attach terminals to the agents running on your Harness machines\n'
-      'Exec=${_quoteExec(appImage)} %u\n'
+      'Exec=${quoteLauncherExec(appImage)} %u\n'
       'MimeType=x-scheme-handler/harness;\n'
       'Icon=${icon.path}\n'
       'Terminal=false\n'
@@ -87,8 +85,17 @@ Future<void> registerAppImageLauncher({
   }
 }
 
+/// Where launcher entries and their icons live: `XDG_DATA_HOME`, else
+/// `$HOME/.local/share`; null when neither names a folder.
+String? launcherDataHome(Map<String, String> environment) {
+  final xdg = environment['XDG_DATA_HOME'];
+  if (xdg != null && xdg.isNotEmpty) return xdg;
+  final home = environment['HOME'];
+  return home == null || home.isEmpty ? null : '$home/.local/share';
+}
+
 /// The program an entry's `Exec=` line starts, unquoted; null when it has none.
-String? _execTarget(String entry) {
+String? launcherExecTarget(String entry) {
   for (final line in entry.split('\n')) {
     if (!line.startsWith('Exec=')) continue;
     final value = line.substring(5).trim();
@@ -107,7 +114,7 @@ String? _execTarget(String entry) {
 
 /// A path as the Desktop Entry spec wants it in `Exec=`: quoted when it holds
 /// a character the launcher would otherwise split or expand on.
-String _quoteExec(String path) {
+String quoteLauncherExec(String path) {
   if (!RegExp(r'''[\s"'\\$`<>~|&;*?#()]''').hasMatch(path)) return path;
   final escaped = path.replaceAllMapped(
     RegExp(r'["`$\\]'),

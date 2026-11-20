@@ -14,7 +14,9 @@ import '../core/hidden_process.dart';
 import '../core/home_dir.dart';
 import '../core/runtime_architecture.dart';
 import '../core/runtime_platform.dart';
+import '../logging/app_log.dart';
 import 'device_app.dart';
+import 'device_app_launcher.dart';
 import 'device_app_manifest.dart';
 
 typedef DeviceAppRun = Future<ProcessResult> Function(
@@ -128,7 +130,8 @@ List<String> deviceAppTargetFolders() {
 /// `Harness Device.app` into the first target folder that takes it; Windows
 /// runs the per-user installer, which puts the app at its place
 /// ([deviceAppPlace]); Linux puts the AppImage there. Neither unpacks, and
-/// Linux checks no signature (an AppImage carries none).
+/// Linux checks no signature (an AppImage carries none), and puts the app in
+/// the desktop's app list before it opens it.
 class DeviceAppInstaller {
   DeviceAppInstaller({
     required this._manifestUrl,
@@ -139,6 +142,7 @@ class DeviceAppInstaller {
     this._run = runDeviceAppTool,
     TargetPlatform? platform,
     String? place,
+    this._launcher = writeDeviceAppLauncher,
     this._architecture,
     this._tempRoot,
     this._manifestTimeout = const Duration(seconds: 15),
@@ -162,6 +166,7 @@ class DeviceAppInstaller {
   final DeviceAppRun _run;
   final TargetPlatform _platform;
   final String? _place;
+  final Future<void> Function(String appImage) _launcher;
   final String? _architecture;
   final Directory? _tempRoot;
   final Duration _manifestTimeout;
@@ -199,6 +204,12 @@ class DeviceAppInstaller {
         case TargetPlatform.linux:
           step = DeviceAppInstallStep.install;
           installed = await _placeAppImage(download);
+          try {
+            await _launcher(installed);
+          } on Exception {
+            // Not worth failing the install over: the app runs without it.
+            appLog.warn('devices', 'device app: launcher entry failed');
+          }
         default:
           step = DeviceAppInstallStep.unpack;
           final bundle = await _unpack(download, p.join(temp.path, 'app'));
