@@ -156,6 +156,14 @@ function harnessRoots() {
   return isRegularFile(join(xdg.data, '.harness-root')) || !existsSync(legacy) ? xdg : { data: legacy, state: legacy }
 }
 
+/**
+ * A Harness folder override as every process reads it (src/config/envFields.ts homePath): an absolute value as given, a
+ * relative one under the home, never the agent's project the hook runs in; an unset or empty one as it is.
+ */
+function homePath(value) {
+  return !value || isAbsolute(value) ? value : join(homedir(), value)
+}
+
 /** A regular file, through a link as the installers' `test -f` looks; a folder, or nothing, is none. */
 function isRegularFile(path) {
   try { return statSync(path).isFile() } catch { return false }
@@ -163,7 +171,7 @@ function isRegularFile(path) {
 
 function paths() {
   // Every installed command names its data folder: the rule is looked up only for one that does not.
-  const dataDir = routed?.dataDir ?? (argValue('--data-dir', '') || process.env.ADAPTER_DATA_DIR || join(harnessRoots().data, 'cli', 'data'))
+  const dataDir = routed?.dataDir ?? (argValue('--data-dir', '') || homePath(process.env.ADAPTER_DATA_DIR) || join(harnessRoots().data, 'cli', 'data'))
   const claudeProjectsDir = argValue('--claude-projects-dir', process.env.CLAUDE_PROJECTS_DIR || join(homedir(), '.claude', 'projects'))
   const codexHome = argValue('--codex-home', process.env.CODEX_HOME || join(homedir(), '.codex'))
   const grokHome = argValue('--grok-home', process.env.GROK_HOME || join(homedir(), '.grok'))
@@ -1289,7 +1297,7 @@ async function ownPane(pane) {
  * in the state folder.
  */
 function hookRoutesDir() {
-  return process.env.HARNESS_HOOK_ROUTES_DIR || join(harnessRoots().state, 'hook-routes')
+  return homePath(process.env.HARNESS_HOOK_ROUTES_DIR) || join(harnessRoots().state, 'hook-routes')
 }
 
 /**
@@ -1527,7 +1535,7 @@ function ptyHostBinary() {
   const override = process.env.HARNESS_PTY_BIN?.trim()
   if (override) return override
   const binary = 'harness-pty.exe'
-  const root = join(process.env.ADAPTER_RUNTIME_DIR || join(homedir(), '.harness', 'runtime'), 'pty')
+  const root = join(homePath(process.env.ADAPTER_RUNTIME_DIR) || join(homedir(), '.harness', 'runtime'), 'pty')
   let version = ''
   try { version = readFileSync(join(root, 'current-pty'), 'utf8').trim() } catch { /* none installed */ }
   if (/^\d+(\.\d+)*$/.test(version)) {
