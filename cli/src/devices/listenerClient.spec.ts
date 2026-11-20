@@ -409,6 +409,32 @@ describe('over a pipe', () => {
     expect(log).toEqual(['table', 'connection', 'table', 'connection'])
   })
 
+  // A refusal that proves the token is the devices' own answer: the proof stands.
+  it('a proven 429 or 400 keeps the proof: the calls after it read no table', async () => {
+    const { dir, pipe, token, counts, options } = piped()
+    let status = 429
+    const { heard } = await onPipe(pipe, token, res => { res.writeHead(status).end() })
+    expect(await tellDevices(dir, FRONT, options)).toBe(false)
+    status = 400
+    expect(await askDevices(dir, NOTICE, options)).toBe(400)
+    expect(await streamDevices(dir, TABS, vi.fn(), { ...options, signal: open() })).toBe(false)
+    expect(heard).toHaveLength(3)
+    expect(counts.rows).toBe(1)
+  })
+
+  // No answer in time proves nothing: the pid may have gone to another process inside the minute.
+  it('a listener that takes a message and never answers drops the proof: the next call reads the table', async () => {
+    const { dir, pipe, token, counts, options } = piped()
+    let answers = false
+    const { heard } = await onPipe(pipe, token, res => { if (answers) res.writeHead(204).end() })
+    expect(await tellDevices(dir, FRONT, { ...options, timeoutMs: 50 })).toBe(false)
+    expect(counts.rows).toBe(1)
+    answers = true
+    expect(await tellDevices(dir, FRONT, options)).toBe(true)
+    expect(counts.rows).toBe(2)
+    expect(heard).toHaveLength(2)
+  })
+
   it('no record: false, null, false, and nothing connects', async () => {
     const { dir, pipe, token, options } = piped()
     rmSync(devicesRecordPath(dir))
