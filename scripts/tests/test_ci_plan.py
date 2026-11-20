@@ -108,7 +108,14 @@ class SelectionTests(unittest.TestCase):
                 self.assertEqual(planner.select([path])[0], {"device-app"})
         self.assertEqual(planner.JOBS["device-app"], {"device-app-checks"})
         self.assertEqual(planner.MANUAL["device-app"], {"device-app"})
-        self.assertNotIn("device-app", planner.PR_READS)
+
+    def test_either_release_workflow_runs_the_device_app_suite(self):
+        # Its test_release_workflow.py reads both through a path built from parts, which the scan cannot see: a change
+        # to either alone, Desktop's runners or signing inputs too, must run it.
+        for path in (".github/workflows/release-device.yml", ".github/workflows/release-desktop.yml"):
+            with self.subTest(path=path):
+                self.assertEqual(planner.select([path])[0], {"device-app"})
+                self.assertTrue(planner.reads("device-app", path))
 
     def test_the_workflow_carries_every_suite(self):
         workflow = (Path(__file__).resolve().parents[2] / ".github/workflows/ci.yml").read_text()
