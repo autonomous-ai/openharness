@@ -8,6 +8,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { runGuestCommand, type GuestRunner } from '../guestRunner.js'
+import { modulesByPath } from './powershell.js'
 import { ps } from './powershellQuote.js'
 
 export type AdminResult =
@@ -40,8 +41,9 @@ function stopped(stderr: string, code: number | null): AdminResult {
  * `1> $out 2> $err`, only PowerShell's streams were kept, and the scripts write through [Console]: every
  * failure read "The script stopped (exit N)" (review, 2026-10-28). The child's handle is read once before waiting, so its exit code is kept.
  */
-const ELEVATED_PS1 = [
+export const ELEVATED_PS1 = [
   '# Runs a Harness script elevated and keeps what it said (cli/src/lib/windows/elevated.ts).',
+  ...modulesByPath('Microsoft.PowerShell.Management', 'Microsoft.PowerShell.Utility').split('\n'),
   "$out = Join-Path $PSScriptRoot 'stdout.txt'",
   "$err = Join-Path $PSScriptRoot 'stderr.txt'",
   "$run = Join-Path $PSScriptRoot 'run.ps1'",
@@ -68,6 +70,21 @@ function decodeText(bytes: Buffer): string {
 /** Win32's ERROR_CANCELLED: the person chose No in User Account Control's prompt. */
 const UAC_CANCELLED = 1223
 
+/** What asks User Account Control to run [elevated] (`elevated.ps1`) and exits with its status. */
+export function uacPromptScript(elevated: string): string {
+  return [
+    modulesByPath('Microsoft.PowerShell.Management'),
+    'try {',
+    `  $p = Start-Process -FilePath powershell.exe -Verb RunAs -Wait -PassThru -WindowStyle Hidden -ArgumentList ${ps(`-NoProfile -ExecutionPolicy Bypass -File "${elevated}"`)}`,
+    '  exit $p.ExitCode',
+    '} catch {',
+    `  if ($_.Exception.NativeErrorCode -eq ${UAC_CANCELLED} -or $_.Exception.InnerException.NativeErrorCode -eq ${UAC_CANCELLED}) { exit ${UAC_CANCELLED} }`,
+    '  [Console]::Error.WriteLine("harness: $($_.Exception.Message)")',
+    '  exit 1',
+    '}',
+  ].join('\n')
+}
+
 /**
  * Windows: User Account Control's prompt (Windows PowerShell's own, signed), for `run.ps1` in a staging folder only the
  * owner, SYSTEM and Administrators can open. Inheritance is removed first, before anything is written in it.
@@ -86,18 +103,8 @@ async function runElevatedOnWindows(runner: GuestRunner, stageDir: string, scrip
   writeFileSync(elevated, `﻿${ELEVATED_PS1}`)
   // Windows names cannot hold a double quote, which would end the path inside the argument list.
   if (elevated.includes('"')) throw new Error(`not a usable staging folder: ${JSON.stringify(stageDir)}`)
-  const outer = [
-    'try {',
-    `  $p = Start-Process -FilePath powershell.exe -Verb RunAs -Wait -PassThru -WindowStyle Hidden -ArgumentList ${ps(`-NoProfile -ExecutionPolicy Bypass -File "${elevated}"`)}`,
-    '  exit $p.ExitCode',
-    '} catch {',
-    `  if ($_.Exception.NativeErrorCode -eq ${UAC_CANCELLED} -or $_.Exception.InnerException.NativeErrorCode -eq ${UAC_CANCELLED}) { exit ${UAC_CANCELLED} }`,
-    '  [Console]::Error.WriteLine("harness: $($_.Exception.Message)")',
-    '  exit 1',
-    '}',
-  ].join('\n')
   // Encoded, so no quoting of the command line between Node and PowerShell can change it.
-  const result = await runner('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(outer, 'utf16le').toString('base64')],
+  const result = await runner('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(uacPromptScript(elevated), 'utf16le').toString('base64')],
     { timeoutMs: 15 * 60_000 })
   if (result.code === UAC_CANCELLED) return { ok: false, code: 'CANCELLED', message: 'The administrator prompt was cancelled.' }
   const said = (name: string) => { try { return decodeText(readFileSync(join(stageDir, name))) } catch { return '' } }
