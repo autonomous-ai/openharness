@@ -94,6 +94,13 @@ jobs:
         if: ${{ !inputs.release }}
         working-directory: pty
         run: cargo test --locked --target ${{ matrix.target }}
+      # The raise's tests again with their output: a test that skips (session 0 with no desktop a person sees, a codex
+      # link handler registered on the runner) says so on stderr, which cargo hides from a test that passes. The pull
+      # request quotes these lines. Built already by the step above, so it runs only the tests.
+      - name: 'Rust: the raise, with its skip lines'
+        if: ${{ !inputs.release }}
+        working-directory: pty
+        run: cargo test --locked --target ${{ matrix.target }} --test raise -- --nocapture
       # The previous version of the host, for the specs of two real builds (the rollover, sub-project G): the same source
       # stamped older, built into the same target first and copied aside, with the ConPTY payload it loads from its own
       # folder. The release build below changes HARNESS_PTY_VERSION, which recompiles only the crate.
