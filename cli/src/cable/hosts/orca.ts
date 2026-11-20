@@ -110,15 +110,24 @@ export function orcaDeps(platform: NodeJS.Platform = process.platform): OrcaRead
       // Drained: a child that writes more to stderr than its pipe holds stalls before its next line. Never kept: it can
       // name paths.
       stderr.resume()
+      const running = () => child.exitCode === null && child.signalCode === null
+      // Until Node has seen the child exit it holds the child's handle, so Windows gives its pid to no other process;
+      // once it has, the pid, and the parent pid of what it started, can be another's. So the child is ended through its
+      // handle, never by its pid, and a table read after it exited ends nothing it lists.
+      const byPid = processTreeKillDeps(null)
+      const tree = {
+        ...byPid,
+        rows: async () => { const rows = await byPid.rows(); return running() ? rows : null },
+        kill: (pid: number) => { if (pid === child.pid) child.kill('SIGKILL'); else byPid.kill(pid) },
+      }
       return {
         onData: (listener) => { stdout.on('data', listener) },
         exited: new Promise((resolve) => { child.once('close', () => resolve()) }),
         // On Windows a signal is TerminateProcess of the child alone: what `orca.exe` started would keep running. So the
-        // whole tree is ended, for either signal, while the child is still there: once it has exited its pid can be
-        // another process's.
+        // whole tree is ended, for either signal, while the child is still there.
         kill: (signal) => {
           if (platform !== 'win32') child.kill(signal)
-          else if (child.pid !== undefined && child.exitCode === null && child.signalCode === null) void endProcessTree(child.pid, processTreeKillDeps(null))
+          else if (child.pid !== undefined && running()) void endProcessTree(child.pid, tree)
         },
       }
     },
