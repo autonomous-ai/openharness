@@ -13,6 +13,8 @@ uint32_t cable_features_parse(const cJSON *welcome)
         if (++count > 16 || !cJSON_IsString(item)) return 0;
         if (!strcmp(item->valuestring, "player.library")) result |= CABLE_FEATURE_PLAYER_LIBRARY;
         if (!strcmp(item->valuestring, "resync")) result |= CABLE_FEATURE_RESYNC;
+        if (!strcmp(item->valuestring, "apps.switch")) result |= CABLE_FEATURE_APPS_SWITCH;
+        if (!strcmp(item->valuestring, "question.tier")) result |= CABLE_FEATURE_QUESTION_TIER;
     }
     return result;
 }

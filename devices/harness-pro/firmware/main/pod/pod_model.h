@@ -5,7 +5,13 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include "cable/cable_types.h"   // ID_MAX, CABLE_NAME_MAX, SWARM_ID_MAX, cable_swarm_t, cable_tile_t
+#include "cable/cable_types.h"   // ID_MAX, CABLE_NAME_MAX, SWARM_ID_MAX, cable_swarm_t, cable_tile_t, cable_app_t
+
+#define POD_APPS_MAX CABLE_APPS_MAX                 // 16
+typedef cable_app_t pod_app_t;                      // { char id[16]; char name[24]; uint8_t count, waiting, working; }
+// What the daemon lets the Pod do with an agent (`caps` on its `agent` row, letters s v f a): S see it, V talk to it,
+// F open it, A answer its questions. An agent the daemon says nothing about can do all four, as on the round dial.
+enum { POD_CAP_S = 1, POD_CAP_V = 2, POD_CAP_F = 4, POD_CAP_A = 8, POD_CAPS_ALL = 15 };
 
 #define POD_AGENTS_MAX 32
 #define POD_TABS_MAX   24
@@ -68,6 +74,10 @@ typedef struct {
     // This turn plays the pet's second working scene (POD_SCENE_WORK_ALT, Claude's builder) instead of its first (the
     // chef): drawn once as the turn starts (pod_model_random), kept until it ends, so every screen shows the same one.
     bool work_alt;
+    char host[16];                       // the app the agent lives in ("codex", "vscode", ...), "" when not said
+    // POD_CAP_* granted (pod_model_agent_app, from the agent's `agent` row); POD_CAPS_ALL when the daemon sent no caps,
+    // and for every agent that came from the library or a tab's members (no `agent` row).
+    uint8_t caps;
 } pod_agent_t;
 
 typedef struct { int16_t x1, y1, x2, y2; } pod_rect_t;   // 0..1000
@@ -113,6 +123,18 @@ typedef struct {
     uint8_t unread_count;
     pod_read_out_t reads[POD_READS_MAX];
     uint8_t read_count;
+    pod_app_t apps[POD_APPS_MAX];        // the last `apps` frame's list, in its order; rows past app_count are zero
+    uint8_t app_count;
+    char app_shown[CABLE_APP_ID_MAX];    // `shown`: the app whose ring the daemon sends ("" none)
+    bool apps_switch;                    // the welcome listed `apps.switch`
+    bool machine_view;                   // the last agents.end said view:"machine"
+    // A Harness window is open: the last agents.end's tab was non-empty, OR the last swarms frame listed at least one
+    // tab (while the view is an app's ring the daemon sends tab:"" but keeps sending the window's swarms).
+    bool has_window;
+    // The two inputs of has_window, the model's own: readers use has_window. swarm_n counts the items the swarms frame
+    // listed, before the tabs with no agent are hidden.
+    bool tab_open;
+    uint8_t swarm_n;
 } pod_model_t;
 
 // Copy src into dst[cap], cut on a UTF-8 codepoint boundary (always valid, always NUL-terminated); src may be dst.
@@ -159,7 +181,22 @@ void pod_model_turn_stats(pod_model_t *, const char *id, int32_t passed, int32_t
 void pod_model_question(pod_model_t *, const char *id, const char *text);
 void pod_model_question_close(pod_model_t *, const char *id);
 void pod_model_recap(pod_model_t *, const char *id, const char *recap, bool restore);
+// A drop also forgets the apps, app_shown, apps_switch, machine_view and tab_open (the next session says them again);
+// swarm_n stays with the tabs.
 void pod_model_link(pod_model_t *, bool up);
+
+// ---- apps ----
+// Every setter here bumps revision only when a field a reader sees changed (an unchanged push costs no redraw).
+// The whole list, replaced: n clamped to 0..POD_APPS_MAX (NULL apps: no rows), NULL shown: "".
+void pod_model_apps(pod_model_t *, const pod_app_t *apps, int n, const char *shown);
+void pod_model_apps_switch(pod_model_t *, bool on);
+// From agents.end: view:"machine", and whether its tab was non-empty.
+void pod_model_view(pod_model_t *, bool machine_view, bool tab_open);
+// An agent's app and caps, from its `agent` row. The roster is fed through pod_glue, whose row has neither, so pro_app
+// calls this for every row right after it, under the same lock. Unknown id: ignored; NULL host: ""; caps & POD_CAPS_ALL.
+void pod_model_agent_app(pod_model_t *, const char *id, const char *host, uint8_t caps);
+const char *pod_host_name(const char *host);     // "ChatGPT" for codex; unknown, "" or NULL: "Terminal"
+const char *pod_host_see_it(const char *host);   // "See it in ChatGPT": a literal, valid forever
 
 const pod_agent_t *pod_model_find(const pod_model_t *, const char *id);
 // The agents with the most recent task (the newer of act_ms and lib_ms), at most max, newest first. An agent with
