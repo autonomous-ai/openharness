@@ -54,9 +54,13 @@ pub fn program_installed(program: &Path) -> bool {
     program.is_file()
 }
 
-/// Whether process `pid` runs `program`, by its `exe` link under `proc_root` (`/proc`).
+/// Whether process `pid` runs `program`, by its `exe` link under `proc_root` (`/proc`). A package upgrade that
+/// replaces the program while it runs makes the kernel add ` (deleted)` to the link: still the same app, as the front
+/// source reads it (`front::exe_name`), or following hears only the empty title until ChatGPT restarts.
 pub fn runs_program(proc_root: &Path, pid: u32, program: &Path) -> bool {
-    std::fs::read_link(proc_root.join(pid.to_string()).join("exe")).is_ok_and(|exe| exe == program)
+    let mut replaced = program.as_os_str().to_owned();
+    replaced.push(" (deleted)");
+    std::fs::read_link(proc_root.join(pid.to_string()).join("exe")).is_ok_and(|exe| exe == program || exe == replaced)
 }
 
 /// Harness's own switch for following, off macOS, where no permission gates reading a window's title: what every
