@@ -6,6 +6,8 @@ import CreatorPage from './CreatorPage';
 import ReportsPage from '../reports/page';
 import NotificationsPage from '../notifications/page';
 import { Header } from './Header';
+import { ExploreIntro } from './ExploreIntro';
+import { HubFooter } from './HubFooter';
 import { CommunityError, emptySocial } from '@/lib/community/client';
 import { starterHarnesses } from '@/lib/community/starters';
 import type { OpenHarness } from '@/lib/community/types';
@@ -492,6 +494,11 @@ describe('community navigation', () => {
     expect(screen.getByRole('link', { name: /Cy replied to your comment on Orbit/ })).toHaveAttribute('href', '/hub/orbit-h1?comments=1');
     expect(screen.getByRole('link', { name: /Di commented on Lamp/ })).toHaveAttribute('href', '/hub/lamp-h2?comments=1');
     await waitFor(() => expect(request).toHaveBeenCalledWith('notifications/read', { method: 'POST' }));
+  });
+  it('sends a reader who wants the desktop app to the download page', () => {
+    render(<><ExploreIntro /><HubFooter /></>);
+    expect(screen.getByRole('link', { name: 'Get the Harness desktop app' })).toHaveAttribute('href', '/download');
+    expect(screen.getByRole('link', { name: 'Harness desktop app' })).toHaveAttribute('href', '/download');
   });
   it('offers the device’s own share sheet in the menu where there is one, and closes on a click outside', async () => {
     request.mockResolvedValue({ harness: null, social: emptySocial });
