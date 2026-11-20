@@ -5712,6 +5712,412 @@ describe('a machine list lands a dial that holds no agent (docs/plans/2026-11-18
   })
 })
 
+// The dial's carousel holds 16 tiles and adds a list's agents before it removes the old ones: a ring pushed over a full
+// one lost every agent the dial did not hold, and the dial sat on "Choose a pane" (Diego, 2026-11-20 17:32:40). "The
+// tick" here is an explicit sync after the fake clock moved: the session's own interval reads the clock as it is.
+describe('a ring that would overflow the dial goes in two steps (docs/plans/2026-11-20-dial-orca-pick-choose-pane-design.md)', () => {
+  type Snapshot = Awaited<ReturnType<NonNullable<CableHost['listAgentSnapshot']>>>
+  const SIXTEEN = Array.from({ length: 16 }, (_, i) => row(`f${i}`, 'ghostty'))
+  const ORCA = [row('o1', 'orca'), row('o2', 'orca')]
+  /** Two of SIXTEEN, f5 and f3, among two agents the dial does not hold: 18 with the sixteen. */
+  const MIXED = [row('n1', 'ghostty'), SIXTEEN[5], row('n2', 'ghostty'), SIXTEEN[3]]
+  const machine = (agents: CableAgent[]): Snapshot => ({ agents, tab: '', total: agents.length, view: 'machine' as const })
+  const tabOf = (agents: CableAgent[], tab: string): Snapshot => ({ agents, tab, total: agents.length })
+  const ids = (agents: CableAgent[]) => agents.map((a) => a.id)
+  /** Each agents.begin…agents.end sent from `from` on, as its agents' ids. */
+  const lists = (port: LoopbackPort, from = 0) => {
+    const out: string[][] = []
+    let list: string[] | null = null
+    for (const m of port.sent.slice(from)) {
+      if (m.t === 'agents.begin') list = []
+      else if (m.t === 'agent' && list) list.push(m.id as string)
+      else if (m.t === 'agents.end' && list) { out.push(list); list = null }
+    }
+    return out
+  }
+  const focuses = (port: LoopbackPort, from = 0) => port.sent.slice(from).filter((m) => m.t === 'focus')
+  /** The lists' ends and the focuses from `from` on, in the order they went. */
+  const order = (port: LoopbackPort, from = 0) => port.types().slice(from).filter((t) => t === 'agents.end' || t === 'focus')
+  const said = (host: CableHost) => (host.log as Mock).mock.calls.map(([line]) => line as string)
+  const splitLines = (host: CableHost) => said(host).filter((line) => line.includes('agents split'))
+
+  /** Waited for to the drawer, the attach push's last frame: the list and any focus after it have been sent. */
+  async function greet(port: LoopbackPort, hello: Record<string, unknown> = {}) {
+    port.say({ t: 'hello', product: 'harness', mac: 'aa:bb', ...hello })
+    await vi.waitFor(() => expect(port.types()).toContain('notif.replace'))
+  }
+  async function landed(snapshot: () => Snapshot) {
+    const c = await connect(makeHost({ dialShows: vi.fn(), log: vi.fn(), listAgentSnapshot: async () => snapshot() }))
+    await greet(c.port)
+    return c
+  }
+  /** Landed on SIXTEEN (its face on f0), then, a push gap later, the ring is `next`: a split's step 1 goes. */
+  async function split(next: CableAgent[]) {
+    let rows = SIXTEEN
+    const c = await landed(() => machine(rows))
+    const mark = c.port.sent.length
+    vi.advanceTimersByTime(1_100)
+    rows = next
+    await c.session.syncAgents()
+    return { ...c, mark }
+  }
+
+  it('a full dial pushed a ring it holds none of gets an empty list, then the ring and a focus on its first agent a second later', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'performance'] })
+    const { session, port, host, mark } = await split(ORCA)
+    try {
+      expect(focuses(port)).toEqual([{ t: 'focus', agentId: 'f0' }])
+      expect(lists(port, mark)).toEqual([[]])
+      expect(focuses(port, mark)).toEqual([])
+      expect((host.dialShows as Mock).mock.calls.at(-1)).toEqual([session, null, null])
+      await session.syncAgents()
+      expect(lists(port, mark)).toEqual([[]])
+      vi.advanceTimersByTime(1_000)
+      await session.syncAgents()
+      expect(lists(port, mark)).toEqual([[], ['o1', 'o2']])
+      expect(focuses(port, mark)).toEqual([{ t: 'focus', agentId: 'o1' }])
+      expect(order(port, mark)).toEqual(['agents.end', 'agents.end', 'focus'])
+      expect((host.dialShows as Mock).mock.calls.at(-1)).toEqual([session, { name: 'o1', app: 'Orca' }, 'o1'])
+    } finally { await session.stop(); vi.useRealTimers() }
+  })
+
+  it('a ring that keeps some of a full dial\'s agents sends those first, in the new order, and re-asserts the record after each step', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'performance'] })
+    let rows = SIXTEEN
+    const { session, port } = await landed(() => machine(rows))
+    try {
+      vi.advanceTimersByTime(751)
+      port.say({ t: 'focus', agentId: 'f3' })
+      await settle()
+      const mark = port.sent.length
+      vi.advanceTimersByTime(1_100)
+      rows = MIXED
+      await session.syncAgents()
+      expect(lists(port, mark)).toEqual([['f5', 'f3']])
+      vi.advanceTimersByTime(1_000)
+      await session.syncAgents()
+      expect(lists(port, mark)).toEqual([['f5', 'f3'], ['n1', 'f5', 'n2', 'f3']])
+      expect(order(port, mark)).toEqual(['agents.end', 'focus', 'agents.end', 'focus'])
+      expect(focuses(port, mark)).toEqual([{ t: 'focus', agentId: 'f3' }, { t: 'focus', agentId: 'f3' }])
+    } finally { await session.stop(); vi.useRealTimers() }
+  })
+
+  it('a forced push that splits (a pick\'s switched) holds its second step a second, its apps frame going once with the first', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'performance'] })
+    const { host, state } = appHost()
+    state.rings.ghostty = SIXTEEN
+    const { session, port } = await connect(host)
+    try {
+      await greet(port, { appFilter: 'v1' })
+      const mark = port.sent.length
+      const apps = () => port.sent.slice(mark).filter((m) => m.t === 'apps')
+      port.say({ t: 'app.pick', app: 'vscode' })
+      await vi.waitFor(() => expect(lists(port, mark)).toHaveLength(1))
+      expect(lists(port, mark)).toEqual([[]])
+      expect(apps()).toEqual([expect.objectContaining({ shown: 'vscode' })])
+      expect(port.types().slice(mark).indexOf('apps')).toBeLessThan(port.types().slice(mark).indexOf('agents.begin'))
+      await session.syncAgents(true)
+      expect(lists(port, mark)).toEqual([[]])
+      vi.advanceTimersByTime(1_000)
+      await session.syncAgents()
+      expect(lists(port, mark)).toEqual([[], ['v1', 'v2']])
+      expect(focuses(port, mark)).toEqual([{ t: 'focus', agentId: 'v1' }])
+      expect(apps()).toHaveLength(1)
+    } finally { await session.stop(); vi.useRealTimers() }
+  })
+
+  it('a window tab\'s list that splits waits the hold too, and a list naming only held agents goes at once', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'performance'] })
+    try {
+      let rows = tabOf(SIXTEEN, 't1')
+      const other = await landed(() => rows)
+      try {
+        const mark = other.port.sent.length
+        rows = tabOf(ORCA, 't2')
+        await other.session.syncAgents()
+        expect(lists(other.port, mark)).toEqual([[]])
+        vi.advanceTimersByTime(500)
+        await other.session.syncAgents()
+        expect(lists(other.port, mark)).toEqual([[]])
+        vi.advanceTimersByTime(500)
+        await other.session.syncAgents()
+        expect(lists(other.port, mark)).toEqual([[], ['o1', 'o2']])
+        // A tab never lands: the window says where the dial goes.
+        expect(focuses(other.port)).toEqual([])
+      } finally { await other.session.stop() }
+      rows = tabOf(SIXTEEN, 't1')
+      const shrunk = await landed(() => rows)
+      try {
+        const mark = shrunk.port.sent.length
+        rows = tabOf(MIXED, 't2')
+        await shrunk.session.syncAgents()
+        expect(lists(shrunk.port, mark)).toEqual([['f5', 'f3']])
+        vi.advanceTimersByTime(300)
+        rows = tabOf([SIXTEEN[5]], 't2')
+        await shrunk.session.syncAgents()
+        expect(lists(shrunk.port, mark)).toEqual([['f5', 'f3'], ['f5']])
+      } finally { await shrunk.session.stop() }
+    } finally { vi.useRealTimers() }
+  })
+
+  it('the hold lasts while the dial\'s voice is open and a second after it closes', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'performance'] })
+    const { session, port, mark } = await split(ORCA)
+    try {
+      expect(lists(port, mark)).toEqual([[]])
+      vi.advanceTimersByTime(100)
+      port.say({ t: 'voice.begin', uploadId: 'u1' })
+      await settle()
+      vi.advanceTimersByTime(2_000)
+      await session.syncAgents()
+      expect(lists(port, mark)).toEqual([[]])
+      port.say({ t: 'voice.abort', uploadId: 'u1' })
+      await settle()
+      vi.advanceTimersByTime(900)
+      await session.syncAgents()
+      expect(lists(port, mark)).toEqual([[]])
+      vi.advanceTimersByTime(200)
+      await session.syncAgents()
+      expect(lists(port, mark)).toEqual([[], ['o1', 'o2']])
+    } finally { await session.stop(); vi.useRealTimers() }
+  })
+
+  it('a port open and the dial\'s agents.list end the hold', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'performance'] })
+    try {
+      let rows = SIXTEEN
+      const ports: LoopbackPort[] = []
+      const host = makeHost({ log: vi.fn(), listAgentSnapshot: async () => machine(rows) })
+      const session = new CableSession(host, tmpLog(), async (onData, onClosed) => {
+        const next = new LoopbackPort(onData, onClosed)
+        ports.push(next)
+        return next
+      })
+      session.start()
+      try {
+        await vi.waitFor(() => expect(ports).toHaveLength(1))
+        await greet(ports[0])
+        vi.advanceTimersByTime(1_100)
+        rows = ORCA
+        await session.syncAgents()
+        expect(lists(ports[0])).toEqual([ids(SIXTEEN), []])
+        await ports[0].close('unplugged')
+        // The tick reopens a port 2 s after it last opened one: here 900 ms after the split, inside its hold.
+        vi.advanceTimersByTime(900)
+        await vi.waitFor(() => expect(ports).toHaveLength(2), NEXT_TICKS)
+        await greet(ports[1])
+        expect(lists(ports[1])).toEqual([['o1', 'o2']])
+        expect(focuses(ports[1])).toEqual([{ t: 'focus', agentId: 'o1' }])
+        expect(splitLines(host)).toHaveLength(1)
+      } finally { await session.stop() }
+      const { session: asked, port, mark } = await split(ORCA)
+      try {
+        expect(lists(port, mark)).toEqual([[]])
+        port.say({ t: 'agents.list' })
+        await vi.waitFor(() => expect(port.types().slice(mark)).toContain('notif.replace'))
+        expect(lists(port, mark)).toEqual([[], ['o1', 'o2']])
+        expect(focuses(port, mark)).toEqual([{ t: 'focus', agentId: 'o1' }])
+      } finally { await asked.stop() }
+    } finally { vi.useRealTimers() }
+  })
+
+  it('a ring that fits with the old one in sixteen goes in one step', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'performance'] })
+    const SIX = Array.from({ length: 6 }, (_, i) => row(`s${i}`, 'ghostty'))
+    let rows = SIXTEEN.slice(0, 10)
+    const { session, port, host } = await landed(() => machine(rows))
+    try {
+      const mark = port.sent.length
+      vi.advanceTimersByTime(1_100)
+      rows = SIX
+      await session.syncAgents()
+      expect(lists(port, mark)).toEqual([ids(SIX)])
+      expect(splitLines(host)).toEqual([])
+      // A ring that replaces agents does not land, as before.
+      expect(focuses(port, mark)).toEqual([])
+    } finally { await session.stop(); vi.useRealTimers() }
+  })
+
+  it('the split line is said once a split, with counts only', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'performance'] })
+    try {
+      for (const [next, line, push] of [
+        [ORCA, 'cable: agents split · 0 kept · 2 in ring', 'cable: agents → 0 of 2'],
+        [MIXED, 'cable: agents split · 2 kept · 4 in ring', 'cable: agents → 2 of 4'],
+      ] as const) {
+        const { session, host } = await split(next)
+        try {
+          // A held push, then step 2.
+          await session.syncAgents()
+          vi.advanceTimersByTime(1_000)
+          await session.syncAgents()
+          expect(splitLines(host)).toEqual([line])
+          expect(said(host)[said(host).indexOf(line) + 1]).toBe(push)
+        } finally { await session.stop() }
+      }
+    } finally { vi.useRealTimers() }
+  })
+
+  it('a tab of more than sixteen agents after an empty dial goes in one push, and over a full dial in two, never three', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'performance'] })
+    const TWENTY = Array.from({ length: 20 }, (_, i) => row(`t${i}`, 'ghostty'))
+    try {
+      let rows = tabOf([], 't1')
+      const empty = await landed(() => rows)
+      try {
+        const mark = empty.port.sent.length
+        rows = tabOf(TWENTY, 't1')
+        await empty.session.syncAgents()
+        expect(lists(empty.port, mark)).toEqual([ids(TWENTY)])
+        expect(splitLines(empty.host)).toEqual([])
+      } finally { await empty.session.stop() }
+      rows = tabOf(SIXTEEN, 't1')
+      const full = await landed(() => rows)
+      try {
+        const mark = full.port.sent.length
+        rows = tabOf(TWENTY, 't1')
+        await full.session.syncAgents()
+        vi.advanceTimersByTime(1_000)
+        await full.session.syncAgents()
+        expect(lists(full.port, mark)).toEqual([[], ids(TWENTY)])
+        for (let i = 0; i < 2; i++) {
+          vi.advanceTimersByTime(1_000)
+          await full.session.syncAgents()
+        }
+        expect(lists(full.port, mark)).toEqual([[], ids(TWENTY)])
+      } finally { await full.session.stop() }
+    } finally { vi.useRealTimers() }
+  })
+
+  it('only the first sixteen rows of a list count, the ring\'s and the dial\'s: a tab that grows in front splits, one that loses a row past them does not', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'performance'] })
+    try {
+      // The dial keeps n1 and f0…f14 of the grown tab: f15 goes in step 1, so n1 then has a place.
+      const GROWN = [row('n1', 'ghostty'), ...SIXTEEN]
+      let rows = tabOf(SIXTEEN, 't1')
+      const grown = await landed(() => rows)
+      try {
+        const mark = grown.port.sent.length
+        rows = tabOf(GROWN, 't1')
+        await grown.session.syncAgents()
+        expect(lists(grown.port, mark)).toEqual([ids(SIXTEEN.slice(0, 15))])
+        expect(splitLines(grown.host)).toEqual(['cable: agents split · 15 kept · 17 in ring'])
+        vi.advanceTimersByTime(1_000)
+        await grown.session.syncAgents()
+        expect(lists(grown.port, mark)).toEqual([ids(SIXTEEN.slice(0, 15)), ids(GROWN)])
+      } finally { await grown.session.stop() }
+      // The dial holds t0…t15 of twenty; t17 was never a tile.
+      const TWENTY = Array.from({ length: 20 }, (_, i) => row(`t${i}`, 'ghostty'))
+      const SHORTER = TWENTY.filter((a) => a.id !== 't17')
+      rows = tabOf(TWENTY, 't1')
+      const shorter = await landed(() => rows)
+      try {
+        const mark = shorter.port.sent.length
+        rows = tabOf(SHORTER, 't1')
+        await shorter.session.syncAgents()
+        expect(lists(shorter.port, mark)).toEqual([ids(SHORTER)])
+        expect(splitLines(shorter.host)).toEqual([])
+      } finally { await shorter.session.stop() }
+    } finally { vi.useRealTimers() }
+  })
+
+  it('back on the window\'s tab from a full app ring, the record moves to the window\'s agent and no focus names the agent left on the tab', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'performance'] })
+    const { host, state } = appHost()
+    state.window = true
+    // The app's ring grows to sixteen while shown, so nothing lands the dial on it: the record keeps a1, where a hand
+    // left the dial on the tab.
+    state.rings.ghostty = SIXTEEN.slice(0, 3)
+    const { session, port } = await connect(host)
+    try {
+      await greet(port, { appFilter: 'v1' })
+      port.say({ t: 'focus', agentId: 'a1' })
+      await vi.waitFor(() => expect(host.focus).toHaveBeenCalledWith('a1'))
+      state.appView = true
+      await session.viewChanged()
+      vi.advanceTimersByTime(1_100)
+      state.rings.ghostty = SIXTEEN
+      await session.syncAgents()
+      expect(lists(port).at(-1)).toEqual(ids(SIXTEEN))
+      const mark = port.sent.length
+      state.focus = { machineId: 'mac-local', agentId: 'a2' }
+      state.appView = false
+      await session.viewChanged()
+      vi.advanceTimersByTime(1_000)
+      await session.syncAgents()
+      expect(lists(port, mark)).toEqual([[], ['a1', 'a2']])
+      expect(focuses(port, mark).length).toBeGreaterThan(0)
+      expect(focuses(port, mark).every((m) => m.agentId === 'a2')).toBe(true)
+    } finally { await session.stop(); vi.useRealTimers() }
+  })
+
+  it('a follow in flight during the hold lands nothing first: its own focus, then the re-assert after the ring', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'performance'] })
+    const { session, port, mark } = await split(ORCA)
+    try {
+      await session.followApp('', 'o2')
+      // Its list push is held; its focus goes with no list before it, and the firmware keeps it for the tile to come.
+      expect(lists(port, mark)).toEqual([[]])
+      expect(order(port, mark)).toEqual(['agents.end', 'focus'])
+      vi.advanceTimersByTime(1_000)
+      await session.syncAgents()
+      expect(lists(port, mark)).toEqual([[], ['o1', 'o2']])
+      expect(order(port, mark)).toEqual(['agents.end', 'focus', 'agents.end', 'focus'])
+      expect(focuses(port, mark)).toEqual([{ t: 'focus', agentId: 'o2' }, { t: 'focus', agentId: 'o2' }])
+    } finally { await session.stop(); vi.useRealTimers() }
+  })
+
+  it('a second split inside the hold sends its first step at once and holds a second from it', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'performance'] })
+    let rows = SIXTEEN
+    const { session, port, host } = await landed(() => machine(rows))
+    try {
+      vi.advanceTimersByTime(751)
+      port.say({ t: 'focus', agentId: 'f3' })
+      await settle()
+      const mark = port.sent.length
+      vi.advanceTimersByTime(1_100)
+      rows = MIXED
+      await session.syncAgents()
+      expect(lists(port, mark)).toEqual([['f5', 'f3']])
+      vi.advanceTimersByTime(400)
+      // f3 and fifteen others: 17 with f5 and f3.
+      const NEXT = [SIXTEEN[3], ...Array.from({ length: 15 }, (_, i) => row(`m${i + 1}`, 'ghostty'))]
+      rows = NEXT
+      await session.syncAgents(true)
+      expect(lists(port, mark)).toEqual([['f5', 'f3'], ['f3']])
+      expect(splitLines(host).at(-1)).toBe('cable: agents split · 1 kept · 16 in ring')
+      // 1 200 ms after the first split, 800 after the second.
+      vi.advanceTimersByTime(800)
+      await session.syncAgents()
+      expect(lists(port, mark)).toHaveLength(2)
+      vi.advanceTimersByTime(200)
+      await session.syncAgents()
+      expect(lists(port, mark)).toEqual([['f5', 'f3'], ['f3'], ids(NEXT)])
+    } finally { await session.stop(); vi.useRealTimers() }
+  })
+
+  it('a voice that opens after the hold ended holds nothing', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'performance'] })
+    let rows = SIXTEEN
+    const { session, port } = await landed(() => machine(rows))
+    try {
+      vi.advanceTimersByTime(1_100)
+      rows = ORCA
+      await session.syncAgents()
+      vi.advanceTimersByTime(5_000)
+      port.say({ t: 'voice.begin', uploadId: 'u2' })
+      await settle()
+      await session.syncAgents()
+      expect(lists(port).at(-1)).toEqual(['o1', 'o2'])
+      vi.advanceTimersByTime(1_100)
+      rows = [...ORCA, row('o3', 'orca')]
+      await session.syncAgents()
+      expect(lists(port).at(-1)).toEqual(['o1', 'o2', 'o3'])
+    } finally { await session.stop(); vi.useRealTimers() }
+  })
+})
+
 describe('the app filter', () => {
   const LIST = new Set(['apps', 'agents.begin', 'agent', 'agents.end'])
   const listFrames = (port: LoopbackPort) => port.sent.filter((m) => LIST.has(m.t as string))
