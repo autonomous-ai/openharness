@@ -1097,27 +1097,27 @@ describe('the dial that shows one app at a time', () => {
     expect(all).not.toHaveProperty('apps')
   })
 
-  it('the app list: fixed order, display names, count and waiting', async () => {
-    const agents = [agent('g1', 'ghostty'), agent('v1', 'vscode', { state: 'needs-you' }), agent('g2', 'ghostty'), agent('v2', 'vscode'), agent('g3', 'ghostty')]
+  it('the app list: fixed order, display names, count, waiting and working', async () => {
+    const agents = [agent('g1', 'ghostty', { state: 'working' }), agent('v1', 'vscode', { state: 'needs-you' }), agent('g2', 'ghostty'), agent('v2', 'vscode'), agent('g3', 'ghostty')]
     const host = setup(agents)
     expect((await host.listAgentSnapshot({ apps: true })).apps?.apps).toEqual([
-      { id: 'ghostty', name: 'Ghostty', count: 3, waiting: 0 },
-      { id: 'vscode', name: 'VS Code', count: 2, waiting: 1 },
+      { id: 'ghostty', name: 'Ghostty', count: 3, waiting: 0, working: 1 },
+      { id: 'vscode', name: 'VS Code', count: 2, waiting: 1, working: 0 },
     ])
     // Listed first now, and still after the apps the dial already holds: the picker never reorders under the finger.
     agents.unshift(agent('c1', 'cursor'), agent('v3', 'vscode', { state: 'needs-you' }))
     expect((await host.listAgentSnapshot({ apps: true })).apps?.apps).toEqual([
-      { id: 'ghostty', name: 'Ghostty', count: 3, waiting: 0 },
-      { id: 'vscode', name: 'VS Code', count: 3, waiting: 2 },
-      { id: 'cursor', name: 'Cursor', count: 1, waiting: 0 },
+      { id: 'ghostty', name: 'Ghostty', count: 3, waiting: 0, working: 1 },
+      { id: 'vscode', name: 'VS Code', count: 3, waiting: 2, working: 0 },
+      { id: 'cursor', name: 'Cursor', count: 1, waiting: 0, working: 0 },
     ])
   })
 
   it('the unknown app is named Other and Apple\'s Terminal is named Terminal', async () => {
     const host = setup([agent('t1', 'terminal'), agent('a1', 'terminal-app'), agent('a2', 'terminal-app')])
     expect((await host.listAgentSnapshot({ apps: true })).apps).toEqual({ shown: 'terminal-app', apps: [
-      { id: 'terminal', name: 'Other', count: 1, waiting: 0 },
-      { id: 'terminal-app', name: 'Terminal', count: 2, waiting: 0 },
+      { id: 'terminal', name: 'Other', count: 1, waiting: 0, working: 0 },
+      { id: 'terminal-app', name: 'Terminal', count: 2, waiting: 0, working: 0 },
     ] })
   })
 
@@ -1135,7 +1135,7 @@ describe('the dial that shows one app at a time', () => {
     // The 16th row gave the shown app its place, and the first 15 did not move.
     expect(appIds(next)).toEqual([...APP_IDS.slice(0, 15), last])
     expect(next.apps?.shown).toBe(last)
-    expect(next.apps?.apps.at(-1)).toEqual({ id: 'terminal', name: 'Other', count: 1, waiting: 0 })
+    expect(next.apps?.apps.at(-1)).toEqual({ id: 'terminal', name: 'Other', count: 1, waiting: 0, working: 0 })
     // The bound is the frame's, not the ring's.
     expect(ids(next)).toEqual(['a-terminal'])
     expect(next.total).toBe(1)
@@ -1209,7 +1209,7 @@ describe('the dial that shows one app at a time', () => {
       settle('orca')
       host.setRank('orca', new Map([['o3', 0], ['o1', 1], ['o2', 2]]))
       const before = (await host.listAgentSnapshot({ apps: true })).apps?.apps
-      expect(before).toContainEqual({ id: 'orca', name: 'Orca', count: 3, waiting: 0 })
+      expect(before).toContainEqual({ id: 'orca', name: 'Orca', count: 3, waiting: 0, working: 0 })
       host.setScope('orca', without('o2'))
       const scoped = await host.listAgentSnapshot({ apps: true })
       expect(ids(scoped)).toEqual(['o3', 'o1'])
@@ -1523,8 +1523,8 @@ describe('the dial that shows one app at a time', () => {
     onTab(host, ['h2'])
     const h2 = { id: 'h2', name: 'h2', engine: 'codex', machineId: 'mine', machine: 'MacbookPro.local' }
     expect(await host.listAgentSnapshot({ apps: true })).toStrictEqual({ tab: 't1', total: 2, agents: [h2], apps: { shown: 'harness', apps: [
-      { id: 'ghostty', name: 'Ghostty', count: 3, waiting: 0 },
-      { id: 'vscode', name: 'VS Code', count: 2, waiting: 0 },
+      { id: 'ghostty', name: 'Ghostty', count: 3, waiting: 0, working: 0 },
+      { id: 'vscode', name: 'VS Code', count: 2, waiting: 0, working: 0 },
     ] } })
     expect(await host.listAgentSnapshot()).toStrictEqual({ tab: 't1', total: 2, agents: [h2] })
     expect(host.pickApp('harness')).toBe('ignored')
@@ -1543,18 +1543,21 @@ describe('the dial that shows one app at a time', () => {
     // The agents of the app the filter shows end: asking the filter would switch it.
     agents.splice(0, agents.length, ...agents.filter((a) => a.app !== 'ghostty'))
     expect((await host.listAgentSnapshot({ apps: true })).apps).toStrictEqual({ shown: 'harness', apps: [
-      { id: 'vscode', name: 'VS Code', count: 2, waiting: 0 },
+      { id: 'vscode', name: 'VS Code', count: 2, waiting: 0, working: 0 },
     ] })
     expect(appSwitched).not.toHaveBeenCalled()
     expect(host.holdsTab()).toBe(true)
   })
 
-  it('the tab\'s apps count the agents that need the person', async () => {
+  it('the tab\'s apps count the agents that need the person and those mid-turn', async () => {
     const agents = five()
+    agents[1] = agent('g2', 'ghostty', { state: 'working' })
     agents[4] = agent('v2', 'vscode', { state: 'needs-you' })
     const host = setup(agents, { sessions })
     onTab(host, ['h1'])
-    expect((await host.listAgentSnapshot({ apps: true })).apps?.apps).toContainEqual({ id: 'vscode', name: 'VS Code', count: 2, waiting: 1 })
+    const rows = (await host.listAgentSnapshot({ apps: true })).apps?.apps
+    expect(rows).toContainEqual({ id: 'ghostty', name: 'Ghostty', count: 3, waiting: 0, working: 1 })
+    expect(rows).toContainEqual({ id: 'vscode', name: 'VS Code', count: 2, waiting: 1, working: 0 })
   })
 
   it('no other app, or no registry: an empty list, shown harness', async () => {
@@ -1671,8 +1674,8 @@ describe('the dial that shows one app at a time', () => {
     expect(snapshot).toMatchObject({ total: 2, apps: { shown: 'ghostty' } })
     expect(ids(snapshot)).toEqual(['g1', 'g2'])
     expect(snapshot.apps?.apps).toEqual([
-      { id: 'terminal', name: 'Other', count: 5, waiting: 0 },
-      { id: 'ghostty', name: 'Ghostty', count: 2, waiting: 0 },
+      { id: 'terminal', name: 'Other', count: 5, waiting: 0, working: 0 },
+      { id: 'ghostty', name: 'Ghostty', count: 2, waiting: 0, working: 0 },
     ])
   })
 

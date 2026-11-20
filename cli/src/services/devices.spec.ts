@@ -8929,7 +8929,7 @@ describe("opencode's sessions, over its local server (docs/plans/2026-11-17-dial
     await live()
     expect(await listed()).toEqual([{ id: expect.any(String), name: 'Fix the login test', caps: 'sv' }])
     expect((await host().listAgentSnapshot()).agents).toEqual([expect.objectContaining({ engine: 'opencode', host: 'opencode' })])
-    expect((await host().listAgentSnapshot({ apps: true })).apps?.apps).toContainEqual({ id: 'opencode', name: 'opencode', count: 1, waiting: 0 })
+    expect((await host().listAgentSnapshot({ apps: true })).apps?.apps).toContainEqual({ id: 'opencode', name: 'opencode', count: 1, waiting: 0, working: 0 })
     expect(logs).toContain('[opencode] listed · 1 sessions')
     seen.host.watching!(false)
     expect(oc.streams.map(({ closed }) => closed)).toEqual([true])
