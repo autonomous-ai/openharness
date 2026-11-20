@@ -17,6 +17,8 @@ interface Button {
   label: string
   action: Action
   primary?: boolean
+  // Takes the focus in place of the primary one.
+  focused?: boolean
 }
 
 interface Face {
@@ -54,7 +56,11 @@ const FACES: Partial<Record<`${Screen}.${Phase}`, Face>> = {
         "Your dial moves to the thread you open in ChatGPT. Harness reads only the ChatGPT window's title, while ChatGPT is in front.",
       ],
     },
-    buttons: [{ label: 'Not now', action: 'later' }, { label: 'Allow', action: 'allow', primary: true }],
+    // It opens by itself as the person switches to ChatGPT: a Return typed for ChatGPT must not press Allow.
+    buttons: [
+      { label: 'Not now', action: 'later', focused: true },
+      { label: 'Allow', action: 'allow', primary: true },
+    ],
   },
 }
 
@@ -120,20 +126,26 @@ export function render(root: HTMLElement, view: View | null, act: (action: Actio
   text.forEach((node, i) => (node.id = `body-${i}`))
   screen.append(content)
 
+  // Return takes the primary answer, as a dialog's default button does, unless another button takes the focus. A screen
+  // without either focuses nothing: the window can come up while the person types elsewhere, and Return must not press
+  // Cancel.
+  const focus = face.buttons.find((button) => button.focused) ?? face.buttons.find((button) => button.primary)
+  let focused: HTMLButtonElement | undefined
   if (face.buttons.length > 0) {
     const row = element('div', 'buttons')
-    for (const { label, action, primary } of face.buttons) {
-      const button = element('button', primary ? 'button primary' : 'button', label) as HTMLButtonElement
+    for (const each of face.buttons) {
+      const button = element('button', each.primary ? 'button primary' : 'button', each.label) as HTMLButtonElement
       button.type = 'button'
-      if (primary && text.length > 0) button.setAttribute('aria-describedby', text.map((node) => node.id).join(' '))
-      button.addEventListener('click', () => act(action))
+      if (each === focus) {
+        focused = button
+        if (text.length > 0) button.setAttribute('aria-describedby', text.map((node) => node.id).join(' '))
+      }
+      button.addEventListener('click', () => act(each.action))
       row.append(button)
     }
     screen.append(row)
   }
 
   root.append(screen)
-  // Return takes the primary answer, as a dialog's default button does. A screen without one focuses nothing: the
-  // window can come up while the person types elsewhere, and Return must not press Cancel.
-  root.querySelector<HTMLElement>('.primary')?.focus()
+  focused?.focus()
 }

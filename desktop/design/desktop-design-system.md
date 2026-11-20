@@ -768,6 +768,10 @@ theme: the app runs from macOS 13, older than WebKit's `color-mix()`.
 - Geometry: dialog content inset 24; group / control gap 16 / 8; buttons are
   capsules, 32 high at least, trailing: secondary first, primary last, as the
   desktop's dialogs. The spinner stands still under Reduce Motion.
+- Focus: Return takes the primary button, as a dialog's default. Follow ChatGPT
+  focuses `Not now`, `Allow` still primary: it opens by itself as the person
+  switches to ChatGPT, where a Return they type must not allow. A screen with
+  only `Cancel` focuses nothing.
 - The menu-bar icon is the Pixel H drawn 8x8 pixels, a template image 18 points
   square (`device-app/src-tauri/icons/tray.png`): black on a light bar, white on
   a dark one. The app icon is the Pixel H, a black H of 7x7 square pixels on the
