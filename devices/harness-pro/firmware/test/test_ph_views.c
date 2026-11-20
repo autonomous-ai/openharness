@@ -52,6 +52,44 @@ static void check_baked(void)
 static int dot_runs(void) { int n = 0; for (int i = 0; i < S.count; i++) n += S.runs[i].pro_kind == K_RECT_AA && (S.runs[i].w == 12 || S.runs[i].w == 11 || S.runs[i].w == 32) && S.runs[i].pro_height <= 12 && S.runs[i].y >= 660; return n; }
 static bool centred_run(const ht_run_t *r) { return r && r->x + r->w / 2 >= 360 - 2 && r->x + r->w / 2 <= 360 + 2; }
 
+// Home's Tabs | Apps pill: how many runs sit at (x, y, w, h) with this radius and colour.
+static int aa_at(int x, int y, int w, int h, int r, unsigned rgb)
+{
+    int n = 0;
+    for (int i = 0; i < S.count; i++) {
+        const ht_run_t *u = &S.runs[i];
+        n += u->pro_kind == K_RECT_AA && u->x == x && u->y == y && u->w == w && u->pro_height == h && u->radius == r && u->fg == ht_rgb(rgb);
+    }
+    return n;
+}
+// The pill's label `t` in ph_sb_22 and `rgb`, centred on x cx within 2 px.
+static bool pill_label(const char *t, int cx, unsigned rgb)
+{
+    const ht_run_t *r = text_run(t);
+    if (!r || r->pro_font != &ph_sb_22 || r->fg != ht_rgb(rgb)) return false;
+    const int mid = r->x + ht_pro_width(&ph_sb_22, t) / 2;
+    return mid >= cx - 2 && mid <= cx + 2;
+}
+static bool pill_hit(pod_action_t a, int x)
+{
+    const pod_hit_t *h = nth_hit(a, 0);
+    return hits_of(a) == 1 && h->x == x && h->y == 624 && h->w == 180 && h->h == 96 && h->arg == 0 && !h->id[0];
+}
+// The pill's five runs and two hits, the filled cell on Apps when `apps`, else on Tabs.
+static void check_pill(bool apps)
+{
+    CHECK(aa_at(234, 640, 252, 46, 23, PH_BORDER) == 1 && aa_at(236, 642, 248, 42, 21, PH_GROUND) == 1);
+    CHECK(aa_at(apps ? 360 : 238, 644, 122, 38, 19, PH_TRACK) == 1 && aa_at(apps ? 238 : 360, 644, 122, 38, 19, PH_TRACK) == 0);
+    CHECK(pill_label("Tabs", 299, apps ? PH_MUTED : PH_INK) && pill_label("Apps", 421, apps ? PH_INK : PH_MUTED));
+    CHECK(pill_hit(POD_A_HOME_TABS, 180) && pill_hit(POD_A_HOME_APPS, 360));
+    CHECK(ph_runs(&F) <= HT_RUNS);
+}
+static void check_no_pill(void)
+{
+    CHECK(aa_at(234, 640, 252, 46, 23, PH_BORDER) == 0 && !text_run("Tabs") && !text_run("Apps"));
+    CHECK(hits_of(POD_A_HOME_TABS) == 0 && hits_of(POD_A_HOME_APPS) == 0 && ph_runs(&F) <= HT_RUNS);
+}
+
 int main(void) {
     {   // Home's equaliser: four 8 px bars 5 px apart, anchored at the bottom of a 36 px box, 40..100 % tall, moving with the clock
         int hmin = 99, hmax = 0;
@@ -1282,6 +1320,96 @@ int main(void) {
         CHECK(pod_home_working(&M) == 0 && !pod_home_has(&N, &M, POD_HOME_WORKING) && pod_tabs_pages_of(&N, &M) == 1);
         fresh(); ph_view_home(&F, &N, &M, now);
         CHECK(!text_run("Working") && text_run("Solo") && hits_of(POD_A_FOLLOW) == 0);
+    }
+
+    // ---- Home's Tabs | Apps pill: drawn under every Home page while another app has agents, its filled cell on the list Home shows ----
+    {
+        static pod_model_t M;
+        static pod_nav_t N;
+        const uint32_t now = 100000u;
+        pod_model_reset(&M);
+        pod_model_agents_begin(&M);
+        static const char *const aid[3] = {"p1", "p2", "p3"};
+        for (int i = 0; i < 3; i++) pod_model_agent(&M, aid[i], aid[i], "claude", "Mac");
+        pod_model_agents_end(&M);
+        cable_swarm_t sw[2];
+        memset(sw, 0, sizeof sw);
+        static const char *const l0[] = {"p1", "p2"}, *const l1[] = {"p3"};
+        const char *const *ls[2] = {l0, l1};
+        uint8_t cn[2] = {2, 1};
+        for (int i = 0; i < 2; i++) { snprintf(sw[i].id, SWARM_ID_MAX, "s%d", i); snprintf(sw[i].name, CABLE_NAME_MAX, "Tab%d", i); sw[i].panes = sw[i].agents = cn[i]; }
+        pod_model_swarms(&M, sw, ls, cn, 2, "s0", NULL, 0);
+        pod_model_link(&M, true);
+        pod_model_clock(&M, now);
+        pod_model_apps_switch(&M, true);
+        static const pod_app_t harness_only[1] = {{"harness", "Harness", 4, 1, 1}};
+        static const pod_app_t apps[3] = {{"harness", "Harness", 4, 1, 1}, {"codex", "ChatGPT", 2, 0, 1}, {"vscode", "VS Code", 3, 1, 0}};
+        pod_nav_init(&N);
+        // The same model with apps.switch off: what Home draws without the pill.
+        int base, base_hits;
+#define BASE() do { pod_model_apps_switch(&M, false); fresh(); ph_view_home(&F, &N, &M, now); base = S.count; base_hits = F.hit_count; pod_model_apps_switch(&M, true); } while (0)
+
+        // only Harness has agents: no other app, no pill
+        pod_model_apps(&M, harness_only, 1, "harness");
+        BASE();
+        fresh(); ph_view_home(&F, &N, &M, now);
+        CHECK(S.count == base && F.hit_count == base_hits);
+        check_no_pill();
+
+        // another app, on tab 0: the pill, Tabs filled
+        pod_model_apps(&M, apps, 3, "harness");
+        BASE();
+        fresh(); ph_view_home(&F, &N, &M, now);
+        CHECK(S.count == base + 5 && F.hit_count == base_hits + 2 && text_run("Tab0"));
+        check_pill(false);
+
+        // Apps chosen: the filled cell moves under "Apps"
+        pod_nav_act(&N, &M, POD_A_HOME_APPS, 0, now);
+        CHECK(N.home_apps);
+        fresh(); ph_view_home(&F, &N, &M, now);
+        check_pill(true);
+        pod_nav_act(&N, &M, POD_A_HOME_TABS, 0, now);
+        CHECK(!N.home_apps);
+
+        // the Notices card (p3 asks) and the Working card (p1 works) carry it too
+        pod_model_turn(&M, "p1", "started", NULL, 0, now);
+        pod_model_question(&M, "p3", "ok?");
+        const int pages[2] = {POD_HOME_NOTICES, POD_HOME_WORKING};
+        for (int k = 0; k < 2; k++) {
+            N.stack[0].scroll = pages[k];
+            BASE();
+            fresh(); ph_view_home(&F, &N, &M, now);
+            CHECK(S.count == base + 5 && F.hit_count == base_hits + 2);
+            CHECK(text_run(k ? "Working" : "Notices"));
+            check_pill(false);
+        }
+        pod_model_question_close(&M, "p3");
+        pod_model_turn(&M, "p3", "done", NULL, 0, now);
+        pod_model_turn(&M, "p1", "done", NULL, 0, now);
+
+        // over the wordmark: nobody works or asks and the window's one tab holds no agent (no tab kept, still a window)
+        cable_swarm_t empty[1];
+        memset(empty, 0, sizeof empty);
+        snprintf(empty[0].id, SWARM_ID_MAX, "e");
+        uint8_t zero[1] = {0};
+        pod_model_swarms(&M, empty, NULL, zero, 1, "e", NULL, 0);
+        pod_model_apps(&M, apps + 1, 1, "harness");   // codex alone
+        CHECK(M.tab_count == 0 && M.has_window && pod_home_switch(&M));
+        N.stack[0].scroll = 0;
+        BASE();
+        fresh(); ph_view_home(&F, &N, &M, now);
+        CHECK(S.background == ht_rgb(0x0E1B2C) && S.count == base + 5 && F.hit_count == base_hits + 2);
+        check_pill(false);
+
+        // no window: Home lists the apps itself, no pill
+        pod_model_apps(&M, apps, 3, "harness");
+        pod_model_swarms(&M, NULL, NULL, NULL, 0, "", NULL, 0);
+        pod_model_view(&M, true, false);
+        CHECK(!M.has_window);
+        pod_nav_sync(&N, &M);
+        fresh(); ph_view_home(&F, &N, &M, now);
+        check_no_pill();
+#undef BASE
     }
     printf("test_ph_views: %d checks ok\n", checks);
     return 0;
