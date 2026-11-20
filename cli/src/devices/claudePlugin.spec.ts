@@ -7,7 +7,7 @@ import * as childProcess from 'node:child_process'
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { delimiter, dirname, join } from 'node:path'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import * as engineBin from '../lib/engineBin.js'
 import {
   claudeDisable, claudeEnable, claudeFound, claudeHomeDisable, claudeHomeEnable, claudeRun, claudeRunIn, claudeSetUp, claudeStatus,
@@ -573,6 +573,17 @@ describe('claudeRun', () => {
     vi.spyOn(childProcess, 'execFile').mockImplementation((() => ({ stdin: { end: () => {} }, kill })) as never)
     expect(await claudeRunner('/nowhere/claude', {}, 'darwin')(['--version'], 200)).toEqual({ code: null, stdout: '', stderr: '' })
     expect(kill).toHaveBeenCalledWith('SIGKILL')
+  })
+
+  // execFile throws rather than emits for a start the system refuses at once (ENOTDIR, EINVAL): its time must not be
+  // left to fire on a child that never was, which would throw in a timer and end the process (on Windows, the core's).
+  it('a start that throws is no answer, and leaves no time running', async () => {
+    vi.useFakeTimers()
+    onTestFinished(() => { vi.useRealTimers() })
+    vi.spyOn(childProcess, 'execFile').mockImplementation((() => { throw Object.assign(new Error('spawn ENOTDIR'), { code: 'ENOTDIR' }) }) as never)
+    const ran = claudeRunner('/nowhere/claude', {}, 'darwin')(['--version'], 200)
+    expect(() => vi.advanceTimersByTime(200)).not.toThrow()
+    expect(await ran).toEqual({ code: null, stdout: '', stderr: '' })
   })
 
   it('is null when no claude is found', () => {
