@@ -7,7 +7,7 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { CableDecoder, CableType, encodeCableFrame } from './cableFrame.js'
 import { CableSession, type CableHost, type CablePort } from './cableSession.js'
-import { parseCableTcp, tcpOpener, tcpPortPath, type CableTcpAddress } from './cableTcp.js'
+import { cableTcpPermissions, parseCableTcp, tcpOpener, tcpPortPath, type CableTcpAddress } from './cableTcp.js'
 import { DialLog } from './dialLog.js'
 import { SerialLink } from './serial.js'
 
@@ -32,6 +32,14 @@ describe('HARNESS_CABLE_TCP', () => {
   it('is named as a port path the logs and the fleet read', () => {
     expect(tcpPortPath({ host: '127.0.0.1', port: 7000 })).toBe('tcp:127.0.0.1:7000')
     expect(tcpPortPath({ host: '::1', port: 7002 })).toBe('tcp:[::1]:7002')
+  })
+})
+
+// TEMP (owner, 20 Nov): dev-only, remove before merging to main.
+describe('HARNESS_CABLE_TCP_PERMISSIONS', () => {
+  it('lets a device over TCP answer permission prompts only when it is exactly 1', () => {
+    expect(cableTcpPermissions('1')).toBe(true)
+    for (const value of [undefined, '', '0', 'true', 'yes', ' 1', '1 ', '01']) expect(cableTcpPermissions(value)).toBe(false)
   })
 })
 

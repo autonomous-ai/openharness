@@ -40,6 +40,15 @@ export function parseCableTcp(value: string | undefined): { addresses: CableTcpA
   return { addresses, rejected }
 }
 
+/**
+ * TEMP (owner, 20 Nov): dev-only, remove before merging to main.
+ * `HARNESS_CABLE_TCP_PERMISSIONS`: exactly `1` lets the devices over TCP answer permission prompts too, to try a bar's
+ * approve on the desk's network. Nothing proves who listens at the address, so anyone who reaches it could approve.
+ */
+export function cableTcpPermissions(value: string | undefined): boolean {
+  return value === '1'
+}
+
 /** The device's name as a port path, in the logs and as the fleet's key: no USB port is named `tcp:`. */
 export function tcpPortPath(address: CableTcpAddress): string {
   return `tcp:${address.host.includes(':') ? `[${address.host}]` : address.host}:${address.port}`

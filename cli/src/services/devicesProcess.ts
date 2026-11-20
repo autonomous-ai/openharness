@@ -215,6 +215,7 @@ export function runDevicesService(options: DevicesServiceOptions): ServiceProces
     testDialPort: processEnv.HARNESSD_TEST_DIAL_PORT,
     cableDisabled: env.CABLE_DISABLE,
     cableTcp: processEnv.HARNESS_CABLE_TCP,
+    cableTcpPermissions: processEnv.HARNESS_CABLE_TCP_PERMISSIONS,   // TEMP (owner, 20 Nov): dev-only, remove before merging to main
     faults: faultsOf(processEnv.HARNESSD_TEST_FAULTS),
     refresh,
     onCoreGone: (run) => { coreGone = run },

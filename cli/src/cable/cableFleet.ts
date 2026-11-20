@@ -42,6 +42,9 @@ export interface CableFleetOptions {
   /** Devices over TCP (`HARNESS_CABLE_TCP`, development alone; cableTcp.ts), each dialed beside the USB dials. Nothing
    *  proves who listens at an address, so their sessions answer no permission prompt. */
   tcp?: CableTcpAddress[]
+  /** TEMP (owner, 20 Nov): dev-only, remove before merging to main. `HARNESS_CABLE_TCP_PERMISSIONS=1`: the devices over
+   *  TCP answer permission prompts too (cableTcp.ts `cableTcpPermissions`). */
+  tcpPermissions?: boolean
   /** How a device over TCP is connected: `SerialLink.connect` unless a test gives its own. */
   connectTcp?: TcpOpenerOptions['connect']
 }
@@ -323,7 +326,8 @@ export class CableFleet {
       }
       return opened
     }
-    entry.session = tcp ? new this.Session(host, new this.Log(join(this.logs, logFolder(id))), opener, { allowPermissions: false })
+    // TEMP (owner, 20 Nov): dev-only, remove before merging to main: `tcpPermissions` (was always false).
+    entry.session = tcp ? new this.Session(host, new this.Log(join(this.logs, logFolder(id))), opener, { allowPermissions: this.options.tcpPermissions === true })
       : new this.Session(host, new this.Log(join(this.logs, logFolder(id))), opener)
     this.entries.set(id, entry)
     entry.session.start()

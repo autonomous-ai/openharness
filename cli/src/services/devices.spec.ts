@@ -446,7 +446,7 @@ afterEach(() => {
   vi.unstubAllEnvs()
 })
 
-function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolean; cableTcp?: string; testDialPort?: string; readUsage?: DevicesDeps['readUsage']; now?: () => number; decideTier?: DevicesDeps['decideTier'] | null; refresh?: DevicesDeps['refresh']; orca?: DevicesDeps['orca']; orcaReads?: DevicesDeps['orcaReads']; codex?: DevicesDeps['codex']; herdr?: DevicesDeps['herdr']; hc?: DevicesDeps['hc']; cmux?: DevicesDeps['cmux'] | null; opencode?: DevicesDeps['opencode']; listen?: DevicesDeps['listen']; tty?: DevicesDeps['tty']; claude?: DevicesDeps['claude'] | null; orcaHomes?: ReturnType<typeof fakeOrcaHomes> | null; vscodeExtension?: DevicesDeps['vscodeExtension'] | null; cursorExtension?: DevicesDeps['cursorExtension'] | null; claudeFullscreen?: null; claudeManagedSettings?: string } = {}) {
+function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolean; cableTcp?: string; cableTcpPermissions?: string; testDialPort?: string; readUsage?: DevicesDeps['readUsage']; now?: () => number; decideTier?: DevicesDeps['decideTier'] | null; refresh?: DevicesDeps['refresh']; orca?: DevicesDeps['orca']; orcaReads?: DevicesDeps['orcaReads']; codex?: DevicesDeps['codex']; herdr?: DevicesDeps['herdr']; hc?: DevicesDeps['hc']; cmux?: DevicesDeps['cmux'] | null; opencode?: DevicesDeps['opencode']; listen?: DevicesDeps['listen']; tty?: DevicesDeps['tty']; claude?: DevicesDeps['claude'] | null; orcaHomes?: ReturnType<typeof fakeOrcaHomes> | null; vscodeExtension?: DevicesDeps['vscodeExtension'] | null; cursorExtension?: DevicesDeps['cursorExtension'] | null; claudeFullscreen?: null; claudeManagedSettings?: string } = {}) {
   const core = over.core ?? fakeCore({ dataDir })
   // None, and no read under way, unless the spec gives its own; null leaves the devices to read this computer's.
   const orcaHomes = over.orcaHomes ?? fakeOrcaHomes()
@@ -460,6 +460,7 @@ function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolea
     testDialPort: over.testDialPort,
     cableDisabled: over.cableDisabled,
     cableTcp: over.cableTcp,
+    cableTcpPermissions: over.cableTcpPermissions,   // TEMP (owner, 20 Nov): dev-only, remove before merging to main
     readUsage: over.readUsage,
     now: over.now,
     refresh: over.refresh,
@@ -646,6 +647,22 @@ describe('the devices, as the core starts them', () => {
     start()
     expect(seen.cable.args[4]).not.toHaveProperty('tcp')
     expect(logs.filter((line) => line.includes('HARNESS_CABLE_TCP'))).toEqual([])
+  })
+
+  // TEMP (owner, 20 Nov): dev-only, remove before merging to main.
+  it('let the devices over TCP answer permission prompts only with HARNESS_CABLE_TCP_PERMISSIONS=1, and say so', () => {
+    start({ cableTcp: '127.0.0.1:7000', cableTcpPermissions: '1' })
+    expect(seen.cable.args[4]).toMatchObject({ tcp: [{ host: '127.0.0.1', port: 7000 }], tcpPermissions: true })
+    expect(logs).toContain('[cable] HARNESS_CABLE_TCP: dials tcp:127.0.0.1:7000, a dev-only link with no authentication that ANSWERS permission prompts (HARNESS_CABLE_TCP_PERMISSIONS=1): anyone who reaches it can approve')
+    for (const value of ['0', 'true', undefined]) {
+      logs.length = 0
+      start({ cableTcp: '127.0.0.1:7000', cableTcpPermissions: value })
+      expect(seen.cable.args[4]).not.toHaveProperty('tcpPermissions')
+      expect(logs).toContain('[cable] HARNESS_CABLE_TCP: dials tcp:127.0.0.1:7000, a dev-only link with no authentication that answers no permission prompt')
+    }
+    // Without a device over TCP it does nothing.
+    start({ cableTcpPermissions: '1' })
+    expect(seen.cable.args[4]).not.toHaveProperty('tcpPermissions')
   })
 
   it('cut an old dial log down to a pointer, and carry on when it cannot be written', () => {

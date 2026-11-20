@@ -1218,6 +1218,23 @@ describe('a device over TCP (HARNESS_CABLE_TCP)', () => {
     } finally { await f.fleet.stop() }
   })
 
+  // TEMP (owner, 20 Nov): dev-only, remove before merging to main.
+  it('answers permission prompts too with tcpPermissions (HARNESS_CABLE_TCP_PERMISSIONS=1), and nothing is refused', async () => {
+    const f = tcpFixture({ tcpPermissions: true })
+    try {
+      f.fleet.start()
+      await vi.waitFor(() => expect(f.tcpPorts).toHaveLength(1))
+      const tcp = f.tcpPorts[0]
+      hello(tcp)
+      await vi.waitFor(() => expect(tcp.sent.some(m => m.t === 'agents.end')).toBe(true))
+      await f.fleet.question('a', 'perm-1', PERMISSION, true)
+      await vi.waitFor(() => expect(tcp.sent.filter(m => m.t === 'question').map(m => m.id)).toEqual(['perm-1']))
+      tcp.say({ t: 'answer', agentId: 'a', requestId: 'perm-1', answers: { [PERMISSION[0].key]: 'Yes' } })
+      await vi.waitFor(() => expect(f.host.answer).toHaveBeenCalledWith('a', 'perm-1', { [PERMISSION[0].key]: 'Yes' }))
+      expect(tcp.sent.filter(m => m.t === 'toast')).toEqual([])
+    } finally { await f.fleet.stop() }
+  })
+
   it('is let go and looked at again after the drop wait when it is not a Harness device, never written off', async () => {
     const f = tcpFixture({ dropBackoffMs: 100 })
     try {

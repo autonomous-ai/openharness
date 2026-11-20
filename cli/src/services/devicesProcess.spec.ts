@@ -118,6 +118,12 @@ describe('the devices in their own process', () => {
     expect(setup({ processEnv: { HARNESS_DIAL_SERIALS: 'AA' } }).deps().cableTcp).toBeUndefined()
   })
 
+  // TEMP (owner, 20 Nov): dev-only, remove before merging to main.
+  it('pass HARNESS_CABLE_TCP_PERMISSIONS on as it is written, for the devices to read', () => {
+    expect(setup({ processEnv: { HARNESS_CABLE_TCP: '127.0.0.1:7000', HARNESS_CABLE_TCP_PERMISSIONS: '1' } }).deps().cableTcpPermissions).toBe('1')
+    expect(setup({ processEnv: { HARNESS_CABLE_TCP: '127.0.0.1:7000' } }).deps().cableTcpPermissions).toBeUndefined()
+  })
+
   it('run what the devices registered for a core that goes, each time one does', () => {
     const f = setup()
     const gone = vi.fn()

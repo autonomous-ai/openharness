@@ -23,7 +23,7 @@ import { dirname, join } from 'node:path'
 import { env } from '../config/env.js'
 import { DEVICES_FALLBACKS, DEVICES_REQUESTS, type CoreApi, type CorePorts, type DeviceHookPort, type DevicesPort, type RouteAnswer, type SendResult, type ServiceRequests, type WindowFocus } from '../core/api.js'
 import { CableFleet, testDialDiscovery, type CableFleetOptions } from '../cable/cableFleet.js'
-import { parseCableTcp, tcpPortPath } from '../cable/cableTcp.js'
+import { cableTcpPermissions, parseCableTcp, tcpPortPath } from '../cable/cableTcp.js'
 import { isLocalOnly } from '../lib/cardUpdate.js'
 import { TurnStats, type TurnStatsFields } from '../cable/turnStats.js'
 import { cableEventFor, cableStepFor, cableQuestionCloseFor, cableQuestionFor, DaemonCableHost } from '../cable/cableHost.js'
@@ -111,6 +111,9 @@ export interface DevicesDeps {
   cableDisabled?: boolean
   /** `HARNESS_CABLE_TCP`, development alone: devices over TCP to dial beside the USB dials, `host:port,…` (cable/cableTcp.ts). */
   cableTcp?: string
+  /** TEMP (owner, 20 Nov): dev-only, remove before merging to main. `HARNESS_CABLE_TCP_PERMISSIONS` as written: `1` lets
+   *  the devices over TCP answer permission prompts too (cable/cableTcp.ts `cableTcpPermissions`). */
+  cableTcpPermissions?: string
   /** `HARNESSD_TEST_FAULTS`: parts to fail, for the end-to-end suite. */
   faults?: ReadonlySet<string>
   log?: (line: string) => void
@@ -1001,10 +1004,14 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   // Said as the devices start: a typo is not dropped unseen, and a device that answers no permission prompt is not taken
   // for a broken one.
   const cableTcp = parseCableTcp(deps.cableTcp)
+  const tcpPermissions = cableTcpPermissions(deps.cableTcpPermissions)   // TEMP (owner, 20 Nov): dev-only, remove before merging to main
   if (!deps.cableDisabled) {
     for (const entry of cableTcp.rejected) log(`[cable] HARNESS_CABLE_TCP: left out, not host:port: ${entry}`)
     for (const address of cableTcp.addresses) {
-      log(`[cable] HARNESS_CABLE_TCP: dials ${tcpPortPath(address)}, a dev-only link with no authentication that answers no permission prompt`)
+      // TEMP (owner, 20 Nov): dev-only, remove before merging to main: the HARNESS_CABLE_TCP_PERMISSIONS line.
+      log(tcpPermissions
+        ? `[cable] HARNESS_CABLE_TCP: dials ${tcpPortPath(address)}, a dev-only link with no authentication that ANSWERS permission prompts (HARNESS_CABLE_TCP_PERMISSIONS=1): anyone who reaches it can approve`
+        : `[cable] HARNESS_CABLE_TCP: dials ${tcpPortPath(address)}, a dev-only link with no authentication that answers no permission prompt`)
     }
   }
   const cable = new CableFleet(deps.Session ?? CableSession, cableHost, deps.logsDir, DialLog, {
@@ -1012,7 +1019,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     verdicts: new DialVerdicts(join(core.dataDir, 'dial-ports.json')),
     faults: deps.faults,
     ...testDialDiscovery(deps.testDialPort),
-    ...(cableTcp.addresses.length ? { tcp: cableTcp.addresses } : {}),
+    // TEMP (owner, 20 Nov): dev-only, remove before merging to main: `tcpPermissions`.
+    ...(cableTcp.addresses.length ? { tcp: cableTcp.addresses, ...(tcpPermissions ? { tcpPermissions: true } : {}) } : {}),
     ...deps.cable,
   })
 
