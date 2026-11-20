@@ -46,6 +46,13 @@ UPDATES = (
 )
 # A release's files never change, so caches may keep them; the manifest must be read fresh every time.
 ASSET_CACHE = "public, max-age=31536000, immutable"
+# The one-line Linux installer, which /device shows once the manifest names a Linux AppImage. Every release of all
+# platforms uploads it, after the version checks, so an older run never rolls it back, and before the manifest, so the
+# line never names a missing script. Read fresh every time: the CDN keeps a positive max-age for a month otherwise
+# (website/scripts/upload-desktop-install-sh.sh).
+INSTALLER = Path(__file__).resolve().parents[2] / "website" / "scripts" / "device-install.sh"
+INSTALLER_URI = f"{BUCKET}/install.sh"
+INSTALLER_CACHE = "no-cache, no-store, must-revalidate"
 VERSION = re.compile(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)")
 TAG = re.compile(rf"v({VERSION.pattern})_device")
 PUB_DATE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z")
@@ -198,9 +205,18 @@ def gcloud(*args):
     return result.stdout
 
 
+def check_installer():
+    """The one-line installer parses as sh, before anything is uploaded: a broken one must never replace the live one."""
+    result = subprocess.run(["sh", "-n", str(INSTALLER)], capture_output=True, text=True, timeout=30)
+    if result.returncode:
+        raise ValueError(f"{INSTALLER.name} does not parse as sh: {result.stderr.strip() or 'sh -n failed'}")
+
+
 def publish(version, folder, notes, pub_date, platforms="macos"):
     """Upload this build and point the live manifest at it; on any failure the live manifest stays as it was."""
     manifest = build_manifest(version, folder, notes, pub_date, CDN_BASE, platforms)
+    if platforms == "all":
+        check_installer()
     live_uri = f"{BUCKET}/metadata.json"
     try:
         description = json.loads(gcloud("storage", "objects", "describe", live_uri, "--format=json"))
@@ -243,6 +259,9 @@ def publish(version, folder, notes, pub_date, platforms="macos"):
             gcloud("storage", "cp", target, str(back))
             if hashlib.sha256(back.read_bytes()).hexdigest() != sums[name]["sha256"]:
                 raise ValueError(f"{target} differs from this build's {name}; the manifest was not written")
+        if platforms == "all":
+            gcloud("storage", "cp", str(INSTALLER), INSTALLER_URI, "--content-type=text/x-shellscript; charset=utf-8",
+                   f"--cache-control={INSTALLER_CACHE}")
         path = Path(temp) / "metadata.json"
         path.write_text(json.dumps(manifest, indent=2) + "\n")
         # Only over the generation read above (0: only where none exists), so a concurrent release fails, never
@@ -338,7 +357,8 @@ def parser():
     output.add_argument("--check", type=Path)
 
     build_step = commands.add_parser("build", help="the manifest, from the release's files")
-    publish_step = commands.add_parser("publish", help="upload the release's files, then write the live manifest")
+    publish_step = commands.add_parser("publish", help="upload the release's files and, with all, the one-line "
+                                                       "installer, then write the live manifest")
     verify_step = commands.add_parser("verify", help="the public manifest and downloads against the release's files")
     for step in (build_step, publish_step, verify_step):
         step.add_argument("--version", required=True)

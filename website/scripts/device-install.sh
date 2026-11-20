@@ -1,8 +1,8 @@
 #!/bin/sh
 # Harness Device installer for Linux: `curl -fsSL https://harness.autonomous.ai/device/install.sh | bash`. That URL
-# redirects (next.config.js) to https://cdn.autonomous.ai/harness/device/install.sh, which release-device.yml uploads
-# from this file with every release that carries Linux, before the manifest names a Linux AppImage. It does not ship
-# with a web deploy.
+# redirects (next.config.js) to https://cdn.autonomous.ai/harness/device/install.sh, which device-manifest.py publish
+# uploads from this file with every release that carries Linux, after its version checks and before the manifest names
+# a Linux AppImage. It does not ship with a web deploy.
 #
 # Installs the AppImage the device manifest names for this computer's arch, checked by size and sha256, at Desktop's
 # place for it, lists it in the app list when nothing is listed there yet, and starts it. No sudo and no libfuse2: the

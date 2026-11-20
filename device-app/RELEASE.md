@@ -72,7 +72,7 @@ The first Windows and Linux release:
 | `sign-windows` | windows, with `all` | Signs both exes, bundles each installer with that Tauri CLI, signs the installers, writes their update signatures, then records their sums; keeps them for 7 days. Compiles and installs nothing. |
 | `check-windows` | windows, with `all` | Checks the installers `sign-windows` made; hands nothing on. |
 | `build-linux` | ubuntu-22.04 x64 and ubuntu-22.04-arm, with `all` | Compiles, bundles the AppImage, then signs it as an update in a step of its own, checks it; keeps it for 7 days. |
-| `publish` | ubuntu, only with `publish=true` | Checks each artifact against the sums its build recorded, uploads to GCS, writes the manifest, verifies the public downloads. With `all` it waits for every build and uploads the one-line Linux installer first. |
+| `publish` | ubuntu, only with `publish=true` | Checks each artifact against the sums its build recorded, uploads to GCS, writes the manifest, verifies the public downloads. With `all` it waits for every build, and uploads the one-line Linux installer after the version checks, before the manifest. |
 
 - **Every run's commit is on `main`.** With `publish=true` the run's ref must be `refs/tags/v<version>_device`; without
   it, `refs/heads/main`. Only `main` may be prepared: the repository is public, so anyone can download a run's
@@ -165,8 +165,9 @@ proves an AppImage starts from its FUSE mount on a computer without `libfuse2`.
 
 **The one line:** `curl -fsSL https://harness.autonomous.ai/device/install.sh | bash`. Its source is
 `website/scripts/device-install.sh`; `/device/install.sh` redirects for good to
-`https://cdn.autonomous.ai/harness/device/install.sh`. `publish` uploads it with every release that carries Linux,
-before the manifest, so the line never names a missing script; nobody uploads it by hand. `/device` shows the line to
+`https://cdn.autonomous.ai/harness/device/install.sh`. `device-manifest.py publish` uploads it with every release
+that carries Linux, after its version checks, so a rerun of an older release never rolls it back, and before the
+manifest, so the line never names a missing script; nobody uploads it by hand. `/device` shows the line to
 Linux visitors only when the manifest has a Linux AppImage. It puts the AppImage of the computer's arch at
 `~/.local/opt/Harness-Device.AppImage` after checking its size and sha256, lists it in the app list when no entry is
 there, and starts it.
