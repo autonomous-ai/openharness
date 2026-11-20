@@ -14,13 +14,25 @@
  *
  * A session in the ChatGPT app runs the app's own Codex CLI, on macOS, when it is there: a native program of the app's
  * own version, which queues into the app's threads with no PATH, no node and no shell (the design's part B).
+ *
+ * On Windows there is no login shell to read: the daemon's PATH is the person's. The `codex` npm installs there is a
+ * `.cmd` shim, which only cmd.exe runs and which would read the text again by its own rules, so the program it names is
+ * started directly (lib/windows/program.ts); a shim it cannot carry out is never started. The ChatGPT app is the Store
+ * package `OpenAI.Codex`, and it holds a Codex of its own, `app\resources\codex.exe`, which runs its threads
+ * (docs/plans/2026-11-19-dial-windows-vm-notes.md `## Task 37`, section 2): a session in the app runs it, as on macOS,
+ * and the `codex` on PATH only when the package has none. The package's folder is named for its version, so it is asked
+ * of Windows (lib/windows/storePackage.ts), in the background, and the `codex` on PATH answers until it has. A signed-in
+ * `codex queue` into a thread of the app, end to end, is not verified on Windows.
  */
 import { execFile } from 'node:child_process'
+import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { delimiter, isAbsolute, join } from 'node:path'
 import { binaryOnPath, resolveBinaryOnPath } from '../../lib/binaryOnPath.js'
 import { engineBin } from '../../lib/engineBin.js'
 import { loginShellEnvironment, oneShotParentEnv, warmLoginShellEnvironment } from '../../lib/loginShellEnv.js'
+import { windowsProgram } from '../../lib/windows/program.js'
+import { storePackageFolder } from '../../lib/windows/storePackage.js'
 import { MAX_TEXT } from './orca.js'
 
 // `--thread` also takes a session's name: only a thread id may reach it.
@@ -36,6 +48,13 @@ const BINARY_LOOK_MS = 30_000
 
 /** Where the ChatGPT app keeps its own Codex CLI, inside the app. */
 const APP_CODEX = join('ChatGPT.app', 'Contents', 'Resources', 'codex-cli', 'CodexCLI.app', 'Contents', 'MacOS', 'codex')
+/** The ChatGPT app's Store package on Windows, and its own Codex CLI inside the package's folder. */
+const APP_PACKAGE = 'OpenAI.Codex'
+const PACKAGE_CODEX = join('app', 'resources', 'codex.exe')
+/** How long no package, or a failed ask for it, holds. Each ask is a PowerShell of 1.3 to 1.8 s on the VM
+ *  (docs/plans/2026-11-19-dial-windows-vm-notes.md, "Fixes after Task 37" §2), taken while an app session is listed: an
+ *  app installed later is found within it. */
+const PACKAGE_ASK_MS = 600_000
 
 /** Why a send failed, as the log line names it: codex's exit code; 'no binary' when it is not there or could not
  *  start; 'refused' for a thread id or a text the queue will not run. */
@@ -55,7 +74,7 @@ export interface CodexQueueDeps {
   run(file: string, args: string[], options: { cwd: string; env: NodeJS.ProcessEnv; timeoutMs: number }): Promise<CodexRunEnd>
   /** The Codex Harness launches, where it is; null when it is not there. */
   binary(): string | null
-  /** The ChatGPT app's own Codex CLI, where it can run; null when it is not there. Asked on macOS only. */
+  /** The ChatGPT app's own Codex CLI, where it can run; null when it is not there. Asked on macOS and Windows. */
   appBinary(): string | null
   /** What a run starts from: the environment a launch has. */
   parentEnv(): NodeJS.ProcessEnv
@@ -83,7 +102,8 @@ export function appCodexCandidates(named: string | undefined, home: string): str
   return [join('/Applications', APP_CODEX), join(home, 'Applications', APP_CODEX)]
 }
 
-export function codexQueueDeps(): Omit<CodexQueueDeps, 'home' | 'cwd'> {
+/** [packageFolder]: where a Store package is installed for this user, on Windows. */
+export function codexQueueDeps(packageFolder: (name: string) => Promise<string | null> = storePackageFolder): Omit<CodexQueueDeps, 'home' | 'cwd'> {
   // The last look of each, on the monotonic clock: a wall clock set back would keep an old answer for as long.
   const looks = new Map<CodexRan, { at: number; path: string | null }>()
   const held = (which: CodexRan, look: () => string | null): string | null => {
@@ -92,6 +112,33 @@ export function codexQueueDeps(): Omit<CodexQueueDeps, 'home' | 'cwd'> {
     if (!last || now - last.at >= BINARY_LOOK_MS) looks.set(which, last = { at: now, path: look() })
     return last.path
   }
+  // The app's codex in its package on Windows, in the folder last asked. Asking starts a PowerShell, so a folder that is
+  // there is never asked for again, codex.exe in it or not; one that went (an update moves the package to a folder named
+  // for the new version) is asked for at once. No package, or a failed ask, is asked again after PACKAGE_ASK_MS. One ask
+  // at a time.
+  let folder: string | null = null
+  let noFolderAt: number | null = null
+  let asking = false
+  const packageCodex = (): string | null => {
+    if (folder !== null && existsSync(folder)) {
+      const codex = join(folder, PACKAGE_CODEX)
+      return binaryOnPath(codex) ? codex : null
+    }
+    if (!asking && (noFolderAt === null || performance.now() - noFolderAt >= PACKAGE_ASK_MS)) {
+      asking = true
+      void packageFolder(APP_PACKAGE).catch(() => null).then((answer) => {
+        asking = false
+        folder = answer
+        noFolderAt = answer === null ? performance.now() : null
+        // The look taken while it was asked found nothing: the next one is fresh.
+        if (answer !== null) looks.delete('app')
+      })
+    }
+    return null
+  }
+  const appLook = process.platform === 'win32'
+    ? packageCodex
+    : () => appCodexCandidates(process.env.HARNESS_CODEX_APP_BIN, homedir()).find((path) => binaryOnPath(path)) ?? null
   return {
     run: (file, args, { cwd, env, timeoutMs }) => new Promise((resolve) => {
       // The timeout's kill waits for the process to exit, and one stuck where even SIGKILL waits would keep its thread
@@ -99,7 +146,10 @@ export function codexQueueDeps(): Omit<CodexQueueDeps, 'home' | 'cwd'> {
       const deadline = setTimeout(() => resolve('unknown'), timeoutMs)
       const end = (how: CodexRunEnd) => { clearTimeout(deadline); resolve(how) }
       try {
-        const child = execFile(file, args, { cwd, env, timeout: timeoutMs, killSignal: 'SIGKILL' }, (error) => {
+        // Unchanged off Windows. A program it refuses throws here, as one that never started.
+        const program = windowsProgram(file, args, { environment: env })
+        const how = { cwd, env: program.env ?? env, timeout: timeoutMs, killSignal: 'SIGKILL' as const, windowsHide: true }
+        const child = execFile(program.file, program.args, how, (error) => {
           if (error === null) end(0)
           else if (typeof error.code === 'number') end(error.code)
           // No pid: it never started (ENOENT, EACCES). With one, a signal or too much output ended it, maybe after it
@@ -109,7 +159,7 @@ export function codexQueueDeps(): Omit<CodexQueueDeps, 'home' | 'cwd'> {
         // Nothing is piped to codex: one that read its stdin would wait out the deadline.
         child.stdin?.end()
       } catch {
-        // An argument execFile refuses (a NUL) throws before any child.
+        // An argument execFile refuses (a NUL) throws before any child, and so does a Windows program refused above.
         end('not-started')
       }
     }),
@@ -121,7 +171,7 @@ export function codexQueueDeps(): Omit<CodexQueueDeps, 'home' | 'cwd'> {
       return resolveBinaryOnPath(name, { PATH: loginShellEnvironment().PATH }) ?? resolveBinaryOnPath(name)
     }),
     // A file there that cannot run is passed over: it would not start.
-    appBinary: () => held('app', () => appCodexCandidates(process.env.HARNESS_CODEX_APP_BIN, homedir()).find((path) => binaryOnPath(path)) ?? null),
+    appBinary: () => held('app', appLook),
     // PATH in the order codex was looked for. An empty segment is the folder the program runs in, the home folder, where
     // `env` would look for `node`: none is kept, from a side that has no PATH or from inside one, and with no segment
     // left there is no PATH, so the system's default is searched.
@@ -142,16 +192,14 @@ export function createCodexQueue(deps: CodexQueueDeps): CodexQueue {
   const queueing = new Set<string>()
   let loginShellAsked = false
   const choose = (isApp: boolean): { file: string; ran: CodexRan } | null => {
-    // Never on Windows: codex is a .cmd shim there, which runs only through a shell, and the text must never meet one.
-    if (deps.platform === 'win32') return null
     // On first use, never at start: the interactive shell can take its 5 s, and a computer whose dial never meets a
-    // Codex session never pays for it. Until it is read, the daemon's environment is used.
-    if (!loginShellAsked) {
+    // Codex session never pays for it. Until it is read, the daemon's environment is used. Windows has none to read.
+    if (!loginShellAsked && deps.platform !== 'win32') {
       loginShellAsked = true
       deps.readLoginShell()
     }
-    // The ChatGPT app is macOS's alone.
-    const app = isApp && deps.platform === 'darwin' ? deps.appBinary() : null
+    // The ChatGPT app is macOS's and Windows'.
+    const app = isApp && (deps.platform === 'darwin' || deps.platform === 'win32') ? deps.appBinary() : null
     if (app) return { file: app, ran: 'app' }
     const path = deps.binary()
     return path ? { file: path, ran: 'path' } : null

@@ -4,30 +4,40 @@
  * devices' real listener and VS Code half (vscodeTerminals.ts). Never the developer's VS Code, its settings, its
  * extensions or their daemon: everything it starts or writes is under the root, which it removes. On a Mac the copy
  * carries a bundle id of its own; after the run LaunchServices forgets it, its own preferences, caches and HTTP storage
- * go, and the run fails if the developer's VS Code's preferences changed (throwawayApp.ts). The clean-up kills what the
- * throwaway still runs and runs each of its steps whatever the others did (cleanup.ts); a run clears the roots of runs
- * that ended without theirs (Ctrl+C).
+ * go, and the run fails if the developer's VS Code's preferences changed (throwawayApp.ts). On Windows the devices
+ * listen on a pipe, and the extension reaches them through the real `harness.exe` (HARNESS_EXE_BIN), in an install
+ * under the throwaway's profile whose CLI answers `device vscode link`. The clean-up kills what the throwaway still runs
+ * and runs each of its steps whatever the others did (cleanup.ts); a run clears the roots of runs that ended without
+ * theirs (Ctrl+C).
  *
  * The driver (driver/run.cjs) runs as VS Code's extension tests and is the gate's hands: it makes the terminals and says
  * which is active. What the extension reports, and what it does with a `show`, is read at the listener. A page key's
  * bytes are read from a fake alt-screen app's record (driver/altScreenApp.cjs): never Claude Code itself.
  */
 import { downloadAndUnzipVSCode, resolveCliPathFromVSCodeExecutablePath, runTests } from '@vscode/test-electron'
-import { execFile } from 'node:child_process'
-import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, watch, writeFileSync, type FSWatcher } from 'node:fs'
+import { exec, execFile } from 'node:child_process'
+import { randomBytes } from 'node:crypto'
+import {
+  chmodSync, copyFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, unwatchFile, watch, watchFile, writeFileSync,
+} from 'node:fs'
 import { createServer, type Server, type Socket } from 'node:net'
-import { dirname, join, relative } from 'node:path'
+import { dirname, isAbsolute, join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { vscodeStreams, type VscodeTerminals } from '../../../cli/src/cable/hosts/vscodeTerminals.js'
+import { DEVICES_TOKEN_FILE, devicesRecordPath } from '../../../cli/src/devices/listenerPipe.js'
 import { buildVersion, packVsix, recordVersion, type VscodeExtensionFiles } from '../../../cli/src/devices/vscodeExtension.js'
+import { CLI_POINTER, writePointer } from '../../../cli/src/lib/windows/installLayout.js'
+import { newPipePath, readDaemonToken } from '../../../cli/src/lib/windows/pipeAuth.js'
 import { openDevicesListener, REFUSED, type DevicesListener, type ListenerStream } from '../../../cli/src/services/devicesListener.js'
 import { cleanUp, within } from './cleanup.js'
 import {
+  assertCmdSafe,
   assertRebranded,
   assertUnchanged,
   forgetPreferences,
+  GATE_TMP,
   killThrowaway,
   rebrand,
   removeOwnFolders,
@@ -51,6 +61,8 @@ const { readVscodeExtensionBundle } = await import('../../../cli/scripts/lib/vsc
 const UNTIL_MS = 120_000
 /** Each clean-up step's bound: the steps all fit in the hook's 300 s. */
 const CLEAN_UP_MS = 30_000
+const WINDOWS = process.platform === 'win32'
+const DRIVER = fileURLToPath(new URL('driver', import.meta.url))
 
 // Run from a VS Code terminal, these name that VS Code's own handles, and a launch or CLI that inherits them could
 // reach it. `__CFBundleIdentifier` names the app the gate was started from, and `TERM_PROGRAM*` the terminal: the
@@ -76,7 +88,7 @@ let launched: Promise<number> | undefined
 /** Each reported shell's start, by its pid: the clean-up kills a shell only while it is that process. */
 const shellStarts = new Map<number, string>()
 let exited: number | Error | undefined
-let logsWatch: FSWatcher | undefined
+let unwatchLogs: (() => void) | undefined
 const answers: { resolve: (line: Record<string, unknown>) => void; reject: (error: Error) => void }[] = []
 const opened: { window: string; stream: ListenerStream }[] = []
 const states: { terminals: number[]; active: number | null }[] = []
@@ -122,7 +134,11 @@ function ask(what: 'terminals' | 'active' | 'app', args: Record<string, unknown>
   return within(answer, UNTIL_MS, `the driver's answer to ${what}`)
 }
 
-const inside = (path: string): boolean => !relative(root, path).startsWith('..')
+const inside = (path: string): boolean => {
+  const from = relative(root, path)
+  // On Windows a path on another drive comes back absolute.
+  return !from.startsWith('..') && !isAbsolute(from)
+}
 
 const MINUTE_LINE = /in the last minute: .*, (\d+) page keys, (\d+) scroll lines, (\d+) dropped$/gm
 
@@ -155,15 +171,57 @@ function macExecutable(named: string): string {
   return name === undefined ? named : join(contents, 'MacOS', name)
 }
 
+/** What VS Code, its CLI and its shells get as their home and PATH: the throwaway's, and the system's programs alone. On
+ *  Windows their temp folder too, inside the root: VS Code leaves a folder of its own in the account's (2026-11-20). */
+function throwawayEnv(): Record<string, string> {
+  if (!WINDOWS) return { HOME: home, PATH: '/usr/bin:/bin' }
+  return {
+    USERPROFILE: home,
+    LOCALAPPDATA: join(home, 'AppData', 'Local'),
+    APPDATA: join(home, 'AppData', 'Roaming'),
+    TEMP: join(root, 'tmp'),
+    TMP: join(root, 'tmp'),
+    PATH: join(process.env.SystemRoot ?? 'C:\\Windows', 'System32'),
+  }
+}
+
+/** The launcher the extension runs first, at its home's path, answering `device vscode link` with `link` and anything
+ *  else with exit 1, as a running daemon with a dial plugged in answers. On Windows the real harness.exe, in an install
+ *  (lib/windows/installLayout.ts) whose Node is the gate's own: it runs only a Node inside the install's runtime folder. */
+function writeLauncher(link: string): void {
+  if (!WINDOWS) {
+    const launcher = join(home, '.local', 'bin', 'harness')
+    mkdirSync(dirname(launcher), { recursive: true })
+    writeFileSync(launcher, `#!/bin/sh\n[ "$*" = "device vscode link" ] || exit 1\necho '${link}'\n`)
+    chmodSync(launcher, 0o755)
+    return
+  }
+  const install = join(home, '.harness')
+  mkdirSync(join(install, 'bin'), { recursive: true })
+  copyFileSync(process.env.HARNESS_EXE_BIN!, join(install, 'bin', 'harness.exe'))
+  const node = join(install, 'runtime', 'node.exe')
+  mkdirSync(dirname(node))
+  copyFileSync(process.execPath, node)
+  writeFileSync(join(install, 'runtime', 'current-node'), `${node}\r\n`)
+  mkdirSync(join(install, 'cli', 'gate'), { recursive: true })
+  writeFileSync(join(install, 'cli', 'gate', 'cli.js'),
+    `if (process.argv.slice(2).join(' ') !== 'device vscode link') process.exit(1)\nconsole.log(${JSON.stringify(link)})\n`)
+  writePointer(join(install, 'cli'), CLI_POINTER, 'gate')
+}
+
 describe('the extension in a real, throwaway VS Code', () => {
   let streams: VscodeTerminals
   let shells: number[]
 
   beforeAll(async () => {
-    preferences = stamp(VSCODE_PREFERENCES)
-    // Short and in /tmp: the devices' socket goes in it, and a Unix socket's path has 96 bytes.
-    root = mkdtempSync(join('/tmp', rootName(process.pid)))
-    const cleared = sweepLeftovers()
+    if (WINDOWS && !process.env.HARNESS_EXE_BIN) {
+      throw new Error('HARNESS_EXE_BIN names no harness.exe: build it with `cd pty && cargo build --release --bins`, and set it to pty\\target\\release\\harness.exe')
+    }
+    // The root's own name, under GATE_TMP, is of letters, digits and -.
+    if (WINDOWS) assertCmdSafe({ 'the temp folder (TEMP)': GATE_TMP, 'the gate\'s driver': DRIVER })
+    if (process.platform === 'darwin') preferences = stamp(VSCODE_PREFERENCES)
+    root = mkdtempSync(join(GATE_TMP, rootName(process.pid)))
+    const cleared = await sweepLeftovers()
     if (cleared.length) console.warn(`cleared ${cleared.length} roots of gate runs that ended without their clean-up`)
     userData = join(root, 'user-data')
     extensions = join(root, 'extensions')
@@ -179,18 +237,18 @@ describe('the extension in a real, throwaway VS Code', () => {
   afterAll(async () => {
     // The driver's run ends with its connection, and VS Code with it.
     driver?.destroy()
-    logsWatch?.close()
+    unwatchLogs?.()
     control?.close()
     const ended = (): Promise<unknown> | undefined => launched?.catch(() => {})
     await cleanUp([
       ['VS Code\'s exit', ended],
-      ['the throwaway\'s processes', () => {
-        const killed = killThrowaway(root, shellStarts)
+      ['the throwaway\'s processes', async () => {
+        const killed = await killThrowaway(root, shellStarts)
         if (killed.length) console.warn(`killed the throwaway's processes still running: ${killed.join(', ')}`)
       }],
       ['the throwaway\'s end', async () => {
         await ended()
-        const left = throwawayProcesses(root).length
+        const left = (await throwawayProcesses(root)).length
         if (left) throw new Error(`${left} of the throwaway's processes still running`)
       }],
       ['the devices\' listener', () => listener?.close()],
@@ -205,12 +263,12 @@ describe('the extension in a real, throwaway VS Code', () => {
       ['the throwaway\'s caches', () => {
         if (app !== undefined) removeOwnFolders()
       }],
-      ['the developer\'s VS Code\'s preferences', () => {
+      ['the developer\'s VS Code\'s preferences', async () => {
         if (preferences === undefined) return
         try {
           assertUnchanged(VSCODE_PREFERENCES, preferences)
         } catch (error) {
-          throw new Error(`${(error as Error).message}; ${vscodeOutside(root)}`)
+          throw new Error(`${(error as Error).message}; ${await vscodeOutside(root)}`)
         }
       }],
     ], CLEAN_UP_MS)
@@ -224,10 +282,18 @@ describe('the extension in a real, throwaway VS Code', () => {
     const cli = resolveCliPathFromVSCodeExecutablePath(executable)
     expect(inside(cli)).toBe(true)
     mkdirSync(home)
+    // A profile's own folders, which Windows' programs expect in it, and the throwaway's temp folder.
+    if (WINDOWS) {
+      for (const folder of [join(home, 'AppData', 'Local'), join(home, 'AppData', 'Roaming'), join(root, 'tmp')]) mkdirSync(folder, { recursive: true })
+    }
     if (app !== undefined) assertRebranded(app)
-    await promisify(execFile)(cli, ['--install-extension', vsix, '--force', '--user-data-dir', userData, '--extensions-dir', extensions], {
-      env: { ...process.env, HOME: home },
-    })
+    const args = ['--install-extension', vsix, '--force', '--user-data-dir', userData, '--extensions-dir', extensions]
+    // The gate's PATH: the CLI is a script that finds its shell's tools there.
+    const env = { ...process.env, ...throwawayEnv(), PATH: process.env.PATH }
+    // On Windows the CLI is code.cmd, which only a shell runs (CVE-2024-27980), as @vscode/test-electron runs it; the
+    // root's paths hold nothing cmd.exe splits or runs (assertCmdSafe, before the root is made).
+    if (WINDOWS) await promisify(exec)(`"${cli}" ${args.map((arg) => `"${arg}"`).join(' ')}`, { env, windowsHide: true })
+    else await promisify(execFile)(cli, args, { env })
     expect(recordVersion(readFileSync(join(extensions, 'extensions.json'), 'utf8'))).toBe(buildVersion({ files: () => files }))
   })
 
@@ -247,11 +313,15 @@ describe('the extension in a real, throwaway VS Code', () => {
       foreground: () => Promise.resolve(undefined),
     })
     const { vscode, 'vscode-state': state } = streams.handlers
-    const socket = join(root, 'h', 'devices.sock')
-    // The listener makes only the daemon's own folder; this one is the account's alone, as the devices' is.
-    mkdirSync(join(root, 'h'), { mode: 0o700 })
+    const dataDir = join(root, 'h')
+    const socket = join(dataDir, 'devices.sock')
+    const pipe = WINDOWS ? { path: newPipePath(), dataDir } : undefined
+    // The listener makes only the daemon's own folder; this one is the account's alone, as the devices' is. On Windows
+    // the pipe's token makes it, inside the profile.
+    if (!WINDOWS) mkdirSync(dataDir, { mode: 0o700 })
     listener = await openDevicesListener({
-      path: socket,
+      path: WINDOWS ? null : socket,
+      pipe,
       handlers: {
         vscode: {
           ...vscode,
@@ -279,14 +349,17 @@ describe('the extension in a real, throwaway VS Code', () => {
     })
     expect(listener, log.join(' | ')).not.toBeNull()
 
-    // `harness device vscode link`, and nothing else, as a running daemon with a dial plugged in answers it.
-    const launcher = join(home, '.local', 'bin', 'harness')
-    mkdirSync(join(home, '.local', 'bin'), { recursive: true })
-    const link = JSON.stringify({ daemon: true, devicesSocket: socket, devicesReady: true })
-    writeFileSync(launcher, `#!/bin/sh\n[ "$*" = "device vscode link" ] || exit 1\necho '${link}'\n`)
-    chmodSync(launcher, 0o755)
+    writeLauncher(JSON.stringify(pipe
+      ? {
+        daemon: true,
+        devicesPipe: pipe.path,
+        devicesToken: readDaemonToken(dataDir, DEVICES_TOKEN_FILE)!.toString('hex'),
+        devicesReady: true,
+        devicesRecord: devicesRecordPath(dataDir),
+      }
+      : { daemon: true, devicesSocket: socket, devicesReady: true }))
 
-    const controlPath = join(root, 'c.sock')
+    const controlPath = WINDOWS ? `\\\\.\\pipe\\harness-gate-${randomBytes(16).toString('hex')}` : join(root, 'c.sock')
     control = createServer((connection) => {
       driver = connection
       let held = ''
@@ -311,11 +384,11 @@ describe('the extension in a real, throwaway VS Code', () => {
     if (app !== undefined) assertRebranded(app)
     launched = runTests({
       vscodeExecutablePath: executable,
-      extensionDevelopmentPath: fileURLToPath(new URL('driver', import.meta.url)),
-      extensionTestsPath: fileURLToPath(new URL('driver/run.cjs', import.meta.url)),
+      extensionDevelopmentPath: DRIVER,
+      extensionTestsPath: join(DRIVER, 'run.cjs'),
       // The secrets in memory: the keychain's VS Code item is the developer's VS Code's too.
       launchArgs: ['--user-data-dir', userData, '--extensions-dir', extensions, '--use-inmemory-secretstorage', '--disable-telemetry'],
-      extensionTestsEnv: { HOME: home, PATH: '/usr/bin:/bin', HARNESS_GATE_CONTROL: controlPath },
+      extensionTestsEnv: { ...throwawayEnv(), HARNESS_GATE_CONTROL: controlPath },
     })
     launched.then((code) => { exited = code }, (error: Error) => { exited = error }).finally(changed)
 
@@ -326,7 +399,7 @@ describe('the extension in a real, throwaway VS Code', () => {
     shells = (await ask('terminals')).terminals as number[]
     expect(shells).toHaveLength(2)
     for (const shell of shells) {
-      const started = startedAt(shell)
+      const started = await startedAt(shell)
       if (started !== undefined) shellStarts.set(shell, started)
     }
     await until('one vscode stream', () => (opened.length ? true : undefined))
@@ -351,8 +424,15 @@ describe('the extension in a real, throwaway VS Code', () => {
     const active = (await ask('active')).active as number
     const inactive = shells.find((shell) => shell !== active)!
     const file = channelFile()
-    // The file, not its folder: a recursive watch of the logs heard none of the extension's writes on a Mac.
-    logsWatch = watch(file, changed)
+    // The file, not its folder: a recursive watch of the logs heard none of the extension's writes on a Mac. On Windows
+    // a watch hears no write to a file another process holds open (none of 5 on the VM, 2026-11-20): its size is read.
+    if (WINDOWS) {
+      watchFile(file, { interval: 250 }, changed)
+      unwatchLogs = () => unwatchFile(file, changed)
+    } else {
+      const watcher = watch(file, changed)
+      unwatchLogs = () => watcher.close()
+    }
     const counted = (lines: number, dropped: number): true | undefined => {
       const sums = scrollCounts(file)
       return sums.lines === lines && sums.dropped === dropped ? true : undefined
@@ -372,7 +452,7 @@ describe('the extension in a real, throwaway VS Code', () => {
     expect(inside(record)).toBe(true)
     writeFileSync(record, '')
     const app = (await ask('app', { node: process.execPath, script: fileURLToPath(new URL('driver/altScreenApp.cjs', import.meta.url)), record })).app as number
-    const started = startedAt(app)
+    const started = await startedAt(app)
     if (started !== undefined) shellStarts.set(app, started)
     await until('a state listing the app', () => (states.some(({ terminals }) => terminals.includes(app)) ? true : undefined))
     expect(streams.show({ window, shell: app }, false)).toBe(true)

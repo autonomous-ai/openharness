@@ -322,10 +322,10 @@ Future<void> verifyMacUpdate({
   if (!verified) throw notFromPublisher(signer.name);
 }
 
-/// Prints one [WindowsSignatureReport] as JSON. Paths come in through the
-/// environment, so no file name is ever parsed as PowerShell.
+/// How every Windows check reads one signer, so the updater's report and
+/// Harness Device's installer check never read one signature two ways.
 @visibleForTesting
-const windowsReportScript = r"""
+const windowsSignerPrelude = r"""
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 # 5.1's own module by path: a PSModulePath handed on by PowerShell 7 (a pwsh
@@ -350,6 +350,14 @@ function Read-Signer($path) {
   try { Signer (Get-AuthenticodeSignature -LiteralPath $path) }
   catch { [ordered]@{ status = 'Unreadable'; subject = ''; identity = '' } }
 }
+""";
+
+/// Prints one [WindowsSignatureReport] as JSON. Paths come in through the
+/// environment, so no file name is ever parsed as PowerShell.
+@visibleForTesting
+const windowsReportScript =
+    windowsSignerPrelude +
+    r"""
 # Files are listed from the very path their names are cut from: another form
 # of the same folder (an 8.3 name, say) would cut the wrong number of letters.
 function Programs($folder) {
@@ -388,6 +396,18 @@ if (Test-Path -LiteralPath $catalogPath -PathType Leaf) {
 } | ConvertTo-Json -Depth 5 -Compress
 """;
 
+/// Prints `{running, file}`, each one signer, as JSON. Paths come in through
+/// the environment, so no file name is ever parsed as PowerShell.
+@visibleForTesting
+const windowsSignerPairScript =
+    windowsSignerPrelude +
+    r"""
+[ordered]@{
+  running = Read-Signer $env:HARNESS_SIGNER_RUNNING
+  file = Read-Signer $env:HARNESS_SIGNER_FILE
+} | ConvertTo-Json -Compress
+""";
+
 /// Asks a hidden Windows PowerShell who signed the running app, everything
 /// beside it, every staged program and the staged file catalog.
 Future<WindowsSignatureReport> readWindowsSignatureReport({
@@ -395,12 +415,46 @@ Future<WindowsSignatureReport> readWindowsSignatureReport({
   required String stagedLauncher,
   required String runningExe,
   Duration timeout = signatureCheckTimeout,
-}) async {
-  final script = windowsReportScript.codeUnits;
-  final utf16 = Uint8List(script.length * 2);
-  for (var i = 0; i < script.length; i++) {
-    utf16[i * 2] = script[i] & 0xff;
-    utf16[i * 2 + 1] = script[i] >> 8;
+}) => _readWindowsScript(
+  windowsReportScript,
+  {
+    'HARNESS_UPDATE_STAGED': stagedFolder,
+    'HARNESS_UPDATE_LAUNCHER': stagedLauncher,
+    'HARNESS_UPDATE_RUNNING': runningExe,
+  },
+  timeout,
+  WindowsSignatureReport.fromJson,
+);
+
+/// Asks a hidden Windows PowerShell who signed the running app and [file].
+/// Throws [cannotCheckSignature] when it cannot say.
+Future<({WindowsSigner running, WindowsSigner file})> readWindowsSignerPair({
+  required String file,
+  required String runningExe,
+  Duration timeout = signatureCheckTimeout,
+}) => _readWindowsScript(
+  windowsSignerPairScript,
+  {'HARNESS_SIGNER_RUNNING': runningExe, 'HARNESS_SIGNER_FILE': file},
+  timeout,
+  (json) => (
+    running: WindowsSigner.fromJson((json['running'] as Map).cast()),
+    file: WindowsSigner.fromJson((json['file'] as Map).cast()),
+  ),
+);
+
+/// Runs [script] in a hidden Windows PowerShell with [environment] and reads
+/// the JSON object it prints through [parse]; any failure refuses.
+Future<T> _readWindowsScript<T>(
+  String script,
+  Map<String, String> environment,
+  Duration timeout,
+  T Function(Map<String, dynamic> json) parse,
+) async {
+  final units = script.codeUnits;
+  final utf16 = Uint8List(units.length * 2);
+  for (var i = 0; i < units.length; i++) {
+    utf16[i * 2] = units[i] & 0xff;
+    utf16[i * 2 + 1] = units[i] >> 8;
   }
   final result = await _run(
     windowsPowerShellPath(RuntimePlatform.environment),
@@ -413,17 +467,11 @@ Future<WindowsSignatureReport> readWindowsSignatureReport({
       base64.encode(utf16),
     ],
     timeout,
-    environment: {
-      'HARNESS_UPDATE_STAGED': stagedFolder,
-      'HARNESS_UPDATE_LAUNCHER': stagedLauncher,
-      'HARNESS_UPDATE_RUNNING': runningExe,
-    },
+    environment: environment,
   );
   try {
     if (result.exitCode != 0) throw FormatException('exit ${result.exitCode}');
-    return WindowsSignatureReport.fromJson(
-      (jsonDecode('${result.stdout}') as Map).cast(),
-    );
+    return parse((jsonDecode('${result.stdout}') as Map).cast());
   } on Object catch (error) {
     debugPrint(
       'UpdateSignature: no report ($error): ${'${result.stderr}'.trim()}',

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { createAppLink, type AppLink, type AppLinkDeps } from './appLink.js'
+import type { WindowsRaise } from './windowsRaise.js'
 
 /** A made-up app, so the helper is tested apart from any real app's link. */
 const FAKE: AppLink = { session: /^s[0-9]{1,3}$/, url: (session) => `fake://open/${session}` }
@@ -266,6 +267,64 @@ describe('a link on Linux', () => {
     expect(verbs.canFocus(pane('s1'))).toBe(false)
     expect(forward.runs).toBe(0)
     expect(calls).toEqual([])
+  })
+})
+
+// Windows has no `open`: the link goes to the raise, which opens it through `harness-pty open-link` (windowsRaise.ts).
+describe('a link on Windows', () => {
+  /** The recorder on Windows, holding a raise whose link notes its URL and bundle and answers the next of [answers],
+   *  then true. */
+  function onWindows(answers: boolean[] = [], link: AppLink = FAKE, over: Partial<AppLinkDeps> = {}) {
+    const links: Array<[string, string | undefined]> = []
+    const windows: WindowsRaise = {
+      app: async () => { throw new Error('no app') },
+      link: async (url, bundle) => { links.push([url, bundle]); return answers.length ? answers.shift()! : true },
+      cursorFolder: async () => { throw new Error('no folder') },
+      desktop: async () => { throw new Error('no desktop') },
+    }
+    return { ...recorder({ platform: 'win32', windows, ...over }, [], link), links }
+  }
+
+  it('a tap and a rest send the link and its bundle to the raise, and run nothing', async () => {
+    const { calls, links, verbs } = onWindows([true, true, false, false], { ...FAKE, bundle: 'com.example.fake' })
+    expect(verbs.canFocus(pane('s1'))).toBe(true)
+    expect(verbs.canShow(pane('s1'))).toBe(true)
+    expect(await verbs.focus(pane('s1'))).toBe(true)
+    expect(await verbs.show(pane('s1'), 'a1')).toBe('ok')
+    expect(await verbs.focus(pane('s1'))).toBe(false)
+    expect(await verbs.show(pane('s1'), 'a1')).toBe('failed')
+    expect(links).toEqual(Array(4).fill(['fake://open/s1', 'com.example.fake']))
+    expect(calls).toEqual([])
+  })
+
+  it('a link with no bundle goes to the raise alone; an id out of form reaches nothing', async () => {
+    const { calls, links, verbs } = onWindows()
+    expect(await verbs.focus(pane('s1'))).toBe(true)
+    for (const id of BAD) {
+      expect(await verbs.focus(pane(id)), id).toBe(false)
+      expect(await verbs.show(pane(id), 'a1'), id).toBe('failed')
+    }
+    expect(links).toEqual([['fake://open/s1', undefined]])
+    expect(calls).toEqual([])
+  })
+
+  it('with a forward, a tap whose link failed runs it once and answers what it answered; a rest never runs it', async () => {
+    for (const answer of [true, false]) {
+      const { forward, link } = forwarding(answer)
+      const { verbs } = onWindows([false, false], link)
+      expect(await verbs.focus(pane('s1')), String(answer)).toBe(answer)
+      expect(await verbs.show(pane('s1'), 'a1')).toBe('failed')
+      expect(forward.runs).toBe(1)
+    }
+  })
+
+  it('a rest needs the app in front', () => {
+    let front = true
+    const { verbs } = onWindows([], FAKE, { inFront: () => front })
+    expect(verbs.canShow(pane('s1'))).toBe(true)
+    front = false
+    expect(verbs.canShow(pane('s1'))).toBe(false)
+    expect(verbs.canFocus(pane('s1'))).toBe(true)
   })
 })
 

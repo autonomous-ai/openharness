@@ -1,6 +1,8 @@
 //! `harness auth status --json` and `harness login --json`.
 
-use crate::cli::{Child, Cli, Killer, LINE_MAX, LOGIN_DEADLINE, LOGIN_EXIT_DEADLINE, STATUS_DEADLINE, Timeout};
+use crate::cli::{
+    Child, Cli, Killer, LINE_MAX, LOGIN_DEADLINE, LOGIN_EXIT_DEADLINE, STATUS_DEADLINE, StdinCloser, Timeout,
+};
 use crate::types::{Event, Log, LoginEvent};
 use serde::Deserialize;
 use std::io;
@@ -15,9 +17,9 @@ pub const NO_RESULT: &str = "Sign-in did not finish.";
 /// The longest message the window is handed, in characters: a line can be 64 KiB.
 const MESSAGE_MAX: usize = 200;
 
-/// How long `harness login` has after SIGTERM before its group is killed: it waits up to 3 s to take its code back,
-/// then exits.
-const TERM_GRACE: Duration = Duration::from_secs(5);
+/// How long `harness login` has after its stdin ends before its group is killed: it waits up to 3 s to take its code
+/// back, then exits.
+const END_GRACE: Duration = Duration::from_secs(5);
 
 /// Whether this computer is signed in; `None` when the CLI could not say.
 pub fn auth_status(cli: &dyn Cli) -> Option<bool> {
@@ -54,28 +56,43 @@ enum Line {
 
 /// A sign-in under way.
 pub struct Login {
-    /// The child's killer until the sign-in is decided: its `result`, its output's end, the deadline or a cancel takes
-    /// it. Events are sent while it is held, so once `cancel` has returned nothing more is sent.
-    live: Arc<Mutex<Option<Killer>>>,
+    /// The child until the sign-in is decided: its `result`, its output's end, the deadline or a cancel takes it.
+    /// Events are sent while it is held, so once `cancel` has returned nothing more is sent.
+    live: Arc<Mutex<Option<Running>>>,
+    grace: Duration,
     log: Arc<dyn Log>,
 }
 
 impl Login {
     /// Ends the child before its `result`. After it, `harness login` is restarting the daemon, so this does nothing.
     pub fn cancel(&self) {
-        if let Some(killer) = self.live.lock().unwrap().take() {
-            // SIGTERM first, as the desktop app sends: `harness login` then takes its code back, and its spawn lock's
-            // exit hook runs.
-            killer.stop(TERM_GRACE);
+        if let Some(running) = self.live.lock().unwrap().take() {
+            running.end(self.grace);
             self.log.line("sign-in: cancelled");
         }
+    }
+}
+
+/// The child of a sign-in that is not decided yet.
+struct Running {
+    stdin: StdinCloser,
+    killer: Killer,
+}
+
+impl Running {
+    /// Its stdin closed, then its group killed unless it has ended within `grace`. On every OS, as Windows has no
+    /// SIGTERM: `harness login --json` reads its stdin's end as the app having gone, takes its code back and exits 1,
+    /// and its spawn lock's exit hook runs.
+    fn end(&self, grace: Duration) {
+        self.stdin.close();
+        self.killer.kill_after(grace);
     }
 }
 
 /// Runs `login --json`: an `Event::Login` for its authorize URL (`https:` only), each `waiting`, and one `Done`,
 /// unless it is cancelled first.
 pub fn login(cli: &dyn Cli, log: Arc<dyn Log>, send: impl Fn(Event) + Send + 'static) -> io::Result<Login> {
-    login_within(cli, log, send, LOGIN_DEADLINE, LOGIN_EXIT_DEADLINE)
+    login_within(cli, log, send, LOGIN_DEADLINE, LOGIN_EXIT_DEADLINE, END_GRACE)
 }
 
 fn login_within(
@@ -84,12 +101,14 @@ fn login_within(
     send: impl Fn(Event) + Send + 'static,
     before_result: Duration,
     after_result: Duration,
+    grace: Duration,
 ) -> io::Result<Login> {
     let mut child = cli.spawn(&["login", "--json"])?;
-    let live = Arc::new(Mutex::new(Some(child.killer())));
-    let login = Login { live: live.clone(), log: log.clone() };
+    let running = Running { stdin: child.stdin_closer(), killer: child.killer() };
+    let live = Arc::new(Mutex::new(Some(running)));
+    let login = Login { live: live.clone(), grace, log: log.clone() };
     thread::spawn(move || {
-        until_result(&mut child, &live, &*log, &|event| send(Event::Login(event)), before_result);
+        until_result(&mut child, &live, &*log, &|event| send(Event::Login(event)), before_result, grace);
         // However it ended, the child is read to its end, so it never blocks on a full pipe, and waited for: after a
         // `result` it is restarting the daemon, and nothing here kills it. The thread ends once it has exited.
         let end = Instant::now() + after_result;
@@ -105,17 +124,18 @@ fn login_within(
 /// cancel.
 fn until_result(
     child: &mut Child,
-    live: &Mutex<Option<Killer>>,
+    live: &Mutex<Option<Running>>,
     log: &dyn Log,
     send: &dyn Fn(LoginEvent),
     deadline: Duration,
+    grace: Duration,
 ) {
     let end = Instant::now() + deadline;
     loop {
         let next = child.line(end.saturating_duration_since(Instant::now()));
         let mut live = live.lock().unwrap();
         // Cancelled: nothing more is sent.
-        let Some(killer) = live.as_ref() else { return };
+        let Some(running) = live.as_ref() else { return };
         let done = match next {
             Ok(Some(line)) => match serde_json::from_str(&line) {
                 Ok(Line::AuthorizeUrl { url }) => {
@@ -150,7 +170,7 @@ fn until_result(
                 Err(NO_RESULT.into())
             }
             Err(Timeout) => {
-                killer.stop(TERM_GRACE);
+                running.end(grace);
                 log.line("sign-in: no result");
                 Err(NO_RESULT.into())
             }
@@ -165,7 +185,8 @@ fn shown(message: &str) -> String {
     message.chars().take(MESSAGE_MAX).collect()
 }
 
-#[cfg(test)]
+// Every test runs the fake CLI, a shell script.
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use crate::cli::LINE_MAX;
@@ -329,16 +350,17 @@ mod tests {
     #[test]
     fn cancel_kills_before_the_result_only() {
         let fake = Fake::new();
+        // One that does not end by itself is killed after the grace.
         fake.script("login --json", &[URL, "@hang"]);
         let (send, events) = channel();
-        let sign_in = login(&fake.cli(), fake.log(), send).unwrap();
+        let sign_in = login_within(&fake.cli(), fake.log(), send, LOGIN_DEADLINE, LOGIN_EXIT_DEADLINE, SHORT).unwrap();
         assert_eq!(events.recv_timeout(WAIT), Ok(AuthorizeUrl("https://id.example/a?state=S".into())));
         sign_in.cancel();
         assert!(wait_gone(fake.pids()[0]));
         assert_eq!(all(&events), Vec::new());
         assert!(fake.ends().is_empty());
         assert!(logged(&fake, "sign-in: cancelled"));
-        assert!(logged(&fake, "harness login --json: killed by a signal"));
+        assert!(logged(&fake, "harness login --json: killed"));
 
         let fake = Fake::new();
         fake.script("login --json", &[SUCCESS, "@wait later"]);
@@ -358,9 +380,10 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn cancel_and_the_deadline_let_the_cli_end_by_itself() {
-        // On SIGTERM `harness login` takes its code back and exits, and its spawn lock's exit hook runs.
+        // On its stdin's end `harness login` takes its code back and exits 1, and its spawn lock's exit hook runs: on
+        // every OS, Windows having no SIGTERM.
         let fake = Fake::new();
-        fake.script("login --json", &["@term", URL, "@wait never"]);
+        fake.script("login --json", &["@driver", URL, "@wait never"]);
         let (send, events) = channel();
         let sign_in = login(&fake.cli(), fake.log(), send).unwrap();
         assert_eq!(events.recv_timeout(WAIT), Ok(AuthorizeUrl("https://id.example/a?state=S".into())));
@@ -368,23 +391,13 @@ mod tests {
         assert_eq!(all(&events), Vec::new());
         assert_eq!(fake.ends(), ["login --json"]);
         assert!(logged(&fake, "harness login --json: exit 1"), "{:?}", fake.log().lines());
-        // The deadline counts from the spawn, and a fake that took all of it to start has no trap yet: the deadline
-        // doubles until the URL, printed once the trap is set, came first.
-        let mut deadline = SHORT;
-        loop {
-            let fake = Fake::new();
-            fake.script("login --json", &["@term", URL, "@wait never"]);
-            let (send, events) = channel();
-            let _login = login_within(&fake.cli(), fake.log(), send, deadline, WAIT).unwrap();
-            let events = all(&events);
-            assert_eq!(events.last(), Some(&failed(NO_RESULT)));
-            if events.len() == 2 {
-                assert_eq!(fake.ends(), ["login --json"]);
-                return;
-            }
-            deadline *= 2;
-            assert!(deadline < Duration::from_secs(10), "the fake never started in time");
-        }
+        // A stdin that ended before the fake watched it is seen as soon as it does, however long it took to start.
+        let fake = Fake::new();
+        fake.script("login --json", &["@driver", URL, "@wait never"]);
+        let (send, events) = channel();
+        let _login = login_within(&fake.cli(), fake.log(), send, SHORT, WAIT, WAIT).unwrap();
+        assert_eq!(all(&events).last(), Some(&failed(NO_RESULT)));
+        assert_eq!(fake.ends(), ["login --json"]);
     }
 
     #[cfg(unix)]
@@ -393,11 +406,11 @@ mod tests {
         let fake = Fake::new();
         fake.script("login --json", &[URL, "@hang"]);
         let (send, events) = channel();
-        let _login = login_within(&fake.cli(), fake.log(), send, SHORT, WAIT).unwrap();
+        let _login = login_within(&fake.cli(), fake.log(), send, SHORT, WAIT, SHORT).unwrap();
         // The URL comes first unless the fake took the whole 300 ms to start, as it can beside other tests.
         assert_eq!(all(&events).last(), Some(&failed(NO_RESULT)));
         // The thread ends after the child, so its line is there, even when the kill came before the fake wrote its pid.
-        assert!(logged(&fake, "harness login --json: killed by a signal"), "{:?}", fake.log().lines());
+        assert!(logged(&fake, "harness login --json: killed"), "{:?}", fake.log().lines());
         assert!(fake.pids().into_iter().all(wait_gone));
         assert!(fake.ends().is_empty());
         assert!(logged(&fake, "sign-in: no result"));
@@ -409,7 +422,7 @@ mod tests {
         let fake = Fake::new();
         fake.script("login --json", &[SUCCESS, "@wait later"]);
         let (send, events) = channel();
-        let _login = login_within(&fake.cli(), fake.log(), send, WAIT, SHORT).unwrap();
+        let _login = login_within(&fake.cli(), fake.log(), send, WAIT, SHORT, WAIT).unwrap();
         assert_eq!(all(&events), [Done(Ok(()))]);
         let pid = fake.pids()[0];
         assert!(alive(pid));
@@ -433,5 +446,49 @@ mod tests {
         // The run's own line too: the thread ends only after the child has.
         assert!(lines.iter().any(|line| line == "harness login --json: exit 0"), "{lines:?}");
         assert!(lines.iter().all(|line| !line.contains("state=S") && !line.contains('@')), "{lines:?}");
+    }
+}
+
+// A sign-in on Windows, against a CLI of Windows' own programs.
+#[cfg(all(test, windows))]
+mod windows_tests {
+    use super::*;
+    use crate::cli::{HarnessCli, find_cli};
+    use crate::types::MemoryLog;
+    use std::fs;
+    use std::sync::mpsc;
+
+    /// For the CLI's first line: PowerShell on a cold machine takes seconds.
+    const FIRST_LINE: Duration = Duration::from_secs(60);
+    const WAIT: Duration = Duration::from_secs(5);
+
+    /// As `harness login --json` while it waits: a `waiting` line, then, once its stdin has ended, exit 1.
+    const LOGIN: &str = r#"
+[Console]::Out.WriteLine('{"type":"waiting","message":"w"}')
+$null = [Console]::In.ReadToEnd()
+exit 1
+"#;
+
+    #[test]
+    fn cancel_lets_the_cli_end_by_itself() {
+        let folder = tempfile::tempdir().unwrap();
+        fs::write(folder.path().join("login.ps1"), LOGIN).unwrap();
+        // `harness login --json`, its arguments left out: the script is its one command.
+        let program = folder.path().join("harness.cmd");
+        let line = r#"@"%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive"#;
+        let file = r#"-ExecutionPolicy Bypass -File "%~dp0login.ps1""#;
+        fs::write(&program, format!("{line} {file}\r\n@exit /b %ERRORLEVEL%\r\n")).unwrap();
+        let log = Arc::new(MemoryLog::default());
+        let cli = HarnessCli::new(find_cli(folder.path(), None, Some(&program)).unwrap(), log.clone());
+        let (send, events) = mpsc::channel();
+        let sign_in = login(&cli, log.clone(), move |event| {
+            let _ = send.send(event);
+        })
+        .unwrap();
+        assert_eq!(events.recv_timeout(FIRST_LINE), Ok(Event::Login(LoginEvent::Waiting("w".into()))));
+        sign_in.cancel();
+        // The sign-in's thread lets go of `send` once the CLI has exited.
+        assert_eq!(events.recv_timeout(WAIT), Err(mpsc::RecvTimeoutError::Disconnected));
+        assert!(log.lines().iter().any(|line| line == "harness login --json: exit 1"), "{:?}", log.lines());
     }
 }

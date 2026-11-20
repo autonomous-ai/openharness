@@ -18,6 +18,7 @@ import { basename, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, onTestFinished } from 'vitest'
 import {
   appBundles,
+  assertCmdSafe,
   assertRebranded,
   assertUnchanged,
   forgetPreferences,
@@ -31,6 +32,8 @@ import {
   sweepLeftovers,
   unregister,
   VSCODE_PREFERENCES,
+  windowsThrowaway,
+  type WindowsProcess,
 } from './throwawayApp.js'
 
 let root: string
@@ -121,7 +124,8 @@ describe.runIf(process.platform === 'darwin')('the throwaway VS Code app', () =>
   })
 })
 
-describe('the throwaway\'s processes', () => {
+// A shell of /bin/sh: Windows' clean-up is the table's below.
+describe.skipIf(process.platform === 'win32')('the throwaway\'s processes', () => {
   /** A shell that ignores SIGTERM, as a VS Code that will not quit does, and ends when its input does, so a failed test
    *  leaves nothing running. */
   function stubborn(script: string, ...args: string[]) {
@@ -144,7 +148,7 @@ describe('the throwaway\'s processes', () => {
     const outside = stubborn('read line; echo "$line"', 'outside')
     await Promise.all([insideStarted, once(reported, 'spawn'), once(outside, 'spawn')])
 
-    const names = killThrowaway(root, new Map([[reported.pid!, startedAt(reported.pid!)!], [outside.pid!, 'not when it started']]))
+    const names = await killThrowaway(root, new Map([[reported.pid!, (await startedAt(reported.pid!))!], [outside.pid!, 'not when it started']]))
 
     await insideGone
     expect((await reportedEnd)[1]).toBe('SIGKILL')
@@ -164,13 +168,82 @@ describe('the throwaway\'s processes', () => {
     const runningEnd = once(running, 'exit')
     await Promise.all([once(stray, 'spawn'), once(running, 'spawn')])
 
-    sweepLeftovers(root)
+    await sweepLeftovers(root)
 
     expect([existsSync(left), existsSync(live)]).toEqual([false, true])
     expect((await strayEnd)[1]).toBe('SIGKILL')
     running.stdin.end('done\n')
     expect(await runningEnd).toEqual([0, null])
   }, 10_000)
+})
+
+describe('the throwaway\'s processes on Windows, from the process table', () => {
+  const root = 'C:\\Users\\Nguyễn Văn A\\AppData\\Local\\Temp\\harness-vscode-gate-4242-Ab12Cd'
+  // FILETIMEs: the later a process started, the larger.
+  const at = (n: number): string => String(134_000_000_000_000_000n + BigInt(n))
+  const row = (pid: number, ppid: number, started: number, command: string): WindowsProcess =>
+    ({ pid, ppid, name: `p${pid}.exe`, command, started: at(started) })
+  const selected = (table: WindowsProcess[], shells?: Map<number, string>): number[] =>
+    windowsThrowaway(table, root, shells).map(({ pid }) => pid).sort((a, b) => a - b)
+
+  it('selects what runs from the root, in any case, and its descendants, and nothing outside', () => {
+    const table = [
+      row(10, 4, 1, `${root}\\vscode\\vscode-win32-arm64-archive-1.147.0\\Code.exe "${root}\\vscode\\…\\Code.exe" --user-data-dir ${root}\\user-data`),
+      // The pty host, started by VS Code; the shell it started, from System32; conhost under that.
+      row(11, 10, 2, 'C:\\Windows\\System32\\cmd.exe cmd /c ptyhost'),
+      row(12, 11, 3, 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe powershell.exe'),
+      row(13, 12, 4, 'C:\\Windows\\System32\\conhost.exe conhost.exe 0xffffffff'),
+      // Named by its argument alone, in another case.
+      row(20, 4, 5, `C:\\Program Files\\nodejs\\node.exe node.exe ${root.toUpperCase()}\\app.bin`),
+      // The developer's own: Explorer, a VS Code, a shell.
+      row(4, 1, 0, 'C:\\Windows\\explorer.exe C:\\Windows\\Explorer.EXE'),
+      row(30, 4, 6, 'C:\\Users\\Nguyễn Văn A\\AppData\\Local\\Programs\\Microsoft VS Code\\Code.exe "Code.exe"'),
+      row(31, 30, 7, 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe powershell.exe'),
+      // Another run's root whose name starts with this one's, and one beside it with a longer name.
+      row(40, 4, 8, `${root}0\\Code.exe Code.exe`),
+      row(41, 4, 9, `${root}-x\\Code.exe Code.exe`),
+      // Another account's process: Windows gives no path or command line.
+      row(50, 4, 10, ' '),
+    ]
+    expect(selected(table)).toEqual([10, 11, 12, 13, 20])
+  })
+
+  it('takes no child of a pid Windows gave the throwaway after the child\'s parent ended', () => {
+    // Process 10 started at 5; 60 started at 2, under an earlier process that had pid 10.
+    const table = [
+      row(10, 4, 5, `${root}\\Code.exe Code.exe`),
+      row(60, 10, 2, 'C:\\Windows\\System32\\svchost.exe svchost.exe'),
+      row(61, 60, 3, 'C:\\Windows\\System32\\conhost.exe conhost.exe'),
+    ]
+    expect(selected(table)).toEqual([10])
+  })
+
+  it('selects a reported shell, and its children, only while it is the process reported', () => {
+    const shell = 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe powershell.exe'
+    const table = [row(70, 4, 1, shell), row(71, 70, 2, 'C:\\Windows\\System32\\conhost.exe conhost.exe'), row(72, 4, 3, shell)]
+    // 70 as reported; 72 reported, but it is a later process given that pid.
+    expect(selected(table, new Map([[70, at(1)], [72, at(0)]]))).toEqual([70, 71])
+  })
+})
+
+describe('the paths cmd.exe gets on Windows', () => {
+  it('passes paths of letters, digits, \\, :, ., _ and - alone', () => {
+    expect(() => assertCmdSafe({ 'the temp folder': 'C:\\Users\\nguyen_a\\AppData\\Local\\Temp', 'the driver': 'D:\\src\\harness-device.vscode\\gate\\driver' })).not.toThrow()
+  })
+
+  it('refuses a space, &, %, a quote or a letter outside ASCII, naming what holds it and never its path', () => {
+    for (const name of ['Nguyen A', 'A&B', '100%', 'O\'Neil', 'A"B', 'Nguyễn']) {
+      const path = `C:\\Users\\${name}\\AppData\\Local\\Temp`
+      let message = ''
+      try {
+        assertCmdSafe({ 'the driver': 'C:\\src\\driver', 'the temp folder': path })
+      } catch (error) {
+        message = (error as Error).message
+      }
+      expect(message).toMatch(/^refusing to launch the throwaway VS Code: the temp folder's path holds a character cmd\.exe /)
+      expect(message).not.toContain(name)
+    }
+  })
 })
 
 describe('the throwaway\'s own preferences, caches and HTTP storage', () => {
@@ -247,7 +320,8 @@ describe('the developer\'s VS Code preferences, before and after', () => {
     expect(() => assertUnchanged(file, null)).toThrow(/VS Code's preferences changed/)
   })
 
-  it('names the developer\'s preferences from ~, never by the account\'s home', () => {
+  // The preferences are a Mac's.
+  it.skipIf(process.platform === 'win32')('names the developer\'s preferences from ~, never by the account\'s home', () => {
     // It only reads the file, and fails on a stamp no file has.
     expect(() => assertUnchanged(VSCODE_PREFERENCES, { mtimeMs: -1, sha256: '' })).toThrow(/~\/Library\/Preferences\/com\.microsoft\.VSCode\.plist/)
     try {

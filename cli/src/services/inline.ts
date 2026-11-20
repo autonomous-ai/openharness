@@ -1,3 +1,6 @@
+import type { CoreApi, CorePorts, ServiceRequests } from '../core/api.js'
+import { startDevices as startDevicesService, type DevicesDeps } from './devices.js'
+import { listenForDevices } from './devicesListener.js'
 export { questionControlFor } from '../engines/questionControls.js'
 /**
  * The services that run in a process of their own by default (harnessd/services.ts `SERVICE_HOSTS`), for
@@ -40,7 +43,6 @@ export { startMemory } from './memory.js'
 export { startCloud } from './cloud.js'
 export { startConnectors } from './connectors.js'
 export { startSharedMachines } from './sharedMachines.js'
-export { startDevices } from './devices.js'
 export { startGoals } from './goals.js'
 export { startHachiInCore } from './hachi.js'
 export { startHomeBridgeInCore } from './homeBridge.js'
@@ -68,3 +70,12 @@ export { startWorkspaces } from './workspaces.js'
 export { createLocalNativeSetup } from './nativeSetup.js'
 export { createServiceHost } from './inlineHost.js'
 export { inlineSharedMachinesPort } from '../lib/sharedMachinesPort.js'
+
+/**
+ * Explicit inline and old-master compatibility starts on Windows still need the devices' authenticated pipe for
+ * notify commands, editor extensions and plugins. Normal starts own that pipe in the devices process. Elsewhere
+ * inline starts keep the existing core door. `platform` is for tests.
+ */
+export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps, platform: NodeJS.Platform = process.platform): ServiceRequests {
+  return startDevicesService(core, ports, platform === 'win32' ? { ...deps, listen: listenForDevices(core.dataDir, platform) } : deps)
+}

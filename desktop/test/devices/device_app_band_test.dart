@@ -67,7 +67,26 @@ void main() {
       tester.getTopLeft(find.byKey(_dismiss)).dx,
       lessThan(tester.getTopLeft(find.byKey(_install)).dx),
     );
-  });
+  }, variant: TargetPlatformVariant.only(TargetPlatform.macOS));
+
+  testWidgets(
+    'on Windows and Linux the sentence names the tray app',
+    (tester) async {
+      final fixture = await DeviceAppFixture.inState(DeviceAppOfferState.offer);
+      await _mount(tester, fixture);
+
+      expect(
+        tester.widget<Text>(find.byKey(_text)).data,
+        'Your dial follows apps with the Harness tray app.',
+      );
+      expect(_label(tester, _dismiss), 'Not now');
+      expect(_label(tester, _install), 'Install');
+    },
+    variant: TargetPlatformVariant({
+      TargetPlatform.windows,
+      TargetPlatform.linux,
+    }),
+  );
 
   testWidgets('Install installs once and reads Installing…', (tester) async {
     final fixture = await DeviceAppFixture.inState(DeviceAppOfferState.offer);

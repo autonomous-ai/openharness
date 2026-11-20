@@ -73,12 +73,11 @@ it('bounds filesystem fan-out, shares a pass, and cannot multiply reads after it
  expect((await engineBin.agentCommandOwnershipSnapshotAsync()).engineCandidates?.get('codex')).toHaveLength(1)
  expect(errors).toHaveBeenCalledWith('[engine] ENGINE_LOOKUP_TIMEOUT: executable ownership unavailable')
 })
-it('rejects failed ownership evidence instead of publishing an empty snapshot', async () => {
+it('a candidate file that fails to read (EIO) is skipped, and the pass answers', async () => {
  fixture(); reads.failure = 'EIO'
  const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
- await expect(engineBin.agentCommandOwnershipSnapshotAsync()).rejects.toThrow('ENGINE_LOOKUP_FAILED')
- expect(errors).toHaveBeenCalledWith('[engine] ENGINE_LOOKUP_FAILED: executable ownership unavailable')
- expect(reads.calls).toBeLessThanOrEqual(8)
+ expect((await engineBin.agentCommandOwnershipSnapshotAsync()).engineCandidates?.get('codex')).toEqual([])
+ expect(errors).not.toHaveBeenCalled()
 })
 it('refuses an in-flight answer when PATH changes', async () => {
  const { root } = fixture(); vi.useFakeTimers()

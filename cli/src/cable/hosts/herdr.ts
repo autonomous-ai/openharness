@@ -3,10 +3,10 @@
  * agent by `herdr agent focus`, then the app around herdr comes forward as every app does. The pane id came from a hook
  * or from herdr, so it is checked against its form before the command, which runs with no shell.
  *
- * A tap stays the command on every platform: one way to focus, and on Windows, where herdr's socket is a named pipe the
- * client does not speak, a tap is not lost. The dial's words go over herdr's socket (herdrClient.ts), so off Windows
- * this adapter types while that socket is there. It comes before Orca's: herdr inside an Orca terminal takes the words
- * into the agent's own pane, where Orca would type into whichever pane herdr has in front.
+ * A tap stays the command on every platform: one way to focus. The dial's words go over herdr's socket, or on Windows
+ * its pipe (herdrClient.ts), so this adapter types while that socket, or the pipe's marker, is there. It comes before
+ * Orca's: herdr inside an Orca terminal takes the words into the agent's own pane, where Orca would type into whichever
+ * pane herdr has in front.
  *
  * A rest runs the same command, only while the app holding the pane's herdr client is in front: the pane id carries
  * that app when observed.ts found it (`w1:p1:terminal-app`), and every verb takes the bare herdr id from it.
@@ -21,7 +21,7 @@ import { APP_IDS } from './hostDetect.js'
 import { RUN_TIMEOUT_MS, type OrcaDeps } from './orca.js'
 
 export interface HerdrAdapterDeps extends OrcaDeps {
-  client: Pick<HerdrClient, 'prompt' | 'socketStamp'>
+  client: Pick<HerdrClient, 'prompt' | 'socketStamp' | 'binary'>
   /** The app in front, which a rest asks for. */
   front(): string | undefined
 }
@@ -53,7 +53,8 @@ export function createHerdrAdapter(deps: HerdrAdapterDeps): HerdrAdapter {
   const turn = (id: string): Promise<boolean> => {
     const under = focusing.get(id)
     if (under) return under
-    const herdr = deps.onPath('herdr')
+    // herdr's zip on Windows puts it on no PATH: there the herdr that wrote the marker runs the command.
+    const herdr = deps.onPath('herdr') ?? deps.client.binary()
     if (!herdr) return Promise.resolve(false)
     const command = async () => (await deps.run(herdr, ['agent', 'focus', id], RUN_TIMEOUT_MS)).code === 0
     const typing = prompting.get(id)
@@ -94,16 +95,14 @@ export function createHerdrAdapter(deps: HerdrAdapterDeps): HerdrAdapter {
       const parts = paneParts(pane)
       return parts && (await turn(parts.id)) ? 'ok' : 'failed'
     },
-    ...(deps.platform === 'win32' ? {} : {
-      type: async (pane: Pane, text: string, engine: string) => {
-        const parts = paneParts(pane)
-        return !!parts && (await prompt(parts.id, engine, text)).outcome === 'sent'
-      },
-      // A daemon started by launchd or systemd may not have the shell's XDG_CONFIG_HOME, and so no socket where herdr
-      // listens: the words then skip herdr, and no other app types into a multiplexer's pane (orca.ts), so the agent's
-      // voice is its mod's or the Codex queue's alone.
-      canType: () => deps.client.socketStamp() !== undefined,
-    }),
+    async type(pane, text, engine) {
+      const parts = paneParts(pane)
+      return !!parts && (await prompt(parts.id, engine, text)).outcome === 'sent'
+    },
+    // A daemon started by launchd or systemd may not have the shell's XDG_CONFIG_HOME, and so no socket where herdr
+    // listens: the words then skip herdr, and no other app types into a multiplexer's pane (orca.ts), so the agent's
+    // voice is its mod's or the Codex queue's alone.
+    canType: () => deps.client.socketStamp() !== undefined,
     paneKey: (pane) => herdrPaneKey(paneParts(pane)?.id ?? pane.id),
     prompt,
   }

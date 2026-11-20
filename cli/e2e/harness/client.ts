@@ -50,17 +50,23 @@ export class LocalClient {
   /** `machineId`: the machine to select — a signed-in daemon serves under its account's machine id, a
    *  signed-out one under its computer id (the default).
    *  `shareId`: open a harness another account shared with this one, read-only. */
-  static async connect(daemon: IsolatedDaemon, options: { tcp?: boolean; tool?: boolean; machineId?: string; shareId?: string; eventsProtocol?: 1 } = {}): Promise<LocalClient> {
+  static async connect(daemon: IsolatedDaemon, options: { tcp?: boolean; tool?: boolean; watch?: readonly 'dial'[]; machineId?: string; shareId?: string; eventsProtocol?: 1 } = {}): Promise<LocalClient> {
     const url = options.tcp
       ? `ws://127.0.0.1:${daemon.port}/api/local-ws`
       : `ws+unix://${daemon.socketPath}:/api/local-ws`
     const ws = new WebSocket(url, options.tcp ? { headers: daemon.localHeaders() } : undefined)
+    return LocalClient.over(ws, options.machineId ?? daemon.computerId, options)
+  }
+
+  /** A client on [ws], a socket to a daemon however it was reached: a Windows daemon's pipe
+   *  (lib/localTransport.ts `openLocalWs`), which `connect` cannot name. `watch`: what a tool is sent as it changes. */
+  static async over(ws: WebSocket, machineId: string, options: { tool?: boolean; watch?: readonly 'dial'[]; shareId?: string; eventsProtocol?: 1 } = {}): Promise<LocalClient> {
     await new Promise<void>((resolve, reject) => {
       ws.once('open', () => resolve())
       ws.once('error', reject)
     })
     const client = new LocalClient(ws)
-    client.send('machine_select', { machineId: options.machineId ?? daemon.computerId, localProtocolVersion: 1, ...(options.shareId ? { shareId: options.shareId } : {}), ...(options.tool ? { tool: true } : {}), ...(options.eventsProtocol ? { eventsProtocol: options.eventsProtocol } : {}) })
+    client.send('machine_select', { machineId, localProtocolVersion: 1, ...(options.shareId ? { shareId: options.shareId } : {}), ...(options.tool ? { tool: true } : {}), ...(options.eventsProtocol ? { eventsProtocol: options.eventsProtocol } : {}), ...(options.watch ? { watch: options.watch } : {}) })
     await client.waitFor((frame) => frame.type === 'connected', 10_000, 'connected')
     return client
   }

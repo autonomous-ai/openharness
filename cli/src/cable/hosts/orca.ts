@@ -10,6 +10,8 @@ import { type ChildProcess, execFile, spawn } from 'node:child_process'
 import { existsSync, realpathSync, statSync } from 'node:fs'
 import { orcaBinary } from '../../devices/orcaHomes.js'
 import { resolveBinaryOnPath } from '../../lib/binaryOnPath.js'
+import { windowsProgram } from '../../lib/windows/program.js'
+import { endProcessTree, processTreeKillDeps } from '../../lib/windows/treeKill.js'
 import type { HostAdapter } from './adapter.js'
 import { APP_BUNDLES } from './hostDetect.js'
 import { observedTitle } from './observedTitle.js'
@@ -60,31 +62,42 @@ export interface OrcaReadDeps extends OrcaDeps {
 
 const GONE: OrcaChild = { onData: () => {}, exited: Promise.resolve(), kill: () => {} }
 
-export function orcaDeps(): OrcaReadDeps {
+/** Every app's command (Orca's, herdr's, tmux's, WezTerm's, the tap paths') as the resolver starts it: on Windows an
+ *  `.exe` with no shell, so a text with a line break, `&` or `%` is one argument, and no console window shows. A batch
+ *  file it refuses throws. */
+function started(file: string, args: string[], platform: NodeJS.Platform): { file: string; args: string[]; options: { windowsHide: true; env?: NodeJS.ProcessEnv } } {
+  const program = windowsProgram(file, args, { platform })
+  return { file: program.file, args: program.args, options: { windowsHide: true, ...(program.env ? { env: program.env } : {}) } }
+}
+
+export function orcaDeps(platform: NodeJS.Platform = process.platform): OrcaReadDeps {
   return {
     run: (file, args, timeoutMs) => new Promise((resolve) => {
       // The timeout's kill waits for the process to exit: one deaf to SIGTERM, or stuck where even SIGKILL waits, kept the
       // call and its terminal's one-command slot open for good. The deadline answers by itself.
       const deadline = setTimeout(() => resolve({ code: null, stdout: '' }), timeoutMs)
       try {
-        execFile(file, args, { timeout: timeoutMs, killSignal: 'SIGKILL' }, (error, stdout) => {
+        const program = started(file, args, platform)
+        execFile(program.file, program.args, { timeout: timeoutMs, killSignal: 'SIGKILL', ...program.options }, (error, stdout) => {
           clearTimeout(deadline)
           // A number is the exit code; a timeout's kill or a binary that could not start has none.
           resolve({ code: error === null ? 0 : typeof error.code === 'number' ? error.code : null, stdout })
         })
       } catch {
-        // A file or argument it refuses before starting (a NUL byte, a .cmd on Windows) throws rather than calls back.
+        // A file or argument refused before starting (a NUL byte, a batch file the resolver does not run) throws rather
+        // than calls back.
         clearTimeout(deadline)
         resolve({ code: null, stdout: '' })
       }
     }),
     onPath: (name, accept) => resolveBinaryOnPath(name, process.env, accept),
     exists: existsSync,
-    platform: process.platform,
+    platform,
     spawn: (file, args) => {
       let child: ChildProcess
       try {
-        child = spawn(file, args, { stdio: ['ignore', 'pipe', 'pipe'] })
+        const program = started(file, args, platform)
+        child = spawn(program.file, program.args, { stdio: ['ignore', 'pipe', 'pipe'], ...program.options })
       } catch {
         // A file or argument it refuses before starting throws rather than emits: a child that has already gone.
         return GONE
@@ -97,10 +110,25 @@ export function orcaDeps(): OrcaReadDeps {
       // Drained: a child that writes more to stderr than its pipe holds stalls before its next line. Never kept: it can
       // name paths.
       stderr.resume()
+      const running = () => child.exitCode === null && child.signalCode === null
+      // Until Node has seen the child exit it holds the child's handle, so Windows gives its pid to no other process;
+      // once it has, the pid, and the parent pid of what it started, can be another's. So the child is ended through its
+      // handle, never by its pid, and a table read after it exited ends nothing it lists.
+      const byPid = processTreeKillDeps(null)
+      const tree = {
+        ...byPid,
+        rows: async () => { const rows = await byPid.rows(); return running() ? rows : null },
+        kill: (pid: number) => { if (pid === child.pid) child.kill('SIGKILL'); else byPid.kill(pid) },
+      }
       return {
         onData: (listener) => { stdout.on('data', listener) },
         exited: new Promise((resolve) => { child.once('close', () => resolve()) }),
-        kill: (signal) => { child.kill(signal) },
+        // On Windows a signal is TerminateProcess of the child alone: what `orca.exe` started would keep running. So the
+        // whole tree is ended, for either signal, while the child is still there.
+        kill: (signal) => {
+          if (platform !== 'win32') child.kill(signal)
+          else if (child.pid !== undefined && running()) void endProcessTree(child.pid, tree)
+        },
       }
     },
     mtime: (path) => {

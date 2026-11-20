@@ -17,6 +17,7 @@ pub mod panes;
 pub mod peer;
 pub mod protocol;
 pub mod ps;
+pub mod raise;
 pub mod server;
 pub mod stream;
 pub mod transport;

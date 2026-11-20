@@ -105,6 +105,22 @@ describe('checkSessionRuntime', () => {
     expect(update).not.toHaveBeenCalled()
   })
 
+  it.each(['same process', 'reused pid', 'outside pane'] as const)('checks a saved process when executable discovery cannot identify it: %s', async mode => {
+    const update = vi.spyOn(registry, 'updateProcessIdentity').mockReturnValue(undefined as never)
+    const saved = { pid: 11, executable: 'claude', startMarker: LSTART }
+    setProcessTableSource(async () => [
+      { pid: 10, parentPid: 1, executable: 'zsh', startMarker: 'Mon Aug 10 10:00:10 2026', args: '-zsh' },
+      { pid: 11, parentPid: mode === 'outside pane' ? 1 : 10, executable: 'engine-loading',
+        startMarker: mode === 'reused pid' ? 'Mon Aug 10 10:00:12 2026' : LSTART, args: 'engine-loading' },
+    ])
+    try {
+      const found = await checkSessionRuntime(backendWithRoot(10), session({ processIdentity: saved }), runtime)
+      expect(found).toEqual(mode === 'same process' ? { state: 'alive' }
+        : { state: 'gone', reason: 'no claude process under tmux:%1' })
+      expect(update).not.toHaveBeenCalled()
+    } finally { setProcessTableSource(null) }
+  })
+
   it('records the live identity when the row has none yet', async () => {
     const update = vi.spyOn(registry, 'updateProcessIdentity').mockReturnValue(undefined as never)
     const found = await withEngine(() => checkSessionRuntime(backendWithRoot(10), session({ processIdentity: null }), runtime))

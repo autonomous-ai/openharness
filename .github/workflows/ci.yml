@@ -729,17 +729,22 @@ jobs:
         run: npx vitest run src/lib/ptyHostBackend.contract.spec.ts --maxWorkers=1
 
   # The Harness Device menu-bar app (device-app/, Rust and Tauri): the release scripts' tests, the UI's typecheck,
-  # Vitest and bundle, then the Rust unit tests on Linux. The macOS code is not compiled here; it is built and tested
-  # on a Mac.
+  # Vitest and bundle, then the Rust unit tests on Linux; on Windows, the lib's unit tests. The macOS code is not
+  # compiled here; it is built and tested on a Mac.
   device-app-checks:
     concurrency:
-      group: ci-${{ github.event_name }}-${{ github.event.action || 'run' }}-${{ github.event.pull_request.number || github.run_id }}-device-app-checks
+      group: ci-${{ github.event_name }}-${{ github.event.action || 'run' }}-${{ github.event.pull_request.number || github.run_id }}-device-app-checks-${{ strategy.job-index }}
       cancel-in-progress: ${{ github.event_name == 'pull_request' }}
     needs: plan
     if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.device-app == 'true'
-    runs-on: ubuntu-latest
+    name: device-app-checks (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
     # apt-install.sh can take about 19.5 minutes to give up in a mirror outage, and a cold Tauri compile follows.
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
     steps:
       - uses: actions/checkout@v7
         with:
@@ -747,33 +752,40 @@ jobs:
       # The release rules (device-app/scripts): versions, refs and the commit on main, the manifest, the publish order
       # and the release command, against temp Git repositories and fake gcloud, curl and gh. Nothing leaves 127.0.0.1.
       - name: Release script tests
+        if: runner.os == 'Linux'
         run: python3 -m unittest discover -s device-app/scripts -p 'test_*.py' -v
       # Tauri's Linux packages: the webview, the tray, SVG icons, and libxdo, which its menu crate links. Then, for the
       # live X11 front source: xvfb (an X server), openbox (a window manager, which keeps _NET_ACTIVE_WINDOW), xdotool
       # (brings a window to the front) and xterm (the X client brought there).
-      - run: >-
+      - if: runner.os == 'Linux'
+        run: >-
           sudo bash scripts/apt-install.sh libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev
           xvfb openbox xdotool xterm
-      - uses: actions/setup-node@v7
+      - if: runner.os == 'Linux'
+        uses: actions/setup-node@v7
         with:
           node-version: ${{ env.CLI_NODE_VERSION }}
           cache: npm
           cache-dependency-path: device-app/ui/package-lock.json
       # The binary embeds ui/dist, so the bundle is built before the Rust tests compile it.
       - name: UI tests and bundle
+        if: runner.os == 'Linux'
         working-directory: device-app/ui
         run: |
           npm ci --no-audit --no-fund
           npx tsc --noEmit
           npx vitest run
           npm run build
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - if: runner.os == 'Linux'
+        uses: dtolnay/rust-toolchain@stable
+      - if: runner.os == 'Linux'
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: device-app/src-tauri
           shared-key: device-app-pr
           cache-bin: false
       - name: Rust unit tests
+        if: runner.os == 'Linux'
         run: cargo test --locked --manifest-path device-app/src-tauri/Cargo.toml
       # x11_live (front_x11.rs) brings two xterms to the front, one copied as `code`, and waits for each exe name from
       # the X11 source. xvfb-run is not used: it needs xauth, which apt-install.sh's --no-install-recommends leaves out.
@@ -781,6 +793,7 @@ jobs:
       # cold runner can take well over 10 s to start it; its log shows why when it never does.
       # A filter that matches no test passes with 0 tests, so the step fails unless x11_live itself passed.
       - name: X11 front source, live
+        if: runner.os == 'Linux'
         run: |
           cp "$(command -v xterm)" "$RUNNER_TEMP/code"
           mkfifo "$RUNNER_TEMP/xvfb-display"
@@ -795,6 +808,18 @@ jobs:
           X11_LIVE_CLIENTS="$(command -v xterm):$RUNNER_TEMP/code" cargo test --locked --lib \
             --manifest-path device-app/src-tauri/Cargo.toml -- --ignored x11_live --nocapture | tee "$RUNNER_TEMP/x11_live.log"
           grep -q 'x11_live ... ok' "$RUNNER_TEMP/x11_live.log"
+      # Windows runs the lib's rules (the Windows children, front source, login item and paths). The release scripts,
+      # the UI and the live X11 source are the same everywhere or Linux's, so they run on the Linux leg only.
+      - if: runner.os == 'Windows'
+        uses: dtolnay/rust-toolchain@stable
+      - if: runner.os == 'Windows'
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: device-app/src-tauri
+          shared-key: device-app-pr-windows
+      - name: Rust unit tests (Windows)
+        if: runner.os == 'Windows'
+        run: cargo test --locked --lib --manifest-path device-app/src-tauri/Cargo.toml
 
   required:
     name: ci/required

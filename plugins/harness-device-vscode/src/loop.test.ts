@@ -1,7 +1,7 @@
 // The loop, against inputs and a window of this file's own: a launcher's answers, a connect whose chunks the test sends,
 // posts it answers, and a clock it moves. Never the developer's own harness, daemon or VS Code.
 import { afterEach, describe, expect, it } from 'vitest'
-import { MISSING, type LoopInputs, type Ran } from './inputs'
+import { MISSING, type LoopInputs, type Ran, type Target } from './inputs'
 import { startLoop, type Loop, type LoopState } from './loop'
 import { fakeWindow } from './testing/fakeWindow'
 import type { WindowFacade } from './window'
@@ -12,6 +12,13 @@ const OPEN = `{"type":"vscode","window":"${ID}"}`
 const READY = JSON.stringify({ daemon: true, devicesSocket: SOCKET, devicesReady: true })
 const UNPLUGGED = JSON.stringify({ daemon: true, devicesSocket: SOCKET, devicesReady: false })
 const LINK = { args: ['device', 'vscode', 'link'], path: '/usr/bin:/bin', timeoutMs: 5_000, maxBytes: 4_096 }
+// On Windows, a profile whose name has a space, Vietnamese letters, ', & and %.
+const WINDOWS = { platform: 'win32', home: "C:\\Users\\Nguyễn Văn A' & 100%", path: 'C:\\Windows\\System32;C:\\Program Files\\nodejs' }
+const PIPE = '\\\\.\\pipe\\harness-0123456789abcdef0123456789abcdef'
+const TOKEN = '0123456789abcdef'.repeat(4)
+const RECORD = "C:\\Users\\Nguyễn Văn A' & 100%\\.harness\\devices.json"
+const WINDOWS_READY = { daemon: true, devicesPipe: PIPE, devicesToken: TOKEN, devicesReady: true, devicesRecord: RECORD }
+const WINDOWS_UNPLUGGED = JSON.stringify({ daemon: true, devicesReady: false, devicesRecord: RECORD })
 
 let loops: Loop[] = []
 
@@ -23,7 +30,7 @@ afterEach(async () => {
 type Timer = { at: number; run: () => void }
 type Watch = { folder: string; changed: (name: string | null) => void; failed: () => void; closed: boolean }
 interface Stream {
-  socket: string
+  target: Target
   body: string
   /** Aborted once the loop has let the stream go. */
   signal: AbortSignal
@@ -33,7 +40,7 @@ interface Stream {
   /** The devices' end of the stream. */
   end(): void
 }
-interface Post { socket: string; body: string; signal: AbortSignal; at: number; answer(status: number | null): void }
+interface Post { target: Target; body: string; signal: AbortSignal; at: number; answer(status: number | null): void }
 
 const bytes = (text: string) => new TextEncoder().encode(text)
 // Every input here answers in a promise, so once the queue of them is drained the loop has done all it can.
@@ -43,7 +50,7 @@ const flush = () => new Promise<void>((done) => setImmediate(done))
 function world(answers: (Ran | Promise<Ran>)[], win = fakeWindow(), over: Partial<LoopInputs> = {}) {
   let time = 0
   const timers = new Set<Timer>()
-  const runs: { file: string; args: readonly string[]; path: string; timeoutMs: number; maxBytes: number; signal: AbortSignal; at: number }[] = []
+  const runs: { file: string; args: readonly string[]; path: string; cwd: string; timeoutMs: number; maxBytes: number; signal: AbortSignal; at: number }[] = []
   const watches: Watch[] = []
   const streams: Stream[] = []
   const posts: Post[] = []
@@ -67,7 +74,7 @@ function world(answers: (Ran | Promise<Ran>)[], win = fakeWindow(), over: Partia
       if (answers.length > 0) return Promise.resolve(answers.shift()!)
       return new Promise((settle) => bounds.signal.addEventListener('abort', () => settle(null)))
     },
-    connect(socket, body, signal) {
+    connect(target, body, signal) {
       return new Promise((settle) => {
         const queue: Uint8Array[] = []
         let ended = false
@@ -92,7 +99,7 @@ function world(answers: (Ran | Promise<Ran>)[], win = fakeWindow(), over: Partia
           called()
         })
         streams.push({
-          socket,
+          target,
           body,
           signal,
           answer: (status) => settle({ status, chunks: chunks() }),
@@ -105,10 +112,10 @@ function world(answers: (Ran | Promise<Ran>)[], win = fakeWindow(), over: Partia
         called()
       })
     },
-    post(socket, body, signal) {
+    post(target, body, signal) {
       return new Promise((settle) => {
         const reply = replies.length > 0 ? replies.shift()! : 204
-        posts.push({ socket, body, signal, at: time, answer: settle })
+        posts.push({ target, body, signal, at: time, answer: settle })
         signal.addEventListener('abort', () => settle(null))
         if (reply !== 'held') settle(reply)
         called()
@@ -230,40 +237,43 @@ async function connected(win = fakeWindow(), more: (Ran | Promise<Ran>)[] = []) 
 const sent = (post: Post) => JSON.parse(post.body)
 
 describe('startLoop', () => {
-  it('on Windows, or in a remote window, nothing starts: no run, no connect, null', async () => {
-    for (const [platform, remote] of [['win32', false], ['darwin', true], ['linux', true]] as const) {
-      const w = world([], fakeWindow({ remote }), { platform })
+  it('in a remote window nothing starts, on any platform: no run, no connect, null', async () => {
+    for (const platform of ['darwin', 'linux', 'win32']) {
+      const w = world([], fakeWindow({ remote: true }), { platform })
       await flush()
       expect(w.loop).toBeNull()
       expect([w.runs, w.streams, w.posts, w.watches, w.timers.size, w.states, w.logs]).toEqual([[], [], [], [], 0, [], []])
     }
   })
 
-  it("the home's launcher is tried before PATH's, with device vscode link, 5 s and 4 KiB", async () => {
+  it("the home's launcher is tried before PATH's, in the home, with device vscode link, 5 s and 4 KiB", async () => {
     const w = world([MISSING, MISSING])
     await w.until(() => w.states.length > 0)
-    expect(w.runs.map(({ file, args, path, timeoutMs, maxBytes }) => ({ file, args, path, timeoutMs, maxBytes }))).toEqual([
-      { file: '/h/.local/bin/harness', ...LINK },
-      { file: 'harness', ...LINK },
+    expect(w.runs.map(({ file, args, path, cwd, timeoutMs, maxBytes }) => ({ file, args, path, cwd, timeoutMs, maxBytes }))).toEqual([
+      { file: '/h/.local/bin/harness', ...LINK, cwd: '/h' },
+      { file: 'harness', ...LINK, cwd: '/h' },
     ])
     // The first answer that is not missing is the launcher's.
     const second = world([MISSING, UNPLUGGED])
     await second.until(() => second.states.length > 0)
     expect(second.states).toEqual(['unplugged'])
-    // With no home, PATH's alone.
-    const homeless = world([MISSING], fakeWindow(), { home: '' })
-    await homeless.until(() => homeless.states.length > 0)
-    expect(homeless.runs.map((run) => run.file)).toEqual(['harness'])
   })
 
   // A relative folder, or an empty one, is the extension host's working folder, which can be the folder VS Code opened:
-  // in Restricted Mode an untrusted one, whose own `harness` must never run.
-  it("only PATH's absolute folders, and only a home that is absolute, are looked in", async () => {
-    const w = world([MISSING, MISSING], fakeWindow(), { path: 'node_modules/.bin::/usr/bin:.:/bin:', home: 'h' })
+  // in Restricted Mode an untrusted one, whose own `harness` must never run. With no absolute home there is no folder of
+  // the account's own to run in, and no Harness either: it keeps its state there.
+  it("only PATH's absolute folders are looked in, and with no absolute home nothing runs", async () => {
+    const w = world([MISSING, MISSING], fakeWindow(), { path: 'node_modules/.bin::/usr/bin:.:/bin:' })
     await w.until(() => w.states.length > 0)
-    expect(w.runs.map(({ file, args, path, timeoutMs, maxBytes }) => ({ file, args, path, timeoutMs, maxBytes }))).toEqual([
-      { file: 'harness', ...LINK },
+    expect(w.runs.map(({ file, path }) => ({ file, path }))).toEqual([
+      { file: '/h/.local/bin/harness', path: LINK.path },
+      { file: 'harness', path: LINK.path },
     ])
+    for (const home of ['', 'h']) {
+      const homeless = world([], fakeWindow(), { home })
+      await homeless.until(() => homeless.states.length > 0)
+      expect([homeless.runs, homeless.states]).toEqual([[], ['noHarness']])
+    }
   })
 
   it.each([
@@ -364,7 +374,7 @@ describe('startLoop', () => {
   it('opens the stream with its window id and is connected at the head', async () => {
     const w = world([READY])
     await w.until(() => w.streams.length === 1)
-    expect([w.streams[0].socket, w.streams[0].body, w.states]).toEqual([SOCKET, OPEN, []])
+    expect([w.streams[0].target, w.streams[0].body, w.states]).toEqual([{ socket: SOCKET }, OPEN, []])
     w.streams[0].answer(200)
     await w.until(() => w.states.length === 1)
     expect(w.states).toEqual(['connected'])
@@ -471,7 +481,7 @@ describe('startLoop', () => {
     await w.to(1_000)
     win.set({ focused: true })
     await w.until(() => w.posts.length === 2)
-    expect(w.posts.map((post) => [post.socket, sent(post).focused])).toEqual([[SOCKET, false], [SOCKET, true]])
+    expect(w.posts.map((post) => [post.target, sent(post).focused])).toEqual([[{ socket: SOCKET }, false], [{ socket: SOCKET }, true]])
     expect(w.streams.map((stream) => stream.body)).toEqual([OPEN])
   })
 
@@ -981,5 +991,74 @@ describe('startLoop', () => {
     stream.send('{"show":101}\n')
     await w.to(600_000)
     expect([w.posts.length, win.shows, w.states, w.logs]).toEqual([2, [], ['connected'], ['state: connected']])
+  })
+})
+
+describe('startLoop on Windows', () => {
+  // In the profile: Windows looks for a bare name in the working folder before PATH, and the extension host's can be the
+  // folder VS Code opened.
+  it("runs the profile's harness.exe first, then harness in PATH's absolute folders, in the profile, each name one argument", async () => {
+    const w = world([MISSING, MISSING], fakeWindow(), { ...WINDOWS, path: 'C:\\Windows\\System32;.;node_modules\\.bin;;C:\\Program Files\\nodejs' })
+    await w.until(() => w.states.length > 0)
+    const path = 'C:\\Windows\\System32;C:\\Program Files\\nodejs'
+    expect(w.runs.map(({ file, args, path, cwd }) => ({ file, args, path, cwd }))).toEqual([
+      { file: "C:\\Users\\Nguyễn Văn A' & 100%\\.harness\\bin\\harness.exe", args: LINK.args, path, cwd: WINDOWS.home },
+      { file: 'harness', args: LINK.args, path, cwd: WINDOWS.home },
+    ])
+    expect(w.states).toEqual(['noHarness'])
+  })
+
+  it('a ready line opens the stream on the pipe with its token, posts the state there, and a show line shows the terminal', async () => {
+    const win = fakeWindow({ terminals: [101, 202] })
+    const w = world([JSON.stringify(WINDOWS_READY)], win, WINDOWS)
+    await w.until(() => w.streams.length === 1)
+    w.streams[0].answer(200)
+    await w.until(() => w.posts.length === 1)
+    w.streams[0].send('{"show":202}\n')
+    await w.until(() => win.shows.length === 1)
+    const target = { pipe: '\\\\.\\pipe\\harness-0123456789abcdef0123456789abcdef', token: '0123456789abcdef'.repeat(4) }
+    expect([w.streams[0].target, w.streams[0].body, w.posts[0].target, w.states, win.shows]).toEqual([target, OPEN, target, ['connected'], [202]])
+  })
+
+  it('a line with a pipe on another computer, a bad token or a relative record is notRunning, and nothing is connected', async () => {
+    const lines = [
+      { ...WINDOWS_READY, devicesPipe: '\\\\srv\\pipe\\harness-0123456789abcdef0123456789abcdef' },
+      { ...WINDOWS_READY, devicesToken: TOKEN.slice(1) },
+      { ...WINDOWS_READY, devicesToken: `A${TOKEN.slice(1)}` },
+      { ...WINDOWS_READY, devicesToken: undefined },
+      { ...WINDOWS_READY, devicesRecord: '.harness\\devices.json' },
+      { daemon: true, devicesReady: false, devicesRecord: '.harness\\devices.json' },
+    ]
+    for (const line of lines) {
+      const out = JSON.stringify(line)
+      const w = world([out], fakeWindow(), WINDOWS)
+      await w.until(() => w.states.length > 0)
+      expect([out, w.states, w.streams, w.watches]).toEqual([out, ['notRunning'], [], []])
+    }
+  })
+
+  it("unplugged watches the record's folder, and only a devices.json entry there asks link again", async () => {
+    const w = world([WINDOWS_UNPLUGGED, WINDOWS_UNPLUGGED, WINDOWS_UNPLUGGED], fakeWindow(), WINDOWS)
+    await w.until(() => w.states.length === 1 && w.timers.size > 0)
+    expect([w.states, w.watches.map((watch) => watch.folder)]).toEqual([['unplugged'], ["C:\\Users\\Nguyễn Văn A' & 100%\\.harness"]])
+    await w.to(1_000)
+    expect(w.due()).toEqual([301_000])
+    await w.to(1_500)
+    w.watches[0].changed('devices-token')
+    expect(w.due()).toEqual([301_000])
+    w.watches[0].changed('devices.json')
+    expect(w.due()).toEqual([2_000])
+    await w.to(2_000)
+    expect([w.runs.length, w.watches.length]).toEqual([3, 1])
+  })
+
+  it('no line it logs holds the token', async () => {
+    const win = fakeWindow({ terminals: [101] })
+    const w = world([JSON.stringify(WINDOWS_READY)], win, WINDOWS)
+    await w.until(() => w.streams.length === 1)
+    w.streams[0].answer(200)
+    w.streams[0].send('{"show":101}\n')
+    await w.to(60_000)
+    expect([w.logs.length, w.logs.filter((line) => line.includes(TOKEN))]).toEqual([2, []])
   })
 })

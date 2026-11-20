@@ -4,8 +4,23 @@
 # told. Not exec'd, and the launcher's output and exit code are dropped: what this hook prints is a decision to Claude
 # Code and its exit 2 a deny, and it decides nothing.
 # ~/.local/bin first: the installer puts the launcher there, and an app started from the Dock may not have it on PATH.
-if [ -x "$HOME/.local/bin/harness" ]; then
+# Windows' installer puts it in %USERPROFILE%\.harness\bin.
+#
+# hooks.json's command is read by two shells. A POSIX shell (and Git Bash on Windows) runs its first line, which execs
+# this script, and never reads the second. Windows PowerShell, Claude Code's shell on Windows without Git Bash, reads
+# the first line up to `<#` as an echo silenced on the second, and runs the rest of the second line: the same check
+# and launcher lookup, its output dropped and exit 0. PowerShell can take longer than the hook's 5 s to start;
+# onFailure "continue" keeps a hook that fails or times out there from denying the tool call.
+#
+# On Windows the mod (device.js) tells of the prompt itself and sets HARNESS_DEVICE_MOD_ASKS for the hooks Claude Code
+# starts after: nothing to tell. The input is read whole all the same: Claude Code's write of one longer than the pipe
+# holds would fail, and that hook with it.
+if [ -n "$HARNESS_DEVICE_MOD_ASKS" ]; then
+  cat >/dev/null
+elif [ -x "$HOME/.local/bin/harness" ]; then
   "$HOME/.local/bin/harness" device claude asked >/dev/null 2>&1
+elif [ -n "$USERPROFILE" ] && [ -x "$USERPROFILE/.harness/bin/harness.exe" ]; then
+  "$USERPROFILE/.harness/bin/harness.exe" device claude asked >/dev/null 2>&1
 elif command -v harness >/dev/null 2>&1; then
   harness device claude asked >/dev/null 2>&1
 fi

@@ -35,7 +35,10 @@ describe.skipIf(process.platform === 'win32')('the herdr source (docs/specs/2026
     await server.stop()
   })
 
-  const herdrClient = () => createHerdrClient({ socketPath: server.path, home: dirname(server.path), uid: process.getuid!(), platform: process.platform })
+  const herdrClient = () => createHerdrClient({
+    socketPath: server.path, endpoint: server.path, home: dirname(server.path), uid: process.getuid!(), platform: process.platform,
+    rows: async () => null,
+  })
 
   /** A source on the real client and the fake server, its words through the real adapter as the devices wire it, with a
    *  timer queue, a watch and two clocks the test runs by hand. */
@@ -79,7 +82,6 @@ describe.skipIf(process.platform === 'win32')('the herdr source (docs/specs/2026
       now: () => wall,
       monotonic: () => mono,
       uuid: () => `u${++ids}`,
-      platform: process.platform,
       log: (line) => {
         log.push(line)
         settle()
@@ -998,17 +1000,6 @@ describe.skipIf(process.platform === 'win32')('the herdr source (docs/specs/2026
     s.source.start()
     await listRead(1)
     expect(subscribe).toHaveBeenCalledTimes(1)
-  })
-
-  it('on Windows start does nothing', () => {
-    const s = setup({ platform: 'win32' })
-    const subscribe = vi.spyOn(s.client, 'subscribe')
-    const stamp = vi.spyOn(s.client, 'socketStamp')
-    s.source.start()
-    expect(subscribe).not.toHaveBeenCalled()
-    expect(stamp).not.toHaveBeenCalled()
-    expect(s.watchers.size).toBe(0)
-    expect(s.timers).toEqual([])
   })
 
   it('voice', async () => {

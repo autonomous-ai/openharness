@@ -493,6 +493,7 @@ lib/windows/powershell.ts
 lib/windows/processTable.ts
 lib/windows/shell.ts
 lib/windows/storeAppAlias.ts
+lib/workingFolder.ts
 lib/workspaceCheck.ts
 lib/wsLiveness.ts
 localWsServer.ts

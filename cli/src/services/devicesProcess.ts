@@ -23,10 +23,9 @@ import type { UnreadNotification } from '../lib/notificationRead.js'
 import { validUsage } from '../lib/agentUsageWire.js'
 import { DAEMON_UNKNOWN, DELIVERIES_OFF, emptyPorts, TERMINALS_OFF, type CorePorts, type DevicesPort, type ForkResult, type ServiceRequests, type WindowFocus } from '../core/api.js'
 import type { RuntimeModelOption } from '../lib/runtimeProfile.js'
-import { devicesListenerPath } from '../devices/listenerPath.js'
 import { accountLink } from './accountLink.js'
 import { startDevices, type DevicesDeps, type DevicesCore, type DeviceSession } from './devices.js'
-import { openDevicesListener } from './devicesListener.js'
+import { listenForDevices, openDevicesListener } from './devicesListener.js'
 import { runServiceProcess, type CoreConnection, type ServiceProcess, type ServiceProcessOptions } from './process.js'
 import { readCoreSessionRecords, readSessionView } from './sessionSnapshot.js'
 import { boundedJsonBytes } from '../lib/boundedJsonBytes.js'
@@ -56,6 +55,8 @@ export interface DevicesServiceOptions {
   run?: (options: ServiceProcessOptions) => ServiceProcess
   openListener?: typeof openDevicesListener
   processEnv?: NodeJS.ProcessEnv
+  /** For this service's tests: the platform the listener is opened for. */
+  platform?: NodeJS.Platform
 }
 
 const text = (value: unknown): string => (typeof value === 'string' ? value : '')
@@ -260,8 +261,8 @@ export function runDevicesService(options: DevicesServiceOptions): ServiceProces
     onDesk: direct => { deskOwner?.revoke(); deskOwner = null; desk = direct; publishDesk() },
     onCoreGone: (run) => { coreGone = run },
     onLegacyCommands: handlers => { legacyCommands = handlers },
-    // Their own listener, in this process alone: the devices started inside the core's process are given none.
-    listen: (handlers, log) => (options.openListener ?? openDevicesListener)({ path: devicesListenerPath(options.dataDir), handlers, log }),
+    // The service owns this authenticated listener; explicit inline Windows starts open the same door.
+    listen: listenForDevices(options.dataDir, options.platform ?? process.platform, options.openListener ?? openDevicesListener),
   }
   const requests = (options.start ?? startDevices)(api, ports, deps)
   const port = ports.devices as DevicesPort

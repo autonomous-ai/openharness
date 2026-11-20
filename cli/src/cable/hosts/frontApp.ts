@@ -12,6 +12,9 @@ const EXE_APPS: Readonly<Record<string, string>> = {
   code: 'vscode',
   cursor: 'cursor',
   windowsterminal: 'terminal',
+  // The Codex app: ChatGPT on Linux (cli/src/testing/recordedLinuxApps.ts, comm) and the Store's ChatGPT on Windows,
+  // package OpenAI.Codex, whose window is ChatGPT.exe's.
+  chatgpt: 'codex',
   // WezTerm's CFBundleExecutable.
   'wezterm-gui': 'wezterm',
   kitty: 'kitty',
@@ -20,11 +23,16 @@ const EXE_APPS: Readonly<Record<string, string>> = {
   harness: 'harness',
 }
 
-// The Claude and ChatGPT apps' Linux processes (cli/src/testing/recordedLinuxApps.ts, comm), lower-cased: never with
-// `.exe`, since ChatGPT.exe on Windows is OpenAI's chat app, not the Codex app.
+// The Claude app's Linux process (cli/src/testing/recordedLinuxApps.ts, comm), lower-cased: never with `.exe`, since
+// the name is Linux's alone.
 const LINUX_APPS: Readonly<Record<string, string>> = {
   'claude-desktop': 'claude',
-  chatgpt: 'codex',
+}
+
+// The Claude app's Windows process, the owner of its window (docs/plans/2026-11-19-dial-windows-vm-notes.md, Task 37
+// §1), lower-cased: only with `.exe`, since a bare `claude` is no app's window name elsewhere.
+const WINDOWS_APPS: Readonly<Record<string, string>> = {
+  'claude.exe': 'claude',
 }
 
 /** The app id of the app in front, or FRONT_NONE. A bundle id matches whole, as detectApp reads it. */
@@ -33,6 +41,7 @@ export function frontAppId(value: string): string {
   const name = value.toLowerCase()
   const exe = name.replace(/\.exe$/, '')
   if (Object.hasOwn(EXE_APPS, exe)) return EXE_APPS[exe]
+  if (Object.hasOwn(WINDOWS_APPS, name)) return WINDOWS_APPS[name]
   return exe === name && Object.hasOwn(LINUX_APPS, name) ? LINUX_APPS[name] : FRONT_NONE
 }
 

@@ -5,8 +5,13 @@
  *
  * The daemon finds it through `HARNESSD_TEST_DIAL_PORT`, the one thing that differs from a dial on USB:
  * a pseudo-terminal is not on the USB bus that discovery reads.
+ *
+ * Windows has no pseudo-terminal a COM port can be: there the dial serves a pipe (`listen`), and the serial stand-in the
+ * daemon runs as its `harness-serial.exe open` carries the port's bytes to it
+ * (src/cable/__fixtures__/fakeHarnessSerial.mjs, `FAKE_SERIAL_OPEN=bridge:<endpoint>`).
  */
-import { spawn, type ChildProcess } from 'node:child_process'
+import { spawn } from 'node:child_process'
+import { createServer, type Socket } from 'node:net'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { CableDecoder, CableType, encodeCableFrame } from '../../src/cable/cableFrame.js'
@@ -24,11 +29,16 @@ export interface FakeDialOptions {
   capabilities?: Record<string, string>
 }
 
+/** The dial's end of the cable: what carries its bytes to the daemon, and what lets the cable go. */
+interface Cable {
+  write(bytes: Uint8Array): void
+  close(): Promise<void>
+}
+
 export class FakeDial {
   readonly messages: DialMessage[] = []
   /** When each message arrived, ms since the epoch: the gaps are what a dial reads as its daemon's health. */
   readonly arrivedAt: number[] = []
-  private readonly decoder = new CableDecoder()
   private readonly mac: string
   private readonly settings?: Record<string, unknown>
   private readonly capabilities: Record<string, string>
@@ -37,22 +47,25 @@ export class FakeDial {
   private welcomed = false
   private cadence: ReturnType<typeof setInterval> | null = null
 
-  private constructor(private readonly bridge: ChildProcess, readonly path: string, options: FakeDialOptions) {
+  private constructor(private readonly cable: Cable, readonly path: string, options: FakeDialOptions) {
     this.mac = options.mac ?? 'e2:e0:00:00:00:01'
     this.settings = options.settings
     this.capabilities = options.capabilities ?? {}
-    bridge.stdout!.on('data', (chunk: Buffer) => {
-      this.decoder.feed(chunk, (frame) => {
-        if (frame.type !== CableType.Json) return
-        let message: DialMessage
-        try { message = JSON.parse(Buffer.from(frame.payload).toString('utf8')) as DialMessage } catch { return }
-        this.messages.push(message)
-        this.arrivedAt.push(Date.now())
-        this.heardAt = Date.now()
-        if (message.t === 'welcome') this.welcomed = true
-        // A dial that stops answering for 20 seconds is taken as unplugged (cableSession SILENCE_MS).
-        if (message.t === 'ping') this.send({ t: 'pong' })
-      })
+  }
+
+  /** What the daemon sent, framed by [decoder]: one for each connection, so a frame cut short by a port that closed is
+   *  never joined to the next connection's bytes. */
+  private hear(decoder: CableDecoder, chunk: Buffer): void {
+    decoder.feed(chunk, (frame) => {
+      if (frame.type !== CableType.Json) return
+      let message: DialMessage
+      try { message = JSON.parse(Buffer.from(frame.payload).toString('utf8')) as DialMessage } catch { return }
+      this.messages.push(message)
+      this.arrivedAt.push(Date.now())
+      this.heardAt = Date.now()
+      if (message.t === 'welcome') this.welcomed = true
+      // A dial that stops answering for 20 seconds is taken as unplugged (cableSession SILENCE_MS).
+      if (message.t === 'ping') this.send({ t: 'pong' })
     })
   }
 
@@ -68,7 +81,51 @@ export class FakeDial {
       })
       bridge.once('exit', (code) => { clearTimeout(timer); reject(new Error(`the pseudo-terminal bridge exited (${code}): ${said}`)) })
     })
-    return new FakeDial(bridge, path, options)
+    const dial = new FakeDial({
+      write: (bytes) => { bridge.stdin!.write(bytes) },
+      close: async () => {
+        if (bridge.exitCode !== null) return
+        const exited = new Promise<void>((done) => bridge.once('exit', () => done()))
+        bridge.stdin!.end()
+        const timer = setTimeout(() => bridge.kill('SIGKILL'), 3_000)
+        await exited
+        clearTimeout(timer)
+      },
+    }, path, options)
+    const decoder = new CableDecoder()
+    bridge.stdout!.on('data', (chunk: Buffer) => dial.hear(decoder, chunk))
+    return dial
+  }
+
+  /**
+   * A dial that serves [endpoint], a pipe or a Unix socket: the connection made to it is the cable. A port the daemon
+   * opens again connects again, and the newer connection is the cable from then on. What it sends while nothing is
+   * connected is lost, as on a port nobody holds; `greet` sends again until it is heard.
+   */
+  static async listen(endpoint: string, options: FakeDialOptions = {}): Promise<FakeDial> {
+    let cable: Socket | null = null
+    const server = createServer()
+    const dial = new FakeDial({
+      write: (bytes) => { if (cable && !cable.destroyed) cable.write(bytes) },
+      close: async () => {
+        cable?.destroy()
+        await new Promise<void>((done) => server.close(() => done()))
+      },
+    }, endpoint, options)
+    server.on('connection', (socket) => {
+      cable?.destroy()
+      cable = socket
+      const decoder = new CableDecoder()
+      socket.on('data', (chunk: Buffer) => dial.hear(decoder, chunk))
+      // A stand-in that ends as its port closes can reset the connection: the port's next open connects anew.
+      socket.on('error', () => {})
+      socket.on('close', () => { if (cable === socket) cable = null })
+    })
+    await new Promise<void>((resolve, reject) => {
+      server.once('error', reject)
+      server.listen(endpoint, () => { server.off('error', reject); resolve() })
+    })
+    return dial
   }
 
   private hello(): DialMessage {
@@ -76,12 +133,12 @@ export class FakeDial {
   }
 
   send(message: DialMessage): void {
-    this.bridge.stdin!.write(encodeCableFrame(CableType.Json, Buffer.from(JSON.stringify(message), 'utf8')))
+    this.cable.write(encodeCableFrame(CableType.Json, Buffer.from(JSON.stringify(message), 'utf8')))
   }
 
   /** One chunk of what its microphone heard, between a `voice.begin` and its `voice.end`, as the firmware sends it. */
   audio(pcm: Buffer): void {
-    this.bridge.stdin!.write(encodeCableFrame(CableType.Pcm, pcm))
+    this.cable.write(encodeCableFrame(CableType.Pcm, pcm))
   }
 
   /** The first message from the daemon that passes `test`, waiting up to `ms` for it. */
@@ -154,7 +211,7 @@ export class FakeDial {
 
   /** Bytes that are no frames, straight onto the port: what a broken or hostile board sends. */
   flood(bytes: Buffer): void {
-    this.bridge.stdin!.write(bytes)
+    this.cable.write(bytes)
   }
 
   /** The first welcome after `since`, waiting up to `ms`: a daemon that started again behind the port. */
@@ -165,11 +222,6 @@ export class FakeDial {
   async close(): Promise<void> {
     if (this.cadence) clearInterval(this.cadence)
     this.cadence = null
-    if (this.bridge.exitCode !== null) return
-    const exited = new Promise<void>((done) => this.bridge.once('exit', () => done()))
-    this.bridge.stdin!.end()
-    const timer = setTimeout(() => this.bridge.kill('SIGKILL'), 3_000)
-    await exited
-    clearTimeout(timer)
+    await this.cable.close()
   }
 }

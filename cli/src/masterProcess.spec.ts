@@ -38,6 +38,9 @@ vi.mock('./lib/localSocket.js', async (real) => {
   const actual = await real<typeof import('./lib/localSocket.js')>()
   return { ...actual, unixSocketPath: (...args: Parameters<typeof actual.unixSocketPath>) => socket.none ? null : actual.unixSocketPath(...args) }
 })
+// No test moves the worker's folder.
+const enterHome = vi.hoisted(() => vi.fn((): string | null => null))
+vi.mock('./lib/workingFolder.js', () => ({ enterHome }))
 vi.mock('./lib/daemonSpawnLock.js', async (real) => ({
   ...await real<object>(),
   acquireSpawnLock: (...args: unknown[]) => spawnLock.acquire(...args),
@@ -386,6 +389,17 @@ describe('the master on Windows', () => {
       expect(log).not.toHaveBeenCalled()
       expect((runMaster.mock.calls[0]![0] as { env: NodeJS.ProcessEnv }).env.HARNESSD_SERVICES).toBe(process.env.HARNESSD_SERVICES)
     } finally { log.mockRestore(); socket.none = false }
+  })
+
+  it('enters the home first, and says a failed entry once the Windows log is in place', () => {
+    const order: string[] = []
+    const log = vi.spyOn(console, 'log').mockImplementation((line: string) => { if (line.includes('[start]')) order.push('said') })
+    enterHome.mockImplementationOnce(() => { order.push('enterHome'); return '[start] sentinel line' })
+    try {
+      startMaster({ scriptPath: '/cli/cli.js' }, () => {}, 'win32', () => { order.push('redirect'); return {} })
+      expect(order).toEqual(['enterHome', 'redirect', 'said'])
+      expect(log).toHaveBeenCalledWith(expect.stringMatching(/ \[start\] sentinel line$/))
+    } finally { log.mockRestore() }
   })
 
   describe('as this process runs it', () => {

@@ -171,8 +171,6 @@ section.block { padding: 96px 0; border-top: 1px solid var(--rule); }
 .move h3 { margin: 0 0 6px; font-size: 19px; font-weight: 600; letter-spacing: -.01em; }
 .move p { margin: 0; font-size: 15px; color: var(--text-2); }
 .move .q { display: block; margin-top: 6px; color: var(--text); }
-.limits { margin-top: 40px; display: flex; flex-wrap: wrap; gap: 8px 28px; font-size: 14px; color: var(--text-2); }
-.limits b { color: var(--text); font-weight: 500; }
 @media (max-width: 960px) { .moves { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 28px 20px; } }
 @media (max-width: 420px) { .moves { grid-template-columns: 1fr; } }
 

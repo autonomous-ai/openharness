@@ -7,7 +7,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/asked\"",
+            "command": "echo `# <#` >/dev/null; exec \"${CLAUDE_PLUGIN_ROOT}/hooks/asked\"\n#> > $null; $PSModuleAutoLoadingPreference = 'None'; if ($env:HARNESS_DEVICE_MOD_ASKS) { $null = [Console]::In.ReadToEnd(); exit 0 }; $h = \"$env:USERPROFILE\\.harness\\bin\\harness.exe\"; if (-not [IO.File]::Exists($h)) { $h = $null; foreach ($d in $env:PATH -split ';') { if ($d -match '^([a-z]:\\\\|\\\\\\\\)' -and [IO.File]::Exists(\"$d\\harness.exe\")) { $h = \"$d\\harness.exe\"; break } } }; if ($h) { & $h device claude asked *> $null }; exit 0",
+            "onFailure": "continue",
             "timeout": 5
           }
         ]

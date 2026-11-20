@@ -203,8 +203,7 @@ export function createDialPluginSetup(deps: DialPluginSetupDeps): DialPluginSetu
 
   return {
     async pass(attached = false) {
-      // Windows has no dial to ring: no `claude` is looked for there.
-      if (deps.platform === 'win32' || running) return false
+      if (running) return false
       running = true
       // One answer a pass, so each Orca home's lookup reads the login shell's PATH as the default home's does.
       let shell: boolean | undefined

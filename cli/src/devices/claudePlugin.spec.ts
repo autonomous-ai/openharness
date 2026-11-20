@@ -3,19 +3,22 @@
  * one real script on a throwaway PATH and HOME stands in for the binary `claudeRun`, `claudeRunIn` and `claudeFound` find. The real
  * `claude` and ~/.claude are never touched.
  */
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import * as childProcess from 'node:child_process'
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { delimiter, join } from 'node:path'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { delimiter, dirname, join } from 'node:path'
+import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import * as engineBin from '../lib/engineBin.js'
 import {
   claudeDisable, claudeEnable, claudeFound, claudeHomeDisable, claudeHomeEnable, claudeRun, claudeRunIn, claudeSetUp, claudeStatus,
-  claudeUpdate, type ClaudeRun,
+  claudeRunner, claudeUpdate, type ClaudeRun,
 } from './claudePlugin.js'
 import { writeExecutable } from '../testing/executableFixture.js'
 
 // A copy of the module, so a test can watch whether the lookup that starts the login shell ran.
 vi.mock('../lib/engineBin.js', async (original) => ({ ...await original<object>() }))
+// A copy of the module, so a test can watch what the runner starts on Windows.
+vi.mock('node:child_process', async (original) => ({ ...await original<object>() }))
 
 type Answer = { code: number | null; stdout?: string; stderr?: string }
 
@@ -73,9 +76,11 @@ describe('claudeStatus', () => {
       .toMatchObject({ supported: false, claudeVersion: null })
   })
 
-  it('Windows is not supported at any version', async () => {
-    expect(await claudeStatus({ run: fakeClaude({}, '9.0.0 (Claude Code)').run, platform: 'win32' }))
-      .toMatchObject({ supported: false, claudeVersion: '9.0.0' })
+  it('Windows takes the plugin from 2.1.287, as a Mac does', async () => {
+    const supported = async (version: string) =>
+      (await claudeStatus({ run: fakeClaude({}, version).run, platform: 'win32' })).supported
+    expect(await supported('2.1.286 (Claude Code)')).toBe(false)
+    expect(await supported('2.1.287 (Claude Code)')).toBe(true)
   })
 
   it('status reads installed and enabled from the user-scope entry and ignores a project-scope one', async () => {
@@ -177,9 +182,6 @@ describe('claudeEnable', () => {
     const old = fakeClaude({}, '2.1.286 (Claude Code)')
     expect(await claudeEnable({ run: old.run, platform: 'darwin' })).toEqual(sentence)
     expect(old.writes()).toEqual([])
-    const windows = fakeClaude({}, '2.2.0 (Claude Code)')
-    expect(await claudeEnable({ run: windows.run, platform: 'win32' })).toEqual(sentence)
-    expect(windows.writes()).toEqual([])
     expect(await claudeEnable({ run: null, platform: 'darwin' })).toEqual(sentence)
   })
 
@@ -274,9 +276,6 @@ describe('claudeHomeEnable', () => {
     const old = fakeClaude({}, '2.1.286 (Claude Code)')
     expect(await claudeHomeEnable({ run: old.run, platform: 'darwin' })).toEqual(unsupported)
     expect(old.calls.map((call) => call.args)).toEqual(['--version'])
-    const windows = fakeClaude({}, '2.2.0 (Claude Code)')
-    expect(await claudeHomeEnable({ run: windows.run, platform: 'win32' })).toEqual(unsupported)
-    expect(windows.calls.map((call) => call.args)).toEqual(['--version'])
     expect(await claudeHomeEnable({ run: null, platform: 'darwin' })).toEqual(unsupported)
   })
 })
@@ -406,6 +405,71 @@ describe('a list that cannot be read', () => {
   })
 })
 
+// On Windows `claude` on PATH can be the Claude desktop app's Claude.exe: its `--version` names no Claude Code, and any
+// other call opens its window (Review Focus 4).
+describe('the Claude desktop app on Windows', () => {
+  const app = () => fakeClaude({ 'plugin list --json': list(USER_ON) }, 'Claude 1.4.0')
+
+  it('is not supported, and enable answers unsupported after its one --version', async () => {
+    const status = app()
+    expect(await claudeStatus({ run: status.run, platform: 'win32' }))
+      .toEqual({ supported: false, installed: false, enabled: false, claudeVersion: null })
+    expect(status.calls.map((call) => call.args)).toEqual(['--version'])
+    for (const step of [claudeEnable, claudeSetUp, claudeUpdate, claudeHomeEnable]) {
+      const claude = app()
+      expect(await step({ run: claude.run, platform: 'win32' }))
+        .toEqual({ ok: false, error: 'Claude Code 2.1.287 or later is needed.', step: 'unsupported' })
+      expect(claude.calls.map((call) => call.args)).toEqual(['--version'])
+    }
+  })
+
+  it('a disable asks its --version and nothing more: there is no plugin of Claude Code\'s to take out', async () => {
+    for (const step of [claudeDisable, claudeHomeDisable]) {
+      const claude = app()
+      expect(await step({ run: claude.run, platform: 'win32' })).toEqual({ ok: true })
+      expect(claude.calls.map((call) => call.args)).toEqual(['--version'])
+    }
+  })
+
+  // A kill, a failed start or an exit not 0 is no answer, which says nothing of what runs: a disable is a failure, so
+  // an undo the devices owe stays owed, and the status reads the list as on a Mac.
+  it('a --version with no answer is no answer, not the app', async () => {
+    const unanswered: Array<[Answer, string]> = [[{ code: null }, 'Claude Code did not answer.'], [{ code: 1, stderr: 'Error: busy\n' }, 'Error: busy']]
+    for (const [answer, error] of unanswered) {
+      for (const step of [claudeDisable, claudeHomeDisable]) {
+        const claude = fakeClaude({ '--version': answer, 'plugin list --json': list(USER_ON) })
+        expect(await step({ run: claude.run, platform: 'win32' })).toEqual({ ok: false, error, step: 'list' })
+        expect(claude.calls.map((call) => call.args)).toEqual(['--version'])
+      }
+      const status = fakeClaude({ '--version': answer, 'plugin list --json': list(USER_ON) })
+      expect(await claudeStatus({ run: status.run, platform: 'win32' }))
+        .toEqual({ supported: false, installed: true, enabled: true, claudeVersion: null })
+    }
+  })
+
+  it('Claude Code itself is asked as on a Mac', async () => {
+    const claude = fakeClaude({ 'plugin list --json': list(USER_ON) }, '2.1.300 (Claude Code)')
+    expect(await claudeDisable({ run: claude.run, platform: 'win32' })).toEqual({ ok: true })
+    expect(claude.writes()).toEqual(['plugin uninstall harness-device@openharness --scope user'])
+  })
+})
+
+// On Windows a batch file that is no npm shim is never run (claudeRunner): nothing ran, which the devices count by its
+// own word rather than as a Claude Code that is too old or failed.
+describe('a claude launcher Harness does not run', () => {
+  it('fails at step launcher, asked nothing after its --version', async () => {
+    for (const act of [claudeEnable, claudeSetUp, claudeUpdate, claudeHomeEnable, claudeDisable, claudeHomeDisable]) {
+      const asked: string[] = []
+      const run: ClaudeRun = async (args) => {
+        asked.push(args.join(' '))
+        return { code: null, stdout: '', stderr: '', refused: true }
+      }
+      expect(await act({ run, platform: 'win32' })).toEqual({ ok: false, error: 'Harness cannot run this claude launcher.', step: 'launcher' })
+      expect(asked).toEqual(['--version'])
+    }
+  })
+})
+
 describe('calls to claude', () => {
   it('the install waits 60 s and the list 15 s', async () => {
     const claude = fakeClaude({ 'plugin list --json': list() })
@@ -501,6 +565,25 @@ describe('claudeRun', () => {
     // A second for the shell to set its trap before the time runs out, however slow the computer is to start it.
     expect(await claudeRun()!(['--version'], 1_000)).toMatchObject({ code: null })
     expect(Date.now() - started).toBeLessThan(4_000)
+  })
+
+  // A claude stuck where even SIGKILL waits never closes: the setup must not wait with it, as orcaHomes' run does not.
+  it('a call past its time ends though claude never closes after the kill', async () => {
+    const kill = vi.fn(() => true)
+    vi.spyOn(childProcess, 'execFile').mockImplementation((() => ({ stdin: { end: () => {} }, kill })) as never)
+    expect(await claudeRunner('/nowhere/claude', {}, 'darwin')(['--version'], 200)).toEqual({ code: null, stdout: '', stderr: '' })
+    expect(kill).toHaveBeenCalledWith('SIGKILL')
+  })
+
+  // execFile throws rather than emits for a start the system refuses at once (ENOTDIR, EINVAL): its time must not be
+  // left to fire on a child that never was, which would throw in a timer and end the process (on Windows, the core's).
+  it('a start that throws is no answer, and leaves no time running', async () => {
+    vi.useFakeTimers()
+    onTestFinished(() => { vi.useRealTimers() })
+    vi.spyOn(childProcess, 'execFile').mockImplementation((() => { throw Object.assign(new Error('spawn ENOTDIR'), { code: 'ENOTDIR' }) }) as never)
+    const ran = claudeRunner('/nowhere/claude', {}, 'darwin')(['--version'], 200)
+    expect(() => vi.advanceTimersByTime(200)).not.toThrow()
+    expect(await ran).toEqual({ code: null, stdout: '', stderr: '' })
   })
 
   it('is null when no claude is found', () => {
@@ -601,5 +684,76 @@ describe('claudeRunIn', () => {
   it('is null when no claude is found', () => {
     const dir = throwawayPath()
     expect(claudeRunIn(join(dir, 'profile-a'))).toBeNull()
+  })
+})
+
+/** This process as Windows until the test ends: the lookup and the runner read process.platform. */
+function asWindows(): void {
+  const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
+  Object.defineProperty(process, 'platform', { ...platform, value: 'win32' })
+  cleanup.push(() => Object.defineProperty(process, 'platform', platform))
+}
+
+describe('claudeRunner on Windows', () => {
+  /** Claude Code as npm installs it on Windows, its shim the real one's form, and a node.exe in another PATH folder. */
+  function npmClaude() {
+    const dir = throwawayPath()
+    const npm = join(dir, 'npm'), nodeDir = join(dir, 'nodejs')
+    const script = join(npm, 'node_modules', '@anthropic-ai', 'claude-code', 'cli.js')
+    mkdirSync(dirname(script), { recursive: true })
+    mkdirSync(nodeDir)
+    writeFileSync(script, '')
+    const node = join(nodeDir, 'node.exe')
+    writeFileSync(node, '')
+    const shim = join(npm, 'claude.cmd')
+    writeFileSync(shim, readFileSync(join(import.meta.dirname, '..', 'lib', 'windows', 'fixtures', 'npm-codex.cmd'), 'utf8')
+      .replace('@openai\\codex\\bin\\codex.js', '@anthropic-ai\\claude-code\\cli.js'))
+    return { shim, node, script, env: { PATH: `${nodeDir};${npm}` } }
+  }
+
+  it('starts the program the shim runs, hidden, with no shell', async () => {
+    const { shim, node, script, env } = npmClaude()
+    const started = vi.spyOn(childProcess, 'execFile').mockImplementation(((_file: string, _args: string[], _options: object,
+      done: (error: null, stdout: string, stderr: string) => void) => {
+      done(null, '2.1.300 (Claude Code)\n', '')
+      return { stdin: { end: () => {} } }
+    }) as never)
+
+    expect(await claudeRunner(shim, env, 'win32')(['--version'], 15_000)).toEqual({ code: 0, stdout: '2.1.300 (Claude Code)\n', stderr: '' })
+
+    expect(started).toHaveBeenCalledOnce()
+    const [file, args, options] = started.mock.calls[0] as unknown as [string, string[], Record<string, unknown>]
+    expect([file, args]).toEqual([node, [script, '--version']])
+    expect(options).toMatchObject({ windowsHide: true })
+    expect(options.shell).toBeUndefined()
+    expect(options.detached).toBeUndefined()
+  })
+
+  it('a batch file it does not know is refused, and nothing is started', async () => {
+    const dir = throwawayPath()
+    const batch = join(dir, 'claude.cmd')
+    writeFileSync(batch, '@echo off\r\nstart calc %*\r\n')
+    const started = vi.spyOn(childProcess, 'execFile')
+    expect(await claudeRunner(batch, undefined, 'win32')(['--version'], 15_000)).toEqual({ code: null, stdout: '', stderr: '', refused: true })
+    expect(started).not.toHaveBeenCalled()
+  })
+})
+
+// The paths are this Mac's, so only the choice of lookup is shown here; claudePlugin.windows.real.spec.ts runs it on
+// Windows itself.
+describe('the lookup on Windows', () => {
+  it('every lookup finds claude.exe in the profile\'s .local\\bin, off PATH, with no shell\'s PATH read', async () => {
+    const dir = throwawayPath()
+    mkdirSync(join(dir, '.local', 'bin'), { recursive: true })
+    writeExecutable(join(dir, '.local', 'bin', 'claude.exe'), '#!/bin/sh\necho "args: $*"\n')
+    const lookup = vi.spyOn(engineBin, 'agentCommandOwnershipSnapshotAsync')
+    asWindows()
+
+    const runs = [await claudeFound(join(dir, '.claude'), false), await claudeFound(join(dir, '.claude'), true), claudeRun(),
+      claudeRunIn(join(dir, 'profile-a'))]
+
+    expect(runs.map((run) => run !== null)).toEqual([true, true, true, true])
+    for (const run of runs) expect(await run!(['--version'], 15_000)).toMatchObject({ code: 0, stdout: 'args: --version\n' })
+    expect(lookup).not.toHaveBeenCalled()
   })
 })

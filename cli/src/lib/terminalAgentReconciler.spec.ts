@@ -216,6 +216,7 @@ describe('composite terminal reconciliation', () => {
   })
 
   it('still verifies retained panes when the process table is unavailable', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const current = { ...session([tmux]), active: false }
     const onTerminalAvailability = vi.fn()
     const onProbeStatus = vi.fn()
@@ -230,10 +231,46 @@ describe('composite terminal reconciliation', () => {
       }),
     })
 
-    await reconciler.trigger()
+    try {
+      await reconciler.trigger()
 
-    expect(onTerminalAvailability).toHaveBeenCalledWith(current, true)
-    expect(onProbeStatus).toHaveBeenCalledWith({ ready: true, error: 'process table unavailable' })
+      expect(onTerminalAvailability).toHaveBeenCalledWith(current, true)
+      expect(onProbeStatus).toHaveBeenCalledWith({ ready: true, error: 'process table unavailable' })
+      expect(warn).toHaveBeenCalledWith('[discovery] process table unavailable; keeping existing terminal agents')
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('names the executables, not the table, when only they could not be resolved, and keeps every agent', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const current = session([tmux])
+    const onProbeStatus = vi.fn()
+    const onRemoved = vi.fn()
+    const onDormant = vi.fn()
+    const reconciler = new TerminalAgentReconciler({
+      current: () => [current], backends: [], backendOrder: ['tmux'],
+      onDiscovered: vi.fn(), onObserved: vi.fn(), onDormant, onRemoved, onProbeStatus,
+      probe: async () => ({
+        processTableAvailable: false,
+        ownershipFailure: 'ENGINE_LOOKUP_TIMEOUT',
+        targets: [{ instanceId: 'tmux:default', result: { state: 'available', roots: [{ runtime: tmux, rootPid: 1, cwd: '/work' }] } }],
+        agents: [], ambiguousPlacements: new Set(),
+      }),
+    })
+
+    try {
+      // Twice: a miss is confirmed on the second pass, so one pass alone would not show an agent kept.
+      await reconciler.trigger()
+      await reconciler.trigger()
+
+      expect(onProbeStatus).toHaveBeenCalledWith({ ready: true, error: 'engine executables could not be resolved (ENGINE_LOOKUP_TIMEOUT)' })
+      expect(warn).toHaveBeenCalledWith('[discovery] engine executables could not be resolved (ENGINE_LOOKUP_TIMEOUT); keeping existing terminal agents')
+      expect(onRemoved).not.toHaveBeenCalled()
+      expect(onDormant).not.toHaveBeenCalled()
+    } finally {
+      warn.mockRestore()
+    }
   })
 
   it('awaits the initial discovery pass before start resolves', async () => {

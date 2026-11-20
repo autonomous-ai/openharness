@@ -559,6 +559,33 @@ function postObserved(port, body) {
  * in an hc terminal keeps that terminal's address, and is the nearer host. cmux's ids come after them: a multiplexer
  * started in a cmux terminal keeps cmux's ids, and is the nearer host. CLAUDE_CODE_ENTRYPOINT is last, the first the
  * cap drops: without it a tap still brings the app forward.
+ *
+ * On Windows no app sets __CFBundleIdentifier, and Cursor and VS Code both set TERM_PROGRAM=vscode: the hook finds the
+ * app itself (lookUpWindowsApp) and sends its bundle id in that hint, never one the environment claims. The first of
+ * these that answers:
+ * - CLAUDE_CODE_ENTRYPOINT=claude-desktop, which the Claude app gives the Claude Code it starts (cable/hosts/record.ts):
+ *   the Claude app. The hook's own environment, never another process's, and its word on how this session started, so
+ *   it is read before an editor's variables the app may have inherited. No process is started.
+ * - VSCODE_GIT_ASKPASS_NODE, which an editor sets in its integrated terminals alone: the editor's own program
+ *   (`Code.exe`, `Cursor.exe`). No process is started.
+ * - VSCODE_PID, for a session started from Claude Code's extension panel, which runs with the extension host's
+ *   environment and has no askpass variable (read on the VM, 2026-11-20): the image name of that pid's row in the
+ *   hook's own chain (windowsHookChain), the one read the caller's climb makes too, so a Codex hook in the panel starts
+ *   the pty host once. An image name, never another process's environment. The editor is one of the hook's parents (on
+ *   the VM: two bash.exe, claude.exe and the extension host, then VSCODE_PID's Code.exe), so a pid past the chain's 9
+ *   rows names none. A read pays a pty host start, so the answer is kept per editor (keepEditor), and a hook whose kept
+ *   answer matches starts none. The key is the pid and the editor's pipe (VSCODE_IPC_HOOK), not the process's start
+ *   time: the start time is in the table alone, so checking it would cost the start the kept answer saves, while the
+ *   pipe's name is in this hook's own environment and differs between editors and versions, so a pid another editor
+ *   reuses misses.
+ * - For Codex alone, the ChatGPT app's program among the rows of the hook's own chain, which Codex's climb reads
+ *   anyway: the app runs its threads on a codex.exe of its own, a child of its ChatGPT.exe (Task 37 §2 of
+ *   docs/plans/2026-11-19-dial-windows-vm-notes.md). An image path the pty host read, never another process's
+ *   environment.
+ * - ALACRITTY_LOG, the one variable Alacritty sets on Windows (its log file, whose path is never read): Alacritty.
+ * - Last, WEZTERM_PANE and TERM_PROGRAM=WarpTerminal, which WezTerm and Warp set on Windows too (read from their
+ *   source): their apps. Those names are sent as they are, but a multiplexer inside them (herdr) is the nearer host, and
+ *   its own bundle names no window a tap can raise there (cable/hosts/windowsRaise.ts WINDOWS_APPS).
  */
 const HOST_HINTS = ['TERM_PROGRAM', '__CFBundleIdentifier', 'HERDR_PANE_ID', 'REX_BLOCK', 'ZELLIJ', 'ZELLIJ_PANE_ID',
   'ZELLIJ_SESSION_NAME', 'TMUX_PANE', 'HC_TERMINAL_ID', 'CMUX_SURFACE_ID', 'CMUX_WORKSPACE_ID', 'KITTY_WINDOW_ID',
@@ -573,7 +600,8 @@ const MAX_HINTS = 10
 /** A character the core refuses in a path or hint (core/observedHook.ts): one there is forged. */
 const CONTROL = /[\u0000-\u001f\u007f]/
 
-function hostHints() {
+/** [appBundle] is the app lookUpWindowsApp found, sent on Windows in place of the environment's __CFBundleIdentifier. */
+function hostHints(appBundle) {
   const hints = {}
   for (const name of HOST_HINTS) {
     // The core refuses a whole event with more hints than MAX_HINTS, one over 64 characters or one with a control
@@ -595,10 +623,52 @@ function hostHints() {
       || process.env.HERDR_PANE_ID || process.env.HERDR_SESSION || process.env.HC_TERMINAL_ID)) continue
     // Skipped before the cap counts it too.
     if (WHOLE_HINTS.includes(name) && process.env[name]?.length > 64) continue
-    const value = process.env[name]?.slice(0, 64)
+    const own = name === '__CFBundleIdentifier' && process.platform === 'win32' ? appBundle : process.env[name]
+    const value = own?.slice(0, 64)
     if (value && !CONTROL.test(value)) hints[name] = value
   }
   return hints
+}
+
+/** Each editor's Windows program, as `path.win32.basename` names it in lower case, and the bundle id the devices know
+ *  the editor by (cable/hosts/hostDetect.ts APP_BUNDLES). */
+const WINDOWS_EDITORS = new Map([['code.exe', 'com.microsoft.VSCode'], ['cursor.exe', 'com.todesktop.230313mzl4w4u92']])
+
+/** The bundle id of the editor whose program [path] names, any case, or undefined. */
+function editorBundle(path) {
+  return WINDOWS_EDITORS.get(win32.basename(path).toLowerCase())
+}
+
+/** The ChatGPT app's program, `<WindowsApps>\OpenAI.Codex_<version>_<arch>__<publisher>\app\ChatGPT.exe`, in its Store
+ *  package's folder (docs/plans/2026-11-19-dial-windows-vm-notes.md, Task 37 §2). Its beta is another package
+ *  (`OpenAI.CodexBeta_`). */
+const CHATGPT_APP = /\\WindowsApps\\OpenAI\.Codex_[^\\]+\\(?:[^\\]+\\)*ChatGPT\.exe$/i
+
+/** On Windows, the bundle id of the app [engine]'s session outside a pane runs in, from the inputs HOST_HINTS names, or
+ *  undefined. Only the id leaves this process: never a path, a pid or a pipe's name. Each id is the devices' for that
+ *  app (cable/hosts/hostDetect.ts APP_BUNDLES). */
+async function lookUpWindowsApp(engine) {
+  if (process.env.CLAUDE_CODE_ENTRYPOINT === 'claude-desktop') return 'com.anthropic.claudefordesktop'
+  const askpass = process.env.VSCODE_GIT_ASKPASS_NODE
+  if (askpass !== undefined) return editorBundle(askpass)
+  const pid = /^\d{1,10}$/.test(process.env.VSCODE_PID ?? '') ? Number(process.env.VSCODE_PID) : 0
+  if (pid > 0) {
+    const ipc = editorIpcKey()
+    const file = join(paths().dataDir, EDITORS_FILE)
+    const kept = ipc && readEditors(file).find((entry) => entry.pid === pid && entry.ipc === ipc)
+    if (kept) return kept.app
+    const row = (await windowsHookChain())?.find((candidate) => candidate.pid === pid)
+    const app = row && editorBundle(row.executable)
+    // Only an answer the table gave is kept: no row, or no table, is asked again next time.
+    if (app && ipc) keepEditor(file, { pid, ipc, app })
+    return app
+  }
+  if (engine === 'codex' && (await windowsHookChain())?.some((row) => CHATGPT_APP.test(row.imagePath ?? ''))) {
+    return 'com.openai.codex'
+  }
+  if (process.env.ALACRITTY_LOG) return 'org.alacritty'
+  if (process.env.WEZTERM_PANE) return 'com.github.wez.wezterm'
+  return process.env.TERM_PROGRAM === 'WarpTerminal' ? 'dev.warp.Warp-Stable' : undefined
 }
 
 /** The endpoint variables that say an engine is routed through OpenRouter: these names exactly. Their values never leave this process. */
@@ -722,6 +792,97 @@ function runsCommandString(cmdline) {
   return false
 }
 
+/** The engines that run their hook through a shell on Windows: Codex and Copilot through PowerShell, Command Code
+ *  through cmd. Claude Code and the others run it as argv, so its parent is the engine already. */
+const WINDOWS_SHELL_ENGINES = new Set(['codex', 'copilot', 'commandcode'])
+
+/** PowerShell's options that take the next word as their value (Windows PowerShell's and pwsh's), each as its name and
+ *  the shortest prefix PowerShell takes for it; `ep`, `if`, `of` and `wd` are short names of their own. */
+const POWERSHELL_VALUE_OPTIONS = [
+  ['executionpolicy', 'ex'], ['ep', 'ep'], ['windowstyle', 'w'], ['inputformat', 'inp'], ['if', 'if'],
+  ['outputformat', 'o'], ['of', 'of'], ['configurationname', 'config'], ['workingdirectory', 'wo'], ['wd', 'wd'],
+  ['custompipename', 'cus'], ['settingsfile', 'settings'], ['version', 'v'], ['psconsolefile', 'psc'],
+]
+
+/**
+ * Whether a PowerShell's argv has it run a command: before its first word that is no option, `-c` or a longer prefix of
+ * `-Command`, in any case. An option's value is no word of its own; `-File` and `-EncodedCommand` are options, so the
+ * script or the encoded text after them ends the scan.
+ */
+function powershellRunsCommand(argv) {
+  for (let index = 1; index < argv.length; index++) {
+    const word = argv[index].toLowerCase()
+    if (!word.startsWith('-')) return false
+    if (word.length >= 2 && '-command'.startsWith(word)) return true
+    const name = word.slice(1)
+    if (POWERSHELL_VALUE_OPTIONS.some(([option, shortest]) => name.length >= shortest.length && option.startsWith(name))) index++
+  }
+  return false
+}
+
+/** Whether a cmd's argv has it run a command: among its leading switches, `/c` or `/r` before any `/k`, in any case. */
+function cmdRunsCommand(argv) {
+  for (const word of argv.slice(1)) {
+    const lower = word.toLowerCase()
+    if (!lower.startsWith('/') || lower === '/k') return false
+    if (lower === '/c' || lower === '/r') return true
+  }
+  return false
+}
+
+/** A row of the pty host's table that is a shell started to run a command, as the engines' hook runners start one. */
+function windowsCommandShell(row) {
+  if (!row.nativeArgv) return false
+  const image = row.executable.toLowerCase()
+  if (image === 'cmd.exe') return cmdRunsCommand(row.nativeArgv)
+  return (image === 'powershell.exe' || image === 'pwsh.exe') && powershellRunsCommand(row.nativeArgv)
+}
+
+/**
+ * The hook's own chain in [rows]: its parent's row, then each one's parent's, nearest first, at most 9 (pty/src/ps.rs
+ * MAX_ANCESTORS). It ends at a pid no row has, a process gone, at a pid seen twice, and at a parent that started after
+ * its child: Windows reuses pids, so that one took the pid of a parent gone, and is none of the hook's. A row the host
+ * could not open has no start to compare, and the chain goes on through it. Built from the rows, not taken as listed,
+ * so a host that takes no `--ancestors` (0.6.22) and lists every row gives the same chain.
+ */
+function hookChain(rows) {
+  const byPid = new Map(rows.map((row) => [row.pid, row]))
+  const chain = []
+  for (let row = byPid.get(process.ppid); row && chain.length < 9 && !chain.includes(row); row = byPid.get(row.parentPid)) {
+    const child = chain.at(-1)
+    if (child && startedAfter(row, child)) break
+    chain.push(row)
+  }
+  return chain
+}
+
+/** Whether [row] started after [child], by the FILETIMEs of their start markers (`w:<FILETIME>`, pty/src/ps.rs); never
+ *  for a row the host could not open, which has none. */
+function startedAfter(row, child) {
+  const start = ({ startMarker }) => /^w:\d{1,20}$/.test(startMarker) ? BigInt(startMarker.slice(2)) : null
+  const started = start(row), childStarted = start(child)
+  return started !== null && childStarted !== null && started > childStarted
+}
+
+/** The hook's own chain from the pty host (`ps --json --ancestors <its parent>`), read at most once a run by the first to
+ *  ask: the caller's climb (windowsHookCallerPid) and the app's lookup (lookUpWindowsApp) share it. Null for a failed
+ *  read, and for a helper Node refuses to start (it throws), so neither reader loses the event to it. */
+let windowsChain
+function windowsHookChain() {
+  windowsChain ??= readWindowsTable(['--ancestors', String(process.ppid)]).then((rows) => rows && hookChain(rows), () => null)
+  return windowsChain
+}
+
+/** hookCallerPid on Windows: past each command shell of the hook's own chain whose parent is in it; the hook's parent
+ *  when there is no chain. */
+async function windowsHookCallerPid() {
+  const chain = await windowsHookChain()
+  if (!chain?.length) return process.ppid
+  let index = 0
+  while (index < 8 && index + 1 < chain.length && windowsCommandShell(chain[index])) index++
+  return chain[index].pid
+}
+
 /**
  * The hook's caller, the nearest ancestor that outlives it: the core checks it against the engine's recorded process
  * (core/engines/hooks.ts), and the devices keep it for a paneless agent (cable/hosts/observed.ts). On Linux dash keeps
@@ -733,8 +894,20 @@ function runsCommandString(cmdline) {
  * above the engine. A process /proc cannot show is named, as nothing above it can be read. A shell left to init, its
  * engine gone, is named itself: pid 1 never exits, and the devices would keep the agent. macOS's /bin/sh is a bash
  * that execs the hook, so its parent is the engine already, with nothing to climb.
+ *
+ * Windows has the same gap: PowerShell (`-Command`) and cmd (`/c`) stay the hook's parent and exit with it. Windows has
+ * no /proc, so the climb reads the pty host's table, the one the core's check reads too (lib/windows/processTable.ts):
+ * each row's pid, parent, image name and command line, never an environment. Starting the host costs a process start
+ * on the hook's path, so only the engines whose runner is a shell pay it, only for an event the hook tells (hookCaller),
+ * and it lists the hook's parent and that one's parents alone (`ps --json --ancestors`, at most 9 rows, the 8 steps'
+ * worth): reading the whole table added about 58 ms to a hook on a Windows VM. The app's lookup reads the same chain
+ * (windowsHookChain), so a run starts the host once at most. A host that takes no `--ancestors` (0.6.22) lists every
+ * row, which the climb reads the same way; one that refuses it names the hook's parent, as no table does.
+ * A process the host lists but cannot open is named, as its command line cannot be read; a shell whose parent is in no
+ * row, gone, or whose parent's pid a process started since has taken, is named itself.
  */
-function hookCallerPid() {
+async function hookCallerPid(engine) {
+  if (process.platform === 'win32') return WINDOWS_SHELL_ENGINES.has(engine) ? windowsHookCallerPid() : process.ppid
   if (process.platform !== 'linux') return process.ppid
   let pid = process.ppid
   for (let step = 0; step < 8; step++) {
@@ -745,6 +918,14 @@ function hookCallerPid() {
     pid = shell.parentPid
   }
   return pid
+}
+
+/** The hook's caller (hookCallerPid), found once a run, by the first to name it: so an event the hook drops climbs
+ *  nothing. A climb that throws (a helper path Node refuses to start) names the parent, as a run with no table does. */
+let caller
+function hookCaller() {
+  caller ??= hookCallerPid(argEngine()).catch(() => process.ppid)
+  return caller
 }
 
 /** The core refuses an event whose title is longer (core/observedHook.ts): the hook cuts it to this instead. */
@@ -773,9 +954,10 @@ function observedTitle(value) {
  * out rather than cost the whole event (core/observedHook.ts), and so are the paths of a body over the 4096 bytes the
  * core reads (hookServer.ts): the transcript's first, as the devices can do without it, then the folder. The title is
  * never dropped: at most 64 characters, it fits beside the hints and ids once both paths are gone, so a body without
- * one always means the session said none.
+ * one always means the session said none. The caller and, on Windows, the app it runs in (lookUpWindowsApp) are found
+ * only for an event it tells, so an event it drops starts no pty host; the two read the one chain (windowsHookChain).
  */
-function observedBody(engine, event, input) {
+async function observedBody(engine, event, input) {
   const kind = observedEvent(engine, event, input)
   const sessionId = input.session_id || input.conversation_id || input.sessionId || input.conversationId
   if (!kind || typeof sessionId !== 'string') return null
@@ -785,8 +967,9 @@ function observedBody(engine, event, input) {
     : Array.isArray(input.workspacePaths) ? input.workspacePaths[0]
       : input.cwd || input.workspaceRoot || (engine === 'devin' ? process.cwd() : undefined)
   const body = {
-    engine, sessionId, event: kind, cwd: path(cwd), callerPid: hookCallerPid(),
-    transcriptPath: path(input.transcript_path || input.transcriptPath), hostHints: hostHints(),
+    engine, sessionId, event: kind, cwd: path(cwd), callerPid: await hookCaller(),
+    transcriptPath: path(input.transcript_path || input.transcriptPath),
+    hostHints: hostHints(process.platform === 'win32' ? await lookUpWindowsApp(engine) : undefined),
   }
   if (relayedPrompt(engine, event, input)) body.relayed = true
   const title = kind === 'session-start' || kind === 'turn-start' ? observedTitle(input.session_title) : undefined
@@ -805,8 +988,20 @@ function syncStateDirectory(directory) {
   try { fsyncSync(fd) } finally { closeSync(fd) }
 }
 
+/**
+ * On Windows NTFS gives Node no owner, and its mode bits read as writable by everyone (src/lib/secureState.ts,
+ * windowsStateRoots), so the owner and mode checks below would refuse every folder and file there, and a hook with no
+ * daemon could never record its session. There, as the daemon does, a folder must be a folder, and a file is read as
+ * the hook reads its other Windows state (readWindowsStateFile): no link, within its size, inside the profile or the
+ * hook's data folder. Never inside its own folder alone: the environment may name that one anywhere
+ * (HARNESS_HOOK_ROUTES_DIR), and a folder this check passes is no proof of whose it is.
+ */
 function secureStateDirectory(directory, create = true) {
   if (create) mkdirSync(directory, { recursive: true, mode: 0o700 })
+  if (process.platform === 'win32') {
+    if (!statSync(directory).isDirectory()) throw new Error('state directory has unsafe type')
+    return
+  }
   const fd = openSync(directory, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW)
   try {
     const stat = fstatSync(fd)
@@ -830,6 +1025,7 @@ function inspectPrivateStateFile(fd, maxBytes = Number.MAX_SAFE_INTEGER) {
   const uid = typeof process.getuid === 'function' ? process.getuid() : null
   if (!stat.isFile() || (uid !== null && stat.uid !== uid)) throw new Error('state file has unsafe owner or type')
   if (stat.size > maxBytes) throw new Error('state file exceeds its size limit')
+  if (process.platform === 'win32') return
   const mode = stat.mode & 0o777
   if (mode & 0o022) throw new Error('state file is group/world writable')
   if (mode !== 0o600) {
@@ -841,6 +1037,7 @@ function inspectPrivateStateFile(fd, maxBytes = Number.MAX_SAFE_INTEGER) {
 }
 
 function readPrivateStateFile(file, maxBytes = Number.MAX_SAFE_INTEGER) {
+  if (process.platform === 'win32') return readWindowsStateFile(paths().dataDir, file, maxBytes)
   const fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK)
   try {
     inspectPrivateStateFile(fd, maxBytes)
@@ -923,11 +1120,11 @@ function ptyHostPane(environment = process.env) {
 }
 const PTY_PANE = ptyHostPane()
 
-function terminalHookFields(tmuxPane) {
+async function terminalHookFields(tmuxPane) {
   const runtimeHints = []
   if (tmuxPane) runtimeHints.push({ backend: 'tmux', paneId: tmuxPane })
   else if (PTY_PANE) runtimeHints.push({ backend: 'ptyhost', instance: PTY_PANE.instance, paneId: PTY_PANE.paneId })
-  return { tmuxPane, runtimeHints, callerPid: hookCallerPid() }
+  return { tmuxPane, runtimeHints, callerPid: await hookCaller() }
 }
 
 function sleep(ms) {
@@ -1341,16 +1538,31 @@ function ptyHostBinary() {
   try { accessSync(beside, constants.F_OK); return beside } catch { return null }
 }
 
+/** The PTY host's whole table, read once a run: the engine's lookup and the caller's descent (rootEngineProcess,
+ *  callerOwns) share one start. They need rows off the hook's chain (the pane's processes, and more than 9 parents). */
+let windowsTable
+function windowsListedRows() {
+  windowsTable ??= readWindowsTable()
+  return windowsTable
+}
+
 /**
  * Windows has no `ps`: the PTY host lists the processes (`harness-pty ps --json`, pty/src/ps.rs), and the rows
  * map as the daemon maps them (src/lib/windows/processTable.ts). A row without a start marker (a process the
  * host could not open) can never be an identity and is dropped; a read that names nobody failed.
  */
 async function windowsProcessRows() {
+  const rows = (await windowsListedRows())?.filter((row) => row.startMarker)
+  return rows?.length ? rows : null
+}
+
+/** Every row the PTY host lists for `ps --json` and [args], those it could not open (an empty start marker) included;
+ *  null for a failed read. */
+async function readWindowsTable(args = []) {
   const binary = ptyHostBinary()
   if (!binary) return null
   // A busy machine's table is a few hundred KB of JSON: the daemon's own limit (src/lib/windows/processTable.ts).
-  const stdout = await execFileText(binary, ['ps', '--json'], 3000, undefined, { maxBuffer: 64 * 1024 * 1024, windowsHide: true })
+  const stdout = await execFileText(binary, ['ps', '--json', ...args], 3000, undefined, { maxBuffer: 64 * 1024 * 1024, windowsHide: true })
   if (stdout === null) return null
   let table
   try { table = JSON.parse(stdout) } catch { return null }
@@ -1358,15 +1570,16 @@ async function windowsProcessRows() {
   const rows = []
   for (const row of table.rows) {
     if (!row || typeof row !== 'object') continue
-    const { pid, parentPid, executable, startMarker, args, nativeArgv } = row
+    const { pid, parentPid, executable, startMarker, args, nativeArgv, imagePath } = row
     if (!Number.isSafeInteger(pid) || pid <= 0 || !Number.isSafeInteger(parentPid) || parentPid < 0) continue
-    if (typeof executable !== 'string' || typeof args !== 'string' || typeof startMarker !== 'string' || !startMarker) continue
+    if (typeof executable !== 'string' || typeof args !== 'string' || typeof startMarker !== 'string') continue
     rows.push({
       pid, parentPid, executable, startMarker, args,
       ...(Array.isArray(nativeArgv) && nativeArgv.every((item) => typeof item === 'string') ? { nativeArgv } : {}),
+      ...(typeof imagePath === 'string' ? { imagePath } : {}),
     })
   }
-  return rows.length ? rows : null
+  return rows
 }
 
 async function processRows() {
@@ -1735,9 +1948,11 @@ async function withRegistryLock(registryFile, fn) {
         const uid = typeof process.getuid === 'function' ? process.getuid() : null
         const st = lstatSync(lockDir)
         const ownerStat = lstatSync(join(lockDir, 'owner.json'))
-        if (!st.isDirectory() || st.isSymbolicLink() || (uid !== null && st.uid !== uid) || (st.mode & 0o777) !== 0o700
+        // No mode on Windows, as the daemon's lock (src/lib/registryPersistence.ts) has none there.
+        const unix = process.platform !== 'win32'
+        if (!st.isDirectory() || st.isSymbolicLink() || (uid !== null && st.uid !== uid) || (unix && (st.mode & 0o777) !== 0o700)
           || !ownerStat.isFile() || ownerStat.isSymbolicLink() || (uid !== null && ownerStat.uid !== uid)
-          || (ownerStat.mode & 0o777) !== 0o600) return
+          || (unix && (ownerStat.mode & 0o777) !== 0o600)) return
         const owner = JSON.parse(readFileSync(join(lockDir, 'owner.json'), 'utf8'))
         const ownerPid = Number(owner?.pid)
         const ownerStartMarker = lockStartMarker(owner)
@@ -1805,6 +2020,62 @@ function writeRegistry(file, sessions, current = () => true) {
     syncStateDirectory(dirname(file))
     return true
   } finally {
+    if (!renamed) {
+      try { rmSync(tmp, { force: true }) } catch { /* ignore */ }
+    }
+  }
+}
+
+/**
+ * The editor each panel hook's VSCODE_PID named (lookUpWindowsApp), kept in the data folder so the next hook of that
+ * editor starts no pty host. On Windows alone, and only the hook reads or writes it. At most EDITORS_MAX entries of a
+ * pid, the key of the editor's pipe (editorIpcKey) and a bundle id, the newest first: never a path or a pipe's name.
+ */
+const EDITORS_FILE = 'hook-editors.json'
+const EDITORS_MAX = 16
+const EDITORS_MAX_BYTES = 4096
+
+/** The key of the editor this hook runs under: the first 16 hex digits of the SHA-256 of its pipe's name
+ *  (`\\.\pipe\<hex>-<version>-main-sock`), or null when VSCODE_IPC_HOOK holds none: then nothing is read or kept. */
+function editorIpcKey() {
+  const pipe = process.env.VSCODE_IPC_HOOK ?? ''
+  return /^\\\\\.\\pipe\\[^\\]{1,200}$/.test(pipe) ? createHash('sha256').update(pipe).digest('hex').slice(0, 16) : null
+}
+
+/** The kept answers. A file missing, over EDITORS_MAX_BYTES, not JSON, of another shape or a link reads as none. */
+function readEditors(file) {
+  try {
+    const editors = JSON.parse(readWindowsStateFile(dirname(file), file, EDITORS_MAX_BYTES)).editors
+    const apps = [...WINDOWS_EDITORS.values()]
+    const valid = Array.isArray(editors) && editors.length <= EDITORS_MAX && editors.every((entry) =>
+      Number.isSafeInteger(entry?.pid) && entry.pid > 0 && typeof entry.ipc === 'string' && /^[0-9a-f]{16}$/.test(entry.ipc)
+      && apps.includes(entry.app))
+    return valid ? editors.map(({ pid, ipc, app }) => ({ pid, ipc, app })) : []
+  } catch { return [] }
+}
+
+/**
+ * Puts [entry] first among the kept answers, the EDITORS_MAX newest kept, written whole: a temporary file renamed over
+ * the old one (a link there is replaced, never followed), so a reader sees the old list or the new. It is the hook's
+ * copy of atomicWriteJson and readState (src/lib/secureState.ts), because this file imports nothing from src/. As
+ * there on Windows, no owner or mode is checked (NTFS gives Node neither; see secureStateDirectory): the file is read
+ * as the hook reads its other Windows state (readWindowsStateFile), and like a cache it is not flushed, since one a
+ * power cut empties reads as none and is written again. Two hooks writing at once each write it whole: the last rename
+ * wins, and the entry lost is read from the table next time. Never throws: a failed write keeps nothing.
+ */
+function keepEditor(file, entry) {
+  const editors = [entry, ...readEditors(file).filter(({ pid, ipc }) => pid !== entry.pid || ipc !== entry.ipc)]
+  const tmp = `${file}.${process.pid}.${randomUUID()}.tmp`
+  let renamed = false
+  try {
+    const fd = openSync(tmp, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600)
+    try {
+      writeFileSync(fd, JSON.stringify({ editors: editors.slice(0, EDITORS_MAX) }, null, 2))
+      fchmodSync(fd, 0o600)
+    } finally { closeSync(fd) }
+    renameSync(tmp, file)
+    renamed = true
+  } catch { /* nothing kept */ } finally {
     if (!renamed) {
       try { rmSync(tmp, { force: true }) } catch { /* ignore */ }
     }
@@ -2182,7 +2453,6 @@ async function main() {
   if (!paneless && event === 'Notification') return
   // Before anything reads the data folder or posts: which daemon this pane is (routeToPaneOwner).
   if (!paneless && await routeToPaneOwner(tmuxPane)) port = argPort()
-  const mutationFields = { engine, ...terminalHookFields(tmuxPane) }
   if (engine === 'cursor' && input.is_background_agent === true) return
   if (engine === 'codex' && isCodexSubagent(input, paths())) return
   // Devin's documented user-level hook locations include ~/.claude.json and ~/.claude/settings.json, so a
@@ -2195,10 +2465,13 @@ async function main() {
   if (paneless) {
     // agy's sub-agents fire hooks of their own; only a top-level conversation is a session (agyIsPaneConversation).
     if (engine === 'agy' && !agyIsPaneConversation(paths(), input.conversationId)) return
-    const body = observedBody(engine, event, input)
+    const body = await observedBody(engine, event, input)
     if (body) await postObserved(port, body)
     return
   }
+
+  // After the guards: an event they drop climbs to no caller (hookCaller).
+  const mutationFields = { engine, ...await terminalHookFields(tmuxPane) }
 
   // Grok's hook payload and event records are camelCase, while every Claude-compatible engine above is
   // snake_case. Its Stop hook is deliberately NOT installed: Grok persists that hook_execution before
@@ -2233,7 +2506,7 @@ async function main() {
       sessionId,
       transcriptPath,
       cwd,
-      ...terminalHookFields(tmuxPane),
+      ...await terminalHookFields(tmuxPane),
     }
     const registered = await post(port, '/api/hook/session-start', body)
     if (registered === false) {
@@ -2281,7 +2554,7 @@ async function main() {
       sessionId,
       transcriptPath,
       cwd,
-      ...terminalHookFields(tmuxPane),
+      ...await terminalHookFields(tmuxPane),
       model: modelName(input.modelName),
     }
     const registered = await post(port, '/api/hook/session-start', body)
@@ -2319,7 +2592,7 @@ async function main() {
       ...(grokEventName === 'UserPromptSubmit' && typeof input.prompt === 'string' ? { prompt: boundedPrompt(input.prompt) } : {}),
       transcriptPath,
       cwd,
-      ...terminalHookFields(tmuxPane),
+      ...await terminalHookFields(tmuxPane),
       model: modelName(input.model),
       cliVersion: input.cliVersion || input.version,
     }
@@ -2383,7 +2656,7 @@ async function main() {
       status: input.status,
       transcriptPath: input.transcript_path,
       cwd: Array.isArray(input.workspace_roots) ? input.workspace_roots[0] : input.cwd,
-      ...terminalHookFields(tmuxPane),
+      ...await terminalHookFields(tmuxPane),
       model: modelName(input.model),
       cliVersion: input.cursor_version || input.version,
     }
@@ -2447,7 +2720,7 @@ async function main() {
         status: event === 'StopFailure' ? 'error' : undefined,
         transcriptPath: existsPath(input.transcript_path) ? input.transcript_path : undefined,
         cwd: input.cwd,
-        ...terminalHookFields(tmuxPane),
+        ...await terminalHookFields(tmuxPane),
         title: input.session_title,
         model: modelName(input.model),
         cliVersion: input.cli_version || input.version,
@@ -2486,7 +2759,7 @@ async function main() {
     // Devin's payload carries no cwd; the hook process inherits the session's working directory.
     cwd: Array.isArray(input.workspace_roots) ? input.workspace_roots[0] : (input.cwd || (engine === 'devin' ? process.cwd() : undefined)),
     source: input.source,
-    ...terminalHookFields(tmuxPane),
+    ...await terminalHookFields(tmuxPane),
     title: input.session_title,
     model: modelName(input.model),
     cliVersion: input.cli_version || input.cursor_version || input.version,

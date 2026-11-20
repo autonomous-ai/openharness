@@ -116,6 +116,47 @@ everywhere), [Process Creation Flags](https://learn.microsoft.com/en-us/windows/
   desktop app's own `Claude.exe` answers `--help` by opening its window and never exiting, so a `claude` on Windows is
   asked `--version` first and refused unless it says Claude Code (`notClaudeCode` in `cli/src/engines/nativeLaunch.ts`).
   A customer's launches held at "permission flags" for good (2026-11-10).
+- **An app's own `.cmd` may forward to an `.exe`, not start Electron.** VS Code's `code.cmd` and Cursor's `cursor.cmd`
+  set `ELECTRON_RUN_AS_NODE=1` and run the app's `.exe` on a CLI script. Orca's `orca.cmd` (1.4.263) checks its first
+  arguments and runs `orca.exe` beside it, and Orca's own comment there says `cmd.exe` reparses a message body (read on
+  a Windows 11 ARM64 VM, 2026-11-20). Read what a launcher does before you run it: Orca's is run as its `orca.exe`, and
+  a `.cmd` of any other shape is refused, never run through `cmd.exe` (`cli/src/lib/windows/program.ts`). Test:
+  `cli/src/lib/windows/program.spec.ts`, against the launchers as installed (`cli/src/lib/windows/fixtures/`).
+- **A launcher's paths change with each update.** VS Code's script sits in a folder named by its build's commit
+  (`8a14f0cc1b\resources\app\out\cli.js` in 1.147.0), so a path read once is wrong after the next update. Read the
+  launcher at every start. Test: `program.spec.ts`, "reads the launcher at every start".
+- **Windows PowerShell takes seconds to start.** 3-6 s inside Claude Code, 1.3-1.8 s for one `Get-AppxPackage` ask
+  (VM, 2026-11-20). Run synchronously in the VS Code gate's process, it held the devices' listener there past the
+  extension's 2 s for a stream's head, and the extension opened its stream again. Never run PowerShell synchronously in
+  a process that serves anything: ask in the background, bounded in time, and answer with what is known meanwhile (the
+  `codex` on PATH until the ChatGPT app's folder is known, `cli/src/cable/hosts/codexQueue.ts`). Tests:
+  `cli/src/lib/windows/storePackage.spec.ts` (the 10 s bound), `cli/src/cable/hosts/codexQueue.spec.ts`.
+- **A Store app's install folder is asked, never built.** The Store's ChatGPT app is package `OpenAI.Codex`, in
+  `%ProgramFiles%\WindowsApps\OpenAI.Codex_<version>_<arch>__<publisher id>`: a folder named for each version, which
+  a standard user cannot list. Its window is `ChatGPT.exe`'s, and it holds a Codex of its own,
+  `app\resources\codex.exe`, newer than the `codex` on PATH, which no alias puts on PATH (VM, 2026-11-20). Ask
+  `Get-AppxPackage` for the package's `InstallLocation` (`cli/src/lib/windows/storePackage.ts`). Tests:
+  `storePackage.spec.ts`; `cli/src/cable/hosts/frontApp.spec.ts` (`ChatGPT.exe` in front is the Codex app).
+- **A hook reads only its own parent chain.** One `harness-pty ps --json` read of the whole table took 49-51 ms on the
+  VM (156 processes) and added 58 ms to every Codex hook at the median (2026-11-20). A hook runs on every turn: it
+  reads `harness-pty ps --json --ancestors <pid>`, at most 9 rows, which opens only the processes on the chain
+  (`cli/hook/notify.mjs`). Tests: `pty/src/ps.rs` (`chain`), `cli/src/hookNotify.spec.ts`.
+
+Claude Code's plugins on Windows (Claude Code 2.1.328 and 2.1.329, VM, 2026-11-20):
+
+- **A mod reaches no named pipe and has no HMAC.** `$.http.fetch` refuses every `\\.\pipe\` `socketPath` as "a
+  network location" before it connects; `crypto.subtle` holds `digest` alone, and `node:crypto` cannot be imported. A
+  mod reaches Harness through `harness.exe` (`harness device claude inbox` and `attach`), which proves the daemon's
+  token itself, and holds no token. Tests: `plugins/harness-device/test/device.test.ts` ("on Windows the follower is
+  the install's harness.exe"), `cli/src/deviceClaude/inbox.windows.real.spec.ts`.
+- **`$.process.run` of a missing absolute path does not reject.** It resolves with exit 1 and "The system cannot find
+  the path specified." on stderr, so a `catch` never reaches a fallback. Look with `$.fs.exists` first. Test:
+  `device.test.ts`, "no harness.exe in the profile: harness on PATH".
+- **A plugin's command hook runs under Git Bash, else Windows PowerShell, and its failure can block.** With no Git
+  Bash, a quoted path as the command is printed by PowerShell and runs nothing; Claude Code reads exit 127, and a
+  `PermissionRequest` hook that fails or passes its timeout denies the tool call: every Write in that run was denied.
+  A hook for both is one command both shells read, ending `exit 0`, with `"onFailure": "continue"`. Test:
+  `cli/src/harnessDevicePlugin.spec.ts`.
 
 ## 3. Files
 
@@ -138,6 +179,11 @@ everywhere), [Process Creation Flags](https://learn.microsoft.com/en-us/windows/
 - **`Get-AuthenticodeSignature` needs its module imported by path** (`$PSHOME\Modules\Microsoft.PowerShell.Security`): a
   PowerShell 7 `PSModulePath` makes 5.1 autoload 7's module, as with `Get-FileHash`. A file that is no program at all
   reads `UnknownError`, not `NotSigned`.
+- **A watch hears no write to a file another process holds open.** A probe wrote 5 lines into a file a second process
+  held open: `fs.watch` saw none of them, and one event once the file was closed; `fs.watchFile` saw all 5 (VM,
+  2026-11-20). VS Code holds its output channel's file open, so the gate's scroll cases timed out. To follow such a
+  file, read its size (`watchFile`). Test: the real-VS Code gate's scroll and page cases
+  (`plugins/harness-device-vscode/gate/realVscode.gate.ts`).
 
 ## 4. Screens a person sees
 
@@ -145,6 +191,15 @@ everywhere), [Process Creation Flags](https://learn.microsoft.com/en-us/windows/
   deleted (`scrollsTabsByMouse` in `desktop/lib/widgets/workspace_tab_scroller.dart`).
 - **A window that nobody asked for is rule 1.** A prompt nobody can answer in a hidden pane is its sibling: answer the exact screen
   safely or fail the start with a reason.
+- **A link may have no handler, and opening it anyway shows a window.** After a silent install, VS Code's and Cursor's
+  `vscode` and `cursor` had no handler until each editor had started once. `ShellExecuteExW` with
+  `SEE_MASK_FLAG_NO_UI` on a scheme with none returns TRUE and opens "Pick an app" (`OpenWith.exe`), and a second call
+  while it was open did not return within 120 s (VM, in the person's session, 2026-11-20). Ask `AssocQueryStringW` for
+  the scheme's `PROGID` first and refuse the link when there is none: `COMMAND` and `EXECUTABLE` find nothing for a
+  packaged handler (the ChatGPT app's `codex`), `PROGID` answers for both kinds (`harness-pty open-link`,
+  `pty/src/raise.rs`). Only the person's session shows the picker: over SSH the old build answered `refused` too.
+  Tests: `pty/src/raise.rs` (`the_link_code_asks_for_no_ui`, `the_link_code_asks_for_a_handler_before_opening`),
+  `pty/tests/raise.rs` (`a_link_with_no_handler_is_refused`).
 - **Windows scales by 125%, 150% and 175%; a Mac by 200%.** A line drawn in logical pixels can then end inside a device
   pixel, and two neighbours that each cover part of it let what is behind show through. In the terminal this put a
   dark stripe between OpenCode's panel rows every 20 device pixels, and a gap in its `┃` bar at every row (measured
@@ -169,6 +224,13 @@ everywhere), [Process Creation Flags](https://learn.microsoft.com/en-us/windows/
 - `SendKeys` Ctrl+Shift chords do not reach the app. That is the test's fault. Send real key events (`keybd_event`).
 - Claude Code on Windows takes a pasted image on Alt+V, not Ctrl+V.
 - Check the machine chip says This Computer before you start anything: a new Harness can default to another machine.
+- **The daemon's ready lines are in `harness.log`, not on stdout.** Under the Windows launcher a master whose output is
+  not a terminal writes its lines and its children's to the data folder's `harness.log`: `start -f` printed its first
+  line only, and a harness waiting on stdout for the port waited 90 s. Follow `harness.log` from where it ended at the
+  start (`cli/e2e/harness/windowsDaemon.ts`). Test: `cli/e2e/dialWindows.e2e.ts`.
+- **The terminal host outlives `harness stop`, by design**, as tmux does, and holds its lock in the pty home, so a
+  test's root cannot be removed while it runs. End it as `harness uninstall` does
+  (`cli/src/lib/uninstall/ptyHosts.ts`). Test: `cli/e2e/dialWindows.e2e.ts`, which leaves no root behind.
 - Files and secrets: read a config file by key name. Never print `config.toml` or similar: it can hold a plain API key.
 
 ## 6. Words

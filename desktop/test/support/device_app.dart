@@ -67,14 +67,18 @@ class FakeDeviceAppOpen {
   }
 }
 
-/// An offer over the three fakes and an in-memory store.
+/// An offer over the three fakes and an in-memory store; [install], when given, installs in place of the fake's.
 class DeviceAppFixture {
-  DeviceAppFixture({bool supported = true, MemoryKeyValueStore? store}) {
+  DeviceAppFixture({
+    bool supported = true,
+    MemoryKeyValueStore? store,
+    Future<DeviceAppInstallResult> Function()? install,
+  }) {
     this.store = store ?? MemoryKeyValueStore();
     offer = DeviceAppOffer(
       supported: supported,
       probe: probe,
-      install: install.call,
+      install: install ?? this.install.call,
       open: open.call,
       store: this.store,
       log: lines.add,

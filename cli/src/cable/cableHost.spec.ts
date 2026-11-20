@@ -1618,6 +1618,21 @@ describe('the dial that shows one app at a time', () => {
     expect(['h1', 'g1'].map((id) => host.appOf(id))).toEqual([undefined, undefined])
   })
 
+  // Windows: the scan learns no agent's app (scannedApp.ts) and nothing reports the app in front, so an agent it found is
+  // not known yet until its first hook, which can be hours away. Counting for nothing, the one agent that hooked decided
+  // the dial's default over the agents the person runs in WezTerm or herdr.
+  it('where the scan learns no app (Windows), the agents it found count in the default; where it learns them they do not', async () => {
+    const found = (id: string) => agent(id, 'terminal', { appPending: true })
+    const agents = () => [agent('v1', 'vscode'), found('f1'), found('f2'), found('f3'), agent('c1', 'claude', { resting: true }),
+      agent('c2', 'claude', { resting: true }), agent('c3', 'claude', { resting: true }), agent('c4', 'claude', { resting: true })]
+    expect(await shown(setup(agents(), { scanLearnsApps: false }))).toBe('terminal')
+    // On a Mac or Linux the scan places most, and one it could not wait for its first hook, or the front.
+    expect(await shown(setup(agents()))).toBe('vscode')
+    // Only agents not known yet, or only herdr's: that app, never none.
+    expect(await shown(setup([found('f1'), found('f2')], { scanLearnsApps: false }))).toBe('terminal')
+    expect(await shown(setup([agent('h1', 'herdr'), agent('h2', 'herdr')], { scanLearnsApps: false }))).toBe('herdr')
+  })
+
   it('no agents: shown is empty and nothing is listed', async () => {
     const agents = [agent('g1', 'ghostty')]
     const host = setup(agents)

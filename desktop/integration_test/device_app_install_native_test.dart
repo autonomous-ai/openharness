@@ -103,8 +103,14 @@ Dio _dio({Map<String, String> loopback = const {}}) => Dio()
     ),
   );
 
-Future<ProcessResult> _run(String executable, List<String> arguments) async {
-  final result = await runDeviceAppTool(executable, arguments);
+Future<ProcessResult> _run(
+  String executable,
+  List<String> arguments, {
+  Duration? timeout,
+}) async {
+  final result = timeout == null
+      ? await runDeviceAppTool(executable, arguments)
+      : await runDeviceAppTool(executable, arguments, timeout: timeout);
   debugPrint('${p.basename(executable)} exit ${result.exitCode}');
   return result;
 }
@@ -126,6 +132,7 @@ Future<DeviceAppRelease> _realRelease() async {
   final release = parseDeviceAppManifest(
     data is String ? jsonDecode(data) : data,
     architecture: runtimeArchitecture,
+    platform: TargetPlatform.macOS,
   );
   expect(release, isNotNull, reason: 'the real manifest names no release');
   return release!;
@@ -194,6 +201,8 @@ void main() {
         },
         dio: dio ?? _dio(),
         run: _run,
+        // FLUTTER_TEST makes defaultTargetPlatform Android in this app too.
+        platform: TargetPlatform.macOS,
         tempRoot: tempRoot,
       );
 

@@ -16,8 +16,20 @@ over. Nothing is kept for later.
 
 The mod also tells the daemon which session the Claude app shows, and the dial turns to it while the app is in front.
 
-With no dial attached, no Harness daemon running, or no Harness CLI (`~/.local/bin/harness`, then `harness` on
-`PATH`), the hook tells nothing, and Claude Code carries on as it would without the plugin.
+On Windows, where a mod reaches no named pipe, the mod runs the Harness CLI instead
+(`%USERPROFILE%\.harness\bin\harness.exe`, else `harness` on `PATH`): one `harness device claude inbox` per session
+holds that request, and `harness device claude attach` tells which session the app shows. The CLI proves Harness's
+tokens in its own process, and the mod is handed no token or other credential. A waiting prompt is the mod's to tell
+there too, through `harness device claude asked`: it hears the prompt before the hook, and sets
+`HARNESS_DEVICE_MOD_ASKS` for it, so the hook runs nothing.
+
+With no dial attached, no Harness daemon running, or no Harness CLI (`~/.local/bin/harness`, on Windows
+`%USERPROFILE%\.harness\bin\harness.exe`, then `harness` on `PATH`), the hook tells nothing, and Claude Code carries
+on as it would without the plugin. On Windows Claude Code still starts the hook, in Git Bash, or in PowerShell when
+there is none, and the prompt shows once it ends: about 0.5-1 s later in Git Bash, 2-3.5 s in PowerShell (measured on a Windows 11 ARM64 VM). The dial shows
+the prompt as soon as the mod has told it. Where an organization manages Claude Code, its hooks pass over the mod: the
+hook tells, and a PowerShell slower than the hook's 5 s rings nothing at the dial for that prompt, which still waits in
+the session.
 
 ## What it never does
 

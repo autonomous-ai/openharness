@@ -1,9 +1,10 @@
-// The loop behind the extension: it asks `harness device vscode link` where the devices' socket is, holds this window's
-// `vscode` stream open on it, reports the window's shells on connections of their own, and shows or scrolls the terminal
-// a line names, or presses its page keys, raising the window for a tap's show. Nothing of `vscode` is loaded here: the end to end test runs this
-// file outside VS Code.
-import { basename, delimiter, dirname, isAbsolute } from 'node:path'
-import { MISSING, type LoopInputs, type Ran } from './inputs'
+// The loop behind the extension: it asks `harness device vscode link` where the devices listen (their socket, or on
+// Windows their pipe and its token), holds this window's `vscode` stream open there, reports the window's shells on
+// connections of their own, and shows or scrolls the terminal a line names, or presses its page keys, raising the
+// window for a tap's show. Nothing of `vscode` is loaded here: the end to end test runs this file outside VS Code.
+import { posix, win32 } from 'node:path'
+import { MISSING, type LoopInputs, type Ran, type Target } from './inputs'
+import { PIPE, TOKEN } from './pipeAuth'
 import type { WindowFacade } from './window'
 
 export type LoopState = 'noHarness' | 'notRunning' | 'unplugged' | 'connected'
@@ -23,8 +24,8 @@ const LINE_BYTES = 1_024
 const NEWLINE = 0x0a
 const FIRST_WAIT_MS = 1_000
 const LAST_WAIT_MS = 30_000
-// Unplugged with the watch on: the watch asks as the socket appears, so link is looked at again only in case the
-// daemon stops.
+// Unplugged with the watch on: the watch asks as the socket or the record appears, so link is looked at again only in
+// case the daemon stops.
 const WATCHED_WAIT_MS = 300_000
 // The folder watch asks link at most this often.
 const WATCH_MS = 1_000
@@ -46,7 +47,8 @@ const LINE_KEYS_MAX = 5
 // A shell's page remainder is forgotten once no page line came for this long.
 const PAGE_IDLE_MS = 1_000
 
-type Link = { ready: false; socket?: string } | { ready: true; socket: string }
+/** `watch` is the file whose entry says the devices may be ready: their socket, or on Windows their record. */
+type Link = { ready: false; watch?: string } | { ready: true; target: Target }
 type Counts = { shows: number; notFound: number; skipped: number; sent: number; notSent: number; pageKeys: number; scrollLines: number; dropped: number }
 /** Whole lines for the terminal of the shell `pid`, from `from` scroll lines of the stream that have done nothing yet. */
 type Scroll = { pid: number; n: number; from: number }
@@ -55,14 +57,17 @@ type Pages = (pid: number, n: number, page: boolean) => number
 
 const decoder = new TextDecoder()
 
-/** Null on Windows and in a remote window: nothing starts. */
+/** Null in a remote window: nothing starts. */
 export function startLoop(
   inputs: LoopInputs,
   window: WindowFacade,
   tell: { changed(state: LoopState): void; log(line: string): void }
 ): Loop | null {
-  // Windows has no devices' socket, and a remote window's terminals are another computer's.
-  if (inputs.platform === 'win32' || window.remote) return null
+  // A remote window's terminals are another computer's.
+  if (window.remote) return null
+  const windows = inputs.platform === 'win32'
+  // The given platform's paths, not the host's: the tests run each platform's on any.
+  const paths = windows ? win32 : posix
   const open = JSON.stringify({ type: 'vscode', window: inputs.windowId })
   let current: LoopState | undefined
   let stopped = false
@@ -74,7 +79,7 @@ export function startLoop(
   let wait = FIRST_WAIT_MS
   let nextAt = Infinity
   let cancelNext = () => {}
-  let watching: { socket: string; close(): void } | null = null
+  let watching: { file: string; close(): void } | null = null
   let counts = noCounts()
   let cancelCounts: (() => void) | null = null
   // One scroll run at a time; what comes during it waits, as one run.
@@ -188,8 +193,9 @@ export function startLoop(
     passing = null
     if (stopped) return
     const now = inputs.now()
-    // Unplugged with the watch on is no failure: the watch asks as the socket appears, link is looked at again only in
-    // case the daemon stops, and a stream that ends soon after waits from 1 s, not from a wait grown meanwhile.
+    // Unplugged with the watch on is no failure: the watch asks as the socket or the record appears, link is looked at
+    // again only in case the daemon stops, and a stream that ends soon after waits from 1 s, not from a wait grown
+    // meanwhile.
     const at = again ? Math.max(now, lastStart + WATCH_MS) : now + (quiet ? WATCHED_WAIT_MS : wait)
     wait = quiet ? FIRST_WAIT_MS : Math.min(wait * 2, LAST_WAIT_MS)
     schedule(at)
@@ -211,16 +217,17 @@ export function startLoop(
     else schedule(Math.max(inputs.now(), lastStart + WATCH_MS))
   }
 
-  // The devices' socket appears in its folder once a dial is plugged in: its entry asks link again.
-  function watch(socket: string | undefined): void {
-    if (stopped || watching?.socket === socket) return
+  // The devices' socket, or on Windows their record, appears in its folder once a dial is plugged in: its entry asks
+  // link again.
+  function watch(file: string | undefined): void {
+    if (stopped || watching?.file === file) return
     unwatch()
-    if (socket === undefined) return
-    const entry = basename(socket)
-    const held = { socket, close: () => {} }
+    if (file === undefined) return
+    const entry = paths.basename(file)
+    const held = { file, close: () => {} }
     watching = held
     held.close = inputs.watch(
-      dirname(socket),
+      paths.dirname(file),
       (name) => {
         if (name === null || name === entry) ask()
       },
@@ -252,40 +259,44 @@ export function startLoop(
   // True when it ends unplugged with the watch on.
   async function pass(abort: AbortController): Promise<boolean> {
     const ran = await launch(abort.signal)
-    const link = ran === MISSING ? null : readLink(ran)
+    const link = ran === MISSING ? null : readLink(ran, windows)
     if (!link) set(ran === MISSING ? 'noHarness' : 'notRunning')
-    else if (link.ready) await follow(link.socket, abort)
+    else if (link.ready) await follow(link.target, abort)
     else {
       set('unplugged')
-      watch(link.socket)
+      watch(link.watch)
       return watching !== null
     }
     return false
   }
 
-  // The launcher in the home first, then one on PATH, as plugins/harness-device/hooks/device.js looks. Only absolute
-  // folders: a relative or empty one is the extension host's working folder, which can be the folder VS Code opened, in
-  // Restricted Mode an untrusted one.
-  const path = inputs.path.split(delimiter).filter((folder) => isAbsolute(folder)).join(delimiter)
+  // The launcher in the home first (where Harness installs it: ~/.local/bin, on Windows %USERPROFILE%\.harness\bin),
+  // then one on PATH, as plugins/harness-device/hooks/device.js looks. Only absolute folders: a relative or empty one
+  // is the extension host's working folder, which can be the folder VS Code opened, in Restricted Mode an untrusted one.
+  // Each runs in the home, as Windows looks for a bare name in the working folder before PATH. With no absolute home
+  // nothing runs: there is no folder of the account's own to run in, and no Harness, which keeps its state there.
+  const path = inputs.path.split(paths.delimiter).filter((folder) => paths.isAbsolute(folder)).join(paths.delimiter)
+  const launcher = windows ? ['.harness', 'bin', 'harness.exe'] : ['.local', 'bin', 'harness']
   async function launch(signal: AbortSignal): Promise<Ran> {
-    const files = isAbsolute(inputs.home) ? [`${inputs.home}/.local/bin/harness`, 'harness'] : ['harness']
-    for (const file of files) {
-      const ran = await inputs.run(file, LINK_ARGS, { path, timeoutMs: LINK_TIMEOUT_MS, maxBytes: LINK_MAX_BYTES, signal })
+    const home = inputs.home
+    if (!paths.isAbsolute(home)) return MISSING
+    for (const file of [paths.join(home, ...launcher), 'harness']) {
+      const ran = await inputs.run(file, LINK_ARGS, { path, cwd: home, timeoutMs: LINK_TIMEOUT_MS, maxBytes: LINK_MAX_BYTES, signal })
       if (ran !== MISSING) return ran
     }
     return MISSING
   }
 
-  async function follow(socket: string, abort: AbortController): Promise<void> {
+  async function follow(target: Target, abort: AbortController): Promise<void> {
     // On the loop's clock, so a test moves it.
     const cancelHead = inputs.after(HEAD_MS, () => abort.abort())
-    const answer = await inputs.connect(socket, open, abort.signal)
+    const answer = await inputs.connect(target, open, abort.signal)
     cancelHead()
     // 409 is a ninth window, 404 a daemon older than this extension: both wait as any other failure.
     if (answer?.status !== 200) return set('notRunning')
     set('connected')
     const opened = inputs.now()
-    const reports = report(socket, abort)
+    const reports = report(target, abort)
     const pages = pager()
     const tooLong = await eachLine(answer.chunks, (line) => take(line, pages))
     reports.end()
@@ -317,7 +328,7 @@ export function startLoop(
 
   // The window's state, once the stream's head has come and then at each change: the latest only, one post at a time,
   // at most one a slot, never one the devices took last.
-  function report(socket: string, abort: AbortController): { end(): void } {
+  function report(target: Target, abort: AbortController): { end(): void } {
     let taken = ''
     let lastAt = -Infinity
     let posting = false
@@ -343,7 +354,7 @@ export function startLoop(
     async function send(body: string): Promise<void> {
       posting = true
       lastAt = inputs.now()
-      const status = await inputs.post(socket, body, abort.signal)
+      const status = await inputs.post(target, body, abort.signal)
       posting = false
       if (over || stopped) return
       if (status !== null && status >= 200 && status < 300) {
@@ -393,8 +404,9 @@ function held(n: number, max: number): number {
   return Math.max(-max, Math.min(max, n))
 }
 
-// link's answer: null for anything but a daemon that is up and a devices' socket that is absent or an absolute path.
-function readLink(ran: string | null): Link | null {
+// link's answer: null for anything but a daemon that is up and, on Windows, an absolute record with, once the devices
+// are ready, their pipe and token; elsewhere a devices' socket that is absent or an absolute path.
+function readLink(ran: string | null, windows: boolean): Link | null {
   let value: unknown
   try {
     value = JSON.parse(ran ?? '')
@@ -402,12 +414,22 @@ function readLink(ran: string | null): Link | null {
     return null
   }
   if (!isRecord(value) || value.daemon !== true) return null
+  if (windows) return readWindowsLink(value)
   const socket = value.devicesSocket
   if (socket === undefined) return value.devicesReady === false ? { ready: false } : null
   // Node's connect throws past its own error handler on a NUL in the path.
   if (typeof socket !== 'string' || !socket.startsWith('/') || socket.includes('\0')) return null
   if (typeof value.devicesReady !== 'boolean') return null
-  return value.devicesReady ? { ready: true, socket } : { ready: false, socket }
+  return value.devicesReady ? { ready: true, target: { socket } } : { ready: false, watch: socket }
+}
+
+// Only a pipe on this computer is dialled: a `\\host\pipe\` name would open a connection to another one.
+function readWindowsLink(value: Record<string, unknown>): Link | null {
+  const { devicesPipe: pipe, devicesToken: token, devicesReady: ready, devicesRecord: record } = value
+  if (typeof record !== 'string' || !win32.isAbsolute(record)) return null
+  if (ready === false) return { ready: false, watch: record }
+  if (ready !== true || typeof pipe !== 'string' || !PIPE.test(pipe) || typeof token !== 'string' || !TOKEN.test(token)) return null
+  return { ready: true, target: { pipe, token } }
 }
 
 // Hands `take` each line until the chunks end or it says stop. A line that would hold more than LINE_BYTES with its

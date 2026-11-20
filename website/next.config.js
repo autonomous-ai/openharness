@@ -107,6 +107,11 @@ module.exports = {
         // Older desktop builds consume snapshots without following redirects.
         { source: '/explore/:id/snapshot', destination: '/hub/:id/snapshot' },
         { source: '/explore/:id/download', destination: '/hub/:id/download' },
+        // Harness Device's one line on Linux, served from the CDN in place: no /device/... path redirects, so the
+        // home page's redirect to /device reaches no other page. Before the files, so no /device route can take it;
+        // the CDN's headers, its content type among them, pass through. release-device.yml uploads
+        // scripts/device-install.sh there with every release that carries Linux.
+        { source: '/device/install.sh', destination: 'https://cdn.autonomous.ai/harness/device/install.sh' },
         // `hn view` links open the web app's viewer at /?viewer=1 (tui/src/viewer.rs).
         { source: '/', has: [{ type: 'query', key: 'viewer' }], destination: '/harness-web/index.html' },
         { source: '/s/:id', destination: '/harness-web/index.html' },
@@ -157,6 +162,12 @@ module.exports = {
           { key: 'Cache-Control', value: 'no-store, no-transform' },
           { key: 'X-Content-Type-Options', value: 'nosniff' },
         ],
+      },
+      {
+        // Chromium sends the CPU hints only to a site that asked: once /device has, a later request to
+        // /device/download-windows or -linux carries them, and those pick the arch from them.
+        source: '/device',
+        headers: [{ key: 'Accept-CH', value: 'Sec-CH-UA-Arch, Sec-CH-UA-Bitness' }],
       },
       {
         source: '/os/latest',

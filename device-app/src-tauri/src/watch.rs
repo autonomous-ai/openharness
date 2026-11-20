@@ -115,7 +115,7 @@ fn spawn_watch_within(
                     wait = Duration::MAX;
                 }
                 Ok(None) => break,
-                // Killed, it ends by a signal: the WatchExit(None) of a watch that ended with the daemon down.
+                // Killed, it has no code: the WatchExit(None) of a watch that ended with the daemon down.
                 Err(Timeout) => {
                     child.killer().kill();
                     break;
@@ -128,7 +128,8 @@ fn spawn_watch_within(
     Ok(Watch { stdin, writer, killer, grace, log, not_reading: AtomicBool::new(false) })
 }
 
-#[cfg(test)]
+// Every test runs the fake CLI, a shell script.
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use crate::cli::{HarnessCli, find_cli};

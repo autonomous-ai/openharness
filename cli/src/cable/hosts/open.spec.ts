@@ -10,6 +10,7 @@ import { bundleOf, createOpenActions, type OpenTarget } from './open.js'
 import { createOrcaAdapter, type OrcaDeps } from './orca.js'
 import { createTabsAdapter } from './tabs.js'
 import { createWeztermAdapter } from './wezterm.js'
+import type { WindowsRaise } from './windowsRaise.js'
 
 const HANDLE = 'term_0f8e2c1a-3b4d-4e5f-8a9b-0c1d2e3f4a5b'
 const SESSION = 'local_8d1f2c3a-4b5e-4f60-9a7b-1c2d3e4f5a6b'
@@ -24,10 +25,10 @@ interface Call { file: string; args: string[]; timeoutMs: number }
 interface Window { pid?: number; app?: string }
 
 /** herdr's socket, which no tap asks: a tap is `herdr agent focus`. */
-const herdrClient = { prompt: vi.fn(), socketStamp: vi.fn() }
+const herdrClient = { prompt: vi.fn(), socketStamp: vi.fn(), binary: vi.fn() }
 
 /** What a test may set: the runner and the binaries it finds, Orca's switch, the log, the opener's `open`, whether
- *  Herdr.app's window is herdr's ring's, and Linux's raise with each agent's window. */
+ *  Herdr.app's window is herdr's ring's, Linux's raise with each agent's window, and Windows' raise. */
 interface Over extends OrcaDeps {
   orcaSwitch(handle: string): Promise<boolean>
   log(line: string): void
@@ -35,6 +36,7 @@ interface Over extends OrcaDeps {
   herdrApp?(): boolean
   raise?: LinuxRaise
   windowOf?(agentId: string): Window | undefined
+  windows?: WindowsRaise
 }
 
 /** A recording runner that runs nothing, so no spec brings the developer's own apps forward: each call answers the next
@@ -67,6 +69,7 @@ function recorder(over: Partial<Over> = {}, codes: Array<number | null> = [], mo
   ]
   const opener = createOpenActions({
     run: deps.run, platform: deps.platform, adapters, log: deps.log, bin: deps.bin, herdrApp: deps.herdrApp, raise: deps.raise, windowOf: deps.windowOf,
+    windows: deps.windows,
   })
   return { calls, switched, logs, claude, opener }
 }
@@ -895,5 +898,147 @@ describe('a pick on the dial brings its app forward', () => {
       expect(await opener.bring!('vscode')).toBe('ok')
       expect(calls.map((call) => call.file), String(bin)).toEqual([file, file, file])
     }
+  })
+})
+
+// Windows has no `open -b`: the app comes forward through the raise (windowsRaise.ts), where macOS opens its bundle.
+describe('a tap on Windows brings the app forward through the raise', () => {
+  const VSCODE = 'com.microsoft.VSCode'
+  const WARP = target({ TERM_PROGRAM: 'WarpTerminal' })
+  const ORCA = target({ ORCA_AGENT_SESSION_ID: 'x', ORCA_TERMINAL_HANDLE: HANDLE })
+
+  /** The recorder on Windows, its opener holding a raise that notes each call, beside Orca's switch, in [asked], and
+   *  answers the next of [answers] (true: raised or refused; false: none), then true. */
+  function onWindows(answers: boolean[] = []) {
+    const asked: string[][] = []
+    const answer = async (call: string[]) => { asked.push(call); return answers.length ? answers.shift()! : true }
+    const windows: WindowsRaise = {
+      app: (bundle) => answer(['app', bundle]),
+      link: (url, bundle) => answer(['link', url, String(bundle)]),
+      cursorFolder: (folder) => answer(['cursorFolder', folder]),
+      desktop: () => answer(['desktop']),
+    }
+    const orcaSwitch = async (handle: string) => { asked.push(['switch', handle]); return true }
+    return { ...recorder({ platform: 'win32', windows, orcaSwitch }), asked }
+  }
+
+  /** The opener on Windows, each raise held until it is let go with its answer. */
+  function held() {
+    const asked: string[][] = []
+    const pending: Array<(answer: boolean) => void> = []
+    const answer = (call: string[]) => { asked.push(call); return new Promise<boolean>((resolve) => pending.push(resolve)) }
+    const opener = createOpenActions({
+      run: async () => ({ code: 0, stdout: '' }),
+      platform: 'win32',
+      adapters: [],
+      log: () => {},
+      windows: {
+        app: (bundle) => answer(['app', bundle]),
+        link: (url) => answer(['link', url]),
+        cursorFolder: (folder) => answer(['cursorFolder', folder]),
+        desktop: () => answer(['desktop']),
+      },
+    })
+    return { asked, pending, opener }
+  }
+
+  async function settled<T>(promise: Promise<T>): Promise<T | 'waiting'> {
+    let answer: T | 'waiting' = 'waiting'
+    void promise.then((value) => { answer = value })
+    await new Promise((resolve) => setImmediate(resolve))
+    return answer
+  }
+
+  it('Orca: its terminal is switched to, then Orca comes forward by its bundle, and open never runs', async () => {
+    const r = onWindows()
+    expect(r.opener.can(ORCA)).toBe(true)
+    expect(await r.opener.open('a1', ORCA)).toBe(true)
+    expect(r.asked).toEqual([['switch', HANDLE], ['app', 'com.stablyai.orca']])
+    expect(r.calls).toEqual([])
+    // The pane came: the tap is done whatever the raise answered.
+    const none = onWindows([false])
+    expect(await none.opener.open('a1', ORCA)).toBe(true)
+  })
+
+  it('an agent with no pane brings its app, and the tap answers what the raise did: refused is done, none fails', async () => {
+    const r = onWindows([true, false])
+    expect(r.opener.can(WARP)).toBe(true)
+    expect(await r.opener.open('a1', WARP)).toBe(true)
+    expect(await r.opener.open('a1', WARP)).toBe(false)
+    expect(r.asked).toEqual([['app', 'dev.warp.Warp-Stable'], ['app', 'dev.warp.Warp-Stable']])
+    expect(r.calls).toEqual([])
+    expect(r.logs).toEqual([])
+  })
+
+  // herdr's own bundle names no window on Windows: the hook sends the terminal herdr runs in (notify.mjs
+  // lookUpWindowsApp, WEZTERM_PANE and TERM_PROGRAM=WarpTerminal), and that terminal comes forward.
+  it.each([
+    ['WezTerm', { WEZTERM_PANE: '0', __CFBundleIdentifier: 'com.github.wez.wezterm' }, 'com.github.wez.wezterm'],
+    ['Warp', { TERM_PROGRAM: 'WarpTerminal', __CFBundleIdentifier: 'dev.warp.Warp-Stable' }, 'dev.warp.Warp-Stable'],
+  ])('herdr in %s: its pane is focused, then the terminal comes forward', async (_, hints, bundle) => {
+    const r = onWindows()
+    const herdr = target({ HERDR_PANE_ID: 'w1:p2', ...hints })
+    expect(r.opener.can(herdr)).toBe(true)
+    expect(await r.opener.open('a1', herdr)).toBe(true)
+    expect(r.calls).toEqual([run('/fake/bin/herdr', 'agent', 'focus', 'w1:p2')])
+    expect(r.asked).toEqual([['app', bundle]])
+  })
+
+  it('a pick brings its app through the raise: ok for raised or refused, failed for none', async () => {
+    const r = onWindows([true, false])
+    expect(await r.opener.bring!('wezterm')).toBe('ok')
+    expect(await r.opener.bring!('vscode')).toBe('failed')
+    expect(r.asked).toEqual([['app', 'com.github.wez.wezterm'], ['app', VSCODE]])
+    expect(r.calls).toEqual([])
+  })
+
+  it('a pick while one runs takes the waiting place, the last pick winning', async () => {
+    const { asked, pending, opener } = held()
+    const first = opener.bring!('vscode')
+    const second = opener.bring!('cursor')
+    const third = opener.bring!('wezterm')
+    expect(asked).toEqual([['app', VSCODE]])
+    expect(await settled(second)).toBeUndefined()
+    pending[0](true)
+    expect(await first).toBe('ok')
+    expect(asked).toEqual([['app', VSCODE], ['app', 'com.github.wez.wezterm']])
+    pending[1](false)
+    expect(await third).toBe('failed')
+  })
+
+  it('desktop() starts Harness Desktop once, drops a waiting pick and answers what it answered; a pick of Harness is the same', async () => {
+    const { asked, pending, opener } = held()
+    const first = opener.bring!('vscode')
+    const waiting = opener.bring!('cursor')
+    const desktop = opener.desktop!()
+    expect(asked).toEqual([['app', VSCODE], ['desktop']])
+    expect(await settled(waiting)).toBeUndefined()
+    pending[0](true)
+    pending[1](false)
+    expect(await first).toBe('ok')
+    expect(await desktop).toBe(false)
+    expect(asked).toHaveLength(2)
+
+    const r = onWindows()
+    expect(await r.opener.bring!('harness')).toBe('ok')
+    expect(r.asked).toEqual([['desktop']])
+  })
+
+  it('a Codex app session opens by its link, sent to the app by its bundle', async () => {
+    const r = onWindows()
+    const codex = { bundle: CODEX_APP, pane: { adapter: 'codex', id: THREAD } }
+    expect(r.opener.can(codex)).toBe(true)
+    expect(await r.opener.open('a1', codex)).toBe(true)
+    expect(r.asked).toEqual([['link', `codex://threads/${THREAD}`, CODEX_APP]])
+    expect(r.calls).toEqual([])
+  })
+
+  it('with no raise, Windows answers as before: no app comes, and there is no desktop or bring', async () => {
+    const { calls, opener } = recorder({ platform: 'win32' })
+    expect(opener.can(WARP)).toBe(false)
+    expect(await opener.open('a1', WARP)).toBe(false)
+    expect(opener.desktop).toBeUndefined()
+    expect(opener.bring).toBeUndefined()
+    expect(calls).toEqual([])
   })
 })

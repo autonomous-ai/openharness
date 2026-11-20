@@ -1,11 +1,13 @@
-/// Which build of the Harness menu-bar app (`Harness Device.app`) this Mac
-/// installs, from the release's own manifest.
+/// Which build of Harness Device this computer installs, from the release's
+/// own manifest.
 ///
 /// The manifest is read from the bucket, never through the CDN, which could
 /// still serve the copy from before a release. Its entry's URL is checked all
 /// the same: a manifest someone else wrote must not send the download anywhere
 /// but the release's own folders.
 library;
+
+import 'package:flutter/foundation.dart';
 
 const deviceAppManifestUrl =
     'https://storage.googleapis.com/s3-autonomous-upgrade-3/harness/device/metadata.json';
@@ -35,13 +37,29 @@ final _sha256 = RegExp(r'^[0-9a-fA-F]{64}$');
 DeviceAppRelease? parseDeviceAppManifest(
   Object? manifest, {
   required String architecture,
+  required TargetPlatform platform,
 }) {
   if (manifest is! Map) return null;
-  // The app is universal, so an Apple Silicon Mac can fall back to the other
-  // build; an Intel Mac never takes the arm64 one.
-  final keys = architecture == 'arm64'
-      ? const ['device-macos-arm64', 'device-macos']
-      : const ['device-macos'];
+  final arm64 = architecture == 'arm64';
+  final keys = switch (platform) {
+    // The app is universal, so an Apple Silicon Mac can fall back to the other
+    // build; an Intel Mac never takes the arm64 one.
+    TargetPlatform.macOS =>
+      arm64
+          ? const ['device-macos-arm64', 'device-macos']
+          : const ['device-macos'],
+    // Windows 11 on ARM runs an x64 app emulated; an x64 PC never takes arm64.
+    TargetPlatform.windows =>
+      arm64
+          ? const ['device-windows-arm64-exe', 'device-windows-x64-exe']
+          : const ['device-windows-x64-exe'],
+    // Linux runs no other arch's AppImage.
+    TargetPlatform.linux =>
+      arm64
+          ? const ['device-linux-arm64-appimage']
+          : const ['device-linux-x64-appimage'],
+    _ => const <String>[],
+  };
   for (final key in keys) {
     final release = _release(manifest[key]);
     if (release != null) return release;
