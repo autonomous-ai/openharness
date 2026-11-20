@@ -152,20 +152,31 @@ impl Drop for Observation {
 
 /// Observes the app `pid` on a thread of its own until the handle is dropped.
 fn observe_pid(pid: libc::pid_t, heard: Box<dyn Fn(Heard) + Send + Sync>) -> Box<dyn Send> {
-    on_own_run_loop(move |stopped| observe_here(pid, &*heard, stopped))
+    let heard: Arc<dyn Fn(Heard) + Send + Sync> = Arc::from(heard);
+    let told = Arc::clone(&heard);
+    on_own_run_loop(move |stopped| observe_here(pid, &*told, stopped)).unwrap_or_else(|| {
+        // No thread to observe on: told as an observer not made, and an empty observation, where a panic would end
+        // the runner's follow thread without a word.
+        heard(Heard::NoObserver);
+        Box::new(())
+    })
 }
 
-/// Runs `body` on a thread of its own. Dropped, the handle sets the flag `body` is given and stops the thread's run loop.
-fn on_own_run_loop(body: impl FnOnce(&AtomicBool) + Send + 'static) -> Box<dyn Send> {
+/// Runs `body` on a thread of its own; None when the system makes no thread. Dropped, the handle sets the flag `body`
+/// is given and stops the thread's run loop.
+fn on_own_run_loop(body: impl FnOnce(&AtomicBool) + Send + 'static) -> Option<Box<dyn Send>> {
     let stopped = Arc::new(AtomicBool::new(false));
     let told = Arc::clone(&stopped);
     let (give, run_loop) = mpsc::sync_channel(1);
-    thread::spawn(move || {
-        // Given before `body` runs, so the caller never waits on ChatGPT.
-        let _ = give.send(CFRunLoop::current().map(RunLoop));
-        body(&told);
-    });
-    Box::new(Observation { run_loop: run_loop.recv().ok().flatten(), stopped })
+    thread::Builder::new()
+        .name("chatgpt-observer".into())
+        .spawn(move || {
+            // Given before `body` runs, so the caller never waits on ChatGPT.
+            let _ = give.send(CFRunLoop::current().map(RunLoop));
+            body(&told);
+        })
+        .ok()?;
+    Some(Box::new(Observation { run_loop: run_loop.recv().ok().flatten(), stopped }))
 }
 
 /// What a notification needs, on the observer's thread.
@@ -387,7 +398,8 @@ mod tests {
             let _ = gate.recv();
             run_until_stopped();
             let _ = ended_to.send(());
-        });
+        })
+        .expect("a thread");
         let (dropped_to, dropped) = mpsc::channel();
         thread::spawn(move || {
             drop(observation);
@@ -414,7 +426,8 @@ mod tests {
             unsafe { CFRunLoop::current().unwrap().perform_block(mode.map(|mode| mode.as_ref()), Some(&told)) };
             run_until_stopped();
             let _ = ended_to.send(());
-        });
+        })
+        .expect("a thread");
         running.recv_timeout(Duration::from_secs(5)).expect("the run loop runs");
         drop(observation);
         ended.recv_timeout(Duration::from_secs(5)).expect("the thread ended");
@@ -430,7 +443,8 @@ mod tests {
             let _ = told_to.send(stopped.load(Ordering::Acquire));
             let _ = gate.recv();
             let _ = told_to.send(stopped.load(Ordering::Acquire));
-        });
+        })
+        .expect("a thread");
         assert_eq!(told.recv_timeout(Duration::from_secs(5)), Ok(false));
         drop(observation);
         open.send(()).unwrap();
