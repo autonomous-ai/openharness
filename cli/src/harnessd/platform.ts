@@ -404,7 +404,8 @@ export function currentUid(proc: { getuid?: () => number } = process): number {
 
 /** [command] in System32, as lib/windows/powershell.ts's `systemProgram` names it: the master imports no feature code. */
 function windowsProgram(command: string, env: NodeJS.ProcessEnv): string {
-  return win32.join(env.SystemRoot ?? env.windir ?? 'C:\\Windows', 'System32', `${command}.exe`)
+  const root = [env.SystemRoot, env.windir].find((folder) => /^[A-Za-z]:\\/.test(folder ?? ''))
+  return win32.join(root ?? 'C:\\Windows', 'System32', `${command}.exe`)
 }
 
 /**

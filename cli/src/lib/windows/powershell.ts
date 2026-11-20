@@ -9,9 +9,11 @@ import { win32 } from 'node:path'
 export const POWERSHELL_TIMEOUT_MS = 30_000
 
 /** One of Windows' own programs by its full path in System32: Node on Windows looks for a bare name in the folder it
- *  runs in before PATH (systemProgram.spec.ts). */
+ *  runs in before PATH (systemProgram.spec.ts). Windows' folder is the first of SystemRoot and windir that names a
+ *  drive's folder: an empty or relative one would name a folder under the one the command runs in. */
 export function systemProgram(name: string, env: NodeJS.ProcessEnv = process.env): string {
-  return win32.join(env.SystemRoot ?? env.windir ?? 'C:\\Windows', 'System32', name)
+  const root = [env.SystemRoot, env.windir].find((folder) => /^[A-Za-z]:\\/.test(folder ?? ''))
+  return win32.join(root ?? 'C:\\Windows', 'System32', name)
 }
 
 export function powershellPath(env: NodeJS.ProcessEnv = process.env): string {
