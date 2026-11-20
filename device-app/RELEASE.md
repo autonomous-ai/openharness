@@ -89,8 +89,9 @@ The first release, with Diego's go. The bucket holds no manifest yet, so both na
   universal (`lipo`) and at the release version; `codesign --verify --deep --strict`; the update archive's signature
   against the public key (`minisign`), and its trusted comment's `version:X.Y.Z`, which the app requires
   (`requireSignedVersion`); the dmg holds the app and an `Applications` link; `spctl` and `stapler validate` accept
-  the app and the dmg. On Windows (`--signed`): each installer's update signature and its version, and its
-  Authenticode signature. On Linux: the AppImage's arch and its update signature and version. Each prints
+  the app and the dmg. On Windows (`--signed`): each installer's update signature and its version, its Authenticode
+  signature, and the `harness-device.exe` it packs (read out with 7-Zip): its Authenticode signature, kept through
+  NSIS, and its version. On Linux: the AppImage's arch and its update signature and version. Each prints
   `ok: <check>`, or `FAILED: <check>` and stops.
 - **Nothing reaches GCS without `publish`.** Only it and `sign-windows` hold `id-token: write`, and only `publish`
   authenticates to GCP; that `sign-windows`'s token (subject `…:environment:release`) gets no GCS credential is GCP's

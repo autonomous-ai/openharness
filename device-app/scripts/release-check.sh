@@ -114,6 +114,23 @@ authenticode_valid() {
       'if ((Get-AuthenticodeSignature -LiteralPath $env:SIGNED_FILE).Status -ne "Valid") { exit 1 }'
 }
 
+# The harness-device.exe the installer $1 packs, read out by 7-Zip (on Windows runners), which reads NSIS installers,
+# into the folder $2.
+packed_app() {
+  7z e -y -r -bso0 -bsp0 -o"$(cygpath -w "$2")" "$(cygpath -w "$1")" harness-device.exe &&
+    [[ -f "$2/harness-device.exe" ]]
+}
+
+# The version resource tauri-build wrote from the version compile was given, compared in PowerShell, whose output would
+# end in a CR here.
+# shellcheck disable=SC2016
+app_version() {
+  local file
+  file="$(cygpath -w "$1")" &&
+    APP_FILE="$file" APP_VERSION="$version" pwsh -NoProfile -NonInteractive -Command \
+      'if ((Get-Item -LiteralPath $env:APP_FILE).VersionInfo.ProductVersion -ne $env:APP_VERSION) { exit 1 }'
+}
+
 case "$os" in
   macos)
     check "the three files" three_files
@@ -155,6 +172,13 @@ case "$os" in
       check "$name's update signature is for $version" signed_version "$installer"
       if [[ -n "$vendor_checks" ]]; then
         check "$name's Authenticode signature" authenticode_valid "$installer"
+        # NSIS packs the exe Authenticode signed before it, which --no-binary-patching keeps whole: Smart App Control
+        # blocks it otherwise.
+        folder="$work/${name%.exe}"
+        app="$folder/harness-device.exe"
+        check "$name packs harness-device.exe" packed_app "$installer" "$folder"
+        check "the harness-device.exe in $name keeps its Authenticode signature" authenticode_valid "$app"
+        check "the harness-device.exe in $name is $version" app_version "$app"
       fi
     done
     ;;
