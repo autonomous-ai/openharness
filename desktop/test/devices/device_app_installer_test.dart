@@ -982,6 +982,24 @@ void main() {
     expect(tempRoot.listSync(), isEmpty);
   });
 
+  // The lookup follows the link and finds nothing, so it offers Install: a
+  // link kept as a copy would open nothing, for good.
+  test('linux: a link at the place whose file is gone is replaced', () async {
+    publishFor(TargetPlatform.linux, _appImage);
+    Link(linuxPlace).createSync(p.join(root.path, 'gone'), recursive: true);
+
+    final result = await onLinux().install();
+
+    expect(result.failed, isNull);
+    expect(result.installedAt, linuxPlace);
+    expect(
+      FileSystemEntity.typeSync(linuxPlace, followLinks: false),
+      FileSystemEntityType.file,
+    );
+    expect(File(linuxPlace).readAsBytesSync(), _appImage);
+    expect(opened, [linuxPlace]);
+  }, skip: _needsChmod);
+
   test('linux: a copy that cannot be made executable is removed and fails at install', () async {
     publishFor(TargetPlatform.linux, _appImage);
     afterTool = (call, result) async => call.first == '/bin/chmod'
