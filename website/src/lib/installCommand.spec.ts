@@ -23,12 +23,13 @@ describe("Harness Device install command", () => {
     expect(DEVICE_INSTALL_COMMAND).toBe("curl -fsSL https://harness.autonomous.ai/device/install.sh | bash");
   });
 
-  it("its URL is the one next.config sends to the CDN", async () => {
+  // Served in place, never redirected: the home page's guard (scripts/home-redirect.spec.ts) allows no /device/... redirect.
+  it("its URL is the one next.config serves from the CDN, before any page", async () => {
     const path = new URL(DEVICE_INSTALL_URL).pathname;
-    expect(await nextConfig.redirects()).toContainEqual({
+    expect((await nextConfig.rewrites()).beforeFiles).toContainEqual({
       source: path,
       destination: "https://cdn.autonomous.ai/harness/device/install.sh",
-      permanent: true,
     });
+    expect((await nextConfig.redirects()).map((r) => r.source)).not.toContain(path);
   });
 });
