@@ -74,10 +74,13 @@ pub fn replaceable(os: &str, target: &Path) -> bool {
         // The installer rewrites the folder's files; a copy an administrator installed refuses a new file where the
         // installer would ask for elevation.
         "windows" => a_file_can_be_made_in(target),
-        // The plugin moves the bundle or the AppImage out of its folder, which rewrites a bundle's own `..`: a
-        // refusal of either is where it asks for an administrator password.
+        // The plugin moves the bundle out of its folder, which rewrites the bundle's own `..`: a refusal of either is
+        // where it asks for an administrator password.
         #[cfg(unix)]
-        "macos" | "linux" => target.parent().is_some_and(writable) && writable(target),
+        "macos" => target.parent().is_some_and(writable) && writable(target),
+        // The plugin renames the AppImage away and writes a new file in its place: only the folder is written.
+        #[cfg(unix)]
+        "linux" => target.exists() && target.parent().is_some_and(writable),
         _ => false,
     }
 }
