@@ -464,7 +464,7 @@ static void talk_begin(const char *agent)
     unlock();
 }
 
-// Send while recording (a tap, or the clock's silence). Stopped before the recorder even started, nothing was recorded.
+// Send while recording (a tap, or the clock's cap). Stopped before the recorder even started, nothing was recorded.
 static void talk_send(void)
 {
     if (pro_voice_open() && pro_voice_start_pending()) {

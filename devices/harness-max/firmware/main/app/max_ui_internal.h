@@ -48,19 +48,14 @@ enum { MAX_CAP_VOICE = 1, MAX_CAP_FOCUS = 2, MAX_CAP_ANSWER = 4, MAX_CAPS_ALL = 
 #define MAX_INBOX 12                // notices kept, newest first
 #define MAX_LEVELS 48               // the band's waveform: the mic's last levels, a tick each
 #define MAX_SPEECH_LEVEL 2          // a level at least this is speech (pro_rec_level: 0..4)
-#define MAX_HEAR_MS 5000u           // nothing heard this long after the mic opened: it closes, nothing sent
-#define MAX_SILENCE_MS 2500u        // quiet this long after speech: the recording is sent (the owner, 20 Nov: 5 s was slow)
+// The Pro's voice, which the owner took for the bar (20 Nov), but for two things: a cell's tap opens the mic
+// MAX_TALK_DELAY_MS after its page, and a mic that heard nothing in MAX_HEAR_MS closes with nothing sent. Else the
+// Pro's: a tap opens the mic, any tap sends (a lift within MAX_TAP_SLOP, however long it was down), a drag does nothing
+// and the mic stays open, the quiet after speech sends nothing, and MAX_TALK_MAX_MS sends it.
+#define MAX_HEAR_MS 10000u          // nothing heard this long after the mic opened: it closes, nothing sent
 #define MAX_TALK_DELAY_MS 1000u     // a cell's tap opens its agent, and the mic this long after (the owner, 20 Nov: at
                                     // once was hurried)
-#define MAX_TALK_MAX_MS 600000u     // the longest recording (the Dial's 600 s): then it is sent
-// The Dial's touch, which the owner kept for the bar (18 Nov). While the mic is open only the Dial's tap sends: down
-// MAX_TAP_MIN_MS..MAX_TAP_MAX_MS, never farther than 1.2 mm from where it went down. A longer hold or a slide is the
-// dead zone: nothing happens and the mic stays open.
-#define MAX_TAP_MIN_MS 25u
-#define MAX_TAP_MAX_MS 350u
-#define MAX_TAP_FAR2 113            // 1.2 mm at 8.86 px a mm is 10.6 px: a send's farthest, squared
-#define MAX_HOLD_MS 650u            // a touch that opens the mic lets go before this (the Dial's hold)
-#define MAX_GUARD_MS 450u           // touches that begin this soon after the mic opens, a send or a cancel are part of it
+#define MAX_TALK_MAX_MS 600000u     // the longest recording (the Pro's 600 s cap): then it is sent
 #define MAX_AMBIENT_MS 60000u       // nobody touched and nothing works or waits this long: Ambient
 #define MAX_ATTN_END_MS 8000u       // a done or failed turn's Attention goes back to Overview after this
 #define MAX_TALK_FRAME_MS 100u      // the band redraws this often while recording
@@ -313,7 +308,6 @@ typedef struct {
     int row_seen_count;
     uint32_t talk_from;              // the recording's start (its clock)
     bool talk_heard;                 // speech was heard in this recording
-    uint32_t talk_quiet_from;        // when the speech last stopped (the send ring fills from here)
     bool talk_closed;                // the clock closed the mic on nothing heard: talk_id's page says so until it goes
     bool talk_soon;                  // a cell's tap opened talk_id's page: the clock opens its mic at talk_soon_at
     uint32_t talk_soon_at;           // (max_ui_talk_due), unless the page went first or a recording began
@@ -347,11 +341,7 @@ typedef struct {
     // The contact in progress.
     bool down, moved;
     int down_x, down_y;
-    uint32_t down_at;                // when it went down
-    int far2;                        // the farthest it went from there, squared px
-    bool held;                       // it began inside the guard, or the clock ended the talk under it: no voice of it
-    bool guarding;                   // a voice action's guard runs until guard_until (MAX_GUARD_MS)
-    uint32_t guard_until;
+    bool held;                       // the clock opened or ended the talk under it: its lift acts on nothing
     uint32_t warm_key;               // what max_ui_warm's motions are of (0: none yet)
 } max_model_t;
 

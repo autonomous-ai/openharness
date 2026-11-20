@@ -2,10 +2,10 @@
 // On its own dark ground with its state's glow and rail: its pet (headphones on while the mic is its own), its name
 // and state chip, the line of its task, the mic's band across its foot, and X at its top right. The panel is one tap:
 // it opens the mic, or sends what is being said. The band, live: "Listening" and its clock, the waveform of the mic's
-// level ("Say it…" until speech is heard), "Tap to send" with the ring that fills in the quiet after speech; sending,
-// "Sending". At rest one quiet line: "Tap to talk", "Mic opens in a moment…" (a cell's tap, for MAX_TALK_DELAY_MS),
-// "Mic closed · tap to talk", or where to talk to an agent the bar cannot record for. As V3's: its rail, glow and chip
-// loop, the band's colours ease between talking and not, and the live dot pulses in its glow.
+// level ("Say it…" until speech is heard), "Tap to send" by its ring (the quiet after speech sends nothing: the Pro's);
+// sending, "Sending". At rest one quiet line: "Tap to talk", "Mic opens in a moment…" (a cell's tap, for
+// MAX_TALK_DELAY_MS), "Mic closed · tap to talk", or where to talk to an agent the bar cannot record for. As V3's: its
+// rail, glow and chip loop, the band's colours ease between talking and not, and the live dot pulses in its glow.
 #include <stdio.h>
 #include <string.h>
 
@@ -50,15 +50,12 @@ static void waveform(ht_scene_t *s, int x, int r)
     }
 }
 
-// The send ring: a dark track, and the green that fills it from the top while the person is quiet after speaking.
-static void send_ring(ht_scene_t *s, int cx, int cy, uint32_t now_ms)
+// The send ring: a dark track, and the green cap at its top where the tap sends from.
+static void send_ring(ht_scene_t *s, int cx, int cy)
 {
     const int r16 = (RING_D - RING_D * 3 / 22) * 8, w16 = RING_D * 3 * 16 / 22, cx16 = cx * 16, cy16 = cy * 16;
     pod_arc(s, cx16, cy16, r16, w16, 0, 180, C(TRACK));
-    const uint32_t quiet = now_ms - max_m.talk_quiet_from, full = quiet < MAX_SILENCE_MS ? quiet : MAX_SILENCE_MS;
-    const int deg = max_m.talk_heard ? (int)(full * 180u / MAX_SILENCE_MS) : 0;
-    if (deg) pod_arc(s, cx16, cy16, r16, w16, 90 - deg, deg, C(VOICE));
-    else max_dot(s, cx - w16 / 32, cy - r16 / 16, w16 / 16 > 2 ? w16 / 16 : 2, VOICE);   // the stroke's round cap
+    max_dot(s, cx - w16 / 32, cy - r16 / 16, w16 / 16 > 2 ? w16 / 16 : 2, VOICE);   // the stroke's round cap
 }
 
 // The mic records for this agent (the live dot pulsing every 0.8 s in its glow, over the band's fill), or sends what
@@ -85,14 +82,11 @@ static void live_band(ht_scene_t *s, int x, int r, unsigned fill, uint32_t now_m
     if (!listening) return;   // sent: nothing to tap for until it is through
     if (!max_m.talk_heard) max_text(s, wave_x, SAY_CY, wave_r - wave_x, &ph_rg_28, FAINT, "Say it\xe2\x80\xa6");
     const int ring_cx = r - RING_D / 2, cy = BAND_Y + BAND_H / 2;
-    send_ring(s, ring_cx, cy, now_ms);
-    // Once speech was heard the quiet counts toward the send.
-    const bool soon = max_m.talk_heard && now_ms != max_m.talk_quiet_from;
+    send_ring(s, ring_cx, cy);
     const ht_pro_font_t *f = &ph_sb_22;
     char rows[2][ROW_BYTES];
     const int words_r = ring_cx - RING_D / 2 - DX(12);
-    const int n = max_wrap(rows, 2, soon ? "Sending soon \xc2\xb7 tap to send now" : "Tap to send", f,
-                           SEND_W - RING_D - DX(12));
+    const int n = max_wrap(rows, 2, "Tap to send", f, SEND_W - RING_D - DX(12));
     for (int i = 0; i < n; i++)
         max_text_right(s, words_r, cy + (2 * i - (n - 1)) * f->height / 2, SEND_W, f, VOICE, rows[i]);
 }

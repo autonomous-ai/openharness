@@ -52,17 +52,49 @@ with `MAX_Y`, the text keeps its size).
   agent's cell opens Attention instead. An agent without voice (caps without `v`) opens its page with the mic closed
   and "Talk to it in <App>" in place of "Tap to talk".
 - While it records, the band takes the page's bottom (from the pet's right edge): "● Listening" with the recording's
-  clock, a green waveform from the mic's level, "Tap to send" with a ring that fills while the person is silent, and
-  X. Above the band the page keeps its words, smaller (two rows; the working page hides its steps).
-- It sends by itself after 5 s of quiet that follows speech. A tap on the page sends at once. X cancels. Nothing heard
-  in 5 s: the mic closes, the notice says "Mic closed · tap to talk", and the page stays to be read. A tap on the page
-  then opens the mic again. The full voice rules (owner, 18 Nov) are in "Voice rules" below.
+  clock, a green waveform from the mic's level, "Tap to send" by its ring (no countdown since 20 Nov), and X. Above
+  the band the page keeps its words, smaller (two rows; the working page hides its steps).
+- A tap on the page sends; the quiet after speech sends nothing (since 20 Nov; 5 s of quiet sent it before). X cancels.
+  Nothing heard in 10 s: the mic closes, the band says "Mic closed · tap to talk", and the page stays to be read. A tap
+  on the page then opens the mic again. The full voice rules (owner, 20 Nov) are in "Voice rules" below.
 - After a send: the notice "Sent to <name>", and the bar goes back to Overview.
 - On the strip, a tap on another agent sends what was said (when something was heard; else it cancels) and shows that
   agent with the mic closed. Back does the same and goes to Overview. A sideways swipe browses the ring the same way.
 - The words are not shown as they are spoken: the daemon transcribes the recording after it is sent.
 
-### Voice rules (owner, 18 Nov 2026): the Dial's, with two changes
+### Voice rules (owner, 20 Nov 2026): the Pro's, with two changes
+
+On 20 Nov the owner replaced the 18 Nov rules below with the Harness Pro's (`devices/harness-pro/firmware/main/app/`
+`pod_glue.c`, `pod_nav.c`, `main/audio/pro_voice.c`), but for two things. They are in the ESP32 firmware V4
+(`devices/harness-max/firmware/main/app/max_ui_internal.h`, `max_ui_touch.c`, `max_ui_model.c`, `max_ui_agent.c`),
+which the Orange Pi build runs too. Demo V3 (Flutter) still has the 18 Nov rules.
+
+The two changes from the Pro:
+
+1. **A cell's tap opens the agent's page at once and its mic 1 s later** (`MAX_TALK_DELAY_MS`; at once was hurried).
+   The band says "Mic opens in a moment…"; a tap on the page opens it then; X, the link dropping or leaving the page
+   opens none. "Tap to talk" on the page opens the mic at once.
+2. **Nothing heard 10 s after the mic opened: it closes and nothing is sent** (`MAX_HEAR_MS`); the band says "Mic
+   closed · tap to talk". Once speech was heard the mic stays open until a tap sends it, X cancels it or the cap sends
+   it.
+
+Everything else is the Pro's:
+
+- A tap opens the mic (a cell, the page, Say it), however long the finger was down.
+- While the mic is open any tap sends: a lift within 24 px (`MAX_TAP_SLOP`, the Pro's `POD_TAP_SLOP`) of where it went
+  down, however long it was down, anywhere on the glass but X, a dimmed agent beside the open one included (it opens
+  nothing). A finger that went farther than 24 px (out and back too) or a swipe does nothing; the mic stays open.
+- The quiet after speech sends nothing.
+- No guard: a tap right after the mic opened, a send or X acts at once. A tap before the recorder actually started
+  sends nothing and says "Not sent".
+- X cancels (the Max has no side button, which the Pro cancels with).
+- 600 s is the longest recording: then it is sent.
+- The recording's agent leaving the ring drops it, heard or not.
+- When the clock opens or ends the talk under a finger, that touch acts on nothing when it lets go.
+
+### Voice rules (owner, 18 Nov 2026, replaced on the firmware 20 Nov): the Dial's, with two changes
+
+Kept as Demo V3's; the firmware runs the 20 Nov rules above.
 
 The owner set these after reading how the Dial records and sends (`devices/harness-device`: `ui/habitat/gestures.c`,
 `ui_habitat.c`, `audio_client_habitat.c`; daemon `cli/src/cable/cableSession.ts`). They are in Demo V3 now

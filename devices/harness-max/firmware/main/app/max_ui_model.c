@@ -743,7 +743,7 @@ bool max_ui_talk(max_talk_t state, uint32_t now_ms)
     const bool changed = max_m.talk != state;
     if (state == MAX_TALK_RECORDING) max_m.talk_soon = false;   // the mic a cell's tap waited for is open, or another
     if (changed && state == MAX_TALK_RECORDING) {   // a new recording: its clock, and nothing heard yet
-        max_m.talk_from = max_m.talk_quiet_from = now_ms;
+        max_m.talk_from = now_ms;
         max_m.talk_heard = false;
         max_m.talk_closed = false;
         max_m.level_count = 0;
@@ -768,14 +768,12 @@ bool max_ui_wall(bool known, int hour, int min, int wday, int mday, int mon)
 
 bool max_ui_level(unsigned level, uint32_t now_ms)
 {
+    (void)now_ms;   // the quiet after speech sends nothing: the levels' times count for nothing
     if (max_m.talk != MAX_TALK_RECORDING) return false;
     if (level > 4) level = 4;
     if (max_m.level_count == MAX_LEVELS) memmove(max_m.levels, max_m.levels + 1, --max_m.level_count);
     max_m.levels[max_m.level_count++] = (uint8_t)level;
-    if (level >= MAX_SPEECH_LEVEL) {
-        max_m.talk_heard = true;
-        max_m.talk_quiet_from = now_ms;
-    }
+    if (level >= MAX_SPEECH_LEVEL) max_m.talk_heard = true;   // the mic stays open now: a tap sends, or the cap
     return true;   // the waveform moved
 }
 
@@ -871,12 +869,7 @@ uint32_t max_ui_next_wake_ms(uint32_t now_ms)
     if (max_m.talk_soon) until(&ms, max_m.talk_soon_at, now_ms);   // the mic a cell's tap opens (max_ui_talk_due)
     if (max_m.talk == MAX_TALK_RECORDING) {   // the band, and the send or the close the clock owes (max_ui_talk_due)
         sooner(&ms, MAX_TALK_FRAME_MS);
-        if (max_m.talk_heard) {
-            until(&ms, max_m.talk_quiet_from + MAX_SILENCE_MS, now_ms);
-            until(&ms, max_m.talk_from + MAX_TALK_MAX_MS, now_ms);
-        } else {
-            until(&ms, max_m.talk_from + MAX_HEAR_MS, now_ms);
-        }
+        until(&ms, max_m.talk_from + (max_m.talk_heard ? MAX_TALK_MAX_MS : MAX_HEAR_MS), now_ms);
     }
     if (max_m.view == MAX_VIEW_ATTENTION && max_m.attn != MAX_ATTN_ASK)
         until(&ms, max_m.attn_from + MAX_ATTN_END_MS, now_ms);

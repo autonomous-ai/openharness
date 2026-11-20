@@ -773,7 +773,7 @@ static void test_agent_page_clock(void)
 }
 
 // While a recording is up the band redraws every MAX_TALK_FRAME_MS, and the render task wakes for what the clock owes
-// it: the send after the quiet, or the mic closing when nothing was heard.
+// it: the mic closing when nothing was heard, else the send at MAX_TALK_MAX_MS (the quiet after speech owes nothing).
 static void test_recording_clock(void)
 {
     linked(ABC, 3);
@@ -786,11 +786,12 @@ static void test_recording_clock(void)
     CHECK(max_ui_next_wake_ms(1000) == MAX_TALK_FRAME_MS);
     CHECK(!max_ui_tick(1000 + MAX_TALK_FRAME_MS - 1) && max_ui_tick(1000 + MAX_TALK_FRAME_MS));
     CHECK(max_ui_next_wake_ms(1000 + MAX_HEAR_MS - 30) == 30);
-    // Speech: the waveform takes each level, and the send is due MAX_SILENCE_MS after the last of it.
-    CHECK(max_ui_level(3, 1200) && max_m.talk_heard && max_m.talk_quiet_from == 1200);
+    // Speech: the waveform takes each level, and the clock owes nothing for the quiet after it, nor the close.
+    CHECK(max_ui_level(3, 1200) && max_m.talk_heard);
     CHECK(max_ui_level(9, 1300) && max_m.levels[max_m.level_count - 1] == 4);   // past the scale: its top
-    CHECK(max_ui_level(1, 1400) && max_m.talk_quiet_from == 1300 && max_m.level_count == 3);
-    CHECK(max_ui_next_wake_ms(1300 + MAX_SILENCE_MS - 40) == 40);
+    CHECK(max_ui_level(1, 1400) && max_m.talk_heard && max_m.level_count == 3);
+    CHECK(max_ui_next_wake_ms(1300 + 2500 - 40) > 40);   // 2.5 s of quiet sent it before (20 Nov)
+    CHECK(max_ui_next_wake_ms(1000 + MAX_HEAR_MS - 30) > 30);
     // Speech that never stops: the send is due at MAX_TALK_MAX_MS all the same.
     max_ui_level(3, 1000 + MAX_TALK_MAX_MS - 100);
     CHECK(max_ui_next_wake_ms(1000 + MAX_TALK_MAX_MS - 40) == 40);

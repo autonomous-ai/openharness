@@ -1,7 +1,7 @@
 // The finger on the pages: what a tap or a sideways swipe does on each page, and what the clock owes a recording. The
 // targets are planted as the pages record them (max_test.h), never drawn: the drawing's layout is its own. While a
-// recording is up the glass is its send: X cancels, any other tap sends (a sliver too); only the Dial's tap counts
-// then, and a voice action's guard takes the touches right after it.
+// recording is up the glass is its send, as the Pro's: X cancels, any other tap sends (a sliver too), however long it
+// was down; a drag does nothing.
 #include "max_test.h"
 #include "max_ui_motion.h"
 
@@ -16,7 +16,7 @@ static bool near_px(int got, int want)
     fprintf(stderr, "  got %d px, want %d\n", got, want);
     return false;
 }
-// The finger's clock: each touch a second after the last, past the guard a voice action leaves (MAX_GUARD_MS).
+// The finger's clock: each touch a second after the last.
 static uint32_t T;
 static max_act_t tap_at(int x, int y, uint32_t now)
 {
@@ -263,8 +263,8 @@ static void test_release_settles(void)
     CHECK(max_m.row_first == 0 && row_px(T + 50) == 0);
 }
 
-// Taps keep the Dial's rules while the row moves, and act on what the last render drew: a cell as it lies mid-settle,
-// a sliver mid-carry; one within the guard of a voice action is part of it.
+// Taps keep the Pro's rules while the row moves, and act on what the last render drew: a cell as it lies mid-settle,
+// a sliver mid-carry, one right after a voice action (no guard).
 static void test_taps_while_moving(void)
 {
     row_drawn(7);
@@ -282,14 +282,10 @@ static void test_taps_while_moving(void)
     b = cell_of("x3");
     CHECK(b && max_row_moving(T + 150) && b->w < CELL_W && b->w > SLIVER_W);
     CHECK(tap_at(b->x + b->w / 2, y, T + 160).kind == MAX_ACT_OPEN_TALK && !strcmp(max_ui_selected(), "x3"));
-    // Within the guard of the mic that tap opened, a tap on another agent is part of it; after, it opens.
+    // No guard (the Pro's): a tap on another agent right after the one that opened x3 opens it.
     render(T + 300);
     b = cell_of("x4");
-    CHECK(b && tap_at(b->x + b->w / 2, y, T + 320).kind == MAX_ACT_NONE && !strcmp(max_ui_selected(), "x3"));
-    render(T + 1200);
-    b = cell_of("x4");
-    CHECK(tap_at(b->x + b->w / 2, y, T + 1220).kind == MAX_ACT_OPEN_TALK);
-    CHECK(!strcmp(max_ui_selected(), "x4"));
+    CHECK(b && tap_at(b->x + b->w / 2, y, T + 320).kind == MAX_ACT_OPEN_TALK && !strcmp(max_ui_selected(), "x4"));
 }
 
 // Open, the row follows a finger that starts on a sliver and rests where it is let go, a fling or not; a drag that
@@ -537,12 +533,12 @@ static void test_slivers(void)
     CHECK(act.kind == MAX_ACT_SEND && !strcmp(act.agent_id, "d") && noticed("Sent to d"));
     CHECK(max_m.view == MAX_VIEW_OVERVIEW);
     max_ui_talk(MAX_TALK_IDLE, 0);
-    // A held press on a sliver while recording: the dead zone.
+    // A long press on a sliver while recording sends too (the Pro's tap has no length), and opens nothing.
     agent_page("c");
     recording(true);
     const max_box_t b = *cell_of("b");
-    CHECK(press_for(b.x + 4, b.y + 4, 0, 0, T += 1000, MAX_TAP_MAX_MS + 50).kind == MAX_ACT_NONE);
-    CHECK(max_m.view == MAX_VIEW_AGENT && !strcmp(max_ui_selected(), "c"));
+    act = press_for(b.x + 4, b.y + 4, 0, 0, T += 1000, 2000);
+    CHECK(act.kind == MAX_ACT_SEND && !strcmp(act.agent_id, "c") && max_m.view == MAX_VIEW_OVERVIEW);
     max_ui_talk(MAX_TALK_IDLE, 0);
     T += 1000;
     // A sliver whose agent asks: its question on Attention, nothing recorded.
@@ -666,8 +662,8 @@ static void test_toast(void)
 }
 
 // A finished turn's note: a tap opens its agent across the row with the mic closed, to read what it did, and reads
-// that agent's done notices; the others stay unread. While the mic is open only the Dial's tap counts: the words go
-// first (what was heard is sent, else dropped), then the note's agent opens. Its agent gone since it was drawn: Inbox,
+// that agent's done notices; the others stay unread. While the mic is open any tap sends, as the Pro's: the words go
+// first (heard or not), then the note's agent opens. Its agent gone since it was drawn: Inbox,
 // where its notice still is.
 static void test_done_note(void)
 {
@@ -683,7 +679,7 @@ static void test_done_note(void)
     CHECK(act.kind == MAX_ACT_NONE && max_m.view == MAX_VIEW_AGENT && !strcmp(max_ui_selected(), "d"));
     CHECK(max_m.talk_id[0] == 0 && max_m.talk == MAX_TALK_IDLE && max_m.done_id[0] == 0 && max_m.dirty);
     for (int i = 0; i < max_m.inbox_count; i++) CHECK(max_m.inbox[i].unread == !strcmp(max_m.inbox[i].id, "c"));
-    // The mic open for a, words heard: a held press is the dead zone; the Dial's tap sends, then opens e.
+    // The mic open for a, words heard: a long press sends as a tap does, then opens e.
     agent_page("a");
     recording(true);
     max_ui_turn("e", "started", "", 0, 0);
@@ -691,14 +687,12 @@ static void test_done_note(void)
     CHECK(max_m.talk == MAX_TALK_RECORDING && !strcmp(max_m.done_id, "e"));
     drawn_page(MAX_VIEW_AGENT);
     const max_hit_t note = *plant(MAX_HIT_DONE_NOTE, 0);
-    CHECK(press_for(note.x + 5, note.y + 5, 0, 0, T += 1000, MAX_TAP_MAX_MS + 50).kind == MAX_ACT_NONE);
-    CHECK(max_m.talk == MAX_TALK_RECORDING && !strcmp(max_m.done_id, "e"));
     no_notice();
-    act = tap_on(&note);
+    act = press_for(note.x + 5, note.y + 5, 0, 0, T += 1000, 2000);
     CHECK(act.kind == MAX_ACT_SEND && !strcmp(act.agent_id, "a") && noticed("Sent to a"));
     CHECK(max_m.view == MAX_VIEW_AGENT && !strcmp(max_ui_selected(), "e") && max_m.done_id[0] == 0);
     max_ui_talk(MAX_TALK_IDLE, 0);
-    // Nothing heard: dropped, and the next touch within the guard is part of it.
+    // Nothing heard: sent all the same, as any tap is (the Pro's), and the next touch acts at once.
     agent_page("a");
     recording(false);
     max_ui_turn("c", "started", "", 0, 0);
@@ -706,10 +700,11 @@ static void test_done_note(void)
     drawn_page(MAX_VIEW_AGENT);
     plant(MAX_HIT_DONE_NOTE, 0);
     act = tap_on(&note);
-    CHECK(act.kind == MAX_ACT_CANCEL && !strcmp(act.agent_id, "a") && !strcmp(max_ui_selected(), "c"));
+    CHECK(act.kind == MAX_ACT_SEND && !strcmp(act.agent_id, "a") && !strcmp(max_ui_selected(), "c"));
     max_ui_talk(MAX_TALK_IDLE, 0);
     agent_drawn();
-    CHECK(tap_at(HT_WIDTH / 2, HT_HEIGHT - 20, T + 90 + MAX_GUARD_MS - 1).kind == MAX_ACT_NONE);
+    CHECK(tap_at(HT_WIDTH / 2, HT_HEIGHT - 20, T + 100).kind == MAX_ACT_TALK);
+    max_ui_talk(MAX_TALK_IDLE, 0);
     // Its agent left the ring since the note was drawn: Inbox.
     max_ui_turn("b", "started", "", 0, 0);
     max_ui_summary("b", "Shipped", NULL, false, POD_TIER_ALERT, 0);
@@ -746,13 +741,13 @@ static void test_cell_tap_opens_the_mic_a_second_later(void)
     max_ui_talk(MAX_TALK_RECORDING, t + 1000);   // the recorder max_app.c starts for it
     CHECK(max_ui_talk_due(t + 1100).kind == MAX_ACT_NONE && max_m.talk == MAX_TALK_RECORDING);
     max_ui_talk(MAX_TALK_IDLE, 0);
-    // A tap on the page while it waits (past the opening tap's guard): the mic then, and the clock opens none after.
+    // A tap on the page while it waits, right after the cell's: the mic then, and the clock opens none after.
     max_show(MAX_VIEW_OVERVIEW);
     overview_drawn();
     t = (T += 3000) + 90;
     CHECK(tap_at(cx, cy, t - 90).kind == MAX_ACT_OPEN_TALK);
     agent_drawn();
-    CHECK(tap_at(px, py, t + MAX_GUARD_MS).kind == MAX_ACT_TALK && !max_m.talk_soon);
+    CHECK(tap_at(px, py, t + 10).kind == MAX_ACT_TALK && !max_m.talk_soon);
     CHECK(max_ui_talk_due(t + 1000).kind == MAX_ACT_NONE);
     // X while it waits: Overview, and no mic.
     max_show(MAX_VIEW_OVERVIEW);
@@ -784,8 +779,9 @@ static void test_cell_tap_opens_the_mic_a_second_later(void)
     T += 3000;
 }
 
-// The owner's numbers, in ms rather than the constants: speech then 2.5 s of quiet sends (20 Nov, 5 s before), a mic
-// that hears nothing closes after 5 s.
+// The owner's numbers, in ms rather than the constants (20 Nov, the Pro's voice): speech and then a minute of quiet
+// sends nothing (2.5 s sent it before), a mic that hears nothing closes after 10 s (5 s before), speech in time keeps
+// it open, and the recording goes at the Pro's 600 s.
 static void test_talk_due_times(void)
 {
     linked(ABCDE, 5);
@@ -794,21 +790,31 @@ static void test_talk_due_times(void)
     max_ui_talk(MAX_TALK_RECORDING, 1000);
     max_ui_level(3, 1100);
     max_ui_level(0, 1200);
-    CHECK(max_ui_talk_due(1100 + 2499).kind == MAX_ACT_NONE && max_m.view == MAX_VIEW_AGENT);
-    CHECK(max_ui_talk_due(1100 + 2500).kind == MAX_ACT_SEND);
+    CHECK(max_ui_talk_due(1100 + 2500).kind == MAX_ACT_NONE);
+    CHECK(max_ui_talk_due(1100 + 60000).kind == MAX_ACT_NONE && max_m.view == MAX_VIEW_AGENT);
+    CHECK(max_ui_talk_due(1000 + 599999).kind == MAX_ACT_NONE && max_m.talk == MAX_TALK_RECORDING);
+    CHECK(max_ui_talk_due(1000 + 600000).kind == MAX_ACT_SEND);
     max_ui_talk(MAX_TALK_IDLE, 0);
     agent_page("a");
     max_ui_talk(MAX_TALK_RECORDING, 5000);
     max_ui_level(1, 6000);   // below speech
-    CHECK(max_ui_talk_due(5000 + 4999).kind == MAX_ACT_NONE);
-    CHECK(max_ui_talk_due(5000 + 5000).kind == MAX_ACT_CANCEL);
+    CHECK(max_ui_talk_due(5000 + 5000).kind == MAX_ACT_NONE);
+    CHECK(max_ui_talk_due(5000 + 9999).kind == MAX_ACT_NONE);
+    CHECK(max_ui_talk_due(5000 + 10000).kind == MAX_ACT_CANCEL);
+    max_ui_talk(MAX_TALK_IDLE, 0);
+    // Speech just inside the 10 s: the mic stays open past them, and on.
+    agent_page("a");
+    max_ui_talk(MAX_TALK_RECORDING, 20000);
+    max_ui_level(3, 20000 + 9990);
+    CHECK(max_ui_talk_due(20000 + 10000).kind == MAX_ACT_NONE);
+    CHECK(max_ui_talk_due(20000 + 120000).kind == MAX_ACT_NONE && max_m.view == MAX_VIEW_AGENT);
     max_ui_talk(MAX_TALK_IDLE, 0);
     max_show(MAX_VIEW_OVERVIEW);
 }
 
-// Speech, then MAX_SILENCE_MS of quiet: sent, as a tap on the page; so is speech that runs MAX_TALK_MAX_MS. Nothing
-// heard in MAX_HEAR_MS: the mic closes, nothing is sent, no notice, and the page stays and says so. Its agent leaving
-// the ring: what was heard is sent, else dropped; Overview. No link: nothing.
+// Speech and then quiet: nothing is sent, the mic stays open for a tap; speech that runs MAX_TALK_MAX_MS is sent, as a
+// tap on the page. Nothing heard in MAX_HEAR_MS: the mic closes, nothing is sent, no notice, and the page stays and
+// says so. Its agent leaving the ring: dropped, heard or not (the Pro's); Overview. No link: nothing.
 static void test_talk_due(void)
 {
     linked(ABCDE, 5);
@@ -818,18 +824,14 @@ static void test_talk_due(void)
     CHECK(max_ui_talk_due(1000).kind == MAX_ACT_NONE);
     max_ui_level(3, 1100);
     max_ui_level(0, 1200);
-    CHECK(max_ui_talk_due(1100 + MAX_SILENCE_MS - 1).kind == MAX_ACT_NONE && max_m.view == MAX_VIEW_AGENT);
     no_notice();
-    max_act_t act = max_ui_talk_due(1100 + MAX_SILENCE_MS);
+    CHECK(max_ui_talk_due(1100 + MAX_HEAR_MS + 30000).kind == MAX_ACT_NONE && max_m.view == MAX_VIEW_AGENT);
+    CHECK(max_m.talk == MAX_TALK_RECORDING && !max_m.talk_closed && !max_notice_shown(0));
+    // The cap: sent, as a tap on the page.
+    CHECK(max_ui_talk_due(1000 + MAX_TALK_MAX_MS - 1).kind == MAX_ACT_NONE);
+    max_act_t act = max_ui_talk_due(1000 + MAX_TALK_MAX_MS);
     CHECK(act.kind == MAX_ACT_SEND && !strcmp(act.agent_id, "a") && noticed("Sent to a"));
     CHECK(max_m.view == MAX_VIEW_OVERVIEW && max_m.dirty);
-    // Speech that never stops: sent at the cap.
-    max_ui_talk(MAX_TALK_IDLE, 0);
-    agent_page("a");
-    max_ui_talk(MAX_TALK_RECORDING, 2000);
-    max_ui_level(3, 2000 + MAX_TALK_MAX_MS - 10);
-    CHECK(max_ui_talk_due(2000 + MAX_TALK_MAX_MS - 1).kind == MAX_ACT_NONE);
-    CHECK(max_ui_talk_due(2000 + MAX_TALK_MAX_MS).kind == MAX_ACT_SEND && max_m.view == MAX_VIEW_OVERVIEW);
     // Nothing heard: the mic closes with no notice, and the page says so until it goes.
     max_ui_talk(MAX_TALK_IDLE, 0);
     agent_page("a");
@@ -857,24 +859,24 @@ static void test_talk_due(void)
     // Not recording: nothing owed.
     max_ui_talk(MAX_TALK_SENDING, 0);
     CHECK(max_ui_talk_due(99999).kind == MAX_ACT_NONE);
-    // Words to an agent that asked are its answer: the question waiting longest takes the page.
+    // Words to an agent that asked are its answer: sent at the cap, the question waiting longest takes the page.
     max_ui_talk(MAX_TALK_IDLE, 0);
     max_ui_question("b", "r1", DB.q, &DB, 1, false, false, 10000);
     max_ui_question("c", "r2", DB.q, &DB, 1, false, false, 10100);
     agent_page("b");
     recording(true);
-    max_m.talk_quiet_from = 10000;
-    act = max_ui_talk_due(10000 + MAX_SILENCE_MS);
+    act = max_ui_talk_due(MAX_TALK_MAX_MS);
     CHECK(act.kind == MAX_ACT_SEND && max_m.view == MAX_VIEW_ATTENTION && !strcmp(max_m.attn_id, "c"));
     max_ui_talk(MAX_TALK_IDLE, 0);
-    // The recording's agent leaves the ring: its page goes at once, and the clock sends what was heard ("Sent").
+    // The recording's agent leaves the ring: its page goes at once, and the clock drops what was heard, no notice.
     agent_page("d");
     recording(true);
     roster(ABCDE, 3);
     CHECK(max_m.view == MAX_VIEW_OVERVIEW);
     no_notice();
     act = max_ui_talk_due(20000);
-    CHECK(act.kind == MAX_ACT_SEND && !strcmp(act.agent_id, "d") && noticed("Sent") && max_m.view == MAX_VIEW_OVERVIEW);
+    CHECK(act.kind == MAX_ACT_CANCEL && !strcmp(act.agent_id, "d") && !max_notice_shown(0));
+    CHECK(max_m.view == MAX_VIEW_OVERVIEW);
     max_ui_talk(MAX_TALK_IDLE, 0);
     roster(ABCDE, 5);
     agent_page("e");
@@ -889,97 +891,95 @@ static void test_talk_due(void)
     CHECK(max_ui_talk_due(99999).kind == MAX_ACT_NONE);
 }
 
-// ---- the Dial's touch around the mic (18 Nov) ----
+// ---- the Pro's touch around the mic (20 Nov) ----
 
-// While the mic is open only the Dial's tap sends: down MAX_TAP_MIN_MS..MAX_TAP_MAX_MS, never past 1.2 mm (10.6 px)
-// from where it went down. A shorter or longer press, or a finger that slid (out and back too), is the dead zone:
-// nothing happens and the mic stays open. X cancels whatever the touch.
-static void test_only_the_dials_tap_sends(void)
+// While the mic is open any tap sends, as the Pro's: a lift within MAX_TAP_SLOP of where it went down, however long the
+// finger was down. A finger that went past the slop (out and back too), or a swipe, does nothing and the mic stays
+// open. X cancels whatever the touch.
+static void test_any_tap_sends(void)
 {
     linked(ABCDE, 5);
     agent_page("a");
     recording(true);
     const int x = HT_WIDTH / 2, y = HT_HEIGHT - 20;
     no_notice();
-    CHECK(press_for(x, y, 0, 0, T += 1000, MAX_TAP_MIN_MS - 1).kind == MAX_ACT_NONE);
-    CHECK(press_for(x, y, 0, 0, T += 1000, MAX_TAP_MAX_MS + 1).kind == MAX_ACT_NONE);
-    CHECK(press_for(x, y, 8, 8, T += 1000, 100).kind == MAX_ACT_NONE);   // 11.3 px
+    CHECK(press_for(x, y, 25, 0, T += 1000, 100).kind == MAX_ACT_NONE);   // past the slop
+    CHECK(press_for(x, y, 0, -25, T += 1000, 100).kind == MAX_ACT_NONE);
     T += 1000;
     max_ui_touch(true, x, y, T);
-    max_ui_touch(true, x + 9, y + 9, T + 40);
+    max_ui_touch(true, x + 30, y, T + 40);
     CHECK(max_ui_touch(false, x, y, T + 90).kind == MAX_ACT_NONE);   // out and back
     CHECK(swipe_left().kind == MAX_ACT_NONE);
     CHECK(!max_notice_shown(0) && max_m.view == MAX_VIEW_AGENT && !strcmp(max_ui_selected(), "a"));
+    CHECK(max_m.talk == MAX_TALK_RECORDING);
     // X: held long, it still cancels.
     const max_hit_t *x_hit = x_of_agent();
     CHECK(x_hit->kind == MAX_HIT_AGENT_X);
     CHECK(press_for(x_hit->x + 4, x_hit->y + 4, 0, 0, T += 1000, 2000).kind == MAX_ACT_CANCEL);
-    // The Dial's tap at its edges sends: the shortest, and the longest that moved 10 px.
+    // Any length sends: the briefest touch, a five-second press, one that moved to the slop's edge.
     agent_page("a");
     recording(true);
-    CHECK(press_for(x, y, 10, 0, T += 3000, MAX_TAP_MIN_MS).kind == MAX_ACT_SEND);
+    CHECK(press_for(x, y, 0, 0, T += 3000, 5).kind == MAX_ACT_SEND);
     agent_page("a");
     recording(true);
-    CHECK(press_for(x, y, 7, 7, T += 1000, MAX_TAP_MAX_MS).kind == MAX_ACT_SEND && noticed("Sent to a"));
+    CHECK(press_for(x, y, 0, 0, T += 3000, 5000).kind == MAX_ACT_SEND);
+    agent_page("a");
+    recording(false);   // nothing heard yet: a tap sends all the same
+    CHECK(press_for(x, y, MAX_TAP_SLOP, MAX_TAP_SLOP, T += 6000, 300).kind == MAX_ACT_SEND && noticed("Sent to a"));
+    T += 1000;
 }
 
-// A touch that opens the mic lets go before MAX_HOLD_MS; held longer it opens nothing, not even the page.
-static void test_a_hold_opens_no_mic(void)
+// A touch that opens the mic may be held as long as it likes (the Pro's tap has no length): a cell's opens its page
+// and, a moment later, its mic; the agent page's body its mic now.
+static void test_a_long_press_opens_the_mic(void)
 {
     linked(ABCDE, 3);
     overview_drawn();
     const max_box_t b = *cell_of("a");
     const int x = b.x + b.w / 2, y = b.y + b.h / 2;
-    CHECK(press_for(x, y, 0, 0, T += 1000, MAX_HOLD_MS).kind == MAX_ACT_NONE && max_m.view == MAX_VIEW_OVERVIEW);
-    max_act_t act = press_for(x, y, 0, 0, T += 1000, MAX_HOLD_MS - 1);
+    max_act_t act = press_for(x, y, 0, 0, T += 1000, 3000);
     CHECK(act.kind == MAX_ACT_OPEN_TALK && !strcmp(act.agent_id, "a") && max_m.view == MAX_VIEW_AGENT);
-    // The agent page's body the same (past the opening's guard).
+    max_m.talk_soon = false;
     agent_drawn();
-    CHECK(press_for(HT_WIDTH / 2, HT_HEIGHT - 20, 0, 0, T += 2000, MAX_HOLD_MS).kind == MAX_ACT_NONE);
-    CHECK(press_for(HT_WIDTH / 2, HT_HEIGHT - 20, 0, 0, T += 2000, MAX_HOLD_MS - 1).kind == MAX_ACT_TALK);
-    T += 2000;
+    CHECK(press_for(HT_WIDTH / 2, HT_HEIGHT - 20, 0, 0, T += 4000, 3000).kind == MAX_ACT_TALK);
+    T += 4000;
 }
 
-// A voice action (the mic opening, a send, X) takes the touches that begin within MAX_GUARD_MS after it as part of
-// it: a double tap is one intent. X itself is never held back.
-static void test_the_guard(void)
+// No guard, as the Pro has none: a tap right after the mic opened sends, one right after a send or X acts at once.
+static void test_no_guard(void)
 {
     linked(ABCDE, 5);
     overview_drawn();
-    const max_box_t b = *cell_of("a"), c = *cell_of("b");
+    const max_box_t b = *cell_of("a");
     const int page_x = HT_WIDTH / 2, page_y = HT_HEIGHT - 20;
     uint32_t t = T += 1000;
-    CHECK(tap_at(b.x + b.w / 2, b.y + b.h / 2, t).kind == MAX_ACT_OPEN_TALK);   // the mic opens at t + 90
-    max_ui_talk(MAX_TALK_RECORDING, t + 90);
+    CHECK(tap_at(b.x + b.w / 2, b.y + b.h / 2, t).kind == MAX_ACT_OPEN_TALK);   // lets go at t + 90
     agent_drawn();
-    // The second tap of a double tap is part of the first: the mic stays open.
-    CHECK(tap_at(page_x, page_y, t + 90 + MAX_GUARD_MS - 1).kind == MAX_ACT_NONE && max_m.view == MAX_VIEW_AGENT);
-    // Past the guard the tap sends (at t + 90 + MAX_GUARD_MS + 90).
-    CHECK(tap_at(page_x, page_y, t + 90 + MAX_GUARD_MS).kind == MAX_ACT_SEND);
+    CHECK(tap_at(page_x, page_y, t + 100).kind == MAX_ACT_TALK);   // the page: the mic now
+    max_ui_talk(MAX_TALK_RECORDING, t + 190);
+    // A tap 10 ms after the mic opened sends (the app says "Not sent" for one before the recorder started).
+    CHECK(tap_at(page_x, page_y, t + 200).kind == MAX_ACT_SEND && max_m.view == MAX_VIEW_OVERVIEW);
     max_ui_talk(MAX_TALK_IDLE, 0);
-    t += 90 + MAX_GUARD_MS + 90;
+    // Right after the send, a cell opens.
     overview_drawn();
-    CHECK(tap_at(c.x + c.w / 2, c.y + c.h / 2, t + MAX_GUARD_MS - 1).kind == MAX_ACT_NONE);
-    CHECK(max_m.view == MAX_VIEW_OVERVIEW);
-    CHECK(tap_at(c.x + c.w / 2, c.y + c.h / 2, t + MAX_GUARD_MS).kind == MAX_ACT_OPEN_TALK);
-    t += MAX_GUARD_MS + 90;
-    max_ui_talk(MAX_TALK_RECORDING, t);
+    const max_box_t c = *cell_of("b");
+    CHECK(tap_at(c.x + c.w / 2, c.y + c.h / 2, t + 300).kind == MAX_ACT_OPEN_TALK);
+    max_m.talk_soon = false;
+    max_ui_talk(MAX_TALK_RECORDING, t + 400);
     agent_drawn();
-    // X right after the mic opened: never held back. Then the cancel's own guard, on the row X brought back.
+    // X right after the mic opened, and a cell right after X.
     const max_hit_t x_hit = *x_of_agent();
-    CHECK(tap_at(x_hit.x + 4, x_hit.y + 4, t + 10).kind == MAX_ACT_CANCEL && max_m.view == MAX_VIEW_OVERVIEW);
+    CHECK(tap_at(x_hit.x + 4, x_hit.y + 4, t + 410).kind == MAX_ACT_CANCEL && max_m.view == MAX_VIEW_OVERVIEW);
     max_ui_talk(MAX_TALK_IDLE, 0);
-    t += 100;
     overview_drawn();
     const max_box_t d = *cell_of("a");
-    CHECK(tap_at(d.x + d.w / 2, d.y + d.h / 2, t + MAX_GUARD_MS - 1).kind == MAX_ACT_NONE);
-    CHECK(max_m.view == MAX_VIEW_OVERVIEW);
-    CHECK(tap_at(d.x + d.w / 2, d.y + d.h / 2, t + MAX_GUARD_MS).kind == MAX_ACT_OPEN_TALK);
+    CHECK(tap_at(d.x + d.w / 2, d.y + d.h / 2, t + 510).kind == MAX_ACT_OPEN_TALK);
+    max_m.talk_soon = false;
+    max_show(MAX_VIEW_OVERVIEW);
     T = t + 10000;
 }
 
-// The clock's close or send under a finger: that contact acts on nothing when it lifts, and the next touches within
-// the guard are part of it.
+// The clock's close or send under a finger: that contact acts on nothing when it lifts; the next one acts at once.
 static void test_the_clock_voids_the_contact(void)
 {
     linked(ABCDE, 5);
@@ -994,17 +994,17 @@ static void test_the_clock_voids_the_contact(void)
     max_ui_talk(MAX_TALK_IDLE, 0);
     agent_drawn();
     CHECK(max_ui_touch(false, x, y, t + MAX_HEAR_MS + 40).kind == MAX_ACT_NONE);   // it would have opened the mic
-    CHECK(tap_at(x, y, t + MAX_HEAR_MS + MAX_GUARD_MS - 1).kind == MAX_ACT_NONE);
-    CHECK(tap_at(x, y, t + MAX_HEAR_MS + MAX_GUARD_MS).kind == MAX_ACT_TALK);
-    // The clock's send the same.
+    CHECK(tap_at(x, y, t + MAX_HEAR_MS + 50).kind == MAX_ACT_TALK);
+    // The cap's send the same.
     const uint32_t u = t + MAX_HEAR_MS + 2000;
+    max_ui_talk(MAX_TALK_IDLE, 0);
     max_ui_talk(MAX_TALK_RECORDING, u);
     max_ui_level(3, u);
     agent_drawn();
-    max_ui_touch(true, x, y, u + MAX_SILENCE_MS - 50);
-    CHECK(max_ui_talk_due(u + MAX_SILENCE_MS).kind == MAX_ACT_SEND);
-    CHECK(max_ui_touch(false, x, y, u + MAX_SILENCE_MS + 40).kind == MAX_ACT_NONE);
-    T = u + 10000;
+    max_ui_touch(true, x, y, u + MAX_TALK_MAX_MS - 50);
+    CHECK(max_ui_talk_due(u + MAX_TALK_MAX_MS).kind == MAX_ACT_SEND);
+    CHECK(max_ui_touch(false, x, y, u + MAX_TALK_MAX_MS + 40).kind == MAX_ACT_NONE);
+    T = u + MAX_TALK_MAX_MS + 10000;
 }
 
 // ---- the rest ----
@@ -1121,9 +1121,9 @@ int main(void)
     test_talk_due();
     test_talk_due_times();
     test_cell_tap_opens_the_mic_a_second_later();
-    test_only_the_dials_tap_sends();
-    test_a_hold_opens_no_mic();
-    test_the_guard();
+    test_any_tap_sends();
+    test_a_long_press_opens_the_mic();
+    test_no_guard();
     test_the_clock_voids_the_contact();
     test_cancel();
     test_update_screen();

@@ -125,8 +125,8 @@ static void attention(const char *id, max_attn_t kind)
     max_m.attn = kind;
     max_m.attn_from = T0 - 700;
 }
-// A recording for `id`, `secs` in, the mic's last levels a speech-like run (or none), quiet for quiet_ms since.
-static void talk(const char *id, uint32_t secs, bool heard, uint32_t quiet_ms)
+// A recording for `id`, `secs` in, the mic's last levels a speech-like run (or none).
+static void talk(const char *id, uint32_t secs, bool heard)
 {
     max_copy(max_m.talk_id, sizeof max_m.talk_id, id);
     max_ui_talk(MAX_TALK_RECORDING, T0 - secs * 1000u);
@@ -134,7 +134,6 @@ static void talk(const char *id, uint32_t secs, bool heard, uint32_t quiet_ms)
                                      1, 2, 3, 4, 2, 3, 4, 3, 2, 2, 3, 1, 2, 3, 2, 1, 1, 0, 1, 0, 0, 0, 0, 0};
     for (int i = 0; heard && i < MAX_LEVELS; i++) max_ui_level(SPEECH[i], T0 - (MAX_LEVELS - i) * 100u);
     for (int i = 0; !heard && i < (int)secs * 10 && i < MAX_LEVELS; i++) max_ui_level(0, T0 - (MAX_LEVELS - i) * 100u);
-    if (heard) max_m.talk_quiet_from = T0 - quiet_ms;
 }
 
 // ---- Overview ----
@@ -192,16 +191,16 @@ static void s_agent_mic_closed(void)
     orca();
     show(MAX_VIEW_AGENT, "sweep");
     max_copy(max_m.talk_id, sizeof max_m.talk_id, "sweep");
-    max_m.talk_closed = true;   // 5 s with nothing heard
+    max_m.talk_closed = true;   // 10 s with nothing heard
 }
-static void s_agent_listening(void) { orca(); show(MAX_VIEW_AGENT, "e2e"); talk("e2e", 2, true, 700); }
-static void s_agent_listening_start(void) { orca(); show(MAX_VIEW_AGENT, "sweep"); talk("sweep", 1, false, 0); }
-static void s_agent_working_talking(void) { orca(); show(MAX_VIEW_AGENT, "auth"); talk("auth", 2, true, 200); }
+static void s_agent_listening(void) { orca(); show(MAX_VIEW_AGENT, "e2e"); talk("e2e", 2, true); }
+static void s_agent_listening_start(void) { orca(); show(MAX_VIEW_AGENT, "sweep"); talk("sweep", 1, false); }
+static void s_agent_working_talking(void) { orca(); show(MAX_VIEW_AGENT, "auth"); talk("auth", 2, true); }
 static void s_agent_sending(void)
 {
     orca();
     show(MAX_VIEW_AGENT, "e2e");
-    talk("e2e", 3, true, 1600);
+    talk("e2e", 3, true);
     max_ui_talk(MAX_TALK_SENDING, T0);
 }
 // An agent the bar cannot record for: where to talk to it instead.
@@ -222,7 +221,7 @@ static void s_toast(void)
 {
     orca();
     show(MAX_VIEW_AGENT, "auth");
-    talk("auth", 4, true, 300);
+    talk("auth", 4, true);
     max_copy(max_m.toast_id, sizeof max_m.toast_id, "hero");
     max_m.toast_from = T0 - 1000;
 }

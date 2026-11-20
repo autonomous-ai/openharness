@@ -192,11 +192,10 @@ max_act_t max_ui_touch(bool down, int x, int y, uint32_t now_ms);
 void max_ui_touch_cancel(void);
 
 // What the clock owes the recording (render task, every tick while recording, or while a cell's tap waits to open the
-// mic: MAX_ACT_TALK MAX_TALK_DELAY_MS after it, its page still up): MAX_ACT_SEND after speech and then
-// MAX_SILENCE_MS of quiet, or at MAX_TALK_MAX_MS (to Overview, as a tap on the page); MAX_ACT_CANCEL when nothing was
-// heard in MAX_HEAR_MS (the page stays and says the mic closed); MAX_ACT_SEND (words heard) or MAX_ACT_CANCEL when its
-// agent left the ring; else MAX_ACT_NONE. A finger on the glass then acts on nothing. The app acts on it as on the
-// finger's.
+// mic: MAX_ACT_TALK MAX_TALK_DELAY_MS after it, its page still up): MAX_ACT_SEND at MAX_TALK_MAX_MS (to Overview, as a
+// tap on the page), never for the quiet after speech; MAX_ACT_CANCEL when nothing was heard in MAX_HEAR_MS (the page
+// stays and says the mic closed), or when its agent left the ring, heard or not; else MAX_ACT_NONE. A finger on the
+// glass then acts on nothing. The app acts on it as on the finger's.
 max_act_t max_ui_talk_due(uint32_t now_ms);
 
 // The agent page's (or Attention's) agent id, or NULL when neither is up.

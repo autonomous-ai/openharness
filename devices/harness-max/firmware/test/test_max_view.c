@@ -162,7 +162,6 @@ static void talk(const char *id, max_talk_t state, bool heard)
     max_copy(max_m.talk_id, sizeof max_m.talk_id, id);
     max_ui_talk(state, T0 - 3000);
     for (int i = 0; heard && i < MAX_LEVELS; i++) max_ui_level((unsigned)(i * 7 % 5), T0 - (MAX_LEVELS - i) * 100u);
-    if (heard) max_m.talk_quiet_from = T0 - 500;
 }
 static void show(max_view_t view, const char *id)
 {
@@ -489,10 +488,10 @@ static void test_talking(void)
     CHECK(HITS_ARE(MAX_HIT_APPS, MAX_HIT_AGENT_X, MAX_HIT_BODY, MAX_HIT_BELL));
     CHECK(max_motion_ms(T0) <= MAX_TALK_FRAME_MS);
     agent_words();
-    // Heard: no "Say it", the ring fills, and the send is coming.
+    // Heard: no "Say it", and still "Tap to send": the quiet after speech sends nothing (the Pro's).
     talk("c", MAX_TALK_RECORDING, true);
     render_at(T0);
-    CHECK(!word("Say it" ELLIPSIS) && word("Listening") && text_run("Sending soon") && !word("Tap to send"));
+    CHECK(!word("Say it" ELLIPSIS) && word("Listening") && word("Tap to send") && !text_run("Sending soon"));
     agent_words();
     // Working while it records: its words stay.
     show(MAX_VIEW_AGENT, "a");
