@@ -317,7 +317,8 @@ mod tests {
     fn who_writes_the_entry_is_one_rule() {
         for case in vectors("decisions") {
             let on_disk: Vec<&str> = case["onDisk"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
-            let exists = |path: &Path| on_disk.iter().any(|there| Path::new(there) == path);
+            // As text: a Path would take `/a//b` for `/a/b`.
+            let exists = |path: &Path| on_disk.iter().any(|there| OsStr::new(there) == path.as_os_str());
             let appimage = Path::new(case["appImage"].as_str().unwrap());
             let wanted = case["wanted"].as_str().unwrap();
             let decided = change(case["existing"].as_str(), appimage, wanted, exists);
@@ -369,6 +370,33 @@ mod tests {
         assert_eq!(image.apply(appdir).map(line).as_deref(), Some("app list: entry kept"));
         assert_eq!(fs::read(image.entry_file()).unwrap(), bytes);
         assert_eq!(fs::metadata(image.entry_file()).unwrap().modified().unwrap(), written);
+    }
+
+    /// An entry there before the run, as these bytes.
+    fn existing(image: &Image, bytes: &[u8]) {
+        fs::create_dir_all(image.entry_file().parent().unwrap()).unwrap();
+        fs::write(image.entry_file(), bytes).unwrap();
+    }
+
+    #[test]
+    fn an_entry_naming_a_folder_is_taken_over() {
+        // A folder is no AppImage on disk, as Desktop's File.existsSync says.
+        let image = an_image();
+        let folder = image.dir.path().join("My Apps");
+        existing(&image, format!("[Desktop Entry]\nExec={}\n", exec_value(&folder).unwrap()).as_bytes());
+        assert_eq!(image.apply(Some(image.appdir.as_os_str())), Some(Ok(Change::Write)));
+    }
+
+    #[test]
+    fn an_entry_not_utf8_is_read_by_the_rule() {
+        // Its own, the older bytes, with a byte that is not UTF-8: read as U+FFFD, as Desktop reads it.
+        let image = an_image();
+        let exec = exec_value(&image.appimage).unwrap();
+        let wanted = entry(&exec, Some(&image.icon_file()));
+        let older = wanted.replace(&format!("StartupWMClass={WM_CLASS}\n"), "");
+        existing(&image, &[older.as_bytes(), b"X-Odd=\xff\n"].concat());
+        assert_eq!(image.apply(Some(image.appdir.as_os_str())), Some(Ok(Change::Write)));
+        assert_eq!(fs::read_to_string(image.entry_file()).unwrap(), wanted);
     }
 
     #[test]

@@ -102,6 +102,22 @@
     {
       "path": "/home/p/a\nb/H.AppImage",
       "exec": null
+    },
+    {
+      "path": "/home/p/a\u0085b/H.AppImage",
+      "exec": null
+    },
+    {
+      "path": "/home/p/a\u00a0b/H.AppImage",
+      "exec": "\"/home/p/a\u00a0b/H.AppImage\""
+    },
+    {
+      "path": "/home/p/a\u3000b/H.AppImage",
+      "exec": "\"/home/p/a\u3000b/H.AppImage\""
+    },
+    {
+      "path": "/home/p/a\ufeffb/H.AppImage",
+      "exec": "/home/p/a\ufeffb/H.AppImage"
     }
   ],
   "entries": [
@@ -331,6 +347,62 @@
         "/home/p/.local/share/icons/harness-device.png"
       ],
       "write": false
+    },
+    {
+      "name": "an entry naming this AppImage by another spelling (//), on disk",
+      "appImage": "/home/p/.local/opt/Harness-Device.AppImage",
+      "wanted": "[Desktop Entry]\nType=Application\nName=Harness Device\nComment=The app for your Harness device.\nExec=/home/p/.local/opt/Harness-Device.AppImage\nIcon=/home/p/.local/share/icons/harness-device.png\nTerminal=false\nCategories=Utility;\nStartupWMClass=harness-device\n",
+      "existing": "[Desktop Entry]\nType=Application\nName=Harness Device\nComment=The app for your Harness device.\nExec=/home/p//.local/opt/Harness-Device.AppImage\nIcon=/home/p/.local/share/icons/harness-device.png\nTerminal=false\nCategories=Utility;\nStartupWMClass=harness-device\n",
+      "onDisk": [
+        "/home/p/.local/opt/Harness-Device.AppImage",
+        "/home/p//.local/opt/Harness-Device.AppImage",
+        "/home/p/.local/share/icons/harness-device.png"
+      ],
+      "write": false
+    },
+    {
+      "name": "its own entry, the older bytes, with a byte that is not UTF-8 (read as U+FFFD)",
+      "appImage": "/home/p/.local/opt/Harness-Device.AppImage",
+      "wanted": "[Desktop Entry]\nType=Application\nName=Harness Device\nComment=The app for your Harness device.\nExec=/home/p/.local/opt/Harness-Device.AppImage\nIcon=/home/p/.local/share/icons/harness-device.png\nTerminal=false\nCategories=Utility;\nStartupWMClass=harness-device\n",
+      "existing": "[Desktop Entry]\nType=Application\nName=Harness Device\nComment=The app for your Harness device.\nExec=/home/p/.local/opt/Harness-Device.AppImage\nIcon=/home/p/.local/share/icons/harness-device.png\nTerminal=false\nCategories=Utility;\nX-Odd=\ufffd\n",
+      "onDisk": [
+        "/home/p/.local/opt/Harness-Device.AppImage",
+        "/home/p/.local/share/icons/harness-device.png"
+      ],
+      "write": true
+    },
+    {
+      "name": "an entry whose Exec= starts with U+FEFF, which is not trimmed",
+      "appImage": "/home/p/.local/opt/Harness-Device.AppImage",
+      "wanted": "[Desktop Entry]\nType=Application\nName=Harness Device\nComment=The app for your Harness device.\nExec=/home/p/.local/opt/Harness-Device.AppImage\nIcon=/home/p/.local/share/icons/harness-device.png\nTerminal=false\nCategories=Utility;\nStartupWMClass=harness-device\n",
+      "existing": "[Desktop Entry]\nType=Application\nName=Harness Device\nComment=The app for your Harness device.\nExec=\ufeff/home/p/.local/opt/Harness-Device.AppImage\nIcon=/home/p/.local/share/icons/harness-device.png\nTerminal=false\nCategories=Utility;\n",
+      "onDisk": [
+        "/home/p/.local/opt/Harness-Device.AppImage",
+        "/home/p/.local/share/icons/harness-device.png"
+      ],
+      "write": false
+    },
+    {
+      "name": "an entry whose Exec= starts with U+00A0, which is not trimmed",
+      "appImage": "/home/p/.local/opt/Harness-Device.AppImage",
+      "wanted": "[Desktop Entry]\nType=Application\nName=Harness Device\nComment=The app for your Harness device.\nExec=/home/p/.local/opt/Harness-Device.AppImage\nIcon=/home/p/.local/share/icons/harness-device.png\nTerminal=false\nCategories=Utility;\nStartupWMClass=harness-device\n",
+      "existing": "[Desktop Entry]\nType=Application\nName=Harness Device\nComment=The app for your Harness device.\nExec=\u00a0/home/p/.local/opt/Harness-Device.AppImage\nIcon=/home/p/.local/share/icons/harness-device.png\nTerminal=false\nCategories=Utility;\n",
+      "onDisk": [
+        "/home/p/.local/opt/Harness-Device.AppImage",
+        "/home/p/.local/share/icons/harness-device.png"
+      ],
+      "write": false
+    },
+    {
+      "name": "its own entry, the older bytes, with a space and a tab after Exec=, which are trimmed",
+      "appImage": "/home/p/.local/opt/Harness-Device.AppImage",
+      "wanted": "[Desktop Entry]\nType=Application\nName=Harness Device\nComment=The app for your Harness device.\nExec=/home/p/.local/opt/Harness-Device.AppImage\nIcon=/home/p/.local/share/icons/harness-device.png\nTerminal=false\nCategories=Utility;\nStartupWMClass=harness-device\n",
+      "existing": "[Desktop Entry]\nType=Application\nName=Harness Device\nComment=The app for your Harness device.\nExec= \t/home/p/.local/opt/Harness-Device.AppImage\nIcon=/home/p/.local/share/icons/harness-device.png\nTerminal=false\nCategories=Utility;\n",
+      "onDisk": [
+        "/home/p/.local/opt/Harness-Device.AppImage",
+        "/home/p/.local/share/icons/harness-device.png"
+      ],
+      "write": true
     }
   ]
 }

@@ -171,6 +171,26 @@ void main() {
     );
   });
 
+  // Read as the Device app reads its entry: the byte as U+FFFD, the rule
+  // applied, and nothing thrown.
+  test(
+    'an entry with a byte that is not UTF-8 is read, and written again',
+    () async {
+      final path = '$home/Applications/Harness.AppImage';
+      await launch(path);
+      entry().writeAsBytesSync([
+        ...utf8.encode('[Desktop Entry]\nType=Application\nExec=$path\n'),
+        ...'X-Odd='.codeUnits,
+        0xff,
+        10,
+      ]);
+
+      await launch(path);
+
+      expect(entry().readAsStringSync(), contains('Exec=$path %u\n'));
+    },
+  );
+
   test('an entry whose AppImage is gone follows the one running', () async {
     await launch('$home/My Apps/Harness.AppImage');
     File('$home/My Apps/Harness.AppImage').deleteSync();

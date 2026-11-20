@@ -244,6 +244,36 @@ void main() {
     skip: Platform.isWindows,
   );
 
+  // A folder is no AppImage on disk, as the Device app's is_file says.
+  test('an entry naming a folder is taken over', () async {
+    Directory('$home/Downloads').createSync(recursive: true);
+    entryFor('$home/Downloads');
+
+    await write(place);
+
+    expect(entryIn(data()).readAsStringSync(), contains('Exec=$place\n'));
+  }, skip: Platform.isWindows);
+
+  // Read as the Device app reads it: the byte as U+FFFD, the rule applied.
+  test('an own entry with a byte that is not UTF-8 is written again', () async {
+    final wanted = rooted(
+      ((_vectors['entries'] as List).first as Map)['entry'] as String,
+    );
+    final older = wanted.replaceFirst('StartupWMClass=harness-device\n', '');
+    entryIn(data())
+      ..createSync(recursive: true)
+      ..writeAsBytesSync([
+        ...utf8.encode(older),
+        ...'X-Odd='.codeUnits,
+        0xff,
+        10,
+      ]);
+
+    await write(place);
+
+    expect(entryIn(data()).readAsStringSync(), wanted);
+  }, skip: Platform.isWindows);
+
   test('an entry whose AppImage is gone is written again', () async {
     entryFor('$home/Downloads/Harness-Device-linux-x64.AppImage');
 
@@ -338,6 +368,25 @@ void main() {
     expect(entryIn(data()).existsSync(), isFalse);
     expect(iconIn(data()).existsSync(), isFalse);
   }, skip: Platform.isWindows);
+
+  test(
+    'an entry with a byte that is not UTF-8 goes once its AppImage is gone',
+    () async {
+      await write(place);
+      entryIn(data()).writeAsBytesSync([
+        ...entryIn(data()).readAsBytesSync(),
+        ...'X-Odd='.codeUnits,
+        0xff,
+        10,
+      ]);
+      File(place).deleteSync();
+
+      await forgetGoneDeviceAppLauncher(environment: {'HOME': home});
+
+      expect(entryIn(data()).existsSync(), isFalse);
+    },
+    skip: Platform.isWindows,
+  );
 
   test('an entry whose AppImage is there stays', () async {
     await write(place);
