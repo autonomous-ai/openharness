@@ -27,6 +27,9 @@ const EXES: [string, string][] = [
   ['Cursor.exe', 'cursor'],
   ['cursor', 'cursor'],
   ['WindowsTerminal.exe', 'terminal'],
+  // The Store's ChatGPT on Windows is the Codex app (package OpenAI.Codex), its window ChatGPT.exe's.
+  ['ChatGPT.exe', 'codex'],
+  ['chatgpt.exe', 'codex'],
   ['wezterm-gui', 'wezterm'],
   ['kitty', 'kitty'],
   ['ghostty', 'ghostty'],
@@ -46,7 +49,7 @@ describe('frontAppId', () => {
     expect(detectApp({ __CFBundleIdentifier: bundle })).toBe(id)
   })
 
-  it.each(EXES)('Code.exe, Cursor.exe, WindowsTerminal.exe, wezterm-gui, kitty, ghostty and harness map: %s', (exe, id) => {
+  it.each(EXES)('Code.exe, Cursor.exe, WindowsTerminal.exe, ChatGPT.exe, wezterm-gui, kitty, ghostty and harness map: %s', (exe, id) => {
     expect(frontAppId(exe)).toBe(id)
   })
 
@@ -57,8 +60,8 @@ describe('frontAppId', () => {
   it.each(['com.apple.Safari', 'org.alacritty', 'net.kovidgoyal.kitty-quick-access', 'alacritty', '', 'x'.repeat(128),
     'constructor', '__proto__', 'toString', 'COM.MITCHELLH.GHOSTTY', 'com.openai.chat', 'codex', 'Codex.exe',
     'com.cmuxterm.app.nightly', 'cmux',
-    // OpenAI's chat app on Windows is not the Codex app, and the Linux processes' names are Linux's alone.
-    'ChatGPT.exe', 'chatgpt.exe', 'claude-desktop.exe'])(
+    // The Linux processes' names are Linux's alone.
+    'claude-desktop.exe'])(
     'an unknown app, the empty string and a 128-character string are none: %j', (value) => {
       expect(frontAppId(value)).toBe(FRONT_NONE)
     })
