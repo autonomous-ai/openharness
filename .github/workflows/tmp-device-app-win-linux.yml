@@ -5,7 +5,12 @@ name: tmp device-app win-linux (temporary)
 on:
   push:
     branches: [feat/device-app-win-linux, feat/device-app-win-linux-t*]
-    paths: ['device-app/**', '.github/workflows/tmp-device-app-win-linux.yml']
+    paths:
+      - 'device-app/**'
+      - '.github/workflows/tmp-device-app-win-linux.yml'
+      # What desktop-device-app-e2e runs.
+      - 'desktop/lib/devices/**'
+      - 'desktop/integration_test/device_app_install_windows_linux_native_test.dart'
 
 permissions:
   contents: read
@@ -248,5 +253,155 @@ jobs:
         with:
           name: device-app-update-e2e-${{ matrix.runner }}
           path: ${{ runner.temp }}/device-app-update
+          retention-days: 3
+          if-no-files-found: ignore
+
+  # Desktop installs, finds and starts this run's debug Device package, and on Linux lists it in the app list:
+  # device_app_install_windows_linux_native_test.dart serves it under a loopback stand-in manifest with its real sha256
+  # and size. No account, no backend, no production manifest. The Desktop under test is the unsigned debug runner
+  # `flutter test` builds, so the Windows installer is held to its sha256 alone (Task 41).
+  desktop-device-app-e2e:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [windows-latest, windows-11-arm, ubuntu-22.04, ubuntu-22.04-arm]
+    runs-on: ${{ matrix.runner }}
+    # A mirror outage, a cold Tauri CLI and app compile, the package's bundle, then Desktop's debug build and the run,
+    # whose Windows install may take its 5 minutes.
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      # Desktop's Linux build packages as release-desktop.yml installs them, then Tauri's and `file` for the AppImage
+      # bundler, then the run's: a display (xauth for xvfb-run), a session bus, FUSE for the AppImage.
+      - if: runner.os == 'Linux'
+        run: >-
+          sudo bash scripts/apt-install.sh clang cmake ninja-build pkg-config libgtk-3-dev libwebkit2gtk-4.1-dev
+          liblzma-dev libstdc++-12-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev file xvfb xauth dbus-x11
+          libfuse2
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.CLI_NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: device-app/ui/package-lock.json
+      # The bundle's beforeBuildCommand builds the window with these.
+      - name: UI packages
+        working-directory: device-app/ui
+        run: npm ci --no-audit --no-fund
+      - uses: dtolnay/rust-toolchain@stable
+      # Restored, never saved, as linux-e2e's.
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: device-app/src-tauri
+          shared-key: device-app-tmp-e2e-${{ matrix.runner }}
+          save-if: false
+      - name: Tauri CLI
+        run: cargo install tauri-cli --version 2.12.4 --locked
+      # Built as windows-e2e and linux-e2e build it: the installer on Windows, the AppImage on Linux.
+      - name: Device package
+        working-directory: device-app/src-tauri
+        shell: bash
+        env:
+          BUNDLE: ${{ runner.os == 'Windows' && 'nsis' || 'appimage' }}
+        run: cargo tauri build --ci --debug --bundles "$BUNDLE" -- --locked
+      - name: Name the package
+        id: package
+        shell: bash
+        run: |
+          shopt -s nullglob
+          bundle=device-app/src-tauri/target/debug/bundle
+          found=("$bundle"/nsis/*-setup.exe "$bundle"/appimage/*.AppImage)
+          if [[ ${#found[@]} -ne 1 ]]; then echo "one package, not ${#found[@]}"; exit 1; fi
+          path="$PWD/${found[0]}"
+          if [[ "$RUNNER_OS" == Windows ]]; then path="$(cygpath -w "$path")"; fi
+          echo "path=$path" >> "$GITHUB_OUTPUT"
+      # windows-desktop.yml's pin, read rather than copied.
+      - name: Flutter version
+        id: flutter
+        shell: bash
+        run: |
+          version="$(sed -n "s/^  FLUTTER_VERSION: '\([^']*\)'.*/\1/p" .github/workflows/windows-desktop.yml)"
+          test -n "$version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - if: runner.os == 'Linux' && runner.arch == 'X64'
+        uses: ./.github/actions/desktop-flutter
+        with:
+          version: ${{ steps.flutter.outputs.version }}
+      - if: runner.os == 'Linux' && runner.arch == 'ARM64'
+        uses: ./.github/actions/desktop-flutter-arm64
+        with:
+          version: ${{ steps.flutter.outputs.version }}
+      # A clone of the pinned tag, as windows-desktop.yml installs it: Flutter's own bootstrap then fetches the Dart SDK
+      # for the runner's architecture, arm64 included.
+      - name: Flutter
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          FLUTTER_VERSION: ${{ steps.flutter.outputs.version }}
+        run: |
+          git clone --depth 1 --branch "$env:FLUTTER_VERSION" https://github.com/flutter/flutter.git "$env:RUNNER_TEMP\flutter"
+          if ($LASTEXITCODE -ne 0) { throw "git clone failed ($LASTEXITCODE)" }
+          "$env:RUNNER_TEMP\flutter\bin" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+      - name: Flutter packages
+        if: runner.os == 'Windows'
+        shell: pwsh
+        working-directory: desktop
+        run: |
+          flutter config --no-analytics
+          flutter pub get
+          if ($LASTEXITCODE -ne 0) { throw "flutter pub get failed ($LASTEXITCODE)" }
+      # The Device app's state says the CLI was seen and sign-in and the login item asked, so it installs nothing and
+      # opens no window: %APPDATA%\ai.autonomous.harness.device\state.json, as windows.ps1 seeds it.
+      - name: End to end
+        if: runner.os == 'Windows'
+        shell: pwsh
+        working-directory: desktop
+        env:
+          FLUTTER_TEST: '1'
+          HARNESS_DEVICE_TEST_PACKAGE: ${{ steps.package.outputs.path }}
+        run: |
+          $data = Join-Path ([Environment]::GetFolderPath('ApplicationData')) 'ai.autonomous.harness.device'
+          New-Item -ItemType Directory -Force -Path $data | Out-Null
+          [IO.File]::WriteAllText((Join-Path $data 'state.json'), '{"version":1,"cliSeen":true,"askedSignIn":true,"loginItem":true}')
+          flutter test -d windows --no-pub integration_test/device_app_install_windows_linux_native_test.dart
+          if ($LASTEXITCODE -ne 0) { throw "the end-to-end test failed ($LASTEXITCODE)" }
+      # The same state under a scratch HOME and XDG folders ($XDG_DATA_HOME/ai.autonomous.harness.device, as linux.sh
+      # seeds it), on a display and session bus of its own. Flutter keeps the runner's pub cache.
+      - name: End to end
+        if: runner.os == 'Linux'
+        working-directory: desktop
+        env:
+          FLUTTER_TEST: '1'
+          HARNESS_DEVICE_TEST_PACKAGE: ${{ steps.package.outputs.path }}
+        run: |
+          export PUB_CACHE="${PUB_CACHE:-$HOME/.pub-cache}"
+          scratch="$RUNNER_TEMP/device-app-home"
+          export HOME="$scratch/home" XDG_CONFIG_HOME="$scratch/config" XDG_DATA_HOME="$scratch/data" \
+            XDG_CACHE_HOME="$scratch/cache" XDG_STATE_HOME="$scratch/state" XDG_RUNTIME_DIR="$scratch/runtime"
+          mkdir -p "$HOME" "$XDG_CONFIG_HOME" "$XDG_DATA_HOME/ai.autonomous.harness.device" "$XDG_CACHE_HOME" \
+            "$XDG_STATE_HOME" "$XDG_RUNTIME_DIR"
+          chmod 0700 "$XDG_RUNTIME_DIR"
+          printf '{"version":1,"cliSeen":true,"askedSignIn":true,"loginItem":true}\n' \
+            >"$XDG_DATA_HOME/ai.autonomous.harness.device/state.json"
+          xvfb-run -a -s '-screen 0 1280x800x24' dbus-run-session -- \
+            flutter test -d linux --no-pub integration_test/device_app_install_windows_linux_native_test.dart
+      # The Device app's log, for a failure: its local data folder on Windows, the scratch XDG_DATA_HOME on Linux.
+      - name: Device app's log
+        if: failure()
+        shell: bash
+        run: |
+          if [[ "$RUNNER_OS" == Windows ]]; then
+            logs="$(cygpath -u "$LOCALAPPDATA")/ai.autonomous.harness.device/logs"
+          else
+            logs="$RUNNER_TEMP/device-app-home/data/ai.autonomous.harness.device/logs"
+          fi
+          mkdir -p "$RUNNER_TEMP/device-app-log"
+          if [[ -d "$logs" ]]; then cp -R "$logs/." "$RUNNER_TEMP/device-app-log/"; fi
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-device-app-e2e-${{ matrix.runner }}
+          path: ${{ runner.temp }}/device-app-log
           retention-days: 3
           if-no-files-found: ignore
