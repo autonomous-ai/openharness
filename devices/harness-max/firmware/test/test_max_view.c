@@ -127,6 +127,7 @@ static void check_hits(void)
             continue;
         for (int j = 0; j < i; j++) {
             const max_hit_t *o = &max_m.hits[j];
+            if (o->kind == MAX_HIT_RELAX) continue;   // TEMP: Relax lies in Apps' Close column, ahead of it
             if (o->kind != MAX_HIT_TOAST && o->kind != MAX_HIT_DONE_NOTE) CHECK(apart(box_of(h), box_of(o)));
         }
     }
@@ -620,13 +621,13 @@ static void test_apps(void)
     ring(NULL);
     show(MAX_VIEW_APPS, NULL);
     render_at(T0);
-    // TEMP (the owner's call of 20 Nov, to try Ambient): Relax at the right end, the cards clear of it.
-    const int last = max_m.hit_count - 1;
-    CHECK(max_m.hits[0].kind == MAX_HIT_CLOSE && hits_of(MAX_HIT_APP) == max_m.hit_count - 2);
-    CHECK(max_m.hits[last].kind == MAX_HIT_RELAX && word("Relax"));
-    CHECK(max_m.hits[last].x + max_m.hits[last].w == HT_WIDTH && max_m.hits[last].h == HT_HEIGHT);
-    CHECK(max_m.hits[last - 1].x + max_m.hits[last - 1].w <= max_m.hits[last].x);
-    for (int i = 1; i < last; i++) CHECK(max_m.hits[i].arg == i - 1);
+    // TEMP (the owner's call of 20 Nov, to try Ambient): Relax, unseen, right under "APPS" in Close's column and ahead
+    // of it; the cards as before.
+    const max_hit_t *relax = &max_m.hits[0];
+    CHECK(relax->kind == MAX_HIT_RELAX && !word("Relax"));
+    CHECK(relax->x + relax->w <= DX(210) && relax->y > HT_HEIGHT / 2 + DY(13) && relax->h == MAX_BUTTON_H);
+    CHECK(max_m.hits[1].kind == MAX_HIT_CLOSE && hits_of(MAX_HIT_APP) == max_m.hit_count - 2);
+    for (int i = 2; i < max_m.hit_count; i++) CHECK(max_m.hits[i].arg == i - 2);
     CHECK(word("Shown") && word("3 agents") && word("1 agent") && word("No agents") && word("Harness"));
     max_box_t boxes[PRO_APPS_MAX + 3] = {box_of(&max_m.hits[0])};
     for (int i = 1; i < max_m.hit_count; i++) {
@@ -640,10 +641,10 @@ static void test_apps(void)
     // Few apps: "+ New" last while the computer offers New Harness, else none.
     max_ui_apps("orca", APPS, 2, T0);
     render_at(T0);
-    CHECK(HITS_ARE(MAX_HIT_CLOSE, MAX_HIT_APP, MAX_HIT_APP, MAX_HIT_NEW, MAX_HIT_RELAX) && word("New") && word("+"));
+    CHECK(HITS_ARE(MAX_HIT_RELAX, MAX_HIT_CLOSE, MAX_HIT_APP, MAX_HIT_APP, MAX_HIT_NEW) && word("New") && word("+"));
     max_ui_offers(false);
     render_at(T0);
-    CHECK(HITS_ARE(MAX_HIT_CLOSE, MAX_HIT_APP, MAX_HIT_APP, MAX_HIT_RELAX) && !word("New"));
+    CHECK(HITS_ARE(MAX_HIT_RELAX, MAX_HIT_CLOSE, MAX_HIT_APP, MAX_HIT_APP) && !word("New"));
 }
 
 static void test_ambient(void)

@@ -410,7 +410,7 @@ static void test_apps(void)
     CHECK(tap_on(add).kind == MAX_ACT_NONE);   // one form at a time
     max_form_dismiss();
     CHECK(tap_on(close).kind == MAX_ACT_NONE && max_m.view == MAX_VIEW_OVERVIEW);
-    // TEMP (the owner's call of 20 Nov, to try Ambient): Relax opens Ambient, only from Apps.
+    // TEMP (the owner's call of 20 Nov, to try Ambient): Relax (unseen under "APPS") opens Ambient, only from Apps.
     max_show(MAX_VIEW_APPS);
     drawn_page(MAX_VIEW_APPS);
     const max_hit_t *relax = plant(MAX_HIT_RELAX, 0);
