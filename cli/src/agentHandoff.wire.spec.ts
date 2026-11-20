@@ -20,6 +20,20 @@ import { createHandoffDependencies } from './core/handoffDependencies.js'
 import { env } from './config/env.js'
 import type { LiveEvent } from './lib/normalize.js'
 import type { RegisteredSession } from './lib/registry.js'
+import { RUN_CAP } from './lib/sessionSearch/sessionTurns.js'
+
+/** The longest whitespace-free run the shared denylist was handed: its work, which is cubic in that run. */
+const denylist = vi.hoisted(() => ({ longestRun: 0 }))
+vi.mock('./lib/redactSecrets.js', async (importOriginal) => {
+  const real = await importOriginal<typeof import('./lib/redactSecrets.js')>()
+  return {
+    ...real,
+    redactSecretsInText: (input: string) => {
+      for (const run of input.match(/\S+/g) ?? []) denylist.longestRun = Math.max(denylist.longestRun, run.length)
+      return real.redactSecretsInText(input)
+    },
+  }
+})
 
 type Frame = { type: string; payload: Record<string, unknown> }
 
@@ -209,17 +223,13 @@ describe('agent_handoff_prepare, socket + real provider: hostile text (R2S1)', (
     git('commit', '-q', '-m', `?token=hunter2secretvalue${run}`)
     // The production deadline (5 s): a TIMEOUT here means the redaction ate it.
     wire([session({ transcriptPath: talk(`please ${run}`, `done ${run}`) })], { lastFullText: () => `done ${run}` })
-    let worst = 0
-    let last = performance.now()
-    const probe = setInterval(() => { const now = performance.now(); worst = Math.max(worst, now - last); last = now }, 5)
-    const started = performance.now()
-    let r: Record<string, unknown>
-    try {
-      ask('r1', 'agent-1')
-      r = await reply('r1')
-    } finally { clearInterval(probe) }
-    expect(performance.now() - started).toBeLessThan(5_000)
-    expect(worst).toBeLessThan(1_000)
+    // The thread is measured by the work the redaction is handed, not by wall time: a slow disk flush of the
+    // publication stalls a loaded runner's loop as long, and has nothing to do with the redaction.
+    denylist.longestRun = 0
+    ask('r1', 'agent-1')
+    const r = await reply('r1')
+    expect(denylist.longestRun).toBeGreaterThan(0)
+    expect(denylist.longestRun).toBeLessThanOrEqual(RUN_CAP)
     expect(r).toEqual({ requestId: 'r1', agentId: 'agent-1', file: `.harness/handoff/agent-1-${CHANGE}.md`, gitRepo: true, cwd: ws, degraded: [] })
     const md = readFileSync(join(ws, '.harness', 'handoff', `agent-1-${CHANGE}.md`), 'utf8')
     const transcriptFile = readFileSync(join(ws, '.harness', 'handoff', `agent-1-${CHANGE}.transcript.md`), 'utf8')
