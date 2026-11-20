@@ -17,11 +17,12 @@ use windows_sys::Win32::System::Registry::{
 /// The Run value's name: the app's installed name, which the uninstaller removes too.
 pub const RUN_VALUE: &str = "Harness Device";
 
-/// What Windows says of the app's login item. Startup Apps keeps its switch in a value of its own: a first byte other
-/// than 02 is off, also with the Run value gone, since a value written again would stay off.
+/// What Windows says of the app's login item. Startup Apps keeps its switch in a value of its own: an odd first byte
+/// (03, 07) is off and an even one (02, 06) on. Off holds with the Run value gone too, since a value written again
+/// would stay off.
 pub fn status(run: Option<&str>, approved: Option<&[u8]>) -> Status {
     match (run, approved) {
-        (_, Some([first, ..])) if *first != 0x02 => Status::RequiresApproval,
+        (_, Some([first, ..])) if first & 1 == 1 => Status::RequiresApproval,
         (Some(_), _) => Status::Enabled,
         (None, _) => Status::NotRegistered,
     }
