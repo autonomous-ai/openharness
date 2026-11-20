@@ -757,6 +757,53 @@ Dell: pending.
 
 over 50 ms: yes
 
+## Task 36
+
+**With its own parent chain (`ps --json --ancestors`), the climb adds 41-47 ms at the median, against Task 33's ~58
+ms. Most of a read is the pty host's start: one chain (9 rows) takes 40-41 ms, the whole table (155-160 rows) 43-44
+ms.**
+
+Run 2026-11-20 on the same VM (Windows 11 ARM64, build 26200, Node v24.20.0), as the test user over SSH (session 0),
+the way Task 33 ran.
+- Branch at 6d55274258: its `notify.mjs`, and `harness-pty.exe` built from it with `cargo build --release --bins`
+  (it takes `--ancestors`), named by `HARNESS_PTY_BIN` for both files.
+- Base: `cli/hook/notify.mjs` of c68b71455e, beside the branch's file.
+- Task 23's daemon (`startWindowsDaemon`, from the run's bundle, signed out, sealed in its throwaway root), started
+  by a throwaway timing spec run through vitest; the spec, its config and the base's copy were never committed and
+  were removed afterwards. The hooks posted to that daemon with its `PORT` and data folder.
+- Each time is from the start of the process to its exit, in the timing process. Each figure is from 20 runs; base
+  and branch took turns after one unmeasured run of each. Median: the mean of the 10th and 11th; p95: the 19th.
+- Process count: 155-160 (`harness-pty ps --json` rows, at the start and end of each case).
+- The panel cases: VS Code 1.147.0 started in the test user's console session (`desktop-e2e.sh run start-app.ps1`,
+  `--disable-extensions --new-window`) and closed afterwards; `VSCODE_PID` its main `Code.exe`, `VSCODE_IPC_HOOK` its
+  `\\.\pipe\<hex>-1.147.0-main-sock`, `CLAUDE_CODE_ENTRYPOINT=claude-vscode`. After the misses, `hook-editors.json`
+  held VS Code's bundle id, so the hits used a kept answer.
+- Every hook exited 0. Two runs, back to back.
+
+| ms, median / p95 | Run 1 | Run 2 |
+| --- | --- | --- |
+| Codex hook, no shell (`node notify.mjs … --engine codex`), base | 175 / 214 | 179 / 208 |
+| Codex hook, no shell, branch | 222 / 273 | 220 / 260 |
+| Codex hook through PowerShell (the plan's form), base | 1415 / 1623 | 1380 / 1491 |
+| Codex hook through PowerShell, branch | 1455 / 1540 | 1435 / 1533 |
+| `harness-pty ps --json` alone | 44 / 49 | 43 / 44 |
+| `harness-pty ps --json --ancestors <pid>` alone (a live 9-step chain) | 41 / 46 | 40 / 42 |
+| Panel hook (`--engine claude`), base | 180 / 219 | 177 / 196 |
+| Panel hook, branch, miss (`hook-editors.json` deleted) | 227 / 271 | 225 / 243 |
+| Panel hook, base (beside the hits) | 175 / 201 | 177 / 192 |
+| Panel hook, branch, hit (`hook-editors.json` in place) | 175 / 215 | 184 / 203 |
+| Codex hook with `VSCODE_PID`, `hook-editors.json` deleted (two reads together), base | 187 / 214 | 187 / 213 |
+| Codex hook with `VSCODE_PID`, `hook-editors.json` deleted, branch | 253 / 317 | 252 / 277 |
+
+Added at the median, branch minus base:
+- the climb, no shell: +47 and +41 ms;
+- the plan's PowerShell form: +40 and +55 ms, inside PowerShell's own spread, as in Task 33;
+- the panel hint: +47 and +48 ms on a miss, 0 and +7 ms on a hit;
+- a Codex hook with `VSCODE_PID` on a miss, the climb's read and the hint's together: +66 and +65 ms, about 20 ms over
+  one read.
+
+The climb now adds 41-47 ms at the median, 11-17 ms less than Task 33's ~58 ms.
+
 ## Task 37
 
 **Nothing here contradicts Task 27 or Task 30, so Task 38 does not run.** Every window belongs to the program
