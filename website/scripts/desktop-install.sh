@@ -40,6 +40,10 @@ if [ "$PLATFORM" = "Darwin" ]; then
   DESTINATION="$APP_DIR/$APP_NAME"
 
   cleanup() {
+    # Stopped between the two moves below, whatever stopped it: the previous app goes back.
+    if [ -n "${BACKUP:-}" ] && [ -e "$BACKUP" ] && [ ! -e "$DESTINATION" ]; then
+      mv "$BACKUP" "$DESTINATION"
+    fi
     if [ -n "${STAGING_DIR:-}" ] && [ -d "$STAGING_DIR" ]; then
       rm -rf "$STAGING_DIR"
     fi
@@ -51,7 +55,11 @@ if [ "$PLATFORM" = "Darwin" ]; then
 
   mkdir -p "$APP_DIR"
   STAGING_DIR="$(mktemp -d "$APP_DIR/.harness-install.XXXXXX")" || fail "could not create an install staging directory in $APP_DIR"
-  trap cleanup EXIT HUP INT TERM
+  trap cleanup EXIT
+  # A trap that does not exit lets the script run on: Ctrl-C, a closed terminal or a kill stops it here.
+  trap 'exit 129' HUP
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
 
   METADATA_FILE="$STAGING_DIR/metadata.json"
   ARCHIVE_FILE="$STAGING_DIR/Harness-macos.zip"
@@ -122,18 +130,14 @@ if [ "$PLATFORM" = "Darwin" ]; then
   lipo -archs "$EXECUTABLE" | tr ' ' '\n' | grep -Fx "$MACHINE_ARCH" >/dev/null \
     || fail "Harness $VERSION does not support this Mac architecture ($MACHINE_ARCH)"
 
-  # The staging directory lives in APP_DIR, so both moves remain on the same filesystem. If the
-  # second move fails, restore the previous app before reporting the failure.
+  # The staging directory lives in APP_DIR, so both moves remain on the same filesystem. A folder
+  # cannot replace another in one move: if the second move fails, or the script stops between the
+  # two, cleanup restores the previous app.
   BACKUP="$STAGING_DIR/previous-$APP_NAME"
   if [ -e "$DESTINATION" ]; then
     mv "$DESTINATION" "$BACKUP" || fail "could not prepare the existing Harness app for replacement"
   fi
-  if ! mv "$CANDIDATE" "$DESTINATION"; then
-    if [ -e "$BACKUP" ]; then
-      mv "$BACKUP" "$DESTINATION" || true
-    fi
-    fail "could not install Harness $VERSION"
-  fi
+  mv "$CANDIDATE" "$DESTINATION" || fail "could not install Harness $VERSION"
 
   printf '%s\n' "Harness $VERSION installed at $DESTINATION"
   open "$DESTINATION"
@@ -172,7 +176,11 @@ done
 
 mkdir -p "$APP_DIR"
 STAGING_DIR="$(mktemp -d "$APP_DIR/.harness-install.XXXXXX")" || fail "could not create an install staging directory in $APP_DIR"
-trap cleanup EXIT HUP INT TERM
+trap cleanup EXIT
+# A trap that does not exit lets the script run on: Ctrl-C, a closed terminal or a kill stops it here.
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 METADATA_FILE="$STAGING_DIR/metadata.json"
 CANDIDATE="$STAGING_DIR/Harness-linux-$RELEASE_ARCH.AppImage"
@@ -220,6 +228,8 @@ esac
 if pgrep -f "$DESTINATION" >/dev/null 2>&1; then
   fail "Harness is running from $DESTINATION. Quit it, then run this installer again."
 fi
+# One move puts the file over a file; over a folder it would put it inside.
+[ ! -d "$DESTINATION" ] || fail "$DESTINATION is a folder. Move it away, then run this installer again."
 
 printf '%s\n' "Downloading Harness ${VERSION}…"
 curl -fL --retry 3 --connect-timeout 15 "$ASSET_URL" -o "$CANDIDATE" \
@@ -237,18 +247,9 @@ ACTUAL_SHA256="$(sha256sum "$CANDIDATE" | awk '{print $1}')"
 
 chmod +x "$CANDIDATE"
 
-# The staging directory lives in APP_DIR, so both moves remain on the same filesystem. If the
-# second move fails, restore the previous install before reporting the failure.
-BACKUP="$STAGING_DIR/previous-Harness.AppImage"
-if [ -e "$DESTINATION" ]; then
-  mv "$DESTINATION" "$BACKUP" || fail "could not prepare the existing Harness install for replacement"
-fi
-if ! mv "$CANDIDATE" "$DESTINATION"; then
-  if [ -e "$BACKUP" ]; then
-    mv "$BACKUP" "$DESTINATION" || true
-  fi
-  fail "could not install Harness $VERSION"
-fi
+# The staging directory lives in APP_DIR, on the same filesystem: one rename replaces the previous
+# install, so the place always holds one AppImage, the old or the new, whenever the script stops.
+mv -f "$CANDIDATE" "$DESTINATION" || fail "could not install Harness $VERSION"
 
 # Best-effort desktop integration — a missing icon/launcher entry is not worth failing the install
 # over, so none of this calls fail(). The AppImage carries its own icon and .desktop entry inside it,

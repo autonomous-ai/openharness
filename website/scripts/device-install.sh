@@ -53,7 +53,11 @@ done
 
 mkdir -p "$APP_DIR"
 STAGING_DIR="$(mktemp -d "$APP_DIR/.harness-device-install.XXXXXX")" || fail "could not create an install staging directory in $APP_DIR"
-trap cleanup EXIT HUP INT TERM
+trap cleanup EXIT
+# A trap that does not exit lets the script run on: Ctrl-C, a closed terminal or a kill stops it here.
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 METADATA_FILE="$STAGING_DIR/metadata.json"
 CANDIDATE="$STAGING_DIR/Harness-Device-linux-$RELEASE_ARCH.AppImage"
@@ -98,6 +102,8 @@ esac
 if pgrep -f "$DESTINATION" >/dev/null 2>&1; then
   fail "Harness Device is running from $DESTINATION. Quit it, then run this installer again."
 fi
+# One move puts the file over a file; over a folder it would put it inside.
+[ ! -d "$DESTINATION" ] || fail "$DESTINATION is a folder. Move it away, then run this installer again."
 
 printf '%s\n' "Downloading Harness Device ${VERSION}…"
 curl -fL --retry 3 --connect-timeout 15 "$ASSET_URL" -o "$CANDIDATE" \
@@ -114,18 +120,9 @@ ACTUAL_SHA256="$(sha256sum < "$CANDIDATE")"
 
 chmod 755 "$CANDIDATE"
 
-# The staging directory lives in APP_DIR, so both moves remain on the same filesystem. If the second move fails, restore
-# the previous install before reporting the failure.
-BACKUP="$STAGING_DIR/previous-Harness-Device.AppImage"
-if [ -e "$DESTINATION" ]; then
-  mv "$DESTINATION" "$BACKUP" || fail "could not prepare the existing Harness Device install for replacement"
-fi
-if ! mv "$CANDIDATE" "$DESTINATION"; then
-  if [ -e "$BACKUP" ]; then
-    mv "$BACKUP" "$DESTINATION" || true
-  fi
-  fail "could not install Harness Device $VERSION"
-fi
+# The staging directory lives in APP_DIR, on the same filesystem: one rename replaces the previous install, so the
+# place always holds one AppImage, the old or the new, whenever the script stops.
+mv -f "$CANDIDATE" "$DESTINATION" || fail "could not install Harness Device $VERSION"
 
 # The app-list entry and its icon, by the rule every writer follows (tests/fixtures/app-list-entry-vectors.json), and
 # only when there is no entry: the app started below applies the whole rule on its first run, so this script reads no
