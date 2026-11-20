@@ -25,6 +25,13 @@ python=/usr/bin/python3
 WAIT=60
 UPDATE_WAIT=300
 PORT=8765
+# The system's folders, where the app looks for a CLI after the scratch HOME's.
+APP_PATH=/usr/local/bin:/usr/bin:/bin
+
+stop_before() {
+  echo "linux.sh: $*" >&2
+  exit 2
+}
 
 update=""
 if [[ $# -eq 2 && "$1" == --update && -d "$2" ]]; then
@@ -39,6 +46,12 @@ fi
   echo "usage: linux.sh <AppImage> | linux.sh --update OUT (update-pair.sh's, for this arch)" >&2
   exit 2
 }
+# The app runs a harness it finds there whenever it runs without the fake, as a release build (the update's) does: that
+# harness's daemon would outlive the run.
+[[ -z "$(PATH="$APP_PATH" command -v harness)" ]] || stop_before "a harness is on $APP_PATH: the app would find it"
+if [[ -n "$update" ]] && timeout 5 bash -c ": </dev/tcp/127.0.0.1/$PORT" 2>/dev/null; then
+  stop_before "127.0.0.1:$PORT is taken"
+fi
 
 work="$(mktemp -d)"
 home="$work/home"
@@ -49,7 +62,7 @@ fake="$work/fake"
 data="$data_home/ai.autonomous.harness.device"
 entry="$config/autostart/harnessd.desktop"
 mkdir -p "$home/My Apps" "$home/Desktop" "$config" "$data_home" "$runtime" "$fake" "$work/bin" "$work/procs" \
-  "$work/apps" "$work/cache" "$work/state"
+  "$work/apps" "$work/cache" "$work/state" "$work/tmp"
 chmod 700 "$runtime"
 # A folder with a space, as a person's may be: the entry's Exec= must quote it.
 appimage="$home/My Apps/Harness-Device.AppImage"
@@ -64,9 +77,26 @@ pids=()
 app_pid=""
 mark=0
 
+gone() { [[ ! -e "/proc/$1" ]] || [[ "$(sed 's/.*) //' "/proc/$1/stat" | cut -d' ' -f1)" == Z ]]; }
+group_gone() {
+  local pid
+  for pid in $(pgrep -g "$1"); do gone "$pid" || return 1; done
+}
+# Every process whose environment's HOME is the scratch one, which only this run's have.
+with_scratch_home() {
+  local proc
+  for proc in /proc/[0-9]*; do
+    ! grep -sqzFx -- "HOME=$home" "$proc/environ" || echo "${proc#/proc/}"
+  done
+}
+
 cleanup() {
   set +e
-  [[ -z "$app_pid" ]] || kill -KILL -- "-$app_pid" 2>/dev/null
+  if [[ -n "$app_pid" ]]; then
+    # TERM first: a KILL leaves the AppImage runtime's FUSE mount behind.
+    kill -TERM -- "-$app_pid" 2>/dev/null
+    WAIT=10 waits group_gone "$app_pid" || kill -KILL -- "-$app_pid" 2>/dev/null
+  fi
   for pid in "${pids[@]}"; do kill "$pid" 2>/dev/null; done
   # The fake CLI's runs, while they are still the fake's.
   if [[ -f "$fake/pids.log" ]]; then
@@ -74,6 +104,12 @@ cleanup() {
       grep -qs fake-harness "/proc/$pid/cmdline" && kill "$pid" 2>/dev/null
     done <"$fake/pids.log"
   fi
+  # What runs with the scratch HOME outside the app's group: the daemon a real `harness start` leaves, its tmux, a
+  # terminal the app opened.
+  for pid in $(with_scratch_home); do
+    kill "$pid" 2>/dev/null
+    WAIT=10 waits gone "$pid" || kill -KILL "$pid" 2>/dev/null
+  done
   wait 2>/dev/null
   rm -rf "$work"
 }
@@ -109,8 +145,8 @@ waits() {
 started() { pids+=("$!"); }
 
 # The app's own environment: nothing of this machine's but its system folders.
-base=(HOME="$home" USER="$(id -un)" LOGNAME="$(id -un)" SHELL=/bin/sh LANG=C.UTF-8
-  PATH="$work/bin:/usr/local/bin:/usr/bin:/bin"
+base=(HOME="$home" USER="$(id -un)" LOGNAME="$(id -un)" SHELL=/bin/sh LANG=C.UTF-8 TMPDIR="$work/tmp"
+  PATH="$work/bin:$APP_PATH"
   XDG_CONFIG_HOME="$config" XDG_DATA_HOME="$data_home" XDG_CACHE_HOME="$work/cache" XDG_STATE_HOME="$work/state"
   XDG_RUNTIME_DIR="$runtime" DBUS_SESSION_BUS_ADDRESS="$DBUS_SESSION_BUS_ADDRESS" NO_AT_BRIDGE=1)
 [[ -z "${APPIMAGE_EXTRACT_AND_RUN:-}" ]] || base+=(APPIMAGE_EXTRACT_AND_RUN="$APPIMAGE_EXTRACT_AND_RUN")
@@ -169,7 +205,8 @@ script 'hardware_watch_--json' '{"attached":false}' '@record'
 script 'auth_status_--json' '{"loggedIn":false}'
 script '--version' '0.6.99'
 script 'logs_export_--json' "{\"path\":\"$home/Desktop/harness-logs-20261120-1200.zip\"}"
-script 'login_--json' '{"type":"authorize_url","url":"https://example.com/e2e?state=S"}' '@stdin'
+# .invalid never resolves: whatever opens the page reaches no one.
+script 'login_--json' '{"type":"authorize_url","url":"https://example.invalid/e2e?state=S"}' '@stdin'
 
 # A GTK program, as a browser or the desktop app is: what it prints, then `ran` if it got that far.
 cat >"$work/gtk-probe.py" <<'PY'
@@ -234,6 +271,18 @@ logged() { run_log | grep -Fxq -- "$1"; }
 times_logged() { run_log | grep -Fxc -- "$1" || true; }
 fronts() { grep -c '^{"front":' "$fake/stdin.log" 2>/dev/null || true; }
 told() { grep -Fxqs -- "{\"front\":\"$1\"}" "$fake/stdin.log"; }
+# The watch was told more than `$1` apps, the last `$2`.
+told_since() {
+  [[ "$(fronts)" -gt "$1" && "$(grep '^{"front":' "$fake/stdin.log" | tail -n 1)" == "{\"front\":\"$2\"}" ]]
+}
+# Runs the command after `$1`, which brings that app to the front, and waits until a new line tells the watch so.
+brought() {
+  local name="$1" since
+  shift
+  since="$(fronts)"
+  "$@"
+  waits told_since "$since" "$name"
+}
 
 MENU="menu: Plug in your device | Sign in… | Export logs | About | Quit"
 
@@ -245,8 +294,6 @@ launch() {
   setsid env -i "${base[@]}" "$@" "$appimage" >>"$work/app.out" 2>&1 &
   app_pid=$!
 }
-
-gone() { [[ ! -e "/proc/$1" ]] || [[ "$(sed 's/.*) //' "/proc/$1/stat" | cut -d' ' -f1)" == Z ]]; }
 
 fakes_gone() {
   local pid
@@ -278,7 +325,8 @@ own_exec="Exec=/bin/sh -c \"[ -x '$appimage' ] && exec '$appimage'; exec '$home/
 # --- The update: 0.0.1 from update-pair.sh, with no CLI and nothing in its way, finds 0.0.2 at 127.0.0.1:8765 and
 # becomes it
 
-checked() { [[ "$(grep -c '"GET /metadata.json ' "$work/server.log")" -ge "$1" ]]; }
+served() { grep -c '"GET /metadata.json ' "$work/server.log" || true; }
+checked() { [[ "$(served)" -ge "$1" ]]; }
 # Tauri starts the new AppImage, which stays in the session's process group, then the old one exits.
 relaunched() {
   local pid
@@ -293,7 +341,8 @@ if [[ -n "$update" ]]; then
   save_state true true
   "$python" -m http.server "$PORT" --bind 127.0.0.1 --directory "$update" >"$work/server.log" 2>&1 &
   started
-  waits curl -fs -o /dev/null "http://127.0.0.1:$PORT/0.0.1/" || fail "the manifest is served on 127.0.0.1:$PORT"
+  waits curl -fs --max-time 5 -o /dev/null "http://127.0.0.1:$PORT/0.0.1/" \
+    || fail "the manifest is served on 127.0.0.1:$PORT"
 
   from=$SECONDS
   launch XDG_SESSION_TYPE=x11
@@ -305,15 +354,18 @@ if [[ -n "$update" ]]; then
   ok "the AppImage is 0.0.2's, byte for byte"
 
   waits gone "$app_pid" || fail "0.0.1 ends for the relaunch"
+  # 0.0.1 asks again a minute after a check or download that failed: only a request from here on is the relaunched
+  # app's.
+  asked="$(served)"
   waits relaunched || fail "the app runs again after the update"
-  # 0.0.1 checked once: a second check is the relaunched app's.
-  WAIT=$((UPDATE_WAIT - SECONDS + from)) waits checked 2 || fail "the relaunched app checks the manifest"
+  WAIT=$((UPDATE_WAIT - SECONDS + from)) waits checked $((asked + 1)) || fail "the relaunched app checks the manifest"
   logged "instance: already running" && fail "the relaunched app takes the lock 0.0.1 let go"
   ok "the app runs again, 0.0.2, past its own lock, and checks the manifest"
 
-  # A check starts only once the one before it was answered, so the third request shows the relaunched app's first
-  # check, the second, was answered: any update it found is logged by then.
-  WAIT=$((UPDATE_WAIT - SECONDS + from)) waits checked 3 || fail "the relaunched app checks again, a minute later"
+  # A check starts only once the one before it was answered, so the relaunched app's second request shows its first was
+  # answered: any update it found is logged by then.
+  WAIT=$((UPDATE_WAIT - SECONDS + from)) waits checked $((asked + 2)) \
+    || fail "the relaunched app checks again, a minute later"
   [[ "$(times_logged "update: found 0.0.2")" -eq 1 ]] || fail "0.0.2 finds no update: one update: found in the log"
   ok "0.0.2 checks the manifest and finds no update"
   echo "0 FAILED"
@@ -348,19 +400,27 @@ waits xdotool search --name '^e2e-code$' >/dev/null || fail "an xterm copied as 
 xterm_window="$(xdotool search --name '^e2e-xterm$' | head -n 1)"
 code_window="$(xdotool search --name '^e2e-code$' | head -n 1)"
 activate() { timeout 10 xdotool windowactivate --sync "$1" || fail "xdotool brings a window to the front"; }
-activate "$xterm_window"
-waits told xterm || fail "X11: the watch is told xterm when it is in front"
+# openbox brings each window to the front as it maps, so the watch may know both already: the moves count from code.
 activate "$code_window"
-waits told code || fail "X11: the watch is told code when it is in front"
-ok "X11: the watch is told xterm, then code, as each comes to the front"
+waits told_since 0 code || fail "X11: the watch is told code, in front"
+brought xterm activate "$xterm_window" || fail "X11: the watch is told xterm when it comes to the front"
+brought code activate "$code_window" || fail "X11: the watch is told code when it comes to the front"
+brought xterm activate "$xterm_window" || fail "X11: the watch is told xterm when it comes back to the front"
+ok "X11: the watch is told xterm, code, then xterm again, each as it comes to the front"
 
 click "Export logs"
 waits grep -Fxqs "$home/Desktop" "$work/xdg-open.log" || fail "Export logs opens the zip's folder with xdg-open"
 logged "logs: exported" || fail "Export logs logs logs: exported"
 ok "Export logs hands xdg-open the zip's folder"
 
-timeout "$WAIT" env -i "${base[@]}" XDG_SESSION_TYPE=x11 "$appimage" >>"$work/app.out" 2>&1 \
-  || fail "a second launch exits by itself, with 0"
+# In a session of its own too, so one that hangs ends with its whole group, the AppImage runtime's FUSE server in it.
+setsid env -i "${base[@]}" XDG_SESSION_TYPE=x11 "$appimage" >>"$work/app.out" 2>&1 &
+second=$!
+if ! waits gone "$second"; then
+  kill -TERM -- "-$second"
+  fail "a second launch exits by itself"
+fi
+wait "$second" || fail "a second launch exits with 0"
 [[ "$(times_logged "instance: already running")" -eq 1 ]] || fail "a second launch logs instance: already running"
 gone "$app_pid" && fail "the first launch keeps running"
 [[ "$(tray_items)" -eq 1 ]] || fail "a second launch adds no tray icon"
@@ -416,11 +476,14 @@ waits sway_has e2e-kitty || fail "foot copied as kitty opens on sway"
 
 launch XDG_SESSION_TYPE=wayland SWAYSOCK="$swaysock" WAYLAND_DISPLAY="$wayland" GDK_BACKEND=x11
 waits logged "$MENU" || fail "sway: the menu reads as on X11"
-swaymsg -s "$swaysock" '[title="^e2e-foot$"] focus' >/dev/null || fail "swaymsg focuses foot"
-waits told foot || fail "sway: the watch is told foot when it is in front"
-swaymsg -s "$swaysock" '[title="^e2e-kitty$"] focus' >/dev/null || fail "swaymsg focuses kitty"
-waits told kitty || fail "sway: the watch is told kitty when it is in front"
-ok "sway: the watch is told foot, then kitty, as each takes the focus"
+focus() { swaymsg -s "$swaysock" "[title=\"^e2e-$1\$\"] focus" >/dev/null || fail "swaymsg focuses $1"; }
+# The source first tells the window in focus, kitty, opened last: the moves count from it.
+focus kitty
+waits told_since 0 kitty || fail "sway: the watch is told kitty, in focus"
+brought foot focus foot || fail "sway: the watch is told foot when it takes the focus"
+brought kitty focus kitty || fail "sway: the watch is told kitty when it takes the focus"
+brought foot focus foot || fail "sway: the watch is told foot when it takes the focus back"
+ok "sway: the watch is told foot, kitty, then foot again, each as it takes the focus"
 
 cmp -s "$work/entry.before" "$entry" || fail "an entry with Hidden=true and another Exec= is left as it is"
 ok "an entry turned off (Hidden=true), with another Exec=, is left as it is"
@@ -484,7 +547,7 @@ sign_in() {
     && WAIT=3 waits grep -Fxqs 'login --json' "$fake/calls.log"
 }
 waits sign_in || fail "the Sign in window's Return starts harness login --json"
-waits grep -Fxqs "https://example.com/e2e?state=S" "$work/xdg-open.log" || fail "the sign-in page opens with xdg-open"
+waits grep -Fxqs "https://example.invalid/e2e?state=S" "$work/xdg-open.log" || fail "the sign-in page opens with xdg-open"
 ok "the sign-in page opens with xdg-open"
 probe xdg-open xdg-open
 
