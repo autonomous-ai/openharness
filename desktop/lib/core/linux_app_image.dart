@@ -43,8 +43,10 @@ Future<void> registerAppImageLauncher({
         // Upgrade this executable's own entry, without taking over another copy.
         if (target != appImage) return;
         final existing = await entry.readAsString();
+        // The line written now: one an earlier Desktop wrote with a single %
+        // is written again.
         if (existing.contains('MimeType=x-scheme-handler/harness;') &&
-            existing.contains(' %u\n')) {
+            existing.contains('Exec=${quoteLauncherExec(appImage)} %u\n')) {
           return;
         }
       }
@@ -95,16 +97,21 @@ String? launcherDataHome(Map<String, String> environment) {
 }
 
 /// The program an entry's `Exec=` line starts, unquoted; null when it has none.
+/// `%%` reads as `%`, before the quotes, as GLib reads it; a single `%` is
+/// kept, so an entry an earlier Desktop wrote without doubling one still names
+/// its path.
 String? launcherExecTarget(String entry) {
   for (final line in entry.split('\n')) {
     if (!line.startsWith('Exec=')) continue;
-    final value = line.substring(5).trim();
+    final value = line.substring(5).trim().replaceAll('%%', '%');
     if (value.startsWith('"')) {
-      final end = value.indexOf('"', 1);
-      if (end < 0) return null;
-      return value
-          .substring(1, end)
-          .replaceAllMapped(RegExp(r'\\(.)'), (match) => match[1]!);
+      // The closing quote is the first one no backslash escapes.
+      final quoted = RegExp(r'^"((?:[^"\\]|\\.)*)"').firstMatch(value);
+      if (quoted == null) return null;
+      return quoted[1]!.replaceAllMapped(
+        RegExp(r'\\(.)'),
+        (match) => match[1]!,
+      );
     }
     final space = value.indexOf(' ');
     return space < 0 ? value : value.substring(0, space);
@@ -113,10 +120,12 @@ String? launcherExecTarget(String entry) {
 }
 
 /// A path as the Desktop Entry spec wants it in `Exec=`: quoted when it holds
-/// a character the launcher would otherwise split or expand on.
+/// a character the launcher would otherwise split or expand on, and every `%`
+/// doubled, as the spec keeps a single one for field codes.
 String quoteLauncherExec(String path) {
-  if (!RegExp(r'''[\s"'\\$`<>~|&;*?#()]''').hasMatch(path)) return path;
-  final escaped = path.replaceAllMapped(
+  final doubled = path.replaceAll('%', '%%');
+  if (!RegExp(r'''[\s"'\\$`<>~|&;*?#()]''').hasMatch(path)) return doubled;
+  final escaped = doubled.replaceAllMapped(
     RegExp(r'["`$\\]'),
     (match) => '\\${match[0]}',
   );
