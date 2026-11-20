@@ -94,6 +94,10 @@ impl X11Follow {
             }
             let observer = Observer { conn: &conn, root, atoms, chatgpt: &chatgpt, heard: &*told };
             observer.follow();
+            // The connection ended. Not by the observation's drop: the server quit, or the display closed.
+            if !held.lock().unwrap().stopped {
+                told(Heard::NoObserver);
+            }
         });
         if spawned.is_err() {
             heard(Heard::NoObserver);
