@@ -368,10 +368,13 @@ class DeviceAppInstaller {
   }
 
   /// Linux: the AppImage at the place, executable, unless a copy is already
-  /// there (the app updates itself in place).
+  /// there (the app updates itself in place). "There" as the lookup has it,
+  /// through a link: a link whose file is gone is replaced by the rename.
   Future<String> _placeAppImage(String appImage) async {
     final place = _place ?? (throw const _Refused());
-    if (_exists(place)) return place;
+    if (FileSystemEntity.typeSync(place) != FileSystemEntityType.notFound) {
+      return place;
+    }
     final folder = p.dirname(place);
     await Directory(folder).create(recursive: true);
     // Beside the place, so the rename is atomic and a half-made copy never
