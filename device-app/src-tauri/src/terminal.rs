@@ -24,8 +24,10 @@ const OPENS_WITHIN: Duration = Duration::from_secs(30);
 const READ_EVERY: Duration = Duration::from_secs(1);
 
 /// Before the line: the result is written whole (a temp file, then a rename), so a read never sees half of it. A
-/// closed terminal (HUP), a Ctrl-C (INT) or a kill (TERM) writes 129 at once, so the app does not wait out its
-/// deadline. Then, the trap set, a file beside the script says it runs.
+/// closed terminal (HUP), a Ctrl-C (INT) or a kill (TERM) writes 129 once the line has ended: sh runs a trap only after
+/// its foreground line, and a closed terminal hangs up the line too only where it signals its whole group, so a line
+/// that does not read the terminal (a silent download) runs to its own end first. Then, the trap set, a file beside
+/// the script says it runs.
 const SCRIPT_HEAD: &str = r#"#!/bin/sh
 # Harness: setup's host half, in a terminal so sudo can ask for a password.
 result="${0%.sh}.exit"
@@ -211,8 +213,8 @@ mod tests {
 
     #[test]
     fn a_hangup_writes_129() {
-        // The line's own child says `ready`: the trap is set and the child is there to be hung up too. A hangup before
-        // the shell starts its child would wait for that child's end, as a terminal's line would.
+        // The line's own child says `ready`: the trap is set and the child is there to be hung up too. The hangup goes
+        // to the whole group, as a terminal that signals its group sends it: the case where the line ends with it.
         let (folder, path) = written("/bin/sh -c 'echo ready; exec sleep 30'");
         let mut child = {
             let _spawning = spawn_lock();
