@@ -222,14 +222,6 @@ export default async function DevicePage() {
                 <p>Switch apps.</p>
               </div>
             </div>
-            <div className={styles.limits}>
-              <span>
-                <b>Voice</b> up to 10 minutes a message
-              </span>
-              <span>
-                <b>Free</b> 30 minutes a day
-              </span>
-            </div>
           </div>
         </section>
 
@@ -323,12 +315,6 @@ export default async function DevicePage() {
                 <div className={styles.a}>
                   <p>Start Claude Code or Codex in one of the apps above. It shows up on its own.</p>
                   <p>Hold the face to switch to the app it runs in.</p>
-                </div>
-              </details>
-              <details>
-                <summary>Voice stops or doesn&apos;t send.</summary>
-                <div className={styles.a}>
-                  <p>A message can be up to 10 minutes. Free accounts get 30 minutes a day.</p>
                 </div>
               </details>
               <details>
