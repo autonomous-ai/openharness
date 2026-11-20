@@ -1769,6 +1769,17 @@ mod tests {
     }
 
     #[test]
+    fn an_offer_while_the_menu_shows_the_follow_screen_is_made() {
+        let mut app = with_chatgpt(signed_in());
+        app.handle(Event::Menu(MenuAction::FollowChatgpt));
+        let effects = app.handle(Event::FollowOffer);
+        assert!(has(&effects, &Effect::Save(Saved { asked_follow: true, ..SEEN })));
+        assert!(shows(&effects).is_empty());
+        app.handle(Event::Act(Action::Later));
+        assert!(app.handle(Event::FollowOffer).is_empty());
+    }
+
+    #[test]
     fn allow_asks_macos_each_time_and_opens_the_settings_after_the_first() {
         let mut app = with_chatgpt(signed_in());
         app.handle(Event::FollowOffer);
