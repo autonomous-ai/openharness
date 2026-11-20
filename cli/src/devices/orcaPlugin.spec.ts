@@ -26,6 +26,8 @@ const FILES: OrcaPluginFiles = {
   'src/worker.ts': 'export const worker = true\n',
 }
 const REAL = orcaPluginRun()
+/** A file system that matches names without case, as macOS's and Windows' do by default. */
+const CASE_BLIND = existsSync(tmpdir().toUpperCase())
 
 // One fake for the file: macOS scans a new executable at its first run, about half a second each, so a fake a case
 // would make the table of rules ten times as long. Each case sets every answer it reads, and its calls are those made
@@ -295,6 +297,14 @@ describe('orcaStatus', () => {
     symlinkSync(deps.dataDir, link)
     up([entry(folder)])
     expect(await orcaStatus({ ...deps, folder: join(link, 'orca-plugin') })).toEqual({ orca: 'on' })
+  })
+
+  // Orca records the folder by fs/promises.realpath, the system's own: where names match without case it gives the
+  // folder's spelling on disk, and JS's realpathSync the one it was handed.
+  it.runIf(CASE_BLIND)('the folder handed in another case is on: Orca records its spelling on disk', async () => {
+    const { root, deps, folder } = setup()
+    up([entry(folder)])
+    expect(await orcaStatus({ ...deps, folder: join(root, 'DATA', 'orca-plugin') })).toEqual({ orca: 'on' })
   })
 
   it('an entry that names the folder through a link is not set up: Orca updates from the path it recorded', async () => {
