@@ -518,9 +518,9 @@ jobs:
           if-no-files-found: error
 
   # Each AppImage on a clean Ubuntu: this run's Device app, and Desktop's current release as people download it through
-  # the public manifest. appimage-starts.sh prints `ok: <app> starts from its FUSE mount` or `FAILED: <app>: <why>`.
-  # Until an app's step sets EXPECT=start (Tasks 48, 49), its FAILED is the finding and the step stays green. Report
-  # puts each runner's row in the run's summary and in an annotation, so `gh run view` reads before and after.
+  # the public manifest. appimage-starts.sh prints `ok: <app> starts from its FUSE mount`, or `FAILED: <app>: <why>`
+  # and fails its step. Report puts each runner's row in the run's summary and in an annotation, so `gh run view`
+  # reads it.
   fuse-probe:
     needs: fuse-device-build
     strategy:
@@ -545,8 +545,8 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      # A display (xauth for xvfb-run), a session bus, X clients to find the window and read its class, `file`, jq.
-      - run: sudo bash scripts/apt-install.sh xvfb xauth dbus-x11 xdotool x11-utils file jq
+      # A display (xauth for xvfb-run), a session bus, `file`, jq.
+      - run: sudo bash scripts/apt-install.sh xvfb xauth dbus-x11 file jq
       # What every Ubuntu desktop has and a bare runner lacks, so the probe stands for "a clean Ubuntu desktop without
       # libfuse2". The Device AppImage bundles GTK and WebKit but, as AppImages do, not the host's graphics and text
       # stack; a clean 22.04 with the line above still lacks, by ldd of the bundle: libEGL (libegl1), libgbm (libgbm1),
@@ -567,12 +567,6 @@ jobs:
           mkdir -p "$RUNNER_TEMP/probe"
           mv "${found[0]}" "$RUNNER_TEMP/probe/Harness-Device.AppImage"
           chmod +x "$RUNNER_TEMP/probe/Harness-Device.AppImage"
-      # Unpacked, so FUSE plays no part: the class the app-list entry's StartupWMClass names (Task 50).
-      - name: The Device window's WM_CLASS
-        run: >-
-          xvfb-run -a -s '-screen 0 1280x800x24' dbus-run-session --
-          bash device-app/scripts/e2e/appimage-starts.sh --wm-class "$RUNNER_TEMP/probe/Harness-Device.AppImage"
-          | tee "$RUNNER_TEMP/probe/wm-class.log"
       # Only a file at the release's own CDN path, whose size and sha256 are the manifest's.
       - name: Desktop's public AppImage
         id: desktop
@@ -644,16 +638,13 @@ jobs:
           before="$(cat "$probe/fusermount3-before" 2>/dev/null || echo unknown)"
           device="$(line '^(ok|FAILED):' device.log)"
           desktop="$(line '^(ok|FAILED):' desktop.log)"
-          wm="$(line '^note: Harness Device (WM_CLASS|opened)' wm-class.log)"
           {
             echo "| runner | libfuse2 gone | fusermount3 before | Device runtime | Desktop runtime | Harness Device | Harness |"
             echo "|---|---|---|---|---|---|---|"
             echo "| $RUNNER_LABEL | $gone | $before | $(line '^note: Harness Device:' device.log) |" \
               "$(line '^note: Harness:' desktop.log) | $device | $desktop |"
-            echo
-            echo "$wm"
           } >>"$GITHUB_STEP_SUMMARY"
-          echo "::notice title=fuse-probe $RUNNER_LABEL::libfuse2 gone: $gone; $device; $desktop; $wm"
+          echo "::notice title=fuse-probe $RUNNER_LABEL::libfuse2 gone: $gone; $device; $desktop"
 
   # The one line end to end: website/scripts/device-install.sh piped from curl as a person runs it, on a clean Ubuntu
   # with no libfuse2, installing fuse-device-build's AppImage (built as linux-e2e builds it, on 22.04 as releases are).
