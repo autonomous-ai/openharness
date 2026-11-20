@@ -9,7 +9,9 @@
 # AppImage runs on a runtime that needs no libfuse2, and its icon comes out with --appimage-extract.
 set -eu
 
-METADATA_URL="${HARNESS_DEVICE_METADATA_URL:-https://storage.googleapis.com/s3-autonomous-upgrade-3/harness/device/metadata.json}"
+# Fixed, with no environment override, as website/src/lib/deviceRelease.ts: only the bucket decides which release a
+# person gets, never a pasted line.
+METADATA_URL="https://storage.googleapis.com/s3-autonomous-upgrade-3/harness/device/metadata.json"
 
 fail() {
   printf '%s\n' "Harness Device installer: $*" >&2

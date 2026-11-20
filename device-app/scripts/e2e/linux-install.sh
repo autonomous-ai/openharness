@@ -4,11 +4,12 @@
 #
 #   bash device-app/scripts/e2e/linux-install.sh <AppImage>
 #
-# The AppImage is this run's debug build. cdn.autonomous.ai is pointed at a local HTTPS server (https-fake-cdn.py)
-# under a throwaway CA the system trusts, which serves the AppImage as release 0.0.0, a stand-in manifest naming it and
-# the repository's install script, so the script runs unchanged and nothing reaches the real CDN or bucket. The line
-# runs with a scratch HOME (with a space, as a person's may have) on a display and session bus of its own; the Device
-# app's state is seeded so it installs nothing and opens no window.
+# The AppImage is this run's debug build. cdn.autonomous.ai and storage.googleapis.com, where the script reads its fixed
+# manifest, are pointed at a local HTTPS server (https-fake-cdn.py) under a throwaway CA the system trusts, which serves
+# the AppImage as release 0.0.0, a stand-in manifest naming it at the manifest's own path and the repository's install
+# script, so the script runs unchanged and nothing reaches the real CDN or bucket. The line runs with a scratch HOME
+# (with a space, as a person's may have) on a display and session bus of its own; the Device app's state is seeded so
+# it installs nothing and opens no window.
 #
 # Prints `ok: <check>` for each check and stops at the first `FAILED: <check>`, exiting 1. It removes libfuse2 and
 # changes /etc/hosts and the trust store, so it runs only on a GitHub-hosted runner, which is thrown away after; it
@@ -40,6 +41,8 @@ python=/usr/bin/python3
 WAIT=60
 VERSION=0.0.0
 CDN=cdn.autonomous.ai
+# The bucket's own host, which serves the manifest; the app's updater reads it there too.
+GCS=storage.googleapis.com
 CA_FILE=/usr/local/share/ca-certificates/harness-device-e2e.crt
 APP_PATH=/usr/local/bin:/usr/bin:/bin
 
@@ -51,7 +54,9 @@ esac
 # The app runs a harness it finds there: that harness's daemon would outlive the run.
 [[ -z "$(PATH="$APP_PATH" command -v harness)" ]] || stop_before "a harness is on $APP_PATH: the app would find it"
 [[ ! -e "$CA_FILE" ]] || stop_before "$CA_FILE is there already"
-grep -qw "$CDN" /etc/hosts && stop_before "/etc/hosts names $CDN already"
+for host in "$CDN" "$GCS"; do
+  grep -qw "$host" /etc/hosts && stop_before "/etc/hosts names $host already"
+done
 
 # Resolved, so the executables' paths under the AppImage's mount begin with it.
 work="$(cd "$(mktemp -d -p "$RUNNER_TEMP")" && pwd -P)"
@@ -62,7 +67,9 @@ entry="$home/.local/share/applications/harness-device.desktop"
 icon="$home/.local/share/icons/harness-device.png"
 cdn="$work/cdn"
 served="$cdn/harness/device/$VERSION/Harness-Device-linux-$arch.AppImage"
-mkdir -p "$home" "$work"/{run,tmp,tls,extract} "$(dirname "$served")" "$cdn/e2e"
+manifest_path=/s3-autonomous-upgrade-3/harness/device/metadata.json
+manifest="$cdn$manifest_path"
+mkdir -p "$home" "$work"/{run,tmp,tls,extract,manifests} "$(dirname "$served")" "$(dirname "$manifest")"
 chmod 700 "$work/run"
 # The vectors' entry for a home with a space is this one's only when no other character needs quoting.
 [[ "$place" =~ ^[A-Za-z0-9/._\ -]+$ ]] \
@@ -160,29 +167,31 @@ ok "libfuse2 is not on this computer (removed: ${installed[*]:-none, it was not 
 
 # --- The stand-in CDN
 
-# A CA that lives only in this run, and the CDN's certificate it signs.
+# A CA that lives only in this run, and the certificate it signs for both hosts.
 tls="$work/tls"
 openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj "/CN=Harness Device e2e throwaway CA" \
   -addext basicConstraints=critical,CA:TRUE -addext keyUsage=critical,keyCertSign,cRLSign \
   -keyout "$tls/ca.key" -out "$tls/ca.crt" 2>/dev/null
 openssl req -newkey rsa:2048 -nodes -subj "/CN=$CDN" -keyout "$tls/cdn.key" -out "$tls/cdn.csr" 2>/dev/null
-printf '%s\n' "subjectAltName=DNS:$CDN" basicConstraints=CA:FALSE extendedKeyUsage=serverAuth >"$tls/cdn.ext"
+printf '%s\n' "subjectAltName=DNS:$CDN,DNS:$GCS" basicConstraints=CA:FALSE extendedKeyUsage=serverAuth >"$tls/cdn.ext"
 openssl x509 -req -days 1 -in "$tls/cdn.csr" -CA "$tls/ca.crt" -CAkey "$tls/ca.key" -CAcreateserial \
   -extfile "$tls/cdn.ext" -out "$tls/cdn.crt" 2>/dev/null
 sudo cp "$tls/ca.crt" "$CA_FILE"
 sudo update-ca-certificates >/dev/null
 cp /etc/hosts "$work/hosts.before"
 hosts_changed=1
-printf '127.0.0.1 %s\n' "$CDN" | sudo tee -a /etc/hosts >/dev/null
+printf '127.0.0.1 %s\n' "$CDN" "$GCS" | sudo tee -a /etc/hosts >/dev/null
 # Resolved as curl resolves it, through getaddrinfo for any family. Not `getent hosts`: it asks for IPv6 first, which
-# /etc/hosts does not name, so where the runner's DNS answers AAAA it prints the real CDN's IPv6 addresses.
-resolved="$(getent ahosts "$CDN" | awk '{ print $1 }' | sort -u | paste -sd ' ')"
-[[ "$resolved" == 127.0.0.1 ]] || fail "$CDN resolves to 127.0.0.1 only, not ${resolved:-nothing}"
+# /etc/hosts does not name, so where the runner's DNS answers AAAA it prints the real host's IPv6 addresses.
+for host in "$CDN" "$GCS"; do
+  resolved="$(getent ahosts "$host" | awk '{ print $1 }' | sort -u | paste -sd ' ')"
+  [[ "$resolved" == 127.0.0.1 ]] || fail "$host resolves to 127.0.0.1 only, not ${resolved:-nothing}"
+done
 
 cp "$repo/website/scripts/device-install.sh" "$cdn/harness/device/install.sh"
 # The manifest as device-manifest.py writes it (json.dumps, indent=2), naming only this arch's AppImage; and the same
-# with its sha256 one hex digit off.
-"$python" -I - "$served" "$VERSION" "$arch" "$cdn/e2e" <<'PY'
+# with its sha256 one hex digit off. Each run of the line serves one of them at the manifest's path.
+"$python" -I - "$served" "$VERSION" "$arch" "$work/manifests" <<'PY'
 import hashlib, json, os, sys
 served, version, arch, out = sys.argv[1:]
 with open(served, "rb") as file:
@@ -201,8 +210,14 @@ PY
 # shellcheck disable=SC2016,SC2024
 sudo bash -c 'echo "$$" >"$1" && exec "${@:2}"' _ "$work/server.pid" \
   "$python" -I "$here/https-fake-cdn.py" "$cdn" "$tls/cdn.crt" "$tls/cdn.key" </dev/null >"$work/server.out" 2>&1 &
-serving() { curl -fsS --max-time 5 -o /dev/null "https://$CDN/harness/device/install.sh" 2>/dev/null; }
-waits serving || fail "the stand-in CDN serves https://$CDN under the throwaway CA: $(cat "$work/server.out")"
+# One folder for both hosts: the CDN's paths and the bucket's never meet.
+serving() {
+  local host
+  for host in "$CDN" "$GCS"; do
+    curl -fsS --max-time 5 -o /dev/null "https://$host/harness/device/install.sh" 2>/dev/null || return 1
+  done
+}
+waits serving || fail "the stand-in serves https://$CDN and https://$GCS under the throwaway CA: $(cat "$work/server.out")"
 
 # --- The line
 
@@ -216,10 +231,12 @@ chmod 700 "$data"
 printf '%s\n' '{"version":1,"cliSeen":true,"askedSignIn":true,"loginItem":true}' >"$data/state.json"
 
 line_pid=""
-# Runs the line a person pastes, naming the stand-in manifest `$1`, in a shell that ends when the line does and leads a
-# session of its own, as a terminal's shell does; waits until it ends and leaves its exit code in `status`.
+# Runs the line a person pastes, exactly, the stand-in manifest `$1` served at the manifest's path, in a shell that ends
+# when the line does and leads a session of its own, as a terminal's shell does; waits until it ends and leaves its exit
+# code in `status`.
 run_line() {
-  local line="curl -fsSL https://$CDN/harness/device/install.sh | HARNESS_DEVICE_METADATA_URL=https://$CDN/e2e/$1 bash"
+  cp "$work/manifests/$1" "$manifest"
+  local line="curl -fsSL https://$CDN/harness/device/install.sh | bash"
   setsid env -i "${base[@]}" bash -c "$line" </dev/null >"$work/line.out" 2>&1 &
   line_pid=$!
   status=0
@@ -243,8 +260,8 @@ run_line metadata.json
 said "Harness Device $VERSION installed at $place" || fail "the line says Harness Device $VERSION installed at $place"
 [[ "$(stat -c %a "$place")" == 755 ]] || fail "the AppImage at the place is mode 0755, not $(stat -c %a "$place")"
 cmp -s "$served" "$place" || fail "the AppImage at the place is the served bytes"
-for path in /harness/device/install.sh /e2e/metadata.json "/harness/device/$VERSION/${served##*/}"; do
-  grep -Fxq "GET $path HTTP/1.1 200" "$work/requests.log" || fail "the stand-in CDN served $path"
+for path in /harness/device/install.sh "$manifest_path" "/harness/device/$VERSION/${served##*/}"; do
+  grep -Fxq "GET $path HTTP/1.1 200" "$work/requests.log" || fail "the stand-in served $path"
 done
 ok "the line exits 0 and says Harness Device $VERSION installed at $place, mode 0755, the served bytes"
 

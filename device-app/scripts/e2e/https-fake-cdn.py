@@ -1,5 +1,6 @@
-"""A stand-in for cdn.autonomous.ai in linux-install.sh: serves a folder over HTTPS on 127.0.0.1:443, under a
-certificate a throwaway CA signed, and appends each request line and its status to requests.log beside the folder.
+"""A stand-in for cdn.autonomous.ai and storage.googleapis.com in linux-install.sh: serves a folder over HTTPS on
+127.0.0.1:443, under a certificate a throwaway CA signed for both, and appends each request line and its status to
+requests.log beside the folder.
 
     sudo python3 -I https-fake-cdn.py <folder> <cert> <key>
 """
