@@ -19,6 +19,15 @@ describe('the path a watch is given', () => {
     expect(pathToWatch(short, deps)).toBe(short)
   })
 
+  // Every short name Windows makes has a `~` (HXDIAL~1). A path without one is watched as it was before: no open of it
+  // on each watch's start, and none refused where long names cannot be read (realpath.native fails on a RAM disk).
+  it('on Windows a path with no short name in it is the path as given, never looked up', () => {
+    const lines: string[] = []
+    const deps: PathToWatchDeps = { ...windows({}, lines), realpath: () => { throw Object.assign(new Error('looked up'), { code: 'EISDIR' }) } }
+    expect(pathToWatch(long, deps)).toBe(long)
+    expect(lines).toEqual([])
+  })
+
   it('on Windows a folder with a short name in it is given by its long name', () => {
     expect(pathToWatch(short, windows({ [short]: long }))).toBe(long)
   })
