@@ -1335,3 +1335,93 @@ Win32_ComputerSystem` is "Access denied" in its SSH logon. It is meant for an ow
   - `~/.codex\config.toml` and `hooks.json` are byte for byte as before the run.
   - `~/.claude\settings.json` has its first size (1,687 bytes) and the same keys, but another SHA-256 (its JSON was
     written again).
+
+## The mod tells of a permission prompt (E), and two checks again at 25c779aaba
+
+Run 2026-11-20 on the same VM (build 26200, ARM64), Claude Code 2.1.329 (`<profile>\.local\bin\claude.exe`), as the
+test user: over SSH (session 0) for §1, in its console session through `session-run.ps1` for §2 and §3. Throwaway
+files (never committed) lived in an `e-probe` and an `echk` folder in its profile.
+
+### 1. The permission hook: F against E
+
+**E rings 10 of 10, from the mod, 0.2 s after the prompt, and the hook runs nothing; the prompt still waits for the
+hook's shell to start.**
+
+- **No model.** OpenRouter's streaming still ended in `ECONNRESET` from the VM, so the key was never read: `claude -p`
+  talked to a stand-in Messages API (Node on 127.0.0.1:18490, a dummy token). Its first answer is one Write call into
+  the work folder, which asks in the default mode; its answer to the tool result is a short text. One prompt per run.
+- **The plugin** by `--plugin-dir`: F as 0b77e5acea has it, E as 6e25d5dc3f (and 25c779aaba) has it.
+- **The time**: a second throwaway mod, above both, noted when its `classic.PermissionRequest` began and when everything
+  beneath it had ended, which is when the prompt can be answered, and whether `HARNESS_DEVICE_MOD_ASKS` was set by then.
+  Claude Code's debug log (`--debug-file`) gives the hook's own `finished with status <n> (<ms>)`.
+- **The ring**: a copy of `node.exe` as `<USERPROFILE>\.harness\bin\harness.exe`, `USERPROFILE` a throwaway folder for
+  the `claude` process. As `device claude asked` it read its stdin and wrote one line: when, who ran it (the mod runs
+  it in the profile, the hook in the session's folder) and the session. It ran in 150-570 ms (Claude Code's
+  `$.process.run` lines), less than the real `harness.exe` (its launcher, Node and the CLI's bundle, then a pipe post
+  bounded at 1 s), so F's hook time here leaves out most of what `asked` costs it.
+- **Git Bash** hidden from the test user alone for F and E (deny entries on Git's `bin` folder and `bin\bash.exe`, as
+  Task 2 did; every debug log has `Git Bash not found`), then restored (read back: inherited entries only) for E under
+  Git Bash.
+- 10 runs a set, one after another. The runs that set the probe up came before and are not counted.
+
+| Set | The hook (Claude Code's log) | The prompt held: median (min-max) | Rung once / twice / none | Rung by | The ring after the prompt: median (max) |
+| --- | --- | --- | --- | --- | --- |
+| F, PowerShell | status 0 ×10, 1725-3550 ms | 1880 ms (1730-3615) | 10 / 0 / 0 | the hook ×10 | 1826 ms (3574) |
+| E, PowerShell | status 0 ×10, 1694-3524 ms | 1988 ms (1700-3555) | 10 / 0 / 0 | the mod ×10 | 203 ms (340) |
+| E, Git Bash | status 0 ×10, 399-1179 ms | 556 ms (407-1239) | 10 / 0 / 0 | the mod ×10 | 310 ms (725) |
+
+- In all 20 E prompts the variable was set, and the hook started no `harness.exe`. No hook failed, no `EPIPE`, no
+  double ring. Each prompt ended `Write tool permission denied`, `-p`'s own.
+- Under F the ring waits for PowerShell to start and comes as the hook ends; a start past the hook's 5 s rings nothing.
+  Under E it comes 0.2-0.3 s after the prompt, whatever the shell does.
+- The wait itself did not shrink here: the shell's start is all of it in both (PowerShell 1.7-3.5 s on this VM today,
+  Git Bash 0.4-1.2 s), and the stand-in's run was too short to show in it. With the real `harness.exe`, F's wait also
+  holds `asked`'s run, which E takes out; that was not measured (no Harness is installed for the test user).
+
+### 2. herdr beside a sealed desk, at 25c779aaba
+
+**Listed (pass).**
+
+- The VM's tree synced at 25c779aaba (`vm-sync.sh --cli`). `pty/` is unchanged since c305c9291f, so the VM's
+  `harness-pty.exe` build stood as `HARNESS_PTY_BIN`. The desk and the CLI were bundled on the Mac (`bundle.mjs`) and
+  copied over.
+- In the test user's console session: `desk.mjs --port 18479 --quit-on <file>` (the sealed stand-in), its root read
+  from its first line; then `desk.mjs --beside <that root> --run <WezTerm's wezterm-gui.exe> --config prefer_egl=true
+  start -- <herdr 0.9.5's x86_64 herdr.exe>`; then herdr's own CLI beside the same root: `pane list` (one pane,
+  `w1:p1`) and `pane run w1:p1 <a copy of node.exe named claude.exe> <a script that waits>`.
+- **7.2 s after `pane run`** the daemon sent the dial `apps` with `herdr` (count 1) and one agent row: engine `claude`,
+  host `herdr`, `caps` `svf`, named after the pane's folder (the sealed profile, `Nguyễn Văn A' & 100%`). herdr's
+  `agent list` named the same pane `claude`.
+- After `herdr server stop` the dial was sent an empty list, WezTerm and the stand-in had ended with herdr, and the
+  desk's `quit` removed its root.
+- A first try named the wrong pane id (the script read the request's `id`) and listed nothing; it was cleaned up the
+  same way.
+
+### 3. `console.ps1`: quotes and UTF-8, at 25c779aaba
+
+**Every line right (pass).** The console session is the test user's, so `console.ps1` ran there, called from a script
+that `session-run.ps1` started, as Final head §7 ran it: over SSH the test user is denied `Get-CimInstance`, and the
+administrator has no console session. The arguments went in as `-ArgsJson`, from inside PowerShell.
+
+| Expected line | Seen |
+| --- | --- |
+| `arg: it's` | yes |
+| `arg: it’s` | yes |
+| `arg: Nguyễn Văn A` | yes |
+| `arg: a "b" & c %PATH% \| d` | yes |
+| `Nguyễn Văn A` printed by `node -e "console.log('Nguy\u1ec5n V\u0103n A')"` | yes |
+| `Nguyễn Văn A` printed by `node -e "console.log('Nguyễn Văn A')"` | yes |
+| `exit 7` (the script's own exit code), and `console.ps1` returning 7 | yes |
+
+No error line. The log's bytes, read on the Mac, hold `Nguyễn Văn A` three times and no `á»`.
+
+### The key, and what was removed
+
+- **The key file is deleted**: `<profile>\.harness-test\openrouter.key`, gone when read back. It was never read in this
+  run, and was deleted after §1, since §2 and §3 need no model. The `.harness-test` folder is left, empty.
+- Removed: the `e-probe` and `echk` folders, the check scripts in the test user's `e2e` folder, and Claude Code's temp
+  folder for these runs (`<profile>\AppData\Local\Temp\claude\<id>`, its sessions all this run's). The Git Bash deny
+  entries are gone (inherited entries only). The desks removed their roots.
+- No process of the run is left (looked for in the console session), and nothing listens on 18478, 18479 or 18490.
+- `C:\work\oh` holds the tree at 25c779aaba. `desktop-e2e.sh cleanup` was not run: the test user stays for the next
+  session.
