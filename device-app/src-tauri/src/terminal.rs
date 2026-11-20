@@ -8,8 +8,9 @@ use std::io;
 use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::path::Path;
 use std::process::Command;
+use std::sync::Mutex;
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 /// Desktop's order (`_defaultOpenTerminal`): the terminal Debian and Ubuntu name as the default, then the two most
 /// common. Each takes the script's path after its flag.
@@ -24,7 +25,7 @@ const READ_EVERY: Duration = Duration::from_secs(1);
 /// deadline.
 const SCRIPT_HEAD: &str = r#"#!/bin/sh
 # Harness: setup's host half, in a terminal so sudo can ask for a password.
-result="$(dirname "$0")/host.exit"
+result="${0%.sh}.exit"
 finish() { printf '%s\n' "$1" > "$result.tmp" && mv "$result.tmp" "$result"; }
 trap 'finish 129; exit 129' HUP INT TERM
 "#;
@@ -38,7 +39,7 @@ fi
 exit "$status"
 "#;
 
-/// The script the terminal runs: `line`, its exit code then written to `host.exit` beside the script.
+/// The script the terminal runs: `line`, its exit code then written beside the script, under its name with `.exit`.
 pub fn script(line: &str) -> String {
     format!("{SCRIPT_HEAD}{line}\n{SCRIPT_TAIL}")
 }
@@ -64,28 +65,28 @@ pub fn wait_result(
     }
 }
 
-/// Writes `script(line)` to `host.sh` in `folder`, both the person's alone (0700), and has `start` open it in the first
-/// of CANDIDATES that is there: one that is not (NotFound) moves on, any other error is the answer. Then waits up to
-/// `deadline` for its code. Output holds no stdout or stderr: what the line prints is the person's, in the terminal.
+/// Writes `script(line)` to `host-<n>.sh` in `folder`, a fresh folder, both the person's alone (0700), and has `start`
+/// open it in the first of CANDIDATES that is there: one that is not (NotFound) moves on, any other error is the
+/// answer. Then waits up to `deadline` for its code. Output holds no stdout or stderr: what the line prints is the
+/// person's, in the terminal.
 pub fn run(
     folder: &Path,
     line: &str,
     deadline: Duration,
     start: &dyn Fn(&str, &str, &Path) -> io::Result<()>,
 ) -> io::Result<Output> {
-    DirBuilder::new().recursive(true).mode(0o700).create(folder)?;
-    // An existing folder or script keeps its mode: one left open to others since is closed again.
-    fs::set_permissions(folder, Permissions::from_mode(0o700))?;
-    let script_path = folder.join("host.sh");
-    fs::write(&script_path, script(line))?;
-    fs::set_permissions(&script_path, Permissions::from_mode(0o700))?;
-    // An earlier run's code would read as this run's.
-    let result = folder.join("host.exit");
-    if let Err(error) = fs::remove_file(&result)
+    // An older run's terminal may still be open. Its files go, and this run's names are its own: what that terminal
+    // writes later is never read as this run's, and its shell, still reading its script, never reads this one's.
+    if let Err(error) = fs::remove_dir_all(folder)
         && error.kind() != io::ErrorKind::NotFound
     {
         return Err(error);
     }
+    DirBuilder::new().recursive(true).mode(0o700).create(folder)?;
+    let script_path = folder.join(format!("host-{}.sh", run_number()));
+    fs::write(&script_path, script(line))?;
+    fs::set_permissions(&script_path, Permissions::from_mode(0o700))?;
+    let result = script_path.with_extension("exit");
     CANDIDATES
         .iter()
         .map(|(program, flag)| start(program, flag, &script_path))
@@ -95,10 +96,20 @@ pub fn run(
     Ok(Output { code, timed_out: code.is_none(), ..Output::default() })
 }
 
+/// The number that names a run's files: the time in milliseconds, past every number this app gave before, so no two
+/// runs share a name, in this app or across a restart.
+fn run_number() -> u128 {
+    static LAST: Mutex<u128> = Mutex::new(0);
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis();
+    let mut last = LAST.lock().unwrap();
+    *last = now.max(*last + 1);
+    *last
+}
+
 /// Starts `program flag script` as the app opens a page (`open::start`): in its own process group, so a signal to the
 /// app's group (a Ctrl-C where the app was started from a shell) does not close the person's terminal, and in the
 /// person's environment, not the AppImage's. How it ends says nothing: gnome-terminal's ends at once and leaves the
-/// window to its server, so the run's end is read from `host.exit` alone.
+/// window to its server, so the run's end is read from the script's result alone.
 pub fn start(program: &str, flag: &str, script: &Path) -> io::Result<()> {
     open::start(Command::new(program).arg(flag).arg(script), None)
 }
