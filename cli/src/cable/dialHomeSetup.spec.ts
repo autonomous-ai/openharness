@@ -852,8 +852,8 @@ describe('the devices set the dial skill up', () => {
     expect([...r.lines, ...off.lines, ...unsaved.lines].join('\n')).not.toContain('/')
   })
 
-  it('on Windows nothing is written', () => {
-    // A dial attached here once: a start and a scan write nothing.
+  it('on Windows a start, an attach and a scan write the skill into an owned home, as on a Mac', () => {
+    // A dial attached here once: a start writes the default homes, and a scan the home a Codex session is in.
     const other = folder()
     const r = rig({ platform: 'win32' })
     pluginOn(r.claudeHome)
@@ -861,16 +861,14 @@ describe('the devices set the dial skill up', () => {
     r.writer.started()
     r.writer.scanned([ownerIn(other)])
 
-    for (const home of [r.claudeHome, r.codexHome, other]) expect(existsSync(join(home, 'skills'))).toBe(false)
-    expect(readSetup(r.dataDir).homes).toEqual({ claude: [], codex: [] })
-    expect(r.lines).toEqual([])
-    expect(r.read.removed).toBe(0)
+    for (const home of [r.claudeHome, r.codexHome, other]) expect(hasSkill(home)).toBe(true)
+    expect(readSetup(r.dataDir).homes).toEqual({ claude: [skillsOf(r.claudeHome)], codex: [skillsOf(r.codexHome), skillsOf(other)] })
 
-    // Never one: an attach records nothing.
+    // Never one: the first attach records the dial and writes.
     const first = rig({ platform: 'win32' }, false)
     first.writer.attached()
-    expect(existsSync(join(first.dataDir, DIAL_SETUP_FILE))).toBe(false)
-    expect(existsSync(join(first.codexHome, 'skills'))).toBe(false)
+    expect(readSetup(first.dataDir).dial).toBe(true)
+    expect(hasSkill(first.codexHome)).toBe(true)
   })
 })
 
