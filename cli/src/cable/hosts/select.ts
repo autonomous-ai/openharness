@@ -102,6 +102,9 @@ export class AppRings {
   private rings = new Map<string, AppRing>()
   private sizes = new Map<string, number>()
 
+  /** `scanLearnsApps`: whether the open scan learns the app of an agent it found (scannedApp.ts). */
+  constructor(private readonly scanLearnsApps = true) {}
+
   update(agents: HostAgent[], ranks?: ReadonlyMap<string, RingRank>): void {
     const byApp = new Map<string, HostAgent[]>()
     for (const a of agents) {
@@ -138,7 +141,10 @@ export class AppRings {
     for (const a of agents) {
       const app = pageOf(a)
       all.set(app, (all.get(app) ?? 0) + 1)
-      if (a.appPending) continue
+      // Where the scan learns no app (Windows) and nothing reports the app in front, an agent it found is placed by its
+      // first hook alone, which can be hours away: it counts as known, or the few agents that hooked would decide the
+      // dial's default over the many the person runs.
+      if (a.appPending && this.scanLearnsApps) continue
       inFront.set(app, (inFront.get(app) ?? 0) + 1)
       if (!a.resting) known.set(app, (known.get(app) ?? 0) + 1)
     }

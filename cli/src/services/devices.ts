@@ -63,7 +63,7 @@ import { createOrcaAdapter, createOrcaReads, orcaDeps, type OrcaFocusWatch, type
 import { firstOuter } from '../cable/hosts/outer.js'
 import { readRecord } from '../cable/hosts/record.js'
 import { HostRegistry, type HostEntry } from '../cable/hosts/registry.js'
-import { appRoots, learnApps, readBundleId, readProcessNames, readPtyOwner, readTtyName } from '../cable/hosts/scannedApp.js'
+import { appRoots, learnApps, readBundleId, readProcessNames, readPtyOwner, readTtyName, scanLearnsApps } from '../cable/hosts/scannedApp.js'
 import { createScrollLines } from '../cable/hosts/scrollLines.js'
 import { createTabsAdapter, readTty, type Tab } from '../cable/hosts/tabs.js'
 import { createTmuxAdapter, createTmuxOuter } from '../cable/hosts/tmux.js'
@@ -1004,6 +1004,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   const cableHost = new DaemonCableHost({
     // The cloud harnesses too, where the core offers them: tiles on the desk the dial walks like any other.
     sessions: () => [...core.agents.advertised(), ...core.agents.cloud?.() ?? []],
+    scanLearnsApps: scanLearnsApps(apps.platform),
     refresh,
     displayName: (session) => core.agents.displayName(session),
     appFocus: () => focus.voice ?? undefined,
