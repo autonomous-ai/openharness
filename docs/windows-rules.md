@@ -124,6 +124,16 @@ everywhere), [Process Creation Flags](https://learn.microsoft.com/en-us/windows/
   a process that serves anything: ask in the background, bounded in time, and answer with what is known meanwhile (the
   `codex` on PATH until the ChatGPT app's folder is known, `cli/src/cable/hosts/codexQueue.ts`). Tests:
   `cli/src/lib/windows/storePackage.spec.ts` (the 10 s bound), `cli/src/cable/hosts/codexQueue.spec.ts`.
+- **A PowerShell script imports each module it calls by path, with autoload off.** Autoload finds a command by
+  searching every module on `PSModulePath`: the first command it had to find cost a Windows PowerShell 5.1 process
+  22-29 s on windows-11-arm and 0.25-0.8 s on windows-latest (runs 43581413308, 43582091190), and the peer query
+  (`cli/src/lib/peerAccount.ts`) timed out at 93.7 s against its 45 s bound. `ptySignatures.ts`, importing by path, took
+  1.8 s on the same runner. A script starts with `modulesByPath(...)` (`cli/src/lib/windows/powershell.ts`):
+  `$PSModuleAutoLoadingPreference = 'None'`, then each module by its folder in `$PSHOME\Modules`, as a string, since
+  `Join-Path` is itself a module's command and LocalAccounts keeps its manifest in a version folder (`1.0.0.0`). With
+  autoload off, a command of a module not imported is "not recognized", Management's `Join-Path` and Utility's
+  `Select-Object` too. A script that runs a vendor's installer keeps autoload on: that script may call any module.
+  Test: `cli/src/lib/windows/powershellModules.spec.ts`.
 - **A Store app's install folder is asked, never built.** The Store's ChatGPT app is package `OpenAI.Codex`, in
   `%ProgramFiles%\WindowsApps\OpenAI.Codex_<version>_<arch>__<publisher id>`: a folder named for each version, which
   a standard user cannot list. Its window is `ChatGPT.exe`'s, and it holds a Codex of its own,

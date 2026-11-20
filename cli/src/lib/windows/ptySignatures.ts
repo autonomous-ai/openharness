@@ -7,7 +7,7 @@
  * (pty-signatures) before promotion, and this before an update: a payload is staged only when every file is signed by
  * its signer, on every computer, not only on one whose Smart App Control would block the canary.
  */
-import { runPowershellAsync, type PowershellResult } from './powershell.js'
+import { modulesByPath, runPowershellAsync, type PowershellResult } from './powershell.js'
 
 /** The certificate name our files are signed with (docs/windows-code-signing.md); install.ps1 $HarnessPublisher. */
 export const WINDOWS_PUBLISHER = 'AUTONOMOUS INC.'
@@ -39,12 +39,12 @@ export function signatureProblems(files: readonly string[], rows: readonly Signa
 
 /**
  * One tab-separated line per file: name, status, signer. Windows itself judges Valid (the chain, the timestamp, the
- * bytes), as Smart App Control does. Get-AuthenticodeSignature's module is imported by its path in this PowerShell's
- * own folder: a PowerShell 7 PSModulePath handed to the daemon would make autoload take 7's (install.ps1 says why).
- * Plain lines, so no other module is needed to print them.
+ * bytes), as Smart App Control does. Get-AuthenticodeSignature's module, and Join-Path's, are imported by their path in
+ * this PowerShell's own folder: a PowerShell 7 PSModulePath handed to the daemon would make autoload take 7's (install.ps1
+ * says why). Plain lines, so no other module is needed to print them.
  */
-const SIGNATURES_SCRIPT = [
-  "Import-Module -Name (Join-Path $PSHOME 'Modules\\Microsoft.PowerShell.Security\\Microsoft.PowerShell.Security.psd1')",
+export const SIGNATURES_SCRIPT = [
+  modulesByPath('Microsoft.PowerShell.Management', 'Microsoft.PowerShell.Security'),
   'foreach ($name in ($env:HARNESS_SIGNATURE_FILES -split "`n")) {',
   '  $signature = Get-AuthenticodeSignature -LiteralPath (Join-Path $env:HARNESS_SIGNATURE_DIR $name)',
   "  $signer = if ($signature.SignerCertificate) { $signature.SignerCertificate.GetNameInfo('SimpleName', $false) } else { '' }",

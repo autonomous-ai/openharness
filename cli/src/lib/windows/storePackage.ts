@@ -6,14 +6,14 @@
  * so Windows PowerShell asks, started directly with no command shell (./powershell.ts), hidden, and bounded in time.
  */
 import { win32 } from 'node:path'
-import { runPowershellAsync, type PowershellResult } from './powershell.js'
+import { modulesByPath, runPowershellAsync, type PowershellResult } from './powershell.js'
 
 export const STORE_PACKAGE_TIMEOUT_MS = 10_000
 
 /** A package's name as Windows allows it: 3 to 50 letters, digits, dots and dashes. No wildcard reaches -Name. */
 const PACKAGE_NAME = /^[A-Za-z0-9.-]{3,50}$/
 
-const SCRIPT = '(Get-AppxPackage -Name $env:HARNESS_STORE_PACKAGE | Select-Object -First 1).InstallLocation'
+export const SCRIPT = `${modulesByPath('Microsoft.PowerShell.Utility', 'Appx')}\n(Get-AppxPackage -Name $env:HARNESS_STORE_PACKAGE | Select-Object -First 1).InstallLocation`
 
 export type PowershellAsk = (script: string, inputs: Record<string, string>, timeoutMs: number) => Promise<PowershellResult>
 

@@ -10,6 +10,7 @@
  * - Removal goes in the order that lets a refusal change nothing: the task is disabled, not unregistered, until the
  *   account is gone (registering it again would need a password nobody knows), and the profile goes before the account.
  */
+import { modulesByPath } from '../lib/windows/powershell.js'
 import { ps } from '../lib/windows/powershellQuote.js'
 import { TEAM_CONFIG_FILES, checkWindowsPath, checkWindowsUser } from './layout.js'
 import { REMOVE_REFUSED, SENTINEL_NAME, type RemoveScriptInput } from './removeScript.js'
@@ -286,6 +287,8 @@ export function buildWindowsRemoveScript(input: RemoveScriptInput): string {
   return [
     '# Harness Team account removal (cli/src/team/windowsRemoveScript.ts), run once elevated behind User Account Control.',
     '# It leaves the owner\'s profile private, as setup made it.',
+    modulesByPath('Microsoft.PowerShell.Management', 'Microsoft.PowerShell.Utility', 'Microsoft.PowerShell.Security',
+      'Microsoft.PowerShell.LocalAccounts', 'CimCmdlets', 'ScheduledTasks'),
     ...PRELUDE,
     `$TEAM = ${ps(user)}`,
     `$TEAM_HOME = ${ps(home)}`,

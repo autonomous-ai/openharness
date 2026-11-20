@@ -36,6 +36,23 @@ export function withPrelude(script: string): string {
   return `${POWERSHELL_PRELUDE}\n${script}`
 }
 
+/** The modules of Windows PowerShell 5.1 a script here imports ([modulesByPath]). */
+export type PowershellModule = 'Appx' | 'CimCmdlets' | 'Microsoft.PowerShell.LocalAccounts' | 'Microsoft.PowerShell.Management'
+  | 'Microsoft.PowerShell.Security' | 'Microsoft.PowerShell.Utility' | 'NetTCPIP' | 'ScheduledTasks'
+
+/**
+ * The lines a script starts with, before its first command: autoload off, then each of [modules] imported from this
+ * PowerShell's own folder. Autoload finds a command by searching every module on PSModulePath: the first one it had to
+ * find cost a 5.1 process 22-29 s on windows-11-arm and 0.25-0.8 s on windows-latest (runs 43581413308, 43582091190),
+ * and the peer query timed out at 93.7 s against WINDOWS_PEER_MS's 45 s, while ptySignatures.ts, importing by path,
+ * took 1.8 s on the same runner. Off, a command of a module not imported is "not recognized", Join-Path and Select-Object
+ * among them (powershellModules.spec.ts names one first). A module goes in by its folder, a string (Join-Path is a
+ * module's command): PowerShell finds its manifest there or in a version folder, where LocalAccounts keeps it (1.0.0.0).
+ */
+export function modulesByPath(...modules: PowershellModule[]): string {
+  return ["$PSModuleAutoLoadingPreference = 'None'", ...modules.map((module) => `Import-Module -Name "$PSHOME\\Modules\\${module}"`)].join('\n')
+}
+
 export interface PowershellResult { status: number | null; stdout: string; stderr: string; error?: Error }
 export type PowershellRun = (script: string, inputs?: Record<string, string>) => PowershellResult
 
