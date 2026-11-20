@@ -5,6 +5,8 @@ import type { RegisteredSession } from './registry.js'
 import { TERMINAL_LEASE_REFUSED, type TerminalActionResult } from './terminalTypes.js'
 import { readInlineScreen } from '../testing/inlineScreen.js'
 import { inlineSubmission } from '../testing/inlineSubmission.js'
+import { OPENCLAW_STATES } from '../engines/openclaw/contract.js'
+import { MoveGate } from './hostMove/gate.js'
 
 const row = { schemaVersion: 2, active: true, agentId: 'a', sessionId: 's', engine: 'openclaw', registeredAt: 1,
   boundAt: 1, tmuxPane: '%1', runtimes: [{ backend: 'tmux', paneId: '%1' }], primaryRuntimeKey: 'tmux\0%1',
@@ -25,7 +27,7 @@ function setup(over: Partial<SessionInputDeps> = {}) {
     if (current?.() === false) return false
     keys.push(key); return true
   })
-  const validateRuntime = vi.fn(async () => true), onDelivery = vi.fn(), taken = vi.fn()
+  const validateRuntime = vi.fn(async (_session: RegisteredSession) => true), onDelivery = vi.fn(), taken = vi.fn()
   const controller = new SessionInputController({ getSession: () => row, readScreen: readInlineScreen, submission: inlineSubmission,
     validateRuntime, inject, sendKey, capture: async () => screen('ready'), onError: vi.fn(), onDelivery,
     onFirstTaskTaken: taken, ...over })
@@ -284,4 +286,104 @@ it('an earlier ordinary turn with identical text does not retire the queued firs
   t.controller.onTurnEnded('s')
   await vi.advanceTimersByTimeAsync(0)
   expect(t.inject).toHaveBeenCalledTimes(2)
+})
+
+
+it.each([OPENCLAW_STATES.boxHeld, OPENCLAW_STATES.noGateway, OPENCLAW_STATES.approval, OPENCLAW_STATES.signInRefused])(
+  'an untyped message survives a temporary pane hold and its release: %s', async hold => {
+    let session: RegisteredSession = { ...row, evidenceRevision: 1 }
+    const receipt = vi.fn(), t = setup({ getSession: () => session })
+    t.inject.mockResolvedValue(notReady)
+    t.controller.submit('s', 'Later', undefined, receipt)
+    await vi.advanceTimersByTimeAsync(0)
+    session = { ...session, identityHold: hold, evidenceRevision: 2 }
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(receipt).not.toHaveBeenCalled()
+    expect(t.controller.waitsForPane('s')).toBe(true)
+    session = { ...session, identityHold: undefined, evidenceRevision: 3 }
+    t.inject.mockResolvedValue(true)
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(t.controller.awaitingConfirmation('s')).toBe(true)
+    t.controller.onTurnStarted('s', 'Later')
+    expect(receipt).toHaveBeenCalledExactlyOnceWith('started')
+    expect(t.validateRuntime.mock.calls.some(([seen]) => seen.evidenceRevision === 3)).toBe(true)
+  },
+)
+
+it('revalidates an untyped message when a short hold starts and ends between retry readings', async () => {
+  let session: RegisteredSession = { ...row, evidenceRevision: 1 }
+  const receipt = vi.fn(), t = setup({ getSession: () => session })
+  t.inject.mockResolvedValueOnce(notReady).mockResolvedValue(true)
+  t.controller.submit('s', 'Later', undefined, receipt)
+  await vi.advanceTimersByTimeAsync(0)
+  session = { ...session, evidenceRevision: 3 }
+  await vi.advanceTimersByTimeAsync(1_000)
+  expect(receipt).not.toHaveBeenCalled()
+  expect(t.inject).toHaveBeenCalledTimes(2)
+  expect(t.validateRuntime.mock.calls.some(([seen]) => seen.evidenceRevision === 3)).toBe(true)
+})
+
+it.each(['session', 'process', 'pane', 'folder', 'unknown hold', 'remote hold', 'caller'] as const)(
+  'a pending pane retry never renews authority after changing %s', async change => {
+    let session: RegisteredSession = { ...row, evidenceRevision: 1 }
+    let caller = true
+    const t = setup({ getSession: () => session })
+    t.inject.mockResolvedValue(notReady)
+    t.controller.submitInput('s', { content: 'Later', deliveryId: 'd', when: 'turn', current: () => caller })
+    await vi.advanceTimersByTimeAsync(0)
+    session = { ...session, identityHold: OPENCLAW_STATES.boxHeld, evidenceRevision: 2 }
+    if (change === 'session') session.sessionId = 'different'
+    if (change === 'process') session.processIdentity = { pid: 123, startTicks: 4 } as RegisteredSession['processIdentity']
+    if (change === 'pane') session.tmuxPane = '%2'
+    if (change === 'folder') session.openclawStateDir = '/fixture/another-state'
+    if (change === 'unknown hold') session.identityHold = 'Native identity is unavailable'
+    if (change === 'remote hold') session.identityHold = OPENCLAW_STATES.remote
+    if (change === 'caller') caller = false
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(t.inject).toHaveBeenCalledOnce()
+    expect(t.controller.awaitingConfirmation('s')).toBe(false)
+  },
+)
+
+
+it.each(['runtime refused', 'binding changed', 'folder changed', 'local mode changed', 'caller cancelled', 'state forgotten'] as const)(
+  'fresh pending-input validation grants no write when %s', async change => {
+    let session: RegisteredSession = { ...row, evidenceRevision: 1 }
+    let caller = true, finish!: (value: boolean) => void
+    const t = setup({ getSession: () => session })
+    t.inject.mockResolvedValueOnce(notReady).mockResolvedValue(true)
+    t.validateRuntime.mockResolvedValueOnce(true).mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+    t.controller.submitInput('s', { content: 'Later', deliveryId: 'd', when: 'turn', current: () => caller })
+    await vi.advanceTimersByTimeAsync(0)
+    session = { ...session, identityHold: OPENCLAW_STATES.boxHeld, evidenceRevision: 2 }
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(finish).toBeTypeOf('function')
+    expect(t.inject).toHaveBeenCalledOnce()
+    if (change === 'binding changed') session = { ...session, evidenceRevision: 3 }
+    if (change === 'folder changed') session = { ...session, openclawStateDir: '/fixture/new-state' }
+    if (change === 'local mode changed') session = { ...session, openclawLocal: '/fixture/local-runtime' }
+    if (change === 'caller cancelled') caller = false
+    if (change === 'state forgotten') t.controller.forget('s')
+    finish(change !== 'runtime refused')
+    await vi.advanceTimersByTimeAsync(0)
+    expect(t.inject).toHaveBeenCalledOnce()
+    expect(t.controller.awaitingConfirmation('s')).toBe(false)
+  },
+)
+
+
+it('a host-move refusal arriving during fresh validation still blocks the pending write', async () => {
+  let session: RegisteredSession = { ...row, evidenceRevision: 1 }
+  let refused = false, finish!: (value: boolean) => void
+  const t = setup({ getSession: () => session, moveGate: new MoveGate(() => refused) })
+  t.inject.mockResolvedValueOnce(notReady).mockResolvedValue(true)
+  t.validateRuntime.mockResolvedValueOnce(true).mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+  t.controller.submit('s', 'Later')
+  await vi.advanceTimersByTimeAsync(0)
+  session = { ...session, identityHold: OPENCLAW_STATES.boxHeld, evidenceRevision: 2 }
+  await vi.advanceTimersByTimeAsync(1_000)
+  expect(finish).toBeTypeOf('function')
+  refused = true; finish(true)
+  await vi.advanceTimersByTimeAsync(0)
+  expect(t.inject).toHaveBeenCalledOnce()
 })

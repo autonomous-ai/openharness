@@ -2,7 +2,7 @@ import type { ScreenReader } from './screenReader.js'
 import type { SubmissionReader } from './submissionReader.js'
 import { createHash } from 'crypto'
 import { composerHolds, composerShown, normalizedTerminalText, visibleTerminal } from '../engines/kit/submission.js'
-import { openclawBoxExactly, openclawBoxHolds, openclawClearKeys, readOpenclawScreen, type OpenclawBoxHidden, type OpenclawScreen } from '../engines/openclaw/contract.js'
+import { OPENCLAW_STATES, openclawBoxExactly, openclawBoxHolds, openclawClearKeys, readOpenclawScreen, type OpenclawBoxHidden, type OpenclawScreen } from '../engines/openclaw/contract.js'
 import { launchBound, captureSessionBinding } from '../core/engines/sessionBinding.js'
 import { adaptSlashCommand } from './goalCommand.js'
 import type { RegisteredSession } from './registry.js'
@@ -345,6 +345,12 @@ function waitingUntyped(state: InputState): boolean {
   return state.paneWait && !state.pasting
 }
 
+/** A pane can recover while the same untyped intent waits; identity and remote-store holds cannot. */
+function recoverablePaneHold(hold: string | undefined): boolean {
+  return hold === undefined || hold === OPENCLAW_STATES.boxHeld || hold === OPENCLAW_STATES.noGateway
+    || hold === OPENCLAW_STATES.approval || hold === OPENCLAW_STATES.signInRefused
+}
+
 /** Admission, draining and the writer share this gate: a failed first paste must not spin queued messages. */
 function waitsForFirstTask(state: InputState, first = false): boolean {
   return state.firstTask !== null && !first
@@ -648,6 +654,7 @@ export class SessionInputController {
     firstTask: () => boolean,
     write: () => Promise<boolean | TerminalActionResult>,
     current: () => boolean,
+    refreshPending: () => Promise<boolean>,
     held: () => boolean,
     firstPaste?: number,
   ): Promise<boolean | TerminalActionResult> {
@@ -671,7 +678,10 @@ export class SessionInputController {
         const waitingAt = now()
         await sleep(notReady ? OPENCLAW_PANE_RETRY_MS : LEASE_RETRY_MS)
         if (held()) return refused()
-        if (!current()) break
+        if (!current()) {
+          if (!await refreshPending()) break
+          if (held()) return refused()
+        }
         // The first task never gives way to itself: put back, it would lose `first` and wait behind itself.
         if (waitsForFirstTask(state, firstTask()) || notReady && state.turnOpen && !firstTask()) return { state: 'failed', dispatch: 'not_started', reason: GAVE_WAY }
         if (!notReady || !(state.controlLocked || state.awaitingFingerprint !== null)) {
@@ -1369,6 +1379,26 @@ export class SessionInputController {
       return this.states.get(sessionId) === state && !(deliveryId && state.cancelled) && request.current?.() !== false && !!now
         && (launchBound(typed, now) === now || sameBinding(now))
     }
+    const refreshPending = async (): Promise<boolean> => {
+      // A not-started pane refusal owns no effect. A draft hold changes the registry revision,
+      // so acquire fresh native authority for this same intent instead of losing it on release.
+      if (!waitingUntyped(state) || typed.engine !== 'openclaw' || requeued || this.states.get(sessionId) !== state
+        || deliveryId && state.cancelled || request.current?.() === false) return false
+      const now = this.controlSession(sessionId)
+      if (!now || !recoverablePaneHold(typed.identityHold) || !recoverablePaneHold(now.identityHold)
+        || typed.openclawStateDir !== now.openclawStateDir || typed.openclawLocal !== now.openclawLocal
+        || !sameBinding({ ...now, identityHold: typed.identityHold, evidenceRevision: typed.evidenceRevision })) return false
+      const selected = { ...now }, binding = captureSessionBinding(selected)
+      const same = (current: RegisteredSession | undefined): boolean => binding(current)
+        && current?.openclawStateDir === selected.openclawStateDir && current?.openclawLocal === selected.openclawLocal
+      if (!await this.deps.validateRuntime(selected).catch(() => false)) return false
+      if (requeued || this.states.get(sessionId) !== state || deliveryId && state.cancelled
+        || request.current?.() === false || !same(this.controlSession(sessionId))) return false
+      typed = selected
+      sameBinding = same
+      operation.session = typed
+      return true
+    }
     const gone = (): void => {
       if (requeued) return // the queue owns this caller and its sole outcome now
       if (deliveryId && state.cancelled) return // cancellation already published its proven refusal
@@ -1488,7 +1518,7 @@ export class SessionInputController {
         return deliveryId?.startsWith('team:') && this.deps.injectTeam
           ? this.deps.injectTeam(session.agentId, content, deliveryId, current)
           : this.deps.inject(session.agentId, content, current)
-      }) as Promise<boolean | TerminalActionResult>, current, () => this.deps.moveGate?.refused(session.agentId) === true, firstPaste)
+      }) as Promise<boolean | TerminalActionResult>, current, refreshPending, () => this.deps.moveGate?.refused(session.agentId) === true, firstPaste)
       operation.writing = false
       if (deliveryId) state.writing = false
       const accepted = typeof result === 'boolean' ? result : result.state === 'succeeded' || result.dispatch === 'possibly_executed'
