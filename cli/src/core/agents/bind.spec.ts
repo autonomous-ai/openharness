@@ -13,7 +13,7 @@ import { continuationOf } from '../../engines/sessionFiles.js'
 import { env } from '../../config/env.js'
 import { isRecentlyDeleted } from '../../lib/deletedSessions.js'
 import { openclawSessionDb, openclawStateDir } from '../../lib/openclawStore.js'
-import type { RegisteredSession } from '../../lib/registry.js'
+import { RegistryOwnershipChanged, type RegisteredSession } from '../../lib/registry.js'
 import { findLiveSession, findResumedTranscript } from '../../lib/sessionRepair.js'
 import type { DiscoveredTerminalAgent } from '../../lib/terminalAgentDiscovery.js'
 import { TerminalAgentReconciler } from '../../lib/terminalAgentReconciler.js'
@@ -3006,6 +3006,20 @@ describe('binding an OpenClaw pane, read from its screen', () => {
       expect(run.deps.capturePane).toHaveBeenCalledTimes(4)
       expect(row.launch).toBeUndefined()
       expect(run.deps.input.firstTaskConfirmed).not.toHaveBeenCalled()
+    })
+
+    // A daemon that just restarted is still taking the registry over: the registry says try again, which the next pass does.
+    it('a removal the registry asks to try again is no error, and the next pass confirms it', async () => {
+      const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+      userRow = START - 1_000
+      vi.mocked(run.deps.registry.firstTaskTaken)
+        .mockRejectedValueOnce(new RegistryOwnershipChanged('the registry owner changed while its write was being prepared'))
+        .mockResolvedValueOnce(true)
+      await pass(0, ready)
+      await new Promise((settle) => setImmediate(settle))
+      await pass(5, ready)
+      await vi.waitFor(() => expect(run.deps.input.firstTaskConfirmed).toHaveBeenCalledWith('a1'))
+      expect(error).not.toHaveBeenCalled()
     })
 
     it('a removal failing for another mark is said again', async () => {
