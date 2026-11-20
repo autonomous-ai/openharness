@@ -202,12 +202,14 @@ struct Here {
     heard: Arc<dyn Fn(Heard) + Send + Sync>,
     /// The process whose name changes are heard, and that hook.
     names: Cell<Option<(u32, HWINEVENTHOOK)>>,
+    /// Whether this observation has ended: an event queued before its loop quits tells nothing.
+    ended: Cell<bool>,
 }
 
 #[cfg(windows)]
 impl Here {
     fn new(check: Box<dyn Fn(u32) -> bool>, heard: Arc<dyn Fn(Heard) + Send + Sync>) -> Here {
-        Here { check, heard, names: Cell::new(None) }
+        Here { check, heard, names: Cell::new(None), ended: Cell::new(false) }
     }
 
     /// The observation began, or the window in front changed: the ChatGPT process in front is heard, and its
@@ -225,9 +227,7 @@ impl Here {
                 self.unhook();
                 let names = hook(EVENT_OBJECT_NAMECHANGE, pid);
                 if names.is_null() {
-                    (self.heard)(Heard::NoObserver);
-                    // SAFETY: takes no pointer; ends this thread's message loop.
-                    unsafe { PostQuitMessage(0) };
+                    self.end();
                     return;
                 }
                 self.names.set(Some((pid, names)));
@@ -248,10 +248,20 @@ impl Here {
     /// Does a hook's work. A panic cannot unwind into Windows, which would end the app: it ends this observation
     /// instead.
     fn guarded(&self, work: impl FnOnce()) {
-        if panic::catch_unwind(AssertUnwindSafe(work)).is_err() {
-            // SAFETY: takes no pointer; ends this thread's message loop.
-            unsafe { PostQuitMessage(0) };
+        if !self.ended.get() && panic::catch_unwind(AssertUnwindSafe(work)).is_err() {
+            self.end();
         }
+    }
+
+    /// Ends this observation, once, with its word: nothing follows until the next start.
+    fn end(&self) {
+        if self.ended.replace(true) {
+            return;
+        }
+        // The word goes where the panic may have come from (a poisoned lock): it cannot unwind into Windows either.
+        let _ = panic::catch_unwind(AssertUnwindSafe(|| (self.heard)(Heard::NoObserver)));
+        // SAFETY: takes no pointer; ends this thread's message loop.
+        unsafe { PostQuitMessage(0) };
     }
 }
 
