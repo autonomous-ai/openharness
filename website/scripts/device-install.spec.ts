@@ -51,6 +51,8 @@ interface Options {
   latin1?: "HOME" | "XDG_DATA_HOME";
   /** Whether the app, started, ends at once, as with no FUSE or another arch's userland. */
   startFails?: boolean;
+  /** The download whose transfer breaks midway, and how many times. */
+  breaks?: { download: "manifest" | "app"; times: number };
   /** Whether curl writes a file of its own, larger than the download. */
   curlWrites?: boolean;
   /** The download whose server sends without end, never naming its size. */
@@ -78,6 +80,11 @@ done
 printf '%s\\n' "$url" >> "$STUB_LOG/requested"
 printf '%s\\0' "$@" >> "$STUB_LOG/curl" && printf '\\n' >> "$STUB_LOG/curl"
 served=app && [ "$url" != "$STUB_MANIFEST_URL" ] || served=manifest
+# A transfer that breaks midway, its first STUB_BREAKS times: some bytes, then curl's status for a partial file.
+broken="$(cat "$STUB_LOG/broken" 2>/dev/null || echo 0)"
+if [ "$STUB_BREAK" = "$served" ] && [ "$broken" -lt "$STUB_BREAKS" ]; then
+  echo "$((broken + 1))" > "$STUB_LOG/broken" && printf 'part of it' > "$out" && exit 18
+fi
 # A server that never stops, its size unnamed: curl before 8.4 (Ubuntu 22.04's 7.81) applies no --max-filesize to it.
 [ "$STUB_ENDLESS" != "$served" ] || exec head -c 4194304 /dev/zero > "$out" 2>/dev/null
 # A file of curl's own, larger than the download, as its errors written to a log file.
@@ -175,6 +182,8 @@ function install(options: Options = {}) {
     STUB_START_FAILS: options.startFails ? "1" : "",
     STUB_ENDLESS: options.endless ?? "",
     STUB_CURL_WRITES: options.curlWrites ? "1" : "",
+    STUB_BREAK: options.breaks?.download ?? "",
+    STUB_BREAKS: String(options.breaks?.times ?? 0),
   };
   delete env.XDG_DATA_HOME;
   if (options.home === null) delete env.HOME;
@@ -299,8 +308,29 @@ describe("device-install.sh", { timeout: 20_000 }, () => {
     expect(run.result.status).toBe(1);
     // curl names its own failure before it.
     expect(run.result.stderr.trimEnd().split("\n").at(-1)).toBe(`Harness Device installer: ${reason}`);
+    // A body past its size is no transport failure: it is never fetched again.
+    expect(new Set(run.requested).size).toBe(run.requested.length);
     expect(run.opt).toEqual([]);
     expect(run.setsid).toEqual([]);
+  });
+
+  // A transfer can break midway: the download starts again from an empty file, a bounded number of times.
+  it.each(["manifest", "app"] as const)("downloads the %s again from the start when its transfer breaks", (download) => {
+    const run = install({ breaks: { download, times: 2 } });
+
+    expect(run.result.stderr).toBe("");
+    expect(run.result.status).toBe(0);
+    expect(run.requested).toHaveLength(4);
+    expect(run.placed).toBe(APP);
+  });
+
+  it("gives up on a download whose transfer keeps breaking", () => {
+    const run = install({ breaks: { download: "app", times: 3 } });
+
+    expect(run.result.status).toBe(1);
+    expect(run.result.stderr).toBe(`Harness Device installer: could not download Harness Device ${VERSION}\n`);
+    expect(run.requested).toEqual([DEVICE_MANIFEST_URL, ...Array(3).fill(releaseUrl("x64"))]);
+    expect(run.opt).toEqual([]);
   });
 
   // The cap binds the download's write alone: a limit on curl would stop its other writes, and on Linux even an append.

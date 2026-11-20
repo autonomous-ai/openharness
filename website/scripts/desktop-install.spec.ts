@@ -33,13 +33,13 @@ const sums = (text: string) => ({ sha256: createHash("sha256").update(text).dige
 const commandPattern = (path: string) => `^${path.replace(/[\][\\.*^$+?(){}|]/g, "\\$&")}( |$)`;
 
 /**
- * Stub uname, curl, plutil, ditto, lipo, open, pgrep and mv, first on PATH, steered by STUB_* variables; shasum,
+ * Stub uname, curl, plutil, ditto, lipo, open, pgrep, mv and sleep, first on PATH, steered by STUB_* variables; shasum,
  * sha256sum, sed and the rest are real. curl serves the manifest at its URL and the release file at any other,
  * recording each URL. plutil answers the manifest's desktop-macos fields from files and an app's version from its
  * Info.plist, which ditto writes beside the executable it unpacks. pgrep matches its pattern as the extended regex it is
  * against the command lines in the log's `processes`. mv records whether something is at the place, moves,
- * then, the first time, sends STUB_MV_SIGNAL to the script. Written once: macOS checks each new executable on its first
- * run.
+ * then, the first time, sends STUB_MV_SIGNAL to the script. sleep returns at once. Written once: macOS checks each
+ * new executable on its first run.
  */
 const bin = mkdtempSync(join(tmpdir(), "harness-install-bin-"));
 const stub = (name: string, body: string) => writeFileSync(join(bin, name), `#!/bin/sh\n${body}\n`, { mode: 0o755 });
@@ -54,6 +54,11 @@ done
 printf '%s\\n' "$url" >> "$STUB_LOG/requested"
 printf '%s\\0' "$@" >> "$STUB_LOG/curl" && printf '\\n' >> "$STUB_LOG/curl"
 served=release && [ "$url" != "$STUB_MANIFEST_URL" ] || served=manifest
+# A transfer that breaks midway, its first STUB_BREAKS times: some bytes, then curl's status for a partial file.
+broken="$(cat "$STUB_LOG/broken" 2>/dev/null || echo 0)"
+if [ "$STUB_BREAK" = "$served" ] && [ "$broken" -lt "$STUB_BREAKS" ]; then
+  echo "$((broken + 1))" > "$STUB_LOG/broken" && printf 'part of it' > "$out" && exit 18
+fi
 # A server that never stops, its size unnamed: curl before 8.4 (Ubuntu 22.04's 7.81) applies no --max-filesize to it.
 [ "$STUB_ENDLESS" != "$served" ] || exec head -c 4194304 /dev/zero > "$out" 2>/dev/null
 # A file of curl's own, larger than the download, as its errors written to a log file.
@@ -68,6 +73,7 @@ mkdir -p "$app/MacOS" && cp "$3" "$app/MacOS/Harness" && chmod 755 "$app/MacOS/H
   && cp "$STUB_SERVED/plutil/desktop-macos.version" "$app/Info.plist"`,
 );
 stub("lipo", "echo x86_64 arm64");
+stub("sleep", ":");
 stub("open", `printf '%s\\n' "$@" >> "$STUB_LOG/open"`);
 stub(
   "pgrep",
@@ -101,6 +107,8 @@ interface Options {
   signal?: string;
   /** A signal the first move sends the script once it has moved. */
   mvSignal?: string;
+  /** The download whose transfer breaks midway, and how many times. */
+  breaks?: { download: "manifest" | "release"; times: number };
   /** Whether curl writes a file of its own, larger than the download. */
   curlWrites?: boolean;
   /** The download whose server sends without end, never naming its size. */
@@ -145,6 +153,8 @@ function install(os: "Darwin" | "Linux", options: Options = {}) {
     STUB_MV_SIGNAL: options.mvSignal ?? "",
     STUB_ENDLESS: options.endless ?? "",
     STUB_CURL_WRITES: options.curlWrites ? "1" : "",
+    STUB_BREAK: options.breaks?.download ?? "",
+    STUB_BREAKS: String(options.breaks?.times ?? 0),
   };
   // exec keeps the pid: the script's own, for the stubs that signal it.
   const result = spawnSync("sh", ["-c", 'export STUB_SCRIPT_PID=$$; exec sh "$0"', installer], {
@@ -336,8 +346,34 @@ describe("desktop-install.sh", { timeout: 20_000 }, () => {
     expect(run.result.status).toBe(1);
     // curl names its own failure before it.
     expect(run.result.stderr.trimEnd().split("\n").at(-1)).toBe(`Harness desktop installer: ${reason}`);
+    // A body past its size is no transport failure: it is never fetched again.
+    expect(new Set(run.requested).size).toBe(run.requested.length);
     expect(run.placed).toBeNull();
     expect(run.ran).toEqual([]);
+  });
+
+  // A transfer can break midway: the download starts again from an empty file, a bounded number of times.
+  it.each([
+    ["Darwin", "manifest"],
+    ["Darwin", "release"],
+    ["Linux", "manifest"],
+    ["Linux", "release"],
+  ] as const)("%s downloads the %s again from the start when its transfer breaks", (os, download) => {
+    const run = install(os, { breaks: { download, times: 2 } });
+
+    expect(run.result.stderr).toBe("");
+    expect(run.result.status).toBe(0);
+    expect(run.requested).toHaveLength(4);
+    expect(run.placed).toBe(os === "Darwin" ? ARCHIVE : APPIMAGE);
+  });
+
+  it.each(["Darwin", "Linux"] as const)("%s gives up on a download whose transfer keeps breaking", (os) => {
+    const run = install(os, { breaks: { download: "release", times: 3 } });
+
+    expect(run.result.status).toBe(1);
+    expect(run.result.stderr).toBe(`Harness desktop installer: could not download Harness ${VERSION}\n`);
+    expect(run.requested).toEqual([MANIFEST_URL, ...Array(3).fill(RELEASE_URLS[os])]);
+    expect(run.placed).toBeNull();
   });
 
   // The cap binds the download's write alone: a limit on curl would stop its other writes, and on Linux even an append.
