@@ -103,7 +103,7 @@ function setup(over: Partial<BindDeps> = {}) {
     announceSession: vi.fn(),
     stoppedAgents: { save: vi.fn(), finishResume: vi.fn(), get: vi.fn(() => null) },
     syncRecapPool: vi.fn(),
-    input: { forget: vi.fn(), awaitingConfirmation: vi.fn(() => false), waitsForPane: vi.fn(() => false), firstTaskWaiting: vi.fn(() => false), typeCommand: vi.fn(async () => true), expectFirstTask: vi.fn() },
+    input: { forget: vi.fn(), awaitingConfirmation: vi.fn(() => false), waitsForPane: vi.fn(() => false), firstTaskWaiting: vi.fn(() => false), typeCommand: vi.fn(async () => true), expectFirstTask: vi.fn(), ownsBox: vi.fn(() => false) },
     submitFirstTask: vi.fn(),
     deviceInput: { forget: vi.fn() },
     homes: { copilot: '/copilot', grok: '/grok', agy: '/agy' },
@@ -2460,7 +2460,9 @@ describe('binding an OpenClaw pane, read from its screen', () => {
     it('types nothing into a box that holds text: the person\'s, or a message OpenClaw refused', async () => {
       for (const second of [0, 20, 40]) await pass(second, screen('screen-history-refused'))
       expect(typed()).toEqual([])
+      // The pass that reads the box empty lets go of the hold that text set, which changes the row and ends that pass.
       await pass(41)
+      await pass(42)
       expect(typed()).toEqual([SESSION])
     })
 
@@ -2736,6 +2738,170 @@ describe('binding an OpenClaw pane, read from its screen', () => {
       expect(await pass(180)).toBe(false)
       expect(await pass(359)).toBe(false)
       expect(await pass(360)).toBe(true)
+    })
+  })
+
+  // A person's draft is never cleared: the agent says so while a message of Harness's waits behind it (decision 1).
+  describe('a box with text Harness did not type', () => {
+    const START = Date.parse('2026-11-19T10:00:00Z')
+    const TASK = 'Fix the parser'
+    const HELD = `[discovery] a1 openclaw · ${OPENCLAW_STATES.boxHeld}`
+    const RELEASED = '[discovery] a1 openclaw · working again'
+    /** The pane with its input box showing [text], one box line a line of it. */
+    const withBox = (shown: string, text: string): string => {
+      const lines = shown.split('\n')
+      const [top, bottom] = lines.flatMap((line, index) => (line.startsWith('────') ? [index] : [])).slice(-2)
+      return [...lines.slice(0, top + 1), ...(text ? text.split('\n') : []), ...lines.slice(bottom)].join('\n')
+    }
+    let run: ReturnType<typeof setup>
+    let row: RegisteredSession
+    beforeEach(() => {
+      vi.useFakeTimers({ toFake: ['Date'] })
+      run = setup({ openclawPaneRead: vi.fn(() => true) })
+      row = pane({ sessionId: 'agent:main:plain', registeredAt: START })
+      run.byAgent.set('a1', row)
+      vi.mocked(run.deps.registry.byProcess).mockReturnValue(row)
+    })
+    /** A pass `second`s after START, the pane showing `shown`. */
+    const pass = async (second: number, shown: string) => {
+      vi.setSystemTime(START + second * 1_000)
+      vi.mocked(run.deps.capturePane).mockResolvedValue(shown)
+      await run.binding.bindObservedAgent(tui({ processIdentity: { pid: 7714, startMarker: new Date(START).toISOString(), executable: 'openclaw' } }))
+    }
+    const logged = () => vi.mocked(console.log).mock.calls.flat().map(String)
+    /** Nothing typed, pressed or taken by the pass: the person's draft is theirs. */
+    const typedNothing = () => {
+      expect(run.deps.input.typeCommand).not.toHaveBeenCalled()
+      expect(run.deps.registry.afterTransaction).not.toHaveBeenCalled()
+      expect(run.deps.submitFirstTask).not.toHaveBeenCalled()
+    }
+
+    describe('on a pane whose history did not load', () => {
+      const refused = screen('screen-history-refused')
+      const draft = withBox(refused, 'my own words')
+
+      it('the person\'s text with a first task waiting holds the agent, said and announced once, and nothing is typed', async () => {
+        row.firstTask = TASK
+        for (const second of [0, 20, 40]) await pass(second, draft)
+        expect(row.identityHold).toBe(OPENCLAW_STATES.boxHeld)
+        expect(logged()).toEqual([HELD])
+        expect(run.deps.announceSession).toHaveBeenCalledOnce()
+        expect(run.deps.input.ownsBox).toHaveBeenCalledWith('a1', 'my own words', { above: 0, below: 0 })
+        // `/session` is never typed into a box with text.
+        typedNothing()
+      })
+
+      it.each([
+        ['shows exactly the message Harness awaits', refused],
+        ['is being typed by Harness', withBox(refused, 'Say hello from')],
+      ])('a box that %s holds nothing', async (_, shown) => {
+        vi.mocked(run.deps.input.awaitingConfirmation).mockReturnValue(true)
+        vi.mocked(run.deps.input.ownsBox).mockReturnValue(true)
+        await pass(0, shown)
+        expect(row).not.toHaveProperty('identityHold')
+        expect(logged()).toEqual([])
+      })
+
+      it('the box emptied lets the agent go, and its message goes the usual way', async () => {
+        row.firstTask = TASK
+        await pass(0, draft)
+        await pass(5, withBox(refused, ''))
+        expect(row).not.toHaveProperty('identityHold')
+        expect(run.deps.announceSession).toHaveBeenCalledTimes(2)
+        // The release changed the row, which ends its pass: the next types `/session`, as on any pane like it.
+        await pass(10, withBox(refused, ''))
+        expect(logged()).toEqual([HELD, RELEASED, '[discovery] a1 openclaw · history not loaded · /session 1/5'])
+        expect(run.deps.announceSession).toHaveBeenCalledTimes(2)
+      })
+
+      // A TUI the person runs with nothing of Harness's waiting on it is theirs.
+      it('the person\'s text with nothing of Harness\'s waiting holds nothing', async () => {
+        await pass(0, draft)
+        expect(row).not.toHaveProperty('identityHold')
+        expect(run.deps.input.ownsBox).not.toHaveBeenCalled()
+      })
+
+      it('the first task\'s bound runs on through the hold: failed at 3 minutes, never typed', async () => {
+        row.firstTask = TASK
+        await pass(0, draft)
+        expect(row.identityHold).toBe(OPENCLAW_STATES.boxHeld)
+        await pass(179, draft)
+        expect(row.launch).toBeUndefined()
+        await pass(180, draft)
+        expect(row.launch).toMatchObject({ state: 'failed', error: 'FIRST_TASK_NOT_TAKEN' })
+        expect(run.deps.submitFirstTask).not.toHaveBeenCalled()
+        expect(run.deps.input.typeCommand).not.toHaveBeenCalled()
+      })
+    })
+
+    describe('on a pane that can send', () => {
+      const ready = screen('screen-plain')
+      const draft = withBox(ready, 'my own words')
+
+      it('a person\'s draft with a tell waiting behind it holds the agent, said and announced once, and nothing is typed', async () => {
+        vi.mocked(run.deps.input.waitsForPane).mockReturnValue(true)
+        for (const second of [0, 5, 10]) await pass(second, draft)
+        expect(row.identityHold).toBe(OPENCLAW_STATES.boxHeld)
+        expect(logged()).toEqual([HELD])
+        expect(run.deps.announceSession).toHaveBeenCalledOnce()
+        typedNothing()
+      })
+
+      // OpenClaw puts a refused message back above the newer draft (its editor's `setText`).
+      it('a refused message with the person\'s draft after it holds the same', async () => {
+        vi.mocked(run.deps.input.awaitingConfirmation).mockReturnValue(true)
+        await pass(0, withBox(ready, `${TASK}\nmy own words`))
+        expect(row.identityHold).toBe(OPENCLAW_STATES.boxHeld)
+        expect(run.deps.input.ownsBox).toHaveBeenCalledWith('a1', `${TASK} my own words`, { above: 0, below: 0 })
+        typedNothing()
+      })
+
+      it('the box emptied lets the agent go, announced once, and the pass types nothing: the tell is the controller\'s to send', async () => {
+        vi.mocked(run.deps.input.waitsForPane).mockReturnValue(true)
+        await pass(0, draft)
+        await pass(5, ready)
+        await pass(10, ready)
+        expect(row).not.toHaveProperty('identityHold')
+        expect(logged()).toEqual([HELD, RELEASED])
+        expect(run.deps.announceSession).toHaveBeenCalledTimes(2)
+        typedNothing()
+      })
+
+      // A tell given up at its bound leaves nothing of Harness's waiting, and a quiet pane is otherwise not read.
+      it('lets the agent go once nothing of Harness\'s waits, its pane quiet or not', async () => {
+        vi.mocked(run.deps.input.waitsForPane).mockReturnValue(true)
+        await pass(0, draft)
+        vi.mocked(run.deps.input.waitsForPane).mockReturnValue(false)
+        vi.mocked(run.deps.openclawPaneDue).mockReturnValue(false)
+        await pass(5, draft)
+        expect(row).not.toHaveProperty('identityHold')
+        expect(logged()).toEqual([HELD, RELEASED])
+        // Let go, a row with nothing waiting and a quiet pane is not read again.
+        await pass(10, draft)
+        expect(run.deps.capturePane).toHaveBeenCalledTimes(2)
+      })
+
+      it('a draft with nothing of Harness\'s waiting holds nothing', async () => {
+        await pass(0, draft)
+        expect(row).not.toHaveProperty('identityHold')
+      })
+
+      it('a box showing exactly the message Harness awaits holds nothing', async () => {
+        vi.mocked(run.deps.input.awaitingConfirmation).mockReturnValue(true)
+        vi.mocked(run.deps.input.ownsBox).mockReturnValue(true)
+        await pass(0, withBox(ready, TASK))
+        expect(row).not.toHaveProperty('identityHold')
+      })
+
+      it('a first task waiting behind a draft holds, and its bound is not paused by it', async () => {
+        row.firstTask = TASK
+        await pass(0, draft)
+        expect(row.identityHold).toBe(OPENCLAW_STATES.boxHeld)
+        await pass(180, draft)
+        expect(row.launch).toMatchObject({ state: 'failed', error: 'FIRST_TASK_NOT_TAKEN' })
+        expect(run.deps.submitFirstTask).not.toHaveBeenCalled()
+        expect(run.deps.input.typeCommand).not.toHaveBeenCalled()
+      })
     })
   })
 
