@@ -199,6 +199,8 @@ class ReleaseWorkflowTests(unittest.TestCase):
         # Desktop's runners: its Linux build links the oldest glibc it supports.
         for entry in entries:
             self.assertIn(f"          - {entry}\n", jobs(self.desktop)["build-linux"])
+        # release-setup.sh installs Tauri's packages through PR CI's apt installer.
+        self.assertIn("            /scripts/apt-install.sh\n", job)
 
     def test_only_sign_update_holds_the_updater_key_on_linux(self):
         # Compile runs the build's code, and the AppImage bundler runs linuxdeploy downloaded unpinned: neither holds it.

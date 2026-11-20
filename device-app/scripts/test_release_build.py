@@ -459,6 +459,10 @@ class ReleaseSetupTests(Fakes):
             (bin_dir / name).write_text(body)
             (bin_dir / name).chmod(0o755)
         (self.root / "device-app" / "ui").mkdir()
+        # PR CI's apt installer, at the repository's root: one line of its arguments a run.
+        self.apt_install_log = self.root / "apt-install.log"
+        (self.root / "scripts").mkdir()
+        (self.root / "scripts" / "apt-install.sh").write_text(f'echo "$*" >>"{self.apt_install_log}"\n')
         self.setup_log, self.github_path = self.root / "setup.jsonl", self.root / "github-path"
         self.runner_temp = self.root / "runner-temp"
         self.runner_temp.mkdir()
@@ -472,6 +476,9 @@ class ReleaseSetupTests(Fakes):
         lines = self.setup_log.read_text().splitlines() if self.setup_log.exists() else []
         return [call["args"] for call in map(json.loads, lines) if call["cmd"] == cmd]
 
+    def apt_installs(self):
+        return self.apt_install_log.read_text().splitlines() if self.apt_install_log.exists() else []
+
     def test_linux_and_windows_install_minisigns_own_pinned_release(self):
         tools = self.runner_temp / "minisign"
         for os_, (url, sha256), folder in ((LINUX_X64, LINUX_MINISIGN, "minisign-linux/x86_64"),
@@ -484,7 +491,7 @@ class ReleaseSetupTests(Fakes):
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual([args[-1] for args in self.calls("curl")], [url])
                 # Ubuntu 22.04's apt has no minisign.
-                self.assertFalse([args for args in self.calls("apt-get") if "minisign" in args])
+                self.assertNotIn("minisign", " ".join(self.apt_installs()))
                 self.assertEqual(self.github_path.read_text().splitlines(), [str(tools / folder)])
                 if os_[0] == "Linux":
                     self.assertTrue((tools / folder / "minisign").is_file())
@@ -496,6 +503,14 @@ class ReleaseSetupTests(Fakes):
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn(f"release-setup: {asset} is not the file pinned here", result.stderr)
                 self.assertFalse(self.github_path.exists())
+
+    def test_linux_installs_tauris_packages_through_apt_install(self):
+        # PR CI's installer bounds and retries each network step, so a mirror outage fails in minutes, naming apt.
+        result = self.setup(LINUX_X64, LINUX_MINISIGN[1])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.apt_installs(),
+                         ["libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev file"])
+        self.assertEqual(self.calls("apt-get"), [])
 
     def test_macos_installs_minisign_with_brew(self):
         result = self.setup(MACOS, "0" * 64)
