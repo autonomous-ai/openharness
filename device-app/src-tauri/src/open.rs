@@ -172,6 +172,7 @@ fn shell_select(zip: &Path) -> io::Result<()> {
         COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE, CoInitializeEx, CoUninitialize,
     };
     use windows_sys::Win32::UI::Shell::{ILCreateFromPathW, ILFree, SHOpenFolderAndSelectItems};
+    let zip = selectable(zip, long_path);
     let path = zip.as_os_str().encode_wide().chain([0]).collect::<Vec<u16>>();
     // SAFETY: this thread's own apartment, set up before the shell calls; nothing is reserved.
     let com = unsafe { CoInitializeEx(ptr::null(), (COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE) as u32) };
@@ -191,6 +192,42 @@ fn shell_select(zip: &Path) -> io::Result<()> {
         unsafe { CoUninitialize() };
     }
     selected
+}
+
+/// The path the shell gets for `zip`: its long form from `expand`, as Explorer opens a folder named by an 8.3 path
+/// (a %TEMP% under `RUNNER~1`) without selecting the zip in it. One it cannot expand is used as given, and no log line
+/// holds it.
+#[cfg(any(windows, test))]
+fn selectable(zip: &Path, expand: impl FnOnce(&Path) -> io::Result<PathBuf>) -> PathBuf {
+    expand(zip).unwrap_or_else(|_| zip.to_path_buf())
+}
+
+/// `path` with each 8.3 name in it expanded to its long name.
+#[cfg(windows)]
+fn long_path(path: &Path) -> io::Result<PathBuf> {
+    use std::ffi::OsString;
+    use std::os::windows::ffi::{OsStrExt, OsStringExt};
+    use std::ptr;
+    use windows_sys::Win32::Storage::FileSystem::GetLongPathNameW;
+    let short = path.as_os_str().encode_wide().chain([0]).collect::<Vec<u16>>();
+    // SAFETY: the path ends in a NUL; a buffer of 0 is written to nowhere, and the size it needs, NUL included, comes
+    // back.
+    let size = unsafe { GetLongPathNameW(short.as_ptr(), ptr::null_mut(), 0) };
+    if size == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let mut long = vec![0u16; size as usize];
+    // SAFETY: as above, into a buffer as long as the size passed.
+    let written = unsafe { GetLongPathNameW(short.as_ptr(), long.as_mut_ptr(), size) };
+    if written == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // `size` or more: renamed to a longer name between the two calls.
+    if written >= size {
+        return Err(io::ErrorKind::Interrupted.into());
+    }
+    long.truncate(written as usize);
+    Ok(PathBuf::from(OsString::from_wide(&long)))
 }
 
 #[cfg(test)]
