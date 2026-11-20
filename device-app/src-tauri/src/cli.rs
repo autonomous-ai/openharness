@@ -1513,6 +1513,7 @@ mod tests {
         use crate::child_windows::CREATION_FLAGS;
         use crate::cli::*;
         use crate::types::MemoryLog;
+        use std::cell::Cell;
         use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
         use std::os::windows::process::CommandExt;
         use windows_sys::Win32::Foundation::WAIT_OBJECT_0;
@@ -1616,20 +1617,37 @@ Start-Sleep 600
         #[test]
         fn a_run_gives_its_code_and_its_lines_in_order() {
             let mut lines = Vec::new();
-            let output =
-                run_lines(cmd("echo a& echo b& exit 3"), WAIT, &mut |line| lines.push(line.trim_end().to_string()))
-                    .unwrap();
+            // A cold cmd.exe on a busy machine takes seconds: the deadline is not what this checks.
+            let output = run_lines(cmd("echo a& echo b& exit 3"), FIRST_LINE, &mut |line| {
+                lines.push(line.trim_end().to_string())
+            })
+            .unwrap();
             assert_eq!(lines, ["a", "b"]);
             assert_eq!((output.code, output.timed_out), (Some(3), false));
         }
 
         #[test]
-        fn a_run_past_its_deadline_has_no_code() {
-            let started = Instant::now();
-            let output = run(powershell("Start-Sleep 60"), Duration::from_secs(2)).unwrap();
-            assert!(output.timed_out);
-            assert_eq!(output.code, None);
-            assert!(started.elapsed() < Duration::from_secs(10), "{:?}", started.elapsed());
+        fn a_run_past_its_deadline_has_no_code_and_dies_with_its_children() {
+            let command = powershell(concat!(
+                "$started = Start-Process -PassThru -NoNewWindow $env:ComSpec '/C ping -n 600 127.0.0.1 >NUL'; ",
+                "[Console]::Out.WriteLine($started.Id); Start-Sleep 600",
+            ));
+            // Its deadline FIRST_LINE away on a clock the sink moves there at the first line, which names what it
+            // started. On a thread, so a run that outlives its deadline fails the test instead of hanging it.
+            let (send, back) = mpsc::channel();
+            thread::spawn(move || {
+                let start = Instant::now();
+                let (clock, end) = (Cell::new(start), start + FIRST_LINE);
+                let mut started = None;
+                let output = run_until(command, end, &|| clock.get(), &mut |line| {
+                    started.get_or_insert_with(|| process(line.trim_end()));
+                    clock.set(end);
+                });
+                send.send((output.map(|output| (output.timed_out, output.code)), started))
+            });
+            let (output, started) = back.recv_timeout(FIRST_LINE + WAIT).expect("back by its deadline");
+            assert_eq!(output.unwrap(), (true, None));
+            assert!(gone_within(&started.expect("the pid it printed"), WAIT));
         }
 
         /// A child that prints its pid and the pid of a process it started, then waits, is ended by `end`: then
