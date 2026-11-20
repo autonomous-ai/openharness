@@ -81,10 +81,12 @@ if [[ "$mode" == minisign ]]; then
 fi
 # The version that wrote Cargo.lock.
 tauri_cli_version=2.12.4
-# CI restores the CLI from a cache keyed on this file: one already at the pin is kept, not compiled again.
+# CI restores the CLI from a cache keyed on this file: one already at the pin is kept, not compiled again. Forced,
+# because the cache holds the binary without cargo's record of it, and cargo refuses to overwrite a binary it did not
+# install.
 install_tauri_cli() {
   if [[ "$(cargo tauri --version 2>/dev/null)" != "tauri-cli $tauri_cli_version" ]]; then
-    cargo install tauri-cli --version "$tauri_cli_version" --locked
+    cargo install tauri-cli --version "$tauri_cli_version" --locked --force
   fi
 }
 rustup toolchain install stable --profile minimal
