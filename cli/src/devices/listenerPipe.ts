@@ -97,6 +97,55 @@ const WINDOWS_LIVENESS: HostLiveness = {
   rows: async () => (await import('../lib/windows/processTable.js')).windowsProcessRows(null),
 }
 
+/** What a record proof reads at each call: the record's pipe and pid, when its file was written, and the pipe's token. */
+export interface RecordRead { record: { pipe: string; pid: number }; mtimeMs: number; token: Buffer }
+
+/** Where the processes of a process's records stand proven, and since when, one proof per record file. */
+export interface RecordProof {
+  /** The pipe and token [read] finds for the record at [file], or null when there is nothing to dial. */
+  pipe(file: string, read: () => RecordRead | null): Promise<PipeTarget | null>
+  /** Drops the proof held for [file]: the next call reads the table. */
+  forget(file: string): void
+}
+
+interface HeldProof { pipe: string; pid: number; mtimeMs: number; provenAt: number }
+
+/**
+ * A process's proofs, one per record file: the devices' (`devices.json`) and the daemon's (deviceClaude/inbox.ts). Each
+ * call reads the record and the token, and checks the pid. The table is read when no proof is held for this pipe, pid
+ * and record time, or the one held is PROOF_MAX_AGE_MS old.
+ */
+export function createRecordProof(options: { liveness?: HostLiveness; now?: () => number } = {}): RecordProof {
+  const liveness = options.liveness ?? WINDOWS_LIVENESS
+  const now = options.now ?? Date.now
+  const held = new Map<string, HeldProof>()
+  return {
+    async pipe(file, read) {
+      const found = read()
+      if (!found) return null
+      const { record, mtimeMs, token } = found
+      if (!liveness.alive(record.pid)) {
+        held.delete(file)
+        return null
+      }
+      const target = { pipe: record.pipe, token }
+      const proof = held.get(file)
+      if (proof && proof.pipe === record.pipe && proof.pid === record.pid && proof.mtimeMs === mtimeMs
+        && now() - proof.provenAt < PROOF_MAX_AGE_MS) return target
+      held.delete(file)
+      // Read here rather than inside recordedProcessDead, so a proof is held only when the table answered: no table is
+      // no proof of death, nor of life, and the next call asks it again. The pid was checked just above.
+      const rows = await liveness.rows?.().catch(() => null) ?? null
+      if (await recordedProcessDead(file, record.pid, { alive: () => true, rows: async () => rows })) return null
+      if (rows) held.set(file, { pipe: record.pipe, pid: record.pid, mtimeMs, provenAt: now() })
+      return target
+    },
+    forget(file) {
+      held.delete(file)
+    },
+  }
+}
+
 /** Where the recorded devices process stands proven, and since when. */
 export interface DevicesProof {
   /** The devices' pipe and token for [dataDir], or null when there is nothing to dial. */
@@ -105,40 +154,19 @@ export interface DevicesProof {
   forget(dataDir: string): void
 }
 
-interface HeldProof { pipe: string; pid: number; mtimeMs: number; provenAt: number }
-
-/**
- * A process's proofs, one per data folder. Each call reads the record and the token, and checks the pid. The table is
- * read when no proof is held for this pipe, pid and record time, or the one held is PROOF_MAX_AGE_MS old.
- */
+/** A process's proofs of the devices, one per data folder, each held as a record proof of its `devices.json`. */
 export function createDevicesProof(options: { liveness?: HostLiveness; now?: () => number } = {}): DevicesProof {
-  const liveness = options.liveness ?? WINDOWS_LIVENESS
-  const now = options.now ?? Date.now
-  const held = new Map<string, HeldProof>()
+  const proof = createRecordProof(options)
   return {
-    async pipe(dataDir) {
-      const found = readRecordFile(dataDir, process.platform)
-      const token = found && readDaemonToken(dataDir, DEVICES_TOKEN_FILE)
-      if (!found || !token) return null
-      const { record, mtimeMs } = found
-      if (!liveness.alive(record.pid)) {
-        held.delete(dataDir)
-        return null
-      }
-      const target = { pipe: record.pipe, token }
-      const proof = held.get(dataDir)
-      if (proof && proof.pipe === record.pipe && proof.pid === record.pid && proof.mtimeMs === mtimeMs
-        && now() - proof.provenAt < PROOF_MAX_AGE_MS) return target
-      held.delete(dataDir)
-      // Read here rather than inside recordedProcessDead, so a proof is held only when the table answered: no table is
-      // no proof of death, nor of life, and the next call asks it again. The pid was checked just above.
-      const rows = await liveness.rows?.().catch(() => null) ?? null
-      if (await recordedProcessDead(devicesRecordPath(dataDir), record.pid, { alive: () => true, rows: async () => rows })) return null
-      if (rows) held.set(dataDir, { pipe: record.pipe, pid: record.pid, mtimeMs, provenAt: now() })
-      return target
+    pipe(dataDir) {
+      return proof.pipe(devicesRecordPath(dataDir), () => {
+        const found = readRecordFile(dataDir, process.platform)
+        const token = found && readDaemonToken(dataDir, DEVICES_TOKEN_FILE)
+        return found && token ? { ...found, token } : null
+      })
     },
     forget(dataDir) {
-      held.delete(dataDir)
+      proof.forget(devicesRecordPath(dataDir))
     },
   }
 }

@@ -1,11 +1,13 @@
 /**
  * `harness device claude …` and `harness device codex …`: status, enable and disable, the way to take away or bring back
- * what the devices service sets up by itself once a dial has attached here, and two words the harness-device plugin runs
- * that a person never types: `asked` (its PermissionRequest hook) and `link` (its mod, for the daemon's socket and the
- * devices' listener's). `disable` marks the engine removed in dial-skill.json, which the devices service then leaves
- * alone, and removes Harness's skill from the engine's default home, from each folder an enable wrote and from each the
- * service recorded in dial-setup.json. `enable` clears the mark and writes the skill into the engine's default home and
- * back into each folder the service recorded; a folder an earlier enable wrote with another home is not written again.
+ * what the devices service sets up by itself once a dial has attached here, and three words the harness-device plugin
+ * runs that a person never types: `asked` (its PermissionRequest hook), `link` (its mod, for the daemon's socket and the
+ * devices' listener's) and `inbox <session id>` (its mod on Windows, whose runtime can neither reach the daemon's pipe
+ * nor sign for it: this process holds the session's poll and proves the daemon's token, inbox.ts). `disable` marks the
+ * engine removed in dial-skill.json, which the devices service then leaves alone, and removes Harness's skill from the
+ * engine's default home, from each folder an enable wrote and from each the service recorded in dial-setup.json.
+ * `enable` clears the mark and writes the skill into the engine's default home and back into each folder the service
+ * recorded; a folder an earlier enable wrote with another home is not written again.
  * Claude Code's two cover each Orca account's Claude Code home as well, and the default home when the command runs with
  * another (in an Orca terminal), all sharing the command's `plugins/`: there the plugin is only turned on or off.
  * `disable` turns those off first and never uninstalls there: an uninstall takes the files every home names, and another
@@ -28,6 +30,7 @@
 import { mkdirSync, realpathSync } from 'node:fs'
 import { connect, type Socket } from 'node:net'
 import { dirname, join } from 'node:path'
+import { setTimeout as sleep } from 'node:timers/promises'
 import { harnessPath } from '../config/harnessHome.js'
 import { claudeDisable, claudeEnable, claudeHomeDisable, claudeHomeEnable, claudeStatus, type ClaudeResult, type ClaudeRun } from '../devices/claudePlugin.js'
 import { claudePluginState, ownDirectory, removeSkill, skillsFolderOf, skillWanted, writeSkill } from '../devices/dialSkill.js'
@@ -42,11 +45,12 @@ import { localSocketRoute, socketIsPrivate } from '../lib/localTransport.js'
 import { daemonPipe } from '../lib/windows/daemonPipe.js'
 import type { PipeTarget } from '../lib/windows/pipeClient.js'
 import { daemonPost, runAsked } from './asked.js'
+import { createDaemonProof, followInbox, parentAlive } from './inbox.js'
 import { claudePluginOn, claudeSettingsPath } from './plugin.js'
 
-/** `asked`, `link`, `orca link` and `vscode link` are left out: they are the plugins', and typed by hand they only wait on
- *  stdin or print a path. `vscode status`, `cursor status` and `orca status` are too: each app shows whether Harness's
- *  extension or plugin is on. */
+/** `asked`, `link`, `inbox`, `orca link` and `vscode link` are left out: they are the plugins', and typed by hand they
+ *  only wait on stdin or the dial, or print a path. `vscode status`, `cursor status` and `orca status` are too: each app
+ *  shows whether Harness's extension or plugin is on. */
 export const DEVICE_USAGE = `Harness device (with a dial plugged in, Claude Code and Codex are set up to ring it, and VS Code, Cursor and Orca to follow it; disable takes that away, enable brings it back):
   harness device claude status [--json]  whether the dial is on for Claude Code (its harness-device plugin on, and not removed), and its version
   harness device claude enable           set Claude Code up again: the plugin and the dial skill (Claude Code 2.1.287 or later), in each Orca account too
@@ -92,6 +96,8 @@ export interface DeviceDeps {
   /** How `orca link` and `vscode link` find the daemon's pipe and the devices' on Windows; by default each record's
    *  process is proven by the process table (tests take it as running). */
   pipes?: { daemon(dataDir: string, port: number): Promise<PipeTarget | null>; devices(dataDir: string): Promise<PipeTarget | null> }
+  /** One line and a newline on stdout, false once a write failed or stdout errored: `inbox` ends on it. */
+  write(line: string): Promise<boolean>
   out(line: string): void
   err(line: string): void
 }
@@ -101,6 +107,13 @@ export async function runDeviceCommand(argv: string[], deps: DeviceDeps): Promis
   if (argv[0] === 'notify') return runNotice(argv.slice(1), deps)
   const words = argv.filter((arg) => !arg.startsWith('-'))
   const json = argv.includes('--json')
+  // A missing id is answered as a refused one, off: the mod reads lines, never the usage.
+  if (words.length <= 3 && words[0] === 'claude' && words[1] === 'inbox') {
+    return followInbox(words[2] ?? '', {
+      dataDir: deps.dataDir, port: deps.port, platform: deps.platform, acts: () => pluginActs(deps.dataDir),
+      proof: createDaemonProof(), write: deps.write, wait: (ms) => sleep(ms), parentAlive,
+    })
+  }
   if (words.length === 2 && (words[0] === 'orca' || words[0] === 'vscode') && words[1] === 'link') return devicesLink(deps)
   if (words.length === 2 && words[0] === 'codex') return codexCommand(words[1], json, deps)
   if (words.length === 2 && (words[0] === 'vscode' || words[0] === 'cursor')) return vscodeCommand(words[0], words[1], json, deps)
