@@ -27,6 +27,7 @@ const MAX_BYTES = 1024 * 1024
 const missing = (error: unknown) => (error as NodeJS.ErrnoException).code === 'ENOENT'
 type HookFileVerifier = (directories?: Map<string, BigIntStats>) => void
 const hookFileFacts = new WeakMap<HookFileVerifier, { facts: readonly NativePathFact[]; target: string; stamp: string | null }>()
+const hookRouteFacts = new WeakMap<() => void, { facts: readonly NativePathFact[]; keys: readonly string[] }>()
 
 /**
  * The directories each attempt has flushed. On macOS every fsync is F_FULLFSYNC, a full drive flush (25-35 ms on an
@@ -332,11 +333,11 @@ export function hookFileVerifier(files: readonly { observed: ReturnType<typeof i
   })
 }
 
-function observationVerifier(checks: readonly HookFileVerifier[]): (() => void) | undefined {
+function observationVerifier(checks: readonly HookFileVerifier[], verifyRoutes?: () => void): (() => void) | undefined {
   if (!checks.length || checks.length > 32) return undefined
   const observed = checks.map(check => hookFileFacts.get(check))
   if (observed.some(file => !file)) return undefined
-  if (checks.length === 1 && observed[0]!.stamp !== null) return checks[0]
+  if (!verifyRoutes && checks.length === 1 && observed[0]!.stamp !== null) return checks[0]
   const union = new Map<string, NativePathFact>()
   const versions = new Map<string, string | null>()
   for (const file of observed) {
@@ -350,6 +351,17 @@ function observationVerifier(checks: readonly HookFileVerifier[]): (() => void) 
       union.set(fact.path, fact)
     }
   }
+  const route = verifyRoutes ? hookRouteFacts.get(verifyRoutes) : undefined
+  if (verifyRoutes) {
+    // File versions are stronger than writable-leaf identities, but only on
+    // the originally reserved routes. New observations cannot adopt a new route.
+    if (!route || route.keys.some(key => !versions.has(key)) || route.facts.some(fact => {
+      const current = union.get(fact.path)
+      return !current || withoutDevice(current.identity) !== withoutDevice(fact.identity)
+        || current.alias?.target !== fact.alias?.target
+        || withoutDevice(current.alias?.version) !== withoutDevice(fact.alias?.version)
+    })) return undefined
+  }
   // NativePaths captures ancestors before descendants; Map updates preserve their first position.
   const facts = [...union.values()], reverse = [...facts].reverse()
   const checkFile = (path: string, info: BigIntStats | null) => {
@@ -360,24 +372,42 @@ function observationVerifier(checks: readonly HookFileVerifier[]): (() => void) 
   }
   // Complete groups keep their original fence. Missing-leaf checks add no
   // per-fact branch or callback to this already measured path.
-  if (observed.every(file => file!.stamp !== null)) return () => {
+  if (!route && observed.every(file => file!.stamp !== null)) return () => {
     const budget = new NativeEvidenceBudget(), devices = new Map<string, bigint | null>()
     verifyNativePathFacts(facts, budget, devices)
     verifyNativePathFacts(reverse, budget, devices, checkFile)
     budget.step()
   }
-  const absentBecamePresent = (path: string, info: BigIntStats) => {
+  const changedFile = (path: string, info: BigIntStats) => {
+    if (route?.keys.includes(path) && info.isSymbolicLink()) {
+      throw new HookPreparationHeld('the reserved destination route changed')
+    }
     if (versions.get(path) !== null) return
     if (info.isSymbolicLink()) throw new HookPreparationHeld('the settings route gained an unconfirmed alias')
     throw new HookPreparationHeld('the settings file changed before publication')
   }
-  // Reverse order checks each selected leaf before the ancestors that routed
-  // to it, including aliases shared by later siblings.
+  // Recheck every file version and route fact. Ordinary ancestors follow their
+  // descendants in this pass; shared aliases keep the existing union order.
   return () => {
     const budget = new NativeEvidenceBudget(), devices = new Map<string, bigint | null>()
-    verifyNativePathFacts(facts, budget, devices, undefined, absentBecamePresent)
-    verifyNativePathFacts(reverse, budget, devices, checkFile, absentBecamePresent)
+    verifyNativePathFacts(facts, budget, devices, undefined, changedFile)
+    verifyNativePathFacts(reverse, budget, devices, checkFile, changedFile)
     budget.step()
+  }
+}
+
+/** Share a fresh fence only when every reserved route is covered by known file observations. */
+function preparationVerifier(checks: readonly HookFileVerifier[], verifyRoutes: () => void): () => void {
+  const combined = observationVerifier(checks, verifyRoutes)
+  if (combined) return combined
+  const verifyFiles = observationVerifier(checks)
+  return () => {
+    verifyRoutes()
+    if (verifyFiles) verifyFiles()
+    else {
+      const directories = new Map<string, BigIntStats>()
+      for (const check of checks) check(directories)
+    }
   }
 }
 
@@ -421,15 +451,10 @@ function preparationProof(files: readonly string[], verifyRoutes: () => void): H
     const observed = inspectHookFile(file)
     return { file, target: located?.path ?? join(directoryPath(dirname(file)), basename(file)), stamp: observed.stamp, facts: paths.snapshot(), verify: observed.verify }
   })
-  const verifyFiles = observationVerifier(confirmed.map(file => file.verify))
+  const verifyFiles = preparationVerifier(confirmed.map(file => file.verify), verifyRoutes)
   const proof = { files: confirmed.map(({ verify: _verify, ...file }) => file), current: () => {
     try {
-      verifyRoutes()
-      if (verifyFiles) verifyFiles()
-      else {
-        const directories = new Map<string, BigIntStats>()
-        for (const file of confirmed) file.verify(directories)
-      }
+      verifyFiles()
       return true
     } catch { return false }
   } }
@@ -573,6 +598,7 @@ export function hookPreparationRoutes(files: readonly string[]): { verify(): voi
       }
     }
   }
+  if (retained) hookRouteFacts.set(verifyRoutes, { facts: retained, keys })
   return { verify: verifyRoutes, keys: [...keys], facts: [...new Map(reservations.flatMap(item => item.facts).map(fact => [fact.path, fact])).values()] }
 }
 
@@ -606,17 +632,12 @@ export async function runHookPreparation<T>(files: readonly string[], work: (att
     }
   }
   const observations = new Map<string, (directories?: Map<string, BigIntStats>) => void>()
-  let verifyObservations = observationVerifier([])
+  let verifyObservations = preparationVerifier([], verifyRoutes)
   let observationRevision = 0
   const verify = () => {
     check()
-    verifyRoutes()
     const checked = observationRevision
-    if (verifyObservations) verifyObservations()
-    else {
-      const directories = new Map<string, BigIntStats>()
-      for (const inspect of observations.values()) inspect(directories)
-    }
+    verifyObservations()
     // Metadata reads consume no dependency authority. Fence dependencies once after them, even in nested attempts.
     options.verify?.(); check()
     if (checked !== observationRevision) throw new HookPreparationHeld('the settings observations changed during verification')
@@ -626,7 +647,7 @@ export async function runHookPreparation<T>(files: readonly string[], work: (att
     observe: (file, inspect) => {
       observations.set(file, inspect)
       observationRevision++
-      verifyObservations = observationVerifier([...observations.values()])
+      verifyObservations = preparationVerifier([...observations.values()], verifyRoutes)
     },
     async flush(fd) {
       check()
@@ -660,7 +681,7 @@ export async function runHookPreparation<T>(files: readonly string[], work: (att
   const actual = Promise.resolve().then(() => {
     verify()
     for (const file of files) observations.set(file, inspectHookFile(file).verify)
-    verifyObservations = observationVerifier([...observations.values()])
+    verifyObservations = preparationVerifier([...observations.values()], verifyRoutes)
     return work(attempt)
   }).then(result => {
     verify()

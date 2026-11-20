@@ -130,3 +130,15 @@ it.each(['no device map', 'first pass', 'later pass'])('a returning mismatch cal
   expect(leafCalls).toBe(1)
   expect(validLeafCalls).toBe(0)
 })
+
+it.each(['mode', 'alias'])('a returning mismatch callback cannot approve an existing leaf with a changed %s', change => {
+  const file = join(root, 'leaf'), target = join(root, 'target')
+  writeFileSync(file, '{}', { mode: 0o600 }); writeFileSync(target, '{}', { mode: 0o600 })
+  const facts = observe(file).snapshot(), callback = vi.fn(), valid = vi.fn()
+  if (change === 'mode') chmodSync(file, 0o640)
+  else { unlinkSync(file); symlinkSync(target, file) }
+  expect(() => verifyNativePathFacts(facts, new NativeEvidenceBudget(), undefined, valid, callback)).toThrow(IdentityReadUnavailable)
+  expect(callback).toHaveBeenCalledTimes(1)
+  expect(callback.mock.calls[0][0]).toBe(file)
+  expect(valid.mock.calls.some(([path]) => path === file)).toBe(false)
+})

@@ -43,9 +43,9 @@ it.each(callers.flatMap(caller => ['all absent', 'mixed', 'single absent'].map(s
       try {
         for (let call = 0; call < 2; call++) {
           reads.clear(); verify()
-          expect(reads.get(group.shared)).toBe(caller === 'optional' ? 2 : 4)
+          expect(reads.get(group.shared)).toBe(2)
           const absent = shape === 'mixed' ? files[1] : files[0]
-          expect(reads.get(absent)).toBe(caller === 'optional' ? 2 : 4)
+          expect(reads.get(absent)).toBe(2)
         }
       } finally { effects.stat = undefined }
     })
@@ -81,7 +81,7 @@ it.each(callers.flatMap(caller => ['replacement', 'alias'].map(change => ({ call
     let changed = false, reads = 0
     await expect(withVerifier(caller, group.files, verify => {
       effects.stat = file => {
-        if (file !== group.files[1] || ++reads !== (caller === 'optional' ? 2 : 4)) return
+        if (file !== group.files[1] || ++reads !== (2)) return
         effects.stat = undefined; changed = true
         renameSync(group.shared, displaced)
         if (change === 'alias') symlinkSync(displaced, group.shared)
@@ -109,7 +109,7 @@ it.each(callers)('%s shares absent-leaf evidence across existing aliases', async
   await withVerifier(caller, files, verify => {
     let reads = 0
     effects.stat = file => { if (file === group.shared) reads++ }
-    try { verify(); expect(reads).toBe(caller === 'optional' ? 2 : 4) }
+    try { verify(); expect(reads).toBe(2) }
     finally { effects.stat = undefined }
   })
 })
@@ -118,7 +118,7 @@ it.each(callers)('%s refuses a file created after the first absent-leaf pass', a
   const group = fixture(); let changed = false, reads = 0, effect = false
   const refused = await withVerifier(caller, group.files, verify => {
     effects.stat = file => {
-      if (file !== group.files[1] || ++reads !== (caller === 'optional' ? 1 : 3)) return
+      if (file !== group.files[1] || ++reads !== (1)) return
       effects.stat = undefined; changed = true
       writeFileSync(group.files[0], '{}', { mode: 0o600 })
     }
