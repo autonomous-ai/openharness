@@ -309,6 +309,23 @@ describe('the pid proof', () => {
     expect(reads).toBe(2)
   })
 
+  // A record rewritten while the table was read, by a devices process started since, says nothing of the one read.
+  it('judges the pid by when the record it read was written, not by the file after the table', async () => {
+    const dir = dataDir()
+    const token = ensureDaemonToken(dir, DEVICES_TOKEN_FILE)
+    const file = join(dir, 'record.json')
+    const pipe = pipeIn(dir)
+    writeFileSync(file, JSON.stringify({ pipe, pid: 4242 }))
+    const mtimeMs = statSync(file).mtimeMs
+    const rewritten = new Date(mtimeMs + 60_000)
+    const proof = createRecordProof({ liveness: { alive: () => true, rows: async () => {
+      utimesSync(file, rewritten, rewritten)
+      // Pid 4242 went to a process started after the record that was read.
+      return [{ pid: 4242, executable: 'other.exe', startMarker: filetime(mtimeMs + 30_000) }]
+    } } })
+    expect(await proof.pipe(file, () => ({ record: { pipe, pid: 4242 }, mtimeMs, token }))).toBeNull()
+  })
+
   // The daemon's record is another file in the same folder (deviceClaude/inbox.ts): neither proof stands for the other.
   it('a record proof is held per record file', async () => {
     const dir = dataDir()
