@@ -241,7 +241,8 @@ case "$EXPECTED_SIZE" in
   *[!0-9]* | '') fail "desktop metadata has an invalid archive size" ;;
 esac
 
-# Only this user's processes: the place is under this HOME.
+# Only this user's processes: the place, ~/.local/opt unless HARNESS_DESKTOP_APP_DIR says otherwise,
+# is this user's own.
 if pgrep -u "$(id -u)" -f "$(command_pattern "$DESTINATION")" >/dev/null 2>&1; then
   fail "Harness is running from $DESTINATION. Quit it, then run this installer again."
 fi
