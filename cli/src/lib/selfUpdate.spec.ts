@@ -1621,8 +1621,9 @@ describe('an update that moves the daemon to Node 24', { timeout: 20_000 }, () =
   const v24 = join(runtime, 'node-v24.22.2-test', 'bin', 'node')
   const newer = join(runtime, 'node-v24.23.0-test', 'bin', 'node')
   const note = (dir: string): Record<string, unknown> => JSON.parse(readFileSync(join(dir, 'update-pending.json'), 'utf8'))
-  // The managed Nodes the suite's own runtime folder holds (vitest.setup.ts): links of the run's Node, which the run
-  // started once (testing/placeNode.ts). A fresh copy's first start is the slow one: 2 to 4 s on a loaded Mac against
+  // The managed Nodes the suite's own runtime folder holds (vitest.setup.ts), each started before any test runs it
+  // (testing/placeNode.ts): links of the run's Node, or, on a Node with libnode beside it, copies of their own, each
+  // started as it is placed. A fresh copy's first start is the slow one: 2 to 4 s on a loaded Mac against
   // 0.04 s after (2026-11-19). Copied before each test, it ran inside the tests' 10 s waits for a canary on it, and 1 to
   // 7 of them failed a run under load. The copies also timed out the hook at the default 10 s on a loaded CI runner
   // (2026-11-14, run 43603619102).

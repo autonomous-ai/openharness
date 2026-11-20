@@ -94,8 +94,9 @@ function makeRunNode(node: string, start: (node: string) => void): void {
  * load, such a link's 0.05 s. master.spec.ts places seven: on an M2 Max at a load of 38 to 100, its run took a median of
  * 48 s with a copy each and 29 s with links (five runs each, taken in turn, 2026-11-21).
  *
- * A copy as [copyNode] makes, where the run made none ([started] ''): Homebrew's Node loads libnode from beside the path
- * it runs as, so one file linked into every test would let any test's links name it (#4395, [copyNode]). A Node that
+ * A copy as [copyNode] makes, started once as it is placed, where the run makes none ([started] ''): Homebrew's Node loads
+ * libnode from beside the path it runs as, so one file linked into every test would let any test's links name it (#4395,
+ * [copyNode]). A Node that
  * Rosetta runs is refused first, by name: it translates a link again as it does a copy. [runFrom] is for a copy, which
  * needs libnode beside it there. [started] is the run's Node and [start] its first run; a spec names others.
  */
@@ -103,7 +104,7 @@ export function placeNode(path: string, runFrom: string[] = [], machine?: Machin
   start: (node: string) => void = firstStart): void {
   refuseRosettaNode(machine)
   if (started === undefined) throw new Error('placeNode needs src/__fixtures__/vitestRun.ts as the run\'s globalSetup, which names the run\'s Node')
-  if (started === '') copyNode(path, runFrom, machine)
+  if (started === '') { copyNode(path, runFrom, machine); start(path) }
   else {
     if (!existsSync(started)) makeRunNode(started, start)
     linkSync(started, path)
