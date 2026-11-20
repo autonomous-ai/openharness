@@ -1,5 +1,5 @@
 //! The ChatGPT window on macOS, through Accessibility: only its focused window's title, read and never set. Nothing
-//! polls: an observer on a thread of its own hears when the focused window or a title changes, and reads the title
+//! polls: an observer on a thread of its own hears when the focused window or its title changes, and reads the title
 //! again. `follow.rs`'s test holds this file to the four Accessibility names it uses.
 
 use crate::follow::{AxTrust, CHATGPT_BUNDLE, ChatgptWindow, Heard, chatgpt_installed};
@@ -15,6 +15,7 @@ use objc2_core_foundation::{
     CFRunLoop, CFString, CFType, kCFRunLoopDefaultMode,
 };
 use objc2_foundation::{NSDictionary, NSString, NSURL, ns_string};
+use std::cell::RefCell;
 use std::ffi::c_void;
 use std::path::{Path, PathBuf};
 use std::ptr::{self, NonNull};
@@ -172,6 +173,20 @@ struct Watched<'a> {
     app: &'a AXUIElement,
     heard: &'a (dyn Fn(Heard) + Send + Sync),
     stopped: &'a AtomicBool,
+    /// The focus change's name, to tell it from a title change.
+    focus_changed: &'a CFString,
+    /// The focused window last read: only its title is the thread's.
+    window: RefCell<Option<CFRetained<AXUIElement>>>,
+}
+
+impl Watched<'_> {
+    /// The focused window's title, told, and the window kept.
+    fn read(&self) {
+        let window = focused_window(self.app);
+        let title = window.as_deref().and_then(title_of);
+        self.window.replace(window);
+        (self.heard)(Heard::Title(title));
+    }
 }
 
 /// On the observer's thread: the title now, then at each change, until the run loop is stopped. Once `stopped` is set,
@@ -185,10 +200,10 @@ fn observe_here(pid: libc::pid_t, heard: &(dyn Fn(Heard) + Send + Sync), stopped
     let app = unsafe { AXUIElement::new_application(pid) };
     // SAFETY: a positive timeout, for every call on the application element.
     unsafe { app.set_messaging_timeout(TIMEOUT) };
-    let watched = Watched { app: &app, heard, stopped };
-    let refcon = ptr::from_ref(&watched).cast_mut().cast();
     // On the application element, which hears both from each of its windows.
     let names = [CFString::from_static_str("AXFocusedWindowChanged"), CFString::from_static_str("AXTitleChanged")];
+    let watched = Watched { app: &app, heard, stopped, focus_changed: &names[0], window: RefCell::new(None) };
+    let refcon = ptr::from_ref(&watched).cast_mut().cast();
     // SAFETY: `refcon` is `watched`, alive until both are removed below, and read only on this thread.
     let added = names
         .iter()
@@ -202,9 +217,9 @@ fn observe_here(pid: libc::pid_t, heard: &(dyn Fn(Heard) + Send + Sync), stopped
         run_loop.add_source(Some(&source), mode);
         // Dropped while the observer was made: the title is not read.
         if !stopped.load(Ordering::Acquire) {
-            heard(Heard::Title(read_title(&app)));
+            watched.read();
         }
-        // Read again, as that read may have waited out ChatGPT's timeout: a loop that would stop at once is not run.
+        // Checked again, as that read may have waited out ChatGPT's timeout: a loop that would stop at once is not run.
         if !stopped.load(Ordering::Acquire) {
             CFRunLoop::run();
         }
@@ -232,8 +247,8 @@ fn observer(pid: libc::pid_t) -> Option<CFRetained<AXObserver>> {
 /// A notification, on the observer's thread: the focused window may be another, or its title new.
 unsafe extern "C-unwind" fn notified(
     _observer: NonNull<AXObserver>,
-    _element: NonNull<AXUIElement>,
-    _name: NonNull<CFString>,
+    element: NonNull<AXUIElement>,
+    name: NonNull<CFString>,
     refcon: *mut c_void,
 ) {
     // SAFETY: `refcon` is the `Watched` of `observe_here`, alive while its run loop runs, which is when this is called.
@@ -242,16 +257,32 @@ unsafe extern "C-unwind" fn notified(
     if watched.stopped.load(Ordering::Acquire) {
         return;
     }
-    (watched.heard)(Heard::Title(read_title(watched.app)));
+    // SAFETY: the element and the name of this notification, alive for the call.
+    let (element, name) = unsafe { (element.as_ref(), name.as_ref()) };
+    let again = reads_again(name == watched.focus_changed, element, watched.window.borrow().as_deref());
+    if again {
+        watched.read();
+    }
 }
 
-/// The focused window's title; None with no window, or on any error (a ChatGPT that does not answer in time included).
-fn read_title(app: &AXUIElement) -> Option<String> {
+/// Whether a notification may change the thread's title: the focus moved, or the focused window's own title changed.
+/// Another element's title (a tab, a button, a line of the page ChatGPT shows) is not read: each read is two calls into
+/// ChatGPT, and an app whose page tree is on changes such titles many times a second. Elements compare with CFEqual.
+fn reads_again(focus_changed: bool, element: &AXUIElement, window: Option<&AXUIElement>) -> bool {
+    focus_changed || window == Some(element)
+}
+
+/// The focused window; None with no window, or on any error (a ChatGPT that does not answer in time included).
+fn focused_window(app: &AXUIElement) -> Option<CFRetained<AXUIElement>> {
     let window = copied(app, "AXFocusedWindow")?.downcast::<AXUIElement>().ok()?;
     // SAFETY: a positive timeout.
     unsafe { window.set_messaging_timeout(TIMEOUT) };
-    let title = copied(&window, "AXTitle")?.downcast::<CFString>().ok()?;
-    Some(title.to_string())
+    Some(window)
+}
+
+/// A window's title; None on any error.
+fn title_of(window: &AXUIElement) -> Option<String> {
+    Some(copied(window, "AXTitle")?.downcast::<CFString>().ok()?.to_string())
 }
 
 /// One attribute's value, copied: Accessibility is only read.
