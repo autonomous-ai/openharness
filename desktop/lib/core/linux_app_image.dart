@@ -88,13 +88,17 @@ Future<void> registerAppImageLauncher({
 /// Where launcher entries and their icons live: `XDG_DATA_HOME`, else
 /// `$HOME/.local/share`; null when neither names a folder. The XDG spec has a
 /// relative path ignored, and an entry under one would land wherever Desktop
-/// was started.
+/// was started. Each without the `/`s that end it: a name goes after one `/`,
+/// as the Device app's entry names its icon.
 String? launcherDataHome(Map<String, String> environment) {
-  final xdg = environment['XDG_DATA_HOME'];
+  final xdg = _folder(environment['XDG_DATA_HOME']);
   if (xdg != null && xdg.startsWith('/')) return xdg;
-  final home = environment['HOME'];
+  final home = _folder(environment['HOME']);
   return home != null && home.startsWith('/') ? '$home/.local/share' : null;
 }
+
+/// [path] without the `/`s that end it, so `/` alone is no folder.
+String? _folder(String? path) => path?.replaceFirst(RegExp(r'/+$'), '');
 
 /// The program an entry's `Exec=` line starts, unquoted; null when it has none.
 /// `%%` reads as `%`, before the quotes, as GLib reads it; a single `%` is

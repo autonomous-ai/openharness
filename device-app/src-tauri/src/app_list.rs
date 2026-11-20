@@ -10,6 +10,7 @@ use crate::loginitem_linux::appimage;
 use std::ffi::OsStr;
 use std::fs;
 use std::io;
+use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 
 /// The entry's file name, the one Desktop's installer writes (device_app_launcher.dart).
@@ -23,12 +24,22 @@ pub const WM_CLASS: &str = "harness-device";
 const ICON: &str = "harness-device.png";
 
 /// `$XDG_DATA_HOME` when it is absolute, as the XDG spec says, else `$HOME/.local/share` when HOME is absolute; None
-/// when neither is: a relative one would put the entry under the app's working folder.
-pub fn data_home(xdg_data_home: Option<&OsStr>, home: Option<&Path>) -> Option<PathBuf> {
-    match xdg_data_home.map(Path::new) {
+/// when neither is: a relative one would put the entry under the app's working folder. Each without the `/`s that end
+/// it, as Desktop and the one-line installer take it: they add `/` and a name, and the entry's `Icon=` is that text.
+pub fn data_home(xdg_data_home: Option<&OsStr>, home: Option<&OsStr>) -> Option<PathBuf> {
+    match xdg_data_home.map(folder) {
         Some(xdg) if xdg.is_absolute() => Some(xdg.to_path_buf()),
-        _ => home.filter(|home| home.is_absolute()).map(|home| home.join(".local").join("share")),
+        _ => home.map(folder).filter(|home| home.is_absolute()).map(|home| home.join(".local").join("share")),
     }
+}
+
+/// `path` without the `/`s that end it, so `/` alone is no folder.
+fn folder(path: &OsStr) -> &Path {
+    let mut bytes = path.as_bytes();
+    while let [rest @ .., b'/'] = bytes {
+        bytes = rest;
+    }
+    Path::new(OsStr::from_bytes(bytes))
 }
 
 /// The path as the Desktop Entry spec wants it in `Exec=`, as Desktop's quoteLauncherExec writes it: in quotes, with
@@ -193,8 +204,7 @@ fn write(file: &Path, bytes: &[u8]) -> io::Result<()> {
 /// What the log says of this launch's entry: one line from an AppImage, None from any other run.
 #[cfg(target_os = "linux")]
 pub fn system() -> Option<String> {
-    let home = std::env::var_os("HOME").map(PathBuf::from);
-    let data_home = data_home(std::env::var_os("XDG_DATA_HOME").as_deref(), home.as_deref());
+    let data_home = data_home(std::env::var_os("XDG_DATA_HOME").as_deref(), std::env::var_os("HOME").as_deref());
     apply(data_home.as_deref(), std::env::var_os("APPIMAGE").as_deref(), std::env::var_os("APPDIR").as_deref())
         .map(line)
 }
@@ -266,7 +276,7 @@ mod tests {
         for case in vectors("dataHome") {
             let env = &case["env"];
             let xdg = env["XDG_DATA_HOME"].as_str().map(OsStr::new);
-            let home = env["HOME"].as_str().map(Path::new);
+            let home = env["HOME"].as_str().map(OsStr::new);
             // As text: a Path equals one with a trailing `/`, the bytes of the entry's Icon= line do not.
             let wanted = case["dataHome"].as_str().map(OsString::from);
             assert_eq!(data_home(xdg, home).map(PathBuf::into_os_string), wanted, "{case}");
