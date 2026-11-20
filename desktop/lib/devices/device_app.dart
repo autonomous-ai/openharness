@@ -1,10 +1,43 @@
 import 'package:flutter/foundation.dart';
+import 'package:path/path.dart' as p;
 
+import '../core/home_dir.dart';
 import '../core/runtime_platform.dart';
 import '../core/viewer_mode.dart';
 
 const deviceAppBundleId = 'ai.autonomous.harness.device';
 const deviceAppBundleName = 'Harness Device.app';
+const deviceAppWindowsExe = 'harness-device.exe';
+const deviceAppImageName = 'Harness-Device.AppImage';
+
+/// Where the menu-bar app lives on Windows and Linux, or null when nothing
+/// names that folder. Windows: where its per-user installer puts it,
+/// `%LOCALAPPDATA%\Harness Device`. Linux: `~/.local/opt`, beside Desktop's own
+/// AppImage, under one fixed name so the app's updater replaces it in place.
+/// macOS has none: LaunchServices finds the app wherever it is.
+/// [platform] and [environment] default to this process's.
+String? deviceAppPlace({
+  TargetPlatform? platform,
+  Map<String, String>? environment,
+}) {
+  final env = environment ?? RuntimePlatform.environment;
+  switch (platform ?? defaultTargetPlatform) {
+    case TargetPlatform.windows:
+      // Windows reads its environment's names in any case.
+      final local = env.entries
+          .where((e) => e.key.toUpperCase() == 'LOCALAPPDATA')
+          .map((e) => e.value)
+          .firstOrNull;
+      if (local == null || !p.windows.isAbsolute(local)) return null;
+      return p.windows.join(local, 'Harness Device', deviceAppWindowsExe);
+    case TargetPlatform.linux:
+      final home = maybeHomeDir(environment: env, isWindows: false);
+      if (home == null) return null;
+      return p.posix.join(home, '.local', 'opt', deviceAppImageName);
+    default:
+      return null;
+  }
+}
 
 /// What LaunchServices and AppKit say about the menu-bar app on this computer.
 class DeviceAppPresence {

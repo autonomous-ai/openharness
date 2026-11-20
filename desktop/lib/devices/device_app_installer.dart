@@ -7,6 +7,7 @@ import 'dart:typed_data';
 
 import 'package:cryptography/dart.dart' show DartSha256;
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 
 import '../core/hidden_process.dart';
@@ -158,6 +159,8 @@ class DeviceAppInstaller {
         return parseDeviceAppManifest(
               jsonDecode(utf8.decode(body.takeBytes())),
               architecture: _architecture ?? runtimeArchitecture,
+              // The steps below unpack and check macOS's archive only.
+              platform: TargetPlatform.macOS,
             ) ??
             (throw const _Refused());
       });
