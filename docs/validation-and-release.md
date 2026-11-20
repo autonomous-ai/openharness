@@ -80,7 +80,7 @@ beside the CLI's own suite); the CLI reads `pty/`, `tui/` and `store/`, Desktop 
 | `device-app/`, and `release-device.yml` or `release-desktop.yml` (its release tests read both) | `device-app-checks` (the release scripts' tests against temp Git repositories and fake `gcloud`, `curl` and `gh`, then the UI's typecheck, Vitest and bundle, then `cargo test` with Tauri's Linux packages, then the X11 source of the app in front, live under Xvfb; on Windows, `cargo test --lib`; the macOS code is not compiled) | a few minutes |
 | `backend/` | `backend-desk` (the backend unit suite, `npm test` in `backend/`) and `backend-integration` (the backend integration suite, `npm run test:integration`, four shards) | unit about 1–2 min; integration about 5 min |
 | `companions/`, `website/`, `os/`, `provider/`, `mobile/`, `daemons/` | that component's one check | 1–4 min |
-| `devices/` | `firmware-checks` | 1–2 min |
+| `devices/`, `.github/assets/apps/` (the Pro's host tests check its baked app icons against this art) | `firmware-checks` | 1–2 min |
 | `devices/harness-pro/` | also `pro-firmware-build` (ESP-IDF v5.5.4 build of `harness_pro.bin`, which must fit `ota_0`) and `pro-golden` (`test/golden.sh --check` with Liberation Sans, on macOS arm64 where the baseline is recorded: float maths in the code-drawn shapes differs on Linux x86-64) | build ~4 min, golden ~1 min |
 | anything else (docs, workflows, scripts) | `process-checks` only | about 1.5 min |
 
