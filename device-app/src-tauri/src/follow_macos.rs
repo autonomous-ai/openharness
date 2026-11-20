@@ -462,7 +462,8 @@ mod tests {
         assert!(reads_again(false, &same, Some(&window)));
         // Another element's title: a tab, a button, a line of the page ChatGPT shows.
         assert!(!reads_again(false, &other, Some(&window)));
-        assert!(!reads_again(false, &other, None));
+        // No window known (none yet, or a read ChatGPT did not answer in time): any title is read, until one is.
+        assert!(reads_again(false, &other, None));
         assert!(reads_again(true, &other, Some(&window)));
         assert!(reads_again(true, &other, None));
     }
