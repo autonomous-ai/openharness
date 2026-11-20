@@ -3,8 +3,9 @@
  * key. Toolchains and skill assets stay at their installed package paths, as in spec 1.
  */
 import { ignoreHarnessRuntime } from '../lib/harnessRuntimeIgnore.js'
-import { createHash, randomUUID } from 'node:crypto'
-import { closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readlinkSync, realpathSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
+import { atomicWriteFile } from '../lib/secureState.js'
+import { createHash } from 'node:crypto'
+import { existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, realpathSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, join, relative, resolve, sep } from 'node:path'
 import { z } from 'zod'
@@ -107,16 +108,12 @@ function isLink(path: string): boolean {
   try { return lstatSync(path).isSymbolicLink() } catch { return false }
 }
 
-function writeManagedFile(path: string, body: string): void {
+/** Written whole, so a killed Store never truncates what an already-running agent is reading. `durable` flushes it: a
+ * file written once (runtime.json, the person's instruction file) must survive a power cut. */
+function writeManagedFile(path: string, body: string, durable: boolean): void {
   if (isLink(path)) throw new Error(`Refusing to replace a symlink: ${path}`)
-  // A killed Store must never truncate the context an already-running agent is reading.
-  const temporary = `${path}.${randomUUID()}.tmp`
   const mode = existsSync(path) ? lstatSync(path).mode & 0o777 : 0o600
-  const fd = openSync(temporary, 'wx', mode)
-  try {
-    try { writeFileSync(fd, body); fsyncSync(fd) } finally { closeSync(fd) }
-    renameSync(temporary, path)
-  } finally { rmSync(temporary, { force: true }) }
+  atomicWriteFile(path, body, 'cache', { mode, durable })
 }
 
 /** Older versions appended a marker without an end marker. Remove only text that exactly matches
@@ -149,7 +146,7 @@ export function migrateHarnessInstructions(workspace: string, current: Installed
   const backup = join(folder, 'legacy-AGENTS.md')
   ensureRuntimeDir(base, folder)
   if (!existsSync(backup) && !isLink(backup)) writeFileSync(backup, before, { flag: 'wx', mode: 0o600 })
-  writeManagedFile(path, after)
+  writeManagedFile(path, after, true)
   for (const pkg of packages) {
     for (const root of pkg.manifest.agent?.skills ?? []) {
       for (const skill of skillDirsIn(join(pkg.realDir, root))) {
@@ -178,7 +175,7 @@ function installBootstrap(workspace: string, engine: AgentEngine): void {
   const projectRules = imports && existsSync(join(workspace, imports.file)) && !before.split('\n').some(line => line.trim() === imports.line)
     ? `${imports.line}\n` : ''
   // Preserve all project bytes. Only the generic, env-dispatched bootstrap is shared by sessions.
-  writeManagedFile(path, `${before}${before.endsWith('\n') || !before ? '' : '\n'}\n${projectRules}${HARNESS_BOOTSTRAP}`)
+  writeManagedFile(path, `${before}${before.endsWith('\n') || !before ? '' : '\n'}\n${projectRules}${HARNESS_BOOTSTRAP}`, true)
 }
 
 function snapshot(dsh: InstalledDsh, workspace: string, engine: AgentEngine): RuntimeSnapshot {
@@ -288,9 +285,10 @@ export function prepareHarnessLaunch(dsh: InstalledDsh, workspace: string, engin
     ...data.skills.map(skill => `- ${skill.name}: ${JSON.stringify(join(skillsDir, skill.name, 'SKILL.md'))}`),
     '',
   ].join('\n')
-  writeManagedFile(env.HARNESS_CONTEXT_FILE!, context)
+  // Rebuilt at every launch, restore and fork, so a write a power cut loses is made again by the next one: no flush.
+  writeManagedFile(env.HARNESS_CONTEXT_FILE!, context, false)
   // Written once, and again only when the move of Harness's folder gave its paths their new place: otherwise a saved
   // runtime keeps its bytes.
-  if (!own || own.moved) writeManagedFile(file, `${JSON.stringify(data, null, 2)}\n`)
+  if (!own || own.moved) writeManagedFile(file, `${JSON.stringify(data, null, 2)}\n`, true)
   return { env, args: [...data.args, ...(adapter.contextArgs?.(env.HARNESS_CONTEXT_FILE!) ?? []), ...(adapter.envArgs?.(env) ?? [])] }
 }
