@@ -211,18 +211,11 @@ mod tests {
 
     #[test]
     fn what_shows_the_zip_on_each_os() {
-        assert_eq!(reveal_args("macos", Path::new(ZIP)), ("/usr/bin/open", strings(&["-R", ZIP])));
-        assert_eq!(reveal_args("linux", Path::new(ZIP)), ("xdg-open", strings(&["/Users/p/Desktop"])));
+        assert_eq!(reveal_args("macos", Path::new(ZIP)), Some(("/usr/bin/open", strings(&["-R", ZIP]))));
+        assert_eq!(reveal_args("linux", Path::new(ZIP)), Some(("xdg-open", strings(&["/Users/p/Desktop"]))));
+        // Windows' shell selects it: `explorer.exe /select,` opens the folder without selecting on a first call.
         let zip = r"C:\Users\p\Desktop\harness-logs-20261118-1030.zip";
-        let select = r#"/select,"C:\Users\p\Desktop\harness-logs-20261118-1030.zip""#;
-        assert_eq!(reveal_args("windows", Path::new(zip)), ("explorer.exe", strings(&[select])));
-    }
-
-    #[test]
-    fn explorer_selects_a_zip_whose_path_has_a_space() {
-        let zip = r"C:\Users\Nguyễn Văn A\Desktop\harness-logs-20261118-1030.zip";
-        let select = r#"/select,"C:\Users\Nguyễn Văn A\Desktop\harness-logs-20261118-1030.zip""#;
-        assert_eq!(explorer_select(Path::new(zip)), select);
+        assert_eq!(reveal_args("windows", Path::new(zip)), None);
     }
 
     #[test]
