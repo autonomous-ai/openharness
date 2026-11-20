@@ -96,11 +96,11 @@ export function prepareHookDirectory(path: string, attempt: HookPreparationAttem
   }
 }
 
-/** Resolve a missing descendant through a bounded, verified existing ancestor. */
-function directoryPath(path: string): string {
+/** A surrounding proof can reuse its provisional walk; its final snapshot still checks every fact afresh. */
+function directoryPath(path: string, paths?: NativePaths): string {
   const suffix: string[] = []
   for (let depth = 0; depth < 256; depth++) {
-    const route = new NativePaths(new NativeEvidenceBudget()).resolveSync(path, true)
+    const route = (paths ?? new NativePaths(new NativeEvidenceBudget())).resolveSync(path, true)
     if (route) {
       if (!route.info.isDirectory()) throw new HookPreparationHeld('the configuration parent is not a directory')
       return join(route.path, ...suffix)
@@ -450,7 +450,7 @@ export function hookPreparationRoutes(files: readonly string[]): { verify(): voi
     const directories = new Map<string, BigIntStats>()
     const current = reservations.map(reservation => {
       const fresh = new NativePaths(new NativeEvidenceBudget()), located = fresh.resolveSync(reservation.file, true, directories)
-      const target = located?.path ?? join(directoryPath(dirname(reservation.file)), basename(reservation.file))
+      const target = located?.path ?? join(directoryPath(dirname(reservation.file), fresh), basename(reservation.file))
       return { ...reservation, fresh, target }
     })
     const snapshots = NativePaths.snapshots(current.map(route => route.fresh))

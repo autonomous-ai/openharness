@@ -1,8 +1,8 @@
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
-import { HookPreparationHeld, hookPreparationRoutes, runHookPreparation, type HookPreparationProof } from './nativeHookFiles.js'
+import { HookPreparationHeld, hookPreparationRoutes, inspectHookFile, runHookPreparation, type HookPreparationProof } from './nativeHookFiles.js'
 
 const effects = vi.hoisted(() => ({ onStat: undefined as ((file: unknown) => void) | undefined }))
 vi.mock('node:fs', async original => {
@@ -58,6 +58,98 @@ it.each(callers)('$name shares only provisional sibling reads and starts a fresh
   })
   for (const file of fixture.files) expect(readFileSync(file, 'utf8')).toBe('{"kept":true}')
 })
+
+it.each(callers.flatMap(caller => ['file', 'parents'].map(missing => ({ ...caller, missing }))))(
+  '$name reuses observed ancestry for missing $missing and still starts a fresh pass', async ({ name, reads, missing }) => {
+    const fixture = siblings()
+    for (const file of fixture.files) rmSync(missing === 'file' ? file : dirname(file), { recursive: true })
+    const files = missing === 'file' ? fixture.files : fixture.files.map(file => join(dirname(file), 'unwritten/deeper/config.json'))
+    await withVerifier(name, files, verify => {
+      let observed = 0
+      effects.onStat = file => { if (file === fixture.shared) observed++ }
+      try {
+        verify(); expect(observed).toBe(reads)
+        observed = 0; verify(); expect(observed).toBe(reads)
+      } finally { effects.onStat = undefined }
+    })
+    expect(hookPreparationRoutes(files).keys).toEqual([...files].sort())
+  },
+)
+
+it.each(callers)('$name preserves canonical keys through an alias with missing descendants', async ({ name }) => {
+  const fixture = siblings(); fixture.aliasAncestor()
+  for (const file of fixture.files) rmSync(dirname(file), { recursive: true })
+  const files = fixture.files.map(file => join(dirname(file), 'unwritten/deeper/config.json'))
+  await withVerifier(name, files, verify => { verify() })
+  expect(hookPreparationRoutes(files).keys).toEqual(files.map(file => file.replace(fixture.shared, join(root, 'displaced'))).sort())
+})
+
+it.skipIf(process.platform === 'win32')('verifies a settings file whose canonical parent is the root', () => {
+  const alias = join(root, 'root-alias'), name = `${basename(root)}-absent.json`
+  symlinkSync('/', alias)
+  const file = join(alias, name)
+  const observed = inspectHookFile(file)
+  expect(observed.directory).toBe('/')
+  expect(() => observed.verify()).not.toThrow()
+  const routes = hookPreparationRoutes([file])
+  expect(routes.keys).toEqual([join('/', name)])
+  expect(() => routes.verify()).not.toThrow()
+})
+
+it.skipIf(process.platform === 'win32')('accepts a newly created descendant after a parent fallback reached the root', () => {
+  const alias = join(root, 'root-alias'), name = `${basename(root)}-absent`
+  symlinkSync('/', alias)
+  const file = join(alias, 'usr', name, 'config.json')
+  // Simulate the ancestor appearing between proofs without writing outside the private fixture.
+  effects.onStat = path => { if (path === '/usr') throw Object.assign(new Error('missing fixture ancestor'), { code: 'ENOENT' }) }
+  let observed: ReturnType<typeof inspectHookFile>, routes: ReturnType<typeof hookPreparationRoutes>
+  try { observed = inspectHookFile(file); routes = hookPreparationRoutes([file]) }
+  finally { effects.onStat = undefined }
+  expect(() => observed.verify()).not.toThrow()
+  expect(() => routes.verify()).not.toThrow()
+  expect(routes.keys).toEqual([join('/usr', name, 'config.json')])
+})
+
+it.skipIf(process.platform === 'win32')('retains the refusal for an absent file with no observed non-root ancestor', () => {
+  expect(() => inspectHookFile(join('/', `${basename(root)}-absent.json`))).toThrow(/retained route/)
+})
+
+it.each([{ depth: 128, held: false }, { depth: 181, held: true }])(
+  'bounds a missing-parent fallback with $depth existing and missing levels', ({ depth, held }) => {
+    const existing = join(root, ...Array.from({ length: depth }, () => 'd'))
+    mkdirSync(existing, { recursive: true })
+    const file = join(existing, ...Array.from({ length: depth }, () => 'missing'), 'config.json')
+    const routes = hookPreparationRoutes([file])
+    if (held) expect(() => routes.verify()).toThrow(/work limit/)
+    else expect(() => routes.verify()).not.toThrow()
+  },
+)
+
+it.each([...callers.map(caller => caller.name), 'file observation' as const].flatMap(name =>
+  (['replacement', 'alias'] as const).map(change => ({ name, change }))))(
+  '$name checks missing-parent ancestry again after a sibling $change', async ({ name, change }) => {
+  const fixture = siblings()
+  for (const file of fixture.files) rmSync(dirname(file), { recursive: true })
+  let changed = false
+  const exercise = (verify: () => void) => {
+    effects.onStat = file => {
+      if (file !== dirname(fixture.files[name === 'file observation' ? 0 : 1])) return
+      effects.onStat = undefined; changed = true
+      if (change === 'alias') fixture.aliasAncestor()
+      else {
+        renameSync(fixture.shared, join(root, 'displaced'))
+        mkdirSync(fixture.shared)
+      }
+    }
+    try { verify() } finally { effects.onStat = undefined }
+  }
+  const checking = name === 'file observation'
+    ? Promise.resolve().then(() => exercise(inspectHookFile(fixture.files[0]).verify))
+    : withVerifier(name, fixture.files, exercise)
+  await expect(checking).rejects.toThrow(/changed/)
+  expect(changed).toBe(true)
+  },
+)
 
 it.each(callers.flatMap(caller => (caller.name === 'destination routes' ? ['replacement', 'alias']
   : ['replacement', 'alias', 'leaf identity', 'leaf bytes', 'leaf mode']).map(change => ({ ...caller, change }))))(
