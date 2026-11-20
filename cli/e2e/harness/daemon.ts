@@ -336,6 +336,8 @@ export class IsolatedDaemon {
     private readonly opensLog: string,
     /** The names of the settings the harness gives every daemon, before a test's own (`shellEnv`). */
     private readonly settingNames: readonly string[],
+    /** Its own fakes and stubs, first on its PATH: a test writes a fake of a command there (harness/schemeApps.ts). */
+    readonly binDir: string,
   ) {}
 
   static async create(options: DaemonOptions = {}): Promise<IsolatedDaemon> {
@@ -404,7 +406,8 @@ export class IsolatedDaemon {
     // never turned guest access on.
     await writeFile(join(dirs.bin, 'sudo'), '#!/bin/sh\necho "sudo: a password is required" >&2\nexit 1\n', { mode: 0o755 })
     // Nor does it ask this computer's scheme handlers: on Linux a link opens only once xdg-mime names the scheme's app
-    // (cable/hosts/appLink.ts), and one that prints nothing names none, so no link reaches the developer's own apps.
+    // (cable/hosts/appLink.ts), and one that prints nothing names none, so no link reaches the developer's own apps,
+    // until a test names the apps of its own (harness/schemeApps.ts).
     await writeFile(join(dirs.bin, 'xdg-mime'), '#!/bin/sh\nexit 0\n', { mode: 0o755 })
     // Nor does a tap raise a window on the developer's own X display. A daemon with no DISPLAY finds the lowest X server
     // socket of root's or this account's in /tmp/.X11-unix (cable/hosts/linuxDesktop.ts), whatever its home, and
@@ -546,7 +549,7 @@ esac
       TERMINAL_RECONCILE_INTERVAL_MS: '5000',
     }
     const env = daemonEnvironment(tmux.env, { ...settings, ...options.env })
-    return new IsolatedDaemon(root, tmux, port, env, options, config, opensLog, Object.keys(settings))
+    return new IsolatedDaemon(root, tmux, port, env, options, config, opensLog, Object.keys(settings), dirs.bin)
   }
 
   /** What the fake engines noted of every hook they ran (fakeEngine.mjs `hookLog`); kept once the root is gone. */
