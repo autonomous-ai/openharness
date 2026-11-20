@@ -620,10 +620,15 @@ static void test_apps(void)
     ring(NULL);
     show(MAX_VIEW_APPS, NULL);
     render_at(T0);
-    CHECK(max_m.hits[0].kind == MAX_HIT_CLOSE && hits_of(MAX_HIT_APP) == max_m.hit_count - 1);
-    for (int i = 1; i < max_m.hit_count; i++) CHECK(max_m.hits[i].arg == i - 1);
+    // TEMP (the owner's call of 20 Nov, to try Ambient): Relax at the right end, the cards clear of it.
+    const int last = max_m.hit_count - 1;
+    CHECK(max_m.hits[0].kind == MAX_HIT_CLOSE && hits_of(MAX_HIT_APP) == max_m.hit_count - 2);
+    CHECK(max_m.hits[last].kind == MAX_HIT_RELAX && word("Relax"));
+    CHECK(max_m.hits[last].x + max_m.hits[last].w == HT_WIDTH && max_m.hits[last].h == HT_HEIGHT);
+    CHECK(max_m.hits[last - 1].x + max_m.hits[last - 1].w <= max_m.hits[last].x);
+    for (int i = 1; i < last; i++) CHECK(max_m.hits[i].arg == i - 1);
     CHECK(word("Shown") && word("3 agents") && word("1 agent") && word("No agents") && word("Harness"));
-    max_box_t boxes[PRO_APPS_MAX + 2] = {box_of(&max_m.hits[0])};
+    max_box_t boxes[PRO_APPS_MAX + 3] = {box_of(&max_m.hits[0])};
     for (int i = 1; i < max_m.hit_count; i++) {
         boxes[i] = box_of(&max_m.hits[i]);
         if (boxes[i].x + boxes[i].w == HT_WIDTH) boxes[i].w = DX(176);
@@ -635,10 +640,10 @@ static void test_apps(void)
     // Few apps: "+ New" last while the computer offers New Harness, else none.
     max_ui_apps("orca", APPS, 2, T0);
     render_at(T0);
-    CHECK(HITS_ARE(MAX_HIT_CLOSE, MAX_HIT_APP, MAX_HIT_APP, MAX_HIT_NEW) && word("New") && word("+"));
+    CHECK(HITS_ARE(MAX_HIT_CLOSE, MAX_HIT_APP, MAX_HIT_APP, MAX_HIT_NEW, MAX_HIT_RELAX) && word("New") && word("+"));
     max_ui_offers(false);
     render_at(T0);
-    CHECK(HITS_ARE(MAX_HIT_CLOSE, MAX_HIT_APP, MAX_HIT_APP) && !word("New"));
+    CHECK(HITS_ARE(MAX_HIT_CLOSE, MAX_HIT_APP, MAX_HIT_APP, MAX_HIT_RELAX) && !word("New"));
 }
 
 static void test_ambient(void)

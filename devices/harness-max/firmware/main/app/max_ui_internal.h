@@ -174,6 +174,7 @@ typedef enum {
     MAX_HIT_SAY_IT,      // Attention's Say it: the agent page with the mic open
     MAX_HIT_AWAY,        // Attention outside its buttons: bring the agent up on the computer, Overview
     MAX_HIT_WAKE,        // Ambient: Overview
+    MAX_HIT_RELAX,       // TEMP (the owner's call of 20 Nov, to try Ambient): Apps' Relax opens Ambient
 } max_hit_kind_t;
 typedef struct {
     int16_t x, y, w, h;

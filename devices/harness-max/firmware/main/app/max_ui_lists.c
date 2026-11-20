@@ -148,12 +148,18 @@ void max_draw_apps(ht_scene_t *s)
         hx += max_text(s, hx, HT_HEIGHT / 2, DX(60), &ph_sb_26, DIM, one) + DX(3);
     }
     max_hit(0, 0, AP_HEAD_W, HT_HEIGHT, MAX_HIT_CLOSE, 0);
+    // TEMP (the owner's call of 20 Nov, to try Ambient): Relax at the right end opens Ambient, the cards stopping
+    // short of it. Goes with MAX_HIT_RELAX.
+    static const char RELAX[] = "Relax";
+    const int rw = max_button_w(RELAX, false, DX(28)), rx = HT_WIDTH - DX(34) - rw;
+    max_button(s, rx, (HT_HEIGHT - MAX_BUTTON_H) / 2, rw, MAX_BUTTON_H, STYLE_GHOST, RELAX, false);
     const bool add = max_m.link && max_m.offers_form;
     const int cards = max_m.app_count + (add ? 1 : 0);
-    for (int i = 0, x = CARDS_X; i < cards && x < HT_WIDTH - APP_PAD_X - APP_ICON_D / 2; i++, x += APP_CARD_W + APP_GAP) {
+    for (int i = 0, x = CARDS_X; i < cards && x + APP_CARD_W <= rx - APP_GAP; i++, x += APP_CARD_W + APP_GAP) {
         const max_app_t *app = i < max_m.app_count ? &max_m.apps[i] : NULL;
         app_card(s, x, app);
         max_hit(x, APP_Y - APP_RAISE, x + APP_CARD_W <= HT_WIDTH ? APP_CARD_W : HT_WIDTH - x, APP_H + APP_RAISE,
                 app ? MAX_HIT_APP : MAX_HIT_NEW, app ? i : 0);
     }
+    max_hit(rx - APP_GAP / 2, 0, HT_WIDTH - rx + APP_GAP / 2, HT_HEIGHT, MAX_HIT_RELAX, 0);   // TEMP: Relax
 }

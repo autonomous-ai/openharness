@@ -261,6 +261,9 @@ static max_act_t press(const max_hit_t *h, uint32_t now_ms)
         return act;
     }
     case MAX_HIT_CLOSE: go(MAX_VIEW_OVERVIEW); break;
+    case MAX_HIT_RELAX:   // TEMP (the owner's call of 20 Nov, to try Ambient)
+        if (view == MAX_VIEW_APPS) go(MAX_VIEW_AMBIENT);
+        break;
     case MAX_HIT_WAKE:   // the demo's first Ambient shows every app, while there is another to pick
         go(max_m.wake_to_apps && other_apps() ? MAX_VIEW_APPS : MAX_VIEW_OVERVIEW);
         break;

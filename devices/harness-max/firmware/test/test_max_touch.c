@@ -410,6 +410,14 @@ static void test_apps(void)
     CHECK(tap_on(add).kind == MAX_ACT_NONE);   // one form at a time
     max_form_dismiss();
     CHECK(tap_on(close).kind == MAX_ACT_NONE && max_m.view == MAX_VIEW_OVERVIEW);
+    // TEMP (the owner's call of 20 Nov, to try Ambient): Relax opens Ambient, only from Apps.
+    max_show(MAX_VIEW_APPS);
+    drawn_page(MAX_VIEW_APPS);
+    const max_hit_t *relax = plant(MAX_HIT_RELAX, 0);
+    max_m.view = MAX_VIEW_INBOX;   // a tap between a change and the redraw
+    CHECK(tap_on(relax).kind == MAX_ACT_NONE && max_m.view == MAX_VIEW_INBOX);
+    max_m.view = MAX_VIEW_APPS;
+    CHECK(tap_on(relax).kind == MAX_ACT_NONE && max_m.view == MAX_VIEW_AMBIENT);
 }
 
 // Ambient: a tap anywhere is Overview, and a person at the bar. The demo's first Ambient (max_ui_demo, V3
