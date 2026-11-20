@@ -54,10 +54,13 @@ async function callerOf(child: ChildProcess, bodies: Array<Record<string, unknow
   return bodies[0].callerPid
 }
 
-/** This process's environment, outside any pane, with no endpoint of the runner's own. */
+/** This process's environment, outside any pane, with no endpoint of the runner's own, and none of the editor's or
+ *  terminal's variables the hook names an app by on Windows (notify.mjs lookUpWindowsApp), so a run is the same
+ *  wherever the runner runs: inside VS Code the hook would look the editor up and keep its answer. */
 function hookEnv(): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...process.env, HARNESS_HOOK_DEADLINE_MS: '30000' }
-  for (const name of ['TMUX', 'TMUX_PANE', 'HARNESS_PANE', 'ANTHROPIC_BASE_URL', 'OPENAI_BASE_URL', 'OPENAI_API_BASE']) delete env[name]
+  for (const name of ['TMUX', 'TMUX_PANE', 'HARNESS_PANE', 'ANTHROPIC_BASE_URL', 'OPENAI_BASE_URL', 'OPENAI_API_BASE',
+    'VSCODE_PID', 'VSCODE_IPC_HOOK', 'VSCODE_GIT_ASKPASS_NODE', 'ALACRITTY_LOG']) delete env[name]
   return env
 }
 
