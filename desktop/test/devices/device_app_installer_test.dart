@@ -1090,6 +1090,7 @@ void main() {
         'APPDIR': '/tmp/.mount_HarnessX',
         'ARGV0': 'Harness.AppImage',
         'OWD': '/home/p q',
+        'HARNESS_LINUX_TITLE_BAR': 'flutter',
         'HOME': '/home/p q',
         'PATH': '/usr/bin:/bin',
       },
@@ -1099,6 +1100,28 @@ void main() {
     final [(path, environment)] = started;
     expect(path, '/home/p q/.local/opt/Harness-Device.AppImage');
     expect(environment, {'HOME': '/home/p q', 'PATH': '/usr/bin:/bin'});
+  });
+
+  // Desktop's runner points WebView2 at its own folder; the app's WebView2
+  // keeps its own, however it was started.
+  test("the device app starts without Desktop's WebView2 folder", () async {
+    final started = <(String, Map<String, String>)>[];
+
+    final ok = await startDeviceApp(
+      r'C:\Users\Nguyễn Văn A\AppData\Local\Harness Device\harness-device.exe',
+      start: (path, environment) async => started.add((path, environment)),
+      environment: const {
+        'WEBVIEW2_USER_DATA_FOLDER':
+            r'C:\Users\Nguyễn Văn A\AppData\Local\Harness\WebView2',
+        'LOCALAPPDATA': r'C:\Users\Nguyễn Văn A\AppData\Local',
+      },
+    );
+
+    expect(ok, isTrue);
+    final [(_, environment)] = started;
+    expect(environment, {
+      'LOCALAPPDATA': r'C:\Users\Nguyễn Văn A\AppData\Local',
+    });
   });
 
   test('a start that throws is a failed open', () async {
