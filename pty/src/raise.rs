@@ -273,6 +273,14 @@ mod tests {
         }
     }
 
+    /// A hung window answers no message, and ShowWindow on another process's window waits for the
+    /// answer: the restore is posted.
+    #[test]
+    fn a_hung_window_cannot_hold_the_raise() {
+        assert!(!code().contains("ShowWindow("));
+        assert!(code().contains("ShowWindowAsync("));
+    }
+
     /// A link the shell takes but cannot open shows no error box.
     #[test]
     fn the_link_code_asks_for_no_ui() {
