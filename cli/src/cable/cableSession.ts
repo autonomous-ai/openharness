@@ -2881,7 +2881,6 @@ export class CableSession {
     // that says appCards is sent `working` and pushed on its change: any other dial's frames and their cadence stay byte
     // for byte as they were (PM 2026-11-20).
     const cards = this.appCards
-    const rows = apps?.apps.map((a) => cards ? a : { id: a.id, name: a.name, count: a.count, waiting: a.waiting })
     const appsKey = apps ? `${apps.shown}|${apps.apps.map((a) => `${a.id}:${a.count}:${a.waiting}${cards ? `:${a.working}` : ''}`).join('|')}` : ''
     const sendRing = ring && (force || key !== this.lastAgentsKey)
     const sendApps = apps !== undefined && (force || appsKey !== this.lastAppsKey)
@@ -2895,8 +2894,13 @@ export class CableSession {
     if (!force && view === 'machine' && performance.now() - this.agentsPushedAt < AGENTS_PUSH_GAP_MS) return
     this.lastAppsKey = appsKey
     this.agentsPushedAt = performance.now()
-    // Before the ring, which the dial draws under the app it names.
-    if (sendApps) await this.send({ t: 'apps', shown: apps.shown, apps: rows })
+    // Before the ring, which the dial draws under the app it names. Each row is picked by name, in the contract's order,
+    // and only when it goes: the wire is the session's whatever else a host's entry carries, and a tick that sends
+    // nothing builds nothing.
+    if (sendApps) {
+      const rows = apps.apps.map(({ id, name, count, waiting, working }) => ({ id, name, count, waiting, ...(cards ? { working } : {}) }))
+      await this.send({ t: 'apps', shown: apps.shown, apps: rows })
+    }
     if (!sendRing) return
     // A dial that says `appFilter` back on the window's tab from an app's ring (its last list a machine list, by the key):
     // the record still names the agent it left the tab on, and the window's agent is where it lands (viewChanged follows
